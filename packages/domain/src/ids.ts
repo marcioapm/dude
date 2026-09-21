@@ -40,6 +40,7 @@ export const ID_PREFIXES = {
   question: "qst",
   repository: "repo",
   workflowRun: "wfr",
+  apiKey: "key",
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIXES;
