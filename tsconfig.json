@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "lib": ["ESNext"],
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": true,
+
+    "skipLibCheck": true,
+    "types": ["bun"],
+
+    "baseUrl": ".",
+    "paths": {
+      "@dude/domain": ["packages/domain/src/index.ts"],
+      "@dude/domain/*": ["packages/domain/src/*"]
+    }
+  },
+  "exclude": ["node_modules", "dist", "tests", "runner"]
+}

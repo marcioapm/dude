@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Go
+/runner/bin/
+*.exe
+*.test
+*.out
+
+# Python E2E
+/tests/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.python-version
+
+# Local state
+/.data/
+/var/
+*.log
+
+# Secrets / env
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Editors / OS
+.DS_Store
+.idea/
+*.swp
