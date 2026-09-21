@@ -40,6 +40,7 @@ export const ID_PREFIXES = {
   question: "qst",
   repository: "repo",
   workflowRun: "wfr",
+  workflowSignal: "sig",
   apiKey: "key",
 } as const;
 
