@@ -11,6 +11,7 @@ import { json } from "./api/http.ts";
 import { registerEventRoutes } from "./api/routes/events.ts";
 import { registerProjectRoutes } from "./api/routes/projects.ts";
 import { registerWorkRoutes } from "./api/routes/work.ts";
+import { registerRunnerRoutes } from "./api/routes/runner.ts";
 import { closePool, getPool } from "./db/client.ts";
 
 export function buildRouter(): Router {
@@ -28,6 +29,7 @@ export function buildRouter(): Router {
   registerEventRoutes(router);
   registerProjectRoutes(router);
   registerWorkRoutes(router);
+  registerRunnerRoutes(router);
 
   return router;
 }

@@ -36,3 +36,6 @@ __pycache__/
 .DS_Store
 .idea/
 *.swp
+
+# Go build output
+/runner/bin/
