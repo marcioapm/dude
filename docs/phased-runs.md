@@ -1,6 +1,26 @@
 # Phased Runs: implementer, reviewer and tester as first-class agents
 
-**Status:** proposal, awaiting your approval. Nothing below is built yet.
+**Status:** mostly built. This was the design; it is kept as the record of
+why the delivery workflow is shaped the way it is. For how the built system
+works, see [`CONTRIBUTING.md`](CONTRIBUTING.md#delivery-end-to-end).
+
+| Part | State |
+| --- | --- |
+| Phases as Runs, git handoff via `base_ref`, parallel review fan-out | built |
+| Reviewer executes but does not publish; findings as rows | built |
+| Review → fix loop with declared bounds; simplifier | built |
+| Per-project, per-role prompt context | built (`agentModels.<role>.context`) |
+| PR opened by the workflow; PR feedback wakes a fixer | built |
+| Tester phase (browser QA in its own container) | not built — the phase exists, the agent does not |
+| Screenshot/video evidence and S3 artifact storage | not built |
+
+Where the build departed from the design below: the schema landed as
+migrations `012_phases_and_findings.sql` and `013_pr_feedback.sql` (not 011,
+which became pull requests); the workflow lives at
+`apps/control-plane/src/workflow/delivery.workflow.ts` rather than a
+`definitions/` directory; and a *fix* phase joined the list, since fixing
+review findings and fixing PR feedback are both implementer Runs with a
+different prompt.
 
 ---
 
