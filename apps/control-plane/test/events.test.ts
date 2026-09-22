@@ -24,6 +24,8 @@ const ORG_A = `org_test_a_${Bun.randomUUIDv7("hex").slice(0, 8)}`;
 const ORG_B = `org_test_b_${Bun.randomUUIDv7("hex").slice(0, 8)}`;
 
 let owner: SQL;
+/** This file's pool, so closing it cannot sever another file's. */
+let app: SQL;
 let server: ReturnType<typeof startServer>;
 let baseUrl: string;
 let keyA: string;
@@ -54,7 +56,8 @@ beforeAll(async () => {
                 ON CONFLICT (id) DO NOTHING`;
   }
 
-  setPool(new SQL(APP_URL));
+  app = new SQL(APP_URL);
+  setPool(app);
   keyA = (await createApiKey({ organizationId: ORG_A, name: "test" })).key;
 
   server = startServer(0);
@@ -63,7 +66,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await server?.stop(true);
-  await closePool();
+  await closePool(app);
   // Cascades through events, api_keys and the rest of the tenant tables.
   await owner`DELETE FROM organizations WHERE id IN (${ORG_A}, ${ORG_B})`;
   await owner.end();
@@ -176,9 +179,13 @@ describe("SSE stream", () => {
     count: number,
     onOpen?: () => Promise<void>,
     timeoutMs = 5000,
+    headers: Record<string, string> = {},
   ): Promise<Array<{ cursor: number; type: string }>> {
     const ctl = new AbortController();
-    const res = await fetch(url, { headers: { authorization: `Bearer ${keyA}` }, signal: ctl.signal });
+    const res = await fetch(url, {
+      headers: { authorization: `Bearer ${keyA}`, ...headers },
+      signal: ctl.signal,
+    });
     const reader = res.body!.getReader();
     const decoder = new TextDecoder();
     const seen: Array<{ cursor: number; type: string }> = [];
@@ -241,6 +248,42 @@ describe("SSE stream", () => {
 
     const cursors = seen.map((s) => s.cursor);
     expect(new Set(cursors).size).toBe(cursors.length);
+  });
+
+  /*
+   * The browser resends the last `id:` it saw as `Last-Event-ID` when it
+   * reconnects on its own. Honouring it is what lets the client drop its
+   * backoff timer, its retained cursor and its dedupe.
+   */
+  test("resumes from Last-Event-ID when no explicit cursor is given", async () => {
+    const anchor = await ledger.append(eventInput(ORG_A, "resume.anchor"));
+    await ledger.append(eventInput(ORG_A, "resume.after"));
+
+    const seen = await collect(`${baseUrl}/v1/events/stream`, 1, undefined, 5000, {
+      "last-event-id": String(anchor.cursor),
+    });
+
+    expect(seen.every((s) => s.cursor > anchor.cursor)).toBe(true);
+    expect(seen.map((s) => s.type)).toContain("resume.after");
+  });
+
+  test("an explicit cursor wins over Last-Event-ID", async () => {
+    const first = await ledger.append(eventInput(ORG_A, "precedence.first"));
+    const second = await ledger.append(eventInput(ORG_A, "precedence.second"));
+
+    // A stale header must not replay what the caller said it already has.
+    const seen = await collect(
+      `${baseUrl}/v1/events/stream?after=${second.cursor}`,
+      1,
+      async () => {
+        await ledger.append(eventInput(ORG_A, "precedence.live"));
+      },
+      5000,
+      { "last-event-id": String(first.cursor) },
+    );
+
+    expect(seen.map((s) => s.type)).not.toContain("precedence.second");
+    expect(seen.map((s) => s.type)).toContain("precedence.live");
   });
 
   test("delivers events in cursor order", async () => {

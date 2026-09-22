@@ -1,6 +1,7 @@
 import { Children, useCallback, useEffect, useLayoutEffect, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
-import type { AgentRole, SessionStatus } from "@dude/domain";
+import type { AgentRole } from "@dude/domain";
 import { cx } from "../util/cx.ts";
+import { statusSpec, type Status } from "../tokens/status.ts";
 import { Button } from "../primitives/Button.tsx";
 import { AgentAvatar, ROLE_LABEL } from "./AgentAvatar.tsx";
 import { StatusBadge } from "./StatusBadge.tsx";
@@ -10,7 +11,12 @@ import styles from "./ChatTranscript.module.css";
 export interface ChatTranscriptSession {
   readonly id: string;
   readonly role: AgentRole;
-  readonly status: SessionStatus;
+  /**
+   * Any domain status. A Run and a Session are both shown here, and a Run
+   * can be `paused` — a state the session vocabulary has no word for, so
+   * narrowing to SessionStatus would force callers to mistranslate it.
+   */
+  readonly status: Status;
   readonly model?: string | undefined;
   /** "WI-2481 · Add retry with backoff…" — enough to know what you are looking at. */
   readonly title?: string | undefined;
@@ -159,9 +165,11 @@ export function ChatTranscript({
 }
 
 function TranscriptHeader({ session, actions }: { readonly session: ChatTranscriptSession; readonly actions: ReactNode }) {
-  const live = session.status === "running" || session.status === "awaiting_input";
+  // `live` and `needsHuman` are properties of the status itself, so the
+  // header asks the spec rather than re-listing which statuses count.
+  const spec = statusSpec(session.status);
   return (
-    <header className={cx(styles["header"], session.status === "awaiting_input" && styles["headerNeedsYou"])} data-status={session.status}>
+    <header className={cx(styles["header"], spec.needsHuman && styles["headerNeedsYou"])} data-status={session.status}>
       <AgentAvatar role={session.role} size="md" live={session.status === "running"} />
       <div className={styles["headerMain"]}>
         <div className={styles["headerTitle"]}>
@@ -185,7 +193,7 @@ function TranscriptHeader({ session, actions }: { readonly session: ChatTranscri
         {session.costUsd !== undefined ? (
           <span className={styles["stat"]}>
             <span className={styles["statLabel"]}>Cost</span>
-            <CostDisplay usd={session.costUsd} budgetUsd={session.budgetUsd} live={live} />
+            <CostDisplay usd={session.costUsd} budgetUsd={session.budgetUsd} live={spec.live} />
           </span>
         ) : null}
         {session.tokens !== undefined ? (
@@ -197,7 +205,7 @@ function TranscriptHeader({ session, actions }: { readonly session: ChatTranscri
         {session.startedAt !== undefined ? (
           <span className={styles["stat"]}>
             <span className={styles["statLabel"]}>Elapsed</span>
-            <Duration since={session.startedAt} until={session.endedAt ?? (live ? null : undefined)} />
+            <Duration since={session.startedAt} until={session.endedAt} live={spec.live} />
           </span>
         ) : null}
       </div>

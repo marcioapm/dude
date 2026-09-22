@@ -68,19 +68,29 @@ export interface DurationProps extends NumberBaseProps {
   readonly format?: DurationOptions["style"] | undefined;
   /** Elapsed milliseconds. Ignored when `since` is given. */
   readonly ms?: number | undefined;
-  /** Start time; the component ticks once a second until `until` is set. */
+  /** Start time. */
   readonly since?: string | number | Date | undefined;
-  /** End time; when provided with `since`, the display is static. */
+  /** End time; when known, the display is static and measures to it. */
   readonly until?: string | number | Date | null | undefined;
+  /**
+   * Whether the clock is still running. Defaults to "yes if there is no
+   * `until`".
+   *
+   * Say so explicitly for something settled without a recorded end — an
+   * aborted Run whose `endedAt` never made it to the ledger, say. Otherwise
+   * it ticks upward forever, reading as though the work were still going.
+   */
+  readonly live?: boolean | undefined;
 }
 
 /**
- * Elapsed time. Static when given `ms` or `since`+`until`; live-ticking
- * when only `since` is given. Tick rate is 1s — nothing in this product
- * needs sub-second live timers, and they read as noise.
+ * Elapsed time. Static when given `ms`, an `until`, or `live={false}`;
+ * live-ticking otherwise. Tick rate is 1s — nothing in this product needs
+ * sub-second live timers, and they read as noise.
  */
-export function Duration({ ms, since, until, format, mono, tone = "default", className, ...rest }: DurationProps) {
-  const isLive = since !== undefined && (until === undefined || until === null);
+export function Duration({ ms, since, until, live, format, mono, tone = "default", className, ...rest }: DurationProps) {
+  const running = live ?? (until === undefined || until === null);
+  const isLive = since !== undefined && running;
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!isLive) return;
@@ -91,7 +101,10 @@ export function Duration({ ms, since, until, format, mono, tone = "default", cla
   let elapsed: number;
   if (since !== undefined) {
     const start = new Date(since).getTime();
-    const end = until !== undefined && until !== null ? new Date(until).getTime() : now;
+    // A settled duration with no recorded end has nothing to measure to;
+    // freezing at zero is honest, where counting up would be a lie.
+    const end =
+      until !== undefined && until !== null ? new Date(until).getTime() : isLive ? now : start;
     elapsed = end - start;
   } else {
     elapsed = ms ?? 0;

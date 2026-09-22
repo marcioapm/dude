@@ -99,18 +99,18 @@ describe("turns", () => {
 });
 
 describe("plan", () => {
-  test("todowrite becomes the plan rather than a tool turn", () => {
-    const todos = [
-      { content: "Read the failing test", status: "completed" },
-      { content: "Fix the assertion", status: "in_progress" },
-    ];
+  test("a plan update is the plan, not a turn", () => {
     const { turns, plan } = project([
-      ev(EventTypes.ToolCalled, { tool: "todowrite", callId: "t1", input: { todos } }),
-      ev(EventTypes.ToolCompleted, { tool: "todowrite", callId: "t1", input: { todos } }),
+      ev(EventTypes.PlanUpdated, {
+        todos: [
+          { content: "Read the failing test", status: "completed" },
+          { content: "Fix the assertion", status: "in_progress" },
+        ],
+      }),
     ]);
 
-    // Neither the call nor its completion may become a card: the agent
-    // rewrites the whole list each time.
+    // It must not also become a card: the agent rewrites the whole list
+    // each time, so every update would look like near-identical work.
     expect(turns).toEqual([]);
     expect(plan).toMatchObject([
       { content: "Read the failing test", status: "completed" },
@@ -118,13 +118,10 @@ describe("plan", () => {
     ]);
   });
 
-  test("the latest todowrite replaces the previous plan", () => {
+  test("the latest update replaces the previous plan", () => {
     const { plan } = project([
-      ev(EventTypes.ToolCalled, { tool: "todowrite", input: { todos: [{ content: "One" }] } }),
-      ev(EventTypes.ToolCalled, {
-        tool: "todowrite",
-        input: { todos: [{ content: "One" }, { content: "Two" }] },
-      }),
+      ev(EventTypes.PlanUpdated, { todos: [{ content: "One" }] }),
+      ev(EventTypes.PlanUpdated, { todos: [{ content: "One" }, { content: "Two" }] }),
     ]);
 
     expect(plan.map((p) => p.content)).toEqual(["One", "Two"]);
@@ -132,22 +129,29 @@ describe("plan", () => {
 
   test("an unknown todo status falls back to pending rather than rendering blank", () => {
     const { plan } = project([
-      ev(EventTypes.ToolCalled, {
-        tool: "todowrite",
-        input: { todos: [{ content: "Odd", status: "something_new" }] },
-      }),
+      ev(EventTypes.PlanUpdated, { todos: [{ content: "Odd", status: "something_new" }] }),
     ]);
 
     expect(plan[0]).toMatchObject({ status: "pending" });
   });
 
-  test("a todowrite without a todos array leaves the plan alone", () => {
+  test("an update without a todos array leaves the plan alone", () => {
     const { plan } = project([
-      ev(EventTypes.ToolCalled, { tool: "todowrite", input: { todos: [{ content: "Kept" }] } }),
-      ev(EventTypes.ToolCompleted, { tool: "todowrite", input: {} }),
+      ev(EventTypes.PlanUpdated, { todos: [{ content: "Kept" }] }),
+      ev(EventTypes.PlanUpdated, {}),
     ]);
 
     expect(plan.map((p) => p.content)).toEqual(["Kept"]);
+  });
+
+  test("a tool the harness did not classify as a plan is still a turn", () => {
+    // Naming the plan tool is the adapter's job; the projection must not
+    // second-guess it and swallow an ordinary tool call.
+    const { turns } = project([
+      ev(EventTypes.ToolCalled, { tool: "todowrite", callId: "t1", input: { todos: [] } }),
+    ]);
+
+    expect(turns).toHaveLength(1);
   });
 });
 
@@ -163,22 +167,45 @@ describe("activity", () => {
 
   test("a finished Run is not doing anything", () => {
     // Without this a completed run shows a thinking indicator forever.
-    const { activity, activeTool } = project([
-      ev(EventTypes.ToolCalled, { tool: "bash", callId: "c1" }),
-      ev(EventTypes.RunCompleted, { status: "completed" }),
-    ]);
+    const { activity, activeTool } = project(
+      [ev(EventTypes.ToolCalled, { tool: "bash", callId: "c1" })],
+      "completed",
+    );
 
     expect(activity).toBeNull();
     expect(activeTool).toBeNull();
   });
 
-  test("a tool still running when the Run ends did not succeed", () => {
-    const { turns } = project([
-      ev(EventTypes.ToolCalled, { tool: "bash", callId: "c1" }),
-      ev(EventTypes.RunAborted, { reason: "operator" }),
-    ]);
+  test("a tool still running when the Run fails did not succeed", () => {
+    const { turns } = project([ev(EventTypes.ToolCalled, { tool: "bash", callId: "c1" })], "failed");
 
     expect(turns[0]).toMatchObject({ status: "failed", endedAt: expect.any(String) });
+  });
+
+  test("an aborted Run leaves its open tool aborted, not failed", () => {
+    // The design system reads `aborted` as deliberate and `failed` as an
+    // error; painting a stopped tool red would misreport what happened.
+    const { turns } = project([ev(EventTypes.ToolCalled, { tool: "bash", callId: "c1" })], "aborted");
+
+    expect(turns[0]).toMatchObject({ status: "aborted" });
+  });
+
+  test("a requested pause does not settle the conversation", () => {
+    /*
+     * `run.paused` is appended when a pause is *requested*; the Run keeps
+     * running until the runner confirms. Treating the event as termination
+     * would blank the activity indicator the moment an operator clicks it.
+     */
+    const { activity, turns } = project(
+      [
+        ev(EventTypes.ToolCalled, { tool: "bash", callId: "c1" }),
+        ev(EventTypes.RunPaused, { requested: true, mode: "graceful" }),
+      ],
+      "running",
+    );
+
+    expect(activity).toBe("tool");
+    expect(turns[0]).toMatchObject({ status: "running" });
   });
 });
 
@@ -212,7 +239,7 @@ describe("incremental folding", () => {
    */
   const events = [
     ev(EventTypes.AgentMessage, { text: "Starting" }),
-    ev(EventTypes.ToolCalled, { tool: "todowrite", input: { todos: [{ content: "Plan" }] } }),
+    ev(EventTypes.PlanUpdated, { todos: [{ content: "Plan" }] }),
     ev(EventTypes.ToolCalled, { tool: "bash", callId: "c1", input: { command: "ls" } }),
     ev(EventTypes.ModelRequestCompleted, { costUsd: 0.01, tokens: { input: 7, output: 3 } }),
     ev(EventTypes.ToolCompleted, { tool: "bash", callId: "c1" }),
@@ -225,18 +252,18 @@ describe("incremental folding", () => {
     const incremental = emptyProjection();
     for (const event of events) apply(incremental, [event]);
 
-    expect(snapshot(incremental)).toEqual(project(events));
+    expect(snapshot(incremental, "completed")).toEqual(project(events, "completed"));
   });
 
   test("a replayed event is not folded twice", () => {
     // A reconnect can re-deliver an event that was already applied; the
     // cursor is what makes that harmless.
     const state = apply(emptyProjection(), events);
-    const before = snapshot(state);
+    const before = snapshot(state, "completed");
 
     apply(state, events);
 
-    expect(snapshot(state)).toEqual(before);
+    expect(snapshot(state, "completed")).toEqual(before);
   });
 
   test("settled turns keep their identity across frames", () => {

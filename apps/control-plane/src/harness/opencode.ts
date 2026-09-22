@@ -355,11 +355,16 @@ export function normalizeEvent(
         // reads one field name whichever path produced the event.
         input: properties.args,
       });
-    case "tool.execute.after":
+    case "tool.execute.after": {
+      // The plan is a milestone, not a tool call — see the runner's harness
+      // for why naming the tool belongs at this boundary.
+      const todos = planTodos(properties.tool, properties.args);
+      if (todos) return event(EventTypes.PlanUpdated, { todos });
       return event(EventTypes.ToolCompleted, {
         tool: properties.tool,
         callId: properties.callID,
       });
+    }
 
     case "question.asked":
       return event(EventTypes.QuestionAsked, { question: properties });
@@ -369,4 +374,21 @@ export function normalizeEvent(
     default:
       return null;
   }
+}
+
+/**
+ * The todo list from a plan tool's arguments, or null if this is not one.
+ *
+ * Mirrors `isPlanTool`/`planTodos` in the runner's Go harness: names vary
+ * between harnesses and between versions of one, so a small set of names is
+ * matched and then the payload is checked for the shape that matters.
+ */
+function planTodos(tool: unknown, args: unknown): unknown[] | null {
+  if (typeof tool !== "string") return null;
+  const normalized = tool.toLowerCase().replaceAll("_", "");
+  if (normalized !== "todowrite" && normalized !== "updateplan" && normalized !== "todo") {
+    return null;
+  }
+  const todos = (args as { todos?: unknown } | null)?.todos;
+  return Array.isArray(todos) ? todos : null;
 }

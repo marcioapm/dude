@@ -17,6 +17,8 @@ const APP_URL = process.env.TEST_APP_DATABASE_URL ?? "postgres://dude_app:dude_a
 const ORG = `org_iv_${Bun.randomUUIDv7("hex").slice(0, 8)}`;
 
 let owner: SQL;
+/** This file's pool, so closing it cannot sever another file's. */
+let app: SQL;
 let server: ReturnType<typeof startServer>;
 let baseUrl: string;
 let userKey: string;
@@ -84,7 +86,8 @@ beforeAll(async () => {
   owner = new SQL(OWNER_URL);
   await owner`INSERT INTO organizations (id, name, slug) VALUES (${ORG}, ${ORG}, ${ORG})
               ON CONFLICT (id) DO NOTHING`;
-  setPool(new SQL(APP_URL));
+  app = new SQL(APP_URL);
+  setPool(app);
 
   userKey = (await createApiKey({ organizationId: ORG, name: "test user" })).key;
   runnerKey = (await createApiKey({ organizationId: ORG, name: "test runner", kind: "runner" })).key;
@@ -95,7 +98,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await server?.stop(true);
-  await closePool();
+  await closePool(app);
   await owner`DELETE FROM organizations WHERE id = ${ORG}`;
   await owner.end();
 });

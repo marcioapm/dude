@@ -43,6 +43,7 @@ const (
 	EventAgentToolCalled            = "agent.tool.called"
 	EventAgentToolCompleted         = "agent.tool.completed"
 	EventAgentModelRequestCompleted = "agent.model.request.completed"
+	EventAgentPlanUpdated           = "agent.plan.updated"
 	EventAgentSessionStopped        = "agent.session.stopped"
 )
 

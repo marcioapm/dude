@@ -45,7 +45,16 @@ export function setPool(next: SQL | null): void {
   pool = next;
 }
 
-export async function closePool(): Promise<void> {
+/**
+ * Close the pool, but only if `expected` is still the current one.
+ *
+ * The pool is a module global and `bun test` runs every file in one process,
+ * so without the guard a file closing its pool in `afterAll` can sever the
+ * connection a concurrently running file is still using — which surfaces as
+ * an unrelated test failing at random.
+ */
+export async function closePool(expected?: SQL | null): Promise<void> {
+  if (expected !== undefined && pool !== expected) return;
   await pool?.end();
   pool = null;
 }

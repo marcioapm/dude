@@ -18,6 +18,8 @@ const APP_URL = process.env.TEST_APP_DATABASE_URL ?? "postgres://dude_app:dude_a
 const ORG = `org_wf_${Bun.randomUUIDv7("hex").slice(0, 8)}`;
 
 let owner: SQL;
+/** This file's pool, so closing it cannot sever another file's. */
+let app: SQL;
 let runtime: PostgresWorkflowRuntime;
 
 /** Records which steps ran, so tests can assert on the path taken. */
@@ -83,10 +85,31 @@ const doomed: WorkflowDefinition = {
   },
 };
 
-/** Advance until no workflow is runnable, or `maxTicks` is reached. */
-async function drain(maxTicks = 20): Promise<void> {
+/**
+ * Advance until no workflow is runnable, or `maxTicks` is reached.
+ *
+ * `tick` is global — it claims whatever is runnable across every
+ * organization — so a budget sized for this file's own workflows can be
+ * spent on another test file's leftovers running concurrently. The budget is
+ * generous for that reason, and a test that needs a specific workflow to
+ * reach a state should wait for that state rather than assume one drain.
+ */
+async function drain(maxTicks = 200): Promise<void> {
   for (let i = 0; i < maxTicks; i++) {
     if ((await runtime.tick()) === 0) return;
+  }
+}
+
+/** Drain until `workflowRunId` reaches `status`, or the budget runs out. */
+async function drainUntil(workflowRunId: string, status: string, maxTicks = 200): Promise<void> {
+  for (let i = 0; i < maxTicks; i++) {
+    const state = await runtime.get(ORG, workflowRunId);
+    if (state?.status === status) return;
+    if ((await runtime.tick()) === 0 && (await runtime.get(ORG, workflowRunId))?.status !== status) {
+      // Nothing runnable anywhere and we are not there yet: one more tick
+      // cannot help, but a concurrent writer might still deliver a signal.
+      await Bun.sleep(10);
+    }
   }
 }
 
@@ -94,14 +117,15 @@ beforeAll(async () => {
   owner = new SQL(OWNER_URL);
   await owner`INSERT INTO organizations (id, name, slug) VALUES (${ORG}, ${ORG}, ${ORG})
               ON CONFLICT (id) DO NOTHING`;
-  setPool(new SQL(APP_URL));
+  app = new SQL(APP_URL);
+  setPool(app);
 
   runtime = new PostgresWorkflowRuntime("test-poller");
   for (const def of [linear, waiter, flaky, doomed]) runtime.register(def);
 });
 
 afterAll(async () => {
-  await closePool();
+  await closePool(app);
   await owner`DELETE FROM organizations WHERE id = ${ORG}`;
   await owner.end();
 });
@@ -159,7 +183,7 @@ describe("signals", () => {
       input: {},
     });
 
-    await drain();
+    await drainUntil(workflowRunId, "waiting");
 
     // Parked: the step ran, and no further work is possible for this run.
     // `trace` is shared, and drain() advances every runnable workflow in the
@@ -170,7 +194,7 @@ describe("signals", () => {
     expect(trace).toContain("ask");
 
     await runtime.signal(ORG, workflowRunId, "approved", { by: "marcio" });
-    await drain();
+    await drainUntil(workflowRunId, "completed");
 
     state = await runtime.get(ORG, workflowRunId);
     expect(state?.status).toBe("completed");

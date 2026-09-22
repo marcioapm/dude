@@ -21,9 +21,68 @@ const (
 
 	lineStepFinish = `{"type":"step_finish","sessionID":"ses_abc","part":{"id":"prt_4","reason":"stop","type":"step-finish","tokens":{"total":7967,"input":3,"output":4,"reasoning":0,"cache":{"write":7960,"read":0}},"cost":0.021}}`
 
+	linePlanRunning = `{"type":"tool_use","sessionID":"ses_abc","part":{"id":"prt_5","tool":"todowrite","callID":"call_2","state":{"status":"running","input":{"todos":[{"content":"Read the test","status":"in_progress"}]}}}}`
+
+	linePlanCompleted = `{"type":"tool_use","sessionID":"ses_abc","part":{"id":"prt_5","tool":"todowrite","callID":"call_2","state":{"status":"completed","input":{"todos":[{"content":"Read the test","status":"completed"},{"content":"Fix it","status":"in_progress"}]}}}}`
+
 	// `--print-logs` writes these to stderr; they must never parse as events.
 	lineLog = `timestamp=2026-09-22T09:39:03.675Z level=INFO run=fde5d370 message="creating instance"`
 )
+
+// The plan is a milestone, not a tool call: naming the tool is this layer's
+// job so no reader has to know a harness spells it `todowrite`.
+func TestNormalizePlanToolBecomesPlanUpdated(t *testing.T) {
+	ev, ok := normalizeLine(linePlanCompleted)
+	if !ok {
+		t.Fatal("expected a completed plan tool to normalize")
+	}
+	if ev.Type != "agent.plan.updated" {
+		t.Fatalf("type = %q, want agent.plan.updated", ev.Type)
+	}
+
+	todos, ok := ev.Payload["todos"].([]any)
+	if !ok {
+		t.Fatalf("todos = %#v, want a list", ev.Payload["todos"])
+	}
+	if len(todos) != 2 {
+		t.Errorf("len(todos) = %d, want 2", len(todos))
+	}
+	// The whole list travels each time; a caller replaces rather than merges.
+	first, _ := todos[0].(map[string]any)
+	if first["content"] != "Read the test" {
+		t.Errorf("first todo = %v, want \"Read the test\"", first["content"])
+	}
+}
+
+// The call and its completion carry the same list, so forwarding both would
+// publish the plan twice for every rewrite.
+func TestNormalizeSkipsTheRunningPlanTool(t *testing.T) {
+	if _, ok := normalizeLine(linePlanRunning); ok {
+		t.Error("expected a running plan tool to produce no event")
+	}
+}
+
+func TestNormalizePlanToolWithoutTodosIsNotAnEvent(t *testing.T) {
+	line := `{"type":"tool_use","sessionID":"s","part":{"tool":"todowrite","callID":"c","state":{"status":"completed","input":{}}}}`
+	if _, ok := normalizeLine(line); ok {
+		t.Error("expected a plan tool with no todo list to produce no event")
+	}
+}
+
+func TestPlanToolNamesAreMatchedLoosely(t *testing.T) {
+	// Harnesses spell it differently, and one harness changes its mind
+	// between versions; the shape check is what actually guards the payload.
+	for _, name := range []string{"todowrite", "TodoWrite", "todo_write", "update_plan"} {
+		if !isPlanTool(name) {
+			t.Errorf("isPlanTool(%q) = false, want true", name)
+		}
+	}
+	for _, name := range []string{"bash", "read", "write", ""} {
+		if isPlanTool(name) {
+			t.Errorf("isPlanTool(%q) = true, want false", name)
+		}
+	}
+}
 
 func TestNormalizeTextBecomesAgentMessage(t *testing.T) {
 	ev, ok := normalizeLine(lineText)

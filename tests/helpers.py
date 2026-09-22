@@ -80,6 +80,12 @@ def query(dsn: str, sql: str, params: tuple = ()) -> list[dict[str, Any]]:
         return [dict(zip(columns, row)) for row in cur.fetchall()]
 
 
+def execute(dsn: str, sql: str, params: tuple = ()) -> None:
+    """Run a write as the owner, for seeding what no API creates yet."""
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        conn.execute(sql, params)
+
+
 # ---------------------------------------------------------------------------
 # API client
 # ---------------------------------------------------------------------------

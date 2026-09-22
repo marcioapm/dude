@@ -14,8 +14,8 @@
  *    conversation. Nothing lives only in component state.
  */
 
-import type { PersistedEvent } from "@dude/domain";
-import { EventTypes } from "@dude/domain";
+import type { PersistedEvent, RunStatus } from "@dude/domain";
+import { EventTypes, TERMINAL_RUN_STATUSES } from "@dude/domain";
 import type { HumanIntent, PlanItem } from "@dude/design-system/components";
 import { TODO_STATUSES, type ActivityKind, type ToolCallStatus } from "@dude/design-system/tokens";
 
@@ -111,8 +111,8 @@ export function emptyProjection(): Projection {
  * events in the same order always produces the same conversation, which is
  * what lets the UI rebuild from a reconnect without special cases.
  */
-export function project(events: readonly PersistedEvent[]): Conversation {
-  return snapshot(apply(emptyProjection(), events));
+export function project(events: readonly PersistedEvent[], runStatus?: RunStatus): Conversation {
+  return snapshot(apply(emptyProjection(), events), runStatus);
 }
 
 /**
@@ -134,18 +134,14 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       event.eventType === EventTypes.ToolCalled || event.eventType === EventTypes.ToolCompleted;
     const tool = isToolEvent ? String(payload.tool ?? "tool") : "";
 
-    /*
-     * `todowrite` is the plan, not a tool call worth its own turn — the
-     * agent rewrites the whole list each time, so rendering every call
-     * would bury the work under near-identical lists. Handled before the
-     * switch because the call and its completion both carry the list.
-     */
-    if (tool === "todowrite") {
-      state.plan = planFrom(payload.input) ?? state.plan;
-      continue;
-    }
-
     switch (event.eventType) {
+      case EventTypes.PlanUpdated: {
+        // The harness adapter already decided this was a plan rather than a
+        // tool call, so nothing here needs to know what the tool was named.
+        state.plan = planFrom(payload) ?? state.plan;
+        break;
+      }
+
       case EventTypes.AgentMessage: {
         const text = typeof payload.text === "string" ? payload.text : "";
         if (!text.trim()) break;
@@ -242,23 +238,6 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         break;
       }
 
-      case EventTypes.RunCompleted:
-      case EventTypes.RunFailed:
-      case EventTypes.RunAborted:
-      case EventTypes.RunPaused: {
-        // A finished Run is not doing anything, whatever the last activity
-        // event suggested; and a tool still marked running never completed.
-        state.activity = null;
-        state.activeTool = null;
-        for (const turn of turns) {
-          if (turn.kind === "tool" && turn.status === "running") {
-            turn.status = "failed";
-            turn.endedAt = turn.endedAt ?? turn.startedAt;
-          }
-        }
-        break;
-      }
-
       default:
         break;
     }
@@ -267,21 +246,54 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
   return state;
 }
 
-/** The read-only view of a projection that the UI renders. */
-export function snapshot(state: Projection): Conversation {
+/**
+ * The read-only view of a projection that the UI renders.
+ *
+ * `runStatus` is the Run's actual status, not something re-derived from the
+ * event types. The two disagree: `run.paused` is appended when a pause is
+ * *requested*, while the Run keeps running until the runner confirms — so a
+ * projection that read termination out of the ledger would blank the
+ * activity indicator the moment an operator clicked Pause.
+ */
+export function snapshot(state: Projection, runStatus?: RunStatus): Conversation {
+  const settled = runStatus !== undefined && TERMINAL_RUN_STATUSES.includes(runStatus);
+  if (!settled) {
+    return {
+      turns: state.turns,
+      plan: state.plan,
+      costUsd: state.costUsd,
+      tokens: state.tokens,
+      activity: state.activity,
+      activeTool: state.activeTool,
+    };
+  }
+
+  /*
+   * A Run that has ended is not doing anything, whatever the last activity
+   * event suggested — without this a completed run shows a thinking
+   * indicator forever. A tool still marked running never reported back:
+   * `aborted` when the operator stopped the Run, `failed` otherwise, because
+   * the design system reads the first as deliberate and the second as an
+   * error.
+   */
+  const unfinished: ToolCallStatus = runStatus === "aborted" ? "aborted" : "failed";
   return {
-    turns: state.turns,
+    turns: state.turns.map((turn) =>
+      turn.kind === "tool" && turn.status === "running"
+        ? { ...turn, status: unfinished, endedAt: turn.endedAt ?? turn.startedAt }
+        : turn,
+    ),
     plan: state.plan,
     costUsd: state.costUsd,
     tokens: state.tokens,
-    activity: state.activity,
-    activeTool: state.activeTool,
+    activity: null,
+    activeTool: null,
   };
 }
 
-/** Extract a plan from a `todowrite` payload, or null if it has none. */
-function planFrom(input: unknown): PlanItem[] | null {
-  const todos = (input as { todos?: unknown } | null)?.todos;
+/** Extract a plan from an `agent.plan.updated` payload, or null if it has none. */
+function planFrom(payload: Record<string, unknown>): PlanItem[] | null {
+  const todos = payload.todos;
   if (!Array.isArray(todos)) return null;
 
   return todos.map((raw) => {

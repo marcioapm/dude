@@ -88,14 +88,6 @@ export function ChatMessage({
   const live = streaming === true || (activity !== undefined && activity !== "completed" && activity !== "failed" && activity !== "aborted");
   const ts = startedAt !== undefined ? new Date(startedAt) : null;
 
-  /*
-   * Elapsed time is only meaningful while a turn is still open, or once it
-   * has an end to measure against. A settled turn with neither would tick
-   * upward forever, reading as though the agent were still working on a
-   * message it finished minutes ago.
-   */
-  const showElapsed = startedAt !== undefined && (live || (endedAt !== undefined && endedAt !== null));
-
   if (k === "system") {
     return (
       <article className={cx(styles["system"], isNew && styles["new"], className)} data-kind="system" {...rest}>
@@ -157,11 +149,11 @@ export function ChatMessage({
           <Markdown source={content} streaming={streaming} className={styles["body"]} />
         ) : null}
         {attachments !== undefined ? <div className={styles["attachments"]}>{attachments}</div> : null}
-        {activity !== undefined || (k === "agent" && (costUsd !== undefined || tokens !== undefined || showElapsed)) ? (
+        {activity !== undefined || (k === "agent" && (costUsd !== undefined || tokens !== undefined || startedAt !== undefined)) ? (
           <footer className={styles["foot"]}>
             {activity !== undefined ? <ActivityIndicator kind={activity} {...activityProps} className={styles["activity"]} /> : <span className={styles["footSpacer"]} />}
             <span className={styles["stats"]}>
-              {showElapsed ? <Duration since={startedAt} until={endedAt ?? null} tone="muted" /> : null}
+              {startedAt !== undefined ? <Duration since={startedAt} until={endedAt} live={live} tone="muted" /> : null}
               {tokens !== undefined ? <TokenCount tokens={tokens} tone="muted" /> : null}
               {costUsd !== undefined ? <CostDisplay usd={costUsd} tone="secondary" live={live} /> : null}
             </span>
