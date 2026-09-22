@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -189,9 +190,46 @@ func (c *Client) ClaimRuns(ctx context.Context, workerID string, limit int) ([]R
 	return out.Runs, nil
 }
 
-// RenewLease extends this worker's claim on a Run still in progress.
-func (c *Client) RenewLease(ctx context.Context, runID string) error {
-	return c.post(ctx, "/v1/runner/runs/"+runID+"/lease", nil, nil)
+// Directive is a steering instruction from a human (plan §24).
+type Directive struct {
+	ID        string `json:"id"`
+	Text      string `json:"text"`
+	Scope     string `json:"scope"`
+	CreatedAt string `json:"createdAt"`
+}
+
+// LeaseResponse carries the control channel back with the lease renewal.
+//
+// Renewal already happens on a timer, so pending interventions ride along
+// rather than needing a second poll — and a runner that has stopped renewing
+// would not have heard a separate poll either.
+type LeaseResponse struct {
+	OK            bool        `json:"ok"`
+	LeaseSeconds  int         `json:"leaseSeconds"`
+	Control       string      `json:"control"`
+	ControlReason string      `json:"controlReason"`
+	Directives    []Directive `json:"directives"`
+}
+
+// ErrRunNotLeasable means the control plane no longer considers this Run
+// ours to execute — it was aborted, reclaimed, or has otherwise finished.
+//
+// Distinguished from a transient failure because the responses are opposite:
+// a transient error means try again, this means stop immediately.
+var ErrRunNotLeasable = errors.New("run is no longer leasable")
+
+// RenewLease extends this worker's claim on a Run still in progress and
+// returns anything a human has asked of it since the last renewal.
+func (c *Client) RenewLease(ctx context.Context, runID string) (*LeaseResponse, error) {
+	var out LeaseResponse
+	if err := c.post(ctx, "/v1/runner/runs/"+runID+"/lease", nil, &out); err != nil {
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
+			return nil, ErrRunNotLeasable
+		}
+		return nil, err
+	}
+	return &out, nil
 }
 
 // UpdateRun reports Run progress or terminal state.

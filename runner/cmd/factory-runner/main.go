@@ -256,11 +256,49 @@ func (d *daemon) executeRun(ctx context.Context, r client.Run) error {
 	log := d.logger.With("run", r.ID, "attempt", r.Attempt)
 	log.Info("run claimed", "repos", len(r.Repositories))
 
+	/*
+	 * `runCtx` is what the agent runs under, so cancelling it interrupts the
+	 * turn. A hard pause or an abort cancels it; a graceful pause sets a flag
+	 * that is checked between phases, letting the current safe action finish
+	 * (plan §24).
+	 */
+	runCtx, interrupt := context.WithCancel(ctx)
+	defer interrupt()
+
+	control := &runControl{}
+
 	// Renew the lease for as long as this Run is executing, so the control
-	// plane can distinguish "still working" from "worker disappeared".
+	// plane can distinguish "still working" from "worker disappeared". The
+	// same call carries back anything a human has asked of this Run.
 	leaseCtx, stopLease := context.WithCancel(ctx)
 	defer stopLease()
-	go d.leaseLoop(leaseCtx, r.ID)
+	go d.leaseLoop(leaseCtx, r.ID,
+		func(kind, reason string) {
+			control.request(kind, reason)
+
+			// Hard pause and abort stop the agent now; graceful waits for the
+			// next phase boundary.
+			if kind != protocol.ControlPauseHard && kind != protocol.ControlAbort {
+				return
+			}
+
+			/*
+			 * Cancelling the context is not enough. The agent runs inside a
+			 * Docker exec, and cancelling the client-side call abandons the
+			 * stream without killing the process on the other side — the
+			 * model keeps generating, and the human who pressed stop keeps
+			 * paying for it.
+			 *
+			 * Stopping the container is what actually ends the turn.
+			 */
+			interrupt()
+			stopCtx, cancelStop := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cancelStop()
+			if err := d.docker.Stop(stopCtx, r.ID); err != nil {
+				log.Warn("stopping container for intervention failed", "error", err)
+			}
+		},
+		func(directive client.Directive) { control.addDirective(directive) })
 
 	if err := d.api.UpdateRun(ctx, r.ID, protocol.RunStarting, "", ""); err != nil {
 		return fmt.Errorf("mark starting: %w", err)
@@ -339,7 +377,18 @@ func (d *daemon) executeRun(ctx context.Context, r client.Run) error {
 	// Drive the agent. This is where the Run stops being plumbing and starts
 	// being work: the harness gets the task, the workspace and a scoped set of
 	// credentials, and its progress streams to the ledger as it happens.
-	agentErr := d.runAgent(ctx, r, created.ContainerID, materialized, log)
+	// Stop before starting the agent if a pause or abort already arrived —
+	// there is no point beginning a turn we are about to interrupt.
+	if control.stopped() {
+		cleanup, cancel := d.teardown(ctx, r, created, log)
+		defer cancel()
+		d.applyControl(cleanup, r, control, log)
+		return nil
+	}
+
+	// Under runCtx, not ctx: cancelling it is how a hard pause or abort
+	// interrupts the turn.
+	agentErr := d.runAgent(runCtx, r, created.ContainerID, materialized, control, log)
 
 	// Capture what changed before the container goes away. The workspace
 	// outlives it, but reading the diff here keeps the Run's record complete
@@ -347,21 +396,14 @@ func (d *daemon) executeRun(ctx context.Context, r client.Run) error {
 	changes := d.collectChanges(ctx, r, created.ContainerID, materialized, log)
 	d.sendEvents(ctx, log, changes)
 
-	// Tear the runtime down *before* reporting the Run terminal.
-	//
-	// Reporting completion first makes "the Run is done" and "its container is
-	// gone" observably inconsistent: anything reacting to the terminal status
-	// — the UI, a test, a scheduler counting capacity — can still see a live
-	// container. Cleanup uses a context detached from the Run's so an aborted
-	// Run is reaped too.
-	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	cleanup, cancel := d.teardown(ctx, r, created, log)
 	defer cancel()
 
-	if err := d.docker.Stop(cleanup, r.ID); err != nil {
-		log.Warn("container cleanup failed", "error", err)
-	}
-	if err := d.api.ReportRuntime(cleanup, r.ID, created.ContainerID, "", protocol.RuntimeDestroyed); err != nil {
-		log.Warn("runtime report failed", "error", err)
+	// An interrupted turn is not a failure: the human asked for it, and
+	// reporting it as failed would make deliberate control look like a bug.
+	if terminal := d.applyControl(cleanup, r, control, log); terminal != "" {
+		log.Info("run stopped by intervention", "terminal", terminal, "took", time.Since(started))
+		return nil
 	}
 
 	if agentErr != nil {
@@ -379,12 +421,34 @@ func (d *daemon) executeRun(ctx context.Context, r client.Run) error {
 	return nil
 }
 
-// leaseLoop renews the Run lease at half the lease interval, which tolerates
-// one lost renewal without the control plane reclaiming the Run.
-func (d *daemon) leaseLoop(ctx context.Context, runID string) {
-	interval := time.Duration(d.worker.LeaseSeconds) * time.Second / 2
-	if interval <= 0 {
-		interval = 30 * time.Second
+/*
+leaseLoop renews the Run lease and carries the control channel.
+
+Renewal runs at half the lease interval, which tolerates one lost renewal
+without the control plane reclaiming the Run. The response brings back
+anything a human has asked of this Run since the last tick — a pause, an
+abort, or steering directives — so intervention needs no second poll.
+
+`onControl` is called for a pause or abort; `onDirective` for steering. Both
+run on this goroutine, so they must not block for long.
+*/
+func (d *daemon) leaseLoop(
+	ctx context.Context,
+	runID string,
+	onControl func(control, reason string),
+	onDirective func(client.Directive),
+) {
+	/*
+	 * Poll far more often than the lease requires.
+	 *
+	 * Renewal alone could run at half the lease — 45s — but this is also the
+	 * control channel, and a human who aborts a run should not watch it keep
+	 * working for the better part of a minute. The renewal is cheap; the
+	 * responsiveness is what matters.
+	 */
+	interval := controlPollInterval
+	if lease := time.Duration(d.worker.LeaseSeconds) * time.Second / 2; lease > 0 && lease < interval {
+		interval = lease
 	}
 
 	ticker := time.NewTicker(interval)
@@ -395,8 +459,36 @@ func (d *daemon) leaseLoop(ctx context.Context, runID string) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := d.api.RenewLease(ctx, runID); err != nil && ctx.Err() == nil {
-				d.logger.Warn("lease renewal failed", "run", runID, "error", err)
+			lease, err := d.api.RenewLease(ctx, runID)
+			if err != nil {
+				// The control plane no longer considers this Run ours —
+				// aborted, or reclaimed after we went quiet. Either way the
+				// work must stop now rather than run on unowned.
+				if errors.Is(err, client.ErrRunNotLeasable) {
+					d.logger.Info("run no longer leasable; stopping", "run", runID)
+					if onControl != nil {
+						onControl(protocol.ControlAbort, "run is no longer leasable")
+					}
+					return
+				}
+				if ctx.Err() == nil {
+					d.logger.Warn("lease renewal failed", "run", runID, "error", err)
+				}
+				continue
+			}
+
+			for _, directive := range lease.Directives {
+				d.logger.Info("directive received", "run", runID,
+					"scope", directive.Scope, "text", directive.Text)
+				if onDirective != nil {
+					onDirective(directive)
+				}
+			}
+
+			if lease.Control != "" && lease.Control != protocol.ControlNone && onControl != nil {
+				d.logger.Info("control requested", "run", runID,
+					"control", lease.Control, "reason", lease.ControlReason)
+				onControl(lease.Control, lease.ControlReason)
 			}
 		}
 	}
@@ -462,6 +554,7 @@ func (d *daemon) runAgent(
 	r client.Run,
 	containerID string,
 	repos []workspace.MaterializedRepo,
+	control *runControl,
 	log *slog.Logger,
 ) error {
 	if len(repos) == 0 {
@@ -475,6 +568,21 @@ func (d *daemon) runAgent(
 	prompt := r.Prompt
 	if prompt == "" {
 		return fmt.Errorf("run %s has no prompt", r.ID)
+	}
+
+	// Directives issued before the turn started are appended to the task, so
+	// a human who steers a queued Run is heard on its first turn rather than
+	// having to wait for a second one.
+	if directives := control.takeDirectives(); len(directives) > 0 {
+		var b strings.Builder
+		b.WriteString(prompt)
+		b.WriteString("\n\nUpdated instructions from the operator:")
+		for _, directive := range directives {
+			b.WriteString("\n- ")
+			b.WriteString(directive.Text)
+		}
+		prompt = b.String()
+		log.Info("applied directives to prompt", "count", len(directives))
 	}
 
 	model := r.Model
@@ -723,6 +831,15 @@ func tail(s string, n int) string {
 	return "..." + s[len(s)-n:]
 }
 
+/*
+controlPollInterval is how often the runner asks for pending interventions.
+
+Tight because it bounds how long an aborted agent keeps working after a
+human said stop. The request is a single indexed UPDATE, so the cost of
+polling is small next to the cost of ignoring a person.
+*/
+const controlPollInterval = 3 * time.Second
+
 // FakeModelPrefix marks a Run that should execute without a model.
 //
 // Platform tests assert on lease handling, event ordering, container
@@ -779,4 +896,117 @@ func (d *daemon) runFakeAgent(
 
 	log.Info("fake agent finished")
 	return nil
+}
+
+/*
+teardown stops the Run's container and reports the runtime destroyed.
+
+Called *before* the Run is reported terminal: reporting completion first
+makes "the Run is done" and "its container is gone" observably inconsistent,
+and anything reacting to the terminal status — the UI, a test, a scheduler
+counting capacity — could still see a live container.
+
+Returns a cleanup context detached from the Run's own, so an aborted or
+paused Run is still reaped, and the cancel func the caller must defer.
+*/
+func (d *daemon) teardown(
+	ctx context.Context,
+	r client.Run,
+	created *dockerruntime.Created,
+	log *slog.Logger,
+) (context.Context, context.CancelFunc) {
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+
+	if err := d.docker.Stop(cleanup, r.ID); err != nil {
+		log.Warn("container cleanup failed", "error", err)
+	}
+	if err := d.api.ReportRuntime(cleanup, r.ID, created.ContainerID, "", protocol.RuntimeDestroyed); err != nil {
+		log.Warn("runtime report failed", "error", err)
+	}
+	return cleanup, cancel
+}
+
+/*
+runControl is what a human has asked of an executing Run.
+
+Written by the lease loop and read by the Run goroutine, so every field is
+mutex-guarded. Kept deliberately small: the runner records the request and
+acts on it, but never decides whether it was allowed — that judgement already
+happened in the control plane.
+*/
+type runControl struct {
+	mu         sync.Mutex
+	kind       string
+	reason     string
+	directives []client.Directive
+}
+
+// request records a pause or abort. The first one wins: a graceful pause
+// followed by an abort escalates, but an abort is never downgraded.
+func (c *runControl) request(kind, reason string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.kind == protocol.ControlAbort {
+		return
+	}
+	c.kind = kind
+	c.reason = reason
+}
+
+func (c *runControl) addDirective(d client.Directive) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.directives = append(c.directives, d)
+}
+
+// pending reports what was asked, if anything.
+func (c *runControl) pending() (kind, reason string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.kind, c.reason
+}
+
+// takeDirectives returns undelivered steering text and clears it, so the same
+// instruction is not appended to two consecutive turns.
+func (c *runControl) takeDirectives() []client.Directive {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	taken := c.directives
+	c.directives = nil
+	return taken
+}
+
+// stopped reports whether the Run should stop before starting more work.
+// Checked at phase boundaries, which is what makes a graceful pause graceful.
+func (c *runControl) stopped() bool {
+	kind, _ := c.pending()
+	return kind != "" && kind != protocol.ControlNone
+}
+
+/*
+applyControl reports the Run's terminal state after an intervention.
+
+Pause and abort are different terminal shapes: an aborted Run is finished, a
+paused one is waiting to be resumed and must not look like a failure. Returns
+"" when nothing was asked.
+*/
+func (d *daemon) applyControl(ctx context.Context, r client.Run, c *runControl, log *slog.Logger) string {
+	kind, reason := c.pending()
+	switch kind {
+	case protocol.ControlAbort:
+		log.Info("run aborted by request", "reason", reason)
+		// The control plane already marked it aborted; the runner's job was
+		// to stop the work, which cancelling runCtx did.
+		return protocol.RunAborted
+
+	case protocol.ControlPauseGraceful, protocol.ControlPauseHard:
+		log.Info("run paused by request", "mode", kind, "reason", reason)
+		if err := d.api.UpdateRun(ctx, r.ID, protocol.RunPaused, reason, ""); err != nil {
+			log.Warn("pause status update failed", "error", err)
+		}
+		return protocol.RunPaused
+
+	default:
+		return ""
+	}
 }
