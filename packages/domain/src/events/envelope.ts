@@ -54,11 +54,30 @@ export const eventEnvelopeSchema = z.object({
 
 export type EventEnvelope = z.infer<typeof eventEnvelopeSchema>;
 
-/** What a producer supplies; the ledger fills in id/cursor/timestamp. */
-export type EventInput = Omit<EventEnvelope, "eventId" | "occurredAt"> & {
-  eventId?: string;
-  occurredAt?: string;
-};
+/**
+ * What a producer supplies; the ledger fills in id, cursor and timestamp.
+ *
+ * The scope and causation fields are optional rather than required-nullable.
+ * Most events belong to one part of the hierarchy, and spelling out four
+ * `null`s at every call site is noise that hides the field that matters — and
+ * makes adding a scope column an edit to every producer.
+ */
+export type EventInput = Pick<EventEnvelope, "eventType" | "organizationId" | "actor" | "source"> &
+  Partial<
+    Pick<
+      EventEnvelope,
+      | "eventId"
+      | "occurredAt"
+      | "projectId"
+      | "workItemId"
+      | "runId"
+      | "sessionId"
+      | "workflowRunId"
+      | "correlationId"
+      | "causationId"
+      | "payload"
+    >
+  >;
 
 /**
  * A persisted event also carries a monotonic per-session cursor so the UI

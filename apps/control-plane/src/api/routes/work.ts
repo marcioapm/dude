@@ -68,13 +68,9 @@ async function createWorkItem(ctx: RequestContext): Promise<Response> {
       organizationId,
       projectId: input.projectId,
       workItemId,
-      runId: null,
-      sessionId: null,
-      workflowRunId: null,
       actor: { type: "human", id: ctx.principal.apiKeyId },
       source: "control-plane",
       correlationId: workItemId,
-      causationId: null,
       payload: { title: input.title, goal: input.goal },
     });
 
@@ -163,12 +159,9 @@ async function createRun(ctx: RequestContext): Promise<Response> {
       projectId: workItem.project_id,
       workItemId,
       runId,
-      sessionId: null,
-      workflowRunId: null,
       actor: { type: "human", id: ctx.principal.apiKeyId },
       source: "control-plane",
       correlationId: workItemId,
-      causationId: null,
       payload: { attempt },
     });
 
@@ -267,14 +260,11 @@ async function createSession(ctx: RequestContext): Promise<Response> {
       eventType: input.parentSessionId ? EventTypes.SubagentStarted : EventTypes.SessionStarted,
       organizationId,
       projectId: run.project_id,
-      workItemId: null,
       runId,
       sessionId,
-      workflowRunId: null,
       actor: { type: "agent", id: sessionId },
       source: "control-plane",
       correlationId: runId,
-      causationId: null,
       payload: { role: input.role, model, harness, parentSessionId: input.parentSessionId },
     });
 

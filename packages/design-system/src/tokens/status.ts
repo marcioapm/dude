@@ -18,44 +18,29 @@
  *   slow pulse that reduced-motion turns off.
  */
 
+import {
+  ALL_RUN_STATUSES,
+  ALL_SESSION_STATUSES,
+  ALL_WORK_ITEM_STATUSES,
+  type RunStatus,
+  type SessionStatus,
+  type WorkItemStatus,
+} from "@dude/domain";
 import type { ToneName } from "./palette.ts";
 
-export const RUN_STATUSES = [
-  "pending",
-  "scheduled",
-  "starting",
-  "running",
-  "paused",
-  "completed",
-  "failed",
-  "aborted",
-] as const;
-export type RunStatus = (typeof RUN_STATUSES)[number];
-
-export const SESSION_STATUSES = [
-  "pending",
-  "running",
-  "awaiting_input",
-  "completed",
-  "failed",
-  "aborted",
-] as const;
-export type SessionStatus = (typeof SESSION_STATUSES)[number];
-
-export const WORK_ITEM_STATUSES = [
-  "received",
-  "intake",
-  "awaiting_confirmation",
-  "queued",
-  "running",
-  "awaiting_input",
-  "review",
-  "ready_to_merge",
-  "done",
-  "failed",
-  "aborted",
-] as const;
-export type WorkItemStatus = (typeof WORK_ITEM_STATUSES)[number];
+/*
+ * The status *names* are domain truth and are imported, not re-declared.
+ * Their tone, glyph and emphasis are design truth and live here.
+ *
+ * Because `STATUS_SPECS` below is keyed on the imported unions, adding a
+ * status to the domain is a compile error here until it is given a
+ * treatment — which is exactly the right failure. A forked copy would
+ * instead render the new state as a raw enum string.
+ */
+export const RUN_STATUSES = ALL_RUN_STATUSES;
+export const SESSION_STATUSES = ALL_SESSION_STATUSES;
+export const WORK_ITEM_STATUSES = ALL_WORK_ITEM_STATUSES;
+export type { RunStatus, SessionStatus, WorkItemStatus };
 
 export type Status = RunStatus | SessionStatus | WorkItemStatus;
 

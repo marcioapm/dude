@@ -13,7 +13,7 @@ import requests
 from playwright.sync_api import Page
 
 from env import TestEnvironment
-from helpers import ApiClient, create_api_key, create_organization
+from helpers import ApiClient, create_api_key, create_organization, wait_until
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -134,16 +134,13 @@ def gallery_url(env: TestEnvironment) -> str:
     """Serve the built gallery for the duration of the session."""
     url = env.start_gallery()
 
-    deadline = time.time() + 20
-    while time.time() < deadline:
+    def reachable() -> bool:
         try:
-            if requests.get(url, timeout=1).status_code == 200:
-                break
+            return requests.get(url, timeout=1).status_code == 200
         except requests.RequestException:
-            time.sleep(0.1)
-    else:
-        raise RuntimeError(f"gallery did not start at {url}")
+            return False
 
+    wait_until(reachable, timeout=20, interval=0.1, message=f"gallery did not start at {url}")
     yield url
 
 

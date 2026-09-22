@@ -88,6 +88,9 @@ export interface RuntimeInstance {
  *     scratch/
  *     artifacts-staging/
  *     runtime-manifest.json
+ *
+ * The runner owns these names — it is what creates the directories. See
+ * runner/internal/workspace/workspace.go.
  */
 export interface SessionWorkspace {
   runId: string;
@@ -98,14 +101,6 @@ export interface SessionWorkspace {
   containerPath: string;
   repos: Array<{ name: string; path: string; branch: string; headSha: string }>;
 }
-
-export const WORKSPACE_LAYOUT = {
-  repos: "repos",
-  agentState: "agent-state",
-  scratch: "scratch",
-  artifactsStaging: "artifacts-staging",
-  manifest: "runtime-manifest.json",
-} as const;
 
 // ---------------------------------------------------------------------------
 // Artifacts

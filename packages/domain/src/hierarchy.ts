@@ -128,6 +128,9 @@ export const workItemStatusSchema = z.enum([
 ]);
 export type WorkItemStatus = z.infer<typeof workItemStatusSchema>;
 
+/** Every work item status, in lifecycle order. */
+export const ALL_WORK_ITEM_STATUSES = workItemStatusSchema.options;
+
 /** States in which no Run should be consuming tokens. */
 export const TERMINAL_WORK_ITEM_STATUSES: readonly WorkItemStatus[] = [
   "done",
@@ -167,6 +170,9 @@ export const runStatusSchema = z.enum([
 ]);
 export type RunStatus = z.infer<typeof runStatusSchema>;
 
+/** Every run status, in lifecycle order. */
+export const ALL_RUN_STATUSES = runStatusSchema.options;
+
 export const TERMINAL_RUN_STATUSES: readonly RunStatus[] = ["completed", "failed", "aborted"];
 
 export const runSchema = z.object({
@@ -193,6 +199,9 @@ export const sessionStatusSchema = z.enum([
   "aborted",
 ]);
 export type SessionStatus = z.infer<typeof sessionStatusSchema>;
+
+/** Every session status, in lifecycle order. */
+export const ALL_SESSION_STATUSES = sessionStatusSchema.options;
 
 export const sessionSchema = z.object({
   id: z.string(),

@@ -18,6 +18,17 @@ import requests
 
 KEY_PREFIX = "dude_sk_"
 
+# Mirrors runner/internal/protocol/protocol.go. The suite reaps containers by
+# label and looks them up by name, so a silent change on either side leaks a
+# container per test run.
+CONTAINER_NAME_PREFIX = "dude-run-"
+CONTAINER_LABEL_MANAGED = "dude.managed"
+
+
+def container_name(run_id: str) -> str:
+    """The container name the runner derives from a Run id."""
+    return f"{CONTAINER_NAME_PREFIX}{run_id.lower()}"
+
 
 # ---------------------------------------------------------------------------
 # Direct database seeding
@@ -170,20 +181,3 @@ def wait_for_run_status(client: ApiClient, run_id: str, status: str, timeout: fl
             f"status={actual['status']!r} error={actual.get('error')!r}"
         ) from None
 
-
-def wait_for_event(client: ApiClient, event_type: str, timeout: float = 30.0, **filters) -> dict:
-    """Wait for an event of a given type to appear in the ledger."""
-
-    def check():
-        for event in client.events(**filters):
-            if event["eventType"] == event_type:
-                return event
-        return None
-
-    try:
-        return wait_until(check, timeout=timeout)
-    except AssertionError:
-        seen = sorted({e["eventType"] for e in client.events(**filters)})
-        raise AssertionError(
-            f"event {event_type!r} not seen within {timeout}s; saw: {seen}"
-        ) from None

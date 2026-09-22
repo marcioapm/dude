@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/marciomartins/dude/runner/internal/client"
+	"github.com/marciomartins/dude/runner/internal/protocol"
 	dockerruntime "github.com/marciomartins/dude/runner/internal/runtime"
 	"github.com/marciomartins/dude/runner/internal/workspace"
 )
@@ -163,7 +164,7 @@ func (d *daemon) reconcile(ctx context.Context) {
 		}
 		// The control plane must learn the Run is not progressing, or it will
 		// wait on a lease that nobody is renewing.
-		if err := d.api.UpdateRun(ctx, runID, "failed", "runner restarted; container orphaned", ""); err != nil {
+		if err := d.api.UpdateRun(ctx, runID, protocol.RunFailed, "runner restarted; container orphaned", ""); err != nil {
 			d.logger.Warn("reconcile: status update failed", "run", runID, "error", err)
 		}
 	}
@@ -180,7 +181,7 @@ func (d *daemon) heartbeatLoop(ctx context.Context) {
 		case <-ticker.C:
 			err := d.api.Heartbeat(ctx, d.worker.ID, client.HeartbeatRequest{
 				ActiveRuns:         d.activeCount(),
-				Status:             "ready",
+				Status:             protocol.WorkerReady,
 				CachedRepositories: d.ws.CachedRepositories(),
 			})
 			if err != nil && ctx.Err() == nil {
@@ -243,7 +244,7 @@ func (d *daemon) startRun(parent context.Context, r client.Run) {
 			d.logger.Error("run failed", "run", r.ID, "error", err)
 			// Best effort: the control plane must not wait forever on a Run
 			// whose worker already gave up.
-			_ = d.api.UpdateRun(context.WithoutCancel(ctx), r.ID, "failed", err.Error(), "")
+			_ = d.api.UpdateRun(context.WithoutCancel(ctx), r.ID, protocol.RunFailed, err.Error(), "")
 		}
 	}()
 }
@@ -259,7 +260,7 @@ func (d *daemon) executeRun(ctx context.Context, r client.Run) error {
 	defer stopLease()
 	go d.leaseLoop(leaseCtx, r.ID)
 
-	if err := d.api.UpdateRun(ctx, r.ID, "starting", "", ""); err != nil {
+	if err := d.api.UpdateRun(ctx, r.ID, protocol.RunStarting, "", ""); err != nil {
 		return fmt.Errorf("mark starting: %w", err)
 	}
 
@@ -280,7 +281,7 @@ func (d *daemon) executeRun(ctx context.Context, r client.Run) error {
 	log.Info("workspace ready", "path", wsPath, "took", time.Since(started))
 
 	events := []client.Event{{
-		EventType:  "workspace.created",
+		EventType:  protocol.EventWorkspaceCreated,
 		RunID:      r.ID,
 		ProjectID:  r.ProjectID,
 		WorkItemID: r.WorkItemID,
@@ -297,15 +298,15 @@ func (d *daemon) executeRun(ctx context.Context, r client.Run) error {
 	}
 
 	// An untrusted repository gets no network at all (plan §47).
-	network := "bridge"
+	network := protocol.NetworkBridge
 	for _, repo := range r.Repositories {
-		if repo.Trust == "untrusted_external" {
-			network = "none"
+		if repo.Trust == protocol.TrustExternal {
+			network = protocol.NetworkIsolated
 			break
 		}
 	}
 
-	if err := d.api.ReportRuntime(ctx, r.ID, "", "", "creating"); err != nil {
+	if err := d.api.ReportRuntime(ctx, r.ID, "", "", protocol.RuntimeCreating); err != nil {
 		log.Warn("runtime report failed", "error", err)
 	}
 
@@ -318,20 +319,20 @@ func (d *daemon) executeRun(ctx context.Context, r client.Run) error {
 		NetworkMode:    network,
 	})
 	if err != nil {
-		_ = d.api.ReportRuntime(context.WithoutCancel(ctx), r.ID, "", "", "failed")
+		_ = d.api.ReportRuntime(context.WithoutCancel(ctx), r.ID, "", "", protocol.RuntimeFailed)
 		return fmt.Errorf("create runtime: %w", err)
 	}
 	log.Info("container started", "container", created.ContainerID[:12], "network", network)
 
 	if err := d.docker.WaitHealthy(ctx, created.ContainerID, 60*time.Second); err != nil {
-		_ = d.api.ReportRuntime(context.WithoutCancel(ctx), r.ID, created.ContainerID, "", "failed")
+		_ = d.api.ReportRuntime(context.WithoutCancel(ctx), r.ID, created.ContainerID, "", protocol.RuntimeFailed)
 		return fmt.Errorf("runtime unhealthy: %w", err)
 	}
 
-	if err := d.api.ReportRuntime(ctx, r.ID, created.ContainerID, created.ImageDigest, "running"); err != nil {
+	if err := d.api.ReportRuntime(ctx, r.ID, created.ContainerID, created.ImageDigest, protocol.RuntimeRunning); err != nil {
 		log.Warn("runtime report failed", "error", err)
 	}
-	if err := d.api.UpdateRun(ctx, r.ID, "running", "", wsPath); err != nil {
+	if err := d.api.UpdateRun(ctx, r.ID, protocol.RunRunning, "", wsPath); err != nil {
 		return fmt.Errorf("mark running: %w", err)
 	}
 
@@ -356,11 +357,11 @@ func (d *daemon) executeRun(ctx context.Context, r client.Run) error {
 	if err := d.docker.Stop(cleanup, r.ID); err != nil {
 		log.Warn("container cleanup failed", "error", err)
 	}
-	if err := d.api.ReportRuntime(cleanup, r.ID, created.ContainerID, "", "destroyed"); err != nil {
+	if err := d.api.ReportRuntime(cleanup, r.ID, created.ContainerID, "", protocol.RuntimeDestroyed); err != nil {
 		log.Warn("runtime report failed", "error", err)
 	}
 
-	if err := d.api.UpdateRun(cleanup, r.ID, "completed", "", wsPath); err != nil {
+	if err := d.api.UpdateRun(cleanup, r.ID, protocol.RunCompleted, "", wsPath); err != nil {
 		return fmt.Errorf("mark completed: %w", err)
 	}
 

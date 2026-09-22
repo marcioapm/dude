@@ -13,17 +13,11 @@
  */
 
 import { SQL, type TransactionSQL } from "bun";
-import { drizzle } from "drizzle-orm/bun-sql";
-import type { BunSQLDatabase } from "drizzle-orm/bun-sql";
-import * as schema from "./schema.ts";
-
-export type Db = BunSQLDatabase<typeof schema>;
 
 /** A transaction already scoped to one organization. */
 export interface OrgScope {
   readonly organizationId: string;
   readonly sql: TransactionSQL;
-  readonly db: Db;
 }
 
 let pool: SQL | null = null;
@@ -62,7 +56,7 @@ export async function withOrg<T>(
   }
   return getPool().begin(async (tx) => {
     await tx`SELECT set_config('app.organization_id', ${organizationId}, true)`;
-    return fn({ organizationId, sql: tx, db: drizzle(tx, { schema }) });
+    return fn({ organizationId, sql: tx });
   });
 }
 
@@ -73,9 +67,7 @@ export async function withOrg<T>(
  * Tenant tables accessed here return nothing, because no organization is set.
  */
 export async function withoutTenant<T>(
-  fn: (ctx: { sql: TransactionSQL; db: Db }) => Promise<T>,
+  fn: (ctx: { sql: TransactionSQL }) => Promise<T>,
 ): Promise<T> {
-  return getPool().begin(async (tx) => fn({ sql: tx, db: drizzle(tx, { schema }) }));
+  return getPool().begin(async (tx) => fn({ sql: tx }));
 }
-
-export { schema };

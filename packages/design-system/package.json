@@ -23,6 +23,7 @@
     "react-dom": "^19.0.0"
   },
   "dependencies": {
+    "@dude/domain": "workspace:*",
     "@radix-ui/react-checkbox": "^1.3.2",
     "@radix-ui/react-dialog": "^1.1.14",
     "@radix-ui/react-scroll-area": "^1.2.9",

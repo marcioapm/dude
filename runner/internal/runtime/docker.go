@@ -20,7 +20,8 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
-	"github.com/docker/go-connections/nat"
+
+	"github.com/marciomartins/dude/runner/internal/protocol"
 )
 
 // DefaultImage is used when a project does not pin its own runtime image.
@@ -82,7 +83,7 @@ func (m *Manager) Ping(ctx context.Context) error {
 // ContainerName is derived from the Run so a restarted runner can find and
 // reconcile containers it previously created.
 func ContainerName(runID string) string {
-	return "dude-run-" + strings.ToLower(runID)
+	return protocol.ContainerNamePrefix + strings.ToLower(runID)
 }
 
 // EnsureImage pulls the image if it is not already present locally.
@@ -148,7 +149,7 @@ func (m *Manager) Create(ctx context.Context, spec Spec) (*Created, error) {
 
 	networkMode := spec.NetworkMode
 	if networkMode == "" {
-		networkMode = "bridge"
+		networkMode = protocol.NetworkBridge
 	}
 
 	hostConfig := &container.HostConfig{
@@ -178,14 +179,13 @@ func (m *Manager) Create(ctx context.Context, spec Spec) (*Created, error) {
 		Env:        env,
 		WorkingDir: ContainerWorkspacePath,
 		Labels: map[string]string{
-			"dude.run_id":          spec.RunID,
-			"dude.organization_id": spec.OrganizationID,
-			"dude.managed":         "true",
+			protocol.LabelRunID:          spec.RunID,
+			protocol.LabelOrganizationID: spec.OrganizationID,
+			protocol.LabelManaged:        "true",
 		},
 		// Hold the container open; the harness is driven through exec.
-		Cmd:          []string{"sleep", "infinity"},
-		Tty:          false,
-		ExposedPorts: nat.PortSet{},
+		Cmd: []string{"sleep", "infinity"},
+		Tty: false,
 	}
 
 	created, err := m.docker.ContainerCreate(ctx, config, hostConfig, nil, nil, name)
@@ -278,10 +278,10 @@ func (m *Manager) ListManaged(ctx context.Context) (map[string]string, error) {
 
 	out := make(map[string]string)
 	for _, c := range containers {
-		if c.Labels["dude.managed"] != "true" {
+		if c.Labels[protocol.LabelManaged] != "true" {
 			continue
 		}
-		if runID := c.Labels["dude.run_id"]; runID != "" {
+		if runID := c.Labels[protocol.LabelRunID]; runID != "" {
 			out[runID] = c.ID
 		}
 	}

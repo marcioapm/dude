@@ -104,10 +104,10 @@ export async function appendInScope(scope: OrgScope, input: EventInput): Promise
     ) VALUES (
       ${id}, ${input.organizationId}, ${input.eventType},
       ${input.occurredAt ?? new Date().toISOString()},
-      ${input.projectId}, ${input.workItemId}, ${input.runId},
-      ${input.sessionId}, ${input.workflowRunId},
+      ${input.projectId ?? null}, ${input.workItemId ?? null}, ${input.runId ?? null},
+      ${input.sessionId ?? null}, ${input.workflowRunId ?? null},
       ${input.actor.type}, ${input.actor.id}, ${input.source},
-      ${input.correlationId}, ${input.causationId},
+      ${input.correlationId ?? null}, ${input.causationId ?? null},
       ${input.payload ?? {}}::jsonb
     )
     RETURNING ${scope.sql.unsafe(EVENT_COLUMNS)}`) as EventRow[];
@@ -179,11 +179,3 @@ export async function query(organizationId: string, q: EventQuery = {}): Promise
   });
 }
 
-/** Highest cursor an organization has reached; 0 when it has no events. */
-export async function latestCursor(organizationId: string): Promise<number> {
-  return withOrg(organizationId, async (scope) => {
-    const rows = (await scope.sql`
-      SELECT COALESCE(MAX(cursor), 0) AS cursor FROM events`) as Array<{ cursor: string | number }>;
-    return Number(rows[0]?.cursor ?? 0);
-  });
-}

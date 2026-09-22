@@ -80,17 +80,11 @@ async function createProject(ctx: RequestContext): Promise<Response> {
     }
 
     const event = await appendInScope(scope, {
-      eventType: "project.created",
+      eventType: EventTypes.ProjectCreated,
       organizationId,
       projectId,
-      workItemId: null,
-      runId: null,
-      sessionId: null,
-      workflowRunId: null,
       actor: { type: "human", id: ctx.principal.apiKeyId },
       source: "control-plane",
-      correlationId: null,
-      causationId: null,
       payload: { name: input.name, slug: input.slug },
     });
 

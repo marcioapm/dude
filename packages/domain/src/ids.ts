@@ -1,28 +1,9 @@
 /**
- * Branded ID types.
+ * Prefixed, sortable identifiers.
  *
  * Every integration-specific ID is stored alongside an internal stable ID
  * (plan §31), so the internal IDs are the ones that appear in the domain.
  */
-
-declare const brand: unique symbol;
-
-type Brand<T, B extends string> = T & { readonly [brand]: B };
-
-export type OrganizationId = Brand<string, "OrganizationId">;
-export type UserId = Brand<string, "UserId">;
-export type ProjectId = Brand<string, "ProjectId">;
-export type EpicId = Brand<string, "EpicId">;
-export type WorkItemId = Brand<string, "WorkItemId">;
-export type RunId = Brand<string, "RunId">;
-export type SessionId = Brand<string, "SessionId">;
-export type EventId = Brand<string, "EventId">;
-export type WorkerId = Brand<string, "WorkerId">;
-export type RuntimeInstanceId = Brand<string, "RuntimeInstanceId">;
-export type ArtifactId = Brand<string, "ArtifactId">;
-export type QuestionId = Brand<string, "QuestionId">;
-export type RepositoryId = Brand<string, "RepositoryId">;
-export type WorkflowRunId = Brand<string, "WorkflowRunId">;
 
 /** Prefixes make IDs self-describing in logs, events and URLs. */
 export const ID_PREFIXES = {
@@ -58,6 +39,3 @@ export function newId<K extends IdKind>(kind: K): string {
   return `${ID_PREFIXES[kind]}_${ts}${rand}`;
 }
 
-export function isId<K extends IdKind>(kind: K, value: string): boolean {
-  return value.startsWith(`${ID_PREFIXES[kind]}_`);
-}

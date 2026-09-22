@@ -7,10 +7,12 @@ are marked `docker` and can be excluded with --no-runner.
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
 import pytest
 
-from helpers import ApiClient, query, wait_for_run_status, wait_until
+from env import REPO_ROOT
+from helpers import ApiClient, container_name, query, wait_for_run_status, wait_until
 
 pytestmark = pytest.mark.docker
 
@@ -25,14 +27,8 @@ def local_project(client: ApiClient) -> dict:
         slug="self-hosting",
         runtimeImage=RUNTIME_IMAGE,
         agentModels={"orchestrator": {"model": "test-model"}},
-        repositories=[{"name": "dude", "url": str(_repo_root())}],
+        repositories=[{"name": "dude", "url": str(REPO_ROOT)}],
     )
-
-
-def _repo_root():
-    from pathlib import Path
-
-    return Path(__file__).resolve().parent.parent.parent
 
 
 def test_runner_registers_itself(client: ApiClient, runner: dict, env, owner_dsn: str):
@@ -79,8 +75,6 @@ def test_workspace_contains_the_materialized_repository(
     run = client.create_run(work_item["id"])
     completed = wait_for_run_status(client, run["id"], "completed", timeout=120)
 
-    from pathlib import Path
-
     workspace = Path(completed["workspacePath"])
     assert (workspace / "repos" / "dude" / ".git").exists()
     assert (workspace / "runtime-manifest.json").exists()
@@ -116,28 +110,28 @@ def test_containers_are_cleaned_up(client: ApiClient, local_project: dict, runne
     wait_for_run_status(client, run["id"], "completed", timeout=120)
 
     result = subprocess.run(
-        ["docker", "ps", "-aq", "--filter", f"name=dude-run-{run['id'].lower()}"],
+        ["docker", "ps", "-aq", "--filter", f"name={container_name(run['id'])}"],
         capture_output=True, text=True, check=False,
     )
     assert not result.stdout.strip(), "the Run container should not outlive the Run"
 
 
 def test_run_duration_includes_container_startup(
-    client: ApiClient, local_project: dict, runner: dict, owner_dsn: str
+    client: ApiClient, local_project: dict, runner: dict
 ):
-    """Lead time must cover startup, or the metric understates reality."""
+    """Lead time must cover startup, or the metric understates reality.
+
+    Asserted through the API, which already exposes both timestamps — a test
+    that reaches into the database couples itself to column names users never
+    see.
+    """
     work_item = client.create_work_item(local_project["id"], "Measure me")
     run = client.create_run(work_item["id"])
-    wait_for_run_status(client, run["id"], "completed", timeout=120)
+    completed = wait_for_run_status(client, run["id"], "completed", timeout=120)
 
-    rows = query(
-        owner_dsn,
-        "SELECT started_at, ended_at FROM runs WHERE id = %s",
-        (run["id"],),
-    )
-    started, ended = rows[0]["started_at"], rows[0]["ended_at"]
-    assert started is not None and ended is not None
-    assert ended >= started
+    assert completed["startedAt"] is not None
+    assert completed["endedAt"] is not None
+    assert completed["endedAt"] >= completed["startedAt"]
 
 
 def test_concurrent_runs_do_not_interfere(client: ApiClient, local_project: dict, runner: dict):

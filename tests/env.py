@@ -22,6 +22,8 @@ from pathlib import Path
 import psycopg
 import requests
 
+from helpers import CONTAINER_LABEL_MANAGED
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # The owner role runs migrations; the app role serves traffic. They are
@@ -205,7 +207,7 @@ class TestEnvironment:
         gone, so cleanup is unconditional rather than best-effort.
         """
         result = subprocess.run(
-            ["docker", "ps", "-aq", "--filter", "label=dude.managed=true"],
+            ["docker", "ps", "-aq", "--filter", f"label={CONTAINER_LABEL_MANAGED}=true"],
             capture_output=True,
             text=True,
             check=False,

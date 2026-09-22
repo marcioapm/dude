@@ -7,6 +7,9 @@
  */
 
 export const EventTypes = {
+  // Project lifecycle
+  ProjectCreated: "project.created",
+
   // Work item lifecycle
   WorkItemCreated: "work_item.created",
   WorkItemConfirmed: "work_item.confirmed",
