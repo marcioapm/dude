@@ -1,0 +1,206 @@
+.root {
+  --ai-fg: var(--ds-tone-neutral-fg);
+  --ai-bg: var(--ds-tone-neutral-bg);
+  --ai-border: var(--ds-tone-neutral-border);
+  --ai-solid: var(--ds-tone-neutral-solid);
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  min-width: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+  white-space: nowrap;
+}
+.neutral {
+  --ai-fg: var(--ds-tone-neutral-fg);
+  --ai-bg: var(--ds-tone-neutral-bg);
+  --ai-border: var(--ds-tone-neutral-border);
+  --ai-solid: var(--ds-tone-neutral-solid);
+}
+.info {
+  --ai-fg: var(--ds-tone-info-fg);
+  --ai-bg: var(--ds-tone-info-bg);
+  --ai-border: var(--ds-tone-info-border);
+  --ai-solid: var(--ds-tone-info-solid);
+}
+.attention {
+  --ai-fg: var(--ds-tone-attention-fg);
+  --ai-bg: var(--ds-tone-attention-bg);
+  --ai-border: var(--ds-tone-attention-border);
+  --ai-solid: var(--ds-tone-attention-solid);
+}
+.success {
+  --ai-fg: var(--ds-tone-success-fg);
+  --ai-bg: var(--ds-tone-success-bg);
+  --ai-border: var(--ds-tone-success-border);
+  --ai-solid: var(--ds-tone-success-solid);
+}
+.danger {
+  --ai-fg: var(--ds-tone-danger-fg);
+  --ai-bg: var(--ds-tone-danger-bg);
+  --ai-border: var(--ds-tone-danger-border);
+  --ai-solid: var(--ds-tone-danger-solid);
+}
+
+/* Line: full width, sits at the foot of a message. Room for the sweep track. */
+.line {
+  display: flex;
+  width: 100%;
+  min-height: 22px;
+  padding: 2px 0 4px;
+}
+.line.terminal {
+  color: var(--ds-color-text-muted);
+}
+
+/* Badge: a chip for headers and collapsed threads. */
+.badge {
+  height: 18px;
+  padding: 0 var(--ds-space-6) 0 5px;
+  border-radius: var(--ds-radius-sm);
+  border: 1px solid var(--ai-border);
+  background: var(--ai-bg);
+  color: var(--ai-fg);
+  font-size: var(--ds-text-xs);
+  font-weight: var(--ds-weight-medium);
+}
+.badge.sm {
+  height: 16px;
+  font-size: var(--ds-text-2xs);
+}
+.badge .elapsed {
+  color: inherit;
+  opacity: 0.8;
+}
+.badge.needsHuman {
+  border: 0;
+  padding: 0;
+  background: none;
+}
+
+.glyph {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  color: var(--ai-fg);
+  flex-shrink: 0;
+}
+.label {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ai-fg);
+}
+.line .label {
+  color: var(--ds-color-text-primary);
+}
+.line.terminal .label {
+  color: var(--ai-fg);
+}
+.tool {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  padding: 0 4px;
+  border-radius: var(--ds-radius-xs);
+  background: var(--ds-color-sunken);
+  border: 1px solid var(--ds-color-border-subtle);
+  color: var(--ds-color-text-primary);
+}
+.attempt {
+  color: var(--ds-color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.detail {
+  color: var(--ds-color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.detail code {
+  color: var(--ds-color-text-secondary);
+}
+.elapsed {
+  margin-left: var(--ai-elapsed-margin, auto);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.badge .elapsed {
+  margin-left: 0;
+}
+.elapsedAttention {
+  color: var(--ds-tone-attention-fg);
+  font-weight: var(--ds-weight-medium);
+}
+
+/* --- Rhythms ------------------------------------------------------------ */
+
+/* thinking: the dashed ring drifts. Frozen, it is still a dashed ring. */
+.motion-drift svg {
+  animation: ds-drift calc(var(--ds-cadence-drift) / max(var(--ds-motion-live), 0.0001)) linear infinite;
+}
+
+/* streaming: a block caret, stepped blink. Frozen, it is lit. */
+.caret {
+  display: block;
+  width: 6px;
+  height: 12px;
+  border-radius: 1px;
+  background: var(--ai-fg);
+  animation: ds-blink calc(var(--ds-cadence-blink) / max(var(--ds-motion-live), 0.0001)) steps(2, jump-none) infinite;
+}
+
+/* tool: the glyph holds still; the track underneath carries the motion. */
+.track {
+  position: absolute;
+  left: 20px;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--ai-bg);
+  overflow: hidden;
+}
+.sweep {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 28%;
+  border-radius: 1px;
+  background: var(--ai-solid);
+  animation: ds-sweep calc(var(--ds-cadence-sweep) / max(var(--ds-motion-live), 0.0001)) var(--ds-ease-standard) infinite;
+}
+.attention .track {
+  background: var(--ds-tone-attention-bg);
+}
+.attention .sweep {
+  background: var(--ds-tone-attention-solid);
+}
+
+/* retrying: a ring that depletes once a second (a transition, not a loop). */
+.countdown {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+}
+.countdownRing {
+  position: absolute;
+  inset: 0;
+  transform: rotate(-90deg);
+}
+.countdownTrack {
+  fill: none;
+  stroke: var(--ai-border);
+  stroke-width: 1.5;
+}
+.countdownFill {
+  fill: none;
+  stroke: var(--ai-fg);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-dasharray: 40.84;
+  transition: stroke-dashoffset 1s linear;
+}

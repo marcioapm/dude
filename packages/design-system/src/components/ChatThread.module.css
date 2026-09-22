@@ -1,0 +1,149 @@
+/*
+ * Nested subagent thread. The role colour is the rail; depth is the number
+ * of rails to the left. Indent is 12px per level — enough to see the
+ * hierarchy, not enough to eat the measure. Depth ≥ 3 never opens inline.
+ */
+
+.root {
+  --rail: var(--ds-color-border-strong);
+  --rail-bg: transparent;
+  --depth: 1;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  margin: var(--ds-space-4) 0;
+  border-left: 2px solid var(--rail);
+  border-radius: 0 var(--ds-radius-md) var(--ds-radius-md) 0;
+  background: var(--rail-bg);
+}
+.orchestrator {
+  --rail: var(--ds-role-orchestrator-solid);
+}
+.investigator {
+  --rail: var(--ds-role-investigator-solid);
+}
+.implementer {
+  --rail: var(--ds-role-implementer-solid);
+}
+.reviewer {
+  --rail: var(--ds-role-reviewer-solid);
+}
+.simplifier {
+  --rail: var(--ds-role-simplifier-solid);
+}
+.qa_browser {
+  --rail: var(--ds-role-qa-browser-solid);
+}
+.finished {
+  border-left-color: color-mix(in srgb, var(--rail) 45%, transparent);
+}
+.live {
+  --rail-bg: color-mix(in srgb, var(--rail) 4%, transparent);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-default);
+  padding: 0 var(--ds-space-8) 0 var(--ds-space-6);
+  font-size: var(--ds-text-sm);
+  outline: none;
+  cursor: default;
+  border-radius: 0 var(--ds-radius-md) var(--ds-radius-md) 0;
+}
+.header:hover {
+  background: var(--ds-color-hover-wash);
+}
+.header:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--ds-color-focus-ring);
+}
+.chevron {
+  color: var(--ds-color-text-muted);
+  flex-shrink: 0;
+  transition: transform var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.root:not(.collapsed) .chevron {
+  transform: rotate(90deg);
+}
+/* Depth ≥ 3 never opens inline: no chevron, the header is a link out. */
+.headerOnly .chevron {
+  visibility: hidden;
+  width: 0;
+}
+.roleName {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-primary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.finished .roleName {
+  color: var(--ds-color-text-secondary);
+}
+.task {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--ds-color-text-secondary);
+}
+.task::before {
+  content: "· ";
+  color: var(--ds-color-text-disabled);
+}
+.model {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  flex-shrink: 0;
+}
+.meta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+  flex-shrink: 0;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+}
+.turns {
+  font-variant-numeric: tabular-nums;
+}
+.open {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--ds-radius-sm);
+  background: transparent;
+  color: var(--ds-color-text-muted);
+}
+.open:hover {
+  background: var(--ds-color-active-wash);
+  color: var(--ds-color-text-primary);
+}
+
+.summary {
+  padding: 0 var(--ds-space-12) var(--ds-space-6) calc(var(--ds-space-6) + 12px + var(--ds-space-8) + 16px + var(--ds-space-8));
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding-left: var(--ds-space-12);
+  padding-bottom: var(--ds-space-4);
+  animation: ds-fade-in var(--ds-duration-fast) var(--ds-ease-enter);
+}
+/* Deeper levels indent less: the rails already carry the hierarchy. */
+.root[data-depth="2"] .body {
+  padding-left: var(--ds-space-8);
+}

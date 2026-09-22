@@ -1,0 +1,172 @@
+/*
+ * The composer. Mode is carried by frame tint, label text, button label and
+ * button icon — four channels — so answer vs steer is never a guess.
+ */
+
+.root {
+  --cc-tint: var(--ds-color-border);
+  --cc-wash: transparent;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-6);
+  padding: var(--ds-space-8) var(--ds-space-12) var(--ds-space-8);
+  background: var(--cc-wash);
+  border-top: 2px solid var(--cc-tint);
+  min-width: 0;
+}
+.answer {
+  --cc-tint: var(--ds-tone-attention-solid);
+  --cc-wash: color-mix(in srgb, var(--ds-tone-attention-bg) 45%, var(--ds-color-raised));
+}
+.steer {
+  --cc-tint: var(--ds-color-accent);
+  --cc-wash: color-mix(in srgb, var(--ds-color-accent-subtle) 60%, var(--ds-color-raised));
+}
+.prompt {
+  --cc-tint: var(--ds-color-border);
+}
+.disabled {
+  --cc-tint: var(--ds-color-border-subtle);
+  --cc-wash: var(--ds-color-raised);
+}
+
+/* Pending question, quoted above the field. */
+.question {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: var(--ds-space-8);
+  padding: var(--ds-space-6) var(--ds-space-8);
+  border: 1px solid var(--ds-tone-attention-border);
+  border-radius: var(--ds-radius-md);
+  background: var(--ds-tone-attention-bg);
+}
+.questionIcon {
+  display: inline-grid;
+  place-items: center;
+  height: 16px;
+  color: var(--ds-tone-attention-fg);
+}
+.questionMain {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.questionLabel {
+  font-size: var(--ds-text-2xs);
+  font-weight: var(--ds-weight-medium);
+  letter-spacing: var(--ds-tracking-caps);
+  text-transform: uppercase;
+  color: var(--ds-tone-attention-fg);
+}
+.questionText {
+  font-size: var(--ds-text-md);
+  color: var(--ds-color-text-primary);
+  line-height: var(--ds-leading-normal);
+}
+.options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-6);
+  margin-top: var(--ds-space-4);
+}
+.option {
+  height: var(--ds-size-control-sm);
+  padding: 0 var(--ds-space-8);
+  border: 1px solid var(--ds-tone-attention-border);
+  border-radius: var(--ds-radius-md);
+  background: var(--ds-color-surface);
+  color: var(--ds-color-text-primary);
+  font-size: var(--ds-text-sm);
+}
+.option:hover:not(:disabled) {
+  border-color: var(--ds-tone-attention-fg);
+  background: var(--ds-color-raised);
+}
+.option:disabled {
+  opacity: 0.5;
+}
+
+.field {
+  display: flex;
+  min-width: 0;
+  background: var(--ds-color-field-bg);
+  border: 1px solid var(--ds-color-border);
+  border-radius: var(--ds-radius-md);
+  transition:
+    border-color var(--ds-duration-fast) var(--ds-ease-standard),
+    box-shadow var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.field:hover {
+  border-color: var(--ds-color-border-strong);
+}
+.field:focus-within {
+  border-color: var(--cc-tint);
+  box-shadow: 0 0 0 var(--ds-focus-ring-width) color-mix(in srgb, var(--cc-tint) 30%, transparent);
+}
+.disabled .field {
+  opacity: 0.6;
+}
+.textarea {
+  flex: 1;
+  min-width: 0;
+  padding: 6px var(--ds-space-8);
+  background: none;
+  border: 0;
+  outline: none;
+  resize: none;
+  font-size: var(--ds-text-md);
+  line-height: 20px;
+  color: var(--ds-color-text-primary);
+  font-family: inherit;
+}
+.textarea::placeholder {
+  color: var(--ds-color-text-muted);
+}
+.textarea:focus-visible {
+  outline: none;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-control-sm);
+}
+.hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+}
+.hintSteer {
+  color: var(--ds-color-accent-text);
+}
+.kbd {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-2xs);
+  padding: 0 4px;
+  height: 16px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--ds-color-border);
+  border-bottom-width: 2px;
+  border-radius: var(--ds-radius-sm);
+  background: var(--ds-color-raised);
+  color: var(--ds-color-text-secondary);
+}
+.spacer {
+  flex: 1;
+}
+.submit {
+  min-width: 88px;
+}
+/* Answer is attention (the same hue as needs-you); steer is the accent. */
+.submit-answer {
+  --btn-bg: var(--ds-tone-attention-solid);
+  --btn-fg: var(--ds-tone-attention-on-solid);
+  --btn-bg-hover: color-mix(in srgb, var(--ds-tone-attention-solid) 88%, black);
+  --btn-bg-active: color-mix(in srgb, var(--ds-tone-attention-solid) 78%, black);
+}

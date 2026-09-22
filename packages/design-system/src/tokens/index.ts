@@ -6,6 +6,7 @@
 
 export * from "./scale.ts";
 export * from "./status.ts";
+export * from "./activity.ts";
 export { themeColors, flattenTheme } from "./themes.ts";
 export type { ThemeMode, ThemeColors } from "./themes.ts";
 export {
@@ -42,4 +43,6 @@ export type TokenName =
   | `shadow-${1 | 2 | 3}`
   | `duration-${keyof typeof import("./scale.ts").duration}`
   | `ease-${keyof typeof import("./scale.ts").easing}`
+  | `cadence-${keyof typeof import("./scale.ts").cadence}`
+  | `measure-${keyof typeof import("./scale.ts").measure}`
   | `z-${keyof typeof import("./scale.ts").zIndex}`;

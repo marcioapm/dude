@@ -9,6 +9,7 @@ import type { PaneMode } from "./Frame.tsx";
 import { TokensSection } from "./sections/Tokens.tsx";
 import { PrimitivesSection } from "./sections/Primitives.tsx";
 import { ComponentsSection } from "./sections/Components.tsx";
+import { ChatSection } from "./sections/Chat.tsx";
 
 const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, string]>]> = [
   [
@@ -57,6 +58,19 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["c-diff", "DiffView"],
       ["c-log", "LogStream"],
       ["c-composed", "Composed"],
+    ],
+  ],
+  [
+    "Chat",
+    [
+      ["ch-activity", "ActivityIndicator"],
+      ["ch-tool", "ToolCallCard"],
+      ["ch-plan", "AgentPlan"],
+      ["ch-markdown", "Markdown"],
+      ["ch-message", "ChatMessage"],
+      ["ch-thread", "ChatThread"],
+      ["ch-composer", "ChatComposer"],
+      ["ch-transcript", "ChatTranscript (live)"],
     ],
   ],
 ];
@@ -127,6 +141,7 @@ function Shell() {
         <TokensSection mode={panes} />
         <PrimitivesSection mode={panes} />
         <ComponentsSection mode={panes} />
+        <ChatSection mode={panes} />
       </main>
     </div>
   );

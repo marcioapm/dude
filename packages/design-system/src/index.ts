@@ -22,5 +22,8 @@ export {
   shortId,
 } from "./util/format.ts";
 export type { DurationOptions, TimestampStyle, UsdOptions } from "./util/format.ts";
+export { parseMarkdown, safeUrl } from "./util/markdown.ts";
+export type { Block as MarkdownBlock, Inline as MarkdownInline, ParseOptions as MarkdownParseOptions } from "./util/markdown.ts";
+export { useNow } from "./util/useNow.ts";
 export { ThemeProvider, useTheme } from "./theme.tsx";
 export type { ThemePreference, ThemeContextValue } from "./theme.tsx";

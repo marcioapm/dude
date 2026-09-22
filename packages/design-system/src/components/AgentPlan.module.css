@@ -1,0 +1,217 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--ds-color-border-subtle);
+  border-radius: var(--ds-radius-lg);
+  background: var(--ds-color-raised);
+  overflow: hidden;
+}
+.sticky {
+  position: sticky;
+  top: 0;
+  z-index: var(--ds-z-sticky);
+  box-shadow: var(--ds-shadow-1);
+}
+.flat {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-default);
+  padding: 0 var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+  outline: none;
+  cursor: default;
+}
+.header[role="button"]:hover {
+  background: var(--ds-color-hover-wash);
+}
+.header:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--ds-color-focus-ring);
+}
+.root:not(.collapsed) .header {
+  border-bottom: 1px solid var(--ds-color-border-subtle);
+}
+.headerIcon {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  color: var(--ds-color-text-muted);
+}
+.title {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-primary);
+  white-space: nowrap;
+}
+.meta {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.progress {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  margin-left: var(--ds-space-4);
+  flex-shrink: 0;
+}
+.count {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.allDone .count {
+  color: var(--ds-tone-success-fg);
+}
+
+/* Segmented bar: one cell per item, in order. Reads as "where in the plan". */
+.bar {
+  display: inline-flex;
+  gap: 2px;
+  height: 6px;
+}
+.bar i {
+  display: block;
+  width: 10px;
+  height: 100%;
+  border-radius: 1px;
+  background: var(--ds-color-border);
+  transition: background-color var(--ds-duration-slow) var(--ds-ease-standard);
+}
+.bar i[data-s="completed"] {
+  background: var(--ds-tone-success-solid);
+}
+.bar i[data-s="in_progress"] {
+  background: var(--ds-tone-info-solid);
+  animation: ds-pulse calc(var(--ds-cadence-breathe) / max(var(--ds-motion-live), 0.0001)) ease-in-out infinite;
+}
+.bar i[data-s="cancelled"] {
+  background: var(--ds-color-border-subtle);
+}
+
+.currentInline {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  min-width: 0;
+  flex: 1;
+  margin-left: var(--ds-space-8);
+  padding-left: var(--ds-space-8);
+  border-left: 1px solid var(--ds-color-border-subtle);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+}
+.currentText {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.chevron {
+  margin-left: auto;
+  color: var(--ds-color-text-muted);
+  transition: transform var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.root:not(.collapsed) .chevron {
+  transform: rotate(90deg);
+}
+.collapsed .currentInline + .chevron {
+  margin-left: 0;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: var(--ds-space-4) 0;
+  display: flex;
+  flex-direction: column;
+}
+.item {
+  display: grid;
+  grid-template-columns: 16px auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-compact);
+  padding: 0 var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-primary);
+}
+.itemChanged {
+  animation: ds-flash var(--ds-duration-deliberate) var(--ds-ease-exit) 1;
+}
+.ordinal {
+  font-size: var(--ds-text-2xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--ds-color-text-disabled);
+  width: 14px;
+  text-align: right;
+}
+.content {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.item-in_progress .content {
+  font-weight: var(--ds-weight-medium);
+}
+.item-completed .content,
+.item-cancelled .content {
+  color: var(--ds-color-text-muted);
+}
+.item-cancelled .content {
+  text-decoration: line-through;
+  text-decoration-color: var(--ds-color-border-strong);
+}
+.priority {
+  font-size: var(--ds-text-2xs);
+  letter-spacing: var(--ds-tracking-caps);
+  text-transform: uppercase;
+  color: var(--ds-tone-attention-fg);
+}
+
+/* Glyphs: same shape rules as StatusBadge dots — hollow = pending,
+   dashed drifting = in progress, filled check = done. */
+.glyph {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--ds-radius-full);
+  color: var(--ds-color-text-muted);
+}
+.glyph-pending {
+  color: var(--ds-color-text-disabled);
+}
+.glyph-in_progress {
+  color: var(--ds-tone-info-fg);
+}
+.glyph-in_progress svg {
+  animation: ds-drift calc(var(--ds-cadence-drift) / max(var(--ds-motion-live), 0.0001)) linear infinite;
+}
+.glyph-completed {
+  color: var(--ds-tone-success-on-solid);
+  background: var(--ds-tone-success-solid);
+  width: 14px;
+  height: 14px;
+  margin-left: 1px;
+}
+.glyph-cancelled {
+  color: var(--ds-color-text-disabled);
+}
+/* One-shot pop when a status changes. Under reduced motion, duration is
+   0 and the glyph simply appears in its new state. */
+.glyphPop {
+  animation: ds-pop var(--ds-duration-slow) var(--ds-ease-enter) 1;
+}

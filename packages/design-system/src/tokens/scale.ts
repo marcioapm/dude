@@ -100,6 +100,34 @@ export const easing = {
   linear: "linear",
 } as const;
 
+/**
+ * Cadence of the looping "live" animations, in ms. Each is a distinct
+ * rhythm so that the activity states read differently even in peripheral
+ * vision: running spins, live breathes, thinking drifts, a tool sweeps,
+ * a cursor blinks. Every loop divides by `--ds-motion-live` so reduced
+ * motion freezes it in place.
+ */
+export const cadence = {
+  /** The running spinner. */
+  spin: 1100,
+  /** The slow opacity breathe on live states and the needs-you ring. */
+  breathe: 2400,
+  /** A dashed ring rotating slowly: the model is thinking. */
+  drift: 3200,
+  /** The indeterminate sweep on a tool call that is still running. */
+  sweep: 1600,
+  /** The streaming text cursor. */
+  blink: 1000,
+} as const;
+
+/** Reading measures for prose. Chat bubbles are narrower than documents. */
+export const measure = {
+  /** Agent messages inside a transcript. */
+  message: "72ch",
+  /** Published artifacts read in full. */
+  document: "84ch",
+} as const;
+
 export const zIndex = {
   base: 0,
   raised: 1,

@@ -64,6 +64,13 @@
   --ds-ease-enter: cubic-bezier(0, 0, 0.2, 1);
   --ds-ease-exit: cubic-bezier(0.4, 0, 1, 1);
   --ds-ease-linear: linear;
+  --ds-cadence-spin: 1100ms;
+  --ds-cadence-breathe: 2400ms;
+  --ds-cadence-drift: 3200ms;
+  --ds-cadence-sweep: 1600ms;
+  --ds-cadence-blink: 1000ms;
+  --ds-measure-message: 72ch;
+  --ds-measure-document: 84ch;
   --ds-z-base: 0;
   --ds-z-raised: 1;
   --ds-z-sticky: 10;

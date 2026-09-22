@@ -15,6 +15,7 @@
  *   Every domain status maps onto one of these plus a glyph.
  */
 
+import { ALL_AGENT_ROLES, type AgentRole } from "@dude/domain";
 import { oklch, toHex, type Oklch } from "./oklch.ts";
 
 // ---------------------------------------------------------------------------
@@ -152,22 +153,9 @@ export const tones: Record<"light" | "dark", Record<ToneName, ToneInstance>> = {
 // AgentAvatar; color is the secondary cue.
 // ---------------------------------------------------------------------------
 
-export type AgentRoleName =
-  | "orchestrator"
-  | "investigator"
-  | "implementer"
-  | "reviewer"
-  | "simplifier"
-  | "qa_browser";
+export type AgentRoleName = AgentRole;
 
-export const AGENT_ROLE_NAMES: readonly AgentRoleName[] = [
-  "orchestrator",
-  "investigator",
-  "implementer",
-  "reviewer",
-  "simplifier",
-  "qa_browser",
-];
+export const AGENT_ROLE_NAMES: readonly AgentRoleName[] = ALL_AGENT_ROLES;
 
 const ROLE_HUES: Record<AgentRoleName, number> = {
   orchestrator: 300, // violet — conducts, sits above the others

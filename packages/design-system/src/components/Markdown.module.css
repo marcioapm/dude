@@ -1,0 +1,353 @@
+/*
+ * Markdown. Two rhythms:
+ *   .message   a chat turn — 13px / 1.5, 72ch, 6px between blocks
+ *   .document  a published artifact — 13px / 1.55, 84ch, 12px between blocks
+ * Neither is a blog theme. Headings step down quickly and never exceed
+ * text-xl inside a message.
+ */
+
+.root {
+  --md-gap: var(--ds-space-6);
+  --md-measure: var(--ds-measure-message);
+  font-size: var(--ds-text-md);
+  line-height: var(--ds-leading-normal);
+  color: var(--ds-color-text-primary);
+  max-width: var(--md-measure);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.root > * + * {
+  margin-top: var(--md-gap);
+}
+.document {
+  --md-gap: var(--ds-space-12);
+  --md-measure: var(--ds-measure-document);
+  line-height: 1.55;
+}
+
+/* Headings */
+.h {
+  font-weight: var(--ds-weight-semibold);
+  letter-spacing: var(--ds-tracking-tight);
+  line-height: var(--ds-leading-tight);
+  color: var(--ds-color-text-primary);
+  scroll-margin-top: var(--ds-space-16);
+}
+.root > .h {
+  margin-top: var(--ds-space-12);
+}
+.document > .h {
+  margin-top: var(--ds-space-24);
+}
+.root > .h:first-child {
+  margin-top: 0;
+}
+.h1 {
+  font-size: var(--ds-text-xl);
+}
+.h2 {
+  font-size: var(--ds-text-lg);
+}
+.h3 {
+  font-size: var(--ds-text-md);
+}
+.h4,
+.h5,
+.h6 {
+  font-size: var(--ds-text-sm);
+  text-transform: uppercase;
+  letter-spacing: var(--ds-tracking-caps);
+  color: var(--ds-color-text-secondary);
+}
+.document .h1 {
+  font-size: var(--ds-text-3xl);
+  padding-bottom: var(--ds-space-8);
+  border-bottom: 1px solid var(--ds-color-border-subtle);
+}
+.document .h2 {
+  font-size: var(--ds-text-xl);
+}
+.document .h3 {
+  font-size: var(--ds-text-lg);
+}
+
+.p {
+  margin: 0;
+}
+
+/* Inline */
+.inlineCode {
+  font-family: var(--ds-font-mono);
+  font-size: 0.925em;
+  padding: 0 4px;
+  border-radius: var(--ds-radius-xs);
+  background: var(--ds-color-sunken);
+  border: 1px solid var(--ds-color-border-subtle);
+  color: var(--ds-color-text-primary);
+}
+.strong {
+  font-weight: var(--ds-weight-semibold);
+}
+.del {
+  color: var(--ds-color-text-muted);
+}
+.link {
+  color: var(--ds-color-accent-text);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--ds-color-accent-text) 40%, transparent);
+  text-underline-offset: 2px;
+}
+.link:hover {
+  text-decoration-color: currentColor;
+}
+.imageLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--ds-text-sm);
+  padding: 0 4px;
+  border: 1px dashed var(--ds-color-border);
+  border-radius: var(--ds-radius-xs);
+  text-decoration: none;
+}
+
+/* Lists */
+.list {
+  padding-left: var(--ds-space-20);
+  margin: 0;
+}
+.li {
+  margin: 0;
+}
+.li + .li {
+  margin-top: var(--ds-space-2);
+}
+.document .li + .li {
+  margin-top: var(--ds-space-4);
+}
+.li::marker {
+  color: var(--ds-color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.liBody {
+  display: block;
+  min-width: 0;
+}
+.liBody > * + * {
+  margin-top: var(--md-gap);
+}
+.taskList {
+  list-style: none;
+  padding-left: var(--ds-space-2);
+}
+.task {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ds-space-6);
+}
+.taskMark {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  margin-top: 3px;
+  border-radius: var(--ds-radius-xs);
+  border: 1px solid var(--ds-color-border-strong);
+  color: transparent;
+  flex-shrink: 0;
+}
+.taskDone .taskMark {
+  color: var(--ds-tone-success-on-solid);
+  background: var(--ds-tone-success-solid);
+  border-color: var(--ds-tone-success-solid);
+}
+.taskDone .liBody {
+  color: var(--ds-color-text-muted);
+  text-decoration: line-through;
+  text-decoration-color: var(--ds-color-border-strong);
+}
+
+/* Quote */
+.quote {
+  margin: 0;
+  padding: var(--ds-space-2) 0 var(--ds-space-2) var(--ds-space-12);
+  border-left: 2px solid var(--ds-color-border-strong);
+  color: var(--ds-color-text-secondary);
+}
+.quote > * + * {
+  margin-top: var(--md-gap);
+}
+
+/* Code block: same type as LogStream (mono, text-sm, 18px lines). */
+.code {
+  border: 1px solid var(--ds-color-border-subtle);
+  border-radius: var(--ds-radius-lg);
+  background: var(--ds-color-field-bg);
+  overflow: hidden;
+  max-width: 100%;
+}
+.codeBar {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  height: 22px;
+  padding: 0 var(--ds-space-8);
+  background: var(--ds-color-raised);
+  border-bottom: 1px solid var(--ds-color-border-subtle);
+  font-size: var(--ds-text-2xs);
+  color: var(--ds-color-text-muted);
+}
+.code:not([data-lang]) .codeBar {
+  height: 0;
+  border: 0;
+  overflow: hidden;
+}
+.code:not([data-lang]):hover .codeBar {
+  height: 22px;
+  border-bottom: 1px solid var(--ds-color-border-subtle);
+}
+.codeLang {
+  font-family: var(--ds-font-mono);
+  letter-spacing: var(--ds-tracking-wide);
+  text-transform: lowercase;
+}
+.codeSpacer {
+  flex: 1;
+}
+.codeCopy {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 var(--ds-space-6);
+  border: 0;
+  border-radius: var(--ds-radius-sm);
+  background: transparent;
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-2xs);
+}
+.codeCopy:hover {
+  background: var(--ds-color-hover-wash);
+  color: var(--ds-color-text-primary);
+}
+.pre {
+  margin: 0;
+  padding: var(--ds-space-8) var(--ds-space-12);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-sm);
+  line-height: 18px;
+  font-feature-settings: "tnum", "zero";
+  color: var(--ds-color-text-primary);
+  overflow: auto;
+  max-height: 420px;
+  white-space: pre;
+  tab-size: 2;
+}
+.pre code {
+  font: inherit;
+}
+.codeOpen .pre {
+  border-left: 2px solid var(--ds-tone-info-border);
+}
+.diff {
+  max-width: none;
+}
+
+/* Table */
+.tableWrap {
+  overflow-x: auto;
+  max-width: 100%;
+}
+.table {
+  border-collapse: collapse;
+  font-size: var(--ds-text-sm);
+  font-variant-numeric: tabular-nums;
+  width: auto;
+  min-width: 40%;
+}
+.table th,
+.table td {
+  padding: 0 var(--ds-space-8);
+  height: var(--ds-size-row-compact);
+  border-bottom: 1px solid var(--ds-color-border-subtle);
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.table th {
+  font-size: var(--ds-text-2xs);
+  font-weight: var(--ds-weight-medium);
+  letter-spacing: var(--ds-tracking-caps);
+  text-transform: uppercase;
+  color: var(--ds-color-text-muted);
+  border-bottom-color: var(--ds-color-border);
+}
+.table td {
+  white-space: normal;
+}
+.document .table th,
+.document .table td {
+  height: var(--ds-size-row-default);
+}
+
+.hr {
+  border: 0;
+  border-top: 1px solid var(--ds-color-border-subtle);
+  margin: var(--ds-space-8) 0;
+}
+
+/* Streaming caret. The static style is fully visible: when reduced motion
+   ends the blink, the caret simply stays lit. Blink is stepped, not faded,
+   so it reads as a cursor rather than a pulse. */
+.caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  background: var(--ds-tone-info-fg);
+  border-radius: 1px;
+  animation: ds-blink calc(var(--ds-cadence-blink) / max(var(--ds-motion-live), 0.0001)) steps(2, jump-none) infinite;
+}
+.pre .caret {
+  height: 14px;
+  vertical-align: text-bottom;
+}
+
+/* Outline (document variant) */
+.withOutline {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 200px;
+  gap: var(--ds-space-32);
+  align-items: start;
+}
+.outline {
+  position: sticky;
+  top: var(--ds-space-16);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-left: var(--ds-space-12);
+  border-left: 1px solid var(--ds-color-border-subtle);
+  font-size: var(--ds-text-xs);
+}
+.outlineTitle {
+  font-size: var(--ds-text-2xs);
+  font-weight: var(--ds-weight-medium);
+  letter-spacing: var(--ds-tracking-caps);
+  text-transform: uppercase;
+  color: var(--ds-color-text-muted);
+  margin-bottom: var(--ds-space-4);
+}
+.outlineLink {
+  color: var(--ds-color-text-secondary);
+  padding: 2px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-decoration: none;
+}
+.outlineLink:hover {
+  color: var(--ds-color-text-primary);
+  text-decoration: none;
+}
