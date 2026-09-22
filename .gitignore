@@ -39,3 +39,7 @@ __pycache__/
 
 # Go build output
 /runner/bin/
+
+# Python E2E
+/tests/.venv/
+/tests/*.egg-info/

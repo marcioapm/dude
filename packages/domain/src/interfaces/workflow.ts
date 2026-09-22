@@ -46,6 +46,13 @@ export interface WorkflowRunState {
   lastError: string | null;
   /** When set, the run is parked until this time. */
   wakeAt: string | null;
+  /**
+   * Signal names this run is parked on; empty when it is not signal-waiting.
+   *
+   * Carried in memory so a failing step's retry can restore it rather than
+   * losing track of what the run was waiting for.
+   */
+  awaitingSignals: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -59,6 +66,16 @@ export interface WorkflowSignal {
   receivedAt: string;
 }
 
+/**
+ * Every method that addresses an existing run takes the *acting* organization
+ * as its first argument.
+ *
+ * Workflow run IDs travel in webhook URLs, events and logs, so possessing one
+ * must not confer authority over it. Resolving the organization from the run
+ * itself would make row-level security satisfied by construction and unable
+ * to reject anything: the caller's tenant has to be an input, so a mismatch
+ * can be refused.
+ */
 export interface WorkflowRuntime {
   start(options: StartWorkflowOptions): Promise<WorkflowRunRef>;
 
@@ -67,6 +84,7 @@ export interface WorkflowRuntime {
    * parked — signals queue in the inbox and are consumed on next step.
    */
   signal(
+    organizationId: string,
     workflowRunId: string,
     name: string,
     payload: Record<string, unknown>,
@@ -74,11 +92,12 @@ export interface WorkflowRuntime {
   ): Promise<void>;
 
   /** Park until `wakeAt`, releasing the worker. */
-  sleepUntil(workflowRunId: string, wakeAt: Date): Promise<void>;
+  sleepUntil(organizationId: string, workflowRunId: string, wakeAt: Date): Promise<void>;
 
-  abort(workflowRunId: string, reason: string): Promise<void>;
+  abort(organizationId: string, workflowRunId: string, reason: string): Promise<void>;
 
-  get(workflowRunId: string): Promise<WorkflowRunState | null>;
+  /** Returns null when the run does not exist *for this organization*. */
+  get(organizationId: string, workflowRunId: string): Promise<WorkflowRunState | null>;
 }
 
 /**

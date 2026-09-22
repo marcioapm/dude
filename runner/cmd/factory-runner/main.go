@@ -343,18 +343,26 @@ func (d *daemon) executeRun(ctx context.Context, r client.Run) error {
 	}
 	log.Info("workspace visible in container", "exit", result.ExitCode)
 
-	if err := d.api.UpdateRun(ctx, r.ID, "completed", "", wsPath); err != nil {
-		return fmt.Errorf("mark completed: %w", err)
-	}
-
-	// Cleanup uses a context detached from the Run's, so an aborted Run still
-	// gets its container reaped.
+	// Tear the runtime down *before* reporting the Run terminal.
+	//
+	// Reporting completion first makes "the Run is done" and "its container is
+	// gone" observably inconsistent: anything reacting to the terminal status
+	// — the UI, a test, a scheduler counting capacity — can still see a live
+	// container. Cleanup uses a context detached from the Run's so an aborted
+	// Run is reaped too.
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
+
 	if err := d.docker.Stop(cleanup, r.ID); err != nil {
 		log.Warn("container cleanup failed", "error", err)
 	}
-	_ = d.api.ReportRuntime(cleanup, r.ID, created.ContainerID, "", "destroyed")
+	if err := d.api.ReportRuntime(cleanup, r.ID, created.ContainerID, "", "destroyed"); err != nil {
+		log.Warn("runtime report failed", "error", err)
+	}
+
+	if err := d.api.UpdateRun(cleanup, r.ID, "completed", "", wsPath); err != nil {
+		return fmt.Errorf("mark completed: %w", err)
+	}
 
 	log.Info("run completed", "took", time.Since(started))
 	return nil

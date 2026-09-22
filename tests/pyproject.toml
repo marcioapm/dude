@@ -1,0 +1,24 @@
+[project]
+name = "dude-e2e"
+version = "0.0.0"
+description = "Black-box E2E suite for the dude software factory"
+# Python 3.14 per plan §52. The suite is a deliberate external client: it
+# drives the deployed system through its public API and never imports the
+# Bun implementation.
+requires-python = ">=3.14"
+dependencies = [
+    "pytest>=8.3",
+    "pytest-timeout>=2.3",
+    "pytest-xdist>=3.6",
+    "requests>=2.32",
+    "psycopg[binary]>=3.2",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["suites"]
+# No test should hang the suite; a stuck Run is a failure, not a pause.
+timeout = 300
+addopts = "-ra --strict-markers"
+markers = [
+    "docker: requires Docker and the runner daemon",
+]

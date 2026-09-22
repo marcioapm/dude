@@ -28,7 +28,7 @@ import type {
   WorkflowStepContext,
 } from "@dude/domain";
 import { newId } from "@dude/domain";
-import { withOrg, withoutTenant } from "../db/client.ts";
+import { withOrg } from "../db/client.ts";
 
 /**
  * Column list aliased to WorkflowRunState.
@@ -67,6 +67,7 @@ function toState(row: Record<string, unknown>): WorkflowRunState {
     attempt: Number(row.attempt ?? 0),
     lastError: (row.lastError as string | null) ?? null,
     wakeAt: iso(row.wakeAt),
+    awaitingSignals: (row.awaitingSignals ?? []) as string[],
     createdAt: iso(row.createdAt)!,
     updatedAt: iso(row.updatedAt)!,
   };
@@ -121,7 +122,17 @@ export class PostgresWorkflowRuntime implements WorkflowRuntime {
         SELECT id FROM workflow_runs
         WHERE workflow_type = ${options.workflowType}
           AND idempotency_key = ${options.idempotencyKey}`) as Array<{ id: string }>;
-      return { workflowRunId: existing[0]!.id, deduplicated: true };
+      const found = existing[0];
+      if (!found) {
+        // The conflicting row is not visible: either the tenant context is
+        // wrong, or it was deleted between the INSERT and this read. Say so
+        // rather than crashing on an undefined property.
+        throw new Error(
+          `workflow start for ${options.workflowType}/${options.idempotencyKey} conflicted, ` +
+            `but the existing run is not visible to organization ${options.organizationId}`,
+        );
+      }
+      return { workflowRunId: found.id, deduplicated: true };
     });
   }
 
@@ -131,16 +142,26 @@ export class PostgresWorkflowRuntime implements WorkflowRuntime {
    * Signals are durable and order-independent: one may arrive before the
    * workflow parks to wait for it, so it is stored and consumed on the next
    * step rather than dropped.
+   *
+   * Scoped to the caller's organization. A run id alone must not confer
+   * authority, since ids appear in webhook URLs and events.
    */
   async signal(
+    organizationId: string,
     workflowRunId: string,
     name: string,
     payload: Record<string, unknown>,
     idempotencyKey?: string,
   ): Promise<void> {
-    const organizationId = await this.#organizationOf(workflowRunId);
-
     await withOrg(organizationId, async ({ sql }) => {
+      // RLS confines this to the caller's tenant, so a run owned by another
+      // organization simply does not exist here.
+      const owned = (await sql`
+        SELECT id FROM workflow_runs WHERE id = ${workflowRunId}`) as Array<{ id: string }>;
+      if (!owned[0]) {
+        throw new Error(`workflow run ${workflowRunId} not found`);
+      }
+
       await sql`
         INSERT INTO workflow_signals (id, organization_id, workflow_run_id, name, payload, idempotency_key)
         VALUES (${newId("workflowSignal")}, ${organizationId}, ${workflowRunId},
@@ -159,30 +180,34 @@ export class PostgresWorkflowRuntime implements WorkflowRuntime {
     });
   }
 
-  async sleepUntil(workflowRunId: string, wakeAt: Date): Promise<void> {
-    const organizationId = await this.#organizationOf(workflowRunId);
+  /**
+   * Park a live run until `wakeAt`.
+   *
+   * Restricted to live statuses: without that guard this resurrects a
+   * completed or aborted run, making it re-claimable and re-executing a
+   * terminal step.
+   */
+  async sleepUntil(organizationId: string, workflowRunId: string, wakeAt: Date): Promise<void> {
     await withOrg(organizationId, async ({ sql }) => {
       await sql`
         UPDATE workflow_runs
         SET status = 'waiting', wake_at = ${wakeAt.toISOString()}, awaiting_signals = '[]'::jsonb
-        WHERE id = ${workflowRunId}`;
+        WHERE id = ${workflowRunId}
+          AND status IN ('running', 'waiting')`;
     });
   }
 
-  async abort(workflowRunId: string, reason: string): Promise<void> {
-    const organizationId = await this.#organizationOf(workflowRunId);
+  async abort(organizationId: string, workflowRunId: string, reason: string): Promise<void> {
     await withOrg(organizationId, async ({ sql }) => {
       await sql`
         UPDATE workflow_runs
-        SET status = 'aborted', last_error = ${reason}, wake_at = NULL
+        SET status = 'aborted', last_error = ${reason}, wake_at = NULL,
+            locked_by = NULL, locked_until = NULL
         WHERE id = ${workflowRunId} AND status IN ('running', 'waiting')`;
     });
   }
 
-  async get(workflowRunId: string): Promise<WorkflowRunState | null> {
-    const organizationId = await this.#organizationOf(workflowRunId).catch(() => null);
-    if (!organizationId) return null;
-
+  async get(organizationId: string, workflowRunId: string): Promise<WorkflowRunState | null> {
     return withOrg(organizationId, async ({ sql }) => {
       const rows = (await sql`
         SELECT ${sql.unsafe(workflowSelect("workflow_runs"))} FROM workflow_runs
@@ -194,14 +219,58 @@ export class PostgresWorkflowRuntime implements WorkflowRuntime {
   /**
    * Claim and advance at most `limit` runnable workflows.
    *
+   * Claimed runs advance concurrently. Advancing them serially would make a
+   * batch's later runs wait behind the earlier ones' model calls, easily
+   * exceeding the lease before they even start, at which point another poller
+   * could claim a run this one still intends to execute.
+   *
    * Returns how many were advanced, so a caller can loop until idle.
    */
   async tick(organizationId: string, limit = 10): Promise<number> {
     const claimed = await this.#claim(organizationId, limit);
-    for (const run of claimed) {
-      await this.#advance(run);
-    }
+    // A step failure is recorded per-run by #advance; allSettled keeps one
+    // bad run from aborting the rest of the batch.
+    await Promise.allSettled(claimed.map((run) => this.#advanceWithLease(run)));
     return claimed.length;
+  }
+
+  /**
+   * Advance a run, renewing its lease while the step executes.
+   *
+   * A step that calls a model, CI or a PR review can easily outlast a fixed
+   * lease. Renewal keeps ownership for as long as this poller is actually
+   * working, while still releasing the run promptly if the process dies.
+   */
+  async #advanceWithLease(run: WorkflowRunState): Promise<void> {
+    let renewing = false;
+    const renew = setInterval(() => {
+      // Skip if the previous renewal is still in flight, so a slow database
+      // cannot queue up overlapping transactions on the pool.
+      if (renewing) return;
+      renewing = true;
+      void withOrg(run.organizationId, async ({ sql }) => {
+        await sql`
+          UPDATE workflow_runs
+          SET locked_until = now() + ${`${LEASE_SECONDS} seconds`}::interval
+          WHERE id = ${run.workflowRunId} AND locked_by = ${this.#pollerId}`;
+      })
+        .catch(() => {
+          // A failed renewal is not fatal: the write-back is guarded on the
+          // lease, so losing it makes the transition a no-op rather than a
+          // double-apply.
+        })
+        .finally(() => {
+          renewing = false;
+        });
+    }, (LEASE_SECONDS * 1000) / 3);
+    // Do not hold the process open for a renewal timer.
+    renew.unref?.();
+
+    try {
+      await this.#advance(run);
+    } finally {
+      clearInterval(renew);
+    }
   }
 
   /**
@@ -264,9 +333,11 @@ export class PostgresWorkflowRuntime implements WorkflowRuntime {
       return;
     }
 
-    // Consume pending signals in the same transaction that runs the step, so a
-    // signal is never both delivered and left unconsumed.
-    const signals = await this.#consumeSignals(run);
+    // Read pending signals without consuming them. They are marked consumed
+    // only once the step's transition commits, so a step that throws leaves
+    // them in the inbox for the retry — otherwise a human's approval or a CI
+    // webhook would be silently discarded by a transient failure.
+    const signals = await this.#peekSignals(run);
 
     const ctx: WorkflowStepContext = {
       workflowRunId: run.workflowRunId,
@@ -279,65 +350,91 @@ export class PostgresWorkflowRuntime implements WorkflowRuntime {
     try {
       const result = await step(ctx);
 
-      await withOrg(run.organizationId, async ({ sql }) => {
-        if (result.next === null) {
-          await sql`
-            UPDATE workflow_runs
-            SET status = 'completed', step = ${run.step}, wake_at = NULL,
-                awaiting_signals = '[]'::jsonb, attempt = 0, locked_by = NULL, locked_until = NULL,
-                state = COALESCE(${result.state ?? null}::jsonb, state)
-            WHERE id = ${run.workflowRunId}`;
-          return;
-        }
+      const committed = await withOrg(run.organizationId, async ({ sql }) => {
+        // Every write-back is guarded on this poller still holding the lease
+        // and the run still being live. That makes the transition a no-op if
+        // the run was aborted mid-step, or if the lease expired and another
+        // poller took over — last-writer-wins would otherwise resurrect an
+        // aborted run or double-apply a step.
+        const rows =
+          result.next === null
+            ? ((await sql`
+                UPDATE workflow_runs
+                SET status = 'completed', step = ${run.step}, wake_at = NULL,
+                    awaiting_signals = '[]'::jsonb, attempt = 0,
+                    locked_by = NULL, locked_until = NULL,
+                    state = COALESCE(${result.state ?? null}::jsonb, state)
+                WHERE id = ${run.workflowRunId}
+                  AND status IN ('running', 'waiting')
+                  AND locked_by = ${this.#pollerId}
+                  AND locked_until > now()
+                RETURNING id`) as Array<{ id: string }>)
+            : ((await sql`
+                UPDATE workflow_runs
+                SET step = ${result.next},
+                    state = COALESCE(${result.state ?? null}::jsonb, state),
+                    status = ${result.sleepUntil || result.awaitSignals?.length ? "waiting" : "running"},
+                    wake_at = ${result.sleepUntil?.toISOString() ?? null},
+                    awaiting_signals = ${result.awaitSignals ?? []}::jsonb,
+                    -- A successful step clears the retry counter for the next.
+                    attempt = 0,
+                    last_error = NULL,
+                    locked_by = NULL,
+                    locked_until = NULL
+                WHERE id = ${run.workflowRunId}
+                  AND status IN ('running', 'waiting')
+                  AND locked_by = ${this.#pollerId}
+                  AND locked_until > now()
+                RETURNING id`) as Array<{ id: string }>);
 
-        const waiting = Boolean(result.sleepUntil || result.awaitSignals?.length);
-        await sql`
-          UPDATE workflow_runs
-          SET step = ${result.next},
-              state = COALESCE(${result.state ?? null}::jsonb, state),
-              status = ${waiting ? "waiting" : "running"},
-              wake_at = ${result.sleepUntil?.toISOString() ?? null},
-              awaiting_signals = ${result.awaitSignals ?? []}::jsonb,
-              -- A successful step clears the retry counter for the next one.
-              attempt = 0,
-              last_error = NULL,
-              locked_by = NULL,
-              locked_until = NULL
-          WHERE id = ${run.workflowRunId}`;
+        if (!rows[0]) return false;
+
+        // The transition is durable, so the signals that produced it can be
+        // retired. Same transaction: a crash between the two would either
+        // re-deliver the signals or lose them.
+        if (signals.length > 0) {
+          // `IN` over a values list rather than `= ANY($1::text[])`: the
+          // driver renders a JS array as a Postgres array *literal*, which a
+          // text[] cast then rejects.
+          await sql`
+            UPDATE workflow_signals SET consumed_at = now()
+            WHERE id IN ${sql(signals.map((s) => s.signalId))}
+              AND consumed_at IS NULL`;
+        }
+        return true;
       });
+
+      if (!committed) {
+        // Aborted, or the lease was lost. Either way this poller must not
+        // also record a failure for a run it no longer owns.
+        return;
+      }
     } catch (err) {
       await this.#fail(run, err instanceof Error ? err.message : String(err), false, definition);
     }
   }
 
   /**
-   * Take the pending signals this run is currently awaiting.
+   * Read the pending signals this run is currently awaiting, without
+   * consuming them.
    *
    * Scoped to `awaiting_signals` on purpose. A signal may arrive before the
-   * workflow reaches the step that waits for it — consuming indiscriminately
+   * workflow reaches the step that waits for it — reading indiscriminately
    * would let an earlier step swallow it, and the workflow would then park
    * forever on a signal that had already been delivered. Unawaited signals
    * stay in the inbox until a step asks for them.
-   *
-   * Marking them consumed in the same statement that reads them means a
-   * concurrent poller cannot deliver the same signal twice.
    */
-  async #consumeSignals(run: WorkflowRunState): Promise<WorkflowSignal[]> {
+  async #peekSignals(run: WorkflowRunState): Promise<WorkflowSignal[]> {
     return withOrg(run.organizationId, async ({ sql }) => {
       const rows = (await sql`
-        UPDATE workflow_signals
-        SET consumed_at = now()
-        WHERE id IN (
-          SELECT s.id FROM workflow_signals s
-          JOIN workflow_runs w ON w.id = s.workflow_run_id
-          WHERE s.workflow_run_id = ${run.workflowRunId}
-            AND s.consumed_at IS NULL
-            AND w.awaiting_signals ? s.name
-          ORDER BY s.received_at
-          FOR UPDATE OF s SKIP LOCKED
-        )
-        RETURNING id AS "signalId", workflow_run_id AS "workflowRunId", name, payload,
-                  received_at AS "receivedAt"`) as Array<Record<string, unknown>>;
+        SELECT s.id AS "signalId", s.workflow_run_id AS "workflowRunId", s.name, s.payload,
+               s.received_at AS "receivedAt"
+        FROM workflow_signals s
+        JOIN workflow_runs w ON w.id = s.workflow_run_id
+        WHERE s.workflow_run_id = ${run.workflowRunId}
+          AND s.consumed_at IS NULL
+          AND w.awaiting_signals ? s.name
+        ORDER BY s.received_at`) as Array<Record<string, unknown>>;
 
       return rows.map((r) => ({
         signalId: r.signalId as string,
@@ -371,36 +468,22 @@ export class PostgresWorkflowRuntime implements WorkflowRuntime {
           UPDATE workflow_runs
           SET status = 'dead_lettered', attempt = ${attempt}, last_error = ${error},
               wake_at = NULL, locked_by = NULL, locked_until = NULL
-          WHERE id = ${run.workflowRunId}`;
+          WHERE id = ${run.workflowRunId}
+            AND status IN ('running', 'waiting')`;
         return;
       }
 
+      // The awaiting set is preserved across a retry. Clearing it would leave
+      // a run that had parked on, say, ["pr_approved","pr_rejected"] unable to
+      // be woken by either signal again, reachable only by its backoff timer.
       await sql`
         UPDATE workflow_runs
         SET status = 'waiting', attempt = ${attempt}, last_error = ${error},
             wake_at = now() + ${`${backoffMs(attempt)} milliseconds`}::interval,
-            awaiting_signals = '[]'::jsonb,
+            awaiting_signals = ${run.awaitingSignals}::jsonb,
             locked_by = NULL, locked_until = NULL
-        WHERE id = ${run.workflowRunId}`;
+        WHERE id = ${run.workflowRunId}
+          AND status IN ('running', 'waiting')`;
     });
-  }
-
-  /**
-   * Resolve a workflow run's organization.
-   *
-   * workflow_runs is tenant-scoped, but callers such as webhook handlers hold
-   * only a run id. This reads the owning organization through the same narrow
-   * definer-rights path used for API keys.
-   */
-  async #organizationOf(workflowRunId: string): Promise<string> {
-    const rows = await withoutTenant(async ({ sql }) => {
-      return (await sql`
-        SELECT organization_id FROM workflow_run_organization(${workflowRunId})`) as Array<{
-        organization_id: string;
-      }>;
-    });
-    const organizationId = rows[0]?.organization_id;
-    if (!organizationId) throw new Error(`workflow run ${workflowRunId} not found`);
-    return organizationId;
   }
 }

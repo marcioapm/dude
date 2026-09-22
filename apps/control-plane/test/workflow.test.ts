@@ -121,7 +121,7 @@ describe("start", () => {
 
     await drain();
 
-    const state = await runtime.get(workflowRunId);
+    const state = await runtime.get(ORG, workflowRunId);
     expect(state?.status).toBe("completed");
     expect(state?.state).toMatchObject({ done: true });
     expect(trace).toEqual(["a", "b"]);
@@ -164,15 +164,15 @@ describe("signals", () => {
     // Parked: the step ran, and no further work is possible for this run.
     // `trace` is shared, and drain() advances every runnable workflow in the
     // org, so assert on this workflow's own steps rather than the whole trace.
-    let state = await runtime.get(workflowRunId);
+    let state = await runtime.get(ORG, workflowRunId);
     expect(state?.status).toBe("waiting");
     expect(state?.step).toBe("receive");
     expect(trace).toContain("ask");
 
-    await runtime.signal(workflowRunId, "approved", { by: "marcio" });
+    await runtime.signal(ORG, workflowRunId, "approved", { by: "marcio" });
     await drain();
 
-    state = await runtime.get(workflowRunId);
+    state = await runtime.get(ORG, workflowRunId);
     expect(state?.status).toBe("completed");
     expect(state?.state).toMatchObject({ answer: { by: "marcio" } });
   });
@@ -186,10 +186,10 @@ describe("signals", () => {
     });
 
     // Signal first — the inbox must hold it rather than drop it.
-    await runtime.signal(workflowRunId, "approved", { early: true });
+    await runtime.signal(ORG, workflowRunId, "approved", { early: true });
     await drain();
 
-    const state = await runtime.get(workflowRunId);
+    const state = await runtime.get(ORG, workflowRunId);
     expect(state?.status).toBe("completed");
     expect(state?.state).toMatchObject({ answer: { early: true } });
   });
@@ -203,8 +203,8 @@ describe("signals", () => {
     });
 
     // A redelivered webhook must not enqueue the signal twice.
-    await runtime.signal(workflowRunId, "approved", { n: 1 }, "delivery-1");
-    await runtime.signal(workflowRunId, "approved", { n: 1 }, "delivery-1");
+    await runtime.signal(ORG, workflowRunId, "approved", { n: 1 }, "delivery-1");
+    await runtime.signal(ORG, workflowRunId, "approved", { n: 1 }, "delivery-1");
 
     const pending = await withOrg(ORG, async ({ sql }) => {
       return (await sql`
@@ -227,7 +227,7 @@ describe("failure handling", () => {
 
     // First attempt fails and parks on a backoff timer.
     await runtime.tick(ORG);
-    let state = await runtime.get(workflowRunId);
+    let state = await runtime.get(ORG, workflowRunId);
     expect(state?.attempt).toBe(1);
     expect(state?.lastError).toMatch(/transient failure/);
 
@@ -242,7 +242,7 @@ describe("failure handling", () => {
     });
     await runtime.tick(ORG);
 
-    state = await runtime.get(workflowRunId);
+    state = await runtime.get(ORG, workflowRunId);
     expect(state?.status).toBe("completed");
     // The attempt counter resets once a step succeeds.
     expect(state?.attempt).toBe(0);
@@ -263,7 +263,7 @@ describe("failure handling", () => {
       });
     }
 
-    const state = await runtime.get(workflowRunId);
+    const state = await runtime.get(ORG, workflowRunId);
     expect(state?.status).toBe("dead_lettered");
     expect(state?.lastError).toMatch(/permanent failure/);
     // A dead-lettered run is never silently retried.
@@ -302,7 +302,7 @@ describe("concurrency", () => {
     // Step "a" ran once, not twice.
     expect(trace.filter((t) => t === "a")).toHaveLength(1);
 
-    const state = await runtime.get(workflowRunId);
+    const state = await runtime.get(ORG, workflowRunId);
     expect(state?.step).toBe("b");
   });
 });
@@ -317,13 +317,184 @@ describe("abort", () => {
     });
     await drain();
 
-    await runtime.abort(workflowRunId, "requirement changed");
+    await runtime.abort(ORG, workflowRunId, "requirement changed");
 
-    const state = await runtime.get(workflowRunId);
+    const state = await runtime.get(ORG, workflowRunId);
     expect(state?.status).toBe("aborted");
     expect(state?.lastError).toBe("requirement changed");
     // An aborted run does not resume even if its signal arrives later.
-    await runtime.signal(workflowRunId, "approved", {});
+    await runtime.signal(ORG, workflowRunId, "approved", {});
     expect(await runtime.tick(ORG)).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regressions found by code review. Each of these passed silently before the
+// corresponding fix, which is why they are asserted explicitly.
+// ---------------------------------------------------------------------------
+
+describe("signal durability", () => {
+  test("a signal survives a step that throws", async () => {
+    // Consuming signals before the step committed meant a transient failure
+    // silently discarded a human approval or a CI webhook, and the retry saw
+    // an empty signal list.
+    let attempts = 0;
+    const seen: string[][] = [];
+
+    const runtimeLocal = new PostgresWorkflowRuntime("signal-durability");
+    runtimeLocal.register({
+      type: "test.signal_retry",
+      initialStep: "ask",
+      maxAttempts: 3,
+      steps: {
+        ask: async () => ({ next: "receive", awaitSignals: ["approved"] }),
+        receive: async ({ signals }) => {
+          seen.push(signals.map((s) => s.name));
+          if (attempts++ === 0) throw new Error("transient failure");
+          return { next: null, state: { answer: signals[0]?.payload ?? "NONE" } };
+        },
+      },
+    });
+
+    const { workflowRunId } = await runtimeLocal.start({
+      workflowType: "test.signal_retry",
+      organizationId: ORG,
+      idempotencyKey: `sigretry-${Bun.randomUUIDv7("hex").slice(0, 8)}`,
+      input: {},
+    });
+
+    await runtimeLocal.tick(ORG);
+    await runtimeLocal.signal(ORG, workflowRunId, "approved", { by: "human" });
+
+    // First execution throws; the signal must remain for the retry.
+    await runtimeLocal.tick(ORG);
+    await withOrg(ORG, async ({ sql }) => {
+      await sql`UPDATE workflow_runs SET wake_at = now() WHERE id = ${workflowRunId}`;
+    });
+    await runtimeLocal.tick(ORG);
+
+    const state = await runtimeLocal.get(ORG, workflowRunId);
+    expect(state?.status).toBe("completed");
+    expect(state?.state).toMatchObject({ answer: { by: "human" } });
+    // Both executions saw the signal, rather than the retry seeing nothing.
+    expect(seen).toEqual([["approved"], ["approved"]]);
+  });
+
+  test("a failing step keeps the set of signals it was waiting for", async () => {
+    const runtimeLocal = new PostgresWorkflowRuntime("awaiting-preserved");
+    runtimeLocal.register({
+      type: "test.awaiting_preserved",
+      initialStep: "park",
+      maxAttempts: 5,
+      steps: {
+        park: async () => ({ next: "work", awaitSignals: ["pr_approved", "pr_rejected"] }),
+        work: async () => {
+          throw new Error("transient failure");
+        },
+      },
+    });
+
+    const { workflowRunId } = await runtimeLocal.start({
+      workflowType: "test.awaiting_preserved",
+      organizationId: ORG,
+      idempotencyKey: `awaiting-${Bun.randomUUIDv7("hex").slice(0, 8)}`,
+      input: {},
+    });
+
+    await runtimeLocal.tick(ORG);
+    await runtimeLocal.signal(ORG, workflowRunId, "pr_approved", {});
+    await runtimeLocal.tick(ORG); // fails, parks on backoff
+
+    const state = await runtimeLocal.get(ORG, workflowRunId);
+    // Clearing this would make the run unwakeable by either signal.
+    expect(state?.awaitingSignals.sort()).toEqual(["pr_approved", "pr_rejected"]);
+  });
+});
+
+describe("abort safety", () => {
+  test("an abort during a step is not overwritten by that step", async () => {
+    // The transition used to key on id alone, so a slow step's commit
+    // resurrected a run the user had already cancelled.
+    const runtimeLocal = new PostgresWorkflowRuntime("abort-race");
+    runtimeLocal.register({
+      type: "test.slow",
+      initialStep: "slow",
+      steps: {
+        slow: async () => {
+          await Bun.sleep(400);
+          return { next: "more" };
+        },
+        more: async () => ({ next: null }),
+      },
+    });
+
+    const { workflowRunId } = await runtimeLocal.start({
+      workflowType: "test.slow",
+      organizationId: ORG,
+      idempotencyKey: `abortrace-${Bun.randomUUIDv7("hex").slice(0, 8)}`,
+      input: {},
+    });
+
+    const ticking = runtimeLocal.tick(ORG);
+    await Bun.sleep(100);
+    await runtimeLocal.abort(ORG, workflowRunId, "user cancelled");
+    await ticking;
+
+    const state = await runtimeLocal.get(ORG, workflowRunId);
+    expect(state?.status).toBe("aborted");
+    expect(state?.lastError).toBe("user cancelled");
+    // And it must stay stopped rather than being picked up again.
+    expect(await runtimeLocal.tick(ORG)).toBe(0);
+  });
+
+  test("sleepUntil does not resurrect a terminal run", async () => {
+    const { workflowRunId } = await runtime.start({
+      workflowType: "test.linear",
+      organizationId: ORG,
+      idempotencyKey: `sleepterm-${Bun.randomUUIDv7("hex").slice(0, 8)}`,
+      input: {},
+    });
+    await drain();
+    expect((await runtime.get(ORG, workflowRunId))?.status).toBe("completed");
+
+    await runtime.sleepUntil(ORG, workflowRunId, new Date(Date.now() - 1000));
+
+    const state = await runtime.get(ORG, workflowRunId);
+    expect(state?.status).toBe("completed");
+  });
+});
+
+describe("tenant isolation", () => {
+  test("one organization cannot abort, signal or read another's workflow", async () => {
+    // Run ids travel in webhook URLs and events, so holding one must not
+    // confer authority over the run.
+    const otherOrg = `org_wf_other_${Bun.randomUUIDv7("hex").slice(0, 8)}`;
+    await owner`INSERT INTO organizations (id, name, slug) VALUES (${otherOrg}, ${otherOrg}, ${otherOrg})`;
+
+    try {
+      const { workflowRunId } = await runtime.start({
+        workflowType: "test.waiter",
+        organizationId: ORG,
+        idempotencyKey: `victim-${Bun.randomUUIDv7("hex").slice(0, 8)}`,
+        input: {},
+      });
+      await drain();
+
+      // Reads disclose nothing.
+      expect(await runtime.get(otherOrg, workflowRunId)).toBeNull();
+
+      // Signals are refused rather than injected.
+      await expect(
+        runtime.signal(otherOrg, workflowRunId, "approved", { by: "attacker" }),
+      ).rejects.toThrow(/not found/);
+
+      // Aborts are a no-op for a foreign tenant.
+      await runtime.abort(otherOrg, workflowRunId, "cross-tenant abort");
+      const state = await runtime.get(ORG, workflowRunId);
+      expect(state?.status).toBe("waiting");
+      expect(state?.lastError).toBeNull();
+    } finally {
+      await owner`DELETE FROM organizations WHERE id = ${otherOrg}`;
+    }
   });
 });
