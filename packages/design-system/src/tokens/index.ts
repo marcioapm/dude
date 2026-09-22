@@ -7,6 +7,7 @@
 export * from "./scale.ts";
 export * from "./status.ts";
 export * from "./activity.ts";
+export * from "./triage.ts";
 export { themeColors, flattenTheme } from "./themes.ts";
 export type { ThemeMode, ThemeColors } from "./themes.ts";
 export {
@@ -15,10 +16,12 @@ export {
   neutral,
   accent,
   diff,
+  identityColors,
+  IDENTITY_SLOTS,
   TONE_NAMES,
   AGENT_ROLE_NAMES,
 } from "./palette.ts";
-export type { ToneName, ToneInstance, AgentRoleName, RoleColor } from "./palette.ts";
+export type { ToneName, ToneInstance, AgentRoleName, RoleColor, IdentityColor } from "./palette.ts";
 export { oklch, toHex } from "./oklch.ts";
 export type { Oklch } from "./oklch.ts";
 
@@ -39,6 +42,7 @@ export type TokenName =
   | `color-${string}`
   | `tone-${string}`
   | `role-${string}`
+  | `identity-${number}-${"fg" | "bg"}`
   | `diff-${string}`
   | `shadow-${1 | 2 | 3}`
   | `duration-${keyof typeof import("./scale.ts").duration}`

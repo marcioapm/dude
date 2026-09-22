@@ -25,5 +25,30 @@ export type { DurationOptions, TimestampStyle, UsdOptions } from "./util/format.
 export { parseMarkdown, safeUrl } from "./util/markdown.ts";
 export type { Block as MarkdownBlock, Inline as MarkdownInline, ParseOptions as MarkdownParseOptions } from "./util/markdown.ts";
 export { useNow } from "./util/useNow.ts";
+export {
+  flattenNav,
+  ancestorKeys,
+  attentionItems,
+  globalCounts,
+  projectCounts,
+  epicCounts,
+  workItemTriage,
+  workingRoles,
+  currentRun,
+  navKey,
+} from "./util/navModel.ts";
+export type {
+  NavProject,
+  NavEpic,
+  NavWorkItem,
+  NavRun,
+  NavSession,
+  NavRef,
+  NavKind,
+  NavRow,
+  NavFilter,
+  NavOverrides,
+  AttentionItem,
+} from "./util/navModel.ts";
 export { ThemeProvider, useTheme } from "./theme.tsx";
 export type { ThemePreference, ThemeContextValue } from "./theme.tsx";
