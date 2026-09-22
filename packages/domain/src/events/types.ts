@@ -56,6 +56,10 @@ export const EventTypes = {
   GitCommitCreated: "git.commit_created",
   GitPushCompleted: "git.push_completed",
 
+  // Review
+  ReviewCompleted: "review.completed",
+  FindingResolved: "review.finding_resolved",
+
   // Pull requests — the factory's output, and the state it waits on.
   PullRequestOpened: "pull_request.opened",
   PullRequestUpdated: "pull_request.updated",

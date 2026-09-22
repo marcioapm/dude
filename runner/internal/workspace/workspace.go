@@ -155,10 +155,17 @@ func (m *Manager) EnsureMirror(ctx context.Context, repo Repository) (string, er
 //
 // Existing workspaces are reused: a replacement container for the same Run
 // must see the same working tree, including uncommitted changes.
+// Create materializes a workspace for a Run.
+//
+// `baseRef` is the commit every repository is checked out at, which is how a
+// phase builds on what the phase before it produced. Empty means each
+// repository's own default branch — an implement phase, or a Run created
+// directly through the API.
 func (m *Manager) Create(
 	ctx context.Context,
 	organizationID, runID string,
 	repos []Repository,
+	baseRef string,
 ) (string, []MaterializedRepo, error) {
 	wsPath := m.WorkspacePath(runID)
 
@@ -170,7 +177,7 @@ func (m *Manager) Create(
 
 	materialized := make([]MaterializedRepo, 0, len(repos))
 	for _, repo := range repos {
-		out, err := m.materialize(ctx, wsPath, repo)
+		out, err := m.materialize(ctx, wsPath, repo, baseRef)
 		if err != nil {
 			return "", nil, err
 		}
@@ -199,7 +206,12 @@ func (m *Manager) Create(
 // An isolated checkout rather than a git worktree: worktrees share the parent
 // repository's object store and refs, so an agent running destructive git
 // commands could damage the cache other Runs depend on (plan §61).
-func (m *Manager) materialize(ctx context.Context, wsPath string, repo Repository) (MaterializedRepo, error) {
+func (m *Manager) materialize(
+	ctx context.Context,
+	wsPath string,
+	repo Repository,
+	baseRef string,
+) (MaterializedRepo, error) {
 	target := filepath.Join(wsPath, DirRepos, repo.Name)
 	branch := repo.DefaultBranch
 	if branch == "" {
@@ -207,7 +219,22 @@ func (m *Manager) materialize(ctx context.Context, wsPath string, repo Repositor
 	}
 
 	if _, err := os.Stat(filepath.Join(target, ".git")); err == nil {
-		// Already materialized — reuse it rather than discarding work.
+		/*
+		 * Already materialized. Reuse it rather than discarding work — but
+		 * only if it is at the ref this Run asked for. A workspace left at
+		 * another phase's commit would silently give this agent the wrong
+		 * code, which is worse than the cost of re-materializing.
+		 */
+		if baseRef != "" {
+			current, err := run(ctx, target, "git", "rev-parse", "HEAD")
+			if err != nil || strings.TrimSpace(current) != baseRef {
+				if err := os.RemoveAll(target); err != nil {
+					return MaterializedRepo{}, fmt.Errorf("discard stale checkout: %w", err)
+				}
+				return m.materialize(ctx, wsPath, repo, baseRef)
+			}
+		}
+
 		sha, err := run(ctx, target, "git", "rev-parse", "HEAD")
 		if err != nil {
 			return MaterializedRepo{}, err
@@ -241,7 +268,22 @@ func (m *Manager) materialize(ctx context.Context, wsPath string, repo Repositor
 		return MaterializedRepo{}, err
 	}
 
-	if _, err := run(ctx, target, "git", "checkout", branch); err != nil {
+	/*
+	 * Check out what this phase was given. A ref rather than a branch when
+	 * the workflow supplied one: a phase builds on the previous phase's
+	 * commit, not on whatever its branch has moved to since.
+	 */
+	checkout := branch
+	if baseRef != "" {
+		checkout = baseRef
+	}
+	if _, err := run(ctx, target, "git", "checkout", checkout); err != nil {
+		if baseRef != "" {
+			// The ref the workflow named is not in this clone. Carrying on
+			// at the default branch would run the agent against the wrong
+			// code and report success.
+			return MaterializedRepo{}, fmt.Errorf("checkout %s in %s: %w", baseRef, repo.Name, err)
+		}
 		// A repo without that branch (or with no commits) is still usable.
 		branch = "HEAD"
 	}

@@ -49,7 +49,7 @@ func TestCreateMaterializesRepoAndLayout(t *testing.T) {
 
 	wsPath, repos, err := m.Create(context.Background(), "org_1", "run_1", []Repository{
 		{Name: "fixture", URL: origin, DefaultBranch: "main"},
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestMaterializePointsOriginAtRealRemote(t *testing.T) {
 
 	wsPath, _, err := m.Create(context.Background(), "org_1", "run_1", []Repository{
 		{Name: "fixture", URL: origin, DefaultBranch: "main"},
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestCreateIsIdempotentAndPreservesUncommittedWork(t *testing.T) {
 
 	wsPath, _, err := m.Create(ctx, "org_1", "run_1", []Repository{
 		{Name: "fixture", URL: origin, DefaultBranch: "main"},
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("first Create: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestCreateIsIdempotentAndPreservesUncommittedWork(t *testing.T) {
 
 	if _, _, err := m.Create(ctx, "org_1", "run_1", []Repository{
 		{Name: "fixture", URL: origin, DefaultBranch: "main"},
-	}); err != nil {
+	}, ""); err != nil {
 		t.Fatalf("second Create: %v", err)
 	}
 
@@ -166,7 +166,7 @@ func TestRemoveKeepsMirrorCache(t *testing.T) {
 
 	if _, _, err := m.Create(ctx, "org_1", "run_1", []Repository{
 		{Name: "fixture", URL: origin, DefaultBranch: "main"},
-	}); err != nil {
+	}, ""); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
@@ -192,5 +192,94 @@ func TestMirrorPathAvoidsBasenameCollisions(t *testing.T) {
 	b := m.mirrorPath("https://gitlab.com/two/api")
 	if a == b {
 		t.Errorf("distinct URLs mapped to the same mirror path: %s", a)
+	}
+}
+
+// Adds a second commit, so a test can materialize at a specific one.
+func addCommit(t *testing.T, dir, name string) string {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "."}, {"commit", "-m", name}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
+		}
+	}
+	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// A phase builds on the commit the phase before it produced, not on whatever
+// the branch has moved to since.
+func TestCreateChecksOutTheRequestedRef(t *testing.T) {
+	origin := newFixtureRepo(t)
+	first := addCommit(t, origin, "first.txt")
+	addCommit(t, origin, "second.txt")
+
+	m := NewManager(t.TempDir())
+	wsPath, repos, err := m.Create(context.Background(), "org_1", "run_1", []Repository{
+		{Name: "fixture", URL: origin, DefaultBranch: "main"},
+	}, first)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if repos[0].HeadSHA != first {
+		t.Errorf("HeadSHA = %q, want %q", repos[0].HeadSHA, first)
+	}
+	// The later commit's file must not be present: materializing at the wrong
+	// ref would silently run an agent against code it was not given.
+	if _, err := os.Stat(filepath.Join(wsPath, DirRepos, "fixture", "second.txt")); err == nil {
+		t.Error("workspace contains a commit after the requested ref")
+	}
+}
+
+// A workspace left at another phase's commit must be rebuilt rather than
+// reused: giving an agent the wrong code is worse than re-cloning.
+func TestCreateRematerializesWhenTheRefDiffers(t *testing.T) {
+	origin := newFixtureRepo(t)
+	first := addCommit(t, origin, "first.txt")
+	second := addCommit(t, origin, "second.txt")
+
+	m := NewManager(t.TempDir())
+	ctx := context.Background()
+	repo := []Repository{{Name: "fixture", URL: origin, DefaultBranch: "main"}}
+
+	if _, _, err := m.Create(ctx, "org_1", "run_1", repo, first); err != nil {
+		t.Fatalf("first Create: %v", err)
+	}
+	_, repos, err := m.Create(ctx, "org_1", "run_1", repo, second)
+	if err != nil {
+		t.Fatalf("second Create: %v", err)
+	}
+
+	if repos[0].HeadSHA != second {
+		t.Errorf("HeadSHA = %q, want the newly requested ref %q", repos[0].HeadSHA, second)
+	}
+}
+
+// A ref the clone does not contain must fail loudly. Falling back to the
+// default branch would run the agent against the wrong code and report
+// success.
+func TestCreateFailsOnAnUnknownRef(t *testing.T) {
+	origin := newFixtureRepo(t)
+	m := NewManager(t.TempDir())
+
+	_, _, err := m.Create(context.Background(), "org_1", "run_1", []Repository{
+		{Name: "fixture", URL: origin, DefaultBranch: "main"},
+	}, "0000000000000000000000000000000000000000")
+	if err == nil {
+		t.Fatal("expected an error for a ref that does not exist")
+	}
+	if !strings.Contains(err.Error(), "checkout") {
+		t.Errorf("error should name the failure: %v", err)
 	}
 }

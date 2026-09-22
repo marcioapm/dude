@@ -40,6 +40,15 @@ export const agentModelConfigSchema = z.object({
   temperature: z.number().min(0).max(2).optional(),
   /** Hard ceiling for one Session in this role, in USD. */
   costLimitUsd: z.number().positive().optional(),
+  /**
+   * Appended to this role's prompt for this project.
+   *
+   * Per role rather than one project-wide blob: the tester needs to know how
+   * to start the app and log in, the reviewer needs to know what this
+   * codebase considers a defect, and sending all of it to all of them would
+   * spend context on every turn to say nothing.
+   */
+  context: z.string().max(20_000).optional(),
 });
 export type AgentModelConfig = z.infer<typeof agentModelConfigSchema>;
 
@@ -186,6 +195,22 @@ export const runSchema = z.object({
   workspacePath: z.string().nullable().default(null),
   /** Why the Run failed, when it did. */
   error: z.string().nullable().default(null),
+  /**
+   * Which step of the delivery workflow this Run is. Null for a Run created
+   * directly through the API, which executes as an orchestrator.
+   */
+  phase: z
+    .enum(["investigate", "implement", "review", "fix", "simplify", "test"])
+    .nullable()
+    .default(null),
+  role: agentRoleSchema.nullable().default(null),
+  /** The Run this one continues from. */
+  parentRunId: z.string().nullable().default(null),
+  /** The commit its workspace started at; null means the default branch. */
+  baseRef: z.string().nullable().default(null),
+  /** What it produced, for the next phase to build on. */
+  headSha: z.string().nullable().default(null),
+  branch: z.string().nullable().default(null),
   createdAt: z.string().datetime({ offset: true }),
   startedAt: z.string().datetime({ offset: true }).nullable().default(null),
   endedAt: z.string().datetime({ offset: true }).nullable().default(null),

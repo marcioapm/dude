@@ -26,6 +26,7 @@ export const ID_PREFIXES = {
   directive: "dir",
   pullRequest: "pr",
   forgeCredential: "forge",
+  finding: "find",
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIXES;

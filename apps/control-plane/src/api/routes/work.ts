@@ -13,6 +13,8 @@ import { withOrg, withoutTenant } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { eventBus } from "../../events/bus.ts";
 import { badRequest, conflict, json, notFound, parseBody } from "../http.ts";
+import { DELIVERY_WORKFLOW_TYPE, DEFAULT_DELIVERY_POLICY } from "../../workflow/delivery.workflow.ts";
+import { getWorkflowRuntime } from "../../workflow/registry.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 const WORK_ITEM_SELECT = `
@@ -24,6 +26,8 @@ const RUN_SELECT = `
   id, organization_id AS "organizationId", project_id AS "projectId",
   work_item_id AS "workItemId", attempt, status, worker_id AS "workerId",
   workspace_path AS "workspacePath", error,
+  phase, role, parent_run_id AS "parentRunId", base_ref AS "baseRef",
+  head_sha AS "headSha", branch,
   created_at AS "createdAt", started_at AS "startedAt", ended_at AS "endedAt"`;
 
 const SESSION_SELECT = `
@@ -80,6 +84,83 @@ async function createWorkItem(ctx: RequestContext): Promise<Response> {
   if ("missingProject" in result) throw notFound(`project ${input.projectId} not found`);
   eventBus.publish(result.event);
   return json(result.workItem, 201);
+}
+
+const deliverInput = z.object({
+  repositoryId: z.string().min(1).optional(),
+  /** Overrides for this work item only; unset fields keep the default. */
+  policy: z.record(z.string(), z.unknown()).optional(),
+});
+
+/**
+ * Start the delivery workflow for a work item.
+ *
+ * Explicit rather than automatic on creation. Creating a work item is
+ * recording that something needs doing; starting delivery is committing an
+ * agent, a container and a budget to it — and those should not be the same
+ * gesture. It also keeps a work item useful as a placeholder for work a
+ * person will do.
+ *
+ * Idempotent: the workflow's key is the work item, so calling twice returns
+ * the run already in flight rather than starting a second one.
+ */
+async function deliverWorkItem(ctx: RequestContext): Promise<Response> {
+  const workItemId = ctx.params.id!;
+  const input = await parseBody(ctx.request, deliverInput);
+  const { organizationId } = ctx.principal;
+
+  const context = await withOrg(organizationId, async (scope) => {
+    const items = (await scope.sql`
+      SELECT id, project_id FROM work_items WHERE id = ${workItemId}`) as Array<{
+      id: string;
+      project_id: string;
+    }>;
+    const workItem = items[0];
+    if (!workItem) return { missing: true as const };
+
+    // A repository is required: the workflow has to know where to push.
+    const repos = (await scope.sql`
+      SELECT id FROM repositories
+      WHERE project_id = ${workItem.project_id}
+        AND (${input.repositoryId ?? null}::text IS NULL OR id = ${input.repositoryId ?? null})
+      ORDER BY name
+      LIMIT 2`) as Array<{ id: string }>;
+
+    if (repos.length === 0) return { noRepository: true as const };
+    // Choosing for them would be a coin flip that lands in someone's
+    // repository.
+    if (repos.length > 1 && !input.repositoryId) return { ambiguous: repos.length };
+
+    return { workItem, repositoryId: repos[0]!.id };
+  });
+
+  if ("missing" in context) throw notFound(`work item ${workItemId} not found`);
+  if ("noRepository" in context) {
+    throw badRequest("this work item's project has no repository to deliver to");
+  }
+  if ("ambiguous" in context) {
+    throw badRequest(
+      `this project has ${context.ambiguous} repositories; name one with repositoryId`,
+    );
+  }
+
+  const runtime = getWorkflowRuntime();
+  const { workflowRunId, deduplicated } = await runtime.start({
+    workflowType: DELIVERY_WORKFLOW_TYPE,
+    organizationId,
+    // The work item is the key, so a second call joins the first delivery
+    // rather than racing it.
+    idempotencyKey: `delivery:${workItemId}`,
+    workItemId,
+    input: {
+      workItemId,
+      projectId: context.workItem.project_id,
+      repositoryId: context.repositoryId,
+      policy: { ...DEFAULT_DELIVERY_POLICY, ...(input.policy ?? {}) },
+    },
+  });
+
+  return json({ workflowRunId, workItemId, alreadyRunning: deduplicated }, deduplicated ? 200 : 201);
 }
 
 async function listWorkItems(ctx: RequestContext): Promise<Response> {
@@ -305,6 +386,7 @@ export function registerWorkRoutes(router: Router): void {
   router.get("/v1/work-items", listWorkItems);
   router.get("/v1/work-items/:id", getWorkItem);
   router.post("/v1/work-items/:id/runs", createRun);
+  router.post("/v1/work-items/:id/deliver", deliverWorkItem);
 
   router.get("/v1/runs/:id", getRun);
   router.post("/v1/runs/:id/sessions", createSession);

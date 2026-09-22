@@ -12,7 +12,9 @@
 import { z } from "zod";
 import { EventTypes, newId, resolveAgentModel } from "@dude/domain";
 import type { AgentModels } from "@dude/domain";
-import { withOrg, withoutTenant } from "../../db/client.ts";
+import { withOrg, withoutTenant, type OrgScope } from "../../db/client.ts";
+import { promptFor } from "../prompts.ts";
+import { PHASE_PUBLISHES, ROLE_FOR_PHASE } from "../../workflow/policy.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { eventBus } from "../../events/bus.ts";
 import { badRequest, json, notFound, parseBody } from "../http.ts";
@@ -198,13 +200,15 @@ async function claimRuns(ctx: RequestContext): Promise<Response> {
             lease_expires_at = now() + ${`${LEASE_SECONDS} seconds`}::interval
         FROM candidate
         WHERE r.id = candidate.id
-        RETURNING r.id, r.work_item_id, r.project_id, r.attempt
+        RETURNING r.id, r.work_item_id, r.project_id, r.attempt, r.phase, r.base_ref
       )
       SELECT
         c.id,
         c.work_item_id AS "workItemId",
         c.project_id   AS "projectId",
         c.attempt,
+        c.phase,
+        c.base_ref      AS "baseRef",
         p.runtime_image AS "runtimeImage",
         p.agent_models  AS "agentModels",
         -- The task the agent is given, composed from the Work Item.
@@ -225,14 +229,25 @@ async function claimRuns(ctx: RequestContext): Promise<Response> {
     const enriched = [];
 
     for (const run of runs) {
+      /*
+       * A Run created by the delivery workflow carries a phase; one created
+       * directly through the API does not, and runs as an orchestrator.
+       * Both have to work: a phase is how the workflow drives specialists,
+       * not a requirement for executing a Run at all.
+       */
+      const phase = (run.phase as string | null) ?? null;
+      const role = phase ? ROLE_FOR_PHASE[phase]! : DEFAULT_RUN_ROLE;
+
       // Resolve the model here rather than on the node: which model runs a
       // role is policy, and policy belongs to the control plane.
       const agentModels = (run.agentModels ?? {}) as AgentModels;
-      const resolved = resolveAgentModel(
-        DEFAULT_RUN_ROLE,
-        { agentModels },
-        { defaultAgentModels: orgDefaults },
-      );
+      const resolved = resolveAgentModel(role, { agentModels }, { defaultAgentModels: orgDefaults });
+
+      // A fix Run needs to see what it is fixing, so the findings travel in
+      // its prompt rather than as a second call the runner would have to
+      // know to make.
+      const findings =
+        phase === "fix" ? await openFindingsFor(scope, run.workItemId as string) : undefined;
 
       enriched.push({
         id: run.id,
@@ -241,9 +256,23 @@ async function claimRuns(ctx: RequestContext): Promise<Response> {
         attempt: run.attempt,
         repositories: run.repositories,
         runtimeImage: run.runtimeImage,
-        role: DEFAULT_RUN_ROLE,
+        phase,
+        role,
+        // Where this Run's workspace starts. Null means the repository's
+        // default branch — the implement phase, or a Run with no phase.
+        baseRef: run.baseRef ?? null,
+        // Whether the runner pushes what this Run commits. A reviewer gets a
+        // full sandbox and may run anything; it simply does not publish.
+        publishes: phase ? PHASE_PUBLISHES[phase]! : true,
         model: resolved?.model ?? null,
-        prompt: composePrompt(run),
+        prompt: promptFor(phase ?? "implement", {
+          title: String(run.title ?? ""),
+          goal: String(run.goal ?? ""),
+          acceptanceCriteria: (run.acceptanceCriteria ?? []) as string[],
+          category: (run.category as string | null) ?? null,
+          ...(findings ? { findings } : {}),
+          context: resolved?.context ?? null,
+        }),
       });
 
       const event = await appendInScope(scope, {
@@ -272,18 +301,33 @@ async function claimRuns(ctx: RequestContext): Promise<Response> {
  * them. Role instructions live in the agent definition, not here, so this does
  * not quietly become a second place where behaviour is specified.
  */
-function composePrompt(run: Record<string, unknown>): string {
-  const parts = [String(run.title ?? "")];
-
-  const goal = String(run.goal ?? "").trim();
-  if (goal) parts.push(goal);
-
-  const criteria = (run.acceptanceCriteria ?? []) as string[];
-  if (criteria.length > 0) {
-    parts.push("Acceptance criteria:\n" + criteria.map((c) => `- ${c}`).join("\n"));
-  }
-
-  return parts.join("\n\n");
+/**
+ * The open findings a fix Run has to address.
+ *
+ * Read inside the claim transaction so the prompt reflects the findings as
+ * they were when the Run was claimed, rather than a set that could change
+ * between the claim and the agent starting.
+ */
+async function openFindingsFor(scope: OrgScope, workItemId: string) {
+  return (await scope.sql`
+    SELECT severity, category, file, line, title, description,
+           suggested_fix AS "suggestedFix"
+    FROM review_findings
+    WHERE work_item_id = ${workItemId} AND status = 'open'
+    ORDER BY
+      CASE severity
+        WHEN 'blocking' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3
+        WHEN 'low' THEN 4 ELSE 5
+      END,
+      created_at`) as Array<{
+    severity: string;
+    category: string;
+    file: string | null;
+    line: number | null;
+    title: string;
+    description: string;
+    suggestedFix: string;
+  }>;
 }
 
 /**
