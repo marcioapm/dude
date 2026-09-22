@@ -79,7 +79,7 @@ export const repositorySchema = z.object({
   url: z.string().min(1),
   defaultBranch: z.string().min(1).default("main"),
   /** Trust class — plan §47. Governs network/credential posture. */
-  trustClass: z.enum(["trusted_internal", "untrusted_external"]).default("trusted_internal"),
+  trust: z.enum(["trusted_internal", "untrusted_external"]).default("trusted_internal"),
 });
 export type Repository = z.infer<typeof repositorySchema>;
 
@@ -184,6 +184,8 @@ export const runSchema = z.object({
   status: runStatusSchema,
   workerId: z.string().nullable().default(null),
   workspacePath: z.string().nullable().default(null),
+  /** Why the Run failed, when it did. */
+  error: z.string().nullable().default(null),
   createdAt: z.string().datetime({ offset: true }),
   startedAt: z.string().datetime({ offset: true }).nullable().default(null),
   endedAt: z.string().datetime({ offset: true }).nullable().default(null),

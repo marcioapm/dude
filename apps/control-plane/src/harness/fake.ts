@@ -246,7 +246,7 @@ export class FakeHarness implements AgentHarness {
             type: EventTypes.ToolCalled,
             occurredAt: now,
             externalSessionId,
-            payload: { tool: action.tool, args: action.args ?? {} },
+            payload: { tool: action.tool, input: action.args ?? {} },
           });
           this.#emit(state, {
             type: EventTypes.ToolCompleted,

@@ -200,8 +200,12 @@ describe("SSE stream", () => {
         buffer = frames.pop() ?? "";
         for (const frame of frames) {
           const cursor = frame.match(/^id: (\d+)$/m)?.[1];
-          const type = frame.match(/^event: (.+)$/m)?.[1];
-          if (cursor && type) seen.push({ cursor: Number(cursor), type });
+          // Frames are deliberately unnamed so EventSource.onmessage fires;
+          // the event type travels in the payload.
+          const data = frame.match(/^data: (.+)$/m)?.[1];
+          if (cursor && data) {
+            seen.push({ cursor: Number(cursor), type: JSON.parse(data).eventType as string });
+          }
         }
       }
     } catch {

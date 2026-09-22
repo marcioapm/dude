@@ -124,11 +124,15 @@ def _read_sse(url: str, api_key: str, want: int, ready: threading.Event, out: li
 
             if line.startswith("id:"):
                 cursor = int(line[3:].strip())
-            elif line.startswith("event:"):
-                event_type = line[6:].strip()
             elif line.startswith("data:"):
+                # Frames carry no `event:` name, so EventSource.onmessage
+                # fires in the browser; the type is in the payload.
                 payload = json.loads(line[5:].strip())
-                out.append({"cursor": cursor, "eventType": event_type, "data": payload})
+                out.append({
+                    "cursor": cursor,
+                    "eventType": payload.get("eventType"),
+                    "data": payload,
+                })
                 if len(out) >= want:
                     return
 
