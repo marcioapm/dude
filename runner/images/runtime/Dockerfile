@@ -38,6 +38,13 @@ WORKDIR /workspace
 RUN chown agent:agent /workspace
 
 USER agent
+ENV HOME=/home/agent
+
+# The agent harness. Installed as the unprivileged user so a compromised
+# session cannot rewrite the binary for the next one.
+ARG OPENCODE_VERSION=latest
+RUN curl -fsSL https://opencode.ai/install | bash
+ENV PATH="/home/agent/.opencode/bin:${PATH}"
 
 # Git identity for commits the agent makes. Overridden per-Run when the
 # factory knows the requesting human.

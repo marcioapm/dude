@@ -39,6 +39,10 @@ type Repository struct {
 }
 
 // Run is a leased unit of work.
+//
+// The control plane sends everything the runner needs to execute it, so the
+// runner never has to ask a second question — and never has to decide what
+// the task is or which model should do it.
 type Run struct {
 	ID           string       `json:"id"`
 	WorkItemID   string       `json:"workItemId"`
@@ -46,6 +50,12 @@ type Run struct {
 	Attempt      int          `json:"attempt"`
 	Repositories []Repository `json:"repositories"`
 	RuntimeImage string       `json:"runtimeImage"`
+
+	// The task, resolved by the control plane from the Work Item.
+	Prompt string `json:"prompt"`
+	// Agent role, and the model resolved for it (project -> org -> default).
+	Role  string `json:"role"`
+	Model string `json:"model"`
 }
 
 // Worker is this node's registration with the control plane.
