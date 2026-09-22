@@ -90,7 +90,9 @@ afterEach(async () => {
 });
 
 describe("run lease reaper", () => {
-  test("reclaims a run whose worker stopped renewing", async () => {
+  test("requeues a run whose worker stopped renewing", async () => {
+    // A workspace with no uncommitted work can be rebuilt anywhere, so the
+    // Run goes back in the queue rather than failing.
     const runId = await seedExpiredRun(ORG_A, 120);
 
     const { handled } = await reapExpiredRunLeases();
@@ -107,11 +109,32 @@ describe("run lease reaper", () => {
       return rows[0]!;
     });
 
-    expect(run.status).toBe("failed");
-    expect(run.error).toMatch(/lease expired/);
-    expect(run.ended_at).not.toBeNull();
-    // A finished run must stop holding capacity.
+    expect(run.status).toBe("pending");
+    expect(run.error).toBeNull();
+    // Released, so another node can pick it up.
     expect(run.lease_expires_at).toBeNull();
+  });
+
+  test("fails a run holding uncommitted work rather than moving it", async () => {
+    // Re-running it on a clean clone would silently discard the agent's work.
+    const runId = await seedExpiredRun(ORG_A, 120);
+    await withOrg(ORG_A, async ({ sql }) => {
+      await sql`UPDATE runs SET workspace_portable = false WHERE id = ${runId}`;
+    });
+
+    await reapExpiredRunLeases();
+
+    const run = await withOrg(ORG_A, async ({ sql }) => {
+      const rows = (await sql`
+        SELECT status::text, error FROM runs WHERE id = ${runId}`) as Array<{
+        status: string;
+        error: string | null;
+      }>;
+      return rows[0]!;
+    });
+
+    expect(run.status).toBe("failed");
+    expect(String(run.error)).toMatch(/uncommitted work/);
   });
 
   test("records the reclamation in the owning tenant's ledger", async () => {
@@ -128,9 +151,12 @@ describe("run lease reaper", () => {
       }>;
     });
 
-    const failure = events.find((e) => e.event_type === "run.failed");
-    expect(failure).toBeDefined();
-    expect(failure!.payload.reason).toBe("lease_expired");
+    // A requeued Run is not a failure, so the ledger records the release
+    // rather than mislabelling it.
+    const release = events.find((e) => e.event_type === "run.lease.released");
+    expect(release).toBeDefined();
+    expect(release!.payload.reason).toBe("lease_expired");
+    expect(release!.payload.requeued).toBe(true);
   });
 
   test("leaves runs whose lease is still valid alone", async () => {
@@ -198,7 +224,7 @@ describe("run lease reaper", () => {
         }>;
         return rows[0]!.status;
       });
-      expect(status).toBe("failed");
+      expect(status).toBe("pending");
     }
   });
 });

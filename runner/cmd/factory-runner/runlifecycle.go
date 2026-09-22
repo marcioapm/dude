@@ -165,6 +165,18 @@ func (d *daemon) executeRun(ctx context.Context, r client.Run) error {
 	changes := d.collectChanges(ctx, r, created.ContainerID, materialized, log)
 	d.sendEvents(ctx, log, changes)
 
+	/*
+	 * Tell the control plane whether this workspace could move.
+	 *
+	 * Only this runner can answer: it is the one that can see the working
+	 * tree. Uncommitted work pins the Run here, because a fresh clone on
+	 * another node would silently drop it.
+	 */
+	portable := d.workspacePortable(ctx, created.ContainerID, materialized)
+	if err := d.api.ReportWorkspacePortable(ctx, r.ID, portable); err != nil {
+		log.Warn("portability report failed", "error", err)
+	}
+
 	cleanup, cancel := d.teardown(ctx, r, created, log)
 	defer cancel()
 
@@ -561,4 +573,32 @@ func (d *daemon) teardown(
 		log.Warn("runtime report failed", "error", err)
 	}
 	return cleanup, cancel
+}
+
+/*
+workspacePortable reports whether every repository in the workspace could be
+rebuilt elsewhere from the mirror.
+
+Committed work is reproducible; uncommitted work is not. A Run with a dirty
+tree must stay on this node until that changes, or resuming it somewhere else
+would quietly discard the agent's work.
+
+Errs on the side of caution: if the state cannot be read, the workspace is
+treated as non-portable rather than risking the loss.
+*/
+func (d *daemon) workspacePortable(
+	ctx context.Context,
+	containerID string,
+	repos []workspace.MaterializedRepo,
+) bool {
+	for _, repo := range repos {
+		changes := d.inspectRepo(ctx, containerID, repo)
+		if changes == nil {
+			continue // unchanged: nothing to lose
+		}
+		if changes.uncommitted != "" {
+			return false
+		}
+	}
+	return true
 }

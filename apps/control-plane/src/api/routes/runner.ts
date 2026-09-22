@@ -57,6 +57,13 @@ const runUpdateInput = z.object({
   status: z.enum(["starting", "running", "completed", "failed", "aborted"]),
   error: z.string().max(10_000).nullable().default(null),
   workspacePath: z.string().nullable().default(null),
+  /**
+   * Whether this Run's workspace could be rebuilt elsewhere without loss.
+   *
+   * The runner knows, because it can see whether the working tree is dirty.
+   * False pins the Run to this node until the work is committed.
+   */
+  workspacePortable: z.boolean().nullish(),
 });
 
 const runtimeInput = z.object({
@@ -169,6 +176,15 @@ async function claimRuns(ctx: RequestContext): Promise<Response> {
       WITH candidate AS (
         SELECT id FROM runs
         WHERE status = 'pending'
+          AND (
+            -- Unstarted work: any worker may take it.
+            home_worker_id IS NULL
+            -- Already ours: reclaim it, workspace and all.
+            OR home_worker_id = ${workerId}
+            -- Someone else's workspace, but rebuildable from the mirror
+            -- without losing anything.
+            OR workspace_portable
+          )
         ORDER BY created_at
         LIMIT ${input.limit}
         FOR UPDATE SKIP LOCKED
@@ -176,6 +192,9 @@ async function claimRuns(ctx: RequestContext): Promise<Response> {
         UPDATE runs r
         SET status = 'scheduled',
             worker_id = ${workerId},
+            -- Claiming a portable Run moves its home: the workspace is about
+            -- to be materialized here.
+            home_worker_id = ${workerId},
             lease_expires_at = now() + ${`${LEASE_SECONDS} seconds`}::interval
         FROM candidate
         WHERE r.id = candidate.id
@@ -332,6 +351,7 @@ async function updateRun(ctx: RequestContext): Promise<Response> {
         status = ${input.status}::run_status,
         error = COALESCE(${input.error}, error),
         workspace_path = COALESCE(${input.workspacePath}, workspace_path),
+        workspace_portable = COALESCE(${input.workspacePortable ?? null}, workspace_portable),
         -- Stamped on the first transition out of scheduling, so elapsed time
         -- covers container startup rather than only the agent's own work.
         started_at = CASE WHEN ${input.status} IN ('starting', 'running') AND started_at IS NULL
