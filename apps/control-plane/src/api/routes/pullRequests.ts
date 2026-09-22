@@ -110,23 +110,37 @@ const openPullRequestInput = z.object({
   draft: z.boolean().default(false),
 });
 
-/**
- * Open a pull request for a Run's branch.
- *
- * Idempotent on the forge's terms rather than ours: if a PR already exists
- * for the branch, GitHub rejects the create with a 422 and we return the
- * existing row instead of failing. That matters because a retried Run must
- * not be blocked by its own earlier success.
- */
-async function openPullRequest(ctx: RequestContext): Promise<Response> {
-  const runId = ctx.params.id!;
-  const input = await parseBody(ctx.request, openPullRequestInput);
-  const { organizationId } = ctx.principal;
+export interface OpenPullRequestForRun {
+  runId: string;
+  repositoryId: string;
+  title: string;
+  body: string;
+  draft?: boolean;
+  headBranch?: string;
+  baseBranch?: string;
+  actor: { type: "human" | "system"; id: string };
+}
 
+/**
+ * Open a pull request for a Run's branch, and record it.
+ *
+ * Callable rather than HTTP-only because the delivery workflow opens PRs
+ * too, and a workflow step calling its own API over the network would turn a
+ * transaction into a round trip that can fail on its own.
+ *
+ * Idempotent on the forge's terms as well as ours: a PR already recorded for
+ * this Run is returned as-is, and one GitHub rejects as a duplicate surfaces
+ * as a conflict rather than a crash — a retried Run must not be blocked by
+ * its own earlier success.
+ */
+export async function openPullRequestForRun(
+  organizationId: string,
+  input: OpenPullRequestForRun,
+): Promise<string> {
   const context = await withOrg(organizationId, async (scope) => {
     const runs = (await scope.sql`
       SELECT id, organization_id, project_id, work_item_id, attempt, status
-      FROM runs WHERE id = ${runId}`) as RunRow[];
+      FROM runs WHERE id = ${input.runId}`) as RunRow[];
     const run = runs[0];
     if (!run) return { missing: true as const };
 
@@ -142,19 +156,18 @@ async function openPullRequest(ctx: RequestContext): Promise<Response> {
     if (!repository) return { missingRepo: true as const };
 
     const existing = (await scope.sql`
-      SELECT ${scope.sql.unsafe(PR_SELECT)} FROM pull_requests
-      WHERE run_id = ${runId} AND repository_id = ${input.repositoryId}
-      LIMIT 1`) as Array<Record<string, unknown>>;
+      SELECT id FROM pull_requests
+      WHERE run_id = ${input.runId} AND repository_id = ${input.repositoryId}
+      LIMIT 1`) as Array<{ id: string }>;
 
-    return { run, repository, existing: existing[0] ?? null };
+    return { run, repository, existingId: existing[0]?.id ?? null };
   });
 
-  if ("missing" in context) throw notFound(`run ${runId} not found`);
+  if ("missing" in context) throw notFound(`run ${input.runId} not found`);
   if ("missingRepo" in context) {
     throw notFound(`repository ${input.repositoryId} is not part of this run's project`);
   }
-  // Already opened — return it rather than asking the forge a second time.
-  if (context.existing) return json(context.existing, 200);
+  if (context.existingId) return context.existingId;
 
   const { run, repository } = context;
   const slug = slugFromUrl(repository.url);
@@ -171,7 +184,7 @@ async function openPullRequest(ctx: RequestContext): Promise<Response> {
     ref = await forge.openPullRequest({
       slug,
       title: input.title,
-      body: input.body ?? "",
+      body: input.body,
       headBranch,
       baseBranch,
       draft: input.draft ?? false,
@@ -184,24 +197,24 @@ async function openPullRequest(ctx: RequestContext): Promise<Response> {
   }
 
   const result = await withOrg(organizationId, async (scope) => {
-    const rows = (await scope.sql`
+    const pullRequestId = newId("pullRequest");
+    await scope.sql`
       INSERT INTO pull_requests (
         id, organization_id, project_id, work_item_id, run_id, repository_id,
         number, node_id, url, head_branch, base_branch, head_sha, title, body, state)
       VALUES (
-        ${newId("pullRequest")}, ${organizationId}, ${run.project_id}, ${run.work_item_id},
-        ${runId}, ${repository.id}, ${ref.number}, ${ref.nodeId}, ${ref.url},
+        ${pullRequestId}, ${organizationId}, ${run.project_id}, ${run.work_item_id},
+        ${input.runId}, ${repository.id}, ${ref.number}, ${ref.nodeId}, ${ref.url},
         ${headBranch}, ${baseBranch}, ${ref.headSha}, ${input.title}, ${input.body},
-        ${ref.state}::pull_request_state)
-      RETURNING ${scope.sql.unsafe(PR_SELECT)}`) as Array<Record<string, unknown>>;
+        ${ref.state}::pull_request_state)`;
 
     const event = await appendInScope(scope, {
       eventType: EventTypes.PullRequestOpened,
       organizationId,
       projectId: run.project_id,
       workItemId: run.work_item_id,
-      runId,
-      actor: { type: "human", id: ctx.principal.apiKeyId },
+      runId: input.runId,
+      actor: input.actor,
       source: "control-plane",
       correlationId: run.work_item_id,
       payload: {
@@ -210,15 +223,40 @@ async function openPullRequest(ctx: RequestContext): Promise<Response> {
         repo: repository.name,
         headBranch,
         baseBranch,
-        draft: input.draft,
+        draft: input.draft ?? false,
       },
     });
 
-    return { pullRequest: rows[0]!, event };
+    return { pullRequestId, event };
   });
 
   eventBus.publish(result.event);
-  return json(result.pullRequest, 201);
+  return result.pullRequestId;
+}
+
+async function openPullRequest(ctx: RequestContext): Promise<Response> {
+  const input = await parseBody(ctx.request, openPullRequestInput);
+
+  const pullRequestId = await openPullRequestForRun(ctx.principal.organizationId, {
+    runId: ctx.params.id!,
+    repositoryId: input.repositoryId,
+    title: input.title,
+    body: input.body ?? "",
+    draft: input.draft ?? false,
+    ...(input.headBranch ? { headBranch: input.headBranch } : {}),
+    ...(input.baseBranch ? { baseBranch: input.baseBranch } : {}),
+    actor: { type: "human", id: ctx.principal.apiKeyId },
+  });
+
+  const pullRequest = await withOrg(ctx.principal.organizationId, async (scope) => {
+    const rows = (await scope.sql`
+      SELECT ${scope.sql.unsafe(PR_SELECT)} FROM pull_requests WHERE id = ${pullRequestId}`) as Array<
+      Record<string, unknown>
+    >;
+    return rows[0]!;
+  });
+
+  return json(pullRequest, 201);
 }
 
 /**

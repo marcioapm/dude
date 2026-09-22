@@ -17,6 +17,8 @@ import { registerRunnerRoutes } from "./api/routes/runner.ts";
 import { registerInterventionRoutes } from "./api/routes/intervention.ts";
 import { closePool, getPool } from "./db/client.ts";
 import { PostgresWorkflowRuntime } from "./workflow/runtime.ts";
+import { deliveryWorkflow } from "./workflow/delivery.workflow.ts";
+import { notifyPhaseFinished } from "./workflow/notify.ts";
 import { Sweeper, dispatchOutbox, reapExpiredRunLeases, reapLostWorkers } from "./workflow/sweepers.ts";
 
 export function buildRouter(): Router {
@@ -53,8 +55,22 @@ export function buildRouter(): Router {
 export function buildSweepers(options: { log?: typeof console.log } = {}) {
   const log = options.log ?? console.log;
   const workflow = new PostgresWorkflowRuntime();
+  workflow.register(deliveryWorkflow);
 
   const sweepers = [
+    /*
+     * Turn finished phase Runs into signals.
+     *
+     * The workflow parks on `phase.finished` rather than polling for Run
+     * status, so something has to bridge the two. A sweeper rather than a
+     * hook on the status update: a Run reaped by the lease reaper also
+     * finishes, and a workflow waiting on it must not hang because the
+     * runner that owned it disappeared without reporting.
+     */
+    new Sweeper("phase-notifier", () => notifyPhaseFinished(workflow), {
+      intervalMs: 1_000,
+      log,
+    }),
     new Sweeper("workflow-poller", async () => ({ handled: await workflow.tick() }), {
       // Short: this is what makes a signalled workflow feel responsive.
       intervalMs: 500,
