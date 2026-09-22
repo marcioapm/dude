@@ -53,18 +53,33 @@ export async function reapExpiredRunLeases(batchSize = DEFAULT_BATCH): Promise<S
         FOR UPDATE SKIP LOCKED
       )
       UPDATE runs r
-      SET status = 'failed',
-          error = 'worker lease expired; the run was abandoned',
-          ended_at = now(),
-          lease_expires_at = NULL
+      SET
+        /*
+         * A Run whose workspace can be rebuilt goes back in the queue; one
+         * holding uncommitted work cannot, because re-running it elsewhere
+         * would silently discard that work (plan §32: retry if
+         * reconstructable, otherwise escalate with clear state).
+         */
+        status = CASE WHEN r.workspace_portable THEN 'pending' ELSE 'failed' END::run_status,
+        error = CASE
+          WHEN r.workspace_portable THEN NULL
+          ELSE 'worker lease expired with uncommitted work in the workspace; '
+               'the run cannot be safely resumed on another node'
+        END,
+        ended_at = CASE WHEN r.workspace_portable THEN NULL ELSE now() END,
+        worker_id = NULL,
+        lease_expires_at = NULL
       FROM candidate
       WHERE r.id = candidate.id
-      RETURNING r.id, r.organization_id, r.project_id, r.work_item_id, r.worker_id`) as Array<{
+      RETURNING r.id, r.organization_id, r.project_id, r.work_item_id, r.worker_id,
+                r.workspace_portable, r.status::text AS status`) as Array<{
       id: string;
       organization_id: string;
       project_id: string;
       work_item_id: string;
       worker_id: string | null;
+      workspace_portable: boolean;
+      status: string;
     }>;
   });
 
@@ -72,16 +87,25 @@ export async function reapExpiredRunLeases(batchSize = DEFAULT_BATCH): Promise<S
   // for infrastructure reasons must be as inspectable as one that failed on
   // its own merits.
   for (const run of expired) {
+    // A requeued Run is not a failure — it is about to be picked up again —
+    // so the ledger must not call it one.
+    const requeued = run.status === "pending";
+
     const event = await withOrg(run.organization_id, (scope) =>
       appendInScope(scope, {
-        eventType: EventTypes.RunFailed,
+        eventType: requeued ? EventTypes.RunLeaseReleased : EventTypes.RunFailed,
         organizationId: run.organization_id,
         projectId: run.project_id,
         workItemId: run.work_item_id,
         runId: run.id,
         actor: { type: "system", id: "run-lease-reaper" },
         source: "control-plane",
-        payload: { reason: "lease_expired", workerId: run.worker_id },
+        payload: {
+          reason: "lease_expired",
+          workerId: run.worker_id,
+          workspacePortable: run.workspace_portable,
+          requeued,
+        },
       }),
     );
     eventBus.publish(event);

@@ -14,6 +14,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/marciomartins/dude/runner/internal/protocol"
 )
 
 // Client is a control-plane API client authenticated with a runner key.
@@ -242,6 +244,20 @@ func (c *Client) UpdateRun(ctx context.Context, runID, status, errMsg, workspace
 		body["workspacePath"] = workspacePath
 	}
 	return c.post(ctx, "/v1/runner/runs/"+runID+"/status", body, nil)
+}
+
+/*
+ReportWorkspacePortable tells the control plane whether this Run could be
+rebuilt on another node without losing anything.
+
+Only this runner can answer: it is the one that can see whether the working
+tree is dirty. A false answer pins the Run here until the work is committed,
+which is what stops a resumed Run from silently restarting on a clean clone
+somewhere else.
+*/
+func (c *Client) ReportWorkspacePortable(ctx context.Context, runID string, portable bool) error {
+	return c.post(ctx, "/v1/runner/runs/"+runID+"/status",
+		map[string]any{"status": protocol.RunRunning, "workspacePortable": portable}, nil)
 }
 
 // ReportRuntime records container lifecycle for a Run.
