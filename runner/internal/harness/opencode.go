@@ -10,12 +10,13 @@
 package harness
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/marciomartins/dude/runner/internal/protocol"
 )
 
 // Execer runs a command inside the Run container.
@@ -171,16 +172,16 @@ func normalizeLine(line string) (Event, bool) {
 
 		if status == "completed" || status == "error" {
 			payload["status"] = status
-			return Event{Type: "agent.tool.completed", Payload: payload}, true
+			return Event{Type: protocol.EventAgentToolCompleted, Payload: payload}, true
 		}
-		return Event{Type: "agent.tool.called", Payload: payload}, true
+		return Event{Type: protocol.EventAgentToolCalled, Payload: payload}, true
 
 	case "text":
 		text, _ := part["text"].(string)
 		if strings.TrimSpace(text) == "" {
 			return Event{}, false
 		}
-		return Event{Type: "agent.message", Payload: map[string]any{
+		return Event{Type: protocol.EventAgentMessage, Payload: map[string]any{
 			"text":      text,
 			"sessionId": raw.SessionID,
 		}}, true
@@ -198,10 +199,10 @@ func normalizeLine(line string) (Event, bool) {
 		if reason, ok := part["reason"]; ok {
 			payload["reason"] = reason
 		}
-		return Event{Type: "agent.model.request.completed", Payload: payload}, true
+		return Event{Type: protocol.EventAgentModelRequestCompleted, Payload: payload}, true
 
 	case "error":
-		return Event{Type: "agent.session.stopped", Payload: map[string]any{
+		return Event{Type: protocol.EventAgentSessionStopped, Payload: map[string]any{
 			"reason":    "error",
 			"error":     part,
 			"sessionId": raw.SessionID,
@@ -220,23 +221,6 @@ func shellJoin(args []string) string {
 		quoted[i] = "'" + strings.ReplaceAll(a, "'", `'\''`) + "'"
 	}
 	return strings.Join(quoted, " ")
-}
-
-// ScanLines reads a stream into a line callback, bounded so a runaway agent
-// cannot exhaust runner memory.
-func ScanLines(r interface{ Read([]byte) (int, error) }, max int, onLine func(string)) error {
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-
-	count := 0
-	for scanner.Scan() {
-		if count >= max {
-			return fmt.Errorf("harness produced more than %d lines", max)
-		}
-		onLine(scanner.Text())
-		count++
-	}
-	return scanner.Err()
 }
 
 // DefaultTimeout bounds one agent turn.

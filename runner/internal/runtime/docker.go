@@ -208,44 +208,6 @@ func (m *Manager) Create(ctx context.Context, spec Spec) (*Created, error) {
 	return &Created{ContainerID: created.ID, ImageDigest: inspected.Image}, nil
 }
 
-// ExecResult is the outcome of a command run inside a container.
-type ExecResult struct {
-	ExitCode int
-	Output   string
-}
-
-// Exec runs a command inside the Run container and returns its combined
-// output. Used to drive the harness and to run deterministic tooling.
-func (m *Manager) Exec(ctx context.Context, containerID string, cmd []string) (*ExecResult, error) {
-	created, err := m.docker.ContainerExecCreate(ctx, containerID, container.ExecOptions{
-		Cmd:          cmd,
-		AttachStdout: true,
-		AttachStderr: true,
-		WorkingDir:   ContainerWorkspacePath,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("exec create: %w", err)
-	}
-
-	attached, err := m.docker.ContainerExecAttach(ctx, created.ID, container.ExecAttachOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("exec attach: %w", err)
-	}
-	defer attached.Close()
-
-	// Bounded: a command that floods stdout must not exhaust runner memory.
-	out, err := io.ReadAll(io.LimitReader(attached.Reader, 16<<20))
-	if err != nil {
-		return nil, fmt.Errorf("exec read: %w", err)
-	}
-
-	inspected, err := m.docker.ContainerExecInspect(ctx, created.ID)
-	if err != nil {
-		return nil, fmt.Errorf("exec inspect: %w", err)
-	}
-	return &ExecResult{ExitCode: inspected.ExitCode, Output: string(out)}, nil
-}
-
 /*
 ExecStream runs a command and delivers its output line by line as it arrives.
 

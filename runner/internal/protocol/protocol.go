@@ -30,9 +30,20 @@ const (
 )
 
 // Event types emitted by the execution plane.
+//
+// Mirrors packages/domain/src/events/types.ts. Spelling these inline is what
+// this package exists to prevent: a rename on the TypeScript side would
+// otherwise surface as a runtime 400, or as an event that is silently never
+// routed, rather than as a build failure here.
 const (
 	EventWorkspaceCreated = "workspace.created"
 	EventGitCommitCreated = "git.commit_created"
+
+	EventAgentMessage               = "agent.message"
+	EventAgentToolCalled            = "agent.tool.called"
+	EventAgentToolCompleted         = "agent.tool.completed"
+	EventAgentModelRequestCompleted = "agent.model.request.completed"
+	EventAgentSessionStopped        = "agent.session.stopped"
 )
 
 // Worker status reported in heartbeats.
