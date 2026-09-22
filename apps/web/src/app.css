@@ -20,66 +20,239 @@ body {
   font-size: var(--ds-text-md);
 }
 
-.app {
+/* Sidebar on the left, the selected thing filling the rest. */
+.shell {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  height: 100%;
+  gap: var(--ds-space-12);
   padding: var(--ds-space-16);
+  overflow: auto;
+}
+
+.centered {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+}
+
+.newWorkItem {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+}
+
+/* -- work item delivery view -------------------------------------------- */
+
+.workItemScreen {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-20);
+  max-width: 960px;
+}
+
+.wiHeader {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+}
+
+.wiTitleRow {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-10);
+}
+
+.wiTitle {
+  margin: 0;
+  font-size: var(--ds-text-xl);
+  font-weight: var(--ds-weight-semibold);
+}
+
+.wiKey {
+  margin-left: auto;
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-xs);
+}
+
+.wiGoal {
+  margin: 0;
+  color: var(--ds-color-text-secondary);
+}
+
+.wiCriteria {
+  margin: 0;
+  padding-left: var(--ds-space-20);
+  color: var(--ds-color-text-secondary);
+}
+
+.wiActions {
+  display: flex;
+  align-items: center;
   gap: var(--ds-space-12);
 }
 
-.appHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+.wiPrLink {
+  color: var(--ds-color-accent);
+  font-weight: var(--ds-weight-medium);
 }
 
-.appHeader h1 {
-  font-size: var(--ds-text-lg);
-  font-weight: var(--ds-weight-semibold);
+.wiSection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+}
+
+/* Typography comes from the design system's `.ds-label`; layout only here. */
+.wiSectionTitle {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
   margin: 0;
 }
 
-.workItems {
+.wiCount {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: var(--ds-weight-regular);
+}
+
+/* The pipeline: one row per phase Run, a hairline between them. */
+.pipeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--ds-color-border-subtle);
+  border-radius: var(--ds-radius-md);
+  background: var(--ds-color-surface);
+  overflow: hidden;
+}
+
+.phase + .phase {
+  border-top: 1px solid var(--ds-color-border-subtle);
+}
+
+.phaseButton {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-10);
+  width: 100%;
+  padding: var(--ds-space-8) var(--ds-space-12);
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.phaseButton:hover {
+  background: var(--ds-color-raised);
+}
+
+.phaseStep {
+  width: 1.75em;
+  color: var(--ds-color-text-muted);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+}
+
+.phaseLabel {
+  min-width: 12em;
+  font-weight: var(--ds-weight-medium);
+}
+
+.phaseNote {
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-sm);
+}
+
+.phaseSha {
+  margin-left: auto;
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-xs);
+}
+
+.phaseOpen {
+  color: var(--ds-color-text-muted);
+}
+
+/* The live phase gets the only colour on the list. */
+.phase[data-status="running"] .phaseButton {
+  box-shadow: inset 2px 0 0 var(--ds-color-accent);
+}
+
+/* Findings */
+.findings {
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
   gap: var(--ds-space-4);
-  overflow-y: auto;
 }
 
-.workItem {
+.finding {
   display: flex;
-  align-items: center;
-  gap: var(--ds-space-8);
-  width: 100%;
-  padding: var(--ds-space-8) var(--ds-space-10);
+  align-items: flex-start;
+  gap: var(--ds-space-10);
+  padding: var(--ds-space-8) var(--ds-space-12);
   background: var(--ds-color-surface);
   border: 1px solid var(--ds-color-border-subtle);
   border-radius: var(--ds-radius-md);
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
 }
 
-.workItem:hover {
-  background: var(--ds-color-raised);
-  border-color: var(--ds-color-border);
+.finding[data-status="open"][data-severity="blocking"],
+.finding[data-status="open"][data-severity="high"] {
+  border-color: var(--ds-tone-danger-border);
+  box-shadow: inset 2px 0 0 var(--ds-tone-danger-fg);
 }
 
-.workItemTitle {
+.findingSeverity {
+  min-width: 5.5em;
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  text-transform: uppercase;
+  color: var(--ds-color-text-muted);
+}
+
+.finding[data-status="open"] .findingSeverity {
+  color: var(--ds-tone-danger-fg);
+}
+
+.findingBody {
   flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  min-width: 0;
 }
 
-.workItemProject {
+.findingTitle {
+  font-weight: var(--ds-weight-medium);
+}
+
+.finding[data-status="resolved"] .findingTitle,
+.finding[data-status="superseded"] .findingTitle {
+  color: var(--ds-color-text-muted);
+  text-decoration: line-through;
+}
+
+.findingMeta,
+.findingNote {
   color: var(--ds-color-text-muted);
   font-size: var(--ds-text-sm);
+}
+
+.findingStatus {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
 }
 
 .runScreen {
@@ -124,26 +297,4 @@ body {
 .keyPrompt p {
   margin: 0;
   color: var(--ds-color-text-secondary);
-}
-
-.keyPrompt input,
-.keyPrompt button {
-  font: inherit;
-  padding: var(--ds-space-8) var(--ds-space-10);
-  border-radius: var(--ds-radius-md);
-  border: 1px solid var(--ds-color-border);
-  background: var(--ds-color-field-bg);
-  color: inherit;
-}
-
-.keyPrompt button {
-  background: var(--ds-color-accent);
-  color: var(--ds-color-accent-text);
-  border-color: transparent;
-  cursor: pointer;
-}
-
-.keyPrompt button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }

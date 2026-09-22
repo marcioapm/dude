@@ -1,115 +1,227 @@
 /**
- * The shell: work item list on the left, the selected Run on the right.
+ * The shell: navigation on the left, the selected thing on the right.
  *
- * A placeholder for the sidebar being designed separately — this is enough
- * navigation to reach a Run and drive it, and it will be replaced by the real
- * project/epic/work-item tree when that lands.
+ * The sidebar's selection decides the main pane, the way the design system's
+ * `boardScope` describes it: a project or epic opens its board, a work item
+ * opens its delivery view, and an agent (a phase Run) opens its conversation.
+ *
+ * The tree is re-read when the organization's event stream says something
+ * happened, not on a timer — so a reviewer starting in another tab shows up
+ * here within a moment, and an idle page makes no requests at all.
  */
 
-import { useCallback, useEffect, useState } from "react";
-import { StatusBadge } from "@dude/design-system/components";
-import { Button, EmptyState } from "@dude/design-system/primitives";
-import type { ApiClient, Project, WorkItem } from "./api/client.ts";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { boardScope, type NavProject, type NavRef } from "@dude/design-system";
+import { Board, Sidebar } from "@dude/design-system/components";
+import { Button, EmptyState, Input, Spinner } from "@dude/design-system/primitives";
+import type { ApiClient } from "./api/client.ts";
+import { useReloadOnEvents } from "./hooks/useEventStream.ts";
 import { RunScreen } from "./screens/RunScreen.tsx";
+import { WorkItemScreen } from "./screens/WorkItemScreen.tsx";
 
 export interface AppProps {
   client: ApiClient;
   onSignOut: () => void;
 }
 
+/** Selection lives in the URL hash, so a reload lands where you were. */
+function readSelection(): NavRef | null {
+  const [kind, id] = window.location.hash.replace(/^#\/?/, "").split("/");
+  if (!kind || !id) return null;
+  if (!["project", "epic", "workItem", "run", "session"].includes(kind)) return null;
+  return { kind: kind as NavRef["kind"], id: decodeURIComponent(id) };
+}
+
+function writeSelection(ref: NavRef | null) {
+  const hash = ref ? `#/${ref.kind}/${encodeURIComponent(ref.id)}` : "";
+  if (window.location.hash !== hash) window.history.replaceState(null, "", hash || " ");
+}
+
+/** The work item an agent row belongs to, for the header over its chat. */
+function workItemOfAgent(projects: readonly NavProject[], agentId: string) {
+  for (const project of projects) {
+    const items = [...(project.workItems ?? []), ...(project.epics ?? []).flatMap((e) => e.workItems)];
+    for (const item of items) {
+      for (const run of item.runs ?? []) {
+        if (run.id === agentId || run.sessions.some((s) => s.id === agentId)) return item;
+      }
+    }
+  }
+  return null;
+}
+
 export function App({ client, onSignOut }: AppProps) {
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [workItems, setWorkItems] = useState<WorkItem[]>([]);
-  const [active, setActive] = useState<{ runId: string; title: string } | null>(null);
+  const [projects, setProjects] = useState<NavProject[] | null>(null);
+  const [selected, setSelectedState] = useState<NavRef | null>(readSelection);
   const [problem, setProblem] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
+  const setSelected = useCallback((ref: NavRef | null) => {
+    setSelectedState(ref);
+    writeSelection(ref);
+  }, []);
 
-    void (async () => {
-      try {
-        const [{ projects: found }, { workItems: items }] = await Promise.all([
-          client.listProjects(),
-          client.listWorkItems(),
-        ]);
-        if (cancelled) return;
-        setProjects(found);
-        setWorkItems(items);
-      } catch (err) {
-        if (!cancelled) setProblem(err instanceof Error ? err.message : String(err));
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
+  const load = useCallback(async () => {
+    try {
+      const { projects: found } = await client.navigation();
+      setProjects(found);
+      setProblem(null);
+    } catch (err) {
+      setProblem(err instanceof Error ? err.message : String(err));
+    }
   }, [client]);
 
-  /** Open a work item's most recent Run, or start one if it has none. */
-  const open = useCallback(
-    async (workItem: WorkItem) => {
-      setProblem(null);
-      try {
-        const full = await client.getWorkItem(workItem.id);
-        const latest = full.runs?.[0];
-        const run = latest ?? (await client.createRun(workItem.id));
-        setActive({ runId: run.id, title: full.title });
-      } catch (err) {
-        setProblem(err instanceof Error ? err.message : String(err));
-      }
-    },
-    [client],
-  );
+  useEffect(() => {
+    void load();
+  }, [load]);
 
-  if (active) {
+  useReloadOnEvents({ client, all: true }, () => void load(), 400);
+
+  // First load with nothing selected: open the first project's board rather
+  // than an empty pane.
+  useEffect(() => {
+    if (!selected && projects && projects[0]) setSelected({ kind: "project", id: projects[0].id });
+  }, [projects, selected, setSelected]);
+
+  const scope = useMemo(() => (projects ? boardScope(projects, selected) : null), [projects, selected]);
+
+  let main;
+  if (!projects) {
+    main = <div className="centered"><Spinner label="Loading…" /></div>;
+  } else if (projects.length === 0) {
+    main = (
+      <EmptyState
+        title="No projects yet"
+        description="Create a project through the API, then reload."
+      />
+    );
+  } else if (scope) {
+    main = (
+      <Board
+        project={scope.project}
+        epic={scope.epic}
+        selected={selected}
+        onSelect={(ref) => setSelected(ref)}
+        headerActions={
+          <NewWorkItemButton
+            client={client}
+            projectId={scope.project.id}
+            onCreated={(id) => {
+              void load();
+              setSelected({ kind: "workItem", id });
+            }}
+          />
+        }
+      />
+    );
+  } else if (selected?.kind === "workItem") {
+    main = (
+      <WorkItemScreen
+        key={selected.id}
+        client={client}
+        workItemId={selected.id}
+        onOpenRun={(runId) => setSelected({ kind: "session", id: runId })}
+      />
+    );
+  } else if (selected && (selected.kind === "session" || selected.kind === "run")) {
+    const item = workItemOfAgent(projects, selected.id);
+    main = (
+      <RunScreen
+        key={selected.id}
+        client={client}
+        runId={selected.id}
+        title={item?.title}
+        onBack={item ? () => setSelected({ kind: "workItem", id: item.id }) : undefined}
+      />
+    );
+  } else {
+    main = <EmptyState title="Nothing selected" description="Pick something from the sidebar." />;
+  }
+
+  return (
+    <div className="shell" data-testid="shell">
+      <Sidebar
+        projects={projects ?? []}
+        loading={!projects}
+        selected={selected}
+        onSelect={(ref) => setSelected(ref)}
+        title="dude"
+        footer={
+          <Button size="sm" variant="ghost" onClick={onSignOut}>
+            Sign out
+          </Button>
+        }
+      />
+      <main className="main">
+        {problem ? <p className="problem">{problem}</p> : null}
+        {main}
+      </main>
+    </div>
+  );
+}
+
+/**
+ * Create a work item from the board.
+ *
+ * Deliberately minimal — a title and a goal — because the delivery view is
+ * where the work item is then looked at and delivered. A richer intake flow
+ * (clarification, acceptance criteria) is its own piece of work.
+ */
+function NewWorkItemButton(props: { client: ApiClient; projectId: string; onCreated: (id: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState("");
+  const [goal, setGoal] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  if (!open) {
     return (
-      <div className="app" data-testid="run-view">
-        <RunScreen
-          client={client}
-          runId={active.runId}
-          title={active.title}
-          onBack={() => setActive(null)}
-        />
-      </div>
+      <Button size="sm" variant="primary" leadingIcon="plus" onClick={() => setOpen(true)} data-testid="new-work-item">
+        New work item
+      </Button>
     );
   }
 
   return (
-    <div className="app" data-testid="work-item-list">
-      <header className="appHeader">
-        <h1>dude</h1>
-        <Button size="sm" variant="ghost" onClick={onSignOut}>
-          Sign out
-        </Button>
-      </header>
-
-      {problem ? <p className="problem">{problem}</p> : null}
-
-      {workItems.length === 0 ? (
-        <EmptyState
-          title="Nothing to work on yet"
-          description="Create a project and a work item through the API, then reload."
-        />
-      ) : null}
-
-      <ul className="workItems">
-        {workItems.map((item) => (
-          <li key={item.id}>
-            <button
-              type="button"
-              className="workItem"
-              data-testid="work-item"
-              onClick={() => void open(item)}
-            >
-              <StatusBadge status={item.status} />
-              <span className="workItemTitle">{item.title}</span>
-              <span className="workItemProject">
-                {projects.find((p) => p.id === item.projectId)?.name ?? ""}
-              </span>
-            </button>
-          </li>
-        ))}
-      </ul>
-    </div>
+    <form
+      className="newWorkItem"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        if (!title.trim()) return;
+        setBusy(true);
+        try {
+          const item = await props.client.createWorkItem({
+            projectId: props.projectId,
+            title: title.trim(),
+            goal: goal.trim(),
+          });
+          setOpen(false);
+          setTitle("");
+          setGoal("");
+          props.onCreated(item.id);
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <Input
+        autoFocus
+        size="sm"
+        placeholder="What should change?"
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        data-testid="new-work-item-title"
+      />
+      <Input
+        size="sm"
+        placeholder="Why, or any detail (optional)"
+        value={goal}
+        onChange={(e) => setGoal(e.target.value)}
+      />
+      <Button size="sm" type="submit" variant="primary" disabled={busy || !title.trim()} data-testid="new-work-item-create">
+        Create
+      </Button>
+      <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>
+        Cancel
+      </Button>
+    </form>
   );
 }

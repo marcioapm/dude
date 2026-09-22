@@ -7,9 +7,12 @@
  * no Electron/Node assumptions, no direct database access.
  */
 
+import type { NavProject } from "@dude/design-system";
 import type {
   Directive,
   DirectiveScope,
+  Finding,
+  PullRequest,
   PauseMode,
   Project,
   Run,
@@ -25,7 +28,15 @@ import type {
 // is the domain package's to say, so the two cannot drift.
 // ---------------------------------------------------------------------------
 
-export type { Project, Repository, Run, Session, WorkItem } from "@dude/domain";
+export type {
+  Finding,
+  Project,
+  PullRequest,
+  Repository,
+  Run,
+  Session,
+  WorkItem,
+} from "@dude/domain";
 
 /** A work item with its attempts, newest first. `GET /v1/work-items/:id`. */
 export interface WorkItemDetail extends WorkItem {
@@ -124,10 +135,40 @@ export class ApiClient {
     return this.#request("GET", `/v1/runs/${id}`);
   }
 
+  /** Every project, epic, work item and agent the sidebar and board draw. */
+  navigation(): Promise<{ projects: NavProject[] }> {
+    return this.#request("GET", "/v1/navigation");
+  }
+
+  listPullRequests(workItemId: string): Promise<{ pullRequests: PullRequest[] }> {
+    return this.#request("GET", `/v1/pull-requests${qs({ workItemId })}`);
+  }
+
+  listFindings(workItemId: string): Promise<{ findings: Finding[] }> {
+    return this.#request("GET", `/v1/findings${qs({ workItemId })}`);
+  }
+
   // -- writes -------------------------------------------------------------
 
   createRun(workItemId: string): Promise<Run> {
     return this.#request("POST", `/v1/work-items/${workItemId}/runs`, {});
+  }
+
+  createWorkItem(input: {
+    projectId: string;
+    title: string;
+    goal?: string;
+    acceptanceCriteria?: string[];
+  }): Promise<WorkItem> {
+    return this.#request("POST", "/v1/work-items", input);
+  }
+
+  /**
+   * Start the delivery workflow: implement, review, fix, simplify, then a
+   * pull request. Idempotent — a second call joins the delivery in flight.
+   */
+  deliver(workItemId: string): Promise<{ workflowRunId: string; alreadyRunning: boolean }> {
+    return this.#request("POST", `/v1/work-items/${workItemId}/deliver`, {});
   }
 
   // -- intervention (plan §24) --------------------------------------------
@@ -165,7 +206,12 @@ export class ApiClient {
     after?: number | undefined;
     runId?: string | undefined;
     sessionId?: string | undefined;
+    workItemId?: string | undefined;
+    projectId?: string | undefined;
+    /** Skip the backfill and deliver only what happens from now on. */
+    live?: boolean | undefined;
   }): string {
-    return `${this.#baseUrl}/v1/events/stream${qs({ ...params, key: this.#apiKey })}`;
+    const { live, ...rest } = params;
+    return `${this.#baseUrl}/v1/events/stream${qs({ ...rest, ...(live ? { live: 1 } : {}), key: this.#apiKey })}`;
   }
 }

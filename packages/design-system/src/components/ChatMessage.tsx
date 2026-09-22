@@ -87,6 +87,10 @@ export function ChatMessage({
   const k: ChatMessageKind = kind ?? (role === "human" ? "human" : role === "system" || role === "integration" ? "system" : "agent");
   const live = streaming === true || (activity !== undefined && activity !== "completed" && activity !== "failed" && activity !== "aborted");
   const ts = startedAt !== undefined ? new Date(startedAt) : null;
+  // A turn has a duration while it is running, or once it has an end to
+  // measure to. A settled turn with neither has no duration to show — the
+  // header's timestamp already says when it happened.
+  const timed = startedAt !== undefined && (live || (endedAt !== undefined && endedAt !== null));
 
   if (k === "system") {
     return (
@@ -149,11 +153,11 @@ export function ChatMessage({
           <Markdown source={content} streaming={streaming} className={styles["body"]} />
         ) : null}
         {attachments !== undefined ? <div className={styles["attachments"]}>{attachments}</div> : null}
-        {activity !== undefined || (k === "agent" && (costUsd !== undefined || tokens !== undefined || startedAt !== undefined)) ? (
+        {activity !== undefined || (k === "agent" && (costUsd !== undefined || tokens !== undefined || timed)) ? (
           <footer className={styles["foot"]}>
             {activity !== undefined ? <ActivityIndicator kind={activity} {...activityProps} className={styles["activity"]} /> : <span className={styles["footSpacer"]} />}
             <span className={styles["stats"]}>
-              {startedAt !== undefined ? <Duration since={startedAt} until={endedAt} live={live} tone="muted" /> : null}
+              {timed ? <Duration since={startedAt} until={endedAt} live={live} tone="muted" /> : null}
               {tokens !== undefined ? <TokenCount tokens={tokens} tone="muted" /> : null}
               {costUsd !== undefined ? <CostDisplay usd={costUsd} tone="secondary" live={live} /> : null}
             </span>

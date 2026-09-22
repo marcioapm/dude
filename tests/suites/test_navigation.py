@@ -70,29 +70,31 @@ def test_epics_group_their_work_items(client: ApiClient, project: dict, owner_ds
     assert "Outside the epic" in [w["title"] for w in found["workItems"]]
 
 
-def test_runs_and_their_sessions_are_nested_under_the_work_item(client: ApiClient, project: dict):
+def test_each_run_of_an_attempt_is_an_agent_under_it(client: ApiClient, project: dict):
+    """Phased delivery puts several Runs in one attempt; each is an agent row."""
     work_item = client.create_work_item(project["id"], "With a run")
     run = client.create_run(work_item["id"])
-
-    orchestrator = client.create_session(run["id"], "orchestrator")
-    assert orchestrator.status_code == 201, orchestrator.text
-    orchestrator = orchestrator.json()
-
-    subagent = client.create_session(
-        run["id"], "implementer", parentSessionId=orchestrator["id"]
-    )
-    assert subagent.status_code == 201, subagent.text
 
     found = _find(_navigation(client), project["id"])
     row = next(w for w in found["workItems"] if w["id"] == work_item["id"])
 
-    assert [r["id"] for r in row["runs"]] == [run["id"]]
-    sessions = row["runs"][0]["sessions"]
+    assert [r["attempt"] for r in row["runs"]] == [1]
+    agents = row["runs"][0]["sessions"]
+    # The tree answers "who is working on this" from these rows, so each Run
+    # must appear, with a role the sidebar can draw an avatar for.
+    assert [a["id"] for a in agents] == [run["id"]]
+    assert agents[0]["role"]
+    assert agents[0]["status"] == "pending"
 
-    # Subagents nest under their parent rather than sitting beside it: the
-    # tree draws them as children, and a flat list would lose the structure.
-    assert [s["id"] for s in sessions] == [orchestrator["id"]]
-    assert [s["role"] for s in sessions[0]["children"]] == ["implementer"]
+
+def test_work_items_carry_time_in_status_and_spend(client: ApiClient, project: dict):
+    """The board shows how long a card has sat in its lane, and what it cost."""
+    work_item = client.create_work_item(project["id"], "Timed")
+
+    found = _find(_navigation(client), project["id"])
+    row = next(w for w in found["workItems"] if w["id"] == work_item["id"])
+    assert row["statusSince"]
+    assert row["costUsd"] == 0
 
 
 def test_attempts_are_ordered_oldest_first(client: ApiClient, project: dict):
@@ -104,8 +106,8 @@ def test_attempts_are_ordered_oldest_first(client: ApiClient, project: dict):
     row = next(w for w in found["workItems"] if w["id"] == work_item["id"])
 
     # The tree treats the last one as current and folds the earlier ones.
-    assert [r["id"] for r in row["runs"]] == [first["id"], second["id"]]
     assert [r["attempt"] for r in row["runs"]] == [1, 2]
+    assert [r["sessions"][0]["id"] for r in row["runs"]] == [first["id"], second["id"]]
 
 
 def test_does_not_leak_another_organizations_tree(
