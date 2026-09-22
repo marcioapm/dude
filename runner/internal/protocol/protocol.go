@@ -38,6 +38,7 @@ const (
 const (
 	EventWorkspaceCreated = "workspace.created"
 	EventGitCommitCreated = "git.commit_created"
+	EventGitPushCompleted = "git.push_completed"
 
 	EventAgentMessage               = "agent.message"
 	EventAgentToolCalled            = "agent.tool.called"

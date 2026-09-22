@@ -162,8 +162,13 @@ func (d *daemon) executeRun(ctx context.Context, r client.Run) error {
 	// Capture what changed before the container goes away. The workspace
 	// outlives it, but reading the diff here keeps the Run's record complete
 	// even if the workspace is later reaped.
-	changes := d.collectChanges(ctx, r, created.ContainerID, materialized, log)
+	changes, moved := d.collectChanges(ctx, r, created.ContainerID, materialized, log)
 	d.sendEvents(ctx, log, changes)
+
+	// Push before teardown, while the lease is certainly still held: the
+	// push credential is scoped to a leased Run, and asking for one after
+	// the lease lapses is a 404.
+	d.sendEvents(ctx, log, d.publish(ctx, r, materialized, moved, log))
 
 	/*
 	 * Tell the control plane whether this workspace could move.
@@ -348,13 +353,18 @@ func (d *daemon) collectChanges(
 	containerID string,
 	repos []workspace.MaterializedRepo,
 	log *slog.Logger,
-) []client.Event {
+) ([]client.Event, map[string]string) {
 	var events []client.Event
+	// Repository name -> new HEAD, for the repositories worth pushing.
+	moved := map[string]string{}
 
 	for _, repo := range repos {
 		changes := d.inspectRepo(ctx, containerID, repo)
 		if changes == nil {
 			continue
+		}
+		if len(changes.commits) > 0 {
+			moved[repo.Name] = changes.head
 		}
 
 		log.Info("repository changed", "repo", repo.Name,
@@ -379,7 +389,7 @@ func (d *daemon) collectChanges(
 			},
 		})
 	}
-	return events
+	return events, moved
 }
 
 // repoChanges is what one repository looked like after the agent finished.

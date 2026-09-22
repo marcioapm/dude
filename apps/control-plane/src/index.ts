@@ -10,6 +10,7 @@ import { Router } from "./api/router.ts";
 import { json } from "./api/http.ts";
 import { registerEventRoutes } from "./api/routes/events.ts";
 import { registerNavigationRoutes } from "./api/routes/navigation.ts";
+import { registerPullRequestRoutes } from "./api/routes/pullRequests.ts";
 import { registerProjectRoutes } from "./api/routes/projects.ts";
 import { registerWorkRoutes } from "./api/routes/work.ts";
 import { registerRunnerRoutes } from "./api/routes/runner.ts";
@@ -32,6 +33,7 @@ export function buildRouter(): Router {
 
   registerEventRoutes(router);
   registerNavigationRoutes(router);
+  registerPullRequestRoutes(router);
   registerProjectRoutes(router);
   registerWorkRoutes(router);
   registerRunnerRoutes(router);

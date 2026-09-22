@@ -56,6 +56,14 @@ export const EventTypes = {
   GitCommitCreated: "git.commit_created",
   GitPushCompleted: "git.push_completed",
 
+  // Pull requests — the factory's output, and the state it waits on.
+  PullRequestOpened: "pull_request.opened",
+  PullRequestUpdated: "pull_request.updated",
+  PullRequestChecksChanged: "pull_request.checks_changed",
+  PullRequestReviewed: "pull_request.reviewed",
+  PullRequestMerged: "pull_request.merged",
+  PullRequestClosed: "pull_request.closed",
+
   // Agent sessions
   SessionStarted: "agent.session.started",
   SessionStopped: "agent.session.stopped",
