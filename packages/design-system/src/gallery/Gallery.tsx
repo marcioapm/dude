@@ -10,6 +10,7 @@ import { TokensSection } from "./sections/Tokens.tsx";
 import { PrimitivesSection } from "./sections/Primitives.tsx";
 import { ComponentsSection } from "./sections/Components.tsx";
 import { ChatSection } from "./sections/Chat.tsx";
+import { NavigationSection } from "./sections/Navigation.tsx";
 
 const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, string]>]> = [
   [
@@ -71,6 +72,16 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["ch-thread", "ChatThread"],
       ["ch-composer", "ChatComposer"],
       ["ch-transcript", "ChatTranscript (live)"],
+    ],
+  ],
+  [
+    "Navigation",
+    [
+      ["nav-human", "HumanAvatar"],
+      ["nav-triage", "Triage & TriageRollup"],
+      ["nav-tree", "NavTree"],
+      ["nav-sidebar", "Sidebar (realistic)"],
+      ["nav-sidebar-states", "Sidebar states"],
     ],
   ],
 ];
@@ -142,6 +153,7 @@ function Shell() {
         <PrimitivesSection mode={panes} />
         <ComponentsSection mode={panes} />
         <ChatSection mode={panes} />
+        <NavigationSection mode={panes} />
       </main>
     </div>
   );

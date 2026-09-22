@@ -1,0 +1,123 @@
+/*
+ * A person. Always a full circle with a ring, always letters, always a
+ * muted identity colour — three channels that no agent avatar shares.
+ */
+
+.root {
+  --id-fg: var(--ds-color-text-secondary);
+  --id-bg: var(--ds-color-overlay);
+  --av-size: 20px;
+
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: var(--av-size);
+  height: var(--av-size);
+  flex-shrink: 0;
+  border-radius: var(--ds-radius-full);
+  color: var(--id-fg);
+  background: var(--id-bg);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--id-fg) 45%, transparent);
+  font-size: calc(var(--av-size) * 0.42);
+  font-weight: var(--ds-weight-semibold);
+  letter-spacing: 0.02em;
+  line-height: 1;
+  user-select: none;
+  vertical-align: middle;
+  overflow: hidden;
+}
+.xs {
+  --av-size: 16px;
+}
+.sm {
+  --av-size: 20px;
+}
+.md {
+  --av-size: 24px;
+}
+.lg {
+  --av-size: 32px;
+}
+.initials {
+  font-variant-numeric: tabular-nums;
+}
+.image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Eight identity slots, from tokens. Scoped to .root: CSS modules do not
+   rename attribute selectors, so a bare [data-identity] would be global. */
+.root[data-identity="0"] { --id-fg: var(--ds-identity-0-fg); --id-bg: var(--ds-identity-0-bg); }
+.root[data-identity="1"] { --id-fg: var(--ds-identity-1-fg); --id-bg: var(--ds-identity-1-bg); }
+.root[data-identity="2"] { --id-fg: var(--ds-identity-2-fg); --id-bg: var(--ds-identity-2-bg); }
+.root[data-identity="3"] { --id-fg: var(--ds-identity-3-fg); --id-bg: var(--ds-identity-3-bg); }
+.root[data-identity="4"] { --id-fg: var(--ds-identity-4-fg); --id-bg: var(--ds-identity-4-bg); }
+.root[data-identity="5"] { --id-fg: var(--ds-identity-5-fg); --id-bg: var(--ds-identity-5-bg); }
+.root[data-identity="6"] { --id-fg: var(--ds-identity-6-fg); --id-bg: var(--ds-identity-6-bg); }
+.root[data-identity="7"] { --id-fg: var(--ds-identity-7-fg); --id-bg: var(--ds-identity-7-bg); }
+
+/* The "+N" chip: same shape, no identity, so it reads as "more of these". */
+.overflow {
+  --id-fg: var(--ds-color-text-muted);
+  --id-bg: var(--ds-color-sunken);
+  font-size: calc(var(--av-size) * 0.4);
+  font-weight: var(--ds-weight-medium);
+}
+
+.withName {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  min-width: 0;
+}
+.text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: var(--ds-leading-tight);
+}
+.name {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-primary);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.detail {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+}
+
+/* Stack: overlap by a quarter; a ring in the surface colour separates
+   them. Earlier avatars sit on top (the caller puts the most relevant
+   person first), so the first pair of initials is always whole. */
+.stack {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  isolation: isolate;
+}
+.stack > * {
+  position: relative;
+  box-shadow:
+    0 0 0 1.5px var(--ds-color-surface),
+    inset 0 0 0 1px color-mix(in srgb, var(--id-fg) 45%, transparent);
+}
+.stack > * + * {
+  margin-left: calc(var(--av-size) * -0.25);
+}
+.stack > :nth-child(1) {
+  z-index: 4;
+}
+.stack > :nth-child(2) {
+  z-index: 3;
+}
+.stack > :nth-child(3) {
+  z-index: 2;
+}
+.stack > :nth-child(4) {
+  z-index: 1;
+}

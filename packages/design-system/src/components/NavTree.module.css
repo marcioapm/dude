@@ -1,0 +1,283 @@
+/*
+ * The navigation tree. Every row is a sibling (flat tree), indented by
+ * --depth. Indentation is 12px per level — deliberately small — because
+ * each level has its own row grammar and the indent is only a tie-breaker.
+ */
+
+.tree {
+  --indent: 12px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 0 var(--ds-space-4);
+}
+
+.row {
+  --depth: 0;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  min-height: var(--ds-size-row-compact);
+  padding: 0 var(--ds-space-6) 0 calc(var(--ds-space-4) + var(--depth) * var(--indent));
+  border-radius: var(--ds-radius-sm);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-primary);
+  cursor: default;
+  outline: none;
+  user-select: none;
+  transition: background-color var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.row:hover {
+  background: var(--ds-color-hover-wash);
+}
+.row:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--ds-color-focus-ring);
+}
+.selected,
+.selected:hover {
+  background: var(--ds-color-accent-subtle);
+}
+/* Selected rows also get a 2px accent bar at the left edge, so selection
+   survives the attention wash on a needs-you row. */
+.selected::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--ds-color-accent);
+}
+
+.toggle {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  flex-shrink: 0;
+  background: none;
+  border: 0;
+  border-radius: var(--ds-radius-xs);
+  color: var(--ds-color-text-muted);
+}
+.toggle:hover {
+  color: var(--ds-color-text-primary);
+  background: var(--ds-color-active-wash);
+}
+.toggleSpacer:hover {
+  background: none;
+}
+.toggleIcon {
+  transition: transform var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.toggleOpen .toggleIcon,
+.toggleIconForced {
+  transform: rotate(90deg);
+}
+.toggleIconForced {
+  color: var(--ds-color-text-disabled);
+}
+
+.mark {
+  flex-shrink: 0;
+}
+.rollup {
+  margin-left: auto;
+}
+
+/* -- Project: a small-caps header that sticks to the top of the scroll. -- */
+.project {
+  position: sticky;
+  top: 0;
+  z-index: var(--ds-z-raised);
+  min-height: var(--ds-size-row-default);
+  margin-top: var(--ds-space-4);
+  background: var(--ds-color-surface);
+}
+.project:hover {
+  background: var(--ds-color-surface);
+}
+.project.selected,
+.project.selected:hover {
+  background: var(--ds-color-accent-subtle);
+}
+.projectName {
+  font-size: var(--ds-text-xs);
+  font-weight: var(--ds-weight-semibold);
+  letter-spacing: var(--ds-tracking-caps);
+  text-transform: uppercase;
+  color: var(--ds-color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* -- Epic: medium text with the layers glyph and a total. -- */
+.epic {
+  color: var(--ds-color-text-secondary);
+}
+.epicGlyph {
+  color: var(--ds-color-text-muted);
+  flex-shrink: 0;
+}
+.epicTitle {
+  font-weight: var(--ds-weight-medium);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.epicCount {
+  font-size: var(--ds-text-2xs);
+  color: var(--ds-color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* -- Work item: status mark · mono key · title · who. -- */
+.workItem {
+  min-height: var(--ds-size-row-default);
+}
+.wiMain {
+  display: flex;
+  align-items: baseline;
+  gap: var(--ds-space-6);
+  min-width: 0;
+  flex: 1;
+}
+.wiKey {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-2xs);
+  color: var(--ds-color-text-muted);
+  flex-shrink: 0;
+}
+.wiTitle {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.finished .wiTitle,
+.finished .sessionTitle {
+  color: var(--ds-color-text-secondary);
+}
+.wiTrailing {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.roles {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.rolesMore {
+  font-size: var(--ds-text-2xs);
+  color: var(--ds-color-text-muted);
+}
+/* In a narrow sidebar the title wins: drop the working-roles stack first,
+   then the people. Both remain in the row's title / accessible name. */
+@container (max-width: 240px) {
+  .roles {
+    display: none;
+  }
+}
+@container (max-width: 200px) {
+  .wiTrailing {
+    display: none;
+  }
+}
+/* Needs you: the row takes a faint attention wash and a 2px attention bar
+   at the left, so it is findable in a scroll without reading. The mark's
+   diamond + ring is still the primary signal. Selection wins over the
+   wash so the two never blend into a third colour. */
+.needsYou {
+  background: color-mix(in srgb, var(--ds-tone-attention-bg) 55%, transparent);
+}
+.needsYou:hover {
+  background: var(--ds-tone-attention-bg);
+}
+.needsYou.selected,
+.needsYou.selected:hover {
+  background: var(--ds-color-accent-subtle);
+}
+.needsYou::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--ds-tone-attention-solid);
+}
+.needsYou.selected::before {
+  background: var(--ds-color-accent);
+}
+.needsYou .wiTitle,
+.needsYou .sessionTitle {
+  font-weight: var(--ds-weight-medium);
+}
+
+/* -- Run (earlier attempt): muted, folded. -- */
+.run {
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-xs);
+}
+.runTitle {
+  flex: 1;
+  min-width: 0;
+}
+.runCount {
+  font-size: var(--ds-text-2xs);
+  font-variant-numeric: tabular-nums;
+}
+
+/* -- Session: role avatar on a guide line. -- */
+.session {
+  font-size: var(--ds-text-xs);
+}
+/* Guide: a hairline from the parent work item's mark down through its sessions. */
+.session::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--ds-space-4) + (var(--depth) - 1) * var(--indent) + 14px + var(--ds-space-6) + 3px);
+  width: 1px;
+  background: var(--ds-color-border-subtle);
+  pointer-events: none;
+}
+.sessionAvatar {
+  flex-shrink: 0;
+}
+.sessionMain {
+  display: flex;
+  align-items: baseline;
+  gap: var(--ds-space-6);
+  min-width: 0;
+  flex: 1;
+}
+.sessionTitle {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-primary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.sessionActivity {
+  color: var(--ds-color-text-muted);
+  font-style: italic;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.needsYou .sessionActivity {
+  color: var(--ds-tone-attention-fg);
+  font-style: normal;
+}

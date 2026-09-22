@@ -228,6 +228,37 @@ export const roleColors: Record<"light" | "dark", Record<AgentRoleName, RoleColo
 };
 
 // ---------------------------------------------------------------------------
+// Human identity colours — for HumanAvatar initials. Eight slots, picked by
+// hashing the person's name, so the same person is the same colour on every
+// screen without a profile record.
+//
+// Deliberately *low chroma* (about half of a role colour): a human must never
+// be confusable with an agent, and hue alone cannot guarantee that when both
+// sets span the wheel. So humans differ on three channels at once — round
+// with a ring (shape), letters not a glyph (mark), and muted not vivid
+// (saturation). Colour here is only to tell two people apart in a stack.
+// ---------------------------------------------------------------------------
+
+export const IDENTITY_SLOTS = 8;
+const IDENTITY_HUES: readonly number[] = [20, 65, 110, 155, 200, 245, 290, 335];
+
+export interface IdentityColor {
+  readonly fg: string;
+  readonly bg: string;
+}
+
+function identityColor(hue: number, mode: "light" | "dark"): IdentityColor {
+  return mode === "dark"
+    ? { fg: toHex(oklch(0.84, 0.07, hue)), bg: toHex(oklch(0.3, 0.035, hue)) }
+    : { fg: toHex(oklch(0.42, 0.09, hue)), bg: toHex(oklch(0.93, 0.03, hue)) };
+}
+
+export const identityColors: Record<"light" | "dark", readonly IdentityColor[]> = {
+  light: IDENTITY_HUES.map((h) => identityColor(h, "light")),
+  dark: IDENTITY_HUES.map((h) => identityColor(h, "dark")),
+};
+
+// ---------------------------------------------------------------------------
 // Accent (interactive). Same hue as info so the UI has one "blue".
 // ---------------------------------------------------------------------------
 

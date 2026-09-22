@@ -24,8 +24,10 @@ do**. Every decision below serves those questions.
 The screen they have open all day is the **chat transcript** of a Session
 (`ChatTranscript` and friends): the agent's narrative, its tool calls, the
 subagents it delegates to, its plan, and the composer through which a human
-answers or steers. The event ledger (`EventRow`) and `LogStream` are the
-debugging and audit tools behind it, reached when something looks off.
+answers or steers. Beside it, always, is the **sidebar** (`Sidebar`,
+`NavTree`): what exists, what is active, what needs a person, who is on
+what. The event ledger (`EventRow`) and `LogStream` are the debugging and
+audit tools behind both, reached when something looks off.
 
 1. **Calm under load.** Density is the goal; noise is the enemy. Dense means
    13px body, 28px rows, 4px radii, hairline borders. Calm means one accent
@@ -117,6 +119,7 @@ gallery for every value.
 | Interaction | `--ds-color-accent`, `-accent-hover/active/subtle/text`, `-focus-ring`, `-selection`, `-hover-wash`, `-active-wash` | One blue. Same hue as the info tone. |
 | Tones | `--ds-tone-{neutral,info,attention,success,danger}-{fg,bg,border,solid,on-solid}` | The only status colours. |
 | Roles | `--ds-role-{orchestrator,…,qa-browser}-{fg,bg,solid,on-solid}` | Categorical identity, fixed order, never used for status. |
+| Identity | `--ds-identity-{0…7}-{fg,bg}` | Eight muted slots for human avatars, picked by hashing the person's id. About half the chroma of a role colour. |
 | Diff | `--ds-diff-{add,del}-{bg,bg-strong,fg}`, `--ds-diff-hunk-{bg,fg}` | Softer than the tones; read for minutes. |
 | Elevation | `--ds-shadow-1/2/3` | Includes the hairline ring. Theme-dependent. |
 | Type | `--ds-font-sans/mono`, `--ds-text-2xs…4xl`, `--ds-weight-*`, `--ds-leading-*`, `--ds-tracking-*` | Body is `text-md` = 13px. |
@@ -207,6 +210,63 @@ nudge by eye.
   collapsed. Two pinned plans would be two competing answers to "what is it
   doing".
 
+### Triage (the sidebar)
+
+- `src/tokens/triage.ts` maps every domain status to one of six buckets:
+  **needs_you**, **active**, **ready**, **failed**, **waiting**, **done**.
+  Keyed on the domain unions, so a new status is a compile error until it is
+  placed. Only the first four are *counted*; waiting and done are the calm
+  majority and are never rolled up.
+- A work item's bucket is the most urgent of its own status and the sessions
+  of its current run (`workItemTriage`). A `running` work item whose reviewer
+  is `awaiting_input` needs you, whatever the macro state says.
+- `TriageRollup` is the one way a collapsed parent says what is inside it:
+  a `StatusBadge` dot per non-empty counted bucket, most urgent first. It
+  reuses the dot shapes (diamond = needs you, round = active, square =
+  failed), so the roll-up never invents a second mark. Needs-you is the only
+  count in attention ink.
+- The tree shows four levels — Project → Epic → Work item → Session — and
+  folds Runs into their work item: the current run's sessions sit directly
+  under it; earlier attempts fold into one "Attempt n" row each. Retrying is
+  rare and must not cost every work item a level.
+- Levels differ in row grammar, not just indent (12px): projects are sticky
+  small-caps headers, epics carry the layers glyph and a total, work items
+  lead with a status dot and a mono key, sessions sit on a guide line behind
+  a role avatar. A tree four deep still reads in grayscale.
+- Default open state is derived from triage and never needs three clicks: a
+  project opens if anything inside is counted; an epic if anything needs you
+  or is active; a work item only if it needs you, down to the asking
+  session. The user's toggles override these per row and survive refreshes,
+  so a newly blocked item still opens its ancestors unless the operator
+  explicitly folded them.
+- "What needs me" must be answerable without expanding anything. The
+  `Sidebar` pins a **Needs you** list across every project — work item,
+  who is asking, who it waits on, where — above the tree; the needs-you
+  filter chip shows the same set in place; and every collapsed ancestor
+  carries the count. Three routes, one source (`attentionItems`).
+- Selection and focus are separate (the ARIA tree pattern): ↑↓ move, →
+  opens or steps in, ← closes or steps out, Home/End, Enter selects, `/`
+  jumps to the search and ↓ from the search enters the tree.
+
+### People
+
+- `HumanAvatar` is for an identified person; `AgentAvatar role="human"` is
+  the anonymous human *actor* glyph in event rows. Do not use one for the
+  other.
+- Humans and agents differ on three channels at once: a human is a full
+  circle with a ring, shows initials, and takes a muted identity colour;
+  agents are squares (the orchestrator a round glyph), show a glyph, and
+  take a vivid role colour. Nothing about a person is ever a role colour or
+  a tone.
+- Identity colour is `identitySlot(person)` — a hash of the id, so the same
+  person is the same colour on every screen with no profile record. Profile
+  images are not in the product yet; `imageUrl` replaces the initials when
+  they arrive and nothing else changes.
+- `HumanAvatarStack` overlaps by a quarter and puts the *first* person on
+  top: order the list by relevance (the one it waits on, then the
+  requester). Past `max`, a "+N" chip in the same shape stands for the rest
+  with the full list in the title.
+
 ### Markdown
 
 - `Markdown` renders from a typed AST (`src/util/markdown.ts`) to React
@@ -285,6 +345,9 @@ nudge by eye.
 | `<ToolCallCard name="bash" status="failed" error={err} />` | an error hidden behind an expander |
 | `<ChatComposer question={q} />` for a blocking question | one generic text box for everything |
 | `<Markdown source={text} streaming />` while tokens arrive | re-parsing strictly on every token |
+| `<TriageRollup counts={projectCounts(p)} />` on a collapsed project | "12 items" |
+| `<HumanAvatarStack people={[waitingOn, requester]} />` | a row of role-coloured circles with letters |
+| `<Sidebar projects={nav} selected={ref} />` and let defaults open the blocked item | expanding three levels to find "Needs you" |
 
 ## Components
 
@@ -340,6 +403,28 @@ Skeleton/SkeletonLines/Spinner, EmptyState, ScrollArea.
   `message` and `document` variants; ```` ```diff ```` hands off to `DiffView`.
   `parseMarkdown` / `safeUrl` are exported for consumers that need the AST.
 
+`src/components/` — navigation (the other half of the screen):
+
+- **Sidebar** — header, search (`/`), four triage chips with global counts,
+  the pinned Needs-you list across every project, the tree, a footer.
+  Loading (skeleton rows), empty, and no-match states. Search and filter are
+  controlled or uncontrolled. `AttentionList` is exported on its own.
+- **NavTree** — Project → Epic → Work item → Session, flat with `aria-level`,
+  full keyboard navigation, per-row open/closed overrides (controlled via
+  `expanded` / `onExpandedChange` so the app can persist them), triage-derived
+  defaults, and a filter that forces ancestors open. Earlier runs fold into
+  "Attempt n" rows.
+- **TriageRollup** — the counted buckets of a subtree as `StatusBadge` dots
+  with counts, most urgent first.
+- **HumanAvatar / HumanAvatarStack** — a person by initials and a hashed
+  identity colour; stacks overflow to "+N". `identitySlot` and `initialsOf`
+  are exported.
+- The view model is pure and exported from `src/util/navModel.ts`:
+  `flattenNav`, `attentionItems`, `globalCounts`, `projectCounts`,
+  `workItemTriage`, `workingRoles`, `ancestorKeys`. The app maps domain
+  records to `NavProject[]` (joining people, activity and titles) and hands
+  it over; nothing here fetches.
+
 ## What is deliberately not here
 
 - A Markdown *parser dependency*. The hand-rolled one in `src/util/markdown.ts`
@@ -353,7 +438,9 @@ Skeleton/SkeletonLines/Spinner, EmptyState, ScrollArea.
 - Charts. When they arrive, series colours must come from a validated
   categorical palette, not the tones or role colours. The tokens module
   exports the raw OKLCH helpers for that.
-- Virtualisation. `Table`, `EventStream` and `LogStream` render plain DOM so
-  any row virtualiser can be applied by the consumer.
+- Virtualisation. `Table`, `EventStream`, `LogStream` and `NavTree` render
+  plain DOM so any row virtualiser can be applied by the consumer; the tree
+  is already a flat list of rows for that reason.
 - A Kanban board, side panel, or page layout. Those are app concerns; they
-  compose the pieces here.
+  compose the pieces here. The `Sidebar` is chrome, not a layout: the app
+  decides how it sits beside the transcript and how wide it is.

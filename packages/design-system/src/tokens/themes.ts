@@ -13,6 +13,7 @@ import {
   TONE_NAMES,
   accent,
   diff,
+  identityColors,
   neutral,
   roleColors,
   tones,
@@ -183,6 +184,10 @@ export function flattenTheme(mode: ThemeMode): Record<string, string> {
     out[`role-${key}-solid`] = rc.solid;
     out[`role-${key}-on-solid`] = rc.onSolid;
   }
+  identityColors[mode].forEach((ic, i) => {
+    out[`identity-${i}-fg`] = ic.fg;
+    out[`identity-${i}-bg`] = ic.bg;
+  });
   const d = diff[mode];
   out["diff-add-bg"] = d.addBg;
   out["diff-add-bg-strong"] = d.addBgStrong;
