@@ -10,10 +10,11 @@
  */
 
 import { z } from "zod";
-import { EventTypes, newId, resolveAgentModel } from "@dude/domain";
+import { DEFAULT_RUN_ROLE, EventTypes, newId, resolveAgentModel } from "@dude/domain";
 import type { AgentModels } from "@dude/domain";
 import { withOrg, withoutTenant, type OrgScope } from "../../db/client.ts";
 import { promptFor } from "../prompts.ts";
+import type { ActionableFeedback } from "../../forge/classify.ts";
 import { PHASE_PUBLISHES, ROLE_FOR_PHASE } from "../../workflow/policy.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { eventBus } from "../../events/bus.ts";
@@ -22,14 +23,6 @@ import type { RequestContext, Router } from "../router.ts";
 
 /** How long a lease is valid before the control plane may reclaim the Run. */
 const LEASE_SECONDS = 90;
-
-/**
- * The role a claimed Run executes as.
- *
- * One orchestrator per Run for now (plan §9.2); specialist roles are spawned
- * as subagents rather than claimed independently.
- */
-const DEFAULT_RUN_ROLE = "orchestrator" as const;
 
 const registerInput = z.object({
   name: z.string().min(1).max(200),
@@ -200,7 +193,8 @@ async function claimRuns(ctx: RequestContext): Promise<Response> {
             lease_expires_at = now() + ${`${LEASE_SECONDS} seconds`}::interval
         FROM candidate
         WHERE r.id = candidate.id
-        RETURNING r.id, r.work_item_id, r.project_id, r.attempt, r.phase, r.base_ref
+        RETURNING r.id, r.work_item_id, r.project_id, r.attempt, r.phase, r.base_ref,
+                  r.category, r.pr_feedback
       )
       SELECT
         c.id,
@@ -209,6 +203,8 @@ async function claimRuns(ctx: RequestContext): Promise<Response> {
         c.attempt,
         c.phase,
         c.base_ref      AS "baseRef",
+        c.category,
+        c.pr_feedback   AS "prFeedback",
         p.runtime_image AS "runtimeImage",
         p.agent_models  AS "agentModels",
         -- The task the agent is given, composed from the Work Item.
@@ -271,6 +267,7 @@ async function claimRuns(ctx: RequestContext): Promise<Response> {
           acceptanceCriteria: (run.acceptanceCriteria ?? []) as string[],
           category: (run.category as string | null) ?? null,
           ...(findings ? { findings } : {}),
+          prFeedback: (run.prFeedback ?? []) as ActionableFeedback[],
           context: resolved?.context ?? null,
         }),
       });

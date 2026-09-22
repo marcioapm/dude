@@ -26,7 +26,7 @@ const RUN_SELECT = `
   id, organization_id AS "organizationId", project_id AS "projectId",
   work_item_id AS "workItemId", attempt, status, worker_id AS "workerId",
   workspace_path AS "workspacePath", error,
-  phase, role, parent_run_id AS "parentRunId", base_ref AS "baseRef",
+  phase, role, category, parent_run_id AS "parentRunId", base_ref AS "baseRef",
   head_sha AS "headSha", branch,
   created_at AS "createdAt", started_at AS "startedAt", ended_at AS "endedAt"`;
 

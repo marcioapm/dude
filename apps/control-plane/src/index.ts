@@ -21,6 +21,7 @@ import { PostgresWorkflowRuntime } from "./workflow/runtime.ts";
 import { deliveryWorkflow } from "./workflow/delivery.workflow.ts";
 import { notifyPhaseFinished } from "./workflow/notify.ts";
 import { setWorkflowRuntime } from "./workflow/registry.ts";
+import { pollPullRequests } from "./forge/sync.ts";
 import { Sweeper, dispatchOutbox, reapExpiredRunLeases, reapLostWorkers } from "./workflow/sweepers.ts";
 
 export function buildRouter(): Router {
@@ -75,6 +76,12 @@ export function buildSweepers(options: { log?: typeof console.log } = {}) {
      */
     new Sweeper("phase-notifier", () => notifyPhaseFinished(workflow), {
       intervalMs: 1_000,
+      log,
+    }),
+    // Each PR is asked about at most every DUDE_PR_POLL_SECONDS; the sweep
+    // itself is frequent so a newly opened PR is picked up promptly.
+    new Sweeper("pr-poller", () => pollPullRequests(workflow), {
+      intervalMs: 5_000,
       log,
     }),
     new Sweeper("workflow-poller", async () => ({ handled: await workflow.tick() }), {

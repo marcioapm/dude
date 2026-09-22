@@ -25,9 +25,10 @@ import { appendInScope } from "../../events/ledger.ts";
 import { eventBus } from "../../events/bus.ts";
 import { badRequest, conflict, json, notFound, parseBody } from "../http.ts";
 import { ForgeError, forgeFor, slugFromUrl } from "../../forge/github.ts";
+import { syncPullRequest } from "../../forge/sync.ts";
 import type { RequestContext, Router } from "../router.ts";
 
-const PR_SELECT = `
+export const PR_SELECT = `
   id, organization_id AS "organizationId", project_id AS "projectId",
   work_item_id AS "workItemId", run_id AS "runId", repository_id AS "repositoryId",
   number, node_id AS "nodeId", url, head_branch AS "headBranch",
@@ -269,102 +270,15 @@ async function openPullRequest(ctx: RequestContext): Promise<Response> {
 }
 
 /**
- * Re-read a pull request from the forge and record what changed.
+ * Re-read a pull request from the forge on demand.
  *
- * Polled rather than pushed, for now: webhooks need a public URL, and a
- * factory that cannot see its own PR because it is behind a laptop's NAT is
- * worse than one that asks every so often. The webhook path replaces the
- * body of this function without changing its contract.
+ * The poller does this on a timer; this is the same thing for a person who
+ * does not want to wait for it.
  */
 async function refreshPullRequest(ctx: RequestContext): Promise<Response> {
-  const id = ctx.params.id!;
-  const { organizationId } = ctx.principal;
-
-  const loaded = await withOrg(organizationId, async (scope) => {
-    const rows = (await scope.sql`
-      SELECT pr.id, pr.project_id, pr.work_item_id, pr.run_id, pr.number,
-             pr.state, pr.checks, pr.review, r.url AS repo_url, r.name AS repo_name
-      FROM pull_requests pr
-      JOIN repositories r ON r.id = pr.repository_id
-      WHERE pr.id = ${id}`) as Array<Record<string, string | number | null>>;
-    return rows[0] ?? null;
-  });
-
-  if (!loaded) throw notFound(`pull request ${id} not found`);
-
-  const slug = slugFromUrl(String(loaded.repo_url));
-  if (!slug) throw badRequest(`cannot derive owner/repo from ${loaded.repo_url}`);
-
-  const forge = await forgeFor(organizationId);
-  if (!forge) throw badRequest("no git forge credential is configured for this organization");
-
-  const status = await forge.getPullRequest(slug, Number(loaded.number));
-
-  const result = await withOrg(organizationId, async (scope) => {
-    const rows = (await scope.sql`
-      UPDATE pull_requests SET
-        state      = ${status.state}::pull_request_state,
-        checks     = ${status.checks}::check_state,
-        review     = ${status.review}::review_state,
-        head_sha   = ${status.headSha},
-        updated_at = now(),
-        merged_at  = CASE WHEN ${status.state} = 'merged' THEN COALESCE(merged_at, now()) ELSE merged_at END,
-        closed_at  = CASE WHEN ${status.state} = 'closed' THEN COALESCE(closed_at, now()) ELSE closed_at END
-      WHERE id = ${id}
-      RETURNING ${scope.sql.unsafe(PR_SELECT)}`) as Array<Record<string, unknown>>;
-
-    /*
-     * One event per thing that actually changed, rather than a single
-     * "refreshed" event on every poll: the ledger is a record of what
-     * happened, and "nothing happened" is not an occurrence.
-     */
-    const changes: Array<{ type: string; payload: Record<string, unknown> }> = [];
-    if (status.checks !== loaded.checks) {
-      changes.push({
-        type: EventTypes.PullRequestChecksChanged,
-        payload: { from: loaded.checks, to: status.checks, number: loaded.number },
-      });
-    }
-    if (status.review !== loaded.review) {
-      changes.push({
-        type: EventTypes.PullRequestReviewed,
-        payload: { from: loaded.review, to: status.review, number: loaded.number },
-      });
-    }
-    if (status.state !== loaded.state) {
-      changes.push({
-        type:
-          status.state === "merged"
-            ? EventTypes.PullRequestMerged
-            : status.state === "closed"
-              ? EventTypes.PullRequestClosed
-              : EventTypes.PullRequestUpdated,
-        payload: { from: loaded.state, to: status.state, number: loaded.number, url: status.url },
-      });
-    }
-
-    const events = [];
-    for (const change of changes) {
-      events.push(
-        await appendInScope(scope, {
-          eventType: change.type,
-          organizationId,
-          projectId: String(loaded.project_id),
-          workItemId: String(loaded.work_item_id),
-          runId: loaded.run_id === null ? null : String(loaded.run_id),
-          actor: { type: "system", id: "forge" },
-          source: "control-plane",
-          correlationId: String(loaded.work_item_id),
-          payload: { ...change.payload, repo: loaded.repo_name },
-        }),
-      );
-    }
-
-    return { pullRequest: rows[0]!, events };
-  });
-
-  for (const event of result.events) eventBus.publish(event);
-  return json(result.pullRequest);
+  const pullRequest = await syncPullRequest(ctx.principal.organizationId, ctx.params.id!);
+  if (!pullRequest) throw notFound(`pull request ${ctx.params.id} not found`);
+  return json(pullRequest);
 }
 
 async function listPullRequests(ctx: RequestContext): Promise<Response> {

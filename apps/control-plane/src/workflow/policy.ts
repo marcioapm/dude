@@ -22,7 +22,8 @@ export type ReviewCategory =
   | "database"
   | "api";
 
-export type FindingSeverity = "blocking" | "high" | "medium" | "low" | "note";
+export type { FindingSeverity } from "@dude/domain";
+import type { FindingSeverity } from "@dude/domain";
 
 export interface ReviewerPolicy {
   category: ReviewCategory;

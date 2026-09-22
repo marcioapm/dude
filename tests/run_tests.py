@@ -25,7 +25,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from build import build, build_gallery  # noqa: E402
+from build import build, build_gallery, build_web  # noqa: E402
 from env import TestEnvironment  # noqa: E402
 
 TESTS_DIR = Path(__file__).resolve().parent
@@ -42,6 +42,7 @@ def main() -> None:
     build(force=args.build)
     if not args.no_ui:
         build_gallery(force=args.build)
+        build_web()
 
     env = TestEnvironment()
     print(f"run id:        {env.run_id}")
@@ -62,6 +63,7 @@ def main() -> None:
         os.environ["DUDE_TEST_RUN_ID"] = env.run_id
         os.environ["DUDE_TEST_CONTROL_PLANE_PORT"] = str(env.control_plane_port)
         os.environ["DUDE_TEST_GALLERY_PORT"] = str(env.gallery_port)
+        os.environ["DUDE_TEST_WEB_PORT"] = str(env.web_port)
         # So the runner the pytest process starts logs beside the control
         # plane's, rather than into a directory named for a run id the
         # subprocess would otherwise mint for itself.

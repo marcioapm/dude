@@ -15,8 +15,6 @@ import { createApiKey } from "../src/api/auth.ts";
 import { slugFromUrl } from "../src/forge/github.ts";
 import { branchForRun } from "../src/api/routes/pullRequests.ts";
 import { startServer } from "../src/index.ts";
-import * as ledger from "../src/events/ledger.ts";
-import { EventTypes } from "@dude/domain";
 
 const OWNER_URL = process.env.DATABASE_URL ?? "postgres://dude:dude@localhost:5433/dude";
 const APP_URL = process.env.TEST_APP_DATABASE_URL ?? "postgres://dude_app:dude_app@localhost:5433/dude";
@@ -240,24 +238,10 @@ describe("findings reported by a re-review", () => {
 
   async function reviewRun(category: string): Promise<string> {
     const id = `run_${Bun.randomUUIDv7("hex").slice(-8)}`;
-    await owner`INSERT INTO runs (id, organization_id, project_id, work_item_id, attempt, status, phase, worker_id)
-                VALUES (${id}, ${ORG}, ${projectId}, ${workItemId}, 1, 'running', 'review', ${reviewer})`;
-    // Through the real ledger rather than a hand-written insert, so the
-    // test cannot drift from the schema the code actually reads.
-    await ledger.append({
-      eventType: EventTypes.RunCreated,
-      organizationId: ORG,
-      projectId,
-      workItemId,
-      runId: id,
-      sessionId: null,
-      workflowRunId: null,
-      actor: { type: "system", id: "test" },
-      source: "control-plane",
-      correlationId: null,
-      causationId: null,
-      payload: { phase: "review", category },
-    });
+    await owner`INSERT INTO runs (id, organization_id, project_id, work_item_id, attempt, status,
+                                  phase, category, worker_id)
+                VALUES (${id}, ${ORG}, ${projectId}, ${workItemId}, 1, 'running',
+                        'review', ${category}, ${reviewer})`;
     return id;
   }
 

@@ -12,6 +12,8 @@
  * without that text reaching every other role.
  */
 
+import type { ActionableFeedback } from "../forge/classify.ts";
+
 export interface PromptInput {
   title: string;
   goal: string;
@@ -29,7 +31,7 @@ export interface PromptInput {
     suggestedFix: string;
   }>;
   /** Fix phase: pull request feedback this Run must address. */
-  prFeedback?: ReadonlyArray<{ author?: string; body?: string; path?: string }>;
+  prFeedback?: ReadonlyArray<ActionableFeedback>;
   /** Per-project, per-role context appended to the prompt. */
   context?: string | null;
 }

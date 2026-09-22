@@ -13,6 +13,7 @@ import { withOrg } from "../db/client.ts";
 import { appendInScope } from "../events/ledger.ts";
 import { eventBus } from "../events/bus.ts";
 import { PHASE_PUBLISHES, ROLE_FOR_PHASE, type FindingSeverity } from "./policy.ts";
+import type { ActionableFeedback } from "../forge/classify.ts";
 
 export interface PhaseRunInput {
   workItemId: string;
@@ -25,7 +26,7 @@ export interface PhaseRunInput {
   /** Fix phase only: the findings this Run must address. */
   findingIds?: string[];
   /** Fix phase only: PR feedback this Run must address. */
-  prFeedback?: unknown[];
+  prFeedback?: ActionableFeedback[];
 }
 
 /**
@@ -56,11 +57,12 @@ export async function createPhaseRun(
     await scope.sql`
       INSERT INTO runs (
         id, organization_id, project_id, work_item_id, attempt, status,
-        phase, role, parent_run_id, base_ref)
+        phase, role, parent_run_id, base_ref, category, pr_feedback)
       VALUES (
         ${runId}, ${organizationId}, ${projectId}, ${input.workItemId}, ${attempt}, 'pending',
         ${input.phase}::run_phase, ${ROLE_FOR_PHASE[input.phase]!}::agent_role,
-        ${input.parentRunId}, ${input.baseRef})`;
+        ${input.parentRunId}, ${input.baseRef}, ${input.category ?? null},
+        ${input.prFeedback ?? []}::jsonb)`;
 
     const event = await appendInScope(scope, {
       eventType: EventTypes.RunCreated,
@@ -316,4 +318,39 @@ async function renderPullRequest(
     sections.push("---\n\nOpened by the dude factory.");
     return { title: item.title, body: sections.filter(Boolean).join("\n\n") };
   });
+}
+
+/**
+ * Move a work item to a new macro status, and say why.
+ *
+ * The workflow owns this: the board, the sidebar and anyone watching the
+ * ledger learn where a work item stands from here, so a status that lags the
+ * workflow is a board that lies. A no-op when the status is unchanged, so a
+ * step that re-runs after a crash does not add a second identical event.
+ */
+export async function setWorkItemStatus(
+  organizationId: string,
+  state: { workItemId: string; projectId: string },
+  status: string,
+  reason: string,
+): Promise<void> {
+  const event = await withOrg(organizationId, async (scope) => {
+    const rows = (await scope.sql`
+      UPDATE work_items SET status = ${status}::work_item_status, updated_at = now()
+      WHERE id = ${state.workItemId} AND status <> ${status}::work_item_status
+      RETURNING id`) as Array<{ id: string }>;
+    if (rows.length === 0) return null;
+
+    return appendInScope(scope, {
+      eventType: EventTypes.WorkItemStatusChanged,
+      organizationId,
+      projectId: state.projectId,
+      workItemId: state.workItemId,
+      actor: { type: "system", id: "workflow" },
+      source: "control-plane",
+      correlationId: state.workItemId,
+      payload: { status, reason },
+    });
+  });
+  if (event) eventBus.publish(event);
 }

@@ -145,6 +145,53 @@ def gallery_url(env: TestEnvironment) -> str:
 
 
 @pytest.fixture
+def fake_github(tmp_path_factory):
+    """A local stand-in for GitHub: a git daemon to push to, and its API."""
+    from fake_github import FakeGitHub
+
+    fake = FakeGitHub(tmp_path_factory.mktemp("github"))
+    fake.start()
+    yield fake
+    fake.stop()
+
+
+@pytest.fixture
+def forge_project(client: ApiClient, fake_github) -> dict:
+    """A project on the fake forge, run end to end by scripted fake agents.
+
+    The forge credential points at the fake's API, so the factory opens pull
+    requests there through the same REST calls it makes to github.com.
+    """
+    resp = client.post(
+        "/v1/forge/credential",
+        {"auth": "pat", "secret": "fake-token", "apiBaseUrl": fake_github.api_url},
+    )
+    assert resp.status_code == 200, resp.text
+    return client.create_project(
+        name="Greeter",
+        slug=f"greeter-{fake_github.api_port}",
+        runtimeImage="dude-runtime:dev",
+        agentModels={
+            "implementer": {"model": "fake/scripted"},
+            "reviewer": {"model": "fake/scripted"},
+            "simplifier": {"model": "fake/scripted"},
+        },
+        repositories=[
+            {"name": "greeter", "url": fake_github.clone_url, "defaultBranch": "main"}
+        ],
+    )
+
+
+@pytest.fixture(scope="session")
+def web_url(env: TestEnvironment) -> str:
+    """The built web app, served against this run's control plane."""
+    url = env.start_web()
+    yield url
+    if env.web_proc:
+        env.web_proc.terminate()
+
+
+@pytest.fixture
 def console_errors(page: Page) -> list[str]:
     """Collect console errors and page exceptions for the current test.
 

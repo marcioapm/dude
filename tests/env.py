@@ -50,6 +50,8 @@ class TestEnvironment:
     db_name: str = field(init=False)
     control_plane_port: int = field(default_factory=find_free_port)
     gallery_port: int = field(default_factory=find_free_port)
+    web_port: int = field(default_factory=find_free_port)
+    web_proc: subprocess.Popen | None = field(default=None, repr=False)
     control_plane_proc: subprocess.Popen | None = field(default=None, repr=False)
     runner_proc: subprocess.Popen | None = field(default=None, repr=False)
     gallery_proc: subprocess.Popen | None = field(default=None, repr=False)
@@ -121,6 +123,10 @@ class TestEnvironment:
                 # exercised by every test, not just the ones that test it.
                 "DATABASE_URL": self.app_dsn,
                 "PORT": str(self.control_plane_port),
+                # Tests drive a local forge; asking it every couple of seconds
+                # keeps the PR loop's tests short without changing what they
+                # prove. A real forge keeps the rate-limit-friendly default.
+                "DUDE_PR_POLL_SECONDS": os.environ.get("DUDE_PR_POLL_SECONDS", "2"),
             },
             stdout=self._log("control-plane"),
             stderr=subprocess.STDOUT,
@@ -147,6 +153,37 @@ class TestEnvironment:
             stderr=subprocess.DEVNULL,
         )
         return self.gallery_url
+
+    def start_web(self) -> str:
+        """Serve the built web app, proxying the API to this run's control plane.
+
+        `vite preview` rather than the dev server, for the same reason as the
+        gallery: the tests should exercise what ships.
+        """
+        self.web_proc = subprocess.Popen(
+            ["bunx", "vite", "preview"],
+            cwd=REPO_ROOT / "apps" / "web",
+            env={
+                **os.environ,
+                "DUDE_CONTROL_PLANE": self.control_plane_url,
+                "DUDE_WEB_PORT": str(self.web_port),
+            },
+            stdout=self._log("web"),
+            stderr=subprocess.STDOUT,
+        )
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            try:
+                if requests.get(self.web_url, timeout=1).ok:
+                    return self.web_url
+            except requests.RequestException:
+                pass
+            time.sleep(0.3)
+        raise RuntimeError(f"web app did not come up on {self.web_url}")
+
+    @property
+    def web_url(self) -> str:
+        return f"http://127.0.0.1:{self.web_port}"
 
     def start_runner(self, api_key: str, max_runs: int = 2) -> None:
         """Start the Go runner. Only needed by suites that execute Runs."""
@@ -190,7 +227,7 @@ class TestEnvironment:
         return False
 
     def teardown(self, keep: bool = False) -> None:
-        for name in ("runner_proc", "gallery_proc", "control_plane_proc"):
+        for name in ("runner_proc", "web_proc", "gallery_proc", "control_plane_proc"):
             proc = getattr(self, name, None)
             if proc is None:
                 continue
@@ -246,6 +283,8 @@ class TestEnvironment:
         env.db_name = f"dude_test_{env.run_id}"
         env.control_plane_port = int(os.environ["DUDE_TEST_CONTROL_PLANE_PORT"])
         env.gallery_port = int(os.environ.get("DUDE_TEST_GALLERY_PORT", "0"))
+        env.web_port = int(os.environ.get("DUDE_TEST_WEB_PORT", "0"))
+        env.web_proc = None
         env.control_plane_url = f"http://localhost:{env.control_plane_port}"
         env.gallery_url = f"http://127.0.0.1:{env.gallery_port}"
         env.workspace_root = f"/tmp/dude-e2e-{env.run_id}"

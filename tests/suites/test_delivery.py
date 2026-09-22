@@ -15,6 +15,9 @@ import pytest
 
 from helpers import ApiClient, wait_until
 
+# Delivery runs agents in containers, so it needs Docker and the runner.
+pytestmark = pytest.mark.docker
+
 
 @pytest.fixture
 def delivery_project(client: ApiClient, tmp_path_factory) -> dict:
