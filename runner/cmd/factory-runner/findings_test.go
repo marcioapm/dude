@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -136,5 +137,21 @@ func TestNonNumericLineIsIgnored(t *testing.T) {
 	findings := parseFindings("title: Bad line\nseverity: low\nline: somewhere\n")
 	if findings[0].Line != 0 {
 		t.Errorf("line = %d, want 0", findings[0].Line)
+	}
+}
+
+// A review that found nothing must encode as `[]`, not `null`: the control
+// plane rejects a null list, and finding nothing is the common case.
+func TestEmptyResultIsAnEmptySliceNotNil(t *testing.T) {
+	findings := parseFindings("I reviewed it and found nothing.")
+	if findings == nil {
+		t.Fatal("parseFindings returned nil; it must return an empty slice")
+	}
+	encoded, err := json.Marshal(map[string]any{"findings": findings})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "null") {
+		t.Errorf("encoded as %s, which the control plane rejects", encoded)
 	}
 }

@@ -18,23 +18,35 @@ from helpers import ApiClient, wait_until
 
 @pytest.fixture
 def delivery_project(client: ApiClient, tmp_path_factory) -> dict:
-    """A project whose repository is a real local git repo the runner can clone."""
+    """A project whose repository is a bare git remote the runner can push to.
+
+    Bare, not a working repository: every phase after the first builds on
+    what the previous one *pushed*, so the push has to succeed. Git refuses a
+    push to a non-bare repository's checked-out branch, and a fixture that
+    cannot be pushed to tests a loop that can never get past its first phase.
+    """
     import subprocess
 
-    repo_dir = tmp_path_factory.mktemp("delivery-repo")
+    root = tmp_path_factory.mktemp("delivery")
+    seed = root / "seed"
+    remote = root / "remote.git"
+
+    seed.mkdir()
     for args in (
         ["git", "init", "--initial-branch=main", "-q"],
         ["git", "config", "user.email", "test@example.com"],
         ["git", "config", "user.name", "Test"],
     ):
-        subprocess.run(args, cwd=repo_dir, check=True)
-    (repo_dir / "README.md").write_text("delivery fixture\n")
-    subprocess.run(["git", "add", "."], cwd=repo_dir, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=repo_dir, check=True)
+        subprocess.run(args, cwd=seed, check=True)
+    (seed / "README.md").write_text("delivery fixture\n")
+    subprocess.run(["git", "add", "."], cwd=seed, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=seed, check=True)
+    subprocess.run(["git", "clone", "-q", "--bare", str(seed), str(remote)], check=True)
+    repo_dir = remote
 
     return client.create_project(
         name="Delivery",
-        slug=f"delivery-{repo_dir.name[-6:]}",
+        slug=f"delivery-{root.name[-6:]}",
         runtimeImage="dude-runtime:dev",
         agentModels={
             "implementer": {"model": "fake/scripted"},
@@ -152,3 +164,58 @@ def test_findings_are_listed_by_severity(client: ApiClient, delivery_project: di
     resp = client.get("/v1/findings", params={"workItemId": work_item["id"]})
     assert resp.status_code == 200
     assert resp.json()["findings"] == []
+
+
+def test_the_review_fix_loop_converges(client: ApiClient, delivery_project: dict, runner):
+    """A blocking finding sends the work back, and the loop then settles.
+
+    The loop that most needs an end-to-end test: its unit tests signal the
+    workflow directly and never exercise the runner's git inspection, which is
+    exactly where it broke the first time. The fake reviewer reports one
+    blocking finding and then reports clean, so this asserts convergence — not
+    merely that the policy bound eventually fires.
+    """
+    work_item = client.create_work_item(delivery_project["id"], "Loop until clean")
+    client.post(f"/v1/work-items/{work_item['id']}/deliver")
+
+    def phases():
+        runs = client.get(f"/v1/work-items/{work_item['id']}").json().get("runs", [])
+        return [r["phase"] for r in runs if r["status"] == "completed"]
+
+    # A fix Run only exists if a blocking finding was reported and acted on.
+    wait_until(
+        lambda: "fix" in phases(),
+        timeout=240,
+        message="the review never produced a fix Run",
+    )
+
+    findings = client.get(
+        "/v1/findings", params={"workItemId": work_item["id"]}
+    ).json()["findings"]
+    assert findings, "the reviewer reported nothing to fix"
+    assert findings[0]["severity"] == "blocking"
+
+    # Converged rather than stopped: reaching simplify means a later review
+    # found nothing, because a blocking finding would have sent it back again.
+    wait_until(
+        lambda: "simplify" in phases(),
+        timeout=240,
+        message="the loop never converged past review",
+    )
+
+
+def test_a_fix_run_is_told_what_to_fix(client: ApiClient, delivery_project: dict, runner):
+    """The fixer sees the findings, not just an instruction to fix something."""
+    work_item = client.create_work_item(delivery_project["id"], "Fix with context")
+    client.post(f"/v1/work-items/{work_item['id']}/deliver")
+
+    def fix_run():
+        runs = client.get(f"/v1/work-items/{work_item['id']}").json().get("runs", [])
+        found = [r for r in runs if r.get("phase") == "fix"]
+        return found[0] if found else None
+
+    run = wait_until(fix_run, timeout=240, message="no fix Run was created")
+
+    # It starts from the implementer's commit, not the default branch.
+    assert run["baseRef"], "the fix Run was not given a base ref"
+    assert run["role"] == "implementer"

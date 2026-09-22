@@ -15,6 +15,8 @@ import { createApiKey } from "../src/api/auth.ts";
 import { slugFromUrl } from "../src/forge/github.ts";
 import { branchForRun } from "../src/api/routes/pullRequests.ts";
 import { startServer } from "../src/index.ts";
+import * as ledger from "../src/events/ledger.ts";
+import { EventTypes } from "@dude/domain";
 
 const OWNER_URL = process.env.DATABASE_URL ?? "postgres://dude:dude@localhost:5433/dude";
 const APP_URL = process.env.TEST_APP_DATABASE_URL ?? "postgres://dude_app:dude_app@localhost:5433/dude";
@@ -217,5 +219,110 @@ describe("pull requests", () => {
       body: JSON.stringify({ repositoryId, title: "Nope" }),
     });
     expect(res.status).toBe(404);
+  });
+});
+
+describe("findings reported by a re-review", () => {
+  /*
+   * What lets the review → fix loop converge. A finding from the first
+   * review is closed by a later review of the same kind that does not raise
+   * it again — but only once a fixer has actually attempted it, and only
+   * within the same category.
+   */
+  let reviewer: string;
+
+  beforeAll(async () => {
+    const workerId = `wrk_${Bun.randomUUIDv7("hex").slice(-8)}`;
+    await owner`INSERT INTO workers (id, organization_id, name, pool)
+                VALUES (${workerId}, ${ORG}, ${workerId}, 'default')`;
+    reviewer = workerId;
+  });
+
+  async function reviewRun(category: string): Promise<string> {
+    const id = `run_${Bun.randomUUIDv7("hex").slice(-8)}`;
+    await owner`INSERT INTO runs (id, organization_id, project_id, work_item_id, attempt, status, phase, worker_id)
+                VALUES (${id}, ${ORG}, ${projectId}, ${workItemId}, 1, 'running', 'review', ${reviewer})`;
+    // Through the real ledger rather than a hand-written insert, so the
+    // test cannot drift from the schema the code actually reads.
+    await ledger.append({
+      eventType: EventTypes.RunCreated,
+      organizationId: ORG,
+      projectId,
+      workItemId,
+      runId: id,
+      sessionId: null,
+      workflowRunId: null,
+      actor: { type: "system", id: "test" },
+      source: "control-plane",
+      correlationId: null,
+      causationId: null,
+      payload: { phase: "review", category },
+    });
+    return id;
+  }
+
+  async function report(runId: string, findings: unknown[]) {
+    const res = await fetch(`${baseUrl}/v1/runs/${runId}/findings`, {
+      method: "POST",
+      headers: auth(runnerKey),
+      body: JSON.stringify({ findings }),
+    });
+    expect(res.status).toBe(201);
+  }
+
+  async function statusOf(title: string): Promise<string> {
+    const [row] = (await owner`
+      SELECT status FROM review_findings WHERE work_item_id = ${workItemId} AND title = ${title}
+      ORDER BY created_at DESC LIMIT 1`) as Array<{ status: string }>;
+    return row!.status;
+  }
+
+  const blocking = (title: string, category = "correctness") => ({
+    severity: "blocking",
+    category,
+    title,
+  });
+
+  test("a clean re-review resolves a finding the fixer attempted", async () => {
+    await report(await reviewRun("correctness"), [blocking("Attempted and fixed")]);
+    await owner`UPDATE review_findings SET fix_attempts = 1 WHERE title = 'Attempted and fixed'`;
+
+    await report(await reviewRun("correctness"), []);
+
+    expect(await statusOf("Attempted and fixed")).toBe("resolved");
+  });
+
+  test("a finding no fixer has touched stays open", async () => {
+    // Not raised again is not the same as fixed: a flaky reviewer omits
+    // things all the time, and nothing has tried to fix this one.
+    await report(await reviewRun("correctness"), [blocking("Never attempted")]);
+    await report(await reviewRun("correctness"), []);
+
+    expect(await statusOf("Never attempted")).toBe("open");
+  });
+
+  test("a re-review of another category does not resolve it", async () => {
+    // A security reviewer saying nothing is not evidence that a correctness
+    // problem went away.
+    await report(await reviewRun("correctness"), [blocking("Wrong reviewer")]);
+    await owner`UPDATE review_findings SET fix_attempts = 1 WHERE title = 'Wrong reviewer'`;
+
+    await report(await reviewRun("security"), []);
+
+    expect(await statusOf("Wrong reviewer")).toBe("open");
+  });
+
+  test("a problem the re-review raises again reappears as open", async () => {
+    await report(await reviewRun("correctness"), [blocking("Survived the fix")]);
+    await owner`UPDATE review_findings SET fix_attempts = 1 WHERE title = 'Survived the fix'`;
+
+    await report(await reviewRun("correctness"), [blocking("Survived the fix")]);
+
+    // The old row closes and the new one is open, so the loop still sees a
+    // blocking finding and does not stop.
+    const rows = (await owner`
+      SELECT status FROM review_findings WHERE title = 'Survived the fix'
+      ORDER BY created_at`) as Array<{ status: string }>;
+    expect(rows.map((r) => r.status)).toEqual(["resolved", "open"]);
   });
 });

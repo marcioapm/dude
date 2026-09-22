@@ -286,7 +286,7 @@ func (d *daemon) runAgent(
 	 * configuration that made it.
 	 */
 	if strings.HasPrefix(model, FakeModelPrefix) {
-		return "", d.runFakeAgent(ctx, r, containerID, repos[0], log)
+		return d.runFakeAgent(ctx, r, containerID, repos[0], log)
 	}
 
 	log.Info("agent starting", "model", model, "repo", repos[0].Name)
@@ -542,55 +542,140 @@ func tail(s string, n int) string {
 // expensive for no added coverage.
 const FakeModelPrefix = "fake/"
 
-// runFakeAgent performs a scripted change instead of calling a model.
-//
-// It writes a file and commits it, so the Run exercises exactly the same
-// downstream path as a real agent: a dirty worktree, a new commit, and a
-// git.commit_created event carrying both.
+/*
+runFakeAgent plays a phase without calling a model.
+
+Returns what the agent "wrote", because a fake reviewer's findings travel the
+same path a real one's do — parsed out of its output by the caller. Without
+that the review → fix loop could only ever be tested by mocking the thing
+under test.
+
+Each phase behaves the way its real counterpart would, in the smallest way
+that exercises the downstream path: the ones that publish make a commit, and
+the ones that report findings write them to stdout in the format the prompt
+asks a model for.
+*/
 func (d *daemon) runFakeAgent(
 	ctx context.Context,
 	r client.Run,
 	containerID string,
 	repo workspace.MaterializedRepo,
 	log *slog.Logger,
-) error {
-	log.Info("fake agent starting", "repo", repo.Name)
+) (string, error) {
+	log.Info("fake agent starting", "repo", repo.Name, "phase", r.Phase)
 
-	dir := repoDir(repo.Name)
-	script := strings.Join([]string{
-		"set -e",
-		// Content includes the Run id so concurrent Runs produce distinct
-		// commits and cannot be confused for one another.
-		fmt.Sprintf("printf '%%s\\n' 'Written by run %s' > FACTORY.md", r.ID),
-		"git add FACTORY.md",
-		fmt.Sprintf("git commit -q -m 'Add FACTORY.md for %s'", r.ID),
-	}, "\n")
+	script, message := fakeScript(r)
 
 	var output strings.Builder
-	exitCode, err := d.docker.ExecStream(ctx, containerID,
-		[]string{"sh", "-c", fmt.Sprintf("cd %q && %s", dir, script)}, nil,
-		func(line string) { output.WriteString(line + "\n") })
-	if err != nil {
-		return fmt.Errorf("fake agent: %w", err)
-	}
-	if exitCode != 0 {
-		return fmt.Errorf("fake agent exited %d: %s", exitCode, tail(output.String(), 500))
+	if script != "" {
+		exitCode, err := d.docker.ExecStream(ctx, containerID,
+			[]string{"sh", "-c", fmt.Sprintf("cd %q && %s", repoDir(repo.Name), script)}, nil,
+			func(line string) { output.WriteString(line + "\n") })
+		if err != nil {
+			return output.String(), fmt.Errorf("fake agent: %w", err)
+		}
+		if exitCode != 0 {
+			return output.String(), fmt.Errorf("fake agent exited %d: %s",
+				exitCode, tail(output.String(), 500))
+		}
 	}
 
-	events := []client.Event{{
+	d.sendEvents(ctx, log, []client.Event{{
 		EventType:  protocol.EventAgentMessage,
 		RunID:      r.ID,
 		ProjectID:  r.ProjectID,
 		WorkItemID: r.WorkItemID,
 		ActorType:  "agent",
 		ActorID:    r.ID,
-		Payload:    map[string]any{"text": "fake agent wrote FACTORY.md", "fake": true},
-	}}
-	d.sendEvents(ctx, log, events)
+		Payload:    map[string]any{"text": message, "fake": true},
+	}})
 
-	log.Info("fake agent finished")
-	return nil
+	/*
+	 * The script's output, not a separate value: a fake reviewer's findings
+	 * travel the same path a real one's do — written to stdout and parsed by
+	 * the caller. Returning them any other way would test a path production
+	 * never takes.
+	 */
+	log.Info("fake agent finished", "phase", r.Phase, "output", len(output.String()))
+	return output.String(), nil
 }
+
+/*
+fakeScript is what a fake agent does for one phase.
+
+Returns the shell to run in the container, the message it reports, and the
+text the caller parses findings out of.
+
+The reviewer's behaviour is the interesting one: it reports a blocking
+finding on its first pass and nothing afterwards, which is exactly the shape
+the review → fix loop needs to be exercised — one cycle, then convergence.
+Keyed on whether the fix Run's file exists rather than on an attempt counter,
+so it stays deterministic across a retried or replayed Run.
+*/
+func fakeScript(r client.Run) (script, message string) {
+	switch r.Phase {
+	case "review":
+		/*
+		 * Report a problem, unless a fixer has already been here.
+		 *
+		 * `test -f FIXED.md` is the check, evaluated in the container: a
+		 * review of a tree that already contains the fixer's file is
+		 * reviewing a fix, and reporting the same finding again would loop
+		 * until the policy bound stopped it — proving the bound works, not
+		 * that the loop converges. Keyed on the workspace rather than an
+		 * attempt counter so it stays deterministic across a replayed Run.
+		 */
+		return "test -f FIXED.md && echo " + fakeReviewClean + " || cat <<'FINDING'\n" +
+				fakeBlockingFinding + "\nFINDING",
+			"fake reviewer inspected the change"
+
+	case "fix":
+		// Content names the Run, so a second fix of the same tree is still a
+		// change — a fixer sent back must produce a commit, not fail on an
+		// empty one.
+		return strings.Join([]string{
+			"set -e",
+			fmt.Sprintf("printf '%%s\\n' 'addressed by %s' >> FIXED.md", r.ID),
+			"git add FIXED.md",
+			fmt.Sprintf("git commit -q -m 'Address review findings for %s'", r.ID),
+		}, "\n"), "fake fixer addressed the findings"
+
+	case "simplify":
+		return strings.Join([]string{
+			"set -e",
+			"printf '%s\\n' 'simplified' >> FACTORY.md",
+			"git add FACTORY.md",
+			fmt.Sprintf("git commit -q -m 'Simplify %s'", r.ID),
+		}, "\n"), "fake simplifier tidied the change"
+
+	case "test":
+		return "", "fake tester exercised the feature"
+
+	default:
+		// implement, and any Run with no phase at all.
+		return strings.Join([]string{
+			"set -e",
+			// Content includes the Run id so concurrent Runs produce distinct
+			// commits and cannot be confused for one another.
+			fmt.Sprintf("printf '%%s\\n' 'Written by run %s' > FACTORY.md", r.ID),
+			"git add FACTORY.md",
+			fmt.Sprintf("git commit -q -m 'Add FACTORY.md for %s'", r.ID),
+		}, "\n"), "fake agent wrote FACTORY.md"
+	}
+}
+
+// What a fake reviewer says when it has nothing to report. Prose rather than
+// an empty string, because a real reviewer that finds nothing says so.
+const fakeReviewClean = "'reviewed the fix; no further problems'"
+
+// One blocking finding, in the format the review prompt asks a model for.
+const fakeBlockingFinding = `severity: blocking
+category: correctness
+file: FACTORY.md
+line: 1
+title: FACTORY.md does not record the fix
+description: The change is missing a record that the review was addressed.
+suggested_fix: Add a file naming what was fixed.`
 
 /*
 teardown stops the Run's container and reports the runtime destroyed.
