@@ -73,7 +73,7 @@ describe("FakeHarness", () => {
     await Bun.sleep(10);
 
     // Parked: this is the state in which waiting must cost nothing.
-    expect((await harness.status(handle.externalSessionId)).status).toBe("waiting_on_human");
+    expect((await harness.status(handle.externalSessionId)).status).toBe("awaiting_input");
     expect(await harness.messages(handle.externalSessionId)).toHaveLength(0);
 
     await harness.resumeSession(handle.externalSessionId, {

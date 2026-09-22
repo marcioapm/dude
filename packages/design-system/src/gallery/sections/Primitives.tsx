@@ -106,7 +106,7 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
                 { label: "Other", options: [{ value: "gpt-5", label: "gpt-5" }, { value: "local", label: "local (disabled)", disabled: true }] },
               ]}
             />
-            <Select label="Status" placeholder="Any status" options={[{ value: "running", label: "Running" }, { value: "awaiting_human", label: "Needs you" }, { value: "done", label: "Done" }]} />
+            <Select label="Status" placeholder="Any status" options={[{ value: "running", label: "Running" }, { value: "awaiting_input", label: "Needs you" }, { value: "done", label: "Done" }]} />
             <Select size="sm" aria-label="Density" defaultValue="default" options={[{ value: "compact", label: "Compact" }, { value: "default", label: "Default" }, { value: "comfortable", label: "Comfortable" }]} />
             <Select label="Disabled" disabled defaultValue="x" options={[{ value: "x", label: "Locked" }]} />
           </Row>
@@ -364,7 +364,7 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
 
 const RUNS = [
   { id: "run_9f2a", item: "WI-2481 Add retry with backoff", status: "running", cost: 1.284, ms: 1_640_000, attempt: 2 },
-  { id: "run_8c11", item: "WI-2477 Migrate events table to partitions", status: "awaiting_human", cost: 0.63, ms: 4_010_000, attempt: 1 },
+  { id: "run_8c11", item: "WI-2477 Migrate events table to partitions", status: "awaiting_input", cost: 0.63, ms: 4_010_000, attempt: 1 },
   { id: "run_7b03", item: "WI-2470 Fix flaky E2E login test", status: "completed", cost: 0.412, ms: 903_000, attempt: 1 },
   { id: "run_6a99", item: "WI-2466 Upgrade drizzle-orm", status: "failed", cost: 2.91, ms: 5_400_000, attempt: 3 },
   { id: "run_5d42", item: "WI-2460 Add org switcher", status: "paused", cost: 0.088, ms: 120_000, attempt: 1 },

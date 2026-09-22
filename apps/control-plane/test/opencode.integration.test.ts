@@ -40,7 +40,7 @@ describeOrSkip("OpenCodeHarness against a live server", () => {
     expect(handle.externalSessionId).toMatch(/^ses/);
 
     const status = await harness.status(handle.externalSessionId);
-    expect(["running", "idle", "waiting_on_human"]).toContain(status.status);
+    expect(["running", "idle", "awaiting_input"]).toContain(status.status);
   });
 
   test("reports usage for cost accounting", async () => {

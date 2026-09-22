@@ -10,7 +10,7 @@
  *   motion    whether it is "alive" (running / waiting on you)
  *
  * Rules:
- * - Only `awaiting_human` / `waiting_on_human` default to `solid`. Nothing
+ * - Only `awaiting_input` defaults to `solid`. Nothing
  *   else may — that is what keeps it noticeable.
  * - `failed` is danger; `aborted` is neutral. Aborting is an operator
  *   decision, not an error, and must not look like one.
@@ -35,7 +35,7 @@ export type RunStatus = (typeof RUN_STATUSES)[number];
 export const SESSION_STATUSES = [
   "pending",
   "running",
-  "waiting_on_human",
+  "awaiting_input",
   "completed",
   "failed",
   "aborted",
@@ -48,7 +48,7 @@ export const WORK_ITEM_STATUSES = [
   "awaiting_confirmation",
   "queued",
   "running",
-  "awaiting_human",
+  "awaiting_input",
   "review",
   "ready_to_merge",
   "done",
@@ -174,15 +174,15 @@ export const STATUS_SPECS: Record<Status, StatusSpec> = {
     terminal: true,
     description: "Stopped deliberately by an operator or policy.",
   },
-  waiting_on_human: {
-    label: "Waiting on you",
+  awaiting_input: {
+    label: "Needs you",
     tone: "attention",
     glyph: "hand",
     emphasis: "solid",
     live: true,
     needsHuman: true,
     terminal: false,
-    description: "The session asked a question and is blocked until answered.",
+    description: "Blocked on the operator. Nothing proceeds until you act.",
   },
 
   // -- work item ---------------------------------------------------------
@@ -225,16 +225,6 @@ export const STATUS_SPECS: Record<Status, StatusSpec> = {
     needsHuman: false,
     terminal: false,
     description: "Approved and waiting for a worker.",
-  },
-  awaiting_human: {
-    label: "Needs you",
-    tone: "attention",
-    glyph: "hand",
-    emphasis: "solid",
-    live: true,
-    needsHuman: true,
-    terminal: false,
-    description: "Blocked on the operator. Nothing proceeds until you act.",
   },
   review: {
     label: "In review",

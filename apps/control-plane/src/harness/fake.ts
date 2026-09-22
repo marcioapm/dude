@@ -218,7 +218,7 @@ export class FakeHarness implements AgentHarness {
   /** Replay the script until it blocks, completes, or is aborted. */
   async #advance(state: FakeSessionState, delayMs: number): Promise<void> {
     while (state.cursor < state.script.length) {
-      if (state.status === "aborted" || state.status === "waiting_on_human") return;
+      if (state.status === "aborted" || state.status === "awaiting_input") return;
       if (delayMs > 0) await Bun.sleep(delayMs);
 
       const action = state.script[state.cursor++]!;
@@ -259,14 +259,14 @@ export class FakeHarness implements AgentHarness {
         case "ask":
           // Blocking questions park the session: no further script runs until
           // resumeSession delivers the answer.
-          state.status = action.blocking === false ? "running" : "waiting_on_human";
+          state.status = action.blocking === false ? "running" : "awaiting_input";
           this.#emit(state, {
             type: EventTypes.QuestionAsked,
             occurredAt: now,
             externalSessionId,
             payload: { question: action.question, blocking: action.blocking ?? true },
           });
-          if (state.status === "waiting_on_human") return;
+          if (state.status === "awaiting_input") return;
           break;
 
         case "spawn": {

@@ -55,7 +55,7 @@ export type HarnessSessionStatus =
   | "pending"
   | "running"
   | "idle"
-  | "waiting_on_human"
+  | "awaiting_input"
   | "completed"
   | "failed"
   | "aborted";

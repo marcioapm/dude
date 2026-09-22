@@ -25,7 +25,7 @@ export interface StatusBadgeProps extends Omit<HTMLAttributes<HTMLSpanElement>, 
  * The one component for every Run / Session / WorkItem status.
  *
  * Meaning is carried three ways at once — tone, glyph, and text — so no
- * single channel is load-bearing. `awaiting_human` / `waiting_on_human`
+ * single channel is load-bearing. `awaiting_input` / `awaiting_input`
  * are the only statuses that default to the solid treatment; do not
  * promote anything else to solid, or the signal is lost.
  */

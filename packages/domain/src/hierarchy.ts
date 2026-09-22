@@ -119,7 +119,7 @@ export const workItemStatusSchema = z.enum([
   "awaiting_confirmation",
   "queued",
   "running",
-  "awaiting_human",
+  "awaiting_input",
   "review",
   "ready_to_merge",
   "done",
@@ -187,7 +187,7 @@ export type Run = z.infer<typeof runSchema>;
 export const sessionStatusSchema = z.enum([
   "pending",
   "running",
-  "waiting_on_human",
+  "awaiting_input",
   "completed",
   "failed",
   "aborted",

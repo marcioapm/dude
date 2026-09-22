@@ -29,7 +29,7 @@ export function ComponentsSection({ mode }: { readonly mode: PaneMode }) {
         title="StatusBadge"
         note={
           <>
-            Every Run, Session and Work item status. Meaning is carried by tone <em>and</em> glyph <em>and</em> text. Only <code>awaiting_human</code> / <code>waiting_on_human</code> default to solid, with a slow expanding ring; that is the one thing on a busy screen that should pull the eye.
+            Every Run, Session and Work item status. Meaning is carried by tone <em>and</em> glyph <em>and</em> text. Only <code>awaiting_input</code> / <code>awaiting_input</code> default to solid, with a slow expanding ring; that is the one thing on a busy screen that should pull the eye.
           </>
         }
       >
@@ -76,7 +76,7 @@ export function ComponentsSection({ mode }: { readonly mode: PaneMode }) {
               items={(["subtle", "tinted", "solid"] as const).map((e) => [
                 e,
                 <>
-                  {(["queued", "running", "awaiting_human", "done", "failed", "aborted"] as const).map((s) => (
+                  {(["queued", "running", "awaiting_input", "done", "failed", "aborted"] as const).map((s) => (
                     <StatusBadge key={s} status={s} emphasis={e} />
                   ))}
                 </>,
@@ -84,7 +84,7 @@ export function ComponentsSection({ mode }: { readonly mode: PaneMode }) {
             />
             <Label>Grayscale check — the same row with color removed</Label>
             <Row style={{ filter: "grayscale(1)" }}>
-              {(["queued", "running", "awaiting_human", "review", "ready_to_merge", "done", "failed", "aborted"] as const).map((s) => (
+              {(["queued", "running", "awaiting_input", "review", "ready_to_merge", "done", "failed", "aborted"] as const).map((s) => (
                 <StatusBadge key={s} status={s} />
               ))}
             </Row>
@@ -267,7 +267,7 @@ export function ComponentsSection({ mode }: { readonly mode: PaneMode }) {
                     WI-2481
                   </span>
                   <span>Add retry with backoff to the GitHub webhook handler</span>
-                  <StatusBadge status="awaiting_human" />
+                  <StatusBadge status="awaiting_input" />
                 </Row>
               }
               actions={

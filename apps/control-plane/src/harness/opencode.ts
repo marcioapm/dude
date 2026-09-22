@@ -163,7 +163,7 @@ export class OpenCodeHarness implements AgentHarness {
       `/api/session/${externalSessionId}/question`,
     ).catch(() => []);
     if (Array.isArray(questions) && questions.length > 0) {
-      return { status: "waiting_on_human" };
+      return { status: "awaiting_input" };
     }
 
     const active = await this.#request<Array<{ sessionID?: string }>>("/api/session/active").catch(

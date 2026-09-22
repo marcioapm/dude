@@ -34,7 +34,7 @@ export interface SessionTreeNodeProps extends Omit<HTMLAttributes<HTMLDivElement
   readonly trailing?: ((node: SessionNodeData) => ReactNode) | undefined;
 }
 
-const LIVE: ReadonlySet<SessionStatus> = new Set(["running", "waiting_on_human"]);
+const LIVE: ReadonlySet<SessionStatus> = new Set(["running", "awaiting_input"]);
 const FINISHED: ReadonlySet<SessionStatus> = new Set(["completed", "failed", "aborted"]);
 
 /**

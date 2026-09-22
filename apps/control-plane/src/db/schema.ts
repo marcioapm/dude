@@ -37,7 +37,7 @@ export const trustClassEnum = pgEnum("trust_class", ["trusted_internal", "untrus
 
 export const workItemStatusEnum = pgEnum("work_item_status", [
   "received", "intake", "awaiting_confirmation", "queued", "running",
-  "awaiting_human", "review", "ready_to_merge", "done", "failed", "aborted",
+  "awaiting_input", "review", "ready_to_merge", "done", "failed", "aborted",
 ]);
 
 export const workerStatusEnum = pgEnum("worker_status", [
@@ -58,7 +58,7 @@ export const agentRoleEnum = pgEnum("agent_role", [
 ]);
 
 export const sessionStatusEnum = pgEnum("session_status", [
-  "pending", "running", "waiting_on_human", "completed", "failed", "aborted",
+  "pending", "running", "awaiting_input", "completed", "failed", "aborted",
 ]);
 
 export const workflowRunStatusEnum = pgEnum("workflow_run_status", [
