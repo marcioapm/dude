@@ -133,5 +133,7 @@ function streamEvents({ url, principal, request }: RequestContext): Response {
 
 export function registerEventRoutes(router: Router): void {
   router.get("/v1/events", listEvents);
-  router.get("/v1/events/stream", streamEvents);
+  // EventSource cannot set an Authorization header, so the live stream is the
+  // one endpoint that accepts the key as a query parameter. It is read-only.
+  router.get("/v1/events/stream", streamEvents, { allowKeyInQuery: true });
 }

@@ -23,6 +23,12 @@ export interface PublicContext {
 }
 
 type Handler = (ctx: RequestContext) => Promise<Response> | Response;
+
+/** Per-route authentication options. */
+export interface RouteOptions {
+  requireKind?: Principal["kind"];
+  allowKeyInQuery?: boolean;
+}
 type PublicHandler = (ctx: PublicContext) => Promise<Response> | Response;
 
 interface Route {
@@ -32,6 +38,14 @@ interface Route {
   public: boolean;
   /** Restricts a route to one principal kind, e.g. runner-only endpoints. */
   requireKind?: Principal["kind"] | undefined;
+  /**
+   * Accept the API key as a `key` query parameter.
+   *
+   * Only for endpoints a browser must reach with `EventSource`, which cannot
+   * set headers. Keys in URLs can leak into logs and proxies, so this is
+   * opt-in per route and limited to read-only streams.
+   */
+  allowKeyInQuery?: boolean | undefined;
 }
 
 export class Router {
@@ -41,7 +55,7 @@ export class Router {
     method: string,
     pattern: string,
     handler: Handler | PublicHandler,
-    opts: { public?: boolean; requireKind?: Principal["kind"] } = {},
+    opts: RouteOptions & { public?: boolean } = {},
   ): this {
     this.#routes.push({
       method,
@@ -49,20 +63,21 @@ export class Router {
       handler,
       public: opts.public ?? false,
       requireKind: opts.requireKind,
+      allowKeyInQuery: opts.allowKeyInQuery,
     });
     return this;
   }
 
-  get(pattern: string, handler: Handler, opts?: { requireKind?: Principal["kind"] }): this {
+  get(pattern: string, handler: Handler, opts?: RouteOptions): this {
     return this.#add("GET", pattern, handler, opts);
   }
-  post(pattern: string, handler: Handler, opts?: { requireKind?: Principal["kind"] }): this {
+  post(pattern: string, handler: Handler, opts?: RouteOptions): this {
     return this.#add("POST", pattern, handler, opts);
   }
-  patch(pattern: string, handler: Handler, opts?: { requireKind?: Principal["kind"] }): this {
+  patch(pattern: string, handler: Handler, opts?: RouteOptions): this {
     return this.#add("PATCH", pattern, handler, opts);
   }
-  delete(pattern: string, handler: Handler, opts?: { requireKind?: Principal["kind"] }): this {
+  delete(pattern: string, handler: Handler, opts?: RouteOptions): this {
     return this.#add("DELETE", pattern, handler, opts);
   }
 
@@ -85,7 +100,20 @@ export class Router {
           return await (route.handler as PublicHandler)({ request, url, params });
         }
 
-        const principal = await authenticate(request.headers.get("authorization"));
+        /*
+         * Credentials come from the Authorization header, except on routes
+         * that opt into a query parameter.
+         *
+         * `EventSource` cannot set headers, so an SSE stream has no other way
+         * to authenticate from a browser. That is a real trade-off — a key in
+         * a URL can reach access logs, proxies and referrers — so it is
+         * enabled per route rather than globally, and only for the read-only
+         * stream endpoint.
+         */
+        const principal = await authenticate(
+          request.headers.get("authorization") ??
+            (route.allowKeyInQuery ? url.searchParams.get("key") : null),
+        );
         if (!principal) throw unauthorized();
         if (route.requireKind && principal.kind !== route.requireKind) {
           throw unauthorized(`this endpoint requires a ${route.requireKind} key`);

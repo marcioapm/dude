@@ -13,7 +13,9 @@
 
 import { z } from "zod";
 import {
+  ALL_RUN_STATUSES,
   EventTypes,
+  TERMINAL_RUN_STATUSES,
   controlForPause,
   newId,
   pauseModeSchema,
@@ -30,8 +32,15 @@ const DIRECTIVE_SELECT = `
   run_id AS "runId", text, scope, created_by AS "createdBy",
   created_at AS "createdAt", supersedes, delivered_at AS "deliveredAt"`;
 
-/** Statuses from which a Run can still be intervened on. */
-const LIVE_RUN_STATUSES = ["pending", "scheduled", "starting", "running", "paused"];
+/**
+ * Statuses from which a Run can still be intervened on.
+ *
+ * Derived rather than listed: a status added to the domain must not silently
+ * become un-interveneable because someone forgot to extend a literal here.
+ */
+const LIVE_RUN_STATUSES: readonly string[] = ALL_RUN_STATUSES.filter(
+  (status) => !TERMINAL_RUN_STATUSES.includes(status),
+);
 
 interface RunRow {
   id: string;
@@ -48,20 +57,28 @@ interface RunRow {
  * Returns a discriminated result rather than throwing, so the caller can
  * throw outside the transaction — a rollback triggered by an HTTP error is
  * noise in the logs.
+ *
+ * `accepts` decides which statuses this intervention applies to: pause and
+ * abort want any live Run, resume wants only a paused one. One query, one
+ * row shape, a predicate per caller.
  */
-async function loadLiveRun(
+async function loadRun(
   scope: { sql: import("bun").TransactionSQL },
   runId: string,
-): Promise<{ run: RunRow } | { missing: true } | { terminal: string }> {
+  accepts: (status: string) => boolean,
+): Promise<{ run: RunRow } | { missing: true } | { rejected: string }> {
   const rows = (await scope.sql`
     SELECT id, organization_id, project_id, work_item_id, status::text, control::text
     FROM runs WHERE id = ${runId}`) as RunRow[];
 
   const run = rows[0];
   if (!run) return { missing: true };
-  if (!LIVE_RUN_STATUSES.includes(run.status)) return { terminal: run.status };
+  if (!accepts(run.status)) return { rejected: run.status };
   return { run };
 }
+
+/** Accepts any Run that has not finished. */
+const isLive = (status: string) => LIVE_RUN_STATUSES.includes(status);
 
 // ---------------------------------------------------------------------------
 // Steer
@@ -89,7 +106,7 @@ async function steerRun(ctx: RequestContext): Promise<Response> {
   const { organizationId } = ctx.principal;
 
   const result = await withOrg(organizationId, async (scope) => {
-    const loaded = await loadLiveRun(scope, runId);
+    const loaded = await loadRun(scope, runId, isLive);
     if (!("run" in loaded)) return loaded;
     const { run } = loaded;
 
@@ -121,8 +138,8 @@ async function steerRun(ctx: RequestContext): Promise<Response> {
   });
 
   if ("missing" in result) throw notFound(`run ${runId} not found`);
-  if ("terminal" in result) {
-    throw conflict(`run ${runId} is ${result.terminal} and can no longer be steered`);
+  if ("rejected" in result) {
+    throw conflict(`run ${runId} is ${result.rejected} and can no longer be steered`);
   }
   eventBus.publish(result.event);
   return json(result.directive, 201);
@@ -168,7 +185,7 @@ async function pauseRun(ctx: RequestContext): Promise<Response> {
   const control = controlForPause(input.mode ?? "graceful");
 
   const result = await withOrg(organizationId, async (scope) => {
-    const loaded = await loadLiveRun(scope, runId);
+    const loaded = await loadRun(scope, runId, isLive);
     if (!("run" in loaded)) return loaded;
     const { run } = loaded;
 
@@ -197,8 +214,8 @@ async function pauseRun(ctx: RequestContext): Promise<Response> {
   });
 
   if ("missing" in result) throw notFound(`run ${runId} not found`);
-  if ("terminal" in result) {
-    throw conflict(`run ${runId} is ${result.terminal} and cannot be paused`);
+  if ("rejected" in result) {
+    throw conflict(`run ${runId} is ${result.rejected} and cannot be paused`);
   }
   if ("alreadyPaused" in result) throw conflict(`run ${runId} is already paused`);
 
@@ -219,12 +236,11 @@ async function resumeRun(ctx: RequestContext): Promise<Response> {
   const { organizationId } = ctx.principal;
 
   const result = await withOrg(organizationId, async (scope) => {
-    const rows = (await scope.sql`
-      SELECT id, organization_id, project_id, work_item_id, status::text, control::text
-      FROM runs WHERE id = ${runId}`) as RunRow[];
-    const run = rows[0];
-    if (!run) return { missing: true as const };
-    if (run.status !== "paused") return { notPaused: run.status };
+    const loaded = await loadRun(scope, runId, (status) => status === "paused");
+    if (!("run" in loaded)) {
+      return "missing" in loaded ? loaded : { notPaused: loaded.rejected };
+    }
+    const { run } = loaded;
 
     await scope.sql`
       UPDATE runs
@@ -273,7 +289,7 @@ async function abortRun(ctx: RequestContext): Promise<Response> {
   const { organizationId } = ctx.principal;
 
   const result = await withOrg(organizationId, async (scope) => {
-    const loaded = await loadLiveRun(scope, runId);
+    const loaded = await loadRun(scope, runId, isLive);
     if (!("run" in loaded)) return loaded;
     const { run } = loaded;
 
@@ -309,8 +325,8 @@ async function abortRun(ctx: RequestContext): Promise<Response> {
   });
 
   if ("missing" in result) throw notFound(`run ${runId} not found`);
-  if ("terminal" in result) {
-    throw conflict(`run ${runId} is already ${result.terminal}`);
+  if ("rejected" in result) {
+    throw conflict(`run ${runId} is already ${result.rejected}`);
   }
   eventBus.publish(result.event);
   return json({ ok: true, status: "aborted" });
