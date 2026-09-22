@@ -19,8 +19,8 @@ import {
   summarizeToolArgs,
 } from "@dude/design-system/components";
 import { Button, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
-import { EventTypes, TERMINAL_RUN_STATUSES } from "@dude/domain";
-import type { PersistedEvent } from "@dude/domain";
+import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, runLabel } from "@dude/domain";
+import type { AgentRole, PersistedEvent } from "@dude/domain";
 import type { ApiClient, RunDetail } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
 import { apply, emptyProjection, snapshot, type Turn } from "../api/conversation.ts";
@@ -32,7 +32,7 @@ export interface RunScreenProps {
   runId: string;
   /** The work item's title, when the caller already knows it. */
   title?: string | undefined;
-  onBack?: () => void;
+  onBack?: (() => void) | undefined;
 }
 
 /**
@@ -130,13 +130,18 @@ export function RunScreen({ client, runId, title, onBack }: RunScreenProps) {
     return <div className="runScreen">{problem ?? <Spinner label="Loading the run…" />}</div>;
   }
 
+  // The agent this Run is. A phase Run carries its role; one created
+  // directly through the API runs as an orchestrator.
+  const role: AgentRole = run.role ?? DEFAULT_RUN_ROLE;
+  const phase = run.phase ? runLabel(run) : null;
+
   const session = {
     id: run.id,
-    role: "orchestrator" as const,
+    role,
     status: run.status,
     // The id is already shown beside the title; repeating it as the title
     // leaves the header saying nothing about the work.
-    title: title ? `${title} · attempt ${run.attempt}` : `Attempt ${run.attempt}`,
+    title: [title, phase, `attempt ${run.attempt}`].filter(Boolean).join(" · "),
     workItemId: run.workItemId,
     startedAt: run.startedAt ?? run.createdAt,
     endedAt: run.endedAt,
@@ -211,10 +216,10 @@ export function RunScreen({ client, runId, title, onBack }: RunScreenProps) {
             }
             emptyMessage="Waiting for the agent to start."
           >
-            {conversation.turns.map(renderTurn)}
+            {conversation.turns.map((turn) => renderTurn(turn, role))}
             {conversation.activity ? (
               <ChatMessage
-                role="orchestrator"
+                role={role}
                 activity={conversation.activity}
                 activityProps={
                   conversation.activeTool
@@ -252,13 +257,13 @@ export function RunScreen({ client, runId, title, onBack }: RunScreenProps) {
   );
 }
 
-function renderTurn(turn: Turn) {
+function renderTurn(turn: Turn, role: AgentRole) {
   switch (turn.kind) {
     case "message":
       return (
         <ChatMessage
           key={turn.id}
-          role="orchestrator"
+          role={role}
           content={turn.text}
           startedAt={turn.at}
         />

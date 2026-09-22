@@ -32,6 +32,25 @@ def build_gallery(force: bool = False) -> Path:
     return GALLERY_DIST
 
 
+WEB_DIST = REPO_ROOT / "apps" / "web" / "dist"
+
+
+def build_web(force: bool = False) -> Path:
+    """Build the web app the UI tests drive.
+
+    Always rebuilt unless skipped by the caller: unlike the gallery, the app
+    changes with almost every piece of work, and a test against a stale build
+    passes or fails for reasons that have nothing to do with the code.
+    """
+    print("building web app...")
+    result = subprocess.run(["bun", "run", "build"], cwd=REPO_ROOT / "apps" / "web",
+                            stdout=subprocess.DEVNULL)
+    if result.returncode != 0:
+        print("web build failed", file=sys.stderr)
+        sys.exit(1)
+    return WEB_DIST
+
+
 def build(force: bool = False) -> Path:
     """Build the runner binary. Returns its path."""
     if RUNNER_BINARY.exists() and not force:
