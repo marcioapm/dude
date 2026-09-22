@@ -1,0 +1,97 @@
+.root {
+  --badge-fg: var(--ds-tone-neutral-fg);
+  --badge-bg: var(--ds-tone-neutral-bg);
+  --badge-border: var(--ds-tone-neutral-border);
+
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  height: 18px;
+  padding: 0 var(--ds-space-6);
+  font-size: var(--ds-text-xs);
+  font-weight: var(--ds-weight-medium);
+  line-height: 1;
+  white-space: nowrap;
+  border-radius: var(--ds-radius-sm);
+  color: var(--badge-fg);
+  background: var(--badge-bg);
+  border: 1px solid transparent;
+  vertical-align: middle;
+  max-width: 100%;
+}
+
+.sm {
+  height: 16px;
+  padding: 0 var(--ds-space-4);
+  font-size: var(--ds-text-2xs);
+}
+
+/* Emphasis */
+.subtle {
+  background: transparent;
+  border-color: var(--badge-border);
+}
+.tinted {
+  /* default */
+}
+.solid {
+  --badge-fg: var(--badge-on-solid);
+  background: var(--badge-solid);
+  font-weight: var(--ds-weight-semibold);
+}
+
+/* Tones */
+.neutral {
+  --badge-fg: var(--ds-tone-neutral-fg);
+  --badge-bg: var(--ds-tone-neutral-bg);
+  --badge-border: var(--ds-tone-neutral-border);
+  --badge-solid: var(--ds-tone-neutral-solid);
+  --badge-on-solid: var(--ds-tone-neutral-on-solid);
+}
+.info {
+  --badge-fg: var(--ds-tone-info-fg);
+  --badge-bg: var(--ds-tone-info-bg);
+  --badge-border: var(--ds-tone-info-border);
+  --badge-solid: var(--ds-tone-info-solid);
+  --badge-on-solid: var(--ds-tone-info-on-solid);
+}
+.attention {
+  --badge-fg: var(--ds-tone-attention-fg);
+  --badge-bg: var(--ds-tone-attention-bg);
+  --badge-border: var(--ds-tone-attention-border);
+  --badge-solid: var(--ds-tone-attention-solid);
+  --badge-on-solid: var(--ds-tone-attention-on-solid);
+}
+.success {
+  --badge-fg: var(--ds-tone-success-fg);
+  --badge-bg: var(--ds-tone-success-bg);
+  --badge-border: var(--ds-tone-success-border);
+  --badge-solid: var(--ds-tone-success-solid);
+  --badge-on-solid: var(--ds-tone-success-on-solid);
+}
+.danger {
+  --badge-fg: var(--ds-tone-danger-fg);
+  --badge-bg: var(--ds-tone-danger-bg);
+  --badge-border: var(--ds-tone-danger-border);
+  --badge-solid: var(--ds-tone-danger-solid);
+  --badge-on-solid: var(--ds-tone-danger-on-solid);
+}
+
+.mono {
+  font-family: var(--ds-font-mono);
+  font-weight: var(--ds-weight-regular);
+  font-feature-settings: "tnum", "zero";
+}
+
+.text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--ds-radius-full);
+  background: currentColor;
+  flex-shrink: 0;
+}

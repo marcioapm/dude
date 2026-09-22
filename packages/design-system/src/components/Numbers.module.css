@@ -1,0 +1,43 @@
+.num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+  white-space: nowrap;
+}
+.mono {
+  font-family: var(--ds-font-mono);
+  font-feature-settings: "tnum", "zero";
+}
+.muted {
+  color: var(--ds-color-text-muted);
+}
+.secondary {
+  color: var(--ds-color-text-secondary);
+}
+.unit {
+  margin-left: 2px;
+  font-size: 0.85em;
+  color: var(--ds-color-text-muted);
+}
+.warn {
+  color: var(--ds-tone-attention-fg);
+}
+.over {
+  color: var(--ds-tone-danger-fg);
+  font-weight: var(--ds-weight-medium);
+}
+.budget {
+  margin-left: var(--ds-space-4);
+  font-size: 0.85em;
+  color: var(--ds-color-text-muted);
+}
+.live::after {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-left: 5px;
+  vertical-align: middle;
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-color-live);
+  animation: ds-pulse calc(2.4s / max(var(--ds-motion-live), 0.0001)) ease-in-out infinite;
+}

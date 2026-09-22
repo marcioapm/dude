@@ -1,0 +1,161 @@
+.root {
+  --sb-fg: var(--ds-tone-neutral-fg);
+  --sb-bg: var(--ds-tone-neutral-bg);
+  --sb-border: var(--ds-tone-neutral-border);
+  --sb-solid: var(--ds-tone-neutral-solid);
+  --sb-on-solid: var(--ds-tone-neutral-on-solid);
+
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 18px;
+  padding: 0 var(--ds-space-6) 0 5px;
+  font-size: var(--ds-text-xs);
+  font-weight: var(--ds-weight-medium);
+  line-height: 1;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  border-radius: var(--ds-radius-sm);
+  border: 1px solid transparent;
+  color: var(--sb-fg);
+  background: var(--sb-bg);
+  vertical-align: middle;
+  position: relative;
+}
+
+.sm {
+  height: 16px;
+  font-size: var(--ds-text-2xs);
+  padding: 0 var(--ds-space-4) 0 4px;
+}
+.iconOnly {
+  width: 18px;
+  padding: 0;
+  justify-content: center;
+}
+.sm.iconOnly {
+  width: 16px;
+}
+
+.subtle {
+  background: transparent;
+  border-color: var(--sb-border);
+}
+.solid {
+  color: var(--sb-on-solid);
+  background: var(--sb-solid);
+  font-weight: var(--ds-weight-semibold);
+}
+
+.neutral {
+  --sb-fg: var(--ds-tone-neutral-fg);
+  --sb-bg: var(--ds-tone-neutral-bg);
+  --sb-border: var(--ds-tone-neutral-border);
+  --sb-solid: var(--ds-tone-neutral-solid);
+  --sb-on-solid: var(--ds-tone-neutral-on-solid);
+}
+.info {
+  --sb-fg: var(--ds-tone-info-fg);
+  --sb-bg: var(--ds-tone-info-bg);
+  --sb-border: var(--ds-tone-info-border);
+  --sb-solid: var(--ds-tone-info-solid);
+  --sb-on-solid: var(--ds-tone-info-on-solid);
+}
+.attention {
+  --sb-fg: var(--ds-tone-attention-fg);
+  --sb-bg: var(--ds-tone-attention-bg);
+  --sb-border: var(--ds-tone-attention-border);
+  --sb-solid: var(--ds-tone-attention-solid);
+  --sb-on-solid: var(--ds-tone-attention-on-solid);
+}
+.success {
+  --sb-fg: var(--ds-tone-success-fg);
+  --sb-bg: var(--ds-tone-success-bg);
+  --sb-border: var(--ds-tone-success-border);
+  --sb-solid: var(--ds-tone-success-solid);
+  --sb-on-solid: var(--ds-tone-success-on-solid);
+}
+.danger {
+  --sb-fg: var(--ds-tone-danger-fg);
+  --sb-bg: var(--ds-tone-danger-bg);
+  --sb-border: var(--ds-tone-danger-border);
+  --sb-solid: var(--ds-tone-danger-solid);
+  --sb-on-solid: var(--ds-tone-danger-on-solid);
+}
+
+.glyph {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+/* Live states breathe slowly; never spin except the running spinner. */
+.live .glyph {
+  animation: ds-pulse calc(2.4s / max(var(--ds-motion-live), 0.0001)) ease-in-out infinite;
+}
+.live [data-icon="spinner"] {
+  animation: ds-spin calc(1.1s / max(var(--ds-motion-live), 0.0001)) linear infinite;
+}
+
+/* "Needs you": a soft expanding ring draws the eye without flashing. */
+.needsHuman.solid::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  --ds-ring-color: var(--sb-solid);
+  animation: ds-ring calc(2.4s / max(var(--ds-motion-live), 0.0001)) var(--ds-ease-exit) infinite;
+  pointer-events: none;
+}
+[data-reduced-motion="true"] .needsHuman.solid::after {
+  animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .needsHuman.solid::after {
+    animation: none;
+  }
+}
+
+.label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Bare dot mode for dense lists: 8px status dot + optional label */
+.dot {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.dotMark {
+  position: relative;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--ds-radius-full);
+  background: var(--sb-fg);
+  flex-shrink: 0;
+}
+.dot.live .dotMark {
+  animation: ds-pulse calc(2.4s / max(var(--ds-motion-live), 0.0001)) ease-in-out infinite;
+}
+.dot.needsHuman .dotMark {
+  --ds-ring-color: var(--sb-fg);
+  animation: ds-ring calc(2.4s / max(var(--ds-motion-live), 0.0001)) var(--ds-ease-exit) infinite;
+}
+.dot.terminal .dotMark {
+  opacity: 0.6;
+}
+/* Shape channel for the dot mode: terminal states become squares,
+   needs-human becomes a diamond, so hue never carries meaning alone. */
+.dot.terminal .dotMark {
+  border-radius: 1px;
+}
+.dot.needsHuman .dotMark {
+  border-radius: 1px;
+  transform: rotate(45deg) scale(0.9);
+}
+.dot.pending .dotMark {
+  background: transparent;
+  border: 1.5px solid var(--sb-fg);
+}

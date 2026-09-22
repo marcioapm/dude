@@ -1,0 +1,218 @@
+.file {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--ds-color-surface);
+  border: 1px solid var(--ds-color-border-subtle);
+  border-radius: var(--ds-radius-lg);
+  overflow: hidden;
+}
+
+.fileHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  height: 30px;
+  padding: 0 var(--ds-space-8);
+  background: var(--ds-color-raised);
+  border-bottom: 1px solid var(--ds-color-border-subtle);
+  position: sticky;
+  top: 0;
+  z-index: var(--ds-z-raised);
+  cursor: default;
+  user-select: none;
+}
+.fileHeader:hover {
+  background: var(--ds-color-overlay);
+}
+.collapsed .fileHeader {
+  border-bottom: 0;
+}
+.fileToggle {
+  color: var(--ds-color-text-muted);
+  transition: transform var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.collapsed .fileToggle {
+  transform: rotate(-90deg);
+}
+.path {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-primary);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  direction: rtl; /* keep the filename visible when truncating */
+  text-align: left;
+}
+.path > span {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+.pathOld {
+  color: var(--ds-color-text-muted);
+}
+.pathArrow {
+  color: var(--ds-color-text-muted);
+  margin: 0 4px;
+}
+.stats {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.statAdd {
+  color: var(--ds-diff-add-fg);
+}
+.statDel {
+  color: var(--ds-diff-del-fg);
+}
+.statBar {
+  display: inline-flex;
+  gap: 1px;
+}
+.statBar i {
+  display: block;
+  width: 6px;
+  height: 8px;
+  background: var(--ds-color-border);
+  border-radius: 1px;
+}
+.statBar i[data-k="add"] {
+  background: var(--ds-diff-add-fg);
+}
+.statBar i[data-k="del"] {
+  background: var(--ds-diff-del-fg);
+}
+
+.fileBadge {
+  font-size: var(--ds-text-2xs);
+  font-weight: var(--ds-weight-medium);
+  letter-spacing: var(--ds-tracking-wide);
+  text-transform: uppercase;
+  padding: 1px 4px;
+  border-radius: var(--ds-radius-xs);
+  background: var(--ds-color-sunken);
+  color: var(--ds-color-text-muted);
+  border: 1px solid var(--ds-color-border-subtle);
+}
+
+.body {
+  overflow-x: auto;
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-sm);
+  line-height: 20px;
+  font-feature-settings: "tnum", "zero";
+  tab-size: 4;
+}
+.table {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: max-content;
+}
+
+.line {
+  --line-bg: transparent;
+  --line-fg: var(--ds-color-text-primary);
+  --gutter-bg: var(--ds-color-sunken);
+  --gutter-fg: var(--ds-color-text-disabled);
+  background: var(--line-bg);
+  color: var(--line-fg);
+}
+.line:hover .code {
+  filter: brightness(1.08);
+}
+
+.gutter {
+  position: sticky;
+  left: 0;
+  width: 1%;
+  min-width: 44px;
+  padding: 0 var(--ds-space-8) 0 var(--ds-space-4);
+  text-align: right;
+  color: var(--gutter-fg);
+  background: var(--gutter-bg);
+  user-select: none;
+  white-space: nowrap;
+  vertical-align: top;
+  border-right: 1px solid var(--ds-color-border-subtle);
+}
+.gutterNew {
+  left: 44px;
+}
+.sign {
+  width: 16px;
+  padding: 0;
+  text-align: center;
+  user-select: none;
+  color: var(--line-fg);
+  opacity: 0.7;
+  vertical-align: top;
+}
+.code {
+  padding: 0 var(--ds-space-12) 0 var(--ds-space-4);
+  white-space: pre;
+  vertical-align: top;
+}
+
+.add {
+  --line-bg: var(--ds-diff-add-bg);
+  --gutter-bg: var(--ds-diff-add-bg-strong);
+  --gutter-fg: var(--ds-diff-add-fg);
+}
+.del {
+  --line-bg: var(--ds-diff-del-bg);
+  --gutter-bg: var(--ds-diff-del-bg-strong);
+  --gutter-fg: var(--ds-diff-del-fg);
+}
+.hunk {
+  --line-bg: var(--ds-diff-hunk-bg);
+  --line-fg: var(--ds-diff-hunk-fg);
+  --gutter-bg: var(--ds-diff-hunk-bg);
+  --gutter-fg: var(--ds-diff-hunk-fg);
+}
+.hunk .code {
+  font-style: italic;
+  opacity: 0.9;
+}
+.hunk .gutter {
+  border-right-color: transparent;
+}
+
+.emphasis {
+  border-radius: 2px;
+}
+.add .emphasis {
+  background: var(--ds-diff-add-bg-strong);
+}
+.del .emphasis {
+  background: var(--ds-diff-del-bg-strong);
+}
+
+/* Blast-radius summary for a set of files */
+.summary {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.summaryStats {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+}
+
+.binary,
+.empty {
+  padding: var(--ds-space-12);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+  font-family: var(--ds-font-sans);
+}

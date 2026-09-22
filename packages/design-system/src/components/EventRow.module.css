@@ -1,0 +1,185 @@
+.row {
+  --row-accent: transparent;
+  display: grid;
+  grid-template-columns: 92px 20px minmax(96px, 160px) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-default);
+  padding: 0 var(--ds-space-8) 0 var(--ds-space-6);
+  border-left: 2px solid var(--row-accent);
+  border-bottom: 1px solid var(--ds-color-border-subtle);
+  font-size: var(--ds-text-sm);
+  line-height: var(--ds-leading-snug);
+  color: var(--ds-color-text-primary);
+  transition: background-color var(--ds-duration-fast) var(--ds-ease-standard);
+  cursor: default;
+  outline: none;
+}
+.row:hover {
+  background: var(--ds-color-hover-wash);
+}
+.row:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--ds-color-focus-ring);
+  border-radius: 0;
+}
+.rowNew {
+  animation: ds-flash var(--ds-duration-deliberate) var(--ds-ease-exit) 1;
+}
+.rowExpanded {
+  background: var(--ds-color-hover-wash);
+  border-bottom-color: transparent;
+}
+.compact {
+  min-height: var(--ds-size-row-compact);
+  font-size: var(--ds-text-xs);
+}
+
+/* Severity: only failures and human-needed events get an accent stripe. */
+.sevAttention {
+  --row-accent: var(--ds-tone-attention-fg);
+}
+.sevDanger {
+  --row-accent: var(--ds-tone-danger-fg);
+}
+.sevSuccess {
+  --row-accent: var(--ds-tone-success-fg);
+}
+.sevAttention .type {
+  color: var(--ds-tone-attention-fg);
+}
+.sevDanger .type {
+  color: var(--ds-tone-danger-fg);
+}
+.sevSuccess .type {
+  color: var(--ds-tone-success-fg);
+}
+
+.time {
+  font-family: var(--ds-font-mono);
+  font-feature-settings: "tnum", "zero";
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+}
+
+.actor {
+  display: inline-flex;
+}
+
+.type {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.summary {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--ds-color-text-primary);
+}
+.summary code {
+  font-size: var(--ds-text-xs);
+  padding: 0 3px;
+  background: var(--ds-color-sunken);
+  border-radius: var(--ds-radius-xs);
+}
+
+.trailing {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.chevron {
+  color: var(--ds-color-text-muted);
+  transition: transform var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.rowExpanded .chevron {
+  transform: rotate(90deg);
+}
+.chevronSpacer {
+  width: 12px;
+}
+
+.detail {
+  padding: var(--ds-space-8) var(--ds-space-12) var(--ds-space-12) calc(92px + 20px + var(--ds-space-8) * 2 + var(--ds-space-6));
+  background: var(--ds-color-hover-wash);
+  border-bottom: 1px solid var(--ds-color-border-subtle);
+  border-left: 2px solid var(--row-accent);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+  animation: ds-fade-in var(--ds-duration-fast) var(--ds-ease-enter);
+}
+.detail pre {
+  margin: 0;
+  padding: var(--ds-space-8);
+  background: var(--ds-color-sunken);
+  border: 1px solid var(--ds-color-border-subtle);
+  border-radius: var(--ds-radius-md);
+  font-size: var(--ds-text-xs);
+  line-height: var(--ds-leading-normal);
+  overflow: auto;
+  max-height: 320px;
+  color: var(--ds-color-text-primary);
+}
+.detailMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-4) var(--ds-space-16);
+  margin-bottom: var(--ds-space-8);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.detailMeta b {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-secondary);
+}
+.detailMeta code {
+  font-size: inherit;
+  color: var(--ds-color-text-secondary);
+}
+
+/* Stream container */
+.stream {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--ds-color-surface);
+}
+.streamHeader {
+  display: grid;
+  grid-template-columns: 92px 20px minmax(96px, 160px) minmax(0, 1fr) auto;
+  gap: var(--ds-space-8);
+  padding: 0 var(--ds-space-8) 0 calc(var(--ds-space-6) + 2px);
+  height: var(--ds-size-row-compact);
+  align-items: center;
+  position: sticky;
+  top: 0;
+  z-index: var(--ds-z-raised);
+  background: var(--ds-color-surface);
+  border-bottom: 1px solid var(--ds-color-border);
+  font-size: var(--ds-text-2xs);
+  font-weight: var(--ds-weight-medium);
+  letter-spacing: var(--ds-tracking-caps);
+  text-transform: uppercase;
+  color: var(--ds-color-text-muted);
+}
+.dayDivider {
+  padding: var(--ds-space-4) var(--ds-space-8);
+  font-size: var(--ds-text-2xs);
+  font-weight: var(--ds-weight-medium);
+  letter-spacing: var(--ds-tracking-caps);
+  text-transform: uppercase;
+  color: var(--ds-color-text-muted);
+  background: var(--ds-color-sunken);
+  border-bottom: 1px solid var(--ds-color-border-subtle);
+}

@@ -1,0 +1,96 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.rootFill {
+  flex: 1;
+  min-height: 0;
+}
+
+.list {
+  display: flex;
+  align-items: stretch;
+  gap: var(--ds-space-2);
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--ds-color-border-subtle);
+}
+
+.trigger {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  height: 32px;
+  padding: 0 var(--ds-space-8);
+  margin-bottom: -1px;
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  font-size: var(--ds-text-md);
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-secondary);
+  white-space: nowrap;
+  user-select: none;
+  transition: color var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.trigger:hover {
+  color: var(--ds-color-text-primary);
+}
+.trigger[data-state="active"] {
+  color: var(--ds-color-text-primary);
+  border-bottom-color: var(--ds-color-accent);
+}
+.trigger[data-disabled] {
+  color: var(--ds-color-text-disabled);
+  pointer-events: none;
+}
+.trigger:focus-visible {
+  border-radius: var(--ds-radius-sm);
+  outline-offset: -2px;
+}
+
+/* Segmented look, for view switchers inside a toolbar */
+.segmented {
+  border-bottom: 0;
+  gap: 0;
+  padding: 2px;
+  background: var(--ds-color-sunken);
+  border: 1px solid var(--ds-color-border-subtle);
+  border-radius: var(--ds-radius-md);
+  align-self: flex-start;
+}
+.segmented .trigger {
+  height: 22px;
+  margin: 0;
+  border: 0;
+  border-radius: var(--ds-radius-sm);
+  font-size: var(--ds-text-sm);
+}
+.segmented .trigger[data-state="active"] {
+  background: var(--ds-color-raised);
+  box-shadow: var(--ds-shadow-1);
+}
+
+.count {
+  font-size: var(--ds-text-xs);
+  font-weight: var(--ds-weight-regular);
+  color: var(--ds-color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.trigger[data-state="active"] .count {
+  color: var(--ds-color-text-secondary);
+}
+
+.content {
+  min-height: 0;
+  outline: none;
+}
+.contentFill {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+.content[data-state="inactive"] {
+  display: none;
+}

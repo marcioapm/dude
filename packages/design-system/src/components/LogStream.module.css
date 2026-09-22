@@ -1,0 +1,147 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  background: var(--ds-color-field-bg);
+  border: 1px solid var(--ds-color-border-subtle);
+  border-radius: var(--ds-radius-lg);
+  overflow: hidden;
+  position: relative;
+}
+.fill {
+  flex: 1;
+  height: 100%;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  height: 28px;
+  padding: 0 var(--ds-space-8);
+  background: var(--ds-color-raised);
+  border-bottom: 1px solid var(--ds-color-border-subtle);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  flex-shrink: 0;
+}
+.toolbarTitle {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-secondary);
+}
+.toolbarSpacer {
+  flex: 1;
+}
+.count {
+  font-variant-numeric: tabular-nums;
+}
+
+.viewport {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-sm);
+  line-height: 18px;
+  font-feature-settings: "tnum", "zero";
+  padding: var(--ds-space-4) 0;
+}
+
+.line {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: start;
+  gap: 0;
+  padding-right: var(--ds-space-12);
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--ds-color-text-primary);
+}
+.nowrap .line {
+  white-space: pre;
+  word-break: normal;
+}
+.line:hover {
+  background: var(--ds-color-hover-wash);
+}
+.lineNew {
+  animation: ds-flash var(--ds-duration-deliberate) var(--ds-ease-exit) 1;
+}
+
+.lineNo {
+  width: 48px;
+  padding-right: var(--ds-space-8);
+  text-align: right;
+  color: var(--ds-color-text-disabled);
+  user-select: none;
+  flex-shrink: 0;
+  position: sticky;
+  left: 0;
+  background: inherit;
+}
+.ts {
+  padding-right: var(--ds-space-8);
+  color: var(--ds-color-text-muted);
+  user-select: none;
+  white-space: nowrap;
+}
+.text {
+  min-width: 0;
+}
+
+/* Streams. Stderr and levels change ink, never background — a log is
+   read for a long time and a wall of tinted rows is exhausting. */
+.stderr .text {
+  color: var(--ds-tone-attention-fg);
+}
+.warn .text {
+  color: var(--ds-tone-attention-fg);
+}
+.error .text {
+  color: var(--ds-tone-danger-fg);
+}
+.error .lineNo {
+  color: var(--ds-tone-danger-fg);
+  opacity: 0.7;
+}
+.debug .text {
+  color: var(--ds-color-text-muted);
+}
+.system .text {
+  color: var(--ds-color-accent-text);
+  font-style: italic;
+}
+
+.mark {
+  display: inline-block;
+  width: 4px;
+  height: 100%;
+  margin-right: 2px;
+}
+
+.followBtn {
+  position: absolute;
+  right: var(--ds-space-12);
+  bottom: var(--ds-space-12);
+  z-index: var(--ds-z-raised);
+  animation: ds-pop var(--ds-duration-base) var(--ds-ease-enter);
+}
+
+.empty {
+  padding: var(--ds-space-16);
+  color: var(--ds-color-text-muted);
+  font-family: var(--ds-font-sans);
+  font-size: var(--ds-text-sm);
+}
+
+.cursor {
+  display: inline-block;
+  width: 7px;
+  height: 14px;
+  vertical-align: text-bottom;
+  background: var(--ds-color-text-secondary);
+  animation: ds-pulse calc(1s / max(var(--ds-motion-live), 0.0001)) steps(2, jump-none) infinite;
+  margin-left: 2px;
+}

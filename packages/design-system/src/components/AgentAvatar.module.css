@@ -1,0 +1,129 @@
+.root {
+  --role-fg: var(--ds-color-text-secondary);
+  --role-bg: var(--ds-color-sunken);
+  --role-solid: var(--ds-color-border-strong);
+  --role-on-solid: var(--ds-color-text-primary);
+  --av-size: 20px;
+
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: var(--av-size);
+  height: var(--av-size);
+  flex-shrink: 0;
+  border-radius: var(--ds-radius-md);
+  color: var(--role-fg);
+  background: var(--role-bg);
+  font-size: calc(var(--av-size) * 0.5);
+  font-weight: var(--ds-weight-semibold);
+  line-height: 1;
+  user-select: none;
+  vertical-align: middle;
+}
+.solid {
+  color: var(--role-on-solid);
+  background: var(--role-solid);
+}
+
+.xs {
+  --av-size: 16px;
+  border-radius: var(--ds-radius-sm);
+}
+.sm {
+  --av-size: 20px;
+}
+.md {
+  --av-size: 24px;
+}
+.lg {
+  --av-size: 32px;
+  border-radius: var(--ds-radius-lg);
+}
+
+/* Roles. Shape channel: each role has its own glyph; the orchestrator is
+   additionally round, so it reads as "the parent" even in monochrome. */
+.orchestrator {
+  --role-fg: var(--ds-role-orchestrator-fg);
+  --role-bg: var(--ds-role-orchestrator-bg);
+  --role-solid: var(--ds-role-orchestrator-solid);
+  --role-on-solid: var(--ds-role-orchestrator-on-solid);
+  border-radius: var(--ds-radius-full);
+}
+.investigator {
+  --role-fg: var(--ds-role-investigator-fg);
+  --role-bg: var(--ds-role-investigator-bg);
+  --role-solid: var(--ds-role-investigator-solid);
+  --role-on-solid: var(--ds-role-investigator-on-solid);
+}
+.implementer {
+  --role-fg: var(--ds-role-implementer-fg);
+  --role-bg: var(--ds-role-implementer-bg);
+  --role-solid: var(--ds-role-implementer-solid);
+  --role-on-solid: var(--ds-role-implementer-on-solid);
+}
+.reviewer {
+  --role-fg: var(--ds-role-reviewer-fg);
+  --role-bg: var(--ds-role-reviewer-bg);
+  --role-solid: var(--ds-role-reviewer-solid);
+  --role-on-solid: var(--ds-role-reviewer-on-solid);
+}
+.simplifier {
+  --role-fg: var(--ds-role-simplifier-fg);
+  --role-bg: var(--ds-role-simplifier-bg);
+  --role-solid: var(--ds-role-simplifier-solid);
+  --role-on-solid: var(--ds-role-simplifier-on-solid);
+}
+.qa_browser {
+  --role-fg: var(--ds-role-qa-browser-fg);
+  --role-bg: var(--ds-role-qa-browser-bg);
+  --role-solid: var(--ds-role-qa-browser-solid);
+  --role-on-solid: var(--ds-role-qa-browser-on-solid);
+}
+
+/* Non-agent actors */
+.human {
+  --role-fg: var(--ds-color-text-primary);
+  --role-bg: var(--ds-color-overlay);
+  border-radius: var(--ds-radius-full);
+  box-shadow: inset 0 0 0 1px var(--ds-color-border-strong);
+}
+.system {
+  --role-fg: var(--ds-color-text-muted);
+  --role-bg: transparent;
+  box-shadow: inset 0 0 0 1px var(--ds-color-border);
+}
+.integration {
+  --role-fg: var(--ds-color-text-secondary);
+  --role-bg: var(--ds-color-sunken);
+  box-shadow: inset 0 0 0 1px var(--ds-color-border);
+}
+
+.liveDot {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-color-live);
+  box-shadow: 0 0 0 2px var(--ds-color-surface);
+  animation: ds-pulse calc(2.4s / max(var(--ds-motion-live), 0.0001)) ease-in-out infinite;
+}
+
+.withName {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  min-width: 0;
+}
+.name {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-primary);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.roleName {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}

@@ -1,0 +1,126 @@
+.wrap {
+  position: relative;
+  min-width: 0;
+  overflow: auto;
+}
+
+.table {
+  --row-h: var(--ds-size-row-default);
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--ds-text-md);
+  font-variant-numeric: tabular-nums;
+  table-layout: auto;
+}
+.compact {
+  --row-h: var(--ds-size-row-compact);
+  font-size: var(--ds-text-sm);
+}
+.comfortable {
+  --row-h: var(--ds-size-row-comfortable);
+}
+
+.th {
+  position: sticky;
+  top: 0;
+  z-index: var(--ds-z-raised);
+  height: var(--row-h);
+  padding: 0 var(--ds-space-8);
+  text-align: left;
+  vertical-align: middle;
+  font-size: var(--ds-text-xs);
+  font-weight: var(--ds-weight-medium);
+  letter-spacing: var(--ds-tracking-caps);
+  text-transform: uppercase;
+  color: var(--ds-color-text-muted);
+  background: var(--ds-color-surface);
+  border-bottom: 1px solid var(--ds-color-border);
+  white-space: nowrap;
+  user-select: none;
+}
+.thSortable {
+  cursor: default;
+}
+.thSortable:hover {
+  color: var(--ds-color-text-secondary);
+}
+.thSorted {
+  color: var(--ds-color-text-primary);
+}
+.thInner {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  height: 100%;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+}
+.sortIcon {
+  opacity: 0.55;
+}
+.thSorted .sortIcon {
+  opacity: 1;
+}
+
+.td {
+  height: var(--row-h);
+  padding: 0 var(--ds-space-8);
+  vertical-align: middle;
+  border-bottom: 1px solid var(--ds-color-border-subtle);
+  color: var(--ds-color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 0;
+}
+.tdWrap {
+  white-space: normal;
+  max-width: none;
+}
+.alignRight {
+  text-align: right;
+}
+.alignCenter {
+  text-align: center;
+}
+.mono {
+  font-family: var(--ds-font-mono);
+  font-feature-settings: "tnum", "zero";
+}
+.muted {
+  color: var(--ds-color-text-secondary);
+}
+
+.tr {
+  transition: background-color var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.tr:hover > .td {
+  background: var(--ds-color-hover-wash);
+}
+.trInteractive {
+  cursor: default;
+}
+.trSelected > .td {
+  background: var(--ds-color-accent-subtle);
+}
+.trSelected:hover > .td {
+  background: var(--ds-color-accent-subtle);
+}
+.trStriped:nth-child(even) > .td {
+  background: color-mix(in srgb, var(--ds-color-hover-wash) 50%, transparent);
+}
+.trNew > .td {
+  animation: ds-flash var(--ds-duration-deliberate) var(--ds-ease-exit) 1;
+}
+
+.empty {
+  padding: var(--ds-space-32) var(--ds-space-16);
+  text-align: center;
+  color: var(--ds-color-text-muted);
+}

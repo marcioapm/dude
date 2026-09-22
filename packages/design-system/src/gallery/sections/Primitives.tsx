@@ -1,0 +1,447 @@
+import { useState } from "react";
+import { Block, Caption, Col, Label, Panes, Row, Section, States, type PaneMode } from "../Frame.tsx";
+import styles from "../gallery.module.css";
+import { Button, IconButton } from "../../primitives/Button.tsx";
+import { Input } from "../../primitives/Input.tsx";
+import { Select } from "../../primitives/Select.tsx";
+import { Checkbox } from "../../primitives/Checkbox.tsx";
+import { Badge } from "../../primitives/Badge.tsx";
+import { Card, CardBody, CardFooter, CardHeader } from "../../primitives/Card.tsx";
+import { Table, TBody, Td, Th, THead, Tr, TableEmpty, type SortDirection } from "../../primitives/Table.tsx";
+import { Tab, TabList, TabPanel, Tabs } from "../../primitives/Tabs.tsx";
+import { Dialog, DialogClose } from "../../primitives/Dialog.tsx";
+import { useToast } from "../../primitives/Toast.tsx";
+import { Tooltip } from "../../primitives/Tooltip.tsx";
+import { EmptyState, Skeleton, SkeletonLines, Spinner } from "../../primitives/Feedback.tsx";
+import { ScrollArea } from "../../primitives/ScrollArea.tsx";
+import { Icon } from "../../icons/index.tsx";
+import { StatusBadge } from "../../components/StatusBadge.tsx";
+import { CostDisplay, Duration } from "../../components/Numbers.tsx";
+import { TONE_NAMES } from "../../tokens/palette.ts";
+
+const VARIANTS = ["primary", "secondary", "ghost", "destructive", "destructive-outline"] as const;
+
+export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
+  return (
+    <Section
+      id="primitives"
+      title="Primitives"
+      intro="Generic controls. Default control height is 28px; 24px small for toolbars and table rows. Every primitive is keyboard operable and shows the shared focus ring only on keyboard focus."
+    >
+      <Block id="p-button" title="Button" note="Secondary is the default — most actions in a console are quiet. One primary per view. Destructive only where work is lost, and always behind a confirm.">
+        <Panes mode={mode}>
+          <Col>
+            <States
+              items={VARIANTS.map((v) => [
+                v,
+                <>
+                  <Button variant={v}>Label</Button>
+                  <Button variant={v} leadingIcon="plus">
+                    Icon
+                  </Button>
+                  <Button variant={v} loading>
+                    Loading
+                  </Button>
+                  <Button variant={v} disabled>
+                    Disabled
+                  </Button>
+                  <Button variant={v} size="sm">
+                    Small
+                  </Button>
+                  <Button variant={v} size="lg">
+                    Large
+                  </Button>
+                </>,
+              ])}
+            />
+            <Label>IconButton</Label>
+            <Row>
+              <IconButton icon="more" label="More actions" />
+              <IconButton icon="copy" label="Copy" variant="secondary" />
+              <IconButton icon="close" label="Close" size="sm" />
+              <IconButton icon="cross" label="Abort" variant="destructive-outline" />
+              <IconButton icon="search" label="Search" disabled />
+            </Row>
+            <Label>Toolbar composition</Label>
+            <Row>
+              <Button size="sm" variant="ghost" leadingIcon="git-branch">
+                main
+              </Button>
+              <Button size="sm" variant="secondary" leadingIcon="pause">
+                Pause
+              </Button>
+              <Button size="sm" variant="destructive-outline" leadingIcon="stop">
+                Abort run
+              </Button>
+              <span style={{ flex: 1 }} />
+              <Button size="sm" variant="primary" leadingIcon="merge">
+                Merge
+              </Button>
+            </Row>
+          </Col>
+        </Panes>
+      </Block>
+
+      <Block id="p-input" title="Input" note="Label, hint, and error are part of the field so every form has the same anatomy. Mono for IDs and paths.">
+        <Panes mode={mode}>
+          <div className={styles["grid2"]}>
+            <Input label="Title" placeholder="Describe the change…" />
+            <Input label="Branch" mono defaultValue="feat/webhook-retry" leading={<Icon name="git-branch" size={12} />} />
+            <Input label="Budget" defaultValue="2.50" leading="$" trailing="USD" hint="Per-session hard limit" />
+            <Input label="Repository URL" defaultValue="git@github" error="Must be an https:// or ssh:// URL" />
+            <Input label="Disabled" defaultValue="Not editable" disabled />
+            <Input size="sm" placeholder="Filter events…" leading={<Icon name="search" size={12} />} aria-label="Filter events" />
+          </div>
+        </Panes>
+      </Block>
+
+      <Block id="p-select" title="Select" note="Radix-backed: typeahead, arrow keys, groups. Below ~30 options only.">
+        <Panes mode={mode}>
+          <Row top>
+            <Select
+              label="Model"
+              defaultValue="claude-opus-4"
+              options={[
+                { label: "Anthropic", options: [{ value: "claude-opus-4", label: "claude-opus-4" }, { value: "claude-sonnet-4", label: "claude-sonnet-4" }] },
+                { label: "Other", options: [{ value: "gpt-5", label: "gpt-5" }, { value: "local", label: "local (disabled)", disabled: true }] },
+              ]}
+            />
+            <Select label="Status" placeholder="Any status" options={[{ value: "running", label: "Running" }, { value: "awaiting_human", label: "Needs you" }, { value: "done", label: "Done" }]} />
+            <Select size="sm" aria-label="Density" defaultValue="default" options={[{ value: "compact", label: "Compact" }, { value: "default", label: "Default" }, { value: "comfortable", label: "Comfortable" }]} />
+            <Select label="Disabled" disabled defaultValue="x" options={[{ value: "x", label: "Locked" }]} />
+          </Row>
+        </Panes>
+      </Block>
+
+      <Block id="p-checkbox" title="Checkbox">
+        <Panes mode={mode}>
+          <Row top style={{ gap: 24 }}>
+            <Checkbox label="Unchecked" />
+            <Checkbox label="Checked" defaultChecked />
+            <Checkbox label="Indeterminate" checked="indeterminate" />
+            <Checkbox label="Disabled" disabled />
+            <Checkbox label="Disabled checked" disabled defaultChecked />
+            <Checkbox label="Auto-merge when green" description="Requires all required checks and one approving review." defaultChecked />
+          </Row>
+        </Panes>
+      </Block>
+
+      <Block id="p-badge" title="Badge / Tag" note="Generic chip. For statuses use StatusBadge. Solid is loud; reserve it.">
+        <Panes mode={mode}>
+          <Col>
+            <States
+              items={(["subtle", "tinted", "solid"] as const).map((e) => [
+                e,
+                <>
+                  {TONE_NAMES.map((t) => (
+                    <Badge key={t} tone={t} emphasis={e}>
+                      {t}
+                    </Badge>
+                  ))}
+                </>,
+              ])}
+            />
+            <Row>
+              <Badge icon="git-pr">#412</Badge>
+              <Badge dot tone="success">
+                ci passing
+              </Badge>
+              <Badge mono>a3f9c1e</Badge>
+              <Badge mono size="sm">
+                v0.9
+              </Badge>
+              <Badge size="sm" tone="info">
+                claude-opus-4
+              </Badge>
+              <Badge tone="attention" icon="warning">
+                2 findings
+              </Badge>
+            </Row>
+          </Col>
+        </Panes>
+      </Block>
+
+      <Block id="p-card" title="Card" note="One surface step above its parent. Do not nest cards; divide inside one.">
+        <Panes mode={mode}>
+          <div className={styles["grid3"]}>
+            <Card>
+              <CardHeader title="Default" actions={<IconButton icon="more" label="More" size="sm" />} />
+              <CardBody>Body text at 12px padding.</CardBody>
+              <CardFooter>Footer · secondary text</CardFooter>
+            </Card>
+            <Card variant="raised" interactive>
+              <CardHeader title="Raised, interactive" />
+              <CardBody>Hover me.</CardBody>
+            </Card>
+            <Card variant="flat" selected>
+              <CardHeader title="Flat, selected" />
+              <CardBody padding="dense">Dense padding.</CardBody>
+            </Card>
+          </div>
+        </Panes>
+      </Block>
+
+      <Block id="p-table" title="Table" note="Dense, 28px rows (24 compact / 36 comfortable). Sticky header; sortable headers render aria-sort and the affordance but do not sort data. Numbers right-aligned and tabular.">
+        <Panes mode={mode} surface>
+          <SortableTableDemo />
+        </Panes>
+        <div style={{ height: 8 }} />
+        <Panes mode={mode} surface>
+          <Table density="compact">
+            <THead>
+              <Tr>
+                <Th>Compact</Th>
+                <Th align="right">Cost</Th>
+              </Tr>
+            </THead>
+            <TBody>
+              <TableEmpty colSpan={2}>
+                <EmptyState compact icon="search" title="No runs match" description="Try clearing the status filter." />
+              </TableEmpty>
+            </TBody>
+          </Table>
+        </Panes>
+      </Block>
+
+      <Block id="p-tabs" title="Tabs" note="Underline for page-level navigation; segmented for view switches inside a toolbar. Counts are quiet.">
+        <Panes mode={mode}>
+          <Col>
+            <Tabs defaultValue="timeline">
+              <TabList aria-label="Work item sections">
+                <Tab value="overview">Overview</Tab>
+                <Tab value="timeline" icon="list" count={128}>
+                  Timeline
+                </Tab>
+                <Tab value="sessions" count={5}>
+                  Sessions
+                </Tab>
+                <Tab value="questions" count={1}>
+                  Questions
+                </Tab>
+                <Tab value="disabled" disabled>
+                  Deployments
+                </Tab>
+              </TabList>
+              <TabPanel value="overview">
+                <div style={{ padding: 12 }}>Overview panel</div>
+              </TabPanel>
+              <TabPanel value="timeline">
+                <div style={{ padding: 12 }}>Timeline panel</div>
+              </TabPanel>
+              <TabPanel value="sessions">
+                <div style={{ padding: 12 }}>Sessions panel</div>
+              </TabPanel>
+              <TabPanel value="questions">
+                <div style={{ padding: 12 }}>Questions panel</div>
+              </TabPanel>
+            </Tabs>
+            <Tabs defaultValue="board">
+              <TabList variant="segmented" aria-label="View">
+                <Tab value="board">Board</Tab>
+                <Tab value="list">List</Tab>
+                <Tab value="tree">Tree</Tab>
+              </TabList>
+            </Tabs>
+          </Col>
+        </Panes>
+      </Block>
+
+      <Block id="p-dialog" title="Dialog" note="For decisions, not browsing. Destructive confirmations get the danger tone and a destructive primary action.">
+        <Panes mode={mode}>
+          <Row>
+            <Dialog
+              trigger={<Button>Open dialog</Button>}
+              title="Retry run"
+              description="Creates attempt 3 from the last checkpoint. The previous attempts are kept."
+              footer={
+                <>
+                  <DialogClose asChild>
+                    <Button variant="ghost">Cancel</Button>
+                  </DialogClose>
+                  <DialogClose asChild>
+                    <Button variant="primary">Retry</Button>
+                  </DialogClose>
+                </>
+              }
+            >
+              <Input label="Note for the agent (optional)" placeholder="What changed since last time?" />
+            </Dialog>
+            <Dialog
+              trigger={<Button variant="destructive-outline">Abort run</Button>}
+              tone="danger"
+              size="sm"
+              title="Abort run 14?"
+              description="The running sessions will be stopped. Work in the workspace is preserved; the run cannot be resumed."
+              footer={
+                <>
+                  <DialogClose asChild>
+                    <Button variant="ghost">Keep running</Button>
+                  </DialogClose>
+                  <DialogClose asChild>
+                    <Button variant="destructive">Abort</Button>
+                  </DialogClose>
+                </>
+              }
+            />
+          </Row>
+        </Panes>
+      </Block>
+
+      <Block id="p-toast" title="Toast" note="Only for outcomes of your own actions. Agent events never toast — they live in the stream and the queue. Danger toasts stick until dismissed.">
+        <Panes mode={mode}>
+          <ToastDemo />
+        </Panes>
+      </Block>
+
+      <Block id="p-tooltip" title="Tooltip" note="Supplementary only. Inverted surface so it reads on any background.">
+        <Panes mode={mode}>
+          <Row>
+            <Tooltip content="Open the session in a side panel" shortcut="⏎">
+              <Button>Hover me</Button>
+            </Tooltip>
+            <Tooltip content="ses_01J9K2QF7X3M8N4P" mono side="bottom">
+              <Badge mono>ses_01J9K2</Badge>
+            </Tooltip>
+            <Tooltip content="Cost so far this run, including subagents">
+              <span>
+                <CostDisplay usd={1.284} />
+              </span>
+            </Tooltip>
+          </Row>
+        </Panes>
+      </Block>
+
+      <Block id="p-loading" title="Skeleton / Spinner" note="Skeletons match the content shape; the shimmer is subtle. Spinner for short in-component waits.">
+        <Panes mode={mode}>
+          <Row top style={{ gap: 24 }}>
+            <Col style={{ width: 220 }}>
+              <Row>
+                <Skeleton variant="circle" width={20} height={20} />
+                <Skeleton width={120} height={12} />
+              </Row>
+              <SkeletonLines lines={3} />
+            </Col>
+            <Col>
+              <Spinner />
+              <Spinner label="Provisioning workspace…" />
+            </Col>
+            <Card style={{ width: 200 }}>
+              <CardBody>
+                <Skeleton width={60} height={10} />
+                <div style={{ height: 6 }} />
+                <Skeleton width={110} height={22} />
+              </CardBody>
+            </Card>
+          </Row>
+        </Panes>
+      </Block>
+
+      <Block id="p-empty" title="EmptyState" note="Say what would appear and how to make it appear. No illustrations.">
+        <Panes mode={mode} surface>
+          <Col>
+            <EmptyState icon="hand" title="Nothing needs you" description="When an agent asks a question or a plan needs confirmation, it shows up here." />
+            <EmptyState compact icon="terminal" title="No output yet" description="The session has not produced any log lines." action={<Button size="sm">Refresh</Button>} />
+          </Col>
+        </Panes>
+      </Block>
+
+      <Block id="p-scroll" title="ScrollArea" note="Overlay scrollbars that look the same in Chromium and WebKit (Tauri).">
+        <Panes mode={mode}>
+          <ScrollArea style={{ height: 120, border: "1px solid var(--ds-color-border-subtle)", borderRadius: 6 }}>
+            <div style={{ padding: 8, width: 900 }}>
+              {Array.from({ length: 14 }, (_, i) => (
+                <div key={i} style={{ padding: "3px 0", fontSize: 12, whiteSpace: "nowrap" }}>
+                  Row {i + 1} — scrolls both ways; this line is intentionally wider than the viewport so a horizontal bar appears too.
+                </div>
+              ))}
+            </div>
+          </ScrollArea>
+        </Panes>
+      </Block>
+    </Section>
+  );
+}
+
+const RUNS = [
+  { id: "run_9f2a", item: "WI-2481 Add retry with backoff", status: "running", cost: 1.284, ms: 1_640_000, attempt: 2 },
+  { id: "run_8c11", item: "WI-2477 Migrate events table to partitions", status: "awaiting_human", cost: 0.63, ms: 4_010_000, attempt: 1 },
+  { id: "run_7b03", item: "WI-2470 Fix flaky E2E login test", status: "completed", cost: 0.412, ms: 903_000, attempt: 1 },
+  { id: "run_6a99", item: "WI-2466 Upgrade drizzle-orm", status: "failed", cost: 2.91, ms: 5_400_000, attempt: 3 },
+  { id: "run_5d42", item: "WI-2460 Add org switcher", status: "paused", cost: 0.088, ms: 120_000, attempt: 1 },
+  { id: "run_4e17", item: "WI-2459 Document runner protocol", status: "scheduled", cost: 0, ms: 0, attempt: 1 },
+] as const;
+
+function SortableTableDemo() {
+  const [sort, setSort] = useState<{ key: "cost" | "ms" | "item"; dir: SortDirection }>({ key: "cost", dir: "desc" });
+  const [selected, setSelected] = useState<string | null>("run_8c11");
+  const rows = [...RUNS].sort((a, b) => {
+    const va = a[sort.key];
+    const vb = b[sort.key];
+    const c = typeof va === "number" && typeof vb === "number" ? va - vb : String(va).localeCompare(String(vb));
+    return sort.dir === "asc" ? c : -c;
+  });
+  return (
+    <Table maxHeight={220}>
+      <THead>
+        <Tr>
+          <Th width={32}>
+            <Checkbox aria-label="Select all" checked="indeterminate" />
+          </Th>
+          <Th width={90}>Run</Th>
+          <Th sort={sort.key === "item" ? sort.dir : null} onSort={(dir) => setSort({ key: "item", dir })}>
+            Work item
+          </Th>
+          <Th width={120}>Status</Th>
+          <Th align="right" width={60}>
+            Attempt
+          </Th>
+          <Th align="right" width={90} sort={sort.key === "ms" ? sort.dir : null} onSort={(dir) => setSort({ key: "ms", dir })}>
+            Duration
+          </Th>
+          <Th align="right" width={90} sort={sort.key === "cost" ? sort.dir : null} onSort={(dir) => setSort({ key: "cost", dir })}>
+            Cost
+          </Th>
+        </Tr>
+      </THead>
+      <TBody>
+        {rows.map((r) => (
+          <Tr key={r.id} interactive selected={selected === r.id} onClick={() => setSelected(r.id)}>
+            <Td>
+              <Checkbox aria-label={`Select ${r.id}`} checked={selected === r.id} />
+            </Td>
+            <Td mono muted>
+              {r.id}
+            </Td>
+            <Td>{r.item}</Td>
+            <Td>
+              <StatusBadge status={r.status} size="sm" />
+            </Td>
+            <Td align="right" mono muted>
+              {r.attempt}
+            </Td>
+            <Td align="right" mono>
+              {r.ms > 0 ? <Duration ms={r.ms} /> : <span style={{ color: "var(--ds-color-text-disabled)" }}>—</span>}
+            </Td>
+            <Td align="right" mono>
+              <CostDisplay usd={r.cost} />
+            </Td>
+          </Tr>
+        ))}
+      </TBody>
+    </Table>
+  );
+}
+
+function ToastDemo() {
+  const { toast } = useToast();
+  return (
+    <Row>
+      <Button onClick={() => toast({ title: "Copied session ID" })}>Neutral</Button>
+      <Button onClick={() => toast({ title: "Run 14 paused", description: "Resume from the run page.", tone: "info" })}>Info</Button>
+      <Button onClick={() => toast({ title: "Merged #412", tone: "success", action: { label: "View", onClick: () => undefined } })}>Success</Button>
+      <Button onClick={() => toast({ title: "Budget at 85%", description: "WI-2481 has used $2.12 of $2.50.", tone: "attention" })}>Attention</Button>
+      <Button onClick={() => toast({ title: "Could not abort run", description: "Worker did not acknowledge within 10s.", tone: "danger", action: { label: "Retry", onClick: () => undefined } })}>Danger (sticky)</Button>
+      <Caption>toasts render bottom-right of the page, in the active app theme</Caption>
+    </Row>
+  );
+}

@@ -1,0 +1,344 @@
+/*
+ * Gallery chrome. Deliberately built on the tokens so the gallery itself
+ * is a test of them; the only gallery-specific colors are the pane labels.
+ */
+
+.app {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.nav {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow: auto;
+  padding: var(--ds-space-16) var(--ds-space-12);
+  background: var(--ds-color-surface);
+  border-right: 1px solid var(--ds-color-border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+}
+.brand {
+  font-weight: var(--ds-weight-semibold);
+  font-size: var(--ds-text-lg);
+  letter-spacing: var(--ds-tracking-tight);
+  margin-bottom: var(--ds-space-4);
+}
+.brand small {
+  display: block;
+  font-size: var(--ds-text-xs);
+  font-weight: var(--ds-weight-regular);
+  color: var(--ds-color-text-muted);
+}
+.navGroup {
+  margin-top: var(--ds-space-12);
+}
+.navLink {
+  display: block;
+  padding: 3px var(--ds-space-8);
+  border-radius: var(--ds-radius-sm);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+  text-decoration: none;
+}
+.navLink:hover {
+  background: var(--ds-color-hover-wash);
+  color: var(--ds-color-text-primary);
+  text-decoration: none;
+}
+.controls {
+  margin-top: auto;
+  padding-top: var(--ds-space-16);
+  border-top: 1px solid var(--ds-color-border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+}
+
+.main {
+  padding: var(--ds-space-24) var(--ds-space-32) var(--ds-space-64);
+  min-width: 0;
+}
+
+.section {
+  margin-bottom: var(--ds-space-48);
+  scroll-margin-top: var(--ds-space-16);
+}
+.sectionTitle {
+  font-size: var(--ds-text-2xl);
+  font-weight: var(--ds-weight-semibold);
+  letter-spacing: var(--ds-tracking-tight);
+  margin-bottom: var(--ds-space-4);
+}
+.sectionIntro {
+  color: var(--ds-color-text-secondary);
+  max-width: 72ch;
+  margin-bottom: var(--ds-space-16);
+}
+
+.block {
+  margin-bottom: var(--ds-space-24);
+  scroll-margin-top: var(--ds-space-16);
+}
+.blockTitle {
+  display: flex;
+  align-items: baseline;
+  gap: var(--ds-space-8);
+  font-size: var(--ds-text-lg);
+  font-weight: var(--ds-weight-medium);
+  margin-bottom: var(--ds-space-4);
+}
+.blockNote {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+  margin-bottom: var(--ds-space-8);
+  max-width: 80ch;
+}
+.blockNote code {
+  color: var(--ds-color-text-secondary);
+}
+
+/* Side-by-side panes. Each pane sets its own data-theme so all tokens in
+   its subtree resolve to that mode. */
+.panes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--ds-space-8);
+}
+.panesSingle {
+  grid-template-columns: 1fr;
+}
+.pane {
+  position: relative;
+  padding: var(--ds-space-16);
+  padding-top: var(--ds-space-24);
+  background: var(--ds-color-canvas);
+  color: var(--ds-color-text-primary);
+  border-radius: var(--ds-radius-lg);
+  border: 1px solid var(--ds-color-border);
+  min-width: 0;
+  color-scheme: inherit;
+}
+.paneLabel {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  font-size: var(--ds-text-2xs);
+  font-weight: var(--ds-weight-medium);
+  letter-spacing: var(--ds-tracking-caps);
+  text-transform: uppercase;
+  color: var(--ds-color-text-muted);
+  user-select: none;
+}
+.paneSurface {
+  background: var(--ds-color-surface);
+}
+
+/* Layout helpers inside panes */
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
+.rowTop {
+  align-items: flex-start;
+}
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  min-width: 0;
+}
+.grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--ds-space-8);
+}
+.grid3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--ds-space-8);
+}
+.caption {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  font-family: var(--ds-font-mono);
+}
+.label {
+  font-size: var(--ds-text-xs);
+  font-weight: var(--ds-weight-medium);
+  letter-spacing: var(--ds-tracking-caps);
+  text-transform: uppercase;
+  color: var(--ds-color-text-muted);
+  margin-bottom: var(--ds-space-4);
+}
+.stateGrid {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--ds-space-6) var(--ds-space-16);
+  align-items: center;
+}
+.stateGrid > .caption {
+  text-align: right;
+}
+
+/* Swatches */
+.swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-8);
+}
+.swatch {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 92px;
+}
+.swatchChip {
+  height: 36px;
+  border-radius: var(--ds-radius-md);
+  box-shadow: inset 0 0 0 1px rgba(127, 127, 127, 0.25);
+}
+.swatchName {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.swatchHex {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-2xs);
+  color: var(--ds-color-text-muted);
+}
+.ramp {
+  display: flex;
+  border-radius: var(--ds-radius-md);
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgba(127, 127, 127, 0.25);
+}
+.rampStep {
+  flex: 1;
+  height: 36px;
+  display: grid;
+  place-items: end center;
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-2xs);
+  padding-bottom: 2px;
+}
+
+.toneRow {
+  display: grid;
+  grid-template-columns: 80px repeat(4, 1fr);
+  gap: var(--ds-space-6);
+  align-items: center;
+  margin-bottom: var(--ds-space-6);
+}
+.toneCell {
+  height: 28px;
+  border-radius: var(--ds-radius-sm);
+  display: grid;
+  place-items: center;
+  font-size: var(--ds-text-xs);
+  font-family: var(--ds-font-mono);
+}
+
+.typeSample {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: var(--ds-space-4) var(--ds-space-16);
+  align-items: baseline;
+}
+.typeSample .caption {
+  text-align: right;
+}
+
+.spaceBar {
+  height: 12px;
+  background: var(--ds-color-accent);
+  border-radius: var(--ds-radius-xs);
+  opacity: 0.8;
+}
+.radiusBox {
+  width: 40px;
+  height: 40px;
+  background: var(--ds-color-raised);
+  border: 1px solid var(--ds-color-border-strong);
+}
+.shadowBox {
+  width: 100%;
+  height: 56px;
+  background: var(--ds-color-raised);
+  border-radius: var(--ds-radius-lg);
+  display: grid;
+  place-items: center;
+}
+
+.motionDot {
+  width: 12px;
+  height: 12px;
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-color-accent);
+  transition: transform var(--dur) var(--ease);
+}
+.motionTrack {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  cursor: default;
+}
+.motionTrack:hover .motionDot {
+  transform: translateX(80px);
+}
+
+.iconGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: var(--ds-space-4);
+}
+.iconCell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: var(--ds-space-8) 0;
+  border-radius: var(--ds-radius-md);
+  color: var(--ds-color-text-primary);
+}
+.iconCell:hover {
+  background: var(--ds-color-hover-wash);
+}
+.iconCell .caption {
+  font-size: 9px;
+}
+
+.statusMatrix {
+  display: grid;
+  grid-template-columns: max-content max-content max-content max-content minmax(0, 1fr);
+  gap: var(--ds-space-6) var(--ds-space-16);
+  align-items: center;
+}
+
+.kbd {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  padding: 1px 5px;
+  border: 1px solid var(--ds-color-border);
+  border-bottom-width: 2px;
+  border-radius: var(--ds-radius-sm);
+  background: var(--ds-color-raised);
+}
+
+.cvdBar {
+  display: flex;
+  gap: var(--ds-space-8);
+  align-items: center;
+  flex-wrap: wrap;
+}
+.cvdSim {
+  filter: grayscale(1);
+}
