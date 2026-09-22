@@ -28,7 +28,7 @@ import type {
   WorkflowStepContext,
 } from "@dude/domain";
 import { newId } from "@dude/domain";
-import { withOrg } from "../db/client.ts";
+import { withOrg, withSystemScope } from "../db/client.ts";
 
 /**
  * Column list aliased to WorkflowRunState.
@@ -71,6 +71,16 @@ function toState(row: Record<string, unknown>): WorkflowRunState {
     createdAt: iso(row.createdAt)!,
     updatedAt: iso(row.updatedAt)!,
   };
+}
+
+/**
+ * A claimed run, with the signals it was waiting for already fetched.
+ *
+ * Carrying them from the claim avoids a per-run transaction just to read rows
+ * that query already visited.
+ */
+interface ClaimedRun extends WorkflowRunState {
+  pendingSignals: WorkflowSignal[];
 }
 
 /** Exponential backoff with a ceiling, in milliseconds. */
@@ -217,7 +227,13 @@ export class PostgresWorkflowRuntime implements WorkflowRuntime {
   }
 
   /**
-   * Claim and advance at most `limit` runnable workflows.
+   * Claim and advance at most `limit` runnable workflows, across all tenants.
+   *
+   * Deliberately not scoped to an organization: a poller's job is to find the
+   * tenants that need attention, and enumerating organizations to poll each
+   * would turn one indexed query into N while making fairness impossible.
+   * Ordering by `wake_at` means the longest-waiting workflow goes first
+   * regardless of whose it is.
    *
    * Claimed runs advance concurrently. Advancing them serially would make a
    * batch's later runs wait behind the earlier ones' model calls, easily
@@ -226,8 +242,8 @@ export class PostgresWorkflowRuntime implements WorkflowRuntime {
    *
    * Returns how many were advanced, so a caller can loop until idle.
    */
-  async tick(organizationId: string, limit = 10): Promise<number> {
-    const claimed = await this.#claim(organizationId, limit);
+  async tick(limit = 10): Promise<number> {
+    const claimed = await this.#claim(limit);
     // A step failure is recorded per-run by #advance; allSettled keeps one
     // bad run from aborting the rest of the batch.
     await Promise.allSettled(claimed.map((run) => this.#advanceWithLease(run)));
@@ -241,7 +257,7 @@ export class PostgresWorkflowRuntime implements WorkflowRuntime {
    * lease. Renewal keeps ownership for as long as this poller is actually
    * working, while still releasing the run promptly if the process dies.
    */
-  async #advanceWithLease(run: WorkflowRunState): Promise<void> {
+  async #advanceWithLease(run: ClaimedRun): Promise<void> {
     let renewing = false;
     const renew = setInterval(() => {
       // Skip if the previous renewal is still in flight, so a slow database
@@ -274,16 +290,20 @@ export class PostgresWorkflowRuntime implements WorkflowRuntime {
   }
 
   /**
-   * Claim runnable workflows.
+   * Claim runnable workflows across all tenants.
    *
    * `SKIP LOCKED` lets concurrent pollers take disjoint sets without blocking
    * each other. A run is runnable when it is not parked on a future timer and
    * either holds no lease or holds an expired one.
+   *
+   * The awaited signals are aggregated in the same query rather than fetched
+   * per claimed run: a batch of 10 would otherwise cost 10 extra transactions
+   * per tick to read rows this query already visited.
    */
-  async #claim(organizationId: string, limit: number): Promise<WorkflowRunState[]> {
-    return withOrg(organizationId, async ({ sql }) => {
+  async #claim(limit: number): Promise<ClaimedRun[]> {
+    return withSystemScope("workflow-poller", async ({ sql }) => {
       const rows = (await sql`
-        WITH claimed AS (
+        WITH candidate AS (
           SELECT id FROM workflow_runs
           WHERE status IN ('running', 'waiting')
             AND (locked_until IS NULL OR locked_until < now())
@@ -302,25 +322,47 @@ export class PostgresWorkflowRuntime implements WorkflowRuntime {
                   AND workflow_runs.awaiting_signals @> to_jsonb(s.name)::jsonb
               )
             )
+          -- Longest-waiting first, regardless of tenant.
           ORDER BY wake_at NULLS FIRST, created_at
           LIMIT ${limit}
           FOR UPDATE SKIP LOCKED
+        ), claimed AS (
+          UPDATE workflow_runs w
+          SET locked_by = ${this.#pollerId},
+              locked_until = now() + ${`${LEASE_SECONDS} seconds`}::interval,
+              status = 'running'
+          FROM candidate
+          WHERE w.id = candidate.id
+          RETURNING ${sql.unsafe(workflowSelect("w"))}
         )
-        UPDATE workflow_runs w
-        SET locked_by = ${this.#pollerId},
-            locked_until = now() + ${`${LEASE_SECONDS} seconds`}::interval,
-            status = 'running'
-        FROM claimed
-        WHERE w.id = claimed.id
-        RETURNING ${sql.unsafe(workflowSelect("w"))}`) as Array<
-        Record<string, unknown>
-      >;
-      return rows.map(toState);
+        SELECT c.*,
+               COALESCE(
+                 (SELECT jsonb_agg(jsonb_build_object(
+                           'signalId', s.id, 'workflowRunId', s.workflow_run_id,
+                           'name', s.name, 'payload', s.payload,
+                           'receivedAt', s.received_at)
+                         ORDER BY s.received_at)
+                  FROM workflow_signals s
+                  WHERE s.workflow_run_id = c."workflowRunId"
+                    AND s.consumed_at IS NULL
+                    AND c."awaitingSignals" @> to_jsonb(s.name)::jsonb),
+                 '[]'::jsonb
+               ) AS "pendingSignals"
+        FROM claimed c`) as Array<Record<string, unknown>>;
+
+      return rows.map((row) => ({
+        ...toState(row),
+        pendingSignals: ((row.pendingSignals ?? []) as WorkflowSignal[]).map((s) => ({
+          ...s,
+          receivedAt:
+            typeof s.receivedAt === "string" ? s.receivedAt : new Date(s.receivedAt).toISOString(),
+        })),
+      }));
     });
   }
 
   /** Run one step of a claimed workflow and persist the transition. */
-  async #advance(run: WorkflowRunState): Promise<void> {
+  async #advance(run: ClaimedRun): Promise<void> {
     const definition = this.#definitions.get(run.workflowType);
     if (!definition) {
       await this.#fail(run, `unknown workflow type: ${run.workflowType}`, true);
@@ -333,11 +375,11 @@ export class PostgresWorkflowRuntime implements WorkflowRuntime {
       return;
     }
 
-    // Read pending signals without consuming them. They are marked consumed
-    // only once the step's transition commits, so a step that throws leaves
-    // them in the inbox for the retry — otherwise a human's approval or a CI
-    // webhook would be silently discarded by a transient failure.
-    const signals = await this.#peekSignals(run);
+    // Signals came with the claim, and are marked consumed only once the
+    // step's transition commits — so a step that throws leaves them in the
+    // inbox for the retry rather than silently discarding a human's approval
+    // or a CI webhook.
+    const signals = run.pendingSignals;
 
     const ctx: WorkflowStepContext = {
       workflowRunId: run.workflowRunId,
@@ -412,39 +454,6 @@ export class PostgresWorkflowRuntime implements WorkflowRuntime {
     } catch (err) {
       await this.#fail(run, err instanceof Error ? err.message : String(err), false, definition);
     }
-  }
-
-  /**
-   * Read the pending signals this run is currently awaiting, without
-   * consuming them.
-   *
-   * Scoped to `awaiting_signals` on purpose. A signal may arrive before the
-   * workflow reaches the step that waits for it — reading indiscriminately
-   * would let an earlier step swallow it, and the workflow would then park
-   * forever on a signal that had already been delivered. Unawaited signals
-   * stay in the inbox until a step asks for them.
-   */
-  async #peekSignals(run: WorkflowRunState): Promise<WorkflowSignal[]> {
-    return withOrg(run.organizationId, async ({ sql }) => {
-      const rows = (await sql`
-        SELECT s.id AS "signalId", s.workflow_run_id AS "workflowRunId", s.name, s.payload,
-               s.received_at AS "receivedAt"
-        FROM workflow_signals s
-        JOIN workflow_runs w ON w.id = s.workflow_run_id
-        WHERE s.workflow_run_id = ${run.workflowRunId}
-          AND s.consumed_at IS NULL
-          AND w.awaiting_signals ? s.name
-        ORDER BY s.received_at`) as Array<Record<string, unknown>>;
-
-      return rows.map((r) => ({
-        signalId: r.signalId as string,
-        workflowRunId: r.workflowRunId as string,
-        name: r.name as string,
-        payload: (r.payload ?? {}) as Record<string, unknown>,
-        receivedAt:
-          r.receivedAt instanceof Date ? r.receivedAt.toISOString() : (r.receivedAt as string),
-      }));
-    });
   }
 
   /**
