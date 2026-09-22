@@ -86,7 +86,7 @@ const doomed: WorkflowDefinition = {
 /** Advance until no workflow is runnable, or `maxTicks` is reached. */
 async function drain(maxTicks = 20): Promise<void> {
   for (let i = 0; i < maxTicks; i++) {
-    if ((await runtime.tick(ORG)) === 0) return;
+    if ((await runtime.tick()) === 0) return;
   }
 }
 
@@ -226,7 +226,7 @@ describe("failure handling", () => {
     });
 
     // First attempt fails and parks on a backoff timer.
-    await runtime.tick(ORG);
+    await runtime.tick();
     let state = await runtime.get(ORG, workflowRunId);
     expect(state?.attempt).toBe(1);
     expect(state?.lastError).toMatch(/transient failure/);
@@ -235,12 +235,12 @@ describe("failure handling", () => {
     await withOrg(ORG, async ({ sql }) => {
       await sql`UPDATE workflow_runs SET wake_at = now() WHERE id = ${workflowRunId}`;
     });
-    await runtime.tick(ORG);
+    await runtime.tick();
 
     await withOrg(ORG, async ({ sql }) => {
       await sql`UPDATE workflow_runs SET wake_at = now() WHERE id = ${workflowRunId}`;
     });
-    await runtime.tick(ORG);
+    await runtime.tick();
 
     state = await runtime.get(ORG, workflowRunId);
     expect(state?.status).toBe("completed");
@@ -257,7 +257,7 @@ describe("failure handling", () => {
     });
 
     for (let i = 0; i < 3; i++) {
-      await runtime.tick(ORG);
+      await runtime.tick();
       await withOrg(ORG, async ({ sql }) => {
         await sql`UPDATE workflow_runs SET wake_at = now() WHERE id = ${workflowRunId}`;
       });
@@ -267,7 +267,7 @@ describe("failure handling", () => {
     expect(state?.status).toBe("dead_lettered");
     expect(state?.lastError).toMatch(/permanent failure/);
     // A dead-lettered run is never silently retried.
-    expect(await runtime.tick(ORG)).toBe(0);
+    expect(await runtime.tick()).toBe(0);
   });
 
   test("backs off exponentially with a ceiling", () => {
@@ -296,7 +296,7 @@ describe("concurrency", () => {
     });
 
     // Both poll simultaneously; SKIP LOCKED must give the run to exactly one.
-    const [a, b] = await Promise.all([runtime.tick(ORG), other.tick(ORG)]);
+    const [a, b] = await Promise.all([runtime.tick(), other.tick()]);
     expect(a + b).toBe(1);
 
     // Step "a" ran once, not twice.
@@ -324,7 +324,7 @@ describe("abort", () => {
     expect(state?.lastError).toBe("requirement changed");
     // An aborted run does not resume even if its signal arrives later.
     await runtime.signal(ORG, workflowRunId, "approved", {});
-    expect(await runtime.tick(ORG)).toBe(0);
+    expect(await runtime.tick()).toBe(0);
   });
 });
 
@@ -363,15 +363,15 @@ describe("signal durability", () => {
       input: {},
     });
 
-    await runtimeLocal.tick(ORG);
+    await runtimeLocal.tick();
     await runtimeLocal.signal(ORG, workflowRunId, "approved", { by: "human" });
 
     // First execution throws; the signal must remain for the retry.
-    await runtimeLocal.tick(ORG);
+    await runtimeLocal.tick();
     await withOrg(ORG, async ({ sql }) => {
       await sql`UPDATE workflow_runs SET wake_at = now() WHERE id = ${workflowRunId}`;
     });
-    await runtimeLocal.tick(ORG);
+    await runtimeLocal.tick();
 
     const state = await runtimeLocal.get(ORG, workflowRunId);
     expect(state?.status).toBe("completed");
@@ -401,9 +401,9 @@ describe("signal durability", () => {
       input: {},
     });
 
-    await runtimeLocal.tick(ORG);
+    await runtimeLocal.tick();
     await runtimeLocal.signal(ORG, workflowRunId, "pr_approved", {});
-    await runtimeLocal.tick(ORG); // fails, parks on backoff
+    await runtimeLocal.tick(); // fails, parks on backoff
 
     const state = await runtimeLocal.get(ORG, workflowRunId);
     // Clearing this would make the run unwakeable by either signal.
@@ -435,7 +435,7 @@ describe("abort safety", () => {
       input: {},
     });
 
-    const ticking = runtimeLocal.tick(ORG);
+    const ticking = runtimeLocal.tick();
     await Bun.sleep(100);
     await runtimeLocal.abort(ORG, workflowRunId, "user cancelled");
     await ticking;
@@ -444,7 +444,7 @@ describe("abort safety", () => {
     expect(state?.status).toBe("aborted");
     expect(state?.lastError).toBe("user cancelled");
     // And it must stay stopped rather than being picked up again.
-    expect(await runtimeLocal.tick(ORG)).toBe(0);
+    expect(await runtimeLocal.tick()).toBe(0);
   });
 
   test("sleepUntil does not resurrect a terminal run", async () => {

@@ -2,7 +2,7 @@
  * Control plane entry point.
  *
  * A modular monolith on Bun (plan §21): API, webhook handlers, event
- * ingestion, live UI transport and background pollers in one process, with
+ * ingestion, live UI transport and background sweepers in one process, with
  * PostgreSQL providing persistence, coordination and search.
  */
 
@@ -13,6 +13,8 @@ import { registerProjectRoutes } from "./api/routes/projects.ts";
 import { registerWorkRoutes } from "./api/routes/work.ts";
 import { registerRunnerRoutes } from "./api/routes/runner.ts";
 import { closePool, getPool } from "./db/client.ts";
+import { PostgresWorkflowRuntime } from "./workflow/runtime.ts";
+import { Sweeper, dispatchOutbox, reapExpiredRunLeases, reapLostWorkers } from "./workflow/sweepers.ts";
 
 export function buildRouter(): Router {
   const router = new Router();
@@ -32,6 +34,49 @@ export function buildRouter(): Router {
   registerRunnerRoutes(router);
 
   return router;
+}
+
+/**
+ * The background work the control plane owns.
+ *
+ * Without these, the durable workflow runtime is inert: nothing wakes a parked
+ * workflow, nothing dispatches the outbox, and work abandoned by a dead worker
+ * stays abandoned. Plan §21's "waiting is free" depends on something doing the
+ * waking.
+ */
+export function buildSweepers(options: { log?: typeof console.log } = {}) {
+  const log = options.log ?? console.log;
+  const workflow = new PostgresWorkflowRuntime();
+
+  const sweepers = [
+    new Sweeper("workflow-poller", async () => ({ handled: await workflow.tick() }), {
+      // Short: this is what makes a signalled workflow feel responsive.
+      intervalMs: 500,
+      log,
+    }),
+    new Sweeper(
+      "outbox-dispatcher",
+      // Handlers are registered as integrations land; an unknown kind
+      // retries with backoff rather than being silently dropped.
+      () => dispatchOutbox({}),
+      { intervalMs: 1_000, log },
+    ),
+    new Sweeper("run-lease-reaper", () => reapExpiredRunLeases(), {
+      // Leases are 90s, so checking every few seconds is ample.
+      intervalMs: 5_000,
+      log,
+    }),
+    new Sweeper("worker-liveness-reaper", () => reapLostWorkers(), {
+      intervalMs: 10_000,
+      log,
+    }),
+  ];
+
+  return {
+    workflow,
+    start: () => sweepers.forEach((s) => s.start()),
+    stop: () => Promise.all(sweepers.map((s) => s.stop())),
+  };
 }
 
 export function startServer(port = Number(process.env.PORT ?? 3000)) {
@@ -56,8 +101,18 @@ if (import.meta.main) {
   const server = startServer();
   console.log(`control plane listening on http://localhost:${server.port}`);
 
+  const sweepers = buildSweepers({
+    log: (message: string, detail?: Record<string, unknown>) =>
+      console.log(message, detail ?? ""),
+  });
+  sweepers.start();
+  console.log("background sweepers started");
+
   const shutdown = async (signal: string) => {
     console.log(`\n${signal} received, shutting down`);
+    // Stop taking new work before closing the pool, or an in-flight sweep
+    // fails on a dead connection during every shutdown.
+    await sweepers.stop();
     await server.stop();
     await closePool();
     process.exit(0);
