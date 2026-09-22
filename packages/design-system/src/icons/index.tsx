@@ -62,7 +62,15 @@ export type IconName =
   | "zap"
   | "git-branch"
   | "git-pr"
-  | "layers";
+  | "layers"
+  // chat / activity
+  | "caret"
+  | "retry"
+  | "send"
+  | "edit"
+  | "globe"
+  | "list-check"
+  | "message";
 
 /** Path data on a 16x16 grid. `fill` marks icons that are filled shapes. */
 const PATHS: Record<IconName, { d: string; fill?: true; dashed?: true }> = {
@@ -126,6 +134,16 @@ const PATHS: Record<IconName, { d: string; fill?: true; dashed?: true }> = {
   "git-branch": { d: "M4.5 3.5v9M4.5 5a1.5 1.5 0 1 0 0-3a1.5 1.5 0 0 0 0 3ZM4.5 14a1.5 1.5 0 1 0 0-3a1.5 1.5 0 0 0 0 3ZM11.5 6.5a1.5 1.5 0 1 0 0-3a1.5 1.5 0 0 0 0 3ZM11.5 6.5c0 2-1.5 3-7 3.5" },
   "git-pr": { d: "M4.5 5v9M4.5 5a1.5 1.5 0 1 0 0-3a1.5 1.5 0 0 0 0 3ZM11.5 14a1.5 1.5 0 1 0 0-3a1.5 1.5 0 0 0 0 3ZM11.5 11V6a2 2 0 0 0-2-2H7.5M9.5 2L7.5 4l2 2" },
   layers: { d: "M8 2.5l6 3-6 3-6-3 6-3ZM2 8.5l6 3 6-3M2 11.5l6 3 6-3" },
+
+  /* A text caret: the streaming glyph. Filled so it reads as a block cursor. */
+  caret: { d: "M6 2.5h4v11H6z", fill: true },
+  /* Circular arrow: an attempt about to be made again. */
+  retry: { d: "M13 8a5 5 0 1 1-1.6-3.7M13 2.5v2.5h-2.5" },
+  send: { d: "M13.5 2.5L2.5 7l5 1.5 1.5 5 4.5-11ZM7.5 8.5l6-6" },
+  edit: { d: "M10.5 3l2.5 2.5-7 7H3.5V10l7-7ZM9.25 4.25l2.5 2.5" },
+  globe: { d: "M8 2.75a5.25 5.25 0 1 0 0 10.5a5.25 5.25 0 0 0 0-10.5ZM2.75 8h10.5M8 2.75c1.6 1.6 2.4 3.4 2.4 5.25S9.6 11.65 8 13.25M8 2.75C6.4 4.35 5.6 6.15 5.6 8s.8 3.65 2.4 5.25" },
+  "list-check": { d: "M2.75 4.5l1 1 2-2M2.75 8.5l1 1 2-2M2.75 12.5l1 1 2-2M8 4.5h5.25M8 8.5h5.25M8 12.5h5.25" },
+  message: { d: "M3 3.5h10a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-.5.5H7l-3 2.5V10.5H3a.5.5 0 0 1-.5-.5V4a.5.5 0 0 1 .5-.5Z" },
 };
 
 export interface IconProps extends Omit<SVGProps<SVGSVGElement>, "name"> {

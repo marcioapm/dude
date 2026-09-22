@@ -10,6 +10,7 @@
 
 import { flattenTheme, type ThemeMode } from "../src/tokens/themes.ts";
 import {
+  cadence,
   duration,
   easing,
   focusRing,
@@ -18,6 +19,7 @@ import {
   fontWeight,
   letterSpacing,
   lineHeight,
+  measure,
   radius,
   size,
   space,
@@ -43,6 +45,10 @@ function staticVars(): Record<string, string> {
   for (const [k, v] of Object.entries(size)) out[`size-${kebab(k)}`] = `${v}px`;
   for (const [k, v] of Object.entries(duration)) out[`duration-${k}`] = `${v}ms`;
   for (const [k, v] of Object.entries(easing)) out[`ease-${k}`] = v;
+  // Live loops divide by --ds-motion-live at the call site; the raw cadence
+  // never changes, so reduced motion is a single switch, not N overrides.
+  for (const [k, v] of Object.entries(cadence)) out[`cadence-${k}`] = `${v}ms`;
+  for (const [k, v] of Object.entries(measure)) out[`measure-${k}`] = v;
   for (const [k, v] of Object.entries(zIndex)) out[`z-${k}`] = `${v}`;
   out["focus-ring-width"] = `${focusRing.width}px`;
   out["focus-ring-offset"] = `${focusRing.offset}px`;

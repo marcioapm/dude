@@ -233,6 +233,35 @@ a:hover {
   }
 }
 
+/* Stepped blink for carets: on/off, never a fade. */
+@keyframes ds-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+/* Slow rotation for the "thinking" dashed ring: a drift, not a spin. */
+@keyframes ds-drift {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Indeterminate sweep for a tool call in flight. The static (un-animated)
+   position is mid-track, so reduced motion shows a stripe, not nothing. */
+@keyframes ds-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(250%);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

@@ -1,0 +1,210 @@
+/*
+ * A turn. Not a bubble: a gutter (avatar) + a column. Agent and human turns
+ * share the grid so text aligns down the page; the human turn gets a
+ * hairline frame tinted by intent so interventions are scannable.
+ */
+
+.root {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: var(--ds-space-8);
+  padding: var(--ds-space-8) var(--ds-space-12);
+  min-width: 0;
+  scroll-margin-top: var(--ds-space-32);
+}
+.continued {
+  padding-top: 0;
+}
+.new {
+  animation: ds-flash var(--ds-duration-deliberate) var(--ds-ease-exit) 1;
+}
+
+.gutter {
+  padding-top: 1px;
+}
+.main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+  min-width: 0;
+}
+
+.header {
+  display: flex;
+  align-items: baseline;
+  gap: var(--ds-space-8);
+  min-height: 20px;
+  font-size: var(--ds-text-sm);
+  line-height: 20px;
+}
+.name {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-primary);
+}
+.roleName {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.model {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.time {
+  margin-left: auto;
+  font-family: var(--ds-font-mono);
+  font-feature-settings: "tnum", "zero";
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-disabled);
+  white-space: nowrap;
+}
+.root:hover .time {
+  color: var(--ds-color-text-muted);
+}
+
+.body {
+  min-width: 0;
+}
+
+.attachments {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-6);
+  margin-top: var(--ds-space-2);
+  min-width: 0;
+}
+
+.foot {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+  margin-top: var(--ds-space-2);
+  min-height: 22px;
+}
+.activity {
+  flex: 1;
+  min-width: 0;
+  /* Inside a foot the turn's own duration sits to the right; keep the
+     state's elapsed next to its label so the two clocks do not collide. */
+  --ai-elapsed-margin: var(--ds-space-4);
+}
+.footSpacer {
+  flex: 1;
+}
+.stats {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* --- Human turns ------------------------------------------------------- */
+
+.human {
+  --cm-tint: var(--ds-color-border);
+  --cm-tint-bg: var(--ds-color-hover-wash);
+  --cm-tag-fg: var(--ds-color-text-secondary);
+  --cm-tag-bg: var(--ds-color-sunken);
+}
+.human .main {
+  padding: var(--ds-space-6) var(--ds-space-12) var(--ds-space-8);
+  border: 1px solid var(--cm-tint);
+  border-left-width: 2px;
+  border-radius: var(--ds-radius-md);
+  background: var(--cm-tint-bg);
+}
+.human .header {
+  min-height: 18px;
+  line-height: 18px;
+}
+
+/* answer: unblocked a question — attention tone, the same hue as needs-you,
+   so the answer visibly "closes" the loud state above it */
+.intent-answer {
+  --cm-tint: var(--ds-tone-attention-border);
+  --cm-tint-bg: color-mix(in srgb, var(--ds-tone-attention-bg) 55%, var(--ds-color-surface));
+  --cm-tag-fg: var(--ds-tone-attention-fg);
+  --cm-tag-bg: var(--ds-tone-attention-bg);
+}
+/* steer: interrupted the agent — accent, the interaction colour, because it
+   is the operator reaching in */
+.intent-steer {
+  --cm-tint: var(--ds-color-accent);
+  --cm-tint-bg: var(--ds-color-accent-subtle);
+  --cm-tag-fg: var(--ds-color-accent-text);
+  --cm-tag-bg: var(--ds-color-accent-subtle);
+}
+.intent {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: var(--ds-radius-sm);
+  font-size: var(--ds-text-2xs);
+  font-weight: var(--ds-weight-medium);
+  letter-spacing: var(--ds-tracking-caps);
+  text-transform: uppercase;
+  color: var(--cm-tag-fg);
+  background: var(--cm-tag-bg);
+  align-self: center;
+}
+
+.quote {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: var(--ds-space-4) var(--ds-space-8);
+  margin-bottom: var(--ds-space-4);
+  border-left: 2px solid var(--ds-tone-attention-border);
+  background: var(--ds-color-surface);
+  border-radius: 0 var(--ds-radius-sm) var(--ds-radius-sm) 0;
+  font-size: var(--ds-text-xs);
+}
+.quoteLabel {
+  font-size: var(--ds-text-2xs);
+  letter-spacing: var(--ds-tracking-caps);
+  text-transform: uppercase;
+  color: var(--ds-tone-attention-fg);
+  font-weight: var(--ds-weight-medium);
+}
+.quoteText {
+  color: var(--ds-color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* --- System lines ------------------------------------------------------ */
+
+.system {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  padding: var(--ds-space-4) var(--ds-space-12);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.systemLine {
+  flex: 1;
+  height: 1px;
+  background: var(--ds-color-border-subtle);
+}
+.systemText {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 70%;
+}
+.systemText code {
+  color: var(--ds-color-text-secondary);
+}
+.systemTime {
+  font-family: var(--ds-font-mono);
+  font-feature-settings: "tnum", "zero";
+  color: var(--ds-color-text-disabled);
+}

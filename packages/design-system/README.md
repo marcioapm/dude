@@ -21,6 +21,12 @@ The operator has one screen, many agents, and five questions: **what is
 running, what is stuck, what needs me, what did it cost, what did the agent
 do**. Every decision below serves those questions.
 
+The screen they have open all day is the **chat transcript** of a Session
+(`ChatTranscript` and friends): the agent's narrative, its tool calls, the
+subagents it delegates to, its plan, and the composer through which a human
+answers or steers. The event ledger (`EventRow`) and `LogStream` are the
+debugging and audit tools behind it, reached when something looks off.
+
 1. **Calm under load.** Density is the goal; noise is the enemy. Dense means
    13px body, 28px rows, 4px radii, hairline borders. Calm means one accent
    color, mostly-neutral surfaces, and status color only where it means
@@ -45,6 +51,11 @@ do**. Every decision below serves those questions.
 6. **Live means alive, not busy.** Running states breathe at 2.4s. Nothing
    spins except the running spinner; nothing flashes except a new row, once.
    Reduced motion turns "live" into "still", never into "invisible".
+7. **Activity has a rhythm, not just a colour.** In the transcript, what a
+   turn is doing right now is told by tone *and* glyph *and* the cadence of
+   its motion: thinking drifts, writing blinks, a tool sweeps, a retry counts
+   down, needs-you rings. Two states never share a rhythm, so they separate
+   in peripheral vision and in grayscale.
 
 ## Styling approach
 
@@ -112,7 +123,8 @@ gallery for every value.
 | Space | `--ds-space-0…64` | 4px grid plus 2 and 6. |
 | Radius | `--ds-radius-xs…xl, full` | `md` = 4px is the default. |
 | Size | `--ds-size-control-sm/md/lg`, `--ds-size-row-compact/default/comfortable` | 24/28/32 and 24/28/36. |
-| Motion | `--ds-duration-fast/base/slow/deliberate`, `--ds-ease-*`, `--ds-motion-live` | Reduced motion zeroes durations and sets `motion-live` to 0. |
+| Motion | `--ds-duration-fast/base/slow/deliberate`, `--ds-ease-*`, `--ds-motion-live`, `--ds-cadence-{spin,breathe,drift,sweep,blink}` | Reduced motion zeroes durations and sets `motion-live` to 0. Cadences are the periods of the live loops; every loop divides by `motion-live`. |
+| Measure | `--ds-measure-message` (72ch), `--ds-measure-document` (84ch) | Prose widths for chat turns and published documents. |
 | Layers | `--ds-z-base…tooltip` | |
 
 ### How the colours were chosen
@@ -147,6 +159,70 @@ nudge by eye.
 - Toasts are for the outcome of *your* action. An agent asking a question is
   not a toast; it is a status change and an event, and it persists until dealt
   with.
+
+### Activity (the transcript)
+
+- `src/tokens/activity.ts` is the vocabulary for what a turn is doing *now*:
+  `thinking`, `streaming`, `tool`, `retrying`, `awaiting_input`, and the three
+  terminal states. It is finer than `SessionStatus` and maps from it
+  (`ACTIVITY_FOR_SESSION_STATUS`, keyed on the domain union so a new status
+  is a compile error until it is placed).
+- Each state owns one rhythm and no two share it: **thinking** drifts a
+  dashed ring (3.2s); **streaming** blinks a block caret (1s, stepped);
+  **tool** sweeps a 2px track under a ticking clock; **retrying** depletes a
+  countdown ring once a second beside "attempt N of M · next in Ns";
+  **awaiting_input** reuses the `StatusBadge` needs-you ring unchanged, so it
+  stays the loudest thing on the screen.
+- A tool call that has run longer than `TOOL_SLOW_AFTER_MS` (20s) is promoted
+  to "slow": its clock and track turn attention-toned and its label becomes
+  "Still running". A 40-second `bash` must never look like a 200ms `read`.
+- Under reduced motion every loop freezes in a legible pose (the ring stays
+  dashed, the caret stays lit, the sweep becomes a stripe) and the clocks keep
+  ticking as text. Motion here is state, not decoration.
+- Errors are never behind a click: a failed `ToolCallCard` opens by default
+  and repeats the error's first line in its collapsed row.
+
+### Human intervention
+
+- The two ways a person acts on a session are distinct on four channels in
+  `ChatComposer`: frame tint, hint text, button label, button icon.
+  **Answer** (session blocked on a question) is attention-toned — the same
+  hue as needs-you, so the answer visibly closes it — and plain Enter submits
+  because the agent is waiting. **Steer** (session running) is accent-toned,
+  says plainly that it interrupts the current turn, and requires ⌘/Ctrl+Enter
+  because an accidental interrupt costs a turn.
+- The same tints mark the human turns in the transcript (`ChatMessage
+  intent="answer" | "steer"`), so interventions are scannable in a long
+  conversation.
+
+### Nesting
+
+- A subagent's conversation nests inside its parent's (`ChatThread`). The
+  2px rail is the child's **role** colour, so depth is a row of differently
+  coloured rails, not shades of grey. Indent is 12px then 8px; depth 2 starts
+  collapsed; depth 3+ shows only its header with an Open action. A collapsed
+  live thread keeps its activity in its header.
+- Only the watched session pins its plan (`AgentPlan sticky` under the
+  transcript header). A child's plan lives inside its own thread, flat and
+  collapsed. Two pinned plans would be two competing answers to "what is it
+  doing".
+
+### Markdown
+
+- `Markdown` renders from a typed AST (`src/util/markdown.ts`) to React
+  elements. There is no HTML string anywhere in the path: raw HTML in the
+  source shows literally, `javascript:`/`data:` URLs are dropped, images are
+  rendered as links rather than fetched. Content is untrusted (models,
+  repository files — plan §25.1).
+- With `streaming`, unterminated constructs at the end of input are treated
+  as open — an unclosed fence is still a code block, an open `**` is still
+  bold — so nothing flickers when the closer lands. Finished messages parse
+  strictly.
+- `variant="message"` (default) is the chat rhythm: 13px, 72ch, 6px between
+  blocks. `variant="document"` is for published artifacts: 84ch, more air,
+  an optional outline. Neither is a blog theme.
+- Code blocks share their type with `LogStream`; a ```` ```diff ```` fence hands
+  off to `DiffView`, so diff colouring exists in one place.
 
 ### Density
 
@@ -188,9 +264,11 @@ nudge by eye.
 
 - Only these things move: the running spinner, the 2.4s breathe on live
   states, the expanding ring on needs-you, a one-shot flash on a row that just
-  arrived, and enter transitions on overlays.
+  arrived, enter transitions on overlays, and the activity rhythms in the
+  transcript (drift, blink, sweep, countdown).
 - Everything that loops must be multiplied by `--ds-motion-live` (see
   `StatusBadge.module.css`) so reduced motion freezes it in a legible state.
+  Loop periods come from `--ds-cadence-*`, never from a literal.
 
 ### Do / Don't
 
@@ -203,6 +281,10 @@ nudge by eye.
 | `variant="destructive"` behind a `Dialog tone="danger"` | a red button that acts immediately |
 | Event stripe only for `success` / `attention` / `danger` | a stripe on every row |
 | `EmptyState title="Nothing needs you"` | an SVG of a mailbox |
+| `<ActivityIndicator kind="retrying" attempt={2} retryAt={t} />` | a spinner with "retrying…" |
+| `<ToolCallCard name="bash" status="failed" error={err} />` | an error hidden behind an expander |
+| `<ChatComposer question={q} />` for a blocking question | one generic text box for everything |
+| `<Markdown source={text} streaming />` while tokens arrive | re-parsing strictly on every token |
 
 ## Components
 
@@ -229,8 +311,45 @@ Skeleton/SkeletonLines/Spinner, EmptyState, ScrollArea.
 - **LogStream** — monospace, follows the tail until you scroll, then offers
   "Jump to latest"; 2000-line render window.
 
+`src/components/` — the transcript (the operator's day-to-day screen):
+
+- **ChatTranscript** — header with enough context to need no other panel
+  (work item, role, model, repo/branch, status, cost vs budget, elapsed), a
+  pinned slot for the plan, the scrolling turns, and a footer slot for the
+  composer. Follows the tail; stops the moment you scroll up and offers
+  "N new turns · Jump to latest". A ResizeObserver keeps streaming text in
+  view without a revision bump.
+- **ChatMessage** — one turn: gutter + column, not a bubble. Agent turns
+  carry model, elapsed, tokens, cost and the live activity in the foot; human
+  turns are framed and tinted by intent (task / answer / steer); system turns
+  are a hairline with a label. Body is `Markdown` and grows in place.
+- **ActivityIndicator** — thinking / streaming / tool / retrying /
+  awaiting_input / completed / failed / aborted, as a full-width line or a
+  badge. Distinct rhythm per state; slow-tool promotion; retry countdown.
+- **ToolCallCard** — one 28px row per call with expandable arguments, error,
+  diff (via `DiffView`) and result. Running calls sweep and tick; failed
+  calls open by default with the error in the row.
+- **AgentPlan** — the agent's `todowrite` list rendered in place with "N of
+  M", a segmented bar, and a one-shot flash/pop when an item changes state.
+  Collapsed, it shows the current item. `sticky` pins it under the header.
+- **ChatThread** — a subagent's conversation nested in its parent's, with a
+  role-coloured rail, collapsible, depth-aware.
+- **ChatComposer** — answer (blocked on a question, with one-click options)
+  vs steer (interrupts a running turn) vs prompt, visibly different.
+- **Markdown** — untrusted Markdown to React from a typed AST; streaming-safe;
+  `message` and `document` variants; ```` ```diff ```` hands off to `DiffView`.
+  `parseMarkdown` / `safeUrl` are exported for consumers that need the AST.
+
 ## What is deliberately not here
 
+- A Markdown *parser dependency*. The hand-rolled one in `src/util/markdown.ts`
+  covers what agents write (headings, lists incl. tasks, fences, quotes, pipe
+  tables, links, emphasis) and nothing that would need an HTML path (raw
+  HTML, footnotes, reference links, setext headings, indented code). If a
+  consumer needs more, it should still emit an AST, not HTML.
+- Syntax highlighting in code blocks. It would need a grammar dependency and
+  a second colour system; the mono type and the fence language label carry
+  enough for a transcript. Revisit for the document variant.
 - Charts. When they arrive, series colours must come from a validated
   categorical palette, not the tones or role colours. The tokens module
   exports the raw OKLCH helpers for that.
