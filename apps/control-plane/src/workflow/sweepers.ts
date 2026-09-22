@@ -14,7 +14,7 @@
 import { withOrg, withSystemScope, type SweeperName } from "../db/client.ts";
 import { appendInScope } from "../events/ledger.ts";
 import { eventBus } from "../events/bus.ts";
-import { EventTypes, newId } from "@dude/domain";
+import { EventTypes } from "@dude/domain";
 
 export interface SweeperOptions {
   /** How often the loop runs when it finds nothing to do. */
@@ -299,7 +299,3 @@ export class Sweeper {
   }
 }
 
-/** Placeholder id generator so outbox entries are traceable in logs. */
-export function outboxEntryId(): string {
-  return newId("event").replace("evt_", "obx_");
-}

@@ -295,9 +295,7 @@ func (d *daemon) executeRun(ctx context.Context, r client.Run) error {
 			"durationMs": time.Since(started).Milliseconds(),
 		},
 	}}
-	if err := d.api.SendEvents(ctx, events); err != nil {
-		log.Warn("event ingest failed", "error", err)
-	}
+	d.sendEvents(ctx, log, events)
 
 	// An untrusted repository gets no network at all (plan §47).
 	network := protocol.NetworkBridge
@@ -347,11 +345,7 @@ func (d *daemon) executeRun(ctx context.Context, r client.Run) error {
 	// outlives it, but reading the diff here keeps the Run's record complete
 	// even if the workspace is later reaped.
 	changes := d.collectChanges(ctx, r, created.ContainerID, materialized, log)
-	if len(changes) > 0 {
-		if err := d.api.SendEvents(ctx, changes); err != nil {
-			log.Warn("change event ingest failed", "error", err)
-		}
-	}
+	d.sendEvents(ctx, log, changes)
 
 	// Tear the runtime down *before* reporting the Run terminal.
 	//
@@ -476,7 +470,7 @@ func (d *daemon) runAgent(
 
 	// Work in the first repository. Multi-repo Runs (plan §14) will need the
 	// orchestrator to choose, but the workspace root is never a git repo.
-	workDir := dockerruntime.ContainerWorkspacePath + "/" + workspace.DirRepos + "/" + repos[0].Name
+	workDir := repoDir(repos[0].Name)
 
 	prompt := r.Prompt
 	if prompt == "" {
@@ -511,9 +505,7 @@ func (d *daemon) runAgent(
 		if len(pending) == 0 {
 			return
 		}
-		if err := d.api.SendEvents(ctx, pending); err != nil {
-			log.Warn("event ingest failed", "error", err, "dropped", len(pending))
-		}
+		d.sendEvents(ctx, log, pending)
 		pending = nil
 	}
 
@@ -594,32 +586,13 @@ func (d *daemon) collectChanges(
 	var events []client.Event
 
 	for _, repo := range repos {
-		dir := dockerruntime.ContainerWorkspacePath + "/" + workspace.DirRepos + "/" + repo.Name
-
-		head := d.execCapture(ctx, containerID, dir, "git rev-parse HEAD")
-		status := d.execCapture(ctx, containerID, dir, "git status --porcelain")
-		diffstat := d.execCapture(ctx, containerID, dir, "git diff --stat HEAD")
-
-		// New commits since the workspace was materialized.
-		commits := ""
-		if head != "" && head != repo.HeadSHA {
-			commits = d.execCapture(ctx, containerID, dir,
-				fmt.Sprintf("git log --oneline %s..HEAD", repo.HeadSHA))
-		}
-
-		if commits == "" && status == "" && diffstat == "" {
+		changes := d.inspectRepo(ctx, containerID, repo)
+		if changes == nil {
 			continue
 		}
 
-		// Count lines, not separators: a single commit has no trailing
-		// newline once trimmed, so counting "\n" reports zero for it.
-		commitCount := 0
-		if commits != "" {
-			commitCount = len(strings.Split(commits, "\n"))
-		}
-
 		log.Info("repository changed", "repo", repo.Name,
-			"commits", commitCount, "dirty", status != "")
+			"commits", len(changes.commits), "dirty", changes.uncommitted != "")
 
 		events = append(events, client.Event{
 			EventType: protocol.EventGitCommitCreated,
@@ -633,30 +606,112 @@ func (d *daemon) collectChanges(
 			Payload: map[string]any{
 				"repo":        repo.Name,
 				"baseSha":     repo.HeadSHA,
-				"headSha":     head,
-				"commits":     commits,
-				"diffstat":    diffstat,
-				"uncommitted": status,
+				"headSha":     changes.head,
+				"commits":     strings.Join(changes.commits, "\n"),
+				"diffstat":    changes.diffstat,
+				"uncommitted": changes.uncommitted,
 			},
 		})
 	}
 	return events
 }
 
-// execCapture runs a shell command in the container and returns trimmed
-// stdout, or "" if it fails — this is diagnostic collection, not control flow.
-func (d *daemon) execCapture(ctx context.Context, containerID, dir, command string) string {
+// repoChanges is what one repository looked like after the agent finished.
+type repoChanges struct {
+	head        string
+	commits     []string
+	diffstat    string
+	uncommitted string
+}
+
+// Separates the sections of the combined git output below. Chosen to be
+// something git will never emit on its own.
+const gitSectionSeparator = "---dude-section---"
+
+/*
+inspectRepo reads a repository's post-run state in a single container exec.
+
+One exec rather than four: each is a full Docker exec-create, attach, demux
+and inspect cycle, and they sit on the critical path between "the agent
+finished" and "the Run is reported terminal". Four round trips per repository
+is latency paid on every Run for information that one shell invocation can
+gather at once.
+
+Returns nil when the repository is unchanged, or when the commands fail —
+this is diagnostic collection, not control flow, and a Run must not fail
+because its summary could not be read.
+*/
+func (d *daemon) inspectRepo(
+	ctx context.Context,
+	containerID string,
+	repo workspace.MaterializedRepo,
+) *repoChanges {
+	dir := repoDir(repo.Name)
+
+	script := strings.Join([]string{
+		"git rev-parse HEAD 2>/dev/null || true",
+		"echo " + gitSectionSeparator,
+		"git status --porcelain 2>/dev/null || true",
+		"echo " + gitSectionSeparator,
+		"git diff --stat HEAD 2>/dev/null || true",
+		"echo " + gitSectionSeparator,
+		// Empty when HEAD has not moved, which is the common case.
+		fmt.Sprintf("git log --oneline %s..HEAD 2>/dev/null || true", repo.HeadSHA),
+	}, "\n")
+
 	var out strings.Builder
 	_, err := d.docker.ExecStream(ctx, containerID,
-		[]string{"sh", "-c", fmt.Sprintf("cd %q && %s", dir, command)}, nil,
+		[]string{"sh", "-c", fmt.Sprintf("cd %q && { %s\n }", dir, script)}, nil,
 		func(line string) {
 			out.WriteString(line)
 			out.WriteByte('\n')
 		})
 	if err != nil {
-		return ""
+		return nil
 	}
-	return strings.TrimSpace(out.String())
+
+	sections := strings.Split(out.String(), gitSectionSeparator)
+	section := func(i int) string {
+		if i >= len(sections) {
+			return ""
+		}
+		return strings.TrimSpace(sections[i])
+	}
+
+	changes := &repoChanges{
+		head:        section(0),
+		uncommitted: section(1),
+		diffstat:    section(2),
+	}
+	if log := section(3); log != "" {
+		changes.commits = strings.Split(log, "\n")
+	}
+
+	if len(changes.commits) == 0 && changes.uncommitted == "" && changes.diffstat == "" {
+		return nil
+	}
+	return changes
+}
+
+/*
+sendEvents ships execution-plane events to the ledger.
+
+A dropped event is not worth failing a Run over — the Run's own status still
+records the outcome — but it must be visible, so every failure is logged with
+how many were lost rather than swallowed.
+*/
+func (d *daemon) sendEvents(ctx context.Context, log *slog.Logger, events []client.Event) {
+	if len(events) == 0 {
+		return
+	}
+	if err := d.api.SendEvents(ctx, events); err != nil {
+		log.Warn("event ingest failed", "error", err, "dropped", len(events))
+	}
+}
+
+// repoDir is where a materialized repository appears inside the container.
+func repoDir(name string) string {
+	return dockerruntime.ContainerWorkspacePath + "/" + workspace.DirRepos + "/" + name
 }
 
 // tail returns the last n characters, for error messages that must stay
@@ -690,7 +745,7 @@ func (d *daemon) runFakeAgent(
 ) error {
 	log.Info("fake agent starting", "repo", repo.Name)
 
-	dir := dockerruntime.ContainerWorkspacePath + "/" + workspace.DirRepos + "/" + repo.Name
+	dir := repoDir(repo.Name)
 	script := strings.Join([]string{
 		"set -e",
 		// Content includes the Run id so concurrent Runs produce distinct
@@ -712,7 +767,7 @@ func (d *daemon) runFakeAgent(
 	}
 
 	events := []client.Event{{
-		EventType:  "agent.message",
+		EventType:  protocol.EventAgentMessage,
 		RunID:      r.ID,
 		ProjectID:  r.ProjectID,
 		WorkItemID: r.WorkItemID,
@@ -720,9 +775,7 @@ func (d *daemon) runFakeAgent(
 		ActorID:    r.ID,
 		Payload:    map[string]any{"text": "fake agent wrote FACTORY.md", "fake": true},
 	}}
-	if err := d.api.SendEvents(ctx, events); err != nil {
-		log.Warn("event ingest failed", "error", err)
-	}
+	d.sendEvents(ctx, log, events)
 
 	log.Info("fake agent finished")
 	return nil

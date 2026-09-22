@@ -41,7 +41,7 @@ trap cleanup EXIT INT TERM
 # -- prerequisites ----------------------------------------------------------
 
 say "checking prerequisites"
-for tool in bun go docker git; do
+for tool in bun go docker git python3; do
   command -v "$tool" >/dev/null || { echo "missing: $tool" >&2; exit 1; }
 done
 docker info >/dev/null 2>&1 || { echo "docker daemon is not reachable" >&2; exit 1; }
