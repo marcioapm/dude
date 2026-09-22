@@ -34,6 +34,8 @@ const ORG_A = `org_sw_a_${Bun.randomUUIDv7("hex").slice(0, 8)}`;
 const ORG_B = `org_sw_b_${Bun.randomUUIDv7("hex").slice(0, 8)}`;
 
 let owner: SQL;
+/** This file's pool, so closing it cannot sever another file's. */
+let app: SQL;
 
 /** Seed a project and work item so runs have something to belong to. */
 async function seedProject(organizationId: string): Promise<{ projectId: string; workItemId: string }> {
@@ -75,11 +77,12 @@ beforeAll(async () => {
     await owner`INSERT INTO organizations (id, name, slug) VALUES (${id}, ${id}, ${id})
                 ON CONFLICT (id) DO NOTHING`;
   }
-  setPool(new SQL(APP_URL));
+  app = new SQL(APP_URL);
+  setPool(app);
 });
 
 afterAll(async () => {
-  await closePool();
+  await closePool(app);
   await owner`DELETE FROM organizations WHERE id IN (${ORG_A}, ${ORG_B})`;
   await owner.end();
 });

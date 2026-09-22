@@ -48,7 +48,18 @@ async function listEvents({ url, principal }: RequestContext): Promise<Response>
  */
 function streamEvents({ url, principal, request }: RequestContext): Response {
   const filter = { organizationId: principal.organizationId, ...filtersFrom(url) };
-  const after = intParam(url, "after", { min: 0 });
+  /*
+   * `after` is explicit; `Last-Event-ID` is what the browser sends by itself.
+   *
+   * Every frame carries `id: <cursor>`, and the sole purpose of that field is
+   * for EventSource to echo the last one back on its own reconnect. Honouring
+   * it means the native reconnect resumes exactly, so a client needs no
+   * backoff timer, no retained cursor and no dedupe of its own.
+   */
+  const resume = Number(request.headers.get("last-event-id"));
+  const after =
+    intParam(url, "after", { min: 0 }) ??
+    (Number.isSafeInteger(resume) && resume > 0 ? resume : undefined);
 
   let unsubscribe: (() => void) | undefined;
   let heartbeat: ReturnType<typeof setInterval> | undefined;

@@ -128,7 +128,7 @@ export function ChatThread({
           )}
           {isCollapsed && turnCount !== undefined ? <span className={styles["turns"]}>{turnCount} turns</span> : null}
           {costUsd !== undefined ? <CostDisplay usd={costUsd} tone="muted" /> : null}
-          {startedAt !== undefined ? <Duration since={startedAt} until={endedAt ?? (live ? null : undefined)} tone="muted" /> : null}
+          {startedAt !== undefined ? <Duration since={startedAt} until={endedAt} live={live} tone="muted" /> : null}
           {onOpen ? (
             <button
               type="button"

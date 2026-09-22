@@ -20,7 +20,7 @@ import {
 } from "@dude/design-system/components";
 import { Button, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
 import { EventTypes, TERMINAL_RUN_STATUSES } from "@dude/domain";
-import type { PersistedEvent, RunStatus, SessionStatus } from "@dude/domain";
+import type { PersistedEvent } from "@dude/domain";
 import type { ApiClient, RunDetail } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
 import { apply, emptyProjection, snapshot, type Turn } from "../api/conversation.ts";
@@ -94,8 +94,8 @@ export function RunScreen({ client, runId, title, onBack }: RunScreenProps) {
       projection.current = emptyProjection();
       projectedRun.current = runId;
     }
-    return snapshot(apply(projection.current, events));
-  }, [events, runId]);
+    return snapshot(apply(projection.current, events), run?.status);
+  }, [events, runId, run?.status]);
   const isLive = run ? !TERMINAL_RUN_STATUSES.includes(run.status) : false;
 
   /** Run an intervention, surfacing conflicts as readable text. */
@@ -133,7 +133,7 @@ export function RunScreen({ client, runId, title, onBack }: RunScreenProps) {
   const session = {
     id: run.id,
     role: "orchestrator" as const,
-    status: SESSION_STATUS_FOR_RUN[run.status],
+    status: run.status,
     // The id is already shown beside the title; repeating it as the title
     // leaves the header saying nothing about the work.
     title: title ? `${title} · attempt ${run.attempt}` : `Attempt ${run.attempt}`,
@@ -286,26 +286,6 @@ function renderTurn(turn: Turn) {
       );
   }
 }
-
-/**
- * A Run status as the transcript header's session vocabulary.
- *
- * A Record rather than a switch: the transcript takes a SessionStatus, and
- * keying on the domain union means a new Run status is a compile error here
- * rather than a row that quietly reads "pending".
- */
-const SESSION_STATUS_FOR_RUN: Record<RunStatus, SessionStatus> = {
-  pending: "pending",
-  scheduled: "pending",
-  starting: "running",
-  running: "running",
-  // No session vocabulary for "paused"; awaiting_input is the closest —
-  // both mean the agent has stopped and is waiting on a person.
-  paused: "awaiting_input",
-  completed: "completed",
-  failed: "failed",
-  aborted: "aborted",
-};
 
 /** One line describing an event, for the debugging timeline. */
 function summarize(event: PersistedEvent): string {

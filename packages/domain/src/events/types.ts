@@ -66,6 +66,15 @@ export const EventTypes = {
   ModelRequestStarted: "agent.model.request.started",
   ModelRequestCompleted: "agent.model.request.completed",
   AgentMessage: "agent.message",
+  /**
+   * The agent rewrote its plan. Payload: `{ todos: [{ content, status }] }`.
+   *
+   * A semantic milestone rather than a tool call, so a reader does not have
+   * to know that OpenCode spells it `todowrite` and the next harness spells
+   * it something else. Each event carries the whole list; the agent rewrites
+   * it wholesale.
+   */
+  PlanUpdated: "agent.plan.updated",
 
   // Human interaction
   QuestionAsked: "question.asked",

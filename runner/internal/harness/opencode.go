@@ -157,6 +157,30 @@ func normalizeLine(line string) (Event, bool) {
 		 */
 		state, _ := part["state"].(map[string]any)
 		status, _ := state["status"].(string)
+		tool, _ := part["tool"].(string)
+
+		/*
+		 * The plan is a milestone, not a tool call. The agent rewrites the
+		 * whole list each time, so rendering every call would bury the work
+		 * under near-identical lists — and naming the tool is this layer's
+		 * job, so a reader never has to know a harness spells it `todowrite`.
+		 *
+		 * The call and its completion carry the same list; only the
+		 * completion is forwarded, so the plan is not published twice.
+		 */
+		if isPlanTool(tool) {
+			if status != "completed" {
+				return Event{}, false
+			}
+			todos, ok := planTodos(state["input"])
+			if !ok {
+				return Event{}, false
+			}
+			return Event{Type: protocol.EventAgentPlanUpdated, Payload: map[string]any{
+				"todos":     todos,
+				"sessionId": raw.SessionID,
+			}}, true
+		}
 
 		payload := map[string]any{
 			"tool":      part["tool"],
@@ -212,6 +236,30 @@ func normalizeLine(line string) (Event, bool) {
 		// step_start and anything new: not a milestone on its own.
 		return Event{}, false
 	}
+}
+
+// isPlanTool reports whether a tool name is a harness's todo-list writer.
+//
+// Names vary between harnesses and between versions of one, so this matches
+// a small set rather than a single literal; `planTodos` then checks that the
+// payload really is a list, which is the property that matters.
+func isPlanTool(tool string) bool {
+	switch strings.ToLower(strings.ReplaceAll(tool, "_", "")) {
+	case "todowrite", "updateplan", "todo":
+		return true
+	default:
+		return false
+	}
+}
+
+// planTodos extracts the todo list from a plan tool's input.
+func planTodos(input any) ([]any, bool) {
+	obj, ok := input.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	todos, ok := obj["todos"].([]any)
+	return todos, ok
 }
 
 // shellJoin quotes arguments for `sh -c`.
