@@ -115,7 +115,8 @@ export type SweeperName =
   | "workflow-poller"
   | "outbox-dispatcher"
   | "run-lease-reaper"
-  | "worker-liveness-reaper";
+  | "worker-liveness-reaper"
+  | "phase-notifier";
 
 export async function withSystemScope<T>(
   sweeper: SweeperName,

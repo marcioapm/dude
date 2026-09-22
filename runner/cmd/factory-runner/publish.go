@@ -1,11 +1,18 @@
 // Publishing a Run's work: push the branch so a pull request can be opened.
 //
-// The push happens on the host, not inside the Run container, for two
-// reasons. The container is network-isolated for untrusted repositories, so
-// it could not reach the forge even if we wanted it to; and the credential
-// must never enter a filesystem the agent can read. The workspace is a
-// host directory the container has mounted, so the host can see the same
-// commits the agent just made.
+// The push happens on the host rather than inside the Run container, because
+// the credential must not enter a filesystem the agent can read. A normal Run
+// container does have network — the agent has to reach the model — so this is
+// about reach, not connectivity: a token written into the workspace, or into
+// the clone's .git/config, is a token the agent can exfiltrate, and the
+// workspace outlives the Run.
+//
+// It also means one path serves both trust classes. An `untrusted_external`
+// repository's container gets no network at all (plan §47), so it could not
+// push even if we handed it the credential.
+//
+// The workspace is a host directory the container mounts, so the host sees
+// the same commits the agent just made.
 //
 // The credential is fetched per push and discarded, so a node whose lease
 // expired cannot write to the repository (plan §61).
