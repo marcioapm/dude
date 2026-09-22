@@ -71,8 +71,19 @@ func (d *daemon) publish(
 			continue
 		}
 
+		/*
+		 * What the branch should currently point at. A phase that started
+		 * from a base ref built on it, so that is what it may replace; an
+		 * implement phase starts from the default branch and is creating the
+		 * work item's branch, so it expects nothing there.
+		 */
+		expected := ""
+		if r.BaseRef != "" {
+			expected = r.BaseRef
+		}
+
 		pushCtx, cancel := context.WithTimeout(ctx, pushTimeout)
-		err := pushBranch(pushCtx, repo.Path, repo.URL, credential, credential.Branch)
+		err := pushBranch(pushCtx, repo.Path, repo.URL, credential, credential.Branch, expected)
 		cancel()
 
 		if err != nil {
@@ -95,18 +106,38 @@ repository's config or a credential helper, so nothing on disk holds it after
 this returns — the workspace outlives the Run, and a token left in
 `.git/config` would outlive it too.
 
-`--force-with-lease` rather than `--force`: a retried Run should be able to
-replace its own earlier attempt, but must not silently discard a commit
-someone else pushed to the same branch.
+The lease is explicit: overwrite the branch only if it still points at
+`expected`, the commit this phase was materialized at. That is the precise
+statement a phase can make — "replace only what I started from" — and it is
+what stops a phase silently discarding a commit someone else pushed while it
+ran.
+
+Explicit rather than the bare `--force-with-lease`, which cannot work here:
+without an expectation git reads the remote-tracking ref for the remote it is
+pushing to, and a push to a URL rather than a named remote has no tracking
+refs at all. It refuses with "stale info" every time — which is exactly what
+the first phase-after-implement reported.
+
+An empty `expected` means this is the first push of the branch, so the lease
+is that the branch must not exist yet.
 */
-func pushBranch(ctx context.Context, repoPath, remoteURL string, cred *client.PushCredential, branch string) error {
+func pushBranch(
+	ctx context.Context,
+	repoPath, remoteURL string,
+	cred *client.PushCredential,
+	branch, expected string,
+) error {
 	authenticated, err := withCredential(remoteURL, cred)
 	if err != nil {
 		return err
 	}
 
-	cmd := exec.CommandContext(ctx, "git", "push", "--force-with-lease",
-		authenticated, "HEAD:refs/heads/"+branch)
+	ref := "refs/heads/" + branch
+	// `<ref>:` with nothing after the colon is git's spelling of "must not
+	// exist": the lease for a branch this Run is creating.
+	lease := "--force-with-lease=" + ref + ":" + expected
+
+	cmd := exec.CommandContext(ctx, "git", "push", lease, authenticated, "HEAD:"+ref)
 	cmd.Dir = repoPath
 	// Never prompt: a push that needs input would hang until the lease died.
 	cmd.Env = append(cmd.Environ(), "GIT_TERMINAL_PROMPT=0")
@@ -123,7 +154,7 @@ func pushBranch(ctx context.Context, repoPath, remoteURL string, cred *client.Pu
 // An ssh remote is returned unchanged: it authenticates with a key the node
 // already has, and there is nothing to inject.
 func withCredential(remoteURL string, cred *client.PushCredential) (string, error) {
-	if !strings.HasPrefix(remoteURL, "https://") {
+	if !strings.HasPrefix(remoteURL, "https://") || cred.Token == "" {
 		return remoteURL, nil
 	}
 	rest := strings.TrimPrefix(remoteURL, "https://")

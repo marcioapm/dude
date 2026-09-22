@@ -47,6 +47,7 @@ def main() -> None:
     print(f"run id:        {env.run_id}")
     print(f"database:      {env.db_name}")
     print(f"control plane: {env.control_plane_url}")
+    print(f"logs:          {env.log_dir}")
 
     exit_code = 1
     try:
@@ -61,6 +62,10 @@ def main() -> None:
         os.environ["DUDE_TEST_RUN_ID"] = env.run_id
         os.environ["DUDE_TEST_CONTROL_PLANE_PORT"] = str(env.control_plane_port)
         os.environ["DUDE_TEST_GALLERY_PORT"] = str(env.gallery_port)
+        # So the runner the pytest process starts logs beside the control
+        # plane's, rather than into a directory named for a run id the
+        # subprocess would otherwise mint for itself.
+        os.environ["DUDE_TEST_LOG_DIR"] = str(env.log_dir)
 
         skip_marks = []
         if args.no_runner:

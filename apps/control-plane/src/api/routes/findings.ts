@@ -79,6 +79,43 @@ async function reportFindings(ctx: RequestContext): Promise<Response> {
     // must not double a review's findings.
     await scope.sql`DELETE FROM review_findings WHERE run_id = ${runId}`;
 
+    /*
+     * A re-review resolves what an earlier review of the same kind raised.
+     *
+     * This is what lets the loop converge. Without it a finding from the
+     * first review stays open forever — a clean second review reports
+     * nothing, and "nothing" cannot close a row it never mentions — so the
+     * loop can only ever end at its policy bound, having proved only that
+     * the bound works.
+     *
+     * Scoped to the same category: a security re-review saying nothing is
+     * not evidence that a correctness finding was fixed. And only findings a
+     * fix Run has already attempted, because a finding the fixer has not
+     * touched yet was not resolved by anything — the re-review simply did
+     * not raise it again, which a flaky reviewer does all the time.
+     *
+     * Findings this review raises *again* are inserted fresh below, so a
+     * problem that survived the fix reappears as open rather than being
+     * quietly closed here.
+     */
+    const categories = [...new Set(input.findings.map((f) => f.category))];
+    const reviewCategory = await categoryOfReview(scope, runId);
+    const covered = reviewCategory ? [reviewCategory, ...categories] : categories;
+
+    if (covered.length > 0 && run.phase === "review") {
+      await scope.sql`
+        UPDATE review_findings SET
+          status = 'resolved',
+          resolved_by_run_id = ${runId},
+          resolution_note = 'not raised again by a re-review after a fix',
+          updated_at = now()
+        WHERE work_item_id = ${run.work_item_id}
+          AND run_id <> ${runId}
+          AND status = 'open'
+          AND fix_attempts > 0
+          AND category IN ${scope.sql(covered)}`;
+    }
+
     const rows: Array<Record<string, unknown>> = [];
     for (const finding of input.findings) {
       const inserted = (await scope.sql`
@@ -191,6 +228,24 @@ async function resolveFinding(ctx: RequestContext): Promise<Response> {
   if ("missing" in result) throw notFound(`finding ${id} not found`);
   eventBus.publish(result.event);
   return json(result.finding);
+}
+
+/**
+ * The category a review Run was created to look at.
+ *
+ * Read from the ledger because it is recorded on the Run's creation event,
+ * not as a column: a review Run is one category's pass, and the workflow
+ * decided which when it fanned out.
+ */
+async function categoryOfReview(
+  scope: { sql: import("../../db/client.ts").OrgScope["sql"] },
+  runId: string,
+): Promise<string | null> {
+  const rows = (await scope.sql`
+    SELECT payload->>'category' AS category FROM events
+    WHERE run_id = ${runId} AND event_type = ${EventTypes.RunCreated}
+    ORDER BY cursor LIMIT 1`) as Array<{ category: string | null }>;
+  return rows[0]?.category ?? null;
 }
 
 function countBy<T>(items: readonly T[], key: (item: T) => string): Record<string, number> {

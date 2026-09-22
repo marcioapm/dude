@@ -111,7 +111,9 @@ type Worker struct {
 // (plan §61). The agent never sees this at all.
 type PushCredential struct {
 	Username string `json:"username"`
-	Token    string `json:"token"`
+	// Empty when the organization has no forge credential, which is normal
+	// for a local-path or ssh remote.
+	Token string `json:"token"`
 	// The branch this Run publishes to, derived by the control plane so both
 	// sides agree on it across a restart.
 	Branch string `json:"branch"`

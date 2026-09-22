@@ -24,7 +24,7 @@ import { withOrg } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { eventBus } from "../../events/bus.ts";
 import { badRequest, conflict, json, notFound, parseBody } from "../http.ts";
-import { ForgeError, forgeFor, loadCredential, slugFromUrl } from "../../forge/github.ts";
+import { ForgeError, forgeFor, slugFromUrl } from "../../forge/github.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 const PR_SELECT = `
@@ -80,18 +80,27 @@ async function getPushCredential(ctx: RequestContext): Promise<Response> {
 
   if (!run) throw notFound(`run ${runId} is not leased`);
 
-  const credential = await loadCredential(organizationId);
-  if (!credential) throw badRequest("no git forge credential is configured for this organization");
+  const branch = branchForRun(run.work_item_id, run.attempt);
 
+  /*
+   * No credential is not an error. A local-path or ssh remote needs none —
+   * the local provisioner and the test suite both use them — and refusing
+   * here stranded every phase after the first: the implementer's commit
+   * never reached the remote, so the next phase could not check it out.
+   *
+   * If the remote does need one, the push fails with the forge's own auth
+   * error and that lands in the ledger as a failed push, which is a more
+   * honest report than refusing before anything was tried.
+   */
   const forge = await forgeFor(organizationId);
-  const token = await forge!.pushToken();
+  const token = forge ? await forge.pushToken() : null;
 
   return json({
     // A git credential helper wants both halves; `x-access-token` is what
     // GitHub expects as the username when the password is a token.
     username: "x-access-token",
     token,
-    branch: branchForRun(run.work_item_id, run.attempt),
+    branch,
   });
 }
 

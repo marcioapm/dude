@@ -45,7 +45,10 @@ about than one that accepts all of YAML and then has to reject most of it.
 func parseFindings(output string) []client.Finding {
 	cleaned := fenceLine.ReplaceAllString(output, "")
 
-	var findings []client.Finding
+	// Non-nil, so a review that found nothing encodes as `[]` rather than
+	// `null`. A nil slice would be rejected by the control plane, which is
+	// the common case — most reviews find nothing.
+	findings := []client.Finding{}
 	for _, doc := range strings.Split(cleaned, "\n---") {
 		if f, ok := parseFinding(doc); ok {
 			findings = append(findings, f)

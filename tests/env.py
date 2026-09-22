@@ -57,6 +57,11 @@ class TestEnvironment:
 
     def __post_init__(self) -> None:
         self.db_name = f"dude_test_{self.run_id}"
+        # Logs from the processes the suite starts. Kept rather than discarded:
+        # a failure in the runner is otherwise invisible from the test, which
+        # only sees that a Run never reached the state it waited for.
+        self.log_dir = Path(os.environ.get("DUDE_TEST_LOG_DIR", f"/tmp/dude-e2e-{self.run_id}"))
+        self.log_dir.mkdir(parents=True, exist_ok=True)
         self.control_plane_url = f"http://localhost:{self.control_plane_port}"
         self.gallery_url = f"http://127.0.0.1:{self.gallery_port}"
         self.workspace_root = f"/tmp/dude-e2e-{self.run_id}"
@@ -117,8 +122,8 @@ class TestEnvironment:
                 "DATABASE_URL": self.app_dsn,
                 "PORT": str(self.control_plane_port),
             },
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=self._log("control-plane"),
+            stderr=subprocess.STDOUT,
         )
 
     def start_gallery(self) -> str:
@@ -162,9 +167,13 @@ class TestEnvironment:
                 "DUDE_CONTROL_PLANE": self.control_plane_url,
                 "DUDE_RUNNER_KEY": api_key,
             },
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=self._log("runner"),
+            stderr=subprocess.STDOUT,
         )
+
+    def _log(self, name: str):
+        """An append-mode log file for one of the suite's processes."""
+        return open(self.log_dir / f"{name}.log", "ab")
 
     def wait_healthy(self, timeout: float = 30.0) -> bool:
         deadline = time.time() + timeout
@@ -240,6 +249,10 @@ class TestEnvironment:
         env.control_plane_url = f"http://localhost:{env.control_plane_port}"
         env.gallery_url = f"http://127.0.0.1:{env.gallery_port}"
         env.workspace_root = f"/tmp/dude-e2e-{env.run_id}"
+        # The parent's log directory, so the runner started here logs beside
+        # the control plane rather than somewhere nobody will look.
+        env.log_dir = Path(os.environ.get("DUDE_TEST_LOG_DIR", env.workspace_root))
+        env.log_dir.mkdir(parents=True, exist_ok=True)
         env.control_plane_proc = None
         env.runner_proc = None
         env.gallery_proc = None
