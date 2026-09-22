@@ -38,3 +38,7 @@ export { NavTree, NavTreeRow } from "./NavTree.tsx";
 export type { NavTreeProps, NavTreeRowProps } from "./NavTree.tsx";
 export { Sidebar, AttentionList } from "./Sidebar.tsx";
 export type { SidebarProps, AttentionListProps } from "./Sidebar.tsx";
+export { RoleStack } from "./RoleStack.tsx";
+export type { RoleStackProps } from "./RoleStack.tsx";
+export { Board } from "./Board.tsx";
+export type { BoardProps } from "./Board.tsx";

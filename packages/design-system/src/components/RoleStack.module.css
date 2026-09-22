@@ -1,0 +1,10 @@
+.root {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.more {
+  font-size: var(--ds-text-2xs);
+  color: var(--ds-color-text-muted);
+}

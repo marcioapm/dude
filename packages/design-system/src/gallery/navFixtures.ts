@@ -34,10 +34,32 @@ function crew(id: string, extra?: NavSession[]): NavSession[] {
   ];
 }
 
+const NOW = Date.now();
+const HOUR = 3_600_000;
+
+/** Plausible time-in-status by stage, in hours; the spread comes from the id. */
+const AGE_HOURS: Record<WorkItemStatus, number> = {
+  received: 30,
+  intake: 3,
+  awaiting_confirmation: 5,
+  queued: 20,
+  running: 4,
+  awaiting_input: 2,
+  review: 26,
+  ready_to_merge: 9,
+  done: 160,
+  failed: 40,
+  aborted: 90,
+};
+const SPENDS: ReadonlySet<WorkItemStatus> = new Set(["intake", "awaiting_confirmation", "running", "awaiting_input", "review", "ready_to_merge", "done", "failed", "aborted"]);
+
 let n = 2400;
 function wi(title: string, status: WorkItemStatus, opts: { people?: Person[]; sessions?: NavSession[]; runs?: number } = {}): NavWorkItem {
   n += 1;
   const id = `wi_${n}`;
+  const spread = ((n * 37) % 17) / 17 + 0.15;
+  const statusSince = NOW - AGE_HOURS[status] * spread * HOUR;
+  const costUsd = SPENDS.has(status) ? (((n * 7919) % 2400) / 100 + 0.4) * (opts.runs ?? 1) : undefined;
   const runs =
     opts.sessions !== undefined
       ? [
@@ -50,7 +72,7 @@ function wi(title: string, status: WorkItemStatus, opts: { people?: Person[]; se
           { id: `${id}-r${opts.runs ?? 1}`, attempt: opts.runs ?? 1, status: status === "failed" ? ("failed" as const) : ("running" as const), sessions: opts.sessions },
         ]
       : undefined;
-  return { id, key: `WI-${n}`, title, status, people: opts.people, runs };
+  return { id, key: `WI-${n}`, title, status, people: opts.people, runs, statusSince, costUsd };
 }
 
 export const navProjects: NavProject[] = [
@@ -220,3 +242,14 @@ export const navProjectsQuiet: NavProject[] = [
     workItems: [wi("Fix broken anchors in the plan", "review", { people: [P["jules"]!] })],
   },
 ];
+
+/** All three projects folded into one: a board whose Closed column overflows its cap. */
+export const navProjectEverything: NavProject = {
+  id: "p_everything",
+  name: "everything",
+  epics: navProjects.flatMap((p) => p.epics ?? []),
+  workItems: navProjects.flatMap((p) => p.workItems ?? []),
+};
+
+/** A project with nothing in it yet. */
+export const navProjectEmpty: NavProject = { id: "p_new", name: "new-service", epics: [], workItems: [] };

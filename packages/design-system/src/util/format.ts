@@ -49,8 +49,12 @@ export function formatTokens(n: number, opts: { readonly exact?: boolean } = {})
 }
 
 export interface DurationOptions {
-  /** `short` = "3m 12s"; `clock` = "03:12"; `long` = "3 min 12 sec". */
-  readonly style?: "short" | "clock" | "long";
+  /**
+   * `short` = "3m 12s"; `clock` = "03:12"; `long` = "3 min 12 sec";
+   * `age` = "3m" / "4h" / "3d" — one coarse unit, for how long something has
+   * sat in a state, where seconds are noise and change would be a distraction.
+   */
+  readonly style?: "short" | "clock" | "long" | "age";
 }
 
 /**
@@ -65,6 +69,12 @@ export function formatDuration(ms: number, opts: DurationOptions = {}): string {
   if (!Number.isFinite(ms) || ms < 0) return "—";
   const style = opts.style ?? "short";
   const s = ms / 1000;
+  if (style === "age") {
+    if (s < 60) return "<1m";
+    if (s < 3600) return `${Math.floor(s / 60)}m`;
+    if (s < 86_400) return `${Math.floor(s / 3600)}h`;
+    return `${Math.floor(s / 86_400)}d`;
+  }
   if (style === "clock") {
     const h = Math.floor(s / 3600);
     const m = Math.floor((s % 3600) / 60);

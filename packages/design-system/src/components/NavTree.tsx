@@ -1,5 +1,4 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type CSSProperties, type HTMLAttributes, type KeyboardEvent, type MouseEvent } from "react";
-import type { AgentRole } from "@dude/domain";
 import { cx } from "../util/cx.ts";
 import { Icon } from "../icons/index.tsx";
 import { statusSpec } from "../tokens/status.ts";
@@ -20,6 +19,7 @@ import {
 } from "../util/navModel.ts";
 import { AgentAvatar, ROLE_LABEL } from "./AgentAvatar.tsx";
 import { HumanAvatarStack } from "./HumanAvatar.tsx";
+import { RoleStack } from "./RoleStack.tsx";
 import { StatusBadge } from "./StatusBadge.tsx";
 import { TriageRollup } from "./TriageRollup.tsx";
 import styles from "./NavTree.module.css";
@@ -278,7 +278,7 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
           </span>
         </span>
         <span className={styles["wiTrailing"]}>
-          {roles.length > 0 ? <RoleStack roles={roles} /> : null}
+          <RoleStack roles={roles} className={styles["roles"]} />
           {wi.people && wi.people.length > 0 ? <HumanAvatarStack people={wi.people} size="xs" max={2} /> : null}
         </span>
       </div>
@@ -310,18 +310,5 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
       </span>
       <StatusBadge status={s.status} variant="dot" iconOnly className={styles["mark"]} />
     </div>
-  );
-}
-
-/** Roles working right now, as xs avatars. Distinct from the human stack: square, glyph, vivid. */
-function RoleStack({ roles }: { readonly roles: ReadonlyArray<AgentRole> }) {
-  const label = roles.map((r) => ROLE_LABEL[r]).join(", ");
-  return (
-    <span className={styles["roles"]} role="group" aria-label={`Working: ${label}`} title={`Working: ${label}`}>
-      {roles.slice(0, 3).map((r) => (
-        <AgentAvatar key={r} role={r} size="xs" aria-hidden />
-      ))}
-      {roles.length > 3 ? <span className={styles["rolesMore"]}>+{roles.length - 3}</span> : null}
-    </span>
   );
 }

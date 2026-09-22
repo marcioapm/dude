@@ -1,0 +1,176 @@
+/**
+ * View model for the board — pure functions, no React.
+ *
+ * The board is the overview for a project or an epic: the same `NavProject`
+ * / `NavEpic` / `NavWorkItem` shapes the sidebar consumes, laid out by
+ * lifecycle stage instead of by hierarchy. The app hands over the nav model
+ * it already built; nothing here fetches.
+ *
+ * Eleven work item statuses would be eleven columns, which is a spreadsheet.
+ * The five columns below are the stages the operator actually watches: is
+ * work waiting to be shaped, waiting for a worker, being worked, waiting to
+ * land, or finished. "Needs you" is deliberately not a column — it is a
+ * condition that can strike at any stage, so it is a card treatment and a
+ * sort order, exactly as it is a row treatment in the tree.
+ *
+ * Keyed on the domain union, so a new status is a compile error here before
+ * it can be a blank column.
+ */
+
+import type { AgentRole, WorkItemStatus } from "@dude/domain";
+import { EMPTY_TRIAGE_COUNTS, TRIAGE_SPECS, addTriage, type TriageCounts, type TriageKind } from "../tokens/triage.ts";
+import { askingSession, currentRun, workItemTriage, type NavEpic, type NavProject, type NavRef, type NavSession, type NavWorkItem } from "./navModel.ts";
+
+export const BOARD_COLUMN_KINDS = ["intake", "queued", "running", "review", "closed"] as const;
+export type BoardColumnKind = (typeof BOARD_COLUMN_KINDS)[number];
+
+export interface BoardColumnSpec {
+  readonly label: string;
+  readonly description: string;
+}
+
+export const BOARD_COLUMN_SPECS: Record<BoardColumnKind, BoardColumnSpec> = {
+  intake: { label: "Intake", description: "Received, being analysed, or waiting for its plan to be confirmed." },
+  queued: { label: "Queued", description: "Plan approved; waiting for a worker." },
+  running: { label: "In progress", description: "A run is active, or blocked on a person mid-run." },
+  review: { label: "Review", description: "A PR is open: under review, or ready to merge." },
+  closed: { label: "Closed", description: "Merged, failed or aborted. Failed items sort first." },
+};
+
+/** Which lane each domain status sits in. */
+export const BOARD_COLUMN_FOR_STATUS: Record<WorkItemStatus, BoardColumnKind> = {
+  received: "intake",
+  intake: "intake",
+  awaiting_confirmation: "intake",
+  queued: "queued",
+  running: "running",
+  awaiting_input: "running",
+  review: "review",
+  ready_to_merge: "review",
+  done: "closed",
+  failed: "closed",
+  aborted: "closed",
+};
+
+export function boardColumnOf(status: WorkItemStatus): BoardColumnKind {
+  return BOARD_COLUMN_FOR_STATUS[status];
+}
+
+export interface BoardCard {
+  readonly workItem: NavWorkItem;
+  /** Null for a work item outside any epic. */
+  readonly epic: NavEpic | null;
+  readonly column: BoardColumnKind;
+  readonly triage: TriageKind;
+  /** The session asking, when the block is at session level. */
+  readonly asking: NavSession | null;
+}
+
+export interface BoardColumn {
+  readonly kind: BoardColumnKind;
+  readonly spec: BoardColumnSpec;
+  /** Most urgent bucket first, then the caller's order. */
+  readonly cards: ReadonlyArray<BoardCard>;
+  readonly counts: TriageCounts;
+  readonly costUsd: number;
+}
+
+function toCard(workItem: NavWorkItem, epic: NavEpic | null): BoardCard {
+  const run = currentRun(workItem);
+  return {
+    workItem,
+    epic,
+    column: boardColumnOf(workItem.status),
+    triage: workItemTriage(workItem),
+    asking: run ? askingSession(run.sessions) : null,
+  };
+}
+
+/**
+ * Every card in scope. With an epic, only its work items; otherwise the
+ * whole project — each epic in order, then the loose work items.
+ */
+export function boardCards(project: NavProject, epic?: NavEpic | null): BoardCard[] {
+  if (epic) return epic.workItems.map((wi) => toCard(wi, epic));
+  const out: BoardCard[] = [];
+  for (const e of project.epics ?? []) for (const wi of e.workItems) out.push(toCard(wi, e));
+  for (const wi of project.workItems ?? []) out.push(toCard(wi, null));
+  return out;
+}
+
+/**
+ * The five columns, always all five and always in order, so the board's
+ * shape never changes with its contents. Within a column, cards sort by
+ * triage rank — needs-you at the top, then active, ready, failed — and are
+ * otherwise left in the caller's order, which is where recency belongs.
+ */
+export function boardColumns(project: NavProject, epic?: NavEpic | null): BoardColumn[] {
+  const byKind: Record<BoardColumnKind, BoardCard[]> = { intake: [], queued: [], running: [], review: [], closed: [] };
+  for (const c of boardCards(project, epic)) byKind[c.column].push(c);
+  return BOARD_COLUMN_KINDS.map((kind) => {
+    const cards = byKind[kind].sort((a, b) => TRIAGE_SPECS[a.triage].rank - TRIAGE_SPECS[b.triage].rank);
+    let counts = EMPTY_TRIAGE_COUNTS;
+    let costUsd = 0;
+    for (const c of cards) {
+      counts = addTriage(counts, c.triage);
+      costUsd += c.workItem.costUsd ?? 0;
+    }
+    return { kind, spec: BOARD_COLUMN_SPECS[kind], cards, counts, costUsd };
+  });
+}
+
+export function boardCardCount(columns: ReadonlyArray<BoardColumn>): number {
+  return columns.reduce((n, c) => n + c.cards.length, 0);
+}
+
+export function boardCost(columns: ReadonlyArray<BoardColumn>): number {
+  return columns.reduce((n, c) => n + c.costUsd, 0);
+}
+
+export interface LiveActivity {
+  readonly role: AgentRole;
+  readonly activity: string;
+}
+
+/**
+ * What a work item is doing right now: the deepest running session that
+ * says so. Deepest, because the orchestrator's line is usually "waiting for
+ * the implementer" and the implementer's is the one that changes.
+ */
+export function liveActivity(wi: NavWorkItem): LiveActivity | null {
+  const walk = (list: ReadonlyArray<NavSession>): LiveActivity | null => {
+    for (const s of list) {
+      const deeper = walk(s.children ?? []);
+      if (deeper) return deeper;
+      if (s.status === "running" && s.activity) return { role: s.role, activity: s.activity };
+    }
+    return null;
+  };
+  const run = currentRun(wi);
+  return run ? walk(run.sessions) : null;
+}
+
+export interface BoardScope {
+  readonly project: NavProject;
+  readonly epic: NavEpic | null;
+}
+
+/**
+ * The board a sidebar selection opens: a project ref is the project board,
+ * an epic ref is that epic's board. Anything else (a work item, a session)
+ * opens the transcript instead and resolves to null.
+ */
+export function boardScope(projects: ReadonlyArray<NavProject>, ref: NavRef | null | undefined): BoardScope | null {
+  if (!ref) return null;
+  if (ref.kind === "project") {
+    const project = projects.find((p) => p.id === ref.id);
+    return project ? { project, epic: null } : null;
+  }
+  if (ref.kind === "epic") {
+    for (const project of projects) {
+      const epic = (project.epics ?? []).find((e) => e.id === ref.id);
+      if (epic) return { project, epic };
+    }
+  }
+  return null;
+}

@@ -171,15 +171,6 @@
   flex-shrink: 0;
   margin-left: auto;
 }
-.roles {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-}
-.rolesMore {
-  font-size: var(--ds-text-2xs);
-  color: var(--ds-color-text-muted);
-}
 /* In a narrow sidebar the title wins: drop the working-roles stack first,
    then the people. Both remain in the row's title / accessible name. */
 @container (max-width: 240px) {

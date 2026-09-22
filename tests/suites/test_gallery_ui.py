@@ -228,3 +228,40 @@ def test_keyboard_focus_is_visible(gallery_page: Page):
         and found["outlineWidth"] not in ("0px", "")
     ) or found["boxShadow"] not in ("none", "")
     assert has_ring, f"focused control has no visible focus indicator: {found}"
+
+
+def test_board_keeps_needs_you_first_and_is_a_keyboard_grid(gallery_page: Page, console_errors: list):
+    """The board is the overview; two things about it must not regress.
+
+    A needs-you card sorted below a calm one would defeat the board's reason
+    to exist, and a board that is only reachable by mouse fails the operator
+    who lives on the keyboard. Both are checked on the realistic project
+    board, which has a needs-you card in two different lanes.
+    """
+    gallery_page.get_by_role("link", name="Project board (realistic)").click()
+    gallery_page.wait_for_timeout(120)
+
+    board = gallery_page.locator("#board-project").get_by_role("region", name="control-plane board").first
+    board.wait_for(state="visible")
+
+    lanes = board.locator("section[data-column]")
+    assert [lanes.nth(i).get_attribute("data-column") for i in range(lanes.count())] == [
+        "intake", "queued", "running", "review", "closed",
+    ], "the five lanes must always be drawn, in lifecycle order"
+
+    for lane in ("intake", "running"):
+        first = board.locator(f"section[data-column='{lane}'] button[data-board-key]").first
+        assert first.get_attribute("data-triage") == "needs_you", f"{lane}: needs-you card is not first"
+
+    # One tab stop, on the selected card; arrows move focus without changing
+    # selection. The tab stop roves with focus, so read the key first.
+    stops = board.locator("button[data-board-key][tabindex='0']")
+    assert stops.count() == 1
+    start = stops.first.get_attribute("data-board-key")
+    stops.first.focus()
+    gallery_page.keyboard.press("ArrowDown")
+    moved = gallery_page.evaluate("document.activeElement?.getAttribute('data-board-key')")
+    assert moved and moved != start, "ArrowDown did not move focus"
+    assert board.locator("[aria-current='true']").get_attribute("data-board-key") == start, "moving focus must not change selection"
+
+    assert console_errors == [], f"console errors on the board: {console_errors}"

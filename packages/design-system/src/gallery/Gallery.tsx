@@ -11,6 +11,7 @@ import { PrimitivesSection } from "./sections/Primitives.tsx";
 import { ComponentsSection } from "./sections/Components.tsx";
 import { ChatSection } from "./sections/Chat.tsx";
 import { NavigationSection } from "./sections/Navigation.tsx";
+import { BoardSection } from "./sections/Board.tsx";
 
 const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, string]>]> = [
   [
@@ -84,6 +85,16 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["nav-sidebar-states", "Sidebar states"],
     ],
   ],
+  [
+    "Board",
+    [
+      ["board-columns", "Status → lane"],
+      ["board-project", "Project board (realistic)"],
+      ["board-epic", "Epic board"],
+      ["board-composed", "Beside the sidebar"],
+      ["board-states", "Board states"],
+    ],
+  ],
 ];
 
 export function Gallery() {
@@ -154,6 +165,7 @@ function Shell() {
         <ComponentsSection mode={panes} />
         <ChatSection mode={panes} />
         <NavigationSection mode={panes} />
+        <BoardSection mode={panes} />
       </main>
     </div>
   );
