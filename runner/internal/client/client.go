@@ -59,6 +59,38 @@ type Run struct {
 	// Agent role, and the model resolved for it (project -> org -> default).
 	Role  string `json:"role"`
 	Model string `json:"model"`
+
+	// Which step of the delivery workflow this Run is, when it is one.
+	// Empty for a Run created directly through the API, which executes as
+	// an orchestrator against the default branch.
+	Phase string `json:"phase"`
+	// The commit this Run's workspace starts from. Empty means the
+	// repository's default branch.
+	BaseRef string `json:"baseRef"`
+	// Whether the runner pushes what this Run commits. A reviewer gets a
+	// full sandbox and may run anything; it simply does not publish.
+	Publishes bool `json:"publishes"`
+}
+
+// Finding is one problem a reviewer reported.
+type Finding struct {
+	Severity     string `json:"severity"`
+	Category     string `json:"category"`
+	Title        string `json:"title"`
+	Description  string `json:"description,omitempty"`
+	SuggestedFix string `json:"suggestedFix,omitempty"`
+	Repo         string `json:"repo,omitempty"`
+	File         string `json:"file,omitempty"`
+	Line         int    `json:"line,omitempty"`
+}
+
+// ReportFindings submits a review Run's findings.
+//
+// The whole review at once: a partial set would let the control plane act on
+// half a review if this call died midway.
+func (c *Client) ReportFindings(ctx context.Context, runID string, findings []Finding) error {
+	return c.post(ctx, "/v1/runs/"+runID+"/findings",
+		map[string]any{"findings": findings}, nil)
 }
 
 // Worker is this node's registration with the control plane.

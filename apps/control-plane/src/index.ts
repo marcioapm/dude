@@ -11,6 +11,7 @@ import { json } from "./api/http.ts";
 import { registerEventRoutes } from "./api/routes/events.ts";
 import { registerNavigationRoutes } from "./api/routes/navigation.ts";
 import { registerPullRequestRoutes } from "./api/routes/pullRequests.ts";
+import { registerFindingRoutes } from "./api/routes/findings.ts";
 import { registerProjectRoutes } from "./api/routes/projects.ts";
 import { registerWorkRoutes } from "./api/routes/work.ts";
 import { registerRunnerRoutes } from "./api/routes/runner.ts";
@@ -19,6 +20,7 @@ import { closePool, getPool } from "./db/client.ts";
 import { PostgresWorkflowRuntime } from "./workflow/runtime.ts";
 import { deliveryWorkflow } from "./workflow/delivery.workflow.ts";
 import { notifyPhaseFinished } from "./workflow/notify.ts";
+import { setWorkflowRuntime } from "./workflow/registry.ts";
 import { Sweeper, dispatchOutbox, reapExpiredRunLeases, reapLostWorkers } from "./workflow/sweepers.ts";
 
 export function buildRouter(): Router {
@@ -36,6 +38,7 @@ export function buildRouter(): Router {
   registerEventRoutes(router);
   registerNavigationRoutes(router);
   registerPullRequestRoutes(router);
+  registerFindingRoutes(router);
   registerProjectRoutes(router);
   registerWorkRoutes(router);
   registerRunnerRoutes(router);
@@ -56,6 +59,9 @@ export function buildSweepers(options: { log?: typeof console.log } = {}) {
   const log = options.log ?? console.log;
   const workflow = new PostgresWorkflowRuntime();
   workflow.register(deliveryWorkflow);
+  // Routes that start a workflow need this instance, not one of their own:
+  // a second runtime would have its own definitions and nothing ticking it.
+  setWorkflowRuntime(workflow);
 
   const sweepers = [
     /*

@@ -83,7 +83,7 @@ func (d *daemon) executeRun(ctx context.Context, r client.Run) error {
 	}
 
 	started := time.Now()
-	wsPath, materialized, err := d.ws.Create(ctx, r.ProjectID, r.ID, repos)
+	wsPath, materialized, err := d.ws.Create(ctx, r.ProjectID, r.ID, repos, r.BaseRef)
 	if err != nil {
 		return fmt.Errorf("materialize workspace: %w", err)
 	}
@@ -157,7 +157,7 @@ func (d *daemon) executeRun(ctx context.Context, r client.Run) error {
 
 	// Under runCtx, not ctx: cancelling it is how a hard pause or abort
 	// interrupts the turn.
-	agentErr := d.runAgent(runCtx, r, created.ContainerID, materialized, control, log)
+	agentOutput, agentErr := d.runAgent(runCtx, r, created.ContainerID, materialized, control, log)
 
 	// Capture what changed before the container goes away. The workspace
 	// outlives it, but reading the diff here keeps the Run's record complete
@@ -165,10 +165,29 @@ func (d *daemon) executeRun(ctx context.Context, r client.Run) error {
 	changes, moved := d.collectChanges(ctx, r, created.ContainerID, materialized, log)
 	d.sendEvents(ctx, log, changes)
 
-	// Push before teardown, while the lease is certainly still held: the
-	// push credential is scoped to a leased Run, and asking for one after
-	// the lease lapses is a 404.
-	d.sendEvents(ctx, log, d.publish(ctx, r, materialized, moved, log))
+	/*
+	 * Publish, when this phase is one that publishes.
+	 *
+	 * A reviewer gets a full sandbox and may commit locally while it pokes
+	 * at things — that is useful. What it must not do is put those commits
+	 * on the work item's branch, and the cleanest way to guarantee that is
+	 * for the push step not to run at all rather than for a prompt to ask
+	 * the agent nicely.
+	 *
+	 * Before teardown, while the lease is certainly still held: the push
+	 * credential is scoped to a leased Run, and asking for one after the
+	 * lease lapses is a 404.
+	 */
+	if r.Publishes {
+		d.sendEvents(ctx, log, d.publish(ctx, r, materialized, moved, log))
+	} else if len(moved) > 0 {
+		log.Info("phase does not publish; leaving commits local",
+			"phase", r.Phase, "repos", len(moved))
+	}
+
+	// A review or test Run's output is findings, which is what the delivery
+	// workflow loops on.
+	d.reportFindings(ctx, r, agentOutput, log)
 
 	/*
 	 * Tell the control plane whether this workspace could move.
@@ -207,7 +226,10 @@ func (d *daemon) executeRun(ctx context.Context, r client.Run) error {
 	return nil
 }
 
-// runAgent drives the harness for one Run.
+// runAgent drives the harness for one Run, returning what the agent wrote.
+//
+// The output matters beyond logging: a review Run's findings are in it, and
+// parsing them here is what closes the delivery workflow's loop.
 //
 // The task comes from the control plane; the credentials come from this
 // runner's environment and are passed per-exec rather than baked into the
@@ -219,9 +241,9 @@ func (d *daemon) runAgent(
 	repos []workspace.MaterializedRepo,
 	control *runControl,
 	log *slog.Logger,
-) error {
+) (string, error) {
 	if len(repos) == 0 {
-		return fmt.Errorf("no repository materialized for run %s", r.ID)
+		return "", fmt.Errorf("no repository materialized for run %s", r.ID)
 	}
 
 	// Work in the first repository. Multi-repo Runs (plan §14) will need the
@@ -230,7 +252,7 @@ func (d *daemon) runAgent(
 
 	prompt := r.Prompt
 	if prompt == "" {
-		return fmt.Errorf("run %s has no prompt", r.ID)
+		return "", fmt.Errorf("run %s has no prompt", r.ID)
 	}
 
 	// Directives issued before the turn started are appended to the task, so
@@ -250,7 +272,7 @@ func (d *daemon) runAgent(
 
 	model := r.Model
 	if model == "" {
-		return fmt.Errorf("run %s has no model configured", r.ID)
+		return "", fmt.Errorf("run %s has no model configured", r.ID)
 	}
 
 	/*
@@ -264,7 +286,7 @@ func (d *daemon) runAgent(
 	 * configuration that made it.
 	 */
 	if strings.HasPrefix(model, FakeModelPrefix) {
-		return d.runFakeAgent(ctx, r, containerID, repos[0], log)
+		return "", d.runFakeAgent(ctx, r, containerID, repos[0], log)
 	}
 
 	log.Info("agent starting", "model", model, "repo", repos[0].Name)
@@ -308,15 +330,16 @@ func (d *daemon) runAgent(
 	flush()
 
 	if err != nil {
-		return err
+		return result.Output, err
 	}
 	if result.ExitCode != 0 {
 		// The harness output is the only explanation of why; keep the tail.
-		return fmt.Errorf("harness exited %d: %s", result.ExitCode, tail(result.Output, 2000))
+		return result.Output, fmt.Errorf("harness exited %d: %s",
+			result.ExitCode, tail(result.Output, 2000))
 	}
 
 	log.Info("agent finished", "events", len(result.Events))
-	return nil
+	return result.Output, nil
 }
 
 // agentEnv is the credential set handed to a Session.
@@ -429,7 +452,19 @@ func (d *daemon) inspectRepo(
 		"echo " + gitSectionSeparator,
 		"git status --porcelain 2>/dev/null || true",
 		"echo " + gitSectionSeparator,
-		"git diff --stat HEAD 2>/dev/null || true",
+		/*
+		 * Against the ref this Run started from, not against HEAD.
+		 *
+		 * `git diff --stat HEAD` shows only what is uncommitted, which is
+		 * empty for an agent that committed its work — the normal case. The
+		 * result was a diffstat of nothing for every successful Run, and a
+		 * delivery workflow that read that as "the implementer changed
+		 * nothing" and escalated.
+		 *
+		 * The `|| git diff --stat HEAD` fallback covers a Run whose base ref
+		 * is not in this clone, and an agent that left work uncommitted.
+		 */
+		fmt.Sprintf("git diff --stat %s..HEAD 2>/dev/null || git diff --stat HEAD 2>/dev/null || true", repo.HeadSHA),
 		"echo " + gitSectionSeparator,
 		// Empty when HEAD has not moved, which is the common case.
 		fmt.Sprintf("git log --oneline %s..HEAD 2>/dev/null || true", repo.HeadSHA),
