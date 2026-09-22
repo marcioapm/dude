@@ -68,8 +68,16 @@ function streamEvents({ url, principal, request }: RequestContext): Response {
       const send = (event: PersistedEvent) => {
         if (closed || event.cursor <= highWater) return;
         highWater = event.cursor;
+        /*
+         * Deliberately unnamed frames.
+         *
+         * Naming each frame after its event type means `EventSource.onmessage`
+         * never fires — that handler only receives frames without a name — so
+         * a client would have to `addEventListener` for every type in a
+         * vocabulary that grows. The type is already in the payload.
+         */
         controller.enqueue(
-          encoder.encode(`id: ${event.cursor}\nevent: ${event.eventType}\ndata: ${JSON.stringify(event)}\n\n`),
+          encoder.encode(`id: ${event.cursor}\ndata: ${JSON.stringify(event)}\n\n`),
         );
       };
 

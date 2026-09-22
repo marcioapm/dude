@@ -351,7 +351,9 @@ export function normalizeEvent(
       return event(EventTypes.ToolCalled, {
         tool: properties.tool,
         callId: properties.callID,
-        args: properties.args,
+        // `input` matches what the runner's harness emits, so a consumer
+        // reads one field name whichever path produced the event.
+        input: properties.args,
       });
     case "tool.execute.after":
       return event(EventTypes.ToolCompleted, {

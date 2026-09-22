@@ -1,0 +1,90 @@
+/**
+ * Application entry point.
+ *
+ * The API key is read from localStorage rather than baked in. Real auth is a
+ * later concern (plan §53 has the organization model); what matters now is
+ * that the frontend holds a credential it was given, and never a database
+ * connection or a host-specific capability — the app must keep working
+ * unchanged inside the desktop shell (plan §117).
+ */
+
+import { StrictMode, useMemo, useState } from "react";
+import { createRoot } from "react-dom/client";
+import { Button, Input } from "@dude/design-system/primitives";
+
+import "@dude/design-system/tokens.css";
+import "@dude/design-system/base.css";
+import "./app.css";
+
+import { ApiClient } from "./api/client.ts";
+import { App } from "./App.tsx";
+
+const KEY_STORAGE = "dude.apiKey";
+
+function Root() {
+  const [apiKey, setApiKey] = useState(() => localStorage.getItem(KEY_STORAGE) ?? "");
+
+  // Same-origin in the browser (Vite proxies /v1), loopback in the desktop
+  // shell — so no base URL is needed in either.
+  //
+  // Memoized because the client is an effect dependency downstream: a new
+  // instance per render would tear down and re-establish the event stream.
+  // Declared before the early return: hooks must run in the same order on
+  // every render, and signing out changes which branch is taken.
+  const client = useMemo(() => new ApiClient({ apiKey }), [apiKey]);
+
+  if (!apiKey) {
+    return <KeyPrompt onSubmit={(key) => {
+      localStorage.setItem(KEY_STORAGE, key);
+      setApiKey(key);
+    }} />;
+  }
+
+  return (
+    <App
+      client={client}
+      onSignOut={() => {
+        localStorage.removeItem(KEY_STORAGE);
+        setApiKey("");
+      }}
+    />
+  );
+}
+
+/** Minimal credential entry until real auth exists. */
+function KeyPrompt({ onSubmit }: { onSubmit: (key: string) => void }) {
+  const [value, setValue] = useState("");
+
+  return (
+    <form
+      className="keyPrompt"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (value.trim()) onSubmit(value.trim());
+      }}
+    >
+      <h1>dude</h1>
+      <Input
+        autoFocus
+        type="password"
+        label="API key"
+        hint="Paste an API key to continue."
+        value={value}
+        placeholder="dude_sk_…"
+        onChange={(event) => setValue(event.target.value)}
+      />
+      <Button type="submit" variant="primary" disabled={!value.trim()}>
+        Continue
+      </Button>
+    </form>
+  );
+}
+
+const container = document.getElementById("root");
+if (!container) throw new Error("#root is missing from index.html");
+
+createRoot(container).render(
+  <StrictMode>
+    <Root />
+  </StrictMode>,
+);
