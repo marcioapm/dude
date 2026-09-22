@@ -26,8 +26,10 @@ The screen they have open all day is the **chat transcript** of a Session
 subagents it delegates to, its plan, and the composer through which a human
 answers or steers. Beside it, always, is the **sidebar** (`Sidebar`,
 `NavTree`): what exists, what is active, what needs a person, who is on
-what. The event ledger (`EventRow`) and `LogStream` are the debugging and
-audit tools behind both, reached when something looks off.
+what. Selecting a project or an epic there opens the **board** (`Board`)
+in place of the transcript: the same work items by lifecycle lane. The
+event ledger (`EventRow`) and `LogStream` are the debugging and audit tools
+behind all of these, reached when something looks off.
 
 1. **Calm under load.** Density is the goal; noise is the enemy. Dense means
    13px body, 28px rows, 4px radii, hairline borders. Calm means one accent
@@ -248,7 +250,43 @@ nudge by eye.
   opens or steps in, ← closes or steps out, Home/End, Enter selects, `/`
   jumps to the search and ↓ from the search enters the tree.
 
-### People
+### Board (the overview)
+
+- `Board` is what the main pane shows when the sidebar selection is a
+  project or an epic; a work item or session opens the transcript. It takes
+  the same `NavProject` / `NavEpic` the sidebar takes — `boardScope` maps a
+  `NavRef` to one or the other — so the two can never disagree about what
+  exists or what needs you.
+- `src/util/boardModel.ts` folds the eleven work item statuses into **five
+  lanes**: Intake (received, intake, confirm plan), Queued, In progress
+  (running, needs you), Review (in review, ready to merge), Closed (done,
+  failed, aborted). Keyed on the domain union, so a new status is a compile
+  error until it is placed. All five lanes are always drawn, in that order;
+  an empty lane folds to a 28px labelled rail rather than an empty box.
+- **Needs-you is not a lane.** It strikes in Intake (a plan to confirm) and
+  In progress (an agent asking), so it is a card treatment and a sort order,
+  exactly as it is a row treatment in the tree. Within a lane, cards sort by
+  triage rank — needs you, active, ready, failed — then keep their order.
+  Failed sits in Closed with its danger mark; aborted stays neutral.
+- A card is three lines and nothing more: status dot, mono key, epic (project
+  boards only) and time in lane; the title, clamped to two lines; who and
+  what it cost. Running cards show the working roles (`RoleStack`) and the
+  deepest live activity. Needs-you cards show the asker and the question in
+  attention ink and take the tree row's wash and bar. Nothing else on the
+  surface is coloured.
+- Time in lane is `Duration format="age"` — one coarse unit (`45m`, `4h`,
+  `3d`), one clock per board ticking once a minute. Seconds on a board are
+  noise, and fifty cards must not own fifty timers.
+- **Nothing drags.** Every transition between lanes is the workflow's — the
+  scheduler starts work, the agent opens the PR, the checks make it ready,
+  the merge closes it — and the two a person performs (confirm a plan, abort
+  a run) are decisions with context, taken in the transcript. A card is a way
+  in, not a handle; clicking a needs-you card lands on the asking session.
+- One tab stop per board: ↑↓ move within a lane, ←→ across (same row, or the
+  last one there is; folded lanes are skipped), Home/End, Enter/Space open.
+  Past `cap` cards a lane shows "N more"; since urgent cards sort first, what
+  folds is only ever the calm tail.
+
 
 - `HumanAvatar` is for an identified person; `AgentAvatar role="human"` is
   the anonymous human *actor* glyph in event rows. Do not use one for the
@@ -305,7 +343,8 @@ nudge by eye.
   `$1,284`. Full precision in the `title`. Budgets colour the value at 80%
   and 100%.
 - Time via `Duration` / `formatDuration`: two units maximum (`3m 12s`,
-  `2h 04m`). Live durations tick once a second, never faster.
+  `2h 04m`). Live durations tick once a second, never faster. `format="age"`
+  is one coarse unit (`4h`) for how long something has sat in a state.
 - Timestamps in event streams are `HH:MM:SS.mmm`; events within one second
   are common.
 - IDs, SHAs, paths, event types, model names: monospace. The mono stack sets
@@ -348,6 +387,7 @@ nudge by eye.
 | `<TriageRollup counts={projectCounts(p)} />` on a collapsed project | "12 items" |
 | `<HumanAvatarStack people={[waitingOn, requester]} />` | a row of role-coloured circles with letters |
 | `<Sidebar projects={nav} selected={ref} />` and let defaults open the blocked item | expanding three levels to find "Needs you" |
+| `<Board project={p} epic={e} selected={ref} />` with needs-you sorted first | eleven columns, or a draggable card for a transition the workflow owns |
 
 ## Components
 
@@ -419,11 +459,21 @@ Skeleton/SkeletonLines/Spinner, EmptyState, ScrollArea.
 - **HumanAvatar / HumanAvatarStack** — a person by initials and a hashed
   identity colour; stacks overflow to "+N". `identitySlot` and `initialsOf`
   are exported.
+- **RoleStack** — the roles working on something right now, as xs agent
+  avatars side by side (never overlapped: each must stay readable).
 - The view model is pure and exported from `src/util/navModel.ts`:
   `flattenNav`, `attentionItems`, `globalCounts`, `projectCounts`,
   `workItemTriage`, `workingRoles`, `ancestorKeys`. The app maps domain
   records to `NavProject[]` (joining people, activity and titles) and hands
   it over; nothing here fetches.
+
+`src/components/` — the overview:
+
+- **Board** — the project or epic board: header with scope, counts and
+  spend; five lifecycle lanes; three-line cards; needs-you first; keyboard
+  grid; "N more" past the cap; quiet, empty and loading states. No drag.
+- Its view model is `src/util/boardModel.ts`: `boardColumns`, `boardCards`,
+  `boardScope`, `liveActivity`, `BOARD_COLUMN_FOR_STATUS`.
 
 ## What is deliberately not here
 
@@ -441,6 +491,8 @@ Skeleton/SkeletonLines/Spinner, EmptyState, ScrollArea.
 - Virtualisation. `Table`, `EventStream`, `LogStream` and `NavTree` render
   plain DOM so any row virtualiser can be applied by the consumer; the tree
   is already a flat list of rows for that reason.
-- A Kanban board, side panel, or page layout. Those are app concerns; they
-  compose the pieces here. The `Sidebar` is chrome, not a layout: the app
-  decides how it sits beside the transcript and how wide it is.
+- A side panel or page layout. Those are app concerns; they compose the
+  pieces here. The `Sidebar` and `Board` are chrome, not a layout: the app
+  decides how they sit beside the transcript and how wide they are.
+- Drag-and-drop on the board. The workflow owns every lane transition; see
+  the Board rules.

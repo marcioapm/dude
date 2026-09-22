@@ -64,7 +64,7 @@ export function TokenCount({ tokens, exact, mono, tone = "default", className, .
 }
 
 export interface DurationProps extends NumberBaseProps {
-  /** `short` = "3m 12s" (default); `clock` = "03:12"; `long` = "3 min 12 sec". */
+  /** `short` = "3m 12s" (default); `clock` = "03:12"; `long` = "3 min 12 sec"; `age` = "4h". */
   readonly format?: DurationOptions["style"] | undefined;
   /** Elapsed milliseconds. Ignored when `since` is given. */
   readonly ms?: number | undefined;

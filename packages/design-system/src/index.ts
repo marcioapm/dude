@@ -50,5 +50,18 @@ export type {
   NavOverrides,
   AttentionItem,
 } from "./util/navModel.ts";
+export {
+  BOARD_COLUMN_KINDS,
+  BOARD_COLUMN_SPECS,
+  BOARD_COLUMN_FOR_STATUS,
+  boardColumnOf,
+  boardCards,
+  boardColumns,
+  boardCardCount,
+  boardCost,
+  boardScope,
+  liveActivity,
+} from "./util/boardModel.ts";
+export type { BoardColumnKind, BoardColumnSpec, BoardCard, BoardColumn, BoardScope, LiveActivity } from "./util/boardModel.ts";
 export { ThemeProvider, useTheme } from "./theme.tsx";
 export type { ThemePreference, ThemeContextValue } from "./theme.tsx";

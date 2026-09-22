@@ -56,6 +56,10 @@ export interface NavWorkItem {
   readonly people?: ReadonlyArray<Person> | undefined;
   /** Attempts in order; the last one is current. */
   readonly runs?: ReadonlyArray<NavRun> | undefined;
+  /** When it entered its current status. The board shows time in column. */
+  readonly statusSince?: string | number | Date | undefined;
+  /** Spend so far across every run, in USD. */
+  readonly costUsd?: number | undefined;
 }
 
 export interface NavEpic {
@@ -369,7 +373,8 @@ export interface AttentionItem {
   readonly session: NavSession | null;
 }
 
-function askingSession(list: ReadonlyArray<NavSession>): NavSession | null {
+/** The deepest session waiting on a person, if any. */
+export function askingSession(list: ReadonlyArray<NavSession>): NavSession | null {
   for (const s of list) {
     const deeper = askingSession(s.children ?? []);
     if (deeper) return deeper;

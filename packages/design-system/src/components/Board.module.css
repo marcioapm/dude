@@ -1,0 +1,399 @@
+/*
+ * The board. Five lanes on the canvas; each card is a surface with a
+ * hairline, 3 lines tall, and the only colour at rest is the status mark.
+ * Needs-you cards borrow the tree row's wash and bar so the two surfaces
+ * are loud in the same way.
+ */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  /* Inline-size containment (for the container queries below) would let an
+     auto-sized flex item collapse to nothing; fill whatever holds it. */
+  flex: 1 1 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  background: var(--ds-color-canvas);
+  color: var(--ds-color-text-primary);
+  font-size: var(--ds-text-sm);
+  container-type: inline-size;
+}
+
+/* -- Header: where you are, what is inside, what it cost. -- */
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+  min-height: var(--ds-size-control-lg);
+  padding: 0 var(--ds-space-12);
+  border-bottom: 1px solid var(--ds-color-border-subtle);
+  background: var(--ds-color-surface);
+  flex-shrink: 0;
+}
+.scope {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  min-width: 0;
+  flex-shrink: 1;
+}
+.scopeParent {
+  font-size: var(--ds-text-xs);
+  font-weight: var(--ds-weight-semibold);
+  letter-spacing: var(--ds-tracking-caps);
+  text-transform: uppercase;
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+}
+.scopeSep,
+.scopeGlyph {
+  color: var(--ds-color-text-muted);
+  flex-shrink: 0;
+}
+.scopeTitle {
+  font-size: var(--ds-text-md);
+  font-weight: var(--ds-weight-semibold);
+  letter-spacing: var(--ds-tracking-tight);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+  min-width: 0;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+}
+.summaryCount {
+  font-variant-numeric: tabular-nums;
+}
+.summaryRollup {
+  gap: var(--ds-space-8);
+}
+.summaryCost {
+  font-size: var(--ds-text-xs);
+}
+.headerActions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* -- Columns: a flex row; a folded column is a 28px rail with its label. -- */
+.columns {
+  display: flex;
+  gap: var(--ds-space-8);
+  flex: 1;
+  min-height: 0;
+  padding: var(--ds-space-8);
+  overflow-x: auto;
+}
+.column {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 200px;
+  max-width: 320px;
+  min-height: 0;
+}
+.columnFolded {
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: none;
+  width: var(--ds-size-row-default);
+}
+.columnHead {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  height: var(--ds-size-row-default);
+  padding: 0 var(--ds-space-6) 0 var(--ds-space-4);
+  flex-shrink: 0;
+}
+.columnFolded .columnHead {
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  height: auto;
+  min-height: 120px;
+  padding: var(--ds-space-8) 0 0;
+  gap: var(--ds-space-4);
+  border-radius: var(--ds-radius-md);
+  background: color-mix(in srgb, var(--ds-color-surface) 60%, transparent);
+  border: 1px dashed var(--ds-color-border-subtle);
+  flex: 1;
+}
+.columnLabel {
+  font-size: var(--ds-text-xs);
+  font-weight: var(--ds-weight-semibold);
+  letter-spacing: var(--ds-tracking-caps);
+  text-transform: uppercase;
+  color: var(--ds-color-text-secondary);
+  white-space: nowrap;
+}
+.columnFolded .columnLabel {
+  writing-mode: vertical-rl;
+  color: var(--ds-color-text-muted);
+}
+.columnCount {
+  font-size: var(--ds-text-2xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--ds-color-text-muted);
+}
+.columnRollup {
+  margin-left: auto;
+}
+.columnScroll {
+  flex: 1;
+  min-height: 0;
+}
+.cards {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 var(--ds-space-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+}
+
+/* -- Card: top line · title · meta. A button, so it is one tab stop and
+   Enter/Space work for free. -- */
+.card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  padding: var(--ds-space-6) var(--ds-space-8);
+  border: 0;
+  border-radius: var(--ds-radius-md);
+  background: var(--ds-color-surface);
+  box-shadow: var(--ds-shadow-1);
+  color: var(--ds-color-text-primary);
+  text-align: left;
+  font-size: var(--ds-text-sm);
+  line-height: var(--ds-leading-snug);
+  cursor: default;
+  outline: none;
+  transition:
+    background-color var(--ds-duration-fast) var(--ds-ease-standard),
+    box-shadow var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.card:hover {
+  background: var(--ds-color-raised);
+}
+.card:focus-visible {
+  box-shadow:
+    0 0 0 2px var(--ds-color-focus-ring),
+    var(--ds-shadow-1);
+}
+.selected,
+.selected:hover {
+  background: var(--ds-color-accent-subtle);
+}
+.selected::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--ds-color-accent);
+}
+
+.top {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  min-width: 0;
+  height: 14px;
+}
+.mark {
+  flex-shrink: 0;
+}
+.key {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-2xs);
+  color: var(--ds-color-text-muted);
+  flex-shrink: 0;
+}
+.epic {
+  font-size: var(--ds-text-2xs);
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+.epic::before {
+  content: "· ";
+}
+.age {
+  margin-left: auto;
+  font-size: var(--ds-text-2xs);
+  flex-shrink: 0;
+}
+
+.title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.finished .title {
+  color: var(--ds-color-text-secondary);
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  min-width: 0;
+  min-height: 16px;
+  font-size: var(--ds-text-xs);
+}
+.metaRight {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.cost {
+  font-size: var(--ds-text-2xs);
+}
+.live {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.activity {
+  color: var(--ds-color-text-muted);
+  font-style: italic;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* Needs you: wash + 2px attention bar, the same treatment as the tree row,
+   and the question itself in attention ink. Selection wins over the wash. */
+.needsYou {
+  background: color-mix(in srgb, var(--ds-tone-attention-bg) 55%, var(--ds-color-surface));
+}
+.needsYou:hover {
+  background: color-mix(in srgb, var(--ds-tone-attention-bg) 85%, var(--ds-color-surface));
+}
+.needsYou.selected,
+.needsYou.selected:hover {
+  background: var(--ds-color-accent-subtle);
+}
+.needsYou::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--ds-tone-attention-solid);
+}
+.needsYou.selected::before {
+  background: var(--ds-color-accent);
+}
+.needsYou .title {
+  font-weight: var(--ds-weight-medium);
+}
+.ask {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  min-width: 0;
+  flex: 1 1 auto;
+  color: var(--ds-tone-attention-fg);
+}
+.asker,
+.askGlyph {
+  flex-shrink: 0;
+}
+.askText {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* "N more": a quiet row at the foot of a long column. Urgent cards sort to
+   the top, so what is folded is only ever the calm tail. */
+.more {
+  display: flex;
+  justify-content: center;
+}
+.moreButton {
+  padding: 3px var(--ds-space-8);
+  border: 0;
+  border-radius: var(--ds-radius-sm);
+  background: none;
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-xs);
+}
+.moreButton:hover {
+  color: var(--ds-color-text-primary);
+  background: var(--ds-color-hover-wash);
+}
+
+.empty {
+  margin: auto;
+}
+
+/* Loading: the five labels stay, the cards shimmer. */
+.skeletonCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+  padding: var(--ds-space-8);
+  border-radius: var(--ds-radius-md);
+  background: var(--ds-color-surface);
+  box-shadow: var(--ds-shadow-1);
+}
+.skeletonRow {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+}
+.skeletonAvatar {
+  margin-left: auto;
+}
+
+/* Narrow: below 720px the lanes stop sharing the width and scroll
+   sideways at a fixed 220px each, so a card never gets thinner than its
+   own title. Below 480px the epic line goes; the key and age stay. */
+@container (max-width: 720px) {
+  .column:not(.columnFolded) {
+    flex: 0 0 220px;
+    max-width: none;
+  }
+}
+@container (max-width: 480px) {
+  .epic {
+    display: none;
+  }
+  .summaryRollup,
+  .summaryCost {
+    display: none;
+  }
+}
