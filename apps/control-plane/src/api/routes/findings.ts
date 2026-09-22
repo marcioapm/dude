@@ -13,7 +13,7 @@
  */
 
 import { z } from "zod";
-import { EventTypes, newId } from "@dude/domain";
+import { EventTypes, findingSeveritySchema, newId } from "@dude/domain";
 import { withOrg } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { eventBus } from "../../events/bus.ts";
@@ -29,7 +29,7 @@ const FINDING_SELECT = `
   created_at AS "createdAt", updated_at AS "updatedAt"`;
 
 const findingInput = z.object({
-  severity: z.enum(["blocking", "high", "medium", "low", "note"]),
+  severity: findingSeveritySchema,
   category: z.string().min(1).max(50),
   title: z.string().min(1).max(300),
   description: z.string().max(10_000).default(""),
@@ -57,11 +57,12 @@ async function reportFindings(ctx: RequestContext): Promise<Response> {
 
   const result = await withOrg(organizationId, async (scope) => {
     const runs = (await scope.sql`
-      SELECT id, project_id, work_item_id, phase FROM runs WHERE id = ${runId}`) as Array<{
+      SELECT id, project_id, work_item_id, phase, category FROM runs WHERE id = ${runId}`) as Array<{
       id: string;
       project_id: string;
       work_item_id: string;
       phase: string | null;
+      category: string | null;
     }>;
     const run = runs[0];
     if (!run) return { missing: true as const };
@@ -99,8 +100,7 @@ async function reportFindings(ctx: RequestContext): Promise<Response> {
      * quietly closed here.
      */
     const categories = [...new Set(input.findings.map((f) => f.category))];
-    const reviewCategory = await categoryOfReview(scope, runId);
-    const covered = reviewCategory ? [reviewCategory, ...categories] : categories;
+    const covered = run.category ? [run.category, ...categories] : categories;
 
     if (covered.length > 0 && run.phase === "review") {
       await scope.sql`
@@ -228,24 +228,6 @@ async function resolveFinding(ctx: RequestContext): Promise<Response> {
   if ("missing" in result) throw notFound(`finding ${id} not found`);
   eventBus.publish(result.event);
   return json(result.finding);
-}
-
-/**
- * The category a review Run was created to look at.
- *
- * Read from the ledger because it is recorded on the Run's creation event,
- * not as a column: a review Run is one category's pass, and the workflow
- * decided which when it fanned out.
- */
-async function categoryOfReview(
-  scope: { sql: import("../../db/client.ts").OrgScope["sql"] },
-  runId: string,
-): Promise<string | null> {
-  const rows = (await scope.sql`
-    SELECT payload->>'category' AS category FROM events
-    WHERE run_id = ${runId} AND event_type = ${EventTypes.RunCreated}
-    ORDER BY cursor LIMIT 1`) as Array<{ category: string | null }>;
-  return rows[0]?.category ?? null;
 }
 
 function countBy<T>(items: readonly T[], key: (item: T) => string): Record<string, number> {

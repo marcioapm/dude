@@ -46,6 +46,9 @@ async function listEvents({ url, principal }: RequestContext): Promise<Response>
  * backfill already covered. Without that ordering an event committed between
  * the two steps would be lost.
  */
+/** Events per backfill query. The whole history is still sent, in pages. */
+const BACKFILL_PAGE = 1000;
+
 function streamEvents({ url, principal, request }: RequestContext): Response {
   const filter = { organizationId: principal.organizationId, ...filtersFrom(url) };
   /*
@@ -100,13 +103,32 @@ function streamEvents({ url, principal, request }: RequestContext): Response {
         else pending.push(event);
       });
 
+      /*
+       * `live=1` skips the backfill: a client that only wants to know *that*
+       * something changed — the shell refreshing its sidebar — has no use
+       * for the organization's entire history, and replaying it on every
+       * page load would be the most expensive thing the page does.
+       */
+      const liveOnly = url.searchParams.get("live") === "1";
+
       try {
-        const history = await ledger.query(principal.organizationId, {
-          ...filtersFrom(url),
-          after,
-          limit: 1000,
-        });
-        for (const event of history) send(event);
+        /*
+         * Paged, not capped. A single capped query delivered only the
+         * *oldest* thousand events of a long history and then jumped to
+         * live, silently dropping everything in between — a gap in the one
+         * stream whose contract is that it has none.
+         */
+        let cursor = after;
+        while (!liveOnly && !closed) {
+          const page = await ledger.query(principal.organizationId, {
+            ...filtersFrom(url),
+            after: cursor,
+            limit: BACKFILL_PAGE,
+          });
+          for (const event of page) send(event);
+          if (page.length < BACKFILL_PAGE) break;
+          cursor = page[page.length - 1]!.cursor;
+        }
       } catch (err) {
         console.error("event stream backfill failed:", err);
       }

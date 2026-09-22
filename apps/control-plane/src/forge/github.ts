@@ -59,6 +59,23 @@ export interface PullRequestStatus extends PullRequestRef {
   review: "pending" | "approved" | "changes_requested";
 }
 
+/**
+ * One piece of feedback left on a pull request by a person.
+ *
+ * Comments on the conversation, comments on a line, and the body of a review
+ * that requested changes all arrive here in one shape, because to a fixer
+ * they are the same thing: something a reviewer asked to be different.
+ */
+export interface PullRequestFeedback {
+  id: string;
+  author: string;
+  body: string;
+  /** The file a line comment is on; absent for conversation comments. */
+  path?: string;
+  createdAt: string;
+  kind: "comment" | "line_comment" | "changes_requested";
+}
+
 export interface Forge {
   /**
    * A credential for one git operation, in a form git understands.
@@ -70,6 +87,8 @@ export interface Forge {
   pushToken(): Promise<string>;
   openPullRequest(input: OpenPullRequestInput): Promise<PullRequestRef>;
   getPullRequest(slug: string, number: number): Promise<PullRequestStatus>;
+  /** Feedback left since `since`, oldest first. */
+  listFeedback(slug: string, number: number, since: string | null): Promise<PullRequestFeedback[]>;
 }
 
 /** The forge rejected a request; `status` is its HTTP status. */
@@ -93,6 +112,9 @@ export class ForgeError extends Error {
 // GitHub
 // ---------------------------------------------------------------------------
 
+/** How long one forge request may take before it is abandoned. */
+const FORGE_TIMEOUT_MS = Number(process.env.DUDE_FORGE_TIMEOUT_MS ?? 15_000);
+
 export class GitHubForge implements Forge {
   constructor(private readonly credential: ForgeCredential) {}
 
@@ -109,6 +131,13 @@ export class GitHubForge implements Forge {
   async #request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const token = await this.pushToken();
     const res = await fetch(`${this.credential.apiBaseUrl}${path}`, {
+      /*
+       * Bounded. `fetch` waits forever by default, and the poller syncs PRs
+       * one after another — so a single forge that stops answering would
+       * stall every other organization's pull requests behind it. Found when
+       * one test's forge went away and the next test's PR was never polled.
+       */
+      signal: AbortSignal.timeout(FORGE_TIMEOUT_MS),
       method,
       headers: {
         authorization: `Bearer ${token}`,
@@ -164,6 +193,71 @@ export class GitHubForge implements Forge {
 
     return { ...toRef(pr), checks: checkState(combined), review: reviewState(reviews) };
   }
+
+  /*
+   * Three GitHub endpoints for what a fixer sees as one thing. Conversation
+   * comments live on the issue, line comments on the pull, and a review that
+   * requested changes carries its summary in the review body — a reviewer
+   * who writes only "please rename this" in the review box would otherwise
+   * be invisible.
+   */
+  async listFeedback(
+    slug: string,
+    number: number,
+    since: string | null,
+  ): Promise<PullRequestFeedback[]> {
+    const sinceQuery = since ? `?since=${encodeURIComponent(since)}` : "";
+    const [issueComments, lineComments, reviews] = await Promise.all([
+      this.#request<GitHubComment[]>("GET", `/repos/${slug}/issues/${number}/comments${sinceQuery}`),
+      this.#request<GitHubComment[]>("GET", `/repos/${slug}/pulls/${number}/comments${sinceQuery}`),
+      this.#request<GitHubReview[]>("GET", `/repos/${slug}/pulls/${number}/reviews`),
+    ]);
+
+    const feedback: PullRequestFeedback[] = [
+      ...issueComments.map((c) => ({
+        id: `issue-comment-${c.id}`,
+        author: c.user?.login ?? "unknown",
+        body: c.body ?? "",
+        createdAt: c.created_at,
+        kind: "comment" as const,
+      })),
+      ...lineComments.map((c) => ({
+        id: `line-comment-${c.id}`,
+        author: c.user?.login ?? "unknown",
+        body: c.body ?? "",
+        ...(c.path ? { path: c.path } : {}),
+        createdAt: c.created_at,
+        kind: "line_comment" as const,
+      })),
+      ...reviews
+        .filter((r) => r.state === "CHANGES_REQUESTED" && r.body && r.submitted_at)
+        .map((r) => ({
+          id: `review-${r.id}`,
+          author: r.user?.login ?? "unknown",
+          body: r.body ?? "",
+          createdAt: r.submitted_at!,
+          kind: "changes_requested" as const,
+        })),
+    ];
+
+    /*
+     * Inclusive of `since`, deliberately. GitHub timestamps are whole
+     * seconds and its own `since` filter is inclusive, so a strict
+     * comparison would drop a comment posted in the same second as the last
+     * one seen. The caller dedupes by id instead, which is exact.
+     */
+    return feedback
+      .filter((f) => !since || f.createdAt >= since)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+}
+
+interface GitHubComment {
+  id: number;
+  body: string | null;
+  path?: string;
+  created_at: string;
+  user: { login: string } | null;
 }
 
 interface GitHubPullRequest {
@@ -177,6 +271,8 @@ interface GitHubPullRequest {
 }
 
 interface GitHubReview {
+  id?: number;
+  body?: string | null;
   state: string;
   submitted_at: string | null;
   user: { login: string } | null;

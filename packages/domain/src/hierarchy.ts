@@ -204,6 +204,8 @@ export const runSchema = z.object({
     .nullable()
     .default(null),
   role: agentRoleSchema.nullable().default(null),
+  /** Review phase: which reviewer flavour this Run is. */
+  category: z.string().nullable().default(null),
   /** The Run this one continues from. */
   parentRunId: z.string().nullable().default(null),
   /** The commit its workspace started at; null means the default branch. */
@@ -216,6 +218,19 @@ export const runSchema = z.object({
   endedAt: z.string().datetime({ offset: true }).nullable().default(null),
 });
 export type Run = z.infer<typeof runSchema>;
+
+/** The role a Run executes as when it has no phase: one created by hand. */
+export const DEFAULT_RUN_ROLE: AgentRole = "orchestrator";
+
+/**
+ * How a Run is named to a person: its phase, and for a review its category.
+ * "Review · security", "Fix", "Agent" for a Run with no phase at all.
+ */
+export function runLabel(run: { phase?: string | null; category?: string | null }): string {
+  if (!run.phase) return "Agent";
+  const phase = run.phase.charAt(0).toUpperCase() + run.phase.slice(1);
+  return run.category ? `${phase} · ${run.category}` : phase;
+}
 
 export const sessionStatusSchema = z.enum([
   "pending",
@@ -261,3 +276,57 @@ export function resolveAgentModel(
     project.agentModels[role] ?? organization.defaultAgentModels[role] ?? systemDefaults[role] ?? null
   );
 }
+
+// ---------------------------------------------------------------------------
+// Review findings and pull requests
+//
+// Defined here rather than beside the routes that serve them so the web
+// client, the workflow and the forge integration share one vocabulary —
+// a severity or PR state spelled differently in two places is a bug waiting
+// for the day one of them changes.
+// ---------------------------------------------------------------------------
+
+export const findingSeveritySchema = z.enum(["blocking", "high", "medium", "low", "note"]);
+export type FindingSeverity = z.infer<typeof findingSeveritySchema>;
+
+export const findingStatusSchema = z.enum(["open", "resolved", "superseded", "accepted"]);
+export type FindingStatus = z.infer<typeof findingStatusSchema>;
+
+export const findingSchema = z.object({
+  id: z.string(),
+  workItemId: z.string(),
+  runId: z.string().nullable(),
+  category: z.string(),
+  severity: findingSeveritySchema,
+  status: findingStatusSchema,
+  file: z.string().nullable(),
+  line: z.number().int().nullable(),
+  title: z.string(),
+  description: z.string(),
+  suggestedFix: z.string(),
+  resolutionNote: z.string(),
+  fixAttempts: z.number().int(),
+  createdAt: z.string(),
+});
+export type Finding = z.infer<typeof findingSchema>;
+
+export const pullRequestStateSchema = z.enum(["draft", "open", "merged", "closed"]);
+export const checkStateSchema = z.enum(["pending", "passing", "failing", "unknown"]);
+export const reviewStateSchema = z.enum(["pending", "approved", "changes_requested"]);
+
+export const pullRequestSchema = z.object({
+  id: z.string(),
+  workItemId: z.string(),
+  runId: z.string().nullable(),
+  number: z.number().int(),
+  url: z.string(),
+  headBranch: z.string(),
+  baseBranch: z.string(),
+  title: z.string(),
+  state: pullRequestStateSchema,
+  checks: checkStateSchema,
+  review: reviewStateSchema,
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type PullRequest = z.infer<typeof pullRequestSchema>;

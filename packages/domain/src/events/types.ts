@@ -17,6 +17,7 @@ export const EventTypes = {
   WorkItemResumed: "work_item.resumed",
   WorkItemSteered: "work_item.steered",
   WorkItemAborted: "work_item.aborted",
+  WorkItemStatusChanged: "work_item.status_changed",
 
   // Workflow
   WorkflowTransitioned: "workflow.transitioned",
@@ -65,6 +66,7 @@ export const EventTypes = {
   PullRequestUpdated: "pull_request.updated",
   PullRequestChecksChanged: "pull_request.checks_changed",
   PullRequestReviewed: "pull_request.reviewed",
+  PullRequestCommented: "pull_request.commented",
   PullRequestMerged: "pull_request.merged",
   PullRequestClosed: "pull_request.closed",
 

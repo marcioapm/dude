@@ -23,6 +23,7 @@
  */
 
 import type { WorkflowDefinition, WorkflowStepContext, WorkflowStepResult } from "@dude/domain";
+import type { PrSignal } from "../forge/classify.ts";
 import { EventTypes } from "@dude/domain";
 import { withOrg } from "../db/client.ts";
 import { appendInScope } from "../events/ledger.ts";
@@ -40,8 +41,8 @@ import {
   markFindingAttempted,
   openPullRequestFor,
   phaseOutcome,
+  setWorkItemStatus,
   supersedeStaleFindings,
-  type PhaseOutcome,
 } from "./delivery.ts";
 
 export const DELIVERY_WORKFLOW_TYPE = "work_item.delivery";
@@ -133,6 +134,7 @@ async function emit(
 /** Create the implementer Run and park until it finishes. */
 async function implement(ctx: WorkflowStepContext): Promise<WorkflowStepResult> {
   const state = stateOf(ctx);
+  await setWorkItemStatus(ctx.organizationId, state, "running", "implementing");
   const runId = await createPhaseRun(ctx.organizationId, {
     workItemId: state.workItemId,
     phase: "implement",
@@ -188,6 +190,7 @@ async function awaitImplement(ctx: WorkflowStepContext): Promise<WorkflowStepRes
  */
 async function review(ctx: WorkflowStepContext): Promise<WorkflowStepResult> {
   const state = stateOf(ctx);
+  await setWorkItemStatus(ctx.organizationId, state, "review", "agent review");
   const categories = reviewersFor(state.policy, state.changedPaths ?? []);
 
   const runIds = await Promise.all(
@@ -247,6 +250,7 @@ async function awaitReview(ctx: WorkflowStepContext): Promise<WorkflowStepResult
  */
 async function fix(ctx: WorkflowStepContext): Promise<WorkflowStepResult> {
   const state = stateOf(ctx);
+  await setWorkItemStatus(ctx.organizationId, state, "running", "fixing review findings");
   const findings = await findingsFor(ctx.organizationId, state.workItemId);
   const unresolved = findings.filter((f) => f.status === "open");
 
@@ -320,6 +324,7 @@ async function awaitFix(ctx: WorkflowStepContext): Promise<WorkflowStepResult> {
  */
 async function simplify(ctx: WorkflowStepContext): Promise<WorkflowStepResult> {
   const state = stateOf(ctx);
+  await setWorkItemStatus(ctx.organizationId, state, "running", "simplifying");
   const runId = await createPhaseRun(ctx.organizationId, {
     workItemId: state.workItemId,
     phase: "simplify",
@@ -413,6 +418,8 @@ async function openPullRequest(ctx: WorkflowStepContext): Promise<WorkflowStepRe
     runId: state.headRunId!,
     repositoryId: state.repositoryId,
   });
+  // Waiting on people now: the agents are done until someone comments.
+  await setWorkItemStatus(ctx.organizationId, state, "review", "pull request open");
 
   return {
     next: "awaitPullRequest",
@@ -434,12 +441,22 @@ async function awaitPullRequest(ctx: WorkflowStepContext): Promise<WorkflowStepR
 
   // Merged or closed: the work item is done either way, and which one it was
   // is already in the ledger.
-  const terminal = feedback.find((s) => s.payload.state === "merged" || s.payload.state === "closed");
+  const signals = feedback.map((s) => s.payload as unknown as PrSignal);
+  const terminal = signals.find((s) => s.kind === "terminal");
   if (terminal) {
+    // Closed without merging is someone deciding not to take the change,
+    // which is an abort of the work item rather than a failure of it.
+    const merged = terminal.state === "merged";
+    await setWorkItemStatus(
+      ctx.organizationId,
+      state,
+      merged ? "done" : "aborted",
+      merged ? "pull request merged" : "pull request closed without merging",
+    );
     return { next: null, state: { ...state, pendingRunIds: [] } };
   }
 
-  const actionable = feedback.filter((s) => s.payload.actionable === true);
+  const actionable = signals.filter((s) => s.kind === "actionable");
   if (actionable.length === 0) {
     return { next: "awaitPullRequest", state, awaitSignals: [Signals.PrFeedback, Signals.HumanDecision] };
   }
@@ -449,13 +466,16 @@ async function awaitPullRequest(ctx: WorkflowStepContext): Promise<WorkflowStepR
     return escalate(ctx, { ...state, prIteration }, "pr_loop_exhausted", { iterations: prIteration });
   }
 
-  // Several comments arriving together cost one fix Run, not one each.
+  // Several comments arriving together cost one fix Run, not one each: the
+  // signals are flattened into one list of things to address.
+  const prFeedback = actionable.flatMap((s) => s.feedback);
+  await setWorkItemStatus(ctx.organizationId, state, "running", "addressing pull request feedback");
   const runId = await createPhaseRun(ctx.organizationId, {
     workItemId: state.workItemId,
     phase: "fix",
     baseRef: state.headSha ?? null,
     parentRunId: state.headRunId ?? null,
-    prFeedback: actionable.map((s) => s.payload),
+    prFeedback,
   });
 
   return {
@@ -477,6 +497,8 @@ async function awaitPrFix(ctx: WorkflowStepContext): Promise<WorkflowStepResult>
   if (!outcome.succeeded) {
     return escalate(ctx, state, "pr_fix_failed", { runId, error: outcome.error });
   }
+  // The push updated the PR; it is back with the reviewers.
+  await setWorkItemStatus(ctx.organizationId, state, "review", "pull request updated");
 
   // The push updates the existing PR; no new PR is opened.
   return {
@@ -509,6 +531,7 @@ async function escalate(
     reason,
     detail,
   });
+  await setWorkItemStatus(ctx.organizationId, state, "awaiting_input", reason);
   return { next: null, state: { ...state, escalation: { reason, detail } } };
 }
 
