@@ -42,8 +42,11 @@ type Repository struct {
 
 // MaterializedRepo records where a repo landed and at what commit.
 type MaterializedRepo struct {
-	Name    string `json:"name"`
-	Path    string `json:"path"`
+	Name string `json:"name"`
+	Path string `json:"path"`
+	// The real remote, so a push reaches the forge rather than the local
+	// mirror the clone came from.
+	URL     string `json:"url"`
 	Branch  string `json:"branch"`
 	HeadSHA string `json:"headSha"`
 }
@@ -216,6 +219,7 @@ func (m *Manager) materialize(ctx context.Context, wsPath string, repo Repositor
 		return MaterializedRepo{
 			Name:    repo.Name,
 			Path:    target,
+			URL:     repo.URL,
 			Branch:  strings.TrimSpace(current),
 			HeadSHA: strings.TrimSpace(sha),
 		}, nil
@@ -251,6 +255,7 @@ func (m *Manager) materialize(ctx context.Context, wsPath string, repo Repositor
 	return MaterializedRepo{
 		Name:    repo.Name,
 		Path:    target,
+		URL:     repo.URL,
 		Branch:  strings.TrimSpace(branch),
 		HeadSHA: strings.TrimSpace(sha),
 	}, nil

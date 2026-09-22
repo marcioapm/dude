@@ -72,6 +72,28 @@ type Worker struct {
 	LeaseSeconds int    `json:"leaseSeconds"`
 }
 
+// PushCredential authorizes exactly one push, for one Run.
+//
+// Fetched per push rather than held: the runner keeps no long-lived forge
+// credential, so a node whose lease expired cannot write to the repository
+// (plan §61). The agent never sees this at all.
+type PushCredential struct {
+	Username string `json:"username"`
+	Token    string `json:"token"`
+	// The branch this Run publishes to, derived by the control plane so both
+	// sides agree on it across a restart.
+	Branch string `json:"branch"`
+}
+
+// PushCredential fetches a one-shot credential for this Run's push.
+func (c *Client) PushCredential(ctx context.Context, runID string) (*PushCredential, error) {
+	var out PushCredential
+	if err := c.get(ctx, "/v1/runs/"+runID+"/push-credential", &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // Event is an occurrence inside the execution plane, normalized for the
 // control plane's durable ledger.
 type Event struct {
@@ -106,6 +128,14 @@ func (e *APIError) Retryable() bool {
 }
 
 func (c *Client) post(ctx context.Context, path string, body, out any) error {
+	return c.do(ctx, http.MethodPost, path, body, out)
+}
+
+func (c *Client) get(ctx context.Context, path string, out any) error {
+	return c.do(ctx, http.MethodGet, path, nil, out)
+}
+
+func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
 	var payload io.Reader
 	if body != nil {
 		encoded, err := json.Marshal(body)
@@ -115,7 +145,7 @@ func (c *Client) post(ctx context.Context, path string, body, out any) error {
 		payload = bytes.NewReader(encoded)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, payload)
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, payload)
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}

@@ -24,6 +24,8 @@ export const ID_PREFIXES = {
   workflowSignal: "sig",
   apiKey: "key",
   directive: "dir",
+  pullRequest: "pr",
+  forgeCredential: "forge",
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIXES;
