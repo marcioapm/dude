@@ -11,6 +11,7 @@
 package runtime
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -20,6 +21,7 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/stdcopy"
 
 	"github.com/marciomartins/dude/runner/internal/protocol"
 )
@@ -243,6 +245,80 @@ func (m *Manager) Exec(ctx context.Context, containerID string, cmd []string) (*
 	}
 	return &ExecResult{ExitCode: inspected.ExitCode, Output: string(out)}, nil
 }
+
+/*
+ExecStream runs a command and delivers its output line by line as it arrives.
+
+Used for the agent harness: a turn can run for many minutes, and its progress
+has to reach the event ledger while it happens rather than in one lump at the
+end. `env` carries per-Session credentials, which is why they are passed here
+and never baked into the image.
+*/
+func (m *Manager) ExecStream(
+	ctx context.Context,
+	containerID string,
+	cmd []string,
+	env map[string]string,
+	onLine func(string),
+) (int, error) {
+	envList := make([]string, 0, len(env))
+	for k, v := range env {
+		envList = append(envList, k+"="+v)
+	}
+
+	created, err := m.docker.ContainerExecCreate(ctx, containerID, container.ExecOptions{
+		Cmd:          cmd,
+		Env:          envList,
+		AttachStdout: true,
+		AttachStderr: true,
+		WorkingDir:   ContainerWorkspacePath,
+	})
+	if err != nil {
+		return -1, fmt.Errorf("exec create: %w", err)
+	}
+
+	attached, err := m.docker.ContainerExecAttach(ctx, created.ID, container.ExecAttachOptions{})
+	if err != nil {
+		return -1, fmt.Errorf("exec attach: %w", err)
+	}
+	defer attached.Close()
+
+	// Without a TTY, Docker multiplexes stdout and stderr into a framed
+	// stream; demultiplex so JSON events on stdout are not interleaved with
+	// log noise on stderr mid-line.
+	stdout, stdoutWriter := io.Pipe()
+	go func() {
+		_, copyErr := stdcopy.StdCopy(stdoutWriter, io.Discard, attached.Reader)
+		_ = stdoutWriter.CloseWithError(copyErr)
+	}()
+
+	scanner := bufio.NewScanner(stdout)
+	// Agent output lines can be long; the default 64KB limit truncates them.
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+
+	lines := 0
+	for scanner.Scan() {
+		if lines >= maxHarnessLines {
+			_ = stdout.CloseWithError(fmt.Errorf("output exceeded %d lines", maxHarnessLines))
+			break
+		}
+		if onLine != nil {
+			onLine(scanner.Text())
+		}
+		lines++
+	}
+	_ = stdout.Close()
+
+	inspected, err := m.docker.ContainerExecInspect(ctx, created.ID)
+	if err != nil {
+		return -1, fmt.Errorf("exec inspect: %w", err)
+	}
+	return inspected.ExitCode, nil
+}
+
+// maxHarnessLines bounds a single agent turn's output, so a runaway loop
+// cannot exhaust runner memory.
+const maxHarnessLines = 200_000
 
 // Stop stops and removes the container for a Run. Safe to call when the
 // container is already gone.

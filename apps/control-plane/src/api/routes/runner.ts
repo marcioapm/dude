@@ -10,7 +10,8 @@
  */
 
 import { z } from "zod";
-import { EventTypes, newId } from "@dude/domain";
+import { EventTypes, newId, resolveAgentModel } from "@dude/domain";
+import type { AgentModels } from "@dude/domain";
 import { withOrg, withoutTenant } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { eventBus } from "../../events/bus.ts";
@@ -19,6 +20,14 @@ import type { RequestContext, Router } from "../router.ts";
 
 /** How long a lease is valid before the control plane may reclaim the Run. */
 const LEASE_SECONDS = 90;
+
+/**
+ * The role a claimed Run executes as.
+ *
+ * One orchestrator per Run for now (plan §9.2); specialist roles are spawned
+ * as subagents rather than claimed independently.
+ */
+const DEFAULT_RUN_ROLE = "orchestrator" as const;
 
 const registerInput = z.object({
   name: z.string().min(1).max(200),
@@ -143,7 +152,19 @@ async function claimRuns(ctx: RequestContext): Promise<Response> {
   const workerId = ctx.params.id!;
   const { organizationId } = ctx.principal;
 
+  // organizations is not tenant-scoped, so the org-level model defaults are
+  // read once here and applied to every claimed Run below.
+  const orgRows = await withoutTenant(async ({ sql }) => {
+    return (await sql`
+      SELECT default_agent_models AS "defaultAgentModels" FROM organizations
+      WHERE id = ${organizationId}`) as Array<{ defaultAgentModels: AgentModels }>;
+  });
+  const organizationDefaults = orgRows[0]?.defaultAgentModels;
+
   const claimed = await withOrg(organizationId, async (scope) => {
+    // One query: claim the runs and join everything the runner needs to
+    // execute them. Looping a per-run lookup here would be N+1 on the hot
+    // path every runner polls.
     const runs = (await scope.sql`
       WITH candidate AS (
         SELECT id FROM runs
@@ -151,29 +172,60 @@ async function claimRuns(ctx: RequestContext): Promise<Response> {
         ORDER BY created_at
         LIMIT ${input.limit}
         FOR UPDATE SKIP LOCKED
+      ), claimed AS (
+        UPDATE runs r
+        SET status = 'scheduled',
+            worker_id = ${workerId},
+            lease_expires_at = now() + ${`${LEASE_SECONDS} seconds`}::interval
+        FROM candidate
+        WHERE r.id = candidate.id
+        RETURNING r.id, r.work_item_id, r.project_id, r.attempt
       )
-      UPDATE runs r
-      SET status = 'scheduled',
-          worker_id = ${workerId},
-          lease_expires_at = now() + ${`${LEASE_SECONDS} seconds`}::interval
-      FROM candidate
-      WHERE r.id = candidate.id
-      RETURNING r.id, r.work_item_id AS "workItemId", r.project_id AS "projectId",
-                r.attempt`) as Array<Record<string, unknown>>;
+      SELECT
+        c.id,
+        c.work_item_id AS "workItemId",
+        c.project_id   AS "projectId",
+        c.attempt,
+        p.runtime_image AS "runtimeImage",
+        p.agent_models  AS "agentModels",
+        -- The task the agent is given, composed from the Work Item.
+        w.title, w.goal, w.acceptance_criteria AS "acceptanceCriteria",
+        COALESCE(
+          (SELECT jsonb_agg(jsonb_build_object(
+                    'name', repo.name, 'url', repo.url,
+                    'defaultBranch', repo.default_branch, 'trust', repo.trust)
+                  ORDER BY repo.name)
+           FROM repositories repo WHERE repo.project_id = c.project_id),
+          '[]'::jsonb
+        ) AS repositories
+      FROM claimed c
+      JOIN projects p ON p.id = c.project_id
+      JOIN work_items w ON w.id = c.work_item_id`) as Array<Record<string, unknown>>;
 
-    // Give the runner everything it needs to materialize a workspace without
-    // a second round trip.
+    const orgDefaults = organizationDefaults ?? {};
     const enriched = [];
+
     for (const run of runs) {
-      const repositories = await scope.sql`
-        SELECT name, url, default_branch AS "defaultBranch", trust
-        FROM repositories WHERE project_id = ${run.projectId as string} ORDER BY name`;
+      // Resolve the model here rather than on the node: which model runs a
+      // role is policy, and policy belongs to the control plane.
+      const agentModels = (run.agentModels ?? {}) as AgentModels;
+      const resolved = resolveAgentModel(
+        DEFAULT_RUN_ROLE,
+        { agentModels },
+        { defaultAgentModels: orgDefaults },
+      );
 
-      const projects = (await scope.sql`
-        SELECT runtime_image AS "runtimeImage" FROM projects
-        WHERE id = ${run.projectId as string}`) as Array<{ runtimeImage: string | null }>;
-
-      enriched.push({ ...run, repositories, runtimeImage: projects[0]?.runtimeImage ?? null });
+      enriched.push({
+        id: run.id,
+        workItemId: run.workItemId,
+        projectId: run.projectId,
+        attempt: run.attempt,
+        repositories: run.repositories,
+        runtimeImage: run.runtimeImage,
+        role: DEFAULT_RUN_ROLE,
+        model: resolved?.model ?? null,
+        prompt: composePrompt(run),
+      });
 
       const event = await appendInScope(scope, {
         eventType: EventTypes.RunLeaseAcquired,
@@ -192,6 +244,27 @@ async function claimRuns(ctx: RequestContext): Promise<Response> {
   });
 
   return json({ runs: claimed, leaseSeconds: LEASE_SECONDS });
+}
+
+/**
+ * Compose the agent's task from the Work Item.
+ *
+ * Deliberately plain: the goal and acceptance criteria as the requester wrote
+ * them. Role instructions live in the agent definition, not here, so this does
+ * not quietly become a second place where behaviour is specified.
+ */
+function composePrompt(run: Record<string, unknown>): string {
+  const parts = [String(run.title ?? "")];
+
+  const goal = String(run.goal ?? "").trim();
+  if (goal) parts.push(goal);
+
+  const criteria = (run.acceptanceCriteria ?? []) as string[];
+  if (criteria.length > 0) {
+    parts.push("Acceptance criteria:\n" + criteria.map((c) => `- ${c}`).join("\n"));
+  }
+
+  return parts.join("\n\n");
 }
 
 /** Renew the lease on a Run the worker is still executing. */

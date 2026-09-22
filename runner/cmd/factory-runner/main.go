@@ -22,11 +22,13 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/marciomartins/dude/runner/internal/client"
+	"github.com/marciomartins/dude/runner/internal/harness"
 	"github.com/marciomartins/dude/runner/internal/protocol"
 	dockerruntime "github.com/marciomartins/dude/runner/internal/runtime"
 	"github.com/marciomartins/dude/runner/internal/workspace"
@@ -336,13 +338,20 @@ func (d *daemon) executeRun(ctx context.Context, r client.Run) error {
 		return fmt.Errorf("mark running: %w", err)
 	}
 
-	// The harness drives the actual work from here. Until it is wired in
-	// (task #7), verify the container can execute inside the workspace.
-	result, err := d.docker.Exec(ctx, created.ContainerID, []string{"sh", "-c", "ls -1 /workspace"})
-	if err != nil {
-		return fmt.Errorf("exec probe: %w", err)
+	// Drive the agent. This is where the Run stops being plumbing and starts
+	// being work: the harness gets the task, the workspace and a scoped set of
+	// credentials, and its progress streams to the ledger as it happens.
+	agentErr := d.runAgent(ctx, r, created.ContainerID, materialized, log)
+
+	// Capture what changed before the container goes away. The workspace
+	// outlives it, but reading the diff here keeps the Run's record complete
+	// even if the workspace is later reaped.
+	changes := d.collectChanges(ctx, r, created.ContainerID, materialized, log)
+	if len(changes) > 0 {
+		if err := d.api.SendEvents(ctx, changes); err != nil {
+			log.Warn("change event ingest failed", "error", err)
+		}
 	}
-	log.Info("workspace visible in container", "exit", result.ExitCode)
 
 	// Tear the runtime down *before* reporting the Run terminal.
 	//
@@ -359,6 +368,13 @@ func (d *daemon) executeRun(ctx context.Context, r client.Run) error {
 	}
 	if err := d.api.ReportRuntime(cleanup, r.ID, created.ContainerID, "", protocol.RuntimeDestroyed); err != nil {
 		log.Warn("runtime report failed", "error", err)
+	}
+
+	if agentErr != nil {
+		if err := d.api.UpdateRun(cleanup, r.ID, protocol.RunFailed, agentErr.Error(), wsPath); err != nil {
+			log.Warn("status update failed", "error", err)
+		}
+		return fmt.Errorf("agent: %w", agentErr)
 	}
 
 	if err := d.api.UpdateRun(cleanup, r.ID, protocol.RunCompleted, "", wsPath); err != nil {
@@ -440,4 +456,200 @@ func defaultWorkspaceRoot() string {
 		return home + "/.dude/runner"
 	}
 	return "/var/lib/dude/runner"
+}
+
+// runAgent drives the harness for one Run.
+//
+// The task comes from the control plane; the credentials come from this
+// runner's environment and are passed per-exec rather than baked into the
+// image, so a Session's access ends when its container does.
+func (d *daemon) runAgent(
+	ctx context.Context,
+	r client.Run,
+	containerID string,
+	repos []workspace.MaterializedRepo,
+	log *slog.Logger,
+) error {
+	if len(repos) == 0 {
+		return fmt.Errorf("no repository materialized for run %s", r.ID)
+	}
+
+	// Work in the first repository. Multi-repo Runs (plan §14) will need the
+	// orchestrator to choose, but the workspace root is never a git repo.
+	workDir := dockerruntime.ContainerWorkspacePath + "/" + workspace.DirRepos + "/" + repos[0].Name
+
+	prompt := r.Prompt
+	if prompt == "" {
+		return fmt.Errorf("run %s has no prompt", r.ID)
+	}
+
+	model := r.Model
+	if model == "" {
+		return fmt.Errorf("run %s has no model configured", r.ID)
+	}
+
+	log.Info("agent starting", "model", model, "repo", repos[0].Name)
+
+	// Batch events rather than posting one HTTP request per tool call: a busy
+	// turn emits hundreds, and the ledger cares about order, not latency.
+	var pending []client.Event
+	flush := func() {
+		if len(pending) == 0 {
+			return
+		}
+		if err := d.api.SendEvents(ctx, pending); err != nil {
+			log.Warn("event ingest failed", "error", err, "dropped", len(pending))
+		}
+		pending = nil
+	}
+
+	turnCtx, cancel := context.WithTimeout(ctx, harness.DefaultTimeout)
+	defer cancel()
+
+	agent := harness.NewOpenCode(d.docker)
+	result, err := agent.Run(turnCtx, harness.Spec{
+		ContainerID: containerID,
+		WorkDir:     workDir,
+		Model:       model,
+		Agent:       r.Role,
+		Prompt:      prompt,
+		Env:         d.agentEnv(),
+	}, func(ev harness.Event) {
+		pending = append(pending, client.Event{
+			EventType:  ev.Type,
+			RunID:      r.ID,
+			ProjectID:  r.ProjectID,
+			WorkItemID: r.WorkItemID,
+			ActorType:  "agent",
+			ActorID:    r.ID,
+			Payload:    ev.Payload,
+		})
+		if len(pending) >= 50 {
+			flush()
+		}
+	})
+	flush()
+
+	if err != nil {
+		return err
+	}
+	if result.ExitCode != 0 {
+		// The harness output is the only explanation of why; keep the tail.
+		return fmt.Errorf("harness exited %d: %s", result.ExitCode, tail(result.Output, 2000))
+	}
+
+	log.Info("agent finished", "events", len(result.Events))
+	return nil
+}
+
+// agentEnv is the credential set handed to a Session.
+//
+// Deliberately an allowlist rather than passing the runner's environment
+// through: that environment holds this runner's control-plane key, which an
+// agent must never see. Nothing here is baked into the image, so a Session's
+// access ends when its container does.
+func (d *daemon) agentEnv() map[string]string {
+	env := map[string]string{}
+	for _, key := range []string{
+		"ANTHROPIC_API_KEY",
+		"ANTHROPIC_BASE_URL",
+		"OPENAI_API_KEY",
+		"OPENAI_BASE_URL",
+		// Lets a deployment point the harness at a gateway or a private
+		// model catalogue without rebuilding the runtime image.
+		"OPENCODE_CONFIG_CONTENT",
+	} {
+		if v := os.Getenv(key); v != "" {
+			env[key] = v
+		}
+	}
+	return env
+}
+
+// collectChanges records what the agent actually did to each repository.
+//
+// A Run whose agent edited nothing looks identical to one that failed
+// silently, so the diffstat and the commits are part of the Run's record.
+func (d *daemon) collectChanges(
+	ctx context.Context,
+	r client.Run,
+	containerID string,
+	repos []workspace.MaterializedRepo,
+	log *slog.Logger,
+) []client.Event {
+	var events []client.Event
+
+	for _, repo := range repos {
+		dir := dockerruntime.ContainerWorkspacePath + "/" + workspace.DirRepos + "/" + repo.Name
+
+		head := d.execCapture(ctx, containerID, dir, "git rev-parse HEAD")
+		status := d.execCapture(ctx, containerID, dir, "git status --porcelain")
+		diffstat := d.execCapture(ctx, containerID, dir, "git diff --stat HEAD")
+
+		// New commits since the workspace was materialized.
+		commits := ""
+		if head != "" && head != repo.HeadSHA {
+			commits = d.execCapture(ctx, containerID, dir,
+				fmt.Sprintf("git log --oneline %s..HEAD", repo.HeadSHA))
+		}
+
+		if commits == "" && status == "" && diffstat == "" {
+			continue
+		}
+
+		// Count lines, not separators: a single commit has no trailing
+		// newline once trimmed, so counting "\n" reports zero for it.
+		commitCount := 0
+		if commits != "" {
+			commitCount = len(strings.Split(commits, "\n"))
+		}
+
+		log.Info("repository changed", "repo", repo.Name,
+			"commits", commitCount, "dirty", status != "")
+
+		events = append(events, client.Event{
+			EventType: protocol.EventGitCommitCreated,
+			// Scoped to the Run: without these the event is unreachable from
+			// a Run's timeline, which is where anyone would look for it.
+			RunID:      r.ID,
+			ProjectID:  r.ProjectID,
+			WorkItemID: r.WorkItemID,
+			ActorType:  "agent",
+			ActorID:    "harness",
+			Payload: map[string]any{
+				"repo":        repo.Name,
+				"baseSha":     repo.HeadSHA,
+				"headSha":     head,
+				"commits":     commits,
+				"diffstat":    diffstat,
+				"uncommitted": status,
+			},
+		})
+	}
+	return events
+}
+
+// execCapture runs a shell command in the container and returns trimmed
+// stdout, or "" if it fails — this is diagnostic collection, not control flow.
+func (d *daemon) execCapture(ctx context.Context, containerID, dir, command string) string {
+	var out strings.Builder
+	_, err := d.docker.ExecStream(ctx, containerID,
+		[]string{"sh", "-c", fmt.Sprintf("cd %q && %s", dir, command)}, nil,
+		func(line string) {
+			out.WriteString(line)
+			out.WriteByte('\n')
+		})
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out.String())
+}
+
+// tail returns the last n characters, for error messages that must stay
+// readable without discarding the part that explains the failure.
+func tail(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return "..." + s[len(s)-n:]
 }

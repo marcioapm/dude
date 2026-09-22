@@ -32,6 +32,7 @@ const (
 // Event types emitted by the execution plane.
 const (
 	EventWorkspaceCreated = "workspace.created"
+	EventGitCommitCreated = "git.commit_created"
 )
 
 // Worker status reported in heartbeats.
