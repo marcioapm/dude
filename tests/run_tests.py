@@ -25,7 +25,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from build import build  # noqa: E402
+from build import build, build_gallery  # noqa: E402
 from env import TestEnvironment  # noqa: E402
 
 TESTS_DIR = Path(__file__).resolve().parent
@@ -36,9 +36,12 @@ def main() -> None:
     parser.add_argument("--build", action="store_true", help="force rebuild the runner binary")
     parser.add_argument("--keep", action="store_true", help="keep the test environment after the run")
     parser.add_argument("--no-runner", action="store_true", help="skip suites that need Docker")
+    parser.add_argument("--no-ui", action="store_true", help="skip suites that drive a browser")
     args, pytest_args = parser.parse_known_args()
 
     build(force=args.build)
+    if not args.no_ui:
+        build_gallery(force=args.build)
 
     env = TestEnvironment()
     print(f"run id:        {env.run_id}")
@@ -57,9 +60,15 @@ def main() -> None:
         # The pytest subprocess reconstructs the environment from these.
         os.environ["DUDE_TEST_RUN_ID"] = env.run_id
         os.environ["DUDE_TEST_CONTROL_PLANE_PORT"] = str(env.control_plane_port)
+        os.environ["DUDE_TEST_GALLERY_PORT"] = str(env.gallery_port)
 
+        skip_marks = []
         if args.no_runner:
-            pytest_args += ["-m", "not docker"]
+            skip_marks.append("not docker")
+        if args.no_ui:
+            skip_marks.append("not ui")
+        if skip_marks:
+            pytest_args += ["-m", " and ".join(skip_marks)]
 
         if not pytest_args or all(a.startswith("-") for a in pytest_args):
             pytest_args = [str(TESTS_DIR / "suites"), *pytest_args]

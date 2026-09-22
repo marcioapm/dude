@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
+import requests
+from playwright.sync_api import Page
 
 from env import TestEnvironment
 from helpers import ApiClient, create_api_key, create_organization
@@ -15,6 +18,7 @@ from helpers import ApiClient, create_api_key, create_organization
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "docker: needs Docker and the runner daemon")
+    config.addinivalue_line("markers", "ui: drives a real browser via Playwright")
 
 
 @pytest.fixture(scope="session")
@@ -108,3 +112,69 @@ def runner(env: TestEnvironment, org: dict):
             except Exception:  # noqa: BLE001 - kill is the fallback
                 proc.kill()
             env.runner_proc = None
+
+
+# ---------------------------------------------------------------------------
+# UI testing
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def browser_type_launch_args(browser_type_launch_args):
+    """Use the system Chrome.
+
+    Playwright's bundled Chromium has no build for this platform, and pinning
+    to the installed browser keeps CI and local runs on the same engine.
+    """
+    return {**browser_type_launch_args, "channel": "chrome"}
+
+
+@pytest.fixture(scope="session")
+def gallery_url(env: TestEnvironment) -> str:
+    """Serve the built gallery for the duration of the session."""
+    url = env.start_gallery()
+
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        try:
+            if requests.get(url, timeout=1).status_code == 200:
+                break
+        except requests.RequestException:
+            time.sleep(0.1)
+    else:
+        raise RuntimeError(f"gallery did not start at {url}")
+
+    yield url
+
+
+@pytest.fixture
+def console_errors(page: Page) -> list[str]:
+    """Collect console errors and page exceptions for the current test.
+
+    Returned as a live list so a test can assert on it after interacting; an
+    error raised during render shows up here rather than silently passing.
+    """
+    errors: list[str] = []
+
+    def record(text: str) -> None:
+        # The gallery loads a webfont from a CDN for convenience; the product
+        # ships its own fonts, so a failure to reach it is not a UI defect.
+        if "fonts" in text or "rsms.me" in text:
+            return
+        errors.append(text)
+
+    page.on("console", lambda m: record(m.text) if m.type == "error" else None)
+    page.on("pageerror", lambda e: record(str(e)))
+    return errors
+
+
+@pytest.fixture
+def gallery_page(page: Page, gallery_url: str, console_errors: list[str]) -> Page:
+    """The gallery, loaded and settled.
+
+    Depends on `console_errors` so the listener is attached before navigation
+    and catches errors thrown during the first render.
+    """
+    page.goto(gallery_url, wait_until="networkidle")
+    page.wait_for_timeout(300)
+    return page

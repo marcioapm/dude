@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import socket
+import sys
 import subprocess
 import time
 import uuid
@@ -46,13 +47,16 @@ class TestEnvironment:
     run_id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
     db_name: str = field(init=False)
     control_plane_port: int = field(default_factory=find_free_port)
+    gallery_port: int = field(default_factory=find_free_port)
     control_plane_proc: subprocess.Popen | None = field(default=None, repr=False)
     runner_proc: subprocess.Popen | None = field(default=None, repr=False)
+    gallery_proc: subprocess.Popen | None = field(default=None, repr=False)
     workspace_root: str = field(init=False)
 
     def __post_init__(self) -> None:
         self.db_name = f"dude_test_{self.run_id}"
         self.control_plane_url = f"http://localhost:{self.control_plane_port}"
+        self.gallery_url = f"http://127.0.0.1:{self.gallery_port}"
         self.workspace_root = f"/tmp/dude-e2e-{self.run_id}"
 
     # -- connection strings -------------------------------------------------
@@ -115,6 +119,28 @@ class TestEnvironment:
             stderr=subprocess.DEVNULL,
         )
 
+    def start_gallery(self) -> str:
+        """Serve the built design-system gallery.
+
+        Serves the build output rather than running the Vite dev server: the UI
+        tests should exercise what ships, and a dev server adds HMR sockets and
+        on-demand transforms that make failures ambiguous. Uses the stdlib
+        server so the suite needs no extra tooling.
+        """
+        dist = REPO_ROOT / "packages" / "design-system" / "dist" / "gallery"
+        if not dist.exists():
+            raise RuntimeError(
+                f"gallery not built at {dist} — run `bun run gallery:build` in packages/design-system"
+            )
+
+        self.gallery_proc = subprocess.Popen(
+            [sys.executable, "-m", "http.server", str(self.gallery_port), "--bind", "127.0.0.1"],
+            cwd=dist,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return self.gallery_url
+
     def start_runner(self, api_key: str, max_runs: int = 2) -> None:
         """Start the Go runner. Only needed by suites that execute Runs."""
         binary = REPO_ROOT / "runner" / "bin" / "factory-runner"
@@ -153,7 +179,7 @@ class TestEnvironment:
         return False
 
     def teardown(self, keep: bool = False) -> None:
-        for name in ("runner_proc", "control_plane_proc"):
+        for name in ("runner_proc", "gallery_proc", "control_plane_proc"):
             proc = getattr(self, name, None)
             if proc is None:
                 continue
@@ -208,8 +234,11 @@ class TestEnvironment:
         env.run_id = os.environ["DUDE_TEST_RUN_ID"]
         env.db_name = f"dude_test_{env.run_id}"
         env.control_plane_port = int(os.environ["DUDE_TEST_CONTROL_PLANE_PORT"])
+        env.gallery_port = int(os.environ.get("DUDE_TEST_GALLERY_PORT", "0"))
         env.control_plane_url = f"http://localhost:{env.control_plane_port}"
+        env.gallery_url = f"http://127.0.0.1:{env.gallery_port}"
         env.workspace_root = f"/tmp/dude-e2e-{env.run_id}"
         env.control_plane_proc = None
         env.runner_proc = None
+        env.gallery_proc = None
         return env

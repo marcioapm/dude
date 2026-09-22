@@ -366,6 +366,18 @@
 /* ------------------------------------------------------------------ */
 /* Motion                                                              */
 /* ------------------------------------------------------------------ */
+
+/*
+ * The default is declared before the overrides. A :root rule and a :root rule
+ * inside a media query have the same specificity, so source order decides:
+ * emitting the default last would silently defeat the reduced-motion
+ * preference.
+ */
+:root {
+  /* 1 = live indicators may pulse; 0 = they hold still. */
+  --ds-motion-live: 1;
+}
+
 @media (prefers-reduced-motion: reduce) {
   :root {
     --ds-duration-fast: 0ms;
@@ -375,14 +387,12 @@
     --ds-motion-live: 0;
   }
 }
+
+/* Explicit opt-in, for a user toggle that does not touch the OS setting. */
 [data-reduced-motion="true"] {
   --ds-duration-fast: 0ms;
   --ds-duration-base: 0ms;
   --ds-duration-slow: 0ms;
   --ds-duration-deliberate: 0ms;
   --ds-motion-live: 0;
-}
-:root {
-  /* 1 = live indicators may pulse; 0 = they hold still. */
-  --ds-motion-live: 1;
 }

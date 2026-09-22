@@ -5,8 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="dark light" />
     <title>dude — design system gallery</title>
-    <link rel="preconnect" href="https://rsms.me/" />
-    <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
+    <!--
+      No webfont is loaded. The type stacks fall back to the system UI and
+      monospace faces, which keeps the gallery renderable offline and means
+      the UI tests measure the design system rather than a CDN. The product
+      ships its own font files; the desktop build cannot reach a CDN at all.
+    -->
+    <link rel="icon" href="data:," />
   </head>
   <body>
     <div id="root"></div>

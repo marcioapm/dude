@@ -43,3 +43,6 @@ __pycache__/
 # Python E2E
 /tests/.venv/
 /tests/*.egg-info/
+
+# Gallery build output
+/packages/design-system/dist/

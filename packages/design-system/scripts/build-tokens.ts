@@ -81,6 +81,18 @@ ${themeBlock("light", ':root:not([data-theme="dark"])', "  ")}
 /* ------------------------------------------------------------------ */
 /* Motion                                                              */
 /* ------------------------------------------------------------------ */
+
+/*
+ * The default is declared before the overrides. A :root rule and a :root rule
+ * inside a media query have the same specificity, so source order decides:
+ * emitting the default last would silently defeat the reduced-motion
+ * preference.
+ */
+:root {
+  /* 1 = live indicators may pulse; 0 = they hold still. */
+  ${PREFIX}motion-live: 1;
+}
+
 @media (prefers-reduced-motion: reduce) {
   :root {
     ${PREFIX}duration-fast: 0ms;
@@ -90,16 +102,14 @@ ${themeBlock("light", ':root:not([data-theme="dark"])', "  ")}
     ${PREFIX}motion-live: 0;
   }
 }
+
+/* Explicit opt-in, for a user toggle that does not touch the OS setting. */
 [data-reduced-motion="true"] {
   ${PREFIX}duration-fast: 0ms;
   ${PREFIX}duration-base: 0ms;
   ${PREFIX}duration-slow: 0ms;
   ${PREFIX}duration-deliberate: 0ms;
   ${PREFIX}motion-live: 0;
-}
-:root {
-  /* 1 = live indicators may pulse; 0 = they hold still. */
-  ${PREFIX}motion-live: 1;
 }
 `;
 
