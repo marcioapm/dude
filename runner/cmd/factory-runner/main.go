@@ -488,6 +488,20 @@ func (d *daemon) runAgent(
 		return fmt.Errorf("run %s has no model configured", r.ID)
 	}
 
+	/*
+	 * The fake harness spends nothing and is deterministic, which is what the
+	 * platform's own tests need: workflow transitions, lease handling, event
+	 * ordering and container lifecycle are all independent of whether a real
+	 * model wrote the text (plan §27.1, §34.15).
+	 *
+	 * Selected by model name rather than a runner flag, so a single runner can
+	 * serve both real and fake Runs and the choice lives with the project
+	 * configuration that made it.
+	 */
+	if strings.HasPrefix(model, FakeModelPrefix) {
+		return d.runFakeAgent(ctx, r, containerID, repos[0], log)
+	}
+
 	log.Info("agent starting", "model", model, "repo", repos[0].Name)
 
 	// Batch events rather than posting one HTTP request per tool call: a busy
@@ -652,4 +666,64 @@ func tail(s string, n int) string {
 		return s
 	}
 	return "..." + s[len(s)-n:]
+}
+
+// FakeModelPrefix marks a Run that should execute without a model.
+//
+// Platform tests assert on lease handling, event ordering, container
+// lifecycle and workspace materialization — none of which depend on a real
+// model. Running one would make the suite slow, non-deterministic and
+// expensive for no added coverage.
+const FakeModelPrefix = "fake/"
+
+// runFakeAgent performs a scripted change instead of calling a model.
+//
+// It writes a file and commits it, so the Run exercises exactly the same
+// downstream path as a real agent: a dirty worktree, a new commit, and a
+// git.commit_created event carrying both.
+func (d *daemon) runFakeAgent(
+	ctx context.Context,
+	r client.Run,
+	containerID string,
+	repo workspace.MaterializedRepo,
+	log *slog.Logger,
+) error {
+	log.Info("fake agent starting", "repo", repo.Name)
+
+	dir := dockerruntime.ContainerWorkspacePath + "/" + workspace.DirRepos + "/" + repo.Name
+	script := strings.Join([]string{
+		"set -e",
+		// Content includes the Run id so concurrent Runs produce distinct
+		// commits and cannot be confused for one another.
+		fmt.Sprintf("printf '%%s\\n' 'Written by run %s' > FACTORY.md", r.ID),
+		"git add FACTORY.md",
+		fmt.Sprintf("git commit -q -m 'Add FACTORY.md for %s'", r.ID),
+	}, "\n")
+
+	var output strings.Builder
+	exitCode, err := d.docker.ExecStream(ctx, containerID,
+		[]string{"sh", "-c", fmt.Sprintf("cd %q && %s", dir, script)}, nil,
+		func(line string) { output.WriteString(line + "\n") })
+	if err != nil {
+		return fmt.Errorf("fake agent: %w", err)
+	}
+	if exitCode != 0 {
+		return fmt.Errorf("fake agent exited %d: %s", exitCode, tail(output.String(), 500))
+	}
+
+	events := []client.Event{{
+		EventType:  "agent.message",
+		RunID:      r.ID,
+		ProjectID:  r.ProjectID,
+		WorkItemID: r.WorkItemID,
+		ActorType:  "agent",
+		ActorID:    r.ID,
+		Payload:    map[string]any{"text": "fake agent wrote FACTORY.md", "fake": true},
+	}}
+	if err := d.api.SendEvents(ctx, events); err != nil {
+		log.Warn("event ingest failed", "error", err)
+	}
+
+	log.Info("fake agent finished")
+	return nil
 }

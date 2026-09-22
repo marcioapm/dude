@@ -46,6 +46,18 @@ export DATABASE_URL="postgres://dude_app:dude_app@localhost:5433/dude"
 bun run dev
 ```
 
+### Seeing it work
+
+```bash
+./scripts/demo.sh          # a scratch repository
+./scripts/demo.sh --self   # this repository
+```
+
+Brings up Postgres, the control plane and the runner, creates a work item,
+and streams the event ledger while a real agent executes it in a container.
+Reuses local OpenCode credentials if present; otherwise export
+`ANTHROPIC_API_KEY`. The agent works on a clone — never your working tree.
+
 ### Running the execution plane
 
 The runner is the same binary locally and on a worker node, so development
@@ -95,6 +107,7 @@ factory can modify its own repository.
 | Go runner, Docker-per-Run, workspace cache | done |
 | OpenCode harness + fake harness | done |
 | Python E2E suite | done |
+| Real agent runs producing commits | done |
 | Design system | in progress |
 | Web UI | not started |
 

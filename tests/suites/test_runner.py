@@ -18,6 +18,13 @@ pytestmark = pytest.mark.docker
 
 RUNTIME_IMAGE = "dude-runtime:dev"
 
+# The runner performs a scripted change instead of calling a model when the
+# model name starts with "fake/". These tests assert on lease handling, event
+# ordering, container lifecycle and workspace materialization — none of which
+# depend on a real model, and all of which would become slow, flaky and
+# expensive if one were involved (plan §27.1).
+FAKE_MODEL = "fake/scripted"
+
 
 @pytest.fixture
 def local_project(client: ApiClient) -> dict:
@@ -26,7 +33,7 @@ def local_project(client: ApiClient) -> dict:
         name="Self",
         slug="self-hosting",
         runtimeImage=RUNTIME_IMAGE,
-        agentModels={"orchestrator": {"model": "test-model"}},
+        agentModels={"orchestrator": {"model": FAKE_MODEL}},
         repositories=[{"name": "dude", "url": str(REPO_ROOT)}],
     )
 
@@ -66,6 +73,46 @@ def test_execution_is_recorded_in_the_ledger(client: ApiClient, local_project: d
         "run.completed",
     ):
         assert expected in types, f"missing {expected} in {types}"
+
+
+def test_agent_work_reaches_the_ledger(client: ApiClient, local_project: dict, runner: dict):
+    """The agent's own actions, not just the plumbing around them.
+
+    A Run whose agent did nothing looks identical to one that failed silently
+    unless what it did is recorded.
+    """
+    work_item = client.create_work_item(local_project["id"], "Produce a commit")
+    run = client.create_run(work_item["id"])
+    wait_for_run_status(client, run["id"], "completed", timeout=120)
+
+    events = client.events(runId=run["id"])
+    types = [e["eventType"] for e in events]
+    assert "agent.message" in types, f"no agent activity recorded: {types}"
+
+    commit_events = [e for e in events if e["eventType"] == "git.commit_created"]
+    assert commit_events, f"the commit was not recorded: {types}"
+
+    payload = commit_events[0]["payload"]
+    assert payload["headSha"] != payload["baseSha"], "HEAD did not move"
+    assert "FACTORY.md" in payload["commits"] or payload["commits"], "no commit listed"
+
+
+def test_agent_commit_lands_in_the_workspace(client: ApiClient, local_project: dict, runner: dict):
+    """The commit is real git history, not just an event."""
+    work_item = client.create_work_item(local_project["id"], "Commit something")
+    run = client.create_run(work_item["id"])
+    completed = wait_for_run_status(client, run["id"], "completed", timeout=120)
+
+    repo = Path(completed["workspacePath"]) / "repos" / "dude"
+    log = subprocess.run(
+        ["git", "-C", str(repo), "log", "--oneline", "-1"],
+        capture_output=True, text=True, check=False,
+    )
+    assert run["id"] in log.stdout, f"expected a commit for {run['id']}, got: {log.stdout!r}"
+
+    # The operator's own working tree must never be touched.
+    assert (repo / "FACTORY.md").exists()
+    assert not (REPO_ROOT / "FACTORY.md").exists(), "the agent wrote into the real repository"
 
 
 def test_workspace_contains_the_materialized_repository(
