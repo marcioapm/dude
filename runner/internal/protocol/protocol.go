@@ -65,6 +65,20 @@ const (
 	LabelOrganizationID = "dude.organization_id"
 )
 
+// Run control — what a human has asked of a Run (plan §24).
+//
+// Mirrors the run_control enum in migrations/009_interventions.sql.
+const (
+	ControlNone          = "none"
+	ControlPauseGraceful = "pause_graceful"
+	ControlPauseHard     = "pause_hard"
+	ControlAbort         = "abort"
+)
+
+// Run status for a paused Run. Separate from the control request above: the
+// control says what was asked, the status says what the Run now is.
+const RunPaused = "paused"
+
 // Network modes for a Run container.
 const (
 	// NetworkIsolated is used for untrusted repositories, which must not

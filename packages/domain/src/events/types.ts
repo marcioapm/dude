@@ -24,6 +24,11 @@ export const EventTypes = {
   WorkflowStepCompleted: "workflow.step.completed",
   WorkflowStepFailed: "workflow.step.failed",
 
+  // Human intervention on a Run (plan §24)
+  RunSteered: "run.steered",
+  RunPaused: "run.paused",
+  RunResumed: "run.resumed",
+
   // Run lifecycle
   RunCreated: "run.created",
   RunStarted: "run.started",

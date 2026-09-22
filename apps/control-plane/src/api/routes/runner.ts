@@ -267,21 +267,56 @@ function composePrompt(run: Record<string, unknown>): string {
   return parts.join("\n\n");
 }
 
-/** Renew the lease on a Run the worker is still executing. */
+/**
+ * Renew the lease on a Run the worker is still executing.
+ *
+ * Doubles as the control channel. The runner already calls this on a timer,
+ * so pending pause/abort requests and undelivered steering directives ride
+ * back on the response rather than needing a second polling loop — and a
+ * runner that has stopped renewing is one that would not have heard a
+ * separate poll either.
+ */
 async function renewLease(ctx: RequestContext): Promise<Response> {
   const runId = ctx.params.id!;
 
-  const renewed = await withOrg(ctx.principal.organizationId, async ({ sql }) => {
+  const result = await withOrg(ctx.principal.organizationId, async ({ sql }) => {
     const rows = (await sql`
       UPDATE runs
       SET lease_expires_at = now() + ${`${LEASE_SECONDS} seconds`}::interval
       WHERE id = ${runId} AND status IN ('scheduled', 'starting', 'running')
-      RETURNING id`) as Array<{ id: string }>;
-    return rows[0];
+      RETURNING id, control::text AS control, control_reason AS "controlReason"`) as Array<{
+      id: string;
+      control: string;
+      controlReason: string | null;
+    }>;
+    const run = rows[0];
+    if (!run) return null;
+
+    // Claim undelivered directives in the same round trip. Marking them
+    // delivered here means the runner owns them: a directive handed over but
+    // never applied is lost, which is why delivery is only marked once the
+    // runner has it in hand.
+    const directives = (await sql`
+      UPDATE directives
+      SET delivered_at = now()
+      WHERE id IN (
+        SELECT id FROM directives
+        WHERE run_id = ${runId} AND delivered_at IS NULL
+        ORDER BY created_at
+      )
+      RETURNING id, text, scope, created_at AS "createdAt"`) as Array<Record<string, unknown>>;
+
+    return { run, directives };
   });
 
-  if (!renewed) throw notFound(`run ${runId} is not leasable`);
-  return json({ ok: true, leaseSeconds: LEASE_SECONDS });
+  if (!result) throw notFound(`run ${runId} is not leasable`);
+  return json({
+    ok: true,
+    leaseSeconds: LEASE_SECONDS,
+    control: result.run.control,
+    controlReason: result.run.controlReason,
+    directives: result.directives,
+  });
 }
 
 /** Report Run progress or completion. */

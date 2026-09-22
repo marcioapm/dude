@@ -12,6 +12,7 @@ import { registerEventRoutes } from "./api/routes/events.ts";
 import { registerProjectRoutes } from "./api/routes/projects.ts";
 import { registerWorkRoutes } from "./api/routes/work.ts";
 import { registerRunnerRoutes } from "./api/routes/runner.ts";
+import { registerInterventionRoutes } from "./api/routes/intervention.ts";
 import { closePool, getPool } from "./db/client.ts";
 import { PostgresWorkflowRuntime } from "./workflow/runtime.ts";
 import { Sweeper, dispatchOutbox, reapExpiredRunLeases, reapLostWorkers } from "./workflow/sweepers.ts";
@@ -32,6 +33,7 @@ export function buildRouter(): Router {
   registerProjectRoutes(router);
   registerWorkRoutes(router);
   registerRunnerRoutes(router);
+  registerInterventionRoutes(router);
 
   return router;
 }

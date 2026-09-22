@@ -23,6 +23,7 @@ export const ID_PREFIXES = {
   workflowRun: "wfr",
   workflowSignal: "sig",
   apiKey: "key",
+  directive: "dir",
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIXES;

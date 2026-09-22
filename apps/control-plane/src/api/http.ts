@@ -48,13 +48,24 @@ export function errorResponse(err: unknown): Response {
   return json({ error: { code: "internal", message: "internal server error" } }, 500);
 }
 
-/** Parse and validate a JSON body, raising a 400 with field details. */
+/**
+ * Parse and validate a JSON body, raising a 400 with field details.
+ *
+ * An absent body is treated as `{}` rather than as malformed. Several
+ * endpoints — pause, resume, abort — take only optional fields, and
+ * `POST`ing them with nothing should mean "use the defaults", not "your
+ * request was invalid". The schema still decides whether empty is acceptable.
+ */
 export async function parseBody<T>(request: Request, schema: ZodType<T>): Promise<T> {
-  let payload: unknown;
-  try {
-    payload = await request.json();
-  } catch {
-    throw badRequest("request body must be valid JSON");
+  const raw = await request.text();
+
+  let payload: unknown = {};
+  if (raw.trim() !== "") {
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      throw badRequest("request body must be valid JSON");
+    }
   }
 
   const result = schema.safeParse(payload);
