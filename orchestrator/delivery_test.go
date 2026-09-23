@@ -336,6 +336,12 @@ func TestTheAgentsWorkReachesTheLedgerAsAConversation(t *testing.T) {
 			t.Errorf("%s: %d events, want %d", typ, n, want)
 		}
 	}
+	// A tool call's completion keeps the name it started with.
+	if n := w.count(`SELECT count(*) FROM events c JOIN events d ON d.payload->>'callId' = c.payload->>'callId'
+		WHERE c.run_id = $1 AND c.event_type = 'agent.tool.called' AND d.event_type = 'agent.tool.completed'
+		AND d.payload->>'tool' = c.payload->>'tool'`, runID); n == 0 {
+		t.Errorf("no tool completion kept its call's name")
+	}
 	var changed []string
 	_ = w.owner.QueryRow(context.Background(), `SELECT changed_paths FROM runs WHERE id = $1`, runID).Scan(&changed)
 	if len(changed) != 1 || changed[0] != "FACTORY.md" {
@@ -474,6 +480,18 @@ func TestAnAgentThatDiesFailsItsPhaseAndEscalates(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'failed'`, wi); n != 1 {
 		t.Errorf("failed runs = %d", n)
 	}
+}
+
+func TestARunLuxNoLongerHasFailsItsPhase(t *testing.T) {
+	w := newWorld(t)
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	wi := w.workItem()
+	w.deliver(wi)
+	w.until("the agent to be working", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'running'`, wi) == 1
+	})
+	w.lux.Forget()
+	w.until("the work item to need a person", func() bool { return w.workItemStatus(wi) == "awaiting_input" })
 }
 
 func TestAnImplementerThatChangesNothingIsEscalated(t *testing.T) {

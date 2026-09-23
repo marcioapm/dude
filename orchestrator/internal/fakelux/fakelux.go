@@ -54,6 +54,8 @@ type Run struct {
 	Stopped     int
 	Resumed     int
 	Interrupted int
+	// Forgotten: lux lost it. Open streams drop, as lux's connection would.
+	Forgotten bool
 
 	repo     string
 	busy     bool
@@ -139,7 +141,8 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 	for path, line := range step.Commit {
 		files[path] = line + "\n"
 	}
-	return Behaviour{Reply: step.Reply, Commit: files, Message: step.Message, Hang: step.Hang}
+	// Every phase looks around first, as an agent does.
+	return Behaviour{Reply: step.Reply, Commit: files, Message: step.Message, Hang: step.Hang, Tools: []string{"read"}}
 }
 
 // Runs returns every Run submitted, in order.
@@ -151,6 +154,18 @@ func (s *Server) Runs() []*Run {
 		out = append(out, s.runs[fmt.Sprintf("lrun_%d", i)])
 	}
 	return out
+}
+
+// Forget drops every Run, as a lux that lost its data would.
+func (s *Server) Forget() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, run := range s.runs {
+		run.Forgotten = true
+		run.cond.Broadcast()
+	}
+	s.runs = map[string]*Run{}
+	s.byKey = map[string]string{}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -237,7 +252,8 @@ func (s *Server) turn(run *Run) {
 	for i, tool := range b.Tools {
 		id := fmt.Sprintf("call_%d", i)
 		s.agent(run, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id, "title": tool, "kind": "execute", "status": "in_progress", "rawInput": map[string]any{"cmd": tool}})
-		s.agent(run, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id, "title": tool, "kind": "execute", "status": "completed"})
+		// As OpenCode reports it: the completion names neither the tool nor its kind.
+		s.agent(run, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id, "status": "completed"})
 	}
 	if b.Hang && !run.woken {
 		return
@@ -569,6 +585,9 @@ func (s *Server) output(w http.ResponseWriter, r *http.Request) {
 		case <-done:
 			return
 		default:
+		}
+		if run.Forgotten {
+			return
 		}
 		// Records first, then lifecycle events, as lux relays them: its
 		// lifecycle events are flushed on a timer and trail the agent's own

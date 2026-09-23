@@ -45,9 +45,10 @@ type translator struct {
 	// Reply text streamed since the last complete message. Chunks are
 	// fragments of words; the ledger records messages.
 	message strings.Builder
-	// Tool calls already recorded, so a command that streams many progress
-	// updates is one call in the ledger.
-	seenCalls map[string]bool
+	// Tool calls already recorded, by id, with the name they were recorded
+	// under: a command that streams many progress updates is one call in the
+	// ledger, and its completion — which carries no title — keeps the name.
+	seenCalls map[string]string
 }
 
 // load restores what the translator keeps between batches.
@@ -58,15 +59,15 @@ func (t *translator) load(ctx context.Context, tx pgx.Tx) error {
 		return err
 	}
 	t.message.WriteString(message)
-	rows, err := tx.Query(ctx, `SELECT payload->>'callId' FROM events WHERE run_id = $1 AND event_type = $2`,
+	rows, err := tx.Query(ctx, `SELECT payload->>'callId', payload->>'tool' FROM events WHERE run_id = $1 AND event_type = $2`,
 		t.run.ID, evToolCalled)
 	if err != nil {
 		return err
 	}
-	calls, err := pgx.CollectRows(rows, pgx.RowTo[string])
-	t.seenCalls = make(map[string]bool, len(calls))
+	calls, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ ID, Tool string }])
+	t.seenCalls = make(map[string]string, len(calls))
 	for _, c := range calls {
-		t.seenCalls[c] = true
+		t.seenCalls[c.ID] = c.Tool
 	}
 	return err
 }
@@ -260,19 +261,24 @@ func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux
 		}
 		switch status {
 		case "in_progress":
-			if t.seenCalls[callID] {
+			if _, seen := t.seenCalls[callID]; seen {
 				return nil
 			}
-			t.seenCalls[callID] = true
+			name := toolName(u)
+			t.seenCalls[callID] = name
 			return s.event(ctx, tx, t.run, evToolCalled, ledger.ActorAgent,
-				map[string]any{"tool": toolName(u), "callId": callID, "input": input, "title": title})
+				map[string]any{"tool": name, "callId": callID, "input": input, "title": title})
 		case "completed", "failed":
 			st := "completed"
 			if status == "failed" {
 				st = "error"
 			}
+			name, seen := t.seenCalls[callID]
+			if !seen {
+				name = toolName(u)
+			}
 			return s.event(ctx, tx, t.run, evToolCompleted, ledger.ActorAgent,
-				map[string]any{"tool": toolName(u), "callId": callID, "status": st, "title": title})
+				map[string]any{"tool": name, "callId": callID, "status": st, "title": title})
 		}
 		// "pending" is announced before its input is known; in_progress follows.
 
