@@ -273,9 +273,12 @@ func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux
 			if status == "failed" {
 				st = "error"
 			}
+			// A completion for a call never recorded is a plan update's: plans
+			// are recorded as plans, and OpenCode's completions carry no title
+			// to recognise them by.
 			name, seen := t.seenCalls[callID]
 			if !seen {
-				name = toolName(u)
+				return nil
 			}
 			return s.event(ctx, tx, t.run, evToolCompleted, ledger.ActorAgent,
 				map[string]any{"tool": name, "callId": callID, "status": st, "title": title})

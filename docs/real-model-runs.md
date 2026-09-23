@@ -71,17 +71,17 @@ provider config, or llmproxy's own accounting.
    message, not a traceback"; the reviewer showed an undecodable file giving
    a traceback, and called it `medium`. Only `blocking` and `high` start a
    fix, so it went into the PR as an open finding. The reviewer did not
-   know what its severity would cause. **Fix:** the finding format now says
-   so: `blocking`/`high` go back for a fix, lower goes to a person, and an
-   unmet acceptance criterion is `high` at least. On the rerun the same
+   know what its severity would cause. **Fix:** the review prompt now says
+   so, from the delivery's policy: which severities go back for a fix, that
+   the rest go to a person, and that an unmet acceptance criterion must be
+   one that goes back. On the rerun the same
    problem came back as `high` and was fixed before the PR opened.
 2. **A PR fix was handed every open finding, not just the comment.** The
    fix Run for a PR comment also got the review's open `low` and `note`
    findings — ones deliberately left for a person — and fixed them all,
    widening a one-line request into three changes across five files
-   (`dd658ce` on #6). With the fix, the comment on #4 produced one test and
-   nothing else. **Fix:** a fix for
-   PR feedback is handed that feedback only.
+   (`dd658ce` on #6). **Fix:** a fix for PR feedback is handed that feedback
+   only. After the fix, a comment on #4 produced one test and nothing else.
 3. **A Run lux lost was followed forever.** The detached lux environment
    was taken down while item 1's simplifier ran (another session's test run
    reclaimed it). The orchestrator got 404 from lux and retried the stream

@@ -48,8 +48,12 @@ type Syncer struct {
 	// One follower per live lux Run. The follower is the only writer of a
 	// Run's cursor, so two must never run for the same Run.
 	mu        sync.Mutex
-	following map[string]context.CancelFunc
+	following map[string]*follower
 }
+
+// follower is one goroutine reading a Run's output. A pointer, so a
+// finishing follower can tell whether the entry is still its own.
+type follower struct{ cancel context.CancelFunc }
 
 // Run statuses (run_status) the syncer decides on.
 const (
@@ -208,6 +212,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 	var findings []delivery.Finding
 	var feedback []forge.ActionableFeedback
 	_ = json.Unmarshal(r.PRFeedback, &feedback)
+	var blocking []string
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
 			SELECT w.title, w.goal, w.acceptance_criteria, COALESCE(p.runtime_image, ''), p.agent_models,
@@ -221,6 +226,16 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 		// A fix for pull request feedback is handed that feedback only. The
 		// open findings are review's: low ones a person chose to leave, and a
 		// fixer handed both takes on work nobody asked this fix to do.
+		if r.Phase == delivery.PhaseReview {
+			// The delivery's policy decides what blocks; the reviewer is told.
+			var raw []byte
+			err := tx.QueryRow(ctx, `SELECT state->'policy'->'blockingSeverities' FROM workflow_runs
+				WHERE work_item_id = $1 ORDER BY created_at DESC LIMIT 1`, r.WorkItemID).Scan(&raw)
+			if err != nil && !db.IsNotFound(err) {
+				return err
+			}
+			_ = json.Unmarshal(raw, &blocking)
+		}
 		if r.Phase == delivery.PhaseFix && len(feedback) == 0 {
 			rows, err := tx.Query(ctx, `SELECT severity::text, category, title, description, suggested_fix,
 				COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0)
@@ -262,7 +277,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 	}
 	in.Prompt = delivery.Prompt(r.Phase, delivery.PromptInput{
 		Title: title, Goal: goal, AcceptanceCriteria: ac, Category: r.Category,
-		Findings: findings, PRFeedback: feedback, Context: context,
+		Findings: findings, PRFeedback: feedback, BlockingSeverities: blocking, Context: context,
 	})
 	if delivery.Publishes[r.Phase] {
 		in.PushBranch = runBranch(r)
@@ -304,17 +319,22 @@ func (s *Syncer) follow(r phaseRun) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.following == nil {
-		s.following = map[string]context.CancelFunc{}
+		s.following = map[string]*follower{}
 	}
 	if _, ok := s.following[r.ID]; ok {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	s.following[r.ID] = cancel
+	mine := &follower{cancel}
+	s.following[r.ID] = mine
 	go func() {
 		defer func() {
 			s.mu.Lock()
-			delete(s.following, r.ID)
+			// Only its own entry: a newer follower may have taken the slot
+			// after this one was told to stop.
+			if s.following[r.ID] == mine {
+				delete(s.following, r.ID)
+			}
 			s.mu.Unlock()
 			cancel()
 		}()
@@ -339,8 +359,8 @@ func (s *Syncer) follow(r phaseRun) {
 func (s *Syncer) Stop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, cancel := range s.following {
-		cancel()
+	for _, f := range s.following {
+		f.cancel()
 	}
 }
 
@@ -691,8 +711,8 @@ func (s *Syncer) deliverDirectives(ctx context.Context, r phaseRun) (bool, error
 func (s *Syncer) unfollow(runID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if cancel, ok := s.following[runID]; ok {
-		cancel()
+	if f, ok := s.following[runID]; ok {
+		f.cancel()
 		delete(s.following, runID)
 	}
 }

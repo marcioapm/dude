@@ -26,8 +26,8 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
-	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
+	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
@@ -337,6 +337,14 @@ func TestTheAgentsWorkReachesTheLedgerAsAConversation(t *testing.T) {
 			t.Errorf("%s: %d events, want %d", typ, n, want)
 		}
 	}
+	// A plan is a plan, not a tool call — including its completion, which
+	// OpenCode sends without a title to recognise it by.
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'agent.plan.updated'`, runID); n != 1 {
+		t.Errorf("plan updates = %d, want 1", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'agent.tool.completed'`, runID); n != 1 {
+		t.Errorf("tool completions = %d, want 1 (the read, not the plan)", n)
+	}
 	// A tool call's completion keeps the name it started with.
 	if n := w.count(`SELECT count(*) FROM events c JOIN events d ON d.payload->>'callId' = c.payload->>'callId'
 		WHERE c.run_id = $1 AND c.event_type = 'agent.tool.called' AND d.event_type = 'agent.tool.completed'
@@ -414,6 +422,43 @@ func TestAReviewersFindingsAreRecorded(t *testing.T) {
 		ORDER BY created_at LIMIT 1`, wi).Scan(&sev, &title, &file, &line)
 	if sev != "blocking" || file != "FACTORY.md" || line != 1 || title != "FACTORY.md does not record the fix" {
 		t.Errorf("finding = %s %s:%d %q", sev, file, line, title)
+	}
+}
+
+func TestAReviewerIsToldWhatTheDeliverysPolicyBlocksOn(t *testing.T) {
+	w := newWorld(t)
+	mustExec(t, w.owner, `UPDATE projects SET agent_models = agent_models || '{"reviewer":{"model":"llm/review"}}'::jsonb
+		WHERE id = $1`, w.project)
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "review" {
+			return fakelux.Behaviour{Hang: true}
+		}
+		return fakelux.Behaviour{Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
+	}
+	wi := w.workItem()
+	policy := delivery.DefaultPolicy()
+	policy.BlockingSeverities = []string{"blocking", "high", "medium"}
+	if _, _, err := w.runtime.Start(context.Background(), workflow.StartOptions{
+		Type: delivery.WorkflowType, OrganizationID: w.org, IdempotencyKey: "delivery:" + wi, WorkItemID: wi,
+		Input: delivery.State{WorkItemID: wi, ProjectID: w.project, RepositoryID: w.repoID,
+			Policy: policy, Branch: delivery.BranchFor(wi, 1)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var prompt string
+	w.until("a review to reach lux", func() bool {
+		for _, r := range w.lux.Runs() {
+			var spec lux.Spec
+			_ = json.Unmarshal(r.Spec, &spec)
+			if spec.Labels["dude.phase"] == "review" {
+				prompt = spec.Workload.Prompt
+				return true
+			}
+		}
+		return false
+	})
+	if !strings.Contains(prompt, "`blocking`, `high`, `medium` send the change back") {
+		t.Errorf("the reviewer was not told the policy's blocking severities:\n%s", prompt)
 	}
 }
 
@@ -617,7 +662,10 @@ func TestAnAbortDuringSubmitIsNotUndone(t *testing.T) {
 	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE work_item_id = $1`, wi).Scan(&runID)
 	// Submit as the sweep would have, had it read the row a moment earlier.
 	mustExec(t, w.owner, `UPDATE runs SET status = 'pending' WHERE id = $1`, runID)
-	go func() { time.Sleep(5 * time.Millisecond); _, _ = w.owner.Exec(context.Background(), `UPDATE runs SET status = 'aborted' WHERE id = $1`, runID) }()
+	go func() {
+		time.Sleep(5 * time.Millisecond)
+		_, _ = w.owner.Exec(context.Background(), `UPDATE runs SET status = 'aborted' WHERE id = $1`, runID)
+	}()
 	w.until("the lux run to be cancelled", func() bool {
 		return len(w.lux.Runs()) == 1 && w.lux.Runs()[0].Cancelled
 	})

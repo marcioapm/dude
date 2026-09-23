@@ -19,6 +19,8 @@ type PromptInput struct {
 	// Fix phase: the findings to address, and any pull request feedback.
 	Findings   []Finding
 	PRFeedback []forge.ActionableFeedback
+	// Review phase: the severities that block, from the delivery's policy.
+	BlockingSeverities []string
 	// Per-project, per-role notes, appended last so a project can tell its
 	// reviewer what this codebase considers a defect without that text
 	// reaching every other role.
@@ -71,13 +73,26 @@ const findingFormat = "Report each finding as one YAML document, separated by `-
 	"description: What is wrong and why it matters.\n" +
 	"suggested_fix: What to do instead.\n" +
 	"```\n\n" +
-	"Severity decides what happens next: `blocking` and `high` send the change back " +
-	"to be fixed before a pull request opens; anything lower goes into the pull " +
-	"request for a person to weigh. So a finding that means an acceptance criterion " +
-	"is not met is `high` at least, however small the fix.\n\n" +
 	"Report nothing if you find nothing. A finding you are not confident in is a " +
 	"`note`, not a `blocking` — a reviewer that cries wolf costs the next fix " +
 	"attempt for nothing."
+
+// severityNote tells a reviewer what its severities cause, from the
+// policy: a reviewer that does not know `medium` lets a pull request open
+// rates an unmet acceptance criterion `medium`.
+func severityNote(blocking []string) string {
+	if len(blocking) == 0 {
+		return ""
+	}
+	names := make([]string, len(blocking))
+	for i, b := range blocking {
+		names[i] = "`" + b + "`"
+	}
+	return fmt.Sprintf("Severity decides what happens next: %s send the change back to be fixed "+
+		"before a pull request opens; anything else goes into the pull request for a person to "+
+		"weigh. So a finding that means an acceptance criterion is not met must be one of %s, "+
+		"however small the fix.", strings.Join(names, ", "), strings.Join(names, ", "))
+}
 
 // Every phase that changes code commits it; lux pushes what was committed.
 // Uncommitted work is not part of the result, and saying so is cheaper than
@@ -109,6 +124,9 @@ func Prompt(phase string, in PromptInput) string {
 				"Do not commit: your output is findings, and someone else will make the change.",
 			"The task under review:\n\n"+in.task(),
 			findingFormat)
+		if note := severityNote(in.BlockingSeverities); note != "" {
+			add(note)
+		}
 
 	case PhaseFix:
 		add("Address the feedback below. " + commitNote)
