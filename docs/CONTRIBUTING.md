@@ -9,43 +9,58 @@ implements, and section numbers below (§21, §81…) refer to it.
 ## The shape of the system
 
 ```
-            ┌──────────────────── control plane (Bun) ────────────────────┐
-  web UI ──▶│ HTTP API ─▶ Postgres (RLS)  ◀── sweepers (background loops)  │◀── GitHub
-  (React)   │    │           │   ▲                 │                      │   (polled)
-            │    ▼           ▼   │                 ▼                      │
-            │  event ledger ──▶ SSE          workflow runtime             │
-            └──────────────────────────────────────┬──────────────────────┘
-                                                   │ leases, push credentials,
-                                                   │ events, findings (HTTP)
-                                         ┌─────────▼─────────┐
-                                         │  runner (Go)      │  one per node
-                                         │  Docker-per-Run   │
-                                         └─────────┬─────────┘
-                                                   │
-                                     container: workspace clone + agent (OpenCode)
+               ┌─────────── backend (Bun) ───────────┐
+  web UI ─────▶│ public API, auth, projects, board,  │◀──── GitHub webhooks
+  (React)      │ settings, live events (SSE)         │      (verified, stored)
+               └──────┬───────────────▲──────────────┘
+          run control │               │ NOTIFY on every event
+     (service token)  ▼               │
+               ┌──────────────────────┴──────────────┐
+               │ orchestrator (Go) — no users         │
+               │ workflow runtime, delivery, policy, │──── GitHub API
+               │ prompts, findings, PR sync          │     (PRs, branches)
+               └──────┬──────────────────────────────┘
+                      │ submit, follow output, steer,
+                      │ stop, resume, push (HTTP + SSE)
+               ┌──────▼──────────────────────────────┐
+               │ lux — containers on Podman hosts,   │
+               │ checkouts, leased pushes, agents    │
+               └─────────────────────────────────────┘
+                 (a separate project: ~/git/lux)
+
+   Both dude processes share one Postgres, with row-level security.
 ```
 
-**The control plane** (`apps/control-plane`) owns all state and every
-decision. It is one Bun process: the HTTP API, plus background *sweepers*
-started in `src/index.ts`:
+**The backend** (`apps/control-plane`, Bun) is the only thing users and
+GitHub talk to. It owns display and management: auth, organizations,
+projects, work items, the board and sidebar (`/v1/navigation`), findings,
+forge settings, and the live event stream. It runs no background work.
+What changes what runs — deliver, steer, pause, resume, abort — it forwards
+to the orchestrator (`src/orchestrator/client.ts`) with a service token, the
+user's organization and who asked, and passes the answer straight back.
+GitHub webhooks land here, are verified against a per-organization secret
+and stored; the orchestrator processes them.
 
-| Sweeper | What it does |
+**The orchestrator** (`orchestrator/`, Go) does all the work and serves
+no users. Its internal API (`internal/api`) is called by the backend. Its
+loops (`cmd/dude-orchestrator/main.go`):
+
+| Loop | What it does |
 | --- | --- |
-| `workflow-poller` | Advances durable workflows that are runnable or were signalled. |
+| `workflow` | Advances durable workflows that are runnable or were signalled, each step in its own slot. |
+| `phase-sync` | Drives each phase Run on lux: submit, follow its output into the ledger, deliver directives, pause, resume, cancel, and when the agent's turn ends, push, fast-forward the branch, record findings, stop. |
 | `phase-notifier` | Turns a finished phase Run into a `phase.finished` signal for its workflow. |
-| `pr-poller` | Syncs open pull requests from the forge and signals the workflow when something is actionable. |
-| `outbox-dispatcher` | Delivers side effects queued in the transactional outbox. |
-| `run-lease-reaper`, `worker-liveness-reaper` | Reclaim work from runners that stopped reporting. |
+| `webhooks` | Acts on stored GitHub deliveries: syncs the pull request each is about. |
+| `pr-reconciler` | Re-reads open pull requests not seen for 15 minutes — the backstop for webhooks GitHub never sent. |
 
-**The runner** (`runner/`, Go) claims Runs over HTTP, materializes a
-workspace (a clone from a node-local bare mirror, at the Run's base ref),
-starts a hardened container, runs the agent inside it, then inspects the repo,
-pushes the branch if the phase publishes, and reports events and findings. It
-never decides anything; the control plane tells it what the Run is.
+**lux** is the runtime (`~/git/lux`, its own repository and docs). It runs
+each phase Run in a container on a Podman host, checks out the repository
+at the Run's base commit, runs the agent through an adapter (OpenCode over
+ACP), streams what happens, steers and stops it, and pushes its commits
+with a credential the container never sees. dude talks to it only through
+`orchestrator/internal/lux`.
 
-**The web app** (`apps/web`) talks only to the public API. It reads
-`/v1/navigation` for the sidebar and board, streams `/v1/events/stream` for
-live updates, and re-reads rather than polling.
+**The web app** (`apps/web`) talks only to the backend's public API.
 
 **The design system** (`packages/design-system`) is product-agnostic and has
 its own [README](../packages/design-system/README.md) with its rules. Browse it
@@ -54,40 +69,53 @@ with `bun run gallery` in that package.
 ### Hierarchy
 
 `Organization → Project → Epic → Work Item → Run → Session` (§39). A **Run**
-is one execution in one container. With phased delivery a single *attempt* at
-a work item is several Runs — one per phase — and each is shown as an agent in
-the UI.
+is one phase of work, executed as one lux Run. A single *attempt* at a work
+item is several Runs — one per phase — and each is shown as an agent in the
+UI.
 
 ### Delivery, end to end
 
-`apps/control-plane/src/workflow/delivery.workflow.ts` is the state machine;
-`delivery.ts` holds its side effects; `policy.ts` holds every bound.
+`orchestrator/internal/delivery/workflow.go` is the state machine;
+`store.go` holds its side effects; `policy.go` holds every bound;
+`prompts.go` what each agent is told.
 
 ```
 implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → wait ⟲ fix → done
 ```
 
 - Each phase is a Run with `phase`, `role`, `base_ref` (the commit it starts
-  from) and, for reviews, `category`. The claim route
-  (`api/routes/runner.ts`) turns those into the agent's role, model and
-  prompt (`api/prompts.ts`).
-- **Handoff is via git.** A phase's commits reach the next phase only by being
-  pushed; the next phase clones the mirror at `base_ref`.
-- **Publishing is a property of the phase** (`PHASE_PUBLISHES`), not a prompt
-  instruction: the runner's push step simply does not run for a review.
-- **Reviewers report findings** as YAML in their output; the runner parses it
-  (`runner/cmd/factory-runner/findings.go`) and posts it. Only review and test
-  Runs may report.
-- **Every loop ends on a declared bound**: `maxReviewIterations`,
-  `maxAttemptsPerFinding`, `maxPrFixIterations`. An escalation stops the
+  from) and, for reviews, `category`. `internal/phases/spec.go` turns it into
+  a lux RunSpec: image, adapter, prompt, model (as OpenCode config, a file
+  secret), repository at `base_ref`, egress to the model provider, and the
+  agent's home as a state volume so a resume keeps the conversation.
+- **Handoff is via git.** Each publishing phase pushes to a branch of its
+  own (`dude/<work item>/run-<run>`) — lux lets a Run's first push go only to
+  a branch that does not exist — and the orchestrator fast-forwards the work
+  item's branch to it through GitHub, never forcing. The next phase checks
+  out that commit.
+- **Publishing is a property of the phase** (`Publishes`): a reviewer's
+  container is never pushed.
+- **A turn is done when the agent goes busy then idle** — reported by lux's
+  shim in the output stream, in order with the agent's messages.
+- **Reviewers report findings** as YAML in their reply; `delivery/findings.go`
+  parses it. Only review and test Runs may report.
+- **Every loop ends on a declared bound**: `MaxReviewIterations`,
+  `MaxAttemptsPerFinding`, `MaxPRFixIterations`. An escalation stops the
   workflow and sets the work item to `awaiting_input`.
 - A clean re-review resolves open findings **of its own category that a fixer
-  has already attempted** (`api/routes/findings.ts`). That rule is what lets
+  has already attempted** (`phases.RecordFindings`). That rule is what lets
   the loop converge.
-- **The PR loop** (`forge/sync.ts`, `forge/classify.ts`): the poller syncs each
-  open PR, records changes as events, and signals the workflow only for what
-  the classifier deems actionable — a change request or a failing check.
-  Merged → work item `done`; closed → `aborted`.
+- **The PR loop** (`internal/prs`, `forge/classify.go`): a webhook says which
+  PR changed; the orchestrator reads that PR, records what changed, and
+  signals the workflow only for what the classifier deems actionable — a
+  change request or a failing check. Merged → work item `done`; closed →
+  `aborted`.
+- **Steering** goes to the agent as a message. OpenCode (ACP) cannot take a
+  message mid-turn, so lux holds it until the turn ends; `interrupt: true`
+  stops the turn so it is heard now. A directive is `sent` when lux has it
+  and `delivered` when the agent does.
+- **Pause** stops the lux Run, keeping its workspace and session; **resume**
+  continues it, on any host, with the agent's conversation intact.
 
 ## Decisions already made
 
@@ -95,26 +123,29 @@ These were settled deliberately. Change them on purpose, not by accident.
 
 - **Build order** follows the plan's §81 self-hosting bootstrap, not the §50
   v1 slice.
-- **Workflow runtime** is Postgres-backed and Bun-only (§21 option A) —
-  explicitly *not* Temporal.
-- **Isolation is real Docker-per-Run from day one.** No host-only shortcut.
-  No Docker socket in the container, all capabilities dropped,
-  `no-new-privileges`, CPU/memory/PID limits, the workspace as the only
-  writable mount.
-- **Containers have network** — the agent must reach its model. Only
-  `untrusted_external` repositories get none. The **push happens on the host**
-  so the forge credential never enters a filesystem the agent can read.
-- **Multi-tenant from the first migration**, enforced by row-level security.
+- **Two processes.** The Go orchestrator owns everything that drives work;
+  the Bun backend owns display and management and is the only public
+  surface. One Postgres, shared; one writer per table is a guideline, not
+  enforced.
+- **lux is the runtime.** dude does not run containers. It tells lux what
+  to run and decides what the result means.
+- **Workflow runtime** is Postgres-backed and hand-built (§21 option A) —
+  *not* Temporal — and lives in the orchestrator.
+- **PR observability is by webhook, never polling.** GitHub's rate limits
+  rule polling out. A reconciler re-reads open PRs every 15 minutes as a
+  backstop.
+- **Multi-tenant from the first migration**, enforced by row-level security,
+  in both processes.
 - **Models are configured per project, per role**, falling back to the
-  organization, then the system default. Per-role `context` is appended to
-  that role's prompt.
-- **DB access** is `Bun.sql` with raw SQL; migrations are `.sql` files. No ORM.
-- **Phases are Runs**, not harness subagents. The reviewer executes but never
+  organization. Per-role `context` is appended to that role's prompt.
+- **DB access**: `Bun.sql` in the backend, `pgx` in the orchestrator, raw SQL
+  in both; migrations are `.sql` files run by `bun run migrate`.
+- **Phases are Runs**, not agent subagents. The reviewer executes but never
   publishes. Tests belong to the implementer; the *tester* is a browser QA
   agent (not built yet).
-- **GitHub**: a PAT first, the GitHub App later behind the same `Forge`
-  interface. **The factory never auto-merges** — it stops at an open PR.
-- **Artifacts** will be S3-compatible from the start (not built yet).
+- **GitHub**: a PAT first, the GitHub App later behind the same client.
+  **The factory never auto-merges** — it stops at an open PR.
+- **Artifacts** will be S3-compatible (lux stores them; not wired up yet).
 - **Chat is the primary surface.** The event timeline and logs are debugging
   tools, one tab away.
 - **Quality passes as you go**: a simplify/review pass after each meaningful
@@ -128,93 +159,89 @@ These were settled deliberately. Change them on purpose, not by accident.
   at `git log` for the house style.
 - **Tests pin behaviour that matters**, and each new guard was checked by
   breaking it and watching the right test fail. Keep doing that.
-- **Status and vocabulary live in `packages/domain`.** A new status should be
-  a compile error in every `Record<Status, …>` that has to handle it.
+- **Event types are a contract** between the processes and the browser:
+  `packages/domain/src/events/types.ts` is the vocabulary, and the Go
+  constants must match it.
 - **The web app never talks to the database** and never reaches around the
   API (§117).
 
 ## Traps
 
-Each of these cost real time. They are the reason for some code that might
-otherwise look over-careful.
+Each of these cost real time.
 
-- **Don't run `bun test` with a dev control plane up.** They share the `dude`
-  database and the sweepers are cross-tenant, so they steal the tests' rows.
-  The E2E suite is safe: it makes its own database.
-- **The unit tests can't see the runner.** Integration tests signal the
-  workflow directly; they never exercise git inspection, the push or findings
-  parsing. Several real bugs lived only there. Anything touching what the
-  runner does with git needs the Python E2E suite, or a live run.
-- **The TypeScript harness adapters** in `apps/control-plane/src/harness/`
-  are exercised only by their own tests. The live path is the Go runner's
-  harness (`runner/internal/harness/opencode.go`). Change behaviour there.
-- **Git and zsh**: `:r` in a refspec is a zsh history modifier. Reproduce git
-  problems with `bash -c`.
-- **Force-pushing between phases** uses an explicit
-  `--force-with-lease=<ref>:<base_ref>`. The bare form fails with "stale
-  info" when pushing to a URL, because there are no tracking refs.
-- **Diffs are against the Run's base**, not `HEAD` — `git diff --stat HEAD`
-  is empty once an agent commits, which once made every Run look like it
-  changed nothing.
+- **The fakes must be as awkward as the real thing.** The fake lux sends
+  lifecycle events *after* the agent's records, queues input to a busy
+  agent, and resumes an agent idle — because real lux does, and code that
+  assumed otherwise passed against a friendlier fake and failed against lux.
+  When the contract suite (`run_tests.py --lux`) disagrees with the fake,
+  fix the fake first.
+- **A `--serve` lux environment runs the lux-fake it was built with.** After
+  lux-fake changes, restart it.
+- **lux's lifecycle events trail the agent's records.** The Run's recorded
+  `lux_state` can say "scheduled" after the agent has finished; only a state
+  lux has already reported as over rules anything out.
+- **Don't run `bun test` with a dev backend up** against the same database;
+  keep test and dev databases apart. The Go tests make a database of their
+  own per binary, cloned from a migrated template.
+- **Migration 014 is still being edited** until it ships. A database that
+  applied an earlier version needs its checksum updated in
+  `schema_migrations` (or recreate it).
 - **`networkidle` never fires in the web app** — it holds an open SSE
   connection. Wait on elements in Playwright.
 - **A pushed demo leaves state on GitHub.** A merged PR changes `main`, which
-  changes what the fake reviewer sees next time.
+  changes what the next run sees.
 
 ## Testing strategy
 
 | Layer | Where | What it proves |
 | --- | --- | --- |
-| Unit / integration | `apps/*/test`, beside Go packages | Logic, SQL, RLS, workflow transitions, parsers — against a real Postgres |
-| E2E | `tests/suites` | The deployed system through its public API and built UI: the runner, containers, git, the forge |
+| Go unit | `orchestrator/internal/*` | Workflow runtime, policy, classifier, parsers — against a real Postgres |
+| Go integration | `orchestrator/delivery_test.go` | Whole deliveries through the orchestrator's real code, against a fake lux and a fake GitHub backed by real git |
+| TS unit | `apps/control-plane/test` | The ledger, the live stream, webhook signatures |
+| E2E | `tests/suites` | The deployed processes through the public API and the built UI, with the fake lux and a fake GitHub that delivers signed webhooks |
+| Contract | `tests/suites/test_lux_contract.py` (`--lux`) | The same flows against a real lux |
 | Browser | `tests/suites/test_web_ui.py`, `test_gallery_ui.py` | The web app and the design system, in system Chrome |
 
-The fake agent (`fake/scripted` model) plays every phase deterministically:
-the implementer commits, the reviewer raises one blocking finding and then
-reports clean once a fixer has been through, the fixer and simplifier commit.
-That is what lets the whole pipeline run in tests without a model.
+The scripted agent (`orchestrator/internal/fakeagent`, model `fake/scripted`)
+plays every phase deterministically: the implementer commits, the reviewer
+raises one blocking finding unless the fixer's file is in its tree, the fixer
+and simplifier commit. `fake/hang` never finishes its turn, for steering and
+pausing. The fake lux plays it directly; a real lux runs it as a lux-fake
+script.
 
 ## What's next
 
-In rough priority order, with the reason for each.
+In rough priority order.
 
-1. **Real models end to end.** Everything above has been proven with the fake
-   agent; one real OpenCode session has run in a container, but never the full
-   phased pipeline. Expect the reviewer's YAML findings to need prompt tuning
-   and a more forgiving parser.
+1. **Real models end to end.** Everything has been proven with the scripted
+   agent; run real work items with OpenCode through lux, read the
+   transcripts, and tune prompts, the findings parser and policy.
 2. **`ask_user`** — the agent asking a person a question and blocking on the
-   answer (Bootstrap 3). Events and the `awaiting_input` status exist; there
-   is no route to answer through.
-3. **Egress allowlist.** Containers currently have full network. The plan
-   (§25.3) wants deny-by-default plus an allowlist (model provider, package
-   registries, git host, control plane), with web search routed through the
-   control plane as a tool.
-4. **Nested Docker for projects whose tests need it.** Plain Docker-in-Docker
-   needs `--privileged`, which undoes the isolation. The recommendation is
-   **Sysbox** as an opt-in runtime per project now, and a disposable VM per
-   worker later (§17.1).
-5. **The tester phase** (browser QA with video/screenshot evidence) and
-   **S3 artifact storage** (Bootstrap 2 and 5). Design in
-   [`phased-runs.md`](phased-runs.md). The implementer should also produce a
-   demonstration recording; label it differently from the tester's evidence.
-6. **GitHub App and webhooks** in place of the PAT and polling.
-7. **Resuming a Run continues its harness session** instead of starting a
-   fresh one (`sessions.external_session_id` is stored but unused).
-8. **Forge credentials are stored in plaintext.** Encrypt at rest before any
+   answer. On lux this is natural: the agent goes idle, dude waits, the
+   answer is input.
+3. **Budgets as loop bounds** — a cost cap per Run and per work item.
+4. **The tester phase** (browser QA with recorded evidence) and artifacts
+   from lux. Design in [`phased-runs.md`](phased-runs.md).
+5. **GitHub App** in place of the PAT, and registering webhooks
+   automatically when a project is added (`forge.EnsureWebhook` exists).
+6. **lux push with an expected base commit**, which would remove the
+   per-Run branch and the GitHub fast-forward.
+7. **Forge credentials are stored in plaintext.** Encrypt at rest before any
    non-local use.
 
 ## Where things are
 
 | You want to… | Look at |
 | --- | --- |
-| Change the delivery sequence or its bounds | `workflow/delivery.workflow.ts`, `workflow/policy.ts` |
-| Change what an agent is told | `api/prompts.ts` |
-| Change what a phase Run receives | `api/routes/runner.ts` (claim) |
-| Change what wakes an agent on a PR | `forge/classify.ts` |
-| Change how the runner pushes | `runner/cmd/factory-runner/publish.go` |
-| Change how findings are parsed | `runner/cmd/factory-runner/findings.go` |
-| Change the fake agent | `fakeScript` in `runner/cmd/factory-runner/runlifecycle.go` |
-| Add an event type | `packages/domain/src/events/types.ts` (and `runner/internal/protocol` if the runner emits it) |
-| Change the sidebar/board data | `api/routes/navigation.ts` |
+| Change the delivery sequence or its bounds | `orchestrator/internal/delivery/workflow.go`, `policy.go` |
+| Change what an agent is told | `orchestrator/internal/delivery/prompts.go` |
+| Change what lux is asked to run | `orchestrator/internal/phases/spec.go` |
+| Change what an agent's output becomes in the ledger | `orchestrator/internal/phases/translate.go` |
+| Change how a finished phase is collected | `finish` and `publish` in `orchestrator/internal/phases/sync.go` |
+| Change what wakes an agent on a PR | `orchestrator/internal/forge/classify.go` |
+| Change how findings are parsed | `orchestrator/internal/delivery/findings.go` |
+| Change the scripted agent | `orchestrator/internal/fakeagent` |
+| Add an event type | `packages/domain/src/events/types.ts` and the Go constants that write it |
+| Change the sidebar/board data | `apps/control-plane/src/api/routes/navigation.ts` |
 | Change a screen | `apps/web/src/screens/` |
 | Change a component | `packages/design-system/src/components/` |

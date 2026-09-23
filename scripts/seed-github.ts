@@ -3,8 +3,8 @@
  * Point the factory at a GitHub repository and run the PR loop against it.
  *
  * Creates a project whose repository is the given GitHub URL, stores the
- * forge credential, and creates a work item — so a runner can claim it, an
- * agent can commit, the runner can push, and a pull request can be opened.
+ * forge credential, and creates a work item — so delivering it runs agents on
+ * lux, pushes their work and opens a pull request.
  *
  *   GITHUB_TOKEN=ghp_… bun run scripts/seed-github.ts <owner/repo>
  *
