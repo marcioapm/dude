@@ -230,6 +230,62 @@ describe("usage", () => {
   });
 });
 
+describe("what the agent received, thought and got back", () => {
+  test("the prompt, thoughts and a tool's output become turns in order", () => {
+    const { turns } = project([
+      ev(EventTypes.PromptDelivered, { text: "Implement this task." }),
+      ev(EventTypes.AgentThought, { text: "Read the tests first." }),
+      ev(EventTypes.ToolCalled, { tool: "bash", callId: "c1", input: { command: "pytest" } }),
+      ev(EventTypes.ToolCompleted, {
+        tool: "bash", callId: "c1", status: "error", exitCode: 3,
+        output: { head: "F..", tail: "1 failed", omittedBytes: 9000 },
+      }),
+      ev(EventTypes.AgentMessage, { text: "One test fails.", contextTokens: 15258 }),
+    ]);
+
+    expect(turns.map((t) => t.kind)).toEqual(["prompt", "thought", "tool", "message"]);
+    expect(turns[2]).toMatchObject({
+      status: "failed",
+      result: { exitCode: 3, output: { head: "F..", tail: "1 failed", omittedBytes: 9000 } },
+    });
+    expect(turns[3]).toMatchObject({ contextTokens: 15258 });
+  });
+
+  test("a steer stays queued until the agent takes it", () => {
+    const events = [ev(EventTypes.RunSteered, { text: "Stop", directiveId: "dir_1" })];
+    expect(project(events).turns[0]).toMatchObject({ deliveredAt: null });
+
+    events.push(ev(EventTypes.DirectiveDelivered, { directiveId: "dir_1" }));
+    expect(project(events).turns[0]).toMatchObject({ deliveredAt: events[1]!.occurredAt });
+  });
+
+  test("tokens are counted when cost is unknown, and a turn's totals are shown where it ended", () => {
+    const conversation = project([
+      ev(EventTypes.ModelRequestCompleted, { contextTokens: 12000, contextWindow: 744000 }),
+      ev(EventTypes.ModelRequestCompleted, {
+        turn: true, contextTokens: 12000,
+        tokens: { input: 2, output: 10, cacheRead: 11889, cacheWrite: 71 },
+      }),
+    ]);
+
+    expect(conversation.costUsd).toBe(0);
+    expect(conversation.tokens).toBe(12);
+    expect(conversation).toMatchObject({ contextTokens: 12000, contextWindow: 744000 });
+    expect(conversation.turns).toEqual([
+      expect.objectContaining({ kind: "usage", input: 2, output: 10, cacheRead: 11889 }),
+    ]);
+  });
+
+  test("a turn that ends on a message carries its totals on that message", () => {
+    const { turns } = project([
+      ev(EventTypes.AgentMessage, { text: "Done." }),
+      ev(EventTypes.ModelRequestCompleted, { turn: true, contextTokens: 15500, tokens: { input: 2, output: 251 } }),
+    ]);
+
+    expect(turns).toEqual([expect.objectContaining({ kind: "message", contextTokens: 15500, outputTokens: 251 })]);
+  });
+});
+
 describe("incremental folding", () => {
   /**
    * The property the streaming UI depends on: applying events one at a time

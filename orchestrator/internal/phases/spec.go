@@ -106,6 +106,13 @@ type specInput struct {
 	ForgeToken                                     string
 }
 
+// Which coding agent runs a phase, as recorded on the Run: what the chat
+// labels it with, and what dude's translation of its output assumes.
+const (
+	harnessOpenCode = "opencode"
+	harnessScripted = "scripted"
+)
+
 // buildSpec turns a phase Run into a lux RunSpec.
 //
 // Everything that decides behaviour is here and nowhere in lux: which image,
@@ -118,6 +125,7 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		Labels: map[string]string{
 			"dude.org": in.OrganizationID, "dude.workItem": in.WorkItemID,
 			"dude.run": in.RunID, "dude.phase": in.Phase,
+			"dude.harness": harnessOpenCode, "dude.model": in.Model,
 		},
 		Image: lux.Image{Ref: in.Image},
 		Workload: lux.Workload{
@@ -149,7 +157,7 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 	// script fakeagent writes for this phase. The model is a label too, so a
 	// stand-in for lux can play the same agent without parsing the script.
 	if fakeagent.Is(in.Model) {
-		spec.Labels["dude.model"] = in.Model
+		spec.Labels["dude.harness"] = harnessScripted
 		spec.Workload.Adapter = "acp"
 		spec.Workload.Command = []string{"lux-fake"}
 		spec.Workload.Prompt = fakeagent.Script(in.Phase, in.Model, in.RunID)

@@ -78,8 +78,17 @@ def test_a_delivery_runs_on_real_lux(client: ApiClient, lux_project):
 
     # What dude recorded from the stream is a conversation, not lux internals.
     implement = client.work_item_runs(work_item["id"])[0]
-    types = {e["eventType"] for e in client.events(runId=implement["id"])}
+    events = client.events(runId=implement["id"])
+    types = {e["eventType"] for e in events}
     assert {"agent.session.started", "agent.message", "run.completed", "git.commit_created"} <= types, types
+
+    # lux acknowledges the task itself, with what the agent received: the
+    # scripted agent's prompt is its script.
+    prompts = [e["payload"] for e in events if e["eventType"] == "agent.prompt.delivered"]
+    assert len(prompts) == 1 and "commit" in prompts[0]["text"], prompts
+    # And relays the turn's token usage, which only the prompt's response carries.
+    usage = client.get(f"/v1/runs/{implement['id']}").json()["tokens"]
+    assert usage["output"] > 0, usage
 
 
 def test_steering_pause_and_resume_on_real_lux(client: ApiClient, lux_project):

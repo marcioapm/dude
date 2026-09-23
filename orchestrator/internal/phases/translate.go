@@ -3,6 +3,7 @@ package phases
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -14,6 +15,8 @@ import (
 // Events the translator writes: the vocabulary the chat view renders.
 const (
 	evAgentMessage       = "agent.message"
+	evAgentThought       = "agent.thought"
+	evPromptDelivered    = "agent.prompt.delivered"
 	evToolCalled         = "agent.tool.called"
 	evToolCompleted      = "agent.tool.completed"
 	evPlanUpdated        = "agent.plan.updated"
@@ -45,6 +48,11 @@ type translator struct {
 	// Reply text streamed since the last complete message. Chunks are
 	// fragments of words; the ledger records messages.
 	message strings.Builder
+	// Thinking streamed since the last complete thought, kept the same way.
+	thought strings.Builder
+	// The conversation's size as the agent last reported it, stamped on each
+	// message so the chat can show how full the context was at that point.
+	context int64
 	// Tool calls already recorded, by id, with the name they were recorded
 	// under: a command that streams many progress updates is one call in the
 	// ledger, and its completion — which carries no title — keeps the name.
@@ -53,12 +61,14 @@ type translator struct {
 
 // load restores what the translator keeps between batches.
 func (t *translator) load(ctx context.Context, tx pgx.Tx) error {
-	var message string
-	if err := tx.QueryRow(ctx, `SELECT agent_session_epoch, agent_cost_usd::float8, agent_message_buffer
-		FROM runs WHERE id = $1`, t.run.ID).Scan(&t.sessionEpoch, &t.cost, &message); err != nil {
+	var message, thought string
+	if err := tx.QueryRow(ctx, `SELECT agent_session_epoch, agent_cost_usd::float8, agent_message_buffer,
+		agent_thought_buffer, context_tokens FROM runs WHERE id = $1`, t.run.ID).
+		Scan(&t.sessionEpoch, &t.cost, &message, &thought, &t.context); err != nil {
 		return err
 	}
 	t.message.WriteString(message)
+	t.thought.WriteString(thought)
 	rows, err := tx.Query(ctx, `SELECT payload->>'callId', payload->>'tool' FROM events WHERE run_id = $1 AND event_type = $2`,
 		t.run.ID, evToolCalled)
 	if err != nil {
@@ -75,7 +85,8 @@ func (t *translator) load(ctx context.Context, tx pgx.Tx) error {
 // save records the reply in progress, in the batch's transaction, so it
 // commits with the cursor that has moved past its chunks.
 func (t *translator) save(ctx context.Context, tx pgx.Tx) error {
-	_, err := tx.Exec(ctx, `UPDATE runs SET agent_message_buffer = $2 WHERE id = $1`, t.run.ID, t.message.String())
+	_, err := tx.Exec(ctx, `UPDATE runs SET agent_message_buffer = $2, agent_thought_buffer = $3 WHERE id = $1`,
+		t.run.ID, t.message.String(), t.thought.String())
 	return err
 }
 
@@ -166,6 +177,22 @@ func (t *translator) shimEvent(ctx context.Context, tx pgx.Tx, s *Syncer, typ st
 		if str("error") != "" {
 			return nil
 		}
+		// The task itself: recorded when the agent has it, as lux delivered it.
+		if str("requestId") == promptRequestID {
+			// Once per Run: an agent resumed on another host is not given its
+			// task again, but a lux that acknowledged it again would repeat it.
+			var seen bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE run_id = $1 AND event_type = $2)`,
+				t.run.ID, evPromptDelivered).Scan(&seen); err != nil || seen {
+				return err
+			}
+			// lux caps the text it relays; a prompt it cut says so.
+			payload := map[string]any{"text": str("text")}
+			if truncated, _ := data["truncated"].(bool); truncated {
+				payload["truncated"] = true
+			}
+			return s.event(ctx, tx, t.run, evPromptDelivered, ledger.ActorSystem, payload)
+		}
 		tag, err := tx.Exec(ctx, `UPDATE directives SET delivered_at = COALESCE(delivered_at, now()) WHERE id = $1`, str("requestId"))
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
@@ -202,7 +229,7 @@ func (t *translator) activity(ctx context.Context, tx pgx.Tx, s *Syncer, activit
 		_, err := tx.Exec(ctx, `UPDATE runs SET agent_busy_at = COALESCE(agent_busy_at, now()), turn_done_at = NULL WHERE id = $1`, t.run.ID)
 		return err
 	case "idle":
-		if err := t.flushMessage(ctx, tx, s); err != nil {
+		if err := t.flush(ctx, tx, s); err != nil {
 			return err
 		}
 		tag, err := tx.Exec(ctx, `UPDATE runs SET turn_done_at = now()
@@ -239,14 +266,28 @@ func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux
 
 	switch typ {
 	case "agent_message_chunk":
+		// A reply ends a thought.
+		if err := t.flushThought(ctx, tx, s); err != nil {
+			return err
+		}
 		content, _ := u["content"].(map[string]any)
 		if str(content, "type") == "text" {
 			t.message.WriteString(str(content, "text"))
 		}
 		return nil
 
-	case "tool_call", "tool_call_update":
+	case "agent_thought_chunk":
 		if err := t.flushMessage(ctx, tx, s); err != nil {
+			return err
+		}
+		content, _ := u["content"].(map[string]any)
+		if str(content, "type") == "text" {
+			t.thought.WriteString(str(content, "text"))
+		}
+		return nil
+
+	case "tool_call", "tool_call_update":
+		if err := t.flush(ctx, tx, s); err != nil {
 			return err
 		}
 		status, title, callID := str(u, "status"), str(u, "title"), str(u, "toolCallId")
@@ -280,39 +321,106 @@ func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux
 			if !seen {
 				return nil
 			}
-			return s.event(ctx, tx, t.run, evToolCompleted, ledger.ActorAgent,
-				map[string]any{"tool": name, "callId": callID, "status": st, "title": title})
+			payload := map[string]any{"tool": name, "callId": callID, "status": st, "title": title}
+			maps.Copy(payload, toolResult(u))
+			return s.event(ctx, tx, t.run, evToolCompleted, ledger.ActorAgent, payload)
 		}
 		// "pending" is announced before its input is known; in_progress follows.
 
 	case "usage_update":
-		cost, _ := u["cost"].(map[string]any)
-		amount, _ := cost["amount"].(float64)
-		delta := amount - t.cost
-		if delta <= 0 {
-			return nil
-		}
-		t.cost = amount
-		if _, err := tx.Exec(ctx, `UPDATE runs SET agent_cost_usd = $2 WHERE id = $1`, t.run.ID, amount); err != nil {
-			return err
-		}
-		return s.event(ctx, tx, t.run, evModelRequestDone, ledger.ActorAgent,
-			map[string]any{"costUsd": delta, "tokens": map[string]any{"context": u["used"]}})
+		return t.usageUpdate(ctx, tx, s, u)
 
 	case "turn_end":
-		return t.flushMessage(ctx, tx, s)
+		if err := t.flush(ctx, tx, s); err != nil {
+			return err
+		}
+		return t.turnUsage(ctx, tx, s, u)
 	}
 	return nil
 }
 
-// flushMessage records the reply text streamed since the last message.
+// flush records whatever reply or thought was streaming: something else
+// happening ends both.
+func (t *translator) flush(ctx context.Context, tx pgx.Tx, s *Syncer) error {
+	if err := t.flushThought(ctx, tx, s); err != nil {
+		return err
+	}
+	return t.flushMessage(ctx, tx, s)
+}
+
+// flushMessage records the reply text streamed since the last message, with
+// the context size at that point.
 func (t *translator) flushMessage(ctx context.Context, tx pgx.Tx, s *Syncer) error {
 	text := t.message.String()
 	t.message.Reset()
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
-	return s.event(ctx, tx, t.run, evAgentMessage, ledger.ActorAgent, map[string]any{"text": text})
+	payload := map[string]any{"text": text}
+	if t.context > 0 {
+		payload["contextTokens"] = t.context
+	}
+	return s.event(ctx, tx, t.run, evAgentMessage, ledger.ActorAgent, payload)
+}
+
+// flushThought records the thinking streamed since the last thought.
+func (t *translator) flushThought(ctx context.Context, tx pgx.Tx, s *Syncer) error {
+	text := t.thought.String()
+	t.thought.Reset()
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	return s.event(ctx, tx, t.run, evAgentThought, ledger.ActorAgent, map[string]any{"text": text})
+}
+
+// usageUpdate: ACP's running report of the conversation's size, and of cost
+// when the agent knows prices. Recorded whenever either moves — a cost of
+// zero means unknown, not free, and must not hide the tokens.
+func (t *translator) usageUpdate(ctx context.Context, tx pgx.Tx, s *Syncer, u map[string]any) error {
+	used := int64(number(u["used"]))
+	cost, _ := u["cost"].(map[string]any)
+	amount := number(cost["amount"])
+	delta := amount - t.cost
+	if (used == 0 || used == t.context) && delta <= 0 {
+		return nil
+	}
+	if used > 0 {
+		t.context = used
+	}
+	payload := map[string]any{"contextTokens": t.context, "contextWindow": int64(number(u["size"]))}
+	if delta > 0 {
+		t.cost = amount
+		payload["costUsd"] = delta
+	}
+	if _, err := tx.Exec(ctx, `UPDATE runs SET context_tokens = $2, agent_cost_usd = $3 WHERE id = $1`,
+		t.run.ID, t.context, t.cost); err != nil {
+		return err
+	}
+	return s.event(ctx, tx, t.run, evModelRequestDone, ledger.ActorAgent, payload)
+}
+
+// turnUsage: the tokens a whole turn used, which ACP reports only with the
+// turn's end. Summed onto the Run; the event carries the turn's own numbers.
+func (t *translator) turnUsage(ctx context.Context, tx pgx.Tx, s *Syncer, u map[string]any) error {
+	usage, _ := u["usage"].(map[string]any)
+	if usage == nil {
+		return nil
+	}
+	in, out := int64(number(usage["inputTokens"])), int64(number(usage["outputTokens"]))
+	cr, cw := int64(number(usage["cachedReadTokens"])), int64(number(usage["cachedWriteTokens"]))
+	if _, err := tx.Exec(ctx, `UPDATE runs SET input_tokens = input_tokens + $2, output_tokens = output_tokens + $3,
+		cache_read_tokens = cache_read_tokens + $4, cache_write_tokens = cache_write_tokens + $5 WHERE id = $1`,
+		t.run.ID, in, out, cr, cw); err != nil {
+		return err
+	}
+	return s.event(ctx, tx, t.run, evModelRequestDone, ledger.ActorAgent, map[string]any{
+		"turn": true, "contextTokens": t.context,
+		"tokens": map[string]any{"input": in, "output": out, "cacheRead": cr, "cacheWrite": cw}})
+}
+
+func number(v any) float64 {
+	f, _ := v.(float64)
+	return f
 }
 
 // toolName: ACP carries a kind (read, edit, execute…) and a title that for

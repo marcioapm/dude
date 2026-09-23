@@ -19,6 +19,24 @@ import { EventTypes, TERMINAL_RUN_STATUSES } from "@dude/domain";
 import type { HumanIntent, PlanItem } from "@dude/design-system/components";
 import { TODO_STATUSES, type ActivityKind, type ToolCallStatus } from "@dude/design-system/tokens";
 
+/**
+ * One stream of a tool's output as the orchestrator keeps it: whole up to
+ * 4 KB, otherwise its first and last 2 KB with how much was left out.
+ */
+export interface CappedOutput {
+  head: string;
+  tail?: string;
+  omittedBytes?: number;
+}
+
+/** What a finished tool call produced. Agents report one merged stream or two. */
+export interface ToolResult {
+  output?: CappedOutput;
+  stdout?: CappedOutput;
+  stderr?: CappedOutput;
+  exitCode?: number;
+}
+
 export interface ToolTurn {
   kind: "tool";
   id: string;
@@ -27,12 +45,45 @@ export interface ToolTurn {
   status: ToolCallStatus;
   startedAt: string;
   endedAt: string | null;
+  result: ToolResult | null;
 }
 
 export interface MessageTurn {
   kind: "message";
   id: string;
   text: string;
+  at: string;
+  /** How full the conversation was when this message was written. */
+  contextTokens: number | null;
+  /** The output tokens of the turn this message ended, once it has ended. */
+  outputTokens: number | null;
+}
+
+/** The model's reasoning between actions: secondary to what it says and does. */
+export interface ThoughtTurn {
+  kind: "thought";
+  id: string;
+  text: string;
+  at: string;
+}
+
+/** The task, as the agent received it. Written by the factory, not a person. */
+export interface PromptTurn {
+  kind: "prompt";
+  id: string;
+  text: string;
+  at: string;
+}
+
+/** A turn's token totals, as the agent reported them when it ended. */
+export interface UsageTurn {
+  kind: "usage";
+  id: string;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  contextTokens: number;
   at: string;
 }
 
@@ -43,9 +94,11 @@ export interface HumanTurn {
   intent: Extract<HumanIntent, "steer" | "answer">;
   text: string;
   at: string;
+  /** A steer is queued until the agent takes it; null until then. */
+  deliveredAt: string | null;
 }
 
-export type Turn = ToolTurn | MessageTurn | HumanTurn;
+export type Turn = ToolTurn | MessageTurn | HumanTurn | ThoughtTurn | PromptTurn | UsageTurn;
 
 export interface Conversation {
   turns: Turn[];
@@ -54,6 +107,9 @@ export interface Conversation {
   /** Running totals, so the header needs no separate query. */
   costUsd: number;
   tokens: number;
+  /** The latest context size, and the window it fills, when reported. */
+  contextTokens: number;
+  contextWindow: number;
   /** What the agent is doing right now, or null when it is not working. */
   activity: Extract<ActivityKind, "thinking" | "streaming" | "tool"> | null;
   /** The tool being waited on, when activity is "tool". */
@@ -82,9 +138,13 @@ export interface Projection {
    * it belongs to rather than appending a second one.
    */
   toolsByCall: Map<string, ToolTurn>;
+  /** Steers by directive id, so a delivery marks the turn it belongs to. */
+  steersByDirective: Map<string, HumanTurn>;
   plan: PlanItem[];
   costUsd: number;
   tokens: number;
+  contextTokens: number;
+  contextWindow: number;
   activity: Conversation["activity"];
   activeTool: Conversation["activeTool"];
   /** Highest cursor folded in; lets a caller skip what it already applied. */
@@ -95,9 +155,12 @@ export function emptyProjection(): Projection {
   return {
     turns: [],
     toolsByCall: new Map(),
+    steersByDirective: new Map(),
     plan: [],
     costUsd: 0,
     tokens: 0,
+    contextTokens: 0,
+    contextWindow: 0,
     activity: null,
     activeTool: null,
     cursor: 0,
@@ -118,9 +181,11 @@ export function project(events: readonly PersistedEvent[], runStatus?: RunStatus
 /**
  * Apply events to a projection, mutating and returning it.
  *
- * Mutation is deliberate: a tool completion updates the turn its call
- * created, so turns were never immutable, and keeping their identity stable
- * across frames is what lets React skip re-rendering settled turns.
+ * Mutation is deliberate: a tool completion, a steer's delivery and a
+ * turn's token totals update a turn already pushed, rather than replacing
+ * it. Nothing memoizes turns today, so that re-renders correctly; a turn
+ * component wrapped in `React.memo` would need these updates to replace the
+ * turn instead.
  */
 export function apply(state: Projection, events: readonly PersistedEvent[]): Projection {
   const { turns, toolsByCall } = state;
@@ -145,7 +210,15 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       case EventTypes.AgentMessage: {
         const text = typeof payload.text === "string" ? payload.text : "";
         if (!text.trim()) break;
-        turns.push({ kind: "message", id: event.eventId, text, at: event.occurredAt });
+        const contextTokens = numberOf(payload.contextTokens);
+        turns.push({
+          kind: "message",
+          id: event.eventId,
+          text,
+          at: event.occurredAt,
+          contextTokens: contextTokens > 0 ? contextTokens : null,
+          outputTokens: null,
+        });
         // A message means the model produced output; it is no longer waiting
         // on a tool.
         state.activity = null;
@@ -163,6 +236,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           status: "running",
           startedAt: event.occurredAt,
           endedAt: null,
+          result: null,
         };
         toolsByCall.set(callId, turn);
         turns.push(turn);
@@ -179,9 +253,11 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         // it "failed".
         const status: ToolCallStatus = payload.status === "error" ? "failed" : "completed";
 
+        const result = resultFrom(payload);
         if (existing) {
           existing.status = status;
           existing.endedAt = event.occurredAt;
+          existing.result = result;
         } else {
           // The harness buffers some tools and only reports them once
           // finished, so a completion with no matching call is normal rather
@@ -194,6 +270,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
             status,
             startedAt: event.occurredAt,
             endedAt: event.occurredAt,
+            result,
           };
           toolsByCall.set(turn.id, turn);
           turns.push(turn);
@@ -206,10 +283,55 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         break;
       }
 
+      case EventTypes.AgentThought: {
+        const text = typeof payload.text === "string" ? payload.text : "";
+        if (!text.trim()) break;
+        turns.push({ kind: "thought", id: event.eventId, text, at: event.occurredAt });
+        break;
+      }
+
+      case EventTypes.PromptDelivered: {
+        const text = typeof payload.text === "string" ? payload.text : "";
+        if (!text.trim()) break;
+        turns.push({ kind: "prompt", id: event.eventId, text, at: event.occurredAt });
+        break;
+      }
+
+      case EventTypes.DirectiveDelivered: {
+        const steer = state.steersByDirective.get(String(payload.directiveId ?? ""));
+        if (steer) steer.deliveredAt = event.occurredAt;
+        break;
+      }
+
       case EventTypes.ModelRequestCompleted: {
         state.costUsd += numberOf(payload.costUsd);
+        const context = numberOf(payload.contextTokens);
+        if (context > 0) state.contextTokens = context;
+        const window = numberOf(payload.contextWindow);
+        if (window > 0) state.contextWindow = window;
         const t = payload.tokens as Record<string, unknown> | undefined;
-        if (t) state.tokens += numberOf(t.input) + numberOf(t.output);
+        if (t) {
+          const [input, output] = [numberOf(t.input), numberOf(t.output)];
+          state.tokens += input + output;
+          // A turn's totals arrive with its end: shown where the turn ended —
+          // on its closing message, or on their own after a tool.
+          const last = turns[turns.length - 1];
+          if (payload.turn === true && last?.kind === "message") {
+            last.outputTokens = output;
+            if (context > 0) last.contextTokens = context;
+          } else if (payload.turn === true) {
+            turns.push({
+              kind: "usage",
+              id: event.eventId,
+              input,
+              output,
+              cacheRead: numberOf(t.cacheRead),
+              cacheWrite: numberOf(t.cacheWrite),
+              contextTokens: context,
+              at: event.occurredAt,
+            });
+          }
+        }
         // Between model requests the agent is thinking, unless a tool is
         // outstanding.
         if (!state.activeTool) state.activity = "thinking";
@@ -217,13 +339,16 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       }
 
       case EventTypes.RunSteered: {
-        turns.push({
+        const turn: HumanTurn = {
           kind: "human",
           id: event.eventId,
           intent: "steer",
           text: String(payload.text ?? ""),
           at: event.occurredAt,
-        });
+          deliveredAt: null,
+        };
+        if (typeof payload.directiveId === "string") state.steersByDirective.set(payload.directiveId, turn);
+        turns.push(turn);
         break;
       }
 
@@ -234,6 +359,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           intent: "answer",
           text: String(payload.answer ?? ""),
           at: event.occurredAt,
+          deliveredAt: event.occurredAt,
         });
         break;
       }
@@ -263,6 +389,8 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
       plan: state.plan,
       costUsd: state.costUsd,
       tokens: state.tokens,
+      contextTokens: state.contextTokens,
+      contextWindow: state.contextWindow,
       activity: state.activity,
       activeTool: state.activeTool,
     };
@@ -286,6 +414,8 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
     plan: state.plan,
     costUsd: state.costUsd,
     tokens: state.tokens,
+    contextTokens: state.contextTokens,
+    contextWindow: state.contextWindow,
     activity: null,
     activeTool: null,
   };
@@ -316,6 +446,23 @@ function normalizeTodoStatus(status: unknown): PlanItem["status"] {
   return (TODO_STATUSES as readonly string[]).includes(status as string)
     ? (status as PlanItem["status"])
     : "pending";
+}
+
+/** A tool's outcome from an `agent.tool.completed` payload, or null if it reported none. */
+function resultFrom(payload: Record<string, unknown>): ToolResult | null {
+  const result: ToolResult = {};
+  for (const key of ["output", "stdout", "stderr"] as const) {
+    const stream = payload[key] as Record<string, unknown> | undefined;
+    if (stream && typeof stream.head === "string") {
+      result[key] = {
+        head: stream.head,
+        ...(typeof stream.tail === "string" ? { tail: stream.tail } : {}),
+        ...(numberOf(stream.omittedBytes) > 0 ? { omittedBytes: numberOf(stream.omittedBytes) } : {}),
+      };
+    }
+  }
+  if (typeof payload.exitCode === "number") result.exitCode = payload.exitCode;
+  return Object.keys(result).length > 0 ? result : null;
 }
 
 function numberOf(value: unknown): number {

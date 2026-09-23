@@ -213,6 +213,23 @@ export const runSchema = z.object({
   /** What it produced, for the next phase to build on. */
   headSha: z.string().nullable().default(null),
   branch: z.string().nullable().default(null),
+  /**
+   * Which coding agent ran it ("opencode", "claude-code", "scripted"…) and
+   * its model. For presentation only: everything the agent reported has
+   * already been translated into dude's own events.
+   */
+  harness: z.string().nullable().default(null),
+  model: z.string().nullable().default(null),
+  /** Tokens as the agent reported them. Context is the latest size, not a sum. */
+  tokens: z
+    .object({
+      input: z.number(),
+      output: z.number(),
+      cacheRead: z.number(),
+      cacheWrite: z.number(),
+      context: z.number(),
+    })
+    .default({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, context: 0 }),
   createdAt: z.string().datetime({ offset: true }),
   startedAt: z.string().datetime({ offset: true }).nullable().default(null),
   endedAt: z.string().datetime({ offset: true }).nullable().default(null),

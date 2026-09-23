@@ -7,6 +7,7 @@
 package ledger
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"time"
@@ -60,6 +61,10 @@ func Append(ctx context.Context, tx pgx.Tx, e Event) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// jsonb refuses the NUL character, and agents relay binary output. One
+	// such byte would fail the insert, roll back the batch with its cursor,
+	// and stop the Run's output being read at all.
+	payload = bytes.ReplaceAll(payload, []byte(`\u0000`), []byte(`\ufffd`))
 	occurred := e.OccurredAt
 	if occurred.IsZero() {
 		occurred = time.Now()
