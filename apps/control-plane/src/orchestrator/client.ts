@@ -29,7 +29,8 @@ export async function orchestrator(
   organizationId: string,
   method: string,
   path: string,
-  body: unknown = {},
+  body: string = "{}",
+  actorId?: string,
 ): Promise<Response> {
   const { url, token } = config();
   let res: Response;
@@ -39,10 +40,13 @@ export async function orchestrator(
       signal: AbortSignal.timeout(TIMEOUT_MS),
       headers: {
         authorization: `Bearer ${token}`,
+        // Who is asking travels in headers, never in the body, so a
+        // request cannot claim to be someone else.
         "x-dude-organization": organizationId,
+        ...(actorId ? { "x-dude-actor": actorId } : {}),
         "content-type": "application/json",
       },
-      body: JSON.stringify(body),
+      body: body || "{}",
     });
   } catch (err) {
     throw new HttpError(503, `the orchestrator is unreachable: ${String(err)}`, "unavailable");

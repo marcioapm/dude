@@ -45,11 +45,6 @@ def lux_project(client: ApiClient, env) -> tuple[dict, FakeGitHub]:
     gh.stop()
 
 
-def _runs(client: ApiClient, work_item_id: str) -> list[dict]:
-    runs = client.get(f"/v1/work-items/{work_item_id}").json().get("runs", [])
-    return sorted(runs, key=lambda r: r["createdAt"])
-
-
 def test_a_delivery_runs_on_real_lux(client: ApiClient, lux_project):
     """Implement → review → fix → review → simplify → PR, every agent a lux Run.
 
@@ -66,9 +61,9 @@ def test_a_delivery_runs_on_real_lux(client: ApiClient, lux_project):
     try:
         pr = wait_until(pr_open, timeout=300, interval=2, message="no pull request on real lux")[0]
     finally:
-        print("phases:", [(r["phase"], r["status"], r.get("error")) for r in _runs(client, work_item["id"])])
+        print("phases:", [(r["phase"], r["status"], r.get("error")) for r in client.work_item_runs(work_item["id"])])
 
-    phases = [(r["phase"], r["status"]) for r in _runs(client, work_item["id"])]
+    phases = [(r["phase"], r["status"]) for r in client.work_item_runs(work_item["id"])]
     assert phases == [("implement", "completed"), ("review", "completed"), ("fix", "completed"),
                       ("review", "completed"), ("simplify", "completed")], phases
 
@@ -82,7 +77,7 @@ def test_a_delivery_runs_on_real_lux(client: ApiClient, lux_project):
     assert [(f["severity"], f["status"]) for f in findings] == [("blocking", "resolved")], findings
 
     # What dude recorded from the stream is a conversation, not lux internals.
-    implement = _runs(client, work_item["id"])[0]
+    implement = client.work_item_runs(work_item["id"])[0]
     types = {e["eventType"] for e in client.events(runId=implement["id"])}
     assert {"agent.session.started", "agent.message", "run.completed", "git.commit_created"} <= types, types
 
@@ -90,11 +85,13 @@ def test_a_delivery_runs_on_real_lux(client: ApiClient, lux_project):
 def test_steering_pause_and_resume_on_real_lux(client: ApiClient, lux_project):
     """A live agent on lux hears a directive, stops, and continues its session."""
     project, _ = lux_project
-    work_item = client.create_work_item(project["id"], "Hold", goal="[hang]")
+    # An agent that never finishes its turn, to have something live to control.
+    client.patch(f"/v1/projects/{project['id']}", {"agentModels": {"implementer": {"model": "fake/hang"}}})
+    work_item = client.create_work_item(project["id"], "Hold")
     assert client.post(f"/v1/work-items/{work_item['id']}/deliver").status_code == 201
 
     run = wait_until(
-        lambda: next((r for r in _runs(client, work_item["id"]) if r["status"] == "running"), None),
+        lambda: next((r for r in client.work_item_runs(work_item["id"]) if r["status"] == "running"), None),
         timeout=120, interval=1, message="the agent never started on lux",
     )
     # The agent is mid-turn and speaks ACP, which cannot take a message then:

@@ -12,7 +12,8 @@ import { withOrg, withoutTenant } from "../db/client.ts";
 
 export const KEY_PREFIX = "dude_sk_";
 
-export type PrincipalKind = "user" | "runner";
+/** Only user keys remain: runner keys belonged to the retired Go runner. */
+export type PrincipalKind = "user";
 
 export interface Principal {
   organizationId: string;
@@ -78,7 +79,9 @@ export async function authenticate(authorization: string | null): Promise<Princi
   });
 
   const row = rows[0];
-  if (!row) return null;
+  // A runner key left over from the retired runner protocol authenticates
+  // nothing (migration 014 revokes them; this holds for any that remain).
+  if (!row || row.kind !== "user") return null;
 
   // Best-effort usage tracking; never fail a request because it did not stick.
   void withoutTenant(async ({ sql }) => {

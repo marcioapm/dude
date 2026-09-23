@@ -97,10 +97,8 @@ const deliverInput = z.object({
  */
 async function deliverWorkItem(ctx: RequestContext): Promise<Response> {
   const input = await parseBody(ctx.request, deliverInput);
-  return orchestrator(ctx.principal.organizationId, "POST", `/internal/work-items/${ctx.params.id}/deliver`, {
-    ...input,
-    actorId: ctx.principal.apiKeyId,
-  });
+  return orchestrator(ctx.principal.organizationId, "POST", `/internal/work-items/${ctx.params.id}/deliver`,
+    JSON.stringify(input), ctx.principal.apiKeyId);
 }
 
 async function listWorkItems(ctx: RequestContext): Promise<Response> {

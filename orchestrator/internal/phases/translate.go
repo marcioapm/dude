@@ -11,8 +11,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
-// Events the translator writes. The same vocabulary the Go runner produced,
-// so the chat view renders lux-run agents unchanged.
+// Events the translator writes: the vocabulary the chat view renders.
 const (
 	evAgentMessage       = "agent.message"
 	evToolCalled         = "agent.tool.called"
@@ -27,11 +26,14 @@ const (
 )
 
 // translator turns one lux Run's output into dude's ledger, and into the
-// Run's own state: the agent's session, whether its turn is done, what its
-// checkout started from, and what its push did.
+// Run's own state: whether its turn is done, what its checkout started from,
+// what its push did.
 //
-// It sees each frame once, in order, inside the transaction that advances
-// the cursor past it.
+// It sees frames in order, in batches, each batch inside the transaction
+// that advances the cursor past it. What it keeps in memory between frames
+// (the reply being streamed, the tool calls seen) is either saved with the
+// cursor or rebuilt from the database when following starts, so a restart
+// neither repeats nor loses anything.
 type translator struct {
 	run phaseRun
 	// The placement whose agent session is established. A resumed agent
@@ -40,6 +42,40 @@ type translator struct {
 	sessionEpoch int
 	// The running total the agent last reported.
 	cost float64
+	// Reply text streamed since the last complete message. Chunks are
+	// fragments of words; the ledger records messages.
+	message strings.Builder
+	// Tool calls already recorded, so a command that streams many progress
+	// updates is one call in the ledger.
+	seenCalls map[string]bool
+}
+
+// load restores what the translator keeps between batches.
+func (t *translator) load(ctx context.Context, tx pgx.Tx) error {
+	var message string
+	if err := tx.QueryRow(ctx, `SELECT agent_session_epoch, agent_cost_usd::float8, agent_message_buffer
+		FROM runs WHERE id = $1`, t.run.ID).Scan(&t.sessionEpoch, &t.cost, &message); err != nil {
+		return err
+	}
+	t.message.WriteString(message)
+	rows, err := tx.Query(ctx, `SELECT payload->>'callId' FROM events WHERE run_id = $1 AND event_type = $2`,
+		t.run.ID, evToolCalled)
+	if err != nil {
+		return err
+	}
+	calls, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	t.seenCalls = make(map[string]bool, len(calls))
+	for _, c := range calls {
+		t.seenCalls[c] = true
+	}
+	return err
+}
+
+// save records the reply in progress, in the batch's transaction, so it
+// commits with the cursor that has moved past its chunks.
+func (t *translator) save(ctx context.Context, tx pgx.Tx) error {
+	_, err := tx.Exec(ctx, `UPDATE runs SET agent_message_buffer = $2 WHERE id = $1`, t.run.ID, t.message.String())
+	return err
 }
 
 func (t *translator) apply(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.Frame) error {
@@ -50,8 +86,8 @@ func (t *translator) apply(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.Fram
 		if f.Event != nil {
 			return t.agentEvent(ctx, tx, s, f)
 		}
-		// Plain stdout is the agent's reply text, which the structured
-		// events already carry; stderr is diagnostics, not conversation.
+		// Plain stdout is the reply text, which the structured events already
+		// carry; stderr is diagnostics, not conversation.
 		return nil
 	case "gap":
 		return s.event(ctx, tx, t.run, evRuntimeStopped, ledger.ActorSystem,
@@ -69,19 +105,16 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 	switch f.EventType {
 	case "state":
 		state := str("state")
-		if _, err := tx.Exec(ctx, `UPDATE runs SET lux_state = $2, lux_state_reason = $3,
+		if _, err := tx.Exec(ctx, `UPDATE runs SET lux_state = $2,
 			started_at = CASE WHEN $2 = 'running' THEN COALESCE(started_at, now()) ELSE started_at END,
 			status = CASE WHEN $2 = 'running' AND status IN ('scheduled', 'starting') THEN 'running'::run_status ELSE status END
-			WHERE id = $1`, t.run.ID, state, str("reason")); err != nil {
+			WHERE id = $1`, t.run.ID, state); err != nil {
 			return err
 		}
 		if state == "running" && t.run.Status == statusScheduled {
 			t.run.Status = statusRunning
 			return s.event(ctx, tx, t.run, evRunStarted, ledger.ActorSystem, map[string]any{"status": statusRunning})
 		}
-		// The container ended without dude asking: the agent crashed, timed
-		// out, or its host died. A phase whose turn was already done is
-		// finished by the sweep; any other has failed.
 		if lux.Terminal(state) {
 			return t.ended(ctx, tx, s, state, str("reason"))
 		}
@@ -99,18 +132,35 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 	return nil
 }
 
+// ended: the container stopped without dude asking — the agent crashed,
+// timed out, or its host died. A phase whose turn was already done is
+// finished by the sweep, and one dude stopped is dude's business; any other
+// has failed.
+func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, reason string) error {
+	if reason == "" {
+		reason = state
+	}
+	tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $2, ended_at = now()
+		WHERE id = $1 AND status NOT IN ('completed', 'failed', 'aborted', 'paused')
+		  AND lux_stop_reason IS NULL AND turn_done_at IS NULL`,
+		t.run.ID, "the agent's run ended before finishing its task: "+reason)
+	if err != nil || tag.RowsAffected() == 0 {
+		return err
+	}
+	return s.event(ctx, tx, t.run, "run.failed", ledger.ActorSystem, map[string]any{"status": "failed", "error": reason})
+}
+
 // shimEvent handles what lux's shim reports about the agent. These come in
 // the record stream, in order with the agent's own messages — unlike lux's
-// lifecycle events, which are interleaved by time. The order matters: "idle"
-// must be seen after the reply it ends, or the reply is read before it is
-// recorded.
+// lifecycle events, which trail them. The order matters: "idle" must be
+// seen after the reply it ends, or the reply is read before it is recorded.
 func (t *translator) shimEvent(ctx context.Context, tx pgx.Tx, s *Syncer, typ string, data map[string]any, epoch int) error {
 	str := func(k string) string { v, _ := data[k].(string); return v }
 	switch typ {
 	case "lux.session":
 		return t.session(ctx, tx, s, str("sessionId"), epoch)
 	case "lux.activity":
-		return t.activity(ctx, tx, s, str("activity"), epoch)
+		return t.activity(ctx, tx, s, str("activity"))
 	case "lux.input":
 		if str("error") != "" {
 			return nil
@@ -124,36 +174,10 @@ func (t *translator) shimEvent(ctx context.Context, tx pgx.Tx, s *Syncer, typ st
 	return nil
 }
 
-func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, reason string) error {
-	var stopReason string
-	var turnDone bool
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(lux_stop_reason, ''), turn_done_at IS NOT NULL FROM runs WHERE id = $1`,
-		t.run.ID).Scan(&stopReason, &turnDone); err != nil {
-		return err
-	}
-	if stopReason != "" || turnDone {
-		return nil // dude stopped it, or it is being finished
-	}
-	if reason == "" {
-		reason = state
-	}
-	tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $2, ended_at = now()
-		WHERE id = $1 AND status NOT IN ('completed', 'failed', 'aborted', 'paused')`,
-		t.run.ID, "the agent's run ended before finishing its task: "+reason)
-	if err != nil || tag.RowsAffected() == 0 {
-		return err
-	}
-	return s.event(ctx, tx, t.run, "run.failed", ledger.ActorSystem, map[string]any{"status": statusFailed, "error": reason})
-}
-
+// session records the placement the agent's session is established in. The
+// first establishes the session; later ones are resumes, which continue it.
 func (t *translator) session(ctx context.Context, tx pgx.Tx, s *Syncer, id string, epoch int) error {
-	if id == "" {
-		return nil
-	}
-	if _, err := tx.Exec(ctx, `UPDATE runs SET agent_session_id = $2 WHERE id = $1`, t.run.ID, id); err != nil {
-		return err
-	}
-	if epoch <= t.sessionEpoch {
+	if id == "" || epoch <= t.sessionEpoch {
 		return nil
 	}
 	first := t.sessionEpoch == 0
@@ -171,10 +195,7 @@ func (t *translator) session(ctx context.Context, tx pgx.Tx, s *Syncer, id strin
 // activity tracks the agent's turn. Busy means it took its task; idle after
 // busy means it finished. Idle before busy is the agent waiting for its
 // first input, and means nothing.
-func (t *translator) activity(ctx context.Context, tx pgx.Tx, s *Syncer, activity string, epoch int) error {
-	if _, err := tx.Exec(ctx, `UPDATE runs SET agent_activity = $2 WHERE id = $1`, t.run.ID, activity); err != nil {
-		return err
-	}
+func (t *translator) activity(ctx context.Context, tx pgx.Tx, s *Syncer, activity string) error {
 	switch activity {
 	case "busy":
 		_, err := tx.Exec(ctx, `UPDATE runs SET agent_busy_at = COALESCE(agent_busy_at, now()), turn_done_at = NULL WHERE id = $1`, t.run.ID)
@@ -193,9 +214,9 @@ func (t *translator) activity(ctx context.Context, tx pgx.Tx, s *Syncer, activit
 	return nil
 }
 
-// agentEvent translates the agent's own protocol messages. Only OpenCode's
-// ACP is spoken for now (the only adapter dude configures); an unknown event
-// type is ignored rather than guessed at.
+// agentEvent translates the agent's own protocol messages. Only ACP is
+// spoken (the adapter dude configures for OpenCode and the scripted agent);
+// an unknown event type is ignored rather than guessed at.
 func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.Frame) error {
 	if strings.HasPrefix(f.Event.Type, "lux.") {
 		var d map[string]any
@@ -218,15 +239,10 @@ func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux
 	switch typ {
 	case "agent_message_chunk":
 		content, _ := u["content"].(map[string]any)
-		if str(content, "type") != "text" || str(content, "text") == "" {
-			return nil
+		if str(content, "type") == "text" {
+			t.message.WriteString(str(content, "text"))
 		}
-		// Chunks are fragments of words; the ledger records messages. They
-		// accumulate on the row and are written as one when the agent moves
-		// on to something else.
-		_, err := tx.Exec(ctx, `UPDATE runs SET agent_message_buffer = agent_message_buffer || $2 WHERE id = $1`,
-			t.run.ID, str(content, "text"))
-		return err
+		return nil
 
 	case "tool_call", "tool_call_update":
 		if err := t.flushMessage(ctx, tx, s); err != nil {
@@ -237,21 +253,17 @@ func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux
 		// A plan is a milestone, not a tool call: the agent rewrites the whole
 		// list each time, and naming the tool is this layer's job.
 		if isPlanTool(title) {
-			if status != "completed" {
-				// The completion carries the list too; record it once.
-				if todos := planTodos(input); todos != nil && status == "in_progress" {
-					return s.event(ctx, tx, t.run, evPlanUpdated, ledger.ActorAgent, map[string]any{"todos": todos})
-				}
+			if todos := planTodos(input); todos != nil && status == "in_progress" {
+				return s.event(ctx, tx, t.run, evPlanUpdated, ledger.ActorAgent, map[string]any{"todos": todos})
 			}
 			return nil
 		}
 		switch status {
-		case "pending":
-			return nil // announced before its input is known; in_progress follows
 		case "in_progress":
-			if typ == "tool_call_update" && !t.firstSight(ctx, tx, callID) {
+			if t.seenCalls[callID] {
 				return nil
 			}
+			t.seenCalls[callID] = true
 			return s.event(ctx, tx, t.run, evToolCalled, ledger.ActorAgent,
 				map[string]any{"tool": toolName(u), "callId": callID, "input": input, "title": title})
 		case "completed", "failed":
@@ -262,6 +274,7 @@ func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux
 			return s.event(ctx, tx, t.run, evToolCompleted, ledger.ActorAgent,
 				map[string]any{"tool": toolName(u), "callId": callID, "status": st, "title": title})
 		}
+		// "pending" is announced before its input is known; in_progress follows.
 
 	case "usage_update":
 		cost, _ := u["cost"].(map[string]any)
@@ -283,28 +296,10 @@ func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux
 	return nil
 }
 
-// firstSight reports whether a tool call is being seen for the first time,
-// so repeated in-progress updates (a command streaming output) record one
-// call rather than many.
-func (t *translator) firstSight(ctx context.Context, tx pgx.Tx, callID string) bool {
-	var seen bool
-	_ = tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE run_id = $1 AND event_type = $2 AND payload->>'callId' = $3)`,
-		t.run.ID, evToolCalled, callID).Scan(&seen)
-	return !seen
-}
-
-// flushMessage records the reply text accumulated since the last message.
+// flushMessage records the reply text streamed since the last message.
 func (t *translator) flushMessage(ctx context.Context, tx pgx.Tx, s *Syncer) error {
-	var text string
-	if err := tx.QueryRow(ctx, `SELECT agent_message_buffer FROM runs WHERE id = $1 FOR UPDATE`, t.run.ID).Scan(&text); err != nil {
-		return err
-	}
-	if text == "" {
-		return nil
-	}
-	if _, err := tx.Exec(ctx, `UPDATE runs SET agent_message_buffer = '' WHERE id = $1`, t.run.ID); err != nil {
-		return err
-	}
+	text := t.message.String()
+	t.message.Reset()
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}

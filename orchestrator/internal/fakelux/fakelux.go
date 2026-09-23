@@ -20,6 +20,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // Behaviour is what a Run's agent does. Chosen per Run by the test, from the
@@ -29,6 +32,8 @@ type Behaviour struct {
 	Reply string
 	// Files to commit, path → content; none means the agent changes nothing.
 	Commit map[string]string
+	// The commit's message.
+	Message string
 	// Tool calls to report before replying.
 	Tools []string
 	// Never finish the turn: for steering, pausing and aborting a live agent.
@@ -52,6 +57,7 @@ type Run struct {
 
 	repo     string
 	busy     bool
+	woken    bool
 	queued   []queuedInput
 	records  []record
 	events   []event
@@ -61,13 +67,21 @@ type Run struct {
 
 type queuedInput struct{ text, requestID string }
 
-// deliverQueued hands queued input to an idle agent. Callers hold s.mu.
+// deliverQueued hands queued input to an idle agent, which takes it as a
+// new turn. Callers hold s.mu.
 func (s *Server) deliverQueued(run *Run) {
+	if len(run.queued) == 0 || run.State != "running" {
+		return
+	}
 	for _, in := range run.queued {
 		run.Inputs = append(run.Inputs, in.text)
 		s.recordEvent(run, "lux.input", map[string]any{"requestId": in.requestID})
 	}
 	run.queued = nil
+	// Input after a resume is what a paused agent was waiting for: it
+	// finishes its work this time.
+	run.woken = run.Resumed > 0
+	s.turn(run)
 }
 
 type record struct {
@@ -100,8 +114,32 @@ type Server struct {
 	Key string
 }
 
+// New serves a fake lux. With decide nil, every Run plays dude's scripted
+// agent (fakeagent), as a real lux running lux-fake would.
 func New(repo, key string, decide func(map[string]any) Behaviour) *Server {
-	return &Server{runs: map[string]*Run{}, byKey: map[string]string{}, Decide: decide, Repo: repo, Key: key}
+	s := &Server{runs: map[string]*Run{}, byKey: map[string]string{}, Decide: decide, Repo: repo, Key: key}
+	if decide == nil {
+		s.Decide = s.scripted
+	}
+	return s
+}
+
+// scripted plays fakeagent's step for the Run's phase, deciding the
+// reviewer's verdict from the tree it checks out.
+func (s *Server) scripted(spec map[string]any) Behaviour {
+	labels, _ := spec["labels"].(map[string]any)
+	str := func(k string) string { v, _ := labels[k].(string); return v }
+	repo := s.Repo
+	if s.RepoFor != nil {
+		repo = s.RepoFor(SpecField(spec, "url"))
+	}
+	fixed := exec.Command("git", "-C", repo, "cat-file", "-e", SpecField(spec, "ref")+":"+fakeagent.FixedFile).Run() == nil
+	step := fakeagent.For(str("dude.phase"), str("dude.model"), str("dude.run"), fixed)
+	files := map[string]string{}
+	for path, line := range step.Commit {
+		files[path] = line + "\n"
+	}
+	return Behaviour{Reply: step.Reply, Commit: files, Message: step.Message, Hang: step.Hang}
 }
 
 // Runs returns every Run submitted, in order.
@@ -155,7 +193,7 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 	run.behavior = s.Decide(spec)
 	run.repo = s.Repo
 	if s.RepoFor != nil {
-		run.repo = s.RepoFor(repoURL(spec))
+		run.repo = s.RepoFor(SpecField(spec, "url"))
 	}
 	s.runs[run.ID] = run
 	if k := r.Header.Get("Idempotency-Key"); k != "" {
@@ -170,17 +208,29 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 func (s *Server) play(run *Run, spec map[string]any, resumed bool) {
 	time.Sleep(20 * time.Millisecond)
 	s.mu.Lock()
-	epoch := run.Epoch
+	defer s.mu.Unlock()
 	s.setState(run, "running")
 	if !resumed {
-		base := head(run.repo, ref(spec))
-		s.luxEvent(run, "git.checkout", map[string]any{"repo": "target", "ref": ref(spec), "base": base})
+		base := head(run.repo, SpecField(spec, "ref"))
+		s.luxEvent(run, "git.checkout", map[string]any{"repo": "target", "ref": SpecField(spec, "ref"), "base": base})
 		run.SessionID = fmt.Sprintf("ses_%s", run.ID)
 	}
 	// As lux's shim does: in the record stream, in order with the agent's
 	// own messages.
 	s.recordEvent(run, "lux.session", map[string]any{"sessionId": run.SessionID})
 	s.recordEvent(run, "lux.activity", map[string]any{"activity": "idle"})
+	if resumed {
+		// A resumed agent has its conversation back and waits for input, as
+		// lux resumes one; what it is given next is a new turn.
+		s.deliverQueued(run)
+		return
+	}
+	s.turn(run)
+}
+
+// turn is the agent working on what it was given, and going idle.
+// Callers hold s.mu.
+func (s *Server) turn(run *Run) {
 	s.recordEvent(run, "lux.activity", map[string]any{"activity": "busy"})
 	run.busy = true
 	b := run.behavior
@@ -189,13 +239,11 @@ func (s *Server) play(run *Run, spec map[string]any, resumed bool) {
 		s.agent(run, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id, "title": tool, "kind": "execute", "status": "in_progress", "rawInput": map[string]any{"cmd": tool}})
 		s.agent(run, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id, "title": tool, "kind": "execute", "status": "completed"})
 	}
-	if b.Hang && !resumed {
-		s.mu.Unlock()
+	if b.Hang && !run.woken {
 		return
 	}
 	if b.Crash {
 		s.setState(run, "failed")
-		s.mu.Unlock()
 		return
 	}
 	for _, chunk := range chunks(b.Reply, 7) {
@@ -206,19 +254,18 @@ func (s *Server) play(run *Run, spec map[string]any, resumed bool) {
 	s.recordEvent(run, "lux.activity", map[string]any{"activity": "idle"})
 	run.busy = false
 	s.deliverQueued(run)
-	_ = epoch
-	s.mu.Unlock()
 }
 
-func ref(spec map[string]any) string {
+// SpecField reads a field of the spec's first repository ("url", "ref").
+func SpecField(spec map[string]any, name string) string {
 	git, _ := spec["git"].(map[string]any)
 	repos, _ := git["repositories"].([]any)
 	if len(repos) == 0 {
 		return ""
 	}
 	r, _ := repos[0].(map[string]any)
-	s, _ := r["ref"].(string)
-	return s
+	v, _ := r[name].(string)
+	return v
 }
 
 func chunks(s string, n int) []string {
@@ -266,17 +313,6 @@ func head(repo, ref string) string {
 	return strings.TrimSpace(string(out))
 }
 
-func repoURL(spec map[string]any) string {
-	git, _ := spec["git"].(map[string]any)
-	repos, _ := git["repositories"].([]any)
-	if len(repos) == 0 {
-		return ""
-	}
-	r, _ := repos[0].(map[string]any)
-	u, _ := r["url"].(string)
-	return u
-}
-
 func (s *Server) view(run *Run) map[string]any {
 	return map[string]any{"id": run.ID, "state": run.State, "epoch": run.Epoch, "sessionId": run.SessionID}
 }
@@ -312,7 +348,11 @@ func (s *Server) input(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&in)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if run.State != "running" {
+	// lux takes input for a Run that is live or about to be, and delivers
+	// it once the agent can take it.
+	switch run.State {
+	case "running", "resuming", "submitted", "scheduled", "starting":
+	default:
 		writeErr(w, 409, "not_running", "run is "+run.State)
 		return
 	}
@@ -320,7 +360,7 @@ func (s *Server) input(w http.ResponseWriter, r *http.Request) {
 	// progress, so input to a busy agent waits for the turn to end, and is
 	// acknowledged when it is actually delivered.
 	run.queued = append(run.queued, queuedInput{in.Text, in.RequestID})
-	if in.Interrupt && run.busy {
+	if in.Interrupt && run.busy && run.State == "running" {
 		// The turn is cancelled, and the agent is free to hear it.
 		run.Interrupted++
 		s.recordEvent(run, "acp.turn_end", map[string]any{"stopReason": "cancelled"})
@@ -367,7 +407,7 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 			base = head(run.repo, spec.Git.Repositories[0].Ref)
 		}
 		result := map[string]any{"repo": "target", "branch": spec.Git.Push.Branch}
-		sha, err := commit(run.repo, base, spec.Git.Push.Branch, run.behavior.Commit)
+		sha, err := commit(run.repo, base, spec.Git.Push.Branch, run.behavior.Commit, run.behavior.Message)
 		switch {
 		case err != nil:
 			result["status"], result["error"] = "failed", err.Error()
@@ -382,7 +422,10 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 }
 
 // commit writes files on top of base and points branch at the result.
-func commit(repo, base, branch string, files map[string]string) (string, error) {
+func commit(repo, base, branch string, files map[string]string, message string) (string, error) {
+	if message == "" {
+		message = "agent work"
+	}
 	if len(files) == 0 {
 		return base, nil
 	}
@@ -412,7 +455,7 @@ func commit(repo, base, branch string, files map[string]string) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	sha, err := git("commit-tree", tree, "-p", base, "-m", "agent work")
+	sha, err := git("commit-tree", tree, "-p", base, "-m", message)
 	if err != nil {
 		return "", err
 	}
@@ -549,8 +592,7 @@ func (s *Server) output(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		switch run.State {
-		case "stopped", "cancelled", "failed", "succeeded":
+		if lux.Terminal(run.State) {
 			send("end", map[string]any{"cursor": "", "state": run.State, "afterEvent": afterEvent})
 			return
 		}

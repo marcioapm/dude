@@ -21,7 +21,6 @@ import hmac
 import json
 import re
 import uuid
-import socket
 import subprocess
 import threading
 import time
@@ -31,10 +30,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("", 0))
-        return int(s.getsockname()[1])
+from env import find_free_port as _free_port  # noqa: E402
 
 
 def _now() -> str:
@@ -158,6 +154,13 @@ class FakeGitHub:
             cwd=self.bare, capture_output=True, text=True,
         )
         return result.stdout.strip() or None
+
+    def branches(self) -> list[str]:
+        result = subprocess.run(
+            ["git", "for-each-ref", "--format=%(refname:short)", "refs/heads"],
+            cwd=self.bare, capture_output=True, text=True, check=True,
+        )
+        return result.stdout.split()
 
     def branch_log(self, branch: str) -> list[str]:
         result = subprocess.run(

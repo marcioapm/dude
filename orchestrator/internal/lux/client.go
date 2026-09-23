@@ -166,7 +166,6 @@ func AsError(err error) (*Error, bool) {
 // Client is what dude calls on lux. An interface so tests can stand in.
 type Client interface {
 	Submit(ctx context.Context, spec Spec, idempotencyKey string) (Run, error)
-	Get(ctx context.Context, runID string) (Run, error)
 	Input(ctx context.Context, runID, text, requestID string, interrupt bool) error
 	Push(ctx context.Context, runID, requestID string) error
 	Stop(ctx context.Context, runID string) error
@@ -253,12 +252,6 @@ func errorFrom(status int, body []byte, what string) *Error {
 func (c *HTTPClient) Submit(ctx context.Context, spec Spec, key string) (Run, error) {
 	var r Run
 	err := c.do(ctx, "POST", "/v1/runs", spec, map[string]string{"Idempotency-Key": key}, &r)
-	return r, err
-}
-
-func (c *HTTPClient) Get(ctx context.Context, runID string) (Run, error) {
-	var r Run
-	err := c.do(ctx, "GET", "/v1/runs/"+runID, nil, nil, &r)
 	return r, err
 }
 

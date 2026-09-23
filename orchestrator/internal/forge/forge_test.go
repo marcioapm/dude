@@ -1,11 +1,6 @@
 package forge
 
-import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
-	"testing"
-)
+import "testing"
 
 // Every false positive here costs a fix Run; every false negative is a
 // person's request silently ignored. The tests pin both directions.
@@ -126,25 +121,5 @@ func TestSlugFromURL(t *testing.T) {
 		if got := SlugFromURL(in); got != want {
 			t.Errorf("SlugFromURL(%q) = %q, want %q", in, got, want)
 		}
-	}
-}
-
-func TestVerifySignature(t *testing.T) {
-	body := []byte(`{"action":"opened"}`)
-	mac := hmac.New(sha256.New, []byte("s3cret"))
-	mac.Write(body)
-	good := "sha256=" + hex.EncodeToString(mac.Sum(nil))
-
-	if !VerifySignature("s3cret", body, good) {
-		t.Error("a correct signature was rejected")
-	}
-	if VerifySignature("other", body, good) {
-		t.Error("a signature under another secret was accepted")
-	}
-	if VerifySignature("s3cret", []byte(`{"action":"closed"}`), good) {
-		t.Error("a tampered body was accepted")
-	}
-	if VerifySignature("", body, good) || VerifySignature("s3cret", body, "") {
-		t.Error("a missing secret or header was accepted")
 	}
 }

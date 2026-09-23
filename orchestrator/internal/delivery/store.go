@@ -28,9 +28,7 @@ const (
 	EvPullRequestCommented  = "pull_request.commented"
 	EvPullRequestMerged     = "pull_request.merged"
 	EvPullRequestClosed     = "pull_request.closed"
-	EvGitPushCompleted      = "git.push_completed"
 	EvGitCommitCreated      = "git.commit_created"
-	EvFindingResolved       = "review.finding_resolved"
 )
 
 // Store is the delivery workflow's side effects. Each is one durable action;
@@ -44,13 +42,19 @@ type Store struct {
 // runByKey finds the Run a workflow step already created, or "".
 func (s *Store) runByKey(ctx context.Context, org, workItemID, key string) (string, error) {
 	var id string
-	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		err := tx.QueryRow(ctx, `SELECT id FROM runs WHERE work_item_id = $1 AND creation_key = $2`, workItemID, key).Scan(&id)
-		if db.IsNotFound(err) {
-			return nil
-		}
+	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
+		id, err = runByKey(ctx, tx, workItemID, key)
 		return err
 	})
+	return id, err
+}
+
+func runByKey(ctx context.Context, tx pgx.Tx, workItemID, key string) (string, error) {
+	var id string
+	err := tx.QueryRow(ctx, `SELECT id FROM runs WHERE work_item_id = $1 AND creation_key = $2`, workItemID, key).Scan(&id)
+	if db.IsNotFound(err) {
+		return "", nil
+	}
 	return id, err
 }
 
@@ -79,11 +83,8 @@ func (s *Store) CreatePhaseRun(ctx context.Context, org string, in PhaseRun) (st
 	var runID string
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		if in.Key != "" {
-			err := tx.QueryRow(ctx, `SELECT id FROM runs WHERE work_item_id = $1 AND creation_key = $2`, in.WorkItemID, in.Key).Scan(&runID)
-			if err == nil {
-				return nil
-			}
-			if !db.IsNotFound(err) {
+			var err error
+			if runID, err = runByKey(ctx, tx, in.WorkItemID, in.Key); err != nil || runID != "" {
 				return err
 			}
 		}
@@ -94,20 +95,20 @@ func (s *Store) CreatePhaseRun(ctx context.Context, org string, in PhaseRun) (st
 			FROM work_items w WHERE w.id = $1`, in.WorkItemID).Scan(&projectID, &attempt); err != nil {
 			return fmt.Errorf("work item %s: %w", in.WorkItemID, err)
 		}
-		feedback, _ := json.Marshal(nonNilFeedback(in.PRFeedback))
+		feedback, _ := json.Marshal(db.NonNil(in.PRFeedback))
 		runID = ids.New(ids.Run)
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO runs (id, organization_id, project_id, work_item_id, attempt, status, phase, role,
 			                  parent_run_id, base_ref, category, pr_feedback, repository_id, creation_key)
 			VALUES ($1, $2, $3, $4, $5, 'pending', $6::run_phase, $7::agent_role, $8, $9, $10, $11::jsonb, $12, $13)`,
 			runID, org, projectID, in.WorkItemID, attempt, in.Phase, RoleForPhase[in.Phase],
-			nullable(in.ParentRunID), nullable(in.BaseRef), nullable(in.Category), feedback,
-			nullable(in.RepositoryID), nullable(in.Key)); err != nil {
+			db.Nullable(in.ParentRunID), db.Nullable(in.BaseRef), db.Nullable(in.Category), feedback,
+			db.Nullable(in.RepositoryID), db.Nullable(in.Key)); err != nil {
 			return err
 		}
 		payload := map[string]any{
 			"attempt": attempt, "phase": in.Phase, "role": RoleForPhase[in.Phase],
-			"publishes": Publishes[in.Phase], "baseRef": nullable(in.BaseRef),
+			"publishes": Publishes[in.Phase], "baseRef": db.Nullable(in.BaseRef),
 		}
 		if in.Category != "" {
 			payload["category"] = in.Category
@@ -320,8 +321,8 @@ func (s *Store) OpenPullRequest(ctx context.Context, org string, st *State, forg
 			INSERT INTO pull_requests (id, organization_id, project_id, work_item_id, run_id, repository_id, number,
 			                           node_id, url, head_branch, base_branch, head_sha, title, body, state)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::pull_request_state)`,
-			prID, org, st.ProjectID, st.WorkItemID, nullable(st.HeadRunID), st.RepositoryID, ref.Number,
-			nullable(ref.NodeID), ref.URL, st.Branch, baseBranch, ref.HeadSHA, title, body, ref.State); err != nil {
+			prID, org, st.ProjectID, st.WorkItemID, db.Nullable(st.HeadRunID), st.RepositoryID, ref.Number,
+			db.Nullable(ref.NodeID), ref.URL, st.Branch, baseBranch, ref.HeadSHA, title, body, ref.State); err != nil {
 			return err
 		}
 		_, err := ledger.Append(ctx, tx, ledger.Event{
@@ -352,20 +353,6 @@ func joinNonEmpty(parts []string, sep string) string {
 		}
 	}
 	return strings.Join(out, sep)
-}
-
-func nonNilFeedback(f []forge.ActionableFeedback) []forge.ActionableFeedback {
-	if f == nil {
-		return []forge.ActionableFeedback{}
-	}
-	return f
-}
-
-func nullable(s string) any {
-	if s == "" {
-		return nil
-	}
-	return s
 }
 
 func deref(s *string) string {
