@@ -195,8 +195,9 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 		// Guarded on still being pending: an abort that raced the submit wins,
 		// and the sweep then cancels the lux Run it made.
 		tag, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, next_attempt_at = NULL,
+			harness = $4, model = $5,
 			status = CASE WHEN status = 'pending' THEN 'scheduled'::run_status ELSE status END
-			WHERE id = $1`, r.ID, lr.ID, lr.State)
+			WHERE id = $1`, r.ID, lr.ID, lr.State, spec.Labels["dude.harness"], spec.Labels["dude.model"])
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}

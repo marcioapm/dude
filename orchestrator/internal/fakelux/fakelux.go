@@ -36,6 +36,11 @@ type Behaviour struct {
 	Message string
 	// Tool calls to report before replying.
 	Tools []string
+	// What the agent thinks before it acts, streamed as thought chunks.
+	Thought string
+	// Tool output, per tool name, reported on completion as OpenCode's bash
+	// tool does: both streams merged, and the exit code in metadata.
+	ToolOutput map[string]string
 	// Never finish the turn: for steering, pausing and aborting a live agent.
 	Hang bool
 	// Exit instead of going idle, as a crashed agent does.
@@ -77,7 +82,7 @@ func (s *Server) deliverQueued(run *Run) {
 	}
 	for _, in := range run.queued {
 		run.Inputs = append(run.Inputs, in.text)
-		s.recordEvent(run, "lux.input", map[string]any{"requestId": in.requestID})
+		s.recordEvent(run, "lux.input", map[string]any{"requestId": in.requestID, "text": in.text})
 	}
 	run.queued = nil
 	// Input after a resume is what a paused agent was waiting for: it
@@ -234,6 +239,11 @@ func (s *Server) play(run *Run, spec map[string]any, resumed bool) {
 	// own messages.
 	s.recordEvent(run, "lux.session", map[string]any{"sessionId": run.SessionID})
 	s.recordEvent(run, "lux.activity", map[string]any{"activity": "idle"})
+	if !resumed {
+		// The task, acknowledged when the agent takes it, with what it got.
+		prompt, _ := spec["workload"].(map[string]any)["prompt"].(string)
+		s.recordEvent(run, "lux.input", map[string]any{"requestId": "prompt", "text": prompt})
+	}
 	if resumed {
 		// A resumed agent has its conversation back and waits for input, as
 		// lux resumes one; what it is given next is a new turn.
@@ -249,6 +259,9 @@ func (s *Server) turn(run *Run) {
 	s.recordEvent(run, "lux.activity", map[string]any{"activity": "busy"})
 	run.busy = true
 	b := run.behavior
+	for _, chunk := range chunks(b.Thought, 7) {
+		s.agent(run, map[string]any{"sessionUpdate": "agent_thought_chunk", "content": map[string]any{"type": "text", "text": chunk}})
+	}
 	for i, tool := range b.Tools {
 		id := fmt.Sprintf("call_%d", i)
 		input := map[string]any{"cmd": tool}
@@ -256,8 +269,14 @@ func (s *Server) turn(run *Run) {
 			input = map[string]any{"todos": []any{map[string]any{"content": "do it", "status": "in_progress"}}}
 		}
 		s.agent(run, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id, "title": tool, "kind": "execute", "status": "in_progress", "rawInput": input})
-		// As OpenCode reports it: the completion names neither the tool nor its kind.
-		s.agent(run, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id, "status": "completed"})
+		// As OpenCode reports it: the completion names neither the tool nor
+		// its kind, and a command's result is its merged output and exit code.
+		done := map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id, "status": "completed"}
+		if out, ok := b.ToolOutput[tool]; ok {
+			done["content"] = []any{map[string]any{"type": "content", "content": map[string]any{"type": "text", "text": out}}}
+			done["rawOutput"] = map[string]any{"output": out, "metadata": map[string]any{"output": out, "exit": 3, "truncated": false}}
+		}
+		s.agent(run, done)
 	}
 	if b.Hang && !run.woken {
 		return
@@ -269,8 +288,11 @@ func (s *Server) turn(run *Run) {
 	for _, chunk := range chunks(b.Reply, 7) {
 		s.agent(run, map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": chunk}})
 	}
-	s.agent(run, map[string]any{"sessionUpdate": "usage_update", "cost": map[string]any{"amount": 0.01, "currency": "USD"}, "used": 1000})
-	s.recordEvent(run, "acp.turn_end", map[string]any{"stopReason": "end_turn"})
+	s.agent(run, map[string]any{"sessionUpdate": "usage_update", "cost": map[string]any{"amount": 0.01, "currency": "USD"}, "used": 1000, "size": 200000})
+	// The prompt's response, as the ACP adapter relays it: with the turn's
+	// token usage.
+	s.recordEvent(run, "acp.turn_end", map[string]any{"stopReason": "end_turn", "usage": map[string]any{
+		"inputTokens": 12, "outputTokens": 34, "totalTokens": 1046, "cachedReadTokens": 900, "cachedWriteTokens": 100}})
 	s.recordEvent(run, "lux.activity", map[string]any{"activity": "idle"})
 	run.busy = false
 	s.deliverQueued(run)

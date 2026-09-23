@@ -24,7 +24,9 @@ const RUN_SELECT = `
   id, organization_id AS "organizationId", project_id AS "projectId",
   work_item_id AS "workItemId", attempt, status, error,
   phase, role, category, parent_run_id AS "parentRunId", base_ref AS "baseRef",
-  head_sha AS "headSha", branch,
+  head_sha AS "headSha", branch, harness, model,
+  json_build_object('input', input_tokens, 'output', output_tokens, 'cacheRead', cache_read_tokens,
+    'cacheWrite', cache_write_tokens, 'context', context_tokens) AS tokens,
   created_at AS "createdAt", started_at AS "startedAt", ended_at AS "endedAt"`;
 
 const SESSION_SELECT = `

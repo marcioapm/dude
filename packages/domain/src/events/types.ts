@@ -27,6 +27,8 @@ export const EventTypes = {
 
   // Human intervention on a Run (plan §24)
   RunSteered: "run.steered",
+  /** A steer reached the agent. Payload: `{ directiveId }`. */
+  DirectiveDelivered: "run.directive.delivered",
   RunPaused: "run.paused",
   RunResumed: "run.resumed",
 
@@ -80,6 +82,13 @@ export const EventTypes = {
   ModelRequestStarted: "agent.model.request.started",
   ModelRequestCompleted: "agent.model.request.completed",
   AgentMessage: "agent.message",
+  /** The model's reasoning between actions. Payload: `{ text }`. */
+  AgentThought: "agent.thought",
+  /**
+   * The task, as the agent received it — recorded when the agent takes it,
+   * not when dude sends it. Payload: `{ text }`.
+   */
+  PromptDelivered: "agent.prompt.delivered",
   /**
    * The agent rewrote its plan. Payload: `{ todos: [{ content, status }] }`.
    *

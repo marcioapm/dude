@@ -330,8 +330,9 @@ func TestTheAgentsWorkReachesTheLedgerAsAConversation(t *testing.T) {
 		t.Errorf("messages = %q", text)
 	}
 	for typ, want := range map[string]int{
-		"agent.session.started":         1,
-		"agent.model.request.completed": 1, "run.started": 1, "run.completed": 1, "git.commit_created": 1,
+		"agent.session.started": 1, "agent.prompt.delivered": 1,
+		// The context size as it changed, and the turn's token totals.
+		"agent.model.request.completed": 2, "run.started": 1, "run.completed": 1, "git.commit_created": 1,
 	} {
 		if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = $2`, runID, typ); n != want {
 			t.Errorf("%s: %d events, want %d", typ, n, want)
@@ -406,6 +407,63 @@ func TestAPullRequestFixIsHandedTheFeedbackAndNotTheFindingsLeftOpen(t *testing.
 	}
 	if strings.Contains(prompt, "does not record the fix") {
 		t.Errorf("the fix was handed a review finding nobody asked it to fix:\n%s", prompt)
+	}
+}
+
+func TestTheChatShowsThinkingToolOutputTokensAndThePrompt(t *testing.T) {
+	w := newWorld(t)
+	// Binary output with a NUL, which jsonb refuses, in what is kept.
+	long := "\x00" + strings.Repeat("a", 2999) + strings.Repeat("z", 3000)
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
+			return fakelux.Behaviour{Hang: true}
+		}
+		return fakelux.Behaviour{Thought: "I should read the tests first.", Tools: []string{"bash"},
+			ToolOutput: map[string]string{"bash": long}, Reply: "Done.",
+			Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
+	}
+	wi := w.workItem()
+	w.deliver(wi)
+	w.until("the implementer to finish", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND phase = 'implement' AND status = 'completed'`, wi) == 1
+	})
+	ctx := context.Background()
+	var runID, harness, model string
+	var ctxTokens, outTokens int64
+	_ = w.owner.QueryRow(ctx, `SELECT id, harness, model, context_tokens, output_tokens FROM runs
+		WHERE work_item_id = $1 AND phase = 'implement'`, wi).Scan(&runID, &harness, &model, &ctxTokens, &outTokens)
+	if harness != "scripted" || model != "fake/scripted" {
+		t.Errorf("harness=%q model=%q", harness, model)
+	}
+	if ctxTokens != 1000 || outTokens != 34 {
+		t.Errorf("context=%d output=%d, want the agent's report", ctxTokens, outTokens)
+	}
+	payload := func(typ string) map[string]any {
+		var raw []byte
+		_ = w.owner.QueryRow(ctx, `SELECT payload FROM events WHERE run_id = $1 AND event_type = $2
+			ORDER BY cursor LIMIT 1`, runID, typ).Scan(&raw)
+		var m map[string]any
+		_ = json.Unmarshal(raw, &m)
+		return m
+	}
+	// The prompt as the agent received it: the scripted agent's is its script.
+	if p := payload("agent.prompt.delivered"); !strings.Contains(fmt.Sprint(p["text"]), "commit") {
+		t.Errorf("prompt = %v", p)
+	}
+	if p := payload("agent.thought"); p["text"] != "I should read the tests first." {
+		t.Errorf("thought = %v", p)
+	}
+	// Output over 4 KB keeps its first and last 2 KB.
+	done := payload("agent.tool.completed")
+	out, _ := done["output"].(map[string]any)
+	if done["exitCode"] != float64(3) || len(fmt.Sprint(out["head"])) != 2048+2 || len(fmt.Sprint(out["tail"])) != 2048 ||
+		out["omittedBytes"] != float64(6000-4096) || !strings.HasPrefix(fmt.Sprint(out["head"]), "\ufffd") || !strings.HasSuffix(fmt.Sprint(out["tail"]), "z") {
+		t.Errorf("tool result = exit %v, head %d, tail %d, omitted %v", done["exitCode"],
+			len(fmt.Sprint(out["head"])), len(fmt.Sprint(out["tail"])), out["omittedBytes"])
+	}
+	// Each message carries the context size at that point.
+	if p := payload("agent.message"); p["contextTokens"] != float64(1000) {
+		t.Errorf("message = %v", p)
 	}
 }
 

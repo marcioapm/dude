@@ -15,6 +15,7 @@ import {
   ChatTranscript,
   EventRow,
   EventStream,
+  ThinkingBlock,
   ToolCallCard,
   summarizeToolArgs,
 } from "@dude/design-system/components";
@@ -145,8 +146,13 @@ export function RunScreen({ client, runId, title, onBack }: RunScreenProps) {
     workItemId: run.workItemId,
     startedAt: run.startedAt ?? run.createdAt,
     endedAt: run.endedAt,
-    costUsd: conversation.costUsd,
-    tokens: conversation.tokens,
+    ...(run.model ? { model: run.model } : {}),
+    // A cost of zero means the agent did not report one (a model behind a
+    // proxy with no prices), not that the work was free.
+    costUsd: conversation.costUsd > 0 ? conversation.costUsd : null,
+    // The Run's own totals are exact; the projection's are what has streamed
+    // in so far, for a Run still working.
+    tokens: Math.max(run.tokens.input + run.tokens.output, conversation.tokens),
   };
 
   return (
@@ -216,7 +222,7 @@ export function RunScreen({ client, runId, title, onBack }: RunScreenProps) {
             }
             emptyMessage="Waiting for the agent to start."
           >
-            {conversation.turns.map((turn) => renderTurn(turn, role))}
+            {conversation.turns.map((turn) => renderTurn(turn, role, conversation.contextWindow))}
             {conversation.activity ? (
               <ChatMessage
                 role={role}
@@ -257,8 +263,13 @@ export function RunScreen({ client, runId, title, onBack }: RunScreenProps) {
   );
 }
 
-function renderTurn(turn: Turn, role: AgentRole) {
+function renderTurn(turn: Turn, role: AgentRole, contextWindow: number) {
   switch (turn.kind) {
+    case "prompt":
+      // Written by the factory, not a person: the avatar and name say so.
+      return (
+        <ChatMessage key={turn.id} role="system" name="dude" intent="prompt" content={turn.text} startedAt={turn.at} />
+      );
     case "message":
       return (
         <ChatMessage
@@ -266,6 +277,26 @@ function renderTurn(turn: Turn, role: AgentRole) {
           role={role}
           content={turn.text}
           startedAt={turn.at}
+          contextTokens={turn.contextTokens ?? undefined}
+          contextWindowTokens={turn.contextTokens && contextWindow > 0 ? contextWindow : undefined}
+          outputTokens={turn.outputTokens ?? undefined}
+        />
+      );
+    case "thought":
+      // Only when the thought ended is known, not how long it took.
+      return <ThinkingBlock key={turn.id} text={turn.text} />;
+    case "usage":
+      // A turn's totals, at its end: a quiet foot, not a message.
+      return (
+        <ChatMessage
+          key={turn.id}
+          role={role}
+          continued
+          startedAt={turn.at}
+          contextTokens={turn.contextTokens || undefined}
+          contextWindowTokens={turn.contextTokens && contextWindow > 0 ? contextWindow : undefined}
+          outputTokens={turn.output}
+          costUsd={null}
         />
       );
     case "human":
@@ -276,6 +307,8 @@ function renderTurn(turn: Turn, role: AgentRole) {
           intent={turn.intent}
           content={turn.text}
           startedAt={turn.at}
+          pending={turn.intent === "steer" && turn.deliveredAt === null}
+          deliveredAt={turn.deliveredAt}
         />
       );
     case "tool":
@@ -287,6 +320,9 @@ function renderTurn(turn: Turn, role: AgentRole) {
           status={turn.status}
           startedAt={turn.startedAt}
           endedAt={turn.endedAt}
+          output={turn.result?.output ?? turn.result?.stdout}
+          stderr={turn.result?.stderr}
+          exitCode={turn.result?.exitCode}
         />
       );
   }
