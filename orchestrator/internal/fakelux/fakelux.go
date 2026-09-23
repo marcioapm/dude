@@ -141,8 +141,8 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 	for path, line := range step.Commit {
 		files[path] = line + "\n"
 	}
-	// Every phase looks around first, as an agent does.
-	return Behaviour{Reply: step.Reply, Commit: files, Message: step.Message, Hang: step.Hang, Tools: []string{"read"}}
+	// Every phase plans and looks around first, as an agent does.
+	return Behaviour{Reply: step.Reply, Commit: files, Message: step.Message, Hang: step.Hang, Tools: []string{"todowrite", "read"}}
 }
 
 // Runs returns every Run submitted, in order.
@@ -251,7 +251,11 @@ func (s *Server) turn(run *Run) {
 	b := run.behavior
 	for i, tool := range b.Tools {
 		id := fmt.Sprintf("call_%d", i)
-		s.agent(run, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id, "title": tool, "kind": "execute", "status": "in_progress", "rawInput": map[string]any{"cmd": tool}})
+		input := map[string]any{"cmd": tool}
+		if tool == "todowrite" {
+			input = map[string]any{"todos": []any{map[string]any{"content": "do it", "status": "in_progress"}}}
+		}
+		s.agent(run, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id, "title": tool, "kind": "execute", "status": "in_progress", "rawInput": input})
 		// As OpenCode reports it: the completion names neither the tool nor its kind.
 		s.agent(run, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id, "status": "completed"})
 	}
