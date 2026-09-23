@@ -185,7 +185,28 @@ nudge by eye.
   dashed, the caret stays lit, the sweep becomes a stripe) and the clocks keep
   ticking as text. Motion here is state, not decoration.
 - Errors are never behind a click: a failed `ToolCallCard` opens by default
-  and repeats the error's first line in its collapsed row.
+  and repeats the error's first line in its collapsed row. A non-zero exit
+  code is a danger chip in the collapsed row whatever the harness said the
+  status was.
+- Tool output arrives capped by the backend (4 KB per stream; longer output
+  keeps the first and last 2 KB). `ToolCallCard output={{ head, tail,
+  omittedBytes }}` draws the dropped middle as a labelled dashed line —
+  never a silent join. stderr, when reported apart (`stderr` prop), is a
+  second block marked by label and rail, not by tinting the text; a harness
+  that merges the streams (OpenCode) passes one `output`.
+- The model's reasoning is a `ThinkingBlock`: no avatar, no frame, muted
+  ink, a 24px row — quieter than a message and distinct from a tool call.
+  Collapsed by default to brain · label · one-line preview · duration.
+  While streaming the brain sits inside the `thinking` rhythm's drifting
+  ring and the preview follows the latest line. Dozens in a row must read
+  as a faint ledger.
+- Every agent turn can carry its context size (`contextTokens`, shown as
+  `ctx 15.2k / 744k` against `contextWindowTokens`, attention ink at 80%
+  and danger at 100% — the same thresholds a cost takes against its
+  budget) and its output tokens (`outputTokens`, `out 1.2k`). A cost the
+  harness does not report is `costUsd={null}` and renders as `—` with a
+  title, never as `$0.00`: zero is a price, unknown is not. Tokens still
+  show when cost is unknown.
 
 ### Human intervention
 
@@ -199,6 +220,16 @@ nudge by eye.
 - The same tints mark the human turns in the transcript (`ChatMessage
   intent="answer" | "steer"`), so interventions are scannable in a long
   conversation.
+- A steer sent mid-turn is held by lux until the turn ends. `ChatMessage
+  pending` shows it as queued on three channels — a dashed frame, a
+  "Queued" chip with a clock, and a line under the body saying why — and
+  `deliveredAt` puts the delivery time in the header once the agent has
+  it. The intent tint is kept throughout: it is still a steer.
+- The task prompt is usually authored by dude, not a person. It is
+  `ChatMessage role="system" intent="prompt"`: the neutral prompt frame,
+  the system avatar and the "Task" tag say who wrote it without a third
+  tint. Prompts clamp at eight lines with a "Show all" control, measured
+  after layout so a short prompt gets no control (`maxLines` overrides).
 
 ### Nesting
 
@@ -382,6 +413,11 @@ nudge by eye.
 | `EmptyState title="Nothing needs you"` | an SVG of a mailbox |
 | `<ActivityIndicator kind="retrying" attempt={2} retryAt={t} />` | a spinner with "retrying…" |
 | `<ToolCallCard name="bash" status="failed" error={err} />` | an error hidden behind an expander |
+| `<ToolCallCard output={{ head, tail, omittedBytes }} exitCode={1} />` | joining head and tail as if nothing was dropped |
+| `<ThinkingBlock text={reasoning} streaming />` between turns | reasoning styled as an agent message |
+| `<ChatMessage contextTokens={n} contextWindowTokens={w} costUsd={null} />` | `$0.00` for a cost nobody reported |
+| `<ChatMessage role="system" intent="prompt" content={phasePrompt} />` | the factory's prompt shown as a person's, unclamped |
+| `<ChatMessage intent="steer" pending />` until lux delivers it | a steer that looks read before the agent has it |
 | `<ChatComposer question={q} />` for a blocking question | one generic text box for everything |
 | `<Markdown source={text} streaming />` while tokens arrive | re-parsing strictly on every token |
 | `<TriageRollup counts={projectCounts(p)} />` on a collapsed project | "12 items" |
@@ -423,15 +459,21 @@ Skeleton/SkeletonLines/Spinner, EmptyState, ScrollArea.
   "N new turns · Jump to latest". A ResizeObserver keeps streaming text in
   view without a revision bump.
 - **ChatMessage** — one turn: gutter + column, not a bubble. Agent turns
-  carry model, elapsed, tokens, cost and the live activity in the foot; human
-  turns are framed and tinted by intent (task / answer / steer); system turns
-  are a hairline with a label. Body is `Markdown` and grows in place.
+  carry model, elapsed, context and output tokens, cost and the live
+  activity in the foot; turns addressed to the agent are framed and tinted
+  by intent (task / answer / steer), can be queued, and clamp when long;
+  system turns are a hairline with a label. Body is `Markdown` and grows in
+  place.
 - **ActivityIndicator** — thinking / streaming / tool / retrying /
   awaiting_input / completed / failed / aborted, as a full-width line or a
   badge. Distinct rhythm per state; slow-tool promotion; retry countdown.
 - **ToolCallCard** — one 28px row per call with expandable arguments, error,
-  diff (via `DiffView`) and result. Running calls sweep and tick; failed
-  calls open by default with the error in the row.
+  diff (via `DiffView`), capped output with a marked elision, optional
+  separate stderr, and the exit code. Running calls sweep and tick; failed
+  calls and non-zero exits open by default with the error / exit in the row.
+- **ThinkingBlock** — the model's reasoning between messages and tool
+  calls. Collapsed to one quiet 24px line with a preview and duration;
+  streams with the thinking rhythm; expands to Markdown or plain text.
 - **AgentPlan** — the agent's `todowrite` list rendered in place with "N of
   M", a segmented bar, and a one-shot flash/pop when an item changes state.
   Collapsed, it shows the current item. `sticky` pins it under the header.

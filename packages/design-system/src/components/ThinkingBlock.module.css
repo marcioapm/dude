@@ -1,0 +1,130 @@
+/*
+ * The model's reasoning. Deliberately the quietest thing in a transcript:
+ * no frame, no surface, no avatar, muted ink, a 24px row. Compare:
+ *   ChatMessage   gutter + avatar, primary ink, 13px       what it said
+ *   ToolCallCard  framed 28px row on a surface, mono       what it ran
+ *   ThinkingBlock frameless 24px row, muted, brain glyph   what it thought
+ */
+
+.root {
+  position: relative;
+  min-width: 0;
+  border-radius: var(--ds-radius-md);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-compact);
+  padding: 0 var(--ds-space-8) 0 var(--ds-space-6);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  border-radius: var(--ds-radius-md);
+  outline: none;
+  cursor: default;
+}
+.row:hover {
+  background: var(--ds-color-hover-wash);
+}
+.row:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--ds-color-focus-ring);
+}
+
+.glyph {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  color: var(--ds-color-text-muted);
+  flex-shrink: 0;
+}
+.glyph > * {
+  grid-area: 1 / 1;
+}
+/* Streaming: the thinking rhythm, unchanged from ActivityIndicator. */
+.ring {
+  color: var(--ds-tone-neutral-fg);
+  animation: ds-drift calc(var(--ds-cadence-drift) / max(var(--ds-motion-live), 0.0001)) linear infinite;
+}
+.live .brain {
+  color: var(--ds-color-text-secondary);
+}
+
+.label {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.live .label {
+  color: var(--ds-color-text-secondary);
+}
+
+.preview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--ds-color-text-muted);
+  font-style: italic;
+}
+.spacer {
+  flex: 1;
+}
+
+.duration {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--ds-color-text-disabled);
+  flex-shrink: 0;
+}
+.live .duration {
+  color: var(--ds-color-text-muted);
+}
+.row:hover .duration {
+  color: var(--ds-color-text-muted);
+}
+
+.chevron {
+  color: var(--ds-color-text-disabled);
+  flex-shrink: 0;
+  transition: transform var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.open .chevron {
+  transform: rotate(90deg);
+}
+.row:hover .chevron {
+  color: var(--ds-color-text-muted);
+}
+
+/* Open: the text hangs off a dotted rail under the glyph, in secondary ink
+   and one step smaller than a message, so it never competes with one. */
+.body {
+  margin: 0 var(--ds-space-8) var(--ds-space-6) 13px;
+  padding: var(--ds-space-2) 0 var(--ds-space-2) var(--ds-space-12);
+  border-left: 1px dotted var(--ds-color-border-strong);
+  animation: ds-fade-in var(--ds-duration-fast) var(--ds-ease-enter);
+}
+.body > div {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.plain {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-width: var(--ds-measure-message);
+  line-height: var(--ds-leading-normal);
+}
+.caret {
+  display: inline-block;
+  width: 6px;
+  height: 11px;
+  margin-left: 2px;
+  vertical-align: -1px;
+  border-radius: 1px;
+  background: currentColor;
+  animation: ds-blink calc(var(--ds-cadence-blink) / max(var(--ds-motion-live), 0.0001)) steps(2, jump-none) infinite;
+}

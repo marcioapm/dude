@@ -1,11 +1,24 @@
 import { useMemo, useState, type HTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import { Icon, type IconName } from "../icons/index.tsx";
-import { formatDuration } from "../util/format.ts";
+import { formatBytes, formatDuration } from "../util/format.ts";
 import { toMs, useNow } from "../util/useNow.ts";
 import { TOOL_SLOW_AFTER_MS, type ToolCallStatus } from "../tokens/activity.ts";
 import { DiffView, parseUnifiedDiff, type FileDiff } from "./DiffView.tsx";
 import styles from "./ToolCallCard.module.css";
+
+/**
+ * A tool's output as the backend delivers it: capped per stream, keeping
+ * the head and the tail when the middle was dropped. A plain string is
+ * output that fit.
+ */
+export interface ToolOutput {
+  readonly head: string;
+  /** The end of the output, when the middle was dropped. */
+  readonly tail?: string | undefined;
+  /** How much was dropped between `head` and `tail`. Shown as an elision line. */
+  readonly omittedBytes?: number | undefined;
+}
 
 export interface ToolCallCardProps extends Omit<HTMLAttributes<HTMLDivElement>, "children" | "title"> {
   readonly name: string;
@@ -18,12 +31,21 @@ export interface ToolCallCardProps extends Omit<HTMLAttributes<HTMLDivElement>, 
   readonly endedAt?: string | number | Date | null | undefined;
   /** Static duration when `startedAt` is unknown. */
   readonly durationMs?: number | undefined;
-  /** Tool output: a string renders in a mono block; a node renders as-is. */
+  /**
+   * The call's output: stdout, or stdout and stderr merged when the harness
+   * does not separate them (OpenCode). Rendered in a mono block with the
+   * exit code; an elided middle is marked.
+   */
+  readonly output?: string | ToolOutput | undefined;
+  /** stderr, when the harness reports it separately. A second block, marked. */
+  readonly stderr?: string | ToolOutput | undefined;
+  /** A non-output result (an artifact id, a rendered node). Strings render in a mono block. */
   readonly result?: ReactNode;
   /** A unified diff (string) or parsed files; rendered with DiffView. */
   readonly diff?: string | ReadonlyArray<FileDiff> | undefined;
   /** Error text. Shown in the collapsed row too — errors are never hidden. */
   readonly error?: string | undefined;
+  /** Process exit code. Non-zero is shown in the collapsed row whatever the status. */
   readonly exitCode?: number | undefined;
   readonly icon?: IconName | undefined;
   readonly defaultExpanded?: boolean | undefined;
@@ -31,7 +53,7 @@ export interface ToolCallCardProps extends Omit<HTMLAttributes<HTMLDivElement>, 
   readonly onExpandedChange?: ((open: boolean) => void) | undefined;
   /** Promote a running call to "slow" after this long. */
   readonly slowAfterMs?: number | undefined;
-  /** Truncate string results above this many lines (the rest is scrollable). */
+  /** Scroll output blocks taller than this many lines. */
   readonly maxResultLines?: number | undefined;
 }
 
@@ -95,6 +117,19 @@ function prettyArgs(args: unknown): string {
   }
 }
 
+function toOutput(v: string | ToolOutput | undefined): ToolOutput | null {
+  if (v === undefined) return null;
+  return typeof v === "string" ? { head: v } : v;
+}
+
+function lineCount(o: ToolOutput): number {
+  return o.head.split("\n").length + (o.tail !== undefined ? o.tail.split("\n").length : 0);
+}
+
+function isEmpty(o: ToolOutput): boolean {
+  return o.head.length === 0 && (o.tail === undefined || o.tail.length === 0) && (o.omittedBytes ?? 0) === 0;
+}
+
 const STATUS_ICON: Record<ToolCallStatus, IconName | null> = {
   running: null,
   completed: "check",
@@ -108,7 +143,13 @@ const STATUS_ICON: Record<ToolCallStatus, IconName | null> = {
  * calls carry a sweep along the bottom edge and a ticking duration that
  * turns attention-toned once the call is slow. Failed calls open by default
  * with the error's first line in the row itself, so an error is never
- * behind a click.
+ * behind a click; a non-zero exit code sits in the row whatever the status.
+ *
+ * Open, the output is a mono block headed by its exit code. The backend
+ * caps each stream and keeps the head and tail of anything longer; the
+ * dropped middle is drawn as a labelled elision line, never silently
+ * joined. stderr, when the harness reports it apart, is a second block
+ * marked by label and rail.
  */
 export function ToolCallCard({
   name,
@@ -118,6 +159,8 @@ export function ToolCallCard({
   startedAt,
   endedAt,
   durationMs,
+  output,
+  stderr,
   result,
   diff,
   error,
@@ -133,7 +176,8 @@ export function ToolCallCard({
 }: ToolCallCardProps) {
   const failed = status === "failed";
   const running = status === "running";
-  const [internal, setInternal] = useState(defaultExpanded ?? failed);
+  const badExit = exitCode !== undefined && exitCode !== 0;
+  const [internal, setInternal] = useState(defaultExpanded ?? (failed || badExit));
   const open = expanded ?? internal;
   const now = useNow(running);
   const start = toMs(startedAt);
@@ -142,7 +186,9 @@ export function ToolCallCard({
   const slow = running && elapsed !== null && elapsed >= slowAfterMs;
 
   const files = useMemo<ReadonlyArray<FileDiff>>(() => (typeof diff === "string" ? parseUnifiedDiff(diff) : diff ?? []), [diff]);
-  const hasBody = args !== undefined || result !== undefined || files.length > 0 || error !== undefined;
+  const out = toOutput(output);
+  const err = toOutput(stderr);
+  const hasBody = args !== undefined || out !== null || err !== null || result !== undefined || files.length > 0 || error !== undefined;
   const line = summary ?? summarizeToolArgs(args);
 
   const toggle = () => {
@@ -161,13 +207,15 @@ export function ToolCallCard({
   const statusIcon = STATUS_ICON[status];
   const resultText = typeof result === "string" ? result : null;
   const resultLines = resultText === null ? 0 : resultText.split("\n").length;
+  const maxHeight = `${maxResultLines * 18 + 16}px`;
 
   return (
     <div
-      className={cx(styles["root"], styles[status], slow && styles["slow"], open && styles["open"], className)}
+      className={cx(styles["root"], styles[status], slow && styles["slow"], badExit && styles["badExit"], open && styles["open"], className)}
       data-tool={name}
       data-status={status}
       data-slow={slow ? "true" : undefined}
+      data-exit-code={exitCode}
       {...rest}
     >
       <div
@@ -187,13 +235,13 @@ export function ToolCallCard({
         </span>
         {failed && error ? <span className={styles["errorInline"]}>{firstLine(error)}</span> : null}
         <span className={styles["meta"]}>
-          {exitCode !== undefined && exitCode !== 0 ? <span className={styles["exit"]}>exit {exitCode}</span> : null}
+          {badExit ? <span className={styles["exit"]}>exit {exitCode}</span> : null}
           {elapsed !== null ? (
             <span className={cx(styles["duration"], slow && styles["durationSlow"])} title={`${Math.round(elapsed)} ms`}>
               {formatDuration(elapsed)}
             </span>
           ) : null}
-          <span className={cx(styles["state"], styles[`state-${status}`])} aria-label={status}>
+          <span className={cx(styles["state"], styles[`state-${status}`])} aria-label={running ? (slow ? "still running" : "running") : status}>
             {statusIcon ? <Icon name={statusIcon} size={11} strokeWidth={2} /> : <Icon name="spinner" size={11} />}
           </span>
           {hasBody ? <Icon name="chevron-right" size={12} className={styles["chevron"]} /> : <span className={styles["chevronSpacer"]} />}
@@ -225,6 +273,21 @@ export function ToolCallCard({
               <DiffView files={files} summary={files.length > 1} />
             </div>
           ) : null}
+          {out !== null ? (
+            <OutputSection label={err !== null ? "stdout" : "Output"} output={out} exitCode={exitCode} running={running} maxHeight={maxHeight} maxLines={maxResultLines} />
+          ) : null}
+          {err !== null ? (
+            <OutputSection label="stderr" output={err} exitCode={out === null ? exitCode : undefined} running={running} maxHeight={maxHeight} maxLines={maxResultLines} stderr />
+          ) : null}
+          {out === null && err === null && exitCode !== undefined ? (
+            <div className={styles["section"]}>
+              <div className={styles["sectionLabel"]}>
+                Output
+                <ExitChip code={exitCode} />
+                <span className={styles["sectionHint"]}>no output</span>
+              </div>
+            </div>
+          ) : null}
           {result !== undefined ? (
             <div className={styles["section"]}>
               <div className={styles["sectionLabel"]}>
@@ -232,7 +295,7 @@ export function ToolCallCard({
                 {resultLines > maxResultLines ? <span className={styles["sectionHint"]}>{resultLines.toLocaleString("en-US")} lines</span> : null}
               </div>
               {resultText !== null ? (
-                <pre className={styles["pre"]} style={{ maxHeight: `${maxResultLines * 18 + 16}px` }}>
+                <pre className={styles["pre"]} style={{ maxHeight }}>
                   {resultText}
                 </pre>
               ) : (
@@ -240,6 +303,62 @@ export function ToolCallCard({
               )}
             </div>
           ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ExitChip({ code }: { readonly code: number }) {
+  return (
+    <span className={cx(styles["exitChip"], code !== 0 && styles["exitChipBad"])} title={code === 0 ? "Exited normally" : `Exited with code ${code}`}>
+      exit {code}
+    </span>
+  );
+}
+
+function OutputSection({
+  label,
+  output,
+  exitCode,
+  running,
+  maxHeight,
+  maxLines,
+  stderr,
+}: {
+  readonly label: string;
+  readonly output: ToolOutput;
+  readonly exitCode: number | undefined;
+  readonly running: boolean;
+  readonly maxHeight: string;
+  readonly maxLines: number;
+  readonly stderr?: boolean | undefined;
+}) {
+  const lines = lineCount(output);
+  const omitted = output.omittedBytes ?? 0;
+  const elided = omitted > 0 || output.tail !== undefined;
+  const empty = isEmpty(output);
+  return (
+    <div className={cx(styles["section"], stderr && styles["stderrSection"])}>
+      <div className={styles["sectionLabel"]}>
+        {label}
+        {exitCode !== undefined ? <ExitChip code={exitCode} /> : null}
+        {running ? <span className={styles["sectionHint"]}>so far</span> : null}
+        {empty ? <span className={styles["sectionHint"]}>empty</span> : null}
+        {elided ? <span className={styles["sectionHint"]}>head and tail · {formatBytes(omitted)} omitted</span> : lines > maxLines ? <span className={styles["sectionHint"]}>{lines.toLocaleString("en-US")} lines</span> : null}
+      </div>
+      {!empty ? (
+        <div className={cx(styles["pre"], styles["out"], stderr && styles["preStderr"])} style={{ maxHeight }} role="region" aria-label={label}>
+          <span className={styles["outText"]}>{output.head}</span>
+          {elided ? (
+            <span className={styles["elision"]} role="separator" aria-label={`${formatBytes(omitted)} omitted`}>
+              <span className={styles["elisionLine"]} aria-hidden />
+              <span className={styles["elisionText"]}>{omitted > 0 ? `${formatBytes(omitted)} omitted` : "middle omitted"}</span>
+              <span className={styles["elisionLine"]} aria-hidden />
+            </span>
+          ) : null}
+          {output.tail !== undefined ? <span className={styles["outText"]}>{output.tail}</span> : null}
+          {running ? <span className={styles["outCaret"]} aria-hidden /> : null}
         </div>
       ) : null}
     </div>

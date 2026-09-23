@@ -6,9 +6,11 @@
  */
 
 import type { PlanItem } from "../components/AgentPlan.tsx";
+import type { ToolOutput } from "../components/ToolCallCard.tsx";
 import type { ActivityKind } from "../tokens/activity.ts";
 import type { AgentRole, SessionStatus } from "@dude/domain";
 import type { ToolCallStatus } from "../tokens/activity.ts";
+import { LONG_TEST_OUTPUT_FAILED, LONG_TEST_OUTPUT_PASSED } from "./realisticTranscript.ts";
 
 export interface ScenarioTool {
   readonly id: string;
@@ -17,6 +19,7 @@ export interface ScenarioTool {
   readonly status: ToolCallStatus;
   readonly startedAt: number;
   readonly endedAt?: number | undefined;
+  readonly output?: string | ToolOutput | undefined;
   readonly result?: string | undefined;
   readonly diff?: string | undefined;
   readonly error?: string | undefined;
@@ -32,6 +35,11 @@ export interface ScenarioTurn {
   readonly text: string;
   /** How many characters of `text` are visible (streaming). */
   readonly shown: number;
+  /** The model's reasoning before this turn's text, streamed the same way. */
+  readonly thought?: string | undefined;
+  readonly thoughtShown?: number | undefined;
+  readonly thoughtStartedAt?: number | undefined;
+  readonly thoughtEndedAt?: number | undefined;
   readonly activity?: ActivityKind | undefined;
   readonly activitySince?: number | undefined;
   readonly tool?: string | undefined;
@@ -39,10 +47,14 @@ export interface ScenarioTurn {
   readonly retryAt?: number | undefined;
   readonly intent?: "prompt" | "answer" | "steer" | undefined;
   readonly inReplyTo?: string | undefined;
+  /** A steer sent mid-turn, not yet read by the agent. */
+  readonly pending?: boolean | undefined;
+  readonly deliveredAt?: number | undefined;
   readonly startedAt: number;
   readonly endedAt?: number | undefined;
   readonly costUsd?: number | undefined;
-  readonly tokens?: number | undefined;
+  readonly contextTokens?: number | undefined;
+  readonly outputTokens?: number | undefined;
   readonly tools: ReadonlyArray<ScenarioTool>;
   // thread-only
   readonly sessionId?: string | undefined;
@@ -102,6 +114,8 @@ PR **#412** opened. Handing off to the reviewer.`;
 
 const QUESTION = "Should 4xx responses be retried? The existing code retries everything, but 4xx usually means our request is wrong.";
 
+const ORCH_THOUGHT_1 = `The task is narrow: one client, one method, a cap on attempts. Before delegating I want an investigator to confirm there is no retry layer already hiding in the integration code — wrapping an existing one would double the attempts. Then an implementer, then review. I'll write the plan first so the operator can see the shape.`;
+
 interface Step {
   readonly label: string;
   readonly at: number;
@@ -156,11 +170,14 @@ export function buildScenario(t0: number): ReadonlyArray<Step> {
       at: 1.2,
       apply: (s) => {
         s.status = "running";
-        s.turns.push({ id: "o1", kind: "agent", role: "orchestrator", model: "claude-opus-4", text: ORCH_TEXT_1, shown: 0, activity: "thinking", activitySince: T(1.2), startedAt: T(1.2), tools: [], costUsd: 0.004, tokens: 1_900 });
+        s.turns.push({ id: "o1", kind: "agent", role: "orchestrator", model: "claude-opus-4", text: ORCH_TEXT_1, shown: 0, thought: ORCH_THOUGHT_1, thoughtShown: 0, thoughtStartedAt: T(1.2), activity: "thinking", activitySince: T(1.2), startedAt: T(1.2), tools: [], costUsd: 0.004, contextTokens: 1_900 });
       },
     },
+    ...streamSteps("o1-thought", ORCH_THOUGHT_1, 1.4, 2.8, (s, shown, last) => {
+      upd(s.turns, "o1", { thoughtShown: shown, thoughtEndedAt: last ? T(2.8) : undefined });
+    }),
     ...streamSteps("o1", ORCH_TEXT_1, 3.0, 5.6, (s, shown, last) => {
-      upd(s.turns, "o1", { shown, activity: last ? "tool" : "streaming", tool: last ? "todowrite" : undefined, activitySince: T(last ? 5.6 : 3.0) });
+      upd(s.turns, "o1", { shown, activity: last ? "tool" : "streaming", tool: last ? "todowrite" : undefined, activitySince: T(last ? 5.6 : 3.0), outputTokens: Math.round(shown / 3.6) });
       s.costUsd = 0.004 + shown * 0.00002;
       s.tokens = 1_900 + shown;
     }),
@@ -194,7 +211,7 @@ export function buildScenario(t0: number): ReadonlyArray<Step> {
           startedAt: T(7),
           costUsd: 0.002,
           tools: [],
-          turns: [{ id: "i1", kind: "agent", role: "investigator", model: "claude-sonnet-4", text: INV_TEXT, shown: 0, activity: "thinking", activitySince: T(7), startedAt: T(7), tools: [], costUsd: 0.002, tokens: 800 }],
+          turns: [{ id: "i1", kind: "agent", role: "investigator", model: "claude-sonnet-4", text: INV_TEXT, shown: 0, activity: "thinking", activitySince: T(7), startedAt: T(7), tools: [], costUsd: 0.002, contextTokens: 800 }],
         });
       },
     },
@@ -218,7 +235,7 @@ export function buildScenario(t0: number): ReadonlyArray<Step> {
           tool: "read",
           activitySince: T(9.4),
           tools: tools([
-            { id: "it1", name: "grep", args: { pattern: "webhook", path: "apps/control-plane/src" }, status: "completed", startedAt: T(8.5), endedAt: T(8.7), result: "apps/control-plane/src/api/routes/webhooks.ts:12\napps/control-plane/src/api/routes/webhooks.ts:48\napps/control-plane/src/integrations/github/client.ts:7\n… 11 more" },
+            { id: "it1", name: "grep", args: { pattern: "webhook", path: "apps/control-plane/src" }, status: "completed", startedAt: T(8.5), endedAt: T(8.7), output: "apps/control-plane/src/api/routes/webhooks.ts:12\napps/control-plane/src/api/routes/webhooks.ts:48\napps/control-plane/src/integrations/github/client.ts:7\n… 11 more" },
             { id: "it2", name: "read", args: { file_path: "apps/control-plane/src/integrations/github/client.ts" }, status: "running", startedAt: T(9.4) },
           ]),
         });
@@ -235,12 +252,12 @@ export function buildScenario(t0: number): ReadonlyArray<Step> {
         updThreadTurn(s.turns, "th1", "i1", {
           activity: "streaming",
           activitySince: T(10.2),
-          tools: tools([...(first ? [first] : []), { id: "it2", name: "read", args: { file_path: "apps/control-plane/src/integrations/github/client.ts" }, status: "completed", startedAt: T(9.4), endedAt: T(9.45), result: "import type { GithubConfig } from \"./config.ts\";\n\nexport class GithubClient {\n  constructor(private readonly config: GithubConfig) {}\n  async post<T>(path: string, body: unknown): Promise<T> {\n    const res = await fetch(this.url(path), { method: \"POST\", headers: this.headers(), body: JSON.stringify(body) });\n    if (!res.ok) throw new Error(`GitHub ${res.status}`);\n    return (await res.json()) as T;\n  }\n}" }]),
+          tools: tools([...(first ? [first] : []), { id: "it2", name: "read", args: { file_path: "apps/control-plane/src/integrations/github/client.ts" }, status: "completed", startedAt: T(9.4), endedAt: T(9.45), output: "import type { GithubConfig } from \"./config.ts\";\n\nexport class GithubClient {\n  constructor(private readonly config: GithubConfig) {}\n  async post<T>(path: string, body: unknown): Promise<T> {\n    const res = await fetch(this.url(path), { method: \"POST\", headers: this.headers(), body: JSON.stringify(body) });\n    if (!res.ok) throw new Error(`GitHub ${res.status}`);\n    return (await res.json()) as T;\n  }\n}" }]),
         });
       },
     },
     ...streamSteps("i1", INV_TEXT, 10.4, 14.4, (s, shown, last) => {
-      updThreadTurn(s.turns, "th1", "i1", { shown, activity: last ? "completed" : "streaming", endedAt: last ? T(14.4) : undefined, costUsd: 0.002 + shown * 0.0001, tokens: 800 + shown * 3 });
+      updThreadTurn(s.turns, "th1", "i1", { shown, activity: last ? "completed" : "streaming", endedAt: last ? T(14.4) : undefined, costUsd: 0.002 + shown * 0.0001, contextTokens: 800 + shown * 3 });
       if (last) {
         upd(s.turns, "th1", { threadStatus: "completed", endedAt: T(14.4), costUsd: 0.084 });
         s.plan = s.plan.map((p, i) => (i === 0 ? { ...p, status: "completed" } : i === 1 ? { ...p, status: "in_progress" } : p));
@@ -252,8 +269,8 @@ export function buildScenario(t0: number): ReadonlyArray<Step> {
       label: "Orchestrator resumes",
       at: 15,
       apply: (s) => {
-        upd(s.turns, "o1", { activity: "completed", endedAt: T(15), tool: undefined, costUsd: 0.06, tokens: 6_100 });
-        s.turns.push({ id: "o2", kind: "agent", role: "orchestrator", model: "claude-opus-4", text: ORCH_TEXT_2, shown: 0, activity: "thinking", activitySince: T(15), startedAt: T(15), tools: [], costUsd: 0.001, tokens: 400 });
+        upd(s.turns, "o1", { activity: "completed", endedAt: T(15), tool: undefined, costUsd: 0.06, contextTokens: 6_100 });
+        s.turns.push({ id: "o2", kind: "agent", role: "orchestrator", model: "claude-opus-4", text: ORCH_TEXT_2, shown: 0, activity: "thinking", activitySince: T(15), startedAt: T(15), tools: [], costUsd: 0.001, contextTokens: 400 });
       },
     },
     ...streamSteps("o2", ORCH_TEXT_2, 16, 17.2, (s, shown, last) => {
@@ -276,7 +293,7 @@ export function buildScenario(t0: number): ReadonlyArray<Step> {
           startedAt: T(17.6),
           costUsd: 0.003,
           tools: [],
-          turns: [{ id: "m1", kind: "agent", role: "implementer", model: "claude-opus-4", text: IMPL_TEXT, shown: 0, activity: "thinking", activitySince: T(17.6), startedAt: T(17.6), tools: [], costUsd: 0.003, tokens: 1_200 }],
+          turns: [{ id: "m1", kind: "agent", role: "implementer", model: "claude-opus-4", text: IMPL_TEXT, shown: 0, activity: "thinking", activitySince: T(17.6), startedAt: T(17.6), tools: [], costUsd: 0.003, contextTokens: 1_200 }],
         });
       },
     },
@@ -327,7 +344,7 @@ export function buildScenario(t0: number): ReadonlyArray<Step> {
           activitySince: T(28),
           tools: tools([
             { id: "mt1", name: "edit", args: { file_path: "apps/control-plane/src/integrations/github/client.ts" }, status: "completed", startedAt: T(19), endedAt: T(19.02), diff: IMPL_DIFF },
-            { id: "mt2", name: "bash", args: { command: "bun test src/integrations/github" }, status: "failed", startedAt: T(20), endedAt: T(28), exitCode: 1, error: "1 failing: retries when response is 502\n  expected 5 calls, received 1\n    at src/integrations/github/client.test.ts:41:22" },
+            { id: "mt2", name: "bash", args: { command: "bun test src/integrations/github" }, status: "failed", startedAt: T(20), endedAt: T(28), exitCode: 1, error: "1 failing: retries when response is 502\n  expected 5 calls, received 1\n    at src/integrations/github/client.test.ts:41:22", output: LONG_TEST_OUTPUT_FAILED },
           ]),
         });
       },
@@ -377,11 +394,11 @@ export function buildScenario(t0: number): ReadonlyArray<Step> {
           tool: undefined,
           endedAt: T(45),
           costUsd: 0.91,
-          tokens: 288_000,
-          tools: tools([...prev, { id: "mt4", name: "bash", args: { command: "bun test src/integrations/github" }, status: "completed", startedAt: T(41.8), endedAt: T(45), exitCode: 0, result: " 4 pass\n 0 fail\n 9 expect() calls\nRan 4 tests across 1 file. [51.00ms]" }]),
+          contextTokens: 288_000,
+          tools: tools([...prev, { id: "mt4", name: "bash", args: { command: "bun test src/integrations/github" }, status: "completed", startedAt: T(41.8), endedAt: T(45), exitCode: 0, output: LONG_TEST_OUTPUT_PASSED }]),
         });
         upd(s.turns, "th2", { threadStatus: "completed", endedAt: T(45), costUsd: 0.912 });
-        upd(s.turns, "o2", { activity: "completed", endedAt: T(45), tool: undefined, costUsd: 0.03, tokens: 2_800 });
+        upd(s.turns, "o2", { activity: "completed", endedAt: T(45), tool: undefined, costUsd: 0.03, contextTokens: 2_800 });
         s.plan = s.plan.map((p, i) => (i <= 2 ? { ...p, status: "completed" } : { ...p, status: "in_progress" }));
         s.costUsd = 1.1;
         s.tokens = 380_000;
@@ -391,7 +408,7 @@ export function buildScenario(t0: number): ReadonlyArray<Step> {
       label: "Orchestrator asks a question",
       at: 46,
       apply: (s) => {
-        s.turns.push({ id: "o3", kind: "agent", role: "orchestrator", model: "claude-opus-4", text: ORCH_TEXT_3, shown: 0, activity: "thinking", activitySince: T(46), startedAt: T(46), tools: [], costUsd: 0.002, tokens: 300 });
+        s.turns.push({ id: "o3", kind: "agent", role: "orchestrator", model: "claude-opus-4", text: ORCH_TEXT_3, shown: 0, activity: "thinking", activitySince: T(46), startedAt: T(46), tools: [], costUsd: 0.002, contextTokens: 300 });
       },
     },
     ...streamSteps("o3", ORCH_TEXT_3, 47, 48, (s, shown, last) => {
@@ -416,7 +433,7 @@ export function buildAnswerSteps(t0: number, answer: string): ReadonlyArray<Step
         s.status = "running";
         upd(s.turns, "o3", { activity: "completed", endedAt: T(0) });
         s.turns.push({ id: "h1", kind: "human", role: "human", name: "marcio", intent: "answer", inReplyTo: QUESTION, text: answer, shown: 999, startedAt: T(0), tools: [] });
-        s.turns.push({ id: "o4", kind: "agent", role: "orchestrator", model: "claude-opus-4", text: ORCH_TEXT_4, shown: 0, activity: "thinking", activitySince: T(0.2), startedAt: T(0.2), tools: [], costUsd: 0.003, tokens: 900 });
+        s.turns.push({ id: "o4", kind: "agent", role: "orchestrator", model: "claude-opus-4", text: ORCH_TEXT_4, shown: 0, activity: "thinking", activitySince: T(0.2), startedAt: T(0.2), tools: [], costUsd: 0.003, contextTokens: 900 });
       },
     },
     ...streamSteps("o4", ORCH_TEXT_4, 1.2, 5.5, (s, shown, last) => {
@@ -430,16 +447,27 @@ export function buildAnswerSteps(t0: number, answer: string): ReadonlyArray<Step
   ];
 }
 
-/** Steps after a steer while running. */
+/**
+ * Steps after a steer while running. lux holds the message until the
+ * current turn ends, so it is queued first and delivered a little later.
+ */
 export function buildSteerSteps(t0: number, instruction: string): ReadonlyArray<Step> {
   const T = (s: number) => t0 + s * 1000;
+  const id = `st${t0}`;
   return [
     {
-      label: "Steered",
+      label: "Steer sent — queued until the turn ends",
       at: 0,
       apply: (s) => {
-        s.turns.push({ id: `st${t0}`, kind: "human", role: "human", name: "marcio", intent: "steer", text: instruction, shown: 999, startedAt: T(0), tools: [] });
-        s.turns.push({ id: `sys${t0}`, kind: "system", role: "system", text: "Current turn interrupted · directive recorded", shown: 999, startedAt: T(0.1), tools: [] });
+        s.turns.push({ id, kind: "human", role: "human", name: "marcio", intent: "steer", pending: true, text: instruction, shown: 999, startedAt: T(0), tools: [] });
+      },
+    },
+    {
+      label: "Steer delivered",
+      at: 4,
+      apply: (s) => {
+        upd(s.turns, id, { pending: false, deliveredAt: T(4) });
+        s.turns.push({ id: `sys${t0}`, kind: "system", role: "system", text: "Turn ended · directive delivered to the agent", shown: 999, startedAt: T(4), tools: [] });
       },
     },
   ];

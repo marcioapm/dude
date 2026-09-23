@@ -16,6 +16,7 @@ export { cx } from "./util/cx.ts";
 export {
   formatUsd,
   formatTokens,
+  formatBytes,
   formatDuration,
   formatTimestamp,
   formatPercent,

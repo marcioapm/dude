@@ -18,6 +18,15 @@
   font-size: 0.85em;
   color: var(--ds-color-text-muted);
 }
+/* A label before a token count ("ctx", "out"): same size as the number,
+   one step quieter, so the number stays the thing being read. */
+.prefix {
+  margin-right: 3px;
+  color: var(--ds-color-text-muted);
+}
+.unknown {
+  color: var(--ds-color-text-muted);
+}
 .warn {
   color: var(--ds-tone-attention-fg);
 }

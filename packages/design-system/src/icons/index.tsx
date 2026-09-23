@@ -70,7 +70,8 @@ export type IconName =
   | "edit"
   | "globe"
   | "list-check"
-  | "message";
+  | "message"
+  | "brain";
 
 /** Path data on a 16x16 grid. `fill` marks icons that are filled shapes. */
 const PATHS: Record<IconName, { d: string; fill?: true; dashed?: true }> = {
@@ -144,6 +145,10 @@ const PATHS: Record<IconName, { d: string; fill?: true; dashed?: true }> = {
   globe: { d: "M8 2.75a5.25 5.25 0 1 0 0 10.5a5.25 5.25 0 0 0 0-10.5ZM2.75 8h10.5M8 2.75c1.6 1.6 2.4 3.4 2.4 5.25S9.6 11.65 8 13.25M8 2.75C6.4 4.35 5.6 6.15 5.6 8s.8 3.65 2.4 5.25" },
   "list-check": { d: "M2.75 4.5l1 1 2-2M2.75 8.5l1 1 2-2M2.75 12.5l1 1 2-2M8 4.5h5.25M8 8.5h5.25M8 12.5h5.25" },
   message: { d: "M3 3.5h10a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-.5.5H7l-3 2.5V10.5H3a.5.5 0 0 1-.5-.5V4a.5.5 0 0 1 .5-.5Z" },
+  /* Two lobes and a midline: the model's reasoning, as opposed to its output. */
+  brain: {
+    d: "M8 3.5C7.1 2.4 5 2.7 5 4.5C3.5 4.5 2.7 6.1 3.5 7.4C2.5 8.6 3.2 10.3 4.8 10.3C4.8 11.9 6.5 12.8 8 11.7C9.5 12.8 11.2 11.9 11.2 10.3C12.8 10.3 13.5 8.6 12.5 7.4C13.3 6.1 12.5 4.5 11 4.5C11 2.7 8.9 2.4 8 3.5ZM8 3.5v8.2",
+  },
 };
 
 export interface IconProps extends Omit<SVGProps<SVGSVGElement>, "name"> {

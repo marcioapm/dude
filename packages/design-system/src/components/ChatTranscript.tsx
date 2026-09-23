@@ -25,7 +25,12 @@ export interface ChatTranscriptSession {
   readonly branch?: string | undefined;
   readonly startedAt?: string | number | Date | undefined;
   readonly endedAt?: string | number | Date | null | undefined;
-  readonly costUsd?: number | undefined;
+  /**
+   * `null` when the harness reports no cost (a subscription seat, say).
+   * The header then shows "—" for cost and still shows the tokens; it
+   * never shows `$0.00` for a run that simply was not priced.
+   */
+  readonly costUsd?: number | null | undefined;
   readonly budgetUsd?: number | undefined;
   readonly tokens?: number | undefined;
 }
@@ -193,7 +198,7 @@ function TranscriptHeader({ session, actions }: { readonly session: ChatTranscri
         {session.costUsd !== undefined ? (
           <span className={styles["stat"]}>
             <span className={styles["statLabel"]}>Cost</span>
-            <CostDisplay usd={session.costUsd} budgetUsd={session.budgetUsd} live={spec.live} />
+            <CostDisplay usd={session.costUsd} budgetUsd={session.budgetUsd} live={spec.live && session.costUsd !== null} />
           </span>
         ) : null}
         {session.tokens !== undefined ? (

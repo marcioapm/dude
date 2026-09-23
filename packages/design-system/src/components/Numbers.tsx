@@ -9,7 +9,13 @@ interface NumberBaseProps extends Omit<HTMLAttributes<HTMLSpanElement>, "childre
 }
 
 export interface CostDisplayProps extends NumberBaseProps {
-  readonly usd: number;
+  /**
+   * `null` means the cost is not known — a harness on a subscription that
+   * reports nothing, or a run whose ledger has not caught up. It renders
+   * as an em dash with a title, never as `$0.00`: zero is a price, unknown
+   * is not.
+   */
+  readonly usd: number | null;
   readonly compact?: boolean | undefined;
   /** When set, shows `/ $budget` and colors the value at 80% and 100%. */
   readonly budgetUsd?: number | undefined;
@@ -22,6 +28,13 @@ export interface CostDisplayProps extends NumberBaseProps {
  * precision lives in `title` so hovering a rounded number reveals cents.
  */
 export function CostDisplay({ usd, compact, budgetUsd, live, mono, tone = "default", className, ...rest }: CostDisplayProps) {
+  if (usd === null) {
+    return (
+      <span className={cx(styles["num"], styles["unknown"], mono && styles["mono"], className)} title="Cost not reported" {...rest}>
+        —
+      </span>
+    );
+  }
   const ratio = budgetUsd !== undefined && budgetUsd > 0 ? usd / budgetUsd : 0;
   const state = ratio >= 1 ? "over" : ratio >= 0.8 ? "warn" : null;
   return (
@@ -48,17 +61,44 @@ export function CostDisplay({ usd, compact, budgetUsd, live, mono, tone = "defau
 export interface TokenCountProps extends NumberBaseProps {
   readonly tokens: number;
   readonly exact?: boolean | undefined;
+  /**
+   * A short word before the number saying which count this is — `ctx`
+   * (context at this point), `out` (output tokens), `in`. Replaces the
+   * trailing `tok` unit, which the label already implies.
+   */
+  readonly label?: string | undefined;
+  /**
+   * The window the count sits in (the model's context limit). Shows
+   * `/ 744k` and colours the value at 80% and 100%, the same thresholds
+   * a cost takes against its budget.
+   */
+  readonly windowTokens?: number | undefined;
 }
 
-export function TokenCount({ tokens, exact, mono, tone = "default", className, ...rest }: TokenCountProps) {
+export function TokenCount({ tokens, exact, label, windowTokens, mono, tone = "default", className, ...rest }: TokenCountProps) {
+  const ratio = windowTokens !== undefined && windowTokens > 0 ? tokens / windowTokens : 0;
+  const state = ratio >= 1 ? "over" : ratio >= 0.8 ? "warn" : null;
+  const title = `${Math.round(tokens).toLocaleString("en-US")} ${label ? `${label} ` : ""}tokens${
+    windowTokens !== undefined ? ` of ${Math.round(windowTokens).toLocaleString("en-US")} (${Math.round(ratio * 100)}%)` : ""
+  }`;
   return (
     <span
-      className={cx(styles["num"], mono && styles["mono"], tone === "muted" && styles["muted"], tone === "secondary" && styles["secondary"], className)}
-      title={`${Math.round(tokens).toLocaleString("en-US")} tokens`}
+      className={cx(
+        styles["num"],
+        mono && styles["mono"],
+        tone === "muted" && styles["muted"],
+        tone === "secondary" && styles["secondary"],
+        state === "warn" && styles["warn"],
+        state === "over" && styles["over"],
+        className,
+      )}
+      title={title}
       {...rest}
     >
+      {label ? <span className={styles["prefix"]}>{label}</span> : null}
       {formatTokens(tokens, { exact: exact ?? false })}
-      <span className={styles["unit"]}>tok</span>
+      {windowTokens !== undefined ? <span className={styles["budget"]}>/ {formatTokens(windowTokens)}</span> : null}
+      {!label ? <span className={styles["unit"]}>tok</span> : null}
     </span>
   );
 }

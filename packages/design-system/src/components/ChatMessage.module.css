@@ -101,8 +101,12 @@
   flex-shrink: 0;
 }
 
-/* --- Human turns ------------------------------------------------------- */
+/* --- Framed turns (addressed to the agent) ------------------------------ */
 
+/* A person's answer or steer, or the factory's own prompt. `prompt` keeps
+   the neutral frame: it is what the agent was told, not an intervention,
+   and when dude itself authored it the system avatar and "Task" tag say
+   so without a third tint. */
 .human {
   --cm-tint: var(--ds-color-border);
   --cm-tint-bg: var(--ds-color-hover-wash);
@@ -150,6 +154,86 @@
   color: var(--cm-tag-fg);
   background: var(--cm-tag-bg);
   align-self: center;
+}
+
+/* --- Queued: sent, not yet read ---------------------------------------- */
+
+/* A steer that arrived mid-turn is held until the turn ends. Three
+   channels say so: a dashed frame, a "Queued" mark with a clock, and a
+   line of text under the body. The intent tint is kept — it is still a
+   steer — but the frame is not solid until the agent has it. */
+.queued .main {
+  border-style: dashed;
+  border-left-style: solid;
+  background: transparent;
+}
+.queued-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 16px;
+  padding: 0 5px 0 4px;
+  border-radius: var(--ds-radius-sm);
+  border: 1px dashed var(--ds-color-border-strong);
+  font-size: var(--ds-text-2xs);
+  font-weight: var(--ds-weight-medium);
+  letter-spacing: var(--ds-tracking-caps);
+  text-transform: uppercase;
+  color: var(--ds-color-text-secondary);
+  align-self: center;
+}
+.queuedNote {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  font-style: italic;
+}
+.delivered {
+  font-family: var(--ds-font-mono);
+  font-feature-settings: "tnum", "zero";
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-disabled);
+  white-space: nowrap;
+}
+.root:hover .delivered {
+  color: var(--ds-color-text-muted);
+}
+
+/* --- Clamped body ------------------------------------------------------- */
+
+.clamp {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+  min-width: 0;
+}
+.clampInner {
+  min-width: 0;
+}
+.clamped .clampInner {
+  overflow: hidden;
+  /* Fade the last line out so the cut reads as a cut. A mask, not a
+     gradient overlay: the frame tints are translucent washes, so there is
+     no one colour to fade *to*. */
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
+}
+.clampToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  align-self: flex-start;
+  height: 20px;
+  padding: 0 var(--ds-space-6) 0 var(--ds-space-4);
+  margin-left: calc(var(--ds-space-4) * -1);
+  border: 0;
+  border-radius: var(--ds-radius-sm);
+  background: transparent;
+  font-size: var(--ds-text-xs);
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-accent-text);
+}
+.clampToggle:hover {
+  background: var(--ds-color-hover-wash);
 }
 
 .quote {
