@@ -7,17 +7,15 @@
  * reviewer describes what it found; policy decides what that means
  * (plan §11.2).
  *
- * Reported by the runner on behalf of a review Run, which is why these
- * routes accept a runner key: the agent produced the text, the runner parsed
- * it, and the control plane is the only thing that decides what happens next.
+ * Recorded by the orchestrator from what a reviewer said; here a person
+ * lists them, and may accept or reopen one.
  */
 
 import { z } from "zod";
-import { EventTypes, findingSeveritySchema, newId } from "@dude/domain";
+import { EventTypes } from "@dude/domain";
 import { withOrg } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
-import { eventBus } from "../../events/bus.ts";
-import { badRequest, json, notFound, parseBody } from "../http.ts";
+import { json, notFound, parseBody } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 const FINDING_SELECT = `
@@ -28,136 +26,6 @@ const FINDING_SELECT = `
   fix_attempts AS "fixAttempts",
   created_at AS "createdAt", updated_at AS "updatedAt"`;
 
-const findingInput = z.object({
-  severity: findingSeveritySchema,
-  category: z.string().min(1).max(50),
-  title: z.string().min(1).max(300),
-  description: z.string().max(10_000).default(""),
-  suggestedFix: z.string().max(10_000).default(""),
-  repo: z.string().max(200).nullable().default(null),
-  file: z.string().max(500).nullable().default(null),
-  line: z.number().int().positive().nullable().default(null),
-});
-
-/**
- * A whole review's findings in one call.
- *
- * All of them together rather than one per request: a review either reported
- * or it did not, and a partial set would let the workflow act on half a
- * review if the runner died mid-report.
- */
-const reportInput = z.object({
-  findings: z.array(findingInput).max(100),
-});
-
-async function reportFindings(ctx: RequestContext): Promise<Response> {
-  const runId = ctx.params.id!;
-  const input = await parseBody(ctx.request, reportInput);
-  const { organizationId } = ctx.principal;
-
-  const result = await withOrg(organizationId, async (scope) => {
-    const runs = (await scope.sql`
-      SELECT id, project_id, work_item_id, phase, category FROM runs WHERE id = ${runId}`) as Array<{
-      id: string;
-      project_id: string;
-      work_item_id: string;
-      phase: string | null;
-      category: string | null;
-    }>;
-    const run = runs[0];
-    if (!run) return { missing: true as const };
-
-    /*
-     * Only a review or test Run may report findings. A fix Run reporting
-     * them would let an implementer manufacture the evidence that its own
-     * work is finished.
-     */
-    if (run.phase !== "review" && run.phase !== "test") {
-      return { wrongPhase: run.phase ?? "none" };
-    }
-
-    // Reporting twice replaces rather than accumulates: a retried report
-    // must not double a review's findings.
-    await scope.sql`DELETE FROM review_findings WHERE run_id = ${runId}`;
-
-    /*
-     * A re-review resolves what an earlier review of the same kind raised.
-     *
-     * This is what lets the loop converge. Without it a finding from the
-     * first review stays open forever — a clean second review reports
-     * nothing, and "nothing" cannot close a row it never mentions — so the
-     * loop can only ever end at its policy bound, having proved only that
-     * the bound works.
-     *
-     * Scoped to the same category: a security re-review saying nothing is
-     * not evidence that a correctness finding was fixed. And only findings a
-     * fix Run has already attempted, because a finding the fixer has not
-     * touched yet was not resolved by anything — the re-review simply did
-     * not raise it again, which a flaky reviewer does all the time.
-     *
-     * Findings this review raises *again* are inserted fresh below, so a
-     * problem that survived the fix reappears as open rather than being
-     * quietly closed here.
-     */
-    const categories = [...new Set(input.findings.map((f) => f.category))];
-    const covered = run.category ? [run.category, ...categories] : categories;
-
-    if (covered.length > 0 && run.phase === "review") {
-      await scope.sql`
-        UPDATE review_findings SET
-          status = 'resolved',
-          resolved_by_run_id = ${runId},
-          resolution_note = 'not raised again by a re-review after a fix',
-          updated_at = now()
-        WHERE work_item_id = ${run.work_item_id}
-          AND run_id <> ${runId}
-          AND status = 'open'
-          AND fix_attempts > 0
-          AND category IN ${scope.sql(covered)}`;
-    }
-
-    const rows: Array<Record<string, unknown>> = [];
-    for (const finding of input.findings) {
-      const inserted = (await scope.sql`
-        INSERT INTO review_findings (
-          id, organization_id, work_item_id, run_id, category, severity,
-          repo, file, line, title, description, suggested_fix)
-        VALUES (
-          ${newId("finding")}, ${organizationId}, ${run.work_item_id}, ${runId},
-          ${finding.category}, ${finding.severity}::finding_severity,
-          ${finding.repo}, ${finding.file}, ${finding.line},
-          ${finding.title}, ${finding.description ?? ""}, ${finding.suggestedFix ?? ""})
-        RETURNING ${scope.sql.unsafe(FINDING_SELECT)}`) as Array<Record<string, unknown>>;
-      rows.push(inserted[0]!);
-    }
-
-    const event = await appendInScope(scope, {
-      eventType: EventTypes.ReviewCompleted,
-      organizationId,
-      projectId: run.project_id,
-      workItemId: run.work_item_id,
-      runId,
-      actor: { type: "agent", id: runId },
-      source: "runner",
-      correlationId: run.work_item_id,
-      payload: {
-        phase: run.phase,
-        count: input.findings.length,
-        bySeverity: countBy(input.findings, (f) => f.severity),
-      },
-    });
-
-    return { findings: rows, event };
-  });
-
-  if ("missing" in result) throw notFound(`run ${runId} not found`);
-  if ("wrongPhase" in result) {
-    throw badRequest(`a ${result.wrongPhase} run may not report review findings`);
-  }
-
-  eventBus.publish(result.event);
-  return json({ findings: result.findings }, 201);
-}
 
 async function listFindings(ctx: RequestContext): Promise<Response> {
   const workItemId = ctx.url.searchParams.get("workItemId");
@@ -226,22 +94,11 @@ async function resolveFinding(ctx: RequestContext): Promise<Response> {
   });
 
   if ("missing" in result) throw notFound(`finding ${id} not found`);
-  eventBus.publish(result.event);
   return json(result.finding);
 }
 
-function countBy<T>(items: readonly T[], key: (item: T) => string): Record<string, number> {
-  const counts: Record<string, number> = {};
-  for (const item of items) {
-    const k = key(item);
-    counts[k] = (counts[k] ?? 0) + 1;
-  }
-  return counts;
-}
 
 export function registerFindingRoutes(router: Router): void {
-  // Reported by the runner on the review Run's behalf.
-  router.post("/v1/runs/:id/findings", reportFindings, { requireKind: "runner" });
   router.get("/v1/findings", listFindings);
   router.post("/v1/findings/:id/resolve", resolveFinding);
 }

@@ -141,3 +141,39 @@ CREATE POLICY tenant_isolation ON webhook_deliveries
 GRANT SELECT, INSERT, UPDATE ON webhook_deliveries TO dude_app;
 GRANT SELECT, UPDATE ON webhook_deliveries TO dude_sweeper;
 GRANT SELECT ON repositories, forge_credentials TO dude_sweeper;
+
+-- The webhook secret, for the one caller that has no tenant yet: a GitHub
+-- delivery names its organization in the URL and proves itself with a
+-- signature, and the secret to check it with lives behind row-level
+-- security. One narrow function rather than an exemption, as for API keys
+-- (migration 003).
+CREATE FUNCTION webhook_secret_for(p_organization_id text) RETURNS text
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
+AS $$
+  SELECT webhook_secret FROM forge_credentials
+  WHERE organization_id = p_organization_id AND forge = 'github' LIMIT 1
+$$;
+
+REVOKE ALL ON FUNCTION webhook_secret_for(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION webhook_secret_for(text) TO dude_app;
+
+-- ---------------------------------------------------------------------------
+-- The runner's schema, retired
+-- ---------------------------------------------------------------------------
+
+-- dude no longer runs containers: lux does. Its workers, their leases, the
+-- containers they ran and where each workspace lived all belonged to the Go
+-- runner this migration replaces.
+DROP INDEX IF EXISTS runs_pending_control_idx;
+DROP INDEX IF EXISTS runs_lease_idx;
+DROP INDEX IF EXISTS runs_home_worker_idx;
+ALTER TABLE runs
+  DROP COLUMN worker_id,
+  DROP COLUMN home_worker_id,
+  DROP COLUMN workspace_portable,
+  DROP COLUMN workspace_path,
+  DROP COLUMN lease_expires_at;
+DROP TABLE runtime_instances;
+DROP TABLE workers;
+DROP TYPE runtime_status;
+DROP TYPE worker_status;

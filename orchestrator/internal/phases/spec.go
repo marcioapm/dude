@@ -156,6 +156,11 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		spec.Workload.Adapter = "acp"
 		spec.Workload.Command = []string{"lux-fake"}
 		spec.Workload.Prompt = fakeScript(in.Phase, in.RunID, in.FixesDone)
+		// A task marked [hang] keeps its agent busy, so a test has a live
+		// agent to steer, pause and abort.
+		if strings.Contains(in.Prompt, "[hang]") {
+			spec.Workload.Prompt = "sleep 3600\n" + spec.Workload.Prompt
+		}
 		return spec
 	}
 

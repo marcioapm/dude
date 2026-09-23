@@ -16,6 +16,7 @@ import { closePool, setPool, withOrg } from "../src/db/client.ts";
 import { createApiKey } from "../src/api/auth.ts";
 import * as ledger from "../src/events/ledger.ts";
 import { startServer } from "../src/index.ts";
+import { listenForEvents } from "../src/events/listen.ts";
 
 const OWNER_URL = process.env.DATABASE_URL ?? "postgres://dude:dude@localhost:5433/dude";
 const APP_URL = process.env.TEST_APP_DATABASE_URL ?? "postgres://dude_app:dude_app@localhost:5433/dude";
@@ -27,6 +28,8 @@ let owner: SQL;
 /** This file's pool, so closing it cannot sever another file's. */
 let app: SQL;
 let server: ReturnType<typeof startServer>;
+/** Live events reach the stream through NOTIFY, as in production. */
+let stopListening: () => Promise<void>;
 let baseUrl: string;
 let keyA: string;
 
@@ -61,10 +64,12 @@ beforeAll(async () => {
   keyA = (await createApiKey({ organizationId: ORG_A, name: "test" })).key;
 
   server = startServer(0);
+  stopListening = await listenForEvents(APP_URL);
   baseUrl = `http://localhost:${server.port}`;
 });
 
 afterAll(async () => {
+  await stopListening?.();
   await server?.stop(true);
   await closePool(app);
   // Cascades through events, api_keys and the rest of the tenant tables.

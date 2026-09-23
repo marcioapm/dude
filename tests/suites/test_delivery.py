@@ -1,83 +1,56 @@
-"""The delivery workflow, driven through the public API.
+"""Delivery, end to end through the deployed processes.
 
-The unit tests prove each piece in isolation; this proves they connect. A
-work item is delivered, the runner claims whatever phase Runs appear, and the
-suite asserts on what the API says happened — not on internal state.
-
-The runner is the real one. The agent is not: `fake/scripted` makes a
-deterministic commit, so the test exercises the workflow's transitions rather
-than a model's judgement.
+The backend receives the request, the orchestrator runs the workflow, agents
+run on a stand-in for lux, and their work lands on a stand-in for GitHub
+backed by a real git repository. What happens inside the orchestrator is
+pinned by its own tests (orchestrator/delivery_test.go); this suite pins the
+seams between the processes: that a user's request reaches the orchestrator,
+that the orchestrator's refusals reach the user, and that what the
+orchestrator records is what the API and the live stream show.
 """
 
 from __future__ import annotations
 
 import pytest
 
+from fake_github import FakeGitHub
 from helpers import ApiClient, wait_until
 
-# Delivery runs agents in containers, so it needs Docker and the runner.
-pytestmark = pytest.mark.docker
 
-
-@pytest.fixture
-def delivery_project(client: ApiClient, tmp_path_factory) -> dict:
-    """A project whose repository is a bare git remote the runner can push to.
-
-    Bare, not a working repository: every phase after the first builds on
-    what the previous one *pushed*, so the push has to succeed. Git refuses a
-    push to a non-bare repository's checked-out branch, and a fixture that
-    cannot be pushed to tests a loop that can never get past its first phase.
-    """
-    import subprocess
-
-    root = tmp_path_factory.mktemp("delivery")
-    seed = root / "seed"
-    remote = root / "remote.git"
-
-    seed.mkdir()
-    for args in (
-        ["git", "init", "--initial-branch=main", "-q"],
-        ["git", "config", "user.email", "test@example.com"],
-        ["git", "config", "user.name", "Test"],
-    ):
-        subprocess.run(args, cwd=seed, check=True)
-    (seed / "README.md").write_text("delivery fixture\n")
-    subprocess.run(["git", "add", "."], cwd=seed, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=seed, check=True)
-    subprocess.run(["git", "clone", "-q", "--bare", str(seed), str(remote)], check=True)
-    repo_dir = remote
-
-    return client.create_project(
-        name="Delivery",
-        slug=f"delivery-{root.name[-6:]}",
-        runtimeImage="dude-runtime:dev",
-        agentModels={
-            "implementer": {"model": "fake/scripted"},
-            "reviewer": {"model": "fake/scripted"},
-            "simplifier": {"model": "fake/scripted"},
-        },
-        repositories=[
-            {"name": "target", "url": str(repo_dir), "defaultBranch": "main"},
-        ],
-    )
+def _runs(client: ApiClient, work_item_id: str) -> list[dict]:
+    return client.get(f"/v1/work-items/{work_item_id}").json().get("runs", [])
 
 
 def test_delivery_requires_a_repository(client: ApiClient, project: dict):
-    """A work item with nowhere to push cannot be delivered."""
-    # The `project` fixture has no repositories.
+    """The orchestrator's refusal reaches the user, in the API's own shape."""
     work_item = client.create_work_item(project["id"], "Nowhere to push")
 
     resp = client.post(f"/v1/work-items/{work_item['id']}/deliver")
     assert resp.status_code == 400
-    assert "repository" in resp.text.lower()
+    assert "repository" in resp.json()["error"]["message"].lower()
 
 
-def test_delivering_twice_joins_the_first(client: ApiClient, delivery_project: dict):
+def test_delivering_a_missing_work_item_is_a_404(client: ApiClient):
+    resp = client.post("/v1/work-items/wi_does_not_exist/deliver")
+    assert resp.status_code == 404
+
+
+def test_another_organization_cannot_deliver_my_work_item(
+    client: ApiClient, forge_project: dict, second_org: dict
+):
+    """The backend names the user's organization; the orchestrator's queries
+    are confined to it, so someone else's work item does not exist for them."""
+    work_item = client.create_work_item(forge_project["id"], "Mine")
+    resp = second_org["client"].post(f"/v1/work-items/{work_item['id']}/deliver")
+    assert resp.status_code == 404
+
+
+def test_delivering_twice_joins_the_first(client: ApiClient, forge_project: dict):
     """The work item is the idempotency key, so a second call must not race."""
-    work_item = client.create_work_item(delivery_project["id"], "Deliver me once")
+    work_item = client.create_work_item(forge_project["id"], "Deliver me once")
 
     first = client.post(f"/v1/work-items/{work_item['id']}/deliver")
-    assert first.status_code == 201
+    assert first.status_code == 201, first.text
 
     second = client.post(f"/v1/work-items/{work_item['id']}/deliver")
     assert second.status_code == 200
@@ -85,140 +58,100 @@ def test_delivering_twice_joins_the_first(client: ApiClient, delivery_project: d
     assert second.json()["workflowRunId"] == first.json()["workflowRunId"]
 
 
-def test_delivery_creates_an_implement_run_first(
-    client: ApiClient, delivery_project: dict, runner
+def test_the_review_fix_loop_converges_and_the_ledger_shows_it(
+    client: ApiClient, forge_project: dict, fake_github: FakeGitHub
 ):
-    """Delivery starts with an implementer, not with whatever claims first."""
-    work_item = client.create_work_item(delivery_project["id"], "Implement first")
-    client.post(f"/v1/work-items/{work_item['id']}/deliver")
+    """Implement → review (a blocking finding) → fix → clean review → simplify.
 
-    def has_run():
-        runs = client.get(f"/v1/work-items/{work_item['id']}").json().get("runs", [])
-        return runs[0] if runs else None
-
-    run = wait_until(has_run, timeout=30, message="no Run was created for the work item")
-    assert run["phase"] == "implement"
-    assert run["role"] == "implementer"
-
-
-def test_review_fans_out_after_the_implementer_commits(
-    client: ApiClient, delivery_project: dict, runner
-):
-    """The diff decides the reviewers, and they run in parallel."""
-    work_item = client.create_work_item(delivery_project["id"], "Review my change")
-    client.post(f"/v1/work-items/{work_item['id']}/deliver")
-
-    def reviews_created():
-        runs = client.get(f"/v1/work-items/{work_item['id']}").json().get("runs", [])
-        reviews = [r for r in runs if r.get("phase") == "review"]
-        return reviews or None
-
-    reviews = wait_until(
-        reviews_created, timeout=120, message="review phase never started"
-    )
-    assert all(r["role"] == "reviewer" for r in reviews)
-    # Each reviewer gets its own Run, hence its own container and clone.
-    assert len({r["id"] for r in reviews}) == len(reviews)
-
-
-def test_a_review_run_does_not_publish(client: ApiClient, delivery_project: dict, runner):
-    """A reviewer may commit locally; its commits must not reach the branch."""
-    work_item = client.create_work_item(delivery_project["id"], "Reviewer stays quiet")
-    client.post(f"/v1/work-items/{work_item['id']}/deliver")
-
-    def review_finished():
-        runs = client.get(f"/v1/work-items/{work_item['id']}").json().get("runs", [])
-        done = [
-            r
-            for r in runs
-            if r.get("phase") == "review" and r["status"] in ("completed", "failed")
-        ]
-        return done or None
-
-    reviews = wait_until(review_finished, timeout=180, message="no review Run finished")
-
-    pushes = [
-        e
-        for e in client.events(runId=reviews[0]["id"])
-        if e["eventType"] == "git.push_completed"
-    ]
-    assert pushes == [], "a review Run published its commits"
-
-
-def test_findings_may_only_come_from_a_review(client: ApiClient, delivery_project: dict):
-    """An implementer reporting findings could manufacture its own sign-off."""
-    work_item = client.create_work_item(delivery_project["id"], "No self-signoff")
-    run = client.create_run(work_item["id"])
-
-    # A Run created through the API has no phase at all.
-    resp = client.post(
-        f"/v1/runs/{run['id']}/findings",
-        {"findings": [{"severity": "note", "category": "correctness", "title": "Hi"}]},
-    )
-    # Rejected before it reaches the phase check: a user key is not a runner.
-    assert resp.status_code in (400, 401)
-
-
-def test_findings_are_listed_by_severity(client: ApiClient, delivery_project: dict):
-    """The loop reads blocking findings first, so the API returns them first."""
-    work_item = client.create_work_item(delivery_project["id"], "Ordered findings")
-
-    # No findings yet: the endpoint must still answer.
-    resp = client.get("/v1/findings", params={"workItemId": work_item["id"]})
-    assert resp.status_code == 200
-    assert resp.json()["findings"] == []
-
-
-def test_the_review_fix_loop_converges(client: ApiClient, delivery_project: dict, runner):
-    """A blocking finding sends the work back, and the loop then settles.
-
-    The loop that most needs an end-to-end test: its unit tests signal the
-    workflow directly and never exercise the runner's git inspection, which is
-    exactly where it broke the first time. The fake reviewer reports one
-    blocking finding and then reports clean, so this asserts convergence — not
-    merely that the policy bound eventually fires.
+    Everything the UI renders comes from the API and the event stream; the
+    orchestrator writes it. So this reads it the way the UI does.
     """
-    work_item = client.create_work_item(delivery_project["id"], "Loop until clean")
+    work_item = client.create_work_item(forge_project["id"], "Loop until clean")
     client.post(f"/v1/work-items/{work_item['id']}/deliver")
 
-    def phases():
-        runs = client.get(f"/v1/work-items/{work_item['id']}").json().get("runs", [])
-        return [r["phase"] for r in runs if r["status"] == "completed"]
-
-    # A fix Run only exists if a blocking finding was reported and acted on.
     wait_until(
-        lambda: "fix" in phases(),
-        timeout=240,
-        message="the review never produced a fix Run",
+        lambda: any(r["phase"] == "simplify" and r["status"] == "completed" for r in _runs(client, work_item["id"])),
+        timeout=60,
+        message="the loop never converged to simplify",
     )
+    phases = [(r["phase"], r["status"]) for r in sorted(_runs(client, work_item["id"]), key=lambda r: r["createdAt"])]
+    assert phases == [
+        ("implement", "completed"),
+        ("review", "completed"),
+        ("fix", "completed"),
+        ("review", "completed"),
+        ("simplify", "completed"),
+    ], phases
 
-    findings = client.get(
-        "/v1/findings", params={"workItemId": work_item["id"]}
-    ).json()["findings"]
-    assert findings, "the reviewer reported nothing to fix"
-    assert findings[0]["severity"] == "blocking"
+    findings = client.get("/v1/findings", params={"workItemId": work_item["id"]}).json()["findings"]
+    assert [f["severity"] for f in findings] == ["blocking"]
+    # Resolved by the clean re-review after the fix, which is what let the
+    # loop converge rather than stop at its bound.
+    assert findings[0]["status"] == "resolved"
 
-    # Converged rather than stopped: reaching simplify means a later review
-    # found nothing, because a blocking finding would have sent it back again.
-    wait_until(
-        lambda: "simplify" in phases(),
-        timeout=240,
-        message="the loop never converged past review",
-    )
+    implement = next(r for r in _runs(client, work_item["id"]) if r["phase"] == "implement")
+    types = [e["eventType"] for e in client.events(runId=implement["id"])]
+    for expected in ("agent.session.started", "agent.tool.called", "agent.message", "run.completed"):
+        assert expected in types, f"{expected} missing from the implementer's timeline: {types}"
 
 
-def test_a_fix_run_is_told_what_to_fix(client: ApiClient, delivery_project: dict, runner):
-    """The fixer sees the findings, not just an instruction to fix something."""
-    work_item = client.create_work_item(delivery_project["id"], "Fix with context")
+def test_steer_pause_resume_and_abort_reach_the_agent(client: ApiClient, forge_project: dict):
+    """Run control goes user → backend → orchestrator → lux, and back as events."""
+    work_item = client.create_work_item(forge_project["id"], "Hold on", goal="[hang] wait to be steered")
     client.post(f"/v1/work-items/{work_item['id']}/deliver")
 
-    def fix_run():
-        runs = client.get(f"/v1/work-items/{work_item['id']}").json().get("runs", [])
-        found = [r for r in runs if r.get("phase") == "fix"]
-        return found[0] if found else None
+    run = wait_until(
+        lambda: next((r for r in _runs(client, work_item["id"]) if r["status"] == "running"), None),
+        timeout=30,
+        message="the implementer never started",
+    )
 
-    run = wait_until(fix_run, timeout=240, message="no fix Run was created")
+    resp = client.post(f"/v1/runs/{run['id']}/steer", {"text": "also add a test"})
+    assert resp.status_code == 201, resp.text
+    directive = resp.json()
+    wait_until(
+        lambda: any(d["deliveredAt"] for d in client.get(f"/v1/runs/{run['id']}/directives").json()["directives"]),
+        timeout=20,
+        message="the directive was never delivered to the agent",
+    )
+    assert directive["text"] == "also add a test"
 
-    # It starts from the implementer's commit, not the default branch.
-    assert run["baseRef"], "the fix Run was not given a base ref"
-    assert run["role"] == "implementer"
+    assert client.post(f"/v1/runs/{run['id']}/pause", {}).status_code == 200
+    wait_until(
+        lambda: client.get(f"/v1/runs/{run['id']}").json()["status"] == "paused",
+        timeout=20,
+        message="the run never paused",
+    )
+    # Refusals come from the orchestrator and keep their meaning.
+    assert client.post(f"/v1/runs/{run['id']}/pause", {}).status_code == 409
+
+    assert client.post(f"/v1/runs/{run['id']}/resume", {}).status_code == 200
+    wait_until(
+        lambda: client.get(f"/v1/runs/{run['id']}").json()["status"] == "running",
+        timeout=20,
+        message="the run never resumed",
+    )
+
+    assert client.post(f"/v1/runs/{run['id']}/abort", {"reason": "changed my mind"}).status_code == 200
+    assert client.get(f"/v1/runs/{run['id']}").json()["status"] == "aborted"
+    assert client.get(f"/v1/work-items/{work_item['id']}").json()["status"] == "aborted"
+    types = [e["eventType"] for e in client.events(runId=run["id"])]
+    for expected in ("run.steered", "run.directive.delivered", "run.paused", "run.resumed", "run.aborted"):
+        assert expected in types, f"{expected} missing: {types}"
+
+
+def test_a_runner_key_cannot_reach_the_product_api(env, org: dict):
+    """Runner keys belonged to the retired runner protocol. One left behind
+    must not work as a user key."""
+    from helpers import create_api_key
+
+    runner = ApiClient(env.control_plane_url, create_api_key(env.owner_dsn, org["id"], kind="runner"))
+    assert runner.get("/v1/navigation").status_code == 401
+
+
+@pytest.mark.parametrize("path", ["/internal/work-items/x/deliver", "/internal/kick"])
+def test_the_orchestrator_refuses_callers_without_the_service_token(env, path: str):
+    import requests
+
+    resp = requests.post(env.orchestrator_url + path, json={}, headers={"x-dude-organization": "org"}, timeout=5)
+    assert resp.status_code == 401

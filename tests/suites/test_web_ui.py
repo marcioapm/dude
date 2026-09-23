@@ -18,7 +18,7 @@ from playwright.sync_api import Page, expect
 from fake_github import FakeGitHub
 from helpers import ApiClient
 
-pytestmark = [pytest.mark.ui, pytest.mark.docker]
+pytestmark = pytest.mark.ui
 
 
 def _sign_in(page: Page, web_url: str, api_key: str) -> None:
@@ -53,7 +53,6 @@ def test_delivering_from_the_ui_reaches_a_pull_request_and_back(
     org: dict,
     forge_project: dict,
     fake_github: FakeGitHub,
-    runner,
     console_errors: list,
 ):
     _sign_in(page, web_url, org["api_key"])

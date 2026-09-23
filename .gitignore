@@ -9,7 +9,7 @@ build/
 *.tsbuildinfo
 
 # Go
-/runner/bin/
+/orchestrator/bin/
 *.exe
 *.test
 *.out
@@ -38,7 +38,7 @@ __pycache__/
 *.swp
 
 # Go build output
-/runner/bin/
+/orchestrator/bin/
 
 # Python E2E
 /tests/.venv/

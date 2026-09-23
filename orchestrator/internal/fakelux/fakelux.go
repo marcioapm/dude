@@ -49,6 +49,7 @@ type Run struct {
 	Stopped   int
 	Resumed   int
 
+	repo     string
 	records  []record
 	events   []event
 	behavior Behaviour
@@ -78,6 +79,9 @@ type Server struct {
 	Decide func(spec map[string]any) Behaviour
 	// Repo is a bare git repository pushes land in, as `git push` would.
 	Repo string
+	// RepoFor, when set, finds the repository from a Run's spec instead: one
+	// fake lux serving tests that each have their own repository.
+	RepoFor func(url string) string
 	// Key is the API key the fake accepts.
 	Key string
 }
@@ -135,6 +139,10 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 	run := &Run{ID: fmt.Sprintf("lrun_%d", s.next), Spec: raw, State: "submitted", Epoch: 1}
 	run.cond = sync.NewCond(&s.mu)
 	run.behavior = s.Decide(spec)
+	run.repo = s.Repo
+	if s.RepoFor != nil {
+		run.repo = s.RepoFor(repoURL(spec))
+	}
 	s.runs[run.ID] = run
 	if k := r.Header.Get("Idempotency-Key"); k != "" {
 		s.byKey[k] = run.ID
@@ -151,7 +159,7 @@ func (s *Server) play(run *Run, spec map[string]any, resumed bool) {
 	epoch := run.Epoch
 	s.setState(run, "running")
 	if !resumed {
-		base := s.head()
+		base := head(run.repo, ref(spec))
 		s.luxEvent(run, "git.checkout", map[string]any{"repo": "target", "ref": ref(spec), "base": base})
 		run.SessionID = fmt.Sprintf("ses_%s", run.ID)
 	}
@@ -229,12 +237,27 @@ func (s *Server) recordEvent(run *Run, typ string, data map[string]any) {
 	run.cond.Broadcast()
 }
 
-func (s *Server) head() string {
-	out, err := exec.Command("git", "-C", s.Repo, "rev-parse", "refs/heads/main").Output()
+// head resolves ref (a branch or sha; "" is the default branch) in repo.
+func head(repo, ref string) string {
+	if ref == "" {
+		ref = "HEAD"
+	}
+	out, err := exec.Command("git", "-C", repo, "rev-parse", ref).Output()
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+func repoURL(spec map[string]any) string {
+	git, _ := spec["git"].(map[string]any)
+	repos, _ := git["repositories"].([]any)
+	if len(repos) == 0 {
+		return ""
+	}
+	r, _ := repos[0].(map[string]any)
+	u, _ := r["url"].(string)
+	return u
 }
 
 func (s *Server) view(run *Run) map[string]any {
@@ -310,14 +333,12 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		base := s.head()
-		if len(spec.Git.Repositories) > 0 && spec.Git.Repositories[0].Ref != "" {
-			if out, err := exec.Command("git", "-C", s.Repo, "rev-parse", spec.Git.Repositories[0].Ref).Output(); err == nil {
-				base = strings.TrimSpace(string(out))
-			}
+		base := ""
+		if len(spec.Git.Repositories) > 0 {
+			base = head(run.repo, spec.Git.Repositories[0].Ref)
 		}
 		result := map[string]any{"repo": "target", "branch": spec.Git.Push.Branch}
-		sha, err := s.commit(base, spec.Git.Push.Branch, run.behavior.Commit)
+		sha, err := commit(run.repo, base, spec.Git.Push.Branch, run.behavior.Commit)
 		switch {
 		case err != nil:
 			result["status"], result["error"] = "failed", err.Error()
@@ -332,14 +353,14 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 }
 
 // commit writes files on top of base and points branch at the result.
-func (s *Server) commit(base, branch string, files map[string]string) (string, error) {
+func commit(repo, base, branch string, files map[string]string) (string, error) {
 	if len(files) == 0 {
 		return base, nil
 	}
 	env := []string{"GIT_AUTHOR_NAME=agent", "GIT_AUTHOR_EMAIL=a@x", "GIT_COMMITTER_NAME=agent", "GIT_COMMITTER_EMAIL=a@x",
-		"GIT_INDEX_FILE=" + s.Repo + "/fakelux.index"}
+		"GIT_INDEX_FILE=" + repo + "/fakelux.index"}
 	git := func(args ...string) (string, error) {
-		c := exec.Command("git", append([]string{"-C", s.Repo}, args...)...)
+		c := exec.Command("git", append([]string{"-C", repo}, args...)...)
 		c.Env = append(c.Environ(), env...)
 		out, err := c.CombinedOutput()
 		return strings.TrimSpace(string(out)), err
@@ -348,7 +369,7 @@ func (s *Server) commit(base, branch string, files map[string]string) (string, e
 		return "", err
 	}
 	for path, content := range files {
-		blob := exec.Command("git", "-C", s.Repo, "hash-object", "-w", "--stdin")
+		blob := exec.Command("git", "-C", repo, "hash-object", "-w", "--stdin")
 		blob.Stdin = strings.NewReader(content)
 		out, err := blob.Output()
 		if err != nil {

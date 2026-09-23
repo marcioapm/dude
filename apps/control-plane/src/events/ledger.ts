@@ -12,7 +12,6 @@
 
 import { newId, type EventInput, type PersistedEvent } from "@dude/domain";
 import { withOrg, type OrgScope } from "../db/client.ts";
-import { eventBus } from "./bus.ts";
 
 /**
  * Columns selected for read paths, aliased to the domain's camelCase shape.
@@ -84,9 +83,9 @@ function toPersisted(row: EventRow): PersistedEvent {
  * Append one event within an existing transaction.
  *
  * Use this when the event must commit atomically with the state change that
- * produced it — which is nearly always. Publishing to live subscribers is
- * deferred to the caller via the returned event, so a rolled-back transaction
- * never leaks a phantom event to the UI.
+ * produced it — which is nearly always. Live subscribers hear of it through
+ * the NOTIFY the insert raises, which Postgres delivers only on commit, so a
+ * rolled-back transaction never leaks a phantom event to the UI.
  */
 export async function appendInScope(scope: OrgScope, input: EventInput): Promise<PersistedEvent> {
   if (input.organizationId !== scope.organizationId) {
@@ -117,14 +116,13 @@ export async function appendInScope(scope: OrgScope, input: EventInput): Promise
   return toPersisted(row);
 }
 
-/** Append one event in its own transaction and publish it to subscribers. */
+/** Append one event in its own transaction. Live subscribers hear of it through NOTIFY. */
 export async function append(input: EventInput): Promise<PersistedEvent> {
   const event = await withOrg(input.organizationId, (scope) => appendInScope(scope, input));
-  eventBus.publish(event);
   return event;
 }
 
-/** Append several events atomically, then publish them in commit order. */
+/** Append several events atomically. */
 export async function appendMany(
   organizationId: string,
   inputs: readonly EventInput[],
@@ -135,7 +133,6 @@ export async function appendMany(
     for (const input of inputs) out.push(await appendInScope(scope, input));
     return out;
   });
-  for (const event of events) eventBus.publish(event);
   return events;
 }
 

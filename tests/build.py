@@ -1,6 +1,7 @@
 """Build the artifacts the E2E suite drives.
 
-The Bun control plane runs from source, so only the Go runner needs building.
+The Bun backend runs from source; the orchestrator and the fake lux are Go
+and are built every time — a stale binary tests yesterday's code.
 """
 
 from __future__ import annotations
@@ -10,7 +11,6 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-RUNNER_BINARY = REPO_ROOT / "runner" / "bin" / "factory-runner"
 
 
 GALLERY_DIST = REPO_ROOT / "packages" / "design-system" / "dist" / "gallery"
@@ -51,23 +51,10 @@ def build_web(force: bool = False) -> Path:
     return WEB_DIST
 
 
-def build(force: bool = False) -> Path:
-    """Build the runner binary. Returns its path."""
-    if RUNNER_BINARY.exists() and not force:
-        return RUNNER_BINARY
-
-    print("building factory-runner...")
-    result = subprocess.run(
-        ["go", "build", "-o", "bin/factory-runner", "./cmd/factory-runner"],
-        cwd=REPO_ROOT / "runner",
-    )
+def build() -> None:
+    """Build the orchestrator and the fake lux into orchestrator/bin."""
+    print("building orchestrator...")
+    result = subprocess.run(["go", "build", "-o", "bin/", "./cmd/..."], cwd=REPO_ROOT / "orchestrator")
     if result.returncode != 0:
         print("go build failed", file=sys.stderr)
         sys.exit(1)
-
-    if not RUNNER_BINARY.exists():
-        print(f"runner binary missing at {RUNNER_BINARY}", file=sys.stderr)
-        sys.exit(1)
-
-    print(f"runner ready: {RUNNER_BINARY}")
-    return RUNNER_BINARY
