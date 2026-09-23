@@ -16,11 +16,14 @@ works, see [`CONTRIBUTING.md`](CONTRIBUTING.md#delivery-end-to-end).
 
 Where the build departed from the design below: the schema landed as
 migrations `012_phases_and_findings.sql` and `013_pr_feedback.sql` (not 011,
-which became pull requests); the workflow lives at
-`apps/control-plane/src/workflow/delivery.workflow.ts` rather than a
-`definitions/` directory; and a *fix* phase joined the list, since fixing
+which became pull requests); a *fix* phase joined the list, since fixing
 review findings and fixing PR feedback are both implementer Runs with a
-different prompt.
+different prompt. Since then the workflow moved to the Go orchestrator
+(`orchestrator/internal/delivery`), and a phase Run no longer runs on dude's
+own Docker runner but on lux: "its own container and clone" below is now a
+lux Run with its own checkout, and "the runner's push step" is lux's leased
+push to a per-Run branch that dude fast-forwards the work item's branch to.
+The reasoning below is unchanged; the file paths it names are historical.
 
 ---
 

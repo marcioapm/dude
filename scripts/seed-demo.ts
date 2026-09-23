@@ -4,7 +4,7 @@
  * Organizations and the first API key are provisioned, not self-served, so
  * this is a deliberate out-of-band step rather than an API call.
  *
- * Prints JSON on stdout; demo.sh reads the keys from it.
+ * Prints JSON on stdout: the organization and a user key to sign in with.
  */
 
 import { SQL } from "bun";
@@ -35,15 +35,8 @@ try {
   setPool(new SQL(appDsn));
 
   const userKey = await createApiKey({ organizationId, name: "demo user" });
-  const runnerKey = await createApiKey({ organizationId, name: "demo runner", kind: "runner" });
 
-  console.log(
-    JSON.stringify({
-      organizationId,
-      userKey: userKey.key,
-      runnerKey: runnerKey.key,
-    }),
-  );
+  console.log(JSON.stringify({ organizationId, userKey: userKey.key }));
 } finally {
   await owner.end();
   await closePool();
