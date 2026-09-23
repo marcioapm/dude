@@ -115,8 +115,12 @@ export class Router {
             (route.allowKeyInQuery ? url.searchParams.get("key") : null),
         );
         if (!principal) throw unauthorized();
-        if (route.requireKind && principal.kind !== route.requireKind) {
-          throw unauthorized(`this endpoint requires a ${route.requireKind} key`);
+        // User keys only, unless a route says otherwise. Runner keys belong
+        // to the retired runner protocol; one left behind must not become a
+        // key to the product API.
+        const kind = route.requireKind ?? "user";
+        if (principal.kind !== kind) {
+          throw unauthorized(`this endpoint requires a ${kind} key`);
         }
 
         return await (route.handler as Handler)({ request, url, params, principal });

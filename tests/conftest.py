@@ -13,11 +13,10 @@ import requests
 from playwright.sync_api import Page
 
 from env import TestEnvironment
-from helpers import ApiClient, create_api_key, create_organization, wait_until
+from helpers import ApiClient, create_api_key, create_organization, wait_until, webhook_secret
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    config.addinivalue_line("markers", "docker: needs Docker and the runner daemon")
     config.addinivalue_line("markers", "ui: drives a real browser via Playwright")
 
 
@@ -87,33 +86,6 @@ def project(client: ApiClient) -> dict:
     )
 
 
-@pytest.fixture
-def runner(env: TestEnvironment, org: dict):
-    """Start the Go runner inside the test's organization.
-
-    The runner must share the organization whose Runs it executes: leases are
-    tenant-scoped, so a runner in another organization would poll forever and
-    see nothing.
-
-    Function-scoped for that reason. Tests that need a runner are marked
-    `docker` and are a small minority, so the startup cost is acceptable in
-    exchange for each test getting a clean tenant.
-    """
-    runner_key = create_api_key(env.owner_dsn, org["id"], kind="runner")
-    env.start_runner(runner_key)
-    try:
-        yield {"organization_id": org["id"], "api_key": runner_key}
-    finally:
-        proc = env.runner_proc
-        if proc is not None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=10)
-            except Exception:  # noqa: BLE001 - kill is the fallback
-                proc.kill()
-            env.runner_proc = None
-
-
 # ---------------------------------------------------------------------------
 # UI testing
 # ---------------------------------------------------------------------------
@@ -145,32 +117,40 @@ def gallery_url(env: TestEnvironment) -> str:
 
 
 @pytest.fixture
-def fake_github(tmp_path_factory):
-    """A local stand-in for GitHub: a git daemon to push to, and its API."""
+def fake_github(env: TestEnvironment):
+    """A local stand-in for GitHub: a git daemon to push to, and its API.
+
+    Its repositories live under the environment's git root, which is where
+    the fake lux pushes, so an agent's commits land where the forge sees them.
+    Each test gets its own owner, so their repositories never collide.
+    """
     from fake_github import FakeGitHub
 
-    fake = FakeGitHub(tmp_path_factory.mktemp("github"))
+    fake = FakeGitHub(env.git_root, owner=f"o{os.urandom(4).hex()}")
     fake.start()
     yield fake
     fake.stop()
 
 
 @pytest.fixture
-def forge_project(client: ApiClient, fake_github) -> dict:
+def forge_project(client: ApiClient, org: dict, env: TestEnvironment, fake_github) -> dict:
     """A project on the fake forge, run end to end by scripted fake agents.
 
     The forge credential points at the fake's API, so the factory opens pull
-    requests there through the same REST calls it makes to github.com.
+    requests there through the same REST calls it makes to github.com, and the
+    fake delivers webhooks to dude signed with the secret dude minted.
     """
     resp = client.post(
         "/v1/forge/credential",
         {"auth": "pat", "secret": "fake-token", "apiBaseUrl": fake_github.api_url},
     )
     assert resp.status_code == 200, resp.text
+    fake_github.webhook_url = env.control_plane_url + resp.json()["webhookPath"]
+    fake_github.webhook_secret = webhook_secret(env.owner_dsn, org["id"])
     return client.create_project(
         name="Greeter",
         slug=f"greeter-{fake_github.api_port}",
-        runtimeImage="dude-runtime:dev",
+        runtimeImage="dude-runtime:test",
         agentModels={
             "implementer": {"model": "fake/scripted"},
             "reviewer": {"model": "fake/scripted"},

@@ -1,32 +1,23 @@
 /**
- * Pull request routes — Bootstrap 4 of the plan's self-hosting order (§81).
+ * Pull requests and the forge they live on.
  *
- * The factory's work only becomes part of a repository through a pull request,
- * so this is what turns "the agent made a commit" into something a person can
- * review and merge.
+ * The orchestrator opens pull requests and keeps them in step with GitHub;
+ * this is the user-facing side: listing them, storing the organization's
+ * forge credential, and receiving GitHub's webhooks.
  *
- * Two audiences:
- *
- *   - the runner asks for a **push credential**, scoped to one Run, because
- *     the workspace lives on its filesystem and only it can push. It never
- *     holds a long-lived forge credential, so a node that loses its lease
- *     loses its ability to write (plan §61);
- *   - a human (and later the workflow) asks to **open a PR** and to read its
- *     state.
- *
- * The agent sees neither. It writes commits into a workspace; the runner
- * pushes them.
+ * Webhooks land here because this is the only process that serves the
+ * public internet. A delivery is verified and stored, then the orchestrator
+ * acts on it — so a delivery is never lost to the orchestrator being busy or
+ * restarting, and GitHub always gets a fast answer.
  */
 
 import { z } from "zod";
-import { EventTypes, newId } from "@dude/domain";
-import { withOrg } from "../../db/client.ts";
-import { appendInScope } from "../../events/ledger.ts";
-import { eventBus } from "../../events/bus.ts";
-import { badRequest, conflict, json, notFound, parseBody } from "../http.ts";
-import { ForgeError, forgeFor, slugFromUrl } from "../../forge/github.ts";
-import { syncPullRequest } from "../../forge/sync.ts";
-import type { RequestContext, Router } from "../router.ts";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { newId } from "@dude/domain";
+import { withOrg, withoutTenant } from "../../db/client.ts";
+import { badRequest, json, notFound, parseBody, unauthorized } from "../http.ts";
+import { kickOrchestrator } from "../../orchestrator/client.ts";
+import type { PublicContext, RequestContext, Router } from "../router.ts";
 
 export const PR_SELECT = `
   id, organization_id AS "organizationId", project_id AS "projectId",
@@ -36,250 +27,6 @@ export const PR_SELECT = `
   state, checks, review,
   created_at AS "createdAt", updated_at AS "updatedAt",
   merged_at AS "mergedAt", closed_at AS "closedAt"`;
-
-/**
- * The branch a Run publishes to.
- *
- * Derived rather than stored so it is the same on both sides of a restart,
- * and namespaced under `dude/` so a human scanning branches can see at a
- * glance which were machine-authored.
- */
-export function branchForRun(workItemId: string, attempt: number): string {
-  return `dude/${workItemId}/attempt-${attempt}`;
-}
-
-interface RunRow {
-  id: string;
-  organization_id: string;
-  project_id: string;
-  work_item_id: string;
-  attempt: number;
-  status: string;
-}
-
-// ---------------------------------------------------------------------------
-// Push credentials (runner only)
-// ---------------------------------------------------------------------------
-
-/**
- * A credential for one push, plus the branch to push to.
- *
- * Deliberately tied to a live Run: a worker whose lease expired cannot ask
- * for one, so losing a node does not leave a push credential loose on it.
- */
-async function getPushCredential(ctx: RequestContext): Promise<Response> {
-  const runId = ctx.params.id!;
-  const { organizationId } = ctx.principal;
-
-  const run = await withOrg(organizationId, async (scope) => {
-    const rows = (await scope.sql`
-      SELECT id, organization_id, project_id, work_item_id, attempt, status
-      FROM runs
-      WHERE id = ${runId} AND worker_id IS NOT NULL AND lease_expires_at > now()`) as RunRow[];
-    return rows[0] ?? null;
-  });
-
-  if (!run) throw notFound(`run ${runId} is not leased`);
-
-  const branch = branchForRun(run.work_item_id, run.attempt);
-
-  /*
-   * No credential is not an error. A local-path or ssh remote needs none —
-   * the local provisioner and the test suite both use them — and refusing
-   * here stranded every phase after the first: the implementer's commit
-   * never reached the remote, so the next phase could not check it out.
-   *
-   * If the remote does need one, the push fails with the forge's own auth
-   * error and that lands in the ledger as a failed push, which is a more
-   * honest report than refusing before anything was tried.
-   */
-  const forge = await forgeFor(organizationId);
-  const token = forge ? await forge.pushToken() : null;
-
-  return json({
-    // A git credential helper wants both halves; `x-access-token` is what
-    // GitHub expects as the username when the password is a token.
-    username: "x-access-token",
-    token,
-    branch,
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Pull requests
-// ---------------------------------------------------------------------------
-
-const openPullRequestInput = z.object({
-  repositoryId: z.string().min(1),
-  title: z.string().min(1).max(200),
-  body: z.string().max(60_000).default(""),
-  /** Defaults to the Run's branch; override only for an unusual workflow. */
-  headBranch: z.string().min(1).optional(),
-  /** Defaults to the repository's own default branch. */
-  baseBranch: z.string().min(1).optional(),
-  draft: z.boolean().default(false),
-});
-
-export interface OpenPullRequestForRun {
-  runId: string;
-  repositoryId: string;
-  title: string;
-  body: string;
-  draft?: boolean;
-  headBranch?: string;
-  baseBranch?: string;
-  actor: { type: "human" | "system"; id: string };
-}
-
-/**
- * Open a pull request for a Run's branch, and record it.
- *
- * Callable rather than HTTP-only because the delivery workflow opens PRs
- * too, and a workflow step calling its own API over the network would turn a
- * transaction into a round trip that can fail on its own.
- *
- * Idempotent on the forge's terms as well as ours: a PR already recorded for
- * this Run is returned as-is, and one GitHub rejects as a duplicate surfaces
- * as a conflict rather than a crash — a retried Run must not be blocked by
- * its own earlier success.
- */
-export async function openPullRequestForRun(
-  organizationId: string,
-  input: OpenPullRequestForRun,
-): Promise<string> {
-  const context = await withOrg(organizationId, async (scope) => {
-    const runs = (await scope.sql`
-      SELECT id, organization_id, project_id, work_item_id, attempt, status
-      FROM runs WHERE id = ${input.runId}`) as RunRow[];
-    const run = runs[0];
-    if (!run) return { missing: true as const };
-
-    const repos = (await scope.sql`
-      SELECT id, name, url, default_branch AS "defaultBranch"
-      FROM repositories WHERE id = ${input.repositoryId} AND project_id = ${run.project_id}`) as Array<{
-      id: string;
-      name: string;
-      url: string;
-      defaultBranch: string;
-    }>;
-    const repository = repos[0];
-    if (!repository) return { missingRepo: true as const };
-
-    const existing = (await scope.sql`
-      SELECT id FROM pull_requests
-      WHERE run_id = ${input.runId} AND repository_id = ${input.repositoryId}
-      LIMIT 1`) as Array<{ id: string }>;
-
-    return { run, repository, existingId: existing[0]?.id ?? null };
-  });
-
-  if ("missing" in context) throw notFound(`run ${input.runId} not found`);
-  if ("missingRepo" in context) {
-    throw notFound(`repository ${input.repositoryId} is not part of this run's project`);
-  }
-  if (context.existingId) return context.existingId;
-
-  const { run, repository } = context;
-  const slug = slugFromUrl(repository.url);
-  if (!slug) throw badRequest(`cannot derive owner/repo from ${repository.url}`);
-
-  const forge = await forgeFor(organizationId);
-  if (!forge) throw badRequest("no git forge credential is configured for this organization");
-
-  const headBranch = input.headBranch ?? branchForRun(run.work_item_id, run.attempt);
-  const baseBranch = input.baseBranch ?? repository.defaultBranch;
-
-  let ref;
-  try {
-    ref = await forge.openPullRequest({
-      slug,
-      title: input.title,
-      body: input.body,
-      headBranch,
-      baseBranch,
-      draft: input.draft ?? false,
-    });
-  } catch (err) {
-    if (err instanceof ForgeError && err.isAlreadyExists) {
-      throw conflict(`a pull request already exists for ${headBranch}: ${err.message}`);
-    }
-    throw err;
-  }
-
-  const result = await withOrg(organizationId, async (scope) => {
-    const pullRequestId = newId("pullRequest");
-    await scope.sql`
-      INSERT INTO pull_requests (
-        id, organization_id, project_id, work_item_id, run_id, repository_id,
-        number, node_id, url, head_branch, base_branch, head_sha, title, body, state)
-      VALUES (
-        ${pullRequestId}, ${organizationId}, ${run.project_id}, ${run.work_item_id},
-        ${input.runId}, ${repository.id}, ${ref.number}, ${ref.nodeId}, ${ref.url},
-        ${headBranch}, ${baseBranch}, ${ref.headSha}, ${input.title}, ${input.body},
-        ${ref.state}::pull_request_state)`;
-
-    const event = await appendInScope(scope, {
-      eventType: EventTypes.PullRequestOpened,
-      organizationId,
-      projectId: run.project_id,
-      workItemId: run.work_item_id,
-      runId: input.runId,
-      actor: input.actor,
-      source: "control-plane",
-      correlationId: run.work_item_id,
-      payload: {
-        number: ref.number,
-        url: ref.url,
-        repo: repository.name,
-        headBranch,
-        baseBranch,
-        draft: input.draft ?? false,
-      },
-    });
-
-    return { pullRequestId, event };
-  });
-
-  eventBus.publish(result.event);
-  return result.pullRequestId;
-}
-
-async function openPullRequest(ctx: RequestContext): Promise<Response> {
-  const input = await parseBody(ctx.request, openPullRequestInput);
-
-  const pullRequestId = await openPullRequestForRun(ctx.principal.organizationId, {
-    runId: ctx.params.id!,
-    repositoryId: input.repositoryId,
-    title: input.title,
-    body: input.body ?? "",
-    draft: input.draft ?? false,
-    ...(input.headBranch ? { headBranch: input.headBranch } : {}),
-    ...(input.baseBranch ? { baseBranch: input.baseBranch } : {}),
-    actor: { type: "human", id: ctx.principal.apiKeyId },
-  });
-
-  const pullRequest = await withOrg(ctx.principal.organizationId, async (scope) => {
-    const rows = (await scope.sql`
-      SELECT ${scope.sql.unsafe(PR_SELECT)} FROM pull_requests WHERE id = ${pullRequestId}`) as Array<
-      Record<string, unknown>
-    >;
-    return rows[0]!;
-  });
-
-  return json(pullRequest, 201);
-}
-
-/**
- * Re-read a pull request from the forge on demand.
- *
- * The poller does this on a timer; this is the same thing for a person who
- * does not want to wait for it.
- */
-async function refreshPullRequest(ctx: RequestContext): Promise<Response> {
-  const pullRequest = await syncPullRequest(ctx.principal.organizationId, ctx.params.id!);
-  if (!pullRequest) throw notFound(`pull request ${ctx.params.id} not found`);
-  return json(pullRequest);
-}
 
 async function listPullRequests(ctx: RequestContext): Promise<Response> {
   const workItemId = ctx.url.searchParams.get("workItemId");
@@ -312,8 +59,11 @@ const credentialInput = z.object({
 /**
  * Store an organization's forge credential.
  *
- * The secret is never returned by any route, including this one — the
- * response confirms what was configured, not what it was configured with.
+ * Also mints the secret GitHub will sign webhook deliveries with, once: a
+ * rotated token must not invalidate the hooks already registered with the
+ * old secret. Neither secret is ever returned by any route; the response
+ * says what was configured, not with what — except the webhook URL, which is
+ * not a secret and is what an operator needs to register a hook by hand.
  */
 async function putCredential(ctx: RequestContext): Promise<Response> {
   const input = await parseBody(ctx.request, credentialInput);
@@ -326,15 +76,17 @@ async function putCredential(ctx: RequestContext): Promise<Response> {
   const saved = await withOrg(organizationId, async (scope) => {
     const rows = (await scope.sql`
       INSERT INTO forge_credentials (
-        id, organization_id, forge, auth, secret, app_id, installation_id, api_base_url)
+        id, organization_id, forge, auth, secret, app_id, installation_id, api_base_url, webhook_secret)
       VALUES (${newId("forgeCredential")}, ${organizationId}, 'github', ${input.auth}::forge_auth_kind,
-              ${input.secret}, ${input.appId}, ${input.installationId}, ${input.apiBaseUrl})
+              ${input.secret}, ${input.appId}, ${input.installationId}, ${input.apiBaseUrl},
+              ${randomBytes(32).toString("hex")})
       ON CONFLICT (organization_id, forge) DO UPDATE SET
         auth            = EXCLUDED.auth,
         secret          = EXCLUDED.secret,
         app_id          = EXCLUDED.app_id,
         installation_id = EXCLUDED.installation_id,
         api_base_url    = EXCLUDED.api_base_url,
+        webhook_secret  = COALESCE(forge_credentials.webhook_secret, EXCLUDED.webhook_secret),
         updated_at      = now()
       RETURNING id, forge, auth, app_id AS "appId", installation_id AS "installationId",
                 api_base_url AS "apiBaseUrl", updated_at AS "updatedAt"`) as Array<
@@ -343,17 +95,79 @@ async function putCredential(ctx: RequestContext): Promise<Response> {
     return rows[0]!;
   });
 
-  return json(saved);
+  return json({ ...saved, webhookPath: `/v1/webhooks/github/${organizationId}` });
+}
+
+// ---------------------------------------------------------------------------
+// Webhooks
+// ---------------------------------------------------------------------------
+
+/** Events that can change what dude does about a pull request. */
+const RELEVANT = new Set([
+  "pull_request",
+  "pull_request_review",
+  "pull_request_review_comment",
+  "issue_comment",
+  "check_suite",
+  "check_run",
+  "status",
+]);
+
+/** Constant-time check of GitHub's X-Hub-Signature-256 against the body. */
+export function verifySignature(secret: string, body: string, header: string | null): boolean {
+  if (!secret || !header?.startsWith("sha256=")) return false;
+  const expected = createHmac("sha256", secret).update(body).digest();
+  const given = Buffer.from(header.slice("sha256=".length), "hex");
+  return given.length === expected.length && timingSafeEqual(given, expected);
+}
+
+/**
+ * Receive a GitHub webhook delivery.
+ *
+ * Public — GitHub cannot send an API key — so the signature is the
+ * authentication. The organization is in the path; its secret is looked up
+ * before its tenant scope exists, which is why that one read goes around
+ * row-level security, through a function that returns only the secret.
+ *
+ * Stored, not acted on: the orchestrator processes deliveries. GitHub's
+ * delivery id is the key, so a redelivery is recognised rather than repeated.
+ */
+async function receiveWebhook(ctx: PublicContext): Promise<Response> {
+  const organizationId = ctx.params.org!;
+  const event = ctx.request.headers.get("x-github-event") ?? "";
+  const deliveryId = ctx.request.headers.get("x-github-delivery") ?? "";
+  const body = await ctx.request.text();
+
+  const secret = await withoutTenant(async ({ sql }) => {
+    const rows = (await sql`SELECT webhook_secret_for(${organizationId}) AS secret`) as Array<{ secret: string | null }>;
+    return rows[0]?.secret ?? null;
+  });
+  if (!secret) throw notFound("no webhook is configured here");
+  if (!verifySignature(secret, body, ctx.request.headers.get("x-hub-signature-256"))) {
+    throw unauthorized("webhook signature does not match");
+  }
+  if (event === "ping") return json({ ok: true });
+  if (!RELEVANT.has(event) || !deliveryId) return json({ ok: true, ignored: event });
+
+  let payload: unknown;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    throw badRequest("webhook body must be JSON");
+  }
+
+  await withOrg(organizationId, async (scope) => {
+    await scope.sql`
+      INSERT INTO webhook_deliveries (id, organization_id, event, payload)
+      VALUES (${deliveryId}, ${organizationId}, ${event}, ${payload}::jsonb)
+      ON CONFLICT (id) DO NOTHING`;
+  });
+  void kickOrchestrator(organizationId);
+  return json({ ok: true }, 202);
 }
 
 export function registerPullRequestRoutes(router: Router): void {
   router.post("/v1/forge/credential", putCredential);
-
-  // The runner is the only thing that can push, because the workspace is on
-  // its disk — and the only principal allowed to ask for a credential.
-  router.get("/v1/runs/:id/push-credential", getPushCredential, { requireKind: "runner" });
-
-  router.post("/v1/runs/:id/pull-request", openPullRequest);
   router.get("/v1/pull-requests", listPullRequests);
-  router.post("/v1/pull-requests/:id/refresh", refreshPullRequest);
+  router.publicRoute("POST", "/v1/webhooks/github/:org", receiveWebhook);
 }

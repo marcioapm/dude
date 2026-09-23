@@ -9,7 +9,6 @@ import { z } from "zod";
 import { agentModelsSchema, newId, EventTypes } from "@dude/domain";
 import { withOrg } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
-import { eventBus } from "../../events/bus.ts";
 import { conflict, json, notFound, parseBody } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
 
@@ -92,7 +91,6 @@ async function createProject(ctx: RequestContext): Promise<Response> {
   });
 
   if ("conflict" in result) throw conflict(`a project with slug "${input.slug}" already exists`);
-  eventBus.publish(result.event);
   return json(result.project, 201);
 }
 

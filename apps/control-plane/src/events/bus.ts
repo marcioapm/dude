@@ -6,9 +6,8 @@
  * disconnected recovers by re-reading from its last cursor, so dropping a
  * live message is never a correctness problem.
  *
- * Deliberately in-process for v1: a single control plane. When the control
- * plane scales horizontally this becomes a Postgres LISTEN/NOTIFY or a
- * broker-backed implementation behind the same interface.
+ * Fed by `listen.ts` from Postgres NOTIFY, not by the code that appends:
+ * most events are written by the orchestrator, another process.
  */
 
 import type { PersistedEvent } from "@dude/domain";

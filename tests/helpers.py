@@ -18,18 +18,6 @@ import requests
 
 KEY_PREFIX = "dude_sk_"
 
-# Mirrors runner/internal/protocol/protocol.go. The suite reaps containers by
-# label and looks them up by name, so a silent change on either side leaks a
-# container per test run.
-CONTAINER_NAME_PREFIX = "dude-run-"
-CONTAINER_LABEL_MANAGED = "dude.managed"
-
-
-def container_name(run_id: str) -> str:
-    """The container name the runner derives from a Run id."""
-    return f"{CONTAINER_NAME_PREFIX}{run_id.lower()}"
-
-
 # ---------------------------------------------------------------------------
 # Direct database seeding
 # ---------------------------------------------------------------------------
@@ -50,6 +38,16 @@ def create_organization(dsn: str, name: str, default_agent_models: dict | None =
             (org_id, name, name, psycopg.types.json.Json(default_agent_models or {})),
         )
     return org_id
+
+
+def webhook_secret(dsn: str, organization_id: str) -> str:
+    """The secret dude signs-checks webhooks with. GitHub is given it at hook
+    creation; the suite's fake GitHub reads it here."""
+    with psycopg.connect(dsn) as conn:
+        row = conn.execute(
+            "SELECT webhook_secret FROM forge_credentials WHERE organization_id = %s", (organization_id,)
+        ).fetchone()
+    return row[0]
 
 
 def create_api_key(dsn: str, organization_id: str, kind: str = "user") -> str:

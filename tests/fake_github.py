@@ -16,8 +16,11 @@ leaving a comment, merging — through `FakeGitHub` directly.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import re
+import uuid
 import socket
 import subprocess
 import threading
@@ -69,6 +72,12 @@ class FakeGitHub:
         self._server: ThreadingHTTPServer | None = None
         self.git_port = _free_port()
         self.api_port = _free_port()
+        # Where to deliver webhooks, and the secret to sign them with. Set
+        # by the test once dude has stored a credential and minted a secret.
+        self.webhook_url: str | None = None
+        self.webhook_secret: str | None = None
+        self.hooks: list[dict] = []
+        self.deliveries: list[tuple[str, int]] = []
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -80,7 +89,7 @@ class FakeGitHub:
                 f"--base-path={self.root}",
                 f"--port={self.git_port}",
                 "--export-all",
-                # The runner pushes; git daemon refuses that unless asked.
+                # Agents push through lux; git daemon refuses that unless asked.
                 "--enable=receive-pack",
                 "--reuseaddr",
                 "--listen=127.0.0.1",
@@ -96,6 +105,9 @@ class FakeGitHub:
     def stop(self) -> None:
         if self._server:
             self._server.shutdown()
+            # Release the socket, so a late caller is refused at once rather
+            # than left waiting on a listener nobody serves.
+            self._server.server_close()
         if self._daemon:
             self._daemon.terminate()
             self._daemon.wait(timeout=5)
@@ -109,7 +121,7 @@ class FakeGitHub:
         return f"http://127.0.0.1:{self.api_port}"
 
     def _seed(self) -> None:
-        seed = self.root / "seed"
+        seed = self.root / f"seed-{self.owner}"
         seed.mkdir(parents=True)
         for args in (
             ["git", "init", "-q", "--initial-branch=main"],
@@ -150,19 +162,42 @@ class FakeGitHub:
         )
         return [line for line in result.stdout.splitlines() if line]
 
-    def comment(self, number: int, body: str, author: str = "reviewer", path: str | None = None):
+    def comment(self, number: int, body: str, author: str = "reviewer", path: str | None = None) -> None:
         with self._lock:
             self._next_id += 1
             self.pulls[number].comments.append(
                 {"id": self._next_id, "body": body, "user": {"login": author},
                  "created_at": _now(), "path": path}
             )
+        if path:
+            self.send_webhook("pull_request_review_comment", {"action": "created", "pull_request": {"number": number}})
+        else:
+            self.send_webhook("issue_comment", {"action": "created", "issue": {"number": number, "pull_request": {"url": ""}}})
 
     def merge(self, number: int) -> None:
         with self._lock:
             pr = self.pulls[number]
             pr.state = "closed"
             pr.merged_at = _now()
+        self.send_webhook("pull_request", {"action": "closed", "pull_request": {"number": number}})
+
+    def send_webhook(self, event: str, payload: dict, secret: str | None = None) -> int:
+        """Deliver a signed webhook to dude, as GitHub would. Returns the status."""
+        import requests
+
+        if not self.webhook_url:
+            return 0
+        body = json.dumps({**payload, "repository": {"full_name": f"{self.owner}/{self.repo}"}}).encode()
+        key = (secret if secret is not None else self.webhook_secret or "").encode()
+        signature = "sha256=" + hmac.new(key, body, hashlib.sha256).hexdigest()
+        resp = requests.post(self.webhook_url, data=body, timeout=10, headers={
+            "content-type": "application/json",
+            "x-github-event": event,
+            "x-github-delivery": str(uuid.uuid4()),
+            "x-hub-signature-256": signature,
+        })
+        self.deliveries.append((event, resp.status_code))
+        return resp.status_code
 
     # -- the API -------------------------------------------------------------
 
@@ -192,8 +227,47 @@ class FakeGitHub:
                     "head": {"sha": github.branch_sha(pr.head) or "0" * 40},
                 }
 
+            def _body(self) -> dict:
+                length = int(self.headers.get("content-length") or 0)
+                return json.loads(self.rfile.read(length) or b"{}") if length else {}
+
+            def _git(self, *args: str) -> subprocess.CompletedProcess:
+                return subprocess.run(["git", *args], cwd=github.bare, capture_output=True, text=True)
+
+            def do_PATCH(self) -> None:
+                prefix = f"/repos/{github.owner}/{github.repo}/git/refs/heads/"
+                if not self.path.startswith(prefix):
+                    return self._send(404, {"message": "Not Found"})
+                branch, body = self.path[len(prefix):], self._body()
+                current = github.branch_sha(branch)
+                if not current:
+                    return self._send(422, {"message": "Reference does not exist"})
+                # GitHub refuses a non-forced update that is not a
+                # fast-forward; that refusal is what protects a person's
+                # commits, so the fake keeps it.
+                if not body.get("force") and self._git("merge-base", "--is-ancestor", current, body["sha"]).returncode:
+                    return self._send(422, {"message": "Update is not a fast forward"})
+                self._git("update-ref", f"refs/heads/{branch}", body["sha"])
+                self._send(200, {"ref": f"refs/heads/{branch}"})
+
+            def do_DELETE(self) -> None:
+                prefix = f"/repos/{github.owner}/{github.repo}/git/refs/heads/"
+                if not self.path.startswith(prefix) or self._git("update-ref", "-d", f"refs/heads/{self.path[len(prefix):]}").returncode:
+                    return self._send(422, {"message": "Reference does not exist"})
+                self.send_response(204)
+                self.end_headers()
+
             def do_POST(self) -> None:
-                body = json.loads(self.rfile.read(int(self.headers["content-length"])) or b"{}")
+                body = self._body()
+                if self.path == f"/repos/{github.owner}/{github.repo}/git/refs":
+                    if self._git("update-ref", body["ref"], body["sha"], "").returncode:
+                        return self._send(422, {"message": "Reference already exists"})
+                    return self._send(201, {"ref": body["ref"]})
+                if self.path == f"/repos/{github.owner}/{github.repo}/hooks":
+                    with github._lock:
+                        hook = {**body, "id": len(github.hooks) + 1}
+                        github.hooks.append(hook)
+                    return self._send(201, hook)
                 if re.fullmatch(rf"/repos/{github.owner}/{github.repo}/pulls", self.path):
                     if not github.branch_sha(body["head"]):
                         return self._send(422, {"message": f"No commits on {body['head']}"})
@@ -223,6 +297,14 @@ class FakeGitHub:
                     return [c for c in items if not since or c["created_at"] >= since]
 
                 prefix = f"/repos/{github.owner}/{github.repo}"
+                if path == f"{prefix}/hooks":
+                    return self._send(200, github.hooks)
+                if m := re.fullmatch(rf"{prefix}/compare/([^.]+)\.\.\.(.+)", path):
+                    diff = self._git("diff", "--name-only", m[1], m[2])
+                    if diff.returncode:
+                        return self._send(404, {"message": "Not Found"})
+                    files = [{"filename": f} for f in diff.stdout.splitlines() if f]
+                    return self._send(200, {"files": files})
                 if m := re.fullmatch(rf"{prefix}/pulls/(\d+)", path):
                     return self._send(200, self._pull_json(github.pulls[int(m[1])]))
                 if re.fullmatch(rf"{prefix}/commits/[^/]+/status", path):

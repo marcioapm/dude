@@ -66,12 +66,6 @@ def test_invalid_key_is_rejected(env):
     assert bogus.get("/v1/projects").status_code == 401
 
 
-def test_user_key_cannot_use_runner_endpoints(client: ApiClient):
-    # Separating principal kinds means a leaked user key cannot lease Runs.
-    resp = client.post("/v1/runner/workers", {"name": "rogue", "pool": "local"})
-    assert resp.status_code == 401
-
-
 def test_app_role_cannot_bypass_row_level_security(env):
     """RLS is only a boundary if the connecting role cannot bypass it.
 

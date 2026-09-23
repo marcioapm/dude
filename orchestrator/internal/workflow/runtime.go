@@ -249,10 +249,8 @@ type claimed struct {
 }
 
 // Tick claims and advances up to limit runnable workflows across all
-// tenants, concurrently, and returns how many it advanced.
-//
-// Concurrently because a batch's later runs would otherwise wait behind the
-// earlier ones' slow steps and could outlive their lease before starting.
+// tenants, concurrently, and waits for them. Returns how many it advanced.
+// For tests and tools; the orchestrator's loop uses Dispatch.
 func (r *Runtime) Tick(ctx context.Context, limit int) (int, error) {
 	runs, err := r.claim(ctx, limit)
 	if err != nil {
@@ -267,6 +265,33 @@ func (r *Runtime) Tick(ctx context.Context, limit int) (int, error) {
 		}(&runs[i])
 	}
 	wg.Wait()
+	return len(runs), nil
+}
+
+// Dispatch claims as many runnable workflows as there are free slots and
+// starts each without waiting for the others.
+//
+// Not waiting is the point. A step that calls a forge which has stopped
+// answering holds its slot until the request times out; if the loop waited
+// for the whole batch, that one step would stall every other organization's
+// workflows behind it — found when a test's forge went away mid-delivery and
+// the next test's pull request took a minute to open.
+func (r *Runtime) Dispatch(ctx context.Context, slots chan struct{}) (int, error) {
+	free := cap(slots) - len(slots)
+	if free == 0 {
+		return 0, nil
+	}
+	runs, err := r.claim(ctx, free)
+	if err != nil {
+		return 0, err
+	}
+	for i := range runs {
+		slots <- struct{}{}
+		go func(run claimed) {
+			defer func() { <-slots }()
+			r.advanceWithLease(ctx, &run)
+		}(runs[i])
+	}
 	return len(runs), nil
 }
 

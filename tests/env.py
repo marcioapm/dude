@@ -22,7 +22,6 @@ from pathlib import Path
 import psycopg
 import requests
 
-from helpers import CONTAINER_LABEL_MANAGED
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -49,24 +48,35 @@ class TestEnvironment:
     run_id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
     db_name: str = field(init=False)
     control_plane_port: int = field(default_factory=find_free_port)
+    orchestrator_port: int = field(default_factory=find_free_port)
     gallery_port: int = field(default_factory=find_free_port)
     web_port: int = field(default_factory=find_free_port)
     web_proc: subprocess.Popen | None = field(default=None, repr=False)
     control_plane_proc: subprocess.Popen | None = field(default=None, repr=False)
-    runner_proc: subprocess.Popen | None = field(default=None, repr=False)
+    orchestrator_proc: subprocess.Popen | None = field(default=None, repr=False)
+    lux_proc: subprocess.Popen | None = field(default=None, repr=False)
     gallery_proc: subprocess.Popen | None = field(default=None, repr=False)
     workspace_root: str = field(init=False)
 
     def __post_init__(self) -> None:
         self.db_name = f"dude_test_{self.run_id}"
         # Logs from the processes the suite starts. Kept rather than discarded:
-        # a failure in the runner is otherwise invisible from the test, which
+        # a failure in the orchestrator is otherwise invisible from the test, which
         # only sees that a Run never reached the state it waited for.
         self.log_dir = Path(os.environ.get("DUDE_TEST_LOG_DIR", f"/tmp/dude-e2e-{self.run_id}"))
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.control_plane_url = f"http://localhost:{self.control_plane_port}"
         self.gallery_url = f"http://127.0.0.1:{self.gallery_port}"
         self.workspace_root = f"/tmp/dude-e2e-{self.run_id}"
+        self._init_services()
+
+    def _init_services(self) -> None:
+        # Where the fake GitHub's repositories live: git daemon serves this
+        # directory, and the fake lux pushes into it.
+        self.git_root = Path(self.workspace_root) / "github"
+        self.orchestrator_url = f"http://127.0.0.1:{self.orchestrator_port}"
+        self.orchestrator_token = f"svc-{self.run_id}"
+        self.lux_key = f"lux-{self.run_id}"
 
     # -- connection strings -------------------------------------------------
 
@@ -95,7 +105,49 @@ class TestEnvironment:
     def setup(self) -> None:
         self._create_database()
         self._migrate()
+        self.git_root.mkdir(parents=True, exist_ok=True)
+        self._start_lux()
+        self._start_orchestrator()
         self._start_control_plane()
+
+    def _start_lux(self) -> None:
+        """A stand-in for lux: scripted agents, real git pushes.
+
+        dude's suite tests what dude sends lux and what it does with the
+        answers; lux is tested by its own suite, and the contract between
+        the two by `--lux`.
+        """
+        addr_file = self.log_dir / "fake-lux.addr"
+        addr_file.unlink(missing_ok=True)
+        self.lux_proc = subprocess.Popen(
+            [str(REPO_ROOT / "orchestrator" / "bin" / "fake-lux"), "-root", str(self.git_root),
+             "-key", self.lux_key, "-addr-file", str(addr_file)],
+            stdout=self._log("fake-lux"), stderr=subprocess.STDOUT,
+        )
+        deadline = time.time() + 10
+        while not addr_file.exists() or not addr_file.read_text():
+            if time.time() > deadline:
+                raise RuntimeError("fake lux did not start")
+            time.sleep(0.05)
+        self.lux_url = f"http://{addr_file.read_text()}"
+
+    def _start_orchestrator(self) -> None:
+        self.orchestrator_proc = subprocess.Popen(
+            [str(REPO_ROOT / "orchestrator" / "bin" / "dude-orchestrator")],
+            env={
+                **os.environ,
+                "DATABASE_URL": self.app_dsn,
+                "DUDE_ORCHESTRATOR_LISTEN": f"127.0.0.1:{self.orchestrator_port}",
+                "DUDE_ORCHESTRATOR_TOKEN": self.orchestrator_token,
+                "LUX_URL": getattr(self, "lux_url", ""),
+                "LUX_API_KEY": self.lux_key,
+                "DUDE_AGENT_IMAGE": "dude-runtime:test",
+                # No real agent credentials in the suite; fake models only.
+                "DUDE_OPENCODE_AUTH": "{}",
+                "DUDE_OPENCODE_CONFIG": "{}",
+            },
+            stdout=self._log("orchestrator"), stderr=subprocess.STDOUT,
+        )
 
     def _create_database(self) -> None:
         with psycopg.connect(self._admin_dsn(), autocommit=True) as conn:
@@ -123,10 +175,8 @@ class TestEnvironment:
                 # exercised by every test, not just the ones that test it.
                 "DATABASE_URL": self.app_dsn,
                 "PORT": str(self.control_plane_port),
-                # Tests drive a local forge; asking it every couple of seconds
-                # keeps the PR loop's tests short without changing what they
-                # prove. A real forge keeps the rate-limit-friendly default.
-                "DUDE_PR_POLL_SECONDS": os.environ.get("DUDE_PR_POLL_SECONDS", "2"),
+                "DUDE_ORCHESTRATOR_URL": self.orchestrator_url,
+                "DUDE_ORCHESTRATOR_TOKEN": self.orchestrator_token,
             },
             stdout=self._log("control-plane"),
             stderr=subprocess.STDOUT,
@@ -185,49 +235,31 @@ class TestEnvironment:
     def web_url(self) -> str:
         return f"http://127.0.0.1:{self.web_port}"
 
-    def start_runner(self, api_key: str, max_runs: int = 2) -> None:
-        """Start the Go runner. Only needed by suites that execute Runs."""
-        binary = REPO_ROOT / "runner" / "bin" / "factory-runner"
-        if not binary.exists():
-            raise RuntimeError(f"runner binary not built: {binary}")
-
-        self.runner_proc = subprocess.Popen(
-            [
-                str(binary),
-                "--workspace-root", self.workspace_root,
-                "--max-runs", str(max_runs),
-                "--name", f"e2e-runner-{self.run_id}",
-                "--poll-interval", "500ms",
-            ],
-            env={
-                **os.environ,
-                "DUDE_CONTROL_PLANE": self.control_plane_url,
-                "DUDE_RUNNER_KEY": api_key,
-            },
-            stdout=self._log("runner"),
-            stderr=subprocess.STDOUT,
-        )
-
     def _log(self, name: str):
         """An append-mode log file for one of the suite's processes."""
         return open(self.log_dir / f"{name}.log", "ab")
 
     def wait_healthy(self, timeout: float = 30.0) -> bool:
+        """Both the backend and the orchestrator answer /health."""
         deadline = time.time() + timeout
-        while time.time() < deadline:
-            if self.control_plane_proc and self.control_plane_proc.poll() is not None:
-                return False  # exited; no point waiting out the timeout
-            try:
-                resp = requests.get(f"{self.control_plane_url}/health", timeout=1)
-                if resp.status_code == 200 and resp.json().get("status") == "ok":
-                    return True
-            except requests.RequestException:
-                pass
-            time.sleep(0.1)
-        return False
+        for proc, url in ((self.control_plane_proc, self.control_plane_url),
+                          (self.orchestrator_proc, self.orchestrator_url)):
+            while True:
+                if proc and proc.poll() is not None:
+                    return False  # exited; no point waiting out the timeout
+                try:
+                    resp = requests.get(f"{url}/health", timeout=1)
+                    if resp.status_code == 200 and resp.json().get("status") == "ok":
+                        break
+                except requests.RequestException:
+                    pass
+                if time.time() > deadline:
+                    return False
+                time.sleep(0.1)
+        return True
 
     def teardown(self, keep: bool = False) -> None:
-        for name in ("runner_proc", "web_proc", "gallery_proc", "control_plane_proc"):
+        for name in ("web_proc", "gallery_proc", "control_plane_proc", "orchestrator_proc", "lux_proc"):
             proc = getattr(self, name, None)
             if proc is None:
                 continue
@@ -238,29 +270,12 @@ class TestEnvironment:
                 proc.kill()
             setattr(self, name, None)
 
-        self._remove_containers()
 
         if keep:
             return
 
         self._drop_database()
         subprocess.run(["rm", "-rf", self.workspace_root], check=False)
-
-    def _remove_containers(self) -> None:
-        """Remove Run containers this environment created.
-
-        A leaked container holds CPU and disk after the test that made it has
-        gone, so cleanup is unconditional rather than best-effort.
-        """
-        result = subprocess.run(
-            ["docker", "ps", "-aq", "--filter", f"label={CONTAINER_LABEL_MANAGED}=true"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        ids = [line for line in result.stdout.split() if line]
-        if ids:
-            subprocess.run(["docker", "rm", "-f", *ids], capture_output=True, check=False)
 
     def _drop_database(self) -> None:
         try:
@@ -288,11 +303,14 @@ class TestEnvironment:
         env.control_plane_url = f"http://localhost:{env.control_plane_port}"
         env.gallery_url = f"http://127.0.0.1:{env.gallery_port}"
         env.workspace_root = f"/tmp/dude-e2e-{env.run_id}"
-        # The parent's log directory, so the runner started here logs beside
+        # The parent's log directory, so anything started here logs beside
         # the control plane rather than somewhere nobody will look.
         env.log_dir = Path(os.environ.get("DUDE_TEST_LOG_DIR", env.workspace_root))
         env.log_dir.mkdir(parents=True, exist_ok=True)
         env.control_plane_proc = None
-        env.runner_proc = None
+        env.orchestrator_proc = None
+        env.lux_proc = None
         env.gallery_proc = None
+        env.orchestrator_port = int(os.environ.get("DUDE_TEST_ORCHESTRATOR_PORT", "0"))
+        env._init_services()
         return env

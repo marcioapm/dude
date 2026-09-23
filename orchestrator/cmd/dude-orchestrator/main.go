@@ -86,8 +86,11 @@ func run(log *slog.Logger) error {
 	// A kick wakes them all: a person's action should take effect now, not
 	// on the next tick.
 	kick := make(chan struct{}, 1)
+	// Workflow steps in flight at once. A step waiting on a slow forge holds
+	// one slot, not the loop.
+	stepSlots := make(chan struct{}, 32)
 	loops := []loop{
-		{"workflow", 250 * time.Millisecond, func(ctx context.Context) (int, error) { return runtime.Tick(ctx, 10) }},
+		{"workflow", 250 * time.Millisecond, func(ctx context.Context) (int, error) { return runtime.Dispatch(ctx, stepSlots) }},
 		{"phase-sync", time.Second, syncer.Sweep},
 		{"phase-notifier", time.Second, func(ctx context.Context) (int, error) {
 			return phases.NotifyFinished(ctx, database, func(ctx context.Context, org, wf, runID, status string) error {

@@ -6,7 +6,7 @@ Usage:
     python run_tests.py suites/test_events.py    # run one suite
     python run_tests.py -x                       # stop on first failure
     python run_tests.py -k "tenant"              # filter by name
-    python run_tests.py --build                  # force rebuild the runner
+    python run_tests.py --build                  # force rebuild the gallery
     python run_tests.py --keep                   # keep the environment (debug)
     python run_tests.py -v                       # verbose
 
@@ -33,13 +33,12 @@ TESTS_DIR = Path(__file__).resolve().parent
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run dude E2E tests")
-    parser.add_argument("--build", action="store_true", help="force rebuild the runner binary")
+    parser.add_argument("--build", action="store_true", help="force rebuild the gallery")
     parser.add_argument("--keep", action="store_true", help="keep the test environment after the run")
-    parser.add_argument("--no-runner", action="store_true", help="skip suites that need Docker")
     parser.add_argument("--no-ui", action="store_true", help="skip suites that drive a browser")
     args, pytest_args = parser.parse_known_args()
 
-    build(force=args.build)
+    build()
     if not args.no_ui:
         build_gallery(force=args.build)
         build_web()
@@ -48,6 +47,7 @@ def main() -> None:
     print(f"run id:        {env.run_id}")
     print(f"database:      {env.db_name}")
     print(f"control plane: {env.control_plane_url}")
+    print(f"orchestrator:  {env.orchestrator_url}")
     print(f"logs:          {env.log_dir}")
 
     exit_code = 1
@@ -62,16 +62,15 @@ def main() -> None:
         # The pytest subprocess reconstructs the environment from these.
         os.environ["DUDE_TEST_RUN_ID"] = env.run_id
         os.environ["DUDE_TEST_CONTROL_PLANE_PORT"] = str(env.control_plane_port)
+        os.environ["DUDE_TEST_ORCHESTRATOR_PORT"] = str(env.orchestrator_port)
         os.environ["DUDE_TEST_GALLERY_PORT"] = str(env.gallery_port)
         os.environ["DUDE_TEST_WEB_PORT"] = str(env.web_port)
-        # So the runner the pytest process starts logs beside the control
-        # plane's, rather than into a directory named for a run id the
-        # subprocess would otherwise mint for itself.
+        # So anything the pytest process starts logs beside the rest,
+        # rather than into a directory named for a run id the subprocess
+        # would otherwise mint for itself.
         os.environ["DUDE_TEST_LOG_DIR"] = str(env.log_dir)
 
         skip_marks = []
-        if args.no_runner:
-            skip_marks.append("not docker")
         if args.no_ui:
             skip_marks.append("not ui")
         if skip_marks:
