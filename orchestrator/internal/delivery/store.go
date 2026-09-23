@@ -309,7 +309,16 @@ func (s *Store) OpenPullRequest(ctx context.Context, org string, st *State, forg
 
 	ref, err := gh.OpenPullRequest(ctx, forge.OpenPullRequest{Slug: slug, Title: title, Body: body, Head: st.Branch, Base: baseBranch})
 	if e, ok := err.(*forge.Error); ok && e.AlreadyExists() {
-		return "", fmt.Errorf("a pull request already exists for %s but is not recorded: %w", st.Branch, err)
+		// A replay after a crash between opening the PR and recording it:
+		// adopt the one GitHub already has.
+		existing, ferr := gh.FindPullRequest(ctx, slug, st.Branch, baseBranch)
+		if ferr != nil {
+			return "", ferr
+		}
+		if existing == nil {
+			return "", fmt.Errorf("GitHub says a pull request exists for %s but lists none: %w", st.Branch, err)
+		}
+		ref, err = *existing, nil
 	}
 	if err != nil {
 		return "", err

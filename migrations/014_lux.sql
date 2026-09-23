@@ -127,6 +127,8 @@ CREATE TABLE webhook_deliveries (
   received_at     timestamptz NOT NULL DEFAULT now(),
   processed_at    timestamptz,
   attempts        integer NOT NULL DEFAULT 0,
+  -- A failed delivery is not tried again before this.
+  next_attempt_at timestamptz,
   last_error      text
 );
 

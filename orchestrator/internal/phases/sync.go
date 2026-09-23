@@ -99,13 +99,19 @@ func scan(row pgx.Row) (phaseRun, error) {
 func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 	var runs []phaseRun
 	err := s.DB.InSystem(ctx, "phase-sync", func(tx pgx.Tx) error {
+		// Every live Run, not the oldest N: a Run with nothing to do still
+		// needs its stream followed, and a paused or idle Run must not
+		// crowd out a newer one that is waiting to be submitted. Runs with
+		// something to do sort first.
 		rows, err := tx.Query(ctx, `SELECT `+runColumns+` FROM runs r
 			WHERE r.phase IS NOT NULL
-			  AND (r.status IN ('pending', 'scheduled', 'starting', 'running', 'paused')
+			  AND (r.status IN ('pending', 'scheduled', 'starting', 'running')
+			       OR (r.status = 'paused' AND r.control = 'resume')
 			       -- Aborted in dude but not yet cancelled in lux.
 			       OR (r.status = 'aborted' AND r.lux_run_id IS NOT NULL AND r.lux_stop_reason IS DISTINCT FROM 'cancel'))
 			  AND (r.next_attempt_at IS NULL OR r.next_attempt_at <= now())
-			ORDER BY r.created_at LIMIT 100`)
+			ORDER BY (r.status = 'pending' OR r.control <> 'none' OR r.turn_done_at IS NOT NULL) DESC, r.created_at
+			LIMIT 1000`)
 		if err != nil {
 			return err
 		}
@@ -153,10 +159,13 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 		return true, s.cancel(ctx, r)
 	case r.Control == "pause_hard" || r.Control == "pause_graceful":
 		return true, s.pause(ctx, r)
-	case r.TurnDone:
+	}
+	// Following comes first: a finishing Run still needs its stream, because
+	// that is where the push result arrives — including after a restart.
+	s.follow(r)
+	if r.TurnDone {
 		return s.finish(ctx, r)
 	}
-	s.follow(r)
 	if !r.HasDirectives {
 		return false, nil
 	}
@@ -179,8 +188,12 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 		return s.retryLater(ctx, r, err)
 	}
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, status = 'scheduled',
-			next_attempt_at = NULL WHERE id = $1`, r.ID, lr.ID, lr.State); err != nil {
+		// Guarded on still being pending: an abort that raced the submit wins,
+		// and the sweep then cancels the lux Run it made.
+		tag, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, next_attempt_at = NULL,
+			status = CASE WHEN status = 'pending' THEN 'scheduled'::run_status ELSE status END
+			WHERE id = $1`, r.ID, lr.ID, lr.State)
+		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
 		return s.event(ctx, tx, r, "run.lease.acquired", ledger.ActorSystem, map[string]any{"luxRunId": lr.ID})
@@ -431,6 +444,11 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 	if delivery.Publishes[r.Phase] {
 		var err error
 		if result, err = s.publish(ctx, r); err != nil {
+			// A forge that is down or rate-limiting will answer later; a
+			// refusal (not a fast-forward, a bad push) will not.
+			if forge.Transient(err) {
+				return true, s.retryLater(ctx, r, err)
+			}
 			return true, s.fail(ctx, r, err.Error())
 		}
 	}
@@ -447,9 +465,11 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 	}
 	s.unfollow(r.ID)
 	return true, s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `UPDATE runs SET status = 'completed', ended_at = now(), lux_stop_reason = $2,
+		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'completed', ended_at = now(), lux_stop_reason = $2,
 			head_sha = COALESCE(NULLIF($3, ''), head_sha), changed_paths = $4, branch = COALESCE(NULLIF($5, ''), branch)
-			WHERE id = $1`, r.ID, "complete", result.head, db.NonNil(result.changed), result.branch); err != nil {
+			WHERE id = $1 AND status IN ('scheduled', 'starting', 'running')`,
+			r.ID, "complete", result.head, db.NonNil(result.changed), result.branch)
+		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
 		return s.event(ctx, tx, r, "run.completed", ledger.ActorSystem, map[string]any{"status": "completed"})
@@ -538,7 +558,10 @@ func (s *Syncer) reportFindings(ctx context.Context, r phaseRun) error {
 			if err := rows.Scan(&text); err != nil {
 				return err
 			}
+			// Messages end where the agent stopped to call a tool; a finding
+			// starting the next one must still begin on a line of its own.
 			reply.WriteString(text)
+			reply.WriteString("\n")
 		}
 		return rows.Err()
 	}); err != nil {
@@ -562,12 +585,21 @@ func (s *Syncer) cancel(ctx context.Context, r phaseRun) error {
 // pause stops the lux Run, keeping its state. Graceful and hard are the same
 // here: lux asks the agent to end its turn cleanly before the container stops.
 func (s *Syncer) pause(ctx context.Context, r phaseRun) error {
+	// The reason is recorded before lux is asked, so the "stopped" it reports
+	// is known to be dude's doing and not read as the agent dying.
+	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE runs SET lux_stop_reason = $2 WHERE id = $1`, r.ID, stopPause)
+		return err
+	}); err != nil {
+		return err
+	}
 	if err := s.ask(ctx, r, s.Lux.Stop); err != nil {
 		return err
 	}
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `UPDATE runs SET status = 'paused', control = 'none', control_requested_at = NULL,
-			lux_stop_reason = $2 WHERE id = $1`, r.ID, stopPause); err != nil {
+		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'paused', control = 'none', control_requested_at = NULL
+			WHERE id = $1 AND status IN ('scheduled', 'starting', 'running')`, r.ID)
+		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
 		return s.event(ctx, tx, r, "run.paused", ledger.ActorSystem, map[string]any{"confirmed": true})
@@ -595,7 +627,7 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 		// the stream to report it running.
 		_, err := tx.Exec(ctx, `UPDATE runs SET status = 'running', lux_state = $2, lux_stop_reason = NULL,
 			control = 'none', control_requested_at = NULL, control_reason = NULL,
-			turn_done_at = NULL, agent_busy_at = NULL WHERE id = $1`, r.ID, lr.State)
+			turn_done_at = NULL, agent_busy_at = NULL WHERE id = $1 AND status = 'paused'`, r.ID, lr.State)
 		return err
 	}); err != nil {
 		return true, err
