@@ -1,6 +1,10 @@
 package forge
 
-import "testing"
+import (
+	"errors"
+	"fmt"
+	"testing"
+)
 
 // Every false positive here costs a fix Run; every false negative is a
 // person's request silently ignored. The tests pin both directions.
@@ -121,5 +125,31 @@ func TestSlugFromURL(t *testing.T) {
 		if got := SlugFromURL(in); got != want {
 			t.Errorf("SlugFromURL(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// A blip must be retried; a refusal must not be retried into the same wall.
+func TestTransientErrors(t *testing.T) {
+	for err, want := range map[error]bool{
+		&Error{Status: 502, Message: "Bad Gateway"}:                               true,
+		&Error{Status: 429, Message: "slow down"}:                                 true,
+		&Error{Status: 403, Message: "API rate limit exceeded"}:                   true,
+		fmt.Errorf("compare: %w", &Unreachable{errors.New("connection refused")}): true,
+		&Error{Status: 422, Message: "Update is not a fast forward"}:              false,
+		&Error{Status: 403, Message: "Resource not accessible by integration"}:    false,
+		errors.New("lux reported no push result"):                                 false,
+	} {
+		if got := Transient(err); got != want {
+			t.Errorf("Transient(%v) = %v, want %v", err, got, want)
+		}
+	}
+}
+
+func TestAlreadyExistsIsOnlyTheDuplicatePR(t *testing.T) {
+	if !(&Error{Status: 422, Message: "A pull request already exists for acme:branch."}).AlreadyExists() {
+		t.Error("a duplicate PR was not recognised")
+	}
+	if (&Error{Status: 422, Message: "No commits between main and branch"}).AlreadyExists() {
+		t.Error("another validation error was taken for a duplicate PR")
 	}
 }

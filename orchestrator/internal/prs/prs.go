@@ -174,7 +174,9 @@ func (s *Syncer) Sync(ctx context.Context, org, prID string) error {
 		ids[i] = f.ID
 	}
 	// One signal per distinct change, however many deliveries report it.
-	key := fmt.Sprintf("pr:%s:%s:%s:%s:%s", pr.ID, signal.Kind, strings.Join(ids, ","), status.Checks, status.State)
+	// The head is part of it: checks failing again after a fix is a new
+	// failure, and must not be taken for the one already handled.
+	key := fmt.Sprintf("pr:%s:%s:%s:%s:%s:%s", pr.ID, signal.Kind, strings.Join(ids, ","), status.Checks, status.State, status.HeadSHA)
 	return s.Signal(ctx, org, workflowRunID, delivery.SignalPRFeedback, signal, key)
 }
 
@@ -189,8 +191,12 @@ func (s *Syncer) ProcessDeliveries(ctx context.Context) (int, error) {
 	}
 	var batch []delivery
 	if err := s.DB.InSystem(ctx, "webhooks", func(tx pgx.Tx) error {
+		// A failed delivery waits before its next try, longer each time, so
+		// a forge that is briefly down is not asked ten times in a second.
 		rows, err := tx.Query(ctx, `SELECT id, organization_id, event, payload, attempts FROM webhook_deliveries
-			WHERE processed_at IS NULL AND attempts < 10 ORDER BY received_at LIMIT 20`)
+			WHERE processed_at IS NULL AND attempts < 10
+			  AND (next_attempt_at IS NULL OR next_attempt_at <= now())
+			ORDER BY received_at LIMIT 20`)
 		if err != nil {
 			return err
 		}
@@ -206,7 +212,8 @@ func (s *Syncer) ProcessDeliveries(ctx context.Context) (int, error) {
 				_, e := tx.Exec(ctx, `UPDATE webhook_deliveries SET processed_at = now(), last_error = NULL WHERE id = $1`, d.ID)
 				return e
 			}
-			_, e := tx.Exec(ctx, `UPDATE webhook_deliveries SET attempts = attempts + 1, last_error = $2 WHERE id = $1`, d.ID, err.Error())
+			_, e := tx.Exec(ctx, `UPDATE webhook_deliveries SET attempts = attempts + 1, last_error = $2,
+				next_attempt_at = now() + make_interval(secs => 5 * power(2, attempts)) WHERE id = $1`, d.ID, err.Error())
 			return e
 		}); err != nil {
 			return 0, err

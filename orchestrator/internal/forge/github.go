@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -86,8 +87,29 @@ type Error struct {
 
 func (e *Error) Error() string { return fmt.Sprintf("github %d: %s", e.Status, e.Message) }
 
-// Already exists: a PR for the branch, a hook for the URL.
-func (e *Error) AlreadyExists() bool { return e.Status == 422 }
+// AlreadyExists: GitHub refused a PR because one is open for the branch.
+// Only that; other 422s are validation errors that mean something else.
+func (e *Error) AlreadyExists() bool {
+	return e.Status == 422 && strings.Contains(strings.ToLower(e.Message), "already exists")
+}
+
+// Transient says whether trying again later could succeed: the forge was
+// unreachable, rate-limiting or failing, rather than refusing.
+func Transient(err error) bool {
+	var e *Error
+	if errors.As(err, &e) {
+		return e.Status == 429 || e.Status >= 500 || e.Status == 403 && strings.Contains(strings.ToLower(e.Message), "rate limit")
+	}
+	// No answer from GitHub at all: the request never completed.
+	var u *Unreachable
+	return errors.As(err, &u)
+}
+
+// Unreachable is a request that got no answer: refused, timed out, cut off.
+type Unreachable struct{ Err error }
+
+func (u *Unreachable) Error() string { return "github unreachable: " + u.Err.Error() }
+func (u *Unreachable) Unwrap() error { return u.Err }
 
 // NotFound: a branch or repository that is not there.
 func (e *Error) NotFound() bool { return e.Status == 404 }
@@ -145,10 +167,13 @@ func (g *GitHub) do(ctx context.Context, method, path string, body, out any) err
 	}
 	res, err := g.http.Do(req)
 	if err != nil {
-		return err
+		return &Unreachable{err}
 	}
 	defer res.Body.Close()
-	data, _ := io.ReadAll(res.Body)
+	data, err := io.ReadAll(res.Body)
+	if err != nil {
+		return &Unreachable{err}
+	}
 	if res.StatusCode >= 300 {
 		var e struct {
 			Message string `json:"message"`
@@ -193,6 +218,22 @@ func (p ghPull) ref() PullRequestRef {
 type OpenPullRequest struct {
 	Slug, Title, Body, Head, Base string
 	Draft                         bool
+}
+
+// FindPullRequest returns the open pull request from head into base, if
+// there is one.
+func (g *GitHub) FindPullRequest(ctx context.Context, slug, head, base string) (*PullRequestRef, error) {
+	owner, _, _ := strings.Cut(slug, "/")
+	var pulls []ghPull
+	q := url.Values{"state": {"open"}, "head": {owner + ":" + head}, "base": {base}}
+	if err := g.do(ctx, "GET", "/repos/"+slug+"/pulls?"+q.Encode(), nil, &pulls); err != nil {
+		return nil, err
+	}
+	if len(pulls) == 0 {
+		return nil, nil
+	}
+	ref := pulls[0].ref()
+	return &ref, nil
 }
 
 func (g *GitHub) OpenPullRequest(ctx context.Context, in OpenPullRequest) (PullRequestRef, error) {

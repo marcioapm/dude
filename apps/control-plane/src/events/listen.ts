@@ -4,19 +4,24 @@
  * Most events are written by the orchestrator, a separate process, so an
  * in-process publish after each append can no longer see them. Every insert
  * into `events` raises a NOTIFY (migration 014); this listens for it,
- * re-reads the row by cursor — NOTIFY payloads are capped at 8000 bytes and
- * an event's payload is not — and publishes it to local subscribers.
+ * re-reads rows by cursor — NOTIFY payloads are capped at 8000 bytes and an
+ * event's payload is not — and publishes them to local subscribers.
  *
  * One connection for the whole process. `Bun.sql` cannot LISTEN, so this is
  * the one place that uses the postgres.js driver.
  *
- * A missed notification is not a correctness problem: the stream's contract
- * is resume-by-cursor, and a client that reconnects gets everything after
- * its last cursor from the ledger.
+ * Two properties matter:
+ *
+ * - **Nothing in a burst is dropped.** Reads are paged until they catch up,
+ *   and a read that fails keeps its position to try again.
+ * - **Order is cursor order.** Cursors are handed out at insert but become
+ *   visible at commit, so two transactions can commit — and notify — out of
+ *   order. Subscribers keep a high-water mark, so publishing 105 before 104
+ *   would lose 104. Notifications are gathered for a moment before reading,
+ *   which puts transactions that commit close together back in order.
  */
 
 import postgres from "postgres";
-import type { PersistedEvent } from "@dude/domain";
 import { eventBus } from "./bus.ts";
 import * as ledger from "./ledger.ts";
 
@@ -25,30 +30,49 @@ interface Notice {
   organizationId: string;
 }
 
+/** How long notifications are gathered before the events are read. */
+const SETTLE_MS = 150;
+const PAGE = 1000;
+
 export async function listenForEvents(databaseUrl: string): Promise<() => Promise<void>> {
   const sql = postgres(databaseUrl, { max: 1, onnotice: () => {} });
-  // Read in batches per organization, in cursor order, so a burst of
-  // notifications costs one query per tenant rather than one per event.
+  // Per organization: the lowest cursor notified and not yet published.
   const waiting = new Map<string, number>();
+  let timer: ReturnType<typeof setTimeout> | null = null;
   let draining = false;
 
   const drain = async () => {
+    timer = null;
     if (draining) return;
     draining = true;
     try {
       while (waiting.size > 0) {
-        const batch = [...waiting.entries()];
-        waiting.clear();
-        for (const [organizationId, after] of batch) {
-          const events: PersistedEvent[] = await ledger.query(organizationId, { after, limit: 1000 });
-          for (const event of events) eventBus.publish(event);
+        const [organizationId, from] = waiting.entries().next().value!;
+        waiting.delete(organizationId);
+        let after = from - 1;
+        try {
+          for (;;) {
+            const events = await ledger.query(organizationId, { after, limit: PAGE });
+            for (const event of events) eventBus.publish(event);
+            if (events.length < PAGE) break;
+            after = events[events.length - 1]!.cursor;
+          }
+        } catch (err) {
+          console.error("live event read failed:", err);
+          // Keep the position; a later notification or the retry reads it.
+          const pending = waiting.get(organizationId);
+          waiting.set(organizationId, Math.min(pending ?? Infinity, after + 1));
+          schedule(1000);
+          return;
         }
       }
-    } catch (err) {
-      console.error("live event read failed:", err);
     } finally {
       draining = false;
     }
+  };
+
+  const schedule = (ms: number) => {
+    if (!timer) timer = setTimeout(() => void drain(), ms);
   };
 
   const { unlisten } = await sql.listen("dude_events", (payload) => {
@@ -61,15 +85,13 @@ export async function listenForEvents(databaseUrl: string): Promise<() => Promis
     } catch {
       return;
     }
-    // Everything after the cursor before this one, so the event itself is
-    // read; a lower pending position for the tenant wins.
-    const after = notice.cursor - 1;
     const pending = waiting.get(notice.organizationId);
-    if (pending === undefined || after < pending) waiting.set(notice.organizationId, after);
-    void drain();
+    if (pending === undefined || notice.cursor < pending) waiting.set(notice.organizationId, notice.cursor);
+    schedule(SETTLE_MS);
   });
 
   return async () => {
+    if (timer) clearTimeout(timer);
     await unlisten();
     await sql.end({ timeout: 2 });
   };

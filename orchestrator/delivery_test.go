@@ -513,3 +513,74 @@ func TestMain(m *testing.M) {
 	}
 	os.Exit(m.Run())
 }
+
+// A Run whose turn ended while no one was following its stream (a restart,
+// a dropped connection) must still learn what its push did. Found in review:
+// finishing Runs were never followed again, and waited forever.
+func TestAFinishingRunIsFollowedAfterARestart(t *testing.T) {
+	w := newWorld(t)
+	wi := w.workItem()
+	w.deliver(wi)
+	w.until("the implementer's push to be asked for", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND phase = 'implement' AND push_request_id IS NOT NULL`, wi) == 1
+	})
+	// A new orchestrator: nothing is following anything.
+	w.syncer.Stop()
+	w.syncer = &phases.Syncer{DB: w.syncer.DB, Lux: w.syncer.Lux, Forges: w.syncer.Forges, Log: quiet, Agent: w.syncer.Agent}
+	t.Cleanup(w.syncer.Stop)
+	w.until("the implementer to complete", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND phase = 'implement' AND status = 'completed'`, wi) == 1
+	})
+}
+
+// An abort that lands while the Run is being submitted wins. Found in
+// review: submit set the Run back to scheduled, and its lux Run carried on.
+func TestAnAbortDuringSubmitIsNotUndone(t *testing.T) {
+	w := newWorld(t)
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	wi := w.workItem()
+	w.deliver(wi)
+	// Create the Run without submitting it, then abort it and let the
+	// submit happen: the row the submit sees is already aborted.
+	for range 5 {
+		if _, err := w.runtime.Tick(context.Background(), 10); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustExec(t, w.owner, `UPDATE runs SET status = 'aborted', control = 'abort' WHERE work_item_id = $1`, wi)
+	var runID string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE work_item_id = $1`, wi).Scan(&runID)
+	// Submit as the sweep would have, had it read the row a moment earlier.
+	mustExec(t, w.owner, `UPDATE runs SET status = 'pending' WHERE id = $1`, runID)
+	go func() { time.Sleep(5 * time.Millisecond); _, _ = w.owner.Exec(context.Background(), `UPDATE runs SET status = 'aborted' WHERE id = $1`, runID) }()
+	w.until("the lux run to be cancelled", func() bool {
+		return len(w.lux.Runs()) == 1 && w.lux.Runs()[0].Cancelled
+	})
+	var status string
+	_ = w.owner.QueryRow(context.Background(), `SELECT status::text FROM runs WHERE id = $1`, runID).Scan(&status)
+	if status != "aborted" {
+		t.Errorf("status = %s, want the abort to stand", status)
+	}
+}
+
+// Pausing is not the agent dying. Found in review: lux's "stopped" could be
+// read before dude recorded why, and the Run was marked failed.
+func TestAPauseIsNeverReadAsAFailure(t *testing.T) {
+	w := newWorld(t)
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	wi := w.workItem()
+	w.deliver(wi)
+	w.until("the agent to be working", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'running'`, wi) == 1
+	})
+	mustExec(t, w.owner, `UPDATE runs SET control = 'pause_hard' WHERE work_item_id = $1`, wi)
+	w.until("the run to pause", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'paused'`, wi) == 1
+	})
+	for range 5 {
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE work_item_id = $1 AND event_type = 'run.failed'`, wi); n != 0 {
+		t.Errorf("a paused run was recorded as failed")
+	}
+}
