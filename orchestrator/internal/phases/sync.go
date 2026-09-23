@@ -315,9 +315,20 @@ func (s *Syncer) follow(r phaseRun) {
 			s.mu.Unlock()
 			cancel()
 		}()
-		if err := s.followOutput(ctx, r); err != nil && ctx.Err() == nil {
-			s.Log.Warn("following lux output stopped", "run", r.ID, "error", err)
+		err := s.followOutput(ctx, r)
+		if err == nil || ctx.Err() != nil {
+			return
 		}
+		// lux no longer knows the Run — its data was lost, or it was
+		// deleted. Nothing will ever arrive; following again every sweep
+		// would spin forever with the phase never finishing.
+		if le, ok := lux.AsError(err); ok && le.Status == 404 {
+			if err := s.fail(context.Background(), r, "lux no longer has this Run"); err != nil {
+				s.Log.Warn("failing a Run lux lost", "run", r.ID, "error", err)
+			}
+			return
+		}
+		s.Log.Warn("following lux output stopped", "run", r.ID, "error", err)
 	}()
 }
 

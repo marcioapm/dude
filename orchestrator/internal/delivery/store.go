@@ -250,6 +250,7 @@ func (s *Store) OpenPullRequest(ctx context.Context, org string, st *State, forg
 	var existing, repoURL, repoName, baseBranch, title, goal string
 	var criteria []string
 	var findings []struct{ Category, Severity, Status, Title string }
+	var reviewers int
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		err := tx.QueryRow(ctx, `SELECT id FROM pull_requests WHERE work_item_id = $1 AND repository_id = $2 LIMIT 1`,
 			st.WorkItemID, st.RepositoryID).Scan(&existing)
@@ -272,7 +273,11 @@ func (s *Store) OpenPullRequest(ctx context.Context, org string, st *State, forg
 			return err
 		}
 		findings, err = pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ Category, Severity, Status, Title string }])
-		return err
+		if err != nil {
+			return err
+		}
+		return tx.QueryRow(ctx, `SELECT count(DISTINCT category) FROM runs
+			WHERE work_item_id = $1 AND phase = 'review' AND status = 'completed'`, st.WorkItemID).Scan(&reviewers)
 	})
 	if err != nil || existing != "" {
 		return existing, err
@@ -292,17 +297,16 @@ func (s *Store) OpenPullRequest(ctx context.Context, org string, st *State, forg
 		sections = append(sections, "## Acceptance criteria\n"+bullets(criteria))
 	}
 	if len(findings) > 0 {
-		cats, addressed := map[string]bool{}, 0
+		addressed := 0
 		var lines []string
 		for _, f := range findings {
-			cats[f.Category] = true
 			if f.Status != "open" {
 				addressed++
 			}
 			lines = append(lines, fmt.Sprintf("- `%s` **%s** — %s _(%s)_", f.Severity, f.Category, f.Title, f.Status))
 		}
 		sections = append(sections, fmt.Sprintf("## Review\n%d finding(s) across %d reviewer(s); %d addressed.\n\n%s",
-			len(findings), len(cats), addressed, strings.Join(lines, "\n")))
+			len(findings), reviewers, addressed, strings.Join(lines, "\n")))
 	}
 	sections = append(sections, "---\n\nOpened by the dude factory.")
 	body := joinNonEmpty(sections, "\n\n")

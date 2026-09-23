@@ -24,6 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       jq \
       openssh-client \
       python3 \
+      python3-pytest \
       python3-venv \
       ripgrep \
       unzip \
