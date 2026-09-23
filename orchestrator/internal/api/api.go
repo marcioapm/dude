@@ -227,7 +227,11 @@ func (s *Server) steer(w http.ResponseWriter, r *http.Request, org string) error
 		Text       string `json:"text"`
 		Scope      string `json:"scope"`
 		Supersedes string `json:"supersedes"`
-		ActorID    string `json:"actorId"`
+		// Stop the agent's current turn so it hears this now. Otherwise an
+		// agent that cannot take a message mid-turn hears it when the turn
+		// ends.
+		Interrupt bool   `json:"interrupt"`
+		ActorID   string `json:"actorId"`
 	}
 	if err := read(r, &body); err != nil {
 		return err
@@ -249,15 +253,17 @@ func (s *Server) steer(w http.ResponseWriter, r *http.Request, org string) error
 		}
 		id := ids.New(ids.Directive)
 		var createdAt any
-		if err := tx.QueryRow(r.Context(), `INSERT INTO directives (id, organization_id, work_item_id, run_id, text, scope, supersedes)
-			VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING created_at`,
-			id, org, ri.WorkItemID, runID, body.Text, body.Scope, nullable(body.Supersedes)).Scan(&createdAt); err != nil {
+		if err := tx.QueryRow(r.Context(), `INSERT INTO directives (id, organization_id, work_item_id, run_id, text, scope, supersedes, interrupt)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING created_at`,
+			id, org, ri.WorkItemID, runID, body.Text, body.Scope, nullable(body.Supersedes), body.Interrupt).Scan(&createdAt); err != nil {
 			return err
 		}
 		out = map[string]any{"id": id, "runId": runID, "workItemId": ri.WorkItemID, "text": body.Text,
-			"scope": body.Scope, "supersedes": nullable(body.Supersedes), "deliveredAt": nil, "createdAt": createdAt}
+			"scope": body.Scope, "supersedes": nullable(body.Supersedes), "interrupt": body.Interrupt,
+			"deliveredAt": nil, "createdAt": createdAt}
 		return humanEvent(r.Context(), tx, org, runID, ri, "run.steered", body.ActorID, map[string]any{
-			"directiveId": id, "text": body.Text, "scope": body.Scope, "supersedes": nullable(body.Supersedes)})
+			"directiveId": id, "text": body.Text, "scope": body.Scope, "supersedes": nullable(body.Supersedes),
+			"interrupt": body.Interrupt})
 	})
 	if err != nil {
 		return err

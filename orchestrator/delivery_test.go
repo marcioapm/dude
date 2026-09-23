@@ -400,21 +400,34 @@ func TestSteeringReachesTheAgentAndIsAcknowledged(t *testing.T) {
 	})
 	var runID string
 	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE work_item_id = $1`, wi).Scan(&runID)
+
+	// An agent that cannot take a message mid-turn holds it until the turn
+	// ends: sent, but not yet delivered.
 	mustExec(t, w.owner, `INSERT INTO directives (id, organization_id, work_item_id, run_id, text) VALUES ('dir_1', $1, $2, $3, 'also add a test')`,
 		w.org, wi, runID)
-
-	w.until("the directive to be delivered", func() bool {
-		return w.count(`SELECT count(*) FROM directives WHERE id = 'dir_1' AND delivered_at IS NOT NULL`) == 1
+	w.until("the directive to be sent", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE id = 'dir_1' AND sent_at IS NOT NULL`) == 1
 	})
-	if got := w.lux.Runs()[0].Inputs; len(got) != 1 || got[0] != "also add a test" {
-		t.Errorf("inputs = %v", got)
+	if n := w.count(`SELECT count(*) FROM directives WHERE id = 'dir_1' AND delivered_at IS NOT NULL`); n != 0 {
+		t.Errorf("a directive to a busy agent was reported delivered before the agent had it")
 	}
-	// Once, however many sweeps see it.
+
+	// One that interrupts is heard now, and so is everything queued before it.
+	mustExec(t, w.owner, `INSERT INTO directives (id, organization_id, work_item_id, run_id, text, interrupt) VALUES ('dir_2', $1, $2, $3, 'stop and listen', true)`,
+		w.org, wi, runID)
+	w.until("both directives to be delivered", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND delivered_at IS NOT NULL`, runID) == 2
+	})
+	r := w.lux.Runs()[0]
+	if r.Interrupted != 1 || len(r.Inputs) != 2 || r.Inputs[0] != "also add a test" {
+		t.Errorf("interrupted=%d inputs=%v", r.Interrupted, r.Inputs)
+	}
+	// Once, however many sweeps see them.
 	for range 3 {
 		w.pump()
 	}
-	if got := w.lux.Runs()[0].Inputs; len(got) != 1 {
-		t.Errorf("directive sent %d times", len(got))
+	if got := w.lux.Runs()[0].Inputs; len(got) != 2 {
+		t.Errorf("directives sent %d times", len(got))
 	}
 }
 

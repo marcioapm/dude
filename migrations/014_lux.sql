@@ -77,6 +77,10 @@ CREATE UNIQUE INDEX runs_creation_key_idx ON runs (work_item_id, creation_key)
 -- A directive is sent to lux, then acknowledged by the agent. `delivered_at`
 -- keeps meaning "the agent has it"; `sent_at` stops it being sent twice.
 ALTER TABLE directives ADD COLUMN sent_at timestamptz;
+-- Whether the directive stops the agent's current turn to be heard now.
+-- Without it, an agent that cannot take a message mid-turn (OpenCode, and any
+-- ACP agent) hears it when the turn ends — which can be a long time.
+ALTER TABLE directives ADD COLUMN interrupt boolean NOT NULL DEFAULT false;
 
 -- ---------------------------------------------------------------------------
 -- Two processes, one ledger

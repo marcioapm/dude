@@ -350,7 +350,11 @@ func (s *Syncer) followOutput(ctx context.Context, r phaseRun) error {
 // for, so a restart resumes the sequence.
 func (s *Syncer) finish(ctx context.Context, r phaseRun) error {
 	if delivery.Publishes[r.Phase] && r.PushResult == nil {
-		if r.LuxState != "running" {
+		// Only a state lux has already reported as over rules the push out.
+		// Anything else is asked of lux itself: its lifecycle events trail
+		// the agent's own records by up to a second, so the state recorded
+		// here can still say "scheduled" when the agent has already finished.
+		if lux.Terminal(r.LuxState) {
 			return s.fail(ctx, r, "the agent's container stopped before its work was pushed")
 		}
 		if r.PushRequestID != "" {
@@ -358,6 +362,9 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) error {
 		}
 		reqID := "push-" + r.ID
 		if err := s.Lux.Push(ctx, r.LuxRunID, reqID); err != nil {
+			if le, ok := lux.AsError(err); ok && le.Code == "not_running" {
+				return s.fail(ctx, r, "the agent's container stopped before its work was pushed: "+le.Message)
+			}
 			return s.retryLater(ctx, r, err)
 		}
 		return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
@@ -559,13 +566,17 @@ func (s *Syncer) deliverDirectives(ctx context.Context, r phaseRun) (bool, error
 	if r.Status != statusRunning || r.LuxState != "running" {
 		return false, nil
 	}
-	var pending []struct{ ID, Text string }
+	type directive struct {
+		ID, Text  string
+		Interrupt bool
+	}
+	var pending []directive
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT id, text FROM directives WHERE run_id = $1 AND sent_at IS NULL ORDER BY created_at`, r.ID)
+		rows, err := tx.Query(ctx, `SELECT id, text, interrupt FROM directives WHERE run_id = $1 AND sent_at IS NULL ORDER BY created_at`, r.ID)
 		if err != nil {
 			return err
 		}
-		pending, err = pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ ID, Text string }])
+		pending, err = pgx.CollectRows(rows, pgx.RowToStructByPos[directive])
 		return err
 	}); err != nil || len(pending) == 0 {
 		return false, err
@@ -573,7 +584,7 @@ func (s *Syncer) deliverDirectives(ctx context.Context, r phaseRun) (bool, error
 	for _, d := range pending {
 		// The directive id is the request id, so a retried send is delivered
 		// once.
-		if err := s.Lux.Input(ctx, r.LuxRunID, d.Text, d.ID, false); err != nil {
+		if err := s.Lux.Input(ctx, r.LuxRunID, d.Text, d.ID, d.Interrupt); err != nil {
 			return true, s.retryLater(ctx, r, err)
 		}
 		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {

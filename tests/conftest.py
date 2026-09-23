@@ -18,6 +18,7 @@ from helpers import ApiClient, create_api_key, create_organization, wait_until, 
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "ui: drives a real browser via Playwright")
+    config.addinivalue_line("markers", "lux: runs against a real lux (opt-in with --lux)")
 
 
 @pytest.fixture(scope="session")

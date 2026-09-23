@@ -9,6 +9,7 @@ Usage:
     python run_tests.py --build                  # force rebuild the gallery
     python run_tests.py --keep                   # keep the environment (debug)
     python run_tests.py -v                       # verbose
+    python run_tests.py --lux                    # the contract suite, against a real lux
 
 Each invocation creates an isolated PostgreSQL database and starts the
 control plane on a free port, so runs do not collide with each other or with
@@ -26,7 +27,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(__file__))
 
 from build import build, build_gallery, build_web  # noqa: E402
-from env import TestEnvironment  # noqa: E402
+from env import TestEnvironment, lux_env  # noqa: E402
 
 TESTS_DIR = Path(__file__).resolve().parent
 
@@ -36,6 +37,8 @@ def main() -> None:
     parser.add_argument("--build", action="store_true", help="force rebuild the gallery")
     parser.add_argument("--keep", action="store_true", help="keep the test environment after the run")
     parser.add_argument("--no-ui", action="store_true", help="skip suites that drive a browser")
+    parser.add_argument("--lux", action="store_true",
+                        help="run the contract suite against a real lux instead (see suites/test_lux_contract.py)")
     args, pytest_args = parser.parse_known_args()
 
     build()
@@ -43,7 +46,7 @@ def main() -> None:
         build_gallery(force=args.build)
         build_web()
 
-    env = TestEnvironment()
+    env = TestEnvironment(real_lux=lux_env() if args.lux else None)
     print(f"run id:        {env.run_id}")
     print(f"database:      {env.db_name}")
     print(f"control plane: {env.control_plane_url}")
@@ -63,6 +66,8 @@ def main() -> None:
         os.environ["DUDE_TEST_RUN_ID"] = env.run_id
         os.environ["DUDE_TEST_CONTROL_PLANE_PORT"] = str(env.control_plane_port)
         os.environ["DUDE_TEST_ORCHESTRATOR_PORT"] = str(env.orchestrator_port)
+        if args.lux:
+            os.environ["DUDE_TEST_REAL_LUX"] = "1"
         os.environ["DUDE_TEST_GALLERY_PORT"] = str(env.gallery_port)
         os.environ["DUDE_TEST_WEB_PORT"] = str(env.web_port)
         # So anything the pytest process starts logs beside the rest,
@@ -70,7 +75,9 @@ def main() -> None:
         # would otherwise mint for itself.
         os.environ["DUDE_TEST_LOG_DIR"] = str(env.log_dir)
 
-        skip_marks = []
+        # One orchestrator drives one lux, so the contract suite gets an
+        # environment of its own rather than sharing the fake's.
+        skip_marks = ["lux"] if args.lux else ["not lux"]
         if args.no_ui:
             skip_marks.append("not ui")
         if skip_marks:
