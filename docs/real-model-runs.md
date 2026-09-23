@@ -1,0 +1,111 @@
+# Real-model runs
+
+What happened when real models ran dude's delivery loop end to end: the
+first time the loop ran on anything other than the scripted agent. Rerun
+this after any change to prompts, the findings parser or the policy, and add
+a section.
+
+## 2026-09-23: OpenCode on lux, three work items
+
+**Setup.** dude's orchestrator and backend on this machine, on a detached
+lux (`run_tests.py --serve`) with two hosts, and the `dude-runtime:dev`
+image. OpenCode through llmproxy: implementer and simplifier
+`claude-sonnet-5`, reviewer `claude-opus-5`, one `correctness` reviewer.
+Project context: "Python 3.11. Run the tests with `python3 -m pytest -q`."
+Repository: `marcioapm/dude-factory-scratch`, a small Python package
+(`textkit`: word counting, slugs, wrapping). Default policy: `blocking` and
+`high` findings start a fix; lower ones go into the PR. GitHub could not
+reach the local backend's webhook, so PR activity came through the
+reconciler, set to every 2 minutes for the runs.
+
+| Work item | Runs | Fix loop | Findings | Agent time | PR |
+| --- | --- | --- | --- | --- | --- |
+| 1. Add `reading_time` (function and tests) | implement, review, simplify* | none needed | 2 low, 2 note | 1m 27s | #3 |
+| 2. Fix a planted off-by-one in `wrap` | implement, review, simplify, PR fix | none needed; one PR comment fixed | 1 low | 1m 20s | #4 |
+| 3. `stats()` and a `python -m textkit stats` CLI | implement, review, simplify | **should have run, did not** | 1 medium, 1 low, 1 note | 4m 39s | #5 |
+| 3, rerun with the prompt fix | implement, review, fix, review, simplify, PR fix | 1 iteration, converged | 1 high + 1 medium fixed; 1 low, 1 note open | 6m 47s | #6 |
+
+\* the first simplify was lost with a lux environment taken down under it;
+see below.
+
+Wall-clock time from delivery to open PR was the agent time plus a few
+seconds per phase: lux started every container within 1–3 seconds.
+
+**Cost: unknown.** OpenCode reports `usage_update` with a cost of 0 for
+llmproxy models, because the provider config gives them no prices, so every
+Run's `agent_cost_usd` is 0. Context size is reported (`used`), tokens per
+request are not. Budgets as loop bounds need a cost source: prices in the
+provider config, or llmproxy's own accounting.
+
+### What worked
+
+- **The implementer does the job.** Every implement Run read the code,
+  reused what was there (`count_words`), wrote tests, ran them, and committed
+  with a sensible message. It found the planted bug in `wrap` from the task
+  description alone, in 29 seconds, and added boundary tests that fail on the
+  old code.
+- **The reviewer is good, and checks its claims.** Opus ran the code
+  before reporting: it wrote throwaway scripts for edge cases (`wpm=0`,
+  undecodable input), and for item 2 it ran the new tests against the
+  pre-fix code to show which of them actually catch the bug. Its findings
+  were specific and correct: a UTF-8 file crashing the CLI with a
+  traceback, a sentence counter counting punctuation-only fragments, a test
+  asserting `>= 1` where `== 1` was meant.
+- **Findings parsed every time.** Four reviews, 13 findings, all in the
+  requested YAML, all recorded with file and line. Nothing needed the
+  parser's tolerance.
+- **The loop converged.** On the rerun of item 3, one fix Run addressed
+  both findings, the re-review found nothing blocking, and the PR opened.
+  Both findings were retired as "file rewritten" by the re-review rule.
+- **PR comments reach a fixer.** A comment on the PR, seen by the
+  reconciler, started a fix Run that did what was asked and pushed to the
+  PR branch. No force-push; the per-Run branches were cleaned up.
+- **The simplifier shows restraint.** On a one-line fix it changed nothing
+  and said why; on item 3 it removed a regex that had been duplicated
+  between two modules.
+
+### What went wrong, and what changed
+
+1. **A reviewer's `medium` finding was an unmet acceptance criterion, and
+   the PR opened anyway.** Item 3 asked for "a missing file exits 1 with a
+   message, not a traceback"; the reviewer showed an undecodable file giving
+   a traceback, and called it `medium`. Only `blocking` and `high` start a
+   fix, so it went into the PR as an open finding. The reviewer did not
+   know what its severity would cause. **Fix:** the finding format now says
+   so: `blocking`/`high` go back for a fix, lower goes to a person, and an
+   unmet acceptance criterion is `high` at least. On the rerun the same
+   problem came back as `high` and was fixed before the PR opened.
+2. **A PR fix was handed every open finding, not just the comment.** The
+   fix Run for a PR comment also got the review's open `low` and `note`
+   findings — ones deliberately left for a person — and fixed them all,
+   widening a one-line request into three changes across five files
+   (`dd658ce` on #6). With the fix, the comment on #4 produced one test and
+   nothing else. **Fix:** a fix for
+   PR feedback is handed that feedback only.
+3. **A Run lux lost was followed forever.** The detached lux environment
+   was taken down while item 1's simplifier ran (another session's test run
+   reclaimed it). The orchestrator got 404 from lux and retried the stream
+   every second, for good; the phase never finished. **Fix:** 404 on the
+   stream fails the Run, and a failed simplify does not fail the work item,
+   so item 1 went on to its PR.
+4. **The PR body said "4 findings across 4 reviewers" from one reviewer.**
+   It counted finding categories. **Fix:** it counts review Runs.
+5. **Every tool completion was recorded as a tool named "tool".**
+   OpenCode's completion updates carry neither title nor kind. **Fix:** a
+   completion keeps the name its call started with.
+6. **The runtime image had no pytest.** The project's context tells agents
+   to run it; the first implementer found it missing. **Fix:** added to the
+   image.
+
+### Still open
+
+- **Cost.** See above.
+- **Scope creep from the implementer.** Nothing yet, but the tasks were
+  small. Watch for it on bigger ones.
+- **One reviewer.** Only `correctness` ran; the fan-out picks reviewers
+  by changed paths, and a Python package matched nothing else. A project
+  should be able to name the reviewers it always wants.
+- **Webhooks from GitHub to a laptop.** The reconciler carried every PR
+  event here. `gh webhook forward` would exercise the real path.
+- **Review took 14–18 seconds each time.** Fast enough that a second
+  reviewer flavour costs little; worth trying on item 3's size.

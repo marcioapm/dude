@@ -27,6 +27,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
+	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
@@ -351,6 +352,52 @@ func TestTheAgentsWorkReachesTheLedgerAsAConversation(t *testing.T) {
 	// session are kept.
 	if r := w.lux.Runs()[0]; r.Stopped != 1 || r.Cancelled {
 		t.Errorf("lux run stopped=%d cancelled=%v", r.Stopped, r.Cancelled)
+	}
+}
+
+func TestAPullRequestFixIsHandedTheFeedbackAndNotTheFindingsLeftOpen(t *testing.T) {
+	w := newWorld(t)
+	// A reviewer that only has a minor point: the PR opens with it open.
+	minor := strings.Replace(fakeagent.Finding, "severity: blocking", "severity: low", 1)
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		switch labels["dude.phase"] {
+		case "review":
+			return fakelux.Behaviour{Reply: "```yaml\n" + minor + "```\n"}
+		case "implement", "fix":
+			return fakelux.Behaviour{Commit: map[string]string{labels["dude.phase"].(string) + ".md": "x\n"}, Message: "work"}
+		}
+		return fakelux.Behaviour{Reply: "Nothing to simplify."}
+	}
+	wi := w.workItem()
+	w.deliver(wi)
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	// The fixer is a real model, so its spec carries the prompt a real agent gets.
+	mustExec(t, w.owner, `UPDATE projects SET agent_models = agent_models || '{"implementer":{"model":"llm/impl"}}'::jsonb
+		WHERE id = $1`, w.project)
+
+	w.gh.Comment(1, "reviewer-person", "Please rename the greeting.")
+	w.until("a fix for the comment", func() bool {
+		_, _ = w.prs.Reconcile(context.Background(), 0)
+		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND phase = 'fix'`, wi) == 1
+	})
+	var prompt string
+	w.until("the fix to reach lux", func() bool {
+		for _, r := range w.lux.Runs() {
+			var spec lux.Spec
+			_ = json.Unmarshal(r.Spec, &spec)
+			if spec.Labels["dude.phase"] == "fix" {
+				prompt = spec.Workload.Prompt
+				return true
+			}
+		}
+		return false
+	})
+	if !strings.Contains(prompt, "Please rename the greeting.") {
+		t.Errorf("the fix was not handed the comment:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "does not record the fix") {
+		t.Errorf("the fix was handed a review finding nobody asked it to fix:\n%s", prompt)
 	}
 }
 

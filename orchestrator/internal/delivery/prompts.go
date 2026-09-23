@@ -71,6 +71,10 @@ const findingFormat = "Report each finding as one YAML document, separated by `-
 	"description: What is wrong and why it matters.\n" +
 	"suggested_fix: What to do instead.\n" +
 	"```\n\n" +
+	"Severity decides what happens next: `blocking` and `high` send the change back " +
+	"to be fixed before a pull request opens; anything lower goes into the pull " +
+	"request for a person to weigh. So a finding that means an acceptance criterion " +
+	"is not met is `high` at least, however small the fix.\n\n" +
 	"Report nothing if you find nothing. A finding you are not confident in is a " +
 	"`note`, not a `blocking` — a reviewer that cries wolf costs the next fix " +
 	"attempt for nothing."

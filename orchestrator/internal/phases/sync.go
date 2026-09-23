@@ -206,6 +206,8 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 	var title, goal, image string
 	var criteria, projectModels, orgModels json.RawMessage
 	var findings []delivery.Finding
+	var feedback []forge.ActionableFeedback
+	_ = json.Unmarshal(r.PRFeedback, &feedback)
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
 			SELECT w.title, w.goal, w.acceptance_criteria, COALESCE(p.runtime_image, ''), p.agent_models,
@@ -216,7 +218,10 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 			Scan(&title, &goal, &criteria, &image, &projectModels, &in.RepoName, &in.RepoURL, &in.Ref); err != nil {
 			return fmt.Errorf("load work item and repository: %w", err)
 		}
-		if r.Phase == delivery.PhaseFix {
+		// A fix for pull request feedback is handed that feedback only. The
+		// open findings are review's: low ones a person chose to leave, and a
+		// fixer handed both takes on work nobody asked this fix to do.
+		if r.Phase == delivery.PhaseFix && len(feedback) == 0 {
 			rows, err := tx.Query(ctx, `SELECT severity::text, category, title, description, suggested_fix,
 				COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0)
 				FROM review_findings WHERE work_item_id = $1 AND status = 'open'
@@ -245,8 +250,6 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 
 	var ac []string
 	_ = json.Unmarshal(criteria, &ac)
-	var feedback []forge.ActionableFeedback
-	_ = json.Unmarshal(r.PRFeedback, &feedback)
 
 	if r.BaseRef != "" {
 		in.Ref = r.BaseRef
