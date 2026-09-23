@@ -52,6 +52,9 @@ export async function listenForEvents(databaseUrl: string): Promise<() => Promis
   };
 
   const { unlisten } = await sql.listen("dude_events", (payload) => {
+    // Nobody watching: nothing to read. A browser that connects later
+    // backfills from the ledger by cursor.
+    if (eventBus.subscriberCount === 0) return;
     let notice: Notice;
     try {
       notice = JSON.parse(payload) as Notice;

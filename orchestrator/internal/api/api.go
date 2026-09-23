@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -60,6 +61,14 @@ func (s *Server) Handler() http.Handler {
 }
 
 type handler func(w http.ResponseWriter, r *http.Request, org string) error
+
+// actor is who the backend says made the request.
+func actor(r *http.Request) string {
+	if a := r.Header.Get("X-Dude-Actor"); a != "" {
+		return a
+	}
+	return "unknown"
+}
 
 // httpError is an error with a status for the caller.
 type httpError struct {
@@ -198,19 +207,9 @@ func loadRun(ctx context.Context, tx pgx.Tx, runID string) (runInfo, error) {
 	return ri, err
 }
 
-func isLive(status string) bool {
-	for _, s := range liveStatuses {
-		if s == status {
-			return true
-		}
-	}
-	return false
-}
+func isLive(status string) bool { return slices.Contains(liveStatuses, status) }
 
 func humanEvent(ctx context.Context, tx pgx.Tx, org, runID string, ri runInfo, typ, actor string, payload map[string]any) error {
-	if actor == "" {
-		actor = "unknown"
-	}
 	_, err := ledger.Append(ctx, tx, ledger.Event{
 		Type: typ, OrganizationID: org, ProjectID: ri.ProjectID, WorkItemID: ri.WorkItemID, RunID: runID,
 		ActorType: ledger.ActorHuman, ActorID: actor, Source: ledger.SourceOrchestrator,
@@ -230,8 +229,7 @@ func (s *Server) steer(w http.ResponseWriter, r *http.Request, org string) error
 		// Stop the agent's current turn so it hears this now. Otherwise an
 		// agent that cannot take a message mid-turn hears it when the turn
 		// ends.
-		Interrupt bool   `json:"interrupt"`
-		ActorID   string `json:"actorId"`
+		Interrupt bool `json:"interrupt"`
 	}
 	if err := read(r, &body); err != nil {
 		return err
@@ -255,14 +253,14 @@ func (s *Server) steer(w http.ResponseWriter, r *http.Request, org string) error
 		var createdAt any
 		if err := tx.QueryRow(r.Context(), `INSERT INTO directives (id, organization_id, work_item_id, run_id, text, scope, supersedes, interrupt)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING created_at`,
-			id, org, ri.WorkItemID, runID, body.Text, body.Scope, nullable(body.Supersedes), body.Interrupt).Scan(&createdAt); err != nil {
+			id, org, ri.WorkItemID, runID, body.Text, body.Scope, db.Nullable(body.Supersedes), body.Interrupt).Scan(&createdAt); err != nil {
 			return err
 		}
 		out = map[string]any{"id": id, "runId": runID, "workItemId": ri.WorkItemID, "text": body.Text,
-			"scope": body.Scope, "supersedes": nullable(body.Supersedes), "interrupt": body.Interrupt,
+			"scope": body.Scope, "supersedes": db.Nullable(body.Supersedes), "interrupt": body.Interrupt,
 			"deliveredAt": nil, "createdAt": createdAt}
-		return humanEvent(r.Context(), tx, org, runID, ri, "run.steered", body.ActorID, map[string]any{
-			"directiveId": id, "text": body.Text, "scope": body.Scope, "supersedes": nullable(body.Supersedes),
+		return humanEvent(r.Context(), tx, org, runID, ri, "run.steered", actor(r), map[string]any{
+			"directiveId": id, "text": body.Text, "scope": body.Scope, "supersedes": db.Nullable(body.Supersedes),
 			"interrupt": body.Interrupt})
 	})
 	if err != nil {
@@ -276,9 +274,7 @@ func (s *Server) steer(w http.ResponseWriter, r *http.Request, org string) error
 // pause records the request; the Run becomes paused once lux has stopped it.
 func (s *Server) pause(w http.ResponseWriter, r *http.Request, org string) error {
 	runID := r.PathValue("id")
-	var body struct {
-		Mode, Reason, ActorID string
-	}
+	var body struct{ Mode, Reason string }
 	if err := read(r, &body); err != nil {
 		return err
 	}
@@ -298,15 +294,15 @@ func (s *Server) pause(w http.ResponseWriter, r *http.Request, org string) error
 			return fail(http.StatusConflict, "conflict", "run %s is %s and cannot be paused", runID, ri.Status)
 		}
 		if _, err := tx.Exec(r.Context(), `UPDATE runs SET control = $2::run_control, control_requested_at = now(),
-			control_reason = $3 WHERE id = $1`, runID, control, nullable(body.Reason)); err != nil {
+			control_reason = $3 WHERE id = $1`, runID, control, db.Nullable(body.Reason)); err != nil {
 			return err
 		}
 		mode := body.Mode
 		if mode == "" {
 			mode = "graceful"
 		}
-		return humanEvent(r.Context(), tx, org, runID, ri, "run.paused", body.ActorID,
-			map[string]any{"mode": mode, "requested": true, "reason": nullable(body.Reason)})
+		return humanEvent(r.Context(), tx, org, runID, ri, "run.paused", actor(r),
+			map[string]any{"mode": mode, "requested": true, "reason": db.Nullable(body.Reason)})
 	})
 	if err != nil {
 		return err
@@ -320,7 +316,7 @@ func (s *Server) pause(w http.ResponseWriter, r *http.Request, org string) error
 // the transcript lux kept; nothing starts over.
 func (s *Server) resume(w http.ResponseWriter, r *http.Request, org string) error {
 	runID := r.PathValue("id")
-	var body struct{ Reason, ActorID string }
+	var body struct{ Reason string }
 	if err := read(r, &body); err != nil {
 		return err
 	}
@@ -332,13 +328,13 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request, org string) erro
 		if ri.Status != "paused" {
 			return fail(http.StatusConflict, "conflict", "run %s is %s, not paused", runID, ri.Status)
 		}
-		// Clearing the stop reason is the request; the syncer resumes the lux
-		// Run and moves it back to running.
-		if _, err := tx.Exec(r.Context(), `UPDATE runs SET lux_stop_reason = NULL, control = 'none',
-			control_requested_at = NULL, control_reason = NULL WHERE id = $1`, runID); err != nil {
+		// A request, like pause and abort; the syncer resumes the lux Run
+		// and moves it back to running.
+		if _, err := tx.Exec(r.Context(), `UPDATE runs SET control = 'resume', control_requested_at = now(),
+			control_reason = $2 WHERE id = $1`, runID, db.Nullable(body.Reason)); err != nil {
 			return err
 		}
-		return humanEvent(r.Context(), tx, org, runID, ri, "run.resumed", body.ActorID, map[string]any{"reason": nullable(body.Reason)})
+		return humanEvent(r.Context(), tx, org, runID, ri, "run.resumed", actor(r), map[string]any{"reason": db.Nullable(body.Reason)})
 	})
 	if err != nil {
 		return err
@@ -353,7 +349,7 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request, org string) erro
 // not erase it.
 func (s *Server) abort(w http.ResponseWriter, r *http.Request, org string) error {
 	runID := r.PathValue("id")
-	var body struct{ Reason, ActorID string }
+	var body struct{ Reason string }
 	if err := read(r, &body); err != nil {
 		return err
 	}
@@ -368,7 +364,7 @@ func (s *Server) abort(w http.ResponseWriter, r *http.Request, org string) error
 		}
 		workItemID = ri.WorkItemID
 		if _, err := tx.Exec(r.Context(), `UPDATE runs SET status = 'aborted', control = 'abort', control_requested_at = now(),
-			control_reason = $2, ended_at = now() WHERE id = $1`, runID, nullable(body.Reason)); err != nil {
+			control_reason = $2, ended_at = now() WHERE id = $1`, runID, db.Nullable(body.Reason)); err != nil {
 			return err
 		}
 		// The work item stops too: an aborted Run should not leave its work
@@ -377,7 +373,7 @@ func (s *Server) abort(w http.ResponseWriter, r *http.Request, org string) error
 			WHERE id = $1 AND status NOT IN ('done', 'failed', 'aborted')`, ri.WorkItemID); err != nil {
 			return err
 		}
-		return humanEvent(r.Context(), tx, org, runID, ri, "run.aborted", body.ActorID, map[string]any{"reason": nullable(body.Reason)})
+		return humanEvent(r.Context(), tx, org, runID, ri, "run.aborted", actor(r), map[string]any{"reason": db.Nullable(body.Reason)})
 	})
 	if err != nil {
 		return err
@@ -421,11 +417,4 @@ func write(w http.ResponseWriter, status int, v any) {
 // refusal straight through to the user.
 func errBody(code, message string) map[string]any {
 	return map[string]any{"error": map[string]string{"code": code, "message": message}}
-}
-
-func nullable(s string) any {
-	if s == "" {
-		return nil
-	}
-	return s
 }

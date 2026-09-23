@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
@@ -95,10 +95,6 @@ const (
 	agentHome    = "/home/agent"
 )
 
-// FakeModelPrefix selects the scripted fake agent: deterministic, free, and
-// what the tests use to drive the whole pipeline without a model.
-const FakeModelPrefix = "fake/"
-
 // specInput is everything a phase Run's spec is built from.
 type specInput struct {
 	RunID, OrganizationID, WorkItemID, Phase, Role string
@@ -108,9 +104,6 @@ type specInput struct {
 	RepoName, RepoURL, Ref                         string
 	PushBranch                                     string
 	ForgeToken                                     string
-	// Fake agent only: whether a fixer has already been through, which is
-	// what the scripted reviewer's verdict depends on.
-	FixesDone int
 }
 
 // buildSpec turns a phase Run into a lux RunSpec.
@@ -152,15 +145,14 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		spec.Git.Push = &lux.Push{Branch: in.PushBranch}
 	}
 
-	if strings.HasPrefix(in.Model, FakeModelPrefix) {
+	// The scripted agent, for tests: lux-fake speaking ACP, following the
+	// script fakeagent writes for this phase. The model is a label too, so a
+	// stand-in for lux can play the same agent without parsing the script.
+	if fakeagent.Is(in.Model) {
+		spec.Labels["dude.model"] = in.Model
 		spec.Workload.Adapter = "acp"
 		spec.Workload.Command = []string{"lux-fake"}
-		spec.Workload.Prompt = fakeScript(in.Phase, in.RunID, in.FixesDone)
-		// A task marked [hang] keeps its agent busy, so a test has a live
-		// agent to steer, pause and abort.
-		if strings.Contains(in.Prompt, "[hang]") {
-			spec.Workload.Prompt = "sleep 3600\n" + spec.Workload.Prompt
-		}
+		spec.Workload.Prompt = fakeagent.Script(in.Phase, in.Model, in.RunID)
 		return spec
 	}
 
@@ -203,48 +195,4 @@ func egress(c AgentConfig) *lux.Network {
 		n.Egress = append(n.Egress, lux.EgressRule{Host: h})
 	}
 	return n
-}
-
-// fakeScript is what the scripted agent does for one phase, in lux-fake's
-// script language (lux/cmd/lux-fake). Test-only, and the reason the whole
-// pipeline can run without a model.
-//
-// The reviewer raises one blocking finding until a fixer has been through,
-// then reports clean — exactly the shape the review → fix loop needs: one
-// cycle, then convergence. Its reply is assembled in a file and read back,
-// because each reply line would otherwise run into the next.
-func fakeScript(phase, runID string, fixesDone int) string {
-	commit := func(file, text, msg string) string {
-		return fmt.Sprintf("append %s %s\ncommit %s", file, text, msg)
-	}
-	switch phase {
-	case delivery.PhaseImplement:
-		return commit("FACTORY.md", "Written by run "+runID, "Add FACTORY.md for "+runID)
-	case delivery.PhaseFix:
-		// Content names the Run, so a second fix is still a change.
-		return commit("FIXED.md", "addressed by "+runID, "Address review findings for "+runID)
-	case delivery.PhaseSimplify:
-		return commit("FACTORY.md", "simplified", "Simplify "+runID)
-	case delivery.PhaseReview:
-		if fixesDone > 0 {
-			return "echo reviewed the fix; no further problems"
-		}
-		lines := []string{
-			"---",
-			"severity: blocking",
-			"category: correctness",
-			"file: FACTORY.md",
-			"line: 1",
-			"title: FACTORY.md does not record the fix",
-			"description: The change is missing a record that the review was addressed.",
-			"suggested_fix: Add a file naming what was fixed.",
-		}
-		var b strings.Builder
-		for _, l := range lines {
-			b.WriteString("append /tmp/review.yaml " + l + "\n")
-		}
-		b.WriteString("read /tmp/review.yaml")
-		return b.String()
-	}
-	return "echo nothing to do for " + phase
 }

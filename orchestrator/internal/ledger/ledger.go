@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
 )
 
@@ -20,16 +21,14 @@ import (
 const (
 	SourceOrchestrator = "control-plane"
 	SourceRunner       = "runner"
-	SourceHarness      = "harness"
 	SourceGitHub       = "github"
 )
 
 // Actor types.
 const (
-	ActorSystem      = "system"
-	ActorAgent       = "agent"
-	ActorHuman       = "human"
-	ActorIntegration = "integration"
+	ActorSystem = "system"
+	ActorAgent  = "agent"
+	ActorHuman  = "human"
 )
 
 type Event struct {
@@ -53,7 +52,11 @@ type Event struct {
 // rolls back with the state change that produced it.
 func Append(ctx context.Context, tx pgx.Tx, e Event) (string, error) {
 	id := ids.New(ids.Event)
-	payload, err := json.Marshal(nonNil(e.Payload))
+	payload := []byte("{}")
+	var err error
+	if e.Payload != nil {
+		payload, err = json.Marshal(e.Payload)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -67,23 +70,7 @@ func Append(ctx context.Context, tx pgx.Tx, e Event) (string, error) {
 		                    actor_type, actor_id, source, correlation_id, causation_id, payload)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb)`,
 		id, e.OrganizationID, e.Type, occurred,
-		null(e.ProjectID), null(e.WorkItemID), null(e.RunID), null(e.SessionID), null(e.WorkflowRunID),
-		e.ActorType, e.ActorID, e.Source, null(e.CorrelationID), null(e.CausationID), payload)
+		db.Nullable(e.ProjectID), db.Nullable(e.WorkItemID), db.Nullable(e.RunID), db.Nullable(e.SessionID), db.Nullable(e.WorkflowRunID),
+		e.ActorType, e.ActorID, e.Source, db.Nullable(e.CorrelationID), db.Nullable(e.CausationID), payload)
 	return id, err
-}
-
-func nonNil(m map[string]any) map[string]any {
-	if m == nil {
-		return map[string]any{}
-	}
-	return m
-}
-
-// null turns "" into SQL NULL: the scope columns are nullable, and an empty
-// string would read as "belongs to the entity with no id".
-func null(s string) any {
-	if s == "" {
-		return nil
-	}
-	return s
 }

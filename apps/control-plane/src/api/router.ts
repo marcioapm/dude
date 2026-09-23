@@ -26,7 +26,6 @@ type Handler = (ctx: RequestContext) => Promise<Response> | Response;
 
 /** Per-route authentication options. */
 export interface RouteOptions {
-  requireKind?: Principal["kind"];
   allowKeyInQuery?: boolean;
 }
 type PublicHandler = (ctx: PublicContext) => Promise<Response> | Response;
@@ -36,8 +35,6 @@ interface Route {
   segments: string[];
   handler: Handler | PublicHandler;
   public: boolean;
-  /** Restricts a route to one principal kind, e.g. runner-only endpoints. */
-  requireKind?: Principal["kind"] | undefined;
   /**
    * Accept the API key as a `key` query parameter.
    *
@@ -62,7 +59,6 @@ export class Router {
       segments: pattern.split("/").filter(Boolean),
       handler,
       public: opts.public ?? false,
-      requireKind: opts.requireKind,
       allowKeyInQuery: opts.allowKeyInQuery,
     });
     return this;
@@ -115,13 +111,6 @@ export class Router {
             (route.allowKeyInQuery ? url.searchParams.get("key") : null),
         );
         if (!principal) throw unauthorized();
-        // User keys only, unless a route says otherwise. Runner keys belong
-        // to the retired runner protocol; one left behind must not become a
-        // key to the product API.
-        const kind = route.requireKind ?? "user";
-        if (principal.kind !== kind) {
-          throw unauthorized(`this endpoint requires a ${kind} key`);
-        }
 
         return await (route.handler as Handler)({ request, url, params, principal });
       }

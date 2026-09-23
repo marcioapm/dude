@@ -16,10 +16,8 @@ ALTER TABLE runs
   -- The lux Run executing this one. Unique: one dude Run is one lux Run,
   -- however many times it is paused and resumed.
   ADD COLUMN lux_run_id      text UNIQUE,
-  -- The lux Run's state as last observed (submitted, running, stopped, …),
-  -- and lux's explanation of it ("exit code 3", "timeout").
+  -- The lux Run's state as last observed (submitted, running, stopped, …).
   ADD COLUMN lux_state        text,
-  ADD COLUMN lux_state_reason text,
   -- Where reading the lux Run's output resumes. Advanced in the same
   -- transaction as the ledger events it produced, so a restart neither
   -- repeats nor skips any of them.
@@ -32,9 +30,6 @@ ALTER TABLE runs
   -- reason that may pass (a quota, lux being unreachable).
   ADD COLUMN next_attempt_at timestamptz,
 
-  -- The agent's own session id, which is what lets a resume continue the
-  -- conversation rather than start a new one.
-  ADD COLUMN agent_session_id text,
   -- The lux placement (epoch) whose agent session has been established.
   -- A resumed agent replays its history before it is ready, and that
   -- replay must not be recorded a second time.
@@ -47,11 +42,9 @@ ALTER TABLE runs
   -- before it has been given anything to do.
   ADD COLUMN agent_busy_at   timestamptz,
   ADD COLUMN turn_done_at    timestamptz,
-  -- busy or idle, as the agent last reported it.
-  ADD COLUMN agent_activity  text,
-  -- Reply text streamed since the last complete message. Kept on the row,
-  -- with the cursor, so a restart mid-sentence loses nothing: the message is
-  -- recorded whole when the agent calls a tool or ends its turn.
+  -- Reply text streamed since the last complete message, saved with the
+  -- cursor, so a restart mid-sentence loses nothing: the message is recorded
+  -- whole when the agent calls a tool or ends its turn.
   ADD COLUMN agent_message_buffer text NOT NULL DEFAULT '',
 
   -- The commit the checkout started from, as lux reported it. A phase with
@@ -77,6 +70,10 @@ CREATE UNIQUE INDEX runs_creation_key_idx ON runs (work_item_id, creation_key)
 -- A directive is sent to lux, then acknowledged by the agent. `delivered_at`
 -- keeps meaning "the agent has it"; `sent_at` stops it being sent twice.
 ALTER TABLE directives ADD COLUMN sent_at timestamptz;
+
+-- A person's request to resume a paused Run, alongside pause and abort: the
+-- orchestrator acts on it and clears it.
+ALTER TYPE run_control ADD VALUE 'resume';
 -- Whether the directive stops the agent's current turn to be heard now.
 -- Without it, an agent that cannot take a message mid-turn (OpenCode, and any
 -- ACP agent) hears it when the turn ends — which can be a long time.
@@ -181,3 +178,7 @@ DROP TABLE runtime_instances;
 DROP TABLE workers;
 DROP TYPE runtime_status;
 DROP TYPE worker_status;
+
+-- Runner keys authenticated the retired runner. Nothing accepts them now;
+-- revoking them says so in the data too.
+UPDATE api_keys SET revoked_at = now() WHERE kind = 'runner' AND revoked_at IS NULL;

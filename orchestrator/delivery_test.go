@@ -44,9 +44,6 @@ func logSink() io.Writer {
 	return io.Discard
 }
 
-const blockingFinding = "---\nseverity: blocking\ncategory: correctness\nfile: FACTORY.md\nline: 1\n" +
-	"title: FACTORY.md does not record the fix\ndescription: Missing.\nsuggested_fix: Add FIXED.md.\n"
-
 type world struct {
 	t       *testing.T
 	app     *db.DB
@@ -86,32 +83,13 @@ func newWorld(t *testing.T) *world {
 	ghSrv := httptest.NewServer(w.gh.Handler())
 	t.Cleanup(ghSrv.Close)
 
-	// The scripted agents: the implementer and fixer commit, the reviewer
-	// raises one blocking finding until a fixer has been through.
-	w.lux = fakelux.New(bare, "lux-key", func(spec map[string]any) fakelux.Behaviour {
-		labels, _ := spec["labels"].(map[string]any)
-		switch labels["dude.phase"] {
-		case "implement":
-			return fakelux.Behaviour{Reply: "Implemented it.", Tools: []string{"bash"}, Commit: map[string]string{"FACTORY.md": "made\n"}}
-		case "review":
-			// Reviewing a tree that already has the fixer's file is reviewing
-			// a fix: it reports clean, so the loop converges.
-			if exec.Command("git", "-C", bare, "cat-file", "-e", specRef(spec)+":FIXED.md").Run() == nil {
-				return fakelux.Behaviour{Reply: "Looks right now."}
-			}
-			return fakelux.Behaviour{Reply: "One problem:\n\n```yaml\n" + blockingFinding + "```\n"}
-		case "fix":
-			return fakelux.Behaviour{Reply: "Fixed.", Commit: map[string]string{"FIXED.md": "fixed " + fmt.Sprint(time.Now().UnixNano()) + "\n"}}
-		case "simplify":
-			return fakelux.Behaviour{Reply: "Nothing to simplify."}
-		}
-		return fakelux.Behaviour{Reply: "?"}
-	})
+	// dude's scripted agent (internal/fakeagent), played by the fake lux.
+	w.lux = fakelux.New(bare, "lux-key", nil)
 	luxSrv := httptest.NewServer(w.lux.Handler())
 	t.Cleanup(luxSrv.Close)
 
 	w.project, w.repoID = "prj_"+w.org, "repo_"+w.org
-	models := `{"implementer":{"model":"llm/impl"},"reviewer":{"model":"llm/rev"},"simplifier":{"model":"llm/simp"}}`
+	models := `{"implementer":{"model":"fake/scripted"},"reviewer":{"model":"fake/scripted"},"simplifier":{"model":"fake/scripted"}}`
 	mustExec(t, owner, `INSERT INTO projects (id, organization_id, name, slug, agent_models, runtime_image)
 		VALUES ($1, $2, 'P', $1, $3::jsonb, 'agent:test')`, w.project, w.org, models)
 	mustExec(t, owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
@@ -132,14 +110,6 @@ func newWorld(t *testing.T) *world {
 		}}
 	_ = ctx
 	return w
-}
-
-func specRef(spec map[string]any) string {
-	git, _ := spec["git"].(map[string]any)
-	repos, _ := git["repositories"].([]any)
-	repo, _ := repos[0].(map[string]any)
-	ref, _ := repo["ref"].(string)
-	return ref
 }
 
 func mustExec(t *testing.T, c *pgx.Conn, sql string, args ...any) {
@@ -242,10 +212,11 @@ func TestADeliveryReachesAPullRequestAndAMergeFinishesIt(t *testing.T) {
 	if pr.Head != branch || pr.Base != "main" {
 		t.Errorf("PR head=%s base=%s, want %s into main", pr.Head, pr.Base, branch)
 	}
-	// The implementer's and the fixer's work both reached the branch, by
-	// fast-forward.
-	if got := w.gh.Log(branch); len(got) != 3 {
-		t.Errorf("branch history = %v, want initial + implement + fix", got)
+	// Every publishing phase reached the branch, by fast-forward.
+	got := w.gh.Log(branch)
+	if len(got) != 4 || !strings.HasPrefix(got[0], "Simplify") || !strings.HasPrefix(got[1], "Address review findings") ||
+		!strings.HasPrefix(got[2], "Add FACTORY.md") {
+		t.Errorf("branch history = %v, want implement, fix and simplify on top of main", got)
 	}
 	// Each phase pushed its own branch, and dude cleaned them up.
 	if out, _ := exec.Command("git", "-C", w.gh.Repo, "branch", "--list", "dude/"+wi+"/run-*").Output(); len(strings.TrimSpace(string(out))) > 0 {
@@ -281,6 +252,9 @@ func TestADeliveryReachesAPullRequestAndAMergeFinishesIt(t *testing.T) {
 
 func TestWhatDudeSendsLux(t *testing.T) {
 	w := newWorld(t)
+	// A real model, so the spec is the one a real agent gets.
+	mustExec(t, w.owner, `UPDATE projects SET agent_models = '{"implementer":{"model":"llm/impl"}}'::jsonb WHERE id = $1`, w.project)
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
 	wi := w.workItem()
 	w.deliver(wi)
 	w.until("the implementer to be submitted", func() bool { return len(w.lux.Runs()) >= 1 })
@@ -355,7 +329,7 @@ func TestTheAgentsWorkReachesTheLedgerAsAConversation(t *testing.T) {
 		t.Errorf("messages = %q", text)
 	}
 	for typ, want := range map[string]int{
-		"agent.tool.called": 1, "agent.tool.completed": 1, "agent.session.started": 1,
+		"agent.session.started":         1,
 		"agent.model.request.completed": 1, "run.started": 1, "run.completed": 1, "git.commit_created": 1,
 	} {
 		if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = $2`, runID, typ); n != want {
@@ -452,10 +426,10 @@ func TestPauseKeepsTheRunAndResumeContinuesIt(t *testing.T) {
 		t.Errorf("lux run stopped=%d state=%s", r.Stopped, r.State)
 	}
 
-	// The backend's resume clears the stop reason; the syncer does the rest.
+	// A directive given while paused, then the request to resume.
 	mustExec(t, w.owner, `INSERT INTO directives (id, organization_id, work_item_id, run_id, text) VALUES ('dir_r', $1, $2, $3, 'carry on')`,
 		w.org, wi, runID)
-	mustExec(t, w.owner, `UPDATE runs SET lux_stop_reason = NULL WHERE id = $1`, runID)
+	mustExec(t, w.owner, `UPDATE runs SET control = 'resume' WHERE id = $1`, runID)
 	w.until("the resumed run to finish its turn", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
 	})
@@ -468,7 +442,10 @@ func TestPauseKeepsTheRunAndResumeContinuesIt(t *testing.T) {
 		t.Errorf("resume made a new lux run")
 	}
 	if len(r.Inputs) != 1 || r.Inputs[0] != "carry on" {
-		t.Errorf("a directive given while paused was not carried by the resume: %v", r.Inputs)
+		t.Errorf("a directive given while paused was not delivered after the resume: %v", r.Inputs)
+	}
+	if n := w.count(`SELECT count(*) FROM directives WHERE id = 'dir_r' AND delivered_at IS NOT NULL`); n != 1 {
+		t.Errorf("a directive delivered after a resume was never acknowledged")
 	}
 	// The session started once, even across two placements.
 	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'agent.session.started'`, runID); n != 1 {

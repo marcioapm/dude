@@ -17,10 +17,6 @@ from fake_github import FakeGitHub
 from helpers import ApiClient, wait_until
 
 
-def _runs(client: ApiClient, work_item_id: str) -> list[dict]:
-    return client.get(f"/v1/work-items/{work_item_id}").json().get("runs", [])
-
-
 def test_delivery_requires_a_repository(client: ApiClient, project: dict):
     """The orchestrator's refusal reaches the user, in the API's own shape."""
     work_item = client.create_work_item(project["id"], "Nowhere to push")
@@ -70,11 +66,11 @@ def test_the_review_fix_loop_converges_and_the_ledger_shows_it(
     client.post(f"/v1/work-items/{work_item['id']}/deliver")
 
     wait_until(
-        lambda: any(r["phase"] == "simplify" and r["status"] == "completed" for r in _runs(client, work_item["id"])),
+        lambda: any(r["phase"] == "simplify" and r["status"] == "completed" for r in client.work_item_runs(work_item["id"])),
         timeout=60,
         message="the loop never converged to simplify",
     )
-    phases = [(r["phase"], r["status"]) for r in sorted(_runs(client, work_item["id"]), key=lambda r: r["createdAt"])]
+    phases = [(r["phase"], r["status"]) for r in client.work_item_runs(work_item["id"])]
     assert phases == [
         ("implement", "completed"),
         ("review", "completed"),
@@ -89,19 +85,21 @@ def test_the_review_fix_loop_converges_and_the_ledger_shows_it(
     # loop converge rather than stop at its bound.
     assert findings[0]["status"] == "resolved"
 
-    implement = next(r for r in _runs(client, work_item["id"]) if r["phase"] == "implement")
+    implement = next(r for r in client.work_item_runs(work_item["id"]) if r["phase"] == "implement")
     types = [e["eventType"] for e in client.events(runId=implement["id"])]
-    for expected in ("agent.session.started", "agent.tool.called", "agent.message", "run.completed"):
+    for expected in ("agent.session.started", "agent.message", "git.commit_created", "run.completed"):
         assert expected in types, f"{expected} missing from the implementer's timeline: {types}"
 
 
 def test_steer_pause_resume_and_abort_reach_the_agent(client: ApiClient, forge_project: dict):
     """Run control goes user → backend → orchestrator → lux, and back as events."""
-    work_item = client.create_work_item(forge_project["id"], "Hold on", goal="[hang] wait to be steered")
+    # An agent that never finishes its turn, to have something live to control.
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {"implementer": {"model": "fake/hang"}}})
+    work_item = client.create_work_item(forge_project["id"], "Hold on")
     client.post(f"/v1/work-items/{work_item['id']}/deliver")
 
     run = wait_until(
-        lambda: next((r for r in _runs(client, work_item["id"]) if r["status"] == "running"), None),
+        lambda: next((r for r in client.work_item_runs(work_item["id"]) if r["status"] == "running"), None),
         timeout=30,
         message="the implementer never started",
     )

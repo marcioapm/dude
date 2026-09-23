@@ -57,7 +57,7 @@ def test_delivery_opens_a_pull_request(client: ApiClient, forge_project: dict, f
     assert len(log) == 4, log
 
     # Each phase pushed a branch of its own, and dude tidied them away.
-    leftovers = [b for b in fake_github_branches(fake_github) if "/run-" in b]
+    leftovers = [b for b in fake_github.branches() if "/run-" in b]
     assert leftovers == [], leftovers
 
     wait_until(
@@ -65,16 +65,6 @@ def test_delivery_opens_a_pull_request(client: ApiClient, forge_project: dict, f
         timeout=30,
         message="work item did not move to review once the PR opened",
     )
-
-
-def fake_github_branches(fake: FakeGitHub) -> list[str]:
-    import subprocess
-
-    out = subprocess.run(
-        ["git", "for-each-ref", "--format=%(refname:short)", "refs/heads"],
-        cwd=fake.bare, capture_output=True, text=True, check=True,
-    )
-    return out.stdout.split()
 
 
 def test_pr_feedback_wakes_a_fixer_and_a_merge_finishes(
@@ -92,7 +82,7 @@ def test_pr_feedback_wakes_a_fixer_and_a_merge_finishes(
     head_before = fake_github.branch_sha(pr["headBranch"])
 
     def fix_runs():
-        return [r for r in _work_item(client, work_item["id"]).get("runs", []) if r["phase"] == "fix"]
+        return [r for r in client.work_item_runs(work_item["id"]) if r["phase"] == "fix"]
 
     fixes_before = len(fix_runs())
 

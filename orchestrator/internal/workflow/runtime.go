@@ -149,7 +149,7 @@ func (r *Runtime) Start(ctx context.Context, o StartOptions) (id string, dedupli
 			ON CONFLICT (organization_id, workflow_type, idempotency_key) DO NOTHING
 			RETURNING id`,
 			ids.New(ids.WorkflowRun), o.OrganizationID, o.Type, o.IdempotencyKey, def.InitialStep, input,
-			nullable(o.WorkItemID)).Scan(&id)
+			db.Nullable(o.WorkItemID)).Scan(&id)
 		if err == nil {
 			return nil
 		}
@@ -196,7 +196,7 @@ func (r *Runtime) Signal(ctx context.Context, organizationID, runID, name string
 			INSERT INTO workflow_signals (id, organization_id, workflow_run_id, name, payload, idempotency_key)
 			VALUES ($1, $2, $3, $4, $5::jsonb, $6)
 			ON CONFLICT (workflow_run_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING`,
-			ids.New(ids.WorkflowSignal), organizationID, runID, name, body, nullable(idempotencyKey)); err != nil {
+			ids.New(ids.WorkflowSignal), organizationID, runID, name, body, db.Nullable(idempotencyKey)); err != nil {
 			return err
 		}
 		// Wake a run parked on this signal. One parked on a timer keeps it.
@@ -416,7 +416,7 @@ func (r *Runtime) advance(ctx context.Context, run *claimed) {
 			return
 		}
 	}
-	awaiting, _ := json.Marshal(nonNil(result.AwaitSignals))
+	awaiting, _ := json.Marshal(db.NonNil(result.AwaitSignals))
 
 	err = r.db.InOrg(ctx, run.OrganizationID, func(tx pgx.Tx) error {
 		// Guarded on this poller still holding the lease and the run still
@@ -510,7 +510,7 @@ func (r *Runtime) fail(ctx context.Context, run *Run, message string, fatal bool
 		}
 		// The awaited signals are kept across a retry, so a run parked on
 		// them can still be woken by one rather than only by its timer.
-		awaiting, _ := json.Marshal(nonNil(run.AwaitingSignals))
+		awaiting, _ := json.Marshal(db.NonNil(run.AwaitingSignals))
 		_, err := tx.Exec(ctx, `
 			UPDATE workflow_runs SET status = 'waiting', attempt = $2, last_error = $3,
 			       wake_at = now() + $4::interval, awaiting_signals = $5::jsonb,
@@ -531,20 +531,6 @@ func Backoff(attempt int) time.Duration {
 		return time.Minute
 	}
 	return d
-}
-
-func nonNil(s []string) []string {
-	if s == nil {
-		return []string{}
-	}
-	return s
-}
-
-func nullable(s string) any {
-	if s == "" {
-		return nil
-	}
-	return s
 }
 
 func nullableJSON(b []byte) any {

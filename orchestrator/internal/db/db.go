@@ -71,3 +71,20 @@ func (d *DB) InSystem(ctx context.Context, task string, fn func(pgx.Tx) error) e
 
 // IsNotFound reports whether err is a query that matched no row.
 func IsNotFound(err error) bool { return errors.Is(err, pgx.ErrNoRows) }
+
+// Nullable turns "" into SQL NULL. The scope columns are nullable, and an
+// empty string would read as "belongs to the thing with no id".
+func Nullable(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+// NonNil makes a nil slice empty, so it encodes as [] rather than null.
+func NonNil[T any](s []T) []T {
+	if s == nil {
+		return []T{}
+	}
+	return s
+}

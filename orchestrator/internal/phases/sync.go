@@ -21,10 +21,12 @@ package phases
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/jackc/pgx/v5"
 
@@ -36,15 +38,10 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
-// Forges resolves an organization's forge client; nil when it has none.
-type Forges interface {
-	For(ctx context.Context, org string) (*forge.GitHub, error)
-}
-
 type Syncer struct {
 	DB     *db.DB
 	Lux    lux.Client
-	Forges Forges
+	Forges delivery.Forges
 	Agent  AgentConfig
 	Log    *slog.Logger
 
@@ -54,30 +51,26 @@ type Syncer struct {
 	following map[string]context.CancelFunc
 }
 
-// Run statuses (run_status).
+// Run statuses (run_status) the syncer decides on.
 const (
 	statusPending   = "pending"
 	statusScheduled = "scheduled"
 	statusRunning   = "running"
 	statusPaused    = "paused"
-	statusCompleted = "completed"
-	statusFailed    = "failed"
 	statusAborted   = "aborted"
 )
 
-// Why dude stopped a lux Run.
-const (
-	stopComplete = "complete"
-	stopPause    = "pause"
-)
+// Why dude stopped a lux Run: "complete", "pause" or "cancel". Recorded so
+// a stop dude asked for is not mistaken for the agent dying.
+const stopPause = "pause"
 
 // phaseRun is a phase Run's row, as the syncer reads it.
 type phaseRun struct {
 	ID, Org, ProjectID, WorkItemID, Phase, Status, Control string
 	RepositoryID, BaseRef, Category                        string
 	LuxRunID, LuxState, LuxStopReason                      string
-	AgentActivity, PushRequestID, BaseSHA, HeadSHA         string
-	AgentBusy, TurnDone                                    bool
+	PushRequestID, BaseSHA                                 string
+	TurnDone, HasDirectives                                bool
 	PushResult                                             json.RawMessage
 	PRFeedback                                             json.RawMessage
 	Attempt                                                int
@@ -86,14 +79,15 @@ type phaseRun struct {
 const runColumns = `r.id, r.organization_id, r.project_id, r.work_item_id, r.phase::text, r.status::text, r.control::text,
 	COALESCE(r.repository_id, ''), COALESCE(r.base_ref, ''), COALESCE(r.category, ''),
 	COALESCE(r.lux_run_id, ''), COALESCE(r.lux_state, ''), COALESCE(r.lux_stop_reason, ''),
-	COALESCE(r.agent_activity, ''), COALESCE(r.push_request_id, ''), COALESCE(r.base_sha, ''), COALESCE(r.head_sha, ''),
-	r.agent_busy_at IS NOT NULL, r.turn_done_at IS NOT NULL, r.push_result, r.pr_feedback, r.attempt`
+	COALESCE(r.push_request_id, ''), COALESCE(r.base_sha, ''), r.turn_done_at IS NOT NULL,
+	EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL),
+	r.push_result, r.pr_feedback, r.attempt`
 
 func scan(row pgx.Row) (phaseRun, error) {
 	var r phaseRun
 	err := row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.WorkItemID, &r.Phase, &r.Status, &r.Control,
 		&r.RepositoryID, &r.BaseRef, &r.Category, &r.LuxRunID, &r.LuxState, &r.LuxStopReason,
-		&r.AgentActivity, &r.PushRequestID, &r.BaseSHA, &r.HeadSHA, &r.AgentBusy, &r.TurnDone,
+		&r.PushRequestID, &r.BaseSHA, &r.TurnDone, &r.HasDirectives,
 		&r.PushResult, &r.PRFeedback, &r.Attempt)
 	return r, err
 }
@@ -121,18 +115,28 @@ func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	handled := 0
+	// Concurrently, a few at a time: one slow call to lux or GitHub must not
+	// hold up submitting, following and steering every other Run.
+	var handled atomic.Int64
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, 8)
 	for _, r := range runs {
-		acted, err := s.advance(ctx, r)
-		if err != nil {
-			s.Log.Warn("phase run sync failed", "run", r.ID, "error", err)
-			continue
-		}
-		if acted {
-			handled++
-		}
+		wg.Add(1)
+		slots <- struct{}{}
+		go func() {
+			defer func() { <-slots; wg.Done() }()
+			acted, err := s.advance(ctx, r)
+			if err != nil && !errors.Is(err, errRetry) {
+				s.Log.Warn("phase run sync failed", "run", r.ID, "error", err)
+				return
+			}
+			if acted {
+				handled.Add(1)
+			}
+		}()
 	}
-	return handled, nil
+	wg.Wait()
+	return int(handled.Load()), nil
 }
 
 // advance moves one Run on by whatever its state calls for. Returns whether
@@ -150,9 +154,12 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 	case r.Control == "pause_hard" || r.Control == "pause_graceful":
 		return true, s.pause(ctx, r)
 	case r.TurnDone:
-		return true, s.finish(ctx, r)
+		return s.finish(ctx, r)
 	}
 	s.follow(r)
+	if !r.HasDirectives {
+		return false, nil
+	}
 	return s.deliverDirectives(ctx, r)
 }
 
@@ -185,17 +192,15 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 	var in specInput
 	var title, goal, image string
 	var criteria, projectModels, orgModels json.RawMessage
-	var fixesDone int
 	var findings []delivery.Finding
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
 			SELECT w.title, w.goal, w.acceptance_criteria, COALESCE(p.runtime_image, ''), p.agent_models,
-			       repo.name, repo.url, repo.default_branch,
-			       (SELECT count(*) FROM runs f WHERE f.work_item_id = w.id AND f.phase = 'fix' AND f.status = 'completed')
+			       repo.name, repo.url, repo.default_branch
 			FROM work_items w JOIN projects p ON p.id = w.project_id
 			JOIN repositories repo ON repo.id = $2
 			WHERE w.id = $1`, r.WorkItemID, r.RepositoryID).
-			Scan(&title, &goal, &criteria, &image, &projectModels, &in.RepoName, &in.RepoURL, &in.Ref, &fixesDone); err != nil {
+			Scan(&title, &goal, &criteria, &image, &projectModels, &in.RepoName, &in.RepoURL, &in.Ref); err != nil {
 			return fmt.Errorf("load work item and repository: %w", err)
 		}
 		if r.Phase == delivery.PhaseFix {
@@ -234,7 +239,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 		in.Ref = r.BaseRef
 	}
 	in.RunID, in.OrganizationID, in.WorkItemID, in.Phase, in.Role = r.ID, r.Org, r.WorkItemID, r.Phase, role
-	in.Model, in.FixesDone = model, fixesDone
+	in.Model = model
 	in.Image = image
 	if in.Image == "" {
 		in.Image = s.Agent.DefaultImage
@@ -313,61 +318,110 @@ func (s *Syncer) Stop() {
 }
 
 // followOutput reads the lux Run's output from where it was last left and
-// records it. Each frame's effects and the cursor advance commit together,
-// so a restart neither repeats nor skips an event.
+// records it.
+//
+// Frames are applied in batches — whatever has arrived, up to a few hundred
+// at a time — each batch in one transaction with the cursor that moves past
+// it. An agent streams thousands of frames a turn, most of them fragments of
+// words, and a transaction per frame would make the database the busiest
+// thing in the system. Committing effects and cursor together is what lets a
+// restart neither repeat nor skip anything.
 func (s *Syncer) followOutput(ctx context.Context, r phaseRun) error {
 	var cursor string
 	var afterEvent int64
-	var sessionEpoch int
-	var cost float64
+	t := &translator{run: r}
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT COALESCE(lux_cursor, ''), lux_after_event, agent_session_epoch, agent_cost_usd::float8
-			FROM runs WHERE id = $1`, r.ID).Scan(&cursor, &afterEvent, &sessionEpoch, &cost)
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(lux_cursor, ''), lux_after_event FROM runs WHERE id = $1`, r.ID).
+			Scan(&cursor, &afterEvent); err != nil {
+			return err
+		}
+		return t.load(ctx, tx)
 	}); err != nil {
 		return err
 	}
-	t := &translator{run: r, sessionEpoch: sessionEpoch, cost: cost}
-	return s.Lux.Output(ctx, r.LuxRunID, cursor, afterEvent, func(f lux.Frame) error {
-		return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-			if err := t.apply(ctx, tx, s, f); err != nil {
-				return err
+
+	frames := make(chan lux.Frame, 256)
+	read := make(chan error, 1)
+	go func() {
+		read <- s.Lux.Output(ctx, r.LuxRunID, cursor, afterEvent, func(f lux.Frame) error {
+			select {
+			case frames <- f:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
 			}
-			switch f.Kind {
-			case "record":
-				_, err := tx.Exec(ctx, `UPDATE runs SET lux_cursor = $2 WHERE id = $1`, r.ID, f.Cursor)
-				return err
-			case "lux":
-				_, err := tx.Exec(ctx, `UPDATE runs SET lux_after_event = GREATEST(lux_after_event, $2) WHERE id = $1`, r.ID, f.EventID)
-				return err
-			}
-			return nil
 		})
-	})
+		close(frames)
+	}()
+
+	for f := range frames {
+		batch := []lux.Frame{f}
+	more:
+		for len(batch) < cap(frames) {
+			select {
+			case next, ok := <-frames:
+				if !ok {
+					break more
+				}
+				batch = append(batch, next)
+			default:
+				break more
+			}
+		}
+		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			var cursor string
+			var afterEvent int64
+			for _, f := range batch {
+				if err := t.apply(ctx, tx, s, f); err != nil {
+					return err
+				}
+				switch f.Kind {
+				case "record":
+					cursor = f.Cursor
+				case "lux":
+					afterEvent = max(afterEvent, f.EventID)
+				}
+			}
+			if err := t.save(ctx, tx); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, `UPDATE runs SET lux_cursor = COALESCE(NULLIF($2, ''), lux_cursor),
+				lux_after_event = GREATEST(lux_after_event, $3) WHERE id = $1`, r.ID, cursor, afterEvent)
+			return err
+		}); err != nil {
+			// What was read but not recorded is read again from the saved
+			// cursor by the next follower.
+			return err
+		}
+	}
+	return <-read
 }
 
 // finish collects what a phase produced once its agent finished its turn.
 // Idempotent end to end: each piece is recorded before the next is asked
 // for, so a restart resumes the sequence.
-func (s *Syncer) finish(ctx context.Context, r phaseRun) error {
+func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 	if delivery.Publishes[r.Phase] && r.PushResult == nil {
 		// Only a state lux has already reported as over rules the push out.
 		// Anything else is asked of lux itself: its lifecycle events trail
 		// the agent's own records by up to a second, so the state recorded
 		// here can still say "scheduled" when the agent has already finished.
 		if lux.Terminal(r.LuxState) {
-			return s.fail(ctx, r, "the agent's container stopped before its work was pushed")
+			return true, s.fail(ctx, r, "the agent's container stopped before its work was pushed")
 		}
 		if r.PushRequestID != "" {
-			return nil // asked; the git.push event will arrive on the stream
+			// Asked; the git.push event will arrive on the stream. Nothing to
+			// do meanwhile, so the loop may rest.
+			return false, nil
 		}
 		reqID := "push-" + r.ID
 		if err := s.Lux.Push(ctx, r.LuxRunID, reqID); err != nil {
 			if le, ok := lux.AsError(err); ok && le.Code == "not_running" {
-				return s.fail(ctx, r, "the agent's container stopped before its work was pushed: "+le.Message)
+				return true, s.fail(ctx, r, "the agent's container stopped before its work was pushed: "+le.Message)
 			}
-			return s.retryLater(ctx, r, err)
+			return true, s.retryLater(ctx, r, err)
 		}
-		return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		return true, s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 			_, err := tx.Exec(ctx, `UPDATE runs SET push_request_id = $2 WHERE id = $1`, r.ID, reqID)
 			return err
 		})
@@ -377,32 +431,28 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) error {
 	if delivery.Publishes[r.Phase] {
 		var err error
 		if result, err = s.publish(ctx, r); err != nil {
-			return s.fail(ctx, r, err.Error())
+			return true, s.fail(ctx, r, err.Error())
 		}
 	}
 	if r.Phase == delivery.PhaseReview || r.Phase == delivery.PhaseTest {
 		if err := s.reportFindings(ctx, r); err != nil {
-			return err
+			return true, err
 		}
 	}
 
 	// Stopped rather than cancelled: the workspace and the agent's session
 	// are kept, so a person can still look at or resume a finished phase.
-	if !lux.Terminal(r.LuxState) {
-		if err := s.Lux.Stop(ctx, r.LuxRunID); err != nil {
-			if le, ok := lux.AsError(err); !ok || le.Retryable() {
-				return s.retryLater(ctx, r, err)
-			}
-		}
+	if err := s.ask(ctx, r, s.Lux.Stop); err != nil {
+		return true, err
 	}
 	s.unfollow(r.ID)
-	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+	return true, s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `UPDATE runs SET status = 'completed', ended_at = now(), lux_stop_reason = $2,
 			head_sha = COALESCE(NULLIF($3, ''), head_sha), changed_paths = $4, branch = COALESCE(NULLIF($5, ''), branch)
-			WHERE id = $1`, r.ID, stopComplete, result.head, nonNil(result.changed), result.branch); err != nil {
+			WHERE id = $1`, r.ID, "complete", result.head, db.NonNil(result.changed), result.branch); err != nil {
 			return err
 		}
-		return s.event(ctx, tx, r, "run.completed", ledger.ActorSystem, map[string]any{"status": statusCompleted})
+		return s.event(ctx, tx, r, "run.completed", ledger.ActorSystem, map[string]any{"status": "completed"})
 	})
 }
 
@@ -500,12 +550,8 @@ func (s *Syncer) reportFindings(ctx context.Context, r phaseRun) error {
 // cancel ends the lux Run of a Run a person aborted.
 func (s *Syncer) cancel(ctx context.Context, r phaseRun) error {
 	s.unfollow(r.ID)
-	if r.LuxRunID != "" && !lux.Terminal(r.LuxState) {
-		if err := s.Lux.Cancel(ctx, r.LuxRunID); err != nil {
-			if le, ok := lux.AsError(err); !ok || le.Retryable() {
-				return s.retryLater(ctx, r, err)
-			}
-		}
+	if err := s.ask(ctx, r, s.Lux.Cancel); err != nil {
+		return err
 	}
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE runs SET lux_stop_reason = 'cancel', control = 'none' WHERE id = $1`, r.ID)
@@ -516,12 +562,8 @@ func (s *Syncer) cancel(ctx context.Context, r phaseRun) error {
 // pause stops the lux Run, keeping its state. Graceful and hard are the same
 // here: lux asks the agent to end its turn cleanly before the container stops.
 func (s *Syncer) pause(ctx context.Context, r phaseRun) error {
-	if r.LuxRunID != "" && !lux.Terminal(r.LuxState) {
-		if err := s.Lux.Stop(ctx, r.LuxRunID); err != nil {
-			if le, ok := lux.AsError(err); !ok || le.Retryable() {
-				return s.retryLater(ctx, r, err)
-			}
-		}
+	if err := s.ask(ctx, r, s.Lux.Stop); err != nil {
+		return err
 	}
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `UPDATE runs SET status = 'paused', control = 'none', control_requested_at = NULL,
@@ -532,33 +574,36 @@ func (s *Syncer) pause(ctx context.Context, r phaseRun) error {
 	})
 }
 
-// whilePaused resumes the lux Run once a person asked (the backend sets the
-// Run back to pending-resume by clearing lux_stop_reason).
+// whilePaused resumes the lux Run once a person asks. The agent continues
+// its conversation from the transcript lux kept; directives given while it
+// was paused are sent once it is running, each acknowledged on its own.
 func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
-	if r.LuxStopReason == stopPause {
+	if r.Control != "resume" {
 		return false, nil
 	}
 	spec, err := s.spec(ctx, r)
 	if err != nil {
 		return true, s.fail(ctx, r, "cannot resume: "+err.Error())
 	}
-	var input string
+	lr, err := s.Lux.Resume(ctx, r.LuxRunID, spec.Secrets, "")
+	if err != nil {
+		return true, s.retryLater(ctx, r, err)
+	}
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		input, err = takeDirectives(ctx, tx, r.ID)
+		// The agent is starting a new turn; the old "done" no longer holds.
+		// lux_state is what lux says now ("resuming"), so directives wait for
+		// the stream to report it running.
+		_, err := tx.Exec(ctx, `UPDATE runs SET status = 'running', lux_state = $2, lux_stop_reason = NULL,
+			control = 'none', control_requested_at = NULL, control_reason = NULL,
+			turn_done_at = NULL, agent_busy_at = NULL WHERE id = $1`, r.ID, lr.State)
 		return err
 	}); err != nil {
 		return true, err
 	}
-	lr, err := s.Lux.Resume(ctx, r.LuxRunID, spec.Secrets, input)
-	if err != nil {
-		return true, s.retryLater(ctx, r, err)
-	}
-	return true, s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		// The agent is starting a new turn; the old "done" no longer holds.
-		_, err := tx.Exec(ctx, `UPDATE runs SET status = 'running', lux_state = $2, turn_done_at = NULL,
-			agent_busy_at = NULL WHERE id = $1`, r.ID, lr.State)
-		return err
-	})
+	// Directives given while it was paused are sent by the usual path once
+	// lux reports the resumed Run running, each on its own so each is
+	// acknowledged: lux refuses input to a Run still waiting for a host.
+	return true, nil
 }
 
 // deliverDirectives sends a person's steering to the running agent.
@@ -597,18 +642,6 @@ func (s *Syncer) deliverDirectives(ctx context.Context, r phaseRun) (bool, error
 	return true, nil
 }
 
-// takeDirectives marks undelivered directives sent and returns them as one
-// message, for a resume to carry.
-func takeDirectives(ctx context.Context, tx pgx.Tx, runID string) (string, error) {
-	rows, err := tx.Query(ctx, `UPDATE directives SET sent_at = now()
-		WHERE run_id = $1 AND sent_at IS NULL RETURNING text`, runID)
-	if err != nil {
-		return "", err
-	}
-	texts, err := pgx.CollectRows(rows, pgx.RowTo[string])
-	return strings.Join(texts, "\n\n"), err
-}
-
 func (s *Syncer) unfollow(runID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -630,9 +663,29 @@ func (s *Syncer) fail(ctx context.Context, r phaseRun, reason string) error {
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
-		return s.event(ctx, tx, r, "run.failed", ledger.ActorSystem, map[string]any{"status": statusFailed, "error": reason})
+		return s.event(ctx, tx, r, "run.failed", ledger.ActorSystem, map[string]any{"status": "failed", "error": reason})
 	})
 }
+
+// ask stops or cancels the Run's lux Run, if it is still going. An answer
+// that may change later backs the Run off and returns errRetry; lux refusing
+// outright (the Run is already over) counts as done.
+func (s *Syncer) ask(ctx context.Context, r phaseRun, call func(context.Context, string) error) error {
+	if r.LuxRunID == "" || lux.Terminal(r.LuxState) {
+		return nil
+	}
+	err := call(ctx, r.LuxRunID)
+	if le, ok := lux.AsError(err); err == nil || ok && !le.Retryable() {
+		return nil
+	}
+	if rerr := s.retryLater(ctx, r, err); rerr != nil {
+		return rerr
+	}
+	return errRetry
+}
+
+// errRetry ends a step that will be tried again after a back-off.
+var errRetry = errors.New("retrying later")
 
 // retryLater backs a Run off after a failure that may pass. Errors that
 // will not pass (a spec lux rejects) fail the Run instead.
@@ -702,7 +755,7 @@ func RecordFindings(ctx context.Context, database *db.DB, org, runID string, fin
 				severity, repo, file, line, title, description, suggested_fix)
 				VALUES ($1, $2, $3, $4, $5, $6::finding_severity, $7, $8, $9, $10, $11, $12)`,
 				ids.New(ids.Finding), org, workItemID, runID, f.Category, f.Severity,
-				nullable(f.Repo), nullable(f.File), nullableInt(f.Line), f.Title, f.Description, f.SuggestedFix); err != nil {
+				db.Nullable(f.Repo), db.Nullable(f.File), nullableInt(f.Line), f.Title, f.Description, f.SuggestedFix); err != nil {
 				return err
 			}
 		}
@@ -751,20 +804,6 @@ func NotifyFinished(ctx context.Context, database *db.DB, signal func(ctx contex
 		handled++
 	}
 	return handled, nil
-}
-
-func nonNil(s []string) []string {
-	if s == nil {
-		return []string{}
-	}
-	return s
-}
-
-func nullable(s string) any {
-	if s == "" {
-		return nil
-	}
-	return s
 }
 
 func nullableInt(n int) any {

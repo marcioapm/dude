@@ -43,7 +43,7 @@ export type Directive = z.infer<typeof directiveSchema>;
  * pause being asked for and the runner acting on it, and conflating them
  * would make that window unrepresentable.
  */
-export const runControlSchema = z.enum(["none", "pause_graceful", "pause_hard", "abort"]);
+export const runControlSchema = z.enum(["none", "pause_graceful", "pause_hard", "abort", "resume"]);
 export type RunControl = z.infer<typeof runControlSchema>;
 
 /**

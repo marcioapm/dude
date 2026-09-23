@@ -10,7 +10,7 @@
  */
 
 import { withOrg } from "../../db/client.ts";
-import { badRequest, json } from "../http.ts";
+import { json } from "../http.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
 import type { RequestContext, Router } from "../router.ts";
 
@@ -21,19 +21,9 @@ const DIRECTIVE_SELECT = `
 
 /** Forward a run-control request, naming the person who made it. */
 function forward(action: "steer" | "pause" | "resume" | "abort") {
-  return async (ctx: RequestContext): Promise<Response> => {
-    const text = await ctx.request.text();
-    let body: Record<string, unknown> = {};
-    try {
-      if (text.trim()) body = JSON.parse(text) as Record<string, unknown>;
-    } catch {
-      throw badRequest("request body must be valid JSON");
-    }
-    return orchestrator(ctx.principal.organizationId, "POST", `/internal/runs/${ctx.params.id}/${action}`, {
-      ...body,
-      actorId: ctx.principal.apiKeyId,
-    });
-  };
+  return async (ctx: RequestContext): Promise<Response> =>
+    orchestrator(ctx.principal.organizationId, "POST", `/internal/runs/${ctx.params.id}/${action}`,
+      await ctx.request.text(), ctx.principal.apiKeyId);
 }
 
 /** Directives issued for a Run, newest first. */

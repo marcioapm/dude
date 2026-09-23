@@ -143,6 +143,11 @@ class ApiClient:
         assert resp.status_code == 200, f"events failed: {resp.status_code} {resp.text}"
         return resp.json()["events"]
 
+    def work_item_runs(self, work_item_id: str) -> list[dict]:
+        """A work item's Runs, oldest first."""
+        runs = self.get(f"/v1/work-items/{work_item_id}").json().get("runs", [])
+        return sorted(runs, key=lambda r: r["createdAt"])
+
     def get_run(self, run_id: str) -> dict:
         resp = self.get(f"/v1/runs/{run_id}")
         assert resp.status_code == 200, f"get run failed: {resp.status_code} {resp.text}"
