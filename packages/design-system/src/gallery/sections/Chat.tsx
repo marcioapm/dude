@@ -8,10 +8,29 @@ import { ChatMessage } from "../../components/ChatMessage.tsx";
 import { ChatThread } from "../../components/ChatThread.tsx";
 import { ChatTranscript } from "../../components/ChatTranscript.tsx";
 import { Markdown } from "../../components/Markdown.tsx";
+import { ThinkingBlock } from "../../components/ThinkingBlock.tsx";
 import { ToolCallCard } from "../../components/ToolCallCard.tsx";
 import { Button, IconButton } from "../../primitives/Button.tsx";
 import { ACTIVITY_KINDS, ACTIVITY_SPECS } from "../../tokens/activity.ts";
 import { at } from "../fixtures.tsx";
+import {
+  CLIENT_DIFF,
+  CLIENT_SOURCE,
+  CONTEXT_WINDOW,
+  LONG_TEST_OUTPUT_FAILED,
+  LONG_TEST_OUTPUT_PASSED,
+  MSG_1,
+  MSG_2,
+  MSG_3,
+  MSG_4,
+  PHASE_PROMPT,
+  THOUGHT_1,
+  THOUGHT_2,
+  THOUGHT_3,
+  THOUGHT_STREAMING,
+  TSC_STDERR,
+  TSC_STDOUT,
+} from "../realisticTranscript.ts";
 import {
   buildAnswerSteps,
   buildScenario,
@@ -155,17 +174,67 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
       </Block>
 
       <Block
-        id="ch-tool"
-        title="ToolCallCard"
-        note="One 28px row per call: glyph · name · what it was called with · duration · outcome. Running calls sweep along the bottom edge with a ticking duration that turns attention-toned once slow. Failed calls open by default and put the error's first line in the row itself. A diff hands off to DiffView."
+        id="ch-thinking"
+        title="ThinkingBlock"
+        note="The model's reasoning, which arrives between its messages and its tool calls. Secondary by construction: no avatar, no frame, muted ink, a 24px row — quieter than a message, and distinct from a tool call, which has a surface and a border. Collapsed it is brain · label · a one-line preview · how long it took. While streaming the brain sits inside the thinking rhythm's drifting ring, the preview follows the latest line and the duration ticks. Twelve in a row read as a faint ledger, not a wall."
       >
         <Panes mode={mode} surface>
           <Col>
-            <ToolCallCard name="read" status="completed" args={{ file_path: "apps/control-plane/src/integrations/github/client.ts" }} durationMs={41} result={"import type { GithubConfig } from \"./config.ts\";\n\nexport class GithubClient {\n  constructor(private readonly config: GithubConfig) {}\n}"} />
-            <ToolCallCard name="grep" status="completed" args={{ pattern: "webhook", path: "apps/control-plane/src", include: "*.ts" }} durationMs={182} result={"apps/control-plane/src/api/routes/webhooks.ts:12\napps/control-plane/src/api/routes/webhooks.ts:48\napps/control-plane/src/integrations/github/client.ts:7"} />
+            <Label>collapsed (default) · streaming · expanded · plain text</Label>
+            <ThinkingBlock text={THOUGHT_1} durationMs={4_200} />
+            <ThinkingBlock text={THOUGHT_STREAMING} streaming startedAt={Date.now() - 6_000} />
+            <ThinkingBlock text={THOUGHT_2} durationMs={11_400} defaultExpanded />
+            <ThinkingBlock text={"Plain text, no Markdown: the * and ` are shown as typed.\n\n  indentation is kept too."} plain durationMs={800} />
+            <ThinkingBlock text="" streaming startedAt={Date.now() - 1_000} />
+            <Label>between a message and its tool calls — the transcript rhythm</Label>
+            <ChatMessage role="implementer" model="claude-opus-4" content={MSG_1} startedAt={at(60_000)} endedAt={at(64_000)} contextTokens={15_200} contextWindowTokens={CONTEXT_WINDOW} outputTokens={240} costUsd={0.012} />
+            <div style={{ padding: "0 12px 0 40px", display: "flex", flexDirection: "column", gap: 4 }}>
+              <ThinkingBlock text={THOUGHT_1} durationMs={4_200} />
+              <ToolCallCard name="read" status="completed" args={{ file_path: "apps/control-plane/src/integrations/github/client.ts" }} durationMs={41} output={CLIENT_SOURCE} />
+              <ThinkingBlock text="Single fetch, plain Error. I need a typed check on res.status before the throw." durationMs={1_900} />
+              <ToolCallCard name="read" status="completed" args={{ file_path: "apps/control-plane/src/util/wait.ts" }} durationMs={22} output={"export const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));"} />
+            </div>
+            <Label>many in a row (grayscale check — still a calm ledger)</Label>
+            <div style={{ filter: "grayscale(1)", display: "flex", flexDirection: "column", gap: 2 }}>
+              {[
+                ["Looking at how the route dedupes before deciding whether retries are safe.", 2_100],
+                ["The delivery id is stored before the handler runs, so a retried POST is a no-op.", 3_300],
+                ["I'll keep the sleep helper that takes a signal.", 900],
+                ["Test fixture returns 502 forever; the give-up assertion needs 5 calls.", 4_700],
+                ["Diff is 118 lines; under the cap.", 600],
+                ["The reviewer prompt does not ask for a changelog. Skipping it.", 1_200],
+              ].map(([t, ms], i) => (
+                <ThinkingBlock key={i} text={String(t)} durationMs={Number(ms)} />
+              ))}
+            </div>
+          </Col>
+        </Panes>
+      </Block>
+
+      <Block
+        id="ch-tool"
+        title="ToolCallCard"
+        note="One 28px row per call: glyph · name · what it was called with · duration · outcome. Running calls sweep along the bottom edge with a ticking duration that turns attention-toned once slow. Failed calls open by default and put the error's first line in the row itself; a non-zero exit code is a danger chip in the row whatever the status said. Open, the output is a mono block headed by its exit code. The backend caps each stream at 4 KB and keeps the first and last 2 KB of anything longer — the dropped middle is a labelled dashed line, never a silent join. stderr, when the harness reports it apart, is a second block with its own rail; OpenCode merges the two, which is one block. A diff hands off to DiffView."
+      >
+        <Panes mode={mode} surface>
+          <Col>
+            <Label>finished, with output</Label>
+            <ToolCallCard name="read" status="completed" args={{ file_path: "apps/control-plane/src/integrations/github/client.ts" }} durationMs={41} output={CLIENT_SOURCE} />
+            <ToolCallCard name="grep" status="completed" args={{ pattern: "webhook", path: "apps/control-plane/src", include: "*.ts" }} durationMs={182} output={"apps/control-plane/src/api/routes/webhooks.ts:12\napps/control-plane/src/api/routes/webhooks.ts:48\napps/control-plane/src/integrations/github/client.ts:7"} exitCode={0} />
+            <ToolCallCard name="bash" status="completed" args={{ command: "git status --short" }} durationMs={30} output="" exitCode={0} />
+            <Label>running: sweep, ticking clock, output so far; slow after 20s</Label>
             <ToolCallCard name="bash" status="running" args={{ command: "bun test src/integrations/github" }} startedAt={Date.now() - 1_200} />
-            <ToolCallCard name="bash" status="running" args={{ command: "bun install && bun run build" }} startedAt={Date.now() - 47_000} />
-            <ToolCallCard name="bash" status="failed" args={{ command: "bun test src/integrations/github" }} durationMs={4_210} exitCode={1} error={"1 failing: retries when response is 502\n  expected 5 calls, received 1\n    at src/integrations/github/client.test.ts:41:22"} result={" 3 pass\n 1 fail\n 8 expect() calls"} />
+            <ToolCallCard name="bash" status="running" args={{ command: "bun install && bun run build" }} startedAt={Date.now() - 47_000} output={"$ bun install\nbun install v1.2.4\n + @dude/domain@workspace:*\n 412 packages installed [1.20s]\n$ bun run build\n$ vite build\nvite v6.3.0 building for production..."} defaultExpanded />
+            <Label>non-zero exit: the chip is in the row, the card opens itself, the rail goes danger</Label>
+            <ToolCallCard name="bash" status="failed" args={{ command: "bun test apps/control-plane" }} durationMs={4_210} exitCode={1} error="1 failing: retries when response is 502" output={LONG_TEST_OUTPUT_FAILED} />
+            <ToolCallCard name="bash" status="completed" args={{ command: "bun run typecheck" }} durationMs={2_900} exitCode={2} output={TSC_STDOUT} stderr={TSC_STDERR} defaultExpanded={false} />
+            <Label>head and tail: 4 KB kept, the middle omitted</Label>
+            <ToolCallCard name="bash" status="completed" args={{ command: "bun test apps/control-plane" }} durationMs={3_880} exitCode={0} output={LONG_TEST_OUTPUT_PASSED} defaultExpanded />
+            <Label>stdout and stderr apart (Claude Code) vs merged (OpenCode)</Label>
+            <ToolCallCard name="bash" status="completed" args={{ command: "bun run typecheck" }} durationMs={2_900} exitCode={2} output={TSC_STDOUT} stderr={TSC_STDERR} defaultExpanded />
+            <ToolCallCard name="bash" status="completed" args={{ command: "bun run typecheck" }} durationMs={2_900} exitCode={2} output={`${TSC_STDOUT}\n${TSC_STDERR}`} defaultExpanded />
+            <ToolCallCard name="bash" status="completed" args={{ command: "cargo build 2>&1 | tail" }} durationMs={12_000} exitCode={0} stderr={{ head: "   Compiling dude-orchestrator v0.1.0\nwarning: unused variable: `attempt`\n  --> src/lux.rs:41:9\n", tail: "warning: `dude-orchestrator` (bin) generated 3 warnings\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.82s", omittedBytes: 3_072 }} defaultExpanded />
+            <Label>the rest</Label>
             <ToolCallCard
               name="edit"
               status="completed"
@@ -225,18 +294,28 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
       <Block
         id="ch-message"
         title="ChatMessage"
-        note="A turn is a gutter and a column, not a bubble, so text aligns down the page. Agent turns carry model, elapsed, tokens, cost and the live activity in the foot. Human turns get a hairline frame tinted by intent — an answer is attention-toned (it closes the needs-you state), a steer is accent-toned (the operator reaching in) — so interventions are scannable in a long transcript."
+        note="A turn is a gutter and a column, not a bubble, so text aligns down the page. Agent turns carry model, elapsed, the context size at that point ('ctx 15.2k / 744k', coloured at 80% and 100% of the window), the output tokens ('out 1.2k'), cost and the live activity in the foot; a cost the harness does not report is '—', never $0.00. Turns addressed to the agent get a hairline frame tinted by intent — an answer is attention-toned (it closes the needs-you state), a steer is accent-toned (the operator reaching in) — so interventions are scannable in a long transcript. The task prompt keeps the neutral frame: when dude authored it, the system avatar and the Task tag say so, and a long phase prompt clamps at eight lines with Show all. A steer that arrives mid-turn is queued until the turn ends: dashed frame, a Queued mark with a clock, and a line saying why; once the agent has it, the frame is solid and the header shows when."
       >
         <Panes mode={mode} surface>
           <Col>
+            <Label>the factory's phase prompt — system-authored, clamped, Show all</Label>
+            <ChatMessage role="system" intent="prompt" name="dude" content={PHASE_PROMPT} startedAt={at(0)} />
+            <Label>a person's prompt — short, no clamp needed</Label>
             <ChatMessage role="human" name="marcio" intent="prompt" content="Add retry with backoff to the GitHub webhook handler. Cap at 5 attempts, keep the public API unchanged." startedAt={at(0)} />
             <ChatMessage role="system" content="Session started on worker-03 · claude-opus-4" startedAt={at(1_000)} />
-            <ChatMessage role="orchestrator" model="claude-opus-4" content={"I'll map the handler first, then delegate.\n\n**Plan**\n1. Investigate `GithubClient.post`\n2. Add bounded backoff\n3. Tests, then review"} startedAt={at(1_830)} endedAt={at(19_000)} costUsd={0.06} tokens={6_100} activity="completed" />
-            <ChatMessage role="implementer" model="claude-opus-4" content="Added `isRetryable` and a bounded loop. Running the tests" streaming startedAt={Date.now() - 38_000} costUsd={0.21} tokens={48_000} activity="streaming" activityProps={{ since: Date.now() - 6_000, detail: "312 tokens" }} />
+            <Label>agent feet: context and output tokens; cost known, unknown, and zero</Label>
+            <ChatMessage role="orchestrator" model="claude-opus-4" content={"I'll map the handler first, then delegate.\n\n**Plan**\n1. Investigate `GithubClient.post`\n2. Add bounded backoff\n3. Tests, then review"} startedAt={at(1_830)} endedAt={at(19_000)} costUsd={0.06} contextTokens={15_200} contextWindowTokens={CONTEXT_WINDOW} outputTokens={1_240} activity="completed" />
+            <ChatMessage role="implementer" model="gpt-5-codex" content="Cost not reported by this harness (subscription seat): the foot says so rather than pricing it at zero." startedAt={at(20_000)} endedAt={at(24_000)} costUsd={null} contextTokens={188_400} contextWindowTokens={CONTEXT_WINDOW} outputTokens={620} activity="completed" />
+            <ChatMessage role="reviewer" model="claude-sonnet-4" content="Context past 80% of the window: the ctx count takes attention ink, the same threshold a cost takes against its budget." startedAt={at(25_000)} endedAt={at(26_000)} costUsd={0} contextTokens={612_000} contextWindowTokens={CONTEXT_WINDOW} outputTokens={90} activity="completed" />
+            <ChatMessage role="simplifier" model="claude-sonnet-4" content="Only a total is known: the plain `tok` count, as before." startedAt={at(27_000)} endedAt={at(28_000)} tokens={4_100} activity="completed" />
+            <Label>live</Label>
+            <ChatMessage role="implementer" model="claude-opus-4" content="Added `isRetryable` and a bounded loop. Running the tests" streaming startedAt={Date.now() - 38_000} costUsd={0.21} contextTokens={48_000} contextWindowTokens={CONTEXT_WINDOW} activity="streaming" activityProps={{ since: Date.now() - 6_000, detail: "312 tokens" }} />
             <ChatMessage role="implementer" model="claude-opus-4" content="Tests are running." continued attachments={<ToolCallCard name="bash" status="running" args={{ command: "bun test src/integrations/github" }} startedAt={Date.now() - 44_000} />} activity="tool" activityProps={{ tool: "bash", since: Date.now() - 44_000 }} startedAt={Date.now() - 61_000} costUsd={0.23} />
             <ChatMessage role="orchestrator" model="claude-opus-4" content="Before I open the PR I need a decision from you." startedAt={Date.now() - 125_000} costUsd={0.002} activity="awaiting_input" activityProps={{ since: Date.now() - 125_000, detail: "Should 4xx be retried?" }} />
+            <Label>interventions: answer · steer queued (agent mid-turn) · steer delivered</Label>
             <ChatMessage role="human" name="marcio" intent="answer" inReplyTo="Should 4xx responses be retried? The existing code retries everything." content="No — only retry 5xx and network errors." startedAt={at(1_520_000)} />
-            <ChatMessage role="human" name="marcio" intent="steer" content="Do not change the public API of GithubClient. Add the retry inside `post` only." startedAt={at(1_530_000)} />
+            <ChatMessage role="human" name="marcio" intent="steer" pending content="Do not change the public API of GithubClient. Add the retry inside `post` only." startedAt={at(1_530_000)} />
+            <ChatMessage role="human" name="marcio" intent="steer" content="Do not change the public API of GithubClient. Add the retry inside `post` only." startedAt={at(1_530_000)} deliveredAt={at(1_571_000)} />
             <ChatMessage role="reviewer" model="claude-opus-4" content="Backoff jitter uses `Math.random`; consider seeding for tests (minor)." startedAt={at(1_640_000)} endedAt={at(1_650_000)} costUsd={0.03} activity="failed" activityProps={{ detail: "upstream 500 after 5 attempts" }} />
           </Col>
         </Panes>
@@ -294,9 +373,19 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
       </Block>
 
       <Block
+        id="ch-realistic"
+        title="A real session, after the fact"
+        note="One implementer session as the real runs look: the factory's phase prompt at the top (system-authored, clamped), the model's reasoning between every move, tool calls whose output the backend capped at 4 KB with the middle dropped, a failing test run with exit 1 that opened itself, a queued steer that was delivered on the next turn, and a context/output foot on every message. Cost is unknown for this harness and reads as such in the header and the feet, while the tokens still add up. Static: this is about density and hierarchy; the live scenario below is about motion."
+      >
+        <Panes mode={mode}>
+          <RealisticTranscript />
+        </Panes>
+      </Block>
+
+      <Block
         id="ch-transcript"
         title="ChatTranscript — live scenario"
-        note="The whole thing, played back: a task arrives, the orchestrator thinks, writes a plan, delegates to an investigator (nested), delegates to an implementer whose bash call runs long and then fails, hits a 429 and backs off twice, recovers, then asks you a question. Answer it in the composer to let it finish; steer it while it runs. Scroll up mid-stream: the view stops following and offers 'Jump to latest' with a count. The tool 'slow' threshold is 6s here (20s in the product) so the state is reachable."
+        note="The whole thing, played back: a task arrives, the orchestrator thinks (a ThinkingBlock streams above its first message), writes a plan, delegates to an investigator (nested), delegates to an implementer whose bash call runs long and then fails with a capped output and exit 1, hits a 429 and backs off twice, recovers, then asks you a question. Answer it in the composer to let it finish; steer it while it runs — the steer shows as queued until the current turn ends. Scroll up mid-stream: the view stops following and offers 'Jump to latest' with a count. The tool 'slow' threshold is 6s here (20s in the product) so the state is reachable."
       >
         <Panes mode={mode}>
           <LiveTranscriptDemo />
@@ -313,6 +402,73 @@ function FragmentRow({ cells }: { readonly cells: ReadonlyArray<ReactNode> }) {
         <span key={i}>{c}</span>
       ))}
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+/** Aligns a thought or a tool card with the message column when it is a turn of its own. */
+function Aside({ children }: { readonly children: ReactNode }) {
+  return <div style={{ padding: "1px 12px 1px 40px", display: "flex", flexDirection: "column", gap: 4 }}>{children}</div>;
+}
+
+const MIN = 60_000;
+
+function RealisticTranscript() {
+  return (
+    <ChatTranscript
+      session={{
+        id: "ses_01J9K4",
+        role: "implementer",
+        status: "completed",
+        model: "claude-opus-4",
+        workItemId: "WI-2481",
+        title: "Add retry with backoff to the GitHub webhook handler",
+        repo: "dude/dude",
+        branch: "wi-2481-webhook-retry",
+        startedAt: at(0),
+        endedAt: at(9 * MIN),
+        costUsd: null,
+        tokens: 1_240_000,
+      }}
+      maxHeight={720}
+    >
+      <ChatMessage role="system" intent="prompt" name="dude" content={PHASE_PROMPT} startedAt={at(0)} />
+      <ChatMessage role="system" content="Session started on worker-03 · claude-opus-4" startedAt={at(1_000)} />
+      <Aside>
+        <ThinkingBlock text={THOUGHT_1} startedAt={at(1_200)} endedAt={at(5_400)} />
+      </Aside>
+      <ChatMessage role="implementer" model="claude-opus-4" content={MSG_1} startedAt={at(5_400)} endedAt={at(7_000)} costUsd={null} contextTokens={18_300} contextWindowTokens={CONTEXT_WINDOW} outputTokens={60} />
+      <Aside>
+        <ToolCallCard name="read" status="completed" args={{ file_path: "apps/control-plane/src/integrations/github/client.ts" }} startedAt={at(7_100)} endedAt={at(7_141)} output={CLIENT_SOURCE} />
+        <ToolCallCard name="read" status="completed" args={{ file_path: "apps/control-plane/src/util/wait.ts" }} startedAt={at(7_300)} endedAt={at(7_322)} output={"export const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));"} />
+        <ThinkingBlock text="Single fetch, plain Error. I need a typed check on res.status before the throw, and the sleep in integrations/github already takes a signal — that is the one to keep." startedAt={at(7_400)} endedAt={at(10_100)} />
+        <ToolCallCard name="edit" status="completed" args={{ file_path: "apps/control-plane/src/integrations/github/client.ts" }} startedAt={at(10_200)} endedAt={at(10_212)} diff={CLIENT_DIFF} />
+        <ToolCallCard name="bash" status="completed" args={{ command: "git rm -q apps/control-plane/src/util/wait.ts" }} startedAt={at(10_300)} endedAt={at(10_330)} exitCode={0} output="" />
+      </Aside>
+      <ChatMessage role="implementer" model="claude-opus-4" content={MSG_2} startedAt={at(10_400)} endedAt={at(14_000)} costUsd={null} contextTokens={31_200} contextWindowTokens={CONTEXT_WINDOW} outputTokens={410} />
+      <Aside>
+        <ToolCallCard name="bash" status="failed" args={{ command: "bun test apps/control-plane" }} startedAt={at(14_100)} endedAt={at(18_310)} exitCode={1} error="1 failing: retries when response is 502" output={LONG_TEST_OUTPUT_FAILED} />
+        <ThinkingBlock text={THOUGHT_2} startedAt={at(18_400)} endedAt={at(29_800)} />
+      </Aside>
+      <ChatMessage role="human" name="marcio" intent="steer" content="Keep the jitter, but make it injectable so the tests can seed it." startedAt={at(20_000)} deliveredAt={at(29_800)} />
+      <ChatMessage role="implementer" model="claude-opus-4" content={MSG_3} startedAt={at(29_800)} endedAt={at(33_000)} costUsd={null} contextTokens={52_800} contextWindowTokens={CONTEXT_WINDOW} outputTokens={380} />
+      <Aside>
+        <ToolCallCard name="edit" status="completed" args={{ file_path: "apps/control-plane/src/integrations/github/client.ts" }} startedAt={at(33_100)} endedAt={at(33_109)} />
+        <ToolCallCard name="edit" status="completed" args={{ file_path: "apps/control-plane/src/integrations/github/client.test.ts" }} startedAt={at(33_200)} endedAt={at(33_211)} />
+        <ToolCallCard name="bash" status="completed" args={{ command: "bun run typecheck" }} startedAt={at(33_300)} endedAt={at(36_200)} exitCode={2} output={TSC_STDOUT} stderr={TSC_STDERR} />
+        <ThinkingBlock text="Two type errors from the catch scope: `res` is unknown outside the try. Narrow it before the check." startedAt={at(36_300)} endedAt={at(38_000)} />
+        <ToolCallCard name="edit" status="completed" args={{ file_path: "apps/control-plane/src/integrations/github/client.ts" }} startedAt={at(38_100)} endedAt={at(38_108)} />
+        <ToolCallCard name="bash" status="completed" args={{ command: "bun run typecheck && bun test apps/control-plane" }} startedAt={at(38_200)} endedAt={at(42_080)} exitCode={0} output={LONG_TEST_OUTPUT_PASSED} />
+        <ThinkingBlock text={THOUGHT_3} startedAt={at(42_100)} endedAt={at(45_600)} />
+      </Aside>
+      <ChatMessage role="implementer" model="claude-opus-4" content={MSG_4} startedAt={at(45_600)} endedAt={at(52_000)} costUsd={null} contextTokens={61_400} contextWindowTokens={CONTEXT_WINDOW} outputTokens={520} />
+      <Aside>
+        <ToolCallCard name="bash" status="completed" args={{ command: 'gh pr create --title "WI-2481: retry GitHub webhook deliveries with backoff" --body-file /tmp/pr.md' }} startedAt={at(52_100)} endedAt={at(54_900)} exitCode={0} output="https://github.com/dude/dude/pull/412" />
+      </Aside>
+      <ChatMessage role="implementer" model="claude-opus-4" content="PR **#412** opened. Handing off to the reviewer." startedAt={at(55_000)} endedAt={at(56_000)} costUsd={null} contextTokens={62_100} contextWindowTokens={CONTEXT_WINDOW} outputTokens={18} activity="completed" />
+      <ChatMessage role="system" content="PR #412 opened · session completed" startedAt={at(56_000)} />
+    </ChatTranscript>
   );
 }
 
@@ -415,6 +571,7 @@ function LiveTranscriptDemo() {
   const t0Ref = useRef(0);
   const rafRef = useRef<number | null>(null);
   const labelRef = useRef("");
+  const steerTimers = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
 
   const stop = useCallback(() => {
     if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
@@ -459,20 +616,44 @@ function LiveTranscriptDemo() {
   };
   const reset = () => {
     stop();
+    for (const id of steerTimers.current) clearTimeout(id);
+    steerTimers.current.clear();
     draftRef.current = initialDraft();
     setState(null);
     setRev(0);
   };
-  useEffect(() => stop, [stop]);
+  useEffect(() => {
+    const timers = steerTimers.current;
+    return () => {
+      stop();
+      for (const id of timers) clearTimeout(id);
+    };
+  }, [stop]);
 
   const onSubmit = (sub: ComposerSubmission) => {
     if (sub.mode === "answer") play(buildAnswerSteps(Date.now(), sub.text));
     else if (sub.mode === "steer") {
       // Inject the steer into the running scenario without restarting it.
+      // Its later steps (delivery once the turn ends) run on their own
+      // clock so the queued state is actually seen.
       const steer = buildSteerSteps(Date.now(), sub.text);
-      for (const st of steer) st.apply(draftRef.current);
-      setState(snapshot(draftRef.current, "Steered", false));
-      setRev((r) => r + 1);
+      const commit = (label: string) => {
+        setState(snapshot(draftRef.current, label, false));
+        setRev((r) => r + 1);
+      };
+      for (const st of steer) {
+        if (st.at === 0) {
+          st.apply(draftRef.current);
+          commit(st.label);
+        } else {
+          const id = setTimeout(() => {
+            steerTimers.current.delete(id);
+            st.apply(draftRef.current);
+            commit(st.label);
+          }, st.at * 1000);
+          steerTimers.current.add(id);
+        }
+      }
     }
   };
 
@@ -559,29 +740,41 @@ function TurnNode({ turn, depth }: { readonly turn: ScenarioTurn; readonly depth
     );
   }
   if (turn.kind === "system") return <ChatMessage role="system" content={turn.text} startedAt={turn.startedAt} isNew />;
-  if (turn.kind === "human") return <ChatMessage role="human" name={turn.name} intent={turn.intent} inReplyTo={turn.inReplyTo} content={turn.text} startedAt={turn.startedAt} isNew />;
+  if (turn.kind === "human") return <ChatMessage role="human" name={turn.name} intent={turn.intent} inReplyTo={turn.inReplyTo} content={turn.text} startedAt={turn.startedAt} pending={turn.pending} deliveredAt={turn.deliveredAt} isNew />;
   if (turn.role === "human" || turn.role === "system") return null;
   const streaming = turn.activity === "streaming";
+  const thought = turn.thought;
+  const thinking = turn.activity === "thinking" && thought !== undefined && turn.thoughtShown !== undefined && turn.thoughtShown < thought.length;
+  const showThought = thought !== undefined && (thinking || (turn.thoughtShown ?? 0) > 0);
   return (
-    <ChatMessage
-      role={turn.role}
-      model={turn.model}
-      content={turn.text.slice(0, turn.shown)}
-      streaming={streaming}
-      activity={turn.activity}
-      activityProps={activityPropsFor(turn)}
-      startedAt={turn.startedAt}
-      endedAt={turn.endedAt}
-      costUsd={turn.costUsd}
-      tokens={turn.tokens}
-      attachments={
-        turn.tools.length > 0
-          ? turn.tools.map((tc) => (
-              <ToolCallCard key={tc.id} name={tc.name} status={tc.status} args={tc.args} startedAt={tc.startedAt} endedAt={tc.endedAt} result={tc.result} diff={tc.diff} error={tc.error} exitCode={tc.exitCode} slowAfterMs={SLOW_DEMO_MS} />
-            ))
-          : undefined
-      }
-    />
+    <>
+      {showThought ? (
+        <Aside>
+          <ThinkingBlock text={thought.slice(0, turn.thoughtShown ?? thought.length)} streaming={thinking} startedAt={turn.thoughtStartedAt} endedAt={thinking ? undefined : turn.thoughtEndedAt} />
+        </Aside>
+      ) : null}
+      <ChatMessage
+        role={turn.role}
+        model={turn.model}
+        content={turn.text.slice(0, turn.shown)}
+        streaming={streaming}
+        activity={turn.activity}
+        activityProps={activityPropsFor(turn)}
+        startedAt={turn.startedAt}
+        endedAt={turn.endedAt}
+        costUsd={turn.costUsd}
+        contextTokens={turn.contextTokens}
+        contextWindowTokens={CONTEXT_WINDOW}
+        outputTokens={turn.outputTokens}
+        attachments={
+          turn.tools.length > 0
+            ? turn.tools.map((tc) => (
+                <ToolCallCard key={tc.id} name={tc.name} status={tc.status} args={tc.args} startedAt={tc.startedAt} endedAt={tc.endedAt} output={tc.output} result={tc.result} diff={tc.diff} error={tc.error} exitCode={tc.exitCode} slowAfterMs={SLOW_DEMO_MS} />
+              ))
+            : undefined
+        }
+      />
+    </>
   );
 }
 

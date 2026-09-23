@@ -100,8 +100,20 @@
   color: var(--ds-color-text-muted);
   font-variant-numeric: tabular-nums;
 }
+/* Only rendered for a non-zero code: a small danger chip, so it survives
+   in the collapsed row next to a green check when the harness said
+   "completed" but the process said otherwise. */
 .exit {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: var(--ds-radius-sm);
+  border: 1px solid var(--ds-tone-danger-border);
+  background: var(--ds-tone-danger-bg);
   font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-2xs);
+  font-weight: var(--ds-weight-medium);
   color: var(--ds-tone-danger-fg);
 }
 .duration {
@@ -229,4 +241,93 @@
   background: var(--ds-tone-danger-bg);
   border-color: var(--ds-tone-danger-border);
   color: var(--ds-tone-danger-fg);
+}
+
+/* --- Output ------------------------------------------------------------- */
+
+/* A non-zero exit code finished "badly" even if the harness said the call
+   completed: the rail says so. */
+.badExit {
+  --tc-accent: var(--ds-tone-danger-fg);
+}
+
+.exitChip {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-2xs);
+  font-weight: var(--ds-weight-regular);
+  letter-spacing: 0;
+  text-transform: none;
+  padding: 0 4px;
+  border-radius: var(--ds-radius-sm);
+  border: 1px solid var(--ds-color-border-subtle);
+  color: var(--ds-color-text-secondary);
+}
+.exitChipBad {
+  border-color: var(--ds-tone-danger-border);
+  background: var(--ds-tone-danger-bg);
+  color: var(--ds-tone-danger-fg);
+  font-weight: var(--ds-weight-medium);
+}
+
+/* The output block is a flex column so the elision can sit between the
+   head and the tail as its own row; the text spans keep pre-wrap. */
+.out {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.outText {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* stderr: the same block, marked by a stronger left rail and its label,
+   not by tinting the text — stderr is where compilers put warnings and
+   test runners put progress, and it is read for minutes. */
+.stderrSection .sectionLabel {
+  color: var(--ds-color-text-secondary);
+}
+.preStderr {
+  border-left: 2px solid var(--ds-tone-attention-border);
+  background: color-mix(in srgb, var(--ds-tone-attention-bg) 30%, var(--ds-color-field-bg));
+}
+.badExit .preStderr {
+  border-left-color: var(--ds-tone-danger-border);
+  background: color-mix(in srgb, var(--ds-tone-danger-bg) 30%, var(--ds-color-field-bg));
+}
+
+/* The elision: a labelled hairline where the backend dropped the middle.
+   It must read as a gap, not as a blank line in the output. */
+.elision {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  margin: var(--ds-space-6) 0;
+  font-family: var(--ds-font-sans);
+  font-size: var(--ds-text-2xs);
+  font-weight: var(--ds-weight-medium);
+  letter-spacing: var(--ds-tracking-caps);
+  text-transform: uppercase;
+  color: var(--ds-color-text-muted);
+  user-select: none;
+}
+.elisionLine {
+  flex: 1;
+  height: 0;
+  border-top: 1px dashed var(--ds-color-border-strong);
+}
+.elisionText {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.outCaret {
+  display: inline-block;
+  width: 7px;
+  height: 13px;
+  margin-top: 2px;
+  border-radius: 1px;
+  background: var(--ds-tone-info-fg);
+  animation: ds-blink calc(var(--ds-cadence-blink) / max(var(--ds-motion-live), 0.0001)) steps(2, jump-none) infinite;
+}
+.slow .outCaret {
+  background: var(--ds-tone-attention-fg);
 }

@@ -48,6 +48,19 @@ export function formatTokens(n: number, opts: { readonly exact?: boolean } = {})
   return `${sign}${trimZeros((v / 1_000_000).toFixed(2))}M`;
 }
 
+/**
+ * Byte counts, for how much of a tool's output the backend dropped.
+ *   < 1024      -> 512 B
+ *   < 1 MiB     -> 12.3 KB
+ *   else        -> 1.2 MB
+ */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "—";
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  if (bytes < 1024 * 1024) return `${trimZeros((bytes / 1024).toFixed(1))} KB`;
+  return `${trimZeros((bytes / (1024 * 1024)).toFixed(1))} MB`;
+}
+
 export interface DurationOptions {
   /**
    * `short` = "3m 12s"; `clock` = "03:12"; `long` = "3 min 12 sec";

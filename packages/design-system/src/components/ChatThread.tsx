@@ -24,7 +24,8 @@ export interface ChatThreadProps extends Omit<HTMLAttributes<HTMLElement>, "chil
   readonly summary?: ReactNode;
   readonly startedAt?: string | number | Date | undefined;
   readonly endedAt?: string | number | Date | null | undefined;
-  readonly costUsd?: number | undefined;
+  /** `null` = not reported; shows "—". */
+  readonly costUsd?: number | null | undefined;
   /** Nesting depth; the transcript sets it. Depth ≥ 2 flattens to a rail. */
   readonly depth?: number | undefined;
   readonly defaultCollapsed?: boolean | undefined;
