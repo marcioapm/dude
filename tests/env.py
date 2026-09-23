@@ -37,6 +37,31 @@ POSTGRES_APP_PASSWORD = os.environ.get("DUDE_TEST_PG_APP_PASSWORD", "dude_app")
 POSTGRES_ADMIN_DB = os.environ.get("DUDE_TEST_PG_ADMIN_DB", "postgres")
 
 
+def lux_env() -> dict:
+    """The lux environment to run the contract suite against.
+
+    DUDE_TEST_LUX_ENV names its env.json; otherwise the most recent one
+    lux's `run_tests.py --serve` wrote. Fails loudly when there is none,
+    because --lux was asked for.
+    """
+    import glob
+    import json
+
+    path = os.environ.get("DUDE_TEST_LUX_ENV")
+    if not path:
+        found = sorted(glob.glob("/tmp/lux-e2e-*/env.json"), key=os.path.getmtime, reverse=True)
+        found = [p for p in found if json.loads(Path(p).read_text()).get("api_key")]
+        if not found:
+            raise SystemExit("no lux environment: run `uv run python run_tests.py --serve --detach` in lux/tests")
+        path = found[0]
+    env = json.loads(Path(path).read_text())
+    try:
+        requests.get(env["luxd_url"] + "/health", timeout=3).raise_for_status()
+    except requests.RequestException as err:
+        raise SystemExit(f"lux at {env['luxd_url']} is not answering: {err}")
+    return env
+
+
 def find_free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("", 0))
@@ -52,6 +77,8 @@ class TestEnvironment:
     gallery_port: int = field(default_factory=find_free_port)
     web_port: int = field(default_factory=find_free_port)
     web_proc: subprocess.Popen | None = field(default=None, repr=False)
+    # A real lux to drive instead of the fake: its env.json (see lux_env).
+    real_lux: dict | None = field(default=None, repr=False)
     control_plane_proc: subprocess.Popen | None = field(default=None, repr=False)
     orchestrator_proc: subprocess.Popen | None = field(default=None, repr=False)
     lux_proc: subprocess.Popen | None = field(default=None, repr=False)
@@ -113,10 +140,15 @@ class TestEnvironment:
     def _start_lux(self) -> None:
         """A stand-in for lux: scripted agents, real git pushes.
 
+        With `real_lux`, nothing is started: the orchestrator drives that lux.
+
         dude's suite tests what dude sends lux and what it does with the
         answers; lux is tested by its own suite, and the contract between
         the two by `--lux`.
         """
+        if self.real_lux:
+            self.lux_url, self.lux_key = self.real_lux["luxd_url"], self.real_lux["api_key"]
+            return
         addr_file = self.log_dir / "fake-lux.addr"
         addr_file.unlink(missing_ok=True)
         self.lux_proc = subprocess.Popen(
@@ -141,7 +173,9 @@ class TestEnvironment:
                 "DUDE_ORCHESTRATOR_TOKEN": self.orchestrator_token,
                 "LUX_URL": getattr(self, "lux_url", ""),
                 "LUX_API_KEY": self.lux_key,
-                "DUDE_AGENT_IMAGE": "dude-runtime:test",
+                # lux-fake's image when the lux is real: it is preloaded on
+                # every host, and it is what the fake models run.
+                "DUDE_AGENT_IMAGE": "localhost/lux-fake:test" if self.real_lux else "dude-runtime:test",
                 # No real agent credentials in the suite; fake models only.
                 "DUDE_OPENCODE_AUTH": "{}",
                 "DUDE_OPENCODE_CONFIG": "{}",
@@ -312,5 +346,6 @@ class TestEnvironment:
         env.lux_proc = None
         env.gallery_proc = None
         env.orchestrator_port = int(os.environ.get("DUDE_TEST_ORCHESTRATOR_PORT", "0"))
+        env.real_lux = lux_env() if os.environ.get("DUDE_TEST_REAL_LUX") else None
         env._init_services()
         return env

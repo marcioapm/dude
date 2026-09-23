@@ -38,22 +38,36 @@ type Behaviour struct {
 }
 
 type Run struct {
-	ID        string
-	Spec      json.RawMessage
-	State     string
-	Epoch     int
-	SessionID string
-	Inputs    []string
-	Pushed    string
-	Cancelled bool
-	Stopped   int
-	Resumed   int
+	ID          string
+	Spec        json.RawMessage
+	State       string
+	Epoch       int
+	SessionID   string
+	Inputs      []string
+	Pushed      string
+	Cancelled   bool
+	Stopped     int
+	Resumed     int
+	Interrupted int
 
 	repo     string
+	busy     bool
+	queued   []queuedInput
 	records  []record
 	events   []event
 	behavior Behaviour
 	cond     *sync.Cond
+}
+
+type queuedInput struct{ text, requestID string }
+
+// deliverQueued hands queued input to an idle agent. Callers hold s.mu.
+func (s *Server) deliverQueued(run *Run) {
+	for _, in := range run.queued {
+		run.Inputs = append(run.Inputs, in.text)
+		s.recordEvent(run, "lux.input", map[string]any{"requestId": in.requestID})
+	}
+	run.queued = nil
 }
 
 type record struct {
@@ -168,6 +182,7 @@ func (s *Server) play(run *Run, spec map[string]any, resumed bool) {
 	s.recordEvent(run, "lux.session", map[string]any{"sessionId": run.SessionID})
 	s.recordEvent(run, "lux.activity", map[string]any{"activity": "idle"})
 	s.recordEvent(run, "lux.activity", map[string]any{"activity": "busy"})
+	run.busy = true
 	b := run.behavior
 	for i, tool := range b.Tools {
 		id := fmt.Sprintf("call_%d", i)
@@ -189,6 +204,8 @@ func (s *Server) play(run *Run, spec map[string]any, resumed bool) {
 	s.agent(run, map[string]any{"sessionUpdate": "usage_update", "cost": map[string]any{"amount": 0.01, "currency": "USD"}, "used": 1000})
 	s.recordEvent(run, "acp.turn_end", map[string]any{"stopReason": "end_turn"})
 	s.recordEvent(run, "lux.activity", map[string]any{"activity": "idle"})
+	run.busy = false
+	s.deliverQueued(run)
 	_ = epoch
 	s.mu.Unlock()
 }
@@ -290,6 +307,7 @@ func (s *Server) input(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Text      string `json:"text"`
 		RequestID string `json:"requestId"`
+		Interrupt bool   `json:"interrupt"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&in)
 	s.mu.Lock()
@@ -298,8 +316,19 @@ func (s *Server) input(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 409, "not_running", "run is "+run.State)
 		return
 	}
-	run.Inputs = append(run.Inputs, in.Text)
-	s.recordEvent(run, "lux.input", map[string]any{"requestId": in.RequestID})
+	// As lux's ACP adapter does: ACP has no way to add to a turn in
+	// progress, so input to a busy agent waits for the turn to end, and is
+	// acknowledged when it is actually delivered.
+	run.queued = append(run.queued, queuedInput{in.Text, in.RequestID})
+	if in.Interrupt && run.busy {
+		// The turn is cancelled, and the agent is free to hear it.
+		run.Interrupted++
+		s.recordEvent(run, "acp.turn_end", map[string]any{"stopReason": "cancelled"})
+		run.busy = false
+	}
+	if !run.busy {
+		s.deliverQueued(run)
+	}
 	writeJSON(w, 202, map[string]any{"requestId": in.RequestID})
 }
 
@@ -399,6 +428,7 @@ func (s *Server) stop(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	run.Stopped++
+	run.busy = false
 	if run.State == "running" {
 		s.setState(run, "stopped")
 	}
@@ -497,15 +527,9 @@ func (s *Server) output(w http.ResponseWriter, r *http.Request) {
 			return
 		default:
 		}
-		for _, e := range run.events {
-			if e.ID <= afterEvent {
-				continue
-			}
-			afterEvent = e.ID
-			if !send("lux", map[string]any{"id": e.ID, "epoch": e.Epoch, "type": e.Type, "data": e.Data}) {
-				return
-			}
-		}
+		// Records first, then lifecycle events, as lux relays them: its
+		// lifecycle events are flushed on a timer and trail the agent's own
+		// records. A client that assumes the other order is wrong on lux.
 		for ; sentRec < len(run.records); sentRec++ {
 			rec := run.records[sentRec]
 			if rec.Epoch < sinceEpoch || rec.Epoch == sinceEpoch && rec.Seq <= sinceSeq {
@@ -513,6 +537,15 @@ func (s *Server) output(w http.ResponseWriter, r *http.Request) {
 			}
 			cursor := fmt.Sprintf("%d.%d", rec.Epoch, rec.Seq)
 			if !send("record", map[string]any{"cursor": cursor, "epoch": rec.Epoch, "seq": rec.Seq, "ch": "event", "event": rec.Event}) {
+				return
+			}
+		}
+		for _, e := range run.events {
+			if e.ID <= afterEvent {
+				continue
+			}
+			afterEvent = e.ID
+			if !send("lux", map[string]any{"id": e.ID, "epoch": e.Epoch, "type": e.Type, "data": e.Data}) {
 				return
 			}
 		}

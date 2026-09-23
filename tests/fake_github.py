@@ -33,7 +33,7 @@ from pathlib import Path
 
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
+        s.bind(("", 0))
         return int(s.getsockname()[1])
 
 
@@ -60,7 +60,11 @@ class PullRequest:
 class FakeGitHub:
     """A bare repository, a git daemon serving it, and an API in front of both."""
 
-    def __init__(self, root: Path, owner: str = "acme", repo: str = "target") -> None:
+    def __init__(self, root: Path, owner: str = "acme", repo: str = "target", listen: str = "127.0.0.1") -> None:
+        # The address git is served on. Loopback for the fake lux; a real
+        # lux's hosts are containers, and reach this machine at their
+        # network's gateway.
+        self.listen = listen
         self.owner = owner
         self.repo = repo
         self.root = root
@@ -92,7 +96,7 @@ class FakeGitHub:
                 # Agents push through lux; git daemon refuses that unless asked.
                 "--enable=receive-pack",
                 "--reuseaddr",
-                "--listen=127.0.0.1",
+                f"--listen={self.listen}",
                 str(self.root),
             ],
             stdout=subprocess.DEVNULL,
@@ -114,7 +118,7 @@ class FakeGitHub:
 
     @property
     def clone_url(self) -> str:
-        return f"git://127.0.0.1:{self.git_port}/{self.owner}/{self.repo}.git"
+        return f"git://{self.listen}:{self.git_port}/{self.owner}/{self.repo}.git"
 
     @property
     def api_url(self) -> str:

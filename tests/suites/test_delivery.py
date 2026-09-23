@@ -106,7 +106,9 @@ def test_steer_pause_resume_and_abort_reach_the_agent(client: ApiClient, forge_p
         message="the implementer never started",
     )
 
-    resp = client.post(f"/v1/runs/{run['id']}/steer", {"text": "also add a test"})
+    # Interrupting: the agent is mid-turn, and without it would only hear
+    # this when its turn ends.
+    resp = client.post(f"/v1/runs/{run['id']}/steer", {"text": "also add a test", "interrupt": True})
     assert resp.status_code == 201, resp.text
     directive = resp.json()
     wait_until(
