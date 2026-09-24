@@ -48,6 +48,18 @@ export interface ProjectDetail extends Project {
   deliveryPolicy: DeliveryPolicy;
 }
 
+/** The organization's GitHub connection, as settings may show it: never the secret. */
+export type ForgeConnection =
+  | { connected: false }
+  | {
+      connected: true;
+      auth: "pat" | "github_app";
+      secretHint: string;
+      apiBaseUrl: string | null;
+      webhookPath: string;
+      updatedAt: string;
+    };
+
 /** What a work item asks for, and where it sits. */
 export interface WorkItemFields {
   title: string;
@@ -190,6 +202,19 @@ export class ApiClient {
     simplify: boolean;
   }> {
     return this.#request("GET", "/v1/delivery-defaults");
+  }
+
+  forgeConnection(): Promise<ForgeConnection> {
+    return this.#request("GET", "/v1/forge/credential");
+  }
+
+  /** Ask GitHub who the stored token is. */
+  verifyForge(): Promise<{ ok: true; login: string | null; scopes: string | null } | { ok: false; reason: string }> {
+    return this.#request("POST", "/v1/forge/credential/verify", {});
+  }
+
+  connectForge(token: string, apiBaseUrl?: string): Promise<unknown> {
+    return this.#request("POST", "/v1/forge/credential", { auth: "pat", secret: token, ...(apiBaseUrl ? { apiBaseUrl } : {}) });
   }
 
   getProject(id: string): Promise<ProjectDetail> {
