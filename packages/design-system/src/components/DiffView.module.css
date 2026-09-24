@@ -14,8 +14,7 @@
   gap: var(--ds-space-8);
   height: 30px;
   padding: 0 var(--ds-space-8);
-  background: var(--ds-color-raised);
-  border-bottom: 1px solid var(--ds-color-border-subtle);
+  background: var(--ds-color-chrome);
   position: sticky;
   top: 0;
   z-index: var(--ds-z-raised);
@@ -24,9 +23,6 @@
 }
 .fileHeader:hover {
   background: var(--ds-color-overlay);
-}
-.collapsed .fileHeader {
-  border-bottom: 0;
 }
 .fileToggle {
   color: var(--ds-color-text-muted);

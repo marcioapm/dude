@@ -119,10 +119,11 @@
   z-index: var(--ds-z-raised);
   min-height: var(--ds-size-row-default);
   margin-top: var(--ds-space-4);
-  background: var(--ds-color-surface);
+  /* Opaque so rows scroll under it; the sidebar sits on the canvas. */
+  background: var(--ds-color-canvas);
 }
 .project:hover {
-  background: var(--ds-color-surface);
+  background: var(--ds-color-canvas);
 }
 .project.selected,
 .project.selected:hover {

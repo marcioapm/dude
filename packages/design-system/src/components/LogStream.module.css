@@ -20,8 +20,7 @@
   gap: var(--ds-space-8);
   height: 28px;
   padding: 0 var(--ds-space-8);
-  background: var(--ds-color-raised);
-  border-bottom: 1px solid var(--ds-color-border-subtle);
+  background: var(--ds-color-chrome);
   font-size: var(--ds-text-xs);
   color: var(--ds-color-text-muted);
   flex-shrink: 0;

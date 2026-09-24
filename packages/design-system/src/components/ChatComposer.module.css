@@ -16,18 +16,18 @@
 }
 .answer {
   --cc-tint: var(--ds-tone-attention-solid);
-  --cc-wash: color-mix(in srgb, var(--ds-tone-attention-bg) 45%, var(--ds-color-raised));
+  --cc-wash: color-mix(in srgb, var(--ds-tone-attention-bg) 45%, var(--ds-color-chrome));
 }
 .steer {
   --cc-tint: var(--ds-color-accent);
-  --cc-wash: color-mix(in srgb, var(--ds-color-accent-subtle) 60%, var(--ds-color-raised));
+  --cc-wash: color-mix(in srgb, var(--ds-color-accent-subtle) 60%, var(--ds-color-chrome));
 }
 .prompt {
   --cc-tint: var(--ds-color-border);
 }
 .disabled {
   --cc-tint: var(--ds-color-border-subtle);
-  --cc-wash: var(--ds-color-raised);
+  --cc-wash: var(--ds-color-chrome);
 }
 
 /* Pending question, quoted above the field. */

@@ -1,6 +1,7 @@
 /*
- * Persistent navigation chrome. Surface-coloured with a hairline on the
- * right; everything inside is 11–12px and the only colour is on marks.
+ * Persistent navigation chrome. On the canvas, the darkest shade, so the
+ * main pane's panels read as lighter layers beside it without an edge;
+ * the only colour is on marks.
  */
 
 .root {
@@ -10,8 +11,7 @@
   min-height: 0;
   min-width: 0;
   flex-shrink: 0;
-  background: var(--ds-color-surface);
-  border-right: 1px solid var(--ds-color-border-subtle);
+  background: var(--ds-color-canvas);
   color: var(--ds-color-text-primary);
   font-size: var(--ds-text-sm);
   container-type: inline-size;
@@ -23,7 +23,6 @@
   gap: var(--ds-space-8);
   min-height: var(--ds-size-control-lg);
   padding: 0 var(--ds-space-8) 0 var(--ds-space-12);
-  border-bottom: 1px solid var(--ds-color-border-subtle);
 }
 .title {
   flex: 1;

@@ -36,6 +36,8 @@ export interface ThemeColors {
   readonly raised: string;
   readonly overlay: string;
   readonly sunken: string;
+  /** Header, toolbar and footer bars inside a panel: one shade off the panel body. */
+  readonly chrome: string;
 
   // Borders
   readonly borderSubtle: string;
@@ -115,6 +117,7 @@ const darkL = {
 };
 const lightL = {
   canvas: 0.965, // = neutral[12]; also sunken
+  chrome: 0.98,
   borderSubtle: 0.91,
   border: 0.85,
   borderStrong: 0.72,
@@ -131,6 +134,7 @@ export const themeColors: Record<ThemeMode, ThemeColors> = {
     raised: oklchHex(darkL.raised),
     overlay: oklchHex(darkL.overlay),
     sunken: neutral[1],
+    chrome: oklchHex(darkL.raised),
 
     borderSubtle: oklchHex(darkL.borderSubtle),
     border: oklchHex(darkL.border),
@@ -169,6 +173,7 @@ export const themeColors: Record<ThemeMode, ThemeColors> = {
     raised: white,
     overlay: white,
     sunken: neutral[12],
+    chrome: oklchHex(lightL.chrome, NEUTRAL_CHROMA * 0.6),
 
     borderSubtle: oklchHex(lightL.borderSubtle, NEUTRAL_CHROMA * 0.6),
     border: oklchHex(lightL.border),

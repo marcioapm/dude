@@ -74,12 +74,13 @@ describe("text ladder contrast (Discord/Obsidian-soft, not a bright-white spike)
     }
   });
 
-  test("every text slot that carries read content clears 4.5:1 on canvas, surface and raised", () => {
-    // Sidebar text sits on canvas, the transcript on surface, headers and
-    // cards on raised. `overlay` is for menus and carries primary text.
+  test("every text slot that carries read content clears 4.5:1 on canvas, surface, raised and chrome", () => {
+    // Sidebar text sits on canvas, the transcript on surface, cards on
+    // raised, panel headers on chrome. `overlay` is for menus and carries
+    // primary text.
     for (const mode of MODES) {
       const c = themeColors[mode];
-      for (const bg of ["canvas", "surface", "raised"] as const) {
+      for (const bg of ["canvas", "surface", "raised", "chrome"] as const) {
         expect(contrast(c.textPrimary, c[bg]), `${mode} primary on ${bg}`).toBeGreaterThanOrEqual(4.5);
         expect(contrast(c.textSecondary, c[bg]), `${mode} secondary on ${bg}`).toBeGreaterThanOrEqual(4.5);
         expect(contrast(c.textMuted, c[bg]), `${mode} muted on ${bg}`).toBeGreaterThanOrEqual(4.5);

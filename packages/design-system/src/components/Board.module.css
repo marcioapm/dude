@@ -28,7 +28,6 @@
   gap: var(--ds-space-12);
   min-height: var(--ds-size-control-lg);
   padding: 0 var(--ds-space-12);
-  border-bottom: 1px solid var(--ds-color-border-subtle);
   background: var(--ds-color-surface);
   flex-shrink: 0;
 }
