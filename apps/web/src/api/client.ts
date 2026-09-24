@@ -9,6 +9,7 @@
 
 import type { NavProject } from "@dude/design-system";
 import type {
+  AgentRole,
   DeliveryPolicy,
   Directive,
   FullDeliveryPolicy,
@@ -127,6 +128,21 @@ export interface ApiClientOptions {
   apiKey: string;
 }
 
+/** A file an agent published, as the work item lists it. `GET /v1/artifacts`. */
+export interface Artifact {
+  id: string;
+  workItemId: string;
+  runId: string | null;
+  name: string;
+  contentType: string;
+  sizeBytes: number;
+  sha256: string;
+  epoch: number;
+  createdAt: string;
+  phase: string | null;
+  role: AgentRole | null;
+}
+
 export class ApiClient {
   readonly #baseUrl: string;
   readonly #apiKey: string;
@@ -136,7 +152,8 @@ export class ApiClient {
     this.#apiKey = options.apiKey;
   }
 
-  async #request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  /** A request that throws ApiError for a refusal; the caller reads the body. */
+  async #fetch(method: string, path: string, body?: unknown): Promise<Response> {
     const res = await fetch(`${this.#baseUrl}${path}`, {
       method,
       headers: {
@@ -145,12 +162,9 @@ export class ApiClient {
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-
-    const text = await res.text();
-    const payload = text ? JSON.parse(text) : null;
-
     if (!res.ok) {
-      const error = payload?.error ?? {};
+      const text = await res.text();
+      const error = (text ? JSON.parse(text) : null)?.error ?? {};
       throw new ApiError(
         res.status,
         error.code ?? "error",
@@ -158,7 +172,12 @@ export class ApiClient {
         error.details,
       );
     }
-    return payload as T;
+    return res;
+  }
+
+  async #request<T>(method: string, path: string, body?: unknown): Promise<T> {
+    const text = await (await this.#fetch(method, path, body)).text();
+    return (text ? JSON.parse(text) : null) as T;
   }
 
   // -- reads --------------------------------------------------------------
@@ -188,6 +207,18 @@ export class ApiClient {
 
   listPullRequests(workItemId: string): Promise<{ pullRequests: PullRequest[] }> {
     return this.#request("GET", `/v1/pull-requests${qs({ workItemId })}`);
+  }
+
+  listArtifacts(workItemId: string): Promise<{ artifacts: Artifact[] }> {
+    return this.#request("GET", `/v1/artifacts${qs({ workItemId })}`);
+  }
+
+  /**
+   * An artifact's bytes. Fetched with the key in a header, never in a URL,
+   * so the page makes blob URLs from it for images and downloads.
+   */
+  async artifactContent(id: string): Promise<Blob> {
+    return (await this.#fetch("GET", `/v1/artifacts/${encodeURIComponent(id)}/content`)).blob();
   }
 
   listFindings(workItemId: string): Promise<{ findings: Finding[] }> {

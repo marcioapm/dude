@@ -32,29 +32,49 @@ export async function orchestrator(
   body: string = "{}",
   actorId?: string,
 ): Promise<Response> {
-  const { url, token } = config();
-  let res: Response;
-  try {
-    res = await fetch(`${url}${path}`, {
-      method,
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-      headers: {
-        authorization: `Bearer ${token}`,
-        // Who is asking travels in headers, never in the body, so a
-        // request cannot claim to be someone else.
-        "x-dude-organization": organizationId,
-        ...(actorId ? { "x-dude-actor": actorId } : {}),
-        "content-type": "application/json",
-      },
-      ...(method === "GET" ? {} : { body: body || "{}" }),
-    });
-  } catch (err) {
-    throw new HttpError(503, `the orchestrator is unreachable: ${String(err)}`, "unavailable");
-  }
+  const res = await call(organizationId, method, path, {
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+    headers: { ...(actorId ? { "x-dude-actor": actorId } : {}), "content-type": "application/json" },
+    ...(method === "GET" ? {} : { body: body || "{}" }),
+  });
   return new Response(await res.text(), {
     status: res.status,
     headers: { "content-type": "application/json" },
   });
+}
+
+/**
+ * Read a file from the orchestrator (an artifact's bytes) as a stream: the
+ * response as it came, for the caller to pass on. Only the time to its
+ * first byte is limited; a large file may take as long as it takes.
+ */
+export async function orchestratorStream(organizationId: string, path: string): Promise<Response> {
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), TIMEOUT_MS);
+  try {
+    return await call(organizationId, "GET", path, { signal: abort.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function call(organizationId: string, method: string, path: string, init: RequestInit): Promise<Response> {
+  const { url, token } = config();
+  try {
+    return await fetch(`${url}${path}`, {
+      ...init,
+      method,
+      headers: {
+        ...(init.headers as Record<string, string>),
+        authorization: `Bearer ${token}`,
+        // Who is asking travels in headers, never in the body, so a
+        // request cannot claim to be someone else.
+        "x-dude-organization": organizationId,
+      },
+    });
+  } catch (err) {
+    throw new HttpError(503, `the orchestrator is unreachable: ${String(err)}`, "unavailable");
+  }
 }
 
 /** Tell the orchestrator something changed that it should act on now. */

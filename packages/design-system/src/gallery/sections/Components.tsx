@@ -11,6 +11,8 @@ import { DiffView, parseUnifiedDiff } from "../../components/DiffView.tsx";
 import { LogStream, type LogLine } from "../../components/LogStream.tsx";
 import { FindingGroup, FindingRow, FINDING_SEVERITIES, FINDING_SEVERITY_SPECS, FINDING_STATUSES } from "../../components/FindingRow.tsx";
 import { Breadcrumb } from "../../components/Breadcrumb.tsx";
+import { ArtifactGroup, ArtifactRow, type ArtifactChange } from "../../components/ArtifactRow.tsx";
+import { ArtifactPreview } from "../../components/ArtifactPreview.tsx";
 import { Badge } from "../../primitives/Badge.tsx";
 import { Button, IconButton } from "../../primitives/Button.tsx";
 import { Icon } from "../../icons/index.tsx";
@@ -297,6 +299,25 @@ export function ComponentsSection({ mode }: { readonly mode: PaneMode }) {
       </Block>
 
       <Block
+        id="c-artifact"
+        title="ArtifactRow / ArtifactGroup / ArtifactPreview"
+        note="Files an agent publishes — a design doc, a report, a screenshot, a JSON result. One 28px row each: a glyph for the kind, the path in mono, the size, who produced it (role avatar and phase), age, and the app's download link; 'New' / 'Updated' since the previous run is a neutral badge. The leading part of the row is a disclosure button; the content opens under it. The preview renders by kind — Markdown as a document, text and JSON in mono (JSON pretty-printed when it parses, as-is when it does not), images on a checkerboard, and 'No preview' plus the download link for anything else. Long content clamps at 400px behind 'Show all'. The group only says 'No artifacts yet' when the screen asks for it."
+      >
+        <Panes mode={mode}>
+          <Col>
+            <Label>Group, each kind, expanded and collapsed</Label>
+            <ArtifactDemo />
+            <Label>Preview states</Label>
+            <ArtifactPreviewStates />
+            <Label>Empty: only with `empty`</Label>
+            <ArtifactGroup artifacts={[]} renderRow={() => null} empty="Agents publish documents and results here." />
+            <Caption>(without `empty`, an empty group renders nothing)</Caption>
+            <ArtifactGroup artifacts={[]} renderRow={() => null} />
+          </Col>
+        </Panes>
+      </Block>
+
+      <Block
         id="c-breadcrumb"
         title="Breadcrumb"
         note="Where you are: Project › Epic › KEY. Every crumb but the last is a link or a button (text-coloured until hovered); the last is the current place and is aria-current. Long middle crumbs elide in the middle so the head and the tail both survive, with the full text in the title; the last crumb is never elided. Use it in the work-item header and the transcript header instead of a Back button."
@@ -363,6 +384,102 @@ const FINDINGS = [
   { id: "f5", severity: "blocking", status: "open", category: "security", title: "Webhook secret read from an unset env var falls back to empty string", file: "apps/control-plane/src/config.ts", line: 88, description: "With no secret, every signature verifies.", suggestedFix: "Fail startup when `GITHUB_WEBHOOK_SECRET` is unset." },
   { id: "f6", severity: "low", status: "superseded", category: "api", title: "Replay endpoint returns 200 for unknown ids", file: "apps/control-plane/src/replay.ts", line: 15, resolutionNote: "Superseded by the endpoint's redesign in CP-60." },
 ] as const;
+
+const ARTIFACT_MD = `# Login flow: PKCE migration
+
+## Summary
+
+Every login flow moves to the authorization-code flow with PKCE. The implicit
+flow is removed; refresh tokens move to an \`HttpOnly\` cookie scoped to \`/auth\`.
+
+## Changes
+
+- Web: \`apps/web/src/auth/*\` — code verifier in \`sessionStorage\`, exchanged once.
+- Mobile: the app scheme redirect stays; the verifier lives in the keychain.
+- CLI: loopback redirect on a random port, as \`gh auth login\` does.
+
+## Risks
+
+| Area | Risk | Mitigation |
+|---|---|---|
+| Sessions | Existing tokens expire at cut-over | Rolling deploy; refresh both kinds for 24h |
+| Mobile | Old builds cannot log in | Force-update gate on the API |
+
+## Rollout
+
+1. Ship the server side behind a flag.
+2. Move the web client.
+3. Move mobile and CLI.
+4. Remove the implicit flow.
+
+## Open questions
+
+- Do we keep the 30-day refresh lifetime, or shorten it to 7 days now that
+  rotation is cheap?
+- Which teams still call the token endpoint directly?
+`;
+const ARTIFACT_JSON = `{"suite":"auth","passed":42,"failed":1,"failures":[{"name":"refresh rotates token","file":"apps/web/src/auth/session.test.ts","line":88,"message":"expected 200, got 401"}],"durationMs":8123}`;
+const ARTIFACT_LOG = Array.from({ length: 80 }, (_, i) => `${String(i + 1).padStart(3, " ")}  ${["GET", "POST", "GET", "PUT"][i % 4]} /auth/${["token", "callback", "refresh", "logout"][i % 4]} ${[200, 200, 302, 401][i % 4]} ${(12 + ((i * 37) % 180)).toFixed(0)}ms`).join("\n");
+const PNG_URL =
+  "data:image/svg+xml;utf8," +
+  encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="360" height="200"><rect x="20" y="20" width="320" height="160" rx="8" fill="#ffffff" stroke="#c7cbcf"/><rect x="44" y="52" width="272" height="28" rx="4" fill="#f2f4f6" stroke="#c7cbcf"/><rect x="44" y="92" width="272" height="28" rx="4" fill="#f2f4f6" stroke="#c7cbcf"/><rect x="44" y="136" width="120" height="28" rx="4" fill="#126db1"/><text x="104" y="155" font-family="sans-serif" font-size="12" fill="#fff" text-anchor="middle">Sign in</text></svg>',
+  );
+
+const ARTIFACTS: ReadonlyArray<{ id: string; name: string; contentType: string; sizeBytes: number; sha256: string; role: "implementer" | "reviewer" | "simplifier"; phase: string; publishedAt: string; change?: ArtifactChange; text?: string; url?: string; open?: boolean }> = [
+  { id: "a1", name: "design.md", contentType: "text/markdown", sizeBytes: 1_284, sha256: "9f2c…e41b", role: "implementer", phase: "write", publishedAt: at(-2 * 3_600_000), change: "updated", text: ARTIFACT_MD, open: true },
+  { id: "a2", name: "screens/login.png", contentType: "image/png", sizeBytes: 48_213, sha256: "0a1b…77cd", role: "implementer", phase: "implement", publishedAt: at(-3 * 3_600_000), change: "new", url: PNG_URL, open: true },
+  { id: "a3", name: "results/tests.json", contentType: "application/json", sizeBytes: 812, sha256: "beef…0042", role: "reviewer", phase: "review", publishedAt: at(-45 * 60_000), text: ARTIFACT_JSON, open: true },
+  { id: "a4", name: "logs/requests.log", contentType: "text/plain", sizeBytes: 6_140, sha256: "1234…abcd", role: "simplifier", phase: "simplify", publishedAt: at(-26 * 3_600_000), text: ARTIFACT_LOG, open: true },
+  { id: "a5", name: "bundle.tar.gz", contentType: "application/gzip", sizeBytes: 3_401_772, sha256: "77aa…bb10", role: "implementer", phase: "implement", publishedAt: at(-3 * 86_400_000), open: true },
+  { id: "a6", name: "notes.txt", contentType: "text/plain", sizeBytes: 302, sha256: "5f5f…0a0a", role: "reviewer", phase: "review", publishedAt: at(-9 * 86_400_000), change: "new", text: "Left the retry helper alone: it is covered by the integration suite and not on the hot path." },
+];
+
+function ArtifactDemo() {
+  return (
+    <ArtifactGroup
+      artifacts={ARTIFACTS}
+      actions={
+        <Button size="sm" variant="ghost" leadingIcon="download">
+          Download all
+        </Button>
+      }
+      renderRow={(a) => (
+        <ArtifactRow
+          key={a.id}
+          name={a.name}
+          contentType={a.contentType}
+          sizeBytes={a.sizeBytes}
+          sha256={a.sha256}
+          producer={{ role: a.role, phase: a.phase }}
+          publishedAt={a.publishedAt}
+          change={a.change}
+          defaultExpanded={a.open}
+          download={
+            <a href={a.url ?? "#c-artifact"} download={a.name.split("/").pop()}>
+              <Icon name="download" size={12} /> Download
+            </a>
+          }
+          preview={<ArtifactPreview contentType={a.contentType} name={a.name} text={a.text} url={a.url} download={<a href="#c-artifact" download>Download</a>} />}
+        />
+      )}
+    />
+  );
+}
+
+function ArtifactPreviewStates() {
+  return (
+    <States
+      items={[
+        ["loading", <ArtifactPreview contentType="text/markdown" name="design.md" loading />],
+        ["error", <ArtifactPreview contentType="text/markdown" name="design.md" error="Could not fetch the artifact (404)." />],
+        ["invalid JSON, shown as-is", <ArtifactPreview contentType="application/json" name="partial.json" text={'{"passed": 4, "failed": '} />],
+        ["type from the name", <ArtifactPreview contentType="application/octet-stream" name="README.md" text={"# Title\n\nThe media type was generic; the `.md` decided it."} />],
+        ["no preview", <ArtifactPreview contentType="application/pdf" name="report.pdf" download={<a href="#c-artifact" download>Download report.pdf</a>} />],
+      ]}
+    />
+  );
+}
 
 function FindingGroupDemo() {
   return (

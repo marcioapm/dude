@@ -3,8 +3,9 @@
  * agent did about it.
  *
  * Top to bottom, the questions an operator asks in the order they ask them:
- * what is this, where is it (the phase pipeline), is anything wrong (the
- * findings), and is it shippable (the pull request). Every agent in the
+ * what is this, where is it (the phase pipeline), what did the agents leave
+ * for a person to read (artifacts), is anything wrong (the findings), and is
+ * it shippable (the pull request). Every agent in the
  * pipeline opens its own conversation, because the pipeline is a summary and
  * the chat is the truth.
  *
@@ -16,9 +17,10 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { AgentAvatar, FindingGroup, FindingRow, StatusBadge } from "@dude/design-system/components";
 import { Button, EmptyState, Spinner } from "@dude/design-system/primitives";
 import { DEFAULT_RUN_ROLE, runLabel } from "@dude/domain";
-import type { ApiClient, Finding, PullRequest, Run, WorkItemDetail } from "../api/client.ts";
+import type { ApiClient, Artifact, Finding, PullRequest, Run, WorkItemDetail } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
 import { useReloadOnEvents } from "../hooks/useEventStream.ts";
+import { ArtifactsSection } from "./ArtifactsSection.tsx";
 import { existingWorkItem, WorkItemDialog } from "./WorkItemDialog.tsx";
 
 export interface WorkItemScreenProps {
@@ -32,6 +34,7 @@ export interface WorkItemScreenProps {
 export function WorkItemScreen({ client, workItemId, onOpenRun, breadcrumb }: WorkItemScreenProps) {
   const [item, setItem] = useState<WorkItemDetail | null>(null);
   const [findings, setFindings] = useState<Finding[]>([]);
+  const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [pullRequests, setPullRequests] = useState<PullRequest[]>([]);
   const [problem, setProblem] = useState<string | null>(null);
   const [delivering, setDelivering] = useState(false);
@@ -39,13 +42,15 @@ export function WorkItemScreen({ client, workItemId, onOpenRun, breadcrumb }: Wo
 
   const load = useCallback(async () => {
     try {
-      const [fresh, f, p] = await Promise.all([
+      const [fresh, f, p, a] = await Promise.all([
         client.getWorkItem(workItemId),
         client.listFindings(workItemId),
         client.listPullRequests(workItemId),
+        client.listArtifacts(workItemId),
       ]);
       setItem(fresh);
       setFindings(f.findings);
+      setArtifacts(a.artifacts);
       setPullRequests(p.pullRequests);
     } catch (err) {
       setProblem(err instanceof Error ? err.message : String(err));
@@ -161,6 +166,8 @@ export function WorkItemScreen({ client, workItemId, onOpenRun, breadcrumb }: Wo
           />
         )}
       </section>
+
+      <ArtifactsSection client={client} artifacts={artifacts} />
 
       {findings.length > 0 ? (
         <FindingGroup

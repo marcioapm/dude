@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"strings"
@@ -32,7 +33,46 @@ type Run struct {
 	Activity  string `json:"activity"`
 	Epoch     int    `json:"epoch"`
 	SessionID string `json:"sessionId"`
+	// Where it ran, one per start; only filled in by Get.
+	Placements []Placement `json:"placements,omitempty"`
 }
+
+// Placement is one start of a Run on a host.
+type Placement struct {
+	Epoch int `json:"epoch"`
+	// assigned, starting, running, stopping; then exited, or lost with its
+	// host.
+	State string `json:"state"`
+	// When the agent's process started; nil for a placement that never got
+	// that far, and so never published anything.
+	WorkloadStartedAt *time.Time `json:"workloadStartedAt,omitempty"`
+	// When its container exited; nil while it runs.
+	ExitedAt *time.Time `json:"exitedAt,omitempty"`
+	// When the host reported what it kept at exit — the snapshot, and the
+	// artifacts with it. Nil while it is still running or uploading.
+	SnapshotDoneAt *time.Time `json:"snapshotDoneAt,omitempty"`
+}
+
+// Artifact is a file a Run produced, kept by lux after the Run ends.
+type Artifact struct {
+	ID    string `json:"id"`
+	Epoch int    `json:"epoch"`
+	// Where it was in the container: /.lux/artifacts/<name> for what the
+	// agent published into $LUX_ARTIFACTS.
+	Path        string `json:"path"`
+	ContentType string `json:"contentType"`
+	Size        int64  `json:"size"`
+	SHA256      string `json:"sha256"`
+	// Uploaded from its host, so it can be downloaded.
+	Available bool `json:"available"`
+}
+
+// PublishedDir is $LUX_ARTIFACTS inside the container, and PublishedPrefix
+// where what an agent put there is listed.
+const (
+	PublishedDir    = "/.lux/run/artifacts"
+	PublishedPrefix = "/.lux/artifacts/"
+)
 
 // Terminal says whether lux will report nothing more without a resume.
 func Terminal(state string) bool {
@@ -156,6 +196,12 @@ func (e *Error) Error() string { return fmt.Sprintf("lux %d %s: %s", e.Status, e
 // passes; an invalid spec does not.
 func (e *Error) Retryable() bool { return e.Status == 0 || e.Status == 429 || e.Status >= 500 }
 
+// IsNotFound says lux has no such Run or artifact: it will not come back.
+func IsNotFound(err error) bool {
+	e, ok := AsError(err)
+	return ok && e.Status == http.StatusNotFound
+}
+
 // AsError unwraps a lux error.
 func AsError(err error) (*Error, bool) {
 	var e *Error
@@ -174,6 +220,10 @@ type Client interface {
 	// Output follows a Run's output from a position until lux says there is
 	// no more, calling fn for each frame. Returning an error from fn stops.
 	Output(ctx context.Context, runID, cursor string, afterEvent int64, fn func(Frame) error) error
+	Get(ctx context.Context, runID string) (Run, error)
+	Artifacts(ctx context.Context, runID string) ([]Artifact, error)
+	// Download streams an artifact as the Run wrote it. The caller closes it.
+	Download(ctx context.Context, artifactID string) (io.ReadCloser, error)
 }
 
 type HTTPClient struct {
@@ -201,32 +251,49 @@ func (c *HTTPClient) do(ctx context.Context, method, path string, body any, head
 			return err
 		}
 		reader = bytes.NewReader(b)
+		headers = maps.Clone(headers)
+		if headers == nil {
+			headers = map[string]string{}
+		}
+		headers["Content-Type"] = "application/json"
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.url+path, reader)
+	res, err := c.send(ctx, c.http, method, path, reader, headers)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.key)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
-	res, err := c.http.Do(req)
-	if err != nil {
-		// Unreachable is a status like any other to the caller: retry later.
-		return &Error{Status: 0, Code: "unreachable", Message: err.Error()}
-	}
 	defer res.Body.Close()
 	data, _ := io.ReadAll(res.Body)
-	if res.StatusCode >= 300 {
-		return errorFrom(res.StatusCode, data, method+" "+path)
-	}
 	if out != nil && len(data) > 0 {
 		return json.Unmarshal(data, out)
 	}
 	return nil
+}
+
+// send makes an authenticated request and turns a refusal or an unreachable
+// lux into an *Error. On success the caller owns the body.
+func (c *HTTPClient) send(ctx context.Context, client *http.Client, method, path string, body io.Reader, headers map[string]string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, method, c.url+path, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.key)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	res, err := client.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		// Unreachable is a status like any other to the caller: retry later.
+		return nil, &Error{Status: 0, Code: "unreachable", Message: err.Error()}
+	}
+	if res.StatusCode >= 300 {
+		defer res.Body.Close()
+		data, _ := io.ReadAll(res.Body)
+		return nil, errorFrom(res.StatusCode, data, method+" "+path)
+	}
+	return res, nil
 }
 
 // lux's error body is {"error": {"code", "message", "details"?}}.
@@ -288,6 +355,28 @@ func (c *HTTPClient) Resume(ctx context.Context, runID string, secrets []Secret,
 	return r, err
 }
 
+func (c *HTTPClient) Get(ctx context.Context, runID string) (Run, error) {
+	var r Run
+	err := c.do(ctx, "GET", "/v1/runs/"+runID, nil, nil, &r)
+	return r, err
+}
+
+func (c *HTTPClient) Artifacts(ctx context.Context, runID string) ([]Artifact, error) {
+	var out struct {
+		Artifacts []Artifact `json:"artifacts"`
+	}
+	err := c.do(ctx, "GET", "/v1/runs/"+runID+"/artifacts", nil, nil, &out)
+	return out.Artifacts, err
+}
+
+func (c *HTTPClient) Download(ctx context.Context, artifactID string) (io.ReadCloser, error) {
+	res, err := c.send(ctx, c.stream, "GET", "/v1/artifacts/"+artifactID, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	return res.Body, nil
+}
+
 // Output follows the SSE stream. Two positions, because lux keeps two
 // streams: the workload's records by cursor, and its own lifecycle events by
 // id. Both come back in the frames, so a caller that stores them resumes
@@ -297,24 +386,12 @@ func (c *HTTPClient) Output(ctx context.Context, runID, cursor string, afterEven
 	if cursor != "" {
 		q.Set("since", cursor)
 	}
-	req, err := http.NewRequestWithContext(ctx, "GET", c.url+"/v1/runs/"+runID+"/output?"+q.Encode(), nil)
+	res, err := c.send(ctx, c.stream, "GET", "/v1/runs/"+runID+"/output?"+q.Encode(), nil,
+		map[string]string{"Accept": "text/event-stream"})
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.key)
-	req.Header.Set("Accept", "text/event-stream")
-	res, err := c.stream.Do(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		return &Error{Status: 0, Code: "unreachable", Message: err.Error()}
-	}
 	defer res.Body.Close()
-	if res.StatusCode >= 300 {
-		data, _ := io.ReadAll(res.Body)
-		return errorFrom(res.StatusCode, data, "GET output")
-	}
 	return ReadSSE(res.Body, func(event string, data []byte) error {
 		f, ok := ParseFrame(event, data)
 		if !ok {

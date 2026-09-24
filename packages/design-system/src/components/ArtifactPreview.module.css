@@ -1,0 +1,115 @@
+/*
+ * ArtifactPreview: the content of a published file, inline.
+ */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  min-width: 0;
+  font-size: var(--ds-text-md);
+  color: var(--ds-color-text-primary);
+}
+
+.error {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--ds-space-6);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-tone-danger-fg);
+}
+
+.none {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--ds-space-12);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+
+/* Text and JSON: the LogStream rhythm — mono, 12px, wrapped, no frame. */
+.pre {
+  margin: 0;
+  padding: var(--ds-space-8) var(--ds-space-12);
+  background: var(--ds-color-sunken);
+  border: 1px solid var(--ds-color-border-subtle);
+  border-radius: var(--ds-radius-md);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  line-height: var(--ds-leading-normal);
+  font-feature-settings: "tnum", "zero";
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--ds-color-text-primary);
+}
+
+.markdown {
+  max-width: var(--ds-measure-document);
+}
+
+/* Images: a checkerboard so transparency has edges; never wider than the row. */
+.checker {
+  display: inline-block;
+  max-width: 100%;
+  padding: var(--ds-space-8);
+  border: 1px solid var(--ds-color-border-subtle);
+  border-radius: var(--ds-radius-md);
+  --checker-a: var(--ds-color-surface);
+  --checker-b: var(--ds-color-sunken);
+  background-color: var(--checker-a);
+  background-image:
+    linear-gradient(45deg, var(--checker-b) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--checker-b) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--checker-b) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--checker-b) 75%);
+  background-size: 16px 16px;
+  background-position:
+    0 0,
+    0 8px,
+    8px -8px,
+    -8px 0;
+}
+.image {
+  display: block;
+  max-width: 100%;
+  max-height: 640px;
+  height: auto;
+  object-fit: contain;
+}
+
+/* Clamp: a hard max height with a fade at the foot, then a quiet control. */
+.clamp {
+  min-width: 0;
+}
+.clamped {
+  position: relative;
+  overflow: hidden;
+}
+.clamped::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 48px;
+  background: linear-gradient(to bottom, transparent, var(--ds-color-surface));
+  pointer-events: none;
+}
+.showAll {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  height: var(--ds-size-control-sm);
+  padding: 0 var(--ds-space-8);
+  border: 0;
+  border-radius: var(--ds-radius-sm);
+  background: none;
+  font-size: var(--ds-text-xs);
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-secondary);
+}
+.showAll:hover {
+  color: var(--ds-color-text-primary);
+  background: var(--ds-color-hover-wash);
+}

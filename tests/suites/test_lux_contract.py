@@ -90,6 +90,17 @@ def test_a_delivery_runs_on_real_lux(client: ApiClient, lux_project):
     usage = client.get(f"/v1/runs/{implement['id']}").json()["tokens"]
     assert usage["output"] > 0, usage
 
+    # What the agent wrote into $LUX_ARTIFACTS, collected by lux when its
+    # container stopped, recorded by dude, and read back through lux.
+    def notes():
+        found = client.get("/v1/artifacts", params={"workItemId": work_item["id"]}).json()["artifacts"]
+        return [a for a in found if a["name"] == "NOTES.md"]
+
+    art = wait_until(notes, timeout=60, interval=1, message="lux's artifacts never reached dude")[0]
+    assert art["runId"] == implement["id"] and art["sizeBytes"] > 0, art
+    content = client.get(f"/v1/artifacts/{art['id']}/content")
+    assert content.status_code == 200 and content.text.startswith("# What changed"), (content.status_code, content.text)
+
 
 def test_steering_pause_and_resume_on_real_lux(client: ApiClient, lux_project):
     """A live agent on lux hears a directive, stops, and continues its session."""

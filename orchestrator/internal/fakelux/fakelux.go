@@ -13,10 +13,14 @@
 package fakelux
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"mime"
 	"net/http"
 	"os/exec"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -48,6 +52,12 @@ type Behaviour struct {
 	// End the first turn on this reply — a question for a person — and do
 	// the rest (Reply, Commit) in the turn the answer starts.
 	Ask string
+	// Files the agent writes into $LUX_ARTIFACTS, name → content: listed as
+	// the Run's artifacts once its container exits, as lux collects them.
+	Publish map[string]string
+	// Fail before the agent starts (a bad image, a failed clone): lux
+	// reports such an exit without a snapshot, ever.
+	FailToStart bool
 }
 
 type Run struct {
@@ -65,6 +75,12 @@ type Run struct {
 	// Forgotten: lux lost it. Open streams drop, as lux's connection would.
 	Forgotten bool
 
+	// Starts of the Run, as lux lists them; the last is the current one.
+	placements []*placement
+	artifacts  []*artifact
+	// Written into $LUX_ARTIFACTS by the agent's turns and not yet collected.
+	published map[string]string
+
 	repo     string
 	busy     bool
 	woken    bool
@@ -76,6 +92,20 @@ type Run struct {
 }
 
 type queuedInput struct{ text, requestID string }
+
+type placement struct {
+	Epoch int
+	// running, then exited.
+	State                                       string
+	WorkloadStartedAt, ExitedAt, SnapshotDoneAt *time.Time
+}
+
+type artifact struct {
+	ID, Path, ContentType, SHA256 string
+	Epoch                         int
+	Size                          int64
+	Content                       string
+}
 
 // deliverQueued hands queued input to an idle agent, which takes it as a
 // new turn. Callers hold s.mu.
@@ -109,11 +139,12 @@ type event struct {
 }
 
 type Server struct {
-	mu     sync.Mutex
-	runs   map[string]*Run
-	byKey  map[string]string
-	next   int
-	nextEv int64
+	mu      sync.Mutex
+	runs    map[string]*Run
+	byKey   map[string]string
+	next    int
+	nextEv  int64
+	nextArt int
 	// Decide chooses each Run's behaviour from its spec.
 	Decide func(spec map[string]any) Behaviour
 	// Repo is a bare git repository pushes land in, as `git push` would.
@@ -150,9 +181,13 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 	for path, line := range step.Commit {
 		files[path] = line + "\n"
 	}
+	published := map[string]string{}
+	for name, text := range step.Publish {
+		published[name] = text + "\n"
+	}
 	// Every phase plans and looks around first, as an agent does.
 	return Behaviour{Reply: step.Reply, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask,
-		Tools: []string{"todowrite", "read"}}
+		Publish: published, Tools: []string{"todowrite", "read"}}
 }
 
 // Runs returns every Run submitted, in order.
@@ -197,6 +232,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/runs/{id}/stop", s.stop)
 	mux.HandleFunc("POST /v1/runs/{id}/cancel", s.cancel)
 	mux.HandleFunc("POST /v1/runs/{id}/resume", s.resume)
+	mux.HandleFunc("GET /v1/runs/{id}/artifacts", s.listArtifacts)
+	mux.HandleFunc("GET /v1/artifacts/{aid}", s.downloadArtifact)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+s.Key {
 			writeErr(w, 401, "unauthorized", "invalid API key")
@@ -243,6 +280,11 @@ func (s *Server) play(run *Run, spec map[string]any, resumed bool) {
 	time.Sleep(20 * time.Millisecond)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if run.behavior.FailToStart {
+		run.placements = append(run.placements, &placement{Epoch: run.Epoch, State: "starting"})
+		s.setState(run, "failed")
+		return
+	}
 	s.setState(run, "running")
 	if !resumed {
 		base := head(run.repo, SpecField(spec, "ref"))
@@ -306,6 +348,14 @@ func (s *Server) turn(run *Run) {
 	for _, chunk := range chunks(reply, 7) {
 		s.agent(run, map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": chunk}})
 	}
+	if reply == b.Reply && len(b.Publish) > 0 {
+		if run.published == nil {
+			run.published = map[string]string{}
+		}
+		for name, content := range b.Publish {
+			run.published[name] = content
+		}
+	}
 	s.agent(run, map[string]any{"sessionUpdate": "usage_update", "cost": map[string]any{"amount": 0.01, "currency": "USD"}, "used": 1000, "size": 200000})
 	// The prompt's response, as the ACP adapter relays it: with the turn's
 	// token usage.
@@ -343,7 +393,56 @@ func chunks(s string, n int) []string {
 // Callers hold s.mu.
 func (s *Server) setState(run *Run, state string) {
 	run.State = state
+	if state == "running" && (len(run.placements) == 0 || run.placements[len(run.placements)-1].Epoch != run.Epoch) {
+		now := time.Now()
+		run.placements = append(run.placements, &placement{Epoch: run.Epoch, State: "running", WorkloadStartedAt: &now})
+	}
+	if lux.Terminal(state) {
+		s.exited(run)
+	}
 	s.luxEvent(run, "state", map[string]any{"state": state})
+}
+
+// exited is the container going away: lux collects what the agent put in
+// $LUX_ARTIFACTS and, a moment later, the host reports it. The report trails
+// the exit, as it does in lux, so dude must wait for it. Callers hold s.mu.
+func (s *Server) exited(run *Run) {
+	if len(run.placements) == 0 {
+		return
+	}
+	p := run.placements[len(run.placements)-1]
+	if p.ExitedAt != nil {
+		return
+	}
+	now := time.Now()
+	p.ExitedAt, p.State = &now, "exited"
+	published := run.published
+	run.published = nil
+	if p.WorkloadStartedAt == nil {
+		return // never started: lux sends no snapshot for it
+	}
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for name, content := range published {
+			sum := sha256.Sum256([]byte(content))
+			s.nextArt++
+			run.artifacts = append(run.artifacts, &artifact{ID: fmt.Sprintf("art_%d", s.nextArt),
+				Path: lux.PublishedPrefix + name, ContentType: mimeFor(name), SHA256: hex.EncodeToString(sum[:]),
+				Epoch: p.Epoch, Size: int64(len(content)), Content: content})
+		}
+		done := time.Now()
+		p.SnapshotDoneAt = &done
+	}()
+}
+
+// mimeFor guesses a type from a name, as lux does from the file.
+func mimeFor(name string) string {
+	if t := mime.TypeByExtension(path.Ext(name)); t != "" {
+		return t
+	}
+	return "application/octet-stream"
 }
 
 func (s *Server) luxEvent(run *Run, typ string, data map[string]any) {
@@ -374,7 +473,43 @@ func head(repo, ref string) string {
 }
 
 func (s *Server) view(run *Run) map[string]any {
-	return map[string]any{"id": run.ID, "state": run.State, "epoch": run.Epoch, "sessionId": run.SessionID}
+	placements := []any{}
+	for _, p := range run.placements {
+		placements = append(placements, map[string]any{"epoch": p.Epoch, "state": p.State,
+			"workloadStartedAt": p.WorkloadStartedAt, "exitedAt": p.ExitedAt, "snapshotDoneAt": p.SnapshotDoneAt})
+	}
+	return map[string]any{"id": run.ID, "state": run.State, "epoch": run.Epoch, "sessionId": run.SessionID, "placements": placements}
+}
+
+func (s *Server) listArtifacts(w http.ResponseWriter, r *http.Request) {
+	run := s.find(w, r)
+	if run == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := []any{}
+	for _, a := range run.artifacts {
+		out = append(out, map[string]any{"id": a.ID, "epoch": a.Epoch, "path": a.Path, "contentType": a.ContentType,
+			"size": a.Size, "sha256": a.SHA256, "available": true})
+	}
+	writeJSON(w, 200, map[string]any{"artifacts": out})
+}
+
+func (s *Server) downloadArtifact(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, run := range s.runs {
+		for _, a := range run.artifacts {
+			if a.ID == r.PathValue("aid") {
+				w.Header().Set("Content-Type", a.ContentType)
+				w.Header().Set("X-Lux-SHA256", a.SHA256)
+				_, _ = w.Write([]byte(a.Content))
+				return
+			}
+		}
+	}
+	writeErr(w, 404, "not_found", "no such artifact")
 }
 
 func (s *Server) find(w http.ResponseWriter, r *http.Request) *Run {

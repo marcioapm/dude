@@ -74,6 +74,12 @@ def test_delivering_from_the_ui_reaches_a_pull_request_and_back(
     expect(pipeline).to_contain_text("no findings", timeout=120_000)
     expect(page.get_by_test_id("finding").first).to_have_attribute("data-status", "resolved")
 
+    # What the implementer published is there to read, rendered.
+    artifact = page.get_by_test_id("artifact").filter(has_text="NOTES.md")
+    expect(artifact).to_be_visible(timeout=60_000)
+    artifact.get_by_role("button", expanded=False).click()
+    expect(artifact.get_by_role("heading", name="What changed")).to_be_visible()
+
     # The PR appears as the last step, linked to the forge.
     expect(page.get_by_test_id("pr-step")).to_be_visible(timeout=180_000)
     pr_number = int(page.get_by_test_id("pr-link").get_attribute("href").rsplit("/", 1)[-1])
