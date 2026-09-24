@@ -3,8 +3,8 @@
   flex-direction: column;
   min-height: 0;
   min-width: 0;
+  /* A lighter shade than the canvas it sits on; no frame needed. */
   background: var(--ds-color-surface);
-  border: 1px solid var(--ds-color-border-subtle);
   border-radius: var(--ds-radius-lg);
   overflow: hidden;
 }
@@ -20,8 +20,7 @@
   align-items: center;
   gap: var(--ds-space-12);
   padding: var(--ds-space-8) var(--ds-space-12);
-  border-bottom: 1px solid var(--ds-color-border-subtle);
-  background: var(--ds-color-raised);
+  background: var(--ds-color-chrome);
   flex-shrink: 0;
 }
 .headerNeedsYou {
@@ -156,6 +155,5 @@
 
 .footer {
   flex-shrink: 0;
-  border-top: 1px solid var(--ds-color-border-subtle);
-  background: var(--ds-color-raised);
+  background: var(--ds-color-chrome);
 }

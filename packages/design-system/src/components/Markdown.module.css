@@ -191,19 +191,16 @@
   gap: var(--ds-space-8);
   height: 22px;
   padding: 0 var(--ds-space-8);
-  background: var(--ds-color-raised);
-  border-bottom: 1px solid var(--ds-color-border-subtle);
+  background: var(--ds-color-chrome);
   font-size: var(--ds-text-2xs);
   color: var(--ds-color-text-muted);
 }
 .code:not([data-lang]) .codeBar {
   height: 0;
-  border: 0;
   overflow: hidden;
 }
 .code:not([data-lang]):hover .codeBar {
   height: 22px;
-  border-bottom: 1px solid var(--ds-color-border-subtle);
 }
 .codeLang {
   font-family: var(--ds-font-mono);
