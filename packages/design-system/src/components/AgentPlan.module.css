@@ -95,7 +95,7 @@
 }
 .bar i[data-s="in_progress"] {
   background: var(--ds-tone-info-solid);
-  animation: ds-pulse calc(var(--ds-cadence-breathe) / max(var(--ds-motion-live), 0.0001)) ease-in-out infinite;
+  animation: global(ds-pulse) calc(var(--ds-cadence-breathe) / max(var(--ds-motion-live), 0.0001)) ease-in-out infinite;
 }
 .bar i[data-s="cancelled"] {
   background: var(--ds-color-border-subtle);
@@ -148,7 +148,7 @@
   color: var(--ds-color-text-primary);
 }
 .itemChanged {
-  animation: ds-flash var(--ds-duration-deliberate) var(--ds-ease-exit) 1;
+  animation: global(ds-flash) var(--ds-duration-deliberate) var(--ds-ease-exit) 1;
 }
 .ordinal {
   font-size: var(--ds-text-2xs);
@@ -198,7 +198,7 @@
   color: var(--ds-tone-info-fg);
 }
 .glyph-in_progress svg {
-  animation: ds-drift calc(var(--ds-cadence-drift) / max(var(--ds-motion-live), 0.0001)) linear infinite;
+  animation: global(ds-drift) calc(var(--ds-cadence-drift) / max(var(--ds-motion-live), 0.0001)) linear infinite;
 }
 .glyph-completed {
   color: var(--ds-tone-success-on-solid);
@@ -213,5 +213,5 @@
 /* One-shot pop when a status changes. Under reduced motion, duration is
    0 and the glyph simply appears in its new state. */
 .glyphPop {
-  animation: ds-pop var(--ds-duration-slow) var(--ds-ease-enter) 1;
+  animation: global(ds-pop) var(--ds-duration-slow) var(--ds-ease-enter) 1;
 }

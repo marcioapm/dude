@@ -178,7 +178,7 @@
   width: 28%;
   background: var(--ds-tone-info-solid);
   border-radius: 1px;
-  animation: ds-sweep calc(var(--ds-cadence-sweep) / max(var(--ds-motion-live), 0.0001)) var(--ds-ease-standard) infinite;
+  animation: global(ds-sweep) calc(var(--ds-cadence-sweep) / max(var(--ds-motion-live), 0.0001)) var(--ds-ease-standard) infinite;
 }
 .slow .track {
   background: var(--ds-tone-attention-bg);
@@ -193,7 +193,7 @@
   flex-direction: column;
   gap: var(--ds-space-8);
   padding: var(--ds-space-8);
-  animation: ds-fade-in var(--ds-duration-fast) var(--ds-ease-enter);
+  animation: global(ds-fade-in) var(--ds-duration-fast) var(--ds-ease-enter);
 }
 .section {
   display: flex;
@@ -328,7 +328,7 @@
   vertical-align: text-bottom;
   border-radius: 1px;
   background: var(--ds-tone-info-fg);
-  animation: ds-blink calc(var(--ds-cadence-blink) / max(var(--ds-motion-live), 0.0001)) steps(2, jump-none) infinite;
+  animation: global(ds-blink) calc(var(--ds-cadence-blink) / max(var(--ds-motion-live), 0.0001)) steps(2, jump-none) infinite;
 }
 .slow .outCaret {
   background: var(--ds-tone-attention-fg);

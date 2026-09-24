@@ -146,7 +146,7 @@
   transform: translateX(-50%);
   z-index: var(--ds-z-raised);
   box-shadow: var(--ds-shadow-2);
-  animation: ds-pop var(--ds-duration-base) var(--ds-ease-enter);
+  animation: global(ds-pop) var(--ds-duration-base) var(--ds-ease-enter);
 }
 /* Something changed below the fold: promote to the accent so it is found. */
 .jumpStale {

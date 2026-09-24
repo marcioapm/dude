@@ -307,7 +307,7 @@
   vertical-align: text-bottom;
   background: var(--ds-tone-info-fg);
   border-radius: 1px;
-  animation: ds-blink calc(var(--ds-cadence-blink) / max(var(--ds-motion-live), 0.0001)) steps(2, jump-none) infinite;
+  animation: global(ds-blink) calc(var(--ds-cadence-blink) / max(var(--ds-motion-live), 0.0001)) steps(2, jump-none) infinite;
 }
 .pre .caret {
   height: 14px;

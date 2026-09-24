@@ -55,14 +55,14 @@
 }
 
 .content {
-  z-index: var(--ds-z-dropdown);
+  z-index: var(--ds-z-popover);
   min-width: var(--radix-select-trigger-width);
   max-height: var(--radix-select-content-available-height);
   background: var(--ds-color-overlay);
   border-radius: var(--ds-radius-lg);
   box-shadow: var(--ds-shadow-2);
   overflow: hidden;
-  animation: ds-pop var(--ds-duration-base) var(--ds-ease-enter);
+  animation: global(ds-pop) var(--ds-duration-base) var(--ds-ease-enter);
 }
 
 .viewport {

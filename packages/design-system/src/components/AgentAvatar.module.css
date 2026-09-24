@@ -107,7 +107,7 @@
   border-radius: var(--ds-radius-full);
   background: var(--ds-color-live);
   box-shadow: 0 0 0 2px var(--ds-color-surface);
-  animation: ds-pulse calc(2.4s / max(var(--ds-motion-live), 0.0001)) ease-in-out infinite;
+  animation: global(ds-pulse) calc(2.4s / max(var(--ds-motion-live), 0.0001)) ease-in-out infinite;
 }
 
 .withName {

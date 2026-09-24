@@ -3,7 +3,7 @@
   inset: 0;
   z-index: var(--ds-z-overlay);
   background: var(--ds-color-scrim);
-  animation: ds-fade-in var(--ds-duration-base) var(--ds-ease-enter);
+  animation: global(ds-fade-in) var(--ds-duration-base) var(--ds-ease-enter);
 }
 
 .content {
@@ -19,7 +19,7 @@
   background: var(--ds-color-overlay);
   border-radius: var(--ds-radius-xl);
   box-shadow: var(--ds-shadow-3);
-  animation: ds-pop var(--ds-duration-base) var(--ds-ease-enter);
+  animation: global(ds-pop) var(--ds-duration-base) var(--ds-ease-enter);
   outline: none;
 }
 .sm {

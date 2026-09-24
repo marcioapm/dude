@@ -46,7 +46,7 @@
 /* Streaming: the thinking rhythm, unchanged from ActivityIndicator. */
 .ring {
   color: var(--ds-tone-neutral-fg);
-  animation: ds-drift calc(var(--ds-cadence-drift) / max(var(--ds-motion-live), 0.0001)) linear infinite;
+  animation: global(ds-drift) calc(var(--ds-cadence-drift) / max(var(--ds-motion-live), 0.0001)) linear infinite;
 }
 .live .brain {
   color: var(--ds-color-text-secondary);
@@ -106,7 +106,7 @@
   margin: 0 var(--ds-space-8) var(--ds-space-6) 13px;
   padding: var(--ds-space-2) 0 var(--ds-space-2) var(--ds-space-12);
   border-left: 1px dotted var(--ds-color-border-strong);
-  animation: ds-fade-in var(--ds-duration-fast) var(--ds-ease-enter);
+  animation: global(ds-fade-in) var(--ds-duration-fast) var(--ds-ease-enter);
 }
 .body > div {
   font-size: var(--ds-text-sm);
@@ -126,5 +126,5 @@
   vertical-align: -1px;
   border-radius: 1px;
   background: currentColor;
-  animation: ds-blink calc(var(--ds-cadence-blink) / max(var(--ds-motion-live), 0.0001)) steps(2, jump-none) infinite;
+  animation: global(ds-blink) calc(var(--ds-cadence-blink) / max(var(--ds-motion-live), 0.0001)) steps(2, jump-none) infinite;
 }

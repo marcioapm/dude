@@ -28,16 +28,16 @@
   font-size: var(--ds-text-md);
 }
 .root[data-state="open"] {
-  animation: ds-slide-in-right var(--ds-duration-slow) var(--ds-ease-enter);
+  animation: global(ds-slide-in-right) var(--ds-duration-slow) var(--ds-ease-enter);
 }
 .root[data-state="closed"] {
-  animation: ds-fade-in var(--ds-duration-base) var(--ds-ease-exit) reverse;
+  animation: global(ds-fade-in) var(--ds-duration-base) var(--ds-ease-exit) reverse;
 }
 .root[data-swipe="move"] {
   transform: translateX(var(--radix-toast-swipe-move-x));
 }
 .root[data-swipe="end"] {
-  animation: ds-fade-in var(--ds-duration-base) var(--ds-ease-exit) reverse;
+  animation: global(ds-fade-in) var(--ds-duration-base) var(--ds-ease-exit) reverse;
 }
 
 .info {

@@ -67,7 +67,7 @@
   background: var(--ds-color-hover-wash);
 }
 .lineNew {
-  animation: ds-flash var(--ds-duration-deliberate) var(--ds-ease-exit) 1;
+  animation: global(ds-flash) var(--ds-duration-deliberate) var(--ds-ease-exit) 1;
 }
 
 .lineNo {
@@ -126,7 +126,7 @@
   right: var(--ds-space-12);
   bottom: var(--ds-space-12);
   z-index: var(--ds-z-raised);
-  animation: ds-pop var(--ds-duration-base) var(--ds-ease-enter);
+  animation: global(ds-pop) var(--ds-duration-base) var(--ds-ease-enter);
 }
 
 .empty {
@@ -142,6 +142,6 @@
   height: 14px;
   vertical-align: text-bottom;
   background: var(--ds-color-text-secondary);
-  animation: ds-pulse calc(1s / max(var(--ds-motion-live), 0.0001)) steps(2, jump-none) infinite;
+  animation: global(ds-pulse) calc(1s / max(var(--ds-motion-live), 0.0001)) steps(2, jump-none) infinite;
   margin-left: 2px;
 }

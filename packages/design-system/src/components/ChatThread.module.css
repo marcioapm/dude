@@ -141,7 +141,7 @@
   min-width: 0;
   padding-left: var(--ds-space-12);
   padding-bottom: var(--ds-space-4);
-  animation: ds-fade-in var(--ds-duration-fast) var(--ds-ease-enter);
+  animation: global(ds-fade-in) var(--ds-duration-fast) var(--ds-ease-enter);
 }
 /* Deeper levels indent less: the rails already carry the hierarchy. */
 .root[data-depth="2"] .body {
