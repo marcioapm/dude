@@ -386,3 +386,33 @@ body {
   display: inline-flex;
   gap: var(--ds-space-4);
 }
+
+.sidebarFooter {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--ds-space-4);
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--ds-space-6) var(--ds-space-16);
+  margin: 0;
+}
+
+.facts dt {
+  color: var(--ds-color-text-secondary);
+}
+
+.facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.mono {
+  font-family: var(--ds-font-mono);
+}
+
+.verdictOk {
+  color: var(--ds-color-text-secondary);
+}

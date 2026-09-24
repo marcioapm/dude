@@ -158,3 +158,42 @@ def test_project_settings_manage_repositories_and_delivery(
     # following them.
     assert project["deliveryPolicy"] == {"requiredReviewers": ["correctness", "security"]}
     assert console_errors == []
+
+
+def test_a_new_project_starts_from_the_empty_screen(page: Page, web_url: str, client: ApiClient, org: dict, console_errors: list):
+    """An organization with nothing yet is offered a project, not told to use the API."""
+    _sign_in(page, web_url, org["api_key"])
+    page.get_by_test_id("new-project-empty").click()
+    page.get_by_test_id("project-name").fill("Payments API")
+    page.get_by_test_id("project-repository").fill("https://github.com/acme/payments-api.git")
+    page.get_by_test_id("project-create").click()
+
+    # It lands on the new project's settings, with the repository in place.
+    expect(page.get_by_test_id("project-settings")).to_be_visible()
+    expect(page.get_by_role("cell", name="payments-api", exact=True)).to_be_visible()
+    project = client.get("/v1/projects").json()["projects"][0]
+    assert (project["name"], project["slug"]) == ("Payments API", "payments-api")
+    assert console_errors == []
+
+
+def test_the_github_connection_is_checked_and_replaced_in_settings(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    _sign_in(page, web_url, org["api_key"])
+    page.get_by_test_id("org-settings-button").click()
+    expect(page.get_by_test_id("org-settings")).to_contain_text("Connected")
+    expect(page.get_by_test_id("org-settings")).to_contain_text("…oken")
+
+    page.get_by_test_id("forge-verify").click()
+    expect(page.get_by_test_id("forge-verdict")).to_have_text("Connected as dude-bot")
+
+    # A wrong token is caught here, not by an agent failing to open a PR.
+    api_base = client.get("/v1/forge/credential").json()["apiBaseUrl"]
+    page.get_by_test_id("forge-connect").click()
+    page.get_by_test_id("forge-token").fill("wrong-token")
+    page.get_by_label("API base URL").fill(api_base)
+    page.get_by_test_id("forge-save").click()
+    expect(page.get_by_test_id("org-settings")).to_contain_text("…oken")
+    page.get_by_test_id("forge-verify").click()
+    expect(page.get_by_test_id("forge-verdict")).to_have_text("GitHub rejected the token")
+    assert console_errors == []

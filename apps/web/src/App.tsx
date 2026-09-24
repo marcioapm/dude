@@ -20,18 +20,24 @@ import { RunScreen } from "./screens/RunScreen.tsx";
 import { WorkItemScreen } from "./screens/WorkItemScreen.tsx";
 import { WorkItemDialog } from "./screens/WorkItemDialog.tsx";
 import { ProjectSettingsScreen } from "./screens/ProjectSettingsScreen.tsx";
+import { NewProjectDialog } from "./screens/NewProjectDialog.tsx";
+import { OrganizationSettingsScreen } from "./screens/OrganizationSettingsScreen.tsx";
 
 export interface AppProps {
   client: ApiClient;
   onSignOut: () => void;
 }
 
-/** A place in the app: something in the tree, or a project's settings. */
-type Place = NavRef & { settings?: boolean };
+/**
+ * A place in the app: something in the tree, a project's settings, or the
+ * organization's (kind "org", which the tree does not have).
+ */
+type Place = (NavRef & { settings?: boolean }) | { kind: "org"; id: "settings"; settings?: undefined };
 
 /** Selection lives in the URL hash, so a reload lands where you were. */
 function readSelection(): Place | null {
   const [kind, id, view] = window.location.hash.replace(/^#\/?/, "").split("/");
+  if (kind === "org" && id === "settings") return { kind: "org", id: "settings" };
   if (!kind || !id) return null;
   if (!["project", "epic", "workItem", "run", "session"].includes(kind)) return null;
   const ref = { kind: kind as NavRef["kind"], id: decodeURIComponent(id) };
@@ -60,6 +66,7 @@ export function App({ client, onSignOut }: AppProps) {
   const [projects, setProjects] = useState<NavProject[] | null>(null);
   const [selected, setSelectedState] = useState<Place | null>(readSelection);
   const [problem, setProblem] = useState<string | null>(null);
+  const [newProject, setNewProject] = useState(false);
 
   const setSelected = useCallback((ref: Place | null) => {
     setSelectedState(ref);
@@ -88,7 +95,9 @@ export function App({ client, onSignOut }: AppProps) {
     if (!selected && projects && projects[0]) setSelected({ kind: "project", id: projects[0].id });
   }, [projects, selected, setSelected]);
 
-  const scope = useMemo(() => (projects ? boardScope(projects, selected) : null), [projects, selected]);
+  // What the tree knows of the selection: the organization is not in it.
+  const inTree = selected?.kind === "org" ? null : selected;
+  const scope = useMemo(() => (projects ? boardScope(projects, inTree) : null), [projects, inTree]);
 
   let main;
   if (!projects) {
@@ -97,9 +106,16 @@ export function App({ client, onSignOut }: AppProps) {
     main = (
       <EmptyState
         title="No projects yet"
-        description="Create a project through the API, then reload."
+        description="A project is where work for a codebase lives: its repositories, its agents, its work items."
+        action={
+          <Button variant="primary" leadingIcon="plus" onClick={() => setNewProject(true)} data-testid="new-project-empty">
+            New project
+          </Button>
+        }
       />
     );
+  } else if (selected?.kind === "org") {
+    main = <OrganizationSettingsScreen client={client} />;
   } else if (selected?.kind === "project" && selected.settings) {
     main = (
       <ProjectSettingsScreen
@@ -172,14 +188,32 @@ export function App({ client, onSignOut }: AppProps) {
       <Sidebar
         projects={projects ?? []}
         loading={!projects}
-        selected={selected}
+        selected={inTree}
         onSelect={(ref) => setSelected(ref)}
         title="dude"
         footer={
-          <Button size="sm" variant="ghost" onClick={onSignOut}>
-            Sign out
-          </Button>
+          <div className="sidebarFooter">
+            <Button size="sm" variant="ghost" leadingIcon="plus" onClick={() => setNewProject(true)} data-testid="new-project">
+              New project
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setSelected({ kind: "org", id: "settings" })}
+              data-testid="org-settings-button">
+              Organization
+            </Button>
+            <Button size="sm" variant="ghost" onClick={onSignOut}>
+              Sign out
+            </Button>
+          </div>
         }
+      />
+      <NewProjectDialog
+        client={client}
+        open={newProject}
+        onOpenChange={setNewProject}
+        onCreated={(id) => {
+          void load();
+          setSelected({ kind: "project", id, settings: true });
+        }}
       />
       <main className="main">
         {problem ? <p className="problem">{problem}</p> : null}
