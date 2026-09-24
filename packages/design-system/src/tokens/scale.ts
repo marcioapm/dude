@@ -1,9 +1,16 @@
 /**
- * Non-color scales. Values are px numbers here and emitted as `px` in CSS.
+ * Non-color scales. Values here are the **comfortable** density (the
+ * default) and are emitted as `px` in CSS by `scripts/build-tokens.ts`.
+ * Compact is NOT a uniform shrink of this scale: `./density.ts` lists a
+ * small, explicit set of tokens that get a `[data-density="compact"]`
+ * override, and everything else — most of this file — is shared by both
+ * densities. See `../../README.md` ("Density") for the reasoning.
  *
- * Density: the base UI size is 13px, control height 28px, table row 28px.
- * That is the "trading terminal" density — dense enough to see 30+ rows on
- * a laptop, generous enough that nothing touches.
+ * Comfortable is Discord/Obsidian-roomy: 15px body, 32px default row, 6px
+ * default radius. Compact only tightens a handful of *big, structural*
+ * measurements (row height, chat avatar, chat/board/main-pane spacing);
+ * text stays within 1px of comfortable, icons, small control heights,
+ * badge padding and hairline-scale radii do not move at all.
  */
 
 export const space = {
@@ -23,13 +30,44 @@ export const space = {
 } as const;
 export type SpaceStep = keyof typeof space;
 
+/**
+ * Named spacing for layout-specific measurements that do not sit on the 4px
+ * grid step scale above. Comfortable values here; the ones marked
+ * "density-sensitive" get a compact override in `./density.ts` — the rest
+ * are shared.
+ */
+export const spaceNamed = {
+  /** Main content pane padding (`apps/web/src/app.css` `.main`). Density-sensitive. */
+  mainPad: 24,
+  /** Board card padding and inter-card gap. Density-sensitive. */
+  cardPad: 12,
+  /** Chat turn horizontal padding. Density-sensitive. */
+  chatPadX: 16,
+  /** Chat turn vertical padding. Density-sensitive. */
+  chatPadY: 12,
+  /** Gap between two different speakers' turns (Discord-style grouping). Density-sensitive. */
+  chatGap: 16,
+  /** Gap between a chat avatar and its text column. Density-sensitive. */
+  chatAvatarGap: 12,
+  /** Gap between major panel/section groups (sidebar sections, board lane groups). Density-sensitive. */
+  panelGap: 24,
+  /** NavTree indent per level. Shared: already tight at every density. */
+  treeIndent: 16,
+  /** Gap between consecutive sidebar/nav rows. Shared: already tight. */
+  navRowGap: 2,
+} as const;
+export type SpaceNamedKey = keyof typeof spaceNamed;
+
 export const radius = {
   none: 0,
   xs: 2,
-  sm: 3,
-  md: 4,
-  lg: 6,
-  xl: 8,
+  sm: 4,
+  /** Default control radius. Density-sensitive: 6 comfortable, 5 compact. */
+  md: 6,
+  /** Cards. Shared. */
+  lg: 8,
+  /** Dialogs. Shared. */
+  xl: 12,
   full: 9999,
 } as const;
 
@@ -38,17 +76,31 @@ export const fontFamily = {
   mono: `"JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, "Liberation Mono", monospace`,
 } as const;
 
-/** Sizes in px. `md` is the body size for the whole product. */
+/**
+ * Sizes in px, comfortable density. `md` is the body size for the whole
+ * product. `xs`/`sm`/`md`/`prose` are density-sensitive (compact is 1px
+ * below comfortable, never below 12px); `2xs` (small-caps labels only) and
+ * `mono` (tool output / logs) are shared across densities; the heading
+ * sizes `lg`…`4xl` are shared too — density does not touch headings.
+ */
 export const fontSize = {
-  "2xs": 10,
-  xs: 11,
-  sm: 12,
-  md: 13,
-  lg: 14,
-  xl: 16,
-  "2xl": 20,
-  "3xl": 24,
-  "4xl": 32,
+  /** Small-caps labels only. Shared: 11px in both densities. */
+  "2xs": 11,
+  /** Density-sensitive: 13 comfortable, 12 compact. */
+  xs: 13,
+  /** Density-sensitive: 14 comfortable, 13 compact. */
+  sm: 14,
+  /** Body. Density-sensitive: 15 comfortable, 14 compact. */
+  md: 15,
+  lg: 16,
+  xl: 18,
+  "2xl": 22,
+  "3xl": 26,
+  "4xl": 34,
+  /** Chat/document prose. Density-sensitive: 16 comfortable, 15 compact. */
+  prose: 16,
+  /** Tool output, logs, diffs. Shared: 13px in both densities. */
+  mono: 13,
 } as const;
 export type FontSizeStep = keyof typeof fontSize;
 
@@ -57,6 +109,8 @@ export const lineHeight = {
   tight: 1.2,
   snug: 1.35,
   normal: 1.5,
+  /** Prose (chat/document Markdown): airier, Obsidian-like. Shared. */
+  prose: 1.55,
 } as const;
 
 export const fontWeight = {
@@ -72,17 +126,36 @@ export const letterSpacing = {
   caps: "0.06em",
 } as const;
 
-/** Control and row heights, px. */
+/**
+ * Control, row and avatar sizes, px, comfortable density. Density-sensitive
+ * entries are noted; everything else is shared. `controlSm` and `rowCompact`
+ * are already the smallest of their kind and hold across densities, per
+ * the rule that small things do not get more compact.
+ */
 export const size = {
-  controlSm: 24,
-  controlMd: 28,
-  controlLg: 32,
-  rowCompact: 24,
-  rowDefault: 28,
-  rowComfortable: 36,
-  iconSm: 12,
-  iconMd: 14,
-  iconLg: 16,
+  /** Shared: already the smallest control height. */
+  controlSm: 28,
+  /** Density-sensitive: 32 comfortable, 30 compact. */
+  controlMd: 32,
+  /** Density-sensitive: 36 comfortable, 34 compact. */
+  controlLg: 36,
+  /** Shared: already the smallest row height (dense lists, logs). */
+  rowCompact: 28,
+  /** Density-sensitive: 32 comfortable, 28 compact — sidebar/nav/board rows. */
+  rowDefault: 32,
+  /** Density-sensitive: 40 comfortable, 36 compact — two-line rows. */
+  rowComfortable: 40,
+  /** Shared avatar sizes (nav, headers, stacks) — not the transcript avatar. */
+  avatarXs: 16,
+  avatarSm: 20,
+  avatarMd: 24,
+  avatarLg: 32,
+  /** Density-sensitive: 36 comfortable, 28 compact — the chat transcript's own avatar. */
+  avatarChat: 36,
+  /** Icon sizes. Shared: icons do not shrink with density, only their ink does. */
+  iconSm: 14,
+  iconMd: 16,
+  iconLg: 18,
 } as const;
 
 export const duration = {
@@ -120,12 +193,17 @@ export const cadence = {
   blink: 1000,
 } as const;
 
-/** Reading measures for prose. Chat bubbles are narrower than documents. */
+/**
+ * Reading measures for prose, comfortable density. Density-sensitive: at
+ * compact the body text is a touch smaller, so both measures widen back to
+ * roughly the document width to keep a comparable number of characters per
+ * line; see `./density.ts`.
+ */
 export const measure = {
-  /** Agent messages inside a transcript. */
-  message: "72ch",
-  /** Published artifacts read in full. */
-  document: "84ch",
+  /** Agent messages inside a transcript. Density-sensitive: 70ch comfortable, 72ch compact. */
+  message: "70ch",
+  /** Published artifacts read in full. Density-sensitive: 70ch comfortable, 72ch compact. */
+  document: "70ch",
 } as const;
 
 export const zIndex = {

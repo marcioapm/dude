@@ -8,6 +8,7 @@ export * from "./scale.ts";
 export * from "./status.ts";
 export * from "./activity.ts";
 export * from "./triage.ts";
+export * from "./density.ts";
 export { themeColors, flattenTheme } from "./themes.ts";
 export type { ThemeMode, ThemeColors } from "./themes.ts";
 export {
@@ -39,8 +40,10 @@ export function cssVar(name: TokenName, fallback?: string): string {
 /** Names of tokens emitted to CSS (non-exhaustive union for autocompletion). */
 export type TokenName =
   | `space-${keyof typeof import("./scale.ts").space}`
+  | `space-${string}`
   | `radius-${keyof typeof import("./scale.ts").radius}`
   | `text-${keyof typeof import("./scale.ts").fontSize}`
+  | `size-${string}`
   | `font-${"sans" | "mono"}`
   | `color-${string}`
   | `tone-${string}`

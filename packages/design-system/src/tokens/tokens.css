@@ -17,28 +17,40 @@
   --ds-space-40: 40px;
   --ds-space-48: 48px;
   --ds-space-64: 64px;
+  --ds-space-main-pad: 24px;
+  --ds-space-card-pad: 12px;
+  --ds-space-chat-pad-x: 16px;
+  --ds-space-chat-pad-y: 12px;
+  --ds-space-chat-gap: 16px;
+  --ds-space-chat-avatar-gap: 12px;
+  --ds-space-panel-gap: 24px;
+  --ds-space-tree-indent: 16px;
+  --ds-space-nav-row-gap: 2px;
   --ds-radius-none: 0px;
   --ds-radius-xs: 2px;
-  --ds-radius-sm: 3px;
-  --ds-radius-md: 4px;
-  --ds-radius-lg: 6px;
-  --ds-radius-xl: 8px;
+  --ds-radius-sm: 4px;
+  --ds-radius-md: 6px;
+  --ds-radius-lg: 8px;
+  --ds-radius-xl: 12px;
   --ds-radius-full: 9999px;
   --ds-font-sans: "Inter", "SF Pro Text", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --ds-font-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, "Liberation Mono", monospace;
-  --ds-text-2xs: 10px;
-  --ds-text-xs: 11px;
-  --ds-text-sm: 12px;
-  --ds-text-md: 13px;
-  --ds-text-lg: 14px;
-  --ds-text-xl: 16px;
-  --ds-text-2xl: 20px;
-  --ds-text-3xl: 24px;
-  --ds-text-4xl: 32px;
+  --ds-text-2xs: 11px;
+  --ds-text-xs: 13px;
+  --ds-text-sm: 14px;
+  --ds-text-md: 15px;
+  --ds-text-lg: 16px;
+  --ds-text-xl: 18px;
+  --ds-text-2xl: 22px;
+  --ds-text-3xl: 26px;
+  --ds-text-4xl: 34px;
+  --ds-text-prose: 16px;
+  --ds-text-mono: 13px;
   --ds-leading-none: 1;
   --ds-leading-tight: 1.2;
   --ds-leading-snug: 1.35;
   --ds-leading-normal: 1.5;
+  --ds-leading-prose: 1.55;
   --ds-weight-regular: 400;
   --ds-weight-medium: 500;
   --ds-weight-semibold: 600;
@@ -46,15 +58,20 @@
   --ds-tracking-normal: 0;
   --ds-tracking-wide: 0.04em;
   --ds-tracking-caps: 0.06em;
-  --ds-size-control-sm: 24px;
-  --ds-size-control-md: 28px;
-  --ds-size-control-lg: 32px;
-  --ds-size-row-compact: 24px;
-  --ds-size-row-default: 28px;
-  --ds-size-row-comfortable: 36px;
-  --ds-size-icon-sm: 12px;
-  --ds-size-icon-md: 14px;
-  --ds-size-icon-lg: 16px;
+  --ds-size-control-sm: 28px;
+  --ds-size-control-md: 32px;
+  --ds-size-control-lg: 36px;
+  --ds-size-row-compact: 28px;
+  --ds-size-row-default: 32px;
+  --ds-size-row-comfortable: 40px;
+  --ds-size-avatar-xs: 16px;
+  --ds-size-avatar-sm: 20px;
+  --ds-size-avatar-md: 24px;
+  --ds-size-avatar-lg: 32px;
+  --ds-size-avatar-chat: 36px;
+  --ds-size-icon-sm: 14px;
+  --ds-size-icon-md: 16px;
+  --ds-size-icon-lg: 18px;
   --ds-duration-instant: 0ms;
   --ds-duration-fast: 80ms;
   --ds-duration-base: 140ms;
@@ -69,8 +86,8 @@
   --ds-cadence-drift: 3200ms;
   --ds-cadence-sweep: 1600ms;
   --ds-cadence-blink: 1000ms;
-  --ds-measure-message: 72ch;
-  --ds-measure-document: 84ch;
+  --ds-measure-message: 70ch;
+  --ds-measure-document: 70ch;
   --ds-z-base: 0;
   --ds-z-raised: 1;
   --ds-z-sticky: 10;
@@ -465,6 +482,33 @@
     --ds-shadow-2: 0 0 0 1px #e3e5e7, 0 4px 12px rgba(22, 25, 27, 0.12);
     --ds-shadow-3: 0 0 0 1px #c7cbcf, 0 12px 32px rgba(22, 25, 27, 0.22);
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* Density. comfortable is the default (Discord/Obsidian feel); compact  */
+/* is opt-in and NOT a uniform shrink — only the tokens listed in        */
+/* src/tokens/density.ts differ. Everything else is the block above.    */
+/* ------------------------------------------------------------------ */
+[data-density="compact"] {
+  --ds-text-xs: 12px;
+  --ds-text-sm: 13px;
+  --ds-text-md: 14px;
+  --ds-text-prose: 15px;
+  --ds-radius-md: 5px;
+  --ds-size-control-md: 30px;
+  --ds-size-control-lg: 34px;
+  --ds-size-row-default: 28px;
+  --ds-size-row-comfortable: 36px;
+  --ds-size-avatar-chat: 28px;
+  --ds-space-main-pad: 20px;
+  --ds-space-card-pad: 10px;
+  --ds-space-chat-pad-x: 14px;
+  --ds-space-chat-pad-y: 8px;
+  --ds-space-chat-gap: 10px;
+  --ds-space-chat-avatar-gap: 8px;
+  --ds-space-panel-gap: 20px;
+  --ds-measure-message: 72ch;
+  --ds-measure-document: 72ch;
 }
 
 /* ------------------------------------------------------------------ */
