@@ -456,8 +456,8 @@ func TestTheChatShowsThinkingToolOutputTokensAndThePrompt(t *testing.T) {
 	// Output over 4 KB keeps its first and last 2 KB.
 	done := payload("agent.tool.completed")
 	out, _ := done["output"].(map[string]any)
-	if done["exitCode"] != float64(3) || len(fmt.Sprint(out["head"])) != 2048+2 || len(fmt.Sprint(out["tail"])) != 2048 ||
-		out["omittedBytes"] != float64(6000-4096) || !strings.HasPrefix(fmt.Sprint(out["head"]), "\ufffd") || !strings.HasSuffix(fmt.Sprint(out["tail"]), "z") {
+	if done["exitCode"] != float64(3) || len(fmt.Sprint(out["head"])) != 2048 || len(fmt.Sprint(out["tail"])) != 2048 ||
+		out["omittedBytes"] != float64(6000+2-4096) || !strings.HasPrefix(fmt.Sprint(out["head"]), "\ufffd") || !strings.HasSuffix(fmt.Sprint(out["tail"]), "z") {
 		t.Errorf("tool result = exit %v, head %d, tail %d, omitted %v", done["exitCode"],
 			len(fmt.Sprint(out["head"])), len(fmt.Sprint(out["tail"])), out["omittedBytes"])
 	}

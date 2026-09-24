@@ -19,4 +19,10 @@ ALTER TABLE runs
   ADD COLUMN context_tokens     bigint NOT NULL DEFAULT 0,
   -- Thinking streamed since the last complete thought, saved with the
   -- cursor like the reply buffer.
-  ADD COLUMN agent_thought_buffer text NOT NULL DEFAULT '';
+  ADD COLUMN agent_thought_buffer text NOT NULL DEFAULT '',
+  -- What the workflow decided this phase is about, carried on the Run so
+  -- the prompt is built from the same decision rather than re-deriving it:
+  -- the findings a fix addresses, and for a review, the severities the
+  -- delivery's policy blocks on.
+  ADD COLUMN finding_ids          text[] NOT NULL DEFAULT '{}',
+  ADD COLUMN blocking_severities  text[] NOT NULL DEFAULT '{}';

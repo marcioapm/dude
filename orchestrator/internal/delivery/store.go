@@ -69,6 +69,9 @@ type PhaseRun struct {
 	Category    string
 	FindingIDs  []string
 	PRFeedback  []forge.ActionableFeedback
+	// Review: the severities the delivery's policy blocks on, which the
+	// reviewer is told.
+	BlockingSeverities []string
 	// Makes creation idempotent: a step that runs twice after a crash finds
 	// the Run the first attempt made instead of creating a second.
 	Key string
@@ -99,11 +102,12 @@ func (s *Store) CreatePhaseRun(ctx context.Context, org string, in PhaseRun) (st
 		runID = ids.New(ids.Run)
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO runs (id, organization_id, project_id, work_item_id, attempt, status, phase, role,
-			                  parent_run_id, base_ref, category, pr_feedback, repository_id, creation_key)
-			VALUES ($1, $2, $3, $4, $5, 'pending', $6::run_phase, $7::agent_role, $8, $9, $10, $11::jsonb, $12, $13)`,
+			                  parent_run_id, base_ref, category, pr_feedback, repository_id, creation_key,
+			                  finding_ids, blocking_severities)
+			VALUES ($1, $2, $3, $4, $5, 'pending', $6::run_phase, $7::agent_role, $8, $9, $10, $11::jsonb, $12, $13, $14, $15)`,
 			runID, org, projectID, in.WorkItemID, attempt, in.Phase, RoleForPhase[in.Phase],
 			db.Nullable(in.ParentRunID), db.Nullable(in.BaseRef), db.Nullable(in.Category), feedback,
-			db.Nullable(in.RepositoryID), db.Nullable(in.Key)); err != nil {
+			db.Nullable(in.RepositoryID), db.Nullable(in.Key), db.NonNil(in.FindingIDs), db.NonNil(in.BlockingSeverities)); err != nil {
 			return err
 		}
 		payload := map[string]any{

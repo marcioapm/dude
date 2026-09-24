@@ -202,7 +202,7 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 	var runIDs []string
 	for _, c := range categories {
 		id, err := w.phase(ctx, sc, st, PhaseReview, st.HeadSHA, key(sc, ":review:", st.Iteration, ":", c),
-			func(p *PhaseRun) { p.Category = c })
+			func(p *PhaseRun) { p.Category, p.BlockingSeverities = c, st.Policy.BlockingSeverities })
 		if err != nil {
 			return workflow.Result{}, err
 		}
