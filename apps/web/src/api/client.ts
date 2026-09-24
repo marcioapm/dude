@@ -80,6 +80,20 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * What a validation failure is about, in the words the server used for the
+ * field — "url must be an https, ssh or git:// URL" says what to change;
+ * "request body failed validation" does not.
+ */
+function fieldMessage(details: unknown): string | undefined {
+  const fields = (details as { fieldErrors?: Record<string, string[]> } | undefined)?.fieldErrors;
+  const [field, messages] = fields ? Object.entries(fields).find(([, m]) => m.length > 0) ?? [] : [];
+  const first = messages?.[0];
+  if (typeof first !== "string") return undefined;
+  // zod's own messages ("Required") need the field to mean anything.
+  return first.toLowerCase().startsWith(field!.toLowerCase()) ? first : `${field}: ${first}`;
+}
+
 /** Query string for the defined params, or "" when there are none. */
 function qs(params: Record<string, unknown>): string {
   const query = new URLSearchParams();
@@ -127,7 +141,7 @@ export class ApiClient {
       throw new ApiError(
         res.status,
         error.code ?? "error",
-        error.message ?? `${method} ${path} failed`,
+        fieldMessage(error.details) ?? error.message ?? `${method} ${path} failed`,
         error.details,
       );
     }
@@ -165,6 +179,17 @@ export class ApiClient {
 
   listFindings(workItemId: string): Promise<{ findings: Finding[] }> {
     return this.#request("GET", `/v1/findings${qs({ workItemId })}`);
+  }
+
+  /** The factory's delivery policy, which a project's settings layer over. */
+  deliveryDefaults(): Promise<{
+    requiredReviewers: DeliveryPolicy["requiredReviewers"] & {};
+    blockingSeverities: DeliveryPolicy["blockingSeverities"] & {};
+    maxReviewIterations: number;
+    maxPrFixIterations: number;
+    simplify: boolean;
+  }> {
+    return this.#request("GET", "/v1/delivery-defaults");
   }
 
   getProject(id: string): Promise<ProjectDetail> {

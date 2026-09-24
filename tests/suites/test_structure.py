@@ -130,3 +130,10 @@ def test_another_organization_cannot_touch_my_structure(client: ApiClient, secon
     assert stranger.patch(f"/v1/repositories/{repo['id']}", {"defaultBranch": "x"}).status_code == 404
     assert stranger.request("DELETE", f"/v1/epics/{epic['id']}").status_code == 404
     assert stranger.post(f"/v1/projects/{project['id']}/epics", {"title": "Theirs"}).status_code == 404
+
+
+def test_the_factorys_delivery_defaults_are_readable(client: ApiClient):
+    defaults = client.get("/v1/delivery-defaults").json()
+    assert defaults["requiredReviewers"] == ["correctness"]
+    assert defaults["blockingSeverities"] == ["blocking", "high"]
+    assert defaults["maxReviewIterations"] >= 1

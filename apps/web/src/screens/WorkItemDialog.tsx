@@ -7,7 +7,7 @@
  * (its epic) can change; the fields say so rather than failing on save.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Button, Dialog, IconButton, Input, Select } from "@dude/design-system/primitives";
 import type { ApiClient, Epic, Repository, WorkItemFields } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
@@ -36,6 +36,13 @@ export function WorkItemDialog({ client, projectId, open, onOpenChange, existing
   const [repositories, setRepositories] = useState<Repository[]>([]);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  // The choices arrive after the dialog opens; until they have, a save could
+  // miss a repository the project needs named.
+  const [loaded, setLoaded] = useState(false);
+  // Created, but its delivery did not start: a retry delivers it rather
+  // than creating a second.
+  const [created, setCreated] = useState<string | null>(null);
+  const formId = useId();
 
   // Fresh fields and choices each time it opens — only then: the parent
   // re-renders as events arrive, and a reset on every render would wipe
@@ -51,12 +58,17 @@ export function WorkItemDialog({ client, projectId, open, onOpenChange, existing
     setEpic(e?.epicId ?? preset ?? NO_EPIC);
     setRepository(e?.repositoryId ?? "");
     setProblem(null);
+    setCreated(null);
+    setLoaded(false);
+    setEpics([]);
+    setRepositories([]);
     let current = true;
     void Promise.all([client.listEpics(projectId), client.getProject(projectId)]).then(
       ([{ epics: found }, project]) => {
         if (!current) return;
         setEpics(found);
         setRepositories(project.repositories);
+        setLoaded(true);
       },
       (err: unknown) => current && setProblem(err instanceof Error ? err.message : String(err)),
     );
@@ -82,12 +94,13 @@ export function WorkItemDialog({ client, projectId, open, onOpenChange, existing
       });
     }
     try {
-      const saved = existing
-        ? await client.updateWorkItem(existing.id, fields)
-        : await client.createWorkItem({ projectId, title: title.trim(), ...fields });
-      if (deliver) await client.deliver(saved.id);
+      const id = existing
+        ? (await client.updateWorkItem(existing.id, fields)).id
+        : (created ?? (await client.createWorkItem({ projectId, title: title.trim(), ...fields })).id);
+      if (!existing) setCreated(id);
+      if (deliver) await client.deliver(id);
       onOpenChange(false);
-      onSaved(saved.id, deliver);
+      onSaved(id, deliver);
     } catch (err) {
       setProblem(err instanceof ApiError ? err.message : String(err));
     } finally {
@@ -95,7 +108,7 @@ export function WorkItemDialog({ client, projectId, open, onOpenChange, existing
     }
   }
 
-  const canSave = Boolean(title.trim()) && !busy && (!needsRepository || repository !== "" || locked);
+  const canSave = loaded && Boolean(title.trim()) && !busy && (!needsRepository || repository !== "" || locked);
 
   return (
     <Dialog
@@ -111,8 +124,8 @@ export function WorkItemDialog({ client, projectId, open, onOpenChange, existing
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button variant={existing ? "primary" : "secondary"} disabled={!canSave}
-            onClick={() => void save(false)} data-testid="work-item-save">
+          <Button type="submit" form={formId} variant={existing ? "primary" : "secondary"} disabled={!canSave}
+            data-testid="work-item-save">
             {existing ? "Save" : "Create"}
           </Button>
           {existing ? null : (
@@ -124,7 +137,8 @@ export function WorkItemDialog({ client, projectId, open, onOpenChange, existing
       }
     >
       <form
-        className="workItemForm"
+        id={formId}
+        className="dialogForm"
         onSubmit={(e) => {
           e.preventDefault();
           if (canSave) void save(false);
