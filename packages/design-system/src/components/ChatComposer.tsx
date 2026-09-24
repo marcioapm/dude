@@ -149,7 +149,7 @@ export function ChatComposer({
       {mode === "answer" && question ? (
         <div className={styles["question"]} role="region" aria-label="Pending question">
           <span className={styles["questionIcon"]} aria-hidden>
-            <Icon name="hand" size={12} strokeWidth={1.75} />
+            <Icon name="hand" size={14} />
           </span>
           <div className={styles["questionMain"]}>
             <div className={styles["questionLabel"]}>{question.askedBy ? `${question.askedBy} asks` : "The agent asks"} — blocked until you answer</div>

@@ -145,7 +145,7 @@ export function Sidebar({
       ) : null}
 
       <div className={styles["search"]}>
-        <Icon name="search" size={12} className={styles["searchIcon"]} />
+        <Icon name="search" size={14} className={styles["searchIcon"]} />
         <input
           ref={searchRef}
           id={searchId}
@@ -247,7 +247,7 @@ export function AttentionList({ items, selected, onSelect, max = 5 }: AttentionL
   return (
     <section className={styles["attention"]} aria-label="Needs you">
       <button type="button" className={styles["attentionHead"]} aria-expanded={open} onClick={() => setOpen((v) => !v)}>
-        <Icon name="chevron-right" size={12} className={cx(styles["attentionChevron"], open && styles["attentionChevronOpen"])} />
+        <Icon name="chevron-right" size={14} className={cx(styles["attentionChevron"], open && styles["attentionChevronOpen"])} />
         <StatusBadge status="awaiting_input" variant="dot" iconOnly className={styles["attentionMark"]} />
         <span className={styles["attentionTitle"]}>Needs you</span>
         <span className={styles["attentionCount"]}>{items.length}</span>

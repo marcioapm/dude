@@ -241,7 +241,7 @@ export function ToolCallCard({
         onKeyDown={hasBody ? onKeyDown : undefined}
       >
         <span className={styles["icon"]} aria-hidden>
-          <Icon name={icon ?? iconFor(name)} size={12} />
+          <Icon name={icon ?? iconFor(name)} size={14} />
         </span>
         <code className={styles["name"]}>{name}</code>
         <span className={styles["summary"]} title={typeof line === "string" ? line : undefined}>
@@ -258,7 +258,7 @@ export function ToolCallCard({
           <span className={cx(styles["state"], styles[`state-${status}`])} aria-label={running ? (slow ? "still running" : "running") : status}>
             {statusIcon ? <Icon name={statusIcon} size={11} strokeWidth={2} /> : <Icon name="spinner" size={11} />}
           </span>
-          {hasBody ? <Icon name="chevron-right" size={12} className={styles["chevron"]} /> : <span className={styles["chevronSpacer"]} />}
+          {hasBody ? <Icon name="chevron-right" size={14} className={styles["chevron"]} /> : <span className={styles["chevronSpacer"]} />}
         </span>
         {running ? (
           <span className={styles["track"]} aria-hidden>

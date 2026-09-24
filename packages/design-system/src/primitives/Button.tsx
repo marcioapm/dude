@@ -99,7 +99,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
       title={label}
       {...rest}
     >
-      <Icon name={icon} size={14} />
+      <Icon name={icon} size={16} />
     </Button>
   );
 });
