@@ -308,3 +308,88 @@ export const diff = {
     hunkFg: toHex(oklch(0.72, 0.08, 248)),
   },
 } as const;
+
+// ---------------------------------------------------------------------------
+// ANSI terminal colours — for tool output that arrives with escape codes.
+// The tool's own colours are the content (pytest's red FAILED, git's green
+// `+`), so they are rendered, not mapped onto the status tones: a green
+// line in a test log is not a "success" status of ours. Sixteen slots per
+// mode, each tuned to stay readable on the field background: "black" on
+// dark is a mid grey rather than invisible, "white" and "bright white" on
+// light are greys rather than paper, and every chromatic slot sits in the
+// lightness band the theme's text contrast needs. Bright is the same hue
+// one step lighter (dark) or one step *darker* (light), so `dim grey`
+// (bright black) never vanishes in either mode.
+// ---------------------------------------------------------------------------
+
+export const ANSI_COLOR_NAMES = [
+  "black",
+  "red",
+  "green",
+  "yellow",
+  "blue",
+  "magenta",
+  "cyan",
+  "white",
+  "bright-black",
+  "bright-red",
+  "bright-green",
+  "bright-yellow",
+  "bright-blue",
+  "bright-magenta",
+  "bright-cyan",
+  "bright-white",
+] as const;
+
+export type AnsiColorName = (typeof ANSI_COLOR_NAMES)[number];
+
+/** Hue per chromatic slot (index 1–6 and 9–14). Yellow leans amber so it holds up on white. */
+const ANSI_HUES = { red: 25, green: 150, yellow: 85, blue: 255, magenta: 325, cyan: 205 } as const;
+
+function ansiPalette(mode: "light" | "dark"): Record<AnsiColorName, string> {
+  const dark = mode === "dark";
+  // Chromatic slots: lightness band chosen so each keeps >= 4.5:1 on the
+  // field background (verified in tests); bright shifts one step away from
+  // the background.
+  const normalL = dark ? 0.76 : 0.5;
+  const brightL = dark ? 0.86 : 0.44;
+  const chroma = dark ? 0.14 : 0.15;
+  const chromatic = (l: number, h: number) => toHex(oklch(l, h === ANSI_HUES.yellow ? chroma * 0.95 : chroma, h));
+  return {
+    // "black" is the colour tools use for "de-emphasised": readable, not gone.
+    black: toHex(oklch(dark ? 0.6 : 0.24, NEUTRAL_CHROMA, NEUTRAL_HUE)),
+    red: chromatic(normalL, ANSI_HUES.red),
+    green: chromatic(normalL, ANSI_HUES.green),
+    yellow: chromatic(normalL, ANSI_HUES.yellow),
+    blue: chromatic(normalL, ANSI_HUES.blue),
+    magenta: chromatic(normalL, ANSI_HUES.magenta),
+    cyan: chromatic(normalL, ANSI_HUES.cyan),
+    white: toHex(oklch(dark ? 0.86 : 0.5, NEUTRAL_CHROMA, NEUTRAL_HUE)),
+    // "bright black" is the classic dim grey; on light it is a step darker
+    // than "white" so the two stay distinct, and never paper.
+    "bright-black": toHex(oklch(dark ? 0.66 : 0.44, NEUTRAL_CHROMA, NEUTRAL_HUE)),
+    "bright-red": chromatic(brightL, ANSI_HUES.red),
+    "bright-green": chromatic(brightL, ANSI_HUES.green),
+    "bright-yellow": chromatic(brightL, ANSI_HUES.yellow),
+    "bright-blue": chromatic(brightL, ANSI_HUES.blue),
+    "bright-magenta": chromatic(brightL, ANSI_HUES.magenta),
+    "bright-cyan": chromatic(brightL, ANSI_HUES.cyan),
+    "bright-white": toHex(oklch(dark ? 0.97 : 0.4, NEUTRAL_CHROMA * 0.5, NEUTRAL_HUE)),
+  };
+}
+
+export const ansiColors: Record<"light" | "dark", Record<AnsiColorName, string>> = {
+  light: ansiPalette("light"),
+  dark: ansiPalette("dark"),
+};
+
+/**
+ * Lightness band for 256-colour and truecolor foregrounds, which arrive as
+ * arbitrary RGB. The renderer keeps their hue and chroma and clamps OKLCH
+ * lightness into this band, so a tool that prints near-black on the
+ * assumption of a light terminal is still legible on the dark field.
+ */
+export const ansiForegroundLightness: Record<"light" | "dark", { readonly min: number; readonly max: number }> = {
+  dark: { min: 0.66, max: 0.97 },
+  light: { min: 0.2, max: 0.55 },
+};

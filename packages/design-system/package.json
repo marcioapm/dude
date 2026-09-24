@@ -13,6 +13,7 @@
     "./components": "./src/components/index.ts"
   },
   "scripts": {
+    "test": "bun test",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "tokens": "bun run scripts/build-tokens.ts",
     "gallery": "vite --config vite.config.ts",

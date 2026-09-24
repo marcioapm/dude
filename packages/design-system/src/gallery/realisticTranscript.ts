@@ -164,3 +164,92 @@ export const MSG_4 = `All green: 65 pass, 0 fail. The diff is 118 lines.
 Opening the PR now. One note for the reviewer: the webhook route has its own retry on the outer edge, so worst case is 5 × 3 attempts before a delivery is declared lost. I have not changed that — it is a product decision — but it is worth a follow-up work item.`;
 
 export const CONTEXT_WINDOW = 744_000;
+
+// ---------------------------------------------------------------------------
+// Coloured output. The container forces colour (FORCE_COLOR, CLICOLOR_FORCE,
+// TERM=xterm-256color, git color.ui=always), so this is what the backend
+// delivers: the tool's own SGR codes, and whatever else it printed.
+// ---------------------------------------------------------------------------
+
+const E = "\u001b";
+const sgr = (codes: string, text: string) => `${E}[${codes}m${text}${E}[0m`;
+
+/** pytest with `-p no:cacheprovider --color=yes`: green dots, a red F, a bold red summary. */
+export const PYTEST_OUTPUT = [
+  `${sgr("1", "============================= test session starts ==============================")}`,
+  `platform linux -- Python 3.12.4, pytest-8.3.2, pluggy-1.5.0`,
+  `rootdir: /workspace`,
+  `${sgr("1", "collected 7 items")}`,
+  ``,
+  `tests/test_client.py ${sgr("32", ".")}${sgr("32", ".")}${sgr("31", "F")}${sgr("32", ".")}${sgr("33", "s")}${sgr("32", ".")}${sgr("32", ".")}${sgr("36", "                                     [100%]")}`,
+  ``,
+  `${sgr("1", "=================================== FAILURES ===================================")}`,
+  `${sgr("31;1", "_________________________ test_retries_when_502 _________________________")}`,
+  ``,
+  `    def test_retries_when_502(client, fake_fetch):`,
+  `        fake_fetch.always(502)`,
+  `${sgr("1", ">")}       assert client.post("/x", {}) is None`,
+  `${sgr("1;31", "E       AssertionError: expected 5 calls, received 1")}`,
+  ``,
+  `${sgr("1;31", "tests/test_client.py")}:41: AssertionError`,
+  `${sgr("36", "=========================== short test summary info ============================")}`,
+  `${sgr("31", "FAILED")} tests/test_client.py::${sgr("1", "test_retries_when_502")} - AssertionError: expected 5 calls, received 1`,
+  `${sgr("31", "========================= ")}${sgr("31;1", "1 failed")}${sgr("31", ", ")}${sgr("32;1", "5 passed")}${sgr("31", ", ")}${sgr("33;1", "1 skipped")}${sgr("31", " in 0.31s ==========================")}`,
+].join("\n");
+
+/** `git diff --color`: bold headers, cyan hunk, red/green lines, and the OSC hyperlink some gits emit. */
+export const GIT_DIFF_COLOR = [
+  `${sgr("1", "diff --git a/apps/control-plane/src/integrations/github/client.ts b/apps/control-plane/src/integrations/github/client.ts")}`,
+  `${sgr("1", "index 3f2a9c1..8b1e0d4 100644")}`,
+  `${sgr("1", "--- a/apps/control-plane/src/integrations/github/client.ts")}`,
+  `${sgr("1", "+++ b/apps/control-plane/src/integrations/github/client.ts")}`,
+  `${sgr("36", "@@ -12,7 +12,14 @@")} ${E}]8;;https://github.com/dude/dude/blob/main/apps/control-plane/src/integrations/github/client.ts#L12\u0007export class GithubClient {${E}]8;;\u0007`,
+  `   async post<T>(path: string, body: unknown): Promise<T> {`,
+  `${sgr("31", "-    const res = await fetch(this.url(path), this.init(body));")}`,
+  `${sgr("31", "-    if (!res.ok) throw new Error(\`GitHub \${res.status}\`);")}`,
+  `${sgr("32", "+    let res: Response | undefined;")}`,
+  `${sgr("32", "+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {")}`,
+  `${sgr("32", "+      res = await fetch(this.url(path), this.init(body));")}`,
+  `${sgr("32", "+      if (res.ok || !isRetryable(res.status)) break;")}`,
+  `${sgr("32", "+      await sleep(backoff(attempt));")}`,
+  `${sgr("32", "+    }")}`,
+  `${sgr("32", "+    if (!res || !res.ok) throw new Error(\`GitHub \${res?.status ?? \"no response\"}\`);")}`,
+  `     return (await res.json()) as T;`,
+  `   }`,
+].join("\n");
+
+/** `ls -la --color=always`: bold blue directories, green executables, cyan symlinks, dim link targets. */
+export const LS_COLOR = [
+  `total 48`,
+  `drwxr-xr-x  8 agent agent 4096 Sep 24 09:12 ${sgr("01;34", ".")}`,
+  `drwxr-xr-x  3 agent agent 4096 Sep 24 09:01 ${sgr("01;34", "..")}`,
+  `drwxr-xr-x  2 agent agent 4096 Sep 24 09:12 ${sgr("01;34", "apps")}`,
+  `-rw-r--r--  1 agent agent  612 Sep 24 09:01 bunfig.toml`,
+  `-rwxr-xr-x  1 agent agent  188 Sep 24 09:01 ${sgr("01;32", "dev.sh")}`,
+  `lrwxrwxrwx  1 agent agent   19 Sep 24 09:01 ${sgr("01;36", "node_modules")} -> ${sgr("2", "../.cache/node_modules")}`,
+  `drwxr-xr-x  4 agent agent 4096 Sep 24 09:12 ${sgr("01;34", "packages")}`,
+  `-rw-r--r--  1 agent agent 1204 Sep 24 09:01 package.json`,
+  `-rw-r--r--  1 agent agent  382 Sep 24 09:01 ${sgr("01;31", "release.tar.gz")}`,
+].join("\n");
+
+/**
+ * A capped, coloured test run: the head ends inside `ESC[32m` (cut after
+ * `[3`), the tail begins with the trailing `2m` of another. Neither
+ * fragment may show, and the tail's first line is not green just
+ * because the head's last one was.
+ */
+export const COLOR_OUTPUT_TRUNCATED: ToolOutput = {
+  head: `${sgr("1", "bun test v1.2.4 (a1b2c3d4)")}\n\napps/control-plane/src/integrations/github/client.test.ts:\n${repeatLines(20, (i) => `${sgr("32", "✓")} GithubClient > ${["headers", "url", "post body", "json", "auth", "user-agent", "timeout"][i % 7]} case ${Math.floor(i / 7) + 1} ${sgr("2", `[${(0.4 + (i % 5) * 0.37).toFixed(2)}ms]`)}`)}\n${E}[3`,
+  tail: `2m✓${E}[0m routes/webhooks > records delivery id #14 ${sgr("2", "[1.80ms]")}\n\n${sgr("31;1", "# Unhandled error between tests")}\n${sgr("31", "-------------------------------")}\n${sgr("31", "error")}: expected 5 calls, received 1\n\n  ${sgr("2", "at <anonymous> (apps/control-plane/src/integrations/github/client.test.ts:41:22)")}\n${sgr("31", "-------------------------------")}\n\n ${sgr("32", "61 pass")}\n ${sgr("31", "1 fail")}\n ${sgr("31", "1 error")}\n 142 expect() calls\nRan 62 tests across 3 files. ${sgr("2", "[412.00ms]")}`,
+  omittedBytes: 12_611,
+};
+
+/** Progress bars and cursor control the way `bun install` and cargo print them, plus 256/truecolor. */
+export const CONTROL_CODES_OUTPUT = [
+  `${E}[?25l${E}[2K\r${sgr("36", "⠋")} Resolving...  10%\r${E}[2K${sgr("36", "⠙")} Resolving...  60%\r${E}[2K${sgr("32", "✓")} Resolved 412 packages${E}[?25h`,
+  `${E}[1;32m   Compiling${E}[0m dude-orchestrator v0.1.0 ${E}[1A${E}[2K${E}[1;32m    Finished${E}[0m \`dev\` profile in 11.82s`,
+  `${sgr("38;5;208", "warning")}${sgr("1", ": unused variable: \`attempt\`")}`,
+  `  ${sgr("38;5;39", "-->")} src/lux.rs:41:9`,
+  `${sgr("38;2;255;255;255", "truecolor white")} ${sgr("38;2;20;20;20", "truecolor near-black")} ${sgr("38;2;255;100;0", "truecolor orange")} ${sgr("38;5;240", "grey 240")}`,
+  `${sgr("7", " inverse ")} ${sgr("4", "underlined")} ${sgr("3", "italic")} ${sgr("2", "dim")} ${sgr("1", "bold")} ${sgr("43;30", " black on yellow ")} ${sgr("48;2;40;60;120", " on rgb ")}`,
+].join("\n");

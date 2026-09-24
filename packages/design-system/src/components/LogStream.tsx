@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import { Button } from "../primitives/Button.tsx";
+import { AnsiString } from "./AnsiString.tsx";
 import { formatTimestamp } from "../util/format.ts";
 import styles from "./LogStream.module.css";
 
@@ -43,6 +44,10 @@ export interface LogStreamProps extends Omit<HTMLAttributes<HTMLDivElement>, "ch
  * High-volume monospace log. Follows the tail while you are at the bottom;
  * the moment you scroll up it stops following and offers a "Jump to
  * latest" button, so reading history is never yanked away from you.
+ *
+ * A line is rendered through `AnsiString`: a tool's own colours show, other
+ * escapes are stripped. Each line is parsed alone, so a style never leaks
+ * from one line into the next.
  */
 export function LogStream({
   lines,
@@ -139,7 +144,7 @@ export function LogStream({
             </span>
             <span className={styles["ts"]}>{timestamps && l.ts !== undefined ? formatTimestamp(l.ts, "time-ms") : ""}</span>
             <span className={styles["text"]}>
-              {l.text}
+              <AnsiString text={l.text} />
               {live && i === window.length - 1 ? <span className={styles["cursor"]} aria-hidden /> : null}
             </span>
           </div>

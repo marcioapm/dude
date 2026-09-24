@@ -20,8 +20,11 @@ export {
   IDENTITY_SLOTS,
   TONE_NAMES,
   AGENT_ROLE_NAMES,
+  ANSI_COLOR_NAMES,
+  ansiColors,
+  ansiForegroundLightness,
 } from "./palette.ts";
-export type { ToneName, ToneInstance, AgentRoleName, RoleColor, IdentityColor } from "./palette.ts";
+export type { ToneName, ToneInstance, AgentRoleName, RoleColor, IdentityColor, AnsiColorName } from "./palette.ts";
 export { oklch, toHex } from "./oklch.ts";
 export type { Oklch } from "./oklch.ts";
 
@@ -44,6 +47,7 @@ export type TokenName =
   | `role-${string}`
   | `identity-${number}-${"fg" | "bg"}`
   | `diff-${string}`
+  | `ansi-${string}`
   | `shadow-${1 | 2 | 3}`
   | `duration-${keyof typeof import("./scale.ts").duration}`
   | `ease-${keyof typeof import("./scale.ts").easing}`
