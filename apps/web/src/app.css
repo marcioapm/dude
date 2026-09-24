@@ -410,3 +410,7 @@ body {
 .mono {
   font-family: var(--ds-font-mono);
 }
+
+.screenBreadcrumb {
+  margin-bottom: var(--ds-space-8);
+}

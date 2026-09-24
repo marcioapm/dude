@@ -7,7 +7,7 @@
  * continuously.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AgentPlan,
   ChatComposer,
@@ -34,7 +34,8 @@ export interface RunScreenProps {
   runId: string;
   /** The work item's title, when the caller already knows it. */
   title?: string | undefined;
-  onBack?: (() => void) | undefined;
+  /** Where this conversation sits, shown above it: a way back up. */
+  breadcrumb?: ReactNode;
 }
 
 /**
@@ -53,7 +54,7 @@ const STATUS_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.RunResumed,
 ]);
 
-export function RunScreen({ client, runId, title, onBack }: RunScreenProps) {
+export function RunScreen({ client, runId, title, breadcrumb }: RunScreenProps) {
   const [run, setRun] = useState<RunDetail | null>(null);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -160,6 +161,7 @@ export function RunScreen({ client, runId, title, onBack }: RunScreenProps) {
 
   return (
     <div className="runScreen">
+      {breadcrumb}
       <Tabs defaultValue="chat" fill>
         <TabList>
           <Tab value="chat">Conversation</Tab>
@@ -274,7 +276,7 @@ export function RunScreen({ client, runId, title, onBack }: RunScreenProps) {
 
       {problem ? <p className="problem">{problem}</p> : null}
       {streamStatus === "reconnecting" ? <p className="muted">Reconnecting…</p> : null}
-      {onBack ? <Button variant="ghost" onClick={onBack}>Back</Button> : null}
+
     </div>
   );
 }

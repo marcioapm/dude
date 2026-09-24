@@ -356,6 +356,8 @@ export const findingSchema = z.object({
   description: z.string(),
   suggestedFix: z.string(),
   resolutionNote: z.string(),
+  /** The Run whose judgement closed it, when a re-review did. */
+  resolvedByRunId: z.string().nullable().default(null),
   fixAttempts: z.number().int(),
   createdAt: z.string(),
 });

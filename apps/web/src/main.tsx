@@ -10,7 +10,7 @@
 
 import { StrictMode, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Button, Input, ToastProvider } from "@dude/design-system/primitives";
+import { Button, Input, ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 
 import "@dude/design-system/tokens.css";
 import "@dude/design-system/base.css";
@@ -41,6 +41,7 @@ function Root() {
   }
 
   return (
+    <TooltipProvider>
     <ToastProvider>
       <App
         client={client}
@@ -50,6 +51,7 @@ function Root() {
         }}
       />
     </ToastProvider>
+    </TooltipProvider>
   );
 }
 

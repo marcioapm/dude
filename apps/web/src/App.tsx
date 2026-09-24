@@ -4,6 +4,7 @@
  * The sidebar's selection decides the main pane, the way the design system's
  * `boardScope` describes it: a project or epic opens its board, a work item
  * opens its delivery view, and an agent (a phase Run) opens its conversation.
+ * Settings are places too (`place.ts`), outside the tree.
  *
  * The tree is re-read when the organization's event stream says something
  * happened, not on a timer — so a reviewer starting in another tab shows up
@@ -11,42 +12,53 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { boardScope, type NavProject, type NavRef } from "@dude/design-system";
-import { Board, Sidebar } from "@dude/design-system/components";
-import { Button, EmptyState, Spinner } from "@dude/design-system/primitives";
+import { boardScope, type NavProject, type NavRow } from "@dude/design-system";
+import { Board, Breadcrumb, Sidebar, type BreadcrumbItem } from "@dude/design-system/components";
+import { Button, EmptyState, RowMenu, Spinner, useToast } from "@dude/design-system/primitives";
 import type { ApiClient } from "./api/client.ts";
 import { useReloadOnEvents } from "./hooks/useEventStream.ts";
-import { RunScreen } from "./screens/RunScreen.tsx";
-import { WorkItemScreen } from "./screens/WorkItemScreen.tsx";
-import { WorkItemDialog } from "./screens/WorkItemDialog.tsx";
-import { ProjectSettingsScreen } from "./screens/ProjectSettingsScreen.tsx";
+import { errorText } from "./hooks/useSave.tsx";
+import { formatPlace, inTree, parsePlace, treeSelection, type Place } from "./place.ts";
+import { DeleteEpicDialog, EpicDialog, rowActions, type Intent } from "./screens/actions.tsx";
 import { NewProjectDialog } from "./screens/NewProjectDialog.tsx";
 import { OrganizationSettingsScreen } from "./screens/OrganizationSettingsScreen.tsx";
+import { ProjectSettingsScreen } from "./screens/ProjectSettingsScreen.tsx";
+import { RunScreen } from "./screens/RunScreen.tsx";
+import { WorkItemDialog } from "./screens/WorkItemDialog.tsx";
+import { WorkItemScreen } from "./screens/WorkItemScreen.tsx";
 
 export interface AppProps {
   client: ApiClient;
   onSignOut: () => void;
 }
 
-/**
- * A place in the app: something in the tree, a project's settings, or the
- * organization's (kind "org", which the tree does not have).
- */
-type Place = (NavRef & { settings?: boolean }) | { kind: "org"; id: "settings"; settings?: undefined };
+/** The one dialog the shell may have open. */
+type Open =
+  | { kind: "newProject" }
+  | { kind: "workItem"; projectId: string; epicId: string | null; editing?: string }
+  | Extract<Intent, { kind: "newEpic" }>
+  | Extract<Intent, { kind: "editEpic" }>
+  | Extract<Intent, { kind: "deleteEpic" }>;
 
-/** Selection lives in the URL hash, so a reload lands where you were. */
-function readSelection(): Place | null {
-  const [kind, id, view] = window.location.hash.replace(/^#\/?/, "").split("/");
-  if (kind === "org" && id === "settings") return { kind: "org", id: "settings" };
-  if (!kind || !id) return null;
-  if (!["project", "epic", "workItem", "run", "session"].includes(kind)) return null;
-  const ref = { kind: kind as NavRef["kind"], id: decodeURIComponent(id) };
-  return kind === "project" && view === "settings" ? { ...ref, settings: true } : ref;
+const GROUP_BY_EPIC = "dude.board.groupByEpic";
+
+/** Where a work item sits: its project, and its epic when it has one. */
+function whereIs(projects: readonly NavProject[], workItemId: string) {
+  for (const project of projects) {
+    const loose = (project.workItems ?? []).find((w) => w.id === workItemId);
+    if (loose) return { project, epic: null, item: loose };
+    for (const epic of project.epics ?? []) {
+      const item = epic.workItems.find((w) => w.id === workItemId);
+      if (item) return { project, epic, item };
+    }
+  }
+  return null;
 }
 
-function writeSelection(ref: Place | null) {
-  const hash = ref ? `#/${ref.kind}/${encodeURIComponent(ref.id)}${ref.settings ? "/settings" : ""}` : "";
-  if (window.location.hash !== hash) window.history.replaceState(null, "", hash || " ");
+/** What an agent is called in a trail: its phase, as the tree names it. */
+function agentLabel(item: ReturnType<typeof workItemOfAgent>, agentId: string): string {
+  const session = item?.runs?.flatMap((r) => r.sessions).find((s) => s.id === agentId);
+  return session?.title ?? "Agent";
 }
 
 /** The work item an agent row belongs to, for the header over its chat. */
@@ -64,13 +76,16 @@ function workItemOfAgent(projects: readonly NavProject[], agentId: string) {
 
 export function App({ client, onSignOut }: AppProps) {
   const [projects, setProjects] = useState<NavProject[] | null>(null);
-  const [selected, setSelectedState] = useState<Place | null>(readSelection);
+  const [place, setPlaceState] = useState<Place | null>(() => parsePlace(window.location.hash));
   const [problem, setProblem] = useState<string | null>(null);
-  const [newProject, setNewProject] = useState(false);
+  const [open, setOpen] = useState<Open | null>(null);
+  const [groupByEpic, setGroupByEpic] = useState(() => localStorage.getItem(GROUP_BY_EPIC) === "1");
+  const { toast } = useToast();
 
-  const setSelected = useCallback((ref: Place | null) => {
-    setSelectedState(ref);
-    writeSelection(ref);
+  const go = useCallback((next: Place | null) => {
+    setPlaceState(next);
+    const hash = formatPlace(next);
+    if (window.location.hash !== hash) window.history.replaceState(null, "", hash || " ");
   }, []);
 
   const load = useCallback(async () => {
@@ -79,7 +94,7 @@ export function App({ client, onSignOut }: AppProps) {
       setProjects(found);
       setProblem(null);
     } catch (err) {
-      setProblem(err instanceof Error ? err.message : String(err));
+      setProblem(errorText(err));
     }
   }, [client]);
 
@@ -92,12 +107,39 @@ export function App({ client, onSignOut }: AppProps) {
   // First load with nothing selected: open the first project's board rather
   // than an empty pane.
   useEffect(() => {
-    if (!selected && projects && projects[0]) setSelected({ kind: "project", id: projects[0].id });
-  }, [projects, selected, setSelected]);
+    if (!place && projects && projects[0]) go(inTree({ kind: "project", id: projects[0].id }));
+  }, [projects, place, go]);
 
-  // What the tree knows of the selection: the organization is not in it.
-  const inTree = selected?.kind === "org" ? null : selected;
-  const scope = useMemo(() => (projects ? boardScope(projects, inTree) : null), [projects, inTree]);
+  const selected = treeSelection(place);
+  const scope = useMemo(() => (projects ? boardScope(projects, selected) : null), [projects, selected]);
+
+  /** Carry out a row or board action: quick ones here, the rest in a dialog. */
+  const act = useCallback(
+    (intent: Intent) => {
+      const quietly = (what: Promise<unknown>) =>
+        void what.then(() => load(), (err: unknown) => toast({ title: errorText(err), tone: "danger" }));
+      switch (intent.kind) {
+        case "newWorkItem":
+          return setOpen({ kind: "workItem", projectId: intent.projectId, epicId: intent.epicId });
+        case "editWorkItem": {
+          const project = projects?.find((p) =>
+            [...(p.workItems ?? []), ...(p.epics ?? []).flatMap((e) => e.workItems)].some((w) => w.id === intent.workItemId));
+          return project ? setOpen({ kind: "workItem", projectId: project.id, epicId: null, editing: intent.workItemId }) : undefined;
+        }
+        case "projectSettings":
+          return go({ view: "projectSettings", projectId: intent.projectId });
+        case "moveEpic":
+          return quietly(client.updateEpic(intent.epicId, { position: intent.position }));
+        case "moveWorkItem":
+          return quietly(client.updateWorkItem(intent.workItemId, { epicId: intent.epicId }));
+        default:
+          return setOpen(intent);
+      }
+    },
+    [client, go, load, projects, toast],
+  );
+
+  const menuItems = useCallback((row: NavRow) => (projects ? rowActions(projects, row.ref, act) : null), [projects, act]);
 
   let main;
   if (!projects) {
@@ -108,53 +150,71 @@ export function App({ client, onSignOut }: AppProps) {
         title="No projects yet"
         description="A project is where work for a codebase lives: its repositories, its agents, its work items."
         action={
-          <Button variant="primary" leadingIcon="plus" onClick={() => setNewProject(true)} data-testid="new-project-empty">
+          <Button variant="primary" leadingIcon="plus" onClick={() => setOpen({ kind: "newProject" })} data-testid="new-project-empty">
             New project
           </Button>
         }
       />
     );
-  } else if (selected?.kind === "org") {
+  } else if (place?.view === "orgSettings") {
     main = <OrganizationSettingsScreen client={client} />;
-  } else if (selected?.kind === "project" && selected.settings) {
+  } else if (place?.view === "projectSettings") {
     main = (
       <ProjectSettingsScreen
-        key={selected.id}
+        key={place.projectId}
         client={client}
-        projectId={selected.id}
+        projectId={place.projectId}
         onChanged={() => void load()}
-        onBack={() => setSelected({ kind: "project", id: selected.id })}
+        onBack={() => go(inTree({ kind: "project", id: place.projectId }))}
       />
     );
   } else if (scope) {
+    const project = scope.project;
     main = (
       <Board
-        project={scope.project}
+        project={project}
         epic={scope.epic}
         selected={selected}
-        onSelect={(ref) => setSelected(ref)}
+        onSelect={(ref) => go(inTree(ref))}
+        groupBy={groupByEpic ? "epic" : null}
+        laneMenu={(lane) => {
+          if (!lane.epic) return null;
+          const items = rowActions(projects, { kind: "epic", id: lane.epic.id }, act);
+          return items ? <RowMenu items={items} label={`Actions for ${lane.title}`} size="sm" /> : null;
+        }}
         headerActions={
           <>
-          {scope.epic ? null : (
-            <Button
-              size="sm"
-              variant="secondary"
-              leadingIcon="list-check"
-              onClick={() => setSelected({ kind: "project", id: scope.project.id, settings: true })}
-              data-testid="project-settings-button"
-            >
-              Settings
+            {scope.epic ? (
+              <Button size="sm" variant="secondary" leadingIcon="edit" data-testid="edit-epic-button"
+                onClick={() => act({ kind: "editEpic", epic: {
+                  id: scope.epic!.id, projectId: project.id, title: scope.epic!.title, workItemCount: scope.epic!.workItems.length,
+                } })}>
+                Edit epic
+              </Button>
+            ) : (
+              <>
+                <Button size="sm" variant={groupByEpic ? "secondary" : "ghost"} leadingIcon="layers" aria-pressed={groupByEpic}
+                  data-testid="group-by-epic"
+                  onClick={() => {
+                    localStorage.setItem(GROUP_BY_EPIC, groupByEpic ? "0" : "1");
+                    setGroupByEpic(!groupByEpic);
+                  }}>
+                  Group by epic
+                </Button>
+                <Button size="sm" variant="ghost" leadingIcon="layers" data-testid="new-epic"
+                  onClick={() => act({ kind: "newEpic", projectId: project.id })}>
+                  New epic
+                </Button>
+                <Button size="sm" variant="secondary" leadingIcon="list-check" data-testid="project-settings-button"
+                  onClick={() => go({ view: "projectSettings", projectId: project.id })}>
+                  Settings
+                </Button>
+              </>
+            )}
+            <Button size="sm" variant="primary" leadingIcon="plus" data-testid="new-work-item"
+              onClick={() => act({ kind: "newWorkItem", projectId: project.id, epicId: scope.epic?.id ?? null })}>
+              New work item
             </Button>
-          )}
-          <NewWorkItemButton
-            client={client}
-            projectId={scope.project.id}
-            epicId={scope.epic?.id ?? null}
-            onCreated={(id) => {
-              void load();
-              setSelected({ kind: "workItem", id });
-            }}
-          />
           </>
         }
       />
@@ -165,7 +225,8 @@ export function App({ client, onSignOut }: AppProps) {
         key={selected.id}
         client={client}
         workItemId={selected.id}
-        onOpenRun={(runId) => setSelected({ kind: "session", id: runId })}
+        onOpenRun={(runId) => go(inTree({ kind: "session", id: runId }))}
+        breadcrumb={trail(selected.id)}
       />
     );
   } else if (selected && (selected.kind === "session" || selected.kind === "run")) {
@@ -176,28 +237,55 @@ export function App({ client, onSignOut }: AppProps) {
         client={client}
         runId={selected.id}
         title={item?.title}
-        onBack={item ? () => setSelected({ kind: "workItem", id: item.id }) : undefined}
+        breadcrumb={item ? trail(item.id, { id: selected.id, label: agentLabel(item, selected.id) }) : null}
       />
     );
   } else {
     main = <EmptyState title="Nothing selected" description="Pick something from the sidebar." />;
   }
 
+  /**
+   * Project › Epic › KEY for a work item, each a way back up — and, on an
+   * agent's conversation, the agent last, so the work item is a link too.
+   */
+  function trail(workItemId: string, here?: { id: string; label: string }) {
+    const where = projects ? whereIs(projects, workItemId) : null;
+    if (!where) return null;
+    const items: BreadcrumbItem[] = [
+      { id: where.project.id, label: where.project.name, onSelect: () => go(inTree({ kind: "project", id: where.project.id })) },
+    ];
+    if (where.epic) {
+      const epicId = where.epic.id;
+      items.push({ id: epicId, label: where.epic.title, icon: "layers", onSelect: () => go(inTree({ kind: "epic", id: epicId })) });
+    }
+    items.push({
+      id: workItemId,
+      label: where.item.key ?? where.item.title,
+      mono: Boolean(where.item.key),
+      ...(here ? { onSelect: () => go(inTree({ kind: "workItem", id: workItemId })) } : {}),
+    });
+    if (here) items.push({ id: here.id, label: here.label });
+    return <Breadcrumb items={items} className="screenBreadcrumb" />;
+  }
+
+  const close = () => setOpen(null);
+  const saved = () => void load();
+
   return (
     <div className="shell" data-testid="shell">
       <Sidebar
         projects={projects ?? []}
         loading={!projects}
-        selected={inTree}
-        onSelect={(ref) => setSelected(ref)}
+        selected={selected}
+        onSelect={(ref) => go(inTree(ref))}
+        menuItems={menuItems}
         title="dude"
         footer={
           <div className="sidebarFooter">
-            <Button size="sm" variant="ghost" leadingIcon="plus" onClick={() => setNewProject(true)} data-testid="new-project">
+            <Button size="sm" variant="ghost" leadingIcon="plus" onClick={() => setOpen({ kind: "newProject" })} data-testid="new-project">
               New project
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => setSelected({ kind: "org", id: "settings" })}
-              data-testid="org-settings-button">
+            <Button size="sm" variant="ghost" onClick={() => go({ view: "orgSettings" })} data-testid="org-settings-button">
               Organization
             </Button>
             <Button size="sm" variant="ghost" onClick={onSignOut}>
@@ -206,16 +294,46 @@ export function App({ client, onSignOut }: AppProps) {
           </div>
         }
       />
-      {newProject ? (
-      <NewProjectDialog
-        client={client}
-        open={newProject}
-        onOpenChange={setNewProject}
-        onCreated={(id) => {
-          void load();
-          setSelected({ kind: "project", id, settings: true });
-        }}
-      />
+      {open?.kind === "newProject" ? (
+        <NewProjectDialog
+          client={client}
+          open
+          onOpenChange={(o) => !o && close()}
+          onCreated={(id) => {
+            saved();
+            go({ view: "projectSettings", projectId: id });
+          }}
+        />
+      ) : null}
+      {open?.kind === "workItem" ? (
+        <WorkItemDialogFor client={client} open={open} onClose={close} onSaved={(id) => {
+          saved();
+          if (!open.editing) go(inTree({ kind: "workItem", id }));
+        }} />
+      ) : null}
+      {open?.kind === "newEpic" || open?.kind === "editEpic" ? (
+        <EpicDialog
+          client={client}
+          projectId={open.kind === "newEpic" ? open.projectId : open.epic.projectId}
+          epic={open.kind === "editEpic" ? open.epic : null}
+          onClose={close}
+          onSaved={(epic) => {
+            saved();
+            // A new epic is shown where it is: its board, which reveals it in the tree.
+            if (open.kind === "newEpic") go(inTree({ kind: "epic", id: epic.id }));
+          }}
+        />
+      ) : null}
+      {open?.kind === "deleteEpic" ? (
+        <DeleteEpicDialog
+          client={client}
+          epic={open.epic}
+          onClose={close}
+          onDeleted={() => {
+            saved();
+            if (selected?.kind === "epic" && selected.id === open.epic.id) go(inTree({ kind: "project", id: open.epic.projectId }));
+          }}
+        />
       ) : null}
       <main className="main">
         {problem ? <p className="problem">{problem}</p> : null}
@@ -225,28 +343,41 @@ export function App({ client, onSignOut }: AppProps) {
   );
 }
 
-/** Create a work item from the board, in the board's epic when it has one. */
-function NewWorkItemButton(props: {
+/**
+ * The work item dialog, for a new work item or an existing one — which it
+ * reads first, since the tree does not carry what a work item asks for.
+ */
+function WorkItemDialogFor(props: {
   client: ApiClient;
-  projectId: string;
-  epicId: string | null;
-  onCreated: (id: string) => void;
+  open: Extract<Open, { kind: "workItem" }>;
+  onClose: () => void;
+  onSaved: (id: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const { client, open } = props;
+  const [existing, setExisting] = useState<Parameters<typeof WorkItemDialog>[0]["existing"] | null>(null);
+  useEffect(() => {
+    if (!open.editing) return;
+    void client.getWorkItem(open.editing).then((item) =>
+      setExisting({
+        id: item.id,
+        delivering: item.runs.length > 0,
+        title: item.title,
+        goal: item.goal,
+        acceptanceCriteria: item.acceptanceCriteria,
+        epicId: item.epicId,
+        repositoryId: item.repositoryId,
+      }),
+    );
+  }, [client, open.editing]);
+  if (open.editing && !existing) return null;
   return (
-    <>
-      <Button size="sm" variant="primary" leadingIcon="plus" onClick={() => setOpen(true)} data-testid="new-work-item">
-        New work item
-      </Button>
-      {open ? (
-        <WorkItemDialog
-          client={props.client}
-          projectId={props.projectId}
-          epicId={props.epicId}
-          onClose={() => setOpen(false)}
-          onSaved={(id) => props.onCreated(id)}
-        />
-      ) : null}
-    </>
+    <WorkItemDialog
+      client={client}
+      projectId={open.projectId}
+      epicId={open.epicId}
+      existing={existing ?? undefined}
+      onClose={props.onClose}
+      onSaved={(id) => props.onSaved(id)}
+    />
   );
 }
