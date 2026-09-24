@@ -49,17 +49,18 @@ func logSink() io.Writer {
 }
 
 type world struct {
-	t       *testing.T
-	app     *db.DB
-	owner   *pgx.Conn
-	org     string
-	project string
-	repoID  string
-	gh      *fakegithub.Server
-	lux     *fakelux.Server
-	runtime *workflow.Runtime
-	syncer  *phases.Syncer
-	prs     *prs.Syncer
+	t         *testing.T
+	app       *db.DB
+	owner     *pgx.Conn
+	org       string
+	project   string
+	repoID    string
+	gh        *fakegithub.Server
+	lux       *fakelux.Server
+	runtime   *workflow.Runtime
+	syncer    *phases.Syncer
+	artifacts *phases.Artifacts
+	prs       *prs.Syncer
 	// The orchestrator's internal API, as the backend calls it.
 	api string
 }
@@ -110,11 +111,12 @@ func newWorld(t *testing.T) *world {
 		Agent: phases.AgentConfig{DefaultImage: "default:img", OpenCodeAuth: `{"k":"secret-key"}`,
 			OpenCodeProviders: json.RawMessage(`{"llm":{"options":{"baseURL":"https://llm.example/v1"}}}`), Timeout: "1h"}}
 	t.Cleanup(w.syncer.Stop)
+	w.artifacts = &phases.Artifacts{DB: app, Lux: w.syncer.Lux}
 	w.prs = &prs.Syncer{DB: app, Forges: forges, Log: quiet,
 		Signal: func(ctx context.Context, org, wf, name string, payload any, key string) error {
 			return w.runtime.Signal(ctx, org, wf, name, payload, key)
 		}}
-	apiSrv := httptest.NewServer((&api.Server{DB: app, Workflow: w.runtime, Token: "svc", Log: quiet, Kick: func() {}}).Handler())
+	apiSrv := httptest.NewServer((&api.Server{DB: app, Lux: w.syncer.Lux, Workflow: w.runtime, Token: "svc", Log: quiet, Kick: func() {}}).Handler())
 	t.Cleanup(apiSrv.Close)
 	w.api = apiSrv.URL
 	_ = ctx
@@ -137,6 +139,21 @@ func (w *world) call(path string, body any) (int, map[string]any) {
 	var out map[string]any
 	_ = json.NewDecoder(res.Body).Decode(&out)
 	return res.StatusCode, out
+}
+
+// get reads from the orchestrator's internal API as an organization.
+func (w *world) get(path, org string) (int, string) {
+	w.t.Helper()
+	req, _ := http.NewRequest("GET", w.api+path, nil)
+	req.Header.Set("Authorization", "Bearer svc")
+	req.Header.Set("X-Dude-Organization", org)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	defer res.Body.Close()
+	b, _ := io.ReadAll(res.Body)
+	return res.StatusCode, string(b)
 }
 
 func mustExec(t *testing.T, c *pgx.Conn, sql string, args ...any) {
@@ -175,6 +192,9 @@ func (w *world) pump() {
 		}
 	}
 	if _, err := w.syncer.Sweep(ctx); err != nil {
+		w.t.Fatal(err)
+	}
+	if _, err := w.artifacts.Sweep(ctx); err != nil {
 		w.t.Fatal(err)
 	}
 	if _, err := phases.NotifyFinished(ctx, w.app, func(ctx context.Context, org, wf, runID, status string) error {
@@ -275,6 +295,90 @@ func TestADeliveryReachesAPullRequestAndAMergeFinishesIt(t *testing.T) {
 	w.until("the work item to finish", func() bool {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
 		return w.workItemStatus(wi) == "done"
+	})
+}
+
+func TestWhatAnAgentPublishesIsKeptWithTheWorkItem(t *testing.T) {
+	w := newWorld(t)
+	wi := w.workItem()
+	w.deliver(wi)
+	w.until("the implementer's notes", func() bool {
+		return w.count(`SELECT count(*) FROM artifacts a JOIN runs r ON r.id = a.run_id WHERE r.work_item_id = $1`, wi) == 1
+	})
+	var name, ctype, key, phase string
+	var size int64
+	if err := w.owner.QueryRow(context.Background(), `SELECT a.name, a.content_type, a.size_bytes, a.storage_key, r.phase::text
+		FROM artifacts a JOIN runs r ON r.id = a.run_id WHERE r.work_item_id = $1`, wi).
+		Scan(&name, &ctype, &size, &key, &phase); err != nil {
+		t.Fatal(err)
+	}
+	if name != fakeagent.Notes || !strings.HasPrefix(ctype, "text/markdown") || size == 0 || key == "" || phase != "implement" {
+		t.Errorf("artifact = %s %s %d bytes key=%q from %s", name, ctype, size, key, phase)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE work_item_id = $1 AND event_type = 'artifact.created'`, wi); n != 1 {
+		t.Errorf("%d artifact.created events", n)
+	}
+
+	// Collected once, however often the collector looks, and nothing is left
+	// due once every exit is reported.
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	w.until("every exit collected", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND artifacts_due_at IS NOT NULL`, wi) == 0
+	})
+	if n := w.count(`SELECT count(*) FROM artifacts a JOIN runs r ON r.id = a.run_id WHERE r.work_item_id = $1`, wi); n != 1 {
+		t.Errorf("%d artifacts, want the implementer's one", n)
+	}
+
+	// Its bytes come from lux, through the orchestrator, only for its own
+	// organization.
+	var id string
+	_ = w.owner.QueryRow(context.Background(), `SELECT a.id FROM artifacts a JOIN runs r ON r.id = a.run_id WHERE r.work_item_id = $1`, wi).Scan(&id)
+	status, body := w.get("/internal/artifacts/"+id+"/content", w.org)
+	if status != 200 || !strings.Contains(body, "# What changed") {
+		t.Errorf("content = %d %q", status, body)
+	}
+	if status, _ := w.get("/internal/artifacts/"+id+"/content", "org_other"); status != 404 {
+		t.Errorf("another organization read it: %d", status)
+	}
+}
+
+func TestAPausedAgentsArtifactsAreCollectedAndItsNextExitsToo(t *testing.T) {
+	w := newWorld(t)
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour {
+		return fakelux.Behaviour{Hang: true, Reply: "Done after resume.", Commit: map[string]string{"A.md": "a\n"},
+			Publish: map[string]string{"plan.md": "# Plan\n"}}
+	}
+	wi := w.workItem()
+	w.deliver(wi)
+	w.until("the agent to be working", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'running'`, wi) == 1
+	})
+	var runID string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE work_item_id = $1`, wi).Scan(&runID)
+	// Nothing published before the pause (the hanging agent never replied),
+	// and a pause is still an exit that is looked at, then settled.
+	mustExec(t, w.owner, `UPDATE runs SET control = 'pause_graceful' WHERE id = $1`, runID)
+	w.until("the pause's exit to be collected", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND artifacts_due_at IS NULL`, runID) == 1
+	})
+	mustExec(t, w.owner, `UPDATE runs SET control = 'resume' WHERE id = $1`, runID)
+	mustExec(t, w.owner, `INSERT INTO directives (id, organization_id, work_item_id, run_id, text) VALUES ('dir_a', $1, $2, $3, 'go')`,
+		w.org, wi, runID)
+	// The resumed placement publishes, and its exit is collected too.
+	w.until("the second placement's artifact", func() bool {
+		return w.count(`SELECT count(*) FROM artifacts WHERE run_id = $1 AND name = 'plan.md' AND epoch = 2`, runID) == 1
+	})
+}
+
+func TestAnExitLuxWillNeverReportIsNotWaitedFor(t *testing.T) {
+	w := newWorld(t)
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{FailToStart: true} }
+	wi := w.workItem()
+	w.deliver(wi)
+	// The agent never started, so lux sends no snapshot for that exit: the
+	// collector sees that and settles at once rather than asking for a day.
+	w.until("the failed start's exit to be settled", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'failed' AND artifacts_due_at IS NULL`, wi) == 1
 	})
 }
 
@@ -610,8 +714,10 @@ func TestAFindingIsResolvedOnlyWhenTheReviewerJudgesItFixed(t *testing.T) {
 	mustExec(t, w.owner, `UPDATE projects SET agent_models = agent_models || '{"reviewer":{"model":"llm/review"}}'::jsonb WHERE id = $1`, w.project)
 	wi := w.workItem()
 	w.deliver(wi)
-	w.until("a second review", func() bool { return reviews >= 2 && w.count(`SELECT count(*) FROM runs
-		WHERE work_item_id = $1 AND phase = 'review' AND status = 'completed'`, wi) >= 2 })
+	w.until("a second review", func() bool {
+		return reviews >= 2 && w.count(`SELECT count(*) FROM runs
+		WHERE work_item_id = $1 AND phase = 'review' AND status = 'completed'`, wi) >= 2
+	})
 
 	if n := w.count(`SELECT count(*) FROM review_findings WHERE work_item_id = $1 AND status = 'open'`, wi); n != 1 {
 		t.Errorf("open findings = %d; a finding the reviewer says is still there must stay open", n)

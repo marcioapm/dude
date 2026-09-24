@@ -22,6 +22,10 @@ import (
 	"strings"
 )
 
+// PublishedDir is $LUX_ARTIFACTS in a lux container. (lux.PublishedDir; not
+// imported, to keep this package free of the client.)
+const PublishedDir = "/.lux/run/artifacts"
+
 // ModelPrefix selects the scripted agent in a project's model settings.
 const ModelPrefix = "fake/"
 
@@ -70,7 +74,13 @@ type Step struct {
 	Hang bool
 	// Its first turn ends on this question instead.
 	Ask string
+	// Files it publishes for people (into $LUX_ARTIFACTS), name → one line.
+	Publish map[string]string
 }
+
+// Notes is what the implementer publishes: a short account of its work, as
+// the prompt invites an agent to leave.
+const Notes = "NOTES.md"
 
 // For is the agent's step for a phase Run. fixed says whether the tree it
 // starts from already has the fixer's file — which only the reviewer reads.
@@ -81,7 +91,8 @@ func For(phase, model, runID string, fixed bool) Step {
 	switch phase {
 	case "implement":
 		step := Step{Commit: map[string]string{"FACTORY.md": "Written by run " + runID},
-			Message: "Add FACTORY.md for " + runID, Reply: "Implemented it."}
+			Message: "Add FACTORY.md for " + runID, Reply: "Implemented it.",
+			Publish: map[string]string{Notes: "# What changed\n\nAdded FACTORY.md for " + runID + "."}}
 		if model == AskModel {
 			step.Ask = Question
 		}
@@ -137,6 +148,10 @@ func Script(phase, model, runID string) string {
 	var b strings.Builder
 	for path, line := range step.Commit {
 		fmt.Fprintf(&b, "append %s %s\n", path, line)
+	}
+	for name, text := range step.Publish {
+		// lux-fake writes one line; the Markdown's line breaks stay escaped.
+		fmt.Fprintf(&b, "write %s/%s %s\n", PublishedDir, name, strings.ReplaceAll(text, "\n", " "))
 	}
 	if len(step.Commit) > 0 {
 		b.WriteString("commit " + step.Message + "\n")

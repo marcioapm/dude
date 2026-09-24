@@ -336,7 +336,7 @@ func (s *Syncer) follow(r phaseRun) {
 		}
 		// A Run lux lost fails here, or nothing would ever finish it: no
 		// output will arrive, and following again would spin forever.
-		if le, ok := lux.AsError(err); ok && le.Status == 404 {
+		if lux.IsNotFound(err) {
 			if err := s.retryLater(context.Background(), r, err); err != nil {
 				s.Log.Warn("failing a Run lux lost", "run", r.ID, "error", err)
 			}
@@ -781,7 +781,7 @@ var errRetry = errors.New("retrying later")
 // no longer has will not come back, whichever call found out: that fails
 // the Run instead of retrying it forever.
 func (s *Syncer) retryLater(ctx context.Context, r phaseRun, cause error) error {
-	if le, ok := lux.AsError(cause); ok && le.Status == 404 {
+	if lux.IsNotFound(cause) {
 		return s.fail(ctx, r, "lux no longer has this Run")
 	}
 	s.Log.Info("lux call failed; retrying later", "run", r.ID, "error", cause)

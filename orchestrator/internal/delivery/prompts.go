@@ -130,6 +130,14 @@ func severityNote(blocking []string) string {
 // discovering an empty push.
 const commitNote = "Commit your work when you are done. Only committed changes are kept."
 
+// publishNote tells an agent how to hand a person something that is not
+// code. Every phase may: an implementer's design notes, a reviewer's
+// reproduction, a tester's screenshots.
+const publishNote = "To give the people following this work a file — notes, a design, a report, a " +
+	"screenshot — write it into the directory named by the LUX_ARTIFACTS environment variable " +
+	"(for example `$LUX_ARTIFACTS/notes.md`). They see each one next to the work item, Markdown " +
+	"rendered. Publish what a person would want to read; don't copy code there."
+
 // askNote tells an agent that changes code how to stop for a person. The
 // fenced block, not a question in prose, is what stops the run: an agent
 // thinking aloud ("should I also…?") must not stall a delivery.
@@ -233,6 +241,7 @@ func Prompt(phase string, in PromptInput) string {
 		add(in.task())
 	}
 
+	add(publishNote)
 	if c := strings.TrimSpace(in.Context); c != "" {
 		add("## Project notes\n\n" + c)
 	}

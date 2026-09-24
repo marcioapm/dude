@@ -14,9 +14,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -25,11 +27,14 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
 type Server struct {
-	DB       *db.DB
+	DB *db.DB
+	// Where artifacts' bytes are: dude records them, lux keeps them.
+	Lux      lux.Client
 	Workflow *workflow.Runtime
 	Token    string
 	Log      *slog.Logger
@@ -53,6 +58,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /internal/runs/{id}/resume", s.auth(s.resume))
 	mux.Handle("POST /internal/runs/{id}/abort", s.auth(s.abort))
 	mux.Handle("POST /internal/questions/{id}/answer", s.auth(s.answer))
+	mux.Handle("GET /internal/artifacts/{id}/content", s.auth(s.artifactContent))
 	// The factory's delivery defaults, which the settings screen shows for
 	// what a project leaves unset: one definition, here, where it is applied.
 	mux.Handle("GET /internal/delivery-defaults", s.auth(func(w http.ResponseWriter, r *http.Request, _ string) error {
@@ -506,4 +512,39 @@ func write(w http.ResponseWriter, status int, v any) {
 // refusal straight through to the user.
 func errBody(code, message string) map[string]any {
 	return map[string]any{"error": map[string]string{"code": code, "message": message}}
+}
+
+// artifactContent streams an artifact's bytes from lux, as the agent wrote
+// them. The artifact is looked up in the caller's organization, so an id
+// from another one is simply not found.
+func (s *Server) artifactContent(w http.ResponseWriter, r *http.Request, org string) error {
+	var key, name, ctype, sum string
+	var size int64
+	if err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+		return tx.QueryRow(r.Context(), `SELECT storage_key, name, content_type, size_bytes, sha256 FROM artifacts WHERE id = $1`,
+			r.PathValue("id")).Scan(&key, &name, &ctype, &size, &sum)
+	}); err != nil {
+		return err
+	}
+	body, err := s.Lux.Download(r.Context(), key)
+	if err != nil {
+		if le, ok := lux.AsError(err); ok {
+			switch le.Status {
+			case http.StatusGone, http.StatusNotFound:
+				return fail(http.StatusGone, "gone", "%s is no longer kept", name)
+			case http.StatusConflict:
+				return fail(http.StatusConflict, "not_ready", "%s is still being uploaded", name)
+			case 0:
+				return fail(http.StatusServiceUnavailable, "unavailable", "lux, which keeps %s, is unreachable", name)
+			}
+		}
+		return err
+	}
+	defer body.Close()
+	w.Header().Set("Content-Type", ctype)
+	w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+	w.Header().Set("X-Content-SHA256", sum)
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, body)
+	return nil
 }

@@ -1,0 +1,199 @@
+/*
+ * ArtifactRow: one published file per 28px row, expandable to its content.
+ * Quiet: the glyph and the mono path do the reading; the producer is a
+ * role avatar; nothing is coloured but the avatar.
+ */
+
+.root {
+  list-style: none;
+  border-radius: var(--ds-radius-md);
+  border: 1px solid transparent;
+}
+.open {
+  border-color: var(--ds-color-border-subtle);
+  background: var(--ds-color-surface);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-default);
+  padding: 0 var(--ds-space-8) 0 var(--ds-space-4);
+  border-radius: var(--ds-radius-md);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-primary);
+}
+.row:has(.headButton:hover) {
+  background: var(--ds-color-hover-wash);
+}
+.open .row {
+  border-bottom: 1px solid var(--ds-color-border-subtle);
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: var(--ds-size-row-default);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  outline: none;
+}
+.headButton:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--ds-color-focus-ring);
+  border-radius: var(--ds-radius-sm);
+}
+
+.chevron {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--ds-color-text-muted);
+}
+.chevronIcon {
+  transition: transform var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.open .chevronIcon {
+  transform: rotate(90deg);
+}
+.glyph {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--ds-color-text-secondary);
+}
+.name {
+  font-family: var(--ds-font-mono);
+  font-feature-settings: "tnum", "zero";
+  font-size: var(--ds-text-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.kind {
+  flex-shrink: 0;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.size {
+  flex-shrink: 0;
+  font-size: var(--ds-text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--ds-color-text-muted);
+}
+
+.trailing {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.change {
+  flex-shrink: 0;
+}
+.producer {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+  white-space: nowrap;
+}
+.age {
+  font-size: var(--ds-text-xs);
+}
+.download {
+  display: inline-flex;
+  align-items: center;
+}
+.download a,
+.download button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  height: var(--ds-size-control-sm);
+  padding: 0 var(--ds-space-6);
+  border: 0;
+  border-radius: var(--ds-radius-sm);
+  background: none;
+  font-size: var(--ds-text-xs);
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-secondary);
+  text-decoration: none;
+}
+.download a:hover,
+.download button:hover {
+  color: var(--ds-color-text-primary);
+  background: var(--ds-color-hover-wash);
+  text-decoration: none;
+}
+
+.body {
+  padding: var(--ds-space-8) var(--ds-space-12) var(--ds-space-12) calc(var(--ds-space-4) + 14px + var(--ds-space-8));
+  min-width: 0;
+}
+
+/* Narrow: the producer's label and the kind go; avatar, size and age stay. */
+@container (max-width: 520px) {
+  .producerLabel,
+  .kind {
+    display: none;
+  }
+}
+
+/* -- Group -- */
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+  min-width: 0;
+  container-type: inline-size;
+}
+.groupHead {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-compact);
+  padding: 0 var(--ds-space-4);
+}
+.groupTitle {
+  white-space: nowrap;
+}
+.groupCount {
+  font-size: var(--ds-text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--ds-color-text-muted);
+}
+.groupActions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+}
+.groupEmpty {
+  padding: var(--ds-space-4) var(--ds-space-8);
+}
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}

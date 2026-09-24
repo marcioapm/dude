@@ -74,8 +74,9 @@ func run(log *slog.Logger) error {
 	signalWorkflow := func(ctx context.Context, org, wf, name string, payload any, key string) error {
 		return runtime.Signal(ctx, org, wf, name, payload, key)
 	}
+	luxClient := lux.New(require("LUX_URL"), require("LUX_API_KEY"))
 	syncer := &phases.Syncer{
-		DB: database, Lux: lux.New(require("LUX_URL"), require("LUX_API_KEY")),
+		DB: database, Lux: luxClient,
 		Forges: forges, Agent: agent, Log: log,
 	}
 	defer syncer.Stop()
@@ -98,6 +99,7 @@ func run(log *slog.Logger) error {
 					map[string]string{"runId": runID, "status": status}, "phase-finished:"+runID)
 			})
 		}},
+		{"artifacts", time.Second, (&phases.Artifacts{DB: database, Lux: luxClient}).Sweep},
 		{"webhooks", time.Second, pullRequests.ProcessDeliveries},
 		{"pr-reconciler", time.Minute, func(ctx context.Context) (int, error) {
 			return pullRequests.Reconcile(ctx, reconcileEvery)
@@ -127,7 +129,7 @@ func run(log *slog.Logger) error {
 
 	srv := &http.Server{
 		Addr: env("DUDE_ORCHESTRATOR_LISTEN", "127.0.0.1:3100"),
-		Handler: (&api.Server{DB: database, Workflow: runtime, Token: require("DUDE_ORCHESTRATOR_TOKEN"), Log: log,
+		Handler: (&api.Server{DB: database, Lux: luxClient, Workflow: runtime, Token: require("DUDE_ORCHESTRATOR_TOKEN"), Log: log,
 			Kick: func() {
 				select {
 				case kick <- struct{}{}:

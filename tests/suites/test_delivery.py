@@ -91,6 +91,39 @@ def test_the_review_fix_loop_converges_and_the_ledger_shows_it(
         assert expected in types, f"{expected} missing from the implementer's timeline: {types}"
 
 
+def test_what_an_agent_publishes_is_listed_and_read_only_by_its_organization(
+    client: ApiClient, forge_project: dict, second_org: dict
+):
+    """An agent writes a file into $LUX_ARTIFACTS; lux collects it when the
+    container exits; the orchestrator records it; the API lists it with the
+    work item and streams its bytes from lux."""
+    work_item = client.create_work_item(forge_project["id"], "Leave notes")
+    client.post(f"/v1/work-items/{work_item['id']}/deliver")
+
+    def published():
+        found = client.get("/v1/artifacts", params={"workItemId": work_item["id"]}).json()["artifacts"]
+        return found or None
+
+    artifacts = wait_until(published, timeout=60, message="the implementer's notes were never recorded")
+    assert [(a["name"], a["phase"], a["role"]) for a in artifacts] == [("NOTES.md", "implement", "implementer")], artifacts
+    notes = artifacts[0]
+    assert notes["contentType"].startswith("text/markdown") and notes["sizeBytes"] > 0
+
+    content = client.get(f"/v1/artifacts/{notes['id']}/content")
+    assert content.status_code == 200, content.text
+    assert content.text.startswith("# What changed")
+    assert int(content.headers["content-length"]) == notes["sizeBytes"]
+    # An agent's file is never run as one of our pages.
+    assert "sandbox" in content.headers["content-security-policy"]
+
+    other = second_org["client"]
+    assert other.get("/v1/artifacts", params={"workItemId": work_item["id"]}).json()["artifacts"] == []
+    assert other.get(f"/v1/artifacts/{notes['id']}/content").status_code == 404
+
+    types = [e["eventType"] for e in client.events(workItemId=work_item["id"])]
+    assert "artifact.created" in types
+
+
 def test_a_project_names_the_reviewers_every_delivery_runs(client: ApiClient, forge_project: dict):
     """Set on the project in the backend, honoured by the orchestrator."""
     resp = client.patch(f"/v1/projects/{forge_project['id']}",

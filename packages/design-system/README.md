@@ -405,6 +405,24 @@ nudge by eye.
   nothing is struck through. `FindingGroup` puts open findings first, most
   severe first (`sortFindings`), and counts what is still open; `fixedIn` is
   a slot for the app's link to the fix run.
+- **ArtifactRow** is a file an agent published: a glyph for its kind
+  (`artifactKind` — content type first, extension when the type is generic,
+  because agents are careless with media types), the path in mono, the
+  size (`formatBytes`), the producer as a role avatar with its phase, the
+  age, and the app's `<a href download>`. "New" / "Updated" since the
+  previous run is a neutral badge. With a `preview` the leading part of the
+  row is a disclosure button (`aria-expanded`); the download link stays a
+  sibling so Enter on it downloads. **ArtifactGroup** lists them under
+  "Artifacts · N" and shows "No artifacts yet" only when given `empty`
+  — a work item without artifacts must not grow a section to say so.
+- **ArtifactPreview** renders by kind: Markdown as `Markdown
+  variant="document"`, text and JSON in mono (JSON pretty-printed when it
+  parses, as typed when it does not — a half-written result is still worth
+  reading), images on a checkerboard so transparency has edges, and "No
+  preview for <type>" plus the download link for anything else. Long
+  content clamps at 400px behind "Show all", measured after layout so short
+  content gets no control. The app fetches text and passes URLs; nothing
+  here fetches.
 
 
 - `HumanAvatar` is for an identified person; `AgentAvatar role="human"` is
@@ -621,6 +639,9 @@ EmptyState, ScrollArea.
 - **FindingRow / FindingGroup** — a review finding, and the open-first list
   of them; `FINDING_SEVERITY_SPECS` / `FINDING_STATUS_SPECS` are the
   vocabulary.
+- **ArtifactRow / ArtifactGroup / ArtifactPreview** — files an agent
+  published, expandable to their content; `artifactKind` and
+  `ARTIFACT_KIND_SPECS` are the vocabulary.
 
 ## What is deliberately not here
 

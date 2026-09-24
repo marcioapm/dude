@@ -52,3 +52,7 @@ export { FindingRow, FindingGroup, sortFindings, countFindings, FINDING_SEVERITI
 export type { FindingRowProps, FindingGroupProps, FindingLike, FindingCounts, FindingSeveritySpec, FindingStatusSpec } from "./FindingRow.tsx";
 export { Breadcrumb, elideMiddle } from "./Breadcrumb.tsx";
 export type { BreadcrumbProps, BreadcrumbItem } from "./Breadcrumb.tsx";
+export { ArtifactRow, ArtifactGroup, artifactKind, ARTIFACT_KIND_SPECS } from "./ArtifactRow.tsx";
+export type { ArtifactRowProps, ArtifactGroupProps, ArtifactLike, ArtifactKind, ArtifactKindSpec, ArtifactChange, ArtifactProducer } from "./ArtifactRow.tsx";
+export { ArtifactPreview, prettyJson } from "./ArtifactPreview.tsx";
+export type { ArtifactPreviewProps } from "./ArtifactPreview.tsx";
