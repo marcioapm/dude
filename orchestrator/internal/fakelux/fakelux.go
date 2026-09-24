@@ -86,7 +86,8 @@ func (s *Server) deliverQueued(run *Run) {
 	}
 	run.queued = nil
 	// Input after a resume is what a paused agent was waiting for: it
-	// finishes its work this time.
+	// finishes its work this time. Without input it waits, as a real one
+	// does.
 	run.woken = run.Resumed > 0
 	s.turn(run)
 }
@@ -558,7 +559,9 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	run.Resumed++
 	run.Epoch++
 	if in.Input != nil {
-		run.Inputs = append(run.Inputs, in.Input.Text)
+		// Delivered once the agent is back, as lux does: it is the input the
+		// resumed agent was waiting for.
+		run.queued = append(run.queued, queuedInput{text: in.Input.Text, requestID: "resume"})
 	}
 	s.setState(run, "resuming")
 	var spec map[string]any

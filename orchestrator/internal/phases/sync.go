@@ -641,7 +641,15 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 	if err != nil {
 		return true, s.fail(ctx, r, "cannot resume: "+err.Error())
 	}
-	lr, err := s.Lux.Resume(ctx, r.LuxRunID, spec.Secrets, "")
+	// A resumed agent has its conversation back but waits for input, and a
+	// paused one never finished its turn: told nothing, it would sit idle
+	// for good. A person's directive, if one is waiting, is that input (sent
+	// the usual way once running); otherwise it is told to carry on.
+	nudge := ""
+	if !r.HasDirectives {
+		nudge = resumeNudge
+	}
+	lr, err := s.Lux.Resume(ctx, r.LuxRunID, spec.Secrets, nudge)
 	if err != nil {
 		return true, s.retryLater(ctx, r, err)
 	}
@@ -739,6 +747,10 @@ func (s *Syncer) ask(ctx context.Context, r phaseRun, call func(context.Context,
 	}
 	return errRetry
 }
+
+// resumeNudge is what a resumed agent is told when nobody said anything
+// while it was paused.
+const resumeNudge = "You were paused and have been resumed. Continue the task where you left off."
 
 // errRetry ends a step that will be tried again after a back-off.
 var errRetry = errors.New("retrying later")
