@@ -23,7 +23,7 @@
   border-radius: 0;
 }
 .rowNew {
-  animation: ds-flash var(--ds-duration-deliberate) var(--ds-ease-exit) 1;
+  animation: global(ds-flash) var(--ds-duration-deliberate) var(--ds-ease-exit) 1;
 }
 .rowExpanded {
   background: var(--ds-color-hover-wash);
@@ -117,7 +117,7 @@
   border-left: 2px solid var(--row-accent);
   font-size: var(--ds-text-sm);
   color: var(--ds-color-text-secondary);
-  animation: ds-fade-in var(--ds-duration-fast) var(--ds-ease-enter);
+  animation: global(ds-fade-in) var(--ds-duration-fast) var(--ds-ease-enter);
 }
 .detail pre {
   margin: 0;

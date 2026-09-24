@@ -9,7 +9,7 @@
     var(--ds-color-border-subtle) 100%
   );
   background-size: 200% 100%;
-  animation: ds-shimmer 1.6s var(--ds-ease-linear) infinite;
+  animation: global(ds-shimmer) 1.6s var(--ds-ease-linear) infinite;
 }
 .text {
   height: 0.85em;

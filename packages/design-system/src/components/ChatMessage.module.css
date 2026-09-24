@@ -16,7 +16,7 @@
   padding-top: 0;
 }
 .new {
-  animation: ds-flash var(--ds-duration-deliberate) var(--ds-ease-exit) 1;
+  animation: global(ds-flash) var(--ds-duration-deliberate) var(--ds-ease-exit) 1;
 }
 
 .gutter {

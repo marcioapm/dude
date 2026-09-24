@@ -99,7 +99,7 @@
   vertical-align: middle;
   border-radius: var(--ds-radius-full);
   background: var(--ds-color-live);
-  animation: ds-pulse calc(2.4s / max(var(--ds-motion-live), 0.0001)) ease-in-out infinite;
+  animation: global(ds-pulse) calc(2.4s / max(var(--ds-motion-live), 0.0001)) ease-in-out infinite;
 }
 
 .bar {

@@ -90,10 +90,10 @@
 
 /* Live states breathe slowly; never spin except the running spinner. */
 .live .glyph {
-  animation: ds-pulse calc(2.4s / max(var(--ds-motion-live), 0.0001)) ease-in-out infinite;
+  animation: global(ds-pulse) calc(2.4s / max(var(--ds-motion-live), 0.0001)) ease-in-out infinite;
 }
 .live [data-icon="spinner"] {
-  animation: ds-spin calc(1.1s / max(var(--ds-motion-live), 0.0001)) linear infinite;
+  animation: global(ds-spin) calc(1.1s / max(var(--ds-motion-live), 0.0001)) linear infinite;
 }
 
 /* "Needs you": a soft expanding ring draws the eye without flashing. */
@@ -103,7 +103,7 @@
   inset: -1px;
   border-radius: inherit;
   --ds-ring-color: var(--sb-solid);
-  animation: ds-ring calc(2.4s / max(var(--ds-motion-live), 0.0001)) var(--ds-ease-exit) infinite;
+  animation: global(ds-ring) calc(2.4s / max(var(--ds-motion-live), 0.0001)) var(--ds-ease-exit) infinite;
   pointer-events: none;
 }
 [data-reduced-motion="true"] .needsHuman.solid::after {
@@ -137,11 +137,11 @@
   flex-shrink: 0;
 }
 .dot.live .dotMark {
-  animation: ds-pulse calc(2.4s / max(var(--ds-motion-live), 0.0001)) ease-in-out infinite;
+  animation: global(ds-pulse) calc(2.4s / max(var(--ds-motion-live), 0.0001)) ease-in-out infinite;
 }
 .dot.needsHuman .dotMark {
   --ds-ring-color: var(--sb-fg);
-  animation: ds-ring calc(2.4s / max(var(--ds-motion-live), 0.0001)) var(--ds-ease-exit) infinite;
+  animation: global(ds-ring) calc(2.4s / max(var(--ds-motion-live), 0.0001)) var(--ds-ease-exit) infinite;
 }
 .dot.terminal .dotMark {
   opacity: 0.6;

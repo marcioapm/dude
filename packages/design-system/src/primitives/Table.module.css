@@ -116,7 +116,7 @@
   background: color-mix(in srgb, var(--ds-color-hover-wash) 50%, transparent);
 }
 .trNew > .td {
-  animation: ds-flash var(--ds-duration-deliberate) var(--ds-ease-exit) 1;
+  animation: global(ds-flash) var(--ds-duration-deliberate) var(--ds-ease-exit) 1;
 }
 
 .empty {

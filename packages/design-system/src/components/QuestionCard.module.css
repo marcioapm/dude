@@ -26,7 +26,7 @@
   scroll-margin-top: var(--ds-space-32);
 }
 .new {
-  animation: ds-flash var(--ds-duration-deliberate) var(--ds-ease-exit) 1;
+  animation: global(ds-flash) var(--ds-duration-deliberate) var(--ds-ease-exit) 1;
 }
 .waiting {
   --qc-frame: var(--ds-tone-attention-border);

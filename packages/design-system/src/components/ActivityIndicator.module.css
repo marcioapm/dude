@@ -137,7 +137,7 @@
 
 /* thinking: the dashed ring drifts. Frozen, it is still a dashed ring. */
 .motion-drift svg {
-  animation: ds-drift calc(var(--ds-cadence-drift) / max(var(--ds-motion-live), 0.0001)) linear infinite;
+  animation: global(ds-drift) calc(var(--ds-cadence-drift) / max(var(--ds-motion-live), 0.0001)) linear infinite;
 }
 
 /* streaming: a block caret, stepped blink. Frozen, it is lit. */
@@ -147,7 +147,7 @@
   height: 12px;
   border-radius: 1px;
   background: var(--ai-fg);
-  animation: ds-blink calc(var(--ds-cadence-blink) / max(var(--ds-motion-live), 0.0001)) steps(2, jump-none) infinite;
+  animation: global(ds-blink) calc(var(--ds-cadence-blink) / max(var(--ds-motion-live), 0.0001)) steps(2, jump-none) infinite;
 }
 
 /* tool: the glyph holds still; the track underneath carries the motion. */
@@ -169,7 +169,7 @@
   width: 28%;
   border-radius: 1px;
   background: var(--ai-solid);
-  animation: ds-sweep calc(var(--ds-cadence-sweep) / max(var(--ds-motion-live), 0.0001)) var(--ds-ease-standard) infinite;
+  animation: global(ds-sweep) calc(var(--ds-cadence-sweep) / max(var(--ds-motion-live), 0.0001)) var(--ds-ease-standard) infinite;
 }
 .attention .track {
   background: var(--ds-tone-attention-bg);

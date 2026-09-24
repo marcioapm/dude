@@ -8,7 +8,7 @@
   font-size: var(--ds-text-sm);
   line-height: var(--ds-leading-snug);
   box-shadow: var(--ds-shadow-2);
-  animation: ds-fade-in var(--ds-duration-fast) var(--ds-ease-enter);
+  animation: global(ds-fade-in) var(--ds-duration-fast) var(--ds-ease-enter);
   user-select: none;
 }
 .mono {
