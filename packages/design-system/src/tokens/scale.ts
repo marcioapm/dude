@@ -135,6 +135,12 @@ export const zIndex = {
   dropdown: 100,
   overlay: 200,
   dialog: 300,
+  /**
+   * A select's or menu's popup: above a dialog, because one opened from a
+   * field in a dialog must be clickable. `dropdown` stays for page-level
+   * layers that must sit under an open dialog.
+   */
+  popover: 350,
   toast: 400,
   tooltip: 500,
 } as const;

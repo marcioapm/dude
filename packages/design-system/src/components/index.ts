@@ -18,6 +18,8 @@ export { Markdown } from "./Markdown.tsx";
 export type { MarkdownProps, MarkdownVariant } from "./Markdown.tsx";
 export { ActivityIndicator } from "./ActivityIndicator.tsx";
 export type { ActivityIndicatorProps } from "./ActivityIndicator.tsx";
+export { AnsiString } from "./AnsiString.tsx";
+export type { AnsiStringProps } from "./AnsiString.tsx";
 export { ToolCallCard, summarizeToolArgs } from "./ToolCallCard.tsx";
 export type { ToolCallCardProps, ToolOutput } from "./ToolCallCard.tsx";
 export { ThinkingBlock } from "./ThinkingBlock.tsx";

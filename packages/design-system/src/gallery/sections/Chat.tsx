@@ -18,7 +18,11 @@ import {
   ANSWER_TEXT,
   CLIENT_DIFF,
   CLIENT_SOURCE,
+  COLOR_OUTPUT_TRUNCATED,
   CONTEXT_WINDOW,
+  CONTROL_CODES_OUTPUT,
+  GIT_DIFF_COLOR,
+  LS_COLOR,
   LONG_TEST_OUTPUT_FAILED,
   LONG_TEST_OUTPUT_PASSED,
   MSG_1,
@@ -26,6 +30,7 @@ import {
   MSG_3,
   MSG_4,
   PHASE_PROMPT,
+  PYTEST_OUTPUT,
   QUESTION_OPTIONS,
   QUESTION_TEXT,
   THOUGHT_1,
@@ -256,6 +261,27 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
             <ToolCallCard name="webfetch" status="aborted" args={{ url: "https://docs.github.com/en/rest/webhooks" }} durationMs={8_000} summary="docs.github.com/en/rest/webhooks — aborted by operator" />
             <ToolCallCard name="publish_artifact" status="completed" args={{ path: "/workspace/artifacts/investigation.md", title: "Investigation: webhook retries" }} durationMs={320} result="ART-8291" />
             <ToolCallCard name="todowrite" status="completed" args={{ todos: PLAN_BASE }} durationMs={9} icon="list-check" />
+          </Col>
+        </Panes>
+      </Block>
+
+      <Block
+        id="ch-tool-ansi"
+        title="ToolCallCard: coloured output"
+        note="The container forces colour (FORCE_COLOR, CLICOLOR_FORCE, TERM=xterm-256color, git color.ui=always), so output arrives with the tool's own escape codes. SGR is rendered — bold, dim, italic, underline, inverse, the 16 colours mapped onto --ds-ansi-* so they read on both fields, 256-colour and truecolor with their lightness clamped into the theme's text band — and everything else (cursor moves, erase-line, hidden cursor, OSC hyperlinks) is stripped rather than shown. Inside the block the tool's colours are the content: a red FAILED is pytest's, not a status of ours. The 2 KB cap can cut a sequence in half at the end of the head or the start of the tail; the fragment is dropped, never shown, and the tail starts plain — a style does not carry across the elision."
+      >
+        <Panes mode={mode} surface>
+          <Col>
+            <Label>pytest: pass/fail colours, bold summary</Label>
+            <ToolCallCard name="bash" status="failed" args={{ command: "pytest -q --color=yes tests/" }} durationMs={1_410} exitCode={1} error="1 failed, 5 passed, 1 skipped" output={PYTEST_OUTPUT} />
+            <Label>git diff --color: an OSC hyperlink on the hunk header is stripped, its text kept</Label>
+            <ToolCallCard name="bash" status="completed" args={{ command: "git diff --color HEAD~1 -- apps/control-plane" }} durationMs={38} exitCode={0} output={GIT_DIFF_COLOR} defaultExpanded />
+            <Label>ls --color: bold blue directories, green executables, a dim link target</Label>
+            <ToolCallCard name="bash" status="completed" args={{ command: "ls -la --color=always" }} durationMs={12} exitCode={0} output={LS_COLOR} defaultExpanded />
+            <Label>head and tail, each cut inside a sequence: no fragment, no leaked style</Label>
+            <ToolCallCard name="bash" status="failed" args={{ command: "bun test apps/control-plane" }} durationMs={4_210} exitCode={1} error="1 failing: retries when response is 502" output={COLOR_OUTPUT_TRUNCATED} />
+            <Label>progress bars collapse to their last frame; cursor control stripped; 256-colour, truecolor and the attributes</Label>
+            <ToolCallCard name="bash" status="completed" args={{ command: "bun install && cargo build" }} durationMs={13_200} exitCode={0} output={CONTROL_CODES_OUTPUT} defaultExpanded />
           </Col>
         </Panes>
       </Block>

@@ -32,6 +32,11 @@ function toHexByte(x: number): string {
     .padStart(2, "0");
 }
 
+/** `#rrggbb` from sRGB bytes (0..255). */
+export function rgbToHex(r: number, g: number, b: number): string {
+  return `#${toHexByte(r / 255)}${toHexByte(g / 255)}${toHexByte(b / 255)}`;
+}
+
 /** Returns true when the color is inside the sRGB gamut (no clipping). */
 export function inGamut({ l, c, h }: Oklch): boolean {
   const [r, g, b] = toLinearRgb(l, c, h);
@@ -79,4 +84,33 @@ export function toHex(color: Oklch): string {
 /** `#rrggbbaa` with alpha 0..1. */
 export function toHexAlpha(color: Oklch, alpha: number): string {
   return `${toHex(color)}${toHexByte(alpha)}`;
+}
+
+function gammaDecode(v: number): number {
+  const x = Math.max(0, Math.min(1, v));
+  return x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+}
+
+/**
+ * sRGB bytes (0..255) to OKLCH. The inverse of `toHex`, for colours that
+ * arrive from outside the token set (a tool's truecolor output) and need
+ * their lightness reasoned about before they are shown.
+ */
+export function fromRgb(r8: number, g8: number, b8: number): Oklch {
+  const r = gammaDecode(r8 / 255);
+  const g = gammaDecode(g8 / 255);
+  const b = gammaDecode(b8 / 255);
+
+  const l_ = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const m_ = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const s_ = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+
+  const L = 0.2104542553 * l_ + 0.793617785 * m_ - 0.0040720468 * s_;
+  const a = 1.9779984951 * l_ - 2.428592205 * m_ + 0.4505937099 * s_;
+  const bb = 0.0259040371 * l_ + 0.7827717662 * m_ - 0.808675766 * s_;
+
+  const c = Math.hypot(a, bb);
+  let h = (Math.atan2(bb, a) * 180) / Math.PI;
+  if (h < 0) h += 360;
+  return { l: L, c, h };
 }

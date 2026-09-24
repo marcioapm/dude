@@ -5,6 +5,7 @@ import { formatBytes, formatDuration } from "../util/format.ts";
 import { useDisclosure } from "../util/useDisclosure.ts";
 import { useElapsed } from "../util/useNow.ts";
 import { TOOL_SLOW_AFTER_MS, type ToolCallStatus } from "../tokens/activity.ts";
+import { AnsiString } from "./AnsiString.tsx";
 import { DiffView, parseUnifiedDiff, type FileDiff } from "./DiffView.tsx";
 import styles from "./ToolCallCard.module.css";
 
@@ -166,6 +167,11 @@ const STATUS_ICON: Record<ToolCallStatus, IconName | null> = {
  * dropped middle is drawn as a labelled elision line, never silently
  * joined. stderr, when the harness reports it apart, is a second block
  * marked by label and rail.
+ *
+ * The container forces colour, so output carries the tool's own escape
+ * codes: SGR is rendered (`AnsiString`), everything else is stripped, and a
+ * sequence cut by the cap is dropped rather than shown as a fragment.
+ * Lines are counted on the raw text — a code never contains a newline.
  */
 export function ToolCallCard({
   name,
@@ -304,7 +310,7 @@ export function ToolCallCard({
               </div>
               {resultText !== null ? (
                 <pre className={styles["pre"]} style={{ maxHeight }}>
-                  {resultText}
+                  <AnsiString text={resultText} />
                 </pre>
               ) : (
                 result
@@ -358,7 +364,7 @@ function OutputSection({
       {!empty ? (
         <div className={cx(styles["pre"], styles["out"], stderr && styles["preStderr"])} style={{ maxHeight }} role="region" aria-label={label}>
           <span className={styles["outText"]}>
-            {output.head}
+            <AnsiString text={output.head} />
             {output.tail === undefined ? caret : null}
           </span>
           {elided ? (
@@ -370,7 +376,7 @@ function OutputSection({
           ) : null}
           {output.tail !== undefined ? (
             <span className={styles["outText"]}>
-              {output.tail}
+              <AnsiString text={output.tail} cutStart />
               {caret}
             </span>
           ) : null}

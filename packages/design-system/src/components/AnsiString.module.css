@@ -1,0 +1,20 @@
+/* Styled runs of tool output (AnsiString). The colour of a run is set
+   inline from the theme's --ds-ansi-* tokens (or a clamped light-dark()
+   pair for a colour outside the 16); this file carries only the attribute
+   styles. */
+.bold {
+  font-weight: var(--ds-weight-semibold);
+}
+/* Dim is opacity, not a lighter colour: it keeps the run's own hue, and
+   over a 4.5:1 colour lands near 3.5:1 — de-emphasised, as the tool
+   asked, but still there in both modes. */
+.dim {
+  opacity: 0.75;
+}
+.italic {
+  font-style: italic;
+}
+.underline {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}

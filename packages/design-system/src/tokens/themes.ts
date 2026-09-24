@@ -10,8 +10,10 @@
 
 import {
   AGENT_ROLE_NAMES,
+  ANSI_COLOR_NAMES,
   TONE_NAMES,
   accent,
+  ansiColors,
   diff,
   identityColors,
   neutral,
@@ -197,6 +199,7 @@ export function flattenTheme(mode: ThemeMode): Record<string, string> {
   out["diff-del-fg"] = d.delFg;
   out["diff-hunk-bg"] = d.hunkBg;
   out["diff-hunk-fg"] = d.hunkFg;
+  for (const name of ANSI_COLOR_NAMES) out[`ansi-${name}`] = ansiColors[mode][name];
 
   // Elevation is theme-dependent: light uses shadow, dark uses a lighter
   // surface + hairline plus a much softer shadow for separation from canvas.

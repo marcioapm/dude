@@ -194,6 +194,35 @@ nudge by eye.
   never a silent join. stderr, when reported apart (`stderr` prop), is a
   second block marked by label and rail, not by tinting the text; a harness
   that merges the streams (OpenCode) passes one `output`.
+- Tool output carries the tool's own escape codes — the container forces
+  colour (`FORCE_COLOR`, `CLICOLOR_FORCE`, `TERM=xterm-256color`,
+  `git color.ui=always`). `parseAnsi` (`src/util/ansi.ts`) turns it into
+  styled runs and `AnsiString` renders them as spans; no HTML string exists
+  anywhere in the path. SGR is kept (reset, bold, dim, italic, underline,
+  inverse, the 16 colours, 256-colour, truecolor); every other sequence
+  (cursor moves, erase, modes, OSC titles and hyperlinks) is stripped, not
+  shown; an OSC that never closes on its line loses only its introducer,
+  never the lines after it. Carriage returns are applied as a terminal
+  would: on each line only the text after the last `\r` shows, so a
+  progress bar collapses to its last frame. A sequence the cap cut in half is
+  dropped whole: at the end of the head always, at the start of the tail
+  when the caller says so (`cutStart`) and the fragment plausibly is one
+  (`10ms` and `5m ago` are text), so `[01;3` never appears. Head
+  and tail are parsed apart, so a style never carries across the elision;
+  each `LogStream` line is parsed alone for the same reason.
+- Inside tool output the tool's colours *are* the content: pytest's red
+  `FAILED` is pytest's, not a status of ours, so the 16 colours map onto
+  their own `--ds-ansi-*` tokens (`ansiColors` in `palette.ts`), not the
+  tones. Each slot clears 4.5:1 on the field background in both modes
+  (the test checks): "black" on dark is a mid grey, "white" and "bright
+  black" on light are text-secondary greys, so a tool that dims a path
+  never makes it vanish. 256-colour and truecolor foregrounds keep their
+  hue and chroma but have their OKLCH lightness clamped into the theme's
+  text band (`ansiForegroundLightness`), emitted as a `light-dark()`
+  pair; backgrounds pass through, and so does the ink a tool chose for its
+  own fill — the clamp is for text on *our* field. Bold is
+  weight, dim is opacity, inverse swaps ink and fill. The card's own
+  chrome — rail, chips, labels — still never means anything by hue alone.
 - The model's reasoning is a `ThinkingBlock`: no avatar, no frame, muted
   ink, a 24px row — quieter than a message and distinct from a tool call.
   Collapsed by default to brain · label · one-line preview · duration.
