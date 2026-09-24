@@ -55,3 +55,11 @@ func TestAnInvalidByteEarlyOnDoesNotEmptyTheHead(t *testing.T) {
 		t.Errorf("head is %d bytes, want %d", len(head), outputKeep)
 	}
 }
+
+func TestColourReachesTheChatUntouched(t *testing.T) {
+	// Rendering it is the chat's job; the orchestrator keeps the bytes.
+	out := "\x1b[31mFAILED\x1b[0m test_x.py::\x1b[1mtest_a\x1b[0m\n"
+	if got := capOutput(out)["head"]; got != out {
+		t.Errorf("got %q", got)
+	}
+}
