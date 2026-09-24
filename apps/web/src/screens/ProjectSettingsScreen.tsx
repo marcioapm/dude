@@ -7,8 +7,8 @@
 
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { ROLE_LABEL } from "@dude/design-system/components";
-import { ALL_AGENT_ROLES as AGENT_ROLES, REVIEWER_CATEGORIES } from "@dude/domain";
-import type { AgentRole, DeliveryPolicy } from "@dude/domain";
+import { ALL_AGENT_ROLES as AGENT_ROLES, findingSeveritySchema, REVIEWER_CATEGORIES } from "@dude/domain";
+import type { AgentRole, DeliveryPolicy, FullDeliveryPolicy } from "@dude/domain";
 import {
   Badge,
   Button,
@@ -30,12 +30,10 @@ import {
   useToast,
 } from "@dude/design-system/primitives";
 import type { ApiClient, ProjectDetail, Repository } from "../api/client.ts";
-import { ApiError } from "../api/client.ts";
+import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
 
-const SEVERITIES = ["blocking", "high", "medium", "low", "note"] as const;
-
-/** A delivery policy with every field present: a project's over the factory's. */
-type FullPolicy = { [K in keyof DeliveryPolicy]-?: NonNullable<DeliveryPolicy[K]> };
+const SEVERITIES = findingSeveritySchema.options;
+type FullPolicy = FullDeliveryPolicy;
 
 export interface ProjectSettingsScreenProps {
   client: ApiClient;
@@ -60,7 +58,7 @@ export function ProjectSettingsScreen({ client, projectId, onChanged, onBack }: 
       setDefaults(factory);
       setProblem(null);
     } catch (err) {
-      if (mine === latest.current) setProblem(err instanceof Error ? err.message : String(err));
+      if (mine === latest.current) setProblem(errorText(err));
     }
   }, [client, projectId]);
 
@@ -115,32 +113,6 @@ interface TabProps {
   onSaved: () => void;
 }
 
-/** Save a change, report the outcome, and say why when it is refused. */
-function useSave() {
-  const { toast } = useToast();
-  const [busy, setBusy] = useState(false);
-  const [problem, setProblem] = useState<string | null>(null);
-  const save = useCallback(
-    async (done: string, action: () => Promise<unknown>, then: () => void) => {
-      setBusy(true);
-      setProblem(null);
-      try {
-        await action();
-        toast({ title: done, tone: "success" });
-        then();
-        return true;
-      } catch (err) {
-        setProblem(err instanceof ApiError ? err.message : String(err));
-        return false;
-      } finally {
-        setBusy(false);
-      }
-    },
-    [toast],
-  );
-  return { busy, problem, save, clear: () => setProblem(null) };
-}
-
 function GeneralTab({ client, project, onSaved }: TabProps) {
   const [name, setName] = useState(project.name);
   const [image, setImage] = useState(project.runtimeImage ?? "");
@@ -151,10 +123,10 @@ function GeneralTab({ client, project, onSaved }: TabProps) {
       className="settingsForm"
       onSubmit={(e) => {
         e.preventDefault();
-        void save("General settings saved", () => client.updateProject(project.id, {
+        void save(() => client.updateProject(project.id, {
           name: name.trim(),
           runtimeImage: image.trim() || null,
-        }), onSaved);
+        }), onSaved, "General settings saved");
       }}
     >
       <Input label="Name" value={name} required maxLength={200} onChange={(e) => setName(e.target.value)} />
@@ -231,13 +203,15 @@ function RepositoriesTab({ client, project, onSaved }: TabProps) {
         </Button>
       </div>
       {problem ? <p className="problem" role="alert">{problem}</p> : null}
-      <RepositoryDialog
-        client={client}
-        projectId={project.id}
-        repository={editing}
-        onClose={() => setEditing(null)}
-        onSaved={onSaved}
-      />
+      {editing ? (
+        <RepositoryDialog
+          client={client}
+          projectId={project.id}
+          existing={editing === "new" ? null : editing}
+          onClose={() => setEditing(null)}
+          onSaved={onSaved}
+        />
+      ) : null}
       <Dialog
         open={removing !== null}
         onOpenChange={(open) => !open && setRemoving(null)}
@@ -257,10 +231,10 @@ function RepositoriesTab({ client, project, onSaved }: TabProps) {
                 const r = removing!;
                 setRemoving(null);
                 // The row goes; focus goes to what is left to do.
-                void save(`${r.name} removed`, () => client.removeRepository(r.id), () => {
+                void save(() => client.removeRepository(r.id), () => {
                   onSaved();
                   addButton.current?.focus();
-                });
+                }, `${r.name} removed`);
               }}
             >
               Remove
@@ -272,102 +246,60 @@ function RepositoriesTab({ client, project, onSaved }: TabProps) {
   );
 }
 
+/** Mounted only while open, so each opening starts from the repository (or empty). */
 function RepositoryDialog(props: {
   client: ApiClient;
   projectId: string;
-  repository: Repository | "new" | null;
+  existing: Repository | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const existing = props.repository === "new" ? null : props.repository;
-  const [name, setName] = useState("");
-  const [url, setUrl] = useState("");
-  const [branch, setBranch] = useState("main");
-  const [external, setExternal] = useState(false);
-  const { busy, problem, save, clear } = useSave();
-  const formId = useId();
+  const { existing } = props;
+  const [name, setName] = useState(existing?.name ?? "");
+  const [url, setUrl] = useState(existing?.url ?? "");
+  const [branch, setBranch] = useState(existing?.defaultBranch ?? "main");
+  const [external, setExternal] = useState(existing?.trust === "untrusted_external");
+  const { busy, problem, save } = useSave();
 
-  useEffect(() => {
-    if (props.repository === null) return;
-    clear();
-    setName(existing?.name ?? "");
-    setUrl(existing?.url ?? "");
-    setBranch(existing?.defaultBranch ?? "main");
-    setExternal(existing?.trust === "untrusted_external");
-  }, [props.repository, existing]);
-
-  const canSave = !busy && Boolean(name.trim()) && Boolean(url.trim());
-  const submit = () =>
-    canSave &&
-    void save(
-      `Repository ${name.trim()} saved`,
-      () => {
+  return (
+    <FormDialog
+      open
+      onOpenChange={(open) => !open && props.onClose()}
+      size="md"
+      title={existing ? `Edit ${existing.name}` : "Add a repository"}
+      submitLabel={existing ? "Save" : "Add"}
+      submitTestId="repository-save"
+      canSubmit={!busy && Boolean(name.trim()) && Boolean(url.trim())}
+      problem={problem}
+      onSubmit={() => {
         const fields = {
           name: name.trim(),
           url: url.trim(),
           defaultBranch: branch.trim() || "main",
           trust: (external ? "untrusted_external" : "trusted_internal") as Repository["trust"],
         };
-        return existing ? props.client.updateRepository(existing.id, fields) : props.client.addRepository(props.projectId, fields);
-      },
-      () => {
-        props.onClose();
-        props.onSaved();
-      },
-    );
-
-  return (
-    <Dialog
-      open={props.repository !== null}
-      onOpenChange={(open) => !open && props.onClose()}
-      size="md"
-      title={existing ? `Edit ${existing.name}` : "Add a repository"}
-      footer={
-        <>
-          <Button variant="ghost" onClick={props.onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" form={formId} variant="primary" disabled={!canSave} data-testid="repository-save">
-            {existing ? "Save" : "Add"}
-          </Button>
-        </>
-      }
+        void save(
+          () => (existing ? props.client.updateRepository(existing.id, fields) : props.client.addRepository(props.projectId, fields)),
+          () => {
+            props.onClose();
+            props.onSaved();
+          },
+          `Repository ${fields.name} saved`,
+        );
+      }}
     >
-      <form
-        id={formId}
-        className="dialogForm"
-        onSubmit={(e) => {
-          e.preventDefault();
-          submit();
-        }}
-      >
-        <Input
-          label="Name"
-          mono
-          autoFocus
-          value={name}
-          hint="A directory name: where agents find it in their workspace."
-          onChange={(e) => setName(e.target.value)}
-          data-testid="repository-name"
-        />
-        <Input
-          label="Clone URL"
-          mono
-          value={url}
-          placeholder="https://github.com/acme/api.git"
-          onChange={(e) => setUrl(e.target.value)}
-          data-testid="repository-url"
-        />
-        <Input label="Default branch" mono value={branch} onChange={(e) => setBranch(e.target.value)} />
-        <Checkbox
-          checked={external}
-          onCheckedChange={(c) => setExternal(c === true)}
-          label="External (untrusted)"
-          description="Code from outside the organisation: agents get no credentials and restricted network."
-        />
-        {problem ? <p className="problem" role="alert">{problem}</p> : null}
-      </form>
-    </Dialog>
+      <Input label="Name" mono autoFocus value={name} data-testid="repository-name"
+        hint="A directory name: where agents find it in their workspace." onChange={(e) => setName(e.target.value)} />
+      <Input label="Clone URL" mono value={url} placeholder="https://github.com/acme/api.git"
+        onChange={(e) => setUrl(e.target.value)} data-testid="repository-url" />
+      <Input label="Default branch" mono value={branch} onChange={(e) => setBranch(e.target.value)} />
+      <Checkbox
+        checked={external}
+        onCheckedChange={(c) => setExternal(c === true)}
+        label="External (untrusted)"
+        description="Code from outside the organisation: agents get no credentials and restricted network."
+      />
+    </FormDialog>
   );
 }
 
@@ -394,7 +326,7 @@ function AgentsTab({ client, project, onSaved }: TabProps) {
             { ...project.agentModels[role], model: models[role].trim() },
           ]),
         );
-        void save("Agents saved", () => client.updateProject(project.id, { agentModels }), onSaved);
+        void save(() => client.updateProject(project.id, { agentModels }), onSaved, "Agents saved");
       }}
     >
       <p className="muted">
@@ -464,7 +396,7 @@ function DeliveryTab({ client, project, defaults, onSaved }: TabProps & { defaul
       className="settingsForm"
       onSubmit={(e) => {
         e.preventDefault();
-        void save("Delivery saved", () => client.updateProject(project.id, { deliveryPolicy: toStore }), onSaved);
+        void save(() => client.updateProject(project.id, { deliveryPolicy: toStore }), onSaved, "Delivery saved");
       }}
     >
       <fieldset className="choices" aria-describedby={reviewersHint}>

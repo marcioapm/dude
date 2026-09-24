@@ -4,10 +4,10 @@
  * wrong in a way nobody notices until an agent's work cannot land.
  */
 
-import { useCallback, useEffect, useId, useState } from "react";
-import { Badge, Button, Card, CardBody, CardFooter, CardHeader, Dialog, Input, Spinner, useToast } from "@dude/design-system/primitives";
+import { useCallback, useEffect, useState } from "react";
+import { Badge, Button, Card, CardBody, CardFooter, CardHeader, Input, Spinner } from "@dude/design-system/primitives";
 import type { ApiClient, ForgeConnection } from "../api/client.ts";
-import { ApiError } from "../api/client.ts";
+import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
 
 export function OrganizationSettingsScreen({ client }: { client: ApiClient }) {
   const [connection, setConnection] = useState<ForgeConnection | null>(null);
@@ -20,7 +20,7 @@ export function OrganizationSettingsScreen({ client }: { client: ApiClient }) {
     try {
       setConnection(await client.forgeConnection());
     } catch (err) {
-      setProblem(err instanceof Error ? err.message : String(err));
+      setProblem(errorText(err));
     }
   }, [client]);
 
@@ -39,7 +39,7 @@ export function OrganizationSettingsScreen({ client }: { client: ApiClient }) {
           : { ok: false, text: v.reason },
       );
     } catch (err) {
-      setVerdict({ ok: false, text: err instanceof Error ? err.message : String(err) });
+      setVerdict({ ok: false, text: errorText(err) });
     } finally {
       setVerifying(false);
     }
@@ -76,7 +76,7 @@ export function OrganizationSettingsScreen({ client }: { client: ApiClient }) {
             <p className="muted">Agents can implement work, but cannot open pull requests until GitHub is connected.</p>
           )}
           {verdict ? (
-            <p className={verdict.ok ? "verdictOk" : "problem"} role="status" data-testid="forge-verdict">
+            <p className={verdict.ok ? "muted" : "problem"} role="status" data-testid="forge-verdict">
               {verdict.text}
             </p>
           ) : null}
@@ -92,6 +92,7 @@ export function OrganizationSettingsScreen({ client }: { client: ApiClient }) {
           </Button>
         </CardFooter>
       </Card>
+      {replacing ? (
       <TokenDialog
         client={client}
         open={replacing}
@@ -101,73 +102,41 @@ export function OrganizationSettingsScreen({ client }: { client: ApiClient }) {
           void load();
         }}
       />
+      ) : null}
     </div>
   );
 }
 
+/** Mounted only while open, so each opening starts empty. */
 function TokenDialog(props: { client: ApiClient; open: boolean; onOpenChange: (open: boolean) => void; onSaved: () => void }) {
   const [token, setToken] = useState("");
   const [apiBase, setApiBase] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [problem, setProblem] = useState<string | null>(null);
-  const { toast } = useToast();
-  const formId = useId();
-
-  useEffect(() => {
-    if (!props.open) return;
-    setToken("");
-    setApiBase("");
-    setProblem(null);
-  }, [props.open]);
-
-  async function save() {
-    if (!token.trim() || busy) return;
-    setBusy(true);
-    setProblem(null);
-    try {
-      await props.client.connectForge(token.trim(), apiBase.trim() || undefined);
-      toast({ title: "GitHub connection saved", tone: "success" });
-      props.onOpenChange(false);
-      props.onSaved();
-    } catch (err) {
-      setProblem(err instanceof ApiError ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
+  const { busy, problem, save } = useSave();
   return (
-    <Dialog
+    <FormDialog
       open={props.open}
       onOpenChange={props.onOpenChange}
-      size="sm"
       title="Connect GitHub"
       description="A personal access token with repository access. It is stored for this organization and never shown again."
-      footer={
-        <>
-          <Button variant="ghost" onClick={() => props.onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button type="submit" form={formId} variant="primary" disabled={busy || !token.trim()} data-testid="forge-save">
-            Save
-          </Button>
-        </>
+      submitLabel="Save"
+      submitTestId="forge-save"
+      canSubmit={!busy && Boolean(token.trim())}
+      problem={problem}
+      onSubmit={() =>
+        void save(
+          () => props.client.connectForge(token.trim(), apiBase.trim() || undefined),
+          () => {
+            props.onOpenChange(false);
+            props.onSaved();
+          },
+          "GitHub connection saved",
+        )
       }
     >
-      <form
-        id={formId}
-        className="dialogForm"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void save();
-        }}
-      >
-        <Input label="Token" type="password" mono autoComplete="off" autoFocus value={token}
-          onChange={(e) => setToken(e.target.value)} data-testid="forge-token" />
-        <Input label="API base URL" mono value={apiBase} placeholder="https://api.github.com"
-          hint="Only for GitHub Enterprise." onChange={(e) => setApiBase(e.target.value)} />
-        {problem ? <p className="problem" role="alert">{problem}</p> : null}
-      </form>
-    </Dialog>
+      <Input label="Token" type="password" mono autoComplete="off" autoFocus value={token}
+        onChange={(e) => setToken(e.target.value)} data-testid="forge-token" />
+      <Input label="API base URL" mono value={apiBase} placeholder="https://api.github.com"
+        hint="Only for GitHub Enterprise." onChange={(e) => setApiBase(e.target.value)} />
+    </FormDialog>
   );
 }

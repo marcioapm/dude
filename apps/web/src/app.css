@@ -358,19 +358,17 @@ body {
   gap: var(--ds-space-8);
 }
 
-.settingsForm {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-16);
-  padding-top: var(--ds-space-16);
-  max-width: 640px;
-}
-
+.settingsForm,
 .settingsSection {
   display: flex;
   flex-direction: column;
   gap: var(--ds-space-16);
   padding-top: var(--ds-space-16);
+}
+
+/* A form is read in one column; a table uses the width it has. */
+.settingsForm {
+  max-width: 640px;
 }
 
 .settingsBack {
@@ -411,8 +409,4 @@ body {
 
 .mono {
   font-family: var(--ds-font-mono);
-}
-
-.verdictOk {
-  color: var(--ds-color-text-secondary);
 }

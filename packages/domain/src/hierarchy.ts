@@ -93,6 +93,8 @@ export const repositorySchema = z.object({
 });
 export type Repository = z.infer<typeof repositorySchema>;
 
+export const findingSeveritySchema = z.enum(["blocking", "high", "medium", "low", "note"]);
+
 /**
  * The reviewer flavours the factory has prompts for. A project names the
  * ones every delivery runs; others join when a change touches their paths.
@@ -106,7 +108,7 @@ export const REVIEWER_CATEGORIES = ["correctness", "security", "database", "api"
 export const deliveryPolicySchema = z
   .object({
     requiredReviewers: z.array(z.enum(REVIEWER_CATEGORIES)).min(1),
-    blockingSeverities: z.array(z.enum(["blocking", "high", "medium", "low", "note"])).min(1),
+    blockingSeverities: z.array(findingSeveritySchema).min(1),
     maxReviewIterations: z.number().int().min(1).max(20),
     maxPrFixIterations: z.number().int().min(0).max(20),
     simplify: z.boolean(),
@@ -114,6 +116,8 @@ export const deliveryPolicySchema = z
   .partial()
   .strict();
 export type DeliveryPolicy = z.infer<typeof deliveryPolicySchema>;
+/** A delivery policy with every field set: the factory's defaults, or a project's over them. */
+export type FullDeliveryPolicy = { [K in keyof DeliveryPolicy]-?: NonNullable<DeliveryPolicy[K]> };
 
 export const projectSchema = z.object({
   id: z.string(),
@@ -334,7 +338,6 @@ export function resolveAgentModel(
 // for the day one of them changes.
 // ---------------------------------------------------------------------------
 
-export const findingSeveritySchema = z.enum(["blocking", "high", "medium", "low", "note"]);
 export type FindingSeverity = z.infer<typeof findingSeveritySchema>;
 
 export const findingStatusSchema = z.enum(["open", "resolved", "superseded", "accepted"]);
