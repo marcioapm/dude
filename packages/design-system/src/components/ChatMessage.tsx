@@ -176,7 +176,7 @@ export function ChatMessage({
       aria-busy={live || undefined}
       {...rest}
     >
-      <div className={styles["gutter"]}>{continued ? null : <AgentAvatar role={role} size="sm" live={live} />}</div>
+      <div className={styles["gutter"]}>{continued ? null : <AgentAvatar role={role} size="chat" live={live} />}</div>
       <div className={styles["main"]}>
         {continued ? null : (
           <header className={styles["header"]}>

@@ -2,18 +2,25 @@
  * A turn. Not a bubble: a gutter (avatar) + a column. Agent and human turns
  * share the grid so text aligns down the page; the human turn gets a
  * hairline frame tinted by intent so interventions are scannable.
+ *
+ * Vertical rhythm (Discord-style): a new speaker's turn gets a top padding
+ * of `--ds-space-chat-pad-y` (density-sensitive: comfortable turns get more
+ * air between different speakers); a turn continuing the same author
+ * (`.continued`) gets a small, density-independent top padding instead, so
+ * consecutive turns from one author stay tightly grouped at every density.
+ * The bottom padding is a fixed, small amount shared by both.
  */
 
 .root {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
-  gap: var(--ds-space-8);
-  padding: var(--ds-space-8) var(--ds-space-12);
+  grid-template-columns: var(--ds-size-avatar-chat) minmax(0, 1fr);
+  gap: var(--ds-space-chat-avatar-gap);
+  padding: var(--ds-space-chat-pad-y) var(--ds-space-chat-pad-x) var(--ds-space-4);
   min-width: 0;
   scroll-margin-top: var(--ds-space-32);
 }
 .continued {
-  padding-top: 0;
+  padding-top: var(--ds-space-2);
 }
 .new {
   animation: global(ds-flash) var(--ds-duration-deliberate) var(--ds-ease-exit) 1;

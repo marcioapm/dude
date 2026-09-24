@@ -33,7 +33,8 @@ const ROLE_ICON: Record<AvatarKind, IconName> = {
 
 export interface AgentAvatarProps extends HTMLAttributes<HTMLSpanElement> {
   readonly role: AvatarKind;
-  readonly size?: "xs" | "sm" | "md" | "lg" | undefined;
+  /** `chat` is the transcript's own avatar: density-sensitive (36 comfortable / 28 compact). */
+  readonly size?: "xs" | "sm" | "md" | "lg" | "chat" | undefined;
   /** Vivid fill; use sparingly (headers, the selected session). */
   readonly solid?: boolean | undefined;
   /** Small green dot: this agent is currently running. */
@@ -64,7 +65,7 @@ export function AgentAvatar({
   ...rest
 }: AgentAvatarProps) {
   const label = ROLE_LABEL[role];
-  const iconSize = size === "xs" ? 10 : size === "sm" ? 12 : size === "md" ? 14 : 18;
+  const iconSize = size === "xs" ? 10 : size === "sm" ? 12 : size === "md" ? 14 : size === "lg" ? 18 : 20;
   const avatar = (
     <span
       className={cx(styles["root"], styles[role], styles[size], solid && styles["solid"], !name && className)}
