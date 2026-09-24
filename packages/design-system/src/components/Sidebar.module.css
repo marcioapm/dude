@@ -111,8 +111,7 @@
 }
 
 /* Chips: four toggles on one line. Off = hairline; on = tinted. The
-   hairline is an inset shadow, not a border, so it costs no width — at
-   280px the row has ~8px to spare with every label shown. */
+   hairline is an inset shadow, not a border, so it costs no width. */
 .chips {
   display: flex;
   gap: 3px;
@@ -178,9 +177,9 @@
 .chip-failed:not(.chipZero) {
   --chip-fg: var(--ds-tone-danger-fg);
 }
-/* Below 264px the labels go; the marks (shape + tone) and counts remain,
-   and the label lives on in the title. */
-@container (max-width: 264px) {
+/* Below 296px the labels go (at 11px they need ~290px); the marks
+   (shape + tone) and counts remain, and the label lives on in the title. */
+@container (max-width: 296px) {
   .chipLabel {
     display: none;
   }

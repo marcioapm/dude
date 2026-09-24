@@ -19,9 +19,9 @@
   --qc-chip-border: var(--ds-color-border-subtle);
   --qc-chip-bg: transparent;
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
-  gap: var(--ds-space-8);
-  padding: var(--ds-space-8) var(--ds-space-12);
+  grid-template-columns: var(--ds-size-avatar-chat) minmax(0, 1fr);
+  gap: var(--ds-space-chat-avatar-gap);
+  padding: var(--ds-space-chat-gap) var(--ds-space-chat-pad-x) var(--ds-space-4);
   min-width: 0;
   scroll-margin-top: var(--ds-space-32);
 }

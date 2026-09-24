@@ -273,7 +273,7 @@
   display: flex;
   align-items: center;
   gap: var(--ds-space-8);
-  padding: var(--ds-space-4) var(--ds-space-12);
+  padding: var(--ds-space-4) var(--ds-space-chat-pad-x);
   font-size: var(--ds-text-xs);
   color: var(--ds-color-text-muted);
 }
