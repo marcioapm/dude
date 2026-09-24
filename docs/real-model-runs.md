@@ -148,3 +148,16 @@ own.
 Still to see: whether agents ask when they should not. The prompt tells
 them most tasks need no question; the runs so far that had no ambiguity
 asked none.
+
+## 2026-09-24: colour, and findings judged by the reviewer
+
+**Colour** ("Add a word frequency table", PR #12). With colour forced in
+the agent's environment, 10 of the implementer's tool calls came back with
+escape codes, and the chat renders them: `git diff` with its bold headers,
+cyan hunk markers and red/green lines, pytest's summary coloured, and a
+failing command's `exit 1` on its collapsed row
+(`docs/images/coloured-tool-output.png`). The agent reads past the codes
+without trouble; nothing in its replies referred to them.
+
+**Findings.** A re-review is now shown the findings its fixer was sent and
+answers for each, fixed or still; nothing else resolves a finding.
