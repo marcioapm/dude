@@ -1,10 +1,16 @@
+/*
+ * Borderless: a quiet filled surface. Status is carried by the glyphs; only
+ * a bad outcome adds the tone wash and a 2px bar. The bar is an inset
+ * shadow on a card whose left corners are square, so it runs straight to
+ * both ends instead of being bent (and visually clipped) by the radius.
+ */
 .root {
   --tc-accent: transparent;
+  --tc-fill: var(--ds-color-hover-wash);
   position: relative;
-  border: 1px solid var(--ds-color-border-subtle);
-  border-left: 2px solid var(--tc-accent);
   border-radius: var(--ds-radius-md);
-  background: var(--ds-color-surface);
+  background: var(--tc-fill);
+  box-shadow: inset 2px 0 0 var(--tc-accent);
   min-width: 0;
   overflow: hidden;
 }
@@ -14,13 +20,16 @@
 .slow {
   --tc-accent: var(--ds-tone-attention-fg);
 }
+.running,
+.slow,
+.failed,
+.badExit {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
 .failed {
   --tc-accent: var(--ds-tone-danger-fg);
-  border-color: var(--ds-tone-danger-border);
-  border-left-color: var(--tc-accent);
-}
-.aborted {
-  --tc-accent: var(--ds-color-border-strong);
+  --tc-fill: color-mix(in srgb, var(--ds-tone-danger-bg) 70%, transparent);
 }
 
 .row {
@@ -29,7 +38,7 @@
   align-items: center;
   gap: var(--ds-space-8);
   min-height: var(--ds-size-row-default);
-  padding: 0 var(--ds-space-8) 0 var(--ds-space-6);
+  padding: 0 var(--ds-space-8);
   font-size: var(--ds-text-sm);
   outline: none;
   cursor: default;
@@ -39,10 +48,6 @@
 }
 .row:focus-visible {
   box-shadow: inset 0 0 0 2px var(--ds-color-focus-ring);
-}
-.open .row {
-  border-bottom: 1px solid var(--ds-color-border-subtle);
-  background: var(--ds-color-hover-wash);
 }
 
 .icon {
@@ -223,8 +228,7 @@
 .pre {
   margin: 0;
   padding: var(--ds-space-8) var(--ds-space-12);
-  background: var(--ds-color-field-bg);
-  border: 1px solid var(--ds-color-border-subtle);
+  background: var(--ds-color-sunken);
   border-radius: var(--ds-radius-md);
   font-family: var(--ds-font-mono);
   font-size: var(--ds-text-mono);
@@ -239,7 +243,6 @@
 }
 .preError {
   background: var(--ds-tone-danger-bg);
-  border-color: var(--ds-tone-danger-border);
   color: var(--ds-tone-danger-fg);
 }
 
@@ -249,6 +252,10 @@
    completed: the rail says so. */
 .badExit {
   --tc-accent: var(--ds-tone-danger-fg);
+  --tc-fill: color-mix(in srgb, var(--ds-tone-danger-bg) 70%, transparent);
+}
+.aborted {
+  --tc-accent: transparent;
 }
 
 .exitChip {

@@ -249,7 +249,7 @@ export function ToolCallCard({
         </span>
         {failed && error ? <span className={styles["errorInline"]}>{firstLine(error)}</span> : null}
         <span className={styles["meta"]}>
-          {badExit ? <span className={styles["exit"]}>exit {exitCode}</span> : null}
+          {badExit ? <span className={styles["exit"]}><span className="ds-cap">exit {exitCode}</span></span> : null}
           {elapsed !== null ? (
             <span className={cx(styles["duration"], slow && styles["durationSlow"])} title={`${Math.round(elapsed)} ms`}>
               {formatDuration(elapsed)}

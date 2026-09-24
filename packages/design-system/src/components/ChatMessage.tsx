@@ -182,11 +182,11 @@ export function ChatMessage({
           <header className={styles["header"]}>
             <span className={styles["name"]}>{name ?? ROLE_LABEL[role]}</span>
             {k === "agent" && name ? <span className={styles["roleName"]}>{ROLE_LABEL[role]}</span> : null}
-            {k === "human" ? <span className={cx(styles["intent"], styles[`intentTag-${humanIntent}`])}>{INTENT_LABEL[humanIntent]}</span> : null}
+            {k === "human" ? <span className={cx(styles["intent"], styles[`intentTag-${humanIntent}`])}><span className="ds-cap">{INTENT_LABEL[humanIntent]}</span></span> : null}
             {queued ? (
               <span className={styles["queued-tag"]} title="Sent. The agent is mid-turn; it will read this when the turn ends.">
                 <Icon name="clock" size={10} strokeWidth={2} />
-                Queued
+                <span className="ds-cap">Queued</span>
               </span>
             ) : null}
             {model ? <code className={styles["model"]}>{model}</code> : null}

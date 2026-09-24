@@ -48,7 +48,7 @@ export function Badge({
     >
       {dot ? <span className={styles["dot"]} aria-hidden /> : null}
       {icon ? <Icon name={icon} size={size === "sm" ? 10 : 12} /> : null}
-      <span className={styles["text"]}>{children}</span>
+      <span className={cx(styles["text"], "ds-cap")}>{children}</span>
     </span>
   );
 }

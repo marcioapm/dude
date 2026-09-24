@@ -6,8 +6,10 @@
  * override, and everything else — most of this file — is shared by both
  * densities. See `../../README.md` ("Density") for the reasoning.
  *
- * Comfortable is Discord/Obsidian-roomy: 15px body, 32px default row, 6px
- * default radius. Compact only tightens a handful of *big, structural*
+ * Type follows Obsidian 1.13's defaults (system UI font; 16px text, 15/13/12
+ * UI sizes, 1.5 leading, 700px readable width); the transcript follows
+ * Discord's chat metrics (16/22px, 40px avatar, content column at 72px).
+ * Comfortable: 15px UI body, 32px default row, 6px default radius. Compact only tightens a handful of *big, structural*
  * measurements (row height, chat avatar, chat/board/main-pane spacing);
  * text stays within 1px of comfortable, icons, small control heights,
  * badge padding and hairline-scale radii do not move at all.
@@ -39,12 +41,12 @@ export const spaceNamed = {
   mainPad: 24,
   /** Board card padding and the gap between cards. */
   cardPad: 12,
-  /** Chat turn horizontal padding. */
+  /** Chat turn horizontal padding (the gutter left of the avatar). */
   chatPadX: 16,
   /** Space above a turn from a new speaker; same-author turns sit 2px apart. */
-  chatGap: 16,
-  /** Chat avatar to text column. */
-  chatAvatarGap: 12,
+  chatGap: 17,
+  /** Chat avatar to text column: 16 + 40 + 16 puts the text at 72px, as in Discord. */
+  chatAvatarGap: 16,
   /** Between major panel sections. */
   panelGap: 24,
   /** NavTree indent per level. */
@@ -67,46 +69,53 @@ export const radius = {
   full: 9999,
 } as const;
 
+// Obsidian's stack: the platform UI face (SF Pro on macOS, Noto Sans or the
+// distro default on Linux, Segoe UI on Windows), Inter only as a fallback.
 export const fontFamily = {
-  sans: `"Inter", "SF Pro Text", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`,
+  sans: `ui-sans-serif, -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", Roboto, "Inter Variable", "Inter", sans-serif`,
   mono: `"JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, "Liberation Mono", monospace`,
 } as const;
 
 /**
- * Sizes in px, comfortable density. `md` is the body size for the whole
- * product. `xs`/`sm`/`md`/`prose` are density-sensitive (compact is 1px
- * below comfortable, never below 12px); `2xs` (small-caps labels only) and
- * `mono` (tool output / logs) are shared across densities; the heading
- * sizes `lg`…`4xl` are shared too — density does not touch headings.
+ * Sizes in px, comfortable density, on Obsidian's UI scale: `sm` 13 and
+ * `xs` 12 are its "UI small / smaller", `md` 15 its "UI medium", `xl` 20
+ * its "UI large", `prose` 16 its text size. Only `md` and `prose` are
+ * density-sensitive (1px less in compact); the small sizes are already at
+ * the floor and hold.
  */
 export const fontSize = {
-  /** Small-caps labels only. Shared: 11px in both densities. */
+  /** Small-caps labels only. Shared. */
   "2xs": 11,
-  /** Density-sensitive: 13 comfortable, 12 compact. */
-  xs: 13,
-  /** Density-sensitive: 14 comfortable, 13 compact. */
-  sm: 14,
-  /** Body. Density-sensitive: 15 comfortable, 14 compact. */
+  /** Obsidian "UI smaller". Shared. */
+  xs: 12,
+  /** Obsidian "UI small": nav rows, metadata. Shared. */
+  sm: 13,
+  /** UI body. Density-sensitive: 15 comfortable, 14 compact. */
   md: 15,
   lg: 16,
-  xl: 18,
+  /** Obsidian "UI large". */
+  xl: 20,
   "2xl": 22,
   "3xl": 26,
   "4xl": 34,
-  /** Chat/document prose. Density-sensitive: 16 comfortable, 15 compact. */
+  /** Chat and document text. Density-sensitive: 16 comfortable, 15 compact. */
   prose: 16,
-  /** Tool output, logs, diffs. Shared: 13px in both densities. */
+  /** Tool output, logs, diffs. Shared. */
   mono: 13,
 } as const;
 export type FontSizeStep = keyof typeof fontSize;
 
 export const lineHeight = {
   none: 1,
-  tight: 1.2,
+  /** Obsidian "line-height-tight": headings. */
+  tight: 1.3,
   snug: 1.35,
+  /** Obsidian "line-height-normal": long-form Markdown. */
   normal: 1.5,
-  /** Prose (chat/document Markdown): airier, Obsidian-like. Shared. */
-  prose: 1.55,
+  /** Transcript text: Discord's 22px at 16px. */
+  chat: 1.375,
+  /** Documents and multi-paragraph Markdown. */
+  prose: 1.5,
 } as const;
 
 export const fontWeight = {
@@ -146,8 +155,12 @@ export const size = {
   avatarSm: 20,
   avatarMd: 24,
   avatarLg: 32,
-  /** Density-sensitive: 36 comfortable, 28 compact — the chat transcript's own avatar. */
-  avatarChat: 36,
+  /** Density-sensitive: 40 comfortable, 32 compact — the chat transcript's own avatar. */
+  avatarChat: 40,
+  /** Badge, pill and chip heights. Shared: small things hold across densities. */
+  badgeSm: 16,
+  badgeMd: 18,
+  chip: 22,
   /** Icon sizes. Shared: icons do not shrink with density, only their ink does. */
   iconSm: 14,
   iconMd: 16,
@@ -198,8 +211,8 @@ export const cadence = {
 export const measure = {
   /** Agent messages inside a transcript. Density-sensitive: 70ch comfortable, 72ch compact. */
   message: "70ch",
-  /** Published artifacts read in full. Density-sensitive: 70ch comfortable, 72ch compact. */
-  document: "70ch",
+  /** Published artifacts read in full: Obsidian's readable line width. Shared. */
+  document: "700px",
 } as const;
 
 export const zIndex = {

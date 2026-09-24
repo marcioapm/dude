@@ -186,8 +186,8 @@ export function Sidebar({
               disabled={n === 0 && !on}
             >
               <StatusBadge status={spec.status} variant="dot" iconOnly className={styles["chipMark"]} />
-              <span className={styles["chipLabel"]}>{spec.label}</span>
-              <span className={styles["chipCount"]}>{n}</span>
+              <span className={cx(styles["chipLabel"], "ds-cap")}>{spec.label}</span>
+              <span className={cx(styles["chipCount"], "ds-cap")}>{n}</span>
             </button>
           );
         })}

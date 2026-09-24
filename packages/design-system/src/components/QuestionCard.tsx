@@ -108,12 +108,12 @@ export function QuestionCard({ role, name, text, options, askedAt, answeredAt, d
           ) : state === "answered" ? (
             <span className={cx(styles["tag"], styles["tagAnswered"])}>
               <Icon name="check" size={10} strokeWidth={2} />
-              Answered
+              <span className="ds-cap">Answered</span>
             </span>
           ) : (
             <span className={cx(styles["tag"], styles["tagDismissed"])}>
               <Icon name="cross" size={10} strokeWidth={2} />
-              Not answered
+              <span className="ds-cap">Not answered</span>
             </span>
           )}
           {asked ? (
