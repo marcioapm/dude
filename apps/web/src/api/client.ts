@@ -9,9 +9,12 @@
 
 import type { NavProject } from "@dude/design-system";
 import type {
+  DeliveryPolicy,
   Directive,
   DirectiveScope,
+  Epic,
   Finding,
+  Repository,
   PullRequest,
   PauseMode,
   Project,
@@ -29,6 +32,7 @@ import type {
 // ---------------------------------------------------------------------------
 
 export type {
+  Epic,
   Finding,
   Project,
   PullRequest,
@@ -37,6 +41,21 @@ export type {
   Session,
   WorkItem,
 } from "@dude/domain";
+
+/** A project with its repositories. `GET /v1/projects/:id`. */
+export interface ProjectDetail extends Project {
+  repositories: Repository[];
+  deliveryPolicy: DeliveryPolicy;
+}
+
+/** What a work item asks for, and where it sits. */
+export interface WorkItemFields {
+  title: string;
+  goal: string;
+  acceptanceCriteria: string[];
+  epicId: string | null;
+  repositoryId: string | null;
+}
 
 /** A work item with its attempts, newest first. `GET /v1/work-items/:id`. */
 export interface WorkItemDetail extends WorkItem {
@@ -148,19 +167,68 @@ export class ApiClient {
     return this.#request("GET", `/v1/findings${qs({ workItemId })}`);
   }
 
+  getProject(id: string): Promise<ProjectDetail> {
+    return this.#request("GET", `/v1/projects/${id}`);
+  }
+
+  listEpics(projectId: string): Promise<{ epics: Epic[] }> {
+    return this.#request("GET", `/v1/projects/${projectId}/epics`);
+  }
+
   // -- writes -------------------------------------------------------------
 
   createRun(workItemId: string): Promise<Run> {
     return this.#request("POST", `/v1/work-items/${workItemId}/runs`, {});
   }
 
-  createWorkItem(input: {
-    projectId: string;
-    title: string;
-    goal?: string;
-    acceptanceCriteria?: string[];
-  }): Promise<WorkItem> {
+  createWorkItem(input: { projectId: string } & Partial<WorkItemFields> & { title: string }): Promise<WorkItem> {
     return this.#request("POST", "/v1/work-items", input);
+  }
+
+  /** Edit a work item. What it asks for is fixed once delivery starts; where it sits is not. */
+  updateWorkItem(id: string, changes: Partial<WorkItemFields>): Promise<WorkItem> {
+    return this.#request("PATCH", `/v1/work-items/${id}`, changes);
+  }
+
+  createProject(input: {
+    name: string;
+    slug: string;
+    repositories?: Array<{ name: string; url: string; defaultBranch?: string }>;
+  }): Promise<ProjectDetail> {
+    return this.#request("POST", "/v1/projects", input);
+  }
+
+  updateProject(
+    id: string,
+    changes: Partial<{ name: string; description: string; runtimeImage: string | null;
+      agentModels: Project["agentModels"]; deliveryPolicy: DeliveryPolicy }>,
+  ): Promise<ProjectDetail> {
+    return this.#request("PATCH", `/v1/projects/${id}`, changes);
+  }
+
+  addRepository(projectId: string, repo: { name: string; url: string; defaultBranch?: string;
+    trust?: Repository["trust"] }): Promise<Repository> {
+    return this.#request("POST", `/v1/projects/${projectId}/repositories`, repo);
+  }
+
+  updateRepository(id: string, changes: Partial<Omit<Repository, "id" | "projectId">>): Promise<Repository> {
+    return this.#request("PATCH", `/v1/repositories/${id}`, changes);
+  }
+
+  removeRepository(id: string): Promise<void> {
+    return this.#request("DELETE", `/v1/repositories/${id}`);
+  }
+
+  createEpic(projectId: string, epic: { title: string; description?: string }): Promise<Epic> {
+    return this.#request("POST", `/v1/projects/${projectId}/epics`, epic);
+  }
+
+  updateEpic(id: string, changes: Partial<{ title: string; description: string; position: number }>): Promise<Epic> {
+    return this.#request("PATCH", `/v1/epics/${id}`, changes);
+  }
+
+  deleteEpic(id: string): Promise<void> {
+    return this.#request("DELETE", `/v1/epics/${id}`);
   }
 
   /**

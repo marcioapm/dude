@@ -44,10 +44,50 @@ body {
   justify-content: center;
 }
 
-.newWorkItem {
+/* -- work item dialog ------------------------------------------------------ */
+
+.workItemForm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-12);
+}
+
+.fieldRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--ds-space-12);
+}
+
+.criteria {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-6);
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.criteria legend {
+  padding: 0;
+  margin-bottom: var(--ds-space-4);
+  font-size: var(--ds-text-sm);
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-secondary);
+}
+
+.criterion {
   display: flex;
   align-items: center;
-  gap: var(--ds-space-6);
+  gap: var(--ds-space-4);
+}
+
+.criterion > :first-child {
+  flex: 1;
+}
+
+.criteria > button {
+  align-self: flex-start;
 }
 
 /* -- work item delivery view -------------------------------------------- */
