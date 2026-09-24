@@ -54,6 +54,11 @@ const PROJECT_SELECT = `
   agent_models AS "agentModels", runtime_image AS "runtimeImage",
   delivery_policy AS "deliveryPolicy", created_at AS "createdAt"`;
 
+/** The start of a project's work item keys (TK-12): the slug's first letters. */
+export function keyPrefix(slug: string): string {
+  return slug.replace(/[^a-zA-Z]/g, "").slice(0, 4).toUpperCase() || "WI";
+}
+
 async function createProject(ctx: RequestContext): Promise<Response> {
   const input = await parseBody(ctx.request, createProjectInput);
   const { organizationId } = ctx.principal;
@@ -65,8 +70,8 @@ async function createProject(ctx: RequestContext): Promise<Response> {
 
     const projectId = newId("project");
     const rows = (await scope.sql`
-      INSERT INTO projects (id, organization_id, name, slug, description, agent_models, runtime_image, delivery_policy)
-      VALUES (${projectId}, ${organizationId}, ${input.name}, ${input.slug}, ${input.description},
+      INSERT INTO projects (id, organization_id, name, slug, key_prefix, description, agent_models, runtime_image, delivery_policy)
+      VALUES (${projectId}, ${organizationId}, ${input.name}, ${input.slug}, ${keyPrefix(input.slug)}, ${input.description},
               ${input.agentModels ?? {}}::jsonb, ${input.runtimeImage}, ${input.deliveryPolicy ?? {}}::jsonb)
       RETURNING ${scope.sql.unsafe(PROJECT_SELECT)}`) as ProjectRow[];
 
