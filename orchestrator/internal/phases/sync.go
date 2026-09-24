@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -71,28 +72,33 @@ const stopPause = "pause"
 // phaseRun is a phase Run's row, as the syncer reads it.
 type phaseRun struct {
 	ID, Org, ProjectID, WorkItemID, Phase, Status, Control string
-	RepositoryID, BaseRef, Category                        string
+	Category                                               string
 	LuxRunID, LuxState, LuxStopReason                      string
-	PushRequestID, BaseSHA                                 string
-	TurnDone, HasDirectives                                bool
-	PushResult                                             json.RawMessage
-	PRFeedback                                             json.RawMessage
-	FindingIDs, BlockingSeverities                         []string
-	Attempt                                                int
+	PushRequestID                                          string
+	// Where this Run's work is pushed; "" for one that pushes nothing.
+	PushBranch string
+	// Per repository name: the commit this phase was asked to start from,
+	// and the one each checkout really started from (lux's git.checkout).
+	BaseRefs, BaseSHAs             map[string]string
+	TurnDone, HasDirectives        bool
+	PushResult                     json.RawMessage
+	PRFeedback                     json.RawMessage
+	FindingIDs, BlockingSeverities []string
+	Attempt                        int
 }
 
 const runColumns = `r.id, r.organization_id, r.project_id, r.work_item_id, r.phase::text, r.status::text, r.control::text,
-	COALESCE(r.repository_id, ''), COALESCE(r.base_ref, ''), COALESCE(r.category, ''),
+	COALESCE(r.category, ''),
 	COALESCE(r.lux_run_id, ''), COALESCE(r.lux_state, ''), COALESCE(r.lux_stop_reason, ''),
-	COALESCE(r.push_request_id, ''), COALESCE(r.base_sha, ''), r.turn_done_at IS NOT NULL,
+	COALESCE(r.push_request_id, ''), COALESCE(r.push_branch, ''), r.base_refs, r.base_shas, r.turn_done_at IS NOT NULL,
 	EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL),
 	r.push_result, r.pr_feedback, r.finding_ids, r.blocking_severities, r.attempt`
 
 func scan(row pgx.Row) (phaseRun, error) {
 	var r phaseRun
 	err := row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.WorkItemID, &r.Phase, &r.Status, &r.Control,
-		&r.RepositoryID, &r.BaseRef, &r.Category, &r.LuxRunID, &r.LuxState, &r.LuxStopReason,
-		&r.PushRequestID, &r.BaseSHA, &r.TurnDone, &r.HasDirectives,
+		&r.Category, &r.LuxRunID, &r.LuxState, &r.LuxStopReason,
+		&r.PushRequestID, &r.PushBranch, &r.BaseRefs, &r.BaseSHAs, &r.TurnDone, &r.HasDirectives,
 		&r.PushResult, &r.PRFeedback, &r.FindingIDs, &r.BlockingSeverities, &r.Attempt)
 	return r, err
 }
@@ -195,10 +201,14 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		// Guarded on still being pending: an abort that raced the submit wins,
 		// and the sweep then cancels the lux Run it made.
+		var pushBranch string
+		if spec.Git != nil && spec.Git.Push != nil {
+			pushBranch = spec.Git.Push.Branch
+		}
 		tag, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, next_attempt_at = NULL,
-			harness = $4, model = $5,
+			harness = $4, model = $5, push_branch = NULLIF($6, ''),
 			status = CASE WHEN status = 'pending' THEN 'scheduled'::run_status ELSE status END
-			WHERE id = $1`, r.ID, lr.ID, lr.State, spec.Labels["dude.harness"], spec.Labels["dude.model"])
+			WHERE id = $1`, r.ID, lr.ID, lr.State, spec.Labels["dude.harness"], spec.Labels["dude.model"], pushBranch)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
@@ -210,19 +220,22 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 	var in specInput
 	var title, goal, image string
+	var repos []delivery.Repository
 	var criteria, projectModels, orgModels json.RawMessage
 	var findings []delivery.Finding
 	var feedback []forge.ActionableFeedback
 	_ = json.Unmarshal(r.PRFeedback, &feedback)
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
-			SELECT w.title, w.goal, w.acceptance_criteria, COALESCE(p.runtime_image, ''), p.agent_models,
-			       repo.name, repo.url, repo.default_branch
+			SELECT w.title, w.goal, w.acceptance_criteria, COALESCE(p.runtime_image, ''), p.agent_models
 			FROM work_items w JOIN projects p ON p.id = w.project_id
-			JOIN repositories repo ON repo.id = $2
-			WHERE w.id = $1`, r.WorkItemID, r.RepositoryID).
-			Scan(&title, &goal, &criteria, &image, &projectModels, &in.RepoName, &in.RepoURL, &in.Ref); err != nil {
-			return fmt.Errorf("load work item and repository: %w", err)
+			WHERE w.id = $1`, r.WorkItemID).
+			Scan(&title, &goal, &criteria, &image, &projectModels); err != nil {
+			return fmt.Errorf("load work item: %w", err)
+		}
+		var err error
+		if repos, err = delivery.WorkItemRepositories(ctx, tx, r.WorkItemID); err != nil {
+			return fmt.Errorf("load repositories: %w", err)
 		}
 		// The findings the workflow chose for this Run, exactly and in its
 		// order: those a fix addresses (a fix for pull request feedback has
@@ -258,8 +271,15 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 	var ac []string
 	_ = json.Unmarshal(criteria, &ac)
 
-	if r.BaseRef != "" {
-		in.Ref = r.BaseRef
+	var promptRepos []delivery.PromptRepo
+	for _, repo := range repos {
+		ref := repo.DefaultBranch
+		if base := r.BaseRefs[repo.Name]; base != "" {
+			ref = base
+		}
+		readOnly := repo.Access == "read"
+		in.Repos = append(in.Repos, specRepo{Name: repo.Name, URL: repo.URL, Ref: ref, ReadOnly: readOnly})
+		promptRepos = append(promptRepos, delivery.PromptRepo{Name: repo.Name, Path: RepoPath(repo.Name), ReadOnly: readOnly})
 	}
 	in.RunID, in.OrganizationID, in.WorkItemID, in.Phase, in.Role = r.ID, r.Org, r.WorkItemID, r.Phase, role
 	in.Model = model
@@ -270,8 +290,11 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 	in.Prompt = delivery.Prompt(r.Phase, delivery.PromptInput{
 		Title: title, Goal: goal, AcceptanceCriteria: ac, Category: r.Category,
 		Findings: findings, PRFeedback: feedback, BlockingSeverities: r.BlockingSeverities, Context: context,
+		Repositories: promptRepos,
 	})
-	if delivery.Publishes[r.Phase] {
+	// Pushed only by a phase that publishes, and only if there is somewhere
+	// it may change.
+	if delivery.Publishes[r.Phase] && slices.ContainsFunc(in.Repos, func(sr specRepo) bool { return !sr.ReadOnly }) {
 		in.PushBranch = runBranch(r)
 	}
 	if gh, err := s.Forges.For(ctx, r.Org); err == nil && gh != nil {
@@ -439,7 +462,8 @@ func (s *Syncer) followOutput(ctx context.Context, r phaseRun) error {
 // Idempotent end to end: each piece is recorded before the next is asked
 // for, so a restart resumes the sequence.
 func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
-	if delivery.Publishes[r.Phase] && r.PushResult == nil {
+	pushes := r.PushBranch != ""
+	if pushes && r.PushResult == nil {
 		// Only a state lux has already reported as over rules the push out.
 		// Anything else is asked of lux itself: its lifecycle events trail
 		// the agent's own records by up to a second, so the state recorded
@@ -465,10 +489,10 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 		})
 	}
 
-	result := publishResult{}
-	if delivery.Publishes[r.Phase] {
+	heads := map[string]delivery.RunHead{}
+	if pushes {
 		var err error
-		if result, err = s.publish(ctx, r); err != nil {
+		if heads, err = s.publish(ctx, r); err != nil {
 			// A forge that is down or rate-limiting will answer later; a
 			// refusal (not a fast-forward, a bad push) will not.
 			if forge.Transient(err) {
@@ -489,11 +513,16 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 		return true, err
 	}
 	s.unfollow(r.ID)
+	raw, _ := json.Marshal(heads)
+	branch := ""
+	if len(heads) > 0 {
+		branch = delivery.BranchFor(r.WorkItemID, r.Attempt)
+	}
 	return true, s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'completed', ended_at = now(), lux_stop_reason = $2,
-			head_sha = COALESCE(NULLIF($3, ''), head_sha), changed_paths = $4, branch = COALESCE(NULLIF($5, ''), branch)
+			heads = $3::jsonb, branch = COALESCE(NULLIF($4, ''), branch)
 			WHERE id = $1 AND status IN ('scheduled', 'starting', 'running')`,
-			r.ID, "complete", result.head, db.NonNil(result.changed), result.branch)
+			r.ID, "complete", raw, branch)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
@@ -501,69 +530,91 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 	})
 }
 
-type publishResult struct {
-	head, branch string
-	changed      []string
-}
-
-// publish moves the work item's branch to what this Run pushed, and works
-// out what changed.
+// publish moves the work item's branch in each repository this Run changed
+// to what it pushed, and works out what changed there. Returns runs.heads:
+// per repository changed, its new commit and changed paths.
 //
-// A fast-forward, never a force: if someone else moved the branch the update
+// A fast-forward, never a force: if someone else moved a branch the update
 // is refused and the phase fails loudly rather than overwriting their work.
-func (s *Syncer) publish(ctx context.Context, r phaseRun) (publishResult, error) {
+// Repositories that did not move are left alone — no branch, no PR — and a
+// read-only one is never pushed at all (lux reports it "skipped").
+func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.RunHead, error) {
 	var push struct {
 		Results []struct {
 			Repo, Branch, Commit, Status, Error string
 		} `json:"results"`
 	}
 	if err := json.Unmarshal(r.PushResult, &push); err != nil || len(push.Results) == 0 {
-		return publishResult{}, fmt.Errorf("lux reported no push result")
+		return nil, fmt.Errorf("lux reported no push result")
 	}
-	res := push.Results[0]
-	if res.Status != "pushed" && res.Status != "up-to-date" {
-		return publishResult{}, fmt.Errorf("push %s: %s", res.Status, res.Error)
-	}
-
-	var repoURL string
-	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT url FROM repositories WHERE id = $1`, r.RepositoryID).Scan(&repoURL)
+	var repos []delivery.Repository
+	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) (err error) {
+		repos, err = delivery.WorkItemRepositories(ctx, tx, r.WorkItemID)
+		return err
 	}); err != nil {
-		return publishResult{}, err
+		return nil, err
 	}
-	gh, err := s.Forges.For(ctx, r.Org)
-	if err != nil {
-		return publishResult{}, err
-	}
-	slug := forge.SlugFromURL(repoURL)
-	if gh == nil || slug == "" {
-		return publishResult{}, fmt.Errorf("no forge to publish %s to", repoURL)
+	byName := map[string]delivery.Repository{}
+	for _, repo := range repos {
+		byName[repo.Name] = repo
 	}
 
+	heads := map[string]delivery.RunHead{}
+	var gh *forge.GitHub
 	branch := delivery.BranchFor(r.WorkItemID, r.Attempt)
-	out := publishResult{head: res.Commit, branch: branch}
-	if res.Commit == r.BaseSHA || res.Status == "up-to-date" && res.Commit == "" {
-		// Nothing was committed: an empty change, which the workflow reads
-		// from the empty path list.
-		return out, nil
+	for _, res := range push.Results {
+		repo, known := byName[res.Repo]
+		switch {
+		case res.Status == "skipped" || known && repo.Access == "read":
+			continue // cloned for reading; nothing to publish
+		case !known:
+			return nil, fmt.Errorf("lux pushed %s, which this work item does not name", res.Repo)
+		case res.Status != "pushed" && res.Status != "up-to-date":
+			return nil, fmt.Errorf("push %s %s: %s", res.Repo, res.Status, res.Error)
+		}
+		if res.Commit == "" {
+			continue // nothing committed there
+		}
+		// What the checkout started from, as lux reported it: what the
+		// change is measured against.
+		base := r.BaseSHAs[res.Repo]
+		if base == "" {
+			return nil, fmt.Errorf("lux never reported where %s's checkout started", res.Repo)
+		}
+		if res.Commit == base {
+			continue // nothing committed there
+		}
+		if gh == nil {
+			var err error
+			if gh, err = s.Forges.For(ctx, r.Org); err != nil {
+				return nil, err
+			}
+			if gh == nil {
+				return nil, fmt.Errorf("no forge credential to publish with")
+			}
+		}
+		slug := forge.SlugFromURL(repo.URL)
+		if slug == "" {
+			return nil, fmt.Errorf("no forge to publish %s to", repo.URL)
+		}
+		if err := gh.FastForward(ctx, slug, branch, res.Commit); err != nil {
+			return nil, fmt.Errorf("move %s in %s to %s: %w", branch, res.Repo, short(res.Commit), err)
+		}
+		// Best effort: a leftover per-Run branch is clutter, not a fault.
+		_ = gh.DeleteBranch(ctx, slug, res.Branch)
+		changed, err := gh.ChangedFiles(ctx, slug, base, res.Commit)
+		if err != nil {
+			return nil, fmt.Errorf("compare %s %s...%s: %w", res.Repo, short(base), short(res.Commit), err)
+		}
+		heads[res.Repo] = delivery.RunHead{SHA: res.Commit, ChangedPaths: db.NonNil(changed)}
+		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			return s.event(ctx, tx, r, delivery.EvGitCommitCreated, ledger.ActorAgent, map[string]any{
+				"repo": res.Repo, "baseSha": base, "headSha": res.Commit, "branch": branch, "changedPaths": changed})
+		}); err != nil {
+			return nil, err
+		}
 	}
-	if err := gh.FastForward(ctx, slug, branch, res.Commit); err != nil {
-		return out, fmt.Errorf("move %s to %s: %w", branch, short(res.Commit), err)
-	}
-	// Best effort: a leftover per-Run branch is clutter, not a fault.
-	_ = gh.DeleteBranch(ctx, slug, res.Branch)
-
-	base := r.BaseSHA
-	if base == "" {
-		base = r.BaseRef
-	}
-	if out.changed, err = gh.ChangedFiles(ctx, slug, base, res.Commit); err != nil {
-		return out, fmt.Errorf("compare %s...%s: %w", short(base), short(res.Commit), err)
-	}
-	return out, s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		return s.event(ctx, tx, r, delivery.EvGitCommitCreated, ledger.ActorAgent, map[string]any{
-			"repo": res.Repo, "baseSha": base, "headSha": res.Commit, "branch": branch, "changedPaths": out.changed})
-	})
+	return heads, nil
 }
 
 // reportFindings parses what a reviewer said and records it as findings.
@@ -868,6 +919,11 @@ func NotifyFinished(ctx context.Context, database *db.DB, signal func(ctx contex
 			JOIN workflow_runs w ON w.work_item_id = r.work_item_id AND w.organization_id = r.organization_id
 			WHERE r.phase IS NOT NULL AND r.status IN ('completed', 'failed', 'aborted')
 			  AND r.phase_notified_at IS NULL AND w.status = 'waiting'
+			  -- Work that changes no code is judged by what it published, so
+			  -- that waits for lux to report it. Work on code is judged by its
+			  -- commits, and does not wait on lux's snapshot upload.
+			  AND (r.artifacts_due_at IS NULL OR EXISTS (SELECT 1 FROM work_item_repositories wr
+			       WHERE wr.work_item_id = r.work_item_id AND wr.access = 'write'))
 			ORDER BY r.ended_at LIMIT 50`)
 		if err != nil {
 			return err

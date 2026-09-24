@@ -373,3 +373,27 @@ body {
   outline: 2px solid var(--ds-color-focus-ring);
   outline-offset: 1px;
 }
+
+/* Which repositories a work item touches, in its dialog. */
+.repositoryChooser {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.repositoryChooser legend {
+  margin-bottom: var(--ds-space-4);
+  font-size: var(--ds-text-sm);
+  font-weight: var(--ds-weight-medium);
+}
+
+.repositoryChoice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ds-space-12);
+  min-height: 32px;
+}

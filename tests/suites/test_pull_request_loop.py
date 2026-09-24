@@ -108,7 +108,7 @@ def test_pr_feedback_wakes_a_fixer_and_a_merge_finishes(
         timeout=30,
         message="the fix never reached the pull request branch",
     )
-    assert fix_runs()[-1]["baseRef"], "the PR fix did not start from the PR's head"
+    assert fix_runs()[-1]["baseRefs"], "the PR fix did not start from the PR's head"
     wait_until(
         lambda: _work_item(client, work_item["id"])["status"] == "review",
         timeout=30,

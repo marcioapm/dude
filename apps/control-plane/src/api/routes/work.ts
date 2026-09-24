@@ -13,10 +13,11 @@ import { withOrg, withoutTenant } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { badRequest, conflict, json, notFound, parseBody } from "../http.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
+import { REPOSITORIES_JSON, setWorkItemRepositories, workItemRepositoriesInput } from "./workItemRepositories.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 const WORK_ITEM_SELECT = `
-  id, organization_id AS "organizationId", project_id AS "projectId", epic_id AS "epicId", repository_id AS "repositoryId",
+  id, organization_id AS "organizationId", project_id AS "projectId", epic_id AS "epicId", ${REPOSITORIES_JSON},
   title, goal, acceptance_criteria AS "acceptanceCriteria", status,
   (SELECT key_prefix FROM projects p WHERE p.id = work_items.project_id) || '-' || number AS key, -- see navigation.ts
   requested_by AS "requestedBy", created_at AS "createdAt", updated_at AS "updatedAt"`;
@@ -24,8 +25,9 @@ const WORK_ITEM_SELECT = `
 const RUN_SELECT = `
   id, organization_id AS "organizationId", project_id AS "projectId",
   work_item_id AS "workItemId", attempt, status, error,
-  phase, role, category, parent_run_id AS "parentRunId", base_ref AS "baseRef",
-  head_sha AS "headSha", branch, harness, model,
+  phase, role, category, parent_run_id AS "parentRunId", base_refs AS "baseRefs",
+  (SELECT COALESCE(json_object_agg(k, v->>'sha'), '{}'::json) FROM jsonb_each(heads) AS h(k, v)) AS heads,
+  branch, harness, model,
   json_build_object('input', input_tokens, 'output', output_tokens, 'cacheRead', cache_read_tokens,
     'cacheWrite', cache_write_tokens, 'context', context_tokens) AS tokens,
   created_at AS "createdAt", started_at AS "startedAt", ended_at AS "endedAt"`;
@@ -43,8 +45,8 @@ const SESSION_SELECT = `
 const createWorkItemInput = z.object({
   projectId: z.string().min(1),
   epicId: z.string().min(1).nullable().default(null),
-  /** The repository it changes; the project's only one when omitted. */
-  repositoryId: z.string().min(1).nullable().default(null),
+  /** The repositories it works on; the project's only one when none is named. */
+  repositories: workItemRepositoriesInput.default([]),
   title: z.string().min(1).max(500),
   goal: z.string().max(10_000).default(""),
   acceptanceCriteria: z.array(z.string().max(2000)).default([]),
@@ -64,19 +66,19 @@ async function createWorkItem(ctx: RequestContext): Promise<Response> {
       WHERE id = ${input.projectId}
       RETURNING next_work_item_number - 1 AS number`) as Array<{ number: number }>;
     if (project.length === 0) return { missingProject: true as const };
-    if (input.repositoryId) {
-      const repo = await scope.sql`SELECT 1 FROM repositories WHERE id = ${input.repositoryId} AND project_id = ${input.projectId}`;
-      if (repo.length === 0) return { missingRepository: true as const };
-    }
 
     const workItemId = newId("workItem");
-    const rows = (await scope.sql`
-      INSERT INTO work_items (id, organization_id, project_id, number, epic_id, repository_id, title, goal,
+    await scope.sql`
+      INSERT INTO work_items (id, organization_id, project_id, number, epic_id, title, goal,
                               acceptance_criteria, status)
-      VALUES (${workItemId}, ${organizationId}, ${input.projectId}, ${project[0]!.number}, ${input.epicId}, ${input.repositoryId},
+      VALUES (${workItemId}, ${organizationId}, ${input.projectId}, ${project[0]!.number}, ${input.epicId},
               ${input.title}, ${input.goal},
-              ${input.acceptanceCriteria ?? []}::jsonb, 'received')
-      RETURNING ${scope.sql.unsafe(WORK_ITEM_SELECT)}`) as Array<Record<string, unknown>>;
+              ${input.acceptanceCriteria ?? []}::jsonb, 'received')`;
+    const missing = await setWorkItemRepositories(scope, organizationId, input.projectId, workItemId, input.repositories ?? []);
+    // Thrown, so the transaction and the work item's number roll back.
+    if (missing) throw notFound(`repository ${missing} is not in this project`);
+    const rows = (await scope.sql`
+      SELECT ${scope.sql.unsafe(WORK_ITEM_SELECT)} FROM work_items WHERE id = ${workItemId}`) as Array<Record<string, unknown>>;
 
     const event = await appendInScope(scope, {
       eventType: EventTypes.WorkItemCreated,
@@ -93,12 +95,10 @@ async function createWorkItem(ctx: RequestContext): Promise<Response> {
   });
 
   if ("missingProject" in result) throw notFound(`project ${input.projectId} not found`);
-  if ("missingRepository" in result) throw notFound(`repository ${input.repositoryId} is not in this project`);
   return json(result.workItem, 201);
 }
 
 const deliverInput = z.object({
-  repositoryId: z.string().min(1).optional(),
   /** Overrides for this work item only; unset fields keep the default. */
   policy: z.record(z.string(), z.unknown()).optional(),
 });
@@ -114,6 +114,12 @@ async function deliverWorkItem(ctx: RequestContext): Promise<Response> {
   const input = await parseBody(ctx.request, deliverInput);
   return orchestrator(ctx.principal.organizationId, "POST", `/internal/work-items/${ctx.params.id}/deliver`,
     JSON.stringify(input), ctx.principal.apiKeyId);
+}
+
+/** Mark finished work that has nothing to merge done: a person has read it. */
+async function markWorkItemDone(ctx: RequestContext): Promise<Response> {
+  return orchestrator(ctx.principal.organizationId, "POST", `/internal/work-items/${ctx.params.id}/done`,
+    "{}", ctx.principal.apiKeyId);
 }
 
 async function listWorkItems(ctx: RequestContext): Promise<Response> {
@@ -338,6 +344,7 @@ export function registerWorkRoutes(router: Router): void {
   router.get("/v1/work-items/:id", getWorkItem);
   router.post("/v1/work-items/:id/runs", createRun);
   router.post("/v1/work-items/:id/deliver", deliverWorkItem);
+  router.post("/v1/work-items/:id/done", markWorkItemDone);
 
   router.get("/v1/runs/:id", getRun);
   router.post("/v1/runs/:id/sessions", createSession);

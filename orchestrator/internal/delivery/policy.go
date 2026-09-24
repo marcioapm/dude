@@ -110,7 +110,11 @@ func ReviewersFor(p Policy, changedPaths []string) []string {
 			continue
 		}
 		for _, path := range changedPaths {
-			if slices.ContainsFunc(rule.WhenPathsMatch, func(g string) bool { return MatchesGlob(g, path) }) {
+			// A path is <repo>/<path in repo>: a rule may name either, so
+			// "migrations/**" matches api/migrations/x.sql, and "web/**"
+			// matches everything in web.
+			_, inRepo, _ := strings.Cut(path, "/")
+			if slices.ContainsFunc(rule.WhenPathsMatch, func(g string) bool { return MatchesGlob(g, path) || MatchesGlob(g, inRepo) }) {
 				selected[rule.Category] = true
 				break
 			}

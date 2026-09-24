@@ -25,15 +25,20 @@ const (
 
 // State is everything the workflow remembers between steps.
 type State struct {
-	WorkItemID   string `json:"workItemId"`
-	ProjectID    string `json:"projectId"`
-	RepositoryID string `json:"repositoryId"`
-	Policy       Policy `json:"policy"`
+	WorkItemID string `json:"workItemId"`
+	ProjectID  string `json:"projectId"`
+	Policy     Policy `json:"policy"`
 
 	// The Run whose output the next phase builds on.
-	HeadRunID    string   `json:"headRunId,omitempty"`
-	Branch       string   `json:"branch,omitempty"`
-	HeadSHA      string   `json:"headSha,omitempty"`
+	HeadRunID string `json:"headRunId,omitempty"`
+	// The work item's branch, the same name in every repository it changes.
+	Branch string `json:"branch,omitempty"`
+	// Where the work stands in each repository it changed, by name: what
+	// the next phase checks out. A repository not here starts from its
+	// default branch.
+	Heads map[string]string `json:"heads,omitempty"`
+	// What changed, across repositories, as <repo>/<path> — what picks the
+	// reviewers.
 	ChangedPaths []string `json:"changedPaths,omitempty"`
 
 	// Phase Runs being waited for.
@@ -41,8 +46,9 @@ type State struct {
 	// Review → fix cycles spent.
 	Iteration int `json:"iteration,omitempty"`
 	// PR feedback → fix cycles spent.
-	PRIteration   int    `json:"prIteration,omitempty"`
-	PullRequestID string `json:"pullRequestId,omitempty"`
+	PRIteration int `json:"prIteration,omitempty"`
+	// The pull requests opened, one per repository changed.
+	PullRequestIDs []string `json:"pullRequestIds,omitempty"`
 	// Why the workflow stopped, when it stopped early.
 	Escalation *Escalation `json:"escalation,omitempty"`
 }
@@ -52,8 +58,8 @@ type Escalation struct {
 	Detail any    `json:"detail,omitempty"`
 }
 
-// BranchFor is the work item's branch — the one its pull request is opened
-// from. Phase Runs never push to it directly; each pushes its own branch and
+// BranchFor is the work item's branch — the one its pull requests are opened
+// from, the same name in each repository. Phase Runs never push to it directly; each pushes its own branch and
 // dude fast-forwards this one.
 func BranchFor(workItemID string, attempt int) string {
 	return fmt.Sprintf("dude/%s/attempt-%d", workItemID, attempt)
@@ -137,9 +143,10 @@ func key(sc workflow.StepContext, parts ...any) string {
 	return fmt.Sprint(append([]any{sc.WorkflowRunID}, parts...)...)
 }
 
-func (w *steps) phase(ctx context.Context, sc workflow.StepContext, st *State, phase, baseRef, k string, extra func(*PhaseRun)) (string, error) {
-	in := PhaseRun{WorkItemID: st.WorkItemID, RepositoryID: st.RepositoryID, Phase: phase,
-		BaseRef: baseRef, ParentRunID: st.HeadRunID, Key: k}
+// phase creates a phase Run starting from where the work stands: each
+// repository at its head, or its default branch if nothing changed it yet.
+func (w *steps) phase(ctx context.Context, sc workflow.StepContext, st *State, phase, k string, extra func(*PhaseRun)) (string, error) {
+	in := PhaseRun{WorkItemID: st.WorkItemID, Phase: phase, BaseRefs: st.Heads, ParentRunID: st.HeadRunID, Key: k}
 	if extra != nil {
 		extra(&in)
 	}
@@ -154,7 +161,7 @@ func (w *steps) implement(ctx context.Context, sc workflow.StepContext) (workflo
 	if err := w.s.SetWorkItemStatus(ctx, sc.OrganizationID, st, "running", "implementing"); err != nil {
 		return workflow.Result{}, err
 	}
-	runID, err := w.phase(ctx, sc, st, PhaseImplement, "", key(sc, ":implement"), nil)
+	runID, err := w.phase(ctx, sc, st, PhaseImplement, key(sc, ":implement"), nil)
 	if err != nil {
 		return workflow.Result{}, err
 	}
@@ -179,11 +186,16 @@ func (w *steps) awaitImplement(ctx context.Context, sc workflow.StepContext) (wo
 		return w.escalate(ctx, sc, st, "implement_failed", map[string]any{"runId": runID, "error": out.Error})
 	}
 	// An implementer that changed nothing has not done the work, and there
-	// is nothing for a reviewer to look at.
-	if len(out.ChangedPaths) == 0 {
+	// is nothing for a reviewer to look at — unless the work changes no
+	// code, when what it published is the work.
+	writable, err := w.s.HasWritableRepository(ctx, sc.OrganizationID, st.WorkItemID)
+	if err != nil {
+		return workflow.Result{}, err
+	}
+	if len(out.ChangedPaths) == 0 && (writable || !out.Published) {
 		return w.escalate(ctx, sc, st, "no_changes", map[string]any{"runId": runID})
 	}
-	st.HeadRunID, st.HeadSHA, st.ChangedPaths, st.PendingRunIDs = runID, out.HeadSHA, out.ChangedPaths, nil
+	st.HeadRunID, st.Heads, st.ChangedPaths, st.PendingRunIDs = runID, out.advance(st.Heads), out.ChangedPaths, nil
 	return workflow.Result{Next: "review", State: st}, nil
 }
 
@@ -207,7 +219,7 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 	}
 	var runIDs []string
 	for _, c := range categories {
-		id, err := w.phase(ctx, sc, st, PhaseReview, st.HeadSHA, key(sc, ":review:", st.Iteration, ":", c),
+		id, err := w.phase(ctx, sc, st, PhaseReview, key(sc, ":review:", st.Iteration, ":", c),
 			func(p *PhaseRun) {
 				p.Category, p.BlockingSeverities, p.FindingIDs = c, st.Policy.BlockingSeverities, toJudge[c]
 			})
@@ -285,7 +297,7 @@ func (w *steps) fix(ctx context.Context, sc workflow.StepContext) (workflow.Resu
 			return workflow.Result{}, err
 		}
 	}
-	runID, err := w.phase(ctx, sc, st, PhaseFix, st.HeadSHA, k, func(p *PhaseRun) { p.FindingIDs = open })
+	runID, err := w.phase(ctx, sc, st, PhaseFix, k, func(p *PhaseRun) { p.FindingIDs = open })
 	if err != nil {
 		return workflow.Result{}, err
 	}
@@ -308,11 +320,7 @@ func (w *steps) awaitFix(ctx context.Context, sc workflow.StepContext) (workflow
 	if !out.Succeeded {
 		return w.escalate(ctx, sc, st, "fix_failed", map[string]any{"runId": runID, "error": out.Error})
 	}
-	st.HeadRunID, st.PendingRunIDs = runID, nil
-	if out.HeadSHA != "" {
-		st.HeadSHA = out.HeadSHA
-	}
-	st.ChangedPaths = out.ChangedPaths
+	st.HeadRunID, st.PendingRunIDs, st.Heads, st.ChangedPaths = runID, nil, out.advance(st.Heads), out.ChangedPaths
 	return workflow.Result{Next: "review", State: st}, nil
 }
 
@@ -326,7 +334,7 @@ func (w *steps) simplify(ctx context.Context, sc workflow.StepContext) (workflow
 	if err := w.s.SetWorkItemStatus(ctx, sc.OrganizationID, st, "running", "simplifying"); err != nil {
 		return workflow.Result{}, err
 	}
-	runID, err := w.phase(ctx, sc, st, PhaseSimplify, st.HeadSHA, key(sc, ":simplify"), nil)
+	runID, err := w.phase(ctx, sc, st, PhaseSimplify, key(sc, ":simplify"), nil)
 	if err != nil {
 		return workflow.Result{}, err
 	}
@@ -349,8 +357,8 @@ func (w *steps) awaitSimplify(ctx context.Context, sc workflow.StepContext) (wor
 	st.PendingRunIDs = nil
 	// A failed or empty simplification is not a failure of the work item: the
 	// code was simple enough already. Carry on with what we had.
-	if out.Succeeded && len(out.ChangedPaths) > 0 && out.HeadSHA != "" {
-		st.HeadRunID, st.HeadSHA = runID, out.HeadSHA
+	if out.Succeeded && len(out.Heads) > 0 {
+		st.HeadRunID, st.Heads = runID, out.advance(st.Heads)
 	}
 	return workflow.Result{Next: "test", State: st}, nil
 }
@@ -363,7 +371,7 @@ func (w *steps) test(ctx context.Context, sc workflow.StepContext) (workflow.Res
 	if !st.Policy.Test {
 		return workflow.Result{Next: "openPullRequest", State: st}, nil
 	}
-	runID, err := w.phase(ctx, sc, st, PhaseTest, st.HeadSHA, key(sc, ":test"), nil)
+	runID, err := w.phase(ctx, sc, st, PhaseTest, key(sc, ":test"), nil)
 	if err != nil {
 		return workflow.Result{}, err
 	}
@@ -397,15 +405,24 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 	if err != nil {
 		return workflow.Result{}, err
 	}
-	prID, err := w.s.OpenPullRequest(ctx, sc.OrganizationID, st, w.forges)
+	prIDs, err := w.s.OpenPullRequests(ctx, sc.OrganizationID, st, w.forges)
 	if err != nil {
 		return workflow.Result{}, err
 	}
+	st.PullRequestIDs, st.PRIteration = prIDs, 0
+	if len(prIDs) == 0 {
+		// Nothing changed in any repository: the work is what the agents
+		// published. A person reads it and says when it is done.
+		return workflow.Result{State: st}, w.s.SetWorkItemStatus(ctx, sc.OrganizationID, st, "review", "ready to read")
+	}
 	// Waiting on people now: the agents are done until someone asks.
-	if err := w.s.SetWorkItemStatus(ctx, sc.OrganizationID, st, "review", "pull request open"); err != nil {
+	reason := "pull request open"
+	if len(prIDs) > 1 {
+		reason = fmt.Sprintf("%d pull requests open", len(prIDs))
+	}
+	if err := w.s.SetWorkItemStatus(ctx, sc.OrganizationID, st, "review", reason); err != nil {
 		return workflow.Result{}, err
 	}
-	st.PullRequestID, st.PRIteration = prID, 0
 	return workflow.Result{Next: "awaitPullRequest", State: st, AwaitSignals: []string{SignalPRFeedback, SignalHumanDecision}}, nil
 }
 
@@ -417,7 +434,11 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 	if err != nil {
 		return workflow.Result{}, err
 	}
+	// Every signal of the batch is read before anything is decided: they are
+	// consumed together, so one PR merging must not drop feedback on another
+	// that arrived with it.
 	var actionable []forge.ActionableFeedback
+	ended := false
 	for _, sig := range sc.Signals {
 		if sig.Name != SignalPRFeedback {
 			continue
@@ -427,15 +448,16 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 			continue
 		}
 		if s.Kind == "terminal" {
-			// Closed without merging is someone deciding not to take the
-			// change: an abort of the work item, not a failure of it.
-			status, reason := "aborted", "pull request closed without merging"
-			if s.State == forge.StateMerged {
-				status, reason = "done", "pull request merged"
-			}
-			return workflow.Result{}, w.s.SetWorkItemStatus(ctx, sc.OrganizationID, st, status, reason)
+			ended = true
+			continue
 		}
 		actionable = append(actionable, s.Feedback...)
+	}
+	if ended {
+		res, finished, err := w.pullRequestEnded(ctx, sc, st)
+		if err != nil || finished || len(actionable) == 0 {
+			return res, err
+		}
 	}
 	waitAgain := workflow.Result{Next: "awaitPullRequest", State: st, AwaitSignals: []string{SignalPRFeedback, SignalHumanDecision}}
 	if len(actionable) == 0 {
@@ -449,7 +471,7 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 		return workflow.Result{}, err
 	}
 	// Several comments arriving together cost one fix Run, not one each.
-	runID, err := w.phase(ctx, sc, st, PhaseFix, st.HeadSHA, key(sc, ":prfix:", st.PRIteration),
+	runID, err := w.phase(ctx, sc, st, PhaseFix, key(sc, ":prfix:", st.PRIteration),
 		func(p *PhaseRun) { p.PRFeedback = actionable })
 	if err != nil {
 		return workflow.Result{}, err
@@ -473,15 +495,61 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 	if !out.Succeeded {
 		return w.escalate(ctx, sc, st, "pr_fix_failed", map[string]any{"runId": runID, "error": out.Error})
 	}
-	// The fast-forward updated the PR; it is back with the reviewers.
+	st.HeadRunID, st.PendingRunIDs, st.Heads = runID, nil, out.advance(st.Heads)
+	// The fix may have changed a repository no pull request is open for yet:
+	// that one gets its own, alongside the others.
+	prIDs, err := w.s.OpenPullRequests(ctx, sc.OrganizationID, st, w.forges)
+	if err != nil {
+		return workflow.Result{}, err
+	}
+	st.PullRequestIDs = prIDs
+	// The fast-forward updated the PRs; they are back with the reviewers.
 	if err := w.s.SetWorkItemStatus(ctx, sc.OrganizationID, st, "review", "pull request updated"); err != nil {
 		return workflow.Result{}, err
 	}
-	st.HeadRunID, st.PendingRunIDs = runID, nil
-	if out.HeadSHA != "" {
-		st.HeadSHA = out.HeadSHA
-	}
 	return workflow.Result{Next: "awaitPullRequest", State: st, AwaitSignals: []string{SignalPRFeedback, SignalHumanDecision}}, nil
+}
+
+// pullRequestEnded: one of the work item's pull requests was merged or
+// closed. The work item is done when every one is merged. One closed without
+// merging is someone deciding not to take that part: with nothing else open
+// that ends the work item (aborted); with siblings still open it is a
+// decision for a person, not something to guess.
+//
+// finished says the work item has left the pull request loop (done,
+// aborted, or waiting on a person); otherwise the others are still open.
+func (w *steps) pullRequestEnded(ctx context.Context, sc workflow.StepContext, st *State) (workflow.Result, bool, error) {
+	states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
+	if err != nil {
+		return workflow.Result{}, true, err
+	}
+	var open, merged, closed int
+	for _, s := range states {
+		switch s {
+		case forge.StateMerged:
+			merged++
+		case forge.StateClosed:
+			closed++
+		default:
+			open++
+		}
+	}
+	waitAgain := workflow.Result{Next: "awaitPullRequest", State: st, AwaitSignals: []string{SignalPRFeedback, SignalHumanDecision}}
+	switch {
+	case len(states) == 0:
+		return workflow.Result{}, true, fmt.Errorf("no pull requests recorded for %s", st.WorkItemID)
+	case closed == 0 && open > 0:
+		return waitAgain, false, nil // the rest are still open
+	case closed == 0:
+		return workflow.Result{}, true, w.s.SetWorkItemStatus(ctx, sc.OrganizationID, st, "done", "pull requests merged")
+	case open == 0 && merged == 0:
+		// Closed without merging is someone deciding not to take the
+		// change: an abort of the work item, not a failure of it.
+		return workflow.Result{}, true, w.s.SetWorkItemStatus(ctx, sc.OrganizationID, st, "aborted", "pull request closed without merging")
+	}
+	// Part taken, part refused, or part still open: a person decides.
+	res, err := w.escalate(ctx, sc, st, "pull_request_closed", map[string]any{"merged": merged, "closed": closed, "open": open})
+	return res, true, err
 }
 
 // escalate stops and asks for a person. Terminal rather than parked: holding

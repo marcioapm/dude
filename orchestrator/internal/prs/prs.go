@@ -169,6 +169,9 @@ func (s *Syncer) Sync(ctx context.Context, org, prID string) error {
 	if signal == nil || workflowRunID == "" {
 		return nil
 	}
+	for i := range signal.Feedback {
+		signal.Feedback[i].Repo = pr.RepoName
+	}
 	ids := make([]string, len(fresh))
 	for i, f := range fresh {
 		ids[i] = f.ID

@@ -22,6 +22,7 @@ import type { PublicContext, RequestContext, Router } from "../router.ts";
 export const PR_SELECT = `
   id, organization_id AS "organizationId", project_id AS "projectId",
   work_item_id AS "workItemId", run_id AS "runId", repository_id AS "repositoryId",
+  (SELECT name FROM repositories r WHERE r.id = pull_requests.repository_id) AS "repositoryName",
   number, node_id AS "nodeId", url, head_branch AS "headBranch",
   base_branch AS "baseBranch", head_sha AS "headSha", title, body,
   state, checks, review,

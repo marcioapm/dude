@@ -62,6 +62,9 @@ const Finding = "---\n" +
 // is in the tree, in the format the re-review prompt asks for.
 const Verdict = "```yaml\nverdicts:\n  F1: fixed\n```\n"
 
+// NothingToReview is the scripted reviewer's reply to work with no code.
+const NothingToReview = "Read what was published; nothing to add."
+
 // Step is what the agent does for one phase.
 type Step struct {
 	// Files to commit, path → one line of content; none changes nothing.
@@ -90,7 +93,8 @@ func For(phase, model, runID string, fixed bool) Step {
 	}
 	switch phase {
 	case "implement":
-		step := Step{Commit: map[string]string{"FACTORY.md": "Written by run " + runID},
+		// In every repository it may change: work across two is two commits.
+		step := Step{Commit: map[string]string{"*:FACTORY.md": "Written by run " + runID},
 			Message: "Add FACTORY.md for " + runID, Reply: "Implemented it.",
 			Publish: map[string]string{Notes: "# What changed\n\nAdded FACTORY.md for " + runID + "."}}
 		if model == AskModel {
@@ -147,6 +151,9 @@ func Script(phase, model, runID string) string {
 	}
 	var b strings.Builder
 	for path, line := range step.Commit {
+		// In the workdir: the one repository. (Work across several needs
+		// lux-fake's `cd`, which is coming; the contract suite uses one.)
+		path = strings.TrimPrefix(path, "*:")
 		fmt.Fprintf(&b, "append %s %s\n", path, line)
 	}
 	for name, text := range step.Publish {

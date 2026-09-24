@@ -178,6 +178,16 @@ export const TERMINAL_WORK_ITEM_STATUSES: readonly WorkItemStatus[] = [
   "aborted",
 ];
 
+/**
+ * A repository a work item works on: one it may change (`write`, and a
+ * pull request if it does) or only read, for context.
+ */
+export const workItemRepositorySchema = z.object({
+  id: z.string().min(1),
+  access: z.enum(["write", "read"]).default("write"),
+});
+export type WorkItemRepository = z.infer<typeof workItemRepositorySchema>;
+
 export const workItemSchema = z.object({
   id: z.string(),
   organizationId: z.string(),
@@ -185,8 +195,8 @@ export const workItemSchema = z.object({
   epicId: z.string().nullable().default(null),
   /** What people call it: the project's prefix and a number (TK-12). */
   key: z.string().optional(),
-  /** The repository it changes; null means the project's only one. */
-  repositoryId: z.string().nullable().default(null),
+  /** The repositories it works on; none is work that changes no code. */
+  repositories: z.array(workItemRepositorySchema).default([]),
   title: z.string().min(1),
   goal: z.string().default(""),
   acceptanceCriteria: z.array(z.string()).default([]),
@@ -243,10 +253,10 @@ export const runSchema = z.object({
   category: z.string().nullable().default(null),
   /** The Run this one continues from. */
   parentRunId: z.string().nullable().default(null),
-  /** The commit its workspace started at; null means the default branch. */
-  baseRef: z.string().nullable().default(null),
-  /** What it produced, for the next phase to build on. */
-  headSha: z.string().nullable().default(null),
+  /** The commit each repository started at, by name; one not named started at its default branch. */
+  baseRefs: z.record(z.string(), z.string()).default({}),
+  /** Where it left each repository it changed, by name: what the next phase builds on. */
+  heads: z.record(z.string(), z.string()).default({}),
   branch: z.string().nullable().default(null),
   /**
    * Which coding agent ran it ("opencode", "claude-code", "scripted"…) and
@@ -371,6 +381,9 @@ export const pullRequestSchema = z.object({
   id: z.string(),
   workItemId: z.string(),
   runId: z.string().nullable(),
+  /** The repository it is in: one per repository a work item changed. */
+  repositoryId: z.string(),
+  repositoryName: z.string(),
   number: z.number().int(),
   url: z.string(),
   headBranch: z.string(),

@@ -101,10 +101,30 @@ type specInput struct {
 	Image                                          string
 	Model                                          string
 	Prompt                                         string
-	RepoName, RepoURL, Ref                         string
-	PushBranch                                     string
-	ForgeToken                                     string
+	// Every repository the work item names, each at the commit this phase
+	// starts from.
+	Repos      []specRepo
+	PushBranch string
+	ForgeToken string
 }
+
+type specRepo struct {
+	Name, URL, Ref string
+	// Cloned for context only: never pushed.
+	ReadOnly bool
+}
+
+// workdir is where the agent starts: the one repository, or the directory
+// holding them all (the prompt names each).
+func workdir(repos []specRepo) string {
+	if len(repos) == 1 {
+		return RepoPath(repos[0].Name)
+	}
+	return workspaceDir
+}
+
+// RepoPath is where a repository is checked out in the container.
+func RepoPath(name string) string { return workspaceDir + "/repos/" + name }
 
 // Which coding agent runs a phase, as recorded on the Run: what the chat
 // labels it with, and what dude's translation of its output assumes.
@@ -119,7 +139,6 @@ const (
 // which model, what the agent is told, which commit it starts from and where
 // its work is pushed.
 func buildSpec(c AgentConfig, in specInput) lux.Spec {
-	repoPath := workspaceDir + "/repos/" + in.RepoName
 	spec := lux.Spec{
 		Name: fmt.Sprintf("%s %s", in.Phase, in.WorkItemID),
 		Labels: map[string]string{
@@ -131,7 +150,7 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		Workload: lux.Workload{
 			Adapter: "opencode",
 			Prompt:  in.Prompt,
-			Workdir: repoPath,
+			Workdir: workdir(in.Repos),
 		},
 		Volumes: []lux.Volume{
 			// The checkout, and the agent's session transcript: the two
@@ -139,18 +158,27 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 			{Name: "workspace", Path: workspaceDir, Kind: "state"},
 			{Name: "home", Path: agentHome, Kind: "state"},
 		},
-		Git: &lux.Git{
-			Repositories: []lux.Repository{{Name: in.RepoName, URL: in.RepoURL, Ref: in.Ref, Path: repoPath}},
-		},
 		Timeout: c.Timeout,
 	}
-	if in.ForgeToken != "" {
-		// Used by lux to clone and push; never placed in the container.
-		spec.Git.Repositories[0].Credential = "GIT_TOKEN"
-		spec.Secrets = append(spec.Secrets, lux.Secret{Name: "GIT_TOKEN", Value: in.ForgeToken})
-	}
-	if in.PushBranch != "" {
-		spec.Git.Push = &lux.Push{Branch: in.PushBranch}
+	if len(in.Repos) > 0 {
+		spec.Git = &lux.Git{}
+		for _, r := range in.Repos {
+			repo := lux.Repository{Name: r.Name, URL: r.URL, Ref: r.Ref, Path: RepoPath(r.Name)}
+			if in.ForgeToken != "" {
+				// Used by lux to clone and push; never placed in the container.
+				repo.Credential = "GIT_TOKEN"
+			}
+			if r.ReadOnly {
+				repo.Push = new(bool)
+			}
+			spec.Git.Repositories = append(spec.Git.Repositories, repo)
+		}
+		if in.PushBranch != "" {
+			spec.Git.Push = &lux.Push{Branch: in.PushBranch}
+		}
+		if in.ForgeToken != "" {
+			spec.Secrets = append(spec.Secrets, lux.Secret{Name: "GIT_TOKEN", Value: in.ForgeToken})
+		}
 	}
 
 	// The scripted agent, for tests: lux-fake speaking ACP, following the

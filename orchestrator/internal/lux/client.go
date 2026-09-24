@@ -127,6 +127,9 @@ type Repository struct {
 	Ref        string `json:"ref,omitempty"`
 	Credential string `json:"credential,omitempty"`
 	Path       string `json:"path,omitempty"`
+	// false: cloned, never pushed (lux reports it "skipped"). Nil is lux's
+	// default, true.
+	Push *bool `json:"push,omitempty"`
 }
 
 type Push struct {

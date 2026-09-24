@@ -11,8 +11,8 @@
  */
 
 import { useEffect, useState } from "react";
-import { Button, IconButton, Input, Select } from "@dude/design-system/primitives";
-import type { ApiClient, Epic, Repository, WorkItemDetail, WorkItemFields } from "../api/client.ts";
+import { Button, Checkbox, IconButton, Input, Select } from "@dude/design-system/primitives";
+import type { ApiClient, Epic, Repository, WorkItemDetail, WorkItemFields, WorkItemRepository } from "../api/client.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
 
 const NO_EPIC = "__none__";
@@ -21,8 +21,8 @@ export type ExistingWorkItem = { id: string; delivering: boolean } & WorkItemFie
 
 /** A work item as the dialog edits it; `delivering` fixes what it asks for. */
 export function existingWorkItem(item: WorkItemDetail, delivering: boolean): ExistingWorkItem {
-  const { id, title, goal, acceptanceCriteria, epicId, repositoryId } = item;
-  return { id, delivering, title, goal, acceptanceCriteria, epicId, repositoryId };
+  const { id, title, goal, acceptanceCriteria, epicId, repositories } = item;
+  return { id, delivering, title, goal, acceptanceCriteria, epicId, repositories };
 }
 
 export interface WorkItemDialogProps {
@@ -41,7 +41,7 @@ export function WorkItemDialog({ client, projectId, onClose, existing, epicId, o
   const [goal, setGoal] = useState(existing?.goal ?? "");
   const [criteria, setCriteria] = useState<string[]>(existing?.acceptanceCriteria.length ? [...existing.acceptanceCriteria] : [""]);
   const [epic, setEpic] = useState<string>(existing?.epicId ?? epicId ?? NO_EPIC);
-  const [repository, setRepository] = useState<string>(existing?.repositoryId ?? "");
+  const [chosen, setChosen] = useState<WorkItemRepository[]>(existing?.repositories ?? []);
   // The choices arrive after it opens; until they have, a save could miss
   // a repository the project needs named.
   const [choices, setChoices] = useState<{ epics: Epic[]; repositories: Repository[] } | null>(null);
@@ -64,8 +64,10 @@ export function WorkItemDialog({ client, projectId, onClose, existing, epicId, o
 
   const locked = existing?.delivering ?? false;
   const repositories = choices?.repositories ?? [];
-  const needsRepository = repositories.length > 1;
-  const canSave = choices !== null && Boolean(title.trim()) && !busy && (!needsRepository || repository !== "" || locked);
+  // One repository needs no choosing: it is where the work goes unless the
+  // work item says otherwise.
+  const choosing = repositories.length > 1;
+  const canSave = choices !== null && Boolean(title.trim()) && !busy;
 
   function submit(deliver: boolean) {
     const fields: Partial<WorkItemFields> = { epicId: epic === NO_EPIC ? null : epic };
@@ -74,7 +76,9 @@ export function WorkItemDialog({ client, projectId, onClose, existing, epicId, o
         title: title.trim(),
         goal: goal.trim(),
         acceptanceCriteria: criteria.map((c) => c.trim()).filter(Boolean),
-        repositoryId: repository || null,
+        // One repository needs no choosing, but is named: adding a second
+        // later must not leave this work with no checkout.
+        repositories: choosing ? chosen : repositories.map((r) => ({ id: r.id, access: "write" as const })),
       });
     }
     let id = existing?.id ?? created ?? "";
@@ -125,18 +129,10 @@ export function WorkItemDialog({ client, projectId, onClose, existing, epicId, o
           onValueChange={setEpic}
           options={[{ value: NO_EPIC, label: "No epic" }, ...(choices?.epics ?? []).map((e) => ({ value: e.id, label: e.title }))]}
         />
-        {/* One repository needs no choosing: it is the only place the work can go. */}
-        {needsRepository ? (
-          <Select
-            label="Repository"
-            value={repository}
-            placeholder="Choose a repository"
-            disabled={locked}
-            onValueChange={setRepository}
-            options={repositories.map((r) => ({ value: r.id, label: `${r.name} · ${r.defaultBranch}` }))}
-          />
-        ) : null}
       </div>
+      {choosing ? (
+        <RepositoryChooser repositories={repositories} chosen={chosen} onChange={setChosen} disabled={locked} />
+      ) : null}
       <fieldset className="criteria" disabled={locked}>
         <legend>Acceptance criteria</legend>
         {criteria.map((c, i) => (
@@ -165,9 +161,61 @@ export function WorkItemDialog({ client, projectId, onClose, existing, epicId, o
           Add criterion
         </Button>
       </fieldset>
-      {needsRepository && !repository && !locked ? (
-        <p className="muted">This project has several repositories; choose the one this changes.</p>
-      ) : null}
     </FormDialog>
+  );
+}
+
+/**
+ * Which of the project's repositories the work touches: each one either
+ * changed (a pull request if it is) or only read, for context. None chosen
+ * is work that changes no code — a design, a write-up.
+ */
+function RepositoryChooser(props: {
+  repositories: Repository[];
+  chosen: WorkItemRepository[];
+  onChange: (chosen: WorkItemRepository[]) => void;
+  disabled: boolean;
+}) {
+  const { repositories, chosen, onChange, disabled } = props;
+  const accessOf = (id: string) => chosen.find((c) => c.id === id)?.access;
+  const set = (id: string, access: "write" | "read" | null) => {
+    const rest = chosen.filter((c) => c.id !== id);
+    onChange(access ? [...rest, { id, access }] : rest);
+  };
+  return (
+    <fieldset className="repositoryChooser" disabled={disabled} data-testid="work-item-repositories">
+      <legend>Repositories</legend>
+      {repositories.map((r) => {
+        const access = accessOf(r.id);
+        return (
+          <div className="repositoryChoice" key={r.id}>
+            <Checkbox
+              label={<span><span className="mono">{r.name}</span> <span className="muted">{r.defaultBranch}</span></span>}
+              checked={Boolean(access)}
+              disabled={disabled}
+              onCheckedChange={(on) => set(r.id, on === true ? "write" : null)}
+            />
+            {access ? (
+              <Select
+                size="sm"
+                aria-label={`What the work does in ${r.name}`}
+                disabled={disabled}
+                value={access}
+                onValueChange={(v) => set(r.id, v as "write" | "read")}
+                options={[
+                  { value: "write", label: "Changes it" },
+                  { value: "read", label: "Reads it" },
+                ]}
+              />
+            ) : null}
+          </div>
+        );
+      })}
+      <p className="muted">
+        {chosen.length === 0
+          ? "None chosen: this work changes no code. What the agents write is kept with it."
+          : "Each repository it changes gets its own pull request."}
+      </p>
+    </fieldset>
   );
 }

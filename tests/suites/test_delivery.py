@@ -17,13 +17,28 @@ from fake_github import FakeGitHub
 from helpers import ApiClient, wait_until
 
 
-def test_delivery_requires_a_repository(client: ApiClient, project: dict):
-    """The orchestrator's refusal reaches the user, in the API's own shape."""
-    work_item = client.create_work_item(project["id"], "Nowhere to push")
+def test_work_on_no_repository_is_delivered_as_what_the_agents_publish(client: ApiClient):
+    """A work item that names no repository, in a project with none, is work
+    that changes no code: it runs, and ends with what the agents published
+    for a person to read, not a pull request."""
+    import os
 
-    resp = client.post(f"/v1/work-items/{work_item['id']}/deliver")
-    assert resp.status_code == 400
-    assert "repository" in resp.json()["error"]["message"].lower()
+    project = client.create_project(
+        name="Notes", slug=f"notes-{os.urandom(3).hex()}", runtimeImage="dude-runtime:test",
+        agentModels={r: {"model": "fake/scripted"} for r in ("implementer", "reviewer", "simplifier")},
+    )
+    work_item = client.create_work_item(project["id"], "Write up the options")
+    assert client.post(f"/v1/work-items/{work_item['id']}/deliver").status_code == 201
+    wait_until(lambda: client.get("/v1/artifacts", params={"workItemId": work_item["id"]}).json()["artifacts"],
+               timeout=60, message="nothing was published")
+    assert client.get("/v1/pull-requests", params={"workItemId": work_item["id"]}).json()["pullRequests"] == []
+
+    # A person reads it and says it is done; there is nothing to merge.
+    wait_until(lambda: client.get(f"/v1/work-items/{work_item['id']}").json()["status"] == "review",
+               timeout=30, message="the work never came to review")
+    wait_until(lambda: client.post(f"/v1/work-items/{work_item['id']}/done").status_code == 200,
+               timeout=30, message="it could not be marked done")
+    assert client.get(f"/v1/work-items/{work_item['id']}").json()["status"] == "done"
 
 
 def test_delivering_a_missing_work_item_is_a_404(client: ApiClient):
@@ -89,6 +104,43 @@ def test_the_review_fix_loop_converges_and_the_ledger_shows_it(
     types = [e["eventType"] for e in client.events(runId=implement["id"])]
     for expected in ("agent.session.started", "agent.message", "git.commit_created", "run.completed"):
         assert expected in types, f"{expected} missing from the implementer's timeline: {types}"
+
+
+def test_work_across_two_repositories_opens_a_pull_request_in_each(
+    client: ApiClient, forge_project: dict, fake_github: FakeGitHub
+):
+    """One work item, two repositories it changes: the implementer is given
+    both, commits in each, and each gets its own pull request, naming the
+    other. The work item is done only when both are merged."""
+    web = fake_github.add_repository("web")
+    repo = client.post(f"/v1/projects/{forge_project['id']}/repositories",
+                       {"name": "web", "url": web.clone_url, "defaultBranch": "main"}).json()
+    api = client.get(f"/v1/projects/{forge_project['id']}").json()["repositories"]
+    target = next(r for r in api if r["name"] != "web")
+    item = client.create_work_item(forge_project["id"], "Across two", repositories=[
+        {"id": target["id"], "access": "write"}, {"id": repo["id"], "access": "write"}])
+    assert client.post(f"/v1/work-items/{item['id']}/deliver").status_code == 201
+
+    def both_open():
+        prs = client.get("/v1/pull-requests", params={"workItemId": item["id"]}).json()["pullRequests"]
+        return prs if len(prs) == 2 else None
+
+    prs = wait_until(both_open, timeout=90, interval=0.5, message="no pull request in each repository")
+    assert {p["repositoryId"] for p in prs} == {target["id"], repo["id"]}
+    assert {p["repositoryName"] for p in prs} == {target["name"], "web"}
+    assert len(fake_github.pulls) == 1 and len(web.pulls) == 1
+    assert "web" in fake_github.pulls[1].body and fake_github.owner in web.pulls[1].body
+
+    def state_of(repository_id: str) -> str:
+        prs = client.get("/v1/pull-requests", params={"workItemId": item["id"]}).json()["pullRequests"]
+        return next(p["state"] for p in prs if p["repositoryId"] == repository_id)
+
+    web.merge(1)
+    wait_until(lambda: state_of(repo["id"]) == "merged", timeout=30, message="web's merge never registered")
+    assert client.get(f"/v1/work-items/{item['id']}").json()["status"] != "done"
+    fake_github.merge(1)
+    wait_until(lambda: client.get(f"/v1/work-items/{item['id']}").json()["status"] == "done",
+               timeout=30, message="the work item never finished with both merged")
 
 
 def test_what_an_agent_publishes_is_listed_and_read_only_by_its_organization(
