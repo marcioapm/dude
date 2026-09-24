@@ -63,6 +63,7 @@ export type IconName =
   | "git-branch"
   | "git-pr"
   | "layers"
+  | "settings"
   // chat / activity
   | "caret"
   | "retry"
@@ -135,6 +136,10 @@ const PATHS: Record<IconName, { d: string; fill?: true; dashed?: true }> = {
   "git-branch": { d: "M4.5 3.5v9M4.5 5a1.5 1.5 0 1 0 0-3a1.5 1.5 0 0 0 0 3ZM4.5 14a1.5 1.5 0 1 0 0-3a1.5 1.5 0 0 0 0 3ZM11.5 6.5a1.5 1.5 0 1 0 0-3a1.5 1.5 0 0 0 0 3ZM11.5 6.5c0 2-1.5 3-7 3.5" },
   "git-pr": { d: "M4.5 5v9M4.5 5a1.5 1.5 0 1 0 0-3a1.5 1.5 0 0 0 0 3ZM11.5 14a1.5 1.5 0 1 0 0-3a1.5 1.5 0 0 0 0 3ZM11.5 11V6a2 2 0 0 0-2-2H7.5M9.5 2L7.5 4l2 2" },
   layers: { d: "M8 2.5l6 3-6 3-6-3 6-3ZM2 8.5l6 3 6-3M2 11.5l6 3 6-3" },
+  /* Three sliders, each with a knob: settings you adjust, not a gear you turn. */
+  settings: {
+    d: "M2.5 4h6M11.5 4h2M10 2.5a1.5 1.5 0 1 0 0 3a1.5 1.5 0 0 0 0-3ZM2.5 8h2M7.5 8h6M6 6.5a1.5 1.5 0 1 0 0 3a1.5 1.5 0 0 0 0-3ZM2.5 12h7M12.5 12h1M11 10.5a1.5 1.5 0 1 0 0 3a1.5 1.5 0 0 0 0-3Z",
+  },
 
   /* A text caret: the streaming glyph. Filled so it reads as a block cursor. */
   caret: { d: "M6 2.5h4v11H6z", fill: true },

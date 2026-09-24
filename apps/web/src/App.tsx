@@ -82,10 +82,20 @@ export function App({ client, onSignOut }: AppProps) {
   const [groupByEpic, setGroupByEpic] = useState(() => localStorage.getItem(GROUP_BY_EPIC) === "1");
   const { toast } = useToast();
 
-  const go = useCallback((next: Place | null) => {
+  /** Move to a place, as a step Back can undo — or, with `replace`, in place of this one. */
+  const go = useCallback((next: Place | null, replace = false) => {
     setPlaceState(next);
     const hash = formatPlace(next);
-    if (window.location.hash !== hash) window.history.replaceState(null, "", hash || " ");
+    if (window.location.hash === hash) return;
+    if (replace) window.history.replaceState(null, "", hash || " ");
+    else window.history.pushState(null, "", hash || " ");
+  }, []);
+
+  // Back, Forward and an edited URL move the app too.
+  useEffect(() => {
+    const follow = () => setPlaceState(parsePlace(window.location.hash));
+    window.addEventListener("hashchange", follow);
+    return () => window.removeEventListener("hashchange", follow);
   }, []);
 
   const load = useCallback(async () => {
@@ -107,7 +117,7 @@ export function App({ client, onSignOut }: AppProps) {
   // First load with nothing selected: open the first project's board rather
   // than an empty pane.
   useEffect(() => {
-    if (!place && projects && projects[0]) go(inTree({ kind: "project", id: projects[0].id }));
+    if (!place && projects && projects[0]) go(inTree({ kind: "project", id: projects[0].id }), true);
   }, [projects, place, go]);
 
   const selected = treeSelection(place);
@@ -205,7 +215,7 @@ export function App({ client, onSignOut }: AppProps) {
                   onClick={() => act({ kind: "newEpic", projectId: project.id })}>
                   New epic
                 </Button>
-                <Button size="sm" variant="secondary" leadingIcon="list-check" data-testid="project-settings-button"
+                <Button size="sm" variant="secondary" leadingIcon="settings" data-testid="project-settings-button"
                   onClick={() => go({ view: "projectSettings", projectId: project.id })}>
                   Settings
                 </Button>

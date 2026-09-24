@@ -20,7 +20,7 @@
   grid-template-columns: auto 1fr auto;
   gap: var(--ds-space-8);
   align-items: start;
-  padding: var(--ds-space-10, 10px) var(--ds-space-12);
+  padding: var(--ds-space-12) var(--ds-space-12);
   background: var(--ds-color-overlay);
   border-radius: var(--ds-radius-lg);
   box-shadow: var(--ds-shadow-3);

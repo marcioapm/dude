@@ -56,7 +56,7 @@ export function rowActions(projects: readonly NavProject[], ref: NavRef, act: (i
         { id: "new-work-item", label: "New work item", icon: "plus", onSelect: () => act({ kind: "newWorkItem", projectId: project.id, epicId: null }) },
         { id: "new-epic", label: "New epic", icon: "layers", onSelect: () => act({ kind: "newEpic", projectId: project.id }) },
         { kind: "separator" },
-        { id: "settings", label: "Settings", icon: "list-check", onSelect: () => act({ kind: "projectSettings", projectId: project.id }) },
+        { id: "settings", label: "Settings", icon: "settings", onSelect: () => act({ kind: "projectSettings", projectId: project.id }) },
       ];
     case "epic": {
       const index = epics.findIndex((e) => e.id === ref.id);

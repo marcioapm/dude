@@ -200,7 +200,7 @@ function menuItemsFor(row: NavRow, act: (label: string) => void): ReadonlyArray<
   switch (row.ref.kind) {
     case "project":
       return [
-        { id: "settings", label: "Settings", icon: "system", onSelect: on("Settings") },
+        { id: "settings", label: "Settings", icon: "settings", onSelect: on("Settings") },
         { id: "new-epic", label: "New epic", icon: "layers", onSelect: on("New epic") },
         { id: "new", label: "New work item", icon: "plus", onSelect: on("New work item") },
         { kind: "separator" },

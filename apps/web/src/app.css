@@ -111,7 +111,7 @@ body {
 .wiTitleRow {
   display: flex;
   align-items: center;
-  gap: var(--ds-space-10);
+  gap: var(--ds-space-12);
 }
 
 .wiTitle {
@@ -121,7 +121,6 @@ body {
 }
 
 .wiKey {
-  margin-left: auto;
   color: var(--ds-color-text-muted);
   font-size: var(--ds-text-xs);
 }
@@ -186,7 +185,7 @@ body {
 .phaseButton {
   display: flex;
   align-items: center;
-  gap: var(--ds-space-10);
+  gap: var(--ds-space-12);
   width: 100%;
   padding: var(--ds-space-8) var(--ds-space-12);
   background: none;
@@ -229,6 +228,11 @@ body {
   color: var(--ds-color-text-muted);
 }
 
+/* The chevron keeps to the right edge, with or without a commit before it. */
+.phaseOpen:not(.phaseSha + .phaseOpen) {
+  margin-left: auto;
+}
+
 /* The live phase gets the only colour on the list. */
 .phase[data-status="running"] .phaseButton {
   box-shadow: inset 2px 0 0 var(--ds-color-accent);
@@ -247,7 +251,7 @@ body {
 .finding {
   display: flex;
   align-items: flex-start;
-  gap: var(--ds-space-10);
+  gap: var(--ds-space-12);
   padding: var(--ds-space-8) var(--ds-space-12);
   background: var(--ds-color-surface);
   border: 1px solid var(--ds-color-border-subtle);
@@ -315,7 +319,7 @@ body {
   background: var(--ds-tone-danger-bg);
   border: 1px solid var(--ds-tone-danger-border);
   border-radius: var(--ds-radius-md);
-  padding: var(--ds-space-8) var(--ds-space-10);
+  padding: var(--ds-space-8) var(--ds-space-12);
   margin: 0;
 }
 
@@ -323,7 +327,7 @@ body {
 .keyPrompt {
   display: flex;
   flex-direction: column;
-  gap: var(--ds-space-10);
+  gap: var(--ds-space-12);
   max-width: 320px;
   margin: 15vh auto;
   padding: var(--ds-space-20);
