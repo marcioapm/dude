@@ -736,6 +736,32 @@ func TestAnAbortDuringSubmitIsNotUndone(t *testing.T) {
 
 // Pausing is not the agent dying. Found in review: lux's "stopped" could be
 // read before dude recorded why, and the Run was marked failed.
+func TestAResumedAgentNobodySteeredIsToldToCarryOn(t *testing.T) {
+	w := newWorld(t)
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour {
+		return fakelux.Behaviour{Hang: true, Reply: "Done after resume.", Commit: map[string]string{"A.md": "a\n"}}
+	}
+	wi := w.workItem()
+	w.deliver(wi)
+	w.until("the agent to be working", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'running'`, wi) == 1
+	})
+	var runID string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE work_item_id = $1`, wi).Scan(&runID)
+	mustExec(t, w.owner, `UPDATE runs SET control = 'pause_graceful' WHERE id = $1`, runID)
+	w.until("the run to pause", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, runID) == 1
+	})
+	// Resumed with nothing said: a real agent would wait for input forever.
+	mustExec(t, w.owner, `UPDATE runs SET control = 'resume' WHERE id = $1`, runID)
+	w.until("the resumed run to finish its turn", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
+	})
+	if r := w.lux.Runs()[0]; len(r.Inputs) != 1 || !strings.Contains(r.Inputs[0], "Continue the task") {
+		t.Errorf("inputs after resume = %v, want one telling it to carry on", r.Inputs)
+	}
+}
+
 func TestAPauseIsNeverReadAsAFailure(t *testing.T) {
 	w := newWorld(t)
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
