@@ -3,19 +3,16 @@
  * share the grid so text aligns down the page; the human turn gets a
  * hairline frame tinted by intent so interventions are scannable.
  *
- * Vertical rhythm (Discord-style): a new speaker's turn gets a top padding
- * of `--ds-space-chat-pad-y` (density-sensitive: comfortable turns get more
- * air between different speakers); a turn continuing the same author
- * (`.continued`) gets a small, density-independent top padding instead, so
- * consecutive turns from one author stay tightly grouped at every density.
- * The bottom padding is a fixed, small amount shared by both.
+ * Vertical rhythm: a new speaker starts `--ds-space-chat-gap` below the
+ * previous turn (16px comfortable, 10px compact); a turn continuing the same
+ * author (`.continued`) keeps 2px, so one author's turns read as a group.
  */
 
 .root {
   display: grid;
   grid-template-columns: var(--ds-size-avatar-chat) minmax(0, 1fr);
   gap: var(--ds-space-chat-avatar-gap);
-  padding: var(--ds-space-chat-pad-y) var(--ds-space-chat-pad-x) var(--ds-space-4);
+  padding: var(--ds-space-chat-gap) var(--ds-space-chat-pad-x) var(--ds-space-4);
   min-width: 0;
   scroll-margin-top: var(--ds-space-32);
 }

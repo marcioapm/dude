@@ -20,7 +20,6 @@
   --ds-space-main-pad: 24px;
   --ds-space-card-pad: 12px;
   --ds-space-chat-pad-x: 16px;
-  --ds-space-chat-pad-y: 12px;
   --ds-space-chat-gap: 16px;
   --ds-space-chat-avatar-gap: 12px;
   --ds-space-panel-gap: 24px;
@@ -485,10 +484,31 @@
 }
 
 /* ------------------------------------------------------------------ */
-/* Density. comfortable is the default (Discord/Obsidian feel); compact  */
-/* is opt-in and NOT a uniform shrink — only the tokens listed in        */
-/* src/tokens/density.ts differ. Everything else is the block above.    */
+/* Density. Comfortable is the :root default above. Only the tokens in   */
+/* src/tokens/density.ts differ; both values are emitted so a subtree    */
+/* can switch either way.                                               */
 /* ------------------------------------------------------------------ */
+[data-density="comfortable"] {
+  --ds-text-xs: 13px;
+  --ds-text-sm: 14px;
+  --ds-text-md: 15px;
+  --ds-text-prose: 16px;
+  --ds-radius-md: 6px;
+  --ds-size-control-md: 32px;
+  --ds-size-control-lg: 36px;
+  --ds-size-row-default: 32px;
+  --ds-size-row-comfortable: 40px;
+  --ds-size-avatar-chat: 36px;
+  --ds-space-main-pad: 24px;
+  --ds-space-card-pad: 12px;
+  --ds-space-chat-pad-x: 16px;
+  --ds-space-chat-gap: 16px;
+  --ds-space-chat-avatar-gap: 12px;
+  --ds-space-panel-gap: 24px;
+  --ds-measure-message: 70ch;
+  --ds-measure-document: 70ch;
+}
+
 [data-density="compact"] {
   --ds-text-xs: 12px;
   --ds-text-sm: 13px;
@@ -500,13 +520,12 @@
   --ds-size-row-default: 28px;
   --ds-size-row-comfortable: 36px;
   --ds-size-avatar-chat: 28px;
-  --ds-space-main-pad: 20px;
+  --ds-space-main-pad: 16px;
   --ds-space-card-pad: 10px;
-  --ds-space-chat-pad-x: 14px;
-  --ds-space-chat-pad-y: 8px;
+  --ds-space-chat-pad-x: 12px;
   --ds-space-chat-gap: 10px;
-  --ds-space-chat-avatar-gap: 8px;
-  --ds-space-panel-gap: 20px;
+  --ds-space-chat-avatar-gap: 10px;
+  --ds-space-panel-gap: 16px;
   --ds-measure-message: 72ch;
   --ds-measure-document: 72ch;
 }

@@ -31,29 +31,25 @@ export const space = {
 export type SpaceStep = keyof typeof space;
 
 /**
- * Named spacing for layout-specific measurements that do not sit on the 4px
- * grid step scale above. Comfortable values here; the ones marked
- * "density-sensitive" get a compact override in `./density.ts` — the rest
- * are shared.
+ * Named layout spacing that does not sit on the step scale. Comfortable
+ * values; `./density.ts` lists which ones compact overrides.
  */
 export const spaceNamed = {
-  /** Main content pane padding (`apps/web/src/app.css` `.main`). Density-sensitive. */
+  /** Main pane padding (`apps/web` `.main`). */
   mainPad: 24,
-  /** Board card padding and inter-card gap. Density-sensitive. */
+  /** Board card padding and the gap between cards. */
   cardPad: 12,
-  /** Chat turn horizontal padding. Density-sensitive. */
+  /** Chat turn horizontal padding. */
   chatPadX: 16,
-  /** Chat turn vertical padding. Density-sensitive. */
-  chatPadY: 12,
-  /** Gap between two different speakers' turns (Discord-style grouping). Density-sensitive. */
+  /** Space above a turn from a new speaker; same-author turns sit 2px apart. */
   chatGap: 16,
-  /** Gap between a chat avatar and its text column. Density-sensitive. */
+  /** Chat avatar to text column. */
   chatAvatarGap: 12,
-  /** Gap between major panel/section groups (sidebar sections, board lane groups). Density-sensitive. */
+  /** Between major panel sections. */
   panelGap: 24,
-  /** NavTree indent per level. Shared: already tight at every density. */
+  /** NavTree indent per level. */
   treeIndent: 16,
-  /** Gap between consecutive sidebar/nav rows. Shared: already tight. */
+  /** Between consecutive sidebar rows. */
   navRowGap: 2,
 } as const;
 export type SpaceNamedKey = keyof typeof spaceNamed;
