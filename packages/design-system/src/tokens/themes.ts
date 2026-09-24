@@ -11,6 +11,8 @@
 import {
   AGENT_ROLE_NAMES,
   ANSI_COLOR_NAMES,
+  NEUTRAL_CHROMA,
+  NEUTRAL_HUE,
   TONE_NAMES,
   accent,
   ansiColors,
@@ -23,6 +25,7 @@ import {
   type AgentRoleName,
   type ToneName,
 } from "./palette.ts";
+import { oklch, toHex } from "./oklch.ts";
 
 export type ThemeMode = "light" | "dark";
 
@@ -82,22 +85,61 @@ const alpha = (hex: string, a: number): string => {
   return `rgba(${r}, ${g}, ${b}, ${a})`;
 };
 
+/**
+ * The surface/text/border ladders, in OKLCH lightness. Written explicitly
+ * (not indexed into `neutral[]`, which is a coarser 13-step display ramp
+ * for the gallery) so every step lands exactly where the contrast search
+ * below puts it.
+ *
+ * Dark surfaces sit one step up from a near-black baseline — canvas is the
+ * sidebar's shade, surface is the main pane's, raised is a card's, each a
+ * small, even step apart, so the eye reads "layer", not "edge". The text
+ * ladder is soft: primary lands at ~11–12:1 on the surface (Discord's
+ * #dbdee1-on-#313338 territory) rather than the old >=14:1 near-white,
+ * secondary ~7:1, muted ~5:1 (every slot that carries read content still
+ * clears 4.5:1), so the three read as close shades rather than a
+ * bright-white spike over dim grey.
+ */
+const oklchHex = (l: number, c = NEUTRAL_CHROMA) => toHex(oklch(l, c, NEUTRAL_HUE));
+const darkL = {
+  canvas: 0.155, // = neutral[1]; also sunken / fieldBg
+  surface: 0.19,
+  raised: 0.225,
+  overlay: 0.265,
+  borderSubtle: 0.21,
+  border: 0.245,
+  borderStrong: 0.3,
+  textMuted: 0.615,
+  textSecondary: 0.695,
+  textPrimary: 0.855,
+};
+const lightL = {
+  canvas: 0.965, // = neutral[12]; also sunken
+  borderSubtle: 0.91,
+  border: 0.85,
+  borderStrong: 0.72,
+  textDisabled: 0.66,
+  textMuted: 0.555,
+  textSecondary: 0.47,
+  textPrimary: 0.32,
+};
+
 export const themeColors: Record<ThemeMode, ThemeColors> = {
   dark: {
     canvas: neutral[1],
-    surface: neutral[2],
-    raised: neutral[3],
-    overlay: neutral[4],
+    surface: oklchHex(darkL.surface),
+    raised: oklchHex(darkL.raised),
+    overlay: oklchHex(darkL.overlay),
     sunken: neutral[1],
 
-    borderSubtle: neutral[4],
-    border: neutral[5],
-    borderStrong: neutral[6],
+    borderSubtle: oklchHex(darkL.borderSubtle),
+    border: oklchHex(darkL.border),
+    borderStrong: oklchHex(darkL.borderStrong),
 
-    textPrimary: neutral[11],
-    textSecondary: neutral[8],
-    textMuted: neutral[7],
-    textDisabled: neutral[6],
+    textPrimary: oklchHex(darkL.textPrimary, NEUTRAL_CHROMA * 0.6),
+    textSecondary: oklchHex(darkL.textSecondary),
+    textMuted: oklchHex(darkL.textMuted),
+    textDisabled: oklchHex(darkL.borderStrong),
     textInverse: neutral[1],
 
     accent: accent.dark.base,
@@ -112,8 +154,8 @@ export const themeColors: Record<ThemeMode, ThemeColors> = {
     activeWash: alpha(white, 0.09),
 
     fieldBg: neutral[1],
-    secondaryHover: neutral[4],
-    secondaryActive: neutral[2],
+    secondaryHover: oklchHex(darkL.overlay),
+    secondaryActive: oklchHex(darkL.surface),
     scrim: alpha("#000000", 0.55),
 
     shadowColor: alpha("#000000", 0.5),
@@ -128,14 +170,14 @@ export const themeColors: Record<ThemeMode, ThemeColors> = {
     overlay: white,
     sunken: neutral[12],
 
-    borderSubtle: neutral[11],
-    border: neutral[10],
-    borderStrong: neutral[9],
+    borderSubtle: oklchHex(lightL.borderSubtle, NEUTRAL_CHROMA * 0.6),
+    border: oklchHex(lightL.border),
+    borderStrong: oklchHex(lightL.borderStrong),
 
-    textPrimary: neutral[1],
-    textSecondary: neutral[6],
-    textMuted: neutral[7],
-    textDisabled: neutral[8],
+    textPrimary: oklchHex(lightL.textPrimary),
+    textSecondary: oklchHex(lightL.textSecondary),
+    textMuted: oklchHex(lightL.textMuted),
+    textDisabled: oklchHex(lightL.textDisabled),
     textInverse: white,
 
     accent: accent.light.base,
@@ -146,16 +188,16 @@ export const themeColors: Record<ThemeMode, ThemeColors> = {
     onAccent: white,
     focusRing: accent.light.ring,
     selection: alpha(accent.light.base, 0.22),
-    hoverWash: alpha(neutral[1], 0.045),
-    activeWash: alpha(neutral[1], 0.08),
+    hoverWash: alpha(oklchHex(lightL.textPrimary), 0.045),
+    activeWash: alpha(oklchHex(lightL.textPrimary), 0.08),
 
     fieldBg: white,
     secondaryHover: neutral[12],
-    secondaryActive: neutral[11],
-    scrim: alpha(neutral[3], 0.4),
+    secondaryActive: oklchHex(lightL.borderSubtle, NEUTRAL_CHROMA * 0.6),
+    scrim: alpha(oklchHex(lightL.textPrimary), 0.4),
 
-    shadowColor: alpha(neutral[3], 0.12),
-    shadowColorStrong: alpha(neutral[3], 0.22),
+    shadowColor: alpha(oklchHex(lightL.textPrimary), 0.12),
+    shadowColorStrong: alpha(oklchHex(lightL.textPrimary), 0.22),
 
     live: tones.light.success.fg,
   },

@@ -6,11 +6,16 @@
  * a ramp step directly.
  *
  * Design intent
- * - Neutrals are very slightly cool (hue 250, chroma ~0.006). A perfectly
- *   gray dark UI reads muddy; a strongly tinted one reads "branded". The
- *   tint is there to make white text sit calmly, not to be noticed.
- * - Dark surfaces are tiered by lightness, not by shadow. Elevation in dark
- *   mode = lighter surface + hairline border.
+ * - Neutrals are very slightly cool (hue 250, chroma ~0.0035 — about half
+ *   the old chroma) and the text ramp is soft, Discord/Obsidian-style:
+ *   primary text sits around 11–12:1 on its surface rather than 14:1+, so
+ *   primary/secondary/muted read as close, even shades rather than a
+ *   bright-white-on-black spike. Every slot that carries read content still
+ *   clears 4.5:1.
+ * - Dark surfaces are tiered by lightness, not by shadow, and sit one step
+ *   up from the old ramp (less near-black); elevation = lighter surface +
+ *   a hairline close in lightness to the surface it sits on, not a bright
+ *   line.
  * - Five status tones only: neutral, info, attention, success, danger.
  *   Every domain status maps onto one of these plus a glyph.
  */
@@ -19,26 +24,33 @@ import { ALL_AGENT_ROLES, type AgentRole } from "@dude/domain";
 import { oklch, toHex, type Oklch } from "./oklch.ts";
 
 // ---------------------------------------------------------------------------
-// Neutral ramp (0 = darkest, 12 = lightest). Used for both themes.
+// Neutral ramp (0 = darkest, 12 = lightest). A smooth visual ramp for the
+// gallery; `./themes.ts` builds each theme's actual colours from precise
+// OKLCH lightness values of its own (see the comment there for why it does
+// not simply index into this array) and only reaches into this array for
+// the two points that must stay literally identical across the codebase:
+// the dark theme's canvas/sunken/fieldBg (index 1) and the light theme's
+// canvas/sunken (index 12).
 // ---------------------------------------------------------------------------
 
 const NEUTRAL_HUE = 250;
-const NEUTRAL_CHROMA = 0.007;
+const NEUTRAL_CHROMA = 0.0035;
+export { NEUTRAL_HUE, NEUTRAL_CHROMA };
 
 const neutralL = [
-  0.11, // 0 near-black
-  0.145, // 1 app canvas (dark)
-  0.175, // 2 surface (dark)
-  0.21, // 3 raised (dark)
-  0.25, // 4 overlay (dark) / border-subtle
-  0.3, // 5 border
-  0.38, // 6 border-strong / text-disabled(dark)
-  0.5, // 7 text-muted (both)
-  0.62, // 8 text-secondary (dark) / text-muted(light)
-  0.75, // 9
-  0.84, // 10 border (light)
-  0.92, // 11 border-subtle (light) / text (dark)
-  0.965, // 12 canvas (light)
+  0.11, // 0
+  0.155, // 1 app canvas / sunken / field bg (dark)
+  0.19, // 2
+  0.225, // 3
+  0.265, // 4
+  0.32, // 5
+  0.4, // 6
+  0.5, // 7
+  0.615, // 8
+  0.72, // 9
+  0.82, // 10
+  0.9, // 11
+  0.965, // 12 canvas / sunken (light)
 ] as const;
 
 export type NeutralRamp = readonly [
@@ -47,7 +59,7 @@ export type NeutralRamp = readonly [
 ];
 
 export const neutral: NeutralRamp = neutralL.map((l, i) =>
-  toHex(oklch(l, i >= 11 ? NEUTRAL_CHROMA * 0.5 : NEUTRAL_CHROMA, NEUTRAL_HUE)),
+  toHex(oklch(l, i >= 11 ? NEUTRAL_CHROMA * 0.6 : NEUTRAL_CHROMA, NEUTRAL_HUE)),
 ) as unknown as NeutralRamp;
 
 export const white = "#ffffff";
@@ -259,25 +271,28 @@ export const identityColors: Record<"light" | "dark", readonly IdentityColor[]> 
 };
 
 // ---------------------------------------------------------------------------
-// Accent (interactive). Same hue as info so the UI has one "blue".
+// Accent (interactive). Same hue as info so the UI has one "blue". Chroma
+// is slightly down from the original (0.16/0.15 -> 0.13) so it sits calmly
+// against the softened neutrals rather than shouting; focus ring and link
+// contrast stay comfortably above the 3:1 / 4.5:1 floors.
 // ---------------------------------------------------------------------------
 
 export const accent = {
   light: {
-    base: toHex(oklch(0.52, 0.16, 248)),
-    hover: toHex(oklch(0.47, 0.16, 248)),
-    active: toHex(oklch(0.42, 0.16, 248)),
-    subtle: toHex(oklch(0.94, 0.035, 248)),
-    ring: toHex(oklch(0.6, 0.17, 248)),
-    text: toHex(oklch(0.48, 0.16, 248)),
+    base: toHex(oklch(0.52, 0.13, 248)),
+    hover: toHex(oklch(0.47, 0.13, 248)),
+    active: toHex(oklch(0.42, 0.13, 248)),
+    subtle: toHex(oklch(0.94, 0.03, 248)),
+    ring: toHex(oklch(0.6, 0.14, 248)),
+    text: toHex(oklch(0.46, 0.13, 248)),
   },
   dark: {
-    base: toHex(oklch(0.64, 0.15, 248)),
-    hover: toHex(oklch(0.69, 0.15, 248)),
-    active: toHex(oklch(0.59, 0.15, 248)),
-    subtle: toHex(oklch(0.26, 0.05, 248)),
-    ring: toHex(oklch(0.72, 0.15, 248)),
-    text: toHex(oklch(0.76, 0.13, 248)),
+    base: toHex(oklch(0.64, 0.13, 248)),
+    hover: toHex(oklch(0.69, 0.13, 248)),
+    active: toHex(oklch(0.59, 0.13, 248)),
+    subtle: toHex(oklch(0.26, 0.045, 248)),
+    ring: toHex(oklch(0.7, 0.13, 248)),
+    text: toHex(oklch(0.76, 0.11, 248)),
   },
 } as const;
 
