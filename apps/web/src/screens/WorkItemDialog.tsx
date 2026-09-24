@@ -12,17 +12,25 @@
 
 import { useEffect, useState } from "react";
 import { Button, IconButton, Input, Select } from "@dude/design-system/primitives";
-import type { ApiClient, Epic, Repository, WorkItemFields } from "../api/client.ts";
+import type { ApiClient, Epic, Repository, WorkItemDetail, WorkItemFields } from "../api/client.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
 
 const NO_EPIC = "__none__";
+
+export type ExistingWorkItem = { id: string; delivering: boolean } & WorkItemFields;
+
+/** A work item as the dialog edits it; `delivering` fixes what it asks for. */
+export function existingWorkItem(item: WorkItemDetail, delivering: boolean): ExistingWorkItem {
+  const { id, title, goal, acceptanceCriteria, epicId, repositoryId } = item;
+  return { id, delivering, title, goal, acceptanceCriteria, epicId, repositoryId };
+}
 
 export interface WorkItemDialogProps {
   client: ApiClient;
   projectId: string;
   onClose: () => void;
   /** Editing this work item; omitted to create one. */
-  existing?: ({ id: string; delivering: boolean } & WorkItemFields) | undefined;
+  existing?: ExistingWorkItem | undefined;
   /** Prefilled epic when creating from an epic's board. */
   epicId?: string | null | undefined;
   onSaved: (id: string, deliver: boolean) => void;

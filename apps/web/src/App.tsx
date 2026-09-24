@@ -11,7 +11,7 @@
  * here within a moment, and an idle page makes no requests at all.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { boardScope, type NavProject, type NavRow } from "@dude/design-system";
 import { Board, Breadcrumb, Sidebar, type BreadcrumbItem } from "@dude/design-system/components";
 import { Button, EmptyState, RowMenu, Spinner, useToast } from "@dude/design-system/primitives";
@@ -19,12 +19,12 @@ import type { ApiClient } from "./api/client.ts";
 import { useReloadOnEvents } from "./hooks/useEventStream.ts";
 import { errorText } from "./hooks/useSave.tsx";
 import { formatPlace, inTree, parsePlace, treeSelection, type Place } from "./place.ts";
-import { DeleteEpicDialog, EpicDialog, rowActions, type Intent } from "./screens/actions.tsx";
+import { DeleteEpicDialog, EpicDialog, epicRef, rowActions, type Intent } from "./screens/actions.tsx";
 import { NewProjectDialog } from "./screens/NewProjectDialog.tsx";
 import { OrganizationSettingsScreen } from "./screens/OrganizationSettingsScreen.tsx";
 import { ProjectSettingsScreen } from "./screens/ProjectSettingsScreen.tsx";
 import { RunScreen } from "./screens/RunScreen.tsx";
-import { WorkItemDialog } from "./screens/WorkItemDialog.tsx";
+import { existingWorkItem, WorkItemDialog, type ExistingWorkItem } from "./screens/WorkItemDialog.tsx";
 import { WorkItemScreen } from "./screens/WorkItemScreen.tsx";
 
 export interface AppProps {
@@ -42,32 +42,23 @@ type Open =
 
 const GROUP_BY_EPIC = "dude.board.groupByEpic";
 
-/** Where a work item sits: its project, and its epic when it has one. */
-function whereIs(projects: readonly NavProject[], workItemId: string) {
-  for (const project of projects) {
-    const loose = (project.workItems ?? []).find((w) => w.id === workItemId);
-    if (loose) return { project, epic: null, item: loose };
-    for (const epic of project.epics ?? []) {
-      const item = epic.workItems.find((w) => w.id === workItemId);
-      if (item) return { project, epic, item };
-    }
-  }
-  return null;
-}
+const OPENS_A_DIALOG: ReadonlySet<Intent["kind"]> = new Set(["newWorkItem", "editWorkItem", "newEpic", "editEpic", "deleteEpic"]);
 
-/** What an agent is called in a trail: its phase, as the tree names it. */
-function agentLabel(item: ReturnType<typeof workItemOfAgent>, agentId: string): string {
-  const session = item?.runs?.flatMap((r) => r.sessions).find((s) => s.id === agentId);
-  return session?.title ?? "Agent";
-}
-
-/** The work item an agent row belongs to, for the header over its chat. */
-function workItemOfAgent(projects: readonly NavProject[], agentId: string) {
+/**
+ * Where something sits: its project, its epic when it has one, and its work
+ * item — found by the work item's id, or by one of its agents' (Run or
+ * session) ids, in which case `agent` names that agent as the tree does.
+ */
+function locate(projects: readonly NavProject[], id: string) {
   for (const project of projects) {
-    const items = [...(project.workItems ?? []), ...(project.epics ?? []).flatMap((e) => e.workItems)];
-    for (const item of items) {
-      for (const run of item.runs ?? []) {
-        if (run.id === agentId || run.sessions.some((s) => s.id === agentId)) return item;
+    const groups = [{ epic: null, items: project.workItems ?? [] }, ...(project.epics ?? []).map((e) => ({ epic: e, items: e.workItems }))];
+    for (const { epic, items } of groups) {
+      for (const item of items) {
+        if (item.id === id) return { project, epic, item, agent: null };
+        for (const run of item.runs ?? []) {
+          const session = run.sessions.find((s) => s.id === id);
+          if (run.id === id || session) return { project, epic, item, agent: session?.title ?? "Agent" };
+        }
       }
     }
   }
@@ -132,8 +123,7 @@ export function App({ client, onSignOut }: AppProps) {
         case "newWorkItem":
           return setOpen({ kind: "workItem", projectId: intent.projectId, epicId: intent.epicId });
         case "editWorkItem": {
-          const project = projects?.find((p) =>
-            [...(p.workItems ?? []), ...(p.epics ?? []).flatMap((e) => e.workItems)].some((w) => w.id === intent.workItemId));
+          const project = projects && locate(projects, intent.workItemId)?.project;
           return project ? setOpen({ kind: "workItem", projectId: project.id, epicId: null, editing: intent.workItemId }) : undefined;
         }
         case "projectSettings":
@@ -149,7 +139,28 @@ export function App({ client, onSignOut }: AppProps) {
     [client, go, load, projects, toast],
   );
 
-  const menuItems = useCallback((row: NavRow) => (projects ? rowActions(projects, row.ref, act) : null), [projects, act]);
+  // A dialog opened from a row's menu gives focus back to that row when it
+  // closes: the menu item that opened it is gone by then.
+  const returnTo = useRef<string | null>(null);
+  const close = useCallback(() => {
+    setOpen(null);
+    const key = returnTo.current;
+    returnTo.current = null;
+    if (key) requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-nav-key="${CSS.escape(key)}"]`)?.focus());
+  }, []);
+
+  const menuItems = useCallback(
+    (row: NavRow) => {
+      const project = projects?.find((p) => p.id === row.projectId);
+      return project
+        ? rowActions(project, row.ref, (intent) => {
+            if (OPENS_A_DIALOG.has(intent.kind)) returnTo.current = row.key;
+            act(intent);
+          })
+        : null;
+    },
+    [projects, act],
+  );
 
   let main;
   if (!projects) {
@@ -189,16 +200,14 @@ export function App({ client, onSignOut }: AppProps) {
         groupBy={groupByEpic ? "epic" : null}
         laneMenu={(lane) => {
           if (!lane.epic) return null;
-          const items = rowActions(projects, { kind: "epic", id: lane.epic.id }, act);
+          const items = rowActions(project, { kind: "epic", id: lane.epic.id }, act);
           return items ? <RowMenu items={items} label={`Actions for ${lane.title}`} size="sm" /> : null;
         }}
         headerActions={
           <>
             {scope.epic ? (
               <Button size="sm" variant="secondary" leadingIcon="edit" data-testid="edit-epic-button"
-                onClick={() => act({ kind: "editEpic", epic: {
-                  id: scope.epic!.id, projectId: project.id, title: scope.epic!.title, workItemCount: scope.epic!.workItems.length,
-                } })}>
+                onClick={() => act({ kind: "editEpic", epic: epicRef(project.id, scope.epic!) })}>
                 Edit epic
               </Button>
             ) : (
@@ -240,14 +249,14 @@ export function App({ client, onSignOut }: AppProps) {
       />
     );
   } else if (selected && (selected.kind === "session" || selected.kind === "run")) {
-    const item = workItemOfAgent(projects, selected.id);
+    const where = locate(projects, selected.id);
     main = (
       <RunScreen
         key={selected.id}
         client={client}
         runId={selected.id}
-        title={item?.title}
-        breadcrumb={item ? trail(item.id, { id: selected.id, label: agentLabel(item, selected.id) }) : null}
+        title={where?.item.title}
+        breadcrumb={trail(selected.id)}
       />
     );
   } else {
@@ -258,9 +267,10 @@ export function App({ client, onSignOut }: AppProps) {
    * Project › Epic › KEY for a work item, each a way back up — and, on an
    * agent's conversation, the agent last, so the work item is a link too.
    */
-  function trail(workItemId: string, here?: { id: string; label: string }) {
-    const where = projects ? whereIs(projects, workItemId) : null;
+  function trail(id: string) {
+    const where = projects ? locate(projects, id) : null;
     if (!where) return null;
+    const workItemId = where.item.id;
     const items: BreadcrumbItem[] = [
       { id: where.project.id, label: where.project.name, onSelect: () => go(inTree({ kind: "project", id: where.project.id })) },
     ];
@@ -272,13 +282,12 @@ export function App({ client, onSignOut }: AppProps) {
       id: workItemId,
       label: where.item.key ?? where.item.title,
       mono: Boolean(where.item.key),
-      ...(here ? { onSelect: () => go(inTree({ kind: "workItem", id: workItemId })) } : {}),
+      ...(where.agent !== null ? { onSelect: () => go(inTree({ kind: "workItem", id: workItemId })) } : {}),
     });
-    if (here) items.push({ id: here.id, label: here.label });
+    if (where.agent !== null) items.push({ id, label: where.agent });
     return <Breadcrumb items={items} className="screenBreadcrumb" />;
   }
 
-  const close = () => setOpen(null);
   const saved = () => void load();
 
   return (
@@ -316,7 +325,7 @@ export function App({ client, onSignOut }: AppProps) {
         />
       ) : null}
       {open?.kind === "workItem" ? (
-        <WorkItemDialogFor client={client} open={open} onClose={close} onSaved={(id) => {
+        <WorkItemDialogFor key={open.editing ?? "new"} client={client} open={open} onClose={close} onSaved={(id) => {
           saved();
           if (!open.editing) go(inTree({ kind: "workItem", id }));
         }} />
@@ -341,7 +350,8 @@ export function App({ client, onSignOut }: AppProps) {
           onClose={close}
           onDeleted={() => {
             saved();
-            if (selected?.kind === "epic" && selected.id === open.epic.id) go(inTree({ kind: "project", id: open.epic.projectId }));
+            // Replacing it, so Back does not return to an epic that is gone.
+            if (selected?.kind === "epic" && selected.id === open.epic.id) go(inTree({ kind: "project", id: open.epic.projectId }), true);
           }}
         />
       ) : null}
@@ -363,22 +373,26 @@ function WorkItemDialogFor(props: {
   onClose: () => void;
   onSaved: (id: string) => void;
 }) {
-  const { client, open } = props;
-  const [existing, setExisting] = useState<Parameters<typeof WorkItemDialog>[0]["existing"] | null>(null);
+  const { client, open, onClose } = props;
+  const [existing, setExisting] = useState<ExistingWorkItem | null>(null);
+  const { toast } = useToast();
+  // Keyed by what it edits, so a late answer for another work item lands
+  // in an unmounted dialog, not this one.
   useEffect(() => {
     if (!open.editing) return;
-    void client.getWorkItem(open.editing).then((item) =>
-      setExisting({
-        id: item.id,
-        delivering: item.runs.length > 0,
-        title: item.title,
-        goal: item.goal,
-        acceptanceCriteria: item.acceptanceCriteria,
-        epicId: item.epicId,
-        repositoryId: item.repositoryId,
-      }),
+    let current = true;
+    void client.getWorkItem(open.editing).then(
+      (item) => current && setExisting(existingWorkItem(item, item.runs.length > 0)),
+      (err: unknown) => {
+        if (!current) return;
+        toast({ title: errorText(err), tone: "danger" });
+        onClose();
+      },
     );
-  }, [client, open.editing]);
+    return () => {
+      current = false;
+    };
+  }, [client, open.editing, toast, onClose]);
   if (open.editing && !existing) return null;
   return (
     <WorkItemDialog
@@ -387,7 +401,7 @@ function WorkItemDialogFor(props: {
       epicId={open.epicId}
       existing={existing ?? undefined}
       onClose={props.onClose}
-      onSaved={(id) => props.onSaved(id)}
+      onSaved={props.onSaved}
     />
   );
 }

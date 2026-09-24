@@ -206,7 +206,6 @@ def test_epics_are_made_ordered_and_removed_from_the_sidebar_and_board(
     item = client.create_work_item(forge_project["id"], "Loose work")
     _sign_in(page, web_url, org["api_key"])
 
-    # Two epics, from the board.
     # Two epics, from the board. A new one opens, which reveals it in the tree.
     for title in ("Onboarding", "Billing"):
         page.get_by_role("treeitem", name="Greeter").click()
@@ -238,9 +237,22 @@ def test_epics_are_made_ordered_and_removed_from_the_sidebar_and_board(
     # The project's board, grouped by epic, shows them in that order.
     page.get_by_role("treeitem", name="Greeter").click()
     page.get_by_test_id("group-by-epic").click()
-    lanes = page.locator("[data-lane]")
-    if lanes.count():
-        expect(lanes.first).to_contain_text("Billing")
+    expect(page.locator("[data-lane]").first).to_contain_text("Billing")
+
+    # Editing the title keeps the description the tree never showed; the
+    # dialog hands focus back to the row it was opened from.
+    client.patch(f"/v1/epics/{billing['id']}", {"description": "Invoices and refunds"})
+    billing_row.focus()
+    page.keyboard.press("Shift+F10")
+    page.get_by_role("menuitem", name="Edit epic").click()
+    expect(page.get_by_label("Description")).to_have_value("Invoices and refunds")
+    page.get_by_test_id("epic-title").fill("Billing and refunds")
+    page.get_by_test_id("epic-save").click()
+    expect(page.get_by_role("dialog")).to_have_count(0)
+    billing_row = page.get_by_role("treeitem", name="Billing and refunds")
+    expect(billing_row).to_be_focused()
+    saved = next(e for e in client.get(f"/v1/projects/{forge_project['id']}/epics").json()["epics"] if e["id"] == billing["id"])
+    assert saved["description"] == "Invoices and refunds"
 
     # Deleting Billing keeps its work.
     billing_row.focus()
@@ -249,8 +261,8 @@ def test_epics_are_made_ordered_and_removed_from_the_sidebar_and_board(
     expect(page.get_by_role("dialog")).to_contain_text("1 work item will stay in the project")
     page.get_by_test_id("epic-delete").click()
     expect(page.get_by_role("dialog")).to_have_count(0)
-    expect(page.get_by_text("Billing deleted")).to_be_visible()
-    expect(page.get_by_role("treeitem", name="Billing")).to_have_count(0)
+    expect(page.get_by_text("Billing and refunds deleted")).to_be_visible()
+    expect(page.get_by_role("treeitem", name="Billing and refunds")).to_have_count(0)
     assert [e["title"] for e in client.get(f"/v1/projects/{forge_project['id']}/epics").json()["epics"]] == ["Onboarding"]
     assert client.get(f"/v1/work-items/{item['id']}").json()["epicId"] is None
     assert console_errors == []

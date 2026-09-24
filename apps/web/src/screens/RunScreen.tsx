@@ -276,7 +276,6 @@ export function RunScreen({ client, runId, title, breadcrumb }: RunScreenProps) 
 
       {problem ? <p className="problem">{problem}</p> : null}
       {streamStatus === "reconnecting" ? <p className="muted">Reconnecting…</p> : null}
-
     </div>
   );
 }
