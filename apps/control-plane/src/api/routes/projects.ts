@@ -11,12 +11,13 @@ import { withOrg } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { conflict, json, notFound, parseBody } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
+import { repositoryFields } from "./structure.ts";
 
 const slugPattern = /^[a-z0-9][a-z0-9-]*$/;
 
 const repositoryInput = z.object({
-  name: z.string().min(1).max(100),
-  url: z.string().min(1),
+  name: repositoryFields.name,
+  url: repositoryFields.url,
   defaultBranch: z.string().min(1).default("main"),
   trust: z.enum(["trusted_internal", "untrusted_external"]).default("trusted_internal"),
 });

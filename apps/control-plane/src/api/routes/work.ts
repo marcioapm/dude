@@ -16,7 +16,7 @@ import { orchestrator } from "../../orchestrator/client.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 const WORK_ITEM_SELECT = `
-  id, organization_id AS "organizationId", project_id AS "projectId", epic_id AS "epicId",
+  id, organization_id AS "organizationId", project_id AS "projectId", epic_id AS "epicId", repository_id AS "repositoryId",
   title, goal, acceptance_criteria AS "acceptanceCriteria", status,
   requested_by AS "requestedBy", created_at AS "createdAt", updated_at AS "updatedAt"`;
 
@@ -42,6 +42,8 @@ const SESSION_SELECT = `
 const createWorkItemInput = z.object({
   projectId: z.string().min(1),
   epicId: z.string().min(1).nullable().default(null),
+  /** The repository it changes; the project's only one when omitted. */
+  repositoryId: z.string().min(1).nullable().default(null),
   title: z.string().min(1).max(500),
   goal: z.string().max(10_000).default(""),
   acceptanceCriteria: z.array(z.string().max(2000)).default([]),
@@ -56,12 +58,16 @@ async function createWorkItem(ctx: RequestContext): Promise<Response> {
     // project does not exist *for them* — which is the correct 404 either way.
     const project = await scope.sql`SELECT id FROM projects WHERE id = ${input.projectId} LIMIT 1`;
     if (project.length === 0) return { missingProject: true as const };
+    if (input.repositoryId) {
+      const repo = await scope.sql`SELECT 1 FROM repositories WHERE id = ${input.repositoryId} AND project_id = ${input.projectId}`;
+      if (repo.length === 0) return { missingRepository: true as const };
+    }
 
     const workItemId = newId("workItem");
     const rows = (await scope.sql`
-      INSERT INTO work_items (id, organization_id, project_id, epic_id, title, goal,
+      INSERT INTO work_items (id, organization_id, project_id, epic_id, repository_id, title, goal,
                               acceptance_criteria, status)
-      VALUES (${workItemId}, ${organizationId}, ${input.projectId}, ${input.epicId},
+      VALUES (${workItemId}, ${organizationId}, ${input.projectId}, ${input.epicId}, ${input.repositoryId},
               ${input.title}, ${input.goal},
               ${input.acceptanceCriteria ?? []}::jsonb, 'received')
       RETURNING ${scope.sql.unsafe(WORK_ITEM_SELECT)}`) as Array<Record<string, unknown>>;
@@ -81,6 +87,7 @@ async function createWorkItem(ctx: RequestContext): Promise<Response> {
   });
 
   if ("missingProject" in result) throw notFound(`project ${input.projectId} not found`);
+  if ("missingRepository" in result) throw notFound(`repository ${input.repositoryId} is not in this project`);
   return json(result.workItem, 201);
 }
 

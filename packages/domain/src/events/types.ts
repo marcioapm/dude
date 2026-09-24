@@ -9,9 +9,17 @@
 export const EventTypes = {
   // Project lifecycle
   ProjectCreated: "project.created",
+  ProjectUpdated: "project.updated",
+  RepositoryAdded: "repository.added",
+  RepositoryUpdated: "repository.updated",
+  RepositoryRemoved: "repository.removed",
+  EpicCreated: "epic.created",
+  EpicUpdated: "epic.updated",
+  EpicDeleted: "epic.deleted",
 
   // Work item lifecycle
   WorkItemCreated: "work_item.created",
+  WorkItemUpdated: "work_item.updated",
   WorkItemConfirmed: "work_item.confirmed",
   WorkItemPaused: "work_item.paused",
   WorkItemResumed: "work_item.resumed",

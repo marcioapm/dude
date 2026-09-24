@@ -105,7 +105,7 @@ async function getNavigation(ctx: RequestContext): Promise<Response> {
 
     const epics = (await sql`
       SELECT id, project_id AS "projectId", title FROM epics
-      ORDER BY created_at`) as EpicRow[];
+      ORDER BY position, created_at`) as EpicRow[];
 
     // `statusSince` is when the work item last changed status, read from the
     // ledger: the board shows time in column, and updated_at moves for
