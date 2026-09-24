@@ -19,6 +19,7 @@ import { DEFAULT_RUN_ROLE, runLabel } from "@dude/domain";
 import type { ApiClient, Finding, PullRequest, Run, WorkItemDetail } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
 import { useReloadOnEvents } from "../hooks/useEventStream.ts";
+import { WorkItemDialog } from "./WorkItemDialog.tsx";
 
 export interface WorkItemScreenProps {
   client: ApiClient;
@@ -32,6 +33,7 @@ export function WorkItemScreen({ client, workItemId, onOpenRun }: WorkItemScreen
   const [pullRequests, setPullRequests] = useState<PullRequest[]>([]);
   const [problem, setProblem] = useState<string | null>(null);
   const [delivering, setDelivering] = useState(false);
+  const [editing, setEditing] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -112,6 +114,9 @@ export function WorkItemScreen({ client, workItemId, onOpenRun }: WorkItemScreen
               {delivering ? "Starting…" : "Deliver"}
             </Button>
           ) : null}
+          <Button variant="secondary" leadingIcon="edit" onClick={() => setEditing(true)} data-testid="edit-work-item">
+            {started ? "Move" : "Edit"}
+          </Button>
           {pr ? (
             <a className="wiPrLink" href={pr.url} target="_blank" rel="noreferrer" data-testid="pr-link">
               Pull request #{pr.number} ↗
@@ -119,6 +124,22 @@ export function WorkItemScreen({ client, workItemId, onOpenRun }: WorkItemScreen
           ) : null}
         </div>
         {problem ? <p className="problem">{problem}</p> : null}
+        <WorkItemDialog
+          client={client}
+          projectId={item.projectId}
+          open={editing}
+          onOpenChange={setEditing}
+          existing={{
+            id: item.id,
+            delivering: started,
+            title: item.title,
+            goal: item.goal,
+            acceptanceCriteria: item.acceptanceCriteria,
+            epicId: item.epicId,
+            repositoryId: item.repositoryId,
+          }}
+          onSaved={() => void load()}
+        />
       </header>
 
       <section className="wiSection" aria-labelledby="pipeline-heading">

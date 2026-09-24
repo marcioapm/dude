@@ -13,11 +13,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { boardScope, type NavProject, type NavRef } from "@dude/design-system";
 import { Board, Sidebar } from "@dude/design-system/components";
-import { Button, EmptyState, Input, Spinner } from "@dude/design-system/primitives";
+import { Button, EmptyState, Spinner } from "@dude/design-system/primitives";
 import type { ApiClient } from "./api/client.ts";
 import { useReloadOnEvents } from "./hooks/useEventStream.ts";
 import { RunScreen } from "./screens/RunScreen.tsx";
 import { WorkItemScreen } from "./screens/WorkItemScreen.tsx";
+import { WorkItemDialog } from "./screens/WorkItemDialog.tsx";
 
 export interface AppProps {
   client: ApiClient;
@@ -105,6 +106,7 @@ export function App({ client, onSignOut }: AppProps) {
           <NewWorkItemButton
             client={client}
             projectId={scope.project.id}
+            epicId={scope.epic?.id ?? null}
             onCreated={(id) => {
               void load();
               setSelected({ kind: "workItem", id });
@@ -159,69 +161,27 @@ export function App({ client, onSignOut }: AppProps) {
   );
 }
 
-/**
- * Create a work item from the board.
- *
- * Deliberately minimal — a title and a goal — because the delivery view is
- * where the work item is then looked at and delivered. A richer intake flow
- * (clarification, acceptance criteria) is its own piece of work.
- */
-function NewWorkItemButton(props: { client: ApiClient; projectId: string; onCreated: (id: string) => void }) {
+/** Create a work item from the board, in the board's epic when it has one. */
+function NewWorkItemButton(props: {
+  client: ApiClient;
+  projectId: string;
+  epicId: string | null;
+  onCreated: (id: string) => void;
+}) {
   const [open, setOpen] = useState(false);
-  const [title, setTitle] = useState("");
-  const [goal, setGoal] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  if (!open) {
-    return (
+  return (
+    <>
       <Button size="sm" variant="primary" leadingIcon="plus" onClick={() => setOpen(true)} data-testid="new-work-item">
         New work item
       </Button>
-    );
-  }
-
-  return (
-    <form
-      className="newWorkItem"
-      onSubmit={async (e) => {
-        e.preventDefault();
-        if (!title.trim()) return;
-        setBusy(true);
-        try {
-          const item = await props.client.createWorkItem({
-            projectId: props.projectId,
-            title: title.trim(),
-            goal: goal.trim(),
-          });
-          setOpen(false);
-          setTitle("");
-          setGoal("");
-          props.onCreated(item.id);
-        } finally {
-          setBusy(false);
-        }
-      }}
-    >
-      <Input
-        autoFocus
-        size="sm"
-        placeholder="What should change?"
-        value={title}
-        onChange={(e) => setTitle(e.target.value)}
-        data-testid="new-work-item-title"
+      <WorkItemDialog
+        client={props.client}
+        projectId={props.projectId}
+        epicId={props.epicId}
+        open={open}
+        onOpenChange={setOpen}
+        onSaved={(id) => props.onCreated(id)}
       />
-      <Input
-        size="sm"
-        placeholder="Why, or any detail (optional)"
-        value={goal}
-        onChange={(e) => setGoal(e.target.value)}
-      />
-      <Button size="sm" type="submit" variant="primary" disabled={busy || !title.trim()} data-testid="new-work-item-create">
-        Create
-      </Button>
-      <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>
-        Cancel
-      </Button>
-    </form>
+    </>
   );
 }

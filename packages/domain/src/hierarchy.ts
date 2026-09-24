@@ -82,6 +82,7 @@ export type OrgRole = z.infer<typeof orgRoleSchema>;
 
 export const repositorySchema = z.object({
   id: z.string(),
+  projectId: z.string().optional(),
   /** Stable internal name used in workspace paths. */
   name: z.string().min(1),
   /** Clone URL; may be a local path for the local provisioner. */
@@ -141,6 +142,8 @@ export const epicSchema = z.object({
   projectId: z.string(),
   title: z.string().min(1),
   description: z.string().default(""),
+  /** Its place among the project's epics, 0 first: a statement of priority. */
+  position: z.number().int().default(0),
   createdAt: z.string().datetime({ offset: true }),
 });
 export type Epic = z.infer<typeof epicSchema>;
@@ -176,6 +179,8 @@ export const workItemSchema = z.object({
   organizationId: z.string(),
   projectId: z.string(),
   epicId: z.string().nullable().default(null),
+  /** The repository it changes; null means the project's only one. */
+  repositoryId: z.string().nullable().default(null),
   title: z.string().min(1),
   goal: z.string().default(""),
   acceptanceCriteria: z.array(z.string()).default([]),

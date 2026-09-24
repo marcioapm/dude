@@ -59,11 +59,11 @@ def test_delivering_from_the_ui_reaches_a_pull_request_and_back(
 
     # Create the work item from the board, as an operator would.
     page.get_by_test_id("new-work-item").click()
-    page.get_by_test_id("new-work-item-title").fill("Greet people by their full name")
-    page.get_by_test_id("new-work-item-create").click()
+    page.get_by_test_id("work-item-title").fill("Greet people by their full name")
+    page.get_by_test_id("work-item-goal").fill("Use the full name, not just the first.")
+    page.get_by_label("Criterion 1").fill("Greets with the full name")
+    page.get_by_test_id("work-item-create-deliver").click()
     expect(page.get_by_test_id("work-item-screen")).to_be_visible()
-
-    page.get_by_test_id("deliver").click()
 
     pipeline = page.get_by_test_id("pipeline")
     expect(pipeline).to_contain_text("Implement", timeout=60_000)
@@ -95,4 +95,27 @@ def test_delivering_from_the_ui_reaches_a_pull_request_and_back(
     fake_github.merge(pr_number)
     expect(page.locator(".wiHeader")).to_contain_text("Done", timeout=90_000)
 
+    assert console_errors == []
+
+
+def test_a_work_item_is_edited_and_moved_from_its_screen(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    epic = client.post(f"/v1/projects/{forge_project['id']}/epics", {"title": "Greetings"}).json()
+    item = client.create_work_item(forge_project["id"], "Draft title")
+    _sign_in(page, web_url, org["api_key"])
+    page.get_by_text("Draft title").first.click()
+    expect(page.get_by_test_id("work-item-screen")).to_be_visible()
+
+    page.get_by_test_id("edit-work-item").click()
+    page.get_by_test_id("work-item-title").fill("Greet by full name")
+    page.get_by_label("Criterion 1").fill("Uses the full name")
+    page.get_by_role("combobox", name="Epic").click()
+    page.get_by_role("listbox").get_by_text("Greetings").click()
+    page.get_by_test_id("work-item-save").click()
+
+    expect(page.locator(".wiTitle")).to_have_text("Greet by full name")
+    expect(page.locator(".wiCriteria")).to_contain_text("Uses the full name")
+    saved = client.get(f"/v1/work-items/{item['id']}").json()
+    assert saved["epicId"] == epic["id"]
     assert console_errors == []
