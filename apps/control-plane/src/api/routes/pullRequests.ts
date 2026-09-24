@@ -65,6 +65,46 @@ const credentialInput = z.object({
  * says what was configured, not with what — except the webhook URL, which is
  * not a secret and is what an operator needs to register a hook by hand.
  */
+/**
+ * The organization's GitHub connection, as settings show it: how it
+ * authenticates and where, never the secret — the last four characters
+ * only, so a person can tell which token it is.
+ */
+async function getCredential(ctx: RequestContext): Promise<Response> {
+  const { organizationId } = ctx.principal;
+  const rows = (await withOrg(organizationId, (scope) => scope.sql`
+    SELECT forge, auth, right(secret, 4) AS "secretHint", app_id AS "appId", installation_id AS "installationId",
+           api_base_url AS "apiBaseUrl", updated_at AS "updatedAt"
+    FROM forge_credentials WHERE forge = 'github'`)) as Array<Record<string, unknown>>;
+  if (!rows[0]) return json({ connected: false });
+  return json({ connected: true, ...rows[0], webhookPath: `/v1/webhooks/github/${organizationId}` });
+}
+
+/**
+ * Ask GitHub who the stored token is, so a person can see the connection
+ * works before an agent finds out it does not. Says who, and what it may do.
+ */
+async function verifyCredential(ctx: RequestContext): Promise<Response> {
+  const rows = (await withOrg(ctx.principal.organizationId, (scope) => scope.sql`
+    SELECT auth, secret, COALESCE(api_base_url, 'https://api.github.com') AS "apiBaseUrl"
+    FROM forge_credentials WHERE forge = 'github'`)) as Array<{ auth: string; secret: string; apiBaseUrl: string }>;
+  const cred = rows[0];
+  if (!cred) return json({ ok: false, reason: "not connected" });
+  if (cred.auth !== "pat") return json({ ok: false, reason: "only token connections can be verified yet" });
+  let res: Response;
+  try {
+    res = await fetch(`${cred.apiBaseUrl.replace(/\/+$/, "")}/user`, {
+      headers: { authorization: `Bearer ${cred.secret}`, accept: "application/vnd.github+json" },
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch (err) {
+    return json({ ok: false, reason: `GitHub did not answer: ${String(err)}` });
+  }
+  if (!res.ok) return json({ ok: false, reason: res.status === 401 ? "GitHub rejected the token" : `GitHub answered ${res.status}` });
+  const user = (await res.json()) as { login?: string };
+  return json({ ok: true, login: user.login ?? null, scopes: res.headers.get("x-oauth-scopes") });
+}
+
 async function putCredential(ctx: RequestContext): Promise<Response> {
   const input = await parseBody(ctx.request, credentialInput);
   const { organizationId } = ctx.principal;
@@ -168,6 +208,8 @@ async function receiveWebhook(ctx: PublicContext): Promise<Response> {
 
 export function registerPullRequestRoutes(router: Router): void {
   router.post("/v1/forge/credential", putCredential);
+  router.get("/v1/forge/credential", getCredential);
+  router.post("/v1/forge/credential/verify", verifyCredential);
   router.get("/v1/pull-requests", listPullRequests);
   router.publicRoute("POST", "/v1/webhooks/github/:org", receiveWebhook);
 }

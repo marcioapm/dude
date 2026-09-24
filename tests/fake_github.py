@@ -304,6 +304,11 @@ class FakeGitHub:
                     return [c for c in items if not since or c["created_at"] >= since]
 
                 prefix = f"/repos/{github.owner}/{github.repo}"
+                if path == "/user":
+                    # Who the token is. The fixture accepts only its own token.
+                    if self.headers.get("authorization") != "Bearer fake-token":
+                        return self._send(401, {"message": "Bad credentials"})
+                    return self._send(200, {"login": "dude-bot"})
                 if path == f"{prefix}/hooks":
                     return self._send(200, github.hooks)
                 if m := re.fullmatch(rf"{prefix}/compare/([^.]+)\.\.\.(.+)", path):
