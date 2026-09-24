@@ -45,6 +45,9 @@ type Behaviour struct {
 	Hang bool
 	// Exit instead of going idle, as a crashed agent does.
 	Crash bool
+	// End the first turn on this reply — a question for a person — and do
+	// the rest (Reply, Commit) in the turn the answer starts.
+	Ask string
 }
 
 type Run struct {
@@ -148,7 +151,8 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 		files[path] = line + "\n"
 	}
 	// Every phase plans and looks around first, as an agent does.
-	return Behaviour{Reply: step.Reply, Commit: files, Message: step.Message, Hang: step.Hang, Tools: []string{"todowrite", "read"}}
+	return Behaviour{Reply: step.Reply, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask,
+		Tools: []string{"todowrite", "read"}}
 }
 
 // Runs returns every Run submitted, in order.
@@ -160,6 +164,15 @@ func (s *Server) Runs() []*Run {
 		out = append(out, s.runs[fmt.Sprintf("lrun_%d", i)])
 	}
 	return out
+}
+
+// Crash ends a Run's agent as a dead container would.
+func (s *Server) Crash(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		s.setState(run, "failed")
+	}
 }
 
 // Forget drops every Run, as a lux that lost its data would.
@@ -286,7 +299,11 @@ func (s *Server) turn(run *Run) {
 		s.setState(run, "failed")
 		return
 	}
-	for _, chunk := range chunks(b.Reply, 7) {
+	reply := b.Reply
+	if b.Ask != "" && len(run.Inputs) == 0 {
+		reply = b.Ask
+	}
+	for _, chunk := range chunks(reply, 7) {
 		s.agent(run, map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": chunk}})
 	}
 	s.agent(run, map[string]any{"sessionUpdate": "usage_update", "cost": map[string]any{"amount": 0.01, "currency": "USD"}, "used": 1000, "size": 200000})

@@ -8,11 +8,13 @@ package orchestrator_test
 // what lux reports. lux's own behaviour is its own tests' concern.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -23,6 +25,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/api"
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
@@ -57,6 +60,8 @@ type world struct {
 	runtime *workflow.Runtime
 	syncer  *phases.Syncer
 	prs     *prs.Syncer
+	// The orchestrator's internal API, as the backend calls it.
+	api string
 }
 
 func newWorld(t *testing.T) *world {
@@ -109,8 +114,29 @@ func newWorld(t *testing.T) *world {
 		Signal: func(ctx context.Context, org, wf, name string, payload any, key string) error {
 			return w.runtime.Signal(ctx, org, wf, name, payload, key)
 		}}
+	apiSrv := httptest.NewServer((&api.Server{DB: app, Workflow: w.runtime, Token: "svc", Log: quiet, Kick: func() {}}).Handler())
+	t.Cleanup(apiSrv.Close)
+	w.api = apiSrv.URL
 	_ = ctx
 	return w
+}
+
+// call posts to the orchestrator's internal API as the backend would.
+func (w *world) call(path string, body any) (int, map[string]any) {
+	w.t.Helper()
+	b, _ := json.Marshal(body)
+	req, _ := http.NewRequest("POST", w.api+path, bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer svc")
+	req.Header.Set("X-Dude-Organization", w.org)
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var out map[string]any
+	_ = json.NewDecoder(res.Body).Decode(&out)
+	return res.StatusCode, out
 }
 
 func mustExec(t *testing.T, c *pgx.Conn, sql string, args ...any) {
@@ -464,6 +490,93 @@ func TestTheChatShowsThinkingToolOutputTokensAndThePrompt(t *testing.T) {
 	// Each message carries the context size at that point.
 	if p := payload("agent.message"); p["contextTokens"] != float64(1000) {
 		t.Errorf("message = %v", p)
+	}
+}
+
+func TestAnAgentThatAsksWaitsForTheAnswerAndCarriesOn(t *testing.T) {
+	w := newWorld(t)
+	question := "I need a decision.\n\n```question\nShould the table be sorted?\n- yes\n- no\n```\n"
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
+			return fakelux.Behaviour{Hang: true}
+		}
+		return fakelux.Behaviour{Ask: question, Reply: "Sorted it, as asked.",
+			Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
+	}
+	wi := w.workItem()
+	w.deliver(wi)
+	w.until("the question to reach a person", func() bool { return w.workItemStatus(wi) == "awaiting_input" })
+
+	var qid, prompt string
+	var options []string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id, prompt, ARRAY(SELECT jsonb_array_elements_text(options))
+		FROM questions WHERE work_item_id = $1`, wi).Scan(&qid, &prompt, &options)
+	if prompt != "Should the table be sorted?" || len(options) != 2 {
+		t.Fatalf("question = %q %v", prompt, options)
+	}
+	// Waiting is not finishing: the phase must not complete, or be pushed,
+	// with its task unanswered.
+	if n := w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'running'`, wi); n != 1 {
+		t.Fatalf("the asking run is not still running")
+	}
+	if len(w.lux.Runs()) != 1 || w.lux.Runs()[0].Pushed != "" {
+		t.Fatalf("the run was pushed before its question was answered")
+	}
+
+	if status, body := w.call("/internal/questions/"+qid+"/answer", map[string]any{"text": "yes"}); status != 200 {
+		t.Fatalf("answer: %d %v", status, body)
+	}
+	w.until("the implementer to finish", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND phase = 'implement' AND status = 'completed'`, wi) == 1
+	})
+	if in := w.lux.Runs()[0].Inputs; len(in) != 1 || !strings.Contains(in[0], "Should the table be sorted?") || !strings.HasSuffix(in[0], "yes") {
+		t.Errorf("the agent was given %v, want the answer quoting its question", in)
+	}
+	if status, _ := w.call("/internal/questions/"+qid+"/answer", map[string]any{"text": "no"}); status != 409 {
+		t.Errorf("a second answer was accepted: %d", status)
+	}
+	for _, typ := range []string{"question.asked", "question.answered"} {
+		if n := w.count(`SELECT count(*) FROM events WHERE work_item_id = $1 AND event_type = $2`, wi, typ); n != 1 {
+			t.Errorf("%s: %d events", typ, n)
+		}
+	}
+}
+
+// asking starts a delivery whose implementer stops on a question.
+func (w *world) asking() (wi, runID string) {
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
+			return fakelux.Behaviour{Hang: true}
+		}
+		return fakelux.Behaviour{Ask: fakeagent.Question, Reply: "Done.", Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
+	}
+	wi = w.workItem()
+	w.deliver(wi)
+	w.until("the question to reach a person", func() bool { return w.workItemStatus(wi) == "awaiting_input" })
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE work_item_id = $1`, wi).Scan(&runID)
+	return wi, runID
+}
+
+func TestAbortingARunThatAskedCancelsItsQuestion(t *testing.T) {
+	w := newWorld(t)
+	wi, runID := w.asking()
+	if status, body := w.call("/internal/runs/"+runID+"/abort", map[string]any{}); status != 200 {
+		t.Fatalf("abort: %d %v", status, body)
+	}
+	if n := w.count(`SELECT count(*) FROM questions WHERE work_item_id = $1 AND status = 'open'`, wi); n != 0 {
+		t.Errorf("an aborted Run's question is still waiting for a person")
+	}
+}
+
+func TestAnAgentThatDiesWhileWaitingFailsItsRun(t *testing.T) {
+	w := newWorld(t)
+	wi, _ := w.asking()
+	w.lux.Crash(w.lux.Runs()[0].ID)
+	w.until("the run to fail", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'failed'`, wi) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM questions WHERE work_item_id = $1 AND status = 'open'`, wi); n != 0 {
+		t.Errorf("a failed Run's question is still waiting for a person")
 	}
 }
 

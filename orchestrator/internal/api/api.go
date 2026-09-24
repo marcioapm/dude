@@ -52,6 +52,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /internal/runs/{id}/pause", s.auth(s.pause))
 	mux.Handle("POST /internal/runs/{id}/resume", s.auth(s.resume))
 	mux.Handle("POST /internal/runs/{id}/abort", s.auth(s.abort))
+	mux.Handle("POST /internal/questions/{id}/answer", s.auth(s.answer))
 	mux.Handle("POST /internal/kick", s.auth(func(w http.ResponseWriter, r *http.Request, _ string) error {
 		s.kick()
 		write(w, http.StatusAccepted, map[string]bool{"ok": true})
@@ -215,6 +216,18 @@ func loadRun(ctx context.Context, tx pgx.Tx, runID string) (runInfo, error) {
 
 func isLive(status string) bool { return slices.Contains(liveStatuses, status) }
 
+// insertDirective queues text for a Run's agent, delivered by the syncer
+// and acknowledged by lux when the agent takes it.
+func insertDirective(ctx context.Context, tx pgx.Tx, org, runID string, ri runInfo, text, scope, supersedes string,
+	interrupt bool) (string, any, error) {
+	id := ids.New(ids.Directive)
+	var createdAt any
+	err := tx.QueryRow(ctx, `INSERT INTO directives (id, organization_id, work_item_id, run_id, text, scope, supersedes, interrupt)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING created_at`,
+		id, org, ri.WorkItemID, runID, text, scope, db.Nullable(supersedes), interrupt).Scan(&createdAt)
+	return id, createdAt, err
+}
+
 func humanEvent(ctx context.Context, tx pgx.Tx, org, runID string, ri runInfo, typ, actor string, payload map[string]any) error {
 	_, err := ledger.Append(ctx, tx, ledger.Event{
 		Type: typ, OrganizationID: org, ProjectID: ri.ProjectID, WorkItemID: ri.WorkItemID, RunID: runID,
@@ -255,11 +268,8 @@ func (s *Server) steer(w http.ResponseWriter, r *http.Request, org string) error
 		if !isLive(ri.Status) {
 			return fail(http.StatusConflict, "conflict", "run %s is %s and can no longer be steered", runID, ri.Status)
 		}
-		id := ids.New(ids.Directive)
-		var createdAt any
-		if err := tx.QueryRow(r.Context(), `INSERT INTO directives (id, organization_id, work_item_id, run_id, text, scope, supersedes, interrupt)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING created_at`,
-			id, org, ri.WorkItemID, runID, body.Text, body.Scope, db.Nullable(body.Supersedes), body.Interrupt).Scan(&createdAt); err != nil {
+		id, createdAt, err := insertDirective(r.Context(), tx, org, runID, ri, body.Text, body.Scope, body.Supersedes, body.Interrupt)
+		if err != nil {
 			return err
 		}
 		out = map[string]any{"id": id, "runId": runID, "workItemId": ri.WorkItemID, "text": body.Text,
@@ -353,6 +363,69 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request, org string) erro
 // abort stops a Run and its work item at once. The lux Run is cancelled by
 // the syncer; its events and workspace are kept — abort stops work, it does
 // not erase it.
+// answer gives an agent the answer to the question it stopped on. The
+// answer is delivered the way a steer is — a directive, acknowledged by lux
+// when the agent takes it — so it starts the agent's next turn.
+func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) error {
+	questionID := r.PathValue("id")
+	var body struct {
+		Text string `json:"text"`
+	}
+	if err := read(r, &body); err != nil {
+		return err
+	}
+	if strings.TrimSpace(body.Text) == "" {
+		return fail(http.StatusBadRequest, "bad_request", "text is required")
+	}
+	var out map[string]any
+	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+		var runID, status, prompt string
+		if err := tx.QueryRow(r.Context(), `SELECT run_id, status::text, prompt FROM questions WHERE id = $1 FOR UPDATE`,
+			questionID).Scan(&runID, &status, &prompt); err != nil {
+			if db.IsNotFound(err) {
+				return fail(http.StatusNotFound, "not_found", "question %s not found", questionID)
+			}
+			return err
+		}
+		if status != "open" {
+			return fail(http.StatusConflict, "conflict", "question %s is already %s", questionID, status)
+		}
+		ri, err := loadRun(r.Context(), tx, runID)
+		if err != nil {
+			return err
+		}
+		if !isLive(ri.Status) {
+			return fail(http.StatusConflict, "conflict", "run %s is %s and can no longer be answered", runID, ri.Status)
+		}
+		var answeredAt any
+		if err := tx.QueryRow(r.Context(), `UPDATE questions SET status = 'answered', answer = $2, answered_at = now(),
+			answered_by = (SELECT id FROM users WHERE id = $3) WHERE id = $1 RETURNING answered_at`,
+			questionID, body.Text, actor(r)).Scan(&answeredAt); err != nil {
+			return err
+		}
+		// Delivered as a steer is — queued until the agent takes it, which
+		// starts its next turn — and quoting the question it settles.
+		text := fmt.Sprintf("Answer to your question %q:\n\n%s", prompt, body.Text)
+		directiveID, _, err := insertDirective(r.Context(), tx, org, runID, ri, text, "run", "", false)
+		if err != nil {
+			return err
+		}
+		if _, err := delivery.SetWorkItemStatusTx(r.Context(), tx, org, ri.ProjectID, ri.WorkItemID, "awaiting_input",
+			"running", "a person answered the agent"); err != nil {
+			return err
+		}
+		out = map[string]any{"id": questionID, "runId": runID, "status": "answered", "answer": body.Text, "answeredAt": answeredAt}
+		return humanEvent(r.Context(), tx, org, runID, ri, "question.answered", actor(r),
+			map[string]any{"questionId": questionID, "answer": body.Text, "directiveId": directiveID})
+	})
+	if err != nil {
+		return err
+	}
+	s.kick()
+	write(w, http.StatusOK, out)
+	return nil
+}
+
 func (s *Server) abort(w http.ResponseWriter, r *http.Request, org string) error {
 	runID := r.PathValue("id")
 	var body struct{ Reason string }

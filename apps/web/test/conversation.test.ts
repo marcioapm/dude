@@ -286,6 +286,44 @@ describe("what the agent received, thought and got back", () => {
   });
 });
 
+describe("an agent that asks", () => {
+  test("the question waits for an answer, and the answer is queued until the agent takes it", () => {
+    const events = [
+      ev(EventTypes.QuestionAsked, { kind: "agent", questionId: "qst_1", prompt: "Sort the table?", options: ["yes", "no"] }),
+    ];
+    let conversation = project(events);
+    expect(conversation.openQuestion).toMatchObject({ questionId: "qst_1", text: "Sort the table?", options: ["yes", "no"] });
+    expect(conversation.activity).toBeNull();
+
+    events.push(ev(EventTypes.QuestionAnswered, { questionId: "qst_1", answer: "yes", directiveId: "dir_1" }));
+    conversation = project(events);
+    expect(conversation.openQuestion).toBeNull();
+    expect(conversation.turns.map((t) => t.kind)).toEqual(["question", "human"]);
+    expect(conversation.turns[1]).toMatchObject({ intent: "answer", text: "yes", deliveredAt: null });
+
+    events.push(ev(EventTypes.DirectiveDelivered, { directiveId: "dir_1" }));
+    expect(project(events).turns[1]).toMatchObject({ deliveredAt: events[2]!.occurredAt });
+  });
+
+  test("the question block leaves the message, which the question turn says instead", () => {
+    const { turns } = project([
+      ev(EventTypes.AgentMessage, { text: "I need a decision.\n\n```question\nSort?\n- yes\n```\n" }),
+    ]);
+    expect(turns[0]).toMatchObject({ kind: "message", text: "I need a decision." });
+  });
+
+  test("a workflow escalation is not a question this agent asked", () => {
+    const conversation = project([ev(EventTypes.QuestionAsked, { kind: "escalation", reason: "review_loop_exhausted" })]);
+    expect(conversation.turns).toEqual([]);
+    expect(conversation.openQuestion).toBeNull();
+  });
+
+  test("a run that ended asks nothing", () => {
+    const events = [ev(EventTypes.QuestionAsked, { kind: "agent", questionId: "qst_1", prompt: "Sort?" })];
+    expect(project(events, "aborted").openQuestion).toBeNull();
+  });
+});
+
 describe("incremental folding", () => {
   /**
    * The property the streaming UI depends on: applying events one at a time

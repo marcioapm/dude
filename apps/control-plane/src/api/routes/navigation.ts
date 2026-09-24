@@ -55,6 +55,8 @@ interface RunRow {
   phase: string | null;
   role: string | null;
   category: string | null;
+  /** The open question the Run waits on, if any. */
+  question: string | null;
 }
 
 /**
@@ -119,7 +121,12 @@ async function getNavigation(ctx: RequestContext): Promise<Response> {
       FROM work_items w ORDER BY w.created_at DESC LIMIT 500`) as WorkItemRow[];
 
     const runs = (await sql`
-      SELECT id, "workItemId", attempt, status, phase, role, category FROM (
+      SELECT id, "workItemId", attempt, status, phase, role, category,
+             -- The question an agent is waiting on: the Run is live, but
+             -- blocked on a person. Open questions die with their Run.
+             (SELECT q.prompt FROM questions q WHERE q.run_id = ranked.id AND q.status = 'open'
+              ORDER BY q.asked_at DESC LIMIT 1) AS question
+      FROM (
         SELECT r.id, r.work_item_id AS "workItemId", r.attempt, r.status, r.phase,
                r.role, r.category, r.created_at,
                dense_rank() OVER (PARTITION BY r.work_item_id ORDER BY r.attempt DESC) AS rank
@@ -168,8 +175,11 @@ async function getNavigation(ctx: RequestContext): Promise<Response> {
           sessions: phaseRuns.map((r) => ({
             id: r.id,
             role: r.role ?? DEFAULT_RUN_ROLE,
-            status: SESSION_STATUS[r.status],
+            status: r.question ? "awaiting_input" : SESSION_STATUS[r.status],
             title: runLabel(r),
+            // What it asked, so the board and the attention list say it
+            // without opening the chat.
+            ...(r.question ? { activity: r.question } : {}),
           })),
         })),
       };

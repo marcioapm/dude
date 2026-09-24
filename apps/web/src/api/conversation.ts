@@ -61,6 +61,18 @@ export interface ThoughtTurn {
   at: string;
 }
 
+/** A question the agent stopped on, for a person to answer. */
+export interface QuestionTurn {
+  kind: "question";
+  id: string;
+  questionId: string;
+  text: string;
+  options: string[];
+  at: string;
+  /** Null while it waits for an answer. */
+  answeredAt: string | null;
+}
+
 /** The task, as the agent received it. Written by the factory, not a person. */
 export interface PromptTurn {
   kind: "prompt";
@@ -89,7 +101,7 @@ export interface HumanTurn {
   deliveredAt: string | null;
 }
 
-export type Turn = ToolTurn | MessageTurn | HumanTurn | ThoughtTurn | PromptTurn | UsageTurn;
+export type Turn = ToolTurn | MessageTurn | HumanTurn | ThoughtTurn | PromptTurn | UsageTurn | QuestionTurn;
 
 export interface Conversation {
   turns: Turn[];
@@ -101,6 +113,8 @@ export interface Conversation {
   /** The latest context size, and the window it fills, when reported. */
   contextTokens: number;
   contextWindow: number;
+  /** The question the agent is waiting on, if it is. */
+  openQuestion: QuestionTurn | null;
   /** What the agent is doing right now, or null when it is not working. */
   activity: Extract<ActivityKind, "thinking" | "streaming" | "tool"> | null;
   /** The tool being waited on, when activity is "tool". */
@@ -129,8 +143,9 @@ export interface Projection {
    * it belongs to rather than appending a second one.
    */
   toolsByCall: Map<string, ToolTurn>;
-  /** Steers by directive id, so a delivery marks the turn it belongs to. */
+  /** Steers and answers by directive id, so a delivery marks the turn it belongs to. */
   steersByDirective: Map<string, HumanTurn>;
+  questionsById: Map<string, QuestionTurn>;
   plan: PlanItem[];
   costUsd: number;
   tokens: number;
@@ -147,6 +162,7 @@ export function emptyProjection(): Projection {
     turns: [],
     toolsByCall: new Map(),
     steersByDirective: new Map(),
+    questionsById: new Map(),
     plan: [],
     costUsd: 0,
     tokens: 0,
@@ -199,7 +215,9 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       }
 
       case EventTypes.AgentMessage: {
-        const text = typeof payload.text === "string" ? payload.text : "";
+        // The question block an agent ends on is shown by the question turn
+        // that follows; left in the message it would be said twice.
+        const text = typeof payload.text === "string" ? withoutQuestion(payload.text) : "";
         if (!text.trim()) break;
         const contextTokens = numberOf(payload.contextTokens);
         turns.push({
@@ -337,15 +355,41 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         break;
       }
 
+      case EventTypes.QuestionAsked: {
+        // The workflow escalating to a person is a question too, but not one
+        // this agent asked, and not one answered here.
+        if (payload.kind !== "agent") break;
+        const turn: QuestionTurn = {
+          kind: "question",
+          id: event.eventId,
+          questionId: String(payload.questionId ?? ""),
+          text: String(payload.prompt ?? ""),
+          options: Array.isArray(payload.options) ? payload.options.map(String) : [],
+          at: event.occurredAt,
+          answeredAt: null,
+        };
+        state.questionsById.set(turn.questionId, turn);
+        turns.push(turn);
+        // The agent is not working: it is waiting on a person.
+        state.activity = null;
+        state.activeTool = null;
+        break;
+      }
+
       case EventTypes.QuestionAnswered: {
-        turns.push({
+        const question = state.questionsById.get(String(payload.questionId ?? ""));
+        if (question) question.answeredAt = event.occurredAt;
+        // Delivered the way a steer is: queued until the agent takes it.
+        const turn: HumanTurn = {
           kind: "human",
           id: event.eventId,
           intent: "answer",
           text: String(payload.answer ?? ""),
           at: event.occurredAt,
-          deliveredAt: event.occurredAt,
-        });
+          deliveredAt: typeof payload.directiveId === "string" ? null : event.occurredAt,
+        };
+        if (typeof payload.directiveId === "string") state.steersByDirective.set(payload.directiveId, turn);
+        turns.push(turn);
         break;
       }
 
@@ -376,6 +420,7 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
       tokens: state.tokens,
       contextTokens: state.contextTokens,
       contextWindow: state.contextWindow,
+      openQuestion: openQuestion(state),
       activity: state.activity,
       activeTool: state.activeTool,
     };
@@ -401,9 +446,18 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
     tokens: state.tokens,
     contextTokens: state.contextTokens,
     contextWindow: state.contextWindow,
+    // A finished Run asks nothing, whatever it asked before it ended.
+    openQuestion: null,
     activity: null,
     activeTool: null,
   };
+}
+
+/** The latest question still waiting for an answer. */
+function openQuestion(state: Projection): QuestionTurn | null {
+  let open: QuestionTurn | null = null;
+  for (const q of state.questionsById.values()) if (q.answeredAt === null) open = q;
+  return open;
 }
 
 /** Extract a plan from an `agent.plan.updated` payload, or null if it has none. */
@@ -448,6 +502,18 @@ function resultFrom(payload: Record<string, unknown>): ToolResult | null {
   }
   if (typeof payload.exitCode === "number") result.exitCode = payload.exitCode;
   return Object.keys(result).length > 0 ? result : null;
+}
+
+/**
+ * A message without the question block it ends a turn with: the question
+ * turn says it. The last block only, as the orchestrator reads it
+ * (delivery.ParseQuestion) — an earlier one was not the question asked.
+ */
+function withoutQuestion(text: string): string {
+  const blocks = [...text.matchAll(/```question[ \t]*\n[\s\S]*?\n?```/g)];
+  const last = blocks[blocks.length - 1];
+  if (!last || last.index === undefined) return text;
+  return (text.slice(0, last.index) + text.slice(last.index + last[0].length)).trimEnd();
 }
 
 function numberOf(value: unknown): number {

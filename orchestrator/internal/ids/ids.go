@@ -22,6 +22,7 @@ const (
 	PullRequest    = "pr"
 	Finding        = "find"
 	Directive      = "dir"
+	Question       = "qst"
 )
 
 // New returns `<prefix>_<base36 millis, 9 wide><16 hex>`.
