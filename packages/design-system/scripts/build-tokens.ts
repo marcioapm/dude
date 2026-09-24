@@ -9,6 +9,7 @@
  */
 
 import { flattenTheme, type ThemeMode } from "../src/tokens/themes.ts";
+import { compactOverrides } from "../src/tokens/density.ts";
 import {
   cadence,
   duration,
@@ -23,6 +24,7 @@ import {
   radius,
   size,
   space,
+  spaceNamed,
   zIndex,
 } from "../src/tokens/scale.ts";
 
@@ -36,6 +38,7 @@ function block(selector: string, vars: Record<string, string>, indent = ""): str
 function staticVars(): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(space)) out[`space-${k}`] = `${v}px`;
+  for (const [k, v] of Object.entries(spaceNamed)) out[`space-${kebab(k)}`] = `${v}px`;
   for (const [k, v] of Object.entries(radius)) out[`radius-${k}`] = `${v}px`;
   for (const [k, v] of Object.entries(fontFamily)) out[`font-${k}`] = v;
   for (const [k, v] of Object.entries(fontSize)) out[`text-${k}`] = `${v}px`;
@@ -83,6 +86,13 @@ ${themeBlock("light", '[data-theme="light"]')}
 @media (prefers-color-scheme: light) {
 ${themeBlock("light", ':root:not([data-theme="dark"])', "  ")}
 }
+
+/* ------------------------------------------------------------------ */
+/* Density. comfortable is the default (Discord/Obsidian feel); compact  */
+/* is opt-in and NOT a uniform shrink — only the tokens listed in        */
+/* src/tokens/density.ts differ. Everything else is the block above.    */
+/* ------------------------------------------------------------------ */
+${block('[data-density="compact"]', compactOverrides)}
 
 /* ------------------------------------------------------------------ */
 /* Motion                                                              */
