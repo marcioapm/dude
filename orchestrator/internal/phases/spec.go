@@ -164,6 +164,7 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		return spec
 	}
 
+	spec.Env = colourEnv
 	config, _ := json.Marshal(map[string]any{"provider": c.OpenCodeProviders, "model": in.Model})
 	spec.Secrets = append(spec.Secrets,
 		lux.Secret{Name: "opencode_auth", Value: c.OpenCodeAuth, As: "file", Path: agentHome + "/.local/share/opencode/auth.json"},
@@ -171,6 +172,20 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 	)
 	spec.Network = egress(c)
 	return spec
+}
+
+// colourEnv makes the tools an agent runs colour their output, though it
+// goes to a pipe rather than a terminal: pytest's failures in red, git's
+// diffs, ls. The chat renders the colour; the agent reads past it.
+var colourEnv = map[string]string{
+	"TERM":           "xterm-256color",
+	"FORCE_COLOR":    "1", // node, many Python tools
+	"CLICOLOR_FORCE": "1", // BSD-style tools, ls on some systems
+	"PY_COLORS":      "1", // pytest
+	// git, through its environment rather than a config file in the image.
+	"GIT_CONFIG_COUNT":   "1",
+	"GIT_CONFIG_KEY_0":   "color.ui",
+	"GIT_CONFIG_VALUE_0": "always",
 }
 
 // egress allows the model providers' hosts and anything configured. Without
