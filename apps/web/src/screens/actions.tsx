@@ -8,12 +8,12 @@
  * board offer the same things.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { NavEpic, NavProject, NavRef } from "@dude/design-system";
 import type { RowMenuItem } from "@dude/design-system/primitives";
 import { Dialog, Button, Input, Textarea } from "@dude/design-system/primitives";
 import type { ApiClient, Epic } from "../api/client.ts";
-import { FormDialog, useSave } from "../hooks/useSave.tsx";
+import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
 
 /** What an action asks the app to open; the app owns navigation and dialogs. */
 export type Intent =
@@ -30,25 +30,16 @@ export interface EpicRef {
   id: string;
   projectId: string;
   title: string;
-  description?: string;
   workItemCount: number;
 }
 
-/** Where a row sits: its project, and for a work item, the epics it could move to. */
-function projectOf(projects: readonly NavProject[], ref: NavRef): NavProject | undefined {
-  return projects.find(
-    (p) =>
-      (ref.kind === "project" && p.id === ref.id) ||
-      (ref.kind === "epic" && (p.epics ?? []).some((e) => e.id === ref.id)) ||
-      (ref.kind === "workItem" &&
-        ((p.workItems ?? []).some((w) => w.id === ref.id) || (p.epics ?? []).some((e) => e.workItems.some((w) => w.id === ref.id)))),
-  );
+/** An epic, as the epic dialogs take it. */
+export function epicRef(projectId: string, epic: NavEpic): EpicRef {
+  return { id: epic.id, projectId, title: epic.title, workItemCount: epic.workItems.length };
 }
 
 /** The actions on one thing in the tree, or none (sessions and runs have their own screens). */
-export function rowActions(projects: readonly NavProject[], ref: NavRef, act: (intent: Intent) => void): RowMenuItem[] | null {
-  const project = projectOf(projects, ref);
-  if (!project) return null;
+export function rowActions(project: NavProject, ref: NavRef, act: (intent: Intent) => void): RowMenuItem[] | null {
   const epics = project.epics ?? [];
   switch (ref.kind) {
     case "project":
@@ -61,7 +52,7 @@ export function rowActions(projects: readonly NavProject[], ref: NavRef, act: (i
     case "epic": {
       const index = epics.findIndex((e) => e.id === ref.id);
       const epic = epics[index]!;
-      const target: EpicRef = { id: epic.id, projectId: project.id, title: epic.title, workItemCount: epic.workItems.length };
+      const target = epicRef(project.id, epic);
       return [
         { id: "new-work-item", label: "New work item", icon: "plus", onSelect: () => act({ kind: "newWorkItem", projectId: project.id, epicId: epic.id }) },
         { id: "edit", label: "Edit epic", icon: "edit", onSelect: () => act({ kind: "editEpic", epic: target }) },
@@ -116,10 +107,24 @@ export function EpicDialog(props: {
   onClose: () => void;
   onSaved: (epic: Epic) => void;
 }) {
-  const { epic } = props;
+  const { epic, client, projectId } = props;
   const [title, setTitle] = useState(epic?.title ?? "");
-  const [description, setDescription] = useState(epic?.description ?? "");
+  // The tree does not carry an epic's description: an edit reads it first,
+  // so saving cannot blank one it never showed.
+  const [description, setDescription] = useState<string | null>(epic ? null : "");
   const { busy, problem, save } = useSave();
+  const [loadProblem, setLoadProblem] = useState<string | null>(null);
+  useEffect(() => {
+    if (!epic) return;
+    let current = true;
+    void client.listEpics(projectId).then(
+      ({ epics }) => current && setDescription(epics.find((e) => e.id === epic.id)?.description ?? ""),
+      (err: unknown) => current && setLoadProblem(errorText(err)),
+    );
+    return () => {
+      current = false;
+    };
+  }, [client, projectId, epic]);
   return (
     <FormDialog
       open
@@ -128,13 +133,13 @@ export function EpicDialog(props: {
       description="An epic groups related work items; its place in the list is its priority."
       submitLabel={epic ? "Save" : "Create epic"}
       submitTestId="epic-save"
-      canSubmit={!busy && Boolean(title.trim())}
-      problem={problem}
+      canSubmit={!busy && description !== null && Boolean(title.trim())}
+      problem={problem ?? loadProblem}
       onSubmit={() => {
         let saved: Epic | null = null;
         void save(
           async () => {
-            const fields = { title: title.trim(), description: description.trim() };
+            const fields = { title: title.trim(), description: (description ?? "").trim() };
             saved = epic ? await props.client.updateEpic(epic.id, fields) : await props.client.createEpic(props.projectId, fields);
           },
           () => {
@@ -146,7 +151,8 @@ export function EpicDialog(props: {
       }}
     >
       <Input label="Title" autoFocus value={title} maxLength={200} onChange={(e) => setTitle(e.target.value)} data-testid="epic-title" />
-      <Textarea label="Description" hint="What this group of work is for. Markdown." value={description}
+      <Textarea label="Description" hint="What this group of work is for. Markdown." value={description ?? ""}
+        disabled={description === null} placeholder={description === null ? "Loading…" : undefined}
         maxLength={10_000} onChange={(e) => setDescription(e.target.value)} />
     </FormDialog>
   );

@@ -245,10 +245,10 @@ export function Board({ project, epic, selected, onSelect, cap = 12, loading, he
         <div className={cx(styles["body"], swimlanes && styles["bodyLanes"])}>
           {swimlanes ? (
             <div className={styles["laneHead"]} aria-hidden>
-              {BOARD_COLUMN_KINDS.map((kind) => (
-                <span key={kind} className={styles["laneHeadCell"]}>
-                  <span className={styles["columnLabel"]}>{BOARD_COLUMN_SPECS[kind].label}</span>
-                  <span className={styles["columnCount"]}>{columns.find((c) => c.kind === kind)?.cards.length ?? 0}</span>
+              {columns.map((c) => (
+                <span key={c.kind} className={styles["laneHeadCell"]}>
+                  <span className={styles["columnLabel"]}>{c.spec.label}</span>
+                  <span className={styles["columnCount"]}>{c.cards.length}</span>
                 </span>
               ))}
             </div>

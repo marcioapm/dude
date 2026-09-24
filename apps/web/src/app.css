@@ -161,12 +161,6 @@ body {
   margin: 0;
 }
 
-.wiCount {
-  text-transform: none;
-  letter-spacing: 0;
-  font-weight: var(--ds-weight-regular);
-}
-
 /* The pipeline: one row per phase Run, a hairline between them. */
 .pipeline {
   list-style: none;
@@ -236,70 +230,6 @@ body {
 /* The live phase gets the only colour on the list. */
 .phase[data-status="running"] .phaseButton {
   box-shadow: inset 2px 0 0 var(--ds-color-accent);
-}
-
-/* Findings */
-.findings {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-4);
-}
-
-.finding {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--ds-space-12);
-  padding: var(--ds-space-8) var(--ds-space-12);
-  background: var(--ds-color-surface);
-  border: 1px solid var(--ds-color-border-subtle);
-  border-radius: var(--ds-radius-md);
-}
-
-.finding[data-status="open"][data-severity="blocking"],
-.finding[data-status="open"][data-severity="high"] {
-  border-color: var(--ds-tone-danger-border);
-  box-shadow: inset 2px 0 0 var(--ds-tone-danger-fg);
-}
-
-.findingSeverity {
-  min-width: 5.5em;
-  font-family: var(--ds-font-mono);
-  font-size: var(--ds-text-xs);
-  text-transform: uppercase;
-  color: var(--ds-color-text-muted);
-}
-
-.finding[data-status="open"] .findingSeverity {
-  color: var(--ds-tone-danger-fg);
-}
-
-.findingBody {
-  flex: 1;
-  min-width: 0;
-}
-
-.findingTitle {
-  font-weight: var(--ds-weight-medium);
-}
-
-.finding[data-status="resolved"] .findingTitle,
-.finding[data-status="superseded"] .findingTitle {
-  color: var(--ds-color-text-muted);
-  text-decoration: line-through;
-}
-
-.findingMeta,
-.findingNote {
-  color: var(--ds-color-text-muted);
-  font-size: var(--ds-text-sm);
-}
-
-.findingStatus {
-  font-size: var(--ds-text-xs);
-  color: var(--ds-color-text-muted);
 }
 
 .runScreen {

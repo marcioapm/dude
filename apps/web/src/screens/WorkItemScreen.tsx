@@ -19,7 +19,7 @@ import { DEFAULT_RUN_ROLE, runLabel } from "@dude/domain";
 import type { ApiClient, Finding, PullRequest, Run, WorkItemDetail } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
 import { useReloadOnEvents } from "../hooks/useEventStream.ts";
-import { WorkItemDialog } from "./WorkItemDialog.tsx";
+import { existingWorkItem, WorkItemDialog } from "./WorkItemDialog.tsx";
 
 export interface WorkItemScreenProps {
   client: ApiClient;
@@ -86,7 +86,6 @@ export function WorkItemScreen({ client, workItemId, onOpenRun, breadcrumb }: Wo
 
   const started = phases.length > 0;
   const pr = pullRequests[0];
-  const openFindings = findings.filter((f) => f.status === "open");
 
   return (
     <div className="workItemScreen" data-testid="work-item-screen">
@@ -132,15 +131,7 @@ export function WorkItemScreen({ client, workItemId, onOpenRun, breadcrumb }: Wo
           client={client}
           projectId={item.projectId}
           onClose={() => setEditing(false)}
-          existing={{
-            id: item.id,
-            delivering: started,
-            title: item.title,
-            goal: item.goal,
-            acceptanceCriteria: item.acceptanceCriteria,
-            epicId: item.epicId,
-            repositoryId: item.repositoryId,
-          }}
+          existing={existingWorkItem(item, started)}
           onSaved={() => void load()}
         />
         ) : null}

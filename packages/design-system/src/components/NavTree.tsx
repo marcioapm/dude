@@ -260,7 +260,6 @@ export const NavTree = forwardRef<HTMLDivElement, NavTreeProps>(function NavTree
   );
 });
 
-/** A short name for a row, for accessible labels ("CP-41", "Webhook reliability"). */
 /** A row's accessible name: its title, and a work item's key before it. */
 function treeItemLabel(row: NavRow): string {
   if (row.ref.kind === "workItem") {
@@ -270,6 +269,7 @@ function treeItemLabel(row: NavRow): string {
   return rowLabel(row);
 }
 
+/** A short name for a row, for accessible labels ("CP-41", "Webhook reliability"). */
 export function rowLabel(row: NavRow): string {
   switch (row.ref.kind) {
     case "project":
