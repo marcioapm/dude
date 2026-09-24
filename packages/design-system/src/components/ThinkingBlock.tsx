@@ -1,8 +1,10 @@
-import { useState, type HTMLAttributes, type KeyboardEvent } from "react";
+import { type HTMLAttributes } from "react";
 import { cx } from "../util/cx.ts";
 import { Icon } from "../icons/index.tsx";
 import { formatDuration } from "../util/format.ts";
-import { toMs, useNow } from "../util/useNow.ts";
+import { parseInline, plain } from "../util/markdown.ts";
+import { useDisclosure } from "../util/useDisclosure.ts";
+import { useElapsed } from "../util/useNow.ts";
 import { Markdown } from "./Markdown.tsx";
 import styles from "./ThinkingBlock.module.css";
 
@@ -24,34 +26,38 @@ export interface ThinkingBlockProps extends Omit<HTMLAttributes<HTMLDivElement>,
   readonly label?: string | undefined;
 }
 
-/** First non-empty line, for the collapsed preview of a finished thought. */
-function firstLine(s: string): string {
-  for (const line of s.split("\n")) {
-    const t = line.trim();
-    if (t.length > 0) return t;
-  }
-  return "";
-}
+const FENCE_LINE = /^(`{3,}|~{3,})/;
 
-/** Last non-empty line, for the collapsed preview of a thought still growing. */
-function lastLine(s: string): string {
-  const lines = s.split("\n");
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const t = lines[i]?.trim() ?? "";
-    if (t.length > 0) return t;
+/**
+ * The first (or, `fromEnd`, the last) line worth previewing: non-blank
+ * and not a code fence. Scans from one end with indexOf rather than
+ * splitting a thought that may run to kilobytes on every render.
+ */
+function previewLine(text: string, fromEnd: boolean): string {
+  let lo = 0;
+  let hi = text.length;
+  while (lo < hi) {
+    let line: string;
+    if (fromEnd) {
+      const i = text.lastIndexOf("\n", hi - 1);
+      line = text.slice(i + 1, hi);
+      hi = i < 0 ? 0 : i;
+    } else {
+      const i = text.indexOf("\n", lo);
+      const end = i < 0 ? text.length : i;
+      line = text.slice(lo, end);
+      lo = end + 1;
+    }
+    const t = line.trim();
+    if (t.length > 0 && !FENCE_LINE.test(t)) return t;
   }
   return "";
 }
 
 /** Strip the Markdown a preview line would otherwise show literally. */
-function unmark(s: string): string {
-  return s
-    .replace(/^#{1,6}\s+/, "")
-    .replace(/^([-*+]|\d+[.)])\s+/, "")
-    .replace(/^>\s?/, "")
-    .replace(/`([^`]*)`/g, "$1")
-    .replace(/\*\*([^*]*)\*\*/g, "$1")
-    .replace(/\*([^*]*)\*/g, "$1");
+function unmark(line: string): string {
+  const body = line.replace(/^(#{1,6}\s+|([-*+]|\d+[.)])\s+|>\s?)/, "");
+  return plain(parseInline(body, false));
 }
 
 /**
@@ -75,42 +81,26 @@ export function ThinkingBlock({
   defaultExpanded,
   expanded,
   onExpandedChange,
-  plain,
+  plain: plainText,
   label,
   className,
   ...rest
 }: ThinkingBlockProps) {
   const live = streaming === true;
-  const [internal, setInternal] = useState(defaultExpanded ?? false);
-  const open = expanded ?? internal;
-  const now = useNow(live);
-  const start = toMs(startedAt);
-  const end = toMs(endedAt);
-  const elapsed = start !== null ? Math.max(0, (live || end === null ? now : end) - start) : durationMs ?? null;
+  const { open, toggle, onKeyDown } = useDisclosure({ expanded, defaultExpanded, onExpandedChange });
+  const elapsed = useElapsed({ startedAt, endedAt, durationMs, live });
 
-  const toggle = () => {
-    const next = !open;
-    if (expanded === undefined) setInternal(next);
-    onExpandedChange?.(next);
-  };
-  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      toggle();
-    }
-  };
-
-  const preview = unmark(live ? lastLine(text) : firstLine(text));
-  const text_ = label ?? (live ? "Thinking" : "Thought");
+  const preview = unmark(previewLine(text, live));
+  const rowLabel = label ?? (live ? "Thinking" : "Thought");
 
   return (
     <div className={cx(styles["root"], live && styles["live"], open && styles["open"], className)} data-streaming={live ? "true" : undefined} aria-busy={live || undefined} {...rest}>
-      <div className={styles["row"]} role="button" tabIndex={0} aria-expanded={open} onClick={toggle} onKeyDown={onKey}>
+      <div className={styles["row"]} role="button" tabIndex={0} aria-expanded={open} onClick={toggle} onKeyDown={onKeyDown}>
         <span className={styles["glyph"]} aria-hidden>
           {live ? <Icon name="circle-dotted" size={16} strokeWidth={1.5} className={styles["ring"]} /> : null}
           <Icon name="brain" size={live ? 9 : 12} className={styles["brain"]} />
         </span>
-        <span className={styles["label"]}>{text_}</span>
+        <span className={styles["label"]}>{rowLabel}</span>
         {!open ? (
           <span className={styles["preview"]} title={preview.length > 0 ? preview : undefined}>
             {preview.length > 0 ? preview : live ? "…" : "(empty)"}
@@ -127,7 +117,7 @@ export function ThinkingBlock({
       </div>
       {open ? (
         <div className={styles["body"]}>
-          {plain ? (
+          {plainText ? (
             <div className={styles["plain"]}>
               {text}
               {live ? <span className={styles["caret"]} aria-hidden /> : null}
