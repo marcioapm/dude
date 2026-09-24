@@ -182,8 +182,10 @@ const ROLE_HUES: Record<AgentRoleName, number> = {
 
 /**
  * Per-role lightness, found by search so that all 15 pairs clear CVD ΔE >= 8
- * and normal-vision ΔE >= 15 in each mode. Lightness varies on purpose: it is
- * what keeps violet/blue and teal/green apart under deutan simulation.
+ * and normal-vision ΔE >= 15 in each mode (OKLab ×100, Machado protan and
+ * deutan) while every fg stays >= 4.5:1 on its surface, taking the smallest
+ * total move from the previous assignment. Lightness varies on purpose: it
+ * is what keeps violet/blue and teal/green apart under deutan simulation.
  */
 const ROLE_L: Record<"light" | "dark", Record<AgentRoleName, number>> = {
   dark: {
@@ -196,11 +198,11 @@ const ROLE_L: Record<"light" | "dark", Record<AgentRoleName, number>> = {
   },
   light: {
     orchestrator: 0.42,
-    investigator: 0.62,
-    implementer: 0.47,
+    investigator: 0.56,
+    implementer: 0.45,
     reviewer: 0.47,
-    simplifier: 0.62,
-    qa_browser: 0.62,
+    simplifier: 0.56,
+    qa_browser: 0.57,
   },
 };
 
@@ -273,10 +275,9 @@ export const identityColors: Record<"light" | "dark", readonly IdentityColor[]> 
 };
 
 // ---------------------------------------------------------------------------
-// Accent (interactive). Same hue as info so the UI has one "blue". Chroma
-// is slightly down from the original (0.16/0.15 -> 0.13) so it sits calmly
-// against the softened neutrals rather than shouting; focus ring and link
-// contrast stay comfortably above the 3:1 / 4.5:1 floors.
+// Accent (interactive). Same hue as info so the UI has one "blue", at
+// chroma 0.13 so it sits calmly against the neutrals; focus ring and link
+// contrast stay above the 3:1 / 4.5:1 floors.
 // ---------------------------------------------------------------------------
 
 export const accent = {
@@ -289,9 +290,11 @@ export const accent = {
     text: toHex(oklch(0.46, 0.13, 248)),
   },
   dark: {
-    base: toHex(oklch(0.64, 0.13, 248)),
-    hover: toHex(oklch(0.69, 0.13, 248)),
-    active: toHex(oklch(0.59, 0.13, 248)),
+    // Dark enough for white button labels at 4.5:1; hover and active step
+    // darker, as in light, so the label never loses contrast.
+    base: toHex(oklch(0.56, 0.13, 248)),
+    hover: toHex(oklch(0.52, 0.13, 248)),
+    active: toHex(oklch(0.48, 0.13, 248)),
     subtle: toHex(oklch(0.31, 0.045, 248)),
     ring: toHex(oklch(0.7, 0.13, 248)),
     text: toHex(oklch(0.76, 0.11, 248)),
