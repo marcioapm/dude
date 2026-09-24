@@ -1,49 +1,79 @@
 /*
- * A turn. Not a bubble: a gutter (avatar) + a column. Agent and human turns
- * share the grid so text aligns down the page; the human turn gets a
- * hairline frame tinted by intent so interventions are scannable.
+ * A turn, Discord-style: no box. A gutter (avatar) + a text column that
+ * starts at pad-x + avatar + gap (16 + 40 + 16 = 72px comfortable). Groups
+ * are separated by whitespace alone: a new author starts `--ds-space-chat-gap`
+ * below the previous turn (17px comfortable, 10px compact); a turn continuing
+ * the same author (`.continued`) has no header and sits 2px below. The row's
+ * 2px vertical padding is inside the hover wash, the group gap is outside it.
  *
- * Vertical rhythm: a new speaker starts `--ds-space-chat-gap` below the
- * previous turn (16px comfortable, 10px compact); a turn continuing the same
- * author (`.continued`) keeps 2px, so one author's turns read as a group.
+ * Emphasis has exactly one pattern: a full-width tint of the tone (~9%) and
+ * a 2px bar in the tone at the left edge. Steers use it (accent). Answers
+ * and task prompts are plain turns marked by their tag.
  */
 
 .root {
+  --cm-bar: transparent;
+  --cm-wash: transparent;
+  position: relative;
   display: grid;
   grid-template-columns: var(--ds-size-avatar-chat) minmax(0, 1fr);
-  gap: var(--ds-space-chat-avatar-gap);
-  padding: var(--ds-space-chat-gap) var(--ds-space-chat-pad-x) var(--ds-space-4);
+  column-gap: var(--ds-space-chat-avatar-gap);
+  margin-top: calc(var(--ds-space-chat-gap) - var(--ds-space-2));
+  padding: var(--ds-space-2) var(--ds-space-chat-pad-x);
   min-width: 0;
+  background: var(--cm-wash);
+  box-shadow: inset 2px 0 0 var(--cm-bar);
+  font-size: var(--ds-text-prose);
+  line-height: var(--ds-leading-chat);
   scroll-margin-top: var(--ds-space-32);
 }
+.root:hover {
+  background: var(--cm-wash-hover, var(--ds-color-row-hover));
+}
 .continued {
-  padding-top: var(--ds-space-2);
+  margin-top: 0;
 }
 .new {
   animation: global(ds-flash) var(--ds-duration-deliberate) var(--ds-ease-exit) 1;
 }
 
+/* The avatar's top sits on the name line's top. */
 .gutter {
-  padding-top: 1px;
+  position: relative;
+  padding-top: var(--ds-space-2);
+}
+/* A continued turn shows its time in the gutter on hover, as Discord does. */
+.gutterTime {
+  display: block;
+  padding-top: 4px;
+  text-align: right;
+  font-size: 11px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+  opacity: 0;
+}
+.root:hover .gutterTime {
+  opacity: 1;
 }
 .main {
   display: flex;
   flex-direction: column;
-  gap: var(--ds-space-4);
   min-width: 0;
 }
 
 .header {
   display: flex;
   align-items: baseline;
-  gap: var(--ds-space-8);
-  min-height: 20px;
-  font-size: var(--ds-text-sm);
-  line-height: 20px;
+  flex-wrap: wrap;
+  column-gap: var(--ds-space-8);
+  min-height: calc(var(--ds-text-prose) * var(--ds-leading-chat));
 }
 .name {
+  font-size: var(--ds-text-prose);
   font-weight: var(--ds-weight-medium);
-  color: var(--ds-color-text-primary);
+  color: var(--ds-color-text-strong);
 }
 .roleName {
   font-size: var(--ds-text-xs);
@@ -55,26 +85,22 @@
   color: var(--ds-color-text-muted);
 }
 .time {
-  margin-left: auto;
-  font-family: var(--ds-font-mono);
-  font-feature-settings: "tnum", "zero";
   font-size: var(--ds-text-xs);
-  color: var(--ds-color-text-disabled);
-  white-space: nowrap;
-}
-.root:hover .time {
+  font-variant-numeric: tabular-nums;
   color: var(--ds-color-text-muted);
+  white-space: nowrap;
 }
 
 .body {
   min-width: 0;
+  color: var(--ds-color-text-primary);
 }
 
 .attachments {
   display: flex;
   flex-direction: column;
-  gap: var(--ds-space-6);
-  margin-top: var(--ds-space-2);
+  gap: var(--ds-space-4);
+  margin-top: var(--ds-space-4);
   min-width: 0;
 }
 
@@ -82,8 +108,8 @@
   display: flex;
   align-items: center;
   gap: var(--ds-space-12);
-  margin-top: var(--ds-space-2);
-  min-height: 22px;
+  min-height: 20px;
+  line-height: 20px;
 }
 .activity {
   flex: 1;
@@ -105,86 +131,97 @@
   flex-shrink: 0;
 }
 
-/* --- Framed turns (addressed to the agent) ------------------------------ */
-
-/* A person's answer or steer, or the factory's own prompt. `prompt` keeps
-   the neutral frame: it is what the agent was told, not an intervention,
-   and when dude itself authored it the system avatar and "Task" tag say
-   so without a third tint. */
-.human {
-  --cm-tint: var(--ds-color-border);
-  --cm-tint-bg: var(--ds-color-hover-wash);
-  --cm-tag-fg: var(--ds-color-text-secondary);
-  --cm-tag-bg: var(--ds-color-sunken);
-}
-.human .main {
-  padding: var(--ds-space-6) var(--ds-space-12) var(--ds-space-8);
-  border: 1px solid var(--cm-tint);
-  border-left-width: 2px;
+/* Row actions: floated over the top-right corner, shown on hover or focus. */
+.actions {
+  position: absolute;
+  top: -12px;
+  right: var(--ds-space-chat-pad-x);
+  z-index: var(--ds-z-raised);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
   border-radius: var(--ds-radius-md);
-  background: var(--cm-tint-bg);
+  background: var(--ds-color-overlay);
+  box-shadow: var(--ds-shadow-1);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--ds-duration-fast) var(--ds-ease-standard);
 }
-.human .header {
-  min-height: 18px;
-  line-height: 18px;
+.root:hover .actions,
+.root:focus-within .actions {
+  opacity: 1;
+  pointer-events: auto;
 }
 
-/* answer: unblocked a question — attention tone, the same hue as needs-you,
-   so the answer visibly "closes" the loud state above it */
+/* --- Turns addressed to the agent -------------------------------------- */
+
+.human {
+  --cm-tag-fg: var(--ds-color-text-secondary);
+  --cm-tag-bg: var(--ds-color-active-wash);
+}
+/* answer: closes a question — attention tag, plain row */
 .intent-answer {
-  --cm-tint: var(--ds-tone-attention-border);
-  --cm-tint-bg: color-mix(in srgb, var(--ds-tone-attention-bg) 55%, var(--ds-color-surface));
   --cm-tag-fg: var(--ds-tone-attention-fg);
   --cm-tag-bg: var(--ds-tone-attention-bg);
 }
-/* steer: interrupted the agent — accent, the interaction colour, because it
-   is the operator reaching in */
+/* steer: the operator reaching into a running turn — the highlight pattern */
 .intent-steer {
-  --cm-tint: var(--ds-color-accent);
-  --cm-tint-bg: var(--ds-color-accent-subtle);
+  --cm-bar: var(--ds-color-accent);
+  --cm-wash: color-mix(in srgb, var(--ds-color-accent) 9%, transparent);
+  --cm-wash-hover: color-mix(in srgb, var(--ds-color-accent) 12%, transparent);
   --cm-tag-fg: var(--ds-color-accent-text);
-  --cm-tag-bg: var(--ds-color-accent-subtle);
+  --cm-tag-bg: color-mix(in srgb, var(--ds-color-accent) 16%, transparent);
 }
 .intent {
   display: inline-flex;
   align-items: center;
-  height: 16px;
+  align-self: center;
+  height: var(--ds-size-badge-sm);
   padding: 0 5px;
   border-radius: var(--ds-radius-sm);
   font-size: var(--ds-text-2xs);
-  font-weight: var(--ds-weight-medium);
+  font-weight: var(--ds-weight-semibold);
   letter-spacing: var(--ds-tracking-caps);
+  line-height: 1;
   text-transform: uppercase;
   color: var(--cm-tag-fg);
   background: var(--cm-tag-bg);
-  align-self: center;
 }
 
 /* --- Queued: sent, not yet read ---------------------------------------- */
 
 /* A steer that arrived mid-turn is held until the turn ends. Three
-   channels say so: a dashed frame, a "Queued" mark with a clock, and a
-   line of text under the body. The intent tint is kept — it is still a
-   steer — but the frame is not solid until the agent has it. */
-.queued .main {
-  border-style: dashed;
-  border-left-style: solid;
-  background: transparent;
+   channels: a dashed bar, a "Queued" mark with a clock, and a line under
+   the body. The tint stays — it is still a steer — but paler. */
+.queued {
+  --cm-bar: transparent;
+  --cm-wash: color-mix(in srgb, var(--ds-color-accent) 5%, transparent);
+}
+.queued::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: repeating-linear-gradient(to bottom, var(--ds-color-accent) 0 4px, transparent 4px 7px);
 }
 .queued-tag {
   display: inline-flex;
   align-items: center;
+  align-self: center;
   gap: 3px;
-  height: 16px;
+  height: var(--ds-size-badge-sm);
   padding: 0 5px 0 4px;
   border-radius: var(--ds-radius-sm);
-  border: 1px dashed var(--ds-color-border-strong);
+  background: var(--ds-color-active-wash);
   font-size: var(--ds-text-2xs);
   font-weight: var(--ds-weight-medium);
   letter-spacing: var(--ds-tracking-caps);
+  line-height: 1;
   text-transform: uppercase;
   color: var(--ds-color-text-secondary);
-  align-self: center;
 }
 .queuedNote {
   font-size: var(--ds-text-xs);
@@ -192,14 +229,10 @@
   font-style: italic;
 }
 .delivered {
-  font-family: var(--ds-font-mono);
-  font-feature-settings: "tnum", "zero";
   font-size: var(--ds-text-xs);
-  color: var(--ds-color-text-disabled);
-  white-space: nowrap;
-}
-.root:hover .delivered {
+  font-variant-numeric: tabular-nums;
   color: var(--ds-color-text-muted);
+  white-space: nowrap;
 }
 
 /* --- Clamped body ------------------------------------------------------- */
@@ -216,8 +249,8 @@
 .clamped .clampInner {
   overflow: hidden;
   /* Fade the last line out so the cut reads as a cut. A mask, not a
-     gradient overlay: the frame tints are translucent washes, so there is
-     no one colour to fade *to*. */
+     gradient overlay: row washes are translucent, so there is no one
+     colour to fade to. */
   -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
   mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
 }
@@ -244,17 +277,14 @@
   display: flex;
   flex-direction: column;
   gap: 1px;
-  padding: var(--ds-space-4) var(--ds-space-8);
-  margin-bottom: var(--ds-space-4);
-  border-left: 2px solid var(--ds-tone-attention-border);
-  background: var(--ds-color-surface);
-  border-radius: 0 var(--ds-radius-sm) var(--ds-radius-sm) 0;
-  font-size: var(--ds-text-xs);
+  padding: 0 0 0 var(--ds-space-8);
+  margin: var(--ds-space-2) 0 var(--ds-space-4);
+  border-left: 2px solid var(--ds-color-border-strong);
+  font-size: var(--ds-text-sm);
+  line-height: var(--ds-leading-snug);
 }
 .quoteLabel {
-  font-size: var(--ds-text-2xs);
-  letter-spacing: var(--ds-tracking-caps);
-  text-transform: uppercase;
+  font-size: var(--ds-text-xs);
   color: var(--ds-tone-attention-fg);
   font-weight: var(--ds-weight-medium);
 }
@@ -267,14 +297,18 @@
   -webkit-box-orient: vertical;
 }
 
-/* --- System lines ------------------------------------------------------ */
+/* --- System lines: the divider pattern ---------------------------------- */
 
+/* A 1px low-contrast rule with a small centred label cutting it. */
 .system {
   display: flex;
   align-items: center;
   gap: var(--ds-space-8);
-  padding: var(--ds-space-4) var(--ds-space-chat-pad-x);
+  margin-top: var(--ds-space-chat-gap);
+  padding: 0 var(--ds-space-chat-pad-x);
   font-size: var(--ds-text-xs);
+  font-weight: var(--ds-weight-medium);
+  line-height: 16px;
   color: var(--ds-color-text-muted);
 }
 .systemLine {
@@ -292,7 +326,16 @@
   color: var(--ds-color-text-secondary);
 }
 .systemTime {
-  font-family: var(--ds-font-mono);
-  font-feature-settings: "tnum", "zero";
-  color: var(--ds-color-text-disabled);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--ds-weight-regular);
+}
+
+/* --- Asides: thoughts and tool calls on the text column ----------------- */
+
+.aside {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+  padding: var(--ds-space-4) var(--ds-space-chat-pad-x) var(--ds-space-2) calc(var(--ds-space-chat-pad-x) + var(--ds-size-avatar-chat) + var(--ds-space-chat-avatar-gap));
+  min-width: 0;
 }

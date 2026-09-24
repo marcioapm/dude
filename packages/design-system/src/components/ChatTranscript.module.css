@@ -70,7 +70,7 @@
   color: var(--ds-color-text-muted);
 }
 .headerSession {
-  color: var(--ds-color-text-disabled) !important;
+  color: var(--ds-color-text-muted) !important;
 }
 .headerStats {
   display: flex;
@@ -101,10 +101,15 @@
   flex-shrink: 0;
 }
 
+/* The plan joins the header's shade band: one chrome strip above the
+   turns, separated from them by shade and a short fade, never a shadow
+   falling on the first visible turn. */
 .pinned {
+  --plan-bg: transparent;
+  --plan-shadow: none;
   flex-shrink: 0;
-  padding: var(--ds-space-6) var(--ds-space-12) 0;
-  background: var(--ds-color-surface);
+  padding: 0 var(--ds-space-8) var(--ds-space-4);
+  background: var(--ds-color-chrome);
 }
 
 .scroller {
@@ -120,7 +125,12 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   outline: none;
+  scroll-padding-top: var(--ds-space-16);
   scroll-padding-bottom: var(--ds-space-16);
+  /* A turn scrolled past the top edge fades out over 16px instead of
+     being cut flush under the header band. */
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--ds-space-16));
+  mask-image: linear-gradient(to bottom, transparent 0, #000 var(--ds-space-16));
 }
 .viewport:focus-visible {
   box-shadow: inset 0 0 0 2px var(--ds-color-focus-ring);
@@ -128,7 +138,7 @@
 .content {
   display: flex;
   flex-direction: column;
-  padding: var(--ds-space-4) 0 var(--ds-space-12);
+  padding: var(--ds-space-8) 0 var(--ds-space-16);
   min-width: 0;
 }
 
@@ -155,5 +165,4 @@
 
 .footer {
   flex-shrink: 0;
-  background: var(--ds-color-chrome);
 }

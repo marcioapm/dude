@@ -71,6 +71,8 @@ export interface ChatMessageProps extends Omit<HTMLAttributes<HTMLElement>, "chi
   readonly isNew?: boolean | undefined;
   /** Hide the avatar/header: this turn continues the previous one by the same actor. */
   readonly continued?: boolean | undefined;
+  /** Row actions (copy, quote…). Float over the row's top-right corner on hover or focus. */
+  readonly actions?: ReactNode;
 }
 
 const INTENT_LABEL: Record<HumanIntent, string> = {
@@ -80,7 +82,7 @@ const INTENT_LABEL: Record<HumanIntent, string> = {
 };
 
 const PROMPT_MAX_LINES = 8;
-const LINE_PX = 20;
+const LINE_PX = 22;
 
 /** A Date for a timestamp prop, or null when it is missing or does not parse — an unparseable string must not take the render down. */
 function toDate(v: string | number | Date | null | undefined): Date | null {
@@ -89,13 +91,13 @@ function toDate(v: string | number | Date | null | undefined): Date | null {
 }
 
 /**
- * One turn in a transcript. Agent turns sit left with a role avatar, a
- * mono model tag and a live foot (elapsed · context · output · cost ·
- * activity). Turns addressed to the agent — a person's answer or steer,
- * or the factory's own prompt — are visually distinct without being
- * bubbles: a hairline frame tinted by intent, so an operator scanning a
- * long transcript can see where someone intervened, and whether it was an
- * answer (unblocked a question) or a steer (interrupted the agent).
+ * One turn in a transcript, laid out as a Discord message: avatar gutter,
+ * then name · tag · model · time on one baseline, then the body. No frame:
+ * a hovered row takes a faint full-width wash and shows its `actions`. A
+ * turn that continues the same author drops avatar and header. Turns
+ * addressed to the agent carry an intent tag; a steer additionally takes
+ * the highlight (tinted row + 2px accent bar) because it interrupted the
+ * agent and must be findable in a long transcript.
  *
  * The body is Markdown rendered from a typed AST and grows in place while
  * streaming; earlier blocks never reflow when a later token lands.
@@ -124,6 +126,7 @@ export function ChatMessage({
   attachments,
   isNew,
   continued,
+  actions,
   className,
   ...rest
 }: ChatMessageProps) {
@@ -176,7 +179,17 @@ export function ChatMessage({
       aria-busy={live || undefined}
       {...rest}
     >
-      <div className={styles["gutter"]}>{continued ? null : <AgentAvatar role={role} size="chat" live={live} />}</div>
+      <div className={styles["gutter"]}>
+        {continued ? (
+          ts ? (
+            <time className={styles["gutterTime"]} dateTime={ts.toISOString()} aria-hidden>
+              {formatTimestamp(ts, "time").slice(0, 5)}
+            </time>
+          ) : null
+        ) : (
+          <AgentAvatar role={role} size="chat" live={live} />
+        )}
+      </div>
       <div className={styles["main"]}>
         {continued ? null : (
           <header className={styles["header"]}>
@@ -217,6 +230,7 @@ export function ChatMessage({
         </ClampedBody>
         {queued ? <div className={styles["queuedNote"]}>Waiting for the current turn to end before the agent reads this.</div> : null}
         {attachments !== undefined ? <div className={styles["attachments"]}>{attachments}</div> : null}
+        {actions !== undefined ? <div className={styles["actions"]}>{actions}</div> : null}
         {activity !== undefined || hasStats ? (
           <footer className={styles["foot"]}>
             {activity !== undefined ? <ActivityIndicator kind={activity} {...activityProps} className={styles["activity"]} /> : <span className={styles["footSpacer"]} />}
@@ -232,6 +246,15 @@ export function ChatMessage({
       </div>
     </article>
   );
+}
+
+/**
+ * Reasoning and tool calls between turns, placed on the message text
+ * column (past the avatar gutter) so their left edge lines up with the
+ * body text above and below. Consecutive asides stack 4px apart.
+ */
+export function ChatAside({ className, ...rest }: HTMLAttributes<HTMLDivElement>) {
+  return <div className={cx(styles["aside"], className)} {...rest} />;
 }
 
 /**

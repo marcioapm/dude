@@ -90,6 +90,8 @@ export const fontSize = {
   xs: 12,
   /** Obsidian "UI small": nav rows, metadata. Shared. */
   sm: 13,
+  /** Sidebar rows and section labels: between Obsidian's 13px tree and Discord's 16px channels. Shared. */
+  nav: 14,
   /** UI body. Density-sensitive: 15 comfortable, 14 compact. */
   md: 15,
   lg: 16,
