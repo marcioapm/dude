@@ -277,9 +277,7 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number) {
           role={role}
           content={turn.text}
           startedAt={turn.at}
-          contextTokens={turn.contextTokens ?? undefined}
-          contextWindowTokens={turn.contextTokens && contextWindow > 0 ? contextWindow : undefined}
-          outputTokens={turn.outputTokens ?? undefined}
+          {...tokenFoot(turn, contextWindow)}
         />
       );
     case "thought":
@@ -293,9 +291,7 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number) {
           role={role}
           continued
           startedAt={turn.at}
-          contextTokens={turn.contextTokens || undefined}
-          contextWindowTokens={turn.contextTokens && contextWindow > 0 ? contextWindow : undefined}
-          outputTokens={turn.output}
+          {...tokenFoot(turn, contextWindow)}
           costUsd={null}
         />
       );
@@ -307,7 +303,6 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number) {
           intent={turn.intent}
           content={turn.text}
           startedAt={turn.at}
-          pending={turn.intent === "steer" && turn.deliveredAt === null}
           deliveredAt={turn.deliveredAt}
         />
       );
@@ -326,6 +321,15 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number) {
         />
       );
   }
+}
+
+/** A message's token foot: the context then, against the window when known, and the turn's output. */
+function tokenFoot(turn: { contextTokens: number | null; outputTokens: number | null }, contextWindow: number) {
+  return {
+    contextTokens: turn.contextTokens ?? undefined,
+    contextWindowTokens: turn.contextTokens !== null && contextWindow > 0 ? contextWindow : undefined,
+    outputTokens: turn.outputTokens ?? undefined,
+  };
 }
 
 /** One line describing an event, for the debugging timeline. */

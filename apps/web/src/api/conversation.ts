@@ -16,24 +16,18 @@
 
 import type { PersistedEvent, RunStatus } from "@dude/domain";
 import { EventTypes, TERMINAL_RUN_STATUSES } from "@dude/domain";
-import type { HumanIntent, PlanItem } from "@dude/design-system/components";
+import type { HumanIntent, PlanItem, ToolOutput } from "@dude/design-system/components";
 import { TODO_STATUSES, type ActivityKind, type ToolCallStatus } from "@dude/design-system/tokens";
 
 /**
- * One stream of a tool's output as the orchestrator keeps it: whole up to
- * 4 KB, otherwise its first and last 2 KB with how much was left out.
+ * What a finished tool call produced. Agents report one merged stream or
+ * two; each is whole up to 4 KB, otherwise its first and last 2 KB with how
+ * much was left out — the shape the tool card renders.
  */
-export interface CappedOutput {
-  head: string;
-  tail?: string;
-  omittedBytes?: number;
-}
-
-/** What a finished tool call produced. Agents report one merged stream or two. */
 export interface ToolResult {
-  output?: CappedOutput;
-  stdout?: CappedOutput;
-  stderr?: CappedOutput;
+  output?: ToolOutput;
+  stdout?: ToolOutput;
+  stderr?: ToolOutput;
   exitCode?: number;
 }
 
@@ -75,15 +69,12 @@ export interface PromptTurn {
   at: string;
 }
 
-/** A turn's token totals, as the agent reported them when it ended. */
+/** A turn's token totals, when the turn ended on something other than a message. */
 export interface UsageTurn {
   kind: "usage";
   id: string;
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  contextTokens: number;
+  outputTokens: number;
+  contextTokens: number | null;
   at: string;
 }
 
@@ -94,7 +85,7 @@ export interface HumanTurn {
   intent: Extract<HumanIntent, "steer" | "answer">;
   text: string;
   at: string;
-  /** A steer is queued until the agent takes it; null until then. */
+  /** When the agent took it. A steer is queued until then (null); an answer is delivered as given. */
   deliveredAt: string | null;
 }
 
@@ -311,25 +302,19 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         if (window > 0) state.contextWindow = window;
         const t = payload.tokens as Record<string, unknown> | undefined;
         if (t) {
-          const [input, output] = [numberOf(t.input), numberOf(t.output)];
-          state.tokens += input + output;
+          const output = numberOf(t.output);
+          state.tokens += numberOf(t.input) + output;
           // A turn's totals arrive with its end: shown where the turn ended —
           // on its closing message, or on their own after a tool.
-          const last = turns[turns.length - 1];
-          if (payload.turn === true && last?.kind === "message") {
-            last.outputTokens = output;
-            if (context > 0) last.contextTokens = context;
-          } else if (payload.turn === true) {
-            turns.push({
-              kind: "usage",
-              id: event.eventId,
-              input,
-              output,
-              cacheRead: numberOf(t.cacheRead),
-              cacheWrite: numberOf(t.cacheWrite),
-              contextTokens: context,
-              at: event.occurredAt,
-            });
+          if (payload.turn === true) {
+            const last = turns[turns.length - 1];
+            const contextTokens = context > 0 ? context : null;
+            if (last?.kind === "message") {
+              last.outputTokens = output;
+              last.contextTokens = contextTokens ?? last.contextTokens;
+            } else {
+              turns.push({ kind: "usage", id: event.eventId, outputTokens: output, contextTokens, at: event.occurredAt });
+            }
           }
         }
         // Between model requests the agent is thinking, unless a tool is

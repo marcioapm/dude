@@ -77,6 +77,7 @@ type phaseRun struct {
 	TurnDone, HasDirectives                                bool
 	PushResult                                             json.RawMessage
 	PRFeedback                                             json.RawMessage
+	FindingIDs, BlockingSeverities                         []string
 	Attempt                                                int
 }
 
@@ -85,14 +86,14 @@ const runColumns = `r.id, r.organization_id, r.project_id, r.work_item_id, r.pha
 	COALESCE(r.lux_run_id, ''), COALESCE(r.lux_state, ''), COALESCE(r.lux_stop_reason, ''),
 	COALESCE(r.push_request_id, ''), COALESCE(r.base_sha, ''), r.turn_done_at IS NOT NULL,
 	EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL),
-	r.push_result, r.pr_feedback, r.attempt`
+	r.push_result, r.pr_feedback, r.finding_ids, r.blocking_severities, r.attempt`
 
 func scan(row pgx.Row) (phaseRun, error) {
 	var r phaseRun
 	err := row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.WorkItemID, &r.Phase, &r.Status, &r.Control,
 		&r.RepositoryID, &r.BaseRef, &r.Category, &r.LuxRunID, &r.LuxState, &r.LuxStopReason,
 		&r.PushRequestID, &r.BaseSHA, &r.TurnDone, &r.HasDirectives,
-		&r.PushResult, &r.PRFeedback, &r.Attempt)
+		&r.PushResult, &r.PRFeedback, &r.FindingIDs, &r.BlockingSeverities, &r.Attempt)
 	return r, err
 }
 
@@ -213,7 +214,6 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 	var findings []delivery.Finding
 	var feedback []forge.ActionableFeedback
 	_ = json.Unmarshal(r.PRFeedback, &feedback)
-	var blocking []string
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
 			SELECT w.title, w.goal, w.acceptance_criteria, COALESCE(p.runtime_image, ''), p.agent_models,
@@ -224,25 +224,15 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 			Scan(&title, &goal, &criteria, &image, &projectModels, &in.RepoName, &in.RepoURL, &in.Ref); err != nil {
 			return fmt.Errorf("load work item and repository: %w", err)
 		}
-		// A fix for pull request feedback is handed that feedback only. The
-		// open findings are review's: low ones a person chose to leave, and a
-		// fixer handed both takes on work nobody asked this fix to do.
-		if r.Phase == delivery.PhaseReview {
-			// The delivery's policy decides what blocks; the reviewer is told.
-			var raw []byte
-			err := tx.QueryRow(ctx, `SELECT state->'policy'->'blockingSeverities' FROM workflow_runs
-				WHERE work_item_id = $1 ORDER BY created_at DESC LIMIT 1`, r.WorkItemID).Scan(&raw)
-			if err != nil && !db.IsNotFound(err) {
-				return err
-			}
-			_ = json.Unmarshal(raw, &blocking)
-		}
-		if r.Phase == delivery.PhaseFix && len(feedback) == 0 {
+		// The findings this fix was created for, exactly: a fix for pull
+		// request feedback has none, and must not take on the review's
+		// findings a person chose to leave.
+		if len(r.FindingIDs) > 0 {
 			rows, err := tx.Query(ctx, `SELECT severity::text, category, title, description, suggested_fix,
 				COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0)
-				FROM review_findings WHERE work_item_id = $1 AND status = 'open'
+				FROM review_findings WHERE id = ANY($1)
 				ORDER BY CASE severity WHEN 'blocking' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 ELSE 5 END, created_at`,
-				r.WorkItemID)
+				r.FindingIDs)
 			if err != nil {
 				return err
 			}
@@ -278,7 +268,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 	}
 	in.Prompt = delivery.Prompt(r.Phase, delivery.PromptInput{
 		Title: title, Goal: goal, AcceptanceCriteria: ac, Category: r.Category,
-		Findings: findings, PRFeedback: feedback, BlockingSeverities: blocking, Context: context,
+		Findings: findings, PRFeedback: feedback, BlockingSeverities: r.BlockingSeverities, Context: context,
 	})
 	if delivery.Publishes[r.Phase] {
 		in.PushBranch = runBranch(r)
@@ -343,11 +333,10 @@ func (s *Syncer) follow(r phaseRun) {
 		if err == nil || ctx.Err() != nil {
 			return
 		}
-		// lux no longer knows the Run — its data was lost, or it was
-		// deleted. Nothing will ever arrive; following again every sweep
-		// would spin forever with the phase never finishing.
+		// A Run lux lost fails here, or nothing would ever finish it: no
+		// output will arrive, and following again would spin forever.
 		if le, ok := lux.AsError(err); ok && le.Status == 404 {
-			if err := s.fail(context.Background(), r, "lux no longer has this Run"); err != nil {
+			if err := s.retryLater(context.Background(), r, err); err != nil {
 				s.Log.Warn("failing a Run lux lost", "run", r.ID, "error", err)
 			}
 			return
@@ -754,9 +743,13 @@ func (s *Syncer) ask(ctx context.Context, r phaseRun, call func(context.Context,
 // errRetry ends a step that will be tried again after a back-off.
 var errRetry = errors.New("retrying later")
 
-// retryLater backs a Run off after a failure that may pass. Errors that
-// will not pass (a spec lux rejects) fail the Run instead.
+// retryLater backs a Run off after a failure that may pass. A lux Run lux
+// no longer has will not come back, whichever call found out: that fails
+// the Run instead of retrying it forever.
 func (s *Syncer) retryLater(ctx context.Context, r phaseRun, cause error) error {
+	if le, ok := lux.AsError(cause); ok && le.Status == 404 {
+		return s.fail(ctx, r, "lux no longer has this Run")
+	}
 	s.Log.Info("lux call failed; retrying later", "run", r.ID, "error", cause)
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE runs SET next_attempt_at = now() + interval '5 seconds' WHERE id = $1`, r.ID)

@@ -354,6 +354,11 @@ func ReadSSE(r io.Reader, fn func(event string, data []byte) error) error {
 // ParseFrame turns one SSE message into a Frame; false for a kind dude
 // does not use.
 func ParseFrame(event string, data []byte) (Frame, bool) {
+	// An agent's output is whatever its tools printed, binary included, and
+	// Postgres takes no NUL in text or jsonb: one would fail every write of
+	// the frame, and the Run's stream could never get past it. Replaced
+	// here, where lux's output enters dude, so nothing downstream sees one.
+	data = bytes.ReplaceAll(data, []byte(`\u0000`), []byte(`\ufffd`))
 	switch event {
 	case "record":
 		var r struct {

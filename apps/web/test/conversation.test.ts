@@ -272,7 +272,7 @@ describe("what the agent received, thought and got back", () => {
     expect(conversation.tokens).toBe(12);
     expect(conversation).toMatchObject({ contextTokens: 12000, contextWindow: 744000 });
     expect(conversation.turns).toEqual([
-      expect.objectContaining({ kind: "usage", input: 2, output: 10, cacheRead: 11889 }),
+      expect.objectContaining({ kind: "usage", outputTokens: 10, contextTokens: 12000 }),
     ]);
   });
 

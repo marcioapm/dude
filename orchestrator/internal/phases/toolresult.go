@@ -13,10 +13,6 @@ const (
 	outputKeep  = outputLimit / 2
 )
 
-// promptRequestID is the id lux acknowledges the task itself under, as
-// opposed to a person's steering.
-const promptRequestID = "prompt"
-
 // toolResult is a finished tool call's outcome in dude's vocabulary:
 // `output` (or `stdout` and `stderr`, for an agent that keeps them apart),
 // each capped, and `exitCode` when the agent reports one.
