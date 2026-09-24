@@ -18,7 +18,7 @@
  */
 
 import type { AgentRole, WorkItemStatus } from "@dude/domain";
-import { EMPTY_TRIAGE_COUNTS, TRIAGE_SPECS, addTriage, type TriageCounts, type TriageKind } from "../tokens/triage.ts";
+import { EMPTY_TRIAGE_COUNTS, TRIAGE_SPECS, addTriage, sumTriage, type TriageCounts, type TriageKind } from "../tokens/triage.ts";
 import { askingSession, currentRun, workItemTriage, type NavEpic, type NavProject, type NavRef, type NavSession, type NavWorkItem } from "./navModel.ts";
 
 export const BOARD_COLUMN_KINDS = ["intake", "queued", "running", "review", "closed"] as const;
@@ -105,18 +105,57 @@ export function boardCards(project: NavProject, epic?: NavEpic | null): BoardCar
  * otherwise left in the caller's order, which is where recency belongs.
  */
 export function boardColumns(project: NavProject, epic?: NavEpic | null): BoardColumn[] {
+  return columnsOf(boardCards(project, epic));
+}
+
+function columnsOf(cards: ReadonlyArray<BoardCard>): BoardColumn[] {
   const byKind: Record<BoardColumnKind, BoardCard[]> = { intake: [], queued: [], running: [], review: [], closed: [] };
-  for (const c of boardCards(project, epic)) byKind[c.column].push(c);
+  for (const c of cards) byKind[c.column].push(c);
   return BOARD_COLUMN_KINDS.map((kind) => {
-    const cards = byKind[kind].sort((a, b) => TRIAGE_SPECS[a.triage].rank - TRIAGE_SPECS[b.triage].rank);
+    const sorted = byKind[kind].sort((a, b) => TRIAGE_SPECS[a.triage].rank - TRIAGE_SPECS[b.triage].rank);
     let counts = EMPTY_TRIAGE_COUNTS;
     let costUsd = 0;
-    for (const c of cards) {
+    for (const c of sorted) {
       counts = addTriage(counts, c.triage);
       costUsd += c.workItem.costUsd ?? 0;
     }
-    return { kind, spec: BOARD_COLUMN_SPECS[kind], cards, counts, costUsd };
+    return { kind, spec: BOARD_COLUMN_SPECS[kind], cards: sorted, counts, costUsd };
   });
+}
+
+/** Key of the "No epic" swimlane. */
+export const NO_EPIC_LANE = "none";
+
+export interface BoardSwimlane {
+  /** `epic:<id>` or `NO_EPIC_LANE`. Stable across renders, so collapse state can key on it. */
+  readonly key: string;
+  /** Null for the loose work items. */
+  readonly epic: NavEpic | null;
+  readonly title: string;
+  readonly columns: ReadonlyArray<BoardColumn>;
+  readonly count: number;
+  readonly counts: TriageCounts;
+  readonly costUsd: number;
+}
+
+/**
+ * The project board read by epic: one swimlane per epic in the order the
+ * project lists them (that order is the operator's), each holding the same
+ * five columns, then "No epic" for the loose work items when there are
+ * any. An epic with nothing in it still gets its row — the order set in
+ * the tree must be visible here — but the row is empty, not five rails.
+ */
+export function boardSwimlanes(project: NavProject): BoardSwimlane[] {
+  const out: BoardSwimlane[] = [];
+  for (const e of project.epics ?? []) out.push(swimlane(`epic:${e.id}`, e, e.title, e.workItems.map((wi) => toCard(wi, e))));
+  const loose = (project.workItems ?? []).map((wi) => toCard(wi, null));
+  if (loose.length > 0) out.push(swimlane(NO_EPIC_LANE, null, "No epic", loose));
+  return out;
+}
+
+function swimlane(key: string, epic: NavEpic | null, title: string, cards: ReadonlyArray<BoardCard>): BoardSwimlane {
+  const columns = columnsOf(cards);
+  return { key, epic, title, columns, count: cards.length, counts: sumTriage(columns.map((c) => c.counts)), costUsd: boardCost(columns) };
 }
 
 export function boardCardCount(columns: ReadonlyArray<BoardColumn>): number {

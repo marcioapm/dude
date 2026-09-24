@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Block, Caption, Col, Label, Panes, Row, Section, States, type PaneMode } from "../Frame.tsx";
 import styles from "../gallery.module.css";
 import { Button, IconButton } from "../../primitives/Button.tsx";
 import { Input } from "../../primitives/Input.tsx";
+import { Textarea } from "../../primitives/Textarea.tsx";
+import { RowMenu, RowMenuTrigger, rowMenuOpeners, type RowMenuItem } from "../../primitives/RowMenu.tsx";
 import { Select } from "../../primitives/Select.tsx";
 import { Checkbox } from "../../primitives/Checkbox.tsx";
 import { Badge } from "../../primitives/Badge.tsx";
@@ -20,6 +22,44 @@ import { CostDisplay, Duration } from "../../components/Numbers.tsx";
 import { TONE_NAMES } from "../../tokens/palette.ts";
 
 const VARIANTS = ["primary", "secondary", "ghost", "destructive", "destructive-outline"] as const;
+
+const moveToEpic: RowMenuItem = {
+  kind: "submenu",
+  id: "move",
+  label: "Move to epic",
+  icon: "layers",
+  items: [
+    { id: "e1", label: "OAuth migration", icon: "layers" },
+    { id: "e2", label: "Q4 performance", icon: "layers" },
+    { id: "e3", label: "Webhook reliability and delivery guarantees", icon: "layers" },
+    { kind: "separator" },
+    { id: "none", label: "No epic" },
+  ],
+};
+const workItemMenu: ReadonlyArray<RowMenuItem> = [
+  { id: "edit", label: "Edit", icon: "edit", shortcut: "E" },
+  moveToEpic,
+  { id: "split", label: "Split", icon: "simplifier" },
+  { kind: "separator" },
+  { id: "delete", label: "Delete", icon: "cross", tone: "danger", disabled: true, disabledReason: "It has run; abort it instead." },
+  { id: "abort", label: "Abort run", icon: "stop", tone: "danger" },
+];
+const epicMenu: ReadonlyArray<RowMenuItem> = [
+  { id: "edit", label: "Edit", icon: "edit" },
+  { id: "new", label: "New work item", icon: "plus", shortcut: "N" },
+  { kind: "separator" },
+  { id: "up", label: "Move up", icon: "arrow-up", disabled: true, disabledReason: "Already first" },
+  { id: "down", label: "Move down", icon: "arrow-down" },
+  { kind: "separator" },
+  { id: "delete", label: "Delete", icon: "cross", tone: "danger" },
+];
+const projectMenu: ReadonlyArray<RowMenuItem> = [
+  { id: "settings", label: "Settings", icon: "system", shortcut: "," },
+  { id: "new-epic", label: "New epic", icon: "layers" },
+  { id: "new", label: "New work item", icon: "plus" },
+  { kind: "separator" },
+  { id: "archive", label: "Archive", icon: "folder", tone: "danger" },
+];
 
 export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
   return (
@@ -92,6 +132,62 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
             <Input label="Disabled" defaultValue="Not editable" disabled />
             <Input size="sm" placeholder="Filter events…" leading={<Icon name="search" size={12} />} aria-label="Filter events" />
           </div>
+        </Panes>
+      </Block>
+
+      <Block id="p-textarea" title="Textarea" note="The Input anatomy, taller. Grows with its content from `rows` to `maxRows` (default 3 → 12) and then scrolls; no resize handle. Mono for commands and config. Try typing past the limit.">
+        <Panes mode={mode}>
+          <div className={styles["grid2"]}>
+            <Textarea label="Goal" placeholder="Why, and any detail the agent should know…" hint="Markdown. Up to 10k characters." />
+            <Textarea label="Description" defaultValue={"Migrate every login flow to PKCE.\n\n- Web\n- Mobile\n- CLI"} />
+            <Textarea label="Runtime command" mono rows={2} maxRows={6} defaultValue={"bun install --frozen-lockfile\nbun test"} />
+            <Textarea label="Acceptance criterion" defaultValue="" error="Each criterion must be under 2000 characters" rows={2} />
+            <Textarea label="Locked" defaultValue="Kind and repository are fixed once a run exists." disabled rows={2} />
+            <ControlledTextarea />
+          </div>
+        </Panes>
+      </Block>
+
+      <Block
+        id="p-rowmenu"
+        title="RowMenu"
+        note="The overflow menu behind a '…' button on a row — tree rows, board headers, table rows. Items carry a glyph, a label, an optional shortcut hint, a danger tone, a disabled reason (tooltip and read aloud) and can open a submenu. Opens on click; a row that spreads rowMenuOpeners also opens it on right-click and Shift+F10. Portaled at the popover layer so it works inside a Dialog. Try ↑↓, →/← for the submenu, Esc."
+      >
+        <Panes mode={mode}>
+          <Col>
+            <Row style={{ gap: 24 }}>
+              <States
+                items={[
+                  ["work item", <RowMenu items={workItemMenu} label="Actions for CP-41" />],
+                  ["epic", <RowMenu items={epicMenu} label="Actions for OAuth migration" />],
+                  ["project", <RowMenu items={projectMenu} label="Actions for Customer Portal" size="md" />],
+                  ["custom trigger", <RowMenu items={epicMenu} label="Epic actions" trigger={<Button size="sm" trailingIcon="chevron-down">Edit epic</Button>} />],
+                ]}
+              />
+            </Row>
+            <Label>In a row: hover, focus, right-click, Shift+F10</Label>
+            <MenuRowDemo />
+            <Label>Inside a dialog</Label>
+            <Row>
+              <Dialog
+                trigger={<Button>Open dialog with a menu</Button>}
+                title="Edit work item"
+                description="The menu must open above the dialog, not beneath its scrim."
+                footer={
+                  <DialogClose asChild>
+                    <Button variant="primary">Done</Button>
+                  </DialogClose>
+                }
+              >
+                <Row>
+                  <Input label="Title" defaultValue="Add PKCE to the login flow" style={{ flex: 1 }} />
+                  <span style={{ alignSelf: "flex-end" }}>
+                    <RowMenu items={workItemMenu} label="Actions for CP-41" size="md" />
+                  </span>
+                </Row>
+              </Dialog>
+            </Row>
+          </Col>
         </Panes>
       </Block>
 
@@ -429,6 +525,53 @@ function SortableTableDemo() {
         ))}
       </TBody>
     </Table>
+  );
+}
+
+function ControlledTextarea() {
+  const [v, setV] = useState("");
+  const over = v.length > 80;
+  return <Textarea label="Controlled (80 chars)" value={v} onChange={(e) => setV(e.target.value)} rows={2} maxRows={4} hint={over ? undefined : `${80 - v.length} left`} error={over ? `${v.length - 80} over the limit` : undefined} />;
+}
+
+/** A focusable row with a hover/focus menu, opened from the row's own keyboard and right-click. */
+function MenuRowDemo() {
+  const [open, setOpen] = useState(false);
+  const [last, setLast] = useState<string | null>(null);
+  const rowRef = useRef<HTMLDivElement>(null);
+  const openers = rowMenuOpeners(() => setOpen(true));
+  return (
+    <Col>
+      <div
+        ref={rowRef}
+        tabIndex={0}
+        role="row"
+        aria-label="CP-41 Add PKCE to the login flow"
+        className={styles["menuRow"]}
+        {...openers}
+      >
+        <StatusBadge status="running" variant="dot" iconOnly />
+        <span className="ds-mono" style={{ fontSize: 11, color: "var(--ds-color-text-muted)" }}>
+          CP-41
+        </span>
+        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Add PKCE to the login flow</span>
+        <span className={styles["menuRowSlot"]} data-open={open ? "true" : undefined}>
+          <RowMenu
+            items={workItemMenu}
+            label="Actions for CP-41"
+            trigger={<RowMenuTrigger label="Actions for CP-41" />}
+            open={open}
+            onOpenChange={setOpen}
+            onSelect={setLast}
+            onCloseAutoFocus={(e) => {
+              e.preventDefault();
+              rowRef.current?.focus();
+            }}
+          />
+        </span>
+      </div>
+      <Caption>last action: {last ?? "none"}</Caption>
+    </Col>
   );
 }
 

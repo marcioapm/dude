@@ -76,8 +76,13 @@ future consumer that is not React (a native menu, a canvas chart, a CLI
 colour table) can import the typed values from `@dude/design-system/tokens`.
 
 Behavioural primitives (Select, Dialog, Tabs, Tooltip, Toast, Checkbox,
-ScrollArea) sit on Radix, which is unstyled and does keyboard/ARIA correctly.
-Everything else is hand-rolled.
+ScrollArea, RowMenu) sit on Radix, which is unstyled and does keyboard/ARIA
+correctly. Everything else is hand-rolled.
+
+Shared keyframes live in `styles/base.css`; a CSS module must reference
+them as `animation: global(ds-name) …` or the name is hashed to nothing and
+a Radix popup waiting on its exit animation never unmounts (a test enforces
+this). Popups that must sit above a dialog use `--ds-z-popover`.
 
 ## Consuming the package
 
@@ -360,6 +365,46 @@ nudge by eye.
   last one there is; folded lanes are skipped), Home/End, Enter/Space open.
   Past `cap` cards a lane shows "N more"; since urgent cards sort first, what
   folds is only ever the calm tail.
+- `groupBy="epic"` turns a project board into **swimlanes**
+  (`boardSwimlanes`): a row per epic in the project's order — the order the
+  operator set — then *No epic*, each across the same five lanes under one
+  shared head row. The lane header is the epic title with the layers glyph,
+  a count, the roll-up and the spend; it folds the row to 28px
+  (`collapsed` / `onCollapsedChange`, keyed `epic:<id>` / `none`). An empty
+  epic keeps its row so its position stays visible. Cards drop their epic
+  line; ↑↓ walk a column across rows. The header's "…" is the app's
+  `RowMenu` via `laneMenu`.
+
+### Management (menus, forms, findings)
+
+- **RowMenu** is the one overflow menu: behind a "more" `IconButton` on a
+  tree row, a board or lane header, a table row. The DS never knows the
+  actions — the app passes `items` (icon, label, shortcut hint, `tone:
+  "danger"`, `disabled` + `disabledReason`, separators, submenus for "Move
+  to epic ›"). It opens on click, and a row that spreads `rowMenuOpeners`
+  also opens it on right-click and Shift+F10 / the context-menu key. Focus
+  returns to the row on close (`onCloseAutoFocus`) so arrow keys keep
+  working. A danger item is still just a request: the destructive action
+  itself goes behind a `Dialog tone="danger"`.
+- `NavTree` / `Sidebar` take `menuItems={(row) => items | null}` (or a
+  `menu` render prop for full control); a row that returns nothing draws no
+  trigger. The trigger is out of the tab order and visible on hover, focus,
+  or while open, so the tree's ↑↓ → ← Home End `/` are untouched.
+- **Textarea** has the `Input` anatomy (label, hint, error,
+  `aria-describedby`) and grows from `rows` to `maxRows` (3 → 12) then
+  scrolls; never a resize handle. `mono` for commands and config.
+- **Breadcrumb** says where you are: Project › Epic › KEY, each crumb but
+  the last a link or button, the last `aria-current`. Middle crumbs elide in
+  the middle (`elideMiddle`) so head and tail survive; the last never does.
+  It replaces a Back button in the work-item and transcript headers.
+- **FindingRow** is the only way a review finding is drawn: severity as
+  glyph + word in its tone (`FINDING_SEVERITY_SPECS`, keyed on the domain
+  union), category, title, `file:line` in mono, and the status as a neutral
+  `Badge` — a resolved blocking finding reads as both. Description,
+  suggested fix and resolution note expand under the row. Settled rows dim;
+  nothing is struck through. `FindingGroup` puts open findings first, most
+  severe first (`sortFindings`), and counts what is still open; `fixedIn` is
+  a slot for the app's link to the fix run.
 
 
 - `HumanAvatar` is for an identified person; `AgentAvatar role="human"` is
@@ -468,12 +513,16 @@ nudge by eye.
 | `<HumanAvatarStack people={[waitingOn, requester]} />` | a row of role-coloured circles with letters |
 | `<Sidebar projects={nav} selected={ref} />` and let defaults open the blocked item | expanding three levels to find "Needs you" |
 | `<Board project={p} epic={e} selected={ref} />` with needs-you sorted first | eleven columns, or a draggable card for a transition the workflow owns |
+| `<RowMenu items={[…, { id: "delete", tone: "danger", disabled, disabledReason }]} />` | a row of icon buttons, or a greyed item that does not say why |
+| `<FindingRow severity="blocking" status="resolved" … />` | `f.severity.toUpperCase()` in red, struck through when done |
+| `<Breadcrumb items={[project, epic, key]} />` in the header | a ghost `Back` button under the content |
 
 ## Components
 
-`src/primitives/` — Button, IconButton, Input, Select, Checkbox, Badge, Card,
-Table (THead/TBody/Tr/Th/Td/TableEmpty), Tabs, Dialog, Toast, Tooltip,
-Skeleton/SkeletonLines/Spinner, EmptyState, ScrollArea.
+`src/primitives/` — Button, IconButton, Input, Textarea, Select, Checkbox,
+Badge, Card, Table (THead/TBody/Tr/Th/Td/TableEmpty), Tabs, Dialog, Toast,
+Tooltip, RowMenu (+ `rowMenuOpeners`), Skeleton/SkeletonLines/Spinner,
+EmptyState, ScrollArea.
 
 `src/components/` — the factory vocabulary:
 
@@ -564,7 +613,14 @@ Skeleton/SkeletonLines/Spinner, EmptyState, ScrollArea.
   spend; five lifecycle lanes; three-line cards; needs-you first; keyboard
   grid; "N more" past the cap; quiet, empty and loading states. No drag.
 - Its view model is `src/util/boardModel.ts`: `boardColumns`, `boardCards`,
-  `boardScope`, `liveActivity`, `BOARD_COLUMN_FOR_STATUS`.
+  `boardSwimlanes`, `boardScope`, `liveActivity`, `BOARD_COLUMN_FOR_STATUS`.
+
+`src/components/` — management:
+
+- **Breadcrumb** — Project › Epic › KEY; links or buttons, middle-elided.
+- **FindingRow / FindingGroup** — a review finding, and the open-first list
+  of them; `FINDING_SEVERITY_SPECS` / `FINDING_STATUS_SPECS` are the
+  vocabulary.
 
 ## What is deliberately not here
 

@@ -1,0 +1,55 @@
+/*
+ * Textarea: the Input frame, taller. Label / hint / error come from
+ * Input.module.css so the two fields cannot drift apart.
+ */
+
+.control {
+  display: flex;
+  background: var(--ds-color-field-bg);
+  border: 1px solid var(--ds-color-border);
+  border-radius: var(--ds-radius-md);
+  color: var(--ds-color-text-primary);
+  transition:
+    border-color var(--ds-duration-fast) var(--ds-ease-standard),
+    box-shadow var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.control:hover {
+  border-color: var(--ds-color-border-strong);
+}
+.control:focus-within {
+  border-color: var(--ds-color-accent);
+  box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-color-selection);
+}
+.control[data-invalid="true"] {
+  border-color: var(--ds-tone-danger-border);
+}
+.control[data-invalid="true"]:focus-within {
+  border-color: var(--ds-tone-danger-fg);
+  box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-tone-danger-bg);
+}
+.control[data-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 20px lines and 6px above/below: TEXTAREA_LINE_PX / TEXTAREA_PADDING_PX in
+   Textarea.tsx assume exactly this. */
+.textarea {
+  flex: 1;
+  min-width: 0;
+  padding: 6px var(--ds-space-8);
+  background: none;
+  border: 0;
+  outline: none;
+  resize: none;
+  font-size: var(--ds-text-md);
+  line-height: 20px;
+  color: inherit;
+  overflow-y: auto;
+}
+.textarea::placeholder {
+  color: var(--ds-color-text-muted);
+}
+.textarea:focus-visible {
+  outline: none;
+}

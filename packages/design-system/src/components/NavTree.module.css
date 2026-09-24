@@ -88,6 +88,28 @@
   margin-left: auto;
 }
 
+/* The row's "…" menu: space reserved so nothing shifts, invisible until
+   the row is hovered, focused, or the menu is open. Sits after whatever
+   trails the row, or pushes right when nothing does. */
+.menuSlot {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.rollup ~ .menuSlot,
+.wiTrailing ~ .menuSlot {
+  margin-left: 0;
+}
+.row:hover .menuSlot,
+.row:focus-visible .menuSlot,
+.row:focus-within .menuSlot,
+.menuSlot[data-open="true"] {
+  opacity: 1;
+}
+
 /* -- Project: a small-caps header that sticks to the top of the scroll. -- */
 .project {
   position: sticky;

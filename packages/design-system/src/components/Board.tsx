@@ -9,7 +9,19 @@ import { sumTriage } from "../tokens/triage.ts";
 import { formatDuration } from "../util/format.ts";
 import { toMs, useNow } from "../util/useNow.ts";
 import { navKey, workingRoles, type NavEpic, type NavProject, type NavRef, type NavRow, type NavSession } from "../util/navModel.ts";
-import { BOARD_COLUMN_KINDS, BOARD_COLUMN_SPECS, boardCardCount, boardColumns, boardCost, liveActivity, type BoardCard, type BoardColumn, type LiveActivity } from "../util/boardModel.ts";
+import {
+  BOARD_COLUMN_KINDS,
+  BOARD_COLUMN_SPECS,
+  boardCardCount,
+  boardColumns,
+  boardCost,
+  boardSwimlanes,
+  liveActivity,
+  type BoardCard,
+  type BoardColumn,
+  type BoardSwimlane,
+  type LiveActivity,
+} from "../util/boardModel.ts";
 import { AgentAvatar } from "./AgentAvatar.tsx";
 import { HumanAvatarStack } from "./HumanAvatar.tsx";
 import { CostDisplay, Duration } from "./Numbers.tsx";
@@ -33,6 +45,23 @@ export interface BoardProps extends Omit<HTMLAttributes<HTMLElement>, "onSelect"
   /** Right side of the header: filters, a new-task button. */
   readonly headerActions?: ReactNode;
   readonly hideHeader?: boolean | undefined;
+  /**
+   * Project boards only: one swimlane per epic in the project's order, then
+   * "No epic", across the same five lanes. Ignored when `epic` is given.
+   */
+  readonly groupBy?: "epic" | null | undefined;
+  /** Collapsed swimlanes by key (`epic:<id>` / `none`). Controlled when given with `onCollapsedChange`. */
+  readonly collapsed?: ReadonlySet<string> | undefined;
+  readonly onCollapsedChange?: ((next: ReadonlySet<string>) => void) | undefined;
+  /** A swimlane header's "…" menu (a `RowMenu`); the DS knows no actions. */
+  readonly laneMenu?: ((lane: BoardSwimlane) => ReactNode) | undefined;
+}
+
+/** What the board is drawing: one anonymous group, or a swimlane per epic. */
+interface Group {
+  readonly key: string;
+  readonly lane: BoardSwimlane | null;
+  readonly columns: ReadonlyArray<BoardColumn>;
 }
 
 /**
@@ -42,17 +71,25 @@ export interface BoardProps extends Omit<HTMLAttributes<HTMLElement>, "onSelect"
  * the eye learns where to look; a column with nothing in it folds to a
  * labelled rail rather than an empty box.
  *
+ * With `groupBy="epic"` the project board becomes swimlanes: a row per
+ * epic in the project's order, then "No epic", each with the same five
+ * columns, so the order an operator set in the tree is legible here and a
+ * lane can be folded to its header.
+ *
  * Nothing on the board is draggable. Every transition between columns is
  * the workflow's — the scheduler starts work, the agent opens the PR, the
  * checks make it ready, the merge closes it — and the two a person does
  * perform (confirm a plan, abort a run) are decisions with context, taken
  * in the transcript, not gestures. A card is a way in, not a handle.
  *
- * Keyboard: one tab stop; ↑↓ move within a column, ←→ across, Home/End,
- * Enter/Space open. Selection and focus are separate.
+ * Keyboard: one tab stop; ↑↓ move within a column (continuing into the
+ * next swimlane), ←→ across, Home/End, Enter/Space open. Selection and
+ * focus are separate.
  */
-export function Board({ project, epic, selected, onSelect, cap = 12, loading, headerActions, hideHeader, className, ...rest }: BoardProps) {
+export function Board({ project, epic, selected, onSelect, cap = 12, loading, headerActions, hideHeader, groupBy, collapsed, onCollapsedChange, laneMenu, className, ...rest }: BoardProps) {
+  const swimlanes = groupBy === "epic" && !epic;
   const columns = useMemo(() => boardColumns(project, epic), [project, epic]);
+  const lanes = useMemo(() => (swimlanes ? boardSwimlanes(project) : []), [swimlanes, project]);
   const total = boardCardCount(columns);
   const cost = boardCost(columns);
   const counts = useMemo(() => sumTriage(columns.map((c) => c.counts)), [columns]);
@@ -60,67 +97,104 @@ export function Board({ project, epic, selected, onSelect, cap = 12, loading, he
   // once a minute, is plenty and keeps fifty cards from owning fifty timers.
   const now = useNow(!loading, 60_000);
 
+  // Controlled only with both props; `collapsed` alone is the initial state.
+  const collapsedControlled = collapsed !== undefined && onCollapsedChange !== undefined;
+  const [localCollapsed, setLocalCollapsed] = useState<ReadonlySet<string>>(() => collapsed ?? new Set());
+  const collapsedSet = collapsedControlled ? collapsed : localCollapsed;
+  const toggleLane = (key: string) => {
+    const next = new Set(collapsedSet);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    onCollapsedChange?.(next);
+    if (!collapsedControlled) setLocalCollapsed(next);
+  };
+
   const [revealed, setRevealed] = useState<ReadonlySet<string>>(() => new Set());
-  const reveal = (kind: string) => setRevealed((prev) => new Set(prev).add(kind));
+  const reveal = (key: string) => setRevealed((prev) => new Set(prev).add(key));
 
   const containerRef = useRef<HTMLElement>(null);
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
   const selectedKey = selected ? navKey(selected) : null;
 
+  const groups = useMemo<Group[]>(
+    () => (swimlanes ? lanes.map((l) => ({ key: l.key, lane: l, columns: l.columns })) : [{ key: "all", lane: null, columns }]),
+    [swimlanes, lanes, columns],
+  );
+
+  // What is actually drawn: per group and column, the cards before the cap
+  // (or all of them once revealed); a collapsed swimlane draws nothing.
   const visible = useMemo(
-    () => columns.map((c) => ({ column: c, cards: revealed.has(c.kind) ? c.cards : c.cards.slice(0, cap), hidden: revealed.has(c.kind) ? 0 : Math.max(0, c.cards.length - cap) })),
-    [columns, revealed, cap],
+    () =>
+      groups.map((g) => ({
+        group: g,
+        open: !collapsedSet.has(g.key),
+        columns: g.columns.map((c) => {
+          const revealKey = `${g.key}/${c.kind}`;
+          const all = revealed.has(revealKey);
+          return { column: c, revealKey, cards: all ? c.cards : c.cards.slice(0, cap), hidden: all ? 0 : Math.max(0, c.cards.length - cap) };
+        }),
+      })),
+    [groups, collapsedSet, revealed, cap],
   );
   const cardKey = (c: BoardCard) => navKey({ kind: "workItem", id: c.workItem.id });
-  const allKeys = visible.flatMap((v) => v.cards.map(cardKey));
-  const selectedCardKey = visible.flatMap((v) => v.cards).find((c) => cardContains(c, selectedKey)) ?? null;
-  const tabStop = (focusedKey && allKeys.includes(focusedKey) ? focusedKey : null) ?? (selectedCardKey ? cardKey(selectedCardKey) : null) ?? allKeys[0] ?? null;
+  const allCards = visible.flatMap((g) => (g.open ? g.columns.flatMap((v) => v.cards) : []));
+  const allKeys = allCards.map(cardKey);
+  const selectedCard = allCards.find((c) => cardContains(c, selectedKey)) ?? null;
+  const tabStop = (focusedKey && allKeys.includes(focusedKey) ? focusedKey : null) ?? (selectedCard ? cardKey(selectedCard) : null) ?? allKeys[0] ?? null;
 
   const focusCard = (key: string) => {
     setFocusedKey(key);
     containerRef.current?.querySelector<HTMLElement>(`[data-board-key="${CSS.escape(key)}"]`)?.focus();
   };
 
-  const onKeyDown = (e: KeyboardEvent<HTMLElement>, col: number, row: number) => {
-    const list = (i: number) => visible[i]?.cards ?? [];
-    const step = (dc: number) => {
-      // Skip folded columns; land on the same row, or the last one there is.
-      for (let i = col + dc; i >= 0 && i < visible.length; i += dc) {
-        const cards = list(i);
+  const onKeyDown = (e: KeyboardEvent<HTMLElement>, gi: number, col: number, row: number) => {
+    const cardsAt = (g: number, c: number) => (visible[g]?.open ? (visible[g]?.columns[c]?.cards ?? []) : []);
+    // Same column, previous / next card — walking into the neighbouring
+    // swimlane when this one runs out, so ↓ reads the column top to bottom.
+    const vertical = (dir: 1 | -1) => {
+      const here = cardsAt(gi, col)[row + dir];
+      if (here) return focusCard(cardKey(here));
+      for (let g = gi + dir; g >= 0 && g < visible.length; g += dir) {
+        const cards = cardsAt(g, col);
+        const target = dir === 1 ? cards[0] : cards[cards.length - 1];
+        if (target) return focusCard(cardKey(target));
+      }
+    };
+    // Across columns in this swimlane: skip folded ones; land on the same
+    // row, or the last one there is.
+    const horizontal = (dir: 1 | -1) => {
+      for (let c = col + dir; c >= 0 && c < BOARD_COLUMN_KINDS.length; c += dir) {
+        const cards = cardsAt(gi, c);
         const target = cards[Math.min(row, cards.length - 1)];
         if (target) return focusCard(cardKey(target));
       }
     };
     switch (e.key) {
-      case "ArrowDown": {
+      case "ArrowDown":
         e.preventDefault();
-        const next = list(col)[row + 1];
-        if (next) focusCard(cardKey(next));
+        vertical(1);
         break;
-      }
-      case "ArrowUp": {
+      case "ArrowUp":
         e.preventDefault();
-        const prev = list(col)[row - 1];
-        if (prev) focusCard(cardKey(prev));
+        vertical(-1);
         break;
-      }
       case "ArrowRight":
         e.preventDefault();
-        step(1);
+        horizontal(1);
         break;
       case "ArrowLeft":
         e.preventDefault();
-        step(-1);
+        horizontal(-1);
         break;
       case "Home": {
         e.preventDefault();
-        const first = list(col)[0];
+        const first = cardsAt(gi, col)[0];
         if (first) focusCard(cardKey(first));
         break;
       }
       case "End": {
         e.preventDefault();
-        const cards = list(col);
+        const cards = cardsAt(gi, col);
         const last = cards[cards.length - 1];
         if (last) focusCard(cardKey(last));
         break;
@@ -168,33 +242,47 @@ export function Board({ project, epic, selected, onSelect, cap = 12, loading, he
       ) : total === 0 ? (
         <EmptyState icon="layers" title={epic ? "Nothing in this epic yet" : "No work items yet"} description="Give an agent a task and it appears here." className={styles["empty"]} />
       ) : (
-        <div className={styles["columns"]}>
-          {visible.map(({ column, cards, hidden }, ci) => (
-            <BoardColumnView key={column.kind} column={column} folded={column.cards.length === 0}>
-              {cards.map((card, ri) => {
-                const key = cardKey(card);
-                return (
-                  <BoardCardView
-                    key={key}
-                    card={card}
-                    now={now}
-                    showEpic={!epic}
-                    selected={cardContains(card, selectedKey)}
-                    tabIndex={key === tabStop ? 0 : -1}
-                    onFocus={() => setFocusedKey(key)}
-                    onKeyDown={(e) => onKeyDown(e, ci, ri)}
-                    onClick={() => select(card)}
-                  />
-                );
-              })}
-              {hidden > 0 ? (
-                <li className={styles["more"]}>
-                  <button type="button" className={styles["moreButton"]} onClick={() => reveal(column.kind)}>
-                    {hidden} more
-                  </button>
-                </li>
-              ) : null}
-            </BoardColumnView>
+        <div className={cx(styles["body"], swimlanes && styles["bodyLanes"])}>
+          {swimlanes ? (
+            <div className={styles["laneHead"]} aria-hidden>
+              {BOARD_COLUMN_KINDS.map((kind) => (
+                <span key={kind} className={styles["laneHeadCell"]}>
+                  <span className={styles["columnLabel"]}>{BOARD_COLUMN_SPECS[kind].label}</span>
+                  <span className={styles["columnCount"]}>{columns.find((c) => c.kind === kind)?.cards.length ?? 0}</span>
+                </span>
+              ))}
+            </div>
+          ) : null}
+          {visible.map(({ group, open, columns: cols }, gi) => (
+            <BoardGroup key={group.key} lane={group.lane} open={open} onToggle={() => toggleLane(group.key)} menu={group.lane && laneMenu ? laneMenu(group.lane) : null}>
+              {cols.map(({ column, revealKey, cards, hidden }, ci) => (
+                <BoardColumnView key={column.kind} column={column} folded={column.cards.length === 0} inLane={swimlanes}>
+                  {cards.map((card, ri) => {
+                    const key = cardKey(card);
+                    return (
+                      <BoardCardView
+                        key={key}
+                        card={card}
+                        now={now}
+                        showEpic={!epic && !swimlanes}
+                        selected={cardContains(card, selectedKey)}
+                        tabIndex={key === tabStop ? 0 : -1}
+                        onFocus={() => setFocusedKey(key)}
+                        onKeyDown={(e) => onKeyDown(e, gi, ci, ri)}
+                        onClick={() => select(card)}
+                      />
+                    );
+                  })}
+                  {hidden > 0 ? (
+                    <li className={styles["more"]}>
+                      <button type="button" className={styles["moreButton"]} onClick={() => reveal(revealKey)}>
+                        {hidden} more
+                      </button>
+                    </li>
+                  ) : null}
+                </BoardColumnView>
+              ))}
+            </BoardGroup>
           ))}
         </div>
       )}
@@ -211,12 +299,66 @@ function cardContains(card: BoardCard, key: string | null): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Group: the plain five columns, or a swimlane with a header
+// ---------------------------------------------------------------------------
+
+interface BoardGroupProps {
+  readonly lane: BoardSwimlane | null;
+  readonly open: boolean;
+  readonly onToggle: () => void;
+  readonly menu: ReactNode;
+  readonly children: ReactNode;
+}
+
+/**
+ * A swimlane: the epic's title (with the layers glyph, as in the tree), a
+ * count, the roll-up and the spend, then the five columns. The header is a
+ * button that folds the lane to one 28px row. "No epic" has no glyph.
+ */
+function BoardGroup({ lane, open, onToggle, menu, children }: BoardGroupProps) {
+  const headingId = useId();
+  if (!lane) return <div className={styles["columns"]}>{children}</div>;
+  const empty = lane.count === 0;
+  return (
+    <section className={cx(styles["lane"], !open && styles["laneClosed"], empty && styles["laneEmpty"])} aria-labelledby={headingId} data-lane={lane.key}>
+      <header className={styles["laneHeader"]}>
+        <button type="button" className={styles["laneToggle"]} aria-expanded={open} aria-controls={open ? `${headingId}-body` : undefined} onClick={onToggle}>
+          <Icon name="chevron-right" size={12} className={cx(styles["laneChevron"], open && styles["laneChevronOpen"])} />
+          {lane.epic ? <Icon name="layers" size={12} className={styles["laneGlyph"]} /> : null}
+          <span id={headingId} className={cx(styles["laneTitle"], !lane.epic && styles["laneTitleNone"])}>
+            {lane.title}
+          </span>
+          <span className={styles["laneCount"]}>{lane.count}</span>
+        </button>
+        <TriageRollup counts={lane.counts} className={styles["laneRollup"]} />
+        {lane.costUsd > 0 ? <CostDisplay usd={lane.costUsd} compact tone="muted" className={styles["laneCost"]} /> : null}
+        {menu ? <span className={styles["laneMenu"]}>{menu}</span> : null}
+      </header>
+      {open ? (
+        <div id={`${headingId}-body`} className={cx(styles["columns"], styles["laneColumns"])}>
+          {empty ? <div className={styles["laneNothing"]}>Nothing in this epic yet.</div> : children}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Column
 // ---------------------------------------------------------------------------
 
-function BoardColumnView({ column, folded, children }: { readonly column: BoardColumn; readonly folded: boolean; readonly children: ReactNode }) {
+function BoardColumnView({ column, folded, inLane, children }: { readonly column: BoardColumn; readonly folded: boolean; readonly inLane: boolean; readonly children: ReactNode }) {
   const spec = BOARD_COLUMN_SPECS[column.kind];
   const headingId = useId();
+  // Inside a swimlane the labels live in the shared head row above; a
+  // folded column is then just an empty cell, keeping the grid aligned.
+  if (inLane) {
+    return (
+      <section className={cx(styles["column"], styles["columnInLane"], folded && styles["columnInLaneEmpty"])} aria-label={spec.label} data-column={column.kind}>
+        {!folded ? <ul className={styles["cards"]}>{children}</ul> : null}
+      </section>
+    );
+  }
   return (
     <section className={cx(styles["column"], folded && styles["columnFolded"])} aria-labelledby={headingId} data-column={column.kind}>
       <header className={styles["columnHead"]} title={spec.description}>

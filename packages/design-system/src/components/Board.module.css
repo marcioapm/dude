@@ -87,6 +87,19 @@
   flex-shrink: 0;
 }
 
+/* -- Body: the five columns, or a stack of swimlanes that scrolls as one. -- */
+.body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.bodyLanes {
+  overflow: auto;
+  padding: 0 var(--ds-space-8) var(--ds-space-8);
+}
+
 /* -- Columns: a flex row; a folded column is a 28px rail with its label. -- */
 .columns {
   display: flex;
@@ -162,6 +175,150 @@
   display: flex;
   flex-direction: column;
   gap: var(--ds-space-4);
+}
+
+/* -- Swimlanes: one shared head row of lane labels, then a section per
+   epic. Each section is a 28px header — chevron, layers glyph, title,
+   count, roll-up, spend, menu — over the same five columns, without the
+   per-column heads. Columns are equal cells so the lanes line up down the
+   page; an empty column is an empty cell, not a rail, so the grid holds. -- */
+.laneHead {
+  position: sticky;
+  top: 0;
+  z-index: var(--ds-z-raised);
+  display: grid;
+  grid-template-columns: repeat(5, minmax(200px, 1fr));
+  gap: var(--ds-space-8);
+  min-width: max-content;
+  padding: var(--ds-space-8) 0 var(--ds-space-4);
+  background: var(--ds-color-canvas);
+}
+.laneHeadCell {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  height: var(--ds-size-row-compact);
+  padding: 0 var(--ds-space-4);
+}
+.lane {
+  display: flex;
+  flex-direction: column;
+  min-width: max-content;
+  flex-shrink: 0;
+  margin-top: var(--ds-space-4);
+}
+.laneHeader {
+  position: sticky;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  height: var(--ds-size-row-default);
+  padding: 0 var(--ds-space-6) 0 0;
+  border-top: 1px solid var(--ds-color-border-subtle);
+}
+.laneEmpty .laneHeader {
+  color: var(--ds-color-text-muted);
+}
+.laneToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  height: 100%;
+  min-width: 0;
+  padding: 0 var(--ds-space-6) 0 var(--ds-space-4);
+  border: 0;
+  border-radius: var(--ds-radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.laneToggle:hover {
+  background: var(--ds-color-hover-wash);
+}
+.laneChevron {
+  color: var(--ds-color-text-muted);
+  flex-shrink: 0;
+  transition: transform var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.laneChevronOpen {
+  transform: rotate(90deg);
+}
+.laneGlyph {
+  color: var(--ds-color-text-muted);
+  flex-shrink: 0;
+}
+.laneTitle {
+  font-size: var(--ds-text-sm);
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  max-width: 320px;
+}
+.laneTitleNone {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-secondary);
+  font-style: italic;
+}
+.laneEmpty .laneTitle {
+  color: var(--ds-color-text-secondary);
+}
+.laneCount {
+  font-size: var(--ds-text-2xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--ds-color-text-muted);
+}
+.laneRollup {
+  flex-shrink: 0;
+}
+.laneCost {
+  font-size: var(--ds-text-xs);
+  flex-shrink: 0;
+}
+.laneMenu {
+  display: inline-flex;
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.laneHeader:hover .laneMenu,
+.laneHeader:focus-within .laneMenu,
+.laneMenu:has([data-state="open"]) {
+  opacity: 1;
+}
+.laneColumns {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(200px, 1fr));
+  flex: none;
+  padding: var(--ds-space-4) 0 var(--ds-space-8);
+  overflow: visible;
+}
+.laneNothing {
+  grid-column: 1 / -1;
+  padding: var(--ds-space-4) var(--ds-space-8);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.columnInLane {
+  min-width: 0;
+  max-width: none;
+}
+.columnInLane .cards {
+  padding-bottom: 0;
+}
+.columnInLaneEmpty {
+  align-self: start;
+  height: var(--ds-size-row-compact);
+  border-radius: var(--ds-radius-md);
+  border: 1px dashed var(--ds-color-border-subtle);
+  opacity: 0.6;
+}
+.laneClosed .laneHeader {
+  border-bottom: 0;
 }
 
 /* -- Card: top line · title · meta. A button, so it is one tab stop and
@@ -383,7 +540,7 @@
    sideways at a fixed 220px each, so a card never gets thinner than its
    own title. Below 480px the epic line goes; the key and age stay. */
 @container (max-width: 720px) {
-  .column:not(.columnFolded) {
+  .column:not(.columnFolded):not(.columnInLane) {
     flex: 0 0 220px;
     max-width: none;
   }
