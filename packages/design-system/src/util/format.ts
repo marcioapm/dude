@@ -56,8 +56,11 @@ export function formatTokens(n: number, opts: { readonly exact?: boolean } = {})
  */
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return "—";
-  if (bytes < 1024) return `${Math.round(bytes)} B`;
-  if (bytes < 1024 * 1024) return `${trimZeros((bytes / 1024).toFixed(1))} KB`;
+  // Round before choosing the unit, so 1023.6 B is "1 KB" and 1023.97 KB is
+  // "1 MB", never "1024 B" or "1024 KB".
+  if (Math.round(bytes) < 1024) return `${Math.round(bytes)} B`;
+  const kb = trimZeros((bytes / 1024).toFixed(1));
+  if (Number(kb) < 1024) return `${kb} KB`;
   return `${trimZeros((bytes / (1024 * 1024)).toFixed(1))} MB`;
 }
 

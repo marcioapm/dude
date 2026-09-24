@@ -3,6 +3,19 @@ import { cx } from "../util/cx.ts";
 import { formatDuration, formatTokens, formatUsd, type DurationOptions } from "../util/format.ts";
 import styles from "./Numbers.module.css";
 
+const INT = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
+
+/**
+ * Where a value stands against its limit: `warn` from 80%, `over` at
+ * 100%. A cost against its budget and a context against its window use
+ * the same thresholds so the same colour means the same thing.
+ */
+export function limitState(value: number, limit: number | undefined): "warn" | "over" | null {
+  if (limit === undefined || limit <= 0) return null;
+  const ratio = value / limit;
+  return ratio >= 1 ? "over" : ratio >= 0.8 ? "warn" : null;
+}
+
 interface NumberBaseProps extends Omit<HTMLAttributes<HTMLSpanElement>, "children"> {
   readonly mono?: boolean | undefined;
   readonly tone?: "default" | "secondary" | "muted" | undefined;
@@ -30,13 +43,12 @@ export interface CostDisplayProps extends NumberBaseProps {
 export function CostDisplay({ usd, compact, budgetUsd, live, mono, tone = "default", className, ...rest }: CostDisplayProps) {
   if (usd === null) {
     return (
-      <span className={cx(styles["num"], styles["unknown"], mono && styles["mono"], className)} title="Cost not reported" {...rest}>
+      <span className={cx(styles["num"], styles["unknown"], mono && styles["mono"], className)} title="Cost not reported" aria-label="Cost not reported" {...rest}>
         —
       </span>
     );
   }
-  const ratio = budgetUsd !== undefined && budgetUsd > 0 ? usd / budgetUsd : 0;
-  const state = ratio >= 1 ? "over" : ratio >= 0.8 ? "warn" : null;
+  const state = limitState(usd, budgetUsd);
   return (
     <span
       className={cx(
@@ -76,11 +88,10 @@ export interface TokenCountProps extends NumberBaseProps {
 }
 
 export function TokenCount({ tokens, exact, label, windowTokens, mono, tone = "default", className, ...rest }: TokenCountProps) {
-  const ratio = windowTokens !== undefined && windowTokens > 0 ? tokens / windowTokens : 0;
-  const state = ratio >= 1 ? "over" : ratio >= 0.8 ? "warn" : null;
-  const title = `${Math.round(tokens).toLocaleString("en-US")} ${label ? `${label} ` : ""}tokens${
-    windowTokens !== undefined ? ` of ${Math.round(windowTokens).toLocaleString("en-US")} (${Math.round(ratio * 100)}%)` : ""
-  }`;
+  // A zero window is "not known", not a limit of nothing.
+  const window = windowTokens !== undefined && windowTokens > 0 ? windowTokens : undefined;
+  const state = limitState(tokens, window);
+  const title = `${INT.format(tokens)} ${label ? `${label} ` : ""}tokens${window !== undefined ? ` of ${INT.format(window)} (${Math.round((tokens / window) * 100)}%)` : ""}`;
   return (
     <span
       className={cx(
@@ -97,7 +108,7 @@ export function TokenCount({ tokens, exact, label, windowTokens, mono, tone = "d
     >
       {label ? <span className={styles["prefix"]}>{label}</span> : null}
       {formatTokens(tokens, { exact: exact ?? false })}
-      {windowTokens !== undefined ? <span className={styles["budget"]}>/ {formatTokens(windowTokens)}</span> : null}
+      {window !== undefined ? <span className={styles["budget"]}>/ {formatTokens(window)}</span> : null}
       {!label ? <span className={styles["unit"]}>tok</span> : null}
     </span>
   );
@@ -160,7 +171,7 @@ export function Duration({ ms, since, until, live, format, mono, tone = "default
         isLive && styles["live"],
         className,
       )}
-      title={`${Math.round(elapsed).toLocaleString("en-US")} ms`}
+      title={`${INT.format(elapsed)} ms`}
       {...rest}
     >
       {formatDuration(elapsed, format !== undefined ? { style: format } : {})}

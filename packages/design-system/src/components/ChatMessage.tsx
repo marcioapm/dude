@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import { formatTimestamp } from "../util/format.ts";
+import { toMs } from "../util/useNow.ts";
 import { type ActivityKind } from "../tokens/activity.ts";
 import { Icon } from "../icons/index.tsx";
 import { AgentAvatar, ROLE_LABEL, type AvatarKind } from "./AgentAvatar.tsx";
@@ -40,12 +41,11 @@ export interface ChatMessageProps extends Omit<HTMLAttributes<HTMLElement>, "chi
   /** For `answer`: the question that was answered, quoted above the reply. */
   readonly inReplyTo?: string | undefined;
   /**
-   * Framed turns only: sent, but not yet delivered to the agent. A steer
-   * arriving mid-turn is held until the turn ends; until then the turn
-   * shows a "Queued" mark and a dashed frame.
+   * Framed turns only: when the agent actually received it. `null` means
+   * sent but not yet delivered — a steer arriving mid-turn is held until
+   * the turn ends, and until then the turn shows a "Queued" mark and a
+   * dashed frame. `undefined` means delivery is not tracked for this turn.
    */
-  readonly pending?: boolean | undefined;
-  /** Framed turns only: when the agent actually received it. Shown once known. */
   readonly deliveredAt?: string | number | Date | null | undefined;
   readonly startedAt?: string | number | Date | undefined;
   readonly endedAt?: string | number | Date | null | undefined;
@@ -82,6 +82,12 @@ const INTENT_LABEL: Record<HumanIntent, string> = {
 const PROMPT_MAX_LINES = 8;
 const LINE_PX = 20;
 
+/** A Date for a timestamp prop, or null when it is missing or does not parse — an unparseable string must not take the render down. */
+function toDate(v: string | number | Date | null | undefined): Date | null {
+  const ms = toMs(v);
+  return ms === null ? null : new Date(ms);
+}
+
 /**
  * One turn in a transcript. Agent turns sit left with a role avatar, a
  * mono model tag and a live foot (elapsed · context · output · cost ·
@@ -106,7 +112,6 @@ export function ChatMessage({
   activityProps,
   intent,
   inReplyTo,
-  pending,
   deliveredAt,
   startedAt,
   endedAt,
@@ -125,11 +130,11 @@ export function ChatMessage({
   const k: ChatMessageKind =
     kind ?? (role === "human" || intent !== undefined ? "human" : role === "system" || role === "integration" ? "system" : "agent");
   const live = streaming === true || (activity !== undefined && activity !== "completed" && activity !== "failed" && activity !== "aborted");
-  const ts = startedAt !== undefined ? new Date(startedAt) : null;
+  const ts = toDate(startedAt);
   // A turn has a duration while it is running, or once it has an end to
   // measure to. A settled turn with neither has no duration to show — the
   // header's timestamp already says when it happened.
-  const timed = startedAt !== undefined && (live || (endedAt !== undefined && endedAt !== null));
+  const timed = ts !== null && (live || toMs(endedAt) !== null);
 
   if (k === "system") {
     return (
@@ -147,8 +152,8 @@ export function ChatMessage({
   }
 
   const humanIntent: HumanIntent = intent ?? "prompt";
-  const queued = k === "human" && pending === true;
-  const delivered = k === "human" && !queued && deliveredAt !== undefined && deliveredAt !== null ? new Date(deliveredAt) : null;
+  const queued = k === "human" && deliveredAt === null;
+  const delivered = k === "human" ? toDate(deliveredAt) : null;
   const clampLines = maxLines === false ? null : maxLines ?? (k === "human" && humanIntent === "prompt" ? PROMPT_MAX_LINES : null);
   const hasStats = k === "agent" && (costUsd !== undefined || tokens !== undefined || contextTokens !== undefined || outputTokens !== undefined || timed);
 

@@ -1,9 +1,10 @@
-import { useState, type CSSProperties, type HTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
+import { type CSSProperties, type HTMLAttributes, type ReactNode } from "react";
 import type { AgentRole, SessionStatus } from "@dude/domain";
 import { cx } from "../util/cx.ts";
 import { Icon } from "../icons/index.tsx";
 import { ACTIVITY_FOR_SESSION_STATUS, type ActivityKind } from "../tokens/activity.ts";
 import { statusSpec } from "../tokens/status.ts";
+import { activateOnKey, useDisclosure } from "../util/useDisclosure.ts";
 import { AgentAvatar, ROLE_LABEL } from "./AgentAvatar.tsx";
 import { ActivityIndicator, type ActivityIndicatorProps } from "./ActivityIndicator.tsx";
 import { StatusBadge } from "./StatusBadge.tsx";
@@ -82,26 +83,18 @@ export function ChatThread({
   const spec = statusSpec(status);
   const finished = spec.terminal;
   const pinnedClosed = depth >= 3;
-  const [internal, setInternal] = useState(defaultCollapsed ?? (finished || depth >= 2));
-  const isCollapsed = pinnedClosed || (collapsed ?? internal);
+  const disclosure = useDisclosure({
+    expanded: collapsed === undefined ? undefined : !collapsed,
+    defaultExpanded: !(defaultCollapsed ?? (finished || depth >= 2)),
+    onExpandedChange: onCollapsedChange === undefined ? undefined : (open) => onCollapsedChange(!open),
+  });
+  const isCollapsed = pinnedClosed || !disclosure.open;
   const act: ActivityKind | null = activity ?? ACTIVITY_FOR_SESSION_STATUS[status];
   const live = spec.live;
 
-  const toggle = () => {
-    if (pinnedClosed) {
-      onOpen?.(sessionId);
-      return;
-    }
-    const next = !isCollapsed;
-    if (collapsed === undefined) setInternal(next);
-    onCollapsedChange?.(next);
-  };
-  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      toggle();
-    }
-  };
+  // Header-only depth cannot open in place; its header opens the session instead.
+  const toggle = pinnedClosed ? () => onOpen?.(sessionId) : disclosure.toggle;
+  const onKey = pinnedClosed ? activateOnKey(toggle) : disclosure.onKeyDown;
 
   return (
     <section

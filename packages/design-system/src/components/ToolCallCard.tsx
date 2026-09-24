@@ -1,8 +1,9 @@
-import { useMemo, useState, type HTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, type HTMLAttributes, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import { Icon, type IconName } from "../icons/index.tsx";
 import { formatBytes, formatDuration } from "../util/format.ts";
-import { toMs, useNow } from "../util/useNow.ts";
+import { useDisclosure } from "../util/useDisclosure.ts";
+import { useElapsed } from "../util/useNow.ts";
 import { TOOL_SLOW_AFTER_MS, type ToolCallStatus } from "../tokens/activity.ts";
 import { DiffView, parseUnifiedDiff, type FileDiff } from "./DiffView.tsx";
 import styles from "./ToolCallCard.module.css";
@@ -130,6 +131,21 @@ function isEmpty(o: ToolOutput): boolean {
   return o.head.length === 0 && (o.tail === undefined || o.tail.length === 0) && (o.omittedBytes ?? 0) === 0;
 }
 
+/**
+ * What the backend dropped, said once and the same way in the section
+ * header and on the separator. Four cases: a tail with a byte count, a
+ * tail with none (the middle went, size unknown), a byte count with no
+ * tail (the end went — the separator then closes the block), or nothing.
+ */
+function elision(o: ToolOutput): { readonly hint: string; readonly separator: string } | null {
+  const omitted = o.omittedBytes ?? 0;
+  const hasTail = o.tail !== undefined;
+  if (omitted <= 0 && !hasTail) return null;
+  const amount = omitted > 0 ? `${formatBytes(omitted)} omitted` : "middle omitted";
+  const kept = hasTail ? "head and tail" : "head only";
+  return { hint: `${kept} · ${amount}`, separator: amount };
+}
+
 const STATUS_ICON: Record<ToolCallStatus, IconName | null> = {
   running: null,
   completed: "check",
@@ -177,32 +193,24 @@ export function ToolCallCard({
   const failed = status === "failed";
   const running = status === "running";
   const badExit = exitCode !== undefined && exitCode !== 0;
-  const [internal, setInternal] = useState(defaultExpanded ?? (failed || badExit));
-  const open = expanded ?? internal;
-  const now = useNow(running);
-  const start = toMs(startedAt);
-  const end = toMs(endedAt);
-  const elapsed = start !== null ? Math.max(0, (running || end === null ? now : end) - start) : durationMs ?? null;
+  const bad = failed || badExit;
+  const { open, toggle, onKeyDown, reveal } = useDisclosure({ expanded, defaultExpanded: defaultExpanded ?? bad, onExpandedChange });
+  // A card that mounted running and then failed opens itself, keeping the
+  // "errors are never behind a click" promise past mount — unless it is
+  // controlled or the user already chose (reveal handles both).
+  const wasBad = useRef(bad);
+  useEffect(() => {
+    if (bad && !wasBad.current) reveal(true);
+    wasBad.current = bad;
+  }, [bad, reveal]);
+  const elapsed = useElapsed({ startedAt, endedAt, durationMs, live: running });
   const slow = running && elapsed !== null && elapsed >= slowAfterMs;
 
   const files = useMemo<ReadonlyArray<FileDiff>>(() => (typeof diff === "string" ? parseUnifiedDiff(diff) : diff ?? []), [diff]);
   const out = toOutput(output);
   const err = toOutput(stderr);
-  const hasBody = args !== undefined || out !== null || err !== null || result !== undefined || files.length > 0 || error !== undefined;
+  const hasBody = args !== undefined || out !== null || err !== null || result !== undefined || files.length > 0 || error !== undefined || exitCode !== undefined;
   const line = summary ?? summarizeToolArgs(args);
-
-  const toggle = () => {
-    if (!hasBody) return;
-    const next = !open;
-    if (expanded === undefined) setInternal(next);
-    onExpandedChange?.(next);
-  };
-  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      toggle();
-    }
-  };
 
   const statusIcon = STATUS_ICON[status];
   const resultText = typeof result === "string" ? result : null;
@@ -223,8 +231,8 @@ export function ToolCallCard({
         role={hasBody ? "button" : undefined}
         tabIndex={hasBody ? 0 : undefined}
         aria-expanded={hasBody ? open : undefined}
-        onClick={toggle}
-        onKeyDown={hasBody ? onKey : undefined}
+        onClick={hasBody ? toggle : undefined}
+        onKeyDown={hasBody ? onKeyDown : undefined}
       >
         <span className={styles["icon"]} aria-hidden>
           <Icon name={icon ?? iconFor(name)} size={12} />
@@ -335,9 +343,9 @@ function OutputSection({
   readonly stderr?: boolean | undefined;
 }) {
   const lines = lineCount(output);
-  const omitted = output.omittedBytes ?? 0;
-  const elided = omitted > 0 || output.tail !== undefined;
+  const elided = elision(output);
   const empty = isEmpty(output);
+  const caret = running ? <span className={styles["outCaret"]} aria-hidden /> : null;
   return (
     <div className={cx(styles["section"], stderr && styles["stderrSection"])}>
       <div className={styles["sectionLabel"]}>
@@ -345,20 +353,27 @@ function OutputSection({
         {exitCode !== undefined ? <ExitChip code={exitCode} /> : null}
         {running ? <span className={styles["sectionHint"]}>so far</span> : null}
         {empty ? <span className={styles["sectionHint"]}>empty</span> : null}
-        {elided ? <span className={styles["sectionHint"]}>head and tail · {formatBytes(omitted)} omitted</span> : lines > maxLines ? <span className={styles["sectionHint"]}>{lines.toLocaleString("en-US")} lines</span> : null}
+        {elided ? <span className={styles["sectionHint"]}>{elided.hint}</span> : lines > maxLines ? <span className={styles["sectionHint"]}>{lines.toLocaleString("en-US")} lines</span> : null}
       </div>
       {!empty ? (
         <div className={cx(styles["pre"], styles["out"], stderr && styles["preStderr"])} style={{ maxHeight }} role="region" aria-label={label}>
-          <span className={styles["outText"]}>{output.head}</span>
+          <span className={styles["outText"]}>
+            {output.head}
+            {output.tail === undefined ? caret : null}
+          </span>
           {elided ? (
-            <span className={styles["elision"]} role="separator" aria-label={`${formatBytes(omitted)} omitted`}>
+            <span className={styles["elision"]} role="separator" aria-label={elided.separator}>
               <span className={styles["elisionLine"]} aria-hidden />
-              <span className={styles["elisionText"]}>{omitted > 0 ? `${formatBytes(omitted)} omitted` : "middle omitted"}</span>
+              <span className={styles["elisionText"]}>{elided.separator}</span>
               <span className={styles["elisionLine"]} aria-hidden />
             </span>
           ) : null}
-          {output.tail !== undefined ? <span className={styles["outText"]}>{output.tail}</span> : null}
-          {running ? <span className={styles["outCaret"]} aria-hidden /> : null}
+          {output.tail !== undefined ? (
+            <span className={styles["outText"]}>
+              {output.tail}
+              {caret}
+            </span>
+          ) : null}
         </div>
       ) : null}
     </div>

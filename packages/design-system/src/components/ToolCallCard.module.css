@@ -319,11 +319,13 @@
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
+/* Inline after the last character, like a terminal cursor. */
 .outCaret {
   display: inline-block;
   width: 7px;
   height: 13px;
-  margin-top: 2px;
+  margin-left: 1px;
+  vertical-align: text-bottom;
   border-radius: 1px;
   background: var(--ds-tone-info-fg);
   animation: ds-blink calc(var(--ds-cadence-blink) / max(var(--ds-motion-live), 0.0001)) steps(2, jump-none) infinite;

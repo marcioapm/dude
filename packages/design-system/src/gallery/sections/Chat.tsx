@@ -314,7 +314,7 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
             <ChatMessage role="orchestrator" model="claude-opus-4" content="Before I open the PR I need a decision from you." startedAt={Date.now() - 125_000} costUsd={0.002} activity="awaiting_input" activityProps={{ since: Date.now() - 125_000, detail: "Should 4xx be retried?" }} />
             <Label>interventions: answer · steer queued (agent mid-turn) · steer delivered</Label>
             <ChatMessage role="human" name="marcio" intent="answer" inReplyTo="Should 4xx responses be retried? The existing code retries everything." content="No — only retry 5xx and network errors." startedAt={at(1_520_000)} />
-            <ChatMessage role="human" name="marcio" intent="steer" pending content="Do not change the public API of GithubClient. Add the retry inside `post` only." startedAt={at(1_530_000)} />
+            <ChatMessage role="human" name="marcio" intent="steer" content="Do not change the public API of GithubClient. Add the retry inside `post` only." startedAt={at(1_530_000)} deliveredAt={null} />
             <ChatMessage role="human" name="marcio" intent="steer" content="Do not change the public API of GithubClient. Add the retry inside `post` only." startedAt={at(1_530_000)} deliveredAt={at(1_571_000)} />
             <ChatMessage role="reviewer" model="claude-opus-4" content="Backoff jitter uses `Math.random`; consider seeding for tests (minor)." startedAt={at(1_640_000)} endedAt={at(1_650_000)} costUsd={0.03} activity="failed" activityProps={{ detail: "upstream 500 after 5 attempts" }} />
           </Col>
@@ -740,7 +740,7 @@ function TurnNode({ turn, depth }: { readonly turn: ScenarioTurn; readonly depth
     );
   }
   if (turn.kind === "system") return <ChatMessage role="system" content={turn.text} startedAt={turn.startedAt} isNew />;
-  if (turn.kind === "human") return <ChatMessage role="human" name={turn.name} intent={turn.intent} inReplyTo={turn.inReplyTo} content={turn.text} startedAt={turn.startedAt} pending={turn.pending} deliveredAt={turn.deliveredAt} isNew />;
+  if (turn.kind === "human") return <ChatMessage role="human" name={turn.name} intent={turn.intent} inReplyTo={turn.inReplyTo} content={turn.text} startedAt={turn.startedAt} deliveredAt={turn.deliveredAt} isNew />;
   if (turn.role === "human" || turn.role === "system") return null;
   const streaming = turn.activity === "streaming";
   const thought = turn.thought;

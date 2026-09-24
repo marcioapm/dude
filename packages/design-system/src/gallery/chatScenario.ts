@@ -47,9 +47,8 @@ export interface ScenarioTurn {
   readonly retryAt?: number | undefined;
   readonly intent?: "prompt" | "answer" | "steer" | undefined;
   readonly inReplyTo?: string | undefined;
-  /** A steer sent mid-turn, not yet read by the agent. */
-  readonly pending?: boolean | undefined;
-  readonly deliveredAt?: number | undefined;
+  /** `null`: a steer sent mid-turn, not yet read by the agent. */
+  readonly deliveredAt?: number | null | undefined;
   readonly startedAt: number;
   readonly endedAt?: number | undefined;
   readonly costUsd?: number | undefined;
@@ -459,14 +458,14 @@ export function buildSteerSteps(t0: number, instruction: string): ReadonlyArray<
       label: "Steer sent — queued until the turn ends",
       at: 0,
       apply: (s) => {
-        s.turns.push({ id, kind: "human", role: "human", name: "marcio", intent: "steer", pending: true, text: instruction, shown: 999, startedAt: T(0), tools: [] });
+        s.turns.push({ id, kind: "human", role: "human", name: "marcio", intent: "steer", deliveredAt: null, text: instruction, shown: 999, startedAt: T(0), tools: [] });
       },
     },
     {
       label: "Steer delivered",
       at: 4,
       apply: (s) => {
-        upd(s.turns, id, { pending: false, deliveredAt: T(4) });
+        upd(s.turns, id, { deliveredAt: T(4) });
         s.turns.push({ id: `sys${t0}`, kind: "system", role: "system", text: "Turn ended · directive delivered to the agent", shown: 999, startedAt: T(4), tools: [] });
       },
     },
