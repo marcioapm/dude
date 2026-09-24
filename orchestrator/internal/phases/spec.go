@@ -3,6 +3,7 @@ package phases
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strings"
@@ -28,6 +29,10 @@ type AgentConfig struct {
 	Egress []string
 	// Wall-clock limit for one phase, across pauses.
 	Timeout string
+	// Where agents reach dude's own tools (agenttools), as they see it; ""
+	// gives them none. Must not be the lux host or lux's own address: lux
+	// never lets a Run reach either.
+	ToolsURL string
 }
 
 // LoadAgentConfig reads the agent configuration from the environment,
@@ -106,6 +111,8 @@ type specInput struct {
 	Repos      []specRepo
 	PushBranch string
 	ForgeToken string
+	// The Run's token for dude's tools; "" gives it none.
+	ToolsToken string
 }
 
 type specRepo struct {
@@ -181,6 +188,14 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		}
 	}
 
+	if c.ToolsURL != "" && in.ToolsToken != "" {
+		// dude's own tools, authenticated as this Run. The token is a secret:
+		// lux fills the header in, and never stores or logs it.
+		spec.Workload.MCPServers = []lux.MCPServer{{Name: "dude", URL: c.ToolsURL,
+			Headers: []lux.MCPHeader{{Name: "Authorization", Secret: "DUDE_TOOLS_AUTH"}}}}
+		spec.Secrets = append(spec.Secrets, lux.Secret{Name: "DUDE_TOOLS_AUTH", Value: "Bearer " + in.ToolsToken})
+	}
+
 	// The scripted agent, for tests: lux-fake speaking ACP, following the
 	// script fakeagent writes for this phase. The model is a label too, so a
 	// stand-in for lux can play the same agent without parsing the script.
@@ -189,6 +204,10 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		spec.Workload.Adapter = "acp"
 		spec.Workload.Command = []string{"lux-fake"}
 		spec.Workload.Prompt = fakeagent.Script(in.Phase, in.Model, in.RunID)
+		if len(spec.Workload.MCPServers) > 0 {
+			// Its tools must be reachable; nothing else needs to be.
+			spec.Network = egress(AgentConfig{ToolsURL: c.ToolsURL, Egress: []string{}})
+		}
 		return spec
 	}
 
@@ -221,6 +240,7 @@ var colourEnv = map[string]string{
 // its own model.
 func egress(c AgentConfig) *lux.Network {
 	hosts := map[string]bool{}
+	var cidrs []string
 	for _, h := range c.Egress {
 		if h == "*" {
 			return &lux.Network{Unrestricted: true}
@@ -238,12 +258,24 @@ func egress(c AgentConfig) *lux.Network {
 			hosts[u.Hostname()] = true
 		}
 	}
-	if len(hosts) == 0 {
+	// dude's tools. An address goes in as an address: lux matches hosts by
+	// name and addresses by range.
+	if u, err := url.Parse(c.ToolsURL); err == nil && u.Hostname() != "" {
+		if ip := net.ParseIP(u.Hostname()); ip != nil {
+			cidrs = append(cidrs, ip.String()+"/32")
+		} else {
+			hosts[u.Hostname()] = true
+		}
+	}
+	if len(hosts) == 0 && len(cidrs) == 0 {
 		return &lux.Network{Unrestricted: true}
 	}
 	n := &lux.Network{}
 	for h := range hosts {
 		n.Egress = append(n.Egress, lux.EgressRule{Host: h})
+	}
+	for _, c := range cidrs {
+		n.Egress = append(n.Egress, lux.EgressRule{CIDR: c})
 	}
 	return n
 }

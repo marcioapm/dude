@@ -114,6 +114,20 @@ type Workload struct {
 	Command []string `json:"command,omitempty"`
 	Prompt  string   `json:"prompt,omitempty"`
 	Workdir string   `json:"workdir,omitempty"`
+	// MCP servers the agent is given (streamable HTTP), each header's value
+	// from a named secret.
+	MCPServers []MCPServer `json:"mcpServers,omitempty"`
+}
+
+type MCPServer struct {
+	Name    string      `json:"name"`
+	URL     string      `json:"url"`
+	Headers []MCPHeader `json:"headers,omitempty"`
+}
+
+type MCPHeader struct {
+	Name   string `json:"name"`
+	Secret string `json:"secret"`
 }
 
 type Git struct {

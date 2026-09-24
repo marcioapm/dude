@@ -31,6 +31,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
@@ -301,6 +302,19 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 		if in.ForgeToken, err = gh.Token(); err != nil {
 			return lux.Spec{}, err
 		}
+	}
+	if s.Agent.ToolsURL != "" {
+		// A new token each time the spec is built — at submit and at every
+		// resume, which must supply secrets again. Only its hash is kept;
+		// storing it retires the one before.
+		token, hash := agenttools.NewToken()
+		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `UPDATE runs SET mcp_token_hash = $2 WHERE id = $1`, r.ID, hash)
+			return err
+		}); err != nil {
+			return lux.Spec{}, err
+		}
+		in.ToolsToken = token
 	}
 	return buildSpec(s.Agent, in), nil
 }
