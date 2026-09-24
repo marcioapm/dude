@@ -4,7 +4,7 @@ import styles from "../gallery.module.css";
 import { AgentPlan, type PlanItem } from "../../components/AgentPlan.tsx";
 import { Breadcrumb } from "../../components/Breadcrumb.tsx";
 import { ChatComposer } from "../../components/ChatComposer.tsx";
-import { ChatMessage } from "../../components/ChatMessage.tsx";
+import { ChatAside as Aside, ChatMessage } from "../../components/ChatMessage.tsx";
 import { ChatTranscript } from "../../components/ChatTranscript.tsx";
 import { QuestionCard } from "../../components/QuestionCard.tsx";
 import { Sidebar } from "../../components/Sidebar.tsx";
@@ -22,6 +22,8 @@ import {
   CONTEXT_WINDOW,
   LONG_TEST_OUTPUT_FAILED,
   LONG_TEST_OUTPUT_PASSED,
+  MD_SHORT,
+  MD_SUMMARY,
   MSG_1,
   MSG_2,
   MSG_3,
@@ -72,11 +74,6 @@ export function ShellSection({ mode }: { readonly mode: PaneMode }) {
       </Block>
     </Section>
   );
-}
-
-/** Tool calls and reasoning sit in the message column, past the avatar gutter. */
-function Aside({ children }: { readonly children: ReactNode }) {
-  return <div className={styles["shellAside"]}>{children}</div>;
 }
 
 function AppShell() {
@@ -149,6 +146,7 @@ function Transcript() {
         />
       }
     >
+      <ChatMessage role="system" content="Today" />
       <ChatMessage role="system" content="Session started on worker-03 · claude-opus-4" startedAt={ts(0)} />
       <Aside>
         <ThinkingBlock text={THOUGHT_1} startedAt={ts(1 * SEC)} endedAt={ts(5 * SEC)} />
@@ -159,6 +157,7 @@ function Transcript() {
         <ToolCallCard name="edit" status="completed" args={{ file_path: "apps/control-plane/src/integrations/github/client.ts" }} startedAt={ts(10_200)} endedAt={ts(10_212)} diff={CLIENT_DIFF} />
       </Aside>
       <ChatMessage role="orchestrator" continued content={MSG_2} startedAt={ts(10_400)} endedAt={ts(14_000)} costUsd={0.031} contextTokens={31_200} contextWindowTokens={CONTEXT_WINDOW} outputTokens={410} />
+      <ChatMessage role="orchestrator" continued content={MD_SHORT} startedAt={ts(14_020)} />
       <Aside>
         <ToolCallCard name="bash" status="failed" args={{ command: "bun test apps/control-plane" }} startedAt={ts(14_100)} endedAt={ts(18_310)} exitCode={1} error="1 failing: retries when response is 502" output={LONG_TEST_OUTPUT_FAILED} maxResultLines={8} />
         <ThinkingBlock text={THOUGHT_2} startedAt={ts(18_400)} endedAt={ts(29_800)} />
@@ -168,7 +167,8 @@ function Transcript() {
       <Aside>
         <ToolCallCard name="bash" status="completed" args={{ command: "bun run typecheck && bun test apps/control-plane" }} startedAt={ts(38_200)} endedAt={ts(42_080)} exitCode={0} output={LONG_TEST_OUTPUT_PASSED} />
       </Aside>
-      <ChatMessage role="orchestrator" continued content="All green: 65 pass, 0 fail. The diff is 118 lines. One thing I need a decision on before the PR." startedAt={ts(45_600)} endedAt={ts(47 * SEC)} costUsd={0.009} contextTokens={61_400} contextWindowTokens={CONTEXT_WINDOW} outputTokens={40} />
+      <ChatMessage role="orchestrator" continued content="All green: 65 pass, 0 fail. The diff is 118 lines." startedAt={ts(45_600)} />
+      <ChatMessage data-shot-anchor="markdown" role="orchestrator" continued content={MD_SUMMARY} startedAt={ts(47 * SEC)} endedAt={ts(58 * SEC)} costUsd={0.021} contextTokens={63_900} contextWindowTokens={CONTEXT_WINDOW} outputTokens={520} />
       <QuestionCard role="orchestrator" text={QUESTION_TEXT} options={QUESTION_OPTIONS} askedAt={ts(12 * MIN)} />
     </ChatTranscript>
   );

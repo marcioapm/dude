@@ -253,3 +253,42 @@ export const CONTROL_CODES_OUTPUT = [
   `${sgr("38;2;255;255;255", "truecolor white")} ${sgr("38;2;20;20;20", "truecolor near-black")} ${sgr("38;2;255;100;0", "truecolor orange")} ${sgr("38;5;240", "grey 240")}`,
   `${sgr("7", " inverse ")} ${sgr("4", "underlined")} ${sgr("3", "italic")} ${sgr("2", "dim")} ${sgr("1", "bold")} ${sgr("43;30", " black on yellow ")} ${sgr("48;2;40;60;120", " on rgb ")}`,
 ].join("\n");
+
+/** A structured agent reply: every block kind the Markdown renderer has, as an agent would use them. */
+export const MD_SUMMARY = `Here is where the change stands. The retry now lives in **one place**, \`GithubClient.post\`, and the jitter is *injectable*, so tests pass a fixed source. Background is in the [GitHub webhook docs](https://docs.github.com/webhooks).
+
+### What changed
+
+- \`isRetryable\` retries 5xx and 429 only
+  - 4xx other than 429 fails at once, with the response body in the error
+- Backoff doubles from 200 ms and caps at 3.2 s
+- \`util/wait.ts\` is gone; everything sleeps through \`sleep.ts\`
+
+1. Map the existing retry patterns
+2. Add the bounded loop and the jitter seam
+3. Fix the 502 test and rerun the suite
+
+\`\`\`ts
+export async function post<T>(req: GithubRequest, opts: RetryOptions = {}): Promise<T> {
+  const { attempts = 5, jitter = Math.random } = opts;
+  for (let i = 1; ; i++) {
+    const res = await send(req);
+    if (res.ok || !isRetryable(res) || i === attempts) return unwrap<T>(res);
+    await sleep(backoff(i, jitter));
+  }
+}
+\`\`\`
+
+> The route's own retry still wraps this, so a lost delivery costs up to 15 calls. That is the decision I need from you below.
+
+| Case | Calls | Outcome |
+| --- | --- | --- |
+| 502 then 200 | 2 | delivered |
+| 502 every time | 5 | gives up |
+| 404 | 1 | fails at once |`;
+
+/** A short structured reply between tool calls. */
+export const MD_SHORT = `Two things left before the PR:
+
+- rerun \`bun run typecheck\` after the jitter change
+- check the route's own retry in \`routes/webhooks.ts\``;
