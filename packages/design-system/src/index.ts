@@ -63,8 +63,10 @@ export {
   boardCardCount,
   boardCost,
   boardScope,
+  boardSwimlanes,
   liveActivity,
+  NO_EPIC_LANE,
 } from "./util/boardModel.ts";
-export type { BoardColumnKind, BoardColumnSpec, BoardCard, BoardColumn, BoardScope, LiveActivity } from "./util/boardModel.ts";
+export type { BoardColumnKind, BoardColumnSpec, BoardCard, BoardColumn, BoardScope, BoardSwimlane, LiveActivity } from "./util/boardModel.ts";
 export { ThemeProvider, useTheme } from "./theme.tsx";
 export type { ThemePreference, ThemeContextValue } from "./theme.tsx";

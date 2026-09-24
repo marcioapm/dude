@@ -1,0 +1,100 @@
+/*
+ * RowMenu: the overflow menu behind a "…" button. Same surface, radius and
+ * item grammar as Select's popup so the two popups read as one family.
+ * z-index is popover so it sits above a dialog.
+ */
+
+.trigger[data-state="open"] {
+  background: var(--ds-color-active-wash);
+  color: var(--ds-color-text-primary);
+}
+
+.content {
+  z-index: var(--ds-z-popover);
+  min-width: 180px;
+  max-width: 320px;
+  padding: var(--ds-space-4);
+  background: var(--ds-color-overlay);
+  border-radius: var(--ds-radius-lg);
+  box-shadow: var(--ds-shadow-2);
+  animation: global(ds-pop) var(--ds-duration-base) var(--ds-ease-enter);
+  outline: none;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  height: var(--ds-size-row-default);
+  padding: 0 var(--ds-space-8) 0 var(--ds-space-6);
+  border-radius: var(--ds-radius-sm);
+  font-size: var(--ds-text-md);
+  color: var(--ds-color-text-primary);
+  user-select: none;
+  outline: none;
+  cursor: default;
+}
+.item[data-highlighted] {
+  background: var(--ds-color-hover-wash);
+}
+.item[data-state="open"] {
+  background: var(--ds-color-hover-wash);
+}
+/* Disabled keeps pointer events so the reason tooltip can show. */
+.item[data-disabled] {
+  color: var(--ds-color-text-disabled);
+}
+.item[data-disabled][data-highlighted] {
+  background: none;
+}
+
+.icon {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--ds-color-text-muted);
+}
+.item[data-disabled] .icon {
+  color: var(--ds-color-text-disabled);
+}
+.label {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.shortcut {
+  margin-left: var(--ds-space-16);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  flex-shrink: 0;
+}
+.subChevron {
+  margin-left: var(--ds-space-8);
+  color: var(--ds-color-text-muted);
+  flex-shrink: 0;
+}
+
+/* Danger: the label and glyph take danger ink; the wash on highlight is the
+   danger tint so the eye is warned before the click, not after. */
+.danger,
+.danger .icon {
+  color: var(--ds-tone-danger-fg);
+}
+.danger[data-highlighted] {
+  background: var(--ds-tone-danger-bg);
+}
+.danger[data-disabled],
+.danger[data-disabled] .icon {
+  color: var(--ds-color-text-disabled);
+}
+
+.separator {
+  height: 1px;
+  margin: var(--ds-space-4) var(--ds-space-6);
+  background: var(--ds-color-border-subtle);
+}

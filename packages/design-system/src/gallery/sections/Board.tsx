@@ -3,7 +3,8 @@ import { Block, Caption, Col, Panes, Section, type PaneMode } from "../Frame.tsx
 import { Board } from "../../components/Board.tsx";
 import { Sidebar } from "../../components/Sidebar.tsx";
 import { StatusBadge } from "../../components/StatusBadge.tsx";
-import { IconButton } from "../../primitives/Button.tsx";
+import { Button, IconButton } from "../../primitives/Button.tsx";
+import { RowMenu } from "../../primitives/RowMenu.tsx";
 import { EmptyState } from "../../primitives/Feedback.tsx";
 import { WORK_ITEM_STATUSES } from "../../tokens/status.ts";
 import { BOARD_COLUMN_FOR_STATUS, BOARD_COLUMN_KINDS, BOARD_COLUMN_SPECS, boardScope } from "../../util/boardModel.ts";
@@ -56,6 +57,16 @@ export function BoardSection({ mode }: { readonly mode: PaneMode }) {
       >
         <Panes mode={mode}>
           <EpicDemo />
+        </Panes>
+      </Block>
+
+      <Block
+        id="board-swimlanes"
+        title="Group by epic — swimlanes"
+        note="The project board read by epic: a row per epic in the project's order, then 'No epic', each with the same five lanes under one shared head row. The lane header is the epic's title with the layers glyph, a count, the roll-up and the spend, and folds the row to 28px; an epic with nothing in it keeps its row so the order the operator set is visible. Cards drop their epic line here — the row says it. ↑↓ walk a column across rows; ←→ stay in the row. The header's '…' is the app's RowMenu. The toggle in the header is the app's; the board takes groupBy."
+      >
+        <Panes mode={mode}>
+          <SwimlaneDemo />
         </Panes>
       </Block>
 
@@ -119,6 +130,54 @@ function ProjectDemo() {
         />
       </Frame>
       <Caption>selected: {selected ? `${selected.kind} ${selected.id}` : "none"}</Caption>
+    </Col>
+  );
+}
+
+function SwimlaneDemo() {
+  const [selected, setSelected] = useState<NavRef | null>({ kind: "workItem", id: "wi_2402" });
+  const [grouped, setGrouped] = useState(true);
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set(["epic:e_intervention"]));
+  const withEmptyEpic = useMemo(() => ({ ...CONTROL, epics: [...(CONTROL.epics ?? []), { id: "e_later", title: "Q4 performance", workItems: [] }] }), []);
+  return (
+    <Col>
+      <Frame height={640}>
+        <Board
+          project={withEmptyEpic}
+          selected={selected}
+          onSelect={setSelected}
+          groupBy={grouped ? "epic" : null}
+          collapsed={collapsed}
+          onCollapsedChange={setCollapsed}
+          laneMenu={(lane) =>
+            lane.epic ? (
+              <RowMenu
+                label={`Actions for ${lane.title}`}
+                items={[
+                  { id: "edit", label: "Edit epic", icon: "edit" },
+                  { id: "new", label: "New work item", icon: "plus" },
+                  { kind: "separator" },
+                  { id: "up", label: "Move up", icon: "arrow-up" },
+                  { id: "down", label: "Move down", icon: "arrow-down" },
+                ]}
+              />
+            ) : null
+          }
+          headerActions={
+            <>
+              <Button size="sm" variant={grouped ? "secondary" : "ghost"} leadingIcon="layers" aria-pressed={grouped} onClick={() => setGrouped((g) => !g)}>
+                Group by epic
+              </Button>
+              <Button size="sm" variant="primary" leadingIcon="plus">
+                New work item
+              </Button>
+            </>
+          }
+        />
+      </Frame>
+      <Caption>
+        collapsed: {[...collapsed].join(", ") || "none"} · selected: {selected ? `${selected.kind} ${selected.id}` : "none"}
+      </Caption>
     </Col>
   );
 }

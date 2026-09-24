@@ -1,6 +1,7 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type CSSProperties, type HTMLAttributes, type KeyboardEvent, type MouseEvent } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type CSSProperties, type HTMLAttributes, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import { Icon } from "../icons/index.tsx";
+import { RowMenu, RowMenuTrigger, focusIsFree, rowMenuOpeners, type RowMenuItem } from "../primitives/RowMenu.tsx";
 import { statusSpec } from "../tokens/status.ts";
 import {
   ancestorKeys,
@@ -34,7 +35,29 @@ export interface NavTreeProps extends Omit<HTMLAttributes<HTMLDivElement>, "onSe
   readonly filter?: NavFilter | undefined;
   /** Called when the operator presses `/` in the tree: focus the search. */
   readonly onSearchRequest?: (() => void) | undefined;
+  /**
+   * Actions for a row's "…" menu. Return null (or nothing) for rows with no
+   * actions; the tree then draws no trigger. The tree knows nothing about
+   * the actions themselves — it only opens the menu on click, right-click
+   * and Shift+F10 and returns focus to the row afterwards.
+   */
+  readonly menuItems?: ((row: NavRow) => ReadonlyArray<RowMenuItem> | null | undefined) | undefined;
+  /**
+   * Full control over what sits in the row's menu slot; spread `controls`
+   * on a `RowMenu` so the row's right-click and Shift+F10 still open it.
+   * Takes precedence over `menuItems`.
+   */
+  readonly menu?: ((row: NavRow, controls: NavRowMenuControls) => ReactNode) | undefined;
   readonly "aria-label"?: string | undefined;
+}
+
+/** What a custom row menu needs from the tree: open state and where focus goes when it closes. */
+export interface NavRowMenuControls {
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  readonly onCloseAutoFocus: (e: Event) => void;
+  /** "Actions for CP-41" — the trigger's accessible name. */
+  readonly label: string;
 }
 
 /**
@@ -54,7 +77,7 @@ export interface NavTreeProps extends Omit<HTMLAttributes<HTMLDivElement>, "onSe
  * opening every row you pass.
  */
 export const NavTree = forwardRef<HTMLDivElement, NavTreeProps>(function NavTree(
-  { projects, selected, onSelect, expanded, onExpandedChange, filter, onSearchRequest, className, "aria-label": ariaLabel = "Projects", ...rest },
+  { projects, selected, onSelect, expanded, onExpandedChange, filter, onSearchRequest, menuItems, menu, className, "aria-label": ariaLabel = "Projects", ...rest },
   ref,
 ) {
   const [localExpanded, setLocalExpanded] = useState<NavOverrides>(() => new Map());
@@ -76,8 +99,11 @@ export const NavTree = forwardRef<HTMLDivElement, NavTreeProps>(function NavTree
   const lastRevealed = useRef<string | null>(null);
   useEffect(() => {
     if (!selected || selectedKey === lastRevealed.current) return;
-    lastRevealed.current = selectedKey;
     const path = ancestorKeys(projects, selected);
+    // Not in the tree yet — just created, the data still loading: try again
+    // when it arrives rather than giving up on revealing it.
+    if (path.length === 0 && !rows.some((r) => r.key === selectedKey)) return;
+    lastRevealed.current = selectedKey;
     const closed = path.filter((k) => overrides.get(k) === false || !rows.some((r) => r.key === k && r.expanded));
     if (closed.length === 0) return;
     setOverrides((prev) => {
@@ -111,7 +137,46 @@ export const NavTree = forwardRef<HTMLDivElement, NavTreeProps>(function NavTree
     onSelect?.(row.ref, row.node);
   };
 
-  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>, row: NavRow, index: number) => {
+  // One menu open at a time, keyed by row; the row itself opens it with a
+  // right-click or Shift+F10, and focus comes back to the row on close so
+  // the arrow keys keep working from where the operator was.
+  const [menuKey, setMenuKey] = useState<string | null>(null);
+  // A row can vanish under its open menu (a refresh folds its parent); the
+  // menu unmounts with it and would otherwise leave the key pointing at
+  // nothing, so the next row with that key would open already-open.
+  useEffect(() => {
+    if (menuKey !== null && !rows.some((r) => r.key === menuKey)) setMenuKey(null);
+  }, [menuKey, rows]);
+  const menuFor = (row: NavRow): ReactNode | null => {
+    if (!menu && !menuItems) return null;
+    const controls: NavRowMenuControls = {
+      open: menuKey === row.key,
+      onOpenChange: (open) => setMenuKey((cur) => (open ? row.key : cur === row.key ? null : cur)),
+      onCloseAutoFocus: (e) => {
+        // Never let Radix focus the "…" trigger (it is out of the tab
+        // order). Give focus to the row only if nothing else took it: a
+        // click on another row's "…" already holds focus, and pulling it
+        // away would dismiss the menu that click just opened.
+        e.preventDefault();
+        if (focusIsFree(document)) focusRow(row.key);
+      },
+      label: `Actions for ${rowLabel(row)}`,
+    };
+    if (menu) return menu(row, controls) || null;
+    const items = menuItems?.(row);
+    if (!items || items.length === 0) return null;
+    return <RowMenu items={items} label={controls.label} trigger={<RowMenuTrigger label={controls.label} />} open={controls.open} onOpenChange={controls.onOpenChange} onCloseAutoFocus={controls.onCloseAutoFocus} />;
+  };
+
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>, row: NavRow, index: number, hasMenu: boolean) => {
+    // Keys typed inside the row's menu bubble here through the portal; they
+    // are the menu's, not the tree's ("/" must not jump to the search, → must
+    // not move focus off the submenu).
+    if (e.target !== e.currentTarget) return;
+    if (hasMenu) {
+      rowMenuOpeners(() => setMenuKey(row.key)).onKeyDown(e);
+      if (e.defaultPrevented) return;
+    }
     switch (e.key) {
       case "ArrowDown": {
         e.preventDefault();
@@ -172,21 +237,57 @@ export const NavTree = forwardRef<HTMLDivElement, NavTreeProps>(function NavTree
 
   return (
     <div ref={containerRef} className={cx(styles["tree"], className)} role="tree" aria-label={ariaLabel} {...rest}>
-      {rows.map((row, i) => (
-        <NavTreeRow
-          key={row.key}
-          row={row}
-          selected={row.key === selectedKey}
-          tabIndex={row.key === tabStop ? 0 : -1}
-          onFocus={() => setFocusedKey(row.key)}
-          onKeyDown={(e) => onKeyDown(e, row, i)}
-          onClick={() => select(row)}
-          onToggle={() => toggle(row)}
-        />
-      ))}
+      {rows.map((row, i) => {
+        const rowMenu = menuFor(row);
+        const hasMenu = rowMenu !== null;
+        return (
+          <NavTreeRow
+            key={row.key}
+            row={row}
+            selected={row.key === selectedKey}
+            tabIndex={row.key === tabStop ? 0 : -1}
+            onFocus={() => setFocusedKey(row.key)}
+            onKeyDown={(e) => onKeyDown(e, row, i, hasMenu)}
+            onClick={() => select(row)}
+            onToggle={() => toggle(row)}
+            menu={rowMenu}
+            menuOpen={menuKey === row.key}
+            onContextMenu={hasMenu ? rowMenuOpeners(() => setMenuKey(row.key)).onContextMenu : undefined}
+          />
+        );
+      })}
     </div>
   );
 });
+
+/** A short name for a row, for accessible labels ("CP-41", "Webhook reliability"). */
+/** A row's accessible name: its title, and a work item's key before it. */
+function treeItemLabel(row: NavRow): string {
+  if (row.ref.kind === "workItem") {
+    const wi = row.node as NavWorkItem;
+    return wi.key ? `${wi.key} ${wi.title}` : wi.title;
+  }
+  return rowLabel(row);
+}
+
+export function rowLabel(row: NavRow): string {
+  switch (row.ref.kind) {
+    case "project":
+      return (row.node as NavProject).name;
+    case "epic":
+      return (row.node as NavEpic).title;
+    case "workItem": {
+      const wi = row.node as NavWorkItem;
+      return wi.key ?? wi.title;
+    }
+    case "run":
+      return `Attempt ${(row.node as NavRun).attempt}`;
+    case "session": {
+      const s = row.node as NavSession;
+      return s.title ?? ROLE_LABEL[s.role];
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Rows
@@ -200,11 +301,20 @@ export interface NavTreeRowProps {
   readonly onKeyDown: (e: KeyboardEvent<HTMLDivElement>) => void;
   readonly onClick: () => void;
   readonly onToggle: () => void;
+  /** The row's "…" menu, shown on hover, focus, or while open. */
+  readonly menu?: ReactNode;
+  readonly menuOpen?: boolean | undefined;
+  readonly onContextMenu?: ((e: MouseEvent<HTMLDivElement>) => void) | undefined;
 }
 
 /** One row of the tree; dispatches on `row.ref.kind`. */
-export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClick, onToggle }: NavTreeRowProps) {
+export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClick, onToggle, menu, menuOpen, onContextMenu }: NavTreeRowProps) {
   const kind = row.ref.kind;
+  const menuSlot = menu ? (
+    <span className={styles["menuSlot"]} data-open={menuOpen ? "true" : undefined}>
+      {menu}
+    </span>
+  ) : null;
   const needsYou = row.triage === "needs_you";
   const onToggleClick = (e: MouseEvent) => {
     e.stopPropagation();
@@ -223,6 +333,10 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
 
   const common = {
     role: "treeitem" as const,
+    // Named by what it is: without this, a screen reader (and the row's
+    // accessible name) would include its buttons — "Expand Greeter Actions
+    // for Greeter".
+    "aria-label": treeItemLabel(row),
     "aria-level": row.depth + 1,
     "aria-expanded": row.expandable ? row.expanded : undefined,
     "aria-selected": selected,
@@ -230,6 +344,7 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
     onFocus,
     onKeyDown,
     onClick,
+    onContextMenu,
     "data-nav-key": row.key,
     "data-kind": kind,
     "data-triage": row.triage ?? undefined,
@@ -244,6 +359,7 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
         <span className={styles["projectName"]}>{p.name}</span>
         {row.counts && !row.expanded ? <TriageRollup counts={row.counts} className={styles["rollup"]} /> : null}
         {row.counts && row.expanded && row.counts.needs_you > 0 ? <TriageRollup counts={row.counts} only={["needs_you"]} className={styles["rollup"]} /> : null}
+        {menuSlot}
       </div>
     );
   }
@@ -258,6 +374,7 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
         <span className={styles["epicCount"]}>{e.workItems.length}</span>
         {row.counts && !row.expanded ? <TriageRollup counts={row.counts} className={styles["rollup"]} /> : null}
         {row.counts && row.expanded && row.counts.needs_you > 0 ? <TriageRollup counts={row.counts} only={["needs_you"]} className={styles["rollup"]} /> : null}
+        {menuSlot}
       </div>
     );
   }
@@ -281,6 +398,7 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
           <RoleStack roles={roles} className={styles["roles"]} />
           {wi.people && wi.people.length > 0 ? <HumanAvatarStack people={wi.people} size="xs" max={2} /> : null}
         </span>
+        {menuSlot}
       </div>
     );
   }
@@ -293,6 +411,7 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
         <StatusBadge status={r.status} variant="dot" iconOnly className={styles["mark"]} />
         <span className={styles["runTitle"]}>Attempt {r.attempt}</span>
         <span className={styles["runCount"]}>{r.sessions.length}</span>
+        {menuSlot}
       </div>
     );
   }
@@ -309,6 +428,7 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
         {s.activity && (live || needsYou) ? <span className={styles["sessionActivity"]}>{s.activity}</span> : null}
       </span>
       <StatusBadge status={s.status} variant="dot" iconOnly className={styles["mark"]} />
+      {menuSlot}
     </div>
   );
 }

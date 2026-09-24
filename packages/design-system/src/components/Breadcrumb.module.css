@@ -1,0 +1,78 @@
+/*
+ * Breadcrumb: Project › Epic › KEY. Quiet — secondary ink for the path,
+ * primary for the current place. Crumbs are links or buttons that look
+ * like text until hovered.
+ */
+
+.root {
+  display: flex;
+  min-width: 0;
+  font-size: var(--ds-text-md);
+  color: var(--ds-color-text-secondary);
+}
+.sm {
+  font-size: var(--ds-text-sm);
+}
+
+.list {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+
+.item {
+  display: inline-flex;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+.current {
+  flex-shrink: 0;
+}
+.sep {
+  display: inline-flex;
+  color: var(--ds-color-text-muted);
+  flex-shrink: 0;
+}
+
+.crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  min-width: 0;
+  height: var(--ds-size-control-sm);
+  padding: 0 var(--ds-space-4);
+  margin: 0;
+  border: 0;
+  border-radius: var(--ds-radius-sm);
+  background: none;
+  font: inherit;
+  color: inherit;
+  white-space: nowrap;
+  text-decoration: none;
+}
+.link:hover {
+  color: var(--ds-color-text-primary);
+  background: var(--ds-color-hover-wash);
+  text-decoration: none;
+}
+.current .crumb {
+  color: var(--ds-color-text-primary);
+  font-weight: var(--ds-weight-medium);
+}
+.glyph {
+  color: var(--ds-color-text-muted);
+  flex-shrink: 0;
+}
+.text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.mono {
+  font-family: var(--ds-font-mono);
+  font-feature-settings: "tnum", "zero";
+}

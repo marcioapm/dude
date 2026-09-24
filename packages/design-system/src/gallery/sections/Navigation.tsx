@@ -7,6 +7,8 @@ import { NavTree } from "../../components/NavTree.tsx";
 import { Sidebar } from "../../components/Sidebar.tsx";
 import { StatusBadge } from "../../components/StatusBadge.tsx";
 import { IconButton } from "../../primitives/Button.tsx";
+import type { RowMenuItem } from "../../primitives/RowMenu.tsx";
+import type { NavRow } from "../../util/navModel.ts";
 import { ALL_STATUSES, type Status } from "../../tokens/status.ts";
 import { COUNTED_TRIAGE_KINDS, TRIAGE_FOR_STATUS, TRIAGE_KINDS, TRIAGE_SPECS, type TriageCounts } from "../../tokens/triage.ts";
 import { globalCounts, type NavRef } from "../../util/navModel.ts";
@@ -107,6 +109,16 @@ export function NavigationSection({ mode }: { readonly mode: PaneMode }) {
       </Block>
 
       <Block
+        id="nav-tree-menus"
+        title="NavTree — row menus"
+        note="Projects, epics and work items get a '…' menu from the app via menuItems (or a menu render prop for full control); the tree knows nothing about the actions. The trigger is visible on hover and focus and stays out of the tab order: with a row focused, Shift+F10 or the context-menu key opens it, as does right-click, and focus returns to the row when it closes so ↑↓ keep working. Rows that return no items draw nothing. Try: focus a row, Shift+F10, ↓, Enter."
+      >
+        <Panes mode={mode} surface>
+          <TreeMenuDemo />
+        </Panes>
+      </Block>
+
+      <Block
         id="nav-sidebar"
         title="Sidebar — realistic"
         note="The whole thing at 280px with three projects and fifty work items. Header, search (/ from the tree, ↓ into it), four filter chips with global counts, the pinned Needs-you list across every project, then the tree. The pinned list is what makes 'what needs me' answerable without expanding anything: it names the work item, who is asking, who it waits on, and where it lives. Select a row to see the selection follow into the tree."
@@ -179,6 +191,53 @@ function TreeDemo() {
         <NavTree projects={navProjects} selected={selected} onSelect={setSelected} />
       </div>
       <Caption>selected: {selected ? `${selected.kind} ${selected.id}` : "none"}</Caption>
+    </Col>
+  );
+}
+
+function menuItemsFor(row: NavRow, act: (label: string) => void): ReadonlyArray<RowMenuItem> | null {
+  const on = (label: string) => () => act(label);
+  switch (row.ref.kind) {
+    case "project":
+      return [
+        { id: "settings", label: "Settings", icon: "system", onSelect: on("Settings") },
+        { id: "new-epic", label: "New epic", icon: "layers", onSelect: on("New epic") },
+        { id: "new", label: "New work item", icon: "plus", onSelect: on("New work item") },
+        { kind: "separator" },
+        { id: "archive", label: "Archive", icon: "folder", tone: "danger", onSelect: on("Archive") },
+      ];
+    case "epic":
+      return [
+        { id: "edit", label: "Edit", icon: "edit", onSelect: on("Edit epic") },
+        { id: "new", label: "New work item", icon: "plus", onSelect: on("New work item") },
+        { kind: "separator" },
+        { id: "up", label: "Move up", icon: "arrow-up", onSelect: on("Move up") },
+        { id: "down", label: "Move down", icon: "arrow-down", onSelect: on("Move down") },
+        { kind: "separator" },
+        { id: "delete", label: "Delete", icon: "cross", tone: "danger", disabled: true, disabledReason: "Move its work items out first" },
+      ];
+    case "workItem":
+      return [
+        { id: "edit", label: "Edit", icon: "edit", onSelect: on("Edit") },
+        { kind: "submenu", id: "move", label: "Move to epic", icon: "layers", items: [{ id: "e1", label: "Webhook reliability", onSelect: on("Move → Webhook reliability") }, { id: "e2", label: "Human intervention", onSelect: on("Move → Human intervention") }, { kind: "separator" }, { id: "none", label: "No epic", onSelect: on("Move → No epic") }] },
+        { id: "split", label: "Split", icon: "simplifier", onSelect: on("Split") },
+        { kind: "separator" },
+        { id: "delete", label: "Delete", icon: "cross", tone: "danger", disabled: true, disabledReason: "It has run; abort it instead." },
+      ];
+    default:
+      return null;
+  }
+}
+
+function TreeMenuDemo() {
+  const [selected, setSelected] = useState<NavRef | null>({ kind: "workItem", id: "wi_2402" });
+  const [last, setLast] = useState<string | null>(null);
+  return (
+    <Col>
+      <div style={{ border: "1px solid var(--ds-color-border-subtle)", borderRadius: 6, maxHeight: 420, overflow: "auto", width: 320, background: "var(--ds-color-surface)" }}>
+        <NavTree projects={navProjectsQuiet.concat(navProjects.slice(0, 1))} selected={selected} onSelect={setSelected} menuItems={(row) => menuItemsFor(row, setLast)} />
+      </div>
+      <Caption>last action: {last ?? "none"}</Caption>
     </Col>
   );
 }

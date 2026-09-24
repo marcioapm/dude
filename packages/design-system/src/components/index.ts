@@ -40,11 +40,15 @@ export { HumanAvatar, HumanAvatarStack, identitySlot, initialsOf } from "./Human
 export type { HumanAvatarProps, HumanAvatarStackProps, HumanAvatarSize, Person } from "./HumanAvatar.tsx";
 export { TriageRollup } from "./TriageRollup.tsx";
 export type { TriageRollupProps } from "./TriageRollup.tsx";
-export { NavTree, NavTreeRow } from "./NavTree.tsx";
-export type { NavTreeProps, NavTreeRowProps } from "./NavTree.tsx";
+export { NavTree, NavTreeRow, rowLabel } from "./NavTree.tsx";
+export type { NavTreeProps, NavTreeRowProps, NavRowMenuControls } from "./NavTree.tsx";
 export { Sidebar, AttentionList } from "./Sidebar.tsx";
 export type { SidebarProps, AttentionListProps } from "./Sidebar.tsx";
 export { RoleStack } from "./RoleStack.tsx";
 export type { RoleStackProps } from "./RoleStack.tsx";
 export { Board } from "./Board.tsx";
 export type { BoardProps } from "./Board.tsx";
+export { FindingRow, FindingGroup, sortFindings, countFindings, FINDING_SEVERITIES, FINDING_SEVERITY_SPECS, FINDING_STATUSES, FINDING_STATUS_SPECS } from "./FindingRow.tsx";
+export type { FindingRowProps, FindingGroupProps, FindingLike, FindingCounts, FindingSeveritySpec, FindingStatusSpec } from "./FindingRow.tsx";
+export { Breadcrumb, elideMiddle } from "./Breadcrumb.tsx";
+export type { BreadcrumbProps, BreadcrumbItem } from "./Breadcrumb.tsx";

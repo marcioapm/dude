@@ -9,7 +9,11 @@ import { EventDayDivider, EventRow, EventStream } from "../../components/EventRo
 import { SessionTree, SessionTreeNode } from "../../components/SessionTreeNode.tsx";
 import { DiffView, parseUnifiedDiff } from "../../components/DiffView.tsx";
 import { LogStream, type LogLine } from "../../components/LogStream.tsx";
+import { FindingGroup, FindingRow, FINDING_SEVERITIES, FINDING_SEVERITY_SPECS, FINDING_STATUSES } from "../../components/FindingRow.tsx";
+import { Breadcrumb } from "../../components/Breadcrumb.tsx";
+import { Badge } from "../../primitives/Badge.tsx";
 import { Button, IconButton } from "../../primitives/Button.tsx";
+import { Icon } from "../../icons/index.tsx";
 import { Card, CardBody, CardHeader } from "../../primitives/Card.tsx";
 import { ScrollArea } from "../../primitives/ScrollArea.tsx";
 import { AGENT_ROLE_NAMES } from "../../tokens/palette.ts";
@@ -257,6 +261,62 @@ export function ComponentsSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
 
+      <Block
+        id="c-finding"
+        title="FindingRow / FindingGroup"
+        note="One review finding per 28px row: severity as glyph + word in its tone (never hue alone, never an uppercase enum), the category, the title, the file:line in mono, then the status as a neutral badge — so a resolved blocking finding still reads as blocking and as resolved. Description and suggested fix expand under the row. Settled rows dim; nothing is struck through. The group sorts open first, most severe first, and counts what is still open. 'fixed in ›' is a slot the app fills with a link to the fix run."
+      >
+        <Panes mode={mode}>
+          <Col>
+            <Label>Severities</Label>
+            <Row style={{ gap: 16 }}>
+              {FINDING_SEVERITIES.map((s) => (
+                <span key={s} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, color: `var(--ds-tone-${FINDING_SEVERITY_SPECS[s].tone}-fg)` }}>
+                  <Icon name={FINDING_SEVERITY_SPECS[s].glyph} size={12} />
+                  {FINDING_SEVERITY_SPECS[s].label}
+                </span>
+              ))}
+            </Row>
+            <Label>Every status, one severity</Label>
+            <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 2 }}>
+              {FINDING_STATUSES.map((st) => (
+                <FindingRow key={st} severity="high" status={st} category="security" title={`Token stored in localStorage (${st})`} file="apps/web/src/auth/session.ts" line={42} description="The refresh token is written to `localStorage`, readable by any script on the origin." suggestedFix="Keep it in an `HttpOnly` cookie scoped to `/auth`." fixedIn={st === "resolved" ? <a href="#c-finding">Fix 2</a> : undefined} fixAttempts={st === "resolved" ? 2 : 0} resolutionNote={st === "accepted" ? "Accepted for the prototype; tracked in CP-88." : st === "superseded" ? "Replaced by a broader finding on the auth module." : undefined} />
+              ))}
+            </ul>
+            <Label>Grouped: open first</Label>
+            <FindingGroupDemo />
+            <Label>Grayscale</Label>
+            <div style={{ filter: "grayscale(1)" }}>
+              <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 2 }}>
+                <FindingRow severity="blocking" status="open" category="correctness" title="Retry loop never terminates on 4xx" file="apps/control-plane/src/webhooks.ts" line={118} />
+                <FindingRow severity="note" status="resolved" category="style" title="Prefer `for…of` over `forEach` here" file="apps/control-plane/src/webhooks.ts" line={130} />
+              </ul>
+            </div>
+          </Col>
+        </Panes>
+      </Block>
+
+      <Block
+        id="c-breadcrumb"
+        title="Breadcrumb"
+        note="Where you are: Project › Epic › KEY. Every crumb but the last is a link or a button (text-coloured until hovered); the last is the current place and is aria-current. Long middle crumbs elide in the middle so the head and the tail both survive, with the full text in the title; the last crumb is never elided. Use it in the work-item header and the transcript header instead of a Back button."
+      >
+        <Panes mode={mode}>
+          <Col>
+            <States
+              items={[
+                ["project › epic › key", <Breadcrumb items={[{ id: "p", label: "Customer Portal", onSelect: () => {} }, { id: "e", label: "OAuth migration", icon: "layers", onSelect: () => {} }, { id: "w", label: "CP-41", mono: true }]} />],
+                ["no epic", <Breadcrumb items={[{ id: "p", label: "Customer Portal", href: "#c-breadcrumb" }, { id: "w", label: "CP-52", mono: true }]} />],
+                ["long middle, maxChars 20", <Breadcrumb maxChars={20} items={[{ id: "p", label: "control-plane", href: "#c-breadcrumb" }, { id: "e", label: "Webhook reliability and delivery guarantees", icon: "layers", href: "#c-breadcrumb" }, { id: "w", label: "WI-2401", mono: true }]} />],
+                ["small, four levels", <Breadcrumb size="sm" maxChars={16} items={[{ id: "o", label: "acme", href: "#c-breadcrumb" }, { id: "p", label: "Customer Portal", href: "#c-breadcrumb" }, { id: "e", label: "OAuth migration", icon: "layers", href: "#c-breadcrumb" }, { id: "w", label: "CP-41", mono: true }]} />],
+                ["settings screen", <Breadcrumb items={[{ id: "p", label: "Customer Portal", href: "#c-breadcrumb" }, { id: "s", label: "Settings" }]} />],
+                ["in a header", <Row style={{ gap: 12 }}><Breadcrumb items={[{ id: "p", label: "Customer Portal", href: "#c-breadcrumb" }, { id: "e", label: "OAuth migration", icon: "layers", href: "#c-breadcrumb" }, { id: "w", label: "CP-41", mono: true }]} /><StatusBadge status="review" size="sm" /><Badge tone="neutral" size="sm">reconnecting</Badge></Row>],
+              ]}
+            />
+          </Col>
+        </Panes>
+      </Block>
+
       <Block id="c-composed" title="Composed: work item header" note="A quick sanity check that the pieces sit together at real density.">
         <Panes mode={mode}>
           <Card>
@@ -292,6 +352,29 @@ export function ComponentsSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
     </Section>
+  );
+}
+
+const FINDINGS = [
+  { id: "f1", severity: "note", status: "open", category: "style", title: "Inconsistent naming between `deliveryId` and `delivery_id`", file: "apps/control-plane/src/webhooks.ts", line: 12, description: "Both spellings appear in this module." },
+  { id: "f2", severity: "blocking", status: "resolved", category: "correctness", title: "Signature verified after the body is parsed", file: "apps/control-plane/src/webhooks.ts", line: 44, description: "An attacker can trigger JSON parsing of arbitrary payloads before rejection.", suggestedFix: "Verify the HMAC over the raw body first; parse only on success.", resolutionNote: "Fixed in round 1: verification moved ahead of parsing.", fixAttempts: 1 },
+  { id: "f3", severity: "high", status: "open", category: "database", title: "Dedupe table has no TTL; grows unbounded", file: "migrations/0007_deliveries.sql", line: 3, description: "Every delivery id is kept forever.", suggestedFix: "Add `expires_at` and a nightly sweep, or a partial index on the last 7 days." },
+  { id: "f4", severity: "medium", status: "accepted", category: "performance", title: "Retry backoff is computed with `Math.pow` per attempt", file: "apps/control-plane/src/retry.ts", line: 27, resolutionNote: "Negligible at our volumes; accepted." },
+  { id: "f5", severity: "blocking", status: "open", category: "security", title: "Webhook secret read from an unset env var falls back to empty string", file: "apps/control-plane/src/config.ts", line: 88, description: "With no secret, every signature verifies.", suggestedFix: "Fail startup when `GITHUB_WEBHOOK_SECRET` is unset." },
+  { id: "f6", severity: "low", status: "superseded", category: "api", title: "Replay endpoint returns 200 for unknown ids", file: "apps/control-plane/src/replay.ts", line: 15, resolutionNote: "Superseded by the endpoint's redesign in CP-60." },
+] as const;
+
+function FindingGroupDemo() {
+  return (
+    <FindingGroup
+      findings={FINDINGS}
+      actions={
+        <Button size="sm" variant="ghost" leadingIcon="reviewer">
+          Review run
+        </Button>
+      }
+      renderRow={(f) => <FindingRow key={f.id} {...f} fixedIn={f.status === "resolved" ? <a href="#c-finding">Fix 1</a> : undefined} onOpenLocation={() => {}} />}
+    />
   );
 }
 

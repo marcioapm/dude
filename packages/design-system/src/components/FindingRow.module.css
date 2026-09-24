@@ -1,0 +1,265 @@
+/*
+ * FindingRow: one review finding on a 28px row, with an expandable body.
+ * Severity carries the only colour, and only in its glyph + word; the
+ * status is a neutral badge. Settled findings dim, never strike through.
+ */
+
+.root {
+  --fr-tone: var(--ds-color-text-secondary);
+  list-style: none;
+  border-radius: var(--ds-radius-md);
+  border: 1px solid transparent;
+}
+.open {
+  border-color: var(--ds-color-border-subtle);
+  background: var(--ds-color-surface);
+}
+.danger {
+  --fr-tone: var(--ds-tone-danger-fg);
+}
+.attention {
+  --fr-tone: var(--ds-tone-attention-fg);
+}
+.info {
+  --fr-tone: var(--ds-tone-info-fg);
+}
+.neutral,
+.success {
+  --fr-tone: var(--ds-color-text-secondary);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-default);
+  padding: 0 var(--ds-space-8) 0 var(--ds-space-4);
+  border-radius: var(--ds-radius-md);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-primary);
+  outline: none;
+  cursor: default;
+}
+.row:has(.headButton:hover) {
+  background: var(--ds-color-hover-wash);
+}
+/* The disclosure button spans the leading part of the row; its focus ring
+   is drawn on the row so the whole line reads as one control. */
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  min-height: var(--ds-size-row-default);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  outline: none;
+}
+.headButton:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--ds-color-focus-ring);
+  border-radius: var(--ds-radius-sm);
+}
+.open .row {
+  border-bottom: 1px solid var(--ds-color-border-subtle);
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.chevron {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--ds-color-text-muted);
+}
+.chevronIcon {
+  transition: transform var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.open .chevronIcon {
+  transform: rotate(90deg);
+}
+
+/* Severity: glyph + word, in its tone. Fixed width so titles align. */
+.severity {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  width: 68px;
+  flex-shrink: 0;
+  color: var(--fr-tone);
+  font-weight: var(--ds-weight-medium);
+  font-size: var(--ds-text-xs);
+}
+.severityLabel {
+  white-space: nowrap;
+}
+
+.category {
+  flex-shrink: 0;
+  width: 80px;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.title {
+  flex: 1 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+/* The path yields to the title: it is capped at a third of the line and
+   the title takes the rest. The full path is always in the title attr. */
+.location {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 28%;
+  align-self: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  font-feature-settings: "tnum", "zero";
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.locationLink:hover {
+  color: var(--ds-color-accent-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.trailing {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.attempts {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--ds-text-2xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--ds-color-text-muted);
+}
+.fixedIn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+}
+.fixedInLabel {
+  color: var(--ds-color-text-muted);
+}
+.fixedInArrow {
+  color: var(--ds-color-text-muted);
+}
+.status {
+  flex-shrink: 0;
+}
+
+/* Settled: the whole row steps back one ink level; the severity keeps its
+   glyph but drops its colour, so an old blocking finding does not shout. */
+.settled .title,
+.settled .category {
+  color: var(--ds-color-text-secondary);
+}
+.settled .severity {
+  color: var(--ds-color-text-muted);
+  font-weight: var(--ds-weight-regular);
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  padding: var(--ds-space-8) var(--ds-space-12) var(--ds-space-12) calc(var(--ds-space-4) + 14px + var(--ds-space-8));
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-primary);
+}
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+}
+.sectionLabel {
+  font-size: var(--ds-text-2xs);
+}
+.prose {
+  font-size: var(--ds-text-sm);
+}
+
+/* -- Group -- */
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+  min-width: 0;
+}
+.groupHead {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-compact);
+  padding: 0 var(--ds-space-4);
+}
+.groupTitle {
+  white-space: nowrap;
+}
+.groupCounts {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.groupOpen {
+  color: var(--ds-color-text-secondary);
+  font-weight: var(--ds-weight-medium);
+}
+.groupBlocking {
+  color: var(--ds-tone-attention-fg);
+}
+.groupSettled {
+  color: var(--ds-color-text-muted);
+}
+.groupActions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+}
+.groupEmpty {
+  padding: var(--ds-space-4) var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.divider {
+  height: 1px;
+  margin: var(--ds-space-4) var(--ds-space-8);
+  background: var(--ds-color-border-subtle);
+}

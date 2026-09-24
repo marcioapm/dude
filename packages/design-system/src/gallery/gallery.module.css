@@ -342,3 +342,34 @@
 .cvdSim {
   filter: grayscale(1);
 }
+
+/* A stand-in row for the RowMenu demo: focusable, hover/focus reveal the menu. */
+.menuRow {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  width: 360px;
+  height: var(--ds-size-row-default);
+  padding: 0 var(--ds-space-4) 0 var(--ds-space-8);
+  border-radius: var(--ds-radius-sm);
+  background: var(--ds-color-surface);
+  font-size: var(--ds-text-sm);
+  outline: none;
+}
+.menuRow:hover {
+  background: var(--ds-color-hover-wash);
+}
+.menuRow:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--ds-color-focus-ring);
+}
+.menuRowSlot {
+  display: inline-flex;
+  margin-left: auto;
+  opacity: 0;
+}
+.menuRow:hover .menuRowSlot,
+.menuRow:focus-visible .menuRowSlot,
+.menuRow:focus-within .menuRowSlot,
+.menuRowSlot[data-open="true"] {
+  opacity: 1;
+}

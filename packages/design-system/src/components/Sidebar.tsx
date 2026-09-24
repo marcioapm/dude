@@ -17,7 +17,8 @@ import {
   type NavRow,
 } from "../util/navModel.ts";
 import { HumanAvatarStack } from "./HumanAvatar.tsx";
-import { NavTree } from "./NavTree.tsx";
+import { NavTree, type NavRowMenuControls } from "./NavTree.tsx";
+import type { RowMenuItem } from "../primitives/RowMenu.tsx";
 import { StatusBadge } from "./StatusBadge.tsx";
 import { AgentAvatar } from "./AgentAvatar.tsx";
 import styles from "./Sidebar.module.css";
@@ -45,6 +46,9 @@ export interface SidebarProps extends Omit<HTMLAttributes<HTMLElement>, "onSelec
   readonly onExpandedChange?: ((next: NavOverrides) => void) | undefined;
   /** Hide the pinned "Needs you" section (e.g. a dedicated inbox exists). */
   readonly hideAttention?: boolean | undefined;
+  /** Row "…" menus for the tree; see `NavTree`. */
+  readonly menuItems?: ((row: NavRow) => ReadonlyArray<RowMenuItem> | null | undefined) | undefined;
+  readonly menu?: ((row: NavRow, controls: NavRowMenuControls) => ReactNode) | undefined;
   readonly width?: number | string | undefined;
 }
 
@@ -80,6 +84,8 @@ export function Sidebar({
   expanded,
   onExpandedChange,
   hideAttention,
+  menuItems,
+  menu,
   width = 280,
   className,
   style,
@@ -208,7 +214,7 @@ export function Sidebar({
             className={styles["empty"]}
           />
         ) : (
-          <NavTree ref={treeRef} projects={projects} selected={selected} onSelect={onSelect} expanded={expanded} onExpandedChange={onExpandedChange} filter={filter} onSearchRequest={focusSearch} />
+          <NavTree ref={treeRef} projects={projects} selected={selected} onSelect={onSelect} expanded={expanded} onExpandedChange={onExpandedChange} filter={filter} onSearchRequest={focusSearch} menuItems={menuItems} menu={menu} />
         )}
       </ScrollArea>
 
