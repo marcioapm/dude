@@ -217,6 +217,20 @@ nudge by eye.
   because the agent is waiting. **Steer** (session running) is accent-toned,
   says plainly that it interrupts the current turn, and requires ⌘/Ctrl+Enter
   because an accidental interrupt costs a turn.
+- The question itself is a turn: `QuestionCard`. While it waits it is the
+  one loud thing a transcript is allowed — the needs-you badge with its
+  ring, the attention wash and 2px bar the tree row and board card use for
+  the same state, the asking avatar marked live, and a wait clock ticking in
+  attention ink — so an operator scanning a long chat lands on it at once,
+  and in grayscale it is still the only framed turn with a solid badge, a
+  bar and a clock. The offered choices are numbered chips so the question
+  reads in full; they become one-click replies only with `onChoose`, since
+  the composer already has them as buttons. `answeredAt` settles it: a
+  hairline, no wash, "Answered · after 4m 12s", and the answer follows as
+  its own `intent="answer"` turn — the card never quotes it, so nothing is
+  said twice. `dismissed` is for a question the session died on: "Not
+  answered", settled, and it never rings. The waiting card is a polite live
+  region announced once; the clock sits outside it.
 - The same tints mark the human turns in the transcript (`ChatMessage
   intent="answer" | "steer"`), so interventions are scannable in a long
   conversation.
@@ -419,6 +433,7 @@ nudge by eye.
 | `<ChatMessage role="system" intent="prompt" content={phasePrompt} />` | the factory's prompt shown as a person's, unclamped |
 | `<ChatMessage intent="steer" pending />` until lux delivers it | a steer that looks read before the agent has it |
 | `<ChatComposer question={q} />` for a blocking question | one generic text box for everything |
+| `<QuestionCard role="implementer" text={q} options={opts} askedAt={t} />` until `answeredAt` lands | the question only in the composer, gone from the history once answered |
 | `<Markdown source={text} streaming />` while tokens arrive | re-parsing strictly on every token |
 | `<TriageRollup counts={projectCounts(p)} />` on a collapsed project | "12 items" |
 | `<HumanAvatarStack people={[waitingOn, requester]} />` | a row of role-coloured circles with letters |
@@ -479,6 +494,11 @@ Skeleton/SkeletonLines/Spinner, EmptyState, ScrollArea.
   Collapsed, it shows the current item. `sticky` pins it under the header.
 - **ChatThread** — a subagent's conversation nested in its parent's, with a
   role-coloured rail, collapsible, depth-aware.
+- **QuestionCard** — an agent's question to a person as a turn. Waiting it
+  is the loudest turn in the transcript (needs-you badge, attention wash
+  and bar, live avatar, ticking wait clock); answered or dismissed it
+  settles to a hairline with when and how long it waited. Choices shown as
+  chips, one-click only with `onChoose`.
 - **ChatComposer** — answer (blocked on a question, with one-click options)
   vs steer (interrupts a running turn) vs prompt, visibly different.
 - **Markdown** — untrusted Markdown to React from a typed AST; streaming-safe;

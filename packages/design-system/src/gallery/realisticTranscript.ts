@@ -152,6 +152,13 @@ export const MSG_2 = `Added \`isRetryable\` (5xx and 429 only) and a bounded loo
 
 export const MSG_3 = `The 502 test failed: I was checking \`isRetryable\` after the throw. Fixed the scope and corrected the assertion — with a fake that always returns 502, "gives up" means **5** calls, not 1.`;
 
+/** The implementer stops for a product decision it should not make alone. */
+export const QUESTION_TEXT = `The webhook route already retries a failed delivery **3 times** on its own (\`routes/webhooks.ts:48\`), so with my 5 attempts inside \`post\` the worst case is 15 calls before a delivery is declared lost.
+
+Should I leave the route's retry in place, or fold it into this change?`;
+export const QUESTION_OPTIONS = ["Leave the route as is; note it in the PR", "Remove the route's retry", "Cap both so the total stays at 5"] as const;
+export const ANSWER_TEXT = `Leave it — the route's retry covers a different failure (our own handler crashing). Note the 15-call worst case in the PR body so the reviewer sees it.`;
+
 export const MSG_4 = `All green: 65 pass, 0 fail. The diff is 118 lines.
 
 Opening the PR now. One note for the reviewer: the webhook route has its own retry on the outer edge, so worst case is 5 × 3 attempts before a delivery is declared lost. I have not changed that — it is a product decision — but it is worth a follow-up work item.`;

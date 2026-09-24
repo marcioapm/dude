@@ -30,6 +30,8 @@ export { ChatThread } from "./ChatThread.tsx";
 export type { ChatThreadProps } from "./ChatThread.tsx";
 export { ChatTranscript } from "./ChatTranscript.tsx";
 export type { ChatTranscriptProps, ChatTranscriptSession } from "./ChatTranscript.tsx";
+export { QuestionCard } from "./QuestionCard.tsx";
+export type { QuestionCardProps, QuestionState } from "./QuestionCard.tsx";
 export { ChatComposer } from "./ChatComposer.tsx";
 export type { ChatComposerProps, ComposerMode, ComposerSubmission, PendingQuestion } from "./ChatComposer.tsx";
 export { HumanAvatar, HumanAvatarStack, identitySlot, initialsOf } from "./HumanAvatar.tsx";
