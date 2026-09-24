@@ -42,6 +42,7 @@ func LoadAgentConfig() (AgentConfig, error) {
 	c := AgentConfig{
 		DefaultImage: envOr("DUDE_AGENT_IMAGE", "localhost/dude-runtime:dev"),
 		Timeout:      envOr("DUDE_AGENT_TIMEOUT", "2h"),
+		ToolsURL:     os.Getenv("DUDE_TOOLS_URL"),
 	}
 	home, _ := os.UserHomeDir()
 	if b, err := readEnvOrFile("DUDE_OPENCODE_AUTH", home+"/.local/share/opencode/auth.json"); err != nil {

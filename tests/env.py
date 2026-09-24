@@ -179,9 +179,23 @@ class TestEnvironment:
                 # No real agent credentials in the suite; fake models only.
                 "DUDE_OPENCODE_AUTH": "{}",
                 "DUDE_OPENCODE_CONFIG": "{}",
+                **self._tools_env(),
             },
             stdout=self._log("orchestrator"), stderr=subprocess.STDOUT,
         )
+
+    def _tools_env(self) -> dict:
+        """dude's tools for agents, when lux is real and they can reach us.
+
+        lux never lets a Run reach its own host or lux's address, so the
+        tools listen on an address of this machine that lux's hosts can
+        reach but is neither: DUDE_TEST_TOOLS_HOST (a LAN address).
+        """
+        host = os.environ.get("DUDE_TEST_TOOLS_HOST")
+        if not self.real_lux or not host:
+            return {}
+        port = find_free_port()
+        return {"DUDE_TOOLS_LISTEN": f"{host}:{port}", "DUDE_TOOLS_URL": f"http://{host}:{port}/"}
 
     def _create_database(self) -> None:
         with psycopg.connect(self._admin_dsn(), autocommit=True) as conn:

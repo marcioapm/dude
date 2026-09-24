@@ -14,6 +14,7 @@ lux's repository; DUDE_TEST_LUX_ENV names another) and runs only these.
 
 from __future__ import annotations
 
+import json
 import os
 
 import pytest
@@ -135,3 +136,33 @@ def test_steering_pause_and_resume_on_real_lux(client: ApiClient, lux_project):
     assert sum(e["eventType"] == "agent.session.started" for e in events) == 1
 
     assert client.post(f"/v1/runs/{run['id']}/abort", {}).status_code == 200
+
+
+@pytest.mark.skipif(not os.environ.get("DUDE_TEST_TOOLS_HOST"), reason="needs DUDE_TEST_TOOLS_HOST: an address of this machine lux's hosts can reach")
+def test_an_agent_on_real_lux_calls_dudes_tools(client: ApiClient, lux_project):
+    """lux hands the agent dude's MCP server, authenticated as its Run; the
+    agent (lux-fake's MCP client) calls list_work, and dude records the
+    call on that Run and answers with the project's work."""
+    project, _ = lux_project
+    client.patch(f"/v1/projects/{project['id']}", {"agentModels": {
+        "implementer": {"model": "fake/tools"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
+    work_item = client.create_work_item(project["id"], "Use the tools")
+    assert client.post(f"/v1/work-items/{work_item['id']}/deliver").status_code == 201
+
+    def called():
+        runs = client.work_item_runs(work_item["id"])
+        if not runs:
+            return None
+        return [e for e in client.events(runId=runs[0]["id"]) if e["eventType"] == "agent.tool.dude"] or None
+
+    try:
+        calls = wait_until(called, timeout=120, interval=1, message="the agent never called dude's tools on lux")
+    finally:
+        print("phases:", [(r["phase"], r["status"], r.get("error")) for r in client.work_item_runs(work_item["id"])])
+    assert calls[0]["payload"]["tool"] == "list_work"
+    assert "Use the tools" in json.dumps(calls[0]["payload"]["result"])
+    # And the agent heard the answer: its reply carries the work item's key.
+    implement = client.work_item_runs(work_item["id"])[0]
+    messages = " ".join(e["payload"].get("text", "") for e in client.events(runId=implement["id"])
+                        if e["eventType"] == "agent.message")
+    assert work_item["key"] in messages, messages

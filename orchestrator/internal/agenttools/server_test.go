@@ -171,3 +171,22 @@ func exec(t *testing.T, c *pgx.Conn, sql string, args ...any) {
 		t.Fatal(err)
 	}
 }
+
+func TestListWorkFindsByText(t *testing.T) {
+	f := setup(t)
+	cs, err := f.connect(t, f.run(t, "run_x", "implementer", "running"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	for text, want := range map[string]bool{"TRUNCATE": true, "hyphen": false} {
+		res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "list_work", Arguments: map[string]any{"text": text}})
+		if err != nil || res.IsError {
+			t.Fatalf("list_work %q: %v %+v", text, err, res)
+		}
+		raw, _ := json.Marshal(res.StructuredContent)
+		if strings.Contains(string(raw), "TEXT-1") != want {
+			t.Errorf("list_work %q: %s", text, raw)
+		}
+	}
+}
