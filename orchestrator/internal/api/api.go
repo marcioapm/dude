@@ -130,15 +130,19 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, org string) err
 	if err := read(r, &body); err != nil {
 		return err
 	}
-	var projectID, repositoryID string
+	var projectID, repositoryID, chosen string
 	var projectPolicy []byte
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(r.Context(), `SELECT w.project_id, p.delivery_policy FROM work_items w
-			JOIN projects p ON p.id = w.project_id WHERE w.id = $1`, workItemID).Scan(&projectID, &projectPolicy); err != nil {
+		if err := tx.QueryRow(r.Context(), `SELECT w.project_id, p.delivery_policy, COALESCE(w.repository_id, '') FROM work_items w
+			JOIN projects p ON p.id = w.project_id WHERE w.id = $1`, workItemID).Scan(&projectID, &projectPolicy, &chosen); err != nil {
 			if db.IsNotFound(err) {
 				return fail(http.StatusNotFound, "not_found", "work item %s not found", workItemID)
 			}
 			return err
+		}
+		// The repository asked for now, else the one the work item names.
+		if body.RepositoryID == "" {
+			body.RepositoryID = chosen
 		}
 		rows, err := tx.Query(r.Context(), `SELECT id FROM repositories WHERE project_id = $1
 			AND ($2 = '' OR id = $2) ORDER BY name LIMIT 2`, projectID, body.RepositoryID)

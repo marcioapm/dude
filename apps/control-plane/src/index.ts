@@ -16,6 +16,7 @@ import { registerPullRequestRoutes } from "./api/routes/pullRequests.ts";
 import { registerFindingRoutes } from "./api/routes/findings.ts";
 import { registerProjectRoutes } from "./api/routes/projects.ts";
 import { registerWorkRoutes } from "./api/routes/work.ts";
+import { registerStructureRoutes } from "./api/routes/structure.ts";
 import { registerInterventionRoutes } from "./api/routes/intervention.ts";
 import { closePool, getPool } from "./db/client.ts";
 import { listenForEvents } from "./events/listen.ts";
@@ -38,6 +39,7 @@ export function buildRouter(): Router {
   registerFindingRoutes(router);
   registerProjectRoutes(router);
   registerWorkRoutes(router);
+  registerStructureRoutes(router);
   registerInterventionRoutes(router);
 
   return router;
