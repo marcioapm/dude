@@ -54,7 +54,7 @@ const epicMenu: ReadonlyArray<RowMenuItem> = [
   { id: "delete", label: "Delete", icon: "cross", tone: "danger" },
 ];
 const projectMenu: ReadonlyArray<RowMenuItem> = [
-  { id: "settings", label: "Settings", icon: "system", shortcut: "," },
+  { id: "settings", label: "Settings", icon: "settings", shortcut: "," },
   { id: "new-epic", label: "New epic", icon: "layers" },
   { id: "new", label: "New work item", icon: "plus" },
   { kind: "separator" },

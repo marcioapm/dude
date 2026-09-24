@@ -254,3 +254,27 @@ def test_epics_are_made_ordered_and_removed_from_the_sidebar_and_board(
     assert [e["title"] for e in client.get(f"/v1/projects/{forge_project['id']}/epics").json()["epics"]] == ["Onboarding"]
     assert client.get(f"/v1/work-items/{item['id']}").json()["epicId"] is None
     assert console_errors == []
+
+
+def test_back_and_forward_move_between_places(
+    page: Page, web_url: str, client: ApiClient, forge_project: dict, org: dict, console_errors: list
+):
+    client.create_work_item(forge_project["id"], "Somewhere to go")
+    _sign_in(page, web_url, org["api_key"])
+    page.get_by_text("Somewhere to go").last.click()
+    expect(page.get_by_test_id("work-item-screen")).to_be_visible()
+    page.get_by_test_id("org-settings-button").click()
+    expect(page.get_by_test_id("org-settings")).to_be_visible()
+
+    page.go_back()
+    expect(page.get_by_test_id("work-item-screen")).to_contain_text("Somewhere to go")
+    page.go_back()
+    expect(page.get_by_text("Somewhere to go").last).to_be_visible()
+    expect(page.get_by_test_id("work-item-screen")).to_have_count(0)
+    page.go_forward()
+    expect(page.get_by_test_id("work-item-screen")).to_be_visible()
+
+    # A pasted link lands where it points.
+    page.goto(f"{web_url}#/org/settings")
+    expect(page.get_by_test_id("org-settings")).to_be_visible()
+    assert console_errors == []

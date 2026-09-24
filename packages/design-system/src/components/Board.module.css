@@ -182,6 +182,13 @@
    count, roll-up, spend, menu — over the same five columns, without the
    per-column heads. Columns are equal cells so the lanes line up down the
    page; an empty column is an empty cell, not a rail, so the grid holds. -- */
+/* Five equal tracks that share the width and never go under 200px; below
+   that the body scrolls sideways. Never size a lane to its content: a card
+   title's max-content is its longest unwrapped line, and one long title
+   would stretch every track to match, pushing the row off the screen. */
+.bodyLanes {
+  --lane-min: calc(5 * 200px + 4 * var(--ds-space-8));
+}
 .laneHead {
   position: sticky;
   top: 0;
@@ -189,7 +196,7 @@
   display: grid;
   grid-template-columns: repeat(5, minmax(200px, 1fr));
   gap: var(--ds-space-8);
-  min-width: max-content;
+  min-width: var(--lane-min);
   padding: var(--ds-space-8) 0 var(--ds-space-4);
   background: var(--ds-color-canvas);
 }
@@ -203,7 +210,7 @@
 .lane {
   display: flex;
   flex-direction: column;
-  min-width: max-content;
+  min-width: var(--lane-min);
   flex-shrink: 0;
   margin-top: var(--ds-space-4);
 }
@@ -293,7 +300,9 @@
 .laneColumns {
   display: grid;
   grid-template-columns: repeat(5, minmax(200px, 1fr));
+  gap: var(--ds-space-8);
   flex: none;
+  min-width: 0;
   padding: var(--ds-space-4) 0 var(--ds-space-8);
   overflow: visible;
 }
@@ -306,6 +315,9 @@
 .columnInLane {
   min-width: 0;
   max-width: none;
+  /* A card cannot widen its track; its focus ring still shows. */
+  overflow: clip;
+  overflow-clip-margin: var(--ds-space-4);
 }
 .columnInLane .cards {
   padding-bottom: 0;

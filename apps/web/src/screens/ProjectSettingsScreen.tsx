@@ -297,7 +297,7 @@ function RepositoryDialog(props: {
         checked={external}
         onCheckedChange={(c) => setExternal(c === true)}
         label="External (untrusted)"
-        description="Code from outside the organisation: agents get no credentials and restricted network."
+        description="Code from outside the organization: agents get no credentials and restricted network."
       />
     </FormDialog>
   );
@@ -330,7 +330,7 @@ function AgentsTab({ client, project, onSaved }: TabProps) {
       }}
     >
       <p className="muted">
-        The model each role runs, as <code>provider/model</code>. A role left empty uses the organisation's default.
+        The model each role runs, as <code>provider/model</code>. A role left empty uses the organization's default.
       </p>
       {AGENT_ROLES.map((role) => (
         <Input
@@ -338,7 +338,7 @@ function AgentsTab({ client, project, onSaved }: TabProps) {
           label={ROLE_LABEL[role]}
           mono
           value={models[role]}
-          placeholder="Organisation default"
+          placeholder="Organization default"
           error={losing.includes(role) ? "This role has other settings (such as its context) that need a model." : undefined}
           onChange={(e) => setModels((m) => ({ ...m, [role]: e.target.value }))}
         />
