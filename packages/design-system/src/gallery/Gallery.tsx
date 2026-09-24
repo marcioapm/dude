@@ -12,8 +12,10 @@ import { ComponentsSection } from "./sections/Components.tsx";
 import { ChatSection } from "./sections/Chat.tsx";
 import { NavigationSection } from "./sections/Navigation.tsx";
 import { BoardSection } from "./sections/Board.tsx";
+import { ShellSection } from "./sections/Shell.tsx";
 
 const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, string]>]> = [
+  ["App shell", [["shell-session", "Sidebar + transcript"]]],
   [
     "Tokens",
     [
@@ -188,6 +190,7 @@ function Shell() {
       </nav>
       <main className={styles["main"]}>
         <PaneDensityContext.Provider value={paneDensity}>
+          <ShellSection mode={panes} />
           <TokensSection mode={panes} />
           <PrimitivesSection mode={panes} />
           <ComponentsSection mode={panes} />
