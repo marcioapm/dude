@@ -92,7 +92,7 @@ export function QuestionCard({ role, name, text, options, askedAt, answeredAt, d
       {...rest}
     >
       <div className={styles["gutter"]}>
-        <AgentAvatar role={role} size="sm" live={waiting} />
+        <AgentAvatar role={role} size="chat" live={waiting} />
       </div>
       <div className={styles["main"]}>
         <header className={styles["header"]}>

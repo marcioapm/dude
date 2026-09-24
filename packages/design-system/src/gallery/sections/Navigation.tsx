@@ -121,14 +121,14 @@ export function NavigationSection({ mode }: { readonly mode: PaneMode }) {
       <Block
         id="nav-sidebar"
         title="Sidebar — realistic"
-        note="The whole thing at 280px with three projects and fifty work items. Header, search (/ from the tree, ↓ into it), four filter chips with global counts, the pinned Needs-you list across every project, then the tree. The pinned list is what makes 'what needs me' answerable without expanding anything: it names the work item, who is asking, who it waits on, and where it lives. Select a row to see the selection follow into the tree."
+        note="The whole thing at its default 304px with three projects and fifty work items. Header, search (/ from the tree, ↓ into it), four filter chips with global counts, the pinned Needs-you list across every project, then the tree. The pinned list is what makes 'what needs me' answerable without expanding anything: it names the work item, who is asking, who it waits on, and where it lives. Select a row to see the selection follow into the tree."
       >
         <Panes mode={mode}>
           <SidebarDemo />
         </Panes>
       </Block>
 
-      <Block id="nav-sidebar-states" title="Sidebar — quiet, filtered, narrow, empty, loading" note="A quiet project shows no roll-ups, no pinned section and no attention ink anywhere. A filter forces the ancestors open and greys the chevrons. Below 264px the chips drop their labels and keep mark + count. Empty and loading are one line and skeleton rows respectively.">
+      <Block id="nav-sidebar-states" title="Sidebar — quiet, filtered, narrow, empty, loading" note="A quiet project shows no roll-ups, no pinned section and no attention ink anywhere. A filter forces the ancestors open and greys the chevrons. Below 296px the chips drop their labels and keep mark + count. Empty and loading are one line and skeleton rows respectively.">
         <Panes mode={mode}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 12 }}>
             {(

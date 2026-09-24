@@ -83,7 +83,7 @@ function AppShell() {
   const [selected, setSelected] = useState<NavRef | null>({ kind: "session", id: "s_2401-orc" });
   return (
     <div className={styles["shell"]}>
-      <Sidebar projects={navProjects} selected={selected} onSelect={setSelected} title="dude" width={288} />
+      <Sidebar projects={navProjects} selected={selected} onSelect={setSelected} title="dude" />
       <main className={styles["shellMain"]}>
         <Breadcrumb
           items={[

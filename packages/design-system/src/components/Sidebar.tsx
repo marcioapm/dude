@@ -86,7 +86,7 @@ export function Sidebar({
   hideAttention,
   menuItems,
   menu,
-  width = 280,
+  width = 304,
   className,
   style,
   ...rest
