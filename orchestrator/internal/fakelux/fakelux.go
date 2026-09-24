@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"os/exec"
 	"path"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +36,8 @@ type Behaviour struct {
 	// The agent's reply, streamed as message chunks.
 	Reply string
 	// Files to commit, path → content; none means the agent changes nothing.
+	// "<repo>:<path>" commits in that repository, "*:<path>" in every one
+	// the Run may push, and a bare path in the first of those.
 	Commit map[string]string
 	// The commit's message.
 	Message string
@@ -61,13 +64,14 @@ type Behaviour struct {
 }
 
 type Run struct {
-	ID          string
-	Spec        json.RawMessage
-	State       string
-	Epoch       int
-	SessionID   string
-	Inputs      []string
-	Pushed      string
+	ID        string
+	Spec      json.RawMessage
+	State     string
+	Epoch     int
+	SessionID string
+	Inputs    []string
+	// Some repository got a commit from a push.
+	Pushed      bool
 	Cancelled   bool
 	Stopped     int
 	Resumed     int
@@ -81,7 +85,6 @@ type Run struct {
 	// Written into $LUX_ARTIFACTS by the agent's turns and not yet collected.
 	published map[string]string
 
-	repo     string
 	busy     bool
 	woken    bool
 	queued   []queuedInput
@@ -171,12 +174,16 @@ func New(repo, key string, decide func(map[string]any) Behaviour) *Server {
 func (s *Server) scripted(spec map[string]any) Behaviour {
 	labels, _ := spec["labels"].(map[string]any)
 	str := func(k string) string { v, _ := labels[k].(string); return v }
-	repo := s.Repo
-	if s.RepoFor != nil {
-		repo = s.RepoFor(SpecField(spec, "url"))
-	}
-	fixed := exec.Command("git", "-C", repo, "cat-file", "-e", SpecField(spec, "ref")+":"+fakeagent.FixedFile).Run() == nil
+	// The fix is in if any repository the reviewer checked out holds it.
+	fixed := slices.ContainsFunc(specRepos(spec), func(r specRepo) bool {
+		return exec.Command("git", "-C", s.repoPath(r.URL), "cat-file", "-e", r.Ref+":"+fakeagent.FixedFile).Run() == nil
+	})
 	step := fakeagent.For(str("dude.phase"), str("dude.model"), str("dude.run"), fixed)
+	if str("dude.phase") == "review" && len(specRepos(spec)) == 0 {
+		// No checkout: the reviewer reads what was published, and the
+		// scripted one is content with it.
+		step.Reply = fakeagent.NothingToReview
+	}
 	files := map[string]string{}
 	for path, line := range step.Commit {
 		files[path] = line + "\n"
@@ -262,10 +269,6 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 	run := &Run{ID: fmt.Sprintf("lrun_%d", s.next), Spec: raw, State: "submitted", Epoch: 1}
 	run.cond = sync.NewCond(&s.mu)
 	run.behavior = s.Decide(spec)
-	run.repo = s.Repo
-	if s.RepoFor != nil {
-		run.repo = s.RepoFor(SpecField(spec, "url"))
-	}
 	s.runs[run.ID] = run
 	if k := r.Header.Get("Idempotency-Key"); k != "" {
 		s.byKey[k] = run.ID
@@ -287,8 +290,9 @@ func (s *Server) play(run *Run, spec map[string]any, resumed bool) {
 	}
 	s.setState(run, "running")
 	if !resumed {
-		base := head(run.repo, SpecField(spec, "ref"))
-		s.luxEvent(run, "git.checkout", map[string]any{"repo": "target", "ref": SpecField(spec, "ref"), "base": base})
+		for _, repo := range specRepos(spec) {
+			s.luxEvent(run, "git.checkout", map[string]any{"repo": repo.Name, "ref": repo.Ref, "base": head(s.repoPath(repo.URL), repo.Ref)})
+		}
 		run.SessionID = fmt.Sprintf("ses_%s", run.ID)
 	}
 	// As lux's shim does: in the record stream, in order with the agent's
@@ -366,16 +370,15 @@ func (s *Server) turn(run *Run) {
 	s.deliverQueued(run)
 }
 
-// SpecField reads a field of the spec's first repository ("url", "ref").
-func SpecField(spec map[string]any, name string) string {
-	git, _ := spec["git"].(map[string]any)
-	repos, _ := git["repositories"].([]any)
-	if len(repos) == 0 {
-		return ""
+// Prompt is what the Run's agent was told.
+func (r *Run) Prompt() string {
+	var spec struct {
+		Workload struct {
+			Prompt string `json:"prompt"`
+		} `json:"workload"`
 	}
-	r, _ := repos[0].(map[string]any)
-	v, _ := r[name].(string)
-	return v
+	_ = json.Unmarshal(r.Spec, &spec)
+	return spec.Workload.Prompt
 }
 
 func chunks(s string, n int) []string {
@@ -422,7 +425,7 @@ func (s *Server) exited(run *Run) {
 		return // never started: lux sends no snapshot for it
 	}
 	go func() {
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		for name, content := range published {
@@ -578,18 +581,12 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 		RequestID string `json:"requestId"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&in)
-	var spec struct {
-		Git struct {
-			Repositories []struct {
-				Ref string `json:"ref"`
-			} `json:"repositories"`
-			Push *struct {
-				Branch string `json:"branch"`
-			} `json:"push"`
-		} `json:"git"`
-	}
+	var spec map[string]any
 	_ = json.Unmarshal(run.Spec, &spec)
-	if spec.Git.Push == nil {
+	git, _ := spec["git"].(map[string]any)
+	push, _ := git["push"].(map[string]any)
+	branch, _ := push["branch"].(string)
+	if branch == "" {
 		writeErr(w, 409, "no_push", "the run's spec has no git.push branch")
 		return
 	}
@@ -597,23 +594,77 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		base := ""
-		if len(spec.Git.Repositories) > 0 {
-			base = head(run.repo, spec.Git.Repositories[0].Ref)
+		// Each repository, in the spec's order, as lux pushes them: its own
+		// result, "skipped" for one that is never pushed.
+		repos := specRepos(spec)
+		first := ""
+		for _, repo := range repos {
+			if repo.Push && first == "" {
+				first = repo.Name
+			}
 		}
-		result := map[string]any{"repo": "target", "branch": spec.Git.Push.Branch}
-		sha, err := commit(run.repo, base, spec.Git.Push.Branch, run.behavior.Commit, run.behavior.Message)
-		switch {
-		case err != nil:
-			result["status"], result["error"] = "failed", err.Error()
-		case sha == base:
-			result["status"], result["commit"] = "up-to-date", sha
-		default:
-			result["status"], result["commit"] = "pushed", sha
-			run.Pushed = sha
+		var results []any
+		for _, repo := range repos {
+			result := map[string]any{"repo": repo.Name}
+			if !repo.Push {
+				result["status"] = "skipped"
+				results = append(results, result)
+				continue
+			}
+			result["branch"] = branch
+			files := map[string]string{}
+			for path, content := range run.behavior.Commit {
+				if name, rest, ok := strings.Cut(path, ":"); ok && (name == repo.Name || name == "*") {
+					files[rest] = content
+				} else if !ok && repo.Name == first {
+					files[path] = content
+				}
+			}
+			path := s.repoPath(repo.URL)
+			base := head(path, repo.Ref)
+			sha, err := commit(path, base, branch, files, run.behavior.Message)
+			switch {
+			case err != nil:
+				result["status"], result["error"] = "failed", err.Error()
+			case sha == base:
+				result["status"], result["commit"] = "up-to-date", sha
+			default:
+				result["status"], result["commit"] = "pushed", sha
+				run.Pushed = true
+			}
+			results = append(results, result)
 		}
-		s.luxEvent(run, "git.push", map[string]any{"requestId": in.RequestID, "results": []any{result}})
+		s.luxEvent(run, "git.push", map[string]any{"requestId": in.RequestID, "results": results})
 	}()
+}
+
+type specRepo struct {
+	Name, URL, Ref string
+	Push           bool
+}
+
+// specRepos are a spec's repositories as lux reads them.
+func specRepos(spec map[string]any) []specRepo {
+	git, _ := spec["git"].(map[string]any)
+	list, _ := git["repositories"].([]any)
+	var out []specRepo
+	for _, item := range list {
+		r, _ := item.(map[string]any)
+		name, _ := r["name"].(string)
+		url, _ := r["url"].(string)
+		ref, _ := r["ref"].(string)
+		push, set := r["push"].(bool)
+		out = append(out, specRepo{Name: name, URL: url, Ref: ref, Push: push || !set})
+	}
+	return out
+}
+
+// repoPath is where a spec's repository lives for this fake.
+func (s *Server) repoPath(url string) string {
+	if s.RepoFor != nil {
+		return s.RepoFor(url)
+	}
+	return s.Repo
 }
 
 // commit writes files on top of base and points branch at the result.

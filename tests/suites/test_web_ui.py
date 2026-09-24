@@ -128,6 +128,33 @@ def test_a_work_item_is_edited_and_moved_from_its_screen(
     assert console_errors == []
 
 
+def test_a_work_item_names_the_repositories_it_changes_and_reads(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    target = forge_project["repositories"][0]
+    docs = client.post(f"/v1/projects/{forge_project['id']}/repositories",
+                       {"name": "docs", "url": "https://github.com/acme/docs.git"}).json()
+    _sign_in(page, web_url, org["api_key"])
+    page.get_by_test_id("new-work-item").click()
+    page.get_by_test_id("work-item-title").fill("Document the greeting")
+    chooser = page.get_by_test_id("work-item-repositories")
+    # Nothing chosen says what that means.
+    expect(chooser).to_contain_text("changes no code")
+    chooser.get_by_role("checkbox", name=target["name"]).click()
+    chooser.get_by_role("checkbox", name="docs").click()
+    chooser.get_by_role("combobox", name="What the work does in docs").click()
+    page.get_by_role("listbox").get_by_text("Reads it").click()
+    expect(chooser).to_contain_text("own pull request")
+    page.get_by_test_id("work-item-save").click()
+    expect(page.get_by_test_id("work-item-screen")).to_be_visible()
+
+    items = client.get("/v1/work-items", params={"projectId": forge_project["id"]}).json()["workItems"]
+    saved = next(i for i in items if i["title"] == "Document the greeting")
+    assert sorted((r["id"], r["access"]) for r in saved["repositories"]) == sorted(
+        [(target["id"], "write"), (docs["id"], "read")])
+    assert console_errors == []
+
+
 def test_project_settings_manage_repositories_and_delivery(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
 ):

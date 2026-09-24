@@ -169,7 +169,10 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 			return t.ended(ctx, tx, s, state, str("reason"))
 		}
 	case "git.checkout":
-		_, err := tx.Exec(ctx, `UPDATE runs SET base_sha = COALESCE(base_sha, $2) WHERE id = $1`, t.run.ID, str("base"))
+		// What each checkout started from, the first time it was made; a
+		// resume leaves the checkout as the agent left it.
+		_, err := tx.Exec(ctx, `UPDATE runs SET base_shas = jsonb_build_object($2::text, $3::text) || base_shas
+			WHERE id = $1`, t.run.ID, str("repo"), str("base"))
 		return err
 	case "git.push":
 		if str("requestId") != t.run.PushRequestID && t.run.PushRequestID != "" {

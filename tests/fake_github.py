@@ -78,6 +78,29 @@ class FakeGitHub:
         self.webhook_secret: str | None = None
         self.hooks: list[dict] = []
         self.deliveries: list[tuple[str, int]] = []
+        # Other repositories of the same owner, served by this one's daemon
+        # and API (add_repository).
+        self.siblings: dict[str, "FakeGitHub"] = {}
+        self._parent: FakeGitHub | None = None
+
+    def add_repository(self, repo: str) -> "FakeGitHub":
+        """Another repository, served alongside this one: same owner, same
+        git daemon, same API, its own branches and pull requests."""
+        sib = FakeGitHub.__new__(FakeGitHub)
+        sib.__dict__.update({k: v for k, v in self.__dict__.items() if k not in ("siblings", "pulls", "hooks", "deliveries")})
+        sib.repo, sib.bare = repo, self.root / self.owner / f"{repo}.git"
+        sib.pulls, sib.hooks, sib.deliveries, sib.siblings = {}, [], [], {}
+        sib._lock, sib._parent = threading.Lock(), self
+        sib._seed(suffix=repo)
+        self.siblings[repo] = sib
+        return sib
+
+    def _for_path(self, path: str) -> "FakeGitHub":
+        """The repository an API path is about: /repos/<owner>/<repo>/…"""
+        parts = path.split("/")
+        if len(parts) > 3 and parts[1] == "repos" and parts[3] in self.siblings:
+            return self.siblings[parts[3]]
+        return self
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -120,8 +143,8 @@ class FakeGitHub:
     def api_url(self) -> str:
         return f"http://127.0.0.1:{self.api_port}"
 
-    def _seed(self) -> None:
-        seed = self.root / f"seed-{self.owner}"
+    def _seed(self, suffix: str = "") -> None:
+        seed = self.root / f"seed-{self.owner}{suffix}"
         seed.mkdir(parents=True)
         for args in (
             ["git", "init", "-q", "--initial-branch=main"],
@@ -192,12 +215,15 @@ class FakeGitHub:
         """Deliver a signed webhook to dude, as GitHub would. Returns the status."""
         import requests
 
-        if not self.webhook_url:
+        # A sibling repository delivers where its owner's does.
+        url = self._parent.webhook_url if self._parent else self.webhook_url
+        secret_value = self._parent.webhook_secret if self._parent else self.webhook_secret
+        if not url:
             return 0
         body = json.dumps({**payload, "repository": {"full_name": f"{self.owner}/{self.repo}"}}).encode()
-        key = (secret if secret is not None else self.webhook_secret or "").encode()
+        key = (secret if secret is not None else secret_value or "").encode()
         signature = "sha256=" + hmac.new(key, body, hashlib.sha256).hexdigest()
-        resp = requests.post(self.webhook_url, data=body, timeout=10, headers={
+        resp = requests.post(url, data=body, timeout=10, headers={
             "content-type": "application/json",
             "x-github-event": event,
             "x-github-delivery": str(uuid.uuid4()),
@@ -209,9 +235,13 @@ class FakeGitHub:
     # -- the API -------------------------------------------------------------
 
     def _handler(self):
-        github = self
+        root = self
 
         class Handler(BaseHTTPRequestHandler):
+            @property
+            def github(self) -> "FakeGitHub":
+                return root._for_path(self.path)
+
             def log_message(self, *args):  # quiet
                 pass
 
@@ -227,11 +257,11 @@ class FakeGitHub:
                 return {
                     "number": pr.number,
                     "node_id": f"PR_{pr.number}",
-                    "html_url": f"https://github.test/{github.owner}/{github.repo}/pull/{pr.number}",
+                    "html_url": f"https://github.test/{self.github.owner}/{self.github.repo}/pull/{pr.number}",
                     "draft": pr.draft,
                     "state": pr.state,
                     "merged_at": pr.merged_at,
-                    "head": {"sha": github.branch_sha(pr.head) or "0" * 40},
+                    "head": {"sha": self.github.branch_sha(pr.head) or "0" * 40},
                 }
 
             def _body(self) -> dict:
@@ -239,14 +269,14 @@ class FakeGitHub:
                 return json.loads(self.rfile.read(length) or b"{}") if length else {}
 
             def _git(self, *args: str) -> subprocess.CompletedProcess:
-                return subprocess.run(["git", *args], cwd=github.bare, capture_output=True, text=True)
+                return subprocess.run(["git", *args], cwd=self.github.bare, capture_output=True, text=True)
 
             def do_PATCH(self) -> None:
-                prefix = f"/repos/{github.owner}/{github.repo}/git/refs/heads/"
+                prefix = f"/repos/{self.github.owner}/{self.github.repo}/git/refs/heads/"
                 if not self.path.startswith(prefix):
                     return self._send(404, {"message": "Not Found"})
                 branch, body = self.path[len(prefix):], self._body()
-                current = github.branch_sha(branch)
+                current = self.github.branch_sha(branch)
                 if not current:
                     return self._send(422, {"message": "Reference does not exist"})
                 # GitHub refuses a non-forced update that is not a
@@ -258,7 +288,7 @@ class FakeGitHub:
                 self._send(200, {"ref": f"refs/heads/{branch}"})
 
             def do_DELETE(self) -> None:
-                prefix = f"/repos/{github.owner}/{github.repo}/git/refs/heads/"
+                prefix = f"/repos/{self.github.owner}/{self.github.repo}/git/refs/heads/"
                 if not self.path.startswith(prefix) or self._git("update-ref", "-d", f"refs/heads/{self.path[len(prefix):]}").returncode:
                     return self._send(422, {"message": "Reference does not exist"})
                 self.send_response(204)
@@ -266,28 +296,28 @@ class FakeGitHub:
 
             def do_POST(self) -> None:
                 body = self._body()
-                if self.path == f"/repos/{github.owner}/{github.repo}/git/refs":
+                if self.path == f"/repos/{self.github.owner}/{self.github.repo}/git/refs":
                     if self._git("update-ref", body["ref"], body["sha"], "").returncode:
                         return self._send(422, {"message": "Reference already exists"})
                     return self._send(201, {"ref": body["ref"]})
-                if self.path == f"/repos/{github.owner}/{github.repo}/hooks":
-                    with github._lock:
-                        hook = {**body, "id": len(github.hooks) + 1}
-                        github.hooks.append(hook)
+                if self.path == f"/repos/{self.github.owner}/{self.github.repo}/hooks":
+                    with self.github._lock:
+                        hook = {**body, "id": len(self.github.hooks) + 1}
+                        self.github.hooks.append(hook)
                     return self._send(201, hook)
-                if re.fullmatch(rf"/repos/{github.owner}/{github.repo}/pulls", self.path):
-                    if not github.branch_sha(body["head"]):
+                if re.fullmatch(rf"/repos/{self.github.owner}/{self.github.repo}/pulls", self.path):
+                    if not self.github.branch_sha(body["head"]):
                         return self._send(422, {"message": f"No commits on {body['head']}"})
-                    with github._lock:
-                        if any(p.head == body["head"] and p.state == "open" for p in github.pulls.values()):
+                    with self.github._lock:
+                        if any(p.head == body["head"] and p.state == "open" for p in self.github.pulls.values()):
                             return self._send(422, {"message": "A pull request already exists"})
-                        number = len(github.pulls) + 1
+                        number = len(self.github.pulls) + 1
                         pr = PullRequest(
                             number=number, head=body["head"], base=body["base"],
                             title=body["title"], body=body.get("body", ""),
                             draft=bool(body.get("draft")),
                         )
-                        github.pulls[number] = pr
+                        self.github.pulls[number] = pr
                     return self._send(201, self._pull_json(pr))
                 self._send(404, {"message": "Not Found"})
 
@@ -303,14 +333,14 @@ class FakeGitHub:
                     # handling has to cope with that, so the fake keeps it.
                     return [c for c in items if not since or c["created_at"] >= since]
 
-                prefix = f"/repos/{github.owner}/{github.repo}"
+                prefix = f"/repos/{self.github.owner}/{self.github.repo}"
                 if path == "/user":
                     # Who the token is. The fixture accepts only its own token.
                     if self.headers.get("authorization") != "Bearer fake-token":
                         return self._send(401, {"message": "Bad credentials"})
                     return self._send(200, {"login": "dude-bot"})
                 if path == f"{prefix}/hooks":
-                    return self._send(200, github.hooks)
+                    return self._send(200, self.github.hooks)
                 if m := re.fullmatch(rf"{prefix}/compare/([^.]+)\.\.\.(.+)", path):
                     diff = self._git("diff", "--name-only", m[1], m[2])
                     if diff.returncode:
@@ -318,17 +348,17 @@ class FakeGitHub:
                     files = [{"filename": f} for f in diff.stdout.splitlines() if f]
                     return self._send(200, {"files": files})
                 if m := re.fullmatch(rf"{prefix}/pulls/(\d+)", path):
-                    return self._send(200, self._pull_json(github.pulls[int(m[1])]))
+                    return self._send(200, self._pull_json(self.github.pulls[int(m[1])]))
                 if re.fullmatch(rf"{prefix}/commits/[^/]+/status", path):
                     # No CI in the fixture: GitHub reports zero statuses.
                     return self._send(200, {"state": "pending", "total_count": 0})
                 if m := re.fullmatch(rf"{prefix}/pulls/(\d+)/reviews", path):
-                    return self._send(200, github.pulls[int(m[1])].reviews)
+                    return self._send(200, self.github.pulls[int(m[1])].reviews)
                 if m := re.fullmatch(rf"{prefix}/issues/(\d+)/comments", path):
-                    comments = [c for c in github.pulls[int(m[1])].comments if not c["path"]]
+                    comments = [c for c in self.github.pulls[int(m[1])].comments if not c["path"]]
                     return self._send(200, after_since(comments))
                 if m := re.fullmatch(rf"{prefix}/pulls/(\d+)/comments", path):
-                    comments = [c for c in github.pulls[int(m[1])].comments if c["path"]]
+                    comments = [c for c in self.github.pulls[int(m[1])].comments if c["path"]]
                     return self._send(200, after_since(comments))
                 self._send(404, {"message": "Not Found"})
 

@@ -56,6 +56,7 @@ type world struct {
 	project   string
 	repoID    string
 	gh        *fakegithub.Server
+	web       *fakegithub.Server
 	lux       *fakelux.Server
 	runtime   *workflow.Runtime
 	syncer    *phases.Syncer
@@ -71,27 +72,26 @@ func newWorld(t *testing.T) *world {
 	w := &world{t: t, app: app, owner: owner, org: dbtest.Org(t, owner)}
 	ctx := context.Background()
 
-	// A bare repository with one commit on main, as GitHub would hold it.
+	// Two bare repositories with one commit on main, as GitHub would hold
+	// them: the project's, and a second one (acme/web) a test may add.
 	dir := t.TempDir()
-	bare := filepath.Join(dir, "target.git")
-	seed := filepath.Join(dir, "seed")
-	for _, args := range [][]string{
-		{"init", "-q", "--bare", "-b", "main", bare},
-		{"init", "-q", "-b", "main", seed},
-		{"-C", seed, "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "--allow-empty", "-m", "initial"},
-		{"-C", seed, "push", "-q", bare, "main"},
-	} {
-		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-
+	bare, webBare := bareRepo(t, dir, "target"), bareRepo(t, dir, "web")
 	w.gh = fakegithub.New(bare, "acme/target")
-	ghSrv := httptest.NewServer(w.gh.Handler())
+	w.web = fakegithub.New(webBare, "acme/web")
+	mux := http.NewServeMux()
+	mux.Handle("/repos/acme/target/", w.gh.Handler())
+	mux.Handle("/repos/acme/web/", w.web.Handler())
+	ghSrv := httptest.NewServer(mux)
 	t.Cleanup(ghSrv.Close)
 
 	// dude's scripted agent (internal/fakeagent), played by the fake lux.
 	w.lux = fakelux.New(bare, "lux-key", nil)
+	w.lux.RepoFor = func(url string) string {
+		if strings.Contains(url, "/web.git") {
+			return webBare
+		}
+		return bare
+	}
 	luxSrv := httptest.NewServer(w.lux.Handler())
 	t.Cleanup(luxSrv.Close)
 
@@ -156,6 +156,23 @@ func (w *world) get(path, org string) (int, string) {
 	return res.StatusCode, string(b)
 }
 
+// bareRepo makes a bare repository with one commit on main.
+func bareRepo(t *testing.T, dir, name string) string {
+	t.Helper()
+	bare, seed := filepath.Join(dir, name+".git"), filepath.Join(dir, "seed-"+name)
+	for _, args := range [][]string{
+		{"init", "-q", "--bare", "-b", "main", bare},
+		{"init", "-q", "-b", "main", seed},
+		{"-C", seed, "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "--allow-empty", "-m", "initial"},
+		{"-C", seed, "push", "-q", bare, "main"},
+	} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	return bare
+}
+
 func mustExec(t *testing.T, c *pgx.Conn, sql string, args ...any) {
 	t.Helper()
 	if _, err := c.Exec(context.Background(), sql, args...); err != nil {
@@ -172,10 +189,21 @@ func (w *world) workItem() string {
 }
 
 func (w *world) deliver(workItemID string) string {
+	// As the API's deliver does: a project's only repository is named.
+	if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
+		return delivery.NameOnlyRepository(context.Background(), tx, workItemID)
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+	return w.start(workItemID, delivery.DefaultPolicy())
+}
+
+// start starts the delivery workflow as the API does, with a policy.
+func (w *world) start(workItemID string, policy delivery.Policy) string {
 	id, _, err := w.runtime.Start(context.Background(), workflow.StartOptions{
 		Type: delivery.WorkflowType, OrganizationID: w.org, IdempotencyKey: "delivery:" + workItemID, WorkItemID: workItemID,
-		Input: delivery.State{WorkItemID: workItemID, ProjectID: w.project, RepositoryID: w.repoID,
-			Policy: delivery.DefaultPolicy(), Branch: delivery.BranchFor(workItemID, 1)},
+		Input: delivery.State{WorkItemID: workItemID, ProjectID: w.project,
+			Policy: policy, Branch: delivery.BranchFor(workItemID, 1)},
 	})
 	if err != nil {
 		w.t.Fatal(err)
@@ -296,6 +324,131 @@ func TestADeliveryReachesAPullRequestAndAMergeFinishesIt(t *testing.T) {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
 		return w.workItemStatus(wi) == "done"
 	})
+}
+
+// addWeb adds acme/web to the project and names both repositories on the
+// work item, the given access for web.
+func (w *world) addWeb(wi, access string) string {
+	webID := "repo_web_" + w.org
+	mustExec(w.t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+		VALUES ($1, $2, $3, 'web', 'https://github.com/acme/web.git', 'main') ON CONFLICT DO NOTHING`, webID, w.org, w.project)
+	mustExec(w.t, w.owner, `INSERT INTO work_item_repositories (organization_id, work_item_id, repository_id, access)
+		VALUES ($1, $2, $3, 'write'), ($1, $2, $4, $5::repository_access)`, w.org, wi, w.repoID, webID, access)
+	return webID
+}
+
+func TestWorkAcrossTwoRepositoriesOpensAPullRequestInEachAndFinishesWhenBothMerge(t *testing.T) {
+	w := newWorld(t)
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		labels, _ := spec["labels"].(map[string]any)
+		if labels["dude.phase"] == "implement" {
+			b.Commit = map[string]string{"target:API.md": "api\n", "web:PAGE.md": "page\n"}
+		}
+		return b
+	}
+	wi := w.workItem()
+	w.addWeb(wi, "write")
+	w.deliver(wi)
+	w.until("a pull request in each repository", func() bool { return len(w.gh.Pulls()) == 1 && len(w.web.Pulls()) == 1 })
+
+	branch := delivery.BranchFor(wi, 1)
+	if log := w.web.Log(branch); len(log) < 2 || !strings.Contains(strings.Join(log, "\n"), "Add FACTORY.md") {
+		t.Errorf("web's branch = %v, want the implementer's commit", log)
+	}
+	// The fixer and simplifier changed only target: web's PR stays at the
+	// implementer's commit, and both name each other.
+	if body := w.web.Pull(1).Body; !strings.Contains(body, "acme/target") {
+		t.Errorf("web's PR does not name its sibling:\n%s", body)
+	}
+	if body := w.gh.Pull(1).Body; !strings.Contains(body, "acme/web") {
+		t.Errorf("target's PR does not name its sibling:\n%s", body)
+	}
+	// The implementer was given both, each at its default branch.
+	var spec struct {
+		Workload struct{ Workdir string } `json:"workload"`
+		Git      struct {
+			Repositories []struct{ Name, Path string } `json:"repositories"`
+		} `json:"git"`
+	}
+	_ = json.Unmarshal(w.lux.Runs()[0].Spec, &spec)
+	if len(spec.Git.Repositories) != 2 || spec.Workload.Workdir != "/workspace" {
+		t.Errorf("implementer's spec: workdir %q, repositories %+v", spec.Workload.Workdir, spec.Git.Repositories)
+	}
+
+	// One merged is not done; both merged is.
+	w.web.Merge(1)
+	_, _ = w.prs.Reconcile(context.Background(), 0)
+	w.pump()
+	if s := w.workItemStatus(wi); s == "done" {
+		t.Fatalf("done with target's pull request still open")
+	}
+	w.gh.Merge(1)
+	w.until("the work item to finish", func() bool {
+		_, _ = w.prs.Reconcile(context.Background(), 0)
+		return w.workItemStatus(wi) == "done"
+	})
+}
+
+func TestARepositoryToReadIsClonedButNeverPushed(t *testing.T) {
+	w := newWorld(t)
+	wi := w.workItem()
+	w.addWeb(wi, "read")
+	w.deliver(wi)
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	var spec struct {
+		Git struct {
+			Repositories []struct {
+				Name string
+				Push *bool
+			} `json:"repositories"`
+		} `json:"git"`
+	}
+	_ = json.Unmarshal(w.lux.Runs()[0].Spec, &spec)
+	var web *bool
+	for _, r := range spec.Git.Repositories {
+		if r.Name == "web" {
+			web = r.Push
+		}
+	}
+	if len(spec.Git.Repositories) != 2 || web == nil || *web {
+		t.Errorf("web should be cloned with push: false: %+v", spec.Git.Repositories)
+	}
+	if len(w.web.Pulls()) != 0 || w.web.SHA(delivery.BranchFor(wi, 1)) != "" {
+		t.Errorf("a repository to read was pushed or got a pull request")
+	}
+}
+
+func TestWorkOnNoRepositoryEndsWithWhatTheAgentPublished(t *testing.T) {
+	w := newWorld(t)
+	// A second repository, so none is implied: this work names none.
+	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+		VALUES ($1, $2, $3, 'web', 'https://github.com/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
+	wi := w.workItem()
+	w.deliver(wi)
+	w.until("the delivery to end", func() bool {
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE work_item_id = $1 AND status = 'completed'`, wi) == 1
+	})
+	if s := w.workItemStatus(wi); s != "review" {
+		var why string
+		_ = w.owner.QueryRow(context.Background(), `SELECT payload::text FROM events WHERE work_item_id = $1
+			AND event_type IN ('question.asked', 'work_item.status_changed') ORDER BY cursor DESC LIMIT 1`, wi).Scan(&why)
+		t.Fatalf("work item = %s (%s), want review: ready to read", s, why)
+	}
+	if len(w.gh.Pulls())+len(w.web.Pulls()) != 0 {
+		t.Errorf("work on no repository opened a pull request")
+	}
+	var spec struct {
+		Git *struct{} `json:"git"`
+	}
+	_ = json.Unmarshal(w.lux.Runs()[0].Spec, &spec)
+	if spec.Git != nil {
+		t.Errorf("work on no repository cloned something")
+	}
+	if n := w.count(`SELECT count(*) FROM artifacts a JOIN runs r ON r.id = a.run_id WHERE r.work_item_id = $1`, wi); n == 0 {
+		t.Errorf("nothing published")
+	}
 }
 
 func TestWhatAnAgentPublishesIsKeptWithTheWorkItem(t *testing.T) {
@@ -488,9 +641,10 @@ func TestTheAgentsWorkReachesTheLedgerAsAConversation(t *testing.T) {
 		t.Errorf("no tool completion kept its call's name")
 	}
 	var changed []string
-	_ = w.owner.QueryRow(context.Background(), `SELECT changed_paths FROM runs WHERE id = $1`, runID).Scan(&changed)
+	_ = w.owner.QueryRow(context.Background(), `SELECT ARRAY(SELECT jsonb_array_elements_text(heads->'target'->'changedPaths'))
+		FROM runs WHERE id = $1`, runID).Scan(&changed)
 	if len(changed) != 1 || changed[0] != "FACTORY.md" {
-		t.Errorf("changed paths = %v", changed)
+		t.Errorf("changed paths in target = %v", changed)
 	}
 	// A finished phase's lux Run is stopped, not cancelled: its workspace and
 	// session are kept.
@@ -628,7 +782,7 @@ func TestAnAgentThatAsksWaitsForTheAnswerAndCarriesOn(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'running'`, wi); n != 1 {
 		t.Fatalf("the asking run is not still running")
 	}
-	if len(w.lux.Runs()) != 1 || w.lux.Runs()[0].Pushed != "" {
+	if len(w.lux.Runs()) != 1 || w.lux.Runs()[0].Pushed {
 		t.Fatalf("the run was pushed before its question was answered")
 	}
 
@@ -756,13 +910,9 @@ func TestAReviewerIsToldWhatTheDeliverysPolicyBlocksOn(t *testing.T) {
 	wi := w.workItem()
 	policy := delivery.DefaultPolicy()
 	policy.BlockingSeverities = []string{"blocking", "high", "medium"}
-	if _, _, err := w.runtime.Start(context.Background(), workflow.StartOptions{
-		Type: delivery.WorkflowType, OrganizationID: w.org, IdempotencyKey: "delivery:" + wi, WorkItemID: wi,
-		Input: delivery.State{WorkItemID: wi, ProjectID: w.project, RepositoryID: w.repoID,
-			Policy: policy, Branch: delivery.BranchFor(wi, 1)},
-	}); err != nil {
-		t.Fatal(err)
-	}
+	mustExec(t, w.owner, `INSERT INTO work_item_repositories (organization_id, work_item_id, repository_id)
+		VALUES ($1, $2, $3)`, w.org, wi, w.repoID)
+	w.start(wi, policy)
 	var prompt string
 	w.until("a review to reach lux", func() bool {
 		for _, r := range w.lux.Runs() {

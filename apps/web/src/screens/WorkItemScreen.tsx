@@ -90,7 +90,8 @@ export function WorkItemScreen({ client, workItemId, onOpenRun, breadcrumb }: Wo
   }
 
   const started = phases.length > 0;
-  const pr = pullRequests[0];
+  // One per repository the work changed, in the order they were opened.
+  const prs = [...pullRequests].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 
   return (
     <div className="workItemScreen" data-testid="work-item-screen">
@@ -121,14 +122,23 @@ export function WorkItemScreen({ client, workItemId, onOpenRun, breadcrumb }: Wo
               {delivering ? "Starting…" : "Deliver"}
             </Button>
           ) : null}
+          {/* Work that changed no code ends waiting to be read, with no PR to merge. */}
+          {item.status === "review" && prs.length === 0 && phases.length > 0 &&
+          phases.every((r) => ["completed", "failed", "aborted"].includes(r.status)) ? (
+            <Button variant="primary" leadingIcon="check" data-testid="mark-done"
+              onClick={() => void client.markDone(workItemId).then(() => load(),
+                (err: unknown) => setProblem(err instanceof ApiError ? err.message : "Could not mark it done."))}>
+              Mark done
+            </Button>
+          ) : null}
           <Button variant="secondary" leadingIcon="edit" onClick={() => setEditing(true)} data-testid="edit-work-item">
             {started ? "Move" : "Edit"}
           </Button>
-          {pr ? (
-            <a className="wiPrLink" href={pr.url} target="_blank" rel="noreferrer" data-testid="pr-link">
-              Pull request #{pr.number} ↗
+          {prs.map((pr) => (
+            <a key={pr.id} className="wiPrLink" href={pr.url} target="_blank" rel="noreferrer" data-testid="pr-link">
+              {prs.length > 1 ? `${pr.repositoryName} #${pr.number}` : `Pull request #${pr.number}`} ↗
             </a>
-          ) : null}
+          ))}
         </div>
         {problem ? <p className="problem">{problem}</p> : null}
         {editing ? (
@@ -155,7 +165,9 @@ export function WorkItemScreen({ client, workItemId, onOpenRun, breadcrumb }: Wo
                 onOpen={() => onOpenRun(run.id)}
               />
             ))}
-            {pr ? <PullRequestStep pr={pr} /> : null}
+            {prs.map((pr) => (
+              <PullRequestStep key={pr.id} pr={pr} named={prs.length > 1} />
+            ))}
           </ol>
         ) : (
           <EmptyState
@@ -221,7 +233,13 @@ function PhaseCard(props: { run: Run; step: number; findings: Finding[]; onOpen:
             {props.findings.length === 0 ? "no findings" : `${blocking.length} blocking`}
           </span>
         ) : null}
-        {run.headSha ? <code className="phaseSha">{run.headSha.slice(0, 7)}</code> : null}
+        {Object.keys(run.heads).length > 0 ? (
+          <code className="phaseSha" title={Object.entries(run.heads).map(([repo, sha]) => `${repo} ${sha}`).join("\n")}>
+            {Object.keys(run.heads).length === 1
+              ? Object.values(run.heads)[0]!.slice(0, 7)
+              : Object.entries(run.heads).map(([repo, sha]) => `${repo}@${sha.slice(0, 7)}`).join(" ")}
+          </code>
+        ) : null}
         <span className="phaseOpen" aria-hidden>›</span>
       </button>
     </li>
@@ -239,12 +257,18 @@ const PR_STATE_STATUS: Record<PullRequest["state"], "review" | "done" | "aborted
   closed: "aborted",
 };
 
-function PullRequestStep({ pr }: { pr: PullRequest }) {
+/**
+ * A pull request as the pipeline's last step. With several (work across
+ * repositories), each names its repository; they share the branch.
+ */
+function PullRequestStep({ pr, named }: { pr: PullRequest; named: boolean }) {
   return (
     <li className="phase" data-phase="pr" data-status={pr.state}>
       <a className="phaseButton" href={pr.url} target="_blank" rel="noreferrer" data-testid="pr-step">
         <span className="phaseStep">PR</span>
-        <span className="phaseLabel">Pull request #{pr.number}</span>
+        <span className="phaseLabel">
+          {named ? <><span className="mono">{pr.repositoryName}</span> #{pr.number}</> : <>Pull request #{pr.number}</>}
+        </span>
         <StatusBadge status={PR_STATE_STATUS[pr.state]} size="sm" />
         <span className="phaseNote">
           {pr.state} · checks {pr.checks} · review {pr.review.replace("_", " ")}

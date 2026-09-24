@@ -201,12 +201,12 @@ func (a *Artifacts) record(ctx context.Context, tx pgx.Tx, r dueRun, art lux.Art
 }
 
 // askAgainLater waits a little longer each time, by how long the Run has
-// been due: a tenth of that, between two seconds and five minutes. A
+// been due: a tenth of that, between a quarter of a second and five minutes. A
 // report that trails by a second is picked up at once; an upload stuck for
 // an hour is not asked about every two seconds.
 func (a *Artifacts) askAgainLater(ctx context.Context, tx pgx.Tx, r dueRun) error {
 	_, err := tx.Exec(ctx, `UPDATE runs SET artifacts_next_at = now()
-			+ LEAST(GREATEST((now() - artifacts_due_at) / 10, interval '2 seconds'), interval '5 minutes')
+			+ LEAST(GREATEST((now() - artifacts_due_at) / 10, interval '250 milliseconds'), interval '5 minutes')
 		WHERE id = $1 AND artifacts_due_at = $2`, r.ID, r.DueAt)
 	return err
 }

@@ -14,6 +14,7 @@ import { withOrg, type OrgScope } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { badRequest, conflict, json, noContent, notFound, parseBody } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
+import { REPOSITORIES_JSON, setWorkItemRepositories, workItemRepositoriesInput } from "./workItemRepositories.ts";
 
 const REPOSITORY_SELECT = `id, project_id AS "projectId", name, url, default_branch AS "defaultBranch", trust,
   created_at AS "createdAt"`;
@@ -90,12 +91,9 @@ async function addRepository(ctx: RequestContext): Promise<Response> {
  */
 async function inUse(scope: OrgScope, repositoryId: string): Promise<boolean> {
   const rows = await scope.sql`
-    SELECT 1 FROM runs WHERE repository_id = ${repositoryId}
-      AND status IN ('pending', 'scheduled', 'starting', 'running', 'paused')
-    UNION ALL
     SELECT 1 FROM workflow_runs w
-      WHERE w.status IN ('running', 'waiting')
-        AND w.state->>'repositoryId' = ${repositoryId}
+      JOIN work_item_repositories wr ON wr.work_item_id = w.work_item_id
+      WHERE w.status IN ('running', 'waiting') AND wr.repository_id = ${repositoryId}
     LIMIT 1`;
   return rows.length > 0;
 }
@@ -271,8 +269,8 @@ const updateWorkItemInput = z.object({
   acceptanceCriteria: z.array(z.string().max(2000)),
   /** Move it into an epic of its project, or out of any (null). */
   epicId: z.string().min(1).nullable(),
-  /** The repository it changes; fixed, like the task, once delivery starts. */
-  repositoryId: z.string().min(1).nullable(),
+  /** The repositories it works on; fixed, like the task, once delivery starts. */
+  repositories: workItemRepositoriesInput,
 }).partial();
 
 /**
@@ -292,7 +290,7 @@ async function updateWorkItem(ctx: RequestContext): Promise<Response> {
     if (!current[0]) return { missing: true as const };
     const { projectId, status } = current[0];
     const changesTheTask = input.title !== undefined || input.goal !== undefined ||
-      input.acceptanceCriteria !== undefined || input.repositoryId !== undefined;
+      input.acceptanceCriteria !== undefined || input.repositories !== undefined;
     // Started means a delivery exists, whatever the status says yet: the
     // orchestrator moves the status on its own schedule.
     const delivering = await scope.sql`SELECT 1 FROM workflow_runs WHERE work_item_id = ${id} LIMIT 1`;
@@ -301,11 +299,11 @@ async function updateWorkItem(ctx: RequestContext): Promise<Response> {
       const epic = await scope.sql`SELECT 1 FROM epics WHERE id = ${input.epicId} AND project_id = ${projectId}`;
       if (epic.length === 0) return { noEpic: input.epicId };
     }
-    if (input.repositoryId) {
-      const repo = await scope.sql`SELECT 1 FROM repositories WHERE id = ${input.repositoryId} AND project_id = ${projectId}`;
-      if (repo.length === 0) return { noRepository: input.repositoryId };
-    }
     if (Object.keys(input).length === 0) return { unchanged: true as const };
+    if (input.repositories) {
+      const missing = await setWorkItemRepositories(scope, ctx.principal.organizationId, projectId, id, input.repositories);
+      if (missing) return { noRepository: missing };
+    }
     const rows = (await scope.sql`
       UPDATE work_items SET
         title = COALESCE(${input.title ?? null}, title),
@@ -313,10 +311,9 @@ async function updateWorkItem(ctx: RequestContext): Promise<Response> {
         acceptance_criteria = CASE WHEN ${input.acceptanceCriteria !== undefined}
                                    THEN ${input.acceptanceCriteria ?? []}::jsonb ELSE acceptance_criteria END,
         epic_id = CASE WHEN ${input.epicId !== undefined} THEN ${input.epicId ?? null} ELSE epic_id END,
-        repository_id = CASE WHEN ${input.repositoryId !== undefined} THEN ${input.repositoryId ?? null} ELSE repository_id END,
         updated_at = now()
       WHERE id = ${id}
-      RETURNING id, project_id AS "projectId", epic_id AS "epicId", repository_id AS "repositoryId", title, goal,
+      RETURNING id, project_id AS "projectId", epic_id AS "epicId", ${scope.sql.unsafe(REPOSITORIES_JSON)}, title, goal,
         acceptance_criteria AS "acceptanceCriteria", status, updated_at AS "updatedAt"`) as Array<Record<string, unknown>>;
     await record(scope, ctx, EventTypes.WorkItemUpdated, projectId, { ...input }, id);
     return { workItem: rows[0]! };

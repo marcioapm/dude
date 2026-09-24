@@ -25,6 +25,8 @@ type Signal struct {
 type ActionableFeedback struct {
 	// "review" or "checks".
 	Source string `json:"source"`
+	// Which repository's pull request it is on, when a work item has several.
+	Repo   string `json:"repo,omitempty"`
 	Author string `json:"author,omitempty"`
 	Body   string `json:"body"`
 	Path   string `json:"path,omitempty"`

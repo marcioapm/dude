@@ -85,6 +85,25 @@ func TestEveryLoopTerminatesWithinItsBound(t *testing.T) {
 	}
 }
 
+func TestAPathRuleMatchesWithinEachRepository(t *testing.T) {
+	// Changed paths arrive as <repo>/<path>: a project's rule names paths in
+	// its repositories, or a repository.
+	p := policy
+	p.ConditionalReviewers = []ReviewerRule{
+		{Category: "database", WhenPathsMatch: []string{"migrations/**"}},
+		{Category: "frontend", WhenPathsMatch: []string{"web/**"}},
+	}
+	if got := ReviewersFor(p, []string{"api/migrations/019_x.sql"}); !slices.Contains(got, "database") {
+		t.Errorf("a migration in api did not summon database: %v", got)
+	}
+	if got := ReviewersFor(p, []string{"web/src/app.tsx"}); !slices.Contains(got, "frontend") {
+		t.Errorf("a change in web did not summon frontend: %v", got)
+	}
+	if got := ReviewersFor(p, []string{"api/src/app.go"}); slices.Contains(got, "database") || slices.Contains(got, "frontend") {
+		t.Errorf("api code summoned %v", got)
+	}
+}
+
 func TestReviewerSelection(t *testing.T) {
 	if got := ReviewersFor(policy, []string{"README.md"}); !slices.Equal(got, []string{"correctness"}) {
 		t.Errorf("README: %v", got)

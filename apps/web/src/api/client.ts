@@ -10,6 +10,7 @@
 import type { NavProject } from "@dude/design-system";
 import type {
   AgentRole,
+  WorkItemRepository,
   DeliveryPolicy,
   Directive,
   FullDeliveryPolicy,
@@ -68,8 +69,11 @@ export interface WorkItemFields {
   goal: string;
   acceptanceCriteria: string[];
   epicId: string | null;
-  repositoryId: string | null;
+  /** The repositories it works on; none is work that changes no code. */
+  repositories: WorkItemRepository[];
 }
+
+export type { WorkItemRepository } from "@dude/domain";
 
 /** A work item with its attempts, newest first. `GET /v1/work-items/:id`. */
 export interface WorkItemDetail extends WorkItem {
@@ -313,6 +317,11 @@ export class ApiClient {
    */
   deliver(workItemId: string): Promise<{ workflowRunId: string; alreadyRunning: boolean }> {
     return this.#request("POST", `/v1/work-items/${workItemId}/deliver`, {});
+  }
+
+  /** Finished work with nothing to merge — a write-up, a design — is done once a person has read it. */
+  markDone(workItemId: string): Promise<{ status: string }> {
+    return this.#request("POST", `/v1/work-items/${workItemId}/done`, {});
   }
 
   // -- intervention (plan §24) --------------------------------------------

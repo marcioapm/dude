@@ -59,6 +59,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /internal/runs/{id}/abort", s.auth(s.abort))
 	mux.Handle("POST /internal/questions/{id}/answer", s.auth(s.answer))
 	mux.Handle("GET /internal/artifacts/{id}/content", s.auth(s.artifactContent))
+	mux.Handle("POST /internal/work-items/{id}/done", s.auth(s.markDone))
 	// The factory's delivery defaults, which the settings screen shows for
 	// what a project leaves unset: one definition, here, where it is applied.
 	mux.Handle("GET /internal/delivery-defaults", s.auth(func(w http.ResponseWriter, r *http.Request, _ string) error {
@@ -135,46 +136,25 @@ func (s *Server) kick() {
 func (s *Server) deliver(w http.ResponseWriter, r *http.Request, org string) error {
 	workItemID := r.PathValue("id")
 	var body struct {
-		RepositoryID string          `json:"repositoryId"`
-		Policy       json.RawMessage `json:"policy"`
-		ActorID      string          `json:"actorId"`
+		Policy  json.RawMessage `json:"policy"`
+		ActorID string          `json:"actorId"`
 	}
 	if err := read(r, &body); err != nil {
 		return err
 	}
-	var projectID, repositoryID, chosen string
+	var projectID string
 	var projectPolicy []byte
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(r.Context(), `SELECT w.project_id, p.delivery_policy, COALESCE(w.repository_id, '') FROM work_items w
-			JOIN projects p ON p.id = w.project_id WHERE w.id = $1`, workItemID).Scan(&projectID, &projectPolicy, &chosen); err != nil {
+		if err := tx.QueryRow(r.Context(), `SELECT w.project_id, p.delivery_policy FROM work_items w
+			JOIN projects p ON p.id = w.project_id WHERE w.id = $1`, workItemID).Scan(&projectID, &projectPolicy); err != nil {
 			if db.IsNotFound(err) {
 				return fail(http.StatusNotFound, "not_found", "work item %s not found", workItemID)
 			}
 			return err
 		}
-		// The repository asked for now, else the one the work item names.
-		if body.RepositoryID == "" {
-			body.RepositoryID = chosen
-		}
-		rows, err := tx.Query(r.Context(), `SELECT id FROM repositories WHERE project_id = $1
-			AND ($2 = '' OR id = $2) ORDER BY name LIMIT 2`, projectID, body.RepositoryID)
-		if err != nil {
-			return err
-		}
-		repos, err := pgx.CollectRows(rows, pgx.RowTo[string])
-		if err != nil {
-			return err
-		}
-		switch {
-		case len(repos) == 0:
-			return fail(http.StatusBadRequest, "bad_request", "this work item's project has no repository to deliver to")
-		case len(repos) > 1:
-			// Choosing for them would be a coin flip that lands in someone's
-			// repository.
-			return fail(http.StatusBadRequest, "bad_request", "this project has several repositories; name one with repositoryId")
-		}
-		repositoryID = repos[0]
-		return nil
+		// Which repositories it works on is the work item's to say: none is
+		// work that changes no code — unless its project has just one.
+		return delivery.NameOnlyRepository(r.Context(), tx, workItemID)
 	})
 	if err != nil {
 		return err
@@ -198,7 +178,7 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, org string) err
 	id, dup, err := s.Workflow.Start(r.Context(), workflow.StartOptions{
 		Type: delivery.WorkflowType, OrganizationID: org, IdempotencyKey: "delivery:" + workItemID,
 		WorkItemID: workItemID,
-		Input: delivery.State{WorkItemID: workItemID, ProjectID: projectID, RepositoryID: repositoryID,
+		Input: delivery.State{WorkItemID: workItemID, ProjectID: projectID,
 			Policy: policy, Branch: delivery.BranchFor(workItemID, attempt)},
 	})
 	if err != nil {
@@ -546,5 +526,35 @@ func (s *Server) artifactContent(w http.ResponseWriter, r *http.Request, org str
 	w.Header().Set("X-Content-SHA256", sum)
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, body)
+	return nil
+}
+
+// markDone: a person says work with nothing to merge is finished — a
+// write-up read, a design accepted. Only a work item in review whose
+// delivery has ended (nothing left to merge) can be marked done; one with
+// open pull requests is done when they are merged.
+func (s *Server) markDone(w http.ResponseWriter, r *http.Request, org string) error {
+	id := r.PathValue("id")
+	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+		var projectID, status string
+		var open bool
+		if err := tx.QueryRow(r.Context(), `SELECT w.project_id, w.status::text,
+				EXISTS (SELECT 1 FROM workflow_runs d WHERE d.work_item_id = w.id AND d.status IN ('running', 'waiting'))
+			FROM work_items w WHERE w.id = $1 FOR UPDATE`, id).Scan(&projectID, &status, &open); err != nil {
+			if db.IsNotFound(err) {
+				return fail(http.StatusNotFound, "not_found", "work item %s not found", id)
+			}
+			return err
+		}
+		if status != "review" || open {
+			return fail(http.StatusConflict, "conflict", "work item %s is %s; only finished work waiting to be read can be marked done", id, status)
+		}
+		_, err := delivery.SetWorkItemStatusTx(r.Context(), tx, org, projectID, id, "review", "done", "marked done by "+actor(r))
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	write(w, http.StatusOK, map[string]any{"workItemId": id, "status": "done"})
 	return nil
 }

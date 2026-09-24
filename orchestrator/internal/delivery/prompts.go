@@ -26,6 +26,42 @@ type PromptInput struct {
 	// reviewer what this codebase considers a defect without that text
 	// reaching every other role.
 	Context string
+	// The repositories checked out for the agent. Named in the prompt only
+	// when there are several, or one it must not change, or none.
+	Repositories []PromptRepo
+}
+
+// PromptRepo is a repository as the agent is told about it.
+type PromptRepo struct {
+	Name, Path string
+	ReadOnly   bool
+}
+
+// workspaceNote says where the code is, when that is not simply "here".
+func workspaceNote(repos []PromptRepo, review bool) string {
+	if len(repos) == 0 {
+		return "No repository is checked out for this work: it changes no code. Its result is what you " +
+			"publish (see below) and what you reply."
+	}
+	if len(repos) == 1 && !repos[0].ReadOnly {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("## Repositories\n\nThis work spans these checkouts:\n")
+	for _, r := range repos {
+		access := "you may change it"
+		if r.ReadOnly {
+			access = "read only: for reference, do not change it — changes there are never kept"
+		}
+		fmt.Fprintf(&b, "\n- `%s` at `%s` — %s", r.Name, r.Path, access)
+	}
+	if review {
+		b.WriteString("\n\nReview the changes in each checkout: `git log` and `git diff` against its default branch. " +
+			"Name the repository in each finding's `repo` field.")
+	} else {
+		b.WriteString("\n\nCommit in each repository you change. Each changed repository gets its own pull request.")
+	}
+	return b.String()
 }
 
 func (in PromptInput) task() string {
@@ -68,6 +104,7 @@ const findingFormat = "Report each finding as one YAML document, separated by `-
 	"```yaml\n" +
 	"severity: blocking | high | medium | low | note\n" +
 	"category: <your review category>\n" +
+	"repo: <the repository, when there are several>\n" +
 	"file: path/to/file.ts\n" +
 	"line: 123\n" +
 	"title: One line naming the problem\n" +
@@ -207,6 +244,9 @@ func Prompt(phase string, in PromptInput) string {
 			var items []string
 			for _, f := range in.PRFeedback {
 				var parts []string
+				if f.Repo != "" {
+					parts = append(parts, "in **"+f.Repo+"**")
+				}
 				if f.Path != "" {
 					parts = append(parts, "`"+f.Path+"`")
 				}
@@ -241,6 +281,9 @@ func Prompt(phase string, in PromptInput) string {
 		add(in.task())
 	}
 
+	if note := workspaceNote(in.Repositories, phase == PhaseReview); note != "" {
+		add(note)
+	}
 	add(publishNote)
 	if c := strings.TrimSpace(in.Context); c != "" {
 		add("## Project notes\n\n" + c)

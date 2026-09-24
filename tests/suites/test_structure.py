@@ -111,15 +111,26 @@ def test_a_work_item_can_be_edited_and_moved_until_delivery_starts(client: ApiCl
     assert client.patch(f"/v1/work-items/{item['id']}", {"epicId": None}).status_code == 200
 
 
-def test_a_work_item_names_its_repository_and_delivery_uses_it(client: ApiClient, forge_project: dict):
-    """With two repositories, delivery needs to know which; the work item says."""
+def test_a_work_item_names_its_repositories_each_changed_or_read(client: ApiClient, forge_project: dict):
+    """A work item names the repositories it touches — each one it changes or
+    only reads — and they are fixed, like what it asks for, once it is delivered."""
+    first = client.get(f"/v1/projects/{forge_project['id']}").json()["repositories"][0]
     second = _repo(client, forge_project, "second")
-    item = client.post("/v1/work-items", {"projectId": forge_project["id"], "title": "Where",
-                                          "repositoryId": second["id"]}).json()
-    assert item["repositoryId"] == second["id"]
+    wanted = [{"id": first["id"], "access": "write"}, {"id": second["id"], "access": "read"}]
+    item = client.post("/v1/work-items", {"projectId": forge_project["id"], "title": "Where", "repositories": wanted}).json()
+    assert sorted(item["repositories"], key=lambda r: r["id"]) == sorted(wanted, key=lambda r: r["id"])
+
+    # One not in the project, or named twice, is refused.
+    assert client.patch(f"/v1/work-items/{item['id']}", {"repositories": [{"id": "repo_nope"}]}).status_code == 404
+    twice = [{"id": first["id"]}, {"id": first["id"], "access": "read"}]
+    assert client.patch(f"/v1/work-items/{item['id']}", {"repositories": twice}).status_code == 400
+    # Changing them keeps what was given; none is work that changes no code.
+    changed = client.patch(f"/v1/work-items/{item['id']}", {"repositories": [{"id": second["id"]}]}).json()
+    assert changed["repositories"] == [{"id": second["id"], "access": "write"}]
+
     assert client.post(f"/v1/work-items/{item['id']}/deliver").status_code == 201
     wait_until(lambda: client.work_item_runs(item["id"]), timeout=15, message="the delivery never started")
-    assert client.patch(f"/v1/work-items/{item['id']}", {"repositoryId": None}).status_code == 409
+    assert client.patch(f"/v1/work-items/{item['id']}", {"repositories": []}).status_code == 409
 
 
 def test_another_organization_cannot_touch_my_structure(client: ApiClient, second_org: dict):
