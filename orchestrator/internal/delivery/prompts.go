@@ -17,6 +17,7 @@ type PromptInput struct {
 	// Review phase: which reviewer flavour this is.
 	Category string
 	// Fix phase: the findings to address, and any pull request feedback.
+	// Review phase: the earlier findings in its category, to judge.
 	Findings   []Finding
 	PRFeedback []forge.ActionableFeedback
 	// Review phase: the severities that block, from the delivery's policy.
@@ -77,6 +78,36 @@ const findingFormat = "Report each finding as one YAML document, separated by `-
 	"`note`, not a `blocking` — a reviewer that cries wolf costs the next fix " +
 	"attempt for nothing."
 
+// earlierFindings asks a re-review to judge what the last round raised.
+// Whether a finding was fixed is the reviewer's call, made by reading the
+// code — not inferred from which files a fix touched, which retires a
+// finding at line 40 because line 200 of the same file changed.
+func earlierFindings(findings []Finding) string {
+	var b strings.Builder
+	b.WriteString("## Findings from the last review\n\nA fix has been made since. For each finding below, " +
+		"check the code as it is now and say whether it is fixed. Report a problem that is still there " +
+		"in your verdicts, not as a new finding; report anything new as a finding as usual.")
+	for i, f := range findings {
+		b.WriteString(fmt.Sprintf("\n\n**F%d** [%s] %s", i+1, f.Severity, f.Title))
+		if f.File != "" {
+			loc := f.File
+			if f.Line > 0 {
+				loc = fmt.Sprintf("%s:%d", f.File, f.Line)
+			}
+			b.WriteString(" — `" + loc + "`")
+		}
+		if f.Description != "" {
+			b.WriteString("\n" + f.Description)
+		}
+	}
+	b.WriteString("\n\nAnswer for every one, as one more YAML document:\n\n```yaml\nverdicts:\n")
+	for i := range findings {
+		b.WriteString(fmt.Sprintf("  F%d: fixed | still\n", i+1))
+	}
+	b.WriteString("```")
+	return b.String()
+}
+
 // severityNote tells a reviewer what its severities cause, from the
 // policy: a reviewer that does not know `medium` lets a pull request open
 // rates an unmet acceptance criterion `medium`.
@@ -136,6 +167,9 @@ func Prompt(phase string, in PromptInput) string {
 			findingFormat)
 		if note := severityNote(in.BlockingSeverities); note != "" {
 			add(note)
+		}
+		if len(in.Findings) > 0 {
+			add(earlierFindings(in.Findings))
 		}
 
 	case PhaseFix:

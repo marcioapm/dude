@@ -46,6 +46,9 @@ func ParseFindings(output string) []Finding {
 	// the common case — most reviews find nothing.
 	findings := []Finding{}
 	for _, doc := range strings.Split(cleaned, "\n---") {
+		if isVerdicts(doc) {
+			continue
+		}
 		if f, ok := parseFinding(doc); ok {
 			findings = append(findings, f)
 		}
@@ -151,6 +154,39 @@ func valueOr(value, fallback string) string {
 }
 
 // Finding is one problem a reviewer reported.
+// verdictLine is one answer about an earlier finding: `  F2: fixed`.
+var verdictLine = regexp.MustCompile(`(?mi)^\s*F(\d+)\s*:\s*"?(fixed|still)"?\s*$`)
+
+func isVerdicts(doc string) bool {
+	return regexp.MustCompile(`(?m)^\s*verdicts\s*:\s*$`).MatchString(doc)
+}
+
+/*
+ParseVerdicts reads a re-review's judgement of the earlier findings it was
+shown, numbered from 1 in the order it was shown them:
+
+	verdicts:
+	  F1: fixed
+	  F2: still
+
+Returns index → fixed. A finding the reviewer said nothing about is absent,
+and stays as it was: silence is not a verdict.
+*/
+func ParseVerdicts(output string) map[int]bool {
+	verdicts := map[int]bool{}
+	for _, doc := range strings.Split(fenceLine.ReplaceAllString(output, ""), "\n---") {
+		if !isVerdicts(doc) {
+			continue
+		}
+		for _, m := range verdictLine.FindAllStringSubmatch(doc, -1) {
+			if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
+				verdicts[n-1] = strings.EqualFold(m[2], "fixed")
+			}
+		}
+	}
+	return verdicts
+}
+
 type Finding struct {
 	Severity     string `json:"severity"`
 	Category     string `json:"category"`

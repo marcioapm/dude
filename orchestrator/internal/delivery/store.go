@@ -189,23 +189,23 @@ func (s *Store) MarkAttempted(ctx context.Context, org string, findingIDs []stri
 	})
 }
 
-// SupersedeStale retires open findings about files the given fix Run
-// rewrote.
-//
-// Deliberately narrow: superseded is not resolved. The re-review that
-// follows raises the problem again if it is still there; this only stops a
-// fixer being sent back for code that no longer exists in that form.
-func (s *Store) SupersedeStale(ctx context.Context, org, workItemID string, changed []string, headSHA string) error {
-	if len(changed) == 0 {
-		return nil
-	}
-	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `
-			UPDATE review_findings SET status = 'superseded', resolution_note = $3, updated_at = now()
-			WHERE work_item_id = $1 AND status = 'open' AND file IS NOT NULL AND file = ANY($2)`,
-			workItemID, changed, "file rewritten at "+headSHA)
+// AttemptedFindings is, per category, the open findings a fix has been
+// sent — what the next reviewer of that category is asked to judge.
+func (s *Store) AttemptedFindings(ctx context.Context, org, workItemID string) (map[string][]string, error) {
+	out := map[string][]string{}
+	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT category, id FROM review_findings
+			WHERE work_item_id = $1 AND status = 'open' AND fix_attempts > 0 ORDER BY created_at`, workItemID)
+		if err != nil {
+			return err
+		}
+		pairs, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ Category, ID string }])
+		for _, p := range pairs {
+			out[p.Category] = append(out[p.Category], p.ID)
+		}
 		return err
 	})
+	return out, err
 }
 
 // SetWorkItemStatus moves a work item to a new status and says why. A no-op
