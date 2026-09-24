@@ -84,6 +84,8 @@ type Step struct {
 	Ask string
 	// Files it publishes for people (into $LUX_ARTIFACTS), name → one line.
 	Publish map[string]string
+	// dude tools it calls before replying, [tool, JSON arguments].
+	Tools [][2]string
 }
 
 // Notes is what the implementer publishes: a short account of its work, as
@@ -104,6 +106,12 @@ func For(phase, model, runID string, fixed bool) Step {
 			Publish: map[string]string{Notes: "# What changed\n\nAdded FACTORY.md for " + runID + "."}}
 		if model == AskModel {
 			step.Ask = Question
+		}
+		if model == ToolsModel {
+			step.Tools = [][2]string{
+				{"emit_event", `{"type":"progress","data":{"done":1,"of":2,"step":"writing FACTORY.md"}}`},
+				{"emit_event", `{"type":"progress","data":{"done":2,"of":2,"step":"committing"}}`},
+			}
 		}
 		return step
 	case "fix":

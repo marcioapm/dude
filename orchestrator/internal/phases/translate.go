@@ -274,8 +274,15 @@ func (t *translator) activity(ctx context.Context, tx pgx.Tx, s *Syncer, activit
 			return err
 		}
 		// A turn that ended on a question is not done: the agent waits for a
-		// person, and the answer — a directive — starts its next turn.
+		// person, and the answer — a directive — starts its next turn. The
+		// question came from the ask_person tool during the turn, or (the
+		// older way) a question block ending the reply.
 		if asked, err := t.question(ctx, tx, s); asked || err != nil {
+			return err
+		}
+		var open bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM questions WHERE run_id = $1 AND status = 'open')`,
+			t.run.ID).Scan(&open); err != nil || open {
 			return err
 		}
 		tag, err := tx.Exec(ctx, `UPDATE runs SET turn_done_at = now()

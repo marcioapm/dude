@@ -11,7 +11,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import {
   AgentPlan,
   ChatComposer,
+  ChatEvent,
   ChatMessage,
+  ChatProgress,
   ChatTranscript,
   EventRow,
   EventStream,
@@ -282,6 +284,14 @@ export function RunScreen({ client, runId, title, breadcrumb }: RunScreenProps) 
 
 function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: boolean) {
   switch (turn.kind) {
+    case "progress":
+      // One row, updated in place as the agent reports.
+      return (
+        <ChatProgress key={turn.id} data-testid="chat-progress" role={role} done={turn.done} of={turn.of}
+          step={turn.step} at={turn.at} startedAt={turn.startedAt} ended={ended} />
+      );
+    case "event":
+      return <ChatEvent key={turn.id} data-testid="chat-event" role={role} type={turn.type} data={turn.data} at={turn.at} />;
     case "question":
       // A Run that ended on an unanswered question will never hear back.
       return (

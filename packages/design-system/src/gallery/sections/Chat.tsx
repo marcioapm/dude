@@ -11,6 +11,8 @@ import { Markdown } from "../../components/Markdown.tsx";
 import { QuestionCard } from "../../components/QuestionCard.tsx";
 import { ThinkingBlock } from "../../components/ThinkingBlock.tsx";
 import { ToolCallCard } from "../../components/ToolCallCard.tsx";
+import { ChatEvent } from "../../components/ChatEvent.tsx";
+import { ChatProgress } from "../../components/ChatProgress.tsx";
 import { Button, IconButton } from "../../primitives/Button.tsx";
 import { ACTIVITY_KINDS, ACTIVITY_SPECS } from "../../tokens/activity.ts";
 import { at } from "../fixtures.tsx";
@@ -282,6 +284,37 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
             <ToolCallCard name="bash" status="failed" args={{ command: "bun test apps/control-plane" }} durationMs={4_210} exitCode={1} error="1 failing: retries when response is 502" output={COLOR_OUTPUT_TRUNCATED} />
             <Label>progress bars collapse to their last frame; cursor control stripped; 256-colour, truecolor and the attributes</Label>
             <ToolCallCard name="bash" status="completed" args={{ command: "bun install && cargo build" }} durationMs={13_200} exitCode={0} output={CONTROL_CODES_OUTPUT} defaultExpanded />
+          </Col>
+        </Panes>
+      </Block>
+
+      <Block
+        id="ch-event"
+        title="ChatEvent / ChatProgress"
+        note="Two quiet rows for what an agent records with `dude event`. ChatEvent is a 24px frameless line — zap glyph, the type in mono, one line of the data (a scalar as-is; an object as up to three key=value pairs then …), the recording role's avatar and the time — expanding to the data pretty-printed. ChatProgress is the same line with a 2px bar under it: determinate with 'n of m' when both are known, a sweep otherwise; the step text follows. While running the fill breathes and the sweep moves; `ended` freezes it where it got to, with a check when complete and a stop mark when not. Reduced motion stills both."
+      >
+        <Panes mode={mode} surface>
+          <Col>
+            <Label>ChatEvent: scalar · object · long object (expand) · array · no data · expanded</Label>
+            <ChatEvent type="coverage" data={87.4} at={at(60_000)} role="implementer" />
+            <ChatEvent type="tests.finished" data={{ passed: 42, failed: 1, skipped: 3 }} at={at(64_000)} role="implementer" />
+            <ChatEvent type="deploy.started" data={{ env: "staging", sha: "9f2c1e4", region: "eu-west-1", by: "implementer", dryRun: false, services: ["api", "web"] }} at={at(70_000)} role="implementer" />
+            <ChatEvent type="files.touched" data={["apps/web/src/auth/session.ts", "apps/web/src/auth/pkce.ts"]} at={at(72_000)} role="simplifier" />
+            <ChatEvent type="checkpoint" data={null} at={at(75_000)} role="reviewer" />
+            <ChatEvent type="tests.finished" data={{ passed: 42, failed: 1, failures: [{ name: "refresh rotates token", file: "session.test.ts", line: 88 }] }} at={at(80_000)} role="reviewer" defaultExpanded />
+            <Label>ChatProgress: determinate running · indeterminate running · done only · ended complete · ended short · ended indeterminate</Label>
+            <ChatProgress done={3} of={10} step="Running integration tests" at={at(90_000)} startedAt={Date.now() - 42_000} role="implementer" />
+            <ChatProgress done={null} of={null} step="Installing dependencies" at={at(91_000)} startedAt={Date.now() - 8_000} role="implementer" />
+            <ChatProgress done={128} of={null} step="Files scanned" at={at(92_000)} startedAt={Date.now() - 12_000} role="investigator" />
+            <ChatProgress done={10} of={10} step="Running integration tests" at={at(150_000)} startedAt={at(90_000)} role="implementer" ended />
+            <ChatProgress done={6} of={10} step="Running integration tests" at={at(130_000)} startedAt={at(90_000)} role="implementer" ended />
+            <ChatProgress done={null} of={null} step="Installing dependencies" at={at(100_000)} startedAt={at(91_000)} role="implementer" ended />
+            <ChatProgress done={0} of={4} step={null} at={at(100_000)} startedAt={Date.now() - 3_000} role="qa_browser" />
+            <Label>in the transcript rhythm — between a tool call and a thought</Label>
+            <ToolCallCard name="bash" status="completed" args={{ command: "bun test" }} startedAt={at(0)} endedAt={at(8_100)} output="42 pass, 1 fail" />
+            <ChatEvent type="tests.finished" data={{ passed: 42, failed: 1 }} at={at(8_200)} role="implementer" />
+            <ChatProgress done={2} of={3} step="Fixing the failing test" at={at(9_000)} startedAt={at(8_500)} role="implementer" />
+            <ThinkingBlock text="The refresh test expects a rotated token; the fixture still returns the old one." durationMs={2_100} />
           </Col>
         </Panes>
       </Block>

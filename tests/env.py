@@ -185,16 +185,23 @@ class TestEnvironment:
         )
 
     def _tools_env(self) -> dict:
-        """dude's tools for agents, when lux is real and they can reach us.
+        """dude's tools for agents: always with the fake lux; with a real one
+        when its hosts can reach us.
 
         lux never lets a Run reach its own host or lux's address, so the
         tools listen on an address of this machine that lux's hosts can
         reach but is neither: DUDE_TEST_TOOLS_HOST (a LAN address).
         """
+        if not self.real_lux:
+            # The fake lux calls them from this machine, as its proxy would.
+            port = find_free_port()
+            return {"DUDE_TOOLS_LISTEN": f"127.0.0.1:{port}", "DUDE_TOOLS_URL": f"http://127.0.0.1:{port}/",
+                    "DUDE_TOOLS_SERVICE": "1"}
         host = os.environ.get("DUDE_TEST_TOOLS_HOST")
-        if not self.real_lux or not host:
+        if not host:
             return {}
         port = find_free_port()
+        # workload.services is not in lux yet: MCP only until it is.
         return {"DUDE_TOOLS_LISTEN": f"{host}:{port}", "DUDE_TOOLS_URL": f"http://{host}:{port}/"}
 
     def _create_database(self) -> None:

@@ -29,6 +29,9 @@ type PromptInput struct {
 	// The repositories checked out for the agent. Named in the prompt only
 	// when there are several, or one it must not change, or none.
 	Repositories []PromptRepo
+	// The Run has dude's tools (the dude CLI, and MCP): questions go through
+	// them rather than a question block.
+	Tools bool
 }
 
 // PromptRepo is a repository as the agent is told about it.
@@ -175,6 +178,27 @@ const publishNote = "To give the people following this work a file — notes, a 
 	"(for example `$LUX_ARTIFACTS/notes.md`). They see each one next to the work item, Markdown " +
 	"rendered. Publish what a person would want to read; don't copy code there."
 
+// ask is how this agent stops for a person: dude's tool when it has
+// them, else a question block ending its reply.
+func (in PromptInput) ask() string {
+	if in.Tools {
+		return askToolNote
+	}
+	return askNote
+}
+
+const askToolNote = "If you cannot go on without a decision only a person can make — the task is ambiguous " +
+	"in a way that changes what you build, or two reasonable readings conflict — ask with " +
+	"`dude ask \"the question\" --choice A --choice B` (or the dude MCP tool ask_person), then end your turn. " +
+	"The answer comes back as your next message. Do not ask about anything you can decide or find out " +
+	"yourself; most tasks need no question at all."
+
+// toolsNote tells an agent about the dude CLI.
+const toolsNote = "The `dude` command (see `dude help`) is the work you are part of, from the shell: " +
+	"`dude work list`, `dude epic list`, `dude work create` for work you find outside your task (a person " +
+	"decides on it), `dude event progress --data '{\"done\":3,\"of\":10}'` for progress people can follow, " +
+	"and `dude publish FILE` to keep a file for people."
+
 // askNote tells an agent that changes code how to stop for a person. The
 // fenced block, not a question in prose, is what stops the run: an agent
 // thinking aloud ("should I also…?") must not stall a delivery.
@@ -197,7 +221,7 @@ func Prompt(phase string, in PromptInput) string {
 
 	case PhaseImplement:
 		add("Implement this task. Run the project's formatter, type checks and tests before you "+
-			"finish — handing over code that does not build is not finishing. "+commitNote, in.task(), askNote)
+			"finish — handing over code that does not build is not finishing. "+commitNote, in.task(), in.ask())
 
 	case PhaseReview:
 		category := in.Category
@@ -258,7 +282,7 @@ func Prompt(phase string, in PromptInput) string {
 			add("## Pull request feedback\n\n" + strings.Join(items, "\n\n"))
 		}
 		add("Fix only what is raised above. Widening the change makes the re-review harder and risks new findings.",
-			"The original task, for context:\n\n"+in.task(), askNote)
+			"The original task, for context:\n\n"+in.task(), in.ask())
 
 	case PhaseSimplify:
 		add("Simplify the changes on this branch without changing what they do.",
@@ -283,6 +307,9 @@ func Prompt(phase string, in PromptInput) string {
 
 	if note := workspaceNote(in.Repositories, phase == PhaseReview); note != "" {
 		add(note)
+	}
+	if in.Tools {
+		add(toolsNote)
 	}
 	add(publishNote)
 	if c := strings.TrimSpace(in.Context); c != "" {

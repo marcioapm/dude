@@ -234,6 +234,18 @@ nudge by eye.
   While streaming the brain sits inside the `thinking` rhythm's drifting
   ring and the preview follows the latest line. Dozens in a row must read
   as a faint ledger.
+- What an agent records with `dude event` takes the same 24px muted line.
+  `ChatEvent` is zap · the type in mono · one line of the data (a scalar
+  as-is; an object as up to three `key=value` pairs then "…";
+  `summarizeEventData`) · the recording role's avatar · the time, and
+  expands to the data pretty-printed (`prettyJson`). `ChatProgress` is the
+  line with a 2px bar under it — determinate with "n of m" when `done` and
+  `of` are known, a sweep otherwise — updated in place, never appended.
+  While running the fill breathes and the sweep moves on the shared
+  cadences; `ended` freezes both where they got to, with a check when
+  complete and a stop mark when not, so a finished or stopped bar never
+  reads as still going. It is a `role="progressbar"` with values only when
+  determinate.
 - Every agent turn can carry its context size (`contextTokens`, shown as
   `ctx 15.2k / 744k` against `contextWindowTokens`, attention ink at 80%
   and danger at 100% — the same thresholds a cost takes against its
@@ -585,6 +597,10 @@ EmptyState, ScrollArea.
 - **ThinkingBlock** — the model's reasoning between messages and tool
   calls. Collapsed to one quiet 24px line with a preview and duration;
   streams with the thinking rhythm; expands to Markdown or plain text.
+- **ChatEvent / ChatProgress** — what the agent records with `dude event`:
+  a typed event with a one-line summary that expands to JSON, and a
+  progress bar (determinate or sweep) that updates in place and freezes
+  on `ended`.
 - **AgentPlan** — the agent's `todowrite` list rendered in place with "N of
   M", a segmented bar, and a one-shot flash/pop when an item changes state.
   Collapsed, it shows the current item. `sticky` pins it under the header.
