@@ -101,7 +101,36 @@ export interface HumanTurn {
   deliveredAt: string | null;
 }
 
-export type Turn = ToolTurn | MessageTurn | HumanTurn | ThoughtTurn | PromptTurn | UsageTurn | QuestionTurn;
+/**
+ * An event the agent (or a script it ran) recorded with `dude event`: a
+ * milestone, a measurement. Progress is one that updates in place.
+ */
+export interface EventTurn {
+  kind: "event";
+  id: string;
+  /** What the agent called it: "progress", "tests.finished". */
+  type: string;
+  data: unknown;
+  at: string;
+}
+
+/** How far along the agent says it is: one per run, updated in place. */
+export interface ProgressTurn {
+  kind: "progress";
+  id: string;
+  done: number | null;
+  of: number | null;
+  step: string | null;
+  at: string;
+  /** When it was first reported, so the chat keeps it where it started. */
+  startedAt: string;
+}
+
+export type Turn =
+  | ToolTurn | MessageTurn | HumanTurn | ThoughtTurn | PromptTurn | UsageTurn | QuestionTurn | EventTurn | ProgressTurn;
+
+/** Custom events live under this prefix in the ledger (agenttools.CustomPrefix). */
+export const CUSTOM_EVENT_PREFIX = "agent.custom.";
 
 export interface Conversation {
   turns: Turn[];
@@ -393,8 +422,27 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         break;
       }
 
-      default:
+      default: {
+        if (!event.eventType.startsWith(CUSTOM_EVENT_PREFIX)) break;
+        const type = event.eventType.slice(CUSTOM_EVENT_PREFIX.length);
+        const data = payload.data ?? {};
+        if (type === "progress") {
+          // Updated in place: one bar that moves, not a line per update.
+          const d = (typeof data === "object" && data !== null ? data : {}) as Record<string, unknown>;
+          const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+          const existing = turns.find((t): t is ProgressTurn => t.kind === "progress");
+          const next: ProgressTurn = {
+            kind: "progress", id: existing?.id ?? event.eventId,
+            done: num(d.done), of: num(d.of), step: typeof d.step === "string" ? d.step : null,
+            at: event.occurredAt, startedAt: existing?.startedAt ?? event.occurredAt,
+          };
+          if (existing) turns[turns.indexOf(existing)] = next;
+          else turns.push(next);
+          break;
+        }
+        turns.push({ kind: "event", id: event.eventId, type, data, at: event.occurredAt });
         break;
+      }
     }
   }
 

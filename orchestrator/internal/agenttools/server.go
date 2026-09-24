@@ -13,6 +13,7 @@
 package agenttools
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -20,10 +21,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/jackc/pgx/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -60,13 +63,19 @@ func HashToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// Handler serves MCP. A request without a live Run's token is refused
-// before any MCP is spoken.
+// Handler serves the tools two ways, to the same code: MCP at / (for
+// agents that take MCP servers), and plain JSON at POST /tools/<name> (for
+// the dude CLI in the agent's container). A request without a live Run's
+// token is refused before anything else.
 func (s *Server) Handler() http.Handler {
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
 		caller, _ := r.Context().Value(callerKey{}).(Caller)
 		return s.serverFor(caller)
 	}, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /tools", s.listJSON)
+	mux.HandleFunc("POST /tools/{name}", s.callJSON)
+	mux.Handle("/", mcpHandler)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if !ok || token == "" {
@@ -83,8 +92,63 @@ func (s *Server) Handler() http.Handler {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		mcpHandler.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callerKey{}, caller)))
+		mux.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callerKey{}, caller)))
 	})
+}
+
+// listJSON is what the CLI shows for `dude tools`: the tools this Run has.
+func (s *Server) listJSON(w http.ResponseWriter, r *http.Request) {
+	c, _ := r.Context().Value(callerKey{}).(Caller)
+	type entry struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	out := []entry{}
+	for _, t := range tools {
+		if t.allowed(c.Role) {
+			out = append(out, entry{t.name, t.description})
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tools": out})
+}
+
+// callJSON calls one tool with a JSON body; the result, or {"error"} with
+// 422 for a request the tool refused (the caller's to fix) and 404 for a
+// tool this Run does not have.
+func (s *Server) callJSON(w http.ResponseWriter, r *http.Request) {
+	c, _ := r.Context().Value(callerKey{}).(Caller)
+	t, ok := find(r.PathValue("name"))
+	if !ok || !t.allowed(c.Role) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no tool " + r.PathValue("name") + " for this Run"})
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxInput+1))
+	if err != nil || len(body) > maxInput {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "request too large"})
+		return
+	}
+	out, err := s.call(r.Context(), c, t, body)
+	var refused refusal
+	switch {
+	case errors.As(err, &refused):
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": refused.Error()})
+	case err != nil:
+		s.Log.Error("agent tool failed", "tool", t.name, "run", c.RunID, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+	default:
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(out)
+	}
+}
+
+// maxInput bounds a tool call's arguments.
+const maxInput = 256 << 10
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 type callerKey struct{}
@@ -122,18 +186,35 @@ func (s *Server) serverFor(c Caller) *mcp.Server {
 			"see and add to the project's work. What you create is marked as yours and waits for a person.",
 	})
 	for _, t := range tools {
-		if t.allowed(c.Role) {
-			t.add(s, srv, c)
+		if !t.allowed(c.Role) {
+			continue
 		}
+		srv.AddTool(&mcp.Tool{Name: t.name, Description: t.description, InputSchema: t.schema},
+			func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				out, err := s.call(ctx, c, t, req.Params.Arguments)
+				var refused refusal
+				if errors.As(err, &refused) {
+					// Said to the agent, which can do something about it; not
+					// a failure of the server.
+					return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: refused.Error()}}}, nil
+				}
+				if err != nil {
+					return nil, err
+				}
+				return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(out)}},
+					StructuredContent: json.RawMessage(out)}, nil
+			})
 	}
 	return srv
 }
 
-// tool is one tool: who may use it, and how to add it bound to a Run.
+// tool is one tool, whichever way it is called: who may use it, and what it
+// does with JSON arguments, in the calling Run's organization.
 type tool struct {
-	name  string
-	roles []string // empty: every role
-	add   func(s *Server, srv *mcp.Server, c Caller)
+	name, description string
+	roles             []string // empty: every role
+	schema            any
+	run               func(ctx context.Context, tx pgx.Tx, c Caller, args json.RawMessage) (any, error)
 }
 
 func (t tool) allowed(role string) bool {
@@ -148,37 +229,63 @@ func (t tool) allowed(role string) bool {
 	return false
 }
 
-// bind adds a typed tool whose calls are recorded in the ledger, in the
-// Run's organization, in the same transaction as what the tool did.
-func bind[In, Out any](s *Server, srv *mcp.Server, c Caller, def *mcp.Tool,
-	do func(ctx context.Context, tx pgx.Tx, c Caller, in In) (Out, error)) {
-	mcp.AddTool(srv, def, func(ctx context.Context, _ *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
-		var out Out
-		err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
-			var err error
-			if out, err = do(ctx, tx, c, in); err != nil {
-				return err
-			}
-			args, _ := json.Marshal(in)
-			result, _ := json.Marshal(out)
-			_, err = ledger.Append(ctx, tx, ledger.Event{
-				Type: EventType, OrganizationID: c.Org, ProjectID: c.ProjectID, WorkItemID: c.WorkItemID, RunID: c.RunID,
-				ActorType: ledger.ActorAgent, ActorID: c.RunID, Source: ledger.SourceOrchestrator, CorrelationID: c.WorkItemID,
-				Payload: map[string]any{"tool": def.Name, "arguments": json.RawMessage(args), "result": json.RawMessage(result)},
-			})
-			return err
-		})
-		var refused refusal
-		if errors.As(err, &refused) {
-			// Said to the agent, which can do something about it; not a
-			// failure of the server.
-			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: refused.Error()}}}, out, nil
+func find(name string) (tool, bool) {
+	for _, t := range tools {
+		if t.name == name {
+			return t, true
 		}
-		return nil, out, err
-	})
+	}
+	return tool{}, false
 }
 
-// refusal is a tool declining a request, with the reason for the agent.
+// define makes a tool from a typed function: its input schema from In,
+// its arguments decoded strictly into In.
+func define[In, Out any](name, description string, roles []string,
+	do func(ctx context.Context, tx pgx.Tx, c Caller, in In) (Out, error)) tool {
+	schema, err := jsonschema.For[In](nil)
+	if err != nil {
+		panic(fmt.Sprintf("tool %s: %v", name, err))
+	}
+	return tool{name: name, description: description, roles: roles, schema: schema,
+		run: func(ctx context.Context, tx pgx.Tx, c Caller, args json.RawMessage) (any, error) {
+			var in In
+			if len(args) > 0 && string(args) != "null" {
+				dec := json.NewDecoder(bytes.NewReader(args))
+				dec.DisallowUnknownFields()
+				if err := dec.Decode(&in); err != nil {
+					return nil, refuse("arguments: %v", err)
+				}
+			}
+			return do(ctx, tx, c, in)
+		}}
+}
+
+// call runs a tool and records the call in the ledger, in the same
+// transaction as what the tool did.
+func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessage) (json.RawMessage, error) {
+	var out json.RawMessage
+	err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
+		result, err := t.run(ctx, tx, c, args)
+		if err != nil {
+			return err
+		}
+		if out, err = json.Marshal(result); err != nil {
+			return err
+		}
+		if len(args) == 0 {
+			args = json.RawMessage("{}")
+		}
+		_, err = ledger.Append(ctx, tx, ledger.Event{
+			Type: EventType, OrganizationID: c.Org, ProjectID: c.ProjectID, WorkItemID: c.WorkItemID, RunID: c.RunID,
+			ActorType: ledger.ActorAgent, ActorID: c.RunID, Source: ledger.SourceOrchestrator, CorrelationID: c.WorkItemID,
+			Payload: map[string]any{"tool": t.name, "arguments": args, "result": out},
+		})
+		return err
+	})
+	return out, err
+}
+
+// refusal is a tool declining a request, with the reason for the caller.
 type refusal struct{ msg string }
 
 func (r refusal) Error() string { return r.msg }

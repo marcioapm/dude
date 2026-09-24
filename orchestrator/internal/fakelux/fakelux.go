@@ -61,6 +61,10 @@ type Behaviour struct {
 	// Fail before the agent starts (a bad image, a failed clone): lux
 	// reports such an exit without a snapshot, ever.
 	FailToStart bool
+	// dude tools to call, in order, before replying: tool name → JSON
+	// arguments. Called as lux's service proxy would, with the header the
+	// spec's services name, so dude sees an agent in its container.
+	CallTools [][2]string
 }
 
 type Run struct {
@@ -71,7 +75,9 @@ type Run struct {
 	SessionID string
 	Inputs    []string
 	// Some repository got a commit from a push.
-	Pushed      bool
+	Pushed bool
+	// dude tools the agent called: "tool status".
+	ToolCalls   []string
 	Cancelled   bool
 	Stopped     int
 	Resumed     int
@@ -194,7 +200,7 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 	}
 	// Every phase plans and looks around first, as an agent does.
 	return Behaviour{Reply: step.Reply, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask,
-		Publish: published, Tools: []string{"todowrite", "read"}}
+		Publish: published, Tools: []string{"todowrite", "read"}, CallTools: step.Tools}
 }
 
 // Runs returns every Run submitted, in order.
@@ -338,6 +344,9 @@ func (s *Server) turn(run *Run) {
 		}
 		s.agent(run, done)
 	}
+	for _, c := range b.CallTools {
+		s.callTool(run, c[0], c[1])
+	}
 	if b.Hang && !run.woken {
 		return
 	}
@@ -368,6 +377,43 @@ func (s *Server) turn(run *Run) {
 	s.recordEvent(run, "lux.activity", map[string]any{"activity": "idle"})
 	run.busy = false
 	s.deliverQueued(run)
+}
+
+// callTool calls one of dude's tools as the agent's container would through
+// lux's service proxy: the spec's "dude" service, its header filled in from
+// the spec's secret. Callers hold s.mu; the call is made without it held,
+// since dude may be slow. The outcome is only logged in the agent's reply.
+func (s *Server) callTool(run *Run, tool, args string) {
+	var spec struct {
+		Secrets  []lux.Secret `json:"secrets"`
+		Workload struct {
+			Services []lux.MCPServer `json:"services"`
+		} `json:"workload"`
+	}
+	_ = json.Unmarshal(run.Spec, &spec)
+	for _, svc := range spec.Workload.Services {
+		if svc.Name != "dude" {
+			continue
+		}
+		req, err := http.NewRequest("POST", strings.TrimRight(svc.URL, "/")+"/tools/"+tool, strings.NewReader(args))
+		if err != nil {
+			return
+		}
+		for _, h := range svc.Headers {
+			for _, sec := range spec.Secrets {
+				if sec.Name == h.Secret {
+					req.Header.Set(h.Name, sec.Value)
+				}
+			}
+		}
+		s.mu.Unlock()
+		res, err := http.DefaultClient.Do(req)
+		s.mu.Lock()
+		if err == nil {
+			res.Body.Close()
+			run.ToolCalls = append(run.ToolCalls, fmt.Sprintf("%s %d", tool, res.StatusCode))
+		}
+	}
 }
 
 // Prompt is what the Run's agent was told.

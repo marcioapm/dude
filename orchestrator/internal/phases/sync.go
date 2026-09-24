@@ -291,7 +291,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 	in.Prompt = delivery.Prompt(r.Phase, delivery.PromptInput{
 		Title: title, Goal: goal, AcceptanceCriteria: ac, Category: r.Category,
 		Findings: findings, PRFeedback: feedback, BlockingSeverities: r.BlockingSeverities, Context: context,
-		Repositories: promptRepos,
+		Repositories: promptRepos, Tools: s.Agent.ToolsURL != "" && s.Agent.ToolsService,
 	})
 	// Pushed only by a phase that publishes, and only if there is somewhere
 	// it may change.

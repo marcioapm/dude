@@ -28,11 +28,11 @@ func setup(t *testing.T) *fixture {
 	app, owner := dbtest.Open(t)
 	org := dbtest.Org(t, owner)
 	f := &fixture{owner: owner, org: org, project: "prj_" + org, item: "wi_" + org}
-	exec(t, owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix, next_work_item_number)
+	mustExec(t, owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix, next_work_item_number)
 		VALUES ($1, $2, 'P', $1, 'TEXT', 2)`, f.project, org)
-	exec(t, owner, `INSERT INTO epics (id, organization_id, project_id, title) VALUES ($1, $2, $3, 'Text utilities')`,
+	mustExec(t, owner, `INSERT INTO epics (id, organization_id, project_id, title) VALUES ($1, $2, $3, 'Text utilities')`,
 		"epc_"+org, org, f.project)
-	exec(t, owner, `INSERT INTO work_items (id, organization_id, project_id, number, title, status)
+	mustExec(t, owner, `INSERT INTO work_items (id, organization_id, project_id, number, title, status)
 		VALUES ($1, $2, $3, 1, 'Truncate long words', 'running')`, f.item, org, f.project)
 	srv := httptest.NewServer((&agenttools.Server{DB: app}).Handler())
 	t.Cleanup(srv.Close)
@@ -44,7 +44,7 @@ func setup(t *testing.T) *fixture {
 func (f *fixture) run(t *testing.T, id, role, status string) string {
 	t.Helper()
 	token, hash := agenttools.NewToken()
-	exec(t, f.owner, `INSERT INTO runs (id, organization_id, project_id, work_item_id, attempt, status, phase, role, mcp_token_hash)
+	mustExec(t, f.owner, `INSERT INTO runs (id, organization_id, project_id, work_item_id, attempt, status, phase, role, mcp_token_hash)
 		VALUES ($1, $2, $3, $4, 1, $5::run_status, 'implement', $6::agent_role, $7)`, id, f.org, f.project, f.item, status, role, hash)
 	return token
 }
@@ -141,7 +141,8 @@ func TestAReviewerCannotCreateWork(t *testing.T) {
 	for _, tool := range list.Tools {
 		names = append(names, tool.Name)
 	}
-	if strings.Join(names, ",") != "list_work" {
+	// Seeing work and recording events, not making work or stopping for a person.
+	if strings.Join(names, ",") != "emit_event,list_epics,list_work" {
 		t.Errorf("a reviewer sees %v", names)
 	}
 }
@@ -165,7 +166,7 @@ func TestOnlyALiveRunsTokenGetsIn(t *testing.T) {
 	}
 }
 
-func exec(t *testing.T, c *pgx.Conn, sql string, args ...any) {
+func mustExec(t *testing.T, c *pgx.Conn, sql string, args ...any) {
 	t.Helper()
 	if _, err := c.Exec(context.Background(), sql, args...); err != nil {
 		t.Fatal(err)
@@ -187,6 +188,79 @@ func TestListWorkFindsByText(t *testing.T) {
 		raw, _ := json.Marshal(res.StructuredContent)
 		if strings.Contains(string(raw), "TEXT-1") != want {
 			t.Errorf("list_work %q: %s", text, raw)
+		}
+	}
+}
+
+// post calls a tool over the JSON API, as the dude CLI does.
+func (f *fixture) post(t *testing.T, token, tool, body string) (int, map[string]any) {
+	t.Helper()
+	req, _ := http.NewRequest("POST", f.url+"/tools/"+tool, strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var out map[string]any
+	_ = json.NewDecoder(res.Body).Decode(&out)
+	return res.StatusCode, out
+}
+
+func TestTheCLIsJSONAPICallsTheSameTools(t *testing.T) {
+	f := setup(t)
+	token := f.run(t, "run_cli", "implementer", "running")
+	if status, out := f.post(t, token, "create_work_item", `{"title":"From the CLI","goal":"why"}`); status != 200 || out["key"] != "TEXT-2" {
+		t.Errorf("create: %d %v", status, out)
+	}
+	if status, out := f.post(t, token, "create_work_item", `{"title":"x","colour":"red"}`); status != 422 {
+		t.Errorf("an unknown argument: %d %v", status, out)
+	}
+	if status, _ := f.post(t, f.run(t, "run_rev2", "reviewer", "running"), "create_work_item", `{"title":"x"}`); status != 404 {
+		t.Errorf("a reviewer created work: %d", status)
+	}
+	var calls int
+	_ = f.owner.QueryRow(context.Background(), `SELECT count(*) FROM events WHERE run_id = 'run_cli' AND event_type = $1`,
+		agenttools.EventType).Scan(&calls)
+	if calls != 1 {
+		t.Errorf("%d ledger events, want the one successful call", calls)
+	}
+}
+
+func TestAnAgentAsksAPersonThroughATool(t *testing.T) {
+	f := setup(t)
+	token := f.run(t, "run_ask", "implementer", "running")
+	status, out := f.post(t, token, "ask_person", `{"question":"Keep hyphenated words whole?","choices":["yes","no"]}`)
+	if status != 200 || out["questionId"] == nil {
+		t.Fatalf("ask: %d %v", status, out)
+	}
+	var prompt, wiStatus string
+	_ = f.owner.QueryRow(context.Background(), `SELECT q.prompt, w.status::text FROM questions q JOIN work_items w ON w.id = q.work_item_id
+		WHERE q.run_id = 'run_ask' AND q.status = 'open'`).Scan(&prompt, &wiStatus)
+	if prompt != "Keep hyphenated words whole?" || wiStatus != "awaiting_input" {
+		t.Errorf("question %q, work item %s", prompt, wiStatus)
+	}
+	// One at a time.
+	if status, _ := f.post(t, token, "ask_person", `{"question":"And another?"}`); status != 422 {
+		t.Errorf("a second open question: %d", status)
+	}
+}
+
+func TestACustomEventIsRecordedInItsOwnNamespace(t *testing.T) {
+	f := setup(t)
+	token := f.run(t, "run_ev", "reviewer", "running")
+	if status, out := f.post(t, token, "emit_event", `{"type":"progress","data":{"done":3,"of":10}}`); status != 200 {
+		t.Fatalf("emit: %d %v", status, out)
+	}
+	var done float64
+	_ = f.owner.QueryRow(context.Background(), `SELECT (payload->'data'->>'done')::float FROM events
+		WHERE run_id = 'run_ev' AND event_type = 'agent.custom.progress'`).Scan(&done)
+	if done != 3 {
+		t.Errorf("progress event not recorded: done=%v", done)
+	}
+	for _, bad := range []string{`{"type":"Run.Completed"}`, `{"type":"../x"}`, `{"type":"progress","data":"` + strings.Repeat("x", 17<<10) + `"}`} {
+		if status, _ := f.post(t, token, "emit_event", bad); status != 422 {
+			t.Errorf("%.40s accepted: %d", bad, status)
 		}
 	}
 }

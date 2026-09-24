@@ -323,3 +323,27 @@ def test_back_and_forward_move_between_places(
     page.goto(f"{web_url}#/org/settings")
     expect(page.get_by_test_id("org-settings")).to_be_visible()
     assert console_errors == []
+
+
+def test_an_agents_progress_shows_in_its_chat(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    """The implementer reports progress with `dude event progress`; its
+    chat shows one progress row that moved, not a line per update."""
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
+        "implementer": {"model": "fake/tools"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
+    item = client.create_work_item(forge_project["id"], "Report progress")
+    assert client.post(f"/v1/work-items/{item['id']}/deliver").status_code == 201
+    from helpers import wait_until
+    implement = wait_until(lambda: next((r for r in client.work_item_runs(item["id"]) if r["phase"] == "implement"), None),
+                           timeout=30, message="no implementer")
+    wait_until(lambda: [e for e in client.events(runId=implement["id"]) if e["eventType"] == "agent.custom.progress"][1:],
+               timeout=30, message="the progress never reached the ledger")
+
+    _sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/session/{implement['id']}")
+    progress = page.get_by_test_id("chat-progress")
+    expect(progress).to_have_count(1)
+    expect(progress).to_contain_text("2 of 2")
+    expect(progress).to_contain_text("committing")
+    assert console_errors == []

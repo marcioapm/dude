@@ -73,6 +73,7 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["ch-activity", "ActivityIndicator"],
       ["ch-thinking", "ThinkingBlock"],
       ["ch-tool", "ToolCallCard"],
+      ["ch-event", "ChatEvent / ChatProgress"],
       ["ch-plan", "AgentPlan"],
       ["ch-markdown", "Markdown"],
       ["ch-message", "ChatMessage"],

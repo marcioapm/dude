@@ -33,6 +33,9 @@ type AgentConfig struct {
 	// gives them none. Must not be the lux host or lux's own address: lux
 	// never lets a Run reach either.
 	ToolsURL string
+	// lux serves the tools as a local service in the container, for the dude
+	// CLI (workload.services). Off until the lux in use supports it.
+	ToolsService bool
 }
 
 // LoadAgentConfig reads the agent configuration from the environment,
@@ -43,6 +46,7 @@ func LoadAgentConfig() (AgentConfig, error) {
 		DefaultImage: envOr("DUDE_AGENT_IMAGE", "localhost/dude-runtime:dev"),
 		Timeout:      envOr("DUDE_AGENT_TIMEOUT", "2h"),
 		ToolsURL:     os.Getenv("DUDE_TOOLS_URL"),
+		ToolsService: os.Getenv("DUDE_TOOLS_SERVICE") != "",
 	}
 	home, _ := os.UserHomeDir()
 	if b, err := readEnvOrFile("DUDE_OPENCODE_AUTH", home+"/.local/share/opencode/auth.json"); err != nil {
@@ -192,8 +196,15 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 	if c.ToolsURL != "" && in.ToolsToken != "" {
 		// dude's own tools, authenticated as this Run. The token is a secret:
 		// lux fills the header in, and never stores or logs it.
-		spec.Workload.MCPServers = []lux.MCPServer{{Name: "dude", URL: c.ToolsURL,
-			Headers: []lux.MCPHeader{{Name: "Authorization", Secret: "DUDE_TOOLS_AUTH"}}}}
+		// The same server twice: as MCP for the agent's own tool calls, and
+		// as a local service for the dude CLI (and anything else in the
+		// container), which never sees the token.
+		dude := lux.MCPServer{Name: "dude", URL: c.ToolsURL,
+			Headers: []lux.MCPHeader{{Name: "Authorization", Secret: "DUDE_TOOLS_AUTH"}}}
+		spec.Workload.MCPServers = []lux.MCPServer{dude}
+		if c.ToolsService {
+			spec.Workload.Services = []lux.MCPServer{dude}
+		}
 		spec.Secrets = append(spec.Secrets, lux.Secret{Name: "DUDE_TOOLS_AUTH", Value: "Bearer " + in.ToolsToken})
 	}
 

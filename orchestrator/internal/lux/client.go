@@ -117,6 +117,10 @@ type Workload struct {
 	// MCP servers the agent is given (streamable HTTP), each header's value
 	// from a named secret.
 	MCPServers []MCPServer `json:"mcpServers,omitempty"`
+	// Outside services lux serves inside the container on a local socket
+	// ($LUX_SERVICE_<NAME>), adding each header on the way out, so the
+	// workload can call them without holding the credential.
+	Services []MCPServer `json:"services,omitempty"`
 }
 
 type MCPServer struct {

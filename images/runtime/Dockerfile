@@ -8,6 +8,7 @@
 # whatever the image had under /home/agent, so nothing the agent needs to
 # *run* may live there — OpenCode and git's identity are installed system-wide.
 #
+#   (cd orchestrator && CGO_ENABLED=0 go build -o ../images/runtime/dude ./cmd/dude)
 #   docker build -t dude-runtime:dev images/runtime
 
 FROM debian:bookworm-slim
@@ -37,6 +38,11 @@ ARG OPENCODE_VERSION=latest
 RUN curl -fsSL https://opencode.ai/install | HOME=/tmp/install bash \
     && install -m 0755 /tmp/install/.opencode/bin/opencode /usr/local/bin/opencode \
     && rm -rf /tmp/install
+
+# dude's CLI: the work the agent is part of, and dude's tools, from the shell.
+# Built beside the image (orchestrator/bin/dude, static), system-wide like
+# the agent.
+COPY dude /usr/local/bin/dude
 
 # Git identity for commits the agent makes, system-wide for the same reason.
 RUN git config --system user.name "dude" \

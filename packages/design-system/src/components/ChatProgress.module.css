@@ -1,0 +1,129 @@
+/*
+ * ChatProgress: a muted 24px line with a 2px bar under it. Determinate
+ * fills and breathes while running; indeterminate sweeps. `ended` stops
+ * both where they are. Every loop divides by --ds-motion-live, so reduced
+ * motion freezes the sweep as a stripe and the fill as a fill.
+ */
+
+.root {
+  --cp-bg: var(--ds-tone-neutral-bg);
+  --cp-solid: var(--ds-tone-neutral-solid);
+  position: relative;
+  min-width: 0;
+  padding-bottom: 3px;
+}
+.running {
+  --cp-bg: var(--ds-tone-info-bg);
+  --cp-solid: var(--ds-tone-info-solid);
+}
+.complete {
+  --cp-bg: var(--ds-tone-success-bg);
+  --cp-solid: var(--ds-tone-success-solid);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-compact);
+  padding: 0 var(--ds-space-8) 0 var(--ds-space-6);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.glyph {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--ds-color-text-muted);
+}
+.running .glyph {
+  color: var(--ds-tone-info-fg);
+}
+.complete .glyph {
+  color: var(--ds-tone-success-fg);
+}
+.count {
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.step {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--ds-color-text-muted);
+}
+.running .step {
+  color: var(--ds-color-text-secondary);
+}
+.spacer {
+  flex: 1;
+}
+.trailing {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.state {
+  font-weight: var(--ds-weight-medium);
+  white-space: nowrap;
+}
+.complete .state {
+  color: var(--ds-tone-success-fg);
+}
+.who {
+  display: inline-flex;
+}
+.elapsed {
+  font-size: var(--ds-text-2xs);
+}
+
+/* The bar: a 2px track under the text, inset to the glyph column like the
+   ActivityIndicator sweep, so the two rhythms line up in a transcript. */
+.track {
+  position: absolute;
+  left: calc(var(--ds-space-6) + 16px + var(--ds-space-8));
+  right: var(--ds-space-8);
+  bottom: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--cp-bg);
+  overflow: hidden;
+}
+.fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: 1px;
+  background: var(--cp-solid);
+  transition: width var(--ds-duration-slow) var(--ds-ease-standard);
+}
+.running .fill {
+  animation: global(ds-pulse) calc(var(--ds-cadence-breathe) / max(var(--ds-motion-live), 0.0001)) var(--ds-ease-standard) infinite;
+}
+.sweep {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 28%;
+  border-radius: 1px;
+  background: var(--cp-solid);
+  /* The stripe sits mid-track when still, so an ended or reduced-motion bar reads as "somewhere", not empty. */
+  transform: translateX(130%);
+}
+.running .sweep {
+  animation: global(ds-sweep) calc(var(--ds-cadence-sweep) / max(var(--ds-motion-live), 0.0001)) var(--ds-ease-standard) infinite;
+}
+.ended .sweep {
+  opacity: 0.6;
+}
