@@ -122,13 +122,12 @@ describe("tones on the new surfaces", () => {
 });
 
 describe("role colours on the new surfaces", () => {
-  test("every role fg clears 4.5:1 on dark's surface", () => {
-    // Light is not asserted here: three of six light role foregrounds
-    // (investigator, simplifier, qa_browser) fall short of 4.5:1 on white.
-    const surface = themeColors.dark.surface;
-    for (const r of AGENT_ROLE_NAMES) {
-      const fg = roleColors.dark[r].fg;
-      expect(contrast(fg, surface), r).toBeGreaterThanOrEqual(4.5);
+  test("every role fg clears 4.5:1 on its theme's surface", () => {
+    for (const mode of MODES) {
+      const surface = themeColors[mode].surface;
+      for (const r of AGENT_ROLE_NAMES) {
+        expect(contrast(roleColors[mode][r].fg, surface), `${mode} ${r}`).toBeGreaterThanOrEqual(4.5);
+      }
     }
   });
 });
@@ -146,12 +145,18 @@ describe("accent", () => {
     }
   });
 
-  test("onAccent (button label) clears 4.5:1 against the accent fill in light mode", () => {
-    // Dark's accent fill (white text on it) was already below 4.5:1 before
-    // this change (the `Button` primary variant's contrast, unrelated to
-    // the density/surface work) — a pre-existing defect, noted in the
-    // density report rather than fixed here.
-    const c = themeColors.light;
-    expect(contrast(c.onAccent, c.accent)).toBeGreaterThanOrEqual(4.5);
+  test("onAccent (button label) clears 4.5:1 on the accent fill at rest, hover and active", () => {
+    for (const mode of MODES) {
+      const c = themeColors[mode];
+      for (const fill of [c.accent, c.accentHover, c.accentActive]) {
+        expect(contrast(c.onAccent, fill), `${mode} ${fill}`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  test("the accent fill stands 3:1 off the surface, as a UI component must", () => {
+    for (const mode of MODES) {
+      expect(contrast(themeColors[mode].accent, themeColors[mode].surface), mode).toBeGreaterThanOrEqual(3);
+    }
   });
 });
