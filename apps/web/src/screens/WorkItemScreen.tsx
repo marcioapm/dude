@@ -124,11 +124,11 @@ export function WorkItemScreen({ client, workItemId, onOpenRun }: WorkItemScreen
           ) : null}
         </div>
         {problem ? <p className="problem">{problem}</p> : null}
+        {editing ? (
         <WorkItemDialog
           client={client}
           projectId={item.projectId}
-          open={editing}
-          onOpenChange={setEditing}
+          onClose={() => setEditing(false)}
           existing={{
             id: item.id,
             delivering: started,
@@ -140,6 +140,7 @@ export function WorkItemScreen({ client, workItemId, onOpenRun }: WorkItemScreen
           }}
           onSaved={() => void load()}
         />
+        ) : null}
       </header>
 
       <section className="wiSection" aria-labelledby="pipeline-heading">

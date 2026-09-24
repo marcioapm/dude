@@ -56,15 +56,25 @@ const credentialInput = z.object({
   apiBaseUrl: z.string().min(1).default("https://api.github.com"),
 });
 
-/**
- * Store an organization's forge credential.
- *
- * Also mints the secret GitHub will sign webhook deliveries with, once: a
- * rotated token must not invalidate the hooks already registered with the
- * old secret. Neither secret is ever returned by any route; the response
- * says what was configured, not with what — except the webhook URL, which is
- * not a secret and is what an operator needs to register a hook by hand.
- */
+interface GithubCredential {
+  forge: string;
+  auth: string;
+  secret: string;
+  appId: string | null;
+  installationId: string | null;
+  apiBaseUrl: string | null;
+  updatedAt: string;
+}
+
+/** The organization's stored GitHub credential, secret included: for this module only. */
+async function githubCredential(organizationId: string): Promise<GithubCredential | null> {
+  const rows = (await withOrg(organizationId, (scope) => scope.sql`
+    SELECT forge, auth, secret, app_id AS "appId", installation_id AS "installationId",
+           api_base_url AS "apiBaseUrl", updated_at AS "updatedAt"
+    FROM forge_credentials WHERE forge = 'github'`)) as GithubCredential[];
+  return rows[0] ?? null;
+}
+
 /**
  * The organization's GitHub connection, as settings show it: how it
  * authenticates and where, never the secret — the last four characters
@@ -72,12 +82,10 @@ const credentialInput = z.object({
  */
 async function getCredential(ctx: RequestContext): Promise<Response> {
   const { organizationId } = ctx.principal;
-  const rows = (await withOrg(organizationId, (scope) => scope.sql`
-    SELECT forge, auth, right(secret, 4) AS "secretHint", app_id AS "appId", installation_id AS "installationId",
-           api_base_url AS "apiBaseUrl", updated_at AS "updatedAt"
-    FROM forge_credentials WHERE forge = 'github'`)) as Array<Record<string, unknown>>;
-  if (!rows[0]) return json({ connected: false });
-  return json({ connected: true, ...rows[0], webhookPath: `/v1/webhooks/github/${organizationId}` });
+  const cred = await githubCredential(organizationId);
+  if (!cred) return json({ connected: false });
+  const { secret, ...shown } = cred;
+  return json({ connected: true, ...shown, secretHint: secret.slice(-4), webhookPath: `/v1/webhooks/github/${organizationId}` });
 }
 
 /**
@@ -85,15 +93,12 @@ async function getCredential(ctx: RequestContext): Promise<Response> {
  * works before an agent finds out it does not. Says who, and what it may do.
  */
 async function verifyCredential(ctx: RequestContext): Promise<Response> {
-  const rows = (await withOrg(ctx.principal.organizationId, (scope) => scope.sql`
-    SELECT auth, secret, COALESCE(api_base_url, 'https://api.github.com') AS "apiBaseUrl"
-    FROM forge_credentials WHERE forge = 'github'`)) as Array<{ auth: string; secret: string; apiBaseUrl: string }>;
-  const cred = rows[0];
+  const cred = await githubCredential(ctx.principal.organizationId);
   if (!cred) return json({ ok: false, reason: "not connected" });
   if (cred.auth !== "pat") return json({ ok: false, reason: "only token connections can be verified yet" });
   let res: Response;
   try {
-    res = await fetch(`${cred.apiBaseUrl.replace(/\/+$/, "")}/user`, {
+    res = await fetch(`${(cred.apiBaseUrl ?? "https://api.github.com").replace(/\/+$/, "")}/user`, {
       headers: { authorization: `Bearer ${cred.secret}`, accept: "application/vnd.github+json" },
       signal: AbortSignal.timeout(10_000),
     });
@@ -105,6 +110,15 @@ async function verifyCredential(ctx: RequestContext): Promise<Response> {
   return json({ ok: true, login: user.login ?? null, scopes: res.headers.get("x-oauth-scopes") });
 }
 
+/**
+ * Store an organization's forge credential.
+ *
+ * Also mints the secret GitHub will sign webhook deliveries with, once: a
+ * rotated token must not invalidate the hooks already registered with the
+ * old secret. Neither secret is ever returned by any route; the response
+ * says what was configured, not with what — except the webhook URL, which is
+ * not a secret and is what an operator needs to register a hook by hand.
+ */
 async function putCredential(ctx: RequestContext): Promise<Response> {
   const input = await parseBody(ctx.request, credentialInput);
   const { organizationId } = ctx.principal;

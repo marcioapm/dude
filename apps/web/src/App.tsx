@@ -206,6 +206,7 @@ export function App({ client, onSignOut }: AppProps) {
           </div>
         }
       />
+      {newProject ? (
       <NewProjectDialog
         client={client}
         open={newProject}
@@ -215,6 +216,7 @@ export function App({ client, onSignOut }: AppProps) {
           setSelected({ kind: "project", id, settings: true });
         }}
       />
+      ) : null}
       <main className="main">
         {problem ? <p className="problem">{problem}</p> : null}
         {main}
@@ -236,14 +238,15 @@ function NewWorkItemButton(props: {
       <Button size="sm" variant="primary" leadingIcon="plus" onClick={() => setOpen(true)} data-testid="new-work-item">
         New work item
       </Button>
-      <WorkItemDialog
-        client={props.client}
-        projectId={props.projectId}
-        epicId={props.epicId}
-        open={open}
-        onOpenChange={setOpen}
-        onSaved={(id) => props.onCreated(id)}
-      />
+      {open ? (
+        <WorkItemDialog
+          client={props.client}
+          projectId={props.projectId}
+          epicId={props.epicId}
+          onClose={() => setOpen(false)}
+          onSaved={(id) => props.onCreated(id)}
+        />
+      ) : null}
     </>
   );
 }

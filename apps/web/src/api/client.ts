@@ -11,6 +11,7 @@ import type { NavProject } from "@dude/design-system";
 import type {
   DeliveryPolicy,
   Directive,
+  FullDeliveryPolicy,
   DirectiveScope,
   Epic,
   Finding,
@@ -194,13 +195,7 @@ export class ApiClient {
   }
 
   /** The factory's delivery policy, which a project's settings layer over. */
-  deliveryDefaults(): Promise<{
-    requiredReviewers: DeliveryPolicy["requiredReviewers"] & {};
-    blockingSeverities: DeliveryPolicy["blockingSeverities"] & {};
-    maxReviewIterations: number;
-    maxPrFixIterations: number;
-    simplify: boolean;
-  }> {
+  deliveryDefaults(): Promise<FullDeliveryPolicy> {
     return this.#request("GET", "/v1/delivery-defaults");
   }
 

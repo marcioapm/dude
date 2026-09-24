@@ -18,7 +18,7 @@ import type { RequestContext, Router } from "../router.ts";
 const WORK_ITEM_SELECT = `
   id, organization_id AS "organizationId", project_id AS "projectId", epic_id AS "epicId", repository_id AS "repositoryId",
   title, goal, acceptance_criteria AS "acceptanceCriteria", status,
-  (SELECT key_prefix FROM projects p WHERE p.id = work_items.project_id) || '-' || number AS key,
+  (SELECT key_prefix FROM projects p WHERE p.id = work_items.project_id) || '-' || number AS key, -- see navigation.ts
   requested_by AS "requestedBy", created_at AS "createdAt", updated_at AS "updatedAt"`;
 
 const RUN_SELECT = `
