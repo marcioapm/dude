@@ -59,7 +59,7 @@ export function Tab({ value, icon, count, disabled, children }: TabProps) {
     <RadixTabs.Trigger value={value} className={styles["trigger"]} disabled={disabled ?? false}>
       {icon ? <Icon name={icon} size={13} /> : null}
       {children}
-      {count !== undefined ? <span className={styles["count"]}>{count}</span> : null}
+      {count !== undefined ? <span className={cx(styles["count"], "ds-cap")}>{count}</span> : null}
     </RadixTabs.Trigger>
   );
 }

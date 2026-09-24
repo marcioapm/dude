@@ -6,7 +6,7 @@
   display: inline-flex;
   align-items: center;
   gap: var(--ds-space-4);
-  height: 18px;
+  height: var(--ds-size-badge-md);
   padding: 0 var(--ds-space-6);
   font-size: var(--ds-text-xs);
   font-weight: var(--ds-weight-medium);
@@ -21,7 +21,7 @@
 }
 
 .sm {
-  height: 16px;
+  height: var(--ds-size-badge-sm);
   padding: 0 var(--ds-space-4);
   font-size: var(--ds-text-2xs);
 }
@@ -84,8 +84,7 @@
 }
 
 .text {
-  overflow: hidden;
-  text-overflow: ellipsis;
+  line-height: 1;
 }
 
 .dot {

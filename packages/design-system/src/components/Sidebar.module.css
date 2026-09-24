@@ -122,9 +122,9 @@
   --chip-border: var(--ds-color-border-subtle);
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  height: 20px;
-  padding: 0 5px 0 4px;
+  gap: 4px;
+  height: var(--ds-size-chip);
+  padding: 0 6px 0 5px;
   border: 0;
   box-shadow: inset 0 0 0 1px var(--chip-border);
   border-radius: var(--ds-radius-sm);
@@ -148,8 +148,7 @@
   flex-shrink: 0;
 }
 .chipLabel {
-  overflow: hidden;
-  text-overflow: ellipsis;
+  min-width: 0;
 }
 .chipCount {
   font-variant-numeric: tabular-nums;

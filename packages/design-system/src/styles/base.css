@@ -133,6 +133,20 @@ a:hover {
   min-width: 0;
 }
 
+/* The label inside a badge, chip or pill. Trims the line box to cap height
+   so the container's flex centring centres the capitals and digits rather
+   than the font's taller ascender space (text otherwise sits 1-1.5px low).
+   `clip` with a margin keeps descenders, which fall outside the trimmed box,
+   and still allows an ellipsis. Engines without text-box fall back to the
+   untrimmed box. */
+.ds-cap {
+  text-box: trim-both cap alphabetic;
+  overflow: clip;
+  overflow-clip-margin: 0.4em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .ds-sr-only {
   position: absolute;
   width: 1px;

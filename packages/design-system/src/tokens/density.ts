@@ -3,10 +3,12 @@
  * `./scale.ts`. `compact` is not a uniform shrink: it is the short list of
  * tokens below. Large layout spacing (main pane padding, chat turn padding
  * and the gap between speakers, board card padding, panel gaps), row
- * heights and the chat avatar shrink meaningfully; body text, the default
- * radius and medium controls lose 1–2px; everything already small (icons,
- * `control-sm`, `row-compact`, chip padding, the 2–6px steps, focus rings,
- * `text-2xs`, mono) is not listed and so holds in both densities.
+ * heights and the chat avatar shrink meaningfully (avatar 40 → 32, speaker
+ * gap 17 → 10, sidebar row 32 → 28, main pad 24 → 16, card pad 12 → 8);
+ * body and prose text, the default radius and medium controls lose 1–2px;
+ * everything already small (icons, `control-sm`, `row-compact`, badge and
+ * chip heights, the 2–6px steps, focus rings, text `2xs`/`xs`/`sm`, mono)
+ * is not listed and so holds in both densities.
  *
  * `scripts/build-tokens.ts` emits the comfortable value of every listed
  * token under `[data-density="comfortable"]` and the compact value under
@@ -23,8 +25,6 @@ const px = (n: number) => `${n}px`;
 
 /** `--ds-<key>` -> [comfortable, compact]. */
 const densityPairs = {
-  "text-xs": [px(fontSize.xs), px(fontSize.xs - 1)],
-  "text-sm": [px(fontSize.sm), px(fontSize.sm - 1)],
   "text-md": [px(fontSize.md), px(fontSize.md - 1)],
   "text-prose": [px(fontSize.prose), px(fontSize.prose - 1)],
 
@@ -38,16 +38,15 @@ const densityPairs = {
   "size-avatar-chat": [px(size.avatarChat), px(size.avatarChat - 8)],
 
   "space-main-pad": [px(spaceNamed.mainPad), px(spaceNamed.mainPad - 8)],
-  "space-card-pad": [px(spaceNamed.cardPad), px(spaceNamed.cardPad - 2)],
+  "space-card-pad": [px(spaceNamed.cardPad), px(spaceNamed.cardPad - 4)],
   "space-chat-pad-x": [px(spaceNamed.chatPadX), px(spaceNamed.chatPadX - 4)],
-  "space-chat-gap": [px(spaceNamed.chatGap), px(spaceNamed.chatGap - 6)],
-  "space-chat-avatar-gap": [px(spaceNamed.chatAvatarGap), px(spaceNamed.chatAvatarGap - 2)],
+  "space-chat-gap": [px(spaceNamed.chatGap), px(spaceNamed.chatGap - 7)],
+  "space-chat-avatar-gap": [px(spaceNamed.chatAvatarGap), px(spaceNamed.chatAvatarGap - 4)],
   "space-panel-gap": [px(spaceNamed.panelGap), px(spaceNamed.panelGap - 8)],
 
   // `ch` scales with the font, so this is characters per line, not width:
   // compact fits two more.
   "measure-message": [measure.message, "72ch"],
-  "measure-document": [measure.document, "72ch"],
 } as const satisfies Record<string, readonly [string, string]>;
 
 export type DensityToken = keyof typeof densityPairs;
