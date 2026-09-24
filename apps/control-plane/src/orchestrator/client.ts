@@ -46,7 +46,7 @@ export async function orchestrator(
         ...(actorId ? { "x-dude-actor": actorId } : {}),
         "content-type": "application/json",
       },
-      body: body || "{}",
+      ...(method === "GET" ? {} : { body: body || "{}" }),
     });
   } catch (err) {
     throw new HttpError(503, `the orchestrator is unreachable: ${String(err)}`, "unavailable");

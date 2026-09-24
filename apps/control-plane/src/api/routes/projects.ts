@@ -12,6 +12,7 @@ import { appendInScope } from "../../events/ledger.ts";
 import { conflict, json, notFound, parseBody } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
 import { repositoryFields } from "./structure.ts";
+import { orchestrator } from "../../orchestrator/client.ts";
 
 const slugPattern = /^[a-z0-9][a-z0-9-]*$/;
 
@@ -149,7 +150,13 @@ async function updateProject(ctx: RequestContext): Promise<Response> {
   return json(project);
 }
 
+/** The factory's delivery defaults, from the orchestrator that applies them. */
+async function deliveryDefaults(ctx: RequestContext): Promise<Response> {
+  return orchestrator(ctx.principal.organizationId, "GET", "/internal/delivery-defaults", undefined);
+}
+
 export function registerProjectRoutes(router: Router): void {
+  router.get("/v1/delivery-defaults", deliveryDefaults);
   router.post("/v1/projects", createProject);
   router.get("/v1/projects", listProjects);
   router.get("/v1/projects/:id", getProject);

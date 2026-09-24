@@ -19,22 +19,27 @@ import { useReloadOnEvents } from "./hooks/useEventStream.ts";
 import { RunScreen } from "./screens/RunScreen.tsx";
 import { WorkItemScreen } from "./screens/WorkItemScreen.tsx";
 import { WorkItemDialog } from "./screens/WorkItemDialog.tsx";
+import { ProjectSettingsScreen } from "./screens/ProjectSettingsScreen.tsx";
 
 export interface AppProps {
   client: ApiClient;
   onSignOut: () => void;
 }
 
+/** A place in the app: something in the tree, or a project's settings. */
+type Place = NavRef & { settings?: boolean };
+
 /** Selection lives in the URL hash, so a reload lands where you were. */
-function readSelection(): NavRef | null {
-  const [kind, id] = window.location.hash.replace(/^#\/?/, "").split("/");
+function readSelection(): Place | null {
+  const [kind, id, view] = window.location.hash.replace(/^#\/?/, "").split("/");
   if (!kind || !id) return null;
   if (!["project", "epic", "workItem", "run", "session"].includes(kind)) return null;
-  return { kind: kind as NavRef["kind"], id: decodeURIComponent(id) };
+  const ref = { kind: kind as NavRef["kind"], id: decodeURIComponent(id) };
+  return kind === "project" && view === "settings" ? { ...ref, settings: true } : ref;
 }
 
-function writeSelection(ref: NavRef | null) {
-  const hash = ref ? `#/${ref.kind}/${encodeURIComponent(ref.id)}` : "";
+function writeSelection(ref: Place | null) {
+  const hash = ref ? `#/${ref.kind}/${encodeURIComponent(ref.id)}${ref.settings ? "/settings" : ""}` : "";
   if (window.location.hash !== hash) window.history.replaceState(null, "", hash || " ");
 }
 
@@ -53,10 +58,10 @@ function workItemOfAgent(projects: readonly NavProject[], agentId: string) {
 
 export function App({ client, onSignOut }: AppProps) {
   const [projects, setProjects] = useState<NavProject[] | null>(null);
-  const [selected, setSelectedState] = useState<NavRef | null>(readSelection);
+  const [selected, setSelectedState] = useState<Place | null>(readSelection);
   const [problem, setProblem] = useState<string | null>(null);
 
-  const setSelected = useCallback((ref: NavRef | null) => {
+  const setSelected = useCallback((ref: Place | null) => {
     setSelectedState(ref);
     writeSelection(ref);
   }, []);
@@ -95,6 +100,16 @@ export function App({ client, onSignOut }: AppProps) {
         description="Create a project through the API, then reload."
       />
     );
+  } else if (selected?.kind === "project" && selected.settings) {
+    main = (
+      <ProjectSettingsScreen
+        key={selected.id}
+        client={client}
+        projectId={selected.id}
+        onChanged={() => void load()}
+        onBack={() => setSelected({ kind: "project", id: selected.id })}
+      />
+    );
   } else if (scope) {
     main = (
       <Board
@@ -103,6 +118,18 @@ export function App({ client, onSignOut }: AppProps) {
         selected={selected}
         onSelect={(ref) => setSelected(ref)}
         headerActions={
+          <>
+          {scope.epic ? null : (
+            <Button
+              size="sm"
+              variant="secondary"
+              leadingIcon="list-check"
+              onClick={() => setSelected({ kind: "project", id: scope.project.id, settings: true })}
+              data-testid="project-settings-button"
+            >
+              Settings
+            </Button>
+          )}
           <NewWorkItemButton
             client={client}
             projectId={scope.project.id}
@@ -112,6 +139,7 @@ export function App({ client, onSignOut }: AppProps) {
               setSelected({ kind: "workItem", id });
             }}
           />
+          </>
         }
       />
     );

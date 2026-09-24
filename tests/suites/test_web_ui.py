@@ -119,3 +119,42 @@ def test_a_work_item_is_edited_and_moved_from_its_screen(
     saved = client.get(f"/v1/work-items/{item['id']}").json()
     assert saved["epicId"] == epic["id"]
     assert console_errors == []
+
+
+def test_project_settings_manage_repositories_and_delivery(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    _sign_in(page, web_url, org["api_key"])
+    page.get_by_test_id("project-settings-button").click()
+    expect(page.get_by_test_id("project-settings")).to_be_visible()
+
+    # A second repository, from the Repositories tab.
+    page.get_by_test_id("add-repository").click()
+    page.get_by_test_id("repository-name").fill("docs")
+    page.get_by_test_id("repository-url").fill("https://github.com/acme/docs.git")
+    page.get_by_test_id("repository-save").click()
+    expect(page.get_by_role("cell", name="docs", exact=True)).to_be_visible()
+    # A URL git could be tricked by is refused, and the dialog says why.
+    page.get_by_test_id("add-repository").click()
+    page.get_by_test_id("repository-name").fill("bad")
+    page.get_by_test_id("repository-url").fill("ext::sh -c id")
+    page.get_by_test_id("repository-save").click()
+    expect(page.get_by_role("alert")).to_contain_text("url must be an https, ssh or git:// URL")
+    page.keyboard.press("Escape")
+    # That refusal is the only error the page saw.
+    assert console_errors == ["Failed to load resource: the server responded with a status of 400 (Bad Request)"]
+    console_errors.clear()
+
+    # Security joins correctness on every delivery.
+    page.get_by_role("tab", name="Delivery").click()
+    page.get_by_role("checkbox", name="security").click()
+    page.get_by_test_id("delivery-save").click()
+    expect(page.get_by_text("Delivery saved")).to_be_visible()
+
+    project = client.get(f"/v1/projects/{forge_project['id']}").json()
+    assert "docs" in [r["name"] for r in project["repositories"]]
+    assert "bad" not in [r["name"] for r in project["repositories"]]
+    # Only what differs from the factory's defaults is stored: the rest keeps
+    # following them.
+    assert project["deliveryPolicy"] == {"requiredReviewers": ["correctness", "security"]}
+    assert console_errors == []

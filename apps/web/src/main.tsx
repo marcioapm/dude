@@ -10,7 +10,7 @@
 
 import { StrictMode, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Button, Input } from "@dude/design-system/primitives";
+import { Button, Input, ToastProvider } from "@dude/design-system/primitives";
 
 import "@dude/design-system/tokens.css";
 import "@dude/design-system/base.css";
@@ -41,13 +41,15 @@ function Root() {
   }
 
   return (
-    <App
-      client={client}
-      onSignOut={() => {
-        localStorage.removeItem(KEY_STORAGE);
-        setApiKey("");
-      }}
-    />
+    <ToastProvider>
+      <App
+        client={client}
+        onSignOut={() => {
+          localStorage.removeItem(KEY_STORAGE);
+          setApiKey("");
+        }}
+      />
+    </ToastProvider>
   );
 }
 

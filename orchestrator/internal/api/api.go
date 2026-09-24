@@ -53,6 +53,12 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /internal/runs/{id}/resume", s.auth(s.resume))
 	mux.Handle("POST /internal/runs/{id}/abort", s.auth(s.abort))
 	mux.Handle("POST /internal/questions/{id}/answer", s.auth(s.answer))
+	// The factory's delivery defaults, which the settings screen shows for
+	// what a project leaves unset: one definition, here, where it is applied.
+	mux.Handle("GET /internal/delivery-defaults", s.auth(func(w http.ResponseWriter, r *http.Request, _ string) error {
+		write(w, http.StatusOK, delivery.DefaultPolicy())
+		return nil
+	}))
 	mux.Handle("POST /internal/kick", s.auth(func(w http.ResponseWriter, r *http.Request, _ string) error {
 		s.kick()
 		write(w, http.StatusAccepted, map[string]bool{"ok": true})
