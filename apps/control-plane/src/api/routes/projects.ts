@@ -6,7 +6,7 @@
  */
 
 import { z } from "zod";
-import { agentModelsSchema, newId, EventTypes } from "@dude/domain";
+import { agentModelsSchema, deliveryPolicySchema, newId, EventTypes } from "@dude/domain";
 import { withOrg } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { conflict, json, notFound, parseBody } from "../http.ts";
@@ -27,6 +27,7 @@ const createProjectInput = z.object({
   description: z.string().max(2000).default(""),
   agentModels: agentModelsSchema,
   runtimeImage: z.string().nullable().default(null),
+  deliveryPolicy: deliveryPolicySchema.default({}),
   repositories: z.array(repositoryInput).default([]),
 });
 
@@ -42,13 +43,14 @@ interface ProjectRow {
   description: string;
   agentModels: Record<string, unknown>;
   runtimeImage: string | null;
+  deliveryPolicy: Record<string, unknown>;
   createdAt: string;
 }
 
 const PROJECT_SELECT = `
   id, organization_id AS "organizationId", name, slug, description,
   agent_models AS "agentModels", runtime_image AS "runtimeImage",
-  created_at AS "createdAt"`;
+  delivery_policy AS "deliveryPolicy", created_at AS "createdAt"`;
 
 async function createProject(ctx: RequestContext): Promise<Response> {
   const input = await parseBody(ctx.request, createProjectInput);
@@ -61,9 +63,9 @@ async function createProject(ctx: RequestContext): Promise<Response> {
 
     const projectId = newId("project");
     const rows = (await scope.sql`
-      INSERT INTO projects (id, organization_id, name, slug, description, agent_models, runtime_image)
+      INSERT INTO projects (id, organization_id, name, slug, description, agent_models, runtime_image, delivery_policy)
       VALUES (${projectId}, ${organizationId}, ${input.name}, ${input.slug}, ${input.description},
-              ${input.agentModels ?? {}}::jsonb, ${input.runtimeImage})
+              ${input.agentModels ?? {}}::jsonb, ${input.runtimeImage}, ${input.deliveryPolicy ?? {}}::jsonb)
       RETURNING ${scope.sql.unsafe(PROJECT_SELECT)}`) as ProjectRow[];
 
     const repositories = [];
@@ -120,8 +122,8 @@ async function getProject(ctx: RequestContext): Promise<Response> {
 }
 
 /**
- * Patch a project. Agent model config is replaced wholesale rather than
- * merged, so removing a role binding is expressible.
+ * Patch a project. Agent model config and delivery policy are replaced
+ * wholesale rather than merged, so removing a setting is expressible.
  */
 async function updateProject(ctx: RequestContext): Promise<Response> {
   const input = await parseBody(ctx.request, updateProjectInput);
@@ -134,6 +136,7 @@ async function updateProject(ctx: RequestContext): Promise<Response> {
         description   = COALESCE(${input.description ?? null}, description),
         agent_models  = COALESCE(${input.agentModels ?? null}::jsonb,
                                  agent_models),
+        delivery_policy = COALESCE(${input.deliveryPolicy ?? null}::jsonb, delivery_policy),
         runtime_image = CASE WHEN ${input.runtimeImage !== undefined} THEN ${input.runtimeImage ?? null}
                              ELSE runtime_image END
       WHERE id = ${projectId}

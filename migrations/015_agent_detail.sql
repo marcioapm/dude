@@ -26,3 +26,8 @@ ALTER TABLE runs
   -- delivery's policy blocks on.
   ADD COLUMN finding_ids          text[] NOT NULL DEFAULT '{}',
   ADD COLUMN blocking_severities  text[] NOT NULL DEFAULT '{}';
+
+-- How a project's work is delivered, over the factory's defaults: which
+-- reviewers always run, what blocks, how many fix rounds. A work item's
+-- own overrides layer on top.
+ALTER TABLE projects ADD COLUMN delivery_policy jsonb NOT NULL DEFAULT '{}';
