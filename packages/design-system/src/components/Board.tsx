@@ -220,8 +220,8 @@ export function Board({ project, epic, selected, onSelect, cap = 12, loading, he
             {epic ? (
               <>
                 <span className={styles["scopeParent"]}>{project.name}</span>
-                <Icon name="chevron-right" size={12} className={styles["scopeSep"]} />
-                <Icon name="layers" size={12} className={styles["scopeGlyph"]} />
+                <Icon name="chevron-right" size={14} className={styles["scopeSep"]} />
+                <Icon name="layers" size={14} className={styles["scopeGlyph"]} />
               </>
             ) : null}
             <span className={styles["scopeTitle"]}>{scopeLabel}</span>
@@ -323,8 +323,8 @@ function BoardGroup({ lane, open, onToggle, menu, children }: BoardGroupProps) {
     <section className={cx(styles["lane"], !open && styles["laneClosed"], empty && styles["laneEmpty"])} aria-labelledby={headingId} data-lane={lane.key}>
       <header className={styles["laneHeader"]}>
         <button type="button" className={styles["laneToggle"]} aria-expanded={open} aria-controls={open ? `${headingId}-body` : undefined} onClick={onToggle}>
-          <Icon name="chevron-right" size={12} className={cx(styles["laneChevron"], open && styles["laneChevronOpen"])} />
-          {lane.epic ? <Icon name="layers" size={12} className={styles["laneGlyph"]} /> : null}
+          <Icon name="chevron-right" size={14} className={cx(styles["laneChevron"], open && styles["laneChevronOpen"])} />
+          {lane.epic ? <Icon name="layers" size={14} className={styles["laneGlyph"]} /> : null}
           <span id={headingId} className={cx(styles["laneTitle"], !lane.epic && styles["laneTitleNone"])}>
             {lane.title}
           </span>

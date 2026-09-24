@@ -31,6 +31,10 @@
 
 .root:hover:not(:disabled) {
   background: var(--btn-bg-hover);
+  --btn-icon: currentColor;
+}
+.root > svg {
+  color: var(--btn-icon, currentColor);
 }
 .root:active:not(:disabled) {
   background: var(--btn-bg-active);
@@ -60,6 +64,7 @@
   --btn-bg-active: var(--ds-color-accent-active);
 }
 .secondary {
+  --btn-icon: var(--ds-color-text-secondary);
   --btn-bg: var(--ds-color-raised);
   --btn-border: var(--ds-color-border);
   --btn-bg-hover: var(--ds-color-secondary-hover);

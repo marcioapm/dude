@@ -323,11 +323,11 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
   const chevron =
     row.expandable && !row.forced ? (
       <button type="button" className={cx(styles["toggle"], row.expanded && styles["toggleOpen"])} aria-label={row.expanded ? "Collapse" : "Expand"} tabIndex={-1} onClick={onToggleClick}>
-        <Icon name="chevron-right" size={12} className={styles["toggleIcon"]} />
+        <Icon name="chevron-right" size={14} className={styles["toggleIcon"]} />
       </button>
     ) : (
       <span className={cx(styles["toggle"], styles["toggleSpacer"])} aria-hidden>
-        {row.expandable && row.forced ? <Icon name="chevron-right" size={12} className={cx(styles["toggleIcon"], styles["toggleIconForced"])} /> : null}
+        {row.expandable && row.forced ? <Icon name="chevron-right" size={14} className={cx(styles["toggleIcon"], styles["toggleIconForced"])} /> : null}
       </span>
     );
 
@@ -369,7 +369,7 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
     return (
       <div {...common} className={cx(styles["row"], styles["epic"], selected && styles["selected"])}>
         {chevron}
-        <Icon name="layers" size={12} className={styles["epicGlyph"]} />
+        <Icon name="layers" size={14} className={styles["epicGlyph"]} />
         <span className={styles["epicTitle"]}>{e.title}</span>
         <span className={styles["epicCount"]}>{e.workItems.length}</span>
         {row.counts && !row.expanded ? <TriageRollup counts={row.counts} className={styles["rollup"]} /> : null}

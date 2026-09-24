@@ -98,7 +98,7 @@ export function ThinkingBlock({
       <div className={styles["row"]} role="button" tabIndex={0} aria-expanded={open} onClick={toggle} onKeyDown={onKeyDown}>
         <span className={styles["glyph"]} aria-hidden>
           {live ? <Icon name="circle-dotted" size={16} strokeWidth={1.5} className={styles["ring"]} /> : null}
-          <Icon name="brain" size={live ? 9 : 12} className={styles["brain"]} />
+          <Icon name="brain" size={live ? 9 : 14} className={styles["brain"]} />
         </span>
         <span className={styles["label"]}>{rowLabel}</span>
         {!open ? (
@@ -113,7 +113,7 @@ export function ThinkingBlock({
             {formatDuration(elapsed)}
           </span>
         ) : null}
-        <Icon name="chevron-right" size={12} className={styles["chevron"]} />
+        <Icon name="chevron-right" size={14} className={styles["chevron"]} />
       </div>
       {open ? (
         <div className={styles["body"]}>

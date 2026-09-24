@@ -307,10 +307,11 @@
   gap: 4px;
   padding: var(--ds-space-8) 0;
   border-radius: var(--ds-radius-md);
-  color: var(--ds-color-text-primary);
+  color: var(--ds-color-text-secondary);
 }
 .iconCell:hover {
   background: var(--ds-color-hover-wash);
+  color: var(--ds-color-text-primary);
 }
 .iconCell .caption {
   font-size: 9px;
