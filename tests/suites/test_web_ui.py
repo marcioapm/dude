@@ -72,7 +72,7 @@ def test_delivering_from_the_ui_reaches_a_pull_request_and_back(
     expect(pipeline).to_contain_text("blocking", timeout=120_000)
     expect(page.get_by_test_id("findings")).to_be_visible()
     expect(pipeline).to_contain_text("no findings", timeout=120_000)
-    expect(page.get_by_test_id("finding-status").first).to_have_text("resolved")
+    expect(page.get_by_test_id("finding").first).to_have_attribute("data-status", "resolved")
 
     # The PR appears as the last step, linked to the forge.
     expect(page.get_by_test_id("pr-step")).to_be_visible(timeout=180_000)
@@ -82,7 +82,8 @@ def test_delivering_from_the_ui_reaches_a_pull_request_and_back(
     # Every agent in the pipeline opens its own conversation.
     page.get_by_test_id("phase").nth(1).click()
     expect(page.get_by_text("Reviewer").first).to_be_visible()
-    page.get_by_role("button", name="Back").click()
+    # Back up to the work item through the breadcrumb, by its key.
+    page.get_by_role("navigation", name="Breadcrumb").get_by_role("button", name="GREE-1").click()
     expect(page.get_by_test_id("work-item-screen")).to_be_visible()
 
     # A person comments on the forge; the page shows a fixer answering.
@@ -196,4 +197,60 @@ def test_the_github_connection_is_checked_and_replaced_in_settings(
     expect(page.get_by_test_id("org-settings")).to_contain_text("…oken")
     page.get_by_test_id("forge-verify").click()
     expect(page.get_by_test_id("forge-verdict")).to_have_text("GitHub rejected the token")
+    assert console_errors == []
+
+
+def test_epics_are_made_ordered_and_removed_from_the_sidebar_and_board(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    item = client.create_work_item(forge_project["id"], "Loose work")
+    _sign_in(page, web_url, org["api_key"])
+
+    # Two epics, from the board.
+    # Two epics, from the board. A new one opens, which reveals it in the tree.
+    for title in ("Onboarding", "Billing"):
+        page.get_by_role("treeitem", name="Greeter").click()
+        page.get_by_test_id("new-epic").click()
+        page.get_by_test_id("epic-title").fill(title)
+        page.get_by_test_id("epic-save").click()
+        expect(page.get_by_role("treeitem", name=title)).to_be_visible()
+
+    # Move the loose work item into Billing from its row's menu.
+    row = page.get_by_role("treeitem", name="Loose work", exact=False)
+    row.focus()
+    page.keyboard.press("Shift+F10")
+    page.get_by_role("menuitem", name="Move to epic").focus()
+    page.keyboard.press("ArrowRight")
+    page.get_by_role("menuitem", name="Billing").click()
+    page.wait_for_timeout(500)
+    epics = client.get(f"/v1/projects/{forge_project['id']}/epics").json()["epics"]
+    billing = next(e for e in epics if e["title"] == "Billing")
+    assert client.get(f"/v1/work-items/{item['id']}").json()["epicId"] == billing["id"]
+
+    # Billing moves above Onboarding.
+    billing_row = page.get_by_role("treeitem", name="Billing")
+    billing_row.hover()
+    page.get_by_role("button", name="Actions for Billing").click()
+    page.get_by_role("menuitem", name="Move up").click()
+    page.wait_for_timeout(500)
+    assert [e["title"] for e in client.get(f"/v1/projects/{forge_project['id']}/epics").json()["epics"]] == ["Billing", "Onboarding"]
+
+    # The project's board, grouped by epic, shows them in that order.
+    page.get_by_role("treeitem", name="Greeter").click()
+    page.get_by_test_id("group-by-epic").click()
+    lanes = page.locator("[data-lane]")
+    if lanes.count():
+        expect(lanes.first).to_contain_text("Billing")
+
+    # Deleting Billing keeps its work.
+    billing_row.focus()
+    page.keyboard.press("Shift+F10")
+    page.get_by_role("menuitem", name="Delete epic").click()
+    expect(page.get_by_role("dialog")).to_contain_text("1 work item will stay in the project")
+    page.get_by_test_id("epic-delete").click()
+    expect(page.get_by_role("dialog")).to_have_count(0)
+    expect(page.get_by_text("Billing deleted")).to_be_visible()
+    expect(page.get_by_role("treeitem", name="Billing")).to_have_count(0)
+    assert [e["title"] for e in client.get(f"/v1/projects/{forge_project['id']}/epics").json()["epics"]] == ["Onboarding"]
+    assert client.get(f"/v1/work-items/{item['id']}").json()["epicId"] is None
     assert console_errors == []

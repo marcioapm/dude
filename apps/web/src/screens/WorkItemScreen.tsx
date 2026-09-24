@@ -12,8 +12,8 @@
  * landing or the PR opening appears without a reload.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { AgentAvatar, StatusBadge } from "@dude/design-system/components";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { AgentAvatar, FindingGroup, FindingRow, StatusBadge } from "@dude/design-system/components";
 import { Button, EmptyState, Spinner } from "@dude/design-system/primitives";
 import { DEFAULT_RUN_ROLE, runLabel } from "@dude/domain";
 import type { ApiClient, Finding, PullRequest, Run, WorkItemDetail } from "../api/client.ts";
@@ -25,9 +25,11 @@ export interface WorkItemScreenProps {
   client: ApiClient;
   workItemId: string;
   onOpenRun: (runId: string) => void;
+  /** Where it sits, shown above its title. */
+  breadcrumb?: ReactNode;
 }
 
-export function WorkItemScreen({ client, workItemId, onOpenRun }: WorkItemScreenProps) {
+export function WorkItemScreen({ client, workItemId, onOpenRun, breadcrumb }: WorkItemScreenProps) {
   const [item, setItem] = useState<WorkItemDetail | null>(null);
   const [findings, setFindings] = useState<Finding[]>([]);
   const [pullRequests, setPullRequests] = useState<PullRequest[]>([]);
@@ -89,6 +91,7 @@ export function WorkItemScreen({ client, workItemId, onOpenRun }: WorkItemScreen
   return (
     <div className="workItemScreen" data-testid="work-item-screen">
       <header className="wiHeader">
+        {breadcrumb}
         <div className="wiTitleRow">
           <StatusBadge status={item.status} />
           {item.key ? <code className="wiKey" title={item.id}>{item.key}</code> : null}
@@ -169,33 +172,35 @@ export function WorkItemScreen({ client, workItemId, onOpenRun }: WorkItemScreen
       </section>
 
       {findings.length > 0 ? (
-        <section className="wiSection" aria-labelledby="findings-heading" data-testid="findings">
-          <h2 id="findings-heading" className="ds-label wiSectionTitle">
-            Review findings
-            <span className="wiCount">
-              {openFindings.length > 0 ? `${openFindings.length} open` : "all addressed"}
-            </span>
-          </h2>
-          <ul className="findings">
-            {findings.map((f) => (
-              <li key={f.id} className="finding" data-status={f.status} data-severity={f.severity}>
-                <span className="findingSeverity">{f.severity}</span>
-                <div className="findingBody">
-                  <div className="findingTitle">{f.title}</div>
-                  <div className="findingMeta">
-                    {f.category}
-                    {f.file ? <> · <code>{f.file}{f.line ? `:${f.line}` : ""}</code></> : null}
-                    {f.fixAttempts > 0 ? ` · ${f.fixAttempts} fix attempt${f.fixAttempts === 1 ? "" : "s"}` : ""}
-                  </div>
-                  {f.status !== "open" && f.resolutionNote ? (
-                    <div className="findingNote">{f.resolutionNote}</div>
-                  ) : null}
-                </div>
-                <span className="findingStatus" data-testid="finding-status">{f.status}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
+        <FindingGroup
+          className="wiSection"
+          data-testid="findings"
+          findings={findings}
+          renderRow={(f) => (
+            <FindingRow
+              key={f.id}
+              data-testid="finding"
+              data-status={f.status}
+              severity={f.severity}
+              status={f.status}
+              category={f.category}
+              title={f.title}
+              file={f.file}
+              line={f.line}
+              description={f.description}
+              suggestedFix={f.suggestedFix}
+              resolutionNote={f.resolutionNote}
+              fixAttempts={f.fixAttempts}
+              fixedIn={
+                f.resolvedByRunId ? (
+                  <Button size="sm" variant="ghost" onClick={() => onOpenRun(f.resolvedByRunId!)}>
+                    judged fixed ›
+                  </Button>
+                ) : undefined
+              }
+            />
+          )}
+        />
       ) : null}
     </div>
   );
