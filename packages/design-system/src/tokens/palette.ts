@@ -12,10 +12,12 @@
  *   primary/secondary/muted read as close, even shades rather than a
  *   bright-white-on-black spike. Every slot that carries read content still
  *   clears 4.5:1.
- * - Dark surfaces are tiered by lightness, not by shadow, and sit one step
- *   up from the old ramp (less near-black); elevation = lighter surface +
- *   a hairline close in lightness to the surface it sits on, not a bright
- *   line.
+ * - Dark surfaces are tiered by lightness, not by shadow, and are charcoal
+ *   rather than near-black (canvas L 0.235, surface 0.27 — Obsidian and
+ *   Discord territory). Elevation = a lighter surface; a hairline, where
+ *   one is kept, sits close in lightness to the surface under it.
+ * - Tinted backgrounds (tone/role/identity/diff bg, accent-subtle) sit a
+ *   few steps above the surface so they read as a tint, not a hole.
  * - Five status tones only: neutral, info, attention, success, danger.
  *   Every domain status maps onto one of these plus a glyph.
  */
@@ -38,17 +40,17 @@ const NEUTRAL_CHROMA = 0.0035;
 export { NEUTRAL_HUE, NEUTRAL_CHROMA };
 
 const neutralL = [
-  0.11, // 0
-  0.155, // 1 app canvas / sunken / field bg (dark)
-  0.19, // 2
-  0.225, // 3
-  0.265, // 4
-  0.32, // 5
-  0.4, // 6
-  0.5, // 7
-  0.615, // 8
-  0.72, // 9
-  0.82, // 10
+  0.18, // 0
+  0.235, // 1 app canvas / sunken / field bg (dark)
+  0.27, // 2
+  0.305, // 3
+  0.34, // 4
+  0.39, // 5
+  0.46, // 6
+  0.55, // 7
+  0.64, // 8
+  0.74, // 9
+  0.83, // 10
   0.9, // 11
   0.965, // 12 canvas / sunken (light)
 ] as const;
@@ -105,11 +107,11 @@ const TONE_HUES: Record<ToneName, ToneSpec> = {
 
 /** Per-tone lightness for each slot; fg lightness is the CVD lever. */
 const DARK_L: Record<ToneName, { fg: number; bg: number; border: number; solid: number }> = {
-  neutral: { fg: 0.74, bg: 0.24, border: 0.34, solid: 0.52 },
-  info: { fg: 0.74, bg: 0.25, border: 0.4, solid: 0.55 },
-  attention: { fg: 0.82, bg: 0.27, border: 0.46, solid: 0.8 },
-  success: { fg: 0.8, bg: 0.25, border: 0.4, solid: 0.7 },
-  danger: { fg: 0.7, bg: 0.25, border: 0.42, solid: 0.55 },
+  neutral: { fg: 0.74, bg: 0.29, border: 0.39, solid: 0.52 },
+  info: { fg: 0.74, bg: 0.3, border: 0.45, solid: 0.55 },
+  attention: { fg: 0.82, bg: 0.32, border: 0.51, solid: 0.8 },
+  success: { fg: 0.8, bg: 0.3, border: 0.45, solid: 0.7 },
+  danger: { fg: 0.7, bg: 0.3, border: 0.47, solid: 0.55 },
 };
 
 /**
@@ -185,12 +187,12 @@ const ROLE_HUES: Record<AgentRoleName, number> = {
  */
 const ROLE_L: Record<"light" | "dark", Record<AgentRoleName, number>> = {
   dark: {
-    orchestrator: 0.62,
-    investigator: 0.8,
-    implementer: 0.68,
-    reviewer: 0.62,
+    orchestrator: 0.66,
+    investigator: 0.82,
+    implementer: 0.71,
+    reviewer: 0.66,
     simplifier: 0.86,
-    qa_browser: 0.8,
+    qa_browser: 0.82,
   },
   light: {
     orchestrator: 0.42,
@@ -215,9 +217,9 @@ function roleColor(role: AgentRoleName, mode: "light" | "dark"): RoleColor {
   if (mode === "dark") {
     return {
       fg: toHex(oklch(l, 0.12, h)),
-      bg: toHex(oklch(0.27, 0.05, h)),
+      bg: toHex(oklch(0.3, 0.05, h)),
       solid: toHex(oklch(l, 0.12, h)),
-      onSolid: l >= 0.7 ? black : white,
+      onSolid: l >= 0.65 ? black : white,
     };
   }
   return {
@@ -261,7 +263,7 @@ export interface IdentityColor {
 
 function identityColor(hue: number, mode: "light" | "dark"): IdentityColor {
   return mode === "dark"
-    ? { fg: toHex(oklch(0.84, 0.07, hue)), bg: toHex(oklch(0.3, 0.035, hue)) }
+    ? { fg: toHex(oklch(0.84, 0.07, hue)), bg: toHex(oklch(0.35, 0.035, hue)) }
     : { fg: toHex(oklch(0.42, 0.09, hue)), bg: toHex(oklch(0.93, 0.03, hue)) };
 }
 
@@ -290,7 +292,7 @@ export const accent = {
     base: toHex(oklch(0.64, 0.13, 248)),
     hover: toHex(oklch(0.69, 0.13, 248)),
     active: toHex(oklch(0.59, 0.13, 248)),
-    subtle: toHex(oklch(0.26, 0.045, 248)),
+    subtle: toHex(oklch(0.31, 0.045, 248)),
     ring: toHex(oklch(0.7, 0.13, 248)),
     text: toHex(oklch(0.76, 0.11, 248)),
   },
@@ -313,13 +315,13 @@ export const diff = {
     hunkFg: toHex(oklch(0.48, 0.1, 248)),
   },
   dark: {
-    addBg: toHex(oklch(0.23, 0.045, 150)),
-    addBgStrong: toHex(oklch(0.33, 0.09, 150)),
+    addBg: toHex(oklch(0.28, 0.045, 150)),
+    addBgStrong: toHex(oklch(0.38, 0.09, 150)),
     addFg: toHex(oklch(0.82, 0.12, 150)),
-    delBg: toHex(oklch(0.23, 0.04, 20)),
-    delBgStrong: toHex(oklch(0.33, 0.09, 20)),
+    delBg: toHex(oklch(0.28, 0.04, 20)),
+    delBgStrong: toHex(oklch(0.38, 0.09, 20)),
     delFg: toHex(oklch(0.78, 0.13, 20)),
-    hunkBg: toHex(oklch(0.23, 0.03, 248)),
+    hunkBg: toHex(oklch(0.28, 0.03, 248)),
     hunkFg: toHex(oklch(0.72, 0.08, 248)),
   },
 } as const;
@@ -372,7 +374,7 @@ function ansiPalette(mode: "light" | "dark"): Record<AnsiColorName, string> {
   const chromatic = (l: number, h: number) => toHex(oklch(l, h === ANSI_HUES.yellow ? chroma * 0.95 : chroma, h));
   return {
     // "black" is the colour tools use for "de-emphasised": readable, not gone.
-    black: toHex(oklch(dark ? 0.6 : 0.24, NEUTRAL_CHROMA, NEUTRAL_HUE)),
+    black: toHex(oklch(dark ? 0.66 : 0.24, NEUTRAL_CHROMA, NEUTRAL_HUE)),
     red: chromatic(normalL, ANSI_HUES.red),
     green: chromatic(normalL, ANSI_HUES.green),
     yellow: chromatic(normalL, ANSI_HUES.yellow),
@@ -382,7 +384,7 @@ function ansiPalette(mode: "light" | "dark"): Record<AnsiColorName, string> {
     white: toHex(oklch(dark ? 0.86 : 0.5, NEUTRAL_CHROMA, NEUTRAL_HUE)),
     // "bright black" is the classic dim grey; on light it is a step darker
     // than "white" so the two stay distinct, and never paper.
-    "bright-black": toHex(oklch(dark ? 0.66 : 0.44, NEUTRAL_CHROMA, NEUTRAL_HUE)),
+    "bright-black": toHex(oklch(dark ? 0.72 : 0.44, NEUTRAL_CHROMA, NEUTRAL_HUE)),
     "bright-red": chromatic(brightL, ANSI_HUES.red),
     "bright-green": chromatic(brightL, ANSI_HUES.green),
     "bright-yellow": chromatic(brightL, ANSI_HUES.yellow),
@@ -405,6 +407,6 @@ export const ansiColors: Record<"light" | "dark", Record<AnsiColorName, string>>
  * assumption of a light terminal is still legible on the dark field.
  */
 export const ansiForegroundLightness: Record<"light" | "dark", { readonly min: number; readonly max: number }> = {
-  dark: { min: 0.66, max: 0.97 },
+  dark: { min: 0.7, max: 0.97 },
   light: { min: 0.2, max: 0.55 },
 };

@@ -91,27 +91,27 @@ const alpha = (hex: string, a: number): string => {
  * for the gallery) so every step lands exactly where the contrast search
  * below puts it.
  *
- * Dark surfaces sit one step up from a near-black baseline — canvas is the
- * sidebar's shade, surface is the main pane's, raised is a card's, each a
- * small, even step apart, so the eye reads "layer", not "edge". The text
- * ladder is soft: primary lands at ~11–12:1 on the surface (Discord's
- * #dbdee1-on-#313338 territory) rather than the old >=14:1 near-white,
- * secondary ~7:1, muted ~5:1 (every slot that carries read content still
- * clears 4.5:1), so the three read as close shades rather than a
- * bright-white spike over dim grey.
+ * Dark surfaces are charcoal, not black: canvas #1d1e20 and surface
+ * #252728 sit where Obsidian (#1e1e1e / #262626) and Discord's deepest
+ * greys (#1e1f22 / #2b2d31) do. Each step is ΔL 0.035, so regions read as
+ * layers, not edges. The text ladder is soft: primary ~11:1 on the surface
+ * (Discord runs #dbdee1 on #313338 at ~9.4:1), secondary ~7:1, muted ~5:1 —
+ * close shades rather than a bright-white spike over dim grey. Muted still
+ * clears 4.5:1 on `raised`, where card and header text sits.
  */
 const oklchHex = (l: number, c = NEUTRAL_CHROMA) => toHex(oklch(l, c, NEUTRAL_HUE));
 const darkL = {
-  canvas: 0.155, // = neutral[1]; also sunken / fieldBg
-  surface: 0.19,
-  raised: 0.225,
-  overlay: 0.265,
-  borderSubtle: 0.21,
-  border: 0.245,
-  borderStrong: 0.3,
-  textMuted: 0.615,
-  textSecondary: 0.695,
-  textPrimary: 0.855,
+  canvas: 0.235, // = neutral[1]; also sunken / fieldBg
+  surface: 0.27,
+  raised: 0.305,
+  overlay: 0.34,
+  borderSubtle: 0.31,
+  border: 0.35,
+  borderStrong: 0.42,
+  textDisabled: 0.5,
+  textMuted: 0.705,
+  textSecondary: 0.78,
+  textPrimary: 0.905,
 };
 const lightL = {
   canvas: 0.965, // = neutral[12]; also sunken
@@ -119,8 +119,8 @@ const lightL = {
   border: 0.85,
   borderStrong: 0.72,
   textDisabled: 0.66,
-  textMuted: 0.555,
-  textSecondary: 0.47,
+  textMuted: 0.54,
+  textSecondary: 0.455,
   textPrimary: 0.32,
 };
 
@@ -139,7 +139,7 @@ export const themeColors: Record<ThemeMode, ThemeColors> = {
     textPrimary: oklchHex(darkL.textPrimary, NEUTRAL_CHROMA * 0.6),
     textSecondary: oklchHex(darkL.textSecondary),
     textMuted: oklchHex(darkL.textMuted),
-    textDisabled: oklchHex(darkL.borderStrong),
+    textDisabled: oklchHex(darkL.textDisabled),
     textInverse: neutral[1],
 
     accent: accent.dark.base,

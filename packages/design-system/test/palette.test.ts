@@ -74,21 +74,26 @@ describe("text ladder contrast (Discord/Obsidian-soft, not a bright-white spike)
     }
   });
 
-  test("every text slot that carries read content clears 4.5:1 on the surface it is actually drawn on", () => {
-    // Not every slot is required to clear 4.5:1 on every surface (`muted`
-    // is used on `canvas` too, where it lands closer to ~4.1:1 since
-    // canvas and surface are close, even shades of each other by design);
-    // the contract is 4.5:1 on `surface`, which is where most text sits.
+  test("every text slot that carries read content clears 4.5:1 on canvas, surface and raised", () => {
+    // Sidebar text sits on canvas, the transcript on surface, headers and
+    // cards on raised. `overlay` is for menus and carries primary text.
     for (const mode of MODES) {
       const c = themeColors[mode];
-      expect(contrast(c.textPrimary, c.surface), `${mode} primary`).toBeGreaterThanOrEqual(4.5);
-      expect(contrast(c.textSecondary, c.surface), `${mode} secondary`).toBeGreaterThanOrEqual(4.5);
-      expect(contrast(c.textMuted, c.surface), `${mode} muted`).toBeGreaterThanOrEqual(4.5);
+      for (const bg of ["canvas", "surface", "raised"] as const) {
+        expect(contrast(c.textPrimary, c[bg]), `${mode} primary on ${bg}`).toBeGreaterThanOrEqual(4.5);
+        expect(contrast(c.textSecondary, c[bg]), `${mode} secondary on ${bg}`).toBeGreaterThanOrEqual(4.5);
+        expect(contrast(c.textMuted, c[bg]), `${mode} muted on ${bg}`).toBeGreaterThanOrEqual(4.5);
+      }
     }
   });
 });
 
 describe("surface ladder", () => {
+  test("dark surfaces are charcoal, not near-black", () => {
+    // Obsidian's darkest is #1e1e1e (~1.23:1 against pure black).
+    expect(contrast(themeColors.dark.canvas, "#000000")).toBeGreaterThanOrEqual(1.2);
+  });
+
   test("dark elevation steps (canvas -> surface -> raised -> overlay) are small, even shades, not hairline-vs-void", () => {
     const c = themeColors.dark;
     const steps = [
@@ -116,14 +121,9 @@ describe("tones on the new surfaces", () => {
 });
 
 describe("role colours on the new surfaces", () => {
-  test("every role fg clears 4.5:1 on dark's surface (the one that moved)", () => {
-    // Light's `surface` is always pure white, unaffected by this change, so
-    // this only exercises the surface that actually moved (dark: L 0.175 ->
-    // 0.19). See the density report for a pre-existing gap: three of six
-    // role foregrounds (investigator, simplifier, qa_browser) already fell
-    // short of 4.5:1 on light's white surface before this change too, and
-    // are unchanged by it — a defect to fix separately, not introduced
-    // here.
+  test("every role fg clears 4.5:1 on dark's surface", () => {
+    // Light is not asserted here: three of six light role foregrounds
+    // (investigator, simplifier, qa_browser) fall short of 4.5:1 on white.
     const surface = themeColors.dark.surface;
     for (const r of AGENT_ROLE_NAMES) {
       const fg = roleColors.dark[r].fg;
