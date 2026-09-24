@@ -106,7 +106,7 @@
 .body {
   overflow-x: auto;
   font-family: var(--ds-font-mono);
-  font-size: var(--ds-text-sm);
+  font-size: var(--ds-text-mono);
   line-height: 20px;
   font-feature-settings: "tnum", "zero";
   tab-size: 4;

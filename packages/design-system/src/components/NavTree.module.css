@@ -1,13 +1,15 @@
 /*
  * The navigation tree. Every row is a sibling (flat tree), indented by
- * --depth. Indentation is 12px per level — deliberately small — because
- * each level has its own row grammar and the indent is only a tie-breaker.
+ * --depth. Indentation is the shared tree-indent token — density-independent,
+ * because each level has its own row grammar and the indent is only a
+ * tie-breaker.
  */
 
 .tree {
-  --indent: 12px;
+  --indent: var(--ds-space-tree-indent);
   display: flex;
   flex-direction: column;
+  gap: var(--ds-space-nav-row-gap);
   min-width: 0;
   padding: 0 var(--ds-space-4);
 }

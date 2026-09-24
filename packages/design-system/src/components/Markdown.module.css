@@ -1,7 +1,7 @@
 /*
  * Markdown. Two rhythms:
- *   .message   a chat turn — 13px / 1.5, 72ch, 6px between blocks
- *   .document  a published artifact — 13px / 1.55, 84ch, 12px between blocks
+ *   .message   a chat turn — prose size / 1.55, ~70ch, 6px between blocks
+ *   .document  a published artifact — prose size / 1.55, ~70ch, 12px between blocks
  * Neither is a blog theme. Headings step down quickly and never exceed
  * text-xl inside a message.
  */
@@ -9,8 +9,8 @@
 .root {
   --md-gap: var(--ds-space-6);
   --md-measure: var(--ds-measure-message);
-  font-size: var(--ds-text-md);
-  line-height: var(--ds-leading-normal);
+  font-size: var(--ds-text-prose);
+  line-height: var(--ds-leading-prose);
   color: var(--ds-color-text-primary);
   max-width: var(--md-measure);
   min-width: 0;
@@ -22,7 +22,6 @@
 .document {
   --md-gap: var(--ds-space-12);
   --md-measure: var(--ds-measure-document);
-  line-height: 1.55;
 }
 
 /* Headings */
@@ -234,7 +233,7 @@
   margin: 0;
   padding: var(--ds-space-8) var(--ds-space-12);
   font-family: var(--ds-font-mono);
-  font-size: var(--ds-text-sm);
+  font-size: var(--ds-text-mono);
   line-height: 18px;
   font-feature-settings: "tnum", "zero";
   color: var(--ds-color-text-primary);
