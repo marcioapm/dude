@@ -1,9 +1,13 @@
 /*
- * The model's reasoning. Deliberately the quietest thing in a transcript:
- * no frame, no surface, no avatar, muted ink, a 24px row. Compare:
- *   ChatMessage   gutter + avatar, primary ink, 13px       what it said
- *   ToolCallCard  framed 28px row on a surface, mono       what it ran
- *   ThinkingBlock frameless 24px row, muted, brain glyph   what it thought
+ * The model's reasoning. The quietest thing in a transcript: no surface,
+ * no avatar, a 28px row in secondary/muted ink. Compare:
+ *   ChatMessage   avatar + name, primary ink, 16px         what it said
+ *   ToolCallCard  filled 32px row, mono name               what it ran
+ *   ThinkingBlock unfilled 28px row, brain glyph, 13px     what it thought
+ *
+ * The glyph's left edge sits on the message text column; the hover wash
+ * overhangs it by 6px to the left so the wash has an inset without moving
+ * the content off the column.
  */
 
 .root {
@@ -17,8 +21,9 @@
   align-items: center;
   gap: var(--ds-space-8);
   min-height: var(--ds-size-row-compact);
+  margin-left: calc(var(--ds-space-6) * -1);
   padding: 0 var(--ds-space-8) 0 var(--ds-space-6);
-  font-size: var(--ds-text-xs);
+  font-size: var(--ds-text-sm);
   color: var(--ds-color-text-muted);
   border-radius: var(--ds-radius-md);
   outline: none;
@@ -37,7 +42,7 @@
   place-items: center;
   width: 16px;
   height: 16px;
-  color: var(--ds-color-text-muted);
+  color: var(--ds-color-text-secondary);
   flex-shrink: 0;
 }
 .glyph > * {
@@ -54,7 +59,7 @@
 
 .label {
   font-weight: var(--ds-weight-medium);
-  color: var(--ds-color-text-muted);
+  color: var(--ds-color-text-secondary);
   white-space: nowrap;
   flex-shrink: 0;
 }
@@ -78,7 +83,7 @@
 .duration {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  color: var(--ds-color-text-disabled);
+  color: var(--ds-color-text-muted);
   flex-shrink: 0;
 }
 .live .duration {
@@ -89,7 +94,7 @@
 }
 
 .chevron {
-  color: var(--ds-color-text-disabled);
+  color: var(--ds-color-text-muted);
   flex-shrink: 0;
   transition: transform var(--ds-duration-fast) var(--ds-ease-standard);
 }
@@ -103,7 +108,7 @@
 /* Open: the text hangs off a dotted rail under the glyph, in secondary ink
    and one step smaller than a message, so it never competes with one. */
 .body {
-  margin: 0 var(--ds-space-8) var(--ds-space-6) 13px;
+  margin: 0 var(--ds-space-8) var(--ds-space-6) 7px;
   padding: var(--ds-space-2) 0 var(--ds-space-2) var(--ds-space-12);
   border-left: 1px dotted var(--ds-color-border-strong);
   animation: global(ds-fade-in) var(--ds-duration-fast) var(--ds-ease-enter);

@@ -37,6 +37,7 @@
   --ds-text-2xs: 11px;
   --ds-text-xs: 12px;
   --ds-text-sm: 13px;
+  --ds-text-nav: 14px;
   --ds-text-md: 15px;
   --ds-text-lg: 16px;
   --ds-text-xl: 20px;
@@ -118,6 +119,7 @@
   --ds-color-border-subtle: #2f3032;
   --ds-color-border: #393b3c;
   --ds-color-border-strong: #4c4d4f;
+  --ds-color-text-strong: #f1f2f3;
   --ds-color-text-primary: #dee0e1;
   --ds-color-text-secondary: #b6b7b9;
   --ds-color-text-muted: #9ea0a2;
@@ -133,7 +135,9 @@
   --ds-color-selection: rgba(39, 121, 188, 0.35);
   --ds-color-hover-wash: rgba(255, 255, 255, 0.05);
   --ds-color-active-wash: rgba(255, 255, 255, 0.09);
+  --ds-color-row-hover: rgba(255, 255, 255, 0.03);
   --ds-color-field-bg: #1d1e20;
+  --ds-color-field-raised: #2e2f31;
   --ds-color-secondary-hover: #37383a;
   --ds-color-secondary-active: #252728;
   --ds-color-scrim: rgba(0, 0, 0, 0.55);
@@ -245,6 +249,7 @@
   --ds-color-border-subtle: #e0e1e3;
   --ds-color-border: #ccced0;
   --ds-color-border-strong: #a3a5a7;
+  --ds-color-text-strong: #101213;
   --ds-color-text-primary: #313335;
   --ds-color-text-secondary: #555758;
   --ds-color-text-muted: #6d6f71;
@@ -260,7 +265,9 @@
   --ds-color-selection: rgba(22, 109, 175, 0.22);
   --ds-color-hover-wash: rgba(49, 51, 53, 0.045);
   --ds-color-active-wash: rgba(49, 51, 53, 0.08);
+  --ds-color-row-hover: rgba(49, 51, 53, 0.03);
   --ds-color-field-bg: #ffffff;
+  --ds-color-field-raised: #f7f8fa;
   --ds-color-secondary-hover: #f2f3f5;
   --ds-color-secondary-active: #e0e1e3;
   --ds-color-scrim: rgba(49, 51, 53, 0.4);
@@ -373,6 +380,7 @@
     --ds-color-border-subtle: #e0e1e3;
     --ds-color-border: #ccced0;
     --ds-color-border-strong: #a3a5a7;
+    --ds-color-text-strong: #101213;
     --ds-color-text-primary: #313335;
     --ds-color-text-secondary: #555758;
     --ds-color-text-muted: #6d6f71;
@@ -388,7 +396,9 @@
     --ds-color-selection: rgba(22, 109, 175, 0.22);
     --ds-color-hover-wash: rgba(49, 51, 53, 0.045);
     --ds-color-active-wash: rgba(49, 51, 53, 0.08);
+    --ds-color-row-hover: rgba(49, 51, 53, 0.03);
     --ds-color-field-bg: #ffffff;
+    --ds-color-field-raised: #f7f8fa;
     --ds-color-secondary-hover: #f2f3f5;
     --ds-color-secondary-active: #e0e1e3;
     --ds-color-scrim: rgba(49, 51, 53, 0.4);

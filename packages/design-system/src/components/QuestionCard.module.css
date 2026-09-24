@@ -1,82 +1,67 @@
 /*
- * An agent's question to a person. The same gutter + column grid as a
- * ChatMessage so it aligns down the page, but framed — and while it waits,
- * the one loud turn in the transcript:
+ * An agent's question to a person, laid out on the ChatMessage grid (same
+ * gutter, avatar, 72px text column). No box:
  *
- *   waiting    attention wash, 2px attention bar, the needs-you badge with
- *              its ring, the avatar live, a ticking wait clock in attention
- *              ink. The tree row and the board card use the same wash and
- *              bar for the same state, so it is one signal everywhere.
- *   answered   a hairline, no wash, a quiet "Answered · after 4m 12s" mark.
+ *   waiting    the highlight pattern — a full-width attention tint (~9%)
+ *              and a 2px attention bar at the left edge — plus the needs-you
+ *              badge with its ring, the avatar live, and a ticking wait
+ *              clock in attention ink. The only loud turn a transcript has.
+ *   answered   a plain row with a quiet "Answered · after 4m 12s" tag.
  *              History. The answer follows as its own turn.
- *   dismissed  the same hairline, "Not answered". Never rings.
+ *   dismissed  the same plain row, "Not answered". Never rings.
  */
 
 .root {
-  --qc-frame: var(--ds-color-border-subtle);
-  --qc-bar: var(--ds-color-border-strong);
+  --qc-bar: transparent;
   --qc-wash: transparent;
-  --qc-chip-border: var(--ds-color-border-subtle);
-  --qc-chip-bg: transparent;
+  --qc-chip-bg: var(--ds-color-active-wash);
+  position: relative;
   display: grid;
   grid-template-columns: var(--ds-size-avatar-chat) minmax(0, 1fr);
-  gap: var(--ds-space-chat-avatar-gap);
-  padding: var(--ds-space-chat-gap) var(--ds-space-chat-pad-x) var(--ds-space-4);
+  column-gap: var(--ds-space-chat-avatar-gap);
+  margin-top: calc(var(--ds-space-chat-gap) - var(--ds-space-2));
+  padding: var(--ds-space-2) var(--ds-space-chat-pad-x);
   min-width: 0;
+  background: var(--qc-wash);
+  box-shadow: inset 2px 0 0 var(--qc-bar);
+  font-size: var(--ds-text-prose);
+  line-height: var(--ds-leading-chat);
   scroll-margin-top: var(--ds-space-32);
+  transition: background-color var(--ds-duration-slow) var(--ds-ease-standard);
+}
+.root:not(.waiting):hover {
+  background: var(--ds-color-row-hover);
 }
 .new {
   animation: global(ds-flash) var(--ds-duration-deliberate) var(--ds-ease-exit) 1;
 }
 .waiting {
-  --qc-frame: var(--ds-tone-attention-border);
   --qc-bar: var(--ds-tone-attention-solid);
-  --qc-wash: color-mix(in srgb, var(--ds-tone-attention-bg) 55%, var(--ds-color-surface));
-  --qc-chip-border: var(--ds-tone-attention-border);
-  --qc-chip-bg: var(--ds-color-surface);
+  --qc-wash: color-mix(in srgb, var(--ds-tone-attention-solid) 9%, transparent);
+  --qc-chip-bg: color-mix(in srgb, var(--ds-tone-attention-solid) 14%, transparent);
+  padding-top: var(--ds-space-8);
+  padding-bottom: var(--ds-space-8);
 }
 
 .gutter {
-  padding-top: 1px;
+  padding-top: var(--ds-space-2);
 }
 .main {
-  position: relative;
   display: flex;
   flex-direction: column;
-  gap: var(--ds-space-4);
   min-width: 0;
-  padding: var(--ds-space-6) var(--ds-space-12) var(--ds-space-8);
-  border: 1px solid var(--qc-frame);
-  border-radius: var(--ds-radius-md);
-  background: var(--qc-wash);
-  overflow: hidden;
-  transition:
-    border-color var(--ds-duration-slow) var(--ds-ease-standard),
-    background-color var(--ds-duration-slow) var(--ds-ease-standard);
-}
-/* The bar: a pseudo-element rather than a thicker left border, so the
-   frame's radius and the bar's stay independent (as on the board card). */
-.main::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  background: var(--qc-bar);
 }
 
 .header {
   display: flex;
   align-items: baseline;
-  gap: var(--ds-space-8);
-  min-height: 18px;
-  font-size: var(--ds-text-sm);
-  line-height: 18px;
+  flex-wrap: wrap;
+  column-gap: var(--ds-space-8);
+  min-height: calc(var(--ds-text-prose) * var(--ds-leading-chat));
 }
 .name {
   font-weight: var(--ds-weight-medium);
-  color: var(--ds-color-text-primary);
+  color: var(--ds-color-text-strong);
 }
 .roleName {
   font-size: var(--ds-text-xs);
@@ -96,15 +81,16 @@
 .tag {
   display: inline-flex;
   align-items: center;
+  align-self: center;
   gap: 3px;
-  height: 16px;
+  height: var(--ds-size-badge-sm);
   padding: 0 5px 0 4px;
   border-radius: var(--ds-radius-sm);
   font-size: var(--ds-text-2xs);
   font-weight: var(--ds-weight-medium);
   letter-spacing: var(--ds-tracking-caps);
+  line-height: 1;
   text-transform: uppercase;
-  align-self: center;
 }
 .tagAnswered {
   color: var(--ds-tone-success-fg);
@@ -134,15 +120,10 @@
 }
 
 .time {
-  margin-left: auto;
-  font-family: var(--ds-font-mono);
-  font-feature-settings: "tnum", "zero";
   font-size: var(--ds-text-xs);
-  color: var(--ds-color-text-disabled);
-  white-space: nowrap;
-}
-.root:hover .time {
+  font-variant-numeric: tabular-nums;
   color: var(--ds-color-text-muted);
+  white-space: nowrap;
 }
 
 .body {
@@ -153,13 +134,13 @@
   color: var(--ds-color-text-secondary);
 }
 
-/* The offered choices. Chips, numbered so "option 2" is a thing a person
-   can say; buttons only with `onChoose`. */
+/* The offered choices: filled chips, numbered so "option 2" is a thing a
+   person can say; buttons only with `onChoose`. */
 .options {
   display: flex;
   flex-wrap: wrap;
   gap: var(--ds-space-6);
-  margin: var(--ds-space-4) 0 0;
+  margin: var(--ds-space-8) 0 0;
   padding: 0;
   list-style: none;
 }
@@ -171,12 +152,13 @@
   align-items: center;
   gap: var(--ds-space-6);
   min-height: var(--ds-size-control-sm);
-  padding: 0 var(--ds-space-8) 0 var(--ds-space-6);
-  border: 1px solid var(--qc-chip-border);
+  padding: 0 var(--ds-space-12) 0 var(--ds-space-8);
+  border: 0;
   border-radius: var(--ds-radius-md);
   background: var(--qc-chip-bg);
   color: var(--ds-color-text-primary);
   font-size: var(--ds-text-sm);
+  line-height: 1.2;
   font-family: inherit;
   text-align: left;
 }
@@ -194,8 +176,7 @@
   cursor: pointer;
 }
 .optionButton:hover {
-  border-color: var(--ds-tone-attention-fg);
-  background: var(--ds-color-raised);
+  background: color-mix(in srgb, var(--ds-tone-attention-solid) 24%, transparent);
 }
 .optionButton:focus-visible {
   outline: none;
@@ -203,7 +184,8 @@
 }
 
 .hint {
+  margin-top: var(--ds-space-6);
   font-size: var(--ds-text-xs);
+  line-height: var(--ds-leading-snug);
   color: var(--ds-color-text-muted);
-  font-style: italic;
 }

@@ -160,3 +160,31 @@ describe("accent", () => {
     }
   });
 });
+
+describe("filled tone buttons and emphasis ink", () => {
+  // Attention fills the Answer button, danger the destructive button; these
+  // carry text labels. Success/info solids fill glyph-only marks.
+  test("labelled tone buttons clear 4.5:1 for their on-solid label", () => {
+    for (const mode of MODES) {
+      for (const t of ["attention", "danger"] as const) {
+        const tone = tones[mode][t];
+        expect(contrast(tone.onSolid, tone.solid), `${mode} ${t} on-solid`).toBeGreaterThanOrEqual(4.5);
+      }
+      expect(contrast(themeColors[mode].onAccent, themeColors[mode].accent), `${mode} primary`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  test("muted metadata clears 4.5:1 on the header chrome", () => {
+    for (const mode of MODES) {
+      const c = themeColors[mode];
+      expect(contrast(c.textMuted, c.chrome), `${mode} muted-on-chrome`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  test("strong text (names, headings) sits a step past primary", () => {
+    for (const mode of MODES) {
+      const c = themeColors[mode];
+      expect(contrast(c.textStrong, c.surface), `${mode} strong`).toBeGreaterThan(contrast(c.textPrimary, c.surface));
+    }
+  });
+});

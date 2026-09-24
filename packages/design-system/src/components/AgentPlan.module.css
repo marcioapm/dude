@@ -3,14 +3,14 @@
   flex-direction: column;
   min-width: 0;
   border-radius: var(--ds-radius-lg);
-  background: var(--ds-color-raised);
+  background: var(--plan-bg, var(--ds-color-raised));
   overflow: hidden;
 }
 .sticky {
   position: sticky;
   top: 0;
   z-index: var(--ds-z-sticky);
-  box-shadow: var(--ds-shadow-1);
+  box-shadow: var(--plan-shadow, var(--ds-shadow-1));
 }
 .flat {
   border: 0;
@@ -31,6 +31,7 @@
 }
 .header[role="button"]:hover {
   background: var(--ds-color-hover-wash);
+  border-radius: var(--ds-radius-md);
 }
 .header:focus-visible {
   box-shadow: inset 0 0 0 2px var(--ds-color-focus-ring);

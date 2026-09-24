@@ -45,6 +45,8 @@ export interface ThemeColors {
   readonly borderStrong: string;
 
   // Text
+  /** Author names and headings: one step past primary, as Discord sets names. */
+  readonly textStrong: string;
   readonly textPrimary: string;
   readonly textSecondary: string;
   readonly textMuted: string;
@@ -62,11 +64,15 @@ export interface ThemeColors {
   readonly selection: string;
   readonly hoverWash: string;
   readonly activeWash: string;
+  /** Full-width wash under a hovered transcript row: ~3% ink, quieter than a control's hover. */
+  readonly rowHover: string;
 
   // Component-level surfaces that differ in *kind* between modes (dark
   // fields are sunken, light fields are white) — tokens so CSS never
   // needs to know which mode it is in.
   readonly fieldBg: string;
+  /** The composer: the one raised field, a step brighter (dark) or tinted (light) than the transcript. */
+  readonly fieldRaised: string;
   readonly secondaryHover: string;
   readonly secondaryActive: string;
   readonly scrim: string;
@@ -114,6 +120,7 @@ const darkL = {
   textMuted: 0.705,
   textSecondary: 0.78,
   textPrimary: 0.905,
+  textStrong: 0.96,
 };
 const lightL = {
   canvas: 0.965, // = neutral[12]; also sunken
@@ -125,6 +132,7 @@ const lightL = {
   textMuted: 0.54,
   textSecondary: 0.455,
   textPrimary: 0.32,
+  textStrong: 0.18,
 };
 
 export const themeColors: Record<ThemeMode, ThemeColors> = {
@@ -140,6 +148,7 @@ export const themeColors: Record<ThemeMode, ThemeColors> = {
     border: oklchHex(darkL.border),
     borderStrong: oklchHex(darkL.borderStrong),
 
+    textStrong: oklchHex(darkL.textStrong, NEUTRAL_CHROMA * 0.4),
     textPrimary: oklchHex(darkL.textPrimary, NEUTRAL_CHROMA * 0.6),
     textSecondary: oklchHex(darkL.textSecondary),
     textMuted: oklchHex(darkL.textMuted),
@@ -156,8 +165,10 @@ export const themeColors: Record<ThemeMode, ThemeColors> = {
     selection: alpha(accent.dark.base, 0.35),
     hoverWash: alpha(white, 0.05),
     activeWash: alpha(white, 0.09),
+    rowHover: alpha(white, 0.03),
 
     fieldBg: neutral[1],
+    fieldRaised: oklchHex(darkL.raised),
     secondaryHover: oklchHex(darkL.overlay),
     secondaryActive: oklchHex(darkL.surface),
     scrim: alpha("#000000", 0.55),
@@ -179,6 +190,7 @@ export const themeColors: Record<ThemeMode, ThemeColors> = {
     border: oklchHex(lightL.border),
     borderStrong: oklchHex(lightL.borderStrong),
 
+    textStrong: oklchHex(lightL.textStrong),
     textPrimary: oklchHex(lightL.textPrimary),
     textSecondary: oklchHex(lightL.textSecondary),
     textMuted: oklchHex(lightL.textMuted),
@@ -195,8 +207,10 @@ export const themeColors: Record<ThemeMode, ThemeColors> = {
     selection: alpha(accent.light.base, 0.22),
     hoverWash: alpha(oklchHex(lightL.textPrimary), 0.045),
     activeWash: alpha(oklchHex(lightL.textPrimary), 0.08),
+    rowHover: alpha(oklchHex(lightL.textPrimary), 0.03),
 
     fieldBg: white,
+    fieldRaised: oklchHex(lightL.chrome, NEUTRAL_CHROMA * 0.6),
     secondaryHover: neutral[12],
     secondaryActive: oklchHex(lightL.borderSubtle, NEUTRAL_CHROMA * 0.6),
     scrim: alpha(oklchHex(lightL.textPrimary), 0.4),

@@ -59,10 +59,12 @@ const MODE_PLACEHOLDER: Record<ComposerMode, string> = {
 /**
  * The human's input. Two modes are distinct on purpose:
  *
- *   answer  the session is blocked on a question. The question is quoted
- *           above the field in attention tone, the frame is attention-
- *           tinted, the button says "Answer", and choices (if any) are
- *           one click away. Submitting unblocks the session.
+ *   answer  the session is blocked on a question. The transcript shows the
+ *           question in full (`QuestionCard`); the composer says only
+ *           which one it answers, on one truncated line, and puts the
+ *           offered choices as one-click chips beside the button. The
+ *           button says "Answer" in the attention tone. Submitting
+ *           unblocks the session.
  *
  *   steer   the session is running. The frame is accent-tinted, a line
  *           under the field says plainly that this interrupts the current
@@ -101,12 +103,12 @@ export function ChatComposer({
     onValueChange?.(v);
   };
 
-  // Autosize: 1–8 rows.
+  // Autosize: 1–8 rows of 22px plus 20px padding.
   useEffect(() => {
     const el = areaRef.current;
     if (!el) return;
     el.style.height = "0px";
-    el.style.height = `${Math.min(8 * 20 + 12, Math.max(20 + 12, el.scrollHeight))}px`;
+    el.style.height = `${Math.min(8 * 22 + 20, Math.max(22 + 20, el.scrollHeight))}px`;
   }, [text]);
 
   const canSubmit = !disabled && !busy && text.trim().length > 0;
@@ -135,6 +137,7 @@ export function ChatComposer({
   };
 
   const isDisabled = disabled === true;
+  const answerOptions = mode === "answer" && question?.options ? question.options : [];
 
   return (
     <form
@@ -147,23 +150,10 @@ export function ChatComposer({
       {...rest}
     >
       {mode === "answer" && question ? (
-        <div className={styles["question"]} role="region" aria-label="Pending question">
-          <span className={styles["questionIcon"]} aria-hidden>
-            <Icon name="hand" size={14} />
-          </span>
-          <div className={styles["questionMain"]}>
-            <div className={styles["questionLabel"]}>{question.askedBy ? `${question.askedBy} asks` : "The agent asks"} — blocked until you answer</div>
-            <div className={styles["questionText"]}>{question.text}</div>
-            {question.options && question.options.length > 0 ? (
-              <div className={styles["options"]}>
-                {question.options.map((o) => (
-                  <button key={o} type="button" className={styles["option"]} disabled={isDisabled || busy} onClick={() => void submit(o)}>
-                    {o}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
+        <div className={styles["question"]} role="note" aria-label="Pending question" title={question.text}>
+          <Icon name="hand" size={14} className={styles["questionIcon"]} />
+          <span className={styles["questionLabel"]}>Answering {question.askedBy ?? "the agent"}:</span>
+          <span className={styles["questionText"]}>{question.text}</span>
         </div>
       ) : null}
 
@@ -188,7 +178,16 @@ export function ChatComposer({
 
       <div className={styles["actions"]}>
         {leading}
-        <span id={`${id}-hint`} className={cx(styles["hint"], mode === "steer" && styles["hintSteer"])}>
+        {answerOptions.length > 0 ? (
+          <div className={styles["options"]} role="group" aria-label="Answer with one of">
+            {answerOptions.map((o) => (
+              <button key={o} type="button" className={styles["option"]} disabled={isDisabled || busy} onClick={() => void submit(o)} title={o}>
+                <span className="ds-cap">{o}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+        <span id={`${id}-hint`} className={cx(styles["hint"], mode === "steer" && styles["hintSteer"], answerOptions.length > 0 && "ds-sr-only")}>
           {isDisabled ? null : mode === "steer" ? (
             <>
               <Icon name="zap" size={11} /> Interrupts the current turn. <kbd className={styles["kbd"]}>⌘</kbd>

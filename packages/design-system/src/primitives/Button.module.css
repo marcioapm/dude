@@ -43,6 +43,14 @@
   opacity: 0.45;
   cursor: not-allowed;
 }
+/* A filled button that is not ready yet: a neutral fill with legible muted
+   ink rather than the tone faded to 45%, which reads as a broken colour. */
+.root.filled:disabled {
+  --btn-bg: var(--ds-color-active-wash);
+  --btn-fg: var(--ds-color-text-muted);
+  --btn-border: transparent;
+  opacity: 1;
+}
 
 /* Sizes */
 .sm {
