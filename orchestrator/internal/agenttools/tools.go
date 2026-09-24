@@ -17,7 +17,8 @@ import (
 var tools = []tool{
 	{name: "list_work", add: func(s *Server, srv *mcp.Server, c Caller) {
 		bind(s, srv, c, &mcp.Tool{Name: "list_work", Description: "The project's epics and work items, with their keys " +
-			"(like TEXT-12), status and who asked for them. Use it before creating work, to find what already exists."}, listWork)
+			"(like TEXT-12), status and who asked for them — optionally only those mentioning some text. Use it before " +
+			"creating work, to find what already exists."}, listWork)
 	}},
 	{name: "create_work_item", roles: []string{"implementer", "investigator", "orchestrator"}, add: func(s *Server, srv *mcp.Server, c Caller) {
 		bind(s, srv, c, &mcp.Tool{Name: "create_work_item", Description: "Record a piece of work you found that is " +
@@ -28,7 +29,9 @@ var tools = []tool{
 
 // ---- list_work --------------------------------------------------------------
 
-type listWorkIn struct{}
+type listWorkIn struct {
+	Text string `json:"text,omitempty" jsonschema:"only work items whose title or goal mention this (case-insensitive); empty lists everything"`
+}
 
 type workItemOut struct {
 	Key    string `json:"key"`
@@ -46,7 +49,7 @@ type listWorkOut struct {
 	WorkItems []workItemOut `json:"workItems"`
 }
 
-func listWork(ctx context.Context, tx pgx.Tx, c Caller, _ listWorkIn) (listWorkOut, error) {
+func listWork(ctx context.Context, tx pgx.Tx, c Caller, in listWorkIn) (listWorkOut, error) {
 	out := listWorkOut{Epics: []string{}, WorkItems: []workItemOut{}}
 	rows, err := tx.Query(ctx, `SELECT title FROM epics WHERE project_id = $1 ORDER BY position, created_at`, c.ProjectID)
 	if err != nil {
@@ -61,7 +64,9 @@ func listWork(ctx context.Context, tx pgx.Tx, c Caller, _ listWorkIn) (listWorkO
 		                 WHERE r.id = w.created_by_run_id), 'person'),
 		       w.id = $2
 		FROM work_items w JOIN projects p ON p.id = w.project_id LEFT JOIN epics e ON e.id = w.epic_id
-		WHERE w.project_id = $1 ORDER BY w.number`, c.ProjectID, c.WorkItemID)
+		WHERE w.project_id = $1
+		  AND ($3 = '' OR w.title ILIKE '%' || $3 || '%' OR w.goal ILIKE '%' || $3 || '%')
+		ORDER BY w.number`, c.ProjectID, c.WorkItemID, strings.TrimSpace(in.Text))
 	if err != nil {
 		return out, err
 	}

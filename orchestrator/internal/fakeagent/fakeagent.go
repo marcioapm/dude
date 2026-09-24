@@ -32,6 +32,11 @@ const ModelPrefix = "fake/"
 // HangModel keeps its agent busy until stopped.
 const HangModel = "fake/hang"
 
+// ToolsModel's implementer calls dude's list_work tool (through lux-fake's
+// MCP client) before its usual work, so a real lux's handling of dude's
+// tools is exercised.
+const ToolsModel = "fake/tools"
+
 // AskModel's implementer stops on a question first, and does its work in
 // the turn the answer starts.
 const AskModel = "fake/ask"
@@ -150,6 +155,9 @@ func Script(phase, model, runID string) string {
 		return "fail " + AskModel + " is only played by the fake lux"
 	}
 	var b strings.Builder
+	if model == ToolsModel && phase == "implement" {
+		b.WriteString("mcp-call dude list_work \n")
+	}
 	for path, line := range step.Commit {
 		// In the workdir: the one repository. (Work across several needs
 		// lux-fake's `cd`, which is coming; the contract suite uses one.)
