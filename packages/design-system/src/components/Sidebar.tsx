@@ -16,7 +16,7 @@ import {
   type NavRef,
   type NavRow,
 } from "../util/navModel.ts";
-import { HumanAvatarStack } from "./HumanAvatar.tsx";
+import { HumanAvatar } from "./HumanAvatar.tsx";
 import { NavTree, type NavRowMenuControls } from "./NavTree.tsx";
 import type { RowMenuItem } from "../primitives/RowMenu.tsx";
 import { StatusBadge } from "./StatusBadge.tsx";
@@ -284,7 +284,12 @@ export function AttentionList({ items, selected, onSelect, max = 5 }: AttentionL
                       </span>
                     </span>
                   </span>
-                  {it.workItem.people && it.workItem.people.length > 0 ? <HumanAvatarStack people={it.workItem.people} size="xs" max={2} /> : null}
+                  {it.workItem.people && it.workItem.people.length > 0 ? (
+                    <span className={styles["attentionPeople"]} title={it.workItem.people.map((p) => p.name).join(", ")}>
+                      <HumanAvatar person={it.workItem.people[0]!} size="xs" aria-hidden />
+                      {it.workItem.people.length > 1 ? <span className={styles["attentionPeopleMore"]}>+{it.workItem.people.length - 1}</span> : null}
+                    </span>
+                  ) : null}
                 </button>
               </li>
             );

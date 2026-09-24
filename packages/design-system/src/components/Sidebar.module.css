@@ -13,7 +13,7 @@
   flex-shrink: 0;
   background: var(--ds-color-canvas);
   color: var(--ds-color-text-primary);
-  font-size: var(--ds-text-sm);
+  font-size: var(--ds-text-nav);
   container-type: inline-size;
 }
 
@@ -48,8 +48,8 @@
   height: var(--ds-size-control-sm);
   margin: var(--ds-space-8) var(--ds-space-8) 0;
   padding: 0 var(--ds-space-6) 0 var(--ds-space-8);
-  background: var(--ds-color-field-bg);
-  border: 1px solid var(--ds-color-border);
+  background: var(--ds-color-active-wash);
+  border: 1px solid transparent;
   border-radius: var(--ds-radius-md);
   color: var(--ds-color-text-primary);
   transition:
@@ -57,7 +57,7 @@
     box-shadow var(--ds-duration-fast) var(--ds-ease-standard);
 }
 .search:hover {
-  border-color: var(--ds-color-border-strong);
+  border-color: var(--ds-color-border-subtle);
 }
 .search:focus-within {
   border-color: var(--ds-color-accent);
@@ -75,7 +75,7 @@
   border: 0;
   background: none;
   outline: none;
-  font-size: var(--ds-text-sm);
+  font-size: var(--ds-text-nav);
   color: inherit;
 }
 .searchInput::placeholder {
@@ -89,7 +89,7 @@
   font-size: var(--ds-text-2xs);
   line-height: 1;
   padding: 2px 4px;
-  border: 1px solid var(--ds-color-border);
+  border: 1px solid var(--ds-color-border-subtle);
   border-radius: var(--ds-radius-xs);
   color: var(--ds-color-text-muted);
 }
@@ -119,7 +119,7 @@
 .chip {
   --chip-fg: var(--ds-color-text-secondary);
   --chip-bg: transparent;
-  --chip-border: var(--ds-color-border-subtle);
+  --chip-border: transparent;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -138,8 +138,7 @@
   flex: 0 1 auto;
 }
 .chip:hover:not(:disabled) {
-  background: var(--ds-color-hover-wash);
-  --chip-border: var(--ds-color-border);
+  --chip-bg: var(--ds-color-hover-wash);
 }
 .chip:disabled {
   opacity: 0.45;
@@ -156,7 +155,7 @@
   margin-left: 1px;
 }
 .chipOn {
-  --chip-bg: var(--ds-color-accent-subtle);
+  --chip-bg: var(--ds-color-active-wash);
   --chip-border: transparent;
   --chip-fg: var(--ds-color-text-primary);
 }
@@ -166,7 +165,7 @@
 /* The needs-you chip is the one loud chip when it has a count. */
 .chip-needs_you:not(.chipZero) {
   --chip-fg: var(--ds-tone-attention-fg);
-  --chip-border: var(--ds-tone-attention-border);
+  --chip-bg: color-mix(in srgb, var(--ds-tone-attention-solid) 10%, transparent);
 }
 .chip-needs_you.chipOn {
   --chip-bg: var(--ds-tone-attention-bg);
@@ -175,22 +174,29 @@
 .chip-failed:not(.chipZero) {
   --chip-fg: var(--ds-tone-danger-fg);
 }
-/* Below 296px the labels go (at 11px they need ~290px); the marks
-   (shape + tone) and counts remain, and the label lives on in the title. */
-@container (max-width: 296px) {
+/* Four labelled chips need ~340px. Below that only the needs-you chip
+   keeps its label; the others show mark (shape + tone) and count, and the
+   label lives on in the title. Below 240px every label goes. */
+@container (max-width: 340px) {
+  .chip:not(.chip-needs_you) .chipLabel {
+    display: none;
+  }
+}
+@container (max-width: 240px) {
   .chipLabel {
     display: none;
   }
 }
 
-/* Pinned needs-you section. Tinted background on the whole block so the
-   section reads as one thing; rows inside are plain. */
+/* Pinned needs-you section: the highlight pattern (attention tint and a
+   2px attention bar) on one rounded block, no frame. Rows inside are
+   two-line, 6px apart, with room between the title and the ask. */
 .attention {
-  margin: 0 var(--ds-space-8) var(--ds-space-6);
-  border: 1px solid var(--ds-tone-attention-border);
-  border-radius: var(--ds-radius-md);
-  background: color-mix(in srgb, var(--ds-tone-attention-bg) 40%, transparent);
-  overflow: hidden;
+  margin: var(--ds-space-4) var(--ds-space-8) var(--ds-space-8);
+  padding: var(--ds-space-4) var(--ds-space-4) var(--ds-space-6);
+  border-radius: var(--ds-radius-lg);
+  background: color-mix(in srgb, var(--ds-tone-attention-solid) 8%, transparent);
+  box-shadow: inset 2px 0 0 var(--ds-tone-attention-solid);
   flex-shrink: 0;
 }
 .attentionHead {
@@ -201,12 +207,13 @@
   height: var(--ds-size-row-compact);
   padding: 0 var(--ds-space-8) 0 var(--ds-space-6);
   border: 0;
+  border-radius: var(--ds-radius-md);
   background: none;
   color: var(--ds-tone-attention-fg);
   text-align: left;
 }
 .attentionHead:hover {
-  background: color-mix(in srgb, var(--ds-tone-attention-bg) 60%, transparent);
+  background: color-mix(in srgb, var(--ds-tone-attention-solid) 10%, transparent);
 }
 .attentionChevron {
   color: var(--ds-tone-attention-fg);
@@ -219,10 +226,8 @@
   flex-shrink: 0;
 }
 .attentionTitle {
-  font-size: var(--ds-text-xs);
+  font-size: var(--ds-text-nav);
   font-weight: var(--ds-weight-semibold);
-  letter-spacing: var(--ds-tracking-wide);
-  text-transform: uppercase;
   flex: 1;
 }
 .attentionCount {
@@ -232,36 +237,37 @@
 }
 .attentionList {
   list-style: none;
-  padding: 0 var(--ds-space-4) var(--ds-space-4);
+  padding: var(--ds-space-2) 0 0;
   margin: 0;
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: var(--ds-space-2);
 }
 .attentionRow {
   display: flex;
   align-items: center;
   gap: var(--ds-space-8);
   width: 100%;
-  padding: 3px var(--ds-space-6) 3px var(--ds-space-8);
+  padding: var(--ds-space-6) var(--ds-space-8);
   border: 0;
-  border-radius: var(--ds-radius-sm);
+  border-radius: var(--ds-radius-md);
   background: none;
   color: var(--ds-color-text-primary);
   text-align: left;
   min-width: 0;
+  line-height: var(--ds-leading-snug);
 }
 .attentionRow:hover {
   background: var(--ds-color-hover-wash);
 }
 .attentionRowSelected,
 .attentionRowSelected:hover {
-  background: var(--ds-color-accent-subtle);
+  background: var(--ds-color-active-wash);
 }
 .attentionMain {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 3px;
   min-width: 0;
   flex: 1;
 }
@@ -270,7 +276,7 @@
   align-items: baseline;
   gap: var(--ds-space-6);
   min-width: 0;
-  font-size: var(--ds-text-sm);
+  font-size: var(--ds-text-nav);
 }
 .attentionKey {
   font-family: var(--ds-font-mono);
@@ -280,6 +286,7 @@
 }
 .attentionWiTitle {
   font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-strong);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -309,14 +316,24 @@
   overflow: hidden;
   text-overflow: ellipsis;
   flex: 0 1 auto;
-  max-width: 45%;
+  max-width: 40%;
 }
-.attentionWhere::before {
-  content: "· ";
+.attentionPeople {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  align-self: flex-start;
+  margin-top: 1px;
+  flex-shrink: 0;
+}
+.attentionPeopleMore {
+  font-size: var(--ds-text-2xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--ds-color-text-muted);
 }
 .attentionMore {
-  padding: 2px var(--ds-space-8) 2px;
-  font-size: var(--ds-text-2xs);
+  padding: var(--ds-space-4) var(--ds-space-8) 0;
+  font-size: var(--ds-text-xs);
   color: var(--ds-color-text-muted);
 }
 
@@ -344,7 +361,6 @@
   gap: var(--ds-space-8);
   min-height: var(--ds-size-control-lg);
   padding: 0 var(--ds-space-12);
-  border-top: 1px solid var(--ds-color-border-subtle);
   font-size: var(--ds-text-xs);
   color: var(--ds-color-text-secondary);
 }
