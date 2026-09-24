@@ -28,6 +28,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 	"github.com/marciomartins/dude/orchestrator/internal/api"
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
@@ -138,11 +139,28 @@ func run(log *slog.Logger) error {
 			}}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	// dude's tools for agents, on a listener of their own: agents reach it
+	// from lux's hosts (DUDE_TOOLS_URL is how they see it), so it is not the
+	// internal API's loopback.
+	var tools *http.Server
+	if addr := os.Getenv("DUDE_TOOLS_LISTEN"); addr != "" {
+		tools = &http.Server{Addr: addr, Handler: (&agenttools.Server{DB: database, Log: log}).Handler(),
+			ReadHeaderTimeout: 10 * time.Second}
+		go func() {
+			log.Info("agent tools listening", "addr", addr, "url", agent.ToolsURL)
+			if err := tools.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error("agent tools stopped", "error", err)
+			}
+		}()
+	}
 	go func() {
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutdown)
+		if tools != nil {
+			_ = tools.Shutdown(shutdown)
+		}
 	}()
 	log.Info("orchestrator listening", "addr", srv.Addr)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

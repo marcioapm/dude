@@ -24,6 +24,8 @@ const (
 	Directive      = "dir"
 	Question       = "qst"
 	Artifact       = "art"
+	WorkItem       = "wi"
+	Epic           = "epc"
 )
 
 // New returns `<prefix>_<base36 millis, 9 wide><16 hex>`.

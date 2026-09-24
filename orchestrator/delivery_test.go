@@ -24,7 +24,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 	"github.com/marciomartins/dude/orchestrator/internal/api"
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
@@ -533,6 +535,71 @@ func TestAnExitLuxWillNeverReportIsNotWaitedFor(t *testing.T) {
 	w.until("the failed start's exit to be settled", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'failed' AND artifacts_due_at IS NULL`, wi) == 1
 	})
+}
+
+func TestAnAgentIsGivenDudesToolsAsItsOwnRun(t *testing.T) {
+	w := newWorld(t)
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
+	t.Cleanup(tools.Close)
+	w.syncer.Agent.ToolsURL = "http://10.9.8.7:3120/mcp"
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	wi := w.workItem()
+	w.deliver(wi)
+	w.until("the implementer to be submitted", func() bool { return len(w.lux.Runs()) >= 1 })
+
+	var spec lux.Spec
+	_ = json.Unmarshal(w.lux.Runs()[0].Spec, &spec)
+	if len(spec.Workload.MCPServers) != 1 || spec.Workload.MCPServers[0].URL != "http://10.9.8.7:3120/mcp" ||
+		spec.Workload.MCPServers[0].Headers[0].Secret != "DUDE_TOOLS_AUTH" {
+		t.Fatalf("mcp servers = %+v", spec.Workload.MCPServers)
+	}
+	var auth string
+	for _, s := range spec.Secrets {
+		if s.Name == "DUDE_TOOLS_AUTH" {
+			auth = s.Value
+		}
+	}
+	// Reachable: an address is allowed as an address.
+	var allowed bool
+	for _, e := range spec.Network.Egress {
+		allowed = allowed || e.CIDR == "10.9.8.7/32"
+	}
+	if !allowed {
+		t.Errorf("egress = %+v, want the tools' address", spec.Network.Egress)
+	}
+
+	// The token in the spec is this Run's: it can list its work.
+	client := mcp.NewClient(&mcp.Implementation{Name: "agent", Version: "1"}, nil)
+	cs, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{Endpoint: tools.URL,
+		DisableStandaloneSSE: true, MaxRetries: -1,
+		HTTPClient: &http.Client{Transport: headerTransport{"Authorization", auth}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "list_work", Arguments: map[string]any{}})
+	if err != nil || res.IsError {
+		t.Fatalf("list_work: %v %+v", err, res)
+	}
+	raw, _ := json.Marshal(res.StructuredContent)
+	if !strings.Contains(string(raw), `"yours":true`) {
+		t.Errorf("the Run does not see its own work item: %s", raw)
+	}
+	// Once the Run is over, the token is too.
+	mustExec(t, w.owner, `UPDATE runs SET status = 'aborted', control = 'abort' WHERE work_item_id = $1`, wi)
+	if _, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{Endpoint: tools.URL,
+		DisableStandaloneSSE: true, MaxRetries: -1,
+		HTTPClient: &http.Client{Transport: headerTransport{"Authorization", auth}}}, nil); err == nil {
+		t.Errorf("an aborted Run's token still works")
+	}
+}
+
+type headerTransport struct{ name, value string }
+
+func (h headerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.Header.Set(h.name, h.value)
+	return http.DefaultTransport.RoundTrip(r)
 }
 
 func TestWhatDudeSendsLux(t *testing.T) {
