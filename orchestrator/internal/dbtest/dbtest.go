@@ -27,7 +27,10 @@ var (
 	once     sync.Once
 	template string
 	setupErr error
-	counter  atomic.Int64
+	// No database to reach at all: tests skip. Any other setup failure
+	// fails them, or a broken migration would pass as "ok".
+	unreachable bool
+	counter     atomic.Int64
 )
 
 func host() string {
@@ -47,8 +50,11 @@ func adminConn(ctx context.Context) (*pgx.Conn, error) {
 func Open(t *testing.T) (app *db.DB, owner *pgx.Conn) {
 	t.Helper()
 	once.Do(setup)
-	if setupErr != nil {
+	if setupErr != nil && unreachable {
 		t.Skipf("no test database: %v", setupErr)
+	}
+	if setupErr != nil {
+		t.Fatalf("setting up the test database: %v", setupErr)
 	}
 	ctx := context.Background()
 	name := fmt.Sprintf("%s_%d", template, counter.Add(1))
@@ -84,10 +90,18 @@ func setup() {
 	ctx := context.Background()
 	admin, err := adminConn(ctx)
 	if err != nil {
-		setupErr = err
+		setupErr, unreachable = err, true
 		return
 	}
 	defer admin.Close(ctx)
+	// Test binaries run in parallel, one per package, and migrations create
+	// cluster-wide roles: two at once fail with "tuple concurrently
+	// updated". One migrates at a time.
+	if _, err := admin.Exec(ctx, "SELECT pg_advisory_lock(hashtext('dude_gotest_migrate'))"); err != nil {
+		setupErr = err
+		return
+	}
+	defer func() { _, _ = admin.Exec(ctx, "SELECT pg_advisory_unlock(hashtext('dude_gotest_migrate'))") }()
 	template = fmt.Sprintf("dude_gotest_%d", time.Now().UnixNano())
 	if _, err := admin.Exec(ctx, "CREATE DATABASE "+template+" OWNER dude"); err != nil {
 		setupErr = err
