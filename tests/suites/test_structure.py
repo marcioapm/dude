@@ -137,3 +137,19 @@ def test_the_factorys_delivery_defaults_are_readable(client: ApiClient):
     assert defaults["requiredReviewers"] == ["correctness"]
     assert defaults["blockingSeverities"] == ["blocking", "high"]
     assert defaults["maxReviewIterations"] >= 1
+
+
+def test_the_github_connection_is_shown_masked_and_can_be_verified(client: ApiClient, forge_project: dict):
+    conn = client.get("/v1/forge/credential").json()
+    assert conn["connected"] is True and conn["auth"] == "pat"
+    assert conn["secretHint"] == "oken"  # the fixture's token ends in "token"
+    assert "secret" not in conn
+    assert conn["webhookPath"].startswith("/v1/webhooks/github/")
+    assert client.post("/v1/forge/credential/verify").json() == {"ok": True, "login": "dude-bot", "scopes": None}
+
+    client.post("/v1/forge/credential", {"auth": "pat", "secret": "wrong", "apiBaseUrl": conn["apiBaseUrl"]})
+    assert client.post("/v1/forge/credential/verify").json() == {"ok": False, "reason": "GitHub rejected the token"}
+
+
+def test_an_organization_without_github_says_so(client: ApiClient):
+    assert client.get("/v1/forge/credential").json() == {"connected": False}
