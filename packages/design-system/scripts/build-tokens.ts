@@ -9,7 +9,7 @@
  */
 
 import { flattenTheme, type ThemeMode } from "../src/tokens/themes.ts";
-import { compactOverrides } from "../src/tokens/density.ts";
+import { densityTokens } from "../src/tokens/density.ts";
 import {
   cadence,
   duration,
@@ -88,11 +88,13 @@ ${themeBlock("light", ':root:not([data-theme="dark"])', "  ")}
 }
 
 /* ------------------------------------------------------------------ */
-/* Density. comfortable is the default (Discord/Obsidian feel); compact  */
-/* is opt-in and NOT a uniform shrink — only the tokens listed in        */
-/* src/tokens/density.ts differ. Everything else is the block above.    */
+/* Density. Comfortable is the :root default above. Only the tokens in   */
+/* src/tokens/density.ts differ; both values are emitted so a subtree    */
+/* can switch either way.                                               */
 /* ------------------------------------------------------------------ */
-${block('[data-density="compact"]', compactOverrides)}
+${block('[data-density="comfortable"]', densityTokens.comfortable)}
+
+${block('[data-density="compact"]', densityTokens.compact)}
 
 /* ------------------------------------------------------------------ */
 /* Motion                                                              */
