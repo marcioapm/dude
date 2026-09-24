@@ -130,8 +130,10 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, org string) err
 		return err
 	}
 	var projectID, repositoryID string
+	var projectPolicy []byte
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(r.Context(), `SELECT project_id FROM work_items WHERE id = $1`, workItemID).Scan(&projectID); err != nil {
+		if err := tx.QueryRow(r.Context(), `SELECT w.project_id, p.delivery_policy FROM work_items w
+			JOIN projects p ON p.id = w.project_id WHERE w.id = $1`, workItemID).Scan(&projectID, &projectPolicy); err != nil {
 			if db.IsNotFound(err) {
 				return fail(http.StatusNotFound, "not_found", "work item %s not found", workItemID)
 			}
@@ -161,9 +163,13 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, org string) err
 		return err
 	}
 
+	// The factory's defaults, then the project's, then this work item's own:
+	// each layer sets only what it names.
 	policy := delivery.DefaultPolicy()
+	if err := json.Unmarshal(projectPolicy, &policy); err != nil {
+		return fmt.Errorf("project %s delivery policy: %w", projectID, err)
+	}
 	if len(body.Policy) > 0 {
-		// Overrides for this work item only; unset fields keep the default.
 		if err := json.Unmarshal(body.Policy, &policy); err != nil {
 			return fail(http.StatusBadRequest, "bad_request", "policy: %v", err)
 		}

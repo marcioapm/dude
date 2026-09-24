@@ -92,6 +92,28 @@ export const repositorySchema = z.object({
 });
 export type Repository = z.infer<typeof repositorySchema>;
 
+/**
+ * The reviewer flavours the factory has prompts for. A project names the
+ * ones every delivery runs; others join when a change touches their paths.
+ */
+export const REVIEWER_CATEGORIES = ["correctness", "security", "database", "api", "frontend", "performance"] as const;
+
+/**
+ * How a project's work is delivered, over the factory's defaults. Each field
+ * left out keeps the default; a work item's own overrides layer on top.
+ */
+export const deliveryPolicySchema = z
+  .object({
+    requiredReviewers: z.array(z.enum(REVIEWER_CATEGORIES)).min(1),
+    blockingSeverities: z.array(z.enum(["blocking", "high", "medium", "low", "note"])).min(1),
+    maxReviewIterations: z.number().int().min(1).max(20),
+    maxPrFixIterations: z.number().int().min(0).max(20),
+    simplify: z.boolean(),
+  })
+  .partial()
+  .strict();
+export type DeliveryPolicy = z.infer<typeof deliveryPolicySchema>;
+
 export const projectSchema = z.object({
   id: z.string(),
   organizationId: z.string(),
@@ -103,6 +125,8 @@ export const projectSchema = z.object({
   agentModels: agentModelsSchema,
   /** Container image for Run runtimes; null uses the system default. */
   runtimeImage: z.string().nullable().default(null),
+  /** How its work is delivered, over the factory's defaults. */
+  deliveryPolicy: deliveryPolicySchema.default({}),
   createdAt: z.string().datetime({ offset: true }),
 });
 export type Project = z.infer<typeof projectSchema>;

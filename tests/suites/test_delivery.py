@@ -91,6 +91,29 @@ def test_the_review_fix_loop_converges_and_the_ledger_shows_it(
         assert expected in types, f"{expected} missing from the implementer's timeline: {types}"
 
 
+def test_a_project_names_the_reviewers_every_delivery_runs(client: ApiClient, forge_project: dict):
+    """Set on the project in the backend, honoured by the orchestrator."""
+    resp = client.patch(f"/v1/projects/{forge_project['id']}",
+                        {"deliveryPolicy": {"requiredReviewers": ["correctness", "security"]}})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["deliveryPolicy"] == {"requiredReviewers": ["correctness", "security"]}
+
+    work_item = client.create_work_item(forge_project["id"], "Reviewed twice over")
+    client.post(f"/v1/work-items/{work_item['id']}/deliver")
+    wait_until(
+        lambda: {r["category"] for r in client.work_item_runs(work_item["id"]) if r["phase"] == "review"}
+        >= {"correctness", "security"},
+        timeout=60,
+        message="the project's required security reviewer never ran",
+    )
+
+
+def test_a_project_policy_names_only_reviewers_the_factory_has(client: ApiClient, forge_project: dict):
+    resp = client.patch(f"/v1/projects/{forge_project['id']}",
+                        {"deliveryPolicy": {"requiredReviewers": ["vibes"]}})
+    assert resp.status_code == 400, resp.text
+
+
 def test_steer_pause_resume_and_abort_reach_the_agent(client: ApiClient, forge_project: dict):
     """Run control goes user → backend → orchestrator → lux, and back as events."""
     # An agent that never finishes its turn, to have something live to control.
