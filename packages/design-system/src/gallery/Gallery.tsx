@@ -72,6 +72,7 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["ch-markdown", "Markdown"],
       ["ch-message", "ChatMessage"],
       ["ch-thread", "ChatThread"],
+      ["ch-question", "QuestionCard"],
       ["ch-composer", "ChatComposer"],
       ["ch-realistic", "A real session (static)"],
       ["ch-transcript", "ChatTranscript (live)"],

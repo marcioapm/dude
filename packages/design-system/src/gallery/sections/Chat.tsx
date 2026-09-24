@@ -8,12 +8,14 @@ import { ChatMessage } from "../../components/ChatMessage.tsx";
 import { ChatThread } from "../../components/ChatThread.tsx";
 import { ChatTranscript } from "../../components/ChatTranscript.tsx";
 import { Markdown } from "../../components/Markdown.tsx";
+import { QuestionCard } from "../../components/QuestionCard.tsx";
 import { ThinkingBlock } from "../../components/ThinkingBlock.tsx";
 import { ToolCallCard } from "../../components/ToolCallCard.tsx";
 import { Button, IconButton } from "../../primitives/Button.tsx";
 import { ACTIVITY_KINDS, ACTIVITY_SPECS } from "../../tokens/activity.ts";
 import { at } from "../fixtures.tsx";
 import {
+  ANSWER_TEXT,
   CLIENT_DIFF,
   CLIENT_SOURCE,
   CONTEXT_WINDOW,
@@ -24,6 +26,8 @@ import {
   MSG_3,
   MSG_4,
   PHASE_PROMPT,
+  QUESTION_OPTIONS,
+  QUESTION_TEXT,
   THOUGHT_1,
   THOUGHT_2,
   THOUGHT_3,
@@ -346,6 +350,33 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
       </Block>
 
       <Block
+        id="ch-question"
+        title="QuestionCard"
+        note="An agent stops and asks a person (ask_user). While it waits this is the one loud turn in a transcript: the needs-you badge with its ring, the attention wash and 2px bar the tree row and board card use for the same state, the avatar marked live, and a wait clock ticking in attention ink — an operator scanning a long chat lands on it at once, and in grayscale it is still the only framed turn with a solid badge, a bar and a clock. The offered choices are shown as numbered chips so the question reads in full; they are buttons only with onChoose, since the composer already has the one-click reply. Answered, it settles: hairline, no wash, a quiet Answered mark with how long it waited. The answer follows as its own turn — the card never repeats it. A question the session died on is Not answered and never rings."
+      >
+        <Panes mode={mode} surface>
+          <Col>
+            <Label>waiting — the run is blocked; the clock ticks</Label>
+            <QuestionCard role="implementer" text={QUESTION_TEXT} options={QUESTION_OPTIONS} askedAt={Date.now() - 4 * 60_000 - 12_000} />
+            <Label>waiting, no choices, a named session — free-text answer only</Label>
+            <QuestionCard role="reviewer" name="reviewer-2" text="The PR body says the route's retry is a product decision. Is there a work item for it, or should I file one?" askedAt={Date.now() - 38_000} />
+            <Label>waiting with onChoose — the chips become one-click replies</Label>
+            <QuestionCard role="orchestrator" text="Should 4xx responses be retried? The existing code retries everything, but 4xx usually means our request is wrong." options={["Retry 5xx and network only", "Retry everything (current behaviour)"]} askedAt={Date.now() - 125_000} onChoose={() => undefined} />
+            <Label>answered — calm; the answer is the next turn, not quoted here</Label>
+            <QuestionCard role="implementer" text={QUESTION_TEXT} options={QUESTION_OPTIONS} askedAt={at(45_600)} answeredAt={at(45_600 + 4 * 60_000 + 12_000)} />
+            <ChatMessage role="human" name="marcio" intent="answer" inReplyTo="Should I leave the route's retry in place, or fold it into this change?" content={ANSWER_TEXT} startedAt={at(45_600 + 4 * 60_000 + 12_000)} deliveredAt={at(45_600 + 4 * 60_000 + 13_000)} />
+            <Label>not answered — the session ended first; settled, never rings</Label>
+            <QuestionCard role="qa_browser" text="The save button has no stable selector. Should I add a `data-testid`, or is that out of scope?" options={["Add data-testid", "Out of scope — skip the check"]} askedAt={at(100_000)} dismissed />
+            <Label>grayscale check — waiting still separates from answered by badge, bar and clock</Label>
+            <div style={{ filter: "grayscale(1)", display: "flex", flexDirection: "column" }}>
+              <QuestionCard role="implementer" text="Leave the route's retry in place?" options={["Yes", "No"]} askedAt={Date.now() - 90_000} />
+              <QuestionCard role="implementer" text="Leave the route's retry in place?" options={["Yes", "No"]} askedAt={at(0)} answeredAt={at(90_000)} />
+            </div>
+          </Col>
+        </Panes>
+      </Block>
+
+      <Block
         id="ch-composer"
         title="ChatComposer"
         note="The two ways a human intervenes are distinct on four channels: frame tint, hint text, button label and button icon. Answer is attention-toned with the question quoted above and one-click options; Enter submits because the agent is waiting. Steer is accent-toned, says plainly that it interrupts the current turn, and needs ⌘/Ctrl+Enter — an accidental interrupt costs a turn."
@@ -375,7 +406,7 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
       <Block
         id="ch-realistic"
         title="A real session, after the fact"
-        note="One implementer session as the real runs look: the factory's phase prompt at the top (system-authored, clamped), the model's reasoning between every move, tool calls whose output the backend capped at 4 KB with the middle dropped, a failing test run with exit 1 that opened itself, a queued steer that was delivered on the next turn, and a context/output foot on every message. Cost is unknown for this harness and reads as such in the header and the feet, while the tokens still add up. Static: this is about density and hierarchy; the live scenario below is about motion."
+        note="One implementer session as the real runs look: the factory's phase prompt at the top (system-authored, clamped), the model's reasoning between every move, tool calls whose output the backend capped at 4 KB with the middle dropped, a failing test run with exit 1 that opened itself, a queued steer that was delivered on the next turn, a question the implementer stopped on for four minutes until marcio answered, and a context/output foot on every message. Cost is unknown for this harness and reads as such in the header and the feet, while the tokens still add up. Static: this is about density and hierarchy; the live scenario below is about motion."
       >
         <Panes mode={mode}>
           <RealisticTranscript />
@@ -462,12 +493,15 @@ function RealisticTranscript() {
         <ToolCallCard name="bash" status="completed" args={{ command: "bun run typecheck && bun test apps/control-plane" }} startedAt={at(38_200)} endedAt={at(42_080)} exitCode={0} output={LONG_TEST_OUTPUT_PASSED} />
         <ThinkingBlock text={THOUGHT_3} startedAt={at(42_100)} endedAt={at(45_600)} />
       </Aside>
-      <ChatMessage role="implementer" model="claude-opus-4" content={MSG_4} startedAt={at(45_600)} endedAt={at(52_000)} costUsd={null} contextTokens={61_400} contextWindowTokens={CONTEXT_WINDOW} outputTokens={520} />
+      <ChatMessage role="implementer" model="claude-opus-4" content="All green: 65 pass, 0 fail. The diff is 118 lines. One thing I need a decision on before the PR." startedAt={at(45_600)} endedAt={at(47_000)} costUsd={null} contextTokens={61_400} contextWindowTokens={CONTEXT_WINDOW} outputTokens={40} />
+      <QuestionCard role="implementer" text={QUESTION_TEXT} options={QUESTION_OPTIONS} askedAt={at(47_000)} answeredAt={at(47_000 + 4 * MIN + 12_000)} />
+      <ChatMessage role="human" name="marcio" intent="answer" inReplyTo="Should I leave the route's retry in place, or fold it into this change?" content={ANSWER_TEXT} startedAt={at(47_000 + 4 * MIN + 12_000)} deliveredAt={at(47_000 + 4 * MIN + 13_000)} />
+      <ChatMessage role="implementer" model="claude-opus-4" content={MSG_4} startedAt={at(47_000 + 4 * MIN + 13_000)} endedAt={at(47_000 + 4 * MIN + 19_000)} costUsd={null} contextTokens={62_000} contextWindowTokens={CONTEXT_WINDOW} outputTokens={480} />
       <Aside>
-        <ToolCallCard name="bash" status="completed" args={{ command: 'gh pr create --title "WI-2481: retry GitHub webhook deliveries with backoff" --body-file /tmp/pr.md' }} startedAt={at(52_100)} endedAt={at(54_900)} exitCode={0} output="https://github.com/dude/dude/pull/412" />
+        <ToolCallCard name="bash" status="completed" args={{ command: 'gh pr create --title "WI-2481: retry GitHub webhook deliveries with backoff" --body-file /tmp/pr.md' }} startedAt={at(47_000 + 4 * MIN + 19_100)} endedAt={at(47_000 + 4 * MIN + 21_900)} exitCode={0} output="https://github.com/dude/dude/pull/412" />
       </Aside>
-      <ChatMessage role="implementer" model="claude-opus-4" content="PR **#412** opened. Handing off to the reviewer." startedAt={at(55_000)} endedAt={at(56_000)} costUsd={null} contextTokens={62_100} contextWindowTokens={CONTEXT_WINDOW} outputTokens={18} activity="completed" />
-      <ChatMessage role="system" content="PR #412 opened · session completed" startedAt={at(56_000)} />
+      <ChatMessage role="implementer" model="claude-opus-4" content="PR **#412** opened. Handing off to the reviewer." startedAt={at(47_000 + 4 * MIN + 22_000)} endedAt={at(47_000 + 4 * MIN + 23_000)} costUsd={null} contextTokens={62_700} contextWindowTokens={CONTEXT_WINDOW} outputTokens={18} activity="completed" />
+      <ChatMessage role="system" content="PR #412 opened · session completed" startedAt={at(47_000 + 4 * MIN + 23_000)} />
     </ChatTranscript>
   );
 }
@@ -740,6 +774,9 @@ function TurnNode({ turn, depth }: { readonly turn: ScenarioTurn; readonly depth
     );
   }
   if (turn.kind === "system") return <ChatMessage role="system" content={turn.text} startedAt={turn.startedAt} isNew />;
+  if (turn.kind === "question" && turn.role !== "human" && turn.role !== "system") {
+    return <QuestionCard role={turn.role} text={turn.text} options={turn.options} askedAt={turn.startedAt} answeredAt={turn.answeredAt} isNew />;
+  }
   if (turn.kind === "human") return <ChatMessage role="human" name={turn.name} intent={turn.intent} inReplyTo={turn.inReplyTo} content={turn.text} startedAt={turn.startedAt} deliveredAt={turn.deliveredAt} isNew />;
   if (turn.role === "human" || turn.role === "system") return null;
   const streaming = turn.activity === "streaming";

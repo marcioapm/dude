@@ -28,7 +28,7 @@ export interface ScenarioTool {
 
 export interface ScenarioTurn {
   readonly id: string;
-  readonly kind: "agent" | "human" | "system" | "thread";
+  readonly kind: "agent" | "human" | "system" | "thread" | "question";
   readonly role: AgentRole | "human" | "system";
   readonly name?: string | undefined;
   readonly model?: string | undefined;
@@ -49,6 +49,9 @@ export interface ScenarioTurn {
   readonly inReplyTo?: string | undefined;
   /** `null`: a steer sent mid-turn, not yet read by the agent. */
   readonly deliveredAt?: number | null | undefined;
+  // question-only
+  readonly options?: ReadonlyArray<string> | undefined;
+  readonly answeredAt?: number | null | undefined;
   readonly startedAt: number;
   readonly endedAt?: number | undefined;
   readonly costUsd?: number | undefined;
@@ -68,7 +71,7 @@ export interface ScenarioState {
   readonly tokens: number;
   readonly plan: ReadonlyArray<PlanItem>;
   readonly turns: ReadonlyArray<ScenarioTurn>;
-  readonly question: { id: string; text: string; options: string[] } | null;
+  readonly question: { id: string; text: string; askedBy: string; options: string[] } | null;
   readonly stepLabel: string;
   readonly done: boolean;
 }
@@ -112,6 +115,7 @@ const ORCH_TEXT_4 = `Understood — retrying only 5xx and network errors. Openin
 PR **#412** opened. Handing off to the reviewer.`;
 
 const QUESTION = "Should 4xx responses be retried? The existing code retries everything, but 4xx usually means our request is wrong.";
+const QUESTION_OPTIONS = ["Retry 5xx and network only", "Retry everything (current behaviour)"] as const;
 
 const ORCH_THOUGHT_1 = `The task is narrow: one client, one method, a cap on attempts. Before delegating I want an investigator to confirm there is no retry layer already hiding in the integration code — wrapping an existing one would double the attempts. Then an implementer, then review. I'll write the plan first so the operator can see the shape.`;
 
@@ -411,10 +415,11 @@ export function buildScenario(t0: number): ReadonlyArray<Step> {
       },
     },
     ...streamSteps("o3", ORCH_TEXT_3, 47, 48, (s, shown, last) => {
-      upd(s.turns, "o3", { shown, activity: last ? "awaiting_input" : "streaming", activitySince: T(last ? 48 : 47) });
+      upd(s.turns, "o3", { shown, activity: last ? "completed" : "streaming", activitySince: T(47), endedAt: last ? T(48) : undefined });
       if (last) {
         s.status = "awaiting_input";
-        s.question = { id: "q_44a1", text: QUESTION, options: ["Retry 5xx and network only", "Retry everything (current behaviour)"] };
+        s.question = { id: "q_44a1", text: QUESTION, askedBy: "Orchestrator", options: [...QUESTION_OPTIONS] };
+        s.turns.push({ id: "q1", kind: "question", role: "orchestrator", text: QUESTION, options: QUESTION_OPTIONS, answeredAt: null, shown: 999, startedAt: T(48), tools: [] });
       }
     }),
   ];
@@ -430,7 +435,7 @@ export function buildAnswerSteps(t0: number, answer: string): ReadonlyArray<Step
       apply: (s) => {
         s.question = null;
         s.status = "running";
-        upd(s.turns, "o3", { activity: "completed", endedAt: T(0) });
+        upd(s.turns, "q1", { answeredAt: T(0) });
         s.turns.push({ id: "h1", kind: "human", role: "human", name: "marcio", intent: "answer", inReplyTo: QUESTION, text: answer, shown: 999, startedAt: T(0), tools: [] });
         s.turns.push({ id: "o4", kind: "agent", role: "orchestrator", model: "claude-opus-4", text: ORCH_TEXT_4, shown: 0, activity: "thinking", activitySince: T(0.2), startedAt: T(0.2), tools: [], costUsd: 0.003, contextTokens: 900 });
       },
