@@ -15,6 +15,7 @@ import {
   ChatTranscript,
   EventRow,
   EventStream,
+  QuestionCard,
   ThinkingBlock,
   ToolCallCard,
   summarizeToolArgs,
@@ -123,7 +124,9 @@ export function RunScreen({ client, runId, title, onBack }: RunScreenProps) {
 
   const send = useCallback(
     (submission: ComposerSubmission) =>
-      void intervene(() => client.steer(runId, submission.text), "steer this run"),
+      void (submission.mode === "answer"
+        ? intervene(() => client.answer(submission.questionId, submission.text), "answer the agent")
+        : intervene(() => client.steer(runId, submission.text), "steer this run")),
     [client, runId, intervene],
   );
 
@@ -210,7 +213,20 @@ export function RunScreen({ client, runId, title, onBack }: RunScreenProps) {
             }
             footer={
               <ChatComposer
-                mode="steer"
+                // The agent waiting on a question takes an answer; otherwise
+                // anything said steers it.
+                mode={conversation.openQuestion ? "answer" : "steer"}
+                question={
+                  conversation.openQuestion
+                    ? {
+                        id: conversation.openQuestion.questionId,
+                        text: conversation.openQuestion.text,
+                        askedBy: runLabel(run),
+                        askedAt: conversation.openQuestion.at,
+                        options: conversation.openQuestion.options,
+                      }
+                    : undefined
+                }
                 disabled={!isLive || run.status === "paused"}
                 disabledReason={
                   run.status === "paused"
@@ -222,7 +238,7 @@ export function RunScreen({ client, runId, title, onBack }: RunScreenProps) {
             }
             emptyMessage="Waiting for the agent to start."
           >
-            {conversation.turns.map((turn) => renderTurn(turn, role, conversation.contextWindow))}
+            {conversation.turns.map((turn) => renderTurn(turn, role, conversation.contextWindow, !isLive))}
             {conversation.activity ? (
               <ChatMessage
                 role={role}
@@ -263,8 +279,21 @@ export function RunScreen({ client, runId, title, onBack }: RunScreenProps) {
   );
 }
 
-function renderTurn(turn: Turn, role: AgentRole, contextWindow: number) {
+function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: boolean) {
   switch (turn.kind) {
+    case "question":
+      // A Run that ended on an unanswered question will never hear back.
+      return (
+        <QuestionCard
+          key={turn.id}
+          role={role}
+          text={turn.text}
+          options={turn.options}
+          askedAt={turn.at}
+          answeredAt={turn.answeredAt}
+          dismissed={ended && turn.answeredAt === null}
+        />
+      );
     case "prompt":
       // Written by the factory, not a person: the avatar and name say so.
       return (

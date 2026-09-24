@@ -8,6 +8,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/db"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -48,6 +51,8 @@ type translator struct {
 	message strings.Builder
 	// Thinking streamed since the last complete thought, kept the same way.
 	thought strings.Builder
+	// Everything said in the current turn, read for a question when it ends.
+	turnReply strings.Builder
 	// Tool calls already recorded, by id, with the name they were recorded
 	// under: a command that streams many progress updates is one call in the
 	// ledger, and its completion — which carries no title — keeps the name.
@@ -79,16 +84,17 @@ const promptRequestID = "prompt"
 
 // load restores what the translator keeps between batches.
 func (t *translator) load(ctx context.Context, tx pgx.Tx) error {
-	var message, thought string
+	var message, thought, turnReply string
 	u := &t.usage
-	if err := tx.QueryRow(ctx, `SELECT agent_session_epoch, agent_message_buffer, agent_thought_buffer,
+	if err := tx.QueryRow(ctx, `SELECT agent_session_epoch, agent_message_buffer, agent_thought_buffer, agent_turn_reply,
 		agent_cost_usd::float8, context_tokens, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens
 		FROM runs WHERE id = $1`, t.run.ID).
-		Scan(&t.sessionEpoch, &message, &thought, &u.cost, &u.context, &u.input, &u.output, &u.cacheRead, &u.cacheWrite); err != nil {
+		Scan(&t.sessionEpoch, &message, &thought, &turnReply, &u.cost, &u.context, &u.input, &u.output, &u.cacheRead, &u.cacheWrite); err != nil {
 		return err
 	}
 	t.message.WriteString(message)
 	t.thought.WriteString(thought)
+	t.turnReply.WriteString(turnReply)
 	rows, err := tx.Query(ctx, `SELECT event_type, COALESCE(payload->>'callId', ''), COALESCE(payload->>'tool', '')
 		FROM events WHERE run_id = $1 AND event_type IN ($2, $3, $4)`, t.run.ID, evToolCalled, evPlanUpdated, evPromptDelivered)
 	if err != nil {
@@ -114,10 +120,11 @@ func (t *translator) load(ctx context.Context, tx pgx.Tx) error {
 // with the cursor that has moved past the frames that produced it.
 func (t *translator) save(ctx context.Context, tx pgx.Tx) error {
 	u := t.usage
-	_, err := tx.Exec(ctx, `UPDATE runs SET agent_message_buffer = $2, agent_thought_buffer = $3,
+	_, err := tx.Exec(ctx, `UPDATE runs SET agent_message_buffer = $2, agent_thought_buffer = $3, agent_turn_reply = $10,
 		agent_cost_usd = $4, context_tokens = $5, input_tokens = $6, output_tokens = $7,
 		cache_read_tokens = $8, cache_write_tokens = $9 WHERE id = $1`,
-		t.run.ID, t.message.String(), t.thought.String(), u.cost, u.context, u.input, u.output, u.cacheRead, u.cacheWrite)
+		t.run.ID, t.message.String(), t.thought.String(), u.cost, u.context, u.input, u.output, u.cacheRead, u.cacheWrite,
+		t.turnReply.String())
 	return err
 }
 
@@ -256,10 +263,16 @@ func (t *translator) session(ctx context.Context, tx pgx.Tx, s *Syncer, id strin
 func (t *translator) activity(ctx context.Context, tx pgx.Tx, s *Syncer, activity string) error {
 	switch activity {
 	case "busy":
+		t.turnReply.Reset()
 		_, err := tx.Exec(ctx, `UPDATE runs SET agent_busy_at = COALESCE(agent_busy_at, now()), turn_done_at = NULL WHERE id = $1`, t.run.ID)
 		return err
 	case "idle":
 		if err := t.flush(ctx, tx, s); err != nil {
+			return err
+		}
+		// A turn that ended on a question is not done: the agent waits for a
+		// person, and the answer — a directive — starts its next turn.
+		if asked, err := t.question(ctx, tx, s); asked || err != nil {
 			return err
 		}
 		tag, err := tx.Exec(ctx, `UPDATE runs SET turn_done_at = now()
@@ -369,6 +382,34 @@ func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux
 	return nil
 }
 
+// question records the question the agent's turn ended on, if it asked
+// one, and says whether it did. Only phases that change code may ask: a
+// reviewer's doubts are findings. Read here, as the turn ends and in the
+// transaction that records it, so no sweep can finish the Run in between.
+func (t *translator) question(ctx context.Context, tx pgx.Tx, s *Syncer) (bool, error) {
+	reply := t.turnReply.String()
+	t.turnReply.Reset()
+	if !delivery.Publishes[t.run.Phase] {
+		return false, nil
+	}
+	q, ok := delivery.ParseQuestion(reply)
+	if !ok {
+		return false, nil
+	}
+	id := ids.New(ids.Question)
+	options, _ := json.Marshal(db.NonNil(q.Options))
+	if _, err := tx.Exec(ctx, `INSERT INTO questions (id, organization_id, work_item_id, run_id, prompt, options)
+		VALUES ($1, $2, $3, $4, $5, $6::jsonb)`, id, t.run.Org, t.run.WorkItemID, t.run.ID, q.Prompt, options); err != nil {
+		return false, err
+	}
+	if _, err := delivery.SetWorkItemStatusTx(ctx, tx, t.run.Org, t.run.ProjectID, t.run.WorkItemID, "",
+		"awaiting_input", "the agent asked a question"); err != nil {
+		return false, err
+	}
+	return true, s.event(ctx, tx, t.run, delivery.EvQuestionAsked, ledger.ActorAgent,
+		map[string]any{"kind": "agent", "questionId": id, "prompt": q.Prompt, "options": db.NonNil(q.Options)})
+}
+
 // flush records whatever reply or thought was streaming: something else
 // happening ends both.
 func (t *translator) flush(ctx context.Context, tx pgx.Tx, s *Syncer) error {
@@ -385,6 +426,10 @@ func (t *translator) flushText(ctx context.Context, tx pgx.Tx, s *Syncer, buf *s
 	buf.Reset()
 	if strings.TrimSpace(text) == "" {
 		return nil
+	}
+	if event == evAgentMessage {
+		t.turnReply.WriteString(text)
+		t.turnReply.WriteString("\n")
 	}
 	payload := map[string]any{"text": text}
 	if t.usage.context > 0 {

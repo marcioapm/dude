@@ -173,6 +173,11 @@ export class ApiClient {
 
   // -- intervention (plan §24) --------------------------------------------
 
+  /** Answer the question an agent stopped on; the answer starts its next turn. */
+  answer(questionId: string, text: string): Promise<{ id: string; status: "answered" }> {
+    return this.#request("POST", `/v1/questions/${questionId}/answer`, { text });
+  }
+
   /** Redirect a running agent. Produces a durable, auditable directive. */
   steer(runId: string, text: string, scope: DirectiveScope = "run"): Promise<Directive> {
     return this.#request("POST", `/v1/runs/${runId}/steer`, { text, scope });

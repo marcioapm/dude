@@ -114,6 +114,39 @@ def test_a_project_policy_names_only_reviewers_the_factory_has(client: ApiClient
     assert resp.status_code == 400, resp.text
 
 
+def test_an_agent_asks_a_person_waits_and_carries_on_with_the_answer(client: ApiClient, forge_project: dict):
+    """The question reaches the API and the sidebar; the answer reaches the agent."""
+    resp = client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
+        "implementer": {"model": "fake/ask"}, "reviewer": {"model": "fake/scripted"},
+        "simplifier": {"model": "fake/scripted"}}})
+    assert resp.status_code == 200, resp.text
+    work_item = client.create_work_item(forge_project["id"], "Ask first")
+    client.post(f"/v1/work-items/{work_item['id']}/deliver")
+
+    def open_questions():
+        return client.get("/v1/questions").json()["questions"]
+
+    wait_until(lambda: open_questions(), timeout=30, message="the agent's question never reached the API")
+    question = open_questions()[0]
+    assert question["prompt"] == "Should FACTORY.md be in English?"
+    assert question["options"] == ["yes", "no"]
+    assert client.get(f"/v1/work-items/{work_item['id']}").json()["status"] == "awaiting_input"
+
+    # The sidebar shows who is asking, and what, without opening the chat.
+    nav = client.get("/v1/navigation").json()
+    sessions = [s for p in nav["projects"] for wi in p.get("workItems", []) if wi["id"] == work_item["id"]
+                for run in wi["runs"] for s in run["sessions"]]
+    assert any(s["status"] == "awaiting_input" and s.get("activity") == question["prompt"] for s in sessions), sessions
+
+    resp = client.post(f"/v1/questions/{question['id']}/answer", {"text": "yes"})
+    assert resp.status_code == 200, resp.text
+    assert open_questions() == []
+    wait_until(
+        lambda: any(r["phase"] == "implement" and r["status"] == "completed" for r in client.work_item_runs(work_item["id"])),
+        timeout=30, message="the implementer never carried on after the answer",
+    )
+
+
 def test_steer_pause_resume_and_abort_reach_the_agent(client: ApiClient, forge_project: dict):
     """Run control goes user → backend → orchestrator → lux, and back as events."""
     # An agent that never finishes its turn, to have something live to control.

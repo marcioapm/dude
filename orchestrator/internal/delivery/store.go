@@ -212,18 +212,29 @@ func (s *Store) SupersedeStale(ctx context.Context, org, workItemID string, chan
 // when unchanged, so a step that re-runs does not add a duplicate event.
 func (s *Store) SetWorkItemStatus(ctx context.Context, org string, st *State, status, reason string) error {
 	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE work_items SET status = $2::work_item_status, updated_at = now()
-			WHERE id = $1 AND status <> $2::work_item_status`, st.WorkItemID, status)
-		if err != nil || tag.RowsAffected() == 0 {
-			return err
-		}
-		_, err = ledger.Append(ctx, tx, ledger.Event{
-			Type: EvWorkItemStatusChanged, OrganizationID: org, ProjectID: st.ProjectID, WorkItemID: st.WorkItemID,
-			ActorType: ledger.ActorSystem, ActorID: "workflow", Source: ledger.SourceOrchestrator,
-			CorrelationID: st.WorkItemID, Payload: map[string]any{"status": status, "reason": reason},
-		})
+		_, err := SetWorkItemStatusTx(ctx, tx, org, st.ProjectID, st.WorkItemID, "", status, reason)
 		return err
 	})
+}
+
+// SetWorkItemStatusTx is SetWorkItemStatus in the caller's transaction, for
+// a change that must commit with something else: an agent's question and
+// the work item waiting on it. With from set, only a work item in that
+// status moves — a person answering must not revive an aborted one.
+func SetWorkItemStatusTx(ctx context.Context, tx pgx.Tx, org, projectID, workItemID, from, status, reason string) (bool, error) {
+	tag, err := tx.Exec(ctx, `UPDATE work_items SET status = $2::work_item_status, updated_at = now()
+		WHERE id = $1 AND status <> $2::work_item_status
+		  AND ($3 = '' OR status = $3::work_item_status)
+		  AND status NOT IN ('done', 'failed', 'aborted')`, workItemID, status, from)
+	if err != nil || tag.RowsAffected() == 0 {
+		return false, err
+	}
+	_, err = ledger.Append(ctx, tx, ledger.Event{
+		Type: EvWorkItemStatusChanged, OrganizationID: org, ProjectID: projectID, WorkItemID: workItemID,
+		ActorType: ledger.ActorSystem, ActorID: "workflow", Source: ledger.SourceOrchestrator,
+		CorrelationID: workItemID, Payload: map[string]any{"status": status, "reason": reason},
+	})
+	return true, err
 }
 
 // Emit records a workflow event about the work item.

@@ -28,6 +28,14 @@ const ModelPrefix = "fake/"
 // HangModel keeps its agent busy until stopped.
 const HangModel = "fake/hang"
 
+// AskModel's implementer stops on a question first, and does its work in
+// the turn the answer starts.
+const AskModel = "fake/ask"
+
+// Question is what AskModel's implementer asks, in the format the prompt
+// asks a model for.
+const Question = "I need a decision first.\n\n```question\nShould FACTORY.md be in English?\n- yes\n- no\n```\n"
+
 // Is says whether a model is the scripted agent rather than a real one.
 func Is(model string) bool { return strings.HasPrefix(model, ModelPrefix) }
 
@@ -56,6 +64,8 @@ type Step struct {
 	Reply string
 	// Never finishes its turn.
 	Hang bool
+	// Its first turn ends on this question instead.
+	Ask string
 }
 
 // For is the agent's step for a phase Run. fixed says whether the tree it
@@ -66,8 +76,12 @@ func For(phase, model, runID string, fixed bool) Step {
 	}
 	switch phase {
 	case "implement":
-		return Step{Commit: map[string]string{"FACTORY.md": "Written by run " + runID},
+		step := Step{Commit: map[string]string{"FACTORY.md": "Written by run " + runID},
 			Message: "Add FACTORY.md for " + runID, Reply: "Implemented it."}
+		if model == AskModel {
+			step.Ask = Question
+		}
+		return step
 	case "fix":
 		// The content names the Run, so a second fix is still a change.
 		return Step{Commit: map[string]string{FixedFile: "addressed by " + runID},
@@ -106,6 +120,11 @@ func Script(phase, model, runID string) string {
 		return b.String()
 	}
 	step := For(phase, model, runID, false)
+	if step.Ask != "" {
+		// lux-fake has no way to wait for an answer mid-script yet; the fake
+		// lux plays the asking agent, and a real lux says plainly it cannot.
+		return "fail " + AskModel + " is only played by the fake lux"
+	}
 	var b strings.Builder
 	for path, line := range step.Commit {
 		fmt.Fprintf(&b, "append %s %s\n", path, line)

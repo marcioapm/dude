@@ -109,3 +109,42 @@ provider config, or llmproxy's own accounting.
   event here. `gh webhook forward` would exercise the real path.
 - **Review took 14–18 seconds each time.** Fast enough that a second
   reviewer flavour costs little; worth trying on item 3's size.
+
+## 2026-09-24: steering, pausing, resuming and asking, live
+
+Same setup, on lux built from `da4b3bd` (which acknowledges the prompt and
+relays turn usage). The scratch project now requires `correctness` and
+`security` reviewers.
+
+**Steer, pause, resume** ("Add a Markdown table formatter"). While the
+Sonnet implementer was reading the code, a steer with interrupt asked it to
+add an `align` parameter. lux acknowledged it; the interrupt ended the turn
+(a turn with zero tokens), and the agent took the steer as its next turn and
+built the parameter. Pausing mid-turn stopped the lux Run with its session
+kept; resuming brought it back on a second placement — and there it sat.
+**A resumed ACP agent waits for input**, and one paused mid-turn never
+finished its task, so the plain Resume button left it idle for good. The
+fake agent carried on by itself after a resume, which is why no test had
+caught it. **Fix:** a resume without a queued directive tells the agent to
+continue where it left off; the fake now waits for input after a resume, as
+a real agent does. Given that input, the agent remembered its earlier work
+("tests already passed (20/20)") and finished; the item went on through
+review, a fix round, re-review and simplify.
+
+**Asking** ("Truncate long words"). The task left a product decision open
+and said so. Sonnet stopped with a well-formed question block and three
+choices — ellipsis character, three dots, or nothing — before writing any
+code. The work item showed as needing a person; nothing was pushed. The
+answer ("Ellipsis character") reached it as its next turn, quoting the
+question; it wrote `word[:limit] + "…"` and documented the choice. Both
+required reviewers ran.
+
+Two things the UI showed on this run and changed: the question appeared
+twice, once as the fenced block in the agent's message and once as the
+question card — the block is now left out of the message; and a turn's
+token totals are shown on its closing message rather than a line of their
+own.
+
+Still to see: whether agents ask when they should not. The prompt tells
+them most tasks need no question; the runs so far that had no ambiguity
+asked none.

@@ -645,8 +645,16 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 	// paused one never finished its turn: told nothing, it would sit idle
 	// for good. A person's directive, if one is waiting, is that input (sent
 	// the usual way once running); otherwise it is told to carry on.
+	// An agent waiting on a person's answer is told nothing: the answer,
+	// when it comes, is its input.
+	var asking bool
+	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM questions WHERE run_id = $1 AND status = 'open')`, r.ID).Scan(&asking)
+	}); err != nil {
+		return true, err
+	}
 	nudge := ""
-	if !r.HasDirectives {
+	if !r.HasDirectives && !asking {
 		nudge = resumeNudge
 	}
 	lr, err := s.Lux.Resume(ctx, r.LuxRunID, spec.Secrets, nudge)

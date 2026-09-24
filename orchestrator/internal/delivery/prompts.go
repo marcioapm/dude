@@ -99,6 +99,16 @@ func severityNote(blocking []string) string {
 // discovering an empty push.
 const commitNote = "Commit your work when you are done. Only committed changes are kept."
 
+// askNote tells an agent that changes code how to stop for a person. The
+// fenced block, not a question in prose, is what stops the run: an agent
+// thinking aloud ("should I also…?") must not stall a delivery.
+const askNote = "If you cannot go on without a decision only a person can make — the task is ambiguous " +
+	"in a way that changes what you build, or two reasonable readings conflict — stop and ask. End your " +
+	"reply with the question in a fenced block, and offer choices as `- ` lines when there are some:\n\n" +
+	"```question\nShould the command read standard input when no path is given?\n- yes\n- no\n```\n\n" +
+	"The answer comes back as your next message. Do not ask about anything you can decide or find out " +
+	"yourself; most tasks need no question at all."
+
 // Prompt composes one phase's prompt.
 func Prompt(phase string, in PromptInput) string {
 	var sections []string
@@ -111,7 +121,7 @@ func Prompt(phase string, in PromptInput) string {
 
 	case PhaseImplement:
 		add("Implement this task. Run the project's formatter, type checks and tests before you "+
-			"finish — handing over code that does not build is not finishing. "+commitNote, in.task())
+			"finish — handing over code that does not build is not finishing. "+commitNote, in.task(), askNote)
 
 	case PhaseReview:
 		category := in.Category
@@ -166,7 +176,7 @@ func Prompt(phase string, in PromptInput) string {
 			add("## Pull request feedback\n\n" + strings.Join(items, "\n\n"))
 		}
 		add("Fix only what is raised above. Widening the change makes the re-review harder and risks new findings.",
-			"The original task, for context:\n\n"+in.task())
+			"The original task, for context:\n\n"+in.task(), askNote)
 
 	case PhaseSimplify:
 		add("Simplify the changes on this branch without changing what they do.",
