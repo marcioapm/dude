@@ -5,7 +5,7 @@ import { ToastProvider } from "../primitives/Toast.tsx";
 import { TooltipProvider } from "../primitives/Tooltip.tsx";
 import { Select } from "../primitives/Select.tsx";
 import { Checkbox } from "../primitives/Checkbox.tsx";
-import type { PaneMode } from "./Frame.tsx";
+import { PaneDensityContext, type PaneDensity, type PaneMode } from "./Frame.tsx";
 import { TokensSection } from "./sections/Tokens.tsx";
 import { PrimitivesSection } from "./sections/Primitives.tsx";
 import { ComponentsSection } from "./sections/Components.tsx";
@@ -110,7 +110,7 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
 
 export function Gallery() {
   return (
-    <ThemeProvider storageKey="dude.gallery.theme" defaultPreference="dark">
+    <ThemeProvider storageKey="dude.gallery.theme" densityStorageKey="dude.gallery.density" defaultPreference="dark">
       <TooltipProvider>
         <ToastProvider>
           <Shell />
@@ -124,6 +124,11 @@ function Shell() {
   const theme = useTheme();
   const [panes, setPanes] = useState<PaneMode>(() => (localStorage.getItem("dude.gallery.panes") as PaneMode | null) ?? "both");
   useEffect(() => localStorage.setItem("dude.gallery.panes", panes), [panes]);
+  const [paneDensity, setPaneDensity] = useState<PaneDensity>(() => (localStorage.getItem("dude.gallery.paneDensity") as PaneDensity | null) ?? theme.density);
+  useEffect(() => {
+    localStorage.setItem("dude.gallery.paneDensity", paneDensity);
+    if (paneDensity !== "both") theme.setDensity(paneDensity);
+  }, [paneDensity, theme.setDensity]);
 
   return (
     <div className={styles["app"]}>
@@ -157,6 +162,17 @@ function Shell() {
             ]}
           />
           <Select
+            label="Density"
+            size="sm"
+            value={paneDensity}
+            onValueChange={(v) => setPaneDensity(v)}
+            options={[
+              { value: "comfortable", label: "Comfortable" },
+              { value: "compact", label: "Compact" },
+              { value: "both", label: "Both, stacked" },
+            ]}
+          />
+          <Select
             label="Gallery chrome"
             size="sm"
             value={theme.preference}
@@ -171,12 +187,14 @@ function Shell() {
         </div>
       </nav>
       <main className={styles["main"]}>
-        <TokensSection mode={panes} />
-        <PrimitivesSection mode={panes} />
-        <ComponentsSection mode={panes} />
-        <ChatSection mode={panes} />
-        <NavigationSection mode={panes} />
-        <BoardSection mode={panes} />
+        <PaneDensityContext.Provider value={paneDensity}>
+          <TokensSection mode={panes} />
+          <PrimitivesSection mode={panes} />
+          <ComponentsSection mode={panes} />
+          <ChatSection mode={panes} />
+          <NavigationSection mode={panes} />
+          <BoardSection mode={panes} />
+        </PaneDensityContext.Provider>
       </main>
     </div>
   );

@@ -3,6 +3,8 @@ import { Block, Caption, Col, Label, Panes, Row, Section, type PaneMode } from "
 import styles from "../gallery.module.css";
 import { AGENT_ROLE_NAMES, TONE_NAMES, accent, diff, neutral, roleColors, themeColors, tones } from "../../tokens/palette-and-themes.ts";
 import { duration, easing, fontSize, radius, space, zIndex } from "../../tokens/scale.ts";
+import { densityTokens, type DensityToken } from "../../tokens/density.ts";
+import type { Density } from "../../tokens/density.ts";
 import { ALL_STATUSES, STATUS_SPECS } from "../../tokens/status.ts";
 import { Icon, ICON_NAMES } from "../../icons/index.tsx";
 import { StatusBadge } from "../../components/StatusBadge.tsx";
@@ -46,7 +48,7 @@ export function TokensSection({ mode }: { readonly mode: PaneMode }) {
       title="Tokens"
       intro="Everything is authored in OKLCH and resolved to hex at build time, so lightness is perceptual and the shipped CSS needs no runtime support. Components reference only semantic roles; the raw ramp is never used directly."
     >
-      <Block id="tokens-neutrals" title="Neutral ramp" note="13 steps, hue 250, chroma 0.007 — a barely-cool gray. Dark surfaces are steps 1–4; light surfaces are 12 + white. Text uses 6–8 (dark) and 1/6/7 (light).">
+      <Block id="tokens-neutrals" title="Neutral ramp" note="13 steps, hue 250, chroma 0.0035 — a grey with the faintest cool cast. Dark surfaces are charcoal, steps 1–4; light surfaces are 12 + white. The text ladders are set in themes.ts against the surfaces, not taken from this ramp.">
         <div className={styles["ramp"]}>
           {neutral.map((hex, i) => (
             <div key={i} className={styles["rampStep"]} style={{ background: hex, color: i < 7 ? "#fff" : "#000" }}>
@@ -56,7 +58,7 @@ export function TokensSection({ mode }: { readonly mode: PaneMode }) {
         </div>
       </Block>
 
-      <Block id="tokens-semantic" title="Semantic colors" note="The roles components actually use. Dark gets elevation by lighter surfaces + hairline; light gets it by shadow.">
+      <Block id="tokens-semantic" title="Semantic colors" note="The roles components actually use. Dark separates regions by small, even surface steps; light by canvas vs white and shadow. Hairlines only where they carry meaning.">
         <Panes mode={mode}>
           {(theme) => (
             <div className={styles["swatches"]}>
@@ -151,11 +153,12 @@ export function TokensSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
 
-      <Block id="tokens-type" title="Type scale" note="Body is 13px Inter. Mono tier is JetBrains Mono with tnum + slashed zero, used for anything an operator might copy or compare: IDs, SHAs, paths, timestamps, costs.">
+      <Block id="tokens-type" title="Type scale" note="Body is 15px Inter (14px compact), chat and document prose 16px at 1.55. Mono tier is JetBrains Mono with tnum + slashed zero, used for anything an operator might copy or compare: IDs, SHAs, paths, timestamps, costs.">
         <Panes mode={mode}>
+          {(_theme, density) => (
           <div className={styles["typeSample"]}>
             {(Object.keys(fontSize) as Array<keyof typeof fontSize>).map((k) => (
-              <TypeRow key={k} k={k} px={fontSize[k]} />
+              <TypeRow key={k} k={k} density={density} />
             ))}
             <Caption>mono md</Caption>
             <span className="ds-mono" style={{ fontSize: 13 }}>
@@ -176,10 +179,11 @@ export function TokensSection({ mode }: { readonly mode: PaneMode }) {
             <Caption>label caps</Caption>
             <span className="ds-label">Section label</span>
           </div>
+          )}
         </Panes>
       </Block>
 
-      <Block id="tokens-space" title="Spacing, radii, elevation" note="Spacing on a 4px grid with 2 and 6 for hairline gaps. Radii are small — 4px is the default control radius; nothing in a console should look like a pill except a status dot.">
+      <Block id="tokens-space" title="Spacing, radii, elevation" note="Spacing on a 4px grid with 2 and 6 for hairline gaps. Radii are soft but small — 6px is the default control radius, 8px cards, 12px dialogs; nothing should look like a pill except a status dot.">
         <Panes mode={mode}>
           {(theme) => (
             <Col>
@@ -210,6 +214,14 @@ export function TokensSection({ mode }: { readonly mode: PaneMode }) {
             </Col>
           )}
         </Panes>
+      </Block>
+
+      <Block
+        id="tokens-density"
+        title="Density"
+        note="Comfortable is the default; compact is data-density=&quot;compact&quot;. Only these tokens differ. The large layout spacing, row heights and the chat avatar give up real space; text, the default radius and medium controls lose 1–2px; everything smaller holds."
+      >
+        <DensityTable />
       </Block>
 
       <Block id="tokens-motion" title="Motion and layers" note="Four durations. Hover a row to see the easing. Everything 'live' pulses at 2.4s and is multiplied by --ds-motion-live, which reduced-motion sets to 0 — so live states become still instead of vanishing.">
@@ -277,13 +289,39 @@ export function TokensSection({ mode }: { readonly mode: PaneMode }) {
   );
 }
 
-function TypeRow({ k, px }: { readonly k: string; readonly px: number }) {
+function TypeRow({ k, density }: { readonly k: keyof typeof fontSize; readonly density: Density }) {
+  const token = `text-${k}`;
+  const value = densityTokens[density][token as DensityToken] ?? `${fontSize[k]}px`;
   return (
     <>
       <Caption>
-        {k} {px}px
+        {k} {value}
       </Caption>
-      <span style={{ fontSize: px, lineHeight: 1.3 }}>Run 14 failed: 3 checks, 1 blocked on you</span>
+      <span style={{ fontSize: `var(--ds-${token})`, lineHeight: 1.3 }}>Run 14 failed: 3 checks, 1 blocked on you</span>
+    </>
+  );
+}
+
+function DensityTable() {
+  const keys = Object.keys(densityTokens.comfortable) as DensityToken[];
+  return (
+    <div className={styles["stateGrid"]} style={{ gridTemplateColumns: "max-content max-content max-content" }}>
+      <Caption>token</Caption>
+      <Caption>comfortable</Caption>
+      <Caption>compact</Caption>
+      {keys.map((k) => (
+        <DensityRow key={k} k={k} />
+      ))}
+    </div>
+  );
+}
+function DensityRow({ k }: { readonly k: DensityToken }) {
+  const same = densityTokens.comfortable[k] === densityTokens.compact[k];
+  return (
+    <>
+      <span className="ds-mono" style={{ fontSize: "var(--ds-text-xs)" }}>--ds-{k}</span>
+      <Caption>{densityTokens.comfortable[k]}</Caption>
+      <Caption>{same ? "—" : densityTokens.compact[k]}</Caption>
     </>
   );
 }
