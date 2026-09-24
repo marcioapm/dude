@@ -179,6 +179,8 @@ export const workItemSchema = z.object({
   organizationId: z.string(),
   projectId: z.string(),
   epicId: z.string().nullable().default(null),
+  /** What people call it: the project's prefix and a number (TK-12). */
+  key: z.string().optional(),
   /** The repository it changes; null means the project's only one. */
   repositoryId: z.string().nullable().default(null),
   title: z.string().min(1),

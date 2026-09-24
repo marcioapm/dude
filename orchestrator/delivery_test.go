@@ -96,8 +96,8 @@ func newWorld(t *testing.T) *world {
 
 	w.project, w.repoID = "prj_"+w.org, "repo_"+w.org
 	models := `{"implementer":{"model":"fake/scripted"},"reviewer":{"model":"fake/scripted"},"simplifier":{"model":"fake/scripted"}}`
-	mustExec(t, owner, `INSERT INTO projects (id, organization_id, name, slug, agent_models, runtime_image)
-		VALUES ($1, $2, 'P', $1, $3::jsonb, 'agent:test')`, w.project, w.org, models)
+	mustExec(t, owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix, agent_models, runtime_image)
+		VALUES ($1, $2, 'P', $1, 'P', $3::jsonb, 'agent:test')`, w.project, w.org, models)
 	mustExec(t, owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
 		VALUES ($1, $2, $3, 'target', 'https://github.com/acme/target.git', 'main')`, w.repoID, w.org, w.project)
 	mustExec(t, owner, `INSERT INTO forge_credentials (id, organization_id, auth, secret, api_base_url)
@@ -148,8 +148,9 @@ func mustExec(t *testing.T, c *pgx.Conn, sql string, args ...any) {
 
 func (w *world) workItem() string {
 	id := fmt.Sprintf("wi_%d", time.Now().UnixNano())
-	mustExec(w.t, w.owner, `INSERT INTO work_items (id, organization_id, project_id, title, goal, acceptance_criteria)
-		VALUES ($1, $2, $3, 'Greet people', 'Say hello', '["it greets"]'::jsonb)`, id, w.org, w.project)
+	mustExec(w.t, w.owner, `INSERT INTO work_items (id, organization_id, project_id, number, title, goal, acceptance_criteria)
+		VALUES ($1, $2, $3, (SELECT count(*) + 1 FROM work_items WHERE project_id = $3), 'Greet people', 'Say hello',
+		'["it greets"]'::jsonb)`, id, w.org, w.project)
 	return id
 }
 

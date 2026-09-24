@@ -153,3 +153,14 @@ def test_the_github_connection_is_shown_masked_and_can_be_verified(client: ApiCl
 
 def test_an_organization_without_github_says_so(client: ApiClient):
     assert client.get("/v1/forge/credential").json() == {"connected": False}
+
+
+def test_work_items_are_numbered_within_their_project(client: ApiClient):
+    project = client.create_project(name="Text Kit", slug=f"textkit-{os.urandom(3).hex()}")
+    first = client.post("/v1/work-items", {"projectId": project["id"], "title": "One"}).json()
+    second = client.post("/v1/work-items", {"projectId": project["id"], "title": "Two"}).json()
+    assert (first["key"], second["key"]) == ("TEXT-1", "TEXT-2")
+    assert client.get(f"/v1/work-items/{second['id']}").json()["key"] == "TEXT-2"
+    nav = client.get("/v1/navigation").json()
+    keys = [wi["key"] for p in nav["projects"] if p["id"] == project["id"] for wi in p["workItems"]]
+    assert sorted(keys) == ["TEXT-1", "TEXT-2"]

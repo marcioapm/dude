@@ -18,6 +18,7 @@ import type { RequestContext, Router } from "../router.ts";
 const WORK_ITEM_SELECT = `
   id, organization_id AS "organizationId", project_id AS "projectId", epic_id AS "epicId", repository_id AS "repositoryId",
   title, goal, acceptance_criteria AS "acceptanceCriteria", status,
+  (SELECT key_prefix FROM projects p WHERE p.id = work_items.project_id) || '-' || number AS key,
   requested_by AS "requestedBy", created_at AS "createdAt", updated_at AS "updatedAt"`;
 
 const RUN_SELECT = `
@@ -56,7 +57,12 @@ async function createWorkItem(ctx: RequestContext): Promise<Response> {
   const result = await withOrg(organizationId, async (scope) => {
     // RLS already confines this to the caller's org, so a miss means the
     // project does not exist *for them* — which is the correct 404 either way.
-    const project = await scope.sql`SELECT id FROM projects WHERE id = ${input.projectId} LIMIT 1`;
+    // Takes the project's next number, locking the row so two creates
+    // cannot take the same one.
+    const project = (await scope.sql`
+      UPDATE projects SET next_work_item_number = next_work_item_number + 1
+      WHERE id = ${input.projectId}
+      RETURNING next_work_item_number - 1 AS number`) as Array<{ number: number }>;
     if (project.length === 0) return { missingProject: true as const };
     if (input.repositoryId) {
       const repo = await scope.sql`SELECT 1 FROM repositories WHERE id = ${input.repositoryId} AND project_id = ${input.projectId}`;
@@ -65,9 +71,9 @@ async function createWorkItem(ctx: RequestContext): Promise<Response> {
 
     const workItemId = newId("workItem");
     const rows = (await scope.sql`
-      INSERT INTO work_items (id, organization_id, project_id, epic_id, repository_id, title, goal,
+      INSERT INTO work_items (id, organization_id, project_id, number, epic_id, repository_id, title, goal,
                               acceptance_criteria, status)
-      VALUES (${workItemId}, ${organizationId}, ${input.projectId}, ${input.epicId}, ${input.repositoryId},
+      VALUES (${workItemId}, ${organizationId}, ${input.projectId}, ${project[0]!.number}, ${input.epicId}, ${input.repositoryId},
               ${input.title}, ${input.goal},
               ${input.acceptanceCriteria ?? []}::jsonb, 'received')
       RETURNING ${scope.sql.unsafe(WORK_ITEM_SELECT)}`) as Array<Record<string, unknown>>;

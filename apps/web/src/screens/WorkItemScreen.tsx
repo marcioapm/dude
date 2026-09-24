@@ -91,8 +91,8 @@ export function WorkItemScreen({ client, workItemId, onOpenRun }: WorkItemScreen
       <header className="wiHeader">
         <div className="wiTitleRow">
           <StatusBadge status={item.status} />
+          {item.key ? <code className="wiKey" title={item.id}>{item.key}</code> : null}
           <h1 className="wiTitle">{item.title}</h1>
-          <code className="wiKey">{item.id}</code>
         </div>
         {item.goal ? <p className="wiGoal">{item.goal}</p> : null}
         {item.acceptanceCriteria.length > 0 ? (

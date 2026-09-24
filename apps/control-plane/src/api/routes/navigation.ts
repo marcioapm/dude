@@ -39,6 +39,7 @@ interface EpicRow {
 
 interface WorkItemRow {
   id: string;
+  key: string;
   projectId: string;
   epicId: string | null;
   title: string;
@@ -111,14 +112,16 @@ async function getNavigation(ctx: RequestContext): Promise<Response> {
     // ledger: the board shows time in column, and updated_at moves for
     // reasons that are not a column change.
     const workItems = (await sql`
-      SELECT w.id, w.project_id AS "projectId", w.epic_id AS "epicId", w.title, w.status,
+      SELECT w.id, p.key_prefix || '-' || w.number AS key,
+             w.project_id AS "projectId", w.epic_id AS "epicId", w.title, w.status,
              w.requested_by AS "requestedBy",
              COALESCE(
                (SELECT max(e.occurred_at) FROM events e
                 WHERE e.work_item_id = w.id AND e.event_type = 'work_item.status_changed'),
                w.created_at
              ) AS "statusSince"
-      FROM work_items w ORDER BY w.created_at DESC LIMIT 500`) as WorkItemRow[];
+      FROM work_items w JOIN projects p ON p.id = w.project_id
+      ORDER BY w.created_at DESC LIMIT 500`) as WorkItemRow[];
 
     const runs = (await sql`
       SELECT id, "workItemId", attempt, status, phase, role, category,
@@ -159,6 +162,7 @@ async function getNavigation(ctx: RequestContext): Promise<Response> {
       const attempts = groupBy(runsByWorkItem.get(w.id) ?? [], (r) => r.attempt);
       return {
         id: w.id,
+        key: w.key,
         title: w.title,
         status: w.status,
         statusSince: w.statusSince,
