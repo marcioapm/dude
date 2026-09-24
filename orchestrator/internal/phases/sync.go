@@ -224,14 +224,15 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 			Scan(&title, &goal, &criteria, &image, &projectModels, &in.RepoName, &in.RepoURL, &in.Ref); err != nil {
 			return fmt.Errorf("load work item and repository: %w", err)
 		}
-		// The findings this fix was created for, exactly: a fix for pull
-		// request feedback has none, and must not take on the review's
-		// findings a person chose to leave.
+		// The findings the workflow chose for this Run, exactly and in its
+		// order: those a fix addresses (a fix for pull request feedback has
+		// none, and must not take on findings a person chose to leave), or
+		// those a re-review judges — which it answers by position.
 		if len(r.FindingIDs) > 0 {
 			rows, err := tx.Query(ctx, `SELECT severity::text, category, title, description, suggested_fix,
 				COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0)
-				FROM review_findings WHERE id = ANY($1)
-				ORDER BY CASE severity WHEN 'blocking' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 ELSE 5 END, created_at`,
+				FROM review_findings f JOIN unnest($1::text[]) WITH ORDINALITY AS chosen(id, n) ON chosen.id = f.id
+				ORDER BY chosen.n`,
 				r.FindingIDs)
 			if err != nil {
 				return err
@@ -591,7 +592,20 @@ func (s *Syncer) reportFindings(ctx context.Context, r phaseRun) error {
 	}); err != nil {
 		return err
 	}
-	return RecordFindings(ctx, s.DB, r.Org, r.ID, delivery.ParseFindings(reply.String()))
+	return RecordFindings(ctx, s.DB, r.Org, r.ID, delivery.ParseFindings(reply.String()),
+		judged(r.FindingIDs, delivery.ParseVerdicts(reply.String())))
+}
+
+// judged maps a re-review's verdicts, given by position, to the findings it
+// was shown.
+func judged(shown []string, verdicts map[int]bool) map[string]bool {
+	out := map[string]bool{}
+	for i, fixed := range verdicts {
+		if i < len(shown) {
+			out[shown[i]] = fixed
+		}
+	}
+	return out
 }
 
 // cancel ends the lux Run of a Run a person aborted.
@@ -785,20 +799,20 @@ func (s *Syncer) event(ctx context.Context, tx pgx.Tx, r phaseRun, typ, actor st
 	return err
 }
 
-// RecordFindings stores a review's findings, and resolves earlier ones a
-// clean re-review no longer raises.
+// RecordFindings stores a review's findings, and resolves the earlier ones
+// the re-review judged fixed.
 //
-// The resolution rule is what lets the loop converge: without it a finding
-// from the first review stays open forever, because a clean second review
-// reports nothing, and nothing cannot close a row it never mentions. Scoped
-// to the review's own category (a security re-review saying nothing is no
-// evidence a correctness finding was fixed) and to findings a fixer has
-// already attempted (one nobody touched was not resolved by anything).
-func RecordFindings(ctx context.Context, database *db.DB, org, runID string, findings []delivery.Finding) error {
+// Resolution is what lets the loop converge: a finding stays open until
+// something closes it. What closes it is the reviewer of its category, shown
+// the finding after a fix and asked, reading the code — not the absence of
+// the finding from a new review, nor a fix having touched its file, both of
+// which close findings nobody checked.
+func RecordFindings(ctx context.Context, database *db.DB, org, runID string, findings []delivery.Finding,
+	verdicts map[string]bool) error {
 	return database.InOrg(ctx, org, func(tx pgx.Tx) error {
-		var projectID, workItemID, phase, category string
-		if err := tx.QueryRow(ctx, `SELECT project_id, work_item_id, phase::text, COALESCE(category, '') FROM runs WHERE id = $1`, runID).
-			Scan(&projectID, &workItemID, &phase, &category); err != nil {
+		var projectID, workItemID, phase string
+		if err := tx.QueryRow(ctx, `SELECT project_id, work_item_id, phase::text FROM runs WHERE id = $1`, runID).
+			Scan(&projectID, &workItemID, &phase); err != nil {
 			return err
 		}
 		// Only a review or test Run may report: a fixer reporting findings
@@ -809,22 +823,16 @@ func RecordFindings(ctx context.Context, database *db.DB, org, runID string, fin
 		if _, err := tx.Exec(ctx, `DELETE FROM review_findings WHERE run_id = $1`, runID); err != nil {
 			return err
 		}
-		covered := map[string]bool{}
-		if category != "" {
-			covered[category] = true
-		}
-		for _, f := range findings {
-			covered[f.Category] = true
-		}
-		if phase == delivery.PhaseReview && len(covered) > 0 {
-			cats := make([]string, 0, len(covered))
-			for c := range covered {
-				cats = append(cats, c)
+		// The reviewer's judgement of what it was shown: fixed is resolved;
+		// still stays open, for the next fix. One it said nothing about stays
+		// as it was.
+		for id, fixed := range verdicts {
+			if !fixed {
+				continue
 			}
 			if _, err := tx.Exec(ctx, `UPDATE review_findings SET status = 'resolved', resolved_by_run_id = $2,
-				resolution_note = 'not raised again by a re-review after a fix', updated_at = now()
-				WHERE work_item_id = $1 AND run_id <> $2 AND status = 'open' AND fix_attempts > 0 AND category = ANY($3)`,
-				workItemID, runID, cats); err != nil {
+				resolution_note = 'judged fixed by the re-review', updated_at = now()
+				WHERE id = $1 AND status = 'open'`, id, runID); err != nil {
 				return err
 			}
 		}

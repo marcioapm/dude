@@ -155,3 +155,21 @@ func TestEmptyResultIsAnEmptySliceNotNil(t *testing.T) {
 		t.Errorf("encoded as %s, which the control plane rejects", encoded)
 	}
 }
+
+func TestVerdictsOnEarlierFindingsAreReadAndNotTakenForFindings(t *testing.T) {
+	reply := "Checked the fix.\n\n```yaml\nverdicts:\n  F1: fixed\n  F2: still\n  F3: \"FIXED\"\n```\n---\n" +
+		"```yaml\nseverity: low\ncategory: correctness\ntitle: A new one\n```\n"
+	v := ParseVerdicts(reply)
+	if len(v) != 3 || !v[0] || v[1] || !v[2] {
+		t.Errorf("verdicts = %v", v)
+	}
+	if f := ParseFindings(reply); len(f) != 1 || f[0].Title != "A new one" {
+		t.Errorf("findings = %+v", f)
+	}
+}
+
+func TestNoVerdictsIsNoJudgement(t *testing.T) {
+	if v := ParseVerdicts("```yaml\nseverity: low\ntitle: x\n```"); len(v) != 0 {
+		t.Errorf("verdicts = %v", v)
+	}
+}

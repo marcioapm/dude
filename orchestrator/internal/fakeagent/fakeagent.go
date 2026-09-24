@@ -54,6 +54,10 @@ const Finding = "---\n" +
 	"description: The change is missing a record that the review was addressed.\n" +
 	"suggested_fix: Add a file naming what was fixed.\n"
 
+// Verdict is the reviewer's judgement of its earlier finding once the fix
+// is in the tree, in the format the re-review prompt asks for.
+const Verdict = "```yaml\nverdicts:\n  F1: fixed\n```\n"
+
 // Step is what the agent does for one phase.
 type Step struct {
 	// Files to commit, path → one line of content; none changes nothing.
@@ -91,7 +95,8 @@ func For(phase, model, runID string, fixed bool) Step {
 			Message: "Simplify " + runID, Reply: "Simplified."}
 	case "review":
 		if fixed {
-			return Step{Reply: "Reviewed the fix; no further problems."}
+			// Shown the finding it raised, it judges the fix.
+			return Step{Reply: "Reviewed the fix; no further problems.\n\n" + Verdict}
 		}
 		return Step{Reply: "One problem:\n\n```yaml\n" + Finding + "```\n"}
 	}
@@ -116,6 +121,10 @@ func Script(phase, model, runID string) string {
 			b.WriteString("append /tmp/review.yaml " + line + "\n")
 		}
 		b.WriteString("unless-exists " + FixedFile + " read /tmp/review.yaml\n")
+		for _, line := range strings.Split(strings.TrimSuffix(Verdict, "\n"), "\n") {
+			b.WriteString("append /tmp/verdict.yaml " + line + "\n")
+		}
+		b.WriteString("if-exists " + FixedFile + " read /tmp/verdict.yaml\n")
 		b.WriteString("echo reviewed")
 		return b.String()
 	}

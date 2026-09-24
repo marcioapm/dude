@@ -326,6 +326,10 @@ func TestWhatDudeSendsLux(t *testing.T) {
 	if spec.Network == nil || len(spec.Network.Egress) != 1 || spec.Network.Egress[0].Host != "llm.example" {
 		t.Errorf("network = %+v, want egress to the model provider only", spec.Network)
 	}
+	// The tools it runs colour their output, which the chat renders.
+	if spec.Env["FORCE_COLOR"] != "1" || spec.Env["TERM"] == "" || spec.Env["GIT_CONFIG_VALUE_0"] != "always" {
+		t.Errorf("env = %v, want colour forced", spec.Env)
+	}
 	if spec.Labels["dude.run"] == "" || spec.Labels["dude.workItem"] != wi {
 		t.Errorf("labels = %v", spec.Labels)
 	}
@@ -577,6 +581,42 @@ func TestAnAgentThatDiesWhileWaitingFailsItsRun(t *testing.T) {
 	})
 	if n := w.count(`SELECT count(*) FROM questions WHERE work_item_id = $1 AND status = 'open'`, wi); n != 0 {
 		t.Errorf("a failed Run's question is still waiting for a person")
+	}
+}
+
+func TestAFindingIsResolvedOnlyWhenTheReviewerJudgesItFixed(t *testing.T) {
+	w := newWorld(t)
+	var reviews int
+	var shown []string
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		switch labels["dude.phase"] {
+		case "review":
+			reviews++
+			workload, _ := spec["workload"].(map[string]any)
+			shown = append(shown, fmt.Sprint(workload["prompt"]))
+			if reviews == 1 {
+				return fakelux.Behaviour{Reply: "```yaml\n" + fakeagent.Finding + "```\n"}
+			}
+			// The fix touched the finding's file, but did not fix it.
+			return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: still\n```\n"}
+		case "implement", "fix":
+			return fakelux.Behaviour{Commit: map[string]string{"FACTORY.md": fmt.Sprint(labels["dude.run"]) + "\n"}, Message: "work"}
+		}
+		return fakelux.Behaviour{Hang: true}
+	}
+	// A real model, so the review prompt is the one a real reviewer reads.
+	mustExec(t, w.owner, `UPDATE projects SET agent_models = agent_models || '{"reviewer":{"model":"llm/review"}}'::jsonb WHERE id = $1`, w.project)
+	wi := w.workItem()
+	w.deliver(wi)
+	w.until("a second review", func() bool { return reviews >= 2 && w.count(`SELECT count(*) FROM runs
+		WHERE work_item_id = $1 AND phase = 'review' AND status = 'completed'`, wi) >= 2 })
+
+	if n := w.count(`SELECT count(*) FROM review_findings WHERE work_item_id = $1 AND status = 'open'`, wi); n != 1 {
+		t.Errorf("open findings = %d; a finding the reviewer says is still there must stay open", n)
+	}
+	if !strings.Contains(shown[1], "FACTORY.md does not record the fix") || !strings.Contains(shown[1], "F1: fixed | still") {
+		t.Errorf("the re-review was not shown the finding to judge:\n%s", shown[1])
 	}
 }
 

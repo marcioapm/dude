@@ -199,10 +199,18 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 		return workflow.Result{}, err
 	}
 	categories := ReviewersFor(st.Policy, st.ChangedPaths)
+	// A re-review judges what the fixer was sent: the open findings of its
+	// category that a fix has attempted.
+	toJudge, err := w.s.AttemptedFindings(ctx, sc.OrganizationID, st.WorkItemID)
+	if err != nil {
+		return workflow.Result{}, err
+	}
 	var runIDs []string
 	for _, c := range categories {
 		id, err := w.phase(ctx, sc, st, PhaseReview, st.HeadSHA, key(sc, ":review:", st.Iteration, ":", c),
-			func(p *PhaseRun) { p.Category, p.BlockingSeverities = c, st.Policy.BlockingSeverities })
+			func(p *PhaseRun) {
+				p.Category, p.BlockingSeverities, p.FindingIDs = c, st.Policy.BlockingSeverities, toJudge[c]
+			})
 		if err != nil {
 			return workflow.Result{}, err
 		}
@@ -299,12 +307,6 @@ func (w *steps) awaitFix(ctx context.Context, sc workflow.StepContext) (workflow
 	}
 	if !out.Succeeded {
 		return w.escalate(ctx, sc, st, "fix_failed", map[string]any{"runId": runID, "error": out.Error})
-	}
-	// Here rather than after a review: it is a fix that can make a finding
-	// moot. After a review it would retire the findings that review just
-	// raised, all of which name files the previous phase touched.
-	if err := w.s.SupersedeStale(ctx, sc.OrganizationID, st.WorkItemID, out.ChangedPaths, out.HeadSHA); err != nil {
-		return workflow.Result{}, err
 	}
 	st.HeadRunID, st.PendingRunIDs = runID, nil
 	if out.HeadSHA != "" {
