@@ -441,11 +441,9 @@ func TestWorkOnNoRepositoryEndsWithWhatTheAgentPublished(t *testing.T) {
 	if len(w.gh.Pulls())+len(w.web.Pulls()) != 0 {
 		t.Errorf("work on no repository opened a pull request")
 	}
-	var spec struct {
-		Git *struct{} `json:"git"`
-	}
+	var spec lux.Spec
 	_ = json.Unmarshal(w.lux.Runs()[0].Spec, &spec)
-	if spec.Git != nil {
+	if spec.Git != nil && len(spec.Git.Repositories) != 0 {
 		t.Errorf("work on no repository cloned something")
 	}
 	if n := w.count(`SELECT count(*) FROM artifacts a JOIN runs r ON r.id = a.run_id WHERE r.work_item_id = $1`, wi); n == 0 {
@@ -1237,6 +1235,44 @@ func TestARequestTheAgentDoesNotWaitOnLetsItsTurnEnd(t *testing.T) {
 	})
 	if n := w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND dude_pause IS NOT NULL`, wi); n != 0 {
 		t.Errorf("parked on a request the agent did not wait on")
+	}
+}
+
+// Work that starts on no repository, and is let change one mid-Run, pushes
+// it: the branch lux pushes to is named at submit, before there is anything
+// to push.
+func TestWorkGivenARepositoryToChangeMidRunIsPushed(t *testing.T) {
+	w := newWorld(t)
+	w.withTools()
+	w.syncer.ParkAfter = 100 * time.Millisecond
+	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+		VALUES ($1, $2, $3, 'web', 'https://github.com/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
+			return fakelux.Behaviour{Hang: true}
+		}
+		return fakelux.Behaviour{CallTools: [][2]string{{"request_repository", `{"repository":"web","write":true,"reason":"the change is there","wait":true}`}},
+			Reply: "Done.", Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
+	}
+	wi := w.workItem() // names no repository: the project has two
+	w.deliver(wi)
+	var reqID string
+	w.until("the request", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM repository_requests WHERE work_item_id = $1`, wi).Scan(&reqID)
+		return reqID != ""
+	})
+	w.call("/internal/repository-requests/"+reqID+"/decide", map[string]any{"approve": true})
+	w.until("the implementer to finish", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND phase = 'implement' AND status = 'completed'`, wi) == 1
+	})
+	if !w.lux.Runs()[0].Pushed {
+		var reqs, evs string
+		_ = w.owner.QueryRow(context.Background(), `SELECT string_agg(status||'/'||blocking::text, ',') FROM repository_requests WHERE work_item_id = $1`, wi).Scan(&reqs)
+		_ = w.owner.QueryRow(context.Background(), `SELECT string_agg(event_type, ' ' ORDER BY cursor) FROM events WHERE work_item_id = $1`, wi).Scan(&evs)
+		t.Fatalf("the change was never pushed; requests %s; resumed %d\n%s\n%s", reqs, w.lux.Runs()[0].Resumed, evs, w.describeRuns())
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE work_item_id = $1 AND payload->>'reason' = 'no_changes'`, wi); n != 0 {
+		t.Errorf("escalated as no changes")
 	}
 }
 

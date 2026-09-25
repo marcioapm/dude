@@ -189,12 +189,14 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 			return nil
 		}
 		if str("status") != "failed" {
-			_, err := tx.Exec(ctx, `WITH done AS (
+			if _, err := tx.Exec(ctx, `WITH done AS (
 					UPDATE repository_requests q SET status = 'cloned' FROM repositories repo
 					WHERE repo.id = q.repository_id AND q.run_id = $1 AND repo.name = $2 AND q.status = 'approved')
 				UPDATE runs SET lux_repositories = array_append(lux_repositories, $2)
-				WHERE id = $1 AND NOT ($2 = ANY (lux_repositories))`, t.run.ID, str("repo"))
-			return err
+				WHERE id = $1 AND NOT ($2 = ANY (lux_repositories))`, t.run.ID, str("repo")); err != nil {
+				return err
+			}
+			return t.settleWait(ctx, tx, s)
 		}
 		if _, err := tx.Exec(ctx, `UPDATE repository_requests q SET status = 'failed', error = $3
 			FROM repositories repo WHERE repo.id = q.repository_id AND q.run_id = $1 AND repo.name = $2
@@ -207,8 +209,11 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 			  AND wr.work_item_id = q.work_item_id AND wr.repository_id = q.repository_id`, t.run.ID, str("repo")); err != nil {
 			return err
 		}
-		return s.event(ctx, tx, t.run, "repository.clone_failed", ledger.ActorSystem,
-			map[string]any{"repository": str("repo"), "error": str("error")})
+		if err := s.event(ctx, tx, t.run, "repository.clone_failed", ledger.ActorSystem,
+			map[string]any{"repository": str("repo"), "error": str("error")}); err != nil {
+			return err
+		}
+		return t.settleWait(ctx, tx, s)
 	case "git.checkout":
 		// What each checkout started from, the first time it was made; a
 		// resume leaves the checkout as the agent left it.
@@ -325,18 +330,32 @@ func (t *translator) activity(ctx context.Context, tx pgx.Tx, s *Syncer, activit
 		// answer starts its next turn. The syncer parks it if the wait is
 		// long.
 		tag, err := tx.Exec(ctx, `UPDATE runs r SET waiting_since = COALESCE(r.waiting_since, now())
-			WHERE r.id = $1 AND r.agent_busy_at IS NOT NULL AND `+delivery.OpenAsk, t.run.ID)
+			WHERE r.id = $1 AND r.agent_busy_at IS NOT NULL AND `+delivery.HoldsTurn, t.run.ID)
 		if err != nil || tag.RowsAffected() > 0 {
 			return err
 		}
-		tag, err = tx.Exec(ctx, `UPDATE runs SET turn_done_at = now()
-			WHERE id = $1 AND agent_busy_at IS NOT NULL AND turn_done_at IS NULL`, t.run.ID)
-		if err != nil || tag.RowsAffected() == 0 {
-			return err
-		}
-		return s.event(ctx, tx, t.run, evSessionStopped, ledger.ActorAgent, map[string]any{"reason": "turn_complete"})
+		return t.turnDone(ctx, tx, s, "")
 	}
 	return nil
+}
+
+// turnDone marks the agent's turn done, once; extra narrows which Run
+// (SQL over r).
+func (t *translator) turnDone(ctx context.Context, tx pgx.Tx, s *Syncer, extra string) error {
+	tag, err := tx.Exec(ctx, `UPDATE runs r SET turn_done_at = now(), waiting_since = NULL
+		WHERE r.id = $1 AND r.agent_busy_at IS NOT NULL AND r.turn_done_at IS NULL`+extra, t.run.ID)
+	if err != nil || tag.RowsAffected() == 0 {
+		return err
+	}
+	return s.event(ctx, tx, t.run, evSessionStopped, ledger.ActorAgent, map[string]any{"reason": "turn_complete"})
+}
+
+// settleWait: a turn that ended holding on a repository it was waiting for
+// is done once that repository has arrived (or failed to) and nothing else
+// holds it. lux reports the clone after the agent's own records, so the
+// resumed turn can end before it.
+func (t *translator) settleWait(ctx context.Context, tx pgx.Tx, s *Syncer) error {
+	return t.turnDone(ctx, tx, s, ` AND r.waiting_since IS NOT NULL AND NOT `+delivery.HoldsTurn)
 }
 
 // agentEvent translates the agent's own protocol messages. Only ACP is
