@@ -27,9 +27,15 @@
   border-top-left-radius: 0;
   border-bottom-left-radius: 0;
 }
-.failed {
+/* A non-zero exit code finished "badly" even if the harness said the call
+   completed: it takes the failed treatment. */
+.failed,
+.badExit {
   --tc-accent: var(--ds-tone-danger-fg);
   --tc-fill: color-mix(in srgb, var(--ds-tone-danger-bg) var(--ds-tint-failed-fill), transparent);
+}
+.aborted {
+  --tc-accent: transparent;
 }
 
 .row {
@@ -250,16 +256,6 @@
 }
 
 /* --- Output ------------------------------------------------------------- */
-
-/* A non-zero exit code finished "badly" even if the harness said the call
-   completed: the rail says so. */
-.badExit {
-  --tc-accent: var(--ds-tone-danger-fg);
-  --tc-fill: color-mix(in srgb, var(--ds-tone-danger-bg) var(--ds-tint-failed-fill), transparent);
-}
-.aborted {
-  --tc-accent: transparent;
-}
 
 .exitChip {
   font-family: var(--ds-font-mono);
