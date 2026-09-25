@@ -295,7 +295,9 @@
 .table th,
 .table td {
   padding: var(--ds-space-cell-y) var(--ds-space-16) var(--ds-space-cell-y) 0;
-  border-bottom: 1px solid var(--ds-color-border-subtle);
+  /* Body rows: a hairline at 60% of border-subtle, so the 1px header rule
+     (one step up, `border`) is the rule that reads. */
+  border-bottom: 1px solid color-mix(in srgb, var(--ds-color-border-subtle) 60%, transparent);
   text-align: left;
   vertical-align: top;
 }
