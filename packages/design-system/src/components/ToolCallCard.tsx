@@ -47,7 +47,7 @@ export interface ToolCallCardProps extends Omit<HTMLAttributes<HTMLDivElement>, 
   readonly diff?: string | ReadonlyArray<FileDiff> | undefined;
   /** Error text. Shown in the collapsed row too — errors are never hidden. */
   readonly error?: string | undefined;
-  /** Process exit code. Non-zero is shown in the collapsed row whatever the status. */
+  /** Process exit code. Shown in the collapsed row when non-zero, except `1` on a failed call, which the ✕ already says. */
   readonly exitCode?: number | undefined;
   readonly icon?: IconName | undefined;
   readonly defaultExpanded?: boolean | undefined;
@@ -160,7 +160,8 @@ const STATUS_ICON: Record<ToolCallStatus, IconName | null> = {
  * calls carry a sweep along the bottom edge and a ticking duration that
  * turns attention-toned once the call is slow. Failed calls open by default
  * with the error's first line in the row itself, so an error is never
- * behind a click; a non-zero exit code sits in the row whatever the status.
+ * behind a click. A non-zero exit code sits in the row unless it is the
+ * plain `1` of a failed call; open, the output block always shows it.
  *
  * Open, the output is a mono block headed by its exit code. The backend
  * caps each stream and keeps the head and tail of anything longer; the
@@ -249,7 +250,7 @@ export function ToolCallCard({
         </span>
         {failed && error ? <span className={styles["errorInline"]}>{firstLine(error)}</span> : null}
         <span className={styles["meta"]}>
-          {badExit ? <span className={styles["exit"]}><span className="ds-cap">exit {exitCode}</span></span> : null}
+          {badExit && !(failed && exitCode === 1) ? <span className={styles["exit"]}><span className="ds-cap">exit {exitCode}</span></span> : null}
           {elapsed !== null ? (
             <span className={cx(styles["duration"], slow && styles["durationSlow"])} title={`${Math.round(elapsed)} ms`}>
               {formatDuration(elapsed)}

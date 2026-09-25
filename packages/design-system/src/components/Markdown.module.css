@@ -259,6 +259,14 @@
   max-height: 420px;
   white-space: pre;
   tab-size: 2;
+  /* Long lines scroll, and say so: a thin always-drawn scrollbar, plus a
+     shadow on the right edge that the "local" cover hides once scrolled to
+     the end (a pure-CSS scroll shadow; no JS measures overflow). */
+  scrollbar-width: thin;
+  scrollbar-color: var(--ds-color-border-strong) transparent;
+  background:
+    linear-gradient(to left, var(--ds-color-sunken) 40%, transparent) right / 32px 100% no-repeat local,
+    linear-gradient(to left, color-mix(in srgb, var(--ds-color-text-primary) 22%, transparent), transparent) right / 14px 100% no-repeat scroll;
 }
 .pre code {
   font: inherit;
@@ -270,7 +278,8 @@
   max-width: none;
 }
 
-/* Table: row hairlines only, no vertical rules, no header fill. */
+/* Table: a 1px rule under the header row, hairlines between body rows, no
+   vertical rules, no fills. */
 .tableWrap {
   overflow-x: auto;
   max-width: 100%;
