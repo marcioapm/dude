@@ -195,7 +195,8 @@ const askToolNote = "If you cannot go on without a decision only a person can ma
 	"you can decide or find out yourself; most tasks need no question at all."
 
 // toolsNote tells an agent about dude's tools.
-const toolsNote = "The dude tools (list_work, list_epics, create_work_item, emit_event, request_repository) " +
+const toolsNote = "The dude tools (list_work, list_epics, list_repositories, create_work_item, emit_event, " +
+	"request_repository) " +
 	"act on the work you are part of: record work you find outside your task (a person decides on it), report " +
 	"progress people can follow, ask for another repository you need."
 
@@ -203,7 +204,7 @@ const toolsNote = "The dude tools (list_work, list_epics, create_work_item, emit
 const cliNote = "The same, from the shell: the `dude` command (see `dude help`) — " +
 	"`dude work list`, `dude epic list`, `dude work create` for work you find outside your task (a person " +
 	"decides on it), `dude event progress --data '{\"done\":3,\"of\":10}'` for progress people can follow, " +
-	"and `dude publish FILE` to keep a file for people."
+	"`dude repo list` and `dude repo request`, and `dude publish FILE` to keep a file for people."
 
 // askNote tells an agent that changes code how to stop for a person. The
 // fenced block, not a question in prose, is what stops the run: an agent

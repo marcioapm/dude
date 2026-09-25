@@ -143,7 +143,7 @@ func TestAReviewerCannotCreateWork(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	// Seeing work and recording events, not making work or stopping for a person.
-	if strings.Join(names, ",") != "emit_event,list_epics,list_work,request_repository" {
+	if strings.Join(names, ",") != "emit_event,list_epics,list_repositories,list_work,request_repository" {
 		t.Errorf("a reviewer sees %v", names)
 	}
 }
@@ -318,5 +318,40 @@ func TestARunawayAgentIsSlowedDown(t *testing.T) {
 	_ = f.owner.QueryRow(context.Background(), `SELECT count(*) FROM work_items WHERE created_by_run_id = 'run_loop'`).Scan(&made)
 	if made != 20 {
 		t.Errorf("%d work items made, want the limit of 20", made)
+	}
+}
+
+// A model fills in arguments as the schema says: data must read as JSON
+// data, not bytes.
+func TestEmitEventsSchemaAsksForAnObject(t *testing.T) {
+	f := setup(t)
+	cs, err := f.connect(t, f.run(t, "run_schema", "implementer", "running"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	list, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range list.Tools {
+		if tool.Name != "emit_event" {
+			continue
+		}
+		raw, _ := json.Marshal(tool.InputSchema)
+		if strings.Contains(string(raw), `"integer"`) {
+			t.Errorf("emit_event's data reads as bytes to a model: %s", raw)
+		}
+	}
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "emit_event",
+		Arguments: map[string]any{"type": "milestone", "data": map[string]any{"done": "implemented"}}})
+	if err != nil || res.IsError {
+		t.Fatalf("emit: %v %+v", err, res)
+	}
+	var done string
+	_ = f.owner.QueryRow(context.Background(), `SELECT payload->'data'->>'done' FROM events
+		WHERE run_id = 'run_schema' AND event_type = 'agent.custom.milestone'`).Scan(&done)
+	if done != "implemented" {
+		t.Errorf("data = %q", done)
 	}
 }
