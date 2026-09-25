@@ -46,12 +46,9 @@ describe("generated density CSS", () => {
     expect(readFileSync(TOKENS_CSS_URL, "utf8")).toBe(css);
   });
 
-  test("each density has a block with exactly its data-density selector", () => {
-    for (const d of DENSITIES) expect(rules.has(`[data-density="${d}"]`), d).toBe(true);
-  });
-
-  test("each density block sets every density token to that density's value", () => {
+  test("each density has a block with exactly its data-density selector, setting every density token to that density's value", () => {
     for (const d of DENSITIES) {
+      expect(rules.has(`[data-density="${d}"]`), d).toBe(true);
       const block = rules.get(`[data-density="${d}"]`) ?? new Map<string, string>();
       for (const k of keys) expect(block.get(`--ds-${k}`), `${d} ${k}`).toBe(densityTokens[d][k]);
     }
