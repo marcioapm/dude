@@ -4,6 +4,7 @@
   --sb-border: var(--ds-tone-neutral-border);
   --sb-solid: var(--ds-tone-neutral-solid);
   --sb-on-solid: var(--ds-tone-neutral-on-solid);
+  --sb-mark: var(--ds-tone-neutral-mark);
 
   display: inline-flex;
   align-items: center;
@@ -53,6 +54,7 @@
   --sb-border: var(--ds-tone-neutral-border);
   --sb-solid: var(--ds-tone-neutral-solid);
   --sb-on-solid: var(--ds-tone-neutral-on-solid);
+  --sb-mark: var(--ds-tone-neutral-mark);
 }
 .info {
   --sb-fg: var(--ds-tone-info-fg);
@@ -60,6 +62,7 @@
   --sb-border: var(--ds-tone-info-border);
   --sb-solid: var(--ds-tone-info-solid);
   --sb-on-solid: var(--ds-tone-info-on-solid);
+  --sb-mark: var(--ds-tone-info-mark);
 }
 .attention {
   --sb-fg: var(--ds-tone-attention-fg);
@@ -67,6 +70,7 @@
   --sb-border: var(--ds-tone-attention-border);
   --sb-solid: var(--ds-tone-attention-solid);
   --sb-on-solid: var(--ds-tone-attention-on-solid);
+  --sb-mark: var(--ds-tone-attention-mark);
 }
 .success {
   --sb-fg: var(--ds-tone-success-fg);
@@ -74,6 +78,7 @@
   --sb-border: var(--ds-tone-success-border);
   --sb-solid: var(--ds-tone-success-solid);
   --sb-on-solid: var(--ds-tone-success-on-solid);
+  --sb-mark: var(--ds-tone-success-mark);
 }
 .danger {
   --sb-fg: var(--ds-tone-danger-fg);
@@ -81,6 +86,7 @@
   --sb-border: var(--ds-tone-danger-border);
   --sb-solid: var(--ds-tone-danger-solid);
   --sb-on-solid: var(--ds-tone-danger-on-solid);
+  --sb-mark: var(--ds-tone-danger-mark);
 }
 
 .glyph {
@@ -132,14 +138,14 @@
   width: 8px;
   height: 8px;
   border-radius: var(--ds-radius-full);
-  background: var(--sb-fg);
+  background: var(--sb-mark);
   flex-shrink: 0;
 }
 .dot.live .dotMark {
   animation: global(ds-pulse) calc(2.4s / max(var(--ds-motion-live), 0.0001)) ease-in-out infinite;
 }
 .dot.needsHuman .dotMark {
-  --ds-ring-color: var(--sb-fg);
+  --ds-ring-color: var(--sb-mark);
   animation: global(ds-ring) calc(2.4s / max(var(--ds-motion-live), 0.0001)) var(--ds-ease-exit) infinite;
 }
 .dot.terminal .dotMark {
@@ -156,5 +162,5 @@
 }
 .dot.pending .dotMark {
   background: transparent;
-  border: 1.5px solid var(--sb-fg);
+  border: 1.5px solid var(--sb-mark);
 }
