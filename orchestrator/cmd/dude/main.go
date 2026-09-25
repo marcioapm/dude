@@ -4,6 +4,7 @@
 //
 //	dude work list [--text T]             the project's work items
 //	dude epic list                        the project's epics
+//	dude repo list | request NAME --reason R [--write]
 //	dude work create --title T --goal G [--epic E] [--criterion C]...
 //	dude ask "question" [--choice C]...   ask a person; end your turn after
 //	dude event TYPE [--data JSON]         record an event on this run
@@ -54,7 +55,7 @@ func run(args []string, out io.Writer) error {
 		return nil
 	}
 	cmd, rest := args[0], args[1:]
-	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") && (cmd == "work" || cmd == "epic") {
+	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") && (cmd == "work" || cmd == "epic" || cmd == "repo") {
 		cmd, rest = cmd+" "+rest[0], rest[1:]
 	}
 	fs := flag.NewFlagSet("dude "+cmd, flag.ContinueOnError)
@@ -77,6 +78,22 @@ func run(args []string, out io.Writer) error {
 			return err
 		}
 		return show(out, *asJSON, call("list_epics", map[string]any{}))
+	case "repo list":
+		if _, err := parse(fs, rest); err != nil {
+			return err
+		}
+		return show(out, *asJSON, call("list_repositories", map[string]any{}))
+	case "repo request":
+		write := fs.Bool("write", false, "you need to change it (an implementer); otherwise read only")
+		reason := fs.String("reason", "", "why this work needs it")
+		args, err := parse(fs, rest)
+		if err != nil {
+			return err
+		}
+		if len(args) != 1 || *reason == "" {
+			return errors.New(`usage: dude repo request NAME --reason "why" [--write]`)
+		}
+		return show(out, *asJSON, call("request_repository", map[string]any{"repository": args[0], "write": *write, "reason": *reason}))
 	case "work create":
 		title := fs.String("title", "", "what should change, in one line")
 		goal := fs.String("goal", "", "why, and what someone needs to know")
@@ -274,6 +291,9 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
   dude work create --title T --goal G [--epic E] [--criterion C]...
                                              record work found outside your task
                                              (a person decides whether it is done)
+  dude repo list                             the project's repositories: which you have, which you could ask for
+  dude repo request NAME --reason R [--write]
+                                             ask a person for another of them
   dude ask "question" [--choice C]...        ask a person; then end your turn —
                                              the answer is your next message
   dude event TYPE [--data JSON]              record an event on this run, e.g.

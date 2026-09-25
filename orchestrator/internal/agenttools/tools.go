@@ -39,6 +39,8 @@ var tools = []tool{
 	define("emit_event", "Record an event on your run for the people following it: progress (type progress, "+
 		"data like {\"done\": 3, \"of\": 10, \"step\": \"tests\"}), a milestone, a measurement. It shows in "+
 		"your chat and the run's events.", nil, emitEvent),
+	define("list_repositories", "The project's repositories: which this work has checked out (and whether it may "+
+		"change them), and which it could ask for with request_repository.", nil, listRepositories),
 	define("request_repository", "Ask for another of the project's repositories when this work needs it — "+
 		"to read code this depends on, or (an implementer) to change it too. A person decides; carry on meanwhile.",
 		nil, requestRepository),
@@ -220,8 +222,10 @@ func askPerson(ctx context.Context, tx pgx.Tx, c Caller, in askIn) (askOut, erro
 // ---- emit_event -------------------------------------------------------------
 
 type emitIn struct {
-	Type string          `json:"type" jsonschema:"what kind of event: lowercase words and dots, like progress or tests.finished"`
-	Data json.RawMessage `json:"data,omitempty" jsonschema:"anything to go with it, as JSON (at most 16 KB)"`
+	Type string `json:"type" jsonschema:"what kind of event: lowercase words and dots, like progress or tests.finished"`
+	// Any JSON value. (Not json.RawMessage: its schema reads as an array of
+	// bytes, and a model follows the schema.)
+	Data any `json:"data,omitempty" jsonschema:"anything to go with it: an object like {\"done\": 3, \"of\": 10} (at most 16 KB)"`
 }
 
 type emitOut struct {
@@ -241,14 +245,12 @@ func emitEvent(ctx context.Context, tx pgx.Tx, c Caller, in emitIn) (emitOut, er
 	if !eventType.MatchString(in.Type) || len(in.Type) > 64 {
 		return emitOut{}, refuse("type %q: lowercase words joined by dots, like progress or tests.finished", in.Type)
 	}
-	if len(in.Data) > 16<<10 {
-		return emitOut{}, refuse("data too large: at most 16 KB")
+	data := in.Data
+	if data == nil {
+		data = map[string]any{}
 	}
-	var data any = map[string]any{}
-	if len(in.Data) > 0 {
-		if err := json.Unmarshal(in.Data, &data); err != nil {
-			return emitOut{}, refuse("data is not JSON: %v", err)
-		}
+	if raw, _ := json.Marshal(data); len(raw) > 16<<10 {
+		return emitOut{}, refuse("data too large: at most 16 KB")
 	}
 	typ := CustomPrefix + in.Type
 	_, err := ledger.Append(ctx, tx, c.event(typ, map[string]any{"type": in.Type, "data": data}))
@@ -330,4 +332,33 @@ func requestRepository(ctx context.Context, tx pgx.Tx, c Caller, in requestRepoI
 	}
 	return requestRepoOut{RequestID: id, Status: "pending", Next: "Carry on with what you can. If a person approves, " +
 		"you will be paused briefly and resumed with " + repo.Name + " checked out, and told where; if not, you will be told."}, nil
+}
+
+// ---- list_repositories ----------------------------------------------------
+
+type listReposIn struct{}
+
+type repoOut struct {
+	Name          string `json:"name"`
+	URL           string `json:"url"`
+	DefaultBranch string `json:"defaultBranch"`
+	// "write" or "read" when this work has it checked out; "" when it could
+	// be requested.
+	Access string `json:"access,omitempty"`
+	// A request for it waiting on a person.
+	Requested bool `json:"requested,omitempty"`
+}
+
+// listRepositories is what an agent may work on: the project's
+// repositories, which this work has, and which it could ask for.
+func listRepositories(ctx context.Context, tx pgx.Tx, c Caller, _ listReposIn) ([]repoOut, error) {
+	rows, err := tx.Query(ctx, `SELECT r.name, r.url, r.default_branch, COALESCE(wr.access::text, ''),
+			EXISTS (SELECT 1 FROM repository_requests q WHERE q.run_id = $2 AND q.repository_id = r.id AND q.status = 'pending')
+		FROM repositories r
+		LEFT JOIN work_item_repositories wr ON wr.repository_id = r.id AND wr.work_item_id = $3
+		WHERE r.project_id = $1 ORDER BY r.name`, c.ProjectID, c.RunID, c.WorkItemID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowToStructByPos[repoOut])
 }
