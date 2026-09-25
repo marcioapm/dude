@@ -5,16 +5,25 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/db"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
 
 // Who may create work: the roles whose job can turn up more of it.
 var creators = []string{"implementer", "investigator", "orchestrator"}
+
+// Who may ask to change another repository: the roles that change code.
+var writers = []string{"implementer"}
+
+// How many repository requests a Run may have waiting at once.
+const maxPendingRequests = 3
 
 // The tools, and which roles have them (docs/design/agent-tools.md).
 var tools = []tool{
@@ -30,6 +39,9 @@ var tools = []tool{
 	define("emit_event", "Record an event on your run for the people following it: progress (type progress, "+
 		"data like {\"done\": 3, \"of\": 10, \"step\": \"tests\"}), a milestone, a measurement. It shows in "+
 		"your chat and the run's events.", nil, emitEvent),
+	define("request_repository", "Ask for another of the project's repositories when this work needs it — "+
+		"to read code this depends on, or (an implementer) to change it too. A person decides; carry on meanwhile.",
+		nil, requestRepository),
 	define("create_work_item", "Record a piece of work you found that is outside your task — a bug, a "+
 		"follow-up, a part to split out — as a new work item in this project. It is not started: a person reads it "+
 		"and decides. Say what and why in the goal.", creators, createWorkItem),
@@ -73,8 +85,8 @@ func listWork(ctx context.Context, tx pgx.Tx, c Caller, in listWorkIn) (listWork
 		       w.id = $2
 		FROM work_items w JOIN projects p ON p.id = w.project_id LEFT JOIN epics e ON e.id = w.epic_id
 		WHERE w.project_id = $1
-		  AND ($3 = '' OR w.title ILIKE '%' || $3 || '%' OR w.goal ILIKE '%' || $3 || '%')
-		ORDER BY w.number`, c.ProjectID, c.WorkItemID, strings.TrimSpace(in.Text))
+		  AND ($3 = '' OR w.title ILIKE '%' || $3 || '%' ESCAPE '\' OR w.goal ILIKE '%' || $3 || '%' ESCAPE '\')
+		ORDER BY w.number`, c.ProjectID, c.WorkItemID, likeLiteral(strings.TrimSpace(in.Text)))
 	if err != nil {
 		return out, err
 	}
@@ -122,7 +134,7 @@ func createWorkItem(ctx context.Context, tx pgx.Tx, c Caller, in createWorkItemI
 		WHERE id = $1 RETURNING next_work_item_number - 1, key_prefix`, c.ProjectID).Scan(&number, &prefix); err != nil {
 		return createWorkItemOut{}, err
 	}
-	criteria, _ := json.Marshal(nonNil(in.AcceptanceCriteria))
+	criteria, _ := json.Marshal(db.NonNil(in.AcceptanceCriteria))
 	id := ids.New(ids.WorkItem)
 	if _, err := tx.Exec(ctx, `INSERT INTO work_items (id, organization_id, project_id, number, epic_id, title, goal,
 			acceptance_criteria, status, created_by_run_id)
@@ -130,23 +142,20 @@ func createWorkItem(ctx context.Context, tx pgx.Tx, c Caller, in createWorkItemI
 		id, c.Org, c.ProjectID, number, epicID, title, strings.TrimSpace(in.Goal), criteria, c.RunID); err != nil {
 		return createWorkItemOut{}, err
 	}
-	// The same event a person creating one records, on the new work item,
-	// so its own history starts with who made it.
-	if _, err := ledger.Append(ctx, tx, ledger.Event{
-		Type: "work_item.created", OrganizationID: c.Org, ProjectID: c.ProjectID, WorkItemID: id, RunID: c.RunID,
-		ActorType: ledger.ActorAgent, ActorID: c.RunID, Source: ledger.SourceOrchestrator, CorrelationID: id,
-		Payload: map[string]any{"title": title, "goal": strings.TrimSpace(in.Goal), "createdByWorkItemId": c.WorkItemID},
-	}); err != nil {
+	// The same event a person creating one records, on the new work item
+	// (its own correlation), so its history starts with who made it.
+	created := c.event("work_item.created", map[string]any{"title": title, "goal": strings.TrimSpace(in.Goal),
+		"createdByWorkItemId": c.WorkItemID})
+	created.WorkItemID, created.CorrelationID = id, id
+	if _, err := ledger.Append(ctx, tx, created); err != nil {
 		return createWorkItemOut{}, err
 	}
 	return createWorkItemOut{Key: fmt.Sprintf("%s-%d", prefix, number)}, nil
 }
 
-func nonNil(s []string) []string {
-	if s == nil {
-		return []string{}
-	}
-	return s
+// likeLiteral escapes text for LIKE: % and _ match themselves.
+func likeLiteral(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
 }
 
 // ---- list_epics -------------------------------------------------------------
@@ -194,33 +203,16 @@ func askPerson(ctx context.Context, tx pgx.Tx, c Caller, in askIn) (askOut, erro
 	case len(q) > 4000 || len(in.Choices) > 10:
 		return askOut{}, refuse("too long: a question of at most 4000 characters, at most 10 choices")
 	}
-	var open bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM questions WHERE run_id = $1 AND status = 'open')`,
-		c.RunID).Scan(&open); err != nil {
+	open, err := delivery.HasOpenQuestion(ctx, tx, c.RunID)
+	if err != nil {
 		return askOut{}, err
 	}
 	if open {
 		return askOut{}, refuse("you already have a question waiting for an answer: end your turn and wait for it")
 	}
-	id := ids.New(ids.Question)
-	choices, _ := json.Marshal(nonNil(in.Choices))
-	if _, err := tx.Exec(ctx, `INSERT INTO questions (id, organization_id, work_item_id, run_id, prompt, options)
-		VALUES ($1, $2, $3, $4, $5, $6::jsonb)`, id, c.Org, c.WorkItemID, c.RunID, q, choices); err != nil {
+	id, err := delivery.AskTx(ctx, tx, c.run(), q, in.Choices)
+	if err != nil {
 		return askOut{}, err
-	}
-	if _, err := tx.Exec(ctx, `UPDATE work_items SET status = 'awaiting_input', updated_at = now()
-		WHERE id = $1 AND status NOT IN ('done', 'failed', 'aborted', 'awaiting_input')`, c.WorkItemID); err != nil {
-		return askOut{}, err
-	}
-	for _, e := range []ledger.Event{
-		{Type: "work_item.status_changed", Payload: map[string]any{"status": "awaiting_input", "reason": "the agent asked a question"}},
-		{Type: "question.asked", Payload: map[string]any{"kind": "agent", "questionId": id, "prompt": q, "options": nonNil(in.Choices)}},
-	} {
-		e.OrganizationID, e.ProjectID, e.WorkItemID, e.RunID = c.Org, c.ProjectID, c.WorkItemID, c.RunID
-		e.ActorType, e.ActorID, e.Source, e.CorrelationID = ledger.ActorAgent, c.RunID, ledger.SourceOrchestrator, c.WorkItemID
-		if _, err := ledger.Append(ctx, tx, e); err != nil {
-			return askOut{}, err
-		}
 	}
 	return askOut{QuestionID: id, Next: "End your turn now. The person's answer will be your next message."}, nil
 }
@@ -259,10 +251,83 @@ func emitEvent(ctx context.Context, tx pgx.Tx, c Caller, in emitIn) (emitOut, er
 		}
 	}
 	typ := CustomPrefix + in.Type
-	_, err := ledger.Append(ctx, tx, ledger.Event{
-		Type: typ, OrganizationID: c.Org, ProjectID: c.ProjectID, WorkItemID: c.WorkItemID, RunID: c.RunID,
-		ActorType: ledger.ActorAgent, ActorID: c.RunID, Source: ledger.SourceOrchestrator, CorrelationID: c.WorkItemID,
-		Payload: map[string]any{"type": in.Type, "data": data},
-	})
+	_, err := ledger.Append(ctx, tx, c.event(typ, map[string]any{"type": in.Type, "data": data}))
 	return emitOut{EventType: typ}, err
+}
+
+// ---- request_repository ---------------------------------------------------
+
+type requestRepoIn struct {
+	Repository string `json:"repository" jsonschema:"the repository's name, or owner/name, as the organization knows it"`
+	Write      bool   `json:"write,omitempty" jsonschema:"you need to change it (it gets its own pull request); otherwise read only"`
+	Reason     string `json:"reason" jsonschema:"why this work needs it, for the person deciding"`
+}
+
+type requestRepoOut struct {
+	RequestID string `json:"requestId"`
+	Status    string `json:"status"`
+	Next      string `json:"next"`
+}
+
+// requestRepository asks a person for another of the project's
+// repositories. The agent carries on; approved, it is given the repository
+// without losing its conversation. Only the project's own: reaching into
+// another project is a person's decision to make, not an agent's to ask.
+func requestRepository(ctx context.Context, tx pgx.Tx, c Caller, in requestRepoIn) (requestRepoOut, error) {
+	name := strings.TrimSpace(in.Repository)
+	reason := strings.TrimSpace(in.Reason)
+	switch {
+	case name == "" || reason == "":
+		return requestRepoOut{}, refuse("name the repository and say why you need it")
+	case len(reason) > 2000:
+		return requestRepoOut{}, refuse("reason too long: at most 2000 characters")
+	case in.Write && !slices.Contains(writers, c.Role):
+		return requestRepoOut{}, refuse("a %s may ask to read a repository, not to change it", c.Role)
+	}
+	// The project's repositories, by name or owner/name (the end of its URL).
+	var repo struct{ ID, Name string }
+	err := tx.QueryRow(ctx, `SELECT id, name FROM repositories
+		WHERE project_id = $1
+		  AND (lower(name) = lower($2) OR lower(regexp_replace(url, '(\.git)?/*$', '')) LIKE '%/' || lower($3) ESCAPE '\')
+		LIMIT 1`, c.ProjectID, name, likeLiteral(name)).Scan(&repo.ID, &repo.Name)
+	if err == pgx.ErrNoRows {
+		return requestRepoOut{}, refuse("no repository %q in this project (a person can add one to the project)", name)
+	}
+	if err != nil {
+		return requestRepoOut{}, err
+	}
+	var clash, pending int
+	if err := tx.QueryRow(ctx, `SELECT
+			(SELECT count(*) FROM work_item_repositories wr JOIN repositories r ON r.id = wr.repository_id
+			 WHERE wr.work_item_id = $1 AND (wr.repository_id = $2 OR r.name = $3)),
+			(SELECT count(*) FROM repository_requests WHERE run_id = $4 AND status = 'pending')`,
+		c.WorkItemID, repo.ID, repo.Name, c.RunID).Scan(&clash, &pending); err != nil {
+		return requestRepoOut{}, err
+	}
+	switch {
+	case clash > 0:
+		return requestRepoOut{}, refuse("%s is already checked out for this work", repo.Name)
+	case pending >= maxPendingRequests:
+		return requestRepoOut{}, refuse("you have %d requests waiting for a person; wait for them first", pending)
+	}
+	access := "read"
+	if in.Write {
+		access = "write"
+	}
+	id := ids.New(ids.RepoRequest)
+	tag, err := tx.Exec(ctx, `INSERT INTO repository_requests (id, organization_id, work_item_id, run_id, repository_id, access, reason)
+		VALUES ($1, $2, $3, $4, $5, $6::repository_access, $7) ON CONFLICT DO NOTHING`,
+		id, c.Org, c.WorkItemID, c.RunID, repo.ID, access, reason)
+	if err != nil {
+		return requestRepoOut{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return requestRepoOut{}, refuse("you already asked for %s; a person has not decided yet", repo.Name)
+	}
+	if _, err := ledger.Append(ctx, tx, c.event("repository.requested",
+		map[string]any{"requestId": id, "repository": repo.Name, "repositoryId": repo.ID, "access": access, "reason": reason})); err != nil {
+		return requestRepoOut{}, err
+	}
+	return requestRepoOut{RequestID: id, Status: "pending", Next: "Carry on with what you can. If a person approves, " +
+		"you will be paused briefly and resumed with " + repo.Name + " checked out, and told where; if not, you will be told."}, nil
 }

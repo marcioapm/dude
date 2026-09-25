@@ -29,9 +29,11 @@ type PromptInput struct {
 	// The repositories checked out for the agent. Named in the prompt only
 	// when there are several, or one it must not change, or none.
 	Repositories []PromptRepo
-	// The Run has dude's tools (the dude CLI, and MCP): questions go through
-	// them rather than a question block.
+	// The Run has dude's tools over MCP: questions go through them rather
+	// than a question block.
 	Tools bool
+	// It also has the dude CLI (lux serves dude's tools in the container).
+	CLI bool
 }
 
 // PromptRepo is a repository as the agent is told about it.
@@ -188,13 +190,17 @@ func (in PromptInput) ask() string {
 }
 
 const askToolNote = "If you cannot go on without a decision only a person can make — the task is ambiguous " +
-	"in a way that changes what you build, or two reasonable readings conflict — ask with " +
-	"`dude ask \"the question\" --choice A --choice B` (or the dude MCP tool ask_person), then end your turn. " +
-	"The answer comes back as your next message. Do not ask about anything you can decide or find out " +
-	"yourself; most tasks need no question at all."
+	"in a way that changes what you build, or two reasonable readings conflict — ask with the dude tool " +
+	"ask_person, then end your turn. The answer comes back as your next message. Do not ask about anything " +
+	"you can decide or find out yourself; most tasks need no question at all."
 
-// toolsNote tells an agent about the dude CLI.
-const toolsNote = "The `dude` command (see `dude help`) is the work you are part of, from the shell: " +
+// toolsNote tells an agent about dude's tools.
+const toolsNote = "The dude tools (list_work, list_epics, create_work_item, emit_event, request_repository) " +
+	"act on the work you are part of: record work you find outside your task (a person decides on it), report " +
+	"progress people can follow, ask for another repository you need."
+
+// cliNote tells an agent about the dude CLI.
+const cliNote = "The same, from the shell: the `dude` command (see `dude help`) — " +
 	"`dude work list`, `dude epic list`, `dude work create` for work you find outside your task (a person " +
 	"decides on it), `dude event progress --data '{\"done\":3,\"of\":10}'` for progress people can follow, " +
 	"and `dude publish FILE` to keep a file for people."
@@ -310,6 +316,9 @@ func Prompt(phase string, in PromptInput) string {
 	}
 	if in.Tools {
 		add(toolsNote)
+	}
+	if in.CLI {
+		add(cliNote)
 	}
 	add(publishNote)
 	if c := strings.TrimSpace(in.Context); c != "" {

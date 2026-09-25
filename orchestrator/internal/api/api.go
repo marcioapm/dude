@@ -60,6 +60,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /internal/questions/{id}/answer", s.auth(s.answer))
 	mux.Handle("GET /internal/artifacts/{id}/content", s.auth(s.artifactContent))
 	mux.Handle("POST /internal/work-items/{id}/done", s.auth(s.markDone))
+	mux.Handle("POST /internal/repository-requests/{id}/decide", s.auth(s.decideRepositoryRequest))
 	// The factory's delivery defaults, which the settings screen shows for
 	// what a project leaves unset: one definition, here, where it is applied.
 	mux.Handle("GET /internal/delivery-defaults", s.auth(func(w http.ResponseWriter, r *http.Request, _ string) error {
@@ -305,8 +306,10 @@ func (s *Server) pause(w http.ResponseWriter, r *http.Request, org string) error
 		case !isLive(ri.Status):
 			return fail(http.StatusConflict, "conflict", "run %s is %s and cannot be paused", runID, ri.Status)
 		}
+		// A person's pause is theirs: dude does not resume it on its own,
+		// even one it had started to bring a repository.
 		if _, err := tx.Exec(r.Context(), `UPDATE runs SET control = $2::run_control, control_requested_at = now(),
-			control_reason = $3 WHERE id = $1`, runID, control, db.Nullable(body.Reason)); err != nil {
+			control_reason = $3, paused_for_repository = false WHERE id = $1`, runID, control, db.Nullable(body.Reason)); err != nil {
 			return err
 		}
 		mode := body.Mode
@@ -556,5 +559,79 @@ func (s *Server) markDone(w http.ResponseWriter, r *http.Request, org string) er
 		return err
 	}
 	write(w, http.StatusOK, map[string]any{"workItemId": id, "status": "done"})
+	return nil
+}
+
+// decideRepositoryRequest: a person approves or denies an agent's request
+// for another repository. Approved, the repository joins the work item and
+// the Run is paused, to be resumed with it cloned (the syncer does both);
+// denied, the agent is told. Either way it is recorded.
+func (s *Server) decideRepositoryRequest(w http.ResponseWriter, r *http.Request, org string) error {
+	id := r.PathValue("id")
+	var body struct {
+		Approve bool   `json:"approve"`
+		Note    string `json:"note"`
+	}
+	if err := read(r, &body); err != nil {
+		return err
+	}
+	var out map[string]any
+	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+		var runID string
+		if err := tx.QueryRow(r.Context(), `SELECT run_id FROM repository_requests WHERE id = $1`, id).Scan(&runID); err != nil {
+			if db.IsNotFound(err) {
+				return fail(http.StatusNotFound, "not_found", "repository request %s not found", id)
+			}
+			return err
+		}
+		// The Run first, then the request: the order a Run ending takes them
+		// in (its trigger cancels pending requests), so the two never deadlock.
+		ri, err := loadRun(r.Context(), tx, runID)
+		if err != nil {
+			return err
+		}
+		var workItemID, repoID, repoName, access, status string
+		if err := tx.QueryRow(r.Context(), `SELECT q.work_item_id, q.repository_id, repo.name, q.access::text, q.status::text
+			FROM repository_requests q JOIN repositories repo ON repo.id = q.repository_id WHERE q.id = $1 FOR UPDATE OF q`, id).
+			Scan(&workItemID, &repoID, &repoName, &access, &status); err != nil {
+			return err
+		}
+		if status != "pending" {
+			return fail(http.StatusConflict, "conflict", "repository request %s is already %s", id, status)
+		}
+		decision := "denied"
+		if body.Approve {
+			decision = "approved"
+		}
+		if _, err := tx.Exec(r.Context(), `UPDATE repository_requests SET status = $2::repository_request_status,
+			decided_by = $3, decided_at = now() WHERE id = $1`, id, decision, actor(r)); err != nil {
+			return err
+		}
+		if body.Approve {
+			// The work item works on it from now on — every later phase gets it too.
+			if _, err := tx.Exec(r.Context(), `INSERT INTO work_item_repositories (organization_id, work_item_id, repository_id, access)
+				VALUES ($1, $2, $3, $4::repository_access) ON CONFLICT (work_item_id, repository_id) DO NOTHING`,
+				org, workItemID, repoID, access); err != nil {
+				return err
+			}
+		} else {
+			// Told as a steer is, so the agent hears it on its next turn.
+			text := fmt.Sprintf("Your request for %s was declined.", repoName)
+			if n := strings.TrimSpace(body.Note); n != "" {
+				text += " " + n
+			}
+			if _, _, err := insertDirective(r.Context(), tx, org, runID, ri, text, "run", "", false); err != nil {
+				return err
+			}
+		}
+		out = map[string]any{"id": id, "status": decision}
+		return humanEvent(r.Context(), tx, org, runID, ri, "repository."+decision, actor(r),
+			map[string]any{"requestId": id, "repository": repoName, "access": access, "note": body.Note})
+	})
+	if err != nil {
+		return err
+	}
+	s.kick()
+	write(w, http.StatusOK, out)
 	return nil
 }

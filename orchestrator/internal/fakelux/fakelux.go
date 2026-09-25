@@ -381,13 +381,14 @@ func (s *Server) turn(run *Run) {
 
 // callTool calls one of dude's tools as the agent's container would through
 // lux's service proxy: the spec's "dude" service, its header filled in from
-// the spec's secret. Callers hold s.mu; the call is made without it held,
-// since dude may be slow. The outcome is only logged in the agent's reply.
+// the spec's secret. (The CLI's own path through a socket is tested in
+// agenttools.) Callers hold s.mu; the call is made without it, since dude
+// may be slow. A failure is said in the agent's reply.
 func (s *Server) callTool(run *Run, tool, args string) {
 	var spec struct {
 		Secrets  []lux.Secret `json:"secrets"`
 		Workload struct {
-			Services []lux.MCPServer `json:"services"`
+			Services []lux.Service `json:"services"`
 		} `json:"workload"`
 	}
 	_ = json.Unmarshal(run.Spec, &spec)
@@ -409,9 +410,17 @@ func (s *Server) callTool(run *Run, tool, args string) {
 		s.mu.Unlock()
 		res, err := http.DefaultClient.Do(req)
 		s.mu.Lock()
-		if err == nil {
+		// Said in the agent's reply, as an agent would report a tool it ran.
+		switch {
+		case err != nil:
+			s.agent(run, map[string]any{"sessionUpdate": "agent_message_chunk",
+				"content": map[string]any{"type": "text", "text": "dude " + tool + " failed: " + err.Error() + "\n"}})
+		case res.StatusCode >= 300:
 			res.Body.Close()
-			run.ToolCalls = append(run.ToolCalls, fmt.Sprintf("%s %d", tool, res.StatusCode))
+			s.agent(run, map[string]any{"sessionUpdate": "agent_message_chunk",
+				"content": map[string]any{"type": "text", "text": fmt.Sprintf("dude %s answered %d\n", tool, res.StatusCode)}})
+		default:
+			res.Body.Close()
 		}
 	}
 }
@@ -797,6 +806,10 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		Input *struct {
 			Text string `json:"text"`
 		} `json:"input"`
+		RequestID string `json:"requestId"`
+		Git       *struct {
+			Repositories []map[string]any `json:"repositories"`
+		} `json:"git"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&in)
 	s.mu.Lock()
@@ -804,6 +817,34 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 		writeErr(w, 409, "not_resumable", "run is "+run.State)
 		return
+	}
+	if in.Git != nil && len(in.Git.Repositories) > 0 {
+		// Added to the Run's spec, as lux does, and cloned before it starts:
+		// each reported with the resume's request id.
+		var spec map[string]any
+		_ = json.Unmarshal(run.Spec, &spec)
+		git, _ := spec["git"].(map[string]any)
+		if git == nil {
+			git = map[string]any{}
+			spec["git"] = git
+		}
+		repos, _ := git["repositories"].([]any)
+		for _, repo := range in.Git.Repositories {
+			repos = append(repos, repo)
+			name, _ := repo["name"].(string)
+			ref, _ := repo["ref"].(string)
+			url, _ := repo["url"].(string)
+			base := head(s.repoPath(url), ref)
+			event := map[string]any{"requestId": in.RequestID, "repo": name, "status": "cloned", "commit": base}
+			if base == "" {
+				event = map[string]any{"requestId": in.RequestID, "repo": name, "status": "failed", "error": "ref not found"}
+			} else {
+				s.luxEvent(run, "git.checkout", map[string]any{"repo": name, "ref": ref, "base": base})
+			}
+			s.luxEvent(run, "git.clone", event)
+		}
+		git["repositories"] = repos
+		run.Spec, _ = json.Marshal(spec)
 	}
 	run.Resumed++
 	run.Epoch++

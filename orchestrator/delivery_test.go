@@ -602,6 +602,158 @@ func (h headerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(r)
 }
 
+// names makes a work item work on a repository, as the dialog would.
+func (w *world) names(wi, repoID string) {
+	mustExec(w.t, w.owner, `INSERT INTO work_item_repositories (organization_id, work_item_id, repository_id)
+		VALUES ($1, $2, $3)`, w.org, wi, repoID)
+}
+
+// callTool calls one of dude's tools as a Run's agent, with the token its
+// spec carries.
+func (w *world) callTool(tools, luxRunSpec string, tool string, args string) (int, string) {
+	w.t.Helper()
+	var spec lux.Spec
+	_ = json.Unmarshal([]byte(luxRunSpec), &spec)
+	var auth string
+	for _, s := range spec.Secrets {
+		if s.Name == "DUDE_TOOLS_AUTH" {
+			auth = s.Value
+		}
+	}
+	req, _ := http.NewRequest("POST", tools+"/tools/"+tool, strings.NewReader(args))
+	req.Header.Set("Authorization", auth)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	defer res.Body.Close()
+	b, _ := io.ReadAll(res.Body)
+	return res.StatusCode, string(b)
+}
+
+func TestAnAgentIsGivenARepositoryAPersonApproved(t *testing.T) {
+	w := newWorld(t)
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
+	t.Cleanup(tools.Close)
+	w.syncer.Agent.ToolsURL = tools.URL
+	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+		VALUES ($1, $2, $3, 'web', 'https://github.com/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour {
+		return fakelux.Behaviour{Hang: true, Reply: "Done.", Commit: map[string]string{"A.md": "a\n"}}
+	}
+	wi := w.workItem()
+	w.names(wi, w.repoID)
+	w.deliver(wi)
+	w.until("the agent to be working", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'running'`, wi) == 1
+	})
+
+	status, body := w.callTool(tools.URL, string(w.lux.Runs()[0].Spec), "request_repository",
+		`{"repository":"acme/web","reason":"the API change needs the web client updated"}`)
+	if status != 200 {
+		t.Fatalf("request: %d %s", status, body)
+	}
+	var req struct{ RequestID string }
+	_ = json.Unmarshal([]byte(body), &req)
+	if status, body := w.call("/internal/repository-requests/"+req.RequestID+"/decide", map[string]any{"approve": true}); status != 200 {
+		t.Fatalf("approve: %d %v", status, body)
+	}
+
+	// Paused, resumed with web added, and told where it is — one lux Run.
+	w.until("lux to report web cloned", func() bool {
+		return w.count(`SELECT count(*) FROM repository_requests WHERE id = $1 AND status = 'cloned'`, req.RequestID) == 1
+	})
+	r := w.lux.Runs()[0]
+	if len(w.lux.Runs()) != 1 || r.Resumed != 1 {
+		t.Fatalf("lux runs %d, resumed %d", len(w.lux.Runs()), r.Resumed)
+	}
+	var spec lux.Spec
+	_ = json.Unmarshal(r.Spec, &spec)
+	names := []string{}
+	for _, repo := range spec.Git.Repositories {
+		names = append(names, repo.Name)
+	}
+	if strings.Join(names, ",") != "target,web" {
+		t.Errorf("the Run's repositories after resume: %v", names)
+	}
+	w.until("the agent to hear it", func() bool {
+		return len(r.Inputs) > 0 && strings.Contains(r.Inputs[0], "web is now checked out at /workspace/repos/web")
+	})
+	// The work item names it now, read only, for every later phase.
+	if n := w.count(`SELECT count(*) FROM work_item_repositories WHERE work_item_id = $1 AND access = 'read'`, wi); n != 1 {
+		t.Errorf("work item's read repositories: %d", n)
+	}
+}
+
+func TestAPersonsPauseIsNotUndoneByAnApproval(t *testing.T) {
+	w := newWorld(t)
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
+	t.Cleanup(tools.Close)
+	w.syncer.Agent.ToolsURL = tools.URL
+	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+		VALUES ($1, $2, $3, 'web', 'https://github.com/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	wi := w.workItem()
+	w.names(wi, w.repoID)
+	w.deliver(wi)
+	w.until("the agent to be working", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'running'`, wi) == 1
+	})
+	var runID string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE work_item_id = $1`, wi).Scan(&runID)
+	_, body := w.callTool(tools.URL, string(w.lux.Runs()[0].Spec), "request_repository", `{"repository":"web","reason":"r"}`)
+	var req struct{ RequestID string }
+	_ = json.Unmarshal([]byte(body), &req)
+	// A person pauses it, then approves: it stays paused.
+	if status, out := w.call("/internal/runs/"+runID+"/pause", map[string]any{}); status != 200 {
+		t.Fatalf("pause: %d %v", status, out)
+	}
+	w.until("the pause", func() bool { return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, runID) == 1 })
+	w.call("/internal/repository-requests/"+req.RequestID+"/decide", map[string]any{"approve": true})
+	for range 10 {
+		w.pump()
+	}
+	if w.lux.Runs()[0].Resumed != 0 {
+		t.Fatalf("an approval resumed a person's pause")
+	}
+	// Their resume brings the repository with it.
+	w.call("/internal/runs/"+runID+"/resume", map[string]any{})
+	w.until("the repository to arrive with their resume", func() bool {
+		return w.count(`SELECT count(*) FROM repository_requests WHERE id = $1 AND status = 'cloned'`, req.RequestID) == 1
+	})
+}
+
+func TestADeclinedRepositoryRequestIsToldToTheAgent(t *testing.T) {
+	w := newWorld(t)
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
+	t.Cleanup(tools.Close)
+	w.syncer.Agent.ToolsURL = tools.URL
+	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+		VALUES ($1, $2, $3, 'web', 'https://github.com/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	wi := w.workItem()
+	w.names(wi, w.repoID)
+	w.deliver(wi)
+	w.until("the agent to be working", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'running'`, wi) == 1
+	})
+	_, body := w.callTool(tools.URL, string(w.lux.Runs()[0].Spec), "request_repository", `{"repository":"web","reason":"curious"}`)
+	var req struct{ RequestID string }
+	_ = json.Unmarshal([]byte(body), &req)
+	w.call("/internal/repository-requests/"+req.RequestID+"/decide", map[string]any{"approve": false, "note": "Not needed for this."})
+	// Sent to lux, which gives it to the agent when its turn allows.
+	w.until("the decline to be sent to the agent", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE run_id = (SELECT id FROM runs WHERE work_item_id = $1)
+			AND text LIKE '%declined. Not needed for this.%' AND sent_at IS NOT NULL`, wi) == 1
+	})
+	if r := w.lux.Runs()[0]; r.Resumed != 0 {
+		t.Errorf("a declined request paused the run")
+	}
+	if n := w.count(`SELECT count(*) FROM work_item_repositories WHERE work_item_id = $1`, wi); n != 1 {
+		t.Errorf("work item's repositories: %d, want only its own", n)
+	}
+}
+
 func TestWhatDudeSendsLux(t *testing.T) {
 	w := newWorld(t)
 	// A real model, so the spec is the one a real agent gets.

@@ -126,8 +126,23 @@ export interface ProgressTurn {
   startedAt: string;
 }
 
+/** The agent asked for a repository its work does not name; a person decides. */
+export interface RepositoryRequestTurn {
+  kind: "repositoryRequest";
+  id: string;
+  requestId: string;
+  repository: string;
+  access: "read" | "write";
+  reason: string;
+  at: string;
+  /** Null while it waits; "approved" or "denied" once decided. */
+  decision: "approved" | "denied" | null;
+  decidedAt: string | null;
+}
+
 export type Turn =
-  | ToolTurn | MessageTurn | HumanTurn | ThoughtTurn | PromptTurn | UsageTurn | QuestionTurn | EventTurn | ProgressTurn;
+  | ToolTurn | MessageTurn | HumanTurn | ThoughtTurn | PromptTurn | UsageTurn | QuestionTurn | EventTurn | ProgressTurn
+  | RepositoryRequestTurn;
 
 /** Custom events live under this prefix in the ledger (agenttools.CustomPrefix). */
 export const CUSTOM_EVENT_PREFIX = "agent.custom.";
@@ -175,6 +190,9 @@ export interface Projection {
   /** Steers and answers by directive id, so a delivery marks the turn it belongs to. */
   steersByDirective: Map<string, HumanTurn>;
   questionsById: Map<string, QuestionTurn>;
+  repoRequestsById: Map<string, RepositoryRequestTurn>;
+  /** Where the progress row is in `turns`, once there is one. */
+  progressIndex: number | null;
   plan: PlanItem[];
   costUsd: number;
   tokens: number;
@@ -192,6 +210,8 @@ export function emptyProjection(): Projection {
     toolsByCall: new Map(),
     steersByDirective: new Map(),
     questionsById: new Map(),
+    repoRequestsById: new Map(),
+    progressIndex: null,
     plan: [],
     costUsd: 0,
     tokens: 0,
@@ -422,6 +442,27 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         break;
       }
 
+      case "repository.requested": {
+        const turn: RepositoryRequestTurn = {
+          kind: "repositoryRequest", id: event.eventId, requestId: String(payload.requestId ?? ""),
+          repository: String(payload.repository ?? ""), access: payload.access === "write" ? "write" : "read",
+          reason: String(payload.reason ?? ""), at: event.occurredAt, decision: null, decidedAt: null,
+        };
+        state.repoRequestsById.set(turn.requestId, turn);
+        turns.push(turn);
+        break;
+      }
+
+      case "repository.approved":
+      case "repository.denied": {
+        const turn = state.repoRequestsById.get(String(payload.requestId ?? ""));
+        if (turn) {
+          turn.decision = event.eventType === "repository.approved" ? "approved" : "denied";
+          turn.decidedAt = event.occurredAt;
+        }
+        break;
+      }
+
       default: {
         if (!event.eventType.startsWith(CUSTOM_EVENT_PREFIX)) break;
         const type = event.eventType.slice(CUSTOM_EVENT_PREFIX.length);
@@ -430,14 +471,14 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           // Updated in place: one bar that moves, not a line per update.
           const d = (typeof data === "object" && data !== null ? data : {}) as Record<string, unknown>;
           const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
-          const existing = turns.find((t): t is ProgressTurn => t.kind === "progress");
+          const existing = state.progressIndex === null ? undefined : (turns[state.progressIndex] as ProgressTurn);
           const next: ProgressTurn = {
             kind: "progress", id: existing?.id ?? event.eventId,
             done: num(d.done), of: num(d.of), step: typeof d.step === "string" ? d.step : null,
             at: event.occurredAt, startedAt: existing?.startedAt ?? event.occurredAt,
           };
-          if (existing) turns[turns.indexOf(existing)] = next;
-          else turns.push(next);
+          if (state.progressIndex !== null) turns[state.progressIndex] = next;
+          else state.progressIndex = turns.push(next) - 1;
           break;
         }
         turns.push({ kind: "event", id: event.eventId, type, data, at: event.occurredAt });

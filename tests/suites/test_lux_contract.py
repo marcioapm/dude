@@ -161,6 +161,12 @@ def test_an_agent_on_real_lux_calls_dudes_tools(client: ApiClient, lux_project):
         print("phases:", [(r["phase"], r["status"], r.get("error")) for r in client.work_item_runs(work_item["id"])])
     assert calls[0]["payload"]["tool"] == "list_work"
     assert "Use the tools" in json.dumps(calls[0]["payload"]["result"])
+    # And through lux's service socket, as the dude CLI calls: lux added the
+    # Run's token; the container never held it.
+    progress = wait_until(lambda: [e for e in client.events(runId=calls[0]["runId"])
+                                   if e["eventType"] == "agent.custom.progress"] or None,
+                          timeout=60, interval=1, message="nothing came through lux's service socket")
+    assert progress[0]["payload"]["data"]["step"] == "through the socket"
     # And the agent heard the answer: its reply carries the work item's key.
     implement = client.work_item_runs(work_item["id"])[0]
     messages = " ".join(e["payload"].get("text", "") for e in client.events(runId=implement["id"])

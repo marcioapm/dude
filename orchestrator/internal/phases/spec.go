@@ -33,8 +33,13 @@ type AgentConfig struct {
 	// gives them none. Must not be the lux host or lux's own address: lux
 	// never lets a Run reach either.
 	ToolsURL string
+	// Signs Runs' tokens for the tools (agenttools.RunToken).
+	ToolsKey []byte
+	// The scripted agent needs nothing but the tools: restrict to them.
+	toolsOnly bool
 	// lux serves the tools as a local service in the container, for the dude
-	// CLI (workload.services). Off until the lux in use supports it.
+	// CLI (workload.services, lux 006bf42 and later). On by default; set
+	// DUDE_TOOLS_SERVICE=off for a lux without it.
 	ToolsService bool
 }
 
@@ -46,7 +51,8 @@ func LoadAgentConfig() (AgentConfig, error) {
 		DefaultImage: envOr("DUDE_AGENT_IMAGE", "localhost/dude-runtime:dev"),
 		Timeout:      envOr("DUDE_AGENT_TIMEOUT", "2h"),
 		ToolsURL:     os.Getenv("DUDE_TOOLS_URL"),
-		ToolsService: os.Getenv("DUDE_TOOLS_SERVICE") != "",
+		ToolsService: os.Getenv("DUDE_TOOLS_SERVICE") != "off",
+		ToolsKey:     []byte(envOr("DUDE_TOOLS_KEY", os.Getenv("DUDE_ORCHESTRATOR_TOKEN"))),
 	}
 	home, _ := os.UserHomeDir()
 	if b, err := readEnvOrFile("DUDE_OPENCODE_AUTH", home+"/.local/share/opencode/auth.json"); err != nil {
@@ -195,15 +201,18 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 
 	if c.ToolsURL != "" && in.ToolsToken != "" {
 		// dude's own tools, authenticated as this Run. The token is a secret:
-		// lux fills the header in, and never stores or logs it.
+		// lux never stores or logs it. Through the service socket the
+		// container never holds it; for MCP, lux hands it to the agent's
+		// harness, whose process does (a known gap: it is good only for this
+		// Run's tools, in this project, until the Run next starts or ends).
 		// The same server twice: as MCP for the agent's own tool calls, and
 		// as a local service for the dude CLI (and anything else in the
 		// container), which never sees the token.
-		dude := lux.MCPServer{Name: "dude", URL: c.ToolsURL,
-			Headers: []lux.MCPHeader{{Name: "Authorization", Secret: "DUDE_TOOLS_AUTH"}}}
-		spec.Workload.MCPServers = []lux.MCPServer{dude}
+		dude := lux.Service{Name: "dude", URL: c.ToolsURL,
+			Headers: []lux.Header{{Name: "Authorization", Secret: "DUDE_TOOLS_AUTH"}}}
+		spec.Workload.MCPServers = []lux.Service{dude}
 		if c.ToolsService {
-			spec.Workload.Services = []lux.MCPServer{dude}
+			spec.Workload.Services = []lux.Service{dude}
 		}
 		spec.Secrets = append(spec.Secrets, lux.Secret{Name: "DUDE_TOOLS_AUTH", Value: "Bearer " + in.ToolsToken})
 	}
@@ -218,7 +227,7 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		spec.Workload.Prompt = fakeagent.Script(in.Phase, in.Model, in.RunID)
 		if len(spec.Workload.MCPServers) > 0 {
 			// Its tools must be reachable; nothing else needs to be.
-			spec.Network = egress(AgentConfig{ToolsURL: c.ToolsURL, Egress: []string{}})
+			spec.Network = egress(AgentConfig{ToolsURL: c.ToolsURL, toolsOnly: true})
 		}
 		return spec
 	}
@@ -270,6 +279,11 @@ func egress(c AgentConfig) *lux.Network {
 			hosts[u.Hostname()] = true
 		}
 	}
+	if len(hosts) == 0 && !c.toolsOnly {
+		// Nothing configured to restrict to: the agent could not reach its
+		// own model otherwise. The tools alone restrict nothing.
+		return &lux.Network{Unrestricted: true}
+	}
 	// dude's tools. An address goes in as an address: lux matches hosts by
 	// name and addresses by range.
 	if u, err := url.Parse(c.ToolsURL); err == nil && u.Hostname() != "" {
@@ -278,9 +292,6 @@ func egress(c AgentConfig) *lux.Network {
 		} else {
 			hosts[u.Hostname()] = true
 		}
-	}
-	if len(hosts) == 0 && len(cidrs) == 0 {
-		return &lux.Network{Unrestricted: true}
 	}
 	n := &lux.Network{}
 	for h := range hosts {

@@ -116,20 +116,24 @@ type Workload struct {
 	Workdir string   `json:"workdir,omitempty"`
 	// MCP servers the agent is given (streamable HTTP), each header's value
 	// from a named secret.
-	MCPServers []MCPServer `json:"mcpServers,omitempty"`
+	MCPServers []Service `json:"mcpServers,omitempty"`
 	// Outside services lux serves inside the container on a local socket
 	// ($LUX_SERVICE_<NAME>), adding each header on the way out, so the
 	// workload can call them without holding the credential.
-	Services []MCPServer `json:"services,omitempty"`
+	Services []Service `json:"services,omitempty"`
 }
 
-type MCPServer struct {
-	Name    string      `json:"name"`
-	URL     string      `json:"url"`
-	Headers []MCPHeader `json:"headers,omitempty"`
+// Service is an outside HTTP service a workload may reach as its Run: an
+// MCP server for the agent, or one lux serves on a local socket. Header
+// values come from named secrets, filled in by lux, never seen by the
+// workload.
+type Service struct {
+	Name    string   `json:"name"`
+	URL     string   `json:"url"`
+	Headers []Header `json:"headers,omitempty"`
 }
 
-type MCPHeader struct {
+type Header struct {
 	Name   string `json:"name"`
 	Secret string `json:"secret"`
 }
@@ -237,7 +241,7 @@ type Client interface {
 	Push(ctx context.Context, runID, requestID string) error
 	Stop(ctx context.Context, runID string) error
 	Cancel(ctx context.Context, runID string) error
-	Resume(ctx context.Context, runID string, secrets []Secret, input string) (Run, error)
+	Resume(ctx context.Context, runID string, in ResumeInput) (Run, error)
 	// Output follows a Run's output from a position until lux says there is
 	// no more, calling fn for each frame. Returning an error from fn stops.
 	Output(ctx context.Context, runID, cursor string, afterEvent int64, fn func(Frame) error) error
@@ -366,14 +370,30 @@ func (c *HTTPClient) Cancel(ctx context.Context, runID string) error {
 	return c.do(ctx, "POST", "/v1/runs/"+runID+"/cancel", nil, nil, nil)
 }
 
-func (c *HTTPClient) Resume(ctx context.Context, runID string, secrets []Secret, input string) (Run, error) {
-	body := map[string]any{"secrets": secrets}
-	if input != "" {
-		body["input"] = map[string]string{"text": input}
+func (c *HTTPClient) Resume(ctx context.Context, runID string, in ResumeInput) (Run, error) {
+	body := map[string]any{"secrets": in.Secrets}
+	if in.Input != "" {
+		body["input"] = map[string]string{"text": in.Input}
+	}
+	if in.RequestID != "" {
+		body["requestId"] = in.RequestID
+	}
+	if len(in.AddRepositories) > 0 {
+		body["git"] = map[string]any{"repositories": in.AddRepositories}
 	}
 	var r Run
 	err := c.do(ctx, "POST", "/v1/runs/"+runID+"/resume", body, nil, &r)
 	return r, err
+}
+
+// ResumeInput is what a resume carries: the secrets again (lux never keeps
+// them), input for the agent, and repositories to add to the Run — cloned
+// before it starts, each reported as a git.clone event with the request id.
+type ResumeInput struct {
+	Secrets         []Secret
+	Input           string
+	RequestID       string
+	AddRepositories []Repository
 }
 
 func (c *HTTPClient) Get(ctx context.Context, runID string) (Run, error) {

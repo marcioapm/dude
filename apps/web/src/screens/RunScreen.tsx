@@ -133,6 +133,13 @@ export function RunScreen({ client, runId, title, breadcrumb }: RunScreenProps) 
     [client, runId, intervene],
   );
 
+  const decide = useCallback(
+    (requestId: string, approve: boolean) =>
+      void intervene(() => client.decideRepositoryRequest(requestId, approve),
+        approve ? "approve the repository" : "decline the repository"),
+    [client, intervene],
+  );
+
   if (!run) {
     return <div className="runScreen">{problem ?? <Spinner label="Loading the run…" />}</div>;
   }
@@ -242,7 +249,7 @@ export function RunScreen({ client, runId, title, breadcrumb }: RunScreenProps) 
             }
             emptyMessage="Waiting for the agent to start."
           >
-            {conversation.turns.map((turn) => renderTurn(turn, role, conversation.contextWindow, !isLive))}
+            {conversation.turns.map((turn) => renderTurn(turn, role, conversation.contextWindow, !isLive, decide))}
             {conversation.activity ? (
               <ChatMessage
                 role={role}
@@ -282,8 +289,29 @@ export function RunScreen({ client, runId, title, breadcrumb }: RunScreenProps) 
   );
 }
 
-function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: boolean) {
+function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: boolean,
+  decide?: (requestId: string, approve: boolean) => void) {
   switch (turn.kind) {
+    case "repositoryRequest": {
+      // Asked of a person, like a question: approve brings it into the Run.
+      const what = `${turn.access === "write" ? "Change" : "Read"} ${turn.repository}`;
+      return (
+        <QuestionCard
+          key={turn.id}
+          data-testid="repository-request"
+          role={role}
+          // The agent's reason, quoted: its words cannot pass for the card's.
+          text={`**${what}?**\n\n${turn.reason.split("\n").map((line) => `> ${line}`).join("\n")}`}
+          options={turn.decision === null && !ended ? ["Approve", "Decline"] : []}
+          askedAt={turn.at}
+          answeredAt={turn.decidedAt}
+          dismissed={ended && turn.decision === null}
+          {...(decide && turn.decision === null && !ended
+            ? { onChoose: (choice: string) => decide(turn.requestId, choice === "Approve") }
+            : {})}
+        />
+      );
+    }
     case "progress":
       // One row, updated in place as the agent reports.
       return (

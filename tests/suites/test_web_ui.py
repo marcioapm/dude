@@ -347,3 +347,35 @@ def test_an_agents_progress_shows_in_its_chat(
     expect(progress).to_contain_text("2 of 2")
     expect(progress).to_contain_text("committing")
     assert console_errors == []
+
+
+def test_a_person_approves_a_repository_an_agent_asked_for(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, fake_github, console_errors: list
+):
+    """The implementer asks for another repository; its chat shows the
+    request, and approving it brings the repository into the running agent."""
+    web = fake_github.add_repository("web")
+    client.post(f"/v1/projects/{forge_project['id']}/repositories", {"name": "web", "url": web.clone_url})
+    target = next(r for r in client.get(f"/v1/projects/{forge_project['id']}").json()["repositories"] if r["name"] != "web")
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
+        "implementer": {"model": "fake/request"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
+    item = client.create_work_item(forge_project["id"], "Needs the client", repositories=[{"id": target["id"]}])
+    assert client.post(f"/v1/work-items/{item['id']}/deliver").status_code == 201
+    from helpers import wait_until
+    implement = wait_until(lambda: next((r for r in client.work_item_runs(item["id"]) if r["phase"] == "implement"), None),
+                           timeout=30, message="no implementer")
+    wait_until(lambda: client.get("/v1/repository-requests", params={"runId": implement["id"]}).json()["repositoryRequests"],
+               timeout=30, message="the agent never asked")
+
+    _sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/session/{implement['id']}")
+    card = page.get_by_test_id("repository-request")
+    expect(card).to_contain_text("Read web")
+    expect(card).to_contain_text("the client calls this API")
+    card.get_by_role("button", name="Approve").click()
+
+    wait_until(lambda: client.get("/v1/repository-requests", params={"runId": implement["id"]}).json()
+               ["repositoryRequests"][0]["status"] == "cloned", timeout=30, message="the repository never reached the run")
+    names = sorted(r["id"] for r in client.get(f"/v1/work-items/{item['id']}").json()["repositories"])
+    assert len(names) == 2, names
+    assert console_errors == []

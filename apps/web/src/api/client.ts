@@ -319,6 +319,11 @@ export class ApiClient {
     return this.#request("POST", `/v1/work-items/${workItemId}/deliver`, {});
   }
 
+  /** Approve or decline an agent's request for a repository. */
+  decideRepositoryRequest(id: string, approve: boolean, note = ""): Promise<{ status: string }> {
+    return this.#request("POST", `/v1/repository-requests/${encodeURIComponent(id)}/decide`, { approve, note });
+  }
+
   /** Finished work with nothing to merge — a write-up, a design — is done once a person has read it. */
   markDone(workItemId: string): Promise<{ status: string }> {
     return this.#request("POST", `/v1/work-items/${workItemId}/done`, {});

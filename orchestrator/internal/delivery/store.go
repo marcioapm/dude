@@ -331,6 +331,41 @@ func WorkItemRepositories(ctx context.Context, tx pgx.Tx, workItemID string) ([]
 	return pgx.CollectRows(rows, pgx.RowToStructByPos[Repository])
 }
 
+// RunRef names the Run something happened on, for its ledger events.
+type RunRef struct{ Org, ProjectID, WorkItemID, RunID string }
+
+// Event is a ledger event on the Run, by the given actor, in the work item's
+// correlation.
+func (r RunRef) Event(typ, actorType string, payload map[string]any) ledger.Event {
+	return ledger.Event{Type: typ, OrganizationID: r.Org, ProjectID: r.ProjectID, WorkItemID: r.WorkItemID, RunID: r.RunID,
+		ActorType: actorType, ActorID: r.RunID, Source: ledger.SourceOrchestrator, CorrelationID: r.WorkItemID, Payload: payload}
+}
+
+// HasOpenQuestion says whether the Run is waiting on a person's answer.
+func HasOpenQuestion(ctx context.Context, tx pgx.Tx, runID string) (bool, error) {
+	var open bool
+	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM questions WHERE run_id = $1 AND status = 'open')`, runID).Scan(&open)
+	return open, err
+}
+
+// AskTx records an agent's question for a person, and the work item waiting
+// on it — however the agent asked (the ask tool, or a question block).
+func AskTx(ctx context.Context, tx pgx.Tx, r RunRef, prompt string, options []string) (string, error) {
+	id := ids.New(ids.Question)
+	opts, _ := json.Marshal(db.NonNil(options))
+	if _, err := tx.Exec(ctx, `INSERT INTO questions (id, organization_id, work_item_id, run_id, prompt, options)
+		VALUES ($1, $2, $3, $4, $5, $6::jsonb)`, id, r.Org, r.WorkItemID, r.RunID, prompt, opts); err != nil {
+		return "", err
+	}
+	if _, err := SetWorkItemStatusTx(ctx, tx, r.Org, r.ProjectID, r.WorkItemID, "", "awaiting_input",
+		"the agent asked a question"); err != nil {
+		return "", err
+	}
+	_, err := ledger.Append(ctx, tx, r.Event(EvQuestionAsked, ledger.ActorAgent,
+		map[string]any{"kind": "agent", "questionId": id, "prompt": prompt, "options": db.NonNil(options)}))
+	return id, err
+}
+
 // HasWritableRepository says whether the work item may change code.
 func (s *Store) HasWritableRepository(ctx context.Context, org, workItemID string) (bool, error) {
 	var ok bool

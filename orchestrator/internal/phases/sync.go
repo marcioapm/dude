@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"slices"
 	"strings"
 	"sync"
@@ -80,8 +81,12 @@ type phaseRun struct {
 	PushBranch string
 	// Per repository name: the commit this phase was asked to start from,
 	// and the one each checkout really started from (lux's git.checkout).
-	BaseRefs, BaseSHAs             map[string]string
-	TurnDone, HasDirectives        bool
+	BaseRefs, BaseSHAs      map[string]string
+	TurnDone, HasDirectives bool
+	// A person approved a repository the lux Run does not have yet.
+	RepoApproved bool
+	// dude paused it to bring those repositories, and resumes it itself.
+	PausedForRepository            bool
 	PushResult                     json.RawMessage
 	PRFeedback                     json.RawMessage
 	FindingIDs, BlockingSeverities []string
@@ -93,13 +98,16 @@ const runColumns = `r.id, r.organization_id, r.project_id, r.work_item_id, r.pha
 	COALESCE(r.lux_run_id, ''), COALESCE(r.lux_state, ''), COALESCE(r.lux_stop_reason, ''),
 	COALESCE(r.push_request_id, ''), COALESCE(r.push_branch, ''), r.base_refs, r.base_shas, r.turn_done_at IS NOT NULL,
 	EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL),
+	EXISTS (SELECT 1 FROM repository_requests q JOIN repositories repo ON repo.id = q.repository_id
+	        WHERE q.run_id = r.id AND q.status = 'approved' AND NOT (repo.name = ANY (r.lux_repositories))),
+	r.paused_for_repository,
 	r.push_result, r.pr_feedback, r.finding_ids, r.blocking_severities, r.attempt`
 
 func scan(row pgx.Row) (phaseRun, error) {
 	var r phaseRun
 	err := row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.WorkItemID, &r.Phase, &r.Status, &r.Control,
 		&r.Category, &r.LuxRunID, &r.LuxState, &r.LuxStopReason,
-		&r.PushRequestID, &r.PushBranch, &r.BaseRefs, &r.BaseSHAs, &r.TurnDone, &r.HasDirectives,
+		&r.PushRequestID, &r.PushBranch, &r.BaseRefs, &r.BaseSHAs, &r.TurnDone, &r.HasDirectives, &r.RepoApproved, &r.PausedForRepository,
 		&r.PushResult, &r.PRFeedback, &r.FindingIDs, &r.BlockingSeverities, &r.Attempt)
 	return r, err
 }
@@ -119,6 +127,8 @@ func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 			WHERE r.phase IS NOT NULL
 			  AND (r.status IN ('pending', 'scheduled', 'starting', 'running')
 			       OR (r.status = 'paused' AND r.control = 'resume')
+			       -- Paused by dude to bring a repository a person approved.
+			       OR (r.status = 'paused' AND r.paused_for_repository)
 			       -- Aborted in dude but not yet cancelled in lux.
 			       OR (r.status = 'aborted' AND r.lux_run_id IS NOT NULL AND r.lux_stop_reason IS DISTINCT FROM 'cancel'))
 			  AND (r.next_attempt_at IS NULL OR r.next_attempt_at <= now())
@@ -173,8 +183,16 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 		return true, s.pause(ctx, r)
 	}
 	// Following comes first: a finishing Run still needs its stream, because
-	// that is where the push result arrives — including after a restart.
+	// that is where the push result arrives — including after a restart —
+	// and a resumed one is where lux reports the repositories it added.
 	s.follow(r)
+	if r.Status == statusRunning && r.LuxState == "running" && r.RepoApproved && !r.TurnDone && r.PushRequestID == "" {
+		// A person approved a repository for the agent while it works: pause,
+		// so the resume can bring it (lux adds repositories only at a
+		// resume). An agent that has finished its turn gets it in the next
+		// phase instead — the work item names it now.
+		return true, s.requestPause(ctx, r, "a repository was approved")
+	}
 	if r.TurnDone {
 		return s.finish(ctx, r)
 	}
@@ -203,13 +221,19 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 		// Guarded on still being pending: an abort that raced the submit wins,
 		// and the sweep then cancels the lux Run it made.
 		var pushBranch string
-		if spec.Git != nil && spec.Git.Push != nil {
-			pushBranch = spec.Git.Push.Branch
+		var repos []string
+		if spec.Git != nil {
+			if spec.Git.Push != nil {
+				pushBranch = spec.Git.Push.Branch
+			}
+			for _, repo := range spec.Git.Repositories {
+				repos = append(repos, repo.Name)
+			}
 		}
 		tag, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, next_attempt_at = NULL,
-			harness = $4, model = $5, push_branch = NULLIF($6, ''),
+			harness = $4, model = $5, push_branch = NULLIF($6, ''), lux_repositories = $7,
 			status = CASE WHEN status = 'pending' THEN 'scheduled'::run_status ELSE status END
-			WHERE id = $1`, r.ID, lr.ID, lr.State, spec.Labels["dude.harness"], spec.Labels["dude.model"], pushBranch)
+			WHERE id = $1`, r.ID, lr.ID, lr.State, spec.Labels["dude.harness"], spec.Labels["dude.model"], pushBranch, db.NonNil(repos))
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
@@ -291,7 +315,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 	in.Prompt = delivery.Prompt(r.Phase, delivery.PromptInput{
 		Title: title, Goal: goal, AcceptanceCriteria: ac, Category: r.Category,
 		Findings: findings, PRFeedback: feedback, BlockingSeverities: r.BlockingSeverities, Context: context,
-		Repositories: promptRepos, Tools: s.Agent.ToolsURL != "" && s.Agent.ToolsService,
+		Repositories: promptRepos, Tools: s.Agent.ToolsURL != "", CLI: s.Agent.ToolsURL != "" && s.Agent.ToolsService,
 	})
 	// Pushed only by a phase that publishes, and only if there is somewhere
 	// it may change.
@@ -304,10 +328,17 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 		}
 	}
 	if s.Agent.ToolsURL != "" {
-		// A new token each time the spec is built — at submit and at every
-		// resume, which must supply secrets again. Only its hash is kept;
-		// storing it retires the one before.
-		token, hash := agenttools.NewToken()
+		// The token for this start of the Run: the same however often the
+		// submit or resume is retried (lux keeps the first attempt's
+		// secrets), new for the next start. Storing its hash retires the
+		// last start's token.
+		var start int
+		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			return tx.QueryRow(ctx, `SELECT tool_starts FROM runs WHERE id = $1`, r.ID).Scan(&start)
+		}); err != nil {
+			return lux.Spec{}, err
+		}
+		token, hash := agenttools.RunToken(s.Agent.ToolsKey, r.ID, start)
 		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 			_, err := tx.Exec(ctx, `UPDATE runs SET mcp_token_hash = $2 WHERE id = $1`, r.ID, hash)
 			return err
@@ -713,7 +744,9 @@ func (s *Syncer) pause(ctx context.Context, r phaseRun) error {
 // its conversation from the transcript lux kept; directives given while it
 // was paused are sent once it is running, each acknowledged on its own.
 func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
-	if r.Control != "resume" {
+	// Paused by dude to bring an approved repository: resume at once, with
+	// it. A person's pause is theirs to end.
+	if r.Control != "resume" && !r.PausedForRepository {
 		return false, nil
 	}
 	spec, err := s.spec(ctx, r)
@@ -727,8 +760,9 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 	// An agent waiting on a person's answer is told nothing: the answer,
 	// when it comes, is its input.
 	var asking bool
-	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM questions WHERE run_id = $1 AND status = 'open')`, r.ID).Scan(&asking)
+	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) (err error) {
+		asking, err = delivery.HasOpenQuestion(ctx, tx, r.ID)
+		return err
 	}); err != nil {
 		return true, err
 	}
@@ -736,7 +770,17 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 	if !r.HasDirectives && !asking {
 		nudge = resumeNudge
 	}
-	lr, err := s.Lux.Resume(ctx, r.LuxRunID, spec.Secrets, nudge)
+	in := lux.ResumeInput{Secrets: spec.Secrets, Input: nudge}
+	if err := s.addedRepositories(ctx, r, spec, &in); err != nil {
+		return true, err
+	}
+	lr, err := s.Lux.Resume(ctx, r.LuxRunID, in)
+	if le, ok := lux.AsError(err); ok && le.Status == http.StatusConflict {
+		// Already resuming: an earlier attempt got through and its answer
+		// was lost. lux's stream reports how it went.
+		err = nil
+		lr.State = "resuming"
+	}
 	if err != nil {
 		return true, s.retryLater(ctx, r, err)
 	}
@@ -745,7 +789,8 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 		// lux_state is what lux says now ("resuming"), so directives wait for
 		// the stream to report it running.
 		_, err := tx.Exec(ctx, `UPDATE runs SET status = 'running', lux_state = $2, lux_stop_reason = NULL,
-			control = 'none', control_requested_at = NULL, control_reason = NULL,
+			control = 'none', control_requested_at = NULL, control_reason = NULL, paused_for_repository = false,
+			tool_starts = tool_starts + 1,
 			turn_done_at = NULL, agent_busy_at = NULL WHERE id = $1 AND status = 'paused'`, r.ID, lr.State)
 		return err
 	}); err != nil {
@@ -755,6 +800,86 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 	// lux reports the resumed Run running, each on its own so each is
 	// acknowledged: lux refuses input to a Run still waiting for a host.
 	return true, nil
+}
+
+// requestPause asks for a graceful pause, saying why, marked as dude's own
+// so the syncer resumes it (and a person's later pause or resume wins).
+func (s *Syncer) requestPause(ctx context.Context, r phaseRun, why string) error {
+	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE runs SET control = 'pause_graceful', control_requested_at = now(), control_reason = $2,
+			paused_for_repository = true
+			WHERE id = $1 AND control = 'none' AND status = 'running'`, r.ID, why)
+		return err
+	})
+}
+
+// addedRepositories puts on the resume the approved repositories the lux
+// Run does not have yet: each as the spec has it (the work item names it
+// now). The resume's request id is the first request's; lux's git.clone for
+// each carries it, and settles the requests (translate.go). An approval the
+// spec cannot carry — the work item no longer names it, or names two by that
+// name — fails, rather than pausing the Run again and again.
+func (s *Syncer) addedRepositories(ctx context.Context, r phaseRun, spec lux.Spec, in *lux.ResumeInput) error {
+	if !r.RepoApproved {
+		return nil
+	}
+	type approved struct{ ID, Name, Access string }
+	var reqs []approved
+	var have []string
+	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `SELECT lux_repositories FROM runs WHERE id = $1`, r.ID).Scan(&have); err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, `SELECT q.id, repo.name, q.access::text FROM repository_requests q
+			JOIN repositories repo ON repo.id = q.repository_id WHERE q.run_id = $1 AND q.status = 'approved' ORDER BY q.created_at`, r.ID)
+		if err != nil {
+			return err
+		}
+		reqs, err = pgx.CollectRows(rows, pgx.RowToStructByPos[approved])
+		return err
+	}); err != nil {
+		return err
+	}
+	byName := map[string][]lux.Repository{}
+	if spec.Git != nil {
+		for _, repo := range spec.Git.Repositories {
+			byName[repo.Name] = append(byName[repo.Name], repo)
+		}
+	}
+	var told []string
+	var carried, failed []string
+	for _, q := range reqs {
+		if slices.Contains(have, q.Name) {
+			continue
+		}
+		if len(byName[q.Name]) != 1 {
+			failed = append(failed, q.ID)
+			continue
+		}
+		repo := byName[q.Name][0]
+		in.AddRepositories = append(in.AddRepositories, repo)
+		carried = append(carried, q.ID)
+		note := "read only"
+		if q.Access == "write" {
+			note = "you may change it; commit there and it gets its own pull request"
+		}
+		told = append(told, fmt.Sprintf("%s is now checked out at %s (%s).", q.Name, repo.Path, note))
+	}
+	if len(failed) > 0 {
+		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `UPDATE repository_requests SET status = 'failed',
+				error = 'the work item no longer names it, or names another repository by that name'
+				WHERE id = ANY($1) AND status = 'approved'`, failed)
+			return err
+		}); err != nil {
+			return err
+		}
+	}
+	if len(carried) > 0 {
+		in.RequestID = carried[0]
+		in.Input = strings.TrimSpace("A person approved your request. " + strings.Join(told, " ") + " Carry on.\n\n" + in.Input)
+	}
+	return nil
 }
 
 // deliverDirectives sends a person's steering to the running agent.
