@@ -207,7 +207,6 @@ function CodeBlock({ lang, value, open, ctx, tail }: { readonly lang: string; re
     <div className={cx(styles["code"], open && styles["codeOpen"])} data-lang={lang || undefined}>
       <div className={styles["codeBar"]} aria-hidden={lang ? undefined : true}>
         <span className={styles["codeLang"]}>{lang}</span>
-        <span className={styles["codeSpacer"]} />
         {!open ? (
           <button type="button" className={styles["codeCopy"]} onClick={copy} aria-label="Copy code">
             <Icon name={copied ? "check" : "copy"} size={12} />
