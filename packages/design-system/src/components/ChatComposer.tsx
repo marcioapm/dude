@@ -103,12 +103,16 @@ export function ChatComposer({
     onValueChange?.(v);
   };
 
-  // Autosize: 1–8 rows of 22px plus 20px padding.
+  // Autosize: 1–8 lines plus padding, both read from the computed style
+  // because they follow the density.
   useEffect(() => {
     const el = areaRef.current;
     if (!el) return;
+    const cs = getComputedStyle(el);
+    const line = Number.parseFloat(cs.lineHeight) || 22;
+    const pad = (Number.parseFloat(cs.paddingTop) || 0) + (Number.parseFloat(cs.paddingBottom) || 0);
     el.style.height = "0px";
-    el.style.height = `${Math.min(8 * 22 + 20, Math.max(22 + 20, el.scrollHeight))}px`;
+    el.style.height = `${Math.min(8 * line + pad, Math.max(line + pad, el.scrollHeight))}px`;
   }, [text]);
 
   const canSubmit = !disabled && !busy && text.trim().length > 0;

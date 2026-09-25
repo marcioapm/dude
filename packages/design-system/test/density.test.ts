@@ -42,17 +42,36 @@ describe("density", () => {
   });
 
   test("the large layout spacing shrinks by a visible amount", () => {
-    for (const k of ["space-main-pad", "space-chat-gap", "space-panel-gap", "space-card-pad", "size-avatar-chat", "size-row-default"] as const) {
+    for (const k of ["space-main-pad", "space-chat-gap", "space-panel-gap", "space-card-pad", "size-avatar-chat", "size-row-default", "size-row-item", "size-row-item-sm", "space-code-y", "space-code-x", "space-highlight-y"] as const) {
       expect(at("comfortable", k) - at("compact", k), k).toBeGreaterThanOrEqual(4);
     }
   });
 
   test("compact hits the targets that make it read denser at a glance", () => {
     expect(at("compact", "size-avatar-chat")).toBe(32);
-    expect(at("compact", "space-chat-gap")).toBe(10);
-    expect(at("compact", "size-row-default")).toBe(28);
-    expect(at("compact", "space-main-pad")).toBe(16);
-    expect(at("compact", "space-card-pad")).toBe(8);
+    expect(at("compact", "space-chat-gap")).toBe(8);
+    expect(at("compact", "size-row-item")).toBe(26);
+    expect(at("compact", "size-row-item-sm")).toBe(24);
+    expect(at("compact", "space-main-pad")).toBe(12);
+    expect(at("compact", "space-card-pad")).toBe(6);
+    expect(at("compact", "space-attention-row-pad-y")).toBe(3);
+    expect(at("compact", "space-aside-y")).toBe(2);
+  });
+
+  test("the big-ticket spacing loses at least a third in compact", () => {
+    for (const k of ["space-main-pad", "space-chat-gap", "space-card-pad", "space-attention-row-pad-y", "space-highlight-y", "space-code-y", "space-cell-y", "space-nav-section-gap"] as const) {
+      expect(at("compact", k) / at("comfortable", k), k).toBeLessThanOrEqual(2 / 3);
+    }
+  });
+
+  test("leading tightens in compact and chat lines land on whole pixels", () => {
+    const lead = (d: "comfortable" | "compact", k: "leading-chat" | "leading-prose") => Number(densityTokens[d][k]);
+    expect(lead("compact", "leading-chat")).toBeLessThan(lead("comfortable", "leading-chat"));
+    expect(lead("compact", "leading-prose")).toBeLessThan(lead("comfortable", "leading-prose"));
+    for (const d of ["comfortable", "compact"] as const) {
+      const line = at(d, "text-prose") * lead(d, "leading-chat");
+      expect(Math.abs(line - Math.round(line)), d).toBeLessThan(0.01);
+    }
   });
 });
 

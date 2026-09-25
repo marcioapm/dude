@@ -25,6 +25,16 @@
   --ds-space-panel-gap: 24px;
   --ds-space-tree-indent: 16px;
   --ds-space-nav-row-gap: 2px;
+  --ds-space-nav-section-gap: 12px;
+  --ds-space-attention-row-pad-y: 6px;
+  --ds-space-aside-y: 4px;
+  --ds-space-highlight-y: 8px;
+  --ds-space-code-y: 12px;
+  --ds-space-code-x: 16px;
+  --ds-space-cell-y: 6px;
+  --ds-space-composer-y: 8px;
+  --ds-space-composer-gap: 6px;
+  --ds-space-field-y: 10px;
   --ds-radius-none: 0px;
   --ds-radius-xs: 2px;
   --ds-radius-sm: 4px;
@@ -65,6 +75,8 @@
   --ds-size-row-compact: 28px;
   --ds-size-row-default: 32px;
   --ds-size-row-comfortable: 40px;
+  --ds-size-row-item: 32px;
+  --ds-size-row-item-sm: 28px;
   --ds-size-avatar-xs: 16px;
   --ds-size-avatar-sm: 20px;
   --ds-size-avatar-md: 24px;
@@ -101,6 +113,8 @@
   --ds-z-popover: 350;
   --ds-z-toast: 400;
   --ds-z-tooltip: 500;
+  --ds-size-code-line: 20px;
+  --ds-md-gap: 0.75em;
   --ds-focus-ring-width: 2px;
   --ds-focus-ring-offset: 1px;
 }
@@ -528,6 +542,8 @@
   --ds-size-control-lg: 36px;
   --ds-size-row-default: 32px;
   --ds-size-row-comfortable: 40px;
+  --ds-size-row-item: 32px;
+  --ds-size-row-item-sm: 28px;
   --ds-size-avatar-chat: 40px;
   --ds-space-main-pad: 24px;
   --ds-space-card-pad: 12px;
@@ -535,6 +551,21 @@
   --ds-space-chat-gap: 17px;
   --ds-space-chat-avatar-gap: 16px;
   --ds-space-panel-gap: 24px;
+  --ds-space-nav-row-gap: 2px;
+  --ds-space-nav-section-gap: 12px;
+  --ds-space-attention-row-pad-y: 6px;
+  --ds-space-aside-y: 4px;
+  --ds-space-highlight-y: 8px;
+  --ds-space-code-y: 12px;
+  --ds-space-code-x: 16px;
+  --ds-space-cell-y: 6px;
+  --ds-space-composer-y: 8px;
+  --ds-space-composer-gap: 6px;
+  --ds-space-field-y: 10px;
+  --ds-size-code-line: 20px;
+  --ds-leading-chat: 1.375;
+  --ds-leading-prose: 1.5;
+  --ds-md-gap: 0.75em;
   --ds-measure-message: 70ch;
 }
 
@@ -546,13 +577,30 @@
   --ds-size-control-lg: 34px;
   --ds-size-row-default: 28px;
   --ds-size-row-comfortable: 36px;
+  --ds-size-row-item: 26px;
+  --ds-size-row-item-sm: 24px;
   --ds-size-avatar-chat: 32px;
-  --ds-space-main-pad: 16px;
-  --ds-space-card-pad: 8px;
+  --ds-space-main-pad: 12px;
+  --ds-space-card-pad: 6px;
   --ds-space-chat-pad-x: 12px;
-  --ds-space-chat-gap: 10px;
+  --ds-space-chat-gap: 8px;
   --ds-space-chat-avatar-gap: 12px;
   --ds-space-panel-gap: 16px;
+  --ds-space-nav-row-gap: 1px;
+  --ds-space-nav-section-gap: 6px;
+  --ds-space-attention-row-pad-y: 3px;
+  --ds-space-aside-y: 2px;
+  --ds-space-highlight-y: 4px;
+  --ds-space-code-y: 8px;
+  --ds-space-code-x: 12px;
+  --ds-space-cell-y: 3px;
+  --ds-space-composer-y: 4px;
+  --ds-space-composer-gap: 4px;
+  --ds-space-field-y: 6px;
+  --ds-size-code-line: 18px;
+  --ds-leading-chat: 1.3333333333333333;
+  --ds-leading-prose: 1.4;
+  --ds-md-gap: 0.5em;
   --ds-measure-message: 72ch;
 }
 

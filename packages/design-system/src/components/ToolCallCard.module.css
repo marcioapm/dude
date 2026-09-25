@@ -37,7 +37,7 @@
   display: flex;
   align-items: center;
   gap: var(--ds-space-8);
-  min-height: var(--ds-size-row-default);
+  min-height: var(--ds-size-row-item);
   padding: 0 var(--ds-space-8);
   font-size: var(--ds-text-sm);
   outline: none;

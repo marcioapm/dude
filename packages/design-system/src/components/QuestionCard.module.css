@@ -37,8 +37,8 @@
 .waiting {
   --qc-bar: var(--ds-tone-attention-solid);
   --qc-wash: color-mix(in srgb, var(--ds-tone-attention-solid) 9%, transparent);
-  padding-top: var(--ds-space-8);
-  padding-bottom: var(--ds-space-8);
+  padding-top: var(--ds-space-highlight-y);
+  padding-bottom: var(--ds-space-highlight-y);
 }
 
 .gutter {

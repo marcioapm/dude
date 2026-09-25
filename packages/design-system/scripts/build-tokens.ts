@@ -53,6 +53,9 @@ function staticVars(): Record<string, string> {
   for (const [k, v] of Object.entries(cadence)) out[`cadence-${k}`] = `${v}ms`;
   for (const [k, v] of Object.entries(measure)) out[`measure-${k}`] = v;
   for (const [k, v] of Object.entries(zIndex)) out[`z-${k}`] = `${v}`;
+  // Density tokens with no scale entry (unitless leading, em gaps) still
+  // need a :root default for trees that never set data-density.
+  for (const [k, v] of Object.entries(densityTokens.comfortable)) if (!(k in out)) out[k] = v;
   out["focus-ring-width"] = `${focusRing.width}px`;
   out["focus-ring-offset"] = `${focusRing.offset}px`;
   return out;
