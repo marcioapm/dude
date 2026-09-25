@@ -227,6 +227,44 @@ describe("text on tints", () => {
       expect(contrast(c.textMuted, fill), `${mode} muted`).toBeGreaterThanOrEqual(4.5);
     }
   });
+
+  test("the composer's muted placeholder clears 4.5:1 on the raised field", () => {
+    for (const mode of MODES) {
+      const c = themeColors[mode];
+      expect(contrast(c.textMuted, c.fieldRaised), `${mode} placeholder`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});
+
+/** An `rgba()` wash token composited over an opaque background. */
+function over(wash: string, bg: string): string {
+  const [r, g, b, a] = wash.match(/[\d.]+/g)!.map(Number) as [number, number, number, number];
+  return mix(`#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")}`, bg, a);
+}
+
+describe("text on row states", () => {
+  // Hovered and selected rows (NavTree on the canvas, a selected row on the
+  // surface) and a steer turn at rest and hovered. Muted falls under 4.5:1
+  // on several of these in light mode, so metadata on them (NavTree key,
+  // "+N" and epic count; a steer's time and "delivered") uses secondary.
+  const states = (mode: ThemeMode) => {
+    const c = themeColors[mode];
+    return {
+      "canvas + hover wash": over(c.hoverWash, c.canvas),
+      "canvas + active wash": over(c.activeWash, c.canvas),
+      "surface + active wash": over(c.activeWash, c.surface),
+      "surface + steer wash": mix(c.accent, c.surface, tints.highlight),
+      "surface + steer hover": mix(c.accent, c.surface, tints.highlightHover),
+    };
+  };
+
+  test("secondary metadata clears 4.5:1", () => {
+    for (const mode of MODES) {
+      for (const [state, bg] of Object.entries(states(mode))) {
+        expect(contrast(themeColors[mode].textSecondary, bg), `${mode} secondary on ${state}`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
 });
 
 describe("disabled filled button", () => {

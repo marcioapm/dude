@@ -159,6 +159,11 @@
   --cm-tag-fg: var(--ds-color-accent-text);
   --cm-tag-bg: color-mix(in srgb, var(--ds-color-accent) 16%, transparent);
 }
+/* Muted falls under 4.5:1 on the steer wash (light). */
+.intent-steer .time,
+.intent-steer .delivered {
+  color: var(--ds-color-text-secondary);
+}
 .intent {
   display: inline-flex;
   align-items: center;
