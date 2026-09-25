@@ -774,7 +774,17 @@ func (s *Server) stop(w http.ResponseWriter, r *http.Request) {
 	run.Stopped++
 	run.busy = false
 	if run.State == "running" {
-		s.setState(run, "stopped")
+		// As lux does: stopping at once, stopped once the container has
+		// gone — a moment later, on the stream.
+		s.setState(run, "stopping")
+		go func() {
+			time.Sleep(30 * time.Millisecond)
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			if run.State == "stopping" {
+				s.setState(run, "stopped")
+			}
+		}()
 	}
 	writeJSON(w, 202, s.view(run))
 }

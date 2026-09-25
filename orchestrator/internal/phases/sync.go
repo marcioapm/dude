@@ -246,6 +246,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 	var in specInput
 	var title, goal, image string
 	var repos []delivery.Repository
+	var decisions []delivery.Decision
 	var criteria, projectModels, orgModels json.RawMessage
 	var findings []delivery.Finding
 	var feedback []forge.ActionableFeedback
@@ -261,6 +262,15 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 		var err error
 		if repos, err = delivery.WorkItemRepositories(ctx, tx, r.WorkItemID); err != nil {
 			return fmt.Errorf("load repositories: %w", err)
+		}
+		// What people decided on this work item, across its Runs.
+		rows, err := tx.Query(ctx, `SELECT prompt, answer FROM questions
+			WHERE work_item_id = $1 AND status = 'answered' AND answer IS NOT NULL ORDER BY answered_at`, r.WorkItemID)
+		if err != nil {
+			return err
+		}
+		if decisions, err = pgx.CollectRows(rows, pgx.RowToStructByPos[delivery.Decision]); err != nil {
+			return err
 		}
 		// The findings the workflow chose for this Run, exactly and in its
 		// order: those a fix addresses (a fix for pull request feedback has
@@ -315,7 +325,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 	in.Prompt = delivery.Prompt(r.Phase, delivery.PromptInput{
 		Title: title, Goal: goal, AcceptanceCriteria: ac, Category: r.Category,
 		Findings: findings, PRFeedback: feedback, BlockingSeverities: r.BlockingSeverities, Context: context,
-		Repositories: promptRepos, Tools: s.Agent.ToolsURL != "", CLI: s.Agent.ToolsURL != "" && s.Agent.ToolsService,
+		Repositories: promptRepos, Decisions: decisions, Tools: s.Agent.ToolsURL != "", CLI: s.Agent.ToolsURL != "" && s.Agent.ToolsService,
 	})
 	// Pushed only by a phase that publishes, and only if there is somewhere
 	// it may change.
@@ -744,9 +754,16 @@ func (s *Syncer) pause(ctx context.Context, r phaseRun) error {
 // its conversation from the transcript lux kept; directives given while it
 // was paused are sent once it is running, each acknowledged on its own.
 func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
-	// Paused by dude to bring an approved repository: resume at once, with
-	// it. A person's pause is theirs to end.
+	// Paused by dude to bring an approved repository: resume, with it, as
+	// soon as lux has stopped the Run — resuming earlier would clear the
+	// stop reason before lux's "stopped" arrives, and that would read as the
+	// agent dying. A person's pause is theirs to end.
 	if r.Control != "resume" && !r.PausedForRepository {
+		return false, nil
+	}
+	if !lux.Terminal(r.LuxState) {
+		// Still stopping: follow the stream, where lux will say so.
+		s.follow(r)
 		return false, nil
 	}
 	spec, err := s.spec(ctx, r)

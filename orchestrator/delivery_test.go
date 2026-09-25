@@ -1214,9 +1214,8 @@ func TestPauseKeepsTheRunAndResumeContinuesIt(t *testing.T) {
 	w.until("the run to pause", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, runID) == 1
 	})
-	if r := w.lux.Runs()[0]; r.Stopped != 1 || r.State != "stopped" {
-		t.Errorf("lux run stopped=%d state=%s", r.Stopped, r.State)
-	}
+	// lux stops it, reporting "stopped" a moment later.
+	w.until("lux to report the run stopped", func() bool { r := w.lux.Runs()[0]; return r.Stopped == 1 && r.State == "stopped" })
 
 	// A directive given while paused, then the request to resume.
 	mustExec(t, w.owner, `INSERT INTO directives (id, organization_id, work_item_id, run_id, text) VALUES ('dir_r', $1, $2, $3, 'carry on')`,
@@ -1360,8 +1359,12 @@ func TestAnAbortDuringSubmitIsNotUndone(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 		_, _ = w.owner.Exec(context.Background(), `UPDATE runs SET status = 'aborted' WHERE id = $1`, runID)
 	}()
-	w.until("the lux run to be cancelled", func() bool {
-		return len(w.lux.Runs()) == 1 && w.lux.Runs()[0].Cancelled
+	// Either the submit got in first, and the lux Run it made is cancelled,
+	// or the abort did, and nothing was ever submitted. Never a live Run.
+	w.until("no live lux run", func() bool {
+		runs := w.lux.Runs()
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'aborted'`, runID) == 1 &&
+			(len(runs) == 0 || len(runs) == 1 && runs[0].Cancelled)
 	})
 	var status string
 	_ = w.owner.QueryRow(context.Background(), `SELECT status::text FROM runs WHERE id = $1`, runID).Scan(&status)
