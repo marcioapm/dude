@@ -348,10 +348,16 @@ func TestEmitEventsSchemaAsksForAnObject(t *testing.T) {
 	if err != nil || res.IsError {
 		t.Fatalf("emit: %v %+v", err, res)
 	}
-	var done string
-	_ = f.owner.QueryRow(context.Background(), `SELECT payload->'data'->>'done' FROM events
-		WHERE run_id = 'run_schema' AND event_type = 'agent.custom.milestone'`).Scan(&done)
-	if done != "implemented" {
-		t.Errorf("data = %q", done)
+	// And as the JSON text of an object, which models also send.
+	res, err = cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "emit_event",
+		Arguments: map[string]any{"type": "milestone", "data": `{"done": "implemented"}`}})
+	if err != nil || res.IsError {
+		t.Fatalf("emit as text: %v %+v", err, res)
+	}
+	var both int
+	_ = f.owner.QueryRow(context.Background(), `SELECT count(*) FROM events
+		WHERE run_id = 'run_schema' AND event_type = 'agent.custom.milestone' AND payload->'data'->>'done' = 'implemented'`).Scan(&both)
+	if both != 2 {
+		t.Errorf("%d of 2 milestones have their data as an object", both)
 	}
 }

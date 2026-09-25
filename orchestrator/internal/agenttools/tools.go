@@ -249,6 +249,15 @@ func emitEvent(ctx context.Context, tx pgx.Tx, c Caller, in emitIn) (emitOut, er
 	if data == nil {
 		data = map[string]any{}
 	}
+	// Models often send an object as the JSON text of one: take the object.
+	if text, ok := data.(string); ok {
+		var decoded any
+		if json.Unmarshal([]byte(text), &decoded) == nil {
+			if _, isObject := decoded.(map[string]any); isObject {
+				data = decoded
+			}
+		}
+	}
 	if raw, _ := json.Marshal(data); len(raw) > 16<<10 {
 		return emitOut{}, refuse("data too large: at most 16 KB")
 	}
