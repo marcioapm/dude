@@ -412,3 +412,31 @@ def test_a_parked_agent_is_answered_from_its_chat(
                timeout=30, message="the answer did not resume the parked agent")
     expect(page.get_by_test_id("chat-notice").last).to_contain_text("Taken back up")
     assert console_errors == []
+
+
+def test_an_agent_parked_on_a_repository_request_says_what_resumes_it(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, fake_github, console_errors: list
+):
+    """An agent that cannot go on without a repository ends its turn on the
+    request and is parked; its chat says so, and approving resumes it."""
+    web = fake_github.add_repository("web")
+    client.post(f"/v1/projects/{forge_project['id']}/repositories", {"name": "web", "url": web.clone_url})
+    target = next(r for r in client.get(f"/v1/projects/{forge_project['id']}").json()["repositories"] if r["name"] != "web")
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
+        "implementer": {"model": "fake/wait"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
+    item = client.create_work_item(forge_project["id"], "Needs the client first", repositories=[{"id": target["id"]}])
+    assert client.post(f"/v1/work-items/{item['id']}/deliver").status_code == 201
+    from helpers import wait_until
+    implement = wait_until(
+        lambda: next((r for r in client.work_item_runs(item["id"]) if r["phase"] == "implement" and r.get("dudePause") == "person"), None),
+        timeout=30, message="the waiting agent was never parked")
+
+    _sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/session/{implement['id']}")
+    expect(page.get_by_test_id("chat-notice")).to_contain_text("Parked while it waits for you")
+    # No question to answer: the composer says what does resume it.
+    expect(page.get_by_placeholder("decide its request above")).to_be_visible()
+    page.get_by_test_id("repository-request").get_by_role("button", name="Approve").click()
+    wait_until(lambda: next(r for r in client.work_item_runs(item["id"]) if r["id"] == implement["id"])["status"] == "completed",
+               timeout=30, message="the approval did not resume the parked agent")
+    assert console_errors == []

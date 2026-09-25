@@ -95,8 +95,12 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   out that commit.
 - **Publishing is a property of the phase** (`Publishes`): a reviewer's
   container is never pushed.
-- **A turn is done when the agent goes busy then idle** — reported by lux's
-  shim in the output stream, in order with the agent's messages.
+- **A turn is done when the agent goes busy then idle**, as lux's shim
+  reports it in the output stream, in order with the agent's messages.
+  The exception is a turn that ends with something open for a person: a
+  question (`ask_person`), or a repository requested with `wait: true`.
+  Then the Run is **waiting** (`runs.waiting_since`), and the answer starts
+  its next turn.
 - **Reviewers report findings** as YAML in their reply; `delivery/findings.go`
   parses it. Only review and test Runs may report.
 - **Every loop ends on a declared bound**: `MaxReviewIterations`,
@@ -116,6 +120,23 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   and `delivered` when the agent does.
 - **Pause** stops the lux Run, keeping its workspace and session; **resume**
   continues it, on any host, with the agent's conversation intact.
+- **Parking.** dude pauses a Run itself (`runs.dude_pause`) so that one
+  waiting on a person holds no host. The syncer resumes it on its own when
+  the reason is over:
+  - `person`: waiting past the project's `parkAfterMinutes` (default 10). An
+    answer or a decision resumes it.
+  - `idle`: quiet mid-turn for `idleNudgeMinutes` (off by default), nudged
+    once, then quiet as long again. The work item goes to awaiting input,
+    and only a person's Resume takes it up.
+  - `repository`: stopped a moment so the resume can bring in a repository
+    a person approved.
+
+  A person's own pause always wins. The chat shows each park and resume
+  (`run.parked`, `run.unparked`). A Run has **no wall-clock limit**: dude
+  sends no timeout, and lux counts a set one as running time only.
+- **Asks die with their Run.** Questions and repository requests still open
+  when a Run ends are cancelled (triggers). Answering one returns a 409 that
+  says so. Design: [`design/agent-tools.md`](design/agent-tools.md).
 
 ## Decisions already made
 
@@ -216,9 +237,8 @@ In rough priority order.
 1. **Real models end to end.** Everything has been proven with the scripted
    agent; run real work items with OpenCode through lux, read the
    transcripts, and tune prompts, the findings parser and policy.
-2. **`ask_user`** — the agent asking a person a question and blocking on the
-   answer. On lux this is natural: the agent goes idle, dude waits, the
-   answer is input.
+2. **Telling a person something waits on them**: a notification (Slack,
+   email) for a question or a request. Today they are only on the board.
 3. **Budgets as loop bounds** — a cost cap per Run and per work item.
 4. **The tester phase** (browser QA with recorded evidence) and artifacts
    from lux. Design in [`phased-runs.md`](phased-runs.md).
