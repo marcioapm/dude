@@ -37,7 +37,7 @@
   display: block;
   padding-top: 4px;
   text-align: right;
-  font-size: 11px;
+  font-size: var(--ds-text-2xs);
   line-height: 1;
   font-variant-numeric: tabular-nums;
   color: var(--ds-color-text-muted);
@@ -90,6 +90,7 @@
   min-width: 0;
 }
 
+/* Fixed line box: the foot's stats are text-xs, which holds in both densities. */
 .foot {
   display: flex;
   align-items: center;
@@ -299,6 +300,7 @@
   padding: 0 var(--ds-space-chat-pad-x);
   font-size: var(--ds-text-xs);
   font-weight: var(--ds-weight-medium);
+  /* Fixed: 12px text on a 16px line, which holds in both densities like text-xs. */
   line-height: 16px;
   color: var(--ds-color-text-muted);
 }

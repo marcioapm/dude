@@ -32,6 +32,7 @@
   min-width: 0;
   padding: 0 var(--ds-space-2);
   font-size: var(--ds-text-sm);
+  /* Fixed: text-sm holds in both densities, so its line box does too. */
   line-height: 20px;
 }
 .questionIcon {

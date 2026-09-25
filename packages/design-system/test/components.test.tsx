@@ -13,6 +13,7 @@ import { QuestionCard } from "../src/components/QuestionCard.tsx";
 import { AttentionList } from "../src/components/Sidebar.tsx";
 import { ToolCallCard } from "../src/components/ToolCallCard.tsx";
 import { Icon } from "../src/icons/index.tsx";
+import { formatTimestamp } from "../src/util/format.ts";
 import type { AttentionItem, NavProject, NavRow, NavWorkItem } from "../src/util/navModel.ts";
 
 const noop = () => {};
@@ -221,5 +222,12 @@ describe("Icon stroke width", () => {
     expect(stroke(14)).toBe("1.5");
     expect(stroke()).toBe("1.5");
     expect(stroke("1em")).toBe("1.5");
+  });
+});
+
+describe("formatTimestamp time-short", () => {
+  test("is HH:MM, zero-padded", () => {
+    expect(formatTimestamp(new Date(2026, 8, 24, 9, 5, 7), "time-short")).toBe("09:05");
+    expect(formatTimestamp(new Date(2026, 8, 24, 23, 59, 59), "time-short")).toBe("23:59");
   });
 });
