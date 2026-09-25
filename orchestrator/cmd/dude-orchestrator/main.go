@@ -12,8 +12,8 @@
 //	DUDE_AGENT_IMAGE             image for agents when a project names none
 //	DUDE_OPENCODE_AUTH/_CONFIG   OpenCode credentials (default: this machine's)
 //	DUDE_PR_RECONCILE            how often open PRs are re-read as a backstop to webhooks (default 15m)
-//	DUDE_PARK_AFTER/IDLE_AFTER   override every project's grace before parking a Run waiting on a person,
-//	                             and its idle limit (durations; unset follows each project's policy)
+//	DUDE_PARK_AFTER/IDLE_AFTER   the grace before parking a Run waiting on a person, and the idle limit,
+//	                             for projects that set none (durations; default: the delivery policy's)
 //	DUDE_FACTORY_LOGINS          comma-separated logins whose PR comments are the factory's own
 package main
 
@@ -67,13 +67,13 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("DUDE_PR_RECONCILE: %w", err)
 	}
-	var parkAfter, idleAfter time.Duration
-	for name, d := range map[string]*time.Duration{"DUDE_PARK_AFTER": &parkAfter, "DUDE_IDLE_AFTER": &idleAfter} {
-		if v := os.Getenv(name); v != "" {
-			if *d, err = time.ParseDuration(v); err != nil {
-				return fmt.Errorf("%s: %w", name, err)
-			}
-		}
+	parkAfter, err := time.ParseDuration(env("DUDE_PARK_AFTER", "0s"))
+	if err != nil {
+		return fmt.Errorf("DUDE_PARK_AFTER: %w", err)
+	}
+	idleAfter, err := time.ParseDuration(env("DUDE_IDLE_AFTER", "0s"))
+	if err != nil {
+		return fmt.Errorf("DUDE_IDLE_AFTER: %w", err)
 	}
 	host, _ := os.Hostname()
 

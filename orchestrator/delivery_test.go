@@ -715,7 +715,9 @@ func TestAPersonsPauseIsNotUndoneByAnApproval(t *testing.T) {
 	if status, out := w.call("/internal/runs/"+runID+"/pause", map[string]any{}); status != 200 {
 		t.Fatalf("pause: %d %v", status, out)
 	}
-	w.until("the pause", func() bool { return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, runID) == 1 })
+	w.until("the pause", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, runID) == 1
+	})
 	w.call("/internal/repository-requests/"+req.RequestID+"/decide", map[string]any{"approve": true})
 	for range 10 {
 		w.pump()
@@ -1045,6 +1047,13 @@ func TestAnAgentThatAsksWaitsForTheAnswerAndCarriesOn(t *testing.T) {
 	}
 }
 
+// questionID is the work item's (one) question.
+func (w *world) questionID(wi string) string {
+	var id string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM questions WHERE work_item_id = $1`, wi).Scan(&id)
+	return id
+}
+
 // asking starts a delivery whose implementer stops on a question.
 func (w *world) asking() (wi, runID string) {
 	w.withTools()
@@ -1071,8 +1080,7 @@ func TestAbortingARunThatAskedCancelsItsQuestion(t *testing.T) {
 		t.Errorf("an aborted Run's question is still waiting for a person")
 	}
 	// Answered afterwards — the next morning — it says why nothing happens.
-	var qid string
-	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM questions WHERE work_item_id = $1`, wi).Scan(&qid)
+	qid := w.questionID(wi)
 	if status, body := w.call("/internal/questions/"+qid+"/answer", map[string]any{"text": "yes"}); status != 409 ||
 		!strings.Contains(fmt.Sprint(body), "no longer relevant") {
 		t.Errorf("answering a dead question: %d %v", status, body)
@@ -1107,8 +1115,7 @@ func TestAnAgentWaitingOnAPersonIsParkedAndTheAnswerResumesIt(t *testing.T) {
 		t.Fatalf("resumed with the question unanswered")
 	}
 
-	var qid string
-	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM questions WHERE work_item_id = $1`, wi).Scan(&qid)
+	qid := w.questionID(wi)
 	if status, body := w.call("/internal/questions/"+qid+"/answer", map[string]any{"text": "yes"}); status != 200 {
 		t.Fatalf("answer: %d %v", status, body)
 	}
@@ -1116,7 +1123,7 @@ func TestAnAgentWaitingOnAPersonIsParkedAndTheAnswerResumesIt(t *testing.T) {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
 	})
 	r := w.lux.Runs()[0]
-	if len(w.lux.Runs()) < 1 || r.Resumed != 1 {
+	if r.Resumed != 1 {
 		t.Fatalf("resumed %d times, want once, the same lux Run", r.Resumed)
 	}
 	// The answer is what it hears, not a "carry on" as well.
@@ -1134,8 +1141,7 @@ func TestAnAnswerWithinTheGracePeriodIsTakenLive(t *testing.T) {
 	w := newWorld(t)
 	w.syncer.ParkAfter = time.Hour
 	wi, runID := w.asking()
-	var qid string
-	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM questions WHERE work_item_id = $1`, wi).Scan(&qid)
+	qid := w.questionID(wi)
 	w.call("/internal/questions/"+qid+"/answer", map[string]any{"text": "yes"})
 	w.until("the implementer to finish", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
@@ -1157,8 +1163,7 @@ func TestAPersonsPauseOfAParkedRunHolds(t *testing.T) {
 	if status, body := w.call("/internal/runs/"+runID+"/pause", map[string]any{}); status != 200 {
 		t.Fatalf("pause: %d %v", status, body)
 	}
-	var qid string
-	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM questions WHERE work_item_id = $1`, wi).Scan(&qid)
+	qid := w.questionID(wi)
 	w.call("/internal/questions/"+qid+"/answer", map[string]any{"text": "yes"})
 	for range 10 {
 		w.pump()
@@ -1214,13 +1219,8 @@ func TestAnAgentWaitingOnARepositoryIsParkedAndTheApprovalResumesIt(t *testing.T
 func TestAQuietAgentIsNudgedThenParkedForAPerson(t *testing.T) {
 	w := newWorld(t)
 	w.syncer.IdleAfter = 300 * time.Millisecond
-	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
-			return fakelux.Behaviour{Hang: true}
-		}
-		// Silent even after the nudge: its turn is taken and it says nothing.
-		return fakelux.Behaviour{Hang: true}
-	}
+	// Silent even after the nudge: its turn is taken and it says nothing.
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
 	wi := w.workItem()
 	w.deliver(wi)
 	var runID string

@@ -33,3 +33,7 @@ ALTER TABLE runs DROP COLUMN agent_turn_reply;
 -- The phase syncer decides across organizations whether a Run waits on a
 -- person, and how long the project lets it wait or stay quiet.
 GRANT SELECT ON questions, projects TO dude_sweeper;
+
+-- "Has this Run a question open?" is asked of every live Run on every
+-- sweep: answered from the index alone.
+CREATE INDEX questions_run_open_idx ON questions (run_id) WHERE status = 'open';

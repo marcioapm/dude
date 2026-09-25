@@ -157,10 +157,17 @@ export type Turn =
   | ToolTurn | MessageTurn | HumanTurn | ThoughtTurn | PromptTurn | UsageTurn | QuestionTurn | EventTurn | ProgressTurn
   | RepositoryRequestTurn | NoticeTurn;
 
-/** What the transcript says when dude parks a Run, by why (runs.dude_pause). */
-const PARKED_TEXT: Record<string, string> = {
-  person: "Parked while it waits for you — nothing is held; your answer resumes it.",
-  idle: "Parked: it went quiet and did not answer a nudge. Resume it when you have looked.",
+/** What the transcript says for what dude did to a Run, by event type. */
+const NOTICES: Record<string, { notice: NoticeTurn["notice"]; text: (payload: Record<string, unknown>) => string }> = {
+  "run.parked": {
+    notice: "parked",
+    // By why dude parked it (runs.dude_pause).
+    text: (p) => p.reason === "person" ? "Parked while it waits for you — nothing is held; your answer resumes it."
+      : p.reason === "idle" ? "Parked: it went quiet and did not answer a nudge. Resume it when you have looked."
+      : "Parked.",
+  },
+  "run.unparked": { notice: "unparked", text: () => "Taken back up where it left off." },
+  "run.idle_nudged": { notice: "nudged", text: () => "Quiet for a while: nudged to carry on or ask." },
 };
 
 /** Custom events live under this prefix in the ledger (agenttools.CustomPrefix). */
@@ -465,11 +472,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       case "run.parked":
       case "run.unparked":
       case "run.idle_nudged": {
-        const notice = event.eventType === "run.parked" ? "parked" : event.eventType === "run.unparked" ? "unparked" : "nudged";
-        const text = notice === "parked"
-          ? PARKED_TEXT[String(payload.reason)] ?? "Parked."
-          : notice === "unparked" ? "Taken back up where it left off." : "Quiet for a while: nudged to carry on or ask.";
-        turns.push({ kind: "notice", id: event.eventId, notice, text, at: event.occurredAt });
+        const { notice, text } = NOTICES[event.eventType]!;
+        turns.push({ kind: "notice", id: event.eventId, notice, text: text(payload), at: event.occurredAt });
         if (notice === "parked") {
           state.activity = null;
           state.activeTool = null;

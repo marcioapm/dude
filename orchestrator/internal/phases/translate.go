@@ -324,14 +324,12 @@ func (t *translator) activity(ctx context.Context, tx pgx.Tx, s *Syncer, activit
 		// repository it asked for — is not done: the agent waits, and the
 		// answer starts its next turn. The syncer parks it if the wait is
 		// long.
-		if open, err := delivery.HasOpenAsk(ctx, tx, t.run.ID); err != nil || open {
-			if err == nil {
-				_, err = tx.Exec(ctx, `UPDATE runs SET waiting_since = COALESCE(waiting_since, now())
-					WHERE id = $1 AND agent_busy_at IS NOT NULL`, t.run.ID)
-			}
+		tag, err := tx.Exec(ctx, `UPDATE runs r SET waiting_since = COALESCE(r.waiting_since, now())
+			WHERE r.id = $1 AND r.agent_busy_at IS NOT NULL AND `+delivery.OpenAsk, t.run.ID)
+		if err != nil || tag.RowsAffected() > 0 {
 			return err
 		}
-		tag, err := tx.Exec(ctx, `UPDATE runs SET turn_done_at = now()
+		tag, err = tx.Exec(ctx, `UPDATE runs SET turn_done_at = now()
 			WHERE id = $1 AND agent_busy_at IS NOT NULL AND turn_done_at IS NULL`, t.run.ID)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
@@ -364,10 +362,7 @@ func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux
 	str := func(m map[string]any, k string) string { v, _ := m[k].(string); return v }
 	// What the model says, thinks or does is activity; a usage report or a
 	// turn ending (a nudge cancels one) is not.
-	switch typ {
-	case "agent_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update", "plan":
-		t.active = true
-	}
+	t.active = t.active || slices.Contains([]string{"agent_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update", "plan"}, typ)
 
 	switch typ {
 	case "agent_message_chunk":
@@ -407,13 +402,11 @@ func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux
 			return nil
 		}
 		switch status {
-		case "pending", "in_progress":
+		case "pending":
+			// Announced before its input is known; in_progress follows.
 			t.openCalls[callID] = true
-		case "completed", "failed":
-			delete(t.openCalls, callID)
-		}
-		switch status {
 		case "in_progress":
+			t.openCalls[callID] = true
 			if _, seen := t.seenCalls[callID]; seen {
 				return nil
 			}
@@ -422,6 +415,7 @@ func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux
 			return s.event(ctx, tx, t.run, evToolCalled, ledger.ActorAgent,
 				map[string]any{"tool": name, "callId": callID, "input": input, "title": title})
 		case "completed", "failed":
+			delete(t.openCalls, callID)
 			st := "completed"
 			if status == "failed" {
 				st = "error"
@@ -436,7 +430,6 @@ func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux
 			maps.Copy(payload, toolResult(u))
 			return s.event(ctx, tx, t.run, evToolCompleted, ledger.ActorAgent, payload)
 		}
-		// "pending" is announced before its input is known; in_progress follows.
 
 	case "usage_update":
 		return t.usageUpdate(ctx, tx, s, u)

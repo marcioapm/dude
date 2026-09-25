@@ -197,14 +197,16 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, org string) err
 // runInfo loads what every run-control action needs, confined to org.
 type runInfo struct {
 	ProjectID, WorkItemID, Status string
+	// dude paused it itself (runs.dude_pause), and would resume it on its own.
+	DudePaused bool
 }
 
 var liveStatuses = []string{"pending", "scheduled", "starting", "running", "paused"}
 
 func loadRun(ctx context.Context, tx pgx.Tx, runID string) (runInfo, error) {
 	var ri runInfo
-	err := tx.QueryRow(ctx, `SELECT project_id, work_item_id, status::text FROM runs WHERE id = $1 FOR UPDATE`, runID).
-		Scan(&ri.ProjectID, &ri.WorkItemID, &ri.Status)
+	err := tx.QueryRow(ctx, `SELECT project_id, work_item_id, status::text, dude_pause IS NOT NULL FROM runs WHERE id = $1 FOR UPDATE`, runID).
+		Scan(&ri.ProjectID, &ri.WorkItemID, &ri.Status, &ri.DudePaused)
 	if db.IsNotFound(err) {
 		return ri, fail(http.StatusNotFound, "not_found", "run %s not found", runID)
 	}
@@ -212,6 +214,19 @@ func loadRun(ctx context.Context, tx pgx.Tx, runID string) (runInfo, error) {
 }
 
 func isLive(status string) bool { return slices.Contains(liveStatuses, status) }
+
+// stillOpen refuses to settle an ask (a question, a repository request) that
+// is no longer open, saying why: one whose Run ended — cancelled — would be
+// heard by nobody.
+func stillOpen(what, id, status, open string) error {
+	switch status {
+	case open:
+		return nil
+	case "cancelled":
+		return fail(http.StatusConflict, "no_longer_relevant", "%s %s is no longer relevant: the run that asked ended", what, id)
+	}
+	return fail(http.StatusConflict, "conflict", "%s %s is already %s", what, id, status)
+}
 
 // insertDirective queues text for a Run's agent, delivered by the syncer
 // and acknowledged by lux when the agent takes it.
@@ -301,24 +316,19 @@ func (s *Server) pause(w http.ResponseWriter, r *http.Request, org string) error
 			return err
 		}
 		switch {
-		case ri.Status == "paused":
-			// Paused by dude (parked for a person, say), which would resume it
-			// on its own: pausing makes it the person's to resume.
-			tag, err := tx.Exec(r.Context(), `UPDATE runs SET dude_pause = NULL WHERE id = $1 AND dude_pause IS NOT NULL`, runID)
-			if err != nil {
-				return err
-			}
-			if tag.RowsAffected() == 0 {
-				return fail(http.StatusConflict, "conflict", "run %s is already paused", runID)
-			}
-			return humanEvent(r.Context(), tx, org, runID, ri, "run.paused", actor(r),
-				map[string]any{"mode": "graceful", "held": true, "reason": db.Nullable(body.Reason)})
+		case ri.Status == "paused" && !ri.DudePaused:
+			return fail(http.StatusConflict, "conflict", "run %s is already paused", runID)
 		case !isLive(ri.Status):
 			return fail(http.StatusConflict, "conflict", "run %s is %s and cannot be paused", runID, ri.Status)
 		}
 		// A person's pause is theirs: dude does not resume it on its own,
-		// even one it had started itself (to bring a repository, to park it).
-		if _, err := tx.Exec(r.Context(), `UPDATE runs SET control = $2::run_control, control_requested_at = now(),
+		// even one it had made itself (to bring a repository, to park it) —
+		// pausing a Run dude already stopped just makes it theirs.
+		if ri.Status == "paused" {
+			control = "none"
+		}
+		if _, err := tx.Exec(r.Context(), `UPDATE runs SET control = $2::run_control,
+			control_requested_at = CASE WHEN $2 = 'none' THEN control_requested_at ELSE now() END,
 			control_reason = $3, dude_pause = NULL WHERE id = $1`, runID, control, db.Nullable(body.Reason)); err != nil {
 			return err
 		}
@@ -396,13 +406,8 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 			}
 			return err
 		}
-		switch status {
-		case "open":
-		case "cancelled":
-			// Asked by a Run that has since ended: nobody would hear the answer.
-			return fail(http.StatusConflict, "no_longer_relevant", "question %s is no longer relevant: the run that asked it ended", questionID)
-		default:
-			return fail(http.StatusConflict, "conflict", "question %s is already %s", questionID, status)
+		if err := stillOpen("question", questionID, status, "open"); err != nil {
+			return err
 		}
 		ri, err := loadRun(r.Context(), tx, runID)
 		if err != nil {
@@ -611,12 +616,8 @@ func (s *Server) decideRepositoryRequest(w http.ResponseWriter, r *http.Request,
 			Scan(&workItemID, &repoID, &repoName, &access, &status); err != nil {
 			return err
 		}
-		switch status {
-		case "pending":
-		case "cancelled":
-			return fail(http.StatusConflict, "no_longer_relevant", "repository request %s is no longer relevant: the run that asked for it ended", id)
-		default:
-			return fail(http.StatusConflict, "conflict", "repository request %s is already %s", id, status)
+		if err := stillOpen("repository request", id, status, "pending"); err != nil {
+			return err
 		}
 		decision := "denied"
 		if body.Approve {
