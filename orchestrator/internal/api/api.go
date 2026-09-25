@@ -42,6 +42,8 @@ type Server struct {
 	// Wakes the loops after a change, so a person's action takes effect
 	// without waiting for the next tick.
 	Kick func()
+	// The Web Push keys browsers subscribe with (notify.Notifier.Keys).
+	PushKeys func(context.Context) (public, private string, err error)
 }
 
 func (s *Server) Handler() http.Handler {
@@ -64,6 +66,17 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /internal/repository-requests/{id}/decide", s.auth(s.decideRepositoryRequest))
 	// The factory's delivery defaults, which the settings screen shows for
 	// what a project leaves unset: one definition, here, where it is applied.
+	mux.Handle("GET /internal/push/key", s.auth(func(w http.ResponseWriter, r *http.Request, _ string) error {
+		if s.PushKeys == nil {
+			return fail(http.StatusNotFound, "not_found", "notifications are not set up")
+		}
+		public, _, err := s.PushKeys(r.Context())
+		if err != nil {
+			return err
+		}
+		write(w, http.StatusOK, map[string]string{"publicKey": public})
+		return nil
+	}))
 	mux.Handle("GET /internal/delivery-defaults", s.auth(func(w http.ResponseWriter, r *http.Request, _ string) error {
 		write(w, http.StatusOK, delivery.DefaultPolicy())
 		return nil

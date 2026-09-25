@@ -21,6 +21,7 @@ import { errorText } from "./hooks/useSave.tsx";
 import { formatPlace, inTree, parsePlace, treeSelection, type Place } from "./place.ts";
 import { DeleteEpicDialog, EpicDialog, epicRef, rowActions, type Intent } from "./screens/actions.tsx";
 import { NewProjectDialog } from "./screens/NewProjectDialog.tsx";
+import { InboxScreen } from "./screens/InboxScreen.tsx";
 import { MySettingsScreen } from "./screens/MySettingsScreen.tsx";
 import { OrganizationSettingsScreen } from "./screens/OrganizationSettingsScreen.tsx";
 import { ProjectSettingsScreen } from "./screens/ProjectSettingsScreen.tsx";
@@ -169,7 +170,7 @@ export function App({ client, onSignOut }: AppProps) {
   if (place?.view === "orgSettings") {
     main = <OrganizationSettingsScreen client={client} />;
   } else if (place?.view === "mySettings") {
-    main = <MySettingsScreen />;
+    main = <MySettingsScreen client={client} />;
   } else if (!projects) {
     main = <div className="centered"><Spinner label="Loading…" /></div>;
   } else if (projects.length === 0) {
@@ -184,6 +185,8 @@ export function App({ client, onSignOut }: AppProps) {
         }
       />
     );
+  } else if (place?.view === "inbox") {
+    main = <InboxScreen projects={projects} selected={selected} onSelect={(ref) => go(inTree(ref))} />;
   } else if (place?.view === "projectSettings") {
     main = (
       <ProjectSettingsScreen
@@ -302,6 +305,7 @@ export function App({ client, onSignOut }: AppProps) {
         loading={!projects}
         selected={selected}
         onSelect={(ref) => go(inTree(ref))}
+        onShowAllAttention={() => go({ view: "inbox" })}
         menuItems={menuItems}
         title="dude"
         footer={

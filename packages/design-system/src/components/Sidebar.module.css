@@ -328,6 +328,27 @@
   font-size: var(--ds-text-xs);
   color: var(--ds-color-text-secondary);
 }
+.attentionMoreButton {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--ds-color-accent-text);
+  cursor: pointer;
+}
+.attentionMoreButton:hover {
+  text-decoration: underline;
+}
+.attentionMoreButton:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--ds-color-focus-ring);
+  border-radius: var(--ds-radius-sm);
+}
+/* A full inbox's own heading: the section head's layout, not a toggle. */
+.attentionHeadStatic {
+  margin: 0;
+  cursor: default;
+}
 
 .scroll {
   flex: 1;

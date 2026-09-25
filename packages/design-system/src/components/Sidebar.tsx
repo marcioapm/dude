@@ -46,6 +46,8 @@ export interface SidebarProps extends Omit<HTMLAttributes<HTMLElement>, "onSelec
   readonly onExpandedChange?: ((next: NavOverrides) => void) | undefined;
   /** Hide the pinned "Needs you" section (e.g. a dedicated inbox exists). */
   readonly hideAttention?: boolean | undefined;
+  /** Where "and N more" in the "Needs you" section goes (a full inbox). */
+  readonly onShowAllAttention?: (() => void) | undefined;
   /** Row "…" menus for the tree; see `NavTree`. */
   readonly menuItems?: ((row: NavRow) => ReadonlyArray<RowMenuItem> | null | undefined) | undefined;
   readonly menu?: ((row: NavRow, controls: NavRowMenuControls) => ReactNode) | undefined;
@@ -83,6 +85,7 @@ export function Sidebar({
   expanded,
   onExpandedChange,
   hideAttention,
+  onShowAllAttention,
   menuItems,
   menu,
   width = 304,
@@ -192,7 +195,7 @@ export function Sidebar({
         })}
       </div>
 
-      {!hideAttention && !loading && attention.length > 0 && !filtering ? <AttentionList items={attention} selected={selected} onSelect={onSelect} /> : null}
+      {!hideAttention && !loading && attention.length > 0 && !filtering ? <AttentionList items={attention} selected={selected} onSelect={onSelect} onShowAll={onShowAllAttention} /> : null}
 
       <ScrollArea fill className={styles["scroll"]}>
         {loading ? (
@@ -228,8 +231,12 @@ export interface AttentionListProps {
   readonly items: ReadonlyArray<AttentionItem>;
   readonly selected?: NavRef | null | undefined;
   readonly onSelect?: ((ref: NavRef, node: NavRow["node"]) => void) | undefined;
-  /** Rows shown before "and N more". */
+  /** Rows shown before "and N more". Infinity: all of them. */
   readonly max?: number | undefined;
+  /** Makes "and N more" a button to where all of them are listed. */
+  readonly onShowAll?: (() => void) | undefined;
+  /** A heading of its own (a full inbox), not the sidebar's collapsible one. */
+  readonly title?: string | undefined;
 }
 
 /**
@@ -239,19 +246,27 @@ export interface AttentionListProps {
  * ask and who it waits on; where it lives (project · epic) is the row's
  * tooltip, so the ask gets the width. It is a list, not a tree.
  */
-export function AttentionList({ items, selected, onSelect, max = 5 }: AttentionListProps) {
+export function AttentionList({ items, selected, onSelect, max = 5, onShowAll, title }: AttentionListProps) {
   const [open, setOpen] = useState(true);
   const shown = open ? items.slice(0, max) : [];
   const more = items.length - shown.length;
   const selectedKey = selected ? navKey(selected) : null;
   return (
-    <section className={styles["attention"]} aria-label="Needs you">
-      <button type="button" className={styles["attentionHead"]} aria-expanded={open} onClick={() => setOpen((v) => !v)}>
-        <Icon name="chevron-right" size={14} className={cx(styles["attentionChevron"], open && styles["attentionChevronOpen"])} />
-        <StatusBadge status="awaiting_input" variant="dot" iconOnly className={styles["attentionMark"]} />
-        <span className={styles["attentionTitle"]}>Needs you</span>
-        <span className={styles["attentionCount"]}>{items.length}</span>
-      </button>
+    <section className={styles["attention"]} aria-label={title ?? "Needs you"}>
+      {title === undefined ? (
+        <button type="button" className={styles["attentionHead"]} aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+          <Icon name="chevron-right" size={14} className={cx(styles["attentionChevron"], open && styles["attentionChevronOpen"])} />
+          <StatusBadge status="awaiting_input" variant="dot" iconOnly className={styles["attentionMark"]} />
+          <span className={styles["attentionTitle"]}>Needs you</span>
+          <span className={styles["attentionCount"]}>{items.length}</span>
+        </button>
+      ) : (
+        <h2 className={cx(styles["attentionHead"], styles["attentionHeadStatic"])}>
+          <StatusBadge status="awaiting_input" variant="dot" iconOnly className={styles["attentionMark"]} />
+          <span className={styles["attentionTitle"]}>{title}</span>
+          <span className={styles["attentionCount"]}>{items.length}</span>
+        </h2>
+      )}
       {open ? (
         <ul className={styles["attentionList"]}>
           {shown.map((it) => {
@@ -298,7 +313,17 @@ export function AttentionList({ items, selected, onSelect, max = 5 }: AttentionL
               </li>
             );
           })}
-          {more > 0 ? <li className={styles["attentionMore"]}>and {more} more — filter by Needs you to see all</li> : null}
+          {more > 0 ? (
+            <li className={styles["attentionMore"]}>
+              {onShowAll ? (
+                <button type="button" className={styles["attentionMoreButton"]} onClick={onShowAll} data-testid="attention-show-all">
+                  and {more} more — see all
+                </button>
+              ) : (
+                <>and {more} more — filter by Needs you to see all</>
+              )}
+            </li>
+          ) : null}
         </ul>
       ) : null}
     </section>

@@ -450,3 +450,78 @@ def test_theme_and_density_are_this_browsers_and_remembered(page: Page, web_url:
     expect(html).to_have_attribute("data-density", "compact")
     expect(html).to_have_attribute("data-theme", "light")
     assert console_errors == []
+
+
+def test_a_browser_turns_notifications_on_and_off(
+    page: Page, web_url: str, client: ApiClient, org: dict, owner_dsn: str, console_errors: list
+):
+    """Notify me: the browser is asked, subscribes with dude's key, and dude
+    keeps the subscription; turning off forgets it. (Headless Chromium has no
+    push service to subscribe with, so the browser's side is stood in for;
+    sending to a subscription is tested in the orchestrator.)"""
+    page.context.grant_permissions(["notifications"], origin=web_url.rstrip("/"))
+    page.add_init_script("""
+      const endpoint = "https://push.example/" + Math.random().toString(36).slice(2);
+      let sub = null;
+      const fake = () => ({ endpoint, toJSON: () => ({ endpoint, keys: { p256dh: "BPk", auth: "au" } }),
+                            unsubscribe: async () => { sub = null; return true; } });
+      const pm = { getSubscription: async () => sub,
+                   subscribe: async (o) => { window.__pushKey = o.applicationServerKey; sub = fake(); return sub; } };
+      const reg = { pushManager: pm, showNotification: async () => {} };
+      Object.defineProperty(navigator, "serviceWorker", { value: {
+        register: async () => reg, getRegistration: async () => reg, ready: Promise.resolve(reg) } });
+    """)
+    _sign_in(page, web_url, org["api_key"])
+    page.get_by_test_id("my-settings-button").click()
+    state = page.get_by_test_id("push-state")
+    expect(state).to_have_attribute("data-state", "off")
+
+    page.get_by_test_id("push-on").click()
+    expect(state).to_have_attribute("data-state", "on")
+    # Subscribed with dude's public key (an uncompressed P-256 point), and
+    # kept for the organization, where the notifier sends.
+    assert page.evaluate("() => window.__pushKey.length") == 65
+    import psycopg
+
+    def subscriptions() -> int:
+        with psycopg.connect(owner_dsn) as conn:
+            return conn.execute("SELECT count(*) FROM push_subscriptions WHERE organization_id = %s",
+                                (org["id"],)).fetchone()[0]
+    assert subscriptions() == 1
+
+    page.get_by_test_id("push-off").click()
+    expect(state).to_have_attribute("data-state", "off")
+    assert subscriptions() == 0
+    assert console_errors == []
+
+
+def test_everything_waiting_on_you_is_in_one_place(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, fake_github, console_errors: list
+):
+    """A question and a repository request, from two agents: both in "Waiting
+    on you", oldest first, each opening the agent that asked."""
+    web = fake_github.add_repository("web")
+    client.post(f"/v1/projects/{forge_project['id']}/repositories", {"name": "web", "url": web.clone_url})
+    target = next(r for r in client.get(f"/v1/projects/{forge_project['id']}").json()["repositories"] if r["name"] != "web")
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
+        "implementer": {"model": "fake/ask"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
+    asking = client.create_work_item(forge_project["id"], "Ask first", repositories=[{"id": target["id"]}])
+    client.post(f"/v1/work-items/{asking['id']}/deliver")
+    wait_until(lambda: client.get("/v1/questions").json()["questions"], timeout=30, message="no question")
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {"implementer": {"model": "fake/wait"}}})
+    requesting = client.create_work_item(forge_project["id"], "Needs the client", repositories=[{"id": target["id"]}])
+    client.post(f"/v1/work-items/{requesting['id']}/deliver")
+    wait_until(lambda: client.get("/v1/repository-requests").json()["repositoryRequests"], timeout=30, message="no request")
+
+    _sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/waiting")
+    inbox = page.get_by_test_id("inbox")
+    rows = inbox.get_by_role("listitem")
+    expect(rows).to_have_count(2)
+    expect(rows.nth(0)).to_contain_text("Ask first")
+    expect(rows.nth(0)).to_contain_text("Should FACTORY.md be in English?")
+    expect(rows.nth(1)).to_contain_text("Needs the client")
+    expect(rows.nth(1)).to_contain_text("Read web?")
+    rows.nth(1).get_by_role("button").click()
+    expect(page.get_by_test_id("repository-request")).to_contain_text("Read web")
+    assert console_errors == []

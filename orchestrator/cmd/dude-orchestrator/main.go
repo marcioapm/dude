@@ -14,6 +14,8 @@
 //	DUDE_PR_RECONCILE            how often open PRs are re-read as a backstop to webhooks (default 15m)
 //	DUDE_PARK_AFTER/IDLE_AFTER   the grace before parking a Run waiting on a person, and the idle limit,
 //	                             for projects that set none (durations; default: the delivery policy's)
+//	DUDE_VAPID_PUBLIC_KEY/_PRIVATE_KEY  Web Push keys (default: made once, kept in the database)
+//	DUDE_VAPID_SUBJECT           who push services may contact about this factory (mailto: or https:)
 //	DUDE_FACTORY_LOGINS          comma-separated logins whose PR comments are the factory's own
 package main
 
@@ -36,6 +38,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
+	"github.com/marciomartins/dude/orchestrator/internal/notify"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
 	"github.com/marciomartins/dude/orchestrator/internal/prs"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
@@ -95,6 +98,11 @@ func run(log *slog.Logger) error {
 	pullRequests := &prs.Syncer{DB: database, Forges: forges, Signal: signalWorkflow, Log: log,
 		FactoryLogins: list(os.Getenv("DUDE_FACTORY_LOGINS"))}
 
+	notifier := &notify.Notifier{DB: database, Log: log,
+		Subject:   env("DUDE_VAPID_SUBJECT", "mailto:dude@localhost"),
+		PublicKey: os.Getenv("DUDE_VAPID_PUBLIC_KEY"), PrivateKey: os.Getenv("DUDE_VAPID_PRIVATE_KEY"),
+	}
+
 	// Each loop sleeps when idle and runs again at once while there is work.
 	// A kick wakes them all: a person's action should take effect now, not
 	// on the next tick.
@@ -113,6 +121,7 @@ func run(log *slog.Logger) error {
 		}},
 		{"artifacts", time.Second, (&phases.Artifacts{DB: database, Lux: luxClient}).Sweep},
 		{"webhooks", time.Second, pullRequests.ProcessDeliveries},
+		{"notify", 2 * time.Second, notifier.Sweep},
 		{"pr-reconciler", time.Minute, func(ctx context.Context) (int, error) {
 			return pullRequests.Reconcile(ctx, reconcileEvery)
 		}},
@@ -142,6 +151,7 @@ func run(log *slog.Logger) error {
 	srv := &http.Server{
 		Addr: env("DUDE_ORCHESTRATOR_LISTEN", "127.0.0.1:3100"),
 		Handler: (&api.Server{DB: database, Lux: luxClient, Workflow: runtime, Token: require("DUDE_ORCHESTRATOR_TOKEN"), Log: log,
+			PushKeys: notifier.Keys,
 			Kick: func() {
 				select {
 				case kick <- struct{}{}:

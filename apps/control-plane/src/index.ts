@@ -19,6 +19,7 @@ import { registerProjectRoutes } from "./api/routes/projects.ts";
 import { registerWorkRoutes } from "./api/routes/work.ts";
 import { registerStructureRoutes } from "./api/routes/structure.ts";
 import { registerInterventionRoutes } from "./api/routes/intervention.ts";
+import { registerPushRoutes } from "./api/routes/push.ts";
 import { closePool, getPool } from "./db/client.ts";
 import { listenForEvents } from "./events/listen.ts";
 
@@ -43,6 +44,7 @@ export function buildRouter(): Router {
   registerWorkRoutes(router);
   registerStructureRoutes(router);
   registerInterventionRoutes(router);
+  registerPushRoutes(router);
 
   return router;
 }
