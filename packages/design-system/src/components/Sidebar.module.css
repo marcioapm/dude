@@ -194,7 +194,8 @@
 .attention {
   margin: var(--ds-space-4) var(--ds-space-8) var(--ds-space-8);
   padding: var(--ds-space-4) var(--ds-space-4) var(--ds-space-6);
-  border-radius: var(--ds-radius-lg);
+  /* Square on the bar side so the 2px bar runs straight, not round the corner. */
+  border-radius: 0 var(--ds-radius-lg) var(--ds-radius-lg) 0;
   background: color-mix(in srgb, var(--ds-tone-attention-solid) 8%, transparent);
   box-shadow: inset 2px 0 0 var(--ds-tone-attention-solid);
   flex-shrink: 0;

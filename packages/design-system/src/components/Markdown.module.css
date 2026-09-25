@@ -82,9 +82,10 @@
   font-size: 1.2em;
 }
 
-.p {
-  margin: 0;
-}
+
+
+/* Block spacing comes from `.root > * + *` alone; no block sets its own
+   margin, or it would override that rule at equal specificity. */
 
 /* Inline */
 /* One of the three places a hairline is allowed (with the date divider and
@@ -129,7 +130,6 @@
 /* Hanging indent: markers sit in the 1.5em gutter, wrapped lines align with the text. */
 .list {
   padding-left: 1.5em;
-  margin: 0;
 }
 .li {
   margin: 0;
@@ -185,7 +185,6 @@
 
 /* Quote */
 .quote {
-  margin: 0;
   padding: 0 0 0 1em;
   box-shadow: inset 2px 0 0 var(--ds-color-border-strong);
   color: var(--ds-color-text-secondary);

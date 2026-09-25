@@ -153,7 +153,7 @@ export function TokensSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
 
-      <Block id="tokens-type" title="Type scale" note="Body is 15px Inter (14px compact), chat and document prose 16px at 1.55. Mono tier is JetBrains Mono with tnum + slashed zero, used for anything an operator might copy or compare: IDs, SHAs, paths, timestamps, costs.">
+      <Block id="tokens-type" title="Type scale" note="The system UI face (SF Pro, Noto Sans, Segoe UI; Inter as a fallback). UI body 15px (14 compact); transcript text 16/22px; long-form Markdown 16px at 1.5. Mono tier is JetBrains Mono with tnum + slashed zero, used for anything an operator might copy or compare: IDs, SHAs, paths, timestamps, costs.">
         <Panes mode={mode}>
           {(_theme, density) => (
           <div className={styles["typeSample"]}>
