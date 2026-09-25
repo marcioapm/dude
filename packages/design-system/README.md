@@ -729,10 +729,11 @@ EmptyState, ScrollArea.
 - **ChatThread** — a subagent's conversation nested in its parent's, with a
   role-coloured rail, collapsible, depth-aware.
 - **QuestionCard** — an agent's question to a person as a turn. Waiting it
-  is the loudest turn in the transcript (needs-you badge, attention wash
-  and bar, live avatar, ticking wait clock); answered or dismissed it
-  settles to a hairline with when and how long it waited. Choices shown as
-  chips, one-click only with `onChoose`.
+  is the loudest turn in the transcript (attention wash and bar, live
+  avatar, a muted ticking wait clock; no badge of its own); answered or
+  dismissed it becomes a plain row with an "Answered" / "Not answered" tag
+  and how long it waited. While waiting, choices are chips only with
+  `onChoose`; otherwise they live in the composer. Settled, they are listed.
 - **ChatComposer** — answer (blocked on a question, with one-click options)
   vs steer (interrupts a running turn) vs prompt, visibly different.
 - **Markdown** — untrusted Markdown to React from a typed AST; streaming-safe;
