@@ -31,6 +31,12 @@ function contrast(a: string, b: string): number {
 
 const MODES: readonly ThemeMode[] = ["dark", "light"];
 
+/** `color-mix(in srgb, top p, bottom)` flattened to a hex, as the browser composites a tint. */
+function mix(top: string, bottom: string, p: number): string {
+  const ch = (h: string, i: number) => Number.parseInt(h.slice(i, i + 2), 16);
+  return `#${[1, 3, 5].map((i) => Math.round(ch(top, i) * p + ch(bottom, i) * (1 - p)).toString(16).padStart(2, "0")).join("")}`;
+}
+
 describe("text ladder contrast (Discord/Obsidian-soft, not a bright-white spike)", () => {
   test("primary text lands close to 10-12:1 on the surface, not >=14:1", () => {
     for (const mode of MODES) {
@@ -185,6 +191,56 @@ describe("filled tone buttons and emphasis ink", () => {
     for (const mode of MODES) {
       const c = themeColors[mode];
       expect(contrast(c.textStrong, c.surface), `${mode} strong`).toBeGreaterThan(contrast(c.textPrimary, c.surface));
+    }
+  });
+});
+
+describe("text on tints", () => {
+  // Tints as the components composite them: QuestionCard's waiting wash is
+  // 9% attention-solid over the surface, the sidebar needs-you block 8%
+  // over the canvas, a failed tool card 70% danger-bg over the surface.
+  test("the waiting question's muted clock and primary body clear 4.5:1 on its wash", () => {
+    for (const mode of MODES) {
+      const c = themeColors[mode];
+      const wash = mix(tones[mode].attention.solid, c.surface, 0.09);
+      expect(contrast(c.textMuted, wash), `${mode} muted`).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(c.textPrimary, wash), `${mode} primary`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  test("the needs-you block's secondary ink (ask line, key, +N) clears 4.5:1 on its tint", () => {
+    // Muted drops to ~4.3:1 on the light tint, so nothing inside the block uses it.
+    for (const mode of MODES) {
+      const c = themeColors[mode];
+      const tint = mix(tones[mode].attention.solid, c.canvas, 0.08);
+      expect(contrast(c.textSecondary, tint), `${mode} secondary`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  test("a failed tool call's error summary (primary) and meta (muted) clear 4.5:1 on the danger fill", () => {
+    for (const mode of MODES) {
+      const c = themeColors[mode];
+      const fill = mix(tones[mode].danger.bg, c.surface, 0.7);
+      expect(contrast(c.textPrimary, fill), `${mode} primary`).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(c.textMuted, fill), `${mode} muted`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});
+
+describe("status marks", () => {
+  test("every tone's mark clears 3:1 (non-text) on the canvas and the surface", () => {
+    for (const mode of MODES) {
+      const c = themeColors[mode];
+      for (const t of TONE_NAMES) {
+        expect(contrast(tones[mode][t].mark, c.canvas), `${mode} ${t} on canvas`).toBeGreaterThanOrEqual(3);
+        expect(contrast(tones[mode][t].mark, c.surface), `${mode} ${t} on surface`).toBeGreaterThanOrEqual(3);
+      }
+    }
+  });
+
+  test("light marks are lighter than the text fg, so an 8px mark keeps its hue", () => {
+    for (const t of TONE_NAMES) {
+      expect(luminance(tones.light[t].mark), t).toBeGreaterThan(luminance(tones.light[t].fg));
     }
   });
 });
