@@ -172,3 +172,36 @@ def test_an_agent_on_real_lux_calls_dudes_tools(client: ApiClient, lux_project):
     messages = " ".join(e["payload"].get("text", "") for e in client.events(runId=implement["id"])
                         if e["eventType"] == "agent.message")
     assert work_item["key"] in messages, messages
+
+
+@pytest.mark.skipif(not os.environ.get("DUDE_TEST_TOOLS_HOST"), reason="needs DUDE_TEST_TOOLS_HOST: an address of this machine lux's hosts can reach")
+def test_an_agent_waiting_on_a_person_is_parked_on_real_lux_and_resumed_by_the_answer(client: ApiClient, lux_project):
+    """The agent asks with ask_person through lux's service socket and ends
+    its turn; past the grace period dude stops the lux Run (nothing held);
+    the answer resumes the same lux Run, in the same agent session."""
+    project, _ = lux_project
+    client.patch(f"/v1/projects/{project['id']}", {"agentModels": {
+        "implementer": {"model": "fake/ask"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
+    work_item = client.create_work_item(project["id"], "Ask on lux")
+    assert client.post(f"/v1/work-items/{work_item['id']}/deliver").status_code == 201
+
+    def implementer():
+        return next((r for r in client.work_item_runs(work_item["id"]) if r["phase"] == "implement"), None)
+
+    try:
+        wait_until(lambda: (implementer() or {}).get("status") == "paused", timeout=180, interval=1,
+                   message="the waiting agent was never parked on lux")
+        question = client.get("/v1/questions").json()["questions"]
+        question = next(q for q in question if q["workItemId"] == work_item["id"])
+        assert client.post(f"/v1/questions/{question['id']}/answer", {"text": "yes"}).status_code == 200
+        wait_until(lambda: implementer()["status"] == "completed", timeout=180, interval=1,
+                   message="the answer did not resume the parked agent on lux")
+    finally:
+        print("phases:", [(r["phase"], r["status"], r.get("error")) for r in client.work_item_runs(work_item["id"])])
+    types = [e["eventType"] for e in client.events(runId=implementer()["id"])]
+    assert "run.parked" in types and "run.unparked" in types, types
+    # One agent session, continued: resumed, not started over.
+    assert types.count("agent.session.started") == 1, types
+    messages = " ".join(e["payload"].get("text", "") for e in client.events(runId=implementer()["id"])
+                        if e["eventType"] == "agent.message")
+    assert "Answer to your question" in messages, messages

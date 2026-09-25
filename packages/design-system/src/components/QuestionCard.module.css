@@ -8,7 +8,7 @@
  *              chips inside it are neutral.
  *   answered   a plain row with a quiet "Answered · after 4m 12s" tag.
  *              History. The answer follows as its own turn.
- *   dismissed  the same plain row, "Not answered". Never rings.
+ *   dismissed  the same plain row, "No longer needed" (its run ended). Never rings.
  */
 
 .root {

@@ -112,6 +112,10 @@ export const deliveryPolicySchema = z
     maxReviewIterations: z.number().int().min(1).max(20),
     maxPrFixIterations: z.number().int().min(0).max(20),
     simplify: z.boolean(),
+    /** Minutes an agent waiting on a person stays live before it is parked. */
+    parkAfterMinutes: z.number().int().min(1).max(1440),
+    /** Minutes an agent may be quiet mid-turn before it is nudged; 0 never. */
+    idleNudgeMinutes: z.number().int().min(0).max(1440),
   })
   .partial()
   .strict();

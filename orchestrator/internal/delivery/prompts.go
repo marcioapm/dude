@@ -29,8 +29,7 @@ type PromptInput struct {
 	// The repositories checked out for the agent. Named in the prompt only
 	// when there are several, or one it must not change, or none.
 	Repositories []PromptRepo
-	// The Run has dude's tools over MCP: questions go through them rather
-	// than a question block.
+	// The Run has dude's tools over MCP: the only way it can ask a person.
 	Tools bool
 	// It also has the dude CLI (lux serves dude's tools in the container).
 	CLI bool
@@ -198,19 +197,20 @@ const publishNote = "To give the people following this work a file — notes, a 
 	"(for example `$LUX_ARTIFACTS/notes.md`). They see each one next to the work item, Markdown " +
 	"rendered. Publish what a person would want to read; don't copy code there."
 
-// ask is how this agent stops for a person: dude's tool when it has
-// them, else a question block ending its reply.
+// ask is how this agent stops for a person: dude's ask_person tool. Without
+// dude's tools it cannot ask, and decides for itself.
 func (in PromptInput) ask() string {
 	if in.Tools {
 		return askToolNote
 	}
-	return askNote
+	return ""
 }
 
 const askToolNote = "If you cannot go on without a decision only a person can make — the task is ambiguous " +
 	"in a way that changes what you build, or two reasonable readings conflict — ask with the dude tool " +
-	"ask_person, then end your turn. The answer comes back as your next message. Do not ask about anything " +
-	"you can decide or find out yourself; most tasks need no question at all."
+	"ask_person, then end your turn. The answer comes back as your next message, even if the person takes " +
+	"hours to answer: your work is kept meanwhile. Do not ask about anything you can decide or find out " +
+	"yourself; most tasks need no question at all."
 
 // toolsNote tells an agent about dude's tools.
 const toolsNote = "The dude tools (list_work, list_epics, list_repositories, create_work_item, emit_event, " +
@@ -224,20 +224,16 @@ const cliNote = "The same, from the shell: the `dude` command (see `dude help`) 
 	"decides on it), `dude event progress --data '{\"done\":3,\"of\":10}'` for progress people can follow, " +
 	"`dude repo list` and `dude repo request`, and `dude publish FILE` to keep a file for people."
 
-// askNote tells an agent that changes code how to stop for a person. The
-// fenced block, not a question in prose, is what stops the run: an agent
-// thinking aloud ("should I also…?") must not stall a delivery.
-const askNote = "If you cannot go on without a decision only a person can make — the task is ambiguous " +
-	"in a way that changes what you build, or two reasonable readings conflict — stop and ask. End your " +
-	"reply with the question in a fenced block, and offer choices as `- ` lines when there are some:\n\n" +
-	"```question\nShould the command read standard input when no path is given?\n- yes\n- no\n```\n\n" +
-	"The answer comes back as your next message. Do not ask about anything you can decide or find out " +
-	"yourself; most tasks need no question at all."
-
 // Prompt composes one phase's prompt.
 func Prompt(phase string, in PromptInput) string {
 	var sections []string
-	add := func(s ...string) { sections = append(sections, s...) }
+	add := func(s ...string) {
+		for _, section := range s {
+			if section != "" {
+				sections = append(sections, section)
+			}
+		}
+	}
 
 	switch phase {
 	case PhaseInvestigate:

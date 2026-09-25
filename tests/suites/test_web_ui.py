@@ -379,3 +379,28 @@ def test_a_person_approves_a_repository_an_agent_asked_for(
     names = sorted(r["id"] for r in client.get(f"/v1/work-items/{item['id']}").json()["repositories"])
     assert len(names) == 2, names
     assert console_errors == []
+
+
+def test_a_parked_agent_is_answered_from_its_chat(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    """An agent that asked and was not answered in time is parked: its chat
+    says so, and answering there resumes it."""
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
+        "implementer": {"model": "fake/ask"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
+    item = client.create_work_item(forge_project["id"], "Ask, then wait")
+    assert client.post(f"/v1/work-items/{item['id']}/deliver").status_code == 201
+    from helpers import wait_until
+    implement = wait_until(
+        lambda: next((r for r in client.work_item_runs(item["id"]) if r["phase"] == "implement" and r["status"] == "paused"), None),
+        timeout=30, message="the waiting agent was never parked")
+
+    _sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/session/{implement['id']}")
+    expect(page.get_by_test_id("chat-notice")).to_contain_text("Parked while it waits for you")
+    # Paused, yet the composer takes the answer: that is what resumes it.
+    page.get_by_role("group", name="Answer with one of").get_by_role("button", name="yes").click()
+    wait_until(lambda: next(r for r in client.work_item_runs(item["id"]) if r["id"] == implement["id"])["status"] == "completed",
+               timeout=30, message="the answer did not resume the parked agent")
+    expect(page.get_by_test_id("chat-notice").last).to_contain_text("Taken back up")
+    assert console_errors == []

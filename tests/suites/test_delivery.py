@@ -200,7 +200,8 @@ def test_a_project_policy_names_only_reviewers_the_factory_has(client: ApiClient
 
 
 def test_an_agent_asks_a_person_waits_and_carries_on_with_the_answer(client: ApiClient, forge_project: dict):
-    """The question reaches the API and the sidebar; the answer reaches the agent."""
+    """The question reaches the API and the sidebar; parked while it waits, the answer resumes it."""
+    # The suite parks a waiting agent after seconds (DUDE_PARK_AFTER).
     resp = client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
         "implementer": {"model": "fake/ask"}, "reviewer": {"model": "fake/scripted"},
         "simplifier": {"model": "fake/scripted"}}})
@@ -222,6 +223,15 @@ def test_an_agent_asks_a_person_waits_and_carries_on_with_the_answer(client: Api
     sessions = [s for p in nav["projects"] for wi in p.get("workItems", []) if wi["id"] == work_item["id"]
                 for run in wi["runs"] for s in run["sessions"]]
     assert any(s["status"] == "awaiting_input" and s.get("activity") == question["prompt"] for s in sessions), sessions
+
+    # Not answered within the grace period: parked, holding nothing.
+    wait_until(
+        lambda: any(r["phase"] == "implement" and r["status"] == "paused" for r in client.work_item_runs(work_item["id"])),
+        timeout=30, message="the waiting agent was never parked",
+    )
+    run = next(r for r in client.work_item_runs(work_item["id"]) if r["phase"] == "implement")
+    types = [e.get("eventType", e.get("type")) for e in client.events(runId=run["id"])]
+    assert "run.parked" in types, types
 
     resp = client.post(f"/v1/questions/{question['id']}/answer", {"text": "yes"})
     assert resp.status_code == 200, resp.text

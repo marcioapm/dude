@@ -13,6 +13,7 @@ import {
   ChatComposer,
   ChatEvent,
   ChatMessage,
+  ChatNotice,
   ChatProgress,
   ChatTranscript,
   EventRow,
@@ -238,7 +239,8 @@ export function RunScreen({ client, runId, title, breadcrumb }: RunScreenProps) 
                       }
                     : undefined
                 }
-                disabled={!isLive || run.status === "paused"}
+                // A Run parked for a person takes the answer: it resumes it.
+                disabled={!isLive || (run.status === "paused" && !conversation.openQuestion)}
                 disabledReason={
                   run.status === "paused"
                     ? "This run is paused. Resume it to steer."
@@ -312,6 +314,8 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
         />
       );
     }
+    case "notice":
+      return <ChatNotice key={turn.id} data-testid="chat-notice" kind={turn.notice} text={turn.text} at={turn.at} />;
     case "progress":
       // One row, updated in place as the agent reports.
       return (

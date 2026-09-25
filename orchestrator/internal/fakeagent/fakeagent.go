@@ -41,13 +41,12 @@ const ToolsModel = "fake/tools"
 // and waits (never finishing its turn) until it is resumed with it.
 const RequestModel = "fake/request"
 
-// AskModel's implementer stops on a question first, and does its work in
-// the turn the answer starts.
+// AskModel's implementer asks a person first, with dude's ask_person tool,
+// and does its work in the turn the answer starts.
 const AskModel = "fake/ask"
 
-// Question is what AskModel's implementer asks, in the format the prompt
-// asks a model for.
-const Question = "I need a decision first.\n\n```question\nShould FACTORY.md be in English?\n- yes\n- no\n```\n"
+// Question is what AskModel's implementer asks: ask_person's arguments.
+const Question = `{"question":"Should FACTORY.md be in English?","choices":["yes","no"]}`
 
 // Is says whether a model is the scripted agent rather than a real one.
 func Is(model string) bool { return strings.HasPrefix(model, ModelPrefix) }
@@ -84,7 +83,7 @@ type Step struct {
 	Reply string
 	// Never finishes its turn.
 	Hang bool
-	// Its first turn ends on this question instead.
+	// Its first turn asks a person this (ask_person's arguments) and ends.
 	Ask string
 	// Files it publishes for people (into $LUX_ARTIFACTS), name → one line.
 	Publish map[string]string
@@ -165,11 +164,6 @@ func Script(phase, model, runID string) string {
 		return b.String()
 	}
 	step := For(phase, model, runID, false)
-	if step.Ask != "" {
-		// lux-fake has no way to wait for an answer mid-script yet; the fake
-		// lux plays the asking agent, and a real lux says plainly it cannot.
-		return "fail " + AskModel + " is only played by the fake lux"
-	}
 	var b strings.Builder
 	if model == ToolsModel && phase == "implement" {
 		// Both ways dude's tools reach an agent on lux: MCP, and the local
@@ -189,6 +183,14 @@ func Script(phase, model, runID string) string {
 	}
 	if len(step.Commit) > 0 {
 		b.WriteString("commit " + step.Message + "\n")
+	}
+	if step.Ask != "" {
+		// Its work done first, as lux-fake runs one script per prompt: then
+		// it asks, and ends its turn. The answer is its next prompt, which
+		// lux-fake only echoes — enough to show the conversation resumed.
+		b.WriteString("http dude POST /tools/ask_person " + step.Ask + "\n")
+		b.WriteString("echo I asked; waiting for the answer.")
+		return b.String()
 	}
 	b.WriteString("echo " + step.Reply)
 	return b.String()

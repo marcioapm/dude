@@ -44,6 +44,14 @@ type Policy struct {
 	// PR fix rounds before escalating. Separate from the review bound: a person
 	// asking for changes is not the same failure as an agent finding them.
 	MaxPRFixIterations int `json:"maxPrFixIterations"`
+	// Minutes an agent waiting on a person stays live before it is parked
+	// (stopped, its conversation kept, resumed by the answer). Long enough
+	// for someone at their desk to answer while it is still running.
+	ParkAfterMinutes int `json:"parkAfterMinutes"`
+	// Minutes an agent may be quiet mid-turn — saying nothing, running no
+	// tool, waiting on nobody — before it is nudged; as long again after the
+	// nudge and it is parked for a person. 0: never.
+	IdleNudgeMinutes int `json:"idleNudgeMinutes"`
 }
 
 func DefaultPolicy() Policy {
@@ -61,6 +69,8 @@ func DefaultPolicy() Policy {
 		Simplify:              true,
 		Test:                  false,
 		MaxPRFixIterations:    3,
+		ParkAfterMinutes:      10,
+		IdleNudgeMinutes:      0,
 	}
 }
 

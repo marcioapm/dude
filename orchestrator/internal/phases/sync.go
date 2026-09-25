@@ -29,6 +29,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -47,6 +48,10 @@ type Syncer struct {
 	Forges delivery.Forges
 	Agent  AgentConfig
 	Log    *slog.Logger
+	// Override every project's grace before a Run waiting on a person is
+	// parked, and its idle limit (tests; DUDE_PARK_AFTER, DUDE_IDLE_AFTER).
+	// Zero follows the project's delivery policy.
+	ParkAfter, IdleAfter time.Duration
 
 	// One follower per live lux Run. The follower is the only writer of a
 	// Run's cursor, so two must never run for the same Run.
@@ -85,8 +90,16 @@ type phaseRun struct {
 	TurnDone, HasDirectives bool
 	// A person approved a repository the lux Run does not have yet.
 	RepoApproved bool
-	// dude paused it to bring those repositories, and resumes it itself.
-	PausedForRepository            bool
+	// Why dude paused it itself, and so when it resumes it: "repository",
+	// "person" or "idle" (migration 021); "" for a person's own pause.
+	DudePause string
+	// Something is open for a person: a question, a repository request.
+	Waiting bool
+	// Its agent has waited on a person past the project's grace period.
+	Parkable bool
+	// Its agent has been quiet, mid-turn, past the project's idle limit: not
+	// nudged yet, or nudged that long ago and still quiet.
+	Quiet, StillQuiet              bool
 	PushResult                     json.RawMessage
 	PRFeedback                     json.RawMessage
 	FindingIDs, BlockingSeverities []string
@@ -100,14 +113,40 @@ const runColumns = `r.id, r.organization_id, r.project_id, r.work_item_id, r.pha
 	EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL),
 	EXISTS (SELECT 1 FROM repository_requests q JOIN repositories repo ON repo.id = q.repository_id
 	        WHERE q.run_id = r.id AND q.status = 'approved' AND NOT (repo.name = ANY (r.lux_repositories))),
-	r.paused_for_repository,
+	COALESCE(r.dude_pause, ''), `+delivery.OpenAsk+`,
+	COALESCE(r.waiting_since < now() - make_interval(secs => lim.park_secs), false),
+	COALESCE(lim.idle_secs > 0 AND r.idle_nudged_at IS NULL AND `+quiet+`, false),
+	COALESCE(lim.idle_secs > 0 AND r.idle_nudged_at < now() - make_interval(secs => lim.idle_secs) AND `+quiet+`, false),
 	r.push_result, r.pr_feedback, r.finding_ids, r.blocking_severities, r.attempt`
+
+// runFrom is what runColumns reads from: the Run, and how long its project
+// lets an agent wait on a person (park_secs) or stay quiet (idle_secs, 0 for
+// never) — the project's delivery policy, over the factory's defaults, and
+// under the syncer's overrides. Its parameters are Syncer.limits.
+const runFrom = `runs r JOIN projects p ON p.id = r.project_id
+	CROSS JOIN LATERAL (SELECT
+		COALESCE(NULLIF($1::float8, 0), (p.delivery_policy->>'parkAfterMinutes')::float8 * 60, $2::float8) AS park_secs,
+		COALESCE(NULLIF($3::float8, 0), (p.delivery_policy->>'idleNudgeMinutes')::float8 * 60, $4::float8) AS idle_secs) lim`
+
+// quiet (SQL, over runFrom): the agent is mid-turn, running no tool, waiting
+// on nobody, and has done nothing for the idle limit.
+const quiet = `(r.status = 'running' AND r.lux_state = 'running' AND r.agent_busy_at IS NOT NULL
+	AND r.turn_done_at IS NULL AND r.waiting_since IS NULL AND cardinality(r.open_tool_calls) = 0
+	AND COALESCE(r.agent_active_at, r.agent_busy_at) < now() - make_interval(secs => lim.idle_secs))`
+
+// limits are runFrom's parameters: the overrides, then the defaults, of the
+// grace before parking and the idle limit, in seconds.
+func (s *Syncer) limits() []any {
+	d := delivery.DefaultPolicy()
+	return []any{s.ParkAfter.Seconds(), float64(d.ParkAfterMinutes * 60), s.IdleAfter.Seconds(), float64(d.IdleNudgeMinutes * 60)}
+}
 
 func scan(row pgx.Row) (phaseRun, error) {
 	var r phaseRun
 	err := row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.WorkItemID, &r.Phase, &r.Status, &r.Control,
 		&r.Category, &r.LuxRunID, &r.LuxState, &r.LuxStopReason,
-		&r.PushRequestID, &r.PushBranch, &r.BaseRefs, &r.BaseSHAs, &r.TurnDone, &r.HasDirectives, &r.RepoApproved, &r.PausedForRepository,
+		&r.PushRequestID, &r.PushBranch, &r.BaseRefs, &r.BaseSHAs, &r.TurnDone, &r.HasDirectives, &r.RepoApproved,
+		&r.DudePause, &r.Waiting, &r.Parkable, &r.Quiet, &r.StillQuiet,
 		&r.PushResult, &r.PRFeedback, &r.FindingIDs, &r.BlockingSeverities, &r.Attempt)
 	return r, err
 }
@@ -123,17 +162,19 @@ func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 		// needs its stream followed, and a paused or idle Run must not
 		// crowd out a newer one that is waiting to be submitted. Runs with
 		// something to do sort first.
-		rows, err := tx.Query(ctx, `SELECT `+runColumns+` FROM runs r
+		rows, err := tx.Query(ctx, `SELECT `+runColumns+` FROM `+runFrom+`
 			WHERE r.phase IS NOT NULL
 			  AND (r.status IN ('pending', 'scheduled', 'starting', 'running')
 			       OR (r.status = 'paused' AND r.control = 'resume')
-			       -- Paused by dude to bring a repository a person approved.
-			       OR (r.status = 'paused' AND r.paused_for_repository)
+			       -- Paused by dude to bring a repository a person approved,
+			       -- or parked for a person who has now answered.
+			       OR (r.status = 'paused' AND (r.dude_pause = 'repository'
+			           OR (r.dude_pause = 'person' AND NOT `+delivery.OpenAsk+`)))
 			       -- Aborted in dude but not yet cancelled in lux.
 			       OR (r.status = 'aborted' AND r.lux_run_id IS NOT NULL AND r.lux_stop_reason IS DISTINCT FROM 'cancel'))
 			  AND (r.next_attempt_at IS NULL OR r.next_attempt_at <= now())
 			ORDER BY (r.status = 'pending' OR r.control <> 'none' OR r.turn_done_at IS NOT NULL) DESC, r.created_at
-			LIMIT 1000`)
+			LIMIT 1000`, s.limits()...)
 		if err != nil {
 			return err
 		}
@@ -191,7 +232,20 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 		// so the resume can bring it (lux adds repositories only at a
 		// resume). An agent that has finished its turn gets it in the next
 		// phase instead — the work item names it now.
-		return true, s.requestPause(ctx, r, "a repository was approved")
+		return true, s.requestPause(ctx, r, "repository", "a repository was approved")
+	}
+	if r.Status == statusRunning && r.LuxState == "running" && r.Control == "none" {
+		switch {
+		case r.Parkable && r.Waiting:
+			// Waiting on a person who has not answered in the grace period:
+			// stop the container, keeping the agent's conversation, and
+			// resume it when they do — the next minute or the next week.
+			return true, s.requestPause(ctx, r, "person", "parked while it waits for a person")
+		case r.StillQuiet:
+			return true, s.parkIdle(ctx, r)
+		case r.Quiet:
+			return true, s.nudge(ctx, r)
+		}
 	}
 	if r.TurnDone {
 		return s.finish(ctx, r)
@@ -758,7 +812,11 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 	// soon as lux has stopped the Run — resuming earlier would clear the
 	// stop reason before lux's "stopped" arrives, and that would read as the
 	// agent dying. A person's pause is theirs to end.
-	if r.Control != "resume" && !r.PausedForRepository {
+	switch {
+	case r.Control == "resume", r.DudePause == "repository":
+	case r.DudePause == "person" && !r.Waiting:
+		// Parked, and the person has answered (or decided the request).
+	default:
 		return false, nil
 	}
 	if !lux.Terminal(r.LuxState) {
@@ -806,10 +864,22 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 		// lux_state is what lux says now ("resuming"), so directives wait for
 		// the stream to report it running.
 		_, err := tx.Exec(ctx, `UPDATE runs SET status = 'running', lux_state = $2, lux_stop_reason = NULL,
-			control = 'none', control_requested_at = NULL, control_reason = NULL, paused_for_repository = false,
-			tool_starts = tool_starts + 1,
-			turn_done_at = NULL, agent_busy_at = NULL WHERE id = $1 AND status = 'paused'`, r.ID, lr.State)
-		return err
+			control = 'none', control_requested_at = NULL, control_reason = NULL, dude_pause = NULL,
+			tool_starts = tool_starts + 1, idle_nudged_at = NULL, agent_active_at = NULL,
+			-- Still waiting on a person (a person resumed it anyway): the
+			-- grace period starts again.
+			waiting_since = CASE WHEN $3 THEN now() END,
+			turn_done_at = NULL, agent_busy_at = NULL WHERE id = $1 AND status = 'paused'`, r.ID, lr.State, r.Waiting)
+		if err != nil || r.DudePause == "" || r.DudePause == "repository" {
+			return err
+		}
+		if r.DudePause == "idle" {
+			if _, err := delivery.SetWorkItemStatusTx(ctx, tx, r.Org, r.ProjectID, r.WorkItemID, "awaiting_input", "running",
+				"a person resumed the agent"); err != nil {
+				return err
+			}
+		}
+		return s.event(ctx, tx, r, evUnparked, ledger.ActorSystem, map[string]any{"reason": r.DudePause})
 	}); err != nil {
 		return true, err
 	}
@@ -820,12 +890,48 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 }
 
 // requestPause asks for a graceful pause, saying why, marked as dude's own
-// so the syncer resumes it (and a person's later pause or resume wins).
-func (s *Syncer) requestPause(ctx context.Context, r phaseRun, why string) error {
+// (kind is a dude_pause) so the syncer knows when to resume it; a person's
+// later pause or resume wins. A pause other than for a repository is a
+// park, and says so in the Run's chat.
+func (s *Syncer) requestPause(ctx context.Context, r phaseRun, kind, why string) error {
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE runs SET control = 'pause_graceful', control_requested_at = now(), control_reason = $2,
-			paused_for_repository = true
-			WHERE id = $1 AND control = 'none' AND status = 'running'`, r.ID, why)
+		tag, err := tx.Exec(ctx, `UPDATE runs SET control = 'pause_graceful', control_requested_at = now(), control_reason = $2,
+			dude_pause = $3
+			WHERE id = $1 AND control = 'none' AND status = 'running'`, r.ID, why, kind)
+		if err != nil || tag.RowsAffected() == 0 || kind == "repository" {
+			return err
+		}
+		return s.event(ctx, tx, r, evParked, ledger.ActorSystem, map[string]any{"reason": kind, "message": why})
+	})
+}
+
+// nudge tells an agent that has been quiet mid-turn for the idle limit to
+// carry on or ask for what it needs — interrupting the turn, which may be
+// stuck. Once: if it stays quiet as long again, it is parked (parkIdle).
+func (s *Syncer) nudge(ctx context.Context, r phaseRun) error {
+	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE runs SET idle_nudged_at = now() WHERE id = $1 AND idle_nudged_at IS NULL`, r.ID)
+		if err != nil || tag.RowsAffected() == 0 {
+			return err
+		}
+		id := ids.New(ids.Directive)
+		if _, err := tx.Exec(ctx, `INSERT INTO directives (id, organization_id, work_item_id, run_id, text, scope, interrupt)
+			VALUES ($1, $2, $3, $4, $5, 'turn', true)`, id, r.Org, r.WorkItemID, r.ID, idleNudge); err != nil {
+			return err
+		}
+		return s.event(ctx, tx, r, evIdleNudged, ledger.ActorSystem, map[string]any{"directiveId": id})
+	})
+}
+
+// parkIdle parks an agent that stayed quiet after its nudge, for a person
+// to look at: it resumes only when they resume it.
+func (s *Syncer) parkIdle(ctx context.Context, r phaseRun) error {
+	if err := s.requestPause(ctx, r, "idle", "parked: the agent went quiet and did not answer a nudge"); err != nil {
+		return err
+	}
+	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		_, err := delivery.SetWorkItemStatusTx(ctx, tx, r.Org, r.ProjectID, r.WorkItemID, "running", "awaiting_input",
+			"the agent went quiet")
 		return err
 	})
 }
@@ -980,6 +1086,17 @@ func (s *Syncer) ask(ctx context.Context, r phaseRun, call func(context.Context,
 // resumeNudge is what a resumed agent is told when nobody said anything
 // while it was paused.
 const resumeNudge = "You were paused and have been resumed. Continue the task where you left off."
+
+// idleNudge is what an agent quiet mid-turn for the idle limit is told.
+const idleNudge = "You have not done anything for a while. Carry on with your task — or, if you need " +
+	"something only a person can give, ask for it with ask_person and end your turn."
+
+// Events of dude parking a Run and taking it back up.
+const (
+	evParked     = "run.parked"
+	evUnparked   = "run.unparked"
+	evIdleNudged = "run.idle_nudged"
+)
 
 // errRetry ends a step that will be tried again after a back-off.
 var errRetry = errors.New("retrying later")

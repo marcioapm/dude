@@ -19,12 +19,43 @@ ACP `mcpServers` for OpenCode, `--mcp-config` for Claude Code).
 | `create_epic` | a new epic in the project | investigator |
 | `list_work` | the project's epics and work items, with status and keys | all |
 | `search_memory` | search the project's history: work items, findings, artifacts' text, PR titles (Postgres full-text first; embeddings later) | all |
-| `ask_person` | a question for a person; the turn ends and the answer is the next input — the tool form of today's ```` ```question``` ```` block | implementer, fixer |
+| `ask_person` | a question for a person; the turn ends and the answer is the next input. The only way an agent asks: the question block is gone | implementer, fixer |
 | `publish_artifact` | write a file for people (name, content) — same as `$LUX_ARTIFACTS`, for agents that prefer a tool | all |
 | `request_repository` | ask for another repository of the organization, read or write, with a reason; a person approves or denies (#45) | all |
 
 Everything an agent creates is marked as created by that Run (`created_by_run_id`)
 and shown so in the UI; nothing an agent creates starts work on its own.
+
+## Waiting on a person
+
+Anything that blocks on a person goes through a tool, so dude knows the
+model's intent: `ask_person`, and `request_repository` when the agent
+ends its turn on it. A turn that ends with one of these open is not done.
+The Run is **waiting**.
+
+- **Grace period, then parked.** A waiting Run stays live for the project's
+  `parkAfterMinutes` (default 10), so someone at their desk answers a live
+  agent. Past it, dude pauses the Run (`dude_pause = 'person'`): lux stops
+  the container and keeps its state and the agent's conversation, so the
+  Run holds nothing. The chat says "Parked while it waits for you".
+- **The answer resumes it.** An answered question, or a decided request,
+  resumes the same lux Run. The answer is its next message, and the
+  conversation continues, whether that is the next minute or the next week.
+  A person's own pause of a parked Run makes it theirs: the answer then
+  waits for their Resume.
+- **No wall-clock limit.** Runs have none; agents work for days. lux treats
+  an unset `timeout` as no limit, and counts an explicit one as running
+  time only, so parked time never counts. (Until that lands, dude sends
+  `8760h`.) lux keeps a stopped Run's state until it is cancelled.
+- **Idle nudge instead of a timeout** (optional, `idleNudgeMinutes`, 0 = off).
+  An agent mid-turn that has said nothing, runs no tool and waits on
+  nobody for that long gets one interrupting nudge: "carry on, or ask".
+  Still quiet as long again, it is parked (`dude_pause = 'idle'`) and the
+  work item goes to awaiting input. Only a person's Resume takes it up.
+- **Asks die with their Run.** When a Run completes, fails, is aborted or
+  is lost, its open questions and pending requests are cancelled
+  (triggers). The chat shows them as "No longer needed". Answering one
+  gets a 409 that says the run ended.
 
 ## Identity and authority
 
