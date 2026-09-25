@@ -25,41 +25,44 @@ export function isDensity(v: unknown): v is Density {
   return (DENSITIES as readonly unknown[]).includes(v);
 }
 
-const px = (n: number) => `${n}px`;
+/** `[comfortable, compact]` for a px value that compact takes `by` px off. */
+function shrink(n: number, by: number): readonly [string, string] {
+  return [`${n}px`, `${n - by}px`];
+}
 
 /** `--ds-<key>` -> [comfortable, compact]. */
 const densityPairs = {
-  "text-md": [px(fontSize.md), px(fontSize.md - 1)],
-  "text-prose": [px(fontSize.prose), px(fontSize.prose - 1)],
+  "text-md": shrink(fontSize.md, 1),
+  "text-prose": shrink(fontSize.prose, 1),
 
-  "radius-md": [px(radius.md), px(radius.md - 1)],
+  "radius-md": shrink(radius.md, 1),
 
-  "size-control-md": [px(size.controlMd), px(size.controlMd - 2)],
-  "size-control-lg": [px(size.controlLg), px(size.controlLg - 2)],
+  "size-control-md": shrink(size.controlMd, 2),
+  "size-control-lg": shrink(size.controlLg, 2),
 
-  "size-row-default": [px(size.rowDefault), px(size.rowDefault - 4)],
-  "size-row-comfortable": [px(size.rowComfortable), px(size.rowComfortable - 4)],
-  "size-row-item": [px(size.rowItem), px(size.rowItem - 6)],
-  "size-row-item-sm": [px(size.rowItemSm), px(size.rowItemSm - 4)],
-  "size-avatar-chat": [px(size.avatarChat), px(size.avatarChat - 8)],
+  "size-row-default": shrink(size.rowDefault, 4),
+  "size-row-comfortable": shrink(size.rowComfortable, 4),
+  "size-row-item": shrink(size.rowItem, 6),
+  "size-row-item-sm": shrink(size.rowItemSm, 4),
+  "size-avatar-chat": shrink(size.avatarChat, 8),
 
-  "space-main-pad": [px(spaceNamed.mainPad), px(spaceNamed.mainPad - 12)],
-  "space-card-pad": [px(spaceNamed.cardPad), px(spaceNamed.cardPad - 6)],
-  "space-chat-pad-x": [px(spaceNamed.chatPadX), px(spaceNamed.chatPadX - 4)],
-  "space-chat-gap": [px(spaceNamed.chatGap), px(spaceNamed.chatGap - 9)],
-  "space-chat-avatar-gap": [px(spaceNamed.chatAvatarGap), px(spaceNamed.chatAvatarGap - 4)],
-  "space-panel-gap": [px(spaceNamed.panelGap), px(spaceNamed.panelGap - 8)],
-  "space-nav-row-gap": [px(spaceNamed.navRowGap), px(spaceNamed.navRowGap - 1)],
-  "space-nav-section-gap": [px(spaceNamed.navSectionGap), px(spaceNamed.navSectionGap - 6)],
-  "space-attention-row-pad-y": [px(spaceNamed.attentionRowPadY), px(spaceNamed.attentionRowPadY - 3)],
-  "space-aside-y": [px(spaceNamed.asideY), px(spaceNamed.asideY - 2)],
-  "space-highlight-y": [px(spaceNamed.highlightY), px(spaceNamed.highlightY - 4)],
-  "space-code-y": [px(spaceNamed.codeY), px(spaceNamed.codeY - 4)],
-  "space-code-x": [px(spaceNamed.codeX), px(spaceNamed.codeX - 4)],
-  "space-cell-y": [px(spaceNamed.cellY), px(spaceNamed.cellY - 3)],
-  "space-composer-y": [px(spaceNamed.composerY), px(spaceNamed.composerY - 4)],
-  "space-composer-gap": [px(spaceNamed.composerGap), px(spaceNamed.composerGap - 2)],
-  "space-field-y": [px(spaceNamed.fieldY), px(spaceNamed.fieldY - 4)],
+  "space-main-pad": shrink(spaceNamed.mainPad, 12),
+  "space-card-pad": shrink(spaceNamed.cardPad, 6),
+  "space-chat-pad-x": shrink(spaceNamed.chatPadX, 4),
+  "space-chat-gap": shrink(spaceNamed.chatGap, 9),
+  "space-chat-avatar-gap": shrink(spaceNamed.chatAvatarGap, 4),
+  "space-panel-gap": shrink(spaceNamed.panelGap, 8),
+  "space-nav-row-gap": shrink(spaceNamed.navRowGap, 1),
+  "space-nav-section-gap": shrink(spaceNamed.navSectionGap, 6),
+  "space-attention-row-pad-y": shrink(spaceNamed.attentionRowPadY, 3),
+  "space-aside-y": shrink(spaceNamed.asideY, 2),
+  "space-highlight-y": shrink(spaceNamed.highlightY, 4),
+  "space-code-y": shrink(spaceNamed.codeY, 4),
+  "space-code-x": shrink(spaceNamed.codeX, 4),
+  "space-cell-y": shrink(spaceNamed.cellY, 3),
+  "space-composer-y": shrink(spaceNamed.composerY, 4),
+  "space-composer-gap": shrink(spaceNamed.composerGap, 2),
+  "space-field-y": shrink(spaceNamed.fieldY, 4),
   // Line pitch of a Markdown code block; mono text itself holds at 13px.
   "size-code-line": ["20px", "18px"],
 
