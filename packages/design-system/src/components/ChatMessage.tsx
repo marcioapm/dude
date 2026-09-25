@@ -100,7 +100,9 @@ function toDate(v: string | number | Date | null | undefined): Date | null {
  * agent and must be findable in a long transcript.
  *
  * The body is Markdown rendered from a typed AST and grows in place while
- * streaming; earlier blocks never reflow when a later token lands.
+ * streaming at chat leading, so earlier blocks do not reflow when a later
+ * token lands. A multi-block reply takes the long-form rhythm once, when
+ * streaming ends.
  */
 export function ChatMessage({
   role,
