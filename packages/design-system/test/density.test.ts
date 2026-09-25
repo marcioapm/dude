@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { BIG_TICKET_TOKENS, LARGE_LAYOUT_TOKENS, densityTokens, type DensityToken } from "../src/tokens/density.ts";
+import { BIG_TICKET_TOKENS, DENSITIES, LARGE_LAYOUT_TOKENS, densityTokens, isDensity, type DensityToken } from "../src/tokens/density.ts";
 import { fontSize, lineHeight, size, space } from "../src/tokens/scale.ts";
 
 /** A length in px or em as a number; NaN for anything else (`ch`, unitless). */
@@ -74,10 +74,17 @@ describe("density", () => {
     const lead = (d: "comfortable" | "compact", k: "leading-chat" | "leading-prose") => Number(densityTokens[d][k]);
     expect(lead("compact", "leading-chat")).toBeLessThan(lead("comfortable", "leading-chat"));
     expect(lead("compact", "leading-prose")).toBeLessThan(lead("comfortable", "leading-prose"));
-    for (const d of ["comfortable", "compact"] as const) {
+    for (const d of DENSITIES) {
       const line = at(d, "text-prose") * lead(d, "leading-chat");
       expect(Math.abs(line - Math.round(line)), d).toBeLessThan(0.01);
     }
+  });
+});
+
+describe("isDensity", () => {
+  test("accepts the two densities and nothing else", () => {
+    for (const d of DENSITIES) expect(isDensity(d)).toBe(true);
+    for (const v of ["bogus", "Compact", "", null, undefined, 1]) expect(isDensity(v), String(v)).toBe(false);
   });
 });
 
@@ -92,7 +99,7 @@ describe("chat metrics (Discord)", () => {
 
   test("a new speaker sits further from the previous turn than a same-author turn", () => {
     // A turn's top margin is `chat-gap - space-2`; a continued turn's is 0.
-    for (const d of ["comfortable", "compact"] as const) {
+    for (const d of DENSITIES) {
       expect(at(d, "space-chat-gap") - space[2], d).toBeGreaterThan(0);
     }
   });

@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { ThemeMode } from "./tokens/themes.ts";
-import { DEFAULT_DENSITY, type Density } from "./tokens/density.ts";
+import { DEFAULT_DENSITY, isDensity, type Density } from "./tokens/density.ts";
 
 export type ThemePreference = ThemeMode | "system";
 
@@ -59,7 +59,7 @@ export function ThemeProvider({
   const [density, setDensityState] = useState<Density>(() => {
     if (densityStorageKey && typeof localStorage !== "undefined") {
       const v = localStorage.getItem(densityStorageKey);
-      if (v === "comfortable" || v === "compact") return v;
+      if (isDensity(v)) return v;
     }
     return defaultDensity;
   });

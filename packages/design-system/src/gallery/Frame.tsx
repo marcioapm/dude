@@ -1,7 +1,7 @@
 import { createContext, useContext, type CSSProperties, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import type { ThemeMode } from "../tokens/themes.ts";
-import type { Density } from "../tokens/density.ts";
+import { DENSITIES, type Density } from "../tokens/density.ts";
 import styles from "./gallery.module.css";
 
 export type PaneMode = "both" | "dark" | "light";
@@ -9,6 +9,11 @@ export type PaneDensity = "both" | Density;
 
 /** Which densities every `Panes` draws; set once by the gallery's density control. */
 export const PaneDensityContext = createContext<PaneDensity>("comfortable");
+
+/** The densities a gallery frame draws for the density control's choice. */
+export function densitiesFor(paneDensity: PaneDensity): readonly Density[] {
+  return paneDensity === "both" ? DENSITIES : [paneDensity];
+}
 
 /**
  * Renders the same children once per theme (columns) and density (rows),
@@ -29,7 +34,7 @@ export function Panes({
 }) {
   const paneDensity = useContext(PaneDensityContext);
   const modes: ThemeMode[] = mode === "both" ? ["dark", "light"] : [mode];
-  const densities: Density[] = paneDensity === "both" ? ["comfortable", "compact"] : [paneDensity];
+  const densities = densitiesFor(paneDensity);
   return (
     <div className={cx(styles["panes"], modes.length === 1 && styles["panesSingle"])}>
       {densities.flatMap((d) =>
