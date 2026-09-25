@@ -10,9 +10,11 @@ export type MarkdownVariant = "message" | "document";
 export interface MarkdownProps extends Omit<HTMLAttributes<HTMLDivElement>, "children"> {
   readonly source: string;
   /**
-   * `message` (default): a chat turn. One block reads at chat leading
-   * (1.375); more than one switches to the long-form rhythm (1.5, 0.75em
-   * between blocks). No outline. `document`: a published artifact read in full. Wider measure,
+   * `message` (default): a chat turn. One block reads at chat
+   * leading; more than one switches to the long-form rhythm (prose leading,
+   * `--ds-md-gap` between blocks) once the reply has finished streaming, so
+   * the switch happens once rather than when the second block arrives. No
+   * outline. `document`: a published artifact read in full. Wider measure,
    * more air between sections, an optional heading outline.
    */
   readonly variant?: MarkdownVariant | undefined;
@@ -53,7 +55,7 @@ export function Markdown({
   const ctx: RenderCtx = { linkTarget, diffs, streaming: streaming === true };
 
   const body = (
-    <div className={cx(styles["root"], variant === "document" ? styles["document"] : styles["message"], variant === "message" && blocks.length > 1 && styles["long"], streaming && styles["streaming"], className)} {...rest}>
+    <div className={cx(styles["root"], variant === "document" ? styles["document"] : styles["message"], variant === "message" && !streaming && blocks.length > 1 && styles["long"], streaming && styles["streaming"], className)} {...rest}>
       {blocks.length === 0 && streaming ? (
         <p className={styles["p"]}>
           <Caret />
