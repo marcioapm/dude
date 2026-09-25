@@ -258,6 +258,8 @@ export function AttentionList({ items, selected, onSelect, max = 5 }: AttentionL
             const ref: NavRef = it.session ? { kind: "session", id: it.session.id } : { kind: "workItem", id: it.workItem.id };
             const isSel = navKey(ref) === selectedKey || navKey({ kind: "workItem", id: it.workItem.id }) === selectedKey;
             const where = it.epic ? `${it.project.name} · ${it.epic.title}` : it.project.name;
+            const people = it.workItem.people ?? [];
+            const names = people.map((p) => p.name).join(", ");
             return (
               <li key={it.workItem.id}>
                 <button
@@ -286,10 +288,10 @@ export function AttentionList({ items, selected, onSelect, max = 5 }: AttentionL
                       )}
                     </span>
                   </span>
-                  {it.workItem.people && it.workItem.people.length > 0 ? (
-                    <span className={styles["attentionPeople"]} title={it.workItem.people.map((p) => p.name).join(", ")}>
-                      <HumanAvatar person={it.workItem.people[0]!} size="xs" aria-hidden />
-                      {it.workItem.people.length > 1 ? <span className={styles["attentionPeopleMore"]}>+{it.workItem.people.length - 1}</span> : null}
+                  {people.length > 0 ? (
+                    <span className={styles["attentionPeople"]} role="group" aria-label={names} title={names}>
+                      <HumanAvatar person={people[0]!} size="xs" aria-hidden />
+                      {people.length > 1 ? <span className={styles["attentionPeopleMore"]}>+{people.length - 1}</span> : null}
                     </span>
                   ) : null}
                 </button>
