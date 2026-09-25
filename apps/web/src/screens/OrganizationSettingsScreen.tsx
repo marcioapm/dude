@@ -5,7 +5,20 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Badge, Button, Card, CardBody, CardFooter, CardHeader, Input, Spinner } from "@dude/design-system/primitives";
+import {
+  Badge,
+  Button,
+  Callout,
+  Card,
+  CardBody,
+  CardFooter,
+  CardHeader,
+  Input,
+  KeyValueList,
+  Page,
+  PageHeader,
+  Spinner,
+} from "@dude/design-system/primitives";
 import type { ApiClient, ForgeConnection } from "../api/client.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
 
@@ -50,11 +63,8 @@ export function OrganizationSettingsScreen({ client }: { client: ApiClient }) {
   const webhookUrl = connection.connected ? `${window.location.origin}${connection.webhookPath}` : null;
 
   return (
-    <div className="settingsScreen" data-testid="org-settings">
-      <header className="settingsHeader">
-        <h1 className="wiTitle">Organization</h1>
-        <span className="muted">Settings</span>
-      </header>
+    <Page data-testid="org-settings">
+      <PageHeader title="Organization" description="Settings" />
       <Card>
         <CardHeader
           title="GitHub"
@@ -62,23 +72,19 @@ export function OrganizationSettingsScreen({ client }: { client: ApiClient }) {
         />
         <CardBody>
           {connection.connected ? (
-            <dl className="facts">
-              <dt>Authentication</dt>
-              <dd>{connection.auth === "pat" ? "Personal access token" : "GitHub App"}</dd>
-              <dt>Token</dt>
-              <dd className="mono">…{connection.secretHint}</dd>
-              <dt>API</dt>
-              <dd className="mono">{connection.apiBaseUrl ?? "https://api.github.com"}</dd>
-              <dt>Webhook</dt>
-              <dd className="mono">{webhookUrl}</dd>
-            </dl>
+            <KeyValueList items={[
+              { label: "Authentication", value: connection.auth === "pat" ? "Personal access token" : "GitHub App" },
+              { label: "Token", value: `…${connection.secretHint}`, mono: true },
+              { label: "API", value: connection.apiBaseUrl ?? "https://api.github.com", mono: true },
+              { label: "Webhook", value: webhookUrl, mono: true },
+            ]} />
           ) : (
             <p className="muted">Agents can implement work, but cannot open pull requests until GitHub is connected.</p>
           )}
           {verdict ? (
-            <p className={verdict.ok ? "muted" : "problem"} role="status" data-testid="forge-verdict">
+            <Callout tone={verdict.ok ? "success" : "danger"} data-testid="forge-verdict">
               {verdict.text}
-            </p>
+            </Callout>
           ) : null}
         </CardBody>
         <CardFooter>
@@ -103,7 +109,7 @@ export function OrganizationSettingsScreen({ client }: { client: ApiClient }) {
         }}
       />
       ) : null}
-    </div>
+    </Page>
   );
 }
 

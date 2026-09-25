@@ -23,7 +23,7 @@ import {
   ToolCallCard,
   summarizeToolArgs,
 } from "@dude/design-system/components";
-import { Button, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
+import { Button, Callout, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
 import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, runLabel } from "@dude/domain";
 import type { AgentRole, PersistedEvent } from "@dude/domain";
 import type { ApiClient, RunDetail } from "../api/client.ts";
@@ -286,8 +286,8 @@ export function RunScreen({ client, runId, title, breadcrumb }: RunScreenProps) 
         </TabPanel>
       </Tabs>
 
-      {problem ? <p className="problem">{problem}</p> : null}
-      {streamStatus === "reconnecting" ? <p className="muted">Reconnecting…</p> : null}
+      {problem ? <Callout tone="danger">{problem}</Callout> : null}
+      {streamStatus === "reconnecting" ? <Callout tone="attention">Reconnecting…</Callout> : null}
     </div>
   );
 }
@@ -423,5 +423,5 @@ function summarize(event: PersistedEvent): string {
 
 /** The raw payload, rendered only when a row is expanded. */
 function PayloadDetail({ payload }: { payload: Record<string, unknown> }) {
-  return <pre className="payload">{JSON.stringify(payload, null, 2)}</pre>;
+  return <pre>{JSON.stringify(payload, null, 2)}</pre>;
 }

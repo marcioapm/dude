@@ -10,7 +10,7 @@
 
 import { StrictMode, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Button, Input, ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
+import { Button, Card, CardBody, CardHeader, FormStack, Input, ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { ThemeProvider } from "@dude/design-system";
 
 import "@dude/design-system/tokens.css";
@@ -61,27 +61,34 @@ function KeyPrompt({ onSubmit }: { onSubmit: (key: string) => void }) {
   const [value, setValue] = useState("");
 
   return (
-    <form
-      className="keyPrompt"
-      onSubmit={(event) => {
-        event.preventDefault();
-        if (value.trim()) onSubmit(value.trim());
-      }}
-    >
-      <h1>dude</h1>
-      <Input
-        autoFocus
-        type="password"
-        label="API key"
-        hint="Paste an API key to continue."
-        value={value}
-        placeholder="dude_sk_…"
-        onChange={(event) => setValue(event.target.value)}
-      />
-      <Button type="submit" variant="primary" disabled={!value.trim()}>
-        Continue
-      </Button>
-    </form>
+    <div className="keyPrompt">
+      <Card variant="flat">
+        <CardHeader title={<h1>dude</h1>} />
+        <CardBody>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (value.trim()) onSubmit(value.trim());
+            }}
+          >
+            <FormStack>
+              <Input
+                autoFocus
+                type="password"
+                label="API key"
+                hint="Paste an API key to continue."
+                value={value}
+                placeholder="dude_sk_…"
+                onChange={(event) => setValue(event.target.value)}
+              />
+              <Button type="submit" variant="primary" disabled={!value.trim()}>
+                Continue
+              </Button>
+            </FormStack>
+          </form>
+        </CardBody>
+      </Card>
+    </div>
   );
 }
 

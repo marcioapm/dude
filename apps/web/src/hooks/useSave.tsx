@@ -5,7 +5,7 @@
  */
 
 import { useCallback, useId, useState, type ReactNode } from "react";
-import { Button, Dialog, useToast } from "@dude/design-system/primitives";
+import { Button, Callout, Dialog, FormStack, useToast } from "@dude/design-system/primitives";
 import { ApiError } from "../api/client.ts";
 
 /** What went wrong, in words a person can act on. */
@@ -96,14 +96,15 @@ export function FormDialog(props: FormDialogProps) {
       {props.open ? (
         <form
           id={formId}
-          className="dialogForm"
           onSubmit={(e) => {
             e.preventDefault();
             if (props.canSubmit) props.onSubmit();
           }}
         >
-          {props.children}
-          {props.problem ? <p className="problem" role="alert">{props.problem}</p> : null}
+          <FormStack>
+            {props.children}
+            {props.problem ? <Callout tone="danger">{props.problem}</Callout> : null}
+          </FormStack>
         </form>
       ) : null}
     </Dialog>

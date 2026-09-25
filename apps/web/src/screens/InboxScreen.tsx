@@ -5,7 +5,7 @@
  */
 
 import { AttentionList, attentionItems, type NavProject, type NavRef, type NavRow } from "@dude/design-system";
-import { EmptyState } from "@dude/design-system/primitives";
+import { EmptyState, Page } from "@dude/design-system/primitives";
 
 export function InboxScreen({ projects, selected, onSelect }: {
   projects: ReadonlyArray<NavProject>;
@@ -14,13 +14,13 @@ export function InboxScreen({ projects, selected, onSelect }: {
 }) {
   const items = attentionItems(projects).sort((a, b) => since(a.workItem.statusSince) - since(b.workItem.statusSince));
   return (
-    <div className="settingsScreen" data-testid="inbox">
+    <Page data-testid="inbox">
       {items.length === 0 ? (
         <EmptyState title="Nothing is waiting on you" description="When an agent asks something, or a delivery needs a decision, it shows here." />
       ) : (
         <AttentionList title="Waiting on you" items={items} selected={selected} onSelect={onSelect} max={Infinity} />
       )}
-    </div>
+    </Page>
   );
 }
 

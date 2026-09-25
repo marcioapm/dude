@@ -11,7 +11,7 @@
 import { useEffect, useState } from "react";
 import type { NavEpic, NavProject, NavRef } from "@dude/design-system";
 import type { RowMenuItem } from "@dude/design-system/primitives";
-import { Dialog, Button, Input, Textarea } from "@dude/design-system/primitives";
+import { Dialog, Button, Callout, Input, Textarea } from "@dude/design-system/primitives";
 import type { ApiClient, Epic } from "../api/client.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
 
@@ -194,7 +194,7 @@ export function DeleteEpicDialog(props: { client: ApiClient; epic: EpicRef; onCl
         </>
       }
     >
-      {problem ? <p className="problem" role="alert">{problem}</p> : null}
+      {problem ? <Callout tone="danger">{problem}</Callout> : null}
     </Dialog>
   );
 }

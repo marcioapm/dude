@@ -9,8 +9,7 @@
 
 import { useEffect, useState } from "react";
 import { ArtifactGroup, ArtifactPreview, ArtifactRow, artifactKind } from "@dude/design-system/components";
-import { Icon } from "@dude/design-system";
-import { useToast } from "@dude/design-system/primitives";
+import { IconButton, useToast } from "@dude/design-system/primitives";
 import { DEFAULT_RUN_ROLE } from "@dude/domain";
 import type { ApiClient, Artifact } from "../api/client.ts";
 
@@ -32,7 +31,6 @@ export function ArtifactsSection({ client, artifacts }: { client: ApiClient; art
   const versions = (name: string) => artifacts.filter((a) => a.name === name).length;
   return (
     <ArtifactGroup
-      className="wiSection"
       data-testid="artifacts"
       artifacts={shown}
       renderRow={(a) => (
@@ -78,11 +76,10 @@ function ArtifactItem({ client, artifact, updated }: { client: ApiClient; artifa
   // A button, not a link: the bytes need the key in a header, so there is no
   // URL a new tab could open.
   const download = (
-    <button
-      type="button"
-      className="artifactDownload"
-      aria-label={`Download ${artifact.name}`}
-      title={`Download ${artifact.name}`}
+    <IconButton
+      icon="download"
+      size="sm"
+      label={`Download ${artifact.name}`}
       onClick={() => {
         void client.artifactContent(artifact.id).then(
           (blob) => {
@@ -96,9 +93,7 @@ function ArtifactItem({ client, artifact, updated }: { client: ApiClient; artifa
           (err: unknown) => toast({ title: err instanceof Error ? err.message : String(err), tone: "danger" }),
         );
       }}
-    >
-      <Icon name="download" size={14} />
-    </button>
+    />
   );
 
   return (

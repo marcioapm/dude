@@ -62,3 +62,5 @@ export { ChatNotice } from "./ChatNotice.tsx";
 export type { ChatNoticeProps, ChatNoticeKind } from "./ChatNotice.tsx";
 export { ChatProgress, progressFraction } from "./ChatProgress.tsx";
 export type { ChatProgressProps } from "./ChatProgress.tsx";
+export { StepList, StepRow } from "./StepList.tsx";
+export type { StepListProps, StepRowProps } from "./StepList.tsx";

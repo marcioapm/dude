@@ -16,6 +16,9 @@ import { useToast } from "../../primitives/Toast.tsx";
 import { Tooltip } from "../../primitives/Tooltip.tsx";
 import { EmptyState, Skeleton, SkeletonLines, Spinner } from "../../primitives/Feedback.tsx";
 import { ScrollArea } from "../../primitives/ScrollArea.tsx";
+import { Callout, Fieldset, FormActions, FormRow, FormStack, KeyValueList, Page, PageHeader, Section as PageSection } from "../../primitives/Layout.tsx";
+import { StepList, StepRow } from "../../components/StepList.tsx";
+import { AgentAvatar } from "../../components/AgentAvatar.tsx";
 import { Icon } from "../../icons/index.tsx";
 import { StatusBadge } from "../../components/StatusBadge.tsx";
 import { CostDisplay, Duration } from "../../components/Numbers.tsx";
@@ -380,6 +383,53 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
               }
             />
           </Row>
+        </Panes>
+      </Block>
+
+      <Block id="p-page" title="Page, PageHeader, Section" note="The frame of a page outside the board and the transcript — a work item, settings, an inbox. The page keeps to --ds-measure-page; its header says where it is (a Breadcrumb, never a Back button), what it is, and what can be done; sections are titled in small caps. All spacing is the density's panel gap.">
+        <Panes mode={mode} surface>
+          <Page>
+            <PageHeader
+              status={<StatusBadge status="review" size="sm" />}
+              itemKey="TEXT-20"
+              title="Add a paragraph-count helper"
+              description="Count paragraphs in a text. A line with only whitespace separates them."
+              actions={<Button size="sm">Move</Button>}
+            />
+            <PageSection title="Pipeline" count={3}>
+              <StepList>
+                <StepRow step="1" avatar={<AgentAvatar role="implementer" size="sm" />} label="Implement" status={<StatusBadge status="completed" size="sm" />} meta="376bf6c" onOpen={() => undefined} />
+                <StepRow step="2" avatar={<AgentAvatar role="reviewer" size="sm" />} label="Review · correctness" status={<StatusBadge status="running" size="sm" />} note="reading the change" onOpen={() => undefined} />
+                <StepRow step="PR" label="Pull request #15" status={<StatusBadge status="review" size="sm" />} note="checks passing · review pending" meta="dude/wi_20/attempt-1" href="https://github.com" />
+              </StepList>
+            </PageSection>
+          </Page>
+        </Panes>
+      </Block>
+
+      <Block id="p-form" title="Form layout, Fieldset, Callout, KeyValueList" note="FormStack keeps a form to a readable width; FormRow puts fields side by side; Fieldset groups controls under one question with the Input anatomy (label, hint, error); FormActions puts the primary first and a note after. Callout says why something failed where it failed — not a toast, and never for agent events. KeyValueList is facts about a thing; mono for identifiers.">
+        <Panes mode={mode} surface>
+          <FormStack>
+            <Callout tone="danger">url must be an https, ssh or git:// URL</Callout>
+            <FormRow>
+              <Input label="Review rounds" defaultValue="5" hint="Review → fix cycles before a person is asked." />
+              <Input label="Park after (minutes)" defaultValue="10" />
+            </FormRow>
+            <Fieldset legend="Reviewers every delivery runs" hint="Others join when a change touches their area.">
+              <Checkbox label="correctness" defaultChecked />
+              <Checkbox label="security" />
+            </Fieldset>
+            <FormActions note="Settings left at the factory's defaults follow them if they change.">
+              <Button variant="primary">Save</Button>
+            </FormActions>
+            <Callout tone="success">Connected as marcioapm · scopes: repo</Callout>
+            <KeyValueList
+              items={[
+                { label: "Account", value: "marcioapm" },
+                { label: "Webhook URL", value: "https://dude.example/webhooks/github/org_1", mono: true },
+              ]}
+            />
+          </FormStack>
         </Panes>
       </Block>
 

@@ -231,3 +231,40 @@ describe("formatTimestamp time-short", () => {
     expect(formatTimestamp(new Date(2026, 8, 24, 23, 59, 59), "time-short")).toBe("23:59");
   });
 });
+
+describe("page structure", () => {
+  test("a header names the item, and a section its content", async () => {
+    const { Page, PageHeader, Section, Callout, KeyValueList, Fieldset } = await import("../src/primitives/Layout.tsx");
+    const html = renderToStaticMarkup(
+      <Page>
+        <PageHeader itemKey="TEXT-20" title="Add a helper" actions={<button>Move</button>} />
+        <Section title="Pipeline" count={3}>rows</Section>
+        <Callout tone="danger">refused</Callout>
+        <Callout tone="info">noted</Callout>
+        <KeyValueList items={[{ label: "Account", value: "me", mono: true }]} />
+        <Fieldset legend="Reviewers" error="Choose one">x</Fieldset>
+      </Page>,
+    );
+    expect(html).toContain("<h1");
+    expect(html).toMatch(/<section[^>]*aria-labelledby="[^"]+"/);
+    expect(html).toContain('role="alert"');
+    expect(html).toContain('role="status"');
+    expect(html).toContain("<dt");
+    expect(html).toContain("<legend");
+    expect(html).toContain("Choose one");
+  });
+
+  test("a step opens its conversation, or a page elsewhere", async () => {
+    const { StepList, StepRow } = await import("../src/components/StepList.tsx");
+    const html = renderToStaticMarkup(
+      <StepList>
+        <StepRow step="1" label="Implement" onOpen={() => undefined} />
+        <StepRow step="PR" label="Pull request #15" href="https://github.com/x/pull/15" />
+      </StepList>,
+    );
+    expect(html).toContain("<ol");
+    expect(html).toContain('<button type="button"');
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('data-icon="external"');
+  });
+});

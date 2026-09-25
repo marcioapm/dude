@@ -11,7 +11,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { Button, Checkbox, IconButton, Input, Select } from "@dude/design-system/primitives";
+import { Button, Checkbox, Fieldset, FormRow, IconButton, Input, Select } from "@dude/design-system/primitives";
 import type { ApiClient, Epic, Repository, WorkItemDetail, WorkItemFields, WorkItemRepository } from "../api/client.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
 
@@ -122,19 +122,18 @@ export function WorkItemDialog({ client, projectId, onClose, existing, epicId, o
         maxLength={500} onChange={(e) => setTitle(e.target.value)} data-testid="work-item-title" />
       <Input label="Goal" hint="Why, and any detail an agent needs." value={goal} disabled={locked}
         maxLength={10_000} onChange={(e) => setGoal(e.target.value)} data-testid="work-item-goal" />
-      <div className="fieldRow">
+      <FormRow>
         <Select
           label="Epic"
           value={epic}
           onValueChange={setEpic}
           options={[{ value: NO_EPIC, label: "No epic" }, ...(choices?.epics ?? []).map((e) => ({ value: e.id, label: e.title }))]}
         />
-      </div>
+      </FormRow>
       {choosing ? (
         <RepositoryChooser repositories={repositories} chosen={chosen} onChange={setChosen} disabled={locked} />
       ) : null}
-      <fieldset className="criteria" disabled={locked}>
-        <legend>Acceptance criteria</legend>
+      <Fieldset legend="Acceptance criteria" className="criteria" disabled={locked}>
         {criteria.map((c, i) => (
           <div className="criterion" key={i}>
             <Input
@@ -160,7 +159,7 @@ export function WorkItemDialog({ client, projectId, onClose, existing, epicId, o
         <Button size="sm" variant="ghost" leadingIcon="plus" onClick={() => setCriteria((all) => [...all, ""])}>
           Add criterion
         </Button>
-      </fieldset>
+      </Fieldset>
     </FormDialog>
   );
 }
@@ -183,14 +182,20 @@ function RepositoryChooser(props: {
     onChange(access ? [...rest, { id, access }] : rest);
   };
   return (
-    <fieldset className="repositoryChooser" disabled={disabled} data-testid="work-item-repositories">
-      <legend>Repositories</legend>
+    <Fieldset
+      legend="Repositories"
+      hint={chosen.length === 0
+        ? "None chosen: this work changes no code. What the agents write is kept with it."
+        : "Each repository it changes gets its own pull request."}
+      disabled={disabled}
+      data-testid="work-item-repositories"
+    >
       {repositories.map((r) => {
         const access = accessOf(r.id);
         return (
           <div className="repositoryChoice" key={r.id}>
             <Checkbox
-              label={<span><span className="mono">{r.name}</span> <span className="muted">{r.defaultBranch}</span></span>}
+              label={<span><span className="ds-mono">{r.name}</span> <span className="muted">{r.defaultBranch}</span></span>}
               checked={Boolean(access)}
               disabled={disabled}
               onCheckedChange={(on) => set(r.id, on === true ? "write" : null)}
@@ -211,11 +216,6 @@ function RepositoryChooser(props: {
           </div>
         );
       })}
-      <p className="muted">
-        {chosen.length === 0
-          ? "None chosen: this work changes no code. What the agents write is kept with it."
-          : "Each repository it changes gets its own pull request."}
-      </p>
-    </fieldset>
+    </Fieldset>
   );
 }
