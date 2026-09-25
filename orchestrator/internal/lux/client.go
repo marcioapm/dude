@@ -128,9 +128,16 @@ type Workload struct {
 // values come from named secrets, filled in by lux, never seen by the
 // workload.
 type Service struct {
-	Name    string   `json:"name"`
-	URL     string   `json:"url"`
+	Name    string   `json:"name,omitempty"`
+	URL     string   `json:"url,omitempty"`
 	Headers []Header `json:"headers,omitempty"`
+	// services: also served on 127.0.0.1 inside the Run
+	// ($LUX_SERVICE_<NAME>_URL), for clients that take a URL.
+	Loopback bool `json:"loopback,omitempty"`
+	// mcpServers: reach the MCP server through this service's loopback
+	// address instead of a url; lux adds the headers, so none reaches the
+	// agent's harness.
+	Service string `json:"service,omitempty"`
 }
 
 type Header struct {
