@@ -3,9 +3,9 @@
  * gutter, avatar, 72px text column). No box:
  *
  *   waiting    the highlight pattern — a full-width attention tint (~9%)
- *              and a 2px attention bar at the left edge — plus the needs-you
- *              badge with its ring, the avatar live, and a ticking wait
- *              clock in attention ink. The only loud turn a transcript has.
+ *              and a 2px attention bar at the left edge. That is the one
+ *              amber signal in the turn: the name, clock and any choice
+ *              chips inside it are neutral.
  *   answered   a plain row with a quiet "Answered · after 4m 12s" tag.
  *              History. The answer follows as its own turn.
  *   dismissed  the same plain row, "Not answered". Never rings.
@@ -14,7 +14,6 @@
 .root {
   --qc-bar: transparent;
   --qc-wash: transparent;
-  --qc-chip-bg: var(--ds-color-active-wash);
   position: relative;
   display: grid;
   grid-template-columns: var(--ds-size-avatar-chat) minmax(0, 1fr);
@@ -38,7 +37,6 @@
 .waiting {
   --qc-bar: var(--ds-tone-attention-solid);
   --qc-wash: color-mix(in srgb, var(--ds-tone-attention-solid) 9%, transparent);
-  --qc-chip-bg: color-mix(in srgb, var(--ds-tone-attention-solid) 14%, transparent);
   padding-top: var(--ds-space-8);
   padding-bottom: var(--ds-space-8);
 }
@@ -70,12 +68,6 @@
 .verb {
   color: var(--ds-color-text-secondary);
 }
-.status {
-  display: inline-flex;
-  align-items: center;
-  align-self: center;
-}
-
 /* Settled marks: the same shape as an intent tag, in a tone that says
    how it ended — success for answered, neutral for dismissed. */
 .tag {
@@ -101,8 +93,9 @@
   background: var(--ds-tone-neutral-bg);
 }
 
-/* The wait: attention ink and ticking while blocked; muted and static once
-   answered ("after 4m 12s") so the cost of the wait stays in the record. */
+/* The wait: ticking while blocked, static once answered ("after 4m 12s")
+   so the cost of the wait stays in the record. Muted either way: the
+   highlight around it already says the turn is waiting. */
 .wait,
 .waited {
   display: inline-flex;
@@ -111,10 +104,7 @@
   font-size: var(--ds-text-xs);
   white-space: nowrap;
 }
-.wait {
-  color: var(--ds-tone-attention-fg);
-  font-weight: var(--ds-weight-medium);
-}
+.wait,
 .waited {
   color: var(--ds-color-text-muted);
 }
@@ -134,8 +124,9 @@
   color: var(--ds-color-text-secondary);
 }
 
-/* The offered choices: filled chips, numbered so "option 2" is a thing a
-   person can say; buttons only with `onChoose`. */
+/* The offered choices: neutral filled chips, numbered so "option 2" is a
+   thing a person can say; buttons only with `onChoose`, and only those
+   take the attention tone, on hover. */
 .options {
   display: flex;
   flex-wrap: wrap;
@@ -155,7 +146,8 @@
   padding: 0 var(--ds-space-12) 0 var(--ds-space-8);
   border: 0;
   border-radius: var(--ds-radius-md);
-  background: var(--qc-chip-bg);
+  background: var(--ds-color-active-wash);
+  box-shadow: inset 0 0 0 1px var(--ds-color-border-subtle);
   color: var(--ds-color-text-primary);
   font-size: var(--ds-text-sm);
   line-height: 1.2;
@@ -176,16 +168,10 @@
   cursor: pointer;
 }
 .optionButton:hover {
-  background: color-mix(in srgb, var(--ds-tone-attention-solid) 24%, transparent);
+  background: color-mix(in srgb, var(--ds-tone-attention-solid) 18%, transparent);
+  box-shadow: inset 0 0 0 1px var(--ds-tone-attention-border);
 }
 .optionButton:focus-visible {
   outline: none;
   box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-color-focus-ring);
-}
-
-.hint {
-  margin-top: var(--ds-space-6);
-  font-size: var(--ds-text-xs);
-  line-height: var(--ds-leading-snug);
-  color: var(--ds-color-text-muted);
 }
