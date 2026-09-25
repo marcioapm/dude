@@ -193,7 +193,8 @@
   box-shadow: inset 2px 0 0 var(--ds-tone-attention-solid);
   flex-shrink: 0;
 }
-/* Inside the block, ink is neutral: the tint and bar are the signal. */
+/* Inside the block, ink is neutral and no lighter than secondary (muted
+   falls under 4.5:1 on the light tint): the tint and bar are the signal. */
 .attentionHead {
   display: flex;
   align-items: center;
@@ -277,7 +278,7 @@
 .attentionKey {
   font-family: var(--ds-font-mono);
   font-size: var(--ds-text-2xs);
-  color: var(--ds-color-text-muted);
+  color: var(--ds-color-text-secondary);
   flex-shrink: 0;
 }
 .attentionWiTitle {
@@ -294,7 +295,7 @@
   gap: var(--ds-space-6);
   min-width: 0;
   font-size: var(--ds-text-xs);
-  color: var(--ds-color-text-muted);
+  color: var(--ds-color-text-secondary);
 }
 .attentionAsker {
   display: inline-flex;
@@ -320,12 +321,12 @@
 .attentionPeopleMore {
   font-size: var(--ds-text-2xs);
   font-variant-numeric: tabular-nums;
-  color: var(--ds-color-text-muted);
+  color: var(--ds-color-text-secondary);
 }
 .attentionMore {
   padding: var(--ds-space-4) var(--ds-space-8) 0;
   font-size: var(--ds-text-xs);
-  color: var(--ds-color-text-muted);
+  color: var(--ds-color-text-secondary);
 }
 
 .scroll {
