@@ -34,8 +34,9 @@ event ledger (`EventRow`) and `LogStream` are the debugging and audit tools
 behind all of these, reached when something looks off.
 
 1. **Calm under load.** Readable is the goal; noise is the enemy. Readable
-   means 15px body and 16px prose at 1.55, 32px rows, 6px radii, a 36px
-   avatar on every speaker, and air between speakers but not within one.
+   means 15px UI body, 16/22px transcript text, 1.5 for long-form Markdown,
+   32px rows, 6px radii, a 40px avatar on every speaker, and air between
+   speakers but not within one — turns are separated by whitespace, not boxes.
    Calm means one accent color, charcoal surfaces told apart by small, even
    shade steps rather than lines, text in close shades rather than white on
    black, and status color only where it means something. A screen with
@@ -111,9 +112,13 @@ import { StatusBadge, EventRow, CostDisplay, Table, Th, Td } from "@dude/design-
 import { formatUsd, STATUS_SPECS, themeColors } from "@dude/design-system";
 ```
 
-Peer deps: `react` and `react-dom` 19. Fonts: Inter and JetBrains Mono are
-named first in the stacks with system fallbacks; load them in the host app (the
-gallery loads Inter from rsms.me for convenience — do not do that in the product).
+Peer deps: `react` and `react-dom` 19. Fonts: the sans stack is the platform
+UI face first (`ui-sans-serif, -apple-system, BlinkMacSystemFont, system-ui,
+"Segoe UI", Roboto`, then Inter as a fallback), the same order Obsidian uses —
+SF Pro on macOS, the distro face (Noto Sans on most) on Linux, Segoe UI on
+Windows. Nothing needs loading for it. Mono is JetBrains Mono with system mono
+fallbacks; ship its files in the host app if you want it everywhere. The
+gallery loads no webfont.
 
 Theme control: the CSS honours `prefers-color-scheme` and
 `prefers-reduced-motion` by itself. `data-theme="light|dark"` on the root
@@ -138,12 +143,12 @@ gallery for every value.
 | Identity | `--ds-identity-{0…7}-{fg,bg}` | Eight muted slots for human avatars, picked by hashing the person's id. About half the chroma of a role colour. |
 | Diff | `--ds-diff-{add,del}-{bg,bg-strong,fg}`, `--ds-diff-hunk-{bg,fg}` | Softer than the tones; read for minutes. |
 | Elevation | `--ds-shadow-1/2/3` | Includes the hairline ring. Theme-dependent. |
-| Type | `--ds-font-sans/mono`, `--ds-text-2xs…4xl`, `--ds-text-prose`, `--ds-text-mono`, `--ds-weight-*`, `--ds-leading-*`, `--ds-tracking-*` | Body is `text-md` = 15px (14 compact); prose 16px (15) at `leading-prose` 1.55; `sm`/`xs` 14/13 (13/12); `2xs` 11px for small-caps labels only; `mono` 13px for tool output and logs in both densities. Headings `lg…4xl` are 16/18/22/26/34. |
-| Space | `--ds-space-0…64`, `--ds-space-{main-pad,card-pad,chat-pad-x,chat-gap,chat-avatar-gap,panel-gap,tree-indent,nav-row-gap}` | 4px grid plus 2 and 6. The named spaces are layout: main pane 24, board card 12, chat turn 16 across and 16 between speakers, avatar gap 12, panel gap 24, tree indent 16, 2 between sidebar rows. |
+| Type | `--ds-font-sans/mono`, `--ds-text-2xs…4xl`, `--ds-text-nav`, `--ds-text-prose`, `--ds-text-mono`, `--ds-weight-*`, `--ds-leading-*`, `--ds-tracking-*` | UI body `text-md` 15px (14 compact); `sm`/`xs` 13/12 and `nav` 14 in both densities; prose 16px (15 compact). Transcript text runs at `leading-chat` 1.375 (22px at 16px); documents and multi-block Markdown at `leading-prose` 1.5; headings at `leading-tight` 1.3. `2xs` 11px for small-caps labels only; `mono` 13px. Headings `lg…4xl` are 16/20/22/26/34. |
+| Space | `--ds-space-0…64`, `--ds-space-{main-pad,card-pad,chat-pad-x,chat-gap,chat-avatar-gap,panel-gap,tree-indent,nav-row-gap}` | 4px grid plus 2 and 6. The named spaces are layout: main pane 24, board card 12, chat turn 16 across and 17 between speakers, avatar gap 16 (so transcript text starts at 16 + 40 + 16 = 72px), panel gap 24, tree indent 16, 2 between sidebar rows. |
 | Radius | `--ds-radius-xs…xl, full` | `md` = 6px is the default (5 compact); `lg` 8 for cards and panels, `xl` 12 for dialogs. |
-| Size | `--ds-size-control-sm/md/lg`, `--ds-size-row-compact/default/comfortable`, `--ds-size-avatar-{xs,sm,md,lg,chat}`, `--ds-size-icon-*` | Controls 28/32/36, rows 28/32/40. Avatars 16/20/24/32 and 36 for the transcript's own. |
+| Size | `--ds-size-control-sm/md/lg`, `--ds-size-row-compact/default/comfortable`, `--ds-size-avatar-{xs,sm,md,lg,chat}`, `--ds-size-badge-{sm,md}`, `--ds-size-chip`, `--ds-size-icon-*` | Controls 28/32/36, rows 28/32/40. Avatars 16/20/24/32 and 40 for the transcript's own. Badges 16/18, chips 22, in both densities. |
 | Motion | `--ds-duration-fast/base/slow/deliberate`, `--ds-ease-*`, `--ds-motion-live`, `--ds-cadence-{spin,breathe,drift,sweep,blink}` | Reduced motion zeroes durations and sets `motion-live` to 0. Cadences are the periods of the live loops; every loop divides by `motion-live`. |
-| Measure | `--ds-measure-message`, `--ds-measure-document` | 70ch at comfortable, 72ch at compact, for chat turns and published documents alike. |
+| Measure | `--ds-measure-message`, `--ds-measure-document` | Chat turns 70ch (72ch compact); documents 700px in both. |
 | Density | `data-density="compact"` | Overrides the tokens listed under Density below; everything else is shared. |
 | Layers | `--ds-z-base…tooltip` | |
 
@@ -486,18 +491,25 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   as open — an unclosed fence is still a code block, an open `**` is still
   bold — so nothing flickers when the closer lands. Finished messages parse
   strictly.
-- `variant="message"` (default) is the chat rhythm: `text-prose` (16px) at
-  1.55, `measure-message`, 6px between blocks. `variant="document"` is for
-  published artifacts: more air, an optional outline. Neither is a blog
-  theme.
+- `variant="message"` (default) is a chat turn. One block sits on the chat
+  line (16/22). Two or more switch to long-form rhythm: 1.5 leading, 0.75em
+  between blocks, headings 1.25em above and one step smaller than in a
+  document. `variant="document"` is for published artifacts: 1em between
+  blocks, 2.5em above headings, h1/h2/h3 at 1.618/1.462/1.318em, a 700px
+  measure and an optional outline.
+- Inline code: 0.85em mono on the sunken fill, 4px radius, a subtle inset
+  ring. Code blocks: a sunken well, 8px radius, 12×16 padding, no frame; the
+  language and copy control appear on hover. Blockquotes: a 2px muted bar
+  and secondary ink. Lists: 1.5em hanging indent. Tables: row hairlines
+  only, no vertical rules, no header fill.
 - Code blocks share their type with `LogStream`; a ```` ```diff ```` fence hands
   off to `DiffView`, so diff colouring exists in one place.
 
 ### Density
 
 There are two, and `comfortable` is the default. It is what the rest of
-this document describes: the Discord/Obsidian reading rhythm, 15px body,
-16px prose, 32px rows, a 36px avatar on each speaker. `compact` is for an
+this document describes: 15px UI body, 16/22px transcript text, 32px rows,
+a 40px avatar on each speaker. `compact` is for an
 operator who wants more on the screen, and is opted into with
 `data-density="compact"` on the root or any subtree (`ThemeProvider`
 `setDensity`).
@@ -510,25 +522,26 @@ shrinking something already small makes it cramped, not dense:
 |---|---|---|---|
 | main pane padding (`space-main-pad`) | 24 | 16 | big layout space: where density comes from |
 | panel gap (`space-panel-gap`) | 24 | 16 | |
-| space between speakers (`space-chat-gap`) | 16 | 10 | turns from one author stay 2px apart in both |
+| space between speakers (`space-chat-gap`) | 17 | 10 | turns from one author stay 2px apart in both |
 | chat turn padding (`space-chat-pad-x`) | 16 | 12 | |
-| chat avatar (`size-avatar-chat`) | 36 | 28 | the gutter follows it |
-| avatar gap (`space-chat-avatar-gap`) | 12 | 10 | |
-| board card padding and gap (`space-card-pad`) | 12 | 10 | |
+| chat avatar (`size-avatar-chat`) | 40 | 32 | the gutter follows it |
+| avatar gap (`space-chat-avatar-gap`) | 16 | 12 | text column at 72px, 56px compact |
+| board card padding and gap (`space-card-pad`) | 12 | 8 | |
 | rows (`size-row-default` / `-comfortable`) | 32 / 40 | 28 / 36 | sidebar, tree, board lanes, tool rows |
 | controls (`size-control-md` / `-lg`) | 32 / 36 | 30 / 34 | a couple of px |
-| body, prose, sm, xs (`text-*`) | 15 / 16 / 14 / 13 | 14 / 15 / 13 / 12 | 1px, never below 12 |
+| body, prose (`text-md`, `text-prose`) | 15 / 16 | 14 / 15 | 1px |
 | default radius (`radius-md`) | 6 | 5 | 1px |
-| measure (`measure-*`) | 70ch | 72ch | `ch` follows the font, so two more characters a line |
+| chat measure (`measure-message`) | 70ch | 72ch | `ch` follows the font, so two more characters a line |
 
 Everything else is shared: icons, `control-sm` and `row-compact` (28, the
-floor), `text-2xs` (11) and `text-mono` (13), chip and badge padding, the
+floor), `text-2xs`/`xs`/`sm`/`nav` (11/12/13/14) and `text-mono` (13), badge
+and chip heights and padding, the document measure, the
 2–6px inner gaps, the tree indent, card and dialog radii, focus rings.
 `src/tokens/density.ts` is the list; `test/density.test.ts` holds it to
 the rule — compact is never roomier, text and radius move at most 1px,
 small tokens are not listed, the big spacing moves at least 4px.
 
-- Body text 15px (14 compact); captions 13–14px; nothing smaller than 11px
+- Body text 15px (14 compact); captions 12–13px; nothing smaller than 11px
   and only in small-caps labels and badges.
 - Rows 32px by default. Use `row-compact` (28px) for logs, event streams and
   anything the operator scans rather than reads. Use `row-comfortable` (40px)
@@ -545,10 +558,21 @@ small tokens are not listed, the big spacing moves at least 4px.
   transcript and board panels on `surface`, cards on `raised`, and a
   panel's header, toolbar or footer on `chrome`. A bar on a different shade
   from the body under it gets no border.
-- A line is kept where it means something: a field's edge, focus, a frame
-  that carries a state (a failed tool call, a waiting question, a steer),
-  diff and table rules, a lane rule on the board. Kept lines are
-  `border-subtle` unless they carry state.
+- Transcript turns are not boxes. Speakers are separated by whitespace;
+  a hovered row takes a full-width `row-hover` wash (3% ink) and shows its
+  actions. Tool calls are a quiet filled row; status is in the glyphs.
+- One emphasis pattern: a full-width tint of the tone (~8–9%) and a 2px bar
+  in the tone at the left edge, with the corners on the bar side square so
+  the bar runs straight. A steer (accent), a waiting question and the
+  sidebar's needs-you block (attention), a failed tool call (danger) use
+  it. Nothing else gets a coloured edge.
+- A line is kept where it means something: focus, the composer's outline
+  (the one raised field), inline code, the divider under a date or
+  session-start label, diff and table row rules, a lane rule on the board.
+  Kept lines are `border-subtle`.
+- Badges, chips and pills centre their label on cap height: the label
+  carries `ds-cap` (`text-box: trim-both cap alphabetic`), so capitals and
+  digits sit in the optical middle instead of 1–1.5px low.
 
 ### Icons
 
