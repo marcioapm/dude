@@ -255,6 +255,15 @@
   font-variant-numeric: tabular-nums;
   color: var(--ds-color-text-muted);
 }
+/* Muted falls under 4.5:1 on the hover and selection washes (light). */
+.row:hover .wiKey,
+.row:hover .more,
+.row:hover .epicCount,
+.selected .wiKey,
+.selected .more,
+.selected .epicCount {
+  color: var(--ds-color-text-secondary);
+}
 /* In a narrow sidebar the title wins; the people stay in the row's title. */
 @container (max-width: 200px) {
   .wiTrailing {
