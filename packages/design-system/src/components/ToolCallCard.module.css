@@ -86,6 +86,8 @@
   font-size: var(--ds-text-xs);
   color: var(--ds-color-text-secondary);
 }
+/* Primary ink, not danger: the row already says "failed" with the tint,
+   the bar and the ✕, and thin red text on a red tint reads poorly. */
 .errorInline {
   flex: 2;
   min-width: 0;
@@ -93,7 +95,8 @@
   white-space: nowrap;
   text-overflow: ellipsis;
   font-size: var(--ds-text-xs);
-  color: var(--ds-tone-danger-fg);
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-primary);
 }
 
 .meta {
@@ -105,9 +108,9 @@
   color: var(--ds-color-text-muted);
   font-variant-numeric: tabular-nums;
 }
-/* Only rendered for a non-zero code: a small danger chip, so it survives
-   in the collapsed row next to a green check when the harness said
-   "completed" but the process said otherwise. */
+/* Only rendered when the code says something the ✕ does not: any non-zero
+   code on a call the harness called completed (it contradicts the check),
+   or a code other than 1 on a failed call (2, 127, 137 name the cause). */
 .exit {
   display: inline-flex;
   align-items: center;
