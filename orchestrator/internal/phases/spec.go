@@ -198,7 +198,11 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		if in.PushBranch != "" {
 			spec.Git.Push = &lux.Push{Branch: in.PushBranch}
 		}
-		if in.ForgeToken != "" {
+		// Only with a repository that uses it: lux keeps a secret out of the
+		// container only as a repository's credential, and one declared
+		// with none would be the workload's. A repository added at a resume
+		// brings it then, as a credential from the start.
+		if in.ForgeToken != "" && len(in.Repos) > 0 {
 			spec.Secrets = append(spec.Secrets, lux.Secret{Name: "GIT_TOKEN", Value: in.ForgeToken})
 		}
 	}
