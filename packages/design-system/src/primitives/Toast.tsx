@@ -69,6 +69,9 @@ function ToastItem({ record, onClose }: { readonly record: ToastRecord; readonly
   const duration = record.duration ?? (tone === "danger" ? Number.POSITIVE_INFINITY : 5000);
   return (
     <RadixToast.Root
+      // A stable hook: Radix also renders a hidden copy of the text for
+      // screen readers for a second, so the text alone matches twice.
+      data-toast={tone}
       className={cx(styles["root"], tone !== "neutral" && styles[tone])}
       duration={duration}
       onOpenChange={(open) => {

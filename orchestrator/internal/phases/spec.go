@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
@@ -187,6 +188,9 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 			repo := lux.Repository{Name: r.Name, URL: r.URL, Ref: r.Ref, Path: RepoPath(r.Name)}
 			if in.ForgeToken != "" {
 				// Used by lux to clone and push; never placed in the container.
+				// Declared as a secret only with a repository that uses it:
+				// one declared with none would be the workload's, and lux
+				// would refuse it as the credential of one added later.
 				repo.Credential = "GIT_TOKEN"
 			}
 			if r.ReadOnly {
@@ -197,11 +201,7 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		if in.PushBranch != "" {
 			spec.Git.Push = &lux.Push{Branch: in.PushBranch}
 		}
-		// Only with a repository that uses it: lux keeps a secret out of the
-		// container only as a repository's credential, and one declared
-		// with none would be the workload's. A repository added at a resume
-		// brings it then, as a credential from the start.
-		if in.ForgeToken != "" && len(in.Repos) > 0 {
+		if slices.ContainsFunc(spec.Git.Repositories, func(r lux.Repository) bool { return r.Credential == "GIT_TOKEN" }) {
 			spec.Secrets = append(spec.Secrets, lux.Secret{Name: "GIT_TOKEN", Value: in.ForgeToken})
 		}
 	}

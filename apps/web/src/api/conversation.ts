@@ -14,7 +14,7 @@
  *    conversation. Nothing lives only in component state.
  */
 
-import type { PersistedEvent, RunStatus } from "@dude/domain";
+import type { PersistedEvent, Run, RunStatus } from "@dude/domain";
 import { EventTypes, TERMINAL_RUN_STATUSES } from "@dude/domain";
 import type { HumanIntent, PlanItem, ToolOutput } from "@dude/design-system/components";
 import { TODO_STATUSES, type ActivityKind, type ToolCallStatus } from "@dude/design-system/tokens";
@@ -157,14 +157,25 @@ export type Turn =
   | ToolTurn | MessageTurn | HumanTurn | ThoughtTurn | PromptTurn | UsageTurn | QuestionTurn | EventTurn | ProgressTurn
   | RepositoryRequestTurn | NoticeTurn;
 
+/** Why dude paused a Run itself (Run.dudePause), as the transcript and the composer say it. */
+export type DudePause = NonNullable<Run["dudePause"]>;
+export const PAUSE_WORDS: Record<DudePause, { parked: string; composer: string }> = {
+  person: {
+    parked: "Parked while it waits for you — nothing is held; your answer resumes it.",
+    composer: "Parked while it waits for you: decide its request above, and that resumes it.",
+  },
+  idle: {
+    parked: "Parked: it went quiet and did not answer a nudge. Resume it when you have looked.",
+    composer: "Parked after going quiet. Resume it to steer.",
+  },
+  repository: { parked: "Paused to bring in a repository.", composer: "Bringing in a repository; it carries on in a moment." },
+};
+
 /** What the transcript says for what dude did to a Run, by event type. */
 const NOTICES: Record<string, { notice: NoticeTurn["notice"]; text: (payload: Record<string, unknown>) => string }> = {
   "run.parked": {
     notice: "parked",
-    // By why dude parked it (runs.dude_pause).
-    text: (p) => p.reason === "person" ? "Parked while it waits for you — nothing is held; your answer resumes it."
-      : p.reason === "idle" ? "Parked: it went quiet and did not answer a nudge. Resume it when you have looked."
-      : "Parked.",
+    text: (p) => PAUSE_WORDS[p.reason as DudePause]?.parked ?? "Parked.",
   },
   "run.unparked": { notice: "unparked", text: () => "Taken back up where it left off." },
   "run.idle_nudged": { notice: "nudged", text: () => "Quiet for a while: nudged to carry on or ask." },

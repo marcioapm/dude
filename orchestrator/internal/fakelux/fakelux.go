@@ -709,8 +709,33 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 }
 
 type specRepo struct {
-	Name, URL, Ref, Credential string
-	Push                       bool
+	Name, URL, Ref string
+	Push           bool
+}
+
+// workloadCredential refuses, as lux does, a repository credential that is
+// a secret the workload sees: a secret the spec declares that none of its
+// own repositories uses as a credential. added are the repositories a
+// resume brings.
+func workloadCredential(rawSpec json.RawMessage, added []lux.Repository) string {
+	var spec lux.Spec
+	_ = json.Unmarshal(rawSpec, &spec)
+	credentials := map[string]bool{}
+	if spec.Git != nil {
+		for _, r := range spec.Git.Repositories {
+			credentials[r.Credential] = true
+		}
+	}
+	declared := map[string]bool{}
+	for _, sec := range spec.Secrets {
+		declared[sec.Name] = true
+	}
+	for _, r := range added {
+		if c := r.Credential; c != "" && declared[c] && !credentials[c] {
+			return fmt.Sprintf("invalid spec: credential %q is a secret the workload sees: use a secret of its own", c)
+		}
+	}
+	return ""
 }
 
 // specRepos are a spec's repositories as lux reads them.
@@ -723,9 +748,8 @@ func specRepos(spec map[string]any) []specRepo {
 		name, _ := r["name"].(string)
 		url, _ := r["url"].(string)
 		ref, _ := r["ref"].(string)
-		credential, _ := r["credential"].(string)
 		push, set := r["push"].(bool)
-		out = append(out, specRepo{Name: name, URL: url, Ref: ref, Credential: credential, Push: push || !set})
+		out = append(out, specRepo{Name: name, URL: url, Ref: ref, Push: push || !set})
 	}
 	return out
 }
@@ -849,23 +873,13 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		// each reported with the resume's request id.
 		var spec map[string]any
 		_ = json.Unmarshal(run.Spec, &spec)
-		// As lux refuses: a credential must be a secret of its own, never
-		// one the workload already sees — a secret the spec declared with
-		// no repository using it is the workload's.
-		credentials := map[string]bool{}
-		for _, repo := range specRepos(spec) {
-			credentials[repo.Credential] = true
-		}
-		secrets, _ := spec["secrets"].([]any)
-		for _, repo := range in.Git.Repositories {
-			c, _ := repo["credential"].(string)
-			for _, sec := range secrets {
-				if m, _ := sec.(map[string]any); c != "" && m["name"] == c && !credentials[c] {
-					s.mu.Unlock()
-					writeErr(w, 422, "invalid_spec", fmt.Sprintf("invalid spec: credential %q is a secret the workload sees: use a secret of its own", c))
-					return
-				}
-			}
+		var added []lux.Repository
+		raw, _ := json.Marshal(in.Git.Repositories)
+		_ = json.Unmarshal(raw, &added)
+		if msg := workloadCredential(run.Spec, added); msg != "" {
+			s.mu.Unlock()
+			writeErr(w, 422, "invalid_spec", msg)
+			return
 		}
 		git, _ := spec["git"].(map[string]any)
 		if git == nil {

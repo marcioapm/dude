@@ -16,17 +16,9 @@ import pytest
 from playwright.sync_api import Page, expect
 
 from fake_github import FakeGitHub
-from helpers import ApiClient
+from helpers import ApiClient, toast, wait_until
 
 pytestmark = pytest.mark.ui
-
-
-def _toast(page: Page, text: str):
-    """A toast, by its text. Not get_by_text alone: for its first second Radix
-    also renders a hidden copy of the text for screen readers, so the text
-    matches twice and the check fails at once — only when it runs in that
-    second, which is why it failed now and then."""
-    return page.get_by_role("region", name="Notifications").get_by_role("listitem").filter(has_text=text)
 
 
 def _sign_in(page: Page, web_url: str, api_key: str) -> None:
@@ -191,7 +183,7 @@ def test_project_settings_manage_repositories_and_delivery(
     page.get_by_role("tab", name="Delivery").click()
     page.get_by_role("checkbox", name="security").click()
     page.get_by_test_id("delivery-save").click()
-    expect(_toast(page, "Delivery saved")).to_be_visible()
+    expect(toast(page, "Delivery saved")).to_be_visible()
 
     project = client.get(f"/v1/projects/{forge_project['id']}").json()
     assert "docs" in [r["name"] for r in project["repositories"]]
@@ -302,7 +294,7 @@ def test_epics_are_made_ordered_and_removed_from_the_sidebar_and_board(
     expect(page.get_by_role("dialog")).to_contain_text("1 work item will stay in the project")
     page.get_by_test_id("epic-delete").click()
     expect(page.get_by_role("dialog")).to_have_count(0)
-    expect(_toast(page, "Billing and refunds deleted")).to_be_visible()
+    expect(toast(page, "Billing and refunds deleted")).to_be_visible()
     expect(page.get_by_role("treeitem", name="Billing and refunds")).to_have_count(0)
     assert [e["title"] for e in client.get(f"/v1/projects/{forge_project['id']}/epics").json()["epics"]] == ["Onboarding"]
     assert client.get(f"/v1/work-items/{item['id']}").json()["epicId"] is None
@@ -342,7 +334,6 @@ def test_an_agents_progress_shows_in_its_chat(
         "implementer": {"model": "fake/tools"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
     item = client.create_work_item(forge_project["id"], "Report progress")
     assert client.post(f"/v1/work-items/{item['id']}/deliver").status_code == 201
-    from helpers import wait_until
     implement = wait_until(lambda: next((r for r in client.work_item_runs(item["id"]) if r["phase"] == "implement"), None),
                            timeout=30, message="no implementer")
     wait_until(lambda: [e for e in client.events(runId=implement["id"]) if e["eventType"] == "agent.custom.progress"][1:],
@@ -369,7 +360,6 @@ def test_a_person_approves_a_repository_an_agent_asked_for(
         "implementer": {"model": "fake/request"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
     item = client.create_work_item(forge_project["id"], "Needs the client", repositories=[{"id": target["id"]}])
     assert client.post(f"/v1/work-items/{item['id']}/deliver").status_code == 201
-    from helpers import wait_until
     implement = wait_until(lambda: next((r for r in client.work_item_runs(item["id"]) if r["phase"] == "implement"), None),
                            timeout=30, message="no implementer")
     wait_until(lambda: client.get("/v1/repository-requests", params={"runId": implement["id"]}).json()["repositoryRequests"],
@@ -398,7 +388,6 @@ def test_a_parked_agent_is_answered_from_its_chat(
         "implementer": {"model": "fake/ask"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
     item = client.create_work_item(forge_project["id"], "Ask, then wait")
     assert client.post(f"/v1/work-items/{item['id']}/deliver").status_code == 201
-    from helpers import wait_until
     implement = wait_until(
         lambda: next((r for r in client.work_item_runs(item["id"]) if r["phase"] == "implement" and r["status"] == "paused"), None),
         timeout=30, message="the waiting agent was never parked")
@@ -408,7 +397,7 @@ def test_a_parked_agent_is_answered_from_its_chat(
     expect(page.get_by_test_id("chat-notice")).to_contain_text("Parked while it waits for you")
     # Paused, yet the composer takes the answer: that is what resumes it.
     page.get_by_role("group", name="Answer with one of").get_by_role("button", name="yes").click()
-    wait_until(lambda: next(r for r in client.work_item_runs(item["id"]) if r["id"] == implement["id"])["status"] == "completed",
+    wait_until(lambda: client.get_run(implement["id"])["status"] == "completed",
                timeout=30, message="the answer did not resume the parked agent")
     expect(page.get_by_test_id("chat-notice").last).to_contain_text("Taken back up")
     assert console_errors == []
@@ -426,7 +415,6 @@ def test_an_agent_parked_on_a_repository_request_says_what_resumes_it(
         "implementer": {"model": "fake/wait"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
     item = client.create_work_item(forge_project["id"], "Needs the client first", repositories=[{"id": target["id"]}])
     assert client.post(f"/v1/work-items/{item['id']}/deliver").status_code == 201
-    from helpers import wait_until
     implement = wait_until(
         lambda: next((r for r in client.work_item_runs(item["id"]) if r["phase"] == "implement" and r.get("dudePause") == "person"), None),
         timeout=30, message="the waiting agent was never parked")
@@ -437,6 +425,6 @@ def test_an_agent_parked_on_a_repository_request_says_what_resumes_it(
     # No question to answer: the composer says what does resume it.
     expect(page.get_by_placeholder("decide its request above")).to_be_visible()
     page.get_by_test_id("repository-request").get_by_role("button", name="Approve").click()
-    wait_until(lambda: next(r for r in client.work_item_runs(item["id"]) if r["id"] == implement["id"])["status"] == "completed",
+    wait_until(lambda: client.get_run(implement["id"])["status"] == "completed",
                timeout=30, message="the approval did not resume the parked agent")
     assert console_errors == []

@@ -28,7 +28,7 @@ import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, runLabel } from "@
 import type { AgentRole, PersistedEvent } from "@dude/domain";
 import type { ApiClient, RunDetail } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
-import { apply, emptyProjection, snapshot, type Turn } from "../api/conversation.ts";
+import { PAUSE_WORDS, apply, emptyProjection, snapshot, type Turn } from "../api/conversation.ts";
 import type { ComposerSubmission } from "@dude/design-system/components";
 import { useEventStream } from "../hooks/useEventStream.ts";
 
@@ -242,7 +242,11 @@ export function RunScreen({ client, runId, title, breadcrumb }: RunScreenProps) 
                 // A paused Run takes an answer (a parked one is resumed by it),
                 // not a steer.
                 disabled={!isLive || (run.status === "paused" && !conversation.openQuestion)}
-                disabledReason={!isLive ? "This run has finished — nobody would hear it." : PAUSED_REASON[run.dudePause ?? "person-paused"]}
+                disabledReason={
+                  !isLive ? "This run has finished — nobody would hear it."
+                    : run.dudePause ? PAUSE_WORDS[run.dudePause].composer
+                    : "This run is paused. Resume it to steer."
+                }
                 onSubmit={send}
               />
             }
@@ -287,14 +291,6 @@ export function RunScreen({ client, runId, title, breadcrumb }: RunScreenProps) 
     </div>
   );
 }
-
-/** Why the composer is closed on a paused Run, by who paused it and why (Run.dudePause). */
-const PAUSED_REASON: Record<string, string> = {
-  "person": "Parked while it waits for you: decide its request above, and that resumes it.",
-  "idle": "Parked after going quiet. Resume it to steer.",
-  "repository": "Bringing in a repository; it carries on in a moment.",
-  "person-paused": "This run is paused. Resume it to steer.",
-};
 
 function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: boolean,
   decide?: (requestId: string, approve: boolean) => void) {

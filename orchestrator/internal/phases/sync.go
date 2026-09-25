@@ -91,9 +91,6 @@ type phaseRun struct {
 	TurnDone, HasDirectives bool
 	// A person approved a repository the lux Run does not have yet.
 	RepoApproved bool
-	// The lux Run holds a repository this work may change: there is
-	// something to push.
-	Writable bool
 	// Why dude paused it itself, and so when it resumes it: "repository",
 	// "person" or "idle" (migration 021); "" for a person's own pause.
 	DudePause string
@@ -123,8 +120,6 @@ const runColumns = `r.id, r.organization_id, r.project_id, r.work_item_id, r.pha
 	EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL),
 	EXISTS (SELECT 1 FROM repository_requests q JOIN repositories repo ON repo.id = q.repository_id
 	        WHERE q.run_id = r.id AND q.status = 'approved' AND NOT (repo.name = ANY (r.lux_repositories))),
-	EXISTS (SELECT 1 FROM work_item_repositories wr JOIN repositories repo ON repo.id = wr.repository_id
-	        WHERE wr.work_item_id = r.work_item_id AND wr.access = 'write' AND repo.name = ANY (r.lux_repositories)),
 	COALESCE(r.dude_pause, ''), ask.open,
 	COALESCE(r.waiting_since < now() - make_interval(secs => lim.park_secs), false) AND ask.open,
 	` + resumable + `,
@@ -179,7 +174,7 @@ func scan(row pgx.Row) (phaseRun, error) {
 	var r phaseRun
 	err := row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.WorkItemID, &r.Phase, &r.Status, &r.Control,
 		&r.Category, &r.LuxRunID, &r.LuxState, &r.LuxStopReason,
-		&r.PushRequestID, &r.PushBranch, &r.BaseRefs, &r.BaseSHAs, &r.TurnDone, &r.HasDirectives, &r.RepoApproved, &r.Writable,
+		&r.PushRequestID, &r.PushBranch, &r.BaseRefs, &r.BaseSHAs, &r.TurnDone, &r.HasDirectives, &r.RepoApproved,
 		&r.DudePause, &r.Waiting, &r.ParkNow, &r.Resumable, &r.Quiet, &r.Nudged, &r.QuietSince,
 		&r.PushResult, &r.PRFeedback, &r.FindingIDs, &r.BlockingSeverities, &r.Attempt)
 	return r, err
@@ -297,10 +292,7 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 	// retried returns the lux Run the first one created.
 	lr, err := s.Lux.Submit(ctx, spec, r.ID)
 	if err != nil {
-		if le, ok := lux.AsError(err); ok && !le.Retryable() {
-			return s.fail(ctx, r, fmt.Sprintf("lux refused the run: %s", le.Message))
-		}
-		return s.retryLater(ctx, r, err)
+		return s.retryOrFail(ctx, r, err, "lux refused the run")
 	}
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		// Guarded on still being pending: an abort that raced the submit wins,
@@ -603,7 +595,10 @@ func (s *Syncer) followOutput(ctx context.Context, r phaseRun) error {
 // Idempotent end to end: each piece is recorded before the next is asked
 // for, so a restart resumes the sequence.
 func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
-	pushes := r.PushBranch != "" && r.Writable
+	// Pushed whenever it names a branch: lux pushes each repository it may
+	// change and reports the rest skipped, so what it answers is what the
+	// phase produced — possibly nothing.
+	pushes := r.PushBranch != ""
 	if pushes && r.PushResult == nil {
 		// Only a state lux has already reported as over rules the push out.
 		// Anything else is asked of lux itself: its lifecycle events trail
@@ -685,8 +680,8 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 			Repo, Branch, Commit, Status, Error string
 		} `json:"results"`
 	}
-	if err := json.Unmarshal(r.PushResult, &push); err != nil || len(push.Results) == 0 {
-		return nil, fmt.Errorf("lux reported no push result")
+	if err := json.Unmarshal(r.PushResult, &push); err != nil {
+		return nil, fmt.Errorf("lux's push result is unreadable: %w", err)
 	}
 	var repos []delivery.Repository
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) (err error) {
@@ -877,12 +872,8 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 		err = nil
 		lr.State = "resuming"
 	}
-	if le, ok := lux.AsError(err); ok && !le.Retryable() {
-		// Refused, and it would be refused again: said, not retried forever.
-		return true, s.fail(ctx, r, fmt.Sprintf("lux refused to resume the run: %s", le.Message))
-	}
 	if err != nil {
-		return true, s.retryLater(ctx, r, err)
+		return true, s.retryOrFail(ctx, r, err, "lux refused to resume the run")
 	}
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		// The agent is starting a new turn; the old "done" no longer holds.
@@ -1151,6 +1142,15 @@ var errRetry = errors.New("retrying later")
 // retryLater backs a Run off after a failure that may pass. A lux Run lux
 // no longer has will not come back, whichever call found out: that fails
 // the Run instead of retrying it forever.
+// retryOrFail: a request lux refused, and would refuse again, fails the Run
+// with lux's reason; anything else is tried again later.
+func (s *Syncer) retryOrFail(ctx context.Context, r phaseRun, cause error, refused string) error {
+	if le, ok := lux.AsError(cause); ok && !le.Retryable() {
+		return s.fail(ctx, r, fmt.Sprintf("%s: %s", refused, le.Message))
+	}
+	return s.retryLater(ctx, r, cause)
+}
+
 func (s *Syncer) retryLater(ctx context.Context, r phaseRun, cause error) error {
 	if lux.IsNotFound(cause) {
 		return s.fail(ctx, r, "lux no longer has this Run")
