@@ -1189,7 +1189,7 @@ func TestAnAgentWaitingOnARepositoryIsParkedAndTheApprovalResumesIt(t *testing.T
 		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
 			return fakelux.Behaviour{Hang: true}
 		}
-		return fakelux.Behaviour{CallTools: [][2]string{{"request_repository", `{"repository":"web","reason":"the client"}`}},
+		return fakelux.Behaviour{CallTools: [][2]string{{"request_repository", `{"repository":"web","reason":"the client","wait":true}`}},
 			Reply: "Done.", Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
 	}
 	wi := w.workItem()
@@ -1211,6 +1211,32 @@ func TestAnAgentWaitingOnARepositoryIsParkedAndTheApprovalResumesIt(t *testing.T
 	})
 	if r := w.lux.Runs()[0]; r.Resumed != 1 || len(r.Inputs) != 1 || !strings.Contains(r.Inputs[0], "web is now checked out") {
 		t.Errorf("resumed %d times, told %q", r.Resumed, r.Inputs)
+	}
+}
+
+// A request the agent does not wait on does not hold its turn: it ends,
+// and the phase finishes, with the request left for a person.
+func TestARequestTheAgentDoesNotWaitOnLetsItsTurnEnd(t *testing.T) {
+	w := newWorld(t)
+	w.withTools()
+	w.syncer.ParkAfter = 100 * time.Millisecond
+	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+		VALUES ($1, $2, $3, 'web', 'https://github.com/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
+			return fakelux.Behaviour{Hang: true}
+		}
+		return fakelux.Behaviour{CallTools: [][2]string{{"request_repository", `{"repository":"web","reason":"curious"}`}},
+			Reply: "Done.", Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
+	}
+	wi := w.workItem()
+	w.names(wi, w.repoID)
+	w.deliver(wi)
+	w.until("the implementer to finish", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND phase = 'implement' AND status = 'completed'`, wi) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND dude_pause IS NOT NULL`, wi); n != 0 {
+		t.Errorf("parked on a request the agent did not wait on")
 	}
 }
 

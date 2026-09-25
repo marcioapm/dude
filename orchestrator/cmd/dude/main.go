@@ -85,15 +85,16 @@ func run(args []string, out io.Writer) error {
 		return show(out, *asJSON, call("list_repositories", map[string]any{}))
 	case "repo request":
 		write := fs.Bool("write", false, "you need to change it (an implementer); otherwise read only")
+		wait := fs.Bool("wait", false, "you cannot go on without it: end your turn after, and be resumed when it is decided")
 		reason := fs.String("reason", "", "why this work needs it")
 		args, err := parse(fs, rest)
 		if err != nil {
 			return err
 		}
 		if len(args) != 1 || *reason == "" {
-			return errors.New(`usage: dude repo request NAME --reason "why" [--write]`)
+			return errors.New(`usage: dude repo request NAME --reason "why" [--write] [--wait]`)
 		}
-		return show(out, *asJSON, call("request_repository", map[string]any{"repository": args[0], "write": *write, "reason": *reason}))
+		return show(out, *asJSON, call("request_repository", map[string]any{"repository": args[0], "write": *write, "reason": *reason, "wait": *wait}))
 	case "work create":
 		title := fs.String("title", "", "what should change, in one line")
 		goal := fs.String("goal", "", "why, and what someone needs to know")
@@ -292,7 +293,7 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
                                              record work found outside your task
                                              (a person decides whether it is done)
   dude repo list                             the project's repositories: which you have, which you could ask for
-  dude repo request NAME --reason R [--write]
+  dude repo request NAME --reason R [--write] [--wait]
                                              ask a person for another of them
   dude ask "question" [--choice C]...        ask a person; then end your turn —
                                              the answer is your next message

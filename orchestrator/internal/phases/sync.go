@@ -103,7 +103,10 @@ type phaseRun struct {
 	Resumable bool
 	// Its agent has been quiet mid-turn for the project's idle limit (since
 	// the nudge, if it was nudged).
-	Quiet, Nudged                  bool
+	Quiet, Nudged bool
+	// When its quiet began, as the sweep read it: a pause or nudge acts only
+	// if the agent has done nothing since.
+	QuietSince                     *time.Time
 	PushResult                     json.RawMessage
 	PRFeedback                     json.RawMessage
 	FindingIDs, BlockingSeverities []string
@@ -120,7 +123,7 @@ const runColumns = `r.id, r.organization_id, r.project_id, r.work_item_id, r.pha
 	COALESCE(r.dude_pause, ''), ask.open,
 	COALESCE(r.waiting_since < now() - make_interval(secs => lim.park_secs), false) AND ask.open,
 	` + resumable + `,
-	COALESCE(lim.idle_secs > 0 AND ` + quiet + `, false), r.idle_nudged_at IS NOT NULL,
+	COALESCE(lim.idle_secs > 0 AND ` + quiet + `, false), r.idle_nudged_at IS NOT NULL, ` + quietSince + `,
 	r.push_result, r.pr_feedback, r.finding_ids, r.blocking_severities, r.attempt`
 
 // runFrom is what runColumns reads from: the Run, whether it has anything
@@ -140,7 +143,10 @@ const runFrom = `runs r JOIN projects p ON p.id = r.project_id
 // nudge once it has had one.
 const quiet = `(r.status = 'running' AND r.lux_state = 'running' AND r.agent_busy_at IS NOT NULL
 	AND r.turn_done_at IS NULL AND r.waiting_since IS NULL AND cardinality(r.open_tool_calls) = 0
-	AND GREATEST(COALESCE(r.agent_active_at, r.agent_busy_at), r.idle_nudged_at) < now() - make_interval(secs => lim.idle_secs))`
+	AND ` + quietSince + ` < now() - make_interval(secs => lim.idle_secs))`
+
+// quietSince (SQL): when the agent last did anything, or was nudged.
+const quietSince = `GREATEST(COALESCE(r.agent_active_at, r.agent_busy_at), r.idle_nudged_at)`
 
 // resumable (SQL): a paused Run that is due to be resumed. A person asked;
 // or dude paused it itself and its reason is over — a repository to bring
@@ -169,7 +175,7 @@ func scan(row pgx.Row) (phaseRun, error) {
 	err := row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.WorkItemID, &r.Phase, &r.Status, &r.Control,
 		&r.Category, &r.LuxRunID, &r.LuxState, &r.LuxStopReason,
 		&r.PushRequestID, &r.PushBranch, &r.BaseRefs, &r.BaseSHAs, &r.TurnDone, &r.HasDirectives, &r.RepoApproved,
-		&r.DudePause, &r.Waiting, &r.ParkNow, &r.Resumable, &r.Quiet, &r.Nudged,
+		&r.DudePause, &r.Waiting, &r.ParkNow, &r.Resumable, &r.Quiet, &r.Nudged, &r.QuietSince,
 		&r.PushResult, &r.PRFeedback, &r.FindingIDs, &r.BlockingSeverities, &r.Attempt)
 	return r, err
 }
@@ -879,17 +885,28 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 			-- grace period starts again.
 			waiting_since = CASE WHEN $3 THEN now() END,
 			turn_done_at = NULL, agent_busy_at = NULL WHERE id = $1 AND status = 'paused'`, r.ID, lr.State, r.Waiting)
-		if err != nil || r.DudePause == "" || r.DudePause == "repository" {
+		if err != nil {
 			return err
 		}
-		if r.DudePause == "idle" {
-			// The flag its park raised, lowered.
-			if _, err := delivery.SetWorkItemStatusTx(ctx, tx, r.Org, r.ProjectID, r.WorkItemID, "awaiting_input", "running",
+		// Taken back up from a park — whoever resumes it: a person may have
+		// made dude's park their own pause meanwhile.
+		var last, reason, workItemStatus string
+		if err := tx.QueryRow(ctx, `SELECT event_type, COALESCE(payload->>'reason', ''), COALESCE(payload->>'workItemStatus', '')
+			FROM events WHERE run_id = $1 AND event_type IN ($2, $3) ORDER BY cursor DESC LIMIT 1`,
+			r.ID, evParked, evUnparked).Scan(&last, &reason, &workItemStatus); err != nil || last != evParked {
+			if db.IsNotFound(err) {
+				return nil
+			}
+			return err
+		}
+		if workItemStatus != "" {
+			// The flag its idle park raised, lowered.
+			if _, err := delivery.SetWorkItemStatusTx(ctx, tx, r.Org, r.ProjectID, r.WorkItemID, "awaiting_input", workItemStatus,
 				"a person resumed the agent"); err != nil {
 				return err
 			}
 		}
-		return s.event(ctx, tx, r, evUnparked, ledger.ActorSystem, map[string]any{"reason": r.DudePause})
+		return s.event(ctx, tx, r, evUnparked, ledger.ActorSystem, map[string]any{"reason": reason})
 	}); err != nil {
 		return true, err
 	}
@@ -904,21 +921,35 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 // later pause or resume wins. A pause other than for a repository is a
 // park, and says so in the Run's chat; an idle one also raises the work
 // item for a person to look at (lowered when they resume it).
+//
+// The sweep decided from what it read; the pause checks it still holds — a
+// Run parked for a person still waits on one, an idle one has done nothing
+// since — so an answer or a word from the agent in between wins.
 func (s *Syncer) requestPause(ctx context.Context, r phaseRun, kind, why string) error {
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE runs SET control = 'pause_graceful', control_requested_at = now(), control_reason = $2,
+		tag, err := tx.Exec(ctx, `UPDATE runs r SET control = 'pause_graceful', control_requested_at = now(), control_reason = $2,
 			dude_pause = $3
-			WHERE id = $1 AND control = 'none' AND status = 'running'`, r.ID, why, kind)
+			WHERE r.id = $1 AND r.control = 'none' AND r.status = 'running'
+			  AND ($3 <> 'person' OR (r.waiting_since IS NOT NULL AND `+delivery.OpenAsk+`))
+			  AND ($3 <> 'idle' OR (r.turn_done_at IS NULL AND r.waiting_since IS NULL
+			       AND cardinality(r.open_tool_calls) = 0 AND `+quietSince+` = $4))`, r.ID, why, kind, r.QuietSince)
 		if err != nil || tag.RowsAffected() == 0 || kind == "repository" {
 			return err
 		}
+		var workItemStatus string
 		if kind == "idle" {
-			if _, err := delivery.SetWorkItemStatusTx(ctx, tx, r.Org, r.ProjectID, r.WorkItemID, "running", "awaiting_input",
+			// Raised for a person to look at, from whatever it was (running,
+			// in review); put back when the Run is taken up again.
+			if err := tx.QueryRow(ctx, `SELECT status::text FROM work_items WHERE id = $1`, r.WorkItemID).Scan(&workItemStatus); err != nil {
+				return err
+			}
+			if _, err := delivery.SetWorkItemStatusTx(ctx, tx, r.Org, r.ProjectID, r.WorkItemID, "", "awaiting_input",
 				"the agent went quiet"); err != nil {
 				return err
 			}
 		}
-		return s.event(ctx, tx, r, evParked, ledger.ActorSystem, map[string]any{"reason": kind, "message": why})
+		return s.event(ctx, tx, r, evParked, ledger.ActorSystem,
+			map[string]any{"reason": kind, "message": why, "workItemStatus": db.Nullable(workItemStatus)})
 	})
 }
 
@@ -927,7 +958,9 @@ func (s *Syncer) requestPause(ctx context.Context, r phaseRun, kind, why string)
 // stuck. Once: if it stays quiet as long again, it is parked for a person.
 func (s *Syncer) nudge(ctx context.Context, r phaseRun) error {
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE runs SET idle_nudged_at = now() WHERE id = $1 AND idle_nudged_at IS NULL`, r.ID)
+		// Only if it has done nothing since the sweep saw it quiet.
+		tag, err := tx.Exec(ctx, `UPDATE runs r SET idle_nudged_at = now() WHERE r.id = $1 AND r.idle_nudged_at IS NULL
+			AND r.waiting_since IS NULL AND cardinality(r.open_tool_calls) = 0 AND `+quietSince+` = $2`, r.ID, r.QuietSince)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
