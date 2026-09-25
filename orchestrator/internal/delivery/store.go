@@ -345,11 +345,11 @@ func (r RunRef) Event(typ, actorType string, payload map[string]any) ledger.Even
 // a person's answer.
 const openQuestion = `EXISTS (SELECT 1 FROM questions q WHERE q.run_id = r.id AND q.status = 'open')`
 
-// OpenAsk is true (SQL, over a Run aliased r) while the Run has something
-// open for a person: a question, or a repository it asked for. An agent
-// that ends its turn with one open is waiting on a person, not done.
+// OpenAsk is true (SQL, over a Run aliased r) while the Run is blocked on a
+// person: a question, or a repository it said it cannot go on without. An
+// agent that ends its turn with one open is waiting, not done.
 const OpenAsk = `(` + openQuestion + `
-	OR EXISTS (SELECT 1 FROM repository_requests q WHERE q.run_id = r.id AND q.status = 'pending'))`
+	OR EXISTS (SELECT 1 FROM repository_requests q WHERE q.run_id = r.id AND q.status = 'pending' AND q.blocking))`
 
 // HasOpenQuestion says whether the Run has a question waiting on a person.
 func HasOpenQuestion(ctx context.Context, tx pgx.Tx, runID string) (bool, error) {

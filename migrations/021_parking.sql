@@ -26,6 +26,11 @@ ALTER TABLE runs
   -- When it was nudged for being quiet; cleared when it does something.
   ADD COLUMN idle_nudged_at  timestamptz;
 
+-- A repository request the agent cannot go on without: it ends its turn on
+-- it, and waits (parked, past the grace) for the decision. Otherwise it
+-- carries on, and a turn that ends with the request pending is done.
+ALTER TABLE repository_requests ADD COLUMN blocking boolean NOT NULL DEFAULT false;
+
 -- The Run's agent no longer keeps the whole turn's reply: a question is
 -- asked with a tool, not read out of the reply.
 ALTER TABLE runs DROP COLUMN agent_turn_reply;

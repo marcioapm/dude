@@ -44,7 +44,8 @@ var tools = []tool{
 		"told when one is decided.", nil, listRepositories),
 	define("request_repository", "Ask for another of the project's repositories when this work needs it — "+
 		"to read code this depends on, or (an implementer) to change it too. A person decides. Carry on meanwhile if "+
-		"you can; if you cannot go on without it, end your turn — you are resumed with it, or told it was declined.",
+		"you can; if you cannot go on without it, ask with wait: true and end your turn — you are resumed with it, "+
+		"or told it was declined.",
 		nil, requestRepository),
 	define("create_work_item", "Record a piece of work you found that is outside your task — a bug, a "+
 		"follow-up, a part to split out — as a new work item in this project. It is not started: a person reads it "+
@@ -274,6 +275,7 @@ type requestRepoIn struct {
 	Repository string `json:"repository" jsonschema:"the repository's name, or owner/name, as the organization knows it"`
 	Write      bool   `json:"write,omitempty" jsonschema:"you need to change it (it gets its own pull request); otherwise read only"`
 	Reason     string `json:"reason" jsonschema:"why this work needs it, for the person deciding"`
+	Wait       bool   `json:"wait,omitempty" jsonschema:"you cannot go on without it: end your turn after asking, and you are resumed when a person decides (otherwise carry on; a later phase gets it if approved)"`
 }
 
 type requestRepoOut struct {
@@ -328,9 +330,9 @@ func requestRepository(ctx context.Context, tx pgx.Tx, c Caller, in requestRepoI
 		access = "write"
 	}
 	id := ids.New(ids.RepoRequest)
-	tag, err := tx.Exec(ctx, `INSERT INTO repository_requests (id, organization_id, work_item_id, run_id, repository_id, access, reason)
-		VALUES ($1, $2, $3, $4, $5, $6::repository_access, $7) ON CONFLICT DO NOTHING`,
-		id, c.Org, c.WorkItemID, c.RunID, repo.ID, access, reason)
+	tag, err := tx.Exec(ctx, `INSERT INTO repository_requests (id, organization_id, work_item_id, run_id, repository_id, access, reason, blocking)
+		VALUES ($1, $2, $3, $4, $5, $6::repository_access, $7, $8) ON CONFLICT DO NOTHING`,
+		id, c.Org, c.WorkItemID, c.RunID, repo.ID, access, reason, in.Wait)
 	if err != nil {
 		return requestRepoOut{}, err
 	}
@@ -341,10 +343,14 @@ func requestRepository(ctx context.Context, tx pgx.Tx, c Caller, in requestRepoI
 		map[string]any{"requestId": id, "repository": repo.Name, "repositoryId": repo.ID, "access": access, "reason": reason})); err != nil {
 		return requestRepoOut{}, err
 	}
-	return requestRepoOut{RequestID: id, Status: "pending", Next: "Do not wait or check for it: a person may take " +
-		"a while. Carry on with what you can without " + repo.Name + ". If they approve, you will be paused and " +
-		"resumed with it checked out, and told where, in a message; if not, a message will say so. If you cannot " +
-		"go on without it, end your turn."}, nil
+	next := "Do not wait or check for it: a person may take a while. Carry on with what you can without " +
+		repo.Name + ". If they approve while you work, you will be paused and resumed with it checked out, and " +
+		"told where, in a message; if not, a message will say so."
+	if in.Wait {
+		next = "End your turn now. When a person decides, you are resumed: with " + repo.Name +
+			" checked out, and told where, or told it was declined."
+	}
+	return requestRepoOut{RequestID: id, Status: "pending", Next: next}, nil
 }
 
 // ---- list_repositories ----------------------------------------------------

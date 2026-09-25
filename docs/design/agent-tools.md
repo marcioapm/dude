@@ -29,9 +29,12 @@ and shown so in the UI; nothing an agent creates starts work on its own.
 ## Waiting on a person
 
 Anything that blocks on a person goes through a tool, so dude knows the
-model's intent: `ask_person`, and `request_repository` when the agent
-ends its turn on it. A turn that ends with one of these open is not done.
-The Run is **waiting**.
+model's intent: `ask_person`, and `request_repository` with `wait: true`
+(`dude repo request --wait`), which the agent uses when it cannot go on
+without the repository. A turn that ends with one of these open is not
+done: the Run is **waiting**. A request without `wait` doesn't hold the
+turn. The agent carries on, and a later phase gets the repository if it is
+approved.
 
 - **Grace period, then parked.** A waiting Run stays live for the project's
   `parkAfterMinutes` (default 10), so someone at their desk answers a live
@@ -50,8 +53,12 @@ The Run is **waiting**.
 - **Idle nudge instead of a timeout** (optional, `idleNudgeMinutes`, 0 = off).
   An agent mid-turn that has said nothing, runs no tool and waits on
   nobody for that long gets one interrupting nudge: "carry on, or ask".
-  Still quiet as long again, it is parked (`dude_pause = 'idle'`) and the
-  work item goes to awaiting input. Only a person's Resume takes it up.
+  Still quiet as long again, it is parked (`dude_pause = 'idle'`). The work
+  item goes to awaiting input, and back to its earlier status when a person
+  resumes the Run. Only a person's Resume takes it up.
+- **Decisions are rechecked.** A park or a nudge re-checks, as it writes,
+  that the Run still waits or is still quiet, so an answer or a word from
+  the agent in between wins.
 - **Asks die with their Run.** When a Run completes, fails, is aborted or
   is lost, its open questions and pending requests are cancelled
   (triggers). The chat shows them as "No longer needed". Answering one
