@@ -128,7 +128,7 @@ export function NavigationSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
 
-      <Block id="nav-sidebar-states" title="Sidebar — quiet, filtered, narrow, empty, loading" note="A quiet project shows no roll-ups, no pinned section and no attention ink anywhere. A filter forces the ancestors open and greys the chevrons. Below 296px the chips drop their labels and keep mark + count. Empty and loading are one line and skeleton rows respectively.">
+      <Block id="nav-sidebar-states" title="Sidebar — quiet, filtered, narrow, empty, loading" note="A quiet project shows no roll-ups, no pinned section and no attention ink anywhere. A filter forces the ancestors open and greys the chevrons. Below 340px the chips other than Needs you drop their labels and keep mark + count. Empty and loading are one line and skeleton rows respectively.">
         <Panes mode={mode}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 12 }}>
             {(
