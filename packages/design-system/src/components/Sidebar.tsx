@@ -65,9 +65,8 @@ export interface SidebarProps extends Omit<HTMLAttributes<HTMLElement>, "onSelec
  *   tree        Project → Epic → Work item → Session
  *   footer      the signed-in person, connection state
  *
- * Calm at fifty work items: rows are 24/28px, colour appears only on the
- * status marks, and the only wash on the surface is the attention tint on
- * rows that need a person.
+ * Calm at fifty work items: colour appears only on the status marks, and
+ * the one amber area is the needs-you block.
  */
 export function Sidebar({
   projects,
@@ -236,8 +235,9 @@ export interface AttentionListProps {
 /**
  * The pinned "Needs you" section: one row per blocked work item, across
  * every project, in the order given (the caller sorts — oldest wait first
- * is the sensible default). Each row says what, where, who is asking and
- * who it waits on. It is a list, not a tree: nothing to expand.
+ * is the sensible default). Each row says what, who is asking, what they
+ * ask and who it waits on; where it lives (project · epic) is the row's
+ * tooltip, so the ask gets the width. It is a list, not a tree.
  */
 export function AttentionList({ items, selected, onSelect, max = 5 }: AttentionListProps) {
   const [open, setOpen] = useState(true);
@@ -260,7 +260,13 @@ export function AttentionList({ items, selected, onSelect, max = 5 }: AttentionL
             const where = it.epic ? `${it.project.name} · ${it.epic.title}` : it.project.name;
             return (
               <li key={it.workItem.id}>
-                <button type="button" className={cx(styles["attentionRow"], isSel && styles["attentionRowSelected"])} onClick={() => onSelect?.(ref, it.session ?? it.workItem)} aria-current={isSel ? "true" : undefined}>
+                <button
+                  type="button"
+                  className={cx(styles["attentionRow"], isSel && styles["attentionRowSelected"])}
+                  onClick={() => onSelect?.(ref, it.session ?? it.workItem)}
+                  aria-current={isSel ? "true" : undefined}
+                  title={where}
+                >
                   <span className={styles["attentionMain"]}>
                     <span className={styles["attentionWi"]}>
                       {it.workItem.key ? <span className={styles["attentionKey"]}>{it.workItem.key}</span> : null}
@@ -269,19 +275,15 @@ export function AttentionList({ items, selected, onSelect, max = 5 }: AttentionL
                       </span>
                     </span>
                     <span className={styles["attentionSub"]}>
+                      {/* The asker's slot is kept when there is no session, so every ask starts on one x. */}
+                      <span className={styles["attentionAsker"]}>{it.session ? <AgentAvatar role={it.session.role} size="xs" /> : null}</span>
                       {it.session ? (
-                        <>
-                          <AgentAvatar role={it.session.role} size="xs" className={styles["attentionAsker"]} />
-                          <span className={styles["attentionAsk"]} title={it.session.activity}>
-                            {it.session.activity ?? "is waiting for you"}
-                          </span>
-                        </>
+                        <span className={styles["attentionAsk"]} title={it.session.activity}>
+                          {it.session.activity ?? "is waiting for you"}
+                        </span>
                       ) : (
                         <span className={styles["attentionAsk"]}>{it.workItem.status === "awaiting_confirmation" ? "plan needs your confirmation" : "waiting for you"}</span>
                       )}
-                      <span className={styles["attentionWhere"]} title={where}>
-                        {where}
-                      </span>
                     </span>
                   </span>
                   {it.workItem.people && it.workItem.people.length > 0 ? (

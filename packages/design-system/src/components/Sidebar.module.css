@@ -162,15 +162,8 @@
 .chipOn .chipCount {
   color: var(--chip-fg);
 }
-/* The needs-you chip is the one loud chip when it has a count. */
-.chip-needs_you:not(.chipZero) {
-  --chip-fg: var(--ds-tone-attention-fg);
-  --chip-bg: color-mix(in srgb, var(--ds-tone-attention-solid) 10%, transparent);
-}
-.chip-needs_you.chipOn {
-  --chip-bg: var(--ds-tone-attention-bg);
-  --chip-fg: var(--ds-tone-attention-fg);
-}
+/* Chips stay neutral; the mark carries the state's hue. The needs-you
+   block below is the sidebar's one amber signal. */
 .chip-failed:not(.chipZero) {
   --chip-fg: var(--ds-tone-danger-fg);
 }
@@ -200,6 +193,7 @@
   box-shadow: inset 2px 0 0 var(--ds-tone-attention-solid);
   flex-shrink: 0;
 }
+/* Inside the block, ink is neutral: the tint and bar are the signal. */
 .attentionHead {
   display: flex;
   align-items: center;
@@ -210,14 +204,14 @@
   border: 0;
   border-radius: var(--ds-radius-md);
   background: none;
-  color: var(--ds-tone-attention-fg);
+  color: var(--ds-color-text-strong);
   text-align: left;
 }
 .attentionHead:hover {
   background: color-mix(in srgb, var(--ds-tone-attention-solid) 10%, transparent);
 }
 .attentionChevron {
-  color: var(--ds-tone-attention-fg);
+  color: var(--ds-color-text-muted);
   transition: transform var(--ds-duration-fast) var(--ds-ease-standard);
 }
 .attentionChevronOpen {
@@ -232,6 +226,7 @@
   flex: 1;
 }
 .attentionCount {
+  color: var(--ds-color-text-secondary);
   font-size: var(--ds-text-xs);
   font-weight: var(--ds-weight-semibold);
   font-variant-numeric: tabular-nums;
@@ -302,22 +297,17 @@
   color: var(--ds-color-text-muted);
 }
 .attentionAsker {
+  display: inline-flex;
   flex-shrink: 0;
+  width: var(--ds-size-avatar-xs);
 }
 .attentionAsk {
-  color: var(--ds-tone-attention-fg);
+  color: var(--ds-color-text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
   flex: 1 1 auto;
-}
-.attentionWhere {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 0 1 auto;
-  max-width: 40%;
 }
 .attentionPeople {
   display: inline-flex;

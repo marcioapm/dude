@@ -6,7 +6,6 @@ import { Icon } from "../icons/index.tsx";
 import { AgentAvatar, ROLE_LABEL, type AvatarKind } from "./AgentAvatar.tsx";
 import { Duration } from "./Numbers.tsx";
 import { Markdown } from "./Markdown.tsx";
-import { StatusBadge } from "./StatusBadge.tsx";
 import styles from "./QuestionCard.module.css";
 
 export type QuestionState = "waiting" | "answered" | "dismissed";
@@ -35,9 +34,10 @@ export interface QuestionCardProps extends Omit<HTMLAttributes<HTMLElement>, "ch
    */
   readonly dismissed?: boolean | undefined;
   /**
-   * Make the offered choices one-click replies while waiting. Without it
-   * they are read-only — the composer, which has the same choices as
-   * buttons, is where a reply is sent from.
+   * Make the offered choices one-click replies in the card while waiting.
+   * Without it a waiting card does not list them: the composer carries the
+   * same choices as buttons, and they are shown once. Settled cards list
+   * them as the record of what was offered.
    */
   readonly onChoose?: ((option: string) => void) | undefined;
   /** Flash once on mount (a question that just arrived). */
@@ -54,25 +54,17 @@ function toDate(v: string | number | Date | null | undefined): Date | null {
  * An agent's question to a person, as a turn in the transcript. Two
  * states that must not be confused:
  *
- *   waiting   the run is blocked on someone. This is the one loud thing a
- *             transcript is allowed: the needs-you badge with its ring,
- *             an attention frame and bar (the same treatment the tree row
- *             and the board card use for the same state), the avatar
- *             marked live, and a wait clock ticking in attention ink. An
- *             operator scrolling a long chat must land on it at once — and
- *             in grayscale it is still the only framed turn with a solid
- *             badge, a bar and a clock.
+ *   waiting   the run is blocked on someone. This is the one loud turn a
+ *             transcript is allowed, and it is loud once: the attention
+ *             highlight (tint and bar). Everything inside it is neutral —
+ *             the transcript header's badge already names the state, the
+ *             wait clock is muted, and the choices live in the composer.
+ *             In grayscale it is still the only barred, tinted turn.
  *
- *   answered  history. The frame drops to a hairline, the wash and bar go,
- *             the badge becomes a quiet "Answered" mark with when and how
- *             long it waited. The answer itself is the `ChatMessage
- *             intent="answer"` turn that follows; the card does not quote
- *             it, so nothing in the transcript is said twice.
- *
- * The choices the agent offered are shown so the question reads in full
- * without the composer. They are chips, not buttons, unless `onChoose`
- * is given: the composer already has the one-click reply and one place to
- * act is enough.
+ *   answered  history. The wash and bar go, and a quiet "Answered" mark
+ *             says when and how long it waited. The answer itself is the
+ *             `ChatMessage intent="answer"` turn that follows; the card
+ *             does not quote it, so nothing in the transcript is said twice.
  */
 export function QuestionCard({ role, name, text, options, askedAt, answeredAt, dismissed, onChoose, isNew, className, ...rest }: QuestionCardProps) {
   const answered = toDate(answeredAt);
@@ -81,7 +73,7 @@ export function QuestionCard({ role, name, text, options, askedAt, answeredAt, d
   const asked = toDate(askedAt);
   const who = name ?? ROLE_LABEL[role];
   const clickable = waiting && onChoose !== undefined;
-  const hasOptions = options !== undefined && options.length > 0;
+  const hasOptions = options !== undefined && options.length > 0 && (!waiting || clickable);
 
   return (
     <article
@@ -101,9 +93,8 @@ export function QuestionCard({ role, name, text, options, askedAt, answeredAt, d
           <span className={styles["verb"]}>{waiting ? "asks" : "asked"}</span>
           {/* Announced once when it appears; the clock lives outside the live region so it is not re-read every second. */}
           {waiting ? (
-            <span role="status" aria-live="polite" className={styles["status"]}>
-              <StatusBadge status="awaiting_input" size="sm" />
-              <span className="ds-sr-only">Blocked until you answer.</span>
+            <span role="status" aria-live="polite" className="ds-sr-only">
+              Needs you. Blocked until you answer.
             </span>
           ) : state === "answered" ? (
             <span className={cx(styles["tag"], styles["tagAnswered"])}>
@@ -153,7 +144,6 @@ export function QuestionCard({ role, name, text, options, askedAt, answeredAt, d
             ))}
           </ul>
         ) : null}
-        {waiting ? <div className={styles["hint"]}>{clickable ? "Pick a choice, or reply in the composer." : "Reply in the composer."}</div> : null}
       </div>
     </article>
   );

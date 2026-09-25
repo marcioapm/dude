@@ -2,7 +2,7 @@
  * The navigation tree, Discord-channel style. Every row is a sibling (flat
  * tree), indented by --depth. No borders: hover is a wash, selection a
  * stronger rounded wash with strong ink and a short accent rail. Needs-you
- * rows carry a small attention pill at the tree's left edge and
+ * rows carry a small neutral pill at the row's left edge and
  * medium-weight text. Status marks for work items and
  * sessions share one column at the right edge, before the row menu.
  */
@@ -61,16 +61,19 @@
   color: var(--ds-color-text-strong);
 }
 
-/* The needs-you pill: 4×8 at the tree's left edge, outside the row box. */
+/* The needs-you pill: 3×8 in strong ink, inside the row where the
+   selection rail sits (so the scroll area never clips it). Neutral: the
+   diamond in the mark column carries the state's hue, and the needs-you
+   block above is the sidebar's one amber signal. */
 .pill {
   position: absolute;
-  left: calc(var(--ds-space-4) * -1);
+  left: 1px;
   top: 50%;
-  width: 4px;
+  width: 3px;
   height: 8px;
   margin-top: -4px;
-  border-radius: 0 4px 4px 0;
-  background: var(--ds-tone-attention-solid);
+  border-radius: 2px;
+  background: var(--ds-color-text-strong);
 }
 /* Selected, the rail is the row's mark; the diamond still says needs-you. */
 .selected > .pill {
@@ -320,6 +323,6 @@
   min-width: 0;
 }
 .needsYou .sessionActivity {
-  color: var(--ds-tone-attention-fg);
+  color: var(--ds-color-text-secondary);
   font-style: normal;
 }
