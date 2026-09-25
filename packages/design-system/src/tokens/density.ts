@@ -73,6 +73,33 @@ const densityPairs = {
 
 export type DensityToken = keyof typeof densityPairs;
 
+/** Large layout measures that compact takes in by a visible amount (at least 4px). */
+export const LARGE_LAYOUT_TOKENS = [
+  "space-main-pad",
+  "space-chat-gap",
+  "space-panel-gap",
+  "space-card-pad",
+  "size-avatar-chat",
+  "size-row-default",
+  "size-row-item",
+  "size-row-item-sm",
+  "space-code-y",
+  "space-code-x",
+  "space-highlight-y",
+] as const satisfies readonly DensityToken[];
+
+/** The big-ticket padding: compact keeps at most two thirds of it. */
+export const BIG_TICKET_TOKENS = [
+  "space-main-pad",
+  "space-chat-gap",
+  "space-card-pad",
+  "space-attention-row-pad-y",
+  "space-highlight-y",
+  "space-code-y",
+  "space-cell-y",
+  "space-nav-section-gap",
+] as const satisfies readonly DensityToken[];
+
 /** The density-sensitive tokens and their value in each density, keyed without the `--ds-` prefix. */
 export const densityTokens: Readonly<Record<Density, Readonly<Record<DensityToken, string>>>> = {
   comfortable: Object.fromEntries(Object.entries(densityPairs).map(([k, [c]]) => [k, c])) as Record<DensityToken, string>,
