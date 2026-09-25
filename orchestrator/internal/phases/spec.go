@@ -182,7 +182,7 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		},
 		Timeout: c.Timeout,
 	}
-	if len(in.Repos) > 0 {
+	if len(in.Repos) > 0 || in.PushBranch != "" {
 		spec.Git = &lux.Git{}
 		for _, r := range in.Repos {
 			repo := lux.Repository{Name: r.Name, URL: r.URL, Ref: r.Ref, Path: RepoPath(r.Name)}

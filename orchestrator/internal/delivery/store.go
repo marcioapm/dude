@@ -351,6 +351,13 @@ const openQuestion = `EXISTS (SELECT 1 FROM questions q WHERE q.run_id = r.id AN
 const OpenAsk = `(` + openQuestion + `
 	OR EXISTS (SELECT 1 FROM repository_requests q WHERE q.run_id = r.id AND q.status = 'pending' AND q.blocking))`
 
+// HoldsTurn is true (SQL, over a Run aliased r) while a turn that ends
+// is not done: something is open for a person (OpenAsk), or a repository
+// the agent waits on was approved and has not reached it yet — it is
+// resumed with it.
+const HoldsTurn = `(` + OpenAsk + `
+	OR EXISTS (SELECT 1 FROM repository_requests q WHERE q.run_id = r.id AND q.status = 'approved' AND q.blocking))`
+
 // HasOpenQuestion says whether the Run has a question waiting on a person.
 func HasOpenQuestion(ctx context.Context, tx pgx.Tx, runID string) (bool, error) {
 	var open bool

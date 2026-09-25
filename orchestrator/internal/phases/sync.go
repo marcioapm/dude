@@ -91,6 +91,9 @@ type phaseRun struct {
 	TurnDone, HasDirectives bool
 	// A person approved a repository the lux Run does not have yet.
 	RepoApproved bool
+	// The lux Run holds a repository this work may change: there is
+	// something to push.
+	Writable bool
 	// Why dude paused it itself, and so when it resumes it: "repository",
 	// "person" or "idle" (migration 021); "" for a person's own pause.
 	DudePause string
@@ -120,6 +123,8 @@ const runColumns = `r.id, r.organization_id, r.project_id, r.work_item_id, r.pha
 	EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL),
 	EXISTS (SELECT 1 FROM repository_requests q JOIN repositories repo ON repo.id = q.repository_id
 	        WHERE q.run_id = r.id AND q.status = 'approved' AND NOT (repo.name = ANY (r.lux_repositories))),
+	EXISTS (SELECT 1 FROM work_item_repositories wr JOIN repositories repo ON repo.id = wr.repository_id
+	        WHERE wr.work_item_id = r.work_item_id AND wr.access = 'write' AND repo.name = ANY (r.lux_repositories)),
 	COALESCE(r.dude_pause, ''), ask.open,
 	COALESCE(r.waiting_since < now() - make_interval(secs => lim.park_secs), false) AND ask.open,
 	` + resumable + `,
@@ -174,7 +179,7 @@ func scan(row pgx.Row) (phaseRun, error) {
 	var r phaseRun
 	err := row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.WorkItemID, &r.Phase, &r.Status, &r.Control,
 		&r.Category, &r.LuxRunID, &r.LuxState, &r.LuxStopReason,
-		&r.PushRequestID, &r.PushBranch, &r.BaseRefs, &r.BaseSHAs, &r.TurnDone, &r.HasDirectives, &r.RepoApproved,
+		&r.PushRequestID, &r.PushBranch, &r.BaseRefs, &r.BaseSHAs, &r.TurnDone, &r.HasDirectives, &r.RepoApproved, &r.Writable,
 		&r.DudePause, &r.Waiting, &r.ParkNow, &r.Resumable, &r.Quiet, &r.Nudged, &r.QuietSince,
 		&r.PushResult, &r.PRFeedback, &r.FindingIDs, &r.BlockingSeverities, &r.Attempt)
 	return r, err
@@ -407,9 +412,10 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 		Findings: findings, PRFeedback: feedback, BlockingSeverities: r.BlockingSeverities, Context: context,
 		Repositories: promptRepos, Decisions: decisions, Tools: s.Agent.ToolsURL != "", CLI: s.Agent.ToolsURL != "" && s.Agent.ToolsService,
 	})
-	// Pushed only by a phase that publishes, and only if there is somewhere
-	// it may change.
-	if delivery.Publishes[r.Phase] && slices.ContainsFunc(in.Repos, func(sr specRepo) bool { return !sr.ReadOnly }) {
+	// Pushed only by a phase that publishes. Even with nowhere to change
+	// yet: a repository a person lets it change mid-Run arrives at a
+	// resume, and lux pushes only to the branch the spec named at submit.
+	if delivery.Publishes[r.Phase] {
 		in.PushBranch = runBranch(r)
 	}
 	if gh, err := s.Forges.For(ctx, r.Org); err == nil && gh != nil {
@@ -597,7 +603,7 @@ func (s *Syncer) followOutput(ctx context.Context, r phaseRun) error {
 // Idempotent end to end: each piece is recorded before the next is asked
 // for, so a restart resumes the sequence.
 func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
-	pushes := r.PushBranch != ""
+	pushes := r.PushBranch != "" && r.Writable
 	if pushes && r.PushResult == nil {
 		// Only a state lux has already reported as over rules the push out.
 		// Anything else is asked of lux itself: its lifecycle events trail
