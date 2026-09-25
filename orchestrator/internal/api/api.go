@@ -20,12 +20,12 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
-	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
@@ -229,16 +229,11 @@ func stillOpen(what, id, status, open string) error {
 	return fail(http.StatusConflict, "conflict", "%s %s is already %s", what, id, status)
 }
 
-// insertDirective queues text for a Run's agent, delivered by the syncer
-// and acknowledged by lux when the agent takes it.
+// insertDirective queues text for a Run's agent (delivery.QueueDirective).
 func insertDirective(ctx context.Context, tx pgx.Tx, org, runID string, ri runInfo, text, scope, supersedes string,
-	interrupt bool) (string, any, error) {
-	id := ids.New(ids.Directive)
-	var createdAt any
-	err := tx.QueryRow(ctx, `INSERT INTO directives (id, organization_id, work_item_id, run_id, text, scope, supersedes, interrupt)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING created_at`,
-		id, org, ri.WorkItemID, runID, text, scope, db.Nullable(supersedes), interrupt).Scan(&createdAt)
-	return id, createdAt, err
+	interrupt bool) (string, time.Time, error) {
+	return delivery.QueueDirective(ctx, tx, delivery.RunRef{Org: org, ProjectID: ri.ProjectID, WorkItemID: ri.WorkItemID, RunID: runID},
+		delivery.Directive{Text: text, Scope: scope, Supersedes: supersedes, Interrupt: interrupt})
 }
 
 func humanEvent(ctx context.Context, tx pgx.Tx, org, runID string, ri runInfo, typ, actor string, payload map[string]any) error {
