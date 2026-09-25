@@ -140,9 +140,28 @@ export interface RepositoryRequestTurn {
   decidedAt: string | null;
 }
 
+/**
+ * Something dude did to the session: parked it while it waits on a person
+ * (its container stopped, nothing held), took it back up, or nudged it
+ * after it went quiet.
+ */
+export interface NoticeTurn {
+  kind: "notice";
+  id: string;
+  notice: "parked" | "unparked" | "nudged";
+  text: string;
+  at: string;
+}
+
 export type Turn =
   | ToolTurn | MessageTurn | HumanTurn | ThoughtTurn | PromptTurn | UsageTurn | QuestionTurn | EventTurn | ProgressTurn
-  | RepositoryRequestTurn;
+  | RepositoryRequestTurn | NoticeTurn;
+
+/** What the transcript says when dude parks a Run, by why (runs.dude_pause). */
+const PARKED_TEXT: Record<string, string> = {
+  person: "Parked while it waits for you — nothing is held; your answer resumes it.",
+  idle: "Parked: it went quiet and did not answer a nudge. Resume it when you have looked.",
+};
 
 /** Custom events live under this prefix in the ledger (agenttools.CustomPrefix). */
 export const CUSTOM_EVENT_PREFIX = "agent.custom.";
@@ -264,8 +283,9 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       }
 
       case EventTypes.AgentMessage: {
-        // The question block an agent ends on is shown by the question turn
-        // that follows; left in the message it would be said twice.
+        // The question block an agent ended on (before questions were asked
+        // with a tool; older transcripts) is shown by the question turn that
+        // follows; left in the message it would be said twice.
         const text = typeof payload.text === "string" ? withoutQuestion(payload.text) : "";
         if (!text.trim()) break;
         const contextTokens = numberOf(payload.contextTokens);
@@ -442,6 +462,21 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         break;
       }
 
+      case "run.parked":
+      case "run.unparked":
+      case "run.idle_nudged": {
+        const notice = event.eventType === "run.parked" ? "parked" : event.eventType === "run.unparked" ? "unparked" : "nudged";
+        const text = notice === "parked"
+          ? PARKED_TEXT[String(payload.reason)] ?? "Parked."
+          : notice === "unparked" ? "Taken back up where it left off." : "Quiet for a while: nudged to carry on or ask.";
+        turns.push({ kind: "notice", id: event.eventId, notice, text, at: event.occurredAt });
+        if (notice === "parked") {
+          state.activity = null;
+          state.activeTool = null;
+        }
+        break;
+      }
+
       case "repository.requested": {
         const turn: RepositoryRequestTurn = {
           kind: "repositoryRequest", id: event.eventId, requestId: String(payload.requestId ?? ""),
@@ -595,8 +630,8 @@ function resultFrom(payload: Record<string, unknown>): ToolResult | null {
 
 /**
  * A message without the question block it ends a turn with: the question
- * turn says it. The last block only, as the orchestrator reads it
- * (delivery.ParseQuestion) — an earlier one was not the question asked.
+ * turn says it. The last block only, as the orchestrator read it when
+ * agents asked that way — an earlier one was not the question asked.
  */
 function withoutQuestion(text: string): string {
   const blocks = [...text.matchAll(/```question[ \t]*\n[\s\S]*?\n?```/g)];

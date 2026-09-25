@@ -179,6 +179,9 @@ class TestEnvironment:
                 # No real agent credentials in the suite; fake models only.
                 "DUDE_OPENCODE_AUTH": "{}",
                 "DUDE_OPENCODE_CONFIG": "{}",
+                # An agent waiting on a person is parked after seconds, not
+                # the policy's minutes, so the suite sees it happen.
+                "DUDE_PARK_AFTER": "3s",
                 **self._tools_env(),
             },
             stdout=self._log("orchestrator"), stderr=subprocess.STDOUT,

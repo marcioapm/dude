@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ChatEvent, eventDetail, eventHasDetail, summarizeEventData } from "../src/components/ChatEvent.tsx";
 import { ChatProgress, progressFraction } from "../src/components/ChatProgress.tsx";
+import { ChatNotice } from "../src/components/ChatNotice.tsx";
 
 describe("summarizeEventData", () => {
   test("scalars as-is", () => {
@@ -115,5 +116,17 @@ describe("ChatProgress motion", () => {
     expect(css).not.toMatch(/^\.fill\s*\{[^}]*animation/m);
     expect(css).toMatch(/^\.running \.sweep\s*\{[^}]*animation/m);
     expect(css).toMatch(/^\.running \.fill\s*\{[^}]*animation/m);
+  });
+});
+
+describe("ChatNotice", () => {
+  test("a note in the transcript's margin, not a message", () => {
+    const html = renderToStaticMarkup(
+      <ChatNotice kind="parked" text="Parked while it waits for you." at="2026-09-25T10:00:00Z" />,
+    );
+    expect(html).toContain('role="note"');
+    expect(html).toContain('data-kind="parked"');
+    expect(html).toContain("Parked while it waits for you.");
+    expect(html).toContain('data-icon="pause"');
   });
 });

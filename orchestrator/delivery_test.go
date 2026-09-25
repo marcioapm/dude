@@ -111,7 +111,7 @@ func newWorld(t *testing.T) *world {
 	w.runtime.Register(delivery.Workflow(&delivery.Store{DB: app}, forges))
 	w.syncer = &phases.Syncer{DB: app, Lux: lux.New(luxSrv.URL, "lux-key"), Forges: forges, Log: quiet,
 		Agent: phases.AgentConfig{DefaultImage: "default:img", OpenCodeAuth: `{"k":"secret-key"}`,
-			OpenCodeProviders: json.RawMessage(`{"llm":{"options":{"baseURL":"https://llm.example/v1"}}}`), Timeout: "1h"}}
+			OpenCodeProviders: json.RawMessage(`{"llm":{"options":{"baseURL":"https://llm.example/v1"}}}`)}}
 	t.Cleanup(w.syncer.Stop)
 	w.artifacts = &phases.Artifacts{DB: app, Lux: w.syncer.Lux}
 	w.prs = &prs.Syncer{DB: app, Forges: forges, Log: quiet,
@@ -982,9 +982,19 @@ func TestTheChatShowsThinkingToolOutputTokensAndThePrompt(t *testing.T) {
 	}
 }
 
+// withTools serves dude's tools to the world's agents, as the orchestrator
+// does, reached through lux's service in their containers.
+func (w *world) withTools() {
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
+	w.t.Cleanup(tools.Close)
+	w.syncer.Agent.ToolsURL = tools.URL
+	w.syncer.Agent.ToolsService = true
+}
+
 func TestAnAgentThatAsksWaitsForTheAnswerAndCarriesOn(t *testing.T) {
 	w := newWorld(t)
-	question := "I need a decision.\n\n```question\nShould the table be sorted?\n- yes\n- no\n```\n"
+	w.withTools()
+	question := `{"question":"Should the table be sorted?","choices":["yes","no"]}`
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
 		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
 			return fakelux.Behaviour{Hang: true}
@@ -1004,8 +1014,12 @@ func TestAnAgentThatAsksWaitsForTheAnswerAndCarriesOn(t *testing.T) {
 		t.Fatalf("question = %q %v", prompt, options)
 	}
 	// Waiting is not finishing: the phase must not complete, or be pushed,
-	// with its task unanswered.
-	if n := w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'running'`, wi); n != 1 {
+	// with its task unanswered. (The question is asked mid-turn; the turn
+	// ends after.)
+	w.until("the agent to wait", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND waiting_since IS NOT NULL`, wi) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'running' AND turn_done_at IS NULL`, wi); n != 1 {
 		t.Fatalf("the asking run is not still running")
 	}
 	if len(w.lux.Runs()) != 1 || w.lux.Runs()[0].Pushed {
@@ -1033,6 +1047,7 @@ func TestAnAgentThatAsksWaitsForTheAnswerAndCarriesOn(t *testing.T) {
 
 // asking starts a delivery whose implementer stops on a question.
 func (w *world) asking() (wi, runID string) {
+	w.withTools()
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
 		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
 			return fakelux.Behaviour{Hang: true}
@@ -1054,6 +1069,209 @@ func TestAbortingARunThatAskedCancelsItsQuestion(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM questions WHERE work_item_id = $1 AND status = 'open'`, wi); n != 0 {
 		t.Errorf("an aborted Run's question is still waiting for a person")
+	}
+	// Answered afterwards — the next morning — it says why nothing happens.
+	var qid string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM questions WHERE work_item_id = $1`, wi).Scan(&qid)
+	if status, body := w.call("/internal/questions/"+qid+"/answer", map[string]any{"text": "yes"}); status != 409 ||
+		!strings.Contains(fmt.Sprint(body), "no longer relevant") {
+		t.Errorf("answering a dead question: %d %v", status, body)
+	}
+}
+
+// An agent waiting on a person holds nothing while it waits: after the
+// grace period its container is stopped, conversation kept, and the answer
+// — however late — resumes it where it was.
+func TestAnAgentWaitingOnAPersonIsParkedAndTheAnswerResumesIt(t *testing.T) {
+	w := newWorld(t)
+	w.syncer.ParkAfter = 300 * time.Millisecond
+	wi, runID := w.asking()
+	w.until("the run to be parked", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause = 'person'`, runID) == 1
+	})
+	w.until("lux to stop it: parked holds no capacity", func() bool { return w.lux.Runs()[0].State == "stopped" })
+	if w.workItemStatus(wi) != "awaiting_input" {
+		t.Errorf("work item is %s while its question is open", w.workItemStatus(wi))
+	}
+	if n := w.count(`SELECT count(*) FROM questions WHERE work_item_id = $1 AND status = 'open'`, wi); n != 1 {
+		t.Fatalf("parking closed the question")
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.parked'`, runID); n != 1 {
+		t.Errorf("%d run.parked events", n)
+	}
+	// Parked stays parked: nothing resumes it until the answer.
+	for range 5 {
+		w.pump()
+	}
+	if w.lux.Runs()[0].Resumed != 0 {
+		t.Fatalf("resumed with the question unanswered")
+	}
+
+	var qid string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM questions WHERE work_item_id = $1`, wi).Scan(&qid)
+	if status, body := w.call("/internal/questions/"+qid+"/answer", map[string]any{"text": "yes"}); status != 200 {
+		t.Fatalf("answer: %d %v", status, body)
+	}
+	w.until("the implementer to finish", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
+	})
+	r := w.lux.Runs()[0]
+	if len(w.lux.Runs()) < 1 || r.Resumed != 1 {
+		t.Fatalf("resumed %d times, want once, the same lux Run", r.Resumed)
+	}
+	// The answer is what it hears, not a "carry on" as well.
+	if len(r.Inputs) != 1 || !strings.HasSuffix(r.Inputs[0], "yes") {
+		t.Errorf("the agent was given %q", r.Inputs)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.unparked'`, runID); n != 1 {
+		t.Errorf("%d run.unparked events", n)
+	}
+}
+
+// Someone at their desk answers within the grace period: the agent is never
+// stopped.
+func TestAnAnswerWithinTheGracePeriodIsTakenLive(t *testing.T) {
+	w := newWorld(t)
+	w.syncer.ParkAfter = time.Hour
+	wi, runID := w.asking()
+	var qid string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM questions WHERE work_item_id = $1`, wi).Scan(&qid)
+	w.call("/internal/questions/"+qid+"/answer", map[string]any{"text": "yes"})
+	w.until("the implementer to finish", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
+	})
+	if w.lux.Runs()[0].Resumed != 0 {
+		t.Errorf("stopped and resumed a run whose question was answered at once")
+	}
+}
+
+// A person who pauses a parked Run makes it theirs: the answer does not
+// resume it.
+func TestAPersonsPauseOfAParkedRunHolds(t *testing.T) {
+	w := newWorld(t)
+	w.syncer.ParkAfter = 300 * time.Millisecond
+	wi, runID := w.asking()
+	w.until("the run to be parked", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND dude_pause = 'person'`, runID) == 1
+	})
+	if status, body := w.call("/internal/runs/"+runID+"/pause", map[string]any{}); status != 200 {
+		t.Fatalf("pause: %d %v", status, body)
+	}
+	var qid string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM questions WHERE work_item_id = $1`, wi).Scan(&qid)
+	w.call("/internal/questions/"+qid+"/answer", map[string]any{"text": "yes"})
+	for range 10 {
+		w.pump()
+	}
+	if w.lux.Runs()[0].Resumed != 0 {
+		t.Fatalf("the answer resumed a run a person paused")
+	}
+	w.call("/internal/runs/"+runID+"/resume", map[string]any{})
+	w.until("the implementer to finish", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
+	})
+}
+
+// An agent that needs a repository to go on ends its turn on the request:
+// parked like a question, and the approval resumes it with the repository.
+func TestAnAgentWaitingOnARepositoryIsParkedAndTheApprovalResumesIt(t *testing.T) {
+	w := newWorld(t)
+	w.withTools()
+	w.syncer.ParkAfter = 300 * time.Millisecond
+	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+		VALUES ($1, $2, $3, 'web', 'https://github.com/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
+			return fakelux.Behaviour{Hang: true}
+		}
+		return fakelux.Behaviour{CallTools: [][2]string{{"request_repository", `{"repository":"web","reason":"the client"}`}},
+			Reply: "Done.", Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
+	}
+	wi := w.workItem()
+	w.names(wi, w.repoID)
+	w.deliver(wi)
+	var runID string
+	w.until("the run to be parked", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE work_item_id = $1 AND dude_pause = 'person'`, wi).Scan(&runID)
+		return runID != ""
+	})
+	var reqID string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM repository_requests WHERE run_id = $1`, runID).Scan(&reqID)
+	if status, body := w.call("/internal/repository-requests/"+reqID+"/decide", map[string]any{"approve": true}); status != 200 {
+		t.Fatalf("approve: %d %v", status, body)
+	}
+	w.until("the clone and the implementer finishing", func() bool {
+		return w.count(`SELECT count(*) FROM repository_requests WHERE id = $1 AND status = 'cloned'`, reqID) == 1 &&
+			w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
+	})
+	if r := w.lux.Runs()[0]; r.Resumed != 1 || len(r.Inputs) != 1 || !strings.Contains(r.Inputs[0], "web is now checked out") {
+		t.Errorf("resumed %d times, told %q", r.Resumed, r.Inputs)
+	}
+}
+
+// An agent quiet mid-turn is nudged once; still quiet, it is parked for a
+// person, who resumes it.
+func TestAQuietAgentIsNudgedThenParkedForAPerson(t *testing.T) {
+	w := newWorld(t)
+	w.syncer.IdleAfter = 300 * time.Millisecond
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
+			return fakelux.Behaviour{Hang: true}
+		}
+		// Silent even after the nudge: its turn is taken and it says nothing.
+		return fakelux.Behaviour{Hang: true}
+	}
+	wi := w.workItem()
+	w.deliver(wi)
+	var runID string
+	w.until("a nudge", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE work_item_id = $1 AND idle_nudged_at IS NOT NULL`, wi).Scan(&runID)
+		return runID != ""
+	})
+	w.until("the nudge to reach the agent, interrupting its turn", func() bool {
+		r := w.lux.Runs()[0]
+		return r.Interrupted == 1 && len(r.Inputs) == 1 && strings.Contains(r.Inputs[0], "ask_person")
+	})
+	w.until("the run to be parked as idle", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause = 'idle'`, runID) == 1
+	})
+	if w.workItemStatus(wi) != "awaiting_input" {
+		t.Errorf("work item is %s, want awaiting_input for a person to look", w.workItemStatus(wi))
+	}
+	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1`, runID); n != 1 {
+		t.Errorf("%d nudges, want one", n)
+	}
+	for range 5 {
+		w.pump()
+	}
+	if w.lux.Runs()[0].Resumed != 0 {
+		t.Fatalf("an idle-parked run resumed on its own")
+	}
+	w.call("/internal/runs/"+runID+"/resume", map[string]any{})
+	w.until("the resume", func() bool { return w.lux.Runs()[0].Resumed == 1 })
+	if w.workItemStatus(wi) != "running" {
+		t.Errorf("work item is %s after a person resumed it", w.workItemStatus(wi))
+	}
+}
+
+// An agent running a long command, or waiting on a person, is not quiet.
+func TestAnAgentInALongCommandIsNotNudged(t *testing.T) {
+	w := newWorld(t)
+	w.syncer.IdleAfter = 200 * time.Millisecond
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour {
+		return fakelux.Behaviour{Hang: true, Tools: []string{"sleep"}, KeepToolsOpen: true}
+	}
+	wi := w.workItem()
+	w.deliver(wi)
+	w.until("the agent to be working", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND cardinality(open_tool_calls) = 1`, wi) == 1
+	})
+	time.Sleep(500 * time.Millisecond)
+	for range 5 {
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND idle_nudged_at IS NOT NULL`, wi); n != 0 {
+		t.Errorf("nudged an agent in the middle of a command")
 	}
 }
 

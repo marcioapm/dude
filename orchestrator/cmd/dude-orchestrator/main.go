@@ -12,6 +12,8 @@
 //	DUDE_AGENT_IMAGE             image for agents when a project names none
 //	DUDE_OPENCODE_AUTH/_CONFIG   OpenCode credentials (default: this machine's)
 //	DUDE_PR_RECONCILE            how often open PRs are re-read as a backstop to webhooks (default 15m)
+//	DUDE_PARK_AFTER/IDLE_AFTER   override every project's grace before parking a Run waiting on a person,
+//	                             and its idle limit (durations; unset follows each project's policy)
 //	DUDE_FACTORY_LOGINS          comma-separated logins whose PR comments are the factory's own
 package main
 
@@ -65,6 +67,14 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("DUDE_PR_RECONCILE: %w", err)
 	}
+	var parkAfter, idleAfter time.Duration
+	for name, d := range map[string]*time.Duration{"DUDE_PARK_AFTER": &parkAfter, "DUDE_IDLE_AFTER": &idleAfter} {
+		if v := os.Getenv(name); v != "" {
+			if *d, err = time.ParseDuration(v); err != nil {
+				return fmt.Errorf("%s: %w", name, err)
+			}
+		}
+	}
 	host, _ := os.Hostname()
 
 	forges := forge.Resolver{DB: database}
@@ -79,6 +89,7 @@ func run(log *slog.Logger) error {
 	syncer := &phases.Syncer{
 		DB: database, Lux: luxClient,
 		Forges: forges, Agent: agent, Log: log,
+		ParkAfter: parkAfter, IdleAfter: idleAfter,
 	}
 	defer syncer.Stop()
 	pullRequests := &prs.Syncer{DB: database, Forges: forges, Signal: signalWorkflow, Log: log,

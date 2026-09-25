@@ -58,5 +58,7 @@ export { ArtifactPreview, prettyJson } from "./ArtifactPreview.tsx";
 export type { ArtifactPreviewProps } from "./ArtifactPreview.tsx";
 export { ChatEvent, summarizeEventData, eventDetail, eventHasDetail, EVENT_SUMMARY_PAIRS } from "./ChatEvent.tsx";
 export type { ChatEventProps } from "./ChatEvent.tsx";
+export { ChatNotice } from "./ChatNotice.tsx";
+export type { ChatNoticeProps, ChatNoticeKind } from "./ChatNotice.tsx";
 export { ChatProgress, progressFraction } from "./ChatProgress.tsx";
 export type { ChatProgressProps } from "./ChatProgress.tsx";

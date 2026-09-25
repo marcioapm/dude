@@ -52,9 +52,12 @@ type Behaviour struct {
 	Hang bool
 	// Exit instead of going idle, as a crashed agent does.
 	Crash bool
-	// End the first turn on this reply — a question for a person — and do
-	// the rest (Reply, Commit) in the turn the answer starts.
+	// Ask a person with dude's ask_person tool (these are its JSON
+	// arguments) and end the first turn there; do the rest (Reply, Commit)
+	// in the turn the answer starts.
 	Ask string
+	// Tools start and do not finish: a long command.
+	KeepToolsOpen bool
 	// Files the agent writes into $LUX_ARTIFACTS, name → content: listed as
 	// the Run's artifacts once its container exits, as lux collects them.
 	Publish map[string]string
@@ -335,6 +338,9 @@ func (s *Server) turn(run *Run) {
 			input = map[string]any{"todos": []any{map[string]any{"content": "do it", "status": "in_progress"}}}
 		}
 		s.agent(run, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id, "title": tool, "kind": "execute", "status": "in_progress", "rawInput": input})
+		if b.KeepToolsOpen {
+			continue
+		}
 		// As OpenCode reports it: the completion names neither the tool nor
 		// its kind, and a command's result is its merged output and exit code.
 		done := map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id, "status": "completed"}
@@ -344,8 +350,15 @@ func (s *Server) turn(run *Run) {
 		}
 		s.agent(run, done)
 	}
+	// Its tools are part of its first turn's work, not repeated on every
+	// turn after.
 	for _, c := range b.CallTools {
-		s.callTool(run, c[0], c[1])
+		if len(run.Inputs) == 0 {
+			s.callTool(run, c[0], c[1])
+		}
+	}
+	if b.Ask != "" && len(run.Inputs) == 0 {
+		s.callTool(run, "ask_person", b.Ask)
 	}
 	if b.Hang && !run.woken {
 		return
@@ -356,7 +369,7 @@ func (s *Server) turn(run *Run) {
 	}
 	reply := b.Reply
 	if b.Ask != "" && len(run.Inputs) == 0 {
-		reply = b.Ask
+		reply = "I asked; waiting for the answer."
 	}
 	for _, chunk := range chunks(reply, 7) {
 		s.agent(run, map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": chunk}})

@@ -362,18 +362,22 @@ function DeliveryTab({ client, project, defaults, onSaved }: TabProps & { defaul
   const [rounds, setRounds] = useState(String(effective.maxReviewIterations));
   const [prRounds, setPrRounds] = useState(String(effective.maxPrFixIterations));
   const [simplify, setSimplify] = useState(effective.simplify);
+  const [parkAfter, setParkAfter] = useState(String(effective.parkAfterMinutes));
+  const [idleNudge, setIdleNudge] = useState(String(effective.idleNudgeMinutes));
   const { busy, problem, save } = useSave();
   const reviewersHint = useId();
   const blockingHint = useId();
 
   const toggle = (list: string[], set: (l: string[]) => void, value: string, on: boolean) =>
     set(on ? [...list, value] : list.filter((v) => v !== value));
-  const count = (text: string, min: number) => {
+  const count = (text: string, min: number, most = 20) => {
     const n = Number(text);
-    return text.trim() !== "" && Number.isInteger(n) && n >= min && n <= 20 ? n : null;
+    return text.trim() !== "" && Number.isInteger(n) && n >= min && n <= most ? n : null;
   };
   const roundsValue = count(rounds, 1);
   const prRoundsValue = count(prRounds, 0);
+  const parkAfterValue = count(parkAfter, 1, 1440);
+  const idleNudgeValue = count(idleNudge, 0, 1440);
 
   // What the form says, as a policy; only what differs from the factory's
   // defaults is stored, so the project keeps following them where it has
@@ -384,12 +388,15 @@ function DeliveryTab({ client, project, defaults, onSaved }: TabProps & { defaul
     maxReviewIterations: roundsValue ?? effective.maxReviewIterations,
     maxPrFixIterations: prRoundsValue ?? effective.maxPrFixIterations,
     simplify,
+    parkAfterMinutes: parkAfterValue ?? effective.parkAfterMinutes,
+    idleNudgeMinutes: idleNudgeValue ?? effective.idleNudgeMinutes,
   };
   const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
   const differs = (Object.keys(chosen) as Array<keyof FullPolicy>).filter((k) => !same(chosen[k], defaults[k]));
   const toStore = Object.fromEntries(differs.map((k) => [k, chosen[k]])) as DeliveryPolicy;
   const dirty = !same(toStore, stored);
-  const valid = reviewers.length > 0 && blocking.length > 0 && roundsValue !== null && prRoundsValue !== null;
+  const valid = reviewers.length > 0 && blocking.length > 0 && roundsValue !== null && prRoundsValue !== null &&
+    parkAfterValue !== null && idleNudgeValue !== null;
 
   return (
     <form
@@ -430,6 +437,16 @@ function DeliveryTab({ client, project, defaults, onSaved }: TabProps & { defaul
         <Input label="Pull request fix rounds" type="number" min={0} max={20} value={prRounds}
           onChange={(e) => setPrRounds(e.target.value)} hint="Fixes for PR comments before a person is asked."
           error={prRoundsValue === null ? "A whole number from 0 to 20." : undefined} />
+      </div>
+      <div className="fieldRow">
+        <Input label="Park after (minutes)" type="number" min={1} max={1440} value={parkAfter}
+          onChange={(e) => setParkAfter(e.target.value)} data-testid="park-after"
+          hint="An agent waiting for an answer stays live this long, then stops holding a slot until you answer."
+          error={parkAfterValue === null ? "A whole number from 1 to 1440." : undefined} />
+        <Input label="Nudge a quiet agent after (minutes)" type="number" min={0} max={1440} value={idleNudge}
+          onChange={(e) => setIdleNudge(e.target.value)}
+          hint="Mid-turn, silent, running nothing: it is asked to carry on or ask. 0 never nudges."
+          error={idleNudgeValue === null ? "A whole number from 0 to 1440." : undefined} />
       </div>
       <Checkbox
         label="Run the simplifier"

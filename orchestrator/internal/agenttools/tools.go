@@ -43,7 +43,8 @@ var tools = []tool{
 		"change them), and which it could ask for with request_repository. Not for waiting on a request: you are "+
 		"told when one is decided.", nil, listRepositories),
 	define("request_repository", "Ask for another of the project's repositories when this work needs it — "+
-		"to read code this depends on, or (an implementer) to change it too. A person decides; carry on meanwhile.",
+		"to read code this depends on, or (an implementer) to change it too. A person decides. Carry on meanwhile if "+
+		"you can; if you cannot go on without it, end your turn — you are resumed with it, or told it was declined.",
 		nil, requestRepository),
 	define("create_work_item", "Record a piece of work you found that is outside your task — a bug, a "+
 		"follow-up, a part to split out — as a new work item in this project. It is not started: a person reads it "+
@@ -196,8 +197,8 @@ type askOut struct {
 }
 
 // askPerson records a question for a person. The agent ends its turn; the
-// answer arrives as its next message, through the same answer flow as a
-// question block.
+// answer arrives as its next message — parked in between if the person
+// takes longer than the project's grace period.
 func askPerson(ctx context.Context, tx pgx.Tx, c Caller, in askIn) (askOut, error) {
 	q := strings.TrimSpace(in.Question)
 	switch {

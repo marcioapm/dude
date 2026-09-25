@@ -13,6 +13,7 @@ import { ThinkingBlock } from "../../components/ThinkingBlock.tsx";
 import { ToolCallCard } from "../../components/ToolCallCard.tsx";
 import { ChatEvent } from "../../components/ChatEvent.tsx";
 import { ChatProgress } from "../../components/ChatProgress.tsx";
+import { ChatNotice } from "../../components/ChatNotice.tsx";
 import { Button, IconButton } from "../../primitives/Button.tsx";
 import { ACTIVITY_KINDS, ACTIVITY_SPECS } from "../../tokens/activity.ts";
 import { at } from "../fixtures.tsx";
@@ -411,7 +412,7 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
       <Block
         id="ch-question"
         title="QuestionCard"
-        note="An agent stops and asks a person (ask_user). While it waits this is the one loud turn in a transcript, and it is loud once: the attention wash and 2px bar. Inside it everything is neutral — the transcript header's Needs-you badge already names the state, the wait clock is muted, and the offered choices are shown once, as one-click chips in the composer (in the card only with onChoose). In grayscale it is still the only barred, tinted turn. Answered, it settles: no wash, a quiet Answered mark with how long it waited, and the choices listed as the record of what was offered. The answer follows as its own turn — the card never repeats it. A question the session died on is Not answered and never rings."
+        note="An agent stops and asks a person (ask_user). While it waits this is the one loud turn in a transcript, and it is loud once: the attention wash and 2px bar. Inside it everything is neutral — the transcript header's Needs-you badge already names the state, the wait clock is muted, and the offered choices are shown once, as one-click chips in the composer (in the card only with onChoose). In grayscale it is still the only barred, tinted turn. Answered, it settles: no wash, a quiet Answered mark with how long it waited, and the choices listed as the record of what was offered. The answer follows as its own turn — the card never repeats it. A question whose run ended is No longer needed and never rings: an answer would reach nobody."
       >
         <Panes mode={mode} surface>
           <Col>
@@ -424,7 +425,10 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
             <Label>answered — calm; the answer is the next turn, not quoted here</Label>
             <QuestionCard role="implementer" text={QUESTION_TEXT} options={QUESTION_OPTIONS} askedAt={at(45_600)} answeredAt={at(45_600 + 4 * 60_000 + 12_000)} />
             <ChatMessage role="human" name="marcio" intent="answer" inReplyTo="Should I leave the route's retry in place, or fold it into this change?" content={ANSWER_TEXT} startedAt={at(45_600 + 4 * 60_000 + 12_000)} deliveredAt={at(45_600 + 4 * 60_000 + 13_000)} />
-            <Label>not answered — the session ended first; settled, never rings</Label>
+            <Label>waiting past the grace period — parked: its container stopped, the answer resumes it</Label>
+            <QuestionCard role="implementer" text={QUESTION_TEXT} options={QUESTION_OPTIONS} askedAt={Date.now() - 14 * 60 * 60_000} />
+            <ChatNotice kind="parked" text="Parked while it waits for you — nothing is held; answering resumes it." at={Date.now() - 14 * 60 * 60_000 + 10 * 60_000} />
+            <Label>no longer needed — its run ended first; settled, never rings</Label>
             <QuestionCard role="qa_browser" text="The save button has no stable selector. Should I add a `data-testid`, or is that out of scope?" options={["Add data-testid", "Out of scope — skip the check"]} askedAt={at(100_000)} dismissed />
             <Label>grayscale check — waiting still separates from answered by wash, bar and clock</Label>
             <div style={{ filter: "grayscale(1)", display: "flex", flexDirection: "column" }}>

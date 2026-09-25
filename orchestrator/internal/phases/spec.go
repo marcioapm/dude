@@ -27,8 +27,6 @@ type AgentConfig struct {
 	// Hosts every agent may reach besides its model provider. "*" turns
 	// egress filtering off.
 	Egress []string
-	// Wall-clock limit for one phase, across pauses.
-	Timeout string
 	// Where agents reach dude's own tools (agenttools), as they see it; ""
 	// gives them none. Must not be the lux host or lux's own address: lux
 	// never lets a Run reach either.
@@ -49,7 +47,6 @@ type AgentConfig struct {
 func LoadAgentConfig() (AgentConfig, error) {
 	c := AgentConfig{
 		DefaultImage: envOr("DUDE_AGENT_IMAGE", "localhost/dude-runtime:dev"),
-		Timeout:      envOr("DUDE_AGENT_TIMEOUT", "2h"),
 		ToolsURL:     os.Getenv("DUDE_TOOLS_URL"),
 		ToolsService: os.Getenv("DUDE_TOOLS_SERVICE") != "off",
 		ToolsKey:     []byte(envOr("DUDE_TOOLS_KEY", os.Getenv("DUDE_ORCHESTRATOR_TOKEN"))),
@@ -151,6 +148,13 @@ const (
 	harnessScripted = "scripted"
 )
 
+// noTimeout is the timeout every Run is given: none, in effect. A Run has
+// no wall-clock limit — agents work for days, and one waiting on a person is
+// parked, not timed out. lux counts its timeout from the Run's first start,
+// parked time included, and gives a Run that names none 24 hours; until it
+// takes "none" to mean none (asked of lux, 2026-09-25), a year stands in.
+const noTimeout = "8760h"
+
 // buildSpec turns a phase Run into a lux RunSpec.
 //
 // Everything that decides behaviour is here and nowhere in lux: which image,
@@ -176,7 +180,7 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 			{Name: "workspace", Path: workspaceDir, Kind: "state"},
 			{Name: "home", Path: agentHome, Kind: "state"},
 		},
-		Timeout: c.Timeout,
+		Timeout: noTimeout,
 	}
 	if len(in.Repos) > 0 {
 		spec.Git = &lux.Git{}

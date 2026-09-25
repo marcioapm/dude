@@ -1,0 +1,40 @@
+/*
+ * ChatNotice: the factory's margin note in a transcript — parked, resumed,
+ * nudged. A hairline either side of one muted line, centred: it separates
+ * what came before from what came after without speaking for anyone.
+ */
+
+.root {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-compact);
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-xs);
+}
+.rule {
+  flex: 1 1 var(--ds-space-24);
+  min-width: var(--ds-space-12);
+  height: 1px;
+  background: var(--ds-color-border-subtle);
+}
+.body {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  min-width: 0;
+  max-width: 80%;
+}
+.glyph {
+  flex-shrink: 0;
+}
+.text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.time {
+  font-family: var(--ds-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--ds-text-2xs);
+  white-space: nowrap;
+}

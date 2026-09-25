@@ -80,7 +80,8 @@ export function QuestionCard({ role, name, text, options, askedAt, answeredAt, d
       className={cx(styles["root"], styles[state], isNew && styles["new"], className)}
       data-state={state}
       data-role={role}
-      aria-label={waiting ? `${who} asks a question and is waiting for an answer` : `${who} asked a question`}
+      aria-label={waiting ? `${who} asks a question and is waiting for an answer`
+        : state === "dismissed" ? `${who} asked a question that is no longer needed: its run ended` : `${who} asked a question`}
       {...rest}
     >
       <div className={styles["gutter"]}>
@@ -104,7 +105,7 @@ export function QuestionCard({ role, name, text, options, askedAt, answeredAt, d
           ) : (
             <span className={cx(styles["tag"], styles["tagDismissed"])}>
               <Icon name="cross" size={10} strokeWidth={2} />
-              <span className="ds-cap">Not answered</span>
+              <span className="ds-cap" title="Its run ended: nobody would hear an answer">No longer needed</span>
             </span>
           )}
           {asked ? (

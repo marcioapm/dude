@@ -341,15 +341,28 @@ func (r RunRef) Event(typ, actorType string, payload map[string]any) ledger.Even
 		ActorType: actorType, ActorID: r.RunID, Source: ledger.SourceOrchestrator, CorrelationID: r.WorkItemID, Payload: payload}
 }
 
-// HasOpenQuestion says whether the Run is waiting on a person's answer.
+// OpenAsk is true (SQL, over a Run aliased r) while the Run has something
+// open for a person: a question, or a repository it asked for. An agent
+// that ends its turn with one open is waiting on a person, not done.
+const OpenAsk = `(EXISTS (SELECT 1 FROM questions q WHERE q.run_id = r.id AND q.status = 'open')
+	OR EXISTS (SELECT 1 FROM repository_requests q WHERE q.run_id = r.id AND q.status = 'pending'))`
+
+// HasOpenQuestion says whether the Run has a question waiting on a person.
 func HasOpenQuestion(ctx context.Context, tx pgx.Tx, runID string) (bool, error) {
 	var open bool
 	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM questions WHERE run_id = $1 AND status = 'open')`, runID).Scan(&open)
 	return open, err
 }
 
+// HasOpenAsk says whether the Run has anything open for a person (OpenAsk).
+func HasOpenAsk(ctx context.Context, tx pgx.Tx, runID string) (bool, error) {
+	var open bool
+	err := tx.QueryRow(ctx, `SELECT `+OpenAsk+` FROM runs r WHERE r.id = $1`, runID).Scan(&open)
+	return open, err
+}
+
 // AskTx records an agent's question for a person, and the work item waiting
-// on it — however the agent asked (the ask tool, or a question block).
+// on it.
 func AskTx(ctx context.Context, tx pgx.Tx, r RunRef, prompt string, options []string) (string, error) {
 	id := ids.New(ids.Question)
 	opts, _ := json.Marshal(db.NonNil(options))
