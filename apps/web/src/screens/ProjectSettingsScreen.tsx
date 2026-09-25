@@ -5,17 +5,25 @@
  * its own.
  */
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { ROLE_LABEL } from "@dude/design-system/components";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Breadcrumb, ROLE_LABEL } from "@dude/design-system/components";
 import { ALL_AGENT_ROLES as AGENT_ROLES, findingSeveritySchema, REVIEWER_CATEGORIES } from "@dude/domain";
 import type { AgentRole, DeliveryPolicy, FullDeliveryPolicy } from "@dude/domain";
 import {
-  Badge,
   Button,
+  Callout,
   Checkbox,
   Dialog,
   EmptyState,
+  Fieldset,
+  FormActions,
+  FormRow,
+  FormStack,
   Input,
+  Page,
+  PageHeader,
+  RowMenu,
+  Section,
   Spinner,
   Tab,
   TabList,
@@ -74,15 +82,17 @@ export function ProjectSettingsScreen({ client, projectId, onChanged, onBack }: 
   };
 
   return (
-    <div className="settingsScreen" data-testid="project-settings">
-      <header className="settingsHeader">
-        <h1 className="wiTitle">{project.name}</h1>
-        <span className="muted">Settings</span>
-        <Button size="sm" variant="ghost" className="settingsBack" onClick={onBack}>
-          Back to the board
-        </Button>
-      </header>
-      {problem ? <p className="problem" role="alert">{problem}</p> : null}
+    <Page data-testid="project-settings">
+      <PageHeader
+        breadcrumb={
+          <Breadcrumb items={[
+            { id: project.id, label: project.name, onSelect: onBack },
+            { id: "settings", label: "Settings" },
+          ]} />
+        }
+        title={project.name}
+      />
+      {problem ? <Callout tone="danger">{problem}</Callout> : null}
       <Tabs defaultValue="repositories">
         <TabList>
           <Tab value="general">General</Tab>
@@ -90,20 +100,20 @@ export function ProjectSettingsScreen({ client, projectId, onChanged, onBack }: 
           <Tab value="agents">Agents</Tab>
           <Tab value="delivery">Delivery</Tab>
         </TabList>
-        <TabPanel value="general">
+        <TabPanel value="general" className="tabPanel">
           <GeneralTab client={client} project={project} onSaved={saved} />
         </TabPanel>
-        <TabPanel value="repositories">
+        <TabPanel value="repositories" className="tabPanel">
           <RepositoriesTab client={client} project={project} onSaved={saved} />
         </TabPanel>
-        <TabPanel value="agents">
+        <TabPanel value="agents" className="tabPanel">
           <AgentsTab client={client} project={project} onSaved={saved} />
         </TabPanel>
-        <TabPanel value="delivery">
+        <TabPanel value="delivery" className="tabPanel">
           <DeliveryTab client={client} project={project} defaults={defaults} onSaved={saved} />
         </TabPanel>
       </Tabs>
-    </div>
+    </Page>
   );
 }
 
@@ -120,7 +130,6 @@ function GeneralTab({ client, project, onSaved }: TabProps) {
   const dirty = name.trim() !== project.name || image.trim() !== (project.runtimeImage ?? "");
   return (
     <form
-      className="settingsForm"
       onSubmit={(e) => {
         e.preventDefault();
         void save(() => client.updateProject(project.id, {
@@ -129,22 +138,24 @@ function GeneralTab({ client, project, onSaved }: TabProps) {
         }), onSaved, "General settings saved");
       }}
     >
-      <Input label="Name" value={name} required maxLength={200} onChange={(e) => setName(e.target.value)} />
-      <Input label="Slug" value={project.slug} mono disabled hint="Fixed: it names the project in paths and keys." />
-      <Input
-        label="Runtime image"
-        mono
-        value={image}
-        placeholder="The system default"
-        hint="The container image agents work in. Empty uses the system default."
-        onChange={(e) => setImage(e.target.value)}
-      />
-      {problem ? <p className="problem" role="alert">{problem}</p> : null}
-      <div className="settingsActions">
-        <Button type="submit" variant="primary" disabled={!dirty || busy || !name.trim()}>
-          Save
-        </Button>
-      </div>
+      <FormStack>
+        <Input label="Name" value={name} required maxLength={200} onChange={(e) => setName(e.target.value)} />
+        <Input label="Slug" value={project.slug} mono disabled hint="Fixed: it names the project in paths and keys." />
+        <Input
+          label="Runtime image"
+          mono
+          value={image}
+          placeholder="The system default"
+          hint="The container image agents work in. Empty uses the system default."
+          onChange={(e) => setImage(e.target.value)}
+        />
+        {problem ? <Callout tone="danger">{problem}</Callout> : null}
+        <FormActions>
+          <Button type="submit" variant="primary" disabled={!dirty || busy || !name.trim()}>
+            Save
+          </Button>
+        </FormActions>
+      </FormStack>
     </form>
   );
 }
@@ -154,8 +165,9 @@ function RepositoriesTab({ client, project, onSaved }: TabProps) {
   const [removing, setRemoving] = useState<Repository | null>(null);
   const { busy, problem, save } = useSave();
   const addButton = useRef<HTMLButtonElement>(null);
+  // A table uses the width it has; a form keeps to one readable column.
   return (
-    <div className="settingsSection">
+    <Section>
       {project.repositories.length === 0 ? (
         <EmptyState
           icon="git-branch"
@@ -170,7 +182,7 @@ function RepositoriesTab({ client, project, onSaved }: TabProps) {
               <Th>URL</Th>
               <Th width="12%">Branch</Th>
               <Th width="12%">Trust</Th>
-              <Th align="right" width="140px">
+              <Th align="right" width="48px">
                 <span className="ds-sr-only">Actions</span>
               </Th>
             </Tr>
@@ -183,26 +195,23 @@ function RepositoriesTab({ client, project, onSaved }: TabProps) {
                 <Td mono>{r.defaultBranch}</Td>
                 <Td>{r.trust === "untrusted_external" ? "External" : "Internal"}</Td>
                 <Td align="right">
-                  <div className="rowActions">
-                    <Button size="sm" variant="ghost" onClick={() => setEditing(r)} aria-label={`Edit ${r.name}`}>
-                      Edit
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={() => setRemoving(r)} aria-label={`Remove ${r.name}`}>
-                      Remove
-                    </Button>
-                  </div>
+                  <RowMenu label={`Actions for ${r.name}`} items={[
+                    { id: "edit", label: "Edit", icon: "edit", onSelect: () => setEditing(r) },
+                    { kind: "separator" },
+                    { id: "remove", label: "Remove", tone: "danger", onSelect: () => setRemoving(r) },
+                  ]} />
                 </Td>
               </Tr>
             ))}
           </TBody>
         </Table>
       )}
-      <div className="settingsActions">
+      <FormActions>
         <Button ref={addButton} variant="secondary" leadingIcon="plus" onClick={() => setEditing("new")} data-testid="add-repository">
           Add repository
         </Button>
-      </div>
-      {problem ? <p className="problem" role="alert">{problem}</p> : null}
+      </FormActions>
+      {problem ? <Callout tone="danger">{problem}</Callout> : null}
       {editing ? (
         <RepositoryDialog
           client={client}
@@ -242,7 +251,7 @@ function RepositoriesTab({ client, project, onSaved }: TabProps) {
           </>
         }
       />
-    </div>
+    </Section>
   );
 }
 
@@ -317,7 +326,6 @@ function AgentsTab({ client, project, onSaved }: TabProps) {
   });
   return (
     <form
-      className="settingsForm"
       onSubmit={(e) => {
         e.preventDefault();
         const agentModels = Object.fromEntries(
@@ -329,26 +337,28 @@ function AgentsTab({ client, project, onSaved }: TabProps) {
         void save(() => client.updateProject(project.id, { agentModels }), onSaved, "Agents saved");
       }}
     >
-      <p className="muted">
-        The model each role runs, as <code>provider/model</code>. A role left empty uses the organization's default.
-      </p>
-      {AGENT_ROLES.map((role) => (
-        <Input
-          key={role}
-          label={ROLE_LABEL[role]}
-          mono
-          value={models[role]}
-          placeholder="Organization default"
-          error={losing.includes(role) ? "This role has other settings (such as its context) that need a model." : undefined}
-          onChange={(e) => setModels((m) => ({ ...m, [role]: e.target.value }))}
-        />
-      ))}
-      {problem ? <p className="problem" role="alert">{problem}</p> : null}
-      <div className="settingsActions">
-        <Button type="submit" variant="primary" disabled={!dirty || busy || losing.length > 0}>
-          Save
-        </Button>
-      </div>
+      <FormStack>
+        <p className="muted">
+          The model each role runs, as <code>provider/model</code>. A role left empty uses the organization's default.
+        </p>
+        {AGENT_ROLES.map((role) => (
+          <Input
+            key={role}
+            label={ROLE_LABEL[role]}
+            mono
+            value={models[role]}
+            placeholder="Organization default"
+            error={losing.includes(role) ? "This role has other settings (such as its context) that need a model." : undefined}
+            onChange={(e) => setModels((m) => ({ ...m, [role]: e.target.value }))}
+          />
+        ))}
+        {problem ? <Callout tone="danger">{problem}</Callout> : null}
+        <FormActions>
+          <Button type="submit" variant="primary" disabled={!dirty || busy || losing.length > 0}>
+            Save
+          </Button>
+        </FormActions>
+      </FormStack>
     </form>
   );
 }
@@ -365,8 +375,6 @@ function DeliveryTab({ client, project, defaults, onSaved }: TabProps & { defaul
   const [parkAfter, setParkAfter] = useState(String(effective.parkAfterMinutes));
   const [idleNudge, setIdleNudge] = useState(String(effective.idleNudgeMinutes));
   const { busy, problem, save } = useSave();
-  const reviewersHint = useId();
-  const blockingHint = useId();
 
   const toggle = (list: string[], set: (l: string[]) => void, value: string, on: boolean) =>
     set(on ? [...list, value] : list.filter((v) => v !== value));
@@ -400,69 +408,66 @@ function DeliveryTab({ client, project, defaults, onSaved }: TabProps & { defaul
 
   return (
     <form
-      className="settingsForm"
       onSubmit={(e) => {
         e.preventDefault();
         void save(() => client.updateProject(project.id, { deliveryPolicy: toStore }), onSaved, "Delivery saved");
       }}
     >
-      <fieldset className="choices" aria-describedby={reviewersHint}>
-        <legend>Reviewers every delivery runs</legend>
-        <p id={reviewersHint} className="muted">Others join when a change touches their area.</p>
-        {REVIEWER_CATEGORIES.map((c) => (
-          <Checkbox
-            key={c}
-            label={c}
-            checked={reviewers.includes(c)}
-            onCheckedChange={(on) => toggle(reviewers, setReviewers, c, on === true)}
-          />
-        ))}
-      </fieldset>
-      <fieldset className="choices" aria-describedby={blockingHint}>
-        <legend>Findings that send the change back for a fix</legend>
-        <p id={blockingHint} className="muted">Lower severities go into the pull request for a person to weigh.</p>
-        {SEVERITIES.map((s) => (
-          <Checkbox
-            key={s}
-            label={s}
-            checked={blocking.includes(s)}
-            onCheckedChange={(on) => toggle(blocking, setBlocking, s, on === true)}
-          />
-        ))}
-      </fieldset>
-      <div className="fieldRow">
-        <Input label="Review rounds" type="number" min={1} max={20} value={rounds} onChange={(e) => setRounds(e.target.value)}
-          hint="Review → fix cycles before a person is asked."
-          error={roundsValue === null ? "A whole number from 1 to 20." : undefined} />
-        <Input label="Pull request fix rounds" type="number" min={0} max={20} value={prRounds}
-          onChange={(e) => setPrRounds(e.target.value)} hint="Fixes for PR comments before a person is asked."
-          error={prRoundsValue === null ? "A whole number from 0 to 20." : undefined} />
-      </div>
-      <div className="fieldRow">
-        <Input label="Park after (minutes)" type="number" min={1} max={1440} value={parkAfter}
-          onChange={(e) => setParkAfter(e.target.value)} data-testid="park-after"
-          hint="An agent waiting for an answer stays live this long, then stops holding a slot until you answer."
-          error={parkAfterValue === null ? "A whole number from 1 to 1440." : undefined} />
-        <Input label="Nudge a quiet agent after (minutes)" type="number" min={0} max={1440} value={idleNudge}
-          onChange={(e) => setIdleNudge(e.target.value)}
-          hint="Mid-turn, silent, running nothing: it is asked to carry on or ask. 0 never nudges."
-          error={idleNudgeValue === null ? "A whole number from 0 to 1440." : undefined} />
-      </div>
-      <Checkbox
-        label="Run the simplifier"
-        description="A last pass that removes needless complexity without changing behaviour."
-        checked={simplify}
-        onCheckedChange={(on) => setSimplify(on === true)}
-      />
-      {reviewers.length === 0 ? <p className="problem">Choose at least one reviewer.</p> : null}
-      {blocking.length === 0 ? <p className="problem">Choose at least one severity that blocks.</p> : null}
-      {problem ? <p className="problem" role="alert">{problem}</p> : null}
-      <div className="settingsActions">
-        <Button type="submit" variant="primary" disabled={busy || !valid || !dirty} data-testid="delivery-save">
-          Save
-        </Button>
-        <span className="muted">Settings left at the factory's defaults follow them if they change.</span>
-      </div>
+      <FormStack>
+        <Fieldset legend="Reviewers every delivery runs" hint="Others join when a change touches their area.">
+          {REVIEWER_CATEGORIES.map((c) => (
+            <Checkbox
+              key={c}
+              label={c}
+              checked={reviewers.includes(c)}
+              onCheckedChange={(on) => toggle(reviewers, setReviewers, c, on === true)}
+            />
+          ))}
+        </Fieldset>
+        <Fieldset legend="Findings that send the change back for a fix"
+          hint="Lower severities go into the pull request for a person to weigh.">
+          {SEVERITIES.map((s) => (
+            <Checkbox
+              key={s}
+              label={s}
+              checked={blocking.includes(s)}
+              onCheckedChange={(on) => toggle(blocking, setBlocking, s, on === true)}
+            />
+          ))}
+        </Fieldset>
+        <FormRow>
+          <Input label="Review rounds" type="number" min={1} max={20} value={rounds} onChange={(e) => setRounds(e.target.value)}
+            hint="Review → fix cycles before a person is asked."
+            error={roundsValue === null ? "A whole number from 1 to 20." : undefined} />
+          <Input label="Pull request fix rounds" type="number" min={0} max={20} value={prRounds}
+            onChange={(e) => setPrRounds(e.target.value)} hint="Fixes for PR comments before a person is asked."
+            error={prRoundsValue === null ? "A whole number from 0 to 20." : undefined} />
+        </FormRow>
+        <FormRow>
+          <Input label="Park after (minutes)" type="number" min={1} max={1440} value={parkAfter}
+            onChange={(e) => setParkAfter(e.target.value)} data-testid="park-after"
+            hint="An agent waiting for an answer stays live this long, then stops holding a slot until you answer."
+            error={parkAfterValue === null ? "A whole number from 1 to 1440." : undefined} />
+          <Input label="Nudge a quiet agent after (minutes)" type="number" min={0} max={1440} value={idleNudge}
+            onChange={(e) => setIdleNudge(e.target.value)}
+            hint="Mid-turn, silent, running nothing: it is asked to carry on or ask. 0 never nudges."
+            error={idleNudgeValue === null ? "A whole number from 0 to 1440." : undefined} />
+        </FormRow>
+        <Checkbox
+          label="Run the simplifier"
+          description="A last pass that removes needless complexity without changing behaviour."
+          checked={simplify}
+          onCheckedChange={(on) => setSimplify(on === true)}
+        />
+        {reviewers.length === 0 ? <Callout tone="danger">Choose at least one reviewer.</Callout> : null}
+        {blocking.length === 0 ? <Callout tone="danger">Choose at least one severity that blocks.</Callout> : null}
+        {problem ? <Callout tone="danger">{problem}</Callout> : null}
+        <FormActions note="Settings left at the factory's defaults follow them if they change.">
+          <Button type="submit" variant="primary" disabled={busy || !valid || !dirty} data-testid="delivery-save">
+            Save
+          </Button>
+        </FormActions>
+      </FormStack>
     </form>
   );
 }

@@ -1,0 +1,213 @@
+/*
+ * Page structure. Every gap and width is a token; section and page spacing
+ * are the density's (--ds-space-panel-gap), so compact tightens the page as
+ * it tightens rows.
+ */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-panel-gap);
+  width: 100%;
+  max-width: var(--ds-measure-page);
+  min-width: 0;
+}
+.full {
+  max-width: none;
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  min-width: 0;
+}
+.titleRow {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+  min-width: 0;
+}
+.id {
+  flex-shrink: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+.title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--ds-text-xl);
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-primary);
+  overflow-wrap: anywhere;
+}
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.description {
+  max-width: var(--ds-measure-message);
+  color: var(--ds-color-text-secondary);
+}
+.description > :first-child {
+  margin-top: 0;
+}
+.description > :last-child {
+  margin-bottom: 0;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  min-width: 0;
+}
+.sectionHead {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-compact);
+}
+.sectionTitle {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--ds-space-6);
+  margin: 0;
+}
+.sectionCount {
+  font-variant-numeric: tabular-nums;
+  color: var(--ds-color-text-muted);
+}
+
+.callout {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ds-space-8);
+  padding: var(--ds-space-8) var(--ds-space-12);
+  border: 1px solid var(--ds-tone-neutral-border);
+  border-radius: var(--ds-radius-md);
+  background: var(--ds-tone-neutral-bg);
+  color: var(--ds-color-text-primary);
+  font-size: var(--ds-text-sm);
+}
+.calloutIcon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--ds-tone-neutral-fg);
+}
+.calloutBody {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.callout[data-tone="danger"] {
+  border-color: var(--ds-tone-danger-border);
+  background: var(--ds-tone-danger-bg);
+}
+.callout[data-tone="danger"] .calloutIcon {
+  color: var(--ds-tone-danger-fg);
+}
+.callout[data-tone="attention"] {
+  border-color: var(--ds-tone-attention-border);
+  background: var(--ds-tone-attention-bg);
+}
+.callout[data-tone="attention"] .calloutIcon {
+  color: var(--ds-tone-attention-fg);
+}
+.callout[data-tone="info"] {
+  border-color: var(--ds-tone-info-border);
+  background: var(--ds-tone-info-bg);
+}
+.callout[data-tone="info"] .calloutIcon {
+  color: var(--ds-tone-info-fg);
+}
+.callout[data-tone="success"] {
+  border-color: var(--ds-tone-success-border);
+  background: var(--ds-tone-success-bg);
+}
+.callout[data-tone="success"] .calloutIcon {
+  color: var(--ds-tone-success-fg);
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  column-gap: var(--ds-space-16);
+  row-gap: var(--ds-space-6);
+  margin: 0;
+  font-size: var(--ds-text-sm);
+}
+.kvRow {
+  display: contents;
+}
+.kvLabel {
+  color: var(--ds-color-text-muted);
+}
+.kvValue {
+  margin: 0;
+  color: var(--ds-color-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-16);
+  max-width: var(--ds-measure-document);
+  min-width: 0;
+}
+.formRow {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: var(--ds-space-12);
+}
+.formActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ds-space-8);
+}
+.formNote {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+
+.fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-6);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.legend {
+  padding: 0;
+  margin-bottom: var(--ds-space-2);
+  font-size: var(--ds-text-sm);
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-secondary);
+}
+.hint {
+  margin: 0;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.hintError {
+  color: var(--ds-tone-danger-fg);
+}
+
+/* A description with a list in it (a work item's criteria): paragraphs
+   spaced, the list indented as prose lists are. */
+.description p {
+  margin: 0 0 var(--ds-space-6);
+}
+.description ul,
+.description ol {
+  margin: var(--ds-space-4) 0 0;
+  padding-left: var(--ds-space-20);
+}

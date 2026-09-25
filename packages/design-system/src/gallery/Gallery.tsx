@@ -46,6 +46,8 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["p-table", "Table"],
       ["p-tabs", "Tabs"],
       ["p-dialog", "Dialog"],
+      ["p-page", "Page & header"],
+      ["p-form", "Form layout"],
       ["p-toast", "Toast"],
       ["p-tooltip", "Tooltip"],
       ["p-loading", "Skeleton / Spinner"],

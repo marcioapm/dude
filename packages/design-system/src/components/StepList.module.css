@@ -1,0 +1,79 @@
+/*
+ * StepList: a framed list of rows that open something. Row height and
+ * padding follow the density; hover is the design system's row wash.
+ */
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--ds-color-border-subtle);
+  border-radius: var(--ds-radius-md);
+  background: var(--ds-color-surface);
+  overflow: hidden;
+}
+
+.row + .row {
+  border-top: 1px solid var(--ds-color-border-subtle);
+}
+
+.target {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+  width: 100%;
+  min-height: var(--ds-size-row-item);
+  padding: var(--ds-space-cell-y) var(--ds-space-12);
+  margin: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.target:hover {
+  background: var(--ds-color-hover-wash);
+}
+.target:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--ds-color-focus-ring);
+}
+
+.step {
+  flex-shrink: 0;
+  width: 2ch;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.label {
+  flex: 0 1 auto;
+  min-width: 10em;
+  font-weight: var(--ds-weight-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.note {
+  min-width: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.meta {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.open {
+  flex-shrink: 0;
+  color: var(--ds-color-text-muted);
+}
+/* The glyph keeps to the right edge, with or without meta before it. */
+.label ~ .open:not(.meta ~ .open) {
+  margin-left: auto;
+}

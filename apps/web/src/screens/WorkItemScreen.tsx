@@ -14,8 +14,8 @@
  */
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { AgentAvatar, FindingGroup, FindingRow, StatusBadge } from "@dude/design-system/components";
-import { Button, EmptyState, Spinner } from "@dude/design-system/primitives";
+import { AgentAvatar, FindingGroup, FindingRow, StatusBadge, StepList, StepRow } from "@dude/design-system/components";
+import { Button, Callout, EmptyState, Page, PageHeader, Section, Spinner } from "@dude/design-system/primitives";
 import { DEFAULT_RUN_ROLE, runLabel } from "@dude/domain";
 import type { ApiClient, Artifact, Finding, PullRequest, Run, WorkItemDetail } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
@@ -93,55 +93,64 @@ export function WorkItemScreen({ client, workItemId, onOpenRun, breadcrumb }: Wo
   // One per repository the work changed, in the order they were opened.
   const prs = [...pullRequests].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 
-  return (
-    <div className="workItemScreen" data-testid="work-item-screen">
-      <header className="wiHeader">
-        {breadcrumb}
-        <div className="wiTitleRow">
-          <StatusBadge status={item.status} />
-          {item.key ? <code className="wiKey" title={item.id}>{item.key}</code> : null}
-          <h1 className="wiTitle">{item.title}</h1>
-        </div>
-        {item.goal ? <p className="wiGoal">{item.goal}</p> : null}
-        {item.acceptanceCriteria.length > 0 ? (
-          <ul className="wiCriteria">
-            {item.acceptanceCriteria.map((c) => (
-              <li key={c}>{c}</li>
-            ))}
-          </ul>
-        ) : null}
-        <div className="wiActions">
-          {!started ? (
-            <Button
-              variant="primary"
-              leadingIcon="zap"
-              onClick={() => void deliver()}
-              disabled={delivering}
-              data-testid="deliver"
-            >
-              {delivering ? "Starting…" : "Deliver"}
-            </Button>
-          ) : null}
-          {/* Work that changed no code ends waiting to be read, with no PR to merge. */}
-          {item.status === "review" && prs.length === 0 && phases.length > 0 &&
-          phases.every((r) => ["completed", "failed", "aborted"].includes(r.status)) ? (
-            <Button variant="primary" leadingIcon="check" data-testid="mark-done"
-              onClick={() => void client.markDone(workItemId).then(() => load(),
-                (err: unknown) => setProblem(err instanceof ApiError ? err.message : "Could not mark it done."))}>
-              Mark done
-            </Button>
-          ) : null}
-          <Button variant="secondary" leadingIcon="edit" onClick={() => setEditing(true)} data-testid="edit-work-item">
-            {started ? "Move" : "Edit"}
-          </Button>
-          {prs.map((pr) => (
-            <a key={pr.id} className="wiPrLink" href={pr.url} target="_blank" rel="noreferrer" data-testid="pr-link">
-              {prs.length > 1 ? `${pr.repositoryName} #${pr.number}` : `Pull request #${pr.number}`} ↗
-            </a>
+  const description = item.goal || item.acceptanceCriteria.length > 0 ? (
+    <>
+      {item.goal ? <p>{item.goal}</p> : null}
+      {item.acceptanceCriteria.length > 0 ? (
+        <ul aria-label="Acceptance criteria">
+          {item.acceptanceCriteria.map((c) => (
+            <li key={c}>{c}</li>
           ))}
-        </div>
-        {problem ? <p className="problem">{problem}</p> : null}
-        {editing ? (
+        </ul>
+      ) : null}
+    </>
+  ) : undefined;
+
+  return (
+    <Page data-testid="work-item-screen">
+      <PageHeader
+        data-testid="work-item-header"
+        breadcrumb={breadcrumb}
+        status={<StatusBadge status={item.status} />}
+        itemKey={item.key ? <span title={item.id}>{item.key}</span> : undefined}
+        title={item.title}
+        description={description}
+        actions={
+          <>
+            {!started ? (
+              <Button
+                variant="primary"
+                leadingIcon="zap"
+                onClick={() => void deliver()}
+                disabled={delivering}
+                data-testid="deliver"
+              >
+                {delivering ? "Starting…" : "Deliver"}
+              </Button>
+            ) : null}
+            {/* Work that changed no code ends waiting to be read, with no PR to merge. */}
+            {item.status === "review" && prs.length === 0 && phases.length > 0 &&
+            phases.every((r) => ["completed", "failed", "aborted"].includes(r.status)) ? (
+              <Button variant="primary" leadingIcon="check" data-testid="mark-done"
+                onClick={() => void client.markDone(workItemId).then(() => load(),
+                  (err: unknown) => setProblem(err instanceof ApiError ? err.message : "Could not mark it done."))}>
+                Mark done
+              </Button>
+            ) : null}
+            <Button variant="secondary" leadingIcon="edit" onClick={() => setEditing(true)} data-testid="edit-work-item">
+              {started ? "Move" : "Edit"}
+            </Button>
+            {prs.map((pr) => (
+              <a key={pr.id} href={pr.url} target="_blank" rel="noreferrer" data-testid="pr-link">
+                {prs.length > 1 ? `${pr.repositoryName} #${pr.number}` : `Pull request #${pr.number}`} ↗
+              </a>
+            ))}
+          </>
+        }
+      >
+        {problem ? <Callout tone="danger">{problem}</Callout> : null}
+      </PageHeader>
+      {editing ? (
         <WorkItemDialog
           client={client}
           projectId={item.projectId}
@@ -149,15 +158,13 @@ export function WorkItemScreen({ client, workItemId, onOpenRun, breadcrumb }: Wo
           existing={existingWorkItem(item, started)}
           onSaved={() => void load()}
         />
-        ) : null}
-      </header>
+      ) : null}
 
-      <section className="wiSection" aria-labelledby="pipeline-heading">
-        <h2 id="pipeline-heading" className="ds-label wiSectionTitle">Pipeline</h2>
+      <Section title="Pipeline">
         {started ? (
-          <ol className="pipeline" data-testid="pipeline">
+          <StepList data-testid="pipeline">
             {phases.map((run, index) => (
-              <PhaseCard
+              <PhaseStep
                 key={run.id}
                 run={run}
                 step={index + 1}
@@ -168,7 +175,7 @@ export function WorkItemScreen({ client, workItemId, onOpenRun, breadcrumb }: Wo
             {prs.map((pr) => (
               <PullRequestStep key={pr.id} pr={pr} named={prs.length > 1} />
             ))}
-          </ol>
+          </StepList>
         ) : (
           <EmptyState
             compact
@@ -177,13 +184,12 @@ export function WorkItemScreen({ client, workItemId, onOpenRun, breadcrumb }: Wo
             description="Deliver runs an implementer, reviewers, a fixer if they find problems, a simplifier, and opens a pull request."
           />
         )}
-      </section>
+      </Section>
 
       <ArtifactsSection client={client} artifacts={artifacts} />
 
       {findings.length > 0 ? (
         <FindingGroup
-          className="wiSection"
           data-testid="findings"
           findings={findings}
           renderRow={(f) => (
@@ -212,37 +218,33 @@ export function WorkItemScreen({ client, workItemId, onOpenRun, breadcrumb }: Wo
           )}
         />
       ) : null}
-    </div>
+    </Page>
   );
 }
 
-function PhaseCard(props: { run: Run; step: number; findings: Finding[]; onOpen: () => void }) {
+function PhaseStep(props: { run: Run; step: number; findings: Finding[]; onOpen: () => void }) {
   const { run } = props;
   const blocking = props.findings.filter((f) => f.severity === "blocking" || f.severity === "high");
-  const label = runLabel(run);
+  const heads = Object.entries(run.heads);
 
   return (
-    <li className="phase" data-phase={run.phase} data-status={run.status}>
-      <button type="button" className="phaseButton" onClick={props.onOpen} data-testid="phase">
-        <span className="phaseStep">{props.step}</span>
-        <AgentAvatar role={run.role ?? DEFAULT_RUN_ROLE} size="sm" live={run.status === "running"} />
-        <span className="phaseLabel">{label}</span>
-        <StatusBadge status={run.status} size="sm" />
-        {run.phase === "review" && run.status === "completed" ? (
-          <span className="phaseNote">
-            {props.findings.length === 0 ? "no findings" : `${blocking.length} blocking`}
-          </span>
-        ) : null}
-        {Object.keys(run.heads).length > 0 ? (
-          <code className="phaseSha" title={Object.entries(run.heads).map(([repo, sha]) => `${repo} ${sha}`).join("\n")}>
-            {Object.keys(run.heads).length === 1
-              ? Object.values(run.heads)[0]!.slice(0, 7)
-              : Object.entries(run.heads).map(([repo, sha]) => `${repo}@${sha.slice(0, 7)}`).join(" ")}
-          </code>
-        ) : null}
-        <span className="phaseOpen" aria-hidden>›</span>
-      </button>
-    </li>
+    <StepRow
+      data-testid="phase"
+      data-phase={run.phase}
+      data-status={run.status}
+      onOpen={props.onOpen}
+      step={props.step}
+      avatar={<AgentAvatar role={run.role ?? DEFAULT_RUN_ROLE} size="sm" live={run.status === "running"} />}
+      label={runLabel(run)}
+      status={<StatusBadge status={run.status} size="sm" />}
+      note={run.phase === "review" && run.status === "completed"
+        ? props.findings.length === 0 ? "no findings" : `${blocking.length} blocking`
+        : undefined}
+      meta={heads.length === 0 ? undefined : heads.length === 1
+        ? heads[0]![1].slice(0, 7)
+        : heads.map(([repo, sha]) => `${repo}@${sha.slice(0, 7)}`).join(" ")}
+      metaTitle={heads.length > 0 ? heads.map(([repo, sha]) => `${repo} ${sha}`).join("\n") : undefined}
+    />
   );
 }
 
@@ -263,19 +265,16 @@ const PR_STATE_STATUS: Record<PullRequest["state"], "review" | "done" | "aborted
  */
 function PullRequestStep({ pr, named }: { pr: PullRequest; named: boolean }) {
   return (
-    <li className="phase" data-phase="pr" data-status={pr.state}>
-      <a className="phaseButton" href={pr.url} target="_blank" rel="noreferrer" data-testid="pr-step">
-        <span className="phaseStep">PR</span>
-        <span className="phaseLabel">
-          {named ? <><span className="mono">{pr.repositoryName}</span> #{pr.number}</> : <>Pull request #{pr.number}</>}
-        </span>
-        <StatusBadge status={PR_STATE_STATUS[pr.state]} size="sm" />
-        <span className="phaseNote">
-          {pr.state} · checks {pr.checks} · review {pr.review.replace("_", " ")}
-        </span>
-        <code className="phaseSha">{pr.headBranch}</code>
-        <span className="phaseOpen" aria-hidden>↗</span>
-      </a>
-    </li>
+    <StepRow
+      data-testid="pr-step"
+      data-phase="pr"
+      data-status={pr.state}
+      href={pr.url}
+      step="PR"
+      label={named ? <><span className="ds-mono">{pr.repositoryName}</span> #{pr.number}</> : <>Pull request #{pr.number}</>}
+      status={<StatusBadge status={PR_STATE_STATUS[pr.state]} size="sm" />}
+      note={`${pr.state} · checks ${pr.checks} · review ${pr.review.replace("_", " ")}`}
+      meta={pr.headBranch}
+    />
   );
 }

@@ -37,6 +37,12 @@ body {
   overflow: auto;
 }
 
+.sidebarFooter {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--ds-space-4);
+}
+
 .centered {
   display: flex;
   flex: 1;
@@ -44,41 +50,38 @@ body {
   justify-content: center;
 }
 
+.muted {
+  color: var(--ds-color-text-muted);
+}
+
+/* Credential entry, until real auth exists: a card in the middle of the page. */
+.keyPrompt {
+  width: 100%;
+  max-width: 40ch;
+  margin: 15vh auto;
+}
+
+.keyPrompt h1 {
+  margin: 0;
+  font-size: inherit;
+}
+
+.runScreen {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: var(--ds-space-8);
+}
+
+/* A settings tab's content, clear of its tab list. */
+.tabPanel {
+  padding-top: var(--ds-space-16);
+}
+
 /* -- work item dialog ------------------------------------------------------ */
 
-.dialogForm {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-12);
-}
-
-.fieldRow {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--ds-space-12);
-}
-
-/* A fieldset laid out as a column: acceptance criteria, settings choices. */
-.criteria,
-.choices {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-6);
-  border: 0;
-  margin: 0;
-  padding: 0;
-  min-width: 0;
-}
-
-.criteria legend,
-.choices legend {
-  padding: 0;
-  margin-bottom: var(--ds-space-4);
-  font-size: var(--ds-text-sm);
-  font-weight: var(--ds-weight-medium);
-  color: var(--ds-color-text-secondary);
-}
-
+/* A criterion's input, with its remove button beside it. */
 .criterion {
   display: flex;
   align-items: center;
@@ -93,307 +96,11 @@ body {
   align-self: flex-start;
 }
 
-/* -- work item delivery view -------------------------------------------- */
-
-.workItemScreen {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-20);
-  max-width: 960px;
-}
-
-.wiHeader {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-8);
-}
-
-.wiTitleRow {
-  display: flex;
-  align-items: center;
-  gap: var(--ds-space-12);
-}
-
-.wiTitle {
-  margin: 0;
-  font-size: var(--ds-text-xl);
-  font-weight: var(--ds-weight-semibold);
-}
-
-.wiKey {
-  color: var(--ds-color-text-muted);
-  font-size: var(--ds-text-xs);
-}
-
-.wiGoal {
-  margin: 0;
-  color: var(--ds-color-text-secondary);
-}
-
-.wiCriteria {
-  margin: 0;
-  padding-left: var(--ds-space-20);
-  color: var(--ds-color-text-secondary);
-}
-
-.wiActions {
-  display: flex;
-  align-items: center;
-  gap: var(--ds-space-12);
-}
-
-.wiPrLink {
-  color: var(--ds-color-accent);
-  font-weight: var(--ds-weight-medium);
-}
-
-.wiSection {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-8);
-}
-
-/* Typography comes from the design system's `.ds-label`; layout only here. */
-.wiSectionTitle {
-  display: flex;
-  align-items: center;
-  gap: var(--ds-space-8);
-  margin: 0;
-}
-
-/* The pipeline: one row per phase Run, a hairline between them. */
-.pipeline {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  border: 1px solid var(--ds-color-border-subtle);
-  border-radius: var(--ds-radius-md);
-  background: var(--ds-color-surface);
-  overflow: hidden;
-}
-
-.phase + .phase {
-  border-top: 1px solid var(--ds-color-border-subtle);
-}
-
-.phaseButton {
-  display: flex;
-  align-items: center;
-  gap: var(--ds-space-12);
-  width: 100%;
-  padding: var(--ds-space-8) var(--ds-space-12);
-  background: none;
-  border: 0;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  text-decoration: none;
-  cursor: pointer;
-}
-
-.phaseButton:hover {
-  background: var(--ds-color-raised);
-}
-
-.phaseStep {
-  width: 1.75em;
-  color: var(--ds-color-text-muted);
-  font-family: var(--ds-font-mono);
-  font-size: var(--ds-text-xs);
-}
-
-.phaseLabel {
-  min-width: 12em;
-  font-weight: var(--ds-weight-medium);
-}
-
-.phaseNote {
-  color: var(--ds-color-text-muted);
-  font-size: var(--ds-text-sm);
-}
-
-.phaseSha {
-  margin-left: auto;
-  color: var(--ds-color-text-muted);
-  font-size: var(--ds-text-xs);
-}
-
-.phaseOpen {
-  color: var(--ds-color-text-muted);
-}
-
-/* The chevron keeps to the right edge, with or without a commit before it. */
-.phaseOpen:not(.phaseSha + .phaseOpen) {
-  margin-left: auto;
-}
-
-/* The live phase gets the only colour on the list. */
-.phase[data-status="running"] .phaseButton {
-  box-shadow: inset 2px 0 0 var(--ds-color-accent);
-}
-
-.runScreen {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  gap: var(--ds-space-8);
-}
-
-.muted {
-  color: var(--ds-color-text-muted);
-}
-
-.problem {
-  color: var(--ds-tone-danger-fg);
-  background: var(--ds-tone-danger-bg);
-  border: 1px solid var(--ds-tone-danger-border);
-  border-radius: var(--ds-radius-md);
-  padding: var(--ds-space-8) var(--ds-space-12);
-  margin: 0;
-}
-
-/* Credential entry, until real auth exists. */
-.keyPrompt {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-12);
-  max-width: 320px;
-  margin: 15vh auto;
-  padding: var(--ds-space-20);
-  background: var(--ds-color-surface);
-  border: 1px solid var(--ds-color-border-subtle);
-  border-radius: var(--ds-radius-lg);
-}
-
-.keyPrompt h1 {
-  margin: 0;
-  font-size: var(--ds-text-xl);
-}
-
-.keyPrompt p {
-  margin: 0;
-  color: var(--ds-color-text-secondary);
-}
-
-/* -- settings --------------------------------------------------------------- */
-
-.settingsScreen {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-16);
-  padding: var(--ds-space-16) var(--ds-space-24);
-  max-width: 880px;
-}
-
-.settingsHeader {
-  display: flex;
-  align-items: baseline;
-  gap: var(--ds-space-8);
-}
-
-.settingsForm,
-.settingsSection {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-16);
-  padding-top: var(--ds-space-16);
-}
-
-/* A form is read in one column; a table uses the width it has. */
-.settingsForm {
-  max-width: 640px;
-}
-
-.settingsBack {
-  margin-left: auto;
-}
-
-.settingsActions {
-  display: flex;
-  gap: var(--ds-space-8);
-}
-
-.rowActions {
-  display: inline-flex;
-  gap: var(--ds-space-4);
-}
-
-.sidebarFooter {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--ds-space-4);
-}
-
-.facts {
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  gap: var(--ds-space-6) var(--ds-space-16);
-  margin: 0;
-}
-
-.facts dt {
-  color: var(--ds-color-text-secondary);
-}
-
-.facts dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.mono {
-  font-family: var(--ds-font-mono);
-}
-
-.screenBreadcrumb {
-  margin-bottom: var(--ds-space-8);
-}
-
-/* An artifact's download: an icon button at the row's end. */
-.artifactDownload {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--ds-radius-sm);
-  background: none;
-  color: var(--ds-color-text-muted);
-  cursor: pointer;
-}
-
-.artifactDownload:hover {
-  background: var(--ds-color-raised);
-  color: var(--ds-color-text-primary);
-}
-
-.artifactDownload:focus-visible {
-  outline: 2px solid var(--ds-color-focus-ring);
-  outline-offset: 1px;
-}
-
-/* Which repositories a work item touches, in its dialog. */
-.repositoryChooser {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-8);
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-.repositoryChooser legend {
-  margin-bottom: var(--ds-space-4);
-  font-size: var(--ds-text-sm);
-  font-weight: var(--ds-weight-medium);
-}
-
+/* A repository, and what the work does in it once chosen. */
 .repositoryChoice {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--ds-space-12);
-  min-height: 32px;
+  min-height: var(--ds-size-row-default);
 }

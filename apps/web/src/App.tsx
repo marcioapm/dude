@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { boardScope, type NavProject, type NavRow } from "@dude/design-system";
 import { Board, Breadcrumb, Sidebar, type BreadcrumbItem } from "@dude/design-system/components";
-import { Button, EmptyState, RowMenu, Spinner, useToast } from "@dude/design-system/primitives";
+import { Button, Callout, EmptyState, RowMenu, Spinner, useToast } from "@dude/design-system/primitives";
 import type { ApiClient } from "./api/client.ts";
 import { useReloadOnEvents } from "./hooks/useEventStream.ts";
 import { errorText } from "./hooks/useSave.tsx";
@@ -293,7 +293,7 @@ export function App({ client, onSignOut }: AppProps) {
       ...(where.agent !== null ? { onSelect: () => go(inTree({ kind: "workItem", id: workItemId })) } : {}),
     });
     if (where.agent !== null) items.push({ id, label: where.agent });
-    return <Breadcrumb items={items} className="screenBreadcrumb" />;
+    return <Breadcrumb items={items} />;
   }
 
   const saved = () => void load();
@@ -368,7 +368,7 @@ export function App({ client, onSignOut }: AppProps) {
         />
       ) : null}
       <main className="main">
-        {problem ? <p className="problem">{problem}</p> : null}
+        {problem ? <Callout tone="danger">{problem}</Callout> : null}
         {main}
       </main>
     </div>

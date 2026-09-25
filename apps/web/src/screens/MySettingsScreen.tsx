@@ -6,7 +6,7 @@
 
 import { useEffect, useState } from "react";
 import { useTheme } from "@dude/design-system";
-import { Button, Card, CardBody, CardHeader, Select } from "@dude/design-system/primitives";
+import { Button, Callout, Card, CardBody, CardHeader, FormActions, FormStack, Page, PageHeader, Select } from "@dude/design-system/primitives";
 import type { ApiClient } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import { pushState, showTestNotification, turnPushOff, turnPushOn, type PushState } from "../push.ts";
@@ -41,15 +41,12 @@ export function MySettingsScreen({ client }: { client: ApiClient }) {
   };
 
   return (
-    <div className="settingsScreen" data-testid="my-settings">
-      <header className="settingsHeader">
-        <h1 className="wiTitle">You</h1>
-        <span className="muted">This browser</span>
-      </header>
+    <Page data-testid="my-settings">
+      <PageHeader title="You" description="This browser" />
       <Card>
         <CardHeader title="Appearance" />
         <CardBody>
-          <div className="settingsForm">
+          <FormStack>
             <Select
               label="Theme"
               value={theme.preference}
@@ -69,17 +66,17 @@ export function MySettingsScreen({ client }: { client: ApiClient }) {
                 { value: "compact", label: "Compact — more on screen" },
               ]}
             />
-          </div>
+          </FormStack>
         </CardBody>
       </Card>
       <Card data-testid="notifications">
         <CardHeader title="Notifications" />
         <CardBody>
           {push === null ? null : (
-            <div className="settingsForm">
+            <FormStack>
               <p className="muted" data-testid="push-state" data-state={push}>{PUSH_TEXT[push]}</p>
-              {problem ? <p className="problem" role="alert">{problem}</p> : null}
-              <div className="settingsActions">
+              {problem ? <Callout tone="danger">{problem}</Callout> : null}
+              <FormActions>
                 {push === "off" ? (
                   <Button variant="primary" disabled={busy} onClick={() => void change(() => turnPushOn(client))} data-testid="push-on">
                     Notify me in this browser
@@ -95,11 +92,11 @@ export function MySettingsScreen({ client }: { client: ApiClient }) {
                     </Button>
                   </>
                 ) : null}
-              </div>
-            </div>
+              </FormActions>
+            </FormStack>
           )}
         </CardBody>
       </Card>
-    </div>
+    </Page>
   );
 }

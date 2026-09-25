@@ -100,7 +100,7 @@ def test_delivering_from_the_ui_reaches_a_pull_request_and_back(
 
     # Merging on the forge finishes the work item.
     fake_github.merge(pr_number)
-    expect(page.locator(".wiHeader")).to_contain_text("Done", timeout=90_000)
+    expect(page.get_by_test_id("work-item-header")).to_contain_text("Done", timeout=90_000)
 
     assert console_errors == []
 
@@ -121,8 +121,9 @@ def test_a_work_item_is_edited_and_moved_from_its_screen(
     page.get_by_role("listbox").get_by_text("Greetings").click()
     page.get_by_test_id("work-item-save").click()
 
-    expect(page.locator(".wiTitle")).to_have_text("Greet by full name")
-    expect(page.locator(".wiCriteria")).to_contain_text("Uses the full name")
+    screen = page.get_by_test_id("work-item-screen")
+    expect(screen.get_by_role("heading", level=1)).to_have_text("Greet by full name")
+    expect(screen.get_by_role("list", name="Acceptance criteria")).to_contain_text("Uses the full name")
     saved = client.get(f"/v1/work-items/{item['id']}").json()
     assert saved["epicId"] == epic["id"]
     assert console_errors == []

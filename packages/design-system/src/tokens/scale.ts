@@ -200,6 +200,8 @@ export const measure = {
   message: "70ch",
   /** Published artifacts read in full: Obsidian's readable line width. */
   document: "700px",
+  /** A page of the app outside the board and the transcript: a work item, settings. */
+  page: "960px",
 } as const;
 
 export const zIndex = {

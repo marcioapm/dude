@@ -104,6 +104,7 @@
   --ds-cadence-blink: 1000ms;
   --ds-measure-message: 70ch;
   --ds-measure-document: 700px;
+  --ds-measure-page: 960px;
   --ds-z-base: 0;
   --ds-z-raised: 1;
   --ds-z-sticky: 10;
