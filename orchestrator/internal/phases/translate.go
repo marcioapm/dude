@@ -340,7 +340,10 @@ func (t *translator) settleClone(ctx context.Context, tx pgx.Tx, s *Syncer, repo
 		_, err := tx.Exec(ctx, `WITH done AS (
 				UPDATE repository_requests q SET status = 'cloned' FROM repositories repo
 				WHERE repo.id = q.repository_id AND q.run_id = $1 AND repo.name = $2 AND q.status = 'approved')
-			UPDATE runs SET lux_repositories = array_append(lux_repositories, $2)
+			UPDATE runs SET lux_repositories = array_append(lux_repositories, $2),
+				lux_pushes = CASE WHEN EXISTS (SELECT 1 FROM work_item_repositories wr JOIN repositories repo ON repo.id = wr.repository_id
+					WHERE wr.work_item_id = runs.work_item_id AND repo.name = $2 AND wr.access = 'write')
+					THEN array_append(lux_pushes, $2) ELSE lux_pushes END
 			WHERE id = $1 AND NOT ($2 = ANY (lux_repositories))`, t.run.ID, repo)
 		return err
 	}

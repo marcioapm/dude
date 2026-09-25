@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -1275,6 +1276,86 @@ func TestWorkGivenARepositoryToChangeMidRunIsPushed(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE work_item_id = $1 AND payload->>'reason' = 'no_changes'`, wi); n != 0 {
 		t.Errorf("escalated as no changes")
+	}
+}
+
+// Work that holds nothing it may push is not pushed: a container that is
+// gone by the time the turn is read still completes with what it published.
+func TestAPublishingRunWithNothingToPushFinishesAfterItsContainerIsGone(t *testing.T) {
+	w := newWorld(t)
+	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+		VALUES ($1, $2, $3, 'web', 'https://github.com/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
+			return fakelux.Behaviour{Hang: true}
+		}
+		return fakelux.Behaviour{Reply: "Wrote the notes.", Publish: map[string]string{"NOTES.md": "notes\n"}, ExitAfterTurn: true}
+	}
+	wi := w.workItem() // names no repository: the project has two
+	w.deliver(wi)
+	w.until("the implementer to complete", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND phase = 'implement' AND status = 'completed'`, wi) == 1
+	})
+}
+
+// A person approving a repository the lux Run already has checked out: no
+// clone will come, so the approval settles at once, and the agent waiting
+// on it is told and carries on.
+func TestAnApprovalForARepositoryTheRunAlreadyHasSettlesAtOnce(t *testing.T) {
+	w := newWorld(t)
+	w.withTools()
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	wi := w.workItem()
+	w.names(wi, w.repoID)
+	w.deliver(wi)
+	w.until("the agent to be working", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'running'`, wi) == 1
+	})
+	var runID string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE work_item_id = $1`, wi).Scan(&runID)
+	// A person takes target off the work item; the lux Run still has it.
+	mustExec(t, w.owner, `DELETE FROM work_item_repositories WHERE work_item_id = $1`, wi)
+	_, body := w.callTool(w.syncer.Agent.ToolsURL, string(w.lux.Runs()[0].Spec), "request_repository",
+		`{"repository":"target","reason":"I still need it","wait":true}`)
+	var req struct{ RequestID string }
+	_ = json.Unmarshal([]byte(body), &req)
+	if status, out := w.call("/internal/repository-requests/"+req.RequestID+"/decide", map[string]any{"approve": true}); status != 200 {
+		t.Fatalf("approve: %d %v (%s)", status, out, body)
+	}
+	if n := w.count(`SELECT count(*) FROM repository_requests WHERE id = $1 AND status = 'cloned'`, req.RequestID); n != 1 {
+		t.Fatalf("the approval did not settle")
+	}
+	w.until("the agent to be told", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND text LIKE '%already checked out%' AND sent_at IS NOT NULL`, runID) == 1
+	})
+	if w.lux.Runs()[0].Resumed != 0 {
+		t.Errorf("paused and resumed for a repository it had")
+	}
+}
+
+// unreadableForge is a forge whose credentials cannot be read right now.
+type unreadableForge struct{}
+
+func (unreadableForge) For(context.Context, string) (*forge.GitHub, error) {
+	return nil, errors.New("connection reset")
+}
+
+// A forge whose credentials cannot be read for a moment delays a start; it
+// does not make one without them.
+func TestAForgeThatCannotBeReadDelaysTheRunRatherThanStartingItWithoutCredentials(t *testing.T) {
+	w := newWorld(t)
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	w.syncer.Forges = unreadableForge{}
+	wi := w.workItem()
+	w.deliver(wi)
+	for range 5 {
+		w.pump()
+	}
+	if n := len(w.lux.Runs()); n != 0 {
+		t.Fatalf("started %d lux Runs without the forge's credentials", n)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'failed'`, wi); n != 0 {
+		t.Fatalf("failed the Run over a passing forge error")
 	}
 }
 

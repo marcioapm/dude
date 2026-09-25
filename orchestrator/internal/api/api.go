@@ -28,6 +28,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
+	"github.com/marciomartins/dude/orchestrator/internal/phases"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
@@ -633,6 +634,22 @@ func (s *Server) decideRepositoryRequest(w http.ResponseWriter, r *http.Request,
 				VALUES ($1, $2, $3, $4::repository_access) ON CONFLICT (work_item_id, repository_id) DO NOTHING`,
 				org, workItemID, repoID, access); err != nil {
 				return err
+			}
+			// The lux Run has it already (a person took it off the work item
+			// and back): nothing to bring, so it is settled now — nothing
+			// would ever clone it.
+			tag, err := tx.Exec(r.Context(), `UPDATE repository_requests q SET status = 'cloned'
+				FROM runs run WHERE q.id = $1 AND run.id = q.run_id AND $2 = ANY (run.lux_repositories)`, id, repoName)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() > 0 {
+				// Told, as a steer is: that starts the turn it may be waiting
+				// for, and is the input a parked one is resumed with.
+				text := fmt.Sprintf("A person approved your request: %s is already checked out at %s. Carry on.", repoName, phases.RepoPath(repoName))
+				if _, _, err := insertDirective(r.Context(), tx, org, runID, ri, text, "run", "", false); err != nil {
+					return err
+				}
 			}
 		} else {
 			// Told as a steer is, so the agent hears it on its next turn.
