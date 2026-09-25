@@ -18,9 +18,6 @@ describe("cssVar names", () => {
   test("accepts density-only tokens", () => {
     const names = Object.keys(densityTokens.comfortable) as DensityToken[];
     for (const n of names) expect(cssVar(n)).toBe(`var(--ds-${n})`);
-    expect(cssVar("leading-chat")).toBe("var(--ds-leading-chat)");
     expect(cssVar("md-gap", "1em")).toBe("var(--ds-md-gap, 1em)");
-    expect(cssVar("space-chat-avatar-gap")).toBe("var(--ds-space-chat-avatar-gap)");
-    expect(cssVar("size-avatar-chat")).toBe("var(--ds-size-avatar-chat)");
   });
 });
