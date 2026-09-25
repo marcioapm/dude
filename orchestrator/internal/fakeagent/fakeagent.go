@@ -37,6 +37,10 @@ const HangModel = "fake/hang"
 // tools is exercised.
 const ToolsModel = "fake/tools"
 
+// RequestModel's implementer asks for the project's "web" repository to read,
+// and waits (never finishing its turn) until it is resumed with it.
+const RequestModel = "fake/request"
+
 // AskModel's implementer stops on a question first, and does its work in
 // the turn the answer starts.
 const AskModel = "fake/ask"
@@ -107,6 +111,10 @@ func For(phase, model, runID string, fixed bool) Step {
 		if model == AskModel {
 			step.Ask = Question
 		}
+		if model == RequestModel {
+			step.Tools = [][2]string{{"request_repository", `{"repository":"web","reason":"the client calls this API"}`}}
+			step.Hang = true
+		}
 		if model == ToolsModel {
 			step.Tools = [][2]string{
 				{"emit_event", `{"type":"progress","data":{"done":1,"of":2,"step":"writing FACTORY.md"}}`},
@@ -164,7 +172,10 @@ func Script(phase, model, runID string) string {
 	}
 	var b strings.Builder
 	if model == ToolsModel && phase == "implement" {
+		// Both ways dude's tools reach an agent on lux: MCP, and the local
+		// service socket the dude CLI uses (no token in the container).
 		b.WriteString("mcp-call dude list_work \n")
+		b.WriteString(`http dude POST /tools/emit_event {"type":"progress","data":{"done":1,"of":1,"step":"through the socket"}}` + "\n")
 	}
 	for path, line := range step.Commit {
 		// In the workdir: the one repository. (Work across several needs

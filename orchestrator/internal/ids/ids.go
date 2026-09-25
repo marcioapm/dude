@@ -26,6 +26,7 @@ const (
 	Artifact       = "art"
 	WorkItem       = "wi"
 	Epic           = "epc"
+	RepoRequest    = "rrq"
 )
 
 // New returns `<prefix>_<base36 millis, 9 wide><16 hex>`.

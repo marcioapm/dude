@@ -15,6 +15,7 @@ package agenttools
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -31,6 +32,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
 
@@ -48,12 +50,32 @@ type Caller struct {
 	RunID, Org, ProjectID, WorkItemID, Role, Status string
 }
 
-// NewToken mints a Run's token: the value for the agent, and the hash to
-// store. Only the hash is kept.
+func (c Caller) run() delivery.RunRef {
+	return delivery.RunRef{Org: c.Org, ProjectID: c.ProjectID, WorkItemID: c.WorkItemID, RunID: c.RunID}
+}
+
+// event is a ledger event by the calling agent, on its Run.
+func (c Caller) event(typ string, payload map[string]any) ledger.Event {
+	return c.run().Event(typ, ledger.ActorAgent, payload)
+}
+
+// NewToken mints a random token: the value, and the hash to store.
 func NewToken() (token, hash string) {
 	var b [32]byte
 	_, _ = rand.Read(b[:])
 	token = "dude_run_" + hex.EncodeToString(b[:])
+	return token, HashToken(token)
+}
+
+// RunToken is a Run's token for one start (submit, or a resume): derived
+// from a server key, the Run and which start it is, so a retried submit or
+// resume — whose first attempt lux may have taken, keeping its secrets —
+// carries the same token rather than one lux never saw. Only its hash is
+// stored.
+func RunToken(key []byte, runID string, start int) (token, hash string) {
+	mac := hmac.New(sha256.New, key)
+	fmt.Fprintf(mac, "dude-run-token\x00%s\x00%d", runID, start)
+	token = "dude_run_" + hex.EncodeToString(mac.Sum(nil))
 	return token, HashToken(token)
 }
 
@@ -260,11 +282,24 @@ func define[In, Out any](name, description string, roles []string,
 		}}
 }
 
+// Calls a Run may make in a minute, and work items and events it may
+// create in its lifetime: enough for real work, not for a runaway loop.
+const (
+	callsPerMinute = 60
+	createsPerRun  = 20
+	eventsPerRun   = 2000
+	requestsPerRun = 10
+	resultInLedger = 4 << 10 // bytes of a result recorded; the rest summarized
+)
+
 // call runs a tool and records the call in the ledger, in the same
 // transaction as what the tool did.
 func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessage) (json.RawMessage, error) {
 	var out json.RawMessage
 	err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
+		if err := withinLimits(ctx, tx, c, t.name); err != nil {
+			return err
+		}
 		result, err := t.run(ctx, tx, c, args)
 		if err != nil {
 			return err
@@ -275,14 +310,36 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 		if len(args) == 0 {
 			args = json.RawMessage("{}")
 		}
-		_, err = ledger.Append(ctx, tx, ledger.Event{
-			Type: EventType, OrganizationID: c.Org, ProjectID: c.ProjectID, WorkItemID: c.WorkItemID, RunID: c.RunID,
-			ActorType: ledger.ActorAgent, ActorID: c.RunID, Source: ledger.SourceOrchestrator, CorrelationID: c.WorkItemID,
-			Payload: map[string]any{"tool": t.name, "arguments": args, "result": out},
-		})
+		// A large answer (a whole project's listing) is not copied into the
+		// ledger on every call: its size is.
+		recorded := any(out)
+		if len(out) > resultInLedger {
+			recorded = map[string]any{"bytes": len(out), "truncated": true}
+		}
+		_, err = ledger.Append(ctx, tx, c.event(EventType, map[string]any{"tool": t.name, "arguments": args, "result": recorded}))
 		return err
 	})
 	return out, err
+}
+
+// withinLimits refuses a call past the Run's budget: counted from the
+// ledger, where every call is.
+func withinLimits(ctx context.Context, tx pgx.Tx, c Caller, tool string) error {
+	var recent, sameTool int
+	if err := tx.QueryRow(ctx, `SELECT
+			count(*) FILTER (WHERE occurred_at > now() - interval '1 minute'),
+			count(*) FILTER (WHERE payload->>'tool' = $3)
+		FROM events WHERE run_id = $1 AND event_type = $2`, c.RunID, EventType, tool).Scan(&recent, &sameTool); err != nil {
+		return err
+	}
+	limit := map[string]int{"create_work_item": createsPerRun, "emit_event": eventsPerRun, "request_repository": requestsPerRun}[tool]
+	switch {
+	case recent >= callsPerMinute:
+		return refuse("too many calls: at most %d a minute; slow down", callsPerMinute)
+	case limit > 0 && sameTool >= limit:
+		return refuse("%s is limited to %d calls in a run; this run has used them", tool, limit)
+	}
+	return nil
 }
 
 // refusal is a tool declining a request, with the reason for the caller.

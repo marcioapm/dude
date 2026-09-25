@@ -8,9 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
-	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -168,6 +166,34 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 		if lux.Terminal(state) {
 			return t.ended(ctx, tx, s, state, str("reason"))
 		}
+	case "git.clone":
+		// A repository added at a resume (only those carry a request id):
+		// the approval for it, on this Run, is settled by name — cloned, or
+		// failed, when lux has dropped it and the agent goes on without it.
+		if str("requestId") == "" {
+			return nil
+		}
+		if str("status") != "failed" {
+			_, err := tx.Exec(ctx, `WITH done AS (
+					UPDATE repository_requests q SET status = 'cloned' FROM repositories repo
+					WHERE repo.id = q.repository_id AND q.run_id = $1 AND repo.name = $2 AND q.status = 'approved')
+				UPDATE runs SET lux_repositories = array_append(lux_repositories, $2)
+				WHERE id = $1 AND NOT ($2 = ANY (lux_repositories))`, t.run.ID, str("repo"))
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE repository_requests q SET status = 'failed', error = $3
+			FROM repositories repo WHERE repo.id = q.repository_id AND q.run_id = $1 AND repo.name = $2
+			  AND q.status = 'approved'`, t.run.ID, str("repo"), str("error")); err != nil {
+			return err
+		}
+		// Not checked out after all: the work item stops naming it.
+		if _, err := tx.Exec(ctx, `DELETE FROM work_item_repositories wr USING repository_requests q, repositories repo
+			WHERE q.run_id = $1 AND q.status = 'failed' AND repo.id = q.repository_id AND repo.name = $2
+			  AND wr.work_item_id = q.work_item_id AND wr.repository_id = q.repository_id`, t.run.ID, str("repo")); err != nil {
+			return err
+		}
+		return s.event(ctx, tx, t.run, "repository.clone_failed", ledger.ActorSystem,
+			map[string]any{"repository": str("repo"), "error": str("error")})
 	case "git.checkout":
 		// What each checkout started from, the first time it was made; a
 		// resume leaves the checkout as the agent left it.
@@ -280,9 +306,7 @@ func (t *translator) activity(ctx context.Context, tx pgx.Tx, s *Syncer, activit
 		if asked, err := t.question(ctx, tx, s); asked || err != nil {
 			return err
 		}
-		var open bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM questions WHERE run_id = $1 AND status = 'open')`,
-			t.run.ID).Scan(&open); err != nil || open {
+		if open, err := delivery.HasOpenQuestion(ctx, tx, t.run.ID); err != nil || open {
 			return err
 		}
 		tag, err := tx.Exec(ctx, `UPDATE runs SET turn_done_at = now()
@@ -406,18 +430,9 @@ func (t *translator) question(ctx context.Context, tx pgx.Tx, s *Syncer) (bool, 
 	if !ok {
 		return false, nil
 	}
-	id := ids.New(ids.Question)
-	options, _ := json.Marshal(db.NonNil(q.Options))
-	if _, err := tx.Exec(ctx, `INSERT INTO questions (id, organization_id, work_item_id, run_id, prompt, options)
-		VALUES ($1, $2, $3, $4, $5, $6::jsonb)`, id, t.run.Org, t.run.WorkItemID, t.run.ID, q.Prompt, options); err != nil {
-		return false, err
-	}
-	if _, err := delivery.SetWorkItemStatusTx(ctx, tx, t.run.Org, t.run.ProjectID, t.run.WorkItemID, "",
-		"awaiting_input", "the agent asked a question"); err != nil {
-		return false, err
-	}
-	return true, s.event(ctx, tx, t.run, delivery.EvQuestionAsked, ledger.ActorAgent,
-		map[string]any{"kind": "agent", "questionId": id, "prompt": q.Prompt, "options": db.NonNil(q.Options)})
+	_, err := delivery.AskTx(ctx, tx, delivery.RunRef{Org: t.run.Org, ProjectID: t.run.ProjectID,
+		WorkItemID: t.run.WorkItemID, RunID: t.run.ID}, q.Prompt, q.Options)
+	return err == nil, err
 }
 
 // flush records whatever reply or thought was streaming: something else

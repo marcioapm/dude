@@ -10,7 +10,7 @@
 //	dude publish FILE [--name NAME]       keep a file for people (local)
 //	dude tools                            what this run may use
 //
-// Output is JSON with --json, readable text otherwise.
+// Output is indented JSON.
 //
 // It acts as its Run, but never holds the Run's credential: lux serves dude's
 // tools on a local socket ($LUX_SERVICE_DUDE) and adds the credential on
@@ -27,12 +27,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"maps"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 )
@@ -56,7 +54,7 @@ func run(args []string, out io.Writer) error {
 		return nil
 	}
 	cmd, rest := args[0], args[1:]
-	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") && (cmd == "work" || cmd == "epic" || cmd == "repo") {
+	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") && (cmd == "work" || cmd == "epic") {
 		cmd, rest = cmd+" "+rest[0], rest[1:]
 	}
 	fs := flag.NewFlagSet("dude "+cmd, flag.ContinueOnError)
@@ -93,23 +91,24 @@ func run(args []string, out io.Writer) error {
 	case "ask":
 		var choices many
 		fs.Var(&choices, "choice", "an answer to offer (repeatable)")
-		if err := fs.Parse(reorder(rest)); err != nil {
+		args, err := parse(fs, rest)
+		if err != nil {
 			return err
 		}
-		if fs.NArg() != 1 {
+		if len(args) != 1 {
 			return errors.New(`usage: dude ask "question" [--choice C]...`)
 		}
-		return show(out, *asJSON, call("ask_person", map[string]any{"question": fs.Arg(0), "choices": []string(choices)}))
+		return show(out, *asJSON, call("ask_person", map[string]any{"question": args[0], "choices": []string(choices)}))
 	case "event":
 		data := fs.String("data", "", "JSON to go with it")
-		if len(rest) == 0 || strings.HasPrefix(rest[0], "-") {
-			return errors.New("usage: dude event TYPE [--data JSON]")
-		}
-		typ, rest := rest[0], rest[1:]
-		if err := fs.Parse(rest); err != nil {
+		args, err := parse(fs, rest)
+		if err != nil {
 			return err
 		}
-		body := map[string]any{"type": typ}
+		if len(args) != 1 {
+			return errors.New("usage: dude event TYPE [--data JSON]")
+		}
+		body := map[string]any{"type": args[0]}
 		if *data != "" {
 			if !json.Valid([]byte(*data)) {
 				return errors.New("--data is not JSON")
@@ -119,33 +118,33 @@ func run(args []string, out io.Writer) error {
 		return show(out, *asJSON, call("emit_event", body))
 	case "publish":
 		name := fs.String("name", "", "the name people see (default: the file's)")
-		if err := fs.Parse(reorder(rest)); err != nil {
+		args, err := parse(fs, rest)
+		if err != nil {
 			return err
 		}
-		if fs.NArg() != 1 {
+		if len(args) != 1 {
 			return errors.New("usage: dude publish FILE [--name NAME]")
 		}
-		return show(out, *asJSON, func() (json.RawMessage, error) { return publish(fs.Arg(0), *name) })
+		return show(out, *asJSON, func() (json.RawMessage, error) { return publish(args[0], *name) })
 	}
 	return fmt.Errorf("unknown command %q (dude help)", cmd)
 }
 
-// reorder puts flags before arguments, so `publish FILE --name N` and
-// `ask "question" --choice A` parse: Go's flags stop at the first argument.
-func reorder(args []string) []string {
-	var flags, rest []string
-	for i := 0; i < len(args); i++ {
-		if strings.HasPrefix(args[i], "-") {
-			flags = append(flags, args[i])
-			if !strings.Contains(args[i], "=") && i+1 < len(args) && args[i] != "--json" {
-				flags = append(flags, args[i+1])
-				i++
-			}
-			continue
+// parse parses flags wherever they are among the arguments — `publish FILE
+// --name N`, `ask "question" --choice A` — since Go's flags stop at the
+// first argument: parse, take that argument, parse what follows, repeat.
+func parse(fs *flag.FlagSet, args []string) ([]string, error) {
+	var positional []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			return nil, err
 		}
-		rest = append(rest, args[i])
+		if fs.NArg() == 0 {
+			return positional, nil
+		}
+		positional = append(positional, fs.Arg(0))
+		args = fs.Args()[1:]
 	}
-	return append(flags, rest...)
 }
 
 // publish copies a file into $LUX_ARTIFACTS, which lux collects when the
@@ -251,82 +250,21 @@ func request(method, path string, body []byte) (json.RawMessage, error) {
 	return data, nil
 }
 
-// show prints a result: indented JSON, or readable text for people and
-// models alike.
-func show(out io.Writer, asJSON bool, do func() (json.RawMessage, error)) error {
+// show prints a result as indented JSON: read by models and people alike,
+// and by scripts. (--json is accepted, and changes nothing.)
+func show(out io.Writer, _ bool, do func() (json.RawMessage, error)) error {
 	raw, err := do()
 	if err != nil {
 		return err
 	}
-	if asJSON {
-		var v any
-		_ = json.Unmarshal(raw, &v)
-		b, _ := json.MarshalIndent(v, "", "  ")
-		fmt.Fprintln(out, string(b))
-		return nil
-	}
-	fmt.Fprint(out, readable(raw))
-	return nil
-}
-
-func readable(raw json.RawMessage) string {
 	var v any
 	if json.Unmarshal(raw, &v) != nil {
-		return string(raw) + "\n"
+		fmt.Fprintln(out, string(raw))
+		return nil
 	}
-	var b strings.Builder
-	write(&b, v, "")
-	return b.String()
-}
-
-// write renders JSON as indented "key: value" lines, lists as "- " items.
-func write(b *strings.Builder, v any, indent string) {
-	switch t := v.(type) {
-	case map[string]any:
-		for _, k := range sortedKeys(t) {
-			switch child := t[k].(type) {
-			case map[string]any, []any:
-				fmt.Fprintf(b, "%s%s:\n", indent, k)
-				write(b, child, indent+"  ")
-			default:
-				fmt.Fprintf(b, "%s%s: %v\n", indent, k, child)
-			}
-		}
-	case []any:
-		if len(t) == 0 {
-			fmt.Fprintf(b, "%s(none)\n", indent)
-		}
-		for _, item := range t {
-			if m, ok := item.(map[string]any); ok {
-				fmt.Fprintf(b, "%s- %s\n", indent, oneLine(m))
-				continue
-			}
-			fmt.Fprintf(b, "%s- %v\n", indent, item)
-		}
-	default:
-		fmt.Fprintf(b, "%s%v\n", indent, t)
-	}
-}
-
-// oneLine shows a list item on one line: its key or name first, then the rest.
-func oneLine(m map[string]any) string {
-	var parts []string
-	for _, k := range []string{"key", "name", "title"} {
-		if v, ok := m[k]; ok {
-			parts = append(parts, fmt.Sprint(v))
-		}
-	}
-	for _, k := range sortedKeys(m) {
-		if k == "key" || k == "name" || k == "title" {
-			continue
-		}
-		parts = append(parts, fmt.Sprintf("%s=%v", k, m[k]))
-	}
-	return strings.Join(parts, "  ")
-}
-
-func sortedKeys(m map[string]any) []string {
-	return slices.Sorted(maps.Keys(m))
+	b, _ := json.MarshalIndent(v, "", "  ")
+	fmt.Fprintln(out, string(b))
+	return nil
 }
 
 const usage = `dude — the work you are part of, and dude's tools, from the shell.
@@ -343,5 +281,5 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
   dude publish FILE [--name NAME]            keep a file for people, shown with the work item
   dude tools                                 the tools this run may use
 
-Add --json for JSON output.
+Output is JSON.
 `

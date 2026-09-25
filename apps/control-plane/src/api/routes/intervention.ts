@@ -68,9 +68,38 @@ async function answerQuestion(ctx: RequestContext): Promise<Response> {
     await ctx.request.text(), ctx.principal.apiKeyId);
 }
 
+/**
+ * An agent's requests for repositories its work item does not name: pending
+ * ones wait for a person to approve or decline.
+ */
+async function listRepositoryRequests(ctx: RequestContext): Promise<Response> {
+  const runId = ctx.url.searchParams.get("runId");
+  const workItemId = ctx.url.searchParams.get("workItemId");
+  const requests = await withOrg(ctx.principal.organizationId, async (scope) => {
+    return (await scope.sql`
+      SELECT q.id, q.run_id AS "runId", q.work_item_id AS "workItemId", q.repository_id AS "repositoryId",
+        r.name AS "repositoryName", q.access, q.reason, q.status, q.error, q.decided_at AS "decidedAt",
+        q.created_at AS "createdAt"
+      FROM repository_requests q JOIN repositories r ON r.id = q.repository_id
+      WHERE (${runId}::text IS NULL OR q.run_id = ${runId})
+        AND (${workItemId}::text IS NULL OR q.work_item_id = ${workItemId})
+        AND (${runId}::text IS NOT NULL OR ${workItemId}::text IS NOT NULL OR q.status = 'pending')
+      ORDER BY q.created_at DESC LIMIT 200`) as Array<Record<string, unknown>>;
+  });
+  return json({ repositoryRequests: requests });
+}
+
+/** Approve or decline: the orchestrator records it and carries it out. */
+async function decideRepositoryRequest(ctx: RequestContext): Promise<Response> {
+  return orchestrator(ctx.principal.organizationId, "POST", `/internal/repository-requests/${ctx.params.id}/decide`,
+    await ctx.request.text(), ctx.principal.apiKeyId);
+}
+
 export function registerInterventionRoutes(router: Router): void {
   router.get("/v1/questions", listQuestions);
   router.post("/v1/questions/:id/answer", answerQuestion);
+  router.get("/v1/repository-requests", listRepositoryRequests);
+  router.post("/v1/repository-requests/:id/decide", decideRepositoryRequest);
 
   router.post("/v1/runs/:id/steer", forward("steer"));
   router.get("/v1/runs/:id/directives", listDirectives);

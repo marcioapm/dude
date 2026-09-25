@@ -3,6 +3,7 @@ package agenttools_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -142,7 +143,7 @@ func TestAReviewerCannotCreateWork(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	// Seeing work and recording events, not making work or stopping for a person.
-	if strings.Join(names, ",") != "emit_event,list_epics,list_work" {
+	if strings.Join(names, ",") != "emit_event,list_epics,list_work,request_repository" {
 		t.Errorf("a reviewer sees %v", names)
 	}
 }
@@ -262,5 +263,60 @@ func TestACustomEventIsRecordedInItsOwnNamespace(t *testing.T) {
 		if status, _ := f.post(t, token, "emit_event", bad); status != 422 {
 			t.Errorf("%.40s accepted: %d", bad, status)
 		}
+	}
+}
+
+func TestARepositoryRequestStaysInTheProjectAndOnlyImplementersAskToWrite(t *testing.T) {
+	f := setup(t)
+	mustExec(t, f.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+		VALUES ($1, $2, $3, 'web', 'https://github.com/acme/web.git', 'main')`, "repo_web_"+f.org, f.org, f.project)
+	// Another project of the same organization, with its own repository.
+	mustExec(t, f.owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ($1, $2, 'Other', $1, 'OTH')`,
+		"prj_other_"+f.org, f.org)
+	mustExec(t, f.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+		VALUES ($1, $2, $3, 'infra', 'https://github.com/acme/infra.git', 'main')`, "repo_infra_"+f.org, f.org, "prj_other_"+f.org)
+
+	impl := f.run(t, "run_i", "implementer", "running")
+	if status, out := f.post(t, impl, "request_repository", `{"repository":"acme/infra","reason":"x"}`); status != 422 ||
+		!strings.Contains(out["error"].(string), "no repository") {
+		t.Errorf("another project's repository: %d %v", status, out)
+	}
+	rev := f.run(t, "run_r", "reviewer", "running")
+	if status, _ := f.post(t, rev, "request_repository", `{"repository":"web","write":true,"reason":"x"}`); status != 422 {
+		t.Errorf("a reviewer asked to write: %d", status)
+	}
+	if status, _ := f.post(t, rev, "request_repository", `{"repository":"web","reason":"to read the client"}`); status != 200 {
+		t.Errorf("a reviewer could not ask to read: %d", status)
+	}
+	if status, _ := f.post(t, impl, "request_repository", `{"repository":"web","write":true,"reason":"to change the client"}`); status != 200 {
+		t.Errorf("an implementer could not ask to write: %d", status)
+	}
+}
+
+func TestARetriedStartCarriesTheSameToken(t *testing.T) {
+	key := []byte("k")
+	a, _ := agenttools.RunToken(key, "run_1", 0)
+	b, _ := agenttools.RunToken(key, "run_1", 0)
+	c, _ := agenttools.RunToken(key, "run_1", 1)
+	d, _ := agenttools.RunToken(key, "run_2", 0)
+	if a != b || a == c || a == d {
+		t.Errorf("tokens: same start %v, next start differs %v, other run differs %v", a == b, a != c, a != d)
+	}
+}
+
+func TestARunawayAgentIsSlowedDown(t *testing.T) {
+	f := setup(t)
+	token := f.run(t, "run_loop", "implementer", "running")
+	var last int
+	for i := 0; i < 25; i++ {
+		last, _ = f.post(t, token, "create_work_item", fmt.Sprintf(`{"title":"spam %d"}`, i))
+	}
+	if last != 422 {
+		t.Errorf("the 25th work item was accepted: %d", last)
+	}
+	var made int
+	_ = f.owner.QueryRow(context.Background(), `SELECT count(*) FROM work_items WHERE created_by_run_id = 'run_loop'`).Scan(&made)
+	if made != 20 {
+		t.Errorf("%d work items made, want the limit of 20", made)
 	}
 }

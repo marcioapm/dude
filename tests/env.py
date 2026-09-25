@@ -195,13 +195,11 @@ class TestEnvironment:
         if not self.real_lux:
             # The fake lux calls them from this machine, as its proxy would.
             port = find_free_port()
-            return {"DUDE_TOOLS_LISTEN": f"127.0.0.1:{port}", "DUDE_TOOLS_URL": f"http://127.0.0.1:{port}/",
-                    "DUDE_TOOLS_SERVICE": "1"}
+            return {"DUDE_TOOLS_LISTEN": f"127.0.0.1:{port}", "DUDE_TOOLS_URL": f"http://127.0.0.1:{port}/"}
         host = os.environ.get("DUDE_TEST_TOOLS_HOST")
         if not host:
             return {}
         port = find_free_port()
-        # workload.services is not in lux yet: MCP only until it is.
         return {"DUDE_TOOLS_LISTEN": f"{host}:{port}", "DUDE_TOOLS_URL": f"http://{host}:{port}/"}
 
     def _create_database(self) -> None:
