@@ -41,6 +41,11 @@ const ToolsModel = "fake/tools"
 // and waits (never finishing its turn) until it is resumed with it.
 const RequestModel = "fake/request"
 
+// WaitModel's implementer asks for the project's "web" repository and ends
+// its turn waiting on it: parked until a person decides, and its work done
+// in the turn the resume starts.
+const WaitModel = "fake/wait"
+
 // AskModel's implementer asks a person first, with dude's ask_person tool,
 // and does its work in the turn the answer starts.
 const AskModel = "fake/ask"
@@ -109,6 +114,9 @@ func For(phase, model, runID string, fixed bool) Step {
 			Publish: map[string]string{Notes: "# What changed\n\nAdded FACTORY.md for " + runID + "."}}
 		if model == AskModel {
 			step.Ask = Question
+		}
+		if model == WaitModel {
+			step.Tools = [][2]string{{"request_repository", `{"repository":"web","reason":"the client calls this API","wait":true}`}}
 		}
 		if model == RequestModel {
 			step.Tools = [][2]string{{"request_repository", `{"repository":"web","reason":"the client calls this API"}`}}

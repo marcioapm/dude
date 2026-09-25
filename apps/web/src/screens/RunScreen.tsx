@@ -242,11 +242,7 @@ export function RunScreen({ client, runId, title, breadcrumb }: RunScreenProps) 
                 // A paused Run takes an answer (a parked one is resumed by it),
                 // not a steer.
                 disabled={!isLive || (run.status === "paused" && !conversation.openQuestion)}
-                disabledReason={
-                  run.status === "paused"
-                    ? "This run is paused. Resume it to steer."
-                    : "This run has finished — nobody would hear it."
-                }
+                disabledReason={!isLive ? "This run has finished — nobody would hear it." : PAUSED_REASON[run.dudePause ?? "person-paused"]}
                 onSubmit={send}
               />
             }
@@ -291,6 +287,14 @@ export function RunScreen({ client, runId, title, breadcrumb }: RunScreenProps) 
     </div>
   );
 }
+
+/** Why the composer is closed on a paused Run, by who paused it and why (Run.dudePause). */
+const PAUSED_REASON: Record<string, string> = {
+  "person": "Parked while it waits for you: decide its request above, and that resumes it.",
+  "idle": "Parked after going quiet. Resume it to steer.",
+  "repository": "Bringing in a repository; it carries on in a moment.",
+  "person-paused": "This run is paused. Resume it to steer.",
+};
 
 function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: boolean,
   decide?: (requestId: string, approve: boolean) => void) {

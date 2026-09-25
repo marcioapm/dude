@@ -269,6 +269,14 @@ export const runSchema = z.object({
    */
   harness: z.string().nullable().default(null),
   model: z.string().nullable().default(null),
+  /**
+   * Why dude paused it itself, and so what takes it up again: "person" —
+   * parked while it waits for an answer or a decision, which resumes it;
+   * "idle" — parked after going quiet, until a person resumes it;
+   * "repository" — stopped a moment to bring one in. Null when not paused,
+   * or when a person paused it.
+   */
+  dudePause: z.enum(["person", "idle", "repository"]).nullable().default(null),
   /** Tokens as the agent reported them. Context is the latest size, not a sum. */
   tokens: z
     .object({
