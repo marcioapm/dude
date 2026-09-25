@@ -94,6 +94,17 @@ var RoleForPhase = map[string]string{
 	PhaseTest:        "qa_browser",
 }
 
+// RoleLabel is how a role is named to a person, as the app names it
+// (ROLE_LABEL, packages/design-system AgentAvatar).
+var RoleLabel = map[string]string{
+	"orchestrator": "Orchestrator",
+	"investigator": "Investigator",
+	"implementer":  "Implementer",
+	"reviewer":     "Reviewer",
+	"simplifier":   "Simplifier",
+	"qa_browser":   "QA browser",
+}
+
 // Publishes says whether a phase's commits reach the work item's branch.
 //
 // A property of the phase rather than a prompt instruction: a reviewer gets a

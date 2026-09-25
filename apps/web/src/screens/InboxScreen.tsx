@@ -4,6 +4,7 @@
  * where the answer is given: the asking agent's chat, or the work item.
  */
 
+import { useMemo } from "react";
 import { AttentionList, attentionItems, type NavProject, type NavRef, type NavRow } from "@dude/design-system";
 import { EmptyState, Page } from "@dude/design-system/primitives";
 
@@ -12,7 +13,10 @@ export function InboxScreen({ projects, selected, onSelect }: {
   selected: NavRef | null;
   onSelect: (ref: NavRef, node: NavRow["node"]) => void;
 }) {
-  const items = attentionItems(projects).sort((a, b) => since(a.workItem.statusSince) - since(b.workItem.statusSince));
+  const items = useMemo(
+    () => attentionItems(projects).sort((a, b) => since(a.workItem.statusSince) - since(b.workItem.statusSince)),
+    [projects],
+  );
   return (
     <Page data-testid="inbox">
       {items.length === 0 ? (

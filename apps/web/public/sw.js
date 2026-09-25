@@ -4,6 +4,11 @@
  * conversation when one is clicked. It caches nothing.
  */
 
+// Control the tab that registered it at once, not after a reload: a click
+// can only navigate a tab this worker controls.
+self.addEventListener("install", () => self.skipWaiting());
+self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
+
 self.addEventListener("push", (event) => {
   let message = {};
   try {
@@ -28,12 +33,18 @@ self.addEventListener("notificationclick", (event) => {
   const target = new URL("/" + (event.notification.data?.url || ""), self.location.origin).href;
   event.waitUntil(
     (async () => {
-      // An open dude tab goes there; otherwise a new one.
+      // An open dude tab goes there; otherwise a new one. The hash is the
+      // app's place, so a tab it cannot navigate is told by message.
       const tabs = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
       for (const tab of tabs) {
         if (new URL(tab.url).origin === self.location.origin) {
           await tab.focus();
-          return tab.navigate(target);
+          try {
+            return await tab.navigate(target);
+          } catch {
+            tab.postMessage({ type: "dude.open", url: event.notification.data?.url || "" });
+            return undefined;
+          }
         }
       }
       return self.clients.openWindow(target);

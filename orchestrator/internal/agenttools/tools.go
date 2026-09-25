@@ -339,7 +339,7 @@ func requestRepository(ctx context.Context, tx pgx.Tx, c Caller, in requestRepoI
 	if tag.RowsAffected() == 0 {
 		return requestRepoOut{}, refuse("you already asked for %s; a person has not decided yet", repo.Name)
 	}
-	if _, err := ledger.Append(ctx, tx, c.event("repository.requested",
+	if _, err := ledger.Append(ctx, tx, c.event(delivery.EvRepositoryRequested,
 		map[string]any{"requestId": id, "repository": repo.Name, "repositoryId": repo.ID, "access": access, "reason": reason})); err != nil {
 		return requestRepoOut{}, err
 	}

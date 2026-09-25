@@ -23,6 +23,7 @@ const (
 	EvRunCreated            = "run.created"
 	EvWorkItemStatusChanged = "work_item.status_changed"
 	EvQuestionAsked         = "question.asked"
+	EvRepositoryRequested   = "repository.requested"
 	EvReviewCompleted       = "review.completed"
 	EvPullRequestOpened     = "pull_request.opened"
 	EvPullRequestUpdated    = "pull_request.updated"

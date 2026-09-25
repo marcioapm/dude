@@ -9,7 +9,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -18,8 +17,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-
-	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 	"github.com/marciomartins/dude/orchestrator/internal/notify"
@@ -101,7 +98,6 @@ func (b *browser) decrypt(body []byte) ([]byte, error) {
 	for i >= 0 && plain[i] == 0 {
 		i--
 	}
-	_ = binary.BigEndian
 	return plain[:i], nil
 }
 
@@ -179,5 +175,4 @@ func TestAnAskReachesEveryBrowserOfItsOrganizationOnce(t *testing.T) {
 	if err := owner.QueryRow(ctx, `SELECT NOT EXISTS (SELECT 1 FROM push_subscriptions WHERE endpoint = $1)`, push.URL+"/stale").Scan(&gone); err != nil || !gone {
 		t.Errorf("a subscription its push service says is gone was kept")
 	}
-	_ = pgx.ErrNoRows
 }

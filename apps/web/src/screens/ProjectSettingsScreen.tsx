@@ -100,16 +100,16 @@ export function ProjectSettingsScreen({ client, projectId, onChanged, onBack }: 
           <Tab value="agents">Agents</Tab>
           <Tab value="delivery">Delivery</Tab>
         </TabList>
-        <TabPanel value="general" className="tabPanel">
+        <TabPanel value="general">
           <GeneralTab client={client} project={project} onSaved={saved} />
         </TabPanel>
-        <TabPanel value="repositories" className="tabPanel">
+        <TabPanel value="repositories">
           <RepositoriesTab client={client} project={project} onSaved={saved} />
         </TabPanel>
-        <TabPanel value="agents" className="tabPanel">
+        <TabPanel value="agents">
           <AgentsTab client={client} project={project} onSaved={saved} />
         </TabPanel>
-        <TabPanel value="delivery" className="tabPanel">
+        <TabPanel value="delivery">
           <DeliveryTab client={client} project={project} defaults={defaults} onSaved={saved} />
         </TabPanel>
       </Tabs>

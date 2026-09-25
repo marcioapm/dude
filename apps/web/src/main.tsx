@@ -19,6 +19,7 @@ import "./app.css";
 
 import { ApiClient } from "./api/client.ts";
 import { App } from "./App.tsx";
+import { turnPushOff } from "./push.ts";
 
 const KEY_STORAGE = "dude.apiKey";
 
@@ -47,8 +48,11 @@ function Root() {
         <App
           client={client}
           onSignOut={() => {
-            localStorage.removeItem(KEY_STORAGE);
-            setApiKey("");
+            // This browser stops hearing about the organization it leaves.
+            void turnPushOff(client).finally(() => {
+              localStorage.removeItem(KEY_STORAGE);
+              setApiKey("");
+            });
           }}
         />
       </ToastProvider>

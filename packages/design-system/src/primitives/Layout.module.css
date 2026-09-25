@@ -188,18 +188,11 @@
 .legend {
   padding: 0;
   margin-bottom: var(--ds-space-2);
-  font-size: var(--ds-text-sm);
-  font-weight: var(--ds-weight-medium);
-  color: var(--ds-color-text-secondary);
 }
 .hint {
   margin: 0;
-  font-size: var(--ds-text-xs);
-  color: var(--ds-color-text-muted);
 }
-.hintError {
-  color: var(--ds-tone-danger-fg);
-}
+
 
 /* A description with a list in it (a work item's criteria): paragraphs
    spaced, the list indented as prose lists are. */
