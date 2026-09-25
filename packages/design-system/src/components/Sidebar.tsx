@@ -16,7 +16,7 @@ import {
   type NavRef,
   type NavRow,
 } from "../util/navModel.ts";
-import { HumanAvatarStack } from "./HumanAvatar.tsx";
+import { HumanAvatar } from "./HumanAvatar.tsx";
 import { NavTree, type NavRowMenuControls } from "./NavTree.tsx";
 import type { RowMenuItem } from "../primitives/RowMenu.tsx";
 import { StatusBadge } from "./StatusBadge.tsx";
@@ -65,9 +65,8 @@ export interface SidebarProps extends Omit<HTMLAttributes<HTMLElement>, "onSelec
  *   tree        Project → Epic → Work item → Session
  *   footer      the signed-in person, connection state
  *
- * Calm at fifty work items: rows are 24/28px, colour appears only on the
- * status marks, and the only wash on the surface is the attention tint on
- * rows that need a person.
+ * Calm at fifty work items: colour appears only on the status marks, and
+ * the one amber area is the needs-you block.
  */
 export function Sidebar({
   projects,
@@ -86,7 +85,7 @@ export function Sidebar({
   hideAttention,
   menuItems,
   menu,
-  width = 280,
+  width = 304,
   className,
   style,
   ...rest
@@ -145,7 +144,7 @@ export function Sidebar({
       ) : null}
 
       <div className={styles["search"]}>
-        <Icon name="search" size={12} className={styles["searchIcon"]} />
+        <Icon name="search" size={14} className={styles["searchIcon"]} />
         <input
           ref={searchRef}
           id={searchId}
@@ -186,8 +185,8 @@ export function Sidebar({
               disabled={n === 0 && !on}
             >
               <StatusBadge status={spec.status} variant="dot" iconOnly className={styles["chipMark"]} />
-              <span className={styles["chipLabel"]}>{spec.label}</span>
-              <span className={styles["chipCount"]}>{n}</span>
+              <span className={cx(styles["chipLabel"], "ds-cap")}>{spec.label}</span>
+              <span className={cx(styles["chipCount"], "ds-cap")}>{n}</span>
             </button>
           );
         })}
@@ -236,8 +235,9 @@ export interface AttentionListProps {
 /**
  * The pinned "Needs you" section: one row per blocked work item, across
  * every project, in the order given (the caller sorts — oldest wait first
- * is the sensible default). Each row says what, where, who is asking and
- * who it waits on. It is a list, not a tree: nothing to expand.
+ * is the sensible default). Each row says what, who is asking, what they
+ * ask and who it waits on; where it lives (project · epic) is the row's
+ * tooltip, so the ask gets the width. It is a list, not a tree.
  */
 export function AttentionList({ items, selected, onSelect, max = 5 }: AttentionListProps) {
   const [open, setOpen] = useState(true);
@@ -247,7 +247,7 @@ export function AttentionList({ items, selected, onSelect, max = 5 }: AttentionL
   return (
     <section className={styles["attention"]} aria-label="Needs you">
       <button type="button" className={styles["attentionHead"]} aria-expanded={open} onClick={() => setOpen((v) => !v)}>
-        <Icon name="chevron-right" size={12} className={cx(styles["attentionChevron"], open && styles["attentionChevronOpen"])} />
+        <Icon name="chevron-right" size={14} className={cx(styles["attentionChevron"], open && styles["attentionChevronOpen"])} />
         <StatusBadge status="awaiting_input" variant="dot" iconOnly className={styles["attentionMark"]} />
         <span className={styles["attentionTitle"]}>Needs you</span>
         <span className={styles["attentionCount"]}>{items.length}</span>
@@ -258,9 +258,17 @@ export function AttentionList({ items, selected, onSelect, max = 5 }: AttentionL
             const ref: NavRef = it.session ? { kind: "session", id: it.session.id } : { kind: "workItem", id: it.workItem.id };
             const isSel = navKey(ref) === selectedKey || navKey({ kind: "workItem", id: it.workItem.id }) === selectedKey;
             const where = it.epic ? `${it.project.name} · ${it.epic.title}` : it.project.name;
+            const people = it.workItem.people ?? [];
+            const names = people.map((p) => p.name).join(", ");
             return (
               <li key={it.workItem.id}>
-                <button type="button" className={cx(styles["attentionRow"], isSel && styles["attentionRowSelected"])} onClick={() => onSelect?.(ref, it.session ?? it.workItem)} aria-current={isSel ? "true" : undefined}>
+                <button
+                  type="button"
+                  className={cx(styles["attentionRow"], isSel && styles["attentionRowSelected"])}
+                  onClick={() => onSelect?.(ref, it.session ?? it.workItem)}
+                  aria-current={isSel ? "true" : undefined}
+                  title={where}
+                >
                   <span className={styles["attentionMain"]}>
                     <span className={styles["attentionWi"]}>
                       {it.workItem.key ? <span className={styles["attentionKey"]}>{it.workItem.key}</span> : null}
@@ -269,22 +277,23 @@ export function AttentionList({ items, selected, onSelect, max = 5 }: AttentionL
                       </span>
                     </span>
                     <span className={styles["attentionSub"]}>
+                      {/* The asker's slot is kept when there is no session, so every ask starts on one x. */}
+                      <span className={styles["attentionAsker"]}>{it.session ? <AgentAvatar role={it.session.role} size="xs" /> : null}</span>
                       {it.session ? (
-                        <>
-                          <AgentAvatar role={it.session.role} size="xs" className={styles["attentionAsker"]} />
-                          <span className={styles["attentionAsk"]} title={it.session.activity}>
-                            {it.session.activity ?? "is waiting for you"}
-                          </span>
-                        </>
+                        <span className={styles["attentionAsk"]} title={it.session.activity}>
+                          {it.session.activity ?? "is waiting for you"}
+                        </span>
                       ) : (
                         <span className={styles["attentionAsk"]}>{it.workItem.status === "awaiting_confirmation" ? "plan needs your confirmation" : "waiting for you"}</span>
                       )}
-                      <span className={styles["attentionWhere"]} title={where}>
-                        {where}
-                      </span>
                     </span>
                   </span>
-                  {it.workItem.people && it.workItem.people.length > 0 ? <HumanAvatarStack people={it.workItem.people} size="xs" max={2} /> : null}
+                  {people.length > 0 ? (
+                    <span className={styles["attentionPeople"]} role="group" aria-label={names} title={names}>
+                      <HumanAvatar person={people[0]!} size="xs" aria-hidden />
+                      {people.length > 1 ? <span className={styles["attentionPeopleMore"]}>+{people.length - 1}</span> : null}
+                    </span>
+                  ) : null}
                 </button>
               </li>
             );

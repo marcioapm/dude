@@ -1,14 +1,24 @@
-import type { CSSProperties, ReactNode } from "react";
+import { createContext, useContext, type CSSProperties, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import type { ThemeMode } from "../tokens/themes.ts";
+import { DENSITIES, type Density } from "../tokens/density.ts";
 import styles from "./gallery.module.css";
 
 export type PaneMode = "both" | "dark" | "light";
+export type PaneDensity = "both" | Density;
+
+/** Which densities every `Panes` draws; set once by the gallery's density control. */
+export const PaneDensityContext = createContext<PaneDensity>("comfortable");
+
+/** The densities a gallery frame draws for the density control's choice. */
+export function densitiesFor(paneDensity: PaneDensity): readonly Density[] {
+  return paneDensity === "both" ? DENSITIES : [paneDensity];
+}
 
 /**
- * Renders the same children in a dark pane and a light pane, each scoped
- * with its own `data-theme`. Children are rendered twice, so anything with
- * local state will have independent state per pane — that is intended.
+ * Renders the same children once per theme (columns) and density (rows),
+ * each pane scoped with its own `data-theme` and `data-density`. Children
+ * are rendered per pane, so local state is independent per pane.
  */
 export function Panes({
   mode,
@@ -19,23 +29,28 @@ export function Panes({
   readonly mode: PaneMode;
   /** Pane background = surface instead of canvas (for things that sit on cards). */
   readonly surface?: boolean | undefined;
-  readonly children: ReactNode | ((theme: ThemeMode) => ReactNode);
+  readonly children: ReactNode | ((theme: ThemeMode, density: Density) => ReactNode);
   readonly style?: CSSProperties | undefined;
 }) {
+  const paneDensity = useContext(PaneDensityContext);
   const modes: ThemeMode[] = mode === "both" ? ["dark", "light"] : [mode];
+  const densities = densitiesFor(paneDensity);
   return (
     <div className={cx(styles["panes"], modes.length === 1 && styles["panesSingle"])}>
-      {modes.map((m) => (
-        <div
-          key={m}
-          className={cx(styles["pane"], surface && styles["paneSurface"])}
-          data-theme={m}
-          style={{ colorScheme: m, ...style }}
-        >
-          <span className={styles["paneLabel"]}>{m}</span>
-          {typeof children === "function" ? children(m) : children}
-        </div>
-      ))}
+      {densities.flatMap((d) =>
+        modes.map((m) => (
+          <div
+            key={`${d}-${m}`}
+            className={cx(styles["pane"], surface && styles["paneSurface"])}
+            data-theme={m}
+            data-density={d}
+            style={{ colorScheme: m, ...style }}
+          >
+            <span className={styles["paneLabel"]}>{densities.length > 1 ? `${m} · ${d}` : m}</span>
+            {typeof children === "function" ? children(m, d) : children}
+          </div>
+        )),
+      )}
     </div>
   );
 }

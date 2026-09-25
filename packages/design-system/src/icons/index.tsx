@@ -1,7 +1,8 @@
 import type { SVGProps } from "react";
 
 /**
- * A small, self-contained icon set. 16px grid, 1.5px strokes, round caps.
+ * A small, self-contained icon set. 16px grid, 1.5px strokes (1.75 at 20px
+ * and up, where 1.5 reads thin), round caps.
  * Icons are the *shape channel* for status — they must read without color.
  */
 
@@ -173,6 +174,7 @@ export interface IconProps extends Omit<SVGProps<SVGSVGElement>, "name"> {
 export function Icon({ name, size = "1em", title, className, style, ...rest }: IconProps) {
   const spec = PATHS[name];
   const spin = name === "spinner";
+  const stroke = typeof size === "number" && size >= 20 ? 1.75 : 1.5;
   return (
     <svg
       viewBox="0 0 16 16"
@@ -180,7 +182,7 @@ export function Icon({ name, size = "1em", title, className, style, ...rest }: I
       height={size}
       fill={spec.fill ? "currentColor" : "none"}
       stroke="currentColor"
-      strokeWidth={spec.fill ? 0 : 1.5}
+      strokeWidth={spec.fill ? 0 : stroke}
       strokeLinecap="round"
       strokeLinejoin="round"
       strokeDasharray={spec.dashed ? "2 2.2" : undefined}

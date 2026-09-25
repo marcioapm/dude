@@ -5,15 +5,18 @@ import { ToastProvider } from "../primitives/Toast.tsx";
 import { TooltipProvider } from "../primitives/Tooltip.tsx";
 import { Select } from "../primitives/Select.tsx";
 import { Checkbox } from "../primitives/Checkbox.tsx";
-import type { PaneMode } from "./Frame.tsx";
+import { PaneDensityContext, type PaneDensity, type PaneMode } from "./Frame.tsx";
+import { DEFAULT_DENSITY, isDensity } from "../tokens/density.ts";
 import { TokensSection } from "./sections/Tokens.tsx";
 import { PrimitivesSection } from "./sections/Primitives.tsx";
 import { ComponentsSection } from "./sections/Components.tsx";
 import { ChatSection } from "./sections/Chat.tsx";
 import { NavigationSection } from "./sections/Navigation.tsx";
 import { BoardSection } from "./sections/Board.tsx";
+import { ShellSection } from "./sections/Shell.tsx";
 
 const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, string]>]> = [
+  ["App shell", [["shell-session", "Sidebar + transcript"]]],
   [
     "Tokens",
     [
@@ -108,9 +111,20 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
   ],
 ];
 
+const PANE_DENSITY_KEY = "dude.gallery.paneDensity";
+
+/** The stored density choice, or null when missing or not one the control offers. */
+function storedPaneDensity(): PaneDensity | null {
+  const v = localStorage.getItem(PANE_DENSITY_KEY);
+  return v === "both" || isDensity(v) ? v : null;
+}
+
 export function Gallery() {
+  // The density control is the one persisted choice; the provider only mirrors
+  // it onto the gallery chrome, so it keeps no storage key of its own.
+  const stored = storedPaneDensity();
   return (
-    <ThemeProvider storageKey="dude.gallery.theme" defaultPreference="dark">
+    <ThemeProvider storageKey="dude.gallery.theme" densityStorageKey={null} defaultDensity={isDensity(stored) ? stored : DEFAULT_DENSITY} defaultPreference="dark">
       <TooltipProvider>
         <ToastProvider>
           <Shell />
@@ -124,6 +138,11 @@ function Shell() {
   const theme = useTheme();
   const [panes, setPanes] = useState<PaneMode>(() => (localStorage.getItem("dude.gallery.panes") as PaneMode | null) ?? "both");
   useEffect(() => localStorage.setItem("dude.gallery.panes", panes), [panes]);
+  const [paneDensity, setPaneDensity] = useState<PaneDensity>(() => storedPaneDensity() ?? theme.density);
+  useEffect(() => {
+    localStorage.setItem(PANE_DENSITY_KEY, paneDensity);
+    if (paneDensity !== "both") theme.setDensity(paneDensity);
+  }, [paneDensity, theme.setDensity]);
 
   return (
     <div className={styles["app"]}>
@@ -157,6 +176,17 @@ function Shell() {
             ]}
           />
           <Select
+            label="Density"
+            size="sm"
+            value={paneDensity}
+            onValueChange={(v) => setPaneDensity(v)}
+            options={[
+              { value: "comfortable", label: "Comfortable" },
+              { value: "compact", label: "Compact" },
+              { value: "both", label: "Both, stacked" },
+            ]}
+          />
+          <Select
             label="Gallery chrome"
             size="sm"
             value={theme.preference}
@@ -171,12 +201,15 @@ function Shell() {
         </div>
       </nav>
       <main className={styles["main"]}>
-        <TokensSection mode={panes} />
-        <PrimitivesSection mode={panes} />
-        <ComponentsSection mode={panes} />
-        <ChatSection mode={panes} />
-        <NavigationSection mode={panes} />
-        <BoardSection mode={panes} />
+        <PaneDensityContext.Provider value={paneDensity}>
+          <ShellSection mode={panes} />
+          <TokensSection mode={panes} />
+          <PrimitivesSection mode={panes} />
+          <ComponentsSection mode={panes} />
+          <ChatSection mode={panes} />
+          <NavigationSection mode={panes} />
+          <BoardSection mode={panes} />
+        </PaneDensityContext.Provider>
       </main>
     </div>
   );

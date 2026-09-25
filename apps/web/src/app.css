@@ -33,7 +33,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: var(--ds-space-12);
-  padding: var(--ds-space-16);
+  padding: var(--ds-space-main-pad);
   overflow: auto;
 }
 

@@ -31,6 +31,10 @@
 
 .root:hover:not(:disabled) {
   background: var(--btn-bg-hover);
+  --btn-icon: currentColor;
+}
+.root > svg {
+  color: var(--btn-icon, currentColor);
 }
 .root:active:not(:disabled) {
   background: var(--btn-bg-active);
@@ -38,6 +42,15 @@
 .root:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+/* A filled button that is not ready yet: a neutral fill with secondary ink
+   rather than the tone faded to 45%, which reads as a broken colour. Muted
+   ink falls to ~4.3:1 on the wash. */
+.root.filled:disabled {
+  --btn-bg: var(--ds-color-active-wash);
+  --btn-fg: var(--ds-color-text-secondary);
+  --btn-border: transparent;
+  opacity: 1;
 }
 
 /* Sizes */
@@ -60,6 +73,7 @@
   --btn-bg-active: var(--ds-color-accent-active);
 }
 .secondary {
+  --btn-icon: var(--ds-color-text-secondary);
   --btn-bg: var(--ds-color-raised);
   --btn-border: var(--ds-color-border);
   --btn-bg-hover: var(--ds-color-secondary-hover);

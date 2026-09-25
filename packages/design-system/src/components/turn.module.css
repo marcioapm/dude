@@ -1,0 +1,39 @@
+/*
+ * Rules shared by ChatMessage and QuestionCard: the turn row (avatar gutter
+ * + text column at pad-x + avatar + gap) and its header line, and the
+ * neutral choice chip's hover. Components pull them in with `composes:`.
+ *
+ * The wash and bar read `--turn-wash` / `--turn-bar`. Custom properties
+ * inherit, so each composing `.root` resets both in its own file and sets
+ * them in modifiers declared after it: a turn nested in a highlighted turn
+ * stays plain, and the result does not depend on bundle order.
+ */
+
+.turn {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--ds-size-avatar-chat) minmax(0, 1fr);
+  column-gap: var(--ds-space-chat-avatar-gap);
+  margin-top: calc(var(--ds-space-chat-gap) - var(--ds-space-2));
+  padding: var(--ds-space-2) var(--ds-space-chat-pad-x);
+  min-width: 0;
+  background: var(--turn-wash);
+  box-shadow: inset 2px 0 0 var(--turn-bar);
+  font-size: var(--ds-text-prose);
+  line-height: var(--ds-leading-chat);
+  scroll-margin-top: var(--ds-space-32);
+}
+
+.turnHeader {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  column-gap: var(--ds-space-8);
+  min-height: calc(var(--ds-text-prose) * var(--ds-leading-chat));
+}
+
+/* Choice chips are neutral at rest; the attention tone arrives on hover. */
+.choiceChip:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ds-tone-attention-solid) 18%, transparent);
+  box-shadow: inset 0 0 0 1px var(--ds-tone-attention-border);
+}

@@ -8,6 +8,8 @@ export * from "./scale.ts";
 export * from "./status.ts";
 export * from "./activity.ts";
 export * from "./triage.ts";
+export * from "./density.ts";
+export * from "./tints.ts";
 export { themeColors, flattenTheme } from "./themes.ts";
 export type { ThemeMode, ThemeColors } from "./themes.ts";
 export {
@@ -36,11 +38,28 @@ export function cssVar(name: TokenName, fallback?: string): string {
   return fallback === undefined ? `var(--ds-${name})` : `var(--ds-${name}, ${fallback})`;
 }
 
-/** Names of tokens emitted to CSS (non-exhaustive union for autocompletion). */
+/** `chatGap` -> `chat-gap`, the way `scripts/build-tokens.ts` names scale keys. */
+type Kebab<S extends string> = S extends `${infer H}${infer T}`
+  ? `${H extends Lowercase<H> ? H : `-${Lowercase<H>}`}${Kebab<T>}`
+  : S;
+
+/**
+ * Names of tokens emitted to CSS. Scale-derived families are exact; the
+ * colour families (`color-`, `tone-`, `role-`, `diff-`, `ansi-`) are open.
+ */
 export type TokenName =
+  | import("./density.ts").DensityToken
   | `space-${keyof typeof import("./scale.ts").space}`
+  | `space-${Kebab<keyof typeof import("./scale.ts").spaceNamed>}`
   | `radius-${keyof typeof import("./scale.ts").radius}`
   | `text-${keyof typeof import("./scale.ts").fontSize}`
+  | `leading-${keyof typeof import("./scale.ts").lineHeight}`
+  | `weight-${keyof typeof import("./scale.ts").fontWeight}`
+  | `tracking-${keyof typeof import("./scale.ts").letterSpacing}`
+  | `size-${Kebab<keyof typeof import("./scale.ts").size>}`
+  | `focus-ring-${"width" | "offset"}`
+  | `tint-${Kebab<keyof typeof import("./tints.ts").tints>}`
+  | "motion-live"
   | `font-${"sans" | "mono"}`
   | `color-${string}`
   | `tone-${string}`

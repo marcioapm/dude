@@ -16,9 +16,9 @@
   color: var(--ds-color-text-muted);
 }
 
-/* Only the needs-you count is loud: attention ink, semibold. */
+/* The needs-you count is semibold; its hue is on the diamond beside it. */
 .root .needs_you {
-  color: var(--ds-tone-attention-fg);
+  color: var(--ds-color-text-secondary);
   font-weight: var(--ds-weight-semibold);
 }
 .root .active {

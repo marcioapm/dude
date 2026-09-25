@@ -1,11 +1,13 @@
 # @dude/design-system
 
-The visual language for the dude control plane: a dense, live, operational
-console for watching autonomous coding agents work. Closer to a trading
-terminal than a marketing site.
+The visual language for the dude control plane: a live, operational
+console for watching autonomous coding agents work, read for hours at a
+time. Closer to Discord or Obsidian than to a trading terminal or a
+marketing site: generous type, regions told apart by shade, one quiet
+accent.
 
 Run the living gallery to see every token, primitive and component in every
-state, dark and light side by side:
+state, dark and light side by side, in either density or both:
 
 ```bash
 cd packages/design-system
@@ -31,11 +33,16 @@ in place of the transcript: the same work items by lifecycle lane. The
 event ledger (`EventRow`) and `LogStream` are the debugging and audit tools
 behind all of these, reached when something looks off.
 
-1. **Calm under load.** Density is the goal; noise is the enemy. Dense means
-   13px body, 28px rows, 4px radii, hairline borders. Calm means one accent
-   color, mostly-neutral surfaces, and status color only where it means
-   something. A screen with 200 events on it should look *quiet* until one
-   of them needs you.
+1. **Calm under load.** Readable is the goal; noise is the enemy. Readable
+   means 15px UI body, 16/22px transcript text, 1.5 for long-form Markdown,
+   32px rows, 6px radii, a 40px avatar on every speaker, and air between
+   speakers but not within one — turns are separated by whitespace, not boxes.
+   Calm means one accent color, charcoal surfaces told apart by small, even
+   shade steps rather than lines, text in close shades rather than white on
+   black, and status color only where it means something. A screen with
+   200 events on it should look *quiet* until one of them needs you.
+   `compact` takes the big spacing in for operators who want more on the
+   screen; it never takes the text below readable.
 2. **Meaning never lives in hue alone.** Every status has a tone *and* a glyph
    *and* a label. Diffs have background *and* gutter color *and* a sign
    column. Roles have a hue *and* a glyph *and* (for the orchestrator) a
@@ -43,7 +50,8 @@ behind all of these, reached when something looks off.
 3. **Dark is primary, light is a peer.** The operator spends hours here, often
    at night, on a big monitor. Dark mode gets the most careful contrast work
    and is the default. Light is designed alongside it, not derived from it:
-   dark elevates with lighter surfaces + hairlines, light elevates with shadow.
+   dark elevates with lighter surfaces, light with white on an off-white
+   canvas and shadow.
 4. **Numbers are read, compared and summed.** Every metric, cost, count,
    duration and timestamp is tabular. Costs, tokens and durations each have
    exactly one formatter, so a value in a tile and the same value in a table
@@ -93,7 +101,7 @@ import "@dude/design-system/base.css";
 
 import { ThemeProvider, TooltipProvider, ToastProvider } from "@dude/design-system";
 
-<ThemeProvider>            // stamps data-theme on <html>; optional — CSS follows the OS on its own
+<ThemeProvider>            // stamps data-theme and data-density on <html>; optional — CSS follows the OS on its own
   <TooltipProvider>
     <ToastProvider>
       <App />
@@ -104,14 +112,20 @@ import { StatusBadge, EventRow, CostDisplay, Table, Th, Td } from "@dude/design-
 import { formatUsd, STATUS_SPECS, themeColors } from "@dude/design-system";
 ```
 
-Peer deps: `react` and `react-dom` 19. Fonts: Inter and JetBrains Mono are
-named first in the stacks with system fallbacks; load them in the host app (the
-gallery loads Inter from rsms.me for convenience — do not do that in the product).
+Peer deps: `react` and `react-dom` 19. Fonts: the sans stack is the platform
+UI face first (`ui-sans-serif, -apple-system, BlinkMacSystemFont, system-ui,
+"Segoe UI", Roboto`, then Inter as a fallback), the same order Obsidian uses —
+SF Pro on macOS, the distro face (Noto Sans on most) on Linux, Segoe UI on
+Windows. Nothing needs loading for it. Mono is JetBrains Mono with system mono
+fallbacks; ship its files in the host app if you want it everywhere. The
+gallery loads no webfont.
 
 Theme control: the CSS honours `prefers-color-scheme` and
 `prefers-reduced-motion` by itself. `data-theme="light|dark"` on the root
 overrides the OS; `data-reduced-motion="true"` forces reduced motion.
-`ThemeProvider` manages both and persists the choice.
+`data-density="comfortable|compact"` picks the density (comfortable when
+absent). `ThemeProvider` manages all three and persists the theme and
+density choices (`density` / `setDensity` on `useTheme()`).
 
 ## Tokens
 
@@ -120,21 +134,22 @@ gallery for every value.
 
 | Group | Examples | Notes |
 |---|---|---|
-| Surfaces | `--ds-color-canvas`, `-surface`, `-raised`, `-overlay`, `-sunken`, `-field-bg` | Back to front. In dark they are neutral steps 1–4; in light, canvas is off-white and the rest are white. |
-| Borders | `--ds-color-border-subtle`, `-border`, `-border-strong` | Hairlines are how dark mode separates surfaces. |
-| Text | `--ds-color-text-primary`, `-secondary`, `-muted`, `-disabled`, `-inverse` | primary ≥ 14:1, secondary ≥ 5:1, muted ≥ 3:1 on surface. |
+| Surfaces | `--ds-color-canvas`, `-surface`, `-raised`, `-overlay`, `-sunken`, `-field-bg`, `-chrome` | Back to front. Dark is charcoal, not black: canvas `#1d1e20`, surface `#252728`, raised `#2e2f31`, overlay `#37383a`, even steps. In light, canvas is off-white and the rest are white. `chrome` is the bar inside a panel (header, toolbar, footer): raised in dark, `#f7f8fa` in light. |
+| Borders | `--ds-color-border-subtle`, `-border`, `-border-strong` | For fields, focus, frames that carry a state, and rules in diffs and tables. Not for separating regions: shade does that. |
+| Text | `--ds-color-text-primary`, `-secondary`, `-muted`, `-disabled`, `-inverse` | On surface, dark: 11.3 / 7.5 / 5.7:1; light: 12.7 / 7.3 / 5.0:1. Muted clears 4.5:1 on canvas, raised and chrome too. |
 | Interaction | `--ds-color-accent`, `-accent-hover/active/subtle/text`, `-focus-ring`, `-selection`, `-hover-wash`, `-active-wash` | One blue. Same hue as the info tone. |
 | Tones | `--ds-tone-{neutral,info,attention,success,danger}-{fg,bg,border,solid,on-solid}` | The only status colours. |
 | Roles | `--ds-role-{orchestrator,…,qa-browser}-{fg,bg,solid,on-solid}` | Categorical identity, fixed order, never used for status. |
 | Identity | `--ds-identity-{0…7}-{fg,bg}` | Eight muted slots for human avatars, picked by hashing the person's id. About half the chroma of a role colour. |
 | Diff | `--ds-diff-{add,del}-{bg,bg-strong,fg}`, `--ds-diff-hunk-{bg,fg}` | Softer than the tones; read for minutes. |
 | Elevation | `--ds-shadow-1/2/3` | Includes the hairline ring. Theme-dependent. |
-| Type | `--ds-font-sans/mono`, `--ds-text-2xs…4xl`, `--ds-weight-*`, `--ds-leading-*`, `--ds-tracking-*` | Body is `text-md` = 13px. |
-| Space | `--ds-space-0…64` | 4px grid plus 2 and 6. |
-| Radius | `--ds-radius-xs…xl, full` | `md` = 4px is the default. |
-| Size | `--ds-size-control-sm/md/lg`, `--ds-size-row-compact/default/comfortable` | 24/28/32 and 24/28/36. |
+| Type | `--ds-font-sans/mono`, `--ds-text-2xs…4xl`, `--ds-text-nav`, `--ds-text-prose`, `--ds-text-mono`, `--ds-weight-*`, `--ds-leading-*`, `--ds-tracking-*` | UI body `text-md` 15px (14 compact); `sm`/`xs` 13/12 and `nav` 14 in both densities; prose 16px (15 compact). Transcript text runs at `leading-chat` 1.375 (22px at 16px); documents and multi-block Markdown at `leading-prose` 1.5; headings at `leading-tight` 1.3. `2xs` 11px for small-caps labels only; `mono` 13px. Headings `lg…4xl` are 16/20/22/26/34. |
+| Space | `--ds-space-0…64`, `--ds-space-{main-pad,card-pad,chat-pad-x,chat-gap,chat-avatar-gap,panel-gap,tree-indent,nav-row-gap}` | 4px grid plus 2 and 6. The named spaces are layout: main pane 24, board card 12, chat turn 16 across and 17 between speakers, avatar gap 16 (so transcript text starts at 16 + 40 + 16 = 72px), panel gap 24, tree indent 16, 2 between sidebar rows. |
+| Radius | `--ds-radius-xs…xl, full` | `md` = 6px is the default (5 compact); `lg` 8 for cards and panels, `xl` 12 for dialogs. |
+| Size | `--ds-size-control-sm/md/lg`, `--ds-size-row-compact/default/comfortable`, `--ds-size-avatar-{xs,sm,md,lg,chat}`, `--ds-size-badge-{sm,md}`, `--ds-size-chip`, `--ds-size-icon-*` | Controls 28/32/36, rows 28/32/40. Avatars 16/20/24/32 and 40 for the transcript's own. Badges 16/18, chips 22, in both densities. |
 | Motion | `--ds-duration-fast/base/slow/deliberate`, `--ds-ease-*`, `--ds-motion-live`, `--ds-cadence-{spin,breathe,drift,sweep,blink}` | Reduced motion zeroes durations and sets `motion-live` to 0. Cadences are the periods of the live loops; every loop divides by `motion-live`. |
-| Measure | `--ds-measure-message` (72ch), `--ds-measure-document` (84ch) | Prose widths for chat turns and published documents. |
+| Measure | `--ds-measure-message`, `--ds-measure-document` | Chat turns 70ch (72ch compact); documents 700px in both. |
+| Density | `data-density="compact"` | Overrides the tokens listed under Density below; everything else is shared. |
 | Layers | `--ds-z-base…tooltip` | |
 
 ### How the colours were chosen
@@ -144,8 +159,19 @@ validated (protan/deutan simulation, normal-vision distance, WCAG contrast)
 rather than eyeballed. The four chromatic tone foregrounds clear ΔE ≥ 8 under
 CVD simulation and ΔE ≥ 15 in normal vision for every pair, in both modes,
 while every `fg` stays ≥ 4.5:1 on the surface. The six role colours clear the
-same bar across all 15 pairs. If you change a hue, re-run the search; do not
-nudge by eye.
+same bar across all 15 pairs, and every role `fg` clears 4.5:1 on its
+theme's surface. If you change a hue or a surface, re-run the search; do not
+nudge by eye. `test/palette.test.ts` holds the WCAG half: the text ladder,
+tone and role foregrounds, link, focus ring and button label.
+
+The neutrals are the same idea turned down. Surfaces are grey with the
+faintest cool cast (chroma 0.0035) and stand ΔL 0.035 apart in dark, close
+enough to read as layers of one thing rather than boxes. The text ladder is
+set against them in close steps: primary is `#dee0e1`, not white — Discord's
+`#dbdee1` on `#313338` is 9.4:1, Obsidian's is 12.3:1, ours is 11.3:1 — then
+secondary and muted about two ratio-points apart each. Hierarchy comes from
+size and shade, not weight: body 400, names and labels 500, headings at most
+600.
 
 ## Rules
 
@@ -190,9 +216,11 @@ nudge by eye.
   dashed, the caret stays lit, the sweep becomes a stripe) and the clocks keep
   ticking as text. Motion here is state, not decoration.
 - Errors are never behind a click: a failed `ToolCallCard` opens by default
-  and repeats the error's first line in its collapsed row. A non-zero exit
-  code is a danger chip in the collapsed row whatever the harness said the
-  status was.
+  and repeats the error's first line, in primary ink on the danger tint, in
+  its collapsed row. A non-zero exit code is a danger chip in the collapsed
+  row whatever the harness said the status was — except the plain `exit 1`
+  of a failed call, which the ✕ already says; open, the output block always
+  shows the code.
 - Tool output arrives capped by the backend (4 KB per stream; longer output
   keeps the first and last 2 KB). `ToolCallCard output={{ head, tail,
   omittedBytes }}` draws the dropped middle as a labelled dashed line —
@@ -229,12 +257,12 @@ nudge by eye.
   weight, dim is opacity, inverse swaps ink and fill. The card's own
   chrome — rail, chips, labels — still never means anything by hue alone.
 - The model's reasoning is a `ThinkingBlock`: no avatar, no frame, muted
-  ink, a 24px row — quieter than a message and distinct from a tool call.
+  ink, a `row-compact` row — quieter than a message and distinct from a tool call.
   Collapsed by default to brain · label · one-line preview · duration.
   While streaming the brain sits inside the `thinking` rhythm's drifting
   ring and the preview follows the latest line. Dozens in a row must read
   as a faint ledger.
-- What an agent records with `dude event` takes the same 24px muted line.
+- What an agent records with `dude event` takes the same muted line.
   `ChatEvent` is zap · the type in mono · one line of the data (a scalar
   as-is; an object as up to three `key=value` pairs then "…";
   `summarizeEventData`) · the recording role's avatar · the time, and
@@ -257,22 +285,23 @@ nudge by eye.
 ### Human intervention
 
 - The two ways a person acts on a session are distinct on four channels in
-  `ChatComposer`: frame tint, hint text, button label, button icon.
-  **Answer** (session blocked on a question) is attention-toned — the same
-  hue as needs-you, so the answer visibly closes it — and plain Enter submits
-  because the agent is waiting. **Steer** (session running) is accent-toned,
+  `ChatComposer`: focus tint, hint text, button label, button icon.
+  **Answer** (session blocked on a question) has an attention-filled button —
+  the same hue as needs-you, so the answer visibly closes it — and plain
+  Enter submits because the agent is waiting. Its context line ("Answering
+  Orchestrator: …") and the offered choices are neutral at rest; a choice
+  chip takes the attention tint only on hover. **Steer** (session running) is accent-toned,
   says plainly that it interrupts the current turn, and requires ⌘/Ctrl+Enter
   because an accidental interrupt costs a turn.
 - The question itself is a turn: `QuestionCard`. While it waits it is the
-  one loud thing a transcript is allowed — the needs-you badge with its
-  ring, the attention wash and 2px bar the tree row and board card use for
-  the same state, the asking avatar marked live, and a wait clock ticking in
-  attention ink — so an operator scanning a long chat lands on it at once,
-  and in grayscale it is still the only framed turn with a solid badge, a
-  bar and a clock. The offered choices are numbered chips so the question
-  reads in full; they become one-click replies only with `onChoose`, since
-  the composer already has them as buttons. `answeredAt` settles it: a
-  hairline, no wash, "Answered · after 4m 12s", and the answer follows as
+  one loud turn a transcript is allowed, and it is loud once: the attention
+  wash and 2px bar. Inside it the ink is neutral — the transcript header's
+  Needs-you badge already names the state, the wait clock is muted, and the
+  avatar is marked live. In grayscale it is still the only barred, tinted
+  turn. The offered choices are shown once, as one-click chips in the
+  composer; the card lists them only with `onChoose` (then they are its own
+  buttons) or once it has settled, as the record of what was offered.
+  `answeredAt` settles it: no wash, "Answered · after 4m 12s", and the answer follows as
   its own `intent="answer"` turn — the card never quotes it, so nothing is
   said twice. `dismissed` is for a question the session died on: "Not
   answered", settled, and it never rings. The waiting card is a polite live
@@ -316,13 +345,18 @@ nudge by eye.
 - `TriageRollup` is the one way a collapsed parent says what is inside it:
   a `StatusBadge` dot per non-empty counted bucket, most urgent first. It
   reuses the dot shapes (diamond = needs you, round = active, square =
-  failed), so the roll-up never invents a second mark. Needs-you is the only
-  count in attention ink.
+  failed), so the roll-up never invents a second mark. The needs-you count
+  is semibold; its hue is on the diamond beside it.
+- **Amber once per region.** In the sidebar the pinned needs-you block (tint
+  and bar) is the one amber area; the filter chip, the tree row's pill, the
+  asking session's activity and the roll-up counts are neutral ink, and the
+  diamond marks carry the hue. In the transcript it is the header's
+  Needs-you badge and the waiting question's highlight.
 - The tree shows four levels — Project → Epic → Work item → Session — and
   folds Runs into their work item: the current run's sessions sit directly
   under it; earlier attempts fold into one "Attempt n" row each. Retrying is
   rare and must not cost every work item a level.
-- Levels differ in row grammar, not just indent (12px): projects are sticky
+- Levels differ in row grammar, not just indent (16px): projects are sticky
   small-caps headers, epics carry the layers glyph and a total, work items
   lead with a status dot and a mono key, sessions sit on a guide line behind
   a role avatar. A tree four deep still reads in grayscale.
@@ -334,7 +368,8 @@ nudge by eye.
   explicitly folded them.
 - "What needs me" must be answerable without expanding anything. The
   `Sidebar` pins a **Needs you** list across every project — work item,
-  who is asking, who it waits on, where — above the tree; the needs-you
+  who is asking and what, who it waits on; where it lives is the row's
+  tooltip — above the tree; the needs-you
   filter chip shows the same set in place; and every collapsed ancestor
   carries the count. Three routes, one source (`attentionItems`).
 - Selection and focus are separate (the ARIA tree pattern): ↑↓ move, →
@@ -353,7 +388,7 @@ nudge by eye.
   (running, needs you), Review (in review, ready to merge), Closed (done,
   failed, aborted). Keyed on the domain union, so a new status is a compile
   error until it is placed. All five lanes are always drawn, in that order;
-  an empty lane folds to a 28px labelled rail rather than an empty box.
+  an empty lane folds to a labelled rail rather than an empty box.
 - **Needs-you is not a lane.** It strikes in Intake (a plan to confirm) and
   In progress (an agent asking), so it is a card treatment and a sort order,
   exactly as it is a row treatment in the tree. Within a lane, cards sort by
@@ -363,7 +398,7 @@ nudge by eye.
   boards only) and time in lane; the title, clamped to two lines; who and
   what it cost. Running cards show the working roles (`RoleStack`) and the
   deepest live activity. Needs-you cards show the asker and the question in
-  attention ink and take the tree row's wash and bar. Nothing else on the
+  attention ink and take the attention wash and bar. Nothing else on the
   surface is coloured.
 - Time in lane is `Duration format="age"` — one coarse unit (`45m`, `4h`,
   `3d`), one clock per board ticking once a minute. Seconds on a board are
@@ -381,7 +416,7 @@ nudge by eye.
   (`boardSwimlanes`): a row per epic in the project's order — the order the
   operator set — then *No epic*, each across the same five lanes under one
   shared head row. The lane header is the epic title with the layers glyph,
-  a count, the roll-up and the spend; it folds the row to 28px
+  a count, the roll-up and the spend; it folds the row to its header
   (`collapsed` / `onCollapsedChange`, keyed `epic:<id>` / `none`). An empty
   epic keeps its row so its position stays visible. Cards drop their epic
   line; ↑↓ walk a column across rows. The header's "…" is the app's
@@ -465,24 +500,111 @@ nudge by eye.
   as open — an unclosed fence is still a code block, an open `**` is still
   bold — so nothing flickers when the closer lands. Finished messages parse
   strictly.
-- `variant="message"` (default) is the chat rhythm: 13px, 72ch, 6px between
-  blocks. `variant="document"` is for published artifacts: 84ch, more air,
-  an optional outline. Neither is a blog theme.
+- `variant="message"` (default) is a chat turn. One block sits on the chat
+  line (16/22). Two or more switch to long-form rhythm: 1.5 leading, 0.75em
+  between blocks, headings 1.25em above and one step smaller than in a
+  document. `variant="document"` is for published artifacts: 1em between
+  blocks, 2.5em above headings, h1/h2/h3 at 1.618/1.462/1.318em, a 700px
+  measure and an optional outline.
+- Inline code: 0.85em mono on the sunken fill, 4px radius, a subtle inset
+  ring. Code blocks: a sunken well, 8px radius, 12×16 padding, no frame; the
+  language and copy control appear on hover; long lines scroll sideways
+  under a thin scrollbar and a shadow on the clipped edge, never wrap or
+  clip. Blockquotes: a 2px muted bar and secondary ink. Lists: 1.5em
+  hanging indent. Tables: a 1px `border` rule under the header, fainter
+  hairlines between body rows, no vertical rules, no header fill.
 - Code blocks share their type with `LogStream`; a ```` ```diff ```` fence hands
   off to `DiffView`, so diff colouring exists in one place.
 
 ### Density
 
-- Body text 13px; captions 11–12px; nothing smaller than 10px and only in
-  badges.
-- Rows 28px by default. Use `compact` (24px) for logs, event streams and
-  anything the operator scans rather than reads. Use `comfortable` (36px)
+There are two, and `comfortable` is the default. It is what the rest of
+this document describes: 15px UI body, 16/22px transcript text, 32px rows,
+a 40px avatar on each speaker. `compact` is for an
+operator who wants more on the screen, and is opted into with
+`data-density="compact"` on the root or any subtree (`ThemeProvider`
+`setDensity`).
+
+Compact is not a smaller copy of comfortable. It takes space from the few
+places that have a lot of it and leaves small things alone, because
+shrinking something already small makes it cramped, not dense:
+
+| | comfortable | compact | why |
+|---|---|---|---|
+| main pane padding (`space-main-pad`) | 24 | 12 | big layout space: where density comes from |
+| panel gap (`space-panel-gap`) | 24 | 16 | |
+| space between speakers (`space-chat-gap`) | 17 | 8 | turns from one author stay 2px apart in both |
+| chat turn padding (`space-chat-pad-x`) | 16 | 12 | |
+| chat avatar (`size-avatar-chat`) | 40 | 32 | the gutter follows it |
+| avatar gap (`space-chat-avatar-gap`) | 16 | 12 | text column at 72px, 56px compact |
+| chat leading (`leading-chat`) / long-form (`leading-prose`) | 1.375 / 1.5 | 1.333 / 1.4 | 16/22 → 15/20; Markdown block gap (`md-gap`) 0.75em → 0.5em |
+| thought / tool call padding (`space-aside-y`) | 4 | 2 | |
+| waiting-question padding (`space-highlight-y`) | 8 | 4 | |
+| code block padding (`space-code-y` / `-x`), line pitch (`size-code-line`) | 12 / 16, 20 | 8 / 12, 18 | mono text stays 13px |
+| table cell padding (`space-cell-y`) | 6 | 3 | |
+| composer padding / gap / field padding | 8 / 6 / 10 | 4 / 4 / 6 | |
+| board card padding and gap (`space-card-pad`) | 12 | 6 | |
+| rows (`size-row-default` / `-comfortable`) | 32 / 40 | 28 / 36 | board lanes, tables, menus |
+| sidebar and transcript rows (`size-row-item` / `-item-sm`) | 32 / 28 | 26 / 24 | work items, epics, projects, tool calls / sessions, thoughts, needs-you header |
+| needs-you row padding (`space-attention-row-pad-y`) | 6 | 3 | |
+| sidebar row gap / project gap (`space-nav-row-gap`, `-nav-section-gap`) | 2 / 12 | 1 / 6 | |
+| controls (`size-control-md` / `-lg`) | 32 / 36 | 30 / 34 | a couple of px |
+| body, prose (`text-md`, `text-prose`) | 15 / 16 | 14 / 15 | 1px |
+| default radius (`radius-md`) | 6 | 5 | 1px |
+| chat measure (`measure-message`) | 70ch | 72ch | `ch` follows the font, so two more characters a line |
+
+Everything else is shared: icons, `control-sm` and `row-compact` (28, the
+floor), `text-2xs`/`xs`/`sm`/`nav` (11/12/13/14) and `text-mono` (13), badge
+and chip heights and padding, the document measure, the
+2–6px inner gaps, the tree indent, card and dialog radii, focus rings.
+`src/tokens/density.ts` is the list; `test/density.test.ts` holds it to
+the rule — compact is never roomier, text and radius move at most 1px,
+small tokens are not listed, the big spacing moves at least 4px and the
+big-ticket padding loses at least a third. At 1440×900 compact fits 26%
+more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
+17) than comfortable.
+
+- Body text 15px (14 compact); captions 12–13px; nothing smaller than 11px
+  and only in small-caps labels and badges.
+- Rows 32px by default. Use `row-compact` (28px) for logs, event streams and
+  anything the operator scans rather than reads. Use `row-comfortable` (40px)
   only for rows with two lines of content.
 - One `primary` button per view. Most actions are `secondary` or `ghost`.
 - Cards do not nest. Divide with `CardHeader`/`CardFooter` borders instead.
 - Empty states are one line of text and a hint, never an illustration.
 - Whitespace is a signal, not a default: a section gets `space-24` above it
   because it *is* a new section, not to look airy.
+
+### Surfaces and lines
+
+- Regions are told apart by shade. The sidebar sits on `canvas`, the
+  transcript and board panels on `surface`, cards on `raised`, and a
+  panel's header, toolbar or footer on `chrome`. A bar on a different shade
+  from the body under it gets no border.
+- Transcript turns are not boxes. Speakers are separated by whitespace;
+  a hovered row takes a full-width `row-hover` wash (3% ink) and shows its
+  actions. Tool calls are a quiet filled row; status is in the glyphs.
+- One emphasis pattern: a full-width tint of the tone (`--ds-tint-*`, from
+  `tokens/tints.ts`) and a 2px bar in the tone at the left edge, with the
+  corners on the bar side square so the bar runs straight. A steer (accent), a waiting question and the
+  sidebar's needs-you block (attention), a failed tool call (danger) use
+  it. Nothing else gets a coloured edge.
+- A line is kept where it means something: focus, the composer's outline
+  (the one raised field), inline code, the divider under a date or
+  session-start label, diff and table row rules, a lane rule on the board.
+  Kept lines are `border-subtle`.
+- Badges, chips and pills centre their label on cap height: the label
+  carries `ds-cap` (`text-box: trim-both cap alphabetic`), so capitals and
+  digits sit in the optical middle instead of 1–1.5px low.
+
+### Icons
+
+- Icons take the ink of the text they label, usually secondary or muted,
+  and brighten only on hover, selection or when active. Status and role
+  glyphs keep their tone and role colours.
+- Size them to the text beside them: 14px next to 14–15px text, 16px in an
+  icon button, 11–12px only inside chips and badges. Strokes are 1.5 on the
+  16px grid and 1.75 at 20px and up.
 
 ### Numbers and identifiers
 
@@ -590,12 +712,12 @@ EmptyState, ScrollArea.
 - **ActivityIndicator** — thinking / streaming / tool / retrying /
   awaiting_input / completed / failed / aborted, as a full-width line or a
   badge. Distinct rhythm per state; slow-tool promotion; retry countdown.
-- **ToolCallCard** — one 28px row per call with expandable arguments, error,
+- **ToolCallCard** — one row per call (`size-row-default`) with expandable arguments, error,
   diff (via `DiffView`), capped output with a marked elision, optional
   separate stderr, and the exit code. Running calls sweep and tick; failed
   calls and non-zero exits open by default with the error / exit in the row.
 - **ThinkingBlock** — the model's reasoning between messages and tool
-  calls. Collapsed to one quiet 24px line with a preview and duration;
+  calls. Collapsed to one quiet `row-compact` line with a preview and duration;
   streams with the thinking rhythm; expands to Markdown or plain text.
 - **ChatEvent / ChatProgress** — what the agent records with `dude event`:
   a typed event with a one-line summary that expands to JSON, and a
@@ -607,10 +729,11 @@ EmptyState, ScrollArea.
 - **ChatThread** — a subagent's conversation nested in its parent's, with a
   role-coloured rail, collapsible, depth-aware.
 - **QuestionCard** — an agent's question to a person as a turn. Waiting it
-  is the loudest turn in the transcript (needs-you badge, attention wash
-  and bar, live avatar, ticking wait clock); answered or dismissed it
-  settles to a hairline with when and how long it waited. Choices shown as
-  chips, one-click only with `onChoose`.
+  is the loudest turn in the transcript (attention wash and bar, live
+  avatar, a muted ticking wait clock; no badge of its own); answered or
+  dismissed it becomes a plain row with an "Answered" / "Not answered" tag
+  and how long it waited. While waiting, choices are chips only with
+  `onChoose`; otherwise they live in the composer. Settled, they are listed.
 - **ChatComposer** — answer (blocked on a question, with one-click options)
   vs steer (interrupts a running turn) vs prompt, visibly different.
 - **Markdown** — untrusted Markdown to React from a typed AST; streaming-safe;

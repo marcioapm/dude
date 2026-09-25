@@ -26,7 +26,7 @@ export { ThinkingBlock } from "./ThinkingBlock.tsx";
 export type { ThinkingBlockProps } from "./ThinkingBlock.tsx";
 export { AgentPlan, planProgress } from "./AgentPlan.tsx";
 export type { AgentPlanProps, PlanItem } from "./AgentPlan.tsx";
-export { ChatMessage } from "./ChatMessage.tsx";
+export { ChatAside, ChatMessage } from "./ChatMessage.tsx";
 export type { ChatMessageProps, ChatMessageKind, HumanIntent } from "./ChatMessage.tsx";
 export { ChatThread } from "./ChatThread.tsx";
 export type { ChatThreadProps } from "./ChatThread.tsx";
