@@ -148,11 +148,10 @@
   --ds-ring-color: var(--sb-mark);
   animation: global(ds-ring) calc(2.4s / max(var(--ds-motion-live), 0.0001)) var(--ds-ease-exit) infinite;
 }
-.dot.terminal .dotMark {
-  opacity: 0.6;
-}
 /* Shape channel for the dot mode: terminal states become squares,
-   needs-human becomes a diamond, so hue never carries meaning alone. */
+   needs-human becomes a diamond, so hue never carries meaning alone.
+   Squares take the full mark colour: faded to 60%, failed and done fall
+   under 3:1 and red reads as pink. */
 .dot.terminal .dotMark {
   border-radius: 1px;
 }

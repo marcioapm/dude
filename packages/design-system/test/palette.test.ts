@@ -227,6 +227,19 @@ describe("text on tints", () => {
   });
 });
 
+describe("disabled filled button", () => {
+  test("its secondary label clears 4.5:1 on the active wash over surface and chrome", () => {
+    for (const mode of MODES) {
+      const c = themeColors[mode];
+      const wash = (bg: string) => {
+        const [r, g, b, a] = c.activeWash.match(/[\d.]+/g)!.map(Number) as [number, number, number, number];
+        return mix(`#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")}`, bg, a);
+      };
+      for (const bg of [c.surface, c.chrome]) expect(contrast(c.textSecondary, wash(bg)), `${mode} on ${bg}`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});
+
 describe("status marks", () => {
   test("every tone's mark clears 3:1 (non-text) on the canvas and the surface", () => {
     for (const mode of MODES) {
