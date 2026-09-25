@@ -3,8 +3,7 @@ import { Block, Caption, Col, Label, Panes, Row, Section, type PaneMode } from "
 import styles from "../gallery.module.css";
 import { AGENT_ROLE_NAMES, TONE_NAMES, accent, diff, neutral, roleColors, themeColors, tones } from "../../tokens/palette-and-themes.ts";
 import { duration, easing, fontSize, radius, space, zIndex } from "../../tokens/scale.ts";
-import { densityTokens, type DensityToken } from "../../tokens/density.ts";
-import type { Density } from "../../tokens/density.ts";
+import { densityTokens, type Density, type DensityToken } from "../../tokens/density.ts";
 import { ALL_STATUSES, STATUS_SPECS } from "../../tokens/status.ts";
 import { Icon, ICON_NAMES } from "../../icons/index.tsx";
 import { StatusBadge } from "../../components/StatusBadge.tsx";
