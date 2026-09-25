@@ -10,7 +10,7 @@ import { QuestionCard } from "../../components/QuestionCard.tsx";
 import { Sidebar } from "../../components/Sidebar.tsx";
 import { ThinkingBlock } from "../../components/ThinkingBlock.tsx";
 import { ToolCallCard } from "../../components/ToolCallCard.tsx";
-import { Button } from "../../primitives/Button.tsx";
+import { Button, IconButton } from "../../primitives/Button.tsx";
 import { Tab, TabList, TabPanel, Tabs } from "../../primitives/Tabs.tsx";
 import type { ThemeMode } from "../../tokens/themes.ts";
 import type { NavRef } from "../../util/navModel.ts";
@@ -106,7 +106,7 @@ function AppShell() {
 }
 
 function Transcript() {
-  const t0 = Date.now() - 14 * MIN;
+  const [t0] = useState(() => Date.now() - 14 * MIN);
   const ts = (offset: number) => new Date(t0 + offset).toISOString();
   return (
     <ChatTranscript
@@ -162,7 +162,18 @@ function Transcript() {
         <ThinkingBlock text={THOUGHT_2} startedAt={ts(18_400)} endedAt={ts(29_800)} />
       </Aside>
       <ChatMessage role="human" name="marcio" intent="steer" content="Keep the jitter, but make it injectable so the tests can seed it." startedAt={ts(20 * SEC)} deliveredAt={ts(29_800)} />
-      <ChatMessage role="orchestrator" model="claude-opus-4" content={MSG_3} startedAt={ts(29_800)} endedAt={ts(33 * SEC)} costUsd={0.024} contextTokens={52_800} contextWindowTokens={CONTEXT_WINDOW} outputTokens={380} />
+      <ChatMessage
+        role="orchestrator"
+        model="claude-opus-4"
+        content={MSG_3}
+        startedAt={ts(29_800)}
+        endedAt={ts(33 * SEC)}
+        costUsd={0.024}
+        contextTokens={52_800}
+        contextWindowTokens={CONTEXT_WINDOW}
+        outputTokens={380}
+        actions={<IconButton icon="copy" label="Copy message" size="sm" onClick={() => void navigator.clipboard?.writeText(MSG_3)} />}
+      />
       <Aside>
         <ToolCallCard name="bash" status="completed" args={{ command: "bun run typecheck && bun test apps/control-plane" }} startedAt={ts(38_200)} endedAt={ts(42_080)} exitCode={0} output={LONG_TEST_OUTPUT_PASSED} />
       </Aside>
