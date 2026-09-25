@@ -351,13 +351,15 @@ func (s *Server) turn(run *Run) {
 		s.agent(run, done)
 	}
 	// Its tools are part of its first turn's work, not repeated on every
-	// turn after.
-	for _, c := range b.CallTools {
-		if len(run.Inputs) == 0 {
+	// turn after; asking a person is one of them, and ends that turn.
+	first := len(run.Inputs) == 0
+	asking := b.Ask != "" && first
+	if first {
+		for _, c := range b.CallTools {
 			s.callTool(run, c[0], c[1])
 		}
 	}
-	if b.Ask != "" && len(run.Inputs) == 0 {
+	if asking {
 		s.callTool(run, "ask_person", b.Ask)
 	}
 	if b.Hang && !run.woken {
@@ -368,13 +370,13 @@ func (s *Server) turn(run *Run) {
 		return
 	}
 	reply := b.Reply
-	if b.Ask != "" && len(run.Inputs) == 0 {
+	if asking {
 		reply = "I asked; waiting for the answer."
 	}
 	for _, chunk := range chunks(reply, 7) {
 		s.agent(run, map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": chunk}})
 	}
-	if reply == b.Reply && len(b.Publish) > 0 {
+	if !asking && len(b.Publish) > 0 {
 		if run.published == nil {
 			run.published = map[string]string{}
 		}

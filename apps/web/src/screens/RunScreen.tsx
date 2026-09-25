@@ -239,12 +239,13 @@ export function RunScreen({ client, runId, title, breadcrumb }: RunScreenProps) 
                       }
                     : undefined
                 }
-                // A Run parked for a person takes the answer: it resumes it.
+                // A paused Run takes an answer (a parked one is resumed by it),
+                // not a steer.
                 disabled={!isLive || (run.status === "paused" && !conversation.openQuestion)}
                 disabledReason={
                   run.status === "paused"
                     ? "This run is paused. Resume it to steer."
-                    : "This run has finished."
+                    : "This run has finished — nobody would hear it."
                 }
                 onSubmit={send}
               />

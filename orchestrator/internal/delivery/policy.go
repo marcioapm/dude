@@ -70,7 +70,7 @@ func DefaultPolicy() Policy {
 		Test:                  false,
 		MaxPRFixIterations:    3,
 		ParkAfterMinutes:      10,
-		IdleNudgeMinutes:      0,
+		IdleNudgeMinutes:      0, // off
 	}
 }
 

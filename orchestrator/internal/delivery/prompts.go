@@ -197,13 +197,13 @@ const publishNote = "To give the people following this work a file — notes, a 
 	"(for example `$LUX_ARTIFACTS/notes.md`). They see each one next to the work item, Markdown " +
 	"rendered. Publish what a person would want to read; don't copy code there."
 
-// ask is how this agent stops for a person: dude's ask_person tool. Without
-// dude's tools it cannot ask, and decides for itself.
-func (in PromptInput) ask() string {
+// ask is how this agent stops for a person: dude's ask_person tool.
+// Without dude's tools it cannot ask, and decides for itself.
+func (in PromptInput) ask() []string {
 	if in.Tools {
-		return askToolNote
+		return []string{askToolNote}
 	}
-	return ""
+	return nil
 }
 
 const askToolNote = "If you cannot go on without a decision only a person can make — the task is ambiguous " +
@@ -227,13 +227,7 @@ const cliNote = "The same, from the shell: the `dude` command (see `dude help`) 
 // Prompt composes one phase's prompt.
 func Prompt(phase string, in PromptInput) string {
 	var sections []string
-	add := func(s ...string) {
-		for _, section := range s {
-			if section != "" {
-				sections = append(sections, section)
-			}
-		}
-	}
+	add := func(s ...string) { sections = append(sections, s...) }
 
 	switch phase {
 	case PhaseInvestigate:
@@ -242,7 +236,8 @@ func Prompt(phase string, in PromptInput) string {
 
 	case PhaseImplement:
 		add("Implement this task. Run the project's formatter, type checks and tests before you "+
-			"finish — handing over code that does not build is not finishing. "+commitNote, in.task(), in.ask())
+			"finish — handing over code that does not build is not finishing. "+commitNote, in.task())
+		add(in.ask()...)
 
 	case PhaseReview:
 		category := in.Category
@@ -303,7 +298,8 @@ func Prompt(phase string, in PromptInput) string {
 			add("## Pull request feedback\n\n" + strings.Join(items, "\n\n"))
 		}
 		add("Fix only what is raised above. Widening the change makes the re-review harder and risks new findings.",
-			"The original task, for context:\n\n"+in.task(), in.ask())
+			"The original task, for context:\n\n"+in.task())
+		add(in.ask()...)
 
 	case PhaseSimplify:
 		add("Simplify the changes on this branch without changing what they do.",
