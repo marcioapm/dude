@@ -70,7 +70,8 @@
   font-size: var(--ds-text-xs);
   color: var(--ds-color-text-muted);
 }
-.time {
+.time,
+.delivered {
   font-size: var(--ds-text-xs);
   font-variant-numeric: tabular-nums;
   color: var(--ds-color-text-muted);
@@ -219,12 +220,6 @@
   font-size: var(--ds-text-xs);
   color: var(--ds-color-text-muted);
   font-style: italic;
-}
-.delivered {
-  font-size: var(--ds-text-xs);
-  font-variant-numeric: tabular-nums;
-  color: var(--ds-color-text-muted);
-  white-space: nowrap;
 }
 
 /* --- Clamped body ------------------------------------------------------- */
