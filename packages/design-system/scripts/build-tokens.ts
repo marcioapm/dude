@@ -10,6 +10,7 @@
 
 import { flattenTheme, type ThemeMode } from "../src/tokens/themes.ts";
 import { densityTokens } from "../src/tokens/density.ts";
+import { tints } from "../src/tokens/tints.ts";
 import {
   cadence,
   duration,
@@ -53,6 +54,7 @@ function staticVars(): Record<string, string> {
   for (const [k, v] of Object.entries(cadence)) out[`cadence-${k}`] = `${v}ms`;
   for (const [k, v] of Object.entries(measure)) out[`measure-${k}`] = v;
   for (const [k, v] of Object.entries(zIndex)) out[`z-${k}`] = `${v}`;
+  for (const [k, v] of Object.entries(tints)) out[`tint-${kebab(k)}`] = `${Math.round(v * 1000) / 10}%`;
   // Density tokens with no scale entry (unitless leading, em gaps) still
   // need a :root default for trees that never set data-density.
   for (const [k, v] of Object.entries(densityTokens.comfortable)) if (!(k in out)) out[k] = v;

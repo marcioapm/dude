@@ -584,9 +584,9 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 - Transcript turns are not boxes. Speakers are separated by whitespace;
   a hovered row takes a full-width `row-hover` wash (3% ink) and shows its
   actions. Tool calls are a quiet filled row; status is in the glyphs.
-- One emphasis pattern: a full-width tint of the tone (~8–9%) and a 2px bar
-  in the tone at the left edge, with the corners on the bar side square so
-  the bar runs straight. A steer (accent), a waiting question and the
+- One emphasis pattern: a full-width tint of the tone (`--ds-tint-*`, from
+  `tokens/tints.ts`) and a 2px bar in the tone at the left edge, with the
+  corners on the bar side square so the bar runs straight. A steer (accent), a waiting question and the
   sidebar's needs-you block (attention), a failed tool call (danger) use
   it. Nothing else gets a coloured edge.
 - A line is kept where it means something: focus, the composer's outline

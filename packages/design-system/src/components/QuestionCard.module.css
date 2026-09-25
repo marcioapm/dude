@@ -2,8 +2,8 @@
  * An agent's question to a person, laid out on the ChatMessage grid (same
  * gutter, avatar, 72px text column). No box:
  *
- *   waiting    the highlight pattern — a full-width attention tint (~9%)
- *              and a 2px attention bar at the left edge. That is the one
+ *   waiting    the highlight pattern — a full-width attention tint
+ *              (`--ds-tint-highlight`) and a 2px attention bar at the left edge. That is the one
  *              amber signal in the turn: the name, clock and any choice
  *              chips inside it are neutral.
  *   answered   a plain row with a quiet "Answered · after 4m 12s" tag.
@@ -12,20 +12,9 @@
  */
 
 .root {
-  --qc-bar: transparent;
-  --qc-wash: transparent;
-  position: relative;
-  display: grid;
-  grid-template-columns: var(--ds-size-avatar-chat) minmax(0, 1fr);
-  column-gap: var(--ds-space-chat-avatar-gap);
-  margin-top: calc(var(--ds-space-chat-gap) - var(--ds-space-2));
-  padding: var(--ds-space-2) var(--ds-space-chat-pad-x);
-  min-width: 0;
-  background: var(--qc-wash);
-  box-shadow: inset 2px 0 0 var(--qc-bar);
-  font-size: var(--ds-text-prose);
-  line-height: var(--ds-leading-chat);
-  scroll-margin-top: var(--ds-space-32);
+  composes: turn from "./turn.module.css";
+  --turn-bar: transparent;
+  --turn-wash: transparent;
   transition: background-color var(--ds-duration-slow) var(--ds-ease-standard);
 }
 .root:not(.waiting):hover {
@@ -34,9 +23,9 @@
 .new {
   animation: global(ds-flash) var(--ds-duration-deliberate) var(--ds-ease-exit) 1;
 }
-.waiting {
-  --qc-bar: var(--ds-tone-attention-solid);
-  --qc-wash: color-mix(in srgb, var(--ds-tone-attention-solid) 9%, transparent);
+.root.waiting {
+  --turn-bar: var(--ds-tone-attention-solid);
+  --turn-wash: color-mix(in srgb, var(--ds-tone-attention-solid) var(--ds-tint-highlight), transparent);
   padding-top: var(--ds-space-highlight-y);
   padding-bottom: var(--ds-space-highlight-y);
 }
@@ -51,11 +40,7 @@
 }
 
 .header {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  column-gap: var(--ds-space-8);
-  min-height: calc(var(--ds-text-prose) * var(--ds-leading-chat));
+  composes: turnHeader from "./turn.module.css";
 }
 .name {
   font-weight: var(--ds-weight-medium);
@@ -165,13 +150,11 @@
   min-width: 10px;
 }
 .optionButton {
+  composes: choiceChip from "./turn.module.css";
   cursor: pointer;
 }
-.optionButton:hover {
-  background: color-mix(in srgb, var(--ds-tone-attention-solid) 18%, transparent);
-  box-shadow: inset 0 0 0 1px var(--ds-tone-attention-border);
-}
-.optionButton:focus-visible {
+/* Matches the shared hover's specificity so the focus ring wins on a hovered chip. */
+.optionButton:focus-visible:not(:disabled) {
   outline: none;
   box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-color-focus-ring);
 }

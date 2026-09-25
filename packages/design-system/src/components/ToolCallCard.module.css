@@ -29,7 +29,7 @@
 }
 .failed {
   --tc-accent: var(--ds-tone-danger-fg);
-  --tc-fill: color-mix(in srgb, var(--ds-tone-danger-bg) 70%, transparent);
+  --tc-fill: color-mix(in srgb, var(--ds-tone-danger-bg) var(--ds-tint-failed-fill), transparent);
 }
 
 .row {
@@ -255,7 +255,7 @@
    completed: the rail says so. */
 .badExit {
   --tc-accent: var(--ds-tone-danger-fg);
-  --tc-fill: color-mix(in srgb, var(--ds-tone-danger-bg) 70%, transparent);
+  --tc-fill: color-mix(in srgb, var(--ds-tone-danger-bg) var(--ds-tint-failed-fill), transparent);
 }
 .aborted {
   --tc-accent: transparent;
