@@ -82,8 +82,6 @@
   font-size: 1.2em;
 }
 
-
-
 /* Block spacing comes from `.root > * + *` alone; no block sets its own
    margin, or it would override that rule at equal specificity. */
 
@@ -228,9 +226,6 @@
   font-family: var(--ds-font-mono);
   letter-spacing: var(--ds-tracking-wide);
   text-transform: lowercase;
-}
-.codeSpacer {
-  display: none;
 }
 .codeCopy {
   display: inline-flex;
