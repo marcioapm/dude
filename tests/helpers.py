@@ -159,6 +159,12 @@ class ApiClient:
 # ---------------------------------------------------------------------------
 
 
+def toast(page, text: str):
+    """A toast, by its text: the design system marks each one (data-toast),
+    since Radix also renders a hidden copy of the text for a second."""
+    return page.locator("[data-toast]").filter(has_text=text)
+
+
 def wait_until(predicate, timeout: float = 30.0, interval: float = 0.25, message: str = ""):
     """Poll until `predicate` returns a truthy value, or fail the test.
 

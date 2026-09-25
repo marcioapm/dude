@@ -1271,10 +1271,7 @@ func TestWorkGivenARepositoryToChangeMidRunIsPushed(t *testing.T) {
 		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND phase = 'implement' AND status = 'completed'`, wi) == 1
 	})
 	if !w.lux.Runs()[0].Pushed {
-		var reqs, evs string
-		_ = w.owner.QueryRow(context.Background(), `SELECT string_agg(status||'/'||blocking::text, ',') FROM repository_requests WHERE work_item_id = $1`, wi).Scan(&reqs)
-		_ = w.owner.QueryRow(context.Background(), `SELECT string_agg(event_type, ' ' ORDER BY cursor) FROM events WHERE work_item_id = $1`, wi).Scan(&evs)
-		t.Fatalf("the change was never pushed; requests %s; resumed %d\n%s\n%s", reqs, w.lux.Runs()[0].Resumed, evs, w.describeRuns())
+		t.Fatalf("the change was never pushed\n%s", w.describeRuns())
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE work_item_id = $1 AND payload->>'reason' = 'no_changes'`, wi); n != 0 {
 		t.Errorf("escalated as no changes")

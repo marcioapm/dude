@@ -195,6 +195,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - Toasts are for the outcome of *your* action. An agent asking a question is
   not a toast; it is a status change and an event, and it persists until dealt
   with.
+- Each toast carries `data-toast="<tone>"`. Find one by it, not by its text
+  alone: for its first second Radix also renders a hidden copy of the text
+  for screen readers, so the text matches twice.
 
 ### Activity (the transcript)
 
