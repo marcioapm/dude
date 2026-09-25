@@ -322,16 +322,16 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
                 </Tab>
               </TabList>
               <TabPanel value="overview">
-                <div style={{ padding: 12 }}>Overview panel</div>
+                Overview panel
               </TabPanel>
               <TabPanel value="timeline">
-                <div style={{ padding: 12 }}>Timeline panel</div>
+                Timeline panel
               </TabPanel>
               <TabPanel value="sessions">
-                <div style={{ padding: 12 }}>Sessions panel</div>
+                Sessions panel
               </TabPanel>
               <TabPanel value="questions">
-                <div style={{ padding: 12 }}>Questions panel</div>
+                Questions panel
               </TabPanel>
             </Tabs>
             <Tabs defaultValue="board">

@@ -74,10 +74,6 @@ body {
   gap: var(--ds-space-8);
 }
 
-/* A settings tab's content, clear of its tab list. */
-.tabPanel {
-  padding-top: var(--ds-space-16);
-}
 
 /* -- work item dialog ------------------------------------------------------ */
 

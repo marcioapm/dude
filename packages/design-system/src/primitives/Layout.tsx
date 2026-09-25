@@ -2,6 +2,8 @@ import { useId, type FieldsetHTMLAttributes, type HTMLAttributes, type ReactNode
 import { cx } from "../util/cx.ts";
 import { Icon, type IconName } from "../icons/index.tsx";
 import styles from "./Layout.module.css";
+// The field anatomy (label, hint, error) is Input's, as Textarea's is.
+import field from "./Input.module.css";
 
 /*
  * The structure of a page outside the board and the transcript — a work
@@ -177,9 +179,9 @@ export function Fieldset({ legend, hint, error, className, children, ...rest }: 
   const id = useId();
   return (
     <fieldset className={cx(styles["fieldset"], className)} aria-describedby={hint || error ? `${id}-hint` : undefined} {...rest}>
-      <legend className={styles["legend"]}>{legend}</legend>
+      <legend className={cx(field["label"], styles["legend"])}>{legend}</legend>
       {hint || error ? (
-        <p id={`${id}-hint`} className={cx(styles["hint"], error ? styles["hintError"] : undefined)}>
+        <p id={`${id}-hint`} className={cx(field["hint"], styles["hint"], error ? field["hintError"] : undefined)}>
           {error ?? hint}
         </p>
       ) : null}

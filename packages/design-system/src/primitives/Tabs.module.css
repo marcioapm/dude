@@ -85,6 +85,12 @@
 .content {
   min-height: 0;
   outline: none;
+  /* Content starts a panel gap below the tabs, following the density. A
+     filling panel (a chat, a log) sits flush. */
+  padding-top: var(--ds-space-panel-gap);
+}
+.contentFill {
+  padding-top: 0;
 }
 .contentFill {
   flex: 1;

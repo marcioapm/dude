@@ -19,6 +19,7 @@ import type { ApiClient } from "./api/client.ts";
 import { useReloadOnEvents } from "./hooks/useEventStream.ts";
 import { errorText } from "./hooks/useSave.tsx";
 import { formatPlace, inTree, parsePlace, treeSelection, type Place } from "./place.ts";
+import { startPush } from "./push.ts";
 import { DeleteEpicDialog, EpicDialog, epicRef, rowActions, type Intent } from "./screens/actions.tsx";
 import { NewProjectDialog } from "./screens/NewProjectDialog.tsx";
 import { InboxScreen } from "./screens/InboxScreen.tsx";
@@ -90,6 +91,11 @@ export function App({ client, onSignOut }: AppProps) {
     window.addEventListener("hashchange", follow);
     return () => window.removeEventListener("hashchange", follow);
   }, []);
+
+  // Notifications: the service worker, and a clicked one opening its place.
+  useEffect(() => startPush(client, (hash) => {
+    window.location.hash = hash;
+  }), [client]);
 
   const load = useCallback(async () => {
     try {

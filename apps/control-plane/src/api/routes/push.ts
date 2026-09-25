@@ -21,14 +21,16 @@ async function publicKey(ctx: RequestContext): Promise<Response> {
   return orchestrator(ctx.principal.organizationId, "GET", "/internal/push/key", undefined);
 }
 
-/** Register this browser; one already known is updated (keys rotate). */
+/**
+ * Register this browser for the organization it is signed in to. One known
+ * already — its keys rotated, or it was subscribed for another organization
+ * before — moves over (claim_push_subscription, across organizations).
+ */
 async function subscribe(ctx: RequestContext): Promise<Response> {
   const sub = await parseBody(ctx.request, subscriptionSchema);
   await withOrg(ctx.principal.organizationId, async ({ sql }) => {
-    await sql`
-      INSERT INTO push_subscriptions (endpoint, organization_id, api_key_id, p256dh, auth)
-      VALUES (${sub.endpoint}, ${ctx.principal.organizationId}, ${ctx.principal.apiKeyId}, ${sub.keys.p256dh}, ${sub.keys.auth})
-      ON CONFLICT (endpoint) DO UPDATE SET api_key_id = EXCLUDED.api_key_id, p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth`;
+    await sql`SELECT claim_push_subscription(${sub.endpoint}, ${ctx.principal.organizationId},
+      ${ctx.principal.apiKeyId}, ${sub.keys.p256dh}, ${sub.keys.auth})`;
   });
   return json({ subscribed: true }, 201);
 }

@@ -8,7 +8,7 @@ import { useEffect, useState } from "react";
 import { useTheme } from "@dude/design-system";
 import { Button, Callout, Card, CardBody, CardHeader, FormActions, FormStack, Page, PageHeader, Select } from "@dude/design-system/primitives";
 import type { ApiClient } from "../api/client.ts";
-import { errorText } from "../hooks/useSave.tsx";
+import { useSave } from "../hooks/useSave.tsx";
 import { pushState, showTestNotification, turnPushOff, turnPushOn, type PushState } from "../push.ts";
 
 const PUSH_TEXT: Record<PushState, string> = {
@@ -21,24 +21,13 @@ const PUSH_TEXT: Record<PushState, string> = {
 export function MySettingsScreen({ client }: { client: ApiClient }) {
   const theme = useTheme();
   const [push, setPush] = useState<PushState | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [problem, setProblem] = useState<string | null>(null);
+  const { busy, problem, save } = useSave();
 
   useEffect(() => {
     void pushState().then(setPush);
   }, []);
 
-  const change = async (to: () => Promise<PushState>) => {
-    setBusy(true);
-    setProblem(null);
-    try {
-      setPush(await to());
-    } catch (err) {
-      setProblem(errorText(err));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const change = (to: () => Promise<PushState>) => save(async () => setPush(await to()));
 
   return (
     <Page data-testid="my-settings">

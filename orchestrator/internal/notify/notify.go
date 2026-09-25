@@ -15,13 +15,16 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
 // Notifier sends Web Push for new asks.
@@ -34,7 +37,17 @@ type Notifier struct {
 	PublicKey, PrivateKey string
 	// The push services' client (tests: a fake one).
 	HTTP webpush.HTTPClient
+
+	keysMu sync.Mutex
+	ready  bool
 }
+
+// settle is how long an ask may take to commit after it was recorded: the
+// watermark moves only past asks older than this, and the ones sent above
+// it are remembered (push_sent). Cursors are handed out at insert and seen
+// at commit, so a watermark at the newest ask read would skip one whose
+// transaction was still open.
+const settle = 10 * time.Minute
 
 // Message is what the service worker shows (apps/web/public/sw.js).
 type Message struct {
@@ -46,13 +59,15 @@ type Message struct {
 	URL string `json:"url"`
 }
 
-// The events that mean something waits on a person.
-var asks = []string{"question.asked", "repository.requested"}
-
 // Keys returns the VAPID key pair: configured, or kept in push_config, made
 // the first time. The public half is what a browser subscribes with.
+//
+// It also makes push_config's row, which holds the notifier's watermark,
+// configured keys or not. Read once and kept: the pair never changes.
 func (n *Notifier) Keys(ctx context.Context) (public, private string, err error) {
-	if n.PublicKey != "" && n.PrivateKey != "" {
+	n.keysMu.Lock()
+	defer n.keysMu.Unlock()
+	if n.ready {
 		return n.PublicKey, n.PrivateKey, nil
 	}
 	err = n.DB.InSystem(ctx, "push-keys", func(tx pgx.Tx) error {
@@ -60,7 +75,9 @@ func (n *Notifier) Keys(ctx context.Context) (public, private string, err error)
 		if !db.IsNotFound(err) {
 			return err
 		}
-		if private, public, err = webpush.GenerateVAPIDKeys(); err != nil {
+		if n.PublicKey != "" && n.PrivateKey != "" {
+			public, private = n.PublicKey, n.PrivateKey
+		} else if private, public, err = webpush.GenerateVAPIDKeys(); err != nil {
 			return err
 		}
 		// Starting now: what was asked before notifications existed is not
@@ -72,7 +89,15 @@ func (n *Notifier) Keys(ctx context.Context) (public, private string, err error)
 		}
 		return tx.QueryRow(ctx, `SELECT vapid_public, vapid_private FROM push_config`).Scan(&public, &private)
 	})
-	return public, private, err
+	if err != nil {
+		return "", "", err
+	}
+	// Configured keys win over those kept.
+	if n.PublicKey == "" || n.PrivateKey == "" {
+		n.PublicKey, n.PrivateKey = public, private
+	}
+	n.ready = true
+	return n.PublicKey, n.PrivateKey, nil
 }
 
 type ask struct {
@@ -100,32 +125,44 @@ func (n *Notifier) Sweep(ctx context.Context) (int, error) {
 			LEFT JOIN work_items w ON w.id = e.work_item_id
 			LEFT JOIN projects p ON p.id = w.project_id
 			LEFT JOIN runs r ON r.id = e.run_id
-			WHERE e.cursor > (SELECT after_cursor FROM push_config) AND e.event_type = ANY ($1)
-			ORDER BY e.cursor LIMIT 100`, asks)
+			WHERE e.cursor > (SELECT after_cursor FROM push_config)
+			  AND e.event_type IN ('question.asked', 'repository.requested')
+			  AND NOT EXISTS (SELECT 1 FROM push_sent s WHERE s.cursor = e.cursor)
+			ORDER BY e.cursor LIMIT 100`)
 		if err != nil {
 			return err
 		}
 		if found, err = pgx.CollectRows(rows, pgx.RowToStructByPos[ask]); err != nil || len(found) == 0 {
 			return err
 		}
-		orgs := map[string]bool{}
+		orgs := make([]string, 0, len(found))
 		for _, a := range found {
-			orgs[a.Org] = true
+			orgs = append(orgs, a.Org)
 		}
-		for org := range orgs {
-			rows, err := tx.Query(ctx, `SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE organization_id = $1`, org)
-			if err != nil {
-				return err
-			}
-			if subs[org], err = pgx.CollectRows(rows, pgx.RowToStructByPos[subscription]); err != nil {
-				return err
-			}
+		rows, err = tx.Query(ctx, `SELECT organization_id, endpoint, p256dh, auth FROM push_subscriptions
+			WHERE organization_id = ANY ($1)`, orgs)
+		if err != nil {
+			return err
 		}
-		return nil
-	}); err != nil || len(found) == 0 {
+		var org string
+		var sub subscription
+		_, err = pgx.ForEachRow(rows, []any{&org, &sub.Endpoint, &sub.P256dh, &sub.Auth}, func() error {
+			subs[org] = append(subs[org], sub)
+			return nil
+		})
+		return err
+	}); err != nil {
 		return 0, err
 	}
+	if len(found) == 0 {
+		return 0, n.advance(ctx)
+	}
 
+	// A few at a time: one slow push service must not hold up the rest.
+	var mu sync.Mutex
+	var gone []string
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, 8)
 	for _, a := range found {
 		msg, ok := messageFor(a)
 		if !ok {
@@ -133,21 +170,61 @@ func (n *Notifier) Sweep(ctx context.Context) (int, error) {
 		}
 		body, _ := json.Marshal(msg)
 		for _, s := range subs[a.Org] {
-			n.send(ctx, a.Org, s, body, msg.Tag, public, private)
+			wg.Add(1)
+			slots <- struct{}{}
+			go func() {
+				defer func() { <-slots; wg.Done() }()
+				if !n.send(ctx, s, body, msg.Tag, public, private) {
+					mu.Lock()
+					gone = append(gone, s.Endpoint)
+					mu.Unlock()
+				}
+			}()
 		}
 	}
-	// Moved past what was looked at, sent or not: a push service that is
-	// down is not a reason to announce an old ask hours later.
-	last := found[len(found)-1].Cursor
+	wg.Wait()
+	// Recorded as sent, sent or not: a push service that is down is not a
+	// reason to announce an old ask hours later. The watermark moves past
+	// asks old enough to be settled, and what is below it is forgotten.
+	cursors := make([]int64, len(found))
+	for i, a := range found {
+		cursors[i] = a.Cursor
+	}
 	return len(found), n.DB.InSystem(ctx, "notify", func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE push_config SET after_cursor = GREATEST(after_cursor, $1)`, last)
+		if len(gone) > 0 {
+			if _, err := tx.Exec(ctx, `DELETE FROM push_subscriptions WHERE endpoint = ANY ($1)`, gone); err != nil {
+				return err
+			}
+		}
+		_, err := tx.Exec(ctx, `INSERT INTO push_sent (cursor) SELECT unnest($1::bigint[]) ON CONFLICT DO NOTHING`, cursors)
 		return err
 	})
 }
 
-// send delivers one message to one browser. A subscription its push service
-// says is gone (404, 410: unsubscribed, expired) is forgotten.
-func (n *Notifier) send(ctx context.Context, org string, s subscription, body []byte, tag, public, private string) {
+// advance moves the watermark past the asks that are sent and settled —
+// old enough that no transaction can still be committing one below them —
+// but never past one not sent yet; and forgets what is below it.
+func (n *Notifier) advance(ctx context.Context) error {
+	return n.DB.InSystem(ctx, "notify", func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `UPDATE push_config SET after_cursor = GREATEST(after_cursor, LEAST(
+				COALESCE((SELECT max(s.cursor) FROM push_sent s JOIN events e ON e.cursor = s.cursor
+				          WHERE e.occurred_at < now() - make_interval(secs => $1)), 0),
+				COALESCE((SELECT min(e.cursor) - 1 FROM events e
+				          WHERE e.cursor > push_config.after_cursor
+				            AND e.event_type IN ('question.asked', 'repository.requested')
+				            AND NOT EXISTS (SELECT 1 FROM push_sent s WHERE s.cursor = e.cursor)), 9223372036854775807)))`,
+			settle.Seconds()); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `DELETE FROM push_sent WHERE cursor <= (SELECT after_cursor FROM push_config)`)
+		return err
+	})
+}
+
+// send delivers one message to one browser, and says whether the
+// subscription is still there: its push service answers 404 or 410 for one
+// that is gone (unsubscribed, expired).
+func (n *Notifier) send(ctx context.Context, s subscription, body []byte, tag, public, private string) bool {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	res, err := webpush.SendNotificationWithContext(ctx, body, &webpush.Subscription{
@@ -158,24 +235,17 @@ func (n *Notifier) send(ctx context.Context, org string, s subscription, body []
 	})
 	if err != nil {
 		n.Log.Warn("push failed", "endpoint", host(s.Endpoint), "error", err)
-		return
+		return true
 	}
 	detail, _ := io.ReadAll(io.LimitReader(res.Body, 512))
 	res.Body.Close()
 	switch {
 	case res.StatusCode == http.StatusNotFound || res.StatusCode == http.StatusGone:
-		_ = n.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, `DELETE FROM push_subscriptions WHERE endpoint = $1`, s.Endpoint)
-			return err
-		})
+		return false
 	case res.StatusCode >= 300:
 		n.Log.Warn("push refused", "endpoint", host(s.Endpoint), "status", res.StatusCode, "detail", strings.TrimSpace(string(detail)))
-	default:
-		_ = n.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, `UPDATE push_subscriptions SET last_sent_at = now() WHERE endpoint = $1`, s.Endpoint)
-			return err
-		})
 	}
+	return true
 }
 
 // messageFor says what an ask's notification reads, and whether it gets
@@ -185,22 +255,22 @@ func messageFor(a ask) (Message, bool) {
 	_ = json.Unmarshal(a.Payload, &p)
 	str := func(k string) string { v, _ := p[k].(string); return v }
 	who := a.WorkItem
-	if role := strings.ToUpper(a.Role[:min(1, len(a.Role))]) + a.Role[min(1, len(a.Role)):]; role != "" {
-		who = strings.TrimSpace(who + " · " + role)
+	if label := delivery.RoleLabel[a.Role]; label != "" {
+		who = strings.TrimSpace(who + " · " + label)
 	}
 	msg := Message{Tag: "run:" + a.RunID, URL: "#/run/" + a.RunID}
 	if a.RunID == "" {
 		msg.Tag, msg.URL = "workItem:"+a.WorkItemID, "#/workItem/"+a.WorkItemID
 	}
 	switch a.Type {
-	case "question.asked":
+	case delivery.EvQuestionAsked:
 		if str("kind") == "escalation" {
 			msg.Title = strings.TrimSpace(a.WorkItem + " needs a decision")
 			msg.Body = strings.ReplaceAll(str("reason"), "_", " ")
-			return msg, true
+		} else {
+			msg.Title, msg.Body = who+" asks", str("prompt")
 		}
-		msg.Title, msg.Body = who+" asks", str("prompt")
-	case "repository.requested":
+	case delivery.EvRepositoryRequested:
 		verb := "Read"
 		if str("access") == "write" {
 			verb = "Change"
@@ -227,7 +297,8 @@ func topic(tag string) string {
 }
 
 func host(endpoint string) string {
-	rest, _ := strings.CutPrefix(endpoint, "https://")
-	h, _, _ := strings.Cut(rest, "/")
-	return h
+	if u, err := url.Parse(endpoint); err == nil {
+		return u.Host
+	}
+	return ""
 }

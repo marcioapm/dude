@@ -458,19 +458,18 @@ def test_a_browser_turns_notifications_on_and_off(
 ):
     """Notify me: the browser is asked, subscribes with dude's key, and dude
     keeps the subscription; turning off forgets it. (Headless Chromium has no
-    push service to subscribe with, so the browser's side is stood in for;
-    sending to a subscription is tested in the orchestrator.)"""
+    push service to subscribe with, so that part is stood in for; sending to
+    a subscription is tested in the orchestrator.)"""
     page.context.grant_permissions(["notifications"], origin=web_url.rstrip("/"))
+    # The real service worker registers and runs; only the push service
+    # headless Chromium lacks is stood in for.
     page.add_init_script("""
       const endpoint = "https://push.example/" + Math.random().toString(36).slice(2);
       let sub = null;
       const fake = () => ({ endpoint, toJSON: () => ({ endpoint, keys: { p256dh: "BPk", auth: "au" } }),
                             unsubscribe: async () => { sub = null; return true; } });
-      const pm = { getSubscription: async () => sub,
-                   subscribe: async (o) => { window.__pushKey = o.applicationServerKey; sub = fake(); return sub; } };
-      const reg = { pushManager: pm, showNotification: async () => {} };
-      Object.defineProperty(navigator, "serviceWorker", { value: {
-        register: async () => reg, getRegistration: async () => reg, ready: Promise.resolve(reg) } });
+      PushManager.prototype.getSubscription = async function () { return sub; };
+      PushManager.prototype.subscribe = async function (o) { window.__pushKey = o.applicationServerKey; sub = fake(); return sub; };
     """)
     _sign_in(page, web_url, org["api_key"])
     page.get_by_test_id("my-settings-button").click()
@@ -493,6 +492,8 @@ def test_a_browser_turns_notifications_on_and_off(
     page.get_by_test_id("push-off").click()
     expect(state).to_have_attribute("data-state", "off")
     assert subscriptions() == 0
+    # The real service worker is what the page registered.
+    assert page.evaluate("async () => (await navigator.serviceWorker.getRegistration('/'))?.active?.scriptURL").endswith("/sw.js")
     assert console_errors == []
 
 

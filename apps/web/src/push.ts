@@ -1,7 +1,8 @@
 /**
  * This browser's notifications: whether they can work here, whether it is
  * subscribed, and subscribing or not (docs/design/notifications.md). The
- * service worker (public/sw.js) shows what dude pushes.
+ * service worker (public/sw.js) shows what dude pushes; it is registered
+ * once, at start (startPush).
  */
 
 import type { ApiClient } from "./api/client.ts";
@@ -12,29 +13,46 @@ export type PushState =
   | "off"
   | "on";
 
-export function pushSupported(): boolean {
-  return typeof window !== "undefined" && window.isSecureContext && "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+function supported(): boolean {
+  return window.isSecureContext && "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
 }
 
-async function registration(): Promise<ServiceWorkerRegistration> {
-  return navigator.serviceWorker.register("/sw.js");
+async function subscription(): Promise<PushSubscription | null> {
+  return (await navigator.serviceWorker.ready).pushManager.getSubscription();
+}
+
+/**
+ * At start: register the service worker, and if this browser is subscribed,
+ * tell dude again — idempotent, and it puts back a subscription dude forgot
+ * (its push service said it was gone) or one made for another organization.
+ * A clicked notification opens its place here when the tab cannot be
+ * navigated by the worker.
+ */
+export function startPush(client: ApiClient, open: (hash: string) => void): () => void {
+  if (!supported()) return () => {};
+  void navigator.serviceWorker.register("/sw.js").then(async () => {
+    const sub = Notification.permission === "granted" ? await subscription() : null;
+    if (sub) await client.subscribePush(sub.toJSON()).catch(() => {});
+  });
+  const onMessage = (e: MessageEvent) => {
+    if (e.data?.type === "dude.open" && typeof e.data.url === "string") open(e.data.url);
+  };
+  navigator.serviceWorker.addEventListener("message", onMessage);
+  return () => navigator.serviceWorker.removeEventListener("message", onMessage);
 }
 
 export async function pushState(): Promise<PushState> {
-  if (!pushSupported()) return "unsupported";
+  if (!supported()) return "unsupported";
   if (Notification.permission === "denied") return "blocked";
-  const reg = await navigator.serviceWorker.getRegistration("/");
-  const sub = await reg?.pushManager.getSubscription();
-  return sub && Notification.permission === "granted" ? "on" : "off";
+  return Notification.permission === "granted" && (await subscription()) ? "on" : "off";
 }
 
 /** Ask for permission, subscribe with dude's key, and register. */
 export async function turnPushOn(client: ApiClient): Promise<PushState> {
-  if (!pushSupported()) return "unsupported";
+  if (!supported()) return "unsupported";
   const permission = await Notification.requestPermission();
   if (permission !== "granted") return permission === "denied" ? "blocked" : "off";
-  const reg = await registration();
-  await navigator.serviceWorker.ready;
+  const reg = await navigator.serviceWorker.ready;
   const { publicKey } = await client.pushKey();
   const sub =
     (await reg.pushManager.getSubscription()) ??
@@ -43,11 +61,12 @@ export async function turnPushOn(client: ApiClient): Promise<PushState> {
   return "on";
 }
 
+/** Stop: dude forgets this browser, and the browser its subscription. Also on sign-out. */
 export async function turnPushOff(client: ApiClient): Promise<PushState> {
-  const reg = await navigator.serviceWorker.getRegistration("/");
-  const sub = await reg?.pushManager.getSubscription();
+  if (!supported()) return "unsupported";
+  const sub = await subscription();
   if (sub) {
-    await client.unsubscribePush(sub.endpoint);
+    await client.unsubscribePush(sub.endpoint).catch(() => {});
     await sub.unsubscribe();
   }
   return "off";
@@ -55,7 +74,7 @@ export async function turnPushOff(client: ApiClient): Promise<PushState> {
 
 /** Shown by the service worker, as a push would be: that this browser shows them. */
 export async function showTestNotification(): Promise<void> {
-  const reg = await registration();
+  const reg = await navigator.serviceWorker.ready;
   await reg.showNotification("dude", { body: "Notifications are on in this browser.", icon: "/icon.svg", tag: "test" });
 }
 
