@@ -155,7 +155,7 @@ const STATUS_ICON: Record<ToolCallStatus, IconName | null> = {
 };
 
 /**
- * A tool invocation inline in a transcript. Collapsed it is one 28px row:
+ * A tool invocation inline in a transcript. Collapsed it is one 32px row (26 compact):
  * glyph · name · what it was called with · duration · outcome. Running
  * calls carry a sweep along the bottom edge and a ticking duration that
  * turns attention-toned once the call is slow. Failed calls open by default

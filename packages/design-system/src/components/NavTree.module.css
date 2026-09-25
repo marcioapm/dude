@@ -22,7 +22,7 @@
   display: flex;
   align-items: center;
   gap: var(--ds-space-6);
-  min-height: var(--ds-size-row-compact);
+  min-height: var(--ds-size-row-item-sm);
   padding: 0 var(--ds-space-8) 0 calc(var(--ds-space-4) + var(--depth) * var(--indent));
   border-radius: var(--ds-radius-md);
   font-size: var(--ds-text-nav);
@@ -159,8 +159,8 @@
   position: sticky;
   top: 0;
   z-index: var(--ds-z-raised);
-  min-height: var(--ds-size-row-default);
-  margin-top: var(--ds-space-12);
+  min-height: var(--ds-size-row-item);
+  margin-top: var(--ds-space-nav-section-gap);
   /* Opaque so rows scroll under it; the sidebar sits on the canvas. */
   background: var(--ds-color-canvas);
 }
@@ -213,7 +213,7 @@
 
 /* -- Work item: status mark · mono key · title · who. -- */
 .workItem {
-  min-height: var(--ds-size-row-default);
+  min-height: var(--ds-size-row-item);
 }
 .wiMain {
   display: flex;

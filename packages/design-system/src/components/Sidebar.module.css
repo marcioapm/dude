@@ -199,7 +199,7 @@
   align-items: center;
   gap: var(--ds-space-6);
   width: 100%;
-  height: var(--ds-size-row-compact);
+  height: var(--ds-size-row-item-sm);
   padding: 0 var(--ds-space-8) 0 var(--ds-space-6);
   border: 0;
   border-radius: var(--ds-radius-md);
@@ -244,7 +244,7 @@
   align-items: center;
   gap: var(--ds-space-8);
   width: 100%;
-  padding: var(--ds-space-6) var(--ds-space-8);
+  padding: var(--ds-space-attention-row-pad-y) var(--ds-space-8);
   border: 0;
   border-radius: var(--ds-radius-md);
   background: none;

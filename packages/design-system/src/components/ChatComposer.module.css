@@ -9,8 +9,8 @@
   --cc-tint: var(--ds-color-accent);
   display: flex;
   flex-direction: column;
-  gap: var(--ds-space-6);
-  padding: var(--ds-space-8) var(--ds-space-chat-pad-x) var(--ds-space-8);
+  gap: var(--ds-space-composer-gap);
+  padding: var(--ds-space-composer-y) var(--ds-space-chat-pad-x);
   min-width: 0;
 }
 .answer {
@@ -108,13 +108,13 @@
 .textarea {
   flex: 1;
   min-width: 0;
-  padding: 10px var(--ds-space-12);
+  padding: var(--ds-space-field-y) var(--ds-space-12);
   background: none;
   border: 0;
   outline: none;
   resize: none;
   font-size: var(--ds-text-prose);
-  line-height: 22px;
+  line-height: calc(var(--ds-text-prose) * var(--ds-leading-chat));
   color: var(--ds-color-text-primary);
   font-family: inherit;
 }

@@ -53,6 +53,24 @@ export const spaceNamed = {
   treeIndent: 16,
   /** Between consecutive sidebar rows. */
   navRowGap: 2,
+  /** Above a sidebar project heading. */
+  navSectionGap: 12,
+  /** Vertical padding of a two-line needs-you row. */
+  attentionRowPadY: 6,
+  /** Top and bottom padding of a thought or tool call between turns. */
+  asideY: 4,
+  /** Vertical padding inside a highlighted turn (the waiting question). */
+  highlightY: 8,
+  /** Code block padding, vertical and horizontal. */
+  codeY: 12,
+  codeX: 16,
+  /** Vertical padding of a Markdown table cell. */
+  cellY: 6,
+  /** Composer: padding above and below, and the gap between its three rows. */
+  composerY: 8,
+  composerGap: 6,
+  /** Vertical padding inside the composer's text field. */
+  fieldY: 10,
 } as const;
 export type SpaceNamedKey = keyof typeof spaceNamed;
 
@@ -152,6 +170,10 @@ export const size = {
   rowDefault: 32,
   /** Density-sensitive: 40 comfortable, 36 compact — two-line rows. */
   rowComfortable: 40,
+  /** Density-sensitive: 32 comfortable, 26 compact — sidebar work items, epics, projects; tool call rows. */
+  rowItem: 32,
+  /** Density-sensitive: 28 comfortable, 24 compact — sidebar session rows, thought rows. */
+  rowItemSm: 28,
   /** Shared avatar sizes (nav, headers, stacks) — not the transcript avatar. */
   avatarXs: 16,
   avatarSm: 20,
