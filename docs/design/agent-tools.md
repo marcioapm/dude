@@ -46,10 +46,11 @@ approved.
   conversation continues, whether that is the next minute or the next week.
   A person's own pause of a parked Run makes it theirs: the answer then
   waits for their Resume.
-- **No wall-clock limit.** Runs have none; agents work for days. lux treats
-  an unset `timeout` as no limit, and counts an explicit one as running
-  time only, so parked time never counts. (Until that lands, dude sends
-  `8760h`.) lux keeps a stopped Run's state until it is cancelled.
+- **No wall-clock limit.** Runs have none; agents work for days. dude sends
+  no `timeout`, which lux takes as no limit (lux d748aa5). An operator can
+  set one (`DUDE_AGENT_TIMEOUT`); lux counts only time spent running, so
+  parked time never counts. lux keeps a stopped Run's state until it is
+  cancelled.
 - **Idle nudge instead of a timeout** (optional, `idleNudgeMinutes`, 0 = off).
   An agent mid-turn that has said nothing, runs no tool and waits on
   nobody for that long gets one interrupting nudge: "carry on, or ask".
