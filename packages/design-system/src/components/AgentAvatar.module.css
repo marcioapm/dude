@@ -39,7 +39,7 @@
   --av-size: var(--ds-size-avatar-lg);
   border-radius: var(--ds-radius-lg);
 }
-/* The transcript's own avatar — density-sensitive (36 comfortable, 28 compact),
+/* The transcript's own avatar: density-sensitive (see `tokens/density.ts`),
    larger than the shared `lg` because it anchors a whole turn, not a row. */
 .chat {
   --av-size: var(--ds-size-avatar-chat);

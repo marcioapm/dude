@@ -9,10 +9,11 @@
  * Type follows Obsidian 1.13's defaults (system UI font; 16px text, 15/13/12
  * UI sizes, 1.5 leading, 700px readable width); the transcript follows
  * Discord's chat metrics (16/22px, 40px avatar, content column at 72px).
- * Comfortable: 15px UI body, 32px default row, 6px default radius. Compact only tightens a handful of *big, structural*
- * measurements (row height, chat avatar, chat/board/main-pane spacing);
- * text stays within 1px of comfortable, icons, small control heights,
- * badge padding and hairline-scale radii do not move at all.
+ * Comfortable: 15px UI body, 32px default row, 6px default radius. Compact
+ * only tightens a handful of *big, structural* measurements (row height,
+ * chat avatar, chat/board/main-pane spacing); text stays within 1px of
+ * comfortable, icons, small control heights, badge padding and
+ * hairline-scale radii do not move at all.
  */
 
 export const space = {
@@ -227,10 +228,9 @@ export const cadence = {
 } as const;
 
 /**
- * Reading measures for prose, comfortable density. Density-sensitive: at
- * compact the body text is a touch smaller, so both measures widen back to
- * roughly the document width to keep a comparable number of characters per
- * line; see `./density.ts`.
+ * Reading measures for prose, comfortable density. Only `message` is
+ * density-sensitive: it is in `ch`, and compact allows two more characters
+ * a line; see `./density.ts`.
  */
 export const measure = {
   /** Agent messages inside a transcript. Density-sensitive: 70ch comfortable, 72ch compact. */

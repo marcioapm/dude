@@ -33,7 +33,7 @@ const ROLE_ICON: Record<AvatarKind, IconName> = {
 
 export interface AgentAvatarProps extends HTMLAttributes<HTMLSpanElement> {
   readonly role: AvatarKind;
-  /** `chat` is the transcript's own avatar: density-sensitive (36 comfortable / 28 compact). */
+  /** `chat` is the transcript's own avatar: sized by `--ds-size-avatar-chat`, which follows the density (`tokens/density.ts`). */
   readonly size?: "xs" | "sm" | "md" | "lg" | "chat" | undefined;
   /** Vivid fill; use sparingly (headers, the selected session). */
   readonly solid?: boolean | undefined;
