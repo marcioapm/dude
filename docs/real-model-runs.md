@@ -161,3 +161,39 @@ without trouble; nothing in its replies referred to them.
 
 **Findings.** A re-review is now shown the findings its fixer was sent and
 answers for each, fixed or still; nothing else resolves a finding.
+
+## 2026-09-25: parked while it waits for a person
+
+OpenCode on the private lux, the project's grace period set to one minute.
+Each work item told the agent to ask before deciding a product question.
+
+**TEXT-18, word frequency.** The implementer asked with `ask_person`
+("case-insensitive, or case-sensitive?", with two choices) and ended its
+turn. A minute later dude parked it: lux reported the Run `stopped`, so
+it held no host. The answer resumed the same lux Run in the same agent
+session. The agent then noticed the work named no repository, asked for
+`textkit` to change, and ended its turn on the request. It was parked
+again, and the approval resumed it with the repository checked out. It
+implemented the change case-insensitively, as answered, and committed. The
+run then escalated as "no changes": lux pushes only to a branch the spec
+named at submit, and dude named one only for work with a repository to
+change. Fixed (64d9b0e): a publishing phase always names its branch.
+
+**TEXT-19, sentence count.** Parked for its question, answered, resumed,
+and parked again on its repository request. After the approval it never
+came back. dude had declared the forge token as a secret with no
+repository using it, so lux treated it as the workload's and refused it as
+the added repository's credential (422, retried forever). Fixed (05c78af):
+the token is declared only with a repository that uses it, and a resume
+lux refuses for good now fails the Run with lux's reason. The fake lux
+checks the same rule now.
+
+**TEXT-20, paragraph count.** Asked, parked, answered, resumed, requested
+`textkit`, parked, approved, resumed with it. It implemented the change,
+review and simplify passed, and it opened PR #15. The implementer's ledger
+reads: session started, parked, taken back up, parked, taken back up,
+commit. One agent session throughout.
+
+Seen along the way: the agent asked only about the decision it was told
+to leave to a person, and waited correctly both times. Both times it also
+explained in plain words why it was ending its turn.
