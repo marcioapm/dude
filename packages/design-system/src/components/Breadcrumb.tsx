@@ -41,7 +41,7 @@ export function Breadcrumb({ items, onSelect, maxChars = 32, size = "md", classN
           const elided = text !== it.label;
           const inner = (
             <>
-              {it.icon ? <Icon name={it.icon} size={12} className={styles["glyph"]} /> : null}
+              {it.icon ? <Icon name={it.icon} size={14} className={styles["glyph"]} /> : null}
               <span className={cx(styles["text"], it.mono && styles["mono"])}>{text}</span>
             </>
           );

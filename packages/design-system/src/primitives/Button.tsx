@@ -58,6 +58,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       className={cx(
         styles["root"],
         VARIANT_CLASS[variant],
+        (variant === "primary" || variant === "destructive") && styles["filled"],
         size !== "md" && styles[size],
         loading && styles["loading"],
         block && styles["block"],
@@ -99,7 +100,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
       title={label}
       {...rest}
     >
-      <Icon name={icon} size={14} />
+      <Icon name={icon} size={16} />
     </Button>
   );
 });

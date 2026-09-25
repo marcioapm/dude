@@ -4,11 +4,12 @@
   --sb-border: var(--ds-tone-neutral-border);
   --sb-solid: var(--ds-tone-neutral-solid);
   --sb-on-solid: var(--ds-tone-neutral-on-solid);
+  --sb-mark: var(--ds-tone-neutral-mark);
 
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  height: 18px;
+  height: var(--ds-size-badge-md);
   padding: 0 var(--ds-space-6) 0 5px;
   font-size: var(--ds-text-xs);
   font-weight: var(--ds-weight-medium);
@@ -24,7 +25,7 @@
 }
 
 .sm {
-  height: 16px;
+  height: var(--ds-size-badge-sm);
   font-size: var(--ds-text-2xs);
   padding: 0 var(--ds-space-4) 0 4px;
 }
@@ -53,6 +54,7 @@
   --sb-border: var(--ds-tone-neutral-border);
   --sb-solid: var(--ds-tone-neutral-solid);
   --sb-on-solid: var(--ds-tone-neutral-on-solid);
+  --sb-mark: var(--ds-tone-neutral-mark);
 }
 .info {
   --sb-fg: var(--ds-tone-info-fg);
@@ -60,6 +62,7 @@
   --sb-border: var(--ds-tone-info-border);
   --sb-solid: var(--ds-tone-info-solid);
   --sb-on-solid: var(--ds-tone-info-on-solid);
+  --sb-mark: var(--ds-tone-info-mark);
 }
 .attention {
   --sb-fg: var(--ds-tone-attention-fg);
@@ -67,6 +70,7 @@
   --sb-border: var(--ds-tone-attention-border);
   --sb-solid: var(--ds-tone-attention-solid);
   --sb-on-solid: var(--ds-tone-attention-on-solid);
+  --sb-mark: var(--ds-tone-attention-mark);
 }
 .success {
   --sb-fg: var(--ds-tone-success-fg);
@@ -74,6 +78,7 @@
   --sb-border: var(--ds-tone-success-border);
   --sb-solid: var(--ds-tone-success-solid);
   --sb-on-solid: var(--ds-tone-success-on-solid);
+  --sb-mark: var(--ds-tone-success-mark);
 }
 .danger {
   --sb-fg: var(--ds-tone-danger-fg);
@@ -81,6 +86,7 @@
   --sb-border: var(--ds-tone-danger-border);
   --sb-solid: var(--ds-tone-danger-solid);
   --sb-on-solid: var(--ds-tone-danger-on-solid);
+  --sb-mark: var(--ds-tone-danger-mark);
 }
 
 .glyph {
@@ -116,8 +122,7 @@
 }
 
 .label {
-  overflow: hidden;
-  text-overflow: ellipsis;
+  line-height: 1;
 }
 
 /* Bare dot mode for dense lists: 8px status dot + optional label */
@@ -133,21 +138,20 @@
   width: 8px;
   height: 8px;
   border-radius: var(--ds-radius-full);
-  background: var(--sb-fg);
+  background: var(--sb-mark);
   flex-shrink: 0;
 }
 .dot.live .dotMark {
   animation: global(ds-pulse) calc(2.4s / max(var(--ds-motion-live), 0.0001)) ease-in-out infinite;
 }
 .dot.needsHuman .dotMark {
-  --ds-ring-color: var(--sb-fg);
+  --ds-ring-color: var(--sb-mark);
   animation: global(ds-ring) calc(2.4s / max(var(--ds-motion-live), 0.0001)) var(--ds-ease-exit) infinite;
 }
-.dot.terminal .dotMark {
-  opacity: 0.6;
-}
 /* Shape channel for the dot mode: terminal states become squares,
-   needs-human becomes a diamond, so hue never carries meaning alone. */
+   needs-human becomes a diamond, so hue never carries meaning alone.
+   Squares take the full mark colour: faded to 60%, failed and done fall
+   under 3:1 and red reads as pink. */
 .dot.terminal .dotMark {
   border-radius: 1px;
 }
@@ -157,5 +161,5 @@
 }
 .dot.pending .dotMark {
   background: transparent;
-  border: 1.5px solid var(--sb-fg);
+  border: 1.5px solid var(--sb-mark);
 }

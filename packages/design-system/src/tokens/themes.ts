@@ -11,6 +11,8 @@
 import {
   AGENT_ROLE_NAMES,
   ANSI_COLOR_NAMES,
+  NEUTRAL_CHROMA,
+  NEUTRAL_HUE,
   TONE_NAMES,
   accent,
   ansiColors,
@@ -23,6 +25,7 @@ import {
   type AgentRoleName,
   type ToneName,
 } from "./palette.ts";
+import { oklch, toHex } from "./oklch.ts";
 
 export type ThemeMode = "light" | "dark";
 
@@ -33,6 +36,8 @@ export interface ThemeColors {
   readonly raised: string;
   readonly overlay: string;
   readonly sunken: string;
+  /** Header, toolbar and footer bars inside a panel: one shade off the panel body. */
+  readonly chrome: string;
 
   // Borders
   readonly borderSubtle: string;
@@ -40,6 +45,8 @@ export interface ThemeColors {
   readonly borderStrong: string;
 
   // Text
+  /** Author names and headings: one step past primary, as Discord sets names. */
+  readonly textStrong: string;
   readonly textPrimary: string;
   readonly textSecondary: string;
   readonly textMuted: string;
@@ -57,11 +64,15 @@ export interface ThemeColors {
   readonly selection: string;
   readonly hoverWash: string;
   readonly activeWash: string;
+  /** Full-width wash under a hovered transcript row: ~3% ink, quieter than a control's hover. */
+  readonly rowHover: string;
 
   // Component-level surfaces that differ in *kind* between modes (dark
   // fields are sunken, light fields are white) — tokens so CSS never
   // needs to know which mode it is in.
   readonly fieldBg: string;
+  /** The composer: the one raised field, a step brighter (dark) or tinted (light) than the transcript. */
+  readonly fieldRaised: string;
   readonly secondaryHover: string;
   readonly secondaryActive: string;
   readonly scrim: string;
@@ -82,22 +93,66 @@ const alpha = (hex: string, a: number): string => {
   return `rgba(${r}, ${g}, ${b}, ${a})`;
 };
 
+/**
+ * The surface/text/border ladders, in OKLCH lightness. Written explicitly
+ * (not indexed into `neutral[]`, which is a coarser 13-step display ramp
+ * for the gallery) so every step lands exactly where the contrast search
+ * below puts it.
+ *
+ * Dark surfaces are charcoal, not black: canvas #1d1e20 and surface
+ * #252728 sit where Obsidian (#1e1e1e / #262626) and Discord's deepest
+ * greys (#1e1f22 / #2b2d31) do. Each step is ΔL 0.035, so regions read as
+ * layers, not edges. The text ladder is soft: primary ~11:1 on the surface
+ * (Discord runs #dbdee1 on #313338 at ~9.4:1), secondary ~7:1, muted ~5:1 —
+ * close shades rather than a bright-white spike over dim grey. Muted still
+ * clears 4.5:1 on `raised`, where card and header text sits.
+ */
+const oklchHex = (l: number, c = NEUTRAL_CHROMA) => toHex(oklch(l, c, NEUTRAL_HUE));
+const darkL = {
+  canvas: 0.235, // = neutral[1]; also sunken / fieldBg
+  surface: 0.27,
+  raised: 0.305,
+  overlay: 0.34,
+  borderSubtle: 0.31,
+  border: 0.35,
+  borderStrong: 0.42,
+  textDisabled: 0.5,
+  textMuted: 0.705,
+  textSecondary: 0.78,
+  textPrimary: 0.905,
+  textStrong: 0.96,
+};
+const lightL = {
+  canvas: 0.965, // = neutral[12]; also sunken
+  chrome: 0.98,
+  borderSubtle: 0.91,
+  border: 0.85,
+  borderStrong: 0.72,
+  textDisabled: 0.66,
+  textMuted: 0.54,
+  textSecondary: 0.455,
+  textPrimary: 0.32,
+  textStrong: 0.18,
+};
+
 export const themeColors: Record<ThemeMode, ThemeColors> = {
   dark: {
     canvas: neutral[1],
-    surface: neutral[2],
-    raised: neutral[3],
-    overlay: neutral[4],
+    surface: oklchHex(darkL.surface),
+    raised: oklchHex(darkL.raised),
+    overlay: oklchHex(darkL.overlay),
     sunken: neutral[1],
+    chrome: oklchHex(darkL.raised),
 
-    borderSubtle: neutral[4],
-    border: neutral[5],
-    borderStrong: neutral[6],
+    borderSubtle: oklchHex(darkL.borderSubtle),
+    border: oklchHex(darkL.border),
+    borderStrong: oklchHex(darkL.borderStrong),
 
-    textPrimary: neutral[11],
-    textSecondary: neutral[8],
-    textMuted: neutral[7],
-    textDisabled: neutral[6],
+    textStrong: oklchHex(darkL.textStrong, NEUTRAL_CHROMA * 0.4),
+    textPrimary: oklchHex(darkL.textPrimary, NEUTRAL_CHROMA * 0.6),
+    textSecondary: oklchHex(darkL.textSecondary),
+    textMuted: oklchHex(darkL.textMuted),
+    textDisabled: oklchHex(darkL.textDisabled),
     textInverse: neutral[1],
 
     accent: accent.dark.base,
@@ -110,10 +165,12 @@ export const themeColors: Record<ThemeMode, ThemeColors> = {
     selection: alpha(accent.dark.base, 0.35),
     hoverWash: alpha(white, 0.05),
     activeWash: alpha(white, 0.09),
+    rowHover: alpha(white, 0.03),
 
     fieldBg: neutral[1],
-    secondaryHover: neutral[4],
-    secondaryActive: neutral[2],
+    fieldRaised: oklchHex(darkL.raised),
+    secondaryHover: oklchHex(darkL.overlay),
+    secondaryActive: oklchHex(darkL.surface),
     scrim: alpha("#000000", 0.55),
 
     shadowColor: alpha("#000000", 0.5),
@@ -127,15 +184,17 @@ export const themeColors: Record<ThemeMode, ThemeColors> = {
     raised: white,
     overlay: white,
     sunken: neutral[12],
+    chrome: oklchHex(lightL.chrome, NEUTRAL_CHROMA * 0.6),
 
-    borderSubtle: neutral[11],
-    border: neutral[10],
-    borderStrong: neutral[9],
+    borderSubtle: oklchHex(lightL.borderSubtle, NEUTRAL_CHROMA * 0.6),
+    border: oklchHex(lightL.border),
+    borderStrong: oklchHex(lightL.borderStrong),
 
-    textPrimary: neutral[1],
-    textSecondary: neutral[6],
-    textMuted: neutral[7],
-    textDisabled: neutral[8],
+    textStrong: oklchHex(lightL.textStrong),
+    textPrimary: oklchHex(lightL.textPrimary),
+    textSecondary: oklchHex(lightL.textSecondary),
+    textMuted: oklchHex(lightL.textMuted),
+    textDisabled: oklchHex(lightL.textDisabled),
     textInverse: white,
 
     accent: accent.light.base,
@@ -146,16 +205,18 @@ export const themeColors: Record<ThemeMode, ThemeColors> = {
     onAccent: white,
     focusRing: accent.light.ring,
     selection: alpha(accent.light.base, 0.22),
-    hoverWash: alpha(neutral[1], 0.045),
-    activeWash: alpha(neutral[1], 0.08),
+    hoverWash: alpha(oklchHex(lightL.textPrimary), 0.045),
+    activeWash: alpha(oklchHex(lightL.textPrimary), 0.08),
+    rowHover: alpha(oklchHex(lightL.textPrimary), 0.03),
 
     fieldBg: white,
+    fieldRaised: oklchHex(lightL.chrome, NEUTRAL_CHROMA * 0.6),
     secondaryHover: neutral[12],
-    secondaryActive: neutral[11],
-    scrim: alpha(neutral[3], 0.4),
+    secondaryActive: oklchHex(lightL.borderSubtle, NEUTRAL_CHROMA * 0.6),
+    scrim: alpha(oklchHex(lightL.textPrimary), 0.4),
 
-    shadowColor: alpha(neutral[3], 0.12),
-    shadowColorStrong: alpha(neutral[3], 0.22),
+    shadowColor: alpha(oklchHex(lightL.textPrimary), 0.12),
+    shadowColorStrong: alpha(oklchHex(lightL.textPrimary), 0.22),
 
     live: tones.light.success.fg,
   },
@@ -177,6 +238,7 @@ export function flattenTheme(mode: ThemeMode): Record<string, string> {
     out[`tone-${t}-border`] = tone.border;
     out[`tone-${t}-solid`] = tone.solid;
     out[`tone-${t}-on-solid`] = tone.onSolid;
+    out[`tone-${t}-mark`] = tone.mark;
   }
   for (const r of AGENT_ROLE_NAMES) {
     const rc = roleColors[mode][r];

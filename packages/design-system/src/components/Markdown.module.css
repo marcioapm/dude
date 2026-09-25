@@ -1,92 +1,105 @@
 /*
- * Markdown. Two rhythms:
- *   .message   a chat turn — 13px / 1.5, 72ch, 6px between blocks
- *   .document  a published artifact — 13px / 1.55, 84ch, 12px between blocks
- * Neither is a blog theme. Headings step down quickly and never exceed
- * text-xl inside a message.
+ * Markdown. Obsidian's long-form metrics, applied in two rhythms:
+ *   .message  a chat turn. A single block sits on the chat line (16/22,
+ *             Discord); two or more blocks (`.long`) switch to 1.5 leading
+ *             and 0.75em between blocks, so a structured reply reads like a
+ *             note rather than a wall of chat lines.
+ *   .document a published artifact: 1.5 leading, 1em between blocks,
+ *             headings 2.5em above, Obsidian's heading ratios, 700px measure.
+ * Headings inside a message step down one level so a reply's `###` does not
+ * outshout the transcript.
  */
 
 .root {
-  --md-gap: var(--ds-space-6);
+  --md-gap: var(--ds-md-gap);
+  --md-h-gap: 1.25em;
   --md-measure: var(--ds-measure-message);
-  font-size: var(--ds-text-md);
-  line-height: var(--ds-leading-normal);
+  font-size: var(--ds-text-prose);
+  line-height: var(--ds-leading-chat);
   color: var(--ds-color-text-primary);
   max-width: var(--md-measure);
   min-width: 0;
   overflow-wrap: anywhere;
 }
+.long,
+.document {
+  line-height: var(--ds-leading-prose);
+}
 .root > * + * {
   margin-top: var(--md-gap);
 }
 .document {
-  --md-gap: var(--ds-space-12);
+  --md-gap: 1em;
+  --md-h-gap: 2.5em;
   --md-measure: var(--ds-measure-document);
-  line-height: 1.55;
 }
 
 /* Headings */
 .h {
   font-weight: var(--ds-weight-semibold);
-  letter-spacing: var(--ds-tracking-tight);
+  letter-spacing: -0.005em;
   line-height: var(--ds-leading-tight);
-  color: var(--ds-color-text-primary);
+  color: var(--ds-color-text-strong);
   scroll-margin-top: var(--ds-space-16);
 }
 .root > .h {
-  margin-top: var(--ds-space-12);
+  margin-top: var(--md-h-gap);
 }
-.document > .h {
-  margin-top: var(--ds-space-24);
+.root > .h + * {
+  margin-top: 0.5em;
 }
 .root > .h:first-child {
   margin-top: 0;
 }
 .h1 {
-  font-size: var(--ds-text-xl);
+  font-size: 1.462em;
+  font-weight: 700;
 }
 .h2 {
-  font-size: var(--ds-text-lg);
+  font-size: 1.318em;
 }
 .h3 {
-  font-size: var(--ds-text-md);
+  font-size: 1.2em;
 }
-.h4,
+.h4 {
+  font-size: 1.1em;
+}
 .h5,
 .h6 {
-  font-size: var(--ds-text-sm);
-  text-transform: uppercase;
-  letter-spacing: var(--ds-tracking-caps);
+  font-size: 1em;
   color: var(--ds-color-text-secondary);
 }
 .document .h1 {
-  font-size: var(--ds-text-3xl);
-  padding-bottom: var(--ds-space-8);
-  border-bottom: 1px solid var(--ds-color-border-subtle);
+  font-size: 1.618em;
 }
 .document .h2 {
-  font-size: var(--ds-text-xl);
+  font-size: 1.462em;
 }
 .document .h3 {
-  font-size: var(--ds-text-lg);
+  font-size: 1.318em;
+}
+.document .h4 {
+  font-size: 1.2em;
 }
 
-.p {
-  margin: 0;
-}
+/* Block spacing comes from `.root > * + *` alone; no block sets its own
+   margin, or it would override that rule at equal specificity. */
 
 /* Inline */
+/* One of the three places a hairline is allowed (with the date divider and
+   the composer): it keeps a code span legible on any wash. */
 .inlineCode {
   font-family: var(--ds-font-mono);
-  font-size: 0.925em;
-  padding: 0 4px;
-  border-radius: var(--ds-radius-xs);
+  font-size: 0.85em;
+  padding: 0.1em 0.3em;
+  border-radius: var(--ds-radius-sm);
   background: var(--ds-color-sunken);
-  border: 1px solid var(--ds-color-border-subtle);
+  box-shadow: inset 0 0 0 1px var(--ds-color-border-subtle);
   color: var(--ds-color-text-primary);
 }
 .strong {
   font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
 }
 .del {
   color: var(--ds-color-text-muted);
@@ -112,18 +125,19 @@
 }
 
 /* Lists */
+/* Hanging indent: markers sit in the 1.5em gutter, wrapped lines align with the text. */
 .list {
-  padding-left: var(--ds-space-20);
-  margin: 0;
+  padding-left: 1.5em;
 }
 .li {
   margin: 0;
+  padding-left: 0.125em;
 }
 .li + .li {
-  margin-top: var(--ds-space-2);
+  margin-top: 0.25em;
 }
-.document .li + .li {
-  margin-top: var(--ds-space-4);
+.liBody > .list {
+  margin-top: 0.25em;
 }
 .li::marker {
   color: var(--ds-color-text-muted);
@@ -134,7 +148,7 @@
   min-width: 0;
 }
 .liBody > * + * {
-  margin-top: var(--md-gap);
+  margin-top: 0.25em;
 }
 .taskList {
   list-style: none;
@@ -169,125 +183,131 @@
 
 /* Quote */
 .quote {
-  margin: 0;
-  padding: var(--ds-space-2) 0 var(--ds-space-2) var(--ds-space-12);
-  border-left: 2px solid var(--ds-color-border-strong);
+  padding: 0 0 0 1em;
+  box-shadow: inset 2px 0 0 var(--ds-color-border-strong);
   color: var(--ds-color-text-secondary);
 }
 .quote > * + * {
   margin-top: var(--md-gap);
 }
 
-/* Code block: same type as LogStream (mono, text-sm, 18px lines). */
+/* Code block: a sunken well, radius 8, no frame. The language and the copy
+   control float in the top-right corner on hover or focus, over the code,
+   so a long first line is never covered at rest. */
 .code {
-  border: 1px solid var(--ds-color-border-subtle);
+  position: relative;
   border-radius: var(--ds-radius-lg);
-  background: var(--ds-color-field-bg);
+  background: var(--ds-color-sunken);
   overflow: hidden;
   max-width: 100%;
+  line-height: normal;
 }
 .codeBar {
+  position: absolute;
+  top: 6px;
+  right: 6px;
   display: flex;
   align-items: center;
-  gap: var(--ds-space-8);
-  height: 22px;
-  padding: 0 var(--ds-space-8);
-  background: var(--ds-color-raised);
-  border-bottom: 1px solid var(--ds-color-border-subtle);
+  gap: var(--ds-space-6);
+  height: 20px;
+  padding: 0 0 0 var(--ds-space-6);
+  border-radius: var(--ds-radius-sm);
+  background: var(--ds-color-sunken);
   font-size: var(--ds-text-2xs);
   color: var(--ds-color-text-muted);
+  opacity: 0;
+  transition: opacity var(--ds-duration-fast) var(--ds-ease-standard);
 }
-.code:not([data-lang]) .codeBar {
-  height: 0;
-  border: 0;
-  overflow: hidden;
-}
-.code:not([data-lang]):hover .codeBar {
-  height: 22px;
-  border-bottom: 1px solid var(--ds-color-border-subtle);
+.code:hover .codeBar,
+.code:focus-within .codeBar {
+  opacity: 1;
 }
 .codeLang {
   font-family: var(--ds-font-mono);
   letter-spacing: var(--ds-tracking-wide);
   text-transform: lowercase;
 }
-.codeSpacer {
-  flex: 1;
-}
 .codeCopy {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 18px;
+  height: 20px;
   padding: 0 var(--ds-space-6);
   border: 0;
   border-radius: var(--ds-radius-sm);
-  background: transparent;
-  color: var(--ds-color-text-muted);
+  background: var(--ds-color-surface);
+  color: var(--ds-color-text-secondary);
   font-size: var(--ds-text-2xs);
 }
 .codeCopy:hover {
-  background: var(--ds-color-hover-wash);
   color: var(--ds-color-text-primary);
 }
 .pre {
   margin: 0;
-  padding: var(--ds-space-8) var(--ds-space-12);
+  padding: var(--ds-space-code-y) var(--ds-space-code-x);
   font-family: var(--ds-font-mono);
-  font-size: var(--ds-text-sm);
-  line-height: 18px;
+  font-size: var(--ds-text-mono);
+  line-height: var(--ds-size-code-line);
   font-feature-settings: "tnum", "zero";
   color: var(--ds-color-text-primary);
   overflow: auto;
   max-height: 420px;
   white-space: pre;
   tab-size: 2;
+  /* Long lines scroll, and say so: a thin always-drawn scrollbar, plus a
+     shadow on the right edge that the "local" cover hides once scrolled to
+     the end (a pure-CSS scroll shadow; no JS measures overflow). */
+  scrollbar-width: thin;
+  scrollbar-color: var(--ds-color-border-strong) transparent;
+  background:
+    linear-gradient(to left, var(--ds-color-sunken) 40%, transparent) right / 32px 100% no-repeat local,
+    linear-gradient(to left, color-mix(in srgb, var(--ds-color-text-primary) 22%, transparent), transparent) right / 14px 100% no-repeat scroll;
 }
 .pre code {
   font: inherit;
 }
 .codeOpen .pre {
-  border-left: 2px solid var(--ds-tone-info-border);
+  box-shadow: inset 2px 0 0 var(--ds-tone-info-border);
 }
 .diff {
   max-width: none;
 }
 
-/* Table */
+/* Table: a 1px rule under the header row, hairlines between body rows, no
+   vertical rules, no fills. */
 .tableWrap {
   overflow-x: auto;
   max-width: 100%;
 }
 .table {
   border-collapse: collapse;
-  font-size: var(--ds-text-sm);
+  font-size: 0.9375em;
+  line-height: var(--ds-leading-snug);
   font-variant-numeric: tabular-nums;
   width: auto;
   min-width: 40%;
 }
 .table th,
 .table td {
-  padding: 0 var(--ds-space-8);
-  height: var(--ds-size-row-compact);
-  border-bottom: 1px solid var(--ds-color-border-subtle);
+  padding: var(--ds-space-cell-y) var(--ds-space-16) var(--ds-space-cell-y) 0;
+  /* Body rows: a hairline at 60% of border-subtle, so the 1px header rule
+     (one step up, `border`) is the rule that reads. */
+  border-bottom: 1px solid color-mix(in srgb, var(--ds-color-border-subtle) 60%, transparent);
   text-align: left;
-  vertical-align: middle;
-  white-space: nowrap;
+  vertical-align: top;
+}
+.table th:last-child,
+.table td:last-child {
+  padding-right: 0;
 }
 .table th {
-  font-size: var(--ds-text-2xs);
-  font-weight: var(--ds-weight-medium);
-  letter-spacing: var(--ds-tracking-caps);
-  text-transform: uppercase;
-  color: var(--ds-color-text-muted);
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
+  white-space: nowrap;
   border-bottom-color: var(--ds-color-border);
 }
-.table td {
-  white-space: normal;
-}
-.document .table th,
-.document .table td {
-  height: var(--ds-size-row-default);
+.table tr:last-child td {
+  border-bottom: 0;
 }
 
 .hr {

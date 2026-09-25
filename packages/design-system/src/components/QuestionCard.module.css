@@ -1,82 +1,50 @@
 /*
- * An agent's question to a person. The same gutter + column grid as a
- * ChatMessage so it aligns down the page, but framed — and while it waits,
- * the one loud turn in the transcript:
+ * An agent's question to a person, laid out on the ChatMessage grid (same
+ * gutter, avatar, 72px text column). No box:
  *
- *   waiting    attention wash, 2px attention bar, the needs-you badge with
- *              its ring, the avatar live, a ticking wait clock in attention
- *              ink. The tree row and the board card use the same wash and
- *              bar for the same state, so it is one signal everywhere.
- *   answered   a hairline, no wash, a quiet "Answered · after 4m 12s" mark.
+ *   waiting    the highlight pattern — a full-width attention tint
+ *              (`--ds-tint-highlight`) and a 2px attention bar at the left edge. That is the one
+ *              amber signal in the turn: the name, clock and any choice
+ *              chips inside it are neutral.
+ *   answered   a plain row with a quiet "Answered · after 4m 12s" tag.
  *              History. The answer follows as its own turn.
- *   dismissed  the same hairline, "Not answered". Never rings.
+ *   dismissed  the same plain row, "Not answered". Never rings.
  */
 
 .root {
-  --qc-frame: var(--ds-color-border-subtle);
-  --qc-bar: var(--ds-color-border-strong);
-  --qc-wash: transparent;
-  --qc-chip-border: var(--ds-color-border-subtle);
-  --qc-chip-bg: transparent;
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
-  gap: var(--ds-space-8);
-  padding: var(--ds-space-8) var(--ds-space-12);
-  min-width: 0;
-  scroll-margin-top: var(--ds-space-32);
+  composes: turn from "./turn.module.css";
+  --turn-bar: transparent;
+  --turn-wash: transparent;
+  transition: background-color var(--ds-duration-slow) var(--ds-ease-standard);
+}
+.root:not(.waiting):hover {
+  background: var(--ds-color-row-hover);
 }
 .new {
   animation: global(ds-flash) var(--ds-duration-deliberate) var(--ds-ease-exit) 1;
 }
-.waiting {
-  --qc-frame: var(--ds-tone-attention-border);
-  --qc-bar: var(--ds-tone-attention-solid);
-  --qc-wash: color-mix(in srgb, var(--ds-tone-attention-bg) 55%, var(--ds-color-surface));
-  --qc-chip-border: var(--ds-tone-attention-border);
-  --qc-chip-bg: var(--ds-color-surface);
+.root.waiting {
+  --turn-bar: var(--ds-tone-attention-solid);
+  --turn-wash: color-mix(in srgb, var(--ds-tone-attention-solid) var(--ds-tint-highlight), transparent);
+  padding-top: var(--ds-space-highlight-y);
+  padding-bottom: var(--ds-space-highlight-y);
 }
 
 .gutter {
-  padding-top: 1px;
+  padding-top: var(--ds-space-2);
 }
 .main {
-  position: relative;
   display: flex;
   flex-direction: column;
-  gap: var(--ds-space-4);
   min-width: 0;
-  padding: var(--ds-space-6) var(--ds-space-12) var(--ds-space-8);
-  border: 1px solid var(--qc-frame);
-  border-radius: var(--ds-radius-md);
-  background: var(--qc-wash);
-  overflow: hidden;
-  transition:
-    border-color var(--ds-duration-slow) var(--ds-ease-standard),
-    background-color var(--ds-duration-slow) var(--ds-ease-standard);
-}
-/* The bar: a pseudo-element rather than a thicker left border, so the
-   frame's radius and the bar's stay independent (as on the board card). */
-.main::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  background: var(--qc-bar);
 }
 
 .header {
-  display: flex;
-  align-items: baseline;
-  gap: var(--ds-space-8);
-  min-height: 18px;
-  font-size: var(--ds-text-sm);
-  line-height: 18px;
+  composes: turnHeader from "./turn.module.css";
 }
 .name {
   font-weight: var(--ds-weight-medium);
-  color: var(--ds-color-text-primary);
+  color: var(--ds-color-text-strong);
 }
 .roleName {
   font-size: var(--ds-text-xs);
@@ -85,26 +53,21 @@
 .verb {
   color: var(--ds-color-text-secondary);
 }
-.status {
-  display: inline-flex;
-  align-items: center;
-  align-self: center;
-}
-
 /* Settled marks: the same shape as an intent tag, in a tone that says
    how it ended — success for answered, neutral for dismissed. */
 .tag {
   display: inline-flex;
   align-items: center;
+  align-self: center;
   gap: 3px;
-  height: 16px;
+  height: var(--ds-size-badge-sm);
   padding: 0 5px 0 4px;
   border-radius: var(--ds-radius-sm);
   font-size: var(--ds-text-2xs);
   font-weight: var(--ds-weight-medium);
   letter-spacing: var(--ds-tracking-caps);
+  line-height: 1;
   text-transform: uppercase;
-  align-self: center;
 }
 .tagAnswered {
   color: var(--ds-tone-success-fg);
@@ -115,8 +78,9 @@
   background: var(--ds-tone-neutral-bg);
 }
 
-/* The wait: attention ink and ticking while blocked; muted and static once
-   answered ("after 4m 12s") so the cost of the wait stays in the record. */
+/* The wait: ticking while blocked, static once answered ("after 4m 12s")
+   so the cost of the wait stays in the record. Muted either way: the
+   highlight around it already says the turn is waiting. */
 .wait,
 .waited {
   display: inline-flex;
@@ -124,25 +88,14 @@
   gap: var(--ds-space-4);
   font-size: var(--ds-text-xs);
   white-space: nowrap;
-}
-.wait {
-  color: var(--ds-tone-attention-fg);
-  font-weight: var(--ds-weight-medium);
-}
-.waited {
   color: var(--ds-color-text-muted);
 }
 
 .time {
-  margin-left: auto;
-  font-family: var(--ds-font-mono);
-  font-feature-settings: "tnum", "zero";
   font-size: var(--ds-text-xs);
-  color: var(--ds-color-text-disabled);
-  white-space: nowrap;
-}
-.root:hover .time {
+  font-variant-numeric: tabular-nums;
   color: var(--ds-color-text-muted);
+  white-space: nowrap;
 }
 
 .body {
@@ -153,13 +106,14 @@
   color: var(--ds-color-text-secondary);
 }
 
-/* The offered choices. Chips, numbered so "option 2" is a thing a person
-   can say; buttons only with `onChoose`. */
+/* The offered choices: neutral filled chips, numbered so "option 2" is a
+   thing a person can say; buttons only with `onChoose`, and only those
+   take the attention tone, on hover. */
 .options {
   display: flex;
   flex-wrap: wrap;
   gap: var(--ds-space-6);
-  margin: var(--ds-space-4) 0 0;
+  margin: var(--ds-space-8) 0 0;
   padding: 0;
   list-style: none;
 }
@@ -171,12 +125,14 @@
   align-items: center;
   gap: var(--ds-space-6);
   min-height: var(--ds-size-control-sm);
-  padding: 0 var(--ds-space-8) 0 var(--ds-space-6);
-  border: 1px solid var(--qc-chip-border);
+  padding: 0 var(--ds-space-12) 0 var(--ds-space-8);
+  border: 0;
   border-radius: var(--ds-radius-md);
-  background: var(--qc-chip-bg);
+  background: var(--ds-color-active-wash);
+  box-shadow: inset 0 0 0 1px var(--ds-color-border-subtle);
   color: var(--ds-color-text-primary);
   font-size: var(--ds-text-sm);
+  line-height: 1.2;
   font-family: inherit;
   text-align: left;
 }
@@ -191,19 +147,11 @@
   min-width: 10px;
 }
 .optionButton {
+  composes: choiceChip from "./turn.module.css";
   cursor: pointer;
 }
-.optionButton:hover {
-  border-color: var(--ds-tone-attention-fg);
-  background: var(--ds-color-raised);
-}
-.optionButton:focus-visible {
+/* Matches the shared hover's specificity so the focus ring wins on a hovered chip. */
+.optionButton:focus-visible:not(:disabled) {
   outline: none;
   box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-color-focus-ring);
-}
-
-.hint {
-  font-size: var(--ds-text-xs);
-  color: var(--ds-color-text-muted);
-  font-style: italic;
 }

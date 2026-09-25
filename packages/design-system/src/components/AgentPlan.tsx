@@ -123,7 +123,7 @@ export function AgentPlan({
         }}
       >
         <span className={styles["headerIcon"]} aria-hidden>
-          <Icon name="list-check" size={12} />
+          <Icon name="list-check" size={14} />
         </span>
         <span className={styles["title"]}>{title}</span>
         {meta !== undefined ? <span className={styles["meta"]}>{meta}</span> : null}
@@ -145,7 +145,7 @@ export function AgentPlan({
             <span className={styles["currentText"]}>{current.content}</span>
           </span>
         ) : null}
-        {collapsible ? <Icon name="chevron-right" size={12} className={styles["chevron"]} /> : null}
+        {collapsible ? <Icon name="chevron-right" size={14} className={styles["chevron"]} /> : null}
       </div>
       {!isCollapsed ? (
         <ol className={styles["list"]}>

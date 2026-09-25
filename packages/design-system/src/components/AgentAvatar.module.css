@@ -3,7 +3,7 @@
   --role-bg: var(--ds-color-sunken);
   --role-solid: var(--ds-color-border-strong);
   --role-on-solid: var(--ds-color-text-primary);
-  --av-size: 20px;
+  --av-size: var(--ds-size-avatar-sm);
 
   position: relative;
   display: inline-grid;
@@ -26,17 +26,23 @@
 }
 
 .xs {
-  --av-size: 16px;
+  --av-size: var(--ds-size-avatar-xs);
   border-radius: var(--ds-radius-sm);
 }
 .sm {
-  --av-size: 20px;
+  --av-size: var(--ds-size-avatar-sm);
 }
 .md {
-  --av-size: 24px;
+  --av-size: var(--ds-size-avatar-md);
 }
 .lg {
-  --av-size: 32px;
+  --av-size: var(--ds-size-avatar-lg);
+  border-radius: var(--ds-radius-lg);
+}
+/* The transcript's own avatar: density-sensitive (see `tokens/density.ts`),
+   larger than the shared `lg` because it anchors a whole turn, not a row. */
+.chat {
+  --av-size: var(--ds-size-avatar-chat);
   border-radius: var(--ds-radius-lg);
 }
 
@@ -82,7 +88,7 @@
 
 /* Non-agent actors */
 .human {
-  --role-fg: var(--ds-color-text-primary);
+  --role-fg: var(--ds-color-text-secondary);
   --role-bg: var(--ds-color-overlay);
   border-radius: var(--ds-radius-full);
   box-shadow: inset 0 0 0 1px var(--ds-color-border-strong);

@@ -113,7 +113,7 @@ export function formatDuration(ms: number, opts: DurationOptions = {}): string {
   return `${d}${units.d}${units.sep}${h % 24}${units.h}`;
 }
 
-export type TimestampStyle = "time" | "time-ms" | "datetime" | "date" | "relative";
+export type TimestampStyle = "time" | "time-short" | "time-ms" | "datetime" | "date" | "relative";
 
 /**
  * Timestamps. Event streams use `time-ms` (HH:MM:SS.mmm) because events
@@ -129,6 +129,8 @@ export function formatTimestamp(
   switch (style) {
     case "time":
       return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+    case "time-short":
+      return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
     case "time-ms":
       return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}.${String(
         d.getMilliseconds(),

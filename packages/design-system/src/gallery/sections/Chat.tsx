@@ -411,11 +411,11 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
       <Block
         id="ch-question"
         title="QuestionCard"
-        note="An agent stops and asks a person (ask_user). While it waits this is the one loud turn in a transcript: the needs-you badge with its ring, the attention wash and 2px bar the tree row and board card use for the same state, the avatar marked live, and a wait clock ticking in attention ink — an operator scanning a long chat lands on it at once, and in grayscale it is still the only framed turn with a solid badge, a bar and a clock. The offered choices are shown as numbered chips so the question reads in full; they are buttons only with onChoose, since the composer already has the one-click reply. Answered, it settles: hairline, no wash, a quiet Answered mark with how long it waited. The answer follows as its own turn — the card never repeats it. A question the session died on is Not answered and never rings."
+        note="An agent stops and asks a person (ask_user). While it waits this is the one loud turn in a transcript, and it is loud once: the attention wash and 2px bar. Inside it everything is neutral — the transcript header's Needs-you badge already names the state, the wait clock is muted, and the offered choices are shown once, as one-click chips in the composer (in the card only with onChoose). In grayscale it is still the only barred, tinted turn. Answered, it settles: no wash, a quiet Answered mark with how long it waited, and the choices listed as the record of what was offered. The answer follows as its own turn — the card never repeats it. A question the session died on is Not answered and never rings."
       >
         <Panes mode={mode} surface>
           <Col>
-            <Label>waiting — the run is blocked; the clock ticks</Label>
+            <Label>waiting — the run is blocked; the clock ticks; choices are in the composer</Label>
             <QuestionCard role="implementer" text={QUESTION_TEXT} options={QUESTION_OPTIONS} askedAt={Date.now() - 4 * 60_000 - 12_000} />
             <Label>waiting, no choices, a named session — free-text answer only</Label>
             <QuestionCard role="reviewer" name="reviewer-2" text="The PR body says the route's retry is a product decision. Is there a work item for it, or should I file one?" askedAt={Date.now() - 38_000} />
@@ -426,7 +426,7 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
             <ChatMessage role="human" name="marcio" intent="answer" inReplyTo="Should I leave the route's retry in place, or fold it into this change?" content={ANSWER_TEXT} startedAt={at(45_600 + 4 * 60_000 + 12_000)} deliveredAt={at(45_600 + 4 * 60_000 + 13_000)} />
             <Label>not answered — the session ended first; settled, never rings</Label>
             <QuestionCard role="qa_browser" text="The save button has no stable selector. Should I add a `data-testid`, or is that out of scope?" options={["Add data-testid", "Out of scope — skip the check"]} askedAt={at(100_000)} dismissed />
-            <Label>grayscale check — waiting still separates from answered by badge, bar and clock</Label>
+            <Label>grayscale check — waiting still separates from answered by wash, bar and clock</Label>
             <div style={{ filter: "grayscale(1)", display: "flex", flexDirection: "column" }}>
               <QuestionCard role="implementer" text="Leave the route's retry in place?" options={["Yes", "No"]} askedAt={Date.now() - 90_000} />
               <QuestionCard role="implementer" text="Leave the route's retry in place?" options={["Yes", "No"]} askedAt={at(0)} answeredAt={at(90_000)} />

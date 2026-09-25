@@ -6,11 +6,18 @@
  * a ramp step directly.
  *
  * Design intent
- * - Neutrals are very slightly cool (hue 250, chroma ~0.006). A perfectly
- *   gray dark UI reads muddy; a strongly tinted one reads "branded". The
- *   tint is there to make white text sit calmly, not to be noticed.
- * - Dark surfaces are tiered by lightness, not by shadow. Elevation in dark
- *   mode = lighter surface + hairline border.
+ * - Neutrals are very slightly cool (hue 250, chroma ~0.0035, close to
+ *   grey) and the text ramp is soft, Discord/Obsidian-style:
+ *   primary text sits around 11–12:1 on its surface rather than 14:1+, so
+ *   primary/secondary/muted read as close, even shades rather than a
+ *   bright-white-on-black spike. Every slot that carries read content still
+ *   clears 4.5:1.
+ * - Dark surfaces are tiered by lightness, not by shadow, and are charcoal
+ *   rather than near-black (canvas L 0.235, surface 0.27 — Obsidian and
+ *   Discord territory). Elevation = a lighter surface; a hairline, where
+ *   one is kept, sits close in lightness to the surface under it.
+ * - Tinted backgrounds (tone/role/identity/diff bg, accent-subtle) sit a
+ *   few steps above the surface so they read as a tint, not a hole.
  * - Five status tones only: neutral, info, attention, success, danger.
  *   Every domain status maps onto one of these plus a glyph.
  */
@@ -19,26 +26,33 @@ import { ALL_AGENT_ROLES, type AgentRole } from "@dude/domain";
 import { oklch, toHex, type Oklch } from "./oklch.ts";
 
 // ---------------------------------------------------------------------------
-// Neutral ramp (0 = darkest, 12 = lightest). Used for both themes.
+// Neutral ramp (0 = darkest, 12 = lightest). A smooth visual ramp for the
+// gallery; `./themes.ts` builds each theme's actual colours from precise
+// OKLCH lightness values of its own (see the comment there for why it does
+// not simply index into this array) and only reaches into this array for
+// the two points that must stay literally identical across the codebase:
+// the dark theme's canvas/sunken/fieldBg (index 1) and the light theme's
+// canvas/sunken (index 12).
 // ---------------------------------------------------------------------------
 
 const NEUTRAL_HUE = 250;
-const NEUTRAL_CHROMA = 0.007;
+const NEUTRAL_CHROMA = 0.0035;
+export { NEUTRAL_HUE, NEUTRAL_CHROMA };
 
 const neutralL = [
-  0.11, // 0 near-black
-  0.145, // 1 app canvas (dark)
-  0.175, // 2 surface (dark)
-  0.21, // 3 raised (dark)
-  0.25, // 4 overlay (dark) / border-subtle
-  0.3, // 5 border
-  0.38, // 6 border-strong / text-disabled(dark)
-  0.5, // 7 text-muted (both)
-  0.62, // 8 text-secondary (dark) / text-muted(light)
-  0.75, // 9
-  0.84, // 10 border (light)
-  0.92, // 11 border-subtle (light) / text (dark)
-  0.965, // 12 canvas (light)
+  0.18, // 0
+  0.235, // 1 app canvas / sunken / field bg (dark)
+  0.27, // 2
+  0.305, // 3
+  0.34, // 4
+  0.39, // 5
+  0.46, // 6
+  0.55, // 7
+  0.64, // 8
+  0.74, // 9
+  0.83, // 10
+  0.9, // 11
+  0.965, // 12 canvas / sunken (light)
 ] as const;
 
 export type NeutralRamp = readonly [
@@ -47,7 +61,7 @@ export type NeutralRamp = readonly [
 ];
 
 export const neutral: NeutralRamp = neutralL.map((l, i) =>
-  toHex(oklch(l, i >= 11 ? NEUTRAL_CHROMA * 0.5 : NEUTRAL_CHROMA, NEUTRAL_HUE)),
+  toHex(oklch(l, i >= 11 ? NEUTRAL_CHROMA * 0.6 : NEUTRAL_CHROMA, NEUTRAL_HUE)),
 ) as unknown as NeutralRamp;
 
 export const white = "#ffffff";
@@ -61,6 +75,7 @@ export const black = "#000000";
 //   border   hairline for outlined treatments
 //   solid    vivid fill for "loud" treatments; carries `onSolid` text
 //   onSolid  text on `solid`
+//   mark     fill of a text-free status mark (dot, diamond, square)
 //
 // Lightness is deliberately different between success and danger in each
 // mode so the two are separable under protan/deutan simulation even before
@@ -76,6 +91,8 @@ export interface ToneInstance {
   readonly border: string;
   readonly solid: string;
   readonly onSolid: string;
+  /** Fill of a text-free status mark (dot, diamond, square): >= 3:1 on canvas and surface, at full hue. */
+  readonly mark: string;
 }
 
 interface ToneSpec {
@@ -93,11 +110,11 @@ const TONE_HUES: Record<ToneName, ToneSpec> = {
 
 /** Per-tone lightness for each slot; fg lightness is the CVD lever. */
 const DARK_L: Record<ToneName, { fg: number; bg: number; border: number; solid: number }> = {
-  neutral: { fg: 0.74, bg: 0.24, border: 0.34, solid: 0.52 },
-  info: { fg: 0.74, bg: 0.25, border: 0.4, solid: 0.55 },
-  attention: { fg: 0.82, bg: 0.27, border: 0.46, solid: 0.8 },
-  success: { fg: 0.8, bg: 0.25, border: 0.4, solid: 0.7 },
-  danger: { fg: 0.7, bg: 0.25, border: 0.42, solid: 0.55 },
+  neutral: { fg: 0.74, bg: 0.29, border: 0.39, solid: 0.52 },
+  info: { fg: 0.74, bg: 0.3, border: 0.45, solid: 0.55 },
+  attention: { fg: 0.82, bg: 0.32, border: 0.51, solid: 0.8 },
+  success: { fg: 0.8, bg: 0.3, border: 0.45, solid: 0.7 },
+  danger: { fg: 0.7, bg: 0.3, border: 0.47, solid: 0.55 },
 };
 
 /**
@@ -113,6 +130,22 @@ const LIGHT_L: Record<ToneName, { fg: number; bg: number; border: number; solid:
   danger: { fg: 0.4, bg: 0.95, border: 0.82, solid: 0.58 },
 };
 
+/**
+ * Light-mode status marks. The light fg is dark enough for body text, and
+ * at 8px that reads as olive (attention) or near-black (danger, info), so
+ * marks take a lighter step at the tone's own hue that still clears 3:1
+ * (non-text contrast) on the canvas. Attention shifts to hue 70 because
+ * hue 78 at this lightness falls out of sRGB gamut into olive. Dark marks
+ * use the dark fg, which is already bright and saturated.
+ */
+const LIGHT_MARK: Record<ToneName, { l: number; hue?: number }> = {
+  neutral: { l: 0.5 },
+  info: { l: 0.55 },
+  attention: { l: 0.64, hue: 70 },
+  success: { l: 0.58 },
+  danger: { l: 0.58 },
+};
+
 function tone(name: ToneName, mode: "light" | "dark"): ToneInstance {
   const { hue, chroma } = TONE_HUES[name];
   const L = mode === "dark" ? DARK_L[name] : LIGHT_L[name];
@@ -121,8 +154,11 @@ function tone(name: ToneName, mode: "light" | "dark"): ToneInstance {
   const solid: Oklch = oklch(L.solid, name === "neutral" ? chroma : chroma, hue);
   // Text on the solid fill: black on bright fills, white on deep fills.
   const onSolid = L.solid >= 0.68 ? black : white;
+  const fg = toHex(oklch(L.fg, chroma, hue));
+  const lm = LIGHT_MARK[name];
   return {
-    fg: toHex(oklch(L.fg, chroma, hue)),
+    fg,
+    mark: mode === "dark" ? fg : toHex(oklch(lm.l, chroma, lm.hue ?? hue)),
     bg: toHex(oklch(L.bg, bgChroma, hue)),
     border: toHex(oklch(L.border, borderChroma, hue)),
     solid: toHex(solid),
@@ -168,25 +204,27 @@ const ROLE_HUES: Record<AgentRoleName, number> = {
 
 /**
  * Per-role lightness, found by search so that all 15 pairs clear CVD ΔE >= 8
- * and normal-vision ΔE >= 15 in each mode. Lightness varies on purpose: it is
- * what keeps violet/blue and teal/green apart under deutan simulation.
+ * and normal-vision ΔE >= 15 in each mode (OKLab ×100, Machado protan and
+ * deutan) while every fg stays >= 4.5:1 on its surface, with hues fixed and
+ * lightness moved as little as possible. Lightness varies on purpose: it
+ * is what keeps violet/blue and teal/green apart under deutan simulation.
  */
 const ROLE_L: Record<"light" | "dark", Record<AgentRoleName, number>> = {
   dark: {
-    orchestrator: 0.62,
-    investigator: 0.8,
-    implementer: 0.68,
-    reviewer: 0.62,
+    orchestrator: 0.66,
+    investigator: 0.82,
+    implementer: 0.71,
+    reviewer: 0.66,
     simplifier: 0.86,
-    qa_browser: 0.8,
+    qa_browser: 0.82,
   },
   light: {
     orchestrator: 0.42,
-    investigator: 0.62,
-    implementer: 0.47,
+    investigator: 0.56,
+    implementer: 0.45,
     reviewer: 0.47,
-    simplifier: 0.62,
-    qa_browser: 0.62,
+    simplifier: 0.56,
+    qa_browser: 0.57,
   },
 };
 
@@ -203,9 +241,9 @@ function roleColor(role: AgentRoleName, mode: "light" | "dark"): RoleColor {
   if (mode === "dark") {
     return {
       fg: toHex(oklch(l, 0.12, h)),
-      bg: toHex(oklch(0.27, 0.05, h)),
+      bg: toHex(oklch(0.3, 0.05, h)),
       solid: toHex(oklch(l, 0.12, h)),
-      onSolid: l >= 0.7 ? black : white,
+      onSolid: l >= 0.65 ? black : white,
     };
   }
   return {
@@ -249,7 +287,7 @@ export interface IdentityColor {
 
 function identityColor(hue: number, mode: "light" | "dark"): IdentityColor {
   return mode === "dark"
-    ? { fg: toHex(oklch(0.84, 0.07, hue)), bg: toHex(oklch(0.3, 0.035, hue)) }
+    ? { fg: toHex(oklch(0.84, 0.07, hue)), bg: toHex(oklch(0.35, 0.035, hue)) }
     : { fg: toHex(oklch(0.42, 0.09, hue)), bg: toHex(oklch(0.93, 0.03, hue)) };
 }
 
@@ -259,25 +297,29 @@ export const identityColors: Record<"light" | "dark", readonly IdentityColor[]> 
 };
 
 // ---------------------------------------------------------------------------
-// Accent (interactive). Same hue as info so the UI has one "blue".
+// Accent (interactive). Same hue as info so the UI has one "blue", at
+// chroma 0.13 so it sits calmly against the neutrals; focus ring and link
+// contrast stay above the 3:1 / 4.5:1 floors.
 // ---------------------------------------------------------------------------
 
 export const accent = {
   light: {
-    base: toHex(oklch(0.52, 0.16, 248)),
-    hover: toHex(oklch(0.47, 0.16, 248)),
-    active: toHex(oklch(0.42, 0.16, 248)),
-    subtle: toHex(oklch(0.94, 0.035, 248)),
-    ring: toHex(oklch(0.6, 0.17, 248)),
-    text: toHex(oklch(0.48, 0.16, 248)),
+    base: toHex(oklch(0.52, 0.13, 248)),
+    hover: toHex(oklch(0.47, 0.13, 248)),
+    active: toHex(oklch(0.42, 0.13, 248)),
+    subtle: toHex(oklch(0.94, 0.03, 248)),
+    ring: toHex(oklch(0.6, 0.14, 248)),
+    text: toHex(oklch(0.46, 0.13, 248)),
   },
   dark: {
-    base: toHex(oklch(0.64, 0.15, 248)),
-    hover: toHex(oklch(0.69, 0.15, 248)),
-    active: toHex(oklch(0.59, 0.15, 248)),
-    subtle: toHex(oklch(0.26, 0.05, 248)),
-    ring: toHex(oklch(0.72, 0.15, 248)),
-    text: toHex(oklch(0.76, 0.13, 248)),
+    // Dark enough for white button labels at 4.5:1; hover and active step
+    // darker, as in light, so the label never loses contrast.
+    base: toHex(oklch(0.56, 0.13, 248)),
+    hover: toHex(oklch(0.52, 0.13, 248)),
+    active: toHex(oklch(0.48, 0.13, 248)),
+    subtle: toHex(oklch(0.31, 0.045, 248)),
+    ring: toHex(oklch(0.7, 0.13, 248)),
+    text: toHex(oklch(0.76, 0.11, 248)),
   },
 } as const;
 
@@ -298,13 +340,13 @@ export const diff = {
     hunkFg: toHex(oklch(0.48, 0.1, 248)),
   },
   dark: {
-    addBg: toHex(oklch(0.23, 0.045, 150)),
-    addBgStrong: toHex(oklch(0.33, 0.09, 150)),
+    addBg: toHex(oklch(0.28, 0.045, 150)),
+    addBgStrong: toHex(oklch(0.38, 0.09, 150)),
     addFg: toHex(oklch(0.82, 0.12, 150)),
-    delBg: toHex(oklch(0.23, 0.04, 20)),
-    delBgStrong: toHex(oklch(0.33, 0.09, 20)),
+    delBg: toHex(oklch(0.28, 0.04, 20)),
+    delBgStrong: toHex(oklch(0.38, 0.09, 20)),
     delFg: toHex(oklch(0.78, 0.13, 20)),
-    hunkBg: toHex(oklch(0.23, 0.03, 248)),
+    hunkBg: toHex(oklch(0.28, 0.03, 248)),
     hunkFg: toHex(oklch(0.72, 0.08, 248)),
   },
 } as const;
@@ -357,7 +399,7 @@ function ansiPalette(mode: "light" | "dark"): Record<AnsiColorName, string> {
   const chromatic = (l: number, h: number) => toHex(oklch(l, h === ANSI_HUES.yellow ? chroma * 0.95 : chroma, h));
   return {
     // "black" is the colour tools use for "de-emphasised": readable, not gone.
-    black: toHex(oklch(dark ? 0.6 : 0.24, NEUTRAL_CHROMA, NEUTRAL_HUE)),
+    black: toHex(oklch(dark ? 0.66 : 0.24, NEUTRAL_CHROMA, NEUTRAL_HUE)),
     red: chromatic(normalL, ANSI_HUES.red),
     green: chromatic(normalL, ANSI_HUES.green),
     yellow: chromatic(normalL, ANSI_HUES.yellow),
@@ -367,7 +409,7 @@ function ansiPalette(mode: "light" | "dark"): Record<AnsiColorName, string> {
     white: toHex(oklch(dark ? 0.86 : 0.5, NEUTRAL_CHROMA, NEUTRAL_HUE)),
     // "bright black" is the classic dim grey; on light it is a step darker
     // than "white" so the two stay distinct, and never paper.
-    "bright-black": toHex(oklch(dark ? 0.66 : 0.44, NEUTRAL_CHROMA, NEUTRAL_HUE)),
+    "bright-black": toHex(oklch(dark ? 0.72 : 0.44, NEUTRAL_CHROMA, NEUTRAL_HUE)),
     "bright-red": chromatic(brightL, ANSI_HUES.red),
     "bright-green": chromatic(brightL, ANSI_HUES.green),
     "bright-yellow": chromatic(brightL, ANSI_HUES.yellow),
@@ -390,6 +432,6 @@ export const ansiColors: Record<"light" | "dark", Record<AnsiColorName, string>>
  * assumption of a light terminal is still legible on the dark field.
  */
 export const ansiForegroundLightness: Record<"light" | "dark", { readonly min: number; readonly max: number }> = {
-  dark: { min: 0.66, max: 0.97 },
+  dark: { min: 0.7, max: 0.97 },
   light: { min: 0.2, max: 0.55 },
 };

@@ -59,7 +59,7 @@ export function StatusBadge({
         {...rest}
       >
         <span className={styles["dotMark"]} aria-hidden />
-        {iconOnly ? <span className="ds-sr-only">{text}</span> : <span className={styles["label"]}>{text}</span>}
+        {iconOnly ? <span className="ds-sr-only">{text}</span> : <span className={cx(styles["label"], "ds-cap")}>{text}</span>}
       </span>
     );
   }
@@ -81,7 +81,7 @@ export function StatusBadge({
       <span className={styles["glyph"]} aria-hidden>
         <Icon name={spec.glyph as IconName} size={size === "sm" ? 10 : 12} strokeWidth={1.75} />
       </span>
-      {iconOnly ? <span className="ds-sr-only">{text}</span> : <span className={styles["label"]}>{text}</span>}
+      {iconOnly ? <span className="ds-sr-only">{text}</span> : <span className={cx(styles["label"], "ds-cap")}>{text}</span>}
     </span>
   );
 }

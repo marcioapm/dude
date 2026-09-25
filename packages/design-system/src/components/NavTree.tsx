@@ -19,10 +19,10 @@ import {
   type NavWorkItem,
 } from "../util/navModel.ts";
 import { AgentAvatar, ROLE_LABEL } from "./AgentAvatar.tsx";
-import { HumanAvatarStack } from "./HumanAvatar.tsx";
-import { RoleStack } from "./RoleStack.tsx";
+import { HumanAvatar } from "./HumanAvatar.tsx";
 import { StatusBadge } from "./StatusBadge.tsx";
 import { TriageRollup } from "./TriageRollup.tsx";
+import type { AgentRole } from "@dude/domain";
 import styles from "./NavTree.module.css";
 
 export interface NavTreeProps extends Omit<HTMLAttributes<HTMLDivElement>, "onSelect"> {
@@ -323,11 +323,11 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
   const chevron =
     row.expandable && !row.forced ? (
       <button type="button" className={cx(styles["toggle"], row.expanded && styles["toggleOpen"])} aria-label={row.expanded ? "Collapse" : "Expand"} tabIndex={-1} onClick={onToggleClick}>
-        <Icon name="chevron-right" size={12} className={styles["toggleIcon"]} />
+        <Icon name="chevron-right" size={14} className={styles["toggleIcon"]} />
       </button>
     ) : (
       <span className={cx(styles["toggle"], styles["toggleSpacer"])} aria-hidden>
-        {row.expandable && row.forced ? <Icon name="chevron-right" size={12} className={cx(styles["toggleIcon"], styles["toggleIconForced"])} /> : null}
+        {row.expandable && row.forced ? <Icon name="chevron-right" size={14} className={cx(styles["toggleIcon"], styles["toggleIconForced"])} /> : null}
       </span>
     );
 
@@ -369,7 +369,7 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
     return (
       <div {...common} className={cx(styles["row"], styles["epic"], selected && styles["selected"])}>
         {chevron}
-        <Icon name="layers" size={12} className={styles["epicGlyph"]} />
+        <Icon name="layers" size={14} className={styles["epicGlyph"]} />
         <span className={styles["epicTitle"]}>{e.title}</span>
         <span className={styles["epicCount"]}>{e.workItems.length}</span>
         {row.counts && !row.expanded ? <TriageRollup counts={row.counts} className={styles["rollup"]} /> : null}
@@ -386,18 +386,16 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
     const finished = spec.terminal;
     return (
       <div {...common} className={cx(styles["row"], styles["workItem"], needsYou && styles["needsYou"], finished && styles["finished"], selected && styles["selected"])}>
+        {needsYou ? <span className={styles["pill"]} aria-hidden /> : null}
         {chevron}
-        <StatusBadge status={wi.status} variant="dot" iconOnly className={styles["mark"]} />
         <span className={styles["wiMain"]}>
           {wi.key ? <span className={styles["wiKey"]}>{wi.key}</span> : null}
           <span className={styles["wiTitle"]} title={wi.title}>
             {wi.title}
           </span>
         </span>
-        <span className={styles["wiTrailing"]}>
-          <RoleStack roles={roles} className={styles["roles"]} />
-          {wi.people && wi.people.length > 0 ? <HumanAvatarStack people={wi.people} size="xs" max={2} /> : null}
-        </span>
+        <WhoTrailing people={wi.people ?? []} roles={roles} />
+        <StatusBadge status={wi.status} variant="dot" iconOnly className={styles["mark"]} />
         {menuSlot}
       </div>
     );
@@ -421,6 +419,7 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
   const sspec = statusSpec(s.status);
   return (
     <div {...common} className={cx(styles["row"], styles["session"], needsYou && styles["needsYou"], sspec.terminal && styles["finished"], selected && styles["selected"])}>
+      {needsYou ? <span className={styles["pill"]} aria-hidden /> : null}
       {chevron}
       <AgentAvatar role={s.role} size="xs" live={live} className={styles["sessionAvatar"]} />
       <span className={styles["sessionMain"]}>
@@ -430,5 +429,25 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
       <StatusBadge status={s.status} variant="dot" iconOnly className={styles["mark"]} />
       {menuSlot}
     </div>
+  );
+}
+
+/**
+ * Who is on a work item, in the space of one avatar: the first person (or,
+ * with nobody assigned, the first working role) and a muted "+N" for
+ * everyone else, so the title keeps the width. The full list is the title
+ * and the accessible name.
+ */
+function WhoTrailing({ people, roles }: { readonly people: NonNullable<NavWorkItem["people"]>; readonly roles: ReadonlyArray<AgentRole> }) {
+  const total = people.length + roles.length;
+  if (total === 0) return null;
+  const names = [...people.map((p) => p.name), ...roles.map((r) => ROLE_LABEL[r])].join(", ");
+  const first = people[0];
+  const firstRole = roles[0];
+  return (
+    <span className={styles["wiTrailing"]} role="group" aria-label={names} title={names}>
+      {first ? <HumanAvatar person={first} size="xs" aria-hidden /> : firstRole ? <AgentAvatar role={firstRole} size="xs" aria-hidden /> : null}
+      {total > 1 ? <span className={styles["more"]}>+{total - 1}</span> : null}
+    </span>
   );
 }

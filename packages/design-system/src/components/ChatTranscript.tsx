@@ -174,7 +174,7 @@ function TranscriptHeader({ session, actions }: { readonly session: ChatTranscri
   // header asks the spec rather than re-listing which statuses count.
   const spec = statusSpec(session.status);
   return (
-    <header className={cx(styles["header"], spec.needsHuman && styles["headerNeedsYou"])} data-status={session.status}>
+    <header className={styles["header"]} data-status={session.status}>
       <AgentAvatar role={session.role} size="md" live={session.status === "running"} />
       <div className={styles["headerMain"]}>
         <div className={styles["headerTitle"]}>
