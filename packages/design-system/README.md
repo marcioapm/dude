@@ -216,9 +216,11 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   dashed, the caret stays lit, the sweep becomes a stripe) and the clocks keep
   ticking as text. Motion here is state, not decoration.
 - Errors are never behind a click: a failed `ToolCallCard` opens by default
-  and repeats the error's first line in its collapsed row. A non-zero exit
-  code is a danger chip in the collapsed row whatever the harness said the
-  status was.
+  and repeats the error's first line, in primary ink on the danger tint, in
+  its collapsed row. A non-zero exit code is a danger chip in the collapsed
+  row whatever the harness said the status was — except the plain `exit 1`
+  of a failed call, which the ✕ already says; open, the output block always
+  shows the code.
 - Tool output arrives capped by the backend (4 KB per stream; longer output
   keeps the first and last 2 KB). `ToolCallCard output={{ head, tail,
   omittedBytes }}` draws the dropped middle as a labelled dashed line —
@@ -283,22 +285,23 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 ### Human intervention
 
 - The two ways a person acts on a session are distinct on four channels in
-  `ChatComposer`: frame tint, hint text, button label, button icon.
-  **Answer** (session blocked on a question) is attention-toned — the same
-  hue as needs-you, so the answer visibly closes it — and plain Enter submits
-  because the agent is waiting. **Steer** (session running) is accent-toned,
+  `ChatComposer`: focus tint, hint text, button label, button icon.
+  **Answer** (session blocked on a question) has an attention-filled button —
+  the same hue as needs-you, so the answer visibly closes it — and plain
+  Enter submits because the agent is waiting. Its context line ("Answering
+  Orchestrator: …") and the offered choices are neutral at rest; a choice
+  chip takes the attention tint only on hover. **Steer** (session running) is accent-toned,
   says plainly that it interrupts the current turn, and requires ⌘/Ctrl+Enter
   because an accidental interrupt costs a turn.
 - The question itself is a turn: `QuestionCard`. While it waits it is the
-  one loud thing a transcript is allowed — the needs-you badge with its
-  ring, the attention wash and 2px bar the tree row and board card use for
-  the same state, the asking avatar marked live, and a wait clock ticking in
-  attention ink — so an operator scanning a long chat lands on it at once,
-  and in grayscale it is still the only framed turn with a solid badge, a
-  bar and a clock. The offered choices are numbered chips so the question
-  reads in full; they become one-click replies only with `onChoose`, since
-  the composer already has them as buttons. `answeredAt` settles it: a
-  hairline, no wash, "Answered · after 4m 12s", and the answer follows as
+  one loud turn a transcript is allowed, and it is loud once: the attention
+  wash and 2px bar. Inside it the ink is neutral — the transcript header's
+  Needs-you badge already names the state, the wait clock is muted, and the
+  avatar is marked live. In grayscale it is still the only barred, tinted
+  turn. The offered choices are shown once, as one-click chips in the
+  composer; the card lists them only with `onChoose` (then they are its own
+  buttons) or once it has settled, as the record of what was offered.
+  `answeredAt` settles it: no wash, "Answered · after 4m 12s", and the answer follows as
   its own `intent="answer"` turn — the card never quotes it, so nothing is
   said twice. `dismissed` is for a question the session died on: "Not
   answered", settled, and it never rings. The waiting card is a polite live
@@ -342,8 +345,13 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - `TriageRollup` is the one way a collapsed parent says what is inside it:
   a `StatusBadge` dot per non-empty counted bucket, most urgent first. It
   reuses the dot shapes (diamond = needs you, round = active, square =
-  failed), so the roll-up never invents a second mark. Needs-you is the only
-  count in attention ink.
+  failed), so the roll-up never invents a second mark. The needs-you count
+  is semibold; its hue is on the diamond beside it.
+- **Amber once per region.** In the sidebar the pinned needs-you block (tint
+  and bar) is the one amber area; the filter chip, the tree row's pill, the
+  asking session's activity and the roll-up counts are neutral ink, and the
+  diamond marks carry the hue. In the transcript it is the header's
+  Needs-you badge and the waiting question's highlight.
 - The tree shows four levels — Project → Epic → Work item → Session — and
   folds Runs into their work item: the current run's sessions sit directly
   under it; earlier attempts fold into one "Attempt n" row each. Retrying is
@@ -360,7 +368,8 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   explicitly folded them.
 - "What needs me" must be answerable without expanding anything. The
   `Sidebar` pins a **Needs you** list across every project — work item,
-  who is asking, who it waits on, where — above the tree; the needs-you
+  who is asking and what, who it waits on; where it lives is the row's
+  tooltip — above the tree; the needs-you
   filter chip shows the same set in place; and every collapsed ancestor
   carries the count. Three routes, one source (`attentionItems`).
 - Selection and focus are separate (the ARIA tree pattern): ↑↓ move, →
@@ -389,7 +398,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   boards only) and time in lane; the title, clamped to two lines; who and
   what it cost. Running cards show the working roles (`RoleStack`) and the
   deepest live activity. Needs-you cards show the asker and the question in
-  attention ink and take the tree row's wash and bar. Nothing else on the
+  attention ink and take the attention wash and bar. Nothing else on the
   surface is coloured.
 - Time in lane is `Duration format="age"` — one coarse unit (`45m`, `4h`,
   `3d`), one clock per board ticking once a minute. Seconds on a board are
@@ -499,9 +508,11 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   measure and an optional outline.
 - Inline code: 0.85em mono on the sunken fill, 4px radius, a subtle inset
   ring. Code blocks: a sunken well, 8px radius, 12×16 padding, no frame; the
-  language and copy control appear on hover. Blockquotes: a 2px muted bar
-  and secondary ink. Lists: 1.5em hanging indent. Tables: row hairlines
-  only, no vertical rules, no header fill.
+  language and copy control appear on hover; long lines scroll sideways
+  under a thin scrollbar and a shadow on the clipped edge, never wrap or
+  clip. Blockquotes: a 2px muted bar and secondary ink. Lists: 1.5em
+  hanging indent. Tables: a 1px `border` rule under the header, fainter
+  hairlines between body rows, no vertical rules, no header fill.
 - Code blocks share their type with `LogStream`; a ```` ```diff ```` fence hands
   off to `DiffView`, so diff colouring exists in one place.
 
@@ -520,14 +531,23 @@ shrinking something already small makes it cramped, not dense:
 
 | | comfortable | compact | why |
 |---|---|---|---|
-| main pane padding (`space-main-pad`) | 24 | 16 | big layout space: where density comes from |
+| main pane padding (`space-main-pad`) | 24 | 12 | big layout space: where density comes from |
 | panel gap (`space-panel-gap`) | 24 | 16 | |
-| space between speakers (`space-chat-gap`) | 17 | 10 | turns from one author stay 2px apart in both |
+| space between speakers (`space-chat-gap`) | 17 | 8 | turns from one author stay 2px apart in both |
 | chat turn padding (`space-chat-pad-x`) | 16 | 12 | |
 | chat avatar (`size-avatar-chat`) | 40 | 32 | the gutter follows it |
 | avatar gap (`space-chat-avatar-gap`) | 16 | 12 | text column at 72px, 56px compact |
-| board card padding and gap (`space-card-pad`) | 12 | 8 | |
-| rows (`size-row-default` / `-comfortable`) | 32 / 40 | 28 / 36 | sidebar, tree, board lanes, tool rows |
+| chat leading (`leading-chat`) / long-form (`leading-prose`) | 1.375 / 1.5 | 1.333 / 1.4 | 16/22 → 15/20; Markdown block gap (`md-gap`) 0.75em → 0.5em |
+| thought / tool call padding (`space-aside-y`) | 4 | 2 | |
+| waiting-question padding (`space-highlight-y`) | 8 | 4 | |
+| code block padding (`space-code-y` / `-x`), line pitch (`size-code-line`) | 12 / 16, 20 | 8 / 12, 18 | mono text stays 13px |
+| table cell padding (`space-cell-y`) | 6 | 3 | |
+| composer padding / gap / field padding | 8 / 6 / 10 | 4 / 4 / 6 | |
+| board card padding and gap (`space-card-pad`) | 12 | 6 | |
+| rows (`size-row-default` / `-comfortable`) | 32 / 40 | 28 / 36 | board lanes, tables, menus |
+| sidebar and transcript rows (`size-row-item` / `-item-sm`) | 32 / 28 | 26 / 24 | work items, epics, projects, tool calls / sessions, thoughts, needs-you header |
+| needs-you row padding (`space-attention-row-pad-y`) | 6 | 3 | |
+| sidebar row gap / project gap (`space-nav-row-gap`, `-nav-section-gap`) | 2 / 12 | 1 / 6 | |
 | controls (`size-control-md` / `-lg`) | 32 / 36 | 30 / 34 | a couple of px |
 | body, prose (`text-md`, `text-prose`) | 15 / 16 | 14 / 15 | 1px |
 | default radius (`radius-md`) | 6 | 5 | 1px |
@@ -539,7 +559,10 @@ and chip heights and padding, the document measure, the
 2–6px inner gaps, the tree indent, card and dialog radii, focus rings.
 `src/tokens/density.ts` is the list; `test/density.test.ts` holds it to
 the rule — compact is never roomier, text and radius move at most 1px,
-small tokens are not listed, the big spacing moves at least 4px.
+small tokens are not listed, the big spacing moves at least 4px and the
+big-ticket padding loses at least a third. At 1440×900 compact fits 26%
+more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
+17) than comfortable.
 
 - Body text 15px (14 compact); captions 12–13px; nothing smaller than 11px
   and only in small-caps labels and badges.
