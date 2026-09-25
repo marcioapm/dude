@@ -1,5 +1,5 @@
 import { useContext, useState, type ReactNode } from "react";
-import { Block, PaneDensityContext, Section, type PaneMode } from "../Frame.tsx";
+import { Block, PaneDensityContext, Section, densitiesFor, type PaneMode } from "../Frame.tsx";
 import styles from "../gallery.module.css";
 import { AgentPlan, type PlanItem } from "../../components/AgentPlan.tsx";
 import { Breadcrumb } from "../../components/Breadcrumb.tsx";
@@ -12,7 +12,6 @@ import { ThinkingBlock } from "../../components/ThinkingBlock.tsx";
 import { ToolCallCard } from "../../components/ToolCallCard.tsx";
 import { Button } from "../../primitives/Button.tsx";
 import { Tab, TabList, TabPanel, Tabs } from "../../primitives/Tabs.tsx";
-import type { Density } from "../../tokens/density.ts";
 import type { ThemeMode } from "../../tokens/themes.ts";
 import type { NavRef } from "../../util/navModel.ts";
 import { navProjects } from "../navFixtures.ts";
@@ -53,7 +52,7 @@ const PLAN: PlanItem[] = [
 export function ShellSection({ mode }: { readonly mode: PaneMode }) {
   const paneDensity = useContext(PaneDensityContext);
   const themes: ThemeMode[] = mode === "both" ? ["dark", "light"] : [mode];
-  const densities: Density[] = paneDensity === "both" ? ["comfortable", "compact"] : [paneDensity];
+  const densities = densitiesFor(paneDensity);
   return (
     <Section
       id="shell"

@@ -21,6 +21,10 @@ export type Density = "comfortable" | "compact";
 export const DENSITIES: readonly Density[] = ["comfortable", "compact"];
 export const DEFAULT_DENSITY: Density = "comfortable";
 
+export function isDensity(v: unknown): v is Density {
+  return (DENSITIES as readonly unknown[]).includes(v);
+}
+
 const px = (n: number) => `${n}px`;
 
 /** `--ds-<key>` -> [comfortable, compact]. */
@@ -105,6 +109,3 @@ export const densityTokens: Readonly<Record<Density, Readonly<Record<DensityToke
   comfortable: Object.fromEntries(Object.entries(densityPairs).map(([k, [c]]) => [k, c])) as Record<DensityToken, string>,
   compact: Object.fromEntries(Object.entries(densityPairs).map(([k, [, c]]) => [k, c])) as Record<DensityToken, string>,
 };
-
-/** The compact values alone: what `[data-density="compact"]` overrides. */
-export const compactOverrides: Readonly<Record<DensityToken, string>> = densityTokens.compact;
