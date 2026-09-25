@@ -73,7 +73,6 @@ export const spaceNamed = {
   /** Vertical padding inside the composer's text field. */
   fieldY: 10,
 } as const;
-export type SpaceNamedKey = keyof typeof spaceNamed;
 
 export const radius = {
   none: 0,
