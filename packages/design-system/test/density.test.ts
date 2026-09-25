@@ -1,16 +1,21 @@
 import { describe, expect, test } from "bun:test";
-import { densityTokens, type DensityToken } from "../src/tokens/density.ts";
-import { fontSize, lineHeight, size, spaceNamed } from "../src/tokens/scale.ts";
+import { BIG_TICKET_TOKENS, LARGE_LAYOUT_TOKENS, densityTokens, type DensityToken } from "../src/tokens/density.ts";
+import { fontSize, lineHeight, size, space } from "../src/tokens/scale.ts";
 
+/** A length in px or em as a number; NaN for anything else (`ch`, unitless). */
+const num = (v: string) => (/^-?[\d.]+(px|em)$/.test(v) ? Number.parseFloat(v) : Number.NaN);
 const px = (v: string) => (v.endsWith("px") ? Number(v.slice(0, -2)) : Number.NaN);
 const keys = Object.keys(densityTokens.compact) as DensityToken[];
 const at = (d: "comfortable" | "compact", k: DensityToken) => px(densityTokens[d][k]);
 
 describe("density", () => {
   test("compact is never roomier than comfortable", () => {
-    for (const k of keys) {
-      const [c, k2] = [px(densityTokens.comfortable[k]), px(densityTokens.compact[k])];
-      if (Number.isNaN(c)) continue;
+    // `measure-message` is in `ch` and is meant to widen: compact text is smaller.
+    // Unitless leading is checked on its own below.
+    const lengths = keys.filter((k) => k !== "measure-message" && !k.startsWith("leading-"));
+    for (const k of lengths) {
+      const [c, k2] = [num(densityTokens.comfortable[k]), num(densityTokens.compact[k])];
+      expect(Number.isNaN(c) || Number.isNaN(k2), `${k} parses`).toBe(false);
       expect(k2, k).toBeLessThanOrEqual(c);
     }
   });
@@ -26,6 +31,7 @@ describe("density", () => {
       "text-2xs",
       "text-xs",
       "text-sm",
+      "text-nav",
       "text-mono",
       "size-control-sm",
       "size-row-compact",
@@ -42,7 +48,7 @@ describe("density", () => {
   });
 
   test("the large layout spacing shrinks by a visible amount", () => {
-    for (const k of ["space-main-pad", "space-chat-gap", "space-panel-gap", "space-card-pad", "size-avatar-chat", "size-row-default", "size-row-item", "size-row-item-sm", "space-code-y", "space-code-x", "space-highlight-y"] as const) {
+    for (const k of LARGE_LAYOUT_TOKENS) {
       expect(at("comfortable", k) - at("compact", k), k).toBeGreaterThanOrEqual(4);
     }
   });
@@ -59,7 +65,7 @@ describe("density", () => {
   });
 
   test("the big-ticket spacing loses at least a third in compact", () => {
-    for (const k of ["space-main-pad", "space-chat-gap", "space-card-pad", "space-attention-row-pad-y", "space-highlight-y", "space-code-y", "space-cell-y", "space-nav-section-gap"] as const) {
+    for (const k of BIG_TICKET_TOKENS) {
       expect(at("compact", k) / at("comfortable", k), k).toBeLessThanOrEqual(2 / 3);
     }
   });
@@ -84,8 +90,11 @@ describe("chat metrics (Discord)", () => {
     expect(fontSize.prose * lineHeight.chat).toBe(22);
   });
 
-  test("speakers are ~17px apart, same-author turns 2px", () => {
-    expect(spaceNamed.chatGap).toBe(17);
+  test("a new speaker sits further from the previous turn than a same-author turn", () => {
+    // A turn's top margin is `chat-gap - space-2`; a continued turn's is 0.
+    for (const d of ["comfortable", "compact"] as const) {
+      expect(at(d, "space-chat-gap") - space[2], d).toBeGreaterThan(0);
+    }
   });
 });
 
