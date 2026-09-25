@@ -1,19 +1,8 @@
 /**
- * Non-color scales. Values here are the **comfortable** density (the
- * default) and are emitted as `px` in CSS by `scripts/build-tokens.ts`.
- * Compact is NOT a uniform shrink of this scale: `./density.ts` lists a
- * small, explicit set of tokens that get a `[data-density="compact"]`
- * override, and everything else — most of this file — is shared by both
- * densities. See `../../README.md` ("Density") for the reasoning.
- *
- * Type follows Obsidian 1.13's defaults (system UI font; 16px text, 15/13/12
- * UI sizes, 1.5 leading, 700px readable width); the transcript follows
- * Discord's chat metrics (16/22px, 40px avatar, content column at 72px).
- * Comfortable: 15px UI body, 32px default row, 6px default radius. Compact
- * only tightens a handful of *big, structural* measurements (row height,
- * chat avatar, chat/board/main-pane spacing); text stays within 1px of
- * comfortable, icons, small control heights, badge padding and
- * hairline-scale radii do not move at all.
+ * Non-color scales, in px unless noted, at the **comfortable** density.
+ * Compact is not a uniform shrink: `./density.ts` lists the few tokens it
+ * overrides; everything else here holds in both densities. Type follows
+ * Obsidian's UI scale; the transcript follows Discord's chat metrics.
  */
 
 export const space = {
@@ -33,10 +22,7 @@ export const space = {
 } as const;
 export type SpaceStep = keyof typeof space;
 
-/**
- * Named layout spacing that does not sit on the step scale. Comfortable
- * values; `./density.ts` lists which ones compact overrides.
- */
+/** Named layout spacing that does not sit on the step scale. */
 export const spaceNamed = {
   /** Main pane padding (`apps/web` `.main`). */
   mainPad: 24,
@@ -78,11 +64,11 @@ export const radius = {
   none: 0,
   xs: 2,
   sm: 4,
-  /** Default control radius. Density-sensitive: 6 comfortable, 5 compact. */
+  /** Default control radius. */
   md: 6,
-  /** Cards. Shared. */
+  /** Cards. */
   lg: 8,
-  /** Dialogs. Shared. */
+  /** Dialogs. */
   xl: 12,
   full: 9999,
 } as const;
@@ -94,33 +80,25 @@ export const fontFamily = {
   mono: `"JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, "Liberation Mono", monospace`,
 } as const;
 
-/**
- * Sizes in px, comfortable density, on Obsidian's UI scale: `sm` 13 and
- * `xs` 12 are its "UI small / smaller", `md` 15 its "UI medium", `xl` 20
- * its "UI large", `prose` 16 its text size. Only `md` and `prose` are
- * density-sensitive (1px less in compact); the small sizes are already at
- * the floor and hold.
- */
+/** Obsidian's UI scale: `xs`/`sm` "UI smaller/small", `md` "UI medium", `xl` "UI large", `prose` its text size. */
 export const fontSize = {
-  /** Small-caps labels only. Shared. */
+  /** Small-caps labels only. */
   "2xs": 11,
-  /** Obsidian "UI smaller". Shared. */
   xs: 12,
-  /** Obsidian "UI small": nav rows, metadata. Shared. */
+  /** Nav rows, metadata. */
   sm: 13,
-  /** Sidebar rows and section labels: between Obsidian's 13px tree and Discord's 16px channels. Shared. */
+  /** Sidebar rows and section labels: between Obsidian's 13px tree and Discord's 16px channels. */
   nav: 14,
-  /** UI body. Density-sensitive: 15 comfortable, 14 compact. */
+  /** UI body. */
   md: 15,
   lg: 16,
-  /** Obsidian "UI large". */
   xl: 20,
   "2xl": 22,
   "3xl": 26,
   "4xl": 34,
-  /** Chat and document text. Density-sensitive: 16 comfortable, 15 compact. */
+  /** Chat and document text. */
   prose: 16,
-  /** Tool output, logs, diffs. Shared. */
+  /** Tool output, logs, diffs. */
   mono: 13,
 } as const;
 export type FontSizeStep = keyof typeof fontSize;
@@ -151,41 +129,31 @@ export const letterSpacing = {
   caps: "0.06em",
 } as const;
 
-/**
- * Control, row and avatar sizes, px, comfortable density. Density-sensitive
- * entries are noted; everything else is shared. `controlSm` and `rowCompact`
- * are already the smallest of their kind and hold across densities, per
- * the rule that small things do not get more compact.
- */
+/** Control, row, avatar, badge and icon sizes. */
 export const size = {
-  /** Shared: already the smallest control height. */
   controlSm: 28,
-  /** Density-sensitive: 32 comfortable, 30 compact. */
   controlMd: 32,
-  /** Density-sensitive: 36 comfortable, 34 compact. */
   controlLg: 36,
-  /** Shared: already the smallest row height (dense lists, logs). */
+  /** Dense lists, logs. */
   rowCompact: 28,
-  /** Density-sensitive: 32 comfortable, 28 compact — sidebar/nav/board rows. */
+  /** Sidebar, nav and board rows. */
   rowDefault: 32,
-  /** Density-sensitive: 40 comfortable, 36 compact — two-line rows. */
+  /** Two-line rows. */
   rowComfortable: 40,
-  /** Density-sensitive: 32 comfortable, 26 compact — sidebar work items, epics, projects; tool call rows. */
+  /** Sidebar work items, epics, projects; tool call rows. */
   rowItem: 32,
-  /** Density-sensitive: 28 comfortable, 24 compact — sidebar session rows, thought rows. */
+  /** Sidebar session rows, thought rows. */
   rowItemSm: 28,
-  /** Shared avatar sizes (nav, headers, stacks) — not the transcript avatar. */
+  /** Nav, headers, stacks — not the transcript avatar. */
   avatarXs: 16,
   avatarSm: 20,
   avatarMd: 24,
   avatarLg: 32,
-  /** Density-sensitive: 40 comfortable, 32 compact — the chat transcript's own avatar. */
+  /** The chat transcript's own avatar. */
   avatarChat: 40,
-  /** Badge, pill and chip heights. Shared: small things hold across densities. */
   badgeSm: 16,
   badgeMd: 18,
   chip: 22,
-  /** Icon sizes. Shared: icons do not shrink with density, only their ink does. */
   iconSm: 14,
   iconMd: 16,
   iconLg: 18,
@@ -226,15 +194,11 @@ export const cadence = {
   blink: 1000,
 } as const;
 
-/**
- * Reading measures for prose, comfortable density. Only `message` is
- * density-sensitive: it is in `ch`, and compact allows two more characters
- * a line; see `./density.ts`.
- */
+/** Reading measures for prose. */
 export const measure = {
-  /** Agent messages inside a transcript. Density-sensitive: 70ch comfortable, 72ch compact. */
+  /** Agent messages inside a transcript. */
   message: "70ch",
-  /** Published artifacts read in full: Obsidian's readable line width. Shared. */
+  /** Published artifacts read in full: Obsidian's readable line width. */
   document: "700px",
 } as const;
 
