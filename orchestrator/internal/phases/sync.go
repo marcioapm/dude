@@ -877,6 +877,10 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 		err = nil
 		lr.State = "resuming"
 	}
+	if le, ok := lux.AsError(err); ok && !le.Retryable() {
+		// Refused, and it would be refused again: said, not retried forever.
+		return true, s.fail(ctx, r, fmt.Sprintf("lux refused to resume the run: %s", le.Message))
+	}
 	if err != nil {
 		return true, s.retryLater(ctx, r, err)
 	}
