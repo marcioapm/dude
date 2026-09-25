@@ -11,6 +11,7 @@
 import { StrictMode, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Button, Input, ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
+import { ThemeProvider } from "@dude/design-system";
 
 import "@dude/design-system/tokens.css";
 import "@dude/design-system/base.css";
@@ -42,15 +43,15 @@ function Root() {
 
   return (
     <TooltipProvider>
-    <ToastProvider>
-      <App
-        client={client}
-        onSignOut={() => {
-          localStorage.removeItem(KEY_STORAGE);
-          setApiKey("");
-        }}
-      />
-    </ToastProvider>
+      <ToastProvider>
+        <App
+          client={client}
+          onSignOut={() => {
+            localStorage.removeItem(KEY_STORAGE);
+            setApiKey("");
+          }}
+        />
+      </ToastProvider>
     </TooltipProvider>
   );
 }
@@ -87,8 +88,12 @@ function KeyPrompt({ onSubmit }: { onSubmit: (key: string) => void }) {
 const container = document.getElementById("root");
 if (!container) throw new Error("#root is missing from index.html");
 
+// Around everything, the key prompt too: theme and density are this
+// browser's, remembered across sign-ins.
 createRoot(container).render(
   <StrictMode>
-    <Root />
+    <ThemeProvider>
+      <Root />
+    </ThemeProvider>
   </StrictMode>,
 );

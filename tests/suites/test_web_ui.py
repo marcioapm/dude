@@ -428,3 +428,25 @@ def test_an_agent_parked_on_a_repository_request_says_what_resumes_it(
     wait_until(lambda: client.get_run(implement["id"])["status"] == "completed",
                timeout=30, message="the approval did not resume the parked agent")
     assert console_errors == []
+
+
+def test_theme_and_density_are_this_browsers_and_remembered(page: Page, web_url: str, org: dict, console_errors: list):
+    """You choose how dude looks; it stays so after a reload."""
+    _sign_in(page, web_url, org["api_key"])
+    page.get_by_test_id("my-settings-button").click()
+    expect(page.get_by_test_id("my-settings")).to_be_visible()
+    html = page.locator("html")
+    expect(html).to_have_attribute("data-density", "comfortable")
+
+    page.get_by_role("combobox", name="Density").click()
+    page.get_by_role("option", name="Compact — more on screen").click()
+    expect(html).to_have_attribute("data-density", "compact")
+    page.get_by_role("combobox", name="Theme").click()
+    page.get_by_role("option", name="Light").click()
+    expect(html).to_have_attribute("data-theme", "light")
+
+    page.reload()
+    expect(page.get_by_test_id("my-settings")).to_be_visible()
+    expect(html).to_have_attribute("data-density", "compact")
+    expect(html).to_have_attribute("data-theme", "light")
+    assert console_errors == []

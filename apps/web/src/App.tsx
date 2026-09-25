@@ -21,6 +21,7 @@ import { errorText } from "./hooks/useSave.tsx";
 import { formatPlace, inTree, parsePlace, treeSelection, type Place } from "./place.ts";
 import { DeleteEpicDialog, EpicDialog, epicRef, rowActions, type Intent } from "./screens/actions.tsx";
 import { NewProjectDialog } from "./screens/NewProjectDialog.tsx";
+import { MySettingsScreen } from "./screens/MySettingsScreen.tsx";
 import { OrganizationSettingsScreen } from "./screens/OrganizationSettingsScreen.tsx";
 import { ProjectSettingsScreen } from "./screens/ProjectSettingsScreen.tsx";
 import { RunScreen } from "./screens/RunScreen.tsx";
@@ -163,7 +164,13 @@ export function App({ client, onSignOut }: AppProps) {
   );
 
   let main;
-  if (!projects) {
+  // Settings that are not a project's come first: a new organization with
+  // no projects yet still sets up its GitHub connection, and you your view.
+  if (place?.view === "orgSettings") {
+    main = <OrganizationSettingsScreen client={client} />;
+  } else if (place?.view === "mySettings") {
+    main = <MySettingsScreen />;
+  } else if (!projects) {
     main = <div className="centered"><Spinner label="Loading…" /></div>;
   } else if (projects.length === 0) {
     main = (
@@ -177,8 +184,6 @@ export function App({ client, onSignOut }: AppProps) {
         }
       />
     );
-  } else if (place?.view === "orgSettings") {
-    main = <OrganizationSettingsScreen client={client} />;
   } else if (place?.view === "projectSettings") {
     main = (
       <ProjectSettingsScreen
@@ -306,6 +311,9 @@ export function App({ client, onSignOut }: AppProps) {
             </Button>
             <Button size="sm" variant="ghost" onClick={() => go({ view: "orgSettings" })} data-testid="org-settings-button">
               Organization
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => go({ view: "mySettings" })} data-testid="my-settings-button">
+              You
             </Button>
             <Button size="sm" variant="ghost" onClick={onSignOut}>
               Sign out
