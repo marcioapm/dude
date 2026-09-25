@@ -7,9 +7,9 @@
  * documented floors on the surfaces they are drawn on, in both themes.
  *
  * Full CVD (protan/deutan) simulation and ΔE pair-distance checks are not
- * implemented anywhere in this repo (see the design-density report for
- * that gap); this test covers the WCAG contrast half, which is the part
- * that is mechanically checkable without a simulation library.
+ * implemented anywhere in this repo; this test covers the WCAG contrast
+ * half, which is the part that is mechanically checkable without a
+ * simulation library.
  */
 
 import { describe, expect, test } from "bun:test";

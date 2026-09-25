@@ -6,8 +6,8 @@
  * a ramp step directly.
  *
  * Design intent
- * - Neutrals are very slightly cool (hue 250, chroma ~0.0035 — about half
- *   the old chroma) and the text ramp is soft, Discord/Obsidian-style:
+ * - Neutrals are very slightly cool (hue 250, chroma ~0.0035, close to
+ *   grey) and the text ramp is soft, Discord/Obsidian-style:
  *   primary text sits around 11–12:1 on its surface rather than 14:1+, so
  *   primary/secondary/muted read as close, even shades rather than a
  *   bright-white-on-black spike. Every slot that carries read content still
@@ -205,8 +205,8 @@ const ROLE_HUES: Record<AgentRoleName, number> = {
 /**
  * Per-role lightness, found by search so that all 15 pairs clear CVD ΔE >= 8
  * and normal-vision ΔE >= 15 in each mode (OKLab ×100, Machado protan and
- * deutan) while every fg stays >= 4.5:1 on its surface, taking the smallest
- * total move from the previous assignment. Lightness varies on purpose: it
+ * deutan) while every fg stays >= 4.5:1 on its surface, with hues fixed and
+ * lightness moved as little as possible. Lightness varies on purpose: it
  * is what keeps violet/blue and teal/green apart under deutan simulation.
  */
 const ROLE_L: Record<"light" | "dark", Record<AgentRoleName, number>> = {

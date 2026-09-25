@@ -1,9 +1,9 @@
 /*
  * A turn, Discord-style: no box. A gutter (avatar) + a text column that
- * starts at pad-x + avatar + gap (16 + 40 + 16 = 72px comfortable). Groups
- * are separated by whitespace alone: a new author starts `--ds-space-chat-gap`
- * below the previous turn (17px comfortable, 10px compact); a turn continuing
- * the same author (`.continued`) has no header and sits 2px below. The row's
+ * starts at pad-x + avatar + gap. Groups are separated by whitespace alone:
+ * a new author starts `--ds-space-chat-gap` below the previous turn (values
+ * per density in `tokens/density.ts`); a turn continuing the same author
+ * (`.continued`) has no header and sits 2px below. The row's
  * 2px vertical padding is inside the hover wash, the group gap is outside it.
  *
  * Emphasis has exactly one pattern: a full-width tint of the tone

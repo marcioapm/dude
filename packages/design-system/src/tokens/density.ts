@@ -59,8 +59,8 @@ const densityPairs = {
   // Line pitch of a Markdown code block; mono text itself holds at 13px.
   "size-code-line": ["20px", "18px"],
 
-  // Unitless leading: compact chat text is 15px on a 20px line (was 20.6),
-  // long-form Markdown 1.4 (was 1.5). Text size itself changes by 1px at most.
+  // Unitless leading: compact chat text is 15px on a whole 20px line;
+  // long-form Markdown tightens to 1.4. Text size changes by 1px at most.
   "leading-chat": [String(lineHeight.chat), String(4 / 3)],
   "leading-prose": [String(lineHeight.prose), "1.4"],
   // Between Markdown blocks inside a chat turn.
