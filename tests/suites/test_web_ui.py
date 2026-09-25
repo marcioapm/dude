@@ -21,6 +21,14 @@ from helpers import ApiClient
 pytestmark = pytest.mark.ui
 
 
+def _toast(page: Page, text: str):
+    """A toast, by its text. Not get_by_text alone: for its first second Radix
+    also renders a hidden copy of the text for screen readers, so the text
+    matches twice and the check fails at once — only when it runs in that
+    second, which is why it failed now and then."""
+    return page.get_by_role("region", name="Notifications").get_by_role("listitem").filter(has_text=text)
+
+
 def _sign_in(page: Page, web_url: str, api_key: str) -> None:
     page.goto(web_url)
     page.evaluate("localStorage.clear()")
@@ -183,7 +191,7 @@ def test_project_settings_manage_repositories_and_delivery(
     page.get_by_role("tab", name="Delivery").click()
     page.get_by_role("checkbox", name="security").click()
     page.get_by_test_id("delivery-save").click()
-    expect(page.get_by_text("Delivery saved")).to_be_visible()
+    expect(_toast(page, "Delivery saved")).to_be_visible()
 
     project = client.get(f"/v1/projects/{forge_project['id']}").json()
     assert "docs" in [r["name"] for r in project["repositories"]]
@@ -294,7 +302,7 @@ def test_epics_are_made_ordered_and_removed_from_the_sidebar_and_board(
     expect(page.get_by_role("dialog")).to_contain_text("1 work item will stay in the project")
     page.get_by_test_id("epic-delete").click()
     expect(page.get_by_role("dialog")).to_have_count(0)
-    expect(page.get_by_text("Billing and refunds deleted")).to_be_visible()
+    expect(_toast(page, "Billing and refunds deleted")).to_be_visible()
     expect(page.get_by_role("treeitem", name="Billing and refunds")).to_have_count(0)
     assert [e["title"] for e in client.get(f"/v1/projects/{forge_project['id']}/epics").json()["epics"]] == ["Onboarding"]
     assert client.get(f"/v1/work-items/{item['id']}").json()["epicId"] is None
