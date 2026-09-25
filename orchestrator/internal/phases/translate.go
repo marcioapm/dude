@@ -124,19 +124,20 @@ func (t *translator) load(ctx context.Context, tx pgx.Tx) error {
 
 // save records what the translator holds — the reply and thought in
 // progress, the usage so far, the tool calls still running, whether the
-// agent did anything — in the batch's transaction, so it commits with the
-// cursor that has moved past the frames that produced it.
-func (t *translator) save(ctx context.Context, tx pgx.Tx) error {
+// agent did anything — with the cursor past the frames that produced it,
+// in one update in the batch's transaction. cursor "" keeps the stored one.
+func (t *translator) save(ctx context.Context, tx pgx.Tx, cursor string, afterEvent int64) error {
 	u := t.usage
 	open := slices.Sorted(maps.Keys(t.openCalls))
 	_, err := tx.Exec(ctx, `UPDATE runs SET agent_message_buffer = $2, agent_thought_buffer = $3,
 		agent_cost_usd = $4, context_tokens = $5, input_tokens = $6, output_tokens = $7,
 		cache_read_tokens = $8, cache_write_tokens = $9, open_tool_calls = $10,
 		agent_active_at = CASE WHEN $11 THEN now() ELSE agent_active_at END,
-		idle_nudged_at = CASE WHEN $11 THEN NULL ELSE idle_nudged_at END
+		idle_nudged_at = CASE WHEN $11 THEN NULL ELSE idle_nudged_at END,
+		lux_cursor = COALESCE(NULLIF($12, ''), lux_cursor), lux_after_event = GREATEST(lux_after_event, $13)
 		WHERE id = $1`,
 		t.run.ID, t.message.String(), t.thought.String(), u.cost, u.context, u.input, u.output, u.cacheRead, u.cacheWrite,
-		db.NonNil(open), t.active)
+		db.NonNil(open), t.active, cursor, afterEvent)
 	t.active = false
 	return err
 }

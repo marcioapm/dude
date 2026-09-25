@@ -592,12 +592,7 @@ func (s *Syncer) followOutput(ctx context.Context, r phaseRun) error {
 					afterEvent = max(afterEvent, f.EventID)
 				}
 			}
-			if err := t.save(ctx, tx); err != nil {
-				return err
-			}
-			_, err := tx.Exec(ctx, `UPDATE runs SET lux_cursor = COALESCE(NULLIF($2, ''), lux_cursor),
-				lux_after_event = GREATEST(lux_after_event, $3) WHERE id = $1`, r.ID, cursor, afterEvent)
-			return err
+			return t.save(ctx, tx, cursor, afterEvent)
 		}); err != nil {
 			// What was read but not recorded is read again from the saved
 			// cursor by the next follower.
@@ -984,9 +979,9 @@ func (s *Syncer) nudge(ctx context.Context, r phaseRun) error {
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
-		id := ids.New(ids.Directive)
-		if _, err := tx.Exec(ctx, `INSERT INTO directives (id, organization_id, work_item_id, run_id, text, scope, interrupt)
-			VALUES ($1, $2, $3, $4, $5, 'turn', true)`, id, r.Org, r.WorkItemID, r.ID, idleNudge); err != nil {
+		id, _, err := delivery.QueueDirective(ctx, tx, delivery.RunRef{Org: r.Org, ProjectID: r.ProjectID, WorkItemID: r.WorkItemID, RunID: r.ID},
+			delivery.Directive{Text: idleNudge, Scope: "turn", Interrupt: true})
+		if err != nil {
 			return err
 		}
 		return s.event(ctx, tx, r, evIdleNudged, ledger.ActorSystem, map[string]any{"directiveId": id})

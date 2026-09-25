@@ -7,6 +7,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -357,6 +358,26 @@ const OpenAsk = `(` + openQuestion + `
 // resumed with it.
 const HoldsTurn = `(` + openQuestion + `
 	OR EXISTS (SELECT 1 FROM repository_requests q WHERE q.run_id = r.id AND q.blocking AND q.status IN ('pending', 'approved')))`
+
+// Directive is a message queued for a Run's agent: delivered by the phase
+// syncer, acknowledged by lux when the agent takes it. Scope "run" holds for
+// the rest of the Run, "turn" for the current turn only; Supersedes names
+// the one it replaces; Interrupt stops the turn so it is heard now.
+type Directive struct {
+	Text, Scope, Supersedes string
+	Interrupt               bool
+}
+
+// QueueDirective records a directive for the Run, and returns its id and
+// when it was queued.
+func QueueDirective(ctx context.Context, tx pgx.Tx, r RunRef, d Directive) (string, time.Time, error) {
+	id := ids.New(ids.Directive)
+	var createdAt time.Time
+	err := tx.QueryRow(ctx, `INSERT INTO directives (id, organization_id, work_item_id, run_id, text, scope, supersedes, interrupt)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING created_at`,
+		id, r.Org, r.WorkItemID, r.RunID, d.Text, d.Scope, db.Nullable(d.Supersedes), d.Interrupt).Scan(&createdAt)
+	return id, createdAt, err
+}
 
 // HasOpenQuestion says whether the Run has a question waiting on a person.
 func HasOpenQuestion(ctx context.Context, tx pgx.Tx, runID string) (bool, error) {
