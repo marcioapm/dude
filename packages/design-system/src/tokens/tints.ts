@@ -14,5 +14,3 @@ export const tints = {
   /** A failed or bad-exit tool call: danger-bg over the surface. */
   failedFill: 0.7,
 } as const;
-
-export type TintName = keyof typeof tints;
