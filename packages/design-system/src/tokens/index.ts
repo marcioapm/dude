@@ -9,6 +9,7 @@ export * from "./status.ts";
 export * from "./activity.ts";
 export * from "./triage.ts";
 export * from "./density.ts";
+export * from "./tints.ts";
 export { themeColors, flattenTheme } from "./themes.ts";
 export type { ThemeMode, ThemeColors } from "./themes.ts";
 export {
@@ -57,6 +58,7 @@ export type TokenName =
   | `tracking-${keyof typeof import("./scale.ts").letterSpacing}`
   | `size-${Kebab<keyof typeof import("./scale.ts").size>}`
   | `focus-ring-${"width" | "offset"}`
+  | `tint-${Kebab<keyof typeof import("./tints.ts").tints>}`
   | "motion-live"
   | `font-${"sans" | "mono"}`
   | `color-${string}`

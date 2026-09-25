@@ -15,6 +15,7 @@
 import { describe, expect, test } from "bun:test";
 import { AGENT_ROLE_NAMES, TONE_NAMES, accent, roleColors, tones } from "../src/tokens/palette.ts";
 import { themeColors, type ThemeMode } from "../src/tokens/themes.ts";
+import { tints } from "../src/tokens/tints.ts";
 
 function luminance(hex: string): number {
   const ch = (i: number) => {
@@ -196,13 +197,14 @@ describe("filled tone buttons and emphasis ink", () => {
 });
 
 describe("text on tints", () => {
-  // Tints as the components composite them: QuestionCard's waiting wash is
-  // 9% attention-solid over the surface, the sidebar needs-you block 8%
-  // over the canvas, a failed tool card 70% danger-bg over the surface.
+  // Tints as the components composite them, from the same `tints` values
+  // the CSS reads: QuestionCard's waiting wash is attention-solid over the
+  // surface, the sidebar needs-you block attention over the canvas, a
+  // failed tool card danger-bg over the surface.
   test("the waiting question's muted clock and primary body clear 4.5:1 on its wash", () => {
     for (const mode of MODES) {
       const c = themeColors[mode];
-      const wash = mix(tones[mode].attention.solid, c.surface, 0.09);
+      const wash = mix(tones[mode].attention.solid, c.surface, tints.highlight);
       expect(contrast(c.textMuted, wash), `${mode} muted`).toBeGreaterThanOrEqual(4.5);
       expect(contrast(c.textPrimary, wash), `${mode} primary`).toBeGreaterThanOrEqual(4.5);
     }
@@ -212,7 +214,7 @@ describe("text on tints", () => {
     // Muted drops to ~4.3:1 on the light tint, so nothing inside the block uses it.
     for (const mode of MODES) {
       const c = themeColors[mode];
-      const tint = mix(tones[mode].attention.solid, c.canvas, 0.08);
+      const tint = mix(tones[mode].attention.solid, c.canvas, tints.needsYou);
       expect(contrast(c.textSecondary, tint), `${mode} secondary`).toBeGreaterThanOrEqual(4.5);
     }
   });
@@ -220,7 +222,7 @@ describe("text on tints", () => {
   test("a failed tool call's error summary (primary) and meta (muted) clear 4.5:1 on the danger fill", () => {
     for (const mode of MODES) {
       const c = themeColors[mode];
-      const fill = mix(tones[mode].danger.bg, c.surface, 0.7);
+      const fill = mix(tones[mode].danger.bg, c.surface, tints.failedFill);
       expect(contrast(c.textPrimary, fill), `${mode} primary`).toBeGreaterThanOrEqual(4.5);
       expect(contrast(c.textMuted, fill), `${mode} muted`).toBeGreaterThanOrEqual(4.5);
     }

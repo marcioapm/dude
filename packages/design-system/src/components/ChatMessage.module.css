@@ -6,31 +6,21 @@
  * the same author (`.continued`) has no header and sits 2px below. The row's
  * 2px vertical padding is inside the hover wash, the group gap is outside it.
  *
- * Emphasis has exactly one pattern: a full-width tint of the tone (~9%) and
- * a 2px bar in the tone at the left edge. Steers use it (accent). Answers
- * and task prompts are plain turns marked by their tag.
+ * Emphasis has exactly one pattern: a full-width tint of the tone
+ * (`--ds-tint-highlight`, from `tokens/tints.ts`) and a 2px bar in the tone
+ * at the left edge. Steers use it (accent). Answers and task prompts are
+ * plain turns marked by their tag. The row grid lives in `turn.module.css`.
  */
 
 .root {
-  --cm-bar: transparent;
-  --cm-wash: transparent;
-  position: relative;
-  display: grid;
-  grid-template-columns: var(--ds-size-avatar-chat) minmax(0, 1fr);
-  column-gap: var(--ds-space-chat-avatar-gap);
-  margin-top: calc(var(--ds-space-chat-gap) - var(--ds-space-2));
-  padding: var(--ds-space-2) var(--ds-space-chat-pad-x);
-  min-width: 0;
-  background: var(--cm-wash);
-  box-shadow: inset 2px 0 0 var(--cm-bar);
-  font-size: var(--ds-text-prose);
-  line-height: var(--ds-leading-chat);
-  scroll-margin-top: var(--ds-space-32);
+  composes: turn from "./turn.module.css";
+  --turn-bar: transparent;
+  --turn-wash: transparent;
 }
 .root:hover {
   background: var(--cm-wash-hover, var(--ds-color-row-hover));
 }
-.continued {
+.root.continued {
   margin-top: 0;
 }
 .new {
@@ -64,11 +54,7 @@
 }
 
 .header {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  column-gap: var(--ds-space-8);
-  min-height: calc(var(--ds-text-prose) * var(--ds-leading-chat));
+  composes: turnHeader from "./turn.module.css";
 }
 .name {
   font-size: var(--ds-text-prose);
@@ -167,9 +153,9 @@
 }
 /* steer: the operator reaching into a running turn — the highlight pattern */
 .intent-steer {
-  --cm-bar: var(--ds-color-accent);
-  --cm-wash: color-mix(in srgb, var(--ds-color-accent) 9%, transparent);
-  --cm-wash-hover: color-mix(in srgb, var(--ds-color-accent) 12%, transparent);
+  --turn-bar: var(--ds-color-accent);
+  --turn-wash: color-mix(in srgb, var(--ds-color-accent) var(--ds-tint-highlight), transparent);
+  --cm-wash-hover: color-mix(in srgb, var(--ds-color-accent) var(--ds-tint-highlight-hover), transparent);
   --cm-tag-fg: var(--ds-color-accent-text);
   --cm-tag-bg: color-mix(in srgb, var(--ds-color-accent) 16%, transparent);
 }
@@ -195,8 +181,8 @@
    channels: a dashed bar, a "Queued" mark with a clock, and a line under
    the body. The tint stays — it is still a steer — but paler. */
 .queued {
-  --cm-bar: transparent;
-  --cm-wash: color-mix(in srgb, var(--ds-color-accent) 5%, transparent);
+  --turn-bar: transparent;
+  --turn-wash: color-mix(in srgb, var(--ds-color-accent) 5%, transparent);
 }
 .queued::before {
   content: "";

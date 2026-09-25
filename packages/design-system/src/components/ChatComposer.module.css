@@ -57,6 +57,7 @@
   min-width: 0;
 }
 .option {
+  composes: choiceChip from "./turn.module.css";
   display: inline-flex;
   align-items: center;
   max-width: 260px;
@@ -72,10 +73,6 @@
   font-size: var(--ds-text-xs);
   font-weight: var(--ds-weight-medium);
   line-height: 1;
-}
-.option:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--ds-tone-attention-solid) 18%, transparent);
-  box-shadow: inset 0 0 0 1px var(--ds-tone-attention-border);
 }
 .option:focus-visible {
   outline: none;

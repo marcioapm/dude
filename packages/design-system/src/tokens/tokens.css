@@ -113,6 +113,10 @@
   --ds-z-popover: 350;
   --ds-z-toast: 400;
   --ds-z-tooltip: 500;
+  --ds-tint-highlight: 9%;
+  --ds-tint-highlight-hover: 12%;
+  --ds-tint-needs-you: 8%;
+  --ds-tint-failed-fill: 70%;
   --ds-size-code-line: 20px;
   --ds-md-gap: 0.75em;
   --ds-focus-ring-width: 2px;
