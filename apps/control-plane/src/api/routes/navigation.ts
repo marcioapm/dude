@@ -127,8 +127,14 @@ async function getNavigation(ctx: RequestContext): Promise<Response> {
       SELECT id, "workItemId", attempt, status, phase, role, category,
              -- The question an agent is waiting on: the Run is live, but
              -- blocked on a person. Open questions die with their Run.
-             (SELECT q.prompt FROM questions q WHERE q.run_id = ranked.id AND q.status = 'open'
-              ORDER BY q.asked_at DESC LIMIT 1) AS question
+             -- Or a repository it asked for, pending a person's decision.
+             COALESCE(
+               (SELECT q.prompt FROM questions q WHERE q.run_id = ranked.id AND q.status = 'open'
+                ORDER BY q.asked_at DESC LIMIT 1),
+               (SELECT CASE q.access WHEN 'write' THEN 'Change ' ELSE 'Read ' END || repo.name || '?'
+                FROM repository_requests q JOIN repositories repo ON repo.id = q.repository_id
+                WHERE q.run_id = ranked.id AND q.status = 'pending' ORDER BY q.created_at DESC LIMIT 1)
+             ) AS question
       FROM (
         SELECT r.id, r.work_item_id AS "workItemId", r.attempt, r.status, r.phase,
                r.role, r.category, r.created_at,

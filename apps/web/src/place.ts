@@ -13,7 +13,8 @@ export type Place =
   | { view: "tree"; ref: NavRef }
   | { view: "projectSettings"; projectId: string }
   | { view: "orgSettings" }
-  | { view: "mySettings" };
+  | { view: "mySettings" }
+  | { view: "inbox" };
 
 const TREE_KINDS: ReadonlyArray<NavRef["kind"]> = ["project", "epic", "workItem", "run", "session"];
 
@@ -21,6 +22,7 @@ export function parsePlace(hash: string): Place | null {
   const [kind, id, view] = hash.replace(/^#\/?/, "").split("/");
   if (kind === "org" && id === "settings") return { view: "orgSettings" };
   if (kind === "me" && id === "settings") return { view: "mySettings" };
+  if (kind === "waiting") return { view: "inbox" };
   if (!kind || !id || !TREE_KINDS.includes(kind as NavRef["kind"])) return null;
   const decoded = decodeURIComponent(id);
   if (kind === "project" && view === "settings") return { view: "projectSettings", projectId: decoded };
@@ -34,6 +36,8 @@ export function formatPlace(place: Place | null): string {
       return "#/org/settings";
     case "mySettings":
       return "#/me/settings";
+    case "inbox":
+      return "#/waiting";
     case "projectSettings":
       return `#/project/${encodeURIComponent(place.projectId)}/settings`;
     case "tree":

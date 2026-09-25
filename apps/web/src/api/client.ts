@@ -324,6 +324,20 @@ export class ApiClient {
     return this.#request("POST", `/v1/repository-requests/${encodeURIComponent(id)}/decide`, { approve, note });
   }
 
+  /** The key this browser subscribes to notifications with. */
+  pushKey(): Promise<{ publicKey: string }> {
+    return this.#request("GET", "/v1/push/key");
+  }
+
+  /** Register this browser for notifications (its PushSubscription, as JSON). */
+  subscribePush(subscription: PushSubscriptionJSON): Promise<{ subscribed: boolean }> {
+    return this.#request("POST", "/v1/push/subscriptions", subscription);
+  }
+
+  unsubscribePush(endpoint: string): Promise<void> {
+    return this.#request("POST", "/v1/push/subscriptions/remove", { endpoint });
+  }
+
   /** Finished work with nothing to merge — a write-up, a design — is done once a person has read it. */
   markDone(workItemId: string): Promise<{ status: string }> {
     return this.#request("POST", `/v1/work-items/${workItemId}/done`, {});
