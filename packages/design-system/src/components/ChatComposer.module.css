@@ -16,9 +16,6 @@
 .answer {
   --cc-tint: var(--ds-tone-attention-solid);
 }
-.steer {
-  --cc-tint: var(--ds-color-accent);
-}
 .disabled {
   --cc-tint: var(--ds-color-border-subtle);
 }
