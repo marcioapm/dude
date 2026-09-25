@@ -52,6 +52,9 @@ type Behaviour struct {
 	Hang bool
 	// Exit instead of going idle, as a crashed agent does.
 	Crash bool
+	// Exit right after finishing the turn, as a container stopped from
+	// outside would: done, but no longer running when dude looks.
+	ExitAfterTurn bool
 	// Ask a person with dude's ask_person tool (these are its JSON
 	// arguments) and end the first turn there; do the rest (Reply, Commit)
 	// in the turn the answer starts.
@@ -391,6 +394,10 @@ func (s *Server) turn(run *Run) {
 		"inputTokens": 12, "outputTokens": 34, "totalTokens": 1046, "cachedReadTokens": 900, "cachedWriteTokens": 100}})
 	s.recordEvent(run, "lux.activity", map[string]any{"activity": "idle"})
 	run.busy = false
+	if b.ExitAfterTurn {
+		s.setState(run, "failed")
+		return
+	}
 	s.deliverQueued(run)
 }
 

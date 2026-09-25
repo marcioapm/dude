@@ -85,6 +85,8 @@ type phaseRun struct {
 	PushRequestID                                          string
 	// Where this Run's work is pushed; "" for one that pushes nothing.
 	PushBranch string
+	// The lux Run holds a repository it may push (runs.lux_pushes).
+	HoldsPushable bool
 	// Per repository name: the commit this phase was asked to start from,
 	// and the one each checkout really started from (lux's git.checkout).
 	BaseRefs, BaseSHAs      map[string]string
@@ -116,7 +118,7 @@ type phaseRun struct {
 const runColumns = `r.id, r.organization_id, r.project_id, r.work_item_id, r.phase::text, r.status::text, r.control::text,
 	COALESCE(r.category, ''),
 	COALESCE(r.lux_run_id, ''), COALESCE(r.lux_state, ''), COALESCE(r.lux_stop_reason, ''),
-	COALESCE(r.push_request_id, ''), COALESCE(r.push_branch, ''), r.base_refs, r.base_shas, r.turn_done_at IS NOT NULL,
+	COALESCE(r.push_request_id, ''), COALESCE(r.push_branch, ''), cardinality(r.lux_pushes) > 0, r.base_refs, r.base_shas, r.turn_done_at IS NOT NULL,
 	EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL),
 	EXISTS (SELECT 1 FROM repository_requests q JOIN repositories repo ON repo.id = q.repository_id
 	        WHERE q.run_id = r.id AND q.status = 'approved' AND NOT (repo.name = ANY (r.lux_repositories))),
@@ -174,7 +176,7 @@ func scan(row pgx.Row) (phaseRun, error) {
 	var r phaseRun
 	err := row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.WorkItemID, &r.Phase, &r.Status, &r.Control,
 		&r.Category, &r.LuxRunID, &r.LuxState, &r.LuxStopReason,
-		&r.PushRequestID, &r.PushBranch, &r.BaseRefs, &r.BaseSHAs, &r.TurnDone, &r.HasDirectives, &r.RepoApproved,
+		&r.PushRequestID, &r.PushBranch, &r.HoldsPushable, &r.BaseRefs, &r.BaseSHAs, &r.TurnDone, &r.HasDirectives, &r.RepoApproved,
 		&r.DudePause, &r.Waiting, &r.ParkNow, &r.Resumable, &r.Quiet, &r.Nudged, &r.QuietSince,
 		&r.PushResult, &r.PRFeedback, &r.FindingIDs, &r.BlockingSeverities, &r.Attempt)
 	return r, err
@@ -285,6 +287,9 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 // submit builds the Run's spec and hands it to lux.
 func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 	spec, err := s.spec(ctx, r)
+	if errors.As(err, new(errForge)) {
+		return s.retryLater(ctx, r, err)
+	}
 	if err != nil {
 		return s.fail(ctx, r, "cannot build the run: "+err.Error())
 	}
@@ -298,19 +303,23 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 		// Guarded on still being pending: an abort that raced the submit wins,
 		// and the sweep then cancels the lux Run it made.
 		var pushBranch string
-		var repos []string
+		var repos, pushes []string
 		if spec.Git != nil {
 			if spec.Git.Push != nil {
 				pushBranch = spec.Git.Push.Branch
 			}
 			for _, repo := range spec.Git.Repositories {
 				repos = append(repos, repo.Name)
+				if repo.Push == nil || *repo.Push {
+					pushes = append(pushes, repo.Name)
+				}
 			}
 		}
 		tag, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, next_attempt_at = NULL,
-			harness = $4, model = $5, push_branch = NULLIF($6, ''), lux_repositories = $7,
+			harness = $4, model = $5, push_branch = NULLIF($6, ''), lux_repositories = $7, lux_pushes = $8,
 			status = CASE WHEN status = 'pending' THEN 'scheduled'::run_status ELSE status END
-			WHERE id = $1`, r.ID, lr.ID, lr.State, spec.Labels["dude.harness"], spec.Labels["dude.model"], pushBranch, db.NonNil(repos))
+			WHERE id = $1`, r.ID, lr.ID, lr.State, spec.Labels["dude.harness"], spec.Labels["dude.model"], pushBranch,
+			db.NonNil(repos), db.NonNil(pushes))
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
@@ -410,9 +419,16 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 	if delivery.Publishes[r.Phase] {
 		in.PushBranch = runBranch(r)
 	}
-	if gh, err := s.Forges.For(ctx, r.Org); err == nil && gh != nil {
+	// A forge that cannot be read now is asked again, not left out: a spec
+	// without its token would clone nothing, and a resume without it is
+	// refused by lux for good.
+	gh, err := s.Forges.For(ctx, r.Org)
+	if err != nil {
+		return lux.Spec{}, errForge{err}
+	}
+	if gh != nil {
 		if in.ForgeToken, err = gh.Token(); err != nil {
-			return lux.Spec{}, err
+			return lux.Spec{}, errForge{err}
 		}
 	}
 	if s.Agent.ToolsURL != "" {
@@ -595,10 +611,10 @@ func (s *Syncer) followOutput(ctx context.Context, r phaseRun) error {
 // Idempotent end to end: each piece is recorded before the next is asked
 // for, so a restart resumes the sequence.
 func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
-	// Pushed whenever it names a branch: lux pushes each repository it may
-	// change and reports the rest skipped, so what it answers is what the
-	// phase produced — possibly nothing.
-	pushes := r.PushBranch != ""
+	// Pushed when it names a branch and holds a repository it may push —
+	// as lux was told, at submit or as a resume added one. Work on nothing
+	// it may change publishes only what it wrote for people.
+	pushes := r.PushBranch != "" && r.HoldsPushable
 	if pushes && r.PushResult == nil {
 		// Only a state lux has already reported as over rules the push out.
 		// Anything else is asked of lux itself: its lifecycle events trail
@@ -848,6 +864,9 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 		return false, nil
 	}
 	spec, err := s.spec(ctx, r)
+	if errors.As(err, new(errForge)) {
+		return true, s.retryLater(ctx, r, err)
+	}
 	if err != nil {
 		return true, s.fail(ctx, r, "cannot resume: "+err.Error())
 	}
@@ -1135,6 +1154,13 @@ const (
 	evUnparked   = "run.unparked"
 	evIdleNudged = "run.idle_nudged"
 )
+
+// errForge: the forge's credentials could not be read. Passing, and asked
+// again, rather than the Run built without them.
+type errForge struct{ err error }
+
+func (e errForge) Error() string { return "reading the forge's credentials: " + e.err.Error() }
+func (e errForge) Unwrap() error { return e.err }
 
 // errRetry ends a step that will be tried again after a back-off.
 var errRetry = errors.New("retrying later")
