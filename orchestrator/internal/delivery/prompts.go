@@ -34,7 +34,14 @@ type PromptInput struct {
 	Tools bool
 	// It also has the dude CLI (lux serves dude's tools in the container).
 	CLI bool
+	// What people decided while this work was delivered: agents' questions
+	// and their answers. Part of the task from then on, for every phase.
+	Decisions []Decision
 }
+
+// Decision is a question an agent asked about this work, and a person's
+// answer.
+type Decision struct{ Question, Answer string }
 
 // PromptRepo is a repository as the agent is told about it.
 type PromptRepo struct {
@@ -82,8 +89,19 @@ func (in PromptInput) task() string {
 		}
 		parts = append(parts, b.String())
 	}
+	if len(in.Decisions) > 0 {
+		var b strings.Builder
+		b.WriteString("Decided by people during this work (part of the task; do not ask again):")
+		for _, d := range in.Decisions {
+			fmt.Fprintf(&b, "\n- Q: %s\n  A: %s", oneLine(d.Question), oneLine(d.Answer))
+		}
+		parts = append(parts, b.String())
+	}
 	return strings.Join(parts, "\n\n")
 }
+
+// oneLine keeps a decision on its line: its own line breaks become spaces.
+func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 // What each reviewer flavour looks for. Narrow on purpose: a reviewer told to
 // "look for problems" finds the same generic ones every time, and one told to

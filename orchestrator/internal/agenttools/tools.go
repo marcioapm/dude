@@ -40,7 +40,8 @@ var tools = []tool{
 		"data like {\"done\": 3, \"of\": 10, \"step\": \"tests\"}), a milestone, a measurement. It shows in "+
 		"your chat and the run's events.", nil, emitEvent),
 	define("list_repositories", "The project's repositories: which this work has checked out (and whether it may "+
-		"change them), and which it could ask for with request_repository.", nil, listRepositories),
+		"change them), and which it could ask for with request_repository. Not for waiting on a request: you are "+
+		"told when one is decided.", nil, listRepositories),
 	define("request_repository", "Ask for another of the project's repositories when this work needs it — "+
 		"to read code this depends on, or (an implementer) to change it too. A person decides; carry on meanwhile.",
 		nil, requestRepository),
@@ -339,8 +340,10 @@ func requestRepository(ctx context.Context, tx pgx.Tx, c Caller, in requestRepoI
 		map[string]any{"requestId": id, "repository": repo.Name, "repositoryId": repo.ID, "access": access, "reason": reason})); err != nil {
 		return requestRepoOut{}, err
 	}
-	return requestRepoOut{RequestID: id, Status: "pending", Next: "Carry on with what you can. If a person approves, " +
-		"you will be paused briefly and resumed with " + repo.Name + " checked out, and told where; if not, you will be told."}, nil
+	return requestRepoOut{RequestID: id, Status: "pending", Next: "Do not wait or check for it: a person may take " +
+		"a while. Carry on with what you can without " + repo.Name + ". If they approve, you will be paused and " +
+		"resumed with it checked out, and told where, in a message; if not, a message will say so. If you cannot " +
+		"go on without it, end your turn."}, nil
 }
 
 // ---- list_repositories ----------------------------------------------------
