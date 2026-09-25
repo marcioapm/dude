@@ -88,9 +88,6 @@
   gap: var(--ds-space-4);
   font-size: var(--ds-text-xs);
   white-space: nowrap;
-}
-.wait,
-.waited {
   color: var(--ds-color-text-muted);
 }
 
