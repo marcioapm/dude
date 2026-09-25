@@ -238,6 +238,7 @@ export function flattenTheme(mode: ThemeMode): Record<string, string> {
     out[`tone-${t}-border`] = tone.border;
     out[`tone-${t}-solid`] = tone.solid;
     out[`tone-${t}-on-solid`] = tone.onSolid;
+    out[`tone-${t}-mark`] = tone.mark;
   }
   for (const r of AGENT_ROLE_NAMES) {
     const rc = roleColors[mode][r];

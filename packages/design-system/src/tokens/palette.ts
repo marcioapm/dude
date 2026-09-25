@@ -75,6 +75,7 @@ export const black = "#000000";
 //   border   hairline for outlined treatments
 //   solid    vivid fill for "loud" treatments; carries `onSolid` text
 //   onSolid  text on `solid`
+//   mark     fill of a text-free status mark (dot, diamond, square)
 //
 // Lightness is deliberately different between success and danger in each
 // mode so the two are separable under protan/deutan simulation even before
@@ -90,6 +91,8 @@ export interface ToneInstance {
   readonly border: string;
   readonly solid: string;
   readonly onSolid: string;
+  /** Fill of a text-free status mark (dot, diamond, square): >= 3:1 on canvas and surface, at full hue. */
+  readonly mark: string;
 }
 
 interface ToneSpec {
@@ -127,6 +130,22 @@ const LIGHT_L: Record<ToneName, { fg: number; bg: number; border: number; solid:
   danger: { fg: 0.4, bg: 0.95, border: 0.82, solid: 0.58 },
 };
 
+/**
+ * Light-mode status marks. The light fg is dark enough for body text, and
+ * at 8px that reads as olive (attention) or near-black (danger, info), so
+ * marks take a lighter step at the tone's own hue that still clears 3:1
+ * (non-text contrast) on the canvas. Attention shifts to hue 70 because
+ * hue 78 at this lightness falls out of sRGB gamut into olive. Dark marks
+ * use the dark fg, which is already bright and saturated.
+ */
+const LIGHT_MARK: Record<ToneName, { l: number; hue?: number }> = {
+  neutral: { l: 0.5 },
+  info: { l: 0.55 },
+  attention: { l: 0.64, hue: 70 },
+  success: { l: 0.58 },
+  danger: { l: 0.58 },
+};
+
 function tone(name: ToneName, mode: "light" | "dark"): ToneInstance {
   const { hue, chroma } = TONE_HUES[name];
   const L = mode === "dark" ? DARK_L[name] : LIGHT_L[name];
@@ -135,8 +154,11 @@ function tone(name: ToneName, mode: "light" | "dark"): ToneInstance {
   const solid: Oklch = oklch(L.solid, name === "neutral" ? chroma : chroma, hue);
   // Text on the solid fill: black on bright fills, white on deep fills.
   const onSolid = L.solid >= 0.68 ? black : white;
+  const fg = toHex(oklch(L.fg, chroma, hue));
+  const lm = LIGHT_MARK[name];
   return {
-    fg: toHex(oklch(L.fg, chroma, hue)),
+    fg,
+    mark: mode === "dark" ? fg : toHex(oklch(lm.l, chroma, lm.hue ?? hue)),
     bg: toHex(oklch(L.bg, bgChroma, hue)),
     border: toHex(oklch(L.border, borderChroma, hue)),
     solid: toHex(solid),
