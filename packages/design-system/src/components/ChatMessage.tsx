@@ -184,7 +184,7 @@ export function ChatMessage({
         {continued ? (
           ts ? (
             <time className={styles["gutterTime"]} dateTime={ts.toISOString()} aria-hidden>
-              {formatTimestamp(ts, "time").slice(0, 5)}
+              {formatTimestamp(ts, "time-short")}
             </time>
           ) : null
         ) : (
