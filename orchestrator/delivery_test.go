@@ -542,6 +542,7 @@ func TestAnAgentIsGivenDudesToolsAsItsOwnRun(t *testing.T) {
 	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
 	t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL = "http://10.9.8.7:3120/mcp"
+	w.syncer.Agent.ToolsService = true
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
 	wi := w.workItem()
 	w.deliver(wi)
@@ -549,9 +550,15 @@ func TestAnAgentIsGivenDudesToolsAsItsOwnRun(t *testing.T) {
 
 	var spec lux.Spec
 	_ = json.Unmarshal(w.lux.Runs()[0].Spec, &spec)
-	if len(spec.Workload.MCPServers) != 1 || spec.Workload.MCPServers[0].URL != "http://10.9.8.7:3120/mcp" ||
-		spec.Workload.MCPServers[0].Headers[0].Secret != "DUDE_TOOLS_AUTH" {
-		t.Fatalf("mcp servers = %+v", spec.Workload.MCPServers)
+	// Served by lux inside the container, which adds the token: the MCP
+	// server names the service, and carries no header of its own.
+	if len(spec.Workload.Services) != 1 || spec.Workload.Services[0].URL != "http://10.9.8.7:3120/mcp" ||
+		spec.Workload.Services[0].Headers[0].Secret != "DUDE_TOOLS_AUTH" || !spec.Workload.Services[0].Loopback {
+		t.Fatalf("services = %+v", spec.Workload.Services)
+	}
+	if len(spec.Workload.MCPServers) != 1 || spec.Workload.MCPServers[0].Service != "dude" ||
+		spec.Workload.MCPServers[0].URL != "" || len(spec.Workload.MCPServers[0].Headers) != 0 {
+		t.Fatalf("mcp servers = %+v, want the service, no url or headers", spec.Workload.MCPServers)
 	}
 	var auth string
 	for _, s := range spec.Secrets {

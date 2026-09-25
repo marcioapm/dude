@@ -200,19 +200,17 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 	}
 
 	if c.ToolsURL != "" && in.ToolsToken != "" {
-		// dude's own tools, authenticated as this Run. The token is a secret:
-		// lux never stores or logs it. Through the service socket the
-		// container never holds it; for MCP, lux hands it to the agent's
-		// harness, whose process does (a known gap: it is good only for this
-		// Run's tools, in this project, until the Run next starts or ends).
-		// The same server twice: as MCP for the agent's own tool calls, and
-		// as a local service for the dude CLI (and anything else in the
-		// container), which never sees the token.
-		dude := lux.Service{Name: "dude", URL: c.ToolsURL,
-			Headers: []lux.Header{{Name: "Authorization", Secret: "DUDE_TOOLS_AUTH"}}}
-		spec.Workload.MCPServers = []lux.Service{dude}
+		// dude's own tools, as this Run. lux serves them inside the container
+		// — a socket for the dude CLI, loopback for the agent's MCP client —
+		// and adds the Run's token on the way out: nothing in the container
+		// ever holds it (lux d73b38c). DUDE_TOOLS_SERVICE=off, for a lux
+		// without services, falls back to handing the header to the harness.
+		auth := []lux.Header{{Name: "Authorization", Secret: "DUDE_TOOLS_AUTH"}}
 		if c.ToolsService {
-			spec.Workload.Services = []lux.Service{dude}
+			spec.Workload.Services = []lux.Service{{Name: "dude", URL: c.ToolsURL, Headers: auth, Loopback: true}}
+			spec.Workload.MCPServers = []lux.Service{{Name: "dude", Service: "dude"}}
+		} else {
+			spec.Workload.MCPServers = []lux.Service{{Name: "dude", URL: c.ToolsURL, Headers: auth}}
 		}
 		spec.Secrets = append(spec.Secrets, lux.Secret{Name: "DUDE_TOOLS_AUTH", Value: "Bearer " + in.ToolsToken})
 	}
