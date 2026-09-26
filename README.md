@@ -168,6 +168,16 @@ network, no containers and no token. `--lux` runs the same flows against a
 real lux (the latest `run_tests.py --serve` in lux's repository, or
 `DUDE_TEST_LUX_ENV`), so a drift between the stand-in and lux shows up.
 
+## Releases
+
+`VERSION=vX.Y.Z bun run dist` (`scripts/dist.sh`, needs Go, Bun and GNU
+tar) builds `dist/dude_<version>_linux_{arm64,amd64}.tar.gz` and
+`SHA256SUMS` over them. Each holds `bin/{dude-orchestrator,dude,dude-backend,dude-migrate}`
+and `share/dude/{web,migrations}`; unpack it into a prefix. The Go binaries
+are static; the Bun ones are `bun build --compile` and need glibc. Every
+binary answers `--version`. The tarballs are reproducible: the same commit
+builds the same bytes.
+
 ## Status
 
 Against the plan's self-hosting order (§81):

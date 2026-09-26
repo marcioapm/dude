@@ -9,18 +9,23 @@
  *   bun run src/db/migrate.ts --status         # list applied/pending
  *
  * DUDE_MIGRATIONS_DIR names the directory of .sql files; by default, the
- * repository's migrations/.
+ * repository's migrations/, or in a release binary (bin/dude-migrate)
+ * ../share/dude/migrations beside it.
  */
 
+import { realpathSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { SQL } from "bun";
 import { createHash } from "node:crypto";
-
-const REPO_MIGRATIONS_DIR = join(import.meta.dir, "../../../../migrations");
+import { isRelease, version } from "../build.ts";
 
 export function migrationsDir(): string {
-  return process.env.DUDE_MIGRATIONS_DIR || REPO_MIGRATIONS_DIR;
+  if (process.env.DUDE_MIGRATIONS_DIR) return process.env.DUDE_MIGRATIONS_DIR;
+  // Resolved through symlinks, so a bin/ linked from elsewhere still finds
+  // the release it belongs to.
+  if (isRelease) return join(dirname(realpathSync(process.execPath)), "../share/dude/migrations");
+  return join(import.meta.dir, "../../../../migrations");
 }
 
 export interface MigrationFile {
@@ -137,6 +142,10 @@ async function status(databaseUrl: string): Promise<void> {
 }
 
 if (import.meta.main) {
+  if (process.argv.includes("--version")) {
+    console.log(version);
+    process.exit(0);
+  }
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
     console.error("DATABASE_URL is required");
