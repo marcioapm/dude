@@ -73,9 +73,11 @@ func (s *Syncer) Sync(ctx context.Context, org, prID string) error {
 		return err
 	}
 	// No CI reports unknown, and so does a new head before CI has
-	// registered on it. A pull request that has had CI has CI: unknown on
-	// it is CI yet to start, not a green light.
-	if status.Checks == forge.ChecksUnknown && pr.Checks != forge.ChecksUnknown {
+	// registered on it: on the first sight of a new head of a pull request
+	// that has had CI, unknown is CI yet to start, not a green light. Seen
+	// again on the same head it is what it says — a commit CI skips (path
+	// filters, [skip ci]) — or the pull request would wait on it forever.
+	if status.Checks == forge.ChecksUnknown && pr.Checks != forge.ChecksUnknown && status.HeadSHA != pr.HeadSHA {
 		status.Checks = forge.ChecksPending
 	}
 	since := ""

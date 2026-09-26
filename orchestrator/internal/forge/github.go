@@ -265,29 +265,39 @@ func (g *GitHub) PullRequest(ctx context.Context, slug string, number int) (Stat
 	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/commits/%s/status", slug, p.Head.SHA), nil, &combined); err != nil {
 		return Status{}, err
 	}
-	var runs struct {
-		TotalCount int `json:"total_count"`
-		CheckRuns  []struct {
-			Status     string `json:"status"`
-			Conclusion string `json:"conclusion"`
-		} `json:"check_runs"`
-	}
-	// A token without Checks: read is refused (403), and GitHub
-	// Enterprise without Actions has no such endpoint (404): no check runs
-	// to read, which is no reason to stop reading the rest.
-	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/commits/%s/check-runs?per_page=100", slug, p.Head.SHA), nil, &runs); err != nil {
-		var e *Error
-		if !asError(err, &e) || e.Status != 403 && e.Status != 404 {
+	checks := checkState(combined.State, combined.TotalCount)
+	// Every page: a matrix build has more runs than one holds, and the
+	// failing one may be on the last. A token without Checks: read is
+	// refused (403), and GitHub Enterprise without Actions has no such
+	// endpoint (404): no check runs to read, which is no reason to stop
+	// reading the rest.
+	for page, seen := 1, 0; ; page++ {
+		var runs struct {
+			TotalCount int `json:"total_count"`
+			CheckRuns  []struct {
+				Status     string `json:"status"`
+				Conclusion string `json:"conclusion"`
+			} `json:"check_runs"`
+		}
+		err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/commits/%s/check-runs?per_page=100&page=%d", slug, p.Head.SHA, page), nil, &runs)
+		if err != nil {
+			var e *Error
+			if asError(err, &e) && (e.Status == 403 || e.Status == 404) {
+				break
+			}
 			return Status{}, err
+		}
+		for _, r := range runs.CheckRuns {
+			checks = worseChecks(checks, checkRunState(r.Status, r.Conclusion))
+		}
+		seen += len(runs.CheckRuns)
+		if len(runs.CheckRuns) == 0 || seen >= runs.TotalCount {
+			break
 		}
 	}
 	var reviews []ghReview
 	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d/reviews", slug, number), nil, &reviews); err != nil {
 		return Status{}, err
-	}
-	checks := checkState(combined.State, combined.TotalCount)
-	for _, r := range runs.CheckRuns {
-		checks = worseChecks(checks, checkRunState(r.Status, r.Conclusion))
 	}
 	return Status{PullRequestRef: p.ref(), Checks: checks, Review: reviewState(reviews)}, nil
 }

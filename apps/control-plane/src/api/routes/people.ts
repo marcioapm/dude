@@ -13,12 +13,14 @@ import { json } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 /**
- * The SELECT expression for a task's owner, `{id, name}` or null, for `tasks`
- * rows. A revoked key can no longer answer, so its task is nobody's — as the
- * orchestrator sees it too.
+ * The SELECT expression for a task's owner, `{id, name}` or null, for the
+ * `tasks` rows under `alias`. A revoked key can no longer answer, so its task
+ * is nobody's — as the orchestrator sees it too.
  */
-export const OWNER_JSON = `(SELECT json_build_object('id', k.id, 'name', k.name) FROM api_keys k
-  WHERE k.id = tasks.owner_key_id AND k.revoked_at IS NULL) AS owner`;
+export function ownerJson(alias = "tasks"): string {
+  return `(SELECT json_build_object('id', k.id, 'name', k.name) FROM api_keys k
+  WHERE k.id = ${alias}.owner_key_id AND k.revoked_at IS NULL) AS owner`;
+}
 
 /** Whether a key is one of the organization's people: a user key, not revoked. */
 export async function isPerson(scope: OrgScope, keyId: string): Promise<boolean> {

@@ -15,7 +15,7 @@ import { appendInScope } from "../../events/ledger.ts";
 import { badRequest, conflict, json, noContent, notFound, parseBody } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
 import { REPOSITORIES_JSON, setTaskRepositories, taskRepositoriesInput } from "./taskRepositories.ts";
-import { isPerson, OWNER_JSON } from "./people.ts";
+import { isPerson, ownerJson } from "./people.ts";
 
 const REPOSITORY_SELECT = `id, project_id AS "projectId", name, url, default_branch AS "defaultBranch", trust,
   created_at AS "createdAt"`;
@@ -321,7 +321,7 @@ async function updateTask(ctx: RequestContext): Promise<Response> {
         updated_at = now()
       WHERE id = ${id}
       RETURNING id, project_id AS "projectId", epic_id AS "epicId", ${scope.sql.unsafe(REPOSITORIES_JSON)}, title, goal,
-        acceptance_criteria AS "acceptanceCriteria", status, ${scope.sql.unsafe(OWNER_JSON)},
+        acceptance_criteria AS "acceptanceCriteria", status, ${scope.sql.unsafe(ownerJson())},
         updated_at AS "updatedAt"`) as Array<Record<string, unknown>>;
     if (Object.keys(input).length > 0) await record(scope, ctx, EventTypes.TaskUpdated, projectId, { ...input }, id);
     // Its own event: who drives a task is not what it asks for, and the
