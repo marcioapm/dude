@@ -11,15 +11,18 @@ A GitHub Release per `v*` tag holds:
 | Asset | What it is |
 | --- | --- |
 | `dude_<version>_linux_arm64.tar.gz`, `…_amd64.tar.gz` | The binaries and their data, below |
-| `runtime-image.txt` | One line, `ghcr.io/marcioapm/dude-runtime@sha256:…`: the agent image built from the same commit, for arm64 and amd64 |
-| `SHA256SUMS` | `sha256sum` output over the tarballs and `runtime-image.txt` |
+| `SHA256SUMS` | `sha256sum` output over the tarballs |
 
 Unpack the tarball into a prefix ([layout](../README.md#releases)).
 `dude-migrate` carries its migrations inside itself; it reads no SQL from
 disk.
 
-Agents run the image in `runtime-image.txt`: set `DUDE_AGENT_IMAGE` to it.
-A project's own `runtimeImage` overrides it for that project.
+A release holds no agent image. `DUDE_AGENT_IMAGE` is the operator's own:
+any registry lux's runners can pull from, pinned by digest
+(`registry.example/agents@sha256:…`). A project's own `runtimeImage`
+overrides it for that project. [`images/runtime/Dockerfile`](../images/runtime/Dockerfile)
+is a starting point; it needs the release's `dude` CLI, which
+`scripts/runtime-image.sh` builds before a local `docker build`.
 
 ## Processes
 
@@ -70,8 +73,9 @@ mode.
    what is new, each file in a transaction, and is safe to run again. It
    refuses a migration whose file changed after it was applied.
    `dude-migrate --status` lists applied and pending migrations.
-3. Switch to the new release and set `DUDE_AGENT_IMAGE` to the new
-   `runtime-image.txt`, then restart `dude-orchestrator` and `dude-backend`.
+3. Switch to the new release and, if the agent image was rebuilt with the
+   new `dude` CLI, set `DUDE_AGENT_IMAGE` to its digest; then restart
+   `dude-orchestrator` and `dude-backend`.
    A Run that has started keeps its image across resumes.
 
 Between steps 2 and 3 the old processes run against the new schema.
@@ -90,7 +94,7 @@ others can read.
 | `DUDE_ORCHESTRATOR_LISTEN` | `127.0.0.1:3100` | Internal API address. |
 | `LUX_URL` | required | The lux control plane. |
 | `LUX_API_KEY` | required | A lux API key with the `run` scope. **Secret.** |
-| `DUDE_AGENT_IMAGE` | `localhost/dude-runtime:dev` | Image for agents when a project names none: the release's `runtime-image.txt`. |
+| `DUDE_AGENT_IMAGE` | `localhost/dude-runtime:dev` | Image for agents when a project names none: the operator's own, pinned by digest. |
 | `DUDE_OPENCODE_AUTH` | `~/.local/share/opencode/auth.json` | OpenCode's `auth.json`: a path to it, or its contents. Given to agents as a file secret. **Secret.** |
 | `DUDE_OPENCODE_CONFIG` | `~/.config/opencode/opencode.json` | OpenCode's config, path or contents; only its `provider` object is used. Its providers' `baseURL` hosts become agents' allowed egress. **Secret** if it holds keys. |
 | `DUDE_AGENT_EGRESS` | none | Comma-separated hosts agents may reach besides their model provider; `*` turns egress filtering off. With neither this nor a provider `baseURL`, egress is unrestricted. |

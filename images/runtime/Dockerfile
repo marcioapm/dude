@@ -8,9 +8,9 @@
 # whatever the image had under /home/agent, so nothing the agent needs to
 # *run* may live there — OpenCode and git's identity are installed system-wide.
 #
-#   scripts/runtime-image.sh -t dude-runtime:dev
+#   scripts/runtime-image.sh dude-runtime:dev
 #
-# That script builds the dude CLI for each target platform into bin/ first.
+# That script builds the dude CLI for the target architecture into bin/ first.
 
 FROM debian:bookworm-slim
 # Set by BuildKit (docker build, buildx) and by podman build.

@@ -91,7 +91,7 @@ A lux, the orchestrator, the backend and the web app.
 # 1. A lux to run agents on: two Podman hosts, a tenant and an API key
 (cd ~/git/lux/tests && uv run python run_tests.py --serve --detach \
     --image dude-runtime:dev)       # prints luxd_url and api_key
-scripts/runtime-image.sh -t dude-runtime:dev   # first, so --image can load it
+scripts/runtime-image.sh dude-runtime:dev     # first, so --image can load it
 
 # 2. The orchestrator: all background work, no users
 DATABASE_URL="postgres://dude_app:dude_app@localhost:5433/dude" \
@@ -180,12 +180,11 @@ binary answers `--version`. The tarballs are reproducible: the same commit
 builds the same bytes.
 
 `.github/workflows/release.yml` runs on every `v*` tag. It builds the
-tarballs, then builds `images/runtime` for linux/arm64 and linux/amd64
-(`scripts/runtime-image.sh`, which builds the `dude` CLI for each platform
-first), and pushes it to `ghcr.io/marcioapm/dude-runtime:<tag>`. It
-publishes the tarballs, `runtime-image.txt` (the pushed manifest list by
-digest, `ghcr.io/marcioapm/dude-runtime@sha256:…`) and `SHA256SUMS` over
-all of them as a GitHub Release.
+tarballs, smoke-tests the amd64 one (`scripts/smoke-release.sh`), and
+publishes the tarballs and `SHA256SUMS` as a GitHub Release. It builds no
+image: agents run an image the operator builds and hosts, for which
+`images/runtime` is an example (`scripts/runtime-image.sh [tag]` builds the
+`dude` CLI, then the image, locally).
 
 Deploying a release — its layout, every setting, the database roles and the
 order of an upgrade — is in [`docs/operations.md`](docs/operations.md).
