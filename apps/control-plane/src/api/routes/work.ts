@@ -14,13 +14,14 @@ import { appendInScope } from "../../events/ledger.ts";
 import { badRequest, conflict, json, notFound, parseBody } from "../http.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
 import { REPOSITORIES_JSON, setTaskRepositories, taskRepositoriesInput } from "./taskRepositories.ts";
+import { OWNER_JSON } from "./people.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 const TASK_SELECT = `
   id, organization_id AS "organizationId", project_id AS "projectId", epic_id AS "epicId", ${REPOSITORIES_JSON},
   title, goal, acceptance_criteria AS "acceptanceCriteria", status,
   (SELECT key_prefix FROM projects p WHERE p.id = tasks.project_id) || '-' || number AS key, -- see navigation.ts
-  requested_by AS "requestedBy", created_at AS "createdAt", updated_at AS "updatedAt"`;
+  requested_by AS "requestedBy", ${OWNER_JSON}, created_at AS "createdAt", updated_at AS "updatedAt"`;
 
 const RUN_SELECT = `
   id, organization_id AS "organizationId", project_id AS "projectId",
@@ -68,12 +69,13 @@ async function createTask(ctx: RequestContext): Promise<Response> {
     if (project.length === 0) return { missingProject: true as const };
 
     const taskId = newId("task");
+    // Whoever creates it drives it until they hand it to someone.
     await scope.sql`
       INSERT INTO tasks (id, organization_id, project_id, number, epic_id, title, goal,
-                              acceptance_criteria, status)
+                              acceptance_criteria, status, owner_key_id)
       VALUES (${taskId}, ${organizationId}, ${input.projectId}, ${project[0]!.number}, ${input.epicId},
               ${input.title}, ${input.goal},
-              ${input.acceptanceCriteria ?? []}::jsonb, 'received')`;
+              ${input.acceptanceCriteria ?? []}::jsonb, 'received', ${ctx.principal.apiKeyId})`;
     const missing = await setTaskRepositories(scope, organizationId, input.projectId, taskId, input.repositories ?? []);
     // Thrown, so the transaction and the task's number roll back.
     if (missing) throw notFound(`repository ${missing} is not in this project`);

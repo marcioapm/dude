@@ -141,9 +141,12 @@ func createTask(ctx context.Context, tx pgx.Tx, c Caller, in createTaskIn) (crea
 	}
 	criteria, _ := json.Marshal(db.NonNil(in.AcceptanceCriteria))
 	id := ids.New(ids.Task)
+	// Owned by whoever drives the task the agent is working on: the person
+	// who would hear about it, and decide whether it is worth doing.
 	if _, err := tx.Exec(ctx, `INSERT INTO tasks (id, organization_id, project_id, number, epic_id, title, goal,
-			acceptance_criteria, status, created_by_run_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, 'received', $9)`,
+			acceptance_criteria, status, created_by_run_id, owner_key_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, 'received', $9,
+			(SELECT t.owner_key_id FROM runs r JOIN tasks t ON t.id = r.task_id WHERE r.id = $9))`,
 		id, c.Org, c.ProjectID, number, epicID, title, strings.TrimSpace(in.Goal), criteria, c.RunID); err != nil {
 		return createTaskOut{}, err
 	}

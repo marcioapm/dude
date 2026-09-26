@@ -15,6 +15,7 @@ import { appendInScope } from "../../events/ledger.ts";
 import { badRequest, conflict, json, noContent, notFound, parseBody } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
 import { REPOSITORIES_JSON, setTaskRepositories, taskRepositoriesInput } from "./taskRepositories.ts";
+import { isPerson, OWNER_JSON } from "./people.ts";
 
 const REPOSITORY_SELECT = `id, project_id AS "projectId", name, url, default_branch AS "defaultBranch", trust,
   created_at AS "createdAt"`;
@@ -271,21 +272,25 @@ const updateTaskInput = z.object({
   epicId: z.string().min(1).nullable(),
   /** The repositories it works on; fixed, like the task, once delivery starts. */
   repositories: taskRepositoriesInput,
+  /** Hand it to another of the organization's people (a user key's id). */
+  ownerId: z.string().min(1),
 }).partial();
 
 /**
- * Edit a task: what it asks for, and where it sits. What it asks for
- * is fixed once delivery starts — agents are working to it — so editing the
- * goal or criteria then is refused; moving it between epics never is.
+ * Edit a task: what it asks for, where it sits, and who drives it. What
+ * it asks for is fixed once delivery starts — agents are working to it — so
+ * editing the goal or criteria then is refused; moving it between epics, or
+ * handing it to someone else, never is.
  */
 async function updateTask(ctx: RequestContext): Promise<Response> {
-  const input = await parseBody(ctx.request, updateTaskInput);
+  const { ownerId, ...input } = await parseBody(ctx.request, updateTaskInput);
   const id = ctx.params.id!;
   const result = await withOrg(ctx.principal.organizationId, async (scope) => {
     const current = (await scope.sql`
-      SELECT project_id AS "projectId", status FROM tasks WHERE id = ${id} FOR UPDATE`) as Array<{
+      SELECT project_id AS "projectId", status, owner_key_id AS "ownerId" FROM tasks WHERE id = ${id} FOR UPDATE`) as Array<{
       projectId: string;
       status: string;
+      ownerId: string | null;
     }>;
     if (!current[0]) return { missing: true as const };
     const { projectId, status } = current[0];
@@ -299,7 +304,8 @@ async function updateTask(ctx: RequestContext): Promise<Response> {
       const epic = await scope.sql`SELECT 1 FROM epics WHERE id = ${input.epicId} AND project_id = ${projectId}`;
       if (epic.length === 0) return { noEpic: input.epicId };
     }
-    if (Object.keys(input).length === 0) return { unchanged: true as const };
+    if (ownerId !== undefined && !(await isPerson(scope, ownerId))) return { noPerson: ownerId };
+    if (Object.keys(input).length === 0 && ownerId === undefined) return { unchanged: true as const };
     if (input.repositories) {
       const missing = await setTaskRepositories(scope, ctx.principal.organizationId, projectId, id, input.repositories);
       if (missing) return { noRepository: missing };
@@ -311,11 +317,18 @@ async function updateTask(ctx: RequestContext): Promise<Response> {
         acceptance_criteria = CASE WHEN ${input.acceptanceCriteria !== undefined}
                                    THEN ${input.acceptanceCriteria ?? []}::jsonb ELSE acceptance_criteria END,
         epic_id = CASE WHEN ${input.epicId !== undefined} THEN ${input.epicId ?? null} ELSE epic_id END,
+        owner_key_id = COALESCE(${ownerId ?? null}, owner_key_id),
         updated_at = now()
       WHERE id = ${id}
       RETURNING id, project_id AS "projectId", epic_id AS "epicId", ${scope.sql.unsafe(REPOSITORIES_JSON)}, title, goal,
-        acceptance_criteria AS "acceptanceCriteria", status, updated_at AS "updatedAt"`) as Array<Record<string, unknown>>;
-    await record(scope, ctx, EventTypes.TaskUpdated, projectId, { ...input }, id);
+        acceptance_criteria AS "acceptanceCriteria", status, ${scope.sql.unsafe(OWNER_JSON)},
+        updated_at AS "updatedAt"`) as Array<Record<string, unknown>>;
+    if (Object.keys(input).length > 0) await record(scope, ctx, EventTypes.TaskUpdated, projectId, { ...input }, id);
+    // Its own event: who drives a task is not what it asks for, and the
+    // history of who held it is worth reading on its own.
+    if (ownerId !== undefined && ownerId !== current[0].ownerId) {
+      await record(scope, ctx, EventTypes.TaskOwnerChanged, projectId, { from: current[0].ownerId, to: ownerId }, id);
+    }
     return { task: rows[0]! };
   });
   if ("missing" in result) throw notFound(`task ${id} not found`);
@@ -324,6 +337,7 @@ async function updateTask(ctx: RequestContext): Promise<Response> {
   }
   if ("noEpic" in result) throw notFound(`epic ${result.noEpic} is not in this task's project`);
   if ("noRepository" in result) throw notFound(`repository ${result.noRepository} is not in this task's project`);
+  if ("noPerson" in result) throw notFound(`${result.noPerson} is not one of this organization's people`);
   if ("unchanged" in result) throw badRequest("nothing to change");
   return json(result.task);
 }

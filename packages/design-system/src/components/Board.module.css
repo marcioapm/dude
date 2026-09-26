@@ -31,6 +31,10 @@
   background: var(--ds-color-surface);
   flex-shrink: 0;
 }
+.overview {
+  padding: var(--ds-space-8) var(--ds-space-12);
+  flex-shrink: 0;
+}
 .scope {
   display: inline-flex;
   align-items: center;

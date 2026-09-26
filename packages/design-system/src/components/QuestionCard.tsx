@@ -40,6 +40,12 @@ export interface QuestionCardProps extends Omit<HTMLAttributes<HTMLElement>, "ch
    * them as the record of what was offered.
    */
   readonly onChoose?: ((option: string) => void) | undefined;
+  /**
+   * The person it waits on, when that is someone other than the reader:
+   * the card says so, and lists the choices without offering them — only
+   * they may answer.
+   */
+  readonly waitingOn?: string | undefined;
   /** Flash once on mount (a question that just arrived). */
   readonly isNew?: boolean | undefined;
 }
@@ -66,21 +72,25 @@ function toDate(v: string | number | Date | null | undefined): Date | null {
  *             `ChatMessage intent="answer"` turn that follows; the card
  *             does not quote it, so nothing in the transcript is said twice.
  */
-export function QuestionCard({ role, name, text, options, askedAt, answeredAt, dismissed, onChoose, isNew, className, ...rest }: QuestionCardProps) {
+export function QuestionCard({ role, name, text, options, askedAt, answeredAt, dismissed, onChoose, waitingOn, isNew, className, ...rest }: QuestionCardProps) {
   const answered = toDate(answeredAt);
   const state: QuestionState = answered ? "answered" : dismissed ? "dismissed" : "waiting";
   const waiting = state === "waiting";
   const asked = toDate(askedAt);
   const who = name ?? ROLE_LABEL[role];
-  const clickable = waiting && onChoose !== undefined;
-  const hasOptions = options !== undefined && options.length > 0 && (!waiting || clickable);
+  const someoneElse = waiting && waitingOn !== undefined;
+  const clickable = waiting && !someoneElse && onChoose !== undefined;
+  // Someone else's to answer: no composer offers the choices, so the card
+  // lists them, as a record of what they will choose from.
+  const hasOptions = options !== undefined && options.length > 0 && (!waiting || clickable || someoneElse);
 
   return (
     <article
       className={cx(styles["root"], styles[state], isNew && styles["new"], className)}
       data-state={state}
       data-role={role}
-      aria-label={waiting ? `${who} asks a question and is waiting for an answer`
+      aria-label={someoneElse ? `${who} asks a question and is waiting for ${waitingOn} to answer`
+        : waiting ? `${who} asks a question and is waiting for an answer`
         : state === "dismissed" ? `${who} asked a question that is no longer needed: its run ended` : `${who} asked a question`}
       {...rest}
     >
@@ -93,7 +103,11 @@ export function QuestionCard({ role, name, text, options, askedAt, answeredAt, d
           {name ? <span className={styles["roleName"]}>{ROLE_LABEL[role]}</span> : null}
           <span className={styles["verb"]}>{waiting ? "asks" : "asked"}</span>
           {/* Announced once when it appears; the clock lives outside the live region so it is not re-read every second. */}
-          {waiting ? (
+          {someoneElse ? (
+            <span role="status" aria-live="polite" className="ds-sr-only">
+              Blocked until {waitingOn} answers.
+            </span>
+          ) : waiting ? (
             <span role="status" aria-live="polite" className="ds-sr-only">
               Needs you. Blocked until you answer.
             </span>
@@ -126,6 +140,12 @@ export function QuestionCard({ role, name, text, options, askedAt, answeredAt, d
           ) : null}
         </header>
         <Markdown source={text} className={styles["body"]} />
+        {someoneElse ? (
+          <p className={styles["waitingOn"]} data-testid="waiting-on">
+            <Icon name="hand" size={12} />
+            Waiting for {waitingOn} to answer
+          </p>
+        ) : null}
         {hasOptions ? (
           <ul className={styles["options"]} aria-label={clickable ? "Reply with one of" : "Choices offered"}>
             {options.map((o, i) => (

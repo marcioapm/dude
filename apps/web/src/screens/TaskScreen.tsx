@@ -21,7 +21,9 @@ import type { ApiClient, Artifact, Finding, PullRequest, Run, TaskDetail } from 
 import { ApiError } from "../api/client.ts";
 import { useReloadOnEvents } from "../hooks/useEventStream.ts";
 import { ArtifactsSection } from "./ArtifactsSection.tsx";
+import { TaskMetricsSection } from "./MetricsSection.tsx";
 import { existingTask, TaskDialog } from "./TaskDialog.tsx";
+import { OwnerSelect } from "./OwnerSelect.tsx";
 
 export interface TaskScreenProps {
   client: ApiClient;
@@ -117,6 +119,7 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb }: TaskScreen
         description={description}
         actions={
           <>
+            <OwnerSelect client={client} task={item} onChanged={() => void load()} onProblem={setProblem} />
             {!started ? (
               <Button
                 variant="primary"
@@ -185,6 +188,8 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb }: TaskScreen
           />
         )}
       </Section>
+
+      <TaskMetricsSection client={client} taskId={taskId} live={item.status === "running"} />
 
       <ArtifactsSection client={client} artifacts={artifacts} />
 

@@ -44,6 +44,8 @@ export interface BoardProps extends Omit<HTMLAttributes<HTMLElement>, "onSelect"
   readonly loading?: boolean | undefined;
   /** Right side of the header: filters, a new-task button. */
   readonly headerActions?: ReactNode;
+  /** Under the header, above the columns: figures about the whole scope (an epic's time and cost). */
+  readonly overview?: ReactNode;
   readonly hideHeader?: boolean | undefined;
   /**
    * Project boards only: one swimlane per epic in the project's order, then
@@ -86,7 +88,7 @@ interface Group {
  * next swimlane), ←→ across, Home/End, Enter/Space open. Selection and
  * focus are separate.
  */
-export function Board({ project, epic, selected, onSelect, cap = 12, loading, headerActions, hideHeader, groupBy, collapsed, onCollapsedChange, laneMenu, className, ...rest }: BoardProps) {
+export function Board({ project, epic, selected, onSelect, cap = 12, loading, headerActions, overview, hideHeader, groupBy, collapsed, onCollapsedChange, laneMenu, className, ...rest }: BoardProps) {
   const swimlanes = groupBy === "epic" && !epic;
   const columns = useMemo(() => boardColumns(project, epic), [project, epic]);
   const lanes = useMemo(() => (swimlanes ? boardSwimlanes(project) : []), [swimlanes, project]);
@@ -236,6 +238,7 @@ export function Board({ project, epic, selected, onSelect, cap = 12, loading, he
           {headerActions ? <span className={styles["headerActions"]}>{headerActions}</span> : null}
         </header>
       ) : null}
+      {overview && !loading ? <div className={styles["overview"]}>{overview}</div> : null}
 
       {loading ? (
         <BoardSkeleton />

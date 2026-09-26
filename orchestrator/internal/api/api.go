@@ -249,6 +249,26 @@ func insertDirective(ctx context.Context, tx pgx.Tx, org, runID string, ri runIn
 		delivery.Directive{Text: text, Scope: scope, Supersedes: supersedes, Interrupt: interrupt})
 }
 
+// ownerOnly refuses anyone but a task's owner a decision that is theirs
+// to make — answering its agents, letting them at a repository — naming
+// who can. A task with no owner (from before there were owners, or whose
+// owner's key is gone) is anyone's.
+func ownerOnly(ctx context.Context, tx pgx.Tx, taskID, actor, verb string) error {
+	var ownerID, ownerName *string
+	if err := tx.QueryRow(ctx, `SELECT t.owner_key_id, k.name FROM tasks t
+		LEFT JOIN api_keys k ON k.id = t.owner_key_id WHERE t.id = $1`, taskID).Scan(&ownerID, &ownerName); err != nil {
+		return err
+	}
+	if ownerID == nil || *ownerID == actor {
+		return nil
+	}
+	name := *ownerID
+	if ownerName != nil {
+		name = *ownerName
+	}
+	return fail(http.StatusForbidden, "not_owner", "only %s can %s this — reassign the task to %s it", name, verb, verb)
+}
+
 func humanEvent(ctx context.Context, tx pgx.Tx, org, runID string, ri runInfo, typ, actor string, payload map[string]any) error {
 	_, err := ledger.Append(ctx, tx, ledger.Event{
 		Type: typ, OrganizationID: org, ProjectID: ri.ProjectID, TaskID: ri.TaskID, RunID: runID,
@@ -424,6 +444,9 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 		}
 		if !isLive(ri.Status) {
 			return fail(http.StatusConflict, "conflict", "run %s is %s and can no longer be answered", runID, ri.Status)
+		}
+		if err := ownerOnly(r.Context(), tx, ri.TaskID, actor(r), "answer"); err != nil {
+			return err
 		}
 		var answeredAt any
 		if err := tx.QueryRow(r.Context(), `UPDATE questions SET status = 'answered', answer = $2, answered_at = now(),
@@ -626,6 +649,9 @@ func (s *Server) decideRepositoryRequest(w http.ResponseWriter, r *http.Request,
 			return err
 		}
 		if err := stillOpen("repository request", id, status, "pending"); err != nil {
+			return err
+		}
+		if err := ownerOnly(r.Context(), tx, taskID, actor(r), "decide"); err != nil {
 			return err
 		}
 		decision := "denied"

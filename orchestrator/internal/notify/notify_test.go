@@ -101,7 +101,9 @@ func (b *browser) decrypt(body []byte) ([]byte, error) {
 	return plain[:i], nil
 }
 
-func TestAnAskReachesEveryBrowserOfItsOrganizationOnce(t *testing.T) {
+// An ask reaches its task's owner's browsers, once; a colleague's browser
+// hears only of a task nobody owns, and another organization's of nothing.
+func TestAnAskReachesItsOwnersBrowsersOnce(t *testing.T) {
 	app, owner := dbtest.Open(t)
 	org := dbtest.Org(t, owner)
 	other := dbtest.Org(t, owner)
@@ -112,29 +114,38 @@ func TestAnAskReachesEveryBrowserOfItsOrganizationOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Two people: the task's owner, and a colleague.
+	for _, k := range []string{"key_me_" + org, "key_colleague_" + org} {
+		exec(`INSERT INTO api_keys (id, organization_id, name, key_hash, key_prefix) VALUES ($1, $2, $1, $1, 'dude_sk_')`, k, org)
+	}
 	exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ($1, $2, 'P', $1, 'TEXT')`, "prj_"+org, org)
-	exec(`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES ($1, $2, $3, 19, 'Count sentences')`,
-		"wi_"+org, org, "prj_"+org)
+	exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, owner_key_id) VALUES ($1, $2, $3, 19, 'Count sentences', $4)`,
+		"wi_"+org, org, "prj_"+org, "key_me_"+org)
 	exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role)
 		VALUES ($1, $2, $3, $4, 1, 'running', 'implement', 'implementer')`, "run_"+org, org, "prj_"+org, "wi_"+org)
+	// And one from before there were owners.
+	exec(`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES ($1, $2, $3, 20, 'Count words')`,
+		"wi_legacy_"+org, org, "prj_"+org)
 
-	mine, stale, theirs := newBrowser(t), newBrowser(t), newBrowser(t)
+	mine, stale, colleague, theirs := newBrowser(t), newBrowser(t), newBrowser(t), newBrowser(t)
 	stale.status = http.StatusGone
 	mux := http.NewServeMux()
 	mux.Handle("/mine", mine)
 	mux.Handle("/stale", stale)
+	mux.Handle("/colleague", colleague)
 	mux.Handle("/theirs", theirs)
 	push := httptest.NewServer(mux)
 	t.Cleanup(push.Close)
-	for org, b := range map[string][]struct {
-		path string
-		b    *browser
-	}{org: {{"/mine", mine}, {"/stale", stale}}, other: {{"/theirs", theirs}}} {
-		for _, s := range b {
-			p256dh, auth := s.b.keys()
-			exec(`INSERT INTO push_subscriptions (endpoint, organization_id, p256dh, auth) VALUES ($1, $2, $3, $4)`,
-				push.URL+s.path, org, p256dh, auth)
-		}
+	for _, s := range []struct {
+		path, org, key string
+		b              *browser
+	}{
+		{"/mine", org, "key_me_" + org, mine}, {"/stale", org, "key_me_" + org, stale},
+		{"/colleague", org, "key_colleague_" + org, colleague}, {"/theirs", other, "", theirs},
+	} {
+		p256dh, auth := s.b.keys()
+		exec(`INSERT INTO push_subscriptions (endpoint, organization_id, api_key_id, p256dh, auth) VALUES ($1, $2, NULLIF($3, ''), $4, $5)`,
+			push.URL+s.path, s.org, s.key, p256dh, auth)
 	}
 
 	n := &notify.Notifier{DB: app, Log: slog.New(slog.DiscardHandler), Subject: "ops@example.com", HTTP: push.Client()}
@@ -149,6 +160,9 @@ func TestAnAskReachesEveryBrowserOfItsOrganizationOnce(t *testing.T) {
 	exec(`INSERT INTO events (id, organization_id, event_type, project_id, task_id, run_id, actor_type, actor_id, source, payload)
 		VALUES ($1, $2, 'agent.message', $3, $4, $5, 'agent', $5, 'runner', '{"text":"thinking"}')`,
 		"evt_m_"+org, org, "prj_"+org, "wi_"+org, "run_"+org)
+	exec(`INSERT INTO events (id, organization_id, event_type, project_id, task_id, actor_type, actor_id, source, payload)
+		VALUES ($1, $2, 'task.ready_to_merge', $3, $4, 'system', 'orchestrator', 'orchestrator', '{}')`,
+		"evt_r_"+org, org, "prj_"+org, "wi_legacy_"+org)
 
 	// Other tests' asks may be swept too; ours must be among them.
 	for range 5 {
@@ -158,15 +172,24 @@ func TestAnAskReachesEveryBrowserOfItsOrganizationOnce(t *testing.T) {
 	}
 	mine.mu.Lock()
 	defer mine.mu.Unlock()
-	if len(mine.got) != 1 {
-		t.Fatalf("the browser got %d notifications, want 1: %+v", len(mine.got), mine.got)
+	if len(mine.got) != 2 {
+		t.Fatalf("the owner's browser got %d notifications, want 2: %+v", len(mine.got), mine.got)
 	}
+	// Sent concurrently, so in either order.
 	m := mine.got[0]
+	if m.Title != "TEXT-19 · Implementer asks" {
+		m = mine.got[1]
+	}
 	if m.Title != "TEXT-19 · Implementer asks" || m.Body != "Does an ellipsis end a sentence?" || m.URL != "#/run/run_"+org {
 		t.Errorf("notification = %+v", m)
 	}
 	if !strings.HasPrefix(mine.auth[0], "vapid t=") {
 		t.Errorf("not signed with VAPID: %q", mine.auth[0])
+	}
+	colleague.mu.Lock()
+	defer colleague.mu.Unlock()
+	if len(colleague.got) != 1 || colleague.got[0].Title != "TEXT-20 is ready to merge" {
+		t.Errorf("a colleague's browser got %+v, want only the task nobody owns", colleague.got)
 	}
 	if len(theirs.got) != 0 {
 		t.Errorf("another organization's browser was told")
