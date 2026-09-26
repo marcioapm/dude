@@ -6,12 +6,11 @@
 #     bin/dude-orchestrator    Go, static
 #     bin/dude                 the agent CLI, Go, static
 #     bin/dude-backend         the backend, bun --compile
-#     bin/dude-migrate         the migration runner, bun --compile
+#     bin/dude-migrate         the migration runner, bun --compile, with
+#                              migrations/*.sql embedded (build-migrate.sh)
 #     share/dude/web/          the built web app (DUDE_WEB_DIR)
-#     share/dude/migrations/   the SQL dude-migrate applies by default
 #
-# Unpacking a tarball into a prefix gives that layout under it; dude-migrate
-# finds ../share/dude/migrations relative to its own (resolved) path.
+# Unpacking a tarball into a prefix gives that layout under it.
 # The bun binaries link glibc dynamically; the Go ones link nothing.
 set -euo pipefail
 
@@ -20,7 +19,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST="$ROOT/dist"
 GO_LDFLAGS="-s -w -X github.com/marciomartins/dude/orchestrator/internal/version.Version=$VERSION"
 # Read by apps/control-plane/src/build.ts.
-BUN_DEFINES=(--define "DUDE_BUILD_VERSION=\"$VERSION\"" --define "DUDE_BUILD_RELEASE=true")
+BUN_DEFINES=(--define "DUDE_BUILD_VERSION=\"$VERSION\"")
 # Reproducible tarballs: root-owned regardless of the builder's uid, sorted,
 # and a fixed mtime (the commit's own date, so a rebuild of the same tag has
 # the same timestamps) rather than each build's wall clock. GNU tar only:
@@ -54,12 +53,10 @@ for arch in arm64 amd64; do
   echo "building dude-backend and dude-migrate for linux/$arch"
   bun build --compile --target="bun-linux-$bun_arch" "${BUN_DEFINES[@]}" \
     "$ROOT/apps/control-plane/src/index.ts" --outfile "$work/bin/dude-backend"
-  bun build --compile --target="bun-linux-$bun_arch" "${BUN_DEFINES[@]}" \
-    "$ROOT/apps/control-plane/src/db/migrate.ts" --outfile "$work/bin/dude-migrate"
+  "$ROOT/scripts/build-migrate.sh" "$work/bin/dude-migrate" \
+    --target="bun-linux-$bun_arch" "${BUN_DEFINES[@]}"
 
   cp -R "$ROOT/apps/web/dist" "$work/share/dude/web"
-  mkdir -p "$work/share/dude/migrations"
-  cp "$ROOT"/migrations/*.sql "$work/share/dude/migrations/"
 
   chmod 0755 "$work/bin/"*
   chmod -R u+rwX,go+rX,go-w "$work/share"
