@@ -595,6 +595,36 @@ func (f *fakeSTS) AssumeRole(_ context.Context, in *sts.AssumeRoleInput, _ ...fu
 	}}, nil
 }
 
+// An AssumeRole that fails at submit holds the Run back: no lux Run, not
+// failed, and once STS answers it is submitted with a token minted as the
+// role.
+func TestAFailedAssumeRoleDelaysASubmitAndDoesNotFailIt(t *testing.T) {
+	w := newWorld(t)
+	api := w.withECR()
+	roles := &fakeSTS{}
+	roles.setFail(errors.New("AccessDenied: not authorized to perform sts:AssumeRole"))
+	w.syncer.Registry = registry.NewECRWithRole(ecrRegistry, pullRole, api, roles, api.now)
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	wi := w.task()
+	w.deliver(wi)
+	w.until("the submit to be held back", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND next_attempt_at IS NOT NULL`, wi) == 1
+	})
+	if len(w.lux.Runs()) != 0 || len(api.tokens()) != 0 {
+		t.Fatalf("%d lux Runs, %d ECR tokens while AssumeRole failed; want none", len(w.lux.Runs()), len(api.tokens()))
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'pending'`, wi); n != 1 {
+		t.Fatalf("the Run is no longer pending")
+	}
+
+	roles.setFail(nil)
+	w.retried(w.runOf(wi), 5*time.Second, func() bool { return len(w.lux.Runs()) == 1 })
+	sent, _ := secretValue(submitted(t, w.lux.Runs()[0]).Secrets, "DUDE_REGISTRY_AUTH")
+	if tokens, signers := api.tokens(), api.signedBy(); len(tokens) != 1 || sent != "AWS:"+tokens[0] || signers[0] != "ASIAPULL1" {
+		t.Errorf("submitted with %q; ECR minted %d, signed by %q; want one token minted as the role", sent, len(tokens), signers)
+	}
+}
+
 // An AssumeRole that fails is an ECR outage: a paused Run's resume waits,
 // still paused, and goes ahead with a token minted as the role once STS
 // answers. No token is minted with the host's credentials meanwhile.
