@@ -112,9 +112,13 @@ func (w *world) withECR() *fakeECR {
 	return api
 }
 
-func secretValue(secrets []lux.Secret, name string) (string, bool) {
+// hang is an agent that never finishes its turn.
+func hang(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+
+// loginIn is the registry login among secrets, if one was sent.
+func loginIn(secrets []lux.Secret) (string, bool) {
 	for _, s := range secrets {
-		if s.Name == name {
+		if s.Name == "DUDE_REGISTRY_AUTH" {
 			return s.Value, true
 		}
 	}
@@ -136,7 +140,7 @@ func submitted(t *testing.T, r *fakelux.Run) lux.Spec {
 func TestWithoutALoginNothingIsAdded(t *testing.T) {
 	w := newWorld(t)
 	mustExec(t, w.owner, `UPDATE projects SET runtime_image = $2 WHERE id = $1`, w.project, ecrImage)
-	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	w.lux.Decide = hang
 	wi := w.task()
 	w.deliver(wi)
 	w.pauseAndResume(wi)
@@ -146,7 +150,7 @@ func TestWithoutALoginNothingIsAdded(t *testing.T) {
 		t.Errorf("registryAuth = %+v", spec.Image.RegistryAuth)
 	}
 	for _, secrets := range append([][]lux.Secret{spec.Secrets}, r.ResumeSecrets...) {
-		if _, ok := secretValue(secrets, "DUDE_REGISTRY_AUTH"); ok {
+		if _, ok := loginIn(secrets); ok {
 			t.Errorf("a login was sent with none configured")
 		}
 	}
@@ -155,7 +159,7 @@ func TestWithoutALoginNothingIsAdded(t *testing.T) {
 func TestAnAgentImageInTheFactorysRegistryIsPulledWithItsLogin(t *testing.T) {
 	w := newWorld(t)
 	api := w.withECR()
-	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	w.lux.Decide = hang
 	w.deliver(w.task())
 	w.until("the implementer to be submitted", func() bool { return len(w.lux.Runs()) >= 1 })
 
@@ -164,7 +168,7 @@ func TestAnAgentImageInTheFactorysRegistryIsPulledWithItsLogin(t *testing.T) {
 		spec.Image.RegistryAuth[0] != (lux.RegistryAuth{Registry: ecrRegistry, Secret: "DUDE_REGISTRY_AUTH"}) {
 		t.Fatalf("image = %+v", spec.Image)
 	}
-	if v, _ := secretValue(spec.Secrets, "DUDE_REGISTRY_AUTH"); v != "AWS:"+api.tokens()[0] {
+	if v, _ := loginIn(spec.Secrets); v != "AWS:"+api.tokens()[0] {
 		t.Errorf("DUDE_REGISTRY_AUTH = %q, want AWS:<ECR's password>", v)
 	}
 }
@@ -178,7 +182,7 @@ func TestAStaticLoginIsSentForItsRegistry(t *testing.T) {
 	w.syncer.Registry = p
 	mustExec(t, w.owner, `UPDATE projects SET runtime_image = NULL WHERE id = $1`, w.project)
 	w.syncer.Agent.DefaultImage = "ghcr.io/acme/agent:2"
-	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	w.lux.Decide = hang
 	w.deliver(w.task())
 	w.until("the implementer to be submitted", func() bool { return len(w.lux.Runs()) >= 1 })
 
@@ -186,7 +190,7 @@ func TestAStaticLoginIsSentForItsRegistry(t *testing.T) {
 	if spec.Image.Ref != "ghcr.io/acme/agent:2" || len(spec.Image.RegistryAuth) != 1 || spec.Image.RegistryAuth[0].Registry != "ghcr.io" {
 		t.Fatalf("image = %+v", spec.Image)
 	}
-	if v, _ := secretValue(spec.Secrets, "DUDE_REGISTRY_AUTH"); v != "acme-bot:ghp_registry" {
+	if v, _ := loginIn(spec.Secrets); v != "acme-bot:ghp_registry" {
 		t.Errorf("DUDE_REGISTRY_AUTH = %q", v)
 	}
 }
@@ -197,7 +201,7 @@ func TestAnImageFromAnotherRegistryGetsNoLogin(t *testing.T) {
 	w := newWorld(t)
 	api := w.withECR()
 	mustExec(t, w.owner, `UPDATE projects SET runtime_image = 'ghcr.io/someone/agent:1' WHERE id = $1`, w.project)
-	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	w.lux.Decide = hang
 	wi := w.task()
 	w.deliver(wi)
 	w.until("the implementer to be submitted", func() bool { return len(w.lux.Runs()) >= 1 })
@@ -209,7 +213,7 @@ func TestAnImageFromAnotherRegistryGetsNoLogin(t *testing.T) {
 		t.Errorf("registryAuth = %+v, want none for another registry", spec.Image.RegistryAuth)
 	}
 	for _, secrets := range append([][]lux.Secret{spec.Secrets}, r.ResumeSecrets...) {
-		if _, ok := secretValue(secrets, "DUDE_REGISTRY_AUTH"); ok {
+		if _, ok := loginIn(secrets); ok {
 			t.Errorf("a login was sent for an image in another registry")
 		}
 	}
@@ -219,24 +223,15 @@ func TestAnImageFromAnotherRegistryGetsNoLogin(t *testing.T) {
 }
 
 // pauseAndResume pauses the task's running Run as a person would, and
-// resumes it once lux has stopped it. Returns the Run's id.
-func (w *world) pauseAndResume(wi string) string {
+// resumes it once lux has stopped it.
+func (w *world) pauseAndResume(wi string) {
 	w.t.Helper()
-	var runID string
-	w.until("the agent to be working", func() bool {
-		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND status = 'running'`, wi).Scan(&runID)
-		return runID != ""
-	})
+	runID := w.parked(wi)
 	resumed := w.lux.Runs()[0].Resumed
-	if status, out := w.call("/internal/runs/"+runID+"/pause", map[string]any{}); status != 200 {
-		w.t.Fatalf("pause: %d %v", status, out)
-	}
-	w.until("lux to stop it", func() bool { return w.lux.Runs()[0].State == "stopped" })
 	if status, out := w.call("/internal/runs/"+runID+"/resume", map[string]any{}); status != 200 {
 		w.t.Fatalf("resume: %d %v", status, out)
 	}
 	w.until("the resume", func() bool { return w.lux.Runs()[0].Resumed == resumed+1 })
-	return runID
 }
 
 // Every way a Run is resumed carries a login minted for it: the one it
@@ -245,16 +240,10 @@ func (w *world) pauseAndResume(wi string) string {
 func TestEveryResumeCarriesAFreshlyMintedLogin(t *testing.T) {
 	for name, park := range map[string]func(w *world) (resume func()){
 		"a person's pause": func(w *world) func() {
-			w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+			w.lux.Decide = hang
 			wi := w.task()
 			w.deliver(wi)
-			var runID string
-			w.until("the agent to be working", func() bool {
-				_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND status = 'running'`, wi).Scan(&runID)
-				return runID != ""
-			})
-			w.call("/internal/runs/"+runID+"/pause", map[string]any{})
-			w.until("lux to stop it", func() bool { return w.lux.Runs()[0].State == "stopped" })
+			runID := w.parked(wi)
 			return func() { w.call("/internal/runs/"+runID+"/resume", map[string]any{}) }
 		},
 		"parked on a question": func(w *world) func() {
@@ -265,7 +254,7 @@ func TestEveryResumeCarriesAFreshlyMintedLogin(t *testing.T) {
 		},
 		"parked idle": func(w *world) func() {
 			w.syncer.IdleAfter = 300 * time.Millisecond
-			w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+			w.lux.Decide = hang
 			wi := w.task()
 			w.deliver(wi)
 			var runID string
@@ -306,7 +295,7 @@ func TestEveryResumeCarriesAFreshlyMintedLogin(t *testing.T) {
 			api := w.withECR()
 			resume := park(w)
 			r := w.lux.Runs()[0]
-			started, _ := secretValue(submitted(t, r).Secrets, "DUDE_REGISTRY_AUTH")
+			started, _ := loginIn(submitted(t, r).Secrets)
 			if started != "AWS:"+api.tokens()[0] {
 				t.Fatalf("started with %q, want ECR's first token", started)
 			}
@@ -315,7 +304,7 @@ func TestEveryResumeCarriesAFreshlyMintedLogin(t *testing.T) {
 			resume()
 			w.until("the resume", func() bool { return r.Resumed == 1 })
 
-			fresh, ok := secretValue(r.ResumeSecrets[0], "DUDE_REGISTRY_AUTH")
+			fresh, ok := loginIn(r.ResumeSecrets[0])
 			if tokens := api.tokens(); !ok || len(tokens) != 2 || fresh != "AWS:"+tokens[1] {
 				t.Errorf("resumed with %q (sent: %v), ECR minted %d; want the second token", fresh, ok, len(tokens))
 			}
@@ -330,7 +319,7 @@ func TestEveryResumeCarriesAFreshlyMintedLogin(t *testing.T) {
 func TestARunStartedWithoutALoginResumesWithout(t *testing.T) {
 	w := newWorld(t)
 	mustExec(t, w.owner, `UPDATE projects SET runtime_image = $2 WHERE id = $1`, w.project, ecrImage)
-	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	w.lux.Decide = hang
 	wi := w.task()
 	w.deliver(wi)
 	runID := w.parked(wi)
@@ -339,7 +328,7 @@ func TestARunStartedWithoutALoginResumesWithout(t *testing.T) {
 	w.call("/internal/runs/"+runID+"/resume", map[string]any{})
 	r := w.lux.Runs()[0]
 	w.until("the resume", func() bool { return r.Resumed == 1 })
-	if _, ok := secretValue(r.ResumeSecrets[0], "DUDE_REGISTRY_AUTH"); ok || len(api.tokens()) != 0 {
+	if _, ok := loginIn(r.ResumeSecrets[0]); ok || len(api.tokens()) != 0 {
 		t.Errorf("a login was sent to resume a Run started without one (ECR minted %d)", len(api.tokens()))
 	}
 }
@@ -369,7 +358,7 @@ func (w *world) parked(wi string) string {
 func TestAResumeAfterARestartIsMintedByTheNewIdentity(t *testing.T) {
 	w := newWorld(t)
 	api := w.withECR()
-	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	w.lux.Decide = hang
 	wi := w.task()
 	w.deliver(wi)
 	r := w.lux.Runs
@@ -384,7 +373,7 @@ func TestAResumeAfterARestartIsMintedByTheNewIdentity(t *testing.T) {
 		w.restart(next.provider)
 		w.call("/internal/runs/"+runID+"/resume", map[string]any{})
 		w.until("the resume", func() bool { return r()[0].Resumed == i+1 })
-		sent, _ := secretValue(r()[0].ResumeSecrets[i], "DUDE_REGISTRY_AUTH")
+		sent, _ := loginIn(r()[0].ResumeSecrets[i])
 		tokens, signers := api.tokens(), api.signedBy()
 		if len(tokens) != i+2 || sent != "AWS:"+tokens[i+1] {
 			t.Fatalf("resume %d sent %q, ECR minted %d; want a token minted for it", i+1, sent, len(tokens))
@@ -466,16 +455,10 @@ func TestARunWaitsForTheLoginItWasStartedWith(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			w := newWorld(t)
 			api := w.withECR()
-			w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+			w.lux.Decide = hang
 			wi := w.task()
 			w.deliver(wi)
-			var runID string
-			w.until("the agent to be working", func() bool {
-				_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND status = 'running'`, wi).Scan(&runID)
-				return runID != ""
-			})
-			w.call("/internal/runs/"+runID+"/pause", map[string]any{})
-			w.until("lux to stop it", func() bool { return w.lux.Runs()[0].State == "stopped" })
+			runID := w.parked(wi)
 
 			logs := w.restart(restarted)
 			w.call("/internal/runs/"+runID+"/resume", map[string]any{})
@@ -496,7 +479,7 @@ func TestARunWaitsForTheLoginItWasStartedWith(t *testing.T) {
 			api.advance(11 * time.Hour)
 			w.restart(registry.NewECR(ecrRegistry, api, api.now))
 			w.retried(runID, time.Minute, func() bool { return r.Resumed == 1 })
-			fresh, _ := secretValue(r.ResumeSecrets[0], "DUDE_REGISTRY_AUTH")
+			fresh, _ := loginIn(r.ResumeSecrets[0])
 			if tokens := api.tokens(); len(tokens) != 2 || fresh != "AWS:"+tokens[1] {
 				t.Errorf("resumed with %q, ECR minted %d; want the second token", fresh, len(tokens))
 			}
@@ -509,16 +492,10 @@ func TestARunWaitsForTheLoginItWasStartedWith(t *testing.T) {
 func TestAnAbortDoesNotWaitForTheLoginRetry(t *testing.T) {
 	w := newWorld(t)
 	w.withECR()
-	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	w.lux.Decide = hang
 	wi := w.task()
 	w.deliver(wi)
-	var runID string
-	w.until("the agent to be working", func() bool {
-		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND status = 'running'`, wi).Scan(&runID)
-		return runID != ""
-	})
-	w.call("/internal/runs/"+runID+"/pause", map[string]any{})
-	w.until("lux to stop it", func() bool { return w.lux.Runs()[0].State == "stopped" })
+	runID := w.parked(wi)
 	w.restart(nil)
 	w.call("/internal/runs/"+runID+"/resume", map[string]any{})
 	w.until("the login retry", func() bool {
@@ -549,7 +526,7 @@ func TestAnECROutageDelaysARunAndDoesNotFailIt(t *testing.T) {
 	w := newWorld(t)
 	api := w.withECR()
 	api.setFail(errors.New("no EC2 IMDS role found"))
-	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	w.lux.Decide = hang
 	wi := w.task()
 	w.deliver(wi)
 	w.until("the submit to be held back", func() bool {
@@ -604,7 +581,7 @@ func TestAFailedAssumeRoleDelaysASubmitAndDoesNotFailIt(t *testing.T) {
 	roles := &fakeSTS{}
 	roles.setFail(errors.New("AccessDenied: not authorized to perform sts:AssumeRole"))
 	w.syncer.Registry = registry.NewECRWithRole(ecrRegistry, pullRole, api, roles, api.now)
-	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	w.lux.Decide = hang
 	wi := w.task()
 	w.deliver(wi)
 	w.until("the submit to be held back", func() bool {
@@ -619,7 +596,7 @@ func TestAFailedAssumeRoleDelaysASubmitAndDoesNotFailIt(t *testing.T) {
 
 	roles.setFail(nil)
 	w.retried(w.runOf(wi), 5*time.Second, func() bool { return len(w.lux.Runs()) == 1 })
-	sent, _ := secretValue(submitted(t, w.lux.Runs()[0]).Secrets, "DUDE_REGISTRY_AUTH")
+	sent, _ := loginIn(submitted(t, w.lux.Runs()[0]).Secrets)
 	if tokens, signers := api.tokens(), api.signedBy(); len(tokens) != 1 || sent != "AWS:"+tokens[0] || signers[0] != "ASIAPULL1" {
 		t.Errorf("submitted with %q; ECR minted %d, signed by %q; want one token minted as the role", sent, len(tokens), signers)
 	}
@@ -633,16 +610,10 @@ func TestAFailedAssumeRoleDelaysAResumeAndDoesNotFailIt(t *testing.T) {
 	api := w.withECR()
 	roles := &fakeSTS{}
 	w.syncer.Registry = registry.NewECRWithRole(ecrRegistry, pullRole, api, roles, api.now)
-	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	w.lux.Decide = hang
 	wi := w.task()
 	w.deliver(wi)
-	var runID string
-	w.until("the agent to be working", func() bool {
-		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND status = 'running'`, wi).Scan(&runID)
-		return runID != ""
-	})
-	w.call("/internal/runs/"+runID+"/pause", map[string]any{})
-	w.until("lux to stop it", func() bool { return w.lux.Runs()[0].State == "stopped" })
+	runID := w.parked(wi)
 
 	// Past the token's refresh point, with the role's credentials gone
 	// (as if expired) and STS refusing.
@@ -666,7 +637,7 @@ func TestAFailedAssumeRoleDelaysAResumeAndDoesNotFailIt(t *testing.T) {
 
 	roles.setFail(nil)
 	w.retried(runID, 5*time.Second, func() bool { return r.Resumed == 1 })
-	fresh, _ := secretValue(r.ResumeSecrets[0], "DUDE_REGISTRY_AUTH")
+	fresh, _ := loginIn(r.ResumeSecrets[0])
 	tokens := api.tokens()
 	if len(tokens) != 2 || fresh != "AWS:"+tokens[1] {
 		t.Fatalf("resumed with %q, ECR minted %d; want the second token", fresh, len(tokens))
@@ -700,13 +671,7 @@ func TestTheRegistryLoginIsNeverLoggedOrStored(t *testing.T) {
 	api.setFail(nil)
 	w.retried(w.runOf(wi), 5*time.Second, func() bool { return len(w.lux.Runs()) == 1 })
 
-	var runID string
-	w.until("the agent to be working", func() bool {
-		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND status = 'running'`, wi).Scan(&runID)
-		return runID != ""
-	})
-	w.call("/internal/runs/"+runID+"/pause", map[string]any{})
-	w.until("lux to stop it", func() bool { return w.lux.Runs()[0].State == "stopped" })
+	runID := w.parked(wi)
 	api.advance(11 * time.Hour)
 	api.setFail(errors.New("ExpiredTokenException"))
 	w.call("/internal/runs/"+runID+"/resume", map[string]any{})
@@ -743,7 +708,7 @@ func TestTheRegistryLoginIsNeverLoggedOrStored(t *testing.T) {
 	}
 	// It did reach lux, so the search above looked for the right thing.
 	r := w.lux.Runs()[0]
-	if v, _ := secretValue(r.ResumeSecrets[0], "DUDE_REGISTRY_AUTH"); v != "AWS:"+tokens[1] {
+	if v, _ := loginIn(r.ResumeSecrets[0]); v != "AWS:"+tokens[1] {
 		t.Errorf("the resume sent %q", v)
 	}
 }
