@@ -1,7 +1,7 @@
 // Package notify tells people when something waits on them: a question an
 // agent asked, a repository it asked for, a delivery that needs a decision.
-// Each browser that opted in gets a Web Push notification, even with dude
-// closed (docs/design/notifications.md).
+// Each browser of the task's owner that opted in gets a Web Push
+// notification, even with dude closed (docs/design/notifications.md).
 //
 // It reads the ledger past a stored cursor, so it needs nothing from the
 // code that records an ask, and a restart neither repeats nor skips one.
@@ -101,16 +101,20 @@ func (n *Notifier) Keys(ctx context.Context) (public, private string, err error)
 }
 
 type ask struct {
-	Cursor                                 int64
+	Cursor                         int64
 	Org, Type, RunID, TaskID, Task string
-	Role                                   string
-	Payload                                json.RawMessage
+	Role                           string
+	// The task's owner's key; empty for a task nobody owns.
+	Owner   string
+	Payload json.RawMessage
 }
 
-type subscription struct{ Endpoint, P256dh, Auth string }
+type subscription struct{ Endpoint, P256dh, Auth, Key string }
 
 // Sweep sends a notification for each ask recorded since the last sweep, to
-// every subscription of its organization. Returns how many asks it handled.
+// the browsers of its task's owner — they are the one who answers it — or,
+// for a task nobody owns, to every browser of its organization. Returns how
+// many asks it handled.
 func (n *Notifier) Sweep(ctx context.Context) (int, error) {
 	public, private, err := n.Keys(ctx)
 	if err != nil {
@@ -120,7 +124,8 @@ func (n *Notifier) Sweep(ctx context.Context) (int, error) {
 	subs := map[string][]subscription{}
 	if err := n.DB.InSystem(ctx, "notify", func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT e.cursor, e.organization_id, e.event_type, COALESCE(e.run_id, ''),
-				COALESCE(e.task_id, ''), COALESCE(p.key_prefix || '-' || w.number, ''), COALESCE(r.role::text, ''), e.payload
+				COALESCE(e.task_id, ''), COALESCE(p.key_prefix || '-' || w.number, ''), COALESCE(r.role::text, ''),
+				COALESCE(w.owner_key_id, ''), e.payload
 			FROM events e
 			LEFT JOIN tasks w ON w.id = e.task_id
 			LEFT JOIN projects p ON p.id = w.project_id
@@ -139,14 +144,14 @@ func (n *Notifier) Sweep(ctx context.Context) (int, error) {
 		for _, a := range found {
 			orgs = append(orgs, a.Org)
 		}
-		rows, err = tx.Query(ctx, `SELECT organization_id, endpoint, p256dh, auth FROM push_subscriptions
-			WHERE organization_id = ANY ($1)`, orgs)
+		rows, err = tx.Query(ctx, `SELECT organization_id, endpoint, p256dh, auth, COALESCE(api_key_id, '')
+			FROM push_subscriptions WHERE organization_id = ANY ($1)`, orgs)
 		if err != nil {
 			return err
 		}
 		var org string
 		var sub subscription
-		_, err = pgx.ForEachRow(rows, []any{&org, &sub.Endpoint, &sub.P256dh, &sub.Auth}, func() error {
+		_, err = pgx.ForEachRow(rows, []any{&org, &sub.Endpoint, &sub.P256dh, &sub.Auth, &sub.Key}, func() error {
 			subs[org] = append(subs[org], sub)
 			return nil
 		})
@@ -170,6 +175,9 @@ func (n *Notifier) Sweep(ctx context.Context) (int, error) {
 		}
 		body, _ := json.Marshal(msg)
 		for _, s := range subs[a.Org] {
+			if a.Owner != "" && s.Key != a.Owner {
+				continue
+			}
 			wg.Add(1)
 			slots <- struct{}{}
 			go func() {

@@ -26,6 +26,8 @@ export const EventTypes = {
   TaskSteered: "task.steered",
   TaskAborted: "task.aborted",
   TaskStatusChanged: "task.status_changed",
+  /** Handed to someone else to drive. Payload: `{ from, to }`, api key ids. */
+  TaskOwnerChanged: "task.owner_changed",
 
   // Workflow
   WorkflowTransitioned: "workflow.transitioned",

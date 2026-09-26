@@ -127,6 +127,27 @@ func TestAnImplementerRecordsWorkItFoundAndSeesIt(t *testing.T) {
 	}
 }
 
+// Work an agent finds is owned by whoever drives the task it found it in:
+// the person who hears of it and decides whether it is worth doing.
+func TestWorkAnAgentFindsIsOwnedByItsTasksOwner(t *testing.T) {
+	f := setup(t)
+	mustExec(t, f.owner, `INSERT INTO api_keys (id, organization_id, name, key_hash, key_prefix) VALUES ($1, $2, 'Ana', $1, 'dude_sk_')`,
+		"key_ana_"+f.org, f.org)
+	mustExec(t, f.owner, `UPDATE tasks SET owner_key_id = $2 WHERE id = $1`, f.item, "key_ana_"+f.org)
+	token := f.run(t, "run_found", "implementer", "running")
+	if status, out := f.post(t, token, "create_task", `{"title":"Found on the way","goal":"why"}`); status != 200 {
+		t.Fatalf("create: %d %v", status, out)
+	}
+	var owner string
+	if err := f.owner.QueryRow(context.Background(), `SELECT COALESCE(owner_key_id, '') FROM tasks
+		WHERE project_id = $1 AND number = 2`, f.project).Scan(&owner); err != nil {
+		t.Fatal(err)
+	}
+	if owner != "key_ana_"+f.org {
+		t.Errorf("owned by %q, want the parent task's owner", owner)
+	}
+}
+
 func TestAReviewerCannotCreateWork(t *testing.T) {
 	f := setup(t)
 	cs, err := f.connect(t, f.run(t, "run_rev", "reviewer", "running"))

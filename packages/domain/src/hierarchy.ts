@@ -112,6 +112,8 @@ export const deliveryPolicySchema = z
     maxReviewIterations: z.number().int().min(1).max(20),
     maxPrFixIterations: z.number().int().min(0).max(20),
     simplify: z.boolean(),
+    /** A browser tester exercises the change and publishes a video, before the pull request. */
+    test: z.boolean(),
     /** Minutes an agent waiting on a person stays live before it is parked. */
     parkAfterMinutes: z.number().int().min(1).max(1440),
     /** Minutes an agent may be quiet mid-turn before it is nudged; 0 never. */
@@ -192,6 +194,10 @@ export const taskRepositorySchema = z.object({
 });
 export type TaskRepository = z.infer<typeof taskRepositorySchema>;
 
+/** A person, by the id and name of the API key they use. */
+export const personSchema = z.object({ id: z.string(), name: z.string() });
+export type Person = z.infer<typeof personSchema>;
+
 export const taskSchema = z.object({
   id: z.string(),
   organizationId: z.string(),
@@ -206,6 +212,12 @@ export const taskSchema = z.object({
   acceptanceCriteria: z.array(z.string()).default([]),
   status: taskStatusSchema,
   requestedBy: z.string().nullable().default(null),
+  /**
+   * Who drives it: told when it waits on someone, and the only one who
+   * answers its agents. Until there are users, a person is a named API key.
+   * Null for a task nobody owns, which anyone may answer for.
+   */
+  owner: personSchema.nullable().default(null),
   createdAt: z.string().datetime({ offset: true }),
   updatedAt: z.string().datetime({ offset: true }),
 });

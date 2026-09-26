@@ -101,6 +101,17 @@
 .body {
   min-width: 0;
 }
+/* Someone else's to answer: said once, quietly — the highlight already
+   says the turn is waiting; this says on whom. */
+.waitingOn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  margin: var(--ds-space-8) 0 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+
 .answered .body,
 .dismissed .body {
   color: var(--ds-color-text-secondary);

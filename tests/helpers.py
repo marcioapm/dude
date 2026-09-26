@@ -50,7 +50,7 @@ def webhook_secret(dsn: str, organization_id: str) -> str:
     return row[0]
 
 
-def create_api_key(dsn: str, organization_id: str, kind: str = "user") -> str:
+def create_api_key(dsn: str, organization_id: str, kind: str = "user", name: str | None = None) -> str:
     """Create an API key and return the plaintext.
 
     Inserted directly because key creation is an administrative bootstrap, and
@@ -65,7 +65,7 @@ def create_api_key(dsn: str, organization_id: str, kind: str = "user") -> str:
         conn.execute(
             "INSERT INTO api_keys (id, organization_id, name, key_hash, key_prefix, kind) "
             "VALUES (%s, %s, %s, %s, %s, %s)",
-            (new_id("key"), organization_id, f"e2e {kind}", key_hash, raw[:16], kind),
+            (new_id("key"), organization_id, name or f"e2e {kind}", key_hash, raw[:16], kind),
         )
     return raw
 

@@ -1051,6 +1051,79 @@ func TestAnAgentThatAsksWaitsForTheAnswerAndCarriesOn(t *testing.T) {
 	}
 }
 
+// callAs posts to the orchestrator's internal API as the backend would for
+// one person (X-Dude-Actor, their key).
+func (w *world) callAs(actor, path string, body any) (int, map[string]any) {
+	w.t.Helper()
+	b, _ := json.Marshal(body)
+	req, _ := http.NewRequest("POST", w.api+path, bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer svc")
+	req.Header.Set("X-Dude-Organization", w.org)
+	req.Header.Set("X-Dude-Actor", actor)
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var out map[string]any
+	_ = json.NewDecoder(res.Body).Decode(&out)
+	return res.StatusCode, out
+}
+
+// person makes a user key in the world's organization, named, and
+// returns its id.
+func (w *world) person(name string) string {
+	id := "key_" + strings.ToLower(name) + "_" + w.org
+	mustExec(w.t, w.owner, `INSERT INTO api_keys (id, organization_id, name, key_hash, key_prefix)
+		VALUES ($1, $2, $3, $1, 'dude_sk_')`, id, w.org, name)
+	return id
+}
+
+// Only a task's owner answers its agents and decides what they may
+// reach; anyone else is told who can. A task nobody owns is anyone's.
+func TestOnlyATasksOwnerAnswersAndDecides(t *testing.T) {
+	w := newWorld(t)
+	ana, bo := w.person("Ana"), w.person("Bo")
+	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+		VALUES ($1, $2, $3, 'web', 'https://github.com/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
+	wi, _ := w.asking()
+	mustExec(t, w.owner, `UPDATE tasks SET owner_key_id = $2 WHERE id = $1`, wi, ana)
+	qid := w.questionID(wi)
+
+	status, body := w.callAs(bo, "/internal/questions/"+qid+"/answer", map[string]any{"text": "yes"})
+	errBody, _ := body["error"].(map[string]any)
+	if status != 403 || errBody["code"] != "not_owner" ||
+		errBody["message"] != "only Ana can answer this — reassign the task to answer it" {
+		t.Fatalf("a non-owner's answer: %d %v", status, body)
+	}
+	if n := w.count(`SELECT count(*) FROM questions WHERE id = $1 AND status = 'open'`, qid); n != 1 {
+		t.Fatalf("the refused answer changed the question")
+	}
+
+	_, reqBody := w.callTool(w.syncer.Agent.ToolsURL, string(w.lux.Runs()[0].Spec), "request_repository",
+		`{"repository":"web","reason":"the client"}`)
+	var req struct{ RequestID string }
+	_ = json.Unmarshal([]byte(reqBody), &req)
+	if status, body := w.callAs(bo, "/internal/repository-requests/"+req.RequestID+"/decide", map[string]any{"approve": true}); status != 403 {
+		t.Fatalf("a non-owner's approval: %d %v", status, body)
+	}
+	if n := w.count(`SELECT count(*) FROM repository_requests WHERE id = $1 AND status = 'pending'`, req.RequestID); n != 1 {
+		t.Fatalf("the refused approval changed the request")
+	}
+
+	// Reassigned, the new owner decides.
+	mustExec(t, w.owner, `UPDATE tasks SET owner_key_id = $2 WHERE id = $1`, wi, bo)
+	if status, body := w.callAs(bo, "/internal/repository-requests/"+req.RequestID+"/decide", map[string]any{"approve": false}); status != 200 {
+		t.Fatalf("the owner's decision: %d %v", status, body)
+	}
+	// Nobody's task: anyone answers.
+	mustExec(t, w.owner, `UPDATE tasks SET owner_key_id = NULL WHERE id = $1`, wi)
+	if status, body := w.callAs(ana, "/internal/questions/"+qid+"/answer", map[string]any{"text": "yes"}); status != 200 {
+		t.Fatalf("an answer on a task nobody owns: %d %v", status, body)
+	}
+}
+
 // questionID is the task's (one) question.
 func (w *world) questionID(wi string) string {
 	var id string

@@ -20,6 +20,8 @@ import { registerWorkRoutes } from "./api/routes/work.ts";
 import { registerStructureRoutes } from "./api/routes/structure.ts";
 import { registerInterventionRoutes } from "./api/routes/intervention.ts";
 import { registerPushRoutes } from "./api/routes/push.ts";
+import { registerPeopleRoutes } from "./api/routes/people.ts";
+import { registerMetricsRoutes } from "./api/routes/metrics.ts";
 import { closePool, getPool } from "./db/client.ts";
 import { listenForEvents } from "./events/listen.ts";
 
@@ -45,6 +47,8 @@ export function buildRouter(): Router {
   registerStructureRoutes(router);
   registerInterventionRoutes(router);
   registerPushRoutes(router);
+  registerPeopleRoutes(router);
+  registerMetricsRoutes(router);
 
   return router;
 }

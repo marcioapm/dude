@@ -125,6 +125,13 @@ def test_pr_feedback_wakes_a_fixer_and_a_merge_finishes(
     )
     assert _pull_requests(client, task["id"])[0]["state"] == "open"
 
+    # Time and cost, from what was recorded: every phase ran, the agents
+    # worked, and the change has sat in review.
+    metrics = client.get(f"/v1/tasks/{task['id']}/metrics").json()
+    assert metrics["leadMs"] > 0 and metrics["activeMs"] > 0 and metrics["reviewMs"] > 0, metrics
+    assert {r["phase"] for r in metrics["runs"]} >= {"implement", "review", "simplify"}, metrics["runs"]
+    assert abs(metrics["costUsd"] - sum(r["costUsd"] for r in metrics["runs"])) < 1e-9
+
     fake_github.merge(pr["number"])
     wait_until(
         lambda: _task(client, task["id"])["status"] == "done",

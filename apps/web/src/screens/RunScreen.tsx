@@ -26,7 +26,7 @@ import {
 import { Button, Callout, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
 import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, runLabel } from "@dude/domain";
 import type { AgentRole, PersistedEvent } from "@dude/domain";
-import type { ApiClient, RunDetail } from "../api/client.ts";
+import type { ApiClient, Person, RunDetail } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
 import { PAUSE_WORDS, apply, emptyProjection, snapshot, type Turn } from "../api/conversation.ts";
 import type { ComposerSubmission } from "@dude/design-system/components";
@@ -59,6 +59,9 @@ const STATUS_EVENTS: ReadonlySet<string> = new Set([
 
 export function RunScreen({ client, runId, title, breadcrumb }: RunScreenProps) {
   const [run, setRun] = useState<RunDetail | null>(null);
+  // Who drives the task, and who is reading: only its owner answers its
+  // agents, so anyone else sees the asks read-only, with whom they wait on.
+  const [driver, setDriver] = useState<{ owner: Person | null; you: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
 
@@ -75,8 +78,12 @@ export function RunScreen({ client, runId, title, breadcrumb }: RunScreenProps) 
     let cancelled = false;
     client
       .getRun(runId)
-      .then((fresh) => {
-        if (!cancelled) setRun(fresh);
+      .then(async (fresh) => {
+        // Read together, so the asks never render as someone's they are not.
+        const [task, people] = await Promise.all([client.getTask(fresh.taskId), client.listPeople()]);
+        if (cancelled) return;
+        setRun(fresh);
+        setDriver({ owner: task.owner, you: people.you });
       })
       .catch((err: unknown) => {
         if (!cancelled) setProblem(err instanceof Error ? err.message : String(err));
@@ -144,6 +151,9 @@ export function RunScreen({ client, runId, title, breadcrumb }: RunScreenProps) 
   if (!run) {
     return <div className="runScreen">{problem ?? <Spinner label="Loading the run…" />}</div>;
   }
+
+  // Someone else's to answer: their name. A task nobody owns is anyone's.
+  const waitingOn = driver?.owner && driver.owner.id !== driver.you ? driver.owner.name : undefined;
 
   // The agent this Run is. A phase Run carries its role; one created
   // directly through the API runs as an orchestrator.
@@ -235,15 +245,18 @@ export function RunScreen({ client, runId, title, breadcrumb }: RunScreenProps) 
                         text: conversation.openQuestion.text,
                         askedBy: runLabel(run),
                         askedAt: conversation.openQuestion.at,
-                        options: conversation.openQuestion.options,
+                        // Choices only for whoever may choose.
+                        options: waitingOn ? [] : conversation.openQuestion.options,
                       }
                     : undefined
                 }
                 // A paused Run takes an answer (a parked one is resumed by it),
-                // not a steer.
-                disabled={!isLive || (run.status === "paused" && !conversation.openQuestion)}
+                // not a steer; a question is its owner's to answer.
+                disabled={!isLive || (run.status === "paused" && !conversation.openQuestion) ||
+                  (conversation.openQuestion !== null && waitingOn !== undefined)}
                 disabledReason={
                   !isLive ? "This run has finished — nobody would hear it."
+                    : waitingOn && (conversation.openQuestion || run.dudePause === "person") ? `Waiting for ${waitingOn} to answer.`
                     : run.dudePause ? PAUSE_WORDS[run.dudePause].composer
                     : "This run is paused. Resume it to steer."
                 }
@@ -252,7 +265,7 @@ export function RunScreen({ client, runId, title, breadcrumb }: RunScreenProps) 
             }
             emptyMessage="Waiting for the agent to start."
           >
-            {conversation.turns.map((turn) => renderTurn(turn, role, conversation.contextWindow, !isLive, decide))}
+            {conversation.turns.map((turn) => renderTurn(turn, role, conversation.contextWindow, !isLive, decide, waitingOn))}
             {conversation.activity ? (
               <ChatMessage
                 role={role}
@@ -293,7 +306,7 @@ export function RunScreen({ client, runId, title, breadcrumb }: RunScreenProps) 
 }
 
 function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: boolean,
-  decide?: (requestId: string, approve: boolean) => void) {
+  decide?: (requestId: string, approve: boolean) => void, waitingOn?: string) {
   switch (turn.kind) {
     case "repositoryRequest": {
       // Asked of a person, like a question: approve brings it into the Run.
@@ -309,6 +322,7 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
           askedAt={turn.at}
           answeredAt={turn.decidedAt}
           dismissed={ended && turn.decision === null}
+          waitingOn={waitingOn}
           {...(decide && turn.decision === null && !ended
             ? { onChoose: (choice: string) => decide(turn.requestId, choice === "Approve") }
             : {})}
@@ -336,6 +350,7 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
           askedAt={turn.at}
           answeredAt={turn.answeredAt}
           dismissed={ended && turn.answeredAt === null}
+          waitingOn={waitingOn}
         />
       );
     case "prompt":

@@ -23,6 +23,7 @@ import { startPush } from "./push.ts";
 import { DeleteEpicDialog, EpicDialog, epicRef, rowActions, type Intent } from "./screens/actions.tsx";
 import { NewProjectDialog } from "./screens/NewProjectDialog.tsx";
 import { InboxScreen } from "./screens/InboxScreen.tsx";
+import { EpicMetricsSection } from "./screens/MetricsSection.tsx";
 import { MySettingsScreen } from "./screens/MySettingsScreen.tsx";
 import { OrganizationSettingsScreen } from "./screens/OrganizationSettingsScreen.tsx";
 import { ProjectSettingsScreen } from "./screens/ProjectSettingsScreen.tsx";
@@ -209,6 +210,7 @@ export function App({ client, onSignOut }: AppProps) {
       <Board
         project={project}
         epic={scope.epic}
+        overview={scope.epic ? <EpicMetricsSection client={client} epicId={scope.epic.id} /> : undefined}
         selected={selected}
         onSelect={(ref) => go(inTree(ref))}
         groupBy={groupByEpic ? "epic" : null}

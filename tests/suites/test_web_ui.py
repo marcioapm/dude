@@ -16,7 +16,7 @@ import pytest
 from playwright.sync_api import Page, expect
 
 from fake_github import FakeGitHub
-from helpers import ApiClient, toast, wait_until
+from helpers import ApiClient, create_api_key, toast, wait_until
 
 pytestmark = pytest.mark.ui
 
@@ -526,4 +526,96 @@ def test_everything_waiting_on_you_is_in_one_place(
     expect(rows.nth(1)).to_contain_text("Read web?")
     rows.nth(1).get_by_role("button").click()
     expect(page.get_by_test_id("repository-request")).to_contain_text("Read web")
+    assert console_errors == []
+
+
+def test_only_a_tasks_owner_answers_and_anyone_can_take_it_over(
+    page: Page, web_url: str, env, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    """Whoever creates a task drives it: a colleague sees its agent's
+    question, but not the choices — they wait on the owner. Taking the task
+    over from its page makes the question theirs to answer."""
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
+        "implementer": {"model": "fake/ask"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
+    item = client.create_task(forge_project["id"], "Ask the owner")
+    assert item["owner"]["name"] == "e2e user"
+    assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
+    question = wait_until(lambda: next(iter(client.get("/v1/questions", params={"taskId": item["id"]}).json()["questions"]), None),
+                          timeout=30, message="the agent never asked")
+    bo_key = create_api_key(env.owner_dsn, org["id"], name="Bo")
+    bo = ApiClient(env.control_plane_url, bo_key)
+    people = bo.get("/v1/people").json()["people"]
+    assert sorted(p["name"] for p in people) == ["Bo", "e2e user"]
+
+    # Not Bo's to answer, and the refusal says whose it is.
+    refused = bo.post(f"/v1/questions/{question['id']}/answer", {"text": "yes"})
+    assert refused.status_code == 403, refused.text
+    assert refused.json()["error"]["code"] == "not_owner"
+    assert "only e2e user can answer this" in refused.json()["error"]["message"]
+
+    _sign_in(page, web_url, bo_key)
+    page.goto(f"{web_url}#/session/{question['runId']}")
+    expect(page.get_by_test_id("waiting-on")).to_have_text("Waiting for e2e user to answer")
+    expect(page.get_by_role("group", name="Answer with one of")).to_have_count(0)
+    expect(page.get_by_placeholder("Waiting for e2e user to answer.")).to_be_disabled()
+
+    # Bo takes it over from the task's page.
+    page.goto(f"{web_url}#/task/{item['id']}")
+    owner = page.get_by_test_id("task-owner")
+    expect(owner).to_have_attribute("data-owner", "e2e user")
+    owner.get_by_role("combobox", name="Owner").click()
+    page.get_by_role("listbox").get_by_text("Bo").click()
+    expect(owner).to_have_attribute("data-owner", "Bo")
+    assert client.get(f"/v1/tasks/{item['id']}").json()["owner"]["name"] == "Bo"
+    changed = [e for e in client.events(taskId=item["id"]) if e["eventType"] == "task.owner_changed"]
+    assert len(changed) == 1 and changed[0]["payload"]["to"] != changed[0]["payload"]["from"]
+    # The board and sidebar name its owner too.
+    tasks = [t for p in client.get("/v1/navigation").json()["projects"] for t in p["tasks"]]
+    assert next(t for t in tasks if t["id"] == item["id"])["people"][0]["name"] == "Bo"
+
+    # Now it is Bo's to answer, from the chat.
+    page.goto(f"{web_url}#/session/{question['runId']}")
+    expect(page.get_by_test_id("waiting-on")).to_have_count(0)
+    page.get_by_role("group", name="Answer with one of").get_by_role("button", name="yes").click()
+    wait_until(lambda: client.get("/v1/questions", params={"taskId": item["id"]}).json()["questions"][0]["status"] == "answered",
+               timeout=30, message="Bo's answer was not taken")
+    assert console_errors == []
+
+
+def test_a_tasks_time_and_cost_show_on_its_page_and_its_epics(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    """A delivered task's page says how long its agents worked and waited
+    and what it cost, run by run; its epic's board totals them."""
+    epic = client.post(f"/v1/projects/{forge_project['id']}/epics", {"title": "Metrics"}).json()
+    task = client.create_task(forge_project["id"], "Measure me", epicId=epic["id"])
+    client.post(f"/v1/tasks/{task['id']}/deliver")
+    wait_until(lambda: any(r["phase"] == "review" and r["status"] == "completed" for r in client.task_runs(task["id"])),
+               timeout=60, message="no finished review")
+
+    _sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/task/{task['id']}")
+    metrics = page.get_by_test_id("task-metrics")
+    expect(metrics).to_contain_text("Agents working")
+    expect(metrics).to_contain_text("Cost")
+    expect(page.get_by_test_id("run-metrics").get_by_role("row").filter(has_text="Implement")).to_have_count(1)
+
+    page.goto(f"{web_url}#/epic/{epic['id']}")
+    expect(page.get_by_test_id("epic-metrics")).to_contain_text("of 1 tasks")
+    assert console_errors == []
+
+
+def test_a_project_can_have_its_changes_tested_in_a_browser(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    """The tester phase is a project's choice, off by default."""
+    _sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/project/{forge_project['id']}/settings")
+    page.get_by_role("tab", name="Delivery").click()
+    box = page.get_by_role("checkbox", name="Test it in a browser")
+    expect(box).not_to_be_checked()
+    box.click()
+    page.get_by_test_id("delivery-save").click()
+    expect(toast(page, "Delivery saved")).to_be_visible()
+    assert client.get(f"/v1/projects/{forge_project['id']}").json()["deliveryPolicy"]["test"] is True
     assert console_errors == []

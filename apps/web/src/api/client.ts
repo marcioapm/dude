@@ -20,6 +20,7 @@ import type {
   Repository,
   PullRequest,
   PauseMode,
+  Person,
   Project,
   Run,
   Session,
@@ -37,6 +38,7 @@ import type {
 export type {
   Epic,
   Finding,
+  Person,
   Project,
   PullRequest,
   Repository,
@@ -255,6 +257,11 @@ export class ApiClient {
     return this.#request("GET", `/v1/projects/${projectId}/epics`);
   }
 
+  /** The organization's people, who a task can be handed to; `you` is the signed-in one. */
+  listPeople(): Promise<{ people: Person[]; you: string }> {
+    return this.#request("GET", "/v1/people");
+  }
+
   // -- writes -------------------------------------------------------------
 
   createRun(taskId: string): Promise<Run> {
@@ -268,6 +275,11 @@ export class ApiClient {
   /** Edit a task. What it asks for is fixed once delivery starts; where it sits is not. */
   updateTask(id: string, changes: Partial<TaskFields>): Promise<Task> {
     return this.#request("PATCH", `/v1/tasks/${id}`, changes);
+  }
+
+  /** Hand a task to someone else to drive: they hear of it, and answer for it. */
+  reassignTask(id: string, ownerId: string): Promise<Task> {
+    return this.#request("PATCH", `/v1/tasks/${id}`, { ownerId });
   }
 
   createProject(input: {
@@ -322,6 +334,16 @@ export class ApiClient {
   /** Approve or decline an agent's request for a repository. */
   decideRepositoryRequest(id: string, approve: boolean, note = ""): Promise<{ status: string }> {
     return this.#request("POST", `/v1/repository-requests/${encodeURIComponent(id)}/decide`, { approve, note });
+  }
+
+  /** How long a task's agents worked and waited, how long it sat in review, what it cost. */
+  taskMetrics(taskId: string): Promise<TaskMetrics> {
+    return this.#request("GET", `/v1/tasks/${encodeURIComponent(taskId)}/metrics`);
+  }
+
+  /** An epic's tasks, totalled. */
+  epicMetrics(epicId: string): Promise<EpicMetrics> {
+    return this.#request("GET", `/v1/epics/${encodeURIComponent(epicId)}/metrics`);
   }
 
   /** The key this browser subscribes to notifications with. */
@@ -391,4 +413,42 @@ export class ApiClient {
     const { live, ...rest } = params;
     return `${this.#baseUrl}/v1/events/stream${qs({ ...rest, ...(live ? { live: 1 } : {}), key: this.#apiKey })}`;
   }
+}
+
+export interface Tokens {
+  input: number;
+  output: number;
+}
+
+/** Times in milliseconds; a task's lead time runs until it ends, or now. */
+export interface TaskMetrics {
+  leadMs: number;
+  activeMs: number;
+  humanWaitMs: number;
+  reviewMs: number;
+  costUsd: number;
+  tokens: Tokens;
+  runs: Array<{
+    id: string;
+    phase: string | null;
+    role: string | null;
+    category: string | null;
+    status: string;
+    activeMs: number;
+    parkedMs: number;
+    costUsd: number;
+    tokens: Tokens;
+  }>;
+}
+
+export interface EpicMetrics {
+  tasks: number;
+  done: number;
+  /** The middle lead time of its finished tasks; null until one is. */
+  leadMsMedian: number | null;
+  activeMs: number;
+  humanWaitMs: number;
+  reviewMs: number;
+  costUsd: number;
+  tokens: Tokens;
 }

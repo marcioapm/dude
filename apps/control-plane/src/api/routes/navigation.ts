@@ -44,7 +44,7 @@ interface TaskRow {
   epicId: string | null;
   title: string;
   status: string;
-  requestedBy: string | null;
+  owner: { id: string; name: string } | null;
   statusSince: string;
 }
 
@@ -114,7 +114,8 @@ async function getNavigation(ctx: RequestContext): Promise<Response> {
     const tasks = (await sql`
       SELECT w.id, p.key_prefix || '-' || w.number AS key,
              w.project_id AS "projectId", w.epic_id AS "epicId", w.title, w.status,
-             w.requested_by AS "requestedBy",
+             (SELECT json_build_object('id', k.id, 'name', k.name) FROM api_keys k
+              WHERE k.id = w.owner_key_id) AS owner,
              COALESCE(
                (SELECT max(e.occurred_at) FROM events e
                 WHERE e.task_id = w.id AND e.event_type = 'task.status_changed'),
@@ -173,9 +174,8 @@ async function getNavigation(ctx: RequestContext): Promise<Response> {
         status: w.status,
         statusSince: w.statusSince,
         costUsd: costByTask.get(w.id) ?? 0,
-        // Whoever asked for it is the person waiting on it. Real membership
-        // lands with the organization model (plan §53).
-        people: w.requestedBy ? [{ id: w.requestedBy, name: w.requestedBy }] : [],
+        // Who drives it: the person it waits on when an agent asks.
+        people: w.owner ? [w.owner] : [],
         runs: [...attempts.entries()].map(([attempt, phaseRuns]) => ({
           // The attempt's id is its first Run's, so selecting the attempt
           // row can still land on a real Run.

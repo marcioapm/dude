@@ -48,6 +48,14 @@ describe("QuestionCard choices", () => {
     }
   });
 
+  test("waiting on someone else: says who, lists the choices, offers none", () => {
+    const h = html(<QuestionCard role="orchestrator" text="Ship it?" options={options} onChoose={noop} waitingOn="Ana" />);
+    expect(buttons(h)).toEqual([]);
+    expect(h).toContain("Waiting for Ana to answer</p>");
+    expect(h).toContain('aria-label="Choices offered"');
+    expect(h).not.toContain("Needs you");
+  });
+
   test("waiting announces once in a status region", () => {
     const h = html(<QuestionCard role="orchestrator" text="Ship it?" />);
     expect(h).toMatch(/<span role="status"[^>]*>Needs you\. Blocked until you answer\.<\/span>/);
