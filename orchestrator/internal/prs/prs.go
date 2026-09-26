@@ -44,9 +44,9 @@ type Syncer struct {
 }
 
 type tracked struct {
-	ID, ProjectID, TaskID, RunID, State, Checks, Review, RepoURL, RepoName string
-	Number                                                                 int
-	FeedbackCursor                                                         *time.Time
+	ID, ProjectID, TaskID, RunID, State, Checks, Review, HeadSHA, RepoURL, RepoName string
+	Number                                                                          int
+	FeedbackCursor                                                                  *time.Time
 }
 
 // Sync reads one PR from GitHub, records what changed, and signals the
@@ -55,9 +55,9 @@ func (s *Syncer) Sync(ctx context.Context, org, prID string) error {
 	var pr tracked
 	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `SELECT pr.id, pr.project_id, pr.task_id, COALESCE(pr.run_id, ''), pr.state::text,
-			pr.checks::text, pr.review::text, r.url, r.name, pr.number, pr.feedback_cursor
+			pr.checks::text, pr.review::text, COALESCE(pr.head_sha, ''), r.url, r.name, pr.number, pr.feedback_cursor
 			FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id WHERE pr.id = $1`, prID).
-			Scan(&pr.ID, &pr.ProjectID, &pr.TaskID, &pr.RunID, &pr.State, &pr.Checks, &pr.Review,
+			Scan(&pr.ID, &pr.ProjectID, &pr.TaskID, &pr.RunID, &pr.State, &pr.Checks, &pr.Review, &pr.HeadSHA,
 				&pr.RepoURL, &pr.RepoName, &pr.Number, &pr.FeedbackCursor)
 	}); err != nil {
 		return err
@@ -71,6 +71,12 @@ func (s *Syncer) Sync(ctx context.Context, org, prID string) error {
 	status, err := gh.PullRequest(ctx, slug, pr.Number)
 	if err != nil {
 		return err
+	}
+	// No CI reports unknown, and so does a new head before CI has
+	// registered on it. A pull request that has had CI has CI: unknown on
+	// it is CI yet to start, not a green light.
+	if status.Checks == forge.ChecksUnknown && pr.Checks != forge.ChecksUnknown {
+		status.Checks = forge.ChecksPending
 	}
 	since := ""
 	if pr.FeedbackCursor != nil {
@@ -168,7 +174,7 @@ func (s *Syncer) Sync(ctx context.Context, org, prID string) error {
 		return err
 	}
 
-	signal := forge.Classify(forge.PriorState{State: pr.State, Checks: pr.Checks, Review: pr.Review}, status, fresh, s.FactoryLogins)
+	signal := forge.Classify(forge.PriorState{State: pr.State, Checks: pr.Checks, Review: pr.Review, HeadSHA: pr.HeadSHA}, status, fresh, s.FactoryLogins)
 	if signal == nil || workflowRunID == "" {
 		return nil
 	}

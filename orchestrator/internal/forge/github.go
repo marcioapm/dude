@@ -272,8 +272,14 @@ func (g *GitHub) PullRequest(ctx context.Context, slug string, number int) (Stat
 			Conclusion string `json:"conclusion"`
 		} `json:"check_runs"`
 	}
+	// A token without Checks: read is refused (403), and GitHub
+	// Enterprise without Actions has no such endpoint (404): no check runs
+	// to read, which is no reason to stop reading the rest.
 	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/commits/%s/check-runs?per_page=100", slug, p.Head.SHA), nil, &runs); err != nil {
-		return Status{}, err
+		var e *Error
+		if !asError(err, &e) || e.Status != 403 && e.Status != 404 {
+			return Status{}, err
+		}
 	}
 	var reviews []ghReview
 	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d/reviews", slug, number), nil, &reviews); err != nil {

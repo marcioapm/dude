@@ -8,9 +8,10 @@ import (
 
 // PriorState is what dude last recorded about a pull request.
 type PriorState struct {
-	State  string
-	Checks string
-	Review string
+	State   string
+	Checks  string
+	Review  string
+	HeadSHA string
 }
 
 // Signal is what the workflow is told about a change on a pull request.
@@ -159,7 +160,10 @@ func Classify(prior PriorState, current Status, feedback []Feedback, factoryLogi
 	}
 	// Approval or green checks gained or lost: the task may be ready to
 	// merge, or no longer. Worth telling the workflow, not a fixer.
-	if Ready(current.Review, current.Checks) != Ready(prior.Review, prior.Checks) {
+	// A new head that is ready is news too: the workflow holds readiness
+	// back until the pull request's head is the one it pushed.
+	ready := Ready(current.Review, current.Checks)
+	if ready != Ready(prior.Review, prior.Checks) || ready && current.HeadSHA != prior.HeadSHA {
 		return &Signal{Kind: "readiness"}
 	}
 	return nil

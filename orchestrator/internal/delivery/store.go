@@ -604,8 +604,8 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 		// id is returned, and it is not announced twice.
 		tag, err := tx.Exec(ctx, `
 			INSERT INTO pull_requests (id, organization_id, project_id, task_id, run_id, repository_id, number,
-			                           node_id, url, head_branch, base_branch, head_sha, title, body, state)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::pull_request_state)
+			                           node_id, url, head_branch, base_branch, head_sha, title, body, state, checks)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::pull_request_state, 'unknown')
 			ON CONFLICT (repository_id, number) DO NOTHING`,
 			id, org, st.ProjectID, st.TaskID, db.Nullable(st.HeadRunID), repo.ID, ref.Number,
 			db.Nullable(ref.NodeID), ref.URL, st.Branch, repo.DefaultBranch, ref.HeadSHA, title, body, ref.State)
@@ -652,12 +652,16 @@ func prBody(goal string, criteria []string, findings []struct{ Category, Severit
 // PullRequestStates is each pull request's state as last synced: open,
 // draft, merged or closed.
 // PullRequestState is a task's pull request as the workflow weighs it.
-type PullRequestState struct{ State, Checks, Review string }
+// PullRequestState is a pull request as last synced from the forge: its
+// head, and its repository's name to match that head against.
+type PullRequestState struct{ State, Checks, Review, HeadSHA, Repo string }
 
 func (s *Store) PullRequestStates(ctx context.Context, org string, prIDs []string) ([]PullRequestState, error) {
 	var out []PullRequestState
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT state::text, checks::text, review::text FROM pull_requests WHERE id = ANY($1)`, prIDs)
+		rows, err := tx.Query(ctx, `SELECT pr.state::text, pr.checks::text, pr.review::text,
+			COALESCE(pr.head_sha, ''), r.name FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
+			WHERE pr.id = ANY($1)`, prIDs)
 		if err != nil {
 			return err
 		}

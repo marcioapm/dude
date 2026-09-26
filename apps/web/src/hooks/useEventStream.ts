@@ -87,27 +87,34 @@ export function useEventStream(options: UseEventStreamOptions): EventStreamState
 }
 
 /**
- * Call `reload` when events arrive on a scope, coalesced.
+ * Call `reload` when events arrive on a scope, at most once per `everyMs`.
  *
  * For views that re-read their data rather than folding events themselves:
- * the sidebar, the delivery view. A phase emits dozens of events in a burst,
- * and re-reading once per burst rather than once per event is what keeps a
- * busy organization from turning each open panel into a request storm.
+ * the sidebar, the delivery view, the metrics. A phase emits dozens of
+ * events in a burst, and re-reading once per interval rather than once per
+ * event is what keeps a busy organization from turning each open panel into
+ * a request storm. A throttle, not a debounce: an agent at work sends events
+ * steadily, and a debounce would never fire until it stopped — exactly
+ * when the view is changing.
  */
 export function useReloadOnEvents(
   options: Omit<UseEventStreamOptions, "limit">,
   reload: () => void,
-  debounceMs = 300,
+  everyMs = 300,
 ): void {
   // Only whether something arrived matters, so the stream keeps almost
   // nothing.
   const { events } = useEventStream({ ...options, limit: 1 });
   const latest = useRef(reload);
   latest.current = reload;
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
-    if (events.length === 0) return;
-    const timer = setTimeout(() => latest.current(), debounceMs);
-    return () => clearTimeout(timer);
-  }, [events, debounceMs]);
+    if (events.length === 0 || timer.current !== undefined) return;
+    timer.current = setTimeout(() => {
+      timer.current = undefined;
+      latest.current();
+    }, everyMs);
+  }, [events, everyMs]);
+  useEffect(() => () => clearTimeout(timer.current), []);
 }

@@ -49,6 +49,22 @@ async function appliedVersions(sql: SQL): Promise<Map<string, string>> {
   return new Map(rows.map((r: { version: string; checksum: string }) => [r.version, r.checksum]));
 }
 
+/**
+ * Migrations move every organization's rows (renames, backfills). Under
+ * row-level security a role that does not bypass it sees none of them, so
+ * those statements would match nothing and succeed — and the migration be
+ * recorded as done. Refuse up front instead.
+ */
+async function requireBypassRLS(sql: SQL): Promise<void> {
+  const [role] = await sql`SELECT rolsuper OR rolbypassrls AS ok FROM pg_roles WHERE rolname = current_user`;
+  if (!role?.ok) {
+    throw new Error(
+      "Migrations must run as a role that bypasses row-level security (the owner, e.g. dude): " +
+        "as any other role their data changes would silently touch no rows.",
+    );
+  }
+}
+
 function checksum(contents: string): string {
   return createHash("sha256").update(contents).digest("hex");
 }
@@ -65,6 +81,7 @@ export async function migrate(
     await ensureMigrationsTable(sql);
     const already = await appliedVersions(sql);
     const files = await listMigrationFiles(opts.dir);
+    if (files.some((f) => !already.has(f.version))) await requireBypassRLS(sql);
 
     for (const file of files) {
       const contents = await readFile(file.path, "utf8");
