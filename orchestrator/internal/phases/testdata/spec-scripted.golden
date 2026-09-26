@@ -1,0 +1,92 @@
+{
+  "name": "implement wi_1",
+  "labels": {
+    "dude.harness": "scripted",
+    "dude.model": "fake/scripted",
+    "dude.org": "org_1",
+    "dude.phase": "implement",
+    "dude.run": "run_1",
+    "dude.task": "wi_1"
+  },
+  "image": {
+    "ref": "registry.example/dude/agent:1"
+  },
+  "workload": {
+    "adapter": "acp",
+    "command": [
+      "lux-fake"
+    ],
+    "prompt": "append FACTORY.md Written by run run_1\nwrite /.lux/run/artifacts/NOTES.md # What changed  Added FACTORY.md for run_1.\ncommit Add FACTORY.md for run_1\necho Implemented it.",
+    "workdir": "/workspace",
+    "mcpServers": [
+      {
+        "name": "dude",
+        "service": "dude"
+      }
+    ],
+    "services": [
+      {
+        "name": "dude",
+        "url": "http://10.9.8.7:3120/mcp",
+        "headers": [
+          {
+            "name": "Authorization",
+            "secret": "DUDE_TOOLS_AUTH"
+          }
+        ],
+        "loopback": true
+      }
+    ]
+  },
+  "secrets": [
+    {
+      "name": "GIT_TOKEN",
+      "value": "ghp_golden"
+    },
+    {
+      "name": "DUDE_TOOLS_AUTH",
+      "value": "Bearer tok_golden"
+    }
+  ],
+  "git": {
+    "repositories": [
+      {
+        "name": "api",
+        "url": "https://github.com/acme/api.git",
+        "ref": "main",
+        "credential": "GIT_TOKEN",
+        "path": "/workspace/repos/api"
+      },
+      {
+        "name": "web",
+        "url": "https://github.com/acme/web.git",
+        "ref": "abc123",
+        "credential": "GIT_TOKEN",
+        "path": "/workspace/repos/web",
+        "push": false
+      }
+    ],
+    "push": {
+      "branch": "dude/wi_1/run-run_1"
+    }
+  },
+  "volumes": [
+    {
+      "name": "workspace",
+      "path": "/workspace",
+      "kind": "state"
+    },
+    {
+      "name": "home",
+      "path": "/home/agent",
+      "kind": "state"
+    }
+  ],
+  "network": {
+    "egress": [
+      {
+        "cidr": "10.9.8.7/32"
+      }
+    ]
+  }
+}
