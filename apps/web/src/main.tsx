@@ -76,6 +76,7 @@ function KeyPrompt({ refused, onSubmit }: { refused: boolean; onSubmit: (key: st
   return (
     <div className="keyPrompt">
       <Card variant="flat">
+        <img className="keyPromptMark" src="/dude.png" alt="" width={160} height={160} />
         <CardHeader title={<h1>dude</h1>} />
         <CardBody>
           <form

@@ -350,7 +350,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         onSelect={(ref) => go(inTree(ref))}
         onShowAllAttention={() => go({ view: "inbox" })}
         menuItems={menuItems}
-        title="dude"
+        title={<span className="brand"><img src="/favicon-64.png" alt="" width={24} height={24} />dude</span>}
         footer={
           <div className="sidebarFooter">
             <Button size="sm" variant="ghost" leadingIcon="plus" onClick={() => setOpen({ kind: "newProject" })} data-testid="new-project">

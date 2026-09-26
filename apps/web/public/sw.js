@@ -23,7 +23,7 @@ self.addEventListener("push", (event) => {
       tag: message.tag || undefined,
       renotify: Boolean(message.tag),
       data: { url: message.url || "" },
-      icon: "/icon.svg",
+      icon: "/icon-192.png",
     }),
   );
 });
