@@ -15,8 +15,8 @@ A GitHub Release per `v*` tag holds:
 | `SHA256SUMS` | `sha256sum` output over the tarballs and `runtime-image.txt` |
 
 Unpack the tarball into a prefix ([layout](../README.md#releases)).
-`dude-migrate` resolves its migrations relative to its own path, so a
-symlink to it from elsewhere still works.
+`dude-migrate` carries its migrations inside itself; it reads no SQL from
+disk.
 
 Agents run the image in `runtime-image.txt`: set `DUDE_AGENT_IMAGE` to it.
 A project's own `runtimeImage` overrides it for that project.
@@ -127,7 +127,6 @@ everything else is revalidated.
 | Variable | Default | |
 | --- | --- | --- |
 | `DATABASE_URL` | required | Postgres, as the owner. **Secret.** |
-| `DUDE_MIGRATIONS_DIR` | `../share/dude/migrations` beside the binary | The directory of `.sql` files. |
 
 ### Stored in the database, not configured
 

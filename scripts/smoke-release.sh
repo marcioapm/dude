@@ -6,8 +6,10 @@
 #
 # It unpacks the tarball into a temporary prefix and checks that
 #   - every bin/* --version prints the version, with DATABASE_URL unset;
-#   - bin/dude-migrate, with no DUDE_MIGRATIONS_DIR, applies every shipped
-#     migration, reports them all applied, and a second run changes nothing;
+#   - the tarball holds no .sql files;
+#   - bin/dude-migrate, run from a directory with no SQL in it, applies
+#     every migration in this repository's migrations/, reports them all
+#     applied, and a second run changes nothing;
 #   - bin/dude-backend, as the app role, serving share/dude/web, answers
 #     /health with {"status":"ok"} and / with HTML.
 #
@@ -16,7 +18,7 @@
 # VERSION          the expected version; by default, the one in the file name
 # SMOKE_PORT       where dude-backend listens (3999)
 #
-# Needs curl and tar.
+# Run it from the checkout the tarball was built from. Needs curl and tar.
 set -euo pipefail
 
 tarball="${1:?usage: smoke-release.sh <tarball>}"
@@ -32,6 +34,7 @@ if [[ -z "${VERSION:-}" ]]; then
   VERSION="${BASH_REMATCH[1]}"
 fi
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 prefix="$(mktemp -d "${TMPDIR:-/tmp}/dude-smoke.XXXXXX")"
 backend_pid=""
 cleanup() {
@@ -51,6 +54,10 @@ fail() {
 echo "unpacking $name into $prefix"
 tar -xzf "$tarball" -C "$prefix"
 
+sql="$(tar -tzf "$tarball" | grep -i '\.sql$' || true)"
+[[ -z "$sql" ]] || fail "the tarball ships SQL; dude-migrate embeds it: $sql"
+echo "ok  the tarball holds no .sql files"
+
 for cmd in dude-orchestrator dude dude-backend dude-migrate; do
   bin="$prefix/bin/$cmd"
   [[ -x "$bin" ]] || fail "bin/$cmd is missing or not executable"
@@ -59,18 +66,20 @@ for cmd in dude-orchestrator dude dude-backend dude-migrate; do
   echo "ok  bin/$cmd --version = $got"
 done
 
+# From an empty directory, so no SQL beside it or under it can be read.
 migrate() {
-  env -u DUDE_MIGRATIONS_DIR DATABASE_URL="$OWNER_URL" "$prefix/bin/dude-migrate" "$@"
+  (cd "$prefix/empty" && DATABASE_URL="$OWNER_URL" "$prefix/bin/dude-migrate" "$@")
 }
+mkdir "$prefix/empty"
 
 migrate || fail "dude-migrate exited $?"
 
-want="$(find "$prefix/share/dude/migrations" -maxdepth 1 -name '*.sql' -exec basename {} \; | LC_ALL=C sort | sed 's/^/applied  /')"
-[[ -n "$want" ]] || fail "the tarball ships no migrations"
+want="$(find "$ROOT/migrations" -maxdepth 1 -name '*.sql' -exec basename {} \; | LC_ALL=C sort | sed 's/^/applied  /')"
+[[ -n "$want" ]] || fail "no migrations in $ROOT/migrations"
 got="$(migrate --status)" || fail "dude-migrate --status exited $?"
 if [[ "$got" != "$want" ]]; then
   diff <(echo "$want") <(echo "$got") >&2 || true
-  fail "dude-migrate --status does not report every shipped migration applied"
+  fail "dude-migrate --status does not report every migration in migrations/ applied"
 fi
 echo "ok  dude-migrate --status: $(echo "$got" | wc -l | tr -d ' ') migrations applied"
 
