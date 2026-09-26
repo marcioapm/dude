@@ -211,21 +211,21 @@ func (s *Server) serverFor(c Caller) *mcp.Server {
 		if !t.allowed(c.Role) {
 			continue
 		}
-		srv.AddTool(&mcp.Tool{Name: t.name, Description: t.description, InputSchema: t.schema},
-			func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-				out, err := s.call(ctx, c, t, req.Params.Arguments)
-				var refused refusal
-				if errors.As(err, &refused) {
-					// Said to the agent, which can do something about it; not
-					// a failure of the server.
-					return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: refused.Error()}}}, nil
-				}
-				if err != nil {
-					return nil, err
-				}
-				return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(out)}},
-					StructuredContent: json.RawMessage(out)}, nil
-			})
+		handler := func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			out, err := s.call(ctx, c, t, req.Params.Arguments)
+			var refused refusal
+			if errors.As(err, &refused) {
+				// Said to the agent, which can do something about it; not
+				// a failure of the server.
+				return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: refused.Error()}}}, nil
+			}
+			if err != nil {
+				return nil, err
+			}
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(out)}},
+				StructuredContent: json.RawMessage(out)}, nil
+		}
+		srv.AddTool(&mcp.Tool{Name: t.name, Description: t.description, InputSchema: t.schema}, handler)
 	}
 	return srv
 }
@@ -251,7 +251,16 @@ func (t tool) allowed(role string) bool {
 	return false
 }
 
+// renamed: tools' names before "work item" became "task". A Run already
+// on lux when that shipped — parked ones resume days later — has the old
+// dude CLI in its image, which calls them by these. (Over MCP an agent
+// lists the tools afresh each session.)
+var renamed = map[string]string{"list_work": "list_tasks", "create_work_item": "create_task"}
+
 func find(name string) (tool, bool) {
+	if now, ok := renamed[name]; ok {
+		name = now
+	}
 	for _, t := range tools {
 		if t.name == name {
 			return t, true
@@ -322,14 +331,25 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 	return out, err
 }
 
+// oldName is what a tool was called before, for the calls a Run made
+// under it to count against its budget; else the name itself.
+func oldName(tool string) string {
+	for old, now := range renamed {
+		if now == tool {
+			return old
+		}
+	}
+	return tool
+}
+
 // withinLimits refuses a call past the Run's budget: counted from the
 // ledger, where every call is.
 func withinLimits(ctx context.Context, tx pgx.Tx, c Caller, tool string) error {
 	var recent, sameTool int
 	if err := tx.QueryRow(ctx, `SELECT
 			count(*) FILTER (WHERE occurred_at > now() - interval '1 minute'),
-			count(*) FILTER (WHERE payload->>'tool' = $3)
-		FROM events WHERE run_id = $1 AND event_type = $2`, c.RunID, EventType, tool).Scan(&recent, &sameTool); err != nil {
+			count(*) FILTER (WHERE payload->>'tool' = $3 OR payload->>'tool' = $4)
+		FROM events WHERE run_id = $1 AND event_type = $2`, c.RunID, EventType, tool, oldName(tool)).Scan(&recent, &sameTool); err != nil {
 		return err
 	}
 	limit := map[string]int{"create_task": createsPerRun, "emit_event": eventsPerRun, "request_repository": requestsPerRun}[tool]

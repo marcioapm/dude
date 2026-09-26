@@ -382,3 +382,21 @@ func TestEmitEventsSchemaAsksForAnObject(t *testing.T) {
 		t.Errorf("%d of 2 milestones have their data as an object", both)
 	}
 }
+
+// The CLI in an image from before "work item" became "task" calls the old
+// names; its calls under them count against the same budget.
+func TestAnOldCLIsToolNamesStillWork(t *testing.T) {
+	f := setup(t)
+	old := f.run(t, "run_old", "implementer", "running")
+	// The CLI in an image from before the rename, by the old name; its
+	// calls under that name count against the same budget.
+	if status, out := f.post(t, old, "create_work_item", `{"title":"From an old CLI","goal":"why"}`); status != 200 {
+		t.Errorf("create_work_item, the old name: %d %v", status, out)
+	}
+	mustExec(t, f.owner, `INSERT INTO events (id, organization_id, event_type, run_id, actor_type, actor_id, source, payload)
+		SELECT 'evt_old_' || g, $1, $2, 'run_old', 'agent', 'run_old', 'runner', '{"tool":"create_work_item"}'
+		FROM generate_series(1, 30) g`, f.org, agenttools.EventType)
+	if status, _ := f.post(t, old, "create_task", `{"title":"over budget","goal":"why"}`); status != 422 {
+		t.Errorf("calls under the old name did not count: %d", status)
+	}
+}

@@ -2024,3 +2024,22 @@ func TestAFixCISkipsIsReadyAfterTheGrace(t *testing.T) {
 		return w.taskStatus(wi) == "ready_to_merge"
 	})
 }
+
+// A commit a person adds on GitHub ("Update branch", a committed
+// suggestion) is the pull request's head from then on: approved and green
+// on it, the task is ready, though the factory never pushed it.
+func TestACommitAPersonAddsCanBeReady(t *testing.T) {
+	w := newWorld(t)
+	wi := w.task()
+	w.deliver(wi)
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	w.until("review", func() bool { return w.taskStatus(wi) == "review" })
+	if w.gh.CommitOnTop(w.gh.Pull(1).Head, "Merge branch 'main' into the task") == "" {
+		t.Fatal("could not commit on top")
+	}
+	w.gh.Review(1, "alice", "APPROVED")
+	w.until("ready to merge", func() bool {
+		_, _ = w.prs.Reconcile(context.Background(), 0)
+		return w.taskStatus(wi) == "ready_to_merge"
+	})
+}

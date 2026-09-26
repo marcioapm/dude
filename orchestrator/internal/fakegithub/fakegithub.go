@@ -68,6 +68,21 @@ func (s *Server) SHA(branch string) string {
 	return out
 }
 
+// CommitOnTop adds an empty commit to a branch, as a person on GitHub
+// does with "Update branch" or a committed suggestion; its SHA.
+func (s *Server) CommitOnTop(branch, message string) string {
+	tree, _ := s.git("rev-parse", "refs/heads/"+branch+"^{tree}")
+	sha, err := s.git("-c", "user.name=Alice", "-c", "user.email=alice@example.com",
+		"commit-tree", tree, "-p", "refs/heads/"+branch, "-m", message)
+	if err != nil {
+		return ""
+	}
+	if _, err := s.git("update-ref", "refs/heads/"+branch, sha); err != nil {
+		return ""
+	}
+	return sha
+}
+
 // Log lists a branch's commit subjects, newest first.
 func (s *Server) Log(branch string) []string {
 	out, _ := s.git("log", "--format=%s", "refs/heads/"+branch)

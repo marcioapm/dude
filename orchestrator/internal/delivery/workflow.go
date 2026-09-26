@@ -37,6 +37,10 @@ type State struct {
 	// the next phase checks out. A repository not here starts from its
 	// default branch.
 	Heads map[string]string `json:"heads,omitempty"`
+	// Where the last pull request fix found each repository it moved: a
+	// pull request synced at one of these has not been synced since the
+	// fix, so what is on record about it is not about the fix.
+	Superseded map[string]string `json:"superseded,omitempty"`
 	// What changed, across repositories, as <repo>/<path> — what picks the
 	// reviewers.
 	ChangedPaths []string `json:"changedPaths,omitempty"`
@@ -501,6 +505,10 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 	if !out.Succeeded {
 		return w.escalate(ctx, sc, st, "pr_fix_failed", map[string]any{"runId": runID, "error": out.Error})
 	}
+	st.Superseded = map[string]string{}
+	for repo := range out.Heads {
+		st.Superseded[repo] = st.Heads[repo]
+	}
 	st.HeadRunID, st.PendingRunIDs, st.Heads = runID, nil, out.advance(st.Heads)
 	// The fix may have changed a repository no pull request is open for yet:
 	// that one gets its own, alongside the others.
@@ -579,11 +587,12 @@ func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st 
 			continue
 		}
 		open++
-		// What was synced must be about the head the factory pushed: just
-		// after a fix, the approval and checks on record are the last
-		// head's, and the new one's CI has not run.
-		pushed, ok := st.Heads[s.Repo]
-		ready = ready && forge.Ready(s.Review, s.Checks) && (!ok || pushed == s.HeadSHA)
+		// Just after a fix, the approval and checks on record may be the
+		// head's before it, whose CI said nothing about the fix. Any other
+		// head is what the pull request is now: the fix, or a commit a
+		// person added on top ("Update branch", a committed suggestion).
+		before, fixed := st.Superseded[s.Repo]
+		ready = ready && forge.Ready(s.Review, s.Checks) && !(fixed && s.HeadSHA == before)
 	}
 	if open > 0 && ready {
 		// The move and its event in one transaction: an event lost to a

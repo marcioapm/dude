@@ -19,7 +19,10 @@ export type Place =
 const TREE_KINDS: ReadonlyArray<NavRef["kind"]> = ["project", "epic", "task", "run", "session"];
 
 export function parsePlace(hash: string): Place | null {
-  const [kind, id, view] = hash.replace(/^#\/?/, "").split("/");
+  const [given, id, view] = hash.replace(/^#\/?/, "").split("/");
+  // Links from before "work item" became "task": bookmarks, and
+  // notifications already delivered.
+  const kind = given === "workItem" ? "task" : given;
   if (kind === "org" && id === "settings") return { view: "orgSettings" };
   if (kind === "me" && id === "settings") return { view: "mySettings" };
   if (kind === "waiting") return { view: "inbox" };
