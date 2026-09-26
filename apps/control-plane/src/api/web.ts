@@ -41,7 +41,7 @@ export function webApp(dir: string): Fallback {
     if (file !== root && !file.startsWith(root + sep)) return badRequest();
 
     if (await isFile(file)) {
-      const hashed = path.startsWith(HASHED_PREFIX) && file !== index;
+      const hashed = path.startsWith(HASHED_PREFIX);
       return send(request, file, hashed ? IMMUTABLE : REVALIDATE);
     }
     // A missing hashed asset is a stale page asking for an old build:
