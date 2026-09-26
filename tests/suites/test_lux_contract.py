@@ -167,11 +167,16 @@ def test_an_agent_on_real_lux_calls_dudes_tools(client: ApiClient, lux_project):
                                    if e["eventType"] == "agent.custom.progress"] or None,
                           timeout=60, interval=1, message="nothing came through lux's service socket")
     assert progress[0]["payload"]["data"]["step"] == "through the socket"
-    # And the agent heard the answer: its reply carries the task's key.
+    # And the agent heard the answer: its reply, which comes after the
+    # socket call, carries the task's key.
     implement = client.task_runs(task["id"])[0]
-    messages = " ".join(e["payload"].get("text", "") for e in client.events(runId=implement["id"])
+
+    def replied():
+        text = " ".join(e["payload"].get("text", "") for e in client.events(runId=implement["id"])
                         if e["eventType"] == "agent.message")
-    assert task["key"] in messages, messages
+        return text if task["key"] in text else None
+
+    wait_until(replied, timeout=60, interval=1, message="the agent's reply never named the task")
 
 
 @pytest.mark.skipif(not os.environ.get("DUDE_TEST_TOOLS_HOST"), reason="needs DUDE_TEST_TOOLS_HOST: an address of this machine lux's hosts can reach")

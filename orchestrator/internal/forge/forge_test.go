@@ -221,3 +221,31 @@ func TestReadyOnANewHeadIsNews(t *testing.T) {
 		t.Errorf("ready on the same head again: %+v", s)
 	}
 }
+
+// A matrix build has more check runs than a page holds: a failure on the
+// second page is a failure.
+func TestEveryPageOfCheckRunsCounts(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/acme/api/pulls/1":
+			fmt.Fprint(w, `{"number":1,"state":"open","head":{"sha":"abc"}}`)
+		case "/repos/acme/api/commits/abc/status":
+			fmt.Fprint(w, `{"state":"pending","total_count":0}`)
+		case "/repos/acme/api/commits/abc/check-runs":
+			conclusion := "success"
+			if r.URL.Query().Get("page") == "2" {
+				conclusion = "failure"
+			}
+			fmt.Fprintf(w, `{"total_count":2,"check_runs":[{"status":"completed","conclusion":%q}]}`, conclusion)
+		case "/repos/acme/api/pulls/1/reviews":
+			fmt.Fprint(w, `[]`)
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+	st, err := NewGitHub(Credential{Auth: "pat", Secret: "x", APIBaseURL: srv.URL}).PullRequest(context.Background(), "acme/api", 1)
+	if err != nil || st.Checks != ChecksFailing {
+		t.Fatalf("status %+v, err %v", st, err)
+	}
+}

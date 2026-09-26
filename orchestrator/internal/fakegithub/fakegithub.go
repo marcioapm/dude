@@ -114,7 +114,8 @@ func (s *Server) Review(number int, login, verdict string) {
 }
 
 // SetChecks sets the combined status of every commit: "success", "failure",
-// "pending".
+// "pending"; "none" for no CI at all; "run:<conclusion>" to report through
+// a check run instead.
 func (s *Server) SetChecks(state string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -222,8 +223,8 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	state := s.checks
 	s.mu.Unlock()
-	if strings.HasPrefix(state, "run:") {
-		// Actions only: no commit statuses at all.
+	if strings.HasPrefix(state, "run:") || state == "none" {
+		// Actions only, or no CI on this commit: no commit statuses at all.
 		write(w, 200, map[string]any{"state": "pending", "total_count": 0})
 		return
 	}

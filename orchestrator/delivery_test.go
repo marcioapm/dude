@@ -1985,3 +1985,28 @@ func TestAFixIsNotReadyUntilItsOwnChecksPass(t *testing.T) {
 		return w.taskStatus(wi) == "ready_to_merge"
 	})
 }
+
+// A fix CI does not run on (a docs-only change under path filters, or
+// [skip ci]) reads unknown: held as pending on first sight, in case CI is
+// yet to start, but not forever.
+func TestAFixCISkipsIsReadyOnceSeenAgain(t *testing.T) {
+	w := newWorld(t)
+	wi := w.task()
+	w.deliver(wi)
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	w.gh.Review(1, "alice", "APPROVED")
+	w.until("ready to merge", func() bool {
+		_, _ = w.prs.Reconcile(context.Background(), 0)
+		return w.taskStatus(wi) == "ready_to_merge"
+	})
+	w.gh.Comment(1, "alice", "Please also fix the typo in the README.")
+	w.until("a fixer", func() bool {
+		_, _ = w.prs.Reconcile(context.Background(), 0)
+		return w.taskStatus(wi) == "running"
+	})
+	w.gh.SetChecks("none")
+	w.until("ready again, without CI on the fix", func() bool {
+		_, _ = w.prs.Reconcile(context.Background(), 0)
+		return w.taskStatus(wi) == "ready_to_merge"
+	})
+}

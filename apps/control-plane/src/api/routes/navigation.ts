@@ -17,6 +17,7 @@
  * right now" answerable from the tree: the running reviewer is a live row.
  */
 
+import { ownerJson } from "./people.ts";
 import { DEFAULT_RUN_ROLE, TERMINAL_RUN_STATUSES, runLabel } from "@dude/domain";
 import type { RunStatus, SessionStatus } from "@dude/domain";
 import { withOrg } from "../../db/client.ts";
@@ -114,8 +115,7 @@ async function getNavigation(ctx: RequestContext): Promise<Response> {
     const tasks = (await sql`
       SELECT w.id, p.key_prefix || '-' || w.number AS key,
              w.project_id AS "projectId", w.epic_id AS "epicId", w.title, w.status,
-             (SELECT json_build_object('id', k.id, 'name', k.name) FROM api_keys k
-              WHERE k.id = w.owner_key_id) AS owner,
+             ${sql.unsafe(ownerJson("w"))},
              COALESCE(
                (SELECT max(e.occurred_at) FROM events e
                 WHERE e.task_id = w.id AND e.event_type = 'task.status_changed'),
