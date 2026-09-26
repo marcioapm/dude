@@ -146,21 +146,41 @@ func TestTokensAreMintedWithTheAssumedRolesCredentials(t *testing.T) {
 	}
 }
 
+// The SDK's credential cache reads the wall clock (aws-sdk-go-v2's
+// internal/sdk.NowTime, which cannot be set from outside), so the boundary
+// is crossed in real time: credentials issued valid for RoleExpiryWindow
+// plus margin are outside the window for margin, then inside it.
 func TestTheRoleIsAssumedAgainBeforeItsCredentialsExpire(t *testing.T) {
+	const margin = 750 * time.Millisecond
 	client, signers := ecrServer(t)
-	// Inside RoleExpiryWindow from the moment they are issued.
-	api := &fakeSTS{ttl: RoleExpiryWindow - time.Minute}
+	api := &fakeSTS{ttl: RoleExpiryWindow + margin}
 	c := &clock{time.Now()}
 	p := NewECRWithRole(ecrHost, role, client, api, c.now)
+	issued := time.Now()
 	if _, err := p.Credential(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	// Past the ECR token's refresh point (its own clock), with the role's
+	// credentials still outside RoleExpiryWindow: reused.
 	c.t = c.t.Add(11 * time.Hour)
 	if _, err := p.Credential(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got := signers(); len(got) != 2 || got[1] != "ASIAROLE2" || len(api.assumed()) != 2 {
-		t.Fatalf("signers %v after %d AssumeRoles; want the second token signed by fresh role credentials", got, len(api.assumed()))
+	if time.Since(issued) >= margin {
+		t.Skip("too slow to observe the credentials outside the window")
+	}
+	if got := signers(); len(got) != 2 || got[1] != "ASIAROLE1" || len(api.assumed()) != 1 {
+		t.Fatalf("signers %v after %d AssumeRoles; want the role's credentials reused outside the window", got, len(api.assumed()))
+	}
+	// Across the boundary on the SDK's clock: inside the window, still
+	// before the credentials' real expiry.
+	time.Sleep(time.Until(issued.Add(margin + 100*time.Millisecond)))
+	c.t = c.t.Add(11 * time.Hour)
+	if _, err := p.Credential(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := signers(); len(got) != 3 || got[2] != "ASIAROLE2" || len(api.assumed()) != 2 {
+		t.Fatalf("signers %v after %d AssumeRoles; want the third token signed by freshly assumed credentials", got, len(api.assumed()))
 	}
 }
 
