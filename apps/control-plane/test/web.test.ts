@@ -82,6 +82,17 @@ describe("DUDE_WEB_DIR", () => {
     }
   });
 
+  test("a registered route wins over a file the web app would serve", async () => {
+    // /health is excluded from the fallback by name, so it cannot show
+    // precedence; /sw.js is a real file in the web directory.
+    const withRoute = buildRouter(join(parent, "web")).publicRoute("GET", "/sw.js", () =>
+      Response.json({ from: "route" }),
+    );
+    const res = await withRoute.handle(new Request("http://dude.test/sw.js"));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ from: "route" });
+  });
+
   test("other methods are not served", async () => {
     const res = await get("/", "POST");
     expect(res.status).toBe(404);
