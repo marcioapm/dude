@@ -63,6 +63,10 @@ type Syncer struct {
 	// The hourly rate of the machine a Run runs on, recorded with each Run
 	// when it is submitted (DUDE_MACHINE_USD_PER_HOUR); zero records none.
 	MachineUSDPerHour float64
+	// For tests: the sweep takes a back-off (next_attempt_at) as due this
+	// much earlier, so a retry a minute out is exercised without the wait.
+	// Zero outside tests.
+	RetryAhead time.Duration
 
 	// One follower per live lux Run. The follower is the only writer of a
 	// Run's cursor, so two must never run for the same Run.
@@ -219,9 +223,10 @@ func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 			       -- Aborted in dude but not yet cancelled in lux.
 			       OR (r.status = 'aborted' AND r.lux_run_id IS NOT NULL AND r.lux_stop_reason IS DISTINCT FROM 'cancel'))
 			  -- An abort does not wait out the back-off of the step it ends.
-			  AND (r.status = 'aborted' OR r.next_attempt_at IS NULL OR r.next_attempt_at <= now())
+			  AND (r.status = 'aborted' OR r.next_attempt_at IS NULL
+			       OR r.next_attempt_at <= now() + make_interval(secs => $3::float8))
 			ORDER BY (r.status = 'pending' OR r.control <> 'none' OR r.turn_done_at IS NOT NULL) DESC, r.created_at
-			LIMIT 1000`, s.limits()...)
+			LIMIT 1000`, append(s.limits(), s.RetryAhead.Seconds())...)
 		if err != nil {
 			return err
 		}
