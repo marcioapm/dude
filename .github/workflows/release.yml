@@ -15,6 +15,20 @@ env:
 jobs:
   release:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: dude
+          POSTGRES_PASSWORD: dude
+          POSTGRES_DB: dude
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dude"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
     steps:
       - uses: actions/checkout@v4
 
@@ -29,6 +43,15 @@ jobs:
 
       - name: bun run dist
         run: VERSION="$GITHUB_REF_NAME" bun run dist
+
+      # Before anything is pushed or published: the amd64 tarball, as an
+      # operator would unpack it, runs on this (amd64) runner.
+      - name: Smoke-test the release tarball
+        env:
+          VERSION: ${{ github.ref_name }}
+          SMOKE_OWNER_URL: postgres://dude:dude@localhost:5432/dude
+          SMOKE_APP_URL: postgres://dude_app:dude_app@localhost:5432/dude
+        run: scripts/smoke-release.sh "dist/dude_${GITHUB_REF_NAME}_linux_amd64.tar.gz"
 
       - uses: docker/setup-qemu-action@v3
 
