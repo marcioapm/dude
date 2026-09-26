@@ -1,8 +1,11 @@
 package forge
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -177,5 +180,44 @@ func TestCheckRunsCountAndTheWorstWins(t *testing.T) {
 		worseChecks(ChecksPassing, ChecksPending) != ChecksPending ||
 		worseChecks(ChecksFailing, ChecksPending) != ChecksFailing {
 		t.Error("worseChecks ranks wrong")
+	}
+}
+
+// A token without Checks: read still reads the pull request: its statuses
+// and reviews are what it has.
+func TestCheckRunsItCannotReadAreNone(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/repos/acme/api/pulls/1":
+			fmt.Fprint(w, `{"number":1,"state":"open","head":{"sha":"abc"}}`)
+		case r.URL.Path == "/repos/acme/api/commits/abc/status":
+			fmt.Fprint(w, `{"state":"success","total_count":1}`)
+		case r.URL.Path == "/repos/acme/api/commits/abc/check-runs":
+			w.WriteHeader(403)
+			fmt.Fprint(w, `{"message":"Resource not accessible by personal access token"}`)
+		case r.URL.Path == "/repos/acme/api/pulls/1/reviews":
+			fmt.Fprint(w, `[]`)
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+	st, err := NewGitHub(Credential{Auth: "pat", Secret: "x", APIBaseURL: srv.URL}).PullRequest(context.Background(), "acme/api", 1)
+	if err != nil || st.Checks != ChecksPassing {
+		t.Fatalf("status %+v, err %v", st, err)
+	}
+}
+
+// Ready on a new head is news: the workflow waits for its own head.
+func TestReadyOnANewHeadIsNews(t *testing.T) {
+	approved := open
+	approved.Review = ReviewApproved
+	was := PriorState{State: StateOpen, Checks: ChecksPassing, Review: ReviewApproved, HeadSHA: "old"}
+	if s := Classify(was, approved, nil, nil); s == nil || s.Kind != "readiness" {
+		t.Errorf("ready on a new head: %+v", s)
+	}
+	was.HeadSHA = approved.HeadSHA
+	if s := Classify(was, approved, nil, nil); s != nil {
+		t.Errorf("ready on the same head again: %+v", s)
 	}
 }

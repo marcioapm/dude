@@ -579,7 +579,11 @@ func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st 
 			continue
 		}
 		open++
-		ready = ready && forge.Ready(s.Review, s.Checks)
+		// What was synced must be about the head the factory pushed: just
+		// after a fix, the approval and checks on record are the last
+		// head's, and the new one's CI has not run.
+		pushed, ok := st.Heads[s.Repo]
+		ready = ready && forge.Ready(s.Review, s.Checks) && (!ok || pushed == s.HeadSHA)
 	}
 	if open > 0 && ready {
 		// The move and its event in one transaction: an event lost to a

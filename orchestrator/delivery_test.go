@@ -1942,3 +1942,46 @@ func TestFailingActionsKeepAnApprovedPullRequestOutOfReady(t *testing.T) {
 		return w.taskStatus(wi) == "ready_to_merge"
 	})
 }
+
+// An approval stands through a fix (the reviewer asked for a tweak), but
+// the fix's head has not been through CI: not ready until it has.
+func TestAFixIsNotReadyUntilItsOwnChecksPass(t *testing.T) {
+	w := newWorld(t)
+	wi := w.task()
+	w.deliver(wi)
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	w.until("review", func() bool { return w.taskStatus(wi) == "review" })
+	w.gh.Review(1, "alice", "APPROVED")
+	w.until("ready to merge", func() bool {
+		_, _ = w.prs.Reconcile(context.Background(), 0)
+		return w.taskStatus(wi) == "ready_to_merge"
+	})
+	head := w.gh.Pull(1).Head
+	before := w.gh.SHA(head)
+
+	w.gh.Comment(1, "alice", "Please also rename foo to bar.")
+	w.until("a fixer", func() bool {
+		_, _ = w.prs.Reconcile(context.Background(), 0)
+		return w.taskStatus(wi) == "running"
+	})
+	// Nothing synced while it works: when the fix lands, the approval and
+	// green checks on record are the last head's, and CI on the new one
+	// has not started.
+	w.gh.SetChecks("pending")
+	w.until("the fix pushed", func() bool { return w.gh.SHA(head) != before && w.taskStatus(wi) != "running" })
+	for range 5 {
+		_, _ = w.prs.Reconcile(context.Background(), 0)
+		w.pump()
+	}
+	if w.taskStatus(wi) != "review" {
+		t.Fatalf("%s before the fix's checks ran", w.taskStatus(wi))
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.ready_to_merge'`, wi); n != 1 {
+		t.Errorf("%d ready-to-merge events, want the first only", n)
+	}
+	w.gh.SetChecks("success")
+	w.until("ready once they pass", func() bool {
+		_, _ = w.prs.Reconcile(context.Background(), 0)
+		return w.taskStatus(wi) == "ready_to_merge"
+	})
+}
