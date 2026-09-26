@@ -13,6 +13,7 @@
 //	DUDE_REGISTRY_AUTH           how lux logs in to pull agent images: none (default), static, or ecr
 //	                             (DUDE_AGENT_IMAGE's ECR registry, a token from the AWS default
 //	                             credential chain, e.g. the instance role, minted fresh for each start)
+//	DUDE_ECR_ROLE_ARN            ecr: a pull-only role to assume and mint tokens as (default: the host's credentials)
 //	DUDE_REGISTRY, DUDE_REGISTRY_CREDENTIAL  static: the registry host and its user:password
 //	DUDE_OPENCODE_AUTH/_CONFIG   OpenCode credentials (default: this machine's)
 //	DUDE_PR_RECONCILE            how often open PRs are re-read as a backstop to webhooks (default 15m)
@@ -81,8 +82,11 @@ func run(log *slog.Logger) error {
 		return fmt.Errorf("registry login: %w", err)
 	}
 	if registryLogin != nil {
-		log.Info("agent images are pulled with a registry login", "mode", os.Getenv("DUDE_REGISTRY_AUTH"),
-			"registry", registryLogin.Registry())
+		attrs := []any{"mode", os.Getenv("DUDE_REGISTRY_AUTH"), "registry", registryLogin.Registry()}
+		if by := registry.MintedBy(registryLogin); by != "" {
+			attrs = append(attrs, "minted_by", by)
+		}
+		log.Info("agent images are pulled with a registry login", attrs...)
 	}
 	reconcileEvery, err := time.ParseDuration(env("DUDE_PR_RECONCILE", "15m"))
 	if err != nil {
