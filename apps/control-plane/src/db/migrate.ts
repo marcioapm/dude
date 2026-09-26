@@ -7,6 +7,9 @@
  *
  *   bun run src/db/migrate.ts                  # apply pending migrations
  *   bun run src/db/migrate.ts --status         # list applied/pending
+ *
+ * DUDE_MIGRATIONS_DIR names the directory of .sql files; by default, the
+ * repository's migrations/.
  */
 
 import { readdir, readFile } from "node:fs/promises";
@@ -14,7 +17,11 @@ import { join } from "node:path";
 import { SQL } from "bun";
 import { createHash } from "node:crypto";
 
-const MIGRATIONS_DIR = join(import.meta.dir, "../../../../migrations");
+const REPO_MIGRATIONS_DIR = join(import.meta.dir, "../../../../migrations");
+
+export function migrationsDir(): string {
+  return process.env.DUDE_MIGRATIONS_DIR || REPO_MIGRATIONS_DIR;
+}
 
 export interface MigrationFile {
   version: string;
@@ -22,7 +29,7 @@ export interface MigrationFile {
   path: string;
 }
 
-export async function listMigrationFiles(dir = MIGRATIONS_DIR): Promise<MigrationFile[]> {
+export async function listMigrationFiles(dir = migrationsDir()): Promise<MigrationFile[]> {
   const entries = await readdir(dir);
   return entries
     .filter((f) => f.endsWith(".sql"))
