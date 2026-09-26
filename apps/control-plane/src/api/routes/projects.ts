@@ -54,7 +54,7 @@ const PROJECT_SELECT = `
   agent_models AS "agentModels", runtime_image AS "runtimeImage",
   delivery_policy AS "deliveryPolicy", created_at AS "createdAt"`;
 
-/** The start of a project's work item keys (TK-12): the slug's first letters. */
+/** The start of a project's task keys (TK-12): the slug's first letters. */
 export function keyPrefix(slug: string): string {
   return slug.replace(/[^a-zA-Z]/g, "").slice(0, 4).toUpperCase() || "WI";
 }

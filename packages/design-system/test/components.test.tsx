@@ -14,7 +14,7 @@ import { AttentionList } from "../src/components/Sidebar.tsx";
 import { ToolCallCard } from "../src/components/ToolCallCard.tsx";
 import { Icon } from "../src/icons/index.tsx";
 import { formatTimestamp } from "../src/util/format.ts";
-import type { AttentionItem, NavProject, NavRow, NavWorkItem } from "../src/util/navModel.ts";
+import type { AttentionItem, NavProject, NavRow, NavTask } from "../src/util/navModel.ts";
 
 const noop = () => {};
 const html = (el: React.ReactElement) => renderToStaticMarkup(el);
@@ -110,7 +110,7 @@ describe("ChatComposer answer mode", () => {
 });
 
 describe("NavTree who trailing", () => {
-  const wi = (people: NavWorkItem["people"], running: boolean): NavWorkItem => ({
+  const wi = (people: NavTask["people"], running: boolean): NavTask => ({
     id: "wi",
     key: "WI-1",
     title: "Retry",
@@ -120,9 +120,9 @@ describe("NavTree who trailing", () => {
       ? [{ id: "r", attempt: 1, status: "running", sessions: [{ id: "s1", role: "implementer", status: "running" }, { id: "s2", role: "reviewer", status: "running" }] }]
       : [],
   });
-  const row = (node: NavWorkItem): NavRow => ({
+  const row = (node: NavTask): NavRow => ({
     key: "wi",
-    ref: { kind: "workItem", id: node.id },
+    ref: { kind: "task", id: node.id },
     depth: 1,
     parentKey: null,
     expandable: false,
@@ -133,7 +133,7 @@ describe("NavTree who trailing", () => {
     triage: null,
     projectId: "p",
   });
-  const render = (node: NavWorkItem) =>
+  const render = (node: NavTask) =>
     html(<NavTreeRow row={row(node)} selected={false} tabIndex={0} onFocus={noop} onKeyDown={noop} onClick={noop} onToggle={noop} />);
   const more = (h: string) => />\+(\d+)<\/span>/.exec(h)?.[1] ?? null;
 
@@ -166,10 +166,10 @@ describe("NavTree who trailing", () => {
 
 describe("AttentionList", () => {
   const project: NavProject = { id: "p", name: "Webhooks" };
-  const item = (people: NavWorkItem["people"], withSession: boolean): AttentionItem => ({
-    workItem: { id: `wi-${people?.length ?? 0}-${withSession}`, key: "WI-9", title: "Retry", status: "awaiting_input", people },
+  const item = (people: NavTask["people"], withSession: boolean): AttentionItem => ({
+    task: { id: `wi-${people?.length ?? 0}-${withSession}`, key: "WI-9", title: "Retry", status: "awaiting_input", people },
     project,
-    epic: { id: "e", title: "Reliability", workItems: [] },
+    epic: { id: "e", title: "Reliability", tasks: [] },
     session: withSession ? { id: "s", role: "orchestrator", status: "awaiting_input", activity: "Which backoff?" } : null,
   });
 

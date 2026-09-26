@@ -1,4 +1,4 @@
-"""Product hierarchy: projects, work items, runs and sessions.
+"""Product hierarchy: projects, tasks, runs and sessions.
 
 Covers the per-project, per-role agent model configuration, which is the knob
 that decides which model runs in which role.
@@ -64,53 +64,53 @@ def test_agent_models_can_be_replaced(client: ApiClient):
 
 
 # ---------------------------------------------------------------------------
-# Work items and runs
+# Tasks and runs
 # ---------------------------------------------------------------------------
 
 
-def test_work_item_starts_in_received(client: ApiClient, project: dict):
-    work_item = client.create_work_item(
+def test_task_starts_in_received(client: ApiClient, project: dict):
+    task = client.create_task(
         project["id"], "Add a health endpoint", goal="expose /health",
         acceptanceCriteria=["returns 200", "has a test"],
     )
-    assert work_item["status"] == "received"
-    assert work_item["acceptanceCriteria"] == ["returns 200", "has a test"]
+    assert task["status"] == "received"
+    assert task["acceptanceCriteria"] == ["returns 200", "has a test"]
 
 
-def test_creating_a_run_queues_the_work_item(client: ApiClient, project: dict):
-    work_item = client.create_work_item(project["id"], "Queue me")
-    run = client.create_run(work_item["id"])
+def test_creating_a_run_queues_the_task(client: ApiClient, project: dict):
+    task = client.create_task(project["id"], "Queue me")
+    run = client.create_run(task["id"])
 
     assert run["attempt"] == 1
     assert run["status"] == "pending"
-    assert client.get(f"/v1/work-items/{work_item['id']}").json()["status"] == "queued"
+    assert client.get(f"/v1/tasks/{task['id']}").json()["status"] == "queued"
 
 
 def test_retrying_creates_a_new_attempt_without_erasing_the_first(client: ApiClient, project: dict):
     """A Run is one attempt; retrying must preserve the prior one for
     inspection and for attempt-level cost and duration (plan §39)."""
-    work_item = client.create_work_item(project["id"], "Retry me")
+    task = client.create_task(project["id"], "Retry me")
 
-    first = client.create_run(work_item["id"])
-    second = client.create_run(work_item["id"])
+    first = client.create_run(task["id"])
+    second = client.create_run(task["id"])
 
     assert (first["attempt"], second["attempt"]) == (1, 2)
 
-    runs = client.get(f"/v1/work-items/{work_item['id']}").json()["runs"]
+    runs = client.get(f"/v1/tasks/{task['id']}").json()["runs"]
     assert {r["id"] for r in runs} == {first["id"], second["id"]}
 
 
-def test_work_item_for_unknown_project_is_rejected(client: ApiClient):
-    resp = client.post("/v1/work-items", {"projectId": "prj_nonexistent", "title": "orphan"})
+def test_task_for_unknown_project_is_rejected(client: ApiClient):
+    resp = client.post("/v1/tasks", {"projectId": "prj_nonexistent", "title": "orphan"})
     assert resp.status_code == 404
 
 
-def test_work_items_can_be_filtered_by_project(client: ApiClient, project: dict):
+def test_tasks_can_be_filtered_by_project(client: ApiClient, project: dict):
     other = client.create_project(name="Other", slug="other-proj")
-    client.create_work_item(project["id"], "In project")
-    client.create_work_item(other["id"], "In other")
+    client.create_task(project["id"], "In project")
+    client.create_task(other["id"], "In other")
 
-    listed = client.get("/v1/work-items", params={"projectId": project["id"]}).json()["workItems"]
+    listed = client.get("/v1/tasks", params={"projectId": project["id"]}).json()["tasks"]
     assert [w["title"] for w in listed] == ["In project"]
 
 
@@ -120,8 +120,8 @@ def test_work_items_can_be_filtered_by_project(client: ApiClient, project: dict)
 
 
 def test_session_uses_the_project_model_for_the_role(client: ApiClient, project: dict):
-    work_item = client.create_work_item(project["id"], "Model resolution")
-    run = client.create_run(work_item["id"])
+    task = client.create_task(project["id"], "Model resolution")
+    run = client.create_run(task["id"])
 
     resp = client.create_session(run["id"], "orchestrator")
     assert resp.status_code == 201
@@ -130,8 +130,8 @@ def test_session_uses_the_project_model_for_the_role(client: ApiClient, project:
 
 def test_session_falls_back_to_the_organization_default(client: ApiClient, project: dict):
     """The project configures no reviewer, so the org default applies."""
-    work_item = client.create_work_item(project["id"], "Fallback")
-    run = client.create_run(work_item["id"])
+    task = client.create_task(project["id"], "Fallback")
+    run = client.create_run(task["id"])
 
     resp = client.create_session(run["id"], "reviewer")
     assert resp.status_code == 201
@@ -140,8 +140,8 @@ def test_session_falls_back_to_the_organization_default(client: ApiClient, proje
 
 def test_unconfigured_role_is_rejected_with_a_useful_message(client: ApiClient, project: dict):
     """Better to refuse than to silently pick an arbitrary model."""
-    work_item = client.create_work_item(project["id"], "Unconfigured")
-    run = client.create_run(work_item["id"])
+    task = client.create_task(project["id"], "Unconfigured")
+    run = client.create_run(task["id"])
 
     resp = client.create_session(run["id"], "qa_browser")
     assert resp.status_code == 400
@@ -149,24 +149,24 @@ def test_unconfigured_role_is_rejected_with_a_useful_message(client: ApiClient, 
 
 
 def test_explicit_model_overrides_configuration(client: ApiClient, project: dict):
-    work_item = client.create_work_item(project["id"], "Override")
-    run = client.create_run(work_item["id"])
+    task = client.create_task(project["id"], "Override")
+    run = client.create_run(task["id"])
 
     resp = client.create_session(run["id"], "orchestrator", model="explicit-model")
     assert resp.json()["model"] == "explicit-model"
 
 
 def test_project_harness_preference_is_honoured(client: ApiClient, project: dict):
-    work_item = client.create_work_item(project["id"], "Harness")
-    run = client.create_run(work_item["id"])
+    task = client.create_task(project["id"], "Harness")
+    run = client.create_run(task["id"])
 
     resp = client.create_session(run["id"], "implementer")
     assert resp.json()["harness"] == "opencode"
 
 
 def test_invalid_role_is_rejected(client: ApiClient, project: dict):
-    work_item = client.create_work_item(project["id"], "Bad role")
-    run = client.create_run(work_item["id"])
+    task = client.create_task(project["id"], "Bad role")
+    run = client.create_run(task["id"])
 
     assert client.create_session(run["id"], "not_a_role").status_code == 400
 
@@ -177,8 +177,8 @@ def test_invalid_role_is_rejected(client: ApiClient, project: dict):
 
 
 def test_subagents_are_linked_to_their_parent(client: ApiClient, project: dict):
-    work_item = client.create_work_item(project["id"], "Session tree")
-    run = client.create_run(work_item["id"])
+    task = client.create_task(project["id"], "Session tree")
+    run = client.create_run(task["id"])
 
     parent = client.create_session(run["id"], "orchestrator").json()
     child = client.create_session(
@@ -190,8 +190,8 @@ def test_subagents_are_linked_to_their_parent(client: ApiClient, project: dict):
 
 
 def test_run_exposes_its_sessions(client: ApiClient, project: dict):
-    work_item = client.create_work_item(project["id"], "Run sessions")
-    run = client.create_run(work_item["id"])
+    task = client.create_task(project["id"], "Run sessions")
+    run = client.create_run(task["id"])
     client.create_session(run["id"], "orchestrator")
     client.create_session(run["id"], "implementer")
 

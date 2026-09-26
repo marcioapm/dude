@@ -1519,8 +1519,8 @@ Suggested starting tables:
 organizations
 projects
 epics
-work_items
-work_item_links
+tasks
+task_links
 runs
 
 organizations
@@ -1614,7 +1614,7 @@ factory/
     auth/
     projects/
     epics/
-    work-items/
+    tasks/
     runs/
     sessions/
     workflow/
@@ -2237,7 +2237,7 @@ software-factory/
         api/
         projects/
         epics/
-        work-items/
+        tasks/
         runs/
         sessions/
         workflow/
@@ -2288,7 +2288,7 @@ software-factory/
 
   schemas/
     events/
-    work-item/
+    task/
     agent-output/
     artifacts/
 
@@ -2625,7 +2625,7 @@ Jira and Slack should follow the same normalized-integration principle: provider
 
 ---
 
-## 39. Product hierarchy: Project → Epic → Work Item → Run → Session
+## 39. Product hierarchy: Project → Epic → Task → Run → Session
 
 Do **not** use agent sessions as the main user-facing unit. Sessions are execution details and can be restarted, forked, replaced by another harness, or multiplied by subagents.
 
@@ -2635,7 +2635,7 @@ Use this hierarchy:
 Organization
   └─ Project
       └─ Epic
-          └─ Work Item
+          └─ Task
               ├─ Run
               │   ├─ Session
               │   │   └─ child Sessions
@@ -2671,7 +2671,7 @@ A project may map to one or many repositories and has:
 
 ### Epic
 
-A business/engineering objective containing multiple work items.
+A business/engineering objective containing multiple tasks.
 
 Examples:
 
@@ -2683,11 +2683,11 @@ Q4 performance initiative
 
 An epic can map to a Jira Epic but should have its own stable internal ID.
 
-### Work Item
+### Task
 
 This supersedes the user-facing meaning of `Task`.
 
-A Work Item is one piece of requested work with:
+A Task is one piece of requested work with:
 
 - goal;
 - acceptance criteria;
@@ -2703,15 +2703,15 @@ A Work Item is one piece of requested work with:
 - total cost;
 - full event timeline.
 
-For internal compatibility, existing `task_id` concepts can be renamed gradually to `work_item_id`.
+For internal compatibility, existing `task_id` concepts can be renamed gradually to `task_id`.
 
 ### Run
 
-A Run is one execution attempt of a Work Item.
+A Run is one execution attempt of a Task.
 
 Why this level matters:
 
-- retrying a Work Item should not erase the prior attempt;
+- retrying a Task should not erase the prior attempt;
 - a user may explicitly rerun with another harness/model;
 - metrics need attempt-level cost and duration;
 - failed/aborted runs remain inspectable.
@@ -2739,7 +2739,7 @@ fixer session
 
 Sessions belong to a Run.
 
-This prevents the domain model from assuming that one Work Item equals one LLM conversation.
+This prevents the domain model from assuming that one Task equals one LLM conversation.
 
 ---
 
@@ -2793,7 +2793,7 @@ Artifact
 - organization_id
 - project_id?
 - epic_id?
-- work_item_id?
+- task_id?
 - run_id?
 - session_id?
 - producer
@@ -2822,7 +2822,7 @@ publish_artifact(
   title?,
   type?,
   description?,
-  visibility="work_item",
+  visibility="task",
   share_to_origin=false
 )
 ```
@@ -2888,7 +2888,7 @@ Example message:
 
 ```text
 Design document produced: design.md
-[View] [Download] [Open in Work Item]
+[View] [Download] [Open in Task]
 ```
 
 Default policy:
@@ -2933,7 +2933,7 @@ Projects
   Project
     Overview
     Epics
-    Work Items
+    Tasks
     Runs
     Repositories
     Deployments
@@ -2942,12 +2942,12 @@ Projects
     Metrics
 
 Epic
-  Work Items
+  Tasks
   Status rollup
   Cost rollup
   Artifacts
 
-Work Item
+Task
   Overview
   Timeline
   Runs
@@ -2978,7 +2978,7 @@ Session
   Current activity
 ```
 
-The Work Item page is the operational center. Session pages are deep inspection views.
+The Task page is the operational center. Session pages are deep inspection views.
 
 ### Start work without Slack
 
@@ -2986,7 +2986,7 @@ Web flow:
 
 ```text
 Project
-  -> New Work Item
+  -> New Task
   -> describe request
   -> attach files / select repos
   -> clarification conversation
@@ -3500,7 +3500,7 @@ The differentiators that may still justify a custom control plane are:
 - custom worker provisioning;
 - explicit deterministic/model boundary;
 - Terraform/deployment control;
-- first-class Project/Epic/Work Item product model.
+- first-class Project/Epic/Task product model.
 
 A sensible spike is to run the same 10–20 real engineering tasks through the leading existing product and through the proposed minimal control plane, then compare autonomy, inspectability, cost, intervention rate, and extensibility.
 
@@ -3513,7 +3513,7 @@ Build this vertical slice before broadening integrations:
 ```text
 Web UI + Slack
       ↓
-create Work Item
+create Task
       ↓
 clarify / confirm
       ↓

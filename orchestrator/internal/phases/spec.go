@@ -117,11 +117,11 @@ const (
 
 // specInput is everything a phase Run's spec is built from.
 type specInput struct {
-	RunID, OrganizationID, WorkItemID, Phase, Role string
+	RunID, OrganizationID, TaskID, Phase, Role string
 	Image                                          string
 	Model                                          string
 	Prompt                                         string
-	// Every repository the work item names, each at the commit this phase
+	// Every repository the task names, each at the commit this phase
 	// starts from.
 	Repos      []specRepo
 	PushBranch string
@@ -162,9 +162,9 @@ const (
 // its work is pushed.
 func buildSpec(c AgentConfig, in specInput) lux.Spec {
 	spec := lux.Spec{
-		Name: fmt.Sprintf("%s %s", in.Phase, in.WorkItemID),
+		Name: fmt.Sprintf("%s %s", in.Phase, in.TaskID),
 		Labels: map[string]string{
-			"dude.org": in.OrganizationID, "dude.workItem": in.WorkItemID,
+			"dude.org": in.OrganizationID, "dude.task": in.TaskID,
 			"dude.run": in.RunID, "dude.phase": in.Phase,
 			"dude.harness": harnessOpenCode, "dude.model": in.Model,
 		},

@@ -172,7 +172,7 @@ function RepositoriesTab({ client, project, onSaved }: TabProps) {
         <EmptyState
           icon="git-branch"
           title="No repository yet"
-          description="Work items can't open pull requests until one is added."
+          description="Tasks can't open pull requests until one is added."
         />
       ) : (
         <Table density="compact">
@@ -227,7 +227,7 @@ function RepositoriesTab({ client, project, onSaved }: TabProps) {
         tone="danger"
         size="sm"
         title={`Remove ${removing?.name ?? ""}?`}
-        description="Work items pointing at it will need another. Refused while work is being delivered to it, or if it has pull requests from past work."
+        description="Tasks pointing at it will need another. Refused while work is being delivered to it, or if it has pull requests from past work."
         footer={
           <>
             <Button variant="ghost" onClick={() => setRemoving(null)}>

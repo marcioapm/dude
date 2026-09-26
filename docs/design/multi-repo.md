@@ -1,28 +1,28 @@
-# Several repositories per work item
+# Several repositories per task
 
-Status: design, 2026-09-24. Replaces the "one repository per work item"
-decision in `management.md`, which the owner reversed: work items name any
+Status: design, 2026-09-24. Replaces the "one repository per task"
+decision in `management.md`, which the owner reversed: tasks name any
 number of repositories — none, one, several — and a change that spans
-repositories is one work item with one PR per repository changed.
+repositories is one task with one PR per repository changed.
 
 ## Model
 
-- **`work_item_repositories (work_item_id, repository_id, access)`**, with
+- **`task_repositories (task_id, repository_id, access)`**, with
   `access` = `write` (may change it → may get a PR) or `read` (cloned for
-  context, never pushed). Replaces `work_items.repository_id`, which is
+  context, never pushed). Replaces `tasks.repository_id`, which is
   migrated into it as `write`.
 - **None named, project has one repository** → that one, write (today's
-  behaviour). **None named, project has several** → none: the work item
+  behaviour). **None named, project has several** → none: the task
   runs with no checkout (a brainstorm, a design) and its outcome is its
   artifacts. Naming repositories is how a person says "this touches code".
-- A work item's repositories can change until delivery starts (like its
+- A task's repositories can change until delivery starts (like its
   goal). Access requests from agents (task #45) add rows later, `read` by
   default.
 
 ## A phase Run
 
-- **Clones every repository the work item names**, each at its own base:
-  the default branch for the implementer, the work item's branch head for
+- **Clones every repository the task names**, each at its own base:
+  the default branch for the implementer, the task's branch head for
   later phases. `spec.git.repositories[]` lists them all, at
   `/workspace/repos/<name>`; the workdir is `/workspace` when there are
   several (the prompt lists them), `/workspace/repos/<name>` when one.
@@ -37,7 +37,7 @@ repositories is one work item with one PR per repository changed.
 ## Publishing
 
 For each `write` repository whose push result moved it (status `pushed`
-with a commit different from its base): fast-forward the work item's
+with a commit different from its base): fast-forward the task's
 branch in that repository, delete the per-Run branch, compute changed
 paths. Repositories that did not change are left alone — no branch, no PR.
 A phase "changed nothing" only if no repository changed and it published no
@@ -50,27 +50,27 @@ paths, each prefixed `<repo>/`. Findings gain `repo` (the column exists).
 
 ## Pull requests
 
-- One PR per repository with commits on the work item's branch, opened
+- One PR per repository with commits on the task's branch, opened
   together. Each body lists its siblings ("Part of TEXT-12, with
   acme/api#41 and acme/web#88"), updated when a sibling opens.
-- **Feedback on any PR wakes one fixer for the work item**, which sees
+- **Feedback on any PR wakes one fixer for the task**, which sees
   every repository — a comment on the API PR may need a web change.
-- The work item is **done when every PR is merged**; a PR closed unmerged
+- The task is **done when every PR is merged**; a PR closed unmerged
   while others are open escalates ("api#41 was closed; merge the rest?")
   rather than aborting silently.
-- Work items with no changed repository finish at review with their
+- Tasks with no changed repository finish at review with their
   artifacts: status `review` → a person marks it done (no PR to merge).
 
 ## UI
 
-- Work item dialog: a repository multi-select with a read/write toggle per
+- Task dialog: a repository multi-select with a read/write toggle per
   repository (write by default), instead of the single Select.
-- Work item screen: the pipeline's PR step becomes one row per PR; the
+- Task screen: the pipeline's PR step becomes one row per PR; the
   header lists the repositories as chips.
 
 ## Order of work
 
-1. Schema + API + dialog (repositories on a work item, read/write).
+1. Schema + API + dialog (repositories on a task, read/write).
 2. Spec with N repositories; per-repository bases and heads; publish per
    repository; review over the union.
 3. PR per repository with sibling links; done when all merged; escalation

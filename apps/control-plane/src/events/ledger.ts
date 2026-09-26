@@ -26,7 +26,7 @@ const EVENT_COLUMNS = `
   occurred_at       AS "occurredAt",
   organization_id   AS "organizationId",
   project_id        AS "projectId",
-  work_item_id      AS "workItemId",
+  task_id      AS "taskId",
   run_id            AS "runId",
   session_id        AS "sessionId",
   workflow_run_id   AS "workflowRunId",
@@ -44,7 +44,7 @@ interface EventRow {
   occurredAt: string | Date;
   organizationId: string;
   projectId: string | null;
-  workItemId: string | null;
+  taskId: string | null;
   runId: string | null;
   sessionId: string | null;
   workflowRunId: string | null;
@@ -67,7 +67,7 @@ function toPersisted(row: EventRow): PersistedEvent {
       row.occurredAt instanceof Date ? row.occurredAt.toISOString() : new Date(row.occurredAt).toISOString(),
     organizationId: row.organizationId,
     projectId: row.projectId,
-    workItemId: row.workItemId,
+    taskId: row.taskId,
     runId: row.runId,
     sessionId: row.sessionId,
     workflowRunId: row.workflowRunId,
@@ -98,12 +98,12 @@ export async function appendInScope(scope: OrgScope, input: EventInput): Promise
   const rows = (await scope.sql`
     INSERT INTO events (
       id, organization_id, event_type, occurred_at,
-      project_id, work_item_id, run_id, session_id, workflow_run_id,
+      project_id, task_id, run_id, session_id, workflow_run_id,
       actor_type, actor_id, source, correlation_id, causation_id, payload
     ) VALUES (
       ${id}, ${input.organizationId}, ${input.eventType},
       ${input.occurredAt ?? new Date().toISOString()},
-      ${input.projectId ?? null}, ${input.workItemId ?? null}, ${input.runId ?? null},
+      ${input.projectId ?? null}, ${input.taskId ?? null}, ${input.runId ?? null},
       ${input.sessionId ?? null}, ${input.workflowRunId ?? null},
       ${input.actor.type}, ${input.actor.id}, ${input.source},
       ${input.correlationId ?? null}, ${input.causationId ?? null},
@@ -141,7 +141,7 @@ export interface EventQuery {
   after?: number | undefined;
   sessionId?: string | undefined;
   runId?: string | undefined;
-  workItemId?: string | undefined;
+  taskId?: string | undefined;
   projectId?: string | undefined;
   eventTypes?: readonly string[] | undefined;
   limit?: number | undefined;
@@ -166,7 +166,7 @@ export async function query(organizationId: string, q: EventQuery = {}): Promise
       WHERE (${q.after ?? null}::bigint IS NULL OR cursor > ${q.after ?? null}::bigint)
         AND (${q.sessionId ?? null}::text IS NULL OR session_id = ${q.sessionId ?? null})
         AND (${q.runId ?? null}::text IS NULL OR run_id = ${q.runId ?? null})
-        AND (${q.workItemId ?? null}::text IS NULL OR work_item_id = ${q.workItemId ?? null})
+        AND (${q.taskId ?? null}::text IS NULL OR task_id = ${q.taskId ?? null})
         AND (${q.projectId ?? null}::text IS NULL OR project_id = ${q.projectId ?? null})
         AND (${q.eventTypes?.length ? (q.eventTypes as string[]) : null}::text[] IS NULL
              OR event_type = ANY(${q.eventTypes?.length ? (q.eventTypes as string[]) : null}::text[]))

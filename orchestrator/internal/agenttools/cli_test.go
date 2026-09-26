@@ -63,17 +63,17 @@ func TestTheCLIWorksThroughLuxsSocketWithoutTheToken(t *testing.T) {
 		return out.String(), err
 	}
 
-	out, err := dude("work", "create", "--title", "Split hyphenated words", "--goal", "found while truncating",
+	out, err := dude("task", "create", "--title", "Split hyphenated words", "--goal", "found while truncating",
 		"--epic", "Text utilities", "--criterion", "re-enter stays whole")
 	if err != nil || !strings.Contains(out, "TEXT-2") {
 		t.Fatalf("work create: %v\n%s", err, out)
 	}
-	out, err = dude("work", "list", "--json")
+	out, err = dude("task", "list", "--json")
 	var listed struct {
-		WorkItems []struct{ Key, Epic string } `json:"workItems"`
+		Tasks []struct{ Key, Epic string } `json:"tasks"`
 	}
-	if err != nil || json.Unmarshal([]byte(out), &listed) != nil || len(listed.WorkItems) != 2 ||
-		listed.WorkItems[1].Epic != "Text utilities" {
+	if err != nil || json.Unmarshal([]byte(out), &listed) != nil || len(listed.Tasks) != 2 ||
+		listed.Tasks[1].Epic != "Text utilities" {
 		t.Fatalf("work list: %v\n%s", err, out)
 	}
 	if out, err = dude("epic", "list"); err != nil || !strings.Contains(out, "Text utilities") {

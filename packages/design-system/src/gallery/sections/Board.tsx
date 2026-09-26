@@ -6,7 +6,7 @@ import { StatusBadge } from "../../components/StatusBadge.tsx";
 import { Button, IconButton } from "../../primitives/Button.tsx";
 import { RowMenu } from "../../primitives/RowMenu.tsx";
 import { EmptyState } from "../../primitives/Feedback.tsx";
-import { WORK_ITEM_STATUSES } from "../../tokens/status.ts";
+import { TASK_STATUSES } from "../../tokens/status.ts";
 import { BOARD_COLUMN_FOR_STATUS, BOARD_COLUMN_KINDS, BOARD_COLUMN_SPECS, boardScope } from "../../util/boardModel.ts";
 import type { NavRef } from "../../util/navModel.ts";
 import { navProjectEmpty, navProjectEverything, navProjects, navProjectsQuiet } from "../navFixtures.ts";
@@ -19,19 +19,19 @@ export function BoardSection({ mode }: { readonly mode: PaneMode }) {
     <Section
       id="board"
       title="Board: the overview for a project or an epic"
-      intro="What the main pane shows when the sidebar selection is a project or an epic rather than a work item. The same view model as the tree, laid out by lifecycle stage instead of by hierarchy: five lanes, always all five, cards sorted needs-you first. Nothing drags — every move between lanes belongs to the workflow, and the two a person makes are decisions taken in the transcript. A card is a way in, not a handle."
+      intro="What the main pane shows when the sidebar selection is a project or an epic rather than a task. The same view model as the tree, laid out by lifecycle stage instead of by hierarchy: five lanes, always all five, cards sorted needs-you first. Nothing drags — every move between lanes belongs to the workflow, and the two a person makes are decisions taken in the transcript. A card is a way in, not a handle."
     >
       <Block
         id="board-columns"
         title="Status → lane"
-        note="Eleven work item statuses fold into five lanes, keyed on the domain union so a new status is a compile error before it is a blank column. Needs-you is not a lane: it can strike in Intake (confirm a plan) or In progress (an agent asks), so it is a card treatment and a sort order, as it is a row treatment in the tree. Closed holds done, failed and aborted together — failed sorts first and keeps its danger mark; aborted is a decision and stays neutral."
+        note="Eleven task statuses fold into five lanes, keyed on the domain union so a new status is a compile error before it is a blank column. Needs-you is not a lane: it can strike in Intake (confirm a plan) or In progress (an agent asks), so it is a card treatment and a sort order, as it is a row treatment in the tree. Closed holds done, failed and aborted together — failed sorts first and keeps its danger mark; aborted is a decision and stays neutral."
       >
         <Panes mode={mode} surface>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(5, max-content)", gap: "6px 24px", alignItems: "start" }}>
             {BOARD_COLUMN_KINDS.map((k) => (
               <Col key={k} style={{ gap: 4 }}>
                 <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--ds-color-text-secondary)" }}>{BOARD_COLUMN_SPECS[k].label}</span>
-                {WORK_ITEM_STATUSES.filter((s) => BOARD_COLUMN_FOR_STATUS[s] === k).map((s) => (
+                {TASK_STATUSES.filter((s) => BOARD_COLUMN_FOR_STATUS[s] === k).map((s) => (
                   <StatusBadge key={s} status={s} size="sm" />
                 ))}
               </Col>
@@ -73,7 +73,7 @@ export function BoardSection({ mode }: { readonly mode: PaneMode }) {
       <Block
         id="board-composed"
         title="Beside the sidebar"
-        note="How the app composes it: boardScope maps the sidebar selection to a project or epic board; a work item or session selection opens the transcript instead. Selecting a card on the board follows into the tree, and the tree's selection marks the card, so the two never disagree about where you are."
+        note="How the app composes it: boardScope maps the sidebar selection to a project or epic board; a task or session selection opens the transcript instead. Selecting a card on the board follows into the tree, and the tree's selection marks the card, so the two never disagree about where you are."
       >
         <Panes mode={mode}>
           <ComposedDemo />
@@ -113,7 +113,7 @@ function Frame({ height = 520, children }: { readonly height?: number | undefine
 }
 
 function ProjectDemo() {
-  const [selected, setSelected] = useState<NavRef | null>({ kind: "workItem", id: "wi_2402" });
+  const [selected, setSelected] = useState<NavRef | null>({ kind: "task", id: "wi_2402" });
   return (
     <Col>
       <Frame>
@@ -135,10 +135,10 @@ function ProjectDemo() {
 }
 
 function SwimlaneDemo() {
-  const [selected, setSelected] = useState<NavRef | null>({ kind: "workItem", id: "wi_2402" });
+  const [selected, setSelected] = useState<NavRef | null>({ kind: "task", id: "wi_2402" });
   const [grouped, setGrouped] = useState(true);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set(["epic:e_intervention"]));
-  const withEmptyEpic = useMemo(() => ({ ...CONTROL, epics: [...(CONTROL.epics ?? []), { id: "e_later", title: "Q4 performance", workItems: [] }] }), []);
+  const withEmptyEpic = useMemo(() => ({ ...CONTROL, epics: [...(CONTROL.epics ?? []), { id: "e_later", title: "Q4 performance", tasks: [] }] }), []);
   return (
     <Col>
       <Frame height={640}>
@@ -155,7 +155,7 @@ function SwimlaneDemo() {
                 label={`Actions for ${lane.title}`}
                 items={[
                   { id: "edit", label: "Edit epic", icon: "edit" },
-                  { id: "new", label: "New work item", icon: "plus" },
+                  { id: "new", label: "New task", icon: "plus" },
                   { kind: "separator" },
                   { id: "up", label: "Move up", icon: "arrow-up" },
                   { id: "down", label: "Move down", icon: "arrow-down" },
@@ -169,7 +169,7 @@ function SwimlaneDemo() {
                 Group by epic
               </Button>
               <Button size="sm" variant="primary" leadingIcon="plus">
-                New work item
+                New task
               </Button>
             </>
           }

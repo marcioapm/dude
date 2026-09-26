@@ -1,6 +1,6 @@
 /**
  * The actions on things in the tree and on the board: what a row's "…"
- * menu offers for a project, an epic or a work item, and the small dialogs
+ * menu offers for a project, an epic or a task, and the small dialogs
  * those actions open.
  *
  * The design system draws the menus; which actions exist, and what they
@@ -17,25 +17,25 @@ import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
 
 /** What an action asks the app to open; the app owns navigation and dialogs. */
 export type Intent =
-  | { kind: "newWorkItem"; projectId: string; epicId: string | null }
-  | { kind: "editWorkItem"; workItemId: string }
+  | { kind: "newTask"; projectId: string; epicId: string | null }
+  | { kind: "editTask"; taskId: string }
   | { kind: "newEpic"; projectId: string }
   | { kind: "editEpic"; epic: EpicRef }
   | { kind: "deleteEpic"; epic: EpicRef }
   | { kind: "projectSettings"; projectId: string }
   | { kind: "moveEpic"; epicId: string; position: number }
-  | { kind: "moveWorkItem"; workItemId: string; epicId: string | null };
+  | { kind: "moveTask"; taskId: string; epicId: string | null };
 
 export interface EpicRef {
   id: string;
   projectId: string;
   title: string;
-  workItemCount: number;
+  taskCount: number;
 }
 
 /** An epic, as the epic dialogs take it. */
 export function epicRef(projectId: string, epic: NavEpic): EpicRef {
-  return { id: epic.id, projectId, title: epic.title, workItemCount: epic.workItems.length };
+  return { id: epic.id, projectId, title: epic.title, taskCount: epic.tasks.length };
 }
 
 /** The actions on one thing in the tree, or none (sessions and runs have their own screens). */
@@ -44,7 +44,7 @@ export function rowActions(project: NavProject, ref: NavRef, act: (intent: Inten
   switch (ref.kind) {
     case "project":
       return [
-        { id: "new-work-item", label: "New work item", icon: "plus", onSelect: () => act({ kind: "newWorkItem", projectId: project.id, epicId: null }) },
+        { id: "new-task", label: "New task", icon: "plus", onSelect: () => act({ kind: "newTask", projectId: project.id, epicId: null }) },
         { id: "new-epic", label: "New epic", icon: "layers", onSelect: () => act({ kind: "newEpic", projectId: project.id }) },
         { kind: "separator" },
         { id: "settings", label: "Settings", icon: "settings", onSelect: () => act({ kind: "projectSettings", projectId: project.id }) },
@@ -54,7 +54,7 @@ export function rowActions(project: NavProject, ref: NavRef, act: (intent: Inten
       const epic = epics[index]!;
       const target = epicRef(project.id, epic);
       return [
-        { id: "new-work-item", label: "New work item", icon: "plus", onSelect: () => act({ kind: "newWorkItem", projectId: project.id, epicId: epic.id }) },
+        { id: "new-task", label: "New task", icon: "plus", onSelect: () => act({ kind: "newTask", projectId: project.id, epicId: epic.id }) },
         { id: "edit", label: "Edit epic", icon: "edit", onSelect: () => act({ kind: "editEpic", epic: target }) },
         { kind: "separator" },
         {
@@ -69,16 +69,16 @@ export function rowActions(project: NavProject, ref: NavRef, act: (intent: Inten
         { id: "delete", label: "Delete epic", tone: "danger", onSelect: () => act({ kind: "deleteEpic", epic: target }) },
       ];
     }
-    case "workItem": {
+    case "task": {
       const item = ref;
-      const current = epics.find((e) => e.workItems.some((w) => w.id === item.id))?.id ?? null;
+      const current = epics.find((e) => e.tasks.some((w) => w.id === item.id))?.id ?? null;
       const destinations: RowMenuItem[] = [
         ...epics.map((e: NavEpic) => ({
           id: `to-${e.id}`,
           label: e.title,
           disabled: e.id === current,
           disabledReason: "It is already here",
-          onSelect: () => act({ kind: "moveWorkItem", workItemId: item.id, epicId: e.id }),
+          onSelect: () => act({ kind: "moveTask", taskId: item.id, epicId: e.id }),
         })),
         ...(epics.length ? [{ kind: "separator" as const }] : []),
         {
@@ -86,11 +86,11 @@ export function rowActions(project: NavProject, ref: NavRef, act: (intent: Inten
           label: "No epic",
           disabled: current === null,
           disabledReason: "It is not in an epic",
-          onSelect: () => act({ kind: "moveWorkItem", workItemId: item.id, epicId: null }),
+          onSelect: () => act({ kind: "moveTask", taskId: item.id, epicId: null }),
         },
       ];
       return [
-        { id: "edit", label: "Edit", icon: "edit", onSelect: () => act({ kind: "editWorkItem", workItemId: item.id }) },
+        { id: "edit", label: "Edit", icon: "edit", onSelect: () => act({ kind: "editTask", taskId: item.id }) },
         { kind: "submenu", id: "move", label: "Move to epic", icon: "layers", items: destinations },
       ];
     }
@@ -130,7 +130,7 @@ export function EpicDialog(props: {
       open
       onOpenChange={(open) => !open && props.onClose()}
       title={epic ? "Edit epic" : "New epic"}
-      description="An epic groups related work items; its place in the list is its priority."
+      description="An epic groups related tasks; its place in the list is its priority."
       submitLabel={epic ? "Save" : "Create epic"}
       submitTestId="epic-save"
       canSubmit={!busy && description !== null && Boolean(title.trim())}
@@ -162,7 +162,7 @@ export function EpicDialog(props: {
 export function DeleteEpicDialog(props: { client: ApiClient; epic: EpicRef; onClose: () => void; onDeleted: () => void }) {
   const { busy, problem, save } = useSave();
   const { epic } = props;
-  const count = epic.workItemCount;
+  const count = epic.taskCount;
   return (
     <Dialog
       open
@@ -172,8 +172,8 @@ export function DeleteEpicDialog(props: { client: ApiClient; epic: EpicRef; onCl
       title={`Delete ${epic.title}?`}
       description={
         count === 0
-          ? "It has no work items."
-          : `Its ${count} work item${count === 1 ? "" : "s"} will stay in the project, with no epic.`
+          ? "It has no tasks."
+          : `Its ${count} task${count === 1 ? "" : "s"} will stay in the project, with no epic.`
       }
       footer={
         <>

@@ -2,10 +2,10 @@
 // part of, and dude's tools, from a shell — for the agent, and for any
 // script it runs.
 //
-//	dude work list [--text T]             the project's work items
+//	dude task list [--text T]             the project's tasks
 //	dude epic list                        the project's epics
 //	dude repo list | request NAME --reason R [--write]
-//	dude work create --title T --goal G [--epic E] [--criterion C]...
+//	dude task create --title T --goal G [--epic E] [--criterion C]...
 //	dude ask "question" [--choice C]...   ask a person; end your turn after
 //	dude event TYPE [--data JSON]         record an event on this run
 //	dude publish FILE [--name NAME]       keep a file for people (local)
@@ -55,7 +55,7 @@ func run(args []string, out io.Writer) error {
 		return nil
 	}
 	cmd, rest := args[0], args[1:]
-	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") && (cmd == "work" || cmd == "epic" || cmd == "repo") {
+	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") && (cmd == "task" || cmd == "epic" || cmd == "repo") {
 		cmd, rest = cmd+" "+rest[0], rest[1:]
 	}
 	fs := flag.NewFlagSet("dude "+cmd, flag.ContinueOnError)
@@ -67,12 +67,12 @@ func run(args []string, out io.Writer) error {
 			return err
 		}
 		return show(out, *asJSON, get("/tools"))
-	case "work list":
+	case "task list":
 		text := fs.String("text", "", "only work mentioning this")
 		if err := fs.Parse(rest); err != nil {
 			return err
 		}
-		return show(out, *asJSON, call("list_work", map[string]any{"text": *text}))
+		return show(out, *asJSON, call("list_tasks", map[string]any{"text": *text}))
 	case "epic list":
 		if err := fs.Parse(rest); err != nil {
 			return err
@@ -95,7 +95,7 @@ func run(args []string, out io.Writer) error {
 			return errors.New(`usage: dude repo request NAME --reason "why" [--write] [--wait]`)
 		}
 		return show(out, *asJSON, call("request_repository", map[string]any{"repository": args[0], "write": *write, "reason": *reason, "wait": *wait}))
-	case "work create":
+	case "task create":
 		title := fs.String("title", "", "what should change, in one line")
 		goal := fs.String("goal", "", "why, and what someone needs to know")
 		epic := fs.String("epic", "", "an existing epic's title")
@@ -104,7 +104,7 @@ func run(args []string, out io.Writer) error {
 		if err := fs.Parse(rest); err != nil {
 			return err
 		}
-		return show(out, *asJSON, call("create_work_item", map[string]any{"title": *title, "goal": *goal,
+		return show(out, *asJSON, call("create_task", map[string]any{"title": *title, "goal": *goal,
 			"epic": *epic, "acceptanceCriteria": []string(criteria)}))
 	case "ask":
 		var choices many
@@ -166,7 +166,7 @@ func parse(fs *flag.FlagSet, args []string) ([]string, error) {
 }
 
 // publish copies a file into $LUX_ARTIFACTS, which lux collects when the
-// container stops and dude shows with the work item.
+// container stops and dude shows with the task.
 func publish(path, name string) (json.RawMessage, error) {
 	dir := os.Getenv("LUX_ARTIFACTS")
 	if dir == "" {
@@ -200,7 +200,7 @@ func publish(path, name string) (json.RawMessage, error) {
 		return nil, err
 	}
 	return json.Marshal(map[string]any{"published": clean, "bytes": n,
-		"note": "kept when your run stops, and shown with the work item"})
+		"note": "kept when your run stops, and shown with the task"})
 }
 
 // ---- talking to dude ------------------------------------------------------
@@ -287,9 +287,9 @@ func show(out io.Writer, _ bool, do func() (json.RawMessage, error)) error {
 
 const usage = `dude — the work you are part of, and dude's tools, from the shell.
 
-  dude work list [--text T]                  the project's work items
+  dude task list [--text T]                  the project's tasks
   dude epic list                             the project's epics, in priority order
-  dude work create --title T --goal G [--epic E] [--criterion C]...
+  dude task create --title T --goal G [--epic E] [--criterion C]...
                                              record work found outside your task
                                              (a person decides whether it is done)
   dude repo list                             the project's repositories: which you have, which you could ask for
@@ -299,7 +299,7 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
                                              the answer is your next message
   dude event TYPE [--data JSON]              record an event on this run, e.g.
                                              dude event progress --data '{"done":3,"of":10}'
-  dude publish FILE [--name NAME]            keep a file for people, shown with the work item
+  dude publish FILE [--name NAME]            keep a file for people, shown with the task
   dude tools                                 the tools this run may use
 
 Output is JSON.

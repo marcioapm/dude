@@ -25,7 +25,7 @@ function ev(eventType: string, payload: Record<string, unknown> = {}): Persisted
     eventType,
     organizationId: "org_test",
     projectId: null,
-    workItemId: null,
+    taskId: null,
     runId: "run_test",
     sessionId: "ses_test",
     workflowRunId: null,

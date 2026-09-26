@@ -194,7 +194,7 @@ const commitNote = "Commit your work when you are done. Only committed changes a
 // reproduction, a tester's screenshots.
 const publishNote = "To give the people following this work a file — notes, a design, a report, a " +
 	"screenshot — write it into the directory named by the LUX_ARTIFACTS environment variable " +
-	"(for example `$LUX_ARTIFACTS/notes.md`). They see each one next to the work item, Markdown " +
+	"(for example `$LUX_ARTIFACTS/notes.md`). They see each one next to the task, Markdown " +
 	"rendered. Publish what a person would want to read; don't copy code there."
 
 // ask is how this agent stops for a person: dude's ask_person tool.
@@ -213,14 +213,14 @@ const askToolNote = "If you cannot go on without a decision only a person can ma
 	"yourself; most tasks need no question at all."
 
 // toolsNote tells an agent about dude's tools.
-const toolsNote = "The dude tools (list_work, list_epics, list_repositories, create_work_item, emit_event, " +
+const toolsNote = "The dude tools (list_tasks, list_epics, list_repositories, create_task, emit_event, " +
 	"request_repository) " +
 	"act on the work you are part of: record work you find outside your task (a person decides on it), report " +
 	"progress people can follow, ask for another repository you need."
 
 // cliNote tells an agent about the dude CLI.
 const cliNote = "The same, from the shell: the `dude` command (see `dude help`) — " +
-	"`dude work list`, `dude epic list`, `dude work create` for work you find outside your task (a person " +
+	"`dude task list`, `dude epic list`, `dude task create` for work you find outside your task (a person " +
 	"decides on it), `dude event progress --data '{\"done\":3,\"of\":10}'` for progress people can follow, " +
 	"`dude repo list` and `dude repo request`, and `dude publish FILE` to keep a file for people."
 

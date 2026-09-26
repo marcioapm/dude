@@ -126,7 +126,7 @@ type StartOptions struct {
 	// Deduplicates starts: a repeat returns the original run.
 	IdempotencyKey string
 	Input          any
-	WorkItemID     string
+	TaskID     string
 }
 
 // Start starts a workflow, or returns the existing run for the same key.
@@ -144,12 +144,12 @@ func (r *Runtime) Start(ctx context.Context, o StartOptions) (id string, dedupli
 	}
 	err = r.db.InOrg(ctx, o.OrganizationID, func(tx pgx.Tx) error {
 		err := tx.QueryRow(ctx, `
-			INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, status, step, state, work_item_id)
+			INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, status, step, state, task_id)
 			VALUES ($1, $2, $3, $4, 'running', $5, $6::jsonb, $7)
 			ON CONFLICT (organization_id, workflow_type, idempotency_key) DO NOTHING
 			RETURNING id`,
 			ids.New(ids.WorkflowRun), o.OrganizationID, o.Type, o.IdempotencyKey, def.InitialStep, input,
-			db.Nullable(o.WorkItemID)).Scan(&id)
+			db.Nullable(o.TaskID)).Scan(&id)
 		if err == nil {
 			return nil
 		}

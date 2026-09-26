@@ -21,7 +21,7 @@ export function NavigationSection({ mode }: { readonly mode: PaneMode }) {
     <Section
       id="navigation"
       title="Navigation: the other half of the screen"
-      intro="Persistent chrome beside the transcript. It has to answer four questions without a click — what needs me, what is active, what is ready, who is working on what — and stay calm at fifty work items. The mechanism is triage: every status rolls up into one of six buckets, and collapsed parents show the counted ones."
+      intro="Persistent chrome beside the transcript. It has to answer four questions without a click — what needs me, what is active, what is ready, who is working on what — and stay calm at fifty tasks. The mechanism is triage: every status rolls up into one of six buckets, and collapsed parents show the counted ones."
     >
       <Block
         id="nav-human"
@@ -101,7 +101,7 @@ export function NavigationSection({ mode }: { readonly mode: PaneMode }) {
       <Block
         id="nav-tree"
         title="NavTree"
-        note="Project → Epic → Work item → Session, rendered flat with aria-level so keyboard movement is index arithmetic. Each level has its own row grammar: projects are sticky small-caps headers, epics carry the layers glyph and a total, work items lead with a status dot and a mono key and trail with who is working (agent squares) and who is involved (human circles), sessions sit on a guide line behind a role avatar. Earlier Runs fold into one 'Attempt n' row each. Click a chevron or use ←→ to fold; a needs-you row opens by default down to the asking session, and a collapsed parent keeps its roll-up. Try ↑↓ → ← Home End Enter and / ."
+        note="Project → Epic → Task → Session, rendered flat with aria-level so keyboard movement is index arithmetic. Each level has its own row grammar: projects are sticky small-caps headers, epics carry the layers glyph and a total, tasks lead with a status dot and a mono key and trail with who is working (agent squares) and who is involved (human circles), sessions sit on a guide line behind a role avatar. Earlier Runs fold into one 'Attempt n' row each. Click a chevron or use ←→ to fold; a needs-you row opens by default down to the asking session, and a collapsed parent keeps its roll-up. Try ↑↓ → ← Home End Enter and / ."
       >
         <Panes mode={mode} surface>
           <TreeDemo />
@@ -111,7 +111,7 @@ export function NavigationSection({ mode }: { readonly mode: PaneMode }) {
       <Block
         id="nav-tree-menus"
         title="NavTree — row menus"
-        note="Projects, epics and work items get a '…' menu from the app via menuItems (or a menu render prop for full control); the tree knows nothing about the actions. The trigger is visible on hover and focus and stays out of the tab order: with a row focused, Shift+F10 or the context-menu key opens it, as does right-click, and focus returns to the row when it closes so ↑↓ keep working. Rows that return no items draw nothing. Try: focus a row, Shift+F10, ↓, Enter."
+        note="Projects, epics and tasks get a '…' menu from the app via menuItems (or a menu render prop for full control); the tree knows nothing about the actions. The trigger is visible on hover and focus and stays out of the tab order: with a row focused, Shift+F10 or the context-menu key opens it, as does right-click, and focus returns to the row when it closes so ↑↓ keep working. Rows that return no items draw nothing. Try: focus a row, Shift+F10, ↓, Enter."
       >
         <Panes mode={mode} surface>
           <TreeMenuDemo />
@@ -121,7 +121,7 @@ export function NavigationSection({ mode }: { readonly mode: PaneMode }) {
       <Block
         id="nav-sidebar"
         title="Sidebar — realistic"
-        note="The whole thing at its default 304px with three projects and fifty work items. Header, search (/ from the tree, ↓ into it), four filter chips with global counts, the pinned Needs-you list across every project, then the tree. The pinned list is what makes 'what needs me' answerable without expanding anything: it names the work item, who is asking, who it waits on, and where it lives. Select a row to see the selection follow into the tree."
+        note="The whole thing at its default 304px with three projects and fifty tasks. Header, search (/ from the tree, ↓ into it), four filter chips with global counts, the pinned Needs-you list across every project, then the tree. The pinned list is what makes 'what needs me' answerable without expanding anything: it names the task, who is asking, who it waits on, and where it lives. Select a row to see the selection follow into the tree."
       >
         <Panes mode={mode}>
           <SidebarDemo />
@@ -202,21 +202,21 @@ function menuItemsFor(row: NavRow, act: (label: string) => void): ReadonlyArray<
       return [
         { id: "settings", label: "Settings", icon: "settings", onSelect: on("Settings") },
         { id: "new-epic", label: "New epic", icon: "layers", onSelect: on("New epic") },
-        { id: "new", label: "New work item", icon: "plus", onSelect: on("New work item") },
+        { id: "new", label: "New task", icon: "plus", onSelect: on("New task") },
         { kind: "separator" },
         { id: "archive", label: "Archive", icon: "folder", tone: "danger", onSelect: on("Archive") },
       ];
     case "epic":
       return [
         { id: "edit", label: "Edit", icon: "edit", onSelect: on("Edit epic") },
-        { id: "new", label: "New work item", icon: "plus", onSelect: on("New work item") },
+        { id: "new", label: "New task", icon: "plus", onSelect: on("New task") },
         { kind: "separator" },
         { id: "up", label: "Move up", icon: "arrow-up", onSelect: on("Move up") },
         { id: "down", label: "Move down", icon: "arrow-down", onSelect: on("Move down") },
         { kind: "separator" },
-        { id: "delete", label: "Delete", icon: "cross", tone: "danger", disabled: true, disabledReason: "Move its work items out first" },
+        { id: "delete", label: "Delete", icon: "cross", tone: "danger", disabled: true, disabledReason: "Move its tasks out first" },
       ];
-    case "workItem":
+    case "task":
       return [
         { id: "edit", label: "Edit", icon: "edit", onSelect: on("Edit") },
         { kind: "submenu", id: "move", label: "Move to epic", icon: "layers", items: [{ id: "e1", label: "Webhook reliability", onSelect: on("Move → Webhook reliability") }, { id: "e2", label: "Human intervention", onSelect: on("Move → Human intervention") }, { kind: "separator" }, { id: "none", label: "No epic", onSelect: on("Move → No epic") }] },
@@ -230,7 +230,7 @@ function menuItemsFor(row: NavRow, act: (label: string) => void): ReadonlyArray<
 }
 
 function TreeMenuDemo() {
-  const [selected, setSelected] = useState<NavRef | null>({ kind: "workItem", id: "wi_2402" });
+  const [selected, setSelected] = useState<NavRef | null>({ kind: "task", id: "wi_2402" });
   const [last, setLast] = useState<string | null>(null);
   return (
     <Col>
@@ -243,7 +243,7 @@ function TreeMenuDemo() {
 }
 
 function SidebarDemo() {
-  const [selected, setSelected] = useState<NavRef | null>({ kind: "workItem", id: "wi_2402" });
+  const [selected, setSelected] = useState<NavRef | null>({ kind: "task", id: "wi_2402" });
   return (
     <Col>
       <div style={{ display: "flex", height: 640, border: "1px solid var(--ds-color-border-subtle)", borderRadius: 6, overflow: "hidden" }}>

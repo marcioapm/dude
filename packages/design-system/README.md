@@ -29,7 +29,7 @@ subagents it delegates to, its plan, and the composer through which a human
 answers or steers. Beside it, always, is the **sidebar** (`Sidebar`,
 `NavTree`): what exists, what is active, what needs a person, who is on
 what. Selecting a project or an epic there opens the **board** (`Board`)
-in place of the transcript: the same work items by lifecycle lane. The
+in place of the transcript: the same tasks by lifecycle lane. The
 event ledger (`EventRow`) and `LogStream` are the debugging and audit tools
 behind all of these, reached when something looks off.
 
@@ -177,7 +177,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 
 ### Status
 
-- Use `StatusBadge` for every Run, Session and Work item state. Never a
+- Use `StatusBadge` for every Run, Session and Task state. Never a
   `Badge` with a hand-picked tone, never a coloured dot with a tooltip.
 - The mapping from status to tone/glyph/emphasis lives in
   `src/tokens/status.ts`. That table is the contract. Add a state there or it
@@ -342,8 +342,8 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   Keyed on the domain unions, so a new status is a compile error until it is
   placed. Only the first four are *counted*; waiting and done are the calm
   majority and are never rolled up.
-- A work item's bucket is the most urgent of its own status and the sessions
-  of its current run (`workItemTriage`). A `running` work item whose reviewer
+- A task's bucket is the most urgent of its own status and the sessions
+  of its current run (`taskTriage`). A `running` task whose reviewer
   is `awaiting_input` needs you, whatever the macro state says.
 - `TriageRollup` is the one way a collapsed parent says what is inside it:
   a `StatusBadge` dot per non-empty counted bucket, most urgent first. It
@@ -355,22 +355,22 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   asking session's activity and the roll-up counts are neutral ink, and the
   diamond marks carry the hue. In the transcript it is the header's
   Needs-you badge and the waiting question's highlight.
-- The tree shows four levels — Project → Epic → Work item → Session — and
-  folds Runs into their work item: the current run's sessions sit directly
+- The tree shows four levels — Project → Epic → Task → Session — and
+  folds Runs into their task: the current run's sessions sit directly
   under it; earlier attempts fold into one "Attempt n" row each. Retrying is
-  rare and must not cost every work item a level.
+  rare and must not cost every task a level.
 - Levels differ in row grammar, not just indent (16px): projects are sticky
-  small-caps headers, epics carry the layers glyph and a total, work items
+  small-caps headers, epics carry the layers glyph and a total, tasks
   lead with a status dot and a mono key, sessions sit on a guide line behind
   a role avatar. A tree four deep still reads in grayscale.
 - Default open state is derived from triage and never needs three clicks: a
   project opens if anything inside is counted; an epic if anything needs you
-  or is active; a work item only if it needs you, down to the asking
+  or is active; a task only if it needs you, down to the asking
   session. The user's toggles override these per row and survive refreshes,
   so a newly blocked item still opens its ancestors unless the operator
   explicitly folded them.
 - "What needs me" must be answerable without expanding anything. The
-  `Sidebar` pins a **Needs you** list across every project — work item,
+  `Sidebar` pins a **Needs you** list across every project — task,
   who is asking and what, who it waits on; where it lives is the row's
   tooltip — above the tree; the needs-you
   filter chip shows the same set in place; and every collapsed ancestor
@@ -382,11 +382,11 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 ### Board (the overview)
 
 - `Board` is what the main pane shows when the sidebar selection is a
-  project or an epic; a work item or session opens the transcript. It takes
+  project or an epic; a task or session opens the transcript. It takes
   the same `NavProject` / `NavEpic` the sidebar takes — `boardScope` maps a
   `NavRef` to one or the other — so the two can never disagree about what
   exists or what needs you.
-- `src/util/boardModel.ts` folds the eleven work item statuses into **five
+- `src/util/boardModel.ts` folds the eleven task statuses into **five
   lanes**: Intake (received, intake, confirm plan), Queued, In progress
   (running, needs you), Review (in review, ready to merge), Closed (done,
   failed, aborted). Keyed on the domain union, so a new status is a compile
@@ -446,7 +446,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - **Breadcrumb** says where you are: Project › Epic › KEY, each crumb but
   the last a link or button, the last `aria-current`. Middle crumbs elide in
   the middle (`elideMiddle`) so head and tail survive; the last never does.
-  It replaces a Back button in the work-item and transcript headers.
+  It replaces a Back button in the task and transcript headers.
 - **FindingRow** is the only way a review finding is drawn: severity as
   glyph + word in its tone (`FINDING_SEVERITY_SPECS`, keyed on the domain
   union), category, title, `file:line` in mono, and the status as a neutral
@@ -464,7 +464,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   row is a disclosure button (`aria-expanded`); the download link stays a
   sibling so Enter on it downloads. **ArtifactGroup** lists them under
   "Artifacts · N" and shows "No artifacts yet" only when given `empty`
-  — a work item without artifacts must not grow a section to say so.
+  — a task without artifacts must not grow a section to say so.
 - **ArtifactPreview** renders by kind: Markdown as `Markdown
   variant="document"`, text and JSON in mono (JSON pretty-printed when it
   parses, as typed when it does not — a half-written result is still worth
@@ -548,7 +548,7 @@ shrinking something already small makes it cramped, not dense:
 | composer padding / gap / field padding | 8 / 6 / 10 | 4 / 4 / 6 | |
 | board card padding and gap (`space-card-pad`) | 12 | 6 | |
 | rows (`size-row-default` / `-comfortable`) | 32 / 40 | 28 / 36 | board lanes, tables, menus |
-| sidebar and transcript rows (`size-row-item` / `-item-sm`) | 32 / 28 | 26 / 24 | work items, epics, projects, tool calls / sessions, thoughts, needs-you header |
+| sidebar and transcript rows (`size-row-item` / `-item-sm`) | 32 / 28 | 26 / 24 | tasks, epics, projects, tool calls / sessions, thoughts, needs-you header |
 | needs-you row padding (`space-attention-row-pad-y`) | 6 | 3 | |
 | sidebar row gap / project gap (`space-nav-row-gap`, `-nav-section-gap`) | 2 / 12 | 1 / 6 | |
 | controls (`size-control-md` / `-lg`) | 32 / 36 | 30 / 34 | a couple of px |
@@ -701,7 +701,7 @@ EmptyState, ScrollArea.
 `src/components/` — the transcript (the operator's day-to-day screen):
 
 - **ChatTranscript** — header with enough context to need no other panel
-  (work item, role, model, repo/branch, status, cost vs budget, elapsed), a
+  (task, role, model, repo/branch, status, cost vs budget, elapsed), a
   pinned slot for the plan, the scrolling turns, and a footer slot for the
   composer. Follows the tail; stops the moment you scroll up and offers
   "N new turns · Jump to latest". A ResizeObserver keeps streaming text in
@@ -749,7 +749,7 @@ EmptyState, ScrollArea.
   the pinned Needs-you list across every project, the tree, a footer.
   Loading (skeleton rows), empty, and no-match states. Search and filter are
   controlled or uncontrolled. `AttentionList` is exported on its own.
-- **NavTree** — Project → Epic → Work item → Session, flat with `aria-level`,
+- **NavTree** — Project → Epic → Task → Session, flat with `aria-level`,
   full keyboard navigation, per-row open/closed overrides (controlled via
   `expanded` / `onExpandedChange` so the app can persist them), triage-derived
   defaults, and a filter that forces ancestors open. Earlier runs fold into
@@ -763,7 +763,7 @@ EmptyState, ScrollArea.
   avatars side by side (never overlapped: each must stay readable).
 - The view model is pure and exported from `src/util/navModel.ts`:
   `flattenNav`, `attentionItems`, `globalCounts`, `projectCounts`,
-  `workItemTriage`, `workingRoles`, `ancestorKeys`. The app maps domain
+  `taskTriage`, `workingRoles`, `ancestorKeys`. The app maps domain
   records to `NavProject[]` (joining people, activity and titles) and hands
   it over; nothing here fetches.
 

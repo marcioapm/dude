@@ -19,7 +19,7 @@ function filtersFrom(url: URL) {
   return {
     sessionId: url.searchParams.get("sessionId") ?? undefined,
     runId: url.searchParams.get("runId") ?? undefined,
-    workItemId: url.searchParams.get("workItemId") ?? undefined,
+    taskId: url.searchParams.get("taskId") ?? undefined,
     projectId: url.searchParams.get("projectId") ?? undefined,
   };
 }

@@ -22,7 +22,7 @@ export type DirectiveScope = z.infer<typeof directiveScopeSchema>;
 export const directiveSchema = z.object({
   id: z.string(),
   organizationId: z.string(),
-  workItemId: z.string().nullable(),
+  taskId: z.string().nullable(),
   runId: z.string().nullable(),
   text: z.string().min(1),
   scope: directiveScopeSchema,

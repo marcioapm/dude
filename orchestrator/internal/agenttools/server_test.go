@@ -16,7 +16,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 )
 
-// A Run with a token, in a project with one work item already.
+// A Run with a token, in a project with one task already.
 type fixture struct {
 	owner         *pgx.Conn
 	url           string
@@ -29,11 +29,11 @@ func setup(t *testing.T) *fixture {
 	app, owner := dbtest.Open(t)
 	org := dbtest.Org(t, owner)
 	f := &fixture{owner: owner, org: org, project: "prj_" + org, item: "wi_" + org}
-	mustExec(t, owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix, next_work_item_number)
+	mustExec(t, owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix, next_task_number)
 		VALUES ($1, $2, 'P', $1, 'TEXT', 2)`, f.project, org)
 	mustExec(t, owner, `INSERT INTO epics (id, organization_id, project_id, title) VALUES ($1, $2, $3, 'Text utilities')`,
 		"epc_"+org, org, f.project)
-	mustExec(t, owner, `INSERT INTO work_items (id, organization_id, project_id, number, title, status)
+	mustExec(t, owner, `INSERT INTO tasks (id, organization_id, project_id, number, title, status)
 		VALUES ($1, $2, $3, 1, 'Truncate long words', 'running')`, f.item, org, f.project)
 	srv := httptest.NewServer((&agenttools.Server{DB: app}).Handler())
 	t.Cleanup(srv.Close)
@@ -45,7 +45,7 @@ func setup(t *testing.T) *fixture {
 func (f *fixture) run(t *testing.T, id, role, status string) string {
 	t.Helper()
 	token, hash := agenttools.NewToken()
-	mustExec(t, f.owner, `INSERT INTO runs (id, organization_id, project_id, work_item_id, attempt, status, phase, role, mcp_token_hash)
+	mustExec(t, f.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, mcp_token_hash)
 		VALUES ($1, $2, $3, $4, 1, $5::run_status, 'implement', $6::agent_role, $7)`, id, f.org, f.project, f.item, status, role, hash)
 	return token
 }
@@ -76,12 +76,12 @@ func TestAnImplementerRecordsWorkItFoundAndSeesIt(t *testing.T) {
 	}
 	defer cs.Close()
 
-	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "create_work_item", Arguments: map[string]any{
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "create_task", Arguments: map[string]any{
 		"title": "Hyphenated words split wrongly", "goal": "Found while truncating: `re-enter` becomes `re-`.",
 		"acceptanceCriteria": []string{"hyphenated words stay whole"}, "epic": "text utilities",
 	}})
 	if err != nil || res.IsError {
-		t.Fatalf("create_work_item: %v %+v", err, res)
+		t.Fatalf("create_task: %v %+v", err, res)
 	}
 	var created struct{ Key string }
 	raw, _ := json.Marshal(res.StructuredContent)
@@ -93,7 +93,7 @@ func TestAnImplementerRecordsWorkItFoundAndSeesIt(t *testing.T) {
 	// Marked as the agent's, in the epic, not started.
 	var status, byRun, epic string
 	if err := f.owner.QueryRow(context.Background(), `SELECT w.status::text, w.created_by_run_id, e.title
-		FROM work_items w JOIN epics e ON e.id = w.epic_id WHERE w.number = 2 AND w.project_id = $1`, f.project).
+		FROM tasks w JOIN epics e ON e.id = w.epic_id WHERE w.number = 2 AND w.project_id = $1`, f.project).
 		Scan(&status, &byRun, &epic); err != nil {
 		t.Fatal(err)
 	}
@@ -103,24 +103,24 @@ func TestAnImplementerRecordsWorkItFoundAndSeesIt(t *testing.T) {
 	// The call is in the ledger, on the calling Run.
 	var calls int
 	_ = f.owner.QueryRow(context.Background(), `SELECT count(*) FROM events WHERE run_id = 'run_impl'
-		AND event_type = $1 AND payload->>'tool' = 'create_work_item'`, agenttools.EventType).Scan(&calls)
+		AND event_type = $1 AND payload->>'tool' = 'create_task'`, agenttools.EventType).Scan(&calls)
 	if calls != 1 {
 		t.Errorf("%d ledger events for the call", calls)
 	}
 
-	res, err = cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "list_work", Arguments: map[string]any{}})
+	res, err = cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "list_tasks", Arguments: map[string]any{}})
 	if err != nil || res.IsError {
-		t.Fatalf("list_work: %v %+v", err, res)
+		t.Fatalf("list_tasks: %v %+v", err, res)
 	}
 	raw, _ = json.Marshal(res.StructuredContent)
 	for _, want := range []string{`"key":"TEXT-1"`, `"yours":true`, `"key":"TEXT-2"`, `"createdBy":"TEXT-1"`, `"Text utilities"`} {
 		if !strings.Contains(string(raw), want) {
-			t.Errorf("list_work lacks %s: %s", want, raw)
+			t.Errorf("list_tasks lacks %s: %s", want, raw)
 		}
 	}
 
 	// A bad request is the agent's to fix, said plainly.
-	res, err = cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "create_work_item",
+	res, err = cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "create_task",
 		Arguments: map[string]any{"title": "x", "goal": "y", "epic": "no such epic"}})
 	if err != nil || !res.IsError {
 		t.Fatalf("an unknown epic was accepted: %v %+v", err, res)
@@ -143,7 +143,7 @@ func TestAReviewerCannotCreateWork(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	// Seeing work and recording events, not making work or stopping for a person.
-	if strings.Join(names, ",") != "emit_event,list_epics,list_repositories,list_work,request_repository" {
+	if strings.Join(names, ",") != "emit_event,list_epics,list_repositories,list_tasks,request_repository" {
 		t.Errorf("a reviewer sees %v", names)
 	}
 }
@@ -182,13 +182,13 @@ func TestListWorkFindsByText(t *testing.T) {
 	}
 	defer cs.Close()
 	for text, want := range map[string]bool{"TRUNCATE": true, "hyphen": false} {
-		res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "list_work", Arguments: map[string]any{"text": text}})
+		res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "list_tasks", Arguments: map[string]any{"text": text}})
 		if err != nil || res.IsError {
-			t.Fatalf("list_work %q: %v %+v", text, err, res)
+			t.Fatalf("list_tasks %q: %v %+v", text, err, res)
 		}
 		raw, _ := json.Marshal(res.StructuredContent)
 		if strings.Contains(string(raw), "TEXT-1") != want {
-			t.Errorf("list_work %q: %s", text, raw)
+			t.Errorf("list_tasks %q: %s", text, raw)
 		}
 	}
 }
@@ -211,13 +211,13 @@ func (f *fixture) post(t *testing.T, token, tool, body string) (int, map[string]
 func TestTheCLIsJSONAPICallsTheSameTools(t *testing.T) {
 	f := setup(t)
 	token := f.run(t, "run_cli", "implementer", "running")
-	if status, out := f.post(t, token, "create_work_item", `{"title":"From the CLI","goal":"why"}`); status != 200 || out["key"] != "TEXT-2" {
+	if status, out := f.post(t, token, "create_task", `{"title":"From the CLI","goal":"why"}`); status != 200 || out["key"] != "TEXT-2" {
 		t.Errorf("create: %d %v", status, out)
 	}
-	if status, out := f.post(t, token, "create_work_item", `{"title":"x","colour":"red"}`); status != 422 {
+	if status, out := f.post(t, token, "create_task", `{"title":"x","colour":"red"}`); status != 422 {
 		t.Errorf("an unknown argument: %d %v", status, out)
 	}
-	if status, _ := f.post(t, f.run(t, "run_rev2", "reviewer", "running"), "create_work_item", `{"title":"x"}`); status != 404 {
+	if status, _ := f.post(t, f.run(t, "run_rev2", "reviewer", "running"), "create_task", `{"title":"x"}`); status != 404 {
 		t.Errorf("a reviewer created work: %d", status)
 	}
 	var calls int
@@ -236,10 +236,10 @@ func TestAnAgentAsksAPersonThroughATool(t *testing.T) {
 		t.Fatalf("ask: %d %v", status, out)
 	}
 	var prompt, wiStatus string
-	_ = f.owner.QueryRow(context.Background(), `SELECT q.prompt, w.status::text FROM questions q JOIN work_items w ON w.id = q.work_item_id
+	_ = f.owner.QueryRow(context.Background(), `SELECT q.prompt, w.status::text FROM questions q JOIN tasks w ON w.id = q.task_id
 		WHERE q.run_id = 'run_ask' AND q.status = 'open'`).Scan(&prompt, &wiStatus)
 	if prompt != "Keep hyphenated words whole?" || wiStatus != "awaiting_input" {
-		t.Errorf("question %q, work item %s", prompt, wiStatus)
+		t.Errorf("question %q, task %s", prompt, wiStatus)
 	}
 	// One at a time.
 	if status, _ := f.post(t, token, "ask_person", `{"question":"And another?"}`); status != 422 {
@@ -309,15 +309,15 @@ func TestARunawayAgentIsSlowedDown(t *testing.T) {
 	token := f.run(t, "run_loop", "implementer", "running")
 	var last int
 	for i := 0; i < 25; i++ {
-		last, _ = f.post(t, token, "create_work_item", fmt.Sprintf(`{"title":"spam %d"}`, i))
+		last, _ = f.post(t, token, "create_task", fmt.Sprintf(`{"title":"spam %d"}`, i))
 	}
 	if last != 422 {
-		t.Errorf("the 25th work item was accepted: %d", last)
+		t.Errorf("the 25th task was accepted: %d", last)
 	}
 	var made int
-	_ = f.owner.QueryRow(context.Background(), `SELECT count(*) FROM work_items WHERE created_by_run_id = 'run_loop'`).Scan(&made)
+	_ = f.owner.QueryRow(context.Background(), `SELECT count(*) FROM tasks WHERE created_by_run_id = 'run_loop'`).Scan(&made)
 	if made != 20 {
-		t.Errorf("%d work items made, want the limit of 20", made)
+		t.Errorf("%d tasks made, want the limit of 20", made)
 	}
 }
 

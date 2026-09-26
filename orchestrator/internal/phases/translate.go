@@ -342,8 +342,8 @@ func (t *translator) settleClone(ctx context.Context, tx pgx.Tx, s *Syncer, repo
 				UPDATE repository_requests q SET status = 'cloned' FROM repositories repo
 				WHERE repo.id = q.repository_id AND q.run_id = $1 AND repo.name = $2 AND q.status = 'approved')
 			UPDATE runs SET lux_repositories = array_append(lux_repositories, $2),
-				lux_pushes = CASE WHEN EXISTS (SELECT 1 FROM work_item_repositories wr JOIN repositories repo ON repo.id = wr.repository_id
-					WHERE wr.work_item_id = runs.work_item_id AND repo.name = $2 AND wr.access = 'write')
+				lux_pushes = CASE WHEN EXISTS (SELECT 1 FROM task_repositories wr JOIN repositories repo ON repo.id = wr.repository_id
+					WHERE wr.task_id = runs.task_id AND repo.name = $2 AND wr.access = 'write')
 					THEN array_append(lux_pushes, $2) ELSE lux_pushes END
 			WHERE id = $1 AND NOT ($2 = ANY (lux_repositories))`, t.run.ID, repo)
 		return err
@@ -353,10 +353,10 @@ func (t *translator) settleClone(ctx context.Context, tx pgx.Tx, s *Syncer, repo
 		  AND q.status = 'approved'`, t.run.ID, repo, cloneErr); err != nil {
 		return err
 	}
-	// Not checked out after all: the work item stops naming it.
-	if _, err := tx.Exec(ctx, `DELETE FROM work_item_repositories wr USING repository_requests q, repositories repo
+	// Not checked out after all: the task stops naming it.
+	if _, err := tx.Exec(ctx, `DELETE FROM task_repositories wr USING repository_requests q, repositories repo
 		WHERE q.run_id = $1 AND q.status = 'failed' AND repo.id = q.repository_id AND repo.name = $2
-		  AND wr.work_item_id = q.work_item_id AND wr.repository_id = q.repository_id`, t.run.ID, repo); err != nil {
+		  AND wr.task_id = q.task_id AND wr.repository_id = q.repository_id`, t.run.ID, repo); err != nil {
 		return err
 	}
 	return s.event(ctx, tx, t.run, "repository.clone_failed", ledger.ActorSystem,

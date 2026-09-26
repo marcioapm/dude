@@ -8,7 +8,7 @@ export interface BreadcrumbItem {
   readonly label: string;
   /** A glyph before the label: `layers` for an epic. */
   readonly icon?: IconName | undefined;
-  /** Monospace label — a work item key. */
+  /** Monospace label — a task key. */
   readonly mono?: boolean | undefined;
   /** Rendered as an anchor when given; a button when only `onSelect` is; plain text when neither. */
   readonly href?: string | undefined;

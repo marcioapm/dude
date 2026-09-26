@@ -28,7 +28,7 @@ type Signal struct {
 type ActionableFeedback struct {
 	// "review" or "checks".
 	Source string `json:"source"`
-	// Which repository's pull request it is on, when a work item has several.
+	// Which repository's pull request it is on, when a task has several.
 	Repo   string `json:"repo,omitempty"`
 	Author string `json:"author,omitempty"`
 	Body   string `json:"body"`
@@ -157,7 +157,7 @@ func Classify(prior PriorState, current Status, feedback []Feedback, factoryLogi
 	if len(actionable) > 0 {
 		return &Signal{Kind: "actionable", Feedback: actionable}
 	}
-	// Approval or green checks gained or lost: the work item may be ready to
+	// Approval or green checks gained or lost: the task may be ready to
 	// merge, or no longer. Worth telling the workflow, not a fixer.
 	if Ready(current.Review, current.Checks) != Ready(prior.Review, prior.Checks) {
 		return &Signal{Kind: "readiness"}

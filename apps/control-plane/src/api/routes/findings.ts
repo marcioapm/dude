@@ -19,7 +19,7 @@ import { json, notFound, parseBody } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 const FINDING_SELECT = `
-  id, organization_id AS "organizationId", work_item_id AS "workItemId",
+  id, organization_id AS "organizationId", task_id AS "taskId",
   run_id AS "runId", category, severity, status, repo, file, line,
   title, description, suggested_fix AS "suggestedFix",
   resolved_by_run_id AS "resolvedByRunId", resolution_note AS "resolutionNote",
@@ -28,14 +28,14 @@ const FINDING_SELECT = `
 
 
 async function listFindings(ctx: RequestContext): Promise<Response> {
-  const workItemId = ctx.url.searchParams.get("workItemId");
+  const taskId = ctx.url.searchParams.get("taskId");
   const runId = ctx.url.searchParams.get("runId");
   const status = ctx.url.searchParams.get("status");
 
   const findings = await withOrg(ctx.principal.organizationId, async (scope) => {
     return (await scope.sql`
       SELECT ${scope.sql.unsafe(FINDING_SELECT)} FROM review_findings
-      WHERE (${workItemId}::text IS NULL OR work_item_id = ${workItemId})
+      WHERE (${taskId}::text IS NULL OR task_id = ${taskId})
         AND (${runId}::text IS NULL OR run_id = ${runId})
         AND (${status}::text IS NULL OR status::text = ${status})
       ORDER BY
@@ -82,11 +82,11 @@ async function resolveFinding(ctx: RequestContext): Promise<Response> {
       eventType: EventTypes.FindingResolved,
       organizationId,
       projectId: null,
-      workItemId: finding.workItemId as string,
+      taskId: finding.taskId as string,
       runId: (finding.runId as string | null) ?? null,
       actor: { type: "human", id: ctx.principal.apiKeyId },
       source: "control-plane",
-      correlationId: finding.workItemId as string,
+      correlationId: finding.taskId as string,
       payload: { status: input.status, note: input.note, title: finding.title },
     });
 

@@ -32,7 +32,7 @@ const ModelPrefix = "fake/"
 // HangModel keeps its agent busy until stopped.
 const HangModel = "fake/hang"
 
-// ToolsModel's implementer calls dude's list_work tool (through lux-fake's
+// ToolsModel's implementer calls dude's list_tasks tool (through lux-fake's
 // MCP client) before its usual work, so a real lux's handling of dude's
 // tools is exercised.
 const ToolsModel = "fake/tools"
@@ -176,7 +176,7 @@ func Script(phase, model, runID string) string {
 	if model == ToolsModel && phase == "implement" {
 		// Both ways dude's tools reach an agent on lux: MCP, and the local
 		// service socket the dude CLI uses (no token in the container).
-		b.WriteString("mcp-call dude list_work \n")
+		b.WriteString("mcp-call dude list_tasks \n")
 		b.WriteString(`http dude POST /tools/emit_event {"type":"progress","data":{"done":1,"of":1,"step":"through the socket"}}` + "\n")
 	}
 	for path, line := range step.Commit {

@@ -21,10 +21,10 @@
 import {
   ALL_RUN_STATUSES,
   ALL_SESSION_STATUSES,
-  ALL_WORK_ITEM_STATUSES,
+  ALL_TASK_STATUSES,
   type RunStatus,
   type SessionStatus,
-  type WorkItemStatus,
+  type TaskStatus,
 } from "@dude/domain";
 import type { ToneName } from "./palette.ts";
 
@@ -39,10 +39,10 @@ import type { ToneName } from "./palette.ts";
  */
 export const RUN_STATUSES = ALL_RUN_STATUSES;
 export const SESSION_STATUSES = ALL_SESSION_STATUSES;
-export const WORK_ITEM_STATUSES = ALL_WORK_ITEM_STATUSES;
-export type { RunStatus, SessionStatus, WorkItemStatus };
+export const TASK_STATUSES = ALL_TASK_STATUSES;
+export type { RunStatus, SessionStatus, TaskStatus };
 
-export type Status = RunStatus | SessionStatus | WorkItemStatus;
+export type Status = RunStatus | SessionStatus | TaskStatus;
 
 export type StatusGlyph =
   | "circle" // hollow — nothing has happened yet
@@ -170,7 +170,7 @@ export const STATUS_SPECS: Record<Status, StatusSpec> = {
     description: "Blocked on the operator. Nothing proceeds until you act.",
   },
 
-  // -- work item ---------------------------------------------------------
+  // -- task ---------------------------------------------------------
   received: {
     label: "Received",
     tone: "neutral",

@@ -10,7 +10,7 @@
 import type { NavProject } from "@dude/design-system";
 import type {
   AgentRole,
-  WorkItemRepository,
+  TaskRepository,
   DeliveryPolicy,
   Directive,
   FullDeliveryPolicy,
@@ -23,7 +23,7 @@ import type {
   Project,
   Run,
   Session,
-  WorkItem,
+  Task,
 } from "@dude/domain";
 
 // ---------------------------------------------------------------------------
@@ -42,7 +42,7 @@ export type {
   Repository,
   Run,
   Session,
-  WorkItem,
+  Task,
 } from "@dude/domain";
 
 /** A project with its repositories. `GET /v1/projects/:id`. */
@@ -63,20 +63,20 @@ export type ForgeConnection =
       updatedAt: string;
     };
 
-/** What a work item asks for, and where it sits. */
-export interface WorkItemFields {
+/** What a task asks for, and where it sits. */
+export interface TaskFields {
   title: string;
   goal: string;
   acceptanceCriteria: string[];
   epicId: string | null;
   /** The repositories it works on; none is work that changes no code. */
-  repositories: WorkItemRepository[];
+  repositories: TaskRepository[];
 }
 
-export type { WorkItemRepository } from "@dude/domain";
+export type { TaskRepository } from "@dude/domain";
 
-/** A work item with its attempts, newest first. `GET /v1/work-items/:id`. */
-export interface WorkItemDetail extends WorkItem {
+/** A task with its attempts, newest first. `GET /v1/tasks/:id`. */
+export interface TaskDetail extends Task {
   runs: Run[];
 }
 
@@ -132,10 +132,10 @@ export interface ApiClientOptions {
   apiKey: string;
 }
 
-/** A file an agent published, as the work item lists it. `GET /v1/artifacts`. */
+/** A file an agent published, as the task lists it. `GET /v1/artifacts`. */
 export interface Artifact {
   id: string;
-  workItemId: string;
+  taskId: string;
   runId: string | null;
   name: string;
   contentType: string;
@@ -190,31 +190,31 @@ export class ApiClient {
     return this.#request("GET", "/v1/projects");
   }
 
-  listWorkItems(params: { projectId?: string; status?: string } = {}): Promise<{
-    workItems: WorkItem[];
+  listTasks(params: { projectId?: string; status?: string } = {}): Promise<{
+    tasks: Task[];
   }> {
-    return this.#request("GET", `/v1/work-items${qs(params)}`);
+    return this.#request("GET", `/v1/tasks${qs(params)}`);
   }
 
-  getWorkItem(id: string): Promise<WorkItemDetail> {
-    return this.#request("GET", `/v1/work-items/${id}`);
+  getTask(id: string): Promise<TaskDetail> {
+    return this.#request("GET", `/v1/tasks/${id}`);
   }
 
   getRun(id: string): Promise<RunDetail> {
     return this.#request("GET", `/v1/runs/${id}`);
   }
 
-  /** Every project, epic, work item and agent the sidebar and board draw. */
+  /** Every project, epic, task and agent the sidebar and board draw. */
   navigation(): Promise<{ projects: NavProject[] }> {
     return this.#request("GET", "/v1/navigation");
   }
 
-  listPullRequests(workItemId: string): Promise<{ pullRequests: PullRequest[] }> {
-    return this.#request("GET", `/v1/pull-requests${qs({ workItemId })}`);
+  listPullRequests(taskId: string): Promise<{ pullRequests: PullRequest[] }> {
+    return this.#request("GET", `/v1/pull-requests${qs({ taskId })}`);
   }
 
-  listArtifacts(workItemId: string): Promise<{ artifacts: Artifact[] }> {
-    return this.#request("GET", `/v1/artifacts${qs({ workItemId })}`);
+  listArtifacts(taskId: string): Promise<{ artifacts: Artifact[] }> {
+    return this.#request("GET", `/v1/artifacts${qs({ taskId })}`);
   }
 
   /**
@@ -225,8 +225,8 @@ export class ApiClient {
     return (await this.#fetch("GET", `/v1/artifacts/${encodeURIComponent(id)}/content`)).blob();
   }
 
-  listFindings(workItemId: string): Promise<{ findings: Finding[] }> {
-    return this.#request("GET", `/v1/findings${qs({ workItemId })}`);
+  listFindings(taskId: string): Promise<{ findings: Finding[] }> {
+    return this.#request("GET", `/v1/findings${qs({ taskId })}`);
   }
 
   /** The factory's delivery policy, which a project's settings layer over. */
@@ -257,17 +257,17 @@ export class ApiClient {
 
   // -- writes -------------------------------------------------------------
 
-  createRun(workItemId: string): Promise<Run> {
-    return this.#request("POST", `/v1/work-items/${workItemId}/runs`, {});
+  createRun(taskId: string): Promise<Run> {
+    return this.#request("POST", `/v1/tasks/${taskId}/runs`, {});
   }
 
-  createWorkItem(input: { projectId: string } & Partial<WorkItemFields> & { title: string }): Promise<WorkItem> {
-    return this.#request("POST", "/v1/work-items", input);
+  createTask(input: { projectId: string } & Partial<TaskFields> & { title: string }): Promise<Task> {
+    return this.#request("POST", "/v1/tasks", input);
   }
 
-  /** Edit a work item. What it asks for is fixed once delivery starts; where it sits is not. */
-  updateWorkItem(id: string, changes: Partial<WorkItemFields>): Promise<WorkItem> {
-    return this.#request("PATCH", `/v1/work-items/${id}`, changes);
+  /** Edit a task. What it asks for is fixed once delivery starts; where it sits is not. */
+  updateTask(id: string, changes: Partial<TaskFields>): Promise<Task> {
+    return this.#request("PATCH", `/v1/tasks/${id}`, changes);
   }
 
   createProject(input: {
@@ -315,8 +315,8 @@ export class ApiClient {
    * Start the delivery workflow: implement, review, fix, simplify, then a
    * pull request. Idempotent — a second call joins the delivery in flight.
    */
-  deliver(workItemId: string): Promise<{ workflowRunId: string; alreadyRunning: boolean }> {
-    return this.#request("POST", `/v1/work-items/${workItemId}/deliver`, {});
+  deliver(taskId: string): Promise<{ workflowRunId: string; alreadyRunning: boolean }> {
+    return this.#request("POST", `/v1/tasks/${taskId}/deliver`, {});
   }
 
   /** Approve or decline an agent's request for a repository. */
@@ -339,8 +339,8 @@ export class ApiClient {
   }
 
   /** Finished work with nothing to merge — a write-up, a design — is done once a person has read it. */
-  markDone(workItemId: string): Promise<{ status: string }> {
-    return this.#request("POST", `/v1/work-items/${workItemId}/done`, {});
+  markDone(taskId: string): Promise<{ status: string }> {
+    return this.#request("POST", `/v1/tasks/${taskId}/done`, {});
   }
 
   // -- intervention (plan §24) --------------------------------------------
@@ -383,7 +383,7 @@ export class ApiClient {
     after?: number | undefined;
     runId?: string | undefined;
     sessionId?: string | undefined;
-    workItemId?: string | undefined;
+    taskId?: string | undefined;
     projectId?: string | undefined;
     /** Skip the backfill and deliver only what happens from now on. */
     live?: boolean | undefined;

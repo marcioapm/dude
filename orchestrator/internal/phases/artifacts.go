@@ -45,7 +45,7 @@ const artifactsPatience = 24 * time.Hour
 const ArtifactEventType = "artifact.created"
 
 type dueRun struct {
-	ID, Org, ProjectID, WorkItemID, LuxRunID string
+	ID, Org, ProjectID, TaskID, LuxRunID string
 	// dude's status for it: stopped, or running again after a resume.
 	Status string
 	DueAt  time.Time
@@ -57,7 +57,7 @@ type dueRun struct {
 func (a *Artifacts) Sweep(ctx context.Context) (int, error) {
 	var due []dueRun
 	if err := a.DB.InSystem(ctx, "artifacts", func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT id, organization_id, project_id, work_item_id, lux_run_id, status::text, artifacts_due_at,
+		rows, err := tx.Query(ctx, `SELECT id, organization_id, project_id, task_id, lux_run_id, status::text, artifacts_due_at,
 				artifacts_due_at < now() - make_interval(secs => $1)
 			FROM runs WHERE artifacts_due_at IS NOT NULL AND artifacts_next_at <= now()
 			ORDER BY artifacts_next_at LIMIT 50`, artifactsPatience.Seconds())
@@ -66,7 +66,7 @@ func (a *Artifacts) Sweep(ctx context.Context) (int, error) {
 		}
 		due, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (dueRun, error) {
 			var r dueRun
-			return r, row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.WorkItemID, &r.LuxRunID, &r.Status, &r.DueAt, &r.Overdue)
+			return r, row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.TaskID, &r.LuxRunID, &r.Status, &r.DueAt, &r.Overdue)
 		})
 		return err
 	}); err != nil {
@@ -192,8 +192,8 @@ func (a *Artifacts) record(ctx context.Context, tx pgx.Tx, r dueRun, art lux.Art
 		return err
 	}
 	_, err = ledger.Append(ctx, tx, ledger.Event{
-		Type: ArtifactEventType, OrganizationID: r.Org, ProjectID: r.ProjectID, WorkItemID: r.WorkItemID, RunID: r.ID,
-		ActorType: ledger.ActorAgent, ActorID: r.ID, Source: ledger.SourceRunner, CorrelationID: r.WorkItemID,
+		Type: ArtifactEventType, OrganizationID: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, RunID: r.ID,
+		ActorType: ledger.ActorAgent, ActorID: r.ID, Source: ledger.SourceRunner, CorrelationID: r.TaskID,
 		Payload: map[string]any{"artifactId": id, "name": name, "contentType": ctype,
 			"sizeBytes": art.Size, "sha256": art.SHA256},
 	})

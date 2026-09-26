@@ -248,7 +248,7 @@ export interface FindingGroupProps<T extends FindingLike> extends Omit<HTMLAttri
 }
 
 /**
- * The findings of a work item, open first. The header counts what is
+ * The findings of a task, open first. The header counts what is
  * still open (in attention ink when any is blocking) and what has been
  * dealt with. `renderRow` gets each finding in sorted order and
  * returns a `FindingRow`, so the app decides the links and the handlers.

@@ -1,7 +1,7 @@
 /**
- * Work item, run and session routes.
+ * Task, run and session routes.
  *
- * A Work Item is the user-facing unit of requested work. A Run is one
+ * A Task is the user-facing unit of requested work. A Run is one
  * execution attempt of it — retrying never erases a prior attempt, so cost,
  * duration and failure remain inspectable per attempt (plan §39).
  */
@@ -13,18 +13,18 @@ import { withOrg, withoutTenant } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { badRequest, conflict, json, notFound, parseBody } from "../http.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
-import { REPOSITORIES_JSON, setWorkItemRepositories, workItemRepositoriesInput } from "./workItemRepositories.ts";
+import { REPOSITORIES_JSON, setTaskRepositories, taskRepositoriesInput } from "./taskRepositories.ts";
 import type { RequestContext, Router } from "../router.ts";
 
-const WORK_ITEM_SELECT = `
+const TASK_SELECT = `
   id, organization_id AS "organizationId", project_id AS "projectId", epic_id AS "epicId", ${REPOSITORIES_JSON},
   title, goal, acceptance_criteria AS "acceptanceCriteria", status,
-  (SELECT key_prefix FROM projects p WHERE p.id = work_items.project_id) || '-' || number AS key, -- see navigation.ts
+  (SELECT key_prefix FROM projects p WHERE p.id = tasks.project_id) || '-' || number AS key, -- see navigation.ts
   requested_by AS "requestedBy", created_at AS "createdAt", updated_at AS "updatedAt"`;
 
 const RUN_SELECT = `
   id, organization_id AS "organizationId", project_id AS "projectId",
-  work_item_id AS "workItemId", attempt, status, error,
+  task_id AS "taskId", attempt, status, error,
   phase, role, category, parent_run_id AS "parentRunId", base_refs AS "baseRefs",
   (SELECT COALESCE(json_object_agg(k, v->>'sha'), '{}'::json) FROM jsonb_each(heads) AS h(k, v)) AS heads,
   branch, harness, model, dude_pause AS "dudePause",
@@ -39,21 +39,21 @@ const SESSION_SELECT = `
   created_at AS "createdAt", ended_at AS "endedAt"`;
 
 // ---------------------------------------------------------------------------
-// Work items
+// Tasks
 // ---------------------------------------------------------------------------
 
-const createWorkItemInput = z.object({
+const createTaskInput = z.object({
   projectId: z.string().min(1),
   epicId: z.string().min(1).nullable().default(null),
   /** The repositories it works on; the project's only one when none is named. */
-  repositories: workItemRepositoriesInput.default([]),
+  repositories: taskRepositoriesInput.default([]),
   title: z.string().min(1).max(500),
   goal: z.string().max(10_000).default(""),
   acceptanceCriteria: z.array(z.string().max(2000)).default([]),
 });
 
-async function createWorkItem(ctx: RequestContext): Promise<Response> {
-  const input = await parseBody(ctx.request, createWorkItemInput);
+async function createTask(ctx: RequestContext): Promise<Response> {
+  const input = await parseBody(ctx.request, createTaskInput);
   const { organizationId } = ctx.principal;
 
   const result = await withOrg(organizationId, async (scope) => {
@@ -62,97 +62,97 @@ async function createWorkItem(ctx: RequestContext): Promise<Response> {
     // Takes the project's next number, locking the row so two creates
     // cannot take the same one.
     const project = (await scope.sql`
-      UPDATE projects SET next_work_item_number = next_work_item_number + 1
+      UPDATE projects SET next_task_number = next_task_number + 1
       WHERE id = ${input.projectId}
-      RETURNING next_work_item_number - 1 AS number`) as Array<{ number: number }>;
+      RETURNING next_task_number - 1 AS number`) as Array<{ number: number }>;
     if (project.length === 0) return { missingProject: true as const };
 
-    const workItemId = newId("workItem");
+    const taskId = newId("task");
     await scope.sql`
-      INSERT INTO work_items (id, organization_id, project_id, number, epic_id, title, goal,
+      INSERT INTO tasks (id, organization_id, project_id, number, epic_id, title, goal,
                               acceptance_criteria, status)
-      VALUES (${workItemId}, ${organizationId}, ${input.projectId}, ${project[0]!.number}, ${input.epicId},
+      VALUES (${taskId}, ${organizationId}, ${input.projectId}, ${project[0]!.number}, ${input.epicId},
               ${input.title}, ${input.goal},
               ${input.acceptanceCriteria ?? []}::jsonb, 'received')`;
-    const missing = await setWorkItemRepositories(scope, organizationId, input.projectId, workItemId, input.repositories ?? []);
-    // Thrown, so the transaction and the work item's number roll back.
+    const missing = await setTaskRepositories(scope, organizationId, input.projectId, taskId, input.repositories ?? []);
+    // Thrown, so the transaction and the task's number roll back.
     if (missing) throw notFound(`repository ${missing} is not in this project`);
     const rows = (await scope.sql`
-      SELECT ${scope.sql.unsafe(WORK_ITEM_SELECT)} FROM work_items WHERE id = ${workItemId}`) as Array<Record<string, unknown>>;
+      SELECT ${scope.sql.unsafe(TASK_SELECT)} FROM tasks WHERE id = ${taskId}`) as Array<Record<string, unknown>>;
 
     const event = await appendInScope(scope, {
-      eventType: EventTypes.WorkItemCreated,
+      eventType: EventTypes.TaskCreated,
       organizationId,
       projectId: input.projectId,
-      workItemId,
+      taskId,
       actor: { type: "human", id: ctx.principal.apiKeyId },
       source: "control-plane",
-      correlationId: workItemId,
+      correlationId: taskId,
       payload: { title: input.title, goal: input.goal },
     });
 
-    return { workItem: rows[0]!, event };
+    return { task: rows[0]!, event };
   });
 
   if ("missingProject" in result) throw notFound(`project ${input.projectId} not found`);
-  return json(result.workItem, 201);
+  return json(result.task, 201);
 }
 
 const deliverInput = z.object({
-  /** Overrides for this work item only; unset fields keep the default. */
+  /** Overrides for this task only; unset fields keep the default. */
   policy: z.record(z.string(), z.unknown()).optional(),
 });
 
 /**
- * Start the delivery workflow for a work item.
+ * Start the delivery workflow for a task.
  *
  * The orchestrator runs it; this authenticates the user and forwards. The
- * work item is the idempotency key there, so a second call joins the
+ * task is the idempotency key there, so a second call joins the
  * delivery already in flight.
  */
-async function deliverWorkItem(ctx: RequestContext): Promise<Response> {
+async function deliverTask(ctx: RequestContext): Promise<Response> {
   const input = await parseBody(ctx.request, deliverInput);
-  return orchestrator(ctx.principal.organizationId, "POST", `/internal/work-items/${ctx.params.id}/deliver`,
+  return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${ctx.params.id}/deliver`,
     JSON.stringify(input), ctx.principal.apiKeyId);
 }
 
 /** Mark finished work that has nothing to merge done: a person has read it. */
-async function markWorkItemDone(ctx: RequestContext): Promise<Response> {
-  return orchestrator(ctx.principal.organizationId, "POST", `/internal/work-items/${ctx.params.id}/done`,
+async function markTaskDone(ctx: RequestContext): Promise<Response> {
+  return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${ctx.params.id}/done`,
     "{}", ctx.principal.apiKeyId);
 }
 
-async function listWorkItems(ctx: RequestContext): Promise<Response> {
+async function listTasks(ctx: RequestContext): Promise<Response> {
   const projectId = ctx.url.searchParams.get("projectId");
   const status = ctx.url.searchParams.get("status");
 
-  const workItems = await withOrg(ctx.principal.organizationId, async (scope) => {
+  const tasks = await withOrg(ctx.principal.organizationId, async (scope) => {
     return (await scope.sql`
-      SELECT ${scope.sql.unsafe(WORK_ITEM_SELECT)} FROM work_items
+      SELECT ${scope.sql.unsafe(TASK_SELECT)} FROM tasks
       WHERE (${projectId}::text IS NULL OR project_id = ${projectId})
         AND (${status}::text IS NULL OR status::text = ${status})
       ORDER BY created_at DESC
       LIMIT 200`) as Array<Record<string, unknown>>;
   });
-  return json({ workItems });
+  return json({ tasks });
 }
 
-async function getWorkItem(ctx: RequestContext): Promise<Response> {
+async function getTask(ctx: RequestContext): Promise<Response> {
   const id = ctx.params.id!;
-  const workItem = await withOrg(ctx.principal.organizationId, async (scope) => {
+  const task = await withOrg(ctx.principal.organizationId, async (scope) => {
     const rows = (await scope.sql`
-      SELECT ${scope.sql.unsafe(WORK_ITEM_SELECT)} FROM work_items WHERE id = ${id}`) as Array<
+      SELECT ${scope.sql.unsafe(TASK_SELECT)} FROM tasks WHERE id = ${id}`) as Array<
       Record<string, unknown>
     >;
     if (!rows[0]) return null;
     const runs = await scope.sql`
-      SELECT ${scope.sql.unsafe(RUN_SELECT)} FROM runs WHERE work_item_id = ${id}
+      SELECT ${scope.sql.unsafe(RUN_SELECT)} FROM runs WHERE task_id = ${id}
       ORDER BY attempt DESC`;
     return { ...rows[0], runs };
   });
 
-  if (!workItem) throw notFound(`work item ${id} not found`);
-  return json(workItem);
+  if (!task) throw notFound(`task ${id} not found`);
+  return json(task);
 }
 
 // ---------------------------------------------------------------------------
@@ -160,60 +160,60 @@ async function getWorkItem(ctx: RequestContext): Promise<Response> {
 // ---------------------------------------------------------------------------
 
 /**
- * Create a Run for a Work Item.
+ * Create a Run for a Task.
  *
  * The attempt number is derived inside the transaction, and `runs` has a
- * UNIQUE(work_item_id, attempt) constraint, so two concurrent creates cannot
+ * UNIQUE(task_id, attempt) constraint, so two concurrent creates cannot
  * both claim the same attempt — the loser gets a 409 rather than a duplicate.
  */
 async function createRun(ctx: RequestContext): Promise<Response> {
-  const workItemId = ctx.params.id!;
+  const taskId = ctx.params.id!;
   const { organizationId } = ctx.principal;
 
   const result = await withOrg(organizationId, async (scope) => {
-    const workItems = (await scope.sql`
-      SELECT id, project_id FROM work_items WHERE id = ${workItemId} LIMIT 1`) as Array<{
+    const tasks = (await scope.sql`
+      SELECT id, project_id FROM tasks WHERE id = ${taskId} LIMIT 1`) as Array<{
       id: string;
       project_id: string;
     }>;
-    const workItem = workItems[0];
-    if (!workItem) return { missing: true as const };
+    const task = tasks[0];
+    if (!task) return { missing: true as const };
 
     const attemptRows = (await scope.sql`
-      SELECT COALESCE(MAX(attempt), 0) + 1 AS attempt FROM runs WHERE work_item_id = ${workItemId}`) as Array<{
+      SELECT COALESCE(MAX(attempt), 0) + 1 AS attempt FROM runs WHERE task_id = ${taskId}`) as Array<{
       attempt: number;
     }>;
     const attempt = Number(attemptRows[0]?.attempt ?? 1);
 
     const runId = newId("run");
     const rows = (await scope.sql`
-      INSERT INTO runs (id, organization_id, project_id, work_item_id, attempt, status)
-      VALUES (${runId}, ${organizationId}, ${workItem.project_id}, ${workItemId}, ${attempt}, 'pending')
+      INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status)
+      VALUES (${runId}, ${organizationId}, ${task.project_id}, ${taskId}, ${attempt}, 'pending')
       RETURNING ${scope.sql.unsafe(RUN_SELECT)}`) as Array<Record<string, unknown>>;
 
-    await scope.sql`UPDATE work_items SET status = 'queued' WHERE id = ${workItemId}`;
+    await scope.sql`UPDATE tasks SET status = 'queued' WHERE id = ${taskId}`;
 
     const event = await appendInScope(scope, {
       eventType: EventTypes.RunCreated,
       organizationId,
-      projectId: workItem.project_id,
-      workItemId,
+      projectId: task.project_id,
+      taskId,
       runId,
       actor: { type: "human", id: ctx.principal.apiKeyId },
       source: "control-plane",
-      correlationId: workItemId,
+      correlationId: taskId,
       payload: { attempt },
     });
 
     return { run: rows[0]!, event };
   }).catch((err: unknown) => {
-    if (err instanceof Error && err.message.includes("runs_work_item_id_attempt_key")) {
+    if (err instanceof Error && err.message.includes("runs_task_id_attempt_key")) {
       return { raced: true as const };
     }
     throw err;
   });
 
-  if ("missing" in result) throw notFound(`work item ${workItemId} not found`);
+  if ("missing" in result) throw notFound(`task ${taskId} not found`);
   if ("raced" in result) throw conflict("a run for this attempt was created concurrently; retry");
   return json(result.run, 201);
 }
@@ -339,12 +339,12 @@ async function getSession(ctx: RequestContext): Promise<Response> {
 }
 
 export function registerWorkRoutes(router: Router): void {
-  router.post("/v1/work-items", createWorkItem);
-  router.get("/v1/work-items", listWorkItems);
-  router.get("/v1/work-items/:id", getWorkItem);
-  router.post("/v1/work-items/:id/runs", createRun);
-  router.post("/v1/work-items/:id/deliver", deliverWorkItem);
-  router.post("/v1/work-items/:id/done", markWorkItemDone);
+  router.post("/v1/tasks", createTask);
+  router.get("/v1/tasks", listTasks);
+  router.get("/v1/tasks/:id", getTask);
+  router.post("/v1/tasks/:id/runs", createRun);
+  router.post("/v1/tasks/:id/deliver", deliverTask);
+  router.post("/v1/tasks/:id/done", markTaskDone);
 
   router.get("/v1/runs/:id", getRun);
   router.post("/v1/runs/:id/sessions", createSession);

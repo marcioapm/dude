@@ -21,12 +21,12 @@ import (
 type ReviewerRule struct {
 	Category string `json:"category"`
 	// Run this reviewer only when the diff touches a matching path: a security
-	// reviewer on a CSS change is a tax on every work item.
+	// reviewer on a CSS change is a tax on every task.
 	WhenPathsMatch []string `json:"whenPathsMatch,omitempty"`
 }
 
 type Policy struct {
-	// Severities that stop a work item from progressing.
+	// Severities that stop a task from progressing.
 	BlockingSeverities   []string       `json:"blockingSeverities"`
 	RequiredReviewers    []string       `json:"requiredReviewers"`
 	ConditionalReviewers []ReviewerRule `json:"conditionalReviewers"`
@@ -105,7 +105,7 @@ var RoleLabel = map[string]string{
 	"qa_browser":   "QA browser",
 }
 
-// Publishes says whether a phase's commits reach the work item's branch.
+// Publishes says whether a phase's commits reach the task's branch.
 //
 // A property of the phase rather than a prompt instruction: a reviewer gets a
 // full sandbox and may run and change anything, but nothing it does is ever
@@ -119,7 +119,7 @@ var Publishes = map[string]bool{
 var reviewerOrder = []string{"correctness", "security", "database", "api", "frontend", "performance"}
 
 // ReviewersFor picks the reviewers a diff warrants, in a stable order so a
-// work item's fan-out is reproducible.
+// task's fan-out is reproducible.
 func ReviewersFor(p Policy, changedPaths []string) []string {
 	selected := map[string]bool{}
 	for _, c := range p.RequiredReviewers {

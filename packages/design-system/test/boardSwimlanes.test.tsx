@@ -22,10 +22,10 @@ const textkit: NavProject = {
   id: "p",
   name: "textkit",
   epics: [
-    { id: "e_util", title: "Text utilities", workItems: [1, 2, 3, 4].map((n) => ({ id: `u${n}`, key: `TEXT-${n}`, title: `util ${n}`, status: "review" })) },
-    { id: "e_cli", title: "Command line", workItems: [] },
+    { id: "e_util", title: "Text utilities", tasks: [1, 2, 3, 4].map((n) => ({ id: `u${n}`, key: `TEXT-${n}`, title: `util ${n}`, status: "review" })) },
+    { id: "e_cli", title: "Command line", tasks: [] },
   ],
-  workItems: [5, 6, 7, 8, 9, 10].map((n) => ({ id: `l${n}`, key: `TEXT-${n}`, title: n === 6 ? LONG : `loose ${n}`, status: "review" })),
+  tasks: [5, 6, 7, 8, 9, 10].map((n) => ({ id: `l${n}`, key: `TEXT-${n}`, title: n === 6 ? LONG : `loose ${n}`, status: "review" })),
 };
 
 const laneOf = (html: string, key: string) => {
@@ -35,7 +35,7 @@ const laneOf = (html: string, key: string) => {
   const next = rest.indexOf("data-lane=", 12);
   return next === -1 ? rest : rest.slice(0, next);
 };
-const cardsIn = (html: string) => [...html.matchAll(/data-board-key="workItem:([^"]+)"/g)].map((m) => m[1]);
+const cardsIn = (html: string) => [...html.matchAll(/data-board-key="task:([^"]+)"/g)].map((m) => m[1]);
 
 describe("boardSwimlanes: cards in one column only", () => {
   test("the lane keeps all five columns; the one with cards has them, the rest are empty", () => {
@@ -51,7 +51,7 @@ describe("boardSwimlanes: cards in one column only", () => {
       ["epic:e_cli", 0],
       ["none", 6],
     ]);
-    expect(lanes[2]!.columns.find((c) => c.kind === "review")!.cards.map((c) => c.workItem.id)).toEqual(["l5", "l6", "l7", "l8", "l9", "l10"]);
+    expect(lanes[2]!.columns.find((c) => c.kind === "review")!.cards.map((c) => c.task.id)).toEqual(["l5", "l6", "l7", "l8", "l9", "l10"]);
   });
 });
 

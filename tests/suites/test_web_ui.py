@@ -1,6 +1,6 @@
-"""The web app, driven in a browser, delivering a work item to a pull request.
+"""The web app, driven in a browser, delivering a task to a pull request.
 
-What an operator actually does: open the board, create a work item, press
+What an operator actually does: open the board, create a task, press
 Deliver, and watch the pipeline advance until a pull request exists — then
 leave a comment on the forge and watch a fixer answer it. Every step is a
 click or a read of the page; nothing reaches around the UI except the forge
@@ -30,10 +30,10 @@ def _sign_in(page: Page, web_url: str, api_key: str) -> None:
     expect(page.get_by_test_id("shell")).to_be_visible()
 
 
-def test_the_board_shows_projects_and_opens_work_items(
+def test_the_board_shows_projects_and_opens_tasks(
     page: Page, web_url: str, client: ApiClient, forge_project: dict, org: dict, console_errors: list
 ):
-    client.create_work_item(forge_project["id"], "Already queued up")
+    client.create_task(forge_project["id"], "Already queued up")
     _sign_in(page, web_url, org["api_key"])
 
     # With nothing selected, the first project's board is what opens.
@@ -42,7 +42,7 @@ def test_the_board_shows_projects_and_opens_work_items(
     expect(card).to_be_visible()
 
     card.click()
-    expect(page.get_by_test_id("work-item-screen")).to_be_visible()
+    expect(page.get_by_test_id("task-screen")).to_be_visible()
     expect(page.get_by_test_id("deliver")).to_be_visible()
     assert console_errors == []
 
@@ -57,13 +57,13 @@ def test_delivering_from_the_ui_reaches_a_pull_request_and_back(
 ):
     _sign_in(page, web_url, org["api_key"])
 
-    # Create the work item from the board, as an operator would.
-    page.get_by_test_id("new-work-item").click()
-    page.get_by_test_id("work-item-title").fill("Greet people by their full name")
-    page.get_by_test_id("work-item-goal").fill("Use the full name, not just the first.")
+    # Create the task from the board, as an operator would.
+    page.get_by_test_id("new-task").click()
+    page.get_by_test_id("task-title").fill("Greet people by their full name")
+    page.get_by_test_id("task-goal").fill("Use the full name, not just the first.")
     page.get_by_label("Criterion 1").fill("Greets with the full name")
-    page.get_by_test_id("work-item-create-deliver").click()
-    expect(page.get_by_test_id("work-item-screen")).to_be_visible()
+    page.get_by_test_id("task-create-deliver").click()
+    expect(page.get_by_test_id("task-screen")).to_be_visible()
 
     pipeline = page.get_by_test_id("pipeline")
     expect(pipeline).to_contain_text("Implement", timeout=60_000)
@@ -88,9 +88,9 @@ def test_delivering_from_the_ui_reaches_a_pull_request_and_back(
     # Every agent in the pipeline opens its own conversation.
     page.get_by_test_id("phase").nth(1).click()
     expect(page.get_by_text("Reviewer").first).to_be_visible()
-    # Back up to the work item through the breadcrumb, by its key.
+    # Back up to the task through the breadcrumb, by its key.
     page.get_by_role("navigation", name="Breadcrumb").get_by_role("button", name="GREE-1").click()
-    expect(page.get_by_test_id("work-item-screen")).to_be_visible()
+    expect(page.get_by_test_id("task-screen")).to_be_visible()
 
     # A person comments on the forge; the page shows a fixer answering.
     phases_before = page.get_by_test_id("phase").count()
@@ -98,47 +98,47 @@ def test_delivering_from_the_ui_reaches_a_pull_request_and_back(
     expect(page.get_by_test_id("phase")).to_have_count(phases_before + 1, timeout=90_000)
     expect(page.get_by_test_id("phase").last).to_contain_text("Completed", timeout=120_000)
 
-    # Merging on the forge finishes the work item.
+    # Merging on the forge finishes the task.
     fake_github.merge(pr_number)
-    expect(page.get_by_test_id("work-item-header")).to_contain_text("Done", timeout=90_000)
+    expect(page.get_by_test_id("task-header")).to_contain_text("Done", timeout=90_000)
 
     assert console_errors == []
 
 
-def test_a_work_item_is_edited_and_moved_from_its_screen(
+def test_a_task_is_edited_and_moved_from_its_screen(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
 ):
     epic = client.post(f"/v1/projects/{forge_project['id']}/epics", {"title": "Greetings"}).json()
-    item = client.create_work_item(forge_project["id"], "Draft title")
+    item = client.create_task(forge_project["id"], "Draft title")
     _sign_in(page, web_url, org["api_key"])
     page.get_by_text("Draft title").first.click()
-    expect(page.get_by_test_id("work-item-screen")).to_be_visible()
+    expect(page.get_by_test_id("task-screen")).to_be_visible()
 
-    page.get_by_test_id("edit-work-item").click()
-    page.get_by_test_id("work-item-title").fill("Greet by full name")
+    page.get_by_test_id("edit-task").click()
+    page.get_by_test_id("task-title").fill("Greet by full name")
     page.get_by_label("Criterion 1").fill("Uses the full name")
     page.get_by_role("combobox", name="Epic").click()
     page.get_by_role("listbox").get_by_text("Greetings").click()
-    page.get_by_test_id("work-item-save").click()
+    page.get_by_test_id("task-save").click()
 
-    screen = page.get_by_test_id("work-item-screen")
+    screen = page.get_by_test_id("task-screen")
     expect(screen.get_by_role("heading", level=1)).to_have_text("Greet by full name")
     expect(screen.get_by_role("list", name="Acceptance criteria")).to_contain_text("Uses the full name")
-    saved = client.get(f"/v1/work-items/{item['id']}").json()
+    saved = client.get(f"/v1/tasks/{item['id']}").json()
     assert saved["epicId"] == epic["id"]
     assert console_errors == []
 
 
-def test_a_work_item_names_the_repositories_it_changes_and_reads(
+def test_a_task_names_the_repositories_it_changes_and_reads(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
 ):
     target = forge_project["repositories"][0]
     docs = client.post(f"/v1/projects/{forge_project['id']}/repositories",
                        {"name": "docs", "url": "https://github.com/acme/docs.git"}).json()
     _sign_in(page, web_url, org["api_key"])
-    page.get_by_test_id("new-work-item").click()
-    page.get_by_test_id("work-item-title").fill("Document the greeting")
-    chooser = page.get_by_test_id("work-item-repositories")
+    page.get_by_test_id("new-task").click()
+    page.get_by_test_id("task-title").fill("Document the greeting")
+    chooser = page.get_by_test_id("task-repositories")
     # Nothing chosen says what that means.
     expect(chooser).to_contain_text("changes no code")
     chooser.get_by_role("checkbox", name=target["name"]).click()
@@ -146,10 +146,10 @@ def test_a_work_item_names_the_repositories_it_changes_and_reads(
     chooser.get_by_role("combobox", name="What the work does in docs").click()
     page.get_by_role("listbox").get_by_text("Reads it").click()
     expect(chooser).to_contain_text("own pull request")
-    page.get_by_test_id("work-item-save").click()
-    expect(page.get_by_test_id("work-item-screen")).to_be_visible()
+    page.get_by_test_id("task-save").click()
+    expect(page.get_by_test_id("task-screen")).to_be_visible()
 
-    items = client.get("/v1/work-items", params={"projectId": forge_project["id"]}).json()["workItems"]
+    items = client.get("/v1/tasks", params={"projectId": forge_project["id"]}).json()["tasks"]
     saved = next(i for i in items if i["title"] == "Document the greeting")
     assert sorted((r["id"], r["access"]) for r in saved["repositories"]) == sorted(
         [(target["id"], "write"), (docs["id"], "read")])
@@ -237,7 +237,7 @@ def test_the_github_connection_is_checked_and_replaced_in_settings(
 def test_epics_are_made_ordered_and_removed_from_the_sidebar_and_board(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
 ):
-    item = client.create_work_item(forge_project["id"], "Loose work")
+    item = client.create_task(forge_project["id"], "Loose work")
     _sign_in(page, web_url, org["api_key"])
 
     # Two epics, from the board. A new one opens, which reveals it in the tree.
@@ -248,7 +248,7 @@ def test_epics_are_made_ordered_and_removed_from_the_sidebar_and_board(
         page.get_by_test_id("epic-save").click()
         expect(page.get_by_role("treeitem", name=title)).to_be_visible()
 
-    # Move the loose work item into Billing from its row's menu.
+    # Move the loose task into Billing from its row's menu.
     row = page.get_by_role("treeitem", name="Loose work", exact=False)
     row.focus()
     page.keyboard.press("Shift+F10")
@@ -258,7 +258,7 @@ def test_epics_are_made_ordered_and_removed_from_the_sidebar_and_board(
     page.wait_for_timeout(500)
     epics = client.get(f"/v1/projects/{forge_project['id']}/epics").json()["epics"]
     billing = next(e for e in epics if e["title"] == "Billing")
-    assert client.get(f"/v1/work-items/{item['id']}").json()["epicId"] == billing["id"]
+    assert client.get(f"/v1/tasks/{item['id']}").json()["epicId"] == billing["id"]
 
     # Billing moves above Onboarding.
     billing_row = page.get_by_role("treeitem", name="Billing")
@@ -292,33 +292,33 @@ def test_epics_are_made_ordered_and_removed_from_the_sidebar_and_board(
     billing_row.focus()
     page.keyboard.press("Shift+F10")
     page.get_by_role("menuitem", name="Delete epic").click()
-    expect(page.get_by_role("dialog")).to_contain_text("1 work item will stay in the project")
+    expect(page.get_by_role("dialog")).to_contain_text("1 task will stay in the project")
     page.get_by_test_id("epic-delete").click()
     expect(page.get_by_role("dialog")).to_have_count(0)
     expect(toast(page, "Billing and refunds deleted")).to_be_visible()
     expect(page.get_by_role("treeitem", name="Billing and refunds")).to_have_count(0)
     assert [e["title"] for e in client.get(f"/v1/projects/{forge_project['id']}/epics").json()["epics"]] == ["Onboarding"]
-    assert client.get(f"/v1/work-items/{item['id']}").json()["epicId"] is None
+    assert client.get(f"/v1/tasks/{item['id']}").json()["epicId"] is None
     assert console_errors == []
 
 
 def test_back_and_forward_move_between_places(
     page: Page, web_url: str, client: ApiClient, forge_project: dict, org: dict, console_errors: list
 ):
-    client.create_work_item(forge_project["id"], "Somewhere to go")
+    client.create_task(forge_project["id"], "Somewhere to go")
     _sign_in(page, web_url, org["api_key"])
     page.get_by_text("Somewhere to go").last.click()
-    expect(page.get_by_test_id("work-item-screen")).to_be_visible()
+    expect(page.get_by_test_id("task-screen")).to_be_visible()
     page.get_by_test_id("org-settings-button").click()
     expect(page.get_by_test_id("org-settings")).to_be_visible()
 
     page.go_back()
-    expect(page.get_by_test_id("work-item-screen")).to_contain_text("Somewhere to go")
+    expect(page.get_by_test_id("task-screen")).to_contain_text("Somewhere to go")
     page.go_back()
     expect(page.get_by_text("Somewhere to go").last).to_be_visible()
-    expect(page.get_by_test_id("work-item-screen")).to_have_count(0)
+    expect(page.get_by_test_id("task-screen")).to_have_count(0)
     page.go_forward()
-    expect(page.get_by_test_id("work-item-screen")).to_be_visible()
+    expect(page.get_by_test_id("task-screen")).to_be_visible()
 
     # A pasted link lands where it points.
     page.goto(f"{web_url}#/org/settings")
@@ -333,9 +333,9 @@ def test_an_agents_progress_shows_in_its_chat(
     chat shows one progress row that moved, not a line per update."""
     client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
         "implementer": {"model": "fake/tools"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
-    item = client.create_work_item(forge_project["id"], "Report progress")
-    assert client.post(f"/v1/work-items/{item['id']}/deliver").status_code == 201
-    implement = wait_until(lambda: next((r for r in client.work_item_runs(item["id"]) if r["phase"] == "implement"), None),
+    item = client.create_task(forge_project["id"], "Report progress")
+    assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
+    implement = wait_until(lambda: next((r for r in client.task_runs(item["id"]) if r["phase"] == "implement"), None),
                            timeout=30, message="no implementer")
     wait_until(lambda: [e for e in client.events(runId=implement["id"]) if e["eventType"] == "agent.custom.progress"][1:],
                timeout=30, message="the progress never reached the ledger")
@@ -359,9 +359,9 @@ def test_a_person_approves_a_repository_an_agent_asked_for(
     target = next(r for r in client.get(f"/v1/projects/{forge_project['id']}").json()["repositories"] if r["name"] != "web")
     client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
         "implementer": {"model": "fake/request"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
-    item = client.create_work_item(forge_project["id"], "Needs the client", repositories=[{"id": target["id"]}])
-    assert client.post(f"/v1/work-items/{item['id']}/deliver").status_code == 201
-    implement = wait_until(lambda: next((r for r in client.work_item_runs(item["id"]) if r["phase"] == "implement"), None),
+    item = client.create_task(forge_project["id"], "Needs the client", repositories=[{"id": target["id"]}])
+    assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
+    implement = wait_until(lambda: next((r for r in client.task_runs(item["id"]) if r["phase"] == "implement"), None),
                            timeout=30, message="no implementer")
     wait_until(lambda: client.get("/v1/repository-requests", params={"runId": implement["id"]}).json()["repositoryRequests"],
                timeout=30, message="the agent never asked")
@@ -375,7 +375,7 @@ def test_a_person_approves_a_repository_an_agent_asked_for(
 
     wait_until(lambda: client.get("/v1/repository-requests", params={"runId": implement["id"]}).json()
                ["repositoryRequests"][0]["status"] == "cloned", timeout=30, message="the repository never reached the run")
-    names = sorted(r["id"] for r in client.get(f"/v1/work-items/{item['id']}").json()["repositories"])
+    names = sorted(r["id"] for r in client.get(f"/v1/tasks/{item['id']}").json()["repositories"])
     assert len(names) == 2, names
     assert console_errors == []
 
@@ -387,10 +387,10 @@ def test_a_parked_agent_is_answered_from_its_chat(
     says so, and answering there resumes it."""
     client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
         "implementer": {"model": "fake/ask"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
-    item = client.create_work_item(forge_project["id"], "Ask, then wait")
-    assert client.post(f"/v1/work-items/{item['id']}/deliver").status_code == 201
+    item = client.create_task(forge_project["id"], "Ask, then wait")
+    assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
     implement = wait_until(
-        lambda: next((r for r in client.work_item_runs(item["id"]) if r["phase"] == "implement" and r["status"] == "paused"), None),
+        lambda: next((r for r in client.task_runs(item["id"]) if r["phase"] == "implement" and r["status"] == "paused"), None),
         timeout=30, message="the waiting agent was never parked")
 
     _sign_in(page, web_url, org["api_key"])
@@ -414,10 +414,10 @@ def test_an_agent_parked_on_a_repository_request_says_what_resumes_it(
     target = next(r for r in client.get(f"/v1/projects/{forge_project['id']}").json()["repositories"] if r["name"] != "web")
     client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
         "implementer": {"model": "fake/wait"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
-    item = client.create_work_item(forge_project["id"], "Needs the client first", repositories=[{"id": target["id"]}])
-    assert client.post(f"/v1/work-items/{item['id']}/deliver").status_code == 201
+    item = client.create_task(forge_project["id"], "Needs the client first", repositories=[{"id": target["id"]}])
+    assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
     implement = wait_until(
-        lambda: next((r for r in client.work_item_runs(item["id"]) if r["phase"] == "implement" and r.get("dudePause") == "person"), None),
+        lambda: next((r for r in client.task_runs(item["id"]) if r["phase"] == "implement" and r.get("dudePause") == "person"), None),
         timeout=30, message="the waiting agent was never parked")
 
     _sign_in(page, web_url, org["api_key"])
@@ -507,12 +507,12 @@ def test_everything_waiting_on_you_is_in_one_place(
     target = next(r for r in client.get(f"/v1/projects/{forge_project['id']}").json()["repositories"] if r["name"] != "web")
     client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
         "implementer": {"model": "fake/ask"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
-    asking = client.create_work_item(forge_project["id"], "Ask first", repositories=[{"id": target["id"]}])
-    client.post(f"/v1/work-items/{asking['id']}/deliver")
+    asking = client.create_task(forge_project["id"], "Ask first", repositories=[{"id": target["id"]}])
+    client.post(f"/v1/tasks/{asking['id']}/deliver")
     wait_until(lambda: client.get("/v1/questions").json()["questions"], timeout=30, message="no question")
     client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {"implementer": {"model": "fake/wait"}}})
-    requesting = client.create_work_item(forge_project["id"], "Needs the client", repositories=[{"id": target["id"]}])
-    client.post(f"/v1/work-items/{requesting['id']}/deliver")
+    requesting = client.create_task(forge_project["id"], "Needs the client", repositories=[{"id": target["id"]}])
+    client.post(f"/v1/tasks/{requesting['id']}/deliver")
     wait_until(lambda: client.get("/v1/repository-requests").json()["repositoryRequests"], timeout=30, message="no request")
 
     _sign_in(page, web_url, org["api_key"])

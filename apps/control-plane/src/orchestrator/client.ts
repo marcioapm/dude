@@ -1,7 +1,7 @@
 /**
  * The backend's client for the orchestrator.
  *
- * Everything that changes what runs — delivering a work item, steering,
+ * Everything that changes what runs — delivering a task, steering,
  * pausing, resuming, aborting — is the orchestrator's decision to carry out.
  * The backend authenticates the user, resolves their organization, and
  * forwards the request with a service token. The orchestrator's refusals use

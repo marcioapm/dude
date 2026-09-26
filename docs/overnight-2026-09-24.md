@@ -1,5 +1,8 @@
 # Overnight, 2026-09-24
 
+> A dated record. What it calls a "work item" is a **task** since 2026-09-26
+> (migration 026).
+
 What was built while you slept, what was decided on your behalf, and what
 is left. Everything below is committed on `main` (not pushed), tested, and
 reviewed by at least one independent code-review pass; the real stack

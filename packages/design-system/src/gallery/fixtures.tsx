@@ -26,10 +26,10 @@ export const events: EventFixture[] = [
     id: "e1",
     occurredAt: at(0),
     actor: { type: "human", name: "marcio" },
-    eventType: "work_item.created",
+    eventType: "task.created",
     summary: "Add retry with backoff to the GitHub webhook handler",
     meta: [
-      ["work_item", <code key="w">WI-2481</code>],
+      ["task", <code key="w">WI-2481</code>],
       ["source", "web"],
     ],
   },
@@ -229,7 +229,7 @@ export const logLines: LogLine[] = LOG_SRC.map(([level, channel, text], i) => ({
 /** Generate N lines of plausible noise for volume tests. */
 export function bulkLog(n: number, startSeq = 0): LogLine[] {
   const templates = [
-    "GET /api/v1/work-items?status=running 200 4.1ms",
+    "GET /api/v1/tasks?status=running 200 4.1ms",
     "worker-03 heartbeat ok (cpu 42%, mem 1.9G)",
     "session ses_01J9K6 model turn 27 — 1,902 in / 148 out",
     "ledger cursor advanced to 128331",

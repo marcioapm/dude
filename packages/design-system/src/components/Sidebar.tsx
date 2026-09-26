@@ -61,13 +61,13 @@ export interface SidebarProps extends Omit<HTMLAttributes<HTMLElement>, "onSelec
  *   search      `/` from anywhere in the tree; ↓ moves into the tree
  *   chips       needs you · active · ready · failed — global counts, each
  *               a filter; the needs-you chip is the only loud one
- *   needs you   pinned: every blocked work item across all projects, with
+ *   needs you   pinned: every blocked task across all projects, with
  *               who is asking and who it waits on. Findable without
  *               expanding anything. Absent when nothing is blocked.
- *   tree        Project → Epic → Work item → Session
+ *   tree        Project → Epic → Task → Session
  *   footer      the signed-in person, connection state
  *
- * Calm at fifty work items: colour appears only on the status marks, and
+ * Calm at fifty tasks: colour appears only on the status marks, and
  * the one amber area is the needs-you block.
  */
 export function Sidebar({
@@ -157,7 +157,7 @@ export function Sidebar({
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={onSearchKey}
           placeholder="Find work…"
-          aria-label="Find work items, people, epics"
+          aria-label="Find tasks, people, epics"
           autoComplete="off"
           spellCheck={false}
         />
@@ -240,7 +240,7 @@ export interface AttentionListProps {
 }
 
 /**
- * The pinned "Needs you" section: one row per blocked work item, across
+ * The pinned "Needs you" section: one row per blocked task, across
  * every project, in the order given (the caller sorts — oldest wait first
  * is the sensible default). Each row says what, who is asking, what they
  * ask and who it waits on; where it lives (project · epic) is the row's
@@ -270,25 +270,25 @@ export function AttentionList({ items, selected, onSelect, max = 5, onShowAll, t
       {open ? (
         <ul className={styles["attentionList"]}>
           {shown.map((it) => {
-            const ref: NavRef = it.session ? { kind: "session", id: it.session.id } : { kind: "workItem", id: it.workItem.id };
-            const isSel = navKey(ref) === selectedKey || navKey({ kind: "workItem", id: it.workItem.id }) === selectedKey;
+            const ref: NavRef = it.session ? { kind: "session", id: it.session.id } : { kind: "task", id: it.task.id };
+            const isSel = navKey(ref) === selectedKey || navKey({ kind: "task", id: it.task.id }) === selectedKey;
             const where = it.epic ? `${it.project.name} · ${it.epic.title}` : it.project.name;
-            const people = it.workItem.people ?? [];
+            const people = it.task.people ?? [];
             const names = people.map((p) => p.name).join(", ");
             return (
-              <li key={it.workItem.id}>
+              <li key={it.task.id}>
                 <button
                   type="button"
                   className={cx(styles["attentionRow"], isSel && styles["attentionRowSelected"])}
-                  onClick={() => onSelect?.(ref, it.session ?? it.workItem)}
+                  onClick={() => onSelect?.(ref, it.session ?? it.task)}
                   aria-current={isSel ? "true" : undefined}
                   title={where}
                 >
                   <span className={styles["attentionMain"]}>
                     <span className={styles["attentionWi"]}>
-                      {it.workItem.key ? <span className={styles["attentionKey"]}>{it.workItem.key}</span> : null}
-                      <span className={styles["attentionWiTitle"]} title={it.workItem.title}>
-                        {it.workItem.title}
+                      {it.task.key ? <span className={styles["attentionKey"]}>{it.task.key}</span> : null}
+                      <span className={styles["attentionWiTitle"]} title={it.task.title}>
+                        {it.task.title}
                       </span>
                     </span>
                     <span className={styles["attentionSub"]}>
@@ -299,7 +299,7 @@ export function AttentionList({ items, selected, onSelect, max = 5, onShowAll, t
                           {it.session.activity ?? "is waiting for you"}
                         </span>
                       ) : (
-                        <span className={styles["attentionAsk"]}>{it.workItem.status === "awaiting_confirmation" ? "plan needs your confirmation" : "waiting for you"}</span>
+                        <span className={styles["attentionAsk"]}>{it.task.status === "awaiting_confirmation" ? "plan needs your confirmation" : "waiting for you"}</span>
                       )}
                     </span>
                   </span>

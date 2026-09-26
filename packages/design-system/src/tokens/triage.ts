@@ -113,7 +113,7 @@ export const TRIAGE_FOR_STATUS: Record<Status, TriageKind> = {
   failed: "failed",
   aborted: "done",
   awaiting_input: "needs_you",
-  // work item
+  // task
   received: "waiting",
   intake: "active",
   awaiting_confirmation: "needs_you",

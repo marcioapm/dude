@@ -18,7 +18,7 @@ from helpers import ApiClient, wait_until
 
 
 def test_work_on_no_repository_is_delivered_as_what_the_agents_publish(client: ApiClient):
-    """A work item that names no repository, in a project with none, is work
+    """A task that names no repository, in a project with none, is work
     that changes no code: it runs, and ends with what the agents published
     for a person to read, not a pull request."""
     import os
@@ -27,43 +27,43 @@ def test_work_on_no_repository_is_delivered_as_what_the_agents_publish(client: A
         name="Notes", slug=f"notes-{os.urandom(3).hex()}", runtimeImage="dude-runtime:test",
         agentModels={r: {"model": "fake/scripted"} for r in ("implementer", "reviewer", "simplifier")},
     )
-    work_item = client.create_work_item(project["id"], "Write up the options")
-    assert client.post(f"/v1/work-items/{work_item['id']}/deliver").status_code == 201
-    wait_until(lambda: client.get("/v1/artifacts", params={"workItemId": work_item["id"]}).json()["artifacts"],
+    task = client.create_task(project["id"], "Write up the options")
+    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+    wait_until(lambda: client.get("/v1/artifacts", params={"taskId": task["id"]}).json()["artifacts"],
                timeout=60, message="nothing was published")
-    assert client.get("/v1/pull-requests", params={"workItemId": work_item["id"]}).json()["pullRequests"] == []
+    assert client.get("/v1/pull-requests", params={"taskId": task["id"]}).json()["pullRequests"] == []
 
     # A person reads it and says it is done; there is nothing to merge.
-    wait_until(lambda: client.get(f"/v1/work-items/{work_item['id']}").json()["status"] == "review",
+    wait_until(lambda: client.get(f"/v1/tasks/{task['id']}").json()["status"] == "review",
                timeout=30, message="the work never came to review")
-    wait_until(lambda: client.post(f"/v1/work-items/{work_item['id']}/done").status_code == 200,
+    wait_until(lambda: client.post(f"/v1/tasks/{task['id']}/done").status_code == 200,
                timeout=30, message="it could not be marked done")
-    assert client.get(f"/v1/work-items/{work_item['id']}").json()["status"] == "done"
+    assert client.get(f"/v1/tasks/{task['id']}").json()["status"] == "done"
 
 
-def test_delivering_a_missing_work_item_is_a_404(client: ApiClient):
-    resp = client.post("/v1/work-items/wi_does_not_exist/deliver")
+def test_delivering_a_missing_task_is_a_404(client: ApiClient):
+    resp = client.post("/v1/tasks/wi_does_not_exist/deliver")
     assert resp.status_code == 404
 
 
-def test_another_organization_cannot_deliver_my_work_item(
+def test_another_organization_cannot_deliver_my_task(
     client: ApiClient, forge_project: dict, second_org: dict
 ):
     """The backend names the user's organization; the orchestrator's queries
-    are confined to it, so someone else's work item does not exist for them."""
-    work_item = client.create_work_item(forge_project["id"], "Mine")
-    resp = second_org["client"].post(f"/v1/work-items/{work_item['id']}/deliver")
+    are confined to it, so someone else's task does not exist for them."""
+    task = client.create_task(forge_project["id"], "Mine")
+    resp = second_org["client"].post(f"/v1/tasks/{task['id']}/deliver")
     assert resp.status_code == 404
 
 
 def test_delivering_twice_joins_the_first(client: ApiClient, forge_project: dict):
-    """The work item is the idempotency key, so a second call must not race."""
-    work_item = client.create_work_item(forge_project["id"], "Deliver me once")
+    """The task is the idempotency key, so a second call must not race."""
+    task = client.create_task(forge_project["id"], "Deliver me once")
 
-    first = client.post(f"/v1/work-items/{work_item['id']}/deliver")
+    first = client.post(f"/v1/tasks/{task['id']}/deliver")
     assert first.status_code == 201, first.text
 
-    second = client.post(f"/v1/work-items/{work_item['id']}/deliver")
+    second = client.post(f"/v1/tasks/{task['id']}/deliver")
     assert second.status_code == 200
     assert second.json()["alreadyRunning"] is True
     assert second.json()["workflowRunId"] == first.json()["workflowRunId"]
@@ -77,15 +77,15 @@ def test_the_review_fix_loop_converges_and_the_ledger_shows_it(
     Everything the UI renders comes from the API and the event stream; the
     orchestrator writes it. So this reads it the way the UI does.
     """
-    work_item = client.create_work_item(forge_project["id"], "Loop until clean")
-    client.post(f"/v1/work-items/{work_item['id']}/deliver")
+    task = client.create_task(forge_project["id"], "Loop until clean")
+    client.post(f"/v1/tasks/{task['id']}/deliver")
 
     wait_until(
-        lambda: any(r["phase"] == "simplify" and r["status"] == "completed" for r in client.work_item_runs(work_item["id"])),
+        lambda: any(r["phase"] == "simplify" and r["status"] == "completed" for r in client.task_runs(task["id"])),
         timeout=60,
         message="the loop never converged to simplify",
     )
-    phases = [(r["phase"], r["status"]) for r in client.work_item_runs(work_item["id"])]
+    phases = [(r["phase"], r["status"]) for r in client.task_runs(task["id"])]
     assert phases == [
         ("implement", "completed"),
         ("review", "completed"),
@@ -94,13 +94,13 @@ def test_the_review_fix_loop_converges_and_the_ledger_shows_it(
         ("simplify", "completed"),
     ], phases
 
-    findings = client.get("/v1/findings", params={"workItemId": work_item["id"]}).json()["findings"]
+    findings = client.get("/v1/findings", params={"taskId": task["id"]}).json()["findings"]
     assert [f["severity"] for f in findings] == ["blocking"]
     # Resolved by the clean re-review after the fix, which is what let the
     # loop converge rather than stop at its bound.
     assert findings[0]["status"] == "resolved"
 
-    implement = next(r for r in client.work_item_runs(work_item["id"]) if r["phase"] == "implement")
+    implement = next(r for r in client.task_runs(task["id"]) if r["phase"] == "implement")
     types = [e["eventType"] for e in client.events(runId=implement["id"])]
     for expected in ("agent.session.started", "agent.message", "git.commit_created", "run.completed"):
         assert expected in types, f"{expected} missing from the implementer's timeline: {types}"
@@ -109,20 +109,20 @@ def test_the_review_fix_loop_converges_and_the_ledger_shows_it(
 def test_work_across_two_repositories_opens_a_pull_request_in_each(
     client: ApiClient, forge_project: dict, fake_github: FakeGitHub
 ):
-    """One work item, two repositories it changes: the implementer is given
+    """One task, two repositories it changes: the implementer is given
     both, commits in each, and each gets its own pull request, naming the
-    other. The work item is done only when both are merged."""
+    other. The task is done only when both are merged."""
     web = fake_github.add_repository("web")
     repo = client.post(f"/v1/projects/{forge_project['id']}/repositories",
                        {"name": "web", "url": web.clone_url, "defaultBranch": "main"}).json()
     api = client.get(f"/v1/projects/{forge_project['id']}").json()["repositories"]
     target = next(r for r in api if r["name"] != "web")
-    item = client.create_work_item(forge_project["id"], "Across two", repositories=[
+    item = client.create_task(forge_project["id"], "Across two", repositories=[
         {"id": target["id"], "access": "write"}, {"id": repo["id"], "access": "write"}])
-    assert client.post(f"/v1/work-items/{item['id']}/deliver").status_code == 201
+    assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
 
     def both_open():
-        prs = client.get("/v1/pull-requests", params={"workItemId": item["id"]}).json()["pullRequests"]
+        prs = client.get("/v1/pull-requests", params={"taskId": item["id"]}).json()["pullRequests"]
         return prs if len(prs) == 2 else None
 
     prs = wait_until(both_open, timeout=90, interval=0.5, message="no pull request in each repository")
@@ -132,15 +132,15 @@ def test_work_across_two_repositories_opens_a_pull_request_in_each(
     assert "web" in fake_github.pulls[1].body and fake_github.owner in web.pulls[1].body
 
     def state_of(repository_id: str) -> str:
-        prs = client.get("/v1/pull-requests", params={"workItemId": item["id"]}).json()["pullRequests"]
+        prs = client.get("/v1/pull-requests", params={"taskId": item["id"]}).json()["pullRequests"]
         return next(p["state"] for p in prs if p["repositoryId"] == repository_id)
 
     web.merge(1)
     wait_until(lambda: state_of(repo["id"]) == "merged", timeout=30, message="web's merge never registered")
-    assert client.get(f"/v1/work-items/{item['id']}").json()["status"] != "done"
+    assert client.get(f"/v1/tasks/{item['id']}").json()["status"] != "done"
     fake_github.merge(1)
-    wait_until(lambda: client.get(f"/v1/work-items/{item['id']}").json()["status"] == "done",
-               timeout=30, message="the work item never finished with both merged")
+    wait_until(lambda: client.get(f"/v1/tasks/{item['id']}").json()["status"] == "done",
+               timeout=30, message="the task never finished with both merged")
 
 
 def test_what_an_agent_publishes_is_listed_and_read_only_by_its_organization(
@@ -148,12 +148,12 @@ def test_what_an_agent_publishes_is_listed_and_read_only_by_its_organization(
 ):
     """An agent writes a file into $LUX_ARTIFACTS; lux collects it when the
     container exits; the orchestrator records it; the API lists it with the
-    work item and streams its bytes from lux."""
-    work_item = client.create_work_item(forge_project["id"], "Leave notes")
-    client.post(f"/v1/work-items/{work_item['id']}/deliver")
+    task and streams its bytes from lux."""
+    task = client.create_task(forge_project["id"], "Leave notes")
+    client.post(f"/v1/tasks/{task['id']}/deliver")
 
     def published():
-        found = client.get("/v1/artifacts", params={"workItemId": work_item["id"]}).json()["artifacts"]
+        found = client.get("/v1/artifacts", params={"taskId": task["id"]}).json()["artifacts"]
         return found or None
 
     artifacts = wait_until(published, timeout=60, message="the implementer's notes were never recorded")
@@ -169,10 +169,10 @@ def test_what_an_agent_publishes_is_listed_and_read_only_by_its_organization(
     assert "sandbox" in content.headers["content-security-policy"]
 
     other = second_org["client"]
-    assert other.get("/v1/artifacts", params={"workItemId": work_item["id"]}).json()["artifacts"] == []
+    assert other.get("/v1/artifacts", params={"taskId": task["id"]}).json()["artifacts"] == []
     assert other.get(f"/v1/artifacts/{notes['id']}/content").status_code == 404
 
-    types = [e["eventType"] for e in client.events(workItemId=work_item["id"])]
+    types = [e["eventType"] for e in client.events(taskId=task["id"])]
     assert "artifact.created" in types
 
 
@@ -183,10 +183,10 @@ def test_a_project_names_the_reviewers_every_delivery_runs(client: ApiClient, fo
     assert resp.status_code == 200, resp.text
     assert resp.json()["deliveryPolicy"] == {"requiredReviewers": ["correctness", "security"]}
 
-    work_item = client.create_work_item(forge_project["id"], "Reviewed twice over")
-    client.post(f"/v1/work-items/{work_item['id']}/deliver")
+    task = client.create_task(forge_project["id"], "Reviewed twice over")
+    client.post(f"/v1/tasks/{task['id']}/deliver")
     wait_until(
-        lambda: {r["category"] for r in client.work_item_runs(work_item["id"]) if r["phase"] == "review"}
+        lambda: {r["category"] for r in client.task_runs(task["id"]) if r["phase"] == "review"}
         >= {"correctness", "security"},
         timeout=60,
         message="the project's required security reviewer never ran",
@@ -206,8 +206,8 @@ def test_an_agent_asks_a_person_waits_and_carries_on_with_the_answer(client: Api
         "implementer": {"model": "fake/ask"}, "reviewer": {"model": "fake/scripted"},
         "simplifier": {"model": "fake/scripted"}}})
     assert resp.status_code == 200, resp.text
-    work_item = client.create_work_item(forge_project["id"], "Ask first")
-    client.post(f"/v1/work-items/{work_item['id']}/deliver")
+    task = client.create_task(forge_project["id"], "Ask first")
+    client.post(f"/v1/tasks/{task['id']}/deliver")
 
     def open_questions():
         return client.get("/v1/questions").json()["questions"]
@@ -216,20 +216,20 @@ def test_an_agent_asks_a_person_waits_and_carries_on_with_the_answer(client: Api
     question = open_questions()[0]
     assert question["prompt"] == "Should FACTORY.md be in English?"
     assert question["options"] == ["yes", "no"]
-    assert client.get(f"/v1/work-items/{work_item['id']}").json()["status"] == "awaiting_input"
+    assert client.get(f"/v1/tasks/{task['id']}").json()["status"] == "awaiting_input"
 
     # The sidebar shows who is asking, and what, without opening the chat.
     nav = client.get("/v1/navigation").json()
-    sessions = [s for p in nav["projects"] for wi in p.get("workItems", []) if wi["id"] == work_item["id"]
+    sessions = [s for p in nav["projects"] for wi in p.get("tasks", []) if wi["id"] == task["id"]
                 for run in wi["runs"] for s in run["sessions"]]
     assert any(s["status"] == "awaiting_input" and s.get("activity") == question["prompt"] for s in sessions), sessions
 
     # Not answered within the grace period: parked, holding nothing.
     wait_until(
-        lambda: any(r["phase"] == "implement" and r["status"] == "paused" for r in client.work_item_runs(work_item["id"])),
+        lambda: any(r["phase"] == "implement" and r["status"] == "paused" for r in client.task_runs(task["id"])),
         timeout=30, message="the waiting agent was never parked",
     )
-    run = next(r for r in client.work_item_runs(work_item["id"]) if r["phase"] == "implement")
+    run = next(r for r in client.task_runs(task["id"]) if r["phase"] == "implement")
     types = [e.get("eventType", e.get("type")) for e in client.events(runId=run["id"])]
     assert "run.parked" in types, types
 
@@ -237,7 +237,7 @@ def test_an_agent_asks_a_person_waits_and_carries_on_with_the_answer(client: Api
     assert resp.status_code == 200, resp.text
     assert open_questions() == []
     wait_until(
-        lambda: any(r["phase"] == "implement" and r["status"] == "completed" for r in client.work_item_runs(work_item["id"])),
+        lambda: any(r["phase"] == "implement" and r["status"] == "completed" for r in client.task_runs(task["id"])),
         timeout=30, message="the implementer never carried on after the answer",
     )
 
@@ -246,11 +246,11 @@ def test_steer_pause_resume_and_abort_reach_the_agent(client: ApiClient, forge_p
     """Run control goes user → backend → orchestrator → lux, and back as events."""
     # An agent that never finishes its turn, to have something live to control.
     client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {"implementer": {"model": "fake/hang"}}})
-    work_item = client.create_work_item(forge_project["id"], "Hold on")
-    client.post(f"/v1/work-items/{work_item['id']}/deliver")
+    task = client.create_task(forge_project["id"], "Hold on")
+    client.post(f"/v1/tasks/{task['id']}/deliver")
 
     run = wait_until(
-        lambda: next((r for r in client.work_item_runs(work_item["id"]) if r["status"] == "running"), None),
+        lambda: next((r for r in client.task_runs(task["id"]) if r["status"] == "running"), None),
         timeout=30,
         message="the implementer never started",
     )
@@ -285,7 +285,7 @@ def test_steer_pause_resume_and_abort_reach_the_agent(client: ApiClient, forge_p
 
     assert client.post(f"/v1/runs/{run['id']}/abort", {"reason": "changed my mind"}).status_code == 200
     assert client.get(f"/v1/runs/{run['id']}").json()["status"] == "aborted"
-    assert client.get(f"/v1/work-items/{work_item['id']}").json()["status"] == "aborted"
+    assert client.get(f"/v1/tasks/{task['id']}").json()["status"] == "aborted"
     types = [e["eventType"] for e in client.events(runId=run["id"])]
     for expected in ("run.steered", "run.directive.delivered", "run.paused", "run.resumed", "run.aborted"):
         assert expected in types, f"{expected} missing: {types}"
@@ -300,7 +300,7 @@ def test_a_runner_key_cannot_reach_the_product_api(env, org: dict):
     assert runner.get("/v1/navigation").status_code == 401
 
 
-@pytest.mark.parametrize("path", ["/internal/work-items/x/deliver", "/internal/kick"])
+@pytest.mark.parametrize("path", ["/internal/tasks/x/deliver", "/internal/kick"])
 def test_the_orchestrator_refuses_callers_without_the_service_token(env, path: str):
     import requests
 

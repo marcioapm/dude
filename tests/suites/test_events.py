@@ -16,18 +16,18 @@ from helpers import ApiClient
 
 
 def test_actions_append_to_the_ledger(client: ApiClient, project: dict):
-    work_item = client.create_work_item(project["id"], "Audited")
-    client.create_run(work_item["id"])
+    task = client.create_task(project["id"], "Audited")
+    client.create_run(task["id"])
 
     types = [e["eventType"] for e in client.events()]
     assert "project.created" in types
-    assert "work_item.created" in types
+    assert "task.created" in types
     assert "run.created" in types
 
 
 def test_cursors_increase_monotonically(client: ApiClient, project: dict):
     for i in range(3):
-        client.create_work_item(project["id"], f"Item {i}")
+        client.create_task(project["id"], f"Item {i}")
 
     cursors = [e["cursor"] for e in client.events()]
     assert cursors == sorted(cursors)
@@ -35,20 +35,20 @@ def test_cursors_increase_monotonically(client: ApiClient, project: dict):
 
 
 def test_after_cursor_resumes_exactly(client: ApiClient, project: dict):
-    client.create_work_item(project["id"], "First")
+    client.create_task(project["id"], "First")
     seen = client.events()
     checkpoint = seen[-1]["cursor"]
 
-    client.create_work_item(project["id"], "Second")
+    client.create_task(project["id"], "Second")
 
     resumed = client.events(after=checkpoint)
     # Exactly the events the client had not seen — no gaps, no repeats.
     assert all(e["cursor"] > checkpoint for e in resumed)
-    assert any(e["eventType"] == "work_item.created" for e in resumed)
+    assert any(e["eventType"] == "task.created" for e in resumed)
 
 
 def test_next_cursor_is_usable_as_the_next_after(client: ApiClient, project: dict):
-    client.create_work_item(project["id"], "Paging")
+    client.create_task(project["id"], "Paging")
 
     body = client.get("/v1/events").json()
     assert body["nextCursor"] == body["events"][-1]["cursor"]
@@ -58,8 +58,8 @@ def test_next_cursor_is_usable_as_the_next_after(client: ApiClient, project: dic
 
 
 def test_events_can_be_filtered_by_run(client: ApiClient, project: dict):
-    work_item = client.create_work_item(project["id"], "Filtered")
-    run = client.create_run(work_item["id"])
+    task = client.create_task(project["id"], "Filtered")
+    run = client.create_run(task["id"])
 
     scoped = client.events(runId=run["id"])
     assert scoped, "expected run-scoped events"
@@ -67,24 +67,24 @@ def test_events_can_be_filtered_by_run(client: ApiClient, project: dict):
 
 
 def test_events_carry_actor_and_source(client: ApiClient, project: dict):
-    client.create_work_item(project["id"], "Attributed")
+    client.create_task(project["id"], "Attributed")
 
-    event = next(e for e in client.events() if e["eventType"] == "work_item.created")
+    event = next(e for e in client.events() if e["eventType"] == "task.created")
     assert event["actor"]["type"] == "human"
     assert event["source"] == "control-plane"
 
 
-def test_correlation_id_links_a_work_items_events(client: ApiClient, project: dict):
-    work_item = client.create_work_item(project["id"], "Correlated")
-    client.create_run(work_item["id"])
+def test_correlation_id_links_a_tasks_events(client: ApiClient, project: dict):
+    task = client.create_task(project["id"], "Correlated")
+    client.create_run(task["id"])
 
-    correlated = [e for e in client.events() if e.get("correlationId") == work_item["id"]]
-    assert {e["eventType"] for e in correlated} >= {"work_item.created", "run.created"}
+    correlated = [e for e in client.events() if e.get("correlationId") == task["id"]]
+    assert {e["eventType"] for e in correlated} >= {"task.created", "run.created"}
 
 
 def test_limit_is_bounded(client: ApiClient, project: dict):
     for i in range(5):
-        client.create_work_item(project["id"], f"Bulk {i}")
+        client.create_task(project["id"], f"Bulk {i}")
 
     assert len(client.events(limit=2)) == 2
     # An absurd limit is clamped rather than accepted.
@@ -157,11 +157,11 @@ def test_stream_delivers_live_events(client: ApiClient, project: dict, env):
     reader.start()
     assert ready.wait(timeout=10), "stream did not signal that it was open"
 
-    client.create_work_item(project["id"], "Live")
+    client.create_task(project["id"], "Live")
     reader.join(timeout=15)
 
     assert received, "no event delivered on the live stream"
-    assert received[0]["data"]["eventType"] == "work_item.created"
+    assert received[0]["data"]["eventType"] == "task.created"
 
 
 def test_stream_backfills_missed_events(client: ApiClient, project: dict, env):
@@ -169,7 +169,7 @@ def test_stream_backfills_missed_events(client: ApiClient, project: dict, env):
     checkpoint = client.events()[-1]["cursor"]
 
     # Happens while the client is "offline".
-    client.create_work_item(project["id"], "Missed while away")
+    client.create_task(project["id"], "Missed while away")
 
     received: list = []
     ready = threading.Event()

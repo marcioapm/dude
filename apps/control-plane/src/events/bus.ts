@@ -16,7 +16,7 @@ export interface EventFilter {
   organizationId: string;
   sessionId?: string | undefined;
   runId?: string | undefined;
-  workItemId?: string | undefined;
+  taskId?: string | undefined;
 }
 
 export type EventListener = (event: PersistedEvent) => void;
@@ -30,7 +30,7 @@ function matches(filter: EventFilter, event: PersistedEvent): boolean {
   if (event.organizationId !== filter.organizationId) return false;
   if (filter.sessionId && event.sessionId !== filter.sessionId) return false;
   if (filter.runId && event.runId !== filter.runId) return false;
-  if (filter.workItemId && event.workItemId !== filter.workItemId) return false;
+  if (filter.taskId && event.taskId !== filter.taskId) return false;
   return true;
 }
 

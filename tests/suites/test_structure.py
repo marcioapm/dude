@@ -1,4 +1,4 @@
-"""Organising work: a project's repositories, its epics, and editing work items.
+"""Organising work: a project's repositories, its epics, and editing tasks.
 
 Metadata, served by the backend alone; these pin the rules a person relies
 on — nothing is lost when a group goes away, what an agent is working to
@@ -59,9 +59,9 @@ def test_a_repository_is_a_name_and_a_forge_url(client: ApiClient, name: str, ur
 
 def test_a_repository_in_use_cannot_be_moved_or_removed(client: ApiClient, forge_project: dict):
     repo = forge_project["repositories"][0]
-    item = client.create_work_item(forge_project["id"], "Keep the repository")
-    assert client.post(f"/v1/work-items/{item['id']}/deliver").status_code == 201
-    wait_until(lambda: client.work_item_runs(item["id"]), timeout=15, message="the delivery never started")
+    item = client.create_task(forge_project["id"], "Keep the repository")
+    assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
+    wait_until(lambda: client.task_runs(item["id"]), timeout=15, message="the delivery never started")
     assert client.patch(f"/v1/repositories/{repo['id']}", {"url": "https://github.com/acme/elsewhere.git"}).status_code == 409
     assert client.request("DELETE", f"/v1/repositories/{repo['id']}").status_code == 409
 
@@ -83,54 +83,54 @@ def test_epics_are_ordered_and_deleting_one_keeps_its_work(client: ApiClient):
     assert client.patch(f"/v1/epics/{one['id']}", {"position": 99}).status_code == 200
     assert order() == ["2", "4", "3", "1"]
 
-    item = client.post("/v1/work-items", {"projectId": project["id"], "epicId": two["id"], "title": "Keep me"}).json()
+    item = client.post("/v1/tasks", {"projectId": project["id"], "epicId": two["id"], "title": "Keep me"}).json()
     assert client.request("DELETE", f"/v1/epics/{two['id']}").status_code == 204
-    kept = client.get(f"/v1/work-items/{item['id']}").json()
+    kept = client.get(f"/v1/tasks/{item['id']}").json()
     assert kept["title"] == "Keep me" and kept["epicId"] is None
     assert order() == ["4", "3", "1"]
     assert three["id"]
 
 
-def test_a_work_item_can_be_edited_and_moved_until_delivery_starts(client: ApiClient, forge_project: dict):
+def test_a_task_can_be_edited_and_moved_until_delivery_starts(client: ApiClient, forge_project: dict):
     epic = client.post(f"/v1/projects/{forge_project['id']}/epics", {"title": "Later"}).json()
-    item = client.post("/v1/work-items", {"projectId": forge_project["id"], "title": "Draft"}).json()
+    item = client.post("/v1/tasks", {"projectId": forge_project["id"], "title": "Draft"}).json()
 
-    resp = client.patch(f"/v1/work-items/{item['id']}", {"title": "Final", "acceptanceCriteria": ["it works"],
+    resp = client.patch(f"/v1/tasks/{item['id']}", {"title": "Final", "acceptanceCriteria": ["it works"],
                                                            "epicId": epic["id"]})
     assert resp.status_code == 200, resp.text
     assert resp.json()["acceptanceCriteria"] == ["it works"] and resp.json()["epicId"] == epic["id"]
-    assert client.patch(f"/v1/work-items/{item['id']}", {}).status_code == 400
+    assert client.patch(f"/v1/tasks/{item['id']}", {}).status_code == 400
 
     other = client.post(f"/v1/projects/{_project(client)['id']}/epics", {"title": "Elsewhere"}).json()
-    assert client.patch(f"/v1/work-items/{item['id']}", {"epicId": other["id"]}).status_code == 404
+    assert client.patch(f"/v1/tasks/{item['id']}", {"epicId": other["id"]}).status_code == 404
 
-    assert client.post(f"/v1/work-items/{item['id']}/deliver").status_code == 201
+    assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
     # Agents are working to it now: what it asks for is fixed.
-    assert client.patch(f"/v1/work-items/{item['id']}", {"goal": "something else"}).status_code == 409
+    assert client.patch(f"/v1/tasks/{item['id']}", {"goal": "something else"}).status_code == 409
     # Where it sits is not.
-    assert client.patch(f"/v1/work-items/{item['id']}", {"epicId": None}).status_code == 200
+    assert client.patch(f"/v1/tasks/{item['id']}", {"epicId": None}).status_code == 200
 
 
-def test_a_work_item_names_its_repositories_each_changed_or_read(client: ApiClient, forge_project: dict):
-    """A work item names the repositories it touches — each one it changes or
+def test_a_task_names_its_repositories_each_changed_or_read(client: ApiClient, forge_project: dict):
+    """A task names the repositories it touches — each one it changes or
     only reads — and they are fixed, like what it asks for, once it is delivered."""
     first = client.get(f"/v1/projects/{forge_project['id']}").json()["repositories"][0]
     second = _repo(client, forge_project, "second")
     wanted = [{"id": first["id"], "access": "write"}, {"id": second["id"], "access": "read"}]
-    item = client.post("/v1/work-items", {"projectId": forge_project["id"], "title": "Where", "repositories": wanted}).json()
+    item = client.post("/v1/tasks", {"projectId": forge_project["id"], "title": "Where", "repositories": wanted}).json()
     assert sorted(item["repositories"], key=lambda r: r["id"]) == sorted(wanted, key=lambda r: r["id"])
 
     # One not in the project, or named twice, is refused.
-    assert client.patch(f"/v1/work-items/{item['id']}", {"repositories": [{"id": "repo_nope"}]}).status_code == 404
+    assert client.patch(f"/v1/tasks/{item['id']}", {"repositories": [{"id": "repo_nope"}]}).status_code == 404
     twice = [{"id": first["id"]}, {"id": first["id"], "access": "read"}]
-    assert client.patch(f"/v1/work-items/{item['id']}", {"repositories": twice}).status_code == 400
+    assert client.patch(f"/v1/tasks/{item['id']}", {"repositories": twice}).status_code == 400
     # Changing them keeps what was given; none is work that changes no code.
-    changed = client.patch(f"/v1/work-items/{item['id']}", {"repositories": [{"id": second["id"]}]}).json()
+    changed = client.patch(f"/v1/tasks/{item['id']}", {"repositories": [{"id": second["id"]}]}).json()
     assert changed["repositories"] == [{"id": second["id"], "access": "write"}]
 
-    assert client.post(f"/v1/work-items/{item['id']}/deliver").status_code == 201
-    wait_until(lambda: client.work_item_runs(item["id"]), timeout=15, message="the delivery never started")
-    assert client.patch(f"/v1/work-items/{item['id']}", {"repositories": []}).status_code == 409
+    assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
+    wait_until(lambda: client.task_runs(item["id"]), timeout=15, message="the delivery never started")
+    assert client.patch(f"/v1/tasks/{item['id']}", {"repositories": []}).status_code == 409
 
 
 def test_another_organization_cannot_touch_my_structure(client: ApiClient, second_org: dict):
@@ -166,12 +166,12 @@ def test_an_organization_without_github_says_so(client: ApiClient):
     assert client.get("/v1/forge/credential").json() == {"connected": False}
 
 
-def test_work_items_are_numbered_within_their_project(client: ApiClient):
+def test_tasks_are_numbered_within_their_project(client: ApiClient):
     project = client.create_project(name="Text Kit", slug=f"textkit-{os.urandom(3).hex()}")
-    first = client.post("/v1/work-items", {"projectId": project["id"], "title": "One"}).json()
-    second = client.post("/v1/work-items", {"projectId": project["id"], "title": "Two"}).json()
+    first = client.post("/v1/tasks", {"projectId": project["id"], "title": "One"}).json()
+    second = client.post("/v1/tasks", {"projectId": project["id"], "title": "Two"}).json()
     assert (first["key"], second["key"]) == ("TEXT-1", "TEXT-2")
-    assert client.get(f"/v1/work-items/{second['id']}").json()["key"] == "TEXT-2"
+    assert client.get(f"/v1/tasks/{second['id']}").json()["key"] == "TEXT-2"
     nav = client.get("/v1/navigation").json()
-    keys = [wi["key"] for p in nav["projects"] if p["id"] == project["id"] for wi in p["workItems"]]
+    keys = [wi["key"] for p in nav["projects"] if p["id"] == project["id"] for wi in p["tasks"]]
     assert sorted(keys) == ["TEXT-1", "TEXT-2"]

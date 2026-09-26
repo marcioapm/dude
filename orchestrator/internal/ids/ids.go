@@ -24,7 +24,7 @@ const (
 	Directive      = "dir"
 	Question       = "qst"
 	Artifact       = "art"
-	WorkItem       = "wi"
+	Task       = "wi"
 	Epic           = "epc"
 	RepoRequest    = "rrq"
 )

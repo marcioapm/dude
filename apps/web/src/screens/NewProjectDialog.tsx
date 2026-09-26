@@ -74,7 +74,7 @@ export function NewProjectDialog({ client, open, onOpenChange, onCreated }: NewP
       <Input label="Name" autoFocus value={name} maxLength={200} data-testid="project-name"
         onChange={(e) => setName(e.target.value)} />
       <Input label="Slug" mono value={effectiveSlug}
-        hint="Names it in paths; its first letters start its work items' keys."
+        hint="Names it in paths; its first letters start its tasks' keys."
         onChange={(e) => setSlug(e.target.value)} />
       <Input label="Repository" mono value={url} placeholder="https://github.com/acme/api.git"
         hint="Optional: where its work goes. You can add more later." data-testid="project-repository"

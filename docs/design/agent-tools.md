@@ -15,10 +15,10 @@ ACP `mcpServers` for OpenCode, `--mcp-config` for Claude Code).
 
 | tool | what it does | who may |
 |---|---|---|
-| `create_work_item` | a new work item in the same project (title, goal, criteria, epic, repositories) — not delivered; a person decides | implementer, investigator |
+| `create_task` | a new task in the same project (title, goal, criteria, epic, repositories) — not delivered; a person decides | implementer, investigator |
 | `create_epic` | a new epic in the project | investigator |
-| `list_work` | the project's epics and work items, with status and keys | all |
-| `search_memory` | search the project's history: work items, findings, artifacts' text, PR titles (Postgres full-text first; embeddings later) | all |
+| `list_tasks` | the project's epics and tasks, with status and keys | all |
+| `search_memory` | search the project's history: tasks, findings, artifacts' text, PR titles (Postgres full-text first; embeddings later) | all |
 | `ask_person` | a question for a person; the turn ends and the answer is the next input. The only way an agent asks: the question block is gone | implementer, fixer |
 | `publish_artifact` | write a file for people (name, content) — same as `$LUX_ARTIFACTS`, for agents that prefer a tool | all |
 | `request_repository` | ask for another repository of the organization, read or write, with a reason; a person approves or denies (#45) | all |
@@ -88,7 +88,7 @@ lux's network. The egress rule for it is added to every spec.
 
 ## Order of work
 
-1. Server skeleton: token minting and auth, `list_work`, `create_work_item`,
+1. Server skeleton: token minting and auth, `list_tasks`, `create_task`,
    the ledger event; Go tests calling it as an MCP client.
 2. Spec: `workload.mcpServers` + the token secret + egress (behind a config
    flag until lux lands it; fake lux accepts and records it).

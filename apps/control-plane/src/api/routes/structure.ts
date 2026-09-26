@@ -1,6 +1,6 @@
 /**
  * How a project's work is organised: its repositories, its epics, and
- * editing the work items within them.
+ * editing the tasks within them.
  *
  * Structure is metadata, so it lives here, in the backend, not in the
  * orchestrator: nothing runs when an epic is renamed. Every change is a
@@ -14,7 +14,7 @@ import { withOrg, type OrgScope } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { badRequest, conflict, json, noContent, notFound, parseBody } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
-import { REPOSITORIES_JSON, setWorkItemRepositories, workItemRepositoriesInput } from "./workItemRepositories.ts";
+import { REPOSITORIES_JSON, setTaskRepositories, taskRepositoriesInput } from "./taskRepositories.ts";
 
 const REPOSITORY_SELECT = `id, project_id AS "projectId", name, url, default_branch AS "defaultBranch", trust,
   created_at AS "createdAt"`;
@@ -23,12 +23,12 @@ const EPIC_SELECT = `id, project_id AS "projectId", title, description, position
 
 /** Record a structural change as the person who made it. */
 function record(scope: OrgScope, ctx: RequestContext, eventType: string, projectId: string,
-  payload: Record<string, unknown>, workItemId: string | null = null) {
+  payload: Record<string, unknown>, taskId: string | null = null) {
   return appendInScope(scope, {
     eventType,
     organizationId: ctx.principal.organizationId,
     projectId,
-    workItemId,
+    taskId,
     actor: { type: "human", id: ctx.principal.apiKeyId },
     source: "control-plane",
     payload,
@@ -92,7 +92,7 @@ async function addRepository(ctx: RequestContext): Promise<Response> {
 async function inUse(scope: OrgScope, repositoryId: string): Promise<boolean> {
   const rows = await scope.sql`
     SELECT 1 FROM workflow_runs w
-      JOIN work_item_repositories wr ON wr.work_item_id = w.work_item_id
+      JOIN task_repositories wr ON wr.task_id = w.task_id
       WHERE w.status IN ('running', 'waiting') AND wr.repository_id = ${repositoryId}
     LIMIT 1`;
   return rows.length > 0;
@@ -239,7 +239,7 @@ async function updateEpic(ctx: RequestContext): Promise<Response> {
 }
 
 /**
- * Delete an epic. Its work items are kept and move to the project itself:
+ * Delete an epic. Its tasks are kept and move to the project itself:
  * an epic is a grouping, and removing a group must not remove the work.
  */
 async function deleteEpic(ctx: RequestContext): Promise<Response> {
@@ -250,7 +250,7 @@ async function deleteEpic(ctx: RequestContext): Promise<Response> {
       title: string;
     }>;
     if (!rows[0]) return false;
-    await scope.sql`UPDATE work_items SET epic_id = NULL, updated_at = now() WHERE epic_id = ${id}`;
+    await scope.sql`UPDATE tasks SET epic_id = NULL, updated_at = now() WHERE epic_id = ${id}`;
     await scope.sql`DELETE FROM epics WHERE id = ${id}`;
     await record(scope, ctx, EventTypes.EpicDeleted, rows[0].projectId, { epicId: id, title: rows[0].title });
     return true;
@@ -260,30 +260,30 @@ async function deleteEpic(ctx: RequestContext): Promise<Response> {
 }
 
 // ---------------------------------------------------------------------------
-// Work items
+// Tasks
 // ---------------------------------------------------------------------------
 
-const updateWorkItemInput = z.object({
+const updateTaskInput = z.object({
   title: z.string().trim().min(1).max(500),
   goal: z.string().max(10_000),
   acceptanceCriteria: z.array(z.string().max(2000)),
   /** Move it into an epic of its project, or out of any (null). */
   epicId: z.string().min(1).nullable(),
   /** The repositories it works on; fixed, like the task, once delivery starts. */
-  repositories: workItemRepositoriesInput,
+  repositories: taskRepositoriesInput,
 }).partial();
 
 /**
- * Edit a work item: what it asks for, and where it sits. What it asks for
+ * Edit a task: what it asks for, and where it sits. What it asks for
  * is fixed once delivery starts — agents are working to it — so editing the
  * goal or criteria then is refused; moving it between epics never is.
  */
-async function updateWorkItem(ctx: RequestContext): Promise<Response> {
-  const input = await parseBody(ctx.request, updateWorkItemInput);
+async function updateTask(ctx: RequestContext): Promise<Response> {
+  const input = await parseBody(ctx.request, updateTaskInput);
   const id = ctx.params.id!;
   const result = await withOrg(ctx.principal.organizationId, async (scope) => {
     const current = (await scope.sql`
-      SELECT project_id AS "projectId", status FROM work_items WHERE id = ${id} FOR UPDATE`) as Array<{
+      SELECT project_id AS "projectId", status FROM tasks WHERE id = ${id} FOR UPDATE`) as Array<{
       projectId: string;
       status: string;
     }>;
@@ -293,7 +293,7 @@ async function updateWorkItem(ctx: RequestContext): Promise<Response> {
       input.acceptanceCriteria !== undefined || input.repositories !== undefined;
     // Started means a delivery exists, whatever the status says yet: the
     // orchestrator moves the status on its own schedule.
-    const delivering = await scope.sql`SELECT 1 FROM workflow_runs WHERE work_item_id = ${id} LIMIT 1`;
+    const delivering = await scope.sql`SELECT 1 FROM workflow_runs WHERE task_id = ${id} LIMIT 1`;
     if (changesTheTask && delivering.length > 0) return { started: status };
     if (input.epicId) {
       const epic = await scope.sql`SELECT 1 FROM epics WHERE id = ${input.epicId} AND project_id = ${projectId}`;
@@ -301,11 +301,11 @@ async function updateWorkItem(ctx: RequestContext): Promise<Response> {
     }
     if (Object.keys(input).length === 0) return { unchanged: true as const };
     if (input.repositories) {
-      const missing = await setWorkItemRepositories(scope, ctx.principal.organizationId, projectId, id, input.repositories);
+      const missing = await setTaskRepositories(scope, ctx.principal.organizationId, projectId, id, input.repositories);
       if (missing) return { noRepository: missing };
     }
     const rows = (await scope.sql`
-      UPDATE work_items SET
+      UPDATE tasks SET
         title = COALESCE(${input.title ?? null}, title),
         goal = COALESCE(${input.goal ?? null}, goal),
         acceptance_criteria = CASE WHEN ${input.acceptanceCriteria !== undefined}
@@ -315,17 +315,17 @@ async function updateWorkItem(ctx: RequestContext): Promise<Response> {
       WHERE id = ${id}
       RETURNING id, project_id AS "projectId", epic_id AS "epicId", ${scope.sql.unsafe(REPOSITORIES_JSON)}, title, goal,
         acceptance_criteria AS "acceptanceCriteria", status, updated_at AS "updatedAt"`) as Array<Record<string, unknown>>;
-    await record(scope, ctx, EventTypes.WorkItemUpdated, projectId, { ...input }, id);
-    return { workItem: rows[0]! };
+    await record(scope, ctx, EventTypes.TaskUpdated, projectId, { ...input }, id);
+    return { task: rows[0]! };
   });
-  if ("missing" in result) throw notFound(`work item ${id} not found`);
+  if ("missing" in result) throw notFound(`task ${id} not found`);
   if ("started" in result) {
     throw conflict(`delivery has started (${result.started}); what it asks for can no longer change — abort and create a new one`);
   }
-  if ("noEpic" in result) throw notFound(`epic ${result.noEpic} is not in this work item's project`);
-  if ("noRepository" in result) throw notFound(`repository ${result.noRepository} is not in this work item's project`);
+  if ("noEpic" in result) throw notFound(`epic ${result.noEpic} is not in this task's project`);
+  if ("noRepository" in result) throw notFound(`repository ${result.noRepository} is not in this task's project`);
   if ("unchanged" in result) throw badRequest("nothing to change");
-  return json(result.workItem);
+  return json(result.task);
 }
 
 export function registerStructureRoutes(router: Router): void {
@@ -338,5 +338,5 @@ export function registerStructureRoutes(router: Router): void {
   router.patch("/v1/epics/:id", updateEpic);
   router.delete("/v1/epics/:id", deleteEpic);
 
-  router.patch("/v1/work-items/:id", updateWorkItem);
+  router.patch("/v1/tasks/:id", updateTask);
 }

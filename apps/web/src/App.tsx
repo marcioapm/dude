@@ -2,7 +2,7 @@
  * The shell: navigation on the left, the selected thing on the right.
  *
  * The sidebar's selection decides the main pane, the way the design system's
- * `boardScope` describes it: a project or epic opens its board, a work item
+ * `boardScope` describes it: a project or epic opens its board, a task
  * opens its delivery view, and an agent (a phase Run) opens its conversation.
  * Settings are places too (`place.ts`), outside the tree.
  *
@@ -27,8 +27,8 @@ import { MySettingsScreen } from "./screens/MySettingsScreen.tsx";
 import { OrganizationSettingsScreen } from "./screens/OrganizationSettingsScreen.tsx";
 import { ProjectSettingsScreen } from "./screens/ProjectSettingsScreen.tsx";
 import { RunScreen } from "./screens/RunScreen.tsx";
-import { existingWorkItem, WorkItemDialog, type ExistingWorkItem } from "./screens/WorkItemDialog.tsx";
-import { WorkItemScreen } from "./screens/WorkItemScreen.tsx";
+import { existingTask, TaskDialog, type ExistingTask } from "./screens/TaskDialog.tsx";
+import { TaskScreen } from "./screens/TaskScreen.tsx";
 
 export interface AppProps {
   client: ApiClient;
@@ -38,23 +38,23 @@ export interface AppProps {
 /** The one dialog the shell may have open. */
 type Open =
   | { kind: "newProject" }
-  | { kind: "workItem"; projectId: string; epicId: string | null; editing?: string }
+  | { kind: "task"; projectId: string; epicId: string | null; editing?: string }
   | Extract<Intent, { kind: "newEpic" }>
   | Extract<Intent, { kind: "editEpic" }>
   | Extract<Intent, { kind: "deleteEpic" }>;
 
 const GROUP_BY_EPIC = "dude.board.groupByEpic";
 
-const OPENS_A_DIALOG: ReadonlySet<Intent["kind"]> = new Set(["newWorkItem", "editWorkItem", "newEpic", "editEpic", "deleteEpic"]);
+const OPENS_A_DIALOG: ReadonlySet<Intent["kind"]> = new Set(["newTask", "editTask", "newEpic", "editEpic", "deleteEpic"]);
 
 /**
  * Where something sits: its project, its epic when it has one, and its work
- * item — found by the work item's id, or by one of its agents' (Run or
+ * item — found by the task's id, or by one of its agents' (Run or
  * session) ids, in which case `agent` names that agent as the tree does.
  */
 function locate(projects: readonly NavProject[], id: string) {
   for (const project of projects) {
-    const groups = [{ epic: null, items: project.workItems ?? [] }, ...(project.epics ?? []).map((e) => ({ epic: e, items: e.workItems }))];
+    const groups = [{ epic: null, items: project.tasks ?? [] }, ...(project.epics ?? []).map((e) => ({ epic: e, items: e.tasks }))];
     for (const { epic, items } of groups) {
       for (const item of items) {
         if (item.id === id) return { project, epic, item, agent: null };
@@ -128,18 +128,18 @@ export function App({ client, onSignOut }: AppProps) {
       const quietly = (what: Promise<unknown>) =>
         void what.then(() => load(), (err: unknown) => toast({ title: errorText(err), tone: "danger" }));
       switch (intent.kind) {
-        case "newWorkItem":
-          return setOpen({ kind: "workItem", projectId: intent.projectId, epicId: intent.epicId });
-        case "editWorkItem": {
-          const project = projects && locate(projects, intent.workItemId)?.project;
-          return project ? setOpen({ kind: "workItem", projectId: project.id, epicId: null, editing: intent.workItemId }) : undefined;
+        case "newTask":
+          return setOpen({ kind: "task", projectId: intent.projectId, epicId: intent.epicId });
+        case "editTask": {
+          const project = projects && locate(projects, intent.taskId)?.project;
+          return project ? setOpen({ kind: "task", projectId: project.id, epicId: null, editing: intent.taskId }) : undefined;
         }
         case "projectSettings":
           return go({ view: "projectSettings", projectId: intent.projectId });
         case "moveEpic":
           return quietly(client.updateEpic(intent.epicId, { position: intent.position }));
-        case "moveWorkItem":
-          return quietly(client.updateWorkItem(intent.workItemId, { epicId: intent.epicId }));
+        case "moveTask":
+          return quietly(client.updateTask(intent.taskId, { epicId: intent.epicId }));
         default:
           return setOpen(intent);
       }
@@ -183,7 +183,7 @@ export function App({ client, onSignOut }: AppProps) {
     main = (
       <EmptyState
         title="No projects yet"
-        description="A project is where work for a codebase lives: its repositories, its agents, its work items."
+        description="A project is where work for a codebase lives: its repositories, its agents, its tasks."
         action={
           <Button variant="primary" leadingIcon="plus" onClick={() => setOpen({ kind: "newProject" })} data-testid="new-project-empty">
             New project
@@ -244,20 +244,20 @@ export function App({ client, onSignOut }: AppProps) {
                 </Button>
               </>
             )}
-            <Button size="sm" variant="primary" leadingIcon="plus" data-testid="new-work-item"
-              onClick={() => act({ kind: "newWorkItem", projectId: project.id, epicId: scope.epic?.id ?? null })}>
-              New work item
+            <Button size="sm" variant="primary" leadingIcon="plus" data-testid="new-task"
+              onClick={() => act({ kind: "newTask", projectId: project.id, epicId: scope.epic?.id ?? null })}>
+              New task
             </Button>
           </>
         }
       />
     );
-  } else if (selected?.kind === "workItem") {
+  } else if (selected?.kind === "task") {
     main = (
-      <WorkItemScreen
+      <TaskScreen
         key={selected.id}
         client={client}
-        workItemId={selected.id}
+        taskId={selected.id}
         onOpenRun={(runId) => go(inTree({ kind: "session", id: runId }))}
         breadcrumb={trail(selected.id)}
       />
@@ -278,13 +278,13 @@ export function App({ client, onSignOut }: AppProps) {
   }
 
   /**
-   * Project › Epic › KEY for a work item, each a way back up — and, on an
-   * agent's conversation, the agent last, so the work item is a link too.
+   * Project › Epic › KEY for a task, each a way back up — and, on an
+   * agent's conversation, the agent last, so the task is a link too.
    */
   function trail(id: string) {
     const where = projects ? locate(projects, id) : null;
     if (!where) return null;
-    const workItemId = where.item.id;
+    const taskId = where.item.id;
     const items: BreadcrumbItem[] = [
       { id: where.project.id, label: where.project.name, onSelect: () => go(inTree({ kind: "project", id: where.project.id })) },
     ];
@@ -293,10 +293,10 @@ export function App({ client, onSignOut }: AppProps) {
       items.push({ id: epicId, label: where.epic.title, icon: "layers", onSelect: () => go(inTree({ kind: "epic", id: epicId })) });
     }
     items.push({
-      id: workItemId,
+      id: taskId,
       label: where.item.key ?? where.item.title,
       mono: Boolean(where.item.key),
-      ...(where.agent !== null ? { onSelect: () => go(inTree({ kind: "workItem", id: workItemId })) } : {}),
+      ...(where.agent !== null ? { onSelect: () => go(inTree({ kind: "task", id: taskId })) } : {}),
     });
     if (where.agent !== null) items.push({ id, label: where.agent });
     return <Breadcrumb items={items} />;
@@ -342,10 +342,10 @@ export function App({ client, onSignOut }: AppProps) {
           }}
         />
       ) : null}
-      {open?.kind === "workItem" ? (
-        <WorkItemDialogFor key={open.editing ?? "new"} client={client} open={open} onClose={close} onSaved={(id) => {
+      {open?.kind === "task" ? (
+        <TaskDialogFor key={open.editing ?? "new"} client={client} open={open} onClose={close} onSaved={(id) => {
           saved();
-          if (!open.editing) go(inTree({ kind: "workItem", id }));
+          if (!open.editing) go(inTree({ kind: "task", id }));
         }} />
       ) : null}
       {open?.kind === "newEpic" || open?.kind === "editEpic" ? (
@@ -382,25 +382,25 @@ export function App({ client, onSignOut }: AppProps) {
 }
 
 /**
- * The work item dialog, for a new work item or an existing one — which it
- * reads first, since the tree does not carry what a work item asks for.
+ * The task dialog, for a new task or an existing one — which it
+ * reads first, since the tree does not carry what a task asks for.
  */
-function WorkItemDialogFor(props: {
+function TaskDialogFor(props: {
   client: ApiClient;
-  open: Extract<Open, { kind: "workItem" }>;
+  open: Extract<Open, { kind: "task" }>;
   onClose: () => void;
   onSaved: (id: string) => void;
 }) {
   const { client, open, onClose } = props;
-  const [existing, setExisting] = useState<ExistingWorkItem | null>(null);
+  const [existing, setExisting] = useState<ExistingTask | null>(null);
   const { toast } = useToast();
-  // Keyed by what it edits, so a late answer for another work item lands
+  // Keyed by what it edits, so a late answer for another task lands
   // in an unmounted dialog, not this one.
   useEffect(() => {
     if (!open.editing) return;
     let current = true;
-    void client.getWorkItem(open.editing).then(
-      (item) => current && setExisting(existingWorkItem(item, item.runs.length > 0)),
+    void client.getTask(open.editing).then(
+      (item) => current && setExisting(existingTask(item, item.runs.length > 0)),
       (err: unknown) => {
         if (!current) return;
         toast({ title: errorText(err), tone: "danger" });
@@ -413,7 +413,7 @@ function WorkItemDialogFor(props: {
   }, [client, open.editing, toast, onClose]);
   if (open.editing && !existing) return null;
   return (
-    <WorkItemDialog
+    <TaskDialog
       client={client}
       projectId={open.projectId}
       epicId={open.epicId}

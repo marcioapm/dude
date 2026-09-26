@@ -34,7 +34,7 @@ export interface BoardProps extends Omit<HTMLAttributes<HTMLElement>, "onSelect"
   readonly project: NavProject;
   /** Narrow the board to one epic. Cards then drop their epic line. */
   readonly epic?: NavEpic | null | undefined;
-  /** A work item or one of its sessions; the card is marked current. */
+  /** A task or one of its sessions; the card is marked current. */
   readonly selected?: NavRef | null | undefined;
   /** A needs-you card hands over the asking session, so one click lands on the question. */
   readonly onSelect?: ((ref: NavRef, node: NavRow["node"]) => void) | undefined;
@@ -66,7 +66,7 @@ interface Group {
 
 /**
  * The overview for a project or an epic — what the sidebar opens when the
- * selection is one of those rather than a work item. Five columns by
+ * selection is one of those rather than a task. Five columns by
  * lifecycle stage (`boardModel.ts`), always all five, always in order, so
  * the eye learns where to look; a column with nothing in it folds to a
  * labelled rail rather than an empty box.
@@ -136,7 +136,7 @@ export function Board({ project, epic, selected, onSelect, cap = 12, loading, he
       })),
     [groups, collapsedSet, revealed, cap],
   );
-  const cardKey = (c: BoardCard) => navKey({ kind: "workItem", id: c.workItem.id });
+  const cardKey = (c: BoardCard) => navKey({ kind: "task", id: c.task.id });
   const allCards = visible.flatMap((g) => (g.open ? g.columns.flatMap((v) => v.cards) : []));
   const allKeys = allCards.map(cardKey);
   const selectedCard = allCards.find((c) => cardContains(c, selectedKey)) ?? null;
@@ -207,7 +207,7 @@ export function Board({ project, epic, selected, onSelect, cap = 12, loading, he
   const select = (card: BoardCard) => {
     if (!onSelect) return;
     if (card.asking) onSelect({ kind: "session", id: card.asking.id }, card.asking);
-    else onSelect({ kind: "workItem", id: card.workItem.id }, card.workItem);
+    else onSelect({ kind: "task", id: card.task.id }, card.task);
   };
 
   const scopeLabel = epic ? epic.title : project.name;
@@ -228,7 +228,7 @@ export function Board({ project, epic, selected, onSelect, cap = 12, loading, he
           </span>
           {!loading ? (
             <span className={styles["summary"]}>
-              <span className={styles["summaryCount"]}>{total === 1 ? "1 work item" : `${total} work items`}</span>
+              <span className={styles["summaryCount"]}>{total === 1 ? "1 task" : `${total} tasks`}</span>
               <TriageRollup counts={counts} verbose className={styles["summaryRollup"]} />
               {cost > 0 ? <CostDisplay usd={cost} compact tone="muted" className={styles["summaryCost"]} /> : null}
             </span>
@@ -240,7 +240,7 @@ export function Board({ project, epic, selected, onSelect, cap = 12, loading, he
       {loading ? (
         <BoardSkeleton />
       ) : total === 0 ? (
-        <EmptyState icon="layers" title={epic ? "Nothing in this epic yet" : "No work items yet"} description="Give an agent a task and it appears here." className={styles["empty"]} />
+        <EmptyState icon="layers" title={epic ? "Nothing in this epic yet" : "No tasks yet"} description="Give an agent a task and it appears here." className={styles["empty"]} />
       ) : (
         <div className={cx(styles["body"], swimlanes && styles["bodyLanes"])}>
           {swimlanes ? (
@@ -290,12 +290,12 @@ export function Board({ project, epic, selected, onSelect, cap = 12, loading, he
   );
 }
 
-/** Is `key` this card's work item, or a session or run inside it? */
+/** Is `key` this card's task, or a session or run inside it? */
 function cardContains(card: BoardCard, key: string | null): boolean {
   if (key === null) return false;
-  if (navKey({ kind: "workItem", id: card.workItem.id }) === key) return true;
+  if (navKey({ kind: "task", id: card.task.id }) === key) return true;
   const inSessions = (list: ReadonlyArray<NavSession>): boolean => list.some((s) => navKey({ kind: "session", id: s.id }) === key || inSessions(s.children ?? []));
-  return (card.workItem.runs ?? []).some((r) => navKey({ kind: "run", id: r.id }) === key || inSessions(r.sessions));
+  return (card.task.runs ?? []).some((r) => navKey({ kind: "run", id: r.id }) === key || inSessions(r.sessions));
 }
 
 // ---------------------------------------------------------------------------
@@ -393,13 +393,13 @@ interface BoardCardViewProps {
 }
 
 /**
- * One work item, three lines: where and how long · what · who and what it
+ * One task, three lines: where and how long · what · who and what it
  * costs. The status dot is the only colour at rest; a needs-you card adds
  * the same wash and bar the tree row gets, plus the question in attention
  * ink, so it is loud in the same way in both places.
  */
 function BoardCardView({ card, now, showEpic, selected, tabIndex, onFocus, onKeyDown, onClick }: BoardCardViewProps) {
-  const wi = card.workItem;
+  const wi = card.task;
   const spec = statusSpec(wi.status);
   const needsYou = card.triage === "needs_you";
   const since = toMs(wi.statusSince);
@@ -410,7 +410,7 @@ function BoardCardView({ card, now, showEpic, selected, tabIndex, onFocus, onKey
       <button
         type="button"
         className={cx(styles["card"], needsYou && styles["needsYou"], spec.terminal && styles["finished"], selected && styles["selected"])}
-        data-board-key={navKey({ kind: "workItem", id: wi.id })}
+        data-board-key={navKey({ kind: "task", id: wi.id })}
         data-triage={card.triage}
         data-status={wi.status}
         aria-current={selected ? "true" : undefined}
@@ -446,7 +446,7 @@ function BoardCardView({ card, now, showEpic, selected, tabIndex, onFocus, onKey
 
 function AskLine({ card }: { readonly card: BoardCard }) {
   const s = card.asking;
-  const text = s ? (s.activity ?? "is waiting for you") : card.workItem.status === "awaiting_confirmation" ? "plan needs your confirmation" : "waiting for you";
+  const text = s ? (s.activity ?? "is waiting for you") : card.task.status === "awaiting_confirmation" ? "plan needs your confirmation" : "waiting for you";
   return (
     <span className={styles["ask"]} title={text}>
       {s ? <AgentAvatar role={s.role} size="xs" className={styles["asker"]} /> : <Icon name="question" size={12} className={styles["askGlyph"]} />}

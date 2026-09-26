@@ -33,7 +33,7 @@ implements, and section numbers below (§21, §81…) refer to it.
 
 **The backend** (`apps/control-plane`, Bun) is the only thing users and
 GitHub talk to. It owns display and management: auth, organizations,
-projects, work items, the board and sidebar (`/v1/navigation`), findings,
+projects, tasks, the board and sidebar (`/v1/navigation`), findings,
 forge settings, and the live event stream. It runs no background work.
 What changes what runs — deliver, steer, pause, resume, abort — it forwards
 to the orchestrator (`src/orchestrator/client.ts`) with a service token, the
@@ -68,7 +68,7 @@ with `bun run gallery` in that package.
 
 ### Hierarchy
 
-`Organization → Project → Epic → Work Item → Run → Session` (§39). A **Run**
+`Organization → Project → Epic → Task → Run → Session` (§39). A **Run**
 is one phase of work, executed as one lux Run. A single *attempt* at a work
 item is several Runs — one per phase — and each is shown as an agent in the
 UI.
@@ -89,7 +89,7 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   secret), repository at `base_ref`, egress to the model provider, and the
   agent's home as a state volume so a resume keeps the conversation.
 - **Handoff is via git.** Each publishing phase pushes to a branch of its
-  own (`dude/<work item>/run-<run>`) — lux lets a Run's first push go only to
+  own (`dude/<task>/run-<run>`) — lux lets a Run's first push go only to
   a branch that does not exist — and the orchestrator fast-forwards the work
   item's branch to it through GitHub, never forcing. The next phase checks
   out that commit.
@@ -105,14 +105,14 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   parses it. Only review and test Runs may report.
 - **Every loop ends on a declared bound**: `MaxReviewIterations`,
   `MaxAttemptsPerFinding`, `MaxPRFixIterations`. An escalation stops the
-  workflow and sets the work item to `awaiting_input`.
+  workflow and sets the task to `awaiting_input`.
 - A clean re-review resolves open findings **of its own category that a fixer
   has already attempted** (`phases.RecordFindings`). That rule is what lets
   the loop converge.
 - **The PR loop** (`internal/prs`, `forge/classify.go`): a webhook says which
   PR changed; the orchestrator reads that PR, records what changed, and
   signals the workflow only for what the classifier deems actionable — a
-  change request or a failing check. Merged → work item `done`; closed →
+  change request or a failing check. Merged → task `done`; closed →
   `aborted`.
 - **Steering** goes to the agent as a message. OpenCode (ACP) cannot take a
   message mid-turn, so lux holds it until the turn ends; `interrupt: true`
@@ -126,7 +126,7 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   - `person`: waiting past the project's `parkAfterMinutes` (default 10). An
     answer or a decision resumes it.
   - `idle`: quiet mid-turn for `idleNudgeMinutes` (off by default), nudged
-    once, then quiet as long again. The work item goes to awaiting input,
+    once, then quiet as long again. The task goes to awaiting input,
     and only a person's Resume takes it up.
   - `repository`: stopped a moment so the resume can bring in a repository
     a person approved.
@@ -235,11 +235,11 @@ script.
 In rough priority order.
 
 1. **Real models end to end.** Everything has been proven with the scripted
-   agent; run real work items with OpenCode through lux, read the
+   agent; run real tasks with OpenCode through lux, read the
    transcripts, and tune prompts, the findings parser and policy.
 2. **Telling a person something waits on them**: a notification (Slack,
    email) for a question or a request. Today they are only on the board.
-3. **Budgets as loop bounds** — a cost cap per Run and per work item.
+3. **Budgets as loop bounds** — a cost cap per Run and per task.
 4. **The tester phase** (browser QA with recorded evidence) and artifacts
    from lux. Design in [`phased-runs.md`](phased-runs.md).
 5. **GitHub App** in place of the PAT, and registering webhooks

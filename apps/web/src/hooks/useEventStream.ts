@@ -22,7 +22,7 @@ export interface UseEventStreamOptions {
   client: ApiClient;
   runId?: string | undefined;
   sessionId?: string | undefined;
-  workItemId?: string | undefined;
+  taskId?: string | undefined;
   /** Every event in the organization. For panels that watch everything. */
   all?: boolean | undefined;
   /** Cap on retained events, so a long session cannot grow without bound. */
@@ -37,13 +37,13 @@ export interface EventStreamState {
 const DEFAULT_LIMIT = 2_000;
 
 export function useEventStream(options: UseEventStreamOptions): EventStreamState {
-  const { client, runId, sessionId, workItemId, all, limit = DEFAULT_LIMIT } = options;
+  const { client, runId, sessionId, taskId, all, limit = DEFAULT_LIMIT } = options;
 
   const [events, setEvents] = useState<PersistedEvent[]>([]);
   const [status, setStatus] = useState<StreamStatus>("connecting");
 
   useEffect(() => {
-    if (!runId && !sessionId && !workItemId && !all) return;
+    if (!runId && !sessionId && !taskId && !all) return;
 
     // A new scope is a new history: keeping the previous run's events would
     // show its transcript under this run's header.
@@ -52,7 +52,7 @@ export function useEventStream(options: UseEventStreamOptions): EventStreamState
 
     // An organization-wide stream is for noticing change, not for reading
     // history, so it starts from now rather than replaying the ledger.
-    const source = new EventSource(client.streamUrl({ runId, sessionId, workItemId, live: all }));
+    const source = new EventSource(client.streamUrl({ runId, sessionId, taskId, live: all }));
 
     source.onopen = () => setStatus("live");
 
@@ -81,7 +81,7 @@ export function useEventStream(options: UseEventStreamOptions): EventStreamState
     source.onerror = () => setStatus("reconnecting");
 
     return () => source.close();
-  }, [client, runId, sessionId, workItemId, all, limit]);
+  }, [client, runId, sessionId, taskId, all, limit]);
 
   return { events, status };
 }

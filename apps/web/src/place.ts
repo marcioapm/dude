@@ -16,7 +16,7 @@ export type Place =
   | { view: "mySettings" }
   | { view: "inbox" };
 
-const TREE_KINDS: ReadonlyArray<NavRef["kind"]> = ["project", "epic", "workItem", "run", "session"];
+const TREE_KINDS: ReadonlyArray<NavRef["kind"]> = ["project", "epic", "task", "run", "session"];
 
 export function parsePlace(hash: string): Place | null {
   const [kind, id, view] = hash.replace(/^#\/?/, "").split("/");

@@ -1,5 +1,5 @@
 /**
- * The files agents published for a work item — notes, a design, a report, a
+ * The files agents published for a task — notes, a design, a report, a
  * screenshot — each opening in place.
  *
  * Their bytes are read only when a row is opened, with the key in a header:

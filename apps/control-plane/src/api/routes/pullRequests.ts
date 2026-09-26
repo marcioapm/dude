@@ -21,7 +21,7 @@ import type { PublicContext, RequestContext, Router } from "../router.ts";
 
 export const PR_SELECT = `
   id, organization_id AS "organizationId", project_id AS "projectId",
-  work_item_id AS "workItemId", run_id AS "runId", repository_id AS "repositoryId",
+  task_id AS "taskId", run_id AS "runId", repository_id AS "repositoryId",
   (SELECT name FROM repositories r WHERE r.id = pull_requests.repository_id) AS "repositoryName",
   number, node_id AS "nodeId", url, head_branch AS "headBranch",
   base_branch AS "baseBranch", head_sha AS "headSha", title, body,
@@ -30,13 +30,13 @@ export const PR_SELECT = `
   merged_at AS "mergedAt", closed_at AS "closedAt"`;
 
 async function listPullRequests(ctx: RequestContext): Promise<Response> {
-  const workItemId = ctx.url.searchParams.get("workItemId");
+  const taskId = ctx.url.searchParams.get("taskId");
   const runId = ctx.url.searchParams.get("runId");
 
   const pullRequests = await withOrg(ctx.principal.organizationId, async (scope) => {
     return (await scope.sql`
       SELECT ${scope.sql.unsafe(PR_SELECT)} FROM pull_requests
-      WHERE (${workItemId}::text IS NULL OR work_item_id = ${workItemId})
+      WHERE (${taskId}::text IS NULL OR task_id = ${taskId})
         AND (${runId}::text IS NULL OR run_id = ${runId})
       ORDER BY created_at DESC
       LIMIT 200`) as Array<Record<string, unknown>>;

@@ -419,7 +419,7 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
             <Label>waiting — the run is blocked; the clock ticks; choices are in the composer</Label>
             <QuestionCard role="implementer" text={QUESTION_TEXT} options={QUESTION_OPTIONS} askedAt={Date.now() - 4 * 60_000 - 12_000} />
             <Label>waiting, no choices, a named session — free-text answer only</Label>
-            <QuestionCard role="reviewer" name="reviewer-2" text="The PR body says the route's retry is a product decision. Is there a work item for it, or should I file one?" askedAt={Date.now() - 38_000} />
+            <QuestionCard role="reviewer" name="reviewer-2" text="The PR body says the route's retry is a product decision. Is there a task for it, or should I file one?" askedAt={Date.now() - 38_000} />
             <Label>waiting with onChoose — the chips become one-click replies</Label>
             <QuestionCard role="orchestrator" text="Should 4xx responses be retried? The existing code retries everything, but 4xx usually means our request is wrong." options={["Retry 5xx and network only", "Retry everything (current behaviour)"]} askedAt={Date.now() - 125_000} onChoose={() => undefined} />
             <Label>answered — calm; the answer is the next turn, not quoted here</Label>
@@ -516,7 +516,7 @@ function RealisticTranscript() {
         role: "implementer",
         status: "completed",
         model: "claude-opus-4",
-        workItemId: "WI-2481",
+        taskId: "WI-2481",
         title: "Add retry with backoff to the GitHub webhook handler",
         repo: "dude/dude",
         branch: "wi-2481-webhook-retry",
@@ -777,7 +777,7 @@ function LiveTranscriptDemo() {
                 role: "orchestrator",
                 status: s.status,
                 model: "claude-opus-4",
-                workItemId: "WI-2481",
+                taskId: "WI-2481",
                 title: "Add retry with backoff to the GitHub webhook handler",
                 repo: "dude/dude",
                 branch: "wi-2481-webhook-retry",
@@ -787,7 +787,7 @@ function LiveTranscriptDemo() {
                 budgetUsd: 2.5,
                 tokens: s.tokens,
               }
-            : { id: "ses_01J9K2", role: "orchestrator", status: "pending", model: "claude-opus-4", workItemId: "WI-2481", title: "Add retry with backoff to the GitHub webhook handler", repo: "dude/dude" }
+            : { id: "ses_01J9K2", role: "orchestrator", status: "pending", model: "claude-opus-4", taskId: "WI-2481", title: "Add retry with backoff to the GitHub webhook handler", repo: "dude/dude" }
         }
         headerActions={
           <>

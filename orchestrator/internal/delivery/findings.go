@@ -125,7 +125,7 @@ func parseFinding(doc string) (Finding, bool) {
 	if !validSeverities[severity] {
 		// An improvised severity is recorded rather than dropped, at the
 		// level that cannot block: a reviewer inventing "critical" should
-		// not silently gain the power to stop a work item.
+		// not silently gain the power to stop a task.
 		severity = "note"
 	}
 

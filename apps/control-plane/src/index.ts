@@ -1,7 +1,7 @@
 /**
  * The backend: dude's public API.
  *
- * Display and management — projects, work items, settings, the board, the
+ * Display and management — projects, tasks, settings, the board, the
  * live event stream, search — and the front door for everything else. What
  * changes what runs (delivering, steering, pausing, resuming, aborting) is
  * forwarded to the orchestrator (orchestrator/, Go), which does all

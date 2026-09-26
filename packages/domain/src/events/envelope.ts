@@ -36,7 +36,7 @@ export const eventEnvelopeSchema = z.object({
   organizationId: z.string(),
 
   projectId: z.string().nullable().default(null),
-  workItemId: z.string().nullable().default(null),
+  taskId: z.string().nullable().default(null),
   runId: z.string().nullable().default(null),
   sessionId: z.string().nullable().default(null),
   workflowRunId: z.string().nullable().default(null),
@@ -69,7 +69,7 @@ export type EventInput = Pick<EventEnvelope, "eventType" | "organizationId" | "a
       | "eventId"
       | "occurredAt"
       | "projectId"
-      | "workItemId"
+      | "taskId"
       | "runId"
       | "sessionId"
       | "workflowRunId"

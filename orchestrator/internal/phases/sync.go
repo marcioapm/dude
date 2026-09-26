@@ -5,7 +5,7 @@
 // A phase Run's life, from dude's side:
 //
 //	pending ─submit─▶ scheduled ─lux running─▶ running ─agent busy→idle─▶ finishing
-//	   finishing: push (publishing phases) → fast-forward the work item branch
+//	   finishing: push (publishing phases) → fast-forward the task branch
 //	              → compare for changed paths → findings (review phases)
 //	              → stop the lux Run → completed
 //
@@ -79,7 +79,7 @@ const stopPause = "pause"
 
 // phaseRun is a phase Run's row, as the syncer reads it.
 type phaseRun struct {
-	ID, Org, ProjectID, WorkItemID, Phase, Status, Control string
+	ID, Org, ProjectID, TaskID, Phase, Status, Control string
 	Category                                               string
 	LuxRunID, LuxState, LuxStopReason                      string
 	PushRequestID                                          string
@@ -115,7 +115,7 @@ type phaseRun struct {
 	Attempt                        int
 }
 
-const runColumns = `r.id, r.organization_id, r.project_id, r.work_item_id, r.phase::text, r.status::text, r.control::text,
+const runColumns = `r.id, r.organization_id, r.project_id, r.task_id, r.phase::text, r.status::text, r.control::text,
 	COALESCE(r.category, ''),
 	COALESCE(r.lux_run_id, ''), COALESCE(r.lux_state, ''), COALESCE(r.lux_stop_reason, ''),
 	COALESCE(r.push_request_id, ''), COALESCE(r.push_branch, ''), cardinality(r.lux_pushes) > 0, r.base_refs, r.base_shas, r.turn_done_at IS NOT NULL,
@@ -174,7 +174,7 @@ func (s *Syncer) limits() []any {
 
 func scan(row pgx.Row) (phaseRun, error) {
 	var r phaseRun
-	err := row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.WorkItemID, &r.Phase, &r.Status, &r.Control,
+	err := row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.TaskID, &r.Phase, &r.Status, &r.Control,
 		&r.Category, &r.LuxRunID, &r.LuxState, &r.LuxStopReason,
 		&r.PushRequestID, &r.PushBranch, &r.HoldsPushable, &r.BaseRefs, &r.BaseSHAs, &r.TurnDone, &r.HasDirectives, &r.RepoApproved,
 		&r.DudePause, &r.Waiting, &r.ParkNow, &r.Resumable, &r.Quiet, &r.Nudged, &r.QuietSince,
@@ -258,7 +258,7 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 		// A person approved a repository for the agent while it works: pause,
 		// so the resume can bring it (lux adds repositories only at a
 		// resume). An agent that has finished its turn gets it in the next
-		// phase instead — the work item names it now.
+		// phase instead — the task names it now.
 		return true, s.requestPause(ctx, r, "repository", "a repository was approved")
 	}
 	if r.Status == statusRunning && r.LuxState == "running" && r.Control == "none" {
@@ -340,18 +340,18 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
 			SELECT w.title, w.goal, w.acceptance_criteria, COALESCE(p.runtime_image, ''), p.agent_models
-			FROM work_items w JOIN projects p ON p.id = w.project_id
-			WHERE w.id = $1`, r.WorkItemID).
+			FROM tasks w JOIN projects p ON p.id = w.project_id
+			WHERE w.id = $1`, r.TaskID).
 			Scan(&title, &goal, &criteria, &image, &projectModels); err != nil {
-			return fmt.Errorf("load work item: %w", err)
+			return fmt.Errorf("load task: %w", err)
 		}
 		var err error
-		if repos, err = delivery.WorkItemRepositories(ctx, tx, r.WorkItemID); err != nil {
+		if repos, err = delivery.TaskRepositories(ctx, tx, r.TaskID); err != nil {
 			return fmt.Errorf("load repositories: %w", err)
 		}
-		// What people decided on this work item, across its Runs.
+		// What people decided on this task, across its Runs.
 		rows, err := tx.Query(ctx, `SELECT prompt, answer FROM questions
-			WHERE work_item_id = $1 AND status = 'answered' AND answer IS NOT NULL ORDER BY answered_at`, r.WorkItemID)
+			WHERE task_id = $1 AND status = 'answered' AND answer IS NOT NULL ORDER BY answered_at`, r.TaskID)
 		if err != nil {
 			return err
 		}
@@ -402,7 +402,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 		in.Repos = append(in.Repos, specRepo{Name: repo.Name, URL: repo.URL, Ref: ref, ReadOnly: readOnly})
 		promptRepos = append(promptRepos, delivery.PromptRepo{Name: repo.Name, Path: RepoPath(repo.Name), ReadOnly: readOnly})
 	}
-	in.RunID, in.OrganizationID, in.WorkItemID, in.Phase, in.Role = r.ID, r.Org, r.WorkItemID, r.Phase, role
+	in.RunID, in.OrganizationID, in.TaskID, in.Phase, in.Role = r.ID, r.Org, r.TaskID, r.Phase, role
 	in.Model = model
 	in.Image = image
 	if in.Image == "" {
@@ -456,9 +456,9 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 
 // runBranch is where one phase Run's commits are pushed. Every Run has its
 // own, because lux allows a Run's first push only to a branch that does not
-// exist yet; dude then fast-forwards the work item's branch to it.
+// exist yet; dude then fast-forwards the task's branch to it.
 func runBranch(r phaseRun) string {
-	return fmt.Sprintf("dude/%s/run-%s", r.WorkItemID, r.ID)
+	return fmt.Sprintf("dude/%s/run-%s", r.TaskID, r.ID)
 }
 
 // resolveModel: the project's setting for a role, else the organization's.
@@ -663,7 +663,7 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 	raw, _ := json.Marshal(heads)
 	branch := ""
 	if len(heads) > 0 {
-		branch = delivery.BranchFor(r.WorkItemID, r.Attempt)
+		branch = delivery.BranchFor(r.TaskID, r.Attempt)
 	}
 	return true, s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'completed', ended_at = now(), lux_stop_reason = $2,
@@ -677,7 +677,7 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 	})
 }
 
-// publish moves the work item's branch in each repository this Run changed
+// publish moves the task's branch in each repository this Run changed
 // to what it pushed, and works out what changed there. Returns runs.heads:
 // per repository changed, its new commit and changed paths.
 //
@@ -696,7 +696,7 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 	}
 	var repos []delivery.Repository
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) (err error) {
-		repos, err = delivery.WorkItemRepositories(ctx, tx, r.WorkItemID)
+		repos, err = delivery.TaskRepositories(ctx, tx, r.TaskID)
 		return err
 	}); err != nil {
 		return nil, err
@@ -708,14 +708,14 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 
 	heads := map[string]delivery.RunHead{}
 	var gh *forge.GitHub
-	branch := delivery.BranchFor(r.WorkItemID, r.Attempt)
+	branch := delivery.BranchFor(r.TaskID, r.Attempt)
 	for _, res := range push.Results {
 		repo, known := byName[res.Repo]
 		switch {
 		case res.Status == "skipped" || known && repo.Access == "read":
 			continue // cloned for reading; nothing to publish
 		case !known:
-			return nil, fmt.Errorf("lux pushed %s, which this work item does not name", res.Repo)
+			return nil, fmt.Errorf("lux pushed %s, which this task does not name", res.Repo)
 		case res.Status != "pushed" && res.Status != "up-to-date":
 			return nil, fmt.Errorf("push %s %s: %s", res.Repo, res.Status, res.Error)
 		}
@@ -905,18 +905,18 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 		}
 		// Taken back up from a park — whoever resumes it: a person may have
 		// made dude's park their own pause meanwhile.
-		var last, reason, workItemStatus string
-		if err := tx.QueryRow(ctx, `SELECT event_type, COALESCE(payload->>'reason', ''), COALESCE(payload->>'workItemStatus', '')
+		var last, reason, taskStatus string
+		if err := tx.QueryRow(ctx, `SELECT event_type, COALESCE(payload->>'reason', ''), COALESCE(payload->>'taskStatus', '')
 			FROM events WHERE run_id = $1 AND event_type IN ($2, $3) ORDER BY cursor DESC LIMIT 1`,
-			r.ID, evParked, evUnparked).Scan(&last, &reason, &workItemStatus); err != nil || last != evParked {
+			r.ID, evParked, evUnparked).Scan(&last, &reason, &taskStatus); err != nil || last != evParked {
 			if db.IsNotFound(err) {
 				return nil
 			}
 			return err
 		}
-		if workItemStatus != "" {
+		if taskStatus != "" {
 			// The flag its idle park raised, lowered.
-			if _, err := delivery.SetWorkItemStatusTx(ctx, tx, r.Org, r.ProjectID, r.WorkItemID, "awaiting_input", workItemStatus,
+			if _, err := delivery.SetTaskStatusTx(ctx, tx, r.Org, r.ProjectID, r.TaskID, "awaiting_input", taskStatus,
 				"a person resumed the agent"); err != nil {
 				return err
 			}
@@ -951,20 +951,20 @@ func (s *Syncer) requestPause(ctx context.Context, r phaseRun, kind, why string)
 		if err != nil || tag.RowsAffected() == 0 || kind == "repository" {
 			return err
 		}
-		var workItemStatus string
+		var taskStatus string
 		if kind == "idle" {
 			// Raised for a person to look at, from whatever it was (running,
 			// in review); put back when the Run is taken up again.
-			if err := tx.QueryRow(ctx, `SELECT status::text FROM work_items WHERE id = $1`, r.WorkItemID).Scan(&workItemStatus); err != nil {
+			if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1`, r.TaskID).Scan(&taskStatus); err != nil {
 				return err
 			}
-			if _, err := delivery.SetWorkItemStatusTx(ctx, tx, r.Org, r.ProjectID, r.WorkItemID, "", "awaiting_input",
+			if _, err := delivery.SetTaskStatusTx(ctx, tx, r.Org, r.ProjectID, r.TaskID, "", "awaiting_input",
 				"the agent went quiet"); err != nil {
 				return err
 			}
 		}
 		return s.event(ctx, tx, r, evParked, ledger.ActorSystem,
-			map[string]any{"reason": kind, "message": why, "workItemStatus": db.Nullable(workItemStatus)})
+			map[string]any{"reason": kind, "message": why, "taskStatus": db.Nullable(taskStatus)})
 	})
 }
 
@@ -979,7 +979,7 @@ func (s *Syncer) nudge(ctx context.Context, r phaseRun) error {
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
-		id, _, err := delivery.QueueDirective(ctx, tx, delivery.RunRef{Org: r.Org, ProjectID: r.ProjectID, WorkItemID: r.WorkItemID, RunID: r.ID},
+		id, _, err := delivery.QueueDirective(ctx, tx, delivery.RunRef{Org: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, RunID: r.ID},
 			delivery.Directive{Text: idleNudge, Scope: "turn", Interrupt: true})
 		if err != nil {
 			return err
@@ -989,10 +989,10 @@ func (s *Syncer) nudge(ctx context.Context, r phaseRun) error {
 }
 
 // addedRepositories puts on the resume the approved repositories the lux
-// Run does not have yet: each as the spec has it (the work item names it
+// Run does not have yet: each as the spec has it (the task names it
 // now). The resume's request id is the first request's; lux's git.clone for
 // each carries it, and settles the requests (translate.go). An approval the
-// spec cannot carry — the work item no longer names it, or names two by that
+// spec cannot carry — the task no longer names it, or names two by that
 // name — fails, rather than pausing the Run again and again.
 func (s *Syncer) addedRepositories(ctx context.Context, r phaseRun, spec lux.Spec, in *lux.ResumeInput) error {
 	if !r.RepoApproved {
@@ -1043,7 +1043,7 @@ func (s *Syncer) addedRepositories(ctx context.Context, r phaseRun, spec lux.Spe
 	if len(failed) > 0 {
 		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 			_, err := tx.Exec(ctx, `UPDATE repository_requests SET status = 'failed',
-				error = 'the work item no longer names it, or names another repository by that name'
+				error = 'the task no longer names it, or names another repository by that name'
 				WHERE id = ANY($1) AND status = 'approved'`, failed)
 			return err
 		}); err != nil {
@@ -1185,8 +1185,8 @@ func (s *Syncer) retryLater(ctx context.Context, r phaseRun, cause error) error 
 
 func (s *Syncer) event(ctx context.Context, tx pgx.Tx, r phaseRun, typ, actor string, payload map[string]any) error {
 	_, err := ledger.Append(ctx, tx, ledger.Event{
-		Type: typ, OrganizationID: r.Org, ProjectID: r.ProjectID, WorkItemID: r.WorkItemID, RunID: r.ID,
-		ActorType: actor, ActorID: r.ID, Source: ledger.SourceRunner, CorrelationID: r.WorkItemID, Payload: payload,
+		Type: typ, OrganizationID: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, RunID: r.ID,
+		ActorType: actor, ActorID: r.ID, Source: ledger.SourceRunner, CorrelationID: r.TaskID, Payload: payload,
 	})
 	return err
 }
@@ -1202,9 +1202,9 @@ func (s *Syncer) event(ctx context.Context, tx pgx.Tx, r phaseRun, typ, actor st
 func RecordFindings(ctx context.Context, database *db.DB, org, runID string, findings []delivery.Finding,
 	verdicts map[string]bool) error {
 	return database.InOrg(ctx, org, func(tx pgx.Tx) error {
-		var projectID, workItemID, phase string
-		if err := tx.QueryRow(ctx, `SELECT project_id, work_item_id, phase::text FROM runs WHERE id = $1`, runID).
-			Scan(&projectID, &workItemID, &phase); err != nil {
+		var projectID, taskID, phase string
+		if err := tx.QueryRow(ctx, `SELECT project_id, task_id, phase::text FROM runs WHERE id = $1`, runID).
+			Scan(&projectID, &taskID, &phase); err != nil {
 			return err
 		}
 		// Only a review or test Run may report: a fixer reporting findings
@@ -1231,17 +1231,17 @@ func RecordFindings(ctx context.Context, database *db.DB, org, runID string, fin
 		counts := map[string]int{}
 		for _, f := range findings {
 			counts[f.Severity]++
-			if _, err := tx.Exec(ctx, `INSERT INTO review_findings (id, organization_id, work_item_id, run_id, category,
+			if _, err := tx.Exec(ctx, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category,
 				severity, repo, file, line, title, description, suggested_fix)
 				VALUES ($1, $2, $3, $4, $5, $6::finding_severity, $7, $8, $9, $10, $11, $12)`,
-				ids.New(ids.Finding), org, workItemID, runID, f.Category, f.Severity,
+				ids.New(ids.Finding), org, taskID, runID, f.Category, f.Severity,
 				db.Nullable(f.Repo), db.Nullable(f.File), nullableInt(f.Line), f.Title, f.Description, f.SuggestedFix); err != nil {
 				return err
 			}
 		}
 		_, err := ledger.Append(ctx, tx, ledger.Event{
-			Type: delivery.EvReviewCompleted, OrganizationID: org, ProjectID: projectID, WorkItemID: workItemID, RunID: runID,
-			ActorType: ledger.ActorAgent, ActorID: runID, Source: ledger.SourceRunner, CorrelationID: workItemID,
+			Type: delivery.EvReviewCompleted, OrganizationID: org, ProjectID: projectID, TaskID: taskID, RunID: runID,
+			ActorType: ledger.ActorAgent, ActorID: runID, Source: ledger.SourceRunner, CorrelationID: taskID,
 			Payload: map[string]any{"phase": phase, "count": len(findings), "bySeverity": counts},
 		})
 		return err
@@ -1257,14 +1257,14 @@ func NotifyFinished(ctx context.Context, database *db.DB, signal func(ctx contex
 	var runs []finished
 	if err := database.InSystem(ctx, "phase-notifier", func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.status::text, w.id FROM runs r
-			JOIN workflow_runs w ON w.work_item_id = r.work_item_id AND w.organization_id = r.organization_id
+			JOIN workflow_runs w ON w.task_id = r.task_id AND w.organization_id = r.organization_id
 			WHERE r.phase IS NOT NULL AND r.status IN ('completed', 'failed', 'aborted')
 			  AND r.phase_notified_at IS NULL AND w.status = 'waiting'
 			  -- Work that changes no code is judged by what it published, so
 			  -- that waits for lux to report it. Work on code is judged by its
 			  -- commits, and does not wait on lux's snapshot upload.
-			  AND (r.artifacts_due_at IS NULL OR EXISTS (SELECT 1 FROM work_item_repositories wr
-			       WHERE wr.work_item_id = r.work_item_id AND wr.access = 'write'))
+			  AND (r.artifacts_due_at IS NULL OR EXISTS (SELECT 1 FROM task_repositories wr
+			       WHERE wr.task_id = r.task_id AND wr.access = 'write'))
 			ORDER BY r.ended_at LIMIT 50`)
 		if err != nil {
 			return err

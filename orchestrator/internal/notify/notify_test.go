@@ -113,9 +113,9 @@ func TestAnAskReachesEveryBrowserOfItsOrganizationOnce(t *testing.T) {
 		}
 	}
 	exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ($1, $2, 'P', $1, 'TEXT')`, "prj_"+org, org)
-	exec(`INSERT INTO work_items (id, organization_id, project_id, number, title) VALUES ($1, $2, $3, 19, 'Count sentences')`,
+	exec(`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES ($1, $2, $3, 19, 'Count sentences')`,
 		"wi_"+org, org, "prj_"+org)
-	exec(`INSERT INTO runs (id, organization_id, project_id, work_item_id, attempt, status, phase, role)
+	exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role)
 		VALUES ($1, $2, $3, $4, 1, 'running', 'implement', 'implementer')`, "run_"+org, org, "prj_"+org, "wi_"+org)
 
 	mine, stale, theirs := newBrowser(t), newBrowser(t), newBrowser(t)
@@ -143,10 +143,10 @@ func TestAnAskReachesEveryBrowserOfItsOrganizationOnce(t *testing.T) {
 	}
 	// Only what is asked from now on: other tests share the database.
 	exec(`UPDATE push_config SET after_cursor = (SELECT COALESCE(max(cursor), 0) FROM events)`)
-	exec(`INSERT INTO events (id, organization_id, event_type, project_id, work_item_id, run_id, actor_type, actor_id, source, payload)
+	exec(`INSERT INTO events (id, organization_id, event_type, project_id, task_id, run_id, actor_type, actor_id, source, payload)
 		VALUES ($1, $2, 'question.asked', $3, $4, $5, 'agent', $5, 'orchestrator', $6)`,
 		"evt_q_"+org, org, "prj_"+org, "wi_"+org, "run_"+org, `{"kind":"agent","prompt":"Does an ellipsis end a sentence?"}`)
-	exec(`INSERT INTO events (id, organization_id, event_type, project_id, work_item_id, run_id, actor_type, actor_id, source, payload)
+	exec(`INSERT INTO events (id, organization_id, event_type, project_id, task_id, run_id, actor_type, actor_id, source, payload)
 		VALUES ($1, $2, 'agent.message', $3, $4, $5, 'agent', $5, 'runner', '{"text":"thinking"}')`,
 		"evt_m_"+org, org, "prj_"+org, "wi_"+org, "run_"+org)
 

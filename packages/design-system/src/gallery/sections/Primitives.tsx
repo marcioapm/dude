@@ -39,7 +39,7 @@ const moveToEpic: RowMenuItem = {
     { id: "none", label: "No epic" },
   ],
 };
-const workItemMenu: ReadonlyArray<RowMenuItem> = [
+const taskMenu: ReadonlyArray<RowMenuItem> = [
   { id: "edit", label: "Edit", icon: "edit", shortcut: "E" },
   moveToEpic,
   { id: "split", label: "Split", icon: "simplifier" },
@@ -49,7 +49,7 @@ const workItemMenu: ReadonlyArray<RowMenuItem> = [
 ];
 const epicMenu: ReadonlyArray<RowMenuItem> = [
   { id: "edit", label: "Edit", icon: "edit" },
-  { id: "new", label: "New work item", icon: "plus", shortcut: "N" },
+  { id: "new", label: "New task", icon: "plus", shortcut: "N" },
   { kind: "separator" },
   { id: "up", label: "Move up", icon: "arrow-up", disabled: true, disabledReason: "Already first" },
   { id: "down", label: "Move down", icon: "arrow-down" },
@@ -59,7 +59,7 @@ const epicMenu: ReadonlyArray<RowMenuItem> = [
 const projectMenu: ReadonlyArray<RowMenuItem> = [
   { id: "settings", label: "Settings", icon: "settings", shortcut: "," },
   { id: "new-epic", label: "New epic", icon: "layers" },
-  { id: "new", label: "New work item", icon: "plus" },
+  { id: "new", label: "New task", icon: "plus" },
   { kind: "separator" },
   { id: "archive", label: "Archive", icon: "folder", tone: "danger" },
 ];
@@ -161,7 +161,7 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
             <Row style={{ gap: 24 }}>
               <States
                 items={[
-                  ["work item", <RowMenu items={workItemMenu} label="Actions for CP-41" />],
+                  ["task", <RowMenu items={taskMenu} label="Actions for CP-41" />],
                   ["epic", <RowMenu items={epicMenu} label="Actions for OAuth migration" />],
                   ["project", <RowMenu items={projectMenu} label="Actions for Customer Portal" size="md" />],
                   ["custom trigger", <RowMenu items={epicMenu} label="Epic actions" trigger={<Button size="sm" trailingIcon="chevron-down">Edit epic</Button>} />],
@@ -174,7 +174,7 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
             <Row>
               <Dialog
                 trigger={<Button>Open dialog with a menu</Button>}
-                title="Edit work item"
+                title="Edit task"
                 description="The menu must open above the dialog, not beneath its scrim."
                 footer={
                   <DialogClose asChild>
@@ -185,7 +185,7 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
                 <Row>
                   <Input label="Title" defaultValue="Add PKCE to the login flow" style={{ flex: 1 }} />
                   <span style={{ alignSelf: "flex-end" }}>
-                    <RowMenu items={workItemMenu} label="Actions for CP-41" size="md" />
+                    <RowMenu items={taskMenu} label="Actions for CP-41" size="md" />
                   </span>
                 </Row>
               </Dialog>
@@ -306,7 +306,7 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
         <Panes mode={mode}>
           <Col>
             <Tabs defaultValue="timeline">
-              <TabList aria-label="Work item sections">
+              <TabList aria-label="Task sections">
                 <Tab value="overview">Overview</Tab>
                 <Tab value="timeline" icon="list" count={128}>
                   Timeline
@@ -386,7 +386,7 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
 
-      <Block id="p-page" title="Page, PageHeader, Section" note="The frame of a page outside the board and the transcript — a work item, settings, an inbox. The page keeps to --ds-measure-page; its header says where it is (a Breadcrumb, never a Back button), what it is, and what can be done; sections are titled in small caps. All spacing is the density's panel gap.">
+      <Block id="p-page" title="Page, PageHeader, Section" note="The frame of a page outside the board and the transcript — a task, settings, an inbox. The page keeps to --ds-measure-page; its header says where it is (a Breadcrumb, never a Back button), what it is, and what can be done; sections are titled in small caps. All spacing is the density's panel gap.">
         <Panes mode={mode} surface>
           <Page>
             <PageHeader
@@ -535,7 +535,7 @@ function SortableTableDemo() {
           </Th>
           <Th width={90}>Run</Th>
           <Th sort={sort.key === "item" ? sort.dir : null} onSort={(dir) => setSort({ key: "item", dir })}>
-            Work item
+            Task
           </Th>
           <Th width={120}>Status</Th>
           <Th align="right" width={60}>
@@ -607,7 +607,7 @@ function MenuRowDemo() {
         <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Add PKCE to the login flow</span>
         <span className={styles["menuRowSlot"]} data-open={open ? "true" : undefined}>
           <RowMenu
-            items={workItemMenu}
+            items={taskMenu}
             label="Actions for CP-41"
             trigger={<RowMenuTrigger label="Actions for CP-41" />}
             open={open}
