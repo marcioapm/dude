@@ -82,10 +82,9 @@ mode.
    what is new, each file in a transaction, and is safe to run again. It
    refuses a migration whose file changed after it was applied.
    `dude-migrate --status` lists applied and pending migrations.
-3. Switch to the new release, then restart `dude-orchestrator` and
-   `dude-backend`.
-4. Set `DUDE_AGENT_IMAGE` to the new `runtime-image.txt` before restarting
-   the orchestrator. A Run that has started keeps its image across resumes.
+3. Switch to the new release and set `DUDE_AGENT_IMAGE` to the new
+   `runtime-image.txt`, then restart `dude-orchestrator` and `dude-backend`.
+   A Run that has started keeps its image across resumes.
 
 Between steps 2 and 3 the old processes run against the new schema.
 
