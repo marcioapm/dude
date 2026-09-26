@@ -1,9 +1,10 @@
 # dude's mascot
 
-`dude.png` is the source: 1254×1254, transparent, flat navy `#062753`,
-cream `#fbf5e6` and orange `#ff6b1a`, generated with ChatGPT (26 Sep 2026).
+`dude.png` is the source: 1254×1254, transparent, five flat colours — ink
+`#010d22`, navy `#1e3a66`, cream `#fbf5e6`, orange `#fb5f02` and a lens
+glint `#ebb68e` — generated with ChatGPT (26 Sep 2026).
 
-`dude.svg` is it traced (`trace.py`: potrace, one layer per colour), and the
+`dude.svg` is it traced (`python trace.py dude.png out.svg`: potrace, one layer per colour), and the
 mark everything is made from. `dude-outlined.svg` adds a cream outline, for
 dark backgrounds, where his navy hair would vanish.
 
