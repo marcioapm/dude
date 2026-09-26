@@ -78,12 +78,8 @@ export function RunScreen({ client, runId, title, breadcrumb }: RunScreenProps) 
     let cancelled = false;
     client
       .getRun(runId)
-      .then(async (fresh) => {
-        // Read together, so the asks never render as someone's they are not.
-        const [task, people] = await Promise.all([client.getTask(fresh.taskId), client.listPeople()]);
-        if (cancelled) return;
-        setRun(fresh);
-        setDriver({ owner: task.owner, you: people.you });
+      .then((fresh) => {
+        if (!cancelled) setRun(fresh);
       })
       .catch((err: unknown) => {
         if (!cancelled) setProblem(err instanceof Error ? err.message : String(err));
@@ -92,6 +88,23 @@ export function RunScreen({ client, runId, title, breadcrumb }: RunScreenProps) 
       cancelled = true;
     };
   }, [client, runId, statusEventCount]);
+
+  // Who drives the task is read once per task, not on every status change,
+  // and apart from the Run: failing to learn it only leaves the asks
+  // answerable here, which the orchestrator still checks.
+  const taskId = run?.taskId;
+  useEffect(() => {
+    if (!taskId) return;
+    let cancelled = false;
+    Promise.all([client.getTask(taskId), client.listPeople()])
+      .then(([task, people]) => {
+        if (!cancelled) setDriver({ owner: task.owner, you: people.you });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [client, taskId]);
 
   /*
    * The projection is folded forward, not rebuilt. `apply` skips events at or

@@ -41,11 +41,20 @@ type Syncer struct {
 	// owner, so their comments cannot be filtered without also filtering their
 	// reviews; only explicitly configured bot accounts are skipped.
 	FactoryLogins []string
+	// How long a new head of a pull request that has had CI may read as
+	// having none before that is believed: CI registering on a push takes
+	// a moment, and some CI reports late. Zero means DefaultCIGrace.
+	CIGrace time.Duration
 }
+
+// DefaultCIGrace: how long CI may take to show up on a new head.
+const DefaultCIGrace = 10 * time.Minute
 
 type tracked struct {
 	ID, ProjectID, TaskID, RunID, State, Checks, Review, HeadSHA, RepoURL, RepoName string
 	Number                                                                          int
+	HadCI                                                                           bool
+	HeadSeenAt                                                                      *time.Time
 	FeedbackCursor                                                                  *time.Time
 }
 
@@ -55,10 +64,11 @@ func (s *Syncer) Sync(ctx context.Context, org, prID string) error {
 	var pr tracked
 	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `SELECT pr.id, pr.project_id, pr.task_id, COALESCE(pr.run_id, ''), pr.state::text,
-			pr.checks::text, pr.review::text, COALESCE(pr.head_sha, ''), r.url, r.name, pr.number, pr.feedback_cursor
+			pr.checks::text, pr.review::text, COALESCE(pr.head_sha, ''), r.url, r.name, pr.number, pr.feedback_cursor,
+			pr.had_ci, pr.head_seen_at
 			FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id WHERE pr.id = $1`, prID).
 			Scan(&pr.ID, &pr.ProjectID, &pr.TaskID, &pr.RunID, &pr.State, &pr.Checks, &pr.Review, &pr.HeadSHA,
-				&pr.RepoURL, &pr.RepoName, &pr.Number, &pr.FeedbackCursor)
+				&pr.RepoURL, &pr.RepoName, &pr.Number, &pr.FeedbackCursor, &pr.HadCI, &pr.HeadSeenAt)
 	}); err != nil {
 		return err
 	}
@@ -73,11 +83,20 @@ func (s *Syncer) Sync(ctx context.Context, org, prID string) error {
 		return err
 	}
 	// No CI reports unknown, and so does a new head before CI has
-	// registered on it: on the first sight of a new head of a pull request
-	// that has had CI, unknown is CI yet to start, not a green light. Seen
-	// again on the same head it is what it says — a commit CI skips (path
-	// filters, [skip ci]) — or the pull request would wait on it forever.
-	if status.Checks == forge.ChecksUnknown && pr.Checks != forge.ChecksUnknown && status.HeadSHA != pr.HeadSHA {
+	// registered on it. On a pull request that has had CI, a head within
+	// its grace is CI yet to start, not a green light; past it, unknown is
+	// what it says — a commit CI skips (path filters, [skip ci]) — or the
+	// pull request would wait on it forever.
+	headSeenAt := time.Now()
+	if status.HeadSHA == pr.HeadSHA && pr.HeadSeenAt != nil {
+		headSeenAt = *pr.HeadSeenAt
+	}
+	grace := s.CIGrace
+	if grace == 0 {
+		grace = DefaultCIGrace
+	}
+	hadCI := pr.HadCI || status.Checks != forge.ChecksUnknown
+	if status.Checks == forge.ChecksUnknown && pr.HadCI && time.Since(headSeenAt) < grace {
 		status.Checks = forge.ChecksPending
 	}
 	since := ""
@@ -116,9 +135,10 @@ func (s *Syncer) Sync(ctx context.Context, org, prID string) error {
 		}
 		if _, err := tx.Exec(ctx, `UPDATE pull_requests SET state = $2::pull_request_state, checks = $3::check_state,
 			review = $4::review_state, head_sha = $5, last_polled_at = now(), feedback_cursor = $6, updated_at = now(),
+			had_ci = $8, head_seen_at = $7,
 			merged_at = CASE WHEN $2 = 'merged' THEN COALESCE(merged_at, now()) ELSE merged_at END,
 			closed_at = CASE WHEN $2 = 'closed' THEN COALESCE(closed_at, now()) ELSE closed_at END
-			WHERE id = $1`, pr.ID, status.State, status.Checks, status.Review, status.HeadSHA, cursor); err != nil {
+			WHERE id = $1`, pr.ID, status.State, status.Checks, status.Review, status.HeadSHA, cursor, headSeenAt, hadCI); err != nil {
 			return err
 		}
 

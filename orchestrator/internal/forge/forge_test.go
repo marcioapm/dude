@@ -249,3 +249,26 @@ func TestEveryPageOfCheckRunsCounts(t *testing.T) {
 		t.Fatalf("status %+v, err %v", st, err)
 	}
 }
+
+// A rate limit is a 403 too, and not a refusal: it fails the sync, to be
+// tried again, rather than reading as no check runs.
+func TestARateLimitOnCheckRunsFailsTheSync(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/acme/api/pulls/1":
+			fmt.Fprint(w, `{"number":1,"state":"open","head":{"sha":"abc"}}`)
+		case "/repos/acme/api/commits/abc/status":
+			fmt.Fprint(w, `{"state":"pending","total_count":0}`)
+		case "/repos/acme/api/commits/abc/check-runs":
+			w.WriteHeader(403)
+			fmt.Fprint(w, `{"message":"API rate limit exceeded for user ID 1."}`)
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+	_, err := NewGitHub(Credential{Auth: "pat", Secret: "x", APIBaseURL: srv.URL}).PullRequest(context.Background(), "acme/api", 1)
+	if err == nil || !Transient(err) {
+		t.Fatalf("err = %v, want a transient error", err)
+	}
+}

@@ -1987,10 +1987,12 @@ func TestAFixIsNotReadyUntilItsOwnChecksPass(t *testing.T) {
 }
 
 // A fix CI does not run on (a docs-only change under path filters, or
-// [skip ci]) reads unknown: held as pending on first sight, in case CI is
-// yet to start, but not forever.
-func TestAFixCISkipsIsReadyOnceSeenAgain(t *testing.T) {
+// [skip ci]) reads unknown, as a head CI has not reached yet does. Within
+// the grace it is CI yet to start, however often it is synced; past it,
+// no CI.
+func TestAFixCISkipsIsReadyAfterTheGrace(t *testing.T) {
 	w := newWorld(t)
+	w.prs.CIGrace = time.Hour
 	wi := w.task()
 	w.deliver(wi)
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
@@ -2005,7 +2007,19 @@ func TestAFixCISkipsIsReadyOnceSeenAgain(t *testing.T) {
 		return w.taskStatus(wi) == "running"
 	})
 	w.gh.SetChecks("none")
-	w.until("ready again, without CI on the fix", func() bool {
+	w.until("the fix in review", func() bool {
+		_, _ = w.prs.Reconcile(context.Background(), 0)
+		return w.taskStatus(wi) == "review"
+	})
+	for range 5 {
+		_, _ = w.prs.Reconcile(context.Background(), 0)
+		w.pump()
+	}
+	if w.taskStatus(wi) != "review" {
+		t.Fatalf("%s within the grace, before CI could show up", w.taskStatus(wi))
+	}
+	w.prs.CIGrace = time.Millisecond
+	w.until("ready, the fix having no CI", func() bool {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
 		return w.taskStatus(wi) == "ready_to_merge"
 	})
