@@ -5,7 +5,10 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
+
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 var update = flag.Bool("update", false, "rewrite testdata/*.golden from the current buildSpec")
@@ -58,5 +61,28 @@ func TestTheSpecIsTheGoldenOne(t *testing.T) {
 				t.Errorf("spec differs from %s:\n got: %s\nwant: %s", path, got, want)
 			}
 		})
+	}
+}
+
+// A login adds image.registryAuth and its secret, and changes nothing else.
+func TestARegistryLoginAddsRegistryAuthAndItsSecretOnly(t *testing.T) {
+	for _, model := range []string{"llm/impl", "fake/scripted"} {
+		c, in := goldenInput(model)
+		without := buildSpec(c, in)
+		in.Registry = &registryLogin{Registry: "registry.example", Credential: "AWS:pw-golden"}
+		with := buildSpec(c, in)
+
+		want := []lux.RegistryAuth{{Registry: "registry.example", Secret: "DUDE_REGISTRY_AUTH"}}
+		if !reflect.DeepEqual(with.Image.RegistryAuth, want) {
+			t.Errorf("%s: registryAuth = %+v, want %+v", model, with.Image.RegistryAuth, want)
+		}
+		added := []lux.Secret{{Name: "DUDE_REGISTRY_AUTH", Value: "AWS:pw-golden"}}
+		if !reflect.DeepEqual(with.Secrets, append(added, without.Secrets...)) {
+			t.Errorf("%s: secrets = %+v, want the login's and then %+v", model, with.Secrets, without.Secrets)
+		}
+		with.Image.RegistryAuth, with.Secrets = nil, without.Secrets
+		if !reflect.DeepEqual(with, without) {
+			t.Errorf("%s: the login changed more than image.registryAuth and secrets", model)
+		}
 	}
 }

@@ -132,7 +132,15 @@ type specInput struct {
 	ForgeToken string
 	// The Run's token for dude's tools; "" gives it none.
 	ToolsToken string
+	// The login for Image's registry; nil when it needs none.
+	Registry *registryLogin
 }
+
+type registryLogin struct{ Registry, Credential string }
+
+// registrySecret holds the registry login. Runner-only in lux: named by
+// image.registryAuth, it never enters the container.
+const registrySecret = "DUDE_REGISTRY_AUTH"
 
 type specRepo struct {
 	Name, URL, Ref string
@@ -205,6 +213,10 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 	}
 	if in.Effort != "" {
 		spec.Labels["dude.effort"] = in.Effort
+	}
+	if l := in.Registry; l != nil {
+		spec.Image.RegistryAuth = []lux.RegistryAuth{{Registry: l.Registry, Secret: registrySecret}}
+		spec.Secrets = append(spec.Secrets, lux.Secret{Name: registrySecret, Value: l.Credential})
 	}
 	if len(in.Repos) > 0 || in.PushBranch != "" {
 		spec.Git = &lux.Git{}
