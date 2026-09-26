@@ -357,6 +357,9 @@ class FakeGitHub:
                     return self._send(200, {"files": files})
                 if m := re.fullmatch(rf"{prefix}/pulls/(\d+)", path):
                     return self._send(200, self._pull_json(self.github.pulls[int(m[1])]))
+                if re.fullmatch(rf"{prefix}/commits/[^/]+/check-runs", path):
+                    # No GitHub Actions in the fixture either.
+                    return self._send(200, {"total_count": 0, "check_runs": []})
                 if re.fullmatch(rf"{prefix}/commits/[^/]+/status", path):
                     # No CI in the fixture: GitHub reports zero statuses.
                     return self._send(200, {"state": "pending", "total_count": 0})

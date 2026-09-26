@@ -254,8 +254,10 @@ func (g *GitHub) PullRequest(ctx context.Context, slug string, number int) (Stat
 	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d", slug, number), nil, &p); err != nil {
 		return Status{}, err
 	}
-	// The combined status rolls up both the legacy status API and checks,
-	// which is the only reading right whichever one a project's CI uses.
+	// CI reports two ways, and a project may use either or both: commit
+	// statuses (the combined status) and check runs (GitHub Actions, and
+	// apps). The combined status does not include check runs, so both are
+	// read, and the worse of the two is the pull request's.
 	var combined struct {
 		State      string `json:"state"`
 		TotalCount int    `json:"total_count"`
@@ -263,11 +265,48 @@ func (g *GitHub) PullRequest(ctx context.Context, slug string, number int) (Stat
 	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/commits/%s/status", slug, p.Head.SHA), nil, &combined); err != nil {
 		return Status{}, err
 	}
+	var runs struct {
+		TotalCount int `json:"total_count"`
+		CheckRuns  []struct {
+			Status     string `json:"status"`
+			Conclusion string `json:"conclusion"`
+		} `json:"check_runs"`
+	}
+	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/commits/%s/check-runs?per_page=100", slug, p.Head.SHA), nil, &runs); err != nil {
+		return Status{}, err
+	}
 	var reviews []ghReview
 	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d/reviews", slug, number), nil, &reviews); err != nil {
 		return Status{}, err
 	}
-	return Status{PullRequestRef: p.ref(), Checks: checkState(combined.State, combined.TotalCount), Review: reviewState(reviews)}, nil
+	checks := checkState(combined.State, combined.TotalCount)
+	for _, r := range runs.CheckRuns {
+		checks = worseChecks(checks, checkRunState(r.Status, r.Conclusion))
+	}
+	return Status{PullRequestRef: p.ref(), Checks: checks, Review: reviewState(reviews)}, nil
+}
+
+// checkRunState reads one check run: still running is pending; finished,
+// its conclusion decides. Neutral and skipped runs block nothing.
+func checkRunState(status, conclusion string) string {
+	if status != "completed" {
+		return ChecksPending
+	}
+	switch conclusion {
+	case "success", "neutral", "skipped":
+		return ChecksPassing
+	}
+	return ChecksFailing
+}
+
+// worseChecks combines two readings: failing over pending over passing
+// over unknown (no CI at all).
+func worseChecks(a, b string) string {
+	rank := map[string]int{ChecksUnknown: 0, ChecksPassing: 1, ChecksPending: 2, ChecksFailing: 3}
+	if rank[b] > rank[a] {
+		return b
+	}
+	return a
 }
 
 type ghComment struct {

@@ -45,8 +45,8 @@ type Syncer struct {
 
 type tracked struct {
 	ID, ProjectID, TaskID, RunID, State, Checks, Review, RepoURL, RepoName string
-	Number                                                                     int
-	FeedbackCursor                                                             *time.Time
+	Number                                                                 int
+	FeedbackCursor                                                         *time.Time
 }
 
 // Sync reads one PR from GitHub, records what changed, and signals the
@@ -83,6 +83,7 @@ func (s *Syncer) Sync(ctx context.Context, org, prID string) error {
 
 	var fresh []forge.Feedback
 	var workflowRunID string
+	var recorded []string // the events this sync appended: what changed
 	err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		// The cursor narrows the query; the ledger decides what is new.
 		// Feedback at the cursor's own second comes back every time, because
@@ -146,13 +147,15 @@ func (s *Syncer) Sync(ctx context.Context, org, prID string) error {
 		}
 		for _, c := range changes {
 			c.payload["number"], c.payload["repo"] = pr.Number, pr.RepoName
-			if _, err := ledger.Append(ctx, tx, ledger.Event{
+			id, err := ledger.Append(ctx, tx, ledger.Event{
 				Type: c.typ, OrganizationID: org, ProjectID: pr.ProjectID, TaskID: pr.TaskID, RunID: pr.RunID,
 				ActorType: ledger.ActorSystem, ActorID: "forge", Source: ledger.SourceGitHub,
 				CorrelationID: pr.TaskID, Payload: c.payload,
-			}); err != nil {
+			})
+			if err != nil {
 				return err
 			}
+			recorded = append(recorded, id)
 		}
 		err := tx.QueryRow(ctx, `SELECT id FROM workflow_runs WHERE task_id = $1 AND status IN ('running', 'waiting')
 			LIMIT 1`, pr.TaskID).Scan(&workflowRunID)
@@ -179,7 +182,15 @@ func (s *Syncer) Sync(ctx context.Context, org, prID string) error {
 	// One signal per distinct change, however many deliveries report it.
 	// The head is part of it: checks failing again after a fix is a new
 	// failure, and must not be taken for the one already handled.
-	key := fmt.Sprintf("pr:%s:%s:%s:%s:%s:%s", pr.ID, signal.Kind, strings.Join(ids, ","), status.Checks, status.State, status.HeadSHA)
+	key := fmt.Sprintf("pr:%s:%s:%s:%s:%s:%s", pr.ID, signal.Kind, strings.Join(ids, ","), status.Checks, status.State,
+		status.HeadSHA)
+	// Readiness can come and go on the same head (approved, dismissed,
+	// approved again): each time is its own change, recorded as its own
+	// event. A second delivery of the same change records none, and is
+	// not classified as a change at all.
+	if signal.Kind == "readiness" {
+		key += ":" + strings.Join(recorded, ",")
+	}
 	return s.Signal(ctx, org, workflowRunID, delivery.SignalPRFeedback, signal, key)
 }
 

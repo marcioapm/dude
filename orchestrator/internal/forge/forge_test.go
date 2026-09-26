@@ -161,3 +161,21 @@ func TestAlreadyExistsIsOnlyTheDuplicatePR(t *testing.T) {
 		t.Error("another validation error was taken for a duplicate PR")
 	}
 }
+
+func TestCheckRunsCountAndTheWorstWins(t *testing.T) {
+	for _, c := range []struct{ status, conclusion, want string }{
+		{"queued", "", ChecksPending}, {"in_progress", "", ChecksPending},
+		{"completed", "success", ChecksPassing}, {"completed", "skipped", ChecksPassing},
+		{"completed", "neutral", ChecksPassing}, {"completed", "failure", ChecksFailing},
+		{"completed", "cancelled", ChecksFailing}, {"completed", "timed_out", ChecksFailing},
+	} {
+		if got := checkRunState(c.status, c.conclusion); got != c.want {
+			t.Errorf("%s/%s = %s, want %s", c.status, c.conclusion, got, c.want)
+		}
+	}
+	if worseChecks(ChecksUnknown, ChecksPassing) != ChecksPassing ||
+		worseChecks(ChecksPassing, ChecksPending) != ChecksPending ||
+		worseChecks(ChecksFailing, ChecksPending) != ChecksFailing {
+		t.Error("worseChecks ranks wrong")
+	}
+}

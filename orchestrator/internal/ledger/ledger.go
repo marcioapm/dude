@@ -35,7 +35,7 @@ type Event struct {
 	Type           string
 	OrganizationID string
 	ProjectID      string
-	TaskID     string
+	TaskID         string
 	RunID          string
 	SessionID      string
 	WorkflowRunID  string
