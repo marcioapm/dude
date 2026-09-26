@@ -22,6 +22,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
+	"github.com/marciomartins/dude/orchestrator/internal/phases"
 	"github.com/marciomartins/dude/orchestrator/internal/registry"
 )
 
@@ -313,6 +314,75 @@ func TestARunStartedWithoutALoginResumesWithout(t *testing.T) {
 	w.pauseAndResume(wi)
 	if _, ok := secretValue(w.lux.Runs()[0].ResumeSecrets[0], "DUDE_REGISTRY_AUTH"); ok || len(api.tokens()) != 0 {
 		t.Errorf("a login was sent to resume a Run started without one")
+	}
+}
+
+// restart replaces the world's syncer with a new one, as an orchestrator
+// restarted with another DUDE_REGISTRY_AUTH would build: same database and
+// lux, provider p (nil for none), logging to the returned buffer.
+func (w *world) restart(p registry.Provider) *bytes.Buffer {
+	w.t.Helper()
+	old := w.syncer
+	old.Stop()
+	var logs bytes.Buffer
+	w.syncer = &phases.Syncer{DB: old.DB, Lux: old.Lux, Forges: old.Forges, Agent: old.Agent, Registry: p,
+		Log: slog.New(slog.NewTextHandler(&logs, nil)), ParkAfter: old.ParkAfter, IdleAfter: old.IdleAfter}
+	w.t.Cleanup(w.syncer.Stop)
+	return &logs
+}
+
+// A Run started with a login, parked, and resumed by an orchestrator that
+// cannot supply that login (logins turned off, or another registry's) is
+// not resumed and not failed: it stays paused, says which login it waits
+// for, and resumes with a fresh one once that login is configured again.
+func TestARunWaitsForTheLoginItWasStartedWith(t *testing.T) {
+	ghcr, err := registry.NewStatic("ghcr.io", "acme-bot:ghp_registry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, restarted := range map[string]registry.Provider{
+		"logins turned off":  nil,
+		"another registry's": ghcr,
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newWorld(t)
+			api := w.withECR()
+			w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+			wi := w.task()
+			w.deliver(wi)
+			var runID string
+			w.until("the agent to be working", func() bool {
+				_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND status = 'running'`, wi).Scan(&runID)
+				return runID != ""
+			})
+			w.call("/internal/runs/"+runID+"/pause", map[string]any{})
+			w.until("lux to stop it", func() bool { return w.lux.Runs()[0].State == "stopped" })
+
+			logs := w.restart(restarted)
+			w.call("/internal/runs/"+runID+"/resume", map[string]any{})
+			w.until("the resume to be held back", func() bool {
+				return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND next_attempt_at IS NOT NULL`, runID) == 1
+			})
+			r := w.lux.Runs()[0]
+			if r.Resumed != 0 {
+				t.Fatalf("lux was asked to resume a Run without its login (%d resumes)", r.Resumed)
+			}
+			if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND control = 'resume'`, runID); n != 1 {
+				t.Fatalf("the Run is no longer paused awaiting its resume")
+			}
+			if got := logs.String(); !strings.Contains(got, ecrRegistry) || !strings.Contains(got, "DUDE_REGISTRY_AUTH") {
+				t.Errorf("the log does not say which login to restore:\n%s", got)
+			}
+
+			api.advance(11 * time.Hour)
+			w.restart(registry.NewECR(ecrRegistry, api, api.now))
+			mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE id = $1`, runID)
+			w.until("the resume", func() bool { return r.Resumed == 1 })
+			fresh, _ := secretValue(r.ResumeSecrets[0], "DUDE_REGISTRY_AUTH")
+			if tokens := api.tokens(); len(tokens) != 2 || fresh != "AWS:"+tokens[1] {
+				t.Errorf("resumed with %q, ECR minted %d; want the second token", fresh, len(tokens))
+			}
+		})
 	}
 }
 
