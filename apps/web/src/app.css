@@ -89,7 +89,7 @@ body {
 .keyPrompt {
   width: 100%;
   max-width: 40ch;
-  margin: 15vh auto;
+  margin: 10vh auto;
 }
 
 .keyPrompt h1 {
@@ -187,4 +187,15 @@ body {
 }
 .escalationProblem {
   color: var(--ds-tone-danger-fg);
+}
+
+/* dude himself, beside the name in the sidebar and above the key prompt. */
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
+.keyPromptMark {
+  display: block;
+  margin: var(--ds-space-24) auto var(--ds-space-8);
 }

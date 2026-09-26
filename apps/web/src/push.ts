@@ -75,7 +75,7 @@ export async function turnPushOff(client: ApiClient): Promise<PushState> {
 /** Shown by the service worker, as a push would be: that this browser shows them. */
 export async function showTestNotification(): Promise<void> {
   const reg = await navigator.serviceWorker.ready;
-  await reg.showNotification("dude", { body: "Notifications are on in this browser.", icon: "/icon.svg", tag: "test" });
+  await reg.showNotification("dude", { body: "Notifications are on in this browser.", icon: "/icon-192.png", tag: "test" });
 }
 
 function fromBase64Url(s: string): Uint8Array<ArrayBuffer> {
