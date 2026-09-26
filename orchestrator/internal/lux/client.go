@@ -136,6 +136,16 @@ type Spec struct {
 
 type Image struct {
 	Ref string `json:"ref"`
+	// Logins the runner uses to pull Ref. The secret each names is
+	// runner-only in lux: it never enters the container.
+	RegistryAuth []RegistryAuth `json:"registryAuth,omitempty"`
+}
+
+type RegistryAuth struct {
+	// A host with an optional port, lowercase, no scheme or path.
+	Registry string `json:"registry"`
+	// A secret holding user:password, or a bare token.
+	Secret string `json:"secret"`
 }
 
 type Workload struct {
