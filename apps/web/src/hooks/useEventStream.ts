@@ -27,6 +27,8 @@ export interface UseEventStreamOptions {
   all?: boolean | undefined;
   /** Cap on retained events, so a long session cannot grow without bound. */
   limit?: number;
+  /** Only what happens from now: no replay of the scope's history. */
+  live?: boolean | undefined;
 }
 
 export interface EventStreamState {
@@ -37,7 +39,7 @@ export interface EventStreamState {
 const DEFAULT_LIMIT = 2_000;
 
 export function useEventStream(options: UseEventStreamOptions): EventStreamState {
-  const { client, runId, sessionId, taskId, all, limit = DEFAULT_LIMIT } = options;
+  const { client, runId, sessionId, taskId, all, limit = DEFAULT_LIMIT, live = all } = options;
 
   const [events, setEvents] = useState<PersistedEvent[]>([]);
   const [status, setStatus] = useState<StreamStatus>("connecting");
@@ -50,9 +52,9 @@ export function useEventStream(options: UseEventStreamOptions): EventStreamState
     setEvents([]);
     setStatus("connecting");
 
-    // An organization-wide stream is for noticing change, not for reading
-    // history, so it starts from now rather than replaying the ledger.
-    const source = new EventSource(client.streamUrl({ runId, sessionId, taskId, live: all }));
+    // An organization-wide stream, or one only watched for change, starts
+    // from now rather than replaying the ledger.
+    const source = new EventSource(client.streamUrl({ runId, sessionId, taskId, live }));
 
     source.onopen = () => setStatus("live");
 
@@ -81,7 +83,7 @@ export function useEventStream(options: UseEventStreamOptions): EventStreamState
     source.onerror = () => setStatus("reconnecting");
 
     return () => source.close();
-  }, [client, runId, sessionId, taskId, all, limit]);
+  }, [client, runId, sessionId, taskId, all, limit, live]);
 
   return { events, status };
 }
@@ -104,7 +106,7 @@ export function useReloadOnEvents(
 ): void {
   // Only whether something arrived matters, so the stream keeps almost
   // nothing.
-  const { events } = useEventStream({ ...options, limit: 1 });
+  const { events } = useEventStream({ ...options, limit: 1, live: true });
   const latest = useRef(reload);
   latest.current = reload;
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);

@@ -6,14 +6,6 @@ import (
 	"unicode"
 )
 
-// PriorState is what dude last recorded about a pull request.
-type PriorState struct {
-	State   string
-	Checks  string
-	Review  string
-	HeadSHA string
-}
-
 // Signal is what the workflow is told about a change on a pull request.
 // Nil, most of the time.
 type Signal struct {
@@ -132,7 +124,7 @@ func IsActionableComment(f Feedback, factoryLogins []string) bool {
 // only updates state. Two things are worth waking a fixer for: a person
 // asking for a change, and a check that turned red. Returns nil otherwise,
 // which is the common case and the reason this exists.
-func Classify(prior PriorState, current Status, feedback []Feedback, factoryLogins []string) *Signal {
+func Classify(prior, current Status, feedback []Feedback, factoryLogins []string) *Signal {
 	if current.State == StateMerged || current.State == StateClosed {
 		if prior.State == current.State {
 			return nil
@@ -160,10 +152,7 @@ func Classify(prior PriorState, current Status, feedback []Feedback, factoryLogi
 	}
 	// Approval or green checks gained or lost: the task may be ready to
 	// merge, or no longer. Worth telling the workflow, not a fixer.
-	// A new head that is ready is news too: the workflow holds readiness
-	// back until the pull request's head is the one it pushed.
-	ready := Ready(current.Review, current.Checks)
-	if ready != Ready(prior.Review, prior.Checks) || ready && current.HeadSHA != prior.HeadSHA {
+	if Ready(current.Review, current.Checks) != Ready(prior.Review, prior.Checks) {
 		return &Signal{Kind: "readiness"}
 	}
 	return nil

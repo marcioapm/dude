@@ -755,6 +755,15 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		}
 		heads[res.Repo] = delivery.RunHead{SHA: res.Commit, ChangedPaths: db.NonNil(changed)}
 		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			// A pull request open on this branch now has this head. What is
+			// on record about it — its checks, and when its head was first
+			// seen — was about the one before: its CI is yet to run on this.
+			if _, err := tx.Exec(ctx, `UPDATE pull_requests SET head_sha = $3, head_seen_at = now(),
+				checks = CASE WHEN had_ci THEN 'pending' ELSE 'unknown' END::check_state, updated_at = now()
+				WHERE task_id = $1 AND repository_id = $2 AND head_branch = $4 AND state IN ('open', 'draft')
+				  AND head_sha IS DISTINCT FROM $3`, r.TaskID, repo.ID, res.Commit, branch); err != nil {
+				return err
+			}
 			return s.event(ctx, tx, r, delivery.EvGitCommitCreated, ledger.ActorAgent, map[string]any{
 				"repo": res.Repo, "baseSha": base, "headSha": res.Commit, "branch": branch, "changedPaths": changed})
 		}); err != nil {

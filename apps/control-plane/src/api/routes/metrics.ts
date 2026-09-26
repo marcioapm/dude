@@ -11,6 +11,8 @@ import type { RequestContext, Router } from "../router.ts";
 
 const ms = (s: unknown) => (s === null || s === undefined ? null : Math.round(Number(s) * 1000));
 
+const tokens = (row: Record<string, unknown>) => ({ input: Number(row.input_tokens), output: Number(row.output_tokens) });
+
 async function taskMetrics(ctx: RequestContext): Promise<Response> {
   const id = ctx.params.id!;
   const out = await withOrg(ctx.principal.organizationId, async ({ sql }) => {
@@ -26,11 +28,11 @@ async function taskMetrics(ctx: RequestContext): Promise<Response> {
       humanWaitMs: ms(task.human_wait_seconds),
       reviewMs: ms(task.review_seconds),
       costUsd: Number(task.cost_usd),
-      tokens: { input: Number(task.input_tokens), output: Number(task.output_tokens) },
+      tokens: tokens(task),
       runs: runs.map((r) => ({
         id: r.id, phase: r.phase, role: r.role, category: r.category, status: r.status,
         activeMs: ms(r.active_seconds), parkedMs: ms(r.parked_seconds), costUsd: Number(r.cost_usd),
-        tokens: { input: Number(r.input_tokens), output: Number(r.output_tokens) },
+        tokens: tokens(r),
       })),
     };
   });
@@ -52,7 +54,7 @@ async function epicMetrics(ctx: RequestContext): Promise<Response> {
       humanWaitMs: ms(m!.human_wait_seconds),
       reviewMs: ms(m!.review_seconds),
       costUsd: Number(m!.cost_usd),
-      tokens: { input: Number(m!.input_tokens), output: Number(m!.output_tokens) },
+      tokens: tokens(m!),
     };
   });
   if (!out) throw notFound(`epic ${id} not found`);

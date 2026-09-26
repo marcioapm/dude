@@ -277,15 +277,12 @@ func (s *Store) SetTaskStatus(ctx context.Context, org string, st *State, status
 	})
 }
 
-// SetTaskStatusFrom moves the task only from the given status, and
-// says whether it moved.
-func (s *Store) SetTaskStatusFrom(ctx context.Context, org string, st *State, from, status, reason string) (bool, error) {
-	var moved bool
-	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
-		moved, err = SetTaskStatusTx(ctx, tx, org, st.ProjectID, st.TaskID, from, status, reason)
+// SetTaskStatusFrom moves the task only from the given status.
+func (s *Store) SetTaskStatusFrom(ctx context.Context, org string, st *State, from, status, reason string) error {
+	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		_, err := SetTaskStatusTx(ctx, tx, org, st.ProjectID, st.TaskID, from, status, reason)
 		return err
 	})
-	return moved, err
 }
 
 // ReadyToMerge moves the task from review to ready to merge and records
@@ -296,12 +293,7 @@ func (s *Store) ReadyToMerge(ctx context.Context, org string, st *State, pullReq
 		if err != nil || !moved {
 			return err
 		}
-		_, err = ledger.Append(ctx, tx, ledger.Event{
-			Type: EvReadyToMerge, OrganizationID: org, ProjectID: st.ProjectID, TaskID: st.TaskID,
-			ActorType: ledger.ActorSystem, ActorID: "workflow", Source: ledger.SourceOrchestrator,
-			CorrelationID: st.TaskID, Payload: map[string]any{"pullRequests": pullRequests},
-		})
-		return err
+		return emitTx(ctx, tx, org, st, EvReadyToMerge, map[string]any{"pullRequests": pullRequests})
 	})
 }
 
@@ -328,13 +320,18 @@ func SetTaskStatusTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID, fro
 // Emit records a workflow event about the task.
 func (s *Store) Emit(ctx context.Context, org string, st *State, typ string, payload map[string]any) error {
 	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		_, err := ledger.Append(ctx, tx, ledger.Event{
-			Type: typ, OrganizationID: org, ProjectID: st.ProjectID, TaskID: st.TaskID,
-			ActorType: ledger.ActorSystem, ActorID: "workflow", Source: ledger.SourceOrchestrator,
-			CorrelationID: st.TaskID, Payload: payload,
-		})
-		return err
+		return emitTx(ctx, tx, org, st, typ, payload)
 	})
+}
+
+// emitTx is Emit in the caller's transaction.
+func emitTx(ctx context.Context, tx pgx.Tx, org string, st *State, typ string, payload map[string]any) error {
+	_, err := ledger.Append(ctx, tx, ledger.Event{
+		Type: typ, OrganizationID: org, ProjectID: st.ProjectID, TaskID: st.TaskID,
+		ActorType: ledger.ActorSystem, ActorID: "workflow", Source: ledger.SourceOrchestrator,
+		CorrelationID: st.TaskID, Payload: payload,
+	})
+	return err
 }
 
 // Forges resolves an organization's forge client.
@@ -649,19 +646,14 @@ func prBody(goal string, criteria []string, findings []struct{ Category, Severit
 	return joinNonEmpty(sections, "\n\n")
 }
 
-// PullRequestStates is each pull request's state as last synced: open,
-// draft, merged or closed.
-// PullRequestState is a task's pull request as the workflow weighs it.
-// PullRequestState is a pull request as last synced from the forge: its
-// head, and its repository's name to match that head against.
-type PullRequestState struct{ State, Checks, Review, HeadSHA, Repo string }
+// PullRequestState is a task's pull request as last synced from the forge.
+type PullRequestState struct{ State, Checks, Review string }
 
+// PullRequestStates reads the pull requests as last synced.
 func (s *Store) PullRequestStates(ctx context.Context, org string, prIDs []string) ([]PullRequestState, error) {
 	var out []PullRequestState
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT pr.state::text, pr.checks::text, pr.review::text,
-			COALESCE(pr.head_sha, ''), r.name FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
-			WHERE pr.id = ANY($1)`, prIDs)
+		rows, err := tx.Query(ctx, `SELECT state::text, checks::text, review::text FROM pull_requests WHERE id = ANY($1)`, prIDs)
 		if err != nil {
 			return err
 		}
