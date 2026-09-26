@@ -70,7 +70,7 @@ type taskOut struct {
 }
 
 type listTasksOut struct {
-	Epics     []string      `json:"epics"`
+	Epics []string  `json:"epics"`
 	Tasks []taskOut `json:"tasks"`
 }
 
@@ -173,7 +173,7 @@ type listEpicsIn struct{}
 type epicOut struct {
 	Title       string `json:"title"`
 	Description string `json:"description,omitempty"`
-	Tasks   int    `json:"tasks"`
+	Tasks       int    `json:"tasks"`
 	Open        int    `json:"open"`
 }
 

@@ -252,11 +252,11 @@ func insertDirective(ctx context.Context, tx pgx.Tx, org, runID string, ri runIn
 // ownerOnly refuses anyone but a task's owner a decision that is theirs
 // to make — answering its agents, letting them at a repository — naming
 // who can. A task with no owner (from before there were owners, or whose
-// owner's key is gone) is anyone's.
+// owner's key is gone or revoked: they can no longer sign in) is anyone's.
 func ownerOnly(ctx context.Context, tx pgx.Tx, taskID, actor, verb string) error {
 	var ownerID, ownerName *string
-	if err := tx.QueryRow(ctx, `SELECT t.owner_key_id, k.name FROM tasks t
-		LEFT JOIN api_keys k ON k.id = t.owner_key_id WHERE t.id = $1`, taskID).Scan(&ownerID, &ownerName); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT k.id, k.name FROM tasks t
+		LEFT JOIN api_keys k ON k.id = t.owner_key_id AND k.revoked_at IS NULL WHERE t.id = $1`, taskID).Scan(&ownerID, &ownerName); err != nil {
 		return err
 	}
 	if ownerID == nil || *ownerID == actor {
@@ -499,8 +499,10 @@ func (s *Server) abort(w http.ResponseWriter, r *http.Request, org string) error
 		}
 		// The task stops too: an aborted Run should not leave its work
 		// item looking like it is still progressing.
-		if _, err := tx.Exec(r.Context(), `UPDATE tasks SET status = 'aborted'
-			WHERE id = $1 AND status NOT IN ('done', 'failed', 'aborted')`, ri.TaskID); err != nil {
+		// Through the one way statuses change, so it is recorded like any
+		// other (what time and cost count from).
+		if _, err := delivery.SetTaskStatusTx(r.Context(), tx, org, ri.ProjectID, ri.TaskID, "", "aborted",
+			"a person aborted a run"); err != nil {
 			return err
 		}
 		return humanEvent(r.Context(), tx, org, runID, ri, "run.aborted", actor(r), map[string]any{"reason": db.Nullable(body.Reason)})

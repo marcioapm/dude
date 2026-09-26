@@ -20,10 +20,10 @@ import (
 // Event types this package writes. The string values are the contract with
 // the backend and the browser (packages/domain/src/events/types.ts).
 const (
-	EvRunCreated            = "run.created"
-	EvTaskStatusChanged = "task.status_changed"
-	EvQuestionAsked         = "question.asked"
-	EvRepositoryRequested   = "repository.requested"
+	EvRunCreated          = "run.created"
+	EvTaskStatusChanged   = "task.status_changed"
+	EvQuestionAsked       = "question.asked"
+	EvRepositoryRequested = "repository.requested"
 	// Every pull request approved with its checks passing: a person's merge.
 	EvReadyToMerge         = "task.ready_to_merge"
 	EvReviewCompleted      = "review.completed"
@@ -67,7 +67,7 @@ func runByKey(ctx context.Context, tx pgx.Tx, taskID, key string) (string, error
 // PhaseRun describes a phase Run to create.
 type PhaseRun struct {
 	TaskID string
-	Phase      string
+	Phase  string
 	// The commit each repository starts from, by name; a repository not
 	// named starts from its default branch.
 	BaseRefs    map[string]string
@@ -286,6 +286,23 @@ func (s *Store) SetTaskStatusFrom(ctx context.Context, org string, st *State, fr
 		return err
 	})
 	return moved, err
+}
+
+// ReadyToMerge moves the task from review to ready to merge and records
+// that it is, for whoever is told when something waits on them — together.
+func (s *Store) ReadyToMerge(ctx context.Context, org string, st *State, pullRequests int) error {
+	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		moved, err := SetTaskStatusTx(ctx, tx, org, st.ProjectID, st.TaskID, "review", "ready_to_merge", "approved, checks passing")
+		if err != nil || !moved {
+			return err
+		}
+		_, err = ledger.Append(ctx, tx, ledger.Event{
+			Type: EvReadyToMerge, OrganizationID: org, ProjectID: st.ProjectID, TaskID: st.TaskID,
+			ActorType: ledger.ActorSystem, ActorID: "workflow", Source: ledger.SourceOrchestrator,
+			CorrelationID: st.TaskID, Payload: map[string]any{"pullRequests": pullRequests},
+		})
+		return err
+	})
 }
 
 // SetTaskStatusTx is SetTaskStatus in the caller's transaction, for

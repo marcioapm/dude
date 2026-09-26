@@ -80,9 +80,9 @@ const stopPause = "pause"
 // phaseRun is a phase Run's row, as the syncer reads it.
 type phaseRun struct {
 	ID, Org, ProjectID, TaskID, Phase, Status, Control string
-	Category                                               string
-	LuxRunID, LuxState, LuxStopReason                      string
-	PushRequestID                                          string
+	Category                                           string
+	LuxRunID, LuxState, LuxStopReason                  string
+	PushRequestID                                      string
 	// Where this Run's work is pushed; "" for one that pushes nothing.
 	PushBranch string
 	// The lux Run holds a repository it may push (runs.lux_pushes).

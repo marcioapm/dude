@@ -1117,10 +1117,10 @@ func TestOnlyATasksOwnerAnswersAndDecides(t *testing.T) {
 	if status, body := w.callAs(bo, "/internal/repository-requests/"+req.RequestID+"/decide", map[string]any{"approve": false}); status != 200 {
 		t.Fatalf("the owner's decision: %d %v", status, body)
 	}
-	// Nobody's task: anyone answers.
-	mustExec(t, w.owner, `UPDATE tasks SET owner_key_id = NULL WHERE id = $1`, wi)
+	// An owner who can no longer sign in is no owner: anyone answers.
+	mustExec(t, w.owner, `UPDATE api_keys SET revoked_at = now() WHERE id = $1`, bo)
 	if status, body := w.callAs(ana, "/internal/questions/"+qid+"/answer", map[string]any{"text": "yes"}); status != 200 {
-		t.Fatalf("an answer on a task nobody owns: %d %v", status, body)
+		t.Fatalf("an answer on a task whose owner was revoked: %d %v", status, body)
 	}
 }
 
@@ -1155,6 +1155,11 @@ func TestAbortingARunThatAskedCancelsItsQuestion(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM questions WHERE task_id = $1 AND status = 'open'`, wi); n != 0 {
 		t.Errorf("an aborted Run's question is still waiting for a person")
+	}
+	// The ledger says so, which is where the task's time ends.
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.status_changed'
+		AND payload->>'status' = 'aborted'`, wi); n != 1 {
+		t.Errorf("%d aborted status events, want one", n)
 	}
 	// Answered afterwards — the next morning — it says why nothing happens.
 	qid := w.questionID(wi)
@@ -1453,6 +1458,18 @@ func TestAnApprovedPullRequestWithGreenChecksIsReadyToMerge(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.ready_to_merge'`, wi); n != 1 {
 		t.Errorf("%d ready-to-merge events, want one to tell people by", n)
 	}
+
+	// An approval dismissed is no approval.
+	w.gh.Review(1, "alice", "DISMISSED")
+	w.until("back in review", func() bool {
+		_, _ = w.prs.Reconcile(context.Background(), 0)
+		return w.taskStatus(wi) == "review"
+	})
+	w.gh.Review(1, "alice", "APPROVED")
+	w.until("ready again", func() bool {
+		_, _ = w.prs.Reconcile(context.Background(), 0)
+		return w.taskStatus(wi) == "ready_to_merge"
+	})
 
 	// A check turning red is back to work: review, and a fixer on it.
 	w.gh.SetChecks("failure")
@@ -1900,4 +1917,28 @@ func TestAPauseIsNeverReadAsAFailure(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'run.failed'`, wi); n != 0 {
 		t.Errorf("a paused run was recorded as failed")
 	}
+}
+
+// A project whose CI is GitHub Actions reports through check runs, not
+// commit statuses: an approved pull request whose Actions fail is not ready.
+func TestFailingActionsKeepAnApprovedPullRequestOutOfReady(t *testing.T) {
+	w := newWorld(t)
+	w.gh.SetChecks("run:failure")
+	wi := w.task()
+	w.deliver(wi)
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	w.until("review", func() bool { return w.taskStatus(wi) == "review" })
+	w.gh.Review(1, "alice", "APPROVED")
+	for range 5 {
+		_, _ = w.prs.Reconcile(context.Background(), 0)
+		w.pump()
+	}
+	if w.taskStatus(wi) == "ready_to_merge" {
+		t.Fatalf("ready to merge with its Actions failing")
+	}
+	w.gh.SetChecks("run:success")
+	w.until("ready once they pass", func() bool {
+		_, _ = w.prs.Reconcile(context.Background(), 0)
+		return w.taskStatus(wi) == "ready_to_merge"
+	})
 }

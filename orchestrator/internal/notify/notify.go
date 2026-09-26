@@ -125,9 +125,11 @@ func (n *Notifier) Sweep(ctx context.Context) (int, error) {
 	if err := n.DB.InSystem(ctx, "notify", func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT e.cursor, e.organization_id, e.event_type, COALESCE(e.run_id, ''),
 				COALESCE(e.task_id, ''), COALESCE(p.key_prefix || '-' || w.number, ''), COALESCE(r.role::text, ''),
-				COALESCE(w.owner_key_id, ''), e.payload
+				COALESCE(k.id, ''), e.payload
 			FROM events e
 			LEFT JOIN tasks w ON w.id = e.task_id
+			-- An owner who can no longer sign in is no owner: everyone hears.
+			LEFT JOIN api_keys k ON k.id = w.owner_key_id AND k.revoked_at IS NULL
 			LEFT JOIN projects p ON p.id = w.project_id
 			LEFT JOIN runs r ON r.id = e.run_id
 			WHERE e.cursor > (SELECT after_cursor FROM push_config)

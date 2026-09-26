@@ -118,9 +118,9 @@ const (
 // specInput is everything a phase Run's spec is built from.
 type specInput struct {
 	RunID, OrganizationID, TaskID, Phase, Role string
-	Image                                          string
-	Model                                          string
-	Prompt                                         string
+	Image                                      string
+	Model                                      string
+	Prompt                                     string
 	// Every repository the task names, each at the commit this phase
 	// starts from.
 	Repos      []specRepo

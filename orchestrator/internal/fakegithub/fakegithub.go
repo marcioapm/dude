@@ -137,6 +137,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET "+prefix+"/pulls/{n}/comments", func(w http.ResponseWriter, r *http.Request) { write(w, 200, []any{}) })
 	mux.HandleFunc("GET "+prefix+"/issues/{n}/comments", s.comments)
 	mux.HandleFunc("GET "+prefix+"/commits/{sha}/status", s.status)
+	mux.HandleFunc("GET "+prefix+"/commits/{sha}/check-runs", s.checkRuns)
 	mux.HandleFunc("GET "+prefix+"/compare/{spec}", s.compare)
 	mux.HandleFunc("PATCH "+prefix+"/git/refs/heads/{branch...}", s.updateRef)
 	mux.HandleFunc("POST "+prefix+"/git/refs", s.createRef)
@@ -221,10 +222,28 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	state := s.checks
 	s.mu.Unlock()
+	if strings.HasPrefix(state, "run:") {
+		// Actions only: no commit statuses at all.
+		write(w, 200, map[string]any{"state": "pending", "total_count": 0})
+		return
+	}
 	if state == "" {
 		state = "success"
 	}
 	write(w, 200, map[string]any{"state": state, "total_count": 1})
+}
+
+// checkRuns: GitHub Actions' way of reporting. SetChecks("run:failure")
+// reports through check runs instead of statuses.
+func (s *Server) checkRuns(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	state := s.checks
+	s.mu.Unlock()
+	runs := []any{}
+	if conclusion, ok := strings.CutPrefix(state, "run:"); ok {
+		runs = append(runs, map[string]any{"status": "completed", "conclusion": conclusion})
+	}
+	write(w, 200, map[string]any{"total_count": len(runs), "check_runs": runs})
 }
 
 func (s *Server) reviews(w http.ResponseWriter, r *http.Request) {

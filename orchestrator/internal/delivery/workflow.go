@@ -25,9 +25,9 @@ const (
 
 // State is everything the workflow remembers between steps.
 type State struct {
-	TaskID string `json:"taskId"`
-	ProjectID  string `json:"projectId"`
-	Policy     Policy `json:"policy"`
+	TaskID    string `json:"taskId"`
+	ProjectID string `json:"projectId"`
+	Policy    Policy `json:"policy"`
 
 	// The Run whose output the next phase builds on.
 	HeadRunID string `json:"headRunId,omitempty"`
@@ -582,12 +582,9 @@ func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st 
 		ready = ready && forge.Ready(s.Review, s.Checks)
 	}
 	if open > 0 && ready {
-		moved, err := w.s.SetTaskStatusFrom(ctx, sc.OrganizationID, st, "review", "ready_to_merge", "approved, checks passing")
-		if err != nil || !moved {
-			return err
-		}
-		// Its own event, for whoever is told when something waits on them.
-		return w.s.Emit(ctx, sc.OrganizationID, st, EvReadyToMerge, map[string]any{"pullRequests": open})
+		// The move and its event in one transaction: an event lost to a
+		// retry would never be written again (the status has moved).
+		return w.s.ReadyToMerge(ctx, sc.OrganizationID, st, open)
 	}
 	_, err = w.s.SetTaskStatusFrom(ctx, sc.OrganizationID, st, "ready_to_merge", "review", "no longer approved with checks passing")
 	return err
