@@ -34,6 +34,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/marciomartins/dude/orchestrator/internal/version"
 )
 
 func main() {
@@ -52,6 +54,10 @@ func (m *many) Set(v string) error { *m = append(*m, v); return nil }
 func run(args []string, out io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
 		fmt.Fprint(out, usage)
+		return nil
+	}
+	if args[0] == "--version" {
+		fmt.Fprintln(out, version.Version)
 		return nil
 	}
 	cmd, rest := args[0], args[1:]
@@ -301,6 +307,7 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
                                              dude event progress --data '{"done":3,"of":10}'
   dude publish FILE [--name NAME]            keep a file for people, shown with the task
   dude tools                                 the tools this run may use
+  dude --version                             this CLI's version
 
 Output is JSON.
 `

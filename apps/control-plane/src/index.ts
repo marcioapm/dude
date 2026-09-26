@@ -23,6 +23,7 @@ import { registerPushRoutes } from "./api/routes/push.ts";
 import { registerPeopleRoutes } from "./api/routes/people.ts";
 import { registerMetricsRoutes } from "./api/routes/metrics.ts";
 import { webApp } from "./api/web.ts";
+import { version } from "./build.ts";
 import { closePool, getPool } from "./db/client.ts";
 import { listenForEvents } from "./events/listen.ts";
 
@@ -70,6 +71,10 @@ export function startServer(port = Number(process.env.PORT ?? 3000)) {
 }
 
 if (import.meta.main) {
+  if (process.argv.includes("--version")) {
+    console.log(version);
+    process.exit(0);
+  }
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
     console.error("DATABASE_URL is required");

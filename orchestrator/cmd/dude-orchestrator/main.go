@@ -41,10 +41,15 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/notify"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
 	"github.com/marciomartins/dude/orchestrator/internal/prs"
+	"github.com/marciomartins/dude/orchestrator/internal/version"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "--version" {
+		fmt.Println(version.Version)
+		return
+	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	if err := run(log); err != nil {
 		log.Error("orchestrator stopped", "error", err)
