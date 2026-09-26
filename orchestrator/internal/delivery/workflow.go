@@ -438,7 +438,7 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 	// consumed together, so one PR merging must not drop feedback on another
 	// that arrived with it.
 	var actionable []forge.ActionableFeedback
-	ended := false
+	ended, readiness := false, false
 	for _, sig := range sc.Signals {
 		if sig.Name != SignalPRFeedback {
 			continue
@@ -447,11 +447,14 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 		if json.Unmarshal(sig.Payload, &s) != nil {
 			continue
 		}
-		if s.Kind == "terminal" {
+		switch s.Kind {
+		case "terminal":
 			ended = true
-			continue
+		case "readiness":
+			readiness = true
+		default:
+			actionable = append(actionable, s.Feedback...)
 		}
-		actionable = append(actionable, s.Feedback...)
 	}
 	if ended {
 		res, finished, err := w.pullRequestEnded(ctx, sc, st)
@@ -461,6 +464,9 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 	}
 	waitAgain := workflow.Result{Next: "awaitPullRequest", State: st, AwaitSignals: []string{SignalPRFeedback, SignalHumanDecision}}
 	if len(actionable) == 0 {
+		if readiness {
+			return waitAgain, w.weighReadiness(ctx, sc, st)
+		}
 		return waitAgain, nil
 	}
 	st.PRIteration++
@@ -507,7 +513,11 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 	if err := w.s.SetWorkItemStatus(ctx, sc.OrganizationID, st, "review", "pull request updated"); err != nil {
 		return workflow.Result{}, err
 	}
-	return workflow.Result{Next: "awaitPullRequest", State: st, AwaitSignals: []string{SignalPRFeedback, SignalHumanDecision}}, nil
+	// What happened to them while the fix ran was signalled to a step not
+	// listening for it: one may have been merged or closed, or be approved
+	// with green checks already. Weighed now rather than waited for.
+	res, _, err := w.pullRequestEnded(ctx, sc, st)
+	return res, err
 }
 
 // pullRequestEnded: one of the work item's pull requests was merged or
@@ -525,7 +535,7 @@ func (w *steps) pullRequestEnded(ctx context.Context, sc workflow.StepContext, s
 	}
 	var open, merged, closed int
 	for _, s := range states {
-		switch s {
+		switch s.State {
 		case forge.StateMerged:
 			merged++
 		case forge.StateClosed:
@@ -539,7 +549,9 @@ func (w *steps) pullRequestEnded(ctx context.Context, sc workflow.StepContext, s
 	case len(states) == 0:
 		return workflow.Result{}, true, fmt.Errorf("no pull requests recorded for %s", st.WorkItemID)
 	case closed == 0 && open > 0:
-		return waitAgain, false, nil // the rest are still open
+		// The rest are still open: what is merged is taken, so whether the
+		// work item is ready depends on those.
+		return waitAgain, false, w.weighReadiness(ctx, sc, st)
 	case closed == 0:
 		return workflow.Result{}, true, w.s.SetWorkItemStatus(ctx, sc.OrganizationID, st, "done", "pull requests merged")
 	case open == 0 && merged == 0:
@@ -550,6 +562,35 @@ func (w *steps) pullRequestEnded(ctx context.Context, sc workflow.StepContext, s
 	// Part taken, part refused, or part still open: a person decides.
 	res, err := w.escalate(ctx, sc, st, "pull_request_closed", map[string]any{"merged": merged, "closed": closed, "open": open})
 	return res, true, err
+}
+
+// weighReadiness moves the work item to ready to merge when every pull
+// request still open is approved with its checks passing (forge.Ready),
+// and back to review when one no longer is. The factory never merges:
+// ready to merge is what a person is told, and merging is theirs.
+func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st *State) error {
+	states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
+	if err != nil {
+		return err
+	}
+	ready, open := true, 0
+	for _, s := range states {
+		if s.State == forge.StateMerged || s.State == forge.StateClosed {
+			continue
+		}
+		open++
+		ready = ready && forge.Ready(s.Review, s.Checks)
+	}
+	if open > 0 && ready {
+		moved, err := w.s.SetWorkItemStatusFrom(ctx, sc.OrganizationID, st, "review", "ready_to_merge", "approved, checks passing")
+		if err != nil || !moved {
+			return err
+		}
+		// Its own event, for whoever is told when something waits on them.
+		return w.s.Emit(ctx, sc.OrganizationID, st, EvReadyToMerge, map[string]any{"pullRequests": open})
+	}
+	_, err = w.s.SetWorkItemStatusFrom(ctx, sc.OrganizationID, st, "ready_to_merge", "review", "no longer approved with checks passing")
+	return err
 }
 
 // escalate stops and asks for a person. Terminal rather than parked: holding

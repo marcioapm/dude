@@ -126,7 +126,7 @@ func (n *Notifier) Sweep(ctx context.Context) (int, error) {
 			LEFT JOIN projects p ON p.id = w.project_id
 			LEFT JOIN runs r ON r.id = e.run_id
 			WHERE e.cursor > (SELECT after_cursor FROM push_config)
-			  AND e.event_type IN ('question.asked', 'repository.requested')
+			  AND e.event_type IN ('question.asked', 'repository.requested', 'work_item.ready_to_merge')
 			  AND NOT EXISTS (SELECT 1 FROM push_sent s WHERE s.cursor = e.cursor)
 			ORDER BY e.cursor LIMIT 100`)
 		if err != nil {
@@ -211,7 +211,7 @@ func (n *Notifier) advance(ctx context.Context) error {
 				          WHERE e.occurred_at < now() - make_interval(secs => $1)), 0),
 				COALESCE((SELECT min(e.cursor) - 1 FROM events e
 				          WHERE e.cursor > push_config.after_cursor
-				            AND e.event_type IN ('question.asked', 'repository.requested')
+				            AND e.event_type IN ('question.asked', 'repository.requested', 'work_item.ready_to_merge')
 				            AND NOT EXISTS (SELECT 1 FROM push_sent s WHERE s.cursor = e.cursor)), 9223372036854775807)))`,
 			settle.Seconds()); err != nil {
 			return err
@@ -270,6 +270,10 @@ func messageFor(a ask) (Message, bool) {
 		} else {
 			msg.Title, msg.Body = who+" asks", str("prompt")
 		}
+	case delivery.EvReadyToMerge:
+		msg.Title = strings.TrimSpace(a.WorkItem + " is ready to merge")
+		msg.Body = "Approved, with its checks passing. Merging is yours."
+		msg.Tag, msg.URL = "workItem:"+a.WorkItemID, "#/workItem/"+a.WorkItemID
 	case delivery.EvRepositoryRequested:
 		verb := "Read"
 		if str("access") == "write" {

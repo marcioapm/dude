@@ -1359,6 +1359,51 @@ func TestAForgeThatCannotBeReadDelaysTheRunRatherThanStartingItWithoutCredential
 	}
 }
 
+// Approved with its checks green, a work item is ready to merge — a
+// person's call to make, the factory never merges — and back in review
+// if a check turns red.
+func TestAnApprovedPullRequestWithGreenChecksIsReadyToMerge(t *testing.T) {
+	w := newWorld(t)
+	wi := w.workItem()
+	w.deliver(wi)
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	w.until("review", func() bool { return w.workItemStatus(wi) == "review" })
+
+	w.gh.Review(1, "alice", "APPROVED")
+	w.until("ready to merge", func() bool {
+		_, _ = w.prs.Reconcile(context.Background(), 0)
+		return w.workItemStatus(wi) == "ready_to_merge"
+	})
+	if w.gh.Pull(1).State != "open" {
+		t.Fatalf("the factory merged it")
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE work_item_id = $1 AND event_type = 'work_item.ready_to_merge'`, wi); n != 1 {
+		t.Errorf("%d ready-to-merge events, want one to tell people by", n)
+	}
+
+	// A check turning red is back to work: review, and a fixer on it.
+	w.gh.SetChecks("failure")
+	w.until("no longer ready", func() bool {
+		_, _ = w.prs.Reconcile(context.Background(), 0)
+		return w.workItemStatus(wi) != "ready_to_merge"
+	})
+
+	// Merged by a person while the fixer is still at work. The fix lands
+	// after the merge, so it is outside it: it gets a pull request of its
+	// own, and the work item is done when that one is merged too.
+	w.gh.SetChecks("success")
+	w.gh.Merge(1)
+	w.until("a pull request for the fix", func() bool {
+		_, _ = w.prs.Reconcile(context.Background(), 0)
+		return len(w.gh.Pulls()) == 2
+	})
+	w.gh.Merge(2)
+	w.until("the work item to finish", func() bool {
+		_, _ = w.prs.Reconcile(context.Background(), 0)
+		return w.workItemStatus(wi) == "done"
+	})
+}
+
 // An agent quiet mid-turn is nudged once; still quiet, it is parked for a
 // person, who resumes it.
 func TestAQuietAgentIsNudgedThenParkedForAPerson(t *testing.T) {

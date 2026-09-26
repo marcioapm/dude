@@ -24,15 +24,17 @@ const (
 	EvWorkItemStatusChanged = "work_item.status_changed"
 	EvQuestionAsked         = "question.asked"
 	EvRepositoryRequested   = "repository.requested"
-	EvReviewCompleted       = "review.completed"
-	EvPullRequestOpened     = "pull_request.opened"
-	EvPullRequestUpdated    = "pull_request.updated"
-	EvPullRequestChecks     = "pull_request.checks_changed"
-	EvPullRequestReviewed   = "pull_request.reviewed"
-	EvPullRequestCommented  = "pull_request.commented"
-	EvPullRequestMerged     = "pull_request.merged"
-	EvPullRequestClosed     = "pull_request.closed"
-	EvGitCommitCreated      = "git.commit_created"
+	// Every pull request approved with its checks passing: a person's merge.
+	EvReadyToMerge         = "work_item.ready_to_merge"
+	EvReviewCompleted      = "review.completed"
+	EvPullRequestOpened    = "pull_request.opened"
+	EvPullRequestUpdated   = "pull_request.updated"
+	EvPullRequestChecks    = "pull_request.checks_changed"
+	EvPullRequestReviewed  = "pull_request.reviewed"
+	EvPullRequestCommented = "pull_request.commented"
+	EvPullRequestMerged    = "pull_request.merged"
+	EvPullRequestClosed    = "pull_request.closed"
+	EvGitCommitCreated     = "git.commit_created"
 )
 
 // Store is the delivery workflow's side effects. Each is one durable action;
@@ -273,6 +275,17 @@ func (s *Store) SetWorkItemStatus(ctx context.Context, org string, st *State, st
 		_, err := SetWorkItemStatusTx(ctx, tx, org, st.ProjectID, st.WorkItemID, "", status, reason)
 		return err
 	})
+}
+
+// SetWorkItemStatusFrom moves the work item only from the given status, and
+// says whether it moved.
+func (s *Store) SetWorkItemStatusFrom(ctx context.Context, org string, st *State, from, status, reason string) (bool, error) {
+	var moved bool
+	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
+		moved, err = SetWorkItemStatusTx(ctx, tx, org, st.ProjectID, st.WorkItemID, from, status, reason)
+		return err
+	})
+	return moved, err
 }
 
 // SetWorkItemStatusTx is SetWorkItemStatus in the caller's transaction, for
@@ -621,14 +634,17 @@ func prBody(goal string, criteria []string, findings []struct{ Category, Severit
 
 // PullRequestStates is each pull request's state as last synced: open,
 // draft, merged or closed.
-func (s *Store) PullRequestStates(ctx context.Context, org string, prIDs []string) ([]string, error) {
-	var out []string
+// PullRequestState is a work item's pull request as the workflow weighs it.
+type PullRequestState struct{ State, Checks, Review string }
+
+func (s *Store) PullRequestStates(ctx context.Context, org string, prIDs []string) ([]PullRequestState, error) {
+	var out []PullRequestState
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT state::text FROM pull_requests WHERE id = ANY($1)`, prIDs)
+		rows, err := tx.Query(ctx, `SELECT state::text, checks::text, review::text FROM pull_requests WHERE id = ANY($1)`, prIDs)
 		if err != nil {
 			return err
 		}
-		out, err = pgx.CollectRows(rows, pgx.RowTo[string])
+		out, err = pgx.CollectRows(rows, pgx.RowToStructByPos[PullRequestState])
 		return err
 	})
 	return out, err

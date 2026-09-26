@@ -27,6 +27,8 @@ type Pull struct {
 	MergedAt *string
 	Comments []Comment
 	Checks   string
+	// Verdicts by reviewer login: APPROVED, CHANGES_REQUESTED.
+	Reviews map[string]string
 }
 
 type Comment struct {
@@ -44,6 +46,8 @@ type Server struct {
 	pulls map[int]*Pull
 	next  int64
 	Hooks []map[string]any
+	// The combined status every commit reports; "" is success.
+	checks string
 }
 
 func New(repo, slug string) *Server {
@@ -98,6 +102,25 @@ func (s *Server) Comment(number int, author, body string) {
 		Comment{ID: s.next, Author: author, Body: body, CreatedAt: time.Now().UTC().Format(time.RFC3339)})
 }
 
+// Review records a reviewer's verdict: "APPROVED" or "CHANGES_REQUESTED".
+func (s *Server) Review(number int, login, verdict string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.pulls[number]
+	if p.Reviews == nil {
+		p.Reviews = map[string]string{}
+	}
+	p.Reviews[login] = verdict
+}
+
+// SetChecks sets the combined status of every commit: "success", "failure",
+// "pending".
+func (s *Server) SetChecks(state string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.checks = state
+}
+
 func (s *Server) Merge(number int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -110,7 +133,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST "+prefix+"/pulls", s.openPull)
 	mux.HandleFunc("GET "+prefix+"/pulls/{n}", s.getPull)
-	mux.HandleFunc("GET "+prefix+"/pulls/{n}/reviews", func(w http.ResponseWriter, r *http.Request) { write(w, 200, []any{}) })
+	mux.HandleFunc("GET "+prefix+"/pulls/{n}/reviews", s.reviews)
 	mux.HandleFunc("GET "+prefix+"/pulls/{n}/comments", func(w http.ResponseWriter, r *http.Request) { write(w, 200, []any{}) })
 	mux.HandleFunc("GET "+prefix+"/issues/{n}/comments", s.comments)
 	mux.HandleFunc("GET "+prefix+"/commits/{sha}/status", s.status)
@@ -195,7 +218,28 @@ func (s *Server) comments(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
-	write(w, 200, map[string]any{"state": "success", "total_count": 1})
+	s.mu.Lock()
+	state := s.checks
+	s.mu.Unlock()
+	if state == "" {
+		state = "success"
+	}
+	write(w, 200, map[string]any{"state": state, "total_count": 1})
+}
+
+func (s *Server) reviews(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := []any{}
+	n, _ := strconv.Atoi(r.PathValue("n"))
+	if p := s.pulls[n]; p != nil {
+		for login, verdict := range p.Reviews {
+			s.next++
+			out = append(out, map[string]any{"id": s.next, "user": map[string]any{"login": login}, "state": verdict,
+				"body": "", "submitted_at": time.Now().UTC().Format(time.RFC3339)})
+		}
+	}
+	write(w, 200, out)
 }
 
 func (s *Server) compare(w http.ResponseWriter, r *http.Request) {

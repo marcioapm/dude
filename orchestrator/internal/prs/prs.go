@@ -165,7 +165,7 @@ func (s *Syncer) Sync(ctx context.Context, org, prID string) error {
 		return err
 	}
 
-	signal := forge.Classify(forge.PriorState{State: pr.State, Checks: pr.Checks}, status, fresh, s.FactoryLogins)
+	signal := forge.Classify(forge.PriorState{State: pr.State, Checks: pr.Checks, Review: pr.Review}, status, fresh, s.FactoryLogins)
 	if signal == nil || workflowRunID == "" {
 		return nil
 	}

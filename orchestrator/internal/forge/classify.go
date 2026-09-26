@@ -10,12 +10,15 @@ import (
 type PriorState struct {
 	State  string
 	Checks string
+	Review string
 }
 
 // Signal is what the workflow is told about a change on a pull request.
 // Nil, most of the time.
 type Signal struct {
-	// "terminal" (merged or closed) or "actionable" (something to fix).
+	// "terminal" (merged or closed), "actionable" (something to fix), or
+	// "readiness" (its approval or checks changed: it may now be ready to
+	// merge, or no longer).
 	Kind     string               `json:"kind"`
 	State    string               `json:"state,omitempty"`
 	Feedback []ActionableFeedback `json:"feedback,omitempty"`
@@ -151,8 +154,20 @@ func Classify(prior PriorState, current Status, feedback []Feedback, factoryLogi
 			Body:   "Continuous integration is failing on this branch. Find out why and fix it.",
 		})
 	}
-	if len(actionable) == 0 {
-		return nil
+	if len(actionable) > 0 {
+		return &Signal{Kind: "actionable", Feedback: actionable}
 	}
-	return &Signal{Kind: "actionable", Feedback: actionable}
+	// Approval or green checks gained or lost: the work item may be ready to
+	// merge, or no longer. Worth telling the workflow, not a fixer.
+	if Ready(current.Review, current.Checks) != Ready(prior.Review, prior.Checks) {
+		return &Signal{Kind: "readiness"}
+	}
+	return nil
+}
+
+// Ready says a pull request has what merging it needs: approved, and its
+// checks passing — or none configured, which GitHub reports as unknown.
+// The factory never merges; this is what a person is told.
+func Ready(review, checks string) bool {
+	return review == ReviewApproved && (checks == ChecksPassing || checks == ChecksUnknown)
 }

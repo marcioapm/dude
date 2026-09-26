@@ -55,14 +55,22 @@ func TestALineCommentKeepsItsFile(t *testing.T) {
 	}
 }
 
-func TestApprovalsAndGreenChecksWakeNobody(t *testing.T) {
+// An approval or checks going green wake no fixer: they may make the work
+// item ready to merge, and that is all the workflow is told.
+func TestApprovalsAndGreenChecksWakeNoFixer(t *testing.T) {
 	approved := open
-	approved.Review = "approved"
-	if s := Classify(prior, approved, nil, nil); s != nil {
+	approved.Review = ReviewApproved
+	if s := Classify(prior, approved, nil, nil); s == nil || s.Kind != "readiness" || len(s.Feedback) > 0 {
 		t.Errorf("approval: %+v", s)
 	}
+	// Green, but not approved: nothing is ready, nothing to say.
 	if s := Classify(PriorState{State: StateOpen, Checks: ChecksFailing}, open, nil, nil); s != nil {
 		t.Errorf("green: %+v", s)
+	}
+	// Approved already, checks going green: now it is ready.
+	approved.Checks = ChecksPassing
+	if s := Classify(PriorState{State: StateOpen, Checks: ChecksPending, Review: ReviewApproved}, approved, nil, nil); s == nil || s.Kind != "readiness" {
+		t.Errorf("approved then green: %+v", s)
 	}
 }
 
