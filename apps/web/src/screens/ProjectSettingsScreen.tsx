@@ -372,6 +372,7 @@ function DeliveryTab({ client, project, defaults, onSaved }: TabProps & { defaul
   const [rounds, setRounds] = useState(String(effective.maxReviewIterations));
   const [prRounds, setPrRounds] = useState(String(effective.maxPrFixIterations));
   const [simplify, setSimplify] = useState(effective.simplify);
+  const [test, setTest] = useState(effective.test);
   const [parkAfter, setParkAfter] = useState(String(effective.parkAfterMinutes));
   const [idleNudge, setIdleNudge] = useState(String(effective.idleNudgeMinutes));
   const { busy, problem, save } = useSave();
@@ -396,6 +397,7 @@ function DeliveryTab({ client, project, defaults, onSaved }: TabProps & { defaul
     maxReviewIterations: roundsValue ?? effective.maxReviewIterations,
     maxPrFixIterations: prRoundsValue ?? effective.maxPrFixIterations,
     simplify,
+    test,
     parkAfterMinutes: parkAfterValue ?? effective.parkAfterMinutes,
     idleNudgeMinutes: idleNudgeValue ?? effective.idleNudgeMinutes,
   };
@@ -458,6 +460,12 @@ function DeliveryTab({ client, project, defaults, onSaved }: TabProps & { defaul
           description="A last pass that removes needless complexity without changing behaviour."
           checked={simplify}
           onCheckedChange={(on) => setSimplify(on === true)}
+        />
+        <Checkbox
+          label="Test it in a browser"
+          description="Before the pull request, a tester starts the app, uses the change as a person would, and publishes a video. Say how to start the app in the Agents tab's notes."
+          checked={test}
+          onCheckedChange={(on) => setTest(on === true)}
         />
         {reviewers.length === 0 ? <Callout tone="danger">Choose at least one reviewer.</Callout> : null}
         {blocking.length === 0 ? <Callout tone="danger">Choose at least one severity that blocks.</Callout> : null}
