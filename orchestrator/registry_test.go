@@ -323,21 +323,78 @@ func TestEveryResumeCarriesAFreshlyMintedLogin(t *testing.T) {
 	}
 }
 
-// A Run started before the factory logged in to a registry is resumed as
-// it was started: lux's spec names no login, so none is sent (lux would
-// take an unnamed secret as the workload's).
+// A Run started before the factory logged in to a registry, resumed by an
+// orchestrator restarted with an ECR login, is resumed as it was started:
+// lux's spec names no login, so none is sent (lux would take an unnamed
+// secret as the workload's) and ECR is not asked.
 func TestARunStartedWithoutALoginResumesWithout(t *testing.T) {
 	w := newWorld(t)
 	mustExec(t, w.owner, `UPDATE projects SET runtime_image = $2 WHERE id = $1`, w.project, ecrImage)
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
 	wi := w.task()
 	w.deliver(wi)
-	w.until("the implementer to be submitted", func() bool { return len(w.lux.Runs()) >= 1 })
+	runID := w.parked(wi)
 	api := &fakeECR{clock: time.Now()}
-	w.syncer.Registry = registry.NewECR(ecrRegistry, api, api.now)
-	w.pauseAndResume(wi)
-	if _, ok := secretValue(w.lux.Runs()[0].ResumeSecrets[0], "DUDE_REGISTRY_AUTH"); ok || len(api.tokens()) != 0 {
-		t.Errorf("a login was sent to resume a Run started without one")
+	w.restart(registry.NewECR(ecrRegistry, api, api.now))
+	w.call("/internal/runs/"+runID+"/resume", map[string]any{})
+	r := w.lux.Runs()[0]
+	w.until("the resume", func() bool { return r.Resumed == 1 })
+	if _, ok := secretValue(r.ResumeSecrets[0], "DUDE_REGISTRY_AUTH"); ok || len(api.tokens()) != 0 {
+		t.Errorf("a login was sent to resume a Run started without one (ECR minted %d)", len(api.tokens()))
+	}
+}
+
+// parked waits for the task's Run to be working, pauses it as a person
+// would, and waits for lux to stop it. Returns the Run's id.
+func (w *world) parked(wi string) string {
+	w.t.Helper()
+	var runID string
+	w.until("the agent to be working", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND status = 'running' AND lux_state = 'running'`, wi).Scan(&runID)
+		return runID != ""
+	})
+	if status, out := w.call("/internal/runs/"+runID+"/pause", map[string]any{}); status != 200 {
+		w.t.Fatalf("pause: %d %v", status, out)
+	}
+	w.until("lux to stop it", func() bool {
+		return w.lux.Runs()[0].State == "stopped" && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, runID) == 1
+	})
+	return runID
+}
+
+// A Run started with a host-minted ECR token, resumed after a restart that
+// mints as a pull role, and again after one back to the host's
+// credentials: each resume carries a token freshly minted by the identity
+// configured at that moment.
+func TestAResumeAfterARestartIsMintedByTheNewIdentity(t *testing.T) {
+	w := newWorld(t)
+	api := w.withECR()
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	wi := w.task()
+	w.deliver(wi)
+	r := w.lux.Runs
+	for i, next := range []struct {
+		provider registry.Provider
+		signer   string
+	}{
+		{registry.NewECRWithRole(ecrRegistry, pullRole, api, &fakeSTS{}, api.now), "ASIAPULL1"},
+		{registry.NewECR(ecrRegistry, api, api.now), ""},
+	} {
+		runID := w.parked(wi)
+		w.restart(next.provider)
+		w.call("/internal/runs/"+runID+"/resume", map[string]any{})
+		w.until("the resume", func() bool { return r()[0].Resumed == i+1 })
+		sent, _ := secretValue(r()[0].ResumeSecrets[i], "DUDE_REGISTRY_AUTH")
+		tokens, signers := api.tokens(), api.signedBy()
+		if len(tokens) != i+2 || sent != "AWS:"+tokens[i+1] {
+			t.Fatalf("resume %d sent %q, ECR minted %d; want a token minted for it", i+1, sent, len(tokens))
+		}
+		if signers[i+1] != next.signer {
+			t.Errorf("resume %d's token minted by %q, want %q", i+1, signers[i+1], next.signer)
+		}
+	}
+	if s := api.signedBy(); s[0] != "" {
+		t.Errorf("the submit's token minted by %q, want the host's credentials", s[0])
 	}
 }
 
