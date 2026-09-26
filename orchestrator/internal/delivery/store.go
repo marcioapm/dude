@@ -249,6 +249,17 @@ func (s *Store) MarkAttempted(ctx context.Context, org string, findingIDs []stri
 	})
 }
 
+// AcceptFindings is a person deciding the task ships with the findings
+// still open: accepted, they block nothing.
+func (s *Store) AcceptFindings(ctx context.Context, org, taskID string) error {
+	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE review_findings SET status = 'accepted',
+			resolution_note = 'accepted by a person', updated_at = now()
+			WHERE task_id = $1 AND status = 'open'`, taskID)
+		return err
+	})
+}
+
 // AttemptedFindings is, per category, the open findings a fix has been
 // sent — what the next reviewer of that category is asked to judge.
 func (s *Store) AttemptedFindings(ctx context.Context, org, taskID string) (map[string][]string, error) {
@@ -430,6 +441,14 @@ func AskTx(ctx context.Context, tx pgx.Tx, r RunRef, prompt string, options []st
 	_, err := ledger.Append(ctx, tx, r.Event(EvQuestionAsked, ledger.ActorAgent,
 		map[string]any{"kind": "agent", "questionId": id, "prompt": prompt, "options": db.NonNil(options)}))
 	return id, err
+}
+
+// RecordDecisionTx records something a person decided about the task, as
+// an answered question: every phase from then on is told it (Decisions).
+func RecordDecisionTx(ctx context.Context, tx pgx.Tx, org, taskID, question, answer string) error {
+	_, err := tx.Exec(ctx, `INSERT INTO questions (id, organization_id, task_id, prompt, status, answer, answered_at)
+		VALUES ($1, $2, $3, $4, 'answered', $5, now())`, ids.New(ids.Question), org, taskID, question, answer)
+	return err
 }
 
 // HasWritableRepository says whether the task may change code.

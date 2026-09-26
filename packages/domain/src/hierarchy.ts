@@ -241,10 +241,20 @@ export type Task = z.infer<typeof taskSchema>;
  * workflow does not go on by itself. A task carries its open one while it
  * waits (`GET /v1/tasks/:id`, the navigation tree).
  */
+/**
+ * A person's decision on an escalation: try the step that stopped again;
+ * accept the findings a review got stuck on and go on; take what was
+ * merged as the task; wait on the pull requests still open; or stop.
+ */
+export const escalationActionSchema = z.enum(["retry", "accept", "done", "wait", "stop"]);
+export type EscalationAction = z.infer<typeof escalationActionSchema>;
+
 export const escalationSchema = z.object({
   reason: z.string(),
   /** Per reason: `runId` and `error` for a phase that failed, `findingIds`, `iterations`, PR counts. */
   detail: z.record(z.string(), z.unknown()).nullable().default(null),
+  /** What its owner may decide (`POST /v1/tasks/:id/decide`). */
+  actions: z.array(escalationActionSchema).default([]),
   at: z.string(),
 });
 export type Escalation = z.infer<typeof escalationSchema>;

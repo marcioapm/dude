@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
@@ -47,15 +48,72 @@ type State struct {
 	Iteration int `json:"iteration,omitempty"`
 	// PR feedback → fix cycles spent.
 	PRIteration int `json:"prIteration,omitempty"`
+	// The pull request feedback being fixed.
+	PRFeedback []forge.ActionableFeedback `json:"prFeedback,omitempty"`
 	// The pull requests opened, one per repository changed.
 	PullRequestIDs []string `json:"pullRequestIds,omitempty"`
-	// Why the workflow stopped, when it stopped early.
+	// Why the workflow stopped for a person, while it waits on one.
 	Escalation *Escalation `json:"escalation,omitempty"`
+	// How often a person sent it back to try again: each retry's Runs are
+	// new ones, not the ones that stopped.
+	Retries int `json:"retries,omitempty"`
+	// Fix attempts per finding a person granted beyond the policy's, by
+	// sending a stuck review back to try again.
+	ExtraFixAttempts int `json:"extraFixAttempts,omitempty"`
 }
 
 type Escalation struct {
 	Reason string `json:"reason"`
 	Detail any    `json:"detail,omitempty"`
+	// The step to go back to on "retry": the one that stopped.
+	Step string `json:"step,omitempty"`
+	// A person's decision, once made: set as it is taken, so a second is
+	// refused before the workflow has acted on the first.
+	Decided *HumanDecision `json:"decided,omitempty"`
+}
+
+// Actions says what a person may do about it: go back and try again,
+// where there is a step to go back to and trying again can help; go on
+// past findings a review got stuck on; take what was merged as the task;
+// wait on pull requests still open; or stop.
+func (e *Escalation) Actions() []string {
+	var out []string
+	switch e.Reason {
+	case "pull_request_closed":
+		out = append(out, "done")
+		if open, _ := e.detail("open"); open > 0 {
+			out = append(out, "wait")
+		}
+	case "stuck", "exhausted":
+		out = append(out, "retry", "accept")
+	default:
+		if e.Step != "" {
+			out = append(out, "retry")
+		}
+	}
+	return append(out, "stop")
+}
+
+// detail reads a number the escalation's detail carries, as JSON left it.
+func (e *Escalation) detail(key string) (float64, bool) {
+	var m map[string]any
+	b, _ := json.Marshal(e.Detail)
+	if json.Unmarshal(b, &m) != nil {
+		return 0, false
+	}
+	n, ok := m[key].(float64)
+	return n, ok
+}
+
+// HumanDecision is a person's answer to an escalation (SignalHumanDecision),
+// kept on it once taken (Escalation.Decided).
+type HumanDecision struct {
+	// "retry" the step that stopped; "accept" the findings a review got
+	// stuck on and go on; "done" — what is merged is the task; "wait" on
+	// the pull requests still open; "stop".
+	Action string `json:"action"`
+	// What they said, for the agents from here on.
+	Note string `json:"note,omitempty"`
 }
 
 // BranchFor is the task's branch — the one its pull requests are opened
@@ -90,7 +148,9 @@ func Workflow(s *Store, forges Forges) *workflow.Definition {
 			"awaitTest":        w.awaitTest,
 			"openPullRequest":  w.openPullRequest,
 			"awaitPullRequest": w.awaitPullRequest,
+			"prFix":            w.prFix,
 			"awaitPRFix":       w.awaitPRFix,
+			"decide":           w.decide,
 		},
 	}
 }
@@ -138,8 +198,13 @@ func park(next string, st *State, pending []string) workflow.Result {
 	return workflow.Result{Next: next, State: st, AwaitSignals: []string{SignalPhaseFinished}}
 }
 
-// key makes phase-Run creation idempotent per workflow step and iteration.
-func key(sc workflow.StepContext, parts ...any) string {
+// key makes phase-Run creation idempotent per workflow step and iteration —
+// and per retry, so a step a person sent back makes new Runs rather than
+// finding the ones that stopped.
+func key(sc workflow.StepContext, st *State, parts ...any) string {
+	if st.Retries > 0 {
+		parts = append(parts, ":retry:", st.Retries)
+	}
 	return fmt.Sprint(append([]any{sc.WorkflowRunID}, parts...)...)
 }
 
@@ -161,7 +226,7 @@ func (w *steps) implement(ctx context.Context, sc workflow.StepContext) (workflo
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "implementing"); err != nil {
 		return workflow.Result{}, err
 	}
-	runID, err := w.phase(ctx, sc, st, PhaseImplement, key(sc, ":implement"), nil)
+	runID, err := w.phase(ctx, sc, st, PhaseImplement, key(sc, st, ":implement"), nil)
 	if err != nil {
 		return workflow.Result{}, err
 	}
@@ -219,7 +284,7 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 	}
 	var runIDs []string
 	for _, c := range categories {
-		id, err := w.phase(ctx, sc, st, PhaseReview, key(sc, ":review:", st.Iteration, ":", c),
+		id, err := w.phase(ctx, sc, st, PhaseReview, key(sc, st, ":review:", st.Iteration, ":", c),
 			func(p *PhaseRun) {
 				p.Category, p.BlockingSeverities, p.FindingIDs = c, st.Policy.BlockingSeverities, toJudge[c]
 			})
@@ -251,7 +316,9 @@ func (w *steps) awaitReview(ctx context.Context, sc workflow.StepContext) (workf
 	}
 	st.Iteration++
 	st.PendingRunIDs = nil
-	exit := Exit(st.Policy, findings, st.Iteration)
+	policy := st.Policy
+	policy.MaxAttemptsPerFinding += st.ExtraFixAttempts
+	exit := Exit(policy, findings, st.Iteration)
 	switch {
 	case exit == nil:
 		return workflow.Result{Next: "fix", State: st}, nil
@@ -285,7 +352,7 @@ func (w *steps) fix(ctx context.Context, sc workflow.StepContext) (workflow.Resu
 			open = append(open, f.ID)
 		}
 	}
-	k := key(sc, ":fix:", st.Iteration)
+	k := key(sc, st, ":fix:", st.Iteration)
 	// Counted once per fix step, however often the step is replayed: the
 	// Run's creation key doubles as the marker that it was counted.
 	existing, err := w.s.runByKey(ctx, sc.OrganizationID, st.TaskID, k)
@@ -334,7 +401,7 @@ func (w *steps) simplify(ctx context.Context, sc workflow.StepContext) (workflow
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "simplifying"); err != nil {
 		return workflow.Result{}, err
 	}
-	runID, err := w.phase(ctx, sc, st, PhaseSimplify, key(sc, ":simplify"), nil)
+	runID, err := w.phase(ctx, sc, st, PhaseSimplify, key(sc, st, ":simplify"), nil)
 	if err != nil {
 		return workflow.Result{}, err
 	}
@@ -371,7 +438,7 @@ func (w *steps) test(ctx context.Context, sc workflow.StepContext) (workflow.Res
 	if !st.Policy.Test {
 		return workflow.Result{Next: "openPullRequest", State: st}, nil
 	}
-	runID, err := w.phase(ctx, sc, st, PhaseTest, key(sc, ":test"), nil)
+	runID, err := w.phase(ctx, sc, st, PhaseTest, key(sc, st, ":test"), nil)
 	if err != nil {
 		return workflow.Result{}, err
 	}
@@ -473,6 +540,17 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 		}
 		return waitAgain, nil
 	}
+	st.PRFeedback = actionable
+	return workflow.Result{Next: "prFix", State: st}, nil
+}
+
+// prFix sends the pull requests' feedback to a fixer — kept in state, so
+// a fix a person sends back to try again gets the same feedback.
+func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Result, error) {
+	st, err := load(sc)
+	if err != nil {
+		return workflow.Result{}, err
+	}
 	st.PRIteration++
 	if st.PRIteration > st.Policy.MaxPRFixIterations {
 		return w.escalate(ctx, sc, st, "pr_loop_exhausted", map[string]any{"iterations": st.PRIteration})
@@ -481,8 +559,8 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 		return workflow.Result{}, err
 	}
 	// Several comments arriving together cost one fix Run, not one each.
-	runID, err := w.phase(ctx, sc, st, PhaseFix, key(sc, ":prfix:", st.PRIteration),
-		func(p *PhaseRun) { p.PRFeedback = actionable })
+	runID, err := w.phase(ctx, sc, st, PhaseFix, key(sc, st, ":prfix:", st.PRIteration),
+		func(p *PhaseRun) { p.PRFeedback = st.PRFeedback })
 	if err != nil {
 		return workflow.Result{}, err
 	}
@@ -505,7 +583,7 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 	if !out.Succeeded {
 		return w.escalate(ctx, sc, st, "pr_fix_failed", map[string]any{"runId": runID, "error": out.Error})
 	}
-	st.HeadRunID, st.PendingRunIDs, st.Heads = runID, nil, out.advance(st.Heads)
+	st.HeadRunID, st.PendingRunIDs, st.Heads, st.PRFeedback = runID, nil, out.advance(st.Heads), nil
 	// The fix may have changed a repository no pull request is open for yet:
 	// that one gets its own, alongside the others.
 	prIDs, err := w.s.OpenPullRequests(ctx, sc.OrganizationID, st, w.forges)
@@ -592,20 +670,92 @@ func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st 
 	return w.s.SetTaskStatusFrom(ctx, sc.OrganizationID, st, "ready_to_merge", "review", "no longer approved with checks passing")
 }
 
-// escalate stops and asks for a person. Terminal rather than parked: holding
-// the workflow open pretending to make progress would hide that it needs a
-// decision.
+// escalate stops and asks for a person, and waits for their decision
+// (decide). Nothing goes on by itself: no agent works, and no timer
+// resumes it.
 func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State, reason string, detail any) (workflow.Result, error) {
-	if err := w.s.Emit(ctx, sc.OrganizationID, st, EvQuestionAsked,
-		map[string]any{"kind": "escalation", "reason": reason, "detail": detail}); err != nil {
-		return workflow.Result{}, err
-	}
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "awaiting_input", reason); err != nil {
 		return workflow.Result{}, err
 	}
-	st.Escalation = &Escalation{Reason: reason, Detail: detail}
+	st.Escalation = &Escalation{Reason: reason, Detail: detail, Step: RetryStep[sc.Step]}
 	st.PendingRunIDs = nil
-	return workflow.Result{State: st}, nil
+	if err := w.s.Emit(ctx, sc.OrganizationID, st, EvQuestionAsked,
+		map[string]any{"kind": "escalation", "reason": reason, "detail": detail, "actions": st.Escalation.Actions()}); err != nil {
+		return workflow.Result{}, err
+	}
+	return workflow.Result{Next: "decide", State: st, AwaitSignals: []string{SignalHumanDecision}}, nil
+}
+
+// RetryStep is where "try again" goes back to, from the step that stopped.
+var RetryStep = map[string]string{
+	"awaitImplement": "implement",
+	// A review loop that gave up tries again with another round of fixes.
+	"awaitReview": "fix",
+	"awaitFix":    "fix",
+	"awaitTest":   "test",
+	"prFix":       "prFix",
+	"awaitPRFix":  "prFix",
+}
+
+// decide carries out a person's decision on an escalation.
+func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.Result, error) {
+	st, err := load(sc)
+	if err != nil {
+		return workflow.Result{}, err
+	}
+	// The decision is on the escalation, taken with the request; the signal
+	// only wakes this step to carry it out.
+	if st.Escalation == nil || st.Escalation.Decided == nil {
+		return workflow.Result{Next: "decide", State: st, AwaitSignals: []string{SignalHumanDecision}}, nil
+	}
+	e, d := st.Escalation, st.Escalation.Decided
+	if !slices.Contains(e.Actions(), d.Action) {
+		// Checked when it was taken; a decision that cannot be carried out
+		// must not leave the task looking busy.
+		return workflow.Result{}, fmt.Errorf("escalation %s cannot %s", e.Reason, d.Action)
+	}
+	st.Escalation = nil
+	switch d.Action {
+	case "stop":
+		return workflow.Result{State: st}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "aborted", "a person stopped it")
+	case "done":
+		return workflow.Result{State: st}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "done", "a person took what was merged")
+	case "wait":
+		return waitForPR(st), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "a person is waiting on the rest")
+	}
+	// Going on: working again, whichever step takes it up.
+	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "a person decided: "+d.Action); err != nil {
+		return workflow.Result{}, err
+	}
+	switch d.Action {
+	case "accept":
+		// The findings it was stuck on ship as they are: a person's call.
+		if err := w.s.AcceptFindings(ctx, sc.OrganizationID, st.TaskID); err != nil {
+			return workflow.Result{}, err
+		}
+		if st.Policy.Simplify {
+			return workflow.Result{Next: "simplify", State: st}, nil
+		}
+		return workflow.Result{Next: "test", State: st}, nil
+	}
+	// retry: the step that stopped, afresh — new Runs, a new budget for
+	// the loop it gave up on.
+	st.Retries++
+	switch e.Step {
+	case "fix":
+		// A new budget for the loop: its rounds, and each finding's fixes.
+		st.Iteration = 0
+		if e.Reason == "stuck" {
+			st.ExtraFixAttempts += st.Policy.MaxAttemptsPerFinding
+		}
+	case "prFix":
+		if e.Reason == "pr_loop_exhausted" {
+			st.PRIteration = 0
+		} else {
+			st.PRIteration-- // the same fix again, not the next
+		}
+	}
+	return workflow.Result{Next: e.Step, State: st}, nil
 }
 
 // waitForPR waits on the task's pull requests: what the forge says of

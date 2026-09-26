@@ -20,13 +20,15 @@ import { Button, Callout, EmptyState, Page, PageHeader, Section, Spinner } from 
 import { DEFAULT_RUN_ROLE, runLabel } from "@dude/domain";
 import type { ApiClient, Artifact, Finding, PullRequest, Run, TaskDetail } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
-import { escalationWords, shortError } from "../escalation.ts";
+import { shortError } from "../escalation.ts";
 import { useReloadOnEvents } from "../hooks/useEventStream.ts";
 import { ArtifactsSection } from "./ArtifactsSection.tsx";
 import { TaskMetricsSection } from "./MetricsSection.tsx";
 import { existingTask, TaskDialog } from "./TaskDialog.tsx";
 import { NotFound } from "./NotFound.tsx";
 import { OwnerSelect } from "./OwnerSelect.tsx";
+import { errorText } from "../hooks/useSave.tsx";
+import { EscalationPanel } from "./EscalationPanel.tsx";
 
 export interface TaskScreenProps {
   client: ApiClient;
@@ -47,6 +49,11 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
   const [problem, setProblem] = useState<string | null>(null);
   const [delivering, setDelivering] = useState(false);
   const [editing, setEditing] = useState(false);
+  // Who is reading: the owner decides what a stopped delivery does next.
+  const [you, setYou] = useState<string | null>(null);
+  useEffect(() => {
+    void client.listPeople().then((p) => setYou(p.you), (err: unknown) => setProblem(errorText(err)));
+  }, [client]);
   // Bumped on each reload, for the sections that read their own data.
   const [version, setVersion] = useState(0);
 
@@ -103,7 +110,6 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
   }
 
   const started = phases.length > 0;
-  const escalation = item.escalation ? escalationWords(item.escalation) : null;
   // One per repository the work changed, in the order they were opened.
   const prs = [...pullRequests].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 
@@ -185,16 +191,9 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
           </>
         }
       >
-        {escalation ? (
-          <Callout tone="attention" data-testid="escalation" data-reason={item.escalation!.reason}>
-            <strong>{escalation.short}.</strong> {escalation.sentence}{" "}
-            {escalation.runId ? (
-              <Button size="sm" variant="ghost" trailingIcon="arrow-right" onClick={() => onOpenRun(escalation.runId!)}
-                data-testid="escalation-run">
-                Open {runLabel(item.runs.find((r) => r.id === escalation.runId) ?? {})}
-              </Button>
-            ) : null}
-          </Callout>
+        {item.escalation ? (
+          <EscalationPanel client={client} task={{ ...item, escalation: item.escalation }} you={you}
+            onOpenRun={onOpenRun} onDecided={() => void load()} />
         ) : null}
         {problem ? <Callout tone="danger">{problem}</Callout> : null}
       </PageHeader>

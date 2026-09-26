@@ -47,12 +47,16 @@ const SESSION_SELECT = `
  * since. The workflow ends on it, so there is at most one worth showing.
  */
 export function escalationJson(alias = "tasks"): string {
-  return `(SELECT json_build_object('reason', e.payload->>'reason', 'detail', e.payload->'detail', 'at', e.occurred_at)
+  return `(SELECT json_build_object('reason', e.payload->>'reason', 'detail', e.payload->'detail',
+    'actions', COALESCE(e.payload->'actions', '["stop"]'::jsonb), 'at', e.occurred_at)
   FROM events e
   WHERE ${alias}.status = 'awaiting_input'
     AND e.task_id = ${alias}.id AND e.event_type = 'question.asked' AND e.payload->>'kind' = 'escalation'
     AND e.cursor > COALESCE((SELECT max(s.cursor) FROM events s WHERE s.task_id = ${alias}.id
       AND s.event_type = 'task.status_changed' AND s.payload->>'status' <> 'awaiting_input'), 0)
+    -- Decided: the workflow is carrying it out.
+    AND NOT EXISTS (SELECT 1 FROM events d WHERE d.task_id = ${alias}.id AND d.event_type = 'task.decided'
+      AND d.cursor > e.cursor)
   ORDER BY e.cursor DESC LIMIT 1) AS escalation`;
 }
 
@@ -139,6 +143,12 @@ async function deliverTask(ctx: RequestContext): Promise<Response> {
 async function markTaskDone(ctx: RequestContext): Promise<Response> {
   return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${ctx.params.id}/done`,
     "{}", ctx.principal.apiKeyId);
+}
+
+/** Its owner decides how delivery goes on after it stopped for them. */
+async function decideTask(ctx: RequestContext): Promise<Response> {
+  return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${ctx.params.id}/decide`,
+    await ctx.request.text(), ctx.principal.apiKeyId);
 }
 
 async function listTasks(ctx: RequestContext): Promise<Response> {
@@ -365,6 +375,7 @@ export function registerWorkRoutes(router: Router): void {
   router.post("/v1/tasks/:id/runs", createRun);
   router.post("/v1/tasks/:id/deliver", deliverTask);
   router.post("/v1/tasks/:id/done", markTaskDone);
+  router.post("/v1/tasks/:id/decide", decideTask);
 
   router.get("/v1/runs/:id", getRun);
   router.post("/v1/runs/:id/sessions", createSession);

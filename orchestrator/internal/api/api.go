@@ -63,6 +63,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /internal/questions/{id}/answer", s.auth(s.answer))
 	mux.Handle("GET /internal/artifacts/{id}/content", s.auth(s.artifactContent))
 	mux.Handle("POST /internal/tasks/{id}/done", s.auth(s.markDone))
+	mux.Handle("POST /internal/tasks/{id}/decide", s.auth(s.decideEscalation))
 	mux.Handle("POST /internal/repository-requests/{id}/decide", s.auth(s.decideRepositoryRequest))
 	// The factory's delivery defaults, which the settings screen shows for
 	// what a project leaves unset: one definition, here, where it is applied.
@@ -613,6 +614,94 @@ func (s *Server) markDone(w http.ResponseWriter, r *http.Request, org string) er
 		return err
 	}
 	write(w, http.StatusOK, map[string]any{"taskId": id, "status": "done"})
+	return nil
+}
+
+// decideEscalation: a task's owner answers delivery stopping for them —
+// try the step again, accept the findings a review got stuck on, take what
+// was merged, wait on the rest, or stop (delivery.Actions says which fit
+// the reason). A note becomes one of the task's decisions, which every
+// agent from then on is told.
+func (s *Server) decideEscalation(w http.ResponseWriter, r *http.Request, org string) error {
+	taskID := r.PathValue("id")
+	var body struct {
+		Action string `json:"action"`
+		Note   string `json:"note"`
+	}
+	if err := read(r, &body); err != nil {
+		return err
+	}
+	var wfID string
+	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+		var projectID, status string
+		var wf struct {
+			ID, Status, Step *string
+			State            []byte
+		}
+		err := tx.QueryRow(r.Context(), `SELECT t.project_id, t.status::text, d.id, d.status::text, d.step, d.state
+			FROM tasks t LEFT JOIN LATERAL (SELECT * FROM workflow_runs d WHERE d.task_id = t.id
+			  ORDER BY d.created_at DESC LIMIT 1) d ON true
+			WHERE t.id = $1 FOR UPDATE OF t`, taskID).Scan(&projectID, &status, &wf.ID, &wf.Status, &wf.Step, &wf.State)
+		if db.IsNotFound(err) {
+			return fail(http.StatusNotFound, "not_found", "task %s not found", taskID)
+		}
+		if err != nil {
+			return err
+		}
+		var st delivery.State
+		if wf.State != nil {
+			_ = json.Unmarshal(wf.State, &st)
+		}
+		e := st.Escalation
+		if status != "awaiting_input" || wf.ID == nil || e == nil || e.Decided != nil {
+			return fail(http.StatusConflict, "conflict", "delivery of task %s is not waiting for a decision", taskID)
+		}
+		wfID = *wf.ID
+		if *wf.Status == "completed" && e.Step == "" {
+			// Stopped before a stop waited for a decision: it ended there,
+			// and never said which step to go back to. Its step says, where
+			// trying again from it can work: a pull request fix from then
+			// kept none of the feedback it was fixing.
+			if step := delivery.RetryStep[*wf.Step]; step != "prFix" {
+				e.Step = step
+			}
+		}
+		if !slices.Contains(e.Actions(), body.Action) {
+			return fail(http.StatusBadRequest, "bad_request", "%q is not a way to go on after %s; one of %s",
+				body.Action, e.Reason, strings.Join(e.Actions(), ", "))
+		}
+		if err := ownerOnly(r.Context(), tx, taskID, actor(r), "decide"); err != nil {
+			return err
+		}
+		// Taken now, in the workflow's own state: a second decision is
+		// refused from here on, before the workflow has acted on this one.
+		// One that ended (from before decisions) is reopened to wait for it.
+		e.Decided = &delivery.HumanDecision{Action: body.Action, Note: strings.TrimSpace(body.Note)}
+		next, _ := json.Marshal(st)
+		if _, err := tx.Exec(r.Context(), `UPDATE workflow_runs SET state = $2::jsonb, status = CASE WHEN status = 'completed'
+				THEN 'waiting'::workflow_run_status ELSE status END, step = 'decide',
+				awaiting_signals = '["human.decision"]'::jsonb, wake_at = NULL, last_error = NULL
+			WHERE id = $1`, wfID, next); err != nil {
+			return err
+		}
+		if n := e.Decided.Note; n != "" {
+			if err := delivery.RecordDecisionTx(r.Context(), tx, org, taskID,
+				"Delivery stopped ("+strings.ReplaceAll(e.Reason, "_", " ")+"). How should it go on?", n); err != nil {
+				return err
+			}
+		}
+		return humanEvent(r.Context(), tx, org, "", runInfo{ProjectID: projectID, TaskID: taskID}, "task.decided", actor(r),
+			map[string]any{"reason": e.Reason, "action": body.Action, "note": e.Decided.Note})
+	})
+	if err != nil {
+		return err
+	}
+	// Wakes the workflow to carry it out; the decision is in its state.
+	if err := s.Workflow.Signal(r.Context(), org, wfID, delivery.SignalHumanDecision, nil, ""); err != nil {
+		return err
+	}
+	s.kick()
+	write(w, http.StatusOK, map[string]any{"taskId": taskID, "action": body.Action})
 	return nil
 }
 
