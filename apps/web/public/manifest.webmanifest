@@ -1,6 +1,6 @@
 {
-  "name": "dude",
-  "short_name": "dude",
+  "name": "The Dude",
+  "short_name": "The Dude",
   "description": "A software factory: describe the work, agents build it.",
   "start_url": "/",
   "display": "standalone",

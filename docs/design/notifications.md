@@ -67,7 +67,12 @@ missing, the orchestrator generates a pair once and stores it in
 
 ## What the notification says
 
-- Title: `TEXT-19 · Implement asks` (the task key, then the role).
+- Title: `His Dudeness · TEXT-19 · Implement asks`: signed, then the task
+  key and the role. The service worker adds the signature, so every kind of
+  notification has it.
+- Under it the browser shows the site's address, which a page cannot
+  change; installed as an app (the manifest names it "The Dude"), the OS
+  shows the app's name there instead.
 - Body: the question, or "Read web? — the client calls this API" for a
   repository request.
 - Tag: the Run, so a second ask from the same Run replaces the first.
