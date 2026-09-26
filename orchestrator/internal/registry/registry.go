@@ -12,7 +12,9 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/netip"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -72,7 +74,8 @@ type static struct{ registry, credential string }
 // long-lived token.
 func NewStatic(registry, credential string) (Provider, error) {
 	if !ValidRegistry(registry) {
-		return nil, fmt.Errorf("DUDE_REGISTRY: %q is not a registry host (lowercase, optional port, no scheme or path, not localhost)", registry)
+		return nil, fmt.Errorf("DUDE_REGISTRY: %q is not a registry host lux accepts (lowercase host or IPv4 address, "+
+			"optional port 1-65535, no scheme or path, not localhost, loopback, unspecified or link-local)", registry)
 	}
 	if credential == "" {
 		return nil, errors.New("DUDE_REGISTRY_CREDENTIAL is empty: want user:password")
@@ -158,12 +161,26 @@ func ecrRegion(host string) (string, bool) {
 	return m[1], true
 }
 
-var hostRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:[0-9]{1,5})?$`)
+var hostLabelsRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$`)
 
-// ValidRegistry mirrors what lux accepts as image.registryAuth[].registry
-// (lux internal/spec/spec.go validRegistry), so a bad setting fails at
-// startup rather than on every Run lux refuses.
+// ValidRegistry is what lux accepts as image.registryAuth[].registry (lux
+// internal/spec/spec.go validRegistry), so a bad setting fails at startup
+// rather than on every Run lux refuses: a lowercase host name or IPv4
+// address, not the runner's own host, and a port 1-65535 in canonical
+// decimal.
 func ValidRegistry(r string) bool {
-	host, _, _ := strings.Cut(r, ":")
-	return hostRe.MatchString(r) && host != "localhost" && !strings.HasSuffix(host, ".localhost")
+	host, port, hasPort := strings.Cut(r, ":")
+	if hasPort {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 || port != strconv.Itoa(n) {
+			return false
+		}
+	}
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return false
+	}
+	if ip, err := netip.ParseAddr(host); err == nil {
+		return ip.Is4() && !ip.IsLoopback() && !ip.IsUnspecified() && !ip.IsLinkLocalUnicast()
+	}
+	return hostLabelsRe.MatchString(host)
 }
