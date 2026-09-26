@@ -32,6 +32,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
+# A browser for the tester (the qa_browser role): Playwright, and the
+# Chromium it drives with its system dependencies, installed system-wide
+# (PLAYWRIGHT_BROWSERS_PATH), since the agent's home is a volume that would
+# hide it. Recording video needs nothing else: Playwright writes webm.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
+RUN python3 -m venv /opt/playwright-venv \
+    && /opt/playwright-venv/bin/pip install --no-cache-dir playwright==1.49.0 \
+    && /opt/playwright-venv/bin/playwright install --with-deps chromium \
+    && ln -s /opt/playwright-venv/bin/python /usr/local/bin/playwright-python \
+    && chmod -R a+rX /opt/playwright \
+    && rm -rf /var/lib/apt/lists/*
+# `python3 -m playwright` and `import playwright` work for the agent: the
+# venv's site-packages are on the system Python's path.
+RUN echo /opt/playwright-venv/lib/python3.11/site-packages > /usr/lib/python3/dist-packages/playwright-venv.pth
+
 # The agent. Installed as root into /usr/local, so the agent cannot rewrite
 # its own binary and the home volume does not hide it.
 ARG OPENCODE_VERSION=latest

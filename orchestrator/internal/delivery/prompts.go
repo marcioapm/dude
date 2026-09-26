@@ -189,6 +189,17 @@ func severityNote(blocking []string) string {
 // discovering an empty push.
 const commitNote = "Commit your work when you are done. Only committed changes are kept."
 
+// testerTools is how the tester drives a browser and records it. Playwright
+// and Chromium are in the runtime image (images/runtime); the evidence is
+// published as files people open next to the task.
+const testerTools = "Drive a real browser with Playwright (Python: `python3 -m playwright`, the `playwright` " +
+	"package; Chromium is installed). Record the whole flow as a video — create the browser context with " +
+	"`record_video_dir` — and take a screenshot at each step that matters. When you are done, close the " +
+	"context so the video is written, then publish the video and the screenshots: copy them into " +
+	"`$LUX_ARTIFACTS` (for example `$LUX_ARTIFACTS/walkthrough.webm`, `$LUX_ARTIFACTS/01-signed-in.png`), " +
+	"named so the order reads. Read the browser console as you go, and report what it says. A flow that does " +
+	"not work is a finding, with the step it failed at; one that works needs no finding — say what you did."
+
 // publishNote tells an agent how to hand a person something that is not
 // code. Every phase may: an implementer's design notes, a reviewer's
 // reproduction, a tester's screenshots.
@@ -312,10 +323,12 @@ func Prompt(phase string, in PromptInput) string {
 	case PhaseTest:
 		add("Exercise this change the way a person would. Start the application, drive it in a "+
 			"browser, and confirm it does what the task asked.",
-			"Record what you did: screenshots at each meaningful step, and a video of the whole flow. "+
-				"Read the console and report anything it says.",
 			"You are not looking for what the unit tests already cover. You are looking for what they "+
 				"cannot: does the feature actually work when used.",
+			testerTools,
+			"How to start the application and what data it needs are the project's to say (in the "+
+				"project notes below); if they say nothing, find out from the repository — its README, "+
+				"its scripts — and say in your report what you did.",
 			in.task(), findingFormat)
 
 	default:
