@@ -410,6 +410,45 @@ func TestARunWaitsForTheLoginItWasStartedWith(t *testing.T) {
 	}
 }
 
+// A Run waiting a minute for its login and then aborted has its lux Run
+// cancelled on the next sweep, not after the login retry comes due.
+func TestAnAbortDoesNotWaitForTheLoginRetry(t *testing.T) {
+	w := newWorld(t)
+	w.withECR()
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	wi := w.task()
+	w.deliver(wi)
+	var runID string
+	w.until("the agent to be working", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND status = 'running'`, wi).Scan(&runID)
+		return runID != ""
+	})
+	w.call("/internal/runs/"+runID+"/pause", map[string]any{})
+	w.until("lux to stop it", func() bool { return w.lux.Runs()[0].State == "stopped" })
+	w.restart(nil)
+	w.call("/internal/runs/"+runID+"/resume", map[string]any{})
+	w.until("the login retry", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND next_attempt_at > now() + interval '30 seconds'`, runID) == 1
+	})
+	var due time.Time
+	_ = w.owner.QueryRow(context.Background(), `SELECT next_attempt_at FROM runs WHERE id = $1`, runID).Scan(&due)
+
+	if status, out := w.call("/internal/runs/"+runID+"/abort", map[string]any{}); status != 200 {
+		t.Fatalf("abort: %d %v", status, out)
+	}
+	w.pump()
+	// lux's Run is stopped, which the syncer treats as over (ask skips the
+	// call): the sweep's cancel shows as the recorded stop reason.
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_stop_reason = 'cancel' AND control = 'none'`, runID); n != 1 {
+		t.Fatalf("the abort was not acted on by the sweep after it")
+	}
+	var still time.Time
+	_ = w.owner.QueryRow(context.Background(), `SELECT next_attempt_at FROM runs WHERE id = $1`, runID).Scan(&still)
+	if !still.Equal(due) || !time.Now().Before(due) {
+		t.Errorf("next_attempt_at = %v, was %v: the retry deadline moved or had passed", still, due)
+	}
+}
+
 // ECR that cannot be reached holds a start back rather than failing it,
 // and the Run goes ahead when it answers.
 func TestAnECROutageDelaysARunAndDoesNotFailIt(t *testing.T) {
