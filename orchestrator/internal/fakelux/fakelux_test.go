@@ -29,9 +29,12 @@ func TestASubmitWithARegistryLuxWouldRefuseIsRefused(t *testing.T) {
 		"GHCR.io":                false,
 		"https://ghcr.io":        false,
 	} {
+		// Otherwise valid for real lux (its Normalize requires a generic
+		// workload's command), so an accept is about the registry alone.
 		spec := lux.Spec{
-			Image:   lux.Image{Ref: "agent:1", RegistryAuth: []lux.RegistryAuth{{Registry: registry, Secret: "LOGIN"}}},
-			Secrets: []lux.Secret{{Name: "LOGIN", Value: "u:p"}},
+			Image:    lux.Image{Ref: "agent:1", RegistryAuth: []lux.RegistryAuth{{Registry: registry, Secret: "LOGIN"}}},
+			Workload: lux.Workload{Adapter: "generic", Command: []string{"sh", "-c", "true"}},
+			Secrets:  []lux.Secret{{Name: "LOGIN", Value: "u:p"}},
 		}
 		_, err := client.Submit(context.Background(), spec, "key-"+registry)
 		le, refused := lux.AsError(err)
