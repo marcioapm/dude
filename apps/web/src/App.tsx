@@ -31,6 +31,7 @@ import { ProjectSettingsScreen } from "./screens/ProjectSettingsScreen.tsx";
 import { RunScreen } from "./screens/RunScreen.tsx";
 import { existingTask, TaskDialog, type ExistingTask } from "./screens/TaskDialog.tsx";
 import { TaskScreen } from "./screens/TaskScreen.tsx";
+import { DudeMark } from "./DudeMark.tsx";
 
 export interface AppProps {
   client: ApiClient;
@@ -350,7 +351,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         onSelect={(ref) => go(inTree(ref))}
         onShowAllAttention={() => go({ view: "inbox" })}
         menuItems={menuItems}
-        title={<span className="brand"><img src="/favicon-64.png" alt="" width={24} height={24} />dude</span>}
+        title={<span className="brand"><DudeMark size={24} />dude</span>}
         footer={
           <div className="sidebarFooter">
             <Button size="sm" variant="ghost" leadingIcon="plus" onClick={() => setOpen({ kind: "newProject" })} data-testid="new-project">

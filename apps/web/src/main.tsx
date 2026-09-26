@@ -20,6 +20,7 @@ import "./app.css";
 import { ApiClient } from "./api/client.ts";
 import { App } from "./App.tsx";
 import { turnPushOff } from "./push.ts";
+import { DudeMark } from "./DudeMark.tsx";
 
 const KEY_STORAGE = "dude.apiKey";
 
@@ -76,7 +77,7 @@ function KeyPrompt({ refused, onSubmit }: { refused: boolean; onSubmit: (key: st
   return (
     <div className="keyPrompt">
       <Card variant="flat">
-        <img className="keyPromptMark" src="/dude.png" alt="" width={160} height={160} />
+        <DudeMark size={160} className="keyPromptMark" />
         <CardHeader title={<h1>dude</h1>} />
         <CardBody>
           <form

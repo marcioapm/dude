@@ -195,6 +195,20 @@ body {
   align-items: center;
   gap: var(--ds-space-8);
 }
+.dudeMark {
+  display: inline-block;
+  flex-shrink: 0;
+}
+.dudeMark img {
+  display: block;
+}
+.dudeMarkDark,
+[data-theme="dark"] .dudeMarkLight {
+  display: none;
+}
+[data-theme="dark"] .dudeMarkDark {
+  display: block;
+}
 .keyPromptMark {
   display: block;
   margin: var(--ds-space-24) auto var(--ds-space-8);
