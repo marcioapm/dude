@@ -167,3 +167,24 @@ body {
   background: var(--ds-color-hover-wash);
   text-decoration: none;
 }
+
+/* A stopped delivery: why, a note, and the decisions its owner may take. */
+.escalation {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+}
+.escalation p {
+  margin: 0;
+}
+.escalationActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-8);
+}
+.escalationWaiting {
+  color: var(--ds-color-text-secondary);
+}
+.escalationProblem {
+  color: var(--ds-tone-danger-fg);
+}

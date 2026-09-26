@@ -2043,3 +2043,192 @@ func TestACommitAPersonAddsCanBeReady(t *testing.T) {
 		return w.taskStatus(wi) == "ready_to_merge"
 	})
 }
+
+// escalated delivers a task whose implementer fails once, then succeeds:
+// delivery stops for a person, and trying again goes on.
+func (w *world) escalated() string {
+	var implements int
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		if labels["dude.phase"] == "implement" {
+			implements++
+			if implements == 1 {
+				return fakelux.Behaviour{Crash: true}
+			}
+			return fakelux.Behaviour{Commit: map[string]string{"FACTORY.md": "done\n"}, Message: "work"}
+		}
+		return fakelux.Behaviour{Reply: "Looks good."}
+	}
+	wi := w.task()
+	w.deliver(wi)
+	w.until("delivery to stop for a person", func() bool { return w.taskStatus(wi) == "awaiting_input" })
+	return wi
+}
+
+// A person sends a stopped delivery back to try again: the step that
+// stopped runs afresh, with a new Run, and the note they left is part of
+// the task from then on.
+func TestAPersonSendsAStoppedDeliveryBackToTryAgain(t *testing.T) {
+	w := newWorld(t)
+	// A real model, so the reviewer's prompt is the one a real one reads.
+	mustExec(t, w.owner, `UPDATE projects SET agent_models = agent_models || '{"reviewer":{"model":"llm/review"}}'::jsonb WHERE id = $1`, w.project)
+	wi := w.escalated()
+	var actions string
+	_ = w.owner.QueryRow(context.Background(), `SELECT payload->>'actions' FROM events WHERE task_id = $1
+		AND event_type = 'question.asked' AND payload->>'kind' = 'escalation'`, wi).Scan(&actions)
+	if actions != `["retry", "stop"]` {
+		t.Errorf("a failed implementer offers %s", actions)
+	}
+	if status, body := w.call("/internal/tasks/"+wi+"/decide", map[string]any{"action": "accept"}); status != 400 {
+		t.Errorf("accepting findings nobody found: %d %v", status, body)
+	}
+	if status, body := w.call("/internal/tasks/"+wi+"/decide", map[string]any{"action": "retry", "note": "Use the new API."}); status != 200 {
+		t.Fatalf("retry: %d %v", status, body)
+	}
+	w.until("a second implementer, and review", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi) == 2 &&
+			w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review'`, wi) > 0
+	})
+	// The note is one of the task's decisions: the reviewer after it is told.
+	runs := w.lux.Runs()
+	var spec struct {
+		Workload struct{ Prompt string } `json:"workload"`
+	}
+	_ = json.Unmarshal(runs[len(runs)-1].Spec, &spec)
+	if !strings.Contains(spec.Workload.Prompt, "Use the new API.") {
+		t.Errorf("the note is not one of the task's decisions:\n%s", spec.Workload.Prompt)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.decided'`, wi); n != 1 {
+		t.Errorf("%d task.decided events", n)
+	}
+}
+
+// A second decision on the same escalation is refused the moment the first
+// is taken — not after the workflow acts on it — and changes nothing.
+func TestASecondDecisionIsRefusedAtOnce(t *testing.T) {
+	w := newWorld(t)
+	wi := w.escalated()
+	if status, body := w.call("/internal/tasks/"+wi+"/decide", map[string]any{"action": "retry"}); status != 200 {
+		t.Fatalf("retry: %d %v", status, body)
+	}
+	if status, body := w.call("/internal/tasks/"+wi+"/decide", map[string]any{"action": "stop", "note": "no"}); status != 409 {
+		t.Fatalf("a second decision: %d %v", status, body)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.decided'`, wi); n != 1 {
+		t.Errorf("%d task.decided events", n)
+	}
+	if n := w.count(`SELECT count(*) FROM questions WHERE task_id = $1 AND answer = 'no'`, wi); n != 0 {
+		t.Errorf("the refused decision's note was kept")
+	}
+}
+
+// Only what can be carried out is offered: a step to go back to, a pull
+// request to wait on.
+func TestEscalationsOfferWhatCanBeDone(t *testing.T) {
+	for _, c := range []struct {
+		e    delivery.Escalation
+		want string
+	}{
+		{delivery.Escalation{Reason: "implement_failed", Step: "implement"}, "retry stop"},
+		{delivery.Escalation{Reason: "pr_loop_exhausted"}, "stop"},
+		{delivery.Escalation{Reason: "stuck", Step: "fix"}, "retry accept stop"},
+		{delivery.Escalation{Reason: "pull_request_closed", Detail: map[string]any{"merged": 1, "closed": 1, "open": 0}}, "done stop"},
+		{delivery.Escalation{Reason: "pull_request_closed", Detail: map[string]any{"merged": 1, "closed": 0, "open": 1}}, "done wait stop"},
+	} {
+		if got := strings.Join(c.e.Actions(), " "); got != c.want {
+			t.Errorf("%s %v: %s, want %s", c.e.Reason, c.e.Detail, got, c.want)
+		}
+	}
+}
+
+// A task waiting on an agent's question, with no delivery, has nothing to
+// decide: refused, not an error.
+func TestDecidingATaskWithNoDeliveryIsRefused(t *testing.T) {
+	w := newWorld(t)
+	wi := w.task()
+	mustExec(t, w.owner, `UPDATE tasks SET status = 'awaiting_input' WHERE id = $1`, wi)
+	if status, body := w.call("/internal/tasks/"+wi+"/decide", map[string]any{"action": "stop"}); status != 409 {
+		t.Errorf("deciding a task with no delivery: %d %v", status, body)
+	}
+}
+
+// Stopping is the end of delivery, and the task's.
+func TestAPersonStopsAStoppedDelivery(t *testing.T) {
+	w := newWorld(t)
+	wi := w.escalated()
+	if status, body := w.call("/internal/tasks/"+wi+"/decide", map[string]any{"action": "stop"}); status != 200 {
+		t.Fatalf("stop: %d %v", status, body)
+	}
+	w.until("the task to be aborted, and delivery over", func() bool {
+		return w.taskStatus(wi) == "aborted" &&
+			w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status = 'completed'`, wi) == 1
+	})
+}
+
+// Only its owner decides.
+func TestOnlyATasksOwnerDecidesAStoppedDelivery(t *testing.T) {
+	w := newWorld(t)
+	ana, bo := w.person("Ana"), w.person("Bo")
+	wi := w.escalated()
+	mustExec(t, w.owner, `UPDATE tasks SET owner_key_id = $2 WHERE id = $1`, wi, ana)
+	if status, body := w.callAs(bo, "/internal/tasks/"+wi+"/decide", map[string]any{"action": "stop"}); status != 403 {
+		t.Fatalf("a non-owner's decision: %d %v", status, body)
+	}
+	if w.taskStatus(wi) != "awaiting_input" {
+		t.Fatalf("the refused decision moved the task")
+	}
+}
+
+// A delivery that stopped before stopping waited for a decision ended
+// there; deciding reopens it where it stopped.
+func TestADeliveryStoppedBeforeDecisionsIsReopened(t *testing.T) {
+	w := newWorld(t)
+	wi := w.escalated()
+	// As the old workflow left it: completed, the escalation in its state
+	// without the step to go back to.
+	mustExec(t, w.owner, `UPDATE workflow_runs SET status = 'completed', step = 'awaitImplement', awaiting_signals = '[]'::jsonb,
+		state = state #- '{escalation,step}' WHERE task_id = $1`, wi)
+	if status, body := w.call("/internal/tasks/"+wi+"/decide", map[string]any{"action": "retry"}); status != 200 {
+		t.Fatalf("retry: %d %v", status, body)
+	}
+	w.until("a second implementer", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi) == 2
+	})
+}
+
+// A review stuck on a finding: accepted, it ships as it is, and delivery
+// goes on to a pull request.
+func TestAPersonAcceptsTheFindingsAReviewGotStuckOn(t *testing.T) {
+	w := newWorld(t)
+	var reviews int
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		switch labels["dude.phase"] {
+		case "review":
+			// Found once; every fix after, still there.
+			if reviews++; reviews == 1 {
+				return fakelux.Behaviour{Reply: "```yaml\n" + fakeagent.Finding + "```\n"}
+			}
+			return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: still\n```\n"}
+		case "implement", "fix":
+			return fakelux.Behaviour{Commit: map[string]string{"FACTORY.md": fmt.Sprint(labels["dude.run"]) + "\n"}, Message: "work"}
+		}
+		return fakelux.Behaviour{Reply: "Nothing to simplify."}
+	}
+	wi := w.task()
+	w.deliver(wi)
+	w.until("the review to get stuck", func() bool { return w.taskStatus(wi) == "awaiting_input" })
+	var reason string
+	_ = w.owner.QueryRow(context.Background(), `SELECT payload->>'reason' FROM events WHERE task_id = $1
+		AND event_type = 'question.asked' AND payload->>'kind' = 'escalation'`, wi).Scan(&reason)
+	if reason != "stuck" && reason != "exhausted" {
+		t.Fatalf("stopped for %q", reason)
+	}
+	if status, body := w.call("/internal/tasks/"+wi+"/decide", map[string]any{"action": "accept"}); status != 200 {
+		t.Fatalf("accept: %d %v", status, body)
+	}
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	if n := w.count(`SELECT count(*) FROM review_findings WHERE task_id = $1 AND status = 'accepted'`, wi); n == 0 {
+		t.Errorf("no finding was accepted")
+	}
+}

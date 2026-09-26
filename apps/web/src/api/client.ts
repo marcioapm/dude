@@ -18,6 +18,7 @@ import type {
   DirectiveScope,
   Epic,
   Escalation,
+  EscalationAction,
   Finding,
   Repository,
   PullRequest,
@@ -40,6 +41,7 @@ import type {
 export type {
   Epic,
   Escalation,
+  EscalationAction,
   Finding,
   Person,
   Project,
@@ -383,6 +385,11 @@ export class ApiClient {
   /** Finished work with nothing to merge — a write-up, a design — is done once a person has read it. */
   markDone(taskId: string): Promise<{ status: string }> {
     return this.#request("POST", `/v1/tasks/${taskId}/done`, {});
+  }
+
+  /** How delivery goes on after it stopped for a person: the task's owner decides. */
+  decide(taskId: string, action: EscalationAction, note: string): Promise<{ action: EscalationAction }> {
+    return this.#request("POST", `/v1/tasks/${taskId}/decide`, { action, note });
   }
 
   // -- intervention (plan §24) --------------------------------------------

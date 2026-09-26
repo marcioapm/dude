@@ -662,6 +662,40 @@ def test_a_failed_implementer_says_why_on_its_task_and_its_chat(
     assert console_errors == []
 
 
+def test_a_person_decides_how_a_stopped_delivery_goes_on(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    """Delivery stopped for a person offers what fits: here, a failed
+    implementer — try again, or stop. A note goes with the decision; trying
+    again runs the step afresh, and with its model back it goes on."""
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {"reviewer": {"model": "fake/scripted"}}})
+    item = client.create_task(forge_project["id"], "Implement it once it can")
+    assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
+    wait_until(lambda: client.get(f"/v1/tasks/{item['id']}").json()["status"] == "awaiting_input",
+               timeout=60, message="delivery never stopped for a person")
+    assert client.get(f"/v1/tasks/{item['id']}").json()["escalation"]["actions"] == ["retry", "stop"]
+
+    _sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/task/{item['id']}")
+    escalation = page.get_by_test_id("escalation")
+    expect(escalation.get_by_test_id("escalation-retry")).to_have_text("Try again")
+    expect(escalation.get_by_test_id("escalation-stop")).to_be_visible()
+    expect(escalation.get_by_test_id("escalation-accept")).to_have_count(0)
+
+    # Its model back, and a word for the agent.
+    client.patch(f"/v1/projects/{forge_project['id']}",
+                 {"agentModels": {"implementer": {"model": "fake/scripted"}, "reviewer": {"model": "fake/scripted"}}})
+    escalation.get_by_test_id("escalation-note").fill("The model is configured now.")
+    escalation.get_by_test_id("escalation-retry").click()
+    expect(page.get_by_test_id("escalation")).to_have_count(0)
+    wait_until(lambda: len([r for r in client.get(f"/v1/tasks/{item['id']}").json()["runs"] if r["phase"] == "implement"]) == 2,
+               timeout=60, message="trying again made no second implementer")
+    decided = [e for e in client.events(taskId=item["id"]) if e["eventType"] == "task.decided"]
+    assert decided and decided[0]["payload"] == {"reason": "implement_failed", "action": "retry",
+                                                 "note": "The model is configured now."}, decided
+    assert console_errors == []
+
+
 def test_a_refused_key_asks_for_another(page: Page, web_url: str, org: dict, console_errors: list):
     """A key the server does not take (mistyped, revoked) goes back to the key
     prompt, saying so — not an error above a spinner that never ends."""

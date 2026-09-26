@@ -51,6 +51,8 @@ type Signal struct {
 type StepContext struct {
 	WorkflowRunID  string
 	OrganizationID string
+	// The step running.
+	Step string
 	// The workflow's state as the last step left it.
 	State json.RawMessage
 	// Signals received since the last step, among those it was waiting for.
@@ -399,6 +401,7 @@ func (r *Runtime) advance(ctx context.Context, run *claimed) {
 	result, err := r.runStep(ctx, step, StepContext{
 		WorkflowRunID:  run.ID,
 		OrganizationID: run.OrganizationID,
+		Step:           run.Step,
 		State:          run.State,
 		Signals:        run.signals,
 		Attempt:        run.Attempt,
