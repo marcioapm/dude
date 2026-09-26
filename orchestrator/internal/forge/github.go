@@ -37,6 +37,10 @@ const (
 	ChecksPassing = "passing"
 	ChecksFailing = "failing"
 	ChecksUnknown = "unknown"
+
+	ReviewPending          = "pending"
+	ReviewApproved         = "approved"
+	ReviewChangesRequested = "changes_requested"
 )
 
 // Feedback kinds.
@@ -446,14 +450,14 @@ func reviewState(reviews []ghReview) string {
 	approved := false
 	for _, v := range latest {
 		if v == "CHANGES_REQUESTED" {
-			return "changes_requested"
+			return ReviewChangesRequested
 		}
 		approved = approved || v == "APPROVED"
 	}
 	if approved {
-		return "approved"
+		return ReviewApproved
 	}
-	return "pending"
+	return ReviewPending
 }
 
 func asError(err error, target **Error) bool {

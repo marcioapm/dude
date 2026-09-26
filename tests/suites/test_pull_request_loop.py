@@ -115,6 +115,16 @@ def test_pr_feedback_wakes_a_fixer_and_a_merge_finishes(
         message="work item did not return to review after the fix",
     )
 
+    # Approved, and the fixture has no CI: ready to merge, and it is a
+    # person's merge — the factory never does it.
+    fake_github.approve(pr["number"])
+    wait_until(
+        lambda: _work_item(client, work_item["id"])["status"] == "ready_to_merge",
+        timeout=30,
+        message="an approved pull request did not make the work item ready to merge",
+    )
+    assert _pull_requests(client, work_item["id"])[0]["state"] == "open"
+
     fake_github.merge(pr["number"])
     wait_until(
         lambda: _work_item(client, work_item["id"])["status"] == "done",

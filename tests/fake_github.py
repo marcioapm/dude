@@ -204,6 +204,14 @@ class FakeGitHub:
         else:
             self.send_webhook("issue_comment", {"action": "created", "issue": {"number": number, "pull_request": {"url": ""}}})
 
+    def approve(self, number: int, reviewer: str = "alice") -> None:
+        """A reviewer approves the pull request, and GitHub says so by webhook."""
+        with self._lock:
+            self._next_id += 1
+            self.pulls[number].reviews.append({"id": self._next_id, "user": {"login": reviewer}, "state": "APPROVED",
+                                               "body": "", "submitted_at": _now()})
+        self.send_webhook("pull_request_review", {"action": "submitted", "pull_request": {"number": number}})
+
     def merge(self, number: int) -> None:
         with self._lock:
             pr = self.pulls[number]
