@@ -9,15 +9,19 @@
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
 
+// Every notification is signed by him, whatever it is about.
+const SIGNED = "His Dudeness";
+const signed = (title) => (title ? `${SIGNED} · ${title}` : SIGNED);
+
 self.addEventListener("push", (event) => {
   let message = {};
   try {
     message = event.data ? event.data.json() : {};
   } catch {
-    message = { title: "dude", body: event.data ? event.data.text() : "" };
+    message = { body: event.data ? event.data.text() : "" };
   }
   event.waitUntil(
-    self.registration.showNotification(message.title || "dude", {
+    self.registration.showNotification(signed(message.title), {
       body: message.body || "",
       // One per Run: a second ask from it replaces the first.
       tag: message.tag || undefined,

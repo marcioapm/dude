@@ -72,10 +72,10 @@ export async function turnPushOff(client: ApiClient): Promise<PushState> {
   return "off";
 }
 
-/** Shown by the service worker, as a push would be: that this browser shows them. */
+/** Shown by the service worker as a push would be, signed as it signs them (sw.js): that this browser shows them. */
 export async function showTestNotification(): Promise<void> {
   const reg = await navigator.serviceWorker.ready;
-  await reg.showNotification("dude", { body: "Notifications are on in this browser.", icon: "/icon-192.png", tag: "test" });
+  await reg.showNotification("His Dudeness", { body: "Notifications are on in this browser.", icon: "/icon-192.png", tag: "test" });
 }
 
 function fromBase64Url(s: string): Uint8Array<ArrayBuffer> {
