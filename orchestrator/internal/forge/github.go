@@ -270,7 +270,8 @@ func (g *GitHub) PullRequest(ctx context.Context, slug string, number int) (Stat
 	// failing one may be on the last. A token without Checks: read is
 	// refused (403), and GitHub Enterprise without Actions has no such
 	// endpoint (404): no check runs to read, which is no reason to stop
-	// reading the rest.
+	// reading the rest. A rate limit is also a 403, and is not that: it
+	// fails the sync, to be tried again.
 	for page, seen := 1, 0; ; page++ {
 		var runs struct {
 			TotalCount int `json:"total_count"`
@@ -282,7 +283,7 @@ func (g *GitHub) PullRequest(ctx context.Context, slug string, number int) (Stat
 		err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/commits/%s/check-runs?per_page=100&page=%d", slug, p.Head.SHA, page), nil, &runs)
 		if err != nil {
 			var e *Error
-			if asError(err, &e) && (e.Status == 403 || e.Status == 404) {
+			if asError(err, &e) && !Transient(err) && (e.Status == 403 || e.Status == 404) {
 				break
 			}
 			return Status{}, err
