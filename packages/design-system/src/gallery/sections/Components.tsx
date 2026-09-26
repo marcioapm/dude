@@ -19,7 +19,7 @@ import { Icon } from "../../icons/index.tsx";
 import { Card, CardBody, CardHeader } from "../../primitives/Card.tsx";
 import { ScrollArea } from "../../primitives/ScrollArea.tsx";
 import { AGENT_ROLE_NAMES } from "../../tokens/palette.ts";
-import { RUN_STATUSES, SESSION_STATUSES, WORK_ITEM_STATUSES } from "../../tokens/status.ts";
+import { RUN_STATUSES, SESSION_STATUSES, TASK_STATUSES } from "../../tokens/status.ts";
 import { at, bulkLog, events, logLines, sessionTree, sessionTreeWaiting, unifiedDiff } from "../fixtures.tsx";
 
 export function ComponentsSection({ mode }: { readonly mode: PaneMode }) {
@@ -35,15 +35,15 @@ export function ComponentsSection({ mode }: { readonly mode: PaneMode }) {
         title="StatusBadge"
         note={
           <>
-            Every Run, Session and Work item status. Meaning is carried by tone <em>and</em> glyph <em>and</em> text. Only <code>awaiting_input</code> / <code>awaiting_input</code> default to solid, with a slow expanding ring; that is the one thing on a busy screen that should pull the eye.
+            Every Run, Session and Task status. Meaning is carried by tone <em>and</em> glyph <em>and</em> text. Only <code>awaiting_input</code> / <code>awaiting_input</code> default to solid, with a slow expanding ring; that is the one thing on a busy screen that should pull the eye.
           </>
         }
       >
         <Panes mode={mode}>
           <Col>
-            <Label>Work item</Label>
+            <Label>Task</Label>
             <Row>
-              {WORK_ITEM_STATUSES.map((s) => (
+              {TASK_STATUSES.map((s) => (
                 <StatusBadge key={s} status={s} />
               ))}
             </Row>
@@ -61,19 +61,19 @@ export function ComponentsSection({ mode }: { readonly mode: PaneMode }) {
             </Row>
             <Label>Small</Label>
             <Row>
-              {WORK_ITEM_STATUSES.map((s) => (
+              {TASK_STATUSES.map((s) => (
                 <StatusBadge key={s} status={s} size="sm" />
               ))}
             </Row>
             <Label>Icon only (label in title + sr-only)</Label>
             <Row>
-              {WORK_ITEM_STATUSES.map((s) => (
+              {TASK_STATUSES.map((s) => (
                 <StatusBadge key={s} status={s} iconOnly />
               ))}
             </Row>
             <Label>Dot variant — shape carries meaning: hollow=pending, round=active, square=terminal, diamond=needs you</Label>
             <Row style={{ gap: 16 }}>
-              {WORK_ITEM_STATUSES.map((s) => (
+              {TASK_STATUSES.map((s) => (
                 <StatusBadge key={s} status={s} variant="dot" />
               ))}
             </Row>
@@ -320,7 +320,7 @@ export function ComponentsSection({ mode }: { readonly mode: PaneMode }) {
       <Block
         id="c-breadcrumb"
         title="Breadcrumb"
-        note="Where you are: Project › Epic › KEY. Every crumb but the last is a link or a button (text-coloured until hovered); the last is the current place and is aria-current. Long middle crumbs elide in the middle so the head and the tail both survive, with the full text in the title; the last crumb is never elided. Use it in the work-item header and the transcript header instead of a Back button."
+        note="Where you are: Project › Epic › KEY. Every crumb but the last is a link or a button (text-coloured until hovered); the last is the current place and is aria-current. Long middle crumbs elide in the middle so the head and the tail both survive, with the full text in the title; the last crumb is never elided. Use it in the task header and the transcript header instead of a Back button."
       >
         <Panes mode={mode}>
           <Col>
@@ -338,7 +338,7 @@ export function ComponentsSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
 
-      <Block id="c-composed" title="Composed: work item header" note="A quick sanity check that the pieces sit together at real density.">
+      <Block id="c-composed" title="Composed: task header" note="A quick sanity check that the pieces sit together at real density.">
         <Panes mode={mode}>
           <Card>
             <CardHeader

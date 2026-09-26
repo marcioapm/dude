@@ -17,15 +17,15 @@ export const EventTypes = {
   EpicUpdated: "epic.updated",
   EpicDeleted: "epic.deleted",
 
-  // Work item lifecycle
-  WorkItemCreated: "work_item.created",
-  WorkItemUpdated: "work_item.updated",
-  WorkItemConfirmed: "work_item.confirmed",
-  WorkItemPaused: "work_item.paused",
-  WorkItemResumed: "work_item.resumed",
-  WorkItemSteered: "work_item.steered",
-  WorkItemAborted: "work_item.aborted",
-  WorkItemStatusChanged: "work_item.status_changed",
+  // Task lifecycle
+  TaskCreated: "task.created",
+  TaskUpdated: "task.updated",
+  TaskConfirmed: "task.confirmed",
+  TaskPaused: "task.paused",
+  TaskResumed: "task.resumed",
+  TaskSteered: "task.steered",
+  TaskAborted: "task.aborted",
+  TaskStatusChanged: "task.status_changed",
 
   // Workflow
   WorkflowTransitioned: "workflow.transitioned",

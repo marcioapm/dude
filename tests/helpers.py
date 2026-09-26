@@ -124,13 +124,13 @@ class ApiClient:
         assert resp.status_code == 201, f"create project failed: {resp.status_code} {resp.text}"
         return resp.json()
 
-    def create_work_item(self, project_id: str, title: str, **body) -> dict:
-        resp = self.post("/v1/work-items", {"projectId": project_id, "title": title, **body})
-        assert resp.status_code == 201, f"create work item failed: {resp.status_code} {resp.text}"
+    def create_task(self, project_id: str, title: str, **body) -> dict:
+        resp = self.post("/v1/tasks", {"projectId": project_id, "title": title, **body})
+        assert resp.status_code == 201, f"create task failed: {resp.status_code} {resp.text}"
         return resp.json()
 
-    def create_run(self, work_item_id: str) -> dict:
-        resp = self.post(f"/v1/work-items/{work_item_id}/runs")
+    def create_run(self, task_id: str) -> dict:
+        resp = self.post(f"/v1/tasks/{task_id}/runs")
         assert resp.status_code == 201, f"create run failed: {resp.status_code} {resp.text}"
         return resp.json()
 
@@ -143,9 +143,9 @@ class ApiClient:
         assert resp.status_code == 200, f"events failed: {resp.status_code} {resp.text}"
         return resp.json()["events"]
 
-    def work_item_runs(self, work_item_id: str) -> list[dict]:
-        """A work item's Runs, oldest first."""
-        runs = self.get(f"/v1/work-items/{work_item_id}").json().get("runs", [])
+    def task_runs(self, task_id: str) -> list[dict]:
+        """A task's Runs, oldest first."""
+        runs = self.get(f"/v1/tasks/{task_id}").json().get("runs", [])
         return sorted(runs, key=lambda r: r["createdAt"])
 
     def get_run(self, run_id: str) -> dict:

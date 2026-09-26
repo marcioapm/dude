@@ -55,14 +55,14 @@ func (s *Server) Handler() http.Handler {
 		}
 		write(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
-	mux.Handle("POST /internal/work-items/{id}/deliver", s.auth(s.deliver))
+	mux.Handle("POST /internal/tasks/{id}/deliver", s.auth(s.deliver))
 	mux.Handle("POST /internal/runs/{id}/steer", s.auth(s.steer))
 	mux.Handle("POST /internal/runs/{id}/pause", s.auth(s.pause))
 	mux.Handle("POST /internal/runs/{id}/resume", s.auth(s.resume))
 	mux.Handle("POST /internal/runs/{id}/abort", s.auth(s.abort))
 	mux.Handle("POST /internal/questions/{id}/answer", s.auth(s.answer))
 	mux.Handle("GET /internal/artifacts/{id}/content", s.auth(s.artifactContent))
-	mux.Handle("POST /internal/work-items/{id}/done", s.auth(s.markDone))
+	mux.Handle("POST /internal/tasks/{id}/done", s.auth(s.markDone))
 	mux.Handle("POST /internal/repository-requests/{id}/decide", s.auth(s.decideRepositoryRequest))
 	// The factory's delivery defaults, which the settings screen shows for
 	// what a project leaves unset: one definition, here, where it is applied.
@@ -146,10 +146,10 @@ func (s *Server) kick() {
 	}
 }
 
-// deliver starts the delivery workflow for a work item. The work item is the
+// deliver starts the delivery workflow for a task. The task is the
 // idempotency key, so a second call joins the delivery already in flight.
 func (s *Server) deliver(w http.ResponseWriter, r *http.Request, org string) error {
-	workItemID := r.PathValue("id")
+	taskID := r.PathValue("id")
 	var body struct {
 		Policy  json.RawMessage `json:"policy"`
 		ActorID string          `json:"actorId"`
@@ -160,22 +160,22 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, org string) err
 	var projectID string
 	var projectPolicy []byte
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(r.Context(), `SELECT w.project_id, p.delivery_policy FROM work_items w
-			JOIN projects p ON p.id = w.project_id WHERE w.id = $1`, workItemID).Scan(&projectID, &projectPolicy); err != nil {
+		if err := tx.QueryRow(r.Context(), `SELECT w.project_id, p.delivery_policy FROM tasks w
+			JOIN projects p ON p.id = w.project_id WHERE w.id = $1`, taskID).Scan(&projectID, &projectPolicy); err != nil {
 			if db.IsNotFound(err) {
-				return fail(http.StatusNotFound, "not_found", "work item %s not found", workItemID)
+				return fail(http.StatusNotFound, "not_found", "task %s not found", taskID)
 			}
 			return err
 		}
-		// Which repositories it works on is the work item's to say: none is
+		// Which repositories it works on is the task's to say: none is
 		// work that changes no code — unless its project has just one.
-		return delivery.NameOnlyRepository(r.Context(), tx, workItemID)
+		return delivery.NameOnlyRepository(r.Context(), tx, taskID)
 	})
 	if err != nil {
 		return err
 	}
 
-	// The factory's defaults, then the project's, then this work item's own:
+	// The factory's defaults, then the project's, then this task's own:
 	// each layer sets only what it names.
 	policy := delivery.DefaultPolicy()
 	if err := json.Unmarshal(projectPolicy, &policy); err != nil {
@@ -188,13 +188,13 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, org string) err
 	}
 	var attempt int
 	_ = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		return tx.QueryRow(r.Context(), `SELECT COALESCE(max(attempt), 1) FROM runs WHERE work_item_id = $1`, workItemID).Scan(&attempt)
+		return tx.QueryRow(r.Context(), `SELECT COALESCE(max(attempt), 1) FROM runs WHERE task_id = $1`, taskID).Scan(&attempt)
 	})
 	id, dup, err := s.Workflow.Start(r.Context(), workflow.StartOptions{
-		Type: delivery.WorkflowType, OrganizationID: org, IdempotencyKey: "delivery:" + workItemID,
-		WorkItemID: workItemID,
-		Input: delivery.State{WorkItemID: workItemID, ProjectID: projectID,
-			Policy: policy, Branch: delivery.BranchFor(workItemID, attempt)},
+		Type: delivery.WorkflowType, OrganizationID: org, IdempotencyKey: "delivery:" + taskID,
+		TaskID: taskID,
+		Input: delivery.State{TaskID: taskID, ProjectID: projectID,
+			Policy: policy, Branch: delivery.BranchFor(taskID, attempt)},
 	})
 	if err != nil {
 		return err
@@ -204,13 +204,13 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, org string) err
 	if dup {
 		status = http.StatusOK
 	}
-	write(w, status, map[string]any{"workflowRunId": id, "workItemId": workItemID, "alreadyRunning": dup})
+	write(w, status, map[string]any{"workflowRunId": id, "taskId": taskID, "alreadyRunning": dup})
 	return nil
 }
 
 // runInfo loads what every run-control action needs, confined to org.
 type runInfo struct {
-	ProjectID, WorkItemID, Status string
+	ProjectID, TaskID, Status string
 	// dude paused it itself (runs.dude_pause), and would resume it on its own.
 	DudePaused bool
 }
@@ -219,8 +219,8 @@ var liveStatuses = []string{"pending", "scheduled", "starting", "running", "paus
 
 func loadRun(ctx context.Context, tx pgx.Tx, runID string) (runInfo, error) {
 	var ri runInfo
-	err := tx.QueryRow(ctx, `SELECT project_id, work_item_id, status::text, dude_pause IS NOT NULL FROM runs WHERE id = $1 FOR UPDATE`, runID).
-		Scan(&ri.ProjectID, &ri.WorkItemID, &ri.Status, &ri.DudePaused)
+	err := tx.QueryRow(ctx, `SELECT project_id, task_id, status::text, dude_pause IS NOT NULL FROM runs WHERE id = $1 FOR UPDATE`, runID).
+		Scan(&ri.ProjectID, &ri.TaskID, &ri.Status, &ri.DudePaused)
 	if db.IsNotFound(err) {
 		return ri, fail(http.StatusNotFound, "not_found", "run %s not found", runID)
 	}
@@ -245,15 +245,15 @@ func stillOpen(what, id, status, open string) error {
 // insertDirective queues text for a Run's agent (delivery.QueueDirective).
 func insertDirective(ctx context.Context, tx pgx.Tx, org, runID string, ri runInfo, text, scope, supersedes string,
 	interrupt bool) (string, time.Time, error) {
-	return delivery.QueueDirective(ctx, tx, delivery.RunRef{Org: org, ProjectID: ri.ProjectID, WorkItemID: ri.WorkItemID, RunID: runID},
+	return delivery.QueueDirective(ctx, tx, delivery.RunRef{Org: org, ProjectID: ri.ProjectID, TaskID: ri.TaskID, RunID: runID},
 		delivery.Directive{Text: text, Scope: scope, Supersedes: supersedes, Interrupt: interrupt})
 }
 
 func humanEvent(ctx context.Context, tx pgx.Tx, org, runID string, ri runInfo, typ, actor string, payload map[string]any) error {
 	_, err := ledger.Append(ctx, tx, ledger.Event{
-		Type: typ, OrganizationID: org, ProjectID: ri.ProjectID, WorkItemID: ri.WorkItemID, RunID: runID,
+		Type: typ, OrganizationID: org, ProjectID: ri.ProjectID, TaskID: ri.TaskID, RunID: runID,
 		ActorType: ledger.ActorHuman, ActorID: actor, Source: ledger.SourceOrchestrator,
-		CorrelationID: ri.WorkItemID, Payload: payload,
+		CorrelationID: ri.TaskID, Payload: payload,
 	})
 	return err
 }
@@ -293,7 +293,7 @@ func (s *Server) steer(w http.ResponseWriter, r *http.Request, org string) error
 		if err != nil {
 			return err
 		}
-		out = map[string]any{"id": id, "runId": runID, "workItemId": ri.WorkItemID, "text": body.Text,
+		out = map[string]any{"id": id, "runId": runID, "taskId": ri.TaskID, "text": body.Text,
 			"scope": body.Scope, "supersedes": db.Nullable(body.Supersedes), "interrupt": body.Interrupt,
 			"deliveredAt": nil, "createdAt": createdAt}
 		return humanEvent(r.Context(), tx, org, runID, ri, "run.steered", actor(r), map[string]any{
@@ -388,7 +388,7 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request, org string) erro
 	return nil
 }
 
-// abort stops a Run and its work item at once. The lux Run is cancelled by
+// abort stops a Run and its task at once. The lux Run is cancelled by
 // the syncer; its events and workspace are kept — abort stops work, it does
 // not erase it.
 // answer gives an agent the answer to the question it stopped on. The
@@ -438,7 +438,7 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 		if err != nil {
 			return err
 		}
-		if _, err := delivery.SetWorkItemStatusTx(r.Context(), tx, org, ri.ProjectID, ri.WorkItemID, "awaiting_input",
+		if _, err := delivery.SetTaskStatusTx(r.Context(), tx, org, ri.ProjectID, ri.TaskID, "awaiting_input",
 			"running", "a person answered the agent"); err != nil {
 			return err
 		}
@@ -460,7 +460,7 @@ func (s *Server) abort(w http.ResponseWriter, r *http.Request, org string) error
 	if err := read(r, &body); err != nil {
 		return err
 	}
-	var workItemID string
+	var taskID string
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		ri, err := loadRun(r.Context(), tx, runID)
 		if err != nil {
@@ -469,15 +469,15 @@ func (s *Server) abort(w http.ResponseWriter, r *http.Request, org string) error
 		if !isLive(ri.Status) {
 			return fail(http.StatusConflict, "conflict", "run %s is already %s", runID, ri.Status)
 		}
-		workItemID = ri.WorkItemID
+		taskID = ri.TaskID
 		if _, err := tx.Exec(r.Context(), `UPDATE runs SET status = 'aborted', control = 'abort', control_requested_at = now(),
 			control_reason = $2, ended_at = now() WHERE id = $1`, runID, db.Nullable(body.Reason)); err != nil {
 			return err
 		}
-		// The work item stops too: an aborted Run should not leave its work
+		// The task stops too: an aborted Run should not leave its work
 		// item looking like it is still progressing.
-		if _, err := tx.Exec(r.Context(), `UPDATE work_items SET status = 'aborted'
-			WHERE id = $1 AND status NOT IN ('done', 'failed', 'aborted')`, ri.WorkItemID); err != nil {
+		if _, err := tx.Exec(r.Context(), `UPDATE tasks SET status = 'aborted'
+			WHERE id = $1 AND status NOT IN ('done', 'failed', 'aborted')`, ri.TaskID); err != nil {
 			return err
 		}
 		return humanEvent(r.Context(), tx, org, runID, ri, "run.aborted", actor(r), map[string]any{"reason": db.Nullable(body.Reason)})
@@ -489,8 +489,8 @@ func (s *Server) abort(w http.ResponseWriter, r *http.Request, org string) error
 	// never finish.
 	var wfID string
 	_ = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		err := tx.QueryRow(r.Context(), `SELECT id FROM workflow_runs WHERE work_item_id = $1 AND status IN ('running', 'waiting')`,
-			workItemID).Scan(&wfID)
+		err := tx.QueryRow(r.Context(), `SELECT id FROM workflow_runs WHERE task_id = $1 AND status IN ('running', 'waiting')`,
+			taskID).Scan(&wfID)
 		if db.IsNotFound(err) {
 			return nil
 		}
@@ -562,7 +562,7 @@ func (s *Server) artifactContent(w http.ResponseWriter, r *http.Request, org str
 }
 
 // markDone: a person says work with nothing to merge is finished — a
-// write-up read, a design accepted. Only a work item in review whose
+// write-up read, a design accepted. Only a task in review whose
 // delivery has ended (nothing left to merge) can be marked done; one with
 // open pull requests is done when they are merged.
 func (s *Server) markDone(w http.ResponseWriter, r *http.Request, org string) error {
@@ -571,28 +571,28 @@ func (s *Server) markDone(w http.ResponseWriter, r *http.Request, org string) er
 		var projectID, status string
 		var open bool
 		if err := tx.QueryRow(r.Context(), `SELECT w.project_id, w.status::text,
-				EXISTS (SELECT 1 FROM workflow_runs d WHERE d.work_item_id = w.id AND d.status IN ('running', 'waiting'))
-			FROM work_items w WHERE w.id = $1 FOR UPDATE`, id).Scan(&projectID, &status, &open); err != nil {
+				EXISTS (SELECT 1 FROM workflow_runs d WHERE d.task_id = w.id AND d.status IN ('running', 'waiting'))
+			FROM tasks w WHERE w.id = $1 FOR UPDATE`, id).Scan(&projectID, &status, &open); err != nil {
 			if db.IsNotFound(err) {
-				return fail(http.StatusNotFound, "not_found", "work item %s not found", id)
+				return fail(http.StatusNotFound, "not_found", "task %s not found", id)
 			}
 			return err
 		}
 		if status != "review" || open {
-			return fail(http.StatusConflict, "conflict", "work item %s is %s; only finished work waiting to be read can be marked done", id, status)
+			return fail(http.StatusConflict, "conflict", "task %s is %s; only finished work waiting to be read can be marked done", id, status)
 		}
-		_, err := delivery.SetWorkItemStatusTx(r.Context(), tx, org, projectID, id, "review", "done", "marked done by "+actor(r))
+		_, err := delivery.SetTaskStatusTx(r.Context(), tx, org, projectID, id, "review", "done", "marked done by "+actor(r))
 		return err
 	})
 	if err != nil {
 		return err
 	}
-	write(w, http.StatusOK, map[string]any{"workItemId": id, "status": "done"})
+	write(w, http.StatusOK, map[string]any{"taskId": id, "status": "done"})
 	return nil
 }
 
 // decideRepositoryRequest: a person approves or denies an agent's request
-// for another repository. Approved, the repository joins the work item and
+// for another repository. Approved, the repository joins the task and
 // the Run is paused, to be resumed with it cloned (the syncer does both);
 // denied, the agent is told. Either way it is recorded.
 func (s *Server) decideRepositoryRequest(w http.ResponseWriter, r *http.Request, org string) error {
@@ -619,10 +619,10 @@ func (s *Server) decideRepositoryRequest(w http.ResponseWriter, r *http.Request,
 		if err != nil {
 			return err
 		}
-		var workItemID, repoID, repoName, access, status string
-		if err := tx.QueryRow(r.Context(), `SELECT q.work_item_id, q.repository_id, repo.name, q.access::text, q.status::text
+		var taskID, repoID, repoName, access, status string
+		if err := tx.QueryRow(r.Context(), `SELECT q.task_id, q.repository_id, repo.name, q.access::text, q.status::text
 			FROM repository_requests q JOIN repositories repo ON repo.id = q.repository_id WHERE q.id = $1 FOR UPDATE OF q`, id).
-			Scan(&workItemID, &repoID, &repoName, &access, &status); err != nil {
+			Scan(&taskID, &repoID, &repoName, &access, &status); err != nil {
 			return err
 		}
 		if err := stillOpen("repository request", id, status, "pending"); err != nil {
@@ -637,13 +637,13 @@ func (s *Server) decideRepositoryRequest(w http.ResponseWriter, r *http.Request,
 			return err
 		}
 		if body.Approve {
-			// The work item works on it from now on — every later phase gets it too.
-			if _, err := tx.Exec(r.Context(), `INSERT INTO work_item_repositories (organization_id, work_item_id, repository_id, access)
-				VALUES ($1, $2, $3, $4::repository_access) ON CONFLICT (work_item_id, repository_id) DO NOTHING`,
-				org, workItemID, repoID, access); err != nil {
+			// The task works on it from now on — every later phase gets it too.
+			if _, err := tx.Exec(r.Context(), `INSERT INTO task_repositories (organization_id, task_id, repository_id, access)
+				VALUES ($1, $2, $3, $4::repository_access) ON CONFLICT (task_id, repository_id) DO NOTHING`,
+				org, taskID, repoID, access); err != nil {
 				return err
 			}
-			// The lux Run has it already (a person took it off the work item
+			// The lux Run has it already (a person took it off the task
 			// and back): nothing to bring, so it is settled now — nothing
 			// would ever clone it.
 			tag, err := tx.Exec(r.Context(), `UPDATE repository_requests q SET status = 'cloned'

@@ -3,7 +3,7 @@
  * tree), indented by --depth. No borders: hover is a wash, selection a
  * stronger rounded wash with strong ink and a short accent rail. Needs-you
  * rows carry a small neutral pill at the row's left edge and
- * medium-weight text. Status marks for work items and
+ * medium-weight text. Status marks for tasks and
  * sessions share one column at the right edge, before the row menu.
  */
 
@@ -211,8 +211,8 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* -- Work item: status mark · mono key · title · who. -- */
-.workItem {
+/* -- Task: status mark · mono key · title · who. -- */
+.task {
   min-height: var(--ds-size-row-item);
 }
 .wiMain {
@@ -296,7 +296,7 @@
 .session {
   font-size: var(--ds-text-sm);
 }
-/* Guide: a hairline from the parent work item's mark down through its sessions. */
+/* Guide: a hairline from the parent task's mark down through its sessions. */
 .session::after {
   content: "";
   position: absolute;

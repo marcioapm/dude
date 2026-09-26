@@ -10,7 +10,7 @@
 
 import type { ToolOutput } from "../components/ToolCallCard.tsx";
 
-export const PHASE_PROMPT = `You are the **implementer** for work item **WI-2481** in \`dude/dude\`.
+export const PHASE_PROMPT = `You are the **implementer** for task **WI-2481** in \`dude/dude\`.
 
 ## Goal
 
@@ -161,7 +161,7 @@ export const ANSWER_TEXT = `Leave it — the route's retry covers a different fa
 
 export const MSG_4 = `All green: 65 pass, 0 fail. The diff is 118 lines.
 
-Opening the PR now. One note for the reviewer: the webhook route has its own retry on the outer edge, so worst case is 5 × 3 attempts before a delivery is declared lost. I have not changed that — it is a product decision — but it is worth a follow-up work item.`;
+Opening the PR now. One note for the reviewer: the webhook route has its own retry on the outer edge, so worst case is 5 × 3 attempts before a delivery is declared lost. I have not changed that — it is a product decision — but it is worth a follow-up task.`;
 
 export const CONTEXT_WINDOW = 744_000;
 

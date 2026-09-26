@@ -22,7 +22,7 @@ export interface StatusBadgeProps extends Omit<HTMLAttributes<HTMLSpanElement>, 
 }
 
 /**
- * The one component for every Run / Session / WorkItem status.
+ * The one component for every Run / Session / Task status.
  *
  * Meaning is carried three ways at once — tone, glyph, and text — so no
  * single channel is load-bearing. `awaiting_input` / `awaiting_input`

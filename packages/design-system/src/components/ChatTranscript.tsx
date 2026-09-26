@@ -20,7 +20,7 @@ export interface ChatTranscriptSession {
   readonly model?: string | undefined;
   /** "WI-2481 · Add retry with backoff…" — enough to know what you are looking at. */
   readonly title?: string | undefined;
-  readonly workItemId?: string | undefined;
+  readonly taskId?: string | undefined;
   readonly repo?: string | undefined;
   readonly branch?: string | undefined;
   readonly startedAt?: string | number | Date | undefined;
@@ -56,7 +56,7 @@ export interface ChatTranscriptProps extends Omit<HTMLAttributes<HTMLDivElement>
 
 /**
  * The transcript: the operator's day-to-day screen. A header states what
- * you are looking at (work item, role, model, repo/branch, status, cost
+ * you are looking at (task, role, model, repo/branch, status, cost
  * against budget, elapsed), an optional pinned plan sits under it, the
  * turns scroll, and the composer sits below.
  *
@@ -178,7 +178,7 @@ function TranscriptHeader({ session, actions }: { readonly session: ChatTranscri
       <AgentAvatar role={session.role} size="md" live={session.status === "running"} />
       <div className={styles["headerMain"]}>
         <div className={styles["headerTitle"]}>
-          {session.workItemId ? <code className={styles["headerId"]}>{session.workItemId}</code> : null}
+          {session.taskId ? <code className={styles["headerId"]}>{session.taskId}</code> : null}
           <span className={styles["headerText"]}>{session.title ?? ROLE_LABEL[session.role]}</span>
           <StatusBadge status={session.status} size="sm" />
         </div>

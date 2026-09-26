@@ -1,17 +1,17 @@
 /**
  * View model for the navigation tree — pure functions, no React.
  *
- * The domain hierarchy is Organization → Project → Epic → Work Item → Run →
+ * The domain hierarchy is Organization → Project → Epic → Task → Run →
  * Session. The tree shows four of those levels and folds Runs into their
- * work item: the sessions of the *current* run sit directly under the work
+ * task: the sessions of the *current* run sit directly under the work
  * item, and earlier attempts fold into one "Attempt n" row each. Retrying
- * is rare enough that it must not cost every work item a level.
+ * is rare enough that it must not cost every task a level.
  *
  * Everything here is keyed on the domain status unions via `triage.ts`, so
  * a new status is a compile error before it can be a blank row.
  */
 
-import type { AgentRole, RunStatus, SessionStatus, WorkItemStatus } from "@dude/domain";
+import type { AgentRole, RunStatus, SessionStatus, TaskStatus } from "@dude/domain";
 import type { Person } from "../components/HumanAvatar.tsx";
 import {
   EMPTY_TRIAGE_COUNTS,
@@ -46,12 +46,12 @@ export interface NavRun {
   readonly sessions: ReadonlyArray<NavSession>;
 }
 
-export interface NavWorkItem {
+export interface NavTask {
   readonly id: string;
   /** Human-facing key ("WI-2481"). Shown muted before the title when present. */
   readonly key?: string | undefined;
   readonly title: string;
-  readonly status: WorkItemStatus;
+  readonly status: TaskStatus;
   /** Humans involved, most relevant first (the one it waits on, then the requester). */
   readonly people?: ReadonlyArray<Person> | undefined;
   /** Attempts in order; the last one is current. */
@@ -65,18 +65,18 @@ export interface NavWorkItem {
 export interface NavEpic {
   readonly id: string;
   readonly title: string;
-  readonly workItems: ReadonlyArray<NavWorkItem>;
+  readonly tasks: ReadonlyArray<NavTask>;
 }
 
 export interface NavProject {
   readonly id: string;
   readonly name: string;
   readonly epics?: ReadonlyArray<NavEpic> | undefined;
-  /** Work items with no epic. Listed after the epics. */
-  readonly workItems?: ReadonlyArray<NavWorkItem> | undefined;
+  /** Tasks with no epic. Listed after the epics. */
+  readonly tasks?: ReadonlyArray<NavTask> | undefined;
 }
 
-export type NavKind = "project" | "epic" | "workItem" | "run" | "session";
+export type NavKind = "project" | "epic" | "task" | "run" | "session";
 
 export interface NavRef {
   readonly kind: NavKind;
@@ -102,17 +102,17 @@ function sessionTriage(s: NavSession): TriageKind {
   return t;
 }
 
-export function currentRun(wi: NavWorkItem): NavRun | null {
+export function currentRun(wi: NavTask): NavRun | null {
   const runs = wi.runs ?? [];
   return runs[runs.length - 1] ?? null;
 }
 
 /**
- * A work item's bucket is the most urgent of its own status and the
- * sessions of its current run: a `running` work item whose reviewer is
+ * A task's bucket is the most urgent of its own status and the
+ * sessions of its current run: a `running` task whose reviewer is
  * `awaiting_input` needs you, whatever the macro state says.
  */
-export function workItemTriage(wi: NavWorkItem): TriageKind {
+export function taskTriage(wi: NavTask): TriageKind {
   let t = triageOf(wi.status);
   const run = currentRun(wi);
   if (run) for (const s of run.sessions) t = moreUrgent(t, sessionTriage(s));
@@ -124,18 +124,18 @@ export function sessionSubtreeNeedsYou(s: NavSession): boolean {
   return sessionTriage(s) === "needs_you";
 }
 
-export function countWorkItems(items: ReadonlyArray<NavWorkItem>): TriageCounts {
+export function countTasks(items: ReadonlyArray<NavTask>): TriageCounts {
   let c = EMPTY_TRIAGE_COUNTS;
-  for (const wi of items) c = addTriage(c, workItemTriage(wi));
+  for (const wi of items) c = addTriage(c, taskTriage(wi));
   return c;
 }
 
 export function epicCounts(e: NavEpic): TriageCounts {
-  return countWorkItems(e.workItems);
+  return countTasks(e.tasks);
 }
 
 export function projectCounts(p: NavProject): TriageCounts {
-  return sumTriage([...(p.epics ?? []).map(epicCounts), countWorkItems(p.workItems ?? [])]);
+  return sumTriage([...(p.epics ?? []).map(epicCounts), countTasks(p.tasks ?? [])]);
 }
 
 export function totalCount(c: TriageCounts): number {
@@ -144,8 +144,8 @@ export function totalCount(c: TriageCounts): number {
   return n;
 }
 
-/** Live roles working on a work item right now, for the collapsed row. */
-export function workingRoles(wi: NavWorkItem): ReadonlyArray<AgentRole> {
+/** Live roles working on a task right now, for the collapsed row. */
+export function workingRoles(wi: NavTask): ReadonlyArray<AgentRole> {
   const out: AgentRole[] = [];
   const walk = (s: NavSession) => {
     if (s.status === "running" && !out.includes(s.role)) out.push(s.role);
@@ -161,7 +161,7 @@ export function workingRoles(wi: NavWorkItem): ReadonlyArray<AgentRole> {
 // ---------------------------------------------------------------------------
 
 export interface NavFilter {
-  /** Show only work items in this bucket (ancestors kept). */
+  /** Show only tasks in this bucket (ancestors kept). */
   readonly triage?: TriageKind | null | undefined;
   /** Case-insensitive substring over titles, keys, people, epic and project names. */
   readonly query?: string | undefined;
@@ -180,10 +180,10 @@ export interface NavRow {
   readonly expanded: boolean;
   /** Set when the filter forced this row open; the chevron is inert. */
   readonly forced: boolean;
-  readonly node: NavProject | NavEpic | NavWorkItem | NavRun | NavSession;
-  /** Project / epic / work item: bucket counts of the work items inside. */
+  readonly node: NavProject | NavEpic | NavTask | NavRun | NavSession;
+  /** Project / epic / task: bucket counts of the tasks inside. */
   readonly counts: TriageCounts | null;
-  /** Work item / session: its own bucket. */
+  /** Task / session: its own bucket. */
   readonly triage: TriageKind | null;
   readonly projectId: string;
 }
@@ -199,7 +199,7 @@ function matches(q: string, ...texts: ReadonlyArray<string | undefined>): boolea
   return texts.some((t) => t !== undefined && t.toLowerCase().includes(q));
 }
 
-function workItemMatches(q: string, wi: NavWorkItem): boolean {
+function taskMatches(q: string, wi: NavTask): boolean {
   return matches(q, wi.title, wi.key, ...(wi.people ?? []).map((p) => p.name));
 }
 
@@ -213,7 +213,7 @@ function isOpen(ctx: Ctx, key: string, byDefault: boolean, forced: boolean): boo
  * levels to reach the thing that needs them:
  *   project    open if anything inside is counted (needs you / active / ready / failed)
  *   epic       open if anything inside needs you or is active
- *   work item  open only if it needs you, so the asking session is visible
+ *   task  open only if it needs you, so the asking session is visible
  *   session    open only if a descendant needs you
  *   run        (earlier attempt) closed
  * Anything the user toggles overrides these; the override is per row and
@@ -237,10 +237,10 @@ function pushSession(ctx: Ctx, s: NavSession, depth: number, parentKey: string, 
   if (expanded) for (const c of kids) pushSession(ctx, c, depth + 1, key, projectId, forceOpen);
 }
 
-function pushWorkItem(ctx: Ctx, wi: NavWorkItem, depth: number, parentKey: string, projectId: string): void {
-  const ref: NavRef = { kind: "workItem", id: wi.id };
+function pushTask(ctx: Ctx, wi: NavTask, depth: number, parentKey: string, projectId: string): void {
+  const ref: NavRef = { kind: "task", id: wi.id };
   const key = navKey(ref);
-  const triage = workItemTriage(wi);
+  const triage = taskTriage(wi);
   const runs = wi.runs ?? [];
   const cur = runs[runs.length - 1];
   const expandable = cur !== undefined && (cur.sessions.length > 0 || runs.length > 1);
@@ -259,9 +259,9 @@ function pushWorkItem(ctx: Ctx, wi: NavWorkItem, depth: number, parentKey: strin
   }
 }
 
-function visibleWorkItems(ctx: Ctx, items: ReadonlyArray<NavWorkItem>, q: string): NavWorkItem[] {
+function visibleTasks(ctx: Ctx, items: ReadonlyArray<NavTask>, q: string): NavTask[] {
   const t = ctx.filter.triage ?? null;
-  return items.filter((wi) => (t === null || workItemTriage(wi) === t) && workItemMatches(q, wi));
+  return items.filter((wi) => (t === null || taskTriage(wi) === t) && taskMatches(q, wi));
 }
 
 /**
@@ -280,12 +280,12 @@ export function flattenNav(projects: ReadonlyArray<NavProject>, overrides: NavOv
     const pkey = navKey(pref);
     const projectHit = matches(q, p.name);
     // A query that hits a project or epic name keeps everything inside it;
-    // otherwise it has to hit the work item itself. The triage filter always
-    // applies to work items.
+    // otherwise it has to hit the task itself. The triage filter always
+    // applies to tasks.
     const epics = (p.epics ?? [])
-      .map((e) => ({ epic: e, items: visibleWorkItems(ctx, e.workItems, projectHit || matches(q, e.title) ? "" : q) }))
+      .map((e) => ({ epic: e, items: visibleTasks(ctx, e.tasks, projectHit || matches(q, e.title) ? "" : q) }))
       .filter((x) => !filtering || x.items.length > 0);
-    const loose = visibleWorkItems(ctx, p.workItems ?? [], projectHit ? "" : q);
+    const loose = visibleTasks(ctx, p.tasks ?? [], projectHit ? "" : q);
     if (filtering && epics.length === 0 && loose.length === 0) continue;
 
     const counts = projectCounts(p);
@@ -299,10 +299,10 @@ export function flattenNav(projects: ReadonlyArray<NavProject>, overrides: NavOv
       const ekey = navKey(eref);
       const ec = epicCounts(epic);
       const eexp = isOpen(ctx, ekey, epicDefaultOpen(ec), forced);
-      ctx.rows.push({ key: ekey, ref: eref, depth: 1, parentKey: pkey, expandable: epic.workItems.length > 0, expanded: eexp, forced, node: epic, counts: ec, triage: null, projectId: p.id });
-      if (eexp) for (const wi of items) pushWorkItem(ctx, wi, 2, ekey, p.id);
+      ctx.rows.push({ key: ekey, ref: eref, depth: 1, parentKey: pkey, expandable: epic.tasks.length > 0, expanded: eexp, forced, node: epic, counts: ec, triage: null, projectId: p.id });
+      if (eexp) for (const wi of items) pushTask(ctx, wi, 2, ekey, p.id);
     }
-    for (const wi of loose) pushWorkItem(ctx, wi, 1, pkey, p.id);
+    for (const wi of loose) pushTask(ctx, wi, 1, pkey, p.id);
   }
   return ctx.rows;
 }
@@ -321,9 +321,9 @@ export function ancestorKeys(projects: ReadonlyArray<NavProject>, ref: NavRef): 
     }
     return false;
   };
-  const inWorkItems = (list: ReadonlyArray<NavWorkItem>): boolean => {
+  const inTasks = (list: ReadonlyArray<NavTask>): boolean => {
     for (const wi of list) {
-      const k = navKey({ kind: "workItem", id: wi.id });
+      const k = navKey({ kind: "task", id: wi.id });
       if (k === target) return true;
       path.push(k);
       const runs = wi.runs ?? [];
@@ -351,10 +351,10 @@ export function ancestorKeys(projects: ReadonlyArray<NavProject>, ref: NavRef): 
       const ek = navKey({ kind: "epic", id: e.id });
       if (ek === target) return [...path];
       path.push(ek);
-      if (inWorkItems(e.workItems)) return [...path];
+      if (inTasks(e.tasks)) return [...path];
       path.pop();
     }
-    if (inWorkItems(p.workItems ?? [])) return [...path];
+    if (inTasks(p.tasks ?? [])) return [...path];
     path.pop();
   }
   return [];
@@ -366,7 +366,7 @@ export function globalCounts(projects: ReadonlyArray<NavProject>): TriageCounts 
 }
 
 export interface AttentionItem {
-  readonly workItem: NavWorkItem;
+  readonly task: NavTask;
   readonly project: NavProject;
   readonly epic: NavEpic | null;
   /** The session that is asking, if the block is at session level. */
@@ -384,20 +384,20 @@ export function askingSession(list: ReadonlyArray<NavSession>): NavSession | nul
 }
 
 /**
- * Every work item across all projects that needs a person, with enough
+ * Every task across all projects that needs a person, with enough
  * context to act on it without opening the tree. This is what makes
  * "what needs me" answerable without expanding anything.
  */
 export function attentionItems(projects: ReadonlyArray<NavProject>): AttentionItem[] {
   const out: AttentionItem[] = [];
-  const consider = (wi: NavWorkItem, project: NavProject, epic: NavEpic | null) => {
-    if (workItemTriage(wi) !== "needs_you") return;
+  const consider = (wi: NavTask, project: NavProject, epic: NavEpic | null) => {
+    if (taskTriage(wi) !== "needs_you") return;
     const run = currentRun(wi);
-    out.push({ workItem: wi, project, epic, session: run ? askingSession(run.sessions) : null });
+    out.push({ task: wi, project, epic, session: run ? askingSession(run.sessions) : null });
   };
   for (const p of projects) {
-    for (const e of p.epics ?? []) for (const wi of e.workItems) consider(wi, p, e);
-    for (const wi of p.workItems ?? []) consider(wi, p, null);
+    for (const e of p.epics ?? []) for (const wi of e.tasks) consider(wi, p, e);
+    for (const wi of p.tasks ?? []) consider(wi, p, null);
   }
   return out;
 }

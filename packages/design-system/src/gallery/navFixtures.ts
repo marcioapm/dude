@@ -1,11 +1,11 @@
 /**
- * Navigation fixtures: three projects, ~50 work items, enough variety to
+ * Navigation fixtures: three projects, ~50 tasks, enough variety to
  * show whether the sidebar stays calm. Deterministic.
  */
 
 import type { Person } from "../components/HumanAvatar.tsx";
-import type { NavProject, NavSession, NavWorkItem } from "../util/navModel.ts";
-import type { AgentRole, SessionStatus, WorkItemStatus } from "@dude/domain";
+import type { NavProject, NavSession, NavTask } from "../util/navModel.ts";
+import type { AgentRole, SessionStatus, TaskStatus } from "@dude/domain";
 
 export const people: Record<string, Person> = {
   marcio: { id: "u_marcio", name: "Márcio Martins" },
@@ -38,7 +38,7 @@ const NOW = Date.now();
 const HOUR = 3_600_000;
 
 /** Plausible time-in-status by stage, in hours; the spread comes from the id. */
-const AGE_HOURS: Record<WorkItemStatus, number> = {
+const AGE_HOURS: Record<TaskStatus, number> = {
   received: 30,
   intake: 3,
   awaiting_confirmation: 5,
@@ -51,10 +51,10 @@ const AGE_HOURS: Record<WorkItemStatus, number> = {
   failed: 40,
   aborted: 90,
 };
-const SPENDS: ReadonlySet<WorkItemStatus> = new Set(["intake", "awaiting_confirmation", "running", "awaiting_input", "review", "ready_to_merge", "done", "failed", "aborted"]);
+const SPENDS: ReadonlySet<TaskStatus> = new Set(["intake", "awaiting_confirmation", "running", "awaiting_input", "review", "ready_to_merge", "done", "failed", "aborted"]);
 
 let n = 2400;
-function wi(title: string, status: WorkItemStatus, opts: { people?: Person[]; sessions?: NavSession[]; runs?: number } = {}): NavWorkItem {
+function wi(title: string, status: TaskStatus, opts: { people?: Person[]; sessions?: NavSession[]; runs?: number } = {}): NavTask {
   n += 1;
   const id = `wi_${n}`;
   const spread = ((n * 37) % 17) / 17 + 0.15;
@@ -83,7 +83,7 @@ export const navProjects: NavProject[] = [
       {
         id: "e_webhooks",
         title: "Webhook reliability",
-        workItems: [
+        tasks: [
           wi("Add retry with backoff to the GitHub webhook handler", "awaiting_input", {
             people: [P["marcio"]!, P["ana"]!],
             sessions: [
@@ -104,7 +104,7 @@ export const navProjects: NavProject[] = [
       {
         id: "e_intervention",
         title: "Human intervention",
-        workItems: [
+        tasks: [
           wi("Steer: deliver directives to the running harness", "running", {
             people: [P["marcio"]!],
             sessions: [
@@ -123,7 +123,7 @@ export const navProjects: NavProject[] = [
       {
         id: "e_sweepers",
         title: "Background sweepers",
-        workItems: [
+        tasks: [
           wi("Reconcile drifted runs against worker heartbeats", "done", { people: [P["marcio"]!] }),
           wi("Expire stale workspaces after 72h idle", "done", { people: [P["sam"]!] }),
           wi("Budget sweeper: pause runs that cross the cost ceiling", "awaiting_confirmation", { people: [P["sam"]!, P["marcio"]!] }),
@@ -131,7 +131,7 @@ export const navProjects: NavProject[] = [
         ],
       },
     ],
-    workItems: [
+    tasks: [
       wi("Fix flaky test: reconcile: 3 runs checked", "running", { people: [P["jules"]!], sessions: [ses("s_2416-orc", "orchestrator", "running", "Thinking", [ses("s_2416-inv", "investigator", "running", "grep reconcile")])] }),
       wi("Bump zod to 3.25", "ready_to_merge", { people: [P["kai"]!] }),
       wi("Type the event payloads end to end", "intake", { people: [P["marcio"]!] }),
@@ -144,7 +144,7 @@ export const navProjects: NavProject[] = [
       {
         id: "e_chat",
         title: "Chat interface",
-        workItems: [
+        tasks: [
           wi("Transcript follows the tail until the operator scrolls", "done", { people: [P["marcio"]!] }),
           wi("Composer: answer vs steer on four channels", "done", { people: [P["marcio"]!] }),
           wi("Nested subagent threads with role-coloured rails", "done", { people: [P["marcio"]!] }),
@@ -156,8 +156,8 @@ export const navProjects: NavProject[] = [
       {
         id: "e_nav",
         title: "Navigation",
-        workItems: [
-          wi("Sidebar: projects, epics, work items, sessions", "running", {
+        tasks: [
+          wi("Sidebar: projects, epics, tasks, sessions", "running", {
             people: [P["marcio"]!],
             sessions: [
               ses("s_2425-orc", "orchestrator", "running", "Waiting for reviewer", [
@@ -174,7 +174,7 @@ export const navProjects: NavProject[] = [
       {
         id: "e_settings",
         title: "Settings",
-        workItems: [
+        tasks: [
           wi("Per-role model picker with org fallback", "done", { people: [P["ana"]!] }),
           wi("Repository trust class toggle", "done", { people: [P["ana"]!] }),
           wi("Cost ceiling per role", "done", { people: [P["tom"]!] }),
@@ -183,7 +183,7 @@ export const navProjects: NavProject[] = [
         ],
       },
     ],
-    workItems: [
+    tasks: [
       wi("Lighthouse: LCP under 1.5s on the transcript page", "queued", { people: [P["kai"]!] }),
       wi("Replace CDN font load with bundled files", "done", { people: [P["marcio"]!] }),
     ],
@@ -195,7 +195,7 @@ export const navProjects: NavProject[] = [
       {
         id: "e_harness",
         title: "Harness adapters",
-        workItems: [
+        tasks: [
           wi("Claude Code adapter: map tool events to the ledger", "done", { people: [P["marcio"]!] }),
           wi("OpenCode adapter: session resume", "failed", {
             people: [P["sam"]!, P["marcio"]!],
@@ -209,7 +209,7 @@ export const navProjects: NavProject[] = [
       {
         id: "e_sandbox",
         title: "Sandboxing",
-        workItems: [
+        tasks: [
           wi("Network egress allowlist per trust class", "done", { people: [P["tom"]!] }),
           wi("Credential injection at exec time, never on disk", "done", { people: [P["tom"]!] }),
           wi("Untrusted repos run without org secrets", "queued", { people: [P["ana"]!] }),
@@ -218,7 +218,7 @@ export const navProjects: NavProject[] = [
         ],
       },
     ],
-    workItems: [
+    tasks: [
       wi("Heartbeat every 5s; worker marked lost after 3 misses", "done", { people: [P["marcio"]!] }),
       wi("Graceful drain on SIGTERM", "done", { people: [P["marcio"]!] }),
       wi("Structured logs with session id on every line", "running", { people: [P["jules"]!], sessions: crew("s_2448") }),
@@ -236,10 +236,10 @@ export const navProjectsQuiet: NavProject[] = [
       {
         id: "e_guides",
         title: "Guides",
-        workItems: [wi("Getting started", "done", { people: [P["ana"]!] }), wi("Configuring a project", "done", { people: [P["ana"]!] }), wi("Steering an agent", "queued", { people: [P["marcio"]!] })],
+        tasks: [wi("Getting started", "done", { people: [P["ana"]!] }), wi("Configuring a project", "done", { people: [P["ana"]!] }), wi("Steering an agent", "queued", { people: [P["marcio"]!] })],
       },
     ],
-    workItems: [wi("Fix broken anchors in the plan", "review", { people: [P["jules"]!] })],
+    tasks: [wi("Fix broken anchors in the plan", "review", { people: [P["jules"]!] })],
   },
 ];
 
@@ -248,8 +248,8 @@ export const navProjectEverything: NavProject = {
   id: "p_everything",
   name: "everything",
   epics: navProjects.flatMap((p) => p.epics ?? []),
-  workItems: navProjects.flatMap((p) => p.workItems ?? []),
+  tasks: navProjects.flatMap((p) => p.tasks ?? []),
 };
 
 /** A project with nothing in it yet. */
-export const navProjectEmpty: NavProject = { id: "p_new", name: "new-service", epics: [], workItems: [] };
+export const navProjectEmpty: NavProject = { id: "p_new", name: "new-service", epics: [], tasks: [] };

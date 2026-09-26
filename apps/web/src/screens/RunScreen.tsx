@@ -35,7 +35,7 @@ import { useEventStream } from "../hooks/useEventStream.ts";
 export interface RunScreenProps {
   client: ApiClient;
   runId: string;
-  /** The work item's title, when the caller already knows it. */
+  /** The task's title, when the caller already knows it. */
   title?: string | undefined;
   /** Where this conversation sits, shown above it: a way back up. */
   breadcrumb?: ReactNode;
@@ -157,7 +157,7 @@ export function RunScreen({ client, runId, title, breadcrumb }: RunScreenProps) 
     // The id is already shown beside the title; repeating it as the title
     // leaves the header saying nothing about the work.
     title: [title, phase, `attempt ${run.attempt}`].filter(Boolean).join(" · "),
-    workItemId: run.workItemId,
+    taskId: run.taskId,
     startedAt: run.startedAt ?? run.createdAt,
     endedAt: run.endedAt,
     ...(run.model ? { model: run.model } : {}),

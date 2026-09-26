@@ -11,7 +11,7 @@ export const ID_PREFIXES = {
   user: "usr",
   project: "prj",
   epic: "epc",
-  workItem: "wi",
+  task: "wi",
   run: "run",
   session: "ses",
   event: "evt",

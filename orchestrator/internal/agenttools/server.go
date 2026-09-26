@@ -47,11 +47,11 @@ type Server struct {
 
 // Caller is the Run a token names: who is calling, and all it may reach.
 type Caller struct {
-	RunID, Org, ProjectID, WorkItemID, Role, Status string
+	RunID, Org, ProjectID, TaskID, Role, Status string
 }
 
 func (c Caller) run() delivery.RunRef {
-	return delivery.RunRef{Org: c.Org, ProjectID: c.ProjectID, WorkItemID: c.WorkItemID, RunID: c.RunID}
+	return delivery.RunRef{Org: c.Org, ProjectID: c.ProjectID, TaskID: c.TaskID, RunID: c.RunID}
 }
 
 // event is a ledger event by the calling agent, on its Run.
@@ -182,8 +182,8 @@ var errUnknown = errors.New("unknown token")
 func (s *Server) lookup(ctx context.Context, token string) (Caller, error) {
 	var c Caller
 	var role *string
-	err := s.DB.Pool.QueryRow(ctx, `SELECT run_id, organization_id, project_id, work_item_id, role, status
-		FROM lookup_run_by_mcp_token($1)`, HashToken(token)).Scan(&c.RunID, &c.Org, &c.ProjectID, &c.WorkItemID, &role, &c.Status)
+	err := s.DB.Pool.QueryRow(ctx, `SELECT run_id, organization_id, project_id, task_id, role, status
+		FROM lookup_run_by_mcp_token($1)`, HashToken(token)).Scan(&c.RunID, &c.Org, &c.ProjectID, &c.TaskID, &role, &c.Status)
 	if db.IsNotFound(err) {
 		return c, errUnknown
 	}
@@ -282,7 +282,7 @@ func define[In, Out any](name, description string, roles []string,
 		}}
 }
 
-// Calls a Run may make in a minute, and work items and events it may
+// Calls a Run may make in a minute, and tasks and events it may
 // create in its lifetime: enough for real work, not for a runaway loop.
 const (
 	callsPerMinute = 60
@@ -332,7 +332,7 @@ func withinLimits(ctx context.Context, tx pgx.Tx, c Caller, tool string) error {
 		FROM events WHERE run_id = $1 AND event_type = $2`, c.RunID, EventType, tool).Scan(&recent, &sameTool); err != nil {
 		return err
 	}
-	limit := map[string]int{"create_work_item": createsPerRun, "emit_event": eventsPerRun, "request_repository": requestsPerRun}[tool]
+	limit := map[string]int{"create_task": createsPerRun, "emit_event": eventsPerRun, "request_repository": requestsPerRun}[tool]
 	switch {
 	case recent >= callsPerMinute:
 		return refuse("too many calls: at most %d a minute; slow down", callsPerMinute)

@@ -69,7 +69,7 @@ export interface ArtifactRowProps extends Omit<HTMLAttributes<HTMLLIElement>, "c
   readonly sha256?: string | undefined;
   readonly producer: ArtifactProducer;
   readonly publishedAt: string | number | Date;
-  /** Since the previous run of the same work item; omit when unknown. */
+  /** Since the previous run of the same task; omit when unknown. */
   readonly change?: ArtifactChange | null | undefined;
   /** The app's `<a href download>`; rendered at the end of the row. */
   readonly download?: ReactNode;
@@ -167,14 +167,14 @@ export interface ArtifactGroupProps<T extends ArtifactLike> extends Omit<HTMLAtt
   readonly actions?: ReactNode;
   /**
    * What to say when there are none. Without it an empty group renders
-   * nothing at all — a work item with no artifacts should not grow a
+   * nothing at all — a task with no artifacts should not grow a
    * section to say so unless the screen wants one.
    */
   readonly empty?: ReactNode;
 }
 
 /**
- * A work item's published files, in the order given (the app decides:
+ * A task's published files, in the order given (the app decides:
  * newest first is the usual). The header carries the count. `renderRow`
  * returns an `ArtifactRow` per artifact, so the app owns the download
  * links and the preview fetching.

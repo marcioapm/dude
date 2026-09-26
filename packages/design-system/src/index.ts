@@ -35,7 +35,7 @@ export {
   globalCounts,
   projectCounts,
   epicCounts,
-  workItemTriage,
+  taskTriage,
   workingRoles,
   currentRun,
   navKey,
@@ -43,7 +43,7 @@ export {
 export type {
   NavProject,
   NavEpic,
-  NavWorkItem,
+  NavTask,
   NavRun,
   NavSession,
   NavRef,

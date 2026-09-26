@@ -16,7 +16,7 @@ import {
   type NavRow,
   type NavRun,
   type NavSession,
-  type NavWorkItem,
+  type NavTask,
 } from "../util/navModel.ts";
 import { AgentAvatar, ROLE_LABEL } from "./AgentAvatar.tsx";
 import { HumanAvatar } from "./HumanAvatar.tsx";
@@ -61,14 +61,14 @@ export interface NavRowMenuControls {
 }
 
 /**
- * The navigation tree: Project → Epic → Work item → Session, with earlier
+ * The navigation tree: Project → Epic → Task → Session, with earlier
  * Runs folded into one "Attempt n" row each. Rendered flat (every row is a
  * sibling with `aria-level`) so keyboard movement is index arithmetic and
  * project headers can stick to the top of the scroll.
  *
  * Each level has its own row grammar, so depth never rests on indentation
  * alone: projects are small-caps headers, epics carry the layers glyph,
- * work items lead with a status mark and a mono key, sessions lead with a
+ * tasks lead with a status mark and a mono key, sessions lead with a
  * role avatar on a guide line.
  *
  * Keyboard: ↑↓ move, → opens or steps in, ← closes or steps out, Home/End,
@@ -260,10 +260,10 @@ export const NavTree = forwardRef<HTMLDivElement, NavTreeProps>(function NavTree
   );
 });
 
-/** A row's accessible name: its title, and a work item's key before it. */
+/** A row's accessible name: its title, and a task's key before it. */
 function treeItemLabel(row: NavRow): string {
-  if (row.ref.kind === "workItem") {
-    const wi = row.node as NavWorkItem;
+  if (row.ref.kind === "task") {
+    const wi = row.node as NavTask;
     return wi.key ? `${wi.key} ${wi.title}` : wi.title;
   }
   return rowLabel(row);
@@ -276,8 +276,8 @@ export function rowLabel(row: NavRow): string {
       return (row.node as NavProject).name;
     case "epic":
       return (row.node as NavEpic).title;
-    case "workItem": {
-      const wi = row.node as NavWorkItem;
+    case "task": {
+      const wi = row.node as NavTask;
       return wi.key ?? wi.title;
     }
     case "run":
@@ -371,7 +371,7 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
         {chevron}
         <Icon name="layers" size={14} className={styles["epicGlyph"]} />
         <span className={styles["epicTitle"]}>{e.title}</span>
-        <span className={styles["epicCount"]}>{e.workItems.length}</span>
+        <span className={styles["epicCount"]}>{e.tasks.length}</span>
         {row.counts && !row.expanded ? <TriageRollup counts={row.counts} className={styles["rollup"]} /> : null}
         {row.counts && row.expanded && row.counts.needs_you > 0 ? <TriageRollup counts={row.counts} only={["needs_you"]} className={styles["rollup"]} /> : null}
         {menuSlot}
@@ -379,13 +379,13 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
     );
   }
 
-  if (kind === "workItem") {
-    const wi = row.node as NavWorkItem;
+  if (kind === "task") {
+    const wi = row.node as NavTask;
     const roles = row.expanded ? [] : workingRoles(wi);
     const spec = statusSpec(wi.status);
     const finished = spec.terminal;
     return (
-      <div {...common} className={cx(styles["row"], styles["workItem"], needsYou && styles["needsYou"], finished && styles["finished"], selected && styles["selected"])}>
+      <div {...common} className={cx(styles["row"], styles["task"], needsYou && styles["needsYou"], finished && styles["finished"], selected && styles["selected"])}>
         {needsYou ? <span className={styles["pill"]} aria-hidden /> : null}
         {chevron}
         <span className={styles["wiMain"]}>
@@ -433,12 +433,12 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
 }
 
 /**
- * Who is on a work item, in the space of one avatar: the first person (or,
+ * Who is on a task, in the space of one avatar: the first person (or,
  * with nobody assigned, the first working role) and a muted "+N" for
  * everyone else, so the title keeps the width. The full list is the title
  * and the accessible name.
  */
-function WhoTrailing({ people, roles }: { readonly people: NonNullable<NavWorkItem["people"]>; readonly roles: ReadonlyArray<AgentRole> }) {
+function WhoTrailing({ people, roles }: { readonly people: NonNullable<NavTask["people"]>; readonly roles: ReadonlyArray<AgentRole> }) {
   const total = people.length + roles.length;
   if (total === 0) return null;
   const names = [...people.map((p) => p.name), ...roles.map((r) => ROLE_LABEL[r])].join(", ");

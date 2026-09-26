@@ -22,7 +22,7 @@ different prompt. Since then the workflow moved to the Go orchestrator
 (`orchestrator/internal/delivery`), and a phase Run no longer runs on dude's
 own Docker runner but on lux: "its own container and clone" below is now a
 lux Run with its own checkout, and "the runner's push step" is lux's leased
-push to a per-Run branch that dude fast-forwards the work item's branch to.
+push to a per-Run branch that dude fast-forwards the task's branch to.
 The reasoning below is unchanged; the file paths it names are historical.
 
 ---
@@ -44,7 +44,7 @@ a lease, a node affinity (`home_worker_id`, `workspace_portable`), a control
 channel, and a place in the event ledger.
 
 So "give each agent its own sandbox" does not need a new concept. It needs the
-**phase to be a Run** — sibling Runs under one Work Item — instead of a subagent
+**phase to be a Run** — sibling Runs under one Task — instead of a subagent
 inside one Run.
 
 ## On "worktree" specifically
@@ -217,9 +217,9 @@ ALTER TABLE runs
   ADD COLUMN branch        text;
 ```
 
-`attempt` keeps its meaning (a retry of the whole Work Item); `phase` is the step
-within it, so `UNIQUE (work_item_id, attempt)` becomes
-`UNIQUE (work_item_id, attempt, phase)`.
+`attempt` keeps its meaning (a retry of the whole Task); `phase` is the step
+within it, so `UNIQUE (task_id, attempt)` becomes
+`UNIQUE (task_id, attempt, phase)`.
 
 `role` moves onto the Run. Today `runner.ts:244` hardcodes `DEFAULT_RUN_ROLE`
 with the comment *"role is policy, and policy belongs to the control plane"* —
@@ -316,9 +316,9 @@ Consequences:
 
 ### 8. UI
 
-`navModel.ts` already models `NavWorkItem → NavRun[] → NavSession[]` and folds
+`navModel.ts` already models `NavTask → NavRun[] → NavSession[]` and folds
 older attempts. Phase Runs slot in as the current attempt's children — the tree
-gains `Work Item → [implement ✓, review ●, test ○]` without a new level. The
+gains `Task → [implement ✓, review ●, test ○]` without a new level. The
 kanban board becomes the natural overview of that.
 
 ---

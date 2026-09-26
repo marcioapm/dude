@@ -194,7 +194,7 @@
 }
 
 
-/* A description with a list in it (a work item's criteria): paragraphs
+/* A description with a list in it (a task's criteria): paragraphs
    spaced, the list indented as prose lists are. */
 .description p {
   margin: 0 0 var(--ds-space-6);

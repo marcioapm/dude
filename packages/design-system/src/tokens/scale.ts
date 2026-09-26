@@ -140,7 +140,7 @@ export const size = {
   rowDefault: 32,
   /** Two-line rows. */
   rowComfortable: 40,
-  /** Sidebar work items, epics, projects; tool call rows. */
+  /** Sidebar tasks, epics, projects; tool call rows. */
   rowItem: 32,
   /** Sidebar session rows, thought rows. */
   rowItemSm: 28,
@@ -200,7 +200,7 @@ export const measure = {
   message: "70ch",
   /** Published artifacts read in full: Obsidian's readable line width. */
   document: "700px",
-  /** A page of the app outside the board and the transcript: a work item, settings. */
+  /** A page of the app outside the board and the transcript: a task, settings. */
   page: "960px",
 } as const;
 

@@ -27,10 +27,10 @@ const maxPendingRequests = 3
 
 // The tools, and which roles have them (docs/design/agent-tools.md).
 var tools = []tool{
-	define("list_work", "The project's epics and work items, with their keys (like TEXT-12), status and who "+
+	define("list_tasks", "The project's epics and tasks, with their keys (like TEXT-12), status and who "+
 		"asked for them — optionally only those mentioning some text. Use it before creating work, to find what "+
-		"already exists.", nil, listWork),
-	define("list_epics", "The project's epics, in priority order, with how many work items each has and how many "+
+		"already exists.", nil, listTasks),
+	define("list_epics", "The project's epics, in priority order, with how many tasks each has and how many "+
 		"are still open.", nil, listEpics),
 	define("ask_person", "Ask a person something only a person can decide — the task is ambiguous in a way that "+
 		"changes what you build, or two reasonable readings conflict. After calling it, end your turn: the answer "+
@@ -47,35 +47,35 @@ var tools = []tool{
 		"you can; if you cannot go on without it, ask with wait: true and end your turn — you are resumed with it, "+
 		"or told it was declined.",
 		nil, requestRepository),
-	define("create_work_item", "Record a piece of work you found that is outside your task — a bug, a "+
-		"follow-up, a part to split out — as a new work item in this project. It is not started: a person reads it "+
-		"and decides. Say what and why in the goal.", creators, createWorkItem),
+	define("create_task", "Record a piece of work you found that is outside your task — a bug, a "+
+		"follow-up, a part to split out — as a new task in this project. It is not started: a person reads it "+
+		"and decides. Say what and why in the goal.", creators, createTask),
 }
 
-// ---- list_work --------------------------------------------------------------
+// ---- list_tasks --------------------------------------------------------------
 
-type listWorkIn struct {
-	Text string `json:"text,omitempty" jsonschema:"only work items whose title or goal mention this (case-insensitive); empty lists everything"`
+type listTasksIn struct {
+	Text string `json:"text,omitempty" jsonschema:"only tasks whose title or goal mention this (case-insensitive); empty lists everything"`
 }
 
-type workItemOut struct {
+type taskOut struct {
 	Key    string `json:"key"`
 	Title  string `json:"title"`
 	Status string `json:"status"`
 	Epic   string `json:"epic,omitempty"`
-	// "person", or the key of the work item whose agent created it.
+	// "person", or the key of the task whose agent created it.
 	CreatedBy string `json:"createdBy"`
-	// This work item is the caller's own.
+	// This task is the caller's own.
 	Yours bool `json:"yours,omitempty"`
 }
 
-type listWorkOut struct {
+type listTasksOut struct {
 	Epics     []string      `json:"epics"`
-	WorkItems []workItemOut `json:"workItems"`
+	Tasks []taskOut `json:"tasks"`
 }
 
-func listWork(ctx context.Context, tx pgx.Tx, c Caller, in listWorkIn) (listWorkOut, error) {
-	out := listWorkOut{Epics: []string{}, WorkItems: []workItemOut{}}
+func listTasks(ctx context.Context, tx pgx.Tx, c Caller, in listTasksIn) (listTasksOut, error) {
+	out := listTasksOut{Epics: []string{}, Tasks: []taskOut{}}
 	rows, err := tx.Query(ctx, `SELECT title FROM epics WHERE project_id = $1 ORDER BY position, created_at`, c.ProjectID)
 	if err != nil {
 		return out, err
@@ -85,40 +85,40 @@ func listWork(ctx context.Context, tx pgx.Tx, c Caller, in listWorkIn) (listWork
 	}
 	rows, err = tx.Query(ctx, `
 		SELECT p.key_prefix || '-' || w.number, w.title, w.status::text, COALESCE(e.title, ''),
-		       COALESCE((SELECT p.key_prefix || '-' || src.number FROM runs r JOIN work_items src ON src.id = r.work_item_id
+		       COALESCE((SELECT p.key_prefix || '-' || src.number FROM runs r JOIN tasks src ON src.id = r.task_id
 		                 WHERE r.id = w.created_by_run_id), 'person'),
 		       w.id = $2
-		FROM work_items w JOIN projects p ON p.id = w.project_id LEFT JOIN epics e ON e.id = w.epic_id
+		FROM tasks w JOIN projects p ON p.id = w.project_id LEFT JOIN epics e ON e.id = w.epic_id
 		WHERE w.project_id = $1
 		  AND ($3 = '' OR w.title ILIKE '%' || $3 || '%' ESCAPE '\' OR w.goal ILIKE '%' || $3 || '%' ESCAPE '\')
-		ORDER BY w.number`, c.ProjectID, c.WorkItemID, likeLiteral(strings.TrimSpace(in.Text)))
+		ORDER BY w.number`, c.ProjectID, c.TaskID, likeLiteral(strings.TrimSpace(in.Text)))
 	if err != nil {
 		return out, err
 	}
-	out.WorkItems, err = pgx.CollectRows(rows, pgx.RowToStructByPos[workItemOut])
+	out.Tasks, err = pgx.CollectRows(rows, pgx.RowToStructByPos[taskOut])
 	return out, err
 }
 
-// ---- create_work_item -----------------------------------------------------
+// ---- create_task -----------------------------------------------------
 
-type createWorkItemIn struct {
+type createTaskIn struct {
 	Title              string   `json:"title" jsonschema:"what should change, in one line"`
 	Goal               string   `json:"goal" jsonschema:"why, and any detail another agent or a person needs"`
 	AcceptanceCriteria []string `json:"acceptanceCriteria,omitempty" jsonschema:"things that must be true when it is done"`
-	Epic               string   `json:"epic,omitempty" jsonschema:"an existing epic's title to put it in (see list_work); none leaves it outside any"`
+	Epic               string   `json:"epic,omitempty" jsonschema:"an existing epic's title to put it in (see list_tasks); none leaves it outside any"`
 }
 
-type createWorkItemOut struct {
+type createTaskOut struct {
 	Key string `json:"key"`
 }
 
-func createWorkItem(ctx context.Context, tx pgx.Tx, c Caller, in createWorkItemIn) (createWorkItemOut, error) {
+func createTask(ctx context.Context, tx pgx.Tx, c Caller, in createTaskIn) (createTaskOut, error) {
 	title := strings.TrimSpace(in.Title)
 	switch {
 	case title == "":
-		return createWorkItemOut{}, refuse("a title is required")
+		return createTaskOut{}, refuse("a title is required")
 	case len(title) > 500 || len(in.Goal) > 10_000 || len(in.AcceptanceCriteria) > 50:
-		return createWorkItemOut{}, refuse("too long: a title of at most 500 characters, a goal of 10000, at most 50 criteria")
+		return createTaskOut{}, refuse("too long: a title of at most 500 characters, a goal of 10000, at most 50 criteria")
 	}
 	var epicID *string
 	if e := strings.TrimSpace(in.Epic); e != "" {
@@ -126,36 +126,36 @@ func createWorkItem(ctx context.Context, tx pgx.Tx, c Caller, in createWorkItemI
 		if err := tx.QueryRow(ctx, `SELECT id FROM epics WHERE project_id = $1 AND lower(title) = lower($2) LIMIT 1`,
 			c.ProjectID, e).Scan(&id); err != nil {
 			if err == pgx.ErrNoRows {
-				return createWorkItemOut{}, refuse("no epic called %q in this project (list_work shows them)", e)
+				return createTaskOut{}, refuse("no epic called %q in this project (list_tasks shows them)", e)
 			}
-			return createWorkItemOut{}, err
+			return createTaskOut{}, err
 		}
 		epicID = &id
 	}
 	var number int
 	var prefix string
 	// The project's next number, locked so two creates cannot take the same.
-	if err := tx.QueryRow(ctx, `UPDATE projects SET next_work_item_number = next_work_item_number + 1
-		WHERE id = $1 RETURNING next_work_item_number - 1, key_prefix`, c.ProjectID).Scan(&number, &prefix); err != nil {
-		return createWorkItemOut{}, err
+	if err := tx.QueryRow(ctx, `UPDATE projects SET next_task_number = next_task_number + 1
+		WHERE id = $1 RETURNING next_task_number - 1, key_prefix`, c.ProjectID).Scan(&number, &prefix); err != nil {
+		return createTaskOut{}, err
 	}
 	criteria, _ := json.Marshal(db.NonNil(in.AcceptanceCriteria))
-	id := ids.New(ids.WorkItem)
-	if _, err := tx.Exec(ctx, `INSERT INTO work_items (id, organization_id, project_id, number, epic_id, title, goal,
+	id := ids.New(ids.Task)
+	if _, err := tx.Exec(ctx, `INSERT INTO tasks (id, organization_id, project_id, number, epic_id, title, goal,
 			acceptance_criteria, status, created_by_run_id)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, 'received', $9)`,
 		id, c.Org, c.ProjectID, number, epicID, title, strings.TrimSpace(in.Goal), criteria, c.RunID); err != nil {
-		return createWorkItemOut{}, err
+		return createTaskOut{}, err
 	}
-	// The same event a person creating one records, on the new work item
+	// The same event a person creating one records, on the new task
 	// (its own correlation), so its history starts with who made it.
-	created := c.event("work_item.created", map[string]any{"title": title, "goal": strings.TrimSpace(in.Goal),
-		"createdByWorkItemId": c.WorkItemID})
-	created.WorkItemID, created.CorrelationID = id, id
+	created := c.event("task.created", map[string]any{"title": title, "goal": strings.TrimSpace(in.Goal),
+		"createdByTaskId": c.TaskID})
+	created.TaskID, created.CorrelationID = id, id
 	if _, err := ledger.Append(ctx, tx, created); err != nil {
-		return createWorkItemOut{}, err
+		return createTaskOut{}, err
 	}
-	return createWorkItemOut{Key: fmt.Sprintf("%s-%d", prefix, number)}, nil
+	return createTaskOut{Key: fmt.Sprintf("%s-%d", prefix, number)}, nil
 }
 
 // likeLiteral escapes text for LIKE: % and _ match themselves.
@@ -170,14 +170,14 @@ type listEpicsIn struct{}
 type epicOut struct {
 	Title       string `json:"title"`
 	Description string `json:"description,omitempty"`
-	WorkItems   int    `json:"workItems"`
+	Tasks   int    `json:"tasks"`
 	Open        int    `json:"open"`
 }
 
 func listEpics(ctx context.Context, tx pgx.Tx, c Caller, _ listEpicsIn) ([]epicOut, error) {
 	rows, err := tx.Query(ctx, `SELECT e.title, e.description,
-			(SELECT count(*) FROM work_items w WHERE w.epic_id = e.id),
-			(SELECT count(*) FROM work_items w WHERE w.epic_id = e.id AND w.status NOT IN ('done', 'aborted', 'failed'))
+			(SELECT count(*) FROM tasks w WHERE w.epic_id = e.id),
+			(SELECT count(*) FROM tasks w WHERE w.epic_id = e.id AND w.status NOT IN ('done', 'aborted', 'failed'))
 		FROM epics e WHERE e.project_id = $1 ORDER BY e.position, e.created_at`, c.ProjectID)
 	if err != nil {
 		return nil, err
@@ -313,10 +313,10 @@ func requestRepository(ctx context.Context, tx pgx.Tx, c Caller, in requestRepoI
 	}
 	var clash, pending int
 	if err := tx.QueryRow(ctx, `SELECT
-			(SELECT count(*) FROM work_item_repositories wr JOIN repositories r ON r.id = wr.repository_id
-			 WHERE wr.work_item_id = $1 AND (wr.repository_id = $2 OR r.name = $3)),
+			(SELECT count(*) FROM task_repositories wr JOIN repositories r ON r.id = wr.repository_id
+			 WHERE wr.task_id = $1 AND (wr.repository_id = $2 OR r.name = $3)),
 			(SELECT count(*) FROM repository_requests WHERE run_id = $4 AND status = 'pending')`,
-		c.WorkItemID, repo.ID, repo.Name, c.RunID).Scan(&clash, &pending); err != nil {
+		c.TaskID, repo.ID, repo.Name, c.RunID).Scan(&clash, &pending); err != nil {
 		return requestRepoOut{}, err
 	}
 	switch {
@@ -330,9 +330,9 @@ func requestRepository(ctx context.Context, tx pgx.Tx, c Caller, in requestRepoI
 		access = "write"
 	}
 	id := ids.New(ids.RepoRequest)
-	tag, err := tx.Exec(ctx, `INSERT INTO repository_requests (id, organization_id, work_item_id, run_id, repository_id, access, reason, blocking)
+	tag, err := tx.Exec(ctx, `INSERT INTO repository_requests (id, organization_id, task_id, run_id, repository_id, access, reason, blocking)
 		VALUES ($1, $2, $3, $4, $5, $6::repository_access, $7, $8) ON CONFLICT DO NOTHING`,
-		id, c.Org, c.WorkItemID, c.RunID, repo.ID, access, reason, in.Wait)
+		id, c.Org, c.TaskID, c.RunID, repo.ID, access, reason, in.Wait)
 	if err != nil {
 		return requestRepoOut{}, err
 	}
@@ -374,8 +374,8 @@ func listRepositories(ctx context.Context, tx pgx.Tx, c Caller, _ listReposIn) (
 	rows, err := tx.Query(ctx, `SELECT r.name, r.url, r.default_branch, COALESCE(wr.access::text, ''),
 			EXISTS (SELECT 1 FROM repository_requests q WHERE q.run_id = $2 AND q.repository_id = r.id AND q.status = 'pending')
 		FROM repositories r
-		LEFT JOIN work_item_repositories wr ON wr.repository_id = r.id AND wr.work_item_id = $3
-		WHERE r.project_id = $1 ORDER BY r.name`, c.ProjectID, c.RunID, c.WorkItemID)
+		LEFT JOIN task_repositories wr ON wr.repository_id = r.id AND wr.task_id = $3
+		WHERE r.project_id = $1 ORDER BY r.name`, c.ProjectID, c.RunID, c.TaskID)
 	if err != nil {
 		return nil, err
 	}

@@ -1,47 +1,47 @@
 /**
- * Create or edit a work item: what it asks for, and where it sits.
+ * Create or edit a task: what it asks for, and where it sits.
  *
  * One dialog for both, because they are the same fields. Once a delivery
- * has started, what the work item asks for (title, goal, criteria,
+ * has started, what the task asks for (title, goal, criteria,
  * repository) is fixed — agents are working to it — and only where it sits
  * (its epic) can change; the fields say so rather than failing on save.
  *
  * Mounted by its opener only while open, so each opening starts from the
- * work item (or empty).
+ * task (or empty).
  */
 
 import { useEffect, useState } from "react";
 import { Button, Checkbox, Fieldset, FormRow, IconButton, Input, Select } from "@dude/design-system/primitives";
-import type { ApiClient, Epic, Repository, WorkItemDetail, WorkItemFields, WorkItemRepository } from "../api/client.ts";
+import type { ApiClient, Epic, Repository, TaskDetail, TaskFields, TaskRepository } from "../api/client.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
 
 const NO_EPIC = "__none__";
 
-export type ExistingWorkItem = { id: string; delivering: boolean } & WorkItemFields;
+export type ExistingTask = { id: string; delivering: boolean } & TaskFields;
 
-/** A work item as the dialog edits it; `delivering` fixes what it asks for. */
-export function existingWorkItem(item: WorkItemDetail, delivering: boolean): ExistingWorkItem {
+/** A task as the dialog edits it; `delivering` fixes what it asks for. */
+export function existingTask(item: TaskDetail, delivering: boolean): ExistingTask {
   const { id, title, goal, acceptanceCriteria, epicId, repositories } = item;
   return { id, delivering, title, goal, acceptanceCriteria, epicId, repositories };
 }
 
-export interface WorkItemDialogProps {
+export interface TaskDialogProps {
   client: ApiClient;
   projectId: string;
   onClose: () => void;
-  /** Editing this work item; omitted to create one. */
-  existing?: ExistingWorkItem | undefined;
+  /** Editing this task; omitted to create one. */
+  existing?: ExistingTask | undefined;
   /** Prefilled epic when creating from an epic's board. */
   epicId?: string | null | undefined;
   onSaved: (id: string, deliver: boolean) => void;
 }
 
-export function WorkItemDialog({ client, projectId, onClose, existing, epicId, onSaved }: WorkItemDialogProps) {
+export function TaskDialog({ client, projectId, onClose, existing, epicId, onSaved }: TaskDialogProps) {
   const [title, setTitle] = useState(existing?.title ?? "");
   const [goal, setGoal] = useState(existing?.goal ?? "");
   const [criteria, setCriteria] = useState<string[]>(existing?.acceptanceCriteria.length ? [...existing.acceptanceCriteria] : [""]);
   const [epic, setEpic] = useState<string>(existing?.epicId ?? epicId ?? NO_EPIC);
-  const [chosen, setChosen] = useState<WorkItemRepository[]>(existing?.repositories ?? []);
+  const [chosen, setChosen] = useState<TaskRepository[]>(existing?.repositories ?? []);
   // The choices arrive after it opens; until they have, a save could miss
   // a repository the project needs named.
   const [choices, setChoices] = useState<{ epics: Epic[]; repositories: Repository[] } | null>(null);
@@ -65,12 +65,12 @@ export function WorkItemDialog({ client, projectId, onClose, existing, epicId, o
   const locked = existing?.delivering ?? false;
   const repositories = choices?.repositories ?? [];
   // One repository needs no choosing: it is where the work goes unless the
-  // work item says otherwise.
+  // task says otherwise.
   const choosing = repositories.length > 1;
   const canSave = choices !== null && Boolean(title.trim()) && !busy;
 
   function submit(deliver: boolean) {
-    const fields: Partial<WorkItemFields> = { epicId: epic === NO_EPIC ? null : epic };
+    const fields: Partial<TaskFields> = { epicId: epic === NO_EPIC ? null : epic };
     if (!locked) {
       Object.assign(fields, {
         title: title.trim(),
@@ -84,9 +84,9 @@ export function WorkItemDialog({ client, projectId, onClose, existing, epicId, o
     let id = existing?.id ?? created ?? "";
     void save(
       async () => {
-        if (existing) await client.updateWorkItem(existing.id, fields);
+        if (existing) await client.updateTask(existing.id, fields);
         else if (!created) {
-          id = (await client.createWorkItem({ projectId, title: title.trim(), ...fields })).id;
+          id = (await client.createTask({ projectId, title: title.trim(), ...fields })).id;
           setCreated(id);
         }
         if (deliver) await client.deliver(id);
@@ -103,25 +103,25 @@ export function WorkItemDialog({ client, projectId, onClose, existing, epicId, o
       open
       onOpenChange={(open) => !open && onClose()}
       size="md"
-      title={existing ? "Edit work item" : "New work item"}
+      title={existing ? "Edit task" : "New task"}
       description={locked ? "Delivery has started, so what it asks for is fixed. You can still move it to another epic." : undefined}
       submitLabel={existing ? "Save" : "Create"}
-      submitTestId="work-item-save"
+      submitTestId="task-save"
       canSubmit={canSave}
       onSubmit={() => submit(false)}
       problem={problem ?? loadProblem}
       extraActions={
         existing ? undefined : (
-          <Button variant="primary" disabled={!canSave} onClick={() => submit(true)} data-testid="work-item-create-deliver">
+          <Button variant="primary" disabled={!canSave} onClick={() => submit(true)} data-testid="task-create-deliver">
             Create and deliver
           </Button>
         )
       }
     >
       <Input label="Title" autoFocus required placeholder="What should change?" value={title} disabled={locked}
-        maxLength={500} onChange={(e) => setTitle(e.target.value)} data-testid="work-item-title" />
+        maxLength={500} onChange={(e) => setTitle(e.target.value)} data-testid="task-title" />
       <Input label="Goal" hint="Why, and any detail an agent needs." value={goal} disabled={locked}
-        maxLength={10_000} onChange={(e) => setGoal(e.target.value)} data-testid="work-item-goal" />
+        maxLength={10_000} onChange={(e) => setGoal(e.target.value)} data-testid="task-goal" />
       <FormRow>
         <Select
           label="Epic"
@@ -171,8 +171,8 @@ export function WorkItemDialog({ client, projectId, onClose, existing, epicId, o
  */
 function RepositoryChooser(props: {
   repositories: Repository[];
-  chosen: WorkItemRepository[];
-  onChange: (chosen: WorkItemRepository[]) => void;
+  chosen: TaskRepository[];
+  onChange: (chosen: TaskRepository[]) => void;
   disabled: boolean;
 }) {
   const { repositories, chosen, onChange, disabled } = props;
@@ -188,7 +188,7 @@ function RepositoryChooser(props: {
         ? "None chosen: this work changes no code. What the agents write is kept with it."
         : "Each repository it changes gets its own pull request."}
       disabled={disabled}
-      data-testid="work-item-repositories"
+      data-testid="task-repositories"
     >
       {repositories.map((r) => {
         const access = accessOf(r.id);

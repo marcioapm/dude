@@ -102,7 +102,7 @@ func (n *Notifier) Keys(ctx context.Context) (public, private string, err error)
 
 type ask struct {
 	Cursor                                 int64
-	Org, Type, RunID, WorkItemID, WorkItem string
+	Org, Type, RunID, TaskID, Task string
 	Role                                   string
 	Payload                                json.RawMessage
 }
@@ -120,13 +120,13 @@ func (n *Notifier) Sweep(ctx context.Context) (int, error) {
 	subs := map[string][]subscription{}
 	if err := n.DB.InSystem(ctx, "notify", func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT e.cursor, e.organization_id, e.event_type, COALESCE(e.run_id, ''),
-				COALESCE(e.work_item_id, ''), COALESCE(p.key_prefix || '-' || w.number, ''), COALESCE(r.role::text, ''), e.payload
+				COALESCE(e.task_id, ''), COALESCE(p.key_prefix || '-' || w.number, ''), COALESCE(r.role::text, ''), e.payload
 			FROM events e
-			LEFT JOIN work_items w ON w.id = e.work_item_id
+			LEFT JOIN tasks w ON w.id = e.task_id
 			LEFT JOIN projects p ON p.id = w.project_id
 			LEFT JOIN runs r ON r.id = e.run_id
 			WHERE e.cursor > (SELECT after_cursor FROM push_config)
-			  AND e.event_type IN ('question.asked', 'repository.requested', 'work_item.ready_to_merge')
+			  AND e.event_type IN ('question.asked', 'repository.requested', 'task.ready_to_merge')
 			  AND NOT EXISTS (SELECT 1 FROM push_sent s WHERE s.cursor = e.cursor)
 			ORDER BY e.cursor LIMIT 100`)
 		if err != nil {
@@ -211,7 +211,7 @@ func (n *Notifier) advance(ctx context.Context) error {
 				          WHERE e.occurred_at < now() - make_interval(secs => $1)), 0),
 				COALESCE((SELECT min(e.cursor) - 1 FROM events e
 				          WHERE e.cursor > push_config.after_cursor
-				            AND e.event_type IN ('question.asked', 'repository.requested', 'work_item.ready_to_merge')
+				            AND e.event_type IN ('question.asked', 'repository.requested', 'task.ready_to_merge')
 				            AND NOT EXISTS (SELECT 1 FROM push_sent s WHERE s.cursor = e.cursor)), 9223372036854775807)))`,
 			settle.Seconds()); err != nil {
 			return err
@@ -254,26 +254,26 @@ func messageFor(a ask) (Message, bool) {
 	var p map[string]any
 	_ = json.Unmarshal(a.Payload, &p)
 	str := func(k string) string { v, _ := p[k].(string); return v }
-	who := a.WorkItem
+	who := a.Task
 	if label := delivery.RoleLabel[a.Role]; label != "" {
 		who = strings.TrimSpace(who + " · " + label)
 	}
 	msg := Message{Tag: "run:" + a.RunID, URL: "#/run/" + a.RunID}
 	if a.RunID == "" {
-		msg.Tag, msg.URL = "workItem:"+a.WorkItemID, "#/workItem/"+a.WorkItemID
+		msg.Tag, msg.URL = "task:"+a.TaskID, "#/task/"+a.TaskID
 	}
 	switch a.Type {
 	case delivery.EvQuestionAsked:
 		if str("kind") == "escalation" {
-			msg.Title = strings.TrimSpace(a.WorkItem + " needs a decision")
+			msg.Title = strings.TrimSpace(a.Task + " needs a decision")
 			msg.Body = strings.ReplaceAll(str("reason"), "_", " ")
 		} else {
 			msg.Title, msg.Body = who+" asks", str("prompt")
 		}
 	case delivery.EvReadyToMerge:
-		msg.Title = strings.TrimSpace(a.WorkItem + " is ready to merge")
+		msg.Title = strings.TrimSpace(a.Task + " is ready to merge")
 		msg.Body = "Approved, with its checks passing. Merging is yours."
-		msg.Tag, msg.URL = "workItem:"+a.WorkItemID, "#/workItem/"+a.WorkItemID
+		msg.Tag, msg.URL = "task:"+a.TaskID, "#/task/"+a.TaskID
 	case delivery.EvRepositoryRequested:
 		verb := "Read"
 		if str("access") == "write" {

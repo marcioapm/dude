@@ -21,11 +21,11 @@ import (
 // the backend and the browser (packages/domain/src/events/types.ts).
 const (
 	EvRunCreated            = "run.created"
-	EvWorkItemStatusChanged = "work_item.status_changed"
+	EvTaskStatusChanged = "task.status_changed"
 	EvQuestionAsked         = "question.asked"
 	EvRepositoryRequested   = "repository.requested"
 	// Every pull request approved with its checks passing: a person's merge.
-	EvReadyToMerge         = "work_item.ready_to_merge"
+	EvReadyToMerge         = "task.ready_to_merge"
 	EvReviewCompleted      = "review.completed"
 	EvPullRequestOpened    = "pull_request.opened"
 	EvPullRequestUpdated   = "pull_request.updated"
@@ -46,18 +46,18 @@ type Store struct {
 }
 
 // runByKey finds the Run a workflow step already created, or "".
-func (s *Store) runByKey(ctx context.Context, org, workItemID, key string) (string, error) {
+func (s *Store) runByKey(ctx context.Context, org, taskID, key string) (string, error) {
 	var id string
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
-		id, err = runByKey(ctx, tx, workItemID, key)
+		id, err = runByKey(ctx, tx, taskID, key)
 		return err
 	})
 	return id, err
 }
 
-func runByKey(ctx context.Context, tx pgx.Tx, workItemID, key string) (string, error) {
+func runByKey(ctx context.Context, tx pgx.Tx, taskID, key string) (string, error) {
 	var id string
-	err := tx.QueryRow(ctx, `SELECT id FROM runs WHERE work_item_id = $1 AND creation_key = $2`, workItemID, key).Scan(&id)
+	err := tx.QueryRow(ctx, `SELECT id FROM runs WHERE task_id = $1 AND creation_key = $2`, taskID, key).Scan(&id)
 	if db.IsNotFound(err) {
 		return "", nil
 	}
@@ -66,7 +66,7 @@ func runByKey(ctx context.Context, tx pgx.Tx, workItemID, key string) (string, e
 
 // PhaseRun describes a phase Run to create.
 type PhaseRun struct {
-	WorkItemID string
+	TaskID string
 	Phase      string
 	// The commit each repository starts from, by name; a repository not
 	// named starts from its default branch.
@@ -93,26 +93,26 @@ func (s *Store) CreatePhaseRun(ctx context.Context, org string, in PhaseRun) (st
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		if in.Key != "" {
 			var err error
-			if runID, err = runByKey(ctx, tx, in.WorkItemID, in.Key); err != nil || runID != "" {
+			if runID, err = runByKey(ctx, tx, in.TaskID, in.Key); err != nil || runID != "" {
 				return err
 			}
 		}
 		var projectID string
 		var attempt int
 		if err := tx.QueryRow(ctx, `
-			SELECT w.project_id, COALESCE((SELECT max(attempt) FROM runs WHERE work_item_id = w.id), 1)
-			FROM work_items w WHERE w.id = $1`, in.WorkItemID).Scan(&projectID, &attempt); err != nil {
-			return fmt.Errorf("work item %s: %w", in.WorkItemID, err)
+			SELECT w.project_id, COALESCE((SELECT max(attempt) FROM runs WHERE task_id = w.id), 1)
+			FROM tasks w WHERE w.id = $1`, in.TaskID).Scan(&projectID, &attempt); err != nil {
+			return fmt.Errorf("task %s: %w", in.TaskID, err)
 		}
 		feedback, _ := json.Marshal(db.NonNil(in.PRFeedback))
 		bases, _ := json.Marshal(nonNilMap(in.BaseRefs))
 		runID = ids.New(ids.Run)
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO runs (id, organization_id, project_id, work_item_id, attempt, status, phase, role,
+			INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role,
 			                  parent_run_id, base_refs, category, pr_feedback, creation_key,
 			                  finding_ids, blocking_severities)
 			VALUES ($1, $2, $3, $4, $5, 'pending', $6::run_phase, $7::agent_role, $8, $9::jsonb, $10, $11::jsonb, $12, $13, $14)`,
-			runID, org, projectID, in.WorkItemID, attempt, in.Phase, RoleForPhase[in.Phase],
+			runID, org, projectID, in.TaskID, attempt, in.Phase, RoleForPhase[in.Phase],
 			db.Nullable(in.ParentRunID), bases, db.Nullable(in.Category), feedback,
 			db.Nullable(in.Key), db.NonNil(in.FindingIDs), db.NonNil(in.BlockingSeverities)); err != nil {
 			return err
@@ -131,9 +131,9 @@ func (s *Store) CreatePhaseRun(ctx context.Context, org string, in PhaseRun) (st
 			payload["prFeedbackCount"] = len(in.PRFeedback)
 		}
 		_, err := ledger.Append(ctx, tx, ledger.Event{
-			Type: EvRunCreated, OrganizationID: org, ProjectID: projectID, WorkItemID: in.WorkItemID, RunID: runID,
+			Type: EvRunCreated, OrganizationID: org, ProjectID: projectID, TaskID: in.TaskID, RunID: runID,
 			ActorType: ledger.ActorSystem, ActorID: "workflow", Source: ledger.SourceOrchestrator,
-			CorrelationID: in.WorkItemID, Payload: payload,
+			CorrelationID: in.TaskID, Payload: payload,
 		})
 		return err
 	})
@@ -221,11 +221,11 @@ func nonNilMap(m map[string]string) map[string]string {
 	return m
 }
 
-func (s *Store) Findings(ctx context.Context, org, workItemID string) ([]FindingState, error) {
+func (s *Store) Findings(ctx context.Context, org, taskID string) ([]FindingState, error) {
 	var out []FindingState
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT id, severity::text, status::text, fix_attempts FROM review_findings
-			WHERE work_item_id = $1 ORDER BY created_at`, workItemID)
+			WHERE task_id = $1 ORDER BY created_at`, taskID)
 		if err != nil {
 			return err
 		}
@@ -251,11 +251,11 @@ func (s *Store) MarkAttempted(ctx context.Context, org string, findingIDs []stri
 
 // AttemptedFindings is, per category, the open findings a fix has been
 // sent — what the next reviewer of that category is asked to judge.
-func (s *Store) AttemptedFindings(ctx context.Context, org, workItemID string) (map[string][]string, error) {
+func (s *Store) AttemptedFindings(ctx context.Context, org, taskID string) (map[string][]string, error) {
 	out := map[string][]string{}
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT category, id FROM review_findings
-			WHERE work_item_id = $1 AND status = 'open' AND fix_attempts > 0 ORDER BY created_at`, workItemID)
+			WHERE task_id = $1 AND status = 'open' AND fix_attempts > 0 ORDER BY created_at`, taskID)
 		if err != nil {
 			return err
 		}
@@ -268,53 +268,53 @@ func (s *Store) AttemptedFindings(ctx context.Context, org, workItemID string) (
 	return out, err
 }
 
-// SetWorkItemStatus moves a work item to a new status and says why. A no-op
+// SetTaskStatus moves a task to a new status and says why. A no-op
 // when unchanged, so a step that re-runs does not add a duplicate event.
-func (s *Store) SetWorkItemStatus(ctx context.Context, org string, st *State, status, reason string) error {
+func (s *Store) SetTaskStatus(ctx context.Context, org string, st *State, status, reason string) error {
 	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		_, err := SetWorkItemStatusTx(ctx, tx, org, st.ProjectID, st.WorkItemID, "", status, reason)
+		_, err := SetTaskStatusTx(ctx, tx, org, st.ProjectID, st.TaskID, "", status, reason)
 		return err
 	})
 }
 
-// SetWorkItemStatusFrom moves the work item only from the given status, and
+// SetTaskStatusFrom moves the task only from the given status, and
 // says whether it moved.
-func (s *Store) SetWorkItemStatusFrom(ctx context.Context, org string, st *State, from, status, reason string) (bool, error) {
+func (s *Store) SetTaskStatusFrom(ctx context.Context, org string, st *State, from, status, reason string) (bool, error) {
 	var moved bool
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
-		moved, err = SetWorkItemStatusTx(ctx, tx, org, st.ProjectID, st.WorkItemID, from, status, reason)
+		moved, err = SetTaskStatusTx(ctx, tx, org, st.ProjectID, st.TaskID, from, status, reason)
 		return err
 	})
 	return moved, err
 }
 
-// SetWorkItemStatusTx is SetWorkItemStatus in the caller's transaction, for
+// SetTaskStatusTx is SetTaskStatus in the caller's transaction, for
 // a change that must commit with something else: an agent's question and
-// the work item waiting on it. With from set, only a work item in that
+// the task waiting on it. With from set, only a task in that
 // status moves — a person answering must not revive an aborted one.
-func SetWorkItemStatusTx(ctx context.Context, tx pgx.Tx, org, projectID, workItemID, from, status, reason string) (bool, error) {
-	tag, err := tx.Exec(ctx, `UPDATE work_items SET status = $2::work_item_status, updated_at = now()
-		WHERE id = $1 AND status <> $2::work_item_status
-		  AND ($3 = '' OR status = $3::work_item_status)
-		  AND status NOT IN ('done', 'failed', 'aborted')`, workItemID, status, from)
+func SetTaskStatusTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID, from, status, reason string) (bool, error) {
+	tag, err := tx.Exec(ctx, `UPDATE tasks SET status = $2::task_status, updated_at = now()
+		WHERE id = $1 AND status <> $2::task_status
+		  AND ($3 = '' OR status = $3::task_status)
+		  AND status NOT IN ('done', 'failed', 'aborted')`, taskID, status, from)
 	if err != nil || tag.RowsAffected() == 0 {
 		return false, err
 	}
 	_, err = ledger.Append(ctx, tx, ledger.Event{
-		Type: EvWorkItemStatusChanged, OrganizationID: org, ProjectID: projectID, WorkItemID: workItemID,
+		Type: EvTaskStatusChanged, OrganizationID: org, ProjectID: projectID, TaskID: taskID,
 		ActorType: ledger.ActorSystem, ActorID: "workflow", Source: ledger.SourceOrchestrator,
-		CorrelationID: workItemID, Payload: map[string]any{"status": status, "reason": reason},
+		CorrelationID: taskID, Payload: map[string]any{"status": status, "reason": reason},
 	})
 	return true, err
 }
 
-// Emit records a workflow event about the work item.
+// Emit records a workflow event about the task.
 func (s *Store) Emit(ctx context.Context, org string, st *State, typ string, payload map[string]any) error {
 	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		_, err := ledger.Append(ctx, tx, ledger.Event{
-			Type: typ, OrganizationID: org, ProjectID: st.ProjectID, WorkItemID: st.WorkItemID,
+			Type: typ, OrganizationID: org, ProjectID: st.ProjectID, TaskID: st.TaskID,
 			ActorType: ledger.ActorSystem, ActorID: "workflow", Source: ledger.SourceOrchestrator,
-			CorrelationID: st.WorkItemID, Payload: payload,
+			CorrelationID: st.TaskID, Payload: payload,
 		})
 		return err
 	})
@@ -325,7 +325,7 @@ type Forges interface {
 	For(ctx context.Context, org string) (*forge.GitHub, error)
 }
 
-// Repository is one the work item names, as delivery uses it.
+// Repository is one the task names, as delivery uses it.
 type Repository struct {
 	ID, Name, URL, DefaultBranch string
 	// "write": may change, and gets a pull request when it does. "read":
@@ -333,13 +333,13 @@ type Repository struct {
 	Access string
 }
 
-// WorkItemRepositories are the repositories a work item works on; none is
+// TaskRepositories are the repositories a task works on; none is
 // work that changes no code.
-func WorkItemRepositories(ctx context.Context, tx pgx.Tx, workItemID string) ([]Repository, error) {
+func TaskRepositories(ctx context.Context, tx pgx.Tx, taskID string) ([]Repository, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT r.id, r.name, r.url, r.default_branch, wr.access::text
-		FROM work_item_repositories wr JOIN repositories r ON r.id = wr.repository_id
-		WHERE wr.work_item_id = $1 ORDER BY r.name`, workItemID)
+		FROM task_repositories wr JOIN repositories r ON r.id = wr.repository_id
+		WHERE wr.task_id = $1 ORDER BY r.name`, taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -347,13 +347,13 @@ func WorkItemRepositories(ctx context.Context, tx pgx.Tx, workItemID string) ([]
 }
 
 // RunRef names the Run something happened on, for its ledger events.
-type RunRef struct{ Org, ProjectID, WorkItemID, RunID string }
+type RunRef struct{ Org, ProjectID, TaskID, RunID string }
 
-// Event is a ledger event on the Run, by the given actor, in the work item's
+// Event is a ledger event on the Run, by the given actor, in the task's
 // correlation.
 func (r RunRef) Event(typ, actorType string, payload map[string]any) ledger.Event {
-	return ledger.Event{Type: typ, OrganizationID: r.Org, ProjectID: r.ProjectID, WorkItemID: r.WorkItemID, RunID: r.RunID,
-		ActorType: actorType, ActorID: r.RunID, Source: ledger.SourceOrchestrator, CorrelationID: r.WorkItemID, Payload: payload}
+	return ledger.Event{Type: typ, OrganizationID: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, RunID: r.RunID,
+		ActorType: actorType, ActorID: r.RunID, Source: ledger.SourceOrchestrator, CorrelationID: r.TaskID, Payload: payload}
 }
 
 // openQuestion (SQL, over a Run aliased r): it has a question waiting for
@@ -387,9 +387,9 @@ type Directive struct {
 func QueueDirective(ctx context.Context, tx pgx.Tx, r RunRef, d Directive) (string, time.Time, error) {
 	id := ids.New(ids.Directive)
 	var createdAt time.Time
-	err := tx.QueryRow(ctx, `INSERT INTO directives (id, organization_id, work_item_id, run_id, text, scope, supersedes, interrupt)
+	err := tx.QueryRow(ctx, `INSERT INTO directives (id, organization_id, task_id, run_id, text, scope, supersedes, interrupt)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING created_at`,
-		id, r.Org, r.WorkItemID, r.RunID, d.Text, d.Scope, db.Nullable(d.Supersedes), d.Interrupt).Scan(&createdAt)
+		id, r.Org, r.TaskID, r.RunID, d.Text, d.Scope, db.Nullable(d.Supersedes), d.Interrupt).Scan(&createdAt)
 	return id, createdAt, err
 }
 
@@ -400,16 +400,16 @@ func HasOpenQuestion(ctx context.Context, tx pgx.Tx, runID string) (bool, error)
 	return open, err
 }
 
-// AskTx records an agent's question for a person, and the work item waiting
+// AskTx records an agent's question for a person, and the task waiting
 // on it.
 func AskTx(ctx context.Context, tx pgx.Tx, r RunRef, prompt string, options []string) (string, error) {
 	id := ids.New(ids.Question)
 	opts, _ := json.Marshal(db.NonNil(options))
-	if _, err := tx.Exec(ctx, `INSERT INTO questions (id, organization_id, work_item_id, run_id, prompt, options)
-		VALUES ($1, $2, $3, $4, $5, $6::jsonb)`, id, r.Org, r.WorkItemID, r.RunID, prompt, opts); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO questions (id, organization_id, task_id, run_id, prompt, options)
+		VALUES ($1, $2, $3, $4, $5, $6::jsonb)`, id, r.Org, r.TaskID, r.RunID, prompt, opts); err != nil {
 		return "", err
 	}
-	if _, err := SetWorkItemStatusTx(ctx, tx, r.Org, r.ProjectID, r.WorkItemID, "", "awaiting_input",
+	if _, err := SetTaskStatusTx(ctx, tx, r.Org, r.ProjectID, r.TaskID, "", "awaiting_input",
 		"the agent asked a question"); err != nil {
 		return "", err
 	}
@@ -418,34 +418,34 @@ func AskTx(ctx context.Context, tx pgx.Tx, r RunRef, prompt string, options []st
 	return id, err
 }
 
-// HasWritableRepository says whether the work item may change code.
-func (s *Store) HasWritableRepository(ctx context.Context, org, workItemID string) (bool, error) {
+// HasWritableRepository says whether the task may change code.
+func (s *Store) HasWritableRepository(ctx context.Context, org, taskID string) (bool, error) {
 	var ok bool
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM work_item_repositories
-			WHERE work_item_id = $1 AND access = 'write')`, workItemID).Scan(&ok)
+		return tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM task_repositories
+			WHERE task_id = $1 AND access = 'write')`, taskID).Scan(&ok)
 	})
 	return ok, err
 }
 
-// NameOnlyRepository records a project's only repository on a work item that
-// names none, when it is delivered: a work item in a one-repository project
+// NameOnlyRepository records a project's only repository on a task that
+// names none, when it is delivered: a task in a one-repository project
 // works on that repository unless it says otherwise. Recorded rather than
 // worked out each time, so adding a second repository later changes nothing
 // for work already under way.
-func NameOnlyRepository(ctx context.Context, tx pgx.Tx, workItemID string) error {
+func NameOnlyRepository(ctx context.Context, tx pgx.Tx, taskID string) error {
 	_, err := tx.Exec(ctx, `
-		INSERT INTO work_item_repositories (organization_id, work_item_id, repository_id, access)
+		INSERT INTO task_repositories (organization_id, task_id, repository_id, access)
 		SELECT w.organization_id, w.id, (SELECT r.id FROM repositories r WHERE r.project_id = w.project_id), 'write'
-		FROM work_items w
+		FROM tasks w
 		WHERE w.id = $1
-		  AND NOT EXISTS (SELECT 1 FROM work_item_repositories WHERE work_item_id = w.id)
-		  AND (SELECT count(*) FROM repositories r WHERE r.project_id = w.project_id) = 1`, workItemID)
+		  AND NOT EXISTS (SELECT 1 FROM task_repositories WHERE task_id = w.id)
+		  AND (SELECT count(*) FROM repositories r WHERE r.project_id = w.project_id) = 1`, taskID)
 	return err
 }
 
 // OpenPullRequests opens a pull request in each repository the work changed
-// that has none yet, and returns every one the work item has, oldest first.
+// that has none yet, and returns every one the task has, oldest first.
 // Idempotent: one already recorded is kept, and one GitHub already has for
 // the branch is recorded rather than treated as a failure.
 //
@@ -457,7 +457,7 @@ func (s *Store) OpenPullRequests(ctx context.Context, org string, st *State, for
 	var todo, changed []Repository
 	var ids []string
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		repos, err := WorkItemRepositories(ctx, tx, st.WorkItemID)
+		repos, err := TaskRepositories(ctx, tx, st.TaskID)
 		if err != nil {
 			return err
 		}
@@ -465,7 +465,7 @@ func (s *Store) OpenPullRequests(ctx context.Context, org string, st *State, for
 		// closed one covers only what it held: a later change in its
 		// repository needs a pull request of its own.
 		rows, err := tx.Query(ctx, `SELECT id, repository_id, state IN ('open', 'draft'), COALESCE(head_sha, '')
-			FROM pull_requests WHERE work_item_id = $1 AND head_branch = $2 ORDER BY created_at, id`, st.WorkItemID, st.Branch)
+			FROM pull_requests WHERE task_id = $1 AND head_branch = $2 ORDER BY created_at, id`, st.TaskID, st.Branch)
 		if err != nil {
 			return err
 		}
@@ -507,7 +507,7 @@ func (s *Store) OpenPullRequests(ctx context.Context, org string, st *State, for
 	if gh == nil {
 		return nil, fmt.Errorf("no forge credential to open pull requests with")
 	}
-	title, body, err := s.pullRequestText(ctx, org, st.WorkItemID)
+	title, body, err := s.pullRequestText(ctx, org, st.TaskID)
 	if err != nil {
 		return nil, err
 	}
@@ -521,22 +521,22 @@ func (s *Store) OpenPullRequests(ctx context.Context, org string, st *State, for
 	return ids, nil
 }
 
-// pullRequestText is a work item's pull request title and body, rendered
+// pullRequestText is a task's pull request title and body, rendered
 // from what the ledger recorded.
-func (s *Store) pullRequestText(ctx context.Context, org, workItemID string) (string, string, error) {
+func (s *Store) pullRequestText(ctx context.Context, org, taskID string) (string, string, error) {
 	var title, goal string
 	var criteria []string
 	var findings []struct{ Category, Severity, Status, Title string }
 	var reviewers int
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		var raw []byte
-		if err := tx.QueryRow(ctx, `SELECT title, goal, acceptance_criteria FROM work_items WHERE id = $1`, workItemID).
+		if err := tx.QueryRow(ctx, `SELECT title, goal, acceptance_criteria FROM tasks WHERE id = $1`, taskID).
 			Scan(&title, &goal, &raw); err != nil {
 			return err
 		}
 		_ = json.Unmarshal(raw, &criteria)
 		rows, err := tx.Query(ctx, `SELECT category, severity::text, status::text, title FROM review_findings
-			WHERE work_item_id = $1 ORDER BY created_at`, workItemID)
+			WHERE task_id = $1 ORDER BY created_at`, taskID)
 		if err != nil {
 			return err
 		}
@@ -544,7 +544,7 @@ func (s *Store) pullRequestText(ctx context.Context, org, workItemID string) (st
 			return err
 		}
 		return tx.QueryRow(ctx, `SELECT count(DISTINCT category) FROM runs
-			WHERE work_item_id = $1 AND phase = 'review' AND status = 'completed'`, workItemID).Scan(&reviewers)
+			WHERE task_id = $1 AND phase = 'review' AND status = 'completed'`, taskID).Scan(&reviewers)
 	})
 	return title, prBody(goal, criteria, findings, reviewers), err
 }
@@ -586,11 +586,11 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 		// One already recorded (a replay that got this far) is the one: its
 		// id is returned, and it is not announced twice.
 		tag, err := tx.Exec(ctx, `
-			INSERT INTO pull_requests (id, organization_id, project_id, work_item_id, run_id, repository_id, number,
+			INSERT INTO pull_requests (id, organization_id, project_id, task_id, run_id, repository_id, number,
 			                           node_id, url, head_branch, base_branch, head_sha, title, body, state)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::pull_request_state)
 			ON CONFLICT (repository_id, number) DO NOTHING`,
-			id, org, st.ProjectID, st.WorkItemID, db.Nullable(st.HeadRunID), repo.ID, ref.Number,
+			id, org, st.ProjectID, st.TaskID, db.Nullable(st.HeadRunID), repo.ID, ref.Number,
 			db.Nullable(ref.NodeID), ref.URL, st.Branch, repo.DefaultBranch, ref.HeadSHA, title, body, ref.State)
 		if err != nil {
 			return err
@@ -600,9 +600,9 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 				repo.ID, ref.Number).Scan(&id)
 		}
 		_, err = ledger.Append(ctx, tx, ledger.Event{
-			Type: EvPullRequestOpened, OrganizationID: org, ProjectID: st.ProjectID, WorkItemID: st.WorkItemID,
+			Type: EvPullRequestOpened, OrganizationID: org, ProjectID: st.ProjectID, TaskID: st.TaskID,
 			RunID: st.HeadRunID, ActorType: ledger.ActorSystem, ActorID: "workflow", Source: ledger.SourceOrchestrator,
-			CorrelationID: st.WorkItemID,
+			CorrelationID: st.TaskID,
 			Payload: map[string]any{"number": ref.Number, "url": ref.URL, "repo": repo.Name,
 				"headBranch": st.Branch, "baseBranch": repo.DefaultBranch, "draft": false},
 		})
@@ -634,7 +634,7 @@ func prBody(goal string, criteria []string, findings []struct{ Category, Severit
 
 // PullRequestStates is each pull request's state as last synced: open,
 // draft, merged or closed.
-// PullRequestState is a work item's pull request as the workflow weighs it.
+// PullRequestState is a task's pull request as the workflow weighs it.
 type PullRequestState struct{ State, Checks, Review string }
 
 func (s *Store) PullRequestStates(ctx context.Context, org string, prIDs []string) ([]PullRequestState, error) {

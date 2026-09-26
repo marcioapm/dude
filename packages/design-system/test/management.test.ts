@@ -62,10 +62,10 @@ describe("boardSwimlanes", () => {
     id: "p",
     name: "p",
     epics: [
-      { id: "e2", title: "Second", workItems: [{ id: "w1", title: "one", status: "running" }] },
-      { id: "e1", title: "First", workItems: [] },
+      { id: "e2", title: "Second", tasks: [{ id: "w1", title: "one", status: "running" }] },
+      { id: "e1", title: "First", tasks: [] },
     ],
-    workItems: [{ id: "w2", title: "loose", status: "done" }, { id: "w3", title: "loose 2", status: "queued" }],
+    tasks: [{ id: "w2", title: "loose", status: "done" }, { id: "w3", title: "loose 2", status: "queued" }],
   };
   test("one lane per epic in the project's order, then No epic", () => {
     const lanes = boardSwimlanes(project);
@@ -78,11 +78,11 @@ describe("boardSwimlanes", () => {
   });
   test("cards land in their column within the lane", () => {
     const none = boardSwimlanes(project)[2]!;
-    expect(none.columns.find((c) => c.kind === "closed")!.cards.map((c) => c.workItem.id)).toEqual(["w2"]);
-    expect(none.columns.find((c) => c.kind === "queued")!.cards.map((c) => c.workItem.id)).toEqual(["w3"]);
+    expect(none.columns.find((c) => c.kind === "closed")!.cards.map((c) => c.task.id)).toEqual(["w2"]);
+    expect(none.columns.find((c) => c.kind === "queued")!.cards.map((c) => c.task.id)).toEqual(["w3"]);
   });
-  test("no loose work items: no No-epic lane", () => {
-    expect(boardSwimlanes({ ...project, workItems: [] }).map((l) => l.key)).toEqual(["epic:e2", "epic:e1"]);
+  test("no loose tasks: no No-epic lane", () => {
+    expect(boardSwimlanes({ ...project, tasks: [] }).map((l) => l.key)).toEqual(["epic:e2", "epic:e1"]);
   });
 });
 

@@ -44,7 +44,7 @@ type Syncer struct {
 }
 
 type tracked struct {
-	ID, ProjectID, WorkItemID, RunID, State, Checks, Review, RepoURL, RepoName string
+	ID, ProjectID, TaskID, RunID, State, Checks, Review, RepoURL, RepoName string
 	Number                                                                     int
 	FeedbackCursor                                                             *time.Time
 }
@@ -54,10 +54,10 @@ type tracked struct {
 func (s *Syncer) Sync(ctx context.Context, org, prID string) error {
 	var pr tracked
 	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT pr.id, pr.project_id, pr.work_item_id, COALESCE(pr.run_id, ''), pr.state::text,
+		return tx.QueryRow(ctx, `SELECT pr.id, pr.project_id, pr.task_id, COALESCE(pr.run_id, ''), pr.state::text,
 			pr.checks::text, pr.review::text, r.url, r.name, pr.number, pr.feedback_cursor
 			FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id WHERE pr.id = $1`, prID).
-			Scan(&pr.ID, &pr.ProjectID, &pr.WorkItemID, &pr.RunID, &pr.State, &pr.Checks, &pr.Review,
+			Scan(&pr.ID, &pr.ProjectID, &pr.TaskID, &pr.RunID, &pr.State, &pr.Checks, &pr.Review,
 				&pr.RepoURL, &pr.RepoName, &pr.Number, &pr.FeedbackCursor)
 	}); err != nil {
 		return err
@@ -90,8 +90,8 @@ func (s *Syncer) Sync(ctx context.Context, org, prID string) error {
 		// by id.
 		for _, f := range listed {
 			var seen bool
-			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE work_item_id = $1
-				AND event_type = $2 AND payload->>'feedbackId' = $3)`, pr.WorkItemID, delivery.EvPullRequestCommented, f.ID).
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE task_id = $1
+				AND event_type = $2 AND payload->>'feedbackId' = $3)`, pr.TaskID, delivery.EvPullRequestCommented, f.ID).
 				Scan(&seen); err != nil {
 				return err
 			}
@@ -147,15 +147,15 @@ func (s *Syncer) Sync(ctx context.Context, org, prID string) error {
 		for _, c := range changes {
 			c.payload["number"], c.payload["repo"] = pr.Number, pr.RepoName
 			if _, err := ledger.Append(ctx, tx, ledger.Event{
-				Type: c.typ, OrganizationID: org, ProjectID: pr.ProjectID, WorkItemID: pr.WorkItemID, RunID: pr.RunID,
+				Type: c.typ, OrganizationID: org, ProjectID: pr.ProjectID, TaskID: pr.TaskID, RunID: pr.RunID,
 				ActorType: ledger.ActorSystem, ActorID: "forge", Source: ledger.SourceGitHub,
-				CorrelationID: pr.WorkItemID, Payload: c.payload,
+				CorrelationID: pr.TaskID, Payload: c.payload,
 			}); err != nil {
 				return err
 			}
 		}
-		err := tx.QueryRow(ctx, `SELECT id FROM workflow_runs WHERE work_item_id = $1 AND status IN ('running', 'waiting')
-			LIMIT 1`, pr.WorkItemID).Scan(&workflowRunID)
+		err := tx.QueryRow(ctx, `SELECT id FROM workflow_runs WHERE task_id = $1 AND status IN ('running', 'waiting')
+			LIMIT 1`, pr.TaskID).Scan(&workflowRunID)
 		if db.IsNotFound(err) {
 			return nil
 		}

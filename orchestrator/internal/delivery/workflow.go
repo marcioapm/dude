@@ -11,7 +11,7 @@ import (
 
 // WorkflowType is the delivery workflow's type name, shared with the rows it
 // has already written.
-const WorkflowType = "work_item.delivery"
+const WorkflowType = "task.delivery"
 
 // Signals the workflow parks on.
 const (
@@ -25,13 +25,13 @@ const (
 
 // State is everything the workflow remembers between steps.
 type State struct {
-	WorkItemID string `json:"workItemId"`
+	TaskID string `json:"taskId"`
 	ProjectID  string `json:"projectId"`
 	Policy     Policy `json:"policy"`
 
 	// The Run whose output the next phase builds on.
 	HeadRunID string `json:"headRunId,omitempty"`
-	// The work item's branch, the same name in every repository it changes.
+	// The task's branch, the same name in every repository it changes.
 	Branch string `json:"branch,omitempty"`
 	// Where the work stands in each repository it changed, by name: what
 	// the next phase checks out. A repository not here starts from its
@@ -58,11 +58,11 @@ type Escalation struct {
 	Detail any    `json:"detail,omitempty"`
 }
 
-// BranchFor is the work item's branch — the one its pull requests are opened
+// BranchFor is the task's branch — the one its pull requests are opened
 // from, the same name in each repository. Phase Runs never push to it directly; each pushes its own branch and
 // dude fast-forwards this one.
-func BranchFor(workItemID string, attempt int) string {
-	return fmt.Sprintf("dude/%s/attempt-%d", workItemID, attempt)
+func BranchFor(taskID string, attempt int) string {
+	return fmt.Sprintf("dude/%s/attempt-%d", taskID, attempt)
 }
 
 // Workflow builds the delivery workflow's definition.
@@ -146,7 +146,7 @@ func key(sc workflow.StepContext, parts ...any) string {
 // phase creates a phase Run starting from where the work stands: each
 // repository at its head, or its default branch if nothing changed it yet.
 func (w *steps) phase(ctx context.Context, sc workflow.StepContext, st *State, phase, k string, extra func(*PhaseRun)) (string, error) {
-	in := PhaseRun{WorkItemID: st.WorkItemID, Phase: phase, BaseRefs: st.Heads, ParentRunID: st.HeadRunID, Key: k}
+	in := PhaseRun{TaskID: st.TaskID, Phase: phase, BaseRefs: st.Heads, ParentRunID: st.HeadRunID, Key: k}
 	if extra != nil {
 		extra(&in)
 	}
@@ -158,7 +158,7 @@ func (w *steps) implement(ctx context.Context, sc workflow.StepContext) (workflo
 	if err != nil {
 		return workflow.Result{}, err
 	}
-	if err := w.s.SetWorkItemStatus(ctx, sc.OrganizationID, st, "running", "implementing"); err != nil {
+	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "implementing"); err != nil {
 		return workflow.Result{}, err
 	}
 	runID, err := w.phase(ctx, sc, st, PhaseImplement, key(sc, ":implement"), nil)
@@ -188,7 +188,7 @@ func (w *steps) awaitImplement(ctx context.Context, sc workflow.StepContext) (wo
 	// An implementer that changed nothing has not done the work, and there
 	// is nothing for a reviewer to look at — unless the work changes no
 	// code, when what it published is the work.
-	writable, err := w.s.HasWritableRepository(ctx, sc.OrganizationID, st.WorkItemID)
+	writable, err := w.s.HasWritableRepository(ctx, sc.OrganizationID, st.TaskID)
 	if err != nil {
 		return workflow.Result{}, err
 	}
@@ -207,13 +207,13 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 	if err != nil {
 		return workflow.Result{}, err
 	}
-	if err := w.s.SetWorkItemStatus(ctx, sc.OrganizationID, st, "review", "agent review"); err != nil {
+	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "agent review"); err != nil {
 		return workflow.Result{}, err
 	}
 	categories := ReviewersFor(st.Policy, st.ChangedPaths)
 	// A re-review judges what the fixer was sent: the open findings of its
 	// category that a fix has attempted.
-	toJudge, err := w.s.AttemptedFindings(ctx, sc.OrganizationID, st.WorkItemID)
+	toJudge, err := w.s.AttemptedFindings(ctx, sc.OrganizationID, st.TaskID)
 	if err != nil {
 		return workflow.Result{}, err
 	}
@@ -245,7 +245,7 @@ func (w *steps) awaitReview(ctx context.Context, sc workflow.StepContext) (workf
 	if pending := settle(st, sc); len(pending) > 0 {
 		return park("awaitReview", st, pending), nil
 	}
-	findings, err := w.s.Findings(ctx, sc.OrganizationID, st.WorkItemID)
+	findings, err := w.s.Findings(ctx, sc.OrganizationID, st.TaskID)
 	if err != nil {
 		return workflow.Result{}, err
 	}
@@ -272,10 +272,10 @@ func (w *steps) fix(ctx context.Context, sc workflow.StepContext) (workflow.Resu
 	if err != nil {
 		return workflow.Result{}, err
 	}
-	if err := w.s.SetWorkItemStatus(ctx, sc.OrganizationID, st, "running", "fixing review findings"); err != nil {
+	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "fixing review findings"); err != nil {
 		return workflow.Result{}, err
 	}
-	findings, err := w.s.Findings(ctx, sc.OrganizationID, st.WorkItemID)
+	findings, err := w.s.Findings(ctx, sc.OrganizationID, st.TaskID)
 	if err != nil {
 		return workflow.Result{}, err
 	}
@@ -288,7 +288,7 @@ func (w *steps) fix(ctx context.Context, sc workflow.StepContext) (workflow.Resu
 	k := key(sc, ":fix:", st.Iteration)
 	// Counted once per fix step, however often the step is replayed: the
 	// Run's creation key doubles as the marker that it was counted.
-	existing, err := w.s.runByKey(ctx, sc.OrganizationID, st.WorkItemID, k)
+	existing, err := w.s.runByKey(ctx, sc.OrganizationID, st.TaskID, k)
 	if err != nil {
 		return workflow.Result{}, err
 	}
@@ -331,7 +331,7 @@ func (w *steps) simplify(ctx context.Context, sc workflow.StepContext) (workflow
 	if err != nil {
 		return workflow.Result{}, err
 	}
-	if err := w.s.SetWorkItemStatus(ctx, sc.OrganizationID, st, "running", "simplifying"); err != nil {
+	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "simplifying"); err != nil {
 		return workflow.Result{}, err
 	}
 	runID, err := w.phase(ctx, sc, st, PhaseSimplify, key(sc, ":simplify"), nil)
@@ -355,7 +355,7 @@ func (w *steps) awaitSimplify(ctx context.Context, sc workflow.StepContext) (wor
 		return workflow.Result{}, err
 	}
 	st.PendingRunIDs = nil
-	// A failed or empty simplification is not a failure of the work item: the
+	// A failed or empty simplification is not a failure of the task: the
 	// code was simple enough already. Carry on with what we had.
 	if out.Succeeded && len(out.Heads) > 0 {
 		st.HeadRunID, st.Heads = runID, out.advance(st.Heads)
@@ -413,14 +413,14 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 	if len(prIDs) == 0 {
 		// Nothing changed in any repository: the work is what the agents
 		// published. A person reads it and says when it is done.
-		return workflow.Result{State: st}, w.s.SetWorkItemStatus(ctx, sc.OrganizationID, st, "review", "ready to read")
+		return workflow.Result{State: st}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "ready to read")
 	}
 	// Waiting on people now: the agents are done until someone asks.
 	reason := "pull request open"
 	if len(prIDs) > 1 {
 		reason = fmt.Sprintf("%d pull requests open", len(prIDs))
 	}
-	if err := w.s.SetWorkItemStatus(ctx, sc.OrganizationID, st, "review", reason); err != nil {
+	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", reason); err != nil {
 		return workflow.Result{}, err
 	}
 	return workflow.Result{Next: "awaitPullRequest", State: st, AwaitSignals: []string{SignalPRFeedback, SignalHumanDecision}}, nil
@@ -473,7 +473,7 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 	if st.PRIteration > st.Policy.MaxPRFixIterations {
 		return w.escalate(ctx, sc, st, "pr_loop_exhausted", map[string]any{"iterations": st.PRIteration})
 	}
-	if err := w.s.SetWorkItemStatus(ctx, sc.OrganizationID, st, "running", "addressing pull request feedback"); err != nil {
+	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "addressing pull request feedback"); err != nil {
 		return workflow.Result{}, err
 	}
 	// Several comments arriving together cost one fix Run, not one each.
@@ -510,7 +510,7 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 	}
 	st.PullRequestIDs = prIDs
 	// The fast-forward updated the PRs; they are back with the reviewers.
-	if err := w.s.SetWorkItemStatus(ctx, sc.OrganizationID, st, "review", "pull request updated"); err != nil {
+	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "pull request updated"); err != nil {
 		return workflow.Result{}, err
 	}
 	// What happened to them while the fix ran was signalled to a step not
@@ -520,13 +520,13 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 	return res, err
 }
 
-// pullRequestEnded: one of the work item's pull requests was merged or
-// closed. The work item is done when every one is merged. One closed without
+// pullRequestEnded: one of the task's pull requests was merged or
+// closed. The task is done when every one is merged. One closed without
 // merging is someone deciding not to take that part: with nothing else open
-// that ends the work item (aborted); with siblings still open it is a
+// that ends the task (aborted); with siblings still open it is a
 // decision for a person, not something to guess.
 //
-// finished says the work item has left the pull request loop (done,
+// finished says the task has left the pull request loop (done,
 // aborted, or waiting on a person); otherwise the others are still open.
 func (w *steps) pullRequestEnded(ctx context.Context, sc workflow.StepContext, st *State) (workflow.Result, bool, error) {
 	states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
@@ -547,24 +547,24 @@ func (w *steps) pullRequestEnded(ctx context.Context, sc workflow.StepContext, s
 	waitAgain := workflow.Result{Next: "awaitPullRequest", State: st, AwaitSignals: []string{SignalPRFeedback, SignalHumanDecision}}
 	switch {
 	case len(states) == 0:
-		return workflow.Result{}, true, fmt.Errorf("no pull requests recorded for %s", st.WorkItemID)
+		return workflow.Result{}, true, fmt.Errorf("no pull requests recorded for %s", st.TaskID)
 	case closed == 0 && open > 0:
 		// The rest are still open: what is merged is taken, so whether the
-		// work item is ready depends on those.
+		// task is ready depends on those.
 		return waitAgain, false, w.weighReadiness(ctx, sc, st)
 	case closed == 0:
-		return workflow.Result{}, true, w.s.SetWorkItemStatus(ctx, sc.OrganizationID, st, "done", "pull requests merged")
+		return workflow.Result{}, true, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "done", "pull requests merged")
 	case open == 0 && merged == 0:
 		// Closed without merging is someone deciding not to take the
-		// change: an abort of the work item, not a failure of it.
-		return workflow.Result{}, true, w.s.SetWorkItemStatus(ctx, sc.OrganizationID, st, "aborted", "pull request closed without merging")
+		// change: an abort of the task, not a failure of it.
+		return workflow.Result{}, true, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "aborted", "pull request closed without merging")
 	}
 	// Part taken, part refused, or part still open: a person decides.
 	res, err := w.escalate(ctx, sc, st, "pull_request_closed", map[string]any{"merged": merged, "closed": closed, "open": open})
 	return res, true, err
 }
 
-// weighReadiness moves the work item to ready to merge when every pull
+// weighReadiness moves the task to ready to merge when every pull
 // request still open is approved with its checks passing (forge.Ready),
 // and back to review when one no longer is. The factory never merges:
 // ready to merge is what a person is told, and merging is theirs.
@@ -582,14 +582,14 @@ func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st 
 		ready = ready && forge.Ready(s.Review, s.Checks)
 	}
 	if open > 0 && ready {
-		moved, err := w.s.SetWorkItemStatusFrom(ctx, sc.OrganizationID, st, "review", "ready_to_merge", "approved, checks passing")
+		moved, err := w.s.SetTaskStatusFrom(ctx, sc.OrganizationID, st, "review", "ready_to_merge", "approved, checks passing")
 		if err != nil || !moved {
 			return err
 		}
 		// Its own event, for whoever is told when something waits on them.
 		return w.s.Emit(ctx, sc.OrganizationID, st, EvReadyToMerge, map[string]any{"pullRequests": open})
 	}
-	_, err = w.s.SetWorkItemStatusFrom(ctx, sc.OrganizationID, st, "ready_to_merge", "review", "no longer approved with checks passing")
+	_, err = w.s.SetTaskStatusFrom(ctx, sc.OrganizationID, st, "ready_to_merge", "review", "no longer approved with checks passing")
 	return err
 }
 
@@ -601,7 +601,7 @@ func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State
 		map[string]any{"kind": "escalation", "reason": reason, "detail": detail}); err != nil {
 		return workflow.Result{}, err
 	}
-	if err := w.s.SetWorkItemStatus(ctx, sc.OrganizationID, st, "awaiting_input", reason); err != nil {
+	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "awaiting_input", reason); err != nil {
 		return workflow.Result{}, err
 	}
 	st.Escalation = &Escalation{Reason: reason, Detail: detail}

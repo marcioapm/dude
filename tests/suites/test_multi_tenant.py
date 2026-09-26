@@ -30,13 +30,13 @@ def test_project_cannot_be_fetched_by_id_across_organizations(client: ApiClient,
     assert other.get(f"/v1/projects/{project['id']}").status_code == 404
 
 
-def test_work_items_cannot_be_created_in_another_organizations_project(
+def test_tasks_cannot_be_created_in_another_organizations_project(
     client: ApiClient, second_org: dict
 ):
     project = client.create_project(name="Private", slug="private-c")
 
     other: ApiClient = second_org["client"]
-    resp = other.post("/v1/work-items", {"projectId": project["id"], "title": "intrusion"})
+    resp = other.post("/v1/tasks", {"projectId": project["id"], "title": "intrusion"})
     # 404 rather than 403: the project's existence is itself not disclosed.
     assert resp.status_code == 404
 
@@ -49,8 +49,8 @@ def test_events_are_not_visible_across_organizations(client: ApiClient, second_o
 
 
 def test_runs_are_not_visible_across_organizations(client: ApiClient, project: dict, second_org: dict):
-    work_item = client.create_work_item(project["id"], "Private work")
-    run = client.create_run(work_item["id"])
+    task = client.create_task(project["id"], "Private work")
+    run = client.create_run(task["id"])
 
     other: ApiClient = second_org["client"]
     assert other.get(f"/v1/runs/{run['id']}").status_code == 404

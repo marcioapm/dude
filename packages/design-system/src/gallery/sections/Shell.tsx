@@ -117,7 +117,7 @@ function Transcript() {
         role: "orchestrator",
         status: "awaiting_input",
         model: "claude-opus-4",
-        workItemId: "WI-2401",
+        taskId: "WI-2401",
         title: "Add retry with backoff to the GitHub webhook handler",
         repo: "dude/control-plane",
         branch: "wi-2401-webhook-retry",

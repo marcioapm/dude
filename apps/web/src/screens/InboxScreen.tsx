@@ -1,7 +1,7 @@
 /**
- * Waiting on you: every work item that needs a person, across projects,
+ * Waiting on you: every task that needs a person, across projects,
  * oldest wait first — the sidebar's "Needs you", in full. Each row opens
- * where the answer is given: the asking agent's chat, or the work item.
+ * where the answer is given: the asking agent's chat, or the task.
  */
 
 import { useMemo } from "react";
@@ -14,7 +14,7 @@ export function InboxScreen({ projects, selected, onSelect }: {
   onSelect: (ref: NavRef, node: NavRow["node"]) => void;
 }) {
   const items = useMemo(
-    () => attentionItems(projects).sort((a, b) => since(a.workItem.statusSince) - since(b.workItem.statusSince)),
+    () => attentionItems(projects).sort((a, b) => since(a.task.statusSince) - since(b.task.statusSince)),
     [projects],
   );
   return (

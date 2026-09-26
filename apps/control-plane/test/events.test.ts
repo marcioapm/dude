@@ -39,7 +39,7 @@ function eventInput(organizationId: string, eventType: string, extra: Record<str
     eventType,
     organizationId,
     projectId: null,
-    workItemId: null,
+    taskId: null,
     runId: null,
     sessionId: null,
     workflowRunId: null,

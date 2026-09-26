@@ -183,30 +183,30 @@ func mustExec(t *testing.T, c *pgx.Conn, sql string, args ...any) {
 	}
 }
 
-func (w *world) workItem() string {
+func (w *world) task() string {
 	id := fmt.Sprintf("wi_%d", time.Now().UnixNano())
-	mustExec(w.t, w.owner, `INSERT INTO work_items (id, organization_id, project_id, number, title, goal, acceptance_criteria)
-		VALUES ($1, $2, $3, (SELECT count(*) + 1 FROM work_items WHERE project_id = $3), 'Greet people', 'Say hello',
+	mustExec(w.t, w.owner, `INSERT INTO tasks (id, organization_id, project_id, number, title, goal, acceptance_criteria)
+		VALUES ($1, $2, $3, (SELECT count(*) + 1 FROM tasks WHERE project_id = $3), 'Greet people', 'Say hello',
 		'["it greets"]'::jsonb)`, id, w.org, w.project)
 	return id
 }
 
-func (w *world) deliver(workItemID string) string {
+func (w *world) deliver(taskID string) string {
 	// As the API's deliver does: a project's only repository is named.
 	if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
-		return delivery.NameOnlyRepository(context.Background(), tx, workItemID)
+		return delivery.NameOnlyRepository(context.Background(), tx, taskID)
 	}); err != nil {
 		w.t.Fatal(err)
 	}
-	return w.start(workItemID, delivery.DefaultPolicy())
+	return w.start(taskID, delivery.DefaultPolicy())
 }
 
 // start starts the delivery workflow as the API does, with a policy.
-func (w *world) start(workItemID string, policy delivery.Policy) string {
+func (w *world) start(taskID string, policy delivery.Policy) string {
 	id, _, err := w.runtime.Start(context.Background(), workflow.StartOptions{
-		Type: delivery.WorkflowType, OrganizationID: w.org, IdempotencyKey: "delivery:" + workItemID, WorkItemID: workItemID,
-		Input: delivery.State{WorkItemID: workItemID, ProjectID: w.project,
-			Policy: policy, Branch: delivery.BranchFor(workItemID, 1)},
+		Type: delivery.WorkflowType, OrganizationID: w.org, IdempotencyKey: "delivery:" + taskID, TaskID: taskID,
+		Input: delivery.State{TaskID: taskID, ProjectID: w.project,
+			Policy: policy, Branch: delivery.BranchFor(taskID, 1)},
 	})
 	if err != nil {
 		w.t.Fatal(err)
@@ -265,9 +265,9 @@ func (w *world) describeRuns() string {
 	return b.String() + "workflow: " + wf
 }
 
-func (w *world) workItemStatus(id string) string {
+func (w *world) taskStatus(id string) string {
 	var s string
-	_ = w.owner.QueryRow(context.Background(), `SELECT status::text FROM work_items WHERE id = $1`, id).Scan(&s)
+	_ = w.owner.QueryRow(context.Background(), `SELECT status::text FROM tasks WHERE id = $1`, id).Scan(&s)
 	return s
 }
 
@@ -281,7 +281,7 @@ func (w *world) count(sql string, args ...any) int {
 
 func TestADeliveryReachesAPullRequestAndAMergeFinishesIt(t *testing.T) {
 	w := newWorld(t)
-	wi := w.workItem()
+	wi := w.task()
 	w.deliver(wi)
 
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
@@ -301,8 +301,8 @@ func TestADeliveryReachesAPullRequestAndAMergeFinishesIt(t *testing.T) {
 	if out, _ := exec.Command("git", "-C", w.gh.Repo, "branch", "--list", "dude/"+wi+"/run-*").Output(); len(strings.TrimSpace(string(out))) > 0 {
 		t.Errorf("per-run branches left behind:\n%s", out)
 	}
-	if s := w.workItemStatus(wi); s != "review" {
-		t.Errorf("work item = %s, want review (waiting on people)", s)
+	if s := w.taskStatus(wi); s != "review" {
+		t.Errorf("task = %s, want review (waiting on people)", s)
 	}
 
 	// The loop went round once: one blocking finding, one fix, then clean.
@@ -317,25 +317,25 @@ func TestADeliveryReachesAPullRequestAndAMergeFinishesIt(t *testing.T) {
 	if phaseCounts["implement"] != 1 || phaseCounts["review"] != 2 || phaseCounts["fix"] != 1 || phaseCounts["simplify"] != 1 {
 		t.Errorf("runs per phase = %v", phaseCounts)
 	}
-	if n := w.count(`SELECT count(*) FROM review_findings WHERE work_item_id = $1 AND status = 'open'`, wi); n != 0 {
+	if n := w.count(`SELECT count(*) FROM review_findings WHERE task_id = $1 AND status = 'open'`, wi); n != 0 {
 		t.Errorf("%d findings still open", n)
 	}
 
 	w.gh.Merge(1)
 	// No webhook in this test: the reconciler is the backstop that notices.
-	w.until("the work item to finish", func() bool {
+	w.until("the task to finish", func() bool {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
-		return w.workItemStatus(wi) == "done"
+		return w.taskStatus(wi) == "done"
 	})
 }
 
 // addWeb adds acme/web to the project and names both repositories on the
-// work item, the given access for web.
+// task, the given access for web.
 func (w *world) addWeb(wi, access string) string {
 	webID := "repo_web_" + w.org
 	mustExec(w.t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
 		VALUES ($1, $2, $3, 'web', 'https://github.com/acme/web.git', 'main') ON CONFLICT DO NOTHING`, webID, w.org, w.project)
-	mustExec(w.t, w.owner, `INSERT INTO work_item_repositories (organization_id, work_item_id, repository_id, access)
+	mustExec(w.t, w.owner, `INSERT INTO task_repositories (organization_id, task_id, repository_id, access)
 		VALUES ($1, $2, $3, 'write'), ($1, $2, $4, $5::repository_access)`, w.org, wi, w.repoID, webID, access)
 	return webID
 }
@@ -351,7 +351,7 @@ func TestWorkAcrossTwoRepositoriesOpensAPullRequestInEachAndFinishesWhenBothMerg
 		}
 		return b
 	}
-	wi := w.workItem()
+	wi := w.task()
 	w.addWeb(wi, "write")
 	w.deliver(wi)
 	w.until("a pull request in each repository", func() bool { return len(w.gh.Pulls()) == 1 && len(w.web.Pulls()) == 1 })
@@ -384,19 +384,19 @@ func TestWorkAcrossTwoRepositoriesOpensAPullRequestInEachAndFinishesWhenBothMerg
 	w.web.Merge(1)
 	_, _ = w.prs.Reconcile(context.Background(), 0)
 	w.pump()
-	if s := w.workItemStatus(wi); s == "done" {
+	if s := w.taskStatus(wi); s == "done" {
 		t.Fatalf("done with target's pull request still open")
 	}
 	w.gh.Merge(1)
-	w.until("the work item to finish", func() bool {
+	w.until("the task to finish", func() bool {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
-		return w.workItemStatus(wi) == "done"
+		return w.taskStatus(wi) == "done"
 	})
 }
 
 func TestARepositoryToReadIsClonedButNeverPushed(t *testing.T) {
 	w := newWorld(t)
-	wi := w.workItem()
+	wi := w.task()
 	w.addWeb(wi, "read")
 	w.deliver(wi)
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
@@ -428,16 +428,16 @@ func TestWorkOnNoRepositoryEndsWithWhatTheAgentPublished(t *testing.T) {
 	// A second repository, so none is implied: this work names none.
 	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
 		VALUES ($1, $2, $3, 'web', 'https://github.com/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
-	wi := w.workItem()
+	wi := w.task()
 	w.deliver(wi)
 	w.until("the delivery to end", func() bool {
-		return w.count(`SELECT count(*) FROM workflow_runs WHERE work_item_id = $1 AND status = 'completed'`, wi) == 1
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status = 'completed'`, wi) == 1
 	})
-	if s := w.workItemStatus(wi); s != "review" {
+	if s := w.taskStatus(wi); s != "review" {
 		var why string
-		_ = w.owner.QueryRow(context.Background(), `SELECT payload::text FROM events WHERE work_item_id = $1
-			AND event_type IN ('question.asked', 'work_item.status_changed') ORDER BY cursor DESC LIMIT 1`, wi).Scan(&why)
-		t.Fatalf("work item = %s (%s), want review: ready to read", s, why)
+		_ = w.owner.QueryRow(context.Background(), `SELECT payload::text FROM events WHERE task_id = $1
+			AND event_type IN ('question.asked', 'task.status_changed') ORDER BY cursor DESC LIMIT 1`, wi).Scan(&why)
+		t.Fatalf("task = %s (%s), want review: ready to read", s, why)
 	}
 	if len(w.gh.Pulls())+len(w.web.Pulls()) != 0 {
 		t.Errorf("work on no repository opened a pull request")
@@ -447,29 +447,29 @@ func TestWorkOnNoRepositoryEndsWithWhatTheAgentPublished(t *testing.T) {
 	if spec.Git != nil && len(spec.Git.Repositories) != 0 {
 		t.Errorf("work on no repository cloned something")
 	}
-	if n := w.count(`SELECT count(*) FROM artifacts a JOIN runs r ON r.id = a.run_id WHERE r.work_item_id = $1`, wi); n == 0 {
+	if n := w.count(`SELECT count(*) FROM artifacts a JOIN runs r ON r.id = a.run_id WHERE r.task_id = $1`, wi); n == 0 {
 		t.Errorf("nothing published")
 	}
 }
 
-func TestWhatAnAgentPublishesIsKeptWithTheWorkItem(t *testing.T) {
+func TestWhatAnAgentPublishesIsKeptWithTheTask(t *testing.T) {
 	w := newWorld(t)
-	wi := w.workItem()
+	wi := w.task()
 	w.deliver(wi)
 	w.until("the implementer's notes", func() bool {
-		return w.count(`SELECT count(*) FROM artifacts a JOIN runs r ON r.id = a.run_id WHERE r.work_item_id = $1`, wi) == 1
+		return w.count(`SELECT count(*) FROM artifacts a JOIN runs r ON r.id = a.run_id WHERE r.task_id = $1`, wi) == 1
 	})
 	var name, ctype, key, phase string
 	var size int64
 	if err := w.owner.QueryRow(context.Background(), `SELECT a.name, a.content_type, a.size_bytes, a.storage_key, r.phase::text
-		FROM artifacts a JOIN runs r ON r.id = a.run_id WHERE r.work_item_id = $1`, wi).
+		FROM artifacts a JOIN runs r ON r.id = a.run_id WHERE r.task_id = $1`, wi).
 		Scan(&name, &ctype, &size, &key, &phase); err != nil {
 		t.Fatal(err)
 	}
 	if name != fakeagent.Notes || !strings.HasPrefix(ctype, "text/markdown") || size == 0 || key == "" || phase != "implement" {
 		t.Errorf("artifact = %s %s %d bytes key=%q from %s", name, ctype, size, key, phase)
 	}
-	if n := w.count(`SELECT count(*) FROM events WHERE work_item_id = $1 AND event_type = 'artifact.created'`, wi); n != 1 {
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'artifact.created'`, wi); n != 1 {
 		t.Errorf("%d artifact.created events", n)
 	}
 
@@ -477,16 +477,16 @@ func TestWhatAnAgentPublishesIsKeptWithTheWorkItem(t *testing.T) {
 	// due once every exit is reported.
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 	w.until("every exit collected", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND artifacts_due_at IS NOT NULL`, wi) == 0
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND artifacts_due_at IS NOT NULL`, wi) == 0
 	})
-	if n := w.count(`SELECT count(*) FROM artifacts a JOIN runs r ON r.id = a.run_id WHERE r.work_item_id = $1`, wi); n != 1 {
+	if n := w.count(`SELECT count(*) FROM artifacts a JOIN runs r ON r.id = a.run_id WHERE r.task_id = $1`, wi); n != 1 {
 		t.Errorf("%d artifacts, want the implementer's one", n)
 	}
 
 	// Its bytes come from lux, through the orchestrator, only for its own
 	// organization.
 	var id string
-	_ = w.owner.QueryRow(context.Background(), `SELECT a.id FROM artifacts a JOIN runs r ON r.id = a.run_id WHERE r.work_item_id = $1`, wi).Scan(&id)
+	_ = w.owner.QueryRow(context.Background(), `SELECT a.id FROM artifacts a JOIN runs r ON r.id = a.run_id WHERE r.task_id = $1`, wi).Scan(&id)
 	status, body := w.get("/internal/artifacts/"+id+"/content", w.org)
 	if status != 200 || !strings.Contains(body, "# What changed") {
 		t.Errorf("content = %d %q", status, body)
@@ -502,13 +502,13 @@ func TestAPausedAgentsArtifactsAreCollectedAndItsNextExitsToo(t *testing.T) {
 		return fakelux.Behaviour{Hang: true, Reply: "Done after resume.", Commit: map[string]string{"A.md": "a\n"},
 			Publish: map[string]string{"plan.md": "# Plan\n"}}
 	}
-	wi := w.workItem()
+	wi := w.task()
 	w.deliver(wi)
 	w.until("the agent to be working", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'running'`, wi) == 1
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running'`, wi) == 1
 	})
 	var runID string
-	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE work_item_id = $1`, wi).Scan(&runID)
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1`, wi).Scan(&runID)
 	// Nothing published before the pause (the hanging agent never replied),
 	// and a pause is still an exit that is looked at, then settled.
 	mustExec(t, w.owner, `UPDATE runs SET control = 'pause_graceful' WHERE id = $1`, runID)
@@ -516,7 +516,7 @@ func TestAPausedAgentsArtifactsAreCollectedAndItsNextExitsToo(t *testing.T) {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND artifacts_due_at IS NULL`, runID) == 1
 	})
 	mustExec(t, w.owner, `UPDATE runs SET control = 'resume' WHERE id = $1`, runID)
-	mustExec(t, w.owner, `INSERT INTO directives (id, organization_id, work_item_id, run_id, text) VALUES ('dir_a', $1, $2, $3, 'go')`,
+	mustExec(t, w.owner, `INSERT INTO directives (id, organization_id, task_id, run_id, text) VALUES ('dir_a', $1, $2, $3, 'go')`,
 		w.org, wi, runID)
 	// The resumed placement publishes, and its exit is collected too.
 	w.until("the second placement's artifact", func() bool {
@@ -527,12 +527,12 @@ func TestAPausedAgentsArtifactsAreCollectedAndItsNextExitsToo(t *testing.T) {
 func TestAnExitLuxWillNeverReportIsNotWaitedFor(t *testing.T) {
 	w := newWorld(t)
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{FailToStart: true} }
-	wi := w.workItem()
+	wi := w.task()
 	w.deliver(wi)
 	// The agent never started, so lux sends no snapshot for that exit: the
 	// collector sees that and settles at once rather than asking for a day.
 	w.until("the failed start's exit to be settled", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'failed' AND artifacts_due_at IS NULL`, wi) == 1
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'failed' AND artifacts_due_at IS NULL`, wi) == 1
 	})
 }
 
@@ -543,7 +543,7 @@ func TestAnAgentIsGivenDudesToolsAsItsOwnRun(t *testing.T) {
 	w.syncer.Agent.ToolsURL = "http://10.9.8.7:3120/mcp"
 	w.syncer.Agent.ToolsService = true
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
-	wi := w.workItem()
+	wi := w.task()
 	w.deliver(wi)
 	w.until("the implementer to be submitted", func() bool { return len(w.lux.Runs()) >= 1 })
 
@@ -588,16 +588,16 @@ func TestAnAgentIsGivenDudesToolsAsItsOwnRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cs.Close()
-	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "list_work", Arguments: map[string]any{}})
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "list_tasks", Arguments: map[string]any{}})
 	if err != nil || res.IsError {
-		t.Fatalf("list_work: %v %+v", err, res)
+		t.Fatalf("list_tasks: %v %+v", err, res)
 	}
 	raw, _ := json.Marshal(res.StructuredContent)
 	if !strings.Contains(string(raw), `"yours":true`) {
-		t.Errorf("the Run does not see its own work item: %s", raw)
+		t.Errorf("the Run does not see its own task: %s", raw)
 	}
 	// Once the Run is over, the token is too.
-	mustExec(t, w.owner, `UPDATE runs SET status = 'aborted', control = 'abort' WHERE work_item_id = $1`, wi)
+	mustExec(t, w.owner, `UPDATE runs SET status = 'aborted', control = 'abort' WHERE task_id = $1`, wi)
 	if _, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{Endpoint: tools.URL,
 		DisableStandaloneSSE: true, MaxRetries: -1,
 		HTTPClient: &http.Client{Transport: headerTransport{"Authorization", auth}}}, nil); err == nil {
@@ -613,9 +613,9 @@ func (h headerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(r)
 }
 
-// names makes a work item work on a repository, as the dialog would.
+// names makes a task work on a repository, as the dialog would.
 func (w *world) names(wi, repoID string) {
-	mustExec(w.t, w.owner, `INSERT INTO work_item_repositories (organization_id, work_item_id, repository_id)
+	mustExec(w.t, w.owner, `INSERT INTO task_repositories (organization_id, task_id, repository_id)
 		VALUES ($1, $2, $3)`, w.org, wi, repoID)
 }
 
@@ -652,11 +652,11 @@ func TestAnAgentIsGivenARepositoryAPersonApproved(t *testing.T) {
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour {
 		return fakelux.Behaviour{Hang: true, Reply: "Done.", Commit: map[string]string{"A.md": "a\n"}}
 	}
-	wi := w.workItem()
+	wi := w.task()
 	w.names(wi, w.repoID)
 	w.deliver(wi)
 	w.until("the agent to be working", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'running'`, wi) == 1
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running'`, wi) == 1
 	})
 
 	status, body := w.callTool(tools.URL, string(w.lux.Runs()[0].Spec), "request_repository",
@@ -690,9 +690,9 @@ func TestAnAgentIsGivenARepositoryAPersonApproved(t *testing.T) {
 	w.until("the agent to hear it", func() bool {
 		return len(r.Inputs) > 0 && strings.Contains(r.Inputs[0], "web is now checked out at /workspace/repos/web")
 	})
-	// The work item names it now, read only, for every later phase.
-	if n := w.count(`SELECT count(*) FROM work_item_repositories WHERE work_item_id = $1 AND access = 'read'`, wi); n != 1 {
-		t.Errorf("work item's read repositories: %d", n)
+	// The task names it now, read only, for every later phase.
+	if n := w.count(`SELECT count(*) FROM task_repositories WHERE task_id = $1 AND access = 'read'`, wi); n != 1 {
+		t.Errorf("task's read repositories: %d", n)
 	}
 }
 
@@ -704,14 +704,14 @@ func TestAPersonsPauseIsNotUndoneByAnApproval(t *testing.T) {
 	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
 		VALUES ($1, $2, $3, 'web', 'https://github.com/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
-	wi := w.workItem()
+	wi := w.task()
 	w.names(wi, w.repoID)
 	w.deliver(wi)
 	w.until("the agent to be working", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'running'`, wi) == 1
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running'`, wi) == 1
 	})
 	var runID string
-	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE work_item_id = $1`, wi).Scan(&runID)
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1`, wi).Scan(&runID)
 	_, body := w.callTool(tools.URL, string(w.lux.Runs()[0].Spec), "request_repository", `{"repository":"web","reason":"r"}`)
 	var req struct{ RequestID string }
 	_ = json.Unmarshal([]byte(body), &req)
@@ -744,11 +744,11 @@ func TestADeclinedRepositoryRequestIsToldToTheAgent(t *testing.T) {
 	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
 		VALUES ($1, $2, $3, 'web', 'https://github.com/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
-	wi := w.workItem()
+	wi := w.task()
 	w.names(wi, w.repoID)
 	w.deliver(wi)
 	w.until("the agent to be working", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'running'`, wi) == 1
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running'`, wi) == 1
 	})
 	_, body := w.callTool(tools.URL, string(w.lux.Runs()[0].Spec), "request_repository", `{"repository":"web","reason":"curious"}`)
 	var req struct{ RequestID string }
@@ -756,14 +756,14 @@ func TestADeclinedRepositoryRequestIsToldToTheAgent(t *testing.T) {
 	w.call("/internal/repository-requests/"+req.RequestID+"/decide", map[string]any{"approve": false, "note": "Not needed for this."})
 	// Sent to lux, which gives it to the agent when its turn allows.
 	w.until("the decline to be sent to the agent", func() bool {
-		return w.count(`SELECT count(*) FROM directives WHERE run_id = (SELECT id FROM runs WHERE work_item_id = $1)
+		return w.count(`SELECT count(*) FROM directives WHERE run_id = (SELECT id FROM runs WHERE task_id = $1)
 			AND text LIKE '%declined. Not needed for this.%' AND sent_at IS NOT NULL`, wi) == 1
 	})
 	if r := w.lux.Runs()[0]; r.Resumed != 0 {
 		t.Errorf("a declined request paused the run")
 	}
-	if n := w.count(`SELECT count(*) FROM work_item_repositories WHERE work_item_id = $1`, wi); n != 1 {
-		t.Errorf("work item's repositories: %d, want only its own", n)
+	if n := w.count(`SELECT count(*) FROM task_repositories WHERE task_id = $1`, wi); n != 1 {
+		t.Errorf("task's repositories: %d, want only its own", n)
 	}
 }
 
@@ -772,7 +772,7 @@ func TestWhatDudeSendsLux(t *testing.T) {
 	// A real model, so the spec is the one a real agent gets.
 	mustExec(t, w.owner, `UPDATE projects SET agent_models = '{"implementer":{"model":"llm/impl"}}'::jsonb WHERE id = $1`, w.project)
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
-	wi := w.workItem()
+	wi := w.task()
 	w.deliver(wi)
 	w.until("the implementer to be submitted", func() bool { return len(w.lux.Runs()) >= 1 })
 
@@ -820,13 +820,13 @@ func TestWhatDudeSendsLux(t *testing.T) {
 	if spec.Env["FORCE_COLOR"] != "1" || spec.Env["TERM"] == "" || spec.Env["GIT_CONFIG_VALUE_0"] != "always" {
 		t.Errorf("env = %v, want colour forced", spec.Env)
 	}
-	if spec.Labels["dude.run"] == "" || spec.Labels["dude.workItem"] != wi {
+	if spec.Labels["dude.run"] == "" || spec.Labels["dude.task"] != wi {
 		t.Errorf("labels = %v", spec.Labels)
 	}
 
 	// The key is the dude Run id: a resubmission returns the same lux Run.
 	var runID string
-	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE work_item_id = $1 AND phase = 'implement'`, wi).Scan(&runID)
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi).Scan(&runID)
 	if runID != spec.Labels["dude.run"] {
 		t.Errorf("label run = %s, row = %s", spec.Labels["dude.run"], runID)
 	}
@@ -834,13 +834,13 @@ func TestWhatDudeSendsLux(t *testing.T) {
 
 func TestTheAgentsWorkReachesTheLedgerAsAConversation(t *testing.T) {
 	w := newWorld(t)
-	wi := w.workItem()
+	wi := w.task()
 	w.deliver(wi)
 	w.until("the implementer to finish", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND phase = 'implement' AND status = 'completed'`, wi) == 1
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'completed'`, wi) == 1
 	})
 	var runID string
-	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE work_item_id = $1 AND phase = 'implement'`, wi).Scan(&runID)
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi).Scan(&runID)
 
 	// One message, whole: the chunks it streamed in are joined.
 	var text string
@@ -899,7 +899,7 @@ func TestAPullRequestFixIsHandedTheFeedbackAndNotTheFindingsLeftOpen(t *testing.
 		}
 		return fakelux.Behaviour{Reply: "Nothing to simplify."}
 	}
-	wi := w.workItem()
+	wi := w.task()
 	w.deliver(wi)
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 	// The fixer is a real model, so its spec carries the prompt a real agent gets.
@@ -909,7 +909,7 @@ func TestAPullRequestFixIsHandedTheFeedbackAndNotTheFindingsLeftOpen(t *testing.
 	w.gh.Comment(1, "reviewer-person", "Please rename the greeting.")
 	w.until("a fix for the comment", func() bool {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
-		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND phase = 'fix'`, wi) == 1
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix'`, wi) == 1
 	})
 	var prompt string
 	w.until("the fix to reach lux", func() bool {
@@ -943,16 +943,16 @@ func TestTheChatShowsThinkingToolOutputTokensAndThePrompt(t *testing.T) {
 			ToolOutput: map[string]string{"bash": long}, Reply: "Done.",
 			Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
 	}
-	wi := w.workItem()
+	wi := w.task()
 	w.deliver(wi)
 	w.until("the implementer to finish", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND phase = 'implement' AND status = 'completed'`, wi) == 1
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'completed'`, wi) == 1
 	})
 	ctx := context.Background()
 	var runID, harness, model string
 	var ctxTokens, outTokens int64
 	_ = w.owner.QueryRow(ctx, `SELECT id, harness, model, context_tokens, output_tokens FROM runs
-		WHERE work_item_id = $1 AND phase = 'implement'`, wi).Scan(&runID, &harness, &model, &ctxTokens, &outTokens)
+		WHERE task_id = $1 AND phase = 'implement'`, wi).Scan(&runID, &harness, &model, &ctxTokens, &outTokens)
 	if harness != "scripted" || model != "fake/scripted" {
 		t.Errorf("harness=%q model=%q", harness, model)
 	}
@@ -1008,14 +1008,14 @@ func TestAnAgentThatAsksWaitsForTheAnswerAndCarriesOn(t *testing.T) {
 		return fakelux.Behaviour{Ask: question, Reply: "Sorted it, as asked.",
 			Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
 	}
-	wi := w.workItem()
+	wi := w.task()
 	w.deliver(wi)
-	w.until("the question to reach a person", func() bool { return w.workItemStatus(wi) == "awaiting_input" })
+	w.until("the question to reach a person", func() bool { return w.taskStatus(wi) == "awaiting_input" })
 
 	var qid, prompt string
 	var options []string
 	_ = w.owner.QueryRow(context.Background(), `SELECT id, prompt, ARRAY(SELECT jsonb_array_elements_text(options))
-		FROM questions WHERE work_item_id = $1`, wi).Scan(&qid, &prompt, &options)
+		FROM questions WHERE task_id = $1`, wi).Scan(&qid, &prompt, &options)
 	if prompt != "Should the table be sorted?" || len(options) != 2 {
 		t.Fatalf("question = %q %v", prompt, options)
 	}
@@ -1023,9 +1023,9 @@ func TestAnAgentThatAsksWaitsForTheAnswerAndCarriesOn(t *testing.T) {
 	// with its task unanswered. (The question is asked mid-turn; the turn
 	// ends after.)
 	w.until("the agent to wait", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND waiting_since IS NOT NULL`, wi) == 1
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND waiting_since IS NOT NULL`, wi) == 1
 	})
-	if n := w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'running' AND turn_done_at IS NULL`, wi); n != 1 {
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running' AND turn_done_at IS NULL`, wi); n != 1 {
 		t.Fatalf("the asking run is not still running")
 	}
 	if len(w.lux.Runs()) != 1 || w.lux.Runs()[0].Pushed {
@@ -1036,7 +1036,7 @@ func TestAnAgentThatAsksWaitsForTheAnswerAndCarriesOn(t *testing.T) {
 		t.Fatalf("answer: %d %v", status, body)
 	}
 	w.until("the implementer to finish", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND phase = 'implement' AND status = 'completed'`, wi) == 1
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'completed'`, wi) == 1
 	})
 	if in := w.lux.Runs()[0].Inputs; len(in) != 1 || !strings.Contains(in[0], "Should the table be sorted?") || !strings.HasSuffix(in[0], "yes") {
 		t.Errorf("the agent was given %v, want the answer quoting its question", in)
@@ -1045,16 +1045,16 @@ func TestAnAgentThatAsksWaitsForTheAnswerAndCarriesOn(t *testing.T) {
 		t.Errorf("a second answer was accepted: %d", status)
 	}
 	for _, typ := range []string{"question.asked", "question.answered"} {
-		if n := w.count(`SELECT count(*) FROM events WHERE work_item_id = $1 AND event_type = $2`, wi, typ); n != 1 {
+		if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, wi, typ); n != 1 {
 			t.Errorf("%s: %d events", typ, n)
 		}
 	}
 }
 
-// questionID is the work item's (one) question.
+// questionID is the task's (one) question.
 func (w *world) questionID(wi string) string {
 	var id string
-	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM questions WHERE work_item_id = $1`, wi).Scan(&id)
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM questions WHERE task_id = $1`, wi).Scan(&id)
 	return id
 }
 
@@ -1067,10 +1067,10 @@ func (w *world) asking() (wi, runID string) {
 		}
 		return fakelux.Behaviour{Ask: fakeagent.Question, Reply: "Done.", Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
 	}
-	wi = w.workItem()
+	wi = w.task()
 	w.deliver(wi)
-	w.until("the question to reach a person", func() bool { return w.workItemStatus(wi) == "awaiting_input" })
-	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE work_item_id = $1`, wi).Scan(&runID)
+	w.until("the question to reach a person", func() bool { return w.taskStatus(wi) == "awaiting_input" })
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1`, wi).Scan(&runID)
 	return wi, runID
 }
 
@@ -1080,7 +1080,7 @@ func TestAbortingARunThatAskedCancelsItsQuestion(t *testing.T) {
 	if status, body := w.call("/internal/runs/"+runID+"/abort", map[string]any{}); status != 200 {
 		t.Fatalf("abort: %d %v", status, body)
 	}
-	if n := w.count(`SELECT count(*) FROM questions WHERE work_item_id = $1 AND status = 'open'`, wi); n != 0 {
+	if n := w.count(`SELECT count(*) FROM questions WHERE task_id = $1 AND status = 'open'`, wi); n != 0 {
 		t.Errorf("an aborted Run's question is still waiting for a person")
 	}
 	// Answered afterwards — the next morning — it says why nothing happens.
@@ -1102,10 +1102,10 @@ func TestAnAgentWaitingOnAPersonIsParkedAndTheAnswerResumesIt(t *testing.T) {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause = 'person'`, runID) == 1
 	})
 	w.until("lux to stop it: parked holds no capacity", func() bool { return w.lux.Runs()[0].State == "stopped" })
-	if w.workItemStatus(wi) != "awaiting_input" {
-		t.Errorf("work item is %s while its question is open", w.workItemStatus(wi))
+	if w.taskStatus(wi) != "awaiting_input" {
+		t.Errorf("task is %s while its question is open", w.taskStatus(wi))
 	}
-	if n := w.count(`SELECT count(*) FROM questions WHERE work_item_id = $1 AND status = 'open'`, wi); n != 1 {
+	if n := w.count(`SELECT count(*) FROM questions WHERE task_id = $1 AND status = 'open'`, wi); n != 1 {
 		t.Fatalf("parking closed the question")
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.parked'`, runID); n != 1 {
@@ -1196,12 +1196,12 @@ func TestAnAgentWaitingOnARepositoryIsParkedAndTheApprovalResumesIt(t *testing.T
 		return fakelux.Behaviour{CallTools: [][2]string{{"request_repository", `{"repository":"web","reason":"the client","wait":true}`}},
 			Reply: "Done.", Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
 	}
-	wi := w.workItem()
+	wi := w.task()
 	w.names(wi, w.repoID)
 	w.deliver(wi)
 	var runID string
 	w.until("the run to be parked", func() bool {
-		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE work_item_id = $1 AND dude_pause = 'person'`, wi).Scan(&runID)
+		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND dude_pause = 'person'`, wi).Scan(&runID)
 		return runID != ""
 	})
 	var reqID string
@@ -1233,13 +1233,13 @@ func TestARequestTheAgentDoesNotWaitOnLetsItsTurnEnd(t *testing.T) {
 		return fakelux.Behaviour{CallTools: [][2]string{{"request_repository", `{"repository":"web","reason":"curious"}`}},
 			Reply: "Done.", Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
 	}
-	wi := w.workItem()
+	wi := w.task()
 	w.names(wi, w.repoID)
 	w.deliver(wi)
 	w.until("the implementer to finish", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND phase = 'implement' AND status = 'completed'`, wi) == 1
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'completed'`, wi) == 1
 	})
-	if n := w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND dude_pause IS NOT NULL`, wi); n != 0 {
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND dude_pause IS NOT NULL`, wi); n != 0 {
 		t.Errorf("parked on a request the agent did not wait on")
 	}
 }
@@ -1260,21 +1260,21 @@ func TestWorkGivenARepositoryToChangeMidRunIsPushed(t *testing.T) {
 		return fakelux.Behaviour{CallTools: [][2]string{{"request_repository", `{"repository":"web","write":true,"reason":"the change is there","wait":true}`}},
 			Reply: "Done.", Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
 	}
-	wi := w.workItem() // names no repository: the project has two
+	wi := w.task() // names no repository: the project has two
 	w.deliver(wi)
 	var reqID string
 	w.until("the request", func() bool {
-		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM repository_requests WHERE work_item_id = $1`, wi).Scan(&reqID)
+		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM repository_requests WHERE task_id = $1`, wi).Scan(&reqID)
 		return reqID != ""
 	})
 	w.call("/internal/repository-requests/"+reqID+"/decide", map[string]any{"approve": true})
 	w.until("the implementer to finish", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND phase = 'implement' AND status = 'completed'`, wi) == 1
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'completed'`, wi) == 1
 	})
 	if !w.lux.Runs()[0].Pushed {
 		t.Fatalf("the change was never pushed\n%s", w.describeRuns())
 	}
-	if n := w.count(`SELECT count(*) FROM events WHERE work_item_id = $1 AND payload->>'reason' = 'no_changes'`, wi); n != 0 {
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND payload->>'reason' = 'no_changes'`, wi); n != 0 {
 		t.Errorf("escalated as no changes")
 	}
 }
@@ -1291,10 +1291,10 @@ func TestAPublishingRunWithNothingToPushFinishesAfterItsContainerIsGone(t *testi
 		}
 		return fakelux.Behaviour{Reply: "Wrote the notes.", Publish: map[string]string{"NOTES.md": "notes\n"}, ExitAfterTurn: true}
 	}
-	wi := w.workItem() // names no repository: the project has two
+	wi := w.task() // names no repository: the project has two
 	w.deliver(wi)
 	w.until("the implementer to complete", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND phase = 'implement' AND status = 'completed'`, wi) == 1
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'completed'`, wi) == 1
 	})
 }
 
@@ -1305,16 +1305,16 @@ func TestAnApprovalForARepositoryTheRunAlreadyHasSettlesAtOnce(t *testing.T) {
 	w := newWorld(t)
 	w.withTools()
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
-	wi := w.workItem()
+	wi := w.task()
 	w.names(wi, w.repoID)
 	w.deliver(wi)
 	w.until("the agent to be working", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'running'`, wi) == 1
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running'`, wi) == 1
 	})
 	var runID string
-	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE work_item_id = $1`, wi).Scan(&runID)
-	// A person takes target off the work item; the lux Run still has it.
-	mustExec(t, w.owner, `DELETE FROM work_item_repositories WHERE work_item_id = $1`, wi)
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1`, wi).Scan(&runID)
+	// A person takes target off the task; the lux Run still has it.
+	mustExec(t, w.owner, `DELETE FROM task_repositories WHERE task_id = $1`, wi)
 	_, body := w.callTool(w.syncer.Agent.ToolsURL, string(w.lux.Runs()[0].Spec), "request_repository",
 		`{"repository":"target","reason":"I still need it","wait":true}`)
 	var req struct{ RequestID string }
@@ -1346,7 +1346,7 @@ func TestAForgeThatCannotBeReadDelaysTheRunRatherThanStartingItWithoutCredential
 	w := newWorld(t)
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
 	w.syncer.Forges = unreadableForge{}
-	wi := w.workItem()
+	wi := w.task()
 	w.deliver(wi)
 	for range 5 {
 		w.pump()
@@ -1354,30 +1354,30 @@ func TestAForgeThatCannotBeReadDelaysTheRunRatherThanStartingItWithoutCredential
 	if n := len(w.lux.Runs()); n != 0 {
 		t.Fatalf("started %d lux Runs without the forge's credentials", n)
 	}
-	if n := w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'failed'`, wi); n != 0 {
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'failed'`, wi); n != 0 {
 		t.Fatalf("failed the Run over a passing forge error")
 	}
 }
 
-// Approved with its checks green, a work item is ready to merge — a
+// Approved with its checks green, a task is ready to merge — a
 // person's call to make, the factory never merges — and back in review
 // if a check turns red.
 func TestAnApprovedPullRequestWithGreenChecksIsReadyToMerge(t *testing.T) {
 	w := newWorld(t)
-	wi := w.workItem()
+	wi := w.task()
 	w.deliver(wi)
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
-	w.until("review", func() bool { return w.workItemStatus(wi) == "review" })
+	w.until("review", func() bool { return w.taskStatus(wi) == "review" })
 
 	w.gh.Review(1, "alice", "APPROVED")
 	w.until("ready to merge", func() bool {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
-		return w.workItemStatus(wi) == "ready_to_merge"
+		return w.taskStatus(wi) == "ready_to_merge"
 	})
 	if w.gh.Pull(1).State != "open" {
 		t.Fatalf("the factory merged it")
 	}
-	if n := w.count(`SELECT count(*) FROM events WHERE work_item_id = $1 AND event_type = 'work_item.ready_to_merge'`, wi); n != 1 {
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.ready_to_merge'`, wi); n != 1 {
 		t.Errorf("%d ready-to-merge events, want one to tell people by", n)
 	}
 
@@ -1385,12 +1385,12 @@ func TestAnApprovedPullRequestWithGreenChecksIsReadyToMerge(t *testing.T) {
 	w.gh.SetChecks("failure")
 	w.until("no longer ready", func() bool {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
-		return w.workItemStatus(wi) != "ready_to_merge"
+		return w.taskStatus(wi) != "ready_to_merge"
 	})
 
 	// Merged by a person while the fixer is still at work. The fix lands
 	// after the merge, so it is outside it: it gets a pull request of its
-	// own, and the work item is done when that one is merged too.
+	// own, and the task is done when that one is merged too.
 	w.gh.SetChecks("success")
 	w.gh.Merge(1)
 	w.until("a pull request for the fix", func() bool {
@@ -1398,9 +1398,9 @@ func TestAnApprovedPullRequestWithGreenChecksIsReadyToMerge(t *testing.T) {
 		return len(w.gh.Pulls()) == 2
 	})
 	w.gh.Merge(2)
-	w.until("the work item to finish", func() bool {
+	w.until("the task to finish", func() bool {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
-		return w.workItemStatus(wi) == "done"
+		return w.taskStatus(wi) == "done"
 	})
 }
 
@@ -1411,11 +1411,11 @@ func TestAQuietAgentIsNudgedThenParkedForAPerson(t *testing.T) {
 	w.syncer.IdleAfter = 300 * time.Millisecond
 	// Silent even after the nudge: its turn is taken and it says nothing.
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
-	wi := w.workItem()
+	wi := w.task()
 	w.deliver(wi)
 	var runID string
 	w.until("a nudge", func() bool {
-		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE work_item_id = $1 AND idle_nudged_at IS NOT NULL`, wi).Scan(&runID)
+		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND idle_nudged_at IS NOT NULL`, wi).Scan(&runID)
 		return runID != ""
 	})
 	w.until("the nudge to reach the agent, interrupting its turn", func() bool {
@@ -1425,8 +1425,8 @@ func TestAQuietAgentIsNudgedThenParkedForAPerson(t *testing.T) {
 	w.until("the run to be parked as idle", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause = 'idle'`, runID) == 1
 	})
-	if w.workItemStatus(wi) != "awaiting_input" {
-		t.Errorf("work item is %s, want awaiting_input for a person to look", w.workItemStatus(wi))
+	if w.taskStatus(wi) != "awaiting_input" {
+		t.Errorf("task is %s, want awaiting_input for a person to look", w.taskStatus(wi))
 	}
 	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1`, runID); n != 1 {
 		t.Errorf("%d nudges, want one", n)
@@ -1439,8 +1439,8 @@ func TestAQuietAgentIsNudgedThenParkedForAPerson(t *testing.T) {
 	}
 	w.call("/internal/runs/"+runID+"/resume", map[string]any{})
 	w.until("the resume", func() bool { return w.lux.Runs()[0].Resumed == 1 })
-	if w.workItemStatus(wi) != "running" {
-		t.Errorf("work item is %s after a person resumed it", w.workItemStatus(wi))
+	if w.taskStatus(wi) != "running" {
+		t.Errorf("task is %s after a person resumed it", w.taskStatus(wi))
 	}
 }
 
@@ -1451,16 +1451,16 @@ func TestAnAgentInALongCommandIsNotNudged(t *testing.T) {
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour {
 		return fakelux.Behaviour{Hang: true, Tools: []string{"sleep"}, KeepToolsOpen: true}
 	}
-	wi := w.workItem()
+	wi := w.task()
 	w.deliver(wi)
 	w.until("the agent to be working", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND cardinality(open_tool_calls) = 1`, wi) == 1
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND cardinality(open_tool_calls) = 1`, wi) == 1
 	})
 	time.Sleep(500 * time.Millisecond)
 	for range 5 {
 		w.pump()
 	}
-	if n := w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND idle_nudged_at IS NOT NULL`, wi); n != 0 {
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND idle_nudged_at IS NOT NULL`, wi); n != 0 {
 		t.Errorf("nudged an agent in the middle of a command")
 	}
 }
@@ -1470,9 +1470,9 @@ func TestAnAgentThatDiesWhileWaitingFailsItsRun(t *testing.T) {
 	wi, _ := w.asking()
 	w.lux.Crash(w.lux.Runs()[0].ID)
 	w.until("the run to fail", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'failed'`, wi) == 1
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'failed'`, wi) == 1
 	})
-	if n := w.count(`SELECT count(*) FROM questions WHERE work_item_id = $1 AND status = 'open'`, wi); n != 0 {
+	if n := w.count(`SELECT count(*) FROM questions WHERE task_id = $1 AND status = 'open'`, wi); n != 0 {
 		t.Errorf("a failed Run's question is still waiting for a person")
 	}
 }
@@ -1500,14 +1500,14 @@ func TestAFindingIsResolvedOnlyWhenTheReviewerJudgesItFixed(t *testing.T) {
 	}
 	// A real model, so the review prompt is the one a real reviewer reads.
 	mustExec(t, w.owner, `UPDATE projects SET agent_models = agent_models || '{"reviewer":{"model":"llm/review"}}'::jsonb WHERE id = $1`, w.project)
-	wi := w.workItem()
+	wi := w.task()
 	w.deliver(wi)
 	w.until("a second review", func() bool {
 		return reviews >= 2 && w.count(`SELECT count(*) FROM runs
-		WHERE work_item_id = $1 AND phase = 'review' AND status = 'completed'`, wi) >= 2
+		WHERE task_id = $1 AND phase = 'review' AND status = 'completed'`, wi) >= 2
 	})
 
-	if n := w.count(`SELECT count(*) FROM review_findings WHERE work_item_id = $1 AND status = 'open'`, wi); n != 1 {
+	if n := w.count(`SELECT count(*) FROM review_findings WHERE task_id = $1 AND status = 'open'`, wi); n != 1 {
 		t.Errorf("open findings = %d; a finding the reviewer says is still there must stay open", n)
 	}
 	if !strings.Contains(shown[1], "FACTORY.md does not record the fix") || !strings.Contains(shown[1], "F1: fixed | still") {
@@ -1517,14 +1517,14 @@ func TestAFindingIsResolvedOnlyWhenTheReviewerJudgesItFixed(t *testing.T) {
 
 func TestAReviewersFindingsAreRecorded(t *testing.T) {
 	w := newWorld(t)
-	wi := w.workItem()
+	wi := w.task()
 	w.deliver(wi)
 	w.until("a finding", func() bool {
-		return w.count(`SELECT count(*) FROM review_findings WHERE work_item_id = $1`, wi) >= 1
+		return w.count(`SELECT count(*) FROM review_findings WHERE task_id = $1`, wi) >= 1
 	})
 	var sev, title, file string
 	var line int
-	_ = w.owner.QueryRow(context.Background(), `SELECT severity::text, title, file, line FROM review_findings WHERE work_item_id = $1
+	_ = w.owner.QueryRow(context.Background(), `SELECT severity::text, title, file, line FROM review_findings WHERE task_id = $1
 		ORDER BY created_at LIMIT 1`, wi).Scan(&sev, &title, &file, &line)
 	if sev != "blocking" || file != "FACTORY.md" || line != 1 || title != "FACTORY.md does not record the fix" {
 		t.Errorf("finding = %s %s:%d %q", sev, file, line, title)
@@ -1541,10 +1541,10 @@ func TestAReviewerIsToldWhatTheDeliverysPolicyBlocksOn(t *testing.T) {
 		}
 		return fakelux.Behaviour{Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
 	}
-	wi := w.workItem()
+	wi := w.task()
 	policy := delivery.DefaultPolicy()
 	policy.BlockingSeverities = []string{"blocking", "high", "medium"}
-	mustExec(t, w.owner, `INSERT INTO work_item_repositories (organization_id, work_item_id, repository_id)
+	mustExec(t, w.owner, `INSERT INTO task_repositories (organization_id, task_id, repository_id)
 		VALUES ($1, $2, $3)`, w.org, wi, w.repoID)
 	w.start(wi, policy)
 	var prompt string
@@ -1567,17 +1567,17 @@ func TestAReviewerIsToldWhatTheDeliverysPolicyBlocksOn(t *testing.T) {
 func TestSteeringReachesTheAgentAndIsAcknowledged(t *testing.T) {
 	w := newWorld(t)
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
-	wi := w.workItem()
+	wi := w.task()
 	w.deliver(wi)
 	w.until("the agent to be working", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'running'`, wi) == 1
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running'`, wi) == 1
 	})
 	var runID string
-	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE work_item_id = $1`, wi).Scan(&runID)
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1`, wi).Scan(&runID)
 
 	// An agent that cannot take a message mid-turn holds it until the turn
 	// ends: sent, but not yet delivered.
-	mustExec(t, w.owner, `INSERT INTO directives (id, organization_id, work_item_id, run_id, text) VALUES ('dir_1', $1, $2, $3, 'also add a test')`,
+	mustExec(t, w.owner, `INSERT INTO directives (id, organization_id, task_id, run_id, text) VALUES ('dir_1', $1, $2, $3, 'also add a test')`,
 		w.org, wi, runID)
 	w.until("the directive to be sent", func() bool {
 		return w.count(`SELECT count(*) FROM directives WHERE id = 'dir_1' AND sent_at IS NOT NULL`) == 1
@@ -1587,7 +1587,7 @@ func TestSteeringReachesTheAgentAndIsAcknowledged(t *testing.T) {
 	}
 
 	// One that interrupts is heard now, and so is everything queued before it.
-	mustExec(t, w.owner, `INSERT INTO directives (id, organization_id, work_item_id, run_id, text, interrupt) VALUES ('dir_2', $1, $2, $3, 'stop and listen', true)`,
+	mustExec(t, w.owner, `INSERT INTO directives (id, organization_id, task_id, run_id, text, interrupt) VALUES ('dir_2', $1, $2, $3, 'stop and listen', true)`,
 		w.org, wi, runID)
 	w.until("both directives to be delivered", func() bool {
 		return w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND delivered_at IS NOT NULL`, runID) == 2
@@ -1610,13 +1610,13 @@ func TestPauseKeepsTheRunAndResumeContinuesIt(t *testing.T) {
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour {
 		return fakelux.Behaviour{Hang: true, Reply: "Done after resume.", Commit: map[string]string{"A.md": "a\n"}}
 	}
-	wi := w.workItem()
+	wi := w.task()
 	w.deliver(wi)
 	w.until("the agent to be working", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'running'`, wi) == 1
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running'`, wi) == 1
 	})
 	var runID string
-	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE work_item_id = $1`, wi).Scan(&runID)
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1`, wi).Scan(&runID)
 
 	mustExec(t, w.owner, `UPDATE runs SET control = 'pause_graceful' WHERE id = $1`, runID)
 	w.until("the run to pause", func() bool {
@@ -1626,7 +1626,7 @@ func TestPauseKeepsTheRunAndResumeContinuesIt(t *testing.T) {
 	w.until("lux to report the run stopped", func() bool { r := w.lux.Runs()[0]; return r.Stopped == 1 && r.State == "stopped" })
 
 	// A directive given while paused, then the request to resume.
-	mustExec(t, w.owner, `INSERT INTO directives (id, organization_id, work_item_id, run_id, text) VALUES ('dir_r', $1, $2, $3, 'carry on')`,
+	mustExec(t, w.owner, `INSERT INTO directives (id, organization_id, task_id, run_id, text) VALUES ('dir_r', $1, $2, $3, 'carry on')`,
 		w.org, wi, runID)
 	mustExec(t, w.owner, `UPDATE runs SET control = 'resume' WHERE id = $1`, runID)
 	w.until("the resumed run to finish its turn", func() bool {
@@ -1655,22 +1655,22 @@ func TestPauseKeepsTheRunAndResumeContinuesIt(t *testing.T) {
 func TestAbortCancelsTheLuxRun(t *testing.T) {
 	w := newWorld(t)
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
-	wi := w.workItem()
+	wi := w.task()
 	w.deliver(wi)
 	w.until("the agent to be working", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'running'`, wi) == 1
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running'`, wi) == 1
 	})
-	mustExec(t, w.owner, `UPDATE runs SET status = 'aborted', control = 'abort' WHERE work_item_id = $1`, wi)
+	mustExec(t, w.owner, `UPDATE runs SET status = 'aborted', control = 'abort' WHERE task_id = $1`, wi)
 	w.until("the lux run to be cancelled", func() bool { return w.lux.Runs()[0].Cancelled })
 }
 
 func TestAnAgentThatDiesFailsItsPhaseAndEscalates(t *testing.T) {
 	w := newWorld(t)
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Crash: true} }
-	wi := w.workItem()
+	wi := w.task()
 	w.deliver(wi)
-	w.until("the work item to need a person", func() bool { return w.workItemStatus(wi) == "awaiting_input" })
-	if n := w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'failed'`, wi); n != 1 {
+	w.until("the task to need a person", func() bool { return w.taskStatus(wi) == "awaiting_input" })
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'failed'`, wi); n != 1 {
 		t.Errorf("failed runs = %d", n)
 	}
 }
@@ -1678,24 +1678,24 @@ func TestAnAgentThatDiesFailsItsPhaseAndEscalates(t *testing.T) {
 func TestARunLuxNoLongerHasFailsItsPhase(t *testing.T) {
 	w := newWorld(t)
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
-	wi := w.workItem()
+	wi := w.task()
 	w.deliver(wi)
 	w.until("the agent to be working", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'running'`, wi) == 1
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running'`, wi) == 1
 	})
 	w.lux.Forget()
-	w.until("the work item to need a person", func() bool { return w.workItemStatus(wi) == "awaiting_input" })
+	w.until("the task to need a person", func() bool { return w.taskStatus(wi) == "awaiting_input" })
 }
 
 func TestAnImplementerThatChangesNothingIsEscalated(t *testing.T) {
 	w := newWorld(t)
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Reply: "Nothing to do."} }
-	wi := w.workItem()
+	wi := w.task()
 	w.deliver(wi)
-	w.until("escalation", func() bool { return w.workItemStatus(wi) == "awaiting_input" })
+	w.until("escalation", func() bool { return w.taskStatus(wi) == "awaiting_input" })
 	var reason string
-	_ = w.owner.QueryRow(context.Background(), `SELECT payload->>'reason' FROM events WHERE work_item_id = $1
-		AND event_type = 'work_item.status_changed' ORDER BY cursor DESC LIMIT 1`, wi).Scan(&reason)
+	_ = w.owner.QueryRow(context.Background(), `SELECT payload->>'reason' FROM events WHERE task_id = $1
+		AND event_type = 'task.status_changed' ORDER BY cursor DESC LIMIT 1`, wi).Scan(&reason)
 	if reason != "no_changes" {
 		t.Errorf("reason = %s", reason)
 	}
@@ -1704,11 +1704,11 @@ func TestAnImplementerThatChangesNothingIsEscalated(t *testing.T) {
 func TestLuxRefusingASpecFailsThePhaseRatherThanRetryingForever(t *testing.T) {
 	w := newWorld(t)
 	mustExec(t, w.owner, `UPDATE projects SET agent_models = '{}'::jsonb WHERE id = $1`, w.project)
-	wi := w.workItem()
+	wi := w.task()
 	w.deliver(wi)
-	w.until("escalation", func() bool { return w.workItemStatus(wi) == "awaiting_input" })
+	w.until("escalation", func() bool { return w.taskStatus(wi) == "awaiting_input" })
 	var errText string
-	_ = w.owner.QueryRow(context.Background(), `SELECT error FROM runs WHERE work_item_id = $1`, wi).Scan(&errText)
+	_ = w.owner.QueryRow(context.Background(), `SELECT error FROM runs WHERE task_id = $1`, wi).Scan(&errText)
 	if !strings.Contains(errText, "no model is configured for the implementer role") {
 		t.Errorf("error = %q", errText)
 	}
@@ -1730,17 +1730,17 @@ func TestMain(m *testing.M) {
 // finishing Runs were never followed again, and waited forever.
 func TestAFinishingRunIsFollowedAfterARestart(t *testing.T) {
 	w := newWorld(t)
-	wi := w.workItem()
+	wi := w.task()
 	w.deliver(wi)
 	w.until("the implementer's push to be asked for", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND phase = 'implement' AND push_request_id IS NOT NULL`, wi) == 1
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND push_request_id IS NOT NULL`, wi) == 1
 	})
 	// A new orchestrator: nothing is following anything.
 	w.syncer.Stop()
 	w.syncer = &phases.Syncer{DB: w.syncer.DB, Lux: w.syncer.Lux, Forges: w.syncer.Forges, Log: quiet, Agent: w.syncer.Agent}
 	t.Cleanup(w.syncer.Stop)
 	w.until("the implementer to complete", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND phase = 'implement' AND status = 'completed'`, wi) == 1
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'completed'`, wi) == 1
 	})
 }
 
@@ -1749,7 +1749,7 @@ func TestAFinishingRunIsFollowedAfterARestart(t *testing.T) {
 func TestAnAbortDuringSubmitIsNotUndone(t *testing.T) {
 	w := newWorld(t)
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
-	wi := w.workItem()
+	wi := w.task()
 	w.deliver(wi)
 	// Create the Run without submitting it, then abort it and let the
 	// submit happen: the row the submit sees is already aborted.
@@ -1758,9 +1758,9 @@ func TestAnAbortDuringSubmitIsNotUndone(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	mustExec(t, w.owner, `UPDATE runs SET status = 'aborted', control = 'abort' WHERE work_item_id = $1`, wi)
+	mustExec(t, w.owner, `UPDATE runs SET status = 'aborted', control = 'abort' WHERE task_id = $1`, wi)
 	var runID string
-	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE work_item_id = $1`, wi).Scan(&runID)
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1`, wi).Scan(&runID)
 	// Submit as the sweep would have, had it read the row a moment earlier.
 	mustExec(t, w.owner, `UPDATE runs SET status = 'pending' WHERE id = $1`, runID)
 	go func() {
@@ -1788,13 +1788,13 @@ func TestAResumedAgentNobodySteeredIsToldToCarryOn(t *testing.T) {
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour {
 		return fakelux.Behaviour{Hang: true, Reply: "Done after resume.", Commit: map[string]string{"A.md": "a\n"}}
 	}
-	wi := w.workItem()
+	wi := w.task()
 	w.deliver(wi)
 	w.until("the agent to be working", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'running'`, wi) == 1
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running'`, wi) == 1
 	})
 	var runID string
-	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE work_item_id = $1`, wi).Scan(&runID)
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1`, wi).Scan(&runID)
 	mustExec(t, w.owner, `UPDATE runs SET control = 'pause_graceful' WHERE id = $1`, runID)
 	w.until("the run to pause", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, runID) == 1
@@ -1812,19 +1812,19 @@ func TestAResumedAgentNobodySteeredIsToldToCarryOn(t *testing.T) {
 func TestAPauseIsNeverReadAsAFailure(t *testing.T) {
 	w := newWorld(t)
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
-	wi := w.workItem()
+	wi := w.task()
 	w.deliver(wi)
 	w.until("the agent to be working", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'running'`, wi) == 1
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running'`, wi) == 1
 	})
-	mustExec(t, w.owner, `UPDATE runs SET control = 'pause_hard' WHERE work_item_id = $1`, wi)
+	mustExec(t, w.owner, `UPDATE runs SET control = 'pause_hard' WHERE task_id = $1`, wi)
 	w.until("the run to pause", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE work_item_id = $1 AND status = 'paused'`, wi) == 1
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'paused'`, wi) == 1
 	})
 	for range 5 {
 		w.pump()
 	}
-	if n := w.count(`SELECT count(*) FROM events WHERE work_item_id = $1 AND event_type = 'run.failed'`, wi); n != 0 {
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'run.failed'`, wi); n != 0 {
 		t.Errorf("a paused run was recorded as failed")
 	}
 }

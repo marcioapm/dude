@@ -20,7 +20,7 @@ func TestOnlyOpenFindingsOfABlockingSeverityBlock(t *testing.T) {
 			t.Errorf("%s: %v, want %v", sev, got, want)
 		}
 	}
-	// Fixed, moot, or a person decided to ship it: none hold up the work item.
+	// Fixed, moot, or a person decided to ship it: none hold up the task.
 	for _, status := range []string{"resolved", "superseded", "accepted"} {
 		if IsBlocking(policy, finding("blocking", status, 0, "f")) {
 			t.Errorf("a %s finding blocked", status)

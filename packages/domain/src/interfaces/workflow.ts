@@ -16,7 +16,7 @@ export interface StartWorkflowOptions {
   /** Deduplicates starts; a repeat returns the original run. */
   idempotencyKey: string;
   input: Record<string, unknown>;
-  workItemId?: string | undefined;
+  taskId?: string | undefined;
   runId?: string | undefined;
 }
 

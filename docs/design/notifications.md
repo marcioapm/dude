@@ -67,7 +67,7 @@ missing, the orchestrator generates a pair once and stores it in
 
 ## What the notification says
 
-- Title: `TEXT-19 · Implement asks` (the work item key, then the role).
+- Title: `TEXT-19 · Implement asks` (the task key, then the role).
 - Body: the question, or "Read web? — the client calls this API" for a
   repository request.
 - Tag: the Run, so a second ask from the same Run replaces the first.

@@ -35,7 +35,7 @@ type Event struct {
 	Type           string
 	OrganizationID string
 	ProjectID      string
-	WorkItemID     string
+	TaskID     string
 	RunID          string
 	SessionID      string
 	WorkflowRunID  string
@@ -66,11 +66,11 @@ func Append(ctx context.Context, tx pgx.Tx, e Event) (string, error) {
 	}
 	_, err = tx.Exec(ctx, `
 		INSERT INTO events (id, organization_id, event_type, occurred_at,
-		                    project_id, work_item_id, run_id, session_id, workflow_run_id,
+		                    project_id, task_id, run_id, session_id, workflow_run_id,
 		                    actor_type, actor_id, source, correlation_id, causation_id, payload)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb)`,
 		id, e.OrganizationID, e.Type, occurred,
-		db.Nullable(e.ProjectID), db.Nullable(e.WorkItemID), db.Nullable(e.RunID), db.Nullable(e.SessionID), db.Nullable(e.WorkflowRunID),
+		db.Nullable(e.ProjectID), db.Nullable(e.TaskID), db.Nullable(e.RunID), db.Nullable(e.SessionID), db.Nullable(e.WorkflowRunID),
 		e.ActorType, e.ActorID, e.Source, db.Nullable(e.CorrelationID), db.Nullable(e.CausationID), payload)
 	return id, err
 }

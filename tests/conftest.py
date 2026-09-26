@@ -38,7 +38,7 @@ def org(env: TestEnvironment) -> dict:
     """A fresh organization with a user API key.
 
     Per-test rather than per-session so suites cannot leak state into each
-    other through shared projects or work items.
+    other through shared projects or tasks.
     """
     organization_id = create_organization(
         env.owner_dsn,

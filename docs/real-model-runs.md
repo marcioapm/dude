@@ -1,5 +1,8 @@
 # Real-model runs
 
+> A dated record. What it calls a "work item" is a **task** since 2026-09-26
+> (migration 026).
+
 What happened when real models ran dude's delivery loop end to end: the
 first time the loop ran on anything other than the scripted agent. Rerun
 this after any change to prompts, the findings parser or the policy, and add

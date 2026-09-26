@@ -3,7 +3,7 @@ import { z } from "zod";
 /**
  * Product hierarchy — plan §39.
  *
- *   Organization → Project → Epic → Work Item → Run → Session
+ *   Organization → Project → Epic → Task → Run → Session
  *
  * Sessions are execution detail, deliberately not the user-facing unit:
  * they get restarted, forked, replaced by another harness, or multiplied
@@ -103,7 +103,7 @@ export const REVIEWER_CATEGORIES = ["correctness", "security", "database", "api"
 
 /**
  * How a project's work is delivered, over the factory's defaults. Each field
- * left out keeps the default; a work item's own overrides layer on top.
+ * left out keeps the default; a task's own overrides layer on top.
  */
 export const deliveryPolicySchema = z
   .object({
@@ -141,7 +141,7 @@ export const projectSchema = z.object({
 export type Project = z.infer<typeof projectSchema>;
 
 // ---------------------------------------------------------------------------
-// Epic / Work Item
+// Epic / Task
 // ---------------------------------------------------------------------------
 
 export const epicSchema = z.object({
@@ -157,7 +157,7 @@ export const epicSchema = z.object({
 export type Epic = z.infer<typeof epicSchema>;
 
 /** Macro state machine — plan §6.1. */
-export const workItemStatusSchema = z.enum([
+export const taskStatusSchema = z.enum([
   "received",
   "intake",
   "awaiting_confirmation",
@@ -170,29 +170,29 @@ export const workItemStatusSchema = z.enum([
   "failed",
   "aborted",
 ]);
-export type WorkItemStatus = z.infer<typeof workItemStatusSchema>;
+export type TaskStatus = z.infer<typeof taskStatusSchema>;
 
-/** Every work item status, in lifecycle order. */
-export const ALL_WORK_ITEM_STATUSES = workItemStatusSchema.options;
+/** Every task status, in lifecycle order. */
+export const ALL_TASK_STATUSES = taskStatusSchema.options;
 
 /** States in which no Run should be consuming tokens. */
-export const TERMINAL_WORK_ITEM_STATUSES: readonly WorkItemStatus[] = [
+export const TERMINAL_TASK_STATUSES: readonly TaskStatus[] = [
   "done",
   "failed",
   "aborted",
 ];
 
 /**
- * A repository a work item works on: one it may change (`write`, and a
+ * A repository a task works on: one it may change (`write`, and a
  * pull request if it does) or only read, for context.
  */
-export const workItemRepositorySchema = z.object({
+export const taskRepositorySchema = z.object({
   id: z.string().min(1),
   access: z.enum(["write", "read"]).default("write"),
 });
-export type WorkItemRepository = z.infer<typeof workItemRepositorySchema>;
+export type TaskRepository = z.infer<typeof taskRepositorySchema>;
 
-export const workItemSchema = z.object({
+export const taskSchema = z.object({
   id: z.string(),
   organizationId: z.string(),
   projectId: z.string(),
@@ -200,16 +200,16 @@ export const workItemSchema = z.object({
   /** What people call it: the project's prefix and a number (TK-12). */
   key: z.string().optional(),
   /** The repositories it works on; none is work that changes no code. */
-  repositories: z.array(workItemRepositorySchema).default([]),
+  repositories: z.array(taskRepositorySchema).default([]),
   title: z.string().min(1),
   goal: z.string().default(""),
   acceptanceCriteria: z.array(z.string()).default([]),
-  status: workItemStatusSchema,
+  status: taskStatusSchema,
   requestedBy: z.string().nullable().default(null),
   createdAt: z.string().datetime({ offset: true }),
   updatedAt: z.string().datetime({ offset: true }),
 });
-export type WorkItem = z.infer<typeof workItemSchema>;
+export type Task = z.infer<typeof taskSchema>;
 
 // ---------------------------------------------------------------------------
 // Run / Session
@@ -237,7 +237,7 @@ export const runSchema = z.object({
   id: z.string(),
   organizationId: z.string(),
   projectId: z.string(),
-  workItemId: z.string(),
+  taskId: z.string(),
   attempt: z.number().int().positive(),
   status: runStatusSchema,
   workerId: z.string().nullable().default(null),
@@ -367,7 +367,7 @@ export type FindingStatus = z.infer<typeof findingStatusSchema>;
 
 export const findingSchema = z.object({
   id: z.string(),
-  workItemId: z.string(),
+  taskId: z.string(),
   runId: z.string().nullable(),
   category: z.string(),
   severity: findingSeveritySchema,
@@ -391,9 +391,9 @@ export const reviewStateSchema = z.enum(["pending", "approved", "changes_request
 
 export const pullRequestSchema = z.object({
   id: z.string(),
-  workItemId: z.string(),
+  taskId: z.string(),
   runId: z.string().nullable(),
-  /** The repository it is in: one per repository a work item changed. */
+  /** The repository it is in: one per repository a task changed. */
   repositoryId: z.string(),
   repositoryName: z.string(),
   number: z.number().int(),

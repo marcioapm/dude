@@ -3,7 +3,7 @@
  * Point the factory at a GitHub repository and run the PR loop against it.
  *
  * Creates a project whose repository is the given GitHub URL, stores the
- * forge credential, and creates a work item — so delivering it runs agents on
+ * forge credential, and creates a task — so delivering it runs agents on
  * lux, pushes their work and opens a pull request.
  *
  *   GITHUB_TOKEN=ghp_… bun run scripts/seed-github.ts <owner/repo>
@@ -69,7 +69,7 @@ const project = await call<{ id: string; repositories: Array<{ id: string; name:
 
 await call("POST", "/v1/forge/credential", { auth: "pat", secret: token });
 
-const workItem = await call<{ id: string }>("POST", "/v1/work-items", {
+const task = await call<{ id: string }>("POST", "/v1/tasks", {
   projectId: project.id,
   title: "Prove the pull request loop works",
   goal: "Make a small change, push the branch, and open a pull request.",
@@ -80,7 +80,7 @@ console.log(
     {
       projectId: project.id,
       repositoryId: project.repositories[0]!.id,
-      workItemId: workItem.id,
+      taskId: task.id,
       slug,
     },
     null,

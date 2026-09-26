@@ -13,7 +13,7 @@ control plane with no agent running and no tokens burning. Agents are woken
 only when there is genuinely new information that needs judgment.
 
 **See it work:** [`docs/demo/delivery.mp4`](docs/demo/delivery.mp4) is a
-two-and-a-half-minute recording of a work item going from the board to a
+two-and-a-half-minute recording of a task going from the board to a
 merged pull request on GitHub, driven entirely through the UI.
 
 **Picking this up?** Read [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) for how
@@ -21,9 +21,9 @@ the system fits together, the decisions already made, and what is next.
 
 ## What it does today
 
-1. A work item is created on the board and someone presses **Deliver**.
+1. A task is created on the board and someone presses **Deliver**.
 2. An **implementer** agent makes the change in its own container, on its own
-   checkout, and commits. Its work is pushed and becomes the work item's
+   checkout, and commits. Its work is pushed and becomes the task's
    branch.
 3. **Reviewers** fan out in parallel — which ones depends on what the diff
    touches — each in its own container at the implementer's commit. They can
@@ -35,7 +35,7 @@ the system fits together, the decisions already made, and what is next.
 6. dude opens a **pull request** whose body is rendered from the ledger, then
    waits. GitHub tells it what happens by webhook: a reviewer's comment wakes
    a fixer; an approval or a green check wakes nobody. Merging finishes the
-   work item.
+   task.
 
 A person can steer any agent while it works, pause it, and resume it later —
 on another machine, with its conversation intact. Every step is an event in

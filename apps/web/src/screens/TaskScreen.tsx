@@ -1,5 +1,5 @@
 /**
- * One work item's delivery: what was asked, where it stands, and what each
+ * One task's delivery: what was asked, where it stands, and what each
  * agent did about it.
  *
  * Top to bottom, the questions an operator asks in the order they ask them:
@@ -9,7 +9,7 @@
  * pipeline opens its own conversation, because the pipeline is a summary and
  * the chat is the truth.
  *
- * Driven by the work item's event stream, so a phase starting, a finding
+ * Driven by the task's event stream, so a phase starting, a finding
  * landing or the PR opening appears without a reload.
  */
 
@@ -17,22 +17,22 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { AgentAvatar, FindingGroup, FindingRow, StatusBadge, StepList, StepRow } from "@dude/design-system/components";
 import { Button, Callout, EmptyState, Page, PageHeader, Section, Spinner } from "@dude/design-system/primitives";
 import { DEFAULT_RUN_ROLE, runLabel } from "@dude/domain";
-import type { ApiClient, Artifact, Finding, PullRequest, Run, WorkItemDetail } from "../api/client.ts";
+import type { ApiClient, Artifact, Finding, PullRequest, Run, TaskDetail } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
 import { useReloadOnEvents } from "../hooks/useEventStream.ts";
 import { ArtifactsSection } from "./ArtifactsSection.tsx";
-import { existingWorkItem, WorkItemDialog } from "./WorkItemDialog.tsx";
+import { existingTask, TaskDialog } from "./TaskDialog.tsx";
 
-export interface WorkItemScreenProps {
+export interface TaskScreenProps {
   client: ApiClient;
-  workItemId: string;
+  taskId: string;
   onOpenRun: (runId: string) => void;
   /** Where it sits, shown above its title. */
   breadcrumb?: ReactNode;
 }
 
-export function WorkItemScreen({ client, workItemId, onOpenRun, breadcrumb }: WorkItemScreenProps) {
-  const [item, setItem] = useState<WorkItemDetail | null>(null);
+export function TaskScreen({ client, taskId, onOpenRun, breadcrumb }: TaskScreenProps) {
+  const [item, setItem] = useState<TaskDetail | null>(null);
   const [findings, setFindings] = useState<Finding[]>([]);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [pullRequests, setPullRequests] = useState<PullRequest[]>([]);
@@ -43,10 +43,10 @@ export function WorkItemScreen({ client, workItemId, onOpenRun, breadcrumb }: Wo
   const load = useCallback(async () => {
     try {
       const [fresh, f, p, a] = await Promise.all([
-        client.getWorkItem(workItemId),
-        client.listFindings(workItemId),
-        client.listPullRequests(workItemId),
-        client.listArtifacts(workItemId),
+        client.getTask(taskId),
+        client.listFindings(taskId),
+        client.listPullRequests(taskId),
+        client.listArtifacts(taskId),
       ]);
       setItem(fresh);
       setFindings(f.findings);
@@ -55,19 +55,19 @@ export function WorkItemScreen({ client, workItemId, onOpenRun, breadcrumb }: Wo
     } catch (err) {
       setProblem(err instanceof Error ? err.message : String(err));
     }
-  }, [client, workItemId]);
+  }, [client, taskId]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  useReloadOnEvents({ client, workItemId }, () => void load());
+  useReloadOnEvents({ client, taskId }, () => void load());
 
   const deliver = async () => {
     setDelivering(true);
     setProblem(null);
     try {
-      await client.deliver(workItemId);
+      await client.deliver(taskId);
       await load();
     } catch (err) {
       setProblem(err instanceof ApiError ? err.message : "Could not start delivery.");
@@ -107,9 +107,9 @@ export function WorkItemScreen({ client, workItemId, onOpenRun, breadcrumb }: Wo
   ) : undefined;
 
   return (
-    <Page data-testid="work-item-screen">
+    <Page data-testid="task-screen">
       <PageHeader
-        data-testid="work-item-header"
+        data-testid="task-header"
         breadcrumb={breadcrumb}
         status={<StatusBadge status={item.status} />}
         itemKey={item.key ? <span title={item.id}>{item.key}</span> : undefined}
@@ -132,12 +132,12 @@ export function WorkItemScreen({ client, workItemId, onOpenRun, breadcrumb }: Wo
             {item.status === "review" && prs.length === 0 && phases.length > 0 &&
             phases.every((r) => ["completed", "failed", "aborted"].includes(r.status)) ? (
               <Button variant="primary" leadingIcon="check" data-testid="mark-done"
-                onClick={() => void client.markDone(workItemId).then(() => load(),
+                onClick={() => void client.markDone(taskId).then(() => load(),
                   (err: unknown) => setProblem(err instanceof ApiError ? err.message : "Could not mark it done."))}>
                 Mark done
               </Button>
             ) : null}
-            <Button variant="secondary" leadingIcon="edit" onClick={() => setEditing(true)} data-testid="edit-work-item">
+            <Button variant="secondary" leadingIcon="edit" onClick={() => setEditing(true)} data-testid="edit-task">
               {started ? "Move" : "Edit"}
             </Button>
             {prs.map((pr) => (
@@ -151,11 +151,11 @@ export function WorkItemScreen({ client, workItemId, onOpenRun, breadcrumb }: Wo
         {problem ? <Callout tone="danger">{problem}</Callout> : null}
       </PageHeader>
       {editing ? (
-        <WorkItemDialog
+        <TaskDialog
           client={client}
           projectId={item.projectId}
           onClose={() => setEditing(false)}
-          existing={existingWorkItem(item, started)}
+          existing={existingTask(item, started)}
           onSaved={() => void load()}
         />
       ) : null}
