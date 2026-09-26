@@ -919,6 +919,10 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 	}
 	lr, err := s.resume(ctx, r, nudge)
 	var cannot errCannotResume
+	var noLogin errLoginUnavailable
+	if errors.As(err, &noLogin) {
+		return true, s.waitForLogin(ctx, r, noLogin)
+	}
 	if errors.As(err, new(errForge)) || errors.As(err, new(errRegistry)) {
 		return true, s.retryLater(ctx, r, err)
 	}
@@ -981,18 +985,15 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 // the secrets come from s.spec, fresh: a Run parked for a day needs a new
 // registry login and forge token, not the ones it started with.
 func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (lux.Run, error) {
-	var stored *lux.StoredSpec
-	if s.Registry != nil {
-		// Only a login needs lux's copy: the image a resume pulls is the one
-		// lux stored at submit, not what the project names today.
-		lr, err := s.Lux.Get(ctx, r.LuxRunID)
-		if err != nil {
-			return lux.Run{}, err
-		}
-		stored = &lr.Spec
+	// lux's copy says whether the Run was started with a login, whatever
+	// this orchestrator is configured with now (the runs row does not
+	// record it), and the image lux stored at submit is the one it pulls.
+	lr, err := s.Lux.Get(ctx, r.LuxRunID)
+	if err != nil {
+		return lux.Run{}, err
 	}
-	spec, err := s.spec(ctx, r, stored)
-	if errors.As(err, new(errForge)) || errors.As(err, new(errRegistry)) {
+	spec, err := s.spec(ctx, r, &lr.Spec)
+	if errors.As(err, new(errForge)) || errors.As(err, new(errRegistry)) || errors.As(err, new(errLoginUnavailable)) {
 		return lux.Run{}, err
 	}
 	if err != nil {
@@ -1007,22 +1008,28 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (lux.Run,
 
 // registryLogin is the login a start of the Run pulls image with: the
 // provider's, if image is in its registry. A resume (stored set) logs in
-// where its submit did.
+// where its submit did, or returns errLoginUnavailable if this orchestrator
+// cannot: lux would refuse the resume, and a refusal fails the Run for good.
 func (s *Syncer) registryLogin(ctx context.Context, image string, stored *lux.StoredSpec) (*registryLogin, error) {
-	if s.Registry == nil {
-		return nil, nil
+	var host string
+	if s.Registry != nil {
+		host = s.Registry.Registry()
 	}
-	host := s.Registry.Registry()
 	if stored != nil {
-		switch auth := stored.Image.RegistryAuth; {
-		case len(auth) == 0:
+		auth := stored.Image.RegistryAuth
+		if len(auth) == 0 {
 			return nil, nil
-		case len(auth) != 1 || auth[0].Registry != host || auth[0].Secret != registrySecret:
-			return nil, fmt.Errorf("the Run was started with a login for %s, and this orchestrator logs in to %s", auth[0].Registry, host)
 		}
-	} else if registry.ImageRegistry(image) != host {
-		// Another registry: a project's own image gets no credential of the
-		// factory's.
+		if host == "" || len(auth) != 1 || auth[0].Registry != host || auth[0].Secret != registrySecret {
+			wanted := make([]string, len(auth))
+			for i, a := range auth {
+				wanted[i] = a.Registry
+			}
+			return nil, errLoginUnavailable{Registry: strings.Join(wanted, ", "), Configured: host}
+		}
+	} else if host == "" || registry.ImageRegistry(image) != host {
+		// No login, or another registry: a project's own image gets no
+		// credential of the factory's.
 		return nil, nil
 	}
 	credential, err := s.Registry.Credential(ctx)
@@ -1266,6 +1273,35 @@ func (e errRegistry) Error() string {
 	return "logging in to the agent image's registry: " + e.err.Error()
 }
 func (e errRegistry) Unwrap() error { return e.err }
+
+// errLoginUnavailable: lux's stored spec names a registry login this
+// orchestrator cannot supply — logins are off (Configured is ""), or it
+// logs in to another registry. Lasts until the configuration is restored.
+type errLoginUnavailable struct{ Registry, Configured string }
+
+func (e errLoginUnavailable) Error() string {
+	now := "DUDE_REGISTRY_AUTH is none"
+	if e.Configured != "" {
+		now = "this orchestrator logs in to " + e.Configured
+	}
+	return fmt.Sprintf("the Run was started with a login for %s and %s: restore DUDE_REGISTRY_AUTH (and DUDE_REGISTRY or DUDE_AGENT_IMAGE) for %s to resume it",
+		e.Registry, now, e.Registry)
+}
+
+// loginRetry is how long a Run waiting for its registry login is left
+// before the next check: a configuration change needs a restart anyway.
+const loginRetry = time.Minute
+
+// waitForLogin leaves a Run paused, still due to resume, until its login
+// is configured again.
+func (s *Syncer) waitForLogin(ctx context.Context, r phaseRun, cause errLoginUnavailable) error {
+	s.Log.Warn("paused Run not resumed: "+cause.Error(), "run", r.ID)
+	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE runs SET next_attempt_at = now() + make_interval(secs => $2) WHERE id = $1`,
+			r.ID, loginRetry.Seconds())
+		return err
+	})
+}
 
 // errCannotResume: the resume's spec cannot be built, and will not be.
 type errCannotResume struct{ err error }

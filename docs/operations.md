@@ -48,9 +48,13 @@ for days resumes with a new token. It is the runner's: it never enters the
 agent's container. dude neither logs nor stores it. Only images in that
 registry get it: a project whose `runtimeImage` is elsewhere pulls without.
 A Run is resumed with the login it was started with: one started without a
-login resumes without, and one whose login was for another registry fails
-its resume. If ECR cannot be reached, starts and resumes wait and are
-retried.
+login resumes without. One started with a login waits, paused, until the
+same login is configured again: if the orchestrator restarts with
+`DUDE_REGISTRY_AUTH=none`, or logging in to another registry, its resume is
+not sent to lux, the orchestrator logs a warning naming the registry and
+`DUDE_REGISTRY_AUTH`, and checks again every minute. Restore the setting
+and restart, and the Run resumes with a fresh token. If ECR cannot be
+reached, starts and resumes wait and are retried.
 
 ## Processes
 
