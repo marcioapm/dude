@@ -1,7 +1,8 @@
 import * as RadixDialog from "@radix-ui/react-dialog";
-import type { ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import { compact } from "../util/compact.ts";
+import { closeAutoFocus, focusedElement } from "../util/focusReturn.ts";
 import { Icon } from "../icons/index.tsx";
 import { IconButton } from "./Button.tsx";
 import styles from "./Dialog.module.css";
@@ -20,11 +21,17 @@ export interface DialogProps {
   readonly footer?: ReactNode;
   readonly children?: ReactNode;
   readonly className?: string | undefined;
+  /**
+   * Where focus goes on close. By default it returns to whatever had it
+   * when the dialog opened (the trigger, or the button that opened a
+   * controlled dialog); call `preventDefault()` to place it yourself.
+   */
+  readonly onCloseAutoFocus?: ((event: Event) => void) | undefined;
 }
 
 /**
  * Modal dialog (Radix). Focus is trapped, Escape closes, the title is the
- * accessible name. Keep it for decisions — confirmations, small forms —
+ * accessible name, and on close focus returns to where it was. Keep it for decisions — confirmations, small forms —
  * not for browsing content; use a side panel for that.
  */
 export function Dialog({
@@ -39,13 +46,23 @@ export function Dialog({
   footer,
   children,
   className,
+  onCloseAutoFocus,
 }: DialogProps) {
+  // Radix returns focus only to its own Trigger; a dialog opened from a
+  // menu item or a button elsewhere would leave it on <body>.
+  const opener = useRef<Element | null>(null);
   return (
     <RadixDialog.Root {...compact({ open, defaultOpen, onOpenChange })}>
       {trigger ? <RadixDialog.Trigger asChild>{trigger}</RadixDialog.Trigger> : null}
       <RadixDialog.Portal>
         <RadixDialog.Overlay className={styles["overlay"]} />
-        <RadixDialog.Content className={cx(styles["content"], size !== "md" && styles[size], className)}>
+        <RadixDialog.Content
+          className={cx(styles["content"], size !== "md" && styles[size], className)}
+          onOpenAutoFocus={() => {
+            opener.current = focusedElement();
+          }}
+          onCloseAutoFocus={closeAutoFocus(() => opener.current, onCloseAutoFocus)}
+        >
           <div className={styles["header"]}>
             {tone ? (
               <span

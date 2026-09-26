@@ -13,9 +13,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { boardScope, type NavProject, type NavRow } from "@dude/design-system";
-import { Board, Breadcrumb, Sidebar, type BreadcrumbItem } from "@dude/design-system/components";
-import { Button, Callout, EmptyState, RowMenu, Spinner, useToast } from "@dude/design-system/primitives";
-import type { ApiClient } from "./api/client.ts";
+import { Board, Breadcrumb, Sidebar, SidebarToggle, type BreadcrumbItem } from "@dude/design-system/components";
+import { Button, Callout, EmptyState, IconButton, RowMenu, Spinner, useToast } from "@dude/design-system/primitives";
+import { ApiError, type ApiClient } from "./api/client.ts";
 import { useReloadOnEvents } from "./hooks/useEventStream.ts";
 import { errorText } from "./hooks/useSave.tsx";
 import { formatPlace, inTree, parsePlace, treeSelection, type Place } from "./place.ts";
@@ -23,6 +23,7 @@ import { startPush } from "./push.ts";
 import { DeleteEpicDialog, EpicDialog, epicRef, rowActions, type Intent } from "./screens/actions.tsx";
 import { NewProjectDialog } from "./screens/NewProjectDialog.tsx";
 import { InboxScreen } from "./screens/InboxScreen.tsx";
+import { NotFound } from "./screens/NotFound.tsx";
 import { EpicMetricsSection } from "./screens/MetricsSection.tsx";
 import { MySettingsScreen } from "./screens/MySettingsScreen.tsx";
 import { OrganizationSettingsScreen } from "./screens/OrganizationSettingsScreen.tsx";
@@ -34,6 +35,8 @@ import { TaskScreen } from "./screens/TaskScreen.tsx";
 export interface AppProps {
   client: ApiClient;
   onSignOut: () => void;
+  /** The key was refused: it is wrong, or was revoked. */
+  onKeyRefused: () => void;
 }
 
 /** The one dialog the shell may have open. */
@@ -69,8 +72,10 @@ function locate(projects: readonly NavProject[], id: string) {
   return null;
 }
 
-export function App({ client, onSignOut }: AppProps) {
+export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   const [projects, setProjects] = useState<NavProject[] | null>(null);
+  // The sidebar drawer, on a narrow screen.
+  const [navOpen, setNavOpen] = useState(false);
   const [place, setPlaceState] = useState<Place | null>(() => parsePlace(window.location.hash));
   const [problem, setProblem] = useState<string | null>(null);
   const [open, setOpen] = useState<Open | null>(null);
@@ -108,9 +113,12 @@ export function App({ client, onSignOut }: AppProps) {
       setVersion((v) => v + 1);
       setProblem(null);
     } catch (err) {
-      setProblem(errorText(err));
+      // Nothing here works without a key the server takes: back to asking
+      // for one, rather than an error above a spinner that never ends.
+      if (err instanceof ApiError && err.status === 401) onKeyRefused();
+      else setProblem(errorText(err));
     }
-  }, [client]);
+  }, [client, onKeyRefused]);
 
   useEffect(() => {
     void load();
@@ -126,6 +134,12 @@ export function App({ client, onSignOut }: AppProps) {
 
   const selected = treeSelection(place);
   const scope = useMemo(() => (projects ? boardScope(projects, selected) : null), [projects, selected]);
+  const toBoard = useCallback(() => go(projects?.[0] ? inTree({ kind: "project", id: projects[0].id }) : null), [go, projects]);
+
+  // The tab says where you are: "TEXT-14 · Implement — dude".
+  useEffect(() => {
+    document.title = [placeTitle(place, projects), "dude"].filter(Boolean).join(" — ");
+  }, [place, projects]);
 
   /** Carry out a row or board action: quick ones here, the rest in a dialog. */
   const act = useCallback(
@@ -265,6 +279,7 @@ export function App({ client, onSignOut }: AppProps) {
         client={client}
         taskId={selected.id}
         onOpenRun={(runId) => go(inTree({ kind: "session", id: runId }))}
+        onBack={toBoard}
         breadcrumb={trail(selected.id)}
       />
     );
@@ -277,8 +292,13 @@ export function App({ client, onSignOut }: AppProps) {
         runId={selected.id}
         title={where?.item.title}
         breadcrumb={trail(selected.id)}
+        onOpenTask={(taskId) => go(inTree({ kind: "task", id: taskId }))}
+        onBack={toBoard}
       />
     );
+  } else if (selected && (selected.kind === "epic" || selected.kind === "project")) {
+    // Loaded, and not in the tree: deleted, or never this organization's.
+    main = <NotFound what={selected.kind} onBack={toBoard} />;
   } else {
     main = <EmptyState title="Nothing selected" description="Pick something from the sidebar." />;
   }
@@ -312,7 +332,18 @@ export function App({ client, onSignOut }: AppProps) {
 
   return (
     <div className="shell" data-testid="shell">
+      {/* First to take focus: past the sidebar, straight to what is selected. */}
+      <a className="skipLink" href="#main" onClick={(e) => {
+        e.preventDefault();
+        document.getElementById("main")?.focus();
+      }}>
+        Skip to content
+      </a>
       <Sidebar
+        id="nav"
+        collapsible
+        open={navOpen}
+        onOpenChange={setNavOpen}
         projects={projects ?? []}
         loading={!projects}
         selected={selected}
@@ -325,15 +356,16 @@ export function App({ client, onSignOut }: AppProps) {
             <Button size="sm" variant="ghost" leadingIcon="plus" onClick={() => setOpen({ kind: "newProject" })} data-testid="new-project">
               New project
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => go({ view: "orgSettings" })} data-testid="org-settings-button">
-              Organization
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => go({ view: "mySettings" })} data-testid="my-settings-button">
-              You
-            </Button>
-            <Button size="sm" variant="ghost" onClick={onSignOut}>
-              Sign out
-            </Button>
+            {/* The two settings as icons, named by their tooltips: four labels do not fit the sidebar's width. */}
+            <span className="sidebarFooterEnd">
+              <IconButton size="sm" icon="settings" label="Organization settings" onClick={() => go({ view: "orgSettings" })}
+                data-testid="org-settings-button" />
+              <IconButton size="sm" icon="human" label="Your settings" onClick={() => go({ view: "mySettings" })}
+                data-testid="my-settings-button" />
+              <Button size="sm" variant="ghost" onClick={onSignOut} data-testid="sign-out">
+                Sign out
+              </Button>
+            </span>
           </div>
         }
       />
@@ -361,9 +393,11 @@ export function App({ client, onSignOut }: AppProps) {
           epic={open.kind === "editEpic" ? open.epic : null}
           onClose={close}
           onSaved={(epic) => {
-            saved();
-            // A new epic is shown where it is: its board, which reveals it in the tree.
-            if (open.kind === "newEpic") go(inTree({ kind: "epic", id: epic.id }));
+            // A new epic is shown where it is: its board, which reveals it in
+            // the tree — once the tree has it, or its board would say it
+            // does not exist.
+            if (open.kind === "newEpic") void load().then(() => go(inTree({ kind: "epic", id: epic.id })));
+            else saved();
           }}
         />
       ) : null}
@@ -379,12 +413,46 @@ export function App({ client, onSignOut }: AppProps) {
           }}
         />
       ) : null}
-      <main className="main">
+      <main className="main" id="main" tabIndex={-1}>
+        {/* The sidebar is a drawer on a narrow screen; this opens it. */}
+        <SidebarToggle open={navOpen} onOpenChange={setNavOpen} controls="nav" size="sm" />
         {problem ? <Callout tone="danger">{problem}</Callout> : null}
         {main}
       </main>
     </div>
   );
+}
+
+/** What a place is called, for the tab: a task's key and, for an agent, which one. */
+function placeTitle(place: Place | null, projects: readonly NavProject[] | null): string {
+  switch (place?.view) {
+    case undefined:
+      return "";
+    case "orgSettings":
+      return "Organization settings";
+    case "mySettings":
+      return "Your settings";
+    case "inbox":
+      return "Waiting on you";
+    case "projectSettings":
+      return [projects?.find((p) => p.id === place.projectId)?.name, "Settings"].filter(Boolean).join(" · ");
+    case "tree": {
+      if (!projects) return "";
+      const { ref } = place;
+      if (ref.kind === "project") return projects.find((p) => p.id === ref.id)?.name ?? "";
+      if (ref.kind === "epic") {
+        for (const p of projects) {
+          const epic = p.epics?.find((e) => e.id === ref.id);
+          if (epic) return epic.title;
+        }
+        return "";
+      }
+      const where = locate(projects, ref.id);
+      if (!where) return "";
+      const name = where.item.key ?? where.item.title;
+      return where.agent !== null ? `${name} · ${where.agent}` : `${name} · ${where.item.title}`;
+    }
+  }
 }
 
 /**

@@ -15,14 +15,17 @@
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { AgentAvatar, FindingGroup, FindingRow, StatusBadge, StepList, StepRow } from "@dude/design-system/components";
+import { Icon } from "@dude/design-system";
 import { Button, Callout, EmptyState, Page, PageHeader, Section, Spinner } from "@dude/design-system/primitives";
 import { DEFAULT_RUN_ROLE, runLabel } from "@dude/domain";
 import type { ApiClient, Artifact, Finding, PullRequest, Run, TaskDetail } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
+import { escalationWords, shortError } from "../escalation.ts";
 import { useReloadOnEvents } from "../hooks/useEventStream.ts";
 import { ArtifactsSection } from "./ArtifactsSection.tsx";
 import { TaskMetricsSection } from "./MetricsSection.tsx";
 import { existingTask, TaskDialog } from "./TaskDialog.tsx";
+import { NotFound } from "./NotFound.tsx";
 import { OwnerSelect } from "./OwnerSelect.tsx";
 
 export interface TaskScreenProps {
@@ -31,10 +34,13 @@ export interface TaskScreenProps {
   onOpenRun: (runId: string) => void;
   /** Where it sits, shown above its title. */
   breadcrumb?: ReactNode;
+  /** Leave for somewhere that exists, when this task does not. */
+  onBack: () => void;
 }
 
-export function TaskScreen({ client, taskId, onOpenRun, breadcrumb }: TaskScreenProps) {
+export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: TaskScreenProps) {
   const [item, setItem] = useState<TaskDetail | null>(null);
+  const [missing, setMissing] = useState(false);
   const [findings, setFindings] = useState<Finding[]>([]);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [pullRequests, setPullRequests] = useState<PullRequest[]>([]);
@@ -58,7 +64,8 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb }: TaskScreen
       setArtifacts(a.artifacts);
       setPullRequests(p.pullRequests);
     } catch (err) {
-      setProblem(err instanceof Error ? err.message : String(err));
+      if (err instanceof ApiError && err.status === 404) setMissing(true);
+      else setProblem(err instanceof Error ? err.message : String(err));
     }
   }, [client, taskId]);
 
@@ -90,11 +97,13 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb }: TaskScreen
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }, [item]);
 
+  if (missing) return <NotFound what="task" onBack={onBack} />;
   if (!item) {
     return <div className="centered">{problem ?? <Spinner label="Loading…" />}</div>;
   }
 
   const started = phases.length > 0;
+  const escalation = item.escalation ? escalationWords(item.escalation) : null;
   // One per repository the work changed, in the order they were opened.
   const prs = [...pullRequests].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 
@@ -110,6 +119,26 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb }: TaskScreen
       ) : null}
     </>
   ) : undefined;
+
+  /**
+   * Where a finding was fixed, as a way there: the fix the re-review that
+   * resolved it judged — the last before that review — as "Fix 2" when
+   * there were several, or the review itself when no fix is known.
+   */
+  const resolvedIn = (reviewId: string) => {
+    const review = item.runs.find((r) => r.id === reviewId);
+    const fixes = item.runs
+      .filter((r) => r.phase === "fix" && r.attempt === review?.attempt)
+      .sort((x, y) => x.createdAt.localeCompare(y.createdAt));
+    const index = review ? fixes.findLastIndex((r) => r.createdAt < review.createdAt) : -1;
+    const fix = fixes[index];
+    const label = fix ? (fixes.length > 1 ? `${runLabel(fix)} ${index + 1}` : runLabel(fix)) : review ? runLabel(review) : "its review";
+    return (
+      <Button size="sm" variant="ghost" onClick={() => onOpenRun(fix?.id ?? reviewId)} data-testid="finding-fixed-in">
+        {label}
+      </Button>
+    );
+  };
 
   return (
     <Page data-testid="task-screen">
@@ -144,16 +173,29 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb }: TaskScreen
               </Button>
             ) : null}
             <Button variant="secondary" leadingIcon="edit" onClick={() => setEditing(true)} data-testid="edit-task">
-              {started ? "Move" : "Edit"}
+              Edit
             </Button>
             {prs.map((pr) => (
-              <a key={pr.id} href={pr.url} target="_blank" rel="noreferrer" data-testid="pr-link">
-                {prs.length > 1 ? `${pr.repositoryName} #${pr.number}` : `Pull request #${pr.number}`} ↗
+              <a key={pr.id} href={pr.url} target="_blank" rel="noreferrer" data-testid="pr-link" className="linkButton">
+                {prs.length > 1 ? `${pr.repositoryName} #${pr.number}` : `Pull request #${pr.number}`}
+                <Icon name="external" size={14} />
+                <span className="ds-sr-only"> (opens in a new tab)</span>
               </a>
             ))}
           </>
         }
       >
+        {escalation ? (
+          <Callout tone="attention" data-testid="escalation" data-reason={item.escalation!.reason}>
+            <strong>{escalation.short}.</strong> {escalation.sentence}{" "}
+            {escalation.runId ? (
+              <Button size="sm" variant="ghost" trailingIcon="arrow-right" onClick={() => onOpenRun(escalation.runId!)}
+                data-testid="escalation-run">
+                Open {runLabel(item.runs.find((r) => r.id === escalation.runId) ?? {})}
+              </Button>
+            ) : null}
+          </Callout>
+        ) : null}
         {problem ? <Callout tone="danger">{problem}</Callout> : null}
       </PageHeader>
       {editing ? (
@@ -192,7 +234,8 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb }: TaskScreen
         )}
       </Section>
 
-      <TaskMetricsSection client={client} taskId={taskId} live={item.status === "running"} version={version} />
+      <TaskMetricsSection client={client} taskId={taskId} live={item.status === "running"}
+        done={["done", "failed", "aborted"].includes(item.status)} version={version} />
 
       <ArtifactsSection client={client} artifacts={artifacts} />
 
@@ -215,13 +258,7 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb }: TaskScreen
               suggestedFix={f.suggestedFix}
               resolutionNote={f.resolutionNote}
               fixAttempts={f.fixAttempts}
-              fixedIn={
-                f.resolvedByRunId ? (
-                  <Button size="sm" variant="ghost" onClick={() => onOpenRun(f.resolvedByRunId!)}>
-                    judged fixed ›
-                  </Button>
-                ) : undefined
-              }
+              fixedIn={f.resolvedByRunId ? resolvedIn(f.resolvedByRunId) : undefined}
             />
           )}
         />
@@ -245,9 +282,11 @@ function PhaseStep(props: { run: Run; step: number; findings: Finding[]; onOpen:
       avatar={<AgentAvatar role={run.role ?? DEFAULT_RUN_ROLE} size="sm" live={run.status === "running"} />}
       label={runLabel(run)}
       status={<StatusBadge status={run.status} size="sm" />}
-      note={run.phase === "review" && run.status === "completed"
-        ? props.findings.length === 0 ? "no findings" : `${blocking.length} blocking`
-        : undefined}
+      note={run.status === "failed" && run.error
+        ? <span title={run.error}>{shortError(run.error, 80)}</span>
+        : run.phase === "review" && run.status === "completed"
+          ? props.findings.length === 0 ? "no findings" : `${blocking.length} blocking`
+          : undefined}
       meta={heads.length === 0 ? undefined : heads.length === 1
         ? heads[0]![1].slice(0, 7)
         : heads.map(([repo, sha]) => `${repo}@${sha.slice(0, 7)}`).join(" ")}
@@ -267,6 +306,19 @@ const PR_STATE_STATUS: Record<PullRequest["state"], "review" | "done" | "aborted
   closed: "aborted",
 };
 
+/** What the forge says of its checks and review, in words; the state is the badge's. */
+const CHECKS_WORDS: Record<PullRequest["checks"], string> = {
+  unknown: "Checks not reported yet",
+  pending: "Checks running",
+  failing: "Checks failing",
+  passing: "Checks passing",
+};
+const REVIEW_WORDS: Record<PullRequest["review"], string> = {
+  pending: "Awaiting review",
+  approved: "Approved",
+  changes_requested: "Changes requested",
+};
+
 /**
  * A pull request as the pipeline's last step. With several (work across
  * repositories), each names its repository; they share the branch.
@@ -281,7 +333,9 @@ function PullRequestStep({ pr, named }: { pr: PullRequest; named: boolean }) {
       step="PR"
       label={named ? <><span className="ds-mono">{pr.repositoryName}</span> #{pr.number}</> : <>Pull request #{pr.number}</>}
       status={<StatusBadge status={PR_STATE_STATUS[pr.state]} size="sm" />}
-      note={`${pr.state} · checks ${pr.checks} · review ${pr.review.replace("_", " ")}`}
+      // Checks and review matter while it is open; once merged or closed,
+      // the badge says all there is.
+      note={pr.state === "open" || pr.state === "draft" ? `${CHECKS_WORDS[pr.checks]} · ${REVIEW_WORDS[pr.review]}` : undefined}
       meta={pr.headBranch}
     />
   );

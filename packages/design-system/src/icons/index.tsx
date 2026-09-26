@@ -67,6 +67,7 @@ export type IconName =
   | "git-pr"
   | "layers"
   | "settings"
+  | "menu"
   // chat / activity
   | "caret"
   | "retry"
@@ -147,6 +148,8 @@ const PATHS: Record<IconName, { d: string; fill?: true; dashed?: true }> = {
   settings: {
     d: "M2.5 4h6M11.5 4h2M10 2.5a1.5 1.5 0 1 0 0 3a1.5 1.5 0 0 0 0-3ZM2.5 8h2M7.5 8h6M6 6.5a1.5 1.5 0 1 0 0 3a1.5 1.5 0 0 0 0-3ZM2.5 12h7M12.5 12h1M11 10.5a1.5 1.5 0 1 0 0 3a1.5 1.5 0 0 0 0-3Z",
   },
+  /* Three bars: the navigation, folded away on a narrow screen. */
+  menu: { d: "M2.5 4h11M2.5 8h11M2.5 12h11" },
 
   /* A text caret: the streaming glyph. Filled so it reads as a block cursor. */
   caret: { d: "M6 2.5h4v11H6z", fill: true },

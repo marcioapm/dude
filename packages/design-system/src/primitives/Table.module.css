@@ -83,6 +83,10 @@
   white-space: normal;
   max-width: none;
 }
+.tdFit {
+  max-width: none;
+  text-overflow: clip;
+}
 .alignRight {
   text-align: right;
 }

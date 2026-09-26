@@ -75,6 +75,8 @@ export interface DurationOptions {
 
 /**
  * Elapsed time. Two significant units, never more.
+ *   0      -> 0s  (nothing elapsed is not a millisecond reading)
+ *   < 1ms  -> <1ms
  *   < 1s   -> 420ms
  *   < 60s  -> 42.1s
  *   < 1h   -> 3m 12s
@@ -103,7 +105,9 @@ export function formatDuration(ms: number, opts: DurationOptions = {}): string {
     style === "long"
       ? { d: " day", h: " hr", m: " min", s: " sec", sep: " " }
       : { d: "d", h: "h", m: "m", s: "s", sep: " " };
-  if (ms < 1000) return `${Math.round(ms)}ms`;
+  if (ms === 0) return `0${units.s}`;
+  if (ms < 0.5) return "<1ms";
+  if (ms < 999.5) return `${Math.round(ms)}ms`;
   if (s < 60) return `${s < 10 ? s.toFixed(1) : Math.round(s)}${units.s}`;
   const m = Math.floor(s / 60);
   if (m < 60) return `${m}${units.m}${units.sep}${pad2(Math.floor(s % 60))}${units.s}`;

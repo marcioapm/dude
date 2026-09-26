@@ -6,8 +6,8 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Breadcrumb, ROLE_LABEL } from "@dude/design-system/components";
-import { ALL_AGENT_ROLES as AGENT_ROLES, findingSeveritySchema, REVIEWER_CATEGORIES } from "@dude/domain";
+import { Breadcrumb, FINDING_SEVERITY_SPECS, ROLE_LABEL } from "@dude/design-system/components";
+import { ALL_AGENT_ROLES as AGENT_ROLES, findingSeveritySchema, REVIEWER_CATEGORIES, REVIEWER_CATEGORY_LABEL } from "@dude/domain";
 import type { AgentRole, DeliveryPolicy, FullDeliveryPolicy } from "@dude/domain";
 import {
   Button,
@@ -85,12 +85,9 @@ export function ProjectSettingsScreen({ client, projectId, onChanged, onBack }: 
     <Page data-testid="project-settings">
       <PageHeader
         breadcrumb={
-          <Breadcrumb items={[
-            { id: project.id, label: project.name, onSelect: onBack },
-            { id: "settings", label: "Settings" },
-          ]} />
+          <Breadcrumb items={[{ id: project.id, label: project.name, onSelect: onBack }]} />
         }
-        title={project.name}
+        title="Settings"
       />
       {problem ? <Callout tone="danger">{problem}</Callout> : null}
       <Tabs defaultValue="repositories">
@@ -420,7 +417,7 @@ function DeliveryTab({ client, project, defaults, onSaved }: TabProps & { defaul
           {REVIEWER_CATEGORIES.map((c) => (
             <Checkbox
               key={c}
-              label={c}
+              label={REVIEWER_CATEGORY_LABEL[c]}
               checked={reviewers.includes(c)}
               onCheckedChange={(on) => toggle(reviewers, setReviewers, c, on === true)}
             />
@@ -431,7 +428,8 @@ function DeliveryTab({ client, project, defaults, onSaved }: TabProps & { defaul
           {SEVERITIES.map((s) => (
             <Checkbox
               key={s}
-              label={s}
+              label={FINDING_SEVERITY_SPECS[s].label}
+              description={FINDING_SEVERITY_SPECS[s].description}
               checked={blocking.includes(s)}
               onCheckedChange={(on) => toggle(blocking, setBlocking, s, on === true)}
             />

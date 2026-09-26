@@ -1,6 +1,8 @@
-import { useCallback, useId, useMemo, useRef, useState, type HTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type HTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
+import { focusedElement, returnFocus } from "../util/focusReturn.ts";
 import { Icon } from "../icons/index.tsx";
+import { IconButton, type IconButtonProps } from "../primitives/Button.tsx";
 import { EmptyState, Skeleton } from "../primitives/Feedback.tsx";
 import { ScrollArea } from "../primitives/ScrollArea.tsx";
 import { COUNTED_TRIAGE_KINDS, TRIAGE_SPECS, type TriageKind } from "../tokens/triage.ts";
@@ -15,6 +17,7 @@ import {
   type NavProject,
   type NavRef,
   type NavRow,
+  waitingWords,
 } from "../util/navModel.ts";
 import { HumanAvatar } from "./HumanAvatar.tsx";
 import { NavTree, type NavRowMenuControls } from "./NavTree.tsx";
@@ -52,6 +55,24 @@ export interface SidebarProps extends Omit<HTMLAttributes<HTMLElement>, "onSelec
   readonly menuItems?: ((row: NavRow) => ReadonlyArray<RowMenuItem> | null | undefined) | undefined;
   readonly menu?: ((row: NavRow, controls: NavRowMenuControls) => ReactNode) | undefined;
   readonly width?: number | string | undefined;
+  /**
+   * Below `SIDEBAR_DRAWER_QUERY` (a viewport under 1000px) the sidebar
+   * leaves the layout and becomes an off-canvas drawer over a scrim,
+   * shown while `open`. Render a `SidebarToggle` in the main pane to open
+   * it. Above the breakpoint `open` is ignored and the sidebar is inline.
+   */
+  readonly collapsible?: boolean | undefined;
+  /** The drawer is showing (narrow screens, with `collapsible`). */
+  readonly open?: boolean | undefined;
+  /** Escape, a scrim click and choosing a row ask for `false`. */
+  readonly onOpenChange?: ((open: boolean) => void) | undefined;
+}
+
+/** Where a `collapsible` sidebar becomes a drawer. Kept in step with Sidebar.module.css. */
+export const SIDEBAR_DRAWER_QUERY = "(max-width: 999.98px)";
+
+function isDrawerViewport(): boolean {
+  return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia(SIDEBAR_DRAWER_QUERY).matches;
 }
 
 /**
@@ -89,6 +110,9 @@ export function Sidebar({
   menuItems,
   menu,
   width = 304,
+  collapsible,
+  open,
+  onOpenChange,
   className,
   style,
   ...rest
@@ -137,8 +161,42 @@ export function Sidebar({
     setTriage(null);
   };
 
-  return (
-    <aside className={cx(styles["root"], className)} style={{ width, ...style }} aria-label="Navigation" {...rest}>
+  // The drawer: focus moves into it on open and back to what opened it
+  // (the toggle) on close; Escape closes it. Nothing is trapped.
+  const drawerOpen = !!collapsible && !!open;
+  // The handler is read through a ref so an inline one does not re-run the
+  // effect (which would bounce focus to the toggle and back).
+  const onOpenChangeRef = useRef(onOpenChange);
+  onOpenChangeRef.current = onOpenChange;
+  useEffect(() => {
+    if (!drawerOpen || !isDrawerViewport()) return;
+    const opener = focusedElement();
+    searchRef.current?.focus({ preventScroll: true });
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === "Escape" && !e.defaultPrevented) onOpenChangeRef.current?.(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      returnFocus(opener);
+    };
+  }, [drawerOpen]);
+  const select = useCallback(
+    (ref: NavRef, node: NavRow["node"]) => {
+      onSelect?.(ref, node);
+      if (drawerOpen) onOpenChange?.(false);
+    },
+    [onSelect, drawerOpen, onOpenChange],
+  );
+
+  const aside = (
+    <aside
+      className={cx(styles["root"], collapsible && styles["collapsible"], drawerOpen && styles["open"], className)}
+      style={{ width, ...style }}
+      aria-label="Navigation"
+      data-open={collapsible ? String(!!open) : undefined}
+      {...rest}
+    >
       {title !== undefined || headerActions !== undefined ? (
         <header className={styles["header"]}>
           <span className={styles["title"]}>{title}</span>
@@ -195,7 +253,7 @@ export function Sidebar({
         })}
       </div>
 
-      {!hideAttention && !loading && attention.length > 0 && !filtering ? <AttentionList items={attention} selected={selected} onSelect={onSelect} onShowAll={onShowAllAttention} /> : null}
+      {!hideAttention && !loading && attention.length > 0 && !filtering ? <AttentionList items={attention} selected={selected} onSelect={select} onShowAll={onShowAllAttention} /> : null}
 
       <ScrollArea fill className={styles["scroll"]}>
         {loading ? (
@@ -216,12 +274,46 @@ export function Sidebar({
             className={styles["empty"]}
           />
         ) : (
-          <NavTree ref={treeRef} projects={projects} selected={selected} onSelect={onSelect} expanded={expanded} onExpandedChange={onExpandedChange} filter={filter} onSearchRequest={focusSearch} menuItems={menuItems} menu={menu} />
+          <NavTree ref={treeRef} projects={projects} selected={selected} onSelect={select} expanded={expanded} onExpandedChange={onExpandedChange} filter={filter} onSearchRequest={focusSearch} menuItems={menuItems} menu={menu} />
         )}
       </ScrollArea>
 
       {footer ? <footer className={styles["footer"]}>{footer}</footer> : null}
     </aside>
+  );
+  if (!collapsible) return aside;
+  return (
+    <>
+      {aside}
+      <div className={cx(styles["scrim"], drawerOpen && styles["scrimOn"])} aria-hidden onClick={() => onOpenChange?.(false)} />
+    </>
+  );
+}
+
+export interface SidebarToggleProps extends Omit<IconButtonProps, "icon" | "label" | "onClick"> {
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  /** The sidebar's `id`, for `aria-controls`. */
+  readonly controls?: string | undefined;
+  readonly label?: string | undefined;
+}
+
+/**
+ * The menu button that opens a `collapsible` sidebar's drawer. Put it at
+ * the start of the main pane's top bar; it hides itself when the viewport
+ * is wide enough for the sidebar to be inline.
+ */
+export function SidebarToggle({ open, onOpenChange, controls, label = "Navigation", className, ...rest }: SidebarToggleProps) {
+  return (
+    <IconButton
+      icon="menu"
+      label={label}
+      aria-expanded={open}
+      aria-controls={controls}
+      className={cx(styles["toggle"], className)}
+      onClick={() => onOpenChange(!open)}
+      {...rest}
+    />
   );
 }
 
@@ -299,7 +391,7 @@ export function AttentionList({ items, selected, onSelect, max = 5, onShowAll, t
                           {it.session.activity ?? "is waiting for you"}
                         </span>
                       ) : (
-                        <span className={styles["attentionAsk"]}>{it.task.status === "awaiting_confirmation" ? "plan needs your confirmation" : "waiting for you"}</span>
+                        <span className={styles["attentionAsk"]} title={waitingWords(it.task)}>{waitingWords(it.task)}</span>
                       )}
                     </span>
                   </span>

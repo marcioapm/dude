@@ -10,7 +10,10 @@ import { ChatComposer } from "../src/components/ChatComposer.tsx";
 import { ChatMessage } from "../src/components/ChatMessage.tsx";
 import { NavTreeRow } from "../src/components/NavTree.tsx";
 import { QuestionCard } from "../src/components/QuestionCard.tsx";
-import { AttentionList } from "../src/components/Sidebar.tsx";
+import { AttentionList, Sidebar, SidebarToggle } from "../src/components/Sidebar.tsx";
+import { ChatTranscript } from "../src/components/ChatTranscript.tsx";
+import { FindingRow } from "../src/components/FindingRow.tsx";
+import { EventRow } from "../src/components/EventRow.tsx";
 import { ToolCallCard } from "../src/components/ToolCallCard.tsx";
 import { Icon } from "../src/icons/index.tsx";
 import { formatTimestamp } from "../src/util/format.ts";
@@ -195,7 +198,13 @@ describe("AttentionList", () => {
 
   test("without a session the asker slot is kept empty", () => {
     const h = html(<AttentionList items={[item([], false)]} />);
-    expect(h).toContain("<span></span><span>waiting for you</span>");
+    expect(h).toContain('<span></span><span title="waiting for you">waiting for you</span>');
+  });
+
+  test("a task that says what it waits for says so", () => {
+    const it = item([], false);
+    const h = html(<AttentionList items={[{ ...it, task: { ...it.task, waitingFor: "Review stuck on 2 findings" } }]} />);
+    expect(h).toContain(">Review stuck on 2 findings</span>");
   });
 });
 
@@ -274,5 +283,57 @@ describe("page structure", () => {
     expect(html).toContain('<button type="button"');
     expect(html).toContain('target="_blank"');
     expect(html).toContain('data-icon="external"');
+  });
+});
+
+describe("ChatTranscript header", () => {
+  const session = { id: "run_0mugpn7v3", role: "implementer", status: "completed", taskId: "wi_0mugpn7ul5", taskKey: "TEXT-14", title: "Title-case" } as const;
+  test("shows the task key; raw ids only in tooltips", () => {
+    const h = html(<ChatTranscript session={session} />);
+    expect(h).toContain(">TEXT-14<");
+    expect(h).not.toContain(">wi_0mugpn7ul5<");
+    expect(h).not.toContain(">run_0mugpn7v3<");
+    expect(h).toContain('title="task wi_0mugpn7ul5 · session run_0mugpn7v3"');
+  });
+  test("no key: no raw id in its place", () => {
+    const h = html(<ChatTranscript session={{ ...session, taskKey: undefined }} />);
+    expect(h).not.toContain(">wi_0mugpn7ul5<");
+  });
+});
+
+describe("FindingRow", () => {
+  test("the category keeps its full name in a tooltip", () => {
+    const h = html(<FindingRow severity="low" status="open" category="input-validation" title="t" />);
+    expect(h).toContain('title="input-validation"');
+  });
+  test("fixedIn reads \"fixed in Fix 2\", with no arrow drawn by the row", () => {
+    const h = html(<FindingRow severity="low" status="resolved" category="c" title="t" fixedIn={<a href="#r">Fix 2</a>} />);
+    const text = h.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+    expect(text).toContain("fixed in Fix 2");
+    expect(h).not.toContain('data-icon="chevron-right"');
+  });
+});
+
+describe("EventRow", () => {
+  test("the full event type is in the title", () => {
+    const h = html(<EventRow occurredAt={0} actor={{ type: "agent", role: "implementer" }} eventType="agent.model.request.completed" summary="s" />);
+    expect(h).toContain('title="agent.model.request.completed"');
+  });
+});
+
+describe("Sidebar drawer", () => {
+  test("not collapsible: no scrim, no open state", () => {
+    const h = html(<Sidebar projects={[]} />);
+    expect(h).not.toContain("data-open");
+  });
+  test("collapsible: says whether the drawer is open", () => {
+    expect(html(<Sidebar projects={[]} collapsible open onOpenChange={noop} />)).toContain('data-open="true"');
+    expect(html(<Sidebar projects={[]} collapsible open={false} onOpenChange={noop} />)).toContain('data-open="false"');
+  });
+  test("the toggle is a labelled button that reports its state", () => {
+    const h = html(<SidebarToggle open={false} onOpenChange={noop} controls="nav" />);
+    expect(h).toContain('aria-label="Navigation"');
+    expect(h).toContain('aria-expanded="false"');
+    expect(h).toContain('aria-controls="nav"');
   });
 });

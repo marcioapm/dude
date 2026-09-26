@@ -39,6 +39,23 @@ const SESSION_SELECT = `
   external_session_id AS "externalSessionId",
   created_at AS "createdAt", ended_at AS "endedAt"`;
 
+/**
+ * The SELECT expression for a task's open escalation, `{reason, detail, at}`
+ * or null, for the `tasks` rows under `alias`: the workflow's last
+ * `question.asked` of kind "escalation" (delivery.escalate), while the task
+ * still waits on a person — nothing has moved it out of awaiting_input
+ * since. The workflow ends on it, so there is at most one worth showing.
+ */
+export function escalationJson(alias = "tasks"): string {
+  return `(SELECT json_build_object('reason', e.payload->>'reason', 'detail', e.payload->'detail', 'at', e.occurred_at)
+  FROM events e
+  WHERE ${alias}.status = 'awaiting_input'
+    AND e.task_id = ${alias}.id AND e.event_type = 'question.asked' AND e.payload->>'kind' = 'escalation'
+    AND e.cursor > COALESCE((SELECT max(s.cursor) FROM events s WHERE s.task_id = ${alias}.id
+      AND s.event_type = 'task.status_changed' AND s.payload->>'status' <> 'awaiting_input'), 0)
+  ORDER BY e.cursor DESC LIMIT 1) AS escalation`;
+}
+
 // ---------------------------------------------------------------------------
 // Tasks
 // ---------------------------------------------------------------------------
@@ -143,7 +160,8 @@ async function getTask(ctx: RequestContext): Promise<Response> {
   const id = ctx.params.id!;
   const task = await withOrg(ctx.principal.organizationId, async (scope) => {
     const rows = (await scope.sql`
-      SELECT ${scope.sql.unsafe(TASK_SELECT)} FROM tasks WHERE id = ${id}`) as Array<
+      SELECT ${scope.sql.unsafe(TASK_SELECT)}, ${scope.sql.unsafe(escalationJson())}
+      FROM tasks WHERE id = ${id}`) as Array<
       Record<string, unknown>
     >;
     if (!rows[0]) return null;

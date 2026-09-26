@@ -13,6 +13,7 @@
 
 import type { AgentRole, RunStatus, SessionStatus, TaskStatus } from "@dude/domain";
 import type { Person } from "../components/HumanAvatar.tsx";
+import { toMs } from "./useNow.ts";
 import {
   EMPTY_TRIAGE_COUNTS,
   TRIAGE_SPECS,
@@ -60,6 +61,16 @@ export interface NavTask {
   readonly statusSince?: string | number | Date | undefined;
   /** Spend so far across every run, in USD. */
   readonly costUsd?: number | undefined;
+  /**
+   * Why it waits on a person when no agent is asking ("Review stuck on 2
+   * findings"). Shown where it would otherwise say only "waiting for you".
+   */
+  readonly waitingFor?: string | undefined;
+}
+
+/** What a task that needs you, with no agent asking, says it waits for. */
+export function waitingWords(task: NavTask): string {
+  return task.waitingFor ?? (task.status === "awaiting_confirmation" ? "plan needs your confirmation" : "waiting for you");
 }
 
 export interface NavEpic {
@@ -386,7 +397,9 @@ export function askingSession(list: ReadonlyArray<NavSession>): NavSession | nul
 /**
  * Every task across all projects that needs a person, with enough
  * context to act on it without opening the tree. This is what makes
- * "what needs me" answerable without expanding anything.
+ * "what needs me" answerable without expanding anything. Oldest wait
+ * first (by `statusSince`; unknown last, tree order among equals), so a
+ * short list shows the longest-waiting ask, not the one highest in the tree.
  */
 export function attentionItems(projects: ReadonlyArray<NavProject>): AttentionItem[] {
   const out: AttentionItem[] = [];
@@ -399,5 +412,11 @@ export function attentionItems(projects: ReadonlyArray<NavProject>): AttentionIt
     for (const e of p.epics ?? []) for (const wi of e.tasks) consider(wi, p, e);
     for (const wi of p.tasks ?? []) consider(wi, p, null);
   }
-  return out;
+  const waitingSince = (it: AttentionItem) => toMs(it.task.statusSince) ?? Number.POSITIVE_INFINITY;
+  // Stable: equal waits keep tree order. Infinity - Infinity is NaN, hence the guard.
+  return out.sort((a, b) => {
+    const x = waitingSince(a);
+    const y = waitingSince(b);
+    return x === y ? 0 : x - y;
+  });
 }

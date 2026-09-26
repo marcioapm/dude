@@ -98,7 +98,7 @@ export function MetricTile({
           : unit === "tokens"
             ? `${delta.value > 0 ? "+" : ""}${formatTokens(delta.value)}`
             : unit === "ms"
-              ? `${delta.value > 0 ? "+" : "-"}${formatDuration(Math.abs(delta.value))}`
+              ? `${delta.value > 0 ? "+" : delta.value < 0 ? "-" : ""}${formatDuration(Math.abs(delta.value))}`
               : `${delta.value > 0 ? "+" : ""}${delta.value.toLocaleString("en-US")}`;
     deltaNode = (
       <span className={cx(styles["delta"], cls)} title={delta.label ? `${deltaText} ${delta.label}` : undefined}>

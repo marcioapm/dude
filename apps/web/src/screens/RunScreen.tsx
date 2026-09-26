@@ -27,10 +27,11 @@ import { Button, Callout, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/de
 import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, runLabel } from "@dude/domain";
 import type { AgentRole, PersistedEvent } from "@dude/domain";
 import type { ApiClient, Person, RunDetail } from "../api/client.ts";
-import { ApiError } from "../api/client.ts";
+import { ApiError, reportedCost } from "../api/client.ts";
 import { PAUSE_WORDS, apply, emptyProjection, snapshot, type Turn } from "../api/conversation.ts";
 import type { ComposerSubmission } from "@dude/design-system/components";
 import { useEventStream } from "../hooks/useEventStream.ts";
+import { NotFound } from "./NotFound.tsx";
 
 export interface RunScreenProps {
   client: ApiClient;
@@ -39,6 +40,10 @@ export interface RunScreenProps {
   title?: string | undefined;
   /** Where this conversation sits, shown above it: a way back up. */
   breadcrumb?: ReactNode;
+  /** Open the task this Run works on. */
+  onOpenTask: (taskId: string) => void;
+  /** Leave for somewhere that exists, when this Run does not. */
+  onBack: () => void;
 }
 
 /**
@@ -57,11 +62,14 @@ const STATUS_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.RunResumed,
 ]);
 
-export function RunScreen({ client, runId, title, breadcrumb }: RunScreenProps) {
+export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack }: RunScreenProps) {
   const [run, setRun] = useState<RunDetail | null>(null);
+  const [missing, setMissing] = useState(false);
   // Who drives the task, and who is reading: only its owner answers its
   // agents, so anyone else sees the asks read-only, with whom they wait on.
   const [driver, setDriver] = useState<{ owner: Person | null; you: string } | null>(null);
+  // The task's key (TEXT-14), which people know it by, for the header.
+  const [taskKey, setTaskKey] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
 
@@ -82,7 +90,9 @@ export function RunScreen({ client, runId, title, breadcrumb }: RunScreenProps) 
         if (!cancelled) setRun(fresh);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setProblem(err instanceof Error ? err.message : String(err));
+        if (cancelled) return;
+        if (err instanceof ApiError && err.status === 404) setMissing(true);
+        else setProblem(err instanceof Error ? err.message : String(err));
       });
     return () => {
       cancelled = true;
@@ -98,7 +108,9 @@ export function RunScreen({ client, runId, title, breadcrumb }: RunScreenProps) 
     let cancelled = false;
     Promise.all([client.getTask(taskId), client.listPeople()])
       .then(([task, people]) => {
-        if (!cancelled) setDriver({ owner: task.owner, you: people.you });
+        if (cancelled) return;
+        setDriver({ owner: task.owner, you: people.you });
+        setTaskKey(task.key);
       })
       .catch(() => {});
     return () => {
@@ -161,6 +173,7 @@ export function RunScreen({ client, runId, title, breadcrumb }: RunScreenProps) 
     [client, intervene],
   );
 
+  if (missing) return <NotFound what="run" onBack={onBack} />;
   if (!run) {
     return <div className="runScreen">{problem ?? <Spinner label="Loading the run…" />}</div>;
   }
@@ -178,15 +191,15 @@ export function RunScreen({ client, runId, title, breadcrumb }: RunScreenProps) 
     role,
     status: run.status,
     // The id is already shown beside the title; repeating it as the title
-    // leaves the header saying nothing about the work.
-    title: [title, phase, `attempt ${run.attempt}`].filter(Boolean).join(" · "),
+    // leaves the header saying nothing about the work. The attempt only
+    // once there is more than one to tell apart.
+    title: [title, phase, run.attempt > 1 ? `attempt ${run.attempt}` : null].filter(Boolean).join(" · "),
     taskId: run.taskId,
+    ...(taskKey ? { taskKey } : {}),
     startedAt: run.startedAt ?? run.createdAt,
     endedAt: run.endedAt,
     ...(run.model ? { model: run.model } : {}),
-    // A cost of zero means the agent did not report one (a model behind a
-    // proxy with no prices), not that the work was free.
-    costUsd: conversation.costUsd > 0 ? conversation.costUsd : null,
+    costUsd: reportedCost(conversation.costUsd),
     // The Run's own totals are exact; the projection's are what has streamed
     // in so far, for a Run still working.
     tokens: Math.max(run.tokens.input + run.tokens.output, conversation.tokens),
@@ -246,7 +259,7 @@ export function RunScreen({ client, runId, title, breadcrumb }: RunScreenProps) 
                 <AgentPlan items={conversation.plan} defaultCollapsed sticky />
               ) : null
             }
-            footer={
+            footer={!isLive ? <RunEnded run={run} onOpenTask={() => onOpenTask(run.taskId)} /> : (
               <ChatComposer
                 // The agent waiting on a question takes an answer; otherwise
                 // anything said steers it.
@@ -265,17 +278,16 @@ export function RunScreen({ client, runId, title, breadcrumb }: RunScreenProps) 
                 }
                 // A paused Run takes an answer (a parked one is resumed by it),
                 // not a steer; a question is its owner's to answer.
-                disabled={!isLive || (run.status === "paused" && !conversation.openQuestion) ||
+                disabled={(run.status === "paused" && !conversation.openQuestion) ||
                   (conversation.openQuestion !== null && waitingOn !== undefined)}
                 disabledReason={
-                  !isLive ? "This run has finished — nobody would hear it."
-                    : waitingOn && (conversation.openQuestion || run.dudePause === "person") ? `Waiting for ${waitingOn} to answer.`
+                  waitingOn && (conversation.openQuestion || run.dudePause === "person") ? `Waiting for ${waitingOn} to answer.`
                     : run.dudePause ? PAUSE_WORDS[run.dudePause].composer
                     : "This run is paused. Resume it to steer."
                 }
                 onSubmit={send}
               />
-            }
+            )}
             emptyMessage="Waiting for the agent to start."
           >
             {conversation.turns.map((turn) => renderTurn(turn, role, conversation.contextWindow, !isLive, decide, waitingOn))}
@@ -344,6 +356,15 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
     }
     case "notice":
       return <ChatNotice key={turn.id} data-testid="chat-notice" kind={turn.notice} text={turn.text} at={turn.at} />;
+    case "ended":
+      // Where the transcript stops, and why: a failure in its tone, not a
+      // margin note (ChatNotice has no tones).
+      return (
+        <Callout key={turn.id} data-testid="chat-ended" data-outcome={turn.outcome}
+          tone={turn.outcome === "failed" ? "danger" : "neutral"}>
+          {turn.text}
+        </Callout>
+      );
     case "progress":
       // One row, updated in place as the agent reports.
       return (
@@ -422,6 +443,32 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
         />
       );
   }
+}
+
+const ENDED_WORDS: Record<"completed" | "failed" | "aborted", string> = {
+  completed: "This run finished.",
+  failed: "This run failed.",
+  aborted: "This run was aborted.",
+};
+
+/**
+ * In place of the composer once a Run has ended — nobody would hear a
+ * steer: how it ended, and the way back to its task, where what happens
+ * next is decided. Why it failed is the transcript's last line, just above.
+ */
+function RunEnded({ run, onOpenTask }: { run: RunDetail; onOpenTask: () => void }) {
+  const outcome = run.status === "failed" || run.status === "aborted" ? run.status : "completed";
+  return (
+    <Callout data-testid="run-ended" data-outcome={outcome}
+      tone={outcome === "failed" ? "danger" : outcome === "aborted" ? "attention" : "neutral"}>
+      <span className="runEnded">
+        <span>{ENDED_WORDS[outcome]}</span>
+        <Button size="sm" variant="ghost" trailingIcon="arrow-right" onClick={onOpenTask} data-testid="run-ended-task">
+          Back to the task
+        </Button>
+      </span>
+    </Callout>
+  );
 }
 
 /** A message's token foot: the context then, against the window when known, and the turn's output. */

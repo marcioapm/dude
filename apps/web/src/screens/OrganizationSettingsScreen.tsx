@@ -5,6 +5,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { Breadcrumb } from "@dude/design-system/components";
 import {
   Badge,
   Button,
@@ -64,7 +65,8 @@ export function OrganizationSettingsScreen({ client }: { client: ApiClient }) {
 
   return (
     <Page data-testid="org-settings">
-      <PageHeader title="Organization" description="Settings" />
+      <PageHeader breadcrumb={<Breadcrumb items={[{ id: "org", label: "Organization" }]} />} title="Settings"
+        description="For every project: where pull requests are opened." />
       <Card>
         <CardHeader
           title="GitHub"

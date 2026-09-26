@@ -223,7 +223,7 @@ func (s *Server) serverFor(c Caller) *mcp.Server {
 				return nil, err
 			}
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(out)}},
-				StructuredContent: json.RawMessage(out)}, nil
+				StructuredContent: structured(out)}, nil
 		}
 		srv.AddTool(&mcp.Tool{Name: t.name, Description: t.description, InputSchema: t.schema}, handler)
 	}
@@ -368,3 +368,14 @@ type refusal struct{ msg string }
 func (r refusal) Error() string { return r.msg }
 
 func refuse(format string, a ...any) error { return refusal{fmt.Sprintf(format, a...)} }
+
+// structured is a tool's result as MCP structured content, which must be a
+// JSON object: a list is given as {"items": [...]}. (The text content, and
+// the CLI's JSON API, keep it as it is.)
+func structured(out []byte) json.RawMessage {
+	if trimmed := bytes.TrimSpace(out); len(trimmed) > 0 && trimmed[0] == '[' {
+		wrapped, _ := json.Marshal(map[string]json.RawMessage{"items": trimmed})
+		return wrapped
+	}
+	return out
+}

@@ -67,7 +67,10 @@ export interface FindingRowProps extends Omit<HTMLAttributes<HTMLLIElement>, "ti
   readonly resolutionNote?: string | undefined;
   /** How many fix rounds have tried; shown when > 0. */
   readonly fixAttempts?: number | undefined;
-  /** "fixed in › Fix 2" — a link or button the app renders; the row draws the arrow. */
+  /**
+   * Where it was fixed: a link or button the app renders, labelled with
+   * the run alone ("Fix 2"). The row puts "fixed in" before it.
+   */
   readonly fixedIn?: ReactNode;
   /** Open the file at the line, when the app can. Makes the location a button. */
   readonly onOpenLocation?: ((file: string, line: number | null) => void) | undefined;
@@ -120,7 +123,9 @@ export function FindingRow({
         <Icon name={sev.glyph} size={12} />
         <span className={styles["severityLabel"]}>{sev.label}</span>
       </span>
-      <span className={styles["category"]}>{category}</span>
+      <span className={styles["category"]} title={category}>
+        {category}
+      </span>
       <span className={styles["title"]}>{title}</span>
     </>
   );
@@ -158,7 +163,6 @@ export function FindingRow({
           {fixedIn ? (
             <span className={styles["fixedIn"]}>
               <span className={styles["fixedInLabel"]}>fixed in</span>
-              <Icon name="chevron-right" size={11} className={styles["fixedInArrow"]} />
               {fixedIn}
             </span>
           ) : null}

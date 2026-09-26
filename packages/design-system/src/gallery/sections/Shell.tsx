@@ -7,7 +7,7 @@ import { ChatComposer } from "../../components/ChatComposer.tsx";
 import { ChatAside as Aside, ChatMessage } from "../../components/ChatMessage.tsx";
 import { ChatTranscript } from "../../components/ChatTranscript.tsx";
 import { QuestionCard } from "../../components/QuestionCard.tsx";
-import { Sidebar } from "../../components/Sidebar.tsx";
+import { Sidebar, SidebarToggle } from "../../components/Sidebar.tsx";
 import { ThinkingBlock } from "../../components/ThinkingBlock.tsx";
 import { ToolCallCard } from "../../components/ToolCallCard.tsx";
 import { Button, IconButton } from "../../primitives/Button.tsx";
@@ -77,10 +77,12 @@ export function ShellSection({ mode }: { readonly mode: PaneMode }) {
 
 function AppShell() {
   const [selected, setSelected] = useState<NavRef | null>({ kind: "session", id: "s_2401-orc" });
+  const [navOpen, setNavOpen] = useState(false);
   return (
     <div className={styles["shell"]}>
-      <Sidebar projects={navProjects} selected={selected} onSelect={setSelected} title="dude" />
+      <Sidebar projects={navProjects} selected={selected} onSelect={setSelected} title="dude" collapsible open={navOpen} onOpenChange={setNavOpen} />
       <main className={styles["shellMain"]}>
+        <SidebarToggle open={navOpen} onOpenChange={setNavOpen} size="sm" />
         <Breadcrumb
           items={[
             { id: "p", label: "control-plane", onSelect: () => undefined },
@@ -117,7 +119,7 @@ function Transcript() {
         role: "orchestrator",
         status: "awaiting_input",
         model: "claude-opus-4",
-        taskId: "WI-2401",
+        taskKey: "WI-2401",
         title: "Add retry with backoff to the GitHub webhook handler",
         repo: "dude/control-plane",
         branch: "wi-2401-webhook-retry",

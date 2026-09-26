@@ -1,7 +1,9 @@
+/* The type column fits the longest usual type ("agent.model.request.completed",
+   29 mono characters at 12px); a longer one ellipsises, whole in the title. */
 .row {
   --row-accent: transparent;
   display: grid;
-  grid-template-columns: 92px 20px minmax(96px, 160px) minmax(0, 1fr) auto;
+  grid-template-columns: 92px 20px minmax(96px, 224px) minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--ds-space-8);
   min-height: var(--ds-size-row-default);
@@ -157,7 +159,7 @@
 }
 .streamHeader {
   display: grid;
-  grid-template-columns: 92px 20px minmax(96px, 160px) minmax(0, 1fr) auto;
+  grid-template-columns: 92px 20px minmax(96px, 224px) minmax(0, 1fr) auto;
   gap: var(--ds-space-8);
   padding: 0 var(--ds-space-8) 0 calc(var(--ds-space-6) + 2px);
   height: var(--ds-size-row-compact);

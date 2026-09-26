@@ -516,7 +516,7 @@ function RealisticTranscript() {
         role: "implementer",
         status: "completed",
         model: "claude-opus-4",
-        taskId: "WI-2481",
+        taskKey: "WI-2481",
         title: "Add retry with backoff to the GitHub webhook handler",
         repo: "dude/dude",
         branch: "wi-2481-webhook-retry",
@@ -777,7 +777,7 @@ function LiveTranscriptDemo() {
                 role: "orchestrator",
                 status: s.status,
                 model: "claude-opus-4",
-                taskId: "WI-2481",
+                taskKey: "WI-2481",
                 title: "Add retry with backoff to the GitHub webhook handler",
                 repo: "dude/dude",
                 branch: "wi-2481-webhook-retry",
@@ -787,7 +787,7 @@ function LiveTranscriptDemo() {
                 budgetUsd: 2.5,
                 tokens: s.tokens,
               }
-            : { id: "ses_01J9K2", role: "orchestrator", status: "pending", model: "claude-opus-4", taskId: "WI-2481", title: "Add retry with backoff to the GitHub webhook handler", repo: "dude/dude" }
+            : { id: "ses_01J9K2", role: "orchestrator", status: "pending", model: "claude-opus-4", taskKey: "WI-2481", title: "Add retry with backoff to the GitHub webhook handler", repo: "dude/dude" }
         }
         headerActions={
           <>

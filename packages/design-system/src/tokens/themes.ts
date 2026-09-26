@@ -129,8 +129,10 @@ const lightL = {
   border: 0.85,
   borderStrong: 0.72,
   textDisabled: 0.66,
-  textMuted: 0.54,
-  textSecondary: 0.455,
+  // Muted clears 4.5:1 on the active wash over the canvas (a selected
+  // sidebar row, the search field), not only on bare surfaces.
+  textMuted: 0.5,
+  textSecondary: 0.44,
   textPrimary: 0.32,
   textStrong: 0.18,
 };
