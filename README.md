@@ -186,6 +186,9 @@ publishes the tarballs, `runtime-image.txt` (the pushed manifest list by
 digest, `ghcr.io/marcioapm/dude-runtime@sha256:…`) and `SHA256SUMS` over
 all of them as a GitHub Release.
 
+Deploying a release — its layout, every setting, the database roles and the
+order of an upgrade — is in [`docs/operations.md`](docs/operations.md).
+
 ## Status
 
 Against the plan's self-hosting order (§81):
