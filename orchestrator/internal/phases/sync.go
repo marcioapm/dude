@@ -218,7 +218,8 @@ func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 			       OR `+resumable+`
 			       -- Aborted in dude but not yet cancelled in lux.
 			       OR (r.status = 'aborted' AND r.lux_run_id IS NOT NULL AND r.lux_stop_reason IS DISTINCT FROM 'cancel'))
-			  AND (r.next_attempt_at IS NULL OR r.next_attempt_at <= now())
+			  -- An abort does not wait out the back-off of the step it ends.
+			  AND (r.status = 'aborted' OR r.next_attempt_at IS NULL OR r.next_attempt_at <= now())
 			ORDER BY (r.status = 'pending' OR r.control <> 'none' OR r.turn_done_at IS NOT NULL) DESC, r.created_at
 			LIMIT 1000`, s.limits()...)
 		if err != nil {
