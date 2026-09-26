@@ -350,9 +350,47 @@ func (w *world) restart(p registry.Provider) *bytes.Buffer {
 	old.Stop()
 	var logs bytes.Buffer
 	w.syncer = &phases.Syncer{DB: old.DB, Lux: old.Lux, Forges: old.Forges, Agent: old.Agent, Registry: p,
-		Log: slog.New(slog.NewTextHandler(&logs, nil)), ParkAfter: old.ParkAfter, IdleAfter: old.IdleAfter}
+		Log: slog.New(slog.NewTextHandler(&logs, nil)), ParkAfter: old.ParkAfter, IdleAfter: old.IdleAfter,
+		RetryAhead: old.RetryAhead}
 	w.t.Cleanup(w.syncer.Stop)
 	return &logs
+}
+
+// retried checks that Run runID is backed off by about want, that the
+// sweep leaves it alone until then, and then lets the ordinary sweep take
+// it up when it comes due — with the sweep's clock moved ahead
+// (Syncer.RetryAhead) rather than the wait sat through or the deadline
+// cleared.
+func (w *world) retried(runID string, want time.Duration, taken func() bool) {
+	w.t.Helper()
+	var left float64
+	if err := w.owner.QueryRow(context.Background(), `SELECT EXTRACT(EPOCH FROM next_attempt_at - now())::float8
+		FROM runs WHERE id = $1 AND next_attempt_at IS NOT NULL`, runID).Scan(&left); err != nil {
+		w.t.Fatalf("no back-off: %v", err)
+	}
+	if got := time.Duration(left * float64(time.Second)); got > want || got < want-3*time.Second {
+		w.t.Fatalf("backed off %v, want about %v", got, want)
+	}
+	w.syncer.RetryAhead = want / 2
+	for range 3 {
+		w.pump()
+	}
+	if taken() {
+		w.t.Fatalf("taken up before its back-off of %v was over", want)
+	}
+	w.syncer.RetryAhead = want + time.Second
+	w.until("the retry once due", taken)
+	w.syncer.RetryAhead = 0
+}
+
+// runOf is the id of the task's one Run.
+func (w *world) runOf(taskID string) string {
+	w.t.Helper()
+	var id string
+	if err := w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1`, taskID).Scan(&id); err != nil {
+		w.t.Fatal(err)
+	}
+	return id
 }
 
 // A Run started with a login, parked, and resumed by an orchestrator that
@@ -400,8 +438,7 @@ func TestARunWaitsForTheLoginItWasStartedWith(t *testing.T) {
 
 			api.advance(11 * time.Hour)
 			w.restart(registry.NewECR(ecrRegistry, api, api.now))
-			mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE id = $1`, runID)
-			w.until("the resume", func() bool { return r.Resumed == 1 })
+			w.retried(runID, time.Minute, func() bool { return r.Resumed == 1 })
 			fresh, _ := secretValue(r.ResumeSecrets[0], "DUDE_REGISTRY_AUTH")
 			if tokens := api.tokens(); len(tokens) != 2 || fresh != "AWS:"+tokens[1] {
 				t.Errorf("resumed with %q, ECR minted %d; want the second token", fresh, len(tokens))
@@ -465,8 +502,7 @@ func TestAnECROutageDelaysARunAndDoesNotFailIt(t *testing.T) {
 		t.Fatalf("a Run went ahead or failed without its login")
 	}
 	api.setFail(nil)
-	mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE task_id = $1`, wi)
-	w.until("the submit", func() bool { return len(w.lux.Runs()) == 1 })
+	w.retried(w.runOf(wi), 5*time.Second, func() bool { return len(w.lux.Runs()) == 1 })
 }
 
 const pullRole = "arn:aws:iam::123456789012:role/dude-ecr-pull"
@@ -542,8 +578,7 @@ func TestAFailedAssumeRoleDelaysAResumeAndDoesNotFailIt(t *testing.T) {
 	}
 
 	roles.setFail(nil)
-	mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE id = $1`, runID)
-	w.until("the resume", func() bool { return r.Resumed == 1 })
+	w.retried(runID, 5*time.Second, func() bool { return r.Resumed == 1 })
 	fresh, _ := secretValue(r.ResumeSecrets[0], "DUDE_REGISTRY_AUTH")
 	tokens := api.tokens()
 	if len(tokens) != 2 || fresh != "AWS:"+tokens[1] {
@@ -576,7 +611,7 @@ func TestTheRegistryLoginIsNeverLoggedOrStored(t *testing.T) {
 		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND next_attempt_at IS NOT NULL`, wi) == 1
 	})
 	api.setFail(nil)
-	mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE task_id = $1`, wi)
+	w.retried(w.runOf(wi), 5*time.Second, func() bool { return len(w.lux.Runs()) == 1 })
 
 	var runID string
 	w.until("the agent to be working", func() bool {
@@ -592,7 +627,7 @@ func TestTheRegistryLoginIsNeverLoggedOrStored(t *testing.T) {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND next_attempt_at IS NOT NULL`, runID) == 1
 	})
 	api.setFail(nil)
-	mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE id = $1`, runID)
+	w.retried(runID, 5*time.Second, func() bool { return w.lux.Runs()[0].Resumed == 1 })
 	w.until("the implementer to finish", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
 	})
