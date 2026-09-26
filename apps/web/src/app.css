@@ -199,15 +199,14 @@ body {
   display: inline-block;
   flex-shrink: 0;
 }
-.dudeMark img {
+/* One of the two, by theme: the rule hiding the other must outrank this one. */
+.dudeMark .dudeMarkLight,
+[data-theme="dark"] .dudeMark .dudeMarkDark {
   display: block;
 }
-.dudeMarkDark,
-[data-theme="dark"] .dudeMarkLight {
+.dudeMark .dudeMarkDark,
+[data-theme="dark"] .dudeMark .dudeMarkLight {
   display: none;
-}
-[data-theme="dark"] .dudeMarkDark {
-  display: block;
 }
 .keyPromptMark {
   display: block;
