@@ -296,7 +296,7 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 // submit builds the Run's spec and hands it to lux.
 func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 	spec, err := s.spec(ctx, r, nil)
-	if errors.As(err, new(errForge)) || errors.As(err, new(errRegistry)) {
+	if passing(err) {
 		return s.retryLater(ctx, r, err)
 	}
 	if err != nil {
@@ -902,11 +902,11 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 	if errors.As(err, &noLogin) {
 		return true, s.waitForLogin(ctx, r, noLogin)
 	}
-	if errors.As(err, new(errForge)) || errors.As(err, new(errRegistry)) {
+	if passing(err) {
 		return true, s.retryLater(ctx, r, err)
 	}
 	if errors.As(err, &cannot) {
-		return true, s.fail(ctx, r, "cannot resume: "+cannot.err.Error())
+		return true, s.fail(ctx, r, "cannot resume: "+cannot.Error())
 	}
 	if le, ok := lux.AsError(err); ok && le.Status == http.StatusConflict {
 		// Already resuming: an earlier attempt got through and its answer
@@ -972,7 +972,7 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (lux.Run,
 		return lux.Run{}, err
 	}
 	spec, err := s.spec(ctx, r, &lr.Spec)
-	if errors.As(err, new(errForge)) || errors.As(err, new(errRegistry)) || errors.As(err, new(errLoginUnavailable)) {
+	if passing(err) || errors.As(err, new(errLoginUnavailable)) {
 		return lux.Run{}, err
 	}
 	if err != nil {
@@ -1252,6 +1252,11 @@ func (e errRegistry) Error() string {
 	return "logging in to the agent image's registry: " + e.err.Error()
 }
 func (e errRegistry) Unwrap() error { return e.err }
+
+// passing: err is a credential that could not be had now, and may be later.
+func passing(err error) bool {
+	return errors.As(err, new(errForge)) || errors.As(err, new(errRegistry))
+}
 
 // errLoginUnavailable: lux's stored spec names a registry login this
 // orchestrator cannot supply — logins are off (Configured is ""), or it
