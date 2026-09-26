@@ -267,11 +267,12 @@ func (g *GitHub) PullRequest(ctx context.Context, slug string, number int) (Stat
 	}
 	checks := checkState(combined.State, combined.TotalCount)
 	// Every page: a matrix build has more runs than one holds, and the
-	// failing one may be on the last. A token without Checks: read is
-	// refused (403), and GitHub Enterprise without Actions has no such
-	// endpoint (404): no check runs to read, which is no reason to stop
-	// reading the rest. A rate limit is also a 403, and is not that: it
-	// fails the sync, to be tried again.
+	// failing one may be on the last. GitHub Enterprise without Actions has
+	// no such endpoint (404): no check runs. A token without Checks: read
+	// is refused (403): there may be CI it cannot see, so the checks are
+	// never read as passing — pending, which holds readiness back without
+	// waking a fixer; the token needs Checks: read. A rate limit is also a
+	// 403, and is neither: it fails the sync, to be tried again.
 	for page, seen := 1, 0; ; page++ {
 		var runs struct {
 			TotalCount int `json:"total_count"`
@@ -281,11 +282,14 @@ func (g *GitHub) PullRequest(ctx context.Context, slug string, number int) (Stat
 			} `json:"check_runs"`
 		}
 		err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/commits/%s/check-runs?per_page=100&page=%d", slug, p.Head.SHA, page), nil, &runs)
-		if err != nil {
-			var e *Error
-			if asError(err, &e) && !Transient(err) && (e.Status == 403 || e.Status == 404) {
-				break
+		var e *Error
+		if err != nil && asError(err, &e) && !Transient(err) && (e.NotFound() || e.Status == 403) {
+			if e.Status == 403 {
+				checks = worseChecks(checks, ChecksPending)
 			}
+			break
+		}
+		if err != nil {
 			return Status{}, err
 		}
 		for _, r := range runs.CheckRuns {
@@ -304,7 +308,9 @@ func (g *GitHub) PullRequest(ctx context.Context, slug string, number int) (Stat
 }
 
 // checkRunState reads one check run: still running is pending; finished,
-// its conclusion decides. Neutral and skipped runs block nothing.
+// its conclusion decides. Neutral and skipped runs block nothing. One a
+// person cancelled, or waiting on a person's approval, or superseded, is
+// not a failure an agent could fix: not passing, but no fixer either.
 func checkRunState(status, conclusion string) string {
 	if status != "completed" {
 		return ChecksPending
@@ -312,15 +318,18 @@ func checkRunState(status, conclusion string) string {
 	switch conclusion {
 	case "success", "neutral", "skipped":
 		return ChecksPassing
+	case "cancelled", "action_required", "stale":
+		return ChecksPending
 	}
 	return ChecksFailing
 }
 
 // worseChecks combines two readings: failing over pending over passing
 // over unknown (no CI at all).
+var checksRank = map[string]int{ChecksUnknown: 0, ChecksPassing: 1, ChecksPending: 2, ChecksFailing: 3}
+
 func worseChecks(a, b string) string {
-	rank := map[string]int{ChecksUnknown: 0, ChecksPassing: 1, ChecksPending: 2, ChecksFailing: 3}
-	if rank[b] > rank[a] {
+	if checksRank[b] > checksRank[a] {
 		return b
 	}
 	return a

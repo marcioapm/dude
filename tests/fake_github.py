@@ -49,8 +49,6 @@ class PullRequest:
     merged_at: str | None = None
     comments: list[dict] = field(default_factory=list)
     reviews: list[dict] = field(default_factory=list)
-    checks: str = "success"
-    check_count: int = 0
 
 
 class FakeGitHub:

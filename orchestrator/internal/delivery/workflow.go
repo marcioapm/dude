@@ -37,10 +37,6 @@ type State struct {
 	// the next phase checks out. A repository not here starts from its
 	// default branch.
 	Heads map[string]string `json:"heads,omitempty"`
-	// Where the last pull request fix found each repository it moved: a
-	// pull request synced at one of these has not been synced since the
-	// fix, so what is on record about it is not about the fix.
-	Superseded map[string]string `json:"superseded,omitempty"`
 	// What changed, across repositories, as <repo>/<path> — what picks the
 	// reviewers.
 	ChangedPaths []string `json:"changedPaths,omitempty"`
@@ -427,7 +423,7 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", reason); err != nil {
 		return workflow.Result{}, err
 	}
-	return workflow.Result{Next: "awaitPullRequest", State: st, AwaitSignals: []string{SignalPRFeedback, SignalHumanDecision}}, nil
+	return waitForPR(st), nil
 }
 
 // awaitPullRequest wakes a fixer only when there is something to fix: the
@@ -466,10 +462,14 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 			return res, err
 		}
 	}
-	waitAgain := workflow.Result{Next: "awaitPullRequest", State: st, AwaitSignals: []string{SignalPRFeedback, SignalHumanDecision}}
+	waitAgain := waitForPR(st)
 	if len(actionable) == 0 {
 		if readiness {
-			return waitAgain, w.weighReadiness(ctx, sc, st)
+			states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
+			if err != nil {
+				return workflow.Result{}, err
+			}
+			return waitAgain, w.weighReadiness(ctx, sc, st, states)
 		}
 		return waitAgain, nil
 	}
@@ -504,10 +504,6 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 	}
 	if !out.Succeeded {
 		return w.escalate(ctx, sc, st, "pr_fix_failed", map[string]any{"runId": runID, "error": out.Error})
-	}
-	st.Superseded = map[string]string{}
-	for repo := range out.Heads {
-		st.Superseded[repo] = st.Heads[repo]
 	}
 	st.HeadRunID, st.PendingRunIDs, st.Heads = runID, nil, out.advance(st.Heads)
 	// The fix may have changed a repository no pull request is open for yet:
@@ -552,14 +548,14 @@ func (w *steps) pullRequestEnded(ctx context.Context, sc workflow.StepContext, s
 			open++
 		}
 	}
-	waitAgain := workflow.Result{Next: "awaitPullRequest", State: st, AwaitSignals: []string{SignalPRFeedback, SignalHumanDecision}}
+	waitAgain := waitForPR(st)
 	switch {
 	case len(states) == 0:
 		return workflow.Result{}, true, fmt.Errorf("no pull requests recorded for %s", st.TaskID)
 	case closed == 0 && open > 0:
 		// The rest are still open: what is merged is taken, so whether the
 		// task is ready depends on those.
-		return waitAgain, false, w.weighReadiness(ctx, sc, st)
+		return waitAgain, false, w.weighReadiness(ctx, sc, st, states)
 	case closed == 0:
 		return workflow.Result{}, true, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "done", "pull requests merged")
 	case open == 0 && merged == 0:
@@ -576,31 +572,24 @@ func (w *steps) pullRequestEnded(ctx context.Context, sc workflow.StepContext, s
 // request still open is approved with its checks passing (forge.Ready),
 // and back to review when one no longer is. The factory never merges:
 // ready to merge is what a person is told, and merging is theirs.
-func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st *State) error {
-	states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
-	if err != nil {
-		return err
-	}
+func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st *State, states []PullRequestState) error {
 	ready, open := true, 0
 	for _, s := range states {
 		if s.State == forge.StateMerged || s.State == forge.StateClosed {
 			continue
 		}
 		open++
-		// Just after a fix, the approval and checks on record may be the
-		// head's before it, whose CI said nothing about the fix. Any other
-		// head is what the pull request is now: the fix, or a commit a
-		// person added on top ("Update branch", a committed suggestion).
-		before, fixed := st.Superseded[s.Repo]
-		ready = ready && forge.Ready(s.Review, s.Checks) && !(fixed && s.HeadSHA == before)
+		// Always about the pull request's current head: publishing a fix
+		// resets its checks (phases.publish), and a sync records a head
+		// someone else pushed.
+		ready = ready && forge.Ready(s.Review, s.Checks)
 	}
 	if open > 0 && ready {
 		// The move and its event in one transaction: an event lost to a
 		// retry would never be written again (the status has moved).
 		return w.s.ReadyToMerge(ctx, sc.OrganizationID, st, open)
 	}
-	_, err = w.s.SetTaskStatusFrom(ctx, sc.OrganizationID, st, "ready_to_merge", "review", "no longer approved with checks passing")
-	return err
+	return w.s.SetTaskStatusFrom(ctx, sc.OrganizationID, st, "ready_to_merge", "review", "no longer approved with checks passing")
 }
 
 // escalate stops and asks for a person. Terminal rather than parked: holding
@@ -617,4 +606,10 @@ func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State
 	st.Escalation = &Escalation{Reason: reason, Detail: detail}
 	st.PendingRunIDs = nil
 	return workflow.Result{State: st}, nil
+}
+
+// waitForPR waits on the task's pull requests: what the forge says of
+// them, or a person's decision.
+func waitForPR(st *State) workflow.Result {
+	return workflow.Result{Next: "awaitPullRequest", State: st, AwaitSignals: []string{SignalPRFeedback, SignalHumanDecision}}
 }

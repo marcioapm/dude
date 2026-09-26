@@ -98,10 +98,14 @@ export function App({ client, onSignOut }: AppProps) {
     window.location.hash = hash;
   }), [client]);
 
+  // Bumped on each reload: what reads its own data (an epic's metrics)
+  // re-reads with the tree rather than on a stream of its own.
+  const [version, setVersion] = useState(0);
   const load = useCallback(async () => {
     try {
       const { projects: found } = await client.navigation();
       setProjects(found);
+      setVersion((v) => v + 1);
       setProblem(null);
     } catch (err) {
       setProblem(errorText(err));
@@ -210,7 +214,7 @@ export function App({ client, onSignOut }: AppProps) {
       <Board
         project={project}
         epic={scope.epic}
-        overview={scope.epic ? <EpicMetricsSection client={client} epicId={scope.epic.id} /> : undefined}
+        overview={scope.epic ? <EpicMetricsSection client={client} epicId={scope.epic.id} version={version} /> : undefined}
         selected={selected}
         onSelect={(ref) => go(inTree(ref))}
         groupBy={groupByEpic ? "epic" : null}

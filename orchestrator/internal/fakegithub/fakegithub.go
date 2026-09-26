@@ -26,7 +26,6 @@ type Pull struct {
 	State    string
 	MergedAt *string
 	Comments []Comment
-	Checks   string
 	// Verdicts by reviewer login: APPROVED, CHANGES_REQUESTED.
 	Reviews map[string]string
 }
@@ -190,7 +189,7 @@ func (s *Server) openPull(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	p := &Pull{Number: len(s.pulls) + 1, Head: in.Head, Base: in.Base, Title: in.Title, Body: in.Body, State: "open", Checks: "success"}
+	p := &Pull{Number: len(s.pulls) + 1, Head: in.Head, Base: in.Base, Title: in.Title, Body: in.Body, State: "open"}
 	s.pulls[p.Number] = p
 	s.mu.Unlock()
 	write(w, 201, s.pullJSON(p))

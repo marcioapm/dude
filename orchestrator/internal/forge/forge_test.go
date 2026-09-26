@@ -13,7 +13,7 @@ import (
 // person's request silently ignored. The tests pin both directions.
 
 var open = Status{PullRequestRef: PullRequestRef{Number: 1, State: StateOpen, HeadSHA: "abc"}, Checks: ChecksPassing, Review: "pending"}
-var prior = PriorState{State: StateOpen, Checks: ChecksPassing}
+var prior = Status{PullRequestRef: PullRequestRef{State: StateOpen}, Checks: ChecksPassing}
 
 func comment(body string) Feedback {
 	return Feedback{ID: body, Author: "alice", Body: body, Kind: KindComment, CreatedAt: "2026-09-22T10:00:00Z"}
@@ -45,7 +45,7 @@ func TestChecksTurningRedWakeAFixer(t *testing.T) {
 func TestChecksThatWereAlreadyRedDoNot(t *testing.T) {
 	failing := open
 	failing.Checks = ChecksFailing
-	if s := Classify(PriorState{State: StateOpen, Checks: ChecksFailing}, failing, nil, nil); s != nil {
+	if s := Classify(Status{PullRequestRef: PullRequestRef{State: StateOpen}, Checks: ChecksFailing}, failing, nil, nil); s != nil {
 		t.Fatalf("signal = %+v, want nil", s)
 	}
 }
@@ -67,12 +67,12 @@ func TestApprovalsAndGreenChecksWakeNoFixer(t *testing.T) {
 		t.Errorf("approval: %+v", s)
 	}
 	// Green, but not approved: nothing is ready, nothing to say.
-	if s := Classify(PriorState{State: StateOpen, Checks: ChecksFailing}, open, nil, nil); s != nil {
+	if s := Classify(Status{PullRequestRef: PullRequestRef{State: StateOpen}, Checks: ChecksFailing}, open, nil, nil); s != nil {
 		t.Errorf("green: %+v", s)
 	}
 	// Approved already, checks going green: now it is ready.
 	approved.Checks = ChecksPassing
-	if s := Classify(PriorState{State: StateOpen, Checks: ChecksPending, Review: ReviewApproved}, approved, nil, nil); s == nil || s.Kind != "readiness" {
+	if s := Classify(Status{PullRequestRef: PullRequestRef{State: StateOpen}, Checks: ChecksPending, Review: ReviewApproved}, approved, nil, nil); s == nil || s.Kind != "readiness" {
 		t.Errorf("approved then green: %+v", s)
 	}
 }
@@ -120,7 +120,7 @@ func TestMergeAndCloseEndTheLoopOnce(t *testing.T) {
 		if s == nil || s.Kind != "terminal" || s.State != state {
 			t.Errorf("%s: %+v", state, s)
 		}
-		if s := Classify(PriorState{State: state}, cur, nil, nil); s != nil {
+		if s := Classify(Status{PullRequestRef: PullRequestRef{State: state}}, cur, nil, nil); s != nil {
 			t.Errorf("%s seen twice reported again: %+v", state, s)
 		}
 	}
@@ -170,7 +170,8 @@ func TestCheckRunsCountAndTheWorstWins(t *testing.T) {
 		{"queued", "", ChecksPending}, {"in_progress", "", ChecksPending},
 		{"completed", "success", ChecksPassing}, {"completed", "skipped", ChecksPassing},
 		{"completed", "neutral", ChecksPassing}, {"completed", "failure", ChecksFailing},
-		{"completed", "cancelled", ChecksFailing}, {"completed", "timed_out", ChecksFailing},
+		{"completed", "cancelled", ChecksPending}, {"completed", "action_required", ChecksPending},
+		{"completed", "stale", ChecksPending}, {"completed", "timed_out", ChecksFailing},
 	} {
 		if got := checkRunState(c.status, c.conclusion); got != c.want {
 			t.Errorf("%s/%s = %s, want %s", c.status, c.conclusion, got, c.want)
@@ -183,8 +184,8 @@ func TestCheckRunsCountAndTheWorstWins(t *testing.T) {
 	}
 }
 
-// A token without Checks: read still reads the pull request: its statuses
-// and reviews are what it has.
+// A token without Checks: read still reads the pull request, but never
+// as passing: there may be CI it cannot see.
 func TestCheckRunsItCannotReadAreNone(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -203,22 +204,8 @@ func TestCheckRunsItCannotReadAreNone(t *testing.T) {
 	}))
 	defer srv.Close()
 	st, err := NewGitHub(Credential{Auth: "pat", Secret: "x", APIBaseURL: srv.URL}).PullRequest(context.Background(), "acme/api", 1)
-	if err != nil || st.Checks != ChecksPassing {
+	if err != nil || st.Checks != ChecksPending {
 		t.Fatalf("status %+v, err %v", st, err)
-	}
-}
-
-// Ready on a new head is news: the workflow waits for its own head.
-func TestReadyOnANewHeadIsNews(t *testing.T) {
-	approved := open
-	approved.Review = ReviewApproved
-	was := PriorState{State: StateOpen, Checks: ChecksPassing, Review: ReviewApproved, HeadSHA: "old"}
-	if s := Classify(was, approved, nil, nil); s == nil || s.Kind != "readiness" {
-		t.Errorf("ready on a new head: %+v", s)
-	}
-	was.HeadSHA = approved.HeadSHA
-	if s := Classify(was, approved, nil, nil); s != nil {
-		t.Errorf("ready on the same head again: %+v", s)
 	}
 }
 

@@ -4,18 +4,23 @@
  * sat in review, and what it cost — read from what dude already records.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { CostDisplay, Duration, MetricGroup, MetricTile, TokenCount } from "@dude/design-system/components";
 import { Section, Table, TBody, Td, Th, THead, Tr } from "@dude/design-system/primitives";
 import { runLabel } from "@dude/domain";
 import type { ApiClient, EpicMetrics, TaskMetrics } from "../api/client.ts";
-import { useReloadOnEvents } from "../hooks/useEventStream.ts";
 
-export function TaskMetricsSection({ client, taskId, live }: { client: ApiClient; taskId: string; live: boolean }) {
+/**
+ * Both re-read when `version` changes: the screen they sit in already
+ * reloads on its own stream, and passes that on rather than each section
+ * opening another.
+ */
+
+export function TaskMetricsSection({ client, taskId, live, version }: {
+  client: ApiClient; taskId: string; live: boolean; version: number;
+}) {
   const [m, setM] = useState<TaskMetrics | null>(null);
-  const load = useCallback(() => void client.taskMetrics(taskId).then(setM, () => {}), [client, taskId]);
-  useEffect(load, [load]);
-  useReloadOnEvents({ client, taskId }, load, 2000);
+  useEffect(() => void client.taskMetrics(taskId).then(setM, () => {}), [client, taskId, version]);
   if (!m || m.runs.length === 0) return null;
   return (
     <Section title="Time & cost" data-testid="task-metrics">
@@ -54,11 +59,9 @@ export function TaskMetricsSection({ client, taskId, live }: { client: ApiClient
   );
 }
 
-export function EpicMetricsSection({ client, epicId }: { client: ApiClient; epicId: string }) {
+export function EpicMetricsSection({ client, epicId, version }: { client: ApiClient; epicId: string; version: number }) {
   const [m, setM] = useState<EpicMetrics | null>(null);
-  const load = useCallback(() => void client.epicMetrics(epicId).then(setM, () => {}), [client, epicId]);
-  useEffect(load, [load]);
-  useReloadOnEvents({ client, all: true }, load, 2000);
+  useEffect(() => void client.epicMetrics(epicId).then(setM, () => {}), [client, epicId, version]);
   if (!m || m.tasks === 0) return null;
   return (
     <MetricGroup joined data-testid="epic-metrics">

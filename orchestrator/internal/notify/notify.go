@@ -27,6 +27,12 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
+// asks are the events a person is told of. A literal in the SQL, not a
+// parameter: it is the predicate of the partial index events_asks_idx
+// (migration 026), which the planner uses only when the query says the
+// same.
+const asks = "('question.asked', 'repository.requested', 'task.ready_to_merge')"
+
 // Notifier sends Web Push for new asks.
 type Notifier struct {
 	DB  *db.DB
@@ -64,6 +70,7 @@ type Message struct {
 //
 // It also makes push_config's row, which holds the notifier's watermark,
 // configured keys or not. Read once and kept: the pair never changes.
+
 func (n *Notifier) Keys(ctx context.Context) (public, private string, err error) {
 	n.keysMu.Lock()
 	defer n.keysMu.Unlock()
@@ -133,7 +140,7 @@ func (n *Notifier) Sweep(ctx context.Context) (int, error) {
 			LEFT JOIN projects p ON p.id = w.project_id
 			LEFT JOIN runs r ON r.id = e.run_id
 			WHERE e.cursor > (SELECT after_cursor FROM push_config)
-			  AND e.event_type IN ('question.asked', 'repository.requested', 'task.ready_to_merge')
+			  AND e.event_type IN `+asks+`
 			  AND NOT EXISTS (SELECT 1 FROM push_sent s WHERE s.cursor = e.cursor)
 			ORDER BY e.cursor LIMIT 100`)
 		if err != nil {
@@ -221,7 +228,7 @@ func (n *Notifier) advance(ctx context.Context) error {
 				          WHERE e.occurred_at < now() - make_interval(secs => $1)), 0),
 				COALESCE((SELECT min(e.cursor) - 1 FROM events e
 				          WHERE e.cursor > push_config.after_cursor
-				            AND e.event_type IN ('question.asked', 'repository.requested', 'task.ready_to_merge')
+				            AND e.event_type IN `+asks+`
 				            AND NOT EXISTS (SELECT 1 FROM push_sent s WHERE s.cursor = e.cursor)), 9223372036854775807)))`,
 			settle.Seconds()); err != nil {
 			return err
@@ -283,7 +290,6 @@ func messageFor(a ask) (Message, bool) {
 	case delivery.EvReadyToMerge:
 		msg.Title = strings.TrimSpace(a.Task + " is ready to merge")
 		msg.Body = "Approved, with its checks passing. Merging is yours."
-		msg.Tag, msg.URL = "task:"+a.TaskID, "#/task/"+a.TaskID
 	case delivery.EvRepositoryRequested:
 		verb := "Read"
 		if str("access") == "write" {

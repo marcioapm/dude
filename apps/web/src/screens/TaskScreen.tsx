@@ -41,8 +41,11 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb }: TaskScreen
   const [problem, setProblem] = useState<string | null>(null);
   const [delivering, setDelivering] = useState(false);
   const [editing, setEditing] = useState(false);
+  // Bumped on each reload, for the sections that read their own data.
+  const [version, setVersion] = useState(0);
 
   const load = useCallback(async () => {
+    setVersion((v) => v + 1);
     try {
       const [fresh, f, p, a] = await Promise.all([
         client.getTask(taskId),
@@ -189,7 +192,7 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb }: TaskScreen
         )}
       </Section>
 
-      <TaskMetricsSection client={client} taskId={taskId} live={item.status === "running"} />
+      <TaskMetricsSection client={client} taskId={taskId} live={item.status === "running"} version={version} />
 
       <ArtifactsSection client={client} artifacts={artifacts} />
 
