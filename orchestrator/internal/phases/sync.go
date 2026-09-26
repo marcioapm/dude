@@ -40,6 +40,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
+	"github.com/marciomartins/dude/orchestrator/internal/registry"
 )
 
 type Syncer struct {
@@ -47,7 +48,9 @@ type Syncer struct {
 	Lux    lux.Client
 	Forges delivery.Forges
 	Agent  AgentConfig
-	Log    *slog.Logger
+	// The login for the registry agent images come from; nil for none.
+	Registry registry.Provider
+	Log      *slog.Logger
 	// The factory's grace before a Run waiting on a person is parked, and
 	// its idle limit, for projects whose policy sets none (DUDE_PARK_AFTER,
 	// DUDE_IDLE_AFTER; finer than the policy's minutes, for tests). Zero
@@ -286,8 +289,8 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 
 // submit builds the Run's spec and hands it to lux.
 func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
-	spec, err := s.spec(ctx, r)
-	if errors.As(err, new(errForge)) {
+	spec, err := s.spec(ctx, r, nil)
+	if errors.As(err, new(errForge)) || errors.As(err, new(errRegistry)) {
 		return s.retryLater(ctx, r, err)
 	}
 	if err != nil {
@@ -327,8 +330,15 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 	})
 }
 
-// spec gathers what the Run's lux spec is built from.
-func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
+// spec gathers what the Run's lux spec is built from. It is the only
+// source of what lux starts a Run with — its submit, and every resume's
+// secrets — so each start carries fresh credentials: the forge token,
+// the tools token, the registry login.
+//
+// stored is lux's copy of the Run's spec, for a resume (resumeInput): the
+// registry login is the one it names, for the image lux has, whatever the
+// project names now. Nil for a submit.
+func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec) (lux.Spec, error) {
 	var in specInput
 	var title, goal, image string
 	var repos []delivery.Repository
@@ -407,6 +417,9 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 	in.Image = image
 	if in.Image == "" {
 		in.Image = s.Agent.DefaultImage
+	}
+	if in.Registry, err = s.registryLogin(ctx, in.Image, stored); err != nil {
+		return lux.Spec{}, err
 	}
 	in.Prompt = delivery.Prompt(r.Phase, delivery.PromptInput{
 		Title: title, Goal: goal, AcceptanceCriteria: ac, Category: r.Category,
@@ -867,13 +880,6 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 		s.follow(r)
 		return false, nil
 	}
-	spec, err := s.spec(ctx, r)
-	if errors.As(err, new(errForge)) {
-		return true, s.retryLater(ctx, r, err)
-	}
-	if err != nil {
-		return true, s.fail(ctx, r, "cannot resume: "+err.Error())
-	}
 	// A resumed agent has its conversation back but waits for input, and a
 	// paused one never finished its turn: told nothing, it would sit idle
 	// for good. A person's directive, if one is waiting, is that input (sent
@@ -884,11 +890,14 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 	if !r.HasDirectives && !r.Waiting {
 		nudge = resumeNudge
 	}
-	in := lux.ResumeInput{Secrets: spec.Secrets, Input: nudge}
-	if err := s.addedRepositories(ctx, r, spec, &in); err != nil {
-		return true, err
+	lr, err := s.resume(ctx, r, nudge)
+	var cannot errCannotResume
+	if errors.As(err, new(errForge)) || errors.As(err, new(errRegistry)) {
+		return true, s.retryLater(ctx, r, err)
 	}
-	lr, err := s.Lux.Resume(ctx, r.LuxRunID, in)
+	if errors.As(err, &cannot) {
+		return true, s.fail(ctx, r, "cannot resume: "+cannot.err.Error())
+	}
 	if le, ok := lux.AsError(err); ok && le.Status == http.StatusConflict {
 		// Already resuming: an earlier attempt got through and its answer
 		// was lost. lux's stream reports how it went.
@@ -938,6 +947,62 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 	// lux reports the resumed Run running, each on its own so each is
 	// acknowledged: lux refuses input to a Run still waiting for a host.
 	return true, nil
+}
+
+// resume is the one call to lux's resume. lux keeps no secret (every resume
+// supplies all of them again, lux internal/server/api.go resumeRun), so
+// the secrets come from s.spec, fresh: a Run parked for a day needs a new
+// registry login and forge token, not the ones it started with.
+func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (lux.Run, error) {
+	var stored *lux.StoredSpec
+	if s.Registry != nil {
+		// Only a login needs lux's copy: the image a resume pulls is the one
+		// lux stored at submit, not what the project names today.
+		lr, err := s.Lux.Get(ctx, r.LuxRunID)
+		if err != nil {
+			return lux.Run{}, err
+		}
+		stored = &lr.Spec
+	}
+	spec, err := s.spec(ctx, r, stored)
+	if errors.As(err, new(errForge)) || errors.As(err, new(errRegistry)) {
+		return lux.Run{}, err
+	}
+	if err != nil {
+		return lux.Run{}, errCannotResume{err}
+	}
+	in := lux.ResumeInput{Secrets: spec.Secrets, Input: input}
+	if err := s.addedRepositories(ctx, r, spec, &in); err != nil {
+		return lux.Run{}, err
+	}
+	return s.Lux.Resume(ctx, r.LuxRunID, in)
+}
+
+// registryLogin is the login a start of the Run pulls image with: the
+// provider's, if image is in its registry. A resume (stored set) logs in
+// where its submit did.
+func (s *Syncer) registryLogin(ctx context.Context, image string, stored *lux.StoredSpec) (*registryLogin, error) {
+	if s.Registry == nil {
+		return nil, nil
+	}
+	host := s.Registry.Registry()
+	if stored != nil {
+		switch auth := stored.Image.RegistryAuth; {
+		case len(auth) == 0:
+			return nil, nil
+		case len(auth) != 1 || auth[0].Registry != host || auth[0].Secret != registrySecret:
+			return nil, fmt.Errorf("the Run was started with a login for %s, and this orchestrator logs in to %s", auth[0].Registry, host)
+		}
+	} else if registry.ImageRegistry(image) != host {
+		// Another registry: a project's own image gets no credential of the
+		// factory's.
+		return nil, nil
+	}
+	credential, err := s.Registry.Credential(ctx)
+	if err != nil {
+		return nil, errRegistry{err}
+	}
+	return &registryLogin{Registry: host, Credential: credential}, nil
 }
 
 // requestPause asks for a graceful pause, saying why, marked as dude's own
@@ -1165,6 +1230,21 @@ type errForge struct{ err error }
 
 func (e errForge) Error() string { return "reading the forge's credentials: " + e.err.Error() }
 func (e errForge) Unwrap() error { return e.err }
+
+// errRegistry: no registry login could be had now (ECR unreachable, the
+// role's credentials expiring). Passing, like errForge.
+type errRegistry struct{ err error }
+
+func (e errRegistry) Error() string {
+	return "logging in to the agent image's registry: " + e.err.Error()
+}
+func (e errRegistry) Unwrap() error { return e.err }
+
+// errCannotResume: the resume's spec cannot be built, and will not be.
+type errCannotResume struct{ err error }
+
+func (e errCannotResume) Error() string { return e.err.Error() }
+func (e errCannotResume) Unwrap() error { return e.err }
 
 // errRetry ends a step that will be tried again after a back-off.
 var errRetry = errors.New("retrying later")
