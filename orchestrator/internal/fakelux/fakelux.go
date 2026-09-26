@@ -28,6 +28,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
+	"github.com/marciomartins/dude/orchestrator/internal/registry"
 )
 
 // Behaviour is what a Run's agent does. Chosen per Run by the test, from the
@@ -762,13 +763,17 @@ func workloadCredential(rawSpec json.RawMessage, added []lux.Repository) string 
 	return ""
 }
 
-// registryAuthProblem refuses, as lux's spec validation does, a login
-// naming a secret the spec does not declare, or a registry twice.
+// registryAuthProblem refuses, as lux's spec validation does, a registry
+// lux's validRegistry would not take, a login naming a secret the spec
+// does not declare, or a registry twice.
 func registryAuthProblem(rawSpec json.RawMessage) string {
 	var spec lux.Spec
 	_ = json.Unmarshal(rawSpec, &spec)
 	seen := map[string]bool{}
 	for i, a := range spec.Image.RegistryAuth {
+		if !registry.ValidRegistry(a.Registry) {
+			return fmt.Sprintf("image.registryAuth[%d].registry: %q is not a registry host", i, a.Registry)
+		}
 		if seen[a.Registry] {
 			return fmt.Sprintf("image.registryAuth: duplicate registry %q", a.Registry)
 		}
