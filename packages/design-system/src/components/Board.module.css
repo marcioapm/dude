@@ -22,12 +22,15 @@
 }
 
 /* -- Header: where you are, what is inside, what it cost. -- */
+/* When scope, figures and actions do not fit on one line, the actions
+   wrap below (still right-aligned) rather than squeezing the others. */
 .header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--ds-space-12);
+  gap: var(--ds-space-4) var(--ds-space-12);
   min-height: var(--ds-size-control-lg);
-  padding: 0 var(--ds-space-12);
+  padding: var(--ds-space-4) var(--ds-space-12);
   background: var(--ds-color-surface);
   flex-shrink: 0;
 }
@@ -39,7 +42,8 @@
   display: inline-flex;
   align-items: center;
   gap: var(--ds-space-4);
-  min-width: 0;
+  /* The name gives way to the figures only down to a few words. */
+  min-width: min(16ch, 100%);
   flex-shrink: 1;
 }
 .scopeParent {
@@ -69,6 +73,8 @@
   align-items: center;
   gap: var(--ds-space-12);
   min-width: 0;
+  /* Clipped, never drawn over its neighbours. */
+  overflow: hidden;
   font-size: var(--ds-text-xs);
   color: var(--ds-color-text-muted);
   white-space: nowrap;
@@ -84,10 +90,13 @@
 }
 .headerActions {
   display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   align-items: center;
   gap: var(--ds-space-4);
   margin-left: auto;
   flex-shrink: 0;
+  max-width: 100%;
 }
 
 /* -- Body: the five columns, or a stack of swimlanes that scrolls as one. -- */

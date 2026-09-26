@@ -20,7 +20,10 @@ export interface ChatTranscriptSession {
   readonly model?: string | undefined;
   /** "WI-2481 · Add retry with backoff…" — enough to know what you are looking at. */
   readonly title?: string | undefined;
+  /** The task's raw id. Only in a tooltip; people read `taskKey`. */
   readonly taskId?: string | undefined;
+  /** The task's human key ("TEXT-14"), shown before the title. */
+  readonly taskKey?: string | undefined;
   readonly repo?: string | undefined;
   readonly branch?: string | undefined;
   readonly startedAt?: string | number | Date | undefined;
@@ -173,17 +176,23 @@ function TranscriptHeader({ session, actions }: { readonly session: ChatTranscri
   // `live` and `needsHuman` are properties of the status itself, so the
   // header asks the spec rather than re-listing which statuses count.
   const spec = statusSpec(session.status);
+  // Raw ids help whoever debugs, not whoever reads: they live in a tooltip.
+  const ids = [session.taskId ? `task ${session.taskId}` : null, `session ${session.id}`].filter(Boolean).join(" · ");
   return (
     <header className={styles["header"]} data-status={session.status}>
       <AgentAvatar role={session.role} size="md" live={session.status === "running"} />
       <div className={styles["headerMain"]}>
         <div className={styles["headerTitle"]}>
-          {session.taskId ? <code className={styles["headerId"]}>{session.taskId}</code> : null}
+          {session.taskKey ? (
+            <code className={styles["headerId"]} title={ids}>
+              {session.taskKey}
+            </code>
+          ) : null}
           <span className={styles["headerText"]}>{session.title ?? ROLE_LABEL[session.role]}</span>
           <StatusBadge status={session.status} size="sm" />
         </div>
         <div className={styles["headerSub"]}>
-          <span>{ROLE_LABEL[session.role]}</span>
+          <span title={ids}>{ROLE_LABEL[session.role]}</span>
           {session.model ? <code>{session.model}</code> : null}
           {session.repo ? (
             <code>
@@ -191,7 +200,6 @@ function TranscriptHeader({ session, actions }: { readonly session: ChatTranscri
               {session.branch ? <span className={styles["headerBranch"]}> @ {session.branch}</span> : null}
             </code>
           ) : null}
-          <code className={styles["headerSession"]}>{session.id}</code>
         </div>
       </div>
       <div className={styles["headerStats"]}>

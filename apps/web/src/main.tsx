@@ -8,7 +8,7 @@
  * unchanged inside the desktop shell (plan §117).
  */
 
-import { StrictMode, useMemo, useState } from "react";
+import { StrictMode, useCallback, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Button, Card, CardBody, CardHeader, FormStack, Input, ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { ThemeProvider } from "@dude/design-system";
@@ -25,6 +25,8 @@ const KEY_STORAGE = "dude.apiKey";
 
 function Root() {
   const [apiKey, setApiKey] = useState(() => localStorage.getItem(KEY_STORAGE) ?? "");
+  // The server refused the key it was given: the prompt says so.
+  const [refused, setRefused] = useState(false);
 
   // Same-origin in the browser (Vite proxies /v1), loopback in the desktop
   // shell — so no base URL is needed in either.
@@ -34,10 +36,16 @@ function Root() {
   // Declared before the early return: hooks must run in the same order on
   // every render, and signing out changes which branch is taken.
   const client = useMemo(() => new ApiClient({ apiKey }), [apiKey]);
+  const keyRefused = useCallback(() => {
+    localStorage.removeItem(KEY_STORAGE);
+    setRefused(true);
+    setApiKey("");
+  }, []);
 
   if (!apiKey) {
-    return <KeyPrompt onSubmit={(key) => {
+    return <KeyPrompt refused={refused} onSubmit={(key) => {
       localStorage.setItem(KEY_STORAGE, key);
+      setRefused(false);
       setApiKey(key);
     }} />;
   }
@@ -47,6 +55,7 @@ function Root() {
       <ToastProvider>
         <App
           client={client}
+          onKeyRefused={keyRefused}
           onSignOut={() => {
             // This browser stops hearing about the organization it leaves.
             void turnPushOff(client).finally(() => {
@@ -61,7 +70,7 @@ function Root() {
 }
 
 /** Minimal credential entry until real auth exists. */
-function KeyPrompt({ onSubmit }: { onSubmit: (key: string) => void }) {
+function KeyPrompt({ refused, onSubmit }: { refused: boolean; onSubmit: (key: string) => void }) {
   const [value, setValue] = useState("");
 
   return (
@@ -81,6 +90,7 @@ function KeyPrompt({ onSubmit }: { onSubmit: (key: string) => void }) {
                 type="password"
                 label="API key"
                 hint="Paste an API key to continue."
+                error={refused && !value ? "That key was not accepted. It may be mistyped, or revoked." : undefined}
                 value={value}
                 placeholder="dude_sk_…"
                 onChange={(event) => setValue(event.target.value)}

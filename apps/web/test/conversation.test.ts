@@ -324,6 +324,34 @@ describe("an agent that asks", () => {
   });
 });
 
+describe("how a run ended", () => {
+  test("a failure says why, and ends whatever the agent was doing", () => {
+    const conversation = project([
+      ev(EventTypes.ToolCalled, { tool: "bash", callId: "c1" }),
+      ev("run.parked", { reason: "person" }),
+      ev(EventTypes.RunFailed, { status: "failed", error: "lux refused to resume the run: invalid spec" }),
+    ], "failed");
+
+    expect(conversation.turns.at(-1)).toMatchObject({
+      kind: "ended", outcome: "failed", text: "Failed: lux refused to resume the run: invalid spec",
+    });
+    expect(conversation.activity).toBeNull();
+  });
+
+  test("an abort says a person did it, and their reason when they gave one", () => {
+    expect(project([ev(EventTypes.RunAborted, { reason: null })]).turns[0]).toMatchObject({
+      kind: "ended", outcome: "aborted", text: "Aborted by a person.",
+    });
+    expect(project([ev(EventTypes.RunAborted, { reason: "wrong task" })]).turns[0]).toMatchObject({
+      text: "Aborted by a person: wrong task",
+    });
+  });
+
+  test("finishing needs no line: the header says so", () => {
+    expect(project([ev(EventTypes.RunCompleted, { status: "completed" })]).turns).toEqual([]);
+  });
+});
+
 describe("incremental folding", () => {
   /**
    * The property the streaming UI depends on: applying events one at a time

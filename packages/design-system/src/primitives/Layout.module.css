@@ -24,8 +24,9 @@
 }
 .titleRow {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--ds-space-12);
+  gap: var(--ds-space-8) var(--ds-space-12);
   min-width: 0;
 }
 .id {
@@ -34,8 +35,10 @@
   color: var(--ds-color-text-muted);
 }
 .title {
-  flex: 1;
-  min-width: 0;
+  flex: 1 1 0;
+  /* A title keeps room for a few words; when it would get less, the
+     actions wrap below it instead of squeezing it to a letter a line. */
+  min-width: min(20ch, 100%);
   margin: 0;
   font-size: var(--ds-text-xl);
   font-weight: var(--ds-weight-semibold);
@@ -44,9 +47,11 @@
 }
 .actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--ds-space-8);
   flex-shrink: 0;
+  max-width: 100%;
   margin-left: auto;
 }
 .description {

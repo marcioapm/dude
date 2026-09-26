@@ -389,3 +389,44 @@
   gap: var(--ds-space-8);
   height: var(--ds-size-row-compact);
 }
+
+/* Collapsible: below 1000px (SIDEBAR_DRAWER_QUERY) the sidebar leaves the
+   layout and slides in over the page from the left, above a scrim, while
+   open. The toggle that opens it shows only there (`button.` outranks
+   the Button's own display, whichever stylesheet loads last). */
+button.toggle {
+  display: none;
+}
+.scrim {
+  display: none;
+}
+@media (max-width: 999.98px) {
+  .collapsible {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: var(--ds-z-dialog);
+    max-width: calc(100vw - 48px);
+    box-shadow: var(--ds-shadow-3);
+    transform: translateX(-100%);
+    visibility: hidden;
+    transition:
+      transform var(--ds-duration-base) var(--ds-ease-standard),
+      visibility 0s linear var(--ds-duration-base);
+  }
+  .collapsible.open {
+    transform: none;
+    visibility: visible;
+    transition: transform var(--ds-duration-base) var(--ds-ease-enter);
+  }
+  .scrimOn {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: var(--ds-z-overlay);
+    background: var(--ds-color-scrim);
+    animation: global(ds-fade-in) var(--ds-duration-base) var(--ds-ease-enter);
+  }
+  button.toggle {
+    display: inline-flex;
+  }
+}

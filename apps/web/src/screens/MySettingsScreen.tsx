@@ -6,6 +6,7 @@
 
 import { useEffect, useState } from "react";
 import { useTheme } from "@dude/design-system";
+import { Breadcrumb } from "@dude/design-system/components";
 import { Button, Callout, Card, CardBody, CardHeader, FormActions, FormStack, Page, PageHeader, Select } from "@dude/design-system/primitives";
 import type { ApiClient } from "../api/client.ts";
 import { useSave } from "../hooks/useSave.tsx";
@@ -31,7 +32,8 @@ export function MySettingsScreen({ client }: { client: ApiClient }) {
 
   return (
     <Page data-testid="my-settings">
-      <PageHeader title="You" description="This browser" />
+      <PageHeader breadcrumb={<Breadcrumb items={[{ id: "me", label: "You" }]} />} title="Settings"
+        description="Yours, in this browser: how dude looks, and what it tells you." />
       <Card>
         <CardHeader title="Appearance" />
         <CardBody>

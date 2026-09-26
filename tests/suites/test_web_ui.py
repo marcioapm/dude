@@ -601,7 +601,7 @@ def test_a_tasks_time_and_cost_show_on_its_page_and_its_epics(
     expect(page.get_by_test_id("run-metrics").get_by_role("row").filter(has_text="Implement")).to_have_count(1)
 
     page.goto(f"{web_url}#/epic/{epic['id']}")
-    expect(page.get_by_test_id("epic-metrics")).to_contain_text("of 1 tasks")
+    expect(page.get_by_test_id("epic-metrics")).to_contain_text("of 1 task")
     assert console_errors == []
 
 
@@ -619,3 +619,76 @@ def test_a_project_can_have_its_changes_tested_in_a_browser(
     expect(toast(page, "Delivery saved")).to_be_visible()
     assert client.get(f"/v1/projects/{forge_project['id']}").json()["deliveryPolicy"]["test"] is True
     assert console_errors == []
+
+
+def test_a_failed_implementer_says_why_on_its_task_and_its_chat(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    """With no model for the implementer its Run fails, and delivery stops for
+    a person. The task says why at the top and on the failed step, "Waiting on
+    you" gives the reason, and the Run's chat ends on the error rather than a
+    composer nobody would hear."""
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {"reviewer": {"model": "fake/scripted"}}})
+    item = client.create_task(forge_project["id"], "Nobody to implement it")
+    assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
+    wait_until(lambda: client.get(f"/v1/tasks/{item['id']}").json()["status"] == "awaiting_input",
+               timeout=60, message="delivery never stopped for a person")
+    task = client.get(f"/v1/tasks/{item['id']}").json()
+    assert task["escalation"]["reason"] == "implement_failed", task["escalation"]
+    implement = next(r for r in task["runs"] if r["phase"] == "implement")
+
+    _sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/task/{item['id']}")
+    escalation = page.get_by_test_id("escalation")
+    expect(escalation).to_contain_text("Implementer failed")
+    expect(escalation).to_contain_text("no model is configured for the implementer role")
+    expect(page.get_by_test_id("phase").first).to_contain_text("no model is configured")
+    expect(page).to_have_title("GREE-1 · Nobody to implement it — dude")
+
+    page.goto(f"{web_url}#/waiting")
+    expect(page.get_by_test_id("inbox").get_by_role("listitem").first).to_contain_text("Implementer failed")
+
+    page.goto(f"{web_url}#/task/{item['id']}")
+    escalation.get_by_test_id("escalation-run").click()
+    ended = page.get_by_test_id("run-ended")
+    expect(ended).to_have_attribute("data-outcome", "failed")
+    # Why is the transcript's last line, just above; the strip says only how it ended.
+    expect(page.get_by_test_id("chat-ended")).to_contain_text("no model is configured")
+    # No composer: a finished run hears nothing.
+    expect(page.locator("textarea")).to_have_count(0)
+    ended.get_by_test_id("run-ended-task").click()
+    expect(page.get_by_test_id("task-screen")).to_be_visible()
+    assert implement["status"] == "failed"
+    assert console_errors == []
+
+
+def test_a_refused_key_asks_for_another(page: Page, web_url: str, org: dict, console_errors: list):
+    """A key the server does not take (mistyped, revoked) goes back to the key
+    prompt, saying so — not an error above a spinner that never ends."""
+    page.goto(web_url)
+    page.evaluate("localStorage.clear()")
+    page.goto(web_url)
+    page.fill('input[type="password"]', "dude_sk_not-a-key")
+    page.click('button[type="submit"]')
+    expect(page.get_by_text("That key was not accepted")).to_be_visible()
+    assert page.evaluate("localStorage.getItem('dude.apiKey')") is None
+
+    # The right one lets you in.
+    page.fill('input[type="password"]', org["api_key"])
+    page.click('button[type="submit"]')
+    expect(page.get_by_test_id("shell")).to_be_visible()
+    assert all("401" in e for e in console_errors), console_errors
+
+
+def test_a_link_to_something_gone_says_so(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    """A task, run or epic that does not exist is said to, with a way back."""
+    _sign_in(page, web_url, org["api_key"])
+    for kind in ("task", "run", "epic"):
+        page.goto(f"{web_url}#/{kind}/{kind}_doesnotexist")
+        expect(page.get_by_test_id("not-found")).to_contain_text(f"This {kind} doesn't exist")
+    page.get_by_test_id("not-found-back").click()
+    expect(page.get_by_test_id("new-task")).to_be_visible()
+    # The server's 404s for the task and the run are the only errors.
+    assert all("404" in e for e in console_errors), console_errors

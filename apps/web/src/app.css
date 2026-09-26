@@ -37,10 +37,41 @@ body {
   overflow: auto;
 }
 
+/* New project on the left, settings and signing out as icons on the right. */
 .sidebarFooter {
   display: flex;
+  flex: 1;
+  align-items: center;
   justify-content: space-between;
   gap: var(--ds-space-4);
+  min-width: 0;
+}
+
+.sidebarFooterEnd {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+}
+
+/* Off-screen until focused: the first Tab stop, past the sidebar to the page. */
+.skipLink {
+  position: fixed;
+  top: var(--ds-space-8);
+  left: var(--ds-space-8);
+  z-index: 100;
+  padding: var(--ds-space-6) var(--ds-space-12);
+  border-radius: var(--ds-radius-md);
+  background: var(--ds-color-surface);
+  box-shadow: var(--ds-shadow-2);
+  transform: translateY(-200%);
+}
+.skipLink:focus-visible {
+  transform: none;
+}
+
+/* Focused by the skip link only; the pane itself needs no ring. */
+.main:focus {
+  outline: none;
 }
 
 .centered {
@@ -106,4 +137,33 @@ body {
   display: inline-flex;
   align-items: center;
   gap: var(--ds-space-6);
+}
+
+/* The strip that replaces a finished run's composer: how it ended, and the way back. */
+.runEnded {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ds-space-8);
+}
+
+/*
+ * A link out among a header's buttons (a pull request): drawn as a ghost
+ * button, since the design system's Button is a <button> and this must stay
+ * a real link — middle-click, copy address, a new tab.
+ */
+.linkButton {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  height: var(--ds-size-control-md);
+  padding: 0 var(--ds-space-12);
+  border-radius: var(--ds-radius-md);
+  font-weight: var(--ds-weight-medium);
+  white-space: nowrap;
+}
+.linkButton:hover {
+  background: var(--ds-color-hover-wash);
+  text-decoration: none;
 }

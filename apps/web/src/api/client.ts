@@ -7,7 +7,8 @@
  * no Electron/Node assumptions, no direct database access.
  */
 
-import type { NavProject } from "@dude/design-system";
+import type { NavProject, NavTask } from "@dude/design-system";
+import { escalationWords } from "../escalation.ts";
 import type {
   AgentRole,
   TaskRepository,
@@ -16,6 +17,7 @@ import type {
   FullDeliveryPolicy,
   DirectiveScope,
   Epic,
+  Escalation,
   Finding,
   Repository,
   PullRequest,
@@ -37,6 +39,7 @@ import type {
 
 export type {
   Epic,
+  Escalation,
   Finding,
   Person,
   Project,
@@ -77,9 +80,25 @@ export interface TaskFields {
 
 export type { TaskRepository } from "@dude/domain";
 
-/** A task with its attempts, newest first. `GET /v1/tasks/:id`. */
+/** A task with its attempts, newest first, and why it waits if delivery stopped for a person. `GET /v1/tasks/:id`. */
 export interface TaskDetail extends Task {
   runs: Run[];
+  escalation: Escalation | null;
+}
+
+/**
+ * The navigation tree gives each task's escalation, when delivery stopped
+ * for a person; the design system's NavTask shows it as what the task waits
+ * for, in words.
+ */
+function withWaitingFor(projects: NavProject[]): NavProject[] {
+  const task = (t: NavTask & { escalation?: Escalation | null }): NavTask =>
+    t.escalation ? { ...t, waitingFor: escalationWords(t.escalation).short } : t;
+  return projects.map((p) => ({
+    ...p,
+    ...(p.epics ? { epics: p.epics.map((e) => ({ ...e, tasks: e.tasks.map(task) })) } : {}),
+    ...(p.tasks ? { tasks: p.tasks.map(task) } : {}),
+  }));
 }
 
 /** A Run with the sessions it spawned. `GET /v1/runs/:id`. */
@@ -207,8 +226,9 @@ export class ApiClient {
   }
 
   /** Every project, epic, task and agent the sidebar and board draw. */
-  navigation(): Promise<{ projects: NavProject[] }> {
-    return this.#request("GET", "/v1/navigation");
+  async navigation(): Promise<{ projects: NavProject[] }> {
+    const { projects } = await this.#request<{ projects: NavProject[] }>("GET", "/v1/navigation");
+    return { projects: withWaitingFor(projects) };
   }
 
   listPullRequests(taskId: string): Promise<{ pullRequests: PullRequest[] }> {
@@ -413,6 +433,15 @@ export class ApiClient {
     const { live, ...rest } = params;
     return `${this.#baseUrl}/v1/events/stream${qs({ ...rest, ...(live ? { live: 1 } : {}), key: this.#apiKey })}`;
   }
+}
+
+/**
+ * A cost as the API reports it, or null when it is not known. Zero means
+ * the agent reported none (a model behind a proxy with no prices), not that
+ * the work was free — so it is shown as "not reported", never as $0.00.
+ */
+export function reportedCost(usd: number): number | null {
+  return usd > 0 ? usd : null;
 }
 
 export interface Tokens {

@@ -39,6 +39,7 @@ export {
   workingRoles,
   currentRun,
   navKey,
+  waitingWords,
 } from "./util/navModel.ts";
 export type {
   NavProject,

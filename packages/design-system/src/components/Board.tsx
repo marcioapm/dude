@@ -8,7 +8,7 @@ import { statusSpec } from "../tokens/status.ts";
 import { sumTriage } from "../tokens/triage.ts";
 import { formatDuration } from "../util/format.ts";
 import { toMs, useNow } from "../util/useNow.ts";
-import { navKey, workingRoles, type NavEpic, type NavProject, type NavRef, type NavRow, type NavSession } from "../util/navModel.ts";
+import { navKey, waitingWords, workingRoles, type NavEpic, type NavProject, type NavRef, type NavRow, type NavSession } from "../util/navModel.ts";
 import {
   BOARD_COLUMN_KINDS,
   BOARD_COLUMN_SPECS,
@@ -449,7 +449,7 @@ function BoardCardView({ card, now, showEpic, selected, tabIndex, onFocus, onKey
 
 function AskLine({ card }: { readonly card: BoardCard }) {
   const s = card.asking;
-  const text = s ? (s.activity ?? "is waiting for you") : card.task.status === "awaiting_confirmation" ? "plan needs your confirmation" : "waiting for you";
+  const text = s ? (s.activity ?? "is waiting for you") : waitingWords(card.task);
   return (
     <span className={styles["ask"]} title={text}>
       {s ? <AgentAvatar role={s.role} size="xs" className={styles["asker"]} /> : <Icon name="question" size={12} className={styles["askGlyph"]} />}

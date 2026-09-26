@@ -252,6 +252,25 @@ describe("text on row states", () => {
   });
 });
 
+describe("sidebar muted ink on its washes (light was 3.95:1)", () => {
+  test("muted clears 4.5:1 on the hover and active washes over the canvas", () => {
+    // The project name, a finished session's title and the search field's
+    // "/" hint are muted, on a hovered or selected row or the search wash.
+    for (const mode of MODES) {
+      const c = themeColors[mode];
+      for (const wash of [c.hoverWash, c.activeWash]) expect(contrast(c.textMuted, over(wash, c.canvas)), `${mode} on ${wash}`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});
+
+describe("badge labels on their own tint", () => {
+  test("every tone fg clears 4.5:1 on its tone bg (a Completed or Answered badge)", () => {
+    for (const mode of MODES) {
+      for (const t of TONE_NAMES) expect(contrast(tones[mode][t].fg, tones[mode][t].bg), `${mode} ${t}`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});
+
 describe("disabled filled button", () => {
   test("its secondary label clears 4.5:1 on the active wash over surface and chrome", () => {
     for (const mode of MODES) {

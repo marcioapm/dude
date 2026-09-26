@@ -275,8 +275,8 @@
   --ds-color-border-strong: #a3a5a7;
   --ds-color-text-strong: #101213;
   --ds-color-text-primary: #313335;
-  --ds-color-text-secondary: #555758;
-  --ds-color-text-muted: #6d6f71;
+  --ds-color-text-secondary: #515354;
+  --ds-color-text-muted: #626365;
   --ds-color-text-disabled: #919294;
   --ds-color-text-inverse: #ffffff;
   --ds-color-accent: #166daf;
@@ -297,7 +297,7 @@
   --ds-color-scrim: rgba(49, 51, 53, 0.4);
   --ds-color-shadow-color: rgba(49, 51, 53, 0.12);
   --ds-color-shadow-color-strong: rgba(49, 51, 53, 0.22);
-  --ds-color-live: #128755;
+  --ds-color-live: #06786c;
   --ds-tone-neutral-fg: #50565c;
   --ds-tone-neutral-bg: #e5ecf3;
   --ds-tone-neutral-border: #c5cbd2;
@@ -316,7 +316,7 @@
   --ds-tone-attention-solid: #efa810;
   --ds-tone-attention-on-solid: #000000;
   --ds-tone-attention-mark: #bf7c15;
-  --ds-tone-success-fg: #128755;
+  --ds-tone-success-fg: #06786c;
   --ds-tone-success-bg: #d9f3e2;
   --ds-tone-success-border: #98ccad;
   --ds-tone-success-solid: #02985f;
@@ -411,8 +411,8 @@
     --ds-color-border-strong: #a3a5a7;
     --ds-color-text-strong: #101213;
     --ds-color-text-primary: #313335;
-    --ds-color-text-secondary: #555758;
-    --ds-color-text-muted: #6d6f71;
+    --ds-color-text-secondary: #515354;
+    --ds-color-text-muted: #626365;
     --ds-color-text-disabled: #919294;
     --ds-color-text-inverse: #ffffff;
     --ds-color-accent: #166daf;
@@ -433,7 +433,7 @@
     --ds-color-scrim: rgba(49, 51, 53, 0.4);
     --ds-color-shadow-color: rgba(49, 51, 53, 0.12);
     --ds-color-shadow-color-strong: rgba(49, 51, 53, 0.22);
-    --ds-color-live: #128755;
+    --ds-color-live: #06786c;
     --ds-tone-neutral-fg: #50565c;
     --ds-tone-neutral-bg: #e5ecf3;
     --ds-tone-neutral-border: #c5cbd2;
@@ -452,7 +452,7 @@
     --ds-tone-attention-solid: #efa810;
     --ds-tone-attention-on-solid: #000000;
     --ds-tone-attention-mark: #bf7c15;
-    --ds-tone-success-fg: #128755;
+    --ds-tone-success-fg: #06786c;
     --ds-tone-success-bg: #d9f3e2;
     --ds-tone-success-border: #98ccad;
     --ds-tone-success-solid: #02985f;

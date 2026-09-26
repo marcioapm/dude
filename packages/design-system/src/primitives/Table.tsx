@@ -12,6 +12,9 @@ import styles from "./Table.module.css";
  * any row-virtualiser works).
  *
  * Numbers: right-align and set `mono` on Td. The table sets tabular-nums.
+ *
+ * Cells truncate with an ellipsis. A cell that must be read whole takes
+ * `wrap` (more lines) or `fit` (one line, as wide as it needs).
  */
 
 export type TableDensity = "compact" | "default" | "comfortable";
@@ -135,10 +138,17 @@ export interface TdProps extends TdHTMLAttributes<HTMLTableCellElement> {
   readonly muted?: boolean | undefined;
   /** Allow wrapping instead of truncating. */
   readonly wrap?: boolean | undefined;
+  /**
+   * One line, never truncated: the column is at least as wide as this
+   * cell's text and the other columns give way. For a short label column
+   * ("Review · correctness") beside numbers. Cells truncate by default,
+   * which shares the width evenly whatever the content.
+   */
+  readonly fit?: boolean | undefined;
   readonly children?: ReactNode;
 }
 
-export function Td({ align = "left", mono, muted, wrap, className, children, ...rest }: TdProps) {
+export function Td({ align = "left", mono, muted, wrap, fit, className, children, ...rest }: TdProps) {
   return (
     <td
       className={cx(
@@ -148,6 +158,7 @@ export function Td({ align = "left", mono, muted, wrap, className, children, ...
         mono && styles["mono"],
         muted && styles["muted"],
         wrap && styles["tdWrap"],
+        fit && styles["tdFit"],
         className,
       )}
       {...rest}

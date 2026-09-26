@@ -4,7 +4,12 @@ import { countFindings, sortFindings } from "../src/components/FindingRow.tsx";
 import { elideMiddle } from "../src/components/Breadcrumb.tsx";
 import { textareaHeight } from "../src/primitives/Textarea.tsx";
 import { chain, focusIsFree, isContextMenuKey, rowMenuOpeners } from "../src/primitives/RowMenu.tsx";
-import type { NavProject } from "../src/util/navModel.ts";
+import { formatDuration } from "../src/util/format.ts";
+import { MetricTile } from "../src/components/MetricTile.tsx";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { attentionItems, type NavProject } from "../src/util/navModel.ts";
+import { closeAutoFocus, focusedElement, returnFocus } from "../src/util/focusReturn.ts";
 
 describe("textareaHeight", () => {
   test("never below `rows` lines", () => {
@@ -149,5 +154,97 @@ describe("chain", () => {
     )(null);
     chain(undefined, () => order.push("alone"))(null);
     expect(order).toEqual(["theirs", "ours", "alone"]);
+  });
+});
+
+describe("attentionItems", () => {
+  const project: NavProject = {
+    id: "p",
+    name: "p",
+    epics: [
+      {
+        id: "e",
+        title: "E",
+        tasks: [
+          { id: "new", title: "new", status: "awaiting_input", statusSince: "2026-09-26T12:00:00Z" },
+          { id: "busy", title: "busy", status: "running" },
+          { id: "unknown", title: "unknown", status: "awaiting_input" },
+        ],
+      },
+    ],
+    tasks: [
+      { id: "old", title: "old", status: "awaiting_input", statusSince: "2026-09-20T12:00:00Z" },
+      { id: "mid", title: "mid", status: "awaiting_input", statusSince: Date.parse("2026-09-24T12:00:00Z") },
+      { id: "unknown2", title: "unknown 2", status: "awaiting_input" },
+    ],
+  };
+  test("oldest wait first, as the inbox lists them; unknown waits last, in tree order", () => {
+    expect(attentionItems([project]).map((it) => it.task.id)).toEqual(["old", "mid", "new", "unknown", "unknown2"]);
+  });
+});
+
+describe("focus return after a dialog or drawer closes", () => {
+  const fakeEl = (isConnected: boolean) => {
+    const el = { isConnected, focused: 0, focus: () => (el.focused += 1) };
+    return el;
+  };
+  test("remembers the focused element, not the body", () => {
+    const body = {} as Element;
+    const button = {} as Element;
+    expect(focusedElement({ activeElement: button, body } as unknown as Document)).toBe(button);
+    expect(focusedElement({ activeElement: body, body } as unknown as Document)).toBeNull();
+    expect(focusedElement(undefined)).toBeNull();
+  });
+  test("focuses it again while it is on the page", () => {
+    const el = fakeEl(true);
+    expect(returnFocus(el as unknown as Element)).toBe(true);
+    expect(el.focused).toBe(1);
+  });
+  test("leaves a removed element alone, so the caller can fall back", () => {
+    const el = fakeEl(false);
+    expect(returnFocus(el as unknown as Element)).toBe(false);
+    expect(el.focused).toBe(0);
+    expect(returnFocus(null)).toBe(false);
+  });
+  // Dialog's onCloseAutoFocus: Escape used to leave focus on <body>.
+  const closeEvent = () => {
+    const e = { defaultPrevented: false, preventDefault: () => (e.defaultPrevented = true) };
+    return e as unknown as Event;
+  };
+  test("dialog close returns focus to the opener and skips Radix's fallback", () => {
+    const el = fakeEl(true);
+    const e = closeEvent();
+    closeAutoFocus(() => el as unknown as Element)(e);
+    expect(el.focused).toBe(1);
+    expect(e.defaultPrevented).toBe(true);
+  });
+  test("dialog close leaves focus to a caller that places it", () => {
+    const el = fakeEl(true);
+    const e = closeEvent();
+    closeAutoFocus(() => el as unknown as Element, (ev) => ev.preventDefault())(e);
+    expect(el.focused).toBe(0);
+  });
+  test("dialog close falls back to Radix when the opener is gone", () => {
+    const e = closeEvent();
+    closeAutoFocus(() => fakeEl(false) as unknown as Element)(e);
+    expect(e.defaultPrevented).toBe(false);
+  });
+});
+
+describe("formatDuration", () => {
+  test("zero is 0s, not a millisecond reading", () => {
+    expect(formatDuration(0)).toBe("0s");
+    expect(formatDuration(0, { style: "long" })).toBe("0 sec");
+  });
+  test("sub-second values stay in milliseconds, never rounding to 0ms or 1000ms", () => {
+    expect(formatDuration(0.2)).toBe("<1ms");
+    expect(formatDuration(420)).toBe("420ms");
+    expect(formatDuration(999.7)).toBe("1.0s");
+    expect(formatDuration(42_100)).toBe("42s");
+  });
+  test("a MetricTile in ms shows zero as 0s", () => {
+    const h = renderToStaticMarkup(createElement(MetricTile, { label: "Wait", value: 0, unit: "ms" }));
+    expect(h).toContain(">0s<");
+    expect(h).not.toContain("0ms");
   });
 });

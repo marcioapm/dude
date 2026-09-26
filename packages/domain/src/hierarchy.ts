@@ -100,6 +100,17 @@ export const findingSeveritySchema = z.enum(["blocking", "high", "medium", "low"
  * ones every delivery runs; others join when a change touches their paths.
  */
 export const REVIEWER_CATEGORIES = ["correctness", "security", "database", "api", "frontend", "performance"] as const;
+export type ReviewerCategory = (typeof REVIEWER_CATEGORIES)[number];
+
+/** A reviewer flavour as a person reads it. */
+export const REVIEWER_CATEGORY_LABEL: Record<ReviewerCategory, string> = {
+  correctness: "Correctness",
+  security: "Security",
+  database: "Database",
+  api: "API",
+  frontend: "Frontend",
+  performance: "Performance",
+};
 
 /**
  * How a project's work is delivered, over the factory's defaults. Each field
@@ -222,6 +233,21 @@ export const taskSchema = z.object({
   updatedAt: z.string().datetime({ offset: true }),
 });
 export type Task = z.infer<typeof taskSchema>;
+
+/**
+ * The delivery workflow stopping to ask for a person (a `question.asked`
+ * of kind "escalation"): why, in the workflow's word — "stuck",
+ * "no_changes", "implement_failed", … — and what it knew. Terminal: the
+ * workflow does not go on by itself. A task carries its open one while it
+ * waits (`GET /v1/tasks/:id`, the navigation tree).
+ */
+export const escalationSchema = z.object({
+  reason: z.string(),
+  /** Per reason: `runId` and `error` for a phase that failed, `findingIds`, `iterations`, PR counts. */
+  detail: z.record(z.string(), z.unknown()).nullable().default(null),
+  at: z.string(),
+});
+export type Escalation = z.infer<typeof escalationSchema>;
 
 // ---------------------------------------------------------------------------
 // Run / Session

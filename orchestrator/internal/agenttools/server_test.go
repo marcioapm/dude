@@ -119,6 +119,16 @@ func TestAnImplementerRecordsWorkItFoundAndSeesIt(t *testing.T) {
 		}
 	}
 
+	// A list is structured content as an object, which MCP requires of it:
+	// strict clients (OpenCode's) refuse an array.
+	res, err = cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "list_repositories", Arguments: map[string]any{}})
+	if err != nil || res.IsError {
+		t.Fatalf("list_repositories: %v %+v", err, res)
+	}
+	if raw, _ := json.Marshal(res.StructuredContent); !strings.HasPrefix(string(raw), `{"items":[`) {
+		t.Errorf("list_repositories' structured content: %s", raw)
+	}
+
 	// A bad request is the agent's to fix, said plainly.
 	res, err = cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "create_task",
 		Arguments: map[string]any{"title": "x", "goal": "y", "epic": "no such epic"}})

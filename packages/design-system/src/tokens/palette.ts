@@ -118,16 +118,23 @@ const DARK_L: Record<ToneName, { fg: number; bg: number; border: number; solid: 
 };
 
 /**
- * Light-mode fg lightness was chosen by search: [0.40, 0.49, 0.55, 0.40] is
+ * Light-mode fg lightness was chosen by search: [0.40, 0.49, 0.515, 0.40] is
  * the assignment that clears all-pairs CVD ΔE >= 8 and normal ΔE >= 15 on
- * white while keeping every fg >= 4.5:1. Do not nudge these by eye.
+ * white while keeping every fg >= 4.5:1 on white and on its own tint (a
+ * badge's label on its bg). Success at 0.55 missed the tint (3.9:1), and
+ * darkening it at hue 158 pulls it towards attention for deutans, so its
+ * light fg also turns to hue 182.5 (`LIGHT_FG_HUE`). Do not nudge these by eye.
  */
 const LIGHT_L: Record<ToneName, { fg: number; bg: number; border: number; solid: number }> = {
   neutral: { fg: 0.45, bg: 0.94, border: 0.84, solid: 0.55 },
   info: { fg: 0.4, bg: 0.94, border: 0.8, solid: 0.55 },
   attention: { fg: 0.49, bg: 0.94, border: 0.78, solid: 0.78 },
-  success: { fg: 0.55, bg: 0.94, border: 0.8, solid: 0.6 },
+  success: { fg: 0.515, bg: 0.94, border: 0.8, solid: 0.6 },
   danger: { fg: 0.4, bg: 0.95, border: 0.82, solid: 0.58 },
+};
+/** Light-mode fg hue where it differs from the tone's; see `LIGHT_L`. */
+const LIGHT_FG_HUE: Partial<Record<ToneName, number>> = {
+  success: 182.5,
 };
 
 /**
@@ -154,7 +161,7 @@ function tone(name: ToneName, mode: "light" | "dark"): ToneInstance {
   const solid: Oklch = oklch(L.solid, name === "neutral" ? chroma : chroma, hue);
   // Text on the solid fill: black on bright fills, white on deep fills.
   const onSolid = L.solid >= 0.68 ? black : white;
-  const fg = toHex(oklch(L.fg, chroma, hue));
+  const fg = toHex(oklch(L.fg, chroma, mode === "light" ? (LIGHT_FG_HUE[name] ?? hue) : hue));
   const lm = LIGHT_MARK[name];
   return {
     fg,

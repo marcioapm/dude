@@ -153,9 +153,23 @@ export interface NoticeTurn {
   at: string;
 }
 
+/**
+ * How the Run ended, when it did not simply finish: it failed (and why, as
+ * the orchestrator recorded it), or a person aborted it. A finished Run
+ * needs no line of its own — its header says so — but these explain the
+ * silence after the last turn, which may otherwise say it was waiting.
+ */
+export interface EndedTurn {
+  kind: "ended";
+  id: string;
+  outcome: "failed" | "aborted";
+  text: string;
+  at: string;
+}
+
 export type Turn =
   | ToolTurn | MessageTurn | HumanTurn | ThoughtTurn | PromptTurn | UsageTurn | QuestionTurn | EventTurn | ProgressTurn
-  | RepositoryRequestTurn | NoticeTurn;
+  | RepositoryRequestTurn | NoticeTurn | EndedTurn;
 
 /** Why dude paused a Run itself (Run.dudePause), as the transcript and the composer say it. */
 export type DudePause = NonNullable<Run["dudePause"]>;
@@ -489,6 +503,20 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           state.activity = null;
           state.activeTool = null;
         }
+        break;
+      }
+
+      case EventTypes.RunFailed:
+      case EventTypes.RunAborted: {
+        const failed = event.eventType === EventTypes.RunFailed;
+        const why = String((failed ? payload.error : payload.reason) ?? "").trim();
+        turns.push({
+          kind: "ended", id: event.eventId, outcome: failed ? "failed" : "aborted",
+          text: failed ? (why ? `Failed: ${why}` : "Failed.") : why ? `Aborted by a person: ${why}` : "Aborted by a person.",
+          at: event.occurredAt,
+        });
+        state.activity = null;
+        state.activeTool = null;
         break;
       }
 
