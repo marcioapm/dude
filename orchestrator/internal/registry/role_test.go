@@ -2,9 +2,12 @@ package registry
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -14,10 +17,12 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/ecr"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
 
 const role = "arn:aws:iam::123456789012:role/dude-ecr-pull"
@@ -75,10 +80,17 @@ func (f *fakeSTS) AssumeRole(_ context.Context, in *sts.AssumeRoleInput, _ ...fu
 	f.calls = append(f.calls, aws.ToString(in.RoleArn))
 	return &sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
 		AccessKeyId:     aws.String("ASIAROLE" + string(rune('0'+len(f.calls)))),
-		SecretAccessKey: aws.String("role-secret"), SessionToken: aws.String("role-session"),
+		SecretAccessKey: aws.String(roleSecret), SessionToken: aws.String(roleSession),
 		Expiration: aws.Time(time.Now().Add(f.ttl)),
 	}}, nil
 }
+
+// The identities the fake ECR knows: the host's long-lived key, and any
+// key fakeSTS issues, with its session token.
+const (
+	hostKey, hostSecret     = "AKIAHOST", "host-secret"
+	roleSecret, roleSession = "role-secret", "role-session"
+)
 
 func (f *fakeSTS) assumed() []string {
 	f.mu.Lock()
@@ -86,36 +98,122 @@ func (f *fakeSTS) assumed() []string {
 	return append([]string(nil), f.calls...)
 }
 
-var signedBy = regexp.MustCompile(`Credential=([A-Z0-9]+)/`)
+var sigv4Auth = regexp.MustCompile(`^AWS4-HMAC-SHA256 Credential=([A-Z0-9]+)/[0-9]{8}/([a-z0-9-]+)/([a-z]+)/aws4_request, SignedHeaders=([a-z0-9;-]+), Signature=[0-9a-f]{64}$`)
 
-// ecrServer is ECR's API over HTTP, for a real *ecr.Client: it records the
-// access key that signed each GetAuthorizationToken and answers with a
-// 12-hour token.
+// verifySigV4 is what ECR checks of a request: the key is one it knows,
+// the session token is that key's (none for a long-lived key), and the
+// signature is the key's secret over the request as received, body
+// included. Returns the access key.
+func verifySigV4(r *http.Request, body []byte) (string, error) {
+	auth := r.Header.Get("Authorization")
+	m := sigv4Auth.FindStringSubmatch(auth)
+	if m == nil {
+		return "", errors.New("not SigV4")
+	}
+	key, region, service, signed := m[1], m[2], m[3], strings.Split(m[4], ";")
+	var creds aws.Credentials
+	switch {
+	case key == hostKey:
+		creds = aws.Credentials{AccessKeyID: key, SecretAccessKey: hostSecret}
+	case strings.HasPrefix(key, "ASIAROLE"):
+		creds = aws.Credentials{AccessKeyID: key, SecretAccessKey: roleSecret, SessionToken: roleSession}
+	default:
+		return "", errors.New("unknown access key")
+	}
+	if r.Header.Get("X-Amz-Security-Token") != creds.SessionToken {
+		return "", errors.New("security token does not match the access key")
+	}
+	at, err := time.Parse("20060102T150405Z", r.Header.Get("X-Amz-Date"))
+	if err != nil {
+		return "", err
+	}
+	// Re-signed with only the headers the client signed: its transport adds
+	// others (Accept-Encoding) after signing.
+	req := r.Clone(r.Context())
+	req.URL.Scheme, req.URL.Host = "http", r.Host
+	req.Header = http.Header{}
+	for _, h := range signed {
+		if h != "host" && h != "x-amz-date" && h != "x-amz-security-token" {
+			req.Header[http.CanonicalHeaderKey(h)] = r.Header.Values(h)
+		}
+	}
+	sum := sha256.Sum256(body)
+	if err := v4.NewSigner().SignHTTP(r.Context(), creds, req, hex.EncodeToString(sum[:]), service, region, at); err != nil {
+		return "", err
+	}
+	if req.Header.Get("Authorization") != auth {
+		return "", errors.New("signature does not match")
+	}
+	return key, nil
+}
+
+// ecrServer is ECR's API over HTTP, for a real *ecr.Client signing as the
+// host (hostKey): it verifies each GetAuthorizationToken's signature and
+// session token (403 otherwise), records the access key that signed it,
+// and answers with a 12-hour token.
 func ecrServer(t *testing.T) (*ecr.Client, func() []string) {
 	var mu sync.Mutex
 	var keys []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		m := signedBy.FindStringSubmatch(r.Header.Get("Authorization"))
-		if m == nil || !strings.HasSuffix(r.Header.Get("X-Amz-Target"), ".GetAuthorizationToken") {
-			http.Error(w, "unsigned or unexpected", http.StatusBadRequest)
+		if !strings.HasSuffix(r.Header.Get("X-Amz-Target"), ".GetAuthorizationToken") {
+			http.Error(w, "unexpected", http.StatusBadRequest)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		key, err := verifySigV4(r, body)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/x-amz-json-1.1")
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]string{"__type": "UnrecognizedClientException", "message": err.Error()})
 			return
 		}
 		mu.Lock()
-		keys = append(keys, m[1])
+		keys = append(keys, key)
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/x-amz-json-1.1")
 		_ = json.NewEncoder(w).Encode(map[string]any{"authorizationData": []map[string]any{{
-			"authorizationToken": base64.StdEncoding.EncodeToString([]byte("AWS:pw-" + m[1])),
+			"authorizationToken": base64.StdEncoding.EncodeToString([]byte("AWS:pw-" + key)),
 			"expiresAt":          time.Now().Add(12 * time.Hour).Unix(),
 		}}})
 	}))
 	t.Cleanup(srv.Close)
 	client := ecr.New(ecr.Options{Region: "eu-west-1", BaseEndpoint: aws.String(srv.URL),
-		Credentials: credentials.NewStaticCredentialsProvider("AKIAHOST", "host-secret", "")})
+		Credentials: credentials.NewStaticCredentialsProvider(hostKey, hostSecret, "")})
 	return client, func() []string {
 		mu.Lock()
 		defer mu.Unlock()
 		return append([]string(nil), keys...)
+	}
+}
+
+// The fake ECR takes only a request signed by the identity it claims: the
+// right secret, and the session token of that identity alone.
+func TestTheFakeECRRejectsAnotherIdentitysSignature(t *testing.T) {
+	client, signers := ecrServer(t)
+	// Each key ID signs with one secret only: the SDK's signer caches the
+	// signing key it derives by access key ID, not by secret.
+	for name, c := range map[string]aws.Credentials{
+		"a role key signed with the host's secret": {AccessKeyID: "ASIAROLE7", SecretAccessKey: hostSecret, SessionToken: roleSession},
+		"a role key without its session token":     {AccessKeyID: "ASIAROLE1", SecretAccessKey: roleSecret},
+		"a role key with another session token":    {AccessKeyID: "ASIAROLE1", SecretAccessKey: roleSecret, SessionToken: "other"},
+		"the host key with a session token":        {AccessKeyID: hostKey, SecretAccessKey: hostSecret, SessionToken: roleSession},
+	} {
+		_, err := client.GetAuthorizationToken(context.Background(), &ecr.GetAuthorizationTokenInput{}, func(o *ecr.Options) {
+			o.Credentials = credentials.StaticCredentialsProvider{Value: c}
+		})
+		var re *smithyhttp.ResponseError
+		if !errors.As(err, &re) || re.HTTPStatusCode() != http.StatusForbidden {
+			t.Errorf("%s: err = %v, want a 403", name, err)
+		}
+	}
+	if got := signers(); len(got) != 0 {
+		t.Fatalf("accepted %v", got)
+	}
+	_, err := client.GetAuthorizationToken(context.Background(), &ecr.GetAuthorizationTokenInput{}, func(o *ecr.Options) {
+		o.Credentials = credentials.NewStaticCredentialsProvider("ASIAROLE1", roleSecret, roleSession)
+	})
+	if _, hostErr := client.GetAuthorizationToken(context.Background(), &ecr.GetAuthorizationTokenInput{}); err != nil || hostErr != nil {
+		t.Fatalf("the role's and the host's own credentials: %v, %v", err, hostErr)
 	}
 }
 
