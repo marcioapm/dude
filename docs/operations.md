@@ -14,21 +14,9 @@ A GitHub Release per `v*` tag holds:
 | `runtime-image.txt` | One line, `ghcr.io/marcioapm/dude-runtime@sha256:…`: the agent image built from the same commit, for arm64 and amd64 |
 | `SHA256SUMS` | `sha256sum` output over the tarballs and `runtime-image.txt` |
 
-Each tarball, unpacked into a prefix:
-
-```
-bin/dude-orchestrator     the orchestrator (Go, static)
-bin/dude-backend          the backend: public API and the web app (Bun, compiled; needs glibc)
-bin/dude-migrate          the migration runner (Bun, compiled; needs glibc)
-bin/dude                  the agent CLI; the runtime image carries its own copy
-share/dude/web/           the built web app, for DUDE_WEB_DIR
-share/dude/migrations/    the SQL dude-migrate applies
-```
-
-Every binary prints its version with `--version`. `dude-migrate` finds
-`../share/dude/migrations` relative to its own resolved path, so a symlink
-to it from elsewhere still works. The tarballs are reproducible: a rebuild
-of the same commit gives the same bytes.
+Unpack the tarball into a prefix ([layout](../README.md#releases)).
+`dude-migrate` resolves its migrations relative to its own path, so a
+symlink to it from elsewhere still works.
 
 Agents run the image in `runtime-image.txt`: set `DUDE_AGENT_IMAGE` to it.
 A project's own `runtimeImage` overrides it for that project.
