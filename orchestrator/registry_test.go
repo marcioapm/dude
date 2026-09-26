@@ -19,6 +19,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ecr"
 	"github.com/aws/aws-sdk-go-v2/service/ecr/types"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
+	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
@@ -39,6 +41,9 @@ type fakeECR struct {
 	clock  time.Time
 	minted []string
 	fail   error
+	// signers is the access key of the credentials each call was given
+	// (options' Credentials), "" for the client's own.
+	signers []string
 }
 
 func (f *fakeECR) now() time.Time {
@@ -65,12 +70,31 @@ func (f *fakeECR) tokens() []string {
 	return append([]string(nil), f.minted...)
 }
 
-func (f *fakeECR) GetAuthorizationToken(context.Context, *ecr.GetAuthorizationTokenInput, ...func(*ecr.Options)) (*ecr.GetAuthorizationTokenOutput, error) {
+func (f *fakeECR) signedBy() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.signers...)
+}
+
+func (f *fakeECR) GetAuthorizationToken(ctx context.Context, _ *ecr.GetAuthorizationTokenInput, optFns ...func(*ecr.Options)) (*ecr.GetAuthorizationTokenOutput, error) {
+	var o ecr.Options
+	for _, fn := range optFns {
+		fn(&o)
+	}
+	var signer string
+	if o.Credentials != nil {
+		c, err := o.Credentials.Retrieve(ctx)
+		if err != nil {
+			return nil, err
+		}
+		signer = c.AccessKeyID
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.fail != nil {
 		return nil, f.fail
 	}
+	f.signers = append(f.signers, signer)
 	password := fmt.Sprintf("ecr-password-%d-%d", len(f.minted)+1, f.clock.UnixNano())
 	f.minted = append(f.minted, password)
 	return &ecr.GetAuthorizationTokenOutput{AuthorizationData: []types.AuthorizationData{{
@@ -404,6 +428,94 @@ func TestAnECROutageDelaysARunAndDoesNotFailIt(t *testing.T) {
 	api.setFail(nil)
 	mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE task_id = $1`, wi)
 	w.until("the submit", func() bool { return len(w.lux.Runs()) == 1 })
+}
+
+const pullRole = "arn:aws:iam::123456789012:role/dude-ecr-pull"
+
+// fakeSTS is STS's AssumeRole for pullRole: credentials numbered by call,
+// valid an hour of wall-clock time (the SDK's cache reads the real clock).
+type fakeSTS struct {
+	mu    sync.Mutex
+	calls int
+	fail  error
+}
+
+func (f *fakeSTS) setFail(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fail = err
+}
+
+func (f *fakeSTS) AssumeRole(_ context.Context, in *sts.AssumeRoleInput, _ ...func(*sts.Options)) (*sts.AssumeRoleOutput, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.fail != nil {
+		return nil, f.fail
+	}
+	if aws.ToString(in.RoleArn) != pullRole {
+		return nil, fmt.Errorf("AccessDenied: no role %s", aws.ToString(in.RoleArn))
+	}
+	f.calls++
+	return &sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
+		AccessKeyId:     aws.String(fmt.Sprintf("ASIAPULL%d", f.calls)),
+		SecretAccessKey: aws.String("pull-secret"), SessionToken: aws.String("pull-session"),
+		Expiration: aws.Time(time.Now().Add(time.Hour)),
+	}}, nil
+}
+
+// An AssumeRole that fails is an ECR outage: a paused Run's resume waits,
+// still paused, and goes ahead with a token minted as the role once STS
+// answers. No token is minted with the host's credentials meanwhile.
+func TestAFailedAssumeRoleDelaysAResumeAndDoesNotFailIt(t *testing.T) {
+	w := newWorld(t)
+	api := w.withECR()
+	roles := &fakeSTS{}
+	w.syncer.Registry = registry.NewECRWithRole(ecrRegistry, pullRole, api, roles, api.now)
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	wi := w.task()
+	w.deliver(wi)
+	var runID string
+	w.until("the agent to be working", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND status = 'running'`, wi).Scan(&runID)
+		return runID != ""
+	})
+	w.call("/internal/runs/"+runID+"/pause", map[string]any{})
+	w.until("lux to stop it", func() bool { return w.lux.Runs()[0].State == "stopped" })
+
+	// Past the token's refresh point, with the role's credentials gone
+	// (as if expired) and STS refusing.
+	api.advance(11 * time.Hour)
+	w.syncer.Registry = registry.NewECRWithRole(ecrRegistry, pullRole, api, roles, api.now)
+	roles.setFail(errors.New("AccessDenied: not authorized to perform sts:AssumeRole"))
+	w.call("/internal/runs/"+runID+"/resume", map[string]any{})
+	w.until("the resume to be held back", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND next_attempt_at IS NOT NULL`, runID) == 1
+	})
+	r := w.lux.Runs()[0]
+	if r.Resumed != 0 {
+		t.Fatalf("lux was asked to resume without a login (%d resumes)", r.Resumed)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND control = 'resume'`, runID); n != 1 {
+		t.Fatalf("the Run is no longer paused awaiting its resume")
+	}
+	if len(api.tokens()) != 1 {
+		t.Fatalf("ECR minted %d tokens while AssumeRole failed; want only the submit's", len(api.tokens()))
+	}
+
+	roles.setFail(nil)
+	mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE id = $1`, runID)
+	w.until("the resume", func() bool { return r.Resumed == 1 })
+	fresh, _ := secretValue(r.ResumeSecrets[0], "DUDE_REGISTRY_AUTH")
+	tokens := api.tokens()
+	if len(tokens) != 2 || fresh != "AWS:"+tokens[1] {
+		t.Fatalf("resumed with %q, ECR minted %d; want the second token", fresh, len(tokens))
+	}
+	if got := api.signedBy(); len(got) != 2 || got[0] != "ASIAPULL1" || got[1] != "ASIAPULL2" {
+		t.Errorf("tokens minted with %q; want each with the assumed role's credentials", got)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed'`, runID); n != 0 {
+		t.Errorf("the Run failed")
+	}
 }
 
 // The login's value reaches lux and nothing else: not the syncer's log
