@@ -24,6 +24,34 @@ overrides it for that project. [`images/runtime/Dockerfile`](../images/runtime/D
 is a starting point; it needs the release's `dude` CLI, which
 `scripts/runtime-image.sh` builds before a local `docker build`.
 
+### Private agent images
+
+lux logs its runners in to a registry per Run (lux's `docs/runspec.md`,
+"Private registries"). `DUDE_REGISTRY_AUTH` says where dude gets that
+login:
+
+- `none` (the default): no login; the image must be pullable as is.
+- `ecr`: `DUDE_AGENT_IMAGE` must be in ECR
+  (`<account>.dkr.ecr.<region>.amazonaws.com/…`), or the orchestrator
+  refuses to start. It calls `ecr:GetAuthorizationToken` through the AWS
+  default credential chain: on EC2, the instance role, which needs that
+  permission, and `ecr:BatchGetImage` plus `ecr:GetDownloadUrlForLayer` on
+  the repository for the runners' pull. A token lasts 12 hours; dude
+  reuses it until an hour before it expires.
+- `static`: `DUDE_REGISTRY` (a host, e.g. `ghcr.io`) and
+  `DUDE_REGISTRY_CREDENTIAL` (`user:password`), for GHCR and other
+  registries with long-lived tokens.
+
+The login goes to lux as the secret `DUDE_REGISTRY_AUTH`, on the Run's
+submit and again on every resume (lux keeps no secret), so a Run parked
+for days resumes with a new token. It is the runner's: it never enters the
+agent's container. dude neither logs nor stores it. Only images in that
+registry get it: a project whose `runtimeImage` is elsewhere pulls without.
+A Run is resumed with the login it was started with: one started without a
+login resumes without, and one whose login was for another registry fails
+its resume. If ECR cannot be reached, starts and resumes wait and are
+retried.
+
 ## Processes
 
 | Process | Runs as DB role | Listens on | Reachable from |
@@ -38,7 +66,9 @@ Neither keeps anything on local disk. Run one orchestrator: its loops claim
 work through the database, but only one has ever been run at a time.
 
 The orchestrator reaches out to `LUX_URL`, to GitHub's API
-(`https://api.github.com`, or the organization's stored `apiBaseUrl`), and
+(`https://api.github.com`, or the organization's stored `apiBaseUrl`), to
+ECR's API (`api.ecr.<region>.amazonaws.com`) and the instance metadata
+service with `DUDE_REGISTRY_AUTH=ecr`, and
 to the push services of browsers that asked for notifications. The backend
 reaches out to the orchestrator, and to GitHub's API when a person verifies
 a stored credential.
@@ -95,6 +125,10 @@ others can read.
 | `LUX_URL` | required | The lux control plane. |
 | `LUX_API_KEY` | required | A lux API key with the `run` scope. **Secret.** |
 | `DUDE_AGENT_IMAGE` | `localhost/dude-runtime:dev` | Image for agents when a project names none: the operator's own, pinned by digest. |
+| `DUDE_REGISTRY_AUTH` | `none` | How lux logs in to pull agent images: `none`, `ecr` or `static`. See [Private agent images](#private-agent-images). |
+| `DUDE_REGISTRY` | none | `static` only: the registry host, e.g. `ghcr.io`. |
+| `DUDE_REGISTRY_CREDENTIAL` | none | `static` only: `user:password` for `DUDE_REGISTRY`. **Secret.** |
+| `AWS_PROFILE`, other `AWS_*` | the instance role | `ecr` only: the AWS default credential chain. The region is always the image's registry's. |
 | `DUDE_OPENCODE_AUTH` | `~/.local/share/opencode/auth.json` | OpenCode's `auth.json`: a path to it, or its contents. Given to agents as a file secret. **Secret.** |
 | `DUDE_OPENCODE_CONFIG` | `~/.config/opencode/opencode.json` | OpenCode's config, path or contents; only its `provider` object is used. Its providers' `baseURL` hosts become agents' allowed egress. **Secret** if it holds keys. |
 | `DUDE_AGENT_EGRESS` | none | Comma-separated hosts agents may reach besides their model provider; `*` turns egress filtering off. With neither this nor a provider `baseURL`, egress is unrestricted. |
