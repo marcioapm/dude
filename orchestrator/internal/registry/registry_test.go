@@ -127,6 +127,45 @@ func TestBadRegistrySettingsRefuseToStart(t *testing.T) {
 	}
 }
 
+// A static registry lux's validRegistry (lux internal/spec/spec.go) would
+// refuse stops the orchestrator at startup; one it takes starts it.
+func TestAStaticRegistryIsCheckedAsLuxChecksIt(t *testing.T) {
+	for registry, ok := range map[string]bool{
+		"ghcr.io":                 true,
+		"registry.example:5000":   true,
+		"registry.example:1":      true,
+		"registry.example:65535":  true,
+		"10.0.0.5":                true,
+		"10.0.0.5:5000":           true,
+		"registry.example:0":      false,
+		"registry.example:65536":  false,
+		"registry.example:99999":  false,
+		"registry.example:05000":  false,
+		"registry.example:":       false,
+		"registry.example:+50":    false,
+		"127.0.0.1":               false,
+		"127.0.0.1:5000":          false,
+		"127.1.2.3":               false,
+		"0.0.0.0":                 false,
+		"0.0.0.0:5000":            false,
+		"169.254.169.254":         false,
+		"169.254.1.1:5000":        false,
+		"localhost":               false,
+		"registry.localhost:5000": false,
+		"GHCR.io":                 false,
+		"ghcr.io/acme":            false,
+	} {
+		_, err := FromEnv(context.Background(), env(map[string]string{"DUDE_REGISTRY_AUTH": "static",
+			"DUDE_REGISTRY": registry, "DUDE_REGISTRY_CREDENTIAL": "u:p"}), "agent:1")
+		if ok && err != nil {
+			t.Errorf("%q: refused: %v", registry, err)
+		}
+		if !ok && (err == nil || !strings.Contains(err.Error(), "DUDE_REGISTRY")) {
+			t.Errorf("%q: err = %v, want the orchestrator refused, naming DUDE_REGISTRY", registry, err)
+		}
+	}
+}
+
 func TestImageRegistryIsWherePodmanPullsFrom(t *testing.T) {
 	for ref, want := range map[string]string{
 		ecrHost + "/dude/agent:1":        ecrHost,
