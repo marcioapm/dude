@@ -45,8 +45,12 @@ interface Route {
   allowKeyInQuery?: boolean | undefined;
 }
 
+/** Answers a request no route matched, or returns null to leave it a 404. */
+export type Fallback = (request: Request, url: URL) => Promise<Response | null> | Response | null;
+
 export class Router {
   readonly #routes: Route[] = [];
+  #fallback: Fallback | null = null;
 
   #add(
     method: string,
@@ -82,6 +86,12 @@ export class Router {
     return this.#add(method, pattern, handler, { public: true });
   }
 
+  /** Runs, unauthenticated, only when no route matched. */
+  fallback(handler: Fallback): this {
+    this.#fallback = handler;
+    return this;
+  }
+
   async handle(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const segments = url.pathname.split("/").filter(Boolean);
@@ -114,6 +124,8 @@ export class Router {
 
         return await (route.handler as Handler)({ request, url, params, principal });
       }
+      const fallback = await this.#fallback?.(request, url);
+      if (fallback) return fallback;
       throw notFound(`no route for ${request.method} ${url.pathname}`);
     } catch (err) {
       return errorResponse(err);

@@ -46,3 +46,6 @@ __pycache__/
 
 # Gallery build output
 /packages/design-system/dist/
+
+# The runtime image's dude CLI, built by scripts/runtime-image.sh
+/images/runtime/bin/

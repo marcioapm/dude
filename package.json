@@ -13,7 +13,8 @@
     "typecheck": "bun run --filter '*' typecheck",
     "test:unit": "bun test",
     "migrate": "bun run apps/control-plane/src/db/migrate.ts",
-    "dev": "bun run --hot apps/control-plane/src/index.ts"
+    "dev": "bun run --hot apps/control-plane/src/index.ts",
+    "dist": "scripts/dist.sh"
   },
   "devDependencies": {
     "@types/bun": "latest",
