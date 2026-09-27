@@ -10,6 +10,11 @@
 //	DUDE_ORCHESTRATOR_LISTEN     internal API address (default 127.0.0.1:3100)
 //	LUX_URL, LUX_API_KEY         the lux control plane and a `run`-scoped key
 //	DUDE_AGENT_IMAGE             image for agents when a project names none
+//	DUDE_REGISTRY_AUTH           how lux logs in to pull agent images: none (default), static, or ecr
+//	                             (DUDE_AGENT_IMAGE's ECR registry, a token from the AWS default
+//	                             credential chain, e.g. the instance role, minted fresh for each start)
+//	DUDE_ECR_ROLE_ARN            ecr: a pull-only role to assume and mint tokens as (default: the host's credentials)
+//	DUDE_REGISTRY, DUDE_REGISTRY_CREDENTIAL  static: the registry host and its user:password
 //	DUDE_OPENCODE_AUTH/_CONFIG   OpenCode credentials (default: this machine's)
 //	DUDE_PR_RECONCILE            how often open PRs are re-read as a backstop to webhooks (default 15m)
 //	DUDE_PARK_AFTER/IDLE_AFTER   the grace before parking a Run waiting on a person, and the idle limit,
@@ -41,6 +46,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/notify"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
 	"github.com/marciomartins/dude/orchestrator/internal/prs"
+	"github.com/marciomartins/dude/orchestrator/internal/registry"
 	"github.com/marciomartins/dude/orchestrator/internal/version"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
@@ -71,6 +77,17 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("agent configuration: %w", err)
 	}
+	registryLogin, err := registry.FromEnv(ctx, os.Getenv, agent.DefaultImage)
+	if err != nil {
+		return fmt.Errorf("registry login: %w", err)
+	}
+	if registryLogin != nil {
+		attrs := []any{"mode", os.Getenv("DUDE_REGISTRY_AUTH"), "registry", registryLogin.Registry()}
+		if by := registry.MintedBy(registryLogin); by != "" {
+			attrs = append(attrs, "minted_by", by)
+		}
+		log.Info("agent images are pulled with a registry login", attrs...)
+	}
 	reconcileEvery, err := time.ParseDuration(env("DUDE_PR_RECONCILE", "15m"))
 	if err != nil {
 		return fmt.Errorf("DUDE_PR_RECONCILE: %w", err)
@@ -96,7 +113,7 @@ func run(log *slog.Logger) error {
 	luxClient := lux.New(require("LUX_URL"), require("LUX_API_KEY"))
 	syncer := &phases.Syncer{
 		DB: database, Lux: luxClient,
-		Forges: forges, Agent: agent, Log: log,
+		Forges: forges, Agent: agent, Registry: registryLogin, Log: log,
 		ParkAfter: parkAfter, IdleAfter: idleAfter,
 	}
 	defer syncer.Stop()

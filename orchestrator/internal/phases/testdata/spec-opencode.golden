@@ -1,0 +1,113 @@
+{
+  "name": "implement wi_1",
+  "labels": {
+    "dude.harness": "opencode",
+    "dude.model": "llm/impl",
+    "dude.org": "org_1",
+    "dude.phase": "implement",
+    "dude.run": "run_1",
+    "dude.task": "wi_1"
+  },
+  "image": {
+    "ref": "registry.example/dude/agent:1"
+  },
+  "workload": {
+    "adapter": "opencode",
+    "prompt": "Do the thing.",
+    "workdir": "/workspace",
+    "mcpServers": [
+      {
+        "name": "dude",
+        "service": "dude"
+      }
+    ],
+    "services": [
+      {
+        "name": "dude",
+        "url": "http://10.9.8.7:3120/mcp",
+        "headers": [
+          {
+            "name": "Authorization",
+            "secret": "DUDE_TOOLS_AUTH"
+          }
+        ],
+        "loopback": true
+      }
+    ]
+  },
+  "env": {
+    "CLICOLOR_FORCE": "1",
+    "FORCE_COLOR": "1",
+    "GIT_CONFIG_COUNT": "1",
+    "GIT_CONFIG_KEY_0": "color.ui",
+    "GIT_CONFIG_VALUE_0": "always",
+    "PY_COLORS": "1",
+    "TERM": "xterm-256color"
+  },
+  "secrets": [
+    {
+      "name": "GIT_TOKEN",
+      "value": "ghp_golden"
+    },
+    {
+      "name": "DUDE_TOOLS_AUTH",
+      "value": "Bearer tok_golden"
+    },
+    {
+      "name": "opencode_auth",
+      "value": "{\"llm\":{\"type\":\"api\",\"key\":\"sk-golden\"}}",
+      "as": "file",
+      "path": "/home/agent/.local/share/opencode/auth.json"
+    },
+    {
+      "name": "opencode_config",
+      "value": "{\"model\":\"llm/impl\",\"provider\":{\"llm\":{\"options\":{\"baseURL\":\"https://llm.example/v1\"}}}}",
+      "as": "file",
+      "path": "/home/agent/.config/opencode/opencode.json"
+    }
+  ],
+  "git": {
+    "repositories": [
+      {
+        "name": "api",
+        "url": "https://github.com/acme/api.git",
+        "ref": "main",
+        "credential": "GIT_TOKEN",
+        "path": "/workspace/repos/api"
+      },
+      {
+        "name": "web",
+        "url": "https://github.com/acme/web.git",
+        "ref": "abc123",
+        "credential": "GIT_TOKEN",
+        "path": "/workspace/repos/web",
+        "push": false
+      }
+    ],
+    "push": {
+      "branch": "dude/wi_1/run-run_1"
+    }
+  },
+  "volumes": [
+    {
+      "name": "workspace",
+      "path": "/workspace",
+      "kind": "state"
+    },
+    {
+      "name": "home",
+      "path": "/home/agent",
+      "kind": "state"
+    }
+  ],
+  "network": {
+    "egress": [
+      {
+        "host": "llm.example"
+      },
+      {
+        "cidr": "10.9.8.7/32"
+      }
+    ]
+  }
+}

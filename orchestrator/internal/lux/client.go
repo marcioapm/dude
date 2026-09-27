@@ -35,6 +35,13 @@ type Run struct {
 	SessionID string `json:"sessionId"`
 	// Where it ran, one per start; only filled in by Get.
 	Placements []Placement `json:"placements,omitempty"`
+	// The spec lux stored, without secret values; only filled in by Get.
+	Spec StoredSpec `json:"spec"`
+}
+
+// StoredSpec is the part of a Run's stored spec dude reads back.
+type StoredSpec struct {
+	Image Image `json:"image"`
 }
 
 // Placement is one start of a Run on a host.
@@ -107,6 +114,16 @@ type Spec struct {
 
 type Image struct {
 	Ref string `json:"ref"`
+	// Logins the runner uses to pull Ref. The secret each names is
+	// runner-only in lux: it never enters the container.
+	RegistryAuth []RegistryAuth `json:"registryAuth,omitempty"`
+}
+
+type RegistryAuth struct {
+	// A host with an optional port, lowercase, no scheme or path.
+	Registry string `json:"registry"`
+	// A secret holding user:password, or a bare token.
+	Secret string `json:"secret"`
 }
 
 type Workload struct {
