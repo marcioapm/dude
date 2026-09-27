@@ -91,7 +91,7 @@ A lux, the orchestrator, the backend and the web app.
 # 1. A lux to run agents on: two Podman hosts, a tenant and an API key
 (cd ~/git/lux/tests && uv run python run_tests.py --serve --detach \
     --image dude-runtime:dev)       # prints luxd_url and api_key
-docker build -t dude-runtime:dev images/runtime   # first, so --image can load it
+scripts/runtime-image.sh dude-runtime:dev     # first, so --image can load it
 
 # 2. The orchestrator: all background work, no users
 DATABASE_URL="postgres://dude_app:dude_app@localhost:5433/dude" \
@@ -167,6 +167,27 @@ endpoints dude calls, and signed webhook deliveries — so the suite needs no
 network, no containers and no token. `--lux` runs the same flows against a
 real lux (the latest `run_tests.py --serve` in lux's repository, or
 `DUDE_TEST_LUX_ENV`), so a drift between the stand-in and lux shows up.
+
+## Releases
+
+`VERSION=vX.Y.Z bun run dist` (`scripts/dist.sh`, needs Go, Bun and GNU
+tar) builds `dist/dude_<version>_linux_{arm64,amd64}.tar.gz` and
+`SHA256SUMS` over them. Each holds `bin/{dude-orchestrator,dude,dude-backend,dude-migrate}`
+and `share/dude/web`; unpack it into a prefix. `dude-migrate` carries every
+`migrations/*.sql` inside itself (`scripts/build-migrate.sh`). The Go
+binaries are static; the Bun ones are `bun build --compile` and need glibc. Every
+binary answers `--version`. The tarballs are reproducible: the same commit
+builds the same bytes.
+
+`.github/workflows/release.yml` runs on every `v*` tag. It builds the
+tarballs, smoke-tests the amd64 one (`scripts/smoke-release.sh`), and
+publishes the tarballs and `SHA256SUMS` as a GitHub Release. It builds no
+image: agents run an image the operator builds and hosts, for which
+`images/runtime` is an example (`scripts/runtime-image.sh [tag]` builds the
+`dude` CLI, then the image, locally).
+
+Deploying a release — its layout, every setting, the database roles and the
+order of an upgrade — is in [`docs/operations.md`](docs/operations.md).
 
 ## Status
 

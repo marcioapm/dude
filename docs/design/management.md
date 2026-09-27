@@ -57,7 +57,7 @@ Customer Portal › Settings
  Required reviewers   ☑ correctness ☑ security ☐ database ☐ api ☐ frontend ☐ performance
  Blocking severities  ☑ blocking ☑ high ☐ medium ☐ low ☐ note
  Review rounds  [3]   PR fix rounds [2]   ☑ Run the simplifier
- Runtime image  [ghcr.io/acme/runtime:1.4        ]  (empty = system default)
+ Runtime image  [registry.acme/runtime:1.4       ]  (empty = system default)
 ```
 Fields/validation: repo `name` `^[a-z0-9][a-z0-9-]*$`, unique in project; `url` non-empty; branch default `main`; trust as a checkbox "External (untrusted): no credentials, egress restricted". Agents: model from a `Select` with groups per harness (needs a model catalog endpoint; free text with `mono` until then), a `Badge tone="neutral"` reading *inherited from organization* when unset, with "Override" turning the row editable. Delivery: `requiredReviewers` min 1, severities min 1, rounds 1–20 / 0–20. Empty state for Repositories: "No repository yet — tasks can't open pull requests until one is added." Reuse: `Tabs`, `Table`, `Input`, `Select`, `Checkbox`, `Button`, `Badge`, `AgentAvatar`, `Dialog` (repo add/edit), `useToast`. New: **Textarea** (there is none; `Input` is single-line), a **FormRow** wrapper (label/hint/error for `Select`/`Checkbox` groups the way `Input` already does it), **RowMenu** (Radix DropdownMenu behind an `IconButton icon="more"`; the DS has no menu primitive).
 

@@ -7,31 +7,56 @@
  *
  *   bun run src/db/migrate.ts                  # apply pending migrations
  *   bun run src/db/migrate.ts --status         # list applied/pending
+ *
+ * Run from source, the files are the repository's migrations/. The release
+ * binary bin/dude-migrate (scripts/build-migrate.sh) carries them inside
+ * itself and reads nothing from disk.
  */
 
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { SQL } from "bun";
 import { createHash } from "node:crypto";
+import { version } from "../build.ts";
 
-const MIGRATIONS_DIR = join(import.meta.dir, "../../../../migrations");
+// Defined by scripts/build-migrate.sh, which embeds migrations/*.sql.
+declare const DUDE_EMBEDDED_MIGRATIONS: boolean | undefined;
+const embedded = typeof DUDE_EMBEDDED_MIGRATIONS === "boolean" && DUDE_EMBEDDED_MIGRATIONS;
+
+export const repoMigrationsDir = join(import.meta.dir, "../../../../migrations");
 
 export interface MigrationFile {
   version: string;
   name: string;
-  path: string;
+  /** The file's text. Decoded the same way from disk and from the binary, so its checksum is too. */
+  contents(): Promise<string>;
 }
 
-export async function listMigrationFiles(dir = MIGRATIONS_DIR): Promise<MigrationFile[]> {
-  const entries = await readdir(dir);
+function decode(bytes: Uint8Array): string {
+  return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("utf8");
+}
+
+function migrationFile(name: string, read: () => Promise<Uint8Array>): MigrationFile {
+  const version = name.split("_")[0];
+  if (!version) throw new Error(`Migration ${name} must start with a version prefix`);
+  return { version, name, contents: async () => decode(await read()) };
+}
+
+export async function listMigrationFiles(): Promise<MigrationFile[]> {
+  if (embedded) {
+    const files = Bun.embeddedFiles
+      .map((blob) => ({ blob, name: (blob as Blob & { name: string }).name }))
+      .filter((f) => f.name.endsWith(".sql"));
+    if (files.length === 0) throw new Error("this dude-migrate was built without its migrations");
+    return files
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+      .map((f) => migrationFile(f.name, async () => new Uint8Array(await f.blob.arrayBuffer())));
+  }
+  const entries = await readdir(repoMigrationsDir);
   return entries
     .filter((f) => f.endsWith(".sql"))
     .sort()
-    .map((f) => {
-      const version = f.split("_")[0];
-      if (!version) throw new Error(`Migration ${f} must start with a version prefix`);
-      return { version, name: f, path: join(dir, f) };
-    });
+    .map((f) => migrationFile(f, () => readFile(join(repoMigrationsDir, f))));
 }
 
 async function ensureMigrationsTable(sql: SQL): Promise<void> {
@@ -71,7 +96,7 @@ function checksum(contents: string): string {
 
 export async function migrate(
   databaseUrl: string,
-  opts: { dir?: string; log?: (msg: string) => void } = {},
+  opts: { log?: (msg: string) => void } = {},
 ): Promise<{ applied: string[] }> {
   const log = opts.log ?? console.log;
   const sql = new SQL(databaseUrl);
@@ -80,11 +105,11 @@ export async function migrate(
   try {
     await ensureMigrationsTable(sql);
     const already = await appliedVersions(sql);
-    const files = await listMigrationFiles(opts.dir);
+    const files = await listMigrationFiles();
     if (files.some((f) => !already.has(f.version))) await requireBypassRLS(sql);
 
     for (const file of files) {
-      const contents = await readFile(file.path, "utf8");
+      const contents = await file.contents();
       const sum = checksum(contents);
       const priorSum = already.get(file.version);
 
@@ -130,6 +155,10 @@ async function status(databaseUrl: string): Promise<void> {
 }
 
 if (import.meta.main) {
+  if (process.argv.includes("--version")) {
+    console.log(version);
+    process.exit(0);
+  }
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
     console.error("DATABASE_URL is required");
