@@ -113,7 +113,7 @@ export function LiveSection({ mode }: { readonly mode: PaneMode }) {
             </Tabs>
             <SessionRail aria-label="This session">
               <SessionRailBlock label="Session">
-                <SessionFacts facts={[["Model", <code key="m">claude-sonnet-5</code>], ["Agent", "opencode"], ["Attempt", "1"]]} />
+                <SessionFacts facts={[{ label: "Model", value: "claude-sonnet-5", mono: true }, { label: "Agent", value: "opencode" }, { label: "Attempt", value: 1 }]} />
               </SessionRailBlock>
               <SessionRailBlock label="Tools used">
                 <ToolUsage tools={[{ name: "Read", count: 9 }, { name: "Edit", count: 5 }, { name: "Bash", count: 4 }, { name: "Grep", count: 3 }, { name: "Write", count: 1 }]} />

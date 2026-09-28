@@ -195,7 +195,7 @@ a:hover {
   width: 7px;
   height: 7px;
   border-radius: var(--ds-radius-full);
-  background: var(--ds-tone-success-fg);
+  background: var(--ds-color-live);
   animation: ds-pulse calc(var(--ds-cadence-breathe) / max(var(--ds-motion-live), 0.0001)) ease-in-out infinite;
 }
 

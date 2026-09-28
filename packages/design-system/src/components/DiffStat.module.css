@@ -1,0 +1,11 @@
+.stat {
+  font-family: var(--ds-font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.add {
+  color: var(--ds-diff-add-fg);
+}
+.del {
+  color: var(--ds-diff-del-fg);
+}

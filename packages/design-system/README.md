@@ -749,7 +749,8 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 `src/primitives/` — Button, IconButton, Input, Textarea, Select, Checkbox,
 Badge, Card, Table (THead/TBody/Tr/Th/Td/TableEmpty), Tabs (underline for a
 page, pills for a second level under it, segmented in a toolbar; a tab can
-carry a count and a live dot), Dialog, Toast,
+carry a count and a live dot — `.ds-live-dot`, the one breathing dot on
+`--ds-color-live`), Dialog, Toast,
 Tooltip, RowMenu (+ `rowMenuOpeners`), Skeleton/SkeletonLines/Spinner,
 EmptyState, ScrollArea.
 
@@ -858,12 +859,16 @@ EmptyState, ScrollArea.
   it changes (the rules are under *Sessions*): files with status and
   counts, sticky file headers, Unified / Split (`splitRows` pairs each
   removed run with the added run after it), fresh lines flashing, Follow
-  the agent, `onOpenFile` for the viewer, `focus` to show a file picked
-  elsewhere, `fileList={false}` for one file on its own.
+  the agent, `onOpenFile` for the viewer, `selected` / `onSelectedChange`
+  to pick the file shown alone from outside, `fileList={false}` for one
+  file on its own.
+- **DiffStat** — "+12 −3" in the diff's colours; every count of lines
+  added and removed.
 - **SessionHeader** — the transcript's header on its own, for a session
   whose views sit under it.
 - **SessionRail / SessionRailBlock / SessionFacts / ToolUsage /
-  ChangedFiles** — the column beside a session's conversation.
+  ChangedFiles** — the column beside a session's conversation; its facts
+  are a `KeyValueList`, values to the right.
 - **SessionList / SessionItem** — a task's sessions, the open one `current`.
 - **FileGallery / FileViewer** — a task's files and their versions.
 - **Cost** — a total, with the tokens / machine split as a hairline.

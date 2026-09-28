@@ -74,14 +74,15 @@ export interface TaskScreenProps {
 type Plans = ReadonlyMap<string, { done: number; total: number; current: string | null }>;
 
 export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, breadcrumb, onBack }: TaskScreenProps) {
-  // Opening a session shows it here, on the Sessions tab; the URL says
-  // which. Going from a session's URL back to the task's (the tree, Back)
-  // goes back to the overview.
-  const [tab, setTab] = useState(runId ? "sessions" : "overview");
+  // A session's URL is the Sessions tab with it open; the task's URL is
+  // whichever tab was picked here, Overview first. Coming back to the
+  // task's URL from a session's (the tree, Back) is the overview again.
+  const [chosenTab, setTab] = useState("overview");
+  const tab = runId ? "sessions" : chosenTab;
   const [lastRunId, setLastRunId] = useState(runId);
   if (runId !== lastRunId) {
     setLastRunId(runId);
-    setTab(runId ? "sessions" : "overview");
+    if (!runId) setTab("overview");
   }
   // The session shown when none is asked for: the last one open, else one
   // picked the first time Sessions shows (what is running, else the newest)
@@ -98,6 +99,10 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, bread
   const [delivering, setDelivering] = useState(false);
   const [editing, setEditing] = useState(false);
   const people = usePeople();
+  // What the open session shows of its task: the owner, the same object while
+  // it is the same person, so the session is not redrawn for every reload here.
+  const ownerId = item?.owner?.id ?? null;
+  const sessionTask = useMemo(() => ({ owner: item?.owner ?? null }), [ownerId]); // eslint-disable-line react-hooks/exhaustive-deps -- `ownerId` stands for the owner
   // Bumped on each reload, for the sections that read their own data.
   const [version, setVersion] = useState(0);
   // The organization's merge method, read once for every pull request here.
@@ -272,8 +277,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, bread
 
       <Tabs value={tab} onValueChange={(next) => {
         setTab(next);
-        if (next !== "sessions" && runId) {
-          // The URL follows; it is the tab change, not a way back.
+        // Leaving a session's tab: the URL says the task again.
+        if (runId && next !== "sessions") {
           setLastRunId(undefined);
           onCloseRun?.();
         }
@@ -378,7 +383,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, bread
                 ))}
               </SessionList>
               {openRun ? (
-                <RunScreen key={openRun} client={client} runId={openRun} onBack={onBack} task={{ owner: item.owner, key: item.key }} />
+                <RunScreen key={openRun} client={client} runId={openRun} onBack={onBack} task={sessionTask} />
               ) : null}
             </div>
           ) : (
