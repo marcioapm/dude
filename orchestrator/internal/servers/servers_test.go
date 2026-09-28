@@ -78,8 +78,8 @@ func TestAServerAPersonTypesRunsAsTheyTypedIt(t *testing.T) {
 }
 
 func TestAPreviewsEgressIsWhatItsSettingsAllow(t *testing.T) {
-	n := Egress([]string{"registry.npmjs.org", "10.0.0.5", "192.168.0.0/16", " "})
-	want := []lux.EgressRule{{Host: "registry.npmjs.org"}, {CIDR: "10.0.0.5/32"}, {CIDR: "192.168.0.0/16"}}
+	n := Egress([]string{"registry.npmjs.org", "10.0.0.5", "192.168.0.0/16", " ", "2001:db8::1"})
+	want := []lux.EgressRule{{Host: "registry.npmjs.org"}, {CIDR: "10.0.0.5/32"}, {CIDR: "192.168.0.0/16"}, {CIDR: "2001:db8::1/128"}}
 	if n.Unrestricted || !reflect.DeepEqual(n.Egress, want) {
 		t.Errorf("egress = %+v", n)
 	}

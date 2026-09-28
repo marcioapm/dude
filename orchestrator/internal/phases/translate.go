@@ -168,7 +168,9 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 
 	switch f.EventType {
 	case "state":
-		state := str("state")
+		// A Run lux is moving to another host stops on the way, and is
+		// resumed by lux itself: recorded as resuming, not over.
+		state := lux.Recorded(str("state"), str("reason"))
 		if _, err := tx.Exec(ctx, `UPDATE runs SET lux_state = $2,
 			started_at = CASE WHEN $2 = 'running' THEN COALESCE(started_at, now()) ELSE started_at END,
 			status = CASE WHEN $2 = 'running' AND status IN ('scheduled', 'starting') THEN 'running'::run_status ELSE status END
@@ -179,9 +181,7 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 			t.run.Status = statusRunning
 			return s.event(ctx, tx, t.run, evRunStarted, ledger.ActorSystem, map[string]any{"status": statusRunning})
 		}
-		// A Run lux is moving to another host stops on the way, and is
-		// resumed by lux itself: not over.
-		if lux.Terminal(state) && !(state == "stopped" && lux.Moved(str("reason"))) {
+		if lux.Terminal(state) {
 			return t.ended(ctx, tx, s, state, str("reason"))
 		}
 	case "git.clone":
