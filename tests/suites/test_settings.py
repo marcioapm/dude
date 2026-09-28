@@ -294,7 +294,7 @@ def test_a_project_shows_inherited_and_overridden_values_and_resets_them(
         {"value": "high", "source": "organization"}
 
     # A project's own prompt: added to the organization's.
-    settings.get_by_role("radio", name="Add to").check(force=True)
+    settings.get_by_role("group", name="Prompt").get_by_role("button", name="Add to").click()
     doc = settings.get_by_test_id("prompt-document")
     doc.get_by_test_id("markdown-source").fill("Money is formatted with `formatUsd`.")
     doc.get_by_test_id("markdown-save").click()

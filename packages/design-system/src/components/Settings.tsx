@@ -1,4 +1,4 @@
-import { useId, type ButtonHTMLAttributes, type HTMLAttributes, type ReactNode } from "react";
+import { type ButtonHTMLAttributes, type HTMLAttributes, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import { Icon, type IconName } from "../icons/index.tsx";
 import styles from "./Settings.module.css";
@@ -233,38 +233,6 @@ export function SettingSource({ source, from, inherited, onReset, disabled }: Se
           Reset
         </button>
       ) : null}
-    </span>
-  );
-}
-
-export interface SegmentedControlProps<T extends string> {
-  readonly value: T;
-  readonly options: ReadonlyArray<{ readonly value: T; readonly label: ReactNode }>;
-  readonly onValueChange: (value: T) => void;
-  readonly "aria-label": string;
-  readonly disabled?: boolean | undefined;
-  readonly className?: string | undefined;
-}
-
-/** One of a few, all in view: a radio group drawn as segments. */
-export function SegmentedControl<T extends string>({ value, options, onValueChange, disabled, className, ...rest }: SegmentedControlProps<T>) {
-  const name = useId();
-  return (
-    <span role="radiogroup" aria-label={rest["aria-label"]} className={cx(styles["segmented"], className)}>
-      {options.map((o) => (
-        <label key={o.value} className={cx(styles["segment"], o.value === value && styles["segmentOn"])}>
-          <input
-            type="radio"
-            name={name}
-            value={o.value}
-            checked={o.value === value}
-            disabled={disabled}
-            className="ds-sr-only"
-            onChange={() => onValueChange(o.value)}
-          />
-          {o.label}
-        </label>
-      ))}
     </span>
   );
 }

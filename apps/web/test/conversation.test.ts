@@ -12,7 +12,7 @@
 import { describe, expect, test } from "bun:test";
 import { EventTypes } from "@dude/domain";
 import type { PersistedEvent } from "@dude/domain";
-import { apply, emptyProjection, project, snapshot } from "../src/api/conversation.ts";
+import { actorName, apply, emptyProjection, humanActor, project, snapshot } from "../src/api/conversation.ts";
 
 let cursor = 0;
 
@@ -338,17 +338,47 @@ describe("how a run ended", () => {
     expect(conversation.activity).toBeNull();
   });
 
-  test("an abort says a person did it, and their reason when they gave one", () => {
-    expect(project([ev(EventTypes.RunAborted, { reason: null })]).turns[0]).toMatchObject({
-      kind: "ended", outcome: "aborted", text: "Aborted by a person.",
+  test("an abort names who did it, and their reason when they gave one", () => {
+    const byAna = (payload: Record<string, unknown>) => ({ ...ev(EventTypes.RunAborted, payload), actor: { type: "human", id: "key_ana" } }) as PersistedEvent;
+    expect(project([byAna({ reason: null })]).turns[0]).toMatchObject({
+      kind: "ended", outcome: "aborted", text: "Aborted.", by: { id: "key_ana", name: null }, why: null,
     });
-    expect(project([ev(EventTypes.RunAborted, { reason: "wrong task" })]).turns[0]).toMatchObject({
-      text: "Aborted by a person: wrong task",
+    expect(project([byAna({ reason: "wrong task" })]).turns[0]).toMatchObject({
+      text: "Aborted: wrong task", why: "wrong task",
     });
   });
 
   test("finishing needs no line: the header says so", () => {
     expect(project([ev(EventTypes.RunCompleted, { status: "completed" })]).turns).toEqual([]);
+  });
+});
+
+describe("who said it", () => {
+  const human = (type: string, payload: Record<string, unknown>, actor: Record<string, unknown>) =>
+    ({ ...ev(type, payload), actor }) as PersistedEvent;
+
+  test("a steer and an answer carry the person who sent them", () => {
+    const { turns } = project([
+      human(EventTypes.RunSteered, { text: "Use the helper", directiveId: "d1" }, { type: "human", id: "key_ana" }),
+      human(EventTypes.QuestionAnswered, { answer: "Yes" }, { type: "human", id: "key_bo", name: "Bo Lindqvist" }),
+    ]);
+    expect(turns.map((t) => (t.kind === "human" ? t.by : null))).toEqual([
+      { id: "key_ana", name: null },
+      { id: "key_bo", name: "Bo Lindqvist" },
+    ]);
+  });
+
+  test("nobody is named for an actor that is not a person, or unknown", () => {
+    expect(humanActor(human(EventTypes.RunSteered, {}, { type: "system", id: "dude" }))).toBeNull();
+    expect(humanActor(human(EventTypes.RunSteered, {}, { type: "human", id: "unknown" }))).toBeNull();
+  });
+
+  test("a name is the event's own, then the organisation's, else unknown", () => {
+    const people = new Map([["key_ana", "Ana Ribeiro"]]);
+    expect(actorName({ id: "key_ana", name: null }, people)).toBe("Ana Ribeiro");
+    expect(actorName({ id: "key_ana", name: "Ana R." }, people)).toBe("Ana R.");
+    expect(actorName({ id: "key_gone", name: null }, people)).toBeNull();
+    expect(actorName(null, people)).toBeNull();
   });
 });
 

@@ -4,7 +4,8 @@ import { MarkdownDocument } from "../../components/MarkdownDocument.tsx";
 import { PromptHistory, type PromptHistoryVersion } from "../../components/PromptHistory.tsx";
 import { AgentAvatar } from "../../components/AgentAvatar.tsx";
 import { EpicCard, EpicRow, type EpicSummary } from "../../components/EpicCard.tsx";
-import { SegmentedControl, SettingRow, SettingSource, SettingsHeader, SettingsLayout, SettingsNote, SettingsSection, Switch } from "../../components/Settings.tsx";
+import { Segmented } from "../../components/ScreenHeader.tsx";
+import { SettingRow, SettingSource, SettingsHeader, SettingsLayout, SettingsNote, SettingsSection, Switch } from "../../components/Settings.tsx";
 import { Input } from "../../primitives/Input.tsx";
 import { Select } from "../../primitives/Select.tsx";
 
@@ -96,11 +97,11 @@ export function SettingsGallerySection({ mode }: { readonly mode: PaneMode }) {
         <Panes mode={mode}>
           <Col>
             <Label>Prompt, with how a project uses it</Label>
-            <SegmentedControl aria-label="Prompt" value={prompt} onValueChange={setPrompt}
+            <Segmented label="Prompt" size="sm" value={prompt} onChange={setPrompt}
               options={[{ value: "add", label: "Add to Acme’s" }, { value: "replace", label: "Replace Acme’s" }, { value: "inherit", label: "Use Acme’s" }]} />
             <MarkdownDocument source={source} onSave={setSource} meta="Last changed by Eli · yesterday" />
             <Label>Editing, empty</Label>
-            <MarkdownDocument source="" onSave={() => {}} defaultEditing empty="Nothing added." />
+            <MarkdownDocument source="" onSave={() => {}} defaultEditing emptyText="Nothing added." />
             <Label>Read-only</Label>
             <MarkdownDocument source={"## Notes\n\nNo **Edit** without `onSave`."} />
           </Col>

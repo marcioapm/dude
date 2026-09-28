@@ -1,159 +1,139 @@
+/*
+ * The agent's plan. Folded: one line on the chrome shade — Plan, n of m,
+ * a step meter, the step it is on. Open: the list under it, the current
+ * step on the info tint with its bar, settled steps struck through.
+ */
+
 .root {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  border-radius: 0;
-  background: var(--plan-bg, var(--ds-color-raised));
-  overflow: hidden;
+  background: var(--plan-bg, var(--ds-color-chrome));
 }
 .sticky {
   position: sticky;
   top: 0;
   z-index: var(--ds-z-sticky);
-  box-shadow: var(--plan-shadow, var(--ds-shadow-1));
 }
 .flat {
-  border: 0;
-  border-radius: 0;
   background: transparent;
-  box-shadow: none;
 }
 
 .header {
   display: flex;
   align-items: center;
   gap: var(--ds-space-8);
-  min-height: var(--ds-size-row-default);
-  padding: 0 var(--ds-space-8);
+  min-height: var(--ds-size-row-item);
+  padding: var(--ds-space-6) var(--ds-space-12);
   font-size: var(--ds-text-sm);
   outline: none;
   cursor: pointer;
 }
 .header[role="button"]:hover {
   background: var(--ds-color-hover-wash);
-  border-radius: var(--ds-radius-control);
 }
 .header:focus-visible {
   box-shadow: inset 0 0 0 2px var(--ds-color-focus-ring);
 }
-.root:not(.collapsed) .header {
-}
 .headerIcon {
-  display: inline-grid;
-  place-items: center;
-  width: 16px;
-  height: 16px;
+  flex-shrink: 0;
   color: var(--ds-color-text-muted);
 }
 .title {
-  font-weight: var(--ds-weight-medium);
-  color: var(--ds-color-text-primary);
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
   white-space: nowrap;
-}
-.meta {
-  font-size: var(--ds-text-xs);
-  color: var(--ds-color-text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.progress {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--ds-space-8);
-  margin-left: var(--ds-space-4);
-  flex-shrink: 0;
 }
 .count {
-  font-size: var(--ds-text-xs);
-  color: var(--ds-color-text-secondary);
+  color: var(--ds-color-text-muted);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 .allDone .count {
   color: var(--ds-tone-success-fg);
 }
-
-/* Segmented bar: one cell per item, in order. Reads as "where in the plan". */
-.bar {
-  display: inline-flex;
-  gap: 2px;
-  height: 6px;
-}
-.bar i {
-  display: block;
-  width: 10px;
-  height: 100%;
-  border-radius: var(--ds-radius-mark);
-  background: var(--ds-color-border);
-  transition: background-color var(--ds-duration-slow) var(--ds-ease-standard);
-}
-.bar i[data-s="completed"] {
-  background: var(--ds-tone-success-solid);
-}
-.bar i[data-s="in_progress"] {
-  background: var(--ds-tone-info-solid);
-  animation: global(ds-pulse) calc(var(--ds-cadence-breathe) / max(var(--ds-motion-live), 0.0001)) ease-in-out infinite;
-}
-.bar i[data-s="cancelled"] {
-  background: var(--ds-color-border-subtle);
-}
-
-.currentInline {
+.current {
   display: inline-flex;
   align-items: center;
   gap: var(--ds-space-6);
-  min-width: 0;
   flex: 1;
-  margin-left: var(--ds-space-8);
-  padding-left: var(--ds-space-8);
-  font-size: var(--ds-text-xs);
-  color: var(--ds-color-text-secondary);
+  min-width: 0;
+  color: var(--ds-color-text-strong);
+}
+/* Open, the list says it; the line keeps its place so nothing jumps. */
+.currentHidden {
+  visibility: hidden;
+}
+.currentGlyph {
+  flex-shrink: 0;
+  color: var(--ds-tone-info-mark);
+  animation: global(ds-drift) calc(var(--ds-cadence-drift) / max(var(--ds-motion-live), 0.0001)) linear infinite;
 }
 .currentText {
+  min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+.spacer {
+  flex: 1;
+}
+.meta {
+  flex-shrink: 0;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+}
 .chevron {
-  margin-left: auto;
+  flex-shrink: 0;
   color: var(--ds-color-text-muted);
   transition: transform var(--ds-duration-fast) var(--ds-ease-standard);
 }
 .root:not(.collapsed) .chevron {
   transform: rotate(90deg);
 }
-.collapsed .currentInline + .chevron {
-  margin-left: 0;
+
+/* The step meter: one cell per step. */
+.meter {
+  display: inline-flex;
+  gap: 2px;
+  height: 6px;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+.meter i {
+  flex: 1;
+  border-radius: var(--ds-radius-mark);
+  background: var(--ds-color-border-strong);
+  transition: background-color var(--ds-duration-slow) var(--ds-ease-standard);
+}
+.meter i[data-s="done"] {
+  background: var(--ds-tone-success-mark);
+}
+.meter i[data-s="current"] {
+  background: var(--ds-tone-info-mark);
+  animation: global(ds-pulse) calc(var(--ds-cadence-breathe) / max(var(--ds-motion-live), 0.0001)) ease-in-out infinite;
 }
 
 .list {
   list-style: none;
   margin: 0;
-  padding: var(--ds-space-4) 0;
+  padding: 0 0 var(--ds-space-8);
   display: flex;
   flex-direction: column;
 }
 .item {
   display: grid;
-  grid-template-columns: 16px auto minmax(0, 1fr) auto;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--ds-space-8);
-  min-height: var(--ds-size-row-compact);
-  padding: 0 var(--ds-space-8);
-  font-size: var(--ds-text-sm);
+  min-height: var(--ds-size-row-default);
+  padding: 0 var(--ds-space-12);
+  font-size: var(--ds-text-md);
   color: var(--ds-color-text-primary);
 }
 .itemChanged {
   animation: global(ds-flash) var(--ds-duration-deliberate) var(--ds-ease-exit) 1;
-}
-.ordinal {
-  font-size: var(--ds-text-2xs);
-  font-variant-numeric: tabular-nums;
-  color: var(--ds-color-text-disabled);
-  width: 14px;
-  text-align: right;
 }
 .content {
   min-width: 0;
@@ -161,14 +141,18 @@
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+/* The step it is on: the one emphasis pattern, the info tint and a bar. */
+.item-in_progress {
+  background: var(--ds-tone-info-bg);
+  box-shadow: inset 2px 0 0 var(--ds-tone-info-mark);
+}
 .item-in_progress .content {
   font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-strong);
 }
 .item-completed .content,
 .item-cancelled .content {
   color: var(--ds-color-text-muted);
-}
-.item-cancelled .content {
   text-decoration: line-through;
   text-decoration-color: var(--ds-color-border-strong);
 }
@@ -179,37 +163,24 @@
   color: var(--ds-tone-attention-fg);
 }
 
-/* Glyphs: same shape rules as StatusBadge dots — hollow = pending,
-   dashed drifting = in progress, filled check = done. */
+/* Glyphs: hollow = to do, drifting dashes = on it, check = done, cross = dropped. */
 .glyph {
   display: inline-grid;
   place-items: center;
   width: 16px;
   height: 16px;
-  border-radius: var(--ds-radius-full);
   color: var(--ds-color-text-muted);
 }
-.glyph-pending {
-  color: var(--ds-color-text-disabled);
-}
 .glyph-in_progress {
-  color: var(--ds-tone-info-fg);
+  color: var(--ds-tone-info-mark);
 }
 .glyph-in_progress svg {
   animation: global(ds-drift) calc(var(--ds-cadence-drift) / max(var(--ds-motion-live), 0.0001)) linear infinite;
 }
 .glyph-completed {
-  color: var(--ds-tone-success-on-solid);
-  background: var(--ds-tone-success-solid);
-  width: 14px;
-  height: 14px;
-  margin-left: 1px;
+  color: var(--ds-tone-success-mark);
 }
-.glyph-cancelled {
-  color: var(--ds-color-text-disabled);
-}
-/* One-shot pop when a status changes. Under reduced motion, duration is
-   0 and the glyph simply appears in its new state. */
+/* One-shot pop when a status changes; under reduced motion it simply appears. */
 .glyphPop {
   animation: global(ds-pop) var(--ds-duration-slow) var(--ds-ease-enter) 1;
 }

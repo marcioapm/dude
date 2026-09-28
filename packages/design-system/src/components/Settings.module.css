@@ -242,32 +242,6 @@
   text-decoration: none;
 }
 
-.segmented {
-  display: inline-flex;
-  padding: 2px;
-  background: var(--ds-color-active-wash);
-  border-radius: var(--ds-radius-control);
-}
-.segment {
-  padding: var(--ds-space-4) var(--ds-space-12);
-  font-size: var(--ds-text-sm);
-  color: var(--ds-color-text-secondary);
-  border-radius: var(--ds-radius-control);
-  cursor: pointer;
-  white-space: nowrap;
-}
-.segment:hover {
-  color: var(--ds-color-text-strong);
-}
-.segment:focus-within {
-  outline: var(--ds-focus-ring-width) solid var(--ds-color-focus-ring);
-}
-.segmentOn {
-  color: var(--ds-color-text-strong);
-  background: var(--ds-color-surface);
-  box-shadow: var(--ds-shadow-1);
-}
-
 .switchRow {
   display: inline-flex;
   align-items: center;

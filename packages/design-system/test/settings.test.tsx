@@ -1,31 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import { lineDiff } from "../src/util/lineDiff.ts";
-import { markdownSourceTokens, sourceCounts } from "../src/util/markdownSource.ts";
-
-describe("markdownSourceTokens", () => {
-  const src = "# Implementer\n\n- Run `bun test` for **{{task.goal}}**\n> quoted\n```\n# not a heading\n```\nplain";
-
-  test("each line's tokens are exactly the line", () => {
-    const lines = markdownSourceTokens(src);
-    expect(lines.map((l) => l.map((t) => t.text).join(""))).toEqual(src.split("\n"));
-  });
-
-  test("marks headings, list markers, code, bold, variables and quotes", () => {
-    const [heading, , item, quote, fenceOpen, fenced] = markdownSourceTokens(src);
-    expect(heading!.map((t) => t.kind)).toEqual(["headingMark", "heading"]);
-    expect(item!.map((t) => t.kind)).toEqual(["listMark", "text", "code", "text", "bold"]);
-    expect(markdownSourceTokens("{{a}} x")[0]![0]).toEqual({ kind: "variable", text: "{{a}}" });
-    expect(quote![0]!.kind).toBe("quote");
-    expect(fenceOpen![0]!.kind).toBe("fence");
-    // Inside a fence nothing is Markdown.
-    expect(fenced).toEqual([{ kind: "code", text: "# not a heading" }]);
-  });
-
-  test("counts lines and words", () => {
-    expect(sourceCounts("")).toEqual({ lines: 0, words: 0 });
-    expect(sourceCounts("one two\nthree")).toEqual({ lines: 2, words: 3 });
-  });
-});
 
 describe("lineDiff", () => {
   test("identical texts have no hunks", () => {
@@ -81,7 +55,7 @@ describe("MarkdownDocument", () => {
   });
 
   test("an empty document says so", () => {
-    expect(text(renderToStaticMarkup(<MarkdownDocument source="" empty="Nothing added." />))).toContain("Nothing added.");
+    expect(text(renderToStaticMarkup(<MarkdownDocument source="" emptyText="Nothing added." />))).toContain("Nothing added.");
   });
 });
 

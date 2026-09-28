@@ -1,149 +1,177 @@
-import { useEffect, useLayoutEffect, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
-import { markdownSourceTokens, sourceCounts } from "../util/markdownSource.ts";
 import { Button } from "../primitives/Button.tsx";
 import { Markdown } from "./Markdown.tsx";
 import styles from "./MarkdownDocument.module.css";
 
-export interface MarkdownDocumentProps extends Omit<HTMLAttributes<HTMLDivElement>, "onChange" | "children"> {
-  /** The saved text. */
+export interface MarkdownDocumentProps extends Omit<HTMLAttributes<HTMLDivElement>, "children" | "onChange"> {
   readonly source: string;
-  /**
-   * Save an edit. Resolve to go back to reading; reject to stay editing
-   * (the caller says why). Without it the document is read-only.
-   */
-  readonly onSave?: ((source: string) => Promise<void> | void) | undefined;
-  /** Shown when there is no text, in place of it. */
-  readonly empty?: ReactNode;
-  /** Beside the counts in the bar: when it last changed, a History link. */
+  /** Saving it; resolve when saved, reject to stay in the editor (the caller says why). Omit for read-only. */
+  readonly onSave?: ((source: string) => void | Promise<void>) | undefined;
+  /** Shown when there is nothing to read. */
+  readonly emptyText?: ReactNode;
+  /** Beside Edit in the bar: "Last changed by Eli · yesterday · History". */
   readonly meta?: ReactNode;
-  /** Start editing (a new document). */
+  /** Label for the source field, for screen readers. */
+  readonly label?: string | undefined;
+  /** Start in the editor (a new document, nothing to read yet). Needs onSave. */
   readonly defaultEditing?: boolean | undefined;
-  /** Tells the caller when editing starts and ends, so it can hold other controls. */
+  /** Told when editing starts and ends, so the caller can hold other controls meanwhile. */
   readonly onEditingChange?: ((editing: boolean) => void) | undefined;
-  readonly saveLabel?: string | undefined;
+}
+
+/** A line of source as spans: what is Markdown syntax, what is a variable, what is code. */
+export type HighlightKind = "heading-mark" | "heading" | "list-mark" | "quote" | "fence" | "code" | "bold" | "var" | "text";
+export type HighlightSpan = readonly [HighlightKind, string];
+
+/**
+ * Light highlighting for Markdown source, one line at a time: the marks
+ * of headings, lists and quotes, code fences and what is inside them,
+ * inline code, bold and `{{variables}}`. Enough to read the shape of a
+ * prompt while editing it — not a parser; `Markdown` renders it.
+ */
+export function highlightMarkdown(source: string): HighlightSpan[][] {
+  let inFence = false;
+  return source.split("\n").map((line): HighlightSpan[] => {
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence;
+      return [["fence", line]];
+    }
+    if (inFence) return [["code", line]];
+    const heading = /^(#{1,6} )(.*)$/.exec(line);
+    if (heading) return [["heading-mark", heading[1]!], ["heading", heading[2]!]];
+    if (/^\s*> /.test(line)) return [["quote", line]];
+    const out: HighlightSpan[] = [];
+    let rest = line;
+    const list = /^(\s*(?:[-*+]|\d+\.) )/.exec(rest);
+    if (list) {
+      out.push(["list-mark", list[1]!]);
+      rest = rest.slice(list[1]!.length);
+    }
+    const inline = /(\{\{[^}]+\}\}|`[^`]+`|\*\*[^*]+\*\*)/g;
+    let at = 0;
+    for (const m of rest.matchAll(inline)) {
+      if (m.index! > at) out.push(["text", rest.slice(at, m.index)]);
+      const t = m[0];
+      out.push([t.startsWith("{{") ? "var" : t.startsWith("`") ? "code" : "bold", t]);
+      at = m.index! + t.length;
+    }
+    if (at < rest.length) out.push(["text", rest.slice(at)]);
+    return out;
+  });
 }
 
 /**
- * A Markdown document that reads rendered and edits as source, in place.
- *
- * Reading is the default: the text rendered, with an Edit button. Edit
- * swaps the rendering for the Markdown source at the same place, lightly
- * highlighted (headings, lists, code, bold, `{{variables}}`) so its
- * structure reads while it is written; Save keeps it, Cancel puts it back.
- * One mode at a time — a split preview halves the width of both.
- *
- * The highlighting is a layer of spans under a transparent textarea with
- * the same metrics, so the caret, selection and undo stay the browser's.
+ * A Markdown document you read, and can edit in place. Reading is the
+ * default: the rendered document. Edit swaps it for its source, at the
+ * same place — a plain textarea over a highlighted copy, so the caret,
+ * selection and undo are the browser's own — and Save or Cancel swaps it
+ * back. No split view: one thing at a time, the thing you are doing.
  */
 export function MarkdownDocument({
   source,
   onSave,
-  empty = "Nothing here yet.",
+  emptyText = "Nothing here yet.",
   meta,
+  label = "Markdown source",
   defaultEditing = false,
   onEditingChange,
-  saveLabel = "Save",
   className,
   ...rest
 }: MarkdownDocumentProps) {
-  const [editing, setEditingState] = useState(defaultEditing && Boolean(onSave));
-  const [draft, setDraft] = useState(source);
+  const [draft, setDraftState] = useState<string | null>(defaultEditing && onSave ? source : null);
+  const setDraft = (next: string | null) => {
+    if ((next === null) !== (draft === null)) onEditingChange?.(next !== null);
+    setDraftState(next);
+  };
   const [saving, setSaving] = useState(false);
   const area = useRef<HTMLTextAreaElement>(null);
-  const setEditing = (on: boolean) => {
-    setEditingState(on);
-    onEditingChange?.(on);
-  };
+  const editing = draft !== null;
 
-  // A new saved text (another save, a restore) replaces what is read.
-  useEffect(() => {
-    if (!editing) setDraft(source);
-  }, [source, editing]);
-
-  // The textarea grows with its text, so the page scrolls, not the field.
+  // The field grows with its text, so the page scrolls, not the field.
   useLayoutEffect(() => {
     const el = area.current;
     if (!el) return;
     el.style.height = "auto";
     el.style.height = `${el.scrollHeight}px`;
-  }, [draft, editing]);
+  }, [draft]);
 
-  const counts = sourceCounts(editing ? draft : source);
-  const dirty = draft !== source;
-
-  async function save() {
-    if (!onSave) return;
+  const start = () => {
+    setDraft(source);
+    requestAnimationFrame(() => {
+      area.current?.focus();
+      area.current?.setSelectionRange(0, 0);
+    });
+  };
+  const save = async () => {
+    if (draft === null || !onSave) return;
     setSaving(true);
     try {
       await onSave(draft);
-      setEditing(false);
+      setDraft(null);
     } catch {
-      // The caller said why; the draft stays for another try.
+      // The caller said why; the draft stays for another go.
     } finally {
       setSaving(false);
     }
-  }
+  };
+
+  const text = draft ?? source;
+  const lines = text.split("\n").length;
+  const words = text.trim() ? text.trim().split(/\s+/).length : 0;
 
   return (
-    <div className={cx(styles["root"], editing && styles["editing"], className)} data-editing={editing || undefined} {...rest}>
+    <div className={cx(styles["root"], editing && styles["editing"], className)} data-editing={editing ? "true" : undefined} {...rest}>
       <div className={styles["bar"]}>
-        <span className={styles["counts"]}>
-          {counts.lines} {counts.lines === 1 ? "line" : "lines"} · {counts.words} {counts.words === 1 ? "word" : "words"}
-        </span>
+        {words > 0 ? (
+          <span className={styles["count"]}>
+            {lines} {lines === 1 ? "line" : "lines"} · {words} {words === 1 ? "word" : "words"}
+          </span>
+        ) : null}
         {meta ? <span className={styles["meta"]}>{meta}</span> : null}
-        <span className={styles["actions"]}>
-          {editing ? (
-            <>
-              <Button size="sm" variant="quiet" disabled={saving} data-testid="markdown-cancel"
-                onClick={() => {
-                  setDraft(source);
-                  setEditing(false);
-                }}>
-                Cancel
-              </Button>
-              <Button size="sm" variant="primary" disabled={saving || !dirty} data-testid="markdown-save" onClick={() => void save()}>
-                {saving ? "Saving…" : saveLabel}
-              </Button>
-            </>
-          ) : onSave ? (
-            <Button size="sm" variant="secondary" leadingIcon="edit" data-testid="markdown-edit"
-              onClick={() => {
-                setDraft(source);
-                setEditing(true);
-                requestAnimationFrame(() => {
-                  area.current?.focus();
-                  area.current?.setSelectionRange(0, 0);
-                });
-              }}>
-              Edit
+        <span className={styles["spacer"]} />
+        {!onSave ? null : editing ? (
+          <>
+            <Button size="sm" variant="quiet" onClick={() => setDraft(null)} disabled={saving} data-testid="markdown-cancel">
+              Cancel
             </Button>
-          ) : null}
-        </span>
+            <Button size="sm" variant="primary" onClick={() => void save()} loading={saving} disabled={draft === source} data-testid="markdown-save">
+              Save
+            </Button>
+          </>
+        ) : (
+          <Button size="sm" variant="secondary" leadingIcon="edit" onClick={start} data-testid="markdown-edit">
+            Edit
+          </Button>
+        )}
       </div>
       {editing ? (
         <div className={styles["source"]}>
-          <pre className={styles["highlight"]} aria-hidden="true">
-            {markdownSourceTokens(draft).map((line, n) => (
-              <span key={n}>
-                {line.map((t, k) => (t.kind === "text" ? t.text : <span key={k} className={styles[t.kind]}>{t.text}</span>))}
+          <pre className={styles["highlight"]} aria-hidden>
+            {highlightMarkdown(draft).map((spans, i) => (
+              <span key={i} className={styles["line"]}>
+                {spans.map(([kind, t], j) => (
+                  <span key={j} className={styles[`hl-${kind}`]}>
+                    {t}
+                  </span>
+                ))}
                 {"\n"}
               </span>
             ))}
           </pre>
           <textarea
             ref={area}
-            className={styles["textarea"]}
+            className={styles["field"]}
             value={draft}
             spellCheck={false}
-            aria-label="Markdown source"
+            aria-label={label}
             data-testid="markdown-source"
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Escape") {
-                setDraft(source);
-                setEditing(false);
-              } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && dirty) {
+                e.preventDefault();
+                setDraft(null);
+              } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
                 void save();
               }
@@ -151,9 +179,7 @@ export function MarkdownDocument({
           />
         </div>
       ) : (
-        <div className={styles["view"]} data-testid="markdown-view">
-          {source.trim() ? <Markdown source={source} variant="document" /> : <p className={styles["empty"]}>{empty}</p>}
-        </div>
+        <div className={styles["view"]} data-testid="markdown-view">{source.trim() ? <Markdown source={source} variant="document" /> : <p className={styles["empty"]}>{emptyText}</p>}</div>
       )}
     </div>
   );

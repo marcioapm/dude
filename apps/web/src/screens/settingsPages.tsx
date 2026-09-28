@@ -13,7 +13,7 @@ import {
   FINDING_SEVERITY_SPECS,
   MarkdownDocument,
   PromptHistory,
-  SegmentedControl,
+  Segmented,
   SettingField,
   SettingFields,
   SettingRow,
@@ -211,11 +211,12 @@ function PromptSection({ scope, role, onHistory }: { scope: SettingsScope; role:
       title="Prompt"
       actions={
         project ? (
-          <SegmentedControl
-            aria-label="Prompt"
+          <Segmented
+            label="Prompt"
+            size="sm"
             disabled={!settings.canEdit || editing}
             value={mode}
-            onValueChange={(m) => {
+            onChange={(m) => {
               setMode(m);
               // Using the organization's needs no text: it is saved at once.
               if (m === "inherit") void save("", "inherit").catch(() => setMode(own?.mode ?? "inherit"));
@@ -251,7 +252,7 @@ function PromptSection({ scope, role, onHistory }: { scope: SettingsScope; role:
           key={`${role}-${mode}`}
           data-testid="prompt-document"
           source={project ? (own?.mode === mode ? own.body : "") : org.body}
-          empty={project ? `Nothing ${mode === "add" ? "added" : "here"} yet.` : "No prompt yet."}
+          emptyText={project ? `Nothing ${mode === "add" ? "added" : "here"} yet.` : "No prompt yet."}
           meta={project && own?.versions ? <SettingsMeta>{changedBy(own)} · {historyLink}</SettingsMeta> : undefined}
           defaultEditing={Boolean(project) && own?.mode !== mode && settings.canEdit}
           onEditingChange={setEditing}
