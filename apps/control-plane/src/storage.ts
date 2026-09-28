@@ -39,12 +39,10 @@ export async function putObject(key: string, bytes: Uint8Array, type: string): P
   await required().write(key, bytes, { type });
 }
 
-/** An object's bytes and type, or null when there is no such object. */
-export async function getObject(key: string): Promise<{ bytes: ArrayBuffer; type: string } | null> {
-  const file = required().file(key);
+/** An object's bytes, or null when there is no such object. */
+export async function getObject(key: string): Promise<ArrayBuffer | null> {
   try {
-    const [bytes, stat] = await Promise.all([file.arrayBuffer(), file.stat()]);
-    return { bytes, type: stat.type };
+    return await required().file(key).arrayBuffer();
   } catch (err) {
     if ((err as { code?: string }).code === "NoSuchKey") return null;
     throw err;
