@@ -3,7 +3,7 @@ import { cx } from "../util/cx.ts";
 import { Icon } from "../icons/index.tsx";
 import { outline as buildOutline, parseMarkdown, type Block, type Inline } from "../util/markdown.ts";
 import { DiffView, parseUnifiedDiff } from "./DiffView.tsx";
-import { PROMPT_VARIABLES } from "@dude/domain";
+import { isPromptVariable } from "@dude/domain";
 import styles from "./Markdown.module.css";
 
 export type MarkdownVariant = "message" | "document" | "prompt";
@@ -230,7 +230,6 @@ function CodeBlock({ lang, value, open, ctx, tail }: { readonly lang: string; re
 }
 
 const VARIABLE = /\{\{\s*([\w.]+)\s*\}\}/g;
-const KNOWN_VARIABLES: ReadonlySet<string> = new Set(PROMPT_VARIABLES.map((v) => v.name));
 
 /**
  * Text with each `{{name}}` the orchestrator fills in as a chip. Anything
@@ -241,7 +240,7 @@ function WithVariables({ text }: { readonly text: string }) {
   const out: ReactNode[] = [];
   let at = 0;
   for (const m of text.matchAll(VARIABLE)) {
-    if (!KNOWN_VARIABLES.has(m[1]!)) continue;
+    if (!isPromptVariable(m[0])) continue;
     if (m.index > at) out.push(text.slice(at, m.index));
     out.push(<span key={m.index} className={styles["variable"]} title={`Filled in for each run: ${m[1]}`}>{m[1]}</span>);
     at = m.index + m[0].length;
