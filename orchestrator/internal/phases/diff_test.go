@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 const sampleDiff = `diff --git a/src/app.ts b/src/app.ts
@@ -202,12 +204,31 @@ func TestTheDiffScriptSeesTrackedAndUntrackedWork(t *testing.T) {
 	if out := run("artifacts", "LUX_ARTIFACTS="+artifacts); out != "" {
 		t.Errorf("the hook printed %q", out)
 	}
-	saved, err := os.ReadFile(filepath.Join(artifacts, finalDiffDir, finalDiffFile))
+	saved, err := os.ReadFile(filepath.Join(artifacts, finalDiffDir, "target.patch"))
 	if err != nil || string(saved) != printed {
 		t.Errorf("saved %q (%v), printed %q", saved, err, printed)
 	}
 	if diffChecksum(string(saved)) != diff.Checksum {
 		t.Error("the same diff has another checksum")
+	}
+
+	// Several repositories: a patch each, which in name order are the live
+	// read, so an unchanged checkout has one checksum either way.
+	both := func(dest string) string {
+		cmd := exec.Command("sh", "-c", diffScript, "dude-diff", dest, "a", repo, "main", "b", repo, "main")
+		cmd.Env = append(os.Environ(), "LUX_ARTIFACTS="+artifacts)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v: %s", err, out)
+		}
+		return string(out)
+	}
+	printed = both("-")
+	both("artifacts")
+	a, _ := os.ReadFile(filepath.Join(artifacts, finalDiffDir, "a.patch"))
+	b, _ := os.ReadFile(filepath.Join(artifacts, finalDiffDir, "b.patch"))
+	if string(a)+string(b) != printed || !strings.HasPrefix(string(b), "# dude-diff b ") {
+		t.Errorf("patches %q + %q, printed %q", a, b, printed)
 	}
 }
 
@@ -333,5 +354,19 @@ func waitFor(t *testing.T, cond func() bool) {
 			t.Fatal("timed out")
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestOnlyTheHooksPatchesAreTheFinalDiff(t *testing.T) {
+	for path, want := range map[string]string{
+		FinalDiffPrefix + "api.patch":     "api",
+		FinalDiffPrefix + ".api.tmp":      "",
+		FinalDiffPrefix + "x/api.patch":   "",
+		FinalDiffPrefix + ".patch":        "",
+		lux.PublishedPrefix + "api.patch": "",
+	} {
+		if got, ok := finalDiffRepo(path); got != want || ok != (want != "") {
+			t.Errorf("%s: %q %v", path, got, ok)
+		}
 	}
 }

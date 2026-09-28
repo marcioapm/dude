@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -270,7 +271,7 @@ func recordRunDiff(ctx context.Context, in inOrg, org, projectID, taskID, runID,
 
 // beforeStop is the hook every phase Run's spec carries: lux runs it in the
 // container whenever it stops the Run, and it leaves the final diff where
-// the artifact collector finds it (FinalDiffPath). refs is each
+// the artifact collector finds it (FinalDiffPrefix). refs is each
 // repository's starting point as the spec names it — the commit, or the
 // branch lux checks out — since the hook runs before dude has heard where
 // the checkout started.
@@ -281,17 +282,24 @@ func beforeStop(refs map[string]string) *lux.BeforeStop {
 	return &lux.BeforeStop{Command: diffCommand("artifacts", refs), Timeout: FinalDiffTimeout}
 }
 
-// recordFinalDiff records the diff the beforeStop hook left, read from lux.
-func (a *Artifacts) recordFinalDiff(ctx context.Context, r dueRun, art lux.Artifact) error {
-	body, err := a.Lux.Download(ctx, art.ID)
-	if err != nil {
-		return err
+// recordFinalDiff records the diff the beforeStop hook left, one patch per
+// repository, read from lux: in name order they are what a live read
+// prints, and so have the same checksum when nothing changed since.
+func (a *Artifacts) recordFinalDiff(ctx context.Context, r dueRun, patches []lux.Artifact) error {
+	repo := func(art lux.Artifact) string { name, _ := finalDiffRepo(art.Path); return name }
+	slices.SortFunc(patches, func(x, y lux.Artifact) int { return strings.Compare(repo(x), repo(y)) })
+	var text strings.Builder
+	for _, art := range patches {
+		body, err := a.Lux.Download(ctx, art.ID)
+		if err != nil {
+			return err
+		}
+		_, err = io.Copy(&text, io.LimitReader(body, 16<<20))
+		body.Close()
+		if err != nil {
+			return err
+		}
 	}
-	defer body.Close()
-	text, err := io.ReadAll(io.LimitReader(body, 16<<20))
-	if err != nil {
-		return err
-	}
-	_, err = recordRunDiff(ctx, a.DB.InOrg, r.Org, r.ProjectID, r.TaskID, r.ID, string(text), true)
+	_, err := recordRunDiff(ctx, a.DB.InOrg, r.Org, r.ProjectID, r.TaskID, r.ID, text.String(), true)
 	return err
 }
