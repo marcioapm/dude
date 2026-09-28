@@ -10,13 +10,13 @@
  * off (or what GitHub said) under it.
  */
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { FactKind } from "@dude/design-system/components";
 import { Button, Input, RowMenu, Tooltip } from "@dude/design-system/primitives";
 import { prCheckFailed } from "@dude/domain";
 import type { ApiClient, MergeMethod, PullRequest } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
-import { mergeBlockedBy } from "../pullRequests.ts";
+import { mergeBlockedBy, parseLogins } from "../pullRequests.ts";
 
 const METHOD_LABEL: Record<MergeMethod, string> = { squash: "Squash and merge", merge: "Create a merge commit", rebase: "Rebase and merge" };
 
@@ -26,9 +26,11 @@ export interface PullRequestActionSlots {
   note: ReactNode;
 }
 
-export function PullRequestActions({ client, pr, onChanged, children }: {
+export function PullRequestActions({ client, pr, defaultMethod, onChanged, children }: {
   client: ApiClient;
   pr: PullRequest;
+  /** The organization's merge method: what Merge does first. */
+  defaultMethod: MergeMethod;
   onChanged: () => void;
   children: (slots: PullRequestActionSlots) => ReactNode;
 }) {
@@ -37,15 +39,6 @@ export function PullRequestActions({ client, pr, onChanged, children }: {
   const [method, setMethod] = useState<MergeMethod | null>(null);
   const [asking, setAsking] = useState(false);
   const [logins, setLogins] = useState("");
-
-  // The organization's merge method, as it is now: what Merge does first.
-  useEffect(() => {
-    let live = true;
-    void client.githubSettings().then((s) => live && setMethod((cur) => cur ?? s.mergeMethod), () => undefined);
-    return () => {
-      live = false;
-    };
-  }, [client]);
 
   const act = async (what: string, action: () => Promise<unknown>): Promise<boolean> => {
     setBusy(what);
@@ -66,7 +59,7 @@ export function PullRequestActions({ client, pr, onChanged, children }: {
   if (!open) return <>{children({ facts: {}, merge: null, note: null })}</>;
 
   const blocked = mergeBlockedBy(pr);
-  const how = method ?? "squash";
+  const how = method ?? defaultMethod;
   const facts: PullRequestActionSlots["facts"] = {};
   if (pr.checks.some(prCheckFailed)) {
     facts.checks = (
@@ -91,7 +84,7 @@ export function PullRequestActions({ client, pr, onChanged, children }: {
   facts.reviews = asking ? (
     <form className="prAskForm" onSubmit={(e) => {
       e.preventDefault();
-      const who = logins.split(/[\s,]+/).map((l) => l.replace(/^@/, "")).filter(Boolean);
+      const who = parseLogins(logins);
       if (who.length) {
         void act("review", () => client.requestReview(pr.id, who)).then((ok) => {
           if (ok) {

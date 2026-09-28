@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -58,7 +59,7 @@ type tracked struct {
 	HeadSeenAt                                                                                 *time.Time
 	FeedbackCursor                                                                             *time.Time
 	UpdatedAt                                                                                  time.Time
-	ChecksJSON, ReviewsJSON                                                                    []byte
+	ReviewsJSON                                                                                []byte
 }
 
 // errRaced: another sync of the same pull request recorded first.
@@ -87,11 +88,11 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		return tx.QueryRow(ctx, `SELECT pr.id, pr.project_id, pr.task_id, COALESCE(pr.run_id, ''), pr.state::text,
 			pr.checks::text, pr.review::text, COALESCE(pr.head_sha, ''), r.url, r.name, pr.mergeable_state,
 			pr.number, pr.behind_by, pr.unresolved_threads, pr.had_ci, pr.head_seen_at, pr.feedback_cursor,
-			pr.checks_json, pr.reviews_json, pr.updated_at
+			pr.reviews_json, pr.updated_at
 			FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id WHERE pr.id = $1`, prID).
 			Scan(&pr.ID, &pr.ProjectID, &pr.TaskID, &pr.RunID, &pr.State, &pr.Checks, &pr.Review, &pr.HeadSHA,
 				&pr.RepoURL, &pr.RepoName, &pr.Mergeable, &pr.Number, &pr.BehindBy, &pr.UnresolvedThreads,
-				&pr.HadCI, &pr.HeadSeenAt, &pr.FeedbackCursor, &pr.ChecksJSON, &pr.ReviewsJSON, &pr.UpdatedAt)
+				&pr.HadCI, &pr.HeadSeenAt, &pr.FeedbackCursor, &pr.ReviewsJSON, &pr.UpdatedAt)
 	}); err != nil {
 		return err
 	}
@@ -141,7 +142,7 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	if pr.FeedbackCursor != nil {
 		since = pr.FeedbackCursor.UTC().Format(time.RFC3339)
 	}
-	listed, err := gh.Feedback(ctx, slug, pr.Number, since)
+	listed, err := gh.Feedback(ctx, slug, status, since)
 	if err != nil {
 		return err
 	}
@@ -154,14 +155,21 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		// Feedback at the cursor's own second comes back every time, because
 		// the listing is inclusive, so anything already recorded is dropped
 		// by id.
+		ids := make([]string, len(listed))
+		for i, f := range listed {
+			ids[i] = f.ID
+		}
+		rows, err := tx.Query(ctx, `SELECT payload->>'feedbackId' FROM events WHERE task_id = $1
+			AND event_type = $2 AND payload->>'feedbackId' = ANY($3)`, pr.TaskID, delivery.EvPullRequestCommented, ids)
+		if err != nil {
+			return err
+		}
+		seen, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return err
+		}
 		for _, f := range listed {
-			var seen bool
-			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE task_id = $1
-				AND event_type = $2 AND payload->>'feedbackId' = $3)`, pr.TaskID, delivery.EvPullRequestCommented, f.ID).
-				Scan(&seen); err != nil {
-				return err
-			}
-			if !seen {
+			if !slices.Contains(seen, f.ID) {
 				fresh = append(fresh, f)
 			}
 		}
@@ -395,13 +403,6 @@ func newReviews(before []byte, after []forge.Review) []forge.Review {
 	return out
 }
 
-// refused: GitHub answered, and would not (403, 404): not a failure
-// asking again would mend.
-func refused(err error) bool {
-	var e *forge.Error
-	return errors.As(err, &e) && !forge.Transient(err)
-}
-
 // permissionTTL: how long what GitHub said of a login is believed. Long
 // enough that a busy pull request asks once; short enough that access
 // granted or taken away counts the same day.
@@ -428,7 +429,7 @@ func (s *Syncer) wakers(ctx context.Context, org string, gh *forge.GitHub, slug 
 		permission, err := s.cached(ctx, org, "collaborator", slug, f.Author, func() (string, error) {
 			return gh.Permission(ctx, slug, f.Author)
 		})
-		if refused(err) {
+		if forge.Refused(err) {
 			s.Log.Warn("GitHub would not say whether a commenter may wake a fixer", "login", f.Author, "error", err)
 			permission = "none"
 		} else if err != nil {
@@ -444,7 +445,7 @@ func (s *Syncer) wakers(ctx context.Context, org string, gh *forge.GitHub, slug 
 				}
 				return "none", err
 			})
-			if refused(err) {
+			if forge.Refused(err) {
 				s.Log.Warn("GitHub would not say whether a commenter is a member", "login", f.Author, "error", err)
 			} else if err != nil {
 				return nil, err

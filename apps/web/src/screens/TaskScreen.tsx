@@ -38,7 +38,7 @@ import {
 import { Icon } from "@dude/design-system";
 import { Button, Callout, EmptyState, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
 import { DEFAULT_RUN_ROLE, TERMINAL_RUN_STATUSES, runLabel, type PersistedEvent } from "@dude/domain";
-import type { ApiClient, Artifact, Finding, PullRequest, Run, TaskDetail } from "../api/client.ts";
+import type { ApiClient, Artifact, Finding, MergeMethod, PullRequest, Run, TaskDetail } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
 import { actorName, humanActor, project as foldConversation } from "../api/conversation.ts";
 import { shortError } from "../escalation.ts";
@@ -80,6 +80,11 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
   const people = usePeople();
   // Bumped on each reload, for the sections that read their own data.
   const [version, setVersion] = useState(0);
+  // The organization's merge method, read once for every pull request here.
+  const [mergeMethod, setMergeMethod] = useState<MergeMethod>("squash");
+  useEffect(() => {
+    void client.githubSettings().then((s) => setMergeMethod(s.mergeMethod), () => undefined);
+  }, [client]);
 
   // Loads overlap when events come quickly: a slower, older one must not
   // put back what a newer one replaced.
@@ -282,7 +287,7 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
             {prs.length > 0 ? (
               <aside className="taskAside" aria-label="Pull requests">
                 {prs.map((pr) => (
-                  <PullRequestActions key={pr.id} client={client} pr={pr} onChanged={() => void load()}>
+                  <PullRequestActions key={pr.id} client={client} pr={pr} defaultMethod={mergeMethod} onChanged={() => void load()}>
                     {(actions) => (
                       <PullRequestPanel pr={pr} data-testid="pr-panel" data-pr={pr.id}
                         face={(login) => <PersonAvatar person={{ name: login }} size={20} ring={false} />}

@@ -19,7 +19,8 @@ export interface EscalationWords {
   runId: string | null;
 }
 
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+/** "1 fix", "3 fixes": a count and its noun. */
+export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 /** The first line of an error, short enough for a sentence. */
 export function shortError(error: string, max = 160): string {

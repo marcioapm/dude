@@ -6,13 +6,14 @@
  */
 
 import { useEffect, useState } from "react";
-import { formatDuration } from "@dude/design-system";
+import { formatTimestamp } from "@dude/design-system";
 import { Segmented, SettingRow, SettingsSection } from "@dude/design-system/components";
 import { Badge, Button, Callout, Input, Select, Spinner } from "@dude/design-system/primitives";
 import type { ApiClient, GithubSettings, WebhookHealth } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
+import { parseLogins } from "../pullRequests.ts";
 
-const ago = (iso: string) => `${formatDuration(Math.max(0, Date.now() - Date.parse(iso)))} ago`;
+const ago = (iso: string) => formatTimestamp(iso, "relative");
 
 /** Webhook health in one line, as the mockup's: healthy, or what is wrong. */
 export function webhookSummary(h: WebhookHealth): { ok: boolean; text: string } {
@@ -104,7 +105,7 @@ export function GithubBehaviour({ client }: { client: ApiClient }) {
             options={[{ value: "nobody", label: "Nobody" }, { value: "codeowners", label: "CODEOWNERS" }, { value: "logins", label: "These people" }]} />
           {draft.requestReviewFrom === "logins" ? (
             <Input aria-label="GitHub logins" placeholder="GitHub logins, comma-separated" value={draft.reviewLogins.join(", ")}
-              onChange={(e) => set("reviewLogins", e.target.value.split(/[\s,]+/).map((l) => l.replace(/^@/, "")).filter(Boolean))} />
+              onChange={(e) => set("reviewLogins", parseLogins(e.target.value))} />
           ) : null}
         </SettingRow>
         <SettingRow label="Merge method" help="What the Merge button in dude does first.">
