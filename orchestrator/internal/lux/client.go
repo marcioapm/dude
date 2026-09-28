@@ -101,6 +101,17 @@ func Moved(reason string) bool {
 	return false
 }
 
+// Recorded is the state to keep for a Run lux reports in state for
+// reason: one stopped to move is as good as resuming — lux resumes it at
+// once — and must not read as over (Terminal) to anything that decides on
+// it meanwhile (an abort, a push, a pause).
+func Recorded(state, reason string) string {
+	if state == "stopped" && Moved(reason) {
+		return "resuming"
+	}
+	return state
+}
+
 type Secret struct {
 	Name  string `json:"name"`
 	Value string `json:"value"`

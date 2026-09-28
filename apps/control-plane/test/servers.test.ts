@@ -45,6 +45,10 @@ let otherKey: string;
 let orchestratorServer: ReturnType<typeof Bun.serve>;
 const asked: Array<{ method: string; path: string; org: string | null; actor: string | null; body: string }> = [];
 
+/** A response body, as the tests read it: whatever the API said. */
+type Json = any; // eslint-disable-line @typescript-eslint/no-explicit-any
+const body = async (res: Response): Promise<Json> => res.json();
+
 function call(key: string, method: string, path: string, body?: unknown) {
   return router.handle(
     new Request(`http://dude.test${path}`, {
@@ -120,17 +124,17 @@ describe("a project's servers", () => {
   test("start empty, with the default preview settings", async () => {
     const res = await call(memberKey, "GET", `/v1/projects/${PROJECT}/servers`);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ servers: [], previews: { image: null, egress: [], idleTimeoutMinutes: 30 } });
+    expect(await body(res)).toEqual({ servers: [], previews: { image: null, egress: [], idleTimeoutMinutes: 30 } });
   });
 
   test("a maintainer saves one, and everyone reads it with who changed it", async () => {
     const res = await call(adminKey, "PUT", `/v1/projects/${PROJECT}/servers/web`, web);
     expect(res.status).toBe(200);
-    const saved = await res.json();
+    const saved = await body(res);
     expect(saved).toMatchObject({ ...web, updatedBy: { name: "Ana" } });
     expect(Date.parse(saved.updatedAt)).toBeGreaterThan(0);
 
-    const list = await (await call(memberKey, "GET", `/v1/projects/${PROJECT}/servers`)).json();
+    const list = await body(await call(memberKey, "GET", `/v1/projects/${PROJECT}/servers`));
     expect(list.servers).toEqual([saved]);
     const [event] = await owner`SELECT payload FROM events WHERE project_id = ${PROJECT} AND event_type = 'settings.updated'
                                 ORDER BY cursor DESC LIMIT 1`;
@@ -179,7 +183,7 @@ describe("a project's servers", () => {
 
     const res = await call(adminKey, "PUT", `/v1/projects/${PROJECT}/servers/api`, { ...web, name: "backend", port: 8080 });
     expect(res.status).toBe(200);
-    const names = (await (await call(memberKey, "GET", `/v1/projects/${PROJECT}/servers`)).json()).servers.map(
+    const names = (await body(await call(memberKey, "GET", `/v1/projects/${PROJECT}/servers`))).servers.map(
       (s: { name: string }) => s.name,
     );
     expect(names).toEqual(["backend", "web"]);
@@ -194,12 +198,12 @@ describe("a project's servers", () => {
       idleTimeoutMinutes: 15,
     });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({
+    expect(await body(res)).toEqual({
       image: "ghcr.io/acme/runner:node22",
       egress: ["registry.npmjs.org", "proxy.golang.org"],
       idleTimeoutMinutes: 15,
     });
-    const reset = await (await call(adminKey, "PUT", `/v1/projects/${PROJECT}/preview-settings`, {})).json();
+    const reset = await body(await call(adminKey, "PUT", `/v1/projects/${PROJECT}/preview-settings`, {}));
     expect(reset).toEqual({ image: null, egress: [], idleTimeoutMinutes: 30 });
     expect((await call(adminKey, "PUT", `/v1/projects/${PROJECT}/preview-settings`, { idleTimeoutMinutes: 0 })).status).toBe(400);
   });
@@ -245,7 +249,7 @@ describe("a task's and a Run's servers", () => {
     }
     // lux's refusal, as it came.
     const refused = await call(memberKey, "POST", "/v1/runs/run_1/servers/web/start");
-    expect((await refused.json()).error.code).toBe("not_running");
+    expect((await body(refused)).error.code).toBe("not_running");
   });
 
   test("what cannot be a server is refused before the orchestrator is asked", async () => {

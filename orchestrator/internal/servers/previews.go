@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -65,16 +66,19 @@ func (p *Previews) Sweep(ctx context.Context) (int, error) {
 		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.project_id, r.task_id, r.status::text,
 				COALESCE(r.lux_run_id, ''), COALESCE(r.lux_state, ''), COALESCE(r.lux_stop_reason, ''), COALESCE(r.dude_pause, ''),
 				r.pending_starts, r.active_since,
-				COALESCE((pr.preview_settings->>'idleTimeoutMinutes')::float8, 30)
+				(preview_settings(pr)->>'idleTimeoutMinutes')::float8
 			FROM runs r JOIN projects pr ON pr.id = r.project_id
 			WHERE r.kind = 'preview'
 			  AND (r.status IN ('pending', 'scheduled', 'starting', 'running')
 			       OR (r.status = 'paused' AND cardinality(r.pending_starts) > 0)
 			       OR (r.status = 'paused' AND r.lux_state IS DISTINCT FROM 'stopped')
-			       -- Stopped in dude, not yet in lux.
-			       OR (r.status = 'completed' AND r.lux_run_id IS NOT NULL AND r.lux_stop_reason IS NULL))
+			       -- Stopped in dude, not yet cancelled in lux (parked ones too).
+			       OR (r.status IN ('completed', 'failed') AND r.lux_run_id IS NOT NULL
+			           AND r.lux_stop_reason IS DISTINCT FROM 'cancel'))
 			  AND (r.next_attempt_at IS NULL OR r.next_attempt_at <= now())
-			ORDER BY r.created_at LIMIT 500`)
+			-- Every live preview, those with something to do first.
+			ORDER BY (r.status IN ('pending', 'completed', 'failed') OR cardinality(r.pending_starts) > 0) DESC, r.created_at
+			LIMIT 1000`)
 		if err != nil {
 			return err
 		}
@@ -87,26 +91,36 @@ func (p *Previews) Sweep(ctx context.Context) (int, error) {
 	}); err != nil {
 		return 0, err
 	}
-	acted := 0
+	// A few at a time, as the phase syncer does: one slow answer from lux
+	// must not hold up every other preview.
+	var acted atomic.Int64
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, 8)
 	for _, r := range runs {
-		did, err := p.advance(ctx, r)
-		if err != nil {
-			p.Log.Warn("preview sync failed", "run", r.ID, "error", err)
-			if rerr := p.retryLater(ctx, r); rerr != nil {
-				return acted, rerr
+		wg.Add(1)
+		slots <- struct{}{}
+		go func() {
+			defer func() { <-slots; wg.Done() }()
+			did, err := p.advance(ctx, r)
+			if err != nil {
+				p.Log.Warn("preview sync failed", "run", r.ID, "error", err)
+				if rerr := p.retryLater(ctx, r); rerr != nil {
+					p.Log.Warn("backing a preview off failed", "run", r.ID, "error", rerr)
+				}
+				return
 			}
-			continue
-		}
-		if did {
-			acted++
-		}
+			if did {
+				acted.Add(1)
+			}
+		}()
 	}
-	return acted, nil
+	wg.Wait()
+	return int(acted.Load()), nil
 }
 
 func (p *Previews) advance(ctx context.Context, r previewRun) (bool, error) {
 	switch {
-	case r.Status == "completed":
+	case r.Status == "completed" || r.Status == "failed":
 		return true, p.cancel(ctx, r)
 	case r.Status == "pending" && r.LuxRunID == "":
 		return true, p.submit(ctx, r)
@@ -114,6 +128,11 @@ func (p *Previews) advance(ctx context.Context, r previewRun) (bool, error) {
 		if !lux.Terminal(r.LuxState) {
 			// Still stopping: its stream says when it has.
 			p.follow(r)
+			if r.LuxState == "running" {
+				// Parked, and lux has not said it is stopping: asked again
+				// (idempotent), without keeping the loop from resting.
+				return false, p.stop(ctx, r)
+			}
 			return false, nil
 		}
 		if len(r.PendingStarts) == 0 {
@@ -153,9 +172,12 @@ func (p *Previews) submit(ctx context.Context, r previewRun) error {
 		}
 	}
 	return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		// Recorded whatever the preview's status: one stopped while this
+		// submit was in flight is then cancelled in lux by the next sweep.
 		tag, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, next_attempt_at = NULL,
-			lux_repositories = $4, branch = NULLIF($5, ''), status = 'scheduled'
-			WHERE id = $1 AND status = 'pending'`, r.ID, lr.ID, lr.State, db.NonNil(repos), branch)
+			lux_repositories = $4, branch = NULLIF($5, ''),
+			status = CASE WHEN status = 'pending' THEN 'scheduled'::run_status ELSE status END
+			WHERE id = $1 AND lux_run_id IS NULL`, r.ID, lr.ID, lr.State, db.NonNil(repos), branch)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
@@ -290,7 +312,11 @@ func Egress(allow []string) *lux.Network {
 		case a == "*":
 			return &lux.Network{Unrestricted: true}
 		case net.ParseIP(a) != nil:
-			n.Egress = append(n.Egress, lux.EgressRule{CIDR: net.ParseIP(a).String() + "/32"})
+			ip, bits := net.ParseIP(a), "/128"
+			if ip.To4() != nil {
+				bits = "/32"
+			}
+			n.Egress = append(n.Egress, lux.EgressRule{CIDR: ip.String() + bits})
 		case strings.Contains(a, "/"):
 			n.Egress = append(n.Egress, lux.EgressRule{CIDR: a})
 		default:
@@ -377,7 +403,8 @@ func (p *Previews) luxEvent(ctx context.Context, tx pgx.Tx, r previewRun, f lux.
 	str := func(k string) string { v, _ := d[k].(string); return v }
 	switch {
 	case f.EventType == "state":
-		state := str("state")
+		// A move is not an end: lux resumes it (lux.Recorded).
+		state := lux.Recorded(str("state"), str("reason"))
 		// Running is a start: what its idle time counts from. A preview dude
 		// did not stop that ends has failed (a clone, its image); one it
 		// stopped is parked or finished, as dude already recorded.
@@ -391,7 +418,7 @@ func (p *Previews) luxEvent(ctx context.Context, tx pgx.Tx, r previewRun, f lux.
 			             THEN 'the preview stopped: ' || COALESCE(NULLIF($4, ''), $2) ELSE error END,
 			ended_at = CASE WHEN $3 AND lux_stop_reason IS NULL AND status IN ('scheduled', 'starting', 'running')
 			                THEN now() ELSE ended_at END
-			WHERE id = $1`, r.ID, state, lux.Terminal(state) && !(state == "stopped" && lux.Moved(str("reason"))), str("reason")); err != nil {
+			WHERE id = $1`, r.ID, state, lux.Terminal(state), str("reason")); err != nil {
 			return err
 		}
 		return phases.ServersChanged(ctx, tx, r.Org, r.ProjectID, r.TaskID, r.ID, map[string]any{"change": "state", "luxState": state})
@@ -449,12 +476,19 @@ func (p *Previews) parkIfUnused(ctx context.Context, r previewRun) (bool, error)
 	}); err != nil {
 		return true, err
 	}
+	return true, p.stop(ctx, r)
+}
+
+// stop asks lux to stop a parked preview. A stop that fails for now is
+// asked again by the sweep, which sees the preview parked in dude and still
+// running in lux.
+func (p *Previews) stop(ctx context.Context, r previewRun) error {
 	if err := p.Lux.Stop(ctx, r.LuxRunID); err != nil {
 		if le, ok := lux.AsError(err); !ok || le.Retryable() {
-			return true, err
+			return err
 		}
 	}
-	return true, nil
+	return nil
 }
 
 func (p *Previews) minute() time.Duration {
@@ -476,11 +510,9 @@ func (p *Previews) resume(ctx context.Context, r previewRun) error {
 	if token != "" {
 		secrets = []lux.Secret{{Name: "GIT_TOKEN", Value: token}}
 	}
+	// lux answers a Run already resuming as it did the first time; a
+	// refusal (cancelled or finished meanwhile) is for good.
 	lr, err := p.Lux.Resume(ctx, r.LuxRunID, lux.ResumeInput{Secrets: secrets, RequestID: "resume-" + r.ID})
-	if le, ok := lux.AsError(err); ok && le.Status == http.StatusConflict {
-		// Already resuming: an earlier attempt got through.
-		err, lr.State = nil, "resuming"
-	}
 	if le, ok := lux.AsError(err); ok && !le.Retryable() {
 		return p.fail(ctx, r, "lux refused to resume the preview: "+le.Message)
 	}
@@ -607,9 +639,9 @@ func (s *Service) StartPreview(ctx context.Context, org, taskID, actor string) (
 func (s *Service) StopPreview(ctx context.Context, org, taskID, actor string) (TaskServers, error) {
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		var id, projectID string
-		err := tx.QueryRow(ctx, `UPDATE runs r SET status = 'completed', ended_at = now(), pending_starts = '{}',
-				-- Never submitted: nothing for lux to cancel.
-				lux_stop_reason = CASE WHEN r.lux_run_id IS NULL THEN 'cancel' ELSE r.lux_stop_reason END
+		// The sweep cancels its lux Run, if it has one (or when a submit in
+		// flight records it).
+		err := tx.QueryRow(ctx, `UPDATE runs r SET status = 'completed', ended_at = now(), pending_starts = '{}'
 			WHERE r.task_id = $1 AND `+livePreview+` RETURNING r.id, r.project_id`, taskID).Scan(&id, &projectID)
 		if db.IsNotFound(err) {
 			return refuse(http.StatusNotFound, "not_found", "task %s has no branch preview", taskID)
