@@ -7,7 +7,7 @@ import { PersonAvatar } from "../../components/PersonAvatar.tsx";
 import { PreviewFrame, PreviewScrim } from "../../components/PreviewFrame.tsx";
 import { PreviewStages, ServersMoved } from "../../components/PreviewStages.tsx";
 import { EnvVarRows, ServerRecipeDialog, ServerRecipeTable, ServerUrlPreview } from "../../components/ServerRecipe.tsx";
-import { AutostartMark, ServerList, ServerRecipeRow, ServerRow, ServersDrawer, ServersPanel, ServersRunLine, ShortId, TerminalLink } from "../../components/ServerRow.tsx";
+import { AutostartMark, ServerList, ServerRecipeRow, ServerRow, ServersDrawer, ServersPanel, ServersRecipesPreview, ServersRunLine, ShortId, TerminalLink } from "../../components/ServerRow.tsx";
 import { ServerStateDot, ServerStateMark } from "../../components/ServerStateMark.tsx";
 import { ServersSummary, ServersSummaryRow } from "../../components/ServersSummary.tsx";
 import { HostChips } from "../../components/HostChips.tsx";
@@ -19,10 +19,12 @@ import { FormActions } from "../../primitives/Layout.tsx";
 import { RowMenu } from "../../primitives/RowMenu.tsx";
 import { Select } from "../../primitives/Select.tsx";
 import { SERVER_DISPLAY_STATES } from "../../tokens/servers.ts";
-import { canStartAny, canStopAny, describeServer, serverLogLines, summarizeServers } from "../../util/servers.ts";
+import { canStartAny, canStopAny, describeServer, isMoving, serverLogLines, summarizeServers } from "../../util/servers.ts";
+import { toggled } from "../../util/sets.ts";
 import { formatTimestamp } from "../../util/format.ts";
-import type { PreviewStage, Server, ServerEnvVar, TaskServers } from "@dude/domain";
-import { PREVIEW_DOMAIN, PREVIEW_PAGE, serverLogs, serverLogsExited, serverRecipes, serverScenarios, serverUrl, type ServerScenario } from "../serverFixtures.ts";
+import type { PreviewStage, RunServer, TaskServers } from "@dude/domain";
+import type { RecipeEnvVar } from "../../components/ServerRecipe.tsx";
+import { PREVIEW_DOMAIN, PREVIEW_PAGE, previewEgress, serverLogs, serverLogsExited, serverRecipes, serverScenarios, serverUrl, type ServerScenario } from "../serverFixtures.ts";
 import { people } from "../navFixtures.ts";
 
 const SCENARIO_WORDS: Record<ServerScenario, string> = {
@@ -54,26 +56,13 @@ function Panel({ data, compact, logHeight, openLogs = [] }: { readonly data: Tas
           }
           className={styles["serversEmpty"]}
         />
-        <section aria-label="Project servers" className={styles["serversSection"]}>
-          <h2 className="ds-label">What a preview starts</h2>
-          <ServerList>
-            {data.recipes.map((r) => (
-              <ServerRecipeRow key={r.name} name={r.name} port={r.port} command={r.command} autostart={r.autostartInPreviews} />
-            ))}
-          </ServerList>
-          <p className={styles["serversNote"]}>Defined in project settings → Servers.</p>
-        </section>
+        <ServersRecipesPreview recipes={data.recipes} note="Defined in project settings → Servers." />
       </ServersPanel>
     );
   }
   const logs = data.servers.some((s) => s.state === "exited") ? serverLogsExited : serverLogs;
   const isPreview = run.kind === "preview";
-  const toggle = (name: string) => setOpen((s) => {
-    const next = new Set(s);
-    if (next.has(name)) next.delete(name);
-    else next.add(name);
-    return next;
-  });
+  const toggle = (name: string) => setOpen((s) => toggled(s, name));
   return (
     <>
       <ServersPanel note={isPreview
@@ -88,7 +77,7 @@ function Panel({ data, compact, logHeight, openLogs = [] }: { readonly data: Tas
             : <><ShortId id={run.luxRunId} /> · {run.host} · started <Duration ms={Math.max(0, Date.now() - Date.parse(run.startedAt ?? ""))} tone="muted" format="age" /> ago · for Márcio</>}
           actions={
             <>
-              <TerminalLink href={run.terminalUrl} />
+              <TerminalLink href={run.terminalUrl ?? "#"} />
               {isPreview ? <Button size="sm" variant="quiet" leadingIcon="stop">Stop preview</Button> : (
                 <>
                   {compact ? null : <Button size="sm" variant="secondary" leadingIcon="play" disabled={!canStartAny(data.servers)}>Start all</Button>}
@@ -105,7 +94,7 @@ function Panel({ data, compact, logHeight, openLogs = [] }: { readonly data: Tas
         ) : null}
         <ServerList aria-label="Servers">
           {data.servers.map((s) => {
-            const words = describeServer(s, now, { runKind: run.kind, previewStage: run.previewStage });
+            const words = describeServer(s, now, run);
             return (
               <ServerRow
                 key={s.name}
@@ -121,7 +110,7 @@ function Panel({ data, compact, logHeight, openLogs = [] }: { readonly data: Tas
                 onStop={() => undefined}
                 onRestart={() => undefined}
                 menu={<RowMenu size="sm" label={`Actions for ${s.name}`} items={[{ id: "remove", label: "Remove", tone: "danger" }]} />}
-                logs={{ open: open.has(s.name), onToggle: () => toggle(s.name), lines: serverLogLines(logs[s.name] ?? []), live: s.state === "ready" || s.state === "starting", maxHeight: logHeight, onFull: () => undefined }}
+                logs={{ open: open.has(s.name), onToggle: () => toggle(s.name), lines: serverLogLines(logs[s.name] ?? []), live: isMoving(s), maxHeight: logHeight, onFull: () => undefined }}
               />
             );
           })}
@@ -162,12 +151,12 @@ function Summary({ data }: { readonly data: TaskServers }) {
       actions={
         <>
           <Button size="sm" variant="quiet" trailingIcon="arrow-right">All servers</Button>
-          <TerminalLink href={data.run.terminalUrl}>Terminal</TerminalLink>
+          <TerminalLink href={data.run.terminalUrl ?? "#"}>Terminal</TerminalLink>
         </>
       }
     >
       {data.servers.map((s) => {
-        const words = describeServer(s, now, { runKind: data.run!.kind, previewStage: data.run!.previewStage });
+        const words = describeServer(s, now, data.run);
         return <ServersSummaryRow key={s.name} name={s.name} state={words.state} stateLabel={words.label} url={s.url} detail={words.detail} onPreview={() => undefined} onStart={() => undefined} />;
       })}
     </ServersSummary>
@@ -185,7 +174,7 @@ function RecipeDialogDemo({ label, existing, initial }: { readonly label: string
 }
 
 function PreviewSettingsDemo() {
-  const [hosts, setHosts] = useState(["registry.npmjs.org", "proxy.golang.org", "sum.golang.org", "api.example.com", "sandbox.example.com"]);
+  const [hosts, setHosts] = useState(previewEgress);
   const [idle, setIdle] = useState("30");
   return (
     <SettingsSection title="Branch previews">
@@ -207,7 +196,7 @@ function PreviewSettingsDemo() {
 }
 
 function EnvDemo() {
-  const [vars, setVars] = useState<ServerEnvVar[]>([{ name: "VITE_API_URL", value: "http://localhost:8080" }, { name: "VITE_EXAMPLE_ENV", value: "preview" }]);
+  const [vars, setVars] = useState<RecipeEnvVar[]>([{ name: "VITE_API_URL", value: "http://localhost:8080" }, { name: "VITE_EXAMPLE_ENV", value: "preview" }]);
   return <EnvVarRows vars={vars} onChange={setVars} />;
 }
 
@@ -233,7 +222,7 @@ function DockedPreview() {
   );
 }
 
-const ROW_STATES: ReadonlyArray<readonly [string, Server, readonly string[]]> = [
+const ROW_STATES: ReadonlyArray<readonly [string, RunServer, readonly string[]]> = [
   ["ready", serverScenarios.a.servers[0]!, []],
   ["starting", serverScenarios.a.servers[1]!, []],
   ["stopped, never started", serverScenarios.a.servers[2]!, []],
@@ -336,7 +325,7 @@ export function ServersSection({ mode }: { readonly mode: PaneMode }) {
             <ServerRecipeTable recipes={serverRecipes} menu={(r) => <RowMenu size="sm" label={`Actions for ${r.name}`} items={[{ id: "edit", label: "Edit", icon: "edit" }, { kind: "separator" }, { id: "remove", label: "Remove", tone: "danger" }]} />} />
             <Row>
               <RecipeDialogDemo label="Edit web" existing={serverRecipes[0]!} />
-              <RecipeDialogDemo label="Add (invalid input)" existing={null} initial={{ name: "Web_App", port: "80" }} />
+              <RecipeDialogDemo label="Add (invalid input)" existing={null} initial={{ name: "Web_App", port: "70000" }} />
               <RecipeDialogDemo label="Add" existing={null} />
             </Row>
             <Label>ServerUrlPreview</Label>
@@ -354,7 +343,7 @@ export function ServersSection({ mode }: { readonly mode: PaneMode }) {
   );
 }
 
-function RowDemo({ server, openLogs }: { readonly server: Server; readonly openLogs: readonly string[] }) {
+function RowDemo({ server, openLogs }: { readonly server: RunServer; readonly openLogs: readonly string[] }) {
   const [open, setOpen] = useState(openLogs.includes(server.name));
   const words = describeServer(server, Date.now());
   const logs = server.state === "exited" ? serverLogsExited : serverLogs;

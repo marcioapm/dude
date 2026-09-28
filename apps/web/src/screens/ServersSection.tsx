@@ -3,11 +3,11 @@
  * (the agent's, or a branch preview's), a notice when the run moved host,
  * a preview's stages, the list with each server's log folding open under
  * it, and Preview opening the page in a sheet. The task's Servers tab and
- * the run screen's drawer are the same section at two widths; the drawer
- * passes `compact`.
+ * the run screen's drawer are the same section; the drawer carries the
+ * run's actions in its own head, through `ServersRunActions`.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   AgentAvatar,
   Duration,
@@ -16,19 +16,20 @@ import {
   PreviewScrim,
   PreviewStages,
   ServerList,
-  ServerRecipeRow,
   ServerRow,
   ServerStateDot,
   ServersMoved,
   ServersPanel,
+  ServersRecipesPreview,
   ServersRunLine,
   ShortId,
   StatusMark,
   TerminalLink,
 } from "@dude/design-system/components";
-import { ALL_STATUSES, canStartAny, canStopAny, describeServer, firstName, formatTimestamp, serverLogLines, summarizeServers, useNow } from "@dude/design-system";
+import { anyMoving, canStartAny, canStop, canStopAny, describeServer, firstName, formatTimestamp, isMoving, PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES, serverLogLines, summarizeServers, toggled, useNow, type ServersRun } from "@dude/design-system";
 import { Button, Callout, Dialog, EmptyState, FormActions, RowMenu, Spinner, TabCount } from "@dude/design-system/primitives";
-import { PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES, type RunStatus, type Server, type ServerLogLine, type ServersRun, type TaskServers } from "@dude/domain";
+import { ALL_STATUSES } from "@dude/design-system/tokens";
+import type { RunServer, RunStatus, TaskServers } from "@dude/domain";
 import type { LogLine } from "@dude/design-system/components";
 import type { ApiClient } from "../api/client.ts";
 import { runIsLive, type ServersState } from "../hooks/useServers.ts";
@@ -41,30 +42,40 @@ export interface ServersSectionProps {
   servers: ServersState;
   /** The task, for Preview branch (its branch is what a preview checks out). */
   taskId?: string | undefined;
-  /** Narrow (the run screen's drawer): Start all and Stop all move to the drawer's head. */
-  compact?: boolean | undefined;
+  /** In a drawer: the run's actions sit in its head (`ServersRunActions`), the logs are shorter. */
+  inDrawer?: boolean | undefined;
   /** The preview, when the parent lays it out itself (docked beside a conversation). */
   onPreview?: ((name: string | null) => void) | undefined;
   /** Which server's preview is open, when the parent owns it. */
   previewing?: string | null | undefined;
-  /** Open the full log elsewhere (the run's events), when there is an elsewhere. */
-  onFullLog?: ((name: string) => void) | undefined;
 }
 
-/** The run status as StatusMark says it; a preview's own word until its servers are up. */
+/** The run status as StatusMark says it: a preview's own word until its servers are up; a word the vocabulary lacks, as it came. */
 function runMark(run: ServersRun) {
   if (run.kind === "preview" && run.previewStage && run.previewStage !== "ready" && runIsLive(run)) return <StatusMark status="starting" size="sm" />;
-  // dude's status, when the vocabulary has it; a word it lacks is shown as it came.
   const known = (ALL_STATUSES as readonly string[]).includes(run.state);
   return <StatusMark status={known ? (run.state as RunStatus) : "running"} size="sm" label={known ? undefined : run.state} />;
 }
 
-export function ServersSection({ client, servers, taskId, compact, onPreview, previewing, onFullLog }: ServersSectionProps) {
+/** Start all and Stop all, wherever the run's actions sit: the section's run line, or the drawer's head. */
+export function ServersRunActions({ servers, variant = "secondary" }: { servers: ServersState; variant?: "secondary" | "quiet" | undefined }) {
+  const { data, busy } = servers;
+  if (!data?.run || !runIsLive(data.run)) return null;
+  return (
+    <>
+      <Button size="sm" variant={variant} leadingIcon="play" disabled={busy !== null || !canStartAny(data.servers)} onClick={() => void servers.startAll()} data-testid="start-all">Start all</Button>
+      <Button size="sm" variant="quiet" leadingIcon="stop" disabled={busy !== null || !canStopAny(data.servers)} onClick={() => void servers.stopAll()} data-testid="stop-all">Stop all</Button>
+    </>
+  );
+}
+
+export const ServersSection = memo(function ServersSection({ client, servers, taskId, inDrawer, onPreview, previewing }: ServersSectionProps) {
   const { data, problem, busy } = servers;
   const people = usePeople();
-  const now = useNow(Boolean(data?.servers.some((s) => s.state === "starting" || s.state === "ready")), 30_000);
-  const [openLogs, setOpenLogs] = useState<Set<string>>(() => new Set());
-  const [logs, setLogs] = useState<Record<string, ServerLogLine[] | "loading">>({});
+  const now = useNow(Boolean(data && anyMoving(data.servers)), 30_000);
+  const [openLogs, setOpenLogs] = useState<ReadonlySet<string>>(() => new Set());
+  // Each open server's log as LogStream draws it, converted once when read.
+  const [logs, setLogs] = useState<Record<string, LogLine[] | "loading">>({});
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<string | null>(null);
   const [ownPreview, setOwnPreview] = useState<string | null>(null);
@@ -83,12 +94,12 @@ export function ServersSection({ client, servers, taskId, compact, onPreview, pr
     setLogs((l) => (l[name] ? l : { ...l, [name]: "loading" }));
     try {
       const { lines } = await client.serverLog(runId, name);
-      setLogs((l) => ({ ...l, [name]: lines }));
+      setLogs((l) => ({ ...l, [name]: serverLogLines(lines) }));
     } catch {
       setLogs((l) => ({ ...l, [name]: [] }));
     }
   }, [client, runId]);
-  const wasOpen = useRef<Set<string>>(new Set());
+  const wasOpen = useRef<ReadonlySet<string>>(new Set());
   useEffect(() => {
     for (const name of openLogs) if (!wasOpen.current.has(name)) void readLog(name);
     wasOpen.current = openLogs;
@@ -112,19 +123,6 @@ export function ServersSection({ client, servers, taskId, compact, onPreview, pr
     for (const name of fresh) shown.current.add(name);
     setOpenLogs((s) => new Set([...s, ...fresh]));
   }, [data]);
-
-  const toggleLog = (name: string) => setOpenLogs((s) => {
-    const next = new Set(s);
-    if (next.has(name)) next.delete(name);
-    else next.add(name);
-    return next;
-  });
-
-  const lines = useMemo(() => {
-    const out: Record<string, LogLine[]> = {};
-    for (const [name, log] of Object.entries(logs)) if (log !== "loading") out[name] = serverLogLines(log);
-    return out;
-  }, [logs]);
 
   const startPreview = () => taskId && void servers.act("*", () => client.startPreview(taskId));
   const stopPreview = () => taskId && void servers.act("*", () => client.stopPreview(taskId));
@@ -152,17 +150,7 @@ export function ServersSection({ client, servers, taskId, compact, onPreview, pr
           ) : undefined}
         />
         {problem ? <Callout tone="danger">{problem}</Callout> : null}
-        {data.recipes.length > 0 ? (
-          <section className="serversRecipes" aria-label="Project servers">
-            <h2 className="ds-label">What a preview starts</h2>
-            <ServerList>
-              {data.recipes.map((r) => (
-                <ServerRecipeRow key={r.name} name={r.name} port={r.port} command={r.command} autostart={r.autostartInPreviews} />
-              ))}
-            </ServerList>
-            <p className="formNote">Defined in project settings → Servers.</p>
-          </section>
-        ) : null}
+        {data.recipes.length > 0 ? <ServersRecipesPreview recipes={data.recipes} note="Defined in project settings → Servers." /> : null}
       </ServersPanel>
     );
   }
@@ -171,21 +159,22 @@ export function ServersSection({ client, servers, taskId, compact, onPreview, pr
   const owner = run.startedBy ? (people.byId.get(run.startedBy.id) ?? run.startedBy) : null;
   const live = runIsLive(run);
   const previewed = preview ? data.servers.find((s) => s.name === preview) ?? null : null;
-  const previewedWords = previewed ? describeServer(previewed, now, { runKind: run.kind, previewStage: run.previewStage }) : null;
   const setup = data.recipes.filter((r) => r.autostartInPreviews && r.setup).map((r) => r.setup).join(", ");
 
+  const host = run.host ? <> · {run.host}</> : null;
+  const started = run.startedAt ? <> · started <Duration ms={Math.max(0, now - Date.parse(run.startedAt))} format="age" tone="muted" /> ago</> : null;
   const detail = isPreview ? (
     <>
       <code>{run.branch}{run.commit ? ` @ ${run.commit.slice(0, 7)}` : ""}</code>
-      {run.host ? <> · {run.host}</> : null}
-      {run.startedAt ? <> · started <Duration ms={Math.max(0, now - Date.parse(run.startedAt))} format="age" tone="muted" /> ago</> : null}
+      {host}
+      {started}
       {run.parksAfterMinutes ? <> · parks after {run.parksAfterMinutes}m idle</> : null}
     </>
   ) : (
     <>
       <ShortId id={run.luxRunId} />
-      {run.host ? <> · {run.host}</> : null}
-      {run.startedAt ? <> · started <Duration ms={Math.max(0, now - Date.parse(run.startedAt))} format="age" tone="muted" /> ago</> : null}
+      {host}
+      {started}
       {owner ? <> · for {firstName(owner.name)}</> : null}
     </>
   );
@@ -208,14 +197,11 @@ export function ServersSection({ client, servers, taskId, compact, onPreview, pr
           detail={detail}
           actions={
             <>
-              {live ? <TerminalLink href={run.terminalUrl} /> : null}
+              {live && run.terminalUrl ? <TerminalLink href={run.terminalUrl} /> : null}
               {isPreview && taskId ? (
                 <Button size="sm" variant="quiet" leadingIcon="stop" disabled={busy !== null} onClick={stopPreview} data-testid="stop-preview">Stop preview</Button>
-              ) : (
-                <>
-                  {compact ? null : <Button size="sm" variant="secondary" leadingIcon="play" disabled={busy !== null || !live || !canStartAny(data.servers)} onClick={() => void servers.startAll()} data-testid="start-all">Start all</Button>}
-                  {compact ? null : <Button size="sm" variant="quiet" leadingIcon="stop" disabled={busy !== null || !live || !canStopAny(data.servers)} onClick={() => void servers.stopAll()} data-testid="stop-all">Stop all</Button>}
-                </>
+              ) : inDrawer ? null : (
+                <ServersRunActions servers={servers} />
               )}
               <Button size="sm" variant="quiet" leadingIcon="plus" disabled={!live} onClick={() => setAdding(true)} data-testid="add-server">Add server</Button>
             </>
@@ -232,8 +218,9 @@ export function ServersSection({ client, servers, taskId, compact, onPreview, pr
         ) : null}
         <ServerList aria-label="Servers">
           {data.servers.map((s) => {
-            const words = describeServer(s, now, { runKind: run.kind, previewStage: run.previewStage });
+            const words = describeServer(s, now, run);
             const rowBusy = busy === s.name || busy === "*";
+            const log = logs[s.name];
             return (
               <ServerRow
                 key={s.name}
@@ -251,18 +238,17 @@ export function ServersSection({ client, servers, taskId, compact, onPreview, pr
                 onRestart={live && s.command ? () => void servers.restart(s.name) : undefined}
                 menu={<RowMenu size="sm" label={`Actions for ${s.name}`} items={[
                   ...(s.url ? [{ id: "copy", label: "Copy URL", icon: "copy" as const, onSelect: () => void navigator.clipboard?.writeText(s.url!) }] : []),
-                  ...(live && s.command && s.state !== "stopped" && s.state !== "exited" ? [{ id: "restart", label: "Restart", icon: "retry" as const, disabled: rowBusy, onSelect: () => void servers.restart(s.name) }] : []),
+                  ...(live && s.command && canStop(s) ? [{ id: "restart", label: "Restart", icon: "retry" as const, disabled: rowBusy, onSelect: () => void servers.restart(s.name) }] : []),
                   { kind: "separator" as const },
                   { id: "remove", label: "Remove from this run", tone: "danger" as const, disabled: rowBusy, onSelect: () => setRemoving(s.name) },
                 ]} />}
                 logs={{
                   open: openLogs.has(s.name),
-                  onToggle: () => toggleLog(s.name),
-                  lines: lines[s.name] ?? [],
-                  loading: logs[s.name] === "loading",
-                  live: s.state === "ready" || s.state === "starting",
-                  maxHeight: compact ? 200 : 240,
-                  onFull: onFullLog ? () => onFullLog(s.name) : undefined,
+                  onToggle: () => setOpenLogs((o) => toggled(o, s.name)),
+                  lines: log === "loading" ? [] : log ?? [],
+                  loading: log === "loading",
+                  live: isMoving(s),
+                  maxHeight: inDrawer ? 200 : 240,
                 }}
               />
             );
@@ -308,47 +294,54 @@ export function ServersSection({ client, servers, taskId, compact, onPreview, pr
         }
       />
 
-      {!onPreview && previewed && previewedWords && previewed.url ? (
-        <>
-          <PreviewScrim onClose={() => setPreview(null)} />
-          <ServerPreview server={previewed} words={previewedWords} you={people.me?.email ?? null} onClose={() => setPreview(null)}
-            onLogs={() => {
-              setPreview(null);
-              setOpenLogs((s) => new Set([...s, previewed.name]));
-            }}
-            onRestart={live && previewed.command ? () => void servers.restart(previewed.name) : undefined} />
-        </>
+      {!onPreview && previewed ? (
+        <ServerPreview server={previewed} run={run} now={now} servers={servers} onClose={() => setPreview(null)}
+          onLogs={() => {
+            setPreview(null);
+            setOpenLogs((o) => toggled(o, previewed.name, true));
+          }} />
       ) : null}
     </>
   );
-}
+});
 
-/** The preview sheet or docked frame for one server, with the words the row uses. */
-export function ServerPreview({ server, words, you, docked, onClose, onLogs, onRestart }: {
-  server: Server;
-  words: ReturnType<typeof describeServer>;
-  you: string | null;
+/**
+ * The preview sheet, or the docked frame, for one server: the words the
+ * row uses, who is signed in, Restart while the run is live, and the scrim
+ * behind a sheet. Three screens open it; what it needs, it works out.
+ */
+export function ServerPreview({ server, run, now, servers, docked, onClose, onLogs }: {
+  server: RunServer;
+  run: ServersRun;
+  now: number;
+  servers: ServersState;
   docked?: boolean | undefined;
   onClose: () => void;
   onLogs?: (() => void) | undefined;
-  onRestart?: (() => void) | undefined;
 }) {
+  const people = usePeople();
   const srcDoc = usePreviewDocument();
+  if (!server.url) return null;
+  const words = describeServer(server, now, run);
+  const you = people.me?.email ?? null;
   return (
-    <PreviewFrame
-      name={server.name}
-      state={words.state}
-      stateLabel={words.label}
-      url={server.url!}
-      srcDoc={srcDoc}
-      docked={docked}
-      access={you ? `Signed in as ${you}` : undefined}
-      onClose={onClose}
-      onLogs={onLogs}
-      onRestart={onRestart}
-      foot={<span>{server.name} · {words.detail}</span>}
-      footNote="Opens with your own sign-in; the agent cannot open this."
-    />
+    <>
+      {docked ? null : <PreviewScrim onClose={onClose} />}
+      <PreviewFrame
+        name={server.name}
+        state={words.state}
+        stateLabel={words.label}
+        url={server.url}
+        srcDoc={srcDoc}
+        docked={docked}
+        access={you ? `Signed in as ${you}` : undefined}
+        onClose={onClose}
+        onLogs={onLogs}
+        onRestart={runIsLive(run) && server.command ? () => void servers.restart(server.name) : undefined}
+        foot={<span>{server.name} · {words.detail}</span>}
+        footNote="Opens with your own sign-in; the agent cannot open this."
+      />
+    </>
   );
 }
 

@@ -406,19 +406,6 @@
 .serversEmpty {
   max-width: 640px;
 }
-.serversSection {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-8);
-}
-.serversSection > h2 {
-  margin: 0;
-}
-.serversNote {
-  margin: 0;
-  font-size: var(--ds-text-xs);
-  color: var(--ds-color-text-muted);
-}
 .serversAccess {
   font-size: var(--ds-text-sm);
 }

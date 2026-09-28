@@ -6,20 +6,20 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { HostChips, ServerRecipeDialog, ServerRecipeTable, SettingRow, SettingSource, SettingsHeader, SettingsMeta, SettingsNote, SettingsSection } from "@dude/design-system/components";
-import { formatTimestamp, Icon } from "@dude/design-system";
+import { formatTimestamp, Icon, PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES } from "@dude/design-system";
 import { Button, Callout, Dialog, EmptyState, FormActions, Input, RowMenu, Select, Spinner } from "@dude/design-system/primitives";
-import { PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES, type PreviewSettings, type ServerRecipe, type ServerRecipeInput } from "@dude/domain";
+import type { PreviewSettings, Recipe, RecipeInput } from "@dude/domain";
 import type { ApiClient, ProjectDetail } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
 
 const IDLE_TIMEOUTS = [5, 10, 15, 30, 60, 120, 240];
 
 export function ServersSettingsPage({ client, project, canEdit, orgName, onCount }: { client: ApiClient; project: ProjectDetail; canEdit: boolean; orgName: string; onCount?: ((n: number) => void) | undefined }) {
-  const [recipes, setRecipes] = useState<ServerRecipe[] | null>(null);
+  const [recipes, setRecipes] = useState<Recipe[] | null>(null);
   const [previews, setPreviews] = useState<PreviewSettings | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
-  const [editing, setEditing] = useState<ServerRecipe | "new" | null>(null);
-  const [removing, setRemoving] = useState<ServerRecipe | null>(null);
+  const [editing, setEditing] = useState<Recipe | "new" | null>(null);
+  const [removing, setRemoving] = useState<Recipe | null>(null);
   const { busy, problem: saveProblem, save, clear } = useSave();
   // The preview settings save apart from the definitions, so a refusal shows by them.
   const previewSave = useSave();
@@ -47,9 +47,8 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, onCount
   if (!recipes || !previews) return <div className="centered">{problem ?? <Spinner label="Loading…" />}</div>;
 
   const repository = project.repositories[0]?.name ?? null;
-  const domain = previews.domain ?? null;
   const last = [...recipes].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
-  const saveRecipe = (name: string, recipe: ServerRecipeInput) =>
+  const saveRecipe = (name: string, recipe: RecipeInput) =>
     void save(() => client.putProjectServer(project.id, name, recipe), () => {
       setEditing(null);
       void load();
@@ -59,7 +58,7 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, onCount
     // fields start over from what it says.
     const next = { ...previews, ...patch };
     setPreviews(next);
-    void previewSave.save(() => client.updatePreviewSettings(project.id, { image: next.image, egress: next.egress, idleTimeoutMinutes: next.idleTimeoutMinutes }), undefined, done)
+    void previewSave.save(() => client.updatePreviewSettings(project.id, next), undefined, done)
       .then(() => load())
       .then(() => setPreviewRound((n) => n + 1));
   };
@@ -68,12 +67,12 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, onCount
     <>
       <SettingsHeader title="Servers" description="What a run can serve. Each server is a port lux exposes at its own URL, with the command that starts it. People start them in a task, and a branch preview starts the ones marked to." />
       <SettingsNote icon="globe">
-        Every server gets <span className="ds-mono">https://&lt;name&gt;-&lt;run&gt;.{domain ?? "<preview domain>"}</span>, behind your sign-in. Servers stop when a run pauses or moves host; a person starts them again.
+        Every server gets <span className="ds-mono">https://&lt;name&gt;-&lt;run&gt;.&lt;preview domain&gt;</span>, behind your sign-in. Servers stop when a run pauses or moves host; a person starts them again.
       </SettingsNote>
       {problem ? <Callout tone="danger">{problem}</Callout> : null}
 
       <SettingsSection title="Definitions" data-testid="server-recipes"
-        actions={last ? <SettingsMeta>Last changed by {last.updatedBy.name} · {formatTimestamp(last.updatedAt, "relative")}</SettingsMeta> : undefined}>
+        actions={last?.updatedBy ? <SettingsMeta>Last changed by {last.updatedBy.name} · {formatTimestamp(last.updatedAt, "relative")}</SettingsMeta> : undefined}>
         {recipes.length === 0 ? (
           <EmptyState compact icon="globe" title="No servers yet"
             description="A server is a port and the command that starts it. Once defined, anyone can start it in a task, or preview a branch with it."
@@ -104,7 +103,7 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, onCount
           source={previews.image === null ? <SettingSource source="organization" from="the project’s runner" /> : <SettingSource source="project" from="the project’s runner" onReset={canEdit ? () => savePreviews({ image: null }, "Image reset") : undefined} />}>
           <ImageField key={previewRound} value={previews.image} fallback={project.runtimeImage} disabled={!canEdit || previewSave.busy} onSave={(image) => savePreviews({ image }, "Image saved")} />
         </SettingRow>
-        <SettingRow label="Egress allowlist" help="Hosts a preview run may reach, beyond the repository. Everything else is refused.">
+        <SettingRow label="Egress allowlist" help="Hosts a preview run may reach, beyond the repository. Everything else is refused; * allows anywhere.">
           <HostChips hosts={previews.egress} disabled={!canEdit || previewSave.busy} onChange={(egress) => savePreviews({ egress }, "Allowlist saved")} data-testid="preview-egress" />
         </SettingRow>
         <SettingRow label="Idle timeout" help="With no request for this long, the preview run is parked. Starting a server wakes it."
@@ -131,7 +130,6 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, onCount
           }}
           existing={editing === "new" ? null : editing}
           repository={repository}
-          domain={domain}
           busy={busy}
           problem={saveProblem}
           onSubmit={(recipe) => saveRecipe(editing === "new" ? recipe.name : editing.name, recipe)}

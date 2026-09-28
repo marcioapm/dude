@@ -1,7 +1,7 @@
 import type { HTMLAttributes, ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import { shortId } from "../util/format.ts";
-import { bareUrl } from "../util/servers.ts";
+import { bareUrl, canStop } from "../util/servers.ts";
 import { Icon } from "../icons/index.tsx";
 import { Button, IconButton, LinkButton } from "../primitives/Button.tsx";
 import { LogStream, type LogLine } from "./LogStream.tsx";
@@ -40,13 +40,15 @@ export interface ServerRowProps extends Omit<HTMLAttributes<HTMLLIElement>, "tit
   readonly state: ServerDisplayState;
   /** The mark's word, when not the state's own ("Exited 1"). */
   readonly stateLabel?: string | undefined;
+  /** In place of the state mark and detail: what a recipe says of itself. */
+  readonly mark?: ReactNode;
   /** Beside the mark, muted: "ready for 12m". */
   readonly detail?: ReactNode;
   /** The last stderr line on exit, in danger ink. */
   readonly error?: string | null | undefined;
   /** Its URL; null when previews are not configured. Clickable only while ready. */
   readonly url?: string | null | undefined;
-  /** In place of the URL: what the row serves, for a recipe. */
+  /** In place of the URL, in the same muted mono: what a recipe would run. */
   readonly urlSlot?: ReactNode;
   readonly onPreview?: (() => void) | undefined;
   readonly onStart?: (() => void) | undefined;
@@ -57,7 +59,6 @@ export interface ServerRowProps extends Omit<HTMLAttributes<HTMLLIElement>, "tit
   readonly logs?: ServerLogs | undefined;
   /** An action is in flight: the buttons wait. */
   readonly busy?: boolean | undefined;
-  readonly onCopyUrl?: ((url: string) => void) | undefined;
 }
 
 /**
@@ -67,11 +68,9 @@ export interface ServerRowProps extends Omit<HTMLAttributes<HTMLLIElement>, "tit
  * Its log folds open under the row, titled `server:<name>`.
  */
 export function ServerRow({
-  name, port, state, stateLabel, detail, error, url, urlSlot, onPreview, onStart, onStop, onRestart, menu, logs, busy, onCopyUrl, className, ...rest
+  name, port, state, stateLabel, mark, detail, error, url, urlSlot, onPreview, onStart, onStop, onRestart, menu, logs, busy, className, ...rest
 }: ServerRowProps) {
   const live = state === "ready";
-  const running = state === "ready" || state === "starting" || state === "unreachable";
-  const copy = (u: string) => (onCopyUrl ? onCopyUrl(u) : void navigator.clipboard?.writeText(u));
   return (
     <li className={className} {...rest}>
       <div className={cx(styles["row"], logs?.open && styles["open"])} data-server={name} data-state={state}>
@@ -81,7 +80,7 @@ export function ServerRow({
         </div>
         <div className={styles["mid"]}>
           <div className={styles["state"]}>
-            <ServerStateMark state={state} size="sm" label={stateLabel} />
+            {mark ?? <ServerStateMark state={state} size="sm" label={stateLabel} />}
             {detail ? <span className={styles["since"]}>{detail}</span> : null}
             {error ? <span className={styles["err"]} title={error}>{error}</span> : null}
           </div>
@@ -90,7 +89,7 @@ export function ServerRow({
           ) : url ? (
             <div className={cx(styles["url"], !live && styles["off"])}>
               <a href={url} target="_blank" rel="noreferrer" title={url} tabIndex={live ? undefined : -1}>{bareUrl(url)}</a>
-              <IconButton size="sm" icon="copy" label="Copy URL" onClick={() => copy(url)} />
+              <IconButton size="sm" icon="copy" label="Copy URL" onClick={() => void navigator.clipboard?.writeText(url)} />
               {live ? <a className={styles["openLink"]} href={url} target="_blank" rel="noreferrer" aria-label="Open in a new tab" title="Open in a new tab"><Icon name="external" size={16} /></a> : null}
             </div>
           ) : null}
@@ -102,10 +101,10 @@ export function ServerRow({
               Logs
             </Button>
           ) : null}
-          {running ? (
+          {canStop({ state }) ? (
             <>
               {/* Restart is the way back for a server that went unreachable; Start would be lux's no-op. */}
-              {(live || state === "unreachable") && onRestart ? <IconButton size="sm" icon="retry" label={`Restart ${name}`} disabled={busy} onClick={onRestart} /> : null}
+              {state !== "starting" && onRestart ? <IconButton size="sm" icon="retry" label={`Restart ${name}`} disabled={busy} onClick={onRestart} /> : null}
               {onStop ? <Button size="sm" variant="quiet" leadingIcon="stop" disabled={busy} onClick={onStop} data-testid="server-stop">Stop</Button> : null}
             </>
           ) : state === "waiting" ? (
@@ -156,21 +155,29 @@ export interface ServerRecipeRowProps extends Omit<HTMLAttributes<HTMLLIElement>
 }
 
 /** A recipe as a row in the servers' grammar: what a preview would start. */
-export function ServerRecipeRow({ name, port, command, autostart, className, ...rest }: ServerRecipeRowProps) {
+export function ServerRecipeRow({ name, port, command, autostart, ...rest }: ServerRecipeRowProps) {
+  return <ServerRow name={name} port={port} state="stopped" mark={<AutostartMark autostart={autostart} />} urlSlot={<span className="ds-mono">{command}</span>} {...rest} />;
+}
+
+export interface ServersRecipesPreviewProps extends HTMLAttributes<HTMLElement> {
+  /** What a preview would start, from the project's definitions. */
+  readonly recipes: ReadonlyArray<{ name: string; port: number; command: string; autostartInPreviews: boolean }>;
+  /** Under the list, muted: where they are defined. */
+  readonly note?: ReactNode;
+}
+
+/** "What a preview starts": the project's recipes as rows, for a task nothing is serving. */
+export function ServersRecipesPreview({ recipes, note, className, ...rest }: ServersRecipesPreviewProps) {
   return (
-    <li className={className} {...rest}>
-      <div className={styles["row"]} data-server={name}>
-        <div className={styles["name"]}>
-          <span className={styles["nameText"]}>{name}</span>
-          <span className={styles["port"]}>:{port}</span>
-        </div>
-        <div className={styles["mid"]}>
-          <div className={styles["state"]}><AutostartMark autostart={autostart} /></div>
-          <div className={cx(styles["url"], styles["off"])}><span className="ds-mono">{command}</span></div>
-        </div>
-        <div className={styles["actions"]} />
-      </div>
-    </li>
+    <section className={cx(styles["recipes"], className)} aria-label="Project servers" {...rest}>
+      <h2 className="ds-label">What a preview starts</h2>
+      <ServerList>
+        {recipes.map((r) => (
+          <ServerRecipeRow key={r.name} name={r.name} port={r.port} command={r.command} autostart={r.autostartInPreviews} />
+        ))}
+      </ServerList>
+      {note ? <p className={styles["note"]}>{note}</p> : null}
+    </section>
   );
 }
 

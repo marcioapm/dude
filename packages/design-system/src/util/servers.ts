@@ -4,14 +4,38 @@
  * that has not had its turn yet), the mark's word when it differs from the
  * vocabulary's ("Exited 1"), and the detail beside it ("ready for 12m",
  * "stopped at 14:32 · was ready for 41m"). One place, so the panel, the
- * summary and the preview's foot never disagree.
+ * summary and the preview's foot never disagree — and one place for what
+ * a state allows, so the row, the summary and Start all agree with lux.
  */
 
-import type { PreviewStage, Server, ServerLogLine, ServersRunKind } from "@dude/domain";
+import { serverNameSchema, serverPortSchema, type RunServer, type TaskServers } from "@dude/domain";
 import type { LogLine } from "../components/LogStream.tsx";
 import type { ServerDisplayState } from "../tokens/servers.ts";
 import { formatDuration, formatTimestamp } from "./format.ts";
 import { toMs } from "./useNow.ts";
+
+/** The run a task's servers live on, as `TaskServers` names it. */
+export type ServersRun = NonNullable<TaskServers["run"]>;
+
+/** One line of a server's output: `GET …/servers/{name}/log`. */
+export interface ServerLogLine {
+  /** Unix milliseconds. */
+  readonly t: number;
+  readonly stream: "stdout" | "stderr";
+  readonly text: string;
+}
+
+/** What the preview settings say when nothing has been chosen. */
+export const PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES = 30;
+
+/** Why a server name is not one, in words a form shows; null when it is. */
+export function serverNameProblem(name: string): string | null {
+  return serverNameSchema.safeParse(name).success ? null : "Lowercase letters, digits and dashes, starting with a letter: it becomes the first label of the URL.";
+}
+
+export function serverPortProblem(port: number): string | null {
+  return serverPortSchema.safeParse(port).success ? null : "Between 1 and 65535.";
+}
 
 export interface ServerWords {
   readonly state: ServerDisplayState;
@@ -20,16 +44,13 @@ export interface ServerWords {
   readonly detail: string;
 }
 
-export interface ServerContext {
-  /** The run the server is on: a preview's spec servers wait for setup. */
-  readonly runKind?: ServersRunKind | null | undefined;
-  readonly previewStage?: PreviewStage | null | undefined;
-}
+/** The run a server is on, as far as its words depend on it: a preview's spec servers wait for setup. */
+export type ServerRunContext = Pick<ServersRun, "kind" | "previewStage"> | null | undefined;
 
 /** Before "starting servers", a preview's spec servers are waiting, not stopped. */
-const BEFORE_SERVERS: ReadonlySet<PreviewStage> = new Set(["scheduling", "cloning", "setup"]);
+const BEFORE_SERVERS: ReadonlySet<ServersRun["previewStage"]> = new Set(["scheduling", "cloning", "setup"]);
 
-export function describeServer(server: Server, now: number, context: ServerContext = {}): ServerWords {
+export function describeServer(server: RunServer, now: number, run?: ServerRunContext): ServerWords {
   const since = toMs(server.since) ?? now;
   const ready = toMs(server.readySince);
   const at = formatTimestamp(since, "time-short");
@@ -47,8 +68,8 @@ export function describeServer(server: Server, now: number, context: ServerConte
     }
     case "stopped": {
       if (server.stoppedEpoch === null) {
-        if (context.runKind === "preview") {
-          if (server.fromSpec && context.previewStage && BEFORE_SERVERS.has(context.previewStage)) return { state: "waiting", detail: "starts after setup" };
+        if (run?.kind === "preview") {
+          if (server.fromSpec && run.previewStage && BEFORE_SERVERS.has(run.previewStage)) return { state: "waiting", detail: "starts after setup" };
           if (!server.fromSpec) return { state: "stopped", detail: "manual" };
         }
         return { state: "stopped", detail: "not started" };
@@ -62,24 +83,29 @@ export function describeServer(server: Server, now: number, context: ServerConte
   }
 }
 
+type Stateful = { readonly state: ServerDisplayState };
+
+/**
+ * What a state allows, as lux has it: start is a no-op while a server is
+ * starting, ready or unreachable — an unreachable one is restarted, not
+ * started — and stop means something only then.
+ */
+export const canStart = (s: Stateful): boolean => s.state === "stopped" || s.state === "exited";
+export const canStop = (s: Stateful): boolean => s.state === "ready" || s.state === "starting" || s.state === "unreachable";
+/** Its clock is running: a starting one counts up, a ready one has been ready for longer. */
+export const isMoving = (s: Stateful): boolean => s.state === "ready" || s.state === "starting";
+
+/** Whether "Start all" / "Stop all" would do anything. */
+export const canStartAny = (servers: ReadonlyArray<Stateful>): boolean => servers.some(canStart);
+export const canStopAny = (servers: ReadonlyArray<Stateful>): boolean => servers.some(canStop);
+export const anyMoving = (servers: ReadonlyArray<Stateful>): boolean => servers.some(isMoving);
+
 /** The state a list of servers puts on its tab: the first bad one, else how many are ready. */
-export function summarizeServers(servers: ReadonlyArray<Pick<Server, "name" | "state">>): { bad: Pick<Server, "name" | "state"> | null; ready: number } {
+export function summarizeServers(servers: ReadonlyArray<Pick<RunServer, "name" | "state">>): { bad: Pick<RunServer, "name" | "state"> | null; ready: number } {
   return {
     bad: servers.find((s) => s.state === "exited" || s.state === "unreachable") ?? null,
     ready: servers.filter((s) => s.state === "ready").length,
   };
-}
-
-/**
- * Whether "Start all" / "Stop all" would do anything. Start is lux's no-op
- * for a server that is starting, ready or unreachable — an unreachable one
- * is restarted, not started.
- */
-export function canStartAny(servers: ReadonlyArray<Pick<Server, "state">>): boolean {
-  return servers.some((s) => s.state === "stopped" || s.state === "exited");
-}
-export function canStopAny(servers: ReadonlyArray<Pick<Server, "state">>): boolean {
-  return servers.some((s) => s.state === "ready" || s.state === "starting" || s.state === "unreachable");
 }
 
 /** A URL without its scheme, as a row shows it. */

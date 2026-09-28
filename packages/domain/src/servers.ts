@@ -1,171 +1,137 @@
 import { z } from "zod";
-import type { PersonRef } from "./hierarchy.ts";
 
 /**
- * Servers: named ports of a Run, with the command that serves each, and the
- * project's recipes for them. The Server object is lux's, passed through by
- * the control plane unchanged (servers contract §A2, §C); the rest is dude's.
+ * Servers: what a Run can serve, through lux. A project defines its
+ * servers (recipes); a person adds them to a task's Run, and a branch
+ * preview starts those marked to start in previews. Shared by the API and
+ * the web app; the orchestrator answers with the same shapes
+ * (orchestrator/internal/servers).
  */
 
-// ---------------------------------------------------------------------------
-// A project's recipes and its preview settings
-// ---------------------------------------------------------------------------
+/**
+ * A server's name, as lux takes it: part of its URL
+ * (`<name>-<run>.<domain>`), so a DNS label's start, at most 30, never
+ * ending in '-'.
+ */
+export const SERVER_NAME = /^[a-z][a-z0-9-]{0,29}$/;
 
-/** Lowercase letters, digits and dashes, starting with a letter: the first label of the URL. */
-export const SERVER_NAME_PATTERN = /^[a-z][a-z0-9-]{0,29}$/;
+export const serverNameSchema = z
+  .string()
+  .regex(SERVER_NAME, "lowercase letters, digits and '-', starting with a letter, at most 30")
+  .refine((n) => !n.endsWith("-"), "must not end in '-'");
 
-/** Why a server name is not one, in words; null when it is. */
-export function serverNameProblem(name: string): string | null {
-  if (!SERVER_NAME_PATTERN.test(name) || name.endsWith("-")) {
-    return "Lowercase letters, digits and dashes, starting with a letter: it becomes the first label of the URL.";
-  }
-  return null;
-}
+export const serverPortSchema = z.number().int().min(1).max(65535);
 
-/** Ports below 1024 are the container's services'; nothing a recipe should take. */
-export const SERVER_PORT_MIN = 1024;
-export const SERVER_PORT_MAX = 65535;
+/** Inside the checkout: relative, never climbing out of it. '' is its root. */
+export const serverWorkdirSchema = z
+  .string()
+  .max(500)
+  .refine((w) => !w.startsWith("/") && !w.split("/").includes(".."), "relative to the repository, inside it");
 
-export function serverPortProblem(port: number): string | null {
-  return Number.isInteger(port) && port >= SERVER_PORT_MIN && port <= SERVER_PORT_MAX ? null : `Between ${SERVER_PORT_MIN} and ${SERVER_PORT_MAX}.`;
-}
+const envNameSchema = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "an environment variable's name");
 
-export const serverEnvVarSchema = z.object({ name: z.string().min(1), value: z.string() });
-export type ServerEnvVar = z.infer<typeof serverEnvVarSchema>;
-
-/** What a person writes to define a server: `PUT /v1/projects/{id}/servers/{name}`. */
-export const serverRecipeInputSchema = z.object({
-  name: z.string().regex(SERVER_NAME_PATTERN).refine((n) => !n.endsWith("-")),
-  port: z.number().int().min(SERVER_PORT_MIN).max(SERVER_PORT_MAX),
-  command: z.string().min(1),
-  /** Relative to the repository. */
-  workdir: z.string().default(""),
-  /** Run once before the command, in the same directory. */
-  setup: z.string().nullable().default(null),
-  env: z.array(serverEnvVarSchema).default([]),
-  autostartInPreviews: z.boolean().default(true),
+/** A recipe as a maintainer writes it (`PUT /v1/projects/:id/servers/:name`). */
+export const recipeInputSchema = z.object({
+  name: serverNameSchema,
+  port: serverPortSchema,
+  command: z.string().trim().min(1).max(4000),
+  workdir: serverWorkdirSchema.default(""),
+  setup: z.string().max(4000).nullable().default(null),
+  env: z
+    .array(z.object({ name: envNameSchema, value: z.string().max(4000) }))
+    .max(100)
+    .default([])
+    .refine((env) => new Set(env.map((e) => e.name)).size === env.length, "each variable once"),
+  autostartInPreviews: z.boolean().default(false),
 });
-export type ServerRecipeInput = z.infer<typeof serverRecipeInputSchema>;
+export type RecipeInput = z.infer<typeof recipeInputSchema>;
 
-/** A recipe as the project lists it. */
-export interface ServerRecipe extends ServerRecipeInput {
+/** A project's server, as the API shows it. */
+export interface Recipe extends RecipeInput {
   updatedAt: string;
-  updatedBy: PersonRef;
+  updatedBy: { id: string; name: string } | null;
 }
 
-export const PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES = 30;
-
+/** How a project's branch previews run (`PUT /v1/projects/:id/preview-settings`). */
 export const previewSettingsSchema = z.object({
-  /** The container a preview run starts in; null is the project runner's image. */
-  image: z.string().nullable().default(null),
-  /** Hosts a preview run may reach, beyond the repository. */
-  egress: z.array(z.string().min(1)).default([]),
-  /** With no request for this long, the preview run is parked. */
-  idleTimeoutMinutes: z.number().int().positive().default(PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES),
-  /**
-   * The preview domain (`lux.example.com`), for showing what URL a name
-   * makes before a server exists. Not in the build contract: read when the
-   * backend sends it, a placeholder otherwise.
-   */
-  domain: z.string().nullable().optional(),
+  /** null: the project's runtime image. */
+  image: z.string().trim().min(1).max(500).nullable().default(null),
+  /** Hosts (or addresses, CIDR ranges) a preview may reach; "*" for anywhere. */
+  egress: z.array(z.string().trim().min(1).max(253)).max(200).default([]),
+  idleTimeoutMinutes: z.number().int().min(1).max(7 * 24 * 60).default(30),
 });
 export type PreviewSettings = z.infer<typeof previewSettingsSchema>;
 
-// ---------------------------------------------------------------------------
-// lux's Server, passed through
-// ---------------------------------------------------------------------------
+export type ServerState = "stopped" | "starting" | "ready" | "unreachable" | "exited";
 
-export const SERVER_STATES = ["stopped", "starting", "ready", "unreachable", "exited"] as const;
-export type ServerState = (typeof SERVER_STATES)[number];
-
-export const SERVER_STOP_REASONS = ["stopped", "run stopped", "migrated", "host lost"] as const;
-export type ServerStopReason = (typeof SERVER_STOP_REASONS)[number];
-
-/** A server on a Run, as lux reports it (contract §A2). */
-export interface Server {
+/** One of a Run's servers, as lux reports it, passed through. */
+export interface RunServer {
   name: string;
   port: number;
   command: string[] | null;
-  workdir?: string | null | undefined;
-  env?: Record<string, string> | undefined;
-  /** Declared in the Run's spec (a preview's autostart recipes) rather than added while it ran. */
+  workdir: string;
+  env: Record<string, string>;
   fromSpec: boolean;
   state: ServerState;
-  /** When exited. */
-  exitCode?: number | null | undefined;
-  /** The last stderr line on exit, if any. */
-  error?: string | null | undefined;
-  /** When the state last changed. */
+  exitCode?: number;
+  error?: string;
   since: string;
-  /**
-   * When it became ready. lux keeps it only while the server is ready
-   * (null otherwise); a backend that leaves the last value on a stopped
-   * server lets the UI say how long it had been up.
-   */
   readySince: string | null;
-  /** Why it is stopped. */
-  stopReason: ServerStopReason | null;
-  /** The placement epoch it stopped in; null if it never started. */
+  stopReason: "stopped" | "run stopped" | "migrated" | "host lost" | null;
   stoppedEpoch: number | null;
-  /** The placement epoch of the current state. */
   epoch: number;
-  /** Null when previews are not configured. */
   url: string | null;
-  lastRequestAt?: string | null | undefined;
+  lastRequestAt?: string | null;
 }
 
-/** One line of a server's output: `GET …/servers/{name}/log`. */
-export interface ServerLogLine {
-  /** Unix milliseconds. */
-  t: number;
-  stream: "stdout" | "stderr";
-  text: string;
-}
+export type PreviewStage = "scheduling" | "cloning" | "setup" | "starting" | "ready";
 
-// ---------------------------------------------------------------------------
-// A task's servers: the run they live on, and the project's recipes
-// ---------------------------------------------------------------------------
-
-export const PREVIEW_STAGES = ["scheduling", "cloning", "setup", "starting", "ready"] as const;
-export type PreviewStage = (typeof PREVIEW_STAGES)[number];
-
-export type ServersRunKind = "agent" | "preview";
-
-/** The run a task's servers live on: its agent's, or a branch preview's. */
-export interface ServersRun {
-  /** dude's run id. */
-  id: string;
-  luxRunId: string;
-  kind: ServersRunKind;
-  /** "Implementer run", "Branch preview". */
-  label: string;
-  /** dude's run status. */
-  state: string;
-  luxState: string;
-  host: string | null;
-  startedAt: string | null;
-  startedBy: PersonRef | null;
-  branch: string | null;
-  commit: string | null;
-  /** A preview run's progress; null for an agent's. */
-  previewStage: PreviewStage | null;
-  /** A preview run is parked after this long without a request. */
-  parksAfterMinutes: number | null;
-  /** `{LUX_CONSOLE_URL}/runs/{luxRunId}/terminal`. */
-  terminalUrl: string;
-}
-
-/** `GET /v1/tasks/{id}/servers`, `GET /v1/runs/{id}/servers`. */
+/** A task's (or a Run's) servers: `GET /v1/tasks/:id/servers`, `GET /v1/runs/:id/servers`. */
 export interface TaskServers {
-  run: ServersRun | null;
-  servers: Server[];
-  /** Set when every server stopped because the run moved host. */
-  moved: { at: string; fromHost: string | null; toHost: string | null } | null;
-  /** The project's, for "Add server". */
-  recipes: ServerRecipe[];
+  run: null | {
+    id: string;
+    luxRunId: string;
+    kind: "agent" | "preview";
+    label: string;
+    /** dude's status for the Run, and lux's state. */
+    state: string;
+    luxState: string;
+    host: string | null;
+    startedAt: string | null;
+    startedBy: { id: string; name: string } | null;
+    branch: string | null;
+    commit: string | null;
+    previewStage: PreviewStage | null;
+    parksAfterMinutes: number | null;
+    terminalUrl: string | null;
+  };
+  servers: RunServer[];
+  moved: null | { at: string; fromHost: string | null; toHost: string | null };
+  recipes: Recipe[];
 }
 
-/** What adds a server to a run: one of the project's, or one just for this run. */
-export type RunServerInput =
-  | { recipe: string }
-  | { name: string; port: number; command?: string | undefined; workdir?: string | undefined; env?: Record<string, string> | undefined };
+/** What a person adds to a Run: a recipe, or a server of their own. */
+export const addServerSchema = z.union([
+  z.object({ recipe: serverNameSchema }).strict(),
+  z.object({
+    name: serverNameSchema,
+    port: serverPortSchema,
+    /** A shell command line, or argv. */
+    command: z.union([z.string().max(4000), z.array(z.string()).min(1)]).nullish(),
+    workdir: serverWorkdirSchema.optional(),
+    env: z.union([z.record(z.string()), z.array(z.object({ name: envNameSchema, value: z.string() }))]).optional(),
+  }).strict(),
+]);
+export type AddServer = z.infer<typeof addServerSchema>;
+
+/** The payload of a `servers.changed` event. */
+export interface ServersChanged {
+  taskId: string;
+  runId: string;
+  change: string;
+  server?: string;
+  state?: ServerState;
+  exitCode?: number;
+  luxState?: string;
+  error?: string;
+}

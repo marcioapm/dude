@@ -199,26 +199,6 @@ body {
   gap: var(--ds-space-8);
 }
 
-/*
- * A link out among a header's buttons (a pull request): drawn as a ghost
- * button, since the design system's Button is a <button> and this must stay
- * a real link — middle-click, copy address, a new tab.
- */
-.linkButton {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--ds-space-6);
-  height: var(--ds-size-control-md);
-  padding: 0 var(--ds-space-12);
-  border-radius: var(--ds-radius-control);
-  font-weight: var(--ds-weight-medium);
-  white-space: nowrap;
-}
-.linkButton:hover {
-  background: var(--ds-color-hover-wash);
-  text-decoration: none;
-}
-
 /* A stopped delivery: why, a note, and the decisions its owner may take. */
 .escalation {
   display: flex;
@@ -503,14 +483,6 @@ body {
 .serversEmpty {
   max-width: 640px;
 }
-.serversRecipes {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-8);
-}
-.serversRecipes > h2 {
-  margin: 0;
-}
 .formNote {
   margin: 0;
   font-size: var(--ds-text-xs);
@@ -528,31 +500,11 @@ body {
 }
 .recipeChoice {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--ds-space-8);
   padding: var(--ds-space-8);
   border-radius: var(--ds-radius-control);
-}
-.recipeChoice[aria-disabled="true"] {
-  opacity: 0.55;
-}
-.recipeChoiceText {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  gap: 1px;
-}
-.recipeChoiceTitle {
-  font-size: var(--ds-text-md);
-  color: var(--ds-color-text-strong);
-}
-.recipeChoiceDetail {
-  font-size: var(--ds-text-xs);
-  color: var(--ds-color-text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .recipeChoiceNone {
   padding: var(--ds-space-8);

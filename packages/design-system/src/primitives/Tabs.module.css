@@ -79,7 +79,7 @@
 .trigger[data-state="active"] .count {
   color: var(--ds-color-text-secondary);
 }
-/* Pushes a toggle to the end of the row. */
+/* Pushes the row's trailing slot to its end. */
 .spacer {
   flex: 1;
 }

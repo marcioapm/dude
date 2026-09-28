@@ -1,5 +1,6 @@
 import { useId, useState, type HTMLAttributes, type ReactNode } from "react";
-import { serverNameProblem, serverPortProblem, type ServerEnvVar, type ServerRecipe, type ServerRecipeInput } from "@dude/domain";
+import type { Recipe, RecipeInput } from "@dude/domain";
+import { serverNameProblem, serverPortProblem } from "../util/servers.ts";
 import { Icon } from "../icons/index.tsx";
 import { Button, IconButton } from "../primitives/Button.tsx";
 import { Checkbox } from "../primitives/Checkbox.tsx";
@@ -10,10 +11,12 @@ import { Table, TBody, Td, Th, THead, Tr } from "../primitives/Table.tsx";
 import { AutostartMark } from "./ServerRow.tsx";
 import styles from "./ServerRecipe.module.css";
 
+export type RecipeEnvVar = RecipeInput["env"][number];
+
 export interface ServerRecipeTableProps extends HTMLAttributes<HTMLTableElement> {
-  readonly recipes: ReadonlyArray<ServerRecipe>;
+  readonly recipes: ReadonlyArray<Recipe>;
   /** The row's overflow menu (the app's RowMenu), when the person may change it. */
-  readonly menu?: ((recipe: ServerRecipe) => ReactNode) | undefined;
+  readonly menu?: ((recipe: Recipe) => ReactNode) | undefined;
 }
 
 /** A project's server definitions: name, port, command, directory, whether a preview starts it. */
@@ -71,15 +74,15 @@ export function ServerUrlPreview({ name, domain }: ServerUrlPreviewProps) {
 }
 
 export interface EnvVarRowsProps {
-  readonly vars: ReadonlyArray<ServerEnvVar>;
-  readonly onChange: (vars: ServerEnvVar[]) => void;
+  readonly vars: ReadonlyArray<RecipeEnvVar>;
+  readonly onChange: (vars: RecipeEnvVar[]) => void;
   readonly disabled?: boolean | undefined;
 }
 
 /** Environment variables as rows of name and value, with add and remove. */
 export function EnvVarRows({ vars, onChange, disabled }: EnvVarRowsProps) {
   const rows = vars.length === 0 ? [{ name: "", value: "" }] : vars;
-  const set = (i: number, patch: Partial<ServerEnvVar>) => onChange(rows.map((v, j) => (j === i ? { ...v, ...patch } : v)));
+  const set = (i: number, patch: Partial<RecipeEnvVar>) => onChange(rows.map((v, j) => (j === i ? { ...v, ...patch } : v)));
   return (
     <div className={styles["field"]}>
       <span className={styles["fieldLabel"]}>Environment variables</span>
@@ -108,14 +111,14 @@ export interface ServerRecipeDraft {
   command: string;
   workdir: string;
   setup: string;
-  env: ServerEnvVar[];
+  env: RecipeEnvVar[];
   autostartInPreviews: boolean;
 }
 
-export function draftOf(recipe: ServerRecipe | null): ServerRecipeDraft {
+export function draftOf(recipe: Recipe | null): ServerRecipeDraft {
   return recipe
     ? { name: recipe.name, port: String(recipe.port), command: recipe.command, workdir: recipe.workdir, setup: recipe.setup ?? "", env: [...recipe.env], autostartInPreviews: recipe.autostartInPreviews }
-    : { name: "", port: "", command: "", workdir: "", setup: "", env: [], autostartInPreviews: true };
+    : { name: "", port: "", command: "", workdir: "", setup: "", env: [], autostartInPreviews: false };
 }
 
 /** The draft's problems, by field; empty when it can be saved. */
@@ -129,7 +132,7 @@ export function draftProblems(d: ServerRecipeDraft, touched: boolean): { name?: 
   return out;
 }
 
-export function recipeOf(d: ServerRecipeDraft): ServerRecipeInput {
+export function recipeOf(d: ServerRecipeDraft): RecipeInput {
   return {
     name: d.name.trim(),
     port: Number(d.port),
@@ -145,13 +148,13 @@ export interface ServerRecipeDialogProps {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   /** The recipe being edited; null for a new one. */
-  readonly existing: ServerRecipe | null;
+  readonly existing: Recipe | null;
   /** The repository the working directory is under: "web-console/". */
   readonly repository?: string | null | undefined;
   readonly domain?: string | null | undefined;
   readonly busy?: boolean | undefined;
   readonly problem?: string | null | undefined;
-  readonly onSubmit: (recipe: ServerRecipeInput) => void;
+  readonly onSubmit: (recipe: RecipeInput) => void;
   /** For the gallery: start with these values rather than the recipe's. */
   readonly initial?: Partial<ServerRecipeDraft> | undefined;
 }
@@ -199,8 +202,8 @@ export function ServerRecipeDialog({ open, onOpenChange, existing, repository, d
           <FormRow className={styles["namePort"]}>
             <Input label="Name" mono autoFocus={!existing} value={draft.name} error={problems.name} data-testid="server-recipe-name"
               hint="Lowercase letters, digits and dashes: the first label of the URL." onChange={(e) => set("name", e.target.value)} />
-            <Input label="Port" mono type="number" inputMode="numeric" value={draft.port} error={problems.port} className={styles["port"]} data-testid="server-recipe-port"
-              hint="1024–65535. Health is a TCP check on it." onChange={(e) => set("port", e.target.value)} />
+            <Input label="Port" mono type="number" inputMode="numeric" value={draft.port} error={problems.port} data-testid="server-recipe-port"
+              hint="1–65535. Health is a TCP check on it." onChange={(e) => set("port", e.target.value)} />
           </FormRow>
           <ServerUrlPreview name={draft.name.trim()} domain={domain} />
           <Input label="Command" mono value={draft.command} error={problems.command} placeholder="npm run dev -- --host 0.0.0.0 --port 3000" data-testid="server-recipe-command"

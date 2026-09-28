@@ -195,6 +195,15 @@
   font-size: var(--ds-text-xs);
   color: var(--ds-color-text-muted);
 }
+/* What a preview would start: a labelled list, at a reading width. */
+.recipes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+}
+.recipes > h2 {
+  margin: 0;
+}
 /* The container is narrow (the run screen's drawer): the row stacks. */
 @container (max-width: 560px) {
   .row {

@@ -6,14 +6,15 @@
  * state and the reason for a refusal live in one place.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { TERMINAL_RUN_STATUSES, type RunServerInput, type RunStatus, type ServersRun, type TaskServers } from "@dude/domain";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { TERMINAL_RUN_STATUSES, type AddServer, type RunStatus, type TaskServers } from "@dude/domain";
+import type { ServersRun } from "@dude/design-system";
 import type { ApiClient } from "../api/client.ts";
 import { errorText } from "./useSave.tsx";
 
-/** Whether the run the servers live on is still going: its status is dude's, and may be missing. */
+/** Whether the run the servers live on is still going: dude's status, as a string on the wire. */
 export function runIsLive(run: Pick<ServersRun, "state">): boolean {
-  return !TERMINAL_RUN_STATUSES.includes((run.state || "running") as RunStatus);
+  return !TERMINAL_RUN_STATUSES.includes(run.state as RunStatus);
 }
 
 export type ServersScope = { taskId: string; runId?: undefined } | { runId: string; taskId?: undefined };
@@ -23,7 +24,6 @@ export interface ServersState {
   problem: string | null;
   /** A name while an action on that server is in flight; "*" for one on all of them. */
   busy: string | null;
-  reload: () => Promise<void>;
   /** Run an action, then re-read. Resolves whether it succeeded; a refusal is `problem`. */
   act: (what: string, action: () => Promise<unknown>) => Promise<boolean>;
   start: (name: string) => Promise<boolean>;
@@ -32,7 +32,7 @@ export interface ServersState {
   remove: (name: string) => Promise<boolean>;
   startAll: () => Promise<boolean>;
   stopAll: () => Promise<boolean>;
-  add: (input: RunServerInput) => Promise<boolean>;
+  add: (input: AddServer) => Promise<boolean>;
   clearProblem: () => void;
 }
 
@@ -124,19 +124,20 @@ export function useServers(client: ApiClient, scope: ServersScope, version = 0):
     [act, client, runId],
   );
 
-  return {
+  // One object per change, so a screen that memoises on it re-renders for
+  // the servers, not for every frame the stream delivers.
+  return useMemo<ServersState>(() => ({
     data,
     problem,
     busy,
-    reload,
     act,
-    start: useCallback((name: string) => on(name, "start"), [on]),
-    stop: useCallback((name: string) => on(name, "stop"), [on]),
-    restart: useCallback((name: string) => on(name, "restart"), [on]),
-    remove: useCallback((name: string) => (runId ? act(name, () => client.removeRunServer(runId, name)) : Promise.resolve(false)), [act, client, runId]),
-    startAll: useCallback(() => (runId ? act("*", () => client.serversAll(runId, "start-all")) : Promise.resolve(false)), [act, client, runId]),
-    stopAll: useCallback(() => (runId ? act("*", () => client.serversAll(runId, "stop-all")) : Promise.resolve(false)), [act, client, runId]),
-    add: useCallback((input: RunServerInput) => (runId ? act("*", () => client.addRunServer(runId, input)) : Promise.resolve(false)), [act, client, runId]),
-    clearProblem: useCallback(() => setProblem(null), []),
-  };
+    start: (name) => on(name, "start"),
+    stop: (name) => on(name, "stop"),
+    restart: (name) => on(name, "restart"),
+    remove: (name) => (runId ? act(name, () => client.removeRunServer(runId, name)) : Promise.resolve(false)),
+    startAll: () => (runId ? act("*", () => client.serversAll(runId, "start-all")) : Promise.resolve(false)),
+    stopAll: () => (runId ? act("*", () => client.serversAll(runId, "stop-all")) : Promise.resolve(false)),
+    add: (input) => (runId ? act("*", () => client.addRunServer(runId, input)) : Promise.resolve(false)),
+    clearProblem: () => setProblem(null),
+  }), [data, problem, busy, act, on, runId, client]);
 }

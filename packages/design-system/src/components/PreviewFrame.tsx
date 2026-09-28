@@ -30,7 +30,6 @@ export interface PreviewFrameProps extends Omit<HTMLAttributes<HTMLElement>, "ti
   readonly footNote?: ReactNode;
   /** For the gallery: what the frame shows instead of the URL. */
   readonly srcDoc?: string | undefined;
-  readonly defaultViewport?: PreviewViewport | undefined;
 }
 
 /**
@@ -39,17 +38,13 @@ export interface PreviewFrameProps extends Omit<HTMLAttributes<HTMLElement>, "ti
  * width. As a side sheet over the page (`PreviewScrim` beside it), or
  * docked next to a conversation.
  *
- * The frame is cross-origin: what it shows is the server's, so its path
- * is known only as far as this component navigated it, and its history
- * cannot be stepped from here.
+ * The frame is cross-origin: what it shows is the server's, so the URL bar
+ * says where the frame was sent, and its history cannot be stepped from
+ * here — Back and Forward stand where a browser's do, disabled.
  */
-export function PreviewFrame({ name, state, stateLabel, url, access, docked, onClose, onLogs, onRestart, foot, footNote, srcDoc, defaultViewport = "desktop", className, ...rest }: PreviewFrameProps) {
+export function PreviewFrame({ name, state, stateLabel, url, access, docked, onClose, onLogs, onRestart, foot, footNote, srcDoc, className, ...rest }: PreviewFrameProps) {
   const frame = useRef<HTMLIFrameElement>(null);
-  const [viewport, setViewport] = useState<PreviewViewport>(defaultViewport);
-  // What the chrome bar says: the frame is cross-origin, so the path is
-  // ours to know only as far as we set it.
-  const [location, setLocation] = useState(url);
-  useEffect(() => setLocation(url), [url]);
+  const [viewport, setViewport] = useState<PreviewViewport>("desktop");
   // A sheet over the page closes on Escape, as a dialog does; docked, it is part of the page.
   useEffect(() => {
     if (docked) return;
@@ -59,20 +54,15 @@ export function PreviewFrame({ name, state, stateLabel, url, access, docked, onC
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [docked, onClose]);
-  const parsed = safeParse(location);
+  const parsed = safeParse(url);
 
   const reload = () => {
     const el = frame.current;
     if (!el) return;
     // Re-assigning the same src is a reload without touching the cross-origin document.
-    if (srcDoc === undefined) el.src = location;
+    if (srcDoc === undefined) el.src = url;
     else el.srcdoc = srcDoc;
   };
-  // Back and forward are the frame's, and a cross-origin frame's history is
-  // out of reach: the buttons stand where a browser's do, and stay disabled
-  // until the page can be asked. Reload and the URL bar work whatever the
-  // origin.
-  const history = { back: false, forward: false };
 
   return (
     <aside
@@ -92,18 +82,18 @@ export function PreviewFrame({ name, state, stateLabel, url, access, docked, onC
         <span className={styles["headSpacer"]} />
         {onLogs ? <Button size="sm" variant="quiet" onClick={onLogs} className={styles["headAction"]}>Logs</Button> : null}
         {onRestart ? <Button size="sm" variant="quiet" leadingIcon="retry" onClick={onRestart} className={styles["headAction"]}>Restart</Button> : null}
-        <LinkButton href={location} size="sm">Open in a new tab</LinkButton>
+        <LinkButton href={url} size="sm">Open in a new tab</LinkButton>
         <IconButton size="sm" icon="close" label="Close preview" onClick={onClose} data-testid="preview-close" />
       </div>
       <div className={styles["chrome"]}>
         <span className={styles["nav"]}>
-          <IconButton size="sm" icon="arrow-right" label="Back" className={styles["back"]} disabled={!history.back} />
-          <IconButton size="sm" icon="arrow-right" label="Forward" disabled={!history.forward} />
+          <IconButton size="sm" icon="arrow-right" label="Back" className={styles["back"]} disabled />
+          <IconButton size="sm" icon="arrow-right" label="Forward" disabled />
           <IconButton size="sm" icon="retry" label="Reload" onClick={reload} />
         </span>
-        <span className={styles["urlbar"]} title={location}>
+        <span className={styles["urlbar"]} title={url}>
           <span className={styles["lock"]}><Icon name="check" size={12} strokeWidth={2} /></span>
-          <span className={styles["host"]}>{parsed ? parsed.host : bareUrl(location)}</span>
+          <span className={styles["host"]}>{parsed ? parsed.host : bareUrl(url)}</span>
           {parsed && parsed.path !== "/" ? <span className={styles["path"]}>{parsed.path}</span> : null}
           {access ? <span className={styles["access"]}><Icon name="human" size={12} />{access}</span> : null}
         </span>

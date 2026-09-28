@@ -1,10 +1,13 @@
 import type { HTMLAttributes, ReactNode } from "react";
-import { PREVIEW_STAGES, type PreviewStage } from "@dude/domain";
+import type { PreviewStage } from "@dude/domain";
 import { cx } from "../util/cx.ts";
 import { Icon } from "../icons/index.tsx";
 import { Button } from "../primitives/Button.tsx";
 import { Callout } from "../primitives/Layout.tsx";
 import styles from "./PreviewStages.module.css";
+
+/** A preview's stages, in order. */
+export const PREVIEW_STAGES = ["scheduling", "cloning", "setup", "starting", "ready"] as const satisfies readonly PreviewStage[];
 
 export interface PreviewStagesProps extends HTMLAttributes<HTMLDivElement> {
   readonly stage: PreviewStage;

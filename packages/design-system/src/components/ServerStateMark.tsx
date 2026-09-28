@@ -3,7 +3,7 @@ import { cx } from "../util/cx.ts";
 import { Icon, type IconName } from "../icons/index.tsx";
 import { serverStateSpec, type ServerDisplayState } from "../tokens/servers.ts";
 import marks from "./StatusMark.module.css";
-import styles from "./ServerStateMark.module.css";
+import dots from "./StatusBadge.module.css";
 
 export interface ServerStateMarkProps extends Omit<HTMLAttributes<HTMLSpanElement>, "children"> {
   readonly state: ServerDisplayState;
@@ -43,15 +43,16 @@ export interface ServerStateDotProps extends Omit<HTMLAttributes<HTMLSpanElement
 }
 
 /**
- * The state as an 8px dot, for a tab or a toggle that has no room for a
- * word: round, in the tone; a live state breathes. The word is its title.
+ * The state as StatusBadge's 8px dot, for a tab or a toggle that has no
+ * room for a word: round, in the tone; a live state breathes. The word is
+ * its title.
  */
 export function ServerStateDot({ state, label, className, ...rest }: ServerStateDotProps) {
   const spec = serverStateSpec(state);
   const text = label ?? spec.label;
   return (
-    <span className={cx(styles["dot"], styles[spec.tone], spec.live && styles["live"], className)} data-server-state={state} title={text} {...rest}>
-      <span className={styles["mark"]} aria-hidden />
+    <span className={cx(dots["dot"], dots[spec.tone], spec.live && dots["live"], className)} data-server-state={state} title={text} {...rest}>
+      <span className={dots["dotMark"]} aria-hidden />
       <span className="ds-sr-only">{text}</span>
     </span>
   );
