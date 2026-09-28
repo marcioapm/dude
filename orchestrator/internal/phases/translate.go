@@ -179,7 +179,9 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 			t.run.Status = statusRunning
 			return s.event(ctx, tx, t.run, evRunStarted, ledger.ActorSystem, map[string]any{"status": statusRunning})
 		}
-		if lux.Terminal(state) {
+		// A Run lux is moving to another host stops on the way, and is
+		// resumed by lux itself: not over.
+		if lux.Terminal(state) && !(state == "stopped" && lux.Moved(str("reason"))) {
 			return t.ended(ctx, tx, s, state, str("reason"))
 		}
 	case "git.clone":
@@ -207,6 +209,12 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 		raw, _ := json.Marshal(d)
 		_, err := tx.Exec(ctx, `UPDATE runs SET push_result = $2::jsonb WHERE id = $1`, t.run.ID, raw)
 		return err
+	}
+	if strings.HasPrefix(f.EventType, "server.") {
+		// A server of the agent's Run changed (a person started it, it became
+		// ready, the Run moved and it stopped): the browser reads it again.
+		r := t.run
+		return ServerEvent(ctx, tx, r.Org, r.ProjectID, r.TaskID, r.ID, f.EventType, f.EventData)
 	}
 	return nil
 }

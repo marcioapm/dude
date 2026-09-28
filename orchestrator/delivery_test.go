@@ -41,6 +41,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
 	"github.com/marciomartins/dude/orchestrator/internal/prs"
+	"github.com/marciomartins/dude/orchestrator/internal/servers"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
@@ -67,6 +68,10 @@ type world struct {
 	syncer    *phases.Syncer
 	artifacts *phases.Artifacts
 	prs       *prs.Syncer
+	// Branch previews, and a task's servers.
+	previews *servers.Previews
+	// The key servers requests are made as (do).
+	actor string
 	// The orchestrator's internal API, as the backend calls it.
 	api string
 }
@@ -122,8 +127,11 @@ func newWorld(t *testing.T) *world {
 		Signal: func(ctx context.Context, org, wf, name string, payload any, key string) error {
 			return w.runtime.Signal(ctx, org, wf, name, payload, key)
 		}}
+	w.previews = &servers.Previews{Service: &servers.Service{DB: app, Lux: w.syncer.Lux, Log: quiet,
+		ConsoleURL: "https://console.lux.test/"}, Forges: forges, DefaultImage: "default:img"}
+	t.Cleanup(w.previews.Stop)
 	apiSrv := httptest.NewServer((&api.Server{DB: app, Lux: w.syncer.Lux, Workflow: w.runtime, Token: "svc", Log: quiet, Kick: func() {},
-		Forges: forges, PRs: w.prs}).Handler())
+		Forges: forges, PRs: w.prs, Servers: w.previews.Service}).Handler())
 	t.Cleanup(apiSrv.Close)
 	w.api = apiSrv.URL
 	_ = ctx
@@ -230,6 +238,9 @@ func (w *world) pump() {
 		w.t.Fatal(err)
 	}
 	if _, err := w.artifacts.Sweep(ctx); err != nil {
+		w.t.Fatal(err)
+	}
+	if _, err := w.previews.Sweep(ctx); err != nil {
 		w.t.Fatal(err)
 	}
 	if _, err := phases.NotifyFinished(ctx, w.app, func(ctx context.Context, org, wf, runID, status string) error {
