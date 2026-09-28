@@ -228,6 +228,8 @@ def test_the_github_connection_is_checked_and_replaced_in_settings(
 ):
     _sign_in(page, web_url, org["api_key"])
     page.get_by_test_id("org-settings-button").click()
+    # Settings open on Members; GitHub is the next page.
+    page.locator('[data-settings-nav="github"]').click()
     expect(page.get_by_test_id("org-settings")).to_contain_text("Connected")
     expect(page.get_by_test_id("org-settings")).to_contain_text("…oken")
 
