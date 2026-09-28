@@ -20,6 +20,7 @@ const ALLOWED: Record<string, Record<string, string>> = {
   "packages/design-system/src/components/ChatComposer.module.css": { ".field": "a field's edge", ".field:hover": "a field's edge", ".field:focus-within": "focus" },
   "packages/design-system/src/components/Sidebar.module.css": { ".search": "a field's edge", ".search:hover": "a field's edge", ".search:focus-within": "focus" },
   "packages/design-system/src/components/DiffView.module.css": { ".gutter": "a diff's gutter" },
+  "packages/design-system/src/components/MarkdownDocument.module.css": { ".editing": "a field's edge, while it is one" },
   "packages/design-system/src/components/Markdown.module.css": {
     ".hr": "a document's own rule",
     ".taskMark": "a checkbox is its outline",
