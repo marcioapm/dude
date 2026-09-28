@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
 import type { RunDiffFile, RunDiffHunk, RunDiffLine } from "@dude/domain";
 import { cx } from "../util/cx.ts";
+import { IconButton } from "../primitives/Button.tsx";
+import { Segmented } from "./ScreenHeader.tsx";
 import { Switch } from "./Settings.tsx";
 import styles from "./LiveDiff.module.css";
 
@@ -19,12 +21,50 @@ export interface LiveDiffProps extends Omit<HTMLAttributes<HTMLDivElement>, "chi
   readonly lastChange?: ReactNode;
   /** Shown when nothing changed yet. */
   readonly emptyMessage?: ReactNode;
+  /** Opens a file in the viewer; each file's header offers it when given. */
+  readonly onOpenFile?: ((path: string) => void) | undefined;
+  /** Side by side or one column; unified until the person picks. */
+  readonly defaultView?: LiveDiffView | undefined;
 }
+
+export type LiveDiffView = "unified" | "split";
 
 const STATUS_WORD: Record<LiveDiffFile["status"], string> = { M: "modified", A: "added", D: "deleted", R: "renamed" };
 
 /** A line's identity across updates: which file, which side, which number, what text. */
 const lineKey = (path: string, l: LiveDiffLine) => `${path}\u0000${l.kind}\u0000${l.old ?? ""}\u0000${l.new ?? ""}\u0000${l.text}`;
+
+/** One row of a side-by-side hunk: the old line on the left, the new on the right, either may be missing. */
+export interface SplitRow {
+  readonly left: LiveDiffLine | null;
+  readonly right: LiveDiffLine | null;
+}
+
+/**
+ * A hunk's lines side by side: context on both sides, and each run of
+ * removed lines paired with the added run that follows it, row by row, the
+ * longer side's rest against nothing — as a split view reads a change.
+ */
+export function splitRows(lines: ReadonlyArray<LiveDiffLine>): SplitRow[] {
+  const rows: SplitRow[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i]!;
+    if (line.kind === " ") {
+      rows.push({ left: line, right: line });
+      i++;
+      continue;
+    }
+    const removed: LiveDiffLine[] = [];
+    const added: LiveDiffLine[] = [];
+    while (i < lines.length && lines[i]!.kind === "-") removed.push(lines[i++]!);
+    while (i < lines.length && lines[i]!.kind === "+") added.push(lines[i++]!);
+    for (let k = 0; k < Math.max(removed.length, added.length); k++) rows.push({ left: removed[k] ?? null, right: added[k] ?? null });
+  }
+  return rows;
+}
+
+const SIGN = { "+": "+", "-": "−", " ": "" } as const;
 
 /**
  * A working agent's checkout against where it started, as it changes: the
@@ -36,10 +76,12 @@ const lineKey = (path: string, l: LiveDiffLine) => `${path}\u0000${l.kind}\u0000
  * newest change. Picking a file shows it alone and turns Follow off — the
  * person has taken over — and turning Follow on shows all again.
  *
- * Changes are told apart by sign and gutter as well as tint (+, −), so the
- * diff reads without colour.
+ * Unified shows each file in one column; Split puts the old side beside
+ * the new. Changes are told apart by sign and gutter as well as tint
+ * (+, −), so the diff reads without colour.
  */
-export function LiveDiff({ files, base, live, lastChange, emptyMessage, className, ...rest }: LiveDiffProps) {
+export function LiveDiff({ files, base, live, lastChange, emptyMessage, onOpenFile, defaultView = "unified", className, ...rest }: LiveDiffProps) {
+  const [view, setView] = useState<LiveDiffView>(defaultView);
   // Keep the latest change in view: on while live, until the person picks a file.
   const [follow, setFollow] = useState(live ?? false);
   const [selected, setSelected] = useState<string | null>(null);
@@ -100,6 +142,7 @@ export function LiveDiff({ files, base, live, lastChange, emptyMessage, classNam
             <i aria-hidden /> Live
           </span>
         ) : null}
+        {files.length > 0 ? (
         <span className={styles["since"]} title={base ? `The agent's checkout against ${base}, the commit it started from. Uncommitted work included.` : undefined}>
           {base ? (
             <>
@@ -109,6 +152,7 @@ export function LiveDiff({ files, base, live, lastChange, emptyMessage, classNam
           <b>{files.length} {files.length === 1 ? "file" : "files"}</b> <span className={styles["add"]}>+{totals.a}</span>{" "}
           <span className={styles["del"]}>−{totals.d}</span>
         </span>
+        ) : null}
         <span className={styles["spacer"]} />
         {lastChange ? <span className={styles["last"]}>{lastChange}</span> : null}
         {live ? (
@@ -121,6 +165,10 @@ export function LiveDiff({ files, base, live, lastChange, emptyMessage, classNam
             label="Follow the agent"
             testId="follow"
           />
+        ) : null}
+        {files.length > 0 ? (
+          <Segmented label="Show the diff" size="sm" value={view} onChange={setView} data-testid="diff-view"
+            options={[{ value: "unified", label: "Unified" }, { value: "split", label: "Split" }]} />
         ) : null}
       </div>
       {files.length === 0 ? (
@@ -176,28 +224,40 @@ export function LiveDiff({ files, base, live, lastChange, emptyMessage, classNam
                   <span className={styles["counts"]}>
                     <span className={styles["add"]}>+{f.additions}</span> <span className={styles["del"]}>−{f.deletions}</span>
                   </span>
+                  {onOpenFile && f.status !== "D" ? (
+                    <IconButton icon="external" label="Open in the viewer" size="sm" onClick={() => onOpenFile(f.path)} data-testid="diff-open" />
+                  ) : null}
                 </header>
                 {f.binary ? <div className={styles["empty"]}>Binary file not shown.</div> : null}
                 {f.hunks.map((h, hi) => (
                   <div key={hi}>
                     <div className={styles["hunk"]}>{h.header}</div>
-                    {h.lines.map((l, li) => {
-                      const isFresh = fresh.lines.has(lineKey(f.path, l));
-                      return (
-                        <div
-                          key={li}
-                          className={cx(styles["line"], l.kind === "+" && styles["added"], l.kind === "-" && styles["removed"], isFresh && styles["fresh"])}
-                          data-fresh={isFresh ? "" : undefined}
-                        >
-                          <span className={styles["n"]}>{l.old ?? ""}</span>
-                          <span className={styles["n"]}>{l.new ?? ""}</span>
-                          <span className={styles["sign"]} aria-hidden>
-                            {l.kind === "+" ? "+" : l.kind === "-" ? "−" : ""}
-                          </span>
-                          <span className={styles["text"]}>{l.text || " "}</span>
-                        </div>
-                      );
-                    })}
+                    {view === "unified"
+                      ? h.lines.map((l, li) => {
+                          const isFresh = fresh.lines.has(lineKey(f.path, l));
+                          return (
+                            <div
+                              key={li}
+                              className={cx(styles["line"], l.kind === "+" && styles["added"], l.kind === "-" && styles["removed"], isFresh && styles["fresh"])}
+                              data-fresh={isFresh ? "" : undefined}
+                            >
+                              <span className={styles["n"]}>{l.old ?? ""}</span>
+                              <span className={styles["n"]}>{l.new ?? ""}</span>
+                              <span className={styles["sign"]} aria-hidden>{SIGN[l.kind]}</span>
+                              <span className={styles["text"]}>{l.text || " "}</span>
+                            </div>
+                          );
+                        })
+                      : splitRows(h.lines).map((row, ri) => {
+                          const isFresh = [row.left, row.right].some((l) => l !== null && fresh.lines.has(lineKey(f.path, l)));
+                          return (
+                            <div key={ri} className={cx(styles["split"], isFresh && styles["fresh"])} data-fresh={isFresh ? "" : undefined}
+                              data-testid="split-row">
+                              <SplitSide line={row.left} side="old" />
+                              <SplitSide line={row.right} side="new" />
+                            </div>
+                          );
+                        })}
                   </div>
                 ))}
                 {f.truncated ? <div className={styles["empty"]}>Longer than shown: the rest of this file is left out.</div> : null}
@@ -207,6 +267,18 @@ export function LiveDiff({ files, base, live, lastChange, emptyMessage, classNam
         </div>
       )}
     </div>
+  );
+}
+
+/** One side of a split row: its number, sign and text, or an empty stretch where that side has no line. */
+function SplitSide({ line, side }: { line: LiveDiffLine | null; side: "old" | "new" }) {
+  if (!line) return <span className={cx(styles["side"], styles["gap"])} />;
+  return (
+    <span className={cx(styles["side"], line.kind === "+" && styles["added"], line.kind === "-" && styles["removed"])}>
+      <span className={styles["n"]}>{side === "old" ? line.old : line.new}</span>
+      <span className={styles["sign"]} aria-hidden>{SIGN[line.kind]}</span>
+      <span className={styles["text"]}>{line.text || " "}</span>
+    </span>
   );
 }
 

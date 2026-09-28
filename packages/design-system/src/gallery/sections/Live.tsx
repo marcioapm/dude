@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Block, Col, Label, Panes, Section, type PaneMode } from "../Frame.tsx";
+import { AgentAvatar } from "../../components/AgentAvatar.tsx";
 import { Cost } from "../../components/Cost.tsx";
 import { LiveDiff, type LiveDiffFile } from "../../components/LiveDiff.tsx";
 import { FileGallery, FileViewer, type GalleryFile } from "../../components/FileGallery.tsx";
@@ -50,7 +51,8 @@ function LiveDemo() {
   }, []);
   return (
     <div style={{ height: 420, display: "flex" }}>
-      <LiveDiff files={files} base="0fff44b9a1" live lastChange={<>Write <code>revenue.test.ts</code> · just now</>} />
+      <LiveDiff files={files} base="0fff44b9a1" live onOpenFile={() => {}}
+        lastChange={<><AgentAvatar role="implementer" size="xs" live /> Write <code>revenue.test.ts</code> · just now</>} />
     </div>
   );
 }
@@ -83,7 +85,7 @@ function FilesDemo() {
 export function LiveSection({ mode }: { readonly mode: PaneMode }) {
   return (
     <Section id="live" title="Live work" intro="What an agent is doing to the code as it does it, the files it leaves, and what it cost.">
-      <Block id="l-diff" title="LiveDiff" note="The agent's checkout against the commit it started from, as it changes. Files on the left with status and counts; each file's diff under a header that sticks. New lines flash and keep a mark down their side for a moment; the file they are in lights up. Follow the agent scrolls to the newest change; picking a file shows it alone and turns Follow off.">
+      <Block id="l-diff" title="LiveDiff" note="The agent's checkout against the commit it started from, as it changes. Files on the left with status and counts; each file's diff under a header that sticks. New lines flash and keep a mark down their side for a moment; the file they are in lights up. Follow the agent scrolls to the newest change; picking a file shows it alone and turns Follow off. Unified or Split; each file opens in the viewer. The last change carries the agent's face.">
         <Panes mode={mode}>
           <LiveDemo />
         </Panes>
