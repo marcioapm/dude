@@ -1,0 +1,162 @@
+/*
+ * The project page's epics: cards for those in progress, told apart from
+ * the page by shade (chrome), square; rows for planned and done ones,
+ * separated by space. The progress bar says each lane in its legend too.
+ */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-12);
+  min-width: 0;
+  padding: var(--ds-space-16) var(--ds-space-20);
+  background: var(--ds-color-chrome);
+}
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-width: 0;
+}
+.title,
+.rowTitle {
+  padding: 0;
+  font: inherit;
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
+  text-align: left;
+  background: none;
+  border: 0;
+}
+.title {
+  font-size: var(--ds-text-lg);
+}
+.title:hover,
+.rowTitle:hover {
+  text-decoration: underline;
+}
+.needs {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  padding: 1px var(--ds-space-8);
+  font-size: var(--ds-text-xs);
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-tone-attention-on-solid);
+  background: var(--ds-tone-attention-solid);
+  border-radius: var(--ds-radius-full);
+}
+.spacer {
+  flex: 1;
+}
+.description {
+  margin: 0;
+  color: var(--ds-color-text-secondary);
+}
+
+.progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-6);
+}
+.bar {
+  display: flex;
+  gap: 2px;
+  height: 6px;
+}
+.bar i {
+  display: block;
+  height: 100%;
+}
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-4) var(--ds-space-12);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.legend i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: var(--ds-space-4);
+}
+.done {
+  background: var(--ds-tone-success-mark);
+}
+.review {
+  background: var(--ds-tone-info-mark);
+}
+.working {
+  background: var(--ds-tone-attention-mark);
+}
+.backlog {
+  background: var(--ds-color-border);
+}
+
+.prs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-6);
+}
+.merged,
+.open {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  height: var(--ds-size-chip);
+  padding: 0 var(--ds-space-8);
+  font-size: var(--ds-text-xs);
+  font-weight: var(--ds-weight-medium);
+  border-radius: var(--ds-radius-control);
+}
+.merged {
+  color: var(--ds-merged-fg);
+  background: var(--ds-merged-bg);
+}
+.open {
+  color: var(--ds-tone-info-fg);
+  background: var(--ds-tone-info-bg);
+}
+
+.foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-12);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+
+.row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: var(--ds-space-16);
+  padding: var(--ds-space-12) var(--ds-space-12);
+  margin: 0 calc(-1 * var(--ds-space-12));
+}
+.row:hover {
+  background: var(--ds-color-hover-wash);
+}
+.rowText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.rowTitleLine {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
+.rowTitle {
+  font-weight: var(--ds-weight-medium);
+}
+.rowDetail,
+.rowWhen {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}

@@ -14,7 +14,6 @@ import type {
   TaskRepository,
   DeliveryPolicy,
   Directive,
-  FullDeliveryPolicy,
   DirectiveScope,
   Epic,
   Escalation,
@@ -32,6 +31,12 @@ import type {
   Run,
   Session,
   Task,
+  EpicState,
+  ProjectPromptMode,
+  PromptHistory,
+  PromptRole,
+  SettingsPatch,
+  SettingsResponse,
 } from "@dude/domain";
 
 // ---------------------------------------------------------------------------
@@ -122,6 +127,31 @@ function withWaitingFor(projects: NavProject[]): NavProject[] {
     ...(p.epics ? { epics: p.epics.map((e) => ({ ...e, tasks: e.tasks.map(task) })) } : {}),
     ...(p.tasks ? { tasks: p.tasks.map(task) } : {}),
   }));
+}
+
+/** One epic on its project's page. `GET /v1/projects/:id/overview`. */
+export interface EpicOverview {
+  id: string;
+  title: string;
+  description: string;
+  position: number;
+  state: EpicState;
+  /** A person chose the state; otherwise it is what the tasks say. */
+  stateSet: boolean;
+  tasks: number;
+  lanes: { done: number; review: number; progress: number; backlog: number };
+  prs: Record<string, number>;
+  owners: Array<{ id: string; name: string }>;
+  costUsd: number;
+  lastActivity: string | null;
+  needsYou: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectOverview {
+  project: { id: string; name: string };
+  epics: EpicOverview[];
 }
 
 /** A Run with the sessions it spawned. `GET /v1/runs/:id`. */
@@ -293,11 +323,6 @@ export class ApiClient {
     return this.#request("GET", `/v1/findings${qs({ taskId })}`);
   }
 
-  /** The factory's delivery policy, which a project's settings layer over. */
-  deliveryDefaults(): Promise<FullDeliveryPolicy> {
-    return this.#request("GET", "/v1/delivery-defaults");
-  }
-
   forgeConnection(): Promise<ForgeConnection> {
     return this.#request("GET", "/v1/forge/credential");
   }
@@ -418,8 +443,44 @@ export class ApiClient {
     return this.#request("POST", `/v1/projects/${projectId}/epics`, epic);
   }
 
-  updateEpic(id: string, changes: Partial<{ title: string; description: string; position: number }>): Promise<Epic> {
+  updateEpic(id: string, changes: Partial<{ title: string; description: string; position: number; state: EpicState | null }>): Promise<Epic> {
     return this.#request("PATCH", `/v1/epics/${id}`, changes);
+  }
+
+  // -- settings: the organization's defaults, a project's overrides ----------
+
+  organizationSettings(): Promise<SettingsResponse> {
+    return this.#request("GET", "/v1/settings/organization");
+  }
+
+  updateOrganizationSettings(patch: SettingsPatch): Promise<SettingsResponse> {
+    return this.#request("PATCH", "/v1/settings/organization", patch);
+  }
+
+  projectSettings(projectId: string): Promise<SettingsResponse> {
+    return this.#request("GET", `/v1/projects/${projectId}/settings`);
+  }
+
+  updateProjectSettings(projectId: string, patch: SettingsPatch): Promise<SettingsResponse> {
+    return this.#request("PATCH", `/v1/projects/${projectId}/settings`, patch);
+  }
+
+  /** Save a role's prompt: the organization's, or (with a project) the project's and how it goes with the organization's. */
+  savePrompt(role: PromptRole, prompt: { projectId?: string; mode?: ProjectPromptMode; body?: string; note?: string }): Promise<SettingsResponse> {
+    return this.#request("POST", `/v1/prompts/${role}`, prompt);
+  }
+
+  promptHistory(role: PromptRole, projectId?: string): Promise<PromptHistory> {
+    return this.#request("GET", `/v1/prompts/${role}/history${qs(projectId ? { projectId } : {})}`);
+  }
+
+  restorePrompt(versionId: string): Promise<SettingsResponse> {
+    return this.#request("POST", `/v1/prompts/versions/${versionId}/restore`);
+  }
+
+  /** A project's page: its epics by state, with lanes, pull requests, people and cost. */
+  projectOverview(projectId: string): Promise<ProjectOverview> {
+    return this.#request("GET", `/v1/projects/${projectId}/overview`);
   }
 
   deleteEpic(id: string): Promise<void> {

@@ -132,12 +132,15 @@ const runColumns = `r.id, r.organization_id, r.project_id, r.task_id, r.phase::t
 // open for a person (ask.open, delivery.OpenAsk: asked once per row, read
 // in several places), and how long its project
 // lets an agent wait on a person (park_secs) or stay quiet (idle_secs, 0 for
-// never) — the project's delivery policy, over the factory's defaults.
+// never) — the project's delivery policy, over its organization's, over the
+// factory's defaults.
 // Its parameters are Syncer.limits.
-const runFrom = `runs r JOIN projects p ON p.id = r.project_id
+const runFrom = `runs r JOIN projects p ON p.id = r.project_id JOIN organizations o ON o.id = r.organization_id
 	CROSS JOIN LATERAL (SELECT
-		COALESCE((p.delivery_policy->>'parkAfterMinutes')::float8 * 60, $1::float8) AS park_secs,
-		COALESCE((p.delivery_policy->>'idleNudgeMinutes')::float8 * 60, $2::float8) AS idle_secs) lim
+		COALESCE((p.delivery_policy->>'parkAfterMinutes')::float8 * 60, (o.delivery_policy->>'parkAfterMinutes')::float8 * 60,
+			$1::float8) AS park_secs,
+		COALESCE((p.delivery_policy->>'idleNudgeMinutes')::float8 * 60, (o.delivery_policy->>'idleNudgeMinutes')::float8 * 60,
+			$2::float8) AS idle_secs) lim
 	CROSS JOIN LATERAL (SELECT ` + delivery.OpenAsk + ` AS open) ask`
 
 // quiet (SQL, over runFrom): the agent is mid-turn, running no tool, waiting
@@ -336,16 +339,20 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 	var criteria, projectModels, orgModels json.RawMessage
 	var findings []delivery.Finding
 	var feedback []forge.ActionableFeedback
+	var prompts delivery.Prompts
 	_ = json.Unmarshal(r.PRFeedback, &feedback)
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
-			SELECT w.title, w.goal, w.acceptance_criteria, COALESCE(p.runtime_image, ''), p.agent_models
-			FROM tasks w JOIN projects p ON p.id = w.project_id
+			SELECT w.title, w.goal, w.acceptance_criteria, COALESCE(p.runtime_image, ''), p.agent_models, o.default_agent_models
+			FROM tasks w JOIN projects p ON p.id = w.project_id JOIN organizations o ON o.id = p.organization_id
 			WHERE w.id = $1`, r.TaskID).
-			Scan(&title, &goal, &criteria, &image, &projectModels); err != nil {
+			Scan(&title, &goal, &criteria, &image, &projectModels, &orgModels); err != nil {
 			return fmt.Errorf("load task: %w", err)
 		}
 		var err error
+		if prompts, err = delivery.LoadPrompts(ctx, tx, r.ID, r.ProjectID, r.Phase); err != nil {
+			return err
+		}
 		if repos, err = delivery.TaskRepositories(ctx, tx, r.TaskID); err != nil {
 			return fmt.Errorf("load repositories: %w", err)
 		}
@@ -379,13 +386,9 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 	if err != nil {
 		return lux.Spec{}, err
 	}
-	// Organizations are not tenant rows; read their defaults separately.
-	if err := s.DB.Pool.QueryRow(ctx, `SELECT default_agent_models FROM organizations WHERE id = $1`, r.Org).Scan(&orgModels); err != nil {
-		return lux.Spec{}, err
-	}
 	role := delivery.RoleForPhase[r.Phase]
-	model, context := resolveModel(role, projectModels, orgModels)
-	if model == "" {
+	settings := delivery.ResolveRole(delivery.PromptRoleForPhase[r.Phase], projectModels, orgModels)
+	if settings.Model == "" {
 		return lux.Spec{}, fmt.Errorf("no model is configured for the %s role", role)
 	}
 
@@ -403,16 +406,18 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 		promptRepos = append(promptRepos, delivery.PromptRepo{Name: repo.Name, Path: RepoPath(repo.Name), ReadOnly: readOnly})
 	}
 	in.RunID, in.OrganizationID, in.TaskID, in.Phase, in.Role = r.ID, r.Org, r.TaskID, r.Phase, role
-	in.Model = model
+	in.Model, in.Effort, in.TimeLimitMinutes = settings.Model, settings.Effort, settings.TimeLimitMinutes
 	in.Image = image
 	if in.Image == "" {
 		in.Image = s.Agent.DefaultImage
 	}
-	in.Prompt = delivery.Prompt(r.Phase, delivery.PromptInput{
+	promptIn := delivery.PromptInput{
 		Title: title, Goal: goal, AcceptanceCriteria: ac, Category: r.Category,
-		Findings: findings, PRFeedback: feedback, BlockingSeverities: r.BlockingSeverities, Context: context,
+		Findings: findings, PRFeedback: feedback, BlockingSeverities: r.BlockingSeverities, Context: settings.Context,
 		Repositories: promptRepos, Decisions: decisions, Tools: s.Agent.ToolsURL != "", CLI: s.Agent.ToolsURL != "" && s.Agent.ToolsService,
-	})
+		OrgPrompt: prompts.Org, ProjectPrompt: prompts.Project, ProjectPromptMode: prompts.ProjectMode,
+	}
+	in.Prompt = delivery.Prompt(r.Phase, promptIn)
 	// Pushed only by a phase that publishes. Even with nowhere to change
 	// yet: a repository a person lets it change mid-Run arrives at a
 	// resume, and lux pushes only to the branch the spec named at submit.
@@ -459,20 +464,6 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 // exist yet; dude then fast-forwards the task's branch to it.
 func runBranch(r phaseRun) string {
 	return fmt.Sprintf("dude/%s/run-%s", r.TaskID, r.ID)
-}
-
-// resolveModel: the project's setting for a role, else the organization's.
-func resolveModel(role string, project, org json.RawMessage) (model, context string) {
-	for _, layer := range []json.RawMessage{project, org} {
-		var m map[string]struct {
-			Model   string `json:"model"`
-			Context string `json:"context"`
-		}
-		if json.Unmarshal(layer, &m) == nil && m[role].Model != "" {
-			return m[role].Model, m[role].Context
-		}
-	}
-	return "", ""
 }
 
 // follow starts reading a Run's lux output, if nothing is reading it yet.

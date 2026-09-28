@@ -22,7 +22,7 @@ export type Intent =
   | { kind: "newEpic"; projectId: string }
   | { kind: "editEpic"; epic: EpicRef }
   | { kind: "deleteEpic"; epic: EpicRef }
-  | { kind: "projectSettings"; projectId: string }
+  | { kind: "projectSettings"; projectId: string; page?: string }
   | { kind: "moveEpic"; epicId: string; position: number }
   | { kind: "moveTask"; taskId: string; epicId: string | null };
 
@@ -47,7 +47,8 @@ export function rowActions(project: NavProject, ref: NavRef, act: (intent: Inten
         { id: "new-task", label: "New task", icon: "plus", onSelect: () => act({ kind: "newTask", projectId: project.id, epicId: null }) },
         { id: "new-epic", label: "New epic", icon: "layers", onSelect: () => act({ kind: "newEpic", projectId: project.id }) },
         { kind: "separator" },
-        { id: "settings", label: "Settings", icon: "settings", onSelect: () => act({ kind: "projectSettings", projectId: project.id }) },
+        { id: "settings", label: "Project settings", icon: "settings", onSelect: () => act({ kind: "projectSettings", projectId: project.id }) },
+        { id: "agents", label: "Agents & prompts", icon: "agent", onSelect: () => act({ kind: "projectSettings", projectId: project.id, page: "implementer" }) },
       ];
     case "epic": {
       const index = epics.findIndex((e) => e.id === ref.id);

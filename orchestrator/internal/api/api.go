@@ -82,6 +82,16 @@ func (s *Server) Handler() http.Handler {
 		write(w, http.StatusOK, delivery.DefaultPolicy())
 		return nil
 	}))
+	// dude's own prompt for each role: what an organization that never
+	// edits runs, and where its first edit starts from.
+	mux.Handle("GET /internal/prompts/builtin", s.auth(func(w http.ResponseWriter, r *http.Request, _ string) error {
+		out := map[string]string{}
+		for _, role := range delivery.PromptRoles {
+			out[role] = delivery.BuiltinPrompt(role)
+		}
+		write(w, http.StatusOK, out)
+		return nil
+	}))
 	mux.Handle("POST /internal/kick", s.auth(func(w http.ResponseWriter, r *http.Request, _ string) error {
 		s.kick()
 		write(w, http.StatusAccepted, map[string]bool{"ok": true})
@@ -159,10 +169,11 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, org string) err
 		return err
 	}
 	var projectID string
-	var projectPolicy []byte
+	var orgPolicy, projectPolicy []byte
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(r.Context(), `SELECT w.project_id, p.delivery_policy FROM tasks w
-			JOIN projects p ON p.id = w.project_id WHERE w.id = $1`, taskID).Scan(&projectID, &projectPolicy); err != nil {
+		if err := tx.QueryRow(r.Context(), `SELECT w.project_id, o.delivery_policy, p.delivery_policy FROM tasks w
+			JOIN projects p ON p.id = w.project_id JOIN organizations o ON o.id = p.organization_id
+			WHERE w.id = $1`, taskID).Scan(&projectID, &orgPolicy, &projectPolicy); err != nil {
 			if db.IsNotFound(err) {
 				return fail(http.StatusNotFound, "not_found", "task %s not found", taskID)
 			}
@@ -176,11 +187,11 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, org string) err
 		return err
 	}
 
-	// The factory's defaults, then the project's, then this task's own:
-	// each layer sets only what it names.
-	policy := delivery.DefaultPolicy()
-	if err := json.Unmarshal(projectPolicy, &policy); err != nil {
-		return fmt.Errorf("project %s delivery policy: %w", projectID, err)
+	// The factory's defaults, then the organization's, then the project's,
+	// then this task's own: each layer sets only what it names.
+	policy, err := delivery.ResolvePolicy(orgPolicy, projectPolicy)
+	if err != nil {
+		return fmt.Errorf("project %s: %w", projectID, err)
 	}
 	if len(body.Policy) > 0 {
 		if err := json.Unmarshal(body.Policy, &policy); err != nil {
