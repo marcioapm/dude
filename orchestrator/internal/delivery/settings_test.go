@@ -179,3 +179,43 @@ func TestACustomPromptStillCommitsAndRecords(t *testing.T) {
 		}
 	}
 }
+
+// A saved prompt that names the task places it where it says, and the task
+// does not follow it again; the Run's branch and base are filled in too.
+func TestASavedPromptPlacesTheTaskWhereItNamesIt(t *testing.T) {
+	org := "# Implementer\n\n**Goal:** {{task.goal}}\n\n**Acceptance criteria:**\n{{ task.criteria }}\n\n" +
+		"Work on `{{run.branch}}`, from `{{run.base_ref}}`. Keep {{unknown.thing}} as it is."
+	in := PromptInput{
+		Title: "Greet people", Goal: "Say hello to whoever arrives.",
+		AcceptanceCriteria: []string{"It greets", "It has a test"},
+		Decisions:          []Decision{{Question: "Which language?", Answer: "English"}},
+		OrgPrompt:          &org, Branch: "dude/tsk_1/run-1", BaseRef: "main",
+	}
+	got := Prompt(PhaseImplement, in)
+	for _, want := range []string{
+		"**Goal:** Say hello to whoever arrives.",
+		"**Acceptance criteria:**\n- It greets\n- It has a test",
+		"Work on `dude/tsk_1/run-1`, from `main`.",
+		"Keep {{unknown.thing}} as it is.",
+		// What the prompt could not have placed still follows it.
+		"Q: Which language?\n  A: English",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("prompt lacks %q:\n%s", want, got)
+		}
+	}
+	if n := strings.Count(got, "Say hello to whoever arrives."); n != 1 {
+		t.Errorf("the goal appears %d times, want once:\n%s", n, got)
+	}
+	if strings.Contains(got, "Acceptance criteria:\n- It greets") && strings.Count(got, "It greets") != 1 {
+		t.Errorf("the criteria were appended again:\n%s", got)
+	}
+
+	// A prompt that names only the Run still gets the task after it.
+	branchOnly := "Push to {{run.branch}}."
+	in.OrgPrompt = &branchOnly
+	got = Prompt(PhaseImplement, in)
+	if !strings.Contains(got, "Push to dude/tsk_1/run-1.") || !strings.Contains(got, "Say hello to whoever arrives.") {
+		t.Errorf("a prompt without the task lost it:\n%s", got)
+	}
+}
