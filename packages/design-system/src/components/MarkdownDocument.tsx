@@ -1,7 +1,8 @@
 import { useLayoutEffect, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
-import { Button } from "../primitives/Button.tsx";
-import { Markdown } from "./Markdown.tsx";
+import { Button, IconButton } from "../primitives/Button.tsx";
+import { RowMenu } from "../primitives/RowMenu.tsx";
+import { Markdown, type MarkdownVariant } from "./Markdown.tsx";
 import styles from "./MarkdownDocument.module.css";
 
 export interface MarkdownDocumentProps extends Omit<HTMLAttributes<HTMLDivElement>, "children" | "onChange"> {
@@ -18,6 +19,41 @@ export interface MarkdownDocumentProps extends Omit<HTMLAttributes<HTMLDivElemen
   readonly defaultEditing?: boolean | undefined;
   /** Told when editing starts and ends, so the caller can hold other controls meanwhile. */
   readonly onEditingChange?: ((editing: boolean) => void) | undefined;
+  /** How it reads: `prompt` for an agent's instructions (default), `document` for an artifact. */
+  readonly variant?: Exclude<MarkdownVariant, "message"> | undefined;
+  /** What `{{ }}` offers to insert while editing, with what each is. None: no button. */
+  readonly variables?: ReadonlyArray<{ readonly name: string; readonly description: string }> | undefined;
+}
+
+/**
+ * Markdown around the selection, or at the caret: `**` for bold, a
+ * backtick for code, and `## ` at the start of each selected line for a
+ * heading (again removes it). Returns the new text and selection.
+ */
+export function applyFormat(
+  text: string,
+  start: number,
+  end: number,
+  kind: "heading" | "bold" | "code" | { readonly insert: string },
+): { text: string; start: number; end: number } {
+  if (typeof kind === "object") {
+    const next = text.slice(0, start) + kind.insert + text.slice(end);
+    const at = start + kind.insert.length;
+    return { text: next, start: at, end: at };
+  }
+  if (kind === "heading") {
+    const from = text.lastIndexOf("\n", start - 1) + 1;
+    const lineEnd = text.indexOf("\n", Math.max(end - 1, from));
+    const to = lineEnd === -1 ? text.length : lineEnd;
+    const lines = text.slice(from, to).split("\n");
+    const off = lines.every((l) => /^#{1,6} /.test(l));
+    const changed = lines.map((l) => (off ? l.replace(/^#{1,6} /, "") : `## ${l.replace(/^#{1,6} /, "")}`)).join("\n");
+    return { text: text.slice(0, from) + changed + text.slice(to), start: from, end: from + changed.length };
+  }
+  const mark = kind === "bold" ? "**" : "`";
+  const inner = text.slice(start, end);
+  const next = text.slice(0, start) + mark + inner + mark + text.slice(end);
+  return { text: next, start: start + mark.length, end: end + mark.length };
 }
 
 /** A line of source as spans: what is Markdown syntax, what is a variable, what is code. */
@@ -76,6 +112,8 @@ export function MarkdownDocument({
   label = "Markdown source",
   defaultEditing = false,
   onEditingChange,
+  variant = "prompt",
+  variables,
   className,
   ...rest
 }: MarkdownDocumentProps) {
@@ -116,6 +154,28 @@ export function MarkdownDocument({
     }
   };
 
+  // Formatting from the bar acts on the field's selection, and leaves the
+  // result selected, with the caret back in the field. A menu opened from
+  // the bar takes focus; the field keeps its selection meanwhile.
+  const pendingSelection = useRef<[number, number] | null>(null);
+  const format = (kind: Parameters<typeof applyFormat>[3]) => {
+    const el = area.current;
+    if (!el || draft === null) return;
+    const next = applyFormat(draft, el.selectionStart, el.selectionEnd, kind);
+    pendingSelection.current = [next.start, next.end];
+    setDraft(next.text);
+  };
+  // Once the new text is in the field, select what formatting left, in the
+  // same commit: nothing typed or clicked in between can be overwritten.
+  useLayoutEffect(() => {
+    const el = area.current;
+    const sel = pendingSelection.current;
+    if (!el || !sel) return;
+    pendingSelection.current = null;
+    el.focus();
+    el.setSelectionRange(sel[0], sel[1]);
+  }, [draft]);
+
   const text = draft ?? source;
   const lines = text.split("\n").length;
   const words = text.trim() ? text.trim().split(/\s+/).length : 0;
@@ -132,6 +192,20 @@ export function MarkdownDocument({
         <span className={styles["spacer"]} />
         {!onSave ? null : editing ? (
           <>
+            <span className={styles["tools"]} role="toolbar" aria-label="Formatting">
+              <IconButton size="sm" icon="heading" label="Heading" onClick={() => format("heading")} data-testid="markdown-heading" />
+              <IconButton size="sm" icon="bold" label="Bold" onClick={() => format("bold")} data-testid="markdown-bold" />
+              <IconButton size="sm" icon="code" label="Code" onClick={() => format("code")} data-testid="markdown-code" />
+              {variables && variables.length > 0 ? (
+                <RowMenu
+                  label="Insert a variable"
+                  trigger={<IconButton size="sm" icon="braces" label="Insert a variable" data-testid="markdown-variable" />}
+                  items={variables.map((v) => ({ id: v.name, label: `{{${v.name}}}`, mono: true, description: v.description, onSelect: () => format({ insert: `{{${v.name}}}` }) }))}
+                  onCloseAutoFocus={(e) => e.preventDefault()}
+                />
+              ) : null}
+            </span>
+            <span className={styles["divider"]} aria-hidden />
             <Button size="sm" variant="quiet" onClick={() => setDraft(null)} disabled={saving} data-testid="markdown-cancel">
               Cancel
             </Button>
@@ -179,7 +253,7 @@ export function MarkdownDocument({
           />
         </div>
       ) : (
-        <div className={styles["view"]} data-testid="markdown-view">{source.trim() ? <Markdown source={source} variant="document" /> : <p className={styles["empty"]}>{emptyText}</p>}</div>
+        <div className={styles["view"]} data-testid="markdown-view">{source.trim() ? <Markdown source={source} variant={variant} /> : <p className={styles["empty"]}>{emptyText}</p>}</div>
       )}
     </div>
   );

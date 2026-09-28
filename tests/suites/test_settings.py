@@ -238,12 +238,24 @@ def test_a_prompt_is_edited_saved_and_cancelled_in_place(page: Page, web_url: st
     expect(doc.get_by_test_id("markdown-view")).to_contain_text("Implement this task.")
     assert client.get("/v1/prompts/implementer/history").json()["versions"] == []
 
-    # Save keeps it, and it reads rendered again.
+    # Save keeps it, and it reads rendered again. The bar formats the
+    # selection and inserts a variable at the caret.
     doc.get_by_test_id("markdown-edit").click()
-    doc.get_by_test_id("markdown-source").fill("# Implementer\n\nWrite the change and **its tests**.")
+    source = doc.get_by_test_id("markdown-source")
+    source.fill("# Implementer\n\nWrite the change and its tests.\n\nGoal: ")
+    source.evaluate("e => { const i = e.value.indexOf('its tests'); e.setSelectionRange(i, i + 9); }")
+    doc.get_by_test_id("markdown-bold").click()
+    expect(source).to_have_value("# Implementer\n\nWrite the change and **its tests**.\n\nGoal: ")
+    source.evaluate("e => e.setSelectionRange(e.value.length, e.value.length)")
+    doc.get_by_test_id("markdown-variable").click()
+    page.get_by_test_id("rowmenu-task.goal").click()
+    expect(source).to_have_value("# Implementer\n\nWrite the change and **its tests**.\n\nGoal: {{task.goal}}")
     doc.get_by_test_id("markdown-save").click()
     expect(doc.get_by_test_id("markdown-view").locator("h1")).to_have_text("Implementer")
     expect(doc.get_by_test_id("markdown-view").locator("strong")).to_have_text("its tests")
+    # A variable reads as what it is, not as braces.
+    expect(doc.get_by_test_id("markdown-view")).to_contain_text("Goal: task.goal")
+    expect(doc.get_by_test_id("markdown-view")).not_to_contain_text("{{")
     history = client.get("/v1/prompts/implementer/history").json()["versions"]
     assert [v["number"] for v in history] == [2, 1]
 

@@ -201,3 +201,18 @@ export function epicState(stored: EpicState | null, taskStatuses: readonly strin
   const finished = (s: string) => (TERMINAL_TASK_STATUSES as readonly string[]).includes(s);
   return taskStatuses.length > 0 && taskStatuses.every(finished) ? "done" : "active";
 }
+
+/**
+ * What a saved prompt may name as `{{name}}`, filled in for each run by
+ * the orchestrator (delivery/prompts.go, promptVariables). A section a
+ * prompt places this way is not appended again after it. Anything else in
+ * braces is left as written.
+ */
+export const PROMPT_VARIABLES = [
+  { name: "task.title", description: "The task's title." },
+  { name: "task.goal", description: "What the task should achieve." },
+  { name: "task.criteria", description: "Its acceptance criteria, as a list." },
+  { name: "run.branch", description: "The branch this run works on." },
+  { name: "run.base_ref", description: "What the branch started from." },
+] as const;
+export type PromptVariable = (typeof PROMPT_VARIABLES)[number]["name"];

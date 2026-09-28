@@ -66,6 +66,30 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* An item with a description: its name over what it is. */
+.twoLine {
+  height: auto;
+  padding-top: var(--ds-space-6);
+  padding-bottom: var(--ds-space-6);
+}
+.twoLine .label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+}
+.name,
+.description {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.description {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.mono {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-sm);
+}
 .shortcut {
   margin-left: var(--ds-space-16);
   font-family: var(--ds-font-mono);

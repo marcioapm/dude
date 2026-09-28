@@ -30,6 +30,7 @@ import { formatTimestamp, plural } from "@dude/design-system";
 import { Button, Callout, Checkbox, Dialog, Input, Select } from "@dude/design-system/primitives";
 import {
   EFFORTS,
+  PROMPT_VARIABLES,
   findingSeveritySchema,
   REVIEWER_CATEGORIES,
   REVIEWER_CATEGORY_LABEL,
@@ -243,7 +244,7 @@ function PromptSection({ scope, role, onHistory }: { scope: SettingsScope; role:
             </>
           }
         >
-          <Markdown source={org.body} variant="document" />
+          <Markdown source={org.body} variant="prompt" />
         </SettingsDisclosure>
       ) : null}
       {project && mode === "inherit" ? null : (
@@ -255,6 +256,7 @@ function PromptSection({ scope, role, onHistory }: { scope: SettingsScope; role:
           meta={project && own?.versions ? <SettingsMeta>{changedBy(own)} · {historyLink}</SettingsMeta> : undefined}
           defaultEditing={Boolean(project) && own?.mode !== mode && settings.canEdit}
           onEditingChange={setEditing}
+          variables={PROMPT_VARIABLES}
           onSave={settings.canEdit ? (body) => save(body) : undefined}
         />
       )}
