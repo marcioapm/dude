@@ -112,8 +112,13 @@ async function personDetail(scope: OrgScope, id: string) {
   return rows[0]?.person ?? null;
 }
 
-/** Refuse anyone but an organization admin. */
+/**
+ * Refuse anyone but an organization admin. Changes to an organization's
+ * members take turns (a transaction-scoped lock), so two admins demoting
+ * each other at once cannot both pass the last-admin check.
+ */
 async function requireAdmin(scope: OrgScope, ctx: RequestContext): Promise<void> {
+  await scope.sql`SELECT pg_advisory_xact_lock(hashtext('people:' || ${scope.organizationId}))`;
   const rows = (await scope.sql`
     SELECT role FROM people WHERE id = ${ctx.principal.personId} AND removed_at IS NULL`) as Array<{ role: string }>;
   if (rows[0]?.role !== "admin") {
@@ -334,9 +339,31 @@ async function updatePerson(ctx: RequestContext): Promise<Response> {
 }
 
 /**
+ * Take someone who is leaving off their tasks. One they owned passes to
+ * the next person on it, so its first person and its owner stay the same
+ * one; with nobody else on it, it is nobody's, which anyone may answer.
+ */
+async function passOnTasks(scope: OrgScope, ctx: RequestContext, personId: string): Promise<void> {
+  const owned = (await scope.sql`
+    DELETE FROM task_people tp USING tasks t
+    WHERE tp.person_id = ${personId} AND t.id = tp.task_id
+    RETURNING tp.task_id AS "taskId", tp.position, t.project_id AS "projectId"`) as Array<
+    { taskId: string; position: number; projectId: string }
+  >;
+  for (const { taskId, projectId } of owned.filter((t) => t.position === 0)) {
+    const next = (await scope.sql`
+      SELECT person_id AS id FROM task_people WHERE task_id = ${taskId} ORDER BY position LIMIT 1`) as Array<{ id: string }>;
+    const to = next[0]?.id ?? null;
+    // The trigger that follows finds the next owner already first.
+    await scope.sql`UPDATE tasks SET owner_key_id = ${to ? await keyOf(scope, to) : null} WHERE id = ${taskId}`;
+    await recordOnTask(scope, ctx, EventTypes.TaskOwnerChanged, projectId, taskId, { from: personId, to });
+  }
+}
+
+/**
  * Remove someone: every key of theirs stops working at once and they
  * leave the organization's lists. Their row stays, so what they did keeps
- * their name; tasks they owned are nobody's, which anyone may answer.
+ * their name; their tasks pass on (see `passOnTasks`).
  */
 async function removePerson(ctx: RequestContext): Promise<Response> {
   const id = ctx.params.id!;
@@ -349,6 +376,7 @@ async function removePerson(ctx: RequestContext): Promise<Response> {
     if (rows[0].role === "admin" && (await otherAdmins(scope, id)) === 0) return "lastAdmin";
     await scope.sql`UPDATE people SET removed_at = now() WHERE id = ${id}`;
     await scope.sql`UPDATE api_keys SET revoked_at = now() WHERE person_id = ${id} AND revoked_at IS NULL`;
+    await passOnTasks(scope, ctx, id);
     await record(scope, ctx, EventTypes.PersonRemoved, { personId: id });
     return "removed";
   });

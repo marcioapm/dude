@@ -49,11 +49,12 @@ CREATE INDEX api_keys_person_idx ON api_keys (person_id) WHERE person_id IS NOT 
 
 -- One person per user key that exists, named as the key was; ids made
 -- here, as newId would ("per_" and something unique). The first key of
--- each organization is its admin: someone must be able to invite.
+-- each organization that still signs in is its admin: someone must be
+-- able to invite.
 INSERT INTO people (id, organization_id, name, role, last_seen_at, created_at)
 SELECT 'per_' || substr(md5(k.id), 1, 24), k.organization_id, k.name,
        CASE WHEN k.id = (SELECT f.id FROM api_keys f WHERE f.organization_id = k.organization_id
-                         AND f.kind = 'user' ORDER BY f.created_at, f.id LIMIT 1) THEN 'admin' ELSE 'member' END,
+                         AND f.kind = 'user' AND f.revoked_at IS NULL ORDER BY f.created_at, f.id LIMIT 1) THEN 'admin' ELSE 'member' END,
        k.last_used_at, k.created_at
 FROM api_keys k WHERE k.kind = 'user';
 UPDATE api_keys k SET person_id = 'per_' || substr(md5(k.id), 1, 24) WHERE k.kind = 'user';

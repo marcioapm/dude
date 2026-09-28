@@ -93,6 +93,18 @@ def test_removing_someone_revokes_all_their_keys(client: ApiClient, env, owner_d
     assert created["actor"]["name"] == "Dee"
 
 
+def test_a_removed_owners_task_passes_to_the_next_person_on_it(client: ApiClient, env, project: dict):
+    """Its first person and its owner stay one: the next on it, not the one who left."""
+    me = client.get("/v1/me").json()["person"]
+    eli, eli_client = _invite(client, env, "Eli")
+    task = eli_client.create_task(project["id"], "Eli's, shared")
+    assert client.put(f"/v1/tasks/{task['id']}/people", {"people": [eli["id"], me["id"]]}).status_code == 200
+    assert client.delete(f"/v1/people/{eli['id']}").status_code == 204
+    after = client.get(f"/v1/tasks/{task['id']}").json()
+    assert after["owner"]["id"] == me["id"]
+    assert [p["id"] for p in after["people"]] == [me["id"]]
+
+
 def test_your_keys_are_yours_to_make_and_revoke(client: ApiClient, env):
     made = client.post("/v1/me/keys", {"name": "CI"}).json()
     script = ApiClient(env.control_plane_url, made["key"])

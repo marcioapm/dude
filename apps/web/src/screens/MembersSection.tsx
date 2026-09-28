@@ -87,8 +87,9 @@ export function MembersSection({ client, me, onChanged }: { client: ApiClient; m
                 return (
                   <Tr key={p.id} data-testid="member" data-member={p.name}>
                     <Td>
-                      <HumanAvatar person={{ id: p.id, name: you ? `${p.name} (you)` : p.name, imageUrl: photoOf(p) }} size="lg"
-                        showName detail={[p.email, p.online ? "online" : whereWords(p) ? `active ${whereWords(p)}` : "not seen yet"]
+                      {/* "you" beside the name, not in it: the face's initials are the name's. */}
+                      <HumanAvatar person={{ id: p.id, name: p.name, imageUrl: photoOf(p) }} size="lg" showName
+                        detail={[you ? "you" : null, p.email, p.online ? "online" : whereWords(p) ? `active ${whereWords(p)}` : "not seen yet"]
                           .filter(Boolean).join(" · ")} />
                     </Td>
                     <Td>
