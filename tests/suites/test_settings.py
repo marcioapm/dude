@@ -256,6 +256,15 @@ def test_a_prompt_is_edited_saved_and_cancelled_in_place(page: Page, web_url: st
     # A variable reads as what it is, not as braces.
     expect(doc.get_by_test_id("markdown-view")).to_contain_text("Goal: task.goal")
     expect(doc.get_by_test_id("markdown-view")).not_to_contain_text("{{")
+    # The bar is one stop to the keyboard: arrows move along it.
+    doc.get_by_test_id("markdown-edit").click()
+    expect(doc.get_by_test_id("markdown-source")).to_be_focused()
+    doc.get_by_test_id("markdown-heading").focus()
+    page.keyboard.press("ArrowRight")
+    expect(doc.get_by_test_id("markdown-bold")).to_be_focused()
+    page.keyboard.press("End")
+    expect(doc.get_by_test_id("markdown-variable")).to_be_focused()
+    doc.get_by_test_id("markdown-cancel").click()
     history = client.get("/v1/prompts/implementer/history").json()["versions"]
     assert [v["number"] for v in history] == [2, 1]
 

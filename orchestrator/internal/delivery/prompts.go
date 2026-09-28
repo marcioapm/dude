@@ -54,9 +54,9 @@ type PromptInput struct {
 var promptVariable = regexp.MustCompile(`\{\{\s*([\w.]+)\s*\}\}`)
 
 // fill puts the task and the Run into a saved prompt where it names them.
-// placed says whether it placed the task itself (its goal or criteria), so
-// the task need not follow it again.
-func (in PromptInput) fill(prompt string) (filled string, placed bool) {
+// The task still follows in full, as every phase frames it: a prompt that
+// names one part of it must not cost the agent the rest.
+func (in PromptInput) fill(prompt string) string {
 	criteria := make([]string, len(in.AcceptanceCriteria))
 	for i, c := range in.AcceptanceCriteria {
 		criteria[i] = "- " + c
@@ -68,18 +68,12 @@ func (in PromptInput) fill(prompt string) (filled string, placed bool) {
 		"run.branch":    in.Branch,
 		"run.base_ref":  in.BaseRef,
 	}
-	filled = promptVariable.ReplaceAllStringFunc(prompt, func(m string) string {
-		name := promptVariable.FindStringSubmatch(m)[1]
-		v, ok := values[name]
-		if !ok {
-			return m
+	return promptVariable.ReplaceAllStringFunc(prompt, func(m string) string {
+		if v, ok := values[promptVariable.FindStringSubmatch(m)[1]]; ok {
+			return v
 		}
-		if name == "task.goal" || name == "task.criteria" {
-			placed = true
-		}
-		return v
+		return m
 	})
-	return filled, placed
 }
 
 // Decision is a question an agent asked about this work, and a person's
@@ -132,23 +126,15 @@ func (in PromptInput) task() string {
 		}
 		parts = append(parts, b.String())
 	}
-	if d := in.decisions(); d != "" {
-		parts = append(parts, d)
+	if len(in.Decisions) > 0 {
+		var b strings.Builder
+		b.WriteString("Decided by people during this work (part of the task; do not ask again):")
+		for _, d := range in.Decisions {
+			fmt.Fprintf(&b, "\n- Q: %s\n  A: %s", oneLine(d.Question), oneLine(d.Answer))
+		}
+		parts = append(parts, b.String())
 	}
 	return strings.Join(parts, "\n\n")
-}
-
-// decisions is what people decided during this work, as a section, or "".
-func (in PromptInput) decisions() string {
-	if len(in.Decisions) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString("Decided by people during this work (part of the task; do not ask again):")
-	for _, d := range in.Decisions {
-		fmt.Fprintf(&b, "\n- Q: %s\n  A: %s", oneLine(d.Question), oneLine(d.Answer))
-	}
-	return b.String()
 }
 
 // oneLine keeps a decision on its line: its own line breaks become spaces.
@@ -365,41 +351,25 @@ func (in PromptInput) instructions(phase string) (lead, tail []string) {
 	return lead, nil
 }
 
-// taskSection is the task as a prompt section, unless a saved prompt has
-// already placed it with {{task.goal}} or {{task.criteria}}: then only what
-// it could not have placed (people's decisions) follows.
-func (in PromptInput) taskSection(placed bool, intro string) []string {
-	if !placed {
-		return []string{intro + in.task()}
-	}
-	if d := in.decisions(); d != "" {
-		return []string{d}
-	}
-	return nil
-}
-
 // Prompt composes one phase's prompt.
 func Prompt(phase string, in PromptInput) string {
 	var sections []string
 	add := func(s ...string) { sections = append(sections, s...) }
 
 	lead, tail := in.instructions(phase)
-	placed := false
 	for i, s := range lead {
-		var p bool
-		lead[i], p = in.fill(s)
-		placed = placed || p
+		lead[i] = in.fill(s)
 	}
 
 	switch phase {
 	case PhaseInvestigate:
 		add(lead...)
-		add(in.taskSection(placed, "")...)
+		add(in.task())
 
 	case PhaseImplement:
 		add(lead...)
 		add(commitNote)
-		add(in.taskSection(placed, "")...)
+		add(in.task())
 		add(in.ask()...)
 
 	case PhaseReview:
@@ -409,8 +379,7 @@ func Prompt(phase string, in PromptInput) string {
 		}
 		add(fmt.Sprintf("Review the changes on this branch for **%s**.", category), reviewFocus[category])
 		add(lead...)
-		add(in.taskSection(placed, "The task under review:\n\n")...)
-		add(findingFormat)
+		add("The task under review:\n\n"+in.task(), findingFormat)
 		if note := severityNote(in.BlockingSeverities); note != "" {
 			add(note)
 		}
@@ -470,19 +439,18 @@ func Prompt(phase string, in PromptInput) string {
 		}
 		add(tail...)
 		add(commitNote)
-		add(in.taskSection(placed, "The original task, for context:\n\n")...)
+		add("The original task, for context:\n\n" + in.task())
 		add(in.ask()...)
 
 	case PhaseSimplify:
 		add(lead...)
 		add(commitNote)
-		add(in.taskSection(placed, "The task this branch implements:\n\n")...)
+		add("The task this branch implements:\n\n" + in.task())
 
 	case PhaseTest:
 		add(lead...)
 		add(testerTools)
-		add(in.taskSection(placed, "")...)
-		add(findingFormat)
+		add(in.task(), findingFormat)
 
 	default:
 		add(in.task())
