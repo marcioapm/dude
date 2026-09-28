@@ -304,7 +304,17 @@ func Prompt(phase string, in PromptInput) string {
 				if f.Author != "" {
 					parts = append(parts, "**"+f.Author+"**")
 				}
-				items = append(items, strings.Join(append(parts, f.Body), " — "))
+				item := strings.Join(append(parts, f.Body), " — ")
+				for _, c := range f.Checks {
+					item += "\n\n**Failing check: " + c.Name + "**"
+					if c.URL != "" {
+						item += " (" + c.URL + ")"
+					}
+					if c.Log != "" {
+						item += "\n\n```\n" + strings.ReplaceAll(c.Log, "```", "`\u200b``") + "\n```"
+					}
+				}
+				items = append(items, item)
 			}
 			add("## Pull request feedback\n\n" + strings.Join(items, "\n\n"))
 		}

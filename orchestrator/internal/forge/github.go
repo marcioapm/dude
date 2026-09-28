@@ -646,6 +646,38 @@ func (g *GitHub) Feedback(ctx context.Context, slug string, number int, since st
 	return filtered, nil
 }
 
+// Head is a pull request's head commit as GitHub has it now: where a fix
+// must start, whoever moved it last.
+func (g *GitHub) Head(ctx context.Context, slug string, number int) (string, error) {
+	var p ghPull
+	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d", slug, number), nil, &p); err != nil {
+		return "", err
+	}
+	return p.Head.SHA, nil
+}
+
+// CommitAuthor is who made a commit, by GitHub login when GitHub knows
+// the address, else by the name in the commit.
+func (g *GitHub) CommitAuthor(ctx context.Context, slug, sha string) (string, error) {
+	var c struct {
+		Author *struct {
+			Login string `json:"login"`
+		} `json:"author"`
+		Commit struct {
+			Author struct {
+				Name string `json:"name"`
+			} `json:"author"`
+		} `json:"commit"`
+	}
+	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/commits/%s", slug, sha), nil, &c); err != nil {
+		return "", err
+	}
+	if c.Author != nil && c.Author.Login != "" {
+		return c.Author.Login, nil
+	}
+	return c.Commit.Author.Name, nil
+}
+
 // Permission is what a login may do in a repository, as GitHub's
 // collaborator permission endpoint says: admin, maintain, write, triage,
 // read, or none for someone who is not a collaborator at all.

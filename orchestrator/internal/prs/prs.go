@@ -51,11 +51,12 @@ type Syncer struct {
 const DefaultCIGrace = 10 * time.Minute
 
 type tracked struct {
-	ID, ProjectID, TaskID, RunID, State, Checks, Review, HeadSHA, RepoURL, RepoName string
-	Number                                                                          int
-	HadCI                                                                           bool
-	HeadSeenAt                                                                      *time.Time
-	FeedbackCursor                                                                  *time.Time
+	ID, ProjectID, TaskID, RunID, State, Checks, Review, HeadSHA, RepoURL, RepoName, Mergeable string
+	Number, BehindBy, UnresolvedThreads                                                        int
+	HadCI                                                                                      bool
+	HeadSeenAt                                                                                 *time.Time
+	FeedbackCursor                                                                             *time.Time
+	ChecksJSON, ReviewsJSON                                                                    []byte
 }
 
 // Sync reads one PR from GitHub, records what changed, and signals the
@@ -64,11 +65,13 @@ func (s *Syncer) Sync(ctx context.Context, org, prID string) error {
 	var pr tracked
 	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `SELECT pr.id, pr.project_id, pr.task_id, COALESCE(pr.run_id, ''), pr.state::text,
-			pr.checks::text, pr.review::text, COALESCE(pr.head_sha, ''), r.url, r.name, pr.number, pr.feedback_cursor,
-			pr.had_ci, pr.head_seen_at
+			pr.checks::text, pr.review::text, COALESCE(pr.head_sha, ''), r.url, r.name, pr.mergeable_state,
+			pr.number, pr.behind_by, pr.unresolved_threads, pr.had_ci, pr.head_seen_at, pr.feedback_cursor,
+			pr.checks_json, pr.reviews_json
 			FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id WHERE pr.id = $1`, prID).
 			Scan(&pr.ID, &pr.ProjectID, &pr.TaskID, &pr.RunID, &pr.State, &pr.Checks, &pr.Review, &pr.HeadSHA,
-				&pr.RepoURL, &pr.RepoName, &pr.Number, &pr.FeedbackCursor, &pr.HadCI, &pr.HeadSeenAt)
+				&pr.RepoURL, &pr.RepoName, &pr.Mergeable, &pr.Number, &pr.BehindBy, &pr.UnresolvedThreads,
+				&pr.HadCI, &pr.HeadSeenAt, &pr.FeedbackCursor, &pr.ChecksJSON, &pr.ReviewsJSON)
 	}); err != nil {
 		return err
 	}
@@ -88,7 +91,8 @@ func (s *Syncer) Sync(ctx context.Context, org, prID string) error {
 	// what it says — a commit CI skips (path filters, [skip ci]) — or the
 	// pull request would wait on it forever.
 	headSeenAt := time.Now()
-	if status.HeadSHA == pr.HeadSHA && pr.HeadSeenAt != nil {
+	newHead := status.HeadSHA != pr.HeadSHA
+	if !newHead && pr.HeadSeenAt != nil {
 		headSeenAt = *pr.HeadSeenAt
 	}
 	grace := s.CIGrace
@@ -98,6 +102,20 @@ func (s *Syncer) Sync(ctx context.Context, org, prID string) error {
 	hadCI := pr.HadCI || status.Checks != forge.ChecksUnknown
 	if status.Checks == forge.ChecksUnknown && pr.HadCI && time.Since(headSeenAt) < grace {
 		status.Checks = forge.ChecksPending
+	}
+	// A head dude did not push: a person pushed, or GitHub's Update
+	// branch did. The next fix starts from it (delivery prFix).
+	var pusher string
+	if newHead && pr.HeadSHA != "" && isOpen(status.State) {
+		ours, err := s.pushedByDude(ctx, org, pr.TaskID, status.HeadSHA)
+		if err != nil {
+			return err
+		}
+		if !ours {
+			if pusher, err = gh.CommitAuthor(ctx, slug, status.HeadSHA); err != nil {
+				return err
+			}
+		}
 	}
 	since := ""
 	if pr.FeedbackCursor != nil {
@@ -127,6 +145,25 @@ func (s *Syncer) Sync(ctx context.Context, org, prID string) error {
 				fresh = append(fresh, f)
 			}
 		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	// Who may wake a fixer: asked of GitHub (cached), before anything is
+	// recorded, so each comment says whether it could.
+	waking, err := s.wakers(ctx, org, gh, slug, fresh)
+	if err != nil {
+		return err
+	}
+	checksJSON, _ := json.Marshal(db.NonNil(status.CheckList))
+	reviewsJSON, _ := json.Marshal(db.NonNil(status.Reviews))
+	if !isOpen(status.State) {
+		// What it was when it closed is what it stays.
+		status.Mergeable, status.BehindBy, status.UnresolvedThreads = pr.Mergeable, pr.BehindBy, pr.UnresolvedThreads
+	}
+
+	err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		cursor := pr.FeedbackCursor
 		if n := len(listed); n > 0 {
 			if t, err := time.Parse(time.RFC3339, listed[n-1].CreatedAt); err == nil {
@@ -135,10 +172,12 @@ func (s *Syncer) Sync(ctx context.Context, org, prID string) error {
 		}
 		if _, err := tx.Exec(ctx, `UPDATE pull_requests SET state = $2::pull_request_state, checks = $3::check_state,
 			review = $4::review_state, head_sha = $5, last_polled_at = now(), feedback_cursor = $6, updated_at = now(),
-			had_ci = $8, head_seen_at = $7,
+			had_ci = $8, head_seen_at = $7, mergeable_state = $9, behind_by = $10, checks_json = $11::jsonb,
+			reviews_json = $12::jsonb, unresolved_threads = $13,
 			merged_at = CASE WHEN $2 = 'merged' THEN COALESCE(merged_at, now()) ELSE merged_at END,
 			closed_at = CASE WHEN $2 = 'closed' THEN COALESCE(closed_at, now()) ELSE closed_at END
-			WHERE id = $1`, pr.ID, status.State, status.Checks, status.Review, status.HeadSHA, cursor, headSeenAt, hadCI); err != nil {
+			WHERE id = $1`, pr.ID, status.State, status.Checks, status.Review, status.HeadSHA, cursor, headSeenAt, hadCI,
+			status.Mergeable, status.BehindBy, checksJSON, reviewsJSON, status.UnresolvedThreads); err != nil {
 			return err
 		}
 
@@ -150,10 +189,23 @@ func (s *Syncer) Sync(ctx context.Context, org, prID string) error {
 		}
 		var changes []change
 		if status.Checks != pr.Checks {
-			changes = append(changes, change{delivery.EvPullRequestChecks, map[string]any{"from": pr.Checks, "to": status.Checks}})
+			p := map[string]any{"from": pr.Checks, "to": status.Checks}
+			if failing := failingNames(status.CheckList); len(failing) > 0 {
+				p["failing"] = failing
+			}
+			changes = append(changes, change{delivery.EvPullRequestChecks, p})
 		}
-		if status.Review != pr.Review {
-			changes = append(changes, change{delivery.EvPullRequestReviewed, map[string]any{"from": pr.Review, "to": status.Review}})
+		if status.Review != pr.Review || reviewsChanged(pr.ReviewsJSON, status.Reviews) {
+			changes = append(changes, change{delivery.EvPullRequestReviewed, map[string]any{"from": pr.Review, "to": status.Review,
+				"reviews": newReviews(pr.ReviewsJSON, status.Reviews)}})
+		}
+		if status.Mergeable != pr.Mergeable && status.Mergeable != forge.MergeUnknown || status.BehindBy != pr.BehindBy {
+			changes = append(changes, change{delivery.EvPullRequestMergeable, map[string]any{"from": pr.Mergeable,
+				"to": status.Mergeable, "behindBy": status.BehindBy}})
+		}
+		if pusher != "" {
+			changes = append(changes, change{delivery.EvPullRequestPushed, map[string]any{"author": pusher,
+				"from": pr.HeadSHA, "to": status.HeadSHA}})
 		}
 		if status.State != pr.State {
 			typ := delivery.EvPullRequestUpdated
@@ -170,8 +222,12 @@ func (s *Syncer) Sync(ctx context.Context, org, prID string) error {
 			if f.Path != "" {
 				path = f.Path
 			}
-			changes = append(changes, change{delivery.EvPullRequestCommented, map[string]any{
-				"feedbackId": f.ID, "author": f.Author, "body": f.Body, "path": path, "kind": f.Kind}})
+			p := map[string]any{"feedbackId": f.ID, "author": f.Author, "body": f.Body, "path": path, "kind": f.Kind}
+			if !waking[f.Author] && forge.IsActionableComment(f, s.FactoryLogins) {
+				// Shown on the task, not acted on: say why.
+				p["ignored"] = "not_permitted"
+			}
+			changes = append(changes, change{delivery.EvPullRequestCommented, p})
 		}
 		for _, c := range changes {
 			c.payload["number"], c.payload["repo"] = pr.Number, pr.RepoName
@@ -196,15 +252,40 @@ func (s *Syncer) Sync(ctx context.Context, org, prID string) error {
 		return err
 	}
 
-	signal := forge.Classify(forge.Status{PullRequestRef: forge.PullRequestRef{State: pr.State, HeadSHA: pr.HeadSHA}, Checks: pr.Checks, Review: pr.Review}, status, fresh, s.FactoryLogins)
+	// Behind and clean: brought up to date on GitHub, if the organization
+	// wants that. The update is a new head; its webhook syncs it.
+	if status.Mergeable == forge.MergeBehind && gh.Settings.WhenBehind == "update" && workflowRunID != "" &&
+		(pr.Mergeable != forge.MergeBehind || newHead) {
+		if err := gh.UpdateBranch(ctx, slug, pr.Number, status.HeadSHA); err != nil && forge.Transient(err) {
+			return err
+		} else if err != nil {
+			s.Log.Info("updating a pull request's branch was refused", "pr", pr.ID, "error", err)
+		}
+	}
+
+	var permitted []forge.Feedback
+	for _, f := range fresh {
+		if waking[f.Author] {
+			permitted = append(permitted, f)
+		}
+	}
+	prior := forge.Status{PullRequestRef: forge.PullRequestRef{State: pr.State, HeadSHA: pr.HeadSHA}, Checks: pr.Checks,
+		Review: pr.Review, Mergeable: pr.Mergeable, UnresolvedThreads: pr.UnresolvedThreads}
+	signal := forge.Classify(prior, status, permitted, s.FactoryLogins)
+	if signal == nil && status.Checks == forge.ChecksPending && isOpen(status.State) && time.Since(headSeenAt) > gh.Settings.CIStuck() {
+		// Pending past the organization's patience on this head: CI that
+		// never reports (a runner gone, a required check nobody runs).
+		signal = &forge.Signal{Kind: "ci_stuck"}
+	}
 	if signal == nil || workflowRunID == "" {
 		return nil
 	}
+	signal.Repo, signal.Number = pr.RepoName, pr.Number
 	for i := range signal.Feedback {
 		signal.Feedback[i].Repo = pr.RepoName
 	}
-	ids := make([]string, len(fresh))
-	for i, f := range fresh {
+	ids := make([]string, len(permitted))
+	for i, f := range permitted {
 		ids[i] = f.ID
 	}
 	// One signal per distinct change, however many deliveries report it.
@@ -220,6 +301,122 @@ func (s *Syncer) Sync(ctx context.Context, org, prID string) error {
 		key += ":" + strings.Join(recorded, ",")
 	}
 	return s.Signal(ctx, org, workflowRunID, delivery.SignalPRFeedback, signal, key)
+}
+
+// pushedByDude says whether one of the task's Runs pushed a commit: lux
+// reports each push before dude fast-forwards the branch to it, so a sync
+// in between sees dude's own commit as the new head.
+func (s *Syncer) pushedByDude(ctx context.Context, org, taskID, sha string) (bool, error) {
+	var ours bool
+	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs r,
+			jsonb_array_elements(COALESCE(r.push_result->'results', '[]'::jsonb)) x
+			WHERE r.task_id = $1 AND x->>'commit' = $2)`, taskID, sha).Scan(&ours)
+	})
+	return ours, err
+}
+
+func isOpen(state string) bool { return state == forge.StateOpen || state == forge.StateDraft }
+
+func failingNames(checks []forge.Check) []string {
+	var out []string
+	for _, c := range checks {
+		if c.Failed() {
+			out = append(out, c.Name)
+		}
+	}
+	return out
+}
+
+// newReviews: the reviewers whose word changed since the last sync, for
+// the activity ("Cy requested changes").
+func newReviews(before []byte, after []forge.Review) []forge.Review {
+	var prior []forge.Review
+	_ = json.Unmarshal(before, &prior)
+	was := map[string]string{}
+	for _, r := range prior {
+		was[r.Login] = r.State
+	}
+	out := []forge.Review{}
+	for _, r := range after {
+		if was[r.Login] != r.State && r.State != "REQUESTED" {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func reviewsChanged(before []byte, after []forge.Review) bool {
+	return len(newReviews(before, after)) > 0
+}
+
+// permissionTTL: how long what GitHub said of a login is believed. Long
+// enough that a busy pull request asks once; short enough that access
+// granted or taken away counts the same day.
+const permissionTTL = time.Hour
+
+// wakers says, for each author of fresh feedback, whether their comments
+// may wake a fixer under the organization's rule.
+func (s *Syncer) wakers(ctx context.Context, org string, gh *forge.GitHub, slug string, fresh []forge.Feedback) (map[string]bool, error) {
+	out := map[string]bool{}
+	who := gh.Settings.WhoCanWake
+	for _, f := range fresh {
+		if _, done := out[f.Author]; done {
+			continue
+		}
+		if who == forge.WakeAnyone {
+			out[f.Author] = true
+			continue
+		}
+		permission, err := s.cached(ctx, org, "collaborator", slug, f.Author, func() (string, error) {
+			return gh.Permission(ctx, slug, f.Author)
+		})
+		if err != nil {
+			return nil, err
+		}
+		member := false
+		if who == forge.WakeMembers && !forge.CanWrite(permission) {
+			owner, _, _ := strings.Cut(slug, "/")
+			v, err := s.cached(ctx, org, "member", owner, f.Author, func() (string, error) {
+				ok, err := gh.Member(ctx, owner, f.Author)
+				if ok {
+					return "member", err
+				}
+				return "none", err
+			})
+			if err != nil {
+				return nil, err
+			}
+			member = v == "member"
+		}
+		out[f.Author] = forge.MayWake(who, permission, member)
+	}
+	return out, nil
+}
+
+// cached answers a question about a login from forge_permissions, asking
+// GitHub when the answer is missing or stale.
+func (s *Syncer) cached(ctx context.Context, org, kind, scope, login string, ask func() (string, error)) (string, error) {
+	var value string
+	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT value FROM forge_permissions WHERE kind = $1 AND scope = $2 AND login = $3
+			AND checked_at > now() - $4::interval`, kind, scope, login, permissionTTL.String()).Scan(&value)
+	})
+	if err == nil {
+		return value, nil
+	}
+	if !db.IsNotFound(err) {
+		return "", err
+	}
+	if value, err = ask(); err != nil {
+		return "", err
+	}
+	return value, s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `INSERT INTO forge_permissions (organization_id, kind, scope, login, value)
+			VALUES ($1, $2, $3, $4, $5) ON CONFLICT (organization_id, kind, scope, login)
+			DO UPDATE SET value = EXCLUDED.value, checked_at = now()`, org, kind, scope, login, value)
+		return err
+	})
 }
 
 // ProcessDeliveries acts on webhook deliveries the backend stored. Each is
