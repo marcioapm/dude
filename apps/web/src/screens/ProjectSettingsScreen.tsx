@@ -54,10 +54,13 @@ export function ProjectSettingsScreen({ client, projectId, page: given, onPage, 
   const page = settingsPage(given, PAGES);
   const [project, setProject] = useState<ProjectDetail | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
-  // How many servers the project defines, for the menu: the page reads them, and says.
+  // How many servers the project defines, for the menu. The Servers page
+  // reads them and says; any other page reads them once for the count.
   const [serverCount, setServerCount] = useState<number | null>(null);
   useEffect(() => {
+    if (page === "servers") return;
     void client.projectServers(projectId).then((s) => setServerCount(s.servers.length), () => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per project, not per page
   }, [client, projectId]);
   const { scope, problem: settingsProblem } = useSettings(
     client,

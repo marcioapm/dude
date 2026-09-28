@@ -74,8 +74,10 @@ export function ServersSection({ client, servers, taskId, compact, onPreview, pr
   const run = data?.run ?? null;
   const runId = run?.id ?? null;
 
-  // A server's log is read when its row opens, and again on each change
-  // while it is open: the log is not on the stream.
+  // A server's log is read when its row opens, and again while it is open
+  // each time that server changes: the log is not on the stream, and a
+  // change elsewhere (another row folding, another server moving) is not
+  // a reason to read it again.
   const readLog = useCallback(async (name: string) => {
     if (!runId) return;
     setLogs((l) => (l[name] ? l : { ...l, [name]: "loading" }));
@@ -86,9 +88,19 @@ export function ServersSection({ client, servers, taskId, compact, onPreview, pr
       setLogs((l) => ({ ...l, [name]: [] }));
     }
   }, [client, runId]);
+  const wasOpen = useRef<Set<string>>(new Set());
   useEffect(() => {
-    for (const name of openLogs) void readLog(name);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-read on each change of the servers
+    for (const name of openLogs) if (!wasOpen.current.has(name)) void readLog(name);
+    wasOpen.current = openLogs;
+  }, [openLogs, readLog]);
+  // What each open server looked like at its last read: a change re-reads.
+  const seen = useRef<Map<string, string>>(new Map());
+  useEffect(() => {
+    for (const s of data?.servers ?? []) {
+      const mark = `${s.state}|${s.since}|${s.epoch}`;
+      if (openLogs.has(s.name) && seen.current.get(s.name) !== undefined && seen.current.get(s.name) !== mark) void readLog(s.name);
+      seen.current.set(s.name, mark);
+    }
   }, [data, openLogs, readLog]);
 
   // An exited server opens its log by itself, once: the error is never
@@ -202,7 +214,7 @@ export function ServersSection({ client, servers, taskId, compact, onPreview, pr
               ) : (
                 <>
                   {compact ? null : <Button size="sm" variant="secondary" leadingIcon="play" disabled={busy !== null || !live || !canStartAny(data.servers)} onClick={() => void servers.startAll()} data-testid="start-all">Start all</Button>}
-                  {compact ? null : <Button size="sm" variant="quiet" leadingIcon="stop" disabled={busy !== null || !canStopAny(data.servers)} onClick={() => void servers.stopAll()} data-testid="stop-all">Stop all</Button>}
+                  {compact ? null : <Button size="sm" variant="quiet" leadingIcon="stop" disabled={busy !== null || !live || !canStopAny(data.servers)} onClick={() => void servers.stopAll()} data-testid="stop-all">Stop all</Button>}
                 </>
               )}
               <Button size="sm" variant="quiet" leadingIcon="plus" disabled={!live} onClick={() => setAdding(true)} data-testid="add-server">Add server</Button>

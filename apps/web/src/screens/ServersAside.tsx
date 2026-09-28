@@ -17,7 +17,8 @@ import { ServerPreview } from "./ServersSection.tsx";
 export function ServersAside({ client, taskId, servers, onAll }: { client: ApiClient; taskId: string; servers: ServersState; onAll: () => void }) {
   const data = servers.data!;
   const people = usePeople();
-  const now = useNow(false);
+  // The clock the words are told by: ticking while something is moving.
+  const now = useNow(data.servers.some((s) => s.state === "starting" || s.state === "ready"), 30_000);
   const [preview, setPreview] = useState<string | null>(null);
   const run = data.run;
 

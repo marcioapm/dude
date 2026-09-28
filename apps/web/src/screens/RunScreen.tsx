@@ -107,7 +107,8 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
   // a window, and a count stands still when an old one drops off the front
   // as a new one arrives. A replayed history moves it once per event, and
   // `useServers` folds the burst into one read in flight and one after it.
-  const serversVersion = useMemo(() => events.findLast((e) => e.eventType === EventTypes.ServersChanged)?.cursor ?? 0, [events]);
+  // A stream that came back may have missed one: its return counts too.
+  const serversVersion = useMemo(() => (events.findLast((e) => e.eventType === EventTypes.ServersChanged)?.cursor ?? 0) + reconnects * 1e9, [events, reconnects]);
   const servers = useServers(client, { runId }, serversVersion);
   const previewed = previewing ? servers.data?.servers.find((s) => s.name === previewing) ?? null : null;
   useEffect(() => {

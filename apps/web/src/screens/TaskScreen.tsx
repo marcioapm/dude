@@ -133,10 +133,17 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
   }, [load]);
 
   // The servers change on their own stream event; the rest of the page on
-  // any other. Both re-read, since a `servers.changed` is also a change.
+  // any other. A stream that comes back replays nothing, so its re-read
+  // takes the servers along: they may have moved while nothing could say so.
   const [serversVersion, setServersVersion] = useState(0);
-  useReloadOnEvents({ client, taskId }, () => void load(), 300, (e) => {
-    if (e.eventType === EventTypes.ServersChanged) setServersVersion((v) => v + 1);
+  useReloadOnEvents({ client, taskId }, () => {
+    void load();
+    setServersVersion((v) => v + 1);
+  }, 300, (e) => {
+    if (e.eventType === EventTypes.ServersChanged) {
+      setServersVersion((v) => v + 1);
+      return true;
+    }
     return false;
   });
   const servers = useServers(client, { taskId }, serversVersion);
