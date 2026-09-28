@@ -1124,6 +1124,21 @@ func TestOnlyATasksOwnerAnswersAndDecides(t *testing.T) {
 	}
 }
 
+// A person answers with any of their keys: the owner is who holds the
+// key the task names, not the key.
+func TestAnOwnerAnswersWithAnyOfTheirKeys(t *testing.T) {
+	w := newWorld(t)
+	ana := w.person("Ana")
+	laptop := "key_laptop_" + w.org
+	mustExec(t, w.owner, `INSERT INTO api_keys (id, organization_id, name, key_hash, key_prefix, person_id)
+		SELECT $1, $2, 'laptop', $1, 'dude_sk_', person_id FROM api_keys WHERE id = $3`, laptop, w.org, ana)
+	wi, _ := w.asking()
+	mustExec(t, w.owner, `UPDATE tasks SET owner_key_id = $2 WHERE id = $1`, wi, ana)
+	if status, body := w.callAs(laptop, "/internal/questions/"+w.questionID(wi)+"/answer", map[string]any{"text": "yes"}); status != 200 {
+		t.Fatalf("the owner's other key: %d %v", status, body)
+	}
+}
+
 // questionID is the task's (one) question.
 func (w *world) questionID(wi string) string {
 	var id string
