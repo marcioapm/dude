@@ -392,6 +392,7 @@ function DeliveryTab({ client, project, defaults, onSaved }: TabProps & { defaul
     requiredReviewers: reviewers as FullPolicy["requiredReviewers"],
     blockingSeverities: blocking as FullPolicy["blockingSeverities"],
     maxReviewIterations: roundsValue ?? effective.maxReviewIterations,
+    maxAttemptsPerFinding: effective.maxAttemptsPerFinding,
     maxPrFixIterations: prRoundsValue ?? effective.maxPrFixIterations,
     simplify,
     test,

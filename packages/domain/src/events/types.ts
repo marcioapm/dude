@@ -16,6 +16,10 @@ export const EventTypes = {
   EpicCreated: "epic.created",
   EpicUpdated: "epic.updated",
   EpicDeleted: "epic.deleted",
+  /** Organization or project settings changed. Payload: `{ scope, projectId?, changed }`. */
+  SettingsUpdated: "settings.updated",
+  /** A role's prompt was saved or restored. Payload: `{ role, versionId, projectId?, restoredFrom? }`. */
+  PromptSaved: "prompt.saved",
 
   // Task lifecycle
   TaskCreated: "task.created",

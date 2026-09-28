@@ -27,6 +27,7 @@ export const ID_PREFIXES = {
   pullRequest: "pr",
   forgeCredential: "forge",
   finding: "find",
+  promptVersion: "pv",
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIXES;

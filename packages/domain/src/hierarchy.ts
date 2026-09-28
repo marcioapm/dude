@@ -33,7 +33,11 @@ export const ALL_AGENT_ROLES = agentRoleSchema.options;
  * pick — plan §45 capability negotiation.
  */
 export const agentModelConfigSchema = z.object({
-  model: z.string().min(1),
+  /**
+   * Optional at each layer: a project that changes only a role's effort
+   * keeps its organization's model (resolveAgentModel, field by field).
+   */
+  model: z.string().min(1).optional(),
   harness: z.string().min(1).optional(),
   /** Overrides the harness default when set. */
   maxTokens: z.number().int().positive().optional(),
@@ -49,6 +53,10 @@ export const agentModelConfigSchema = z.object({
    * spend context on every turn to say nothing.
    */
   context: z.string().max(20_000).optional(),
+  /** How hard the model thinks; unset leaves it to the model. */
+  effort: z.enum(["low", "medium", "high", "max"]).optional(),
+  /** Running time allowed per session, in minutes. */
+  timeLimitMinutes: z.number().int().min(1).max(10_080).optional(),
 });
 export type AgentModelConfig = z.infer<typeof agentModelConfigSchema>;
 
@@ -56,7 +64,11 @@ export type AgentModelConfig = z.infer<typeof agentModelConfigSchema>;
  * Per-project, per-role model configuration. Partial: any role left unset
  * falls back to the organization default, then to the system default.
  */
-export const agentModelsSchema = z.record(agentRoleSchema, agentModelConfigSchema).default({});
+export const agentModelsSchema = z
+  // The fixer is the implementer told something else; it takes the
+  // implementer's settings except where it is given its own.
+  .record(z.union([agentRoleSchema, z.literal("fixer")]), agentModelConfigSchema)
+  .default({});
 export type AgentModels = z.infer<typeof agentModelsSchema>;
 
 // ---------------------------------------------------------------------------
@@ -121,6 +133,8 @@ export const deliveryPolicySchema = z
     requiredReviewers: z.array(z.enum(REVIEWER_CATEGORIES)).min(1),
     blockingSeverities: z.array(findingSeveritySchema).min(1),
     maxReviewIterations: z.number().int().min(1).max(20),
+    /** Fix attempts one finding may survive before it is escalated on its own. */
+    maxAttemptsPerFinding: z.number().int().min(1).max(20),
     maxPrFixIterations: z.number().int().min(0).max(20),
     simplify: z.boolean(),
     /** A browser tester exercises the change and publishes a video, before the pull request. */
@@ -385,8 +399,9 @@ export const sessionSchema = z.object({
 export type Session = z.infer<typeof sessionSchema>;
 
 /**
- * Resolve the model config for a role: project → organization → default.
- * Returns null when no layer configures the role.
+ * Resolve the model config for a role: project → organization → default,
+ * field by field, so a project that sets only a role's effort keeps its
+ * organization's model. Returns null when no layer configures the role.
  */
 export function resolveAgentModel(
   role: AgentRole,
@@ -394,9 +409,8 @@ export function resolveAgentModel(
   organization: Pick<Organization, "defaultAgentModels">,
   systemDefaults: AgentModels = {},
 ): AgentModelConfig | null {
-  return (
-    project.agentModels[role] ?? organization.defaultAgentModels[role] ?? systemDefaults[role] ?? null
-  );
+  const layers = [systemDefaults[role], organization.defaultAgentModels[role], project.agentModels[role]].filter(Boolean);
+  return layers.length ? Object.assign({}, ...layers) : null;
 }
 
 // ---------------------------------------------------------------------------
