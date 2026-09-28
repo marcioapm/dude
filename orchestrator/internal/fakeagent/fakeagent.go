@@ -46,6 +46,18 @@ const RequestModel = "fake/request"
 // in the turn the resume starts.
 const WaitModel = "fake/wait"
 
+// LiveModel's implementer writes files into its checkout without committing
+// them, and keeps working (never finishing its turn): what the live diff
+// shows while an agent works.
+const LiveModel = "fake/live"
+
+// LiveEdits are what LiveModel's implementer writes: a new file and a
+// change to the README the test repositories start with.
+var LiveEdits = map[string]string{
+	"LIVE.md":   "# Live\n\nWritten while the agent works.\n",
+	"README.md": "# target\n\nChanged while the agent works.\n",
+}
+
 // AskModel's implementer asks a person first, with dude's ask_person tool,
 // and does its work in the turn the answer starts.
 const AskModel = "fake/ask"
@@ -94,6 +106,9 @@ type Step struct {
 	Publish map[string]string
 	// dude tools it calls before replying, [tool, JSON arguments].
 	Tools [][2]string
+	// Files it writes into its checkout and does not commit, path →
+	// content.
+	Edits map[string]string
 }
 
 // Notes is what the implementer publishes: a short account of its work, as
@@ -105,6 +120,9 @@ const Notes = "NOTES.md"
 func For(phase, model, runID string, fixed bool) Step {
 	if model == HangModel {
 		return Step{Hang: true}
+	}
+	if model == LiveModel && phase == "implement" {
+		return Step{Hang: true, Edits: LiveEdits}
 	}
 	switch phase {
 	case "implement":
@@ -154,6 +172,15 @@ func For(phase, model, runID string, fixed bool) Step {
 func Script(phase, model, runID string) string {
 	if model == HangModel {
 		return "sleep 3600"
+	}
+	if model == LiveModel && phase == "implement" {
+		var b strings.Builder
+		for _, path := range []string{"LIVE.md", "README.md"} {
+			// lux-fake writes one line; the file's line breaks stay escaped.
+			fmt.Fprintf(&b, "write %s %s\n", path, strings.ReplaceAll(LiveEdits[path], "\n", " "))
+		}
+		b.WriteString("sleep 3600")
+		return b.String()
 	}
 	if phase == "review" {
 		// Built in a file and read back, because separate reply lines would

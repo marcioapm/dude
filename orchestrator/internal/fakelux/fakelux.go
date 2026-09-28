@@ -71,6 +71,10 @@ type Behaviour struct {
 	// arguments. Called as lux's service proxy would, with the header the
 	// spec's services name, so dude sees an agent in its container.
 	CallTools [][2]string
+	// Files the agent writes into its checkout, path → content, each with
+	// an edit tool call, in its first turn: uncommitted work, which exec
+	// sees and the live diff shows. Paths are in the first repository.
+	Edits map[string]string
 }
 
 type Run struct {
@@ -96,6 +100,10 @@ type Run struct {
 	artifacts  []*artifact
 	// Written into $LUX_ARTIFACTS by the agent's turns and not yet collected.
 	published map[string]string
+
+	// Its checkout, a real git clone made when first needed: the
+	// container's /workspace.
+	workspace string
 
 	busy     bool
 	woken    bool
@@ -169,6 +177,9 @@ type Server struct {
 	RepoFor func(url string) string
 	// Key is the API key the fake accepts.
 	Key string
+	// Workspaces is where each Run's checkout is made; "" is the system's
+	// temporary directory.
+	Workspaces string
 }
 
 // New serves a fake lux. With decide nil, every Run plays dude's scripted
@@ -206,7 +217,7 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 	}
 	// Every phase plans and looks around first, as an agent does.
 	return Behaviour{Reply: step.Reply, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask,
-		Publish: published, Tools: []string{"todowrite", "read"}, CallTools: step.Tools}
+		Publish: published, Tools: []string{"todowrite", "read"}, CallTools: step.Tools, Edits: step.Edits}
 }
 
 // Runs returns every Run submitted, in order.
@@ -253,6 +264,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/runs/{id}/resume", s.resume)
 	mux.HandleFunc("GET /v1/runs/{id}/artifacts", s.listArtifacts)
 	mux.HandleFunc("GET /v1/artifacts/{aid}", s.downloadArtifact)
+	mux.HandleFunc("GET /v1/runs/{id}/exec", s.exec)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+s.Key {
 			writeErr(w, 401, "unauthorized", "invalid API key")
@@ -361,6 +373,7 @@ func (s *Server) turn(run *Run) {
 		for _, c := range b.CallTools {
 			s.callTool(run, c[0], c[1])
 		}
+		s.edit(run, b.Edits)
 	}
 	if asking {
 		s.callTool(run, "ask_person", b.Ask)
