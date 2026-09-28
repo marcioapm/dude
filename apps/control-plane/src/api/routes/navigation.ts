@@ -24,6 +24,7 @@ import type { Escalation, PersonRef, RunStatus, SessionStatus } from "@dude/doma
 import { withOrg } from "../../db/client.ts";
 import { json } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
+import { PROJECT_IMAGE_URL } from "./projects.ts";
 
 /** Attempts to carry per task. Older ones are history. */
 const ATTEMPTS_PER_TASK = 3;
@@ -31,6 +32,7 @@ const ATTEMPTS_PER_TASK = 3;
 interface ProjectRow {
   id: string;
   name: string;
+  imageUrl: string | null;
 }
 
 interface EpicRow {
@@ -105,7 +107,7 @@ async function getNavigation(ctx: RequestContext): Promise<Response> {
     const { sql } = scope;
 
     const projects = (await sql`
-      SELECT id, name FROM projects ORDER BY name`) as ProjectRow[];
+      SELECT id, name, ${sql.unsafe(PROJECT_IMAGE_URL)} AS "imageUrl" FROM projects ORDER BY name`) as ProjectRow[];
     if (projects.length === 0) return [];
 
     const epics = (await sql`
@@ -204,6 +206,7 @@ async function getNavigation(ctx: RequestContext): Promise<Response> {
     return projects.map((p) => ({
       id: p.id,
       name: p.name,
+      imageUrl: p.imageUrl,
       epics: (epicsByProject.get(p.id) ?? []).map((e) => ({
         id: e.id,
         title: e.title,

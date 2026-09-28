@@ -79,6 +79,10 @@ DATABASE_URL="postgres://dude:dude@localhost:5433/dude" bun run migrate
 (cd orchestrator && go build -o bin/ ./cmd/...)
 ```
 
+Photos are kept in S3 (`DUDE_S3_*`, see [`docs/operations.md`](docs/operations.md)).
+The test suite and the demo start their own S3, a versitygw container
+(`dude-e2e-s3`, port 59200), and make a bucket per run.
+
 Migrations run as the owner role. Everything else connects as `dude_app`,
 which has neither `SUPERUSER` nor `BYPASSRLS`, so the row-level security that
 isolates tenants is a real boundary rather than a convention.

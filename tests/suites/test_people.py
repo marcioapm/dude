@@ -120,21 +120,71 @@ def test_your_keys_are_yours_to_make_and_revoke(client: ApiClient, env):
     assert client.delete(f"/v1/me/keys/{only[0]['id']}").status_code == 409
 
 
-def test_a_profile_has_a_name_and_a_photo(client: ApiClient, env):
-    pixel = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
-    person = client.patch("/v1/me", {"name": "Ana Ribeiro", "photoUrl": pixel}).json()["person"]
+# A 1×1 red PNG.
+PNG = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+    "0000000d49444154789c63f8cfc0f01f00050001ff89993d1d0000000049454e44ae426082")
+
+
+def _upload(client: ApiClient, path: str, body: bytes, content_type: str = "image/png") -> requests.Response:
+    return requests.put(client.base_url + path, data=body, timeout=30,
+                        headers={"authorization": f"Bearer {client.api_key}", "content-type": content_type})
+
+
+def test_a_profile_has_a_name_and_a_photo_kept_in_storage(client: ApiClient, env, owner_dsn: str):
+    person = client.patch("/v1/me", {"name": "Ana Ribeiro"}).json()["person"]
     assert person["name"] == "Ana Ribeiro"
+    up = _upload(client, "/v1/me/photo", PNG)
+    assert up.status_code == 200, up.text
+    person = up.json()["person"]
     # Lists carry a short URL, not the image; an <img> loads it with no key.
     assert person["photoUrl"].startswith(f"/v1/people/{person['id']}/photo?t=")
     img = requests.get(env.control_plane_url + person["photoUrl"], timeout=10)
-    assert img.status_code == 200 and img.headers["content-type"] == "image/png"
+    assert img.status_code == 200 and img.headers["content-type"] == "image/png" and img.content == PNG
     assert requests.get(f"{env.control_plane_url}/v1/people/{person['id']}/photo?t=guess", timeout=10).status_code == 404
-    # An https photo is kept as given; anything else is refused.
+    # The image is in the bucket, never the database.
+    [row] = query(owner_dsn, "SELECT photo_url, photo_key FROM people WHERE id = %s", (person["id"],))
+    assert row["photo_url"] is None
+    assert env.s3().get_object(Bucket=env.s3_bucket, Key=row["photo_key"])["Body"].read() == PNG
+
+    # A new photo is a new object and a new URL; the old one goes.
+    first_key, first_url = row["photo_key"], person["photoUrl"]
+    second = _upload(client, "/v1/me/photo", PNG).json()["person"]
+    assert second["photoUrl"] != first_url
+    assert requests.get(env.control_plane_url + first_url, timeout=10).status_code == 404
+    keys = [o["Key"] for o in env.s3().list_objects_v2(Bucket=env.s3_bucket).get("Contents", [])]
+    assert first_key not in keys
+
+    # Only images, and only small ones: what is served back is never anything a browser runs.
+    assert _upload(client, "/v1/me/photo", b"<script>alert(1)</script>", "text/html").status_code == 400
+    assert _upload(client, "/v1/me/photo", b"<svg onload=alert(1)>", "image/png").status_code == 400
+    assert _upload(client, "/v1/me/photo", PNG[:8] + b"\0" * 600_000).status_code == 400
+
+    # An https photo is kept as given; anything else, data: URLs included, is refused.
     assert client.patch("/v1/me", {"photoUrl": "https://example.com/a.jpg"}).json()["person"]["photoUrl"] == "https://example.com/a.jpg"
-    for bad in ("javascript:alert(1)", "http://example.com/a.jpg", "data:text/html;base64,PGI+"):
+    for bad in ("javascript:alert(1)", "http://example.com/a.jpg", "data:image/png;base64,iVBORw0KGgo="):
         assert client.patch("/v1/me", {"photoUrl": bad}).status_code == 400, bad
-    assert client.patch("/v1/me", {"photoUrl": "data:image/png;base64," + "A" * 400_000}).status_code == 400
     assert client.patch("/v1/me", {"photoUrl": None}).json()["person"]["photoUrl"] is None
+
+
+def test_a_project_has_an_image_only_admins_set(client: ApiClient, env, project: dict):
+    pid = project["id"]
+    up = _upload(client, f"/v1/projects/{pid}/image", PNG)
+    assert up.status_code == 200, up.text
+    url = up.json()["imageUrl"]
+    assert url.startswith(f"/v1/projects/{pid}/image?t=")
+    assert requests.get(env.control_plane_url + url, timeout=10).content == PNG
+    # The tree carries it, so the sidebar shows the face.
+    nav = client.get("/v1/navigation").json()["projects"]
+    assert next(p for p in nav if p["id"] == pid)["imageUrl"] == url
+    # A member sees it and cannot change it.
+    _, bo = _invite(client, env, "Bo")
+    assert _upload(bo, f"/v1/projects/{pid}/image", PNG).status_code == 403
+    assert bo.delete(f"/v1/projects/{pid}/image").status_code == 403
+    # Back to initials; the object goes with it.
+    assert client.delete(f"/v1/projects/{pid}/image").json()["imageUrl"] is None
+    assert requests.get(env.control_plane_url + url, timeout=10).status_code == 404
+    assert env.s3().list_objects_v2(Bucket=env.s3_bucket, Prefix=f"{project['organizationId']}/projects/").get("KeyCount", 0) == 0
 
 
 def test_presence_says_who_is_online_and_is_pushed_live(client: ApiClient, env, owner_dsn: str):
@@ -315,7 +365,10 @@ def test_your_profile_and_keys_in_your_settings(page: Page, web_url: str, client
     png = bytes.fromhex("89504e470d0a1a0a0000000d4948445200000002000000020802000000fdd49a730000001049444154789c63f8cfc000440c100a001fee03fd8b5f14d40000000049454e44ae426082")
     page.get_by_test_id("photo-file").set_input_files({"name": "me.png", "mimeType": "image/png", "buffer": png})
     expect(page.get_by_test_id("my-settings-button").locator("img")).to_have_count(1)
-    assert client.get("/v1/me").json()["person"]["photoUrl"].startswith("/v1/people/")
+    photo = client.get("/v1/me").json()["person"]["photoUrl"]
+    assert photo.startswith("/v1/people/")
+    # Resized to a JPEG in the browser, stored, and served back.
+    assert requests.get(env.control_plane_url + photo, timeout=10).headers["content-type"] == "image/jpeg"
 
     # A new key, shown once; revoked, it stops working.
     page.get_by_test_id("key-new").click()

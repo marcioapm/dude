@@ -1,7 +1,8 @@
 """TestEnvironment — isolated per-run environment for the E2E suite.
 
-Each run gets its own PostgreSQL database and free ports, so suites can run
-concurrently and a failed run leaves no residue in a shared database.
+Each run gets its own PostgreSQL database, its own bucket on a shared S3
+(versitygw, as lux's suite uses) and free ports, so suites can run
+concurrently and a failed run leaves no residue in a shared service.
 
 The suite drives the factory through its public HTTP API only. It never
 imports the Bun implementation, which is what makes it a real test of the
@@ -20,11 +21,22 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import boto3
 import psycopg
 import requests
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Photos go to object storage. The suite shares one S3 gateway over a
+# local directory, started on first use and left running like the dev
+# Postgres; each run makes and removes its own bucket.
+S3_IMAGE = os.environ.get("DUDE_TEST_S3_IMAGE", "versity/versitygw:v1.7.0")
+S3_CONTAINER = "dude-e2e-s3"
+S3_PORT = int(os.environ.get("DUDE_TEST_S3_PORT", "59200"))
+S3_ACCESS_KEY = "dudes3"
+S3_SECRET_KEY = "dudes3-secret"
+S3_REGION = "us-east-1"
 
 # The owner role runs migrations; the app role serves traffic. They are
 # deliberately different: the app role has neither SUPERUSER nor BYPASSRLS,
@@ -142,6 +154,7 @@ class TestEnvironment:
     # -- lifecycle ----------------------------------------------------------
 
     def setup(self) -> None:
+        self._s3_bucket()
         self._create_database()
         self._migrate()
         self.git_root.mkdir(parents=True, exist_ok=True)
@@ -250,6 +263,7 @@ class TestEnvironment:
                 "PORT": str(self.control_plane_port),
                 "DUDE_ORCHESTRATOR_URL": self.orchestrator_url,
                 "DUDE_ORCHESTRATOR_TOKEN": self.orchestrator_token,
+                **self.s3_env,
             },
             stdout=self._log("control-plane"),
             stderr=subprocess.STDOUT,
@@ -353,7 +367,62 @@ class TestEnvironment:
             return
 
         self._drop_database()
+        self._drop_s3_bucket()
         subprocess.run(["rm", "-rf", self.workspace_root], check=False)
+
+    # -- object storage -----------------------------------------------------
+
+    @property
+    def s3_bucket(self) -> str:
+        return f"dude-test-{self.run_id}"
+
+    @property
+    def s3_env(self) -> dict:
+        return {
+            "DUDE_S3_BUCKET": self.s3_bucket,
+            "DUDE_S3_ENDPOINT": f"http://127.0.0.1:{S3_PORT}",
+            "DUDE_S3_REGION": S3_REGION,
+            "DUDE_S3_ACCESS_KEY": S3_ACCESS_KEY,
+            "DUDE_S3_SECRET_KEY": S3_SECRET_KEY,
+        }
+
+    def s3(self):
+        return boto3.client("s3", endpoint_url=f"http://127.0.0.1:{S3_PORT}", aws_access_key_id=S3_ACCESS_KEY,
+                            aws_secret_access_key=S3_SECRET_KEY, region_name=S3_REGION)
+
+    def _s3_bucket(self) -> None:
+        running = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", S3_CONTAINER],
+                                 capture_output=True, text=True).stdout.strip() == "true"
+        if not running:
+            subprocess.run(["docker", "rm", "-f", S3_CONTAINER], capture_output=True)
+            subprocess.run(
+                ["docker", "run", "-d", "--name", S3_CONTAINER, "--label", "dude-e2e",
+                 "-p", f"127.0.0.1:{S3_PORT}:9000",
+                 "-e", f"ROOT_ACCESS_KEY={S3_ACCESS_KEY}", "-e", f"ROOT_SECRET_KEY={S3_SECRET_KEY}",
+                 S3_IMAGE, "--port", ":9000", "--health", "/health", "--region", S3_REGION, "posix", "/tmp"],
+                check=True, capture_output=True,
+            )
+        deadline = time.time() + 30
+        while True:
+            try:
+                if requests.get(f"http://127.0.0.1:{S3_PORT}/health", timeout=2).ok:
+                    break
+            except requests.RequestException:
+                pass
+            if time.time() > deadline:
+                raise RuntimeError(f"the test S3 ({S3_CONTAINER}) did not come up on port {S3_PORT}")
+            time.sleep(0.3)
+        self.s3().create_bucket(Bucket=self.s3_bucket)
+
+    def _drop_s3_bucket(self) -> None:
+        try:
+            s3 = self.s3()
+            for page in s3.get_paginator("list_objects_v2").paginate(Bucket=self.s3_bucket):
+                for obj in page.get("Contents", []):
+                    s3.delete_object(Bucket=self.s3_bucket, Key=obj["Key"])
+            s3.delete_bucket(Bucket=self.s3_bucket)
+        except Exception as err:  # noqa: BLE001 - teardown is best effort
+            print(f"warning: could not remove bucket {self.s3_bucket}: {err}", file=sys.stderr)
 
     def _drop_database(self) -> None:
         try:

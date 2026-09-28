@@ -1,7 +1,7 @@
 """A seeded dude to look at and click through: `uv run python demo.py`.
 
 Everything is local and nothing costs money: its own database on the dev
-Postgres, the fake lux running the scripted agents, a fake GitHub that opens
+Postgres, its own bucket on a local S3 (for photos), the fake lux running the scripted agents, a fake GitHub that opens
 real pull requests on local repositories and sends signed webhooks, and the
 built web app. It seeds one organisation with four people and two projects
 with epics and tasks in every state the screens show — delivered to a pull
@@ -24,6 +24,9 @@ import json
 import signal
 import sys
 import time
+from pathlib import Path
+
+import requests
 
 from build import build, build_gallery, build_web
 from env import TestEnvironment
@@ -104,6 +107,12 @@ def run(env: TestEnvironment, args) -> None:
         clients[name] = ApiClient(env.control_plane_url, body["key"])
         ids[name] = body["person"]["id"]
     ben, chloe = clients["Ben Okafor"], clients["Chloé Martin"]
+    # Faces: two photos (uploaded, so kept in the demo's bucket) beside two
+    # people with initials.
+    photos = Path(__file__).resolve().parent.parent / "docs" / "design" / "mockups" / "photos"
+    for name, photo in (("Ana Costa", "ana.jpg"), ("Chloé Martin", "cy.jpg")):
+        requests.put(env.control_plane_url + "/v1/me/photo", data=(photos / photo).read_bytes(), timeout=30,
+                     headers={"authorization": f"Bearer {keys[name]}", "content-type": "image/jpeg"}).raise_for_status()
 
     gh = FakeGitHub(env.git_root, owner="acme", repo="dashboard")
     gh.start()

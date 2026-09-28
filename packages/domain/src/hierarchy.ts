@@ -171,6 +171,8 @@ export const projectSchema = z.object({
   /** How its work is delivered, over the factory's defaults. */
   deliveryPolicy: deliveryPolicySchema.default({}),
   createdAt: z.string().datetime({ offset: true }),
+  /** Its face: an uploaded image's URL, or null for initials. */
+  imageUrl: z.string().nullable().default(null),
 });
 export type Project = z.infer<typeof projectSchema>;
 

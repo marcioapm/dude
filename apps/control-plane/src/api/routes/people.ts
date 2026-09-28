@@ -10,7 +10,6 @@
  * orchestrator, which enforces that only the owner answers its agents.
  */
 
-import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import { EventTypes, personRoleSchema, type PersonRef } from "@dude/domain";
 import type { OrgScope } from "../../db/client.ts";
@@ -18,6 +17,8 @@ import { withOrg, withoutTenant } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { insertApiKey, insertPerson } from "../auth.ts";
 import { HttpError, badRequest, conflict, json, noContent, notFound, parseBody } from "../http.ts";
+import { serveImage, storeImage } from "../faces.ts";
+import { deleteObject } from "../../storage.ts";
 import type { PublicContext, RequestContext, Router } from "../router.ts";
 
 /** The SELECT expression for a task's owner (a `PersonRef`) or null, for the `tasks` rows under `alias`. */
@@ -153,18 +154,11 @@ async function getMe(ctx: RequestContext): Promise<Response> {
   return json(out);
 }
 
-/**
- * A photo: an https URL, or an image small enough to keep inline as a
- * data: URL (dude has no file storage yet). Browsers resize before
- * uploading, so the cap is a guard, not a quality setting.
- */
-export const PHOTO_MAX_BYTES = 256 * 1024;
-const DATA_URL = /^data:image\/(png|jpeg|webp|gif);base64,([A-Za-z0-9+/]+={0,2})$/;
+/** A photo someone keeps elsewhere: an https URL. Uploads go to PUT /v1/me/photo. */
 const photoInput = z
   .string()
-  .max(Math.ceil((PHOTO_MAX_BYTES * 4) / 3) + 64, "a photo is at most 256 KB")
-  .refine((v) => DATA_URL.test(v) || (v.length <= 2000 && /^https:\/\/[^\s"'<>]+$/.test(v)),
-    "a photo is an https URL or a data:image URL")
+  .max(2000)
+  .regex(/^https:\/\/[^\s"'<>]+$/, "a photo is an https URL; upload an image to /v1/me/photo")
   .nullable();
 
 const updateMeInput = z
@@ -178,35 +172,45 @@ const updateMeInput = z
 async function updateMe(ctx: RequestContext): Promise<Response> {
   const input = await parseBody(ctx.request, updateMeInput);
   if (input.name === undefined && input.photoUrl === undefined) throw badRequest("nothing to change");
-  const person = await withOrg(ctx.principal.organizationId, async (scope) => {
-    // A new token per photo: a URL handed out for the old one stops working.
-    const token = input.photoUrl ? randomBytes(12).toString("base64url") : null;
+  const setPhoto = input.photoUrl !== undefined;
+  const { person, old } = await withOrg(ctx.principal.organizationId, async (scope) => {
+    const [before] = (await scope.sql`
+      SELECT photo_key AS key FROM people WHERE id = ${ctx.principal.personId} FOR UPDATE`) as Array<{ key: string | null }>;
+    // A photo by URL, or none, replaces an uploaded one.
     await scope.sql`
       UPDATE people SET
         name = COALESCE(${input.name ?? null}, name),
-        photo_url = CASE WHEN ${input.photoUrl !== undefined} THEN ${input.photoUrl ?? null} ELSE photo_url END,
-        photo_token = CASE WHEN ${input.photoUrl !== undefined} THEN ${token} ELSE photo_token END
+        photo_url = CASE WHEN ${setPhoto} THEN ${input.photoUrl ?? null} ELSE photo_url END,
+        photo_key = CASE WHEN ${setPhoto} THEN NULL ELSE photo_key END,
+        photo_token = CASE WHEN ${setPhoto} THEN NULL ELSE photo_token END
       WHERE id = ${ctx.principal.personId}`;
-    return personDetail(scope, ctx.principal.personId);
+    return { person: await personDetail(scope, ctx.principal.personId), old: setPhoto ? before?.key : null };
   });
+  if (old) await deleteObject(old);
   return json({ person });
 }
 
-/** A photo kept inline, for an `<img>`: it sends no key, so the URL carries a token. */
+/** Your photo, uploaded: the image is the body (see api/faces.ts). */
+async function uploadMyPhoto(ctx: RequestContext): Promise<Response> {
+  const { organizationId, personId } = ctx.principal;
+  const { key, token } = await storeImage(ctx.request, `${organizationId}/people/${personId}`);
+  const { person, old } = await withOrg(organizationId, async (scope) => {
+    const [before] = (await scope.sql`
+      SELECT photo_key AS key FROM people WHERE id = ${personId} FOR UPDATE`) as Array<{ key: string | null }>;
+    await scope.sql`
+      UPDATE people SET photo_key = ${key}, photo_token = ${token}, photo_url = NULL WHERE id = ${personId}`;
+    return { person: await personDetail(scope, personId), old: before?.key };
+  });
+  if (old) await deleteObject(old);
+  return json({ person });
+}
+
+/** A photo for an `<img>`: it sends no key, so the URL carries a token. */
 async function getPhoto(ctx: PublicContext): Promise<Response> {
   const token = ctx.url.searchParams.get("t") ?? "";
   const rows = await withoutTenant(async ({ sql }) =>
-    (await sql`SELECT person_photo(${ctx.params.id!}, ${token}) AS url`) as Array<{ url: string | null }>);
-  const match = DATA_URL.exec(rows[0]?.url ?? "");
-  if (!match) throw notFound("no such photo");
-  return new Response(Buffer.from(match[2]!, "base64"), {
-    headers: {
-      "content-type": `image/${match[1]}`,
-      // The token changes with the photo, so a URL's image never does.
-      "cache-control": "private, max-age=31536000, immutable",
-      "x-content-type-options": "nosniff",
-    },
-  });
+    (await sql`SELECT person_photo(${ctx.params.id!}, ${token}) AS key`) as Array<{ key: string | null }>);
+  return serveImage(rows[0]?.key);
 }
 
 // ---------------------------------------------------------------------------
@@ -376,6 +380,7 @@ async function removePerson(ctx: RequestContext): Promise<Response> {
 export function registerPeopleRoutes(router: Router): void {
   router.get("/v1/me", getMe);
   router.patch("/v1/me", updateMe);
+  router.put("/v1/me/photo", uploadMyPhoto);
   router.get("/v1/me/keys", listMyKeys);
   router.post("/v1/me/keys", createMyKey);
   router.delete("/v1/me/keys/:id", revokeMyKey);
