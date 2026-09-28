@@ -558,6 +558,25 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   sibling so Enter on it downloads. **ArtifactGroup** lists them under
   "Artifacts · N" and shows "No artifacts yet" only when given `empty`
   — a task without artifacts must not grow a section to say so.
+- **Settings pages with sub-pages list them in the settings menu**, under
+  their page, as the roles sit under Agents and Search, Memories and Index
+  under Memory. Never tabs inside a settings page: the menu already says
+  where you are, and a second navigation inside it is two answers to one
+  question. Read-only facts about a connection (GitHub, the embedder) are a
+  `Card` with a `KeyValueList` and its actions in the footer; `SettingRow`
+  is for a value you change.
+- **SearchResultRow** is the one way a search result is drawn (Memory's
+  search): ArtifactRow's anatomy — a 32px row, chevron, rank, a lead that
+  says what it is in the sidebar's grammar (a task's `StatusMark` and mono
+  key, the `layers` glyph for an epic, a project's face, the `memory` glyph)
+  and the title; at the end, as muted facts, which search found it ("words
+  and meaning", "words only", "meaning only") and where it lives. Why it
+  ranked where it did is behind the click, as a `KeyValueList` in mono. A
+  score is never a chip or a bar, and matched words are not highlighted in
+  a hue. `SearchResultList` is the ordered list of them.
+- A memory's author is a `PersonLine`: a person as themselves, an agent as
+  the person it worked for with its role's tile on their face and "Role on
+  KEY" beneath; dude's own is the `system` avatar and why it wrote it.
 - **ArtifactPreview** renders by kind: Markdown as `Markdown
   variant="document"`, text and JSON in mono (JSON pretty-printed when it
   parses, as typed when it does not — a half-written result is still worth
@@ -768,6 +787,8 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | `<RowMenu items={[…, { id: "delete", tone: "danger", disabled, disabledReason }]} />` | a row of icon buttons, or a greyed item that does not say why |
 | `<FindingRow severity="blocking" status="resolved" … />` | `f.severity.toUpperCase()` in red, struck through when done |
 | `<Breadcrumb items={[project, epic, key]} />` in the header | a ghost `Back` button under the content |
+| a settings page's sub-pages as `items` of its `SettingsNavItem` | `Tabs` inside a settings page |
+| `<SearchResultRow rank={1} lead="memory" facts={["words and meaning"]} />` | a score chip and a progress bar on every result |
 
 ## Components
 
@@ -877,6 +898,8 @@ EmptyState, ScrollArea.
 - **ArtifactRow / ArtifactGroup / ArtifactPreview** — files an agent
   published, expandable to their content; `artifactKind` and
   `ARTIFACT_KIND_SPECS` are the vocabulary.
+- **SearchResultRow / SearchResultList** — a ranked search result, in
+  ArtifactRow's anatomy, expandable to why it ranked where it did.
 
 `src/components/` — live work:
 

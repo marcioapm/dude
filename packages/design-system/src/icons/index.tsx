@@ -92,7 +92,8 @@ export type IconName =
   | "heading"
   | "bold"
   | "code"
-  | "braces";
+  | "braces"
+  | "memory";
 
 /** Path data on a 16x16 grid. `fill` marks icons that are filled shapes. */
 const PATHS: Record<IconName, { d: string; fill?: true; dashed?: true }> = {
@@ -208,6 +209,8 @@ const PATHS: Record<IconName, { d: string; fill?: true; dashed?: true }> = {
   wrench: { d: "M10 2.5a3 3 0 0 0-2.8 4.1L2.5 11.3l2.2 2.2 4.7-4.7A3 3 0 0 0 13.5 6l-2 .5-1-1 .5-2Z" },
   /* The organisation: a building. */
   building: { d: "M2.5 13.5h11M4 13.5V6l4-3.5L12 6v7.5M6.5 13.5v-4h3v4" },
+  /* Something kept: a page with a bookmark. A memory, and the Memory settings. */
+  memory: { d: "M4 2.5h8a.5.5 0 0 1 .5.5v10.5L8 11l-4.5 2.5V3a.5.5 0 0 1 .5-.5ZM6 5.5h4M6 7.5h2.5" },
 };
 
 export interface IconProps extends Omit<SVGProps<SVGSVGElement>, "name"> {

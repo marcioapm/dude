@@ -7,6 +7,12 @@ import { EpicCard, EpicRow, type EpicSummary } from "../../components/EpicCard.t
 import { Segmented } from "../../components/ScreenHeader.tsx";
 import { SettingRow, SettingSource, SettingsHeader, SettingsLayout, SettingsNote, SettingsSection, Switch } from "../../components/Settings.tsx";
 import { Input } from "../../primitives/Input.tsx";
+import { Badge } from "../../primitives/Badge.tsx";
+import { Button } from "../../primitives/Button.tsx";
+import { KeyValueList } from "../../primitives/Layout.tsx";
+import { ProjectAvatar } from "../../components/ProjectAvatar.tsx";
+import { StatusMark } from "../../components/StatusMark.tsx";
+import { SearchResultList, SearchResultRow } from "../../components/SearchResultRow.tsx";
 import { Select } from "../../primitives/Select.tsx";
 
 const PROMPT = `# Implementer
@@ -91,6 +97,34 @@ export function SettingsGallerySection({ mode }: { readonly mode: PaneMode }) {
       <Block id="s-layout" title="Settings page" note="A left menu with sub-pages (the roles under Agents), rows of label and control, and on a project each value's source with Reset.">
         <Panes mode={mode}>
           <SettingsDemo />
+        </Panes>
+      </Block>
+      <Block id="s-search" title="SearchResultRow" note="Memory's search: a ranked row per memory, task, epic or project in ArtifactRow's anatomy. The lead says what it is in the sidebar's grammar; which search found it is a quiet fact; why it ranked where it did is behind the click. No score chips, no bars.">
+        <Panes mode={mode}>
+          <SearchResultList>
+            <SearchResultRow rank={1} lead="memory" title="GitHub retries a delivery for up to 3 days; dedupe on X-GitHub-Delivery"
+              facts={["words and meaning", "control-plane"]} defaultExpanded>
+              <span>GitHub re-sends a webhook delivery it thinks failed for up to 3 days, with the same X-GitHub-Delivery id.</span>
+              <KeyValueList items={[
+                { label: "Words", value: "#1 · ts_rank_cd 0.612", mono: true },
+                { label: "Meaning", value: "#1 · cosine distance 0.182", mono: true },
+                { label: "Score", value: "0.0328 = 1/(60+1) + 1/(60+1)", mono: true },
+              ]} />
+              <div><Button size="sm" variant="secondary" leadingIcon="edit">Open memory</Button></div>
+            </SearchResultRow>
+            <SearchResultRow rank={2} lead={<><StatusMark status="running" iconOnly size="sm" /><span className="ds-mono">WI-2402</span></>}
+              title="Dedupe deliveries by X-GitHub-Delivery across restarts" facts={["words and meaning", "control-plane"]}>
+              <span>Goal: a redelivered webhook is processed once.</span>
+            </SearchResultRow>
+            <SearchResultRow rank={3} lead="layers" title="Webhook reliability" facts={["words and meaning", "control-plane"]}>
+              <span>Every GitHub webhook is verified, deduplicated and retried.</span>
+            </SearchResultRow>
+            <SearchResultRow rank={4} lead="memory" title="4xx from a webhook consumer is never retried"
+              badge={<Badge size="sm" emphasis="subtle" icon="clock">Text only</Badge>} facts={["words only", "control-plane"]}>
+              <span>Only 5xx and timeouts are retried.</span>
+            </SearchResultRow>
+            <SearchResultRow rank={5} lead={<ProjectAvatar project={{ id: "p", name: "control-plane" }} size={16} />} title="control-plane" facts={["meaning only"]} />
+          </SearchResultList>
         </Panes>
       </Block>
       <Block id="s-markdown" title="MarkdownDocument" note="Reads rendered; Edit swaps in the Markdown source, lightly highlighted, in place; Save or Cancel returns to reading.">
