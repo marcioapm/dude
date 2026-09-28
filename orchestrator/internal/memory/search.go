@@ -61,14 +61,86 @@ const rrfK = 60
 const candidates = 50
 
 // Search ranks by words and by meaning apart, then fuses the two by rank.
-// With no embedder, or when the query cannot be embedded, it is by words
-// alone and says so.
+// It embeds the query itself: for a caller without a transaction open.
+// Inside one, embed first (EmbedQuery) and call Ranked, so no connection
+// is held while the embedder answers.
 func Search(ctx context.Context, tx pgx.Tx, e embeddings.Embedder, q Query) (Outcome, error) {
-	out := Outcome{Mode: "words"}
+	return Ranked(ctx, tx, EmbedQuery(ctx, e, q.Text), q)
+}
+
+// Embedded is a query's vector, or why there is none.
+type Embedded struct {
+	Model  string
+	Vector []float32
+	// Why meaning is not searched, when it was meant to be.
+	Degraded string
+}
+
+// EmbedQuery embeds the words searched for. With no embedder, or when it
+// fails, search is by words alone and says why.
+func EmbedQuery(ctx context.Context, e embeddings.Embedder, text string) Embedded {
+	text = strings.TrimSpace(text)
+	if e == nil || text == "" {
+		return Embedded{}
+	}
+	vecs, err := e.Embed(ctx, []string{text}, embeddings.Query)
+	if err != nil {
+		return Embedded{Degraded: err.Error()}
+	}
+	return Embedded{Model: e.Model(), Vector: vecs[0]}
+}
+
+// wordQuery is the query's words for Postgres: any of the plain words and
+// quoted phrases (an agent asks in sentences; ranking puts documents with
+// more of them first), and none of the -words. In English stems
+// (deliveries → deliveri) and as the simple words (keys, names) both.
+func wordQuery(text string) (any string, none string) {
+	var pos, neg []string
+	for _, t := range terms(text) {
+		if strings.HasPrefix(t, "-") && len(t) > 1 {
+			neg = append(neg, t[1:])
+		} else {
+			pos = append(pos, t)
+		}
+	}
+	return strings.Join(pos, " or "), strings.Join(neg, " or ")
+}
+
+// terms splits websearch syntax: "quoted phrases" stay whole (with their
+// quotes, and a leading - with them), the rest is split on spaces.
+func terms(text string) []string {
+	var out []string
+	for text = strings.TrimSpace(text); text != ""; text = strings.TrimSpace(text) {
+		neg := strings.HasPrefix(text, "-\"")
+		if neg || strings.HasPrefix(text, "\"") {
+			start := 1
+			if neg {
+				start = 2
+			}
+			if end := strings.Index(text[start:], "\""); end >= 0 {
+				out = append(out, text[:start+end+1])
+				text = text[start+end+1:]
+				continue
+			}
+		}
+		word, rest, _ := strings.Cut(text, " ")
+		if w := strings.Trim(word, "\""); w != "" && w != "-" && !strings.EqualFold(w, "or") {
+			out = append(out, word)
+		}
+		text = rest
+	}
+	return out
+}
+
+// Ranked searches with a query already embedded (or not): words and
+// meaning apart, fused by rank.
+func Ranked(ctx context.Context, tx pgx.Tx, emb Embedded, q Query) (Outcome, error) {
+	out := Outcome{Mode: "words", Degraded: emb.Degraded}
 	q.Text = strings.TrimSpace(q.Text)
-	if q.Limit <= 0 || q.Limit > 50 {
+	if q.Limit <= 0 {
 		q.Limit = 10
 	}
+	q.Limit = min(q.Limit, 50)
 	if q.Text == "" {
 		out.Results = []Result{}
 		return out, nil
@@ -83,6 +155,7 @@ func Search(ctx context.Context, tx pgx.Tx, e embeddings.Embedder, q Query) (Out
 	const scope = `source_type = ANY($2) AND ($3 = '' OR project_id = $3 OR project_id IS NULL)
 		AND (coalesce(cardinality($4::text[]), 0) = 0 OR source_type <> 'memory' OR EXISTS (
 			SELECT 1 FROM memory_refs r WHERE r.memory_id = d.source_id AND r.ref_id = ANY($4)))`
+	any, none := wordQuery(q.Text)
 
 	byKey := map[string]*Result{}
 	take := func(typ, id string) *Result {
@@ -95,20 +168,15 @@ func Search(ctx context.Context, tx pgx.Tx, e embeddings.Embedder, q Query) (Out
 		return r
 	}
 
-	// Any of the words, not all: an agent asks in sentences, and ranking
-	// puts the documents with more of them first. Quoted phrases and -words
-	// keep their meaning: only an AND before a plain word becomes an OR, not
-	// one before a negation. English stems (deliveries → deliveri) and the
-	// simple words (keys, names) both.
-	rows, err := tx.Query(ctx, `WITH q AS (SELECT
-			regexp_replace(websearch_to_tsquery('english', $1)::text, ' & (?!!)', ' | ', 'g')::tsquery
-			|| regexp_replace(websearch_to_tsquery('simple', $1)::text, ' & (?!!)', ' | ', 'g')::tsquery AS q)
+	// $6 excludes: a document with any -word is out of both lists.
+	const excluded = `($6 = '' OR NOT tsv @@ (websearch_to_tsquery('english', $6) || websearch_to_tsquery('simple', $6)))`
+	rows, err := tx.Query(ctx, `WITH q AS (SELECT websearch_to_tsquery('english', $1) || websearch_to_tsquery('simple', $1) AS q)
 		SELECT source_type, source_id, coalesce(project_id, ''), title,
 			ts_headline('english', body, q.q, 'MaxFragments=1,MaxWords=24,MinWords=8,StartSel=⟦,StopSel=⟧'),
 			ts_rank_cd(tsv, q.q), embedding IS NOT NULL
 		FROM search_documents d, q
-		WHERE numnode(q.q) > 0 AND tsv @@ q.q AND `+scope+`
-		ORDER BY 6 DESC, updated_at DESC LIMIT $5`, q.Text, types, q.Project, q.About, candidates)
+		WHERE numnode(q.q) > 0 AND tsv @@ q.q AND `+excluded+` AND `+scope+`
+		ORDER BY 6 DESC, updated_at DESC LIMIT $5`, any, types, q.Project, q.About, candidates, none)
 	if err != nil {
 		return out, err
 	}
@@ -131,44 +199,39 @@ func Search(ctx context.Context, tx pgx.Tx, e embeddings.Embedder, q Query) (Out
 		return out, err
 	}
 
-	if e != nil {
-		vecs, err := e.Embed(ctx, []string{q.Text}, embeddings.Query)
+	if emb.Vector != nil {
+		out.Mode, out.Model = "hybrid", emb.Model
+		// The HNSW index returns its nearest before the organization and
+		// scope filter them; let it keep looking until enough are left.
+		if _, err := tx.Exec(ctx, `SET LOCAL hnsw.iterative_scan = relaxed_order`); err != nil {
+			return out, err
+		}
+		rows, err := tx.Query(ctx, `SELECT source_type, source_id, coalesce(project_id, ''), title, left(body, 200),
+				embedding <=> $1::halfvec
+			FROM search_documents d
+			WHERE embedding IS NOT NULL AND embedding_model = $7 AND `+excluded+` AND `+scope+`
+			ORDER BY embedding <=> $1::halfvec LIMIT $5`, Vector(emb.Vector), types, q.Project, q.About, candidates, none, emb.Model)
 		if err != nil {
-			out.Degraded = err.Error()
-		} else {
-			out.Mode, out.Model = "hybrid", e.Model()
-			// The HNSW index returns its nearest before the organization and
-			// scope filter them; let it keep looking until enough are left.
-			if _, err := tx.Exec(ctx, `SET LOCAL hnsw.iterative_scan = relaxed_order`); err != nil {
+			return out, err
+		}
+		rank := 0
+		for rows.Next() {
+			var typ, id, project, title, body string
+			var dist float64
+			if err := rows.Scan(&typ, &id, &project, &title, &body, &dist); err != nil {
+				rows.Close()
 				return out, err
 			}
-			rows, err := tx.Query(ctx, `SELECT source_type, source_id, coalesce(project_id, ''), title, left(body, 200),
-					embedding <=> $1::halfvec
-				FROM search_documents d
-				WHERE embedding IS NOT NULL AND embedding_model = $6 AND `+scope+`
-				ORDER BY embedding <=> $1::halfvec LIMIT $5`, Vector(vecs[0]), types, q.Project, q.About, candidates, e.Model())
-			if err != nil {
-				return out, err
+			rank++
+			r := take(typ, id)
+			if r.TextRank == 0 {
+				r.ProjectID, r.Title, r.Snippet = project, title, body
 			}
-			rank := 0
-			for rows.Next() {
-				var typ, id, project, title, body string
-				var dist float64
-				if err := rows.Scan(&typ, &id, &project, &title, &body, &dist); err != nil {
-					rows.Close()
-					return out, err
-				}
-				rank++
-				r := take(typ, id)
-				if r.TextRank == 0 {
-					r.ProjectID, r.Title, r.Snippet = project, title, body
-				}
-				r.Embedded, r.VectorRank, r.Distance = true, rank, dist
-			}
-			rows.Close()
-			if err := rows.Err(); err != nil {
-				return out, err
-			}
+			r.Embedded, r.VectorRank, r.Distance = true, rank, dist
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return out, err
 		}
 	}
 

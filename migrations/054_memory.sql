@@ -65,6 +65,7 @@ CREATE TABLE search_documents (
   -- The indexer's: how often it failed, why, and when it tries again.
   attempts          integer NOT NULL DEFAULT 0,
   last_error        text,
+  last_attempt_at   timestamptz,
   next_attempt_at   timestamptz NOT NULL DEFAULT now(),
   updated_at        timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (source_type, source_id)
@@ -72,7 +73,8 @@ CREATE TABLE search_documents (
 CREATE INDEX search_documents_tsv_idx ON search_documents USING gin (tsv);
 CREATE INDEX search_documents_embedding_idx ON search_documents USING hnsw (embedding halfvec_cosine_ops);
 CREATE INDEX search_documents_scope_idx ON search_documents (organization_id, project_id);
--- What the indexer takes next, across organizations.
+-- What the indexer takes next, across organizations: a change of model
+-- clears every embedding (Reindex), so "pending" is always "no embedding".
 CREATE INDEX search_documents_pending_idx ON search_documents (next_attempt_at) WHERE embedding IS NULL;
 
 ALTER TABLE memories ENABLE ROW LEVEL SECURITY;
@@ -99,13 +101,15 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON search_documents TO dude_app;
 GRANT SELECT, UPDATE ON search_documents TO dude_sweeper;
 
 -- ---------------------------------------------------------------------------
--- Keeping the index in step. SECURITY DEFINER so a writer that may change a
--- task need not be granted the index; the row carries its own organization.
+-- Keeping the index in step. The triggers run as whoever wrote the row, so
+-- the index's row-level security holds for them as for any write: a
+-- tenant's write can only ever touch its own organization's index. (No
+-- SECURITY DEFINER: that would let a caller name any organization.)
 -- ---------------------------------------------------------------------------
 
 CREATE FUNCTION search_document_put(
   p_type text, p_id text, p_org text, p_project text, p_title text, p_body text
-) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+) RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
   h text := md5(p_title || E'\n' || p_body);
 BEGIN
@@ -126,18 +130,27 @@ BEGIN
     embedded_at = CASE WHEN d.content_hash = EXCLUDED.content_hash THEN d.embedded_at END,
     attempts = CASE WHEN d.content_hash = EXCLUDED.content_hash THEN d.attempts ELSE 0 END,
     last_error = CASE WHEN d.content_hash = EXCLUDED.content_hash THEN d.last_error END,
+    last_attempt_at = CASE WHEN d.content_hash = EXCLUDED.content_hash THEN d.last_attempt_at END,
     next_attempt_at = CASE WHEN d.content_hash = EXCLUDED.content_hash THEN d.next_attempt_at ELSE now() END;
 END $$;
 
 CREATE FUNCTION search_document_drop(p_type text, p_id text) RETURNS void
-LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$
+LANGUAGE sql AS $$
   DELETE FROM search_documents WHERE source_type = p_type AND source_id = p_id;
 $$;
--- Only through the triggers, which run as whoever wrote the row: the app.
-REVOKE ALL ON FUNCTION search_document_put(text, text, text, text, text, text) FROM PUBLIC;
-REVOKE ALL ON FUNCTION search_document_drop(text, text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION search_document_put(text, text, text, text, text, text) TO dude_app;
-GRANT EXECUTE ON FUNCTION search_document_drop(text, text) TO dude_app;
+
+-- A task's document: its key as people say it (TEXT-12) and title; its goal
+-- and each of its criteria. One place, for the trigger, a new key prefix
+-- and the backfill, none of which may touch the task itself (its
+-- updated_at is its last activity).
+CREATE FUNCTION search_document_put_task(p_task text) RETURNS void LANGUAGE sql AS $$
+  SELECT search_document_put('task', t.id, t.organization_id, t.project_id,
+    p.key_prefix || '-' || t.number || ' ' || t.title,
+    concat_ws(E'\n', nullif(t.goal, ''), nullif((
+      SELECT string_agg(c, E'\n') FROM jsonb_array_elements_text(
+        CASE WHEN jsonb_typeof(t.acceptance_criteria) = 'array' THEN t.acceptance_criteria ELSE '[]' END) c), '')))
+  FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = p_task;
+$$;
 
 CREATE FUNCTION memories_index() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
@@ -153,22 +166,13 @@ END $$;
 CREATE TRIGGER memories_index AFTER INSERT OR UPDATE OF title, content, project_id, archived_at OR DELETE ON memories
   FOR EACH ROW EXECUTE FUNCTION memories_index();
 
--- A task is found by its key as people say it (TEXT-12), its title, its
--- goal and each of its criteria.
 CREATE FUNCTION tasks_index() RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE
-  k text;
-  criteria text;
 BEGIN
   IF TG_OP = 'DELETE' THEN
     PERFORM search_document_drop('task', OLD.id);
-    RETURN NULL;
+  ELSE
+    PERFORM search_document_put_task(NEW.id);
   END IF;
-  SELECT p.key_prefix || '-' || NEW.number INTO k FROM projects p WHERE p.id = NEW.project_id;
-  SELECT coalesce(string_agg(c, E'\n'), '') INTO criteria
-    FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(NEW.acceptance_criteria) = 'array' THEN NEW.acceptance_criteria ELSE '[]' END) c;
-  PERFORM search_document_put('task', NEW.id, NEW.organization_id, NEW.project_id,
-    coalesce(k || ' ', '') || NEW.title, concat_ws(E'\n', nullif(NEW.goal, ''), nullif(criteria, '')));
   RETURN NULL;
 END $$;
 CREATE TRIGGER tasks_index AFTER INSERT OR UPDATE OF title, goal, acceptance_criteria, number, project_id OR DELETE ON tasks
@@ -198,10 +202,10 @@ END $$;
 CREATE TRIGGER projects_index AFTER INSERT OR UPDATE OF name, description OR DELETE ON projects
   FOR EACH ROW EXECUTE FUNCTION projects_index();
 
--- A project's new key prefix renames every task's key.
+-- A project's new key prefix renames every task's key, in the index only.
 CREATE FUNCTION projects_reindex_tasks() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-  UPDATE tasks SET number = number WHERE project_id = NEW.id;
+  PERFORM search_document_put_task(t.id) FROM tasks t WHERE t.project_id = NEW.id;
   RETURN NULL;
 END $$;
 CREATE TRIGGER projects_reindex_tasks AFTER UPDATE OF key_prefix ON projects
@@ -211,4 +215,4 @@ CREATE TRIGGER projects_reindex_tasks AFTER UPDATE OF key_prefix ON projects
 -- What exists today, indexed once.
 SELECT search_document_put('project', p.id, p.organization_id, p.id, p.name, p.description) FROM projects p;
 SELECT search_document_put('epic', e.id, e.organization_id, e.project_id, e.title, e.description) FROM epics e;
-UPDATE tasks SET number = number;
+SELECT search_document_put_task(t.id) FROM tasks t;

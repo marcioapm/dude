@@ -82,14 +82,27 @@ type Error struct {
 
 func (e *Error) Error() string { return fmt.Sprintf("%d: %s", e.Status, e.Body) }
 
-// Retryable reports whether trying again later could work: rate limits and
-// the upstream's own failures, not a request it will always refuse.
-func Retryable(err error) bool {
+// Systemic reports a failure no document is to blame for: a key that is
+// wrong or not allowed, an endpoint that is not there. Every document would
+// fail alike, so none should be backed off for it.
+func Systemic(err error) bool {
 	var e *Error
 	if errors.As(err, &e) {
-		return e.Status == http.StatusTooManyRequests || e.Status >= 500
+		switch e.Status {
+		case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusMethodNotAllowed:
+			return true
+		}
 	}
-	return true // the network, a timeout
+	return false
+}
+
+// OneBad reports a refusal of the request's content (a 4xx that is not
+// systemic nor a rate limit): some text in the batch the endpoint will not
+// take, which one by one finds.
+func OneBad(err error) bool {
+	var e *Error
+	return errors.As(err, &e) && e.Status >= 400 && e.Status < 500 &&
+		e.Status != http.StatusTooManyRequests && !Systemic(err)
 }
 
 func (c *Client) Embed(ctx context.Context, texts []string, purpose Purpose) ([][]float32, error) {

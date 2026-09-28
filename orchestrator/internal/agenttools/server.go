@@ -35,6 +35,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/embeddings"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
+	"github.com/marciomartins/dude/orchestrator/internal/memory"
 )
 
 // EventType is the ledger event for one call of a dude tool.
@@ -58,8 +59,9 @@ type Caller struct {
 }
 
 type memoryDeps struct {
-	embedder embeddings.Embedder
-	kick     func()
+	kick func()
+	// search_memory's query, embedded before the transaction opened.
+	query memory.Embedded
 }
 
 func (c Caller) run() delivery.RunRef {
@@ -317,8 +319,15 @@ const (
 // transaction as what the tool did.
 func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessage) (json.RawMessage, error) {
 	var out json.RawMessage
+	c.memory = memoryDeps{kick: s.Kick}
+	if t.name == "search_memory" {
+		// Embedded before the transaction: a slow embedder must not hold a
+		// connection. Arguments it cannot read are refused inside, as ever.
+		var in struct{ Query string }
+		_ = json.Unmarshal(args, &in)
+		c.memory.query = memory.EmbedQuery(ctx, s.Embedder, in.Query)
+	}
 	err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
-		c.memory = memoryDeps{embedder: s.Embedder, kick: s.Kick}
 		if err := withinLimits(ctx, tx, c, t.name); err != nil {
 			return err
 		}

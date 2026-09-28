@@ -123,7 +123,7 @@ export function MemoryPages({ client, scope, page, projects, admin, index, onPag
   return (
     <>
       {page === "memory-search" ? (
-        <SearchPage key={version} client={client} scope={scope} projects={projects} onOpen={(id) => void open(id)} />
+        <SearchPage client={client} scope={scope} projects={projects} version={version} onOpen={(id) => void open(id)} />
       ) : page === "memory-list" ? (
         <MemoriesPage key={version} client={client} scope={scope} projects={projects} embedder={index.embedder} onOpen={setEditing}
           add={<Button variant="primary" leadingIcon="plus" onClick={() => setEditing("new")} data-testid="memory-add">Add memory</Button>} />
@@ -228,10 +228,12 @@ const TYPE_OPTIONS = [
   { value: "project", label: "Projects" },
 ];
 
-function SearchPage({ client, scope, projects, onOpen }: {
+function SearchPage({ client, scope, projects, version, onOpen }: {
   client: ApiClient;
   scope: MemoryScope;
   projects: readonly ProjectChoice[];
+  /** Bumped by a save: the same search runs again, keeping its words. */
+  version: number;
   onOpen: (id: string) => void;
 }) {
   const [query, setQuery] = useState("");
@@ -273,7 +275,7 @@ function SearchPage({ client, scope, projects, onOpen }: {
   useEffect(() => {
     const t = setTimeout(() => void run(), 300);
     return () => clearTimeout(t);
-  }, [run]);
+  }, [run, version]);
 
   return (
     <>

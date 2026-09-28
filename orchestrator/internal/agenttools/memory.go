@@ -46,7 +46,7 @@ func searchMemory(ctx context.Context, tx pgx.Tx, c Caller, in searchMemoryIn) (
 	if limit <= 0 {
 		limit = 8
 	}
-	out, err := memory.Search(ctx, tx, c.memory.embedder, memory.Query{Text: in.Query, Project: c.ProjectID, Types: in.Types, Limit: min(limit, 20)})
+	out, err := memory.Ranked(ctx, tx, c.memory.query, memory.Query{Text: in.Query, Project: c.ProjectID, Types: in.Types, Limit: min(limit, 20)})
 	if err != nil {
 		return nil, err
 	}
