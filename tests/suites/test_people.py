@@ -373,6 +373,7 @@ def test_a_member_cannot_change_what_only_admins_may(client: ApiClient, env, pro
     GitHub connection are an admin's: a member reads settings, changes none."""
     _, bo = _invite(client, env, "Bo")
     pid = project["id"]
+    task = bo.create_task(pid, "Bo's own task")
     refused = [
         bo.patch("/v1/settings/organization", {"roles": {"implementer": {"model": "fake/scripted"}}}),
         bo.post("/v1/prompts/implementer", {"body": "# Mine now"}),
@@ -386,6 +387,10 @@ def test_a_member_cannot_change_what_only_admins_may(client: ApiClient, env, pro
         # The same settings by the project's own route, and its repositories.
         bo.patch(f"/v1/projects/{pid}", {"agentModels": {"implementer": {"model": "fake/scripted"}}}),
         bo.post(f"/v1/projects/{pid}/repositories", {"name": "extra", "url": "https://github.com/acme/extra.git"}),
+        # Or a project of their own, or looser rules and other models for one task.
+        bo.post("/v1/projects", {"name": "Mine", "slug": "mine", "agentModels": {"implementer": {"model": "fake/scripted"}}}),
+        bo.post(f"/v1/tasks/{task['id']}/deliver", {"policy": {"requiredReviewers": []}}),
+        bo.post("/v1/runs/run_any/sessions", {"role": "implementer", "model": "fake/scripted"}),
     ]
     assert [r.status_code for r in refused] == [403] * len(refused), [(r.request.url, r.status_code, r.text[:80]) for r in refused]
     assert all(r.json()["error"]["code"] == "not_admin" for r in refused), [r.text[:80] for r in refused]

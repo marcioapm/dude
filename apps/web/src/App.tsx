@@ -102,6 +102,8 @@ const MINE = "dude.tree.mine";
 export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   const [projects, setProjects] = useState<NavProject[] | null>(null);
   const people = usePeople();
+  // Making a project is an admin's: it brings its own models, image and repositories.
+  const isAdmin = people.me?.role === "admin";
   const [mine, setMine] = useState(() => localStorage.getItem(MINE) === "1");
   // The sidebar drawer, on a narrow screen.
   const [navOpen, setNavOpen] = useState(false);
@@ -244,11 +246,11 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
       <EmptyState
         title="No projects yet"
         description="A project is where work for a codebase lives: its repositories, its agents, its tasks."
-        action={
+        action={isAdmin ? (
           <Button variant="primary" leadingIcon="plus" onClick={() => setOpen({ kind: "newProject" })} data-testid="new-project-empty">
             New project
           </Button>
-        }
+        ) : undefined}
       />
     );
   } else if (place?.view === "inbox") {
@@ -412,9 +414,9 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         }}
         menuItems={menuItems}
         title={<span className="brand"><DudeMark size={30} />El Duderino</span>}
-        treeActions={
+        treeActions={isAdmin ? (
           <IconButton size="sm" icon="plus" label="New project" onClick={() => setOpen({ kind: "newProject" })} data-testid="new-project" />
-        }
+        ) : undefined}
         footer={
           <>
             <SidebarLink icon="building" current={place?.view === "orgSettings"} onClick={() => go({ view: "orgSettings" })}
