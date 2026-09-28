@@ -305,6 +305,8 @@ func (t *translator) activity(ctx context.Context, tx pgx.Tx, s *Syncer, activit
 			return err
 		}
 		clear(t.openCalls)
+		// A turn's end is when an agent's edits settle.
+		s.pokeDiff(t.run.ID)
 		// A turn that ended with something open for a person — a question, a
 		// repository it asked for — is not done: the agent waits, and the
 		// answer starts its next turn. The syncer parks it if the wait is
@@ -452,6 +454,10 @@ func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux
 			}
 			payload := map[string]any{"tool": name, "callId": callID, "status": st, "title": title}
 			maps.Copy(payload, toolResult(u))
+			// It changed files: the live diff is read shortly.
+			if isEdit(name) {
+				s.pokeDiff(t.run.ID)
+			}
 			return s.event(ctx, tx, t.run, evToolCompleted, ledger.ActorAgent, payload)
 		}
 

@@ -44,7 +44,7 @@ import { actorName, humanActor, project as foldConversation } from "../api/conve
 import { shortError } from "../escalation.ts";
 import { useReloadOnEvents } from "../hooks/useEventStream.ts";
 import { firstName, usePeople, type People } from "../people.tsx";
-import { ArtifactsSection } from "./ArtifactsSection.tsx";
+import { FilesSection } from "./FilesSection.tsx";
 import { EscalationPanel } from "./EscalationPanel.tsx";
 import { TaskMetricsSection } from "./MetricsSection.tsx";
 import { NotFound } from "./NotFound.tsx";
@@ -336,9 +336,9 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
 
         <TabPanel value="files" className="taskPane">
           {artifacts.length > 0 ? (
-            <ArtifactsSection client={client} artifacts={artifacts} />
+            <FilesSection client={client} taskId={taskId} taskKey={item.key} artifacts={artifacts} onOpenRun={onOpenRun} />
           ) : (
-            <EmptyState compact icon="file" title="No files yet" description="What the agents save — notes, screenshots, reports — shows here." />
+            <EmptyState compact icon="file" title="No files yet" description="What the agents save — notes, screenshots, reports, recordings — shows here." />
           )}
         </TabPanel>
 
