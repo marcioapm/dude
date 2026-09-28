@@ -1,0 +1,433 @@
+/*
+ * The Memory page's own pieces, in the design system's tokens only. Rows are
+ * told apart by space and shade; the only colour is a task's status mark and
+ * a failure's danger glyph. What proves itself here moves into the design
+ * system as MemoryRow / SearchResultRow once the mockup is approved.
+ */
+
+.tab {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-16);
+  padding-top: var(--ds-space-16);
+}
+.tabSections {
+  gap: var(--ds-space-24);
+}
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  flex-wrap: wrap;
+}
+.query {
+  flex: 1 1 360px;
+}
+.filter {
+  flex: 0 1 280px;
+}
+.spacer {
+  flex: 1;
+}
+.mono {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-mono);
+}
+.glyph {
+  display: inline-flex;
+  color: var(--ds-color-text-muted);
+}
+.key {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-mono);
+  color: var(--ds-color-text-secondary);
+}
+.none {
+  color: var(--ds-color-text-muted);
+}
+
+/* ---------------------------------------------------------------- results */
+
+.resultsHead {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+}
+.resultsMeta {
+  flex: 1;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+.results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+}
+.result {
+  border-radius: 0;
+}
+.resultOpen {
+  background: var(--ds-color-raised);
+}
+.resultHead {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ds-space-12);
+  width: 100%;
+  padding: var(--ds-space-8) var(--ds-space-12) var(--ds-space-8) var(--ds-space-8);
+  margin: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  border-radius: 0;
+}
+.resultHead:hover {
+  background: var(--ds-color-row-hover);
+}
+.resultHead:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 var(--ds-focus-ring-width) var(--ds-color-focus-ring);
+}
+.rank {
+  flex: none;
+  width: 20px;
+  padding-top: 1px;
+  text-align: right;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.resultMain {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+}
+.resultLine {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-width: 0;
+}
+.lead {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  flex: none;
+  width: 104px;
+}
+.typeWord {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.resultTitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-strong);
+}
+.resultProject {
+  flex: none;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.snippet {
+  padding-left: 112px;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.snippet b {
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
+}
+.scores {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+  padding-top: 1px;
+}
+.scoreChips {
+  display: flex;
+  gap: var(--ds-space-4);
+}
+.scoreChip {
+  display: inline-flex;
+  align-items: center;
+  height: var(--ds-size-badge-md);
+  padding: 0 var(--ds-space-6);
+  border-radius: var(--ds-radius-mark);
+  background: var(--ds-color-sunken);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.scoreMissing {
+  background: none;
+  color: var(--ds-color-text-muted);
+}
+.fused {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--ds-space-2);
+  width: 64px;
+}
+.fusedValue {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+/* Relative to the top result: how far down the list this one fell. Ink, not a tone. */
+.fusedBar {
+  display: block;
+  width: 100%;
+  height: 2px;
+  background: var(--ds-color-sunken);
+}
+.fusedBar b {
+  display: block;
+  height: 100%;
+  background: var(--ds-color-text-muted);
+}
+.chevron {
+  flex: none;
+  margin-top: 4px;
+  color: var(--ds-color-text-muted);
+  transition: transform var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.resultOpen .chevron {
+  transform: rotate(90deg);
+}
+.resultBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-12);
+  padding: 0 var(--ds-space-16) var(--ds-space-16) 40px;
+}
+.memoryBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  max-width: var(--ds-measure-message);
+}
+.memoryFoot,
+.formMeta {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+  flex-wrap: wrap;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+.footItem {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+}
+.why {
+  font-size: var(--ds-text-sm);
+}
+.bodyActions {
+  display: flex;
+}
+
+.agentView {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+}
+.agentText {
+  margin: 0;
+  padding: var(--ds-space-code-y) var(--ds-space-code-x);
+  background: var(--ds-color-sunken);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-mono);
+  line-height: var(--ds-size-code-line);
+  color: var(--ds-color-text-primary);
+  white-space: pre-wrap;
+}
+.agentNote {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  margin: 0;
+  color: var(--ds-color-text-secondary);
+}
+
+/* ---------------------------------------------------------------- memories */
+
+.memoryCell {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-width: 0;
+}
+.memoryTitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ds-color-text-primary);
+}
+.kind {
+  flex: none;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.archived {
+  opacity: 0.6;
+}
+.scope,
+.author,
+.ref {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  min-width: 0;
+  white-space: nowrap;
+}
+.ref {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.authorName {
+  color: var(--ds-color-text-primary);
+}
+.authorDetail {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.inherited {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+
+/* ---------------------------------------------------------------- dialog */
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-16);
+}
+.formMeta {
+  padding: var(--ds-space-8) var(--ds-space-12);
+  background: var(--ds-color-chrome);
+}
+.formRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--ds-space-12);
+}
+.aboutField {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-6);
+}
+.fieldLabel {
+  font-size: var(--ds-text-sm);
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-primary);
+}
+.fieldHint {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.aboutChips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ds-space-6);
+}
+.aboutChip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  height: var(--ds-size-chip);
+  padding: 0 var(--ds-space-4) 0 var(--ds-space-8);
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-sunken);
+}
+.chipRemove {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--ds-radius-mark);
+  background: none;
+  color: var(--ds-color-text-muted);
+}
+.chipRemove:hover {
+  background: var(--ds-color-hover-wash);
+  color: var(--ds-color-text-primary);
+}
+
+/* ---------------------------------------------------------------- index */
+
+.provider {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--ds-space-8);
+}
+.failures {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+}
+.failure {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+  min-height: var(--ds-size-row-comfortable);
+  padding: var(--ds-space-4) var(--ds-space-8);
+  background: var(--ds-color-raised);
+}
+.failGlyph {
+  color: var(--ds-tone-danger-fg);
+}
+.failWhat {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+}
+.failLine {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-width: 0;
+}
+.failError {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+}
+.failWhen {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+}
