@@ -322,6 +322,63 @@
   font-variant-numeric: tabular-nums;
   color: var(--ds-color-text-secondary);
 }
+/* What waits on someone else: the same rows, calm — no wash, no bar. */
+.attentionOthers {
+  background: none;
+  box-shadow: none;
+}
+/* A row and, beside it, its Take over. */
+.attentionItem {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+}
+.takeOver {
+  flex-shrink: 0;
+  height: var(--ds-size-control-sm);
+  padding: 0 var(--ds-space-8);
+  border: 0;
+  border-radius: var(--ds-radius-control);
+  background: none;
+  font: inherit;
+  font-size: var(--ds-text-sm);
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-secondary);
+}
+.takeOver:hover {
+  background: var(--ds-color-hover-wash);
+  color: var(--ds-color-text-primary);
+}
+/* The sidebar's one line for others' asks: quiet, a count and their faces. */
+.othersRow {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  margin: 0 var(--ds-space-8) var(--ds-space-4);
+  height: var(--ds-size-row-item-sm);
+  padding: 0 var(--ds-space-8) 0 var(--ds-space-12);
+  border: 0;
+  border-radius: var(--ds-radius-control);
+  background: none;
+  font: inherit;
+  font-size: var(--ds-text-nav);
+  color: var(--ds-color-text-secondary);
+  text-align: left;
+  flex-shrink: 0;
+}
+.othersRow:hover:not(:disabled) {
+  background: var(--ds-color-hover-wash);
+  color: var(--ds-color-text-primary);
+}
+.othersTitle {
+  flex: 1;
+  min-width: 0;
+}
+.othersCount {
+  font-size: var(--ds-text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--ds-color-text-muted);
+}
 .attentionMore {
   padding: var(--ds-space-4) var(--ds-space-8) 0;
   font-size: var(--ds-text-xs);

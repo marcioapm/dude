@@ -182,6 +182,7 @@ describe("AttentionList", () => {
     project,
     epic: { id: "e", title: "Reliability", tasks: [] },
     session: withSession ? { id: "s", role: "orchestrator", status: "awaiting_input", activity: "Which backoff?" } : null,
+    yours: true,
   });
 
   test("where is the row's title, not visible text", () => {
