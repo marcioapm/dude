@@ -89,8 +89,10 @@ export function ChangesPanel({ client, runId, role, events, checksum: latest, li
     );
   }, [events, role]);
 
-  if (problem) return <Callout tone="danger">{problem}</Callout>;
-  if (!diff) return <div className="runBar">{leading}<span className="runBarSpacer" />{trailing}</div>;
+  // Without a diff the bar still stands: the way back to the conversation.
+  const bar = <div className="runBar">{leading}<span className="runBarSpacer" />{trailing}</div>;
+  if (problem) return <>{bar}<div className="runChanges"><Callout tone="danger">{problem}</Callout></div></>;
+  if (!diff) return bar;
   return (
     <>
       <LiveDiff
@@ -109,7 +111,7 @@ export function ChangesPanel({ client, runId, role, events, checksum: latest, li
       />
       {openedFiles ? (
         <Dialog open size="xl" onOpenChange={(o) => !o && setViewing(null)} title={<code>{openedFiles[0]!.path}</code>}>
-          <div className="diffViewer" data-testid="diff-viewer">
+          <div className="dialogFill" data-testid="diff-viewer">
             <LiveDiff files={openedFiles} base={diff.base} fileList={false} defaultView="split" />
           </div>
         </Dialog>

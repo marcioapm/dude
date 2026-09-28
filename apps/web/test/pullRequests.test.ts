@@ -35,7 +35,8 @@ describe("merging", () => {
 describe("activity", () => {
   test("dude opening it, and whom it asked", () => {
     expect(pullRequestActivity(event("pull_request.opened", { draft: true, reviewersRequested: ["cy", "bo"] }), false)?.text)
-      .toBe("dude opened #41 as a draft, asking cy and bo to review");
+      .toBe("opened #41 as a draft, asking cy and bo to review");
+    expect(pullRequestActivity(event("pull_request.opened", {}), false)?.byDude).toBe(true);
   });
 
   test("a person on GitHub, by login, with what they said", () => {

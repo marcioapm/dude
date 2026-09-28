@@ -52,8 +52,8 @@ function SessionSwitch({ value: start = "chat" }: { readonly value?: "chat" | "c
   return (
     <Segmented label="Show" size="sm" value={value} onChange={setValue}
       options={[
-        { value: "chat", label: <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Icon name="message" size={13} />Conversation</span> },
-        { value: "changes", label: <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Icon name="git-branch" size={13} />Changes 3<span className="ds-live-dot" /></span> },
+        { value: "chat", label: <><Icon name="message" size={13} />Conversation</> },
+        { value: "changes", label: <><Icon name="git-branch" size={13} />Changes 3<span className="ds-live-dot" /></> },
       ]} />
   );
 }

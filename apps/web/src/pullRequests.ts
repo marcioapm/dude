@@ -56,6 +56,8 @@ export interface PullRequestActivity {
   actorId: string | null;
   text: string;
   quote?: string | undefined;
+  /** dude did it: the caller puts his name first, and his face beside it. */
+  byDude?: boolean | undefined;
 }
 
 const str = (v: unknown) => (typeof v === "string" ? v : "");
@@ -73,7 +75,7 @@ export function pullRequestActivity(e: PersistedEvent, named: boolean): PullRequ
   switch (e.eventType) {
     case "pull_request.opened": {
       const asked = Array.isArray(p.reviewersRequested) ? (p.reviewersRequested as string[]) : [];
-      return system(`dude opened ${pr}${p.draft ? " as a draft" : ""}${asked.length ? `, asking ${asked.join(" and ")} to review` : ""}`);
+      return { ...system(`opened ${pr}${p.draft ? " as a draft" : ""}${asked.length ? `, asking ${asked.join(" and ")} to review` : ""}`), byDude: true };
     }
     case "pull_request.commented": {
       const ignored = p.ignored === "not_permitted" ? " — not acted on: they may not wake a fixer" : "";

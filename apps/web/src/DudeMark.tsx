@@ -17,11 +17,13 @@ export function dudeName(taskId: string): (typeof DUDE_NAMES)[number] {
   return DUDE_NAMES[Math.abs(h) % DUDE_NAMES.length]!;
 }
 
-export function DudeMark({ size, className }: { size: number; className?: string }) {
+/** `size` in pixels, or "fill" to take the size of the box it sits in (a chat avatar's, which follows the density). */
+export function DudeMark({ size, className }: { size: number | "fill"; className?: string }) {
+  const box = size === "fill" ? { width: "100%", height: "100%" } : { width: size, height: size };
   return (
-    <span className={["dudeMark", className].filter(Boolean).join(" ")} style={{ width: size, height: size }} aria-hidden="true">
-      <img className="dudeMarkLight" src="/dude.svg" alt="" width={size} height={size} />
-      <img className="dudeMarkDark" src="/dude-outlined.svg" alt="" width={size} height={size} />
+    <span className={["dudeMark", className].filter(Boolean).join(" ")} style={box} aria-hidden="true">
+      <img className="dudeMarkLight" src="/dude.svg" alt="" style={box} />
+      <img className="dudeMarkDark" src="/dude-outlined.svg" alt="" style={box} />
     </span>
   );
 }

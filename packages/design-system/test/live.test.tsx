@@ -41,7 +41,7 @@ describe("LiveDiff", () => {
 
   test("an ended diff has no live pill and no follow toggle", () => {
     const html = renderToStaticMarkup(<LiveDiff base="b" files={[file("a", "A", [["+", "x"]])]} />);
-    expect(html).not.toContain("live-pill");
+    expect(html).not.toContain('role="switch"');
     expect(html).not.toContain("Follow the agent");
   });
 
@@ -58,6 +58,21 @@ describe("LiveDiff", () => {
     expect(html.match(/Open in the viewer/g)?.length).toBe(2); // aria-label and title, once: not on the deleted file
     expect(html).toContain(">Unified<");
     expect(html).toContain("split-row");
+  });
+
+  test("the page's controls share its toolbar, and the last change heads the files", () => {
+    const html = renderToStaticMarkup(
+      <LiveDiff base="b" live files={[file("a.ts", "M", [["+", "x"]])]} leading={<i data-x="lead" />} trailing={<i data-x="trail" />}
+        lastChange="Write a.ts" />,
+    );
+    const head = html.slice(0, html.indexOf('aria-label="Changed files"'));
+    expect(head.indexOf('data-x="lead"')).toBeLessThan(head.indexOf("Since"));
+    expect(head).toContain('data-x="trail"');
+    expect(html.indexOf('data-testid="last-change"')).toBeGreaterThan(html.indexOf('aria-label="Changed files"'));
+  });
+
+  test("an empty diff still says what the agent did last", () => {
+    expect(renderToStaticMarkup(<LiveDiff base="b" live files={[]} lastChange="Write a.ts" />)).toContain("Write a.ts");
   });
 
   test("with nothing changed there is no summary, only what it says", () => {

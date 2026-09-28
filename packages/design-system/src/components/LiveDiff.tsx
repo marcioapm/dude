@@ -198,7 +198,10 @@ export function LiveDiff({ files, base, live, lastChange, leading, trailing, emp
         {trailing}
       </div>
       {files.length === 0 ? (
-        <div className={styles["empty"]}>{emptyMessage ?? "No changes yet."}</div>
+        <div className={styles["empty"]}>
+          {lastChange ? <div className={styles["last"]} data-testid="last-change">{lastChange}</div> : null}
+          {emptyMessage ?? "No changes yet."}
+        </div>
       ) : (
         <div className={cx(styles["body"], !fileList && styles["bodyAlone"])}>
           {fileList ? (
