@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { DeliverySettings, FullDeliveryPolicy, RoleSettings } from "@dude/domain";
-import { deliveryChanged, deliveryPatch, effortLabel, roleChanged, settingsPage, timeLimitLabel, valueLabel } from "../src/settings.ts";
+import { deliveryChanged, deliveryPatch, effortLabel, roleChanged, settingsPage, timeLimitLabel } from "../src/settings.ts";
 
 const org = <T,>(value: T) => ({ value, source: "organization" as const });
 const proj = <T,>(value: T) => ({ value, source: "project" as const });
@@ -46,7 +46,6 @@ describe("settings helpers", () => {
     expect([timeLimitLabel(null), timeLimitLabel(45), timeLimitLabel(60), timeLimitLabel(120), timeLimitLabel(90)])
       .toEqual(["No limit", "45 min", "1 hour", "2 hours", "90 min"]);
     expect([effortLabel(null), effortLabel("high")]).toEqual(["Model’s default", "High"]);
-    expect([valueLabel(false), valueLabel(null), valueLabel(["a", "b"]), valueLabel(5)]).toEqual(["off", "not set", "a, b", "5"]);
   });
 
   test("a place's page, or the first", () => {

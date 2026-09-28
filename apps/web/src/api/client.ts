@@ -14,7 +14,6 @@ import type {
   TaskRepository,
   DeliveryPolicy,
   Directive,
-  FullDeliveryPolicy,
   DirectiveScope,
   Epic,
   Escalation,
@@ -282,11 +281,6 @@ export class ApiClient {
 
   listFindings(taskId: string): Promise<{ findings: Finding[] }> {
     return this.#request("GET", `/v1/findings${qs({ taskId })}`);
-  }
-
-  /** The factory's delivery policy, which a project's settings layer over. */
-  deliveryDefaults(): Promise<FullDeliveryPolicy> {
-    return this.#request("GET", "/v1/delivery-defaults");
   }
 
   forgeConnection(): Promise<ForgeConnection> {

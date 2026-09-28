@@ -49,11 +49,13 @@ export function PromptHistory({ versions, onRestore, emptyText = "No versions ye
   const index = Math.max(0, versions.findIndex((v) => v.id === selected));
   const version = versions[index];
   const previous = versions[index + 1];
-  const diff = useMemo(() => (version ? lineDiff(previous?.body ?? "", version.body) : null), [version, previous]);
+  // Each version against the one before: its +/- in the list, and the
+  // selected one's hunks.
   const stats = useMemo(
     () => new Map(versions.map((v, i) => [v.id, lineDiff(versions[i + 1]?.body ?? "", v.body)] as const)),
     [versions],
   );
+  const diff = version ? stats.get(version.id) : undefined;
 
   if (!version || !diff) return <p className={styles["empty"]}>{emptyText}</p>;
 

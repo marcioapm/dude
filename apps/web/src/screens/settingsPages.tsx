@@ -7,7 +7,7 @@
  * project starts from.
  */
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   AgentAvatar,
   FINDING_SEVERITY_SPECS,
@@ -278,7 +278,32 @@ function HistoryDialog({ scope, role, onClose, onOpenRun }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [role, project?.id]);
 
-  const where = project ? project.name : settings.organization.name;
+  const orgName = settings.organization.name;
+  // Memoised: PromptHistory diffs each version against the one before.
+  const versions = useMemo(
+    () =>
+      history?.versions.map((v) => ({
+        id: v.id,
+        number: v.number,
+        body: v.body,
+        note: v.note,
+        author: v.createdBy,
+        when: formatTimestamp(v.createdAt, "datetime"),
+        current: v.current,
+        mode: v.mode === "replace" ? `replaces ${orgName}’s` : v.mode === "add" ? (v.body.trim() ? `adds to ${orgName}’s` : `uses ${orgName}’s`) : undefined,
+        sessions: {
+          count: v.sessions.count,
+          recent: v.sessions.recent.map((s) => ({
+            id: s.runId,
+            label: `${s.taskKey} · ${s.taskTitle} · ${s.phase}`,
+            onOpen: onOpenRun ? () => onOpenRun(s.runId) : undefined,
+          })),
+        },
+      })),
+    [history, orgName, onOpenRun],
+  );
+
+  const where = project ? project.name : orgName;
   return (
     <Dialog
       open
@@ -292,24 +317,7 @@ function HistoryDialog({ scope, role, onClose, onOpenRun }: {
         <div data-testid="prompt-history-dialog">
           <PromptHistory
             emptyText={project ? `${project.name} has not saved a prompt of its own.` : "Never edited: agents are told dude’s built-in prompt."}
-            versions={history.versions.map((v) => ({
-              id: v.id,
-              number: v.number,
-              body: v.body,
-              note: v.note,
-              author: v.createdBy,
-              when: formatTimestamp(v.createdAt, "datetime"),
-              current: v.current,
-              mode: v.mode === "replace" ? `replaces ${settings.organization.name}’s` : v.mode === "add" ? (v.body.trim() ? `adds to ${settings.organization.name}’s` : `uses ${settings.organization.name}’s`) : undefined,
-              sessions: {
-                count: v.sessions.count,
-                recent: v.sessions.recent.map((s) => ({
-                  id: s.runId,
-                  label: `${s.taskKey} · ${s.taskTitle} · ${s.phase}`,
-                  onOpen: onOpenRun ? () => onOpenRun(s.runId) : undefined,
-                })),
-              },
-            }))}
+            versions={versions!}
             onRestore={
               settings.canEdit
                 ? async (id) => {

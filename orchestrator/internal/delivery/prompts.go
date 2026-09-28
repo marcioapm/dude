@@ -242,8 +242,9 @@ const cliNote = "The same, from the shell: the `dude` command (see `dude help`) 
 	"decides on it), `dude event progress --data '{\"done\":3,\"of\":10}'` for progress people can follow, " +
 	"`dude repo list` and `dude repo request`, and `dude publish FILE` to keep a file for people."
 
-// PromptRoleForPhase is whose prompt each phase runs: an agent role, or
-// the fixer's — the implementer's model, told something else.
+// PromptRoleForPhase is whose prompt and settings each phase runs with: an
+// agent role, or the fixer's — the implementer's model, told something
+// else, whose settings fall back to the implementer's.
 var PromptRoleForPhase = map[string]string{
 	PhaseInvestigate: "investigator",
 	PhaseImplement:   "implementer",
@@ -260,29 +261,28 @@ var PromptRoles = []string{"implementer", "reviewer", "fixer", "simplifier", "qa
 // builtinInstructions is what each role is told to do, before the work it
 // is given: the part of a phase's prompt a person may rewrite (an
 // organization's prompt replaces it, a project's adds to or replaces that).
-// The rest — the task, findings, formats and tools — is dude's, and every
-// phase gets it whatever its instructions say, because the workflow reads
-// the replies it asks for.
+// The rest — the task, findings, formats, tools, committing and the
+// tester's recording — is dude's, and every phase gets it whatever its
+// instructions say, because the workflow depends on it.
 var builtinInstructions = map[string][]string{
 	"investigator": {"Investigate this task before any code is written. Read the relevant code, identify " +
 		"what will have to change, and report what you found. Do not change anything."},
 	"implementer": {"Implement this task. Run the project's formatter, type checks and tests before you " +
-		"finish — handing over code that does not build is not finishing. " + commitNote},
+		"finish — handing over code that does not build is not finishing."},
 	"reviewer": {"You may run the code, run the tests, and write throwaway scripts to check a hypothesis. " +
 		"Do not commit: your output is findings, and someone else will make the change."},
 	// The fixer's second paragraph follows the feedback it is given.
-	"fixer": {"Address the feedback below. " + commitNote,
+	"fixer": {"Address the feedback below.",
 		"Fix only what is raised above. Widening the change makes the re-review harder and risks new findings."},
 	"simplifier": {"Simplify the changes on this branch without changing what they do.",
 		"Remove needless complexity, improve names and structure, delete dead code the change " +
 			"introduced, and consolidate obvious duplication.",
 		"Do not widen the scope, do not add features, and do not change behaviour. Run the tests: " +
-			"if they do not pass, your simplification was not behaviour-preserving. " + commitNote},
+			"if they do not pass, your simplification was not behaviour-preserving."},
 	"qa_browser": {"Exercise this change the way a person would. Start the application, drive it in a " +
 		"browser, and confirm it does what the task asked.",
 		"You are not looking for what the unit tests already cover. You are looking for what they " +
 			"cannot: does the feature actually work when used.",
-		testerTools,
 		"How to start the application and what data it needs are the project's to say (in the " +
 			"project notes below); if they say nothing, find out from the repository — its README, " +
 			"its scripts — and say in your report what you did."},
@@ -314,29 +314,10 @@ func (in PromptInput) instructions(phase string) (lead, tail []string) {
 		lead, custom = append(slices.Clone(lead), project), true
 	}
 	lead = slices.DeleteFunc(slices.Clone(lead), func(s string) bool { return strings.TrimSpace(s) == "" })
-	if !custom {
-		if phase == PhaseFix && len(lead) > 1 {
-			return lead[:1], lead[1:]
-		}
-		return lead, nil
-	}
-	// What the workflow depends on stays, whatever a person wrote: work that
-	// is not committed is lost, and the tester's video is its evidence. A
-	// prompt edited from dude's own text usually still says it; one that
-	// doesn't is told.
-	if note := requiredNotes[PromptRoleForPhase[phase]]; note != "" && !strings.Contains(strings.Join(lead, "\n\n"), note) {
-		lead = append(lead, note)
+	if !custom && phase == PhaseFix && len(lead) > 1 {
+		return lead[:1], lead[1:]
 	}
 	return lead, nil
-}
-
-// requiredNotes is the part of a role's instructions a custom prompt cannot
-// drop.
-var requiredNotes = map[string]string{
-	"implementer": commitNote,
-	"fixer":       commitNote,
-	"simplifier":  commitNote,
-	"qa_browser":  testerTools,
 }
 
 // Prompt composes one phase's prompt.
@@ -353,6 +334,7 @@ func Prompt(phase string, in PromptInput) string {
 
 	case PhaseImplement:
 		add(lead...)
+		add(commitNote)
 		add(in.task())
 		add(in.ask()...)
 
@@ -412,15 +394,18 @@ func Prompt(phase string, in PromptInput) string {
 			add("## Pull request feedback\n\n" + strings.Join(items, "\n\n"))
 		}
 		add(tail...)
+		add(commitNote)
 		add("The original task, for context:\n\n" + in.task())
 		add(in.ask()...)
 
 	case PhaseSimplify:
 		add(lead...)
+		add(commitNote)
 		add("The task this branch implements:\n\n" + in.task())
 
 	case PhaseTest:
 		add(lead...)
+		add(testerTools)
 		add(in.task(), findingFormat)
 
 	default:
