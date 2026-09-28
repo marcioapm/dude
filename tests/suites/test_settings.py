@@ -187,3 +187,127 @@ def test_a_run_records_the_prompt_version_it_ran_with(client: ApiClient, owner_d
     history = client.get("/v1/prompts/implementer/history").json()
     used = history["versions"][0]["sessions"]
     assert used["count"] >= 1 and used["recent"][0]["taskId"] == task["id"]
+
+
+# ---------------------------------------------------------------------------
+# In the browser
+# ---------------------------------------------------------------------------
+
+import pytest  # noqa: E402
+from playwright.sync_api import Page, expect  # noqa: E402
+
+from helpers import toast  # noqa: E402
+
+
+def _sign_in(page: Page, web_url: str, api_key: str) -> None:
+    page.goto(web_url)
+    page.evaluate("localStorage.clear()")
+    page.goto(web_url)
+    page.fill('input[type="password"]', api_key)
+    page.click('button[type="submit"]')
+    expect(page.get_by_test_id("shell")).to_be_visible()
+
+
+@pytest.mark.ui
+def test_a_prompt_is_edited_saved_and_cancelled_in_place(page: Page, web_url: str, client: ApiClient, org: dict,
+                                                        console_errors: list):
+    _sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/org/settings/implementer")
+    doc = page.get_by_test_id("prompt-document")
+    # It reads rendered: dude's own prompt, never edited.
+    expect(doc.get_by_test_id("markdown-view")).to_contain_text("Implement this task.")
+    expect(page.get_by_test_id("org-settings")).to_contain_text("dude’s built-in prompt")
+
+    # Edit is the source, in place; Cancel puts it back untouched.
+    doc.get_by_test_id("markdown-edit").click()
+    source = doc.get_by_test_id("markdown-source")
+    expect(source).to_be_focused()
+    source.fill("# Implementer\n\nThrown away.")
+    doc.get_by_test_id("markdown-cancel").click()
+    expect(doc.get_by_test_id("markdown-view")).to_contain_text("Implement this task.")
+    assert client.get("/v1/prompts/implementer/history").json()["versions"] == []
+
+    # Save keeps it, and it reads rendered again.
+    doc.get_by_test_id("markdown-edit").click()
+    doc.get_by_test_id("markdown-source").fill("# Implementer\n\nWrite the change and **its tests**.")
+    doc.get_by_test_id("markdown-save").click()
+    expect(doc.get_by_test_id("markdown-view").locator("h1")).to_have_text("Implementer")
+    expect(doc.get_by_test_id("markdown-view").locator("strong")).to_have_text("its tests")
+    history = client.get("/v1/prompts/implementer/history").json()["versions"]
+    assert [v["number"] for v in history] == [2, 1]
+
+    # History: the versions, what changed, and restoring the first.
+    page.get_by_test_id("prompt-history").click()
+    dialog = page.get_by_test_id("prompt-history-dialog")
+    expect(dialog).to_contain_text("v2")
+    expect(dialog).to_contain_text("its tests")
+    dialog.locator("[data-version='1']").click()
+    dialog.get_by_test_id("prompt-restore").click()
+    expect(dialog.locator("[data-version='3']")).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(doc.get_by_test_id("markdown-view")).to_contain_text("Implement this task.")
+    assert console_errors == []
+
+
+@pytest.mark.ui
+def test_a_project_shows_inherited_and_overridden_values_and_resets_them(
+    page: Page, web_url: str, client: ApiClient, org: dict, project: dict, console_errors: list
+):
+    client.patch("/v1/settings/organization", {"roles": {"reviewer": {"effort": "high"}}})
+    _sign_in(page, web_url, org["api_key"])
+
+    # From the project's menu in the sidebar.
+    page.locator(f"[data-nav-key='project:{project['id']}']").click(button="right")
+    page.get_by_role("menuitem", name="Agents & prompts").click()
+    expect(page.get_by_test_id("project-settings")).to_be_visible()
+    page.locator("[data-settings-nav='reviewer']").click()
+    settings = page.get_by_test_id("project-settings")
+    # Everything follows the organization until it is changed here.
+    expect(settings.locator("[data-source='project']")).to_have_count(0)
+    expect(settings.locator("[data-source='organization']").first).to_contain_text("From ")
+
+    settings.get_by_label("Reasoning effort").click()
+    page.get_by_role("option", name="Low").click()
+    expect(toast(page, "Effort saved")).to_be_visible()
+    overridden = settings.locator("[data-source='project']")
+    expect(overridden).to_have_count(1)
+    expect(overridden).to_contain_text("Overridden")
+    assert client.get(f"/v1/projects/{project['id']}/settings").json()["roles"]["reviewer"]["effort"] == \
+        {"value": "low", "source": "project"}
+    expect(page.locator("[data-settings-nav='reviewer']")).to_contain_text("changed")
+
+    # Reset: the organization's value again.
+    overridden.get_by_role("button", name="Reset").click()
+    expect(settings.locator("[data-source='project']")).to_have_count(0)
+    assert client.get(f"/v1/projects/{project['id']}/settings").json()["roles"]["reviewer"]["effort"] == \
+        {"value": "high", "source": "organization"}
+
+    # A project's own prompt: added to the organization's.
+    settings.get_by_role("radio", name="Add to").check(force=True)
+    doc = settings.get_by_test_id("prompt-document")
+    doc.get_by_test_id("markdown-source").fill("Money is formatted with `formatUsd`.")
+    doc.get_by_test_id("markdown-save").click()
+    expect(doc.get_by_test_id("markdown-view")).to_contain_text("Money is formatted")
+    assert client.get(f"/v1/projects/{project['id']}/settings").json()["roles"]["reviewer"]["prompt"]["project"]["mode"] == "add"
+    assert console_errors == []
+
+
+@pytest.mark.ui
+def test_the_project_page_shows_epics_by_state(page: Page, web_url: str, client: ApiClient, org: dict,
+                                               forge_project: dict, console_errors: list):
+    pid = forge_project["id"]
+    client.post(f"/v1/projects/{pid}/epics", {"title": "Exports", "state": "planned"})
+    charts = client.post(f"/v1/projects/{pid}/epics", {"title": "Charts"}).json()
+    client.create_task(pid, "Port the chart", epicId=charts["id"])
+    _sign_in(page, web_url, org["api_key"])
+    epics = page.get_by_test_id("project-epics")
+    expect(epics.locator("[data-epic-state='active']")).to_contain_text("Charts")
+    expect(epics.locator("[data-epic-state='active']")).to_contain_text("1 backlog")
+    expect(epics.locator("[data-epic-state='planned']")).to_contain_text("Exports")
+
+    # Set it done by hand.
+    epics.get_by_role("button", name="State of Charts").click()
+    page.get_by_role("menuitem", name="Done").click()
+    expect(epics.locator("[data-epic-state='done']")).to_contain_text("Charts")
+    assert {e["title"]: e["state"] for e in client.get(f"/v1/projects/{pid}/epics").json()["epics"]}["Charts"] == "done"
+    assert console_errors == []
