@@ -7,9 +7,10 @@
  * it already built; nothing here fetches.
  *
  * Eleven task statuses would be eleven columns, which is a spreadsheet.
- * The five columns below are the stages the operator actually watches: is
- * work waiting to be shaped, waiting for a worker, being worked, waiting to
- * land, or finished. "Needs you" is deliberately not a column — it is a
+ * The five columns below are the stages a team actually watches: not
+ * started, being worked, in review, ready for a person to merge, done.
+ * "Ready to merge" has a lane of its own because it is the one stage that
+ * waits on a person's click, not on an agent or on GitHub. "Needs you" is deliberately not a column — it is a
  * condition that can strike at any stage, so it is a card treatment and a
  * sort order, exactly as it is a row treatment in the tree.
  *
@@ -21,7 +22,7 @@ import type { AgentRole, TaskStatus } from "@dude/domain";
 import { EMPTY_TRIAGE_COUNTS, TRIAGE_SPECS, addTriage, sumTriage, type TriageCounts, type TriageKind } from "../tokens/triage.ts";
 import { askingSession, currentRun, taskTriage, type NavEpic, type NavProject, type NavRef, type NavSession, type NavTask } from "./navModel.ts";
 
-export const BOARD_COLUMN_KINDS = ["intake", "queued", "running", "review", "closed"] as const;
+export const BOARD_COLUMN_KINDS = ["backlog", "running", "review", "ready", "closed"] as const;
 export type BoardColumnKind = (typeof BOARD_COLUMN_KINDS)[number];
 
 export interface BoardColumnSpec {
@@ -30,23 +31,23 @@ export interface BoardColumnSpec {
 }
 
 export const BOARD_COLUMN_SPECS: Record<BoardColumnKind, BoardColumnSpec> = {
-  intake: { label: "Intake", description: "Received, being analysed, or waiting for its plan to be confirmed." },
-  queued: { label: "Queued", description: "Plan approved; waiting for a worker." },
-  running: { label: "In progress", description: "A run is active, or blocked on a person mid-run." },
-  review: { label: "Review", description: "A PR is open: under review, or ready to merge." },
-  closed: { label: "Closed", description: "Merged, failed or aborted. Failed items sort first." },
+  backlog: { label: "Backlog", description: "Not started: received, being shaped, or waiting for a worker." },
+  running: { label: "In progress", description: "An agent is working on it, or asking a person mid-run." },
+  review: { label: "In review", description: "Its pull request is open, waiting on checks and people." },
+  ready: { label: "Ready to merge", description: "Approved, checks green: a person merges it." },
+  closed: { label: "Done", description: "Merged, or stopped: failed and aborted sort here too." },
 };
 
 /** Which lane each domain status sits in. */
 export const BOARD_COLUMN_FOR_STATUS: Record<TaskStatus, BoardColumnKind> = {
-  received: "intake",
-  intake: "intake",
-  awaiting_confirmation: "intake",
-  queued: "queued",
+  received: "backlog",
+  intake: "backlog",
+  awaiting_confirmation: "backlog",
+  queued: "backlog",
   running: "running",
   awaiting_input: "running",
   review: "review",
-  ready_to_merge: "review",
+  ready_to_merge: "ready",
   done: "closed",
   failed: "closed",
   aborted: "closed",
@@ -109,7 +110,7 @@ export function boardColumns(project: NavProject, epic?: NavEpic | null): BoardC
 }
 
 function columnsOf(cards: ReadonlyArray<BoardCard>): BoardColumn[] {
-  const byKind: Record<BoardColumnKind, BoardCard[]> = { intake: [], queued: [], running: [], review: [], closed: [] };
+  const byKind: Record<BoardColumnKind, BoardCard[]> = { backlog: [], running: [], review: [], ready: [], closed: [] };
   for (const c of cards) byKind[c.column].push(c);
   return BOARD_COLUMN_KINDS.map((kind) => {
     const sorted = byKind[kind].sort((a, b) => TRIAGE_SPECS[a.triage].rank - TRIAGE_SPECS[b.triage].rank);

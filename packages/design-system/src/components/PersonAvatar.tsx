@@ -147,3 +147,25 @@ export function PersonAvatarStack({ people, size = 20, max = 4, agents, leadLarg
     </span>
   );
 }
+
+export interface PersonLineProps extends Omit<HTMLAttributes<HTMLSpanElement>, "children"> {
+  readonly person: Person;
+  readonly size?: PersonAvatarSize | undefined;
+  /** Under the name: their part ("Owner", "On this task"), or what their agent is doing. */
+  readonly detail?: ReactNode;
+  readonly agent?: AgentRole | undefined;
+  readonly live?: boolean | undefined;
+}
+
+/** A face with a name and a line under it: the people on a task, the owner of a session. */
+export function PersonLine({ person, size = 40, detail, agent, live, className, ...rest }: PersonLineProps) {
+  return (
+    <span className={cx(styles["line"], className)} {...rest}>
+      <PersonAvatar person={person} size={size} {...(agent ? { agent, live } : {})} />
+      <span className={styles["lineText"]}>
+        <span className={styles["lineName"]}>{person.name}</span>
+        {detail ? <span className={styles["lineDetail"]}>{detail}</span> : null}
+      </span>
+    </span>
+  );
+}

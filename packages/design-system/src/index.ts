@@ -40,6 +40,10 @@ export {
   currentRun,
   navKey,
   waitingWords,
+  liveSessions,
+  waitingSplit,
+  projectPeople,
+  taskOwner,
 } from "./util/navModel.ts";
 export type {
   NavProject,

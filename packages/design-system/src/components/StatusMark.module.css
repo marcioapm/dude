@@ -77,3 +77,27 @@
   animation: global(ds-ring) calc(var(--ds-cadence-breathe) / max(var(--ds-motion-live), 0.0001)) var(--ds-ease-exit) infinite;
   pointer-events: none;
 }
+
+/* The needs-you count: a diamond and a number on the attention fill. */
+.count {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  height: var(--ds-size-badge-md);
+  padding: 0 var(--ds-space-6);
+  border-radius: var(--ds-radius-full);
+  color: var(--ds-tone-attention-on-solid);
+  background: var(--ds-tone-attention-solid);
+  font-size: var(--ds-text-xs);
+  font-weight: var(--ds-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.diamond {
+  width: 6px;
+  height: 6px;
+  background: currentColor;
+  transform: rotate(45deg);
+}
