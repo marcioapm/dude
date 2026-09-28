@@ -165,6 +165,18 @@ class ApiClient:
 # ---------------------------------------------------------------------------
 
 
+def sign_in(page, web_url: str, api_key: str) -> None:
+    """Sign the web app in with a key, from a clean slate."""
+    from playwright.sync_api import expect
+
+    page.goto(web_url)
+    page.evaluate("localStorage.clear()")
+    page.goto(web_url)
+    page.fill('input[type="password"]', api_key)
+    page.click('button[type="submit"]')
+    expect(page.get_by_test_id("shell")).to_be_visible()
+
+
 def toast(page, text: str):
     """A toast, by its text: the design system marks each one (data-toast),
     since Radix also renders a hidden copy of the text for a second."""

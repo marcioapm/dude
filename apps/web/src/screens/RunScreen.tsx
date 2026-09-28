@@ -26,7 +26,7 @@ import {
 import { Button, Callout, Dialog, Spinner, Tab, TabList, TabPanel, Tabs, Textarea } from "@dude/design-system/primitives";
 import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, runLabel } from "@dude/domain";
 import type { AgentRole, PersistedEvent } from "@dude/domain";
-import type { ApiClient, Person, RunDetail } from "../api/client.ts";
+import type { ApiClient, Person, RunDetail, RunDiffSummary } from "../api/client.ts";
 import { ApiError, reportedCost } from "../api/client.ts";
 import { PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, snapshot, type Turn } from "../api/conversation.ts";
 import type { ComposerSubmission } from "@dude/design-system/components";
@@ -34,6 +34,7 @@ import { useEventStream } from "../hooks/useEventStream.ts";
 import { conflictNotice, type Notice } from "../conflict.ts";
 import { firstName, usePeople, type People } from "../people.tsx";
 import { NotFound } from "./NotFound.tsx";
+import { ChangesPanel } from "./ChangesPanel.tsx";
 
 export interface RunScreenProps {
   client: ApiClient;
@@ -143,6 +144,12 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
     return snapshot(apply(projection.current, events), run?.status);
   }, [events, runId, run?.status]);
   const isLive = run ? !TERMINAL_RUN_STATUSES.includes(run.status) : false;
+  // The latest diff's summary: its file count for the Changes tab, its
+  // checksum for the panel to know when to fetch.
+  const diffSummary = useMemo(
+    () => events.findLast((e) => e.eventType === EventTypes.RunDiffUpdated)?.payload as RunDiffSummary | undefined,
+    [events],
+  );
 
   /**
    * Run an intervention. A conflict (409) means the Run moved on while
@@ -247,8 +254,12 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
       {breadcrumb ? <div className="runCrumbs">{breadcrumb}</div> : null}
       <Tabs defaultValue="chat" fill>
         <TabList>
-          <Tab value="chat">Conversation</Tab>
-          {/* Debugging, not the daily view — hence second and quieter. */}
+          <Tab value="chat" icon="message">Conversation</Tab>
+          {/* The agent's checkout, as it changes: only for a Run with one. */}
+          {Object.keys(run.baseRefs).length > 0 || run.phase ? (
+            <Tab value="changes" icon="git-branch" count={diffSummary?.files.length}>Changes</Tab>
+          ) : null}
+          {/* Debugging, not the daily view — hence last and quieter. */}
           <Tab value="events" count={events.length}>Events</Tab>
         </TabList>
 
@@ -337,6 +348,10 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
               />
             ) : null}
           </ChatTranscript>
+        </TabPanel>
+
+        <TabPanel value="changes" fill>
+          <ChangesPanel client={client} runId={runId} events={events} checksum={diffSummary?.checksum ?? ""} live={isLive && run.status !== "paused"} />
         </TabPanel>
 
         <TabPanel value="events" fill>

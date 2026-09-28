@@ -22,6 +22,9 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/coder/websocket"
+	"github.com/coder/websocket/wsjson"
 )
 
 // Run is a lux Run as its API reports it; only the fields dude reads.
@@ -121,6 +124,19 @@ type Workload struct {
 	// ($LUX_SERVICE_<NAME>), adding each header on the way out, so the
 	// workload can call them without holding the credential.
 	Services []Service `json:"services,omitempty"`
+	// Run in the container on every stop, before the workload is
+	// signalled: dude's stop, cancel and pause, and lux's own (a timeout, a
+	// drain). Not after a crash or a lost host.
+	BeforeStop *BeforeStop `json:"beforeStop,omitempty"`
+}
+
+// BeforeStop is a command lux runs inside the container, as the workload's
+// user with its environment and working directory, when it stops the Run —
+// bounded by Timeout, and never longer than the stop's grace. What it
+// writes into $LUX_ARTIFACTS is collected like any artifact.
+type BeforeStop struct {
+	Command []string `json:"command"`
+	Timeout string   `json:"timeout,omitempty"`
 }
 
 // Service is an outside HTTP service a workload may reach as its Run: an
@@ -256,6 +272,9 @@ type Client interface {
 	Artifacts(ctx context.Context, runID string) ([]Artifact, error)
 	// Download streams an artifact as the Run wrote it. The caller closes it.
 	Download(ctx context.Context, artifactID string) (io.ReadCloser, error)
+	// Exec runs a command in a running Run's container, as its workload
+	// user with its environment, and returns what it printed.
+	Exec(ctx context.Context, runID string, command []string) (ExecResult, error)
 }
 
 type HTTPClient struct {
@@ -533,4 +552,87 @@ func ParseFrame(event string, data []byte) (Frame, bool) {
 		return Frame{Kind: "end", Cursor: e.Cursor, State: e.State, AfterEvent: e.AfterEvent}, true
 	}
 	return Frame{}, false
+}
+
+// ExecResult is what a command run with Exec printed, and how it exited.
+type ExecResult struct {
+	Stdout, Stderr []byte
+	ExitCode       int
+}
+
+// ExecLimit caps what Exec keeps of a command's output. Past it the
+// command's output is dropped rather than held: the caller asked a question
+// whose answer was too big to use.
+const ExecLimit = 8 << 20
+
+// streamData is one message of lux's interactive stream (lux's
+// proto.StreamData): bytes as base64, the channel they came on, and on the
+// last one the exit code or why the stream ended.
+type streamData struct {
+	Data     []byte `json:"data,omitempty"`
+	Channel  string `json:"ch,omitempty"`
+	ExitCode *int   `json:"exitCode,omitempty"`
+	EOF      bool   `json:"eof,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
+// Exec speaks lux's exec stream: a WebSocket to /v1/runs/{id}/exec whose
+// first message is the command, then the command's output as it comes, and
+// last its exit code. No terminal, and no input: stdin is closed at once.
+//
+// Refusals come before the upgrade, as HTTP errors (409 not_running, 503
+// host_unreachable), and are returned as an *Error like any other call's.
+func (c *HTTPClient) Exec(ctx context.Context, runID string, command []string) (ExecResult, error) {
+	var out ExecResult
+	u := "ws" + strings.TrimPrefix(c.url, "http") + "/v1/runs/" + runID + "/exec"
+	ws, res, err := websocket.Dial(ctx, u, &websocket.DialOptions{
+		HTTPHeader: http.Header{"Authorization": {"Bearer " + c.key}},
+		HTTPClient: c.stream,
+	})
+	if err != nil {
+		if res != nil && res.StatusCode >= 300 {
+			var body []byte
+			if res.Body != nil {
+				body, _ = io.ReadAll(res.Body)
+			}
+			return out, errorFrom(res.StatusCode, body, "exec "+runID)
+		}
+		if ctx.Err() != nil {
+			return out, ctx.Err()
+		}
+		return out, &Error{Status: 0, Code: "unreachable", Message: err.Error()}
+	}
+	defer ws.CloseNow()
+	ws.SetReadLimit(4 << 20)
+	if err := wsjson.Write(ctx, ws, map[string]any{"command": command}); err != nil {
+		return out, err
+	}
+	if err := wsjson.Write(ctx, ws, streamData{EOF: true}); err != nil {
+		return out, err
+	}
+	for {
+		var d streamData
+		if err := wsjson.Read(ctx, ws, &d); err != nil {
+			// Closed without an exit code: the stream ended early (a host
+			// that went away, a stream that fell behind).
+			return out, &Error{Status: 0, Code: "stream_ended", Message: "exec ended before the command did: " + err.Error()}
+		}
+		switch {
+		case d.Error != "":
+			return out, &Error{Status: http.StatusConflict, Code: "exec_failed", Message: d.Error}
+		case d.ExitCode != nil:
+			out.ExitCode = *d.ExitCode
+			_ = ws.Close(websocket.StatusNormalClosure, "")
+			return out, nil
+		case d.Channel == "stderr":
+			if len(out.Stderr) < 64<<10 {
+				out.Stderr = append(out.Stderr, d.Data...)
+			}
+		default:
+			if len(out.Stdout)+len(d.Data) > ExecLimit {
+				continue // past the limit: dropped
+			}
+			out.Stdout = append(out.Stdout, d.Data...)
+		}
+	}
 }
