@@ -34,11 +34,15 @@ class QuietEventSource extends EventTarget {
   onopen: ((e: Event) => void) | null = null;
   onmessage: ((e: MessageEvent) => void) | null = null;
   onerror: ((e: Event) => void) | null = null;
+  #opening: ReturnType<typeof setTimeout>;
   constructor(readonly url: string) {
     super();
     streams.add(this);
     const q = new URL(url, window.location.origin).searchParams;
-    setTimeout(() => {
+    // Opens a moment later, as a socket would; closed before then, it never
+    // opens (StrictMode mounts, unmounts and mounts again).
+    this.#opening = setTimeout(() => {
+      if (this.readyState !== 0) return;
       this.readyState = 1;
       this.onopen?.(new Event("open"));
       if (q.get("live") || !ledger) return;
@@ -47,6 +51,7 @@ class QuietEventSource extends EventTarget {
     }, 20);
   }
   close() {
+    clearTimeout(this.#opening);
     this.readyState = 2;
     streams.delete(this);
   }

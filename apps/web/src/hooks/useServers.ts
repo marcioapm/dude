@@ -45,38 +45,42 @@ export function useServers(client: ApiClient, scope: ServersScope, version = 0):
   // overlap. And one read at a time: a burst of events (a replayed history)
   // asks once more when the read in flight lands, not once per event — and
   // that once more is the newest `reload`, in case the scope moved meanwhile.
+  // A caller that asked during a read waits for that once more, so an action
+  // resolves with the state it left, not the one before it.
   const latest = useRef(0);
-  const inFlight = useRef(false);
-  const again = useRef(false);
+  const inFlight = useRef<Promise<void> | null>(null);
+  const again = useRef<Promise<void> | null>(null);
   const newest = useRef<() => Promise<void>>(async () => undefined);
 
-  const reload = useCallback(async () => {
+  const reload = useCallback((): Promise<void> => {
     if (inFlight.current) {
-      again.current = true;
-      return;
+      // One follow-up read serves everyone who asks during the one in flight.
+      again.current ??= inFlight.current.then(() => newest.current());
+      return again.current;
     }
-    inFlight.current = true;
     const mine = ++latest.current;
-    try {
-      const fresh = await (scope.taskId !== undefined ? client.taskServers(scope.taskId) : client.runServers(scope.runId));
-      if (mine !== latest.current) return;
-      setData(fresh);
-      setProblem(null);
-    } catch (err) {
-      if (mine === latest.current) setProblem(errorText(err));
-    } finally {
-      inFlight.current = false;
-      if (again.current) {
-        again.current = false;
-        void newest.current();
+    const read = (async () => {
+      try {
+        const fresh = await (scope.taskId !== undefined ? client.taskServers(scope.taskId) : client.runServers(scope.runId));
+        if (mine !== latest.current) return;
+        setData(fresh);
+        setProblem(null);
+      } catch (err) {
+        if (mine === latest.current) setProblem(errorText(err));
+      } finally {
+        inFlight.current = null;
+        again.current = null;
       }
-    }
+    })();
+    inFlight.current = read;
+    return read;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` stands for the scope
   }, [client, key]);
   newest.current = reload;
 
   useEffect(() => {
     setData(null);
+    setProblem(null);
     // A read in flight is the old scope's: it may finish, but not land.
     latest.current++;
     void reload();
@@ -99,8 +103,7 @@ export function useServers(client: ApiClient, scope: ServersScope, version = 0):
       setProblem(null);
       try {
         await action();
-        // Read what the action left, whatever read is in flight: `reload`
-        // folds a second ask into one more read.
+        // Resolves once a read started after the action has landed.
         await reload();
         return true;
       } catch (err) {
