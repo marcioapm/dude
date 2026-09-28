@@ -1,0 +1,79 @@
+/*
+ * A status is a glyph and a word in its tone. No pill, no fill: the only
+ * filled status on a screen is the one waiting on a person (.loud).
+ */
+
+.root {
+  --sm-fg: var(--ds-tone-neutral-fg);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  color: var(--sm-fg);
+  font-size: var(--ds-text-sm);
+  font-weight: var(--ds-weight-medium);
+  line-height: 1;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.sm {
+  gap: var(--ds-space-4);
+  font-size: var(--ds-text-xs);
+}
+
+.neutral {
+  --sm-fg: var(--ds-tone-neutral-fg);
+}
+.info {
+  --sm-fg: var(--ds-tone-info-fg);
+}
+.attention {
+  --sm-fg: var(--ds-tone-attention-fg);
+}
+.success {
+  --sm-fg: var(--ds-tone-success-fg);
+}
+.danger {
+  --sm-fg: var(--ds-tone-danger-fg);
+}
+
+.glyph {
+  flex-shrink: 0;
+}
+.word {
+  line-height: 1;
+}
+
+/* Running breathes at the live cadence; reduced motion holds it lit. */
+.live .glyph {
+  animation: global(ds-pulse) calc(var(--ds-cadence-breathe) / max(var(--ds-motion-live), 0.0001)) ease-in-out infinite;
+}
+.live [data-icon="spinner"] {
+  animation: global(ds-spin) calc(1.1s / max(var(--ds-motion-live), 0.0001)) linear infinite;
+}
+
+/* Needs you: the one filled pill, and its slow ring. */
+.loud {
+  position: relative;
+  height: var(--ds-size-badge-md);
+  padding: 0 var(--ds-space-8) 0 var(--ds-space-6);
+  border-radius: var(--ds-radius-full);
+  color: var(--ds-tone-attention-on-solid);
+  background: var(--ds-tone-attention-solid);
+  font-weight: var(--ds-weight-semibold);
+}
+.loud.sm {
+  height: var(--ds-size-badge-sm);
+  padding: 0 var(--ds-space-6) 0 var(--ds-space-4);
+}
+.loud .glyph {
+  animation: none;
+}
+.loud::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  --ds-ring-color: var(--ds-tone-attention-solid);
+  animation: global(ds-ring) calc(var(--ds-cadence-breathe) / max(var(--ds-motion-live), 0.0001)) var(--ds-ease-exit) infinite;
+  pointer-events: none;
+}
