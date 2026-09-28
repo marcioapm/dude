@@ -29,6 +29,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
+	"github.com/marciomartins/dude/orchestrator/internal/prs"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
@@ -44,6 +45,10 @@ type Server struct {
 	Kick func()
 	// The Web Push keys browsers subscribe with (notify.Notifier.Keys).
 	PushKeys func(context.Context) (public, private string, err error)
+	// GitHub, for the actions a person takes on a pull request, and the
+	// pull request sync that reads one back after.
+	Forges delivery.Forges
+	PRs    *prs.Syncer
 }
 
 func (s *Server) Handler() http.Handler {
@@ -82,6 +87,7 @@ func (s *Server) Handler() http.Handler {
 		write(w, http.StatusOK, delivery.DefaultPolicy())
 		return nil
 	}))
+	s.githubRoutes(mux)
 	mux.Handle("POST /internal/kick", s.auth(func(w http.ResponseWriter, r *http.Request, _ string) error {
 		s.kick()
 		write(w, http.StatusAccepted, map[string]bool{"ok": true})

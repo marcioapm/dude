@@ -48,6 +48,9 @@ const (
 	KindComment          = "comment"
 	KindLineComment      = "line_comment"
 	KindChangesRequested = "changes_requested"
+	// A review's own text, approving or commenting: kept, because "approved,
+	// but rename this" is a request too.
+	KindReview = "review"
 )
 
 // Credential is how an organization authenticates to GitHub.
@@ -69,7 +72,49 @@ type Status struct {
 	PullRequestRef
 	Checks string
 	Review string // pending | approved | changes_requested
+	// What a person reads beyond the rollups: every check by name, each
+	// reviewer's latest verdict, whether it merges, how far main has moved
+	// ahead, and the review threads nobody has resolved.
+	CheckList         []Check
+	Reviews           []Review
+	Mergeable         string // clean | behind | conflicting | unknown
+	BehindBy          int
+	UnresolvedThreads int
+	BaseBranch        string
 }
+
+// Check is one check on a pull request's head: a check run (GitHub
+// Actions, an app) or a commit status, by the name GitHub shows.
+type Check struct {
+	Name       string `json:"name"`
+	Status     string `json:"status"`     // queued | in_progress | completed
+	Conclusion string `json:"conclusion"` // success | failure | … ; "" while running
+	URL        string `json:"url"`
+	DurationMs int64  `json:"durationMs"`
+	// A check run's id, for its log and for running it again; 0 for a
+	// commit status, which has neither.
+	RunID int64 `json:"runId,omitempty"`
+}
+
+// Failed says the check finished and failed: what wakes a fixer.
+func (c Check) Failed() bool { return checkRunState(c.Status, c.Conclusion) == ChecksFailing }
+
+// Review is one reviewer's latest word on a pull request: APPROVED,
+// CHANGES_REQUESTED, COMMENTED, DISMISSED, or REQUESTED for one asked and
+// yet to answer.
+type Review struct {
+	Login       string  `json:"login"`
+	State       string  `json:"state"`
+	SubmittedAt *string `json:"submittedAt"`
+}
+
+// Mergeable states.
+const (
+	MergeClean       = "clean"
+	MergeBehind      = "behind"
+	MergeConflicting = "conflicting"
+	MergeUnknown     = "unknown"
+)
 
 // Feedback is one thing a person left on a pull request. Conversation
 // comments, line comments and a changes-requested review body arrive in one
@@ -126,6 +171,8 @@ const requestTimeout = 15 * time.Second
 type GitHub struct {
 	cred Credential
 	http *http.Client
+	// How the organization wants dude to behave on GitHub.
+	Settings Settings
 }
 
 func NewGitHub(c Credential) *GitHub {
@@ -133,7 +180,7 @@ func NewGitHub(c Credential) *GitHub {
 		c.APIBaseURL = "https://api.github.com"
 	}
 	c.APIBaseURL = strings.TrimRight(c.APIBaseURL, "/")
-	return &GitHub{cred: c, http: &http.Client{Timeout: requestTimeout}}
+	return &GitHub{cred: c, http: &http.Client{Timeout: requestTimeout}, Settings: DefaultSettings()}
 }
 
 // Token is the credential to hand lux for cloning and pushing. With a PAT it
@@ -147,6 +194,10 @@ func (g *GitHub) Token() (string, error) {
 }
 
 func (g *GitHub) do(ctx context.Context, method, path string, body, out any) error {
+	return g.doURL(ctx, method, g.cred.APIBaseURL+path, body, out)
+}
+
+func (g *GitHub) doURL(ctx context.Context, method, target string, body, out any) error {
 	token, err := g.Token()
 	if err != nil {
 		return err
@@ -159,7 +210,7 @@ func (g *GitHub) do(ctx context.Context, method, path string, body, out any) err
 		}
 		reader = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, g.cred.APIBaseURL+path, reader)
+	req, err := http.NewRequestWithContext(ctx, method, target, reader)
 	if err != nil {
 		return err
 	}
@@ -184,7 +235,7 @@ func (g *GitHub) do(ctx context.Context, method, path string, body, out any) err
 		}
 		_ = json.Unmarshal(data, &e)
 		if e.Message == "" {
-			e.Message = fmt.Sprintf("%s %s failed", method, path)
+			e.Message = fmt.Sprintf("%s %s failed", method, target)
 		}
 		return &Error{Status: res.StatusCode, Message: e.Message}
 	}
@@ -195,15 +246,23 @@ func (g *GitHub) do(ctx context.Context, method, path string, body, out any) err
 }
 
 type ghPull struct {
-	Number   int     `json:"number"`
-	NodeID   string  `json:"node_id"`
-	HTMLURL  string  `json:"html_url"`
-	Draft    bool    `json:"draft"`
-	State    string  `json:"state"`
-	MergedAt *string `json:"merged_at"`
-	Head     struct {
+	Number         int     `json:"number"`
+	NodeID         string  `json:"node_id"`
+	HTMLURL        string  `json:"html_url"`
+	Draft          bool    `json:"draft"`
+	State          string  `json:"state"`
+	MergedAt       *string `json:"merged_at"`
+	Mergeable      *bool   `json:"mergeable"`
+	MergeableState string  `json:"mergeable_state"`
+	Head           struct {
 		SHA string `json:"sha"`
 	} `json:"head"`
+	Base struct {
+		Ref string `json:"ref"`
+	} `json:"base"`
+	RequestedReviewers []struct {
+		Login string `json:"login"`
+	} `json:"requested_reviewers"`
 }
 
 func (p ghPull) ref() PullRequestRef {
@@ -248,63 +307,232 @@ func (g *GitHub) OpenPullRequest(ctx context.Context, in OpenPullRequest) (PullR
 	return p.ref(), err
 }
 
-// PullRequest reads a pull request's state, checks and review verdict.
+// PullRequest reads a pull request as a person sees it on GitHub: its
+// state, every check by name, each reviewer's verdict, whether it merges
+// and how far behind its base it is, and its unresolved review threads.
 func (g *GitHub) PullRequest(ctx context.Context, slug string, number int) (Status, error) {
 	var p ghPull
 	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d", slug, number), nil, &p); err != nil {
 		return Status{}, err
 	}
-	// CI reports two ways, and a project may use either or both: commit
-	// statuses (the combined status) and check runs (GitHub Actions, and
-	// apps). The combined status does not include check runs, so both are
-	// read, and the worse of the two is the pull request's.
+	st := Status{PullRequestRef: p.ref(), BaseBranch: p.Base.Ref}
+	var err error
+	if st.Checks, st.CheckList, err = g.checks(ctx, slug, p.Head.SHA); err != nil {
+		return Status{}, err
+	}
+	reviews, err := pages[ghReview](ctx, g, fmt.Sprintf("/repos/%s/pulls/%d/reviews", slug, number))
+	if err != nil {
+		return Status{}, err
+	}
+	st.Review, st.Reviews = reviewState(reviews), latestReviews(reviews, p.RequestedReviewers)
+	if st.State != StateOpen && st.State != StateDraft {
+		return st, nil
+	}
+	// Only an open pull request can be behind or in conflict, or have
+	// threads left to resolve that anyone is waiting on.
+	if p.Base.Ref != "" && p.Head.SHA != "" {
+		var cmp struct {
+			BehindBy int `json:"behind_by"`
+		}
+		err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/compare/%s...%s", slug, url.PathEscape(p.Base.Ref), p.Head.SHA), nil, &cmp)
+		var e *Error
+		if err != nil && !(asError(err, &e) && e.NotFound()) {
+			return Status{}, err
+		}
+		st.BehindBy = cmp.BehindBy
+	}
+	st.Mergeable = mergeable(p.Mergeable, p.MergeableState, st.BehindBy)
+	if st.UnresolvedThreads, err = g.unresolvedThreads(ctx, slug, number); err != nil {
+		return Status{}, err
+	}
+	return st, nil
+}
+
+// mergeable reads GitHub's two mergeable fields and the distance from the
+// base: GitHub computes mergeability lazily, so right after a push it is
+// null — unknown, not clean — and the next read (a webhook will prompt one)
+// has it.
+func mergeable(ok *bool, state string, behindBy int) string {
+	switch {
+	case state == "dirty" || ok != nil && !*ok:
+		return MergeConflicting
+	case ok == nil:
+		return MergeUnknown
+	case behindBy > 0 || state == "behind":
+		return MergeBehind
+	}
+	return MergeClean
+}
+
+// checks reads the checks on a commit, both ways CI reports: commit
+// statuses and check runs (GitHub Actions, apps). The combined status does
+// not include check runs, so both are read, and the worse of the two is the
+// rollup.
+//
+// Every page of check runs: a matrix build has more than one holds, and the
+// failing one may be on the last. GitHub Enterprise without Actions has no
+// such endpoint (404): no check runs. A token without Checks: read is
+// refused (403): there may be CI it cannot see, so the checks are never
+// read as passing — pending, which holds readiness back without waking a
+// fixer; the token needs Checks: read. A rate limit is also a 403, and is
+// neither: it fails the sync, to be tried again.
+func (g *GitHub) checks(ctx context.Context, slug, sha string) (string, []Check, error) {
 	var combined struct {
 		State      string `json:"state"`
 		TotalCount int    `json:"total_count"`
+		Statuses   []struct {
+			Context   string `json:"context"`
+			State     string `json:"state"`
+			TargetURL string `json:"target_url"`
+			CreatedAt string `json:"created_at"`
+			UpdatedAt string `json:"updated_at"`
+		} `json:"statuses"`
 	}
-	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/commits/%s/status", slug, p.Head.SHA), nil, &combined); err != nil {
-		return Status{}, err
+	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/commits/%s/status", slug, sha), nil, &combined); err != nil {
+		return "", nil, err
 	}
-	checks := checkState(combined.State, combined.TotalCount)
-	// Every page: a matrix build has more runs than one holds, and the
-	// failing one may be on the last. GitHub Enterprise without Actions has
-	// no such endpoint (404): no check runs. A token without Checks: read
-	// is refused (403): there may be CI it cannot see, so the checks are
-	// never read as passing — pending, which holds readiness back without
-	// waking a fixer; the token needs Checks: read. A rate limit is also a
-	// 403, and is neither: it fails the sync, to be tried again.
+	rollup := checkState(combined.State, combined.TotalCount)
+	var list []Check
+	for _, s := range combined.Statuses {
+		c := Check{Name: s.Context, URL: s.TargetURL, Status: "completed", Conclusion: s.State,
+			DurationMs: elapsed(s.CreatedAt, s.UpdatedAt)}
+		if s.State == "pending" {
+			c.Status, c.Conclusion, c.DurationMs = "in_progress", "", 0
+		}
+		list = append(list, c)
+	}
 	for page, seen := 1, 0; ; page++ {
 		var runs struct {
 			TotalCount int `json:"total_count"`
 			CheckRuns  []struct {
-				Status     string `json:"status"`
-				Conclusion string `json:"conclusion"`
+				ID          int64  `json:"id"`
+				Name        string `json:"name"`
+				Status      string `json:"status"`
+				Conclusion  string `json:"conclusion"`
+				HTMLURL     string `json:"html_url"`
+				DetailsURL  string `json:"details_url"`
+				StartedAt   string `json:"started_at"`
+				CompletedAt string `json:"completed_at"`
 			} `json:"check_runs"`
 		}
-		err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/commits/%s/check-runs?per_page=100&page=%d", slug, p.Head.SHA, page), nil, &runs)
+		err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/commits/%s/check-runs?per_page=100&page=%d", slug, sha, page), nil, &runs)
 		var e *Error
 		if err != nil && asError(err, &e) && !Transient(err) && (e.NotFound() || e.Status == 403) {
 			if e.Status == 403 {
-				checks = worseChecks(checks, ChecksPending)
+				rollup = worseChecks(rollup, ChecksPending)
 			}
 			break
 		}
 		if err != nil {
-			return Status{}, err
+			return "", nil, err
 		}
 		for _, r := range runs.CheckRuns {
-			checks = worseChecks(checks, checkRunState(r.Status, r.Conclusion))
+			rollup = worseChecks(rollup, checkRunState(r.Status, r.Conclusion))
+			link := r.HTMLURL
+			if link == "" {
+				link = r.DetailsURL
+			}
+			list = append(list, Check{Name: r.Name, Status: r.Status, Conclusion: r.Conclusion, URL: link,
+				DurationMs: elapsed(r.StartedAt, r.CompletedAt), RunID: r.ID})
 		}
 		seen += len(runs.CheckRuns)
 		if len(runs.CheckRuns) == 0 || seen >= runs.TotalCount {
 			break
 		}
 	}
-	var reviews []ghReview
-	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d/reviews", slug, number), nil, &reviews); err != nil {
-		return Status{}, err
+	return rollup, list, nil
+}
+
+// elapsed is the milliseconds between two GitHub timestamps, or 0.
+func elapsed(from, to string) int64 {
+	a, err1 := time.Parse(time.RFC3339, from)
+	b, err2 := time.Parse(time.RFC3339, to)
+	if err1 != nil || err2 != nil || b.Before(a) {
+		return 0
 	}
-	return Status{PullRequestRef: p.ref(), Checks: checks, Review: reviewState(reviews)}, nil
+	return b.Sub(a).Milliseconds()
+}
+
+// pages reads every page of a list endpoint. GitHub pages lists at 30 by
+// default and 100 at most; a pull request with a long review has more.
+func pages[T any](ctx context.Context, g *GitHub, path string) ([]T, error) {
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	var all []T
+	// Bounded, so an endpoint that ignores paging cannot loop forever.
+	for page := 1; page <= 50; page++ {
+		var batch []T
+		if err := g.do(ctx, "GET", fmt.Sprintf("%s%sper_page=100&page=%d", path, sep, page), nil, &batch); err != nil {
+			return nil, err
+		}
+		all = append(all, batch...)
+		if len(batch) < 100 {
+			break
+		}
+	}
+	return all, nil
+}
+
+// unresolvedThreads counts the pull request's review threads nobody has
+// resolved — only GitHub's GraphQL API says. An endpoint that has none
+// (an old Enterprise) or a token refused it counts none: this informs a
+// person, and must not stop the sync.
+func (g *GitHub) unresolvedThreads(ctx context.Context, slug string, number int) (int, error) {
+	owner, name, _ := strings.Cut(slug, "/")
+	const query = `query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){` +
+		`pullRequest(number:$number){reviewThreads(first:100,after:$after){nodes{isResolved}pageInfo{hasNextPage endCursor}}}}}`
+	n := 0
+	var after *string
+	for range 20 {
+		var out struct {
+			Data struct {
+				Repository struct {
+					PullRequest struct {
+						ReviewThreads struct {
+							Nodes []struct {
+								IsResolved bool `json:"isResolved"`
+							} `json:"nodes"`
+							PageInfo struct {
+								HasNextPage bool   `json:"hasNextPage"`
+								EndCursor   string `json:"endCursor"`
+							} `json:"pageInfo"`
+						} `json:"reviewThreads"`
+					} `json:"pullRequest"`
+				} `json:"repository"`
+			} `json:"data"`
+		}
+		err := g.doURL(ctx, "POST", g.graphqlURL(), map[string]any{"query": query,
+			"variables": map[string]any{"owner": owner, "name": name, "number": number, "after": after}}, &out)
+		if err != nil {
+			if Transient(err) {
+				return 0, err
+			}
+			return 0, nil
+		}
+		threads := out.Data.Repository.PullRequest.ReviewThreads
+		for _, t := range threads.Nodes {
+			if !t.IsResolved {
+				n++
+			}
+		}
+		if !threads.PageInfo.HasNextPage {
+			break
+		}
+		c := threads.PageInfo.EndCursor
+		after = &c
+	}
+	return n, nil
+}
+
+// graphqlURL: github.com's GraphQL is beside its REST root; Enterprise's
+// REST is under /api/v3 and its GraphQL at /api/graphql.
+func (g *GitHub) graphqlURL() string {
+	if base, ok := strings.CutSuffix(g.cred.APIBaseURL, "/api/v3"); ok {
+		return base + "/api/graphql"
+	}
+	return g.cred.APIBaseURL + "/graphql"
 }
 
 // checkRunState reads one check run: still running is pending; finished,
@@ -365,23 +593,27 @@ func login(u *struct {
 }
 
 // Feedback lists what people left on a pull request since `since`, oldest
-// first. Inclusive of `since` on purpose: GitHub timestamps are whole
-// seconds, so a strict comparison drops a comment posted in the same second
-// as the last one seen. Callers dedupe by id, which is exact.
+// first: conversation comments, line comments, and the text of every
+// review — one that requests changes, and one that approves or comments
+// ("approved, but rename this" asks for something too). Every page of each.
+// Inclusive of `since` on purpose: GitHub timestamps are whole seconds, so a
+// strict comparison drops a comment posted in the same second as the last
+// one seen. Callers dedupe by id, which is exact.
 func (g *GitHub) Feedback(ctx context.Context, slug string, number int, since string) ([]Feedback, error) {
 	q := ""
 	if since != "" {
 		q = "?since=" + url.QueryEscape(since)
 	}
-	var issue, line []ghComment
-	var reviews []ghReview
-	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/issues/%d/comments%s", slug, number, q), nil, &issue); err != nil {
+	issue, err := pages[ghComment](ctx, g, fmt.Sprintf("/repos/%s/issues/%d/comments%s", slug, number, q))
+	if err != nil {
 		return nil, err
 	}
-	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d/comments%s", slug, number, q), nil, &line); err != nil {
+	line, err := pages[ghComment](ctx, g, fmt.Sprintf("/repos/%s/pulls/%d/comments%s", slug, number, q))
+	if err != nil {
 		return nil, err
 	}
-	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d/reviews", slug, number), nil, &reviews); err != nil {
+	reviews, err := pages[ghReview](ctx, g, fmt.Sprintf("/repos/%s/pulls/%d/reviews", slug, number))
+	if err != nil {
 		return nil, err
 	}
 	var out []Feedback
@@ -393,10 +625,16 @@ func (g *GitHub) Feedback(ctx context.Context, slug string, number int, since st
 	}
 	for _, r := range reviews {
 		// A reviewer who writes only "please rename this" in the review box
-		// would otherwise be invisible.
-		if r.State == "CHANGES_REQUESTED" && r.Body != "" && r.SubmittedAt != nil {
-			out = append(out, Feedback{ID: fmt.Sprintf("review-%d", r.ID), Author: login(r.User), Body: r.Body, CreatedAt: *r.SubmittedAt, Kind: KindChangesRequested})
+		// would otherwise be invisible. An empty body says nothing: the
+		// verdict is in Status.
+		if r.Body == "" || r.SubmittedAt == nil {
+			continue
 		}
+		kind := KindReview
+		if r.State == "CHANGES_REQUESTED" {
+			kind = KindChangesRequested
+		}
+		out = append(out, Feedback{ID: fmt.Sprintf("review-%d", r.ID), Author: login(r.User), Body: r.Body, CreatedAt: *r.SubmittedAt, Kind: kind})
 	}
 	filtered := out[:0]
 	for _, f := range out {
@@ -406,6 +644,157 @@ func (g *GitHub) Feedback(ctx context.Context, slug string, number int, since st
 	}
 	sort.SliceStable(filtered, func(i, j int) bool { return filtered[i].CreatedAt < filtered[j].CreatedAt })
 	return filtered, nil
+}
+
+// Permission is what a login may do in a repository, as GitHub's
+// collaborator permission endpoint says: admin, maintain, write, triage,
+// read, or none for someone who is not a collaborator at all.
+func (g *GitHub) Permission(ctx context.Context, slug, login string) (string, error) {
+	var out struct {
+		Permission string `json:"permission"`
+		RoleName   string `json:"role_name"`
+	}
+	err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/collaborators/%s/permission", slug, url.PathEscape(login)), nil, &out)
+	var e *Error
+	if asError(err, &e) && e.NotFound() {
+		return "none", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	// role_name is the finer answer (maintain, triage); permission folds
+	// those into write and read.
+	if out.RoleName != "" {
+		return out.RoleName, nil
+	}
+	return out.Permission, nil
+}
+
+// CanWrite says whether a permission lets its holder push: what "a
+// collaborator with write access" means.
+func CanWrite(permission string) bool {
+	switch permission {
+	case "admin", "maintain", "write":
+		return true
+	}
+	return false
+}
+
+// Member says whether a login is a member of a GitHub organization. A user
+// account (not an organization) has no members: only its owner counts.
+func (g *GitHub) Member(ctx context.Context, org, login string) (bool, error) {
+	if strings.EqualFold(org, login) {
+		return true, nil
+	}
+	err := g.do(ctx, "GET", fmt.Sprintf("/orgs/%s/members/%s", url.PathEscape(org), url.PathEscape(login)), nil, nil)
+	var e *Error
+	if asError(err, &e) && (e.NotFound() || e.Status == 302) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// UpdateBranch merges the base into a pull request's branch on GitHub, as
+// its "Update branch" button does. expectedHead guards against updating a
+// head someone moved meanwhile; GitHub refuses (422) a branch that
+// conflicts.
+func (g *GitHub) UpdateBranch(ctx context.Context, slug string, number int, expectedHead string) error {
+	body := map[string]any{}
+	if expectedHead != "" {
+		body["expected_head_sha"] = expectedHead
+	}
+	return g.do(ctx, "PUT", fmt.Sprintf("/repos/%s/pulls/%d/update-branch", slug, number), body, nil)
+}
+
+// Merge methods, as GitHub names them.
+var MergeMethods = []string{"squash", "merge", "rebase"}
+
+// Merge merges a pull request by the given method. sha guards against
+// merging a head nobody looked at: GitHub refuses (409) when it moved.
+func (g *GitHub) Merge(ctx context.Context, slug string, number int, method, sha string) (string, error) {
+	body := map[string]any{"merge_method": method}
+	if sha != "" {
+		body["sha"] = sha
+	}
+	var out struct {
+		SHA string `json:"sha"`
+	}
+	err := g.do(ctx, "PUT", fmt.Sprintf("/repos/%s/pulls/%d/merge", slug, number), body, &out)
+	return out.SHA, err
+}
+
+// RerunFailed asks GitHub to run each failed check run again. A check run
+// an app owns is re-requested through the checks API; GitHub Actions
+// re-runs the failed jobs of the workflow run the check belongs to, which
+// the checks API does the same for.
+func (g *GitHub) RerunFailed(ctx context.Context, slug string, checks []Check) (int, error) {
+	n := 0
+	for _, c := range checks {
+		if !c.Failed() || c.RunID == 0 {
+			continue
+		}
+		if err := g.do(ctx, "POST", fmt.Sprintf("/repos/%s/check-runs/%d/rerequest", slug, c.RunID), map[string]any{}, nil); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
+}
+
+// RequestReviewers asks people for a review on a pull request.
+func (g *GitHub) RequestReviewers(ctx context.Context, slug string, number int, logins []string) error {
+	return g.do(ctx, "POST", fmt.Sprintf("/repos/%s/pulls/%d/requested_reviewers", slug, number),
+		map[string]any{"reviewers": logins}, nil)
+}
+
+// CheckOutput is what a failed check run says about why: its summary and
+// text, and its annotations (file, line, message). Truncated: a fixer
+// wants the reason, not the whole log.
+func (g *GitHub) CheckOutput(ctx context.Context, slug string, runID int64, limit int) (string, error) {
+	var run struct {
+		Output struct {
+			Title   string `json:"title"`
+			Summary string `json:"summary"`
+			Text    string `json:"text"`
+		} `json:"output"`
+	}
+	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/check-runs/%d", slug, runID), nil, &run); err != nil {
+		return "", err
+	}
+	var annotations []struct {
+		Path    string `json:"path"`
+		Line    int    `json:"start_line"`
+		Level   string `json:"annotation_level"`
+		Message string `json:"message"`
+	}
+	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/check-runs/%d/annotations?per_page=50", slug, runID), nil, &annotations); err != nil {
+		var e *Error
+		if !asError(err, &e) || Transient(err) {
+			return "", err
+		}
+	}
+	var b strings.Builder
+	for _, part := range []string{run.Output.Title, run.Output.Summary, run.Output.Text} {
+		if part = strings.TrimSpace(part); part != "" {
+			b.WriteString(part + "\n")
+		}
+	}
+	for _, a := range annotations {
+		fmt.Fprintf(&b, "%s:%d: %s: %s\n", a.Path, a.Line, a.Level, a.Message)
+	}
+	return truncate(strings.TrimSpace(b.String()), limit), nil
+}
+
+// truncate keeps the end of a log, where the failure usually is.
+func truncate(s string, limit int) string {
+	if limit <= 0 || len(s) <= limit {
+		return s
+	}
+	cut := s[len(s)-limit:]
+	if i := strings.IndexByte(cut, '\n'); i >= 0 && i < len(cut)-1 {
+		cut = cut[i+1:]
+	}
+	return "…\n" + cut
 }
 
 // ChangedFiles lists the paths that differ between two commits. What a phase
@@ -452,7 +841,7 @@ func (g *GitHub) DeleteBranch(ctx context.Context, slug, branch string) error {
 
 // EnsureWebhook registers a repository webhook delivering the pull request
 // events dude acts on, and returns its id. A hook already there for the same
-// URL is reused.
+// URL is updated rather than duplicated: its secret may have been rotated.
 func (g *GitHub) EnsureWebhook(ctx context.Context, slug, target, secret string) (string, error) {
 	var hooks []struct {
 		ID     int64 `json:"id"`
@@ -463,20 +852,21 @@ func (g *GitHub) EnsureWebhook(ctx context.Context, slug, target, secret string)
 	if err := g.do(ctx, "GET", "/repos/"+slug+"/hooks", nil, &hooks); err != nil {
 		return "", err
 	}
-	for _, h := range hooks {
-		if h.Config.URL == target {
-			return fmt.Sprint(h.ID), nil
-		}
-	}
-	var created struct {
-		ID int64 `json:"id"`
-	}
-	err := g.do(ctx, "POST", "/repos/"+slug+"/hooks", map[string]any{
-		"name":   "web",
+	hook := map[string]any{
 		"active": true,
 		"events": WebhookEvents,
 		"config": map[string]any{"url": target, "content_type": "json", "secret": secret, "insecure_ssl": "0"},
-	}, &created)
+	}
+	for _, h := range hooks {
+		if h.Config.URL == target {
+			return fmt.Sprint(h.ID), g.do(ctx, "PATCH", fmt.Sprintf("/repos/%s/hooks/%d", slug, h.ID), hook, nil)
+		}
+	}
+	hook["name"] = "web"
+	var created struct {
+		ID int64 `json:"id"`
+	}
+	err := g.do(ctx, "POST", "/repos/"+slug+"/hooks", hook, &created)
 	return fmt.Sprint(created.ID), err
 }
 
@@ -523,6 +913,40 @@ func reviewState(reviews []ghReview) string {
 		return ReviewApproved
 	}
 	return ReviewPending
+}
+
+// latestReviews is each reviewer's latest word, oldest first, and those
+// asked for a review who have not given one yet. A COMMENTED review does
+// not replace a verdict: a question after an approval is still an approval.
+func latestReviews(reviews []ghReview, requested []struct {
+	Login string `json:"login"`
+}) []Review {
+	var order []string
+	latest := map[string]Review{}
+	for _, r := range reviews {
+		if r.User == nil || r.State == "PENDING" {
+			continue
+		}
+		prior, seen := latest[r.User.Login]
+		if !seen {
+			order = append(order, r.User.Login)
+		}
+		if r.State == "COMMENTED" && seen && prior.State != "COMMENTED" {
+			continue
+		}
+		latest[r.User.Login] = Review{Login: r.User.Login, State: r.State, SubmittedAt: r.SubmittedAt}
+	}
+	out := make([]Review, 0, len(order)+len(requested))
+	for _, l := range order {
+		out = append(out, latest[l])
+	}
+	// Asked again after reviewing: GitHub lists them as requested once more.
+	for _, r := range requested {
+		if _, seen := latest[r.Login]; !seen {
+			out = append(out, Review{Login: r.Login, State: "REQUESTED"})
+		}
+	}
+	return out
 }
 
 func asError(err error, target **Error) bool {
