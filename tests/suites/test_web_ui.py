@@ -750,7 +750,7 @@ def test_a_steer_is_sent_with_enter_and_signed_with_a_name(
     """Enter sends a steer (Shift+Enter is a new line); the chat and the
     event log say who sent it, by name, not "Human"."""
     run = _hanging_run(client, forge_project, "Steer me")
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/session/{run['id']}")
     field = page.get_by_placeholder("Steer the agent…")
     field.fill("first line")
@@ -781,7 +781,7 @@ def test_abort_asks_first_and_offers_to_pause_instead(
     """Abort is a request, confirmed in a dialog whose one solid button
     aborts; "Pause instead" pauses. The chat then says who stopped it."""
     run = _hanging_run(client, forge_project, "Stop me")
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/session/{run['id']}")
 
     page.get_by_test_id("abort").click()
@@ -807,7 +807,7 @@ def test_acting_second_is_a_calm_notice_naming_who_acted_first(
     refused (409), and the page says Bo did it — not an error — until the
     page catches up."""
     run = _hanging_run(client, forge_project, "Two hands")
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/session/{run['id']}")
     expect(page.get_by_role("button", name="Pause")).to_be_visible()
     # Bo acts first; the page is told nothing yet: its live stream is cut,
@@ -831,7 +831,7 @@ def test_a_dropped_stream_says_so_and_catches_up(
     """The live stream drops: the page says it is reconnecting, and when it
     is back it re-reads what it missed."""
     client.create_task(forge_project["id"], "Before")
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     expect(page.get_by_text("Before").first).to_be_visible()
     page.context.set_offline(True)
     expect(page.get_by_test_id("reconnecting")).to_be_visible(timeout=20_000)
