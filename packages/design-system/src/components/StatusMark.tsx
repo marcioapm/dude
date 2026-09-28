@@ -40,3 +40,26 @@ export function StatusMark({ status, size = "md", iconOnly, label, emphasis, cla
     </span>
   );
 }
+
+export interface NeedsYouCountProps extends Omit<HTMLAttributes<HTMLSpanElement>, "children"> {
+  readonly count: number;
+  /** Spell it out ("2 need you") instead of the bare number. */
+  readonly verbose?: boolean | undefined;
+}
+
+/**
+ * How many things wait on you, as the one loud pill: a diamond and a
+ * number on the attention fill. For rows and headers that count what is
+ * inside them; a single state is a `StatusMark`.
+ */
+export function NeedsYouCount({ count, verbose, className, ...rest }: NeedsYouCountProps) {
+  const words = count === 1 ? "1 needs you" : `${count} need you`;
+  return (
+    <span className={cx(styles["count"], className)} title={words} aria-label={words} {...rest}>
+      <span className={styles["diamond"]} aria-hidden />
+      <span className="ds-cap" aria-hidden>
+        {verbose ? words : count}
+      </span>
+    </span>
+  );
+}
