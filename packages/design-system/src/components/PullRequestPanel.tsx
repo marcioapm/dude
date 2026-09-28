@@ -53,11 +53,20 @@ export function PullRequestPanel({ pr, additions, deletions, actions, face, note
   if (typeof pr.checks !== "string") {
     const failing = pr.checks.filter(prCheckFailed);
     const done = pr.checks.filter((c) => c.status.toLowerCase() === "completed").length;
-    const summary = failing.length > 0 ? `${failing.length} of ${pr.checks.length} checks failing` : done < pr.checks.length ? `Checks running · ${done} of ${pr.checks.length} done` : `All ${pr.checks.length} checks passing`;
+    // None yet on this head (a fix just pushed): CI has not reported, which
+    // is not passing.
+    const none = pr.checks.length === 0;
+    const summary = none
+      ? "No checks reported on this commit yet"
+      : failing.length > 0
+        ? `${failing.length} of ${pr.checks.length} checks failing`
+        : done < pr.checks.length
+          ? `Checks running · ${done} of ${pr.checks.length} done`
+          : `All ${pr.checks.length} checks passing`;
     facts.push({
       kind: "checks",
-      tone: failing.length > 0 ? "bad" : done < pr.checks.length ? "attention" : "ok",
-      glyph: failing.length > 0 ? "circle-x" : done < pr.checks.length ? "circle-dotted" : "circle-check",
+      tone: none ? "neutral" : failing.length > 0 ? "bad" : done < pr.checks.length ? "attention" : "ok",
+      glyph: none ? "circle" : failing.length > 0 ? "circle-x" : done < pr.checks.length ? "circle-dotted" : "circle-check",
       text: <b>{summary}</b>,
       children:
         pr.checks.length > 0 ? (

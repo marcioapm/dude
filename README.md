@@ -83,6 +83,23 @@ Migrations run as the owner role. Everything else connects as `dude_app`,
 which has neither `SUPERUSER` nor `BYPASSRLS`, so the row-level security that
 isolates tenants is a real boundary rather than a convention.
 
+### A seeded demo, with nothing else to run
+
+One command gives a dude to click through: its own database on the dev
+Postgres, the fake lux running scripted agents, a fake GitHub that opens real
+pull requests on local repositories, and four people in one organisation with
+tasks in every state — delivered to a pull request, asking a question,
+running (watch its live Changes), CI failing, changes requested, ready to
+merge, merged, conflicting.
+
+```bash
+cd tests && uv run python demo.py          # prints the URL and each person's key
+```
+
+Sign in as one person, and as another in a private window, to see two
+people at once. Ctrl-C stops it and removes what it made. `--port` picks the
+web app's port (default 5180), `--no-build` skips the builds.
+
 ### Running the whole thing
 
 A lux, the orchestrator, the backend and the web app.

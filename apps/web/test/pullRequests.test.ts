@@ -40,7 +40,7 @@ describe("activity", () => {
 
   test("a person on GitHub, by login, with what they said", () => {
     const line = pullRequestActivity(event("pull_request.commented", { author: "cy", body: "Please keep fetchRevenue.", kind: "changes_requested" }), true);
-    expect(line).toEqual({ who: "cy", actorId: null, text: "cy requested changes on web#41", quote: "Please keep fetchRevenue." });
+    expect(line).toEqual({ who: "cy", actorId: null, text: "cy wrote, requesting changes on web#41", quote: "Please keep fetchRevenue." });
     expect(pullRequestActivity(event("pull_request.commented", { author: "stranger", body: "x", kind: "comment", ignored: "not_permitted" }), false)?.text)
       .toBe("stranger commented on #41 — not acted on: they may not wake a fixer");
   });
