@@ -34,6 +34,14 @@ const (
 	EvPullRequestCommented = "pull_request.commented"
 	EvPullRequestMerged    = "pull_request.merged"
 	EvPullRequestClosed    = "pull_request.closed"
+	// Someone other than dude pushed to the pull request's branch: the
+	// next fix starts from their commit.
+	EvPullRequestPushed = "pull_request.pushed"
+	// A person acted on a pull request through dude: merge, update the
+	// branch, re-run failed checks, request a review.
+	EvPullRequestAction = "pull_request.action"
+	// Mergeability or distance from the base changed.
+	EvPullRequestMergeable = "pull_request.mergeable_changed"
 	EvGitCommitCreated     = "git.commit_created"
 )
 

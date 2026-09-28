@@ -156,7 +156,7 @@ func run(log *slog.Logger) error {
 	srv := &http.Server{
 		Addr: env("DUDE_ORCHESTRATOR_LISTEN", "127.0.0.1:3100"),
 		Handler: (&api.Server{DB: database, Lux: luxClient, Workflow: runtime, Token: require("DUDE_ORCHESTRATOR_TOKEN"), Log: log,
-			PushKeys: notifier.Keys,
+			PushKeys: notifier.Keys, Forges: forges, PRs: pullRequests,
 			Kick: func() {
 				select {
 				case kick <- struct{}{}:

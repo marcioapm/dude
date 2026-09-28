@@ -12,6 +12,7 @@ import { appendInScope } from "../../events/ledger.ts";
 import { conflict, json, notFound, parseBody } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
 import { repositoryFields } from "./structure.ts";
+import { registerRepositoryWebhook } from "./pullRequests.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
 
 const slugPattern = /^[a-z0-9][a-z0-9-]*$/;
@@ -100,6 +101,7 @@ async function createProject(ctx: RequestContext): Promise<Response> {
   });
 
   if ("conflict" in result) throw conflict(`a project with slug "${input.slug}" already exists`);
+  for (const repo of result.project.repositories) await registerRepositoryWebhook(ctx, repo.id as string);
   return json(result.project, 201);
 }
 

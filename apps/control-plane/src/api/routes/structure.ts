@@ -13,6 +13,7 @@ import { EventTypes, newId } from "@dude/domain";
 import { withOrg, type OrgScope } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { badRequest, conflict, json, noContent, notFound, parseBody } from "../http.ts";
+import { registerRepositoryWebhook } from "./pullRequests.ts";
 import type { RequestContext, Router } from "../router.ts";
 import { REPOSITORIES_JSON, setTaskRepositories, taskRepositoriesInput } from "./taskRepositories.ts";
 import { isPerson, ownerJson } from "./people.ts";
@@ -81,6 +82,7 @@ async function addRepository(ctx: RequestContext): Promise<Response> {
   });
   if ("missing" in result) throw notFound(`project ${projectId} not found`);
   if ("taken" in result) throw conflict(`the project already has a repository named "${input.name}"`);
+  await registerRepositoryWebhook(ctx, result.repository.id as string);
   return json(result.repository, 201);
 }
 

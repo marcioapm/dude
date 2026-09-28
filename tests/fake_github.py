@@ -278,6 +278,14 @@ class FakeGitHub:
                 return subprocess.run(["git", *args], cwd=self.github.bare, capture_output=True, text=True)
 
             def do_PATCH(self) -> None:
+                if m := re.fullmatch(rf"/repos/{self.github.owner}/{self.github.repo}/hooks/(\d+)", self.path):
+                    body = self._body()
+                    with self.github._lock:
+                        for hook in self.github.hooks:
+                            if hook["id"] == int(m[1]):
+                                hook.update(body)
+                                return self._send(200, hook)
+                    return self._send(404, {"message": "Not Found"})
                 prefix = f"/repos/{self.github.owner}/{self.github.repo}/git/refs/heads/"
                 if not self.path.startswith(prefix):
                     return self._send(404, {"message": "Not Found"})
