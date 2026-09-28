@@ -4,7 +4,9 @@
 // land in the git repository each Run's spec names, resolved under -root —
 // the directory the suite's fake GitHub serves.
 //
-//	fake-lux -listen 127.0.0.1:0 -root /path/served/by/git-daemon -key KEY -addr-file PATH
+// Each Run's checkout, which exec runs in, is a clone under -workspaces.
+//
+//	fake-lux -listen 127.0.0.1:0 -root /path/served/by/git-daemon -key KEY -addr-file PATH -workspaces DIR
 package main
 
 import (
@@ -23,9 +25,11 @@ func main() {
 	root := flag.String("root", "", "directory git:// repository URLs resolve under, as git daemon's --base-path")
 	key := flag.String("key", "", "API key to accept")
 	addrFile := flag.String("addr-file", "", "write the bound address here once listening")
+	workspaces := flag.String("workspaces", "", "where each Run's checkout is made (default: the system's temporary directory)")
 	flag.Parse()
 
 	srv := fakelux.New("", *key, nil)
+	srv.Workspaces = *workspaces
 	srv.RepoFor = func(u string) string { return repoPath(*root, u) }
 	ln, err := net.Listen("tcp", *listen)
 	if err != nil {
