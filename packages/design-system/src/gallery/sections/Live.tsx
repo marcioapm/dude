@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Block, Col, Label, Panes, Section, type PaneMode } from "../Frame.tsx";
 import { AgentAvatar } from "../../components/AgentAvatar.tsx";
+import { ChangedFiles, SessionFacts, SessionRail, SessionRailBlock, ToolUsage } from "../../components/SessionRail.tsx";
+import { Tab, TabList, TabPanel, Tabs } from "../../primitives/Tabs.tsx";
 import { Cost } from "../../components/Cost.tsx";
 import { LiveDiff, type LiveDiffFile } from "../../components/LiveDiff.tsx";
 import { FileGallery, FileViewer, type GalleryFile } from "../../components/FileGallery.tsx";
@@ -93,6 +95,33 @@ export function LiveSection({ mode }: { readonly mode: PaneMode }) {
         <Panes mode={mode}>
           <div style={{ height: 160, display: "flex" }}>
             <LiveDiff files={[]} base="0fff44b" emptyMessage="The agent has not changed anything yet." />
+          </div>
+        </Panes>
+      </Block>
+      <Block id="l-session" title="A session's views and its rail" note="Under a session's header, its views as pill tabs — the second level under the page's underline tabs. Changes carries its count and, while the agent changes files, a breathing dot. Beside the conversation, the rail on the chrome shade: facts, the tools used, the files changed so far (each opens Changes on it alone).">
+        <Panes mode={mode}>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 260px", height: 360 }}>
+            <Tabs defaultValue="chat" fill>
+              <TabList variant="pills">
+                <Tab value="chat" icon="message">Conversation</Tab>
+                <Tab value="changes" icon="git-branch" count={3} live>Changes</Tab>
+                <Tab value="events" count={128}>Events</Tab>
+              </TabList>
+              <TabPanel value="chat" fill><div /></TabPanel>
+              <TabPanel value="changes" fill><div /></TabPanel>
+              <TabPanel value="events" fill><div /></TabPanel>
+            </Tabs>
+            <SessionRail aria-label="This session">
+              <SessionRailBlock label="Session">
+                <SessionFacts facts={[["Model", <code key="m">claude-sonnet-5</code>], ["Tokens in / out", "38k / 4.1k"], ["Cost", <Cost key="c" tokensUsd={0.05} machineUsd={0.02} size="sm" />], ["Elapsed", "2m 41s"]]} />
+              </SessionRailBlock>
+              <SessionRailBlock label="Tools used">
+                <ToolUsage tools={[{ name: "Read", count: 9 }, { name: "Edit", count: 5 }, { name: "Bash", count: 4 }, { name: "Grep", count: 3 }, { name: "Write", count: 1 }]} />
+              </SessionRailBlock>
+              <SessionRailBlock label="Files changed" live>
+                <ChangedFiles files={FILES.map((f) => ({ path: f.path, additions: f.additions, deletions: f.deletions }))} onOpen={() => {}} />
+              </SessionRailBlock>
+            </SessionRail>
           </div>
         </Panes>
       </Block>

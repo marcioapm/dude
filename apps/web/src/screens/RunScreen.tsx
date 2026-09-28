@@ -1,10 +1,13 @@
 /**
- * The Run screen — the operator's day-to-day view.
+ * A session — the operator's day-to-day view, on its task's page beside
+ * the task's other sessions (or alone, for a Run the tree does not hold).
  *
- * Opens on the conversation, because that is what someone supervising agents
- * actually reads. The event timeline and logs are available behind a tab:
- * they are debugging tools, reached when something looks wrong, not watched
- * continuously.
+ * A header says whose agent it is and what it is doing, with Pause and
+ * Abort. Under it, Conversation (what someone supervising agents actually
+ * reads, with a rail beside it: the session's facts, the tools it used and
+ * the files it changed so far), Changes (its checkout as it changes), and
+ * the event timeline — a debugging tool, reached when something looks
+ * wrong, not watched continuously.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -18,8 +21,17 @@ import {
   ChatTranscript,
   EventRow,
   EventStream,
+  ChangedFiles,
+  Cost,
+  Duration,
   QuestionCard,
+  SessionFacts,
+  SessionHeader,
+  SessionRail,
+  SessionRailBlock,
   ThinkingBlock,
+  TokenCount,
+  ToolUsage,
   ToolCallCard,
   summarizeToolArgs,
 } from "@dude/design-system/components";
@@ -48,6 +60,8 @@ export interface RunScreenProps {
   onOpenTask: (taskId: string) => void;
   /** Leave for somewhere that exists, when this Run does not. */
   onBack: () => void;
+  /** On its task's page: the task's key and title are already above it. */
+  embedded?: boolean;
 }
 
 /**
@@ -66,7 +80,10 @@ const STATUS_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.RunResumed,
 ]);
 
-export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack }: RunScreenProps) {
+export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack, embedded }: RunScreenProps) {
+  const [view, setView] = useState("chat");
+  // A file picked in the rail, for Changes to show alone.
+  const [focus, setFocus] = useState<{ path: string } | null>(null);
   const [run, setRun] = useState<RunDetail | null>(null);
   const [missing, setMissing] = useState(false);
   // Who drives the task: only its owner answers its agents, so anyone else
@@ -148,6 +165,16 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
     () => events.findLast((e) => e.eventType === EventTypes.RunDiffUpdated)?.payload as RunDiffSummary | undefined,
     [events],
   );
+  // Which tools it called, and how often: for the rail.
+  const tools = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const e of events) {
+      if (e.eventType !== EventTypes.ToolCalled || typeof e.payload.tool !== "string") continue;
+      const name = e.payload.tool.charAt(0).toUpperCase() + e.payload.tool.slice(1);
+      counts.set(name, (counts.get(name) ?? 0) + 1);
+    }
+    return [...counts].map(([name, count]) => ({ name, count }));
+  }, [events]);
 
   /**
    * Run an intervention. A conflict (409) means the Run moved on while
@@ -237,9 +264,9 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
     // The id is already shown beside the title; repeating it as the title
     // leaves the header saying nothing about the work. The attempt only
     // once there is more than one to tell apart.
-    title: [title, phase, run.attempt > 1 ? `attempt ${run.attempt}` : null].filter(Boolean).join(" · "),
+    title: [embedded ? null : title, phase, run.attempt > 1 ? `attempt ${run.attempt}` : null].filter(Boolean).join(" · "),
     taskId: run.taskId,
-    ...(taskKey ? { taskKey } : {}),
+    ...(taskKey && !embedded ? { taskKey } : {}),
     startedAt: run.startedAt ?? run.createdAt,
     endedAt: run.endedAt,
     ...(run.model ? { model: run.model } : {}),
@@ -249,109 +276,128 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
     tokens: Math.max(run.tokens.input + run.tokens.output, conversation.tokens),
   };
 
+  const changed = diffSummary?.files ?? [];
+  const hasChanges = Object.keys(run.baseRefs).length > 0 || run.phase !== null;
+  const liveDiff = isLive && run.status !== "paused";
+
+  const actions = isLive ? (
+    <>
+      {run.status === "paused" ? (
+        <Button size="sm" variant="secondary" disabled={busy} onClick={() => void intervene(() => client.resume(runId), "resume this run")}>
+          Resume
+        </Button>
+      ) : (
+        <Button size="sm" variant="secondary" disabled={busy} onClick={() => void intervene(() => client.pause(runId), "pause this run")}>
+          Pause
+        </Button>
+      )}
+      <Button size="sm" variant="danger" disabled={busy} onClick={() => setConfirmAbort(true)} data-testid="abort">
+        Abort…
+      </Button>
+    </>
+  ) : undefined;
+
   return (
-    <div className="runScreen">
+    <div className={embedded ? "runScreen embedded" : "runScreen"} data-testid="run-screen">
       {breadcrumb ? <div className="runCrumbs">{breadcrumb}</div> : null}
-      <Tabs defaultValue="chat" fill>
-        <TabList className="tabsInset">
+      <SessionHeader session={session} stats={false} actions={actions} />
+      <Tabs value={view} onValueChange={setView} fill>
+        <TabList variant="pills" className="tabsInset runTabs">
           <Tab value="chat" icon="message">Conversation</Tab>
           {/* The agent's checkout, as it changes: only for a Run with one. */}
-          {Object.keys(run.baseRefs).length > 0 || run.phase ? (
-            <Tab value="changes" icon="git-branch" count={diffSummary?.files.length}>Changes</Tab>
+          {hasChanges ? (
+            <Tab value="changes" icon="git-branch" count={diffSummary?.files.length} live={liveDiff && changed.length > 0}>Changes</Tab>
           ) : null}
           {/* Debugging, not the daily view — hence last and quieter. */}
           <Tab value="events" count={events.length}>Events</Tab>
         </TabList>
 
         <TabPanel value="chat" fill>
-          <ChatTranscript
-            fill
-            live={isLive}
-            revision={events.length}
-            session={session}
-            headerActions={
-              isLive ? (
-                <>
-                  {run.status === "paused" ? (
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      disabled={busy}
-                      onClick={() => void intervene(() => client.resume(runId), "resume this run")}
-                    >
-                      Resume
-                    </Button>
-                  ) : (
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      disabled={busy}
-                      onClick={() => void intervene(() => client.pause(runId), "pause this run")}
-                    >
-                      Pause
-                    </Button>
-                  )}
-                  <Button size="sm" variant="danger" disabled={busy} onClick={() => setConfirmAbort(true)} data-testid="abort">
-                    Abort…
-                  </Button>
-                </>
-              ) : null
-            }
-            pinned={
-              conversation.plan.length > 0 ? (
-                <AgentPlan items={conversation.plan} defaultCollapsed data-testid="plan" />
-              ) : null
-            }
-            footer={!isLive ? <RunEnded run={run} onOpenTask={() => onOpenTask(run.taskId)} /> : (
-              <ChatComposer
-                // The agent waiting on a question takes an answer; otherwise
-                // anything said steers it.
-                mode={conversation.openQuestion ? "answer" : "steer"}
-                question={
-                  conversation.openQuestion
-                    ? {
-                        id: conversation.openQuestion.questionId,
-                        text: conversation.openQuestion.text,
-                        askedBy: runLabel(run),
-                        askedAt: conversation.openQuestion.at,
-                        // Choices only for whoever may choose.
-                        options: waitingOn ? [] : conversation.openQuestion.options,
-                      }
-                    : undefined
-                }
-                // A paused Run takes an answer (a parked one is resumed by it),
-                // not a steer; a question is its owner's to answer.
-                disabled={(run.status === "paused" && !conversation.openQuestion) ||
-                  (conversation.openQuestion !== null && waitingOn !== undefined)}
-                disabledReason={
-                  waitingOn && (conversation.openQuestion || run.dudePause === "person") ? `Waiting for ${waitingOn} to answer.`
-                    : run.dudePause ? PAUSE_WORDS[run.dudePause].composer
-                    : "This run is paused. Resume it to steer."
-                }
-                onSubmit={send}
-                sentAs={youName ? firstName(youName) : undefined}
-                canInterrupt
-              />
-            )}
-            emptyMessage="Waiting for the agent to start."
-          >
-            {conversation.turns.map((turn) => renderTurn(turn, role, conversation.contextWindow, !isLive, people, decide, waitingOn))}
-            {conversation.activity ? (
-              <ChatMessage
-                role={role}
-                activity={conversation.activity}
-                activityProps={
-                  conversation.activeTool
-                    ? { label: conversation.activeTool.name, since: conversation.activeTool.since }
-                    : undefined
-                }
-              />
-            ) : null}
-          </ChatTranscript>
+          <div className="runChat">
+            <ChatTranscript
+              fill
+              live={isLive}
+              revision={events.length}
+              pinned={
+                conversation.plan.length > 0 ? (
+                  <AgentPlan items={conversation.plan} defaultCollapsed data-testid="plan" />
+                ) : null
+              }
+              footer={!isLive ? <RunEnded run={run} onOpenTask={() => onOpenTask(run.taskId)} embedded={embedded} /> : (
+                <ChatComposer
+                  // The agent waiting on a question takes an answer; otherwise
+                  // anything said steers it.
+                  mode={conversation.openQuestion ? "answer" : "steer"}
+                  question={
+                    conversation.openQuestion
+                      ? {
+                          id: conversation.openQuestion.questionId,
+                          text: conversation.openQuestion.text,
+                          askedBy: runLabel(run),
+                          askedAt: conversation.openQuestion.at,
+                          // Choices only for whoever may choose.
+                          options: waitingOn ? [] : conversation.openQuestion.options,
+                        }
+                      : undefined
+                  }
+                  // A paused Run takes an answer (a parked one is resumed by it),
+                  // not a steer; a question is its owner's to answer.
+                  disabled={(run.status === "paused" && !conversation.openQuestion) ||
+                    (conversation.openQuestion !== null && waitingOn !== undefined)}
+                  disabledReason={
+                    waitingOn && (conversation.openQuestion || run.dudePause === "person") ? `Waiting for ${waitingOn} to answer.`
+                      : run.dudePause ? PAUSE_WORDS[run.dudePause].composer
+                      : "This run is paused. Resume it to steer."
+                  }
+                  onSubmit={send}
+                  sentAs={youName ? firstName(youName) : undefined}
+                  canInterrupt
+                />
+              )}
+              emptyMessage="Waiting for the agent to start."
+            >
+              {conversation.turns.map((turn) => renderTurn(turn, role, conversation.contextWindow, !isLive, people, decide, waitingOn))}
+              {conversation.activity ? (
+                <ChatMessage
+                  role={role}
+                  activity={conversation.activity}
+                  activityProps={
+                    conversation.activeTool
+                      ? { label: conversation.activeTool.name, since: conversation.activeTool.since }
+                      : undefined
+                  }
+                />
+              ) : null}
+            </ChatTranscript>
+            <SessionRail className="runRail" aria-label="This session" data-testid="session-rail">
+              <SessionRailBlock label="Session">
+                <SessionFacts facts={[
+                  ...(run.model ? [["Model", <code key="model">{run.model}</code>] as const] : []),
+                  ["Tokens in / out", <span key="tokens"><TokenCount tokens={run.tokens.input} /> / <TokenCount tokens={run.tokens.output} /></span>],
+                  ["Cost", <Cost key="cost" tokensUsd={session.costUsd} size="sm" />],
+                  ["Elapsed", run.startedAt ? <Duration key="elapsed" since={run.startedAt} until={run.endedAt} live={isLive} /> : "not started"],
+                  ...(run.harness ? [["Agent", run.harness] as const] : []),
+                ]} />
+              </SessionRailBlock>
+              {tools.length > 0 ? (
+                <SessionRailBlock label="Tools used">
+                  <ToolUsage tools={tools} />
+                </SessionRailBlock>
+              ) : null}
+              {changed.length > 0 ? (
+                <SessionRailBlock label="Files changed" live={liveDiff}>
+                  <ChangedFiles files={changed} onOpen={(path) => {
+                    setFocus({ path });
+                    setView("changes");
+                  }} />
+                </SessionRailBlock>
+              ) : null}
+            </SessionRail>
+          </div>
         </TabPanel>
 
         <TabPanel value="changes" fill>
-          <ChangesPanel client={client} runId={runId} events={events} checksum={diffSummary?.checksum ?? ""} live={isLive && run.status !== "paused"} />
+          <ChangesPanel client={client} runId={runId} role={role} events={events} checksum={diffSummary?.checksum ?? ""} live={liveDiff} focus={focus} />
         </TabPanel>
 
         <TabPanel value="events" fill>
@@ -572,16 +618,19 @@ const ENDED_WORDS: Record<"completed" | "failed" | "aborted", string> = {
  * steer: how it ended, and the way back to its task, where what happens
  * next is decided. Why it failed is the transcript's last line, just above.
  */
-function RunEnded({ run, onOpenTask }: { run: RunDetail; onOpenTask: () => void }) {
+function RunEnded({ run, onOpenTask, embedded }: { run: RunDetail; onOpenTask: () => void; embedded?: boolean | undefined }) {
   const outcome = run.status === "failed" || run.status === "aborted" ? run.status : "completed";
   return (
     <Callout data-testid="run-ended" data-outcome={outcome}
       tone={outcome === "failed" ? "danger" : outcome === "aborted" ? "attention" : "neutral"}>
       <span className="runEnded">
         <span>{ENDED_WORDS[outcome]}</span>
-        <Button size="sm" variant="quiet" trailingIcon="arrow-right" onClick={onOpenTask} data-testid="run-ended-task">
-          Back to the task
-        </Button>
+        {/* On its task's page, the task is already here. */}
+        {embedded ? null : (
+          <Button size="sm" variant="quiet" trailingIcon="arrow-right" onClick={onOpenTask} data-testid="run-ended-task">
+            Back to the task
+          </Button>
+        )}
       </span>
     </Callout>
   );
