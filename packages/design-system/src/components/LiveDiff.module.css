@@ -16,7 +16,9 @@
 
 .head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  row-gap: var(--ds-space-8);
   gap: var(--ds-space-12);
   min-width: 0;
   /* Clear of the pane's edges, where the file list and diff meet them. */
@@ -43,7 +45,8 @@
   animation: global(ds-pulse) var(--ds-cadence-breathe) infinite;
 }
 .since {
-  min-width: 0;
+  min-width: 12ch;
+  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -68,6 +71,14 @@
   align-items: center;
   gap: var(--ds-space-6);
   font-size: var(--ds-text-xs);
+  white-space: nowrap;
+}
+.last code {
+  font-family: var(--ds-font-mono);
+  color: var(--ds-color-text-secondary);
+}
+/* The toggle's words stay on one line beside it. */
+.head label {
   white-space: nowrap;
 }
 .add {
@@ -129,7 +140,7 @@
   white-space: nowrap;
 }
 .path b {
-  font-weight: var(--ds-weight-regular);
+  font-weight: var(--ds-weight-medium);
   color: var(--ds-color-text-strong);
 }
 .dir {
@@ -201,10 +212,11 @@
   font-weight: var(--ds-weight-medium);
   color: var(--ds-color-text-strong);
 }
+/* Where a hunk starts: quiet, on a wash, so the changes stay the loudest thing. */
 .hunk {
   padding: 3px var(--ds-space-12);
-  background: var(--ds-diff-hunk-bg);
-  color: var(--ds-diff-hunk-fg);
+  background: var(--ds-color-hover-wash);
+  color: var(--ds-color-text-muted);
   font-family: var(--ds-font-mono);
   font-size: var(--ds-text-xs);
 }
@@ -247,6 +259,36 @@
 .removed .sign {
   color: var(--ds-diff-del-fg);
 }
+/* Split: the old side and the new, each with its own number column. */
+.split {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-mono);
+  line-height: 1.65;
+  color: var(--ds-color-text-primary);
+}
+.side {
+  display: grid;
+  grid-template-columns: 44px 18px minmax(0, 1fr);
+  min-width: 0;
+}
+.side + .side {
+  box-shadow: inset 1px 0 0 var(--ds-color-border-subtle);
+}
+.gap {
+  background: var(--ds-color-hover-wash);
+}
+.split .added .text,
+.split .added .sign {
+  color: var(--ds-diff-add-fg);
+}
+.split .removed .text,
+.split .removed .sign {
+  color: var(--ds-diff-del-fg);
+}
+
 /* New since the last update: a flash over the line, and a mark down its side. */
 .fresh {
   box-shadow: inset 3px 0 0 var(--ds-tone-info-mark);
