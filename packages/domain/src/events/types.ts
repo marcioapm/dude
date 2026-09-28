@@ -49,9 +49,10 @@ export const EventTypes = {
   RunFailed: "run.failed",
   RunAborted: "run.aborted",
   /**
-   * A running agent's checkout changed: its live diff against the commit it
-   * started from. Payload: the diff, as `GET /v1/runs/:id/diff` returns it
-   * (`RunDiff`).
+   * A Run's checkout changed: its diff against the commit it started from,
+   * read live or left by the beforeStop hook as it stopped. Payload: a
+   * summary with no lines (`RunDiffSummary`); the lines are
+   * `GET /v1/runs/:id/diff`.
    */
   RunDiffUpdated: "run.diff.updated",
 
