@@ -24,10 +24,11 @@ import type { ApiClient, ForgeConnection, Member } from "../api/client.ts";
 import { MembersSection } from "./MembersSection.tsx";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
 
-export function OrganizationSettingsScreen({ client, me, onPeopleChanged }: {
+export function OrganizationSettingsScreen({ client, me, people, onPeopleChanged }: {
   client: ApiClient;
   /** You: admins manage the members. */
   me: Member | null;
+  people: Member[];
   onPeopleChanged: () => void;
 }) {
   const [connection, setConnection] = useState<ForgeConnection | null>(null);
@@ -73,7 +74,7 @@ export function OrganizationSettingsScreen({ client, me, onPeopleChanged }: {
     <Page data-testid="org-settings">
       <PageHeader breadcrumb={<Breadcrumb items={[{ id: "org", label: "Organization" }]} />} title="Settings"
         description="For every project: who is in it, and where pull requests are opened." />
-      <MembersSection client={client} me={me} onChanged={onPeopleChanged} />
+      <MembersSection client={client} me={me} people={people} onChanged={onPeopleChanged} />
       <Card>
         <CardHeader
           title="GitHub"

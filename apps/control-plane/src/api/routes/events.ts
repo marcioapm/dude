@@ -87,16 +87,7 @@ function streamEvents({ url, principal, request }: RequestContext): Response {
       controller.enqueue(encoder.encode(": open\n\n"));
 
       const send = (event: PersistedEvent) => {
-        if (closed) return;
-        // Not in the ledger (presence): no id, so a reconnect's
-        // Last-Event-ID stays the last ledger event's. Only for streams
-        // watching what happens now; a history has no use for it.
-        if (event.cursor === 0) {
-          if (!liveOnly) return;
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
-          return;
-        }
-        if (event.cursor <= highWater) return;
+        if (closed || event.cursor <= highWater) return;
         highWater = event.cursor;
         /*
          * Deliberately unnamed frames.
@@ -115,7 +106,12 @@ function streamEvents({ url, principal, request }: RequestContext): Response {
       const pending: PersistedEvent[] = [];
       let backfilled = false;
       unsubscribe = eventBus.subscribe(filter, (event) => {
-        if (backfilled || event.cursor === 0) send(event);
+        // Not in the ledger (presence, cursor 0): sent at once and without
+        // an id, so a reconnect's Last-Event-ID stays the last ledger
+        // event's. Only for streams watching what happens now.
+        if (event.cursor === 0) {
+          if (liveOnly && !closed) controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+        } else if (backfilled) send(event);
         else pending.push(event);
       });
 

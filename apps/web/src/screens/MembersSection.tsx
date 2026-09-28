@@ -5,7 +5,7 @@
  * once). Anyone else sees the list.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { HumanAvatar } from "@dude/design-system/components";
 import {
   Badge,
@@ -27,7 +27,7 @@ import {
 import type { PersonRole } from "@dude/domain";
 import type { ApiClient, Member } from "../api/client.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
-import { photoOf, whereWords } from "../hooks/usePeople.ts";
+import { avatarOf, whereWords } from "../hooks/usePeople.ts";
 import { KeyShownOnce } from "./YouSections.tsx";
 
 const ROLES = [
@@ -35,26 +35,23 @@ const ROLES = [
   { value: "admin", label: "Admin" },
 ];
 
-export function MembersSection({ client, me, onChanged }: { client: ApiClient; me: Member | null; onChanged: () => void }) {
-  const [people, setPeople] = useState<Member[] | null>(null);
+/** `me`, `people` and `onChanged` are the shell's (`usePeople`), so this list is as live as the sidebar's. */
+export function MembersSection({ client, me, people, onChanged }: {
+  client: ApiClient;
+  me: Member | null;
+  people: Member[];
+  onChanged: () => void;
+}) {
   const [problem, setProblem] = useState<string | null>(null);
   const [inviting, setInviting] = useState(false);
   const [invited, setInvited] = useState<{ name: string; key: string } | null>(null);
   const [removing, setRemoving] = useState<Member | null>(null);
   const admin = me?.role === "admin";
 
-  const load = useCallback(() => {
-    void client.listPeople().then((p) => setPeople(p.people), (err: unknown) => setProblem(errorText(err)));
-  }, [client]);
-  useEffect(load, [load]);
-  const changed = () => {
-    load();
-    onChanged();
-  };
 
   const setRole = (person: Member, role: PersonRole) => {
     setProblem(null);
-    void client.updatePerson(person.id, { role }).then(changed, (err: unknown) => setProblem(errorText(err)));
+    void client.updatePerson(person.id, { role }).then(onChanged, (err: unknown) => setProblem(errorText(err)));
   };
 
   return (
@@ -72,7 +69,7 @@ export function MembersSection({ client, me, onChanged }: { client: ApiClient; m
           Everyone here can create, deliver and steer tasks. Admins manage the organization: its members and its settings.
         </p>
         {problem ? <Callout tone="danger">{problem}</Callout> : null}
-        {people ? (
+        {people.length > 0 ? (
           <Table>
             <THead>
               <Tr>
@@ -88,7 +85,7 @@ export function MembersSection({ client, me, onChanged }: { client: ApiClient; m
                   <Tr key={p.id} data-testid="member" data-member={p.name}>
                     <Td>
                       {/* "you" beside the name, not in it: the face's initials are the name's. */}
-                      <HumanAvatar person={{ id: p.id, name: p.name, imageUrl: photoOf(p) }} size="lg" showName
+                      <HumanAvatar person={avatarOf(p)} size="lg" showName
                         detail={[you ? "you" : null, p.email, p.online ? "online" : whereWords(p) ? `active ${whereWords(p)}` : "not seen yet"]
                           .filter(Boolean).join(" · ")} />
                     </Td>
@@ -114,7 +111,7 @@ export function MembersSection({ client, me, onChanged }: { client: ApiClient; m
         <InviteDialog client={client} onClose={() => setInviting(false)} onInvited={(made) => {
           setInviting(false);
           setInvited(made);
-          changed();
+          onChanged();
         }} />
       ) : null}
       {invited ? (
@@ -122,7 +119,7 @@ export function MembersSection({ client, me, onChanged }: { client: ApiClient; m
           description={`Give ${invited.name} this key to sign in with. It is not shown again.`} />
       ) : null}
       {removing ? (
-        <RemoveDialog client={client} person={removing} onClose={() => setRemoving(null)} onRemoved={changed} />
+        <RemoveDialog client={client} person={removing} onClose={() => setRemoving(null)} onRemoved={onChanged} />
       ) : null}
     </Card>
   );

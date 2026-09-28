@@ -6,14 +6,15 @@
  * which the shell hands to `seen`.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { formatDuration } from "@dude/design-system";
+import type { Person } from "@dude/design-system/components";
 import { EventTypes, type PersistedEvent } from "@dude/domain";
 import type { ApiClient, Member } from "../api/client.ts";
 
 export interface People {
   /** You; null until read. */
   me: Member | null;
-  organization: { id: string; name: string } | null;
   people: Member[];
   reload: () => void;
   /** A `person.seen` from the live stream: that person is here now. True when it was one. */
@@ -23,15 +24,13 @@ export interface People {
 const EVERY_MS = 60_000;
 
 export function usePeople(client: ApiClient): People {
-  const [me, setMe] = useState<Member | null>(null);
-  const [organization, setOrganization] = useState<People["organization"]>(null);
+  const [you, setYou] = useState<string | null>(null);
   const [people, setPeople] = useState<Member[]>([]);
 
   const reload = useCallback(() => {
-    void Promise.all([client.me(), client.listPeople()]).then(
-      ([mine, all]) => {
-        setMe(mine.person);
-        setOrganization(mine.organization);
+    void client.listPeople().then(
+      (all) => {
+        setYou(all.you);
         setPeople(all.people);
       },
       // The shell works without them: no faces, and every ask is yours.
@@ -61,18 +60,19 @@ export function usePeople(client: ApiClient): People {
     return true;
   }, [reload]);
 
-  return { me, organization, people, reload, seen };
+  const me = useMemo(() => people.find((p) => p.id === you) ?? null, [people, you]);
+  return { me, people, reload, seen };
 }
 
 /** "on TEXT-14 · 2m ago": where someone was, and when, for their face's tooltip. */
 export function whereWords(person: Pick<Member, "lastSeenAt" | "lastSeenWhere">, now = Date.now()): string | undefined {
   if (!person.lastSeenAt) return undefined;
-  const minutes = Math.floor((now - Date.parse(person.lastSeenAt)) / 60_000);
-  const when = minutes < 1 ? "just now" : `${minutes}m ago`;
+  const ms = now - Date.parse(person.lastSeenAt);
+  const when = ms < 60_000 ? "just now" : `${formatDuration(ms, { style: "age" })} ago`;
   return person.lastSeenWhere ? `on ${person.lastSeenWhere} · ${when}` : when;
 }
 
-/** A person's photo for an <img>: the API's own URLs are relative to it. */
-export function photoOf(person: { photoUrl: string | null }): string | undefined {
-  return person.photoUrl ?? undefined;
+/** A person as a face: the design system's `Person` for an API one. */
+export function avatarOf(person: { id: string; name: string; photoUrl: string | null }): Person & { id: string } {
+  return { id: person.id, name: person.name, imageUrl: person.photoUrl ?? undefined };
 }

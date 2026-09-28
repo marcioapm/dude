@@ -12,8 +12,7 @@
  */
 
 import { SQL } from "bun";
-import { newId } from "@dude/domain";
-import { insertApiKey } from "../apps/control-plane/src/api/auth.ts";
+import { insertPerson } from "../apps/control-plane/src/api/auth.ts";
 import { closePool, setPool, withOrg } from "../apps/control-plane/src/db/client.ts";
 
 const [organizationId, name, email, role = "member"] = process.argv.slice(2);
@@ -27,17 +26,9 @@ if (!appDsn || !organizationId || !name || !email || (role !== "admin" && role !
 // Through the app role, so row-level security holds here as in the API.
 setPool(new SQL(appDsn));
 try {
-  const out = await withOrg(organizationId, async (scope) => {
-    const taken = await scope.sql`SELECT 1 FROM people WHERE email = ${email} AND removed_at IS NULL`;
-    if (taken.length > 0) throw new Error(`${email} is already a member of ${organizationId}`);
-    const personId = newId("person");
-    await scope.sql`
-      INSERT INTO people (id, organization_id, name, email, role)
-      VALUES (${personId}, ${organizationId}, ${name}, ${email}, ${role})`;
-    const { key } = await insertApiKey(scope, { name, personId });
-    return { personId, name, email, role, key };
-  });
-  console.log(JSON.stringify(out));
+  const made = await withOrg(organizationId, (scope) => insertPerson(scope, { name, email, role }));
+  if (!made) throw new Error(`${email} is already a member of ${organizationId}`);
+  console.log(JSON.stringify({ personId: made.personId, name, email, role, key: made.key }));
 } catch (err) {
   console.error(err instanceof Error ? err.message : err);
   process.exitCode = 1;

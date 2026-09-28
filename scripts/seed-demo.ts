@@ -14,7 +14,7 @@
 
 import { SQL } from "bun";
 import { newId } from "@dude/domain";
-import { insertApiKey } from "../apps/control-plane/src/api/auth.ts";
+import { insertPerson } from "../apps/control-plane/src/api/auth.ts";
 import { closePool, setPool, withOrg } from "../apps/control-plane/src/db/client.ts";
 
 const ownerDsn = process.env.OWNER_DSN;
@@ -25,13 +25,13 @@ if (!ownerDsn || !appDsn) {
   process.exit(1);
 }
 
-/** The demo's people; the first is you, the organization's admin. `where` is set for those online. */
+/** The demo's people; the first is you, the organization's admin. Those somewhere are online. */
 const PEOPLE = [
-  { name: "Ana Costa", email: "ana@demo.test", role: "admin", where: "Board" },
-  { name: "Ben Okafor", email: "ben@demo.test", role: "member", where: "WEB-2" },
-  { name: "Chloé Martin", email: "chloe@demo.test", role: "member", where: "Settings" },
-  { name: "Dev Patel", email: "dev@demo.test", role: "member", where: null },
-];
+  { name: "Ana Costa", email: "ana@demo.test", role: "admin", lastSeenWhere: "Board" },
+  { name: "Ben Okafor", email: "ben@demo.test", role: "member", lastSeenWhere: "WEB-2" },
+  { name: "Chloé Martin", email: "chloe@demo.test", role: "member", lastSeenWhere: "Settings" },
+  { name: "Dev Patel", email: "dev@demo.test", role: "member", lastSeenWhere: null },
+] as const;
 
 /** Tasks, each with its people as indexes into PEOPLE, the owner first. */
 const TASKS: Array<{ title: string; status: string; people: number[]; epic: number | null }> = [
@@ -63,15 +63,7 @@ try {
   const people = await withOrg(organizationId, async (scope) => {
     const { sql } = scope;
     const made: Array<{ personId: string; keyId: string; key: string }> = [];
-    for (const p of PEOPLE) {
-      const personId = newId("person");
-      await sql`
-        INSERT INTO people (id, organization_id, name, email, role, last_seen_at, last_seen_where)
-        VALUES (${personId}, ${organizationId}, ${p.name}, ${p.email}, ${p.role},
-                ${p.where ? new Date() : null}, ${p.where})`;
-      const { id, key } = await insertApiKey(scope, { name: p.name, personId });
-      made.push({ personId, keyId: id, key });
-    }
+    for (const p of PEOPLE) made.push((await insertPerson(scope, p))!);
 
     const projectId = newId("project");
     await sql`

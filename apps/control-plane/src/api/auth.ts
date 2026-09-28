@@ -63,6 +63,27 @@ export async function insertApiKey(
 }
 
 /**
+ * Add a person to the organization `scope` is in, with a first key to sign
+ * in with (its plaintext returned this once). Null when someone there
+ * already has that email.
+ */
+export async function insertPerson(
+  scope: OrgScope,
+  person: { name: string; email: string; role?: "admin" | "member" | undefined; lastSeenWhere?: string | null },
+): Promise<{ personId: string; keyId: string; key: string } | null> {
+  const taken = await scope.sql`SELECT 1 FROM people WHERE email = ${person.email} AND removed_at IS NULL`;
+  if (taken.length > 0) return null;
+  const personId = newId("person");
+  const where = person.lastSeenWhere ?? null;
+  await scope.sql`
+    INSERT INTO people (id, organization_id, name, email, role, last_seen_at, last_seen_where)
+    VALUES (${personId}, ${scope.organizationId}, ${person.name}, ${person.email}, ${person.role ?? "member"},
+            ${where ? new Date() : null}, ${where})`;
+  const { id, key } = await insertApiKey(scope, { name: person.name, personId });
+  return { personId, keyId: id, key };
+}
+
+/**
  * Resolve a bearer token to a principal.
  *
  * Returns null for unknown, revoked or malformed keys — callers must not

@@ -17,7 +17,7 @@ import { Board, Breadcrumb, OnlineRow, ProfileBand, Sidebar, SidebarToggle, type
 import { Button, Callout, EmptyState, IconButton, RowMenu, Spinner, useToast } from "@dude/design-system/primitives";
 import { ApiError, type ApiClient } from "./api/client.ts";
 import { useReloadOnEvents } from "./hooks/useEventStream.ts";
-import { photoOf, usePeople, whereWords } from "./hooks/usePeople.ts";
+import { avatarOf, usePeople, whereWords } from "./hooks/usePeople.ts";
 import { errorText } from "./hooks/useSave.tsx";
 import { formatPlace, inTree, parsePlace, treeSelection, type Place } from "./place.ts";
 import { startPush } from "./push.ts";
@@ -201,9 +201,9 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   // Settings that are not a project's come first: a new organization with
   // no projects yet still sets up its GitHub connection, and you your view.
   if (place?.view === "orgSettings") {
-    main = <OrganizationSettingsScreen client={client} me={me} onPeopleChanged={reloadPeople} />;
+    main = <OrganizationSettingsScreen client={client} me={me} people={people} onPeopleChanged={reloadPeople} />;
   } else if (place?.view === "mySettings") {
-    main = <MySettingsScreen client={client} onChanged={reloadPeople} />;
+    main = <MySettingsScreen client={client} me={me} onChanged={reloadPeople} />;
   } else if (!projects) {
     main = <div className="centered"><Spinner label="Loading…" /></div>;
   } else if (projects.length === 0) {
@@ -369,12 +369,12 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         presence={
           // You first, then the others as the organization lists them.
           <OnlineRow data-testid="online"
-            people={people.filter((p) => p.online).sort((a, b) => Number(b.id === you) - Number(a.id === you)).map((p) => ({ id: p.id, name: p.name, imageUrl: photoOf(p), where: whereWords(p) }))} />
+            people={people.filter((p) => p.online).sort((a, b) => Number(b.id === you) - Number(a.id === you)).map((p) => ({ ...avatarOf(p), where: whereWords(p) }))} />
         }
         band={
           <ProfileBand
             className="profileBand"
-            person={me ? { id: me.id, name: me.name, imageUrl: photoOf(me) } : { name: "…" }}
+            person={me ? avatarOf(me) : { name: "…" }}
             detail={me?.email ?? (me?.role === "admin" ? "Organization admin" : undefined)}
             onOpen={() => go({ view: "mySettings" })}
             openTestId="my-settings-button"
