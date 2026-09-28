@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"maps"
 	"net/http"
 	"os"
@@ -11,9 +12,12 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // Exec and the checkout it runs in.
@@ -71,10 +75,17 @@ func (s *Server) checkout(run *Run, spec map[string]any) (string, error) {
 	for _, repo := range specRepos(spec) {
 		src := s.repoPath(repo.URL)
 		dst := filepath.Join(dir, "repos", repo.Name)
-		for _, args := range [][]string{
-			{"clone", "-q", src, dst},
-			{"-C", dst, "checkout", "-q", "--detach", head(src, repo.Ref)},
-		} {
+		// As lux checks one out: a branch as a local branch (checkout -B,
+		// which the reflog records), anything else detached.
+		checkout := []string{"-C", dst, "checkout", "-q", "--detach", head(src, repo.Ref)}
+		if repo.Ref == "" || exec.Command("git", "-C", src, "rev-parse", "-q", "--verify", "refs/heads/"+repo.Ref).Run() == nil {
+			branch := repo.Ref
+			if branch == "" {
+				branch = "main"
+			}
+			checkout = []string{"-C", dst, "checkout", "-q", "-B", branch, "origin/" + branch}
+		}
+		for _, args := range [][]string{{"clone", "-q", "--no-checkout", src, dst}, checkout} {
 			if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
 				return "", fmt.Errorf("git %s: %v: %s", args[0], err, out)
 			}
@@ -82,6 +93,84 @@ func (s *Server) checkout(run *Run, spec map[string]any) (string, error) {
 	}
 	run.workspace = dir
 	return dir, nil
+}
+
+// beforeStop runs the spec's workload.beforeStop hook, as lux does on every
+// stop it makes — dude's stop, cancel and pause, and its own timeout — in
+// the Run's checkout, with $LUX_ARTIFACTS a directory whose files are then
+// published as the agent's would be. Reported in the record stream between
+// lux.beforeStop start and done, as lux's shim reports it. A Run whose
+// checkout was never looked at or written to has nothing to diff, and the
+// fake skips the hook for it rather than clone for nothing. Callers hold
+// s.mu.
+func (s *Server) beforeStop(run *Run) {
+	var spec struct {
+		Workload struct {
+			BeforeStop *lux.BeforeStop `json:"beforeStop"`
+		} `json:"workload"`
+	}
+	_ = json.Unmarshal(run.Spec, &spec)
+	hook := spec.Workload.BeforeStop
+	if hook == nil || len(hook.Command) == 0 || run.workspace == "" || run.State != "running" {
+		return
+	}
+	out := filepath.Join(run.workspace, ".lux-artifacts")
+	_ = os.MkdirAll(out, 0o755)
+	defer os.RemoveAll(out)
+	s.recordEvent(run, "lux.beforeStop", map[string]any{"phase": "start"})
+	timeout := 10 * time.Second
+	if d, err := time.ParseDuration(hook.Timeout); err == nil && d > 0 {
+		timeout = d
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, hook.Command[0], s.inWorkspace(run, hook.Command[1:])...)
+	cmd.Dir = run.workspace
+	cmd.Env = append(os.Environ(), "LUX_ARTIFACTS="+out)
+	code := 0
+	if err := cmd.Run(); err != nil {
+		code = -1
+		if ee, ok := err.(*exec.ExitError); ok {
+			code = ee.ExitCode()
+		}
+	}
+	s.recordEvent(run, "lux.beforeStop", map[string]any{"phase": "done", "exitCode": code, "timedOut": ctx.Err() != nil})
+	_ = filepath.WalkDir(out, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || !d.Type().IsRegular() {
+			return nil
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		rel, _ := filepath.Rel(out, path)
+		if run.published == nil {
+			run.published = map[string]string{}
+		}
+		run.published[filepath.ToSlash(rel)] = string(content)
+		return nil
+	})
+}
+
+// inWorkspace reads /workspace in a command's arguments as the Run's
+// checkout: the one liberty the fake takes with what runs "in" it.
+func (s *Server) inWorkspace(run *Run, args []string) []string {
+	out := make([]string, len(args))
+	for i, a := range args {
+		out[i] = strings.ReplaceAll(a, workspaceRoot, run.workspace)
+	}
+	return out
+}
+
+// Timeout stops a Run as lux's own timeout would: the beforeStop hook runs,
+// then the Run fails with reason "timeout".
+func (s *Server) Timeout(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil && run.State == "running" {
+		s.beforeStop(run)
+		s.setStateWith(run, "failed", "timeout")
+	}
 }
 
 // exec is lux's exec stream: refused over plain HTTP when the Run is not
@@ -93,6 +182,7 @@ func (s *Server) exec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
+	run.Calls = append(run.Calls, "exec")
 	state := run.State
 	var spec map[string]any
 	_ = json.Unmarshal(run.Spec, &spec)
@@ -126,10 +216,9 @@ func (s *Server) exec(w http.ResponseWriter, r *http.Request) {
 		_ = ws.Close(websocket.StatusNormalClosure, "")
 		return
 	}
-	args := make([]string, len(open.Command))
-	for i, a := range open.Command {
-		args[i] = strings.ReplaceAll(a, workspaceRoot, dir)
-	}
+	s.mu.Lock()
+	args := append([]string{open.Command[0]}, s.inWorkspace(run, open.Command[1:])...)
+	s.mu.Unlock()
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Dir = dir
 	var stdout, stderr strings.Builder

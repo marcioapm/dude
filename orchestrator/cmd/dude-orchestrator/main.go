@@ -84,6 +84,7 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("DUDE_IDLE_AFTER: %w", err)
 	}
+	// How often a working agent's diff is read besides after its edits.
 	diffEvery, err := time.ParseDuration(env("DUDE_DIFF_EVERY", "15s"))
 	if err != nil {
 		return fmt.Errorf("DUDE_DIFF_EVERY: %w", err)

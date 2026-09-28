@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -134,62 +135,120 @@ func TestQuotedPathsAreUnquoted(t *testing.T) {
 	}
 }
 
-// The script the orchestrator runs through exec, against a real checkout:
-// tracked changes against the base, untracked files as new, ignored files
-// left out, and the agent's index untouched.
+// The script, against a real checkout made as lux makes one (a branch
+// checked out with -B): tracked changes against where it started, a
+// commit since included; untracked files as new, binary ones too; ignored
+// files left out; and the agent's index untouched. Run both ways: printed,
+// for the live read, and saved into $LUX_ARTIFACTS, for the beforeStop hook.
 func TestTheDiffScriptSeesTrackedAndUntrackedWork(t *testing.T) {
 	dir := t.TempDir()
-	git := func(args ...string) string {
-		out, err := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=t", "-c", "user.email=t@x"}, args...)...).CombinedOutput()
+	origin, repo := filepath.Join(dir, "origin"), filepath.Join(dir, "repos", "target")
+	git := func(in string, args ...string) string {
+		out, err := exec.Command("git", append([]string{"-C", in, "-c", "user.name=t", "-c", "user.email=t@x"}, args...)...).CombinedOutput()
 		if err != nil {
 			t.Fatalf("git %v: %v %s", args, err, out)
 		}
 		return string(out)
 	}
-	git("init", "-q", "-b", "main")
 	write := func(name, content string) {
-		_ = os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755)
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		_ = os.MkdirAll(filepath.Dir(filepath.Join(repo, name)), 0o755)
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	write("README.md", "one\n")
-	write(".gitignore", "build/\n")
-	git("add", ".")
-	git("commit", "-q", "-m", "base")
-	base := git("rev-parse", "HEAD")[:40]
-	// A commit since the base, an uncommitted change, a new file, and build
-	// output that is ignored.
+	_ = os.MkdirAll(origin, 0o755)
+	git(origin, "init", "-q", "-b", "main")
+	_ = os.WriteFile(filepath.Join(origin, "README.md"), []byte("one\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(origin, ".gitignore"), []byte("build/\n"), 0o644)
+	git(origin, "add", ".")
+	git(origin, "commit", "-q", "-m", "base")
+	base := git(origin, "rev-parse", "HEAD")[:40]
+	git(dir, "clone", "-q", "--no-checkout", origin, repo)
+	git(repo, "checkout", "-q", "-B", "main", "origin/main")
+
+	// A commit since the base, an uncommitted change, a new text file and
+	// a new binary one, and build output that is ignored.
 	write("README.md", "two\n")
-	git("commit", "-q", "-am", "agent's commit")
+	git(repo, "commit", "-q", "-am", "agent's commit")
 	write("README.md", "three\n")
 	write("src/new file.go", "package x\n")
+	write("logo.bin", "\x00\x01")
 	write("build/out.js", "junk\n")
 
-	cmd := diffCommand(dir, base)
-	out, err := exec.Command(cmd[0], cmd[1:]...).CombinedOutput()
-	if err != nil {
-		t.Fatalf("%v: %s", err, out)
+	run := func(dest string, env ...string) string {
+		cmd := exec.Command("sh", "-c", diffScript, "dude-diff", dest, "target", repo, "main")
+		cmd.Env = append(os.Environ(), env...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v: %s", err, out)
+		}
+		return string(out)
 	}
-	files := ParseDiff(string(out))
+	printed := run("-")
+	diff := parseRunDiff(printed)
 	got := map[string]string{}
-	for _, f := range files {
+	for _, f := range diff.Files {
 		got[f.Path] = f.Status
 	}
-	if len(got) != 2 || got["README.md"] != "M" || got["src/new file.go"] != "A" {
-		t.Errorf("files = %v\n%s", got, out)
+	if diff.Base != base || len(got) != 3 || got["README.md"] != "M" || got["src/new file.go"] != "A" || got["logo.bin"] != "A" {
+		t.Errorf("base %s (want %s), files %v\n%s", diff.Base, base, got, printed)
 	}
-	if status := git("status", "--porcelain"); status != " M README.md\n?? src/\n" {
+	if status := git(repo, "status", "--porcelain"); status != " M README.md\n?? logo.bin\n?? src/\n" {
 		t.Errorf("the index changed: %q", status)
+	}
+
+	// The hook's way: the same diff, in $LUX_ARTIFACTS, printing nothing.
+	artifacts := filepath.Join(dir, "artifacts")
+	if out := run("artifacts", "LUX_ARTIFACTS="+artifacts); out != "" {
+		t.Errorf("the hook printed %q", out)
+	}
+	saved, err := os.ReadFile(filepath.Join(artifacts, finalDiffDir, finalDiffFile))
+	if err != nil || string(saved) != printed {
+		t.Errorf("saved %q (%v), printed %q", saved, err, printed)
+	}
+	if diffChecksum(string(saved)) != diff.Checksum {
+		t.Error("the same diff has another checksum")
+	}
+}
+
+func TestSeveralRepositoriesAreOneDiffWithTheirNames(t *testing.T) {
+	text := "# dude-diff api aaaa\n" + sampleDiff + "# dude-diff web bbbb\ndiff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n"
+	d := parseRunDiff(text)
+	if d.Base != "aaaa" || len(d.Files) != 6 || d.Files[0].Path != "api/src/app.ts" || d.Files[5].Path != "web/x" {
+		t.Errorf("got base %s, %d files, %s … %s", d.Base, len(d.Files), d.Files[0].Path, d.Files[len(d.Files)-1].Path)
+	}
+	if parseRunDiff("").Files == nil {
+		t.Error("no changes is an empty list, not null")
+	}
+}
+
+func TestEveryPhaseLeavesItsFinalDiffOnStop(t *testing.T) {
+	spec := buildSpec(AgentConfig{}, specInput{Phase: "implement", Model: "m", Repos: []specRepo{{Name: "api", Ref: "main"}, {Name: "web", Ref: "abc123"}}})
+	hook := spec.Workload.BeforeStop
+	if hook == nil || hook.Timeout != FinalDiffTimeout {
+		t.Fatalf("hook = %+v", hook)
+	}
+	args := hook.Command[4:]
+	if hook.Command[0] != "sh" || hook.Command[4] != "artifacts" ||
+		strings.Join(args[1:], " ") != "api /workspace/repos/api main web /workspace/repos/web abc123" {
+		t.Errorf("command = %q", hook.Command)
+	}
+	if spec := buildSpec(AgentConfig{}, specInput{Phase: "implement", Model: "m"}); spec.Workload.BeforeStop != nil {
+		t.Error("work on no repository has no diff to leave")
 	}
 }
 
 func TestTheDiffIsReadSoonAfterAnEditOnceForABurstAndEverySoOften(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	var reads atomic.Int32
+	var edits atomic.Int32
 	poke := make(chan struct{}, 1)
-	go watchDiff(ctx, poke, 30*time.Millisecond, time.Hour, func(context.Context) { reads.Add(1) })
+	go watchDiff(ctx, poke, 30*time.Millisecond, time.Hour, time.Hour, func(_ context.Context, periodic bool) bool {
+		if !periodic {
+			edits.Add(1)
+		}
+		return true
+	})
 
 	// A burst of edits is one read, a moment after the first.
 	for range 5 {
@@ -199,26 +258,46 @@ func TestTheDiffIsReadSoonAfterAnEditOnceForABurstAndEverySoOften(t *testing.T) 
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
-	if reads.Load() != 0 {
+	if edits.Load() != 0 {
 		t.Fatal("read before the delay")
 	}
-	waitFor(t, func() bool { return reads.Load() == 1 })
+	waitFor(t, func() bool { return edits.Load() == 1 })
 	time.Sleep(60 * time.Millisecond)
-	if n := reads.Load(); n != 1 {
+	if n := edits.Load(); n != 1 {
 		t.Fatalf("a burst was read %d times", n)
 	}
 	// A later edit is read again.
 	poke <- struct{}{}
-	waitFor(t, func() bool { return reads.Load() == 2 })
+	waitFor(t, func() bool { return edits.Load() == 2 })
+}
 
-	// Without edits, the slow tick still reads.
-	var ticks atomic.Int32
-	go watchDiff(ctx, make(chan struct{}), time.Hour, 20*time.Millisecond, func(context.Context) { ticks.Add(1) })
-	waitFor(t, func() bool { return ticks.Load() >= 2 })
+func TestReadsThatFindNothingNewSlowDownUntilTheAgentEditsAgain(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var ticks, edits atomic.Int32
+	poke := make(chan struct{}, 1)
+	go watchDiff(ctx, poke, time.Millisecond, 10*time.Millisecond, time.Hour, func(_ context.Context, periodic bool) bool {
+		if !periodic {
+			edits.Add(1)
+			return true
+		}
+		ticks.Add(1)
+		return false // unchanged, or skipped: the agent is idle
+	})
+	// Every 10ms, until four found nothing; then the slow pace (an hour).
+	waitFor(t, func() bool { return ticks.Load() == diffBackoffAfter })
+	time.Sleep(80 * time.Millisecond)
+	if n := ticks.Load(); n != diffBackoffAfter {
+		t.Fatalf("%d periodic reads, want them to slow after %d", n, diffBackoffAfter)
+	}
+	// An edit brings the pace back.
+	poke <- struct{}{}
+	waitFor(t, func() bool { return edits.Load() == 1 })
+	waitFor(t, func() bool { return ticks.Load() > diffBackoffAfter })
 
 	// And nothing after it is told to stop.
 	cancel()
-	time.Sleep(10 * time.Millisecond)
+	time.Sleep(20 * time.Millisecond)
 	n := ticks.Load()
 	time.Sleep(60 * time.Millisecond)
 	if ticks.Load() != n {
