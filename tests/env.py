@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import socket
 import sys
+import signal
 import subprocess
 import time
 import uuid
@@ -60,6 +61,17 @@ def lux_env() -> dict:
     except requests.RequestException as err:
         raise SystemExit(f"lux at {env['luxd_url']} is not answering: {err}")
     return env
+
+
+def _signal(proc: subprocess.Popen, sig: int, group: bool) -> None:
+    """Signal a process, or its whole process group."""
+    try:
+        if group:
+            os.killpg(proc.pid, sig)
+        else:
+            proc.send_signal(sig)
+    except ProcessLookupError:
+        pass
 
 
 def find_free_port() -> int:
@@ -281,6 +293,8 @@ class TestEnvironment:
             },
             stdout=self._log("web"),
             stderr=subprocess.STDOUT,
+            # bunx runs vite as a child; its own group lets teardown stop both.
+            start_new_session=True,
         )
         deadline = time.time() + 30
         while time.time() < deadline:
@@ -324,11 +338,14 @@ class TestEnvironment:
             proc = getattr(self, name, None)
             if proc is None:
                 continue
-            proc.terminate()
+            # The web app is `bunx vite`: vite is bunx's child and would outlive
+            # it, holding the port with a proxy to a backend that is gone.
+            group = name == "web_proc"
+            _signal(proc, signal.SIGTERM, group)
             try:
                 proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
-                proc.kill()
+                _signal(proc, signal.SIGKILL, group)
             setattr(self, name, None)
 
 

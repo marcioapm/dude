@@ -77,7 +77,9 @@ export function pullRequestActivity(e: PersistedEvent, named: boolean): PullRequ
     }
     case "pull_request.commented": {
       const ignored = p.ignored === "not_permitted" ? " — not acted on: they may not wake a fixer" : "";
-      const verb = p.kind === "changes_requested" ? "requested changes on" : p.kind === "review" ? "reviewed" : p.kind === "line_comment" ? `commented on ${str(p.path)} in` : "commented on";
+      // A review's body: the verdict has a line of its own (pull_request.reviewed),
+      // so this one is what they wrote.
+      const verb = p.kind === "changes_requested" ? "wrote, requesting changes on" : p.kind === "review" ? "reviewed" : p.kind === "line_comment" ? `commented on ${str(p.path)} in` : "commented on";
       return person(str(p.author), `${str(p.author) || "Someone"} ${verb} ${pr}${ignored}`, str(p.body));
     }
     case "pull_request.reviewed": {
