@@ -22,6 +22,8 @@ export interface Principal {
   personId: string;
   kind: PrincipalKind;
   name: string;
+  /** Their role in the organization, as of this request. */
+  role: "admin" | "member";
 }
 
 export function hashKey(key: string): string {
@@ -101,13 +103,14 @@ export async function authenticate(authorization: string | null): Promise<Princi
   // lookup_api_key is SECURITY DEFINER and matches on the full hash only.
   const rows = await withoutTenant(async ({ sql }) => {
     return (await sql`
-      SELECT id, organization_id, name, kind, person_id
+      SELECT id, organization_id, name, kind, person_id, role
       FROM lookup_api_key(${candidateHash})`) as Array<{
       id: string;
       organization_id: string;
       name: string;
       kind: PrincipalKind;
       person_id: string | null;
+      role: string | null;
     }>;
   });
 
@@ -127,5 +130,6 @@ export async function authenticate(authorization: string | null): Promise<Princi
     personId: row.person_id,
     kind: row.kind,
     name: row.name,
+    role: row.role === "admin" ? "admin" : "member",
   };
 }

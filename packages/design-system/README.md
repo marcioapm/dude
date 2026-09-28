@@ -372,11 +372,6 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - A task's bucket is the most urgent of its own status and the sessions
   of its current run (`taskTriage`). A `running` task whose reviewer
   is `awaiting_input` needs you, whatever the macro state says.
-- `TriageRollup` is the one way a collapsed parent says what is inside it:
-  a `StatusBadge` dot per non-empty counted bucket, most urgent first. It
-  reuses the dot shapes (diamond = needs you, round = active, square =
-  failed), so the roll-up never invents a second mark. The needs-you count
-  is semibold; its hue is on the diamond beside it.
 - **Amber once per region.** In the sidebar the pinned needs-you block (tint
   and bar) is the one amber area; the filter chip, the tree row's pill, the
   asking session's activity and the roll-up counts are neutral ink, and the
@@ -426,7 +421,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   Failed sits in Closed with its danger mark; aborted stays neutral.
 - A card is three lines and nothing more: status dot, mono key, epic (project
   boards only) and time in lane; the title, clamped to two lines; who and
-  what it cost. Running cards show the working roles (`RoleStack`) and the
+  what it cost. Running cards show the working roles and the
   deepest live activity. Needs-you cards show the asker and the question in
   attention ink and take the attention wash and bar. Nothing else on the
   surface is coloured.
@@ -502,7 +497,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   here fetches.
 
 
-- `HumanAvatar` is for an identified person; `AgentAvatar role="human"` is
+- `PersonAvatar` is for an identified person; `AgentAvatar role="human"` is
   the anonymous human *actor* glyph in event rows. Do not use one for the
   other.
 - Humans and agents differ on three channels at once: a human is a full
@@ -511,10 +506,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   take a vivid role colour. Nothing about a person is ever a role colour or
   a tone.
 - Identity colour is `identitySlot(person)` — a hash of the id, so the same
-  person is the same colour on every screen with no profile record. Profile
-  images are not in the product yet; `imageUrl` replaces the initials when
-  they arrive and nothing else changes.
-- `HumanAvatarStack` overlaps by a quarter and puts the *first* person on
+  person is the same colour on every screen with no profile record. A
+  `photoUrl` replaces the initials and nothing else changes.
+- `PersonAvatarStack` overlaps by a quarter and puts the *first* person on
   top: order the list by relevance (the one it waits on, then the
   requester). Past `max`, a "+N" chip in the same shape stands for the rest
   with the full list in the title.
@@ -695,8 +689,7 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | `<ChatComposer question={q} />` for a blocking question | one generic text box for everything |
 | `<QuestionCard role="implementer" text={q} options={opts} askedAt={t} />` until `answeredAt` lands | the question only in the composer, gone from the history once answered |
 | `<Markdown source={text} streaming />` while tokens arrive | re-parsing strictly on every token |
-| `<TriageRollup counts={projectCounts(p)} />` on a collapsed project | "12 items" |
-| `<HumanAvatarStack people={[waitingOn, requester]} />` | a row of role-coloured circles with letters |
+| `<PersonAvatarStack people={[waitingOn, requester]} />` | a row of role-coloured circles with letters |
 | `<Sidebar projects={nav} selected={ref} />` and let defaults open the blocked item | expanding three levels to find "Needs you" |
 | `<Board project={p} epic={e} selected={ref} />` with needs-you sorted first | eleven columns, or a draggable card for a transition the workflow owns |
 | `<RowMenu items={[…, { id: "delete", tone: "danger", disabled, disabledReason }]} />` | a row of icon buttons, or a greyed item that does not say why |
@@ -779,19 +772,12 @@ EmptyState, ScrollArea.
 - **Sidebar** — header, search (`/`), four triage chips with global counts,
   the pinned Needs-you list across every project, the tree, a footer.
   Loading (skeleton rows), empty, and no-match states. Search and filter are
-  controlled or uncontrolled. `AttentionList` is exported on its own.
+  controlled or uncontrolled.
 - **NavTree** — Project → Epic → Task → Session, flat with `aria-level`,
   full keyboard navigation, per-row open/closed overrides (controlled via
   `expanded` / `onExpandedChange` so the app can persist them), triage-derived
   defaults, and a filter that forces ancestors open. Earlier runs fold into
   "Attempt n" rows.
-- **TriageRollup** — the counted buckets of a subtree as `StatusBadge` dots
-  with counts, most urgent first.
-- **HumanAvatar / HumanAvatarStack** — a person by initials and a hashed
-  identity colour; stacks overflow to "+N". `identitySlot` and `initialsOf`
-  are exported.
-- **RoleStack** — the roles working on something right now, as xs agent
-  avatars side by side (never overlapped: each must stay readable).
 - The view model is pure and exported from `src/util/navModel.ts`:
   `flattenNav`, `attentionItems`, `globalCounts`, `projectCounts`,
   `taskTriage`, `workingRoles`, `ancestorKeys`. The app maps domain

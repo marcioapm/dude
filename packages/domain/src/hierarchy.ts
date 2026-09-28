@@ -591,19 +591,33 @@ export interface PrDisplayInput {
   unresolvedThreads?: number | null | undefined;
 }
 
-const FAILED_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled", "action_required", "startup_failure"]);
+/**
+ * One check's reading, as the orchestrator's checkRunState has it (forge,
+ * github.go): running is pending; finished, its conclusion decides. Neutral
+ * and skipped pass. Cancelled, waiting on a person, or superseded is not a
+ * failure an agent could fix: pending, never failed, never re-run.
+ */
+function prCheckState(check: PrCheck): "passing" | "pending" | "failing" {
+  if (check.status.toLowerCase() !== "completed") return "pending";
+  switch ((check.conclusion ?? "").toLowerCase()) {
+    case "success": case "neutral": case "skipped": return "passing";
+    case "cancelled": case "action_required": case "stale": return "pending";
+  }
+  return "failing";
+}
 
 /** Whether a check run ended badly. */
 export function prCheckFailed(check: PrCheck): boolean {
-  return check.conclusion !== null && FAILED_CONCLUSIONS.has(check.conclusion.toLowerCase());
+  return prCheckState(check) === "failing";
 }
 
-/** The checks' verdict: one failing run outweighs running ones, which outweigh all green. */
+/** The checks' verdict: one failing run outweighs pending ones, which outweigh all green. */
 export function prChecksSummary(checks: PrDisplayInput["checks"]): PullRequest["checkState"] {
   if (typeof checks === "string") return checks;
   if (checks.length === 0) return "unknown";
-  if (checks.some(prCheckFailed)) return "failing";
-  if (checks.some((c) => c.status.toLowerCase() !== "completed")) return "pending";
+  const states = checks.map(prCheckState);
+  if (states.includes("failing")) return "failing";
+  if (states.includes("pending")) return "pending";
   return "passing";
 }
 

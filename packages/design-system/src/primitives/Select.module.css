@@ -37,7 +37,8 @@
 .trigger[data-placeholder] {
   color: var(--ds-color-text-muted);
 }
-.trigger[data-disabled] {
+.trigger[data-disabled],
+.trigger:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }

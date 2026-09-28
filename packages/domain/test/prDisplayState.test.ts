@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { PR_DISPLAY_STATES, prChecksSummary, prDisplayState, prReviewSummary, type PrCheck, type PrDisplayInput } from "../src/hierarchy.ts";
+import { PR_DISPLAY_STATES, prCheckFailed, prChecksSummary, prDisplayState, prReviewSummary, type PrCheck, type PrDisplayInput } from "../src/hierarchy.ts";
 
 const open = (over: Partial<PrDisplayInput> = {}): PrDisplayInput => ({ state: "open", checks: "passing", review: "approved", ...over });
 const check = (name: string, status: string, conclusion: string | null): PrCheck => ({ name, status, conclusion });
@@ -58,9 +58,15 @@ describe("prChecksSummary", () => {
     expect(prChecksSummary([])).toBe("unknown");
     expect(prChecksSummary([check("lint", "completed", "skipped"), check("unit", "completed", "neutral")])).toBe("passing");
   });
-  test("a timed-out or cancelled run failed", () => {
+  test("a timed-out run failed", () => {
     expect(prChecksSummary([check("e2e", "completed", "timed_out")])).toBe("failing");
-    expect(prChecksSummary([check("e2e", "COMPLETED", "CANCELLED")])).toBe("failing");
+    expect(prChecksSummary([check("e2e", "COMPLETED", "FAILURE")])).toBe("failing");
+  });
+  test("cancelled, waiting on a person or superseded is pending, as the orchestrator reads it", () => {
+    for (const c of ["cancelled", "action_required", "stale"]) {
+      expect(prChecksSummary([check("e2e", "completed", c)])).toBe("pending");
+      expect(prCheckFailed(check("e2e", "completed", c))).toBe(false);
+    }
   });
 });
 

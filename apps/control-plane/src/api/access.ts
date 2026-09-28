@@ -7,15 +7,15 @@
  * place it lands.
  */
 
-import { withOrg } from "../db/client.ts";
 import type { RequestContext } from "./router.ts";
 import { HttpError } from "./http.ts";
 
-/** Whether the caller administers their organization: a person on it, not removed, whose role is admin. */
+/**
+ * Whether the caller administers their organization: their role as the
+ * key's lookup read it for this request (migration 052), no query of its own.
+ */
 export async function isOrgAdmin(ctx: RequestContext): Promise<boolean> {
-  const rows = (await withOrg(ctx.principal.organizationId, (scope) => scope.sql`
-    SELECT 1 FROM people WHERE id = ${ctx.principal.personId} AND role = 'admin' AND removed_at IS NULL`)) as unknown[];
-  return rows.length > 0;
+  return ctx.principal.role === "admin";
 }
 
 /** Whether the caller may change a project's settings: for now, an organization admin. */

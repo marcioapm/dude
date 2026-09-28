@@ -5,13 +5,11 @@ import { Icon, type IconName } from "../icons/index.tsx";
 import { IconButton, type IconButtonProps } from "../primitives/Button.tsx";
 import { EmptyState, Skeleton } from "../primitives/Feedback.tsx";
 import { ScrollArea } from "../primitives/ScrollArea.tsx";
-import type { TriageKind } from "../tokens/triage.ts";
 import {
   attentionItems,
   flattenNav,
   navKey,
   waitingSplit,
-  type AttentionItem,
   type NavFilter,
   type NavOverrides,
   type NavProject,
@@ -19,14 +17,11 @@ import {
   type NavRow,
   waitingWords,
 } from "../util/navModel.ts";
-import { HumanAvatar } from "./HumanAvatar.tsx";
 import { PersonAvatar, PersonAvatarStack, type Person } from "./PersonAvatar.tsx";
 import { NeedsYouCount } from "./StatusMark.tsx";
 import { Segmented } from "./ScreenHeader.tsx";
 import { NavTree, type NavRowMenuControls } from "./NavTree.tsx";
 import type { RowMenuItem } from "../primitives/RowMenu.tsx";
-import { StatusBadge } from "./StatusBadge.tsx";
-import { AgentAvatar } from "./AgentAvatar.tsx";
 import styles from "./Sidebar.module.css";
 
 export interface SidebarProps extends Omit<HTMLAttributes<HTMLElement>, "onSelect" | "title"> {
@@ -44,8 +39,6 @@ export interface SidebarProps extends Omit<HTMLAttributes<HTMLElement>, "onSelec
   /** Controlled search text. Uncontrolled when omitted. */
   readonly query?: string | undefined;
   readonly onQueryChange?: ((q: string) => void) | undefined;
-  /** Controlled bucket filter (no control of its own; the app's). */
-  readonly triage?: TriageKind | null | undefined;
   /** Open/closed overrides for the tree; see `NavTree`. */
   readonly expanded?: NavOverrides | undefined;
   readonly onExpandedChange?: ((next: NavOverrides) => void) | undefined;
@@ -117,7 +110,6 @@ export function Sidebar({
   loading,
   query,
   onQueryChange,
-  triage,
   expanded,
   onExpandedChange,
   you,
@@ -153,9 +145,9 @@ export function Sidebar({
     if (mine === undefined) setLocalMine(v);
   };
 
-  const filter = useMemo<NavFilter>(() => ({ query: q, triage: triage ?? null, person: isMine ? (you ?? null) : null, you }), [q, triage, isMine, you]);
+  const filter = useMemo<NavFilter>(() => ({ query: q, triage: null, person: isMine ? (you ?? null) : null, you }), [q, isMine, you]);
   const waiting = useMemo(() => waitingSplit(attentionItems(projects), you), [projects, you]);
-  const filtering = q.trim().length > 0 || (triage ?? null) !== null || isMine;
+  const filtering = q.trim().length > 0 || isMine;
   const visible = useMemo(() => (filtering ? flattenNav(projects, expanded ?? new Map(), filter).length : -1), [filtering, projects, expanded, filter]);
 
   const searchRef = useRef<HTMLInputElement>(null);
@@ -399,111 +391,6 @@ export function SidebarToggle({ open, onOpenChange, controls, label = "Navigatio
       onClick={() => onOpenChange(!open)}
       {...rest}
     />
-  );
-}
-
-// ---------------------------------------------------------------------------
-
-export interface AttentionListProps {
-  readonly items: ReadonlyArray<AttentionItem>;
-  readonly selected?: NavRef | null | undefined;
-  readonly onSelect?: ((ref: NavRef, node: NavRow["node"]) => void) | undefined;
-  /** Rows shown before "and N more". Infinity: all of them. */
-  readonly max?: number | undefined;
-  /** Makes "and N more" a button to where all of them are listed. */
-  readonly onShowAll?: (() => void) | undefined;
-  /** A heading of its own (a full inbox), not the sidebar's collapsible one. */
-  readonly title?: string | undefined;
-}
-
-/**
- * The pinned "Needs you" section: one row per blocked task, across
- * every project, in the order given (the caller sorts — oldest wait first
- * is the sensible default). Each row says what, who is asking, what they
- * ask and who it waits on; where it lives (project · epic) is the row's
- * tooltip, so the ask gets the width. It is a list, not a tree.
- */
-export function AttentionList({ items, selected, onSelect, max = 5, onShowAll, title }: AttentionListProps) {
-  const [open, setOpen] = useState(true);
-  const shown = open ? items.slice(0, max) : [];
-  const more = items.length - shown.length;
-  const selectedKey = selected ? navKey(selected) : null;
-  return (
-    <section className={styles["attention"]} aria-label={title ?? "Needs you"}>
-      {title === undefined ? (
-        <button type="button" className={styles["attentionHead"]} aria-expanded={open} onClick={() => setOpen((v) => !v)}>
-          <Icon name="chevron-right" size={14} className={cx(styles["attentionChevron"], open && styles["attentionChevronOpen"])} />
-          <StatusBadge status="awaiting_input" variant="dot" iconOnly className={styles["attentionMark"]} />
-          <span className={styles["attentionTitle"]}>Needs you</span>
-          <span className={styles["attentionCount"]}>{items.length}</span>
-        </button>
-      ) : (
-        <h2 className={cx(styles["attentionHead"], styles["attentionHeadStatic"])}>
-          <StatusBadge status="awaiting_input" variant="dot" iconOnly className={styles["attentionMark"]} />
-          <span className={styles["attentionTitle"]}>{title}</span>
-          <span className={styles["attentionCount"]}>{items.length}</span>
-        </h2>
-      )}
-      {open ? (
-        <ul className={styles["attentionList"]}>
-          {shown.map((it) => {
-            const ref: NavRef = it.session ? { kind: "session", id: it.session.id } : { kind: "task", id: it.task.id };
-            const isSel = navKey(ref) === selectedKey || navKey({ kind: "task", id: it.task.id }) === selectedKey;
-            const where = it.epic ? `${it.project.name} · ${it.epic.title}` : it.project.name;
-            const people = it.task.people ?? [];
-            const names = people.map((p) => p.name).join(", ");
-            return (
-              <li key={it.task.id}>
-                <button
-                  type="button"
-                  className={cx(styles["attentionRow"], isSel && styles["attentionRowSelected"])}
-                  onClick={() => onSelect?.(ref, it.session ?? it.task)}
-                  aria-current={isSel ? "true" : undefined}
-                  title={where}
-                >
-                  <span className={styles["attentionMain"]}>
-                    <span className={styles["attentionWi"]}>
-                      {it.task.key ? <span className={styles["attentionKey"]}>{it.task.key}</span> : null}
-                      <span className={styles["attentionWiTitle"]} title={it.task.title}>
-                        {it.task.title}
-                      </span>
-                    </span>
-                    <span className={styles["attentionSub"]}>
-                      {/* The asker's slot is kept when there is no session, so every ask starts on one x. */}
-                      <span className={styles["attentionAsker"]}>{it.session ? <AgentAvatar role={it.session.role} size="xs" /> : null}</span>
-                      {it.session ? (
-                        <span className={styles["attentionAsk"]} title={it.session.activity}>
-                          {it.session.activity ?? "is waiting for you"}
-                        </span>
-                      ) : (
-                        <span className={styles["attentionAsk"]} title={waitingWords(it.task)}>{waitingWords(it.task)}</span>
-                      )}
-                    </span>
-                  </span>
-                  {people.length > 0 ? (
-                    <span className={styles["attentionPeople"]} role="group" aria-label={names} title={names}>
-                      <HumanAvatar person={people[0]!} size="xs" aria-hidden />
-                      {people.length > 1 ? <span className={styles["attentionPeopleMore"]}>+{people.length - 1}</span> : null}
-                    </span>
-                  ) : null}
-                </button>
-              </li>
-            );
-          })}
-          {more > 0 ? (
-            <li className={styles["attentionMore"]}>
-              {onShowAll ? (
-                <button type="button" className={styles["attentionMoreButton"]} onClick={onShowAll} data-testid="attention-show-all">
-                  and {more} more — see all
-                </button>
-              ) : (
-                <>and {more} more — filter by Needs you to see all</>
-              )}
-            </li>
-          ) : null}
-        </ul>
-      ) : null}
-    </section>
   );
 }
 

@@ -77,50 +77,6 @@
   color: var(--ds-diff-del-fg);
 }
 
-.follow {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--ds-space-6);
-  padding: 0;
-  background: none;
-  border: 0;
-  color: var(--ds-color-text-secondary);
-  font: inherit;
-  white-space: nowrap;
-}
-.follow:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-color-focus-ring);
-  border-radius: var(--ds-radius-control);
-}
-.toggle {
-  position: relative;
-  display: inline-block;
-  width: 30px;
-  height: 18px;
-  flex: none;
-  border-radius: var(--ds-radius-full);
-  background: var(--ds-color-border-strong);
-  transition: background var(--ds-duration-fast) var(--ds-ease-standard);
-}
-.toggle::after {
-  content: "";
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--ds-color-surface);
-  transition: left var(--ds-duration-fast) var(--ds-ease-standard);
-}
-.toggle.on {
-  background: var(--ds-color-accent);
-}
-.toggle.on::after {
-  left: 14px;
-}
-
 .body {
   flex: 1;
   min-height: 0;

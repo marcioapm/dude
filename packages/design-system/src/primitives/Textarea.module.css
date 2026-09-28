@@ -27,7 +27,8 @@
   border-color: var(--ds-tone-danger-fg);
   box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-tone-danger-bg);
 }
-.control[data-disabled="true"] {
+.control[data-disabled="true"],
+.control:has(:disabled) {
   opacity: 0.5;
   cursor: not-allowed;
 }

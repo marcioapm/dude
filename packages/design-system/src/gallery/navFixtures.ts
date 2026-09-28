@@ -3,7 +3,7 @@
  * show whether the sidebar stays calm. Deterministic.
  */
 
-import type { Person } from "../components/HumanAvatar.tsx";
+import type { Person } from "../components/PersonAvatar.tsx";
 import type { NavProject, NavSession, NavTask } from "../util/navModel.ts";
 import type { AgentRole, SessionStatus, TaskStatus } from "@dude/domain";
 

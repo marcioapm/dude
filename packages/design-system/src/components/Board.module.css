@@ -55,8 +55,7 @@
 .scopePeople {
   margin-left: var(--ds-space-4);
 }
-.scopeSep,
-.scopeGlyph {
+.scopeSep {
   color: var(--ds-color-text-muted);
   flex-shrink: 0;
 }

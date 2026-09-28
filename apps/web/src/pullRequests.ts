@@ -9,7 +9,7 @@
 
 import type { PersistedEvent, PullRequest } from "@dude/domain";
 import { prCheckFailed } from "@dude/domain";
-import { plural } from "./escalation.ts";
+import { plural } from "@dude/design-system";
 
 /** GitHub logins as a person types them: "@cy, bo". */
 export function parseLogins(text: string): string[] {

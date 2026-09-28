@@ -649,7 +649,7 @@ function openQuestion(state: Projection): QuestionTurn | null {
 }
 
 /** Extract a plan from an `agent.plan.updated` payload, or null if it has none. */
-function planFrom(payload: Record<string, unknown>): PlanItem[] | null {
+export function planFrom(payload: Record<string, unknown>): PlanItem[] | null {
   const todos = payload.todos;
   if (!Array.isArray(todos)) return null;
 

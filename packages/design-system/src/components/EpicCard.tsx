@@ -3,6 +3,7 @@ import { cx } from "../util/cx.ts";
 import { Icon } from "../icons/index.tsx";
 import { Cost } from "./Cost.tsx";
 import { PersonAvatarStack, type Person } from "./PersonAvatar.tsx";
+import { NeedsYouCount } from "./StatusMark.tsx";
 import styles from "./EpicCard.module.css";
 
 /** A project's epics by how far along they are: done, in review, in progress, not started. */
@@ -30,6 +31,8 @@ export interface EpicSummary {
   readonly prs: Readonly<Record<string, number>>;
   readonly people: ReadonlyArray<Person>;
   readonly costUsd: number | null;
+  /** What its machines cost; the card shows the total, the tooltip the split. */
+  readonly machineUsd?: number | null | undefined;
   /** "updated 12m ago", "finished Sep 14". */
   readonly when?: ReactNode;
   /** Tasks waiting on a person. */
@@ -94,9 +97,7 @@ export function EpicCard({ epic, onOpen, actions, className, ...rest }: EpicCard
           {epic.title}
         </button>
         {epic.needsYou ? (
-          <span className={styles["needs"]}>
-            <Icon name="hand" size={12} /> {epic.needsYou} {epic.needsYou === 1 ? "needs you" : "need you"}
-          </span>
+          <NeedsYouCount count={epic.needsYou} verbose />
         ) : null}
         <span className={styles["spacer"]} />
         {actions}
@@ -108,7 +109,7 @@ export function EpicCard({ epic, onOpen, actions, className, ...rest }: EpicCard
         <span>
           {epic.tasks} {epic.tasks === 1 ? "task" : "tasks"}
         </span>
-        <Cost tokensUsd={epic.costUsd} size="sm" tone="secondary" />
+        <Cost tokensUsd={epic.costUsd} machineUsd={epic.machineUsd} size="sm" tone="secondary" />
         {epic.when ? <span>{epic.when}</span> : null}
         <span className={styles["spacer"]} />
         <PersonAvatarStack people={epic.people} size={24} max={5} />

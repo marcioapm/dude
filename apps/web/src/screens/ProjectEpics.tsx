@@ -7,14 +7,13 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { EpicCard, EpicRow, type EpicSummary } from "@dude/design-system/components";
-import { formatTimestamp, formatUsd } from "@dude/design-system";
+import { formatTimestamp, formatUsd, plural } from "@dude/design-system";
 import { Callout, RowMenu, Section, useToast } from "@dude/design-system/primitives";
 import { EPIC_STATES, type EpicState } from "@dude/domain";
 import type { ApiClient, EpicOverview } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
 
 const STATE_LABEL: Record<EpicState, string> = { planned: "Planned", active: "In progress", done: "Done" };
-const tasksLabel = (n: number) => `${n} ${n === 1 ? "task" : "tasks"}`;
 
 function summary(e: EpicOverview, when: string): EpicSummary {
   return {
@@ -26,6 +25,7 @@ function summary(e: EpicOverview, when: string): EpicSummary {
     prs: e.prs,
     people: e.owners,
     costUsd: e.costUsd,
+    machineUsd: e.machineUsd,
     when,
     needsYou: e.needsYou,
   };
@@ -102,14 +102,14 @@ export function ProjectEpics({ client, projectId, version, onOpenEpic }: {
           <Section title="Planned" count={planned.length} data-epic-state="planned">
             {planned.map((e) => (
               <EpicRow key={e.id} epic={summary(e, e.tasks ? "not started" : "")} onOpen={() => onOpenEpic(e.id)}
-                detail={e.tasks ? tasksLabel(e.tasks) : e.description || "no tasks yet"} actions={menu(e)} />
+                detail={e.tasks ? plural(e.tasks, "task") : e.description || "no tasks yet"} actions={menu(e)} />
             ))}
           </Section>
           <Section title="Done" count={done.length} data-epic-state="done">
             {done.map((e) => (
               <EpicRow key={e.id} epic={summary(e, `finished ${formatTimestamp(e.lastActivity ?? e.updatedAt, "relative")}`)}
                 onOpen={() => onOpenEpic(e.id)}
-                detail={`${tasksLabel(e.tasks)} · ${formatUsd(e.costUsd)}`} actions={menu(e)} />
+                detail={`${plural(e.tasks, "task")} · ${formatUsd(e.costUsd + e.machineUsd)}`} actions={menu(e)} />
             ))}
           </Section>
         </div>

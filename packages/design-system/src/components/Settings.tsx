@@ -243,10 +243,11 @@ export interface SwitchProps {
   readonly label: ReactNode;
   readonly disabled?: boolean | undefined;
   readonly id?: string | undefined;
+  readonly testId?: string | undefined;
 }
 
 /** On or off, saying which in words beside it. */
-export function Switch({ checked, onCheckedChange, label, disabled, id }: SwitchProps) {
+export function Switch({ checked, onCheckedChange, label, disabled, id, testId }: SwitchProps) {
   return (
     <label className={styles["switchRow"]}>
       <button
@@ -257,6 +258,7 @@ export function Switch({ checked, onCheckedChange, label, disabled, id }: Switch
         disabled={disabled}
         className={cx(styles["switch"], checked && styles["switchOn"])}
         onClick={() => onCheckedChange(!checked)}
+        data-testid={testId}
       >
         <span className={styles["switchThumb"]} />
       </button>

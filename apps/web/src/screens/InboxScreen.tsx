@@ -14,7 +14,8 @@ import { Duration, PersonAvatar, ProjectAvatar, ScreenHeader, WaitingGroup, Wait
 import { Button, EmptyState, useToast } from "@dude/design-system/primitives";
 import type { ApiClient } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
-import { firstName, usePeople } from "../people.tsx";
+import { firstName } from "@dude/design-system";
+import { usePeople } from "../people.tsx";
 
 export function InboxScreen({ client, projects, onSelect, onChanged }: {
   client: ApiClient;
