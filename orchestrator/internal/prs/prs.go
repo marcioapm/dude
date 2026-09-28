@@ -156,6 +156,9 @@ func (s *Syncer) Sync(ctx context.Context, org, prID string) error {
 	if err != nil {
 		return err
 	}
+	if status.ThreadsUnknown {
+		status.UnresolvedThreads = pr.UnresolvedThreads
+	}
 	checksJSON, _ := json.Marshal(db.NonNil(status.CheckList))
 	reviewsJSON, _ := json.Marshal(db.NonNil(status.Reviews))
 	if !isOpen(status.State) {
@@ -272,7 +275,11 @@ func (s *Syncer) Sync(ctx context.Context, org, prID string) error {
 	prior := forge.Status{PullRequestRef: forge.PullRequestRef{State: pr.State, HeadSHA: pr.HeadSHA}, Checks: pr.Checks,
 		Review: pr.Review, Mergeable: pr.Mergeable, UnresolvedThreads: pr.UnresolvedThreads}
 	signal := forge.Classify(prior, status, permitted, s.FactoryLogins)
-	if signal == nil && status.Checks == forge.ChecksPending && isOpen(status.State) && time.Since(headSeenAt) > gh.Settings.CIStuck() {
+	stuckFor := 0 // how many of the organization's patiences checks have been pending on this head
+	if signal == nil && status.Checks == forge.ChecksPending && isOpen(status.State) {
+		stuckFor = int(time.Since(headSeenAt) / gh.Settings.CIStuck())
+	}
+	if stuckFor > 0 {
 		// Pending past the organization's patience on this head: CI that
 		// never reports (a runner gone, a required check nobody runs).
 		signal = &forge.Signal{Kind: "ci_stuck"}
@@ -294,11 +301,17 @@ func (s *Syncer) Sync(ctx context.Context, org, prID string) error {
 	key := fmt.Sprintf("pr:%s:%s:%s:%s:%s:%s", pr.ID, signal.Kind, strings.Join(ids, ","), status.Checks, status.State,
 		status.HeadSHA)
 	// Readiness can come and go on the same head (approved, dismissed,
-	// approved again): each time is its own change, recorded as its own
+	// approved again), and so can a conflict (resolved, then main moves
+	// into it again): each time is its own change, recorded as its own
 	// event. A second delivery of the same change records none, and is
 	// not classified as a change at all.
-	if signal.Kind == "readiness" {
+	if signal.Kind == "readiness" || signal.Kind == "conflict" {
 		key += ":" + strings.Join(recorded, ",")
+	}
+	// Still stuck after a person chose to wait: asked again once as long
+	// has passed again, not at every sync, and not never.
+	if signal.Kind == "ci_stuck" {
+		key += fmt.Sprintf(":stuck:%d", stuckFor)
 	}
 	return s.Signal(ctx, org, workflowRunID, delivery.SignalPRFeedback, signal, key)
 }

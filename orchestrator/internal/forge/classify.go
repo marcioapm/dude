@@ -1,6 +1,7 @@
 package forge
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"unicode"
@@ -34,8 +35,18 @@ type ActionableFeedback struct {
 	Author string `json:"author,omitempty"`
 	Body   string `json:"body"`
 	Path   string `json:"path,omitempty"`
+	// What kind of feedback it was (Feedback.Kind): a submitted review
+	// starts a new round of fixes, a comment does not.
+	Kind string `json:"kind,omitempty"`
 	// For failing checks: which, where their logs are, and what they said.
 	Checks []FailingCheck `json:"checks,omitempty"`
+}
+
+// IsReview says it came through GitHub's review — its text, or a line
+// comment, which GitHub files under a review: a new round, as a person
+// sees it. A conversation comment, or CI, is not.
+func (f ActionableFeedback) IsReview() bool {
+	return f.Kind == KindReview || f.Kind == KindChangesRequested || f.Kind == KindLineComment
 }
 
 // FailingCheck is one check that failed, as a fixer is told about it.
@@ -160,7 +171,7 @@ func Classify(prior, current Status, feedback []Feedback, factoryLogins []string
 	var actionable []ActionableFeedback
 	for _, f := range feedback {
 		if IsActionableComment(f, factoryLogins) {
-			actionable = append(actionable, ActionableFeedback{Source: "review", Author: f.Author, Body: f.Body, Path: f.Path})
+			actionable = append(actionable, ActionableFeedback{Source: "review", Author: f.Author, Body: f.Body, Path: f.Path, Kind: f.Kind})
 		}
 	}
 	// A check turning red is worth a fixer; one already red is not news, and
@@ -195,7 +206,30 @@ func Classify(prior, current Status, feedback []Feedback, factoryLogins []string
 // checks passing — or none configured, which GitHub reports as unknown;
 // no conflict with its base; and no review thread left unresolved. The
 // factory merges only when a person says so; this is what a person is told.
-func Ready(s Status) bool {
-	return s.Review == ReviewApproved && (s.Checks == ChecksPassing || s.Checks == ChecksUnknown) &&
-		s.Mergeable != MergeConflicting && s.UnresolvedThreads == 0
+func Ready(s Status) bool { return len(Blockers(s)) == 0 }
+
+// Blockers says, in a person's words, what keeps a pull request from
+// being merged: nothing, when it is ready.
+func Blockers(s Status) []string {
+	var out []string
+	switch s.Checks {
+	case ChecksFailing:
+		out = append(out, "checks are failing")
+	case ChecksPending:
+		out = append(out, "checks are still running")
+	}
+	switch s.Review {
+	case ReviewChangesRequested:
+		out = append(out, "changes were requested")
+	case ReviewApproved:
+	default:
+		out = append(out, "nobody has approved it")
+	}
+	if s.Mergeable == MergeConflicting {
+		out = append(out, "it conflicts with its base")
+	}
+	if s.UnresolvedThreads > 0 {
+		out = append(out, fmt.Sprintf("%d review thread(s) unresolved", s.UnresolvedThreads))
+	}
+	return out
 }

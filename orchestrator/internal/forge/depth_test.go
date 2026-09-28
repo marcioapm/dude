@@ -223,3 +223,65 @@ func TestGraphQLIsBesideTheRESTRoot(t *testing.T) {
 		}
 	}
 }
+
+// GraphQL answers most failures with 200 and "errors": a rate limit is a
+// sync to try again; anything else is threads unknown — never zero, which
+// would let a thread nobody read count as resolved.
+func TestGraphQLErrorsAreNotZeroThreads(t *testing.T) {
+	for name, c := range map[string]struct {
+		body              string
+		unknown, retrying bool
+	}{
+		"rate limited":  {`{"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded"}]}`, false, true},
+		"no repository": {`{"data":{"repository":null},"errors":[{"type":"NOT_FOUND","message":"Could not resolve"}]}`, true, false},
+		"no data":       {`{"errors":[{"message":"Something went wrong"}]}`, true, false},
+		"refused":       {`403`, true, false},
+		"two open":      {`{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"isResolved":false},{"isResolved":false}],"pageInfo":{"hasNextPage":false}}}}}}`, false, false},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if c.body == "403" {
+				w.WriteHeader(403)
+				fmt.Fprint(w, `{"message":"Resource not accessible by personal access token"}`)
+				return
+			}
+			fmt.Fprint(w, c.body)
+		}))
+		n, unknown, err := NewGitHub(Credential{Auth: "pat", Secret: "x", APIBaseURL: srv.URL}).unresolvedThreads(context.Background(), "acme/api", 1)
+		srv.Close()
+		if c.retrying != (err != nil && Transient(err)) || unknown != c.unknown || !c.retrying && err != nil {
+			t.Errorf("%s: n=%d unknown=%v err=%v", name, n, unknown, err)
+		}
+		if name == "two open" && n != 2 {
+			t.Errorf("%s: %d threads", name, n)
+		}
+	}
+}
+
+// What keeps a pull request from merging, as a person is told it.
+func TestBlockersNameWhatStopsAMerge(t *testing.T) {
+	ready := Status{PullRequestRef: PullRequestRef{State: StateOpen}, Checks: ChecksUnknown, Review: ReviewApproved, Mergeable: MergeBehind}
+	if b := Blockers(ready); len(b) != 0 {
+		t.Errorf("approved, no CI, behind but clean: blocked by %v", b)
+	}
+	s := Status{Checks: ChecksFailing, Review: ReviewChangesRequested, Mergeable: MergeConflicting, UnresolvedThreads: 2}
+	if b := Blockers(s); len(b) != 4 || b[0] != "checks are failing" || b[3] != "2 review thread(s) unresolved" {
+		t.Errorf("blockers = %v", b)
+	}
+	if b := Blockers(Status{Checks: ChecksPending}); len(b) != 2 || b[1] != "nobody has approved it" {
+		t.Errorf("blockers = %v", b)
+	}
+}
+
+// A submitted review, or a line comment filed under one, is a new round;
+// a conversation comment or CI is not.
+func TestOnlyAReviewStartsANewRound(t *testing.T) {
+	for kind, want := range map[string]bool{KindReview: true, KindChangesRequested: true, KindLineComment: true, KindComment: false, "": false} {
+		if got := (ActionableFeedback{Kind: kind}).IsReview(); got != want {
+			t.Errorf("%q: %v", kind, got)
+		}
+	}
+	s := Classify(prior, open, []Feedback{{ID: "r", Author: "cy", Body: "Please rename it", Kind: KindChangesRequested}}, nil)
+	if s == nil || !s.Feedback[0].IsReview() {
+		t.Errorf("a review's feedback lost its kind: %+v", s)
+	}
+}
