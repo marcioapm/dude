@@ -3,17 +3,25 @@
 --
 -- A Run's live diff is its checkout against the commit it started from,
 -- read by the orchestrator through lux's exec while the agent works (after
--- each edit it reports, and every so often). Only the latest is kept: it
--- is a view of now, and the ledger's run.diff.updated events are its
--- history. It stays after the Run ends, as the last thing the agent's
--- checkout held.
+-- each edit it reports, every so often while it works, and once more
+-- before dude stops its container). Only the latest is kept, one row per
+-- Run: it is a view of now. The ledger's run.diff.updated events carry
+-- only a summary of each (paths and counts), so hunks never fill the
+-- ledger. It stays after the Run ends, as the last thing the checkout held.
 CREATE TABLE run_diffs (
   run_id          text PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
   organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   -- The commit the diff is against (the first repository's, with several).
   base            text NOT NULL,
-  -- [{ path, status, additions, deletions, hunks: [{ header, lines }] }]
+  -- [{ path, status, additions, deletions, hunks: [{ header, lines }] }],
+  -- cut at 1,000 lines a file and 5,000 in all (the file says truncated).
   files           jsonb NOT NULL DEFAULT '[]',
+  -- sha256 of what git printed, and of the base: a read identical to the
+  -- last is dropped before it is parsed, even by an orchestrator that just
+  -- started.
+  checksum        text NOT NULL,
+  -- Read just before dude stopped the container, rather than while it ran.
+  final           boolean NOT NULL DEFAULT false,
   updated_at      timestamptz NOT NULL DEFAULT now()
 );
 

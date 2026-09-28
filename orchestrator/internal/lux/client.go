@@ -124,6 +124,19 @@ type Workload struct {
 	// ($LUX_SERVICE_<NAME>), adding each header on the way out, so the
 	// workload can call them without holding the credential.
 	Services []Service `json:"services,omitempty"`
+	// Run in the container on every stop, before the workload is
+	// signalled: dude's stop, cancel and pause, and lux's own (a timeout, a
+	// drain). Not after a crash or a lost host.
+	BeforeStop *BeforeStop `json:"beforeStop,omitempty"`
+}
+
+// BeforeStop is a command lux runs inside the container, as the workload's
+// user with its environment and working directory, when it stops the Run —
+// bounded by Timeout, and never longer than the stop's grace. What it
+// writes into $LUX_ARTIFACTS is collected like any artifact.
+type BeforeStop struct {
+	Command []string `json:"command"`
+	Timeout string   `json:"timeout,omitempty"`
 }
 
 // Service is an outside HTTP service a workload may reach as its Run: an

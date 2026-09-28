@@ -2,6 +2,10 @@ package phases
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -39,8 +43,8 @@ type DiffLine struct {
 // What a diff keeps of a file, and of all of them: a Run that rewrote a
 // lockfile must not put megabytes in the ledger each time it saves.
 const (
-	maxFileLines  = 2000
-	maxTotalLines = 20000
+	maxFileLines  = 1000
+	maxTotalLines = 5000
 )
 
 // ParseDiff reads `git diff` output — several diffs one after another, as
@@ -216,24 +220,113 @@ func unquotePath(p string) string {
 
 func num(n int) *int { return &n }
 
-// diffScript prints what a checkout changed since a commit: tracked files
-// against it, then each untracked file (not ignored) as new — a file the
-// agent wrote and has not added is still its work. $1 is the checkout, $2
-// the commit. Read-only: nothing is staged, so the agent's index is left as
-// it was. At most 200 untracked files, and none over a megabyte: a build's
-// output the project forgot to ignore is not the agent's change.
-const diffScript = `cd "$1" || exit 3
-git -c core.quotePath=off diff --no-color --no-ext-diff --find-renames "$2" -- || exit $?
-n=0
-git -c core.quotePath=off ls-files -z --others --exclude-standard |
-while IFS= read -r -d '' f; do
-  n=$((n + 1)); [ "$n" -le 200 ] || break
-  [ -f "$f" ] && [ "$(wc -c < "$f")" -le 1048576 ] || continue
-  git -c core.quotePath=off diff --no-color --no-ext-diff --no-index -- /dev/null "$f"
-done
-exit 0`
+// diffScript prints what each checkout changed since the commit it started
+// from: tracked files against it, and untracked ones (not ignored) as new —
+// a file the agent wrote and has not added is still its work. Each
+// repository's section starts "# dude-diff <name> <base>".
+//
+// It is POSIX sh, for any image, and read-only: untracked files are marked
+// intent-to-add in a copy of the index, so the agent's own index is left as
+// it was. Output stops at 8 MB.
+//
+// $1 is where the diff goes: "-" for standard output (the live read,
+// through exec), or "artifacts" for $LUX_ARTIFACTS/.dude-final-diff/ (the
+// beforeStop hook, collected when the container exits). Then, per
+// repository: its name, its checkout, and the commit it started from — a
+// sha, or the branch lux checked out, whose first reflog entry is where it
+// started (lux checks a branch out with checkout -B, which records it).
+const diffScript = `set -u
+dest=$1; shift
+base_of() {
+  if first=$(git -C "$1" reflog show --format=%H "refs/heads/$2" -- 2>/dev/null | tail -n 1) && [ -n "$first" ]; then
+    echo "$first"
+  else
+    git -C "$1" rev-parse -q --verify "$2^{commit}" 2>/dev/null || git -C "$1" rev-parse -q --verify "origin/$2^{commit}"
+  fi
+}
+diffs() {
+  while [ $# -ge 3 ]; do
+    name=$1 dir=$2 ref=$3; shift 3
+    [ -d "$dir" ] || continue
+    base=$(base_of "$dir" "$ref") || continue
+    echo "# dude-diff $name $base"
+    idx=$(mktemp) || exit 3
+    real=$(git -C "$dir" rev-parse --git-path index)
+    case $real in /*) ;; *) real=$dir/$real ;; esac
+    if [ -f "$real" ]; then cp "$real" "$idx"; else rm -f "$idx"; fi
+    GIT_INDEX_FILE=$idx git -C "$dir" add -A -N . 2>/dev/null
+    GIT_INDEX_FILE=$idx git -C "$dir" -c core.quotePath=off diff --no-color --no-ext-diff --find-renames "$base" --
+    rm -f "$idx"
+  done
+}
+if [ "$dest" = - ]; then
+  diffs "$@" | head -c 8388608
+else
+  out=${LUX_ARTIFACTS:?}/` + finalDiffDir + `
+  mkdir -p "$out" && diffs "$@" | head -c 8388608 > "$out/.diff.tmp" && mv "$out/.diff.tmp" "$out/` + finalDiffFile + `"
+fi`
 
-// diffCommand is the exec that prints a checkout's diff against base.
-func diffCommand(checkout, base string) []string {
-	return []string{"bash", "-c", diffScript, "dude-diff", checkout, base}
+// Where the beforeStop hook leaves the final diff, under $LUX_ARTIFACTS:
+// dude's own, never listed as a file for people.
+const (
+	finalDiffDir  = ".dude-final-diff"
+	finalDiffFile = "diff.patch"
+)
+
+// FinalDiffPath is the final diff's artifact path, as lux lists it.
+const FinalDiffPath = "/.lux/artifacts/" + finalDiffDir + "/" + finalDiffFile
+
+// diffCommand is the command that prints (dest "-") or saves (dest
+// "artifacts") the diff of each repository, given as name → the commit or
+// branch it started from.
+func diffCommand(dest string, bases map[string]string) []string {
+	cmd := []string{"sh", "-c", diffScript, "dude-diff", dest}
+	for _, name := range slices.Sorted(maps.Keys(bases)) {
+		cmd = append(cmd, name, RepoPath(name), bases[name])
+	}
+	return cmd
+}
+
+// diffChecksum identifies what diffScript printed — every repository's
+// name, base and diff — so an identical read is known without parsing it.
+func diffChecksum(text string) string {
+	sum := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(sum[:])
+}
+
+// diffSection is one repository's part of what diffScript printed.
+type diffSection struct {
+	Repo, Base, Text string
+}
+
+// splitDiff splits diffScript's output into its repositories' sections.
+func splitDiff(text string) []diffSection {
+	var out []diffSection
+	for _, part := range strings.Split("\n"+text, "\n# dude-diff ")[1:] {
+		head, body, _ := strings.Cut(part, "\n")
+		repo, base, _ := strings.Cut(head, " ")
+		out = append(out, diffSection{Repo: repo, Base: base, Text: body})
+	}
+	return out
+}
+
+// parseRunDiff reads diffScript's output into a Run's diff: its files —
+// each path prefixed with its repository when there are several — against
+// the first repository's base, and a checksum of it all, which is how a
+// read identical to the last is known before anything else is done.
+func parseRunDiff(text string) RunDiff {
+	diff := RunDiff{Files: []DiffFile{}, Checksum: diffChecksum(text)}
+	sections := splitDiff(text)
+	for i, sec := range sections {
+		if i == 0 {
+			diff.Base = sec.Base
+		}
+		for _, f := range ParseDiff(sec.Text) {
+			if len(sections) > 1 {
+				f.Path = sec.Repo + "/" + f.Path
+			}
+			diff.Files = append(diff.Files, f)
+		}
+	}
+	return diff
 }

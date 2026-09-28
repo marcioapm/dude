@@ -53,9 +53,10 @@ type Syncer struct {
 	// DUDE_IDLE_AFTER; finer than the policy's minutes, for tests). Zero
 	// takes delivery.DefaultPolicy's.
 	ParkAfter, IdleAfter time.Duration
-	// How soon after an edit a working Run's live diff is read, and how
-	// often besides (DUDE_DIFF_EVERY); zero takes the defaults.
-	DiffDelay, DiffEvery time.Duration
+	// How soon after an edit a Run's live diff is read, how often while its
+	// agent works (DUDE_DIFF_EVERY), and how often once several reads found
+	// nothing new; zero takes the defaults.
+	DiffDelay, DiffEvery, DiffSlow time.Duration
 	// The hourly rate of the machine a Run runs on, recorded with each Run
 	// when it is submitted (DUDE_MACHINE_USD_PER_HOUR); zero records none.
 	MachineUSDPerHour float64
@@ -64,6 +65,8 @@ type Syncer struct {
 	// Run's cursor, so two must never run for the same Run.
 	mu        sync.Mutex
 	following map[string]*follower
+	// What each Run's live diff last was (livediff.go).
+	diffs map[string]*diffState
 }
 
 // follower is one goroutine reading a Run's output. A pointer, so a
@@ -503,11 +506,13 @@ func (s *Syncer) follow(r phaseRun) {
 	mine := &follower{cancel: cancel, poke: make(chan struct{}, 1)}
 	s.following[r.ID] = mine
 	// The live diff is read for as long as the Run's output is followed.
-	delay, every := s.diffTiming()
-	go watchDiff(ctx, mine.poke, delay, every, func(ctx context.Context) {
-		if err := s.refreshDiff(ctx, r); err != nil && ctx.Err() == nil {
+	delay, every, slow := s.diffTimings()
+	go watchDiff(ctx, mine.poke, delay, every, slow, func(ctx context.Context, periodic bool) bool {
+		changed, err := s.readDiff(ctx, r, periodic)
+		if err != nil && ctx.Err() == nil {
 			s.Log.Debug("reading the live diff failed", "run", r.ID, "error", err)
 		}
+		return changed
 	})
 	go func() {
 		defer func() {
@@ -516,6 +521,7 @@ func (s *Syncer) follow(r phaseRun) {
 			// after this one was told to stop.
 			if s.following[r.ID] == mine {
 				delete(s.following, r.ID)
+				delete(s.diffs, r.ID)
 			}
 			s.mu.Unlock()
 			cancel()
@@ -672,9 +678,6 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 		}
 	}
 
-	// What the agent's checkout held, once more before it stops: the diff
-	// that stays with the Run.
-	s.lastDiff(ctx, r)
 	// Stopped rather than cancelled: the workspace and the agent's session
 	// are kept, so a person can still look at or resume a finished phase.
 	if err := s.ask(ctx, r, s.Lux.Stop); err != nil {

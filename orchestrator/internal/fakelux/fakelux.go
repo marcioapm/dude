@@ -94,6 +94,8 @@ type Run struct {
 	Interrupted int
 	// Forgotten: lux lost it. Open streams drop, as lux's connection would.
 	Forgotten bool
+	// What was asked of it, in order: "exec", "stop", "cancel".
+	Calls []string
 
 	// Starts of the Run, as lux lists them; the last is the current one.
 	placements []*placement
@@ -229,6 +231,16 @@ func (s *Server) Runs() []*Run {
 		out = append(out, s.runs[fmt.Sprintf("lrun_%d", i)])
 	}
 	return out
+}
+
+// CallsOf is what was asked of a Run, in order: "exec", "stop", "cancel".
+func (s *Server) CallsOf(id string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		return slices.Clone(run.Calls)
+	}
+	return nil
 }
 
 // Crash ends a Run's agent as a dead container would.
@@ -484,7 +496,10 @@ func chunks(s string, n int) []string {
 }
 
 // Callers hold s.mu.
-func (s *Server) setState(run *Run, state string) {
+func (s *Server) setState(run *Run, state string) { s.setStateWith(run, state, "") }
+
+// setStateWith records a state with lux's reason for it. Callers hold s.mu.
+func (s *Server) setStateWith(run *Run, state, reason string) {
 	run.State = state
 	if state == "running" && (len(run.placements) == 0 || run.placements[len(run.placements)-1].Epoch != run.Epoch) {
 		now := time.Now()
@@ -493,7 +508,11 @@ func (s *Server) setState(run *Run, state string) {
 	if lux.Terminal(state) {
 		s.exited(run)
 	}
-	s.luxEvent(run, "state", map[string]any{"state": state})
+	data := map[string]any{"state": state}
+	if reason != "" {
+		data["reason"] = reason
+	}
+	s.luxEvent(run, "state", data)
 }
 
 // exited is the container going away: lux collects what the agent put in
@@ -831,9 +850,11 @@ func (s *Server) stop(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	run.Calls = append(run.Calls, "stop")
 	run.Stopped++
 	run.busy = false
 	if run.State == "running" {
+		s.beforeStop(run)
 		// As lux does: stopping at once, stopped once the container has
 		// gone — a moment later, on the stream.
 		s.setState(run, "stopping")
@@ -856,7 +877,9 @@ func (s *Server) cancel(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	run.Calls = append(run.Calls, "cancel")
 	run.Cancelled = true
+	s.beforeStop(run)
 	if run.State != "cancelled" {
 		s.setState(run, "cancelled")
 	}

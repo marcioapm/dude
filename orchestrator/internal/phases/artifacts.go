@@ -124,8 +124,24 @@ func (a *Artifacts) collect(ctx context.Context, r dueRun) error {
 		}
 		ready = append(ready, art)
 	}
+	// The final diff the beforeStop hook left is dude's own: recorded as
+	// the Run's diff, never listed as a file for people. The latest exit's.
+	var final *lux.Artifact
+	files := ready[:0]
+	for _, art := range ready {
+		if art.Path != FinalDiffPath {
+			files = append(files, art)
+		} else if final == nil || art.Epoch > final.Epoch {
+			final = &art
+		}
+	}
+	if final != nil {
+		if err := a.recordFinalDiff(ctx, r, *final); err != nil {
+			return a.later(ctx, r, err)
+		}
+	}
 	return a.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		for _, art := range ready {
+		for _, art := range files {
 			if err := a.record(ctx, tx, r, art); err != nil {
 				return err
 			}

@@ -7,6 +7,8 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -54,8 +56,9 @@ func TestAWorkingAgentsUncommittedEditsAreItsLiveDiff(t *testing.T) {
 	// Announced once, with the same diff; a quiet agent read again is not
 	// announced again.
 	w.until("the event", func() bool {
-		return w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.diff.updated'
-			AND jsonb_array_length(payload->'files') = 2 AND payload->>'base' = $2`, runID, base) == 1
+		return w.count(`SELECT count(*) FROM events e JOIN run_diffs d ON d.run_id = e.run_id
+			WHERE e.run_id = $1 AND e.event_type = 'run.diff.updated'
+			AND jsonb_array_length(e.payload->'files') = 2 AND e.payload->>'checksum' = d.checksum`, runID) == 1
 	})
 	// Read every 20ms meanwhile.
 	time.Sleep(200 * time.Millisecond)
@@ -70,8 +73,93 @@ func TestAWorkingAgentsUncommittedEditsAreItsLiveDiff(t *testing.T) {
 	w.until("the Run to end", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'aborted'`, runID) == 1
 	})
-	if n := w.count(`SELECT count(*) FROM run_diffs WHERE run_id = $1 AND jsonb_array_length(files) = 2`, runID); n != 1 {
-		t.Error("the last diff was not kept")
+	w.until("the final diff, left by the hook", func() bool {
+		return w.count(`SELECT count(*) FROM run_diffs WHERE run_id = $1 AND jsonb_array_length(files) = 2 AND final`, runID) == 1
+	})
+	// The event is a summary: which files and how much, never their lines.
+	var summary string
+	_ = w.owner.QueryRow(context.Background(), `SELECT payload::text FROM events WHERE run_id = $1 AND event_type = 'run.diff.updated'
+		ORDER BY cursor LIMIT 1`, runID).Scan(&summary)
+	if strings.Contains(summary, "hunks") || !strings.Contains(summary, `"checksum"`) || !strings.Contains(summary, `"additions": 2`) {
+		t.Errorf("event payload = %s", summary)
+	}
+}
+
+// Every stop lux can see coming runs the Run's beforeStop hook, which
+// leaves the checkout's final diff for the artifact collector: dude's own
+// stops — a finished phase, a person's pause, a park, an abort — and lux's
+// own timeout. One mechanism: dude never reads the diff itself before a
+// stop. The live reads are held off here (an hour), so only the hook can
+// know the agent's edit.
+func TestEveryStopLeavesTheFinalDiffThroughLuxsBeforeStopHook(t *testing.T) {
+	cases := []struct {
+		name  string
+		agent fakelux.Behaviour
+		setup func(w *world)
+		stop  func(w *world, runID, luxID string)
+	}{
+		{name: "finished",
+			agent: fakelux.Behaviour{Reply: "Done.", Edits: map[string]string{"a.md": "a\n"}},
+			stop:  func(*world, string, string) {}},
+		{name: "paused by a person",
+			agent: fakelux.Behaviour{Hang: true, Edits: map[string]string{"a.md": "a\n"}},
+			stop: func(w *world, runID, _ string) {
+				mustExec(w.t, w.owner, `UPDATE runs SET control = 'pause_graceful' WHERE id = $1`, runID)
+			}},
+		{name: "parked when quiet",
+			agent: fakelux.Behaviour{Hang: true, Edits: map[string]string{"a.md": "a\n"}},
+			setup: func(w *world) { w.syncer.IdleAfter = 300 * time.Millisecond },
+			stop:  func(*world, string, string) {}},
+		{name: "aborted",
+			agent: fakelux.Behaviour{Hang: true, Edits: map[string]string{"a.md": "a\n"}},
+			stop: func(w *world, runID, _ string) {
+				if status, body := w.call("/internal/runs/"+runID+"/abort", map[string]any{}); status != 200 {
+					w.t.Fatalf("abort: %d %v", status, body)
+				}
+			}},
+		{name: "timed out by lux",
+			agent: fakelux.Behaviour{Hang: true, Edits: map[string]string{"a.md": "a\n"}},
+			stop:  func(w *world, _, luxID string) { w.lux.Timeout(luxID) }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.syncer.DiffDelay, w.syncer.DiffEvery = time.Hour, time.Hour
+			w.lux.Workspaces = t.TempDir()
+			if c.setup != nil {
+				c.setup(w)
+			}
+			w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+				if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
+					return fakelux.Behaviour{Hang: true}
+				}
+				return c.agent
+			}
+			wi := w.task()
+			w.deliver(wi)
+			var runID, luxID string
+			w.until("the implementer to be working", func() bool {
+				_ = w.owner.QueryRow(context.Background(), `SELECT id, COALESCE(lux_run_id, '') FROM runs
+					WHERE task_id = $1 AND phase = 'implement' AND agent_busy_at IS NOT NULL`, wi).Scan(&runID, &luxID)
+				return luxID != ""
+			})
+			c.stop(w, runID, luxID)
+			w.until("the final diff", func() bool {
+				return w.count(`SELECT count(*) FROM run_diffs WHERE run_id = $1 AND final
+					AND files @> '[{"path": "a.md", "status": "A", "additions": 1}]'`, runID) == 1
+			})
+			if calls := w.lux.CallsOf(luxID); slices.Contains(calls, "exec") {
+				t.Errorf("dude read the diff itself: %v", calls)
+			}
+			// Announced as a summary, and never listed as a file for people.
+			if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.diff.updated'
+				AND (payload->>'final')::boolean`, runID); n != 1 {
+				t.Errorf("%d final diff events", n)
+			}
+			if n := w.count(`SELECT count(*) FROM artifacts WHERE run_id = $1`, runID); n != 0 {
+				t.Errorf("the final diff was recorded as %d artifacts", n)
+			}
+		})
 	}
 }
 
