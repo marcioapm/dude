@@ -1,11 +1,12 @@
 /**
- * The organization's settings: for now, its GitHub connection — the one
- * thing every project's pull requests depend on, and the one most often
- * wrong in a way nobody notices until an agent's work cannot land.
+ * The organization's settings, for its admins: its GitHub connection, and
+ * the defaults every project starts from — each agent role (a sub-page of
+ * Agents in the menu) and delivery. A project changes any of them for
+ * itself in its own settings.
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Breadcrumb } from "@dude/design-system/components";
+import { AgentAvatar, SettingRow, SettingsHeader, SettingsNote, SettingsSection } from "@dude/design-system/components";
 import {
   Badge,
   Button,
@@ -16,14 +17,76 @@ import {
   CardHeader,
   Input,
   KeyValueList,
-  Page,
-  PageHeader,
   Spinner,
 } from "@dude/design-system/primitives";
 import type { ApiClient, ForgeConnection } from "../api/client.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
+import { settingsPage } from "../settings.ts";
+import { agentsNav, deliveryNav, isRole, SettingsFrame, useSettings } from "./SettingsFrame.tsx";
+import { DeliveryPage, RolePage } from "./settingsPages.tsx";
 
-export function OrganizationSettingsScreen({ client }: { client: ApiClient }) {
+// The first is where the screen opens: GitHub, what a new organization sets up first.
+const PAGES = ["github", "general", "implementer", "reviewer", "fixer", "simplifier", "qa_browser", "delivery"] as const;
+
+export interface OrganizationSettingsScreenProps {
+  client: ApiClient;
+  page?: string | undefined;
+  onPage: (page: string) => void;
+  onOpenRun?: ((runId: string) => void) | undefined;
+}
+
+export function OrganizationSettingsScreen({ client, page: given, onPage, onOpenRun }: OrganizationSettingsScreenProps) {
+  const page = settingsPage(given, PAGES);
+  const { scope, problem } = useSettings(client, () => client.organizationSettings(), (p) => client.updateOrganizationSettings(p));
+  const settings = scope?.settings;
+  return (
+    <SettingsFrame
+      testId="org-settings"
+      loading={!scope}
+      problem={problem}
+      page={page}
+      onPage={onPage}
+      scope={{ title: settings?.organization.name ?? "", subtitle: "Organisation settings", leading: <AgentAvatar role="orchestrator" size="lg" /> }}
+      items={
+        settings
+          ? [
+              { id: "general", label: "General", icon: "settings" },
+              { id: "github", label: "GitHub", icon: "git-branch" },
+              agentsNav(settings),
+              deliveryNav(settings),
+            ]
+          : []
+      }
+    >
+      {scope ? (
+        <>
+          <SettingsNote icon="info">
+            Organisation admins only. Every project starts from these; a project’s admins can change them for their project.
+          </SettingsNote>
+          {page === "general" ? (
+            <>
+              <SettingsHeader title="General" />
+              <SettingsSection title="Organisation">
+                <SettingRow label="Name" help="How dude names this organisation, and what “From …” says in a project’s settings.">
+                  <span data-testid="org-name">{scope.settings.organization.name}</span>
+                </SettingRow>
+              </SettingsSection>
+            </>
+          ) : page === "github" ? (
+            <GitHubPage client={client} />
+          ) : page === "delivery" ? (
+            <DeliveryPage scope={scope} />
+          ) : isRole(page) ? (
+            <RolePage key={page} scope={scope} role={page} onOpenRun={onOpenRun} />
+          ) : null}
+        </>
+      ) : null}
+    </SettingsFrame>
+  );
+}
+
+/** Where every project's pull requests are opened — the one thing most often wrong in a way nobody notices until an agent's work cannot land. */
+function GitHubPage({ client }: { client: ApiClient }) {
   const [connection, setConnection] = useState<ForgeConnection | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
@@ -64,9 +127,8 @@ export function OrganizationSettingsScreen({ client }: { client: ApiClient }) {
   const webhookUrl = connection.connected ? `${window.location.origin}${connection.webhookPath}` : null;
 
   return (
-    <Page data-testid="org-settings">
-      <PageHeader breadcrumb={<Breadcrumb items={[{ id: "org", label: "Organization" }]} />} title="Settings"
-        description="For every project: where pull requests are opened." />
+    <>
+      <SettingsHeader title="GitHub" description="Where every project’s pull requests are opened." />
       <Card>
         <CardHeader
           title="GitHub"
@@ -111,7 +173,7 @@ export function OrganizationSettingsScreen({ client }: { client: ApiClient }) {
         }}
       />
       ) : null}
-    </Page>
+    </>
   );
 }
 

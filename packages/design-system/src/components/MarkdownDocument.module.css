@@ -1,0 +1,114 @@
+/*
+ * A document that reads rendered and edits as source. At rest it is a
+ * region told apart by shade (chrome), no frame; editing, it is a field:
+ * the surface, and the focus ring that says so.
+ */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--ds-color-chrome);
+  border-radius: var(--ds-radius-control);
+}
+.editing {
+  background: var(--ds-color-field-bg);
+  box-shadow:
+    0 0 0 1px var(--ds-color-accent),
+    0 0 0 var(--ds-focus-ring-width) var(--ds-color-selection);
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+  min-height: var(--ds-size-control-lg);
+  padding: var(--ds-space-6) var(--ds-space-8) var(--ds-space-6) var(--ds-space-16);
+}
+.counts,
+.meta {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.meta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+}
+.actions {
+  display: inline-flex;
+  gap: var(--ds-space-6);
+  margin-left: auto;
+}
+
+.view {
+  padding: var(--ds-space-8) var(--ds-space-32) var(--ds-space-32);
+}
+.empty {
+  margin: 0;
+  color: var(--ds-color-text-muted);
+}
+
+/* The source: highlighted spans under a transparent textarea, one grid
+   cell, the same metrics, so the caret sits on the text it edits. */
+.source {
+  display: grid;
+}
+.highlight,
+.textarea {
+  grid-area: 1 / 1;
+  margin: 0;
+  padding: var(--ds-space-12) var(--ds-space-32) var(--ds-space-32);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-mono);
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 2;
+  border: 0;
+}
+.highlight {
+  color: var(--ds-color-text-primary);
+  pointer-events: none;
+}
+.textarea {
+  resize: none;
+  overflow: hidden;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--ds-color-text-strong);
+  outline: none;
+  min-height: 12em;
+}
+.textarea::selection {
+  background: var(--ds-color-selection);
+  color: transparent;
+}
+
+.headingMark {
+  color: var(--ds-color-accent-text);
+}
+.heading,
+.bold {
+  color: var(--ds-color-text-strong);
+  font-weight: var(--ds-weight-semibold);
+}
+.listMark {
+  color: var(--ds-role-reviewer-fg);
+}
+.code {
+  color: var(--ds-role-implementer-fg);
+}
+.fence,
+.quote {
+  color: var(--ds-color-text-muted);
+}
+.quote {
+  font-style: italic;
+}
+.variable {
+  color: var(--ds-color-accent-text);
+  background: var(--ds-color-accent-subtle);
+  border-radius: var(--ds-radius-mark);
+}
