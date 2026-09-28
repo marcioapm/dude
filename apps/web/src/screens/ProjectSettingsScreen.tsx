@@ -6,7 +6,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { SettingsHeader, SettingsNote, TextButton } from "@dude/design-system/components";
+import { ProjectAvatar, SettingsHeader, SettingsNote, TextButton } from "@dude/design-system/components";
 import {
   Button,
   Callout,
@@ -32,6 +32,7 @@ import { settingsPage } from "../settings.ts";
 import { SETTINGS_ROLES } from "@dude/domain";
 import { agentsNav, deliveryNav, isRole, SettingsFrame, useSettings } from "./SettingsFrame.tsx";
 import { DeliveryPage, RolePage } from "./settingsPages.tsx";
+import { FacePicker } from "./FacePicker.tsx";
 
 // The first is where the screen opens: a new project needs its repositories first.
 const PAGES = ["repositories", "general", ...SETTINGS_ROLES, "delivery"] as const;
@@ -157,6 +158,7 @@ function GeneralTab({ client, project, canEdit, onSaved }: TabProps) {
   const [name, setName] = useState(project.name);
   const [image, setImage] = useState(project.runtimeImage ?? "");
   const { busy, problem, save } = useSave();
+  const face = useSave();
   const dirty = name.trim() !== project.name || image.trim() !== (project.runtimeImage ?? "");
   return (
     <form
@@ -170,6 +172,16 @@ function GeneralTab({ client, project, canEdit, onSaved }: TabProps) {
     >
       <fieldset disabled={!canEdit} className="plainFieldset">
       <FormStack>
+        <FacePicker
+          testId="project-image"
+          face={<ProjectAvatar project={project} size={56} data-testid="project-face" />}
+          hasImage={Boolean(project.imageUrl)}
+          busy={face.busy}
+          disabled={!canEdit}
+          onPick={(picked) => void face.save(async () => client.setProjectImage(project.id, await picked), onSaved, "Image updated")}
+          onRemove={() => void face.save(() => client.setProjectImage(project.id, null), onSaved, "Image removed")}
+        />
+        {face.problem ? <Callout tone="danger">{face.problem}</Callout> : null}
         <Input label="Name" value={name} required maxLength={200} onChange={(e) => setName(e.target.value)} />
         <Input label="Slug" value={project.slug} mono disabled hint="Fixed: it names the project in paths and keys." />
         <Input

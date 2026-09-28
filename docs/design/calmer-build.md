@@ -27,8 +27,9 @@ like the existing ones (`ENABLE` + `FORCE ROW LEVEL SECURITY`, policy on
 
 ### People (owned by the people track)
 - Table `people` (`id` text pk `per_…`, `organization_id`, `name`, `email`
-  citext unique per org, `role` text check in (`admin`,`member`), `photo_url`
-  text null, `last_seen_at` timestamptz null, `created_at`,
+  citext unique per org, `role` text check in (`admin`,`member`), a photo
+  (`photo_key` in the `DUDE_S3_BUCKET`, served under `photo_token`; or an
+  https `photo_url`), `last_seen_at` timestamptz null, `created_at`,
   `removed_at` null). `api_keys` gains `person_id` → people. A migration
   backfills one person per existing user key (name from the key's name).
 - Every API response that names a person uses the shape

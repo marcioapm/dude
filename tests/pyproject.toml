@@ -15,6 +15,7 @@ dependencies = [
     # The browser suites drive the system Chrome (see conftest.py).
     "playwright>=1.63",
     "pytest-playwright>=0.9",
+    "boto3>=1.40",
 ]
 
 [tool.pytest.ini_options]

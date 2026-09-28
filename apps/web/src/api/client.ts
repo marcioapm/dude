@@ -275,14 +275,16 @@ export class ApiClient {
 
   /** A request that throws ApiError for a refusal; the caller reads the body. */
   async #fetch(method: string, path: string, body?: unknown): Promise<Response> {
+    // A Blob goes as itself (an image upload); anything else as JSON.
+    const raw = body instanceof Blob;
     const res = await fetch(`${this.#baseUrl}${path}`, {
       method,
       headers: {
         authorization: `Bearer ${this.#apiKey}`,
-        "content-type": "application/json",
+        "content-type": raw ? body.type : "application/json",
         ...(this.#where ? { "x-dude-where": this.#where } : {}),
       },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      ...(body === undefined ? {} : { body: raw ? body : JSON.stringify(body) }),
     });
     if (!res.ok) {
       const text = await res.text();
@@ -295,6 +297,10 @@ export class ApiClient {
       );
     }
     return res;
+  }
+
+  #upload<T>(method: string, path: string, body: Blob): Promise<T> {
+    return this.#request(method, path, body);
   }
 
   async #request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -452,6 +458,11 @@ export class ApiClient {
     return this.#request("PATCH", "/v1/me", changes);
   }
 
+  /** Your photo: the image itself, stored and served back by the backend. */
+  uploadMyPhoto(image: Blob): Promise<{ person: Member }> {
+    return this.#upload("PUT", "/v1/me/photo", image);
+  }
+
   listMyKeys(): Promise<{ keys: ApiKeyInfo[] }> {
     return this.#request("GET", "/v1/me/keys");
   }
@@ -518,6 +529,11 @@ export class ApiClient {
       agentModels: Project["agentModels"]; deliveryPolicy: DeliveryPolicy }>,
   ): Promise<ProjectDetail> {
     return this.#request("PATCH", `/v1/projects/${id}`, changes);
+  }
+
+  /** A project's face: an image, or null for its initials again. */
+  setProjectImage(id: string, image: Blob | null): Promise<ProjectDetail> {
+    return image ? this.#upload("PUT", `/v1/projects/${id}/image`, image) : this.#request("DELETE", `/v1/projects/${id}/image`);
   }
 
   addRepository(projectId: string, repo: { name: string; url: string; defaultBranch?: string;

@@ -198,6 +198,18 @@ def test_project_settings_manage_repositories_and_delivery(
     assert project["deliveryPolicy"] == {"requiredReviewers": ["correctness", "security"]}
     assert console_errors == []
 
+    # Its face: an image picked in General, resized in the browser, stored,
+    # and shown wherever the project is, the sidebar included.
+    page.locator("[data-settings-nav='general']").click()
+    png = bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+                        "0000000d49444154789c63f8cfc0f01f00050001ff89993d1d0000000049454e44ae426082")
+    page.get_by_test_id("project-image-file").set_input_files({"name": "logo.png", "mimeType": "image/png", "buffer": png})
+    expect(toast(page, "Image updated")).to_be_visible()
+    expect(page.get_by_test_id("project-face").locator("img")).to_have_count(1)
+    expect(page.locator(f"[data-nav-key='project:{forge_project['id']}'] img")).to_have_count(1)
+    assert client.get(f"/v1/projects/{forge_project['id']}").json()["imageUrl"].startswith("/v1/projects/")
+    assert console_errors == []
+
 
 def test_a_new_project_starts_from_the_empty_screen(page: Page, web_url: str, client: ApiClient, org: dict, console_errors: list):
     """An organization with nothing yet is offered a project, not told to use the API."""

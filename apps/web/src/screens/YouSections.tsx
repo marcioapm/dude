@@ -2,12 +2,10 @@
  * Your profile and your keys, in your settings: how teammates see you
  * (name, photo), and the keys that act as you (the CLI, scripts).
  *
- * A photo is resized here, in the browser, to a small square JPEG and sent
- * as a data: URL — dude keeps it in the database until there is file
- * storage, so it must be small.
+ * A photo is resized in the browser and uploaded as an image (FacePicker).
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Duration, PersonAvatar } from "@dude/design-system/components";
 import {
   Button,
@@ -29,28 +27,11 @@ import {
 } from "@dude/design-system/primitives";
 import type { ApiClient, ApiKeyInfo, Member } from "../api/client.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
-
-/** The photo's side, in pixels: twice the largest face drawn, for sharp screens. */
-const PHOTO_PX = 160;
-
-/** A picked image as a small square JPEG data: URL, cropped to its centre. */
-export async function squarePhoto(file: File, px = PHOTO_PX): Promise<string> {
-  const bitmap = await createImageBitmap(file);
-  const side = Math.min(bitmap.width, bitmap.height);
-  const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = px;
-  canvas.getContext("2d")!.drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, px, px);
-  bitmap.close();
-  return canvas.toDataURL("image/jpeg", 0.85);
-}
+import { FacePicker } from "./FacePicker.tsx";
 
 export function ProfileSection({ client, me, onChanged }: { client: ApiClient; me: Member; onChanged: () => void }) {
   const [name, setName] = useState(me.name);
-  const file = useRef<HTMLInputElement>(null);
   const { busy, problem, save } = useSave();
-
-  const setPhoto = (photoUrl: string | null) =>
-    void save(() => client.updateMe({ photoUrl }), onChanged, photoUrl ? "Photo updated" : "Photo removed");
 
   return (
     <Card data-testid="profile">
@@ -58,23 +39,14 @@ export function ProfileSection({ client, me, onChanged }: { client: ApiClient; m
       <CardBody>
         <FormStack>
           <p className="muted">How your teammates see you, on tasks and in chats.</p>
-          <div className="profilePhoto">
-            <PersonAvatar person={me} size={56} ring={false} data-testid="profile-photo" />
-            <Button variant="secondary" disabled={busy} onClick={() => file.current?.click()} data-testid="photo-upload">
-              Upload…
-            </Button>
-            {me.photoUrl ? (
-              <Button variant="quiet" disabled={busy} onClick={() => setPhoto(null)} data-testid="photo-remove">
-                Use initials
-              </Button>
-            ) : null}
-            <input ref={file} type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden data-testid="photo-file"
-              onChange={(e) => {
-                const picked = e.target.files?.[0];
-                e.target.value = "";
-                if (picked) void save(async () => client.updateMe({ photoUrl: await squarePhoto(picked) }), onChanged, "Photo updated");
-              }} />
-          </div>
+          <FacePicker
+            testId="photo"
+            face={<PersonAvatar person={me} size={56} ring={false} data-testid="profile-photo" />}
+            hasImage={Boolean(me.photoUrl)}
+            busy={busy}
+            onPick={(image) => void save(async () => client.uploadMyPhoto(await image), onChanged, "Photo updated")}
+            onRemove={() => void save(() => client.updateMe({ photoUrl: null }), onChanged, "Photo removed")}
+          />
           <Input label="Name" value={name} onChange={(e) => setName(e.target.value)} data-testid="profile-name" />
           <KeyValueList items={[
             { label: "Email", value: me.email ?? "—" },

@@ -102,7 +102,8 @@ The assessment's blockers for a team, in the order they unblock each other:
    they work for.
 4. Presence: `last_seen_at` per person, touched at most once a minute by
    any request, pushed over the existing SSE stream. No Redis at this size.
-5. Profile photos and project images (S3-compatible storage, as artifacts).
+5. Profile photos and project images, in an S3 bucket (`DUDE_S3_*`), served
+   by the backend under a token.
 
 ## Phase 3 — projects, epics, settings
 
