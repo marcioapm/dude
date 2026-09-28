@@ -32,13 +32,14 @@ export interface MarkdownDocumentProps extends Omit<HTMLAttributes<HTMLDivElemen
  */
 function moveAlongToolbar(e: KeyboardEvent<HTMLElement>): number | null {
   if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return null;
-  const buttons = [...e.currentTarget.querySelectorAll<HTMLButtonElement>("button")];
+  const all = [...e.currentTarget.querySelectorAll<HTMLButtonElement>("button")];
+  const buttons = all.filter((b) => !b.disabled);
   const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
   if (at === -1) return null;
   e.preventDefault();
   const next = e.key === "Home" ? 0 : e.key === "End" ? buttons.length - 1 : (at + (e.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length;
   buttons[next]?.focus();
-  return next;
+  return all.indexOf(buttons[next]!);
 }
 
 /**
@@ -218,7 +219,12 @@ export function MarkdownDocument({
                 const moved = moveAlongToolbar(e);
                 if (moved !== null) setStop(moved);
               }}
-              ref={(bar) => bar?.querySelectorAll<HTMLButtonElement>("button").forEach((b, i) => (b.tabIndex = i === stop ? 0 : -1))}
+              ref={(bar) => {
+                // The stop, or the last button if the bar has since lost some.
+                const buttons = bar?.querySelectorAll<HTMLButtonElement>("button") ?? [];
+                const at = Math.min(stop, buttons.length - 1);
+                buttons.forEach((b, i) => (b.tabIndex = i === at ? 0 : -1));
+              }}
             >
               <IconButton size="sm" icon="heading" label="Heading" onClick={() => format("heading")} data-testid="markdown-heading" />
               <IconButton size="sm" icon="bold" label="Bold" onClick={() => format("bold")} data-testid="markdown-bold" />
