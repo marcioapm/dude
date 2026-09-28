@@ -22,6 +22,10 @@ CREATE TABLE run_diffs (
   checksum        text NOT NULL,
   -- Left by the beforeStop hook as the container stopped, not read live.
   final           boolean NOT NULL DEFAULT false,
+  -- The lux placement it is from. A final diff collected late never
+  -- replaces a resumed Run's live one, and a live read that lands as the
+  -- container stops never replaces its placement's final one.
+  epoch           integer NOT NULL DEFAULT 0,
   updated_at      timestamptz NOT NULL DEFAULT now()
 );
 
@@ -88,12 +92,15 @@ LANGUAGE sql STABLE AS $$
       AND e.payload->>'status' IN ('done', 'aborted', 'failed')
       AND (SELECT status FROM t) IN ('done', 'aborted', 'failed')),
   rm AS (SELECT m.* FROM runs r CROSS JOIN LATERAL run_metrics(r.id) m WHERE r.task_id = p_task),
+  -- An ask left unanswered until its Run ended was waited on until then (031).
   waits AS (
-    SELECT EXTRACT(EPOCH FROM (COALESCE(answered_at, CASE WHEN status = 'open' THEN now() END, asked_at) - asked_at)) AS s
-    FROM questions WHERE task_id = p_task
+    SELECT EXTRACT(EPOCH FROM (COALESCE(q.answered_at, CASE WHEN q.status = 'open' THEN now() END,
+                                        r.ended_at, q.asked_at) - q.asked_at)) AS s
+    FROM questions q LEFT JOIN runs r ON r.id = q.run_id WHERE q.task_id = p_task
     UNION ALL
-    SELECT EXTRACT(EPOCH FROM (COALESCE(decided_at, CASE WHEN status = 'pending' THEN now() END, created_at) - created_at))
-    FROM repository_requests WHERE task_id = p_task),
+    SELECT EXTRACT(EPOCH FROM (COALESCE(q.decided_at, CASE WHEN q.status = 'pending' THEN now() END,
+                                        r.ended_at, q.created_at) - q.created_at))
+    FROM repository_requests q LEFT JOIN runs r ON r.id = q.run_id WHERE q.task_id = p_task),
   spans AS (
     SELECT e.payload->>'status' AS status, e.occurred_at AS from_at,
            COALESCE(lead(e.occurred_at) OVER (ORDER BY e.cursor), now()) AS to_at

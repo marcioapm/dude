@@ -20,6 +20,12 @@ import type { ApiClient, Artifact } from "../api/client.ts";
 
 /** Past this, a text file is downloaded rather than shown: the tab would not survive it. */
 const PREVIEW_LIMIT = 2 * 1024 * 1024;
+/**
+ * Video and pages are shown from a blob — the content needs the key, which
+ * a <video src> cannot send — so the whole file is read first. Past this
+ * it is downloaded instead of held in the tab.
+ */
+const MEDIA_LIMIT = 64 * 1024 * 1024;
 
 /** The API lists every version, newest first: one file per name, its versions in that order. */
 export function filesOf(artifacts: readonly Artifact[]): GalleryFile[] {
@@ -109,8 +115,10 @@ function useThumbnails(client: ApiClient, files: readonly GalleryFile[]): Map<st
     void Promise.all(ids.split(",").map((id) => client.artifactContent(id).then((b) => [id, URL.createObjectURL(b)] as const, () => null)))
       .then((pairs) => {
         const found = pairs.filter((p): p is readonly [string, string] => p !== null);
+        // Gone before they came: freed at once, or they would never be.
+        if (!current) return found.forEach(([, u]) => URL.revokeObjectURL(u));
         made.push(...found.map(([, u]) => u));
-        if (current) setUrls(new Map(found));
+        setUrls(new Map(found));
       });
     return () => {
       current = false;
@@ -124,7 +132,7 @@ function useThumbnails(client: ApiClient, files: readonly GalleryFile[]): Map<st
 function Content({ client, version }: { client: ApiClient; version: FileVersion }) {
   const kind = artifactKind(version.contentType, version.name);
   const byUrl = kind === "image" || kind === "video" || kind === "html";
-  const previewable = kind !== "other" && (byUrl || version.sizeBytes <= PREVIEW_LIMIT);
+  const previewable = kind !== "other" && version.sizeBytes <= (byUrl ? MEDIA_LIMIT : PREVIEW_LIMIT);
   const [content, setContent] = useState<{ text?: string; url?: string; error?: string } | null>(null);
   useEffect(() => {
     if (!previewable) return;

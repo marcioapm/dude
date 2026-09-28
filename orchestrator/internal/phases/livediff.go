@@ -182,12 +182,14 @@ func (s *Syncer) readDiff(ctx context.Context, r phaseRun, periodic bool) (bool,
 	var luxState string
 	var working bool
 	var stored *string
+	var epoch int
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `SELECT r.base_shas, COALESCE(r.lux_state, ''),
 				r.status = 'running' AND r.agent_busy_at IS NOT NULL AND r.turn_done_at IS NULL AND r.waiting_since IS NULL,
 				-- A final diff is from a stop; after a resume the live one replaces it.
-				(SELECT d.checksum FROM run_diffs d WHERE d.run_id = r.id AND NOT d.final)
-			FROM runs r WHERE r.id = $1`, r.ID).Scan(&refs, &luxState, &working, &stored)
+				(SELECT d.checksum FROM run_diffs d WHERE d.run_id = r.id AND NOT d.final),
+				r.agent_session_epoch
+			FROM runs r WHERE r.id = $1`, r.ID).Scan(&refs, &luxState, &working, &stored, &epoch)
 	}); err != nil {
 		return false, err
 	}
@@ -214,24 +216,24 @@ func (s *Syncer) readDiff(ctx context.Context, r phaseRun, periodic bool) (bool,
 	if sum == st.checksum {
 		return false, nil // the same as the last: not parsed, not written
 	}
-	changed, err := s.recordDiff(ctx, r, text, false)
-	if err == nil {
+	// The placement is the session's: until a resumed one reports its
+	// session, a read counts as the last one's and yields to its final diff.
+	changed, err := recordRunDiff(ctx, s.DB.InOrg, r.Org, r.ProjectID, r.TaskID, r.ID, text, epoch, false)
+	if changed {
 		st.checksum = sum
 	}
 	return changed, err
 }
 
-// recordDiff records what diffScript printed as the Run's diff, replacing
-// the last. Announced with a summary: which files, how, and how much; the
-// hunks are fetched from the API by whoever is looking.
-func (s *Syncer) recordDiff(ctx context.Context, r phaseRun, text string, final bool) (bool, error) {
-	return recordRunDiff(ctx, s.DB.InOrg, r.Org, r.ProjectID, r.TaskID, r.ID, text, final)
-}
-
 // inOrg is db.DB.InOrg, so the artifact collector can record too.
 type inOrg func(ctx context.Context, org string, fn func(pgx.Tx) error) error
 
-func recordRunDiff(ctx context.Context, in inOrg, org, projectID, taskID, runID, text string, final bool) (bool, error) {
+// recordRunDiff records what diffScript printed as the Run's diff, from lux
+// placement epoch, replacing the last unless that is newer: from a later
+// placement, or its placement's final diff where this is a live read.
+// Announced with a summary — which files, how, and how much; the hunks are
+// fetched from the API by whoever is looking.
+func recordRunDiff(ctx context.Context, in inOrg, org, projectID, taskID, runID, text string, epoch int, final bool) (bool, error) {
 	diff := parseRunDiff(text)
 	diff.Final = final
 	files, err := json.Marshal(diff.Files)
@@ -246,12 +248,14 @@ func recordRunDiff(ctx context.Context, in inOrg, org, projectID, taskID, runID,
 	err = in(ctx, org, func(tx pgx.Tx) error {
 		var at time.Time
 		// A final diff identical to the live one only marks it final.
-		err := tx.QueryRow(ctx, `INSERT INTO run_diffs (run_id, organization_id, base, files, checksum, final)
-			VALUES ($1, $2, $3, $4::jsonb, $5, $6)
+		err := tx.QueryRow(ctx, `INSERT INTO run_diffs (run_id, organization_id, base, files, checksum, final, epoch)
+			VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)
 			ON CONFLICT (run_id) DO UPDATE SET base = EXCLUDED.base, files = EXCLUDED.files,
-				checksum = EXCLUDED.checksum, final = EXCLUDED.final, updated_at = now()
-			WHERE run_diffs.checksum <> EXCLUDED.checksum OR run_diffs.final <> EXCLUDED.final
-			RETURNING updated_at`, runID, org, diff.Base, files, diff.Checksum, diff.Final).Scan(&at)
+				checksum = EXCLUDED.checksum, final = EXCLUDED.final, epoch = EXCLUDED.epoch, updated_at = now()
+			WHERE (run_diffs.checksum <> EXCLUDED.checksum OR run_diffs.final <> EXCLUDED.final)
+				AND (EXCLUDED.epoch > run_diffs.epoch
+					OR EXCLUDED.epoch = run_diffs.epoch AND (EXCLUDED.final OR NOT run_diffs.final))
+			RETURNING updated_at`, runID, org, diff.Base, files, diff.Checksum, diff.Final, epoch).Scan(&at)
 		if err == pgx.ErrNoRows {
 			return nil
 		}
@@ -300,6 +304,6 @@ func (a *Artifacts) recordFinalDiff(ctx context.Context, r dueRun, patches []lux
 			return err
 		}
 	}
-	_, err := recordRunDiff(ctx, a.DB.InOrg, r.Org, r.ProjectID, r.TaskID, r.ID, text.String(), true)
+	_, err := recordRunDiff(ctx, a.DB.InOrg, r.Org, r.ProjectID, r.TaskID, r.ID, text.String(), patches[0].Epoch, true)
 	return err
 }
