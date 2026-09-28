@@ -50,6 +50,16 @@ var tools = []tool{
 	define("create_task", "Record a piece of work you found that is outside your task — a bug, a "+
 		"follow-up, a part to split out — as a new task in this project. It is not started: a person reads it "+
 		"and decides. Say what and why in the goal.", creators, createTask),
+	define("search_memory", "Search what is known here: memories people and agents saved (facts, procedures, "+
+		"notes), and this project's tasks, epics and the project itself — by words and by meaning, best first. "+
+		"Search before you investigate something that may already be known, and before you remember something.",
+		nil, searchMemory),
+	define("get_memory", "Read one memory in full, by the id search_memory gave, with where it was learned "+
+		"and what it is about.", nil, getMemory),
+	define("remember", "Save something worth knowing next time, for every agent and person on this project: "+
+		"a fact that holds (\"the billing API paginates by cursor\"), a procedure that works, a trap and its way "+
+		"around. It is live at once, and marked as yours. Search first so you do not save it twice; do not save "+
+		"what the code or the task already says.", nil, remember),
 }
 
 // ---- list_tasks --------------------------------------------------------------

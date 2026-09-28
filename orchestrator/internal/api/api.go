@@ -26,6 +26,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/embeddings"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
@@ -49,6 +50,8 @@ type Server struct {
 	// pull request sync that reads one back after.
 	Forges delivery.Forges
 	PRs    *prs.Syncer
+	// Search by meaning for the memory pages; nil, by words alone.
+	Embedder embeddings.Embedder
 }
 
 func (s *Server) Handler() http.Handler {
@@ -88,6 +91,7 @@ func (s *Server) Handler() http.Handler {
 		return nil
 	}))
 	s.githubRoutes(mux)
+	s.memoryRoutes(mux)
 	// dude's own prompt for each role: what an organization that never
 	// edits runs, and where its first edit starts from.
 	mux.Handle("GET /internal/prompts/builtin", s.auth(func(w http.ResponseWriter, r *http.Request, _ string) error {
