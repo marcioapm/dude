@@ -103,6 +103,9 @@ type Run struct {
 	// What was asked of it, in order: "exec", "stop", "cancel".
 	Calls []string
 
+	// Its servers (servers.go).
+	servers []*server
+
 	// Starts of the Run, as lux lists them; the last is the current one.
 	placements []*placement
 	artifacts  []*artifact
@@ -128,6 +131,8 @@ type queuedInput struct{ text, requestID string }
 
 type placement struct {
 	Epoch int
+	// The host it ran on (host-<epoch>: each start is on another).
+	HostName string
 	// running, then exited.
 	State                                       string
 	WorkloadStartedAt, ExitedAt, SnapshotDoneAt *time.Time
@@ -190,6 +195,12 @@ type Server struct {
 	// Workspaces is where each Run's checkout is made; "" is the system's
 	// temporary directory.
 	Workspaces string
+	// How long a started server with a command takes to be ready; zero is
+	// 30ms.
+	ServerReadyAfter time.Duration
+	// The preview domain servers' URLs are under; "" gives them none, as a
+	// lux without previews configured.
+	PreviewDomain string
 }
 
 // New serves a fake lux. With decide nil, every Run plays dude's scripted
@@ -286,6 +297,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/runs/{id}/artifacts", s.listArtifacts)
 	mux.HandleFunc("GET /v1/artifacts/{aid}", s.downloadArtifact)
 	mux.HandleFunc("GET /v1/runs/{id}/exec", s.exec)
+	mux.HandleFunc("GET /v1/runs/{id}/servers", s.listServers)
+	mux.HandleFunc("POST /v1/runs/{id}/servers", s.addServer)
+	mux.HandleFunc("PUT /v1/runs/{id}/servers/{name}", s.putServer)
+	mux.HandleFunc("POST /v1/runs/{id}/servers/{name}/{action}", s.serverAction)
+	mux.HandleFunc("DELETE /v1/runs/{id}/servers/{name}", s.removeServer)
+	mux.HandleFunc("GET /v1/runs/{id}/servers/{name}/log", s.serverLog)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+s.Key {
 			writeErr(w, 401, "unauthorized", "invalid API key")
@@ -313,7 +330,12 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 	s.next++
 	run := &Run{ID: fmt.Sprintf("lrun_%d", s.next), Spec: raw, State: "submitted", Epoch: 1}
 	run.cond = sync.NewCond(&s.mu)
-	run.behavior = s.Decide(spec)
+	if generic(spec) {
+		run.behavior = Behaviour{}
+	} else {
+		run.behavior = s.Decide(spec)
+	}
+	s.specServers(run, spec)
 	s.runs[run.ID] = run
 	if k := r.Header.Get("Idempotency-Key"); k != "" {
 		s.byKey[k] = run.ID
@@ -333,12 +355,21 @@ func (s *Server) play(run *Run, spec map[string]any, resumed bool) {
 		s.setState(run, "failed")
 		return
 	}
+	if run.State == "cancelled" {
+		return // cancelled before it started
+	}
 	s.setState(run, "running")
 	if !resumed {
 		for _, repo := range specRepos(spec) {
 			s.luxEvent(run, "git.checkout", map[string]any{"repo": repo.Name, "ref": repo.Ref, "base": head(s.repoPath(repo.URL), repo.Ref)})
 		}
 		run.SessionID = fmt.Sprintf("ses_%s", run.ID)
+	}
+	// Every start of the Run starts its spec's servers.
+	s.placementStarted(run)
+	if generic(spec) {
+		// No agent: the workload (sleep infinity) runs until stopped.
+		return
 	}
 	// As lux's shim does: in the record stream, in order with the agent's
 	// own messages.
@@ -521,10 +552,12 @@ func (s *Server) setStateWith(run *Run, state, reason string) {
 	run.State = state
 	if state == "running" && (len(run.placements) == 0 || run.placements[len(run.placements)-1].Epoch != run.Epoch) {
 		now := time.Now()
-		run.placements = append(run.placements, &placement{Epoch: run.Epoch, State: "running", WorkloadStartedAt: &now})
+		run.placements = append(run.placements, &placement{Epoch: run.Epoch, HostName: fmt.Sprintf("host-%d", run.Epoch),
+			State: "running", WorkloadStartedAt: &now})
 	}
 	if lux.Terminal(state) {
 		s.exited(run)
+		s.placementEnded(run, state, reason)
 	}
 	data := map[string]any{"state": state}
 	if reason != "" {
@@ -604,11 +637,23 @@ func head(repo, ref string) string {
 
 func (s *Server) view(run *Run) map[string]any {
 	placements := []any{}
+	host := ""
 	for _, p := range run.placements {
-		placements = append(placements, map[string]any{"epoch": p.Epoch, "state": p.State,
+		placements = append(placements, map[string]any{"epoch": p.Epoch, "hostName": p.HostName, "state": p.State,
 			"workloadStartedAt": p.WorkloadStartedAt, "exitedAt": p.ExitedAt, "snapshotDoneAt": p.SnapshotDoneAt})
+		if p.Epoch == run.Epoch && p.ExitedAt == nil {
+			host = p.HostName
+		}
 	}
-	return map[string]any{"id": run.ID, "state": run.State, "epoch": run.Epoch, "sessionId": run.SessionID, "placements": placements}
+	return map[string]any{"id": run.ID, "state": run.State, "epoch": run.Epoch, "sessionId": run.SessionID,
+		"host": host, "placements": placements, "servers": s.serverViews(run)}
+}
+
+// generic: the spec's workload is a plain command, no agent (a branch
+// preview's sleep infinity).
+func generic(spec map[string]any) bool {
+	w, _ := spec["workload"].(map[string]any)
+	return w["adapter"] == "generic"
 }
 
 func (s *Server) listArtifacts(w http.ResponseWriter, r *http.Request) {
