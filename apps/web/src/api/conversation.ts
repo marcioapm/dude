@@ -90,14 +90,25 @@ export interface UsageTurn {
   at: string;
 }
 
+/**
+ * Who a person's act came from: the ledger's actor id (an API key until
+ * people are records), and their name when the event carried one
+ * (`actor` as a PersonRef, once the people work lands). The screen names
+ * the rest from the organisation's people.
+ */
+export interface ActorRef {
+  id: string;
+  name: string | null;
+}
+
 export interface HumanTurn {
   kind: "human";
   id: string;
   /** Steering interrupts; an answer unblocks. They read differently. */
   intent: Extract<HumanIntent, "steer" | "answer">;
+  /** Who said it. */
+  by: ActorRef | null;
   text: string;
-  /** Who: the person the ledger's key resolves to, when it does. */
-  by: string | undefined;
   at: string;
   /** When the agent took it. A steer is queued until then (null); an answer is delivered as given. */
   deliveredAt: string | null;
@@ -167,6 +178,10 @@ export interface EndedTurn {
   outcome: "failed" | "aborted";
   text: string;
   at: string;
+  /** Who stopped it, for an abort a person asked for. */
+  by: ActorRef | null;
+  /** The reason given, when there was one. */
+  why: string | null;
 }
 
 export type Turn =
@@ -449,8 +464,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           kind: "human",
           id: event.eventId,
           intent: "steer",
+          by: humanActor(event),
           text: String(payload.text ?? ""),
-          by: event.actor.name,
           at: event.occurredAt,
           deliveredAt: null,
         };
@@ -488,8 +503,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           kind: "human",
           id: event.eventId,
           intent: "answer",
+          by: humanActor(event),
           text: String(payload.answer ?? ""),
-          by: event.actor.name,
           at: event.occurredAt,
           deliveredAt: typeof payload.directiveId === "string" ? null : event.occurredAt,
         };
@@ -516,8 +531,10 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         const why = String((failed ? payload.error : payload.reason) ?? "").trim();
         turns.push({
           kind: "ended", id: event.eventId, outcome: failed ? "failed" : "aborted",
-          text: failed ? (why ? `Failed: ${why}` : "Failed.") : why ? `Aborted by a person: ${why}` : "Aborted by a person.",
+          text: failed ? (why ? `Failed: ${why}` : "Failed.") : why ? `Aborted: ${why}` : "Aborted.",
           at: event.occurredAt,
+          by: failed ? null : humanActor(event),
+          why: why || null,
         });
         state.activity = null;
         state.activeTool = null;
@@ -685,6 +702,23 @@ function withoutQuestion(text: string): string {
   const last = blocks[blocks.length - 1];
   if (!last || last.index === undefined) return text;
   return (text.slice(0, last.index) + text.slice(last.index + last[0].length)).trimEnd();
+}
+
+/**
+ * The person behind an event, when a person did it: their id, and their
+ * name if the event says it (a PersonRef `actor` from the API, or a
+ * `name` on the envelope's actor).
+ */
+export function humanActor(event: PersistedEvent): ActorRef | null {
+  const actor = event.actor as PersistedEvent["actor"] & { name?: unknown };
+  if (actor?.type !== "human" || !actor.id || actor.id === "unknown") return null;
+  return { id: actor.id, name: typeof actor.name === "string" && actor.name ? actor.name : null };
+}
+
+/** A person's name for an act: the one it came with, the organisation's, or null when unknown. */
+export function actorName(by: ActorRef | null, people: ReadonlyMap<string, string>): string | null {
+  if (!by) return null;
+  return by.name ?? people.get(by.id) ?? null;
 }
 
 function numberOf(value: unknown): number {

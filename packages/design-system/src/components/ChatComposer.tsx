@@ -38,11 +38,19 @@ export interface ChatComposerProps extends Omit<HTMLAttributes<HTMLFormElement>,
   /** Extra controls at the left of the action row (attach, templates…). */
   readonly leading?: ReactNode;
   readonly autoFocus?: boolean | undefined;
+  /** Who it is sent as: "Sent as Ana" in the action row, so a steer is never anonymous. */
+  readonly sentAs?: string | undefined;
+  /**
+   * Steer only: offer "interrupt now", which stops the current turn so
+   * the agent hears the steer at once. Off by default: a steer waits for
+   * the turn to end.
+   */
+  readonly canInterrupt?: boolean | undefined;
 }
 
 export type ComposerSubmission =
   | { readonly mode: "answer"; readonly questionId: string; readonly text: string }
-  | { readonly mode: "steer"; readonly text: string }
+  | { readonly mode: "steer"; readonly text: string; readonly interrupt: boolean }
   | { readonly mode: "prompt"; readonly text: string };
 
 const MODE_LABEL: Record<ComposerMode, string> = {
@@ -52,7 +60,7 @@ const MODE_LABEL: Record<ComposerMode, string> = {
 };
 const MODE_PLACEHOLDER: Record<ComposerMode, string> = {
   answer: "Type your answer…",
-  steer: "Instruction for the running agent — interrupts the current turn",
+  steer: "Steer the agent…",
   prompt: "Describe the task…",
 };
 
@@ -66,14 +74,15 @@ const MODE_PLACEHOLDER: Record<ComposerMode, string> = {
  *           button says "Answer" in the attention tone. Submitting
  *           unblocks the session.
  *
- *   steer   the session is running. The frame is accent-tinted, a line
- *           under the field says plainly that this interrupts the current
- *           turn, and the button says "Steer". Submitting is deliberate:
- *           Cmd/Ctrl+Enter, or the button — plain Enter inserts a newline,
- *           because an accidental interrupt costs a turn.
+ *   steer   the session is running. The frame is accent-tinted and the
+ *           button says "Steer". A steer waits for the agent's turn to
+ *           end, so sending one costs nothing: plain Enter sends it, as
+ *           in any chat. "Interrupt now" (off unless ticked) stops the
+ *           turn so it is heard at once — that is the costly one, and it
+ *           is a deliberate tick, not a key.
  *
- * In `answer` mode plain Enter submits: the agent is waiting, and speed is
- * the point. Shift+Enter always inserts a newline.
+ * Enter sends in both modes; Shift+Enter always inserts a newline. The
+ * action row says who it is sent as.
  */
 export function ChatComposer({
   mode: modeProp,
@@ -88,9 +97,12 @@ export function ChatComposer({
   onSubmit,
   leading,
   autoFocus,
+  sentAs,
+  canInterrupt,
   className,
   ...rest
 }: ChatComposerProps) {
+  const [interrupt, setInterrupt] = useState(false);
   const mode: ComposerMode = modeProp ?? (question ? "answer" : running ? "steer" : "prompt");
   const [internal, setInternal] = useState(defaultValue ?? "");
   const text = value ?? internal;
@@ -121,21 +133,19 @@ export function ChatComposer({
     const t = (override ?? text).trim();
     if (disabled || busy || t.length === 0) return;
     const submission: ComposerSubmission =
-      mode === "answer" && question ? { mode: "answer", questionId: question.id, text: t } : mode === "steer" ? { mode: "steer", text: t } : { mode: "prompt", text: t };
+      mode === "answer" && question ? { mode: "answer", questionId: question.id, text: t } : mode === "steer" ? { mode: "steer", text: t, interrupt } : { mode: "prompt", text: t };
     setBusy(true);
     try {
       await onSubmit(submission);
       setText("");
+      setInterrupt(false);
     } finally {
       setBusy(false);
     }
   };
 
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key !== "Enter") return;
-    if (e.shiftKey) return; // newline
-    const modifier = e.metaKey || e.ctrlKey;
-    if (mode === "steer" && !modifier) return; // steer needs a deliberate submit
+    if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return; // Shift+Enter is a new line
     e.preventDefault();
     void submit();
   };
@@ -191,29 +201,30 @@ export function ChatComposer({
             ))}
           </div>
         ) : null}
-        <span id={`${id}-hint`} className={cx(styles["hint"], mode === "steer" && styles["hintSteer"], answerOptions.length > 0 && "ds-sr-only")}>
-          {isDisabled ? null : mode === "steer" ? (
+        {sentAs && !isDisabled ? (
+          <span className={styles["sentAs"]}>
+            Sent as <b>{sentAs}</b>
+          </span>
+        ) : null}
+        {mode === "steer" && canInterrupt && !isDisabled ? (
+          <label className={styles["interrupt"]} title="Stop the agent's current turn so it hears this now. Otherwise it reads it when the turn ends.">
+            <input type="checkbox" checked={interrupt} onChange={(e) => setInterrupt(e.target.checked)} />
+            interrupt now
+          </label>
+        ) : null}
+        <span className={styles["spacer"]} />
+        <span id={`${id}-hint`} className={cx(styles["hint"], answerOptions.length > 0 && "ds-sr-only")}>
+          {isDisabled ? null : (
             <>
-              <Icon name="zap" size={11} /> Interrupts the current turn. <kbd className={styles["kbd"]}>⌘</kbd>
-              <kbd className={styles["kbd"]}>Enter</kbd> to send
-            </>
-          ) : mode === "answer" ? (
-            <>
-              <kbd className={styles["kbd"]}>Enter</kbd> to answer · <kbd className={styles["kbd"]}>Shift</kbd>
-              <kbd className={styles["kbd"]}>Enter</kbd> for a new line
-            </>
-          ) : (
-            <>
-              <kbd className={styles["kbd"]}>Enter</kbd> to send
+              <kbd className={styles["kbd"]}>Enter</kbd> {mode === "answer" ? "answer" : "send"} <kbd className={styles["kbd"]}>⇧ Enter</kbd> new line
             </>
           )}
         </span>
-        <span className={styles["spacer"]} />
         <Button
           type="submit"
           size="sm"
           variant={mode === "prompt" ? "secondary" : "primary"}
-          leadingIcon={mode === "steer" ? "zap" : mode === "answer" ? "hand" : "send"}
+          leadingIcon={mode === "answer" ? "hand" : mode === "steer" && interrupt ? "zap" : undefined}
           disabled={!canSubmit}
           loading={busy}
           className={cx(styles["submit"], styles[`submit-${mode}`])}

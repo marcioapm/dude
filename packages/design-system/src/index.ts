@@ -15,6 +15,7 @@ export type { IconName, IconProps } from "./icons/index.tsx";
 export { cx } from "./util/cx.ts";
 export {
   formatUsd,
+  firstName,
   formatTokens,
   formatBytes,
   formatDuration,
@@ -27,14 +28,12 @@ export { parseMarkdown, safeUrl } from "./util/markdown.ts";
 export { parseAnsi } from "./util/ansi.ts";
 export type { AnsiColor, AnsiStyle, AnsiSegment, ParseAnsiOptions } from "./util/ansi.ts";
 export type { Block as MarkdownBlock, Inline as MarkdownInline, ParseOptions as MarkdownParseOptions } from "./util/markdown.ts";
-export { useNow } from "./util/useNow.ts";
+export { toMs, useNow } from "./util/useNow.ts";
 export {
   flattenNav,
   ancestorKeys,
   attentionItems,
-  splitAttention,
   isYours,
-  ownerOf,
   globalCounts,
   projectCounts,
   epicCounts,
@@ -43,6 +42,11 @@ export {
   currentRun,
   navKey,
   waitingWords,
+  liveSessions,
+  waitingSplit,
+  projectPeople,
+  taskOwner,
+  ownerAgents,
 } from "./util/navModel.ts";
 export type {
   NavProject,

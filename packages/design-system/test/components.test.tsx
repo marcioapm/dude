@@ -120,16 +120,17 @@ describe("ChatComposer answer mode", () => {
   });
 });
 
-describe("NavTree who trailing", () => {
-  const wi = (people: NavTask["people"], running: boolean): NavTask => ({
+describe("NavTree task row: its people and its one state", () => {
+  const wi = (people: NavTask["people"], running: boolean, extra: Partial<NavTask> = {}): NavTask => ({
     id: "wi",
     key: "WI-1",
     title: "Retry",
     status: running ? "running" : "intake",
     people,
     runs: running
-      ? [{ id: "r", attempt: 1, status: "running", sessions: [{ id: "s1", role: "implementer", status: "running" }, { id: "s2", role: "reviewer", status: "running" }] }]
+      ? [{ id: "r", attempt: 1, status: "running", sessions: [{ id: "s1", role: "implementer", status: "running" }, { id: "s2", role: "reviewer", status: "completed" }] }]
       : [],
+    ...extra,
   });
   const row = (node: NavTask): NavRow => ({
     key: "wi",
@@ -146,32 +147,53 @@ describe("NavTree who trailing", () => {
   });
   const render = (node: NavTask) =>
     html(<NavTreeRow row={row(node)} selected={false} tabIndex={0} onFocus={noop} onKeyDown={noop} onClick={noop} onToggle={noop} />);
-  const more = (h: string) => />\+(\d+)<\/span>/.exec(h)?.[1] ?? null;
 
-  test("people only: first person and +N, everyone in the label", () => {
-    const h = render(wi([{ name: "Ann" }, { name: "Bo" }, { name: "Cy" }], false));
-    expect(groups(h)).toEqual(["Ann, Bo, Cy"]);
-    expect(more(h)).toBe("2");
+  test("everyone on it is a face, named in the group", () => {
+    const h = render(wi([{ id: "a", name: "Ann" }, { id: "b", name: "Bo" }], false));
+    expect(groups(h)).toEqual(["Ann, Bo"]);
     expect(h).toContain('aria-label="Ann"');
+    expect(h).toContain('aria-label="Bo"');
   });
 
-  test("roles only: the first role's avatar", () => {
-    const h = render(wi([], true));
-    expect(groups(h)).toEqual(["Implementer, Reviewer"]);
-    expect(h).toContain('aria-label="Implementer"');
-    expect(more(h)).toBe("1");
+  test("the agent working now sits on the owner's face", () => {
+    const h = render(wi([{ id: "a", name: "Ann" }, { id: "b", name: "Bo" }], true));
+    expect(h).toContain('aria-label="Ann · Implementer working for them now"');
+    expect(h).toContain('data-role="implementer"');
+    expect(h).not.toContain('data-role="reviewer"');
   });
 
-  test("people and roles: +N counts both", () => {
-    const h = render(wi([{ name: "Ann" }], true));
-    expect(groups(h)).toEqual(["Ann, Implementer, Reviewer"]);
-    expect(more(h)).toBe("2");
+  test("nobody: no faces", () => {
+    expect(groups(render(wi([], true)))).toEqual([]);
   });
 
-  test("nobody: nothing rendered", () => {
-    const h = render(wi([], false));
-    expect(groups(h)).toEqual([]);
-    expect(more(h)).toBeNull();
+  test("a pull request shows its one state, not the task's", () => {
+    const pr = { number: 41, url: "https://github.com/o/r/pull/41", state: "open", checks: "failing", review: "approved" } as const;
+    const h = render(wi([], false, { status: "review", pullRequests: [pr] }));
+    expect(h).toContain('data-pr-state="ci_red"');
+    expect(h).not.toContain('data-status="review"');
+  });
+});
+
+describe("the tree under a task: only what works now", () => {
+  test("finished phases are not rows; the running one is", async () => {
+    const { flattenNav } = await import("../src/util/navModel.ts");
+    const project: NavProject = {
+      id: "p",
+      name: "p",
+      tasks: [
+        {
+          id: "t",
+          title: "t",
+          status: "running",
+          runs: [{ id: "r", attempt: 1, status: "running", sessions: [
+            { id: "impl", role: "implementer", status: "completed" },
+            { id: "rev", role: "reviewer", status: "completed" },
+            { id: "fix", role: "implementer", status: "running", activity: "fixing" },
+          ] }],
+        },
+      ],
+    };
+    expect(flattenNav([project], new Map()).map((r) => r.key)).toEqual(["project:p", "task:t", "session:fix"]);
   });
 });
 
@@ -182,7 +204,6 @@ describe("AttentionList", () => {
     project,
     epic: { id: "e", title: "Reliability", tasks: [] },
     session: withSession ? { id: "s", role: "orchestrator", status: "awaiting_input", activity: "Which backoff?" } : null,
-    yours: true,
   });
 
   test("where is the row's title, not visible text", () => {

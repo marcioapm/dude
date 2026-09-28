@@ -28,7 +28,7 @@ export function OrganizationSettingsScreen({ client, me, people, onPeopleChanged
   client: ApiClient;
   /** You: admins manage the members. */
   me: Member | null;
-  people: Member[];
+  people: readonly Member[];
   onPeopleChanged: () => void;
 }) {
   const [connection, setConnection] = useState<ForgeConnection | null>(null);

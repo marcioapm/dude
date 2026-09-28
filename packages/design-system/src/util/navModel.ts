@@ -12,7 +12,8 @@
  */
 
 import type { AgentRole, RunStatus, SessionStatus, TaskStatus } from "@dude/domain";
-import type { Person } from "../components/HumanAvatar.tsx";
+import type { Person } from "../components/PersonAvatar.tsx";
+import type { PrChipPullRequest } from "../components/PrChip.tsx";
 import { toMs } from "./useNow.ts";
 import {
   EMPTY_TRIAGE_COUNTS,
@@ -37,6 +38,8 @@ export interface NavSession {
   readonly title?: string | undefined;
   /** What the agent is doing right now (live sessions only). */
   readonly activity?: string | undefined;
+  /** Its plan, when known: how far along, and the step it is on. */
+  readonly plan?: { readonly done: number; readonly total: number; readonly current?: string | undefined } | undefined;
   readonly children?: ReadonlyArray<NavSession> | undefined;
 }
 
@@ -66,6 +69,8 @@ export interface NavTask {
    * findings"). Shown where it would otherwise say only "waiting for you".
    */
   readonly waitingFor?: string | undefined;
+  /** Its pull requests, one per repository it changed, in the order they were opened. */
+  readonly pullRequests?: ReadonlyArray<PrChipPullRequest> | undefined;
 }
 
 /** What a task that needs you, with no agent asking, says it waits for. */
@@ -82,6 +87,9 @@ export interface NavEpic {
 export interface NavProject {
   readonly id: string;
   readonly name: string;
+  /** Its face: an uploaded image, or initials on `colorSlot` (a hash of the id by default). */
+  readonly imageUrl?: string | null | undefined;
+  readonly colorSlot?: number | undefined;
   readonly epics?: ReadonlyArray<NavEpic> | undefined;
   /** Tasks with no epic. Listed after the epics. */
   readonly tasks?: ReadonlyArray<NavTask> | undefined;
@@ -119,20 +127,12 @@ export function currentRun(wi: NavTask): NavRun | null {
 }
 
 /**
- * Who a task waits on when it needs a person: its owner, the first of its
- * people. Null when nobody owns it — then anyone may answer.
- */
-export function ownerOf(wi: NavTask): Person | null {
-  return wi.people?.[0] ?? null;
-}
-
-/**
  * Whether a task's asks are the viewer's to answer: theirs, or nobody's.
- * With no viewer (`you` undefined) every ask is, as before people.
+ * With no viewer every ask is, as before people.
  */
-export function isYours(wi: NavTask, you: string | undefined): boolean {
-  const owner = ownerOf(wi);
-  return you === undefined || owner === null || owner.id === you;
+export function isYours(wi: NavTask, you: string | null | undefined): boolean {
+  const owner = taskOwner(wi);
+  return !you || !owner?.id || owner.id === you;
 }
 
 /**
@@ -144,7 +144,7 @@ export function isYours(wi: NavTask, you: string | undefined): boolean {
  * *you*: it is `waiting`, calm, and counted nowhere — only what you can
  * answer is loud (see `attentionItems` for the others).
  */
-export function taskTriage(wi: NavTask, you?: string): TriageKind {
+export function taskTriage(wi: NavTask, you?: string | null): TriageKind {
   let t = triageOf(wi.status);
   const run = currentRun(wi);
   if (run) for (const s of run.sessions) t = moreUrgent(t, sessionTriage(s));
@@ -156,17 +156,17 @@ export function sessionSubtreeNeedsYou(s: NavSession): boolean {
   return sessionTriage(s) === "needs_you";
 }
 
-export function countTasks(items: ReadonlyArray<NavTask>, you?: string): TriageCounts {
+export function countTasks(items: ReadonlyArray<NavTask>, you?: string | null): TriageCounts {
   let c = EMPTY_TRIAGE_COUNTS;
   for (const wi of items) c = addTriage(c, taskTriage(wi, you));
   return c;
 }
 
-export function epicCounts(e: NavEpic, you?: string): TriageCounts {
+export function epicCounts(e: NavEpic, you?: string | null): TriageCounts {
   return countTasks(e.tasks, you);
 }
 
-export function projectCounts(p: NavProject, you?: string): TriageCounts {
+export function projectCounts(p: NavProject, you?: string | null): TriageCounts {
   return sumTriage([...(p.epics ?? []).map((e) => epicCounts(e, you)), countTasks(p.tasks ?? [], you)]);
 }
 
@@ -174,6 +174,27 @@ export function totalCount(c: TriageCounts): number {
   let n = 0;
   for (const k of Object.keys(c) as TriageKind[]) n += c[k];
   return n;
+}
+
+/**
+ * The agents of a task's current run that are working now or asking a
+ * person — the deepest such in each branch, since an orchestrator
+ * "waiting for the implementer" says less than the implementer does. The
+ * tree shows only these under a task: the phases that ran live on the
+ * task's page.
+ */
+export function liveSessions(wi: NavTask): NavSession[] {
+  const out: NavSession[] = [];
+  const walk = (s: NavSession): boolean => {
+    let deeper = false;
+    for (const c of s.children ?? []) deeper = walk(c) || deeper;
+    const live = s.status === "running" || s.status === "awaiting_input";
+    if (live && !deeper) out.push(s);
+    return live || deeper;
+  };
+  const run = currentRun(wi);
+  if (run) for (const s of run.sessions) walk(s);
+  return out;
 }
 
 /** Live roles working on a task right now, for the collapsed row. */
@@ -198,7 +219,9 @@ export interface NavFilter {
   /** Case-insensitive substring over titles, keys, people, epic and project names. */
   readonly query?: string | undefined;
   /** The viewer's person id: only their asks need them (`taskTriage`). */
-  readonly you?: string | undefined;
+  readonly you?: string | null | undefined;
+  /** Only tasks this person is on ("Mine"). */
+  readonly person?: string | null | undefined;
 }
 
 /** User overrides of the default open state, by row key. */
@@ -261,41 +284,30 @@ function epicDefaultOpen(c: TriageCounts): boolean {
   return c.needs_you > 0 || c.active > 0;
 }
 
-function pushSession(ctx: Ctx, s: NavSession, depth: number, parentKey: string, projectId: string, forceOpen: boolean): void {
-  const ref: NavRef = { kind: "session", id: s.id };
-  const key = navKey(ref);
-  const kids = s.children ?? [];
-  const needs = sessionSubtreeNeedsYou(s);
-  const expanded = kids.length > 0 && isOpen(ctx, key, needs, forceOpen && needs);
-  ctx.rows.push({ key, ref, depth, parentKey, expandable: kids.length > 0, expanded, forced: forceOpen && needs, node: s, counts: null, triage: sessionTriage(s), projectId });
-  if (expanded) for (const c of kids) pushSession(ctx, c, depth + 1, key, projectId, forceOpen);
-}
-
 function pushTask(ctx: Ctx, wi: NavTask, depth: number, parentKey: string, projectId: string): void {
   const ref: NavRef = { kind: "task", id: wi.id };
   const key = navKey(ref);
   const triage = taskTriage(wi, ctx.filter.you);
-  const runs = wi.runs ?? [];
-  const cur = runs[runs.length - 1];
-  const expandable = cur !== undefined && (cur.sessions.length > 0 || runs.length > 1);
+  const live = liveSessions(wi);
+  const expandable = live.length > 0;
   const filterOpen = ctx.filter.triage === "needs_you" || ctx.filter.triage === "active";
   const forced = expandable && filterOpen && ctx.filter.triage === triage;
-  const expanded = expandable && isOpen(ctx, key, triage === "needs_you", forced);
+  // What is working now is the point of the row: open unless folded by hand.
+  const expanded = expandable && isOpen(ctx, key, true, forced);
   ctx.rows.push({ key, ref, depth, parentKey, expandable, expanded, forced, node: wi, counts: null, triage, projectId });
-  if (!expanded || cur === undefined) return;
-  for (const s of cur.sessions) pushSession(ctx, s, depth + 1, key, projectId, forced);
-  for (const r of runs.slice(0, -1).reverse()) {
-    const rref: NavRef = { kind: "run", id: r.id };
-    const rkey = navKey(rref);
-    const rexp = r.sessions.length > 0 && isOpen(ctx, rkey, false, false);
-    ctx.rows.push({ key: rkey, ref: rref, depth: depth + 1, parentKey: key, expandable: r.sessions.length > 0, expanded: rexp, forced: false, node: r, counts: null, triage: triageOf(r.status), projectId });
-    if (rexp) for (const s of r.sessions) pushSession(ctx, s, depth + 2, rkey, projectId, false);
+  if (!expanded) return;
+  for (const s of live) {
+    const sref: NavRef = { kind: "session", id: s.id };
+    ctx.rows.push({ key: navKey(sref), ref: sref, depth: depth + 1, parentKey: key, expandable: false, expanded: false, forced: false, node: s, counts: null, triage: sessionTriage(s), projectId });
   }
 }
 
 function visibleTasks(ctx: Ctx, items: ReadonlyArray<NavTask>, q: string): NavTask[] {
   const t = ctx.filter.triage ?? null;
-  return items.filter((wi) => (t === null || taskTriage(wi, ctx.filter.you) === t) && taskMatches(q, wi));
+  const person = ctx.filter.person ?? null;
+  return items.filter(
+    (wi) => (t === null || taskTriage(wi, ctx.filter.you) === t) && (person === null || (wi.people ?? []).some((p) => p.id === person)) && taskMatches(q, wi),
+  );
 }
 
 /**
@@ -307,7 +319,7 @@ function visibleTasks(ctx: Ctx, items: ReadonlyArray<NavTask>, q: string): NavTa
 export function flattenNav(projects: ReadonlyArray<NavProject>, overrides: NavOverrides, filter: NavFilter = {}): NavRow[] {
   const ctx: Ctx = { overrides, filter, rows: [] };
   const q = (filter.query ?? "").trim().toLowerCase();
-  const filtering = q.length > 0 || (filter.triage ?? null) !== null;
+  const filtering = q.length > 0 || (filter.triage ?? null) !== null || (filter.person ?? null) !== null;
 
   for (const p of projects) {
     const pref: NavRef = { kind: "project", id: p.id };
@@ -395,7 +407,7 @@ export function ancestorKeys(projects: ReadonlyArray<NavProject>, ref: NavRef): 
 }
 
 /** Bucket counts across every project — the sidebar's filter chips. */
-export function globalCounts(projects: ReadonlyArray<NavProject>, you?: string): TriageCounts {
+export function globalCounts(projects: ReadonlyArray<NavProject>, you?: string | null): TriageCounts {
   return sumTriage(projects.map((p) => projectCounts(p, you)));
 }
 
@@ -405,8 +417,6 @@ export interface AttentionItem {
   readonly epic: NavEpic | null;
   /** The session that is asking, if the block is at session level. */
   readonly session: NavSession | null;
-  /** The viewer's to answer (`isYours`): theirs, or nobody's. */
-  readonly yours: boolean;
 }
 
 /** The deepest session waiting on a person, if any. */
@@ -425,15 +435,14 @@ export function askingSession(list: ReadonlyArray<NavSession>): NavSession | nul
  * tree. This is what makes "what needs me" answerable without expanding
  * anything. Oldest wait first (by `statusSince`; unknown last, tree order
  * among equals), so a short list shows the longest-waiting ask, not the one
- * highest in the tree. `yours` says whose each is; `splitAttention` parts
- * them.
+ * highest in the tree. `waitingSplit` parts them by whose they are.
  */
-export function attentionItems(projects: ReadonlyArray<NavProject>, you?: string): AttentionItem[] {
+export function attentionItems(projects: ReadonlyArray<NavProject>): AttentionItem[] {
   const out: AttentionItem[] = [];
   const consider = (wi: NavTask, project: NavProject, epic: NavEpic | null) => {
     if (taskTriage(wi) !== "needs_you") return;
     const run = currentRun(wi);
-    out.push({ task: wi, project, epic, session: run ? askingSession(run.sessions) : null, yours: isYours(wi, you) });
+    out.push({ task: wi, project, epic, session: run ? askingSession(run.sessions) : null });
   };
   for (const p of projects) {
     for (const e of p.epics ?? []) for (const wi of e.tasks) consider(wi, p, e);
@@ -448,7 +457,41 @@ export function attentionItems(projects: ReadonlyArray<NavProject>, you?: string
   });
 }
 
-/** "Waiting on you" and "Waiting on others", each in the order given. */
-export function splitAttention(items: ReadonlyArray<AttentionItem>): { yours: AttentionItem[]; others: AttentionItem[] } {
-  return { yours: items.filter((it) => it.yours), others: items.filter((it) => !it.yours) };
+/** Who a task waits on: its owner, the first of its people. */
+export function taskOwner(wi: NavTask): Person | null {
+  return wi.people?.[0] ?? null;
+}
+
+/** Agents work for the task's owner: the one working now, keyed for the owner's face. */
+export function ownerAgents(wi: NavTask, working: NavSession | undefined): Map<string, { role: AgentRole; live: true }> | undefined {
+  const owner = taskOwner(wi);
+  return owner && working ? new Map([[owner.id ?? owner.name, { role: working.role, live: true as const }]]) : undefined;
+}
+
+/**
+ * What needs a person, split by whose it is: yours (you own the task, or
+ * nobody does, so anyone may act) and others'. With no `you`, all of it
+ * is yours.
+ */
+export function waitingSplit(items: ReadonlyArray<AttentionItem>, you: string | null | undefined): { yours: AttentionItem[]; others: AttentionItem[] } {
+  const yours: AttentionItem[] = [];
+  const others: AttentionItem[] = [];
+  for (const it of items) (isYours(it.task, you) ? yours : others).push(it);
+  return { yours, others };
+}
+
+/** Everyone on a project's tasks, most involved first, each once. */
+export function projectPeople(p: NavProject): Person[] {
+  const seen = new Map<string, { person: Person; n: number; first: number }>();
+  let i = 0;
+  const all = [...(p.epics ?? []).flatMap((e) => e.tasks), ...(p.tasks ?? [])];
+  for (const wi of all) {
+    for (const person of wi.people ?? []) {
+      const k = person.id ?? person.name;
+      const had = seen.get(k);
+      if (had) had.n++;
+      else seen.set(k, { person, n: 1, first: i++ });
+    }
+  }
+  return [...seen.values()].sort((a, b) => b.n - a.n || a.first - b.first).map((x) => x.person);
 }
