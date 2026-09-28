@@ -28,7 +28,7 @@
   padding: 0 var(--ds-space-8);
   background: var(--ds-color-field-bg);
   border: 1px solid var(--ds-color-border);
-  border-radius: var(--ds-radius-md);
+  border-radius: var(--ds-radius-control);
   color: var(--ds-color-text-primary);
   transition:
     border-color var(--ds-duration-fast) var(--ds-ease-standard),

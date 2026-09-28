@@ -177,11 +177,11 @@ export function DeleteEpicDialog(props: { client: ApiClient; epic: EpicRef; onCl
       }
       footer={
         <>
-          <Button variant="ghost" onClick={props.onClose}>
+          <Button variant="quiet" onClick={props.onClose}>
             Cancel
           </Button>
           <Button
-            variant="destructive"
+            variant="danger" solid
             disabled={busy}
             data-testid="epic-delete"
             onClick={() => void save(() => props.client.deleteEpic(epic.id), () => {

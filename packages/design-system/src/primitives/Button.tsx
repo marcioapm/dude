@@ -3,12 +3,16 @@ import { cx } from "../util/cx.ts";
 import { Icon, type IconName } from "../icons/index.tsx";
 import styles from "./Button.module.css";
 
-export type ButtonVariant =
-  | "primary"
-  | "secondary"
-  | "ghost"
-  | "destructive"
-  | "destructive-outline";
+/**
+ * Four kinds, one rule each:
+ * - `primary`: the one main action of a view or a panel (Deliver, Merge, Save).
+ * - `secondary`: any other action. The default.
+ * - `quiet`: row and toolbar actions, text until hovered.
+ * - `danger`: loses work. Red text; `solid` only inside the confirmation
+ *   that asks whether to do it.
+ * Links navigate; buttons act.
+ */
+export type ButtonVariant = "primary" | "secondary" | "quiet" | "danger";
 export type ButtonSize = "sm" | "md" | "lg";
 
 export interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "type"> {
@@ -19,22 +23,18 @@ export interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement
   readonly trailingIcon?: IconName | undefined;
   readonly loading?: boolean | undefined;
   readonly block?: boolean | undefined;
+  /** `danger` only: filled red, for the confirming button of a destructive dialog. */
+  readonly solid?: boolean | undefined;
   readonly children?: ReactNode;
 }
 
 const VARIANT_CLASS: Record<ButtonVariant, string | undefined> = {
   primary: styles["primary"],
   secondary: styles["secondary"],
-  ghost: styles["ghost"],
-  destructive: styles["destructive"],
-  "destructive-outline": styles["destructiveOutline"],
+  quiet: styles["quiet"],
+  danger: styles["danger"],
 };
 
-/**
- * Button. Default is `secondary` — in a dense console, most actions are
- * quiet. Exactly one `primary` per view; `destructive` only for actions that
- * lose work (abort a run, delete), and always behind a confirm dialog.
- */
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
   {
     variant = "secondary",
@@ -44,6 +44,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
     trailingIcon,
     loading = false,
     block = false,
+    solid = false,
     className,
     children,
     disabled,
@@ -58,7 +59,8 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       className={cx(
         styles["root"],
         VARIANT_CLASS[variant],
-        (variant === "primary" || variant === "destructive") && styles["filled"],
+        variant === "danger" && solid && styles["solid"],
+        (variant === "primary" || (variant === "danger" && solid)) && styles["filled"],
         size !== "md" && styles[size],
         loading && styles["loading"],
         block && styles["block"],
@@ -88,7 +90,7 @@ export interface IconButtonProps extends Omit<ButtonProps, "leadingIcon" | "trai
 
 /** Square icon-only button. `label` becomes the aria-label and tooltip text. */
 export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(function IconButton(
-  { icon, label, variant = "ghost", className, ...rest },
+  { icon, label, variant = "quiet", className, ...rest },
   ref,
 ) {
   return (

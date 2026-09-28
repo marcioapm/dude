@@ -4,7 +4,6 @@
   --btn-fs: var(--ds-text-md);
   --btn-bg: transparent;
   --btn-fg: var(--ds-color-text-primary);
-  --btn-border: transparent;
   --btn-bg-hover: var(--ds-color-hover-wash);
   --btn-bg-active: var(--ds-color-active-wash);
 
@@ -20,12 +19,11 @@
   white-space: nowrap;
   color: var(--btn-fg);
   background: var(--btn-bg);
-  border: 1px solid var(--btn-border);
-  border-radius: var(--ds-radius-md);
+  border-radius: var(--ds-radius-control);
   user-select: none;
+  cursor: pointer;
   transition:
     background-color var(--ds-duration-fast) var(--ds-ease-standard),
-    border-color var(--ds-duration-fast) var(--ds-ease-standard),
     color var(--ds-duration-fast) var(--ds-ease-standard);
 }
 
@@ -49,7 +47,6 @@
 .root.filled:disabled {
   --btn-bg: var(--ds-color-active-wash);
   --btn-fg: var(--ds-color-text-secondary);
-  --btn-border: transparent;
   opacity: 1;
 }
 
@@ -65,7 +62,7 @@
   --btn-fs: var(--ds-text-lg);
 }
 
-/* Variants */
+/* Kinds. No outlines: a button is told from the page by its fill. */
 .primary {
   --btn-bg: var(--ds-color-accent);
   --btn-fg: var(--ds-color-on-accent);
@@ -74,28 +71,27 @@
 }
 .secondary {
   --btn-icon: var(--ds-color-text-secondary);
-  --btn-bg: var(--ds-color-raised);
-  --btn-border: var(--ds-color-border);
-  --btn-bg-hover: var(--ds-color-secondary-hover);
-  --btn-bg-active: var(--ds-color-secondary-active);
+  --btn-bg: var(--ds-color-active-wash);
+  --btn-bg-hover: color-mix(in srgb, var(--ds-color-text-primary) 13%, transparent);
+  --btn-bg-active: color-mix(in srgb, var(--ds-color-text-primary) 17%, transparent);
 }
-.ghost {
+.quiet {
   --btn-fg: var(--ds-color-text-secondary);
 }
-.ghost:hover:not(:disabled) {
+.quiet:hover:not(:disabled) {
   color: var(--ds-color-text-primary);
 }
-.destructive {
+.danger {
+  --btn-fg: var(--ds-tone-danger-fg);
+  --btn-bg: var(--ds-color-active-wash);
+  --btn-bg-hover: var(--ds-tone-danger-bg);
+  --btn-bg-active: var(--ds-tone-danger-bg);
+}
+.danger.solid {
   --btn-bg: var(--ds-tone-danger-solid);
   --btn-fg: var(--ds-tone-danger-on-solid);
   --btn-bg-hover: color-mix(in srgb, var(--ds-tone-danger-solid) 88%, black);
   --btn-bg-active: color-mix(in srgb, var(--ds-tone-danger-solid) 78%, black);
-}
-.destructiveOutline {
-  --btn-fg: var(--ds-tone-danger-fg);
-  --btn-border: var(--ds-tone-danger-border);
-  --btn-bg-hover: var(--ds-tone-danger-bg);
-  --btn-bg-active: var(--ds-tone-danger-bg);
 }
 
 .iconOnly {

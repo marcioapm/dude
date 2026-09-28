@@ -14,7 +14,7 @@
   min-width: 0;
   margin: var(--ds-space-4) 0;
   border-left: 2px solid var(--rail);
-  border-radius: 0 var(--ds-radius-md) var(--ds-radius-md) 0;
+  border-radius: 0;
   background: var(--rail-bg);
 }
 .orchestrator {
@@ -50,8 +50,8 @@
   padding: 0 var(--ds-space-8) 0 var(--ds-space-6);
   font-size: var(--ds-text-sm);
   outline: none;
-  cursor: default;
-  border-radius: 0 var(--ds-radius-md) var(--ds-radius-md) 0;
+  cursor: pointer;
+  border-radius: 0;
 }
 .header:hover {
   background: var(--ds-color-hover-wash);
@@ -117,7 +117,7 @@
   width: 20px;
   height: 20px;
   border: 0;
-  border-radius: var(--ds-radius-sm);
+  border-radius: var(--ds-radius-control);
   background: transparent;
   color: var(--ds-color-text-muted);
 }

@@ -359,6 +359,17 @@ export const diff = {
 } as const;
 
 // ---------------------------------------------------------------------------
+// Merged — GitHub's violet, because every reader of a pull request already
+// knows it means "merged". Its own pair, not a tone: it is not a status of
+// ours, and nothing else may borrow it.
+// ---------------------------------------------------------------------------
+
+export const merged = {
+  light: { fg: toHex(oklch(0.48, 0.17, 300)), bg: toHex(oklch(0.95, 0.035, 300)) },
+  dark: { fg: toHex(oklch(0.78, 0.12, 300)), bg: toHex(oklch(0.3, 0.06, 300)) },
+} as const;
+
+// ---------------------------------------------------------------------------
 // ANSI terminal colours — for tool output that arrives with escape codes.
 // The tool's own colours are the content (pytest's red FAILED, git's green
 // `+`), so they are rendered, not mapped onto the status tones: a green

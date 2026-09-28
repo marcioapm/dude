@@ -5,7 +5,7 @@
   min-width: 0;
   /* A lighter shade than the canvas it sits on; no frame needed. */
   background: var(--ds-color-surface);
-  border-radius: var(--ds-radius-lg);
+  border-radius: 0;
   overflow: hidden;
   container-type: inline-size;
 }

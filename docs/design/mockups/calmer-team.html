@@ -1,0 +1,667 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dude — calmer, for a team (mockups)</title>
+<style>
+/* Tokens: dude's real values (packages/design-system/src/tokens/tokens.css).
+   Only the radius scale and the border rules are new. */
+:root, [data-theme="light"] {
+  --canvas:#f2f3f5; --surface:#ffffff; --chrome:#f7f8fa; --sunken:#eceef1;
+  --line:#e6e7e9; --field-line:#ccced0;
+  --strong:#101213; --text:#313335; --secondary:#515354; --muted:#626365; --disabled:#919294;
+  --accent:#166daf; --accent-subtle:#dceeff; --accent-text:#035b98;
+  --wash:rgba(49,51,53,.045); --wash-2:rgba(49,51,53,.08);
+  --n-fg:#50565c; --n-bg:#e5ecf3; --n-mark:#5e646a;
+  --i-fg:#074a7c; --i-bg:#dcedfe; --i-mark:#1375bf;
+  --a-fg:#7e580c; --a-bg:#fae9ce; --a-mark:#bf7c15; --a-solid:#efa810;
+  --s-fg:#06786c; --s-bg:#d9f3e2; --s-mark:#11915b;
+  --d-fg:#a8222c; --d-bg:#fbe1e0; --d-mark:#c92e3b;
+  --impl:#1a8f6f; --impl-bg:#d6f2e8; --rev:#b35a3c; --rev-bg:#f8e3da; --fix:#8a5cc7; --fix-bg:#ece3f8;
+  --id0:#8c3b3a; --id0-bg:#f6dcdb; --id1:#7a5320; --id1-bg:#f3e3cf; --id3:#2f6b45; --id3-bg:#d9eedf; --id5:#3d5a91; --id5-bg:#dde5f5;
+  --shadow-float:0 1px 2px rgba(49,51,53,.08), 0 8px 24px rgba(49,51,53,.14);
+}
+[data-theme="dark"] {
+  --canvas:#1d1e20; --surface:#252728; --chrome:#2a2b2d; --sunken:#1a1b1d;
+  --line:#2f3032; --field-line:#393b3c;
+  --strong:#f1f2f3; --text:#dee0e1; --secondary:#b6b7b9; --muted:#9ea0a2; --disabled:#626365;
+  --accent:#2779bc; --accent-subtle:#1d3246; --accent-text:#77b7f4;
+  --wash:rgba(255,255,255,.05); --wash-2:rgba(255,255,255,.09);
+  --n-fg:#a5acb2; --n-bg:#272c31; --n-mark:#a5acb2;
+  --i-fg:#5ab1ff; --i-bg:#173047; --i-mark:#5ab1ff;
+  --a-fg:#fcb52c; --a-bg:#422f0d; --a-mark:#fcb52c; --a-solid:#f5af20;
+  --s-fg:#63d99b; --s-bg:#163524; --s-mark:#63d99b;
+  --d-fg:#ff6367; --d-bg:#4a1e1e; --d-mark:#ff6367;
+  --impl:#3fb996; --impl-bg:#0d362a; --rev:#d07758; --rev-bg:#43251a; --fix:#b08ae6; --fix-bg:#2f2442;
+  --id0:#f5b9b8; --id0-bg:#4b3333; --id1:#ebc29b; --id1-bg:#473727; --id3:#a7d9b7; --id3-bg:#2c4033; --id5:#a9bdf0; --id5-bg:#2c3450;
+  --shadow-float:0 0 0 1px #393b3c, 0 12px 32px rgba(0,0,0,.6);
+}
+/* The proposed radius scale: structure is square, only what you touch or what floats is rounded. */
+:root { --r-control:6px; --r-float:10px; --r-pill:999px;
+  --sans: ui-sans-serif,-apple-system,BlinkMacSystemFont,system-ui,"Segoe UI",Roboto,"Inter",sans-serif;
+  --mono: "JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace; }
+
+* { box-sizing:border-box; }
+html,body { margin:0; background:var(--canvas); color:var(--text); font:15px/1.45 var(--sans); }
+a { color:var(--accent-text); text-decoration:none; }
+a:hover { text-decoration:underline; }
+.mono { font-family:var(--mono); font-size:13px; }
+.muted { color:var(--muted); } .secondary { color:var(--secondary); }
+.num { font-variant-numeric:tabular-nums; }
+.label { font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); font-weight:600; }
+
+/* ---------- Mockup chrome (not part of the design) ---------- */
+.mk-bar { position:sticky; top:0; z-index:50; display:flex; gap:4px; align-items:center; padding:8px 16px;
+  background:#111; color:#ddd; font-size:13px; flex-wrap:wrap; }
+.mk-bar b { margin-right:12px; color:#fff; }
+.mk-bar button { background:none; border:0; color:#bbb; padding:6px 10px; border-radius:6px; cursor:pointer; font:inherit; }
+.mk-bar button[aria-pressed="true"] { background:#333; color:#fff; }
+.mk-bar .sp { flex:1; }
+.screen { display:none; } .screen.on { display:block; }
+.note { max-width:1100px; margin:24px auto 0; padding:0 24px; color:var(--secondary); font-size:14px; }
+.note h1 { font-size:22px; color:var(--strong); margin:0 0 6px; font-weight:600; }
+.note ul { margin:8px 0 0; padding-left:18px; } .note li { margin:3px 0; }
+.frame { margin:16px auto 40px; max-width:1440px; height:880px; display:flex; overflow:hidden;
+  background:var(--canvas); box-shadow:0 0 0 1px var(--line); }
+.frame.phone { max-width:390px; height:780px; }
+
+/* ---------- Primitives ---------- */
+.btn { display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 12px; border-radius:var(--r-control);
+  border:0; background:var(--wash-2); color:var(--text); font:inherit; font-size:14px; cursor:pointer; white-space:nowrap; }
+.btn:hover { background:var(--wash); box-shadow:inset 0 0 0 1px var(--field-line); }
+.btn.primary { background:var(--accent); color:#fff; }
+.btn.ghost { background:none; color:var(--secondary); }
+.btn.ghost:hover { background:var(--wash); box-shadow:none; }
+.btn.danger { background:none; color:var(--d-fg); }
+.btn.danger.solid { background:var(--d-mark); color:#fff; }
+.btn.sm { height:28px; padding:0 10px; font-size:13px; }
+.field { height:32px; border-radius:var(--r-control); border:1px solid var(--field-line); background:var(--surface);
+  padding:0 10px; font:inherit; color:var(--text); width:100%; }
+textarea.field { height:auto; padding:10px; resize:none; line-height:1.45; }
+.kbd { font:11px var(--mono); padding:1px 5px; border-radius:4px; background:var(--wash-2); color:var(--secondary); }
+
+/* Status: glyph + word, no pill. Only "needs you" gets a fill. */
+.st { display:inline-flex; align-items:center; gap:6px; font-size:13px; white-space:nowrap; }
+.st i { width:8px; height:8px; border-radius:50%; background:currentColor; display:inline-block; font-style:normal; }
+.st.run { color:var(--i-fg); } .st.run i { animation:breathe 2.4s ease-in-out infinite; }
+.st.ok { color:var(--s-fg); } .st.bad { color:var(--d-fg); } .st.wait { color:var(--muted); } .st.wait i { background:none; box-shadow:inset 0 0 0 1.5px currentColor; }
+.st.merged { color:#7d4cc2; } [data-theme="dark"] .st.merged { color:#b995f0; }
+.st.closed { color:var(--muted); } .st.closed i { border-radius:1px; }
+.needs { display:inline-flex; align-items:center; gap:6px; padding:2px 8px; border-radius:var(--r-pill); background:var(--a-solid);
+  color:#000; font-size:12px; font-weight:600; }
+.needs::before { content:""; width:7px; height:7px; background:#000; transform:rotate(45deg); }
+@keyframes breathe { 50% { opacity:.35; } }
+.check { width:14px; text-align:center; font-weight:700; }
+
+/* Avatars: the one place full circles live. */
+.av { width:22px; height:22px; border-radius:50%; display:inline-grid; place-items:center; font-size:10px; font-weight:700; flex:none; }
+.av.lg { width:32px; height:32px; font-size:12px; }
+.av.ana { background:var(--id3-bg); color:var(--id3); } .av.bo { background:var(--id0-bg); color:var(--id0); }
+.av.cy { background:var(--id5-bg); color:var(--id5); } .av.dee { background:var(--id1-bg); color:var(--id1); }
+.av.gh { background:var(--wash-2); color:var(--secondary); }
+.role { width:22px; height:22px; border-radius:6px; display:inline-grid; place-items:center; font-size:11px; flex:none; }
+.role.lg { width:32px; height:32px; font-size:14px; }
+.role.impl { background:var(--impl-bg); color:var(--impl); } .role.rev { background:var(--rev-bg); color:var(--rev); }
+.role.fix { background:var(--fix-bg); color:var(--fix); } .role.sys { background:var(--wash-2); color:var(--secondary); }
+
+/* ---------- Shell ---------- */
+.side { width:272px; flex:none; background:var(--chrome); display:flex; flex-direction:column; padding:12px 8px; gap:2px; }
+.brand { display:flex; align-items:center; gap:8px; padding:4px 8px 12px; font-weight:600; color:var(--strong); }
+.brand .logo { width:22px; height:22px; border-radius:6px; background:var(--strong); color:var(--canvas); display:grid; place-items:center; font-size:12px; }
+.search { margin:0 4px 10px; height:32px; border-radius:var(--r-control); background:var(--wash-2); display:flex; align-items:center;
+  padding:0 10px; color:var(--muted); font-size:14px; justify-content:space-between; }
+.nav-h { padding:14px 8px 4px; }
+.nav { display:flex; align-items:center; gap:8px; height:30px; padding:0 8px; border-radius:var(--r-control); font-size:14px; color:var(--text); cursor:default; }
+.nav:hover { background:var(--wash); }
+.nav.on { background:var(--wash-2); color:var(--strong); font-weight:500; }
+.nav .k { color:var(--muted); font:11px var(--mono); }
+.nav .t { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.nav .c { color:var(--muted); font-size:12px; }
+.nav.sub { padding-left:28px; }
+.me { margin-top:auto; display:flex; align-items:center; gap:10px; padding:10px 8px 2px; }
+.me .who { flex:1; line-height:1.2; font-size:14px; color:var(--strong); } .me .who small { display:block; color:var(--muted); font-size:12px; }
+.main { flex:1; min-width:0; display:flex; flex-direction:column; background:var(--surface); }
+.top { display:flex; align-items:center; gap:12px; height:56px; padding:0 28px; flex:none; }
+.top h2 { margin:0; font-size:18px; font-weight:600; color:var(--strong); }
+.crumbs { color:var(--muted); font-size:14px; } .crumbs b { color:var(--strong); font-weight:500; }
+.scroll { flex:1; overflow:auto; padding:4px 28px 32px; }
+
+/* Segmented filter */
+.seg { display:inline-flex; background:var(--wash-2); border-radius:var(--r-control); padding:2px; }
+.seg span { padding:4px 10px; border-radius:5px; font-size:13px; color:var(--secondary); cursor:default; }
+.seg span.on { background:var(--surface); color:var(--strong); box-shadow:0 1px 2px rgba(0,0,0,.08); }
+
+/* ---------- Board: columns are regions of shade, cards are flat rows ---------- */
+.board { display:grid; grid-template-columns:repeat(5, minmax(0,1fr)); gap:20px; height:100%; }
+.col h3 { display:flex; align-items:center; gap:8px; margin:0 0 8px; font-size:13px; font-weight:600; color:var(--secondary); height:24px; }
+.col h3 .c { color:var(--muted); font-weight:400; }
+.card { padding:10px 12px; background:var(--chrome); margin-bottom:6px; cursor:default; border-radius:0; }
+.card:hover { background:var(--wash-2); }
+.card.attn { background:var(--a-bg); box-shadow:inset 3px 0 0 var(--a-mark); }
+.card .r1 { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted); }
+.card .r1 .sp { flex:1; }
+.card .ttl { margin:3px 0 6px; color:var(--strong); font-size:14px; line-height:1.35; }
+.card .r3 { display:flex; align-items:center; gap:10px; font-size:12px; color:var(--secondary); }
+.card .r3 .sp { flex:1; }
+.pr { display:inline-flex; gap:5px; align-items:center; font-size:12px; color:var(--secondary); white-space:nowrap; }
+.card .r1 .pr { font:12px var(--mono); }
+.card .q { font-size:13px; color:var(--secondary); margin:-2px 0 8px; display:flex; gap:8px; align-items:flex-start; }
+.pr .dotc { color:var(--s-mark); } .pr .dotx { color:var(--d-mark); } .pr .doto { color:var(--a-mark); }
+
+/* ---------- Task page ---------- */
+.hdr { display:flex; align-items:flex-start; gap:16px; }
+.hdr h1 { margin:0; font-size:22px; font-weight:600; color:var(--strong); line-height:1.3; }
+.hdr .meta { margin-top:6px; display:flex; gap:16px; align-items:center; color:var(--muted); font-size:13px; }
+.goal { margin:16px 0 0; color:var(--secondary); max-width:760px; }
+.sec { margin-top:32px; }
+.sec > .label { display:block; margin-bottom:10px; }
+.grid2 { display:grid; grid-template-columns:minmax(0,1.35fr) minmax(0,1fr); gap:40px; }
+.steps .step { display:grid; grid-template-columns:20px 22px 1fr auto auto; gap:10px; align-items:center; height:36px; padding:0 8px; margin:0 -8px; }
+.steps .step:hover { background:var(--wash); }
+.steps .n { color:var(--muted); font-size:12px; text-align:right; }
+.steps .what { color:var(--strong); font-size:14px; } .steps .why { color:var(--muted); font-size:13px; margin-left:6px; }
+.steps .sha { color:var(--muted); }
+.prbox { background:var(--chrome); padding:16px 18px; }
+.prbox .head { display:flex; gap:10px; align-items:center; }
+.prbox .head b { color:var(--strong); font-size:15px; }
+.prbox .sum { display:flex; gap:18px; margin:10px 0 4px; flex-wrap:wrap; }
+.kv { display:grid; grid-template-columns:110px 1fr; row-gap:8px; margin-top:14px; font-size:14px; }
+.kv dt { color:var(--muted); } .kv dd { margin:0; }
+.checks { margin:6px 0 0; padding:0; list-style:none; }
+.checks li { display:flex; align-items:center; gap:8px; height:28px; font-size:13px; }
+.checks li .sp { flex:1; } .checks .ok { color:var(--s-mark); } .checks .bad { color:var(--d-mark); } .checks .run { color:var(--a-mark); }
+.tl { list-style:none; margin:0; padding:0; }
+.tl li { display:grid; grid-template-columns:22px 1fr auto; gap:10px; padding:8px 0; align-items:start; font-size:14px; }
+.tl li .when { color:var(--muted); font-size:12px; white-space:nowrap; }
+.tl li .body { color:var(--secondary); }
+.tl li .body b { color:var(--strong); font-weight:500; }
+.tl li blockquote { margin:4px 0 0; padding:0 0 0 10px; box-shadow:inset 2px 0 0 var(--line); color:var(--text); }
+.metrics { display:flex; gap:40px; }
+.metrics div b { display:block; font-size:20px; font-weight:600; color:var(--strong); }
+.metrics div span { font-size:12px; color:var(--muted); }
+
+/* ---------- Run / chat ---------- */
+.runhdr { display:flex; align-items:center; gap:12px; padding:14px 28px; background:var(--chrome); }
+.runhdr .t { flex:1; } .runhdr .t b { color:var(--strong); font-size:15px; font-weight:600; }
+.runhdr .t small { display:block; color:var(--muted); font-size:13px; }
+.stats { display:flex; gap:22px; font-size:13px; color:var(--muted); } .stats b { color:var(--strong); font-weight:500; }
+.chat { flex:1; overflow:auto; padding:20px 28px; }
+.turn { display:grid; grid-template-columns:32px 1fr; gap:14px; margin-bottom:20px; max-width:880px; }
+.turn .who { font-size:14px; color:var(--strong); font-weight:600; display:flex; gap:8px; align-items:baseline; }
+.turn .who small { color:var(--muted); font-weight:400; font-size:12px; }
+.turn .txt { margin-top:2px; }
+.turn.steer .txt { padding:8px 12px; background:var(--accent-subtle); color:var(--text); display:inline-block; }
+.tool { display:flex; gap:10px; align-items:center; font:13px var(--mono); color:var(--secondary); padding:6px 10px; background:var(--chrome); margin-top:8px; }
+.tool .sp { flex:1; }
+.event { display:flex; gap:10px; align-items:center; color:var(--muted); font-size:13px; margin:0 0 18px 46px; }
+.event::before { content:""; width:16px; height:1px; background:var(--line); }
+.event b { color:var(--secondary); font-weight:500; }
+.conflict { margin:0 28px; padding:10px 14px; background:var(--n-bg); color:var(--n-fg); display:flex; gap:10px; align-items:center; font-size:14px; }
+.conflict .sp { flex:1; }
+.composer { padding:12px 28px 18px; }
+.composer .box { background:var(--canvas); border-radius:var(--r-control); padding:10px 12px; }
+.composer .box:focus-within { box-shadow:inset 0 0 0 1px var(--accent); }
+.composer .row { display:flex; align-items:center; gap:10px; margin-top:8px; font-size:12px; color:var(--muted); }
+.composer .row .sp { flex:1; }
+.live { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); }
+.live i { width:6px; height:6px; border-radius:50%; background:var(--s-mark); }
+.live.lost { color:var(--a-fg); } .live.lost i { background:var(--a-mark); animation:breathe 1.2s infinite; }
+
+/* Dialog: floats, so it is rounded and shadowed. */
+.scrim { position:absolute; inset:0; background:rgba(20,20,22,.35); display:grid; place-items:center; }
+.dialog { width:440px; background:var(--surface); border-radius:var(--r-float); box-shadow:var(--shadow-float); padding:20px 22px; }
+.dialog h4 { margin:0 0 8px; font-size:16px; color:var(--strong); }
+.dialog p { margin:0 0 16px; color:var(--secondary); font-size:14px; }
+.dialog .acts { display:flex; justify-content:flex-end; gap:8px; margin-top:18px; }
+
+/* ---------- Inbox ---------- */
+.group { margin-bottom:28px; }
+.group > .label { display:flex; gap:8px; align-items:center; margin-bottom:6px; }
+.item { display:grid; grid-template-columns:22px 1fr auto auto; gap:12px; align-items:center; padding:10px 12px; margin:0 -12px; }
+.item:hover { background:var(--wash); }
+.item .q { color:var(--strong); font-size:14px; } .item .q small { display:block; color:var(--muted); font-size:13px; margin-top:1px; }
+.item.mine { background:var(--a-bg); margin:0 -12px 4px; box-shadow:inset 3px 0 0 var(--a-mark); }
+.item.theirs { opacity:.9; }
+
+/* ---------- Settings ---------- */
+.tabs { display:flex; gap:22px; padding:0 28px; height:40px; align-items:flex-end; }
+.tabs span { padding-bottom:10px; font-size:14px; color:var(--muted); cursor:default; }
+.tabs span.on { color:var(--strong); box-shadow:inset 0 -2px 0 var(--accent); }
+.table { width:100%; border-collapse:collapse; font-size:14px; }
+.table th { text-align:left; font-weight:600; font-size:12px; color:var(--muted); padding:0 12px 8px 0; }
+.table td { padding:10px 12px 10px 0; vertical-align:middle; }
+.table tr:hover td { background:var(--wash); }
+.pane { max-width:880px; }
+.pane h3 { font-size:16px; margin:0 0 4px; color:var(--strong); font-weight:600; }
+.pane .lead { color:var(--secondary); margin:0 0 16px; font-size:14px; }
+.okline { display:flex; gap:10px; align-items:center; padding:12px 14px; background:var(--s-bg); color:var(--s-fg); font-size:14px; }
+.secret { display:flex; gap:8px; align-items:center; }
+.secret code { flex:1; padding:6px 10px; background:var(--canvas); font:13px var(--mono); color:var(--secondary); }
+
+/* ---------- Principles sheet ---------- */
+.rules { max-width:1100px; margin:16px auto 40px; padding:0 24px; display:grid; grid-template-columns:1fr 1fr; gap:28px; }
+.rule { background:var(--surface); padding:20px 22px; }
+.rule h3 { margin:0 0 4px; font-size:16px; color:var(--strong); }
+.rule p { margin:0 0 14px; color:var(--secondary); font-size:14px; }
+.ba { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+.ba > div > .label { display:block; margin-bottom:8px; }
+.old-card { border:1px solid var(--field-line); border-radius:8px; padding:10px; background:var(--surface); }
+.old-row { border:1px solid var(--line); border-radius:6px; padding:6px 8px; margin-top:6px; display:flex; gap:8px; align-items:center; font-size:13px; }
+.old-pill { border:1px solid var(--i-mark); background:var(--i-bg); color:var(--i-fg); border-radius:4px; padding:0 6px; font-size:12px; }
+.old-pill.ok { border-color:var(--s-mark); background:var(--s-bg); color:var(--s-fg); }
+.spec { width:100%; font-size:13px; border-collapse:collapse; } .spec td { padding:6px 8px 6px 0; vertical-align:top; } .spec td:first-child { color:var(--strong); white-space:nowrap; }
+
+/* ---------- Phone ---------- */
+.phone .main { background:var(--surface); }
+.phone .top { padding:0 16px; height:52px; }
+.phone .scroll { padding:4px 16px 24px; }
+.phone .steps .step { grid-template-columns:22px 1fr auto; }
+.phone .steps .n, .phone .steps .sha { display:none; }
+</style>
+</head>
+<body>
+
+<div class="mk-bar">
+  <b>dude · calmer, for a team</b>
+  <button data-s="rules" aria-pressed="true">0 · Rules</button>
+  <button data-s="board">1 · Board</button>
+  <button data-s="task">2 · Task + PR</button>
+  <button data-s="run">3 · Run, two people</button>
+  <button data-s="inbox">4 · Waiting on you</button>
+  <button data-s="members">5 · Members & GitHub</button>
+  <button data-s="phone">6 · Phone</button>
+  <span class="sp"></span>
+  <button id="theme">Dark / light</button>
+</div>
+
+<!-- ================================================================ 0 RULES -->
+<section class="screen on" id="rules">
+  <div class="note">
+    <h1>Three rules, and what they replace</h1>
+    Today the design system asks for 6px radii, 8px cards and 12px dialogs, and 16 components draw a full hairline box.
+    Stack a card in a column in a panel and you see three nested rounded outlines. The proposal keeps the palette,
+    type, spacing and motion as they are, and changes only the <b>shape</b> language.
+  </div>
+  <div class="rules">
+    <div class="rule">
+      <h3>1 · Structure is square. Only what you touch or what floats is round.</h3>
+      <p>Panels, board columns, cards, tables, the pipeline, the chat: 0 radius. Buttons, fields, segmented
+        controls, menu rows: 6px. Dialogs, popovers, toasts: 10px. Avatars and the one "needs you" badge: full.</p>
+      <div class="ba">
+        <div><span class="label">Today</span>
+          <div class="old-card"><div class="muted" style="font-size:12px">DASH-3</div>Refactor the data layer
+            <div class="old-row"><span class="old-pill">Running</span> Implement</div>
+            <div class="old-row"><span class="old-pill ok">Completed</span> Review</div></div></div>
+        <div><span class="label">Proposed</span>
+          <div class="card" style="margin:0"><div class="r1"><span class="mono">DASH-3</span></div>
+            <div class="ttl">Refactor the data layer</div>
+            <div class="r3"><span class="st run"><i></i>Implement</span><span class="st ok">✓ Review</span></div></div></div>
+      </div>
+    </div>
+    <div class="rule">
+      <h3>2 · Lines are for fields and focus, not for separating things.</h3>
+      <p>Regions are told apart by shade and space (the README already says so; the CSS drifted). A hairline survives in
+        exactly three places: an input's edge, the focus ring, and a diff's gutter. Table rows get air, not rules;
+        hover gives them a wash.</p>
+      <table class="spec">
+        <tr><td>Region vs region</td><td>shade step (surface / chrome / canvas)</td></tr>
+        <tr><td>Item vs item</td><td>6–8px of space, hover wash</td></tr>
+        <tr><td>Selected / current</td><td>wash + weight, or a 2px accent underline for tabs</td></tr>
+        <tr><td>Needs attention</td><td>attention wash + 3px inset bar (not a border)</td></tr>
+        <tr><td>Fields</td><td>1px line, accent ring on focus</td></tr>
+      </table>
+    </div>
+    <div class="rule">
+      <h3>3 · Status is a glyph and a word, not a pill.</h3>
+      <p>Every "Completed" / "Running" chip today is a rounded box with a border and a tint. In a pipeline of eight
+        steps that is eight boxes. Status becomes a coloured mark and a coloured word. The only filled pill left is
+        <span class="needs">Needs you</span> — so it is, again, the loudest thing on the screen.</p>
+      <div style="display:flex;gap:18px;flex-wrap:wrap">
+        <span class="st run"><i></i>Running</span><span class="st ok">✓ Completed</span><span class="st bad">✕ Failed</span>
+        <span class="st wait"><i></i>Queued</span><span class="st merged">⇡ Merged</span><span class="st closed"><i></i>Closed</span>
+      </div>
+    </div>
+    <div class="rule">
+      <h3>4 · Every person has a face and a name.</h3>
+      <p>Humans get an identity-coloured round avatar and their name everywhere an action is shown — chat, events,
+        timeline, toasts, conflict notices. Agents keep a rounded-square role tile, so a person and an agent never look
+        alike. "Human" and "a person" disappear from the UI.</p>
+      <div style="display:flex;gap:14px;align-items:center;font-size:14px">
+        <span class="av ana">AN</span>Ana <span class="av bo">BO</span>Bo <span class="role impl">✎</span>Implementer
+        <span class="role rev">◎</span>Reviewer <span class="av gh">GH</span>@octo on GitHub</div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================ 1 BOARD -->
+<section class="screen" id="board">
+  <div class="note"><h1>Board</h1><ul>
+    <li><b>Mine / Everyone</b> filter; "Mine" is the default for a team. Signed-in person in the sidebar footer.</li>
+    <li><b>Ready to merge</b> is its own column. Cards carry the PR number, checks and review at a glance.</li>
+    <li>Columns are just headings over space; cards are flat blocks of shade. No outlines, no rounded corners, no dashed collapsed lanes.</li></ul></div>
+  <div class="frame">
+    <aside class="side">
+      <div class="brand"><span class="logo">d</span>El Duderino</div>
+      <div class="search">Find work… <span class="kbd">/</span></div>
+      <div class="nav"><span class="needs" style="padding:1px 7px">2</span><span class="t">Waiting on you</span></div>
+      <div class="nav"><span class="t">Waiting on others</span><span class="c">3</span></div>
+      <div class="nav-h label">Projects</div>
+      <div class="nav on"><span class="t">Dashboard</span><span class="c">6</span></div>
+      <div class="nav"><span class="t">Greeter</span><span class="c">9</span></div>
+      <div class="nav"><span class="t">Billing API</span><span class="c">4</span></div>
+      <div class="nav-h label">Recent</div>
+      <div class="nav sub" style="padding-left:8px"><span class="k">DASH-2</span><span class="t">Localise the dashboard</span></div>
+      <div class="nav sub" style="padding-left:8px"><span class="k">GREE-5</span><span class="t">Capitalise names</span></div>
+      <div class="me"><span class="av lg ana">AN</span><div class="who">Ana Ribeiro<small>Admin · Acme</small></div><button class="btn ghost sm">⚙</button></div>
+    </aside>
+    <main class="main">
+      <div class="top"><h2>Dashboard</h2>
+        <span class="muted" style="font-size:13px">6 tasks · $4.12 this week</span>
+        <span style="flex:1"></span>
+        <span class="seg"><span class="on">Mine</span><span>Everyone</span></span>
+        <button class="btn ghost">Group by epic</button>
+        <button class="btn primary">＋ New task</button></div>
+      <div class="scroll"><div class="board">
+        <div class="col"><h3>Backlog <span class="c">1</span></h3>
+          <div class="card"><div class="r1"><span class="mono">DASH-6</span><span class="sp"></span></div>
+            <div class="ttl">Export charts as PNG</div>
+            <div class="r3"><span class="st wait"><i></i>Not started</span><span class="sp"></span><span class="av ana">AN</span></div></div></div>
+        <div class="col"><h3>In progress <span class="c">3</span></h3>
+          <div class="card attn"><div class="r1"><span class="mono">DASH-2</span><span class="sp"></span><span class="needs">Needs you</span></div>
+            <div class="ttl">Localise the dashboard</div>
+            <div class="q"><span class="role impl">✎</span><span>“Should FACTORY.md be in English?”</span></div>
+            <div class="r3"><span class="muted">asked 38m ago</span><span class="sp"></span><span class="av ana">AN</span></div></div>
+          <div class="card"><div class="r1"><span class="mono">DASH-3</span><span class="sp"></span><span class="num">12m</span></div>
+            <div class="ttl">Refactor the data layer</div>
+            <div class="r3"><span class="st run"><i></i>Review · 2 of 3</span><span class="sp"></span><span class="num">$0.41</span><span class="av ana">AN</span></div></div>
+          <div class="card"><div class="r1"><span class="mono">DASH-7</span><span class="sp"></span><span class="num">3m</span></div>
+            <div class="ttl">Dark mode for the charts</div>
+            <div class="r3"><span class="st run"><i></i>Implement</span><span class="sp"></span><span class="av ana">AN</span></div></div></div>
+        <div class="col"><h3>In review <span class="c">1</span></h3>
+          <div class="card"><div class="r1"><span class="mono">DASH-1</span><span class="sp"></span><span class="pr">#41</span></div>
+            <div class="ttl">Pick the chart library</div>
+            <div class="r3"><span class="pr"><span class="dotx">✕</span> 1 failing</span><span class="st run"><i></i>Fixing</span><span class="sp"></span><span class="av ana">AN</span></div></div></div>
+        <div class="col"><h3>Ready to merge <span class="c">1</span></h3>
+          <div class="card"><div class="r1"><span class="mono">DASH-4</span><span class="sp"></span><span class="pr">#38</span></div>
+            <div class="ttl">Add dark mode toggle</div>
+            <div class="r3"><span class="pr"><span class="dotc">✓</span> checks</span><span class="pr"><span class="dotc">✓</span> @cy</span><span class="sp"></span><span class="av ana">AN</span></div></div></div>
+        <div class="col"><h3>Done <span class="c">12</span></h3>
+          <div class="card"><div class="r1"><span class="mono">DASH-5</span><span class="sp"></span><span class="pr">#36</span></div>
+            <div class="ttl">Fix tooltip overflow</div>
+            <div class="r3"><span class="st merged">⇡ Merged</span><span class="sp"></span><span class="muted">2d</span><span class="av ana">AN</span></div></div>
+          <div class="card"><div class="r1"><span class="mono">DASH-0</span><span class="sp"></span><span class="pr">#31</span></div>
+            <div class="ttl">Seed the project</div>
+            <div class="r3"><span class="st closed"><i></i>Closed, not merged</span><span class="sp"></span><span class="av ana">AN</span></div></div></div>
+      </div></div>
+    </main>
+  </div>
+</section>
+
+<!-- ================================================================ 2 TASK + PR -->
+<section class="screen" id="task">
+  <div class="note"><h1>Task, with the pull request as a first-class panel</h1><ul>
+    <li>Header status and PR panel say the same thing: <b>Changes requested</b> is a state, not grey note text.</li>
+    <li>Every check by name, with a link to its log. Reviews and comments from GitHub, by person, in one timeline with dude's own actions.</li>
+    <li>Each fix step says what woke it: <i>@cy's review</i>, <i>CI: e2e</i>, <i>Ana's steer</i>. Warnings dude can't fix itself (behind main, conflicts, someone pushed) are shown, not silent.</li></ul></div>
+  <div class="frame">
+    <aside class="side">
+      <div class="brand"><span class="logo">d</span>El Duderino</div>
+      <div class="search">Find work… <span class="kbd">/</span></div>
+      <div class="nav"><span class="needs" style="padding:1px 7px">2</span><span class="t">Waiting on you</span></div>
+      <div class="nav"><span class="t">Waiting on others</span><span class="c">3</span></div>
+      <div class="nav-h label">Projects</div>
+      <div class="nav on"><span class="t">Dashboard</span><span class="c">6</span></div>
+      <div class="nav"><span class="t">Greeter</span><span class="c">9</span></div>
+      <div class="me"><span class="av lg ana">AN</span><div class="who">Ana Ribeiro<small>Admin · Acme</small></div><button class="btn ghost sm">⚙</button></div>
+    </aside>
+    <main class="main">
+      <div class="top"><span class="crumbs">Dashboard › <b>DASH-1</b></span><span style="flex:1"></span>
+        <span class="muted" style="font-size:13px">Owner</span><span class="av ana">AN</span><span style="font-size:14px">Ana</span>
+        <button class="btn">Edit</button><button class="btn ghost">⋯</button></div>
+      <div class="scroll">
+        <div class="hdr"><div style="flex:1">
+          <h1>Pick the chart library</h1>
+          <div class="meta"><span class="st bad">✕ Changes requested</span><span>PR <a href="#">#41 ↗</a></span><span class="mono">dude/dash-1/attempt-1</span><span>Created by Ana · 2h ago</span></div></div></div>
+        <p class="goal">Choose between Recharts and visx for the dashboard, add it, and port the revenue chart as the first user.</p>
+
+        <div class="grid2">
+          <div>
+            <div class="sec"><span class="label">Pipeline</span>
+              <div class="steps">
+                <div class="step"><span class="n">1</span><span class="role impl">✎</span><span class="what">Implement</span><span class="st ok">✓</span><span class="mono sha">d4ef040</span></div>
+                <div class="step"><span class="n">2</span><span class="role rev">◎</span><span class="what">Review · correctness<span class="why">1 blocking</span></span><span class="st ok">✓</span><span class="mono sha"></span></div>
+                <div class="step"><span class="n">3</span><span class="role fix">⚒</span><span class="what">Fix<span class="why">for the review</span></span><span class="st ok">✓</span><span class="mono sha">0fff44b</span></div>
+                <div class="step"><span class="n">4</span><span class="role rev">◎</span><span class="what">Review · correctness<span class="why">no findings</span></span><span class="st ok">✓</span><span class="mono sha"></span></div>
+                <div class="step"><span class="n">5</span><span class="role impl">✦</span><span class="what">Simplify</span><span class="st ok">✓</span><span class="mono sha">dc5889c</span></div>
+                <div class="step"><span class="n">6</span><span class="role sys">⇡</span><span class="what">Opened PR #41</span><span class="st ok">✓</span><span class="mono sha"></span></div>
+                <div class="step"><span class="n">7</span><span class="role fix">⚒</span><span class="what">Fix<span class="why">for CI: e2e</span></span><span class="st ok">✓</span><span class="mono sha">a91be02</span></div>
+                <div class="step"><span class="n">8</span><span class="role fix">⚒</span><span class="what">Fix<span class="why">for @cy's review · 2 comments</span></span><span class="st run"><i></i>Running</span><span class="mono sha"></span></div>
+              </div>
+              <div class="muted" style="font-size:12px;margin-top:8px">PR fix rounds: 2 of 5 used</div>
+            </div>
+            <div class="sec"><span class="label">Time &amp; cost</span>
+              <div class="metrics"><div><b class="num">2h 04m</b><span>lead time</span></div><div><b class="num">18m</b><span>agents working</span></div>
+                <div><b class="num">6m</b><span>waiting on people</span></div><div><b class="num">$0.87</b><span>8 runs</span></div></div></div>
+          </div>
+
+          <div class="sec">
+            <div class="prbox">
+              <div class="head"><span class="role sys">⇡</span><b>Pull request #41</b><span style="flex:1"></span><a href="#" style="font-size:13px">Open on GitHub ↗</a></div>
+              <div class="sum"><span class="st bad">✕ Changes requested</span><span class="st bad">✕ 1 of 4 checks failing</span><span class="st wait" style="color:var(--a-fg)">⚠ 3 commits behind main</span></div>
+              <dl class="kv">
+                <dt>Reviewers</dt><dd style="display:grid;gap:6px"><span style="display:flex;gap:8px;align-items:center"><span class="av cy">CY</span>Cy<span class="st bad">✕ changes requested</span></span><span style="display:flex;gap:8px;align-items:center"><span class="av dee">DE</span>Dee<span class="st wait"><i></i>pending</span></span></dd>
+                <dt>Checks</dt><dd><ul class="checks">
+                  <li><span class="check bad">✕</span>e2e (chrome)<span class="sp"></span><span class="muted">4m 12s</span><a href="#">log</a></li>
+                  <li><span class="check ok">✓</span>unit<span class="sp"></span><span class="muted">48s</span></li>
+                  <li><span class="check ok">✓</span>lint<span class="sp"></span><span class="muted">21s</span></li>
+                  <li><span class="check run">●</span>deploy-preview<span class="sp"></span><span class="muted">running</span></li></ul></dd>
+                <dt>Mergeable</dt><dd>Behind main, no conflicts. <a href="#">Update branch</a></dd>
+              </dl>
+            </div>
+            <div style="margin-top:22px"><span class="label">Activity on GitHub and here</span>
+              <ul class="tl" style="margin-top:6px">
+                <li><span class="role fix">⚒</span><div class="body"><b>Fixer</b> started on Cy's 2 comments</div><span class="when">now</span></li>
+                <li><span class="av cy">CY</span><div class="body"><b>@cy</b> requested changes
+                  <blockquote>Please don't pull in all of visx — import the chart packages you use. And the tooltip formatter should use our formatUsd.</blockquote></div><span class="when">4m</span></li>
+                <li><span class="av ana">AN</span><div class="body"><b>Ana</b> asked the fixer to keep the old chart behind a flag</div><span class="when">22m</span></li>
+                <li><span class="role sys">✕</span><div class="body"><b>CI: e2e (chrome)</b> failed on a91be02 — a fixer was started with its log</div><span class="when">31m</span></li>
+                <li><span class="av gh">GH</span><div class="body"><b>@marcio</b> pushed 1 commit to the branch</div><span class="when">40m</span></li>
+                <li><span class="role sys">⇡</span><div class="body"><b>dude</b> opened the pull request · requested review from Cy and Dee</div><span class="when">52m</span></li>
+              </ul></div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+</section>
+
+<!-- ================================================================ 3 RUN -->
+<section class="screen" id="run">
+  <div class="note"><h1>Run, with two people in it</h1><ul>
+    <li>Steers are signed: <b>Bo</b>, not "Human". The owner sees an inline note when someone else steers their agent.</li>
+    <li>Someone else's action that beat you is a calm notice with their name, not a red error with an ID — and it goes away when you act.</li>
+    <li>Abort asks first, and says whose run it is. A dropped live connection is shown and recovered.</li></ul></div>
+  <div class="frame" style="position:relative">
+    <aside class="side">
+      <div class="brand"><span class="logo">d</span>El Duderino</div>
+      <div class="search">Find work… <span class="kbd">/</span></div>
+      <div class="nav"><span class="needs" style="padding:1px 7px">1</span><span class="t">Waiting on you</span></div>
+      <div class="nav"><span class="t">Waiting on others</span><span class="c">4</span></div>
+      <div class="nav-h label">Projects</div>
+      <div class="nav on"><span class="t">Dashboard</span><span class="c">6</span></div>
+      <div class="nav"><span class="t">Greeter</span><span class="c">9</span></div>
+      <div class="me"><span class="av lg bo">BO</span><div class="who">Bo Lindqvist<small>Member · Acme</small></div><button class="btn ghost sm">⚙</button></div>
+    </aside>
+    <main class="main">
+      <div class="top"><span class="crumbs">Dashboard › DASH-3 › <b>Implement</b></span><span style="flex:1"></span>
+        <span class="live"><i></i>Live</span></div>
+      <div class="runhdr"><span class="role lg impl">✎</span>
+        <div class="t"><b>Refactor the data layer · Implement</b><small>Ana's task · claude-sonnet-5 · started 14m ago</small></div>
+        <div class="stats"><span>Cost <b class="num">$0.23</b></span><span>Tokens <b class="num">41k</b></span><span>Elapsed <b class="num">14m 02s</b></span></div>
+        <span class="st run"><i></i>Running</span>
+        <button class="btn">Pause</button><button class="btn danger">Abort…</button></div>
+      <div class="chat">
+        <div class="turn"><span class="role lg sys">★</span><div><div class="who">Task <small>14:02</small></div>
+          <div class="txt">Move the data fetching out of the chart components into <span class="mono">useDashboardData</span>, with one cache.</div></div></div>
+        <div class="turn"><span class="role lg impl">✎</span><div><div class="who">Implementer <small>14:03</small></div>
+          <div class="txt">I'll start by finding every place that fetches directly.</div>
+          <div class="tool"><span>⌕ grep "fetch(" src/charts</span><span class="sp"></span><span class="muted">7 matches · 0.2s</span></div>
+          <div class="tool"><span>✎ edit src/data/useDashboardData.ts</span><span class="sp"></span><span class="muted">+84 −0</span></div></div></div>
+        <div class="turn steer"><span class="av lg bo">BO</span><div><div class="who">Bo <small>14:11 · steer, interrupted the turn</small></div>
+          <div class="txt">Keep the old <span class="mono">fetchRevenue</span> export — billing imports it.</div></div></div>
+        <div class="event">Ana was notified that <b>Bo</b> steered her agent</div>
+        <div class="turn"><span class="role lg impl">✎</span><div><div class="who">Implementer <small>14:11</small></div>
+          <div class="txt">Understood — I'll keep <span class="mono">fetchRevenue</span> as a thin wrapper over the new hook's loader.</div>
+          <div class="tool"><span>▶ bun test src/data</span><span class="sp"></span><span class="st run"><i></i>running 38s</span></div></div></div>
+      </div>
+      <div class="conflict"><span class="av ana">AN</span><span><b>Ana</b> paused this run a moment ago, so your pause wasn't needed.</span><span class="sp"></span><button class="btn ghost sm">Dismiss</button></div>
+      <div class="composer"><div class="box">
+        <textarea class="field" rows="2" style="border:0;background:none;padding:0" placeholder="Steer the implementer…"></textarea>
+        <div class="row"><span>Sent as <b style="color:var(--text)">Bo</b> · waits for the turn to end</span><label style="display:flex;gap:6px;align-items:center"><input type="checkbox"> interrupt now</label><span class="sp"></span><span class="kbd">Enter</span> send <span class="kbd">⇧ Enter</span> new line<button class="btn primary sm">Steer</button></div>
+      </div></div>
+    </main>
+    <div class="scrim" id="abortDlg" style="display:none"><div class="dialog">
+      <h4>Abort Ana's implementer?</h4>
+      <p>This ends the run and the task goes back to Ana. Work that isn't pushed is lost. Pausing keeps everything.</p>
+      <textarea class="field" rows="2" placeholder="Why (shown to Ana)…"></textarea>
+      <div class="acts"><button class="btn ghost" onclick="abortDlg.style.display='none'">Cancel</button><button class="btn">Pause instead</button><button class="btn danger solid">Abort run</button></div>
+    </div></div>
+  </div>
+  <div class="note" style="margin-top:-28px;margin-bottom:40px"><button class="btn" onclick="abortDlg.style.display='grid'">Show the Abort confirmation</button></div>
+</section>
+
+<!-- ================================================================ 4 INBOX -->
+<section class="screen" id="inbox">
+  <div class="note"><h1>Waiting on you — and, separately, on others</h1><ul>
+    <li>"Waiting on you" only counts what <b>you</b> can answer. It's the only filled attention badge in the sidebar.</li>
+    <li>Others' items are visible (so you can cover for someone on holiday) but quiet, with a "Take over" action.</li>
+    <li>Things no person owns — dead-lettered work, a webhook that stopped arriving, CI stuck for an hour — show under "Needs an admin".</li></ul></div>
+  <div class="frame">
+    <aside class="side">
+      <div class="brand"><span class="logo">d</span>El Duderino</div>
+      <div class="search">Find work… <span class="kbd">/</span></div>
+      <div class="nav on"><span class="needs" style="padding:1px 7px">2</span><span class="t">Waiting on you</span></div>
+      <div class="nav"><span class="t">Waiting on others</span><span class="c">3</span></div>
+      <div class="nav-h label">Projects</div>
+      <div class="nav"><span class="t">Dashboard</span><span class="c">6</span></div>
+      <div class="nav"><span class="t">Greeter</span><span class="c">9</span></div>
+      <div class="me"><span class="av lg ana">AN</span><div class="who">Ana Ribeiro<small>Admin · Acme</small></div><button class="btn ghost sm">⚙</button></div>
+    </aside>
+    <main class="main">
+      <div class="top"><h2>Waiting on you</h2><span style="flex:1"></span><span class="seg"><span class="on">Oldest first</span><span>By project</span></span></div>
+      <div class="scroll" style="max-width:980px">
+        <div class="group"><span class="label">Yours · 2</span>
+          <div class="item mine"><span class="role impl">✎</span><div class="q">Should FACTORY.md be in English or Portuguese?<small>DASH-2 · Localise the dashboard · implementer is parked</small></div><span class="muted num" style="font-size:13px">waiting 38m</span><button class="btn sm primary">Answer</button></div>
+          <div class="item mine"><span class="role sys">!</span><div class="q">Review loop hit its limit (5 rounds)<small>GREE-7 · Greet in Klingon · decide how it goes on</small></div><span class="muted num" style="font-size:13px">waiting 2h</span><button class="btn sm">Decide</button></div>
+        </div>
+        <div class="group"><span class="label">Waiting on others · 3</span>
+          <div class="item theirs"><span class="av bo">BO</span><div class="q">May the implementer add <span class="mono">acme/design-tokens</span> to the workspace?<small>BILL-4 · Bo · repository request</small></div><span class="muted num" style="font-size:13px">12m</span><button class="btn ghost sm">Take over</button></div>
+          <div class="item theirs"><span class="av cy">CY</span><div class="q">Which currency should the invoice default to?<small>BILL-2 · Cy · question</small></div><span class="muted num" style="font-size:13px">1h 05m</span><button class="btn ghost sm">Take over</button></div>
+          <div class="item theirs"><span class="av dee">DE</span><div class="q">PR #44 has merge conflicts with main<small>GREE-9 · Dee · needs a person to rebase</small></div><span class="muted num" style="font-size:13px">3h</span><button class="btn ghost sm">Take over</button></div>
+        </div>
+        <div class="group"><span class="label">Needs an admin · 1</span>
+          <div class="item"><span class="role sys" style="color:var(--d-fg)">✕</span><div class="q">No GitHub webhooks from <span class="mono">acme/greeter</span> for 6h<small>PR updates are arriving only every 15 minutes · check the webhook in Settings › GitHub</small></div><span class="muted num" style="font-size:13px">6h</span><button class="btn ghost sm">Open settings</button></div>
+        </div>
+      </div>
+    </main>
+  </div>
+</section>
+
+<!-- ================================================================ 5 MEMBERS -->
+<section class="screen" id="members">
+  <div class="note"><h1>Organisation settings: Members and GitHub</h1><ul>
+    <li>Invite a teammate: name, email, role → a one-time sign-in key shown once. Revoke in one click. Each person can hold several keys (laptop, phone) and stays one person.</li>
+    <li>Roles: <b>Admin</b> (credentials, policy, members) and <b>Member</b> (tasks, steer, answer own).</li>
+    <li>GitHub: webhook registered by dude, with its health; the secret is shown for manual setup. Who may wake a fixer.</li></ul></div>
+  <div class="frame">
+    <aside class="side">
+      <div class="brand"><span class="logo">d</span>El Duderino</div>
+      <div class="nav-h label">Organisation</div>
+      <div class="nav on"><span class="t">Members</span><span class="c">4</span></div>
+      <div class="nav"><span class="t">GitHub</span></div>
+      <div class="nav"><span class="t">Agent defaults</span></div>
+      <div class="nav"><span class="t">Budgets</span></div>
+      <div class="nav-h label">You</div>
+      <div class="nav"><span class="t">Profile &amp; keys</span></div>
+      <div class="nav"><span class="t">Notifications</span></div>
+      <div class="me"><span class="av lg ana">AN</span><div class="who">Ana Ribeiro<small>Admin · Acme</small></div><button class="btn ghost sm">⚙</button></div>
+    </aside>
+    <main class="main">
+      <div class="top"><h2>Members</h2><span style="flex:1"></span><button class="btn primary">＋ Invite</button></div>
+      <div class="scroll"><div class="pane">
+        <p class="lead">Everyone here can create and deliver tasks. Admins also manage GitHub, agent defaults, budgets and members.</p>
+        <table class="table">
+          <tr><th style="width:40%">Person</th><th>Role</th><th>Keys</th><th>Last active</th><th></th></tr>
+          <tr><td><span style="display:flex;gap:10px;align-items:center"><span class="av ana">AN</span>Ana Ribeiro <span class="muted">(you)</span></span></td><td>Admin</td><td>2</td><td class="muted">now</td><td></td></tr>
+          <tr><td><span style="display:flex;gap:10px;align-items:center"><span class="av bo">BO</span>Bo Lindqvist</span></td><td><select class="field" style="width:110px;height:28px"><option>Member</option><option>Admin</option></select></td><td>1</td><td class="muted">4m ago</td><td><button class="btn ghost sm">Revoke…</button></td></tr>
+          <tr><td><span style="display:flex;gap:10px;align-items:center"><span class="av cy">CY</span>Cy Okafor</span></td><td><select class="field" style="width:110px;height:28px"><option>Member</option></select></td><td>1</td><td class="muted">1h ago</td><td><button class="btn ghost sm">Revoke…</button></td></tr>
+          <tr><td><span style="display:flex;gap:10px;align-items:center"><span class="av dee">DE</span>Dee Marsh <span class="muted">· invited</span></span></td><td>Member</td><td>—</td><td class="muted">never</td><td><button class="btn ghost sm">Copy key again</button></td></tr>
+        </table>
+
+        <div style="margin-top:44px"><h3>GitHub</h3><p class="lead">Pull requests are opened as <b>acme-dude[bot]</b> through the GitHub App.</p>
+          <div class="okline">✓ Webhook on 3 repositories · last delivery 12s ago · 0 failed today</div>
+          <dl class="kv" style="grid-template-columns:180px 1fr;row-gap:14px;margin-top:18px">
+            <dt>Webhook URL</dt><dd><div class="secret"><code>https://dude.acme.dev/v1/webhooks/github/org_7f2c</code><button class="btn sm">Copy</button></div></dd>
+            <dt>Secret</dt><dd><div class="secret"><code>••••••••••••••••••••</code><button class="btn sm">Reveal</button><button class="btn ghost sm">Rotate</button></div></dd>
+            <dt>Who can wake a fixer</dt><dd><select class="field" style="width:320px"><option>Repository collaborators with write access</option><option>Task owner and org members only</option><option>Anyone who can comment</option></select></dd>
+            <dt>Fix rounds on a PR</dt><dd><input class="field" style="width:80px" value="5"> <span class="muted" style="font-size:13px">then ask the owner</span></dd>
+            <dt>Open pull requests as</dt><dd><span class="seg"><span class="on">Ready for review</span><span>Draft</span></span></dd>
+          </dl></div>
+      </div></div>
+    </main>
+  </div>
+</section>
+
+<!-- ================================================================ 6 PHONE -->
+<section class="screen" id="phone">
+  <div class="note"><h1>Phone (390px): answering from a notification</h1><ul>
+    <li>The pipeline collapses to role, step and status — nothing is cut off on the right.</li>
+    <li>The question is the whole screen; you can answer without opening the run.</li></ul></div>
+  <div style="display:flex;gap:40px;justify-content:center;flex-wrap:wrap">
+    <div class="frame phone" style="margin:16px 0 40px">
+      <main class="main">
+        <div class="top"><span style="font-size:20px">☰</span><span class="crumbs"><b>DASH-1</b></span><span style="flex:1"></span><span class="av ana">AN</span></div>
+        <div class="scroll">
+          <h1 style="font-size:20px;margin:4px 0 6px;color:var(--strong)">Pick the chart library</h1>
+          <div style="display:flex;gap:12px;flex-wrap:wrap"><span class="st bad">✕ Changes requested</span><a href="#" style="font-size:13px">PR #41 ↗</a></div>
+          <div class="sec" style="margin-top:22px"><span class="label">Pipeline</span><div class="steps">
+            <div class="step"><span class="role impl">✎</span><span class="what">Implement</span><span class="st ok">✓</span></div>
+            <div class="step"><span class="role rev">◎</span><span class="what">Review<span class="why">1 blocking</span></span><span class="st ok">✓</span></div>
+            <div class="step"><span class="role fix">⚒</span><span class="what">Fix</span><span class="st ok">✓</span></div>
+            <div class="step"><span class="role sys">⇡</span><span class="what">PR #41</span><span class="st ok">✓</span></div>
+            <div class="step"><span class="role fix">⚒</span><span class="what">Fix<span class="why">@cy's review</span></span><span class="st run"><i></i></span></div></div></div>
+          <div class="prbox" style="margin-top:20px;padding:14px"><div class="head"><b>Checks</b><span style="flex:1"></span><span class="st bad">1 of 4 failing</span></div>
+            <ul class="checks"><li><span class="check bad">✕</span>e2e (chrome)<span class="sp"></span><a href="#">log</a></li><li><span class="check ok">✓</span>unit</li><li><span class="check ok">✓</span>lint</li></ul></div>
+        </div>
+      </main>
+    </div>
+    <div class="frame phone" style="margin:16px 0 40px">
+      <main class="main">
+        <div class="top"><span style="font-size:20px">‹</span><span class="crumbs"><b>DASH-2</b> · question</span></div>
+        <div class="scroll">
+          <span class="needs">Needs you</span>
+          <div style="display:flex;gap:10px;align-items:center;margin:16px 0 6px"><span class="role impl">✎</span><b style="color:var(--strong)">Implementer</b><span class="muted" style="font-size:13px">asked 38m ago</span></div>
+          <p style="margin:0 0 18px;font-size:16px;color:var(--strong)">Should FACTORY.md be in English or Portuguese? The rest of the repo's docs are English, but the task says "localise".</p>
+          <div style="display:grid;gap:8px"><button class="btn" style="justify-content:flex-start;height:44px">English</button><button class="btn" style="justify-content:flex-start;height:44px">Portuguese</button></div>
+          <textarea class="field" rows="3" style="margin-top:14px" placeholder="Or write an answer…"></textarea>
+          <button class="btn primary" style="width:100%;justify-content:center;height:44px;margin-top:10px">Answer as Ana</button>
+        </div>
+      </main>
+    </div>
+  </div>
+</section>
+
+<script>
+document.querySelectorAll('.mk-bar [data-s]').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.mk-bar [data-s]').forEach(x => x.setAttribute('aria-pressed', x === b));
+  document.querySelectorAll('.screen').forEach(s => s.classList.toggle('on', s.id === b.dataset.s));
+  history.replaceState(null, '', '#' + b.dataset.s);
+});
+const start = location.hash.slice(1); if (start) document.querySelector(`[data-s="${start}"]`)?.click();
+document.getElementById('theme').onclick = () => {
+  const h = document.documentElement; h.dataset.theme = h.dataset.theme === 'dark' ? 'light' : 'dark';
+};
+</script>
+</body>
+</html>

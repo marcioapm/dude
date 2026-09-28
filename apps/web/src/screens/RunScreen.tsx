@@ -245,7 +245,7 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
                   )}
                   <Button
                     size="sm"
-                    variant="destructive-outline"
+                    variant="danger"
                     disabled={busy}
                     onClick={() => void intervene(() => client.abort(runId), "abort this run")}
                   >
@@ -463,7 +463,7 @@ function RunEnded({ run, onOpenTask }: { run: RunDetail; onOpenTask: () => void 
       tone={outcome === "failed" ? "danger" : outcome === "aborted" ? "attention" : "neutral"}>
       <span className="runEnded">
         <span>{ENDED_WORDS[outcome]}</span>
-        <Button size="sm" variant="ghost" trailingIcon="arrow-right" onClick={onOpenTask} data-testid="run-ended-task">
+        <Button size="sm" variant="quiet" trailingIcon="arrow-right" onClick={onOpenTask} data-testid="run-ended-task">
           Back to the task
         </Button>
       </span>

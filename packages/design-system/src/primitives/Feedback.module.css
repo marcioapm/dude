@@ -1,7 +1,7 @@
 .skeleton {
   display: block;
   background: var(--ds-color-border-subtle);
-  border-radius: var(--ds-radius-sm);
+  border-radius: var(--ds-radius-mark);
   background-image: linear-gradient(
     90deg,
     var(--ds-color-border-subtle) 0%,
@@ -53,9 +53,8 @@
   place-items: center;
   width: 32px;
   height: 32px;
-  border-radius: var(--ds-radius-lg);
+  border-radius: var(--ds-radius-control);
   background: var(--ds-color-sunken);
-  border: 1px solid var(--ds-color-border-subtle);
   color: var(--ds-color-text-muted);
 }
 .emptyCompact .emptyIcon {

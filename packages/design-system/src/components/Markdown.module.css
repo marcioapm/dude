@@ -92,7 +92,7 @@
   font-family: var(--ds-font-mono);
   font-size: 0.85em;
   padding: 0.1em 0.3em;
-  border-radius: var(--ds-radius-sm);
+  border-radius: var(--ds-radius-mark);
   background: var(--ds-color-sunken);
   box-shadow: inset 0 0 0 1px var(--ds-color-border-subtle);
   color: var(--ds-color-text-primary);
@@ -119,8 +119,7 @@
   gap: 3px;
   font-size: var(--ds-text-sm);
   padding: 0 4px;
-  border: 1px dashed var(--ds-color-border);
-  border-radius: var(--ds-radius-xs);
+  border-radius: var(--ds-radius-mark);
   text-decoration: none;
 }
 
@@ -165,7 +164,7 @@
   width: 14px;
   height: 14px;
   margin-top: 3px;
-  border-radius: var(--ds-radius-xs);
+  border-radius: var(--ds-radius-mark);
   border: 1px solid var(--ds-color-border-strong);
   color: transparent;
   flex-shrink: 0;
@@ -196,7 +195,7 @@
    so a long first line is never covered at rest. */
 .code {
   position: relative;
-  border-radius: var(--ds-radius-lg);
+  border-radius: 0;
   background: var(--ds-color-sunken);
   overflow: hidden;
   max-width: 100%;
@@ -211,7 +210,7 @@
   gap: var(--ds-space-6);
   height: 20px;
   padding: 0 0 0 var(--ds-space-6);
-  border-radius: var(--ds-radius-sm);
+  border-radius: var(--ds-radius-control);
   background: var(--ds-color-sunken);
   font-size: var(--ds-text-2xs);
   color: var(--ds-color-text-muted);
@@ -234,7 +233,7 @@
   height: 20px;
   padding: 0 var(--ds-space-6);
   border: 0;
-  border-radius: var(--ds-radius-sm);
+  border-radius: var(--ds-radius-control);
   background: var(--ds-color-surface);
   color: var(--ds-color-text-secondary);
   font-size: var(--ds-text-2xs);
@@ -292,7 +291,6 @@
   padding: var(--ds-space-cell-y) var(--ds-space-16) var(--ds-space-cell-y) 0;
   /* Body rows: a hairline at 60% of border-subtle, so the 1px header rule
      (one step up, `border`) is the rule that reads. */
-  border-bottom: 1px solid color-mix(in srgb, var(--ds-color-border-subtle) 60%, transparent);
   text-align: left;
   vertical-align: top;
 }
@@ -304,7 +302,6 @@
   font-weight: var(--ds-weight-semibold);
   color: var(--ds-color-text-strong);
   white-space: nowrap;
-  border-bottom-color: var(--ds-color-border);
 }
 .table tr:last-child td {
   border-bottom: 0;
@@ -326,7 +323,7 @@
   margin-left: 1px;
   vertical-align: text-bottom;
   background: var(--ds-tone-info-fg);
-  border-radius: 1px;
+  border-radius: var(--ds-radius-mark);
   animation: global(ds-blink) calc(var(--ds-cadence-blink) / max(var(--ds-motion-live), 0.0001)) steps(2, jump-none) infinite;
 }
 .pre .caret {
@@ -348,7 +345,6 @@
   flex-direction: column;
   gap: 1px;
   padding-left: var(--ds-space-12);
-  border-left: 1px solid var(--ds-color-border-subtle);
   font-size: var(--ds-text-xs);
 }
 .outlineTitle {

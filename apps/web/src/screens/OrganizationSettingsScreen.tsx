@@ -95,7 +95,7 @@ export function OrganizationSettingsScreen({ client }: { client: ApiClient }) {
               {verifying ? "Checking…" : "Verify"}
             </Button>
           ) : null}
-          <Button variant={connection.connected ? "ghost" : "primary"} onClick={() => setReplacing(true)} data-testid="forge-connect">
+          <Button variant={connection.connected ? "quiet" : "primary"} onClick={() => setReplacing(true)} data-testid="forge-connect">
             {connection.connected ? "Replace token" : "Connect GitHub"}
           </Button>
         </CardFooter>

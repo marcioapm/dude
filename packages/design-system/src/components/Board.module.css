@@ -151,9 +151,8 @@
   min-height: 120px;
   padding: var(--ds-space-8) 0 0;
   gap: var(--ds-space-4);
-  border-radius: var(--ds-radius-md);
+  border-radius: 0;
   background: color-mix(in srgb, var(--ds-color-surface) 60%, transparent);
-  border: 1px dashed var(--ds-color-border-subtle);
   flex: 1;
 }
 .columnLabel {
@@ -234,7 +233,6 @@
   gap: var(--ds-space-8);
   height: var(--ds-size-row-default);
   padding: 0 var(--ds-space-6) 0 0;
-  border-top: 1px solid var(--ds-color-border-subtle);
 }
 .laneEmpty .laneHeader {
   color: var(--ds-color-text-muted);
@@ -247,7 +245,7 @@
   min-width: 0;
   padding: 0 var(--ds-space-6) 0 var(--ds-space-4);
   border: 0;
-  border-radius: var(--ds-radius-sm);
+  border-radius: var(--ds-radius-control);
   background: none;
   color: inherit;
   font: inherit;
@@ -337,9 +335,9 @@
 .columnInLaneEmpty {
   align-self: start;
   height: var(--ds-size-row-compact);
-  border-radius: var(--ds-radius-md);
-  border: 1px dashed var(--ds-color-border-subtle);
+  border-radius: 0;
   opacity: 0.6;
+  background: var(--ds-color-sunken);
 }
 .laneClosed .laneHeader {
   border-bottom: 0;
@@ -355,14 +353,14 @@
   width: 100%;
   padding: var(--ds-space-card-pad);
   border: 0;
-  border-radius: var(--ds-radius-md);
+  border-radius: 0;
   background: var(--ds-color-surface);
   box-shadow: var(--ds-shadow-1);
   color: var(--ds-color-text-primary);
   text-align: left;
   font-size: var(--ds-text-sm);
   line-height: var(--ds-leading-snug);
-  cursor: default;
+  cursor: pointer;
   outline: none;
   transition:
     background-color var(--ds-duration-fast) var(--ds-ease-standard),
@@ -387,7 +385,7 @@
   top: 6px;
   bottom: 6px;
   width: 2px;
-  border-radius: 1px;
+  border-radius: var(--ds-radius-mark);
   background: var(--ds-color-accent);
 }
 
@@ -490,7 +488,7 @@
   top: 6px;
   bottom: 6px;
   width: 2px;
-  border-radius: 1px;
+  border-radius: var(--ds-radius-mark);
   background: var(--ds-tone-attention-solid);
 }
 .needsYou.selected::before {
@@ -527,7 +525,7 @@
 .moreButton {
   padding: 3px var(--ds-space-8);
   border: 0;
-  border-radius: var(--ds-radius-sm);
+  border-radius: var(--ds-radius-control);
   background: none;
   color: var(--ds-color-text-muted);
   font-size: var(--ds-text-xs);
@@ -547,7 +545,7 @@
   flex-direction: column;
   gap: var(--ds-space-4);
   padding: var(--ds-space-8);
-  border-radius: var(--ds-radius-md);
+  border-radius: 0;
   background: var(--ds-color-surface);
   box-shadow: var(--ds-shadow-1);
 }

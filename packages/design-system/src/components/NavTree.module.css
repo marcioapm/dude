@@ -24,10 +24,10 @@
   gap: var(--ds-space-6);
   min-height: var(--ds-size-row-item-sm);
   padding: 0 var(--ds-space-8) 0 calc(var(--ds-space-4) + var(--depth) * var(--indent));
-  border-radius: var(--ds-radius-md);
+  border-radius: var(--ds-radius-control);
   font-size: var(--ds-text-nav);
   color: var(--ds-color-text-primary);
-  cursor: default;
+  cursor: pointer;
   outline: none;
   user-select: none;
   transition: background-color var(--ds-duration-fast) var(--ds-ease-standard);
@@ -51,7 +51,7 @@
   top: 8px;
   bottom: 8px;
   width: 2px;
-  border-radius: 1px;
+  border-radius: var(--ds-radius-mark);
   background: var(--ds-color-accent);
 }
 .selected,
@@ -72,7 +72,7 @@
   width: 3px;
   height: 8px;
   margin-top: -4px;
-  border-radius: 2px;
+  border-radius: var(--ds-radius-mark);
   background: var(--ds-color-text-strong);
 }
 /* Selected, the rail is the row's mark; the diamond still says needs-you. */
@@ -89,7 +89,7 @@
   flex-shrink: 0;
   background: none;
   border: 0;
-  border-radius: var(--ds-radius-xs);
+  border-radius: var(--ds-radius-mark);
   color: var(--ds-color-text-disabled);
 }
 .row:hover .toggle {

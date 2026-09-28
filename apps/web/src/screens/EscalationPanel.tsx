@@ -60,7 +60,7 @@ export function EscalationPanel({ client, task, you, onOpenRun, onDecided }: {
         <p>
           <strong>{words.short}.</strong> {words.sentence}{" "}
           {words.runId ? (
-            <Button size="sm" variant="ghost" trailingIcon="arrow-right" onClick={() => onOpenRun(words.runId!)}
+            <Button size="sm" variant="quiet" trailingIcon="arrow-right" onClick={() => onOpenRun(words.runId!)}
               data-testid="escalation-run">
               Open {runLabel(task.runs.find((r) => r.id === words.runId) ?? {})}
             </Button>
@@ -74,7 +74,7 @@ export function EscalationPanel({ client, task, you, onOpenRun, onDecided }: {
               hint="Kept with the task: every agent from here on is told it." data-testid="escalation-note" />
             <div className="escalationActions">
               {task.escalation.actions.map((action) => (
-                <Button key={action} size="sm" variant={action === "stop" ? "ghost" : action === task.escalation.actions[0] ? "primary" : "secondary"}
+                <Button key={action} size="sm" variant={action === "stop" ? "quiet" : action === task.escalation.actions[0] ? "primary" : "secondary"}
                   disabled={busy !== null} loading={busy === action} onClick={() => void decide(action)}
                   data-testid={`escalation-${action}`}>
                   {ACTION_LABEL[action]}

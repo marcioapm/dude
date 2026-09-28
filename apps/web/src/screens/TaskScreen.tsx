@@ -140,7 +140,7 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
     const fix = fixes[index];
     const label = fix ? (fixes.length > 1 ? `${runLabel(fix)} ${index + 1}` : runLabel(fix)) : review ? runLabel(review) : "its review";
     return (
-      <Button size="sm" variant="ghost" onClick={() => onOpenRun(fix?.id ?? reviewId)} data-testid="finding-fixed-in">
+      <Button size="sm" variant="quiet" onClick={() => onOpenRun(fix?.id ?? reviewId)} data-testid="finding-fixed-in">
         {label}
       </Button>
     );

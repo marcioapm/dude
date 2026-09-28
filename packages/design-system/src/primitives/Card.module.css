@@ -3,7 +3,7 @@
   flex-direction: column;
   min-width: 0;
   background: var(--ds-color-surface);
-  border-radius: var(--ds-radius-lg);
+  border-radius: 0;
   box-shadow: var(--ds-shadow-1);
 }
 .raised {
@@ -12,10 +12,10 @@
 }
 .flat {
   box-shadow: none;
-  border: 1px solid var(--ds-color-border-subtle);
+  background: var(--ds-color-chrome);
 }
 .interactive {
-  cursor: default;
+  cursor: pointer;
   transition:
     background-color var(--ds-duration-fast) var(--ds-ease-standard),
     box-shadow var(--ds-duration-fast) var(--ds-ease-standard);
@@ -36,7 +36,6 @@
   gap: var(--ds-space-8);
   min-height: 32px;
   padding: var(--ds-space-6) var(--ds-space-12);
-  border-bottom: 1px solid var(--ds-color-border-subtle);
 }
 .title {
   flex: 1;
@@ -71,7 +70,6 @@
   align-items: center;
   gap: var(--ds-space-8);
   padding: var(--ds-space-8) var(--ds-space-12);
-  border-top: 1px solid var(--ds-color-border-subtle);
   color: var(--ds-color-text-secondary);
   font-size: var(--ds-text-sm);
 }

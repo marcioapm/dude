@@ -18,6 +18,7 @@ export {
   neutral,
   accent,
   diff,
+  merged,
   identityColors,
   IDENTITY_SLOTS,
   TONE_NAMES,
@@ -52,6 +53,7 @@ export type TokenName =
   | `space-${keyof typeof import("./scale.ts").space}`
   | `space-${Kebab<keyof typeof import("./scale.ts").spaceNamed>}`
   | `radius-${keyof typeof import("./scale.ts").radius}`
+  | `radius-face-${keyof typeof import("./scale.ts").faceRadius}`
   | `text-${keyof typeof import("./scale.ts").fontSize}`
   | `leading-${keyof typeof import("./scale.ts").lineHeight}`
   | `weight-${keyof typeof import("./scale.ts").fontWeight}`
@@ -66,6 +68,7 @@ export type TokenName =
   | `role-${string}`
   | `identity-${number}-${"fg" | "bg"}`
   | `diff-${string}`
+  | `merged-${"fg" | "bg"}`
   | `ansi-${string}`
   | `shadow-${1 | 2 | 3}`
   | `duration-${keyof typeof import("./scale.ts").duration}`

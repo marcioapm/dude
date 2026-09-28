@@ -247,7 +247,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
               </Button>
             ) : (
               <>
-                <Button size="sm" variant={groupByEpic ? "secondary" : "ghost"} leadingIcon="layers" aria-pressed={groupByEpic}
+                <Button size="sm" variant={groupByEpic ? "secondary" : "quiet"} leadingIcon="layers" aria-pressed={groupByEpic}
                   data-testid="group-by-epic"
                   onClick={() => {
                     localStorage.setItem(GROUP_BY_EPIC, groupByEpic ? "0" : "1");
@@ -255,7 +255,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
                   }}>
                   Group by epic
                 </Button>
-                <Button size="sm" variant="ghost" leadingIcon="layers" data-testid="new-epic"
+                <Button size="sm" variant="quiet" leadingIcon="layers" data-testid="new-epic"
                   onClick={() => act({ kind: "newEpic", projectId: project.id })}>
                   New epic
                 </Button>
@@ -354,7 +354,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         title={<span className="brand"><DudeMark size={24} />El Duderino</span>}
         footer={
           <div className="sidebarFooter">
-            <Button size="sm" variant="ghost" leadingIcon="plus" onClick={() => setOpen({ kind: "newProject" })} data-testid="new-project">
+            <Button size="sm" variant="quiet" leadingIcon="plus" onClick={() => setOpen({ kind: "newProject" })} data-testid="new-project">
               New project
             </Button>
             {/* The two settings as icons, named by their tooltips: four labels do not fit the sidebar's width. */}
@@ -363,7 +363,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
                 data-testid="org-settings-button" />
               <IconButton size="sm" icon="human" label="Your settings" onClick={() => go({ view: "mySettings" })}
                 data-testid="my-settings-button" />
-              <Button size="sm" variant="ghost" onClick={onSignOut} data-testid="sign-out">
+              <Button size="sm" variant="quiet" onClick={onSignOut} data-testid="sign-out">
                 Sign out
               </Button>
             </span>
