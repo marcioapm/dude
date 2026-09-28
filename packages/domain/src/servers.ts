@@ -28,7 +28,8 @@ export const serverWorkdirSchema = z
   .max(500)
   .refine((w) => !w.startsWith("/") && !w.split("/").includes(".."), "relative to the repository, inside it");
 
-const envNameSchema = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "an environment variable's name");
+const envNameSchema = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "an environment variable's name")
+  .refine((n) => !n.startsWith("LUX_"), "the LUX_ prefix is reserved");
 
 /** A recipe as a maintainer writes it (`PUT /v1/projects/:id/servers/:name`). */
 export const recipeInputSchema = z.object({

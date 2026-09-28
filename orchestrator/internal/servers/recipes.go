@@ -174,6 +174,11 @@ func (m ManualServer) Input(repo string) (lux.ServerInput, error) {
 				in.Env[e.Name] = e.Value
 			}
 		}
+		for k := range in.Env {
+			if strings.HasPrefix(k, "LUX_") {
+				return in, fmt.Errorf("env: %q: the LUX_ prefix is reserved", k)
+			}
+		}
 	}
 	return in, nil
 }

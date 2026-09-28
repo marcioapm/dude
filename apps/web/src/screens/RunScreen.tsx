@@ -175,7 +175,9 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
   const isLive = run ? !TERMINAL_RUN_STATUSES.includes(run.status) : false;
   // A branch preview is a run with no agent: nothing to steer, pause or abort
   // from here (the API says 409 not_an_agent); the servers are all of it.
-  const isPreviewRun = servers.data?.run?.kind === "preview" && servers.data.run.id === runId;
+  // The Run says so itself, so the agent's controls never flash (or a
+  // parked preview's pause words go missing) before the servers are read.
+  const isPreviewRun = run?.kind === "preview";
   // The latest diff's summary: its file count for the Changes tab, its
   // checksum for the panel to know when to fetch.
   const diffSummary = useMemo(
