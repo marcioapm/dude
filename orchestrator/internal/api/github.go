@@ -64,12 +64,8 @@ func (s *Server) updateGithubSettings(w http.ResponseWriter, r *http.Request, or
 	}
 	stored := map[string]json.RawMessage{}
 	_ = json.Unmarshal(raw, &stored)
-	known := map[string]bool{}
-	for _, k := range forge.SettingKeys() {
-		known[k] = true
-	}
 	for k, v := range change {
-		if !known[k] {
+		if !slices.Contains(forge.SettingKeys(), k) {
 			return fail(http.StatusBadRequest, "bad_request", "no GitHub setting %q", k)
 		}
 		stored[k] = v
@@ -159,7 +155,7 @@ func (s *Server) registerWebhooks(w http.ResponseWriter, r *http.Request, org st
 		res := result{RepositoryID: rp.ID, Name: rp.Name, Slug: slug}
 		id, err := gh.EnsureWebhook(r.Context(), slug, body.URL, secret)
 		if err != nil {
-			if !forge.Transient(err) && !isForgeRefusal(err) {
+			if !forge.Transient(err) && !forge.Refused(err) {
 				return err
 			}
 			res.Error = err.Error()
@@ -178,11 +174,6 @@ func (s *Server) registerWebhooks(w http.ResponseWriter, r *http.Request, org st
 	}
 	write(w, http.StatusOK, map[string]any{"repositories": results})
 	return nil
-}
-
-func isForgeRefusal(err error) bool {
-	var e *forge.Error
-	return errors.As(err, &e)
 }
 
 // pullRequestAction does to a pull request what a person asked, on GitHub.
@@ -306,7 +297,7 @@ func (s *Server) pullRequestAction(w http.ResponseWriter, r *http.Request, org s
 // caller's problem, as any error.
 func forgeRefusal(err error, what string) error {
 	var e *forge.Error
-	if errors.As(err, &e) && !forge.Transient(err) {
+	if forge.Refused(err) && errors.As(err, &e) {
 		status := http.StatusConflict
 		if e.Status == 403 || e.Status == 404 {
 			status = http.StatusForbidden

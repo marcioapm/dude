@@ -70,7 +70,6 @@ class FakeGitHub:
         self.repo = repo
         self.root = root
         self.bare = root / owner / f"{repo}.git"
-        self.pulls: dict[int, PullRequest] = {}
         self._next_id = 1000
         self._lock = threading.Lock()
         self._daemon: subprocess.Popen | None = None
@@ -81,25 +80,29 @@ class FakeGitHub:
         # by the test once dude has stored a credential and minted a secret.
         self.webhook_url: str | None = None
         self.webhook_secret: str | None = None
-        self.hooks: list[dict] = []
-        self.deliveries: list[tuple[str, int]] = []
-        # Other repositories of the same owner, served by this one's daemon
-        # and API (add_repository).
-        self.siblings: dict[str, "FakeGitHub"] = {}
+        # Other repositories of the same owner are served by this one's
+        # daemon and API (add_repository).
         self._parent: FakeGitHub | None = None
         # Repository permission by login (admin, write, read, none); anyone
         # not named has write access, as the people in these tests are the
         # team. And the owner organization's members.
         self.permissions: dict[str, str] = {}
         self.members: set[str] = set()
+        self._init_repository()
+
+    def _init_repository(self) -> None:
+        """What each repository has of its own; the rest a sibling shares."""
+        self.pulls: dict[int, PullRequest] = {}
+        self.hooks: list[dict] = []
+        self.deliveries: list[tuple[str, int]] = []
+        self.siblings: dict[str, "FakeGitHub"] = {}
         # CI, by commit: each check by name — a check run (GitHub Actions,
         # an app) or a commit status.
         self.checks: dict[str, dict[str, dict]] = {}
-        # What dude asked GitHub to do.
+        # What dude asked GitHub to do. An Actions check run is a job,
+        # re-run through the Actions API.
         self.merges: list[dict] = []
         self.updates: list[int] = []
-        self.rerequested: list[int] = []
-        # Actions jobs asked to run again (an Actions check run is a job).
         self.jobs_rerun: list[int] = []
         self.review_requests: list[tuple[int, list[str]]] = []
 
@@ -107,11 +110,9 @@ class FakeGitHub:
         """Another repository, served alongside this one: same owner, same
         git daemon, same API, its own branches and pull requests."""
         sib = FakeGitHub.__new__(FakeGitHub)
-        own = ("siblings", "pulls", "hooks", "deliveries", "checks", "merges", "updates", "rerequested", "jobs_rerun", "review_requests")
-        sib.__dict__.update({k: v for k, v in self.__dict__.items() if k not in own})
+        sib.__dict__.update(self.__dict__)
+        sib._init_repository()
         sib.repo, sib.bare = repo, self.root / self.owner / f"{repo}.git"
-        sib.pulls, sib.hooks, sib.deliveries, sib.siblings = {}, [], [], {}
-        sib.checks, sib.merges, sib.updates, sib.rerequested, sib.jobs_rerun, sib.review_requests = {}, [], [], [], [], []
         sib._lock, sib._parent = threading.Lock(), self
         sib._seed(suffix=repo)
         self.siblings[repo] = sib

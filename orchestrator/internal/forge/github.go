@@ -84,7 +84,9 @@ type Status struct {
 	// without the scope, a GraphQL error): UnresolvedThreads is not a
 	// reading, and whoever holds the last one keeps it.
 	ThreadsUnknown bool
-	BaseBranch     string
+	// Every review as GitHub listed it: Feedback reads their words from
+	// the same listing rather than asking again.
+	reviews []ghReview
 }
 
 // Check is one check on a pull request's head: a check run (GitHub
@@ -159,6 +161,13 @@ func Transient(err error) bool {
 	// No answer from GitHub at all: the request never completed.
 	var u *Unreachable
 	return errors.As(err, &u)
+}
+
+// Refused says GitHub answered, and would not: a refusal (403, 404, 422…)
+// asking again will not mend, as opposed to a failure that may pass.
+func Refused(err error) bool {
+	var e *Error
+	return errors.As(err, &e) && !Transient(err)
 }
 
 // Unreachable is a request that got no answer: refused, timed out, cut off.
@@ -322,7 +331,7 @@ func (g *GitHub) PullRequest(ctx context.Context, slug string, number int) (Stat
 	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d", slug, number), nil, &p); err != nil {
 		return Status{}, err
 	}
-	st := Status{PullRequestRef: p.ref(), BaseBranch: p.Base.Ref}
+	st := Status{PullRequestRef: p.ref()}
 	var err error
 	if st.Checks, st.CheckList, err = g.checks(ctx, slug, p.Head.SHA); err != nil {
 		return Status{}, err
@@ -331,7 +340,7 @@ func (g *GitHub) PullRequest(ctx context.Context, slug string, number int) (Stat
 	if err != nil {
 		return Status{}, err
 	}
-	st.Review, st.Reviews = reviewState(reviews), latestReviews(reviews, p.RequestedReviewers)
+	st.Review, st.Reviews, st.reviews = reviewState(reviews), latestReviews(reviews, p.RequestedReviewers), reviews
 	if st.State != StateOpen && st.State != StateDraft {
 		return st, nil
 	}
@@ -624,11 +633,13 @@ func login(u *struct {
 // Feedback lists what people left on a pull request since `since`, oldest
 // first: conversation comments, line comments, and the text of every
 // review — one that requests changes, and one that approves or comments
-// ("approved, but rename this" asks for something too). Every page of each.
+// ("approved, but rename this" asks for something too), from the reviews
+// PullRequest already listed. Every page of each.
 // Inclusive of `since` on purpose: GitHub timestamps are whole seconds, so a
 // strict comparison drops a comment posted in the same second as the last
 // one seen. Callers dedupe by id, which is exact.
-func (g *GitHub) Feedback(ctx context.Context, slug string, number int, since string) ([]Feedback, error) {
+func (g *GitHub) Feedback(ctx context.Context, slug string, st Status, since string) ([]Feedback, error) {
+	number := st.Number
 	q := ""
 	if since != "" {
 		q = "?since=" + url.QueryEscape(since)
@@ -641,10 +652,7 @@ func (g *GitHub) Feedback(ctx context.Context, slug string, number int, since st
 	if err != nil {
 		return nil, err
 	}
-	reviews, err := pages[ghReview](ctx, g, fmt.Sprintf("/repos/%s/pulls/%d/reviews", slug, number))
-	if err != nil {
-		return nil, err
-	}
+	reviews := st.reviews
 	var out []Feedback
 	for _, c := range issue {
 		out = append(out, Feedback{ID: fmt.Sprintf("issue-comment-%d", c.ID), Author: login(c.User), Body: c.Body, CreatedAt: c.CreatedAt, Kind: KindComment})

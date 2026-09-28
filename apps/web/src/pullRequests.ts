@@ -9,8 +9,12 @@
 
 import type { PersistedEvent, PullRequest } from "@dude/domain";
 import { prCheckFailed } from "@dude/domain";
+import { plural } from "./escalation.ts";
 
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+/** GitHub logins as a person types them: "@cy, bo". */
+export function parseLogins(text: string): string[] {
+  return text.split(/[\s,]+/).map((l) => l.replace(/^@/, "")).filter(Boolean);
+}
 
 /** A reviewer's latest word, in a person's words. */
 export function reviewWords(state: string): string {

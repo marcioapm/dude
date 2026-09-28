@@ -196,7 +196,7 @@ func TestAPullRequestIsReadAsAPersonSeesIt(t *testing.T) {
 	if st.Mergeable != MergeBehind || st.BehindBy != 3 || st.UnresolvedThreads != 2 {
 		t.Errorf("mergeable = %s behind %d, threads %d", st.Mergeable, st.BehindBy, st.UnresolvedThreads)
 	}
-	fb, err := gh.Feedback(context.Background(), "acme/api", 1, "")
+	fb, err := gh.Feedback(context.Background(), "acme/api", st, "")
 	if err != nil || len(fb) != 1 || fb[0].Kind != KindReview || fb[0].Body != "Approved, but rename foo" {
 		t.Errorf("feedback = %+v, %v", fb, err)
 	}

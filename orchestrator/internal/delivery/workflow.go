@@ -111,12 +111,17 @@ func (e *Escalation) Actions() []string {
 // detail reads a number the escalation's detail carries, as JSON left it.
 func (e *Escalation) detail(key string) (float64, bool) {
 	var m map[string]any
-	b, _ := json.Marshal(e.Detail)
-	if json.Unmarshal(b, &m) != nil {
+	if !e.decode(&m) {
 		return 0, false
 	}
 	n, ok := m[key].(float64)
 	return n, ok
+}
+
+// decode reads the detail into out, as it reads once stored.
+func (e *Escalation) decode(out any) bool {
+	b, _ := json.Marshal(e.Detail)
+	return json.Unmarshal(b, out) == nil
 }
 
 // spent: the pull requests (by repository) a pr_loop_exhausted escalation
@@ -125,8 +130,7 @@ func (e *Escalation) spent() []string {
 	var d struct {
 		Spent []string `json:"spent"`
 	}
-	b, _ := json.Marshal(e.Detail)
-	_ = json.Unmarshal(b, &d)
+	e.decode(&d)
 	return d.Spent
 }
 
@@ -570,11 +574,9 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 		// Signals wait while the workflow is busy elsewhere (a fix, a
 		// person deciding): one that is no longer true — the conflict
 		// resolved, CI passed — is not a reason to stop now.
-		still, err := w.stillStuck(ctx, sc, st, stop)
-		if err != nil {
+		if still, err := w.stillStuck(ctx, sc, st, stop); err != nil {
 			return workflow.Result{}, err
-		}
-		if !still {
+		} else if !still {
 			stop = nil
 		}
 	}
