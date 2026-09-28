@@ -1,13 +1,16 @@
 /**
- * The Run screen — the operator's day-to-day view.
+ * A session — the operator's day-to-day view, on its task's page beside
+ * the task's other sessions (or alone, for a Run the tree does not hold).
  *
- * Opens on the conversation, because that is what someone supervising agents
- * actually reads. The event timeline and logs are available behind a tab:
- * they are debugging tools, reached when something looks wrong, not watched
- * continuously.
+ * A header says whose agent it is and what it is doing, with Pause and
+ * Abort. Under it, Conversation (what someone supervising agents actually
+ * reads, with a rail beside it: the session's facts, the tools it used and
+ * the files it changed so far), Changes (its checkout as it changes), and
+ * the event timeline — a debugging tool, reached when something looks
+ * wrong, not watched continuously.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AgentPlan,
   ChatComposer,
@@ -18,12 +21,20 @@ import {
   ChatTranscript,
   EventRow,
   EventStream,
+  ChangedFiles,
+  ChatAside,
   QuestionCard,
+  Segmented,
+  SessionFacts,
+  SessionHeader,
+  SessionRail,
+  SessionRailBlock,
   ThinkingBlock,
+  ToolUsage,
   ToolCallCard,
   summarizeToolArgs,
 } from "@dude/design-system/components";
-import { Button, Callout, Dialog, Spinner, Tab, TabList, TabPanel, Tabs, Textarea } from "@dude/design-system/primitives";
+import { Button, Callout, Dialog, Spinner, Textarea } from "@dude/design-system/primitives";
 import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, runLabel } from "@dude/domain";
 import type { AgentRole, PersistedEvent } from "@dude/domain";
 import type { ApiClient, Person, RunDetail, RunDiffSummary } from "../api/client.ts";
@@ -32,23 +43,29 @@ import { PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, snapshot, t
 import type { ComposerSubmission } from "@dude/design-system/components";
 import { useEventStream } from "../hooks/useEventStream.ts";
 import { conflictNotice, type Notice } from "../conflict.ts";
-import { firstName } from "@dude/design-system";
+import { firstName, Icon } from "@dude/design-system";
 import { usePeople, type People } from "../people.tsx";
 import { NotFound } from "./NotFound.tsx";
+import { DudeMark, dudeName } from "../DudeMark.tsx";
 import { ChangesPanel } from "./ChangesPanel.tsx";
 
 export interface RunScreenProps {
   client: ApiClient;
   runId: string;
-  /** The task's title, when the caller already knows it. */
-  title?: string | undefined;
-  /** Where this conversation sits, shown above it: a way back up. */
-  breadcrumb?: ReactNode;
-  /** Open the task this Run works on. */
-  onOpenTask: (taskId: string) => void;
+  /** Open the task this Run works on. Not given on the task's own page. */
+  onOpenTask?: ((taskId: string) => void) | undefined;
   /** Leave for somewhere that exists, when this Run does not. */
   onBack: () => void;
+  /**
+   * The task's owner and key, when the caller has them (its task's page):
+   * not read again, and only what is given is shown — the task page gives
+   * the owner alone, its key being on the page already.
+   */
+  task?: { owner: Person | null; key?: string | undefined } | undefined;
 }
+
+/** What a session shows: its conversation, its checkout's changes, or its event ledger. */
+type SessionView = "chat" | "changes" | "events";
 
 /**
  * Events that can change a Run's status, and so are worth a re-read.
@@ -66,13 +83,22 @@ const STATUS_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.RunResumed,
 ]);
 
-export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack }: RunScreenProps) {
+export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, onBack, task: given }: RunScreenProps) {
+  const [view, setView] = useState<SessionView>("chat");
+  // The file Changes shows alone, picked there or in the rail. Leaving
+  // Changes forgets it, so coming back finds all of them.
+  const [selected, setSelected] = useState<string | null>(null);
+  const showView = (next: SessionView) => {
+    if (next !== "changes") setSelected(null);
+    setView(next);
+  };
   const [run, setRun] = useState<RunDetail | null>(null);
   const [missing, setMissing] = useState(false);
   // Who drives the task: only its owner answers its agents, so anyone else
   // sees the asks read-only, with whom they wait on. And the task's key
   // (TEXT-14), which people know it by, for the header.
-  const [task, setTask] = useState<{ owner: Person | null; key?: string | undefined } | null>(null);
+  const [read, setTask] = useState<{ owner: Person | null; key?: string | undefined } | null>(null);
+  const task = given ?? read;
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   // Someone else acted first: said calmly, and gone once the Run catches up.
@@ -111,7 +137,7 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
   // Who drives the task is read once per task, not on every status change,
   // and apart from the Run: failing to learn it only leaves the asks
   // answerable here, which the orchestrator still checks.
-  const taskId = run?.taskId;
+  const taskId = given ? undefined : run?.taskId;
   useEffect(() => {
     if (!taskId) return;
     let cancelled = false;
@@ -148,6 +174,8 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
     () => events.findLast((e) => e.eventType === EventTypes.RunDiffUpdated)?.payload as RunDiffSummary | undefined,
     [events],
   );
+  // Which tools it called, and how often: for the rail. The projection counts them.
+  const tools = [...conversation.toolCounts].map(([name, count]) => ({ name: name.charAt(0).toUpperCase() + name.slice(1), count }));
 
   /**
    * Run an intervention. A conflict (409) means the Run moved on while
@@ -220,7 +248,6 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
   // The agent this Run is. A phase Run carries its role; one created
   // directly through the API runs as an orchestrator.
   const role: AgentRole = run.role ?? DEFAULT_RUN_ROLE;
-  const phase = run.phase ? runLabel(run) : null;
 
   const session = {
     id: run.id,
@@ -237,7 +264,7 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
     // The id is already shown beside the title; repeating it as the title
     // leaves the header saying nothing about the work. The attempt only
     // once there is more than one to tell apart.
-    title: [title, phase, run.attempt > 1 ? `attempt ${run.attempt}` : null].filter(Boolean).join(" · "),
+    title: [runLabel(run), run.attempt > 1 ? `attempt ${run.attempt}` : null].filter(Boolean).join(" · "),
     taskId: run.taskId,
     ...(taskKey ? { taskKey } : {}),
     startedAt: run.startedAt ?? run.createdAt,
@@ -249,112 +276,58 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
     tokens: Math.max(run.tokens.input + run.tokens.output, conversation.tokens),
   };
 
+  const changed = diffSummary?.files ?? [];
+  // The name dude signs this task's messages with.
+  const dude = dudeName(run.taskId);
+  const hasChanges = Object.keys(run.baseRefs).length > 0 || run.phase !== null;
+  const liveDiff = isLive && run.status !== "paused";
+
+  const actions = isLive ? (
+    <>
+      {run.status === "paused" ? (
+        <Button size="sm" variant="secondary" disabled={busy} onClick={() => void intervene(() => client.resume(runId), "resume this run")}>
+          Resume
+        </Button>
+      ) : (
+        <Button size="sm" variant="secondary" disabled={busy} onClick={() => void intervene(() => client.pause(runId), "pause this run")}>
+          Pause
+        </Button>
+      )}
+      <Button size="sm" variant="danger" disabled={busy} onClick={() => setConfirmAbort(true)} data-testid="abort">
+        Abort…
+      </Button>
+    </>
+  ) : undefined;
+
+  // The session's views: one switch, in the same place on each, with the
+  // diff's own controls beside it on Changes rather than on a row of their own.
+  const switcher = (
+    <Segmented<SessionView> label="Show" value={view} onChange={showView} data-testid="session-view"
+      options={[
+        { value: "chat", label: <><Icon name="message" size={13} />Conversation</> },
+        // The agent's checkout, as it changes: only for a Run with one.
+        ...(hasChanges ? [{ value: "changes" as const, label: (
+          <>
+            <Icon name="git-branch" size={13} />Changes
+            {changed.length > 0 ? <span className="ds-tnum runCount">{changed.length}</span> : null}
+            {liveDiff && changed.length > 0 ? <span className="ds-live-dot" aria-label="changing now" /> : null}
+          </>
+        ) }] : []),
+        // Debugging, not the daily view — hence last.
+        { value: "events", label: <><Icon name="list" size={13} />Events<span className="ds-tnum runCount">{events.length}</span></> },
+      ]} />
+  );
+
   return (
-    <div className="runScreen">
-      {breadcrumb ? <div className="runCrumbs">{breadcrumb}</div> : null}
-      <Tabs defaultValue="chat" fill>
-        <TabList className="tabsInset">
-          <Tab value="chat" icon="message">Conversation</Tab>
-          {/* The agent's checkout, as it changes: only for a Run with one. */}
-          {Object.keys(run.baseRefs).length > 0 || run.phase ? (
-            <Tab value="changes" icon="git-branch" count={diffSummary?.files.length}>Changes</Tab>
-          ) : null}
-          {/* Debugging, not the daily view — hence last and quieter. */}
-          <Tab value="events" count={events.length}>Events</Tab>
-        </TabList>
-
-        <TabPanel value="chat" fill>
-          <ChatTranscript
-            fill
-            live={isLive}
-            revision={events.length}
-            session={session}
-            headerActions={
-              isLive ? (
-                <>
-                  {run.status === "paused" ? (
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      disabled={busy}
-                      onClick={() => void intervene(() => client.resume(runId), "resume this run")}
-                    >
-                      Resume
-                    </Button>
-                  ) : (
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      disabled={busy}
-                      onClick={() => void intervene(() => client.pause(runId), "pause this run")}
-                    >
-                      Pause
-                    </Button>
-                  )}
-                  <Button size="sm" variant="danger" disabled={busy} onClick={() => setConfirmAbort(true)} data-testid="abort">
-                    Abort…
-                  </Button>
-                </>
-              ) : null
-            }
-            pinned={
-              conversation.plan.length > 0 ? (
-                <AgentPlan items={conversation.plan} defaultCollapsed data-testid="plan" />
-              ) : null
-            }
-            footer={!isLive ? <RunEnded run={run} onOpenTask={() => onOpenTask(run.taskId)} /> : (
-              <ChatComposer
-                // The agent waiting on a question takes an answer; otherwise
-                // anything said steers it.
-                mode={conversation.openQuestion ? "answer" : "steer"}
-                question={
-                  conversation.openQuestion
-                    ? {
-                        id: conversation.openQuestion.questionId,
-                        text: conversation.openQuestion.text,
-                        askedBy: runLabel(run),
-                        askedAt: conversation.openQuestion.at,
-                        // Choices only for whoever may choose.
-                        options: waitingOn ? [] : conversation.openQuestion.options,
-                      }
-                    : undefined
-                }
-                // A paused Run takes an answer (a parked one is resumed by it),
-                // not a steer; a question is its owner's to answer.
-                disabled={(run.status === "paused" && !conversation.openQuestion) ||
-                  (conversation.openQuestion !== null && waitingOn !== undefined)}
-                disabledReason={
-                  waitingOn && (conversation.openQuestion || run.dudePause === "person") ? `Waiting for ${waitingOn} to answer.`
-                    : run.dudePause ? PAUSE_WORDS[run.dudePause].composer
-                    : "This run is paused. Resume it to steer."
-                }
-                onSubmit={send}
-                sentAs={youName ? firstName(youName) : undefined}
-                canInterrupt
-              />
-            )}
-            emptyMessage="Waiting for the agent to start."
-          >
-            {conversation.turns.map((turn) => renderTurn(turn, role, conversation.contextWindow, !isLive, people, decide, waitingOn))}
-            {conversation.activity ? (
-              <ChatMessage
-                role={role}
-                activity={conversation.activity}
-                activityProps={
-                  conversation.activeTool
-                    ? { label: conversation.activeTool.name, since: conversation.activeTool.since }
-                    : undefined
-                }
-              />
-            ) : null}
-          </ChatTranscript>
-        </TabPanel>
-
-        <TabPanel value="changes" fill>
-          <ChangesPanel client={client} runId={runId} events={events} checksum={diffSummary?.checksum ?? ""} live={isLive && run.status !== "paused"} />
-        </TabPanel>
-
-        <TabPanel value="events" fill>
+    <div className="runScreen" data-testid="run-screen">
+      <SessionHeader session={session} actions={actions} />
+      {view === "changes" && hasChanges ? (
+        <ChangesPanel client={client} runId={runId} role={role} events={events} checksum={diffSummary?.checksum ?? ""} live={liveDiff}
+          selected={selected} onSelectedChange={setSelected} leading={switcher} />
+      ) : view === "events" ? (
+        <>
+          <div className="runBar">{switcher}</div>
+          <div className="runEvents" data-testid="event-log">
           <EventStream>
             {events.map((event) => (
               <EventRow
@@ -370,8 +343,96 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
               />
             ))}
           </EventStream>
-        </TabPanel>
-      </Tabs>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="runBar">{switcher}</div>
+          <div className="runChat">
+            <ChatTranscript
+              fill
+              live={isLive}
+              revision={events.length}
+              pinned={
+                conversation.plan.length > 0 ? (
+                  <AgentPlan items={conversation.plan} defaultCollapsed data-testid="plan" />
+                ) : null
+              }
+              footer={!isLive ? <RunEnded run={run} onOpenTask={onOpenTask ? () => onOpenTask(run.taskId) : undefined} /> : (
+                <ChatComposer
+                  // The agent waiting on a question takes an answer; otherwise
+                  // anything said steers it.
+                  mode={conversation.openQuestion ? "answer" : "steer"}
+                  question={
+                    conversation.openQuestion
+                      ? {
+                          id: conversation.openQuestion.questionId,
+                          text: conversation.openQuestion.text,
+                          askedBy: runLabel(run),
+                          askedAt: conversation.openQuestion.at,
+                          // Choices only for whoever may choose.
+                          options: waitingOn ? [] : conversation.openQuestion.options,
+                        }
+                      : undefined
+                  }
+                  // A paused Run takes an answer (a parked one is resumed by it),
+                  // not a steer; a question is its owner's to answer.
+                  disabled={(run.status === "paused" && !conversation.openQuestion) ||
+                    (conversation.openQuestion !== null && waitingOn !== undefined)}
+                  disabledReason={
+                    waitingOn && (conversation.openQuestion || run.dudePause === "person") ? `Waiting for ${waitingOn} to answer.`
+                      : run.dudePause ? PAUSE_WORDS[run.dudePause].composer
+                      : "This run is paused. Resume it to steer."
+                  }
+                  onSubmit={send}
+                  sentAs={youName ? firstName(youName) : undefined}
+                  canInterrupt
+                />
+              )}
+              emptyMessage="Waiting for the agent to start."
+            >
+              {asides(conversation.turns).map((group) => Array.isArray(group)
+                ? <ChatAside key={group[0]!.id}>{group.map((turn) => renderTurn(turn, role, conversation.contextWindow, !isLive, people, dude, decide, waitingOn))}</ChatAside>
+                : renderTurn(group, role, conversation.contextWindow, !isLive, people, dude, decide, waitingOn))}
+              {conversation.activity ? (
+                <ChatMessage
+                  role={role}
+                  activity={conversation.activity}
+                  activityProps={
+                    conversation.activeTool
+                      ? { label: conversation.activeTool.name, since: conversation.activeTool.since }
+                      : undefined
+                  }
+                />
+              ) : null}
+            </ChatTranscript>
+            {/* Cost, tokens and elapsed are the header's, on every view: the rail has the rest. */}
+            <SessionRail className="runRail" aria-label="This session" data-testid="session-rail">
+              <SessionRailBlock label="Session">
+                <SessionFacts facts={[
+                  ...(run.model ? [{ label: "Model", value: run.model, mono: true }] : []),
+                  ...(run.harness ? [{ label: "Agent", value: run.harness }] : []),
+                  { label: "Attempt", value: run.attempt },
+                ]} />
+              </SessionRailBlock>
+              {tools.length > 0 ? (
+                <SessionRailBlock label="Tools used">
+                  <ToolUsage tools={tools} />
+                </SessionRailBlock>
+              ) : null}
+              {changed.length > 0 ? (
+                <SessionRailBlock label="Files changed" live={liveDiff}>
+                  <ChangedFiles files={changed} onOpen={(path) => {
+                    setSelected(path);
+                    showView("changes");
+                  }} />
+                </SessionRailBlock>
+              ) : null}
+            </SessionRail>
+          </div>
+        </>
+      )}
+
 
       {notice ? (
         <Callout tone="neutral" data-testid="conflict-notice">
@@ -424,6 +485,26 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
       ) : null}
     </div>
   );
+});
+
+/**
+ * The turns, with each run of tool calls and thoughts gathered into one
+ * group: a `ChatAside` puts them on the message column, stacked close,
+ * with a turn's air above and below the run — as the design system draws
+ * what an agent does between its messages.
+ */
+function asides(turns: readonly Turn[]): Array<Turn | Turn[]> {
+  const out: Array<Turn | Turn[]> = [];
+  for (const turn of turns) {
+    if (turn.kind !== "tool" && turn.kind !== "thought") {
+      out.push(turn);
+      continue;
+    }
+    const last = out[out.length - 1];
+    if (Array.isArray(last)) last.push(turn);
+    else out.push([turn]);
+  }
+  return out;
 }
 
 /** The actor's name for the event ledger, when it is a person the organisation knows. */
@@ -432,7 +513,7 @@ function namedActor(event: PersistedEvent, people: People): { name?: string } {
   return name ? { name } : {};
 }
 
-function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: boolean, people: People,
+function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: boolean, people: People, dude: string,
   decide?: (requestId: string, approve: boolean) => void, waitingOn?: string) {
   switch (turn.kind) {
     case "repositoryRequest": {
@@ -492,7 +573,7 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
     case "prompt":
       // Written by the factory, not a person: the avatar and name say so.
       return (
-        <ChatMessage key={turn.id} role="system" name="dude" intent="prompt" content={turn.text} startedAt={turn.at} />
+        <ChatMessage key={turn.id} role="system" name={dude} avatar={<DudeMark size="fill" />} intent="prompt" content={turn.text} startedAt={turn.at} />
       );
     case "message":
       return (
@@ -572,16 +653,19 @@ const ENDED_WORDS: Record<"completed" | "failed" | "aborted", string> = {
  * steer: how it ended, and the way back to its task, where what happens
  * next is decided. Why it failed is the transcript's last line, just above.
  */
-function RunEnded({ run, onOpenTask }: { run: RunDetail; onOpenTask: () => void }) {
+function RunEnded({ run, onOpenTask }: { run: RunDetail; onOpenTask?: (() => void) | undefined }) {
   const outcome = run.status === "failed" || run.status === "aborted" ? run.status : "completed";
   return (
     <Callout data-testid="run-ended" data-outcome={outcome}
       tone={outcome === "failed" ? "danger" : outcome === "aborted" ? "attention" : "neutral"}>
       <span className="runEnded">
         <span>{ENDED_WORDS[outcome]}</span>
-        <Button size="sm" variant="quiet" trailingIcon="arrow-right" onClick={onOpenTask} data-testid="run-ended-task">
-          Back to the task
-        </Button>
+        {/* On its task's page, the task is already here. */}
+        {!onOpenTask ? null : (
+          <Button size="sm" variant="quiet" trailingIcon="arrow-right" onClick={onOpenTask} data-testid="run-ended-task">
+            Back to the task
+          </Button>
+        )}
       </span>
     </Callout>
   );

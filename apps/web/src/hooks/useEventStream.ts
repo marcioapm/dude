@@ -9,7 +9,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { PersistedEvent } from "@dude/domain";
+import { EventTypes, type PersistedEvent } from "@dude/domain";
 import type { ApiClient } from "../api/client.ts";
 
 /**
@@ -130,6 +130,17 @@ export function useEventStream(options: UseEventStreamOptions): EventStreamState
 
   return { events, status, reconnects };
 }
+
+/**
+ * An agent at work: what it says and does, and its diff — many a second.
+ * Nothing but its own session shows them, and that has its own stream, so
+ * a page re-reading on events leaves these out. Its plan and what it
+ * spends (a finished model request) are not here: pages show those.
+ */
+export const AGENT_CHATTER: ReadonlySet<string> = new Set([
+  EventTypes.AgentMessage, EventTypes.AgentThought, EventTypes.ToolCalled, EventTypes.ToolCompleted,
+  EventTypes.ModelRequestStarted, EventTypes.PromptDelivered, EventTypes.RunDiffUpdated,
+]);
 
 /**
  * Call `reload` when events arrive on a scope, at most once per `everyMs`.

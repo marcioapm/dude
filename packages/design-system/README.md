@@ -174,7 +174,7 @@ gallery for every value.
 | Radius | `--ds-radius-{none,mark,control,float,full}`, `--ds-radius-face-{agent,project}` | Roles, not sizes: structure `none`, inline marks `mark` 3, controls `control` 6 (5 compact), floats `float` 10, people and dots `full`. Agent and project faces take a share of their size (28%, 22%). |
 | Size | `--ds-size-control-sm/md/lg`, `--ds-size-row-compact/default/comfortable`, `--ds-size-avatar-{xs,sm,md,lg,chat}`, `--ds-size-badge-{sm,md}`, `--ds-size-chip`, `--ds-size-icon-*` | Controls 28/32/36, rows 28/32/40. Avatars 16/20/24/32 and 40 for the transcript's own. Badges 16/18, chips 22, in both densities. |
 | Motion | `--ds-duration-fast/base/slow/deliberate`, `--ds-ease-*`, `--ds-motion-live`, `--ds-cadence-{spin,breathe,drift,sweep,blink}` | Reduced motion zeroes durations and sets `motion-live` to 0. Cadences are the periods of the live loops; every loop divides by `motion-live`. |
-| Measure | `--ds-measure-message`, `--ds-measure-document` | Chat turns 70ch (72ch compact); documents 700px in both. |
+| Measure | `--ds-measure-message`, `--ds-measure-document` | Prose outside the transcript (help text, settings) 70ch (72ch compact); documents 700px in both. Chat turns have none: they span the transcript's column. |
 | Density | `data-density="compact"` | Overrides the tokens listed under Density below; everything else is shared. |
 | Layers | `--ds-z-base…tooltip` | |
 
@@ -346,9 +346,14 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   it. The intent tint is kept throughout: it is still a steer.
 - The task prompt is usually authored by dude, not a person. It is
   `ChatMessage role="system" intent="prompt"`: the neutral prompt frame,
-  the system avatar and the "Task" tag say who wrote it without a third
-  tint. Prompts clamp at eight lines with a "Show all" control, measured
-  after layout so a short prompt gets no control (`maxLines` overrides).
+  dude's face (`avatar`, which the app gives — the design system carries no
+  brand image) and the "Task" tag say who wrote it without a third tint.
+  It is signed with dude's name for the task: one of The Dude, El Duderino,
+  His Dudeness, Duder, picked by the task's id so a task always hears from
+  the same one. His other acts on a task (the pull request he opens, a Run
+  he aborts) wear the same face and name. Prompts clamp at eight lines with
+  a "Show all" control, measured after layout so a short prompt gets no
+  control (`maxLines` overrides).
 
 ### Nesting
 
@@ -446,6 +451,71 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   epic keeps its row so its position stays visible. Cards drop their epic
   line; ↑↓ walk a column across rows. The header's "…" is the app's
   `RowMenu` via `laneMenu`.
+
+### Sessions (live work on a task)
+
+- A task's sessions and the one open share its page: the **Sessions** tab
+  is the task's sessions down the left (`SessionList`, newest first, the
+  open one `current`) and the open session beside them. There is no
+  separate session page: a link to a session (`#/session/<id>`) opens its
+  task on that tab with that session open, so the task's people, pull
+  requests and findings stay one tab away while you watch an agent. Only a
+  session whose task cannot be learned stands on its own, and says the way
+  to its task when it ends.
+- The open session is `SessionHeader` (whose agent, for whom, its model,
+  status, cost, tokens and elapsed, Pause / Abort — on every view, so the
+  numbers never depend on the rail being there), then **one bar**: a
+  `Segmented` switch at the control size (it follows the density) between **Conversation**, **Changes** and **Events**
+  (debugging, last), and on Changes the diff's own controls after it
+  (`LiveDiff`'s `leading`). One row, one left edge, whichever view is
+  shown: never a row of tabs over a row of tools. Each view fills the same
+  place under the bar; none opens over the page.
+- **Changes** in the switch carries its file count and, while the agent is
+  changing files, the breathing dot. That dot is the one "live" on the bar:
+  the header's status already says Running, so the diff has no Live pill.
+- Beside the conversation, a `SessionRail` on the chrome shade: what the
+  header does not say (agent, attempt), the tools it used (`ToolUsage`), and the files it has
+  changed so far (`ChangedFiles`, a breathing dot on the label while live).
+  Picking a file there opens Changes on that file alone, as picking it in
+  the diff's own list does. When the session is narrower than about 820px
+  the rail goes and the conversation keeps the width. Narrower than 900px
+  the sessions list sits above the session.
+- With no session asked for, the one shown is picked once (running, else
+  newest) and kept: a phase ending must not swap it under someone reading.
+- **Two edges.** Everything in a session shares one outer edge and one
+  inner edge. Bands — a turn's wash and hover, the pinned plan — run edge
+  to edge across the transcript's column. Content sits on the chat inset
+  (`--ds-space-chat-pad-x`): the session header's face, the bar's switch,
+  the plan's icon (`--plan-pad-x`), every turn's face, the composer, the
+  Changes and Events views. Nothing in a session uses the page's 24px pad.
+- A turn's text spans its column: chat turns have no measure, so a long
+  line wraps at the column's edge, not beside empty space.
+- What an agent does between its messages — a run of tool calls and
+  thoughts — is one `ChatAside`: on the message text column (past the
+  avatar gutter, so its left edge lines up with the words above), 4px
+  between its items, and a turn's air above and below the run. Never a
+  tool call on its own at the transcript's edge.
+- The sessions list is 260px (200px below 1280px).
+- **Changes is `LiveDiff`**: the agent's checkout against the commit the
+  session started from, uncommitted work included. Its toolbar reads
+  *Since abc1234 · N files +a −d*, then *Follow the agent* and Unified /
+  Split (`Segmented`). It wraps before it truncates: the summary is never
+  cut to "3 fil…". With nothing changed there is no summary, only the empty
+  message. The last change, with the agent's face (*[face] Write
+  `revenue.ts`*), heads the file list, where the change lands.
+- Files down the left with their status letter (M / A / D / R on its tone)
+  and counts; each file's diff under a header that sticks, with an **Open
+  in the viewer** icon button (not on a deleted file). The viewer is the
+  file's diff alone, split, in a `Dialog` — dude keeps a Run's diff, not its
+  files, so the diff is what there is to open.
+- Hunk headers are quiet (the hover wash, muted text): the changes are the
+  loudest thing in a diff, never the `@@`. Added and removed lines use the
+  `--ds-diff-*` tokens, with a sign and gutter as well as the tint.
+- A line new since the last update flashes (`ds-flash`, once) and keeps an
+  info mark down its side; the file it is in flashes in the list. With
+  Follow on, the diff scrolls to the newest change. Picking a file — in the
+  list or the rail — shows it alone and turns Follow off: the person has
+  taken over. Turning Follow on shows all again.
 
 ### Management (menus, forms, findings)
 
@@ -575,7 +645,7 @@ shrinking something already small makes it cramped, not dense:
 | controls (`size-control-md` / `-lg`) | 32 / 36 | 30 / 34 | a couple of px |
 | body, prose (`text-md`, `text-prose`) | 15 / 16 | 14 / 15 | 1px |
 | control radius (`radius-control`) | 6 | 5 | 1px |
-| chat measure (`measure-message`) | 70ch | 72ch | `ch` follows the font, so two more characters a line |
+| prose measure (`measure-message`) | 70ch | 72ch | `ch` follows the font, so two more characters a line; not chat turns, which span their column |
 
 Everything else is shared: icons, `control-sm` and `row-compact` (28, the
 floor), `text-2xs`/`xs`/`sm`/`nav` (11/12/13/14) and `text-mono` (13), badge
@@ -699,7 +769,8 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 ## Components
 
 `src/primitives/` — Button, IconButton, Input, Textarea, Select, Checkbox,
-Badge, Card, Table (THead/TBody/Tr/Th/Td/TableEmpty), Tabs, Dialog, Toast,
+Badge, Card, Table (THead/TBody/Tr/Th/Td/TableEmpty), Tabs (underline for a
+page, segmented in a toolbar; a tab can carry a count), Dialog, Toast,
 Tooltip, RowMenu (+ `rowMenuOpeners`), Skeleton/SkeletonLines/Spinner,
 EmptyState, ScrollArea.
 
@@ -735,7 +806,7 @@ EmptyState, ScrollArea.
   activity in the foot; turns addressed to the agent are framed and tinted
   by intent (task / answer / steer), can be queued, and clamp when long;
   system turns are a hairline with a label. Body is `Markdown` and grows in
-  place.
+  place. `avatar` puts a face of the app's own in the gutter (dude's).
 - **ActivityIndicator** — thinking / streaming / tool / retrying /
   awaiting_input / completed / failed / aborted, as a full-width line or a
   badge. Distinct rhythm per state; slow-tool promotion; retry countdown.
@@ -753,6 +824,8 @@ EmptyState, ScrollArea.
 - **AgentPlan** — the agent's `todowrite` list rendered in place with "N of
   M", a segmented bar, and a one-shot flash/pop when an item changes state.
   Collapsed, it shows the current item. `sticky` pins it under the header.
+  `--plan-pad-x` sets its text's inset (the transcript sets the chat inset,
+  so the plan lines up with the turns).
 - **ChatThread** — a subagent's conversation nested in its parent's, with a
   role-coloured rail, collapsible, depth-aware.
 - **QuestionCard** — an agent's question to a person as a turn. Waiting it
@@ -801,6 +874,28 @@ EmptyState, ScrollArea.
 - **ArtifactRow / ArtifactGroup / ArtifactPreview** — files an agent
   published, expandable to their content; `artifactKind` and
   `ARTIFACT_KIND_SPECS` are the vocabulary.
+
+`src/components/` — live work:
+
+- **LiveDiff** — a working agent's checkout against where it started, as
+  it changes (the rules are under *Sessions*): files with status and
+  counts, sticky file headers, Unified / Split (`splitRows` pairs each
+  removed run with the added run after it), fresh lines flashing, Follow
+  the agent, `leading` for the page's controls first in its toolbar, `onOpenFile` for the viewer, `selected` / `onSelectedChange`
+  to pick the file shown alone from outside, `fileList={false}` for one
+  file on its own.
+- **DiffStat** — "+12 −3" in the diff's colours; every count of lines
+  added and removed.
+- **SessionHeader** — the transcript's header on its own, for a session
+  whose views sit under it.
+- **`.ds-live-dot`** (base.css) — the one breathing dot, on
+  `--ds-color-live`: beside what is changing now (a view's name, a label).
+- **SessionRail / SessionRailBlock / SessionFacts / ToolUsage /
+  ChangedFiles** — the column beside a session's conversation; its facts
+  are a `KeyValueList`, values to the right.
+- **SessionList / SessionItem** — a task's sessions, the open one `current`.
+- **FileGallery / FileViewer** — a task's files and their versions.
+- **Cost** — a total, with the tokens / machine split as a hairline.
 
 ## What is deliberately not here
 

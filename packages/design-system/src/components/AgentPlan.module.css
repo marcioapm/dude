@@ -24,7 +24,7 @@
   align-items: center;
   gap: var(--ds-space-8);
   min-height: var(--ds-size-row-item);
-  padding: var(--ds-space-6) var(--ds-space-12);
+  padding: var(--ds-space-6) var(--plan-pad-x, var(--ds-space-12));
   font-size: var(--ds-text-sm);
   outline: none;
   cursor: pointer;
@@ -128,7 +128,7 @@
   align-items: center;
   gap: var(--ds-space-8);
   min-height: var(--ds-size-row-default);
-  padding: 0 var(--ds-space-12);
+  padding: 0 var(--plan-pad-x, var(--ds-space-12));
   font-size: var(--ds-text-md);
   color: var(--ds-color-text-primary);
 }

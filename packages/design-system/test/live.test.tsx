@@ -5,7 +5,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { LiveDiff, type LiveDiffFile } from "../src/components/LiveDiff.tsx";
+import { LiveDiff, splitRows, type LiveDiffFile } from "../src/components/LiveDiff.tsx";
 import { FileGallery, type GalleryFile } from "../src/components/FileGallery.tsx";
 import { artifactKind } from "../src/components/ArtifactRow.tsx";
 
@@ -41,8 +41,43 @@ describe("LiveDiff", () => {
 
   test("an ended diff has no live pill and no follow toggle", () => {
     const html = renderToStaticMarkup(<LiveDiff base="b" files={[file("a", "A", [["+", "x"]])]} />);
-    expect(html).not.toContain("live-pill");
+    expect(html).not.toContain('role="switch"');
     expect(html).not.toContain("Follow the agent");
+  });
+
+  test("split pairs each removed run with the added run after it", () => {
+    const l = (kind: "+" | "-" | " ", text: string) => ({ kind, old: null, new: null, text });
+    const rows = splitRows([l(" ", "a"), l("-", "b"), l("-", "c"), l("+", "B"), l(" ", "d"), l("+", "e")]);
+    expect(rows.map((r) => [r.left?.text ?? null, r.right?.text ?? null])).toEqual([["a", "a"], ["b", "B"], ["c", null], ["d", "d"], [null, "e"]]);
+  });
+
+  test("offers Unified/Split, and the viewer only when it can open one", () => {
+    const files = [file("a.ts", "M", [["+", "x"]]), file("gone.ts", "D", [["-", "y"]])];
+    expect(renderToStaticMarkup(<LiveDiff base="b" files={files} />)).not.toContain("Open in the viewer");
+    const html = renderToStaticMarkup(<LiveDiff base="b" files={files} onOpenFile={() => {}} defaultView="split" />);
+    expect(html.match(/Open in the viewer/g)?.length).toBe(2); // aria-label and title, once: not on the deleted file
+    expect(html).toContain(">Unified<");
+    expect(html).toContain("split-row");
+  });
+
+  test("the page's controls share its toolbar, and the last change heads the files", () => {
+    const html = renderToStaticMarkup(
+      <LiveDiff base="b" live files={[file("a.ts", "M", [["+", "x"]])]} leading={<i data-x="lead" />}
+        lastChange="Write a.ts" />,
+    );
+    const head = html.slice(0, html.indexOf('aria-label="Changed files"'));
+    expect(head.indexOf('data-x="lead"')).toBeLessThan(head.indexOf("Since"));
+    expect(html.indexOf('data-testid="last-change"')).toBeGreaterThan(html.indexOf('aria-label="Changed files"'));
+  });
+
+  test("an empty diff still says what the agent did last", () => {
+    expect(renderToStaticMarkup(<LiveDiff base="b" live files={[]} lastChange="Write a.ts" />)).toContain("Write a.ts");
+  });
+
+  test("with nothing changed there is no summary, only what it says", () => {
+    const html = renderToStaticMarkup(<LiveDiff base="b" files={[]} emptyMessage="Nothing yet." />);
+    expect(html).not.toContain("0 files");
+    expect(html).not.toContain("Unified");
   });
 
   test("with nothing changed it says so", () => {
