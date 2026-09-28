@@ -25,7 +25,7 @@ import {
   summarizeToolArgs,
 } from "@dude/design-system/components";
 import { Button, Callout, Dialog, LinkButton, Spinner, Tab, TabList, TabPanel, TabToggle, Tabs, Textarea } from "@dude/design-system/primitives";
-import { canStartAny, describeServer, summarizeServers } from "@dude/design-system";
+import { canStartAny, canStopAny, describeServer, summarizeServers } from "@dude/design-system";
 import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, runLabel } from "@dude/domain";
 import type { AgentRole, PersistedEvent } from "@dude/domain";
 import type { ApiClient, Person, RunDetail, RunDiffSummary } from "../api/client.ts";
@@ -102,7 +102,9 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
 
   const { events, reconnects } = useEventStream({ client, runId });
 
-  // The servers are re-read on their own event; the Run on its status events.
+  // The servers are re-read on their own event; the Run on its status
+  // events. A replayed history counts too, but `useServers` folds a burst
+  // into one read in flight and one more after it.
   const serversVersion = useMemo(() => events.reduce((n, e) => (e.eventType === EventTypes.ServersChanged ? n + 1 : n), 0), [events]);
   const servers = useServers(client, { runId }, serversVersion);
   const previewed = previewing ? servers.data?.servers.find((s) => s.name === previewing) ?? null : null;
@@ -408,7 +410,7 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
       </Tabs>
       {/* The preview docks beside the conversation and takes the drawer's place: one thing at the right. */}
       {previewed?.url ? (
-        <ServerPreview docked client={client} server={previewed} words={describeServer(previewed, Date.now(), { runKind: servers.data?.run?.kind, previewStage: servers.data?.run?.previewStage })}
+        <ServerPreview docked server={previewed} words={describeServer(previewed, Date.now(), { runKind: servers.data?.run?.kind, previewStage: servers.data?.run?.previewStage })}
           you={people.me?.email ?? null} onClose={() => setPreviewing(null)}
           onRestart={isLive && previewed.command ? () => void servers.restart(previewed.name) : undefined} />
       ) : drawer ? (
@@ -418,9 +420,14 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
             ? servers.data.run.kind === "preview" ? "preview run" : `${summarizeServers(servers.data.servers).ready} of ${servers.data.servers.length} ready`
             : undefined}
           actions={servers.data?.run && isLive ? (
-            <Button size="sm" variant="quiet" leadingIcon="play" disabled={servers.busy !== null || !canStartAny(servers.data.servers)} onClick={() => void servers.startAll()}>
-              Start all
-            </Button>
+            <>
+              <Button size="sm" variant="quiet" leadingIcon="play" disabled={servers.busy !== null || !canStartAny(servers.data.servers)} onClick={() => void servers.startAll()}>
+                Start all
+              </Button>
+              <Button size="sm" variant="quiet" leadingIcon="stop" disabled={servers.busy !== null || !canStopAny(servers.data.servers)} onClick={() => void servers.stopAll()}>
+                Stop all
+              </Button>
+            </>
           ) : null}
           onClose={() => toggleDrawer(false)}
         >

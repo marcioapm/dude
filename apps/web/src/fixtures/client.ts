@@ -2,34 +2,20 @@
  * The API without a backend: the mockups' world, answered from memory.
  * For seeing the screens and the gallery's scenarios in the real app —
  * `?fixtures=a` … `f` (or `dude.fixtures` in localStorage), outside
- * production builds. Reads come from `data.ts`; writes to servers change
- * what the next read returns, so Start, Stop and Preview branch move
- * things as a backend would, if a little faster.
+ * production builds, which never load this module. Reads come from
+ * `data.ts`; writes to servers change what the next read returns, so
+ * Start, Stop and Preview branch move things as a backend would, if a
+ * little faster.
  */
 
 import type { ServerScenario } from "@dude/design-system/fixtures/servers";
-import { PREVIEW_PAGE, previewRun, serverRecipes } from "@dude/design-system/fixtures/servers";
+import { previewRun, serverRecipes } from "@dude/design-system/fixtures/servers";
 import type { NavProject } from "@dude/design-system";
 import type { PersistedEvent, PreviewSettings, RunServerInput, Server, ServerLogLine, ServerRecipe, ServerRecipeInput, SettingsResponse, TaskServers } from "@dude/domain";
 import { ApiClient, ApiError, type Member, type ProjectDetail, type RunDetail, type TaskDetail, type TaskMetrics } from "../api/client.ts";
 import { EPIC, FINDINGS, METRICS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RUN_ID, SETTINGS, TASK_ID, YOU, eventsFor, logsFor, navigationFor, runDetailFor, serversFor, taskFor } from "./data.ts";
 
-export const SCENARIOS: readonly ServerScenario[] = ["a", "b", "c", "d", "e", "f"];
-const KEY = "dude.fixtures";
-
-/** The scenario asked for: `?fixtures=b` (remembered), or what was remembered. Null for the real API. */
-export function fixtureScenario(): ServerScenario | null {
-  if (import.meta.env.MODE === "production") return null;
-  const asked = new URLSearchParams(window.location.search).get("fixtures");
-  if (asked !== null) {
-    if (asked === "" || asked === "off") localStorage.removeItem(KEY);
-    else localStorage.setItem(KEY, asked);
-    // The parameter has done its work; the hash is the app's own.
-    window.history.replaceState(null, "", `${window.location.pathname}${window.location.hash}`);
-  }
-  const stored = localStorage.getItem(KEY);
-  return stored && (SCENARIOS as readonly string[]).includes(stored) ? (stored as ServerScenario) : null;
-}
+export { PREVIEW_PAGE } from "@dude/design-system/fixtures/servers";
 
 /**
  * An EventSource over the fixtures: on open it replays the scope's ledger
@@ -101,11 +87,6 @@ export class FixtureClient extends ApiClient {
     this.#events = eventsFor(scenario);
     this.#nav = navigationFor(scenario);
     ledger = (params) => this.#events.filter((e) => e.cursor > (params.after ?? 0) && (!params.runId || e.runId === params.runId) && (!params.taskId || e.taskId === params.taskId));
-  }
-
-  /** The frame has no server to reach: the mockup's page stands in. */
-  override previewDocument(): string {
-    return PREVIEW_PAGE;
   }
 
   get scenario(): ServerScenario {

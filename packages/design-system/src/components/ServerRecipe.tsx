@@ -165,7 +165,8 @@ export interface ServerRecipeDialogProps {
 export function ServerRecipeDialog({ open, onOpenChange, existing, repository, domain, busy, problem, onSubmit, initial }: ServerRecipeDialogProps) {
   const formId = useId();
   const [draft, setDraft] = useState<ServerRecipeDraft>(() => ({ ...draftOf(existing), ...initial }));
-  const [touched, setTouched] = useState(Boolean(initial));
+  // A problem shows once its field has something in it, or once Add was tried.
+  const [touched, setTouched] = useState(false);
   const problems = draftProblems(draft, touched);
   const complete = draft.name.trim() !== "" && draft.port !== "" && draft.command.trim() !== "";
   const canSubmit = !busy && complete && Object.keys(draftProblems(draft, true)).length === 0;

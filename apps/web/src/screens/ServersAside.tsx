@@ -9,10 +9,8 @@ import { useState } from "react";
 import { PreviewScrim, ServersSummary, ServersSummaryRow, TerminalLink } from "@dude/design-system/components";
 import { describeServer, formatTimestamp, useNow } from "@dude/design-system";
 import { Button } from "@dude/design-system/primitives";
-import { TERMINAL_RUN_STATUSES, type RunStatus } from "@dude/domain";
 import type { ApiClient } from "../api/client.ts";
-import type { ServersState } from "../hooks/useServers.ts";
-import { errorText } from "../hooks/useSave.tsx";
+import { runIsLive, type ServersState } from "../hooks/useServers.ts";
 import { usePeople } from "../people.tsx";
 import { ServerPreview } from "./ServersSection.tsx";
 
@@ -21,22 +19,17 @@ export function ServersAside({ client, taskId, servers, onAll }: { client: ApiCl
   const people = usePeople();
   const now = useNow(false);
   const [preview, setPreview] = useState<string | null>(null);
-  const [starting, setStarting] = useState(false);
-  const [problem, setProblem] = useState<string | null>(null);
   const run = data.run;
 
   if (!run) {
     return (
       <ServersSummary
         data-testid="servers-summary"
-        empty={problem ?? "No run is serving this branch."}
+        empty={servers.problem ?? "No run is serving this branch."}
         actions={
           data.recipes.length > 0 ? (
-            <Button size="sm" variant="secondary" leadingIcon="play" disabled={starting} data-testid="preview-branch-aside" onClick={() => {
-              setStarting(true);
-              setProblem(null);
-              client.startPreview(taskId).then(() => servers.reload(), (err: unknown) => setProblem(errorText(err))).finally(() => setStarting(false));
-            }}>
+            <Button size="sm" variant="secondary" leadingIcon="play" disabled={servers.busy !== null} data-testid="preview-branch-aside"
+              onClick={() => void servers.act("*", () => client.startPreview(taskId))}>
               Preview branch
             </Button>
           ) : undefined
@@ -45,7 +38,7 @@ export function ServersAside({ client, taskId, servers, onAll }: { client: ApiCl
     );
   }
 
-  const live = !TERMINAL_RUN_STATUSES.includes((run.state || "running") as RunStatus);
+  const live = runIsLive(run);
   const previewed = preview ? data.servers.find((s) => s.name === preview) ?? null : null;
   return (
     <>
@@ -72,7 +65,7 @@ export function ServersAside({ client, taskId, servers, onAll }: { client: ApiCl
       {previewed?.url ? (
         <>
           <PreviewScrim onClose={() => setPreview(null)} />
-          <ServerPreview client={client} server={previewed} words={describeServer(previewed, now, { runKind: run.kind, previewStage: run.previewStage })}
+          <ServerPreview server={previewed} words={describeServer(previewed, now, { runKind: run.kind, previewStage: run.previewStage })}
             you={people.me?.email ?? null} onClose={() => setPreview(null)}
             onRestart={live && previewed.command ? () => void servers.restart(previewed.name) : undefined} />
         </>

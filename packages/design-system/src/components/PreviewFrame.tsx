@@ -34,20 +34,21 @@ export interface PreviewFrameProps extends Omit<HTMLAttributes<HTMLElement>, "ti
 }
 
 /**
- * A server's page, in a frame with a browser's chrome over it: back,
- * forward, reload, the URL with its host and path, who is signed in, and
- * Desktop or Mobile width. As a side sheet over the page (`PreviewScrim`
- * beside it), or docked next to a conversation.
+ * A server's page, in a frame with a browser's chrome over it: the URL
+ * with its host and path, reload, who is signed in, and Desktop or Mobile
+ * width. As a side sheet over the page (`PreviewScrim` beside it), or
+ * docked next to a conversation.
  *
  * The frame is cross-origin: what it shows is the server's, so its path
- * is known only as far as this component navigated it.
+ * is known only as far as this component navigated it, and its history
+ * cannot be stepped from here.
  */
 export function PreviewFrame({ name, state, stateLabel, url, access, docked, onClose, onLogs, onRestart, foot, footNote, srcDoc, defaultViewport = "desktop", className, ...rest }: PreviewFrameProps) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [viewport, setViewport] = useState<PreviewViewport>(defaultViewport);
-  // What the chrome bar says: the path is ours to know only when we set it.
+  // What the chrome bar says: the frame is cross-origin, so the path is
+  // ours to know only as far as we set it.
   const [location, setLocation] = useState(url);
-  const [history, setHistory] = useState<{ back: number; forward: number }>({ back: 0, forward: 0 });
   useEffect(() => setLocation(url), [url]);
   // A sheet over the page closes on Escape, as a dialog does; docked, it is part of the page.
   useEffect(() => {
@@ -67,17 +68,11 @@ export function PreviewFrame({ name, state, stateLabel, url, access, docked, onC
     if (srcDoc === undefined) el.src = location;
     else el.srcdoc = srcDoc;
   };
-  const go = (delta: number) => {
-    // The frame's own history is the window's; stepping it moves the frame
-    // when the frame made the last entries, which the counters track.
-    if (delta < 0 && history.back > 0) {
-      window.history.back();
-      setHistory((h) => ({ back: h.back - 1, forward: h.forward + 1 }));
-    } else if (delta > 0 && history.forward > 0) {
-      window.history.forward();
-      setHistory((h) => ({ back: h.back + 1, forward: h.forward - 1 }));
-    }
-  };
+  // Back and forward are the frame's, and a cross-origin frame's history is
+  // out of reach: the buttons stand where a browser's do, and stay disabled
+  // until the page can be asked. Reload and the URL bar work whatever the
+  // origin.
+  const history = { back: false, forward: false };
 
   return (
     <aside
@@ -102,8 +97,8 @@ export function PreviewFrame({ name, state, stateLabel, url, access, docked, onC
       </div>
       <div className={styles["chrome"]}>
         <span className={styles["nav"]}>
-          <IconButton size="sm" icon="arrow-right" label="Back" className={styles["back"]} disabled={history.back === 0} onClick={() => go(-1)} />
-          <IconButton size="sm" icon="arrow-right" label="Forward" disabled={history.forward === 0} onClick={() => go(1)} />
+          <IconButton size="sm" icon="arrow-right" label="Back" className={styles["back"]} disabled={!history.back} />
+          <IconButton size="sm" icon="arrow-right" label="Forward" disabled={!history.forward} />
           <IconButton size="sm" icon="retry" label="Reload" onClick={reload} />
         </span>
         <span className={styles["urlbar"]} title={location}>

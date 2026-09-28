@@ -7,7 +7,7 @@
  * passes `compact`.
  */
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AgentAvatar,
   Duration,
@@ -28,12 +28,12 @@ import {
 } from "@dude/design-system/components";
 import { canStartAny, canStopAny, describeServer, firstName, formatTimestamp, serverLogLines, summarizeServers, useNow } from "@dude/design-system";
 import { Button, Callout, Dialog, EmptyState, FormActions, RowMenu, Spinner, TabCount } from "@dude/design-system/primitives";
-import { PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES, TERMINAL_RUN_STATUSES, type RunStatus, type Server, type ServerLogLine, type ServersRun, type TaskServers } from "@dude/domain";
+import { PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES, type RunStatus, type Server, type ServerLogLine, type ServersRun, type TaskServers } from "@dude/domain";
 import type { LogLine } from "@dude/design-system/components";
 import type { ApiClient } from "../api/client.ts";
-import type { ServersState } from "../hooks/useServers.ts";
-import { errorText } from "../hooks/useSave.tsx";
+import { runIsLive, type ServersState } from "../hooks/useServers.ts";
 import { usePeople } from "../people.tsx";
+import { usePreviewDocument } from "../preview.tsx";
 import { AddServerDialog } from "./AddServerDialog.tsx";
 
 export interface ServersSectionProps {
@@ -54,7 +54,7 @@ export interface ServersSectionProps {
 /** The run status as StatusMark says it; a preview's own word until its servers are up. */
 function runMark(run: ServersRun) {
   const status = (run.state || "running") as RunStatus;
-  if (run.kind === "preview" && run.previewStage && run.previewStage !== "ready" && !TERMINAL_RUN_STATUSES.includes(status)) return <StatusMark status="starting" size="sm" />;
+  if (run.kind === "preview" && run.previewStage && run.previewStage !== "ready" && runIsLive(run)) return <StatusMark status="starting" size="sm" />;
   return <StatusMark status={status} size="sm" />;
 }
 
@@ -67,8 +67,6 @@ export function ServersSection({ client, servers, taskId, compact, onPreview, pr
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<string | null>(null);
   const [ownPreview, setOwnPreview] = useState<string | null>(null);
-  const [previewBusy, setPreviewBusy] = useState(false);
-  const [previewProblem, setPreviewProblem] = useState<string | null>(null);
   const preview = onPreview ? previewing ?? null : ownPreview;
   const setPreview = onPreview ?? setOwnPreview;
 
@@ -92,10 +90,14 @@ export function ServersSection({ client, servers, taskId, compact, onPreview, pr
     // eslint-disable-next-line react-hooks/exhaustive-deps -- re-read on each change of the servers
   }, [data, openLogs, readLog]);
 
-  // An exited server opens its log by itself: the error is never behind a click.
+  // An exited server opens its log by itself, once: the error is never
+  // behind a click, and a person who folds it keeps it folded.
+  const shown = useRef<Set<string>>(new Set());
   useEffect(() => {
-    const exited = data?.servers.filter((s) => s.state === "exited").map((s) => s.name) ?? [];
-    if (exited.length > 0) setOpenLogs((s) => new Set([...s, ...exited]));
+    const fresh = (data?.servers ?? []).filter((s) => s.state === "exited" && !shown.current.has(s.name)).map((s) => s.name);
+    if (fresh.length === 0) return;
+    for (const name of fresh) shown.current.add(name);
+    setOpenLogs((s) => new Set([...s, ...fresh]));
   }, [data]);
 
   const toggleLog = (name: string) => setOpenLogs((s) => {
@@ -111,19 +113,7 @@ export function ServersSection({ client, servers, taskId, compact, onPreview, pr
     return out;
   }, [logs]);
 
-  const startPreview = async () => {
-    if (!taskId) return;
-    setPreviewBusy(true);
-    setPreviewProblem(null);
-    try {
-      await client.startPreview(taskId);
-      await servers.reload();
-    } catch (err) {
-      setPreviewProblem(errorText(err));
-    } finally {
-      setPreviewBusy(false);
-    }
-  };
+  const startPreview = () => taskId && void servers.act("*", () => client.startPreview(taskId));
   const stopPreview = () => taskId && void servers.act("*", () => client.stopPreview(taskId));
 
   if (!data) return <div className="centered">{problem ?? <Spinner label="Loading…" />}</div>;
@@ -133,7 +123,6 @@ export function ServersSection({ client, servers, taskId, compact, onPreview, pr
     const auto = data.recipes.filter((r) => r.autostartInPreviews).map((r) => r.name);
     return (
       <ServersPanel data-testid="servers-panel" data-run="none">
-        {problem ? <Callout tone="danger">{problem}</Callout> : null}
         <EmptyState
           icon="globe"
           title="Nothing is serving this task"
@@ -143,13 +132,13 @@ export function ServersSection({ client, servers, taskId, compact, onPreview, pr
             <FormActions note={data.recipes.length > 0
               ? `${auto.length > 0 ? `${auto.join(", ")} start${auto.length === 1 ? "s" : ""} automatically` : "nothing starts automatically"} · parks after ${PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES}m idle`
               : "The project defines no servers yet."}>
-              <Button variant="primary" leadingIcon="play" disabled={previewBusy || data.recipes.length === 0} onClick={() => void startPreview()} data-testid="preview-branch">
-                {previewBusy ? "Starting…" : "Preview branch"}
+              <Button variant="primary" leadingIcon="play" disabled={busy !== null || data.recipes.length === 0} onClick={startPreview} data-testid="preview-branch">
+                {busy ? "Starting…" : "Preview branch"}
               </Button>
             </FormActions>
           ) : undefined}
         />
-        {previewProblem ? <Callout tone="danger">{previewProblem}</Callout> : null}
+        {problem ? <Callout tone="danger">{problem}</Callout> : null}
         {data.recipes.length > 0 ? (
           <section className="serversRecipes" aria-label="Project servers">
             <h2 className="ds-label">What a preview starts</h2>
@@ -167,7 +156,7 @@ export function ServersSection({ client, servers, taskId, compact, onPreview, pr
 
   const isPreview = run.kind === "preview";
   const owner = run.startedBy ? (people.byId.get(run.startedBy.id) ?? run.startedBy) : null;
-  const live = !TERMINAL_RUN_STATUSES.includes((run.state || "running") as RunStatus);
+  const live = runIsLive(run);
   const previewed = preview ? data.servers.find((s) => s.name === preview) ?? null : null;
   const previewedWords = previewed ? describeServer(previewed, now, { runKind: run.kind, previewStage: run.previewStage }) : null;
   const setup = data.recipes.filter((r) => r.autostartInPreviews && r.setup).map((r) => r.setup).join(", ");
@@ -309,7 +298,7 @@ export function ServersSection({ client, servers, taskId, compact, onPreview, pr
       {!onPreview && previewed && previewedWords && previewed.url ? (
         <>
           <PreviewScrim onClose={() => setPreview(null)} />
-          <ServerPreview client={client} server={previewed} words={previewedWords} you={people.me?.email ?? null} onClose={() => setPreview(null)}
+          <ServerPreview server={previewed} words={previewedWords} you={people.me?.email ?? null} onClose={() => setPreview(null)}
             onLogs={() => {
               setPreview(null);
               setOpenLogs((s) => new Set([...s, previewed.name]));
@@ -322,8 +311,7 @@ export function ServersSection({ client, servers, taskId, compact, onPreview, pr
 }
 
 /** The preview sheet or docked frame for one server, with the words the row uses. */
-export function ServerPreview({ client, server, words, you, docked, onClose, onLogs, onRestart }: {
-  client: ApiClient;
+export function ServerPreview({ server, words, you, docked, onClose, onLogs, onRestart }: {
   server: Server;
   words: ReturnType<typeof describeServer>;
   you: string | null;
@@ -332,13 +320,14 @@ export function ServerPreview({ client, server, words, you, docked, onClose, onL
   onLogs?: (() => void) | undefined;
   onRestart?: (() => void) | undefined;
 }) {
+  const srcDoc = usePreviewDocument();
   return (
     <PreviewFrame
       name={server.name}
       state={words.state}
       stateLabel={words.label}
       url={server.url!}
-      srcDoc={client.previewDocument(server)}
+      srcDoc={srcDoc}
       docked={docked}
       access={you ? `Signed in as ${you}` : undefined}
       onClose={onClose}

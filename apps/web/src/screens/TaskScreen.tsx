@@ -191,6 +191,9 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
   const prs = [...pullRequests].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const owner = item.owner ? (people.byId.get(item.owner.id) ?? item.owner) : null;
   const working = phases.find((r) => r.status === "running");
+  // The aside says what serves the task when something does, or could: a
+  // project with no servers defined has nothing to say there.
+  const showServers = Boolean(servers.data && (servers.data.run || servers.data.recipes.length > 0));
 
   return (
     <div className="screen taskScreen" data-testid="task-screen">
@@ -301,8 +304,8 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
               <TaskMetricsSection client={client} taskId={taskId} live={item.status === "running"}
                 done={["done", "failed", "aborted"].includes(item.status)} version={version} />
             </div>
-            {prs.length > 0 || servers.data ? (
-              <aside className="taskAside" aria-label="Beside">
+            {prs.length > 0 || showServers ? (
+              <aside className="taskAside" aria-label="Pull requests and servers">
                 {prs.map((pr) => (
                   <PullRequestActions key={pr.id} client={client} pr={pr} defaultMethod={mergeMethod} onChanged={() => void load()}>
                     {(actions) => (
@@ -321,7 +324,7 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
                     )}
                   </PullRequestActions>
                 ))}
-                {servers.data ? (
+                {showServers ? (
                   <ServersAside client={client} taskId={taskId} servers={servers} onAll={() => setTab("servers")} />
                 ) : null}
               </aside>

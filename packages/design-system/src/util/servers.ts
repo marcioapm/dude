@@ -55,6 +55,10 @@ export function describeServer(server: Server, now: number, context: ServerConte
       }
       return { state: "stopped", detail: `stopped at ${at}${wasReady}` };
     }
+    default:
+      // A state lux added that this build does not know: shown with its own
+      // word under the attention glyph, rather than nothing at all.
+      return { state: "unreachable", label: String(server.state), detail: `since ${at}` };
   }
 }
 
