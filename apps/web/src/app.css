@@ -159,6 +159,16 @@ body {
     grid-template-columns: 240px minmax(0, 1fr);
   }
 }
+/* Narrow: the sessions above, as a short scrolling list, the open one under them. */
+@media (max-width: 900px) {
+  .taskSessions {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .taskSessionList {
+    max-height: 168px;
+  }
+}
 /* Changes, in line with the session's header and tabs. */
 .runChanges {
   padding: 0 var(--ds-space-24) var(--ds-space-16);
@@ -353,8 +363,17 @@ body {
 .taskScreen {
   overflow: auto;
 }
-.taskScreen.fixed {
-  overflow: hidden;
+/* On Sessions the page holds still and the session scrolls inside it — while
+   there is height for that; a short window scrolls the page as before. */
+@media (min-height: 640px) {
+  .taskScreen.fixed {
+    overflow: hidden;
+  }
+}
+@media (max-height: 639px) {
+  .taskSessions {
+    min-height: 560px;
+  }
 }
 .taskTop {
   display: flex;

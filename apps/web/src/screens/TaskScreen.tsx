@@ -79,6 +79,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, bread
   useEffect(() => {
     if (runId) setTab("sessions");
   }, [runId]);
+  // With none asked for, the session shown is picked once and kept: a phase
+  // ending and the next starting must not swap it under someone reading.
+  const [picked, setPicked] = useState<string | null>(null);
   const [item, setItem] = useState<TaskDetail | null>(null);
   const [missing, setMissing] = useState(false);
   const [findings, setFindings] = useState<Finding[]>([]);
@@ -191,10 +194,13 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, bread
   const prs = [...pullRequests].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const owner = item.owner ? (people.byId.get(item.owner.id) ?? item.owner) : null;
   const working = phases.find((r) => r.status === "running");
-  // Newest first; the one open is the one asked for, else what is running, else the newest.
+  // Newest first; the one open is the one asked for, else the one picked
+  // on first sight (what was running, else the newest).
   const sessions = [...item.runs].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const openRun = (runId && sessions.some((r) => r.id === runId) ? runId : undefined)
+    ?? (picked && sessions.some((r) => r.id === picked) ? picked : undefined)
     ?? sessions.find((r) => r.status === "running")?.id ?? sessions[0]?.id;
+  if (!runId && openRun && openRun !== picked) setPicked(openRun);
 
   return (
     // On Sessions the page holds still and the session scrolls inside it.
@@ -360,11 +366,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, bread
                 ))}
               </SessionList>
               {openRun && tab === "sessions" ? (
-                <RunScreen key={openRun} embedded client={client} runId={openRun} onBack={onBack}
-                  onOpenTask={() => {
-                    setTab("overview");
-                    onCloseRun?.();
-                  }} />
+                <RunScreen key={openRun} embedded client={client} runId={openRun} onBack={onBack} />
               ) : null}
             </div>
           ) : (

@@ -91,14 +91,6 @@
   font-weight: var(--ds-weight-medium);
 }
 
-.live {
-  width: 7px;
-  height: 7px;
-  border-radius: var(--ds-radius-full);
-  background: var(--ds-tone-success-fg);
-  animation: global(ds-pulse) calc(var(--ds-cadence-breathe) / max(var(--ds-motion-live), 0.0001)) ease-in-out infinite;
-}
-
 .count {
   font-size: var(--ds-text-xs);
   font-weight: var(--ds-weight-regular);

@@ -67,7 +67,7 @@ export function Tab({ value, icon, count, live, disabled, children }: TabProps) 
       {icon ? <Icon name={icon} size={13} /> : null}
       {children}
       {count !== undefined ? <span className={cx(styles["count"], "ds-cap")}>{count}</span> : null}
-      {live ? <span className={styles["live"]} aria-label="live" data-testid="tab-live" /> : null}
+      {live ? <span className="ds-live-dot" aria-label="live" data-testid="tab-live" /> : null}
     </RadixTabs.Trigger>
   );
 }

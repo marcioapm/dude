@@ -39,6 +39,16 @@ export function ChangesPanel({ client, runId, role, events, checksum: latest, li
 }) {
   const [diff, setDiff] = useState<RunDiff | null>(null);
   const [viewing, setViewing] = useState<string | null>(null);
+  // The file in the viewer, as one list: the same list while the file is
+  // unchanged, so the viewer's diff does not re-read it on every event.
+  const openedFiles = useMemo(() => {
+    const f = viewing ? diff?.files.find((x) => x.path === viewing) : undefined;
+    return f ? [f] : null;
+  }, [diff, viewing]);
+  // A file that left the diff closes its viewer for good: it does not come back by itself.
+  useEffect(() => {
+    if (viewing && diff && !diff.files.some((f) => f.path === viewing)) setViewing(null);
+  }, [diff, viewing]);
   const [problem, setProblem] = useState<string | null>(null);
 
   const shown = useRef<string | null>(null);
@@ -77,7 +87,6 @@ export function ChangesPanel({ client, runId, role, events, checksum: latest, li
 
   if (problem) return <Callout tone="danger">{problem}</Callout>;
   if (!diff) return null;
-  const opened = viewing ? diff.files.find((f) => f.path === viewing) : undefined;
   return (
     <>
       <LiveDiff
@@ -91,10 +100,10 @@ export function ChangesPanel({ client, runId, role, events, checksum: latest, li
         lastChange={live && lastChange ? lastChange : undefined}
         emptyMessage={live ? "The agent has not changed anything yet." : "This session changed nothing."}
       />
-      {opened ? (
-        <Dialog open size="xl" onOpenChange={(o) => !o && setViewing(null)} title={<code>{opened.path}</code>}>
+      {openedFiles ? (
+        <Dialog open size="xl" onOpenChange={(o) => !o && setViewing(null)} title={<code>{openedFiles[0]!.path}</code>}>
           <div className="diffViewer" data-testid="diff-viewer">
-            <LiveDiff files={[opened]} base={diff.base} fileList={false} defaultView="split" />
+            <LiveDiff files={openedFiles} base={diff.base} fileList={false} defaultView="split" />
           </div>
         </Dialog>
       ) : null}
