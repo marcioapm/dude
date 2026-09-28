@@ -26,7 +26,7 @@ const TASK_SELECT = `
 
 const RUN_SELECT = `
   id, organization_id AS "organizationId", project_id AS "projectId",
-  task_id AS "taskId", attempt, status, error,
+  task_id AS "taskId", attempt, status, error, kind,
   phase, role, category, parent_run_id AS "parentRunId", base_refs AS "baseRefs",
   (SELECT COALESCE(json_object_agg(k, v->>'sha'), '{}'::json) FROM jsonb_each(heads) AS h(k, v)) AS heads,
   branch, harness, model, dude_pause AS "dudePause",
