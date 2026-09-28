@@ -124,7 +124,7 @@ export function CalmerSection({ mode }: { readonly mode: PaneMode }) {
                 <PersonAvatar person={CY} size={20} agent="reviewer" live />
               </>],
               ["an agent", <><AgentAvatar role="implementer" size="lg" live /><AgentAvatar role="reviewer" size="md" /></>],
-              ["stack, owner first and larger", <PersonAvatarStack people={[ANA, CY]} size={28} leadLarger agents={new Map([["per_ana", { role: "implementer", live: true }]])} />],
+              ["stack, owner first", <PersonAvatarStack people={[ANA, CY]} size={28} agents={new Map([["per_ana", { role: "implementer", live: true }]])} />],
               ["stack past max", <PersonAvatarStack people={[ANA, BO, CY, DEE, ELI]} size={24} max={4} />],
               ["projects", <>
                 {[16, 20, 32, 56].map((s) => <ProjectAvatar key={s} project={{ id: "prj_dash", name: "Dashboard" }} size={s} />)}

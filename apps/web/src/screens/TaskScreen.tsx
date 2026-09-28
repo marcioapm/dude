@@ -86,6 +86,10 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
   const load = useCallback(async () => {
     const seq = ++loads.current;
     setVersion((v) => v + 1);
+    // The ledger is for who did what and the plans; the page stands without
+    // it. Only what is new since the last read is fetched, beside the rest.
+    const since = ledger.current.at(-1)?.cursor ?? 0;
+    const more = allEvents(client, taskId, since).catch(() => [] as PersistedEvent[]);
     try {
       const [fresh, f, p, a] = await Promise.all([
         client.getTask(taskId),
@@ -104,18 +108,11 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
       if (err instanceof ApiError && err.status === 404) setMissing(true);
       else setProblem(err instanceof Error ? err.message : String(err));
     }
-    // The ledger is for who did what and the plans; the page stands without
-    // it. Only what is new since the last read is fetched.
-    try {
-      const more = await allEvents(client, taskId, ledger.current.at(-1)?.cursor ?? 0);
-      const last = ledger.current.at(-1)?.cursor ?? 0;
-      const fresh = more.filter((e) => e.cursor > last);
-      if (fresh.length > 0) {
-        ledger.current = [...ledger.current, ...fresh];
-        setEvents(ledger.current);
-      }
-    } catch {
-      // Activity says it could not be read; nothing else depends on it.
+    const last = ledger.current.at(-1)?.cursor ?? 0;
+    const unseen = (await more).filter((e) => e.cursor > last);
+    if (unseen.length > 0) {
+      ledger.current = [...ledger.current, ...unseen];
+      setEvents(ledger.current);
     }
   }, [client, taskId]);
 
@@ -144,6 +141,9 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
     const attempt = Math.max(0, ...runs.map((r) => r.attempt));
     return runs.filter((r) => r.attempt === attempt).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }, [item]);
+
+  // What a pull request heard, for why a fix ran: a few of the ledger's many.
+  const prEvents = useMemo(() => events.filter((e) => e.eventType.startsWith("pull_request.")), [events]);
 
   // Each running phase's plan, from its events.
   const plans = useMemo<Plans>(() => {
@@ -198,7 +198,7 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
           <div className="taskMeta">
             <StatusMark status={item.status} size="sm" />
             {prs.map((pr) => (
-              <PrChip key={pr.id} pr={{ ...pr, repositoryName: pr.repositoryName }} data-testid="pr-link" />
+              <PrChip key={pr.id} pr={pr} data-testid="pr-link" />
             ))}
             {item.key ? <span className="ds-mono" title={item.id}>{item.key}</span> : null}
             {phases[0]?.branch ? <span className="ds-mono">{phases[0].branch}</span> : null}
@@ -261,7 +261,7 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
                 {started ? (
                   <StepList data-testid="pipeline">
                     {phases.map((run, index) => (
-                      <PhaseStep key={run.id} run={run} plan={plans.get(run.id)} why={whyItRan(run, index, phases, findings, events)}
+                      <PhaseStep key={run.id} run={run} plan={plans.get(run.id)} why={whyItRan(run, index, phases, findings, prEvents)}
                         findings={findings.filter((f) => f.runId === run.id)} onOpen={() => onOpenRun(run.id)} />
                     ))}
                     {prs.map((pr) => (
@@ -357,12 +357,11 @@ async function allEvents(client: ApiClient, taskId: string, after: number): Prom
  * for a pull request's feedback (and whose), a re-review of a fix. Only
  * what can be read from the runs, findings and events; nothing guessed.
  */
-function whyItRan(run: Run, index: number, phases: readonly Run[], findings: readonly Finding[], events: readonly PersistedEvent[]): string | undefined {
+function whyItRan(run: Run, index: number, phases: readonly Run[], findings: readonly Finding[], prEvents: readonly PersistedEvent[]): string | undefined {
   const earlier = phases.slice(0, index);
   if (run.phase === "fix") {
-    const prBefore = events.filter((e) => e.eventType === "pull_request.opened" && e.occurredAt < run.createdAt);
-    if (prBefore.length > 0) {
-      const feedback = [...events].reverse().find((e) => e.occurredAt <= run.createdAt &&
+    if (prEvents.some((e) => e.eventType === "pull_request.opened" && e.occurredAt < run.createdAt)) {
+      const feedback = prEvents.findLast((e) => e.occurredAt <= run.createdAt &&
         (e.eventType === "pull_request.commented" || e.eventType === "pull_request.reviewed" || e.eventType === "pull_request.checks_changed"));
       if (feedback?.eventType === "pull_request.checks_changed") return "for failing CI";
       const author = typeof feedback?.payload.author === "string" ? feedback.payload.author : null;
@@ -478,10 +477,8 @@ interface ActivityLine {
 /** The ledger as sentences: the acts worth a line, each with who did it. */
 export function activityLines(events: readonly PersistedEvent[], people: People, runs: readonly Run[]): ActivityLine[] {
   const out: ActivityLine[] = [];
-  const phase = (runId: string | null) => {
-    const run = runs.find((r) => r.id === runId);
-    return run ? runLabel(run).toLowerCase() : "agent";
-  };
+  const labels = new Map(runs.map((r) => [r.id, runLabel(r).toLowerCase()]));
+  const phase = (runId: string | null) => (runId && labels.get(runId)) || "agent";
   for (const e of events) {
     const by = humanActor(e);
     const name = actorName(by, people.names);

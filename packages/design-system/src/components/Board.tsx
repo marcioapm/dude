@@ -6,9 +6,9 @@ import { EmptyState, Skeleton } from "../primitives/Feedback.tsx";
 import { ScrollArea } from "../primitives/ScrollArea.tsx";
 import { statusSpec } from "../tokens/status.ts";
 import { sumTriage } from "../tokens/triage.ts";
-import { formatDuration } from "../util/format.ts";
+import { firstName, formatDuration } from "../util/format.ts";
 import { toMs, useNow } from "../util/useNow.ts";
-import { liveSessions, navKey, projectPeople, waitingWords, type NavEpic, type NavProject, type NavRef, type NavRow, type NavSession, type NavTask } from "../util/navModel.ts";
+import { liveSessions, navKey, ownerAgents, projectPeople, taskOwner, waitingWords, type NavEpic, type NavProject, type NavRef, type NavRow, type NavSession, type NavTask } from "../util/navModel.ts";
 import {
   BOARD_COLUMN_KINDS,
   BOARD_COLUMN_SPECS,
@@ -408,10 +408,9 @@ function BoardCardView({ card, now, showEpic, selected, tabIndex, onFocus, onKey
   const needsYou = card.triage === "needs_you";
   const since = toMs(wi.statusSince);
   const people = wi.people ?? [];
-  const owner = people[0];
   const live = liveSessions(wi).filter((s) => s.status === "running");
   const working = live[0];
-  const agents = owner && working ? new Map([[owner.id ?? owner.name, { role: working.role, live: true }]]) : undefined;
+  const agents = ownerAgents(wi, working);
   const plan = working?.plan;
   const prs = wi.pullRequests ?? [];
   return (
@@ -471,7 +470,7 @@ function BoardCardView({ card, now, showEpic, selected, tabIndex, onFocus, onKey
           </span>
         ) : null}
         <span className={styles["foot"]}>
-          {people.length > 0 ? <PersonAvatarStack people={people} size={28} max={3} leadLarger={false} agents={agents} /> : working ? <AgentAvatar role={working.role} size="md" live /> : null}
+          {people.length > 0 ? <PersonAvatarStack people={people} size={28} max={3} agents={agents} /> : working ? <AgentAvatar role={working.role} size="md" live /> : null}
           <span className={styles["doing"]}>
             <DoingLine task={wi} working={live} needsYou={needsYou} />
           </span>
@@ -484,8 +483,9 @@ function BoardCardView({ card, now, showEpic, selected, tabIndex, onFocus, onKey
 
 /** Who, and what is happening: the working agent and what it is doing, or where the task stands. */
 function DoingLine({ task, working, needsYou }: { readonly task: NavTask; readonly working: ReadonlyArray<NavSession>; readonly needsYou: boolean }) {
-  const names = (task.people ?? []).map((p) => p.name.split(/\s+/)[0]).join(", ");
-  if (needsYou) return <><b>{names || "Nobody"}</b>waiting on {task.people?.[0]?.name.split(/\s+/)[0] ?? "a person"}</>;
+  const names = (task.people ?? []).map((p) => firstName(p.name)).join(", ");
+  const owner = taskOwner(task);
+  if (needsYou) return <><b>{names || "Nobody"}</b>waiting on {owner ? firstName(owner.name) : "a person"}</>;
   if (working.length > 1) return <><b>{working.length} agents working</b>{names}</>;
   const w = working[0];
   if (w) return <><b>{w.title ?? ROLE_LABEL[w.role]}</b>{w.activity ?? "working"}</>;

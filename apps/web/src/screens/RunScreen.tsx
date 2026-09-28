@@ -30,7 +30,7 @@ import type { ApiClient, Person, RunDetail } from "../api/client.ts";
 import { ApiError, reportedCost } from "../api/client.ts";
 import { PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, snapshot, type Turn } from "../api/conversation.ts";
 import type { ComposerSubmission } from "@dude/design-system/components";
-import { cameBack, useEventStream } from "../hooks/useEventStream.ts";
+import { useEventStream } from "../hooks/useEventStream.ts";
 import { conflictNotice, type Notice } from "../conflict.ts";
 import { firstName, usePeople, type People } from "../people.tsx";
 import { NotFound } from "./NotFound.tsx";
@@ -81,7 +81,7 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
   const [abortReason, setAbortReason] = useState("");
   const people = usePeople();
 
-  const { events, status: streamStatus } = useEventStream({ client, runId });
+  const { events, reconnects } = useEventStream({ client, runId });
 
   // Re-read the Run whenever the ledger says its status changed, rather than
   // polling: the stream already tells us when something happened.
@@ -89,14 +89,6 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
     () => events.reduce((n, e) => (STATUS_EVENTS.has(e.eventType) ? n + 1 : n), 0),
     [events],
   );
-  // The Run is re-read when the stream comes back, too: its status may
-  // have moved while nothing could say so.
-  const [reconnects, setReconnects] = useState(0);
-  const lastStream = useRef(streamStatus);
-  useEffect(() => {
-    if (cameBack(lastStream.current, streamStatus)) setReconnects((n) => n + 1);
-    lastStream.current = streamStatus;
-  }, [streamStatus]);
 
   useEffect(() => {
     let cancelled = false;
