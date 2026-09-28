@@ -53,8 +53,24 @@ async function fromOrchestrator<T>(ctx: RequestContext, path: string): Promise<T
   return (await res.json()) as T;
 }
 
-const factoryPolicy = (ctx: RequestContext) => fromOrchestrator<FullDeliveryPolicy>(ctx, "/internal/delivery-defaults");
-const builtinPrompts = (ctx: RequestContext) => fromOrchestrator<Record<PromptRole, string>>(ctx, "/internal/prompts/builtin");
+/**
+ * The factory's policy and dude's built-in prompts are constants of the
+ * orchestrator's build, so one read serves every request; a failed one is
+ * not kept.
+ */
+function constant<T>(path: string): (ctx: RequestContext) => Promise<T> {
+  let cached: Promise<T> | null = null;
+  return (ctx) => {
+    cached ??= fromOrchestrator<T>(ctx, path).catch((err: unknown) => {
+      cached = null;
+      throw err;
+    });
+    return cached;
+  };
+}
+
+const factoryPolicy = constant<FullDeliveryPolicy>("/internal/delivery-defaults");
+const builtinPrompts = constant<Record<PromptRole, string>>("/internal/prompts/builtin");
 
 interface Layers {
   org: { id: string; name: string; agentModels: AgentModels; deliveryPolicy: Json };
@@ -373,6 +389,7 @@ async function insertVersion(
   body: string,
   note: string,
   restoredFrom: string | null,
+  builtin: string,
 ): Promise<{ id: string; unchanged: boolean }> {
   // One save at a time per layer: the row that owns it serialises them.
   if (projectId) {
@@ -385,7 +402,6 @@ async function insertVersion(
   const current = (await versions(scope, projectId, role))[0];
   if (current && current.body === body && current.mode === mode) return { id: current.id, unchanged: true };
   if (!current && !projectId) {
-    const builtin = (await builtinPrompts(ctx))[role];
     if (builtin === body) return { id: "", unchanged: true };
     await scope.sql`
       INSERT INTO prompt_versions (id, organization_id, project_id, role, mode, body, note, created_by)
@@ -425,14 +441,16 @@ async function savePrompt(ctx: RequestContext): Promise<Response> {
   }
   if (!body.trim() && mode !== "add") throw badRequest("a prompt that replaces another needs text");
 
+  const builtin = (await builtinPrompts(ctx))[role];
   const saved = await withOrg(ctx.principal.organizationId, (scope) =>
-    insertVersion(scope, ctx, role, projectId, mode, body, input.note ?? "", null),
+    insertVersion(scope, ctx, role, projectId, mode, body, input.note ?? "", null, builtin),
   );
-  return json(projectId ? await settingsResponse(ctx, projectId) : await settingsResponse(ctx), saved.unchanged ? 200 : 201);
+  return json(await settingsResponse(ctx, projectId ?? undefined), saved.unchanged ? 200 : 201);
 }
 
 async function restorePrompt(ctx: RequestContext): Promise<Response> {
   const id = ctx.params.id!;
+  const builtin = await builtinPrompts(ctx);
   const restored = await withOrg(ctx.principal.organizationId, async (scope) => {
     const rows = (await scope.sql`
       SELECT ${scope.sql.unsafe(VERSION_SELECT)} FROM ${scope.sql.unsafe(VERSION_FROM)}
@@ -442,10 +460,10 @@ async function restorePrompt(ctx: RequestContext): Promise<Response> {
     if (!version) throw notFound(`prompt version ${id} not found`);
     if (version.projectId) await requireProjectEditor(ctx, version.projectId);
     else await requireOrgAdmin(ctx);
-    await insertVersion(scope, ctx, version.role, version.projectId, version.mode, version.body, `Restored v${version.number}`, id);
+    await insertVersion(scope, ctx, version.role, version.projectId, version.mode, version.body, `Restored v${version.number}`, id, builtin[version.role]);
     return version.projectId;
   });
-  return json(restored ? await settingsResponse(ctx, restored) : await settingsResponse(ctx));
+  return json(await settingsResponse(ctx, restored ?? undefined));
 }
 
 export function registerSettingsRoutes(router: Router): void {

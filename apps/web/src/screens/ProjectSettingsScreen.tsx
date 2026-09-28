@@ -29,11 +29,12 @@ import {
 import type { ApiClient, ProjectDetail, Repository } from "../api/client.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
 import { settingsPage } from "../settings.ts";
+import { SETTINGS_ROLES } from "@dude/domain";
 import { agentsNav, deliveryNav, isRole, SettingsFrame, useSettings } from "./SettingsFrame.tsx";
 import { DeliveryPage, RolePage } from "./settingsPages.tsx";
 
 // The first is where the screen opens: a new project needs its repositories first.
-const PAGES = ["repositories", "general", "implementer", "reviewer", "fixer", "simplifier", "qa_browser", "delivery"] as const;
+const PAGES = ["repositories", "general", ...SETTINGS_ROLES, "delivery"] as const;
 
 export interface ProjectSettingsScreenProps {
   client: ApiClient;

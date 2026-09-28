@@ -4,7 +4,7 @@
  * Pure, so the rules are tested apart from the screens.
  */
 
-import type { DeliverySettings, FullDeliveryPolicy, RoleSettings, SettingsResponse, SettingsRole } from "@dude/domain";
+import type { DeliverySettings, FullDeliveryPolicy, RoleSettings } from "@dude/domain";
 
 /** Time limits a person picks from, in minutes; null is none of the role's own. */
 export const TIME_LIMITS: ReadonlyArray<number | null> = [null, 15, 20, 30, 45, 60, 120, 240, 480];
@@ -18,14 +18,6 @@ export function timeLimitLabel(minutes: number | null): string {
 
 export function effortLabel(effort: string | null): string {
   return effort ? effort[0]!.toUpperCase() + effort.slice(1) : "Model’s default";
-}
-
-/** How a value reads beside "Overridden · Acme: …". */
-export function valueLabel(value: unknown): string {
-  if (value === null || value === undefined || value === "") return "not set";
-  if (typeof value === "boolean") return value ? "on" : "off";
-  if (Array.isArray(value)) return value.join(", ");
-  return String(value);
 }
 
 /** Whether a project changes anything about a role: a setting, or its prompt. */
@@ -65,4 +57,3 @@ export function settingsPage<T extends string>(page: string | undefined, pages: 
   return pages.includes(page as T) ? (page as T) : pages[0]!;
 }
 
-export type { SettingsResponse, SettingsRole };

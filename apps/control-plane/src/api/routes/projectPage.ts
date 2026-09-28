@@ -60,9 +60,9 @@ async function projectOverview(ctx: RequestContext): Promise<Response> {
              COALESCE((SELECT json_object_agg(s.state, s.n) FROM (
                          SELECT pr.state::text AS state, count(*) AS n FROM pull_requests pr JOIN tasks t ON t.id = pr.task_id
                          WHERE t.epic_id = e.id GROUP BY pr.state) s), '{}') AS prs,
-             COALESCE((SELECT sum((ev.payload->>'costUsd')::numeric) FROM events ev JOIN tasks t ON t.id = ev.task_id
-                       WHERE t.epic_id = e.id AND ev.event_type = 'agent.model.request.completed'
-                         AND jsonb_typeof(ev.payload->'costUsd') = 'number'), 0)::float8 AS "costUsd",
+             -- What its Runs cost, as the epic's metrics count it.
+             COALESCE((SELECT sum(r.agent_cost_usd) FROM runs r JOIN tasks t ON t.id = r.task_id
+                       WHERE t.epic_id = e.id), 0)::float8 AS "costUsd",
              (SELECT max(t.updated_at) FROM tasks t WHERE t.epic_id = e.id) AS "lastActivity",
              (SELECT count(*)::int FROM tasks t WHERE t.epic_id = e.id AND t.status IN ('awaiting_input', 'awaiting_confirmation')) AS "needsYou"
       FROM epics e WHERE e.project_id = ${projectId}

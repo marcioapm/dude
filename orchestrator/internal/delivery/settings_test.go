@@ -40,7 +40,7 @@ func TestTheFixerIsTheImplementerUnlessSetApart(t *testing.T) {
 	if got := ResolveRole("fixer", project, org); got.Model != "org/impl" || got.Effort != "high" {
 		t.Errorf("fixer with its own effort = %+v", got)
 	}
-	if SettingsRoleForPhase(PhaseFix) != "fixer" || SettingsRoleForPhase(PhaseReview) != "reviewer" {
+	if PromptRoleForPhase[PhaseFix] != "fixer" || PromptRoleForPhase[PhaseReview] != "reviewer" {
 		t.Error("phases take the wrong role's settings")
 	}
 }
@@ -174,10 +174,8 @@ func TestACustomPromptStillCommitsAndRecords(t *testing.T) {
 				t.Errorf("%s under a custom prompt should say %q once:\n%s", phase, note, got)
 			}
 		}
-		// A prompt that already says it is not told twice.
-		kept := mine + " " + note
-		if got := Prompt(phase, PromptInput{Title: "T", OrgPrompt: &kept}); strings.Count(got, note) != 1 {
-			t.Errorf("%s repeats %q:\n%s", phase, note, got)
+		if got := Prompt(phase, PromptInput{Title: "T"}); strings.Count(got, note) != 1 {
+			t.Errorf("%s's built-in prompt should say %q once:\n%s", phase, note, got)
 		}
 	}
 }

@@ -1,5 +1,12 @@
 import { z } from "zod";
-import { deliveryPolicySchema, type FullDeliveryPolicy } from "./hierarchy.ts";
+import {
+  deliveryPolicySchema,
+  effortSchema,
+  TERMINAL_TASK_STATUSES,
+  timeLimitMinutesSchema,
+  type Effort,
+  type FullDeliveryPolicy,
+} from "./hierarchy.ts";
 
 /**
  * Settings in two layers: the organization's defaults, and each project's
@@ -50,20 +57,6 @@ export const ROLE_ENABLED_BY = { simplifier: "simplify", qa_browser: "test" } as
   Record<SettingsRole, keyof FullDeliveryPolicy>
 >;
 
-export const EFFORTS = ["low", "medium", "high", "max"] as const;
-export const effortSchema = z.enum(EFFORTS);
-export type Effort = z.infer<typeof effortSchema>;
-
-/** A role's settings as one layer stores them: each field optional. */
-export const roleLayerSchema = z
-  .object({
-    model: z.string().min(1).max(200),
-    effort: effortSchema,
-    /** Running time per session, in minutes. */
-    timeLimitMinutes: z.number().int().min(1).max(10_080),
-  })
-  .partial();
-export type RoleLayer = z.infer<typeof roleLayerSchema>;
 
 /** Where a value comes from, as a project's settings show it. */
 export type SettingSource = "organization" | "project";
@@ -135,7 +128,7 @@ export const settingsPatchSchema = z
           .object({
             model: nullable(z.string().trim().min(1).max(200)),
             effort: nullable(effortSchema),
-            timeLimitMinutes: nullable(z.number().int().min(1).max(10_080)),
+            timeLimitMinutes: nullable(timeLimitMinutesSchema),
             enabled: nullable(z.boolean()),
           })
           .strict(),
@@ -167,7 +160,6 @@ export const savePromptSchema = z
     note: z.string().max(500).default(""),
   })
   .strict();
-export type SavePrompt = z.infer<typeof savePromptSchema>;
 
 /** One saved version of a prompt, as its history lists it. */
 export interface PromptVersion {
@@ -206,6 +198,6 @@ export type EpicState = z.infer<typeof epicStateSchema>;
 
 export function epicState(stored: EpicState | null, taskStatuses: readonly string[]): EpicState {
   if (stored) return stored;
-  const finished = new Set(["done", "failed", "aborted"]);
-  return taskStatuses.length > 0 && taskStatuses.every((s) => finished.has(s)) ? "done" : "active";
+  const finished = (s: string) => (TERMINAL_TASK_STATUSES as readonly string[]).includes(s);
+  return taskStatuses.length > 0 && taskStatuses.every(finished) ? "done" : "active";
 }

@@ -73,3 +73,7 @@ CREATE INDEX runs_project_prompt_version_idx ON runs (project_prompt_version_id)
 -- say": done once it has tasks and all of them are finished, active
 -- otherwise. A person's choice, once made, stands.
 ALTER TABLE epics ADD COLUMN state text CHECK (state IN ('planned', 'active', 'done'));
+
+-- The project page reads each epic's tasks: their lanes, owners, pull
+-- requests and cost.
+CREATE INDEX IF NOT EXISTS tasks_epic_idx ON tasks (epic_id) WHERE epic_id IS NOT NULL;

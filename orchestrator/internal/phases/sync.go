@@ -339,7 +339,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 	var criteria, projectModels, orgModels json.RawMessage
 	var findings []delivery.Finding
 	var feedback []forge.ActionableFeedback
-	var prompts delivery.PromptSet
+	var prompts delivery.Prompts
 	_ = json.Unmarshal(r.PRFeedback, &feedback)
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
@@ -387,7 +387,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 		return lux.Spec{}, err
 	}
 	role := delivery.RoleForPhase[r.Phase]
-	settings := delivery.ResolveRole(delivery.SettingsRoleForPhase(r.Phase), projectModels, orgModels)
+	settings := delivery.ResolveRole(delivery.PromptRoleForPhase[r.Phase], projectModels, orgModels)
 	if settings.Model == "" {
 		return lux.Spec{}, fmt.Errorf("no model is configured for the %s role", role)
 	}
@@ -415,8 +415,8 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 		Title: title, Goal: goal, AcceptanceCriteria: ac, Category: r.Category,
 		Findings: findings, PRFeedback: feedback, BlockingSeverities: r.BlockingSeverities, Context: settings.Context,
 		Repositories: promptRepos, Decisions: decisions, Tools: s.Agent.ToolsURL != "", CLI: s.Agent.ToolsURL != "" && s.Agent.ToolsService,
+		OrgPrompt: prompts.Org, ProjectPrompt: prompts.Project, ProjectPromptMode: prompts.ProjectMode,
 	}
-	prompts.Apply(&promptIn)
 	in.Prompt = delivery.Prompt(r.Phase, promptIn)
 	// Pushed only by a phase that publishes. Even with nowhere to change
 	// yet: a repository a person lets it change mid-Run arrives at a

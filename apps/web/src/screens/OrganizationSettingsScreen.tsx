@@ -22,11 +22,12 @@ import {
 import type { ApiClient, ForgeConnection } from "../api/client.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
 import { settingsPage } from "../settings.ts";
+import { SETTINGS_ROLES } from "@dude/domain";
 import { agentsNav, deliveryNav, isRole, SettingsFrame, useSettings } from "./SettingsFrame.tsx";
 import { DeliveryPage, RolePage } from "./settingsPages.tsx";
 
 // The first is where the screen opens: GitHub, what a new organization sets up first.
-const PAGES = ["github", "general", "implementer", "reviewer", "fixer", "simplifier", "qa_browser", "delivery"] as const;
+const PAGES = ["github", "general", ...SETTINGS_ROLES, "delivery"] as const;
 
 export interface OrganizationSettingsScreenProps {
   client: ApiClient;

@@ -32,6 +32,13 @@ export const ALL_AGENT_ROLES = agentRoleSchema.options;
  * express "any harness that satisfies the capabilities" and let policy
  * pick — plan §45 capability negotiation.
  */
+/** How hard a model thinks. */
+export const EFFORTS = ["low", "medium", "high", "max"] as const;
+export const effortSchema = z.enum(EFFORTS);
+export type Effort = z.infer<typeof effortSchema>;
+/** Running time allowed per session, in minutes: up to a week. */
+export const timeLimitMinutesSchema = z.number().int().min(1).max(10_080);
+
 export const agentModelConfigSchema = z.object({
   /**
    * Optional at each layer: a project that changes only a role's effort
@@ -54,9 +61,9 @@ export const agentModelConfigSchema = z.object({
    */
   context: z.string().max(20_000).optional(),
   /** How hard the model thinks; unset leaves it to the model. */
-  effort: z.enum(["low", "medium", "high", "max"]).optional(),
+  effort: effortSchema.optional(),
   /** Running time allowed per session, in minutes. */
-  timeLimitMinutes: z.number().int().min(1).max(10_080).optional(),
+  timeLimitMinutes: timeLimitMinutesSchema.optional(),
 });
 export type AgentModelConfig = z.infer<typeof agentModelConfigSchema>;
 
