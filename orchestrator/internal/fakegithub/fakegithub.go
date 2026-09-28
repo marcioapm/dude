@@ -66,8 +66,16 @@ type Server struct {
 	Unresolved map[int]int
 	// Update-branch and merge requests received, by pull request.
 	Updates, Merges []int
-	// Check runs asked to run again.
-	Rerequested []int64
+	// Check runs asked to run again: through the checks API, and Actions
+	// jobs through the Actions API.
+	Rerequested, JobsRerun []int64
+	// GitHub has not worked out whether it merges yet (after a push).
+	MergeableUnknown map[int]bool
+	// The collaborator permission endpoint refuses (a token without the
+	// scope).
+	PermissionRefused bool
+	// Update-branch requests fail as GitHub does when it is down.
+	UpdateDown bool
 }
 
 // Comment and review ids, unique across repositories as GitHub's are.
@@ -75,7 +83,7 @@ var nextID atomic.Int64
 
 func New(repo, slug string) *Server {
 	return &Server{Repo: repo, Slug: slug, pulls: map[int]*Pull{},
-		Permissions: map[string]string{}, Conflicting: map[int]bool{}, Unresolved: map[int]int{}}
+		Permissions: map[string]string{}, Conflicting: map[int]bool{}, Unresolved: map[int]int{}, MergeableUnknown: map[int]bool{}}
 }
 
 // Set changes the fake's state under its lock.
@@ -211,7 +219,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET "+prefix+"/collaborators/{login}/permission", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		p, ok := s.Permissions[r.PathValue("login")]
+		refused := s.PermissionRefused
 		s.mu.Unlock()
+		if refused {
+			fail(w, 403, "Resource not accessible by personal access token")
+			return
+		}
 		if !ok {
 			p = "write"
 		}
@@ -235,9 +248,13 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		s.mu.Lock()
-		conflicting := s.Conflicting[p.Number]
+		conflicting, down := s.Conflicting[p.Number], s.UpdateDown
 		s.Updates = append(s.Updates, p.Number)
 		s.mu.Unlock()
+		if down {
+			fail(w, 502, "Server Error")
+			return
+		}
 		if conflicting {
 			fail(w, 422, "merge conflict between base and head")
 			return
@@ -290,6 +307,13 @@ func (s *Server) Handler() http.Handler {
 		id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 		s.mu.Lock()
 		s.Rerequested = append(s.Rerequested, id)
+		s.mu.Unlock()
+		write(w, 201, map[string]any{})
+	})
+	mux.HandleFunc("POST "+prefix+"/actions/jobs/{id}/rerun", func(w http.ResponseWriter, r *http.Request) {
+		id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		s.mu.Lock()
+		s.JobsRerun = append(s.JobsRerun, id)
 		s.mu.Unlock()
 		write(w, 201, map[string]any{})
 	})
@@ -348,9 +372,13 @@ func (s *Server) pullJSON(p *Pull) map[string]any {
 	for _, l := range p.Requested {
 		requested = append(requested, map[string]string{"login": l})
 	}
-	mergeable, state := true, "clean"
+	var mergeable any = true
+	state := "clean"
 	if s.Conflicting[p.Number] {
 		mergeable, state = false, "dirty"
+	}
+	if s.MergeableUnknown[p.Number] {
+		mergeable, state = nil, "unknown"
 	}
 	return map[string]any{
 		"number": p.Number, "node_id": fmt.Sprintf("PR_%d", p.Number),
@@ -451,6 +479,7 @@ func (s *Server) checkRuns(w http.ResponseWriter, r *http.Request) {
 			status, conclusion = "in_progress", ""
 		}
 		runs = append(runs, map[string]any{"id": 77, "name": "e2e", "status": status, "conclusion": conclusion,
+			"app":      map[string]string{"slug": "github-actions"},
 			"html_url": "https://github.test/" + s.Slug + "/runs/77", "started_at": "2026-09-28T10:00:00Z",
 			"completed_at": "2026-09-28T10:04:12Z"})
 	}

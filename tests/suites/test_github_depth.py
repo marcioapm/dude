@@ -156,7 +156,7 @@ def test_failed_checks_are_rerun_from_dude(client: ApiClient, forge_project: dic
     shown = _wait_pr(client, task["id"], lambda p: p["display"] == "ci_red", "the failing check was not shown")
     resp = client.post(f"/v1/pull-requests/{shown['id']}/rerun-failed")
     assert resp.status_code == 200, resp.text
-    assert resp.json()["rerun"] == 1 and len(fake_github.rerequested) == 1
+    assert resp.json()["rerun"] == 1 and len(fake_github.jobs_rerun) == 1
 
 
 # -- people on GitHub ------------------------------------------------------------

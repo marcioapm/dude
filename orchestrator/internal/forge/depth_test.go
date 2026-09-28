@@ -270,6 +270,11 @@ func TestBlockersNameWhatStopsAMerge(t *testing.T) {
 	if b := Blockers(Status{Checks: ChecksPending}); len(b) != 2 || b[1] != "nobody has approved it" {
 		t.Errorf("blockers = %v", b)
 	}
+	draft := ready
+	draft.State = StateDraft
+	if b := Blockers(draft); len(b) != 1 || b[0] != "it is a draft" {
+		t.Errorf("a draft: %v", b)
+	}
 }
 
 // A submitted review, or a line comment filed under one, is a new round;
@@ -294,7 +299,7 @@ func TestSavingSettingsRefusesWhatDudeDoesNotKnow(t *testing.T) {
 		t.Errorf("settings = %+v, %v", s, err)
 	}
 	for _, bad := range []string{`{"mergeMethod":"octopus"}`, `{"whoCanWake":"everyone"}`, `{"fixRoundsPerPr":51}`,
-		`{"fixRoundsPerPr":"five"}`, `{"ciStuckMinutes":-1}`} {
+		`{"fixRoundsPerPr":"five"}`, `{"ciStuckMinutes":-1}`, `{"ciStuckMinutes":0}`} {
 		if _, err := ParseSettings([]byte(bad)); err == nil {
 			t.Errorf("%s was accepted", bad)
 		}

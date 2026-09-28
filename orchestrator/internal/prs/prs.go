@@ -147,7 +147,7 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	}
 
 	var fresh []forge.Feedback
-	var workflowRunID string
+	var workflowRunID, workflowStep string
 	var recorded []string // the events this sync appended: what changed
 	err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		// The cursor narrows the query; the ledger decides what is new.
@@ -178,6 +178,12 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	}
 	if status.ThreadsUnknown {
 		status.UnresolvedThreads = pr.UnresolvedThreads
+	}
+	// GitHub works mergeability out lazily: unknown for a moment after a
+	// push or main moving. That is not a reading; the last one stands, or a
+	// conflicting pull request would read as ready in between.
+	if status.Mergeable == forge.MergeUnknown {
+		status.Mergeable, status.BehindBy = pr.Mergeable, pr.BehindBy
 	}
 	checksJSON, _ := json.Marshal(db.NonNil(status.CheckList))
 	reviewsJSON, _ := json.Marshal(db.NonNil(status.Reviews))
@@ -268,8 +274,8 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 			}
 			recorded = append(recorded, id)
 		}
-		err = tx.QueryRow(ctx, `SELECT id FROM workflow_runs WHERE task_id = $1 AND status IN ('running', 'waiting')
-			LIMIT 1`, pr.TaskID).Scan(&workflowRunID)
+		err = tx.QueryRow(ctx, `SELECT id, step FROM workflow_runs WHERE task_id = $1 AND status IN ('running', 'waiting')
+			LIMIT 1`, pr.TaskID).Scan(&workflowRunID, &workflowStep)
 		if db.IsNotFound(err) {
 			return nil
 		}
@@ -277,17 +283,6 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	})
 	if err != nil {
 		return err
-	}
-
-	// Behind and clean: brought up to date on GitHub, if the organization
-	// wants that. The update is a new head; its webhook syncs it.
-	if status.Mergeable == forge.MergeBehind && gh.Settings.WhenBehind == "update" && workflowRunID != "" &&
-		(pr.Mergeable != forge.MergeBehind || newHead) {
-		if err := gh.UpdateBranch(ctx, slug, pr.Number, status.HeadSHA); err != nil && forge.Transient(err) {
-			return err
-		} else if err != nil {
-			s.Log.Info("updating a pull request's branch was refused", "pr", pr.ID, "error", err)
-		}
 	}
 
 	var permitted []forge.Feedback
@@ -308,9 +303,26 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		// never reports (a runner gone, a required check nobody runs).
 		signal = &forge.Signal{Kind: "ci_stuck"}
 	}
-	if signal == nil || workflowRunID == "" {
-		return nil
+	if signal != nil && workflowRunID != "" {
+		if err := s.signal(ctx, org, pr, status, signal, permitted, recorded, stuckFor, workflowRunID); err != nil {
+			return err
+		}
 	}
+	// Behind and clean: brought up to date on GitHub, if the organization
+	// wants that — after the workflow has heard what this sync found, so a
+	// failure here loses nothing, and only while it waits on the pull
+	// request: a fix at work starts from the old head, and a merge commit
+	// under it would refuse its push.
+	if status.Mergeable == forge.MergeBehind && gh.Settings.WhenBehind == "update" && workflowStep == "awaitPullRequest" {
+		s.updateBranch(ctx, org, gh, slug, pr, status.HeadSHA)
+	}
+	return nil
+}
+
+// signal tells the workflow what a sync found. One signal per distinct
+// change, however many deliveries report it.
+func (s *Syncer) signal(ctx context.Context, org string, pr tracked, status forge.Status, signal *forge.Signal,
+	permitted []forge.Feedback, recorded []string, stuckFor int, workflowRunID string) error {
 	signal.Repo, signal.Number = pr.RepoName, pr.Number
 	for i := range signal.Feedback {
 		signal.Feedback[i].Repo = pr.RepoName
@@ -383,6 +395,13 @@ func newReviews(before []byte, after []forge.Review) []forge.Review {
 	return out
 }
 
+// refused: GitHub answered, and would not (403, 404): not a failure
+// asking again would mend.
+func refused(err error) bool {
+	var e *forge.Error
+	return errors.As(err, &e) && !forge.Transient(err)
+}
+
 // permissionTTL: how long what GitHub said of a login is believed. Long
 // enough that a busy pull request asks once; short enough that access
 // granted or taken away counts the same day.
@@ -390,6 +409,11 @@ const permissionTTL = time.Hour
 
 // wakers says, for each author of fresh feedback, whether their comments
 // may wake a fixer under the organization's rule.
+//
+// GitHub refusing to say (a token without the scope to read members or
+// collaborators) is "may not": the comment is recorded and shown, not
+// acted on, and the pull request goes on syncing. Only a failure GitHub
+// may not repeat fails the sync, to be tried again.
 func (s *Syncer) wakers(ctx context.Context, org string, gh *forge.GitHub, slug string, fresh []forge.Feedback) (map[string]bool, error) {
 	out := map[string]bool{}
 	who := gh.Settings.WhoCanWake
@@ -404,7 +428,10 @@ func (s *Syncer) wakers(ctx context.Context, org string, gh *forge.GitHub, slug 
 		permission, err := s.cached(ctx, org, "collaborator", slug, f.Author, func() (string, error) {
 			return gh.Permission(ctx, slug, f.Author)
 		})
-		if err != nil {
+		if refused(err) {
+			s.Log.Warn("GitHub would not say whether a commenter may wake a fixer", "login", f.Author, "error", err)
+			permission = "none"
+		} else if err != nil {
 			return nil, err
 		}
 		member := false
@@ -417,7 +444,9 @@ func (s *Syncer) wakers(ctx context.Context, org string, gh *forge.GitHub, slug 
 				}
 				return "none", err
 			})
-			if err != nil {
+			if refused(err) {
+				s.Log.Warn("GitHub would not say whether a commenter is a member", "login", f.Author, "error", err)
+			} else if err != nil {
 				return nil, err
 			}
 			member = v == "member"
@@ -603,4 +632,37 @@ func (s *Syncer) Reconcile(ctx context.Context, every time.Duration) (int, error
 		}
 	}
 	return len(batch), nil
+}
+
+// updateBranch brings a pull request that fell behind up to date on
+// GitHub, once per head: recorded as dude's action, so the next sync of
+// the same head does not ask again. A failure GitHub may not repeat (a
+// rate limit, an outage) is not recorded, and the next sync tries again;
+// a refusal is, with GitHub's reason. Best effort either way: what the
+// sync read is recorded already.
+func (s *Syncer) updateBranch(ctx context.Context, org string, gh *forge.GitHub, slug string, pr tracked, head string) {
+	var tried bool
+	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE task_id = $1 AND event_type = $2
+			AND payload->>'action' = 'update-branch' AND payload->>'head' = $3)`, pr.TaskID, delivery.EvPullRequestAction, head).Scan(&tried)
+	}); err != nil || tried {
+		return
+	}
+	err := gh.UpdateBranch(ctx, slug, pr.Number, head)
+	if err != nil && forge.Transient(err) {
+		s.Log.Info("updating a pull request's branch failed; the next sync tries again", "pr", pr.ID, "error", err)
+		return
+	}
+	payload := map[string]any{"action": "update-branch", "head": head, "number": pr.Number, "repo": pr.RepoName}
+	if err != nil {
+		payload["refused"] = err.Error()
+	}
+	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		_, err := ledger.Append(ctx, tx, ledger.Event{Type: delivery.EvPullRequestAction, OrganizationID: org,
+			ProjectID: pr.ProjectID, TaskID: pr.TaskID, ActorType: ledger.ActorSystem, ActorID: "workflow",
+			Source: ledger.SourceOrchestrator, CorrelationID: pr.TaskID, Payload: payload})
+		return err
+	}); err != nil {
+		s.Log.Warn("recording a branch update failed", "pr", pr.ID, "error", err)
+	}
 }

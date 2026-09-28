@@ -68,7 +68,7 @@ def test_the_pull_request_panel_shows_github_and_acts_on_it(
     expect(page.get_by_test_id("pr-merge")).to_be_disabled()
     expect(page.get_by_test_id("pr-blocked")).to_contain_text("e2e (chrome) failing")
     page.get_by_test_id("pr-rerun").click()
-    wait_until(lambda: len(fake_github.rerequested) == 1, timeout=10, message="Re-run failed did not reach GitHub")
+    wait_until(lambda: len(fake_github.jobs_rerun) == 1, timeout=10, message="Re-run failed did not reach GitHub")
     # The failure woke a fixer too: its fix lands before anything is merged.
     wait_until(lambda: client.get(f"/v1/tasks/{task['id']}").json()["status"] == "review", timeout=90, message="the CI fix did not land")
 

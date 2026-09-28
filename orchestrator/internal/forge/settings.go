@@ -114,8 +114,14 @@ func ParseSettings(raw []byte) (Settings, error) {
 	if s.FixRoundsPerPR < 0 || s.FixRoundsPerPR > 50 {
 		return Settings{}, fmt.Errorf("fixRoundsPerPr must be from 0 (no limit) to 50")
 	}
-	if s.CIStuckMinutes < 0 {
-		return Settings{}, fmt.Errorf("ciStuckMinutes must be positive")
+	// Absent is the default; given, it is what the person chose, and 0
+	// would be read back as the default: refused, not saved as another.
+	var given struct {
+		CIStuckMinutes *int `json:"ciStuckMinutes"`
+	}
+	_ = json.Unmarshal(raw, &given)
+	if given.CIStuckMinutes != nil && *given.CIStuckMinutes < 1 {
+		return Settings{}, fmt.Errorf("ciStuckMinutes must be at least 1")
 	}
 	return read, nil
 }

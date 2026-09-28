@@ -567,6 +567,18 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 		st.PRIteration = 0
 	}
 	if stop != nil {
+		// Signals wait while the workflow is busy elsewhere (a fix, a
+		// person deciding): one that is no longer true — the conflict
+		// resolved, CI passed — is not a reason to stop now.
+		still, err := w.stillStuck(ctx, sc, st, stop)
+		if err != nil {
+			return workflow.Result{}, err
+		}
+		if !still {
+			stop = nil
+		}
+	}
+	if stop != nil {
 		// Kept for after: a person who resolves the conflict and waits
 		// again has the feedback that arrived with it fixed then.
 		st.PRFeedback = append(st.PRFeedback, actionable...)
@@ -589,6 +601,25 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 	}
 	st.PRFeedback = actionable
 	return workflow.Result{Next: "prFix", State: st}, nil
+}
+
+// stillStuck says whether what a conflict or ci_stuck signal reported is
+// still so, as the pull request was last read.
+func (w *steps) stillStuck(ctx context.Context, sc workflow.StepContext, st *State, stop *forge.Signal) (bool, error) {
+	states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
+	if err != nil {
+		return false, err
+	}
+	for _, p := range states {
+		if p.Repo != stop.Repo || p.Number != stop.Number || p.State == forge.StateMerged || p.State == forge.StateClosed {
+			continue
+		}
+		if stop.Kind == "ci_stuck" {
+			return p.Checks == forge.ChecksPending, nil
+		}
+		return p.Mergeable == forge.MergeConflicting, nil
+	}
+	return false, nil
 }
 
 // prFix sends the pull requests' feedback to a fixer — kept in state, so
