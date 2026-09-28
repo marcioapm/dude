@@ -12,7 +12,7 @@ import { requireOrgAdmin, requireProjectEditor } from "../access.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { conflict, json, notFound, parseBody } from "../http.ts";
 import type { PublicContext, RequestContext, Router } from "../router.ts";
-import { serveImage, storeImage } from "../faces.ts";
+import { replaceImage, serveImage } from "../faces.ts";
 import { deleteObject } from "../../storage.ts";
 import { repositoryFields } from "./structure.ts";
 import { registerRepositoryWebhook } from "./pullRequests.ts";
@@ -170,18 +170,15 @@ async function deliveryDefaults(ctx: RequestContext): Promise<Response> {
   return orchestrator(ctx.principal.organizationId, "GET", "/internal/delivery-defaults", undefined);
 }
 
-/** Replace a project's image with the one in the body (see api/faces.ts), or remove it. */
-async function setProjectImage(ctx: RequestContext, upload: boolean): Promise<Response> {
-  const projectId = ctx.params.id!;
-  await requireProjectEditor(ctx, projectId);
+/** Set a project's image (key and token) or clear it (null); returns the project and the key it had. */
+async function recordProjectImage(ctx: RequestContext, projectId: string, image: { key: string; token: string } | null) {
   const { organizationId } = ctx.principal;
-  const stored = upload ? await storeImage(ctx.request, `${organizationId}/projects/${projectId}`) : null;
-  const result = await withOrg(organizationId, async (scope) => {
+  return withOrg(organizationId, async (scope) => {
     const [before] = (await scope.sql`
       SELECT image_key AS key FROM projects WHERE id = ${projectId} FOR UPDATE`) as Array<{ key: string | null }>;
-    if (!before) return null;
+    if (!before) throw notFound(`project ${projectId} not found`);
     const [project] = (await scope.sql`
-      UPDATE projects SET image_key = ${stored?.key ?? null}, image_token = ${stored?.token ?? null}, updated_at = now()
+      UPDATE projects SET image_key = ${image?.key ?? null}, image_token = ${image?.token ?? null}, updated_at = now()
       WHERE id = ${projectId}
       RETURNING ${scope.sql.unsafe(PROJECT_SELECT)}`) as ProjectRow[];
     await appendInScope(scope, {
@@ -192,14 +189,34 @@ async function setProjectImage(ctx: RequestContext, upload: boolean): Promise<Re
       source: "control-plane",
       payload: { changed: ["image"] },
     });
-    return { project: project!, old: before.key };
+    return { result: project!, old: before.key };
   });
-  if (!result) {
-    if (stored) await deleteObject(stored.key);
-    throw notFound(`project ${projectId} not found`);
-  }
-  if (result.old) await deleteObject(result.old);
-  return json(result.project);
+}
+
+/** A project in the caller's organization, by id, or 404: its id is then safe to name storage by. */
+async function existingProject(ctx: RequestContext): Promise<string> {
+  const projectId = ctx.params.id!;
+  const rows = await withOrg(ctx.principal.organizationId, (scope) => scope.sql`
+    SELECT id FROM projects WHERE id = ${projectId}`) as Array<{ id: string }>;
+  if (!rows[0]) throw notFound(`project ${projectId} not found`);
+  return rows[0].id;
+}
+
+/** Replace a project's image with the one in the body (see api/faces.ts). */
+async function uploadProjectImage(ctx: RequestContext): Promise<Response> {
+  const projectId = await existingProject(ctx);
+  await requireProjectEditor(ctx, projectId);
+  return json(await replaceImage(ctx.request, `${ctx.principal.organizationId}/projects/${projectId}`,
+    (image) => recordProjectImage(ctx, projectId, image)));
+}
+
+/** A project's initials again: its image, and the object, go. */
+async function removeProjectImage(ctx: RequestContext): Promise<Response> {
+  const projectId = await existingProject(ctx);
+  await requireProjectEditor(ctx, projectId);
+  const { result, old } = await recordProjectImage(ctx, projectId, null);
+  if (old) await deleteObject(old);
+  return json(result);
 }
 
 /** A project's image for an `<img>`: it sends no key, so the URL carries a token. */
@@ -227,7 +244,7 @@ export function registerProjectRoutes(router: Router): void {
     return updateProject(ctx);
   });
   // Its face: an image, uploaded as the body, or initials again.
-  router.put("/v1/projects/:id/image", (ctx) => setProjectImage(ctx, true));
-  router.delete("/v1/projects/:id/image", (ctx) => setProjectImage(ctx, false));
+  router.put("/v1/projects/:id/image", uploadProjectImage);
+  router.delete("/v1/projects/:id/image", removeProjectImage);
   router.publicRoute("GET", "/v1/projects/:id/image", getProjectImage);
 }

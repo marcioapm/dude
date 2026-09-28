@@ -11,6 +11,7 @@ deployed system rather than of internal functions (plan §29, §50).
 
 from __future__ import annotations
 
+import fcntl
 import os
 import socket
 import sys
@@ -391,17 +392,21 @@ class TestEnvironment:
                             aws_secret_access_key=S3_SECRET_KEY, region_name=S3_REGION)
 
     def _s3_bucket(self) -> None:
-        running = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", S3_CONTAINER],
-                                 capture_output=True, text=True).stdout.strip() == "true"
-        if not running:
-            subprocess.run(["docker", "rm", "-f", S3_CONTAINER], capture_output=True)
-            subprocess.run(
-                ["docker", "run", "-d", "--name", S3_CONTAINER, "--label", "dude-e2e",
-                 "-p", f"127.0.0.1:{S3_PORT}:9000",
-                 "-e", f"ROOT_ACCESS_KEY={S3_ACCESS_KEY}", "-e", f"ROOT_SECRET_KEY={S3_SECRET_KEY}",
-                 S3_IMAGE, "--port", ":9000", "--health", "/health", "--region", S3_REGION, "posix", "/tmp"],
-                check=True, capture_output=True,
-            )
+        # Runs set up side by side: one starts the container, under a lock,
+        # and the others find it running.
+        with open(f"/tmp/{S3_CONTAINER}.lock", "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            running = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", S3_CONTAINER],
+                                     capture_output=True, text=True).stdout.strip() == "true"
+            if not running:
+                subprocess.run(["docker", "rm", "-f", S3_CONTAINER], capture_output=True)
+                subprocess.run(
+                    ["docker", "run", "-d", "--name", S3_CONTAINER, "--label", "dude-e2e",
+                     "-p", f"127.0.0.1:{S3_PORT}:9000",
+                     "-e", f"ROOT_ACCESS_KEY={S3_ACCESS_KEY}", "-e", f"ROOT_SECRET_KEY={S3_SECRET_KEY}",
+                     S3_IMAGE, "--port", ":9000", "--health", "/health", "--region", S3_REGION, "posix", "/tmp"],
+                    check=True, capture_output=True,
+                )
         deadline = time.time() + 30
         while True:
             try:

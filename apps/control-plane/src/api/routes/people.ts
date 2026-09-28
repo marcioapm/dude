@@ -17,7 +17,7 @@ import { withOrg, withoutTenant } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { insertApiKey, insertPerson } from "../auth.ts";
 import { HttpError, badRequest, conflict, json, noContent, notFound, parseBody } from "../http.ts";
-import { serveImage, storeImage } from "../faces.ts";
+import { replaceImage, serveImage } from "../faces.ts";
 import { deleteObject } from "../../storage.ts";
 import type { PublicContext, RequestContext, Router } from "../router.ts";
 
@@ -192,16 +192,16 @@ async function updateMe(ctx: RequestContext): Promise<Response> {
 
 /** Your photo, uploaded: the image is the body (see api/faces.ts). */
 async function uploadMyPhoto(ctx: RequestContext): Promise<Response> {
+  // The person is the key's own, found when it authenticated.
   const { organizationId, personId } = ctx.principal;
-  const { key, token } = await storeImage(ctx.request, `${organizationId}/people/${personId}`);
-  const { person, old } = await withOrg(organizationId, async (scope) => {
-    const [before] = (await scope.sql`
-      SELECT photo_key AS key FROM people WHERE id = ${personId} FOR UPDATE`) as Array<{ key: string | null }>;
-    await scope.sql`
-      UPDATE people SET photo_key = ${key}, photo_token = ${token}, photo_url = NULL WHERE id = ${personId}`;
-    return { person: await personDetail(scope, personId), old: before?.key };
-  });
-  if (old) await deleteObject(old);
+  const person = await replaceImage(ctx.request, `${organizationId}/people/${personId}`, ({ key, token }) =>
+    withOrg(organizationId, async (scope) => {
+      const [before] = (await scope.sql`
+        SELECT photo_key AS key FROM people WHERE id = ${personId} FOR UPDATE`) as Array<{ key: string | null }>;
+      await scope.sql`
+        UPDATE people SET photo_key = ${key}, photo_token = ${token}, photo_url = NULL WHERE id = ${personId}`;
+      return { result: await personDetail(scope, personId), old: before?.key };
+    }));
   return json({ person });
 }
 
