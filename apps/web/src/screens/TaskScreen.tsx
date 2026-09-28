@@ -595,13 +595,14 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
         break;
       default: {
         // What happened to a pull request: by the GitHub login that did it,
-        // or the person who did it from here, or dude and GitHub.
+        // or the person who did it from here, or dude, or GitHub.
         const line = pullRequestActivity(e, named);
         if (!line) break;
         const who = line.actorId ? face : line.who
           ? <PersonAvatar person={{ id: `gh:${line.who}`, name: line.who }} size={32} />
-          : <AgentAvatar role="integration" size="lg" />;
-        out.push({ ...base, who, text: line.actorId ? <>{person} {line.text}</> : line.text, quote: line.quote });
+          : line.byDude ? <DudeMark size={32} /> : <AgentAvatar role="integration" size="lg" />;
+        const text = line.actorId ? <>{person} {line.text}</> : line.byDude ? <><b>{dudeName(e.taskId ?? "")}</b> {line.text}</> : line.text;
+        out.push({ ...base, who, text, quote: line.quote });
         break;
       }
     }

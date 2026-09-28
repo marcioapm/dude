@@ -60,6 +60,9 @@
   text-overflow: ellipsis;
 }
 .last code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-family: var(--ds-font-mono);
   color: var(--ds-color-text-secondary);
 }

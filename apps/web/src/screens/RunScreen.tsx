@@ -275,6 +275,8 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   };
 
   const changed = diffSummary?.files ?? [];
+  // The name dude signs this task's messages with.
+  const dude = dudeName(run.taskId);
   const hasChanges = Object.keys(run.baseRefs).length > 0 || run.phase !== null;
   const liveDiff = isLive && run.status !== "paused";
 
@@ -372,7 +374,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
               )}
               emptyMessage="Waiting for the agent to start."
             >
-              {conversation.turns.map((turn) => renderTurn(turn, role, conversation.contextWindow, !isLive, people, dudeName(run.taskId), decide, waitingOn))}
+              {conversation.turns.map((turn) => renderTurn(turn, role, conversation.contextWindow, !isLive, people, dude, decide, waitingOn))}
               {conversation.activity ? (
                 <ChatMessage
                   role={role}
@@ -415,7 +417,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
       {showEvents ? (
         <Dialog open size="xl" onOpenChange={(o) => !o && setShowEvents(false)} title="Event log"
           description="Everything this session recorded, oldest first: for when something looks wrong.">
-          <div className="eventLog" data-testid="event-log">
+          <div className="dialogFill" data-testid="event-log">
             <EventStream>
               {events.map((event) => (
                 <EventRow
@@ -554,7 +556,7 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
     case "prompt":
       // Written by the factory, not a person: the avatar and name say so.
       return (
-        <ChatMessage key={turn.id} role="system" name={dude} avatar={<DudeMark size={40} />} intent="prompt" content={turn.text} startedAt={turn.at} />
+        <ChatMessage key={turn.id} role="system" name={dude} avatar={<DudeMark size="fill" />} intent="prompt" content={turn.text} startedAt={turn.at} />
       );
     case "message":
       return (

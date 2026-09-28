@@ -328,13 +328,10 @@
   min-width: 0;
 }
 
-/* A face of the app's own (dude's), at the chat avatar's size. */
+/* A face of the app's own (dude's), at the chat avatar's size: the face fills it. */
 .ownAvatar {
   display: inline-flex;
   width: var(--ds-size-avatar-chat);
   height: var(--ds-size-avatar-chat);
 }
-.ownAvatar > * {
-  width: 100%;
-  height: 100%;
-}
+

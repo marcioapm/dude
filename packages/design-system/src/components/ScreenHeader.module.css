@@ -40,6 +40,10 @@
   background: var(--ds-color-active-wash);
 }
 .seg button {
+  /* An option may carry an icon, a count or a live dot beside its words. */
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
   height: 28px;
   padding: 0 var(--ds-space-12);
   border: 0;
