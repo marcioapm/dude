@@ -42,6 +42,17 @@ def test_an_organizations_default_is_overridden_by_a_project_and_reset(client: A
     assert "reviewer" not in client.get(f"/v1/projects/{project['id']}").json()["agentModels"]
 
 
+def test_the_fixer_follows_the_implementer_without_calling_it_its_own(client: ApiClient, project: dict):
+    # The project overrides the implementer's model; the fixer runs it too,
+    # but has nothing of its own to reset.
+    settings = client.patch(f"/v1/projects/{project['id']}/settings", {"roles": {"implementer": {"model": "proj/impl"}}}).json()
+    assert settings["roles"]["implementer"]["model"] == {"value": "proj/impl", "source": "project"}
+    assert settings["roles"]["fixer"]["model"] == {"value": "proj/impl", "source": "organization"}
+
+    settings = client.patch(f"/v1/projects/{project['id']}/settings", {"roles": {"fixer": {"model": "proj/fix"}}}).json()
+    assert settings["roles"]["fixer"]["model"] == {"value": "proj/fix", "source": "project"}
+
+
 def test_delivery_is_the_factorys_then_the_organizations_then_the_projects(client: ApiClient, project: dict):
     factory = client.get("/v1/delivery-defaults").json()
     settings = client.get(f"/v1/projects/{project['id']}/settings").json()

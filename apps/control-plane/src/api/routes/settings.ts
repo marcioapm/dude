@@ -161,13 +161,17 @@ async function settingsResponse(ctx: RequestContext, projectId?: string): Promis
      * A role's field from the first layer that sets it: the project's, then
      * the organization's — and for the fixer, which is the implementer told
      * something else, then the implementer's (as the orchestrator resolves it).
+     * What the fixer takes from the implementer is not the fixer's own
+     * setting, so it is never the project's to reset there.
      */
     const field = (role: SettingsRole, key: string) => {
       const chain = role === "fixer" ? ["fixer", "implementer"] : [role];
       for (const r of chain) {
         for (const [models, source] of [[layers.project?.agentModels, "project"], [layers.org.agentModels, "organization"]] as const) {
           const v = roleLayer(models, r)[key];
-          if (v !== undefined) return { value: v, source } as { value: never; source: SettingSource };
+          if (v !== undefined) {
+            return { value: v, source: r === role ? source : "organization" } as { value: never; source: SettingSource };
+          }
         }
       }
       return { value: null as never, source: "organization" as SettingSource };

@@ -163,3 +163,21 @@ func TestEveryPromptRoleHasABuiltInPrompt(t *testing.T) {
 		}
 	}
 }
+
+func TestACustomPromptStillCommitsAndRecords(t *testing.T) {
+	mine := "Do it my way."
+	for phase, note := range map[string]string{PhaseImplement: commitNote, PhaseFix: commitNote, PhaseSimplify: commitNote, PhaseTest: testerTools} {
+		org := PromptInput{Title: "T", OrgPrompt: &mine}
+		replaced := PromptInput{Title: "T", ProjectPrompt: mine, ProjectPromptMode: "replace"}
+		for _, in := range []PromptInput{org, replaced} {
+			if got := Prompt(phase, in); strings.Count(got, note) != 1 {
+				t.Errorf("%s under a custom prompt should say %q once:\n%s", phase, note, got)
+			}
+		}
+		// A prompt that already says it is not told twice.
+		kept := mine + " " + note
+		if got := Prompt(phase, PromptInput{Title: "T", OrgPrompt: &kept}); strings.Count(got, note) != 1 {
+			t.Errorf("%s repeats %q:\n%s", phase, note, got)
+		}
+	}
+}

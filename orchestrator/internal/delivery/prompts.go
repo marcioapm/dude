@@ -314,10 +314,29 @@ func (in PromptInput) instructions(phase string) (lead, tail []string) {
 		lead, custom = append(slices.Clone(lead), project), true
 	}
 	lead = slices.DeleteFunc(slices.Clone(lead), func(s string) bool { return strings.TrimSpace(s) == "" })
-	if !custom && phase == PhaseFix && len(lead) > 1 {
-		return lead[:1], lead[1:]
+	if !custom {
+		if phase == PhaseFix && len(lead) > 1 {
+			return lead[:1], lead[1:]
+		}
+		return lead, nil
+	}
+	// What the workflow depends on stays, whatever a person wrote: work that
+	// is not committed is lost, and the tester's video is its evidence. A
+	// prompt edited from dude's own text usually still says it; one that
+	// doesn't is told.
+	if note := requiredNotes[PromptRoleForPhase[phase]]; note != "" && !strings.Contains(strings.Join(lead, "\n\n"), note) {
+		lead = append(lead, note)
 	}
 	return lead, nil
+}
+
+// requiredNotes is the part of a role's instructions a custom prompt cannot
+// drop.
+var requiredNotes = map[string]string{
+	"implementer": commitNote,
+	"fixer":       commitNote,
+	"simplifier":  commitNote,
+	"qa_browser":  testerTools,
 }
 
 // Prompt composes one phase's prompt.
