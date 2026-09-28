@@ -1,4 +1,4 @@
-import type { HTMLAttributes, ReactNode } from "react";
+import { isValidElement, type HTMLAttributes, type ReactElement, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import { Icon, type IconName } from "../icons/index.tsx";
 import { formatDuration, formatPercent, formatTokens, formatUsd } from "../util/format.ts";
@@ -21,8 +21,8 @@ export interface MetricDelta {
 
 export interface MetricTileProps extends Omit<HTMLAttributes<HTMLDivElement>, "children"> {
   readonly label: ReactNode;
-  /** A number in `unit`, a string as it is, or a node that formats itself (a `Cost`). */
-  readonly value: number | string | ReactNode;
+  /** A number formatted by `unit`, text as it is, or an element (a `Cost`) drawn as it is. */
+  readonly value: number | string | ReactElement;
   readonly unit?: MetricUnit | undefined;
   /** Text shown after the number (only when unit is `none`/`count`). */
   readonly unitLabel?: string | undefined;
@@ -39,8 +39,8 @@ export interface MetricTileProps extends Omit<HTMLAttributes<HTMLDivElement>, "c
   readonly flat?: boolean | undefined;
 }
 
-function formatValue(value: number | string | ReactNode, unit: MetricUnit): { text: ReactNode; suffix?: string } {
-  if (typeof value !== "number") return { text: value };
+function formatValue(value: number | string | ReactElement, unit: MetricUnit): { text: ReactNode; suffix?: string } {
+  if (typeof value === "string" || isValidElement(value)) return { text: value };
   switch (unit) {
     case "usd":
       return { text: formatUsd(value, { compact: value >= 10_000 }) };
@@ -76,7 +76,8 @@ export function MetricTile({
   ...rest
 }: MetricTileProps) {
   const { text, suffix } = formatValue(value, unit);
-  const ratio = max !== undefined && max > 0 && typeof value === "number" ? value / max : null;
+  const numeric = typeof value === "number";
+  const ratio = max !== undefined && max > 0 && numeric ? (value as number) / max : null;
   const barState = ratio === null ? null : ratio >= 1 ? "over" : ratio >= 0.8 ? "warn" : "ok";
 
   let deltaNode: ReactNode = null;
@@ -128,7 +129,7 @@ export function MetricTile({
           role="progressbar"
           aria-valuemin={0}
           aria-valuemax={max}
-          aria-valuenow={typeof value === "number" ? value : undefined}
+          aria-valuenow={numeric ? (value as number) : undefined}
         >
           <div className={styles["barFill"]} style={{ width: `${Math.min(100, ratio * 100)}%` }} />
         </div>

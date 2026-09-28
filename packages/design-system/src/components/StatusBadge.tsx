@@ -1,7 +1,7 @@
 import type { HTMLAttributes } from "react";
 import { cx } from "../util/cx.ts";
-import { Icon, type IconName } from "../icons/index.tsx";
 import { statusSpec, type Status, type StatusEmphasis } from "../tokens/status.ts";
+import { StatusMark } from "./StatusMark.tsx";
 import styles from "./StatusBadge.module.css";
 
 export interface StatusBadgeProps extends Omit<HTMLAttributes<HTMLSpanElement>, "children"> {
@@ -25,9 +25,9 @@ export interface StatusBadgeProps extends Omit<HTMLAttributes<HTMLSpanElement>, 
  * The one component for every Run / Session / Task status.
  *
  * Meaning is carried three ways at once — tone, glyph, and text — so no
- * single channel is load-bearing. `awaiting_input` / `awaiting_input`
- * are the only statuses that default to the solid treatment; do not
- * promote anything else to solid, or the signal is lost.
+ * single channel is load-bearing. The badge variant draws a `StatusMark`
+ * (glyph and word, no box); `awaiting_input` alone defaults to the solid
+ * pill. Do not promote anything else to solid, or the signal is lost.
  */
 export function StatusBadge({
   status,
@@ -64,24 +64,7 @@ export function StatusBadge({
     );
   }
 
-  return (
-    <span
-      className={cx(
-        styles["root"],
-        stateClasses,
-        styles[em],
-        size === "sm" && styles["sm"],
-        iconOnly && styles["iconOnly"],
-        className,
-      )}
-      data-status={status}
-      title={iconOnly ? text : undefined}
-      {...rest}
-    >
-      <span className={styles["glyph"]} aria-hidden>
-        <Icon name={spec.glyph as IconName} size={size === "sm" ? 10 : 12} strokeWidth={1.75} />
-      </span>
-      {iconOnly ? <span className="ds-sr-only">{text}</span> : <span className={cx(styles["label"], "ds-cap")}>{text}</span>}
-    </span>
-  );
+  // The badge is a glyph and a word now (`StatusMark`): no bordered pill.
+  // Only a state waiting on a person keeps a fill, and only when solid.
+  return <StatusMark status={status} size={size} iconOnly={iconOnly} label={label} emphasis={em} className={className} {...rest} />;
 }

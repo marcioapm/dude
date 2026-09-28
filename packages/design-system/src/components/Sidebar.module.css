@@ -1,17 +1,20 @@
 /*
- * Persistent navigation chrome. On the canvas, the darkest shade, so the
- * main pane's panels read as lighter layers beside it without an edge;
- * the only colour is on marks.
+ * Persistent navigation on the chrome shade, beside the main pane's
+ * surface, told apart by shade alone. Faces sit on chrome here, so their
+ * rings and tiles cut their gap in chrome (--ds-avatar-bed). The profile
+ * band at the bottom is one step darker still.
  */
 
 .root {
+  --ds-avatar-bed: var(--ds-color-chrome);
   display: flex;
   flex-direction: column;
   height: 100%;
   min-height: 0;
   min-width: 0;
   flex-shrink: 0;
-  background: var(--ds-color-canvas);
+  padding: var(--ds-space-12) var(--ds-space-8) 0;
+  background: var(--ds-color-chrome);
   color: var(--ds-color-text-primary);
   font-size: var(--ds-text-nav);
   container-type: inline-size;
@@ -22,16 +25,28 @@
   align-items: center;
   gap: var(--ds-space-8);
   min-height: var(--ds-size-control-lg);
-  padding: 0 var(--ds-space-8) 0 var(--ds-space-12);
+  padding: 0 var(--ds-space-8) var(--ds-space-8);
 }
 .title {
   flex: 1;
   min-width: 0;
   font-weight: var(--ds-weight-semibold);
-  letter-spacing: var(--ds-tracking-tight);
+  color: var(--ds-color-text-strong);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.online {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  padding: var(--ds-space-4) var(--ds-space-8) var(--ds-space-12);
+}
+.onlineCount {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  font-variant-numeric: tabular-nums;
 }
 .headerActions {
   display: inline-flex;
@@ -45,9 +60,9 @@
   display: flex;
   align-items: center;
   gap: var(--ds-space-6);
-  height: var(--ds-size-control-sm);
-  margin: var(--ds-space-8) var(--ds-space-8) 0;
-  padding: 0 var(--ds-space-6) 0 var(--ds-space-8);
+  height: var(--ds-size-control-md);
+  margin: 0 var(--ds-space-4) var(--ds-space-8);
+  padding: 0 var(--ds-space-8) 0 var(--ds-space-8);
   background: var(--ds-color-active-wash);
   border: 1px solid transparent;
   border-radius: var(--ds-radius-control);
@@ -108,76 +123,132 @@
   background: var(--ds-color-active-wash);
 }
 
-/* Chips: four toggles on one line. Off = hairline; on = tinted. The
-   hairline is an inset shadow, not a border, so it costs no width. */
-.chips {
+/* Places outside the tree: Waiting on you, on others, settings. */
+.waiting {
   display: flex;
-  gap: 3px;
-  padding: var(--ds-space-8) var(--ds-space-6) var(--ds-space-6);
+  flex-direction: column;
+  gap: var(--ds-space-nav-row-gap);
 }
-.chip {
-  --chip-fg: var(--ds-color-text-secondary);
-  --chip-bg: transparent;
-  --chip-border: transparent;
-  display: inline-flex;
+.navRow {
+  display: flex;
   align-items: center;
-  gap: 4px;
-  height: var(--ds-size-chip);
-  padding: 0 6px 0 5px;
+  gap: var(--ds-space-8);
+  width: 100%;
+  min-height: var(--ds-size-row-item);
+  padding: 0 var(--ds-space-8);
   border: 0;
-  box-shadow: inset 0 0 0 1px var(--chip-border);
   border-radius: var(--ds-radius-control);
-  background: var(--chip-bg);
-  color: var(--chip-fg);
-  font-size: var(--ds-text-2xs);
+  background: none;
+  color: var(--ds-color-text-primary);
+  font: inherit;
+  font-size: var(--ds-text-nav);
+  text-align: left;
+}
+.navRow:hover {
+  background: var(--ds-color-hover-wash);
+}
+.navRow:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--ds-color-focus-ring);
+}
+.navRowCurrent,
+.navRowCurrent:hover {
+  background: var(--ds-color-active-wash);
+  color: var(--ds-color-text-strong);
   font-weight: var(--ds-weight-medium);
-  line-height: 1;
-  white-space: nowrap;
-  min-width: 0;
-  flex: 0 1 auto;
 }
-.chip:hover:not(:disabled) {
-  --chip-bg: var(--ds-color-hover-wash);
-}
-.chip:disabled {
-  opacity: 0.45;
-}
-.chipMark {
+.navIcon {
   flex-shrink: 0;
-}
-.chipLabel {
-  min-width: 0;
-}
-.chipCount {
-  font-variant-numeric: tabular-nums;
   color: var(--ds-color-text-muted);
-  margin-left: 1px;
 }
-.chipOn {
-  --chip-bg: var(--ds-color-active-wash);
-  --chip-border: transparent;
-  --chip-fg: var(--ds-color-text-primary);
+.navText {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.chipOn .chipCount {
-  color: var(--chip-fg);
+.navCount {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  font-variant-numeric: tabular-nums;
 }
-/* Chips stay neutral; the mark carries the state's hue. The needs-you
-   block below is the sidebar's one amber signal. */
-.chip-failed:not(.chipZero) {
-  --chip-fg: var(--ds-tone-danger-fg);
+
+/* The tree's head: the Projects label, Everyone / Mine, a new project. */
+.treeHead {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  padding: var(--ds-space-16) var(--ds-space-8) var(--ds-space-6);
 }
-/* Four labelled chips need ~340px. Below that only the needs-you chip
-   keeps its label; the others show mark (shape + tone) and count, and the
-   label lives on in the title. Below 240px every label goes. */
-@container (max-width: 340px) {
-  .chip:not(.chip-needs_you) .chipLabel {
-    display: none;
-  }
+.spacer {
+  flex: 1;
 }
-@container (max-width: 240px) {
-  .chipLabel {
-    display: none;
-  }
+/* The profile band: its own shade, apart from the tree above it. */
+.band {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+  margin: var(--ds-space-6) calc(-1 * var(--ds-space-8)) 0;
+  padding: var(--ds-space-6) var(--ds-space-8) var(--ds-space-12);
+  background: var(--ds-color-active-wash);
+  --ds-avatar-bed: var(--ds-color-chrome);
+}
+.band .navRow {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.profile {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  padding-top: var(--ds-space-6);
+}
+.profileOpen {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+  flex: 1;
+  min-width: 0;
+  padding: var(--ds-space-4) var(--ds-space-8);
+  border: 0;
+  border-radius: var(--ds-radius-control);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.profileOpen:hover {
+  background: var(--ds-color-hover-wash);
+}
+.profileOpen:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--ds-color-focus-ring);
+}
+.profileText {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  line-height: var(--ds-leading-tight);
+}
+.profileName {
+  font-size: var(--ds-text-nav);
+  color: var(--ds-color-text-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.profileDetail {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.profileGear {
+  flex-shrink: 0;
+  color: var(--ds-color-text-muted);
 }
 
 /* Pinned needs-you section: the highlight pattern (attention tint and a
@@ -352,6 +423,7 @@
 .scroll {
   flex: 1;
   min-height: 0;
+  margin: 0 calc(-1 * var(--ds-space-4));
 }
 .empty {
   margin: var(--ds-space-8);
@@ -367,15 +439,6 @@
   text-decoration: underline;
 }
 
-.footer {
-  display: flex;
-  align-items: center;
-  gap: var(--ds-space-8);
-  min-height: var(--ds-size-control-lg);
-  padding: 0 var(--ds-space-12);
-  font-size: var(--ds-text-xs);
-  color: var(--ds-color-text-secondary);
-}
 
 .skeleton {
   display: flex;

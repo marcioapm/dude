@@ -84,18 +84,18 @@ export function TaskMetricsSection({ client, taskId, live, done, version }: {
   );
 }
 
+/** An epic's figures, as one quiet line under its header: how far along, how long, what it cost. */
 export function EpicMetricsSection({ client, epicId, version }: { client: ApiClient; epicId: string; version: number }) {
   const [m, setM] = useState<EpicMetrics | null>(null);
   useEffect(() => void client.epicMetrics(epicId).then(setM, () => {}), [client, epicId, version]);
   if (!m || m.tasks === 0) return null;
   return (
-    <MetricGroup joined data-testid="epic-metrics">
-      <MetricTile size="sm" label="Done" value={m.done} unit="count" sub={`of ${plural(m.tasks, "task")}`} />
-      <MetricTile size="sm" label="Typical lead time" value={m.leadMsMedian ?? "—"} unit={m.leadMsMedian === null ? "none" : "ms"}
-        sub="median, finished tasks" />
-      <MetricTile size="sm" label="Agents working" value={m.activeMs} unit="ms" />
-      <MetricTile size="sm" label="Waiting on people" value={m.humanWaitMs} unit="ms" />
-      <CostTile cost={m.cost} tokens={m.tokens.input + m.tokens.output} activeMs={m.activeMs} />
-    </MetricGroup>
+    <div className="figures" data-testid="epic-metrics">
+      <span>{m.done} of {plural(m.tasks, "task")} done</span>
+      {m.leadMsMedian !== null ? <span title="Median lead time of its finished tasks">typically <Duration ms={m.leadMsMedian} /> each</span> : null}
+      <span>agents <Duration ms={m.activeMs} /></span>
+      {m.humanWaitMs > 0 ? <span>waiting on people <Duration ms={m.humanWaitMs} /></span> : null}
+      <CostOf cost={m.cost} tokens={m.tokens.input + m.tokens.output} activeMs={m.activeMs} size="sm" />
+    </div>
   );
 }

@@ -1,8 +1,8 @@
 /*
- * The board. Five lanes on the canvas; each card is a surface with a
- * hairline, 3 lines tall, and the only colour at rest is the status mark.
- * Needs-you cards borrow the tree row's wash and bar so the two surfaces
- * are loud in the same way.
+ * The board. Five lanes on the surface; each card is a square on the
+ * chrome shade — no edge, no shadow — told apart from the page by shade.
+ * The colour on a card is its people's faces and its pull requests'
+ * states; a needs-you card takes the attention tint and a bar.
  */
 
 .root {
@@ -15,10 +15,11 @@
   height: 100%;
   min-height: 0;
   min-width: 0;
-  background: var(--ds-color-canvas);
+  background: var(--ds-color-surface);
   color: var(--ds-color-text-primary);
   font-size: var(--ds-text-sm);
   container-type: inline-size;
+  --ds-avatar-bed: var(--ds-color-chrome);
 }
 
 /* -- Header: where you are, what is inside, what it cost. -- */
@@ -29,30 +30,30 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--ds-space-4) var(--ds-space-12);
-  min-height: var(--ds-size-control-lg);
-  padding: var(--ds-space-4) var(--ds-space-12);
-  background: var(--ds-color-surface);
+  min-height: 60px;
+  padding: var(--ds-space-8) var(--ds-space-24);
   flex-shrink: 0;
+  --ds-avatar-bed: var(--ds-color-surface);
 }
 .overview {
-  padding: var(--ds-space-8) var(--ds-space-12);
+  padding: 0 var(--ds-space-24) var(--ds-space-12);
   flex-shrink: 0;
 }
 .scope {
   display: inline-flex;
   align-items: center;
-  gap: var(--ds-space-4);
+  gap: var(--ds-space-8);
   /* The name gives way to the figures only down to a few words. */
   min-width: min(16ch, 100%);
   flex-shrink: 1;
 }
 .scopeParent {
-  font-size: var(--ds-text-xs);
-  font-weight: var(--ds-weight-semibold);
-  letter-spacing: var(--ds-tracking-caps);
-  text-transform: uppercase;
+  font-size: var(--ds-text-sm);
   color: var(--ds-color-text-muted);
   white-space: nowrap;
+}
+.scopePeople {
+  margin-left: var(--ds-space-4);
 }
 .scopeSep,
 .scopeGlyph {
@@ -60,8 +61,10 @@
   flex-shrink: 0;
 }
 .scopeTitle {
-  font-size: var(--ds-text-md);
+  margin: 0;
+  font-size: var(--ds-text-xl);
   font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
   letter-spacing: var(--ds-tracking-tight);
   white-space: nowrap;
   overflow: hidden;
@@ -73,20 +76,15 @@
   align-items: center;
   gap: var(--ds-space-12);
   min-width: 0;
-  /* Clipped, never drawn over its neighbours. */
-  overflow: hidden;
-  font-size: var(--ds-text-xs);
+  font-size: var(--ds-text-sm);
   color: var(--ds-color-text-muted);
   white-space: nowrap;
 }
 .summaryCount {
   font-variant-numeric: tabular-nums;
 }
-.summaryRollup {
-  gap: var(--ds-space-8);
-}
 .summaryCost {
-  font-size: var(--ds-text-xs);
+  font-size: var(--ds-text-sm);
 }
 .headerActions {
   display: inline-flex;
@@ -115,10 +113,10 @@
 /* -- Columns: a flex row; a folded column is a 28px rail with its label. -- */
 .columns {
   display: flex;
-  gap: var(--ds-space-8);
+  gap: var(--ds-space-16);
   flex: 1;
   min-height: 0;
-  padding: var(--ds-space-8);
+  padding: var(--ds-space-4) var(--ds-space-24) var(--ds-space-8);
   overflow-x: auto;
 }
 .column {
@@ -152,14 +150,12 @@
   padding: var(--ds-space-8) 0 0;
   gap: var(--ds-space-4);
   border-radius: 0;
-  background: color-mix(in srgb, var(--ds-color-surface) 60%, transparent);
+  background: var(--ds-color-chrome);
   flex: 1;
 }
 .columnLabel {
-  font-size: var(--ds-text-xs);
+  font-size: var(--ds-text-sm);
   font-weight: var(--ds-weight-semibold);
-  letter-spacing: var(--ds-tracking-caps);
-  text-transform: uppercase;
   color: var(--ds-color-text-secondary);
   white-space: nowrap;
 }
@@ -168,12 +164,9 @@
   color: var(--ds-color-text-muted);
 }
 .columnCount {
-  font-size: var(--ds-text-2xs);
+  font-size: var(--ds-text-sm);
   font-variant-numeric: tabular-nums;
   color: var(--ds-color-text-muted);
-}
-.columnRollup {
-  margin-left: auto;
 }
 .columnScroll {
   flex: 1;
@@ -185,7 +178,7 @@
   padding: 0 0 var(--ds-space-card-pad);
   display: flex;
   flex-direction: column;
-  gap: var(--ds-space-card-pad);
+  gap: var(--ds-space-8);
 }
 
 /* -- Swimlanes: one shared head row of lane labels, then a section per
@@ -209,7 +202,7 @@
   gap: var(--ds-space-8);
   min-width: var(--lane-min);
   padding: var(--ds-space-8) 0 var(--ds-space-4);
-  background: var(--ds-color-canvas);
+  background: var(--ds-color-surface);
 }
 .laneHeadCell {
   display: flex;
@@ -336,77 +329,60 @@
   align-self: start;
   height: var(--ds-size-row-compact);
   border-radius: 0;
-  opacity: 0.6;
-  background: var(--ds-color-sunken);
+  background: var(--ds-color-chrome);
 }
 .laneClosed .laneHeader {
   border-bottom: 0;
 }
 
-/* -- Card: top line · title · meta. A button, so it is one tab stop and
-   Enter/Space work for free. -- */
+/* -- Card: key · title · the ask · PRs · plan · people and what is happening.
+   A single tab stop; Enter/Space open it. Links inside (PR chips) are
+   out of the tab order: the card is the way in. -- */
 .card {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: var(--ds-space-8);
   width: 100%;
   padding: var(--ds-space-card-pad);
-  border: 0;
   border-radius: 0;
-  background: var(--ds-color-surface);
-  box-shadow: var(--ds-shadow-1);
+  background: var(--ds-color-chrome);
   color: var(--ds-color-text-primary);
   text-align: left;
   font-size: var(--ds-text-sm);
   line-height: var(--ds-leading-snug);
   cursor: pointer;
   outline: none;
-  transition:
-    background-color var(--ds-duration-fast) var(--ds-ease-standard),
-    box-shadow var(--ds-duration-fast) var(--ds-ease-standard);
+  transition: background-color var(--ds-duration-fast) var(--ds-ease-standard);
 }
 .card:hover {
-  background: var(--ds-color-raised);
+  background: var(--ds-color-active-wash);
 }
 .card:focus-visible {
-  box-shadow:
-    0 0 0 2px var(--ds-color-focus-ring),
-    var(--ds-shadow-1);
+  box-shadow: 0 0 0 2px var(--ds-color-focus-ring);
 }
 .selected,
 .selected:hover {
-  background: var(--ds-color-accent-subtle);
-}
-.selected::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 6px;
-  bottom: 6px;
-  width: 2px;
-  border-radius: var(--ds-radius-mark);
-  background: var(--ds-color-accent);
+  background: var(--ds-color-active-wash);
+  box-shadow: inset 2px 0 0 var(--ds-color-accent);
 }
 
 .top {
   display: flex;
   align-items: center;
-  gap: var(--ds-space-6);
+  gap: var(--ds-space-8);
   min-width: 0;
-  height: 14px;
-}
-.mark {
-  flex-shrink: 0;
+  min-height: var(--ds-size-badge-md);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
 }
 .key {
   font-family: var(--ds-font-mono);
-  font-size: var(--ds-text-2xs);
+  font-size: var(--ds-text-xs);
   color: var(--ds-color-text-muted);
   flex-shrink: 0;
 }
 .epic {
-  font-size: var(--ds-text-2xs);
   color: var(--ds-color-text-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -414,13 +390,13 @@
   min-width: 0;
   flex: 0 1 auto;
 }
-.epic::before {
-  content: "· ";
+.topEnd {
+  display: inline-flex;
+  margin-left: auto;
+  flex-shrink: 0;
 }
 .age {
-  margin-left: auto;
-  font-size: var(--ds-text-2xs);
-  flex-shrink: 0;
+  font-size: var(--ds-text-xs);
 }
 
 .title {
@@ -430,90 +406,79 @@
   overflow: hidden;
   min-width: 0;
   overflow-wrap: anywhere;
+  font-size: var(--ds-text-md);
+  line-height: var(--ds-leading-tight);
+  color: var(--ds-color-text-strong);
 }
 .finished .title {
   color: var(--ds-color-text-secondary);
 }
 
-.meta {
+.prs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-6);
+}
+.plan {
   display: flex;
   align-items: center;
-  gap: var(--ds-space-6);
-  min-width: 0;
-  min-height: 16px;
+  gap: var(--ds-space-8);
   font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
 }
-.metaRight {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--ds-space-6);
-  margin-left: auto;
-  flex-shrink: 0;
-}
-.cost {
-  font-size: var(--ds-text-2xs);
-}
-.live {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--ds-space-6);
-  min-width: 0;
-  flex: 1 1 auto;
-}
-.activity {
-  color: var(--ds-color-text-muted);
-  font-style: italic;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
+.planCount {
+  font-variant-numeric: tabular-nums;
 }
 
-/* Needs you: wash + 2px attention bar, the same treatment as the tree row,
-   and the question itself in attention ink. Selection wins over the wash. */
-.needsYou {
-  background: color-mix(in srgb, var(--ds-tone-attention-bg) 55%, var(--ds-color-surface));
-}
-.needsYou:hover {
-  background: color-mix(in srgb, var(--ds-tone-attention-bg) 85%, var(--ds-color-surface));
-}
-.needsYou.selected,
-.needsYou.selected:hover {
-  background: var(--ds-color-accent-subtle);
-}
-.needsYou::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 6px;
-  bottom: 6px;
-  width: 2px;
-  border-radius: var(--ds-radius-mark);
-  background: var(--ds-tone-attention-solid);
-}
-.needsYou.selected::before {
-  background: var(--ds-color-accent);
-}
-.needsYou .title {
-  font-weight: var(--ds-weight-medium);
-}
-.ask {
-  display: inline-flex;
+.foot {
+  display: flex;
   align-items: center;
-  gap: var(--ds-space-6);
+  gap: var(--ds-space-8);
   min-width: 0;
-  flex: 1 1 auto;
-  color: var(--ds-tone-attention-fg);
+  margin-top: var(--ds-space-2);
 }
-.asker,
-.askGlyph {
-  flex-shrink: 0;
+.doing {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  font-size: var(--ds-text-xs);
+  line-height: var(--ds-leading-tight);
+  color: var(--ds-color-text-secondary);
 }
-.askText {
+.doing b {
+  font-size: var(--ds-text-sm);
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-strong);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  min-width: 0;
+}
+.cost {
+  flex-shrink: 0;
+  align-self: flex-end;
+}
+
+/* Needs you: the attention tint and its bar, and the question in attention ink. */
+.needsYou {
+  background: var(--ds-tone-attention-bg);
+  box-shadow: inset 3px 0 0 var(--ds-tone-attention-mark);
+  --ds-avatar-bed: var(--ds-tone-attention-bg);
+}
+.needsYou:hover {
+  background: color-mix(in srgb, var(--ds-tone-attention-bg) 85%, var(--ds-color-text-primary));
+}
+.needsYou.selected {
+  box-shadow: inset 3px 0 0 var(--ds-color-accent);
+}
+.ask {
+  margin-top: calc(-1 * var(--ds-space-4));
+  font-size: var(--ds-text-sm);
+  color: var(--ds-tone-attention-fg);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
 }
 
 /* "N more": a quiet row at the foot of a long column. Urgent cards sort to
@@ -546,8 +511,7 @@
   gap: var(--ds-space-4);
   padding: var(--ds-space-8);
   border-radius: 0;
-  background: var(--ds-color-surface);
-  box-shadow: var(--ds-shadow-1);
+  background: var(--ds-color-chrome);
 }
 .skeletonRow {
   display: flex;
@@ -571,7 +535,6 @@
   .epic {
     display: none;
   }
-  .summaryRollup,
   .summaryCost {
     display: none;
   }
