@@ -213,6 +213,15 @@ func TestARunsMachineTimeIsPricedAtTheRateItWasSubmittedWith(t *testing.T) {
 	if task != machine {
 		t.Errorf("the task's machine cost %v is not its Run's %v", task, machine)
 	}
+	// The rewrite keeps 031's rule: a question its Run ended on unanswered
+	// was waited on until the Run ended.
+	mustExec(t, w.owner, `INSERT INTO questions (id, organization_id, task_id, run_id, prompt, status, asked_at)
+		VALUES ('q_'||$1, $2, $3, $1, 'Which?', 'cancelled', now() - interval '4 minutes')`, runID, w.org, wi)
+	var waited float64
+	_ = w.owner.QueryRow(context.Background(), `SELECT human_wait_seconds FROM task_metrics($1)`, wi).Scan(&waited)
+	if waited < 239 || waited > 241 {
+		t.Errorf("waited %vs on a question its Run ended on, not 240", waited)
+	}
 	// Before machine cost was recorded, a Run's is unknown: nothing, not a
 	// guess.
 	mustExec(t, w.owner, `UPDATE runs SET machine_usd_per_hour = NULL WHERE id = $1`, runID)

@@ -11,7 +11,7 @@
 
 import { withOrg } from "../../db/client.ts";
 import { orchestratorStream } from "../../orchestrator/client.ts";
-import { badRequest, json, notFound } from "../http.ts";
+import { badRequest, HttpError, json, notFound } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
 import { zipStream, type ZipEntry } from "../zip.ts";
 
@@ -187,7 +187,11 @@ async function artifactsZip(ctx: RequestContext): Promise<Response> {
   async function* entries(): AsyncGenerator<ZipEntry> {
     const missing: string[] = [];
     for (const a of latest) {
-      const res = await fetchContent(organizationId, a.id);
+      // The orchestrator unreachable throws rather than answers: that file
+      // is missing too, not the end of the archive.
+      const res = await fetchContent(organizationId, a.id).catch(
+        (e: unknown) => new Response(null, { status: e instanceof HttpError ? e.status : 502 }),
+      );
       if (!res.ok || !res.body) {
         missing.push(`${a.name}: ${res.status === 410 ? "no longer kept" : `unavailable (${res.status})`}`);
         await res.body?.cancel();
