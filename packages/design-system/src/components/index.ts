@@ -44,6 +44,8 @@ export { NavTree, NavTreeRow, rowLabel } from "./NavTree.tsx";
 export type { NavTreeProps, NavTreeRowProps, NavRowMenuControls } from "./NavTree.tsx";
 export { Sidebar, SidebarToggle, AttentionList, SIDEBAR_DRAWER_QUERY } from "./Sidebar.tsx";
 export type { SidebarProps, SidebarToggleProps, AttentionListProps } from "./Sidebar.tsx";
+export { OnlineRow, ProfileBand } from "./People.tsx";
+export type { OnlineRowProps, ProfileBandProps, PresencePerson } from "./People.tsx";
 export { RoleStack } from "./RoleStack.tsx";
 export type { RoleStackProps } from "./RoleStack.tsx";
 export { Board } from "./Board.tsx";

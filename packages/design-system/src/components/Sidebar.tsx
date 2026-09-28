@@ -9,6 +9,8 @@ import { COUNTED_TRIAGE_KINDS, TRIAGE_SPECS, type TriageKind } from "../tokens/t
 import {
   attentionItems,
   flattenNav,
+  ownerOf,
+  splitAttention,
   globalCounts,
   navKey,
   type AttentionItem,
@@ -19,7 +21,7 @@ import {
   type NavRow,
   waitingWords,
 } from "../util/navModel.ts";
-import { HumanAvatar } from "./HumanAvatar.tsx";
+import { HumanAvatar, HumanAvatarStack, type Person } from "./HumanAvatar.tsx";
 import { NavTree, type NavRowMenuControls } from "./NavTree.tsx";
 import type { RowMenuItem } from "../primitives/RowMenu.tsx";
 import { StatusBadge } from "./StatusBadge.tsx";
@@ -28,6 +30,16 @@ import styles from "./Sidebar.module.css";
 
 export interface SidebarProps extends Omit<HTMLAttributes<HTMLElement>, "onSelect" | "title"> {
   readonly projects: ReadonlyArray<NavProject>;
+  /**
+   * The viewer's person id. Only what they can answer is counted and
+   * pinned as Needs you; what waits on others is one quiet row
+   * (`onShowOthers`). Undefined: every ask is the viewer's.
+   */
+  readonly you?: string | undefined;
+  /** Where "Waiting on others" goes (the full inbox). */
+  readonly onShowOthers?: (() => void) | undefined;
+  /** Between the header and the search: who is online (`OnlineRow`). */
+  readonly presence?: ReactNode;
   readonly selected?: NavRef | null | undefined;
   readonly onSelect?: ((ref: NavRef, node: NavRow["node"]) => void) | undefined;
   /** Header line: the organisation, or the product name. */
@@ -93,6 +105,9 @@ function isDrawerViewport(): boolean {
  */
 export function Sidebar({
   projects,
+  you,
+  onShowOthers,
+  presence,
   selected,
   onSelect,
   title,
@@ -136,9 +151,9 @@ export function Sidebar({
     [onTriageChange, triage],
   );
 
-  const filter = useMemo<NavFilter>(() => ({ query: q, triage: t }), [q, t]);
-  const counts = useMemo(() => globalCounts(projects), [projects]);
-  const attention = useMemo(() => attentionItems(projects), [projects]);
+  const filter = useMemo<NavFilter>(() => ({ query: q, triage: t, you }), [q, t, you]);
+  const counts = useMemo(() => globalCounts(projects, you), [projects, you]);
+  const { yours: attention, others } = useMemo(() => splitAttention(attentionItems(projects, you)), [projects, you]);
   const filtering = q.trim().length > 0 || t !== null;
   const visible = useMemo(() => (filtering ? flattenNav(projects, expanded ?? new Map(), filter).length : -1), [filtering, projects, expanded, filter]);
 
@@ -204,6 +219,8 @@ export function Sidebar({
         </header>
       ) : null}
 
+      {presence}
+
       <div className={styles["search"]}>
         <Icon name="search" size={14} className={styles["searchIcon"]} />
         <input
@@ -254,6 +271,13 @@ export function Sidebar({
       </div>
 
       {!hideAttention && !loading && attention.length > 0 && !filtering ? <AttentionList items={attention} selected={selected} onSelect={select} onShowAll={onShowAllAttention} /> : null}
+      {!hideAttention && !loading && others.length > 0 && !filtering ? (
+        <button type="button" className={styles["othersRow"]} onClick={onShowOthers} disabled={!onShowOthers} data-testid="waiting-on-others">
+          <span className={styles["othersTitle"]}>Waiting on others</span>
+          <HumanAvatarStack people={others.map((it) => ownerOf(it.task)).filter((p): p is Person => p !== null)} size="xs" max={3} aria-hidden />
+          <span className={styles["othersCount"]}>{others.length}</span>
+        </button>
+      ) : null}
 
       <ScrollArea fill className={styles["scroll"]}>
         {loading ? (
@@ -329,6 +353,13 @@ export interface AttentionListProps {
   readonly onShowAll?: (() => void) | undefined;
   /** A heading of its own (a full inbox), not the sidebar's collapsible one. */
   readonly title?: string | undefined;
+  /**
+   * Asks that wait on someone else: calm (no attention wash — only yours
+   * are loud), the owner's face leads the row, and each offers Take over.
+   */
+  readonly others?: boolean | undefined;
+  /** "Take over": make the task yours, so its asks are yours to answer. */
+  readonly onTakeOver?: ((item: AttentionItem) => void) | undefined;
 }
 
 /**
@@ -336,15 +367,16 @@ export interface AttentionListProps {
  * every project, in the order given (the caller sorts — oldest wait first
  * is the sensible default). Each row says what, who is asking, what they
  * ask and who it waits on; where it lives (project · epic) is the row's
- * tooltip, so the ask gets the width. It is a list, not a tree.
+ * tooltip, so the ask gets the width. It is a list, not a tree. With
+ * `others`, the same list for what waits on someone else, quietly.
  */
-export function AttentionList({ items, selected, onSelect, max = 5, onShowAll, title }: AttentionListProps) {
+export function AttentionList({ items, selected, onSelect, max = 5, onShowAll, title, others, onTakeOver }: AttentionListProps) {
   const [open, setOpen] = useState(true);
   const shown = open ? items.slice(0, max) : [];
   const more = items.length - shown.length;
   const selectedKey = selected ? navKey(selected) : null;
   return (
-    <section className={styles["attention"]} aria-label={title ?? "Needs you"}>
+    <section className={cx(styles["attention"], others && styles["attentionOthers"])} aria-label={title ?? "Needs you"}>
       {title === undefined ? (
         <button type="button" className={styles["attentionHead"]} aria-expanded={open} onClick={() => setOpen((v) => !v)}>
           <Icon name="chevron-right" size={14} className={cx(styles["attentionChevron"], open && styles["attentionChevronOpen"])} />
@@ -354,7 +386,7 @@ export function AttentionList({ items, selected, onSelect, max = 5, onShowAll, t
         </button>
       ) : (
         <h2 className={cx(styles["attentionHead"], styles["attentionHeadStatic"])}>
-          <StatusBadge status="awaiting_input" variant="dot" iconOnly className={styles["attentionMark"]} />
+          {others ? null : <StatusBadge status="awaiting_input" variant="dot" iconOnly className={styles["attentionMark"]} />}
           <span className={styles["attentionTitle"]}>{title}</span>
           <span className={styles["attentionCount"]}>{items.length}</span>
         </h2>
@@ -367,8 +399,9 @@ export function AttentionList({ items, selected, onSelect, max = 5, onShowAll, t
             const where = it.epic ? `${it.project.name} · ${it.epic.title}` : it.project.name;
             const people = it.task.people ?? [];
             const names = people.map((p) => p.name).join(", ");
+            const owner = ownerOf(it.task);
             return (
-              <li key={it.task.id}>
+              <li key={it.task.id} className={styles["attentionItem"]}>
                 <button
                   type="button"
                   className={cx(styles["attentionRow"], isSel && styles["attentionRowSelected"])}
@@ -388,20 +421,27 @@ export function AttentionList({ items, selected, onSelect, max = 5, onShowAll, t
                       <span className={styles["attentionAsker"]}>{it.session ? <AgentAvatar role={it.session.role} size="xs" /> : null}</span>
                       {it.session ? (
                         <span className={styles["attentionAsk"]} title={it.session.activity}>
-                          {it.session.activity ?? "is waiting for you"}
+                          {it.session.activity ?? (others && owner ? `is waiting for ${owner.name}` : "is waiting for you")}
                         </span>
                       ) : (
-                        <span className={styles["attentionAsk"]} title={waitingWords(it.task)}>{waitingWords(it.task)}</span>
+                        <span className={styles["attentionAsk"]} title={waitingWords(it.task)}>
+                          {others && owner ? `waiting for ${owner.name}` : waitingWords(it.task)}
+                        </span>
                       )}
                     </span>
                   </span>
                   {people.length > 0 ? (
                     <span className={styles["attentionPeople"]} role="group" aria-label={names} title={names}>
-                      <HumanAvatar person={people[0]!} size="xs" aria-hidden />
+                      <HumanAvatar person={people[0]!} size={others ? "md" : "xs"} aria-hidden />
                       {people.length > 1 ? <span className={styles["attentionPeopleMore"]}>+{people.length - 1}</span> : null}
                     </span>
                   ) : null}
                 </button>
+                {onTakeOver ? (
+                  <button type="button" className={styles["takeOver"]} onClick={() => onTakeOver(it)} data-testid="take-over">
+                    Take over
+                  </button>
+                ) : null}
               </li>
             );
           })}
