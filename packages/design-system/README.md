@@ -314,14 +314,15 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 ### Human intervention
 
 - The two ways a person acts on a session are distinct on four channels in
-  `ChatComposer`: focus tint, hint text, button label, button icon.
+  `ChatComposer`: focus tint, context line, button label, button colour.
   **Answer** (session blocked on a question) has an attention-filled button —
-  the same hue as needs-you, so the answer visibly closes it — and plain
-  Enter submits because the agent is waiting. Its context line ("Answering
+  the same hue as needs-you, so the answer visibly closes it. Its context line ("Answering
   Orchestrator: …") and the offered choices are neutral at rest; a choice
-  chip takes the attention tint only on hover. **Steer** (session running) is accent-toned,
-  says plainly that it interrupts the current turn, and requires ⌘/Ctrl+Enter
-  because an accidental interrupt costs a turn.
+  chip takes the attention tint only on hover. **Steer** (session running) is
+  accent-toned. A steer waits for the agent's turn to end, so sending one
+  costs nothing and plain Enter sends it; **interrupt now** — the costly
+  one, which stops the turn — is a checkbox, never a key. Shift+Enter is a
+  new line in both. The action row says who it is sent as (`sentAs`).
 - The question itself is a turn: `QuestionCard`. While it waits it is the
   one loud turn a transcript is allowed, and it is loud once: the attention
   wash and 2px bar. Inside it the ink is neutral — the transcript header's

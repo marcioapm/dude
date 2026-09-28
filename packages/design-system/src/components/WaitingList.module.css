@@ -1,0 +1,95 @@
+/*
+ * What waits on a person. Rows are told apart by space; yours take the
+ * attention tint and its bar, the one emphasis pattern.
+ */
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-6);
+  margin-bottom: var(--ds-space-24);
+}
+.label {
+  margin: 0;
+}
+.empty {
+  margin: 0;
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-sm);
+}
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--ds-space-12);
+  padding: var(--ds-space-8) var(--ds-space-12);
+  margin: 0 calc(-1 * var(--ds-space-12));
+}
+.row:hover {
+  background: var(--ds-color-hover-wash);
+}
+.mine,
+.mine:hover {
+  background: var(--ds-tone-attention-bg);
+  box-shadow: inset 3px 0 0 var(--ds-tone-attention-mark);
+  --ds-avatar-bed: var(--ds-tone-attention-bg);
+}
+
+.face {
+  display: inline-flex;
+}
+.open {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.open:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--ds-color-focus-ring);
+  border-radius: var(--ds-radius-mark);
+}
+.ask {
+  font-size: var(--ds-text-md);
+  color: var(--ds-color-text-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.where {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  min-width: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mine .where {
+  color: var(--ds-color-text-secondary);
+}
+.age {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.action {
+  display: inline-flex;
+}

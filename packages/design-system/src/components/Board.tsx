@@ -6,9 +6,9 @@ import { EmptyState, Skeleton } from "../primitives/Feedback.tsx";
 import { ScrollArea } from "../primitives/ScrollArea.tsx";
 import { statusSpec } from "../tokens/status.ts";
 import { sumTriage } from "../tokens/triage.ts";
-import { formatDuration } from "../util/format.ts";
+import { firstName, formatDuration } from "../util/format.ts";
 import { toMs, useNow } from "../util/useNow.ts";
-import { navKey, waitingWords, workingRoles, type NavEpic, type NavProject, type NavRef, type NavRow, type NavSession } from "../util/navModel.ts";
+import { liveSessions, navKey, ownerAgents, projectPeople, taskOwner, waitingWords, type NavEpic, type NavProject, type NavRef, type NavRow, type NavSession, type NavTask } from "../util/navModel.ts";
 import {
   BOARD_COLUMN_KINDS,
   BOARD_COLUMN_SPECS,
@@ -16,18 +16,18 @@ import {
   boardColumns,
   boardCost,
   boardSwimlanes,
-  liveActivity,
   type BoardCard,
   type BoardColumn,
   type BoardSwimlane,
-  type LiveActivity,
 } from "../util/boardModel.ts";
-import { AgentAvatar } from "./AgentAvatar.tsx";
-import { HumanAvatarStack } from "./HumanAvatar.tsx";
-import { CostDisplay, Duration } from "./Numbers.tsx";
-import { RoleStack } from "./RoleStack.tsx";
-import { StatusBadge } from "./StatusBadge.tsx";
-import { TriageRollup } from "./TriageRollup.tsx";
+import { AgentAvatar, ROLE_LABEL } from "./AgentAvatar.tsx";
+import { PlanMeter } from "./AgentPlan.tsx";
+import { Cost } from "./Cost.tsx";
+import { Duration } from "./Numbers.tsx";
+import { PersonAvatarStack } from "./PersonAvatar.tsx";
+import { PrChip } from "./PrChip.tsx";
+import { ProjectAvatar } from "./ProjectAvatar.tsx";
+import { NeedsYouCount, StatusMark } from "./StatusMark.tsx";
 import styles from "./Board.module.css";
 
 export interface BoardProps extends Omit<HTMLAttributes<HTMLElement>, "onSelect" | "title"> {
@@ -70,8 +70,7 @@ interface Group {
  * The overview for a project or an epic — what the sidebar opens when the
  * selection is one of those rather than a task. Five columns by
  * lifecycle stage (`boardModel.ts`), always all five, always in order, so
- * the eye learns where to look; a column with nothing in it folds to a
- * labelled rail rather than an empty box.
+ * the eye learns where to look; an empty one keeps its heading and count.
  *
  * With `groupBy="epic"` the project board becomes swimlanes: a row per
  * epic in the project's order, then "No epic", each with the same five
@@ -95,6 +94,7 @@ export function Board({ project, epic, selected, onSelect, cap = 12, loading, he
   const total = boardCardCount(columns);
   const cost = boardCost(columns);
   const counts = useMemo(() => sumTriage(columns.map((c) => c.counts)), [columns]);
+  const scopePeople = useMemo(() => projectPeople(epic ? { id: project.id, name: project.name, epics: [epic] } : project), [project, epic]);
   // Time in column is read in hours and days; one clock for every card,
   // once a minute, is plenty and keeps fifty cards from owning fifty timers.
   const now = useNow(!loading, 60_000);
@@ -213,26 +213,28 @@ export function Board({ project, epic, selected, onSelect, cap = 12, loading, he
   };
 
   const scopeLabel = epic ? epic.title : project.name;
+  // The heading says where you are with a face: the project's.
 
   return (
     <section ref={containerRef} className={cx(styles["root"], className)} aria-label={`${scopeLabel} board`} aria-busy={loading || undefined} {...rest}>
       {!hideHeader ? (
         <header className={styles["header"]}>
           <span className={styles["scope"]}>
+            <ProjectAvatar project={project} size={epic ? 20 : 28} aria-hidden title={undefined} />
             {epic ? (
               <>
                 <span className={styles["scopeParent"]}>{project.name}</span>
                 <Icon name="chevron-right" size={14} className={styles["scopeSep"]} />
-                <Icon name="layers" size={14} className={styles["scopeGlyph"]} />
               </>
             ) : null}
-            <span className={styles["scopeTitle"]}>{scopeLabel}</span>
+            <h2 className={styles["scopeTitle"]}>{scopeLabel}</h2>
+            {scopePeople.length > 0 ? <PersonAvatarStack people={scopePeople} size={28} max={6} className={styles["scopePeople"]} /> : null}
           </span>
           {!loading ? (
             <span className={styles["summary"]}>
+              {counts.needs_you > 0 ? <NeedsYouCount count={counts.needs_you} verbose /> : null}
               <span className={styles["summaryCount"]}>{total === 1 ? "1 task" : `${total} tasks`}</span>
-              <TriageRollup counts={counts} verbose className={styles["summaryRollup"]} />
-              {cost > 0 ? <CostDisplay usd={cost} compact tone="muted" className={styles["summaryCost"]} /> : null}
+              {cost > 0 ? <Cost tokensUsd={cost} size="sm" tone="muted" className={styles["summaryCost"]} /> : null}
             </span>
           ) : null}
           {headerActions ? <span className={styles["headerActions"]}>{headerActions}</span> : null}
@@ -259,7 +261,7 @@ export function Board({ project, epic, selected, onSelect, cap = 12, loading, he
           {visible.map(({ group, open, columns: cols }, gi) => (
             <BoardGroup key={group.key} lane={group.lane} open={open} onToggle={() => toggleLane(group.key)} menu={group.lane && laneMenu ? laneMenu(group.lane) : null}>
               {cols.map(({ column, revealKey, cards, hidden }, ci) => (
-                <BoardColumnView key={column.kind} column={column} folded={column.cards.length === 0} inLane={swimlanes}>
+                <BoardColumnView key={column.kind} column={column} folded={swimlanes && column.cards.length === 0} inLane={swimlanes}>
                   {cards.map((card, ri) => {
                     const key = cardKey(card);
                     return (
@@ -333,8 +335,8 @@ function BoardGroup({ lane, open, onToggle, menu, children }: BoardGroupProps) {
           </span>
           <span className={styles["laneCount"]}>{lane.count}</span>
         </button>
-        <TriageRollup counts={lane.counts} className={styles["laneRollup"]} />
-        {lane.costUsd > 0 ? <CostDisplay usd={lane.costUsd} compact tone="muted" className={styles["laneCost"]} /> : null}
+        {lane.counts.needs_you > 0 ? <NeedsYouCount count={lane.counts.needs_you} className={styles["laneRollup"]} /> : null}
+        {lane.costUsd > 0 ? <Cost tokensUsd={lane.costUsd} size="sm" tone="muted" className={styles["laneCost"]} /> : null}
         {menu ? <span className={styles["laneMenu"]}>{menu}</span> : null}
       </header>
       {open ? (
@@ -369,7 +371,6 @@ function BoardColumnView({ column, folded, inLane, children }: { readonly column
           {spec.label}
         </span>
         <span className={styles["columnCount"]}>{column.cards.length}</span>
-        {!folded ? <TriageRollup counts={column.counts} className={styles["columnRollup"]} /> : null}
       </header>
       {!folded ? (
         <ScrollArea fill className={styles["columnScroll"]}>
@@ -396,55 +397,103 @@ interface BoardCardViewProps {
 }
 
 /**
- * One task, three lines: where and how long · what · who and what it
- * costs. The status dot is the only colour at rest; a needs-you card adds
- * the same wash and bar the tree row gets, plus the question in attention
- * ink, so it is loud in the same way in both places.
+ * One task: its key (and the one loud pill when it needs you), its title,
+ * the question when an agent asks, its pull requests' states, how far the
+ * working agent's plan has got, and its people with what is happening —
+ * the agent working for the owner sits on the owner's face.
  */
 function BoardCardView({ card, now, showEpic, selected, tabIndex, onFocus, onKeyDown, onClick }: BoardCardViewProps) {
   const wi = card.task;
   const spec = statusSpec(wi.status);
   const needsYou = card.triage === "needs_you";
   const since = toMs(wi.statusSince);
-  const roles = workingRoles(wi);
-  const live = needsYou ? null : liveActivity(wi);
+  const people = wi.people ?? [];
+  const live = liveSessions(wi).filter((s) => s.status === "running");
+  const working = live[0];
+  const agents = ownerAgents(wi, working);
+  const plan = working?.plan;
+  const prs = wi.pullRequests ?? [];
   return (
     <li>
-      <button
-        type="button"
+      <div
+        role="button"
         className={cx(styles["card"], needsYou && styles["needsYou"], spec.terminal && styles["finished"], selected && styles["selected"])}
         data-board-key={navKey({ kind: "task", id: wi.id })}
         data-triage={card.triage}
         data-status={wi.status}
         aria-current={selected ? "true" : undefined}
+        aria-label={wi.key ? `${wi.key} ${wi.title}` : wi.title}
         tabIndex={tabIndex}
         onFocus={onFocus}
-        onKeyDown={onKeyDown}
+        onKeyDown={(e) => {
+          if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
+            e.preventDefault();
+            onClick();
+            return;
+          }
+          onKeyDown(e);
+        }}
         onClick={onClick}
       >
         <span className={styles["top"]}>
-          <StatusBadge status={wi.status} variant="dot" iconOnly className={styles["mark"]} />
           {wi.key ? <span className={styles["key"]}>{wi.key}</span> : null}
           {showEpic && card.epic ? (
             <span className={styles["epic"]} title={card.epic.title}>
               {card.epic.title}
             </span>
           ) : null}
-          {since !== null ? <Duration ms={Math.max(0, now - since)} format="age" tone="muted" className={styles["age"]} title={`${spec.label} for ${formatDuration(Math.max(0, now - since), { style: "long" })}`} /> : null}
+          <span className={styles["topEnd"]}>
+            {needsYou ? (
+              <StatusMark status="awaiting_input" size="sm" />
+            ) : since !== null ? (
+              <Duration ms={Math.max(0, now - since)} format="age" tone="muted" className={styles["age"]} title={`${spec.label} for ${formatDuration(Math.max(0, now - since), { style: "long" })}`} />
+            ) : null}
+          </span>
         </span>
         <span className={styles["title"]} title={wi.title}>
           {wi.title}
         </span>
-        <span className={styles["meta"]}>
-          {needsYou ? <AskLine card={card} /> : live ? <LiveLine roles={roles} live={live} /> : roles.length > 0 ? <RoleStack roles={roles} /> : null}
-          <span className={styles["metaRight"]}>
-            {wi.costUsd !== undefined && wi.costUsd > 0 ? <CostDisplay usd={wi.costUsd} compact tone="muted" className={styles["cost"]} /> : null}
-            {wi.people && wi.people.length > 0 ? <HumanAvatarStack people={wi.people} size="xs" max={2} /> : null}
+        {needsYou ? <AskLine card={card} /> : null}
+        {prs.length > 0 ? (
+          <span className={styles["prs"]}>
+            {prs.map((pr) => (
+              <PrChip key={pr.url} pr={pr} size="sm" onClick={(e) => e.stopPropagation()} tabIndex={-1} />
+            ))}
           </span>
+        ) : null}
+        {plan && plan.total > 0 ? (
+          <span className={styles["plan"]} title={`Plan: ${plan.done} of ${plan.total} done${plan.current ? `\nNow: ${plan.current}` : ""}`}>
+            <PlanMeter done={plan.done} total={plan.total} width={64} />
+            <span className={styles["planCount"]}>
+              {plan.done}/{plan.total}
+            </span>
+          </span>
+        ) : null}
+        <span className={styles["foot"]}>
+          {people.length > 0 ? <PersonAvatarStack people={people} size={28} max={3} agents={agents} /> : working ? <AgentAvatar role={working.role} size="md" live /> : null}
+          <span className={styles["doing"]}>
+            <DoingLine task={wi} working={live} needsYou={needsYou} />
+          </span>
+          {wi.costUsd !== undefined && wi.costUsd > 0 ? <Cost tokensUsd={wi.costUsd} size="sm" tone="muted" className={styles["cost"]} /> : null}
         </span>
-      </button>
+      </div>
     </li>
   );
+}
+
+/** Who, and what is happening: the working agent and what it is doing, or where the task stands. */
+function DoingLine({ task, working, needsYou }: { readonly task: NavTask; readonly working: ReadonlyArray<NavSession>; readonly needsYou: boolean }) {
+  const names = (task.people ?? []).map((p) => firstName(p.name)).join(", ");
+  const owner = taskOwner(task);
+  if (needsYou) return <><b>{names || "Nobody"}</b>waiting on {owner ? firstName(owner.name) : "a person"}</>;
+  if (working.length > 1) return <><b>{working.length} agents working</b>{names}</>;
+  const w = working[0];
+  if (w) return <><b>{w.title ?? ROLE_LABEL[w.role]}</b>{w.activity ?? "working"}</>;
+  const where: Partial<Record<NavTask["status"], string>> = {
+    review: "waiting on GitHub", ready_to_merge: "ready to merge", done: "merged", failed: "failed", aborted: "stopped",
+    queued: "not started", received: "not started", intake: "being shaped", awaiting_confirmation: "plan to confirm",
+  };
+  return <><b>{names || statusSpec(task.status).label}</b>{where[task.status] ?? statusSpec(task.status).label.toLowerCase()}</>;
 }
 
 function AskLine({ card }: { readonly card: BoardCard }) {
@@ -452,17 +501,7 @@ function AskLine({ card }: { readonly card: BoardCard }) {
   const text = s ? (s.activity ?? "is waiting for you") : waitingWords(card.task);
   return (
     <span className={styles["ask"]} title={text}>
-      {s ? <AgentAvatar role={s.role} size="xs" className={styles["asker"]} /> : <Icon name="question" size={12} className={styles["askGlyph"]} />}
-      <span className={styles["askText"]}>{text}</span>
-    </span>
-  );
-}
-
-function LiveLine({ roles, live }: { readonly roles: ReadonlyArray<AgentRole>; readonly live: LiveActivity }) {
-  return (
-    <span className={styles["live"]} title={live.activity}>
-      <RoleStack roles={roles} />
-      <span className={styles["activity"]}>{live.activity}</span>
+      {s ? `“${text}”` : text}
     </span>
   );
 }

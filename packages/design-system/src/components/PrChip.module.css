@@ -1,0 +1,93 @@
+/*
+ * A pull request's one state: icon, word and number on a tint of its
+ * tone. Merged is violet (GitHub's), nothing else is.
+ */
+
+.root {
+  --pr-fg: var(--ds-tone-neutral-fg);
+  --pr-bg: var(--ds-tone-neutral-bg);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  height: var(--ds-size-chip);
+  padding: 0 var(--ds-space-8) 0 var(--ds-space-6);
+  border-radius: var(--ds-radius-control);
+  color: var(--pr-fg);
+  background: var(--pr-bg);
+  font-size: var(--ds-text-xs);
+  font-weight: var(--ds-weight-medium);
+  line-height: 1;
+  white-space: nowrap;
+  text-decoration: none;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+.root:hover {
+  text-decoration: none;
+  filter: brightness(0.97);
+}
+.root:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-color-focus-ring);
+}
+.sm {
+  height: var(--ds-size-badge-md);
+  gap: var(--ds-space-4);
+  padding: 0 var(--ds-space-6) 0 var(--ds-space-4);
+}
+.iconOnly {
+  width: var(--ds-size-badge-md);
+  padding: 0;
+  justify-content: center;
+}
+.glyph {
+  flex-shrink: 0;
+}
+.number {
+  font-family: var(--ds-font-mono);
+  opacity: 0.8;
+}
+
+.merged {
+  --pr-fg: var(--ds-merged-fg);
+  --pr-bg: var(--ds-merged-bg);
+}
+.closed,
+.awaiting {
+  --pr-fg: var(--ds-tone-neutral-fg);
+  --pr-bg: var(--ds-tone-neutral-bg);
+}
+.ci_red,
+.changes,
+.conflict {
+  --pr-fg: var(--ds-tone-danger-fg);
+  --pr-bg: var(--ds-tone-danger-bg);
+}
+.ci_running,
+.comments {
+  --pr-fg: var(--ds-tone-attention-fg);
+  --pr-bg: var(--ds-tone-attention-bg);
+}
+.ready {
+  --pr-fg: var(--ds-tone-success-fg);
+  --pr-bg: var(--ds-tone-success-bg);
+}
+.ci_running .glyph {
+  animation: global(ds-drift) calc(var(--ds-cadence-drift) / max(var(--ds-motion-live), 0.0001)) linear infinite;
+}
+
+.tip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.tipHead {
+  font-weight: var(--ds-weight-semibold);
+}
+.tipFact::before {
+  content: "• ";
+}
+.tipFoot {
+  margin-top: var(--ds-space-4);
+  opacity: 0.7;
+}

@@ -33,25 +33,52 @@ body {
   display: flex;
   flex-direction: column;
   gap: var(--ds-space-12);
-  padding: var(--ds-space-main-pad);
+  padding: var(--ds-space-main-pad) var(--ds-space-32);
   overflow: auto;
+  background: var(--ds-color-surface);
+}
+/* The board, a task and an agent's conversation lay themselves out to the edges. */
+.main.flush {
+  padding: 0;
+  gap: 0;
 }
 
-/* New project on the left, settings and signing out as icons on the right. */
-.sidebarFooter {
+/* A screen that lays itself out: a header line, then its body, scrolling. */
+.screen {
   display: flex;
+  flex-direction: column;
   flex: 1;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--ds-space-4);
+  min-height: 0;
   min-width: 0;
 }
+.screenBody {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--ds-space-4) var(--ds-space-24) var(--ds-space-32);
+}
+.screenBody.narrow {
+  max-width: 1000px;
+}
 
-.sidebarFooterEnd {
+/* The live connection is down: one calm line at the top, until it is back. */
+.reconnecting {
   display: flex;
   align-items: center;
-  gap: var(--ds-space-2);
+  gap: var(--ds-space-8);
+  flex-shrink: 0;
+  padding: var(--ds-space-6) var(--ds-space-24);
+  background: var(--ds-tone-attention-bg);
+  color: var(--ds-color-text-primary);
+  font-size: var(--ds-text-sm);
 }
+.reconnectingIcon {
+  color: var(--ds-tone-attention-fg);
+}
+.reconnectingText {
+  flex: 1;
+}
+
 
 /* Off-screen until focused: the first Tab stop, past the sidebar to the page. */
 .skipLink {
@@ -102,6 +129,23 @@ body {
   flex-direction: column;
   flex: 1;
   min-height: 0;
+}
+.runCrumbs {
+  padding: var(--ds-space-16) var(--ds-space-24) var(--ds-space-4);
+}
+.runScreen > [role="tabpanel"],
+.runScreen [role="tablist"] {
+  padding-left: var(--ds-space-24);
+  padding-right: var(--ds-space-24);
+}
+.runScreen [role="tabpanel"] {
+  padding: 0;
+}
+/* A notice with its dismiss, on one line. */
+.noticeLine {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: var(--ds-space-8);
 }
 
@@ -193,7 +237,7 @@ body {
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: var(--ds-space-8);
+  gap: var(--ds-space-12);
 }
 .dudeMark {
   display: inline-block;
@@ -213,163 +257,151 @@ body {
   margin: var(--ds-space-24) auto var(--ds-space-8);
 }
 
-/* -- a task's pull requests ------------------------------------------- */
+/* -- The task page -------------------------------------------------- */
 
-/* Tones, by name: a glyph and a word always carry the meaning with them. */
-[data-tone="success"] { --pr-fg: var(--ds-tone-success-fg); --pr-bg: var(--ds-tone-success-bg); }
-[data-tone="danger"] { --pr-fg: var(--ds-tone-danger-fg); --pr-bg: var(--ds-tone-danger-bg); }
-[data-tone="attention"] { --pr-fg: var(--ds-tone-attention-fg); --pr-bg: var(--ds-tone-attention-bg); }
-[data-tone="neutral"] { --pr-fg: var(--ds-tone-neutral-fg); --pr-bg: var(--ds-tone-neutral-bg); }
-[data-tone="merged"] { --pr-fg: var(--ds-merged-fg); --pr-bg: var(--ds-merged-bg); }
-
-.prChip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--ds-space-6);
-  height: var(--ds-size-badge-md);
-  padding: 0 var(--ds-space-8) 0 var(--ds-space-6);
-  border-radius: var(--ds-radius-control);
-  background: var(--pr-bg);
-  color: var(--pr-fg);
-  font-size: var(--ds-text-xs);
-  font-weight: var(--ds-weight-medium);
-  white-space: nowrap;
+.taskScreen {
+  overflow: auto;
 }
-
-.taskPullRequests {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));
-  gap: var(--ds-space-16);
-}
-
-.prPanel {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-8);
-  padding: var(--ds-space-16);
-  background: var(--ds-color-surface);
-}
-.prPanelHead {
+.taskTop {
   display: flex;
   align-items: center;
-  gap: var(--ds-space-8);
-  min-width: 0;
+  gap: var(--ds-space-12);
+  min-height: 60px;
+  padding: var(--ds-space-8) var(--ds-space-24);
 }
-.prPanelTitle {
+.taskCrumbs {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: var(--ds-weight-medium);
-  color: var(--ds-color-text-strong);
 }
-.prPanelWhere {
-  color: var(--ds-color-text-muted);
-  font-size: var(--ds-text-xs);
-  padding-left: var(--ds-space-24);
+.taskTopActions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-8);
 }
-.prFacts,
-.prChecks {
-  list-style: none;
+.taskHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--ds-space-16) var(--ds-space-24);
+  padding: 0 var(--ds-space-24) var(--ds-space-16);
+}
+.taskHeadMain {
+  flex: 1 1 420px;
+  min-width: 0;
+}
+.taskTitle {
   margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-4);
-}
-.prFact,
-.prChecks li {
-  display: flex;
-  align-items: center;
-  gap: var(--ds-space-8);
-  min-height: var(--ds-size-row-compact);
-}
-.prFactText {
-  flex: 1;
-  min-width: 0;
-}
-.prFactText b {
+  font-size: var(--ds-text-2xl);
+  font-weight: var(--ds-weight-semibold);
+  line-height: var(--ds-leading-tight);
   color: var(--ds-color-text-strong);
-  font-weight: var(--ds-weight-medium);
+  overflow-wrap: anywhere;
 }
-.prGlyph {
-  display: inline-flex;
-  color: var(--pr-fg);
-}
-.prChecks {
-  padding-left: var(--ds-space-24);
-  font-size: var(--ds-text-sm);
-}
-.prCheckName {
-  flex: 1;
-  min-width: 0;
-}
-.prWho {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--ds-space-6);
-}
-.prAskForm {
-  display: flex;
-  align-items: center;
-  gap: var(--ds-space-6);
-}
-.prAskForm > :first-child {
-  flex: 1;
-}
-.prActions {
+.taskMeta {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--ds-space-8);
-  padding-top: var(--ds-space-8);
+  gap: var(--ds-space-8) var(--ds-space-12);
+  margin-top: var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
 }
+.taskPeople {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-16);
+}
+.taskNotices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  padding: 0 var(--ds-space-24) var(--ds-space-16);
+}
+.taskTabs > [role="tablist"] {
+  padding: 0 var(--ds-space-24);
+}
+.taskPane {
+  padding: var(--ds-space-16) var(--ds-space-24) var(--ds-space-32);
+}
+.taskOverview {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 440px);
+  gap: var(--ds-space-32);
+  align-items: start;
+}
+.taskOverview:not(:has(.taskAside)) {
+  grid-template-columns: minmax(0, 1fr);
+}
+@media (max-width: 1200px) {
+  .taskOverview {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.taskMain {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-32);
+  min-width: 0;
+}
+.taskBlock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+}
+.taskBlock > h2 {
+  margin: 0;
+}
+.taskGoal {
+  max-width: 720px;
+  color: var(--ds-color-text-secondary);
+}
+.taskGoal p {
+  margin: 0;
+}
+.taskGoal ul {
+  margin: var(--ds-space-8) 0 0;
+  padding-left: var(--ds-space-20);
+}
+.taskAside {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-12);
+}
+.planNow {
+  color: var(--ds-color-text-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.taskSessions {
+  max-width: 640px;
+}
+
+/* A line of figures under a header: an epic's progress, time and cost. */
+.figures {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8) var(--ds-space-24);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+
+/* -- a task's pull requests: what can be done from here ---------------- */
+
 .prMerge {
   display: inline-flex;
   align-items: center;
   gap: var(--ds-space-2);
 }
-.prNote {
-  margin: 0;
-  font-size: var(--ds-text-sm);
+.prAskForm {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
 }
 .prProblem {
   color: var(--ds-tone-danger-fg);
-}
-
-/* -- a task's activity ------------------------------------------------ */
-
-.activity {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-12);
-  max-width: 820px;
-}
-.activity li {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--ds-space-12);
-}
-.activityBody {
-  flex: 1;
-  min-width: 0;
-  padding-top: var(--ds-space-4);
-}
-.activityBody blockquote {
-  margin: var(--ds-space-6) 0 0;
-  padding: var(--ds-space-6) var(--ds-space-12);
-  background: var(--ds-color-sunken);
-  color: var(--ds-color-text-secondary);
-  white-space: pre-wrap;
-}
-.activityWhen {
-  color: var(--ds-color-text-muted);
-  font-size: var(--ds-text-xs);
-  padding-top: var(--ds-space-6);
 }
 
 /* -- settings: GitHub -------------------------------------------------- */
@@ -390,12 +422,6 @@ body {
   color: var(--ds-color-text-muted);
   font-size: var(--ds-text-sm);
 }
-.webhookHealth {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--ds-space-8);
-}
 .webhookRepos {
   list-style: none;
   margin: 0;
@@ -409,12 +435,4 @@ body {
   display: flex;
   gap: var(--ds-space-8);
   align-items: center;
-}
-.prHeaderLink {
-  display: inline-flex;
-  text-decoration: none;
-}
-.prHeaderLink:hover {
-  text-decoration: none;
-  filter: brightness(1.08);
 }

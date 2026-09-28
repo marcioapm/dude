@@ -1,55 +1,16 @@
 /**
- * A pull request in words: the one state it shows as, what else is true of
- * it, and what happened to it, as the task's page and its activity say.
+ * A pull request in words, beyond what its chip and panel say (the design
+ * system's PrChip and PullRequestPanel): why it cannot be merged yet, and
+ * what happened to it, as the task's activity tells it.
  *
- * Pure, so the words are tested without a browser. The state itself is
+ * Pure, so the words are tested without a browser. Its state is
  * `prDisplayState`'s (in @dude/domain), computed by the API as `display`.
  */
 
-import type { PersistedEvent, PrDisplayState, PullRequest } from "@dude/domain";
+import type { PersistedEvent, PullRequest } from "@dude/domain";
 import { prCheckFailed } from "@dude/domain";
-import type { IconName, ToneName } from "@dude/design-system";
-
-export interface DisplaySpec {
-  label: string;
-  glyph: IconName;
-  /** `merged` wears the one violet, which is not a tone. */
-  tone: ToneName | "merged";
-}
-
-/** Every state a pull request shows as: a glyph, a word and a tone, never hue alone. */
-export const DISPLAY: Record<PrDisplayState, DisplaySpec> = {
-  merged: { label: "Merged", glyph: "merge", tone: "merged" },
-  closed: { label: "Closed", glyph: "stop", tone: "neutral" },
-  ci_red: { label: "CI failing", glyph: "cross", tone: "danger" },
-  ci_running: { label: "CI running", glyph: "circle-dotted", tone: "attention" },
-  awaiting: { label: "Awaiting approval", glyph: "eye", tone: "neutral" },
-  changes: { label: "Changes requested", glyph: "edit", tone: "danger" },
-  conflict: { label: "Conflicts", glyph: "warning", tone: "danger" },
-  comments: { label: "Unresolved comments", glyph: "message", tone: "attention" },
-  ready: { label: "Ready to merge", glyph: "check", tone: "success" },
-};
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
-
-/** A check's line: failed, running, or passed. */
-export function checkOutcome(c: PullRequest["checks"][number]): "failed" | "running" | "passed" {
-  if (prCheckFailed(c)) return "failed";
-  return c.status.toLowerCase() === "completed" ? "passed" : "running";
-}
-
-/** The checks, summed up in a line: "1 of 4 checks failing". */
-export function checksLine(pr: Pick<PullRequest, "checks" | "checkState">): string {
-  const failing = pr.checks.filter(prCheckFailed).length;
-  const running = pr.checks.filter((c) => checkOutcome(c) === "running").length;
-  const n = pr.checks.length;
-  if (n === 0) {
-    return { failing: "Checks failing", pending: "Checks not reported yet", passing: "Checks passing", unknown: "No checks" }[pr.checkState];
-  }
-  if (failing > 0) return `${failing} of ${plural(n, "check")} failing`;
-  if (running > 0) return `Checks running · ${n - running} of ${n} done`;
-  return n === 1 ? "The check passed" : `All ${n} checks passing`;
-}
 
 /** A reviewer's latest word, in a person's words. */
 export function reviewWords(state: string): string {
@@ -65,14 +26,6 @@ export function reviewWords(state: string): string {
     default:
       return "commented";
   }
-}
-
-/** How it stands against its base. */
-export function baseLine(pr: Pick<PullRequest, "mergeable" | "behindBy" | "baseBranch">): string | null {
-  if (pr.mergeable === "conflicting") return `Conflicts with ${pr.baseBranch}`;
-  if (pr.behindBy > 0) return `${plural(pr.behindBy, "commit")} behind ${pr.baseBranch} · no conflicts`;
-  if (pr.mergeable === "clean") return `Up to date with ${pr.baseBranch}`;
-  return null;
 }
 
 /** Why the Merge button is off, in a person's words; null when it is on. */
