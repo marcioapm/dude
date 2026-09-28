@@ -216,3 +216,10 @@ export const PROMPT_VARIABLES = [
   { name: "run.base_ref", description: "What the branch started from." },
 ] as const;
 export type PromptVariable = (typeof PROMPT_VARIABLES)[number]["name"];
+
+const PROMPT_VARIABLE_NAMES: ReadonlySet<string> = new Set(PROMPT_VARIABLES.map((v) => v.name));
+
+/** Whether `{{name}}` (braces and spaces allowed around it) is one dude fills in. */
+export function isPromptVariable(text: string): boolean {
+  return PROMPT_VARIABLE_NAMES.has(text.replace(/^\{\{\s*|\s*\}\}$/g, ""));
+}
