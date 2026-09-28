@@ -22,6 +22,7 @@ import {
   EventRow,
   EventStream,
   ChangedFiles,
+  ChatAside,
   QuestionCard,
   Segmented,
   SessionFacts,
@@ -390,7 +391,9 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
               )}
               emptyMessage="Waiting for the agent to start."
             >
-              {conversation.turns.map((turn) => renderTurn(turn, role, conversation.contextWindow, !isLive, people, dude, decide, waitingOn))}
+              {asides(conversation.turns).map((group) => Array.isArray(group)
+                ? <ChatAside key={group[0]!.id}>{group.map((turn) => renderTurn(turn, role, conversation.contextWindow, !isLive, people, dude, decide, waitingOn))}</ChatAside>
+                : renderTurn(group, role, conversation.contextWindow, !isLive, people, dude, decide, waitingOn))}
               {conversation.activity ? (
                 <ChatMessage
                   role={role}
@@ -483,6 +486,26 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     </div>
   );
 });
+
+/**
+ * The turns, with each run of tool calls and thoughts gathered into one
+ * group: a `ChatAside` puts them on the message column, stacked close,
+ * with a turn's air above and below the run — as the design system draws
+ * what an agent does between its messages.
+ */
+function asides(turns: readonly Turn[]): Array<Turn | Turn[]> {
+  const out: Array<Turn | Turn[]> = [];
+  for (const turn of turns) {
+    if (turn.kind !== "tool" && turn.kind !== "thought") {
+      out.push(turn);
+      continue;
+    }
+    const last = out[out.length - 1];
+    if (Array.isArray(last)) last.push(turn);
+    else out.push([turn]);
+  }
+  return out;
+}
 
 /** The actor's name for the event ledger, when it is a person the organisation knows. */
 function namedActor(event: PersistedEvent, people: People): { name?: string } {

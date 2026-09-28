@@ -346,9 +346,14 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   it. The intent tint is kept throughout: it is still a steer.
 - The task prompt is usually authored by dude, not a person. It is
   `ChatMessage role="system" intent="prompt"`: the neutral prompt frame,
-  the system avatar and the "Task" tag say who wrote it without a third
-  tint. Prompts clamp at eight lines with a "Show all" control, measured
-  after layout so a short prompt gets no control (`maxLines` overrides).
+  dude's face (`avatar`, which the app gives — the design system carries no
+  brand image) and the "Task" tag say who wrote it without a third tint.
+  It is signed with dude's name for the task: one of The Dude, El Duderino,
+  His Dudeness, Duder, picked by the task's id so a task always hears from
+  the same one. His other acts on a task (the pull request he opens, a Run
+  he aborts) wear the same face and name. Prompts clamp at eight lines with
+  a "Show all" control, measured after layout so a short prompt gets no
+  control (`maxLines` overrides).
 
 ### Nesting
 
@@ -477,6 +482,20 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   the sessions list sits above the session.
 - With no session asked for, the one shown is picked once (running, else
   newest) and kept: a phase ending must not swap it under someone reading.
+- **Two edges.** Everything in a session shares one outer edge and one
+  inner edge. Bands — a turn's wash and hover, the pinned plan — run edge
+  to edge across the transcript's column. Content sits on the chat inset
+  (`--ds-space-chat-pad-x`): the session header's face, the bar's switch,
+  the plan's icon (`--plan-pad-x`), every turn's face, the composer, the
+  Changes and Events views. Nothing in a session uses the page's 24px pad.
+- A turn's text spans its column: chat turns have no measure, so a long
+  line wraps at the column's edge, not beside empty space.
+- What an agent does between its messages — a run of tool calls and
+  thoughts — is one `ChatAside`: on the message text column (past the
+  avatar gutter, so its left edge lines up with the words above), 4px
+  between its items, and a turn's air above and below the run. Never a
+  tool call on its own at the transcript's edge.
+- The sessions list is 260px (200px below 1280px).
 - **Changes is `LiveDiff`**: the agent's checkout against the commit the
   session started from, uncommitted work included. Its toolbar reads
   *Since abc1234 · N files +a −d*, then *Follow the agent* and Unified /
@@ -787,7 +806,7 @@ EmptyState, ScrollArea.
   activity in the foot; turns addressed to the agent are framed and tinted
   by intent (task / answer / steer), can be queued, and clamp when long;
   system turns are a hairline with a label. Body is `Markdown` and grows in
-  place.
+  place. `avatar` puts a face of the app's own in the gutter (dude's).
 - **ActivityIndicator** — thinking / streaming / tool / retrying /
   awaiting_input / completed / failed / aborted, as a full-width line or a
   badge. Distinct rhythm per state; slow-tool promotion; retry countdown.
@@ -805,6 +824,8 @@ EmptyState, ScrollArea.
 - **AgentPlan** — the agent's `todowrite` list rendered in place with "N of
   M", a segmented bar, and a one-shot flash/pop when an item changes state.
   Collapsed, it shows the current item. `sticky` pins it under the header.
+  `--plan-pad-x` sets its text's inset (the transcript sets the chat inset,
+  so the plan lines up with the turns).
 - **ChatThread** — a subagent's conversation nested in its parent's, with a
   role-coloured rail, collapsible, depth-aware.
 - **QuestionCard** — an agent's question to a person as a turn. Waiting it
