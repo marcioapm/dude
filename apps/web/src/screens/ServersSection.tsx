@@ -26,7 +26,7 @@ import {
   StatusMark,
   TerminalLink,
 } from "@dude/design-system/components";
-import { canStartAny, canStopAny, describeServer, firstName, formatTimestamp, serverLogLines, summarizeServers, useNow } from "@dude/design-system";
+import { ALL_STATUSES, canStartAny, canStopAny, describeServer, firstName, formatTimestamp, serverLogLines, summarizeServers, useNow } from "@dude/design-system";
 import { Button, Callout, Dialog, EmptyState, FormActions, RowMenu, Spinner, TabCount } from "@dude/design-system/primitives";
 import { PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES, type RunStatus, type Server, type ServerLogLine, type ServersRun, type TaskServers } from "@dude/domain";
 import type { LogLine } from "@dude/design-system/components";
@@ -53,9 +53,10 @@ export interface ServersSectionProps {
 
 /** The run status as StatusMark says it; a preview's own word until its servers are up. */
 function runMark(run: ServersRun) {
-  const status = (run.state || "running") as RunStatus;
   if (run.kind === "preview" && run.previewStage && run.previewStage !== "ready" && runIsLive(run)) return <StatusMark status="starting" size="sm" />;
-  return <StatusMark status={status} size="sm" />;
+  // dude's status, when the vocabulary has it; a word it lacks is shown as it came.
+  const known = (ALL_STATUSES as readonly string[]).includes(run.state);
+  return <StatusMark status={known ? (run.state as RunStatus) : "running"} size="sm" label={known ? undefined : run.state} />;
 }
 
 export function ServersSection({ client, servers, taskId, compact, onPreview, previewing, onFullLog }: ServersSectionProps) {
@@ -202,9 +203,9 @@ export function ServersSection({ client, servers, taskId, compact, onPreview, pr
                 <>
                   {compact ? null : <Button size="sm" variant="secondary" leadingIcon="play" disabled={busy !== null || !live || !canStartAny(data.servers)} onClick={() => void servers.startAll()} data-testid="start-all">Start all</Button>}
                   {compact ? null : <Button size="sm" variant="quiet" leadingIcon="stop" disabled={busy !== null || !canStopAny(data.servers)} onClick={() => void servers.stopAll()} data-testid="stop-all">Stop all</Button>}
-                  <Button size="sm" variant="quiet" leadingIcon="plus" disabled={!live} onClick={() => setAdding(true)} data-testid="add-server">Add server</Button>
                 </>
               )}
+              <Button size="sm" variant="quiet" leadingIcon="plus" disabled={!live} onClick={() => setAdding(true)} data-testid="add-server">Add server</Button>
             </>
           }
         />
@@ -238,7 +239,7 @@ export function ServersSection({ client, servers, taskId, compact, onPreview, pr
                 onRestart={live && s.command ? () => void servers.restart(s.name) : undefined}
                 menu={<RowMenu size="sm" label={`Actions for ${s.name}`} items={[
                   ...(s.url ? [{ id: "copy", label: "Copy URL", icon: "copy" as const, onSelect: () => void navigator.clipboard?.writeText(s.url!) }] : []),
-                  ...(live && s.command ? [{ id: "restart", label: "Restart", icon: "retry" as const, disabled: rowBusy, onSelect: () => void servers.restart(s.name) }] : []),
+                  ...(live && s.command && s.state !== "stopped" && s.state !== "exited" ? [{ id: "restart", label: "Restart", icon: "retry" as const, disabled: rowBusy, onSelect: () => void servers.restart(s.name) }] : []),
                   { kind: "separator" as const },
                   { id: "remove", label: "Remove from this run", tone: "danger" as const, disabled: rowBusy, onSelect: () => setRemoving(s.name) },
                 ]} />}
@@ -345,7 +346,7 @@ export function serversTabTrailing(data: TaskServers | null): ReactNode {
   const { bad, ready } = summarizeServers(data.servers);
   if (bad) return <ServerStateDot state={bad.state} label={`${bad.name} ${bad.state}`} />;
   if (ready > 0) return <TabCount>{ready} ready</TabCount>;
-  if (data.run.kind === "preview") return <ServerStateDot state="starting" label="Preview starting" />;
+  if (data.run.kind === "preview" && data.run.previewStage !== "ready" && runIsLive(data.run)) return <ServerStateDot state="starting" label="Preview starting" />;
   if (data.moved) return <ServerStateDot state="unreachable" label="Stopped when the run moved" />;
   return null;
 }

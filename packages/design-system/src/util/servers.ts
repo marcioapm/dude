@@ -70,9 +70,13 @@ export function summarizeServers(servers: ReadonlyArray<Pick<Server, "name" | "s
   };
 }
 
-/** Whether "Start all" / "Stop all" would do anything. */
+/**
+ * Whether "Start all" / "Stop all" would do anything. Start is lux's no-op
+ * for a server that is starting, ready or unreachable — an unreachable one
+ * is restarted, not started.
+ */
 export function canStartAny(servers: ReadonlyArray<Pick<Server, "state">>): boolean {
-  return servers.some((s) => s.state === "stopped" || s.state === "exited" || s.state === "unreachable");
+  return servers.some((s) => s.state === "stopped" || s.state === "exited");
 }
 export function canStopAny(servers: ReadonlyArray<Pick<Server, "state">>): boolean {
   return servers.some((s) => s.state === "ready" || s.state === "starting" || s.state === "unreachable");
@@ -83,13 +87,24 @@ export function bareUrl(url: string): string {
   return url.replace(/^https?:\/\//, "");
 }
 
-/** lux's log lines as LogStream draws them: a `[lux]` line is the runtime's own word, stderr keeps its channel. */
+/**
+ * lux's log lines as LogStream draws them: a `[lux]` line is the runtime's
+ * own word, stderr keeps its channel. The sequence is the line's time, so
+ * a re-read tail — the same window, slid on — keeps each line's key and
+ * LogStream sees what is new; lines within one millisecond keep their order.
+ */
 export function serverLogLines(log: ReadonlyArray<ServerLogLine>): LogLine[] {
-  return log.map((l, i) => ({
-    seq: i,
-    text: l.text,
-    ts: l.t,
-    channel: l.stream,
-    ...(l.text.includes("[lux]") ? { level: "system" as const } : {}),
-  }));
+  let lastT = -1;
+  let sameT = 0;
+  return log.map((l) => {
+    sameT = l.t === lastT ? sameT + 1 : 0;
+    lastT = l.t;
+    return {
+      seq: l.t * 1000 + sameT,
+      text: l.text,
+      ts: l.t,
+      channel: l.stream,
+      ...(l.text.includes("[lux]") ? { level: "system" as const } : {}),
+    };
+  });
 }

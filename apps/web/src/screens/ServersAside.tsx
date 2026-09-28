@@ -58,7 +58,8 @@ export function ServersAside({ client, taskId, servers, onAll }: { client: ApiCl
           return (
             <ServersSummaryRow key={s.name} name={s.name} state={words.state} stateLabel={words.label} url={s.url} detail={words.detail}
               onPreview={s.url ? () => setPreview(s.name) : undefined}
-              onStart={live && s.command ? () => void servers.start(s.name) : undefined} />
+              onStart={live && s.command ? () => void servers.start(s.name) : undefined}
+              onRestart={live && s.command ? () => void servers.restart(s.name) : undefined} />
           );
         })}
       </ServersSummary>

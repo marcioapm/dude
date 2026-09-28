@@ -21,6 +21,9 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, onCount
   const [editing, setEditing] = useState<ServerRecipe | "new" | null>(null);
   const [removing, setRemoving] = useState<ServerRecipe | null>(null);
   const { busy, problem: saveProblem, save, clear } = useSave();
+  // The preview settings save apart from the definitions, so a refusal shows by them.
+  const previewSave = useSave();
+  const [previewRound, setPreviewRound] = useState(0);
   const addButton = useRef<HTMLButtonElement>(null);
 
   const latest = useRef(0);
@@ -52,11 +55,13 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, onCount
       void load();
     }, `Server ${recipe.name} saved`);
   const savePreviews = (patch: Partial<PreviewSettings>, done: string) => {
-    // Shown at once; put back from the server if it refuses.
+    // Shown at once; put back from the server if it refuses, and the
+    // fields start over from what it says.
     const next = { ...previews, ...patch };
     setPreviews(next);
-    void save(() => client.updatePreviewSettings(project.id, { image: next.image, egress: next.egress, idleTimeoutMinutes: next.idleTimeoutMinutes }), undefined, done)
-      .then(() => load());
+    void previewSave.save(() => client.updatePreviewSettings(project.id, { image: next.image, egress: next.egress, idleTimeoutMinutes: next.idleTimeoutMinutes }), undefined, done)
+      .then(() => load())
+      .then(() => setPreviewRound((n) => n + 1));
   };
 
   return (
@@ -94,18 +99,19 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, onCount
 
       <SettingsSection title="Branch previews" data-testid="preview-settings">
         {recipes.length === 0 ? <Callout tone="neutral">Previewing a branch needs at least one server. Add one above.</Callout> : null}
+        {previewSave.problem ? <Callout tone="danger">{previewSave.problem}</Callout> : null}
         <SettingRow label="Image" help="The container a preview run starts in. The project’s runner image unless changed here."
           source={previews.image === null ? <SettingSource source="organization" from="the project’s runner" /> : <SettingSource source="project" from="the project’s runner" onReset={canEdit ? () => savePreviews({ image: null }, "Image reset") : undefined} />}>
-          <ImageField value={previews.image} fallback={project.runtimeImage} disabled={!canEdit || busy} onSave={(image) => savePreviews({ image }, "Image saved")} />
+          <ImageField key={previewRound} value={previews.image} fallback={project.runtimeImage} disabled={!canEdit || previewSave.busy} onSave={(image) => savePreviews({ image }, "Image saved")} />
         </SettingRow>
         <SettingRow label="Egress allowlist" help="Hosts a preview run may reach, beyond the repository. Everything else is refused.">
-          <HostChips hosts={previews.egress} disabled={!canEdit || busy} onChange={(egress) => savePreviews({ egress }, "Allowlist saved")} data-testid="preview-egress" />
+          <HostChips hosts={previews.egress} disabled={!canEdit || previewSave.busy} onChange={(egress) => savePreviews({ egress }, "Allowlist saved")} data-testid="preview-egress" />
         </SettingRow>
         <SettingRow label="Idle timeout" help="With no request for this long, the preview run is parked. Starting a server wakes it."
           source={previews.idleTimeoutMinutes !== PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES
             ? <SettingSource source="project" from={orgName} inherited={`${PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES} minutes`} onReset={canEdit ? () => savePreviews({ idleTimeoutMinutes: PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES }, "Idle timeout reset") : undefined} />
             : undefined}>
-          <Select aria-label="Idle timeout" value={String(previews.idleTimeoutMinutes)} disabled={!canEdit || busy}
+          <Select aria-label="Idle timeout" value={String(previews.idleTimeoutMinutes)} disabled={!canEdit || previewSave.busy}
             onValueChange={(v) => savePreviews({ idleTimeoutMinutes: Number(v) }, "Idle timeout saved")}
             options={[...new Set([...IDLE_TIMEOUTS, previews.idleTimeoutMinutes])].sort((a, b) => a - b).map((m) => ({ value: String(m), label: m < 60 ? `${m} minutes` : m === 60 ? "1 hour" : `${m / 60} hours` }))} />
         </SettingRow>
@@ -158,10 +164,9 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, onCount
   );
 }
 
-/** The preview image: typed in place, saved on blur or Enter; empty means the runner's. */
+/** The preview image: typed in place, saved on blur or Enter; empty means the runner's. Keyed by its parent per save, so a refused value goes. */
 function ImageField({ value, fallback, disabled, onSave }: { value: string | null; fallback: string | null; disabled: boolean; onSave: (image: string | null) => void }) {
   const [draft, setDraft] = useState(value ?? "");
-  useEffect(() => setDraft(value ?? ""), [value]);
   const commit = () => {
     const next = draft.trim() || null;
     if (next !== value) onSave(next);
