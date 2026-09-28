@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type HTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import { Button, IconButton } from "../primitives/Button.tsx";
 import { RowMenu } from "../primitives/RowMenu.tsx";
@@ -23,6 +23,20 @@ export interface MarkdownDocumentProps extends Omit<HTMLAttributes<HTMLDivElemen
   readonly variant?: Exclude<MarkdownVariant, "message"> | undefined;
   /** What `{{ }}` offers to insert while editing, with what each is. None: no button. */
   readonly variables?: ReadonlyArray<{ readonly name: string; readonly description: string }> | undefined;
+}
+
+/**
+ * A toolbar's keys: ← and → move between its buttons, Home and End to the
+ * ends, so it is one Tab stop's worth of controls to a keyboard.
+ */
+function moveAlongToolbar(e: KeyboardEvent<HTMLElement>) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
+  const buttons = [...e.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
+  const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
+  if (at === -1) return;
+  e.preventDefault();
+  const next = e.key === "Home" ? 0 : e.key === "End" ? buttons.length - 1 : (at + (e.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length;
+  buttons[next]?.focus();
 }
 
 /**
@@ -192,7 +206,7 @@ export function MarkdownDocument({
         <span className={styles["spacer"]} />
         {!onSave ? null : editing ? (
           <>
-            <span className={styles["tools"]} role="toolbar" aria-label="Formatting">
+            <span className={styles["tools"]} role="toolbar" aria-label="Formatting" onKeyDownCapture={moveAlongToolbar}>
               <IconButton size="sm" icon="heading" label="Heading" onClick={() => format("heading")} data-testid="markdown-heading" />
               <IconButton size="sm" icon="bold" label="Bold" onClick={() => format("bold")} data-testid="markdown-bold" />
               <IconButton size="sm" icon="code" label="Code" onClick={() => format("code")} data-testid="markdown-code" />

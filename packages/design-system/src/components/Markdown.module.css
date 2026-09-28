@@ -106,7 +106,12 @@
   box-shadow: none;
   background: var(--ds-color-hover-wash);
 }
-/* A variable: filled in for each run. The accent's tint, in mono. */
+/* A variable: filled in for each run. The accent's tint, in mono; inside
+   a code span it takes the span's size. */
+.inlineCode .variable {
+  font-size: 1em;
+  padding: 0 0.2em;
+}
 .variable {
   font-family: var(--ds-font-mono);
   font-size: 0.85em;

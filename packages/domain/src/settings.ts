@@ -204,9 +204,9 @@ export function epicState(stored: EpicState | null, taskStatuses: readonly strin
 
 /**
  * What a saved prompt may name as `{{name}}`, filled in for each run by
- * the orchestrator (delivery/prompts.go, promptVariables). A section a
- * prompt places this way is not appended again after it. Anything else in
- * braces is left as written.
+ * the orchestrator (delivery/prompts.go, fill). The task still follows the
+ * prompt in full, however much of it the prompt names. Anything else in
+ * braces is left as written, and the editor does not draw it as a variable.
  */
 export const PROMPT_VARIABLES = [
   { name: "task.title", description: "The task's title." },

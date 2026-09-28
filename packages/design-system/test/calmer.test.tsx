@@ -194,11 +194,16 @@ describe("prompt editing", () => {
   test("a variable goes in at the caret", () => {
     expect(applyFormat("Goal: ", 6, 6, { insert: "{{task.goal}}" })).toEqual({ text: "Goal: {{task.goal}}", start: 19, end: 19 });
   });
-  test("a prompt reads its variables as chips, backticked or not", () => {
-    const h = html(<Markdown source={"Goal: {{task.goal}} on `{{run.branch}}`, `bun test`"} variant="prompt" />);
-    expect(h.match(/title="Filled in for each run: [\w.]+"/g)?.length).toBe(2);
-    expect(text(h)).not.toContain("{{");
+  test("a prompt reads the variables dude fills as chips, and nothing else", () => {
+    const h = html(<Markdown source={"Goal: {{task.goal}} on `{{run.branch}}`, `bun test`, {{task.goals}}"} variant="prompt" />);
+    expect(h.match(/title="Filled in for each run: [\w.]+"/g)).toEqual([
+      'title="Filled in for each run: task.goal"',
+      'title="Filled in for each run: run.branch"',
+    ]);
+    // A backticked variable is still code; a typo stays as the agent reads it.
+    expect(h).toMatch(/<code[^>]*><span[^>]*title="Filled in for each run: run.branch"/);
     expect(h).toContain(">bun test</code>");
+    expect(text(h)).toContain("{{task.goals}}");
   });
 });
 
