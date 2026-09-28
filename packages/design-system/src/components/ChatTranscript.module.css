@@ -20,7 +20,8 @@
   grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: var(--ds-space-12);
-  padding: var(--ds-space-12) var(--ds-space-24);
+  /* On the turns' inset: the session's face sits over theirs. */
+  padding: var(--ds-space-12) var(--ds-space-chat-pad-x);
   flex-shrink: 0;
 }
 .headerMain {
@@ -95,11 +96,12 @@
   flex-shrink: 0;
 }
 
-/* The plan, pinned above the turns: its own chrome band, inset to the
-   transcript's column, so it reads as part of the page, not the header. */
+/* The plan, pinned above the turns: its own chrome band, edge to edge as
+   the turns and tool calls are, its text on their inset. */
 .pinned {
   flex-shrink: 0;
-  padding: 0 var(--ds-space-24) var(--ds-space-4);
+  padding: 0 0 var(--ds-space-4);
+  --plan-pad-x: var(--ds-space-chat-pad-x);
 }
 
 .scroller {
