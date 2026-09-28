@@ -142,6 +142,12 @@ export const EventTypes = {
   // Artifacts
   ArtifactCreated: "artifact.created",
 
+  // Memory (docs/design/memory.md). Payload: `{ memoryId, title, kind? }`.
+  MemoryCreated: "memory.created",
+  MemoryUpdated: "memory.updated",
+  MemoryArchived: "memory.archived",
+  MemoryRestored: "memory.restored",
+
   // Cost
   CostSampled: "cost.sampled",
   BudgetSoftLimitReached: "budget.soft_limit_reached",

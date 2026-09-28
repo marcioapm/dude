@@ -31,10 +31,11 @@ export async function orchestrator(
   path: string,
   body: string = "{}",
   actorId?: string,
+  headers: Record<string, string> = {},
 ): Promise<Response> {
   const res = await call(organizationId, method, path, {
     signal: AbortSignal.timeout(TIMEOUT_MS),
-    headers: { ...(actorId ? { "x-dude-actor": actorId } : {}), "content-type": "application/json" },
+    headers: { ...headers, ...(actorId ? { "x-dude-actor": actorId } : {}), "content-type": "application/json" },
     ...(method === "GET" ? {} : { body: body || "{}" }),
   });
   return new Response(await res.text(), {
