@@ -101,6 +101,11 @@ def test_delivering_from_the_ui_reaches_a_pull_request_and_back(
     # Back to the overview, and the URL says the task again.
     tabs.get_by_role("tab", name="Overview").click()
     expect(page).to_have_url(re.compile(r"#/task/"))
+    # From a session's URL, going to its task (the breadcrumb, Back) is the overview.
+    page.get_by_test_id("phase").nth(1).click()
+    expect(tabs.get_by_role("tab", name="Sessions")).to_have_attribute("aria-selected", "true")
+    page.go_back()
+    expect(tabs.get_by_role("tab", name="Overview")).to_have_attribute("aria-selected", "true")
 
     # A person comments on the forge; the page shows a fixer answering.
     phases_before = page.get_by_test_id("phase").count()
