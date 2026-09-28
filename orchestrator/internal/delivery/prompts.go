@@ -2,6 +2,7 @@ package delivery
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -43,6 +44,36 @@ type PromptInput struct {
 	// What people decided while this work was delivered: agents' questions
 	// and their answers. Part of the task from then on, for every phase.
 	Decisions []Decision
+	// The branch the Run works on, and what it started from: what a saved
+	// prompt's {{run.branch}} and {{run.base_ref}} say.
+	Branch, BaseRef string
+}
+
+// promptVariable matches {{name}} in a saved prompt. The names are
+// @dude/domain's PROMPT_VARIABLES; anything else in braces is left.
+var promptVariable = regexp.MustCompile(`\{\{\s*([\w.]+)\s*\}\}`)
+
+// fill puts the task and the Run into a saved prompt where it names them.
+// The task still follows in full, as every phase frames it: a prompt that
+// names one part of it must not cost the agent the rest.
+func (in PromptInput) fill(prompt string) string {
+	criteria := make([]string, len(in.AcceptanceCriteria))
+	for i, c := range in.AcceptanceCriteria {
+		criteria[i] = "- " + c
+	}
+	values := map[string]string{
+		"task.title":    in.Title,
+		"task.goal":     in.Goal,
+		"task.criteria": strings.Join(criteria, "\n"),
+		"run.branch":    in.Branch,
+		"run.base_ref":  in.BaseRef,
+	}
+	return promptVariable.ReplaceAllStringFunc(prompt, func(m string) string {
+		if v, ok := values[promptVariable.FindStringSubmatch(m)[1]]; ok {
+			return v
+		}
+		return m
+	})
 }
 
 // Decision is a question an agent asked about this work, and a person's
@@ -326,6 +357,9 @@ func Prompt(phase string, in PromptInput) string {
 	add := func(s ...string) { sections = append(sections, s...) }
 
 	lead, tail := in.instructions(phase)
+	for i, s := range lead {
+		lead[i] = in.fill(s)
+	}
 
 	switch phase {
 	case PhaseInvestigate:

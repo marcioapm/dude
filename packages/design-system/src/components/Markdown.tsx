@@ -3,9 +3,10 @@ import { cx } from "../util/cx.ts";
 import { Icon } from "../icons/index.tsx";
 import { outline as buildOutline, parseMarkdown, type Block, type Inline } from "../util/markdown.ts";
 import { DiffView, parseUnifiedDiff } from "./DiffView.tsx";
+import { isPromptVariable } from "@dude/domain";
 import styles from "./Markdown.module.css";
 
-export type MarkdownVariant = "message" | "document";
+export type MarkdownVariant = "message" | "document" | "prompt";
 
 export interface MarkdownProps extends Omit<HTMLAttributes<HTMLDivElement>, "children"> {
   readonly source: string;
@@ -15,7 +16,9 @@ export interface MarkdownProps extends Omit<HTMLAttributes<HTMLDivElement>, "chi
    * `--ds-md-gap` between blocks) once the reply has finished streaming, so
    * the switch happens once rather than when the second block arrives. No
    * outline. `document`: a published artifact read in full. Wider measure,
-   * more air between sections, an optional heading outline.
+   * more air between sections, an optional heading outline. `prompt`: an
+   * agent's instructions, read and edited in settings — UI body size, a
+   * compact rhythm, and `{{variables}}` drawn as chips.
    */
   readonly variant?: MarkdownVariant | undefined;
   /**
@@ -52,10 +55,10 @@ export function Markdown({
 }: MarkdownProps) {
   const blocks = useMemo(() => parseMarkdown(source, { streaming: streaming ?? false }), [source, streaming]);
   const headings = useMemo(() => (outline && variant === "document" ? buildOutline(blocks) : []), [blocks, outline, variant]);
-  const ctx: RenderCtx = { linkTarget, diffs, streaming: streaming === true };
+  const ctx: RenderCtx = { linkTarget, diffs, streaming: streaming === true, variables: variant === "prompt" };
 
   const body = (
-    <div className={cx(styles["root"], variant === "document" ? styles["document"] : styles["message"], variant === "message" && !streaming && blocks.length > 1 && styles["long"], streaming && styles["streaming"], className)} {...rest}>
+    <div className={cx(styles["root"], variant === "message" ? styles["message"] : styles[variant], variant === "message" && !streaming && blocks.length > 1 && styles["long"], streaming && styles["streaming"], className)} {...rest}>
       {blocks.length === 0 && streaming ? (
         <p className={styles["p"]}>
           <Caret />
@@ -86,6 +89,8 @@ interface RenderCtx {
   readonly linkTarget: "_blank" | "_self";
   readonly diffs: boolean;
   readonly streaming: boolean;
+  /** Draw `{{name}}` as a variable chip (prompts). */
+  readonly variables: boolean;
 }
 
 /** The streaming caret. Base style is solid so reduced motion leaves it visible. */
@@ -224,6 +229,26 @@ function CodeBlock({ lang, value, open, ctx, tail }: { readonly lang: string; re
   );
 }
 
+const VARIABLE = /\{\{\s*([\w.]+)\s*\}\}/g;
+
+/**
+ * Text with each `{{name}}` the orchestrator fills in as a chip. Anything
+ * else in braces stays as written — as the agent will read it — so a typo
+ * does not look like a variable.
+ */
+function WithVariables({ text }: { readonly text: string }) {
+  const out: ReactNode[] = [];
+  let at = 0;
+  for (const m of text.matchAll(VARIABLE)) {
+    if (!isPromptVariable(m[0])) continue;
+    if (m.index > at) out.push(text.slice(at, m.index));
+    out.push(<span key={m.index} className={styles["variable"]} title={`Filled in for each run: ${m[1]}`}>{m[1]}</span>);
+    at = m.index + m[0].length;
+  }
+  if (at < text.length) out.push(text.slice(at));
+  return <>{out}</>;
+}
+
 function Inlines({ nodes, ctx }: { readonly nodes: readonly Inline[]; readonly ctx: RenderCtx }) {
   return (
     <>
@@ -237,9 +262,9 @@ function Inlines({ nodes, ctx }: { readonly nodes: readonly Inline[]; readonly c
 function InlineNode({ node, ctx }: { readonly node: Inline; readonly ctx: RenderCtx }) {
   switch (node.t) {
     case "text":
-      return <>{node.v}</>;
+      return ctx.variables ? <WithVariables text={node.v} /> : <>{node.v}</>;
     case "code":
-      return <code className={styles["inlineCode"]}>{node.v}</code>;
+      return <code className={styles["inlineCode"]}>{ctx.variables ? <WithVariables text={node.v} /> : node.v}</code>;
     case "strong":
       return (
         <strong className={styles["strong"]}>

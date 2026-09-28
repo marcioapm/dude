@@ -179,3 +179,39 @@ func TestACustomPromptStillCommitsAndRecords(t *testing.T) {
 		}
 	}
 }
+
+// A saved prompt's variables are filled in where it names them, and the
+// task still follows in full, however much of it the prompt names.
+func TestASavedPromptsVariablesAreFilledAndTheTaskStillFollows(t *testing.T) {
+	in := PromptInput{
+		Title: "Greet people", Goal: "Say hello to whoever arrives.",
+		AcceptanceCriteria: []string{"It greets", "It has a test"},
+		Decisions:          []Decision{{Question: "Which language?", Answer: "English"}},
+		Branch:             "dude/tsk_1/run-1", BaseRef: "main",
+	}
+	org := "**Goal:** {{task.goal}}\n\nWork on `{{ run.branch }}`, from `{{run.base_ref}}`. Keep {{unknown.thing}} as it is."
+	in.OrgPrompt = &org
+	for _, phase := range []string{PhaseImplement, PhaseReview, PhaseFix, PhaseSimplify, PhaseTest} {
+		got := Prompt(phase, in)
+		for _, want := range []string{
+			"**Goal:** Say hello to whoever arrives.",
+			"Work on `dude/tsk_1/run-1`, from `main`.",
+			"Keep {{unknown.thing}} as it is.",
+			// The prompt named the goal only: the rest of the task is not lost.
+			"Greet people", "Acceptance criteria:\n- It greets\n- It has a test",
+			"Q: Which language?\n  A: English",
+		} {
+			if !strings.Contains(got, want) {
+				t.Errorf("%s: prompt lacks %q:\n%s", phase, want, got)
+			}
+		}
+	}
+	if got := Prompt(PhaseReview, in); !strings.Contains(got, "The task under review:\n\nGreet people") {
+		t.Errorf("the review lost its framing of the task:\n%s", got)
+	}
+	// A task's own text is never read for variables: filling is one pass.
+	in.Goal = "Mention {{run.branch}} literally."
+	if got := Prompt(PhaseImplement, in); !strings.Contains(got, "**Goal:** Mention {{run.branch}} literally.") {
+		t.Errorf("a goal's braces were expanded:\n%s", got)
+	}
+}
