@@ -37,9 +37,16 @@ import type {
   ProjectPromptMode,
   PromptHistory,
   PromptRole,
+  AddServer,
+  PreviewSettings,
+  Recipe,
+  RecipeInput,
+  RunServer,
+  TaskServers,
   SettingsPatch,
   SettingsResponse,
 } from "@dude/domain";
+import type { ServerLogLine } from "@dude/design-system";
 
 // ---------------------------------------------------------------------------
 // Wire types
@@ -649,6 +656,67 @@ export class ApiClient {
   /** Answer the question an agent stopped on; the answer starts its next turn. */
   answer(questionId: string, text: string): Promise<{ id: string; status: "answered" }> {
     return this.#request("POST", `/v1/questions/${questionId}/answer`, { text });
+  }
+
+  // -- servers: a project's recipes, and what a run serves ---------------
+
+  /** The project's server recipes, and how its branch previews run. */
+  projectServers(projectId: string): Promise<{ servers: Recipe[]; previews: PreviewSettings }> {
+    return this.#request("GET", `/v1/projects/${encodeURIComponent(projectId)}/servers`);
+  }
+
+  /** Create or replace a recipe; `name` in the path is the one being replaced, the body's may differ (a rename). */
+  putProjectServer(projectId: string, name: string, recipe: RecipeInput): Promise<Recipe> {
+    return this.#request("PUT", `/v1/projects/${encodeURIComponent(projectId)}/servers/${encodeURIComponent(name)}`, recipe);
+  }
+
+  removeProjectServer(projectId: string, name: string): Promise<void> {
+    return this.#request("DELETE", `/v1/projects/${encodeURIComponent(projectId)}/servers/${encodeURIComponent(name)}`);
+  }
+
+  updatePreviewSettings(projectId: string, settings: PreviewSettings): Promise<PreviewSettings> {
+    return this.#request("PUT", `/v1/projects/${encodeURIComponent(projectId)}/preview-settings`, settings);
+  }
+
+  /** The run serving a task — its agent's, else its branch preview — and that run's servers. */
+  taskServers(taskId: string): Promise<TaskServers> {
+    return this.#request("GET", `/v1/tasks/${encodeURIComponent(taskId)}/servers`);
+  }
+
+  runServers(runId: string): Promise<TaskServers> {
+    return this.#request("GET", `/v1/runs/${encodeURIComponent(runId)}/servers`);
+  }
+
+  /** Add a server to a run: one of the project's recipes by name, or a port and command just for this run. */
+  addRunServer(runId: string, input: AddServer): Promise<RunServer> {
+    return this.#request("POST", `/v1/runs/${encodeURIComponent(runId)}/servers`, input);
+  }
+
+  serverAction(runId: string, name: string, action: "start" | "stop" | "restart"): Promise<RunServer> {
+    return this.#request("POST", `/v1/runs/${encodeURIComponent(runId)}/servers/${encodeURIComponent(name)}/${action}`, {});
+  }
+
+  removeRunServer(runId: string, name: string): Promise<void> {
+    return this.#request("DELETE", `/v1/runs/${encodeURIComponent(runId)}/servers/${encodeURIComponent(name)}`);
+  }
+
+  serversAll(runId: string, action: "start-all" | "stop-all"): Promise<TaskServers> {
+    return this.#request("POST", `/v1/runs/${encodeURIComponent(runId)}/servers/${action}`, {});
+  }
+
+  /** A server's output, current and earlier placements, newest last; `tail` up to 10 000 lines. */
+  serverLog(runId: string, name: string, tail = 200): Promise<{ lines: ServerLogLine[] }> {
+    return this.#request("GET", `/v1/runs/${encodeURIComponent(runId)}/servers/${encodeURIComponent(name)}/log${qs({ tail })}`);
+  }
+
+  /** Bring the project's servers up on a run of their own, at the task's branch: no agent, just the checkout. 409 `preview_running` while one is live. */
+  startPreview(taskId: string): Promise<TaskServers> {
+    return this.#request("POST", `/v1/tasks/${encodeURIComponent(taskId)}/preview`, {});
+  }
+
+  /** Stop the task's branch preview; 404 when none is live. */
+  stopPreview(taskId: string): Promise<TaskServers> {
+    return this.#request("DELETE", `/v1/tasks/${encodeURIComponent(taskId)}/preview`);
   }
 
   /**
