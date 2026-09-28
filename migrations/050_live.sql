@@ -3,8 +3,8 @@
 --
 -- A Run's live diff is its checkout against the commit it started from,
 -- read by the orchestrator through lux's exec while the agent works (after
--- each edit it reports, every so often while it works, and once more
--- before dude stops its container). Only the latest is kept, one row per
+-- each edit it reports, and every so often while it works), and left by
+-- lux's beforeStop hook, as the final diff, whenever lux stops it. Only the latest is kept, one row per
 -- Run: it is a view of now. The ledger's run.diff.updated events carry
 -- only a summary of each (paths and counts), so hunks never fill the
 -- ledger. It stays after the Run ends, as the last thing the checkout held.
@@ -20,7 +20,7 @@ CREATE TABLE run_diffs (
   -- last is dropped before it is parsed, even by an orchestrator that just
   -- started.
   checksum        text NOT NULL,
-  -- Read just before dude stopped the container, rather than while it ran.
+  -- Left by the beforeStop hook as the container stopped, not read live.
   final           boolean NOT NULL DEFAULT false,
   updated_at      timestamptz NOT NULL DEFAULT now()
 );

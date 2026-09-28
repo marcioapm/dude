@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // A Run's live diff, as the API serves it (GET /v1/runs/:id/diff) and the
@@ -230,11 +232,13 @@ func num(n int) *int { return &n }
 // it was. Output stops at 8 MB.
 //
 // $1 is where the diff goes: "-" for standard output (the live read,
-// through exec), or "artifacts" for $LUX_ARTIFACTS/.dude-final-diff/ (the
-// beforeStop hook, collected when the container exits). Then, per
-// repository: its name, its checkout, and the commit it started from — a
-// sha, or the branch lux checked out, whose first reflog entry is where it
-// started (lux checks a branch out with checkout -B, which records it).
+// through exec), or "artifacts" for $LUX_ARTIFACTS/.dude-final-diff/, one
+// <repository>.patch each (the beforeStop hook, collected when the
+// container exits; together, in name order, they are what a live read
+// prints). Then, per repository: its name, its checkout, and the commit it
+// started from — a sha, or the branch lux checked out, whose first reflog
+// entry is where it started (lux checks a branch out with checkout -B,
+// which records it).
 const diffScript = `set -u
 dest=$1; shift
 base_of() {
@@ -263,18 +267,34 @@ if [ "$dest" = - ]; then
   diffs "$@" | head -c 8388608
 else
   out=${LUX_ARTIFACTS:?}/` + finalDiffDir + `
-  mkdir -p "$out" && diffs "$@" | head -c 8388608 > "$out/.diff.tmp" && mv "$out/.diff.tmp" "$out/` + finalDiffFile + `"
+  mkdir -p "$out" || exit 3
+  while [ $# -ge 3 ]; do
+    diffs "$1" "$2" "$3" | head -c 8388608 > "$out/.$1.tmp" && mv "$out/.$1.tmp" "$out/$1.patch"
+    shift 3
+  done
 fi`
 
-// Where the beforeStop hook leaves the final diff, under $LUX_ARTIFACTS:
-// dude's own, never listed as a file for people.
-const (
-	finalDiffDir  = ".dude-final-diff"
-	finalDiffFile = "diff.patch"
-)
+// Where the beforeStop hook leaves the final diff, under $LUX_ARTIFACTS: a
+// <repository>.patch each, headed by its base like a live read's section.
+// dude's own: nothing under it is listed as a file for people.
+const finalDiffDir = ".dude-final-diff"
 
-// FinalDiffPath is the final diff's artifact path, as lux lists it.
-const FinalDiffPath = "/.lux/artifacts/" + finalDiffDir + "/" + finalDiffFile
+// FinalDiffPrefix is where the final diff's artifacts are, as lux lists them.
+const FinalDiffPrefix = lux.PublishedPrefix + finalDiffDir + "/"
+
+// finalDiffRepo is the repository a final diff artifact is for, if it is
+// one of the patches the hook leaves (not a file it had not finished).
+func finalDiffRepo(path string) (string, bool) {
+	name, ok := strings.CutPrefix(path, FinalDiffPrefix)
+	if !ok {
+		return "", false
+	}
+	repo, ok := strings.CutSuffix(name, ".patch")
+	if !ok || repo == "" || strings.Contains(repo, "/") {
+		return "", false
+	}
+	return repo, true
+}
 
 // diffCommand is the command that prints (dest "-") or saves (dest
 // "artifacts") the diff of each repository, given as name → the commit or

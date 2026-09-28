@@ -126,17 +126,25 @@ func (a *Artifacts) collect(ctx context.Context, r dueRun) error {
 	}
 	// The final diff the beforeStop hook left is dude's own: recorded as
 	// the Run's diff, never listed as a file for people. The latest exit's.
-	var final *lux.Artifact
+	var final []lux.Artifact
 	files := ready[:0]
 	for _, art := range ready {
-		if art.Path != FinalDiffPath {
+		if !strings.HasPrefix(art.Path, FinalDiffPrefix) {
 			files = append(files, art)
-		} else if final == nil || art.Epoch > final.Epoch {
-			final = &art
+			continue
+		}
+		if _, ok := finalDiffRepo(art.Path); !ok {
+			continue // not one of its patches: a file it had not finished
+		}
+		switch {
+		case len(final) == 0 || art.Epoch > final[0].Epoch:
+			final = []lux.Artifact{art}
+		case art.Epoch == final[0].Epoch:
+			final = append(final, art)
 		}
 	}
-	if final != nil {
-		if err := a.recordFinalDiff(ctx, r, *final); err != nil {
+	if len(final) > 0 {
+		if err := a.recordFinalDiff(ctx, r, final); err != nil {
 			return a.later(ctx, r, err)
 		}
 	}
