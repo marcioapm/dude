@@ -13,7 +13,7 @@
 
 import { z } from "zod";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { newId } from "@dude/domain";
+import { newId, prDisplayState, type PullRequest } from "@dude/domain";
 import { withOrg, withoutTenant } from "../../db/client.ts";
 import { badRequest, HttpError, json, notFound, parseBody, unauthorized } from "../http.ts";
 import { kickOrchestrator, orchestrator } from "../../orchestrator/client.ts";
@@ -25,9 +25,29 @@ export const PR_SELECT = `
   (SELECT name FROM repositories r WHERE r.id = pull_requests.repository_id) AS "repositoryName",
   number, node_id AS "nodeId", url, head_branch AS "headBranch",
   base_branch AS "baseBranch", head_sha AS "headSha", title, body,
-  state, checks, review,
+  state, checks_json AS "checks", checks AS "checkState", review, reviews_json AS "reviews",
+  mergeable_state AS "mergeable", behind_by AS "behindBy", unresolved_threads AS "unresolvedThreads",
   created_at AS "createdAt", updated_at AS "updatedAt",
   merged_at AS "mergedAt", closed_at AS "closedAt"`;
+
+/**
+ * A pull request as the API returns it: with the one state it shows as.
+ * Decided on dude's rollup of the checks, not the list: a new head CI has
+ * yet to report on, or checks the token cannot read, are running, not
+ * absent.
+ */
+export function withDisplay(pr: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...pr,
+    display: prDisplayState({
+      state: pr.state as PullRequest["state"],
+      checks: pr.checkState as PullRequest["checkState"],
+      review: pr.review as PullRequest["review"],
+      mergeable: pr.mergeable as PullRequest["mergeable"],
+      unresolvedThreads: pr.unresolvedThreads as number,
+    }),
+  };
+}
 
 async function listPullRequests(ctx: RequestContext): Promise<Response> {
   const taskId = ctx.url.searchParams.get("taskId");
@@ -42,7 +62,7 @@ async function listPullRequests(ctx: RequestContext): Promise<Response> {
       LIMIT 200`) as Array<Record<string, unknown>>;
   });
 
-  return json({ pullRequests });
+  return json({ pullRequests: pullRequests.map(withDisplay) });
 }
 
 // ---------------------------------------------------------------------------
@@ -347,7 +367,35 @@ async function noteDelivery(organizationId: string, failure: string | null): Pro
   await withoutTenant(({ sql }) => sql`SELECT note_webhook_delivery(${organizationId}, ${failure})`);
 }
 
+/**
+ * What a person does to a pull request through dude, as GitHub's page
+ * would let them: merge it, update its branch, re-run its failed checks, or
+ * ask someone to review it. The orchestrator does it on GitHub, records who
+ * asked, and reads the pull request back.
+ */
+function pullRequestAction(action: "merge" | "update-branch" | "rerun-failed" | "reviewers") {
+  return async (ctx: RequestContext): Promise<Response> =>
+    orchestrator(ctx.principal.organizationId, "POST", `/internal/pull-requests/${encodeURIComponent(ctx.params.id!)}/${action}`,
+      await ctx.request.text(), ctx.principal.apiKeyId);
+}
+
+/**
+ * How dude behaves on GitHub for the organization — who may wake a fixer,
+ * how pull requests open and merge, what happens when main moves ahead,
+ * the fix budget. The orchestrator owns their meaning and defaults.
+ */
+async function getGithubSettings(ctx: RequestContext): Promise<Response> {
+  return orchestrator(ctx.principal.organizationId, "GET", "/internal/github-settings");
+}
+
+async function updateGithubSettings(ctx: RequestContext): Promise<Response> {
+  return orchestrator(ctx.principal.organizationId, "PATCH", "/internal/github-settings", await ctx.request.text(),
+    ctx.principal.apiKeyId);
+}
+
 export function registerPullRequestRoutes(router: Router): void {
+  router.get("/v1/forge/settings", getGithubSettings);
+  router.patch("/v1/forge/settings", updateGithubSettings);
   router.get("/v1/forge/webhook-secret", revealWebhookSecret);
   router.post("/v1/forge/webhook-secret/rotate", rotateWebhookSecret);
   router.post("/v1/forge/webhooks/register", registerWebhooks);
@@ -355,5 +403,9 @@ export function registerPullRequestRoutes(router: Router): void {
   router.get("/v1/forge/credential", getCredential);
   router.post("/v1/forge/credential/verify", verifyCredential);
   router.get("/v1/pull-requests", listPullRequests);
+  router.post("/v1/pull-requests/:id/merge", pullRequestAction("merge"));
+  router.post("/v1/pull-requests/:id/update-branch", pullRequestAction("update-branch"));
+  router.post("/v1/pull-requests/:id/rerun-failed", pullRequestAction("rerun-failed"));
+  router.post("/v1/pull-requests/:id/reviewers", pullRequestAction("reviewers"));
   router.publicRoute("POST", "/v1/webhooks/github/:org", receiveWebhook);
 }

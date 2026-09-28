@@ -523,8 +523,11 @@ func (s *Syncer) process(ctx context.Context, org, event string, payload json.Ra
 
 	var prIDs []string
 	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		// A closed pull request too, when GitHub says something happened to
+		// it (reopened): otherwise its reopening would never be read.
 		rows, err := tx.Query(ctx, `SELECT pr.id, r.url FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
-			WHERE pr.state IN ('draft', 'open') AND (pr.number = $1 OR pr.head_sha = $2)`, number, sha)
+			WHERE (pr.state IN ('draft', 'open') OR $3 AND pr.state = 'closed') AND (pr.number = $1 OR pr.head_sha = $2)`,
+			number, sha, event == "pull_request")
 		if err != nil {
 			return err
 		}

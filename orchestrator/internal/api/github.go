@@ -24,10 +24,69 @@ import (
 func (s *Server) githubRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /internal/webhooks/register", s.auth(s.registerWebhooks))
 	mux.Handle("POST /internal/pull-requests/{id}/{action}", s.auth(s.pullRequestAction))
-	mux.Handle("GET /internal/github-defaults", s.auth(func(w http.ResponseWriter, r *http.Request, _ string) error {
-		write(w, http.StatusOK, forge.DefaultSettings())
-		return nil
-	}))
+	mux.Handle("GET /internal/github-settings", s.auth(s.githubSettings))
+	mux.Handle("PATCH /internal/github-settings", s.auth(s.updateGithubSettings))
+}
+
+// githubSettings is how dude behaves on GitHub for the organization, every
+// value filled in: what is stored, over the defaults.
+func (s *Server) githubSettings(w http.ResponseWriter, r *http.Request, org string) error {
+	raw, err := s.storedGithubSettings(r.Context(), org)
+	if err != nil {
+		return err
+	}
+	write(w, http.StatusOK, forge.ReadSettings(raw))
+	return nil
+}
+
+func (s *Server) storedGithubSettings(ctx context.Context, org string) ([]byte, error) {
+	var raw []byte
+	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT settings FROM forge_credentials WHERE forge = 'github'`).Scan(&raw)
+	})
+	if db.IsNotFound(err) {
+		return nil, fail(http.StatusConflict, "not_connected", "GitHub is not connected: add a token first")
+	}
+	return raw, err
+}
+
+// updateGithubSettings changes the settings named, and only those. A value
+// dude does not know is refused, not stored: ReadSettings would read it as
+// the default, and a person would think it saved.
+func (s *Server) updateGithubSettings(w http.ResponseWriter, r *http.Request, org string) error {
+	var change map[string]json.RawMessage
+	if err := read(r, &change); err != nil {
+		return err
+	}
+	raw, err := s.storedGithubSettings(r.Context(), org)
+	if err != nil {
+		return err
+	}
+	stored := map[string]json.RawMessage{}
+	_ = json.Unmarshal(raw, &stored)
+	known := map[string]bool{}
+	for _, k := range forge.SettingKeys() {
+		known[k] = true
+	}
+	for k, v := range change {
+		if !known[k] {
+			return fail(http.StatusBadRequest, "bad_request", "no GitHub setting %q", k)
+		}
+		stored[k] = v
+	}
+	merged, _ := json.Marshal(stored)
+	settings, err := forge.ParseSettings(merged)
+	if err != nil {
+		return fail(http.StatusBadRequest, "bad_request", "%s", err.Error())
+	}
+	if err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+		_, err := tx.Exec(r.Context(), `UPDATE forge_credentials SET settings = $1::jsonb, updated_at = now() WHERE forge = 'github'`, merged)
+		return err
+	}); err != nil {
+		return err
+	}
+	write(w, http.StatusOK, settings)
+	return nil
 }
 
 func (s *Server) forge(ctx context.Context, org string) (*forge.GitHub, error) {

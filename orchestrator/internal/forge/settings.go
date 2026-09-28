@@ -2,6 +2,8 @@ package forge
 
 import (
 	"encoding/json"
+	"fmt"
+	"reflect"
 	"slices"
 	"time"
 )
@@ -28,7 +30,8 @@ type Settings struct {
 	// merges cleanly (else ask), or only "tell" the task's people.
 	WhenBehind string `json:"whenBehind"`
 	// Fix rounds a pull request may have in all, across review rounds,
-	// before its owner decides how it goes on.
+	// before its owner decides how it goes on; 0, no limit but each
+	// round's.
 	FixRoundsPerPR int `json:"fixRoundsPerPr"`
 	// Minutes checks may stay pending on a head before a person is asked.
 	CIStuckMinutes int `json:"ciStuckMinutes"`
@@ -76,6 +79,45 @@ func ReadSettings(raw []byte) Settings {
 		s.ReviewLogins = []string{}
 	}
 	return s
+}
+
+// SettingKeys are the settings' names as stored.
+func SettingKeys() []string {
+	t := reflect.TypeFor[Settings]()
+	out := make([]string, t.NumField())
+	for i := range out {
+		out[i] = t.Field(i).Tag.Get("json")
+	}
+	return out
+}
+
+// ParseSettings reads settings a person is saving: strictly, so a value
+// dude does not know is an error rather than, as ReadSettings would have
+// it, the default.
+func ParseSettings(raw []byte) (Settings, error) {
+	var s Settings
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return Settings{}, fmt.Errorf("settings: %v", err)
+	}
+	read := ReadSettings(raw)
+	for _, c := range []struct {
+		name, got, kept string
+	}{
+		{"whoCanWake", s.WhoCanWake, read.WhoCanWake}, {"openAs", s.OpenAs, read.OpenAs},
+		{"requestReviewFrom", s.RequestReviewFrom, read.RequestReviewFrom},
+		{"mergeMethod", s.MergeMethod, read.MergeMethod}, {"whenBehind", s.WhenBehind, read.WhenBehind},
+	} {
+		if c.got != "" && c.got != c.kept {
+			return Settings{}, fmt.Errorf("%s cannot be %q", c.name, c.got)
+		}
+	}
+	if s.FixRoundsPerPR < 0 || s.FixRoundsPerPR > 50 {
+		return Settings{}, fmt.Errorf("fixRoundsPerPr must be from 0 (no limit) to 50")
+	}
+	if s.CIStuckMinutes < 0 {
+		return Settings{}, fmt.Errorf("ciStuckMinutes must be positive")
+	}
+	return read, nil
 }
 
 // CIStuck is how long checks may stay pending on a head.

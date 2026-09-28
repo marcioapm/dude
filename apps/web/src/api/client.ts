@@ -25,6 +25,7 @@ import type {
   PauseMode,
   Person,
   Project,
+  PersistedEvent,
   Run,
   Session,
   Task,
@@ -68,7 +69,38 @@ export type ForgeConnection =
       apiBaseUrl: string | null;
       webhookPath: string;
       updatedAt: string;
+      webhook: WebhookHealth;
     };
+
+/** Whether GitHub's webhooks reach dude, and each repository's hook. */
+export interface WebhookHealth {
+  lastDeliveryAt: string | null;
+  lastFailureAt: string | null;
+  lastFailure: string | null;
+  failedToday: number;
+  rotatedAt: string | null;
+  publicUrl: string | null;
+  /** Deliveries dude has yet to act on, retrying. */
+  retrying: number;
+  lastError: string | null;
+  repositories: Array<{ id: string; name: string; url: string; projectName: string; hookId: string | null;
+    registeredAt: string | null; error: string | null }>;
+}
+
+/** How dude behaves on GitHub for the organization. */
+export interface GithubSettings {
+  whoCanWake: "collaborators" | "members" | "anyone";
+  openAs: "ready" | "draft";
+  requestReviewFrom: "nobody" | "codeowners" | "logins";
+  reviewLogins: string[];
+  mergeMethod: "squash" | "merge" | "rebase";
+  whenBehind: "update" | "tell";
+  /** 0: no limit but each round's. */
+  fixRoundsPerPr: number;
+  ciStuckMinutes: number;
+}
+
+export type MergeMethod = GithubSettings["mergeMethod"];
 
 /** What a task asks for, and where it sits. */
 export interface TaskFields {
@@ -237,6 +269,11 @@ export class ApiClient {
     return this.#request("GET", `/v1/pull-requests${qs({ taskId })}`);
   }
 
+  /** A scope's events, oldest first, from a cursor: for who did what, and a task's activity. */
+  events(params: { runId?: string; taskId?: string; after?: number; limit?: number }): Promise<{ events: PersistedEvent[]; nextCursor: number }> {
+    return this.#request("GET", `/v1/events${qs(params)}`);
+  }
+
   listArtifacts(taskId: string): Promise<{ artifacts: Artifact[] }> {
     return this.#request("GET", `/v1/artifacts${qs({ taskId })}`);
   }
@@ -269,6 +306,45 @@ export class ApiClient {
 
   connectForge(token: string, apiBaseUrl?: string): Promise<unknown> {
     return this.#request("POST", "/v1/forge/credential", { auth: "pat", secret: token, ...(apiBaseUrl ? { apiBaseUrl } : {}) });
+  }
+
+  githubSettings(): Promise<GithubSettings> {
+    return this.#request("GET", "/v1/forge/settings");
+  }
+
+  updateGithubSettings(changes: Partial<GithubSettings>): Promise<GithubSettings> {
+    return this.#request("PATCH", "/v1/forge/settings", changes);
+  }
+
+  /** Register dude's webhook on every repository (or one), delivering to `url`. */
+  registerWebhooks(url: string): Promise<{ repositories: Array<{ name: string; slug: string; hookId?: string; error?: string }> }> {
+    return this.#request("POST", "/v1/forge/webhooks/register", { url });
+  }
+
+  revealWebhookSecret(): Promise<{ secret: string }> {
+    return this.#request("GET", "/v1/forge/webhook-secret");
+  }
+
+  rotateWebhookSecret(url?: string): Promise<{ secret: string }> {
+    return this.#request("POST", "/v1/forge/webhook-secret/rotate", url ? { url } : {});
+  }
+
+  /** Merge a pull request on GitHub, when dude would call it ready. */
+  mergePullRequest(id: string, method?: MergeMethod): Promise<unknown> {
+    return this.#request("POST", `/v1/pull-requests/${id}/merge`, method ? { method } : {});
+  }
+
+  /** Merge its base into its branch on GitHub, as "Update branch" does. */
+  updatePullRequestBranch(id: string): Promise<unknown> {
+    return this.#request("POST", `/v1/pull-requests/${id}/update-branch`, {});
+  }
+
+  rerunFailedChecks(id: string): Promise<{ rerun: number }> {
+    return this.#request("POST", `/v1/pull-requests/${id}/rerun-failed`, {});
+  }
+
+  requestReview(id: string, logins: string[]): Promise<unknown> {
+    return this.#request("POST", `/v1/pull-requests/${id}/reviewers`, { logins });
   }
 
   getProject(id: string): Promise<ProjectDetail> {
