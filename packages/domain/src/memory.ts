@@ -15,9 +15,9 @@ export interface MemoryRef {
   readonly type: "task" | "epic" | "project" | "run";
   readonly id: string;
   /** A task's key (TEXT-12), an epic's title, a project's name. */
-  readonly label?: string;
+  readonly label?: string | undefined;
   /** A task's status. */
-  readonly status?: string;
+  readonly status?: string | undefined;
 }
 
 export interface MemoryAuthor {
