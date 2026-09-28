@@ -15,12 +15,14 @@ import { deleteObject, getObject, putObject } from "../storage.ts";
 /** Browsers resize before uploading, so this is a guard, not a quality setting. */
 export const PHOTO_MAX_BYTES = 512 * 1024;
 
-const TYPES: Record<string, (b: Uint8Array) => boolean> = {
-  "image/png": (b) => b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47,
-  "image/jpeg": (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
-  "image/gif": (b) => b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46,
-  "image/webp": (b) => b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45,
+/** Each image type: the key's extension, and whether bytes are one. */
+const TYPES: Record<string, { ext: string; is: (b: Uint8Array) => boolean }> = {
+  "image/png": { ext: "png", is: (b) => b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 },
+  "image/jpeg": { ext: "jpg", is: (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
+  "image/gif": { ext: "gif", is: (b) => b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 },
+  "image/webp": { ext: "webp", is: (b) => b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45 },
 };
+const TYPE_OF_EXT = new Map(Object.entries(TYPES).map(([type, { ext }]) => [ext, type]));
 
 const tooBig = () => badRequest(`an image is at most ${PHOTO_MAX_BYTES / 1024} KB`);
 
@@ -68,13 +70,14 @@ export async function replaceImage<T>(
   record: (image: { key: string; token: string }) => Promise<{ result: T; old: string | null | undefined }>,
 ): Promise<T> {
   const type = (request.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
-  const looksLike = TYPES[type];
-  if (!looksLike) throw badRequest("an image is image/png, image/jpeg, image/webp or image/gif");
+  const known = TYPES[type];
+  if (!known) throw badRequest("an image is image/png, image/jpeg, image/webp or image/gif");
   const bytes = await readCapped(request);
   if (bytes.length === 0) throw badRequest("no image in the request");
-  if (!looksLike(bytes)) throw badRequest(`the body is not ${type}`);
+  if (!known.is(bytes)) throw badRequest(`the body is not ${type}`);
   const token = randomBytes(12).toString("base64url");
-  const key = `${prefix}/${token}`;
+  // The type rides in the key, so serving it is one read.
+  const key = `${prefix}/${token}.${known.ext}`;
   await putObject(key, bytes, type);
   let recorded: { result: T; old: string | null | undefined };
   try {
@@ -89,12 +92,13 @@ export async function replaceImage<T>(
 
 /** An image for an `<img>`, from the key its token resolved to. */
 export async function serveImage(key: string | null | undefined): Promise<Response> {
-  const found = key ? await getObject(key) : null;
-  if (!found) throw notFound("no such image");
-  return new Response(found.bytes, {
+  const type = TYPE_OF_EXT.get(key?.split(".").pop() ?? "");
+  const bytes = key && type ? await getObject(key) : null;
+  if (!bytes || !type) throw notFound("no such image");
+  return new Response(bytes, {
     headers: {
-      // Stored only after its bytes matched an image type (storeImage).
-      "content-type": found.type,
+      // Stored only after its bytes matched this type (replaceImage).
+      "content-type": type,
       // The key and token change with the image, so a URL's image never does.
       "cache-control": "private, max-age=31536000, immutable",
       "x-content-type-options": "nosniff",
