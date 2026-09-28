@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -83,6 +84,18 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("DUDE_IDLE_AFTER: %w", err)
 	}
+	// How often a working agent's diff is read besides after its edits.
+	diffEvery, err := time.ParseDuration(env("DUDE_DIFF_EVERY", "15s"))
+	if err != nil {
+		return fmt.Errorf("DUDE_DIFF_EVERY: %w", err)
+	}
+	// What an hour of a lux host costs, recorded with each Run so its
+	// machine time has a price. One rate for every host until lux reports
+	// each host's own.
+	machineRate, err := strconv.ParseFloat(env("DUDE_MACHINE_USD_PER_HOUR", "0.20"), 64)
+	if err != nil || machineRate < 0 {
+		return fmt.Errorf("DUDE_MACHINE_USD_PER_HOUR: not a rate: %q", os.Getenv("DUDE_MACHINE_USD_PER_HOUR"))
+	}
 	host, _ := os.Hostname()
 
 	forges := forge.Resolver{DB: database}
@@ -98,6 +111,7 @@ func run(log *slog.Logger) error {
 		DB: database, Lux: luxClient,
 		Forges: forges, Agent: agent, Log: log,
 		ParkAfter: parkAfter, IdleAfter: idleAfter,
+		DiffEvery: diffEvery, MachineUSDPerHour: machineRate,
 	}
 	defer syncer.Stop()
 	pullRequests := &prs.Syncer{DB: database, Forges: forges, Signal: signalWorkflow, Log: log,

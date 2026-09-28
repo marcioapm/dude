@@ -59,6 +59,8 @@ export type IconName =
   | "file"
   | "image"
   | "download"
+  | "play"
+  | "archive"
   | "folder"
   | "terminal"
   | "dollar"
@@ -146,6 +148,10 @@ const PATHS: Record<IconName, { d: string; fill?: true; dashed?: true }> = {
   image: { d: "M3 3.5h10a.5.5 0 0 1 .5.5v8a.5.5 0 0 1-.5.5H3a.5.5 0 0 1-.5-.5V4a.5.5 0 0 1 .5-.5ZM2.5 11l3.5-3.5 2.5 2.5 2-2 3 3M10.5 6.5h.01" },
   /* An arrow into a tray: get the file. */
   download: { d: "M8 2.5v7M5 6.5l3 3 3-3M2.5 10.5v1.5a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-1.5" },
+  /* A triangle pointing on: a recording to watch. */
+  play: { d: "M5 3.5v9l7-4.5-7-4.5Z" },
+  /* A box with a zipper down it: everything, in one download. */
+  archive: { d: "M4 2.5h8v11H4ZM8 2.5v1M8 5v1M8 7.5v1M7 9.5h2v2H7Z" },
   folder: { d: "M2.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h4.5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-7.5Z" },
   terminal: { d: "M3.5 4.5l3.5 3.5-3.5 3.5M8.5 11.5h4" },
   dollar: { d: "M8 2v12M10.75 5.25c0-1.1-1.2-1.75-2.75-1.75S5.25 4.15 5.25 5.25 6.5 7 8 7s2.75.65 2.75 1.75S9.55 10.5 8 10.5s-2.75-.65-2.75-1.75" },

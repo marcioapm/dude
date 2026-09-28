@@ -46,6 +46,28 @@ const RequestModel = "fake/request"
 // in the turn the resume starts.
 const WaitModel = "fake/wait"
 
+// LiveModel's implementer writes files into its checkout without committing
+// them, and keeps working (never finishing its turn): what the live diff
+// shows while an agent works. It saves notes and a screenshot for people as
+// it goes, so a pause collects them; resumed, it finishes, saving its notes
+// again (a second version) and committing.
+const LiveModel = "fake/live"
+
+// LiveNotes is what LiveModel's implementer saves: while working, then when
+// it finishes.
+var LiveNotes = [2]string{"# Notes\n\nStill working.", "# Notes\n\nFinished."}
+
+// LiveScreenshot is a 1×1 PNG LiveModel's implementer saves as it works.
+const LiveScreenshot = "\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89" +
+	"\x00\x00\x00\rIDATx\x9cc\xf8\xcf\xc0\xf0\x1f\x00\x05\x00\x01\xff\x89\x99=\x1d\x00\x00\x00\x00IEND\xaeB`\x82"
+
+// LiveEdits are what LiveModel's implementer writes: a new file and a
+// change to the README the test repositories start with.
+var LiveEdits = map[string]string{
+	"LIVE.md":   "# Live\n\nWritten while the agent works.\n",
+	"README.md": "# target\n\nChanged while the agent works.\n",
+}
+
 // AskModel's implementer asks a person first, with dude's ask_person tool,
 // and does its work in the turn the answer starts.
 const AskModel = "fake/ask"
@@ -94,6 +116,15 @@ type Step struct {
 	Publish map[string]string
 	// dude tools it calls before replying, [tool, JSON arguments].
 	Tools [][2]string
+	// Files it writes into its checkout and does not commit, path →
+	// content.
+	Edits map[string]string
+	// Files it saves for people while it works (into $LUX_ARTIFACTS),
+	// before its first turn hangs: collected when its container stops.
+	PublishNow map[string]string
+	// Files it writes into its checkout in the turn it finishes, after
+	// a Hang is woken: a change a person watching can see arrive.
+	FinishEdits map[string]string
 }
 
 // Notes is what the implementer publishes: a short account of its work, as
@@ -105,6 +136,15 @@ const Notes = "NOTES.md"
 func For(phase, model, runID string, fixed bool) Step {
 	if model == HangModel {
 		return Step{Hang: true}
+	}
+	if model == LiveModel && phase == "implement" {
+		return Step{Hang: true, Edits: LiveEdits,
+			PublishNow: map[string]string{Notes: LiveNotes[0], "screenshot.png": LiveScreenshot,
+				"coverage.html": `<!doctype html><title>Coverage</title><script>parent.document.title = "pwned"</script><p>87%</p>`},
+			Publish:     map[string]string{Notes: LiveNotes[1]},
+			FinishEdits: map[string]string{"DONE.md": "Finished while you watched.\n"},
+			Commit:      map[string]string{"*:FACTORY.md": "Written by run " + runID}, Message: "Add FACTORY.md for " + runID,
+			Reply: "Implemented it."}
 	}
 	switch phase {
 	case "implement":
@@ -154,6 +194,15 @@ func For(phase, model, runID string, fixed bool) Step {
 func Script(phase, model, runID string) string {
 	if model == HangModel {
 		return "sleep 3600"
+	}
+	if model == LiveModel && phase == "implement" {
+		var b strings.Builder
+		for _, path := range []string{"LIVE.md", "README.md"} {
+			// lux-fake writes one line; the file's line breaks stay escaped.
+			fmt.Fprintf(&b, "write %s %s\n", path, strings.ReplaceAll(LiveEdits[path], "\n", " "))
+		}
+		b.WriteString("sleep 3600")
+		return b.String()
 	}
 	if phase == "review" {
 		// Built in a file and read back, because separate reply lines would

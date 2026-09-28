@@ -124,21 +124,51 @@ func (a *Artifacts) collect(ctx context.Context, r dueRun) error {
 		}
 		ready = append(ready, art)
 	}
-	return a.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		for _, art := range ready {
+	// The final diff the beforeStop hook left is dude's own: recorded as
+	// the Run's diff, never listed as a file for people. The latest exit's.
+	var final []lux.Artifact
+	files := ready[:0]
+	for _, art := range ready {
+		if !strings.HasPrefix(art.Path, FinalDiffPrefix) {
+			files = append(files, art)
+			continue
+		}
+		if _, ok := finalDiffRepo(art.Path); !ok {
+			continue // not one of its patches: a file it had not finished
+		}
+		switch {
+		case len(final) == 0 || art.Epoch > final[0].Epoch:
+			final = []lux.Artifact{art}
+		case art.Epoch == final[0].Epoch:
+			final = append(final, art)
+		}
+	}
+	// Never at the expense of the files: a diff lux refuses for good (gone,
+	// expired) is left out, and one it could not serve just now is asked
+	// for again while the files are recorded.
+	var finalErr error
+	if len(final) > 0 {
+		finalErr = a.recordFinalDiff(ctx, r, final)
+		if e, ok := lux.AsError(finalErr); ok && e.Status >= 400 && e.Status < 500 {
+			finalErr = nil
+		}
+	}
+	err = a.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		for _, art := range files {
 			if err := a.record(ctx, tx, r, art); err != nil {
 				return err
 			}
 		}
 		// Only if nothing marked it due again meanwhile — a resume and a
 		// second exit — so that exit is collected too.
-		if !waiting || r.Overdue {
+		if !waiting && finalErr == nil || r.Overdue {
 			_, err := tx.Exec(ctx, `UPDATE runs SET artifacts_due_at = NULL, artifacts_next_at = NULL
 				WHERE id = $1 AND artifacts_due_at = $2`, r.ID, r.DueAt)
 			return err
 		}
 		return a.askAgainLater(ctx, tx, r)
 	})
+	return errors.Join(err, finalErr)
 }
 
 // settled: lux has reported every exit so far, so the list of what the Run
