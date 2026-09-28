@@ -74,6 +74,13 @@ export const EventTypes = {
    * `GET /v1/runs/:id/diff`.
    */
   RunDiffUpdated: "run.diff.updated",
+  /**
+   * A task's servers, or its branch preview, changed: lux reported a
+   * server.* event on the Run, or the preview moved on (created, submitted,
+   * lux state, parked, waking, resumed, stopped, failed). Read
+   * `GET /v1/tasks/:taskId/servers` again. Payload: `ServersChanged`.
+   */
+  ServersChanged: "servers.changed",
 
   // Worker / capacity
   WorkerRegistered: "worker.registered",
