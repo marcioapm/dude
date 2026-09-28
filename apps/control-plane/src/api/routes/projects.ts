@@ -8,6 +8,7 @@
 import { z } from "zod";
 import { agentModelsSchema, deliveryPolicySchema, newId, EventTypes } from "@dude/domain";
 import { withOrg } from "../../db/client.ts";
+import { requireProjectEditor } from "../access.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { conflict, json, notFound, parseBody } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
@@ -167,5 +168,10 @@ export function registerProjectRoutes(router: Router): void {
   router.post("/v1/projects", createProject);
   router.get("/v1/projects", listProjects);
   router.get("/v1/projects/:id", getProject);
-  router.patch("/v1/projects/:id", updateProject);
+  // A project's name, runtime image, models and delivery policy: the same
+  // settings its settings route guards, so the same people may change them.
+  router.patch("/v1/projects/:id", async (ctx) => {
+    await requireProjectEditor(ctx, ctx.params.id!);
+    return updateProject(ctx);
+  });
 }

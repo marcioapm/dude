@@ -87,6 +87,8 @@ $$;
 REVOKE ALL ON FUNCTION note_webhook_delivery(text, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION note_webhook_delivery(text, text) TO dude_app;
 
+-- The pull request sync reads the organization's GitHub settings.
+GRANT SELECT ON forge_credentials TO dude_sweeper;
 
 -- ---------------------------------------------------------------------------
 -- Who may wake a fixer

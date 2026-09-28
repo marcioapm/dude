@@ -25,7 +25,7 @@ export function webhookSummary(h: WebhookHealth): { ok: boolean; text: string } 
   return { ok, text: parts.join(" · ") };
 }
 
-export function WebhookCard({ client, health, onChanged }: { client: ApiClient; health: WebhookHealth; onChanged: () => void }) {
+export function WebhookCard({ client, health, onChanged, admin }: { client: ApiClient; health: WebhookHealth; onChanged: () => void; admin: boolean }) {
   const { busy, problem, save } = useSave();
   const [secret, setSecret] = useState<string | null>(null);
   const summary = webhookSummary(health);
@@ -52,7 +52,7 @@ export function WebhookCard({ client, health, onChanged }: { client: ApiClient; 
       {secret ? <Input label="Webhook secret" mono readOnly value={secret} data-testid="webhook-secret"
         hint="For a hook added by hand on GitHub: content type application/json." /> : null}
       {problem ? <Callout tone="danger">{problem}</Callout> : null}
-      <div className="webhookActions">
+      {admin ? <div className="webhookActions">
         <Button variant="secondary" disabled={busy} data-testid="webhook-register"
           onClick={() => void save(() => client.registerWebhooks(origin), onChanged, "Webhooks registered")}>
           Register on every repository
@@ -64,12 +64,13 @@ export function WebhookCard({ client, health, onChanged }: { client: ApiClient; 
           onClick={() => void save(async () => setSecret((await client.rotateWebhookSecret(origin)).secret), onChanged, "Secret rotated; the old one works for a day")}>
           Rotate secret
         </Button>
-      </div>
+      </div> : null}
     </SettingsSection>
   );
 }
 
-export function GithubBehaviour({ client }: { client: ApiClient }) {
+/** How dude behaves on GitHub; a member sees it, only an admin changes it. */
+export function GithubBehaviour({ client, admin }: { client: ApiClient; admin: boolean }) {
   const [saved, setSaved] = useState<GithubSettings | null>(null);
   const [draft, setDraft] = useState<GithubSettings | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
@@ -95,6 +96,7 @@ export function GithubBehaviour({ client }: { client: ApiClient }) {
         setDraft(next);
       }, undefined, "GitHub settings saved");
     }}>
+      <fieldset disabled={!admin} className="plainFieldset">
       <SettingsSection title="Pull requests">
         <SettingRow label="Open pull requests as">
           <Segmented label="Open pull requests as" value={draft.openAs} onChange={(v) => set("openAs", v)}
@@ -115,12 +117,12 @@ export function GithubBehaviour({ client }: { client: ApiClient }) {
       </SettingsSection>
       <SettingsSection title="Reacting to GitHub">
         <SettingRow label="Who can wake a fixer" help="A comment from anyone else is shown on the task, not acted on.">
-          <Select aria-label="Who can wake a fixer" value={draft.whoCanWake} onValueChange={(v) => set("whoCanWake", v)}
+          <Select disabled={!admin} aria-label="Who can wake a fixer" value={draft.whoCanWake} onValueChange={(v) => set("whoCanWake", v)}
             options={[{ value: "collaborators", label: "Collaborators with write access" },
               { value: "members", label: "Organisation members only" }, { value: "anyone", label: "Anyone who can comment" }]} />
         </SettingRow>
         <SettingRow label="When main moves ahead">
-          <Select aria-label="When main moves ahead" value={draft.whenBehind} onValueChange={(v) => set("whenBehind", v)}
+          <Select disabled={!admin} aria-label="When main moves ahead" value={draft.whenBehind} onValueChange={(v) => set("whenBehind", v)}
             options={[{ value: "update", label: "Update the branch if it merges cleanly, else ask" },
               { value: "tell", label: "Only tell the task's people" }]} />
         </SettingRow>
@@ -133,10 +135,13 @@ export function GithubBehaviour({ client }: { client: ApiClient }) {
             onChange={(e) => set("ciStuckMinutes", Number(e.target.value))} />
         </SettingRow>
       </SettingsSection>
+      </fieldset>
       {saveProblem ? <Callout tone="danger">{saveProblem}</Callout> : null}
-      <div>
-        <Button type="submit" variant="primary" disabled={busy || changed.length === 0} data-testid="github-save">Save</Button>
-      </div>
+      {admin ? (
+        <div>
+          <Button type="submit" variant="primary" disabled={busy || changed.length === 0} data-testid="github-save">Save</Button>
+        </div>
+      ) : null}
     </form>
   );
 }
