@@ -252,15 +252,21 @@ func insertDirective(ctx context.Context, tx pgx.Tx, org, runID string, ri runIn
 
 // ownerOnly refuses anyone but a task's owner a decision that is theirs
 // to make — answering its agents, letting them at a repository — naming
-// who can. A task with no owner (from before there were owners, or whose
+// who can. The owner is a person, with any number of keys: any of theirs
+// will do. A task with no owner (from before there were owners, or whose
 // owner's key is gone or revoked: they can no longer sign in) is anyone's.
 func ownerOnly(ctx context.Context, tx pgx.Tx, taskID, actor, verb string) error {
 	var ownerID, ownerName *string
-	if err := tx.QueryRow(ctx, `SELECT k.id, k.name FROM tasks t
-		LEFT JOIN api_keys k ON k.id = t.owner_key_id AND k.revoked_at IS NULL WHERE t.id = $1`, taskID).Scan(&ownerID, &ownerName); err != nil {
+	var mine bool
+	if err := tx.QueryRow(ctx, `SELECT k.id, COALESCE(p.name, k.name),
+			COALESCE(k.id = $2 OR k.person_id = (SELECT a.person_id FROM api_keys a WHERE a.id = $2), false)
+		FROM tasks t
+		LEFT JOIN api_keys k ON k.id = t.owner_key_id AND k.revoked_at IS NULL
+		LEFT JOIN people p ON p.id = k.person_id
+		WHERE t.id = $1`, taskID, actor).Scan(&ownerID, &ownerName, &mine); err != nil {
 		return err
 	}
-	if ownerID == nil || *ownerID == actor {
+	if ownerID == nil || mine {
 		return nil
 	}
 	name := *ownerID
