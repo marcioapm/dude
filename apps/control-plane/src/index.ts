@@ -24,6 +24,7 @@ import { registerPeopleRoutes } from "./api/routes/people.ts";
 import { registerMetricsRoutes } from "./api/routes/metrics.ts";
 import { registerSettingsRoutes } from "./api/routes/settings.ts";
 import { registerProjectPageRoutes } from "./api/routes/projectPage.ts";
+import { registerLiveRoutes } from "./api/routes/live.ts";
 import { webApp } from "./api/web.ts";
 import { version } from "./build.ts";
 import { closePool, getPool } from "./db/client.ts";
@@ -55,6 +56,7 @@ export function buildRouter(webDir = process.env.DUDE_WEB_DIR): Router {
   registerMetricsRoutes(router);
   registerSettingsRoutes(router);
   registerProjectPageRoutes(router);
+  registerLiveRoutes(router);
 
   if (webDir) router.fallback(webApp(webDir));
 

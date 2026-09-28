@@ -71,6 +71,16 @@ type Behaviour struct {
 	// arguments. Called as lux's service proxy would, with the header the
 	// spec's services name, so dude sees an agent in its container.
 	CallTools [][2]string
+	// Files the agent writes into its checkout, path → content, each with
+	// an edit tool call, in its first turn: uncommitted work, which exec
+	// sees and the live diff shows. Paths are in the first repository.
+	Edits map[string]string
+	// Files written into $LUX_ARTIFACTS in its first turn, as it works —
+	// before a Hang — rather than as it finishes (Publish).
+	PublishNow map[string]string
+	// Files written into its checkout in the turn that finishes, after a
+	// Hang is woken.
+	FinishEdits map[string]string
 }
 
 type Run struct {
@@ -90,12 +100,20 @@ type Run struct {
 	Interrupted int
 	// Forgotten: lux lost it. Open streams drop, as lux's connection would.
 	Forgotten bool
+	// What was asked of it, in order: "exec", "stop", "cancel".
+	Calls []string
 
 	// Starts of the Run, as lux lists them; the last is the current one.
 	placements []*placement
 	artifacts  []*artifact
 	// Written into $LUX_ARTIFACTS by the agent's turns and not yet collected.
 	published map[string]string
+
+	// Its checkout, a real git clone made when first needed: the
+	// container's /workspace.
+	workspace string
+	// Edit tool calls made, so each has an id of its own.
+	edits int
 
 	busy     bool
 	woken    bool
@@ -169,6 +187,9 @@ type Server struct {
 	RepoFor func(url string) string
 	// Key is the API key the fake accepts.
 	Key string
+	// Workspaces is where each Run's checkout is made; "" is the system's
+	// temporary directory.
+	Workspaces string
 }
 
 // New serves a fake lux. With decide nil, every Run plays dude's scripted
@@ -206,7 +227,8 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 	}
 	// Every phase plans and looks around first, as an agent does.
 	return Behaviour{Reply: step.Reply, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask,
-		Publish: published, Tools: []string{"todowrite", "read"}, CallTools: step.Tools}
+		Publish: published, Tools: []string{"todowrite", "read"}, CallTools: step.Tools, Edits: step.Edits, PublishNow: step.PublishNow,
+		FinishEdits: step.FinishEdits}
 }
 
 // Runs returns every Run submitted, in order.
@@ -218,6 +240,16 @@ func (s *Server) Runs() []*Run {
 		out = append(out, s.runs[fmt.Sprintf("lrun_%d", i)])
 	}
 	return out
+}
+
+// CallsOf is what was asked of a Run, in order: "exec", "stop", "cancel".
+func (s *Server) CallsOf(id string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		return slices.Clone(run.Calls)
+	}
+	return nil
 }
 
 // Crash ends a Run's agent as a dead container would.
@@ -253,6 +285,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/runs/{id}/resume", s.resume)
 	mux.HandleFunc("GET /v1/runs/{id}/artifacts", s.listArtifacts)
 	mux.HandleFunc("GET /v1/artifacts/{aid}", s.downloadArtifact)
+	mux.HandleFunc("GET /v1/runs/{id}/exec", s.exec)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+s.Key {
 			writeErr(w, 401, "unauthorized", "invalid API key")
@@ -361,6 +394,13 @@ func (s *Server) turn(run *Run) {
 		for _, c := range b.CallTools {
 			s.callTool(run, c[0], c[1])
 		}
+		s.edit(run, b.Edits)
+		for name, content := range b.PublishNow {
+			if run.published == nil {
+				run.published = map[string]string{}
+			}
+			run.published[name] = content
+		}
 	}
 	if asking {
 		s.callTool(run, "ask_person", b.Ask)
@@ -371,6 +411,9 @@ func (s *Server) turn(run *Run) {
 	if b.Crash {
 		s.setState(run, "failed")
 		return
+	}
+	if run.woken {
+		s.edit(run, b.FinishEdits)
 	}
 	reply := b.Reply
 	if asking {
@@ -471,7 +514,10 @@ func chunks(s string, n int) []string {
 }
 
 // Callers hold s.mu.
-func (s *Server) setState(run *Run, state string) {
+func (s *Server) setState(run *Run, state string) { s.setStateWith(run, state, "") }
+
+// setStateWith records a state with lux's reason for it. Callers hold s.mu.
+func (s *Server) setStateWith(run *Run, state, reason string) {
 	run.State = state
 	if state == "running" && (len(run.placements) == 0 || run.placements[len(run.placements)-1].Epoch != run.Epoch) {
 		now := time.Now()
@@ -480,7 +526,11 @@ func (s *Server) setState(run *Run, state string) {
 	if lux.Terminal(state) {
 		s.exited(run)
 	}
-	s.luxEvent(run, "state", map[string]any{"state": state})
+	data := map[string]any{"state": state}
+	if reason != "" {
+		data["reason"] = reason
+	}
+	s.luxEvent(run, "state", data)
 }
 
 // exited is the container going away: lux collects what the agent put in
@@ -818,9 +868,11 @@ func (s *Server) stop(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	run.Calls = append(run.Calls, "stop")
 	run.Stopped++
 	run.busy = false
 	if run.State == "running" {
+		s.beforeStop(run)
 		// As lux does: stopping at once, stopped once the container has
 		// gone — a moment later, on the stream.
 		s.setState(run, "stopping")
@@ -843,7 +895,9 @@ func (s *Server) cancel(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	run.Calls = append(run.Calls, "cancel")
 	run.Cancelled = true
+	s.beforeStop(run)
 	if run.State != "cancelled" {
 		s.setState(run, "cancelled")
 	}

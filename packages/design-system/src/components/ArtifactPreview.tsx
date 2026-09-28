@@ -11,7 +11,11 @@ export interface ArtifactPreviewProps extends Omit<HTMLAttributes<HTMLDivElement
   readonly name: string;
   /** The content, for text kinds. The app fetches it. */
   readonly text?: string | undefined;
-  /** Where the bytes are, for images. */
+  /**
+   * Where the bytes are, for images and video; for HTML, a URL to show in
+   * a sandboxed frame (scripts off, an opaque origin), which the server
+   * also serves sandboxed.
+   */
   readonly url?: string | undefined;
   readonly loading?: boolean | undefined;
   readonly error?: string | undefined;
@@ -61,6 +65,21 @@ export function ArtifactPreview({ contentType, name, text, url, loading, error, 
         <div className={styles["checker"]}>
           <img src={url} alt={name} className={styles["image"]} loading="lazy" />
         </div>
+      </div>
+    );
+  }
+  if (kind === "video" && url) {
+    return (
+      <div className={cx(styles["root"], className)} {...rest}>
+        <video src={url} controls preload="metadata" className={styles["video"]} aria-label={name} />
+      </div>
+    );
+  }
+  if (kind === "html" && url) {
+    // sandbox with no allowances: no scripts, no forms, no same origin.
+    return (
+      <div className={cx(styles["root"], className)} {...rest}>
+        <iframe src={url} sandbox="" title={name} className={styles["frame"]} referrerPolicy="no-referrer" />
       </div>
     );
   }

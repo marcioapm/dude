@@ -149,6 +149,15 @@ func workdir(repos []specRepo) string {
 	return workspaceDir
 }
 
+// repoRefs is where each repository starts, by name.
+func repoRefs(repos []specRepo) map[string]string {
+	refs := make(map[string]string, len(repos))
+	for _, r := range repos {
+		refs[r.Name] = r.Ref
+	}
+	return refs
+}
+
 // RepoPath is where a repository is checked out in the container.
 func RepoPath(name string) string { return workspaceDir + "/repos/" + name }
 
@@ -177,6 +186,9 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 			Adapter: "opencode",
 			Prompt:  in.Prompt,
 			Workdir: workdir(in.Repos),
+			// On every stop lux can see coming, the checkout's final diff
+			// (livediff.go).
+			BeforeStop: beforeStop(repoRefs(in.Repos)),
 		},
 		Volumes: []lux.Volume{
 			// The checkout, and the agent's session transcript: the two
