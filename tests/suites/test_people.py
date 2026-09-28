@@ -218,3 +218,140 @@ def test_keys_from_before_people_are_people(env, org: dict):
     assert me["name"] == "Provisioned" and me["role"] == "member"
     rows = query(env.owner_dsn, "SELECT count(*) AS n FROM people WHERE organization_id = %s", (org["id"],))
     assert rows[0]["n"] == 2
+
+
+# ---------------------------------------------------------------------------
+# In the browser
+# ---------------------------------------------------------------------------
+
+import pytest  # noqa: E402
+from playwright.sync_api import Page, expect  # noqa: E402
+
+
+def _sign_in(page: Page, web_url: str, api_key: str) -> None:
+    page.goto(web_url)
+    page.evaluate("localStorage.clear()")
+    page.goto(web_url)
+    page.fill('input[type="password"]', api_key)
+    page.click('button[type="submit"]')
+    expect(page.get_by_test_id("shell")).to_be_visible()
+
+
+@pytest.mark.ui
+def test_waiting_on_you_is_split_by_whose_it_is(
+    page: Page, web_url: str, client: ApiClient, env, forge_project: dict, console_errors: list
+):
+    """Bo's agent asks Bo. Bo sees it as his, loud; the first person sees it
+    under Waiting on others, quietly, and takes it over — then it is theirs."""
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
+        "implementer": {"model": "fake/ask"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
+    bo, bo_client = _invite(client, env, "Bo")
+    task = bo_client.create_task(forge_project["id"], "Bo's question")
+    assert bo_client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+    wait_until(lambda: client.get("/v1/questions", params={"taskId": task["id"]}).json()["questions"], timeout=30,
+               message="the agent never asked")
+
+    # Bo: his, in the sidebar's Needs you and the inbox's own list.
+    _sign_in(page, web_url, bo_client.api_key)
+    expect(page.get_by_role("region", name="Needs you")).to_contain_text("Bo's question")
+    page.goto(f"{web_url}#/waiting")
+    expect(page.get_by_test_id("inbox-yours")).to_contain_text("Bo's question")
+    expect(page.get_by_test_id("inbox-others")).to_have_count(0)
+
+    # The first person: not theirs — calm, under Waiting on others.
+    _sign_in(page, web_url, client.api_key)
+    expect(page.get_by_test_id("waiting-on-others")).to_contain_text("1")
+    expect(page.get_by_role("region", name="Needs you")).to_have_count(0)
+    page.get_by_test_id("waiting-on-others").click()
+    others = page.get_by_test_id("inbox-others")
+    expect(others).to_contain_text("Bo's question")
+    expect(others).to_contain_text("waiting for Bo")
+    expect(page.get_by_test_id("inbox-yours")).to_have_count(0)
+
+    others.get_by_test_id("take-over").click()
+    expect(page.get_by_test_id("inbox-yours")).to_contain_text("Bo's question")
+    expect(page.get_by_test_id("inbox-others")).to_have_count(0)
+    after = client.get(f"/v1/tasks/{task['id']}").json()
+    assert [p["name"] for p in after["people"]] == ["e2e user", "Bo"]
+    assert console_errors == []
+
+
+@pytest.mark.ui
+def test_online_row_and_profile_band(page: Page, web_url: str, client: ApiClient, env, console_errors: list):
+    _invite(client, env, "Ana")
+    ana_client = ApiClient(env.control_plane_url, client.post("/v1/people", {"name": "Cy", "email": "cy@acme.dev"}).json()["key"])
+    ana_client.get("/v1/me")  # Cy is here now.
+    _sign_in(page, web_url, client.api_key)
+    online = page.get_by_test_id("online")
+    # You and Cy; Ana was never seen.
+    expect(online).to_have_attribute("aria-label", "Online: e2e user, Cy")
+    band = page.get_by_test_id("my-settings-button")
+    expect(band).to_contain_text("e2e user")
+    band.click()
+    expect(page.get_by_test_id("my-settings")).to_be_visible()
+    assert console_errors == []
+
+
+@pytest.mark.ui
+def test_your_profile_and_keys_in_your_settings(page: Page, web_url: str, client: ApiClient, env, console_errors: list):
+    _sign_in(page, web_url, client.api_key)
+    page.get_by_test_id("my-settings-button").click()
+    page.get_by_test_id("profile-name").fill("Ana Ribeiro")
+    page.get_by_test_id("profile-save").click()
+    expect(page.get_by_test_id("my-settings-button")).to_contain_text("Ana Ribeiro")
+
+    # A photo, resized in the browser, is your face everywhere.
+    png = bytes.fromhex("89504e470d0a1a0a0000000d4948445200000002000000020802000000fdd49a730000001049444154789c63f8cfc000440c100a001fee03fd8b5f14d40000000049454e44ae426082")
+    page.get_by_test_id("photo-file").set_input_files({"name": "me.png", "mimeType": "image/png", "buffer": png})
+    expect(page.get_by_test_id("my-settings-button").locator("img")).to_have_count(1)
+    assert client.get("/v1/me").json()["person"]["photoUrl"].startswith("/v1/people/")
+
+    # A new key, shown once; revoked, it stops working.
+    page.get_by_test_id("key-new").click()
+    page.get_by_test_id("key-name").fill("Laptop CLI")
+    page.get_by_test_id("key-create").click()
+    secret = page.get_by_test_id("key-secret").input_value()
+    assert ApiClient(env.control_plane_url, secret).get("/v1/me").status_code == 200
+    page.get_by_test_id("key-done").click()
+    row = page.locator('[data-testid="key-row"][data-key-name="Laptop CLI"]')
+    row.get_by_test_id("key-revoke").click()
+    page.get_by_test_id("key-revoke-confirm").click()
+    expect(row).to_have_count(0)
+    assert ApiClient(env.control_plane_url, secret).get("/v1/me").status_code == 401
+    assert console_errors == []
+
+
+@pytest.mark.ui
+def test_an_admin_manages_members(page: Page, web_url: str, client: ApiClient, env, console_errors: list):
+    _sign_in(page, web_url, client.api_key)
+    page.get_by_test_id("org-settings-button").click()
+    members = page.get_by_test_id("members")
+    expect(members.get_by_test_id("member")).to_have_count(1)
+
+    page.get_by_test_id("invite").click()
+    page.get_by_test_id("invite-name").fill("Dee Marsh")
+    page.get_by_test_id("invite-email").fill("dee@acme.dev")
+    page.get_by_test_id("invite-submit").click()
+    secret = page.get_by_test_id("key-secret").input_value()
+    dee = ApiClient(env.control_plane_url, secret)
+    assert dee.get("/v1/me").json()["person"]["name"] == "Dee Marsh"
+    page.get_by_test_id("key-done").click()
+
+    row = members.locator('[data-member="Dee Marsh"]')
+    row.get_by_role("combobox", name="Role of Dee Marsh").click()
+    page.get_by_role("option", name="Admin").click()
+    wait_until(lambda: dee.get("/v1/me").json()["person"]["role"] == "admin", timeout=10, message="role not changed")
+
+    row.get_by_test_id("member-remove").click()
+    page.get_by_test_id("member-remove-confirm").click()
+    expect(row).to_have_count(0)
+    assert dee.get("/v1/me").status_code == 401
+
+    # A member sees the list, and nothing to manage it with.
+    _, cy = _invite(client, env, "Cy")
+    _sign_in(page, web_url, cy.api_key)
+    page.get_by_test_id("org-settings-button").click()
+    expect(page.get_by_test_id("member")).to_have_count(2)
+    expect(page.get_by_test_id("invite")).to_have_count(0)
+    expect(page.get_by_test_id("member-remove")).to_have_count(0)
+    assert console_errors == []

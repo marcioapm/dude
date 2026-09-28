@@ -96,6 +96,8 @@ export interface HumanTurn {
   /** Steering interrupts; an answer unblocks. They read differently. */
   intent: Extract<HumanIntent, "steer" | "answer">;
   text: string;
+  /** Who: the person the ledger's key resolves to, when it does. */
+  by: string | undefined;
   at: string;
   /** When the agent took it. A steer is queued until then (null); an answer is delivered as given. */
   deliveredAt: string | null;
@@ -448,6 +450,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           id: event.eventId,
           intent: "steer",
           text: String(payload.text ?? ""),
+          by: event.actor.name,
           at: event.occurredAt,
           deliveredAt: null,
         };
@@ -486,6 +489,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           id: event.eventId,
           intent: "answer",
           text: String(payload.answer ?? ""),
+          by: event.actor.name,
           at: event.occurredAt,
           deliveredAt: typeof payload.directiveId === "string" ? null : event.occurredAt,
         };

@@ -20,10 +20,16 @@ import {
   PageHeader,
   Spinner,
 } from "@dude/design-system/primitives";
-import type { ApiClient, ForgeConnection } from "../api/client.ts";
+import type { ApiClient, ForgeConnection, Member } from "../api/client.ts";
+import { MembersSection } from "./MembersSection.tsx";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
 
-export function OrganizationSettingsScreen({ client }: { client: ApiClient }) {
+export function OrganizationSettingsScreen({ client, me, onPeopleChanged }: {
+  client: ApiClient;
+  /** You: admins manage the members. */
+  me: Member | null;
+  onPeopleChanged: () => void;
+}) {
   const [connection, setConnection] = useState<ForgeConnection | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
@@ -66,7 +72,8 @@ export function OrganizationSettingsScreen({ client }: { client: ApiClient }) {
   return (
     <Page data-testid="org-settings">
       <PageHeader breadcrumb={<Breadcrumb items={[{ id: "org", label: "Organization" }]} />} title="Settings"
-        description="For every project: where pull requests are opened." />
+        description="For every project: who is in it, and where pull requests are opened." />
+      <MembersSection client={client} me={me} onChanged={onPeopleChanged} />
       <Card>
         <CardHeader
           title="GitHub"

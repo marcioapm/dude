@@ -103,16 +103,21 @@ export function useReloadOnEvents(
   options: Omit<UseEventStreamOptions, "limit">,
   reload: () => void,
   everyMs = 300,
+  /** Sees each event first; returning true means it needs no reload (presence). */
+  onEvent?: (event: PersistedEvent) => boolean,
 ): void {
   // Only whether something arrived matters, so the stream keeps almost
   // nothing.
   const { events } = useEventStream({ ...options, limit: 1, live: true });
   const latest = useRef(reload);
   latest.current = reload;
+  const handle = useRef(onEvent);
+  handle.current = onEvent;
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
-    if (events.length === 0 || timer.current !== undefined) return;
+    const event = events[0];
+    if (!event || (handle.current?.(event) ?? false) || timer.current !== undefined) return;
     timer.current = setTimeout(() => {
       timer.current = undefined;
       latest.current();

@@ -422,6 +422,7 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
         <ChatMessage
           key={turn.id}
           role="human"
+          name={turn.by}
           intent={turn.intent}
           content={turn.text}
           startedAt={turn.at}

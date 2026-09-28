@@ -52,18 +52,20 @@ export interface ProfileBandProps extends Omit<HTMLAttributes<HTMLElement>, "onC
   readonly children?: ReactNode;
   /** At the end of your row: sign out. */
   readonly actions?: ReactNode;
+  /** For tests: the open button's `data-testid`. */
+  readonly openTestId?: string | undefined;
 }
 
 /**
  * The foot of the sidebar: you, by face and name — a way to your settings
  * — on a shade of its own, apart from the tree above it.
  */
-export function ProfileBand({ person, detail, onOpen, children, actions, className, ...rest }: ProfileBandProps) {
+export function ProfileBand({ person, detail, onOpen, children, actions, openTestId, className, ...rest }: ProfileBandProps) {
   return (
     <footer className={cx(styles["band"], className)} {...rest}>
       {children}
       <div className={styles["me"]}>
-        <button type="button" className={styles["meButton"]} onClick={onOpen} aria-label={`Your settings — ${person.name}`} data-testid="profile-band">
+        <button type="button" className={styles["meButton"]} onClick={onOpen} aria-label={`Your settings — ${person.name}`} data-testid={openTestId}>
           <HumanAvatar person={person} size="lg" aria-hidden />
           <span className={styles["who"]}>
             <span className={styles["name"]}>{person.name}</span>

@@ -48,6 +48,8 @@ export interface SidebarProps extends Omit<HTMLAttributes<HTMLElement>, "onSelec
   readonly headerActions?: ReactNode;
   /** Below the tree: the signed-in person, connection state. */
   readonly footer?: ReactNode;
+  /** The very bottom, unwrapped: a `ProfileBand`, which brings its own shade. */
+  readonly band?: ReactNode;
   /** Data has not arrived yet. Skeleton rows instead of "no projects". */
   readonly loading?: boolean | undefined;
   /** Controlled search text. Uncontrolled when omitted. */
@@ -113,6 +115,7 @@ export function Sidebar({
   title,
   headerActions,
   footer,
+  band,
   loading,
   query,
   onQueryChange,
@@ -303,6 +306,7 @@ export function Sidebar({
       </ScrollArea>
 
       {footer ? <footer className={styles["footer"]}>{footer}</footer> : null}
+      {band}
     </aside>
   );
   if (!collapsible) return aside;
