@@ -100,11 +100,15 @@ export function withPullRequests(projects: NavProject[], prs: readonly PullReque
 
 const MINE = "dude.tree.mine";
 
-/** An agent at work: what it says and does, its plan, diff and spend. None of it is in the tree. */
+/**
+ * An agent at work: what it says and does, its plan and diff. None of it is
+ * in the tree. What it spends is (a card's, a lane's, an epic's cost), so a
+ * finished model request and a cost sample still reload.
+ */
 const QUIET_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.AgentMessage, EventTypes.AgentThought, EventTypes.ToolCalled, EventTypes.ToolCompleted,
-  EventTypes.ModelRequestStarted, EventTypes.ModelRequestCompleted, EventTypes.PromptDelivered,
-  EventTypes.PlanUpdated, EventTypes.RunDiffUpdated, EventTypes.CostSampled, EventTypes.WorkerHeartbeat,
+  EventTypes.ModelRequestStarted, EventTypes.PromptDelivered, EventTypes.PlanUpdated,
+  EventTypes.RunDiffUpdated, EventTypes.WorkerHeartbeat,
 ]);
 
 export function App({ client, onSignOut, onKeyRefused }: AppProps) {
@@ -167,8 +171,8 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
     void load();
   }, [load]);
 
-  // Someone seen is presence, and an agent at work (its words, tools, plan,
-  // diff, spend) changes nothing the tree shows: no reload for either.
+  // Someone seen is presence, and an agent's words, tools, plan and diff
+  // change nothing the tree shows: no reload for either.
   const stream = useReloadOnEvents({ client, all: true }, () => void load(), 400,
     (e) => people.seen(e) || QUIET_EVENTS.has(e.eventType));
 

@@ -28,11 +28,10 @@ describe("raw values", () => {
 });
 
 describe("pointer", () => {
-  const STATIC = new Set(["packages/design-system/src/components/Sidebar.module.css .attentionHeadStatic"]);
   for (const path of stylesheets()) {
     test(`${path} never takes the pointer away from something clickable`, () => {
       const bad = declarations(readFileSync(`${ROOT}/${path}`, "utf8"), /^cursor$/)
-        .filter(([selector, , value]) => value === "default" && !STATIC.has(`${path} ${selector}`))
+        .filter(([, , value]) => value === "default")
         .map(([selector]) => selector);
       expect(bad).toEqual([]);
     });
