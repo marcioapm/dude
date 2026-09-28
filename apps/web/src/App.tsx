@@ -337,28 +337,30 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         }
       />
     );
-  } else if (selected?.kind === "task") {
+  } else if (selected?.kind === "task" || ((selected?.kind === "session" || selected?.kind === "run") && locate(projects, selected.id))) {
+    // A session opens on its task's page, beside the task's other sessions.
+    const taskId = selected.kind === "task" ? selected.id : locate(projects, selected.id)!.item.id;
     flush = true;
     main = (
       <TaskScreen
-        key={selected.id}
+        key={taskId}
         client={client}
-        taskId={selected.id}
+        taskId={taskId}
+        runId={selected.kind === "task" ? undefined : selected.id}
         onOpenRun={(runId) => go(inTree({ kind: "session", id: runId }))}
+        onCloseRun={() => go(inTree({ kind: "task", id: taskId }))}
         onBack={toBoard}
-        breadcrumb={trail(selected.id)}
+        breadcrumb={trail(taskId)}
       />
     );
   } else if (selected && (selected.kind === "session" || selected.kind === "run")) {
-    const where = locate(projects, selected.id);
+    // Not in the tree (a Run made through the API alone): on its own.
     flush = true;
     main = (
       <RunScreen
         key={selected.id}
         client={client}
         runId={selected.id}
-        title={where?.item.title}
-        breadcrumb={trail(selected.id)}
         onOpenTask={(taskId) => go(inTree({ kind: "task", id: taskId }))}
         onBack={toBoard}
       />

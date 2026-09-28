@@ -159,7 +159,7 @@ export function ChatTranscript({
 
   return (
     <div className={cx(styles["root"], fill && styles["fill"], className)} style={fill ? undefined : { maxHeight }} data-following={following ? "true" : "false"} {...rest}>
-      {session ? <TranscriptHeader session={session} actions={headerActions} /> : null}
+      {session ? <SessionHeader session={session} actions={headerActions} /> : null}
       {pinned !== undefined ? <div className={styles["pinned"]}>{pinned}</div> : null}
       <div className={styles["scroller"]}>
         <div ref={viewportRef} className={styles["viewport"]} onScroll={onScroll} role="log" aria-live={live ? "polite" : "off"} aria-relevant="additions text" tabIndex={0}>
@@ -178,7 +178,21 @@ export function ChatTranscript({
   );
 }
 
-function TranscriptHeader({ session, actions }: { readonly session: ChatTranscriptSession; readonly actions: ReactNode }) {
+export interface SessionHeaderProps {
+  readonly session: ChatTranscriptSession;
+  readonly actions?: ReactNode;
+  /**
+   * Cost, tokens and elapsed on the right. Off where a rail beside the
+   * conversation already lists them (a session on its task's page).
+   */
+  readonly stats?: boolean | undefined;
+}
+
+/**
+ * Whose agent this is and what it is doing: the transcript's own header,
+ * and — above a session's Conversation / Changes tabs — the header both share.
+ */
+export function SessionHeader({ session, actions, stats = true }: SessionHeaderProps) {
   // `live` and `needsHuman` are properties of the status itself, so the
   // header asks the spec rather than re-listing which statuses count.
   const spec = statusSpec(session.status);
@@ -216,7 +230,7 @@ function TranscriptHeader({ session, actions }: { readonly session: ChatTranscri
           )}
         </div>
       </div>
-      <div className={styles["headerStats"]}>
+      {stats ? <div className={styles["headerStats"]}>
         {session.costUsd !== undefined ? (
           <span className={styles["stat"]}>
             <span className={styles["statLabel"]}>Cost</span>
@@ -239,7 +253,7 @@ function TranscriptHeader({ session, actions }: { readonly session: ChatTranscri
             <Duration since={session.startedAt} until={session.endedAt} live={spec.live} />
           </span>
         ) : null}
-      </div>
+      </div> : null}
       {actions !== undefined ? <div className={styles["headerActions"]}>{actions}</div> : null}
     </header>
   );

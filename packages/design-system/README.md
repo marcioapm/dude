@@ -447,6 +447,50 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   line; ↑↓ walk a column across rows. The header's "…" is the app's
   `RowMenu` via `laneMenu`.
 
+### Sessions (live work on a task)
+
+- A task's sessions and the one open share its page: the **Sessions** tab
+  is the task's sessions down the left (`SessionList`, newest first, the
+  open one `current`) and the open session beside them. There is no
+  separate session page: a link to a session (`#/session/<id>`) opens its
+  task on that tab with that session open, so the task's people, pull
+  requests and findings stay one tab away while you watch an agent. Only a
+  Run the tree does not hold (made through the API alone) stands on its
+  own, with a breadcrumb.
+- The open session is `SessionHeader` (whose agent, for whom, its model,
+  status, Pause / Abort — no cost or tokens: the rail has them), then its
+  views as `TabList variant="pills"` — the second level under the page's
+  underline tabs, told apart by a wash, not a line: **Conversation**,
+  **Changes**, **Events** (debugging; last, quiet).
+- **Changes** carries its file count and, while the agent is changing
+  files, a breathing dot (`Tab live`). Nothing else on the tab moves.
+- Beside the conversation, a `SessionRail` on the chrome shade: the
+  session's facts, the tools it used (`ToolUsage`), and the files it has
+  changed so far (`ChangedFiles`, a breathing dot on the label while live).
+  Picking a file there opens Changes on that file alone, as picking it in
+  the diff's own list does. Below 1280px the rail goes; the conversation
+  keeps the width.
+- **Changes is `LiveDiff`**: the agent's checkout against the commit the
+  session started from, uncommitted work included. Its header reads *Live ·
+  Since abc1234 · N files +a −d*, then the last change with the agent's
+  face (*[face] Write `revenue.ts` · just now*), *Follow the agent*, and
+  Unified / Split (`Segmented`). The header wraps before it truncates: the
+  summary is never cut to "3 fil…". With nothing changed there is no
+  summary, only the empty message.
+- Files down the left with their status letter (M / A / D / R on its tone)
+  and counts; each file's diff under a header that sticks, with an **Open
+  in the viewer** icon button (not on a deleted file). The viewer is the
+  file's diff alone, split, in a `Dialog` — dude keeps a Run's diff, not its
+  files, so the diff is what there is to open.
+- Hunk headers are quiet (the hover wash, muted text): the changes are the
+  loudest thing in a diff, never the `@@`. Added and removed lines use the
+  `--ds-diff-*` tokens, with a sign and gutter as well as the tint.
+- A line new since the last update flashes (`ds-flash`, once) and keeps an
+  info mark down its side; the file it is in flashes in the list. With
+  Follow on, the diff scrolls to the newest change. Picking a file — in the
+  list or the rail — shows it alone and turns Follow off: the person has
+  taken over. Turning Follow on shows all again.
+
 ### Management (menus, forms, findings)
 
 - **RowMenu** is the one overflow menu: behind a "more" `IconButton` on a
@@ -699,7 +743,9 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 ## Components
 
 `src/primitives/` — Button, IconButton, Input, Textarea, Select, Checkbox,
-Badge, Card, Table (THead/TBody/Tr/Th/Td/TableEmpty), Tabs, Dialog, Toast,
+Badge, Card, Table (THead/TBody/Tr/Th/Td/TableEmpty), Tabs (underline for a
+page, pills for a second level under it, segmented in a toolbar; a tab can
+carry a count and a live dot), Dialog, Toast,
 Tooltip, RowMenu (+ `rowMenuOpeners`), Skeleton/SkeletonLines/Spinner,
 EmptyState, ScrollArea.
 
@@ -801,6 +847,22 @@ EmptyState, ScrollArea.
 - **ArtifactRow / ArtifactGroup / ArtifactPreview** — files an agent
   published, expandable to their content; `artifactKind` and
   `ARTIFACT_KIND_SPECS` are the vocabulary.
+
+`src/components/` — live work:
+
+- **LiveDiff** — a working agent's checkout against where it started, as
+  it changes (the rules are under *Sessions*): files with status and
+  counts, sticky file headers, Unified / Split (`splitRows` pairs each
+  removed run with the added run after it), fresh lines flashing, Follow
+  the agent, `onOpenFile` for the viewer, `focus` to show a file picked
+  elsewhere, `fileList={false}` for one file on its own.
+- **SessionHeader** — the transcript's header on its own, for a session
+  whose views sit under it; `stats={false}` where a rail lists them.
+- **SessionRail / SessionRailBlock / SessionFacts / ToolUsage /
+  ChangedFiles** — the column beside a session's conversation.
+- **SessionList / SessionItem** — a task's sessions, the open one `current`.
+- **FileGallery / FileViewer** — a task's files and their versions.
+- **Cost** — a total, with the tokens / machine split as a hairline.
 
 ## What is deliberately not here
 

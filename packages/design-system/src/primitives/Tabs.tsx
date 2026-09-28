@@ -28,7 +28,12 @@ export function Tabs({ value, defaultValue, onValueChange, fill, className, chil
 }
 
 export interface TabListProps {
-  readonly variant?: "underline" | "segmented" | undefined;
+  /**
+   * `underline` for a page's tabs; `pills` for a second level under them
+   * (a session's Conversation / Changes on its task's page); `segmented`
+   * for a view switch inside a toolbar.
+   */
+  readonly variant?: "underline" | "pills" | "segmented" | undefined;
   readonly "aria-label"?: string | undefined;
   readonly className?: string | undefined;
   readonly children?: ReactNode;
@@ -37,7 +42,7 @@ export interface TabListProps {
 export function TabList({ variant = "underline", className, children, "aria-label": ariaLabel }: TabListProps) {
   return (
     <RadixTabs.List
-      className={cx(styles["list"], variant === "segmented" && styles["segmented"], className)}
+      className={cx(styles["list"], variant === "segmented" && styles["segmented"], variant === "pills" && styles["pills"], className)}
       {...compact({ "aria-label": ariaLabel })}
     >
       {children}
@@ -50,16 +55,19 @@ export interface TabProps {
   readonly icon?: IconName | undefined;
   /** Small trailing count, e.g. number of findings. */
   readonly count?: number | undefined;
+  /** What it shows is changing now: a breathing dot after the count. */
+  readonly live?: boolean | undefined;
   readonly disabled?: boolean | undefined;
   readonly children?: ReactNode;
 }
 
-export function Tab({ value, icon, count, disabled, children }: TabProps) {
+export function Tab({ value, icon, count, live, disabled, children }: TabProps) {
   return (
     <RadixTabs.Trigger value={value} className={styles["trigger"]} disabled={disabled ?? false}>
       {icon ? <Icon name={icon} size={13} /> : null}
       {children}
       {count !== undefined ? <span className={cx(styles["count"], "ds-cap")}>{count}</span> : null}
+      {live ? <span className={styles["live"]} aria-label="live" data-testid="tab-live" /> : null}
     </RadixTabs.Trigger>
   );
 }

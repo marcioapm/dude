@@ -170,6 +170,23 @@ def test_a_sessions_changes_update_as_the_agent_works(
     changes.get_by_test_id("follow").click()
     expect(changes.get_by_test_id("diff-section")).to_have_count(2)
 
+    # Split puts the old side beside the new; a file opens alone in the viewer.
+    changes.get_by_test_id("diff-view").get_by_role("button", name="Split").click()
+    expect(changes.get_by_test_id("split-row").first).to_be_visible()
+    changes.get_by_test_id("diff-section").filter(has_text="LIVE.md").get_by_test_id("diff-open").click()
+    expect(page.get_by_test_id("diff-viewer")).to_contain_text("Live")
+    page.keyboard.press("Escape")
+
+    # The rail beside the conversation lists the files; one opens Changes on
+    # it alone. It needs the room a wide screen gives.
+    page.set_viewport_size({"width": 1600, "height": 900})
+    page.get_by_role("tab", name="Conversation").click()
+    rail = page.get_by_test_id("session-rail")
+    expect(rail.get_by_test_id("changed-files")).to_contain_text("LIVE.md")
+    rail.get_by_test_id("changed-files").get_by_role("button", name="LIVE.md").click()
+    expect(changes.get_by_test_id("diff-section")).to_have_count(1)
+    changes.get_by_test_id("follow").click()
+
     # Paused and resumed, the agent finishes with one more file: it arrives.
     client.post(f"/v1/runs/{run['id']}/pause", {})
     wait_until(lambda: client.get_run(run["id"])["status"] == "paused", timeout=30, message="never paused")

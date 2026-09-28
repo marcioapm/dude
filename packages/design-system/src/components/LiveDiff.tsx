@@ -25,6 +25,14 @@ export interface LiveDiffProps extends Omit<HTMLAttributes<HTMLDivElement>, "chi
   readonly onOpenFile?: ((path: string) => void) | undefined;
   /** Side by side or one column; unified until the person picks. */
   readonly defaultView?: LiveDiffView | undefined;
+  /**
+   * A file to show alone, picked outside the diff (a list of changed files
+   * beside it). As picking it here does, it turns Follow off. A new object
+   * each time, so picking the same file again still takes.
+   */
+  readonly focus?: { readonly path: string } | null | undefined;
+  /** The list of files down the left; off for one file on its own (in a viewer). */
+  readonly fileList?: boolean | undefined;
 }
 
 export type LiveDiffView = "unified" | "split";
@@ -80,7 +88,7 @@ const SIGN = { "+": "+", "-": "−", " ": "" } as const;
  * the new. Changes are told apart by sign and gutter as well as tint
  * (+, −), so the diff reads without colour.
  */
-export function LiveDiff({ files, base, live, lastChange, emptyMessage, onOpenFile, defaultView = "unified", className, ...rest }: LiveDiffProps) {
+export function LiveDiff({ files, base, live, lastChange, emptyMessage, onOpenFile, defaultView = "unified", focus, fileList = true, className, ...rest }: LiveDiffProps) {
   const [view, setView] = useState<LiveDiffView>(defaultView);
   // Keep the latest change in view: on while live, until the person picks a file.
   const [follow, setFollow] = useState(live ?? false);
@@ -128,6 +136,13 @@ export function LiveDiff({ files, base, live, lastChange, emptyMessage, onOpenFi
     }
   }, [follow, fresh]);
 
+  // Picked from outside: shown alone, and the person has taken over.
+  useEffect(() => {
+    if (!focus) return;
+    setSelected(focus.path);
+    setFollow(false);
+  }, [focus]);
+
   // A file that is gone is no longer selectable.
   useEffect(() => {
     if (selected && !files.some((f) => f.path === selected)) setSelected(null);
@@ -143,15 +158,15 @@ export function LiveDiff({ files, base, live, lastChange, emptyMessage, onOpenFi
           </span>
         ) : null}
         {files.length > 0 ? (
-        <span className={styles["since"]} title={base ? `The agent's checkout against ${base}, the commit it started from. Uncommitted work included.` : undefined}>
-          {base ? (
-            <>
-              Since <span className={styles["mono"]}>{short}</span> ·{" "}
-            </>
-          ) : null}
-          <b>{files.length} {files.length === 1 ? "file" : "files"}</b> <span className={styles["add"]}>+{totals.a}</span>{" "}
-          <span className={styles["del"]}>−{totals.d}</span>
-        </span>
+          <span className={styles["since"]} title={base ? `The agent's checkout against ${base}, the commit it started from. Uncommitted work included.` : undefined}>
+            {base ? (
+              <>
+                Since <span className={styles["mono"]}>{short}</span> ·{" "}
+              </>
+            ) : null}
+            <b>{files.length} {files.length === 1 ? "file" : "files"}</b> <span className={styles["add"]}>+{totals.a}</span>{" "}
+            <span className={styles["del"]}>−{totals.d}</span>
+          </span>
         ) : null}
         <span className={styles["spacer"]} />
         {lastChange ? <span className={styles["last"]}>{lastChange}</span> : null}
@@ -174,44 +189,46 @@ export function LiveDiff({ files, base, live, lastChange, emptyMessage, onOpenFi
       {files.length === 0 ? (
         <div className={styles["empty"]}>{emptyMessage ?? "No changes yet."}</div>
       ) : (
-        <div className={styles["body"]}>
-          <nav className={styles["files"]} aria-label="Changed files">
-            <button type="button" className={cx(styles["file"], styles["all"], !selected && styles["current"])}
-              aria-pressed={!selected} onClick={() => setSelected(null)}>
-              <span className={styles["path"]}>
-                <b>All files</b>
-              </span>
-              <span className={styles["counts"]}>{files.length}</span>
-            </button>
-            {files.map((f) => {
-              const slash = f.path.lastIndexOf("/");
-              return (
-                <button
-                  type="button"
-                  key={f.path}
-                  className={cx(styles["file"], selected === f.path && styles["current"], fresh.paths.has(f.path) && styles["touched"])}
-                  aria-pressed={selected === f.path}
-                  title={`${f.path} · ${STATUS_WORD[f.status]}`}
-                  onClick={() => {
-                    setSelected(f.path);
-                    setFollow(false);
-                  }}
-                  data-testid="diff-file"
-                  data-path={f.path}
-                >
-                  <StatusGlyph status={f.status} />
-                  <span className={styles["path"]}>
-                    {slash >= 0 ? <span className={styles["dir"]}>{f.path.slice(0, slash + 1)}</span> : null}
-                    <b>{f.path.slice(slash + 1)}</b>
-                  </span>
-                  <span className={styles["counts"]}>
-                    <span className={styles["add"]}>+{f.additions}</span> <span className={styles["del"]}>−{f.deletions}</span>
-                  </span>
-                </button>
-              );
-            })}
-            <p className={styles["note"]}>Uncommitted work counts: this is the agent's checkout now, not what it has pushed.</p>
-          </nav>
+        <div className={cx(styles["body"], !fileList && styles["bodyAlone"])}>
+          {fileList ? (
+            <nav className={styles["files"]} aria-label="Changed files">
+              <button type="button" className={cx(styles["file"], styles["all"], !selected && styles["current"])}
+                aria-pressed={!selected} onClick={() => setSelected(null)}>
+                <span className={styles["path"]}>
+                  <b>All files</b>
+                </span>
+                <span className={styles["counts"]}>{files.length}</span>
+              </button>
+              {files.map((f) => {
+                const slash = f.path.lastIndexOf("/");
+                return (
+                  <button
+                    type="button"
+                    key={f.path}
+                    className={cx(styles["file"], selected === f.path && styles["current"], fresh.paths.has(f.path) && styles["touched"])}
+                    aria-pressed={selected === f.path}
+                    title={`${f.path} · ${STATUS_WORD[f.status]}`}
+                    onClick={() => {
+                      setSelected(f.path);
+                      setFollow(false);
+                    }}
+                    data-testid="diff-file"
+                    data-path={f.path}
+                  >
+                    <StatusGlyph status={f.status} />
+                    <span className={styles["path"]}>
+                      {slash >= 0 ? <span className={styles["dir"]}>{f.path.slice(0, slash + 1)}</span> : null}
+                      <b>{f.path.slice(slash + 1)}</b>
+                    </span>
+                    <span className={styles["counts"]}>
+                      <span className={styles["add"]}>+{f.additions}</span> <span className={styles["del"]}>−{f.deletions}</span>
+                    </span>
+                  </button>
+                );
+              })}
+              <p className={styles["note"]}>Uncommitted work counts: this is the agent's checkout now, not what it has pushed.</p>
+            </nav>
+          ) : null}
           <div className={styles["diffs"]} ref={scroller} data-testid="diffs">
             {shown.map((f) => (
               <section key={f.path} className={styles["section"]} data-testid="diff-section" data-path={f.path}>

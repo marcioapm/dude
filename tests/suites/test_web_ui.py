@@ -12,6 +12,8 @@ token.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from playwright.sync_api import Page, expect
 
@@ -89,12 +91,16 @@ def test_delivering_from_the_ui_reaches_a_pull_request_and_back(
     # The same state is on its row in the tree.
     expect(page.get_by_role("tree").locator('[data-pr-state="awaiting"]')).to_have_count(1)
 
-    # Every agent in the pipeline opens its own conversation.
+    # Every agent in the pipeline opens its own conversation, on the task's
+    # Sessions tab beside the others.
     page.get_by_test_id("phase").nth(1).click()
-    expect(page.get_by_text("Reviewer").first).to_be_visible()
-    # Back up to the task through the breadcrumb, by its key.
-    page.get_by_role("navigation", name="Breadcrumb").get_by_role("button", name="GREE-1").click()
-    expect(page.get_by_test_id("task-screen")).to_be_visible()
+    expect(tabs.get_by_role("tab", name="Sessions")).to_have_attribute("aria-selected", "true")
+    sessions = page.get_by_test_id("sessions")
+    expect(sessions.locator('[aria-current="true"]')).to_contain_text("Review")
+    expect(page.get_by_test_id("run-screen")).to_contain_text("Reviewer")
+    # Back to the overview, and the URL says the task again.
+    tabs.get_by_role("tab", name="Overview").click()
+    expect(page).to_have_url(re.compile(r"#/task/"))
 
     # A person comments on the forge; the page shows a fixer answering.
     phases_before = page.get_by_test_id("phase").count()
@@ -674,9 +680,10 @@ def test_a_failed_implementer_says_why_on_its_task_and_its_chat(
     expect(ended).to_have_attribute("data-outcome", "failed")
     # Why is the transcript's last line, just above; the strip says only how it ended.
     expect(page.get_by_test_id("chat-ended")).to_contain_text("no model is configured")
-    # No composer: a finished run hears nothing.
-    expect(page.locator("textarea")).to_have_count(0)
-    ended.get_by_test_id("run-ended-task").click()
+    # No composer: a finished run hears nothing. It is on its task's page,
+    # so there is no way back to offer: the task is right there.
+    expect(page.get_by_test_id("run-screen").locator("textarea")).to_have_count(0)
+    expect(ended.get_by_test_id("run-ended-task")).to_have_count(0)
     expect(page.get_by_test_id("task-screen")).to_be_visible()
     assert implement["status"] == "failed"
     assert console_errors == []
