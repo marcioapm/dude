@@ -14,6 +14,7 @@ import { ChatSection } from "./sections/Chat.tsx";
 import { NavigationSection } from "./sections/Navigation.tsx";
 import { BoardSection } from "./sections/Board.tsx";
 import { ShellSection } from "./sections/Shell.tsx";
+import { LiveSection } from "./sections/Live.tsx";
 
 const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, string]>]> = [
   ["App shell", [["shell-session", "Sidebar + transcript"]]],
@@ -109,6 +110,14 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["board-swimlanes", "Group by epic"],
       ["board-composed", "Beside the sidebar"],
       ["board-states", "Board states"],
+    ],
+  ],
+  [
+    "Live work",
+    [
+      ["l-diff", "LiveDiff"],
+      ["l-files", "FileGallery / FileViewer"],
+      ["l-cost", "Cost, both halves"],
     ],
   ],
 ];
@@ -211,6 +220,7 @@ function Shell() {
           <ChatSection mode={panes} />
           <NavigationSection mode={panes} />
           <BoardSection mode={panes} />
+          <LiveSection mode={panes} />
         </PaneDensityContext.Provider>
       </main>
     </div>

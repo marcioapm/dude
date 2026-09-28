@@ -1,5 +1,7 @@
 export { StatusBadge } from "./StatusBadge.tsx";
 export type { StatusBadgeProps } from "./StatusBadge.tsx";
+export { Cost } from "./Cost.tsx";
+export type { CostProps } from "./Cost.tsx";
 export { AgentAvatar, ROLE_LABEL } from "./AgentAvatar.tsx";
 export type { AgentAvatarProps, AvatarKind } from "./AgentAvatar.tsx";
 export { CostDisplay, TokenCount, Duration } from "./Numbers.tsx";
@@ -11,6 +13,8 @@ export type { EventRowProps, EventStreamProps, EventActor, EventSeverity } from 
 export { SessionTreeNode, SessionTree } from "./SessionTreeNode.tsx";
 export type { SessionTreeNodeProps, SessionTreeProps, SessionNodeData } from "./SessionTreeNode.tsx";
 export { DiffView, DiffFile, parseUnifiedDiff } from "./DiffView.tsx";
+export { LiveDiff } from "./LiveDiff.tsx";
+export type { LiveDiffProps, LiveDiffFile, LiveDiffHunk, LiveDiffLine } from "./LiveDiff.tsx";
 export type { DiffViewProps, DiffFileProps, FileDiff, DiffHunk, DiffLine, DiffLineKind, FileChangeKind } from "./DiffView.tsx";
 export { LogStream } from "./LogStream.tsx";
 export type { LogStreamProps, LogLine, LogLevel, LogChannel } from "./LogStream.tsx";
@@ -55,6 +59,8 @@ export type { BreadcrumbProps, BreadcrumbItem } from "./Breadcrumb.tsx";
 export { ArtifactRow, ArtifactGroup, artifactKind, ARTIFACT_KIND_SPECS } from "./ArtifactRow.tsx";
 export type { ArtifactRowProps, ArtifactGroupProps, ArtifactLike, ArtifactKind, ArtifactKindSpec, ArtifactChange, ArtifactProducer } from "./ArtifactRow.tsx";
 export { ArtifactPreview, prettyJson } from "./ArtifactPreview.tsx";
+export { FileGallery, FileViewer, galleryOrder } from "./FileGallery.tsx";
+export type { FileGalleryProps, FileViewerProps, GalleryFile, FileVersion } from "./FileGallery.tsx";
 export type { ArtifactPreviewProps } from "./ArtifactPreview.tsx";
 export { ChatEvent, summarizeEventData, eventDetail, eventHasDetail, EVENT_SUMMARY_PAIRS } from "./ChatEvent.tsx";
 export type { ChatEventProps } from "./ChatEvent.tsx";
