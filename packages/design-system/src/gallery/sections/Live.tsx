@@ -49,7 +49,7 @@ const NEXT: LiveDiffFile = {
 function SessionSwitch({ value: start = "chat" }: { readonly value?: "chat" | "changes" | "events" }) {
   const [value, setValue] = useState(start);
   return (
-    <Segmented label="Show" size="sm" value={value} onChange={setValue}
+    <Segmented label="Show" value={value} onChange={setValue}
       options={[
         { value: "chat", label: <><Icon name="message" size={13} />Conversation</> },
         { value: "changes", label: <><Icon name="git-branch" size={13} />Changes 3<span className="ds-live-dot" /></> },

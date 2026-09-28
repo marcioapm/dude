@@ -131,6 +131,11 @@
   padding: var(--ds-space-8) 0 var(--ds-space-16);
   min-width: 0;
 }
+/* A run of tool calls sits apart from the turn before it, as one group: a
+   gap above the first call, none between the calls themselves. */
+.content > [data-tool]:not([data-tool] + [data-tool]) {
+  margin-top: calc(var(--ds-space-chat-gap) - var(--ds-space-2));
+}
 
 .empty {
   padding: var(--ds-space-24) var(--ds-space-16);
