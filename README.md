@@ -105,10 +105,14 @@ DATABASE_URL="postgres://dude_app:dude_app@localhost:5433/dude" \
 DUDE_ORCHESTRATOR_URL=http://127.0.0.1:3100 DUDE_ORCHESTRATOR_TOKEN=dev-token \
   bun run dev
 
-# 4. An organization and a user key (organizations are provisioned, not self-served)
+# 4. An organization, its people and some tasks (organizations are provisioned, not self-served)
 OWNER_DSN="postgres://dude:dude@localhost:5433/dude" \
 DATABASE_URL="postgres://dude_app:dude_app@localhost:5433/dude" \
-  bun run scripts/seed-demo.ts            # prints { organizationId, userKey }
+  bun run scripts/seed-demo.ts            # prints { organizationId, userKey, people }
+
+# Someone else, later (admins can also invite from Organization → Members)
+DATABASE_URL="postgres://dude_app:dude_app@localhost:5433/dude" \
+  bun run scripts/add-person.ts <organizationId> "Ada Lovelace" ada@example.com admin
 
 # 5. The web app on :5180, proxying /v1 to the backend
 (cd apps/web && bun run dev)
