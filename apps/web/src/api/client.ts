@@ -24,6 +24,9 @@ import type {
   PullRequest,
   PauseMode,
   Person,
+  PersonDetail,
+  PersonRef,
+  PersonRole,
   Project,
   Run,
   Session,
@@ -44,6 +47,9 @@ export type {
   EscalationAction,
   Finding,
   Person,
+  PersonDetail,
+  PersonRef,
+  PersonRole,
   Project,
   PullRequest,
   Repository,
@@ -51,6 +57,20 @@ export type {
   Session,
   Task,
 } from "@dude/domain";
+
+/** A person as `/v1/people` lists them: where they were last seen, too. */
+export type Member = PersonDetail & { lastSeenWhere: string | null };
+
+/** One of your keys: its prefix, never the key. */
+export interface ApiKeyInfo {
+  id: string;
+  name: string;
+  prefix: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+  /** The key this browser signed in with. */
+  current: boolean;
+}
 
 /** A project with its repositories. `GET /v1/projects/:id`. */
 export interface ProjectDetail extends Project {
@@ -173,6 +193,8 @@ export interface Artifact {
 export class ApiClient {
   readonly #baseUrl: string;
   readonly #apiKey: string;
+  /** What this browser has open, for presence ("TEXT-14"): see `setWhere`. */
+  #where = "";
 
   constructor(options: ApiClientOptions) {
     this.#baseUrl = (options.baseUrl ?? "").replace(/\/$/, "");
@@ -186,6 +208,7 @@ export class ApiClient {
       headers: {
         authorization: `Bearer ${this.#apiKey}`,
         "content-type": "application/json",
+        ...(this.#where ? { "x-dude-where": this.#where } : {}),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
@@ -205,6 +228,12 @@ export class ApiClient {
   async #request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const text = await (await this.#fetch(method, path, body)).text();
     return (text ? JSON.parse(text) : null) as T;
+  }
+
+  /** Say what this browser has open; teammates see it beside your face. */
+  setWhere(where: string): void {
+    // Header values are Latin-1: anything else would make fetch throw.
+    this.#where = where.replace(/[^\x20-\x7e]/g, "").slice(0, 80);
   }
 
   // -- reads --------------------------------------------------------------
@@ -279,9 +308,45 @@ export class ApiClient {
     return this.#request("GET", `/v1/projects/${projectId}/epics`);
   }
 
-  /** The organization's people, who a task can be handed to; `you` is the signed-in one. */
-  listPeople(): Promise<{ people: Person[]; you: string }> {
+  /** The organization's people, who a task can be handed to; `you` is the signed-in one's person id. */
+  listPeople(): Promise<{ people: Member[]; you: string }> {
     return this.#request("GET", "/v1/people");
+  }
+
+  /** Who you are, and your organization. */
+  me(): Promise<{ person: Member; organization: { id: string; name: string } }> {
+    return this.#request("GET", "/v1/me");
+  }
+
+  updateMe(changes: { name?: string; photoUrl?: string | null }): Promise<{ person: Member }> {
+    return this.#request("PATCH", "/v1/me", changes);
+  }
+
+  listMyKeys(): Promise<{ keys: ApiKeyInfo[] }> {
+    return this.#request("GET", "/v1/me/keys");
+  }
+
+  /** A new key for you; `key` is shown this once. */
+  createMyKey(name: string): Promise<{ id: string; name: string; prefix: string; key: string }> {
+    return this.#request("POST", "/v1/me/keys", { name });
+  }
+
+  revokeMyKey(id: string): Promise<void> {
+    return this.#request("DELETE", `/v1/me/keys/${id}`);
+  }
+
+  /** Admins: add someone, with a key shown this once. */
+  invitePerson(input: { name: string; email: string; role: PersonRole }): Promise<{ person: Member; key: string }> {
+    return this.#request("POST", "/v1/people", input);
+  }
+
+  updatePerson(id: string, changes: { name?: string; role?: PersonRole }): Promise<{ person: Member }> {
+    return this.#request("PATCH", `/v1/people/${id}`, changes);
+  }
+
+  /** Admins: remove someone; every key of theirs stops working. */
+  removePerson(id: string): Promise<void> {
+    return this.#request("DELETE", `/v1/people/${id}`);
   }
 
   // -- writes -------------------------------------------------------------
@@ -302,6 +367,11 @@ export class ApiClient {
   /** Hand a task to someone else to drive: they hear of it, and answer for it. */
   reassignTask(id: string, ownerId: string): Promise<Task> {
     return this.#request("PATCH", `/v1/tasks/${id}`, { ownerId });
+  }
+
+  /** Everyone on a task, in order; the first owns it. */
+  setTaskPeople(id: string, people: string[]): Promise<{ owner: PersonRef | null; people: PersonRef[] }> {
+    return this.#request("PUT", `/v1/tasks/${id}/people`, { people });
   }
 
   createProject(input: {

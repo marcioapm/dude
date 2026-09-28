@@ -13,10 +13,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { boardScope, type NavProject, type NavRow } from "@dude/design-system";
-import { Board, Breadcrumb, Sidebar, SidebarToggle, type BreadcrumbItem } from "@dude/design-system/components";
+import { Board, Breadcrumb, OnlineRow, ProfileBand, Sidebar, SidebarToggle, type BreadcrumbItem } from "@dude/design-system/components";
 import { Button, Callout, EmptyState, IconButton, RowMenu, Spinner, useToast } from "@dude/design-system/primitives";
 import { ApiError, type ApiClient } from "./api/client.ts";
 import { useReloadOnEvents } from "./hooks/useEventStream.ts";
+import { photoOf, usePeople, whereWords } from "./hooks/usePeople.ts";
 import { errorText } from "./hooks/useSave.tsx";
 import { formatPlace, inTree, parsePlace, treeSelection, type Place } from "./place.ts";
 import { startPush } from "./push.ts";
@@ -125,7 +126,10 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
     void load();
   }, [load]);
 
-  useReloadOnEvents({ client, all: true }, () => void load(), 400);
+  const { me, people, seen, reload: reloadPeople } = usePeople(client);
+  const you = me?.id;
+  // Someone seen is presence, not a change to the tree: no reload for it.
+  useReloadOnEvents({ client, all: true }, () => void load(), 400, seen);
 
   // First load with nothing selected: open the first project's board rather
   // than an empty pane.
@@ -137,10 +141,13 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   const scope = useMemo(() => (projects ? boardScope(projects, selected) : null), [projects, selected]);
   const toBoard = useCallback(() => go(projects?.[0] ? inTree({ kind: "project", id: projects[0].id }) : null), [go, projects]);
 
-  // The tab says where you are: "TEXT-14 · Implement — dude".
+  // The tab says where you are: "TEXT-14 · Implement — dude"; teammates
+  // see the same beside your face.
   useEffect(() => {
-    document.title = [placeTitle(place, projects), "dude"].filter(Boolean).join(" — ");
-  }, [place, projects]);
+    const where = placeTitle(place, projects);
+    document.title = [where, "dude"].filter(Boolean).join(" — ");
+    client.setWhere(where);
+  }, [place, projects, client]);
 
   /** Carry out a row or board action: quick ones here, the rest in a dialog. */
   const act = useCallback(
@@ -194,9 +201,9 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   // Settings that are not a project's come first: a new organization with
   // no projects yet still sets up its GitHub connection, and you your view.
   if (place?.view === "orgSettings") {
-    main = <OrganizationSettingsScreen client={client} />;
+    main = <OrganizationSettingsScreen client={client} me={me} onPeopleChanged={reloadPeople} />;
   } else if (place?.view === "mySettings") {
-    main = <MySettingsScreen client={client} />;
+    main = <MySettingsScreen client={client} onChanged={reloadPeople} />;
   } else if (!projects) {
     main = <div className="centered"><Spinner label="Loading…" /></div>;
   } else if (projects.length === 0) {
@@ -212,7 +219,11 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
       />
     );
   } else if (place?.view === "inbox") {
-    main = <InboxScreen projects={projects} selected={selected} onSelect={(ref) => go(inTree(ref))} />;
+    main = (
+      <InboxScreen projects={projects} you={you} selected={selected} onSelect={(ref) => go(inTree(ref))}
+        onTakeOver={(taskId) => you ? void client.reassignTask(taskId, you).then(() => load(),
+          (err: unknown) => toast({ title: errorText(err), tone: "danger" })) : undefined} />
+    );
   } else if (place?.view === "projectSettings") {
     main = (
       <ProjectSettingsScreen
@@ -228,6 +239,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
     main = (
       <Board
         project={project}
+        you={you}
         epic={scope.epic}
         overview={scope.epic ? <EpicMetricsSection client={client} epicId={scope.epic.id} version={version} /> : undefined}
         selected={selected}
@@ -346,28 +358,41 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         open={navOpen}
         onOpenChange={setNavOpen}
         projects={projects ?? []}
+        you={you}
         loading={!projects}
         selected={selected}
         onSelect={(ref) => go(inTree(ref))}
         onShowAllAttention={() => go({ view: "inbox" })}
+        onShowOthers={() => go({ view: "inbox" })}
         menuItems={menuItems}
         title={<span className="brand"><DudeMark size={24} />El Duderino</span>}
-        footer={
-          <div className="sidebarFooter">
-            <Button size="sm" variant="quiet" leadingIcon="plus" onClick={() => setOpen({ kind: "newProject" })} data-testid="new-project">
-              New project
-            </Button>
-            {/* The two settings as icons, named by their tooltips: four labels do not fit the sidebar's width. */}
-            <span className="sidebarFooterEnd">
-              <IconButton size="sm" icon="settings" label="Organization settings" onClick={() => go({ view: "orgSettings" })}
-                data-testid="org-settings-button" />
-              <IconButton size="sm" icon="human" label="Your settings" onClick={() => go({ view: "mySettings" })}
-                data-testid="my-settings-button" />
+        presence={
+          <OnlineRow data-testid="online"
+            people={people.filter((p) => p.online).map((p) => ({ id: p.id, name: p.name, imageUrl: photoOf(p), where: whereWords(p) }))} />
+        }
+        band={
+          <ProfileBand
+            className="profileBand"
+            person={me ? { id: me.id, name: me.name, imageUrl: photoOf(me) } : { name: "…" }}
+            detail={me?.email ?? (me?.role === "admin" ? "Organization admin" : undefined)}
+            onOpen={() => go({ view: "mySettings" })}
+            openTestId="my-settings-button"
+            actions={
               <Button size="sm" variant="quiet" onClick={onSignOut} data-testid="sign-out">
                 Sign out
               </Button>
-            </span>
-          </div>
+            }
+          >
+            <div className="sidebarFooter">
+              <Button size="sm" variant="quiet" leadingIcon="plus" onClick={() => setOpen({ kind: "newProject" })} data-testid="new-project">
+                New project
+              </Button>
+              <Button size="sm" variant="quiet" leadingIcon="settings" onClick={() => go({ view: "orgSettings" })}
+                data-testid="org-settings-button">
+                Organization
+              </Button>
+            </div>
+          </ProfileBand>
         }
       />
       {open?.kind === "newProject" ? (

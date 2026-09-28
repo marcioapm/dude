@@ -37,20 +37,13 @@ body {
   overflow: auto;
 }
 
-/* New project on the left, settings and signing out as icons on the right. */
+/* Above you in the profile band: a new project, the organization's settings. */
 .sidebarFooter {
   display: flex;
-  flex: 1;
   align-items: center;
   justify-content: space-between;
   gap: var(--ds-space-4);
   min-width: 0;
-}
-
-.sidebarFooterEnd {
-  display: flex;
-  align-items: center;
-  gap: var(--ds-space-2);
 }
 
 /* Off-screen until focused: the first Tab stop, past the sidebar to the page. */
@@ -211,4 +204,11 @@ body {
 .keyPromptMark {
   display: block;
   margin: var(--ds-space-24) auto var(--ds-space-8);
+}
+
+/* Your photo, and the buttons that change it. */
+.profilePhoto {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-12);
 }
