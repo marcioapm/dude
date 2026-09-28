@@ -201,3 +201,25 @@ export function epicState(stored: EpicState | null, taskStatuses: readonly strin
   const finished = (s: string) => (TERMINAL_TASK_STATUSES as readonly string[]).includes(s);
   return taskStatuses.length > 0 && taskStatuses.every(finished) ? "done" : "active";
 }
+
+/**
+ * What a saved prompt may name as `{{name}}`, filled in for each run by
+ * the orchestrator (delivery/prompts.go, fill). The task still follows the
+ * prompt in full, however much of it the prompt names. Anything else in
+ * braces is left as written, and the editor does not draw it as a variable.
+ */
+export const PROMPT_VARIABLES = [
+  { name: "task.title", description: "The task's title." },
+  { name: "task.goal", description: "What the task should achieve." },
+  { name: "task.criteria", description: "Its acceptance criteria, as a list." },
+  { name: "run.branch", description: "The branch this run works on." },
+  { name: "run.base_ref", description: "What the branch started from." },
+] as const;
+export type PromptVariable = (typeof PROMPT_VARIABLES)[number]["name"];
+
+const PROMPT_VARIABLE_NAMES: ReadonlySet<string> = new Set(PROMPT_VARIABLES.map((v) => v.name));
+
+/** Whether `{{name}}` (braces and spaces allowed around it) is one dude fills in. */
+export function isPromptVariable(text: string): boolean {
+  return PROMPT_VARIABLE_NAMES.has(text.replace(/^\{\{\s*|\s*\}\}$/g, ""));
+}

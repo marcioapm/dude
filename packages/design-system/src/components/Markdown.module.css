@@ -83,6 +83,45 @@
   font-size: 1.2em;
 }
 
+/* An agent's instructions: read and edited in settings, at UI body size
+   with a compact rhythm — a prompt is a working document, not an article. */
+.prompt {
+  --md-gap: 0.75em;
+  --md-h-gap: 1.6em;
+  --md-measure: var(--ds-measure-message);
+  font-size: var(--ds-text-md);
+  line-height: var(--ds-leading-prose);
+}
+.prompt .h1 {
+  font-size: var(--ds-text-2xl);
+  font-weight: 700;
+}
+.prompt .h2 {
+  font-size: calc(var(--ds-text-md) + 2px);
+}
+.prompt .h3 {
+  font-size: var(--ds-text-md);
+}
+/* In a prompt, code is a flat tint: it marks a name, it is not a box. */
+.prompt .inlineCode {
+  box-shadow: none;
+  background: var(--ds-color-hover-wash);
+}
+/* A variable: filled in for each run. The accent's tint, in mono; inside
+   a code span it takes the span's size. */
+.inlineCode .variable {
+  font-size: 1em;
+  padding: 0 0.2em;
+}
+.variable {
+  font-family: var(--ds-font-mono);
+  font-size: 0.85em;
+  padding: 0.1em 0.4em;
+  border-radius: var(--ds-radius-mark);
+  background: var(--ds-color-accent-subtle);
+  color: var(--ds-color-accent-text);
+}
+
 /* Block spacing comes from `.root > * + *` alone; no block sets its own
    margin, or it would override that rule at equal specificity. */
 
