@@ -58,12 +58,36 @@ export function escalationWords(e: Escalation): EscalationWords {
       return failed("Tester");
     case "pr_fix_failed":
       return { ...failed("Fixer"), sentence: `The fixer answering the pull request's feedback failed${error}` };
-    case "pr_loop_exhausted":
+    case "pr_loop_exhausted": {
+      const spent = Array.isArray(d.spent) ? (d.spent as string[]) : [];
+      return spent.length > 0
+        ? {
+            short: "PR fix rounds used up",
+            sentence: `${spent.length === 1 ? `The pull request in ${spent[0]} has` : `The pull requests in ${spent.join(", ")} have`} had ${plural(num("total"), "fix", "fixes")}, the most the organization allows for one.`,
+            runId,
+          }
+        : {
+            short: "PR fix rounds used up",
+            sentence: `The pull request still has feedback in this review after ${plural(num("iterations"), "fix round")}, the most this project allows.`,
+            runId,
+          };
+    }
+    case "pull_request_conflict": {
+      const which = typeof d.repo === "string" && d.repo ? `${d.repo} #${num("number")}` : `#${num("number")}`;
       return {
-        short: "PR fix rounds used up",
-        sentence: `The pull request still has feedback after ${plural(num("iterations"), "fix round")}, the most this project allows.`,
+        short: "A pull request conflicts",
+        sentence: `Pull request ${which} conflicts with its base. Resolve it on GitHub (or update the branch), then wait on it again.`,
         runId,
       };
+    }
+    case "ci_stuck": {
+      const which = typeof d.repo === "string" && d.repo ? `${d.repo} #${num("number")}` : `#${num("number")}`;
+      return {
+        short: "CI is stuck",
+        sentence: `Checks on pull request ${which} have been running far longer than they should: a runner may be gone, or a required check never starts.`,
+        runId,
+      };
+    }
     case "pull_request_closed": {
       const parts = [
         num("merged") ? `${num("merged")} merged` : "",

@@ -25,8 +25,11 @@ type Pull struct {
 	Title    string
 	Body     string
 	State    string
+	Draft    bool
 	MergedAt *string
-	Comments []Comment
+	// Logins asked for a review.
+	Requested []string
+	Comments  []Comment
 	// Reviews submitted, oldest first: each keeps its id, as GitHub's do.
 	Reviews []Review
 }
@@ -162,7 +165,9 @@ func (s *Server) Comment(number int, author, body string) {
 }
 
 // Review records a reviewer's verdict: "APPROVED" or "CHANGES_REQUESTED".
-func (s *Server) Review(number int, login, verdict string) { s.ReviewSaying(number, login, verdict, "") }
+func (s *Server) Review(number int, login, verdict string) {
+	s.ReviewSaying(number, login, verdict, "")
+}
 
 // ReviewSaying submits a review with words in its box.
 func (s *Server) ReviewSaying(number int, login, verdict, body string) {
@@ -270,7 +275,14 @@ func (s *Server) Handler() http.Handler {
 		write(w, 200, map[string]any{"merged": true, "sha": s.SHA(p.Head)})
 	})
 	mux.HandleFunc("POST "+prefix+"/pulls/{n}/requested_reviewers", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Reviewers []string `json:"reviewers"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&in)
 		if p := s.number(w, r); p != nil {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			p.Requested = append(p.Requested, in.Reviewers...)
 			write(w, 201, s.pullJSON(p))
 		}
 	})
@@ -307,7 +319,10 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) openPull(w http.ResponseWriter, r *http.Request) {
-	var in struct{ Title, Body, Head, Base string }
+	var in struct {
+		Title, Body, Head, Base string
+		Draft                   bool
+	}
 	_ = json.NewDecoder(r.Body).Decode(&in)
 	if s.SHA(in.Head) == "" {
 		fail(w, 422, "head branch does not exist")
@@ -321,7 +336,7 @@ func (s *Server) openPull(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	p := &Pull{Number: len(s.pulls) + 1, Head: in.Head, Base: in.Base, Title: in.Title, Body: in.Body, State: "open"}
+	p := &Pull{Number: len(s.pulls) + 1, Head: in.Head, Base: in.Base, Title: in.Title, Body: in.Body, State: "open", Draft: in.Draft}
 	s.pulls[p.Number] = p
 	out := s.pullJSON(p)
 	s.mu.Unlock()
@@ -329,6 +344,10 @@ func (s *Server) openPull(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) pullJSON(p *Pull) map[string]any {
+	requested := []any{}
+	for _, l := range p.Requested {
+		requested = append(requested, map[string]string{"login": l})
+	}
 	mergeable, state := true, "clean"
 	if s.Conflicting[p.Number] {
 		mergeable, state = false, "dirty"
@@ -336,9 +355,9 @@ func (s *Server) pullJSON(p *Pull) map[string]any {
 	return map[string]any{
 		"number": p.Number, "node_id": fmt.Sprintf("PR_%d", p.Number),
 		"html_url": fmt.Sprintf("https://github.test/%s/pull/%d", s.Slug, p.Number),
-		"draft":    false, "state": p.State, "merged_at": p.MergedAt,
+		"draft":    p.Draft, "state": p.State, "merged_at": p.MergedAt,
 		"head": map[string]string{"sha": s.SHA(p.Head)}, "base": map[string]string{"ref": p.Base},
-		"mergeable": mergeable, "mergeable_state": state, "requested_reviewers": []any{},
+		"mergeable": mergeable, "mergeable_state": state, "requested_reviewers": requested,
 	}
 }
 

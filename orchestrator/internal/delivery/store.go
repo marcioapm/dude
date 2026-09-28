@@ -606,7 +606,10 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 		body += fmt.Sprintf("\n\nOne of %d pull requests for this work, all from `%s`; the others are in %s.",
 			len(all), st.Branch, strings.Join(others, ", "))
 	}
-	ref, err := gh.OpenPullRequest(ctx, forge.OpenPullRequest{Slug: slug, Title: title, Body: body, Head: st.Branch, Base: repo.DefaultBranch})
+	draft := gh.Settings.OpenAs == "draft"
+	ref, err := gh.OpenPullRequest(ctx, forge.OpenPullRequest{Slug: slug, Title: title, Body: body, Head: st.Branch,
+		Base: repo.DefaultBranch, Draft: draft})
+	fresh := err == nil
 	if e, ok := err.(*forge.Error); ok && e.AlreadyExists() {
 		// A replay after a crash between opening the PR and recording it:
 		// adopt the one GitHub already has.
@@ -621,6 +624,15 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 	}
 	if err != nil {
 		return "", err
+	}
+	// Whom the organization asks for a review. CODEOWNERS GitHub asks by
+	// itself. Best effort, and asked once: a login GitHub will not ask (not
+	// a collaborator, the author), or GitHub failing now, must not keep the
+	// pull request from being recorded — a person can ask from the task.
+	var asked []string
+	if fresh && gh.Settings.RequestReviewFrom == "logins" && len(gh.Settings.ReviewLogins) > 0 &&
+		gh.RequestReviewers(ctx, slug, ref.Number, gh.Settings.ReviewLogins) == nil {
+		asked = gh.Settings.ReviewLogins
 	}
 	id := ids.New(ids.PullRequest)
 	err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
@@ -645,7 +657,8 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 			RunID: st.HeadRunID, ActorType: ledger.ActorSystem, ActorID: "workflow", Source: ledger.SourceOrchestrator,
 			CorrelationID: st.TaskID,
 			Payload: map[string]any{"number": ref.Number, "url": ref.URL, "repo": repo.Name,
-				"headBranch": st.Branch, "baseBranch": repo.DefaultBranch, "draft": false},
+				"headBranch": st.Branch, "baseBranch": repo.DefaultBranch, "draft": ref.State == forge.StateDraft,
+				"reviewersRequested": db.NonNil(asked)},
 		})
 		return err
 	})

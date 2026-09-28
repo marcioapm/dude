@@ -15,10 +15,9 @@
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { AgentAvatar, FindingGroup, FindingRow, StatusBadge, StepList, StepRow } from "@dude/design-system/components";
-import { Icon } from "@dude/design-system";
 import { Button, Callout, EmptyState, Page, PageHeader, Section, Spinner } from "@dude/design-system/primitives";
 import { DEFAULT_RUN_ROLE, runLabel } from "@dude/domain";
-import type { ApiClient, Artifact, Finding, PullRequest, Run, TaskDetail } from "../api/client.ts";
+import type { ApiClient, Artifact, Finding, MergeMethod, PullRequest, Run, TaskDetail } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
 import { shortError } from "../escalation.ts";
 import { useReloadOnEvents } from "../hooks/useEventStream.ts";
@@ -29,6 +28,8 @@ import { NotFound } from "./NotFound.tsx";
 import { OwnerSelect } from "./OwnerSelect.tsx";
 import { errorText } from "../hooks/useSave.tsx";
 import { EscalationPanel } from "./EscalationPanel.tsx";
+import { PrStateChip, PullRequestPanel } from "./PullRequestPanel.tsx";
+import { PullRequestActivitySection } from "./PullRequestActivity.tsx";
 
 export interface TaskScreenProps {
   client: ApiClient;
@@ -56,6 +57,11 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
   }, [client]);
   // Bumped on each reload, for the sections that read their own data.
   const [version, setVersion] = useState(0);
+  // What the Merge button does first: the organization's merge method.
+  const [mergeMethod, setMergeMethod] = useState<MergeMethod>("squash");
+  useEffect(() => {
+    void client.githubSettings().then((s) => setMergeMethod(s.mergeMethod), () => undefined);
+  }, [client]);
 
   const load = useCallback(async () => {
     setVersion((v) => v + 1);
@@ -182,9 +188,9 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
               Edit
             </Button>
             {prs.map((pr) => (
-              <a key={pr.id} href={pr.url} target="_blank" rel="noreferrer" data-testid="pr-link" className="linkButton">
-                {prs.length > 1 ? `${pr.repositoryName} #${pr.number}` : `Pull request #${pr.number}`}
-                <Icon name="external" size={14} />
+              <a key={pr.id} href={pr.url} target="_blank" rel="noreferrer" data-testid="pr-header-link" className="prHeaderLink"
+                title={`${pr.repositoryName} #${pr.number} on GitHub`}>
+                <PrStateChip pr={pr} />
                 <span className="ds-sr-only"> (opens in a new tab)</span>
               </a>
             ))}
@@ -233,6 +239,16 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
         )}
       </Section>
 
+      {prs.length > 0 ? (
+        <Section title={prs.length > 1 ? "Pull requests" : "Pull request"}>
+          <div className="taskPullRequests">
+            {prs.map((pr) => (
+              <PullRequestPanel key={pr.id} client={client} pr={pr} defaultMethod={mergeMethod} onChanged={() => void load()} />
+            ))}
+          </div>
+        </Section>
+      ) : null}
+
       <TaskMetricsSection client={client} taskId={taskId} live={item.status === "running"}
         done={["done", "failed", "aborted"].includes(item.status)} version={version} />
 
@@ -262,6 +278,8 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
           )}
         />
       ) : null}
+
+      {prs.length > 0 ? <PullRequestActivitySection client={client} taskId={taskId} named={prs.length > 1} version={version} /> : null}
     </Page>
   );
 }
@@ -295,30 +313,6 @@ function PhaseStep(props: { run: Run; step: number; findings: Finding[]; onOpen:
 }
 
 /**
- * A PR's state in the status vocabulary. Open is "in review", not
- * "running": nothing of ours is executing, it is waiting on people.
- */
-const PR_STATE_STATUS: Record<PullRequest["state"], "review" | "done" | "aborted" | "pending"> = {
-  draft: "pending",
-  open: "review",
-  merged: "done",
-  closed: "aborted",
-};
-
-/** What the forge says of its checks and review, in words; the state is the badge's. */
-const CHECKS_WORDS: Record<PullRequest["checks"], string> = {
-  unknown: "Checks not reported yet",
-  pending: "Checks running",
-  failing: "Checks failing",
-  passing: "Checks passing",
-};
-const REVIEW_WORDS: Record<PullRequest["review"], string> = {
-  pending: "Awaiting review",
-  approved: "Approved",
-  changes_requested: "Changes requested",
-};
-
-/**
  * A pull request as the pipeline's last step. With several (work across
  * repositories), each names its repository; they share the branch.
  */
@@ -331,10 +325,8 @@ function PullRequestStep({ pr, named }: { pr: PullRequest; named: boolean }) {
       href={pr.url}
       step="PR"
       label={named ? <><span className="ds-mono">{pr.repositoryName}</span> #{pr.number}</> : <>Pull request #{pr.number}</>}
-      status={<StatusBadge status={PR_STATE_STATUS[pr.state]} size="sm" />}
-      // Checks and review matter while it is open; once merged or closed,
-      // the badge says all there is.
-      note={pr.state === "open" || pr.state === "draft" ? `${CHECKS_WORDS[pr.checks]} · ${REVIEW_WORDS[pr.review]}` : undefined}
+      status={<PrStateChip pr={pr} withNumber={false} />}
+      note={pr.title}
       meta={pr.headBranch}
     />
   );

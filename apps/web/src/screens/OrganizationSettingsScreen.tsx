@@ -1,7 +1,8 @@
 /**
- * The organization's settings: for now, its GitHub connection — the one
- * thing every project's pull requests depend on, and the one most often
- * wrong in a way nobody notices until an agent's work cannot land.
+ * The organization's settings: for now, GitHub — the connection every
+ * project's pull requests depend on (and the one most often wrong in a way
+ * nobody notices until an agent's work cannot land), whether its webhooks
+ * arrive, and how dude behaves there.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -22,6 +23,7 @@ import {
 } from "@dude/design-system/primitives";
 import type { ApiClient, ForgeConnection } from "../api/client.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
+import { GithubBehaviour, WebhookCard } from "./GithubSettings.tsx";
 
 export function OrganizationSettingsScreen({ client }: { client: ApiClient }) {
   const [connection, setConnection] = useState<ForgeConnection | null>(null);
@@ -66,7 +68,7 @@ export function OrganizationSettingsScreen({ client }: { client: ApiClient }) {
   return (
     <Page data-testid="org-settings">
       <PageHeader breadcrumb={<Breadcrumb items={[{ id: "org", label: "Organization" }]} />} title="Settings"
-        description="For every project: where pull requests are opened." />
+        description="For every project: where pull requests are opened, and how dude behaves there." />
       <Card>
         <CardHeader
           title="GitHub"
@@ -100,6 +102,12 @@ export function OrganizationSettingsScreen({ client }: { client: ApiClient }) {
           </Button>
         </CardFooter>
       </Card>
+      {connection.connected ? (
+        <>
+          <WebhookCard client={client} health={connection.webhook} onChanged={() => void load()} />
+          <GithubBehaviour client={client} />
+        </>
+      ) : null}
       {replacing ? (
       <TokenDialog
         client={client}

@@ -2598,3 +2598,21 @@ func (w *world) escalationReason(wi string) string {
 		AND event_type = 'question.asked' AND payload->>'kind' = 'escalation' ORDER BY cursor DESC LIMIT 1`, wi).Scan(&r)
 	return r
 }
+
+// How the organization opens pull requests: as drafts, asking named
+// people for a review.
+func TestPullRequestsOpenAsTheOrganizationSays(t *testing.T) {
+	w := newWorld(t)
+	mustExec(t, w.owner, `UPDATE forge_credentials SET settings = '{"openAs":"draft","requestReviewFrom":"logins","reviewLogins":["cy","bo"]}'
+		WHERE organization_id = $1`, w.org)
+	wi := w.reviewing()
+	if p := w.gh.Pull(1); !p.Draft || !slices.Equal(p.Requested, []string{"cy", "bo"}) {
+		t.Errorf("draft %v, requested %v", p.Draft, p.Requested)
+	}
+	w.sync()
+	var reviews string
+	_ = w.owner.QueryRow(context.Background(), `SELECT reviews_json::text FROM pull_requests WHERE task_id = $1`, wi).Scan(&reviews)
+	if !strings.Contains(reviews, `"REQUESTED"`) {
+		t.Errorf("reviews = %s, want the two asked", reviews)
+	}
+}

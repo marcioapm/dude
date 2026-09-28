@@ -36,9 +36,17 @@ describe("escalationWords", () => {
     expect(escalationWords({ reason: "pr_loop_exhausted", detail: { iterations: 1 }, at }).sentence).toContain("after 1 fix round,");
     expect(escalationWords({ reason: "exhausted", detail: { iterations: 3 }, at }).sentence).toContain("after 3 review rounds,");
   });
+
+  test("a pull request's conflict, stuck CI and spent budget say which", () => {
+    expect(escalationWords({ reason: "pull_request_conflict", detail: { repo: "web", number: 4 }, at }).sentence).toContain("web #4 conflicts");
+    expect(escalationWords({ reason: "ci_stuck", detail: { repo: "api", number: 2 }, at }).short).toBe("CI is stuck");
+    expect(escalationWords({ reason: "pr_loop_exhausted", detail: { spent: ["web"], total: 5 }, at }).sentence)
+      .toBe("The pull request in web has had 5 fixes, the most the organization allows for one.");
+  });
 });
 
 test("shortError keeps the first line, and cuts a long one", () => {
   expect(shortError("first\nsecond")).toBe("first");
   expect(shortError("x".repeat(10), 5)).toBe("xxxx…");
+
 });

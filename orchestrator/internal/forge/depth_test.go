@@ -285,3 +285,21 @@ func TestOnlyAReviewStartsANewRound(t *testing.T) {
 		t.Errorf("a review's feedback lost its kind: %+v", s)
 	}
 }
+
+// Saving settings is strict where reading them is forgiving: a person
+// told "saved" must have saved what they chose.
+func TestSavingSettingsRefusesWhatDudeDoesNotKnow(t *testing.T) {
+	if s, err := ParseSettings([]byte(`{"mergeMethod":"rebase","fixRoundsPerPr":0,"whoCanWake":"members"}`)); err != nil ||
+		s.MergeMethod != "rebase" || s.FixRoundsPerPR != 0 || s.WhoCanWake != WakeMembers || s.OpenAs != "ready" {
+		t.Errorf("settings = %+v, %v", s, err)
+	}
+	for _, bad := range []string{`{"mergeMethod":"octopus"}`, `{"whoCanWake":"everyone"}`, `{"fixRoundsPerPr":51}`,
+		`{"fixRoundsPerPr":"five"}`, `{"ciStuckMinutes":-1}`} {
+		if _, err := ParseSettings([]byte(bad)); err == nil {
+			t.Errorf("%s was accepted", bad)
+		}
+	}
+	if keys := SettingKeys(); len(keys) != 8 || keys[0] != "whoCanWake" {
+		t.Errorf("keys = %v", keys)
+	}
+}
