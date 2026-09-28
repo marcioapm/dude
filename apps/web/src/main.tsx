@@ -19,6 +19,7 @@ import "./app.css";
 
 import { ApiClient } from "./api/client.ts";
 import { App } from "./App.tsx";
+import { FixtureClient, fixtureScenario, installFixtureStream } from "./fixtures/client.ts";
 import { turnPushOff } from "./push.ts";
 import { PeopleProvider } from "./people.tsx";
 import { DudeMark } from "./DudeMark.tsx";
@@ -29,6 +30,8 @@ function Root() {
   const [apiKey, setApiKey] = useState(() => localStorage.getItem(KEY_STORAGE) ?? "");
   // The server refused the key it was given: the prompt says so.
   const [refused, setRefused] = useState(false);
+  // Outside production, `?fixtures=a` … `f` answers the API from the mockups' world.
+  const scenario = useMemo(() => fixtureScenario(), []);
 
   // Same-origin in the browser (Vite proxies /v1), loopback in the desktop
   // shell — so no base URL is needed in either.
@@ -37,14 +40,14 @@ function Root() {
   // instance per render would tear down and re-establish the event stream.
   // Declared before the early return: hooks must run in the same order on
   // every render, and signing out changes which branch is taken.
-  const client = useMemo(() => new ApiClient({ apiKey }), [apiKey]);
+  const client = useMemo(() => (scenario ? new FixtureClient(scenario) : new ApiClient({ apiKey })), [apiKey, scenario]);
   const keyRefused = useCallback(() => {
     localStorage.removeItem(KEY_STORAGE);
     setRefused(true);
     setApiKey("");
   }, []);
 
-  if (!apiKey) {
+  if (!apiKey && !scenario) {
     return <KeyPrompt refused={refused} onSubmit={(key) => {
       localStorage.setItem(KEY_STORAGE, key);
       setRefused(false);
@@ -113,6 +116,9 @@ function KeyPrompt({ refused, onSubmit }: { refused: boolean; onSubmit: (key: st
 
 const container = document.getElementById("root");
 if (!container) throw new Error("#root is missing from index.html");
+
+// The fixtures have no stream: an EventSource that opens and says nothing.
+if (fixtureScenario()) installFixtureStream();
 
 // Around everything, the key prompt too: theme and density are this
 // browser's, remembered across sign-ins.

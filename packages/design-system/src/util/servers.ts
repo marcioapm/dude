@@ -7,7 +7,8 @@
  * summary and the preview's foot never disagree.
  */
 
-import type { PreviewStage, Server, ServersRunKind } from "@dude/domain";
+import type { PreviewStage, Server, ServerLogLine, ServersRunKind } from "@dude/domain";
+import type { LogLine } from "../components/LogStream.tsx";
 import type { ServerDisplayState } from "../tokens/servers.ts";
 import { formatDuration, formatTimestamp } from "./format.ts";
 import { toMs } from "./useNow.ts";
@@ -76,4 +77,15 @@ export function canStopAny(servers: ReadonlyArray<Pick<Server, "state">>): boole
 /** A URL without its scheme, as a row shows it. */
 export function bareUrl(url: string): string {
   return url.replace(/^https?:\/\//, "");
+}
+
+/** lux's log lines as LogStream draws them: a `[lux]` line is the runtime's own word, stderr keeps its channel. */
+export function serverLogLines(log: ReadonlyArray<ServerLogLine>): LogLine[] {
+  return log.map((l, i) => ({
+    seq: i,
+    text: l.text,
+    ts: l.t,
+    channel: l.stream,
+    ...(l.text.includes("[lux]") ? { level: "system" as const } : {}),
+  }));
 }

@@ -33,9 +33,10 @@ import { SETTINGS_ROLES } from "@dude/domain";
 import { agentsNav, deliveryNav, isRole, SettingsFrame, useSettings } from "./SettingsFrame.tsx";
 import { DeliveryPage, RolePage } from "./settingsPages.tsx";
 import { FacePicker } from "./FacePicker.tsx";
+import { ServersSettingsPage } from "./ServersSettings.tsx";
 
 // The first is where the screen opens: a new project needs its repositories first.
-const PAGES = ["repositories", "general", ...SETTINGS_ROLES, "delivery"] as const;
+const PAGES = ["repositories", "general", "servers", ...SETTINGS_ROLES, "delivery"] as const;
 
 export interface ProjectSettingsScreenProps {
   client: ApiClient;
@@ -53,6 +54,11 @@ export function ProjectSettingsScreen({ client, projectId, page: given, onPage, 
   const page = settingsPage(given, PAGES);
   const [project, setProject] = useState<ProjectDetail | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+  // How many servers the project defines, for the menu: the page reads them, and says.
+  const [serverCount, setServerCount] = useState<number | null>(null);
+  useEffect(() => {
+    void client.projectServers(projectId).then((s) => setServerCount(s.servers.length), () => undefined);
+  }, [client, projectId]);
   const { scope, problem: settingsProblem } = useSettings(
     client,
     () => client.projectSettings(projectId),
@@ -105,6 +111,7 @@ export function ProjectSettingsScreen({ client, projectId, page: given, onPage, 
           ? [
               { id: "general", label: "General", icon: "settings" },
               { id: "repositories", label: "Repositories", icon: "git-branch", note: project.repositories.length || undefined },
+              { id: "servers", label: "Servers", icon: "globe", note: serverCount || undefined },
               agentsNav(settings),
               deliveryNav(settings),
             ]
@@ -135,6 +142,8 @@ export function ProjectSettingsScreen({ client, projectId, page: given, onPage, 
               <SettingsHeader title="Repositories" description="What agents check out. The first is where tasks start; the others can be requested." />
               <RepositoriesTab client={client} project={project} canEdit={scope.settings.canEdit} onSaved={saved} />
             </>
+          ) : page === "servers" ? (
+            <ServersSettingsPage client={client} project={project} canEdit={scope.settings.canEdit} orgName={orgName} onCount={setServerCount} />
           ) : page === "delivery" ? (
             <DeliveryPage scope={scope} />
           ) : isRole(page) ? (

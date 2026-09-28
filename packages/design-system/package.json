@@ -10,7 +10,8 @@
     "./base.css": "./src/styles/base.css",
     "./tokens": "./src/tokens/index.ts",
     "./primitives": "./src/primitives/index.ts",
-    "./components": "./src/components/index.ts"
+    "./components": "./src/components/index.ts",
+    "./fixtures/servers": "./src/gallery/serverFixtures.ts"
   },
   "scripts": {
     "test": "bun test",

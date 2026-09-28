@@ -802,6 +802,34 @@ EmptyState, ScrollArea.
   published, expandable to their content; `artifactKind` and
   `ARTIFACT_KIND_SPECS` are the vocabulary.
 
+`src/components/` — servers and previews (what a run serves):
+
+- **ServerStateMark / ServerStateDot** — a server's state in StatusMark's
+  grammar; `src/tokens/servers.ts` is the vocabulary (lux's five states
+  and `waiting`, for a preview's spec server before its turn).
+- **ServerRow / ServerList / ServerRecipeRow** — one row per server in
+  StepList's grammar: mono name and port, the state with what it means
+  (`describeServer` turns lux's Server into the words, in one place), the
+  URL to copy or open, the actions its state allows, its log folded under
+  it as `server:<name>`.
+- **ServersRunLine / ServersPanel / ServersDrawer** — the run the servers
+  live on as a line, the panel (a container: rows stack in a narrow
+  drawer), and the run screen's 440px drawer on chrome.
+- **PreviewStages / ServersMoved** — a branch preview's stages, and the
+  notice with Start all after a run moved host.
+- **ServersSummary** — the overview aside's block, in PullRequestPanel's
+  grammar.
+- **PreviewFrame / PreviewScrim** — a server's page under a browser's
+  chrome (back, forward, reload, the URL, who is signed in, Desktop or
+  Mobile), as a sheet over a scrim or docked beside a conversation. Its
+  bed is `--ds-color-preview-bed`, white in both modes: the page is
+  someone else's.
+- **ServerRecipeTable / ServerRecipeDialog / EnvVarRows / HostChips** —
+  project settings: the definitions, the editor with validation in words,
+  and a preview's egress allowlist as chips.
+- **LinkButton** (a primitive) — a real link drawn as a button, for a way
+  out among actions ("Open terminal in lux ↗").
+
 ## What is deliberately not here
 
 - A Markdown *parser dependency*. The hand-rolled one in `src/util/markdown.ts`

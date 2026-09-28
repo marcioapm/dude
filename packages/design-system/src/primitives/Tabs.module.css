@@ -79,6 +79,10 @@
 .trigger[data-state="active"] .count {
   color: var(--ds-color-text-secondary);
 }
+/* Pushes a toggle to the end of the row. */
+.spacer {
+  flex: 1;
+}
 
 .content {
   min-height: 0;
