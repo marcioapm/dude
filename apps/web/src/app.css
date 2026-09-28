@@ -133,6 +133,17 @@ body {
 .runCrumbs {
   padding: var(--ds-space-16) var(--ds-space-24) var(--ds-space-4);
 }
+/* The conversation, and beside it the servers drawer or a docked preview. */
+.runSplit {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.runSplit > :first-child {
+  flex: 1;
+  min-width: 0;
+}
 /* A screen's tabs, in line with its header. */
 .tabsInset {
   padding: 0 var(--ds-space-24);
@@ -186,26 +197,6 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: var(--ds-space-8);
-}
-
-/*
- * A link out among a header's buttons (a pull request): drawn as a ghost
- * button, since the design system's Button is a <button> and this must stay
- * a real link — middle-click, copy address, a new tab.
- */
-.linkButton {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--ds-space-6);
-  height: var(--ds-size-control-md);
-  padding: 0 var(--ds-space-12);
-  border-radius: var(--ds-radius-control);
-  font-weight: var(--ds-weight-medium);
-  white-space: nowrap;
-}
-.linkButton:hover {
-  background: var(--ds-color-hover-wash);
-  text-decoration: none;
 }
 
 /* A stopped delivery: why, a note, and the decisions its owner may take. */
@@ -484,4 +475,50 @@ body {
   padding: 0;
   border: 0;
   min-width: 0;
+}
+
+/* -- servers ---------------------------------------------------------- */
+
+/* Nothing serving a task: the way to a preview, at a reading width. */
+.serversEmpty {
+  max-width: 640px;
+}
+.formNote {
+  margin: 0;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+/* Add server: the project's recipes to tick, in SessionList's grammar. */
+.recipeChoices {
+  list-style: none;
+  margin: 0;
+  padding: var(--ds-space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+  background: var(--ds-color-chrome);
+}
+.recipeChoice {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--ds-space-8);
+  padding: var(--ds-space-8);
+  border-radius: var(--ds-radius-control);
+}
+.recipeChoiceNone {
+  padding: var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+/* Project settings → Servers: who may open a preview, in a line. */
+.previewAccess {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.previewAccess > svg {
+  color: var(--ds-color-text-muted);
 }

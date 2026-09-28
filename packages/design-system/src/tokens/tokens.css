@@ -160,6 +160,7 @@
   --ds-color-secondary-hover: #37383a;
   --ds-color-secondary-active: #252728;
   --ds-color-scrim: rgba(0, 0, 0, 0.55);
+  --ds-color-preview-bed: #ffffff;
   --ds-color-shadow-color: rgba(0, 0, 0, 0.5);
   --ds-color-shadow-color-strong: rgba(0, 0, 0, 0.7);
   --ds-color-live: #63d99b;
@@ -297,6 +298,7 @@
   --ds-color-secondary-hover: #f2f3f5;
   --ds-color-secondary-active: #e0e1e3;
   --ds-color-scrim: rgba(49, 51, 53, 0.4);
+  --ds-color-preview-bed: #ffffff;
   --ds-color-shadow-color: rgba(49, 51, 53, 0.12);
   --ds-color-shadow-color-strong: rgba(49, 51, 53, 0.22);
   --ds-color-live: #06786c;
@@ -435,6 +437,7 @@
     --ds-color-secondary-hover: #f2f3f5;
     --ds-color-secondary-active: #e0e1e3;
     --ds-color-scrim: rgba(49, 51, 53, 0.4);
+    --ds-color-preview-bed: #ffffff;
     --ds-color-shadow-color: rgba(49, 51, 53, 0.12);
     --ds-color-shadow-color-strong: rgba(49, 51, 53, 0.22);
     --ds-color-live: #06786c;

@@ -79,6 +79,10 @@
 .trigger[data-state="active"] .count {
   color: var(--ds-color-text-secondary);
 }
+/* Pushes the row's trailing slot to its end. */
+.spacer {
+  flex: 1;
+}
 
 .content {
   min-height: 0;

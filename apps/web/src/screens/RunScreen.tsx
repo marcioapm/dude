@@ -19,11 +19,13 @@ import {
   EventRow,
   EventStream,
   QuestionCard,
+  ServersDrawer,
   ThinkingBlock,
   ToolCallCard,
   summarizeToolArgs,
 } from "@dude/design-system/components";
-import { Button, Callout, Dialog, Spinner, Tab, TabList, TabPanel, Tabs, Textarea } from "@dude/design-system/primitives";
+import { Button, Callout, Dialog, LinkButton, Spinner, Tab, TabList, TabPanel, TabToggle, Tabs, Textarea } from "@dude/design-system/primitives";
+import { summarizeServers } from "@dude/design-system";
 import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, runLabel } from "@dude/domain";
 import type { AgentRole, PersistedEvent } from "@dude/domain";
 import type { ApiClient, Person, RunDetail, RunDiffSummary } from "../api/client.ts";
@@ -31,11 +33,16 @@ import { ApiError, reportedCost } from "../api/client.ts";
 import { PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, snapshot, type Turn } from "../api/conversation.ts";
 import type { ComposerSubmission } from "@dude/design-system/components";
 import { useEventStream } from "../hooks/useEventStream.ts";
+import { useServers } from "../hooks/useServers.ts";
 import { conflictNotice, type Notice } from "../conflict.ts";
 import { firstName } from "@dude/design-system";
 import { usePeople, type People } from "../people.tsx";
 import { NotFound } from "./NotFound.tsx";
 import { ChangesPanel } from "./ChangesPanel.tsx";
+import { ServerPreview, ServersRunActions, ServersSection, serversTabTrailing } from "./ServersSection.tsx";
+
+/** Whether the servers drawer is open: this browser's choice, kept across runs. */
+const DRAWER = "dude.run.servers";
 
 export interface RunScreenProps {
   client: ApiClient;
@@ -81,8 +88,32 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
   const [confirmAbort, setConfirmAbort] = useState(false);
   const [abortReason, setAbortReason] = useState("");
   const people = usePeople();
+  // The servers panel beside the conversation, and the one previewed in its
+  // place. Open by this browser's last choice; with none made, open once the
+  // run turns out to have servers — they are why someone would look.
+  const [drawer, setDrawer] = useState(() => localStorage.getItem(DRAWER) === "1");
+  const chose = useRef(localStorage.getItem(DRAWER) !== null);
+  const toggleDrawer = useCallback((open: boolean) => {
+    chose.current = true;
+    localStorage.setItem(DRAWER, open ? "1" : "0");
+    setDrawer(open);
+  }, []);
+  const [previewing, setPreviewing] = useState<string | null>(null);
 
   const { events, reconnects } = useEventStream({ client, runId });
+
+  // The servers are re-read on their own event; the Run on its status
+  // events. The latest such event's cursor, not a count: the stream keeps
+  // a window, and a count stands still when an old one drops off the front
+  // as a new one arrives. A replayed history moves it once per event, and
+  // `useServers` folds the burst into one read in flight and one after it.
+  // A stream that came back may have missed one: its return counts too.
+  const serversVersion = useMemo(() => (events.findLast((e) => e.eventType === EventTypes.ServersChanged)?.cursor ?? 0) + reconnects * 1e9, [events, reconnects]);
+  const servers = useServers(client, { runId }, serversVersion);
+  const previewed = previewing ? servers.data?.servers.find((s) => s.name === previewing) ?? null : null;
+  useEffect(() => {
+    if (!chose.current && servers.data?.run && servers.data.servers.length > 0) setDrawer(true);
+  }, [servers.data]);
 
   // Re-read the Run whenever the ledger says its status changed, rather than
   // polling: the stream already tells us when something happened.
@@ -142,6 +173,9 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
     return snapshot(apply(projection.current, events), run?.status);
   }, [events, runId, run?.status]);
   const isLive = run ? !TERMINAL_RUN_STATUSES.includes(run.status) : false;
+  // A branch preview is a run with no agent: nothing to steer, pause or abort
+  // from here (the API says 409 not_an_agent); the servers are all of it.
+  const isPreviewRun = servers.data?.run?.kind === "preview" && servers.data.run.id === runId;
   // The latest diff's summary: its file count for the Changes tab, its
   // checksum for the panel to know when to fetch.
   const diffSummary = useMemo(
@@ -252,8 +286,14 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
   return (
     <div className="runScreen">
       {breadcrumb ? <div className="runCrumbs">{breadcrumb}</div> : null}
+      <div className="runSplit">
       <Tabs defaultValue="chat" fill>
-        <TabList className="tabsInset">
+        <TabList className="tabsInset" trailing={
+          /* Not a tab: a panel beside the conversation, so someone can steer the agent and watch its server together. */
+          <TabToggle pressed={drawer} onPressedChange={toggleDrawer} icon="globe" title="Servers on this run" trailing={serversTabTrailing(servers.data)} data-testid="servers-toggle">
+            Servers
+          </TabToggle>
+        }>
           <Tab value="chat" icon="message">Conversation</Tab>
           {/* The agent's checkout, as it changes: only for a Run with one. */}
           {Object.keys(run.baseRefs).length > 0 || run.phase ? (
@@ -272,7 +312,10 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
             headerActions={
               isLive ? (
                 <>
-                  {run.status === "paused" ? (
+                  {run.status === "running" && servers.data?.run?.terminalUrl ? (
+                    <LinkButton size="sm" iconOnly leadingIcon="terminal" label="Open terminal in lux" href={servers.data.run.terminalUrl} data-testid="terminal-icon" />
+                  ) : null}
+                  {isPreviewRun ? null : run.status === "paused" ? (
                     <Button
                       size="sm"
                       variant="secondary"
@@ -291,9 +334,11 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
                       Pause
                     </Button>
                   )}
-                  <Button size="sm" variant="danger" disabled={busy} onClick={() => setConfirmAbort(true)} data-testid="abort">
-                    Abort…
-                  </Button>
+                  {isPreviewRun ? null : (
+                    <Button size="sm" variant="danger" disabled={busy} onClick={() => setConfirmAbort(true)} data-testid="abort">
+                      Abort…
+                    </Button>
+                  )}
                 </>
               ) : null
             }
@@ -302,7 +347,10 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
                 <AgentPlan items={conversation.plan} defaultCollapsed data-testid="plan" />
               ) : null
             }
-            footer={!isLive ? <RunEnded run={run} onOpenTask={() => onOpenTask(run.taskId)} /> : (
+            footer={!isLive ? <RunEnded run={run} onOpenTask={() => onOpenTask(run.taskId)} /> : isPreviewRun ? (
+              // A preview run has no agent to steer: its servers are the whole of it.
+              <Callout tone="neutral" data-testid="preview-run-note">A branch preview has no agent. Start, stop and open its servers from the Servers panel; its checkout is the branch as it stood.</Callout>
+            ) : (
               <ChatComposer
                 // The agent waiting on a question takes an answer; otherwise
                 // anything said steers it.
@@ -372,6 +420,22 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
           </EventStream>
         </TabPanel>
       </Tabs>
+      {/* The preview docks beside the conversation and takes the drawer's place: one thing at the right. */}
+      {previewed && servers.data?.run ? (
+        <ServerPreview docked server={previewed} run={servers.data.run} now={Date.now()} servers={servers} onClose={() => setPreviewing(null)} />
+      ) : drawer ? (
+        <ServersDrawer
+          data-testid="servers-drawer"
+          count={servers.data?.run
+            ? servers.data.run.kind === "preview" ? "preview run" : `${summarizeServers(servers.data.servers).ready} of ${servers.data.servers.length} ready`
+            : undefined}
+          actions={<ServersRunActions servers={servers} variant="quiet" />}
+          onClose={() => toggleDrawer(false)}
+        >
+          <ServersSection client={client} servers={servers} inDrawer onPreview={setPreviewing} previewing={previewing} />
+        </ServersDrawer>
+      ) : null}
+      </div>
 
       {notice ? (
         <Callout tone="neutral" data-testid="conflict-notice">
