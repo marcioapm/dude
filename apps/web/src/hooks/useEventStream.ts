@@ -146,12 +146,16 @@ export function useReloadOnEvents(
   options: Omit<UseEventStreamOptions, "limit">,
   reload: () => void,
   everyMs = 300,
+  /** Sees each event first; returning true means it needs no reload (presence). */
+  onEvent?: (event: PersistedEvent) => boolean,
 ): StreamStatus {
   // Only whether something arrived matters, so the stream keeps almost
   // nothing.
   const { events, status, reconnects } = useEventStream({ ...options, limit: 1, live: true });
   const latest = useRef(reload);
   latest.current = reload;
+  const handle = useRef(onEvent);
+  handle.current = onEvent;
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const schedule = useCallback(() => {
     if (timer.current !== undefined) return;
@@ -162,7 +166,8 @@ export function useReloadOnEvents(
   }, [everyMs]);
 
   useEffect(() => {
-    if (events.length > 0) schedule();
+    const event = events[0];
+    if (event && !(handle.current?.(event) ?? false)) schedule();
   }, [events, schedule]);
 
   // A live-only stream replays nothing when it comes back: whatever

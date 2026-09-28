@@ -101,13 +101,13 @@ def test_settings_show_webhook_health_and_save_how_dude_behaves_on_github(
 ):
     _sign_in(page, web_url, org["api_key"])
     page.get_by_test_id("org-settings-button").click()
+    page.locator('[data-settings-nav="github"]').click()
     expect(page.get_by_test_id("webhook-summary")).to_contain_text("0 of 1 repository registered")
     page.get_by_test_id("webhook-register").click()
     expect(page.get_by_test_id("webhook-summary")).to_contain_text("1 of 1 repository registered", timeout=15_000)
     assert len(fake_github.hooks) == 1
 
-    page.get_by_label("Merge method").click()
-    page.get_by_role("option", name="Rebase").click()
+    page.get_by_test_id("setting-merge-method").get_by_text("Rebase").click()
     page.get_by_test_id("setting-fix-rounds").fill("3")
     page.get_by_test_id("github-save").click()
     wait_until(lambda: client.get("/v1/forge/settings").json()["mergeMethod"] == "rebase", timeout=10,

@@ -153,7 +153,7 @@ export function Sidebar({
     if (mine === undefined) setLocalMine(v);
   };
 
-  const filter = useMemo<NavFilter>(() => ({ query: q, triage: triage ?? null, person: isMine ? (you ?? null) : null }), [q, triage, isMine, you]);
+  const filter = useMemo<NavFilter>(() => ({ query: q, triage: triage ?? null, person: isMine ? (you ?? null) : null, you }), [q, triage, isMine, you]);
   const waiting = useMemo(() => waitingSplit(attentionItems(projects), you), [projects, you]);
   const filtering = q.trim().length > 0 || (triage ?? null) !== null || isMine;
   const visible = useMemo(() => (filtering ? flattenNav(projects, expanded ?? new Map(), filter).length : -1), [filtering, projects, expanded, filter]);
@@ -225,8 +225,8 @@ export function Sidebar({
       ) : null}
 
       {online && online.length > 0 ? (
-        <div className={styles["online"]}>
-          <span className={cx(styles["label"], "ds-label")}>Online</span>
+        <div className={styles["online"]} role="group" aria-label={`Online: ${online.map((p) => p.name).join(", ")}`} data-testid="online">
+          <span className={cx(styles["label"], "ds-label")} aria-hidden>Online</span>
           <PersonAvatarStack people={online} size={24} max={6} />
           <span className={styles["onlineCount"]}>{online.length}</span>
         </div>

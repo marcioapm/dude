@@ -33,6 +33,7 @@ export {
   flattenNav,
   ancestorKeys,
   attentionItems,
+  isYours,
   globalCounts,
   projectCounts,
   epicCounts,

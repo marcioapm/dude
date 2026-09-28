@@ -2,6 +2,7 @@ package delivery
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
@@ -33,6 +34,12 @@ type PromptInput struct {
 	Tools bool
 	// It also has the dude CLI (lux serves dude's tools in the container).
 	CLI bool
+	// The organization's prompt for the phase's role, when it has saved
+	// one: it replaces dude's built-in instructions. nil runs dude's.
+	OrgPrompt *string
+	// The project's prompt for the role, and whether it is added after the
+	// organization's ("add") or replaces it ("replace"). "" has none.
+	ProjectPrompt, ProjectPromptMode string
 	// What people decided while this work was delivered: agents' questions
 	// and their answers. Part of the task from then on, for every phase.
 	Decisions []Decision
@@ -235,19 +242,100 @@ const cliNote = "The same, from the shell: the `dude` command (see `dude help`) 
 	"decides on it), `dude event progress --data '{\"done\":3,\"of\":10}'` for progress people can follow, " +
 	"`dude repo list` and `dude repo request`, and `dude publish FILE` to keep a file for people."
 
+// PromptRoleForPhase is whose prompt and settings each phase runs with: an
+// agent role, or the fixer's — the implementer's model, told something
+// else, whose settings fall back to the implementer's.
+var PromptRoleForPhase = map[string]string{
+	PhaseInvestigate: "investigator",
+	PhaseImplement:   "implementer",
+	PhaseReview:      "reviewer",
+	PhaseFix:         "fixer",
+	PhaseSimplify:    "simplifier",
+	PhaseTest:        "qa_browser",
+}
+
+// PromptRoles are the prompts a person can edit, in the order they are
+// shown.
+var PromptRoles = []string{"implementer", "reviewer", "fixer", "simplifier", "qa_browser", "investigator"}
+
+// builtinInstructions is what each role is told to do, before the work it
+// is given: the part of a phase's prompt a person may rewrite (an
+// organization's prompt replaces it, a project's adds to or replaces that).
+// The rest — the task, findings, formats, tools, committing and the
+// tester's recording — is dude's, and every phase gets it whatever its
+// instructions say, because the workflow depends on it.
+var builtinInstructions = map[string][]string{
+	"investigator": {"Investigate this task before any code is written. Read the relevant code, identify " +
+		"what will have to change, and report what you found. Do not change anything."},
+	"implementer": {"Implement this task. Run the project's formatter, type checks and tests before you " +
+		"finish — handing over code that does not build is not finishing."},
+	"reviewer": {"You may run the code, run the tests, and write throwaway scripts to check a hypothesis. " +
+		"Do not commit: your output is findings, and someone else will make the change."},
+	// The fixer's second paragraph follows the feedback it is given.
+	"fixer": {"Address the feedback below.",
+		"Fix only what is raised above. Widening the change makes the re-review harder and risks new findings."},
+	"simplifier": {"Simplify the changes on this branch without changing what they do.",
+		"Remove needless complexity, improve names and structure, delete dead code the change " +
+			"introduced, and consolidate obvious duplication.",
+		"Do not widen the scope, do not add features, and do not change behaviour. Run the tests: " +
+			"if they do not pass, your simplification was not behaviour-preserving."},
+	"qa_browser": {"Exercise this change the way a person would. Start the application, drive it in a " +
+		"browser, and confirm it does what the task asked.",
+		"You are not looking for what the unit tests already cover. You are looking for what they " +
+			"cannot: does the feature actually work when used.",
+		"How to start the application and what data it needs are the project's to say (in the " +
+			"project notes below); if they say nothing, find out from the repository — its README, " +
+			"its scripts — and say in your report what you did."},
+}
+
+// BuiltinPrompt is a role's instructions as dude ships them: what an
+// organization that never edits its prompt runs, and where the first
+// edit starts from.
+func BuiltinPrompt(role string) string {
+	return strings.Join(builtinInstructions[role], "\n\n")
+}
+
+// instructions is what the phase's role is told to do: the organization's
+// prompt if it has one, else dude's; then the project's, added after it or
+// in its place. dude's own fixer instructions come in two parts, either
+// side of the feedback it is given (tail); a person's come in one piece,
+// before it.
+func (in PromptInput) instructions(phase string) (lead, tail []string) {
+	lead = builtinInstructions[PromptRoleForPhase[phase]]
+	custom := in.OrgPrompt != nil
+	if custom {
+		lead = []string{*in.OrgPrompt}
+	}
+	project := strings.TrimSpace(in.ProjectPrompt)
+	switch {
+	case in.ProjectPromptMode == "replace":
+		lead, custom = []string{project}, true
+	case in.ProjectPromptMode == "add" && project != "":
+		lead, custom = append(slices.Clone(lead), project), true
+	}
+	lead = slices.DeleteFunc(slices.Clone(lead), func(s string) bool { return strings.TrimSpace(s) == "" })
+	if !custom && phase == PhaseFix && len(lead) > 1 {
+		return lead[:1], lead[1:]
+	}
+	return lead, nil
+}
+
 // Prompt composes one phase's prompt.
 func Prompt(phase string, in PromptInput) string {
 	var sections []string
 	add := func(s ...string) { sections = append(sections, s...) }
 
+	lead, tail := in.instructions(phase)
+
 	switch phase {
 	case PhaseInvestigate:
-		add("Investigate this task before any code is written. Read the relevant code, identify "+
-			"what will have to change, and report what you found. Do not change anything.", in.task())
+		add(lead...)
+		add(in.task())
 
 	case PhaseImplement:
-		add("Implement this task. Run the project's formatter, type checks and tests before you "+
-			"finish — handing over code that does not build is not finishing. "+commitNote, in.task())
+		add(lead...)
+		add(commitNote)
+		add(in.task())
 		add(in.ask()...)
 
 	case PhaseReview:
@@ -255,12 +343,9 @@ func Prompt(phase string, in PromptInput) string {
 		if reviewFocus[category] == "" {
 			category = "correctness"
 		}
-		add(fmt.Sprintf("Review the changes on this branch for **%s**.", category),
-			reviewFocus[category],
-			"You may run the code, run the tests, and write throwaway scripts to check a hypothesis. "+
-				"Do not commit: your output is findings, and someone else will make the change.",
-			"The task under review:\n\n"+in.task(),
-			findingFormat)
+		add(fmt.Sprintf("Review the changes on this branch for **%s**.", category), reviewFocus[category])
+		add(lead...)
+		add("The task under review:\n\n"+in.task(), findingFormat)
 		if note := severityNote(in.BlockingSeverities); note != "" {
 			add(note)
 		}
@@ -269,7 +354,7 @@ func Prompt(phase string, in PromptInput) string {
 		}
 
 	case PhaseFix:
-		add("Address the feedback below. " + commitNote)
+		add(lead...)
 		if len(in.Findings) > 0 {
 			var b strings.Builder
 			b.WriteString("## Review findings")
@@ -318,28 +403,20 @@ func Prompt(phase string, in PromptInput) string {
 			}
 			add("## Pull request feedback\n\n" + strings.Join(items, "\n\n"))
 		}
-		add("Fix only what is raised above. Widening the change makes the re-review harder and risks new findings.",
-			"The original task, for context:\n\n"+in.task())
+		add(tail...)
+		add(commitNote)
+		add("The original task, for context:\n\n" + in.task())
 		add(in.ask()...)
 
 	case PhaseSimplify:
-		add("Simplify the changes on this branch without changing what they do.",
-			"Remove needless complexity, improve names and structure, delete dead code the change "+
-				"introduced, and consolidate obvious duplication.",
-			"Do not widen the scope, do not add features, and do not change behaviour. Run the tests: "+
-				"if they do not pass, your simplification was not behaviour-preserving. "+commitNote,
-			"The task this branch implements:\n\n"+in.task())
+		add(lead...)
+		add(commitNote)
+		add("The task this branch implements:\n\n" + in.task())
 
 	case PhaseTest:
-		add("Exercise this change the way a person would. Start the application, drive it in a "+
-			"browser, and confirm it does what the task asked.",
-			"You are not looking for what the unit tests already cover. You are looking for what they "+
-				"cannot: does the feature actually work when used.",
-			testerTools,
-			"How to start the application and what data it needs are the project's to say (in the "+
-				"project notes below); if they say nothing, find out from the repository — its README, "+
-				"its scripts — and say in your report what you did.",
-			in.task(), findingFormat)
+		add(lead...)
+		add(testerTools)
+		add(in.task(), findingFormat)
 
 	default:
 		add(in.task())

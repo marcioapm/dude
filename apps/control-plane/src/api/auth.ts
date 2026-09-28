@@ -8,7 +8,7 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { newId } from "@dude/domain";
-import { withOrg, withoutTenant } from "../db/client.ts";
+import { type OrgScope, withOrg, withoutTenant } from "../db/client.ts";
 
 export const KEY_PREFIX = "dude_sk_";
 
@@ -18,6 +18,8 @@ export type PrincipalKind = "user";
 export interface Principal {
   organizationId: string;
   apiKeyId: string;
+  /** The person the key acts for (migration 035 gives every user key one). */
+  personId: string;
   kind: PrincipalKind;
   name: string;
 }
@@ -31,24 +33,54 @@ export function generateApiKey(): { key: string; keyHash: string; keyPrefix: str
   return { key, keyHash: hashKey(key), keyPrefix: key.slice(0, 16) };
 }
 
-/** Create an API key and return the plaintext exactly once. */
+/**
+ * Create an API key and return the plaintext exactly once. For `personId`,
+ * or — with none — for a new person named as the key is (migration 035).
+ */
 export async function createApiKey(params: {
   organizationId: string;
   name: string;
   kind?: PrincipalKind;
-}): Promise<{ id: string; key: string }> {
+  personId?: string;
+}): Promise<{ id: string; key: string; personId: string }> {
+  // api_keys is tenant-scoped, so creation runs inside the owning org.
+  return withOrg(params.organizationId, (scope) => insertApiKey(scope, params));
+}
+
+/** `createApiKey` inside a transaction already scoped to the organization. */
+export async function insertApiKey(
+  scope: OrgScope,
+  params: { name: string; kind?: PrincipalKind; personId?: string },
+): Promise<{ id: string; key: string; personId: string; keyPrefix: string }> {
   const { key, keyHash, keyPrefix } = generateApiKey();
   const id = newId("apiKey");
+  const rows = (await scope.sql`
+    INSERT INTO api_keys (id, organization_id, name, key_hash, key_prefix, kind, person_id)
+    VALUES (${id}, ${scope.organizationId}, ${params.name}, ${keyHash}, ${keyPrefix},
+            ${params.kind ?? "user"}, ${params.personId ?? null})
+    RETURNING person_id AS "personId"`) as Array<{ personId: string }>;
+  return { id, key, personId: rows[0]!.personId, keyPrefix };
+}
 
-  // api_keys is tenant-scoped, so creation runs inside the owning org.
-  await withOrg(params.organizationId, async ({ sql }) => {
-    await sql`
-      INSERT INTO api_keys (id, organization_id, name, key_hash, key_prefix, kind)
-      VALUES (${id}, ${params.organizationId}, ${params.name}, ${keyHash}, ${keyPrefix},
-              ${params.kind ?? "user"})`;
-  });
-
-  return { id, key };
+/**
+ * Add a person to the organization `scope` is in, with a first key to sign
+ * in with (its plaintext returned this once). Null when someone there
+ * already has that email.
+ */
+export async function insertPerson(
+  scope: OrgScope,
+  person: { name: string; email: string; role?: "admin" | "member" | undefined; lastSeenWhere?: string | null },
+): Promise<{ personId: string; keyId: string; key: string } | null> {
+  const taken = await scope.sql`SELECT 1 FROM people WHERE email = ${person.email} AND removed_at IS NULL`;
+  if (taken.length > 0) return null;
+  const personId = newId("person");
+  const where = person.lastSeenWhere ?? null;
+  await scope.sql`
+    INSERT INTO people (id, organization_id, name, email, role, last_seen_at, last_seen_where)
+    VALUES (${personId}, ${scope.organizationId}, ${person.name}, ${person.email}, ${person.role ?? "member"},
+            ${where ? new Date() : null}, ${where})`;
+  const { id, key } = await insertApiKey(scope, { name: person.name, personId });
+  return { personId, keyId: id, key };
 }
 
 /**
@@ -69,19 +101,20 @@ export async function authenticate(authorization: string | null): Promise<Princi
   // lookup_api_key is SECURITY DEFINER and matches on the full hash only.
   const rows = await withoutTenant(async ({ sql }) => {
     return (await sql`
-      SELECT id, organization_id, name, kind
+      SELECT id, organization_id, name, kind, person_id
       FROM lookup_api_key(${candidateHash})`) as Array<{
       id: string;
       organization_id: string;
       name: string;
       kind: PrincipalKind;
+      person_id: string | null;
     }>;
   });
 
   const row = rows[0];
   // A runner key left over from the retired runner protocol authenticates
   // nothing (migration 014 revokes them; this holds for any that remain).
-  if (!row || row.kind !== "user") return null;
+  if (!row || row.kind !== "user" || !row.person_id) return null;
 
   // Best-effort usage tracking; never fail a request because it did not stick.
   void withoutTenant(async ({ sql }) => {
@@ -91,6 +124,7 @@ export async function authenticate(authorization: string | null): Promise<Princi
   return {
     organizationId: row.organization_id,
     apiKeyId: row.id,
+    personId: row.person_id,
     kind: row.kind,
     name: row.name,
   };

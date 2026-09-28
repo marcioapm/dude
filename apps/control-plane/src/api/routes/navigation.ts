@@ -17,10 +17,10 @@
  * right now" answerable from the tree: the running reviewer is a live row.
  */
 
-import { ownerJson } from "./people.ts";
+import { peopleJson } from "./people.ts";
 import { escalationJson } from "./work.ts";
 import { DEFAULT_RUN_ROLE, TERMINAL_RUN_STATUSES, runLabel } from "@dude/domain";
-import type { Escalation, RunStatus, SessionStatus } from "@dude/domain";
+import type { Escalation, PersonRef, RunStatus, SessionStatus } from "@dude/domain";
 import { withOrg } from "../../db/client.ts";
 import { json } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
@@ -46,7 +46,8 @@ interface TaskRow {
   epicId: string | null;
   title: string;
   status: string;
-  owner: { id: string; name: string } | null;
+  /** Everyone on it, the owner first. */
+  people: PersonRef[];
   statusSince: string;
   escalation: Escalation | null;
 }
@@ -117,7 +118,7 @@ async function getNavigation(ctx: RequestContext): Promise<Response> {
     const tasks = (await sql`
       SELECT w.id, p.key_prefix || '-' || w.number AS key,
              w.project_id AS "projectId", w.epic_id AS "epicId", w.title, w.status,
-             ${sql.unsafe(ownerJson("w"))}, ${sql.unsafe(escalationJson("w"))},
+             ${sql.unsafe(peopleJson("w"))}, ${sql.unsafe(escalationJson("w"))},
              COALESCE(
                (SELECT max(e.occurred_at) FROM events e
                 WHERE e.task_id = w.id AND e.event_type = 'task.status_changed'),
@@ -176,8 +177,9 @@ async function getNavigation(ctx: RequestContext): Promise<Response> {
         status: w.status,
         statusSince: w.statusSince,
         costUsd: costByTask.get(w.id) ?? 0,
-        // Who drives it: the person it waits on when an agent asks.
-        people: w.owner ? [w.owner] : [],
+        // Who is on it, the owner first: the person it waits on when an
+        // agent asks, and who "Waiting on you" is for.
+        people: w.people,
         // Why delivery stopped for a person, so "Needs you" can say it.
         escalation: w.escalation,
         runs: [...attempts.entries()].map(([attempt, phaseRuns]) => ({

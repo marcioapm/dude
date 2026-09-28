@@ -30,6 +30,7 @@ import { EpicMetricsSection } from "./screens/MetricsSection.tsx";
 import { MySettingsScreen } from "./screens/MySettingsScreen.tsx";
 import { OrganizationSettingsScreen } from "./screens/OrganizationSettingsScreen.tsx";
 import { ProjectSettingsScreen } from "./screens/ProjectSettingsScreen.tsx";
+import { ProjectEpics } from "./screens/ProjectEpics.tsx";
 import { RunScreen } from "./screens/RunScreen.tsx";
 import { existingTask, TaskDialog, type ExistingTask } from "./screens/TaskDialog.tsx";
 import { TaskScreen } from "./screens/TaskScreen.tsx";
@@ -156,7 +157,8 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
     void load();
   }, [load]);
 
-  const stream = useReloadOnEvents({ client, all: true }, () => void load(), 400);
+  // Someone seen is presence, not a change to the tree: no reload for it.
+  const stream = useReloadOnEvents({ client, all: true }, () => void load(), 400, people.seen);
 
   // First load with nothing selected: open the first project's board rather
   // than an empty pane.
@@ -168,10 +170,13 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   const scope = useMemo(() => (projects ? boardScope(projects, selected) : null), [projects, selected]);
   const toBoard = useCallback(() => go(projects?.[0] ? inTree({ kind: "project", id: projects[0].id }) : null), [go, projects]);
 
-  // The tab says where you are: "TEXT-14 · Implement — dude".
+  // The tab says where you are: "TEXT-14 · Implement — dude"; teammates
+  // see the same beside your face.
   useEffect(() => {
-    document.title = [placeTitle(place, projects), "dude"].filter(Boolean).join(" — ");
-  }, [place, projects]);
+    const where = placeTitle(place, projects);
+    document.title = [where, "dude"].filter(Boolean).join(" — ");
+    client.setWhere(where);
+  }, [place, projects, client]);
 
   /** Carry out a row or board action: quick ones here, the rest in a dialog. */
   const act = useCallback(
@@ -186,7 +191,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
           return project ? setOpen({ kind: "task", projectId: project.id, epicId: null, editing: intent.taskId }) : undefined;
         }
         case "projectSettings":
-          return go({ view: "projectSettings", projectId: intent.projectId });
+          return go({ view: "projectSettings", projectId: intent.projectId, ...(intent.page ? { page: intent.page } : {}) });
         case "moveEpic":
           return quietly(client.updateEpic(intent.epicId, { position: intent.position }));
         case "moveTask":
@@ -226,10 +231,12 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   let main;
   // Settings that are not a project's come first: a new organization with
   // no projects yet still sets up its GitHub connection, and you your view.
+  const openRun = (runId: string) => go(inTree({ kind: "session", id: runId }));
   if (place?.view === "orgSettings") {
-    main = <OrganizationSettingsScreen client={client} />;
+    main = <OrganizationSettingsScreen client={client} me={people.me} people={people.all} onPeopleChanged={() => void people.refresh()}
+      page={place.page} onOpenRun={openRun} onPage={(page) => go({ view: "orgSettings", page }, true)} />;
   } else if (place?.view === "mySettings") {
-    main = <MySettingsScreen client={client} />;
+    main = <MySettingsScreen client={client} me={people.me} onChanged={() => void people.refresh()} />;
   } else if (!projects) {
     main = <div className="centered"><Spinner label="Loading…" /></div>;
   } else if (projects.length === 0) {
@@ -253,6 +260,10 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         key={place.projectId}
         client={client}
         projectId={place.projectId}
+        page={place.page}
+        onPage={(page) => go({ view: "projectSettings", projectId: place.projectId, page }, true)}
+        onOrganization={(page) => go({ view: "orgSettings", page })}
+        onOpenRun={openRun}
         onChanged={() => void load()}
         onBack={() => go(inTree({ kind: "project", id: place.projectId }))}
       />
@@ -263,8 +274,10 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
     main = (
       <Board
         project={project}
+        you={people.you}
         epic={scope.epic}
-        overview={scope.epic ? <EpicMetricsSection client={client} epicId={scope.epic.id} version={version} /> : undefined}
+        overview={scope.epic ? <EpicMetricsSection client={client} epicId={scope.epic.id} version={version} />
+          : <ProjectEpics client={client} projectId={project.id} version={version} onOpenEpic={(id) => go(inTree({ kind: "epic", id }))} />}
         selected={selected}
         onSelect={(ref) => go(inTree(ref))}
         groupBy={groupByEpic ? "epic" : null}
@@ -367,7 +380,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   }
 
   const saved = () => void load();
-  const you = people.you ? people.byId.get(people.you) ?? null : null;
+  const you = people.me;
 
   return (
     <div className="shell" data-testid="shell">
@@ -388,7 +401,8 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         selected={selected}
         onSelect={(ref) => go(inTree(ref))}
         you={people.you}
-        online={people.all.filter((p) => p.online)}
+        // You first, then the others as the organization lists them.
+        online={people.all.filter((p) => p.online).sort((a, b) => Number(b.id === people.you) - Number(a.id === people.you))}
         onWaitingSelect={() => go({ view: "inbox" })}
         waitingSelected={place?.view === "inbox"}
         mine={mine}
@@ -408,7 +422,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
               Organisation settings
             </SidebarLink>
             {you ? (
-              <SidebarProfile person={you} onOpen={() => go({ view: "mySettings" })} openProps={{ "data-testid": "my-settings-button" }}
+              <SidebarProfile person={you} detail={you.email ?? undefined} onOpen={() => go({ view: "mySettings" })} openProps={{ "data-testid": "my-settings-button" }}
                 actions={<IconButton size="sm" icon="arrow-right" label="Sign out" onClick={onSignOut} data-testid="sign-out" />} />
             ) : (
               <>

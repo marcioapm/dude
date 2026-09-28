@@ -117,6 +117,12 @@ class ApiClient:
     def patch(self, path: str, json: dict | None = None) -> requests.Response:
         return self.request("PATCH", path, json=json or {})
 
+    def put(self, path: str, json: dict | None = None) -> requests.Response:
+        return self.request("PUT", path, json=json or {})
+
+    def delete(self, path: str) -> requests.Response:
+        return self.request("DELETE", path)
+
     # -- convenience wrappers, raising on unexpected failures ---------------
 
     def create_project(self, **body) -> dict:

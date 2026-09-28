@@ -32,6 +32,8 @@ import styles from "./Board.module.css";
 
 export interface BoardProps extends Omit<HTMLAttributes<HTMLElement>, "onSelect" | "title"> {
   readonly project: NavProject;
+  /** The viewer's person id: only their asks are needs-you cards (`taskTriage`). */
+  readonly you?: string | null | undefined;
   /** Narrow the board to one epic. Cards then drop their epic line. */
   readonly epic?: NavEpic | null | undefined;
   /** A task or one of its sessions; the card is marked current. */
@@ -87,10 +89,10 @@ interface Group {
  * next swimlane), ←→ across, Home/End, Enter/Space open. Selection and
  * focus are separate.
  */
-export function Board({ project, epic, selected, onSelect, cap = 12, loading, headerActions, overview, hideHeader, groupBy, collapsed, onCollapsedChange, laneMenu, className, ...rest }: BoardProps) {
+export function Board({ project, you, epic, selected, onSelect, cap = 12, loading, headerActions, overview, hideHeader, groupBy, collapsed, onCollapsedChange, laneMenu, className, ...rest }: BoardProps) {
   const swimlanes = groupBy === "epic" && !epic;
-  const columns = useMemo(() => boardColumns(project, epic), [project, epic]);
-  const lanes = useMemo(() => (swimlanes ? boardSwimlanes(project) : []), [swimlanes, project]);
+  const columns = useMemo(() => boardColumns(project, epic, you), [project, epic, you]);
+  const lanes = useMemo(() => (swimlanes ? boardSwimlanes(project, you) : []), [swimlanes, project, you]);
   const total = boardCardCount(columns);
   const cost = boardCost(columns);
   const counts = useMemo(() => sumTriage(columns.map((c) => c.counts)), [columns]);

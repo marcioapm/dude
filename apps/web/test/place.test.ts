@@ -11,4 +11,11 @@ describe("places", () => {
   test("a link from before tasks were work items still opens the task", () => {
     expect(parsePlace("#/workItem/wi_1")).toEqual({ view: "tree", ref: { kind: "task", id: "wi_1" } });
   });
+
+  test("a settings page is part of its place", () => {
+    for (const hash of ["#/org/settings", "#/org/settings/reviewer", "#/project/prj_1/settings", "#/project/prj_1/settings/delivery"]) {
+      expect(formatPlace(parsePlace(hash))).toBe(hash);
+    }
+    expect(parsePlace("#/project/prj_1/settings/fixer")).toEqual({ view: "projectSettings", projectId: "prj_1", page: "fixer" });
+  });
 });
