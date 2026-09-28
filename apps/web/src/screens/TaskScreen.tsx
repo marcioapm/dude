@@ -12,7 +12,7 @@
  *
  * Driven by the task's event stream, so a phase starting, a finding
  * landing or the PR opening appears without a reload; a dropped stream
- * says so and re-reads when it is back.
+ * is said by the shell, and the page re-reads when it is back.
  */
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
@@ -44,7 +44,6 @@ import { actorName, humanActor, project as foldConversation } from "../api/conve
 import { shortError } from "../escalation.ts";
 import { useReloadOnEvents } from "../hooks/useEventStream.ts";
 import { firstName, usePeople, type People } from "../people.tsx";
-import { Reconnecting } from "../Reconnecting.tsx";
 import { ArtifactsSection } from "./ArtifactsSection.tsx";
 import { EscalationPanel } from "./EscalationPanel.tsx";
 import { TaskMetricsSection } from "./MetricsSection.tsx";
@@ -108,7 +107,7 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
     void load();
   }, [load]);
 
-  const stream = useReloadOnEvents({ client, taskId }, () => void load());
+  useReloadOnEvents({ client, taskId }, () => void load());
 
   const deliver = async () => {
     setDelivering(true);
@@ -156,7 +155,6 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
 
   return (
     <div className="screen taskScreen" data-testid="task-screen">
-      {stream === "reconnecting" ? <Reconnecting /> : null}
       <header className="taskTop">
         <div className="taskCrumbs">{breadcrumb}</div>
         <span className="taskTopActions">

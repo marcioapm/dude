@@ -818,20 +818,19 @@ def test_acting_second_is_a_calm_notice_naming_who_acted_first(
     _sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/session/{run['id']}")
     expect(page.get_by_role("button", name="Pause")).to_be_visible()
-    # Bo acts first; the page is told nothing yet (the stream is closed).
-    page.context.set_offline(True)
+    # Bo acts first; the page is told nothing yet: its live stream is cut,
+    # while its own requests still go through.
+    page.route("**/v1/events/stream**", lambda route: route.abort())
+    page.evaluate("window.dispatchEvent(new Event('offline'))")
     bo = ApiClient(env.control_plane_url, create_api_key(env.owner_dsn, org["id"], name="Bo"))
     assert bo.post(f"/v1/runs/{run['id']}/pause").status_code in (200, 201, 202)
     wait_until(lambda: client.get_run(run["id"])["status"] == "paused", timeout=30, message="Bo's pause did not land")
-    page.context.set_offline(False)
     page.get_by_role("button", name="Pause").click()
-    page.wait_for_timeout(2000)
-    print("DBG", client.get_run(run["id"])["status"], [(e["eventType"], e["actor"]) for e in client.events(runId=run["id"]) if e["actor"]["type"] == "human" or e["eventType"].startswith("run.")])
     notice = page.get_by_test_id("conflict-notice")
     expect(notice).to_contain_text("Bo paused it first")
     expect(page.get_by_role("alert")).to_have_count(0)
     # The refusal is the only error the page saw.
-    assert all("409" in e or "ERR_INTERNET_DISCONNECTED" in e for e in console_errors), console_errors
+    assert all("409" in e or "ERR_FAILED" in e for e in console_errors), console_errors
 
 
 def test_a_dropped_stream_says_so_and_catches_up(
@@ -844,6 +843,9 @@ def test_a_dropped_stream_says_so_and_catches_up(
     expect(page.get_by_text("Before").first).to_be_visible()
     page.context.set_offline(True)
     expect(page.get_by_test_id("reconnecting")).to_be_visible(timeout=20_000)
+    # One banner, from the shell, with a way out if it never comes back.
+    expect(page.get_by_test_id("reconnecting")).to_have_count(1)
+    expect(page.get_by_test_id("reconnecting-reload")).to_be_visible()
     client.create_task(forge_project["id"], "While away")
     page.context.set_offline(False)
     expect(page.get_by_test_id("reconnecting")).to_have_count(0, timeout=30_000)

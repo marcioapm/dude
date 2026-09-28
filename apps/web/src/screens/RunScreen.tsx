@@ -31,7 +31,6 @@ import { ApiError, reportedCost } from "../api/client.ts";
 import { PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, snapshot, type Turn } from "../api/conversation.ts";
 import type { ComposerSubmission } from "@dude/design-system/components";
 import { cameBack, useEventStream } from "../hooks/useEventStream.ts";
-import { Reconnecting } from "../Reconnecting.tsx";
 import { conflictNotice, type Notice } from "../conflict.ts";
 import { firstName, usePeople, type People } from "../people.tsx";
 import { NotFound } from "./NotFound.tsx";
@@ -256,7 +255,6 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
 
   return (
     <div className="runScreen">
-      {streamStatus === "reconnecting" ? <Reconnecting /> : null}
       {breadcrumb ? <div className="runCrumbs">{breadcrumb}</div> : null}
       <Tabs defaultValue="chat" fill>
         <TabList>
