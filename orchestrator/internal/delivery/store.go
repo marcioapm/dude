@@ -673,19 +673,36 @@ func prBody(goal string, criteria []string, findings []struct{ Category, Severit
 	return joinNonEmpty(sections, "\n\n")
 }
 
-// PullRequestState is a task's pull request as last synced from the forge.
-type PullRequestState struct{ State, Checks, Review string }
+// PullRequestState is a task's pull request as last synced from the forge,
+// with what finds it on GitHub.
+type PullRequestState struct {
+	forge.Status
+	Repo, Slug string
+}
 
 // PullRequestStates reads the pull requests as last synced.
 func (s *Store) PullRequestStates(ctx context.Context, org string, prIDs []string) ([]PullRequestState, error) {
 	var out []PullRequestState
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT state::text, checks::text, review::text FROM pull_requests WHERE id = ANY($1)`, prIDs)
+		rows, err := tx.Query(ctx, `SELECT pr.state::text, pr.checks::text, pr.review::text, pr.mergeable_state,
+				pr.unresolved_threads, pr.number, COALESCE(pr.head_sha, ''), r.name, r.url
+			FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
+			WHERE pr.id = ANY($1) ORDER BY pr.created_at, pr.id`, prIDs)
 		if err != nil {
 			return err
 		}
-		out, err = pgx.CollectRows(rows, pgx.RowToStructByPos[PullRequestState])
-		return err
+		defer rows.Close()
+		for rows.Next() {
+			var p PullRequestState
+			var url string
+			if err := rows.Scan(&p.State, &p.Checks, &p.Review, &p.Mergeable, &p.UnresolvedThreads, &p.Number,
+				&p.HeadSHA, &p.Repo, &url); err != nil {
+				return err
+			}
+			p.Slug = forge.SlugFromURL(url)
+			out = append(out, p)
+		}
+		return rows.Err()
 	})
 	return out, err
 }

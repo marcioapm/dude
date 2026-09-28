@@ -46,8 +46,14 @@ type State struct {
 	PendingRunIDs []string `json:"pendingRunIds,omitempty"`
 	// Review → fix cycles spent.
 	Iteration int `json:"iteration,omitempty"`
-	// PR feedback → fix cycles spent.
+	// PR feedback → fix cycles spent in this review round: a person's new
+	// review starts another, and CI failing again after a fix does not.
 	PRIteration int `json:"prIteration,omitempty"`
+	// PR fix cycles in all, across rounds: bounded by the organization's
+	// fix rounds per pull request. PRFixKey only grows, and names each
+	// fix's Run, so a round starting over never finds an earlier fix.
+	PRFixes  int `json:"prFixes,omitempty"`
+	PRFixKey int `json:"prFixKey,omitempty"`
 	// The pull request feedback being fixed.
 	PRFeedback []forge.ActionableFeedback `json:"prFeedback,omitempty"`
 	// The pull requests opened, one per repository changed.
@@ -86,6 +92,10 @@ func (e *Escalation) Actions() []string {
 		}
 	case "stuck", "exhausted":
 		out = append(out, "retry", "accept")
+	case "pull_request_conflict", "ci_stuck":
+		// A person resolves the conflict, or sees to CI, on GitHub; dude
+		// waits on the pull request again.
+		out = append(out, "wait")
 	default:
 		if e.Step != "" {
 			out = append(out, "retry")
@@ -506,6 +516,7 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 	// that arrived with it.
 	var actionable []forge.ActionableFeedback
 	ended, readiness := false, false
+	var stop *forge.Signal // a conflict, or CI stuck: a person's to see to
 	for _, sig := range sc.Signals {
 		if sig.Name != SignalPRFeedback {
 			continue
@@ -519,15 +530,38 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 			ended = true
 		case "readiness":
 			readiness = true
+		case "conflict", "ci_stuck":
+			stop = &s
 		default:
 			actionable = append(actionable, s.Feedback...)
+			if s.Conflict {
+				stop = &forge.Signal{Kind: "conflict", Repo: s.Repo, Number: s.Number}
+			}
 		}
 	}
 	if ended {
 		res, finished, err := w.pullRequestEnded(ctx, sc, st)
-		if err != nil || finished || len(actionable) == 0 {
+		if err != nil || finished || len(actionable) == 0 && stop == nil {
 			return res, err
 		}
+	}
+	// A person's review is a new round: the fixes CI's failures took
+	// before it do not count against it.
+	for _, f := range actionable {
+		if f.Source == "review" {
+			st.PRIteration = 0
+			break
+		}
+	}
+	if stop != nil {
+		// Kept for after: a person who resolves the conflict and waits
+		// again has the feedback that arrived with it fixed then.
+		st.PRFeedback = append(st.PRFeedback, actionable...)
+		reason := "pull_request_conflict"
+		if stop.Kind == "ci_stuck" {
+			reason = "ci_stuck"
+		}
+		return w.escalate(ctx, sc, st, reason, map[string]any{"repo": stop.Repo, "number": stop.Number})
 	}
 	waitAgain := waitForPR(st)
 	if len(actionable) == 0 {
@@ -551,21 +585,86 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 	if err != nil {
 		return workflow.Result{}, err
 	}
+	gh, err := w.forges.For(ctx, sc.OrganizationID)
+	if err != nil {
+		return workflow.Result{}, err
+	}
+	total := forge.DefaultSettings().FixRoundsPerPR
+	if gh != nil {
+		total = gh.Settings.FixRoundsPerPR
+	}
 	st.PRIteration++
-	if st.PRIteration > st.Policy.MaxPRFixIterations {
-		return w.escalate(ctx, sc, st, "pr_loop_exhausted", map[string]any{"iterations": st.PRIteration})
+	st.PRFixes++
+	// A workflow from before rounds counted its fixes in PRIteration only.
+	st.PRFixKey = max(st.PRFixKey, st.PRIteration-1) + 1
+	if st.PRIteration > st.Policy.MaxPRFixIterations || total > 0 && st.PRFixes > total {
+		return w.escalate(ctx, sc, st, "pr_loop_exhausted", map[string]any{"iterations": st.PRIteration,
+			"fixes": st.PRFixes - 1, "perRound": st.Policy.MaxPRFixIterations, "total": total})
 	}
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "addressing pull request feedback"); err != nil {
 		return workflow.Result{}, err
 	}
+	k := key(sc, st, ":prfix:", st.PRFixKey)
+	existing, err := w.s.runByKey(ctx, sc.OrganizationID, st.TaskID, k)
+	if err != nil {
+		return workflow.Result{}, err
+	}
+	if existing == "" && gh != nil {
+		// What GitHub has, not what dude last pushed: a person may have
+		// pushed since, and a fix from dude's head would fail to
+		// fast-forward over theirs — or undo it.
+		if err := w.fromPullRequestHeads(ctx, sc, st, gh); err != nil {
+			return workflow.Result{}, err
+		}
+	}
 	// Several comments arriving together cost one fix Run, not one each.
-	runID, err := w.phase(ctx, sc, st, PhaseFix, key(sc, st, ":prfix:", st.PRIteration),
-		func(p *PhaseRun) { p.PRFeedback = st.PRFeedback })
+	runID, err := w.phase(ctx, sc, st, PhaseFix, k, func(p *PhaseRun) { p.PRFeedback = st.PRFeedback })
 	if err != nil {
 		return workflow.Result{}, err
 	}
 	return park("awaitPRFix", st, []string{runID}), nil
 }
+
+// fromPullRequestHeads starts the fix from each open pull request's head
+// as GitHub has it, and gives failing checks the end of their logs.
+func (w *steps) fromPullRequestHeads(ctx context.Context, sc workflow.StepContext, st *State, gh *forge.GitHub) error {
+	states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
+	if err != nil {
+		return err
+	}
+	slugs := map[string]string{}
+	for _, p := range states {
+		if p.Slug == "" || p.State == forge.StateMerged || p.State == forge.StateClosed {
+			continue
+		}
+		slugs[p.Repo] = p.Slug
+		head, err := gh.Head(ctx, p.Slug, p.Number)
+		if err != nil {
+			return err
+		}
+		if head != "" && head != st.Heads[p.Repo] {
+			if st.Heads == nil {
+				st.Heads = map[string]string{}
+			}
+			st.Heads[p.Repo] = head
+		}
+	}
+	for i, f := range st.PRFeedback {
+		for j, c := range f.Checks {
+			if c.RunID == 0 || c.Log != "" || slugs[f.Repo] == "" {
+				continue
+			}
+			// Best effort: the check's name and link are enough to start.
+			if log, err := gh.CheckOutput(ctx, slugs[f.Repo], c.RunID, checkLogLimit); err == nil {
+				st.PRFeedback[i].Checks[j].Log = log
+			}
+		}
+	}
+	return nil
+}
+
+// checkLogLimit: how much of a failing check's output a fixer is given.
+const checkLogLimit = 4000
 
 func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workflow.Result, error) {
 	st, err := load(sc)
@@ -660,14 +759,14 @@ func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st 
 		// Always about the pull request's current head: publishing a fix
 		// resets its checks (phases.publish), and a sync records a head
 		// someone else pushed.
-		ready = ready && forge.Ready(s.Review, s.Checks)
+		ready = ready && forge.Ready(s.Status)
 	}
 	if open > 0 && ready {
 		// The move and its event in one transaction: an event lost to a
 		// retry would never be written again (the status has moved).
 		return w.s.ReadyToMerge(ctx, sc.OrganizationID, st, open)
 	}
-	return w.s.SetTaskStatusFrom(ctx, sc.OrganizationID, st, "ready_to_merge", "review", "no longer approved with checks passing")
+	return w.s.SetTaskStatusFrom(ctx, sc.OrganizationID, st, "ready_to_merge", "review", "no longer ready to merge")
 }
 
 // escalate stops and asks for a person, and waits for their decision
@@ -721,6 +820,10 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 	case "done":
 		return workflow.Result{State: st}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "done", "a person took what was merged")
 	case "wait":
+		if len(st.PRFeedback) > 0 && (e.Reason == "pull_request_conflict" || e.Reason == "ci_stuck") {
+			// Feedback arrived with the conflict: fixed now it is resolved.
+			return workflow.Result{Next: "prFix", State: st}, nil
+		}
 		return waitForPR(st), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "a person is waiting on the rest")
 	}
 	// Going on: working again, whichever step takes it up.
@@ -750,9 +853,10 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		}
 	case "prFix":
 		if e.Reason == "pr_loop_exhausted" {
-			st.PRIteration = 0
+			st.PRIteration, st.PRFixes = 0, 0
 		} else {
 			st.PRIteration-- // the same fix again, not the next
+			st.PRFixes--
 		}
 	}
 	return workflow.Result{Next: e.Step, State: st}, nil

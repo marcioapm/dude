@@ -36,7 +36,7 @@ type Settings struct {
 
 func DefaultSettings() Settings {
 	return Settings{
-		WhoCanWake:        "collaborators",
+		WhoCanWake:        WakeCollaborators,
 		OpenAs:            "ready",
 		RequestReviewFrom: "codeowners",
 		ReviewLogins:      []string{},
@@ -61,7 +61,7 @@ func ReadSettings(raw []byte) Settings {
 			*v = allowed[0]
 		}
 	}
-	pick(&s.WhoCanWake, d.WhoCanWake, "members", "anyone")
+	pick(&s.WhoCanWake, WakeCollaborators, WakeMembers, WakeAnyone)
 	pick(&s.OpenAs, d.OpenAs, "draft")
 	pick(&s.RequestReviewFrom, d.RequestReviewFrom, "nobody", "logins")
 	pick(&s.MergeMethod, MergeMethods...)
@@ -80,3 +80,25 @@ func ReadSettings(raw []byte) Settings {
 
 // CIStuck is how long checks may stay pending on a head.
 func (s Settings) CIStuck() time.Duration { return time.Duration(s.CIStuckMinutes) * time.Minute }
+
+// Who may wake a fixer, as Settings.WhoCanWake names it.
+const (
+	WakeCollaborators = "collaborators"
+	WakeMembers       = "members"
+	WakeAnyone        = "anyone"
+)
+
+// MayWake decides whether a person's comment may wake a fixer, from what
+// GitHub says of them: their permission on the repository, and whether
+// they are a member of its organization. Members, as a setting, still
+// includes collaborators with write access: an outside contractor given
+// write access is trusted with the code already.
+func MayWake(who, permission string, member bool) bool {
+	switch who {
+	case WakeAnyone:
+		return true
+	case WakeMembers:
+		return member || CanWrite(permission)
+	}
+	return CanWrite(permission)
+}

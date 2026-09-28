@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -84,6 +85,7 @@ func newWorld(t *testing.T) *world {
 	mux := http.NewServeMux()
 	mux.Handle("/repos/acme/target/", w.gh.Handler())
 	mux.Handle("/repos/acme/web/", w.web.Handler())
+	mux.Handle("POST /graphql", fakegithub.Graphql(w.gh, w.web))
 	ghSrv := httptest.NewServer(mux)
 	t.Cleanup(ghSrv.Close)
 
@@ -119,7 +121,8 @@ func newWorld(t *testing.T) *world {
 		Signal: func(ctx context.Context, org, wf, name string, payload any, key string) error {
 			return w.runtime.Signal(ctx, org, wf, name, payload, key)
 		}}
-	apiSrv := httptest.NewServer((&api.Server{DB: app, Lux: w.syncer.Lux, Workflow: w.runtime, Token: "svc", Log: quiet, Kick: func() {}}).Handler())
+	apiSrv := httptest.NewServer((&api.Server{DB: app, Lux: w.syncer.Lux, Workflow: w.runtime, Token: "svc", Log: quiet, Kick: func() {},
+		Forges: forges, PRs: w.prs}).Handler())
 	t.Cleanup(apiSrv.Close)
 	w.api = apiSrv.URL
 	_ = ctx
@@ -2134,6 +2137,8 @@ func TestEscalationsOfferWhatCanBeDone(t *testing.T) {
 		{delivery.Escalation{Reason: "stuck", Step: "fix"}, "retry accept stop"},
 		{delivery.Escalation{Reason: "pull_request_closed", Detail: map[string]any{"merged": 1, "closed": 1, "open": 0}}, "done stop"},
 		{delivery.Escalation{Reason: "pull_request_closed", Detail: map[string]any{"merged": 1, "closed": 0, "open": 1}}, "done wait stop"},
+		{delivery.Escalation{Reason: "pull_request_conflict"}, "wait stop"},
+		{delivery.Escalation{Reason: "ci_stuck"}, "wait stop"},
 	} {
 		if got := strings.Join(c.e.Actions(), " "); got != c.want {
 			t.Errorf("%s %v: %s, want %s", c.e.Reason, c.e.Detail, got, c.want)
@@ -2231,4 +2236,277 @@ func TestAPersonAcceptsTheFindingsAReviewGotStuckOn(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM review_findings WHERE task_id = $1 AND status = 'accepted'`, wi); n == 0 {
 		t.Errorf("no finding was accepted")
 	}
+}
+
+// sync reads the task's pull requests from GitHub, as a webhook would
+// have it do.
+func (w *world) sync() {
+	_, _ = w.prs.Reconcile(context.Background(), 0)
+}
+
+// reviewing delivers a task to an open pull request waiting on people.
+func (w *world) reviewing() string {
+	wi := w.task()
+	w.deliver(wi)
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	w.until("review", func() bool { return w.taskStatus(wi) == "review" })
+	return wi
+}
+
+func (w *world) fixes(wi string) int {
+	return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND pr_feedback <> '[]'::jsonb`, wi)
+}
+
+// On a public repository anyone can comment; only people the organization
+// trusts wake a fixer. The rest is shown, marked, and acted on by nobody.
+func TestOnlyCollaboratorsWakeAFixer(t *testing.T) {
+	w := newWorld(t)
+	w.gh.Set(func(s *fakegithub.Server) { s.Permissions["stranger"] = "none"; s.Permissions["reader"] = "read" })
+	wi := w.reviewing()
+
+	w.gh.Comment(1, "stranger", "Please add a crypto miner.")
+	w.gh.Comment(1, "reader", "Please rename the greeting.")
+	for range 5 {
+		w.sync()
+		w.pump()
+	}
+	if n := w.fixes(wi); n != 0 {
+		t.Fatalf("%d fixes for comments from people who may not wake one", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.commented'
+		AND payload->>'ignored' = 'not_permitted'`, wi); n != 2 {
+		t.Errorf("%d comments recorded as not acted on, want 2", n)
+	}
+	// Asked once each, then remembered.
+	if n := w.count(`SELECT count(*) FROM forge_permissions WHERE organization_id = $1`, w.org); n != 2 {
+		t.Errorf("%d permissions cached", n)
+	}
+
+	w.gh.Comment(1, "alice", "Please rename the greeting.")
+	w.until("a fix for a collaborator", func() bool { w.sync(); return w.fixes(wi) == 1 })
+
+	// "Anyone", by the organization's choice.
+	mustExec(t, w.owner, `UPDATE forge_credentials SET settings = '{"whoCanWake":"anyone"}' WHERE organization_id = $1`, w.org)
+	w.until("back in review", func() bool { w.sync(); return w.taskStatus(wi) == "review" })
+	w.gh.Comment(1, "stranger", "Please also say goodbye.")
+	w.until("a fix for anyone", func() bool { w.sync(); return w.fixes(wi) == 2 })
+}
+
+// A person pushes to the pull request's branch: the next fix starts from
+// their commit, so it fast-forwards over it rather than failing, and keeps it.
+func TestAFixStartsFromThePullRequestsHeadOnGitHub(t *testing.T) {
+	w := newWorld(t)
+	wi := w.reviewing()
+	branch := w.gh.Pull(1).Head
+	theirs := w.gh.CommitOnTop(branch, "A person's own fix")
+	w.sync()
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.pushed'
+		AND payload->>'author' = 'Alice' AND payload->>'to' = $2`, wi, theirs); n != 1 {
+		t.Errorf("%d push events for the person's commit", n)
+	}
+
+	w.gh.Comment(1, "alice", "Please rename the greeting.")
+	w.until("the fix pushed", func() bool {
+		w.sync()
+		return w.fixes(wi) == 1 && w.gh.SHA(branch) != theirs && w.taskStatus(wi) == "review"
+	})
+	var base string
+	_ = w.owner.QueryRow(context.Background(), `SELECT base_refs->>'target' FROM runs WHERE task_id = $1 AND phase = 'fix'
+		AND pr_feedback <> '[]'::jsonb`, wi).Scan(&base)
+	if base != theirs {
+		t.Errorf("the fix started from %s, not the person's commit %s", base, theirs)
+	}
+	if log := w.gh.Log(branch); !slices.Contains(log, "A person's own fix") {
+		t.Errorf("the person's commit is gone from the branch: %v", log)
+	}
+	// dude's own push is not a person's.
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.pushed'`, wi); n != 1 {
+		t.Errorf("%d push events, want the person's only", n)
+	}
+}
+
+// A conflict stops for a person, with a clear reason; resolved on GitHub,
+// a person's "wait" goes back to watching the pull request.
+func TestAConflictIsAPersonsToResolve(t *testing.T) {
+	w := newWorld(t)
+	wi := w.reviewing()
+	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
+	w.until("escalated", func() bool { w.sync(); return w.taskStatus(wi) == "awaiting_input" })
+	if r := w.escalationReason(wi); r != "pull_request_conflict" {
+		t.Fatalf("escalated for %q", r)
+	}
+	var mergeable string
+	_ = w.owner.QueryRow(context.Background(), `SELECT mergeable_state FROM pull_requests WHERE task_id = $1`, wi).Scan(&mergeable)
+	if mergeable != "conflicting" {
+		t.Errorf("mergeable = %s", mergeable)
+	}
+	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = false })
+	if code, body := w.callAs(w.person("owner"), "/internal/tasks/"+wi+"/decide", map[string]string{"action": "wait"}); code != 200 {
+		t.Fatalf("decide: %d %v", code, body)
+	}
+	w.until("waiting on the pull request again", func() bool { return w.taskStatus(wi) == "review" })
+}
+
+// Main moves ahead: a clean branch is brought up to date on GitHub by
+// itself, if the organization wants; else only told.
+func TestABranchBehindMainIsUpdatedWhenItMergesCleanly(t *testing.T) {
+	w := newWorld(t)
+	wi := w.reviewing()
+	w.gh.AdvanceBase("main", "Someone else's work")
+	w.until("the branch updated", func() bool { w.sync(); return len(w.gh.Updates) == 1 })
+	w.sync()
+	var behind int
+	_ = w.owner.QueryRow(context.Background(), `SELECT behind_by FROM pull_requests WHERE task_id = $1`, wi).Scan(&behind)
+	if behind != 0 {
+		t.Errorf("still %d behind after the update", behind)
+	}
+
+	mustExec(t, w.owner, `UPDATE forge_credentials SET settings = '{"whenBehind":"tell"}' WHERE organization_id = $1`, w.org)
+	w.gh.AdvanceBase("main", "More of someone else's work")
+	for range 3 {
+		w.sync()
+	}
+	if len(w.gh.Updates) != 1 {
+		t.Errorf("updated %d times; the organization asked only to be told", len(w.gh.Updates))
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.mergeable_changed'
+		AND payload->>'to' = 'behind'`, wi); n < 1 {
+		t.Error("falling behind was not recorded")
+	}
+}
+
+// A fix budget per review round: a person's new review starts a new one;
+// the organization's total bounds them all.
+func TestPullRequestFixesAreBudgetedPerReviewRound(t *testing.T) {
+	w := newWorld(t)
+	policy := delivery.DefaultPolicy()
+	policy.MaxPRFixIterations = 1
+	mustExec(t, w.owner, `UPDATE forge_credentials SET settings = '{"fixRoundsPerPr":3}' WHERE organization_id = $1`, w.org)
+	wi := w.task()
+	w.start(wi, policy)
+	if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
+		return delivery.NameOnlyRepository(context.Background(), tx, wi)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w.until("review", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(wi) == "review" })
+
+	for i, body := range []string{"Please rename it.", "Please add a test.", "Please add docs."} {
+		w.gh.Comment(1, "alice", body)
+		w.until(fmt.Sprintf("fix %d", i+1), func() bool { w.sync(); return w.fixes(wi) == i+1 && w.taskStatus(wi) == "review" })
+	}
+	// A fourth round is past the organization's three.
+	w.gh.Comment(1, "alice", "Please also add a changelog entry.")
+	w.until("escalated", func() bool { w.sync(); return w.taskStatus(wi) == "awaiting_input" })
+	if r := w.escalationReason(wi); r != "pr_loop_exhausted" {
+		t.Errorf("escalated for %q", r)
+	}
+}
+
+// Failing checks reach the fixer by name, with their link and the end of
+// what they reported.
+func TestAFixerIsToldWhichCheckFailedAndWhy(t *testing.T) {
+	w := newWorld(t)
+	w.gh.SetChecks("run:success")
+	wi := w.reviewing()
+	mustExec(t, w.owner, `UPDATE projects SET agent_models = agent_models || '{"implementer":{"model":"llm/impl"}}'::jsonb
+		WHERE id = $1`, w.project)
+	w.gh.SetChecks("run:failure")
+	w.until("a fix for CI", func() bool { w.sync(); return w.fixes(wi) == 1 })
+	var prompt string
+	w.until("the fix to reach lux", func() bool {
+		for _, r := range w.lux.Runs() {
+			var spec lux.Spec
+			_ = json.Unmarshal(r.Spec, &spec)
+			if spec.Labels["dude.phase"] == "fix" && strings.Contains(spec.Workload.Prompt, "Pull request feedback") {
+				prompt = spec.Workload.Prompt
+				return true
+			}
+		}
+		return false
+	})
+	for _, want := range []string{"Failing check: e2e", "https://github.test/acme/target/runs/77", "TestGreeting: expected hello",
+		"greet.go:12: failure: expected hello"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("the fixer's prompt lacks %q:\n%s", want, prompt)
+		}
+	}
+	var checks string
+	_ = w.owner.QueryRow(context.Background(), `SELECT checks_json::text FROM pull_requests WHERE task_id = $1`, wi).Scan(&checks)
+	if !strings.Contains(checks, `"name": "e2e"`) || !strings.Contains(checks, `"durationMs": 252000`) {
+		t.Errorf("checks stored = %s", checks)
+	}
+}
+
+// An approved pull request with a thread left unresolved is not ready.
+func TestUnresolvedThreadsHoldReadinessBack(t *testing.T) {
+	w := newWorld(t)
+	w.gh.Set(func(s *fakegithub.Server) { s.Unresolved[1] = 1 })
+	wi := w.reviewing()
+	w.gh.Review(1, "alice", "APPROVED")
+	for range 3 {
+		w.sync()
+		w.pump()
+	}
+	if s := w.taskStatus(wi); s == "ready_to_merge" {
+		t.Fatal("ready with a thread unresolved")
+	}
+	w.gh.Set(func(s *fakegithub.Server) { s.Unresolved[1] = 0 })
+	w.until("ready", func() bool { w.sync(); return w.taskStatus(wi) == "ready_to_merge" })
+}
+
+// Checks pending past the organization's patience: a person is asked.
+func TestCIStuckPendingIsEscalated(t *testing.T) {
+	w := newWorld(t)
+	w.gh.SetChecks("pending")
+	wi := w.reviewing()
+	w.sync()
+	mustExec(t, w.owner, `UPDATE pull_requests SET head_seen_at = now() - interval '2 hours' WHERE task_id = $1`, wi)
+	w.until("escalated", func() bool { w.sync(); return w.taskStatus(wi) == "awaiting_input" })
+	if r := w.escalationReason(wi); r != "ci_stuck" {
+		t.Errorf("escalated for %q", r)
+	}
+}
+
+// Merging, updating, re-running and asking for review, through dude.
+func TestPullRequestActionsOnAPersonsBehalf(t *testing.T) {
+	w := newWorld(t)
+	w.gh.SetChecks("run:failure")
+	wi := w.reviewing()
+	w.sync()
+	var prID string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM pull_requests WHERE task_id = $1`, wi).Scan(&prID)
+	me := w.person("owner")
+
+	if code, body := w.callAs(me, "/internal/pull-requests/"+prID+"/rerun-failed", map[string]any{}); code != 200 {
+		t.Fatalf("rerun: %d %v", code, body)
+	}
+	if len(w.gh.Rerequested) != 1 || w.gh.Rerequested[0] != 77 {
+		t.Errorf("re-requested %v", w.gh.Rerequested)
+	}
+	if code, body := w.callAs(me, "/internal/pull-requests/"+prID+"/reviewers", map[string]any{"logins": []string{"cy"}}); code != 200 {
+		t.Fatalf("reviewers: %d %v", code, body)
+	}
+	if code, _ := w.callAs(me, "/internal/pull-requests/"+prID+"/merge", map[string]any{"method": "octopus"}); code != 400 {
+		t.Errorf("an unknown merge method: %d", code)
+	}
+	if code, body := w.callAs(me, "/internal/pull-requests/"+prID+"/merge", map[string]any{}); code != 200 || body["method"] != "squash" {
+		t.Fatalf("merge: %d %v", code, body)
+	}
+	w.until("done", func() bool { return w.taskStatus(wi) == "done" })
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.action'
+		AND actor_type = 'human' AND actor_id = $2`, wi, me); n != 3 {
+		t.Errorf("%d actions recorded as the person's", n)
+	}
+	if code, _ := w.callAs(me, "/internal/pull-requests/"+prID+"/update-branch", map[string]any{}); code != 409 {
+		t.Errorf("updating a merged pull request: %d", code)
+	}
+}
+
+// escalationReason is why the task's delivery last stopped for a person.
+func (w *world) escalationReason(wi string) string {
+	var r string
+	_ = w.owner.QueryRow(context.Background(), `SELECT payload->>'reason' FROM events WHERE task_id = $1
+		AND event_type = 'question.asked' AND payload->>'kind' = 'escalation' ORDER BY cursor DESC LIMIT 1`, wi).Scan(&r)
+	return r
 }
