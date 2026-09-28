@@ -61,6 +61,10 @@ export function useEventStream(options: UseEventStreamOptions): EventStreamState
       setEvents([]);
       lastCursor.current = 0;
       setStatus("connecting");
+    } else {
+      // Reopened (the network changed): until it is open it is catching up,
+      // which is what tells a live-only watcher to re-read what it missed.
+      setStatus("reconnecting");
     }
     const after = fresh || lastCursor.current === 0 ? undefined : lastCursor.current;
 
