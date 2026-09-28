@@ -37,7 +37,9 @@ export async function orchestrator(
     headers: { ...(actorId ? { "x-dude-actor": actorId } : {}), "content-type": "application/json" },
     ...(method === "GET" ? {} : { body: body || "{}" }),
   });
-  return new Response(await res.text(), {
+  const text = await res.text();
+  // A 204 carries no body, and a Response refuses one.
+  return new Response(res.status === 204 ? null : text, {
     status: res.status,
     headers: { "content-type": "application/json" },
   });

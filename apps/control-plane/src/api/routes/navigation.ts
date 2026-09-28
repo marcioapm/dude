@@ -146,6 +146,8 @@ async function getNavigation(ctx: RequestContext): Promise<Response> {
                r.role, r.category, r.created_at,
                dense_rank() OVER (PARTITION BY r.task_id ORDER BY r.attempt DESC) AS rank
         FROM runs r
+        -- The agents: a branch preview is a task's servers, not one of them.
+        WHERE r.kind = 'agent'
       ) ranked
       WHERE rank <= ${ATTEMPTS_PER_TASK}
       ORDER BY "taskId", attempt, created_at`) as RunRow[];
