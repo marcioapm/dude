@@ -2375,8 +2375,9 @@ func TestABranchBehindMainIsUpdatedWhenItMergesCleanly(t *testing.T) {
 	}
 }
 
-// A fix budget per review round: a person's new review starts a new one;
-// the organization's total bounds them all.
+// A fix budget per review round: a person's new review starts a new one,
+// a conversation comment does not; the organization's total per pull
+// request bounds them all.
 func TestPullRequestFixesAreBudgetedPerReviewRound(t *testing.T) {
 	w := newWorld(t)
 	policy := delivery.DefaultPolicy()
@@ -2391,15 +2392,66 @@ func TestPullRequestFixesAreBudgetedPerReviewRound(t *testing.T) {
 	}
 	w.until("review", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(wi) == "review" })
 
-	for i, body := range []string{"Please rename it.", "Please add a test.", "Please add docs."} {
-		w.gh.Comment(1, "alice", body)
-		w.until(fmt.Sprintf("fix %d", i+1), func() bool { w.sync(); return w.fixes(wi) == i+1 && w.taskStatus(wi) == "review" })
+	// A review, then a comment: the comment is the same round, past its one fix.
+	w.gh.ReviewSaying(1, "alice", "CHANGES_REQUESTED", "Please rename it.")
+	w.until("fix 1", func() bool { w.sync(); return w.fixes(wi) == 1 && w.taskStatus(wi) == "review" })
+	w.gh.Comment(1, "alice", "Please add a test too.")
+	w.until("escalated in the round", func() bool { w.sync(); return w.taskStatus(wi) == "awaiting_input" })
+	if r := w.escalationReason(wi); r != "pr_loop_exhausted" {
+		t.Fatalf("escalated for %q", r)
 	}
-	// A fourth round is past the organization's three.
-	w.gh.Comment(1, "alice", "Please also add a changelog entry.")
+	if code, body := w.callAs(w.person("owner"), "/internal/tasks/"+wi+"/decide", map[string]string{"action": "retry"}); code != 200 {
+		t.Fatalf("decide: %d %v", code, body)
+	}
+	w.until("fix 2", func() bool { w.sync(); return w.fixes(wi) == 2 && w.taskStatus(wi) == "review" })
+
+	// Each new review is a round of its own.
+	w.gh.ReviewSaying(1, "bo", "CHANGES_REQUESTED", "Please add docs.")
+	w.until("fix 3", func() bool { w.sync(); return w.fixes(wi) == 3 && w.taskStatus(wi) == "review" })
+	// A fourth is past the organization's three for this pull request.
+	w.gh.ReviewSaying(1, "cy", "CHANGES_REQUESTED", "Please add a changelog entry.")
 	w.until("escalated", func() bool { w.sync(); return w.taskStatus(wi) == "awaiting_input" })
 	if r := w.escalationReason(wi); r != "pr_loop_exhausted" {
 		t.Errorf("escalated for %q", r)
+	}
+	if n := w.fixes(wi); n != 3 {
+		t.Errorf("%d fixes", n)
+	}
+}
+
+// Two pull requests, one budget each: fixes on one do not spend the other's.
+func TestEachPullRequestHasItsOwnFixBudget(t *testing.T) {
+	w := newWorld(t)
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		labels, _ := spec["labels"].(map[string]any)
+		if labels["dude.phase"] == "implement" {
+			b.Commit = map[string]string{"target:API.md": "api\n", "web:PAGE.md": "page\n"}
+		}
+		return b
+	}
+	mustExec(t, w.owner, `UPDATE forge_credentials SET settings = '{"fixRoundsPerPr":2}' WHERE organization_id = $1`, w.org)
+	wi := w.task()
+	w.addWeb(wi, "write")
+	w.deliver(wi)
+	w.until("two pull requests", func() bool {
+		return len(w.gh.Pulls()) == 1 && len(w.web.Pulls()) == 1 && w.taskStatus(wi) == "review"
+	})
+	for i, body := range []string{"Please rename it.", "Please add a test."} {
+		w.gh.ReviewSaying(1, "alice", "CHANGES_REQUESTED", body)
+		w.until(fmt.Sprintf("target fix %d", i+1), func() bool { w.sync(); return w.fixes(wi) == i+1 && w.taskStatus(wi) == "review" })
+	}
+	// target's budget is spent; web's is whole.
+	w.web.ReviewSaying(1, "alice", "CHANGES_REQUESTED", "Please fix the page title.")
+	w.until("a fix for web", func() bool { w.sync(); return w.fixes(wi) == 3 && w.taskStatus(wi) == "review" })
+	w.gh.ReviewSaying(1, "alice", "CHANGES_REQUESTED", "Please add docs.")
+	w.until("target escalated", func() bool { w.sync(); return w.taskStatus(wi) == "awaiting_input" })
+	var spent string
+	_ = w.owner.QueryRow(context.Background(), `SELECT payload->'detail'->>'spent' FROM events WHERE task_id = $1
+		AND event_type = 'question.asked' ORDER BY cursor DESC LIMIT 1`, wi).Scan(&spent)
+	if spent != `["target"]` {
+		t.Errorf("spent = %s, want target's only", spent)
 	}
 }
 
@@ -2455,16 +2507,35 @@ func TestUnresolvedThreadsHoldReadinessBack(t *testing.T) {
 	w.until("ready", func() bool { w.sync(); return w.taskStatus(wi) == "ready_to_merge" })
 }
 
-// Checks pending past the organization's patience: a person is asked.
+// Checks pending past the organization's patience: a person is asked; one
+// who waits is asked again once as long has passed again — not at every
+// sync, and not never.
 func TestCIStuckPendingIsEscalated(t *testing.T) {
 	w := newWorld(t)
 	w.gh.SetChecks("pending")
 	wi := w.reviewing()
 	w.sync()
-	mustExec(t, w.owner, `UPDATE pull_requests SET head_seen_at = now() - interval '2 hours' WHERE task_id = $1`, wi)
+	mustExec(t, w.owner, `UPDATE pull_requests SET head_seen_at = now() - interval '61 minutes' WHERE task_id = $1`, wi)
 	w.until("escalated", func() bool { w.sync(); return w.taskStatus(wi) == "awaiting_input" })
 	if r := w.escalationReason(wi); r != "ci_stuck" {
 		t.Errorf("escalated for %q", r)
+	}
+	if code, body := w.callAs(w.person("owner"), "/internal/tasks/"+wi+"/decide", map[string]string{"action": "wait"}); code != 200 {
+		t.Fatalf("decide: %d %v", code, body)
+	}
+	w.until("waiting again", func() bool { return w.taskStatus(wi) == "review" })
+	for range 3 {
+		w.sync()
+		w.pump()
+	}
+	if s := w.taskStatus(wi); s != "review" {
+		t.Fatalf("asked again at once: %s", s)
+	}
+	mustExec(t, w.owner, `UPDATE pull_requests SET head_seen_at = now() - interval '121 minutes' WHERE task_id = $1`, wi)
+	w.until("asked again", func() bool { w.sync(); return w.taskStatus(wi) == "awaiting_input" })
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'question.asked'
+		AND payload->>'reason' = 'ci_stuck'`, wi); n != 2 {
+		t.Errorf("%d ci_stuck escalations, want 2", n)
 	}
 }
 
@@ -2490,6 +2561,23 @@ func TestPullRequestActionsOnAPersonsBehalf(t *testing.T) {
 	if code, _ := w.callAs(me, "/internal/pull-requests/"+prID+"/merge", map[string]any{"method": "octopus"}); code != 400 {
 		t.Errorf("an unknown merge method: %d", code)
 	}
+	// Not ready — CI failing, nobody approved — is not merged, and says why.
+	if code, body := w.callAs(me, "/internal/pull-requests/"+prID+"/merge", map[string]any{}); code != 409 ||
+		!strings.Contains(fmt.Sprint(body), "checks are failing") {
+		t.Fatalf("merging an unready pull request: %d %v", code, body)
+	}
+	if len(w.gh.Merges) != 0 {
+		t.Fatal("GitHub was asked to merge it")
+	}
+	w.gh.SetChecks("run:success")
+	w.gh.Review(1, "alice", "APPROVED")
+	// Stale: dude last read a head before the one GitHub has now.
+	w.gh.CommitOnTop(w.gh.Pull(1).Head, "A late push")
+	if code, body := w.callAs(me, "/internal/pull-requests/"+prID+"/merge", map[string]any{}); code != 409 ||
+		!strings.Contains(fmt.Sprint(body), "changed since") {
+		t.Fatalf("merging a head nobody saw: %d %v", code, body)
+	}
+	w.sync()
 	if code, body := w.callAs(me, "/internal/pull-requests/"+prID+"/merge", map[string]any{}); code != 200 || body["method"] != "squash" {
 		t.Fatalf("merge: %d %v", code, body)
 	}

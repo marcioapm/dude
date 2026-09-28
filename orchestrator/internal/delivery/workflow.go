@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
@@ -47,12 +48,15 @@ type State struct {
 	// Review → fix cycles spent.
 	Iteration int `json:"iteration,omitempty"`
 	// PR feedback → fix cycles spent in this review round: a person's new
-	// review starts another, and CI failing again after a fix does not.
+	// review (not a comment, not CI failing again) starts another.
 	PRIteration int `json:"prIteration,omitempty"`
-	// PR fix cycles in all, across rounds: bounded by the organization's
-	// fix rounds per pull request. PRFixKey only grows, and names each
-	// fix's Run, so a round starting over never finds an earlier fix.
-	PRFixes  int `json:"prFixes,omitempty"`
+	// Fixes each pull request has had, by repository (a task has one pull
+	// request per repository): bounded by the organization's fix rounds per
+	// pull request. A fix counts against every pull request whose feedback
+	// it addressed, and no other.
+	PRFixes map[string]int `json:"prFixesByRepo,omitempty"`
+	// Names each PR fix's Run. Only grows, so a round starting over never
+	// finds an earlier fix.
 	PRFixKey int `json:"prFixKey,omitempty"`
 	// The pull request feedback being fixed.
 	PRFeedback []forge.ActionableFeedback `json:"prFeedback,omitempty"`
@@ -113,6 +117,17 @@ func (e *Escalation) detail(key string) (float64, bool) {
 	}
 	n, ok := m[key].(float64)
 	return n, ok
+}
+
+// spent: the pull requests (by repository) a pr_loop_exhausted escalation
+// found past their budget.
+func (e *Escalation) spent() []string {
+	var d struct {
+		Spent []string `json:"spent"`
+	}
+	b, _ := json.Marshal(e.Detail)
+	_ = json.Unmarshal(b, &d)
+	return d.Spent
 }
 
 // HumanDecision is a person's answer to an escalation (SignalHumanDecision),
@@ -545,13 +560,11 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 			return res, err
 		}
 	}
-	// A person's review is a new round: the fixes CI's failures took
-	// before it do not count against it.
-	for _, f := range actionable {
-		if f.Source == "review" {
-			st.PRIteration = 0
-			break
-		}
+	// A person's review is a new round: the fixes before it do not count
+	// against it. A comment is not: a conversation of one-line requests,
+	// each fixed, is the loop the per-round bound is for.
+	if slices.ContainsFunc(actionable, forge.ActionableFeedback.IsReview) {
+		st.PRIteration = 0
 	}
 	if stop != nil {
 		// Kept for after: a person who resolves the conflict and waits
@@ -594,12 +607,21 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 		total = gh.Settings.FixRoundsPerPR
 	}
 	st.PRIteration++
-	st.PRFixes++
 	// A workflow from before rounds counted its fixes in PRIteration only.
 	st.PRFixKey = max(st.PRFixKey, st.PRIteration-1) + 1
-	if st.PRIteration > st.Policy.MaxPRFixIterations || total > 0 && st.PRFixes > total {
+	var spent []string // pull requests past the organization's budget
+	for _, repo := range feedbackRepos(st.PRFeedback) {
+		if st.PRFixes == nil {
+			st.PRFixes = map[string]int{}
+		}
+		st.PRFixes[repo]++
+		if total > 0 && st.PRFixes[repo] > total {
+			spent = append(spent, repo)
+		}
+	}
+	if st.PRIteration > st.Policy.MaxPRFixIterations || len(spent) > 0 {
 		return w.escalate(ctx, sc, st, "pr_loop_exhausted", map[string]any{"iterations": st.PRIteration,
-			"fixes": st.PRFixes - 1, "perRound": st.Policy.MaxPRFixIterations, "total": total})
+			"perRound": st.Policy.MaxPRFixIterations, "total": total, "spent": db.NonNil(spent)})
 	}
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "addressing pull request feedback"); err != nil {
 		return workflow.Result{}, err
@@ -623,6 +645,17 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 		return workflow.Result{}, err
 	}
 	return park("awaitPRFix", st, []string{runID}), nil
+}
+
+// feedbackRepos names the pull requests (by repository) feedback is on.
+func feedbackRepos(feedback []forge.ActionableFeedback) []string {
+	var out []string
+	for _, f := range feedback {
+		if !slices.Contains(out, f.Repo) {
+			out = append(out, f.Repo)
+		}
+	}
+	return out
 }
 
 // fromPullRequestHeads starts the fix from each open pull request's head
@@ -852,11 +885,19 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 			st.ExtraFixAttempts += st.Policy.MaxAttemptsPerFinding
 		}
 	case "prFix":
+		// The same fix again, not the next: what the stopped one counted
+		// is given back. A budget spent is a new one.
+		st.PRIteration--
+		for _, repo := range feedbackRepos(st.PRFeedback) {
+			if st.PRFixes[repo] > 0 {
+				st.PRFixes[repo]--
+			}
+		}
 		if e.Reason == "pr_loop_exhausted" {
-			st.PRIteration, st.PRFixes = 0, 0
-		} else {
-			st.PRIteration-- // the same fix again, not the next
-			st.PRFixes--
+			st.PRIteration = 0
+			for _, repo := range e.spent() {
+				st.PRFixes[repo] = 0
+			}
 		}
 	}
 	return workflow.Result{Next: e.Step, State: st}, nil

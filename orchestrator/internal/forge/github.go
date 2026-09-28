@@ -80,7 +80,11 @@ type Status struct {
 	Mergeable         string // clean | behind | conflicting | unknown
 	BehindBy          int
 	UnresolvedThreads int
-	BaseBranch        string
+	// GitHub would not count the threads (an old Enterprise, a token
+	// without the scope, a GraphQL error): UnresolvedThreads is not a
+	// reading, and whoever holds the last one keeps it.
+	ThreadsUnknown bool
+	BaseBranch     string
 }
 
 // Check is one check on a pull request's head: a check run (GitHub
@@ -342,7 +346,7 @@ func (g *GitHub) PullRequest(ctx context.Context, slug string, number int) (Stat
 		st.BehindBy = cmp.BehindBy
 	}
 	st.Mergeable = mergeable(p.Mergeable, p.MergeableState, st.BehindBy)
-	if st.UnresolvedThreads, err = g.unresolvedThreads(ctx, slug, number); err != nil {
+	if st.UnresolvedThreads, st.ThreadsUnknown, err = g.unresolvedThreads(ctx, slug, number); err != nil {
 		return Status{}, err
 	}
 	return st, nil
@@ -476,20 +480,21 @@ func pages[T any](ctx context.Context, g *GitHub, path string) ([]T, error) {
 }
 
 // unresolvedThreads counts the pull request's review threads nobody has
-// resolved — only GitHub's GraphQL API says. An endpoint that has none
-// (an old Enterprise) or a token refused it counts none: this informs a
-// person, and must not stop the sync.
-func (g *GitHub) unresolvedThreads(ctx context.Context, slug string, number int) (int, error) {
+// resolved — only GitHub's GraphQL API says. GraphQL answers 200 with
+// "errors" for most failures, so those are read too: a rate limit fails
+// the sync, to be tried again; anything else (an old Enterprise without
+// GraphQL, a token refused it, a repository it cannot see) is unknown —
+// never zero, which would let an unread thread count as resolved.
+func (g *GitHub) unresolvedThreads(ctx context.Context, slug string, number int) (n int, unknown bool, err error) {
 	owner, name, _ := strings.Cut(slug, "/")
 	const query = `query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){` +
 		`pullRequest(number:$number){reviewThreads(first:100,after:$after){nodes{isResolved}pageInfo{hasNextPage endCursor}}}}}`
-	n := 0
 	var after *string
 	for range 20 {
 		var out struct {
-			Data struct {
-				Repository struct {
-					PullRequest struct {
+			Data *struct {
+				Repository *struct {
+					PullRequest *struct {
 						ReviewThreads struct {
 							Nodes []struct {
 								IsResolved bool `json:"isResolved"`
@@ -502,14 +507,26 @@ func (g *GitHub) unresolvedThreads(ctx context.Context, slug string, number int)
 					} `json:"pullRequest"`
 				} `json:"repository"`
 			} `json:"data"`
+			Errors []struct {
+				Type    string `json:"type"`
+				Message string `json:"message"`
+			} `json:"errors"`
 		}
 		err := g.doURL(ctx, "POST", g.graphqlURL(), map[string]any{"query": query,
 			"variables": map[string]any{"owner": owner, "name": name, "number": number, "after": after}}, &out)
 		if err != nil {
 			if Transient(err) {
-				return 0, err
+				return 0, false, err
 			}
-			return 0, nil
+			return 0, true, nil
+		}
+		for _, e := range out.Errors {
+			if e.Type == "RATE_LIMITED" {
+				return 0, false, &Error{Status: 429, Message: "GraphQL: " + e.Message}
+			}
+		}
+		if len(out.Errors) > 0 || out.Data == nil || out.Data.Repository == nil || out.Data.Repository.PullRequest == nil {
+			return 0, true, nil
 		}
 		threads := out.Data.Repository.PullRequest.ReviewThreads
 		for _, t := range threads.Nodes {
@@ -518,12 +535,14 @@ func (g *GitHub) unresolvedThreads(ctx context.Context, slug string, number int)
 			}
 		}
 		if !threads.PageInfo.HasNextPage {
-			break
+			return n, false, nil
 		}
 		c := threads.PageInfo.EndCursor
 		after = &c
 	}
-	return n, nil
+	// More threads than it reads: at least n, which holds readiness back
+	// if any is open, as all of them would.
+	return n, false, nil
 }
 
 // graphqlURL: github.com's GraphQL is beside its REST root; Enterprise's

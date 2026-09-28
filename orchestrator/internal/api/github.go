@@ -175,9 +175,25 @@ func (s *Server) pullRequestAction(w http.ResponseWriter, r *http.Request, org s
 		if !slices.Contains(forge.MergeMethods, method) {
 			return fail(http.StatusBadRequest, "bad_request", "method must be one of %s", strings.Join(forge.MergeMethods, ", "))
 		}
-		// The head dude last read: merging a commit nobody here has seen is
-		// refused by GitHub (409), and said so.
-		sha, err := gh.Merge(r.Context(), slug, pr.Number, method, pr.HeadSHA)
+		// Merged only as dude would call it ready, read from GitHub now: a
+		// button a person pressed on a stale page must not merge what CI
+		// has since failed. GitHub's own branch protection applies too.
+		now, err := gh.PullRequest(r.Context(), slug, pr.Number)
+		if err != nil {
+			return forgeRefusal(err, "GitHub would not say how the pull request stands")
+		}
+		if now.State != forge.StateOpen {
+			return fail(http.StatusConflict, "not_ready", "the pull request is %s", now.State)
+		}
+		if blockers := forge.Blockers(now); len(blockers) > 0 {
+			return fail(http.StatusConflict, "not_ready", "not ready to merge: %s", strings.Join(blockers, "; "))
+		}
+		// The head dude showed the person: one pushed since is theirs to
+		// look at first, and GitHub refuses (409) a head that moves now.
+		if pr.HeadSHA != "" && now.HeadSHA != pr.HeadSHA {
+			return fail(http.StatusConflict, "not_ready", "the pull request changed since it was last read: look again")
+		}
+		sha, err := gh.Merge(r.Context(), slug, pr.Number, method, now.HeadSHA)
 		if err != nil {
 			return forgeRefusal(err, "GitHub would not merge it")
 		}

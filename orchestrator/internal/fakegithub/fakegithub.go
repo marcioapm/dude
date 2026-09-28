@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -26,8 +27,15 @@ type Pull struct {
 	State    string
 	MergedAt *string
 	Comments []Comment
-	// Verdicts by reviewer login: APPROVED, CHANGES_REQUESTED.
-	Reviews map[string]string
+	// Reviews submitted, oldest first: each keeps its id, as GitHub's do.
+	Reviews []Review
+}
+
+type Review struct {
+	ID          int64
+	Login       string
+	State, Body string
+	SubmittedAt string
 }
 
 type Comment struct {
@@ -43,7 +51,6 @@ type Server struct {
 	Slug  string // owner/repo
 	mu    sync.Mutex
 	pulls map[int]*Pull
-	next  int64
 	Hooks []map[string]any
 	// The combined status every commit reports; "" is success.
 	checks string
@@ -60,8 +67,11 @@ type Server struct {
 	Rerequested []int64
 }
 
+// Comment and review ids, unique across repositories as GitHub's are.
+var nextID atomic.Int64
+
 func New(repo, slug string) *Server {
-	return &Server{Repo: repo, Slug: slug, pulls: map[int]*Pull{}, next: 1000,
+	return &Server{Repo: repo, Slug: slug, pulls: map[int]*Pull{},
 		Permissions: map[string]string{}, Conflicting: map[int]bool{}, Unresolved: map[int]int{}}
 }
 
@@ -147,20 +157,20 @@ func (s *Server) Pulls() []*Pull {
 func (s *Server) Comment(number int, author, body string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.next++
 	s.pulls[number].Comments = append(s.pulls[number].Comments,
-		Comment{ID: s.next, Author: author, Body: body, CreatedAt: time.Now().UTC().Format(time.RFC3339)})
+		Comment{ID: nextID.Add(1), Author: author, Body: body, CreatedAt: time.Now().UTC().Format(time.RFC3339)})
 }
 
 // Review records a reviewer's verdict: "APPROVED" or "CHANGES_REQUESTED".
-func (s *Server) Review(number int, login, verdict string) {
+func (s *Server) Review(number int, login, verdict string) { s.ReviewSaying(number, login, verdict, "") }
+
+// ReviewSaying submits a review with words in its box.
+func (s *Server) ReviewSaying(number int, login, verdict, body string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p := s.pulls[number]
-	if p.Reviews == nil {
-		p.Reviews = map[string]string{}
-	}
-	p.Reviews[login] = verdict
+	p.Reviews = append(p.Reviews, Review{ID: nextID.Add(1), Login: login, State: verdict, Body: body,
+		SubmittedAt: time.Now().UTC().Format(time.RFC3339)})
 }
 
 // SetChecks sets the combined status of every commit: "success", "failure",
@@ -434,10 +444,9 @@ func (s *Server) reviews(w http.ResponseWriter, r *http.Request) {
 	out := []any{}
 	n, _ := strconv.Atoi(r.PathValue("n"))
 	if p := s.pulls[n]; p != nil {
-		for login, verdict := range p.Reviews {
-			s.next++
-			out = append(out, map[string]any{"id": s.next, "user": map[string]any{"login": login}, "state": verdict,
-				"body": "", "submitted_at": time.Now().UTC().Format(time.RFC3339)})
+		for _, rv := range p.Reviews {
+			out = append(out, map[string]any{"id": rv.ID, "user": map[string]any{"login": rv.Login}, "state": rv.State,
+				"body": rv.Body, "submitted_at": rv.SubmittedAt})
 		}
 	}
 	write(w, 200, out)
