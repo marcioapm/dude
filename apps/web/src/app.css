@@ -571,3 +571,135 @@ body {
   border: 0;
   min-width: 0;
 }
+
+/* Memory's settings pages: layout only; the rows and tables are the design
+   system's. The memory cell is the members table's face then two lines. */
+.memoryToolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  flex-wrap: wrap;
+}
+.memoryQuery {
+  flex: 1 1 360px;
+}
+.memoryFilter {
+  flex: 0 1 240px;
+}
+.memorySpacer {
+  flex: 1;
+}
+.memoryLead,
+.memoryRef {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  min-width: 0;
+  white-space: nowrap;
+}
+.memoryRef {
+  max-width: 100%;
+}
+.memoryClip {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.memoryInherited {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+.memoryCell {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+  min-width: 0;
+}
+.memoryGlyph {
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: var(--ds-color-text-secondary);
+}
+.memoryText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.memoryName {
+  color: var(--ds-color-text-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.memoryDetail {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+.memoryArchived {
+  opacity: 0.6;
+}
+.memoryDude {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
+.memorySnippet {
+  margin: 0;
+  max-width: var(--ds-measure-message);
+  color: var(--ds-color-text-secondary);
+}
+.memoryActions {
+  display: flex;
+  gap: var(--ds-space-8);
+}
+.memoryForm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-16);
+}
+.memoryFormRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--ds-space-12);
+}
+.memoryAbout {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.memoryAbout li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: var(--ds-size-row-compact);
+  padding: 0 var(--ds-space-4) 0 var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+}
+.memoryAbout li:hover {
+  background: var(--ds-color-hover-wash);
+}
+.memoryPicker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+}
+.memoryPick {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
