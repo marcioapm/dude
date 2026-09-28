@@ -24,23 +24,6 @@
   font-size: var(--ds-text-sm);
   color: var(--ds-color-text-muted);
 }
-/* On the pill, the dot takes the pill's colour. */
-.live :global(.ds-live-dot) {
-  width: 6px;
-  height: 6px;
-  background: currentColor;
-}
-.live {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--ds-space-6);
-  padding: 2px var(--ds-space-8);
-  border-radius: var(--ds-radius-full);
-  background: var(--ds-tone-success-bg);
-  color: var(--ds-tone-success-fg);
-  font-size: var(--ds-text-xs);
-  font-weight: var(--ds-weight-semibold);
-}
 .since {
   min-width: 12ch;
   flex: 0 1 auto;
@@ -63,12 +46,18 @@
 .spacer {
   flex: 1;
 }
+/* What the agent did last: above the files, where the change lands. */
 .last {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: var(--ds-space-6);
+  min-width: 0;
+  padding: var(--ds-space-4) var(--ds-space-8) var(--ds-space-8);
   font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .last code {
   font-family: var(--ds-font-mono);

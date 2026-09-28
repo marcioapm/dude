@@ -70,27 +70,6 @@
   box-shadow: var(--ds-shadow-1);
 }
 
-/* Pills: a second level of tabs, under a page's underline — told apart by a wash, not a line. */
-.pills {
-  gap: var(--ds-space-4);
-}
-.pills .trigger {
-  height: 30px;
-  margin: 0;
-  padding: 0 var(--ds-space-12);
-  border: 0;
-  border-radius: var(--ds-radius-control);
-  font-weight: var(--ds-weight-regular);
-}
-.pills .trigger:hover {
-  background: var(--ds-color-hover-wash);
-}
-.pills .trigger[data-state="active"] {
-  background: var(--ds-color-active-wash);
-  color: var(--ds-color-text-strong);
-  font-weight: var(--ds-weight-medium);
-}
-
 .count {
   font-size: var(--ds-text-xs);
   font-weight: var(--ds-weight-regular);

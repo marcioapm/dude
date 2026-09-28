@@ -50,6 +50,7 @@ import { FilesSection } from "./FilesSection.tsx";
 import { EscalationPanel } from "./EscalationPanel.tsx";
 import { TaskMetricsSection } from "./MetricsSection.tsx";
 import { NotFound } from "./NotFound.tsx";
+import { DudeMark, dudeName } from "../DudeMark.tsx";
 import { RunScreen } from "./RunScreen.tsx";
 import { OwnerSelect } from "./OwnerSelect.tsx";
 import { existingTask, TaskDialog } from "./TaskDialog.tsx";
@@ -491,7 +492,7 @@ function PullRequestStep({ pr, named }: { pr: PullRequest; named: boolean }) {
       data-phase="pr"
       data-status={pr.state}
       href={pr.url}
-      avatar={<AgentAvatar role="system" size="lg" />}
+      avatar={<DudeMark size={32} />}
       label={named ? <><span className="ds-mono">{pr.repositoryName}</span> #{pr.number}</> : <>Pull request #{pr.number}</>}
       note={pr.title}
       status={<PrChip pr={pr} size="sm" showNumber={false} tabIndex={-1} />}
@@ -576,7 +577,7 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
         if (by) out.push({ ...base, who: face, text: <>{person} resumed the {phase(e.runId)}</> });
         break;
       case "run.aborted":
-        out.push({ ...base, who: face ?? <AgentAvatar role="system" size="lg" />, text: <>{by ? person : <b>dude</b>} aborted the {phase(e.runId)}</>, quote: p.reason ? String(p.reason) : undefined });
+        out.push({ ...base, who: face ?? <DudeMark size={32} />, text: <>{by ? person : <b>{dudeName(e.taskId ?? "")}</b>} aborted the {phase(e.runId)}</>, quote: p.reason ? String(p.reason) : undefined });
         break;
       case "task.owner_changed": {
         const to = typeof p.to === "string" ? people.names.get(p.to) : undefined;
