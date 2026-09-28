@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -2614,5 +2615,30 @@ func TestPullRequestsOpenAsTheOrganizationSays(t *testing.T) {
 	_ = w.owner.QueryRow(context.Background(), `SELECT reviews_json::text FROM pull_requests WHERE task_id = $1`, wi).Scan(&reviews)
 	if !strings.Contains(reviews, `"REQUESTED"`) {
 		t.Errorf("reviews = %s, want the two asked", reviews)
+	}
+}
+
+// A webhook, the reconciler and a person's action can sync one pull
+// request at once: a change is recorded once, whoever saw it.
+func TestSyncsAtOnceRecordAChangeOnce(t *testing.T) {
+	w := newWorld(t)
+	wi := w.reviewing()
+	w.sync()
+	var prID string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM pull_requests WHERE task_id = $1`, wi).Scan(&prID)
+	w.gh.CommitOnTop(w.gh.Pull(1).Head, "A person's own fix")
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := w.prs.Sync(context.Background(), w.org, prID); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.pushed'`, wi); n != 1 {
+		t.Errorf("%d push events for one push", n)
 	}
 }

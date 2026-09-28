@@ -924,6 +924,8 @@ func (g *GitHub) EnsureWebhook(ctx context.Context, slug, target, secret string)
 // WebhookEvents are the events that can change what dude does about a PR.
 var WebhookEvents = []string{
 	"pull_request", "pull_request_review", "pull_request_review_comment",
+	// A thread resolved or reopened: whether it is ready to merge.
+	"pull_request_review_thread",
 	"issue_comment", "check_suite", "check_run", "status",
 }
 
