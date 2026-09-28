@@ -1,69 +1,71 @@
 /**
- * A project's settings: where its work goes, who does it, and how it is
- * delivered. Tabs, because the four are read separately — the person
- * adding a repository is not also retuning reviewers — and each saves on
- * its own.
+ * A project's settings, for its admins (and the organization's): its name
+ * and image, its repositories, and — over the organization's defaults — its
+ * agents and delivery. Every inherited value says "From <organization>";
+ * changing one overrides it here, and Reset puts the organization's back.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Breadcrumb, FINDING_SEVERITY_SPECS, ROLE_LABEL } from "@dude/design-system/components";
-import { ALL_AGENT_ROLES as AGENT_ROLES, findingSeveritySchema, REVIEWER_CATEGORIES, REVIEWER_CATEGORY_LABEL } from "@dude/domain";
-import type { AgentRole, DeliveryPolicy, FullDeliveryPolicy } from "@dude/domain";
+import { SettingsHeader, SettingsNote, TextButton } from "@dude/design-system/components";
 import {
   Button,
   Callout,
   Checkbox,
   Dialog,
   EmptyState,
-  Fieldset,
   FormActions,
-  FormRow,
   FormStack,
   Input,
-  Page,
-  PageHeader,
   RowMenu,
   Section,
   Spinner,
-  Tab,
-  TabList,
-  TabPanel,
   Table,
   TBody,
   Td,
   Th,
   THead,
   Tr,
-  Tabs,
-  useToast,
 } from "@dude/design-system/primitives";
 import type { ApiClient, ProjectDetail, Repository } from "../api/client.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
+import { settingsPage } from "../settings.ts";
+import { SETTINGS_ROLES } from "@dude/domain";
+import { agentsNav, deliveryNav, isRole, SettingsFrame, useSettings } from "./SettingsFrame.tsx";
+import { DeliveryPage, RolePage } from "./settingsPages.tsx";
 
-const SEVERITIES = findingSeveritySchema.options;
-type FullPolicy = FullDeliveryPolicy;
+// The first is where the screen opens: a new project needs its repositories first.
+const PAGES = ["repositories", "general", ...SETTINGS_ROLES, "delivery"] as const;
 
 export interface ProjectSettingsScreenProps {
   client: ApiClient;
   projectId: string;
+  page?: string | undefined;
+  onPage: (page: string) => void;
   onChanged: () => void;
   onBack: () => void;
+  /** The organization's settings, where what is not changed here comes from. */
+  onOrganization: (page: string) => void;
+  onOpenRun?: ((runId: string) => void) | undefined;
 }
 
-export function ProjectSettingsScreen({ client, projectId, onChanged, onBack }: ProjectSettingsScreenProps) {
+export function ProjectSettingsScreen({ client, projectId, page: given, onPage, onChanged, onBack, onOrganization, onOpenRun }: ProjectSettingsScreenProps) {
+  const page = settingsPage(given, PAGES);
   const [project, setProject] = useState<ProjectDetail | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+  const { scope, problem: settingsProblem } = useSettings(
+    client,
+    () => client.projectSettings(projectId),
+    (p) => client.updateProjectSettings(projectId, p),
+  );
 
-  const [defaults, setDefaults] = useState<FullPolicy | null>(null);
   // Only the latest load may land: two saves in a row start two.
   const latest = useRef(0);
   const load = useCallback(async () => {
     const mine = ++latest.current;
     try {
-      const [fresh, factory] = await Promise.all([client.getProject(projectId), client.deliveryDefaults()]);
+      const fresh = await client.getProject(projectId);
       if (mine !== latest.current) return;
       setProject(fresh);
-      setDefaults(factory);
       setProblem(null);
     } catch (err) {
       if (mine === latest.current) setProblem(errorText(err));
@@ -74,43 +76,72 @@ export function ProjectSettingsScreen({ client, projectId, onChanged, onBack }: 
     void load();
   }, [load]);
 
-  if (!project || !defaults) return <div className="centered">{problem ?? <Spinner label="Loading…" />}</div>;
-
   const saved = () => {
     void load();
     onChanged();
   };
+  const settings = scope?.settings;
+  const orgName = settings?.organization.name ?? "the organisation";
 
   return (
-    <Page data-testid="project-settings">
-      <PageHeader
-        breadcrumb={
-          <Breadcrumb items={[{ id: project.id, label: project.name, onSelect: onBack }]} />
-        }
-        title="Settings"
-      />
-      {problem ? <Callout tone="danger">{problem}</Callout> : null}
-      <Tabs defaultValue="repositories">
-        <TabList>
-          <Tab value="general">General</Tab>
-          <Tab value="repositories" count={project.repositories.length}>Repositories</Tab>
-          <Tab value="agents">Agents</Tab>
-          <Tab value="delivery">Delivery</Tab>
-        </TabList>
-        <TabPanel value="general">
-          <GeneralTab client={client} project={project} onSaved={saved} />
-        </TabPanel>
-        <TabPanel value="repositories">
-          <RepositoriesTab client={client} project={project} onSaved={saved} />
-        </TabPanel>
-        <TabPanel value="agents">
-          <AgentsTab client={client} project={project} onSaved={saved} />
-        </TabPanel>
-        <TabPanel value="delivery">
-          <DeliveryTab client={client} project={project} defaults={defaults} onSaved={saved} />
-        </TabPanel>
-      </Tabs>
-    </Page>
+    <SettingsFrame
+      testId="project-settings"
+      loading={!project || !scope}
+      problem={problem ?? settingsProblem}
+      page={page}
+      onPage={onPage}
+      scope={{
+        title: project?.name ?? "",
+        subtitle: (
+          <TextButton onClick={onBack} data-testid="project-settings-back">
+            Project settings
+          </TextButton>
+        ),
+        leading: null,
+      }}
+      items={
+        settings && project
+          ? [
+              { id: "general", label: "General", icon: "settings" },
+              { id: "repositories", label: "Repositories", icon: "git-branch", note: project.repositories.length || undefined },
+              agentsNav(settings),
+              deliveryNav(settings),
+            ]
+          : []
+      }
+      footer={
+        <>
+          Anything not changed here follows{" "}
+          <TextButton onClick={() => onOrganization(isRole(page) || page === "delivery" ? page : "implementer")}>{orgName}’s settings</TextButton>.
+        </>
+      }
+    >
+      {project && scope ? (
+        <>
+          {problem ? <Callout tone="danger">{problem}</Callout> : null}
+          {isRole(page) || page === "delivery" ? (
+            <SettingsNote icon="layers">
+              Values marked “From {orgName}” follow the organisation; change one to override it here.
+            </SettingsNote>
+          ) : null}
+          {page === "general" ? (
+            <>
+              <SettingsHeader title="General" />
+              <GeneralTab client={client} project={project} onSaved={saved} />
+            </>
+          ) : page === "repositories" ? (
+            <>
+              <SettingsHeader title="Repositories" description="What agents check out. The first is where tasks start; the others can be requested." />
+              <RepositoriesTab client={client} project={project} onSaved={saved} />
+            </>
+          ) : page === "delivery" ? (
+            <DeliveryPage scope={scope} />
+          ) : isRole(page) ? (
+            <RolePage key={page} scope={scope} role={page} onOpenRun={onOpenRun} />
+          ) : null}
+        </>
+      ) : null}
+    </SettingsFrame>
   );
 }
 
@@ -306,174 +337,5 @@ function RepositoryDialog(props: {
         description="Code from outside the organization: agents get no credentials and restricted network."
       />
     </FormDialog>
-  );
-}
-
-function AgentsTab({ client, project, onSaved }: TabProps) {
-  const initial = () =>
-    Object.fromEntries(AGENT_ROLES.map((role) => [role, project.agentModels[role]?.model ?? ""])) as Record<AgentRole, string>;
-  const [models, setModels] = useState(initial);
-  const { busy, problem, save } = useSave();
-  const dirty = AGENT_ROLES.some((role) => (project.agentModels[role]?.model ?? "") !== models[role]);
-  // A role's settings beyond its model (context, limits) need a model to
-  // hang on: clearing the model would silently drop them.
-  const losing = AGENT_ROLES.filter((role) => {
-    const { model: _model, ...rest } = project.agentModels[role] ?? { model: "" };
-    return !models[role].trim() && Object.keys(rest).length > 0;
-  });
-  return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        const agentModels = Object.fromEntries(
-          AGENT_ROLES.filter((role) => models[role].trim()).map((role) => [
-            role,
-            { ...project.agentModels[role], model: models[role].trim() },
-          ]),
-        );
-        void save(() => client.updateProject(project.id, { agentModels }), onSaved, "Agents saved");
-      }}
-    >
-      <FormStack>
-        <p className="muted">
-          The model each role runs, as <code>provider/model</code>. A role left empty uses the organization's default.
-        </p>
-        {AGENT_ROLES.map((role) => (
-          <Input
-            key={role}
-            label={ROLE_LABEL[role]}
-            mono
-            value={models[role]}
-            placeholder="Organization default"
-            error={losing.includes(role) ? "This role has other settings (such as its context) that need a model." : undefined}
-            onChange={(e) => setModels((m) => ({ ...m, [role]: e.target.value }))}
-          />
-        ))}
-        {problem ? <Callout tone="danger">{problem}</Callout> : null}
-        <FormActions>
-          <Button type="submit" variant="primary" disabled={!dirty || busy || losing.length > 0}>
-            Save
-          </Button>
-        </FormActions>
-      </FormStack>
-    </form>
-  );
-}
-
-function DeliveryTab({ client, project, defaults, onSaved }: TabProps & { defaults: FullPolicy }) {
-  const stored = project.deliveryPolicy;
-  // Stored fields are present or absent, never undefined; drop any that are.
-  const effective = { ...defaults, ...Object.fromEntries(Object.entries(stored).filter(([, v]) => v !== undefined)) } as FullPolicy;
-  const [reviewers, setReviewers] = useState<string[]>(effective.requiredReviewers);
-  const [blocking, setBlocking] = useState<string[]>(effective.blockingSeverities);
-  const [rounds, setRounds] = useState(String(effective.maxReviewIterations));
-  const [prRounds, setPrRounds] = useState(String(effective.maxPrFixIterations));
-  const [simplify, setSimplify] = useState(effective.simplify);
-  const [test, setTest] = useState(effective.test);
-  const [parkAfter, setParkAfter] = useState(String(effective.parkAfterMinutes));
-  const [idleNudge, setIdleNudge] = useState(String(effective.idleNudgeMinutes));
-  const { busy, problem, save } = useSave();
-
-  const toggle = (list: string[], set: (l: string[]) => void, value: string, on: boolean) =>
-    set(on ? [...list, value] : list.filter((v) => v !== value));
-  const count = (text: string, min: number, most = 20) => {
-    const n = Number(text);
-    return text.trim() !== "" && Number.isInteger(n) && n >= min && n <= most ? n : null;
-  };
-  const roundsValue = count(rounds, 1);
-  const prRoundsValue = count(prRounds, 0);
-  const parkAfterValue = count(parkAfter, 1, 1440);
-  const idleNudgeValue = count(idleNudge, 0, 1440);
-
-  // What the form says, as a policy; only what differs from the factory's
-  // defaults is stored, so the project keeps following them where it has
-  // not chosen otherwise.
-  const chosen: FullPolicy = {
-    requiredReviewers: reviewers as FullPolicy["requiredReviewers"],
-    blockingSeverities: blocking as FullPolicy["blockingSeverities"],
-    maxReviewIterations: roundsValue ?? effective.maxReviewIterations,
-    maxPrFixIterations: prRoundsValue ?? effective.maxPrFixIterations,
-    simplify,
-    test,
-    parkAfterMinutes: parkAfterValue ?? effective.parkAfterMinutes,
-    idleNudgeMinutes: idleNudgeValue ?? effective.idleNudgeMinutes,
-  };
-  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
-  const differs = (Object.keys(chosen) as Array<keyof FullPolicy>).filter((k) => !same(chosen[k], defaults[k]));
-  const toStore = Object.fromEntries(differs.map((k) => [k, chosen[k]])) as DeliveryPolicy;
-  const dirty = !same(toStore, stored);
-  const valid = reviewers.length > 0 && blocking.length > 0 && roundsValue !== null && prRoundsValue !== null &&
-    parkAfterValue !== null && idleNudgeValue !== null;
-
-  return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        void save(() => client.updateProject(project.id, { deliveryPolicy: toStore }), onSaved, "Delivery saved");
-      }}
-    >
-      <FormStack>
-        <Fieldset legend="Reviewers every delivery runs" hint="Others join when a change touches their area.">
-          {REVIEWER_CATEGORIES.map((c) => (
-            <Checkbox
-              key={c}
-              label={REVIEWER_CATEGORY_LABEL[c]}
-              checked={reviewers.includes(c)}
-              onCheckedChange={(on) => toggle(reviewers, setReviewers, c, on === true)}
-            />
-          ))}
-        </Fieldset>
-        <Fieldset legend="Findings that send the change back for a fix"
-          hint="Lower severities go into the pull request for a person to weigh.">
-          {SEVERITIES.map((s) => (
-            <Checkbox
-              key={s}
-              label={FINDING_SEVERITY_SPECS[s].label}
-              description={FINDING_SEVERITY_SPECS[s].description}
-              checked={blocking.includes(s)}
-              onCheckedChange={(on) => toggle(blocking, setBlocking, s, on === true)}
-            />
-          ))}
-        </Fieldset>
-        <FormRow>
-          <Input label="Review rounds" type="number" min={1} max={20} value={rounds} onChange={(e) => setRounds(e.target.value)}
-            hint="Review → fix cycles before a person is asked."
-            error={roundsValue === null ? "A whole number from 1 to 20." : undefined} />
-          <Input label="Pull request fix rounds" type="number" min={0} max={20} value={prRounds}
-            onChange={(e) => setPrRounds(e.target.value)} hint="Fixes for PR comments before a person is asked."
-            error={prRoundsValue === null ? "A whole number from 0 to 20." : undefined} />
-        </FormRow>
-        <FormRow>
-          <Input label="Park after (minutes)" type="number" min={1} max={1440} value={parkAfter}
-            onChange={(e) => setParkAfter(e.target.value)} data-testid="park-after"
-            hint="An agent waiting for an answer stays live this long, then stops holding a slot until you answer."
-            error={parkAfterValue === null ? "A whole number from 1 to 1440." : undefined} />
-          <Input label="Nudge a quiet agent after (minutes)" type="number" min={0} max={1440} value={idleNudge}
-            onChange={(e) => setIdleNudge(e.target.value)}
-            hint="Mid-turn, silent, running nothing: it is asked to carry on or ask. 0 never nudges."
-            error={idleNudgeValue === null ? "A whole number from 0 to 1440." : undefined} />
-        </FormRow>
-        <Checkbox
-          label="Run the simplifier"
-          description="A last pass that removes needless complexity without changing behaviour."
-          checked={simplify}
-          onCheckedChange={(on) => setSimplify(on === true)}
-        />
-        <Checkbox
-          label="Test it in a browser"
-          description="Before the pull request, a tester starts the app, uses the change as a person would, and publishes a video. Say how to start the app in the Agents tab's notes."
-          checked={test}
-          onCheckedChange={(on) => setTest(on === true)}
-        />
-        {reviewers.length === 0 ? <Callout tone="danger">Choose at least one reviewer.</Callout> : null}
-        {blocking.length === 0 ? <Callout tone="danger">Choose at least one severity that blocks.</Callout> : null}
-        {problem ? <Callout tone="danger">{problem}</Callout> : null}
-        <FormActions note="Settings left at the factory's defaults follow them if they change.">
-          <Button type="submit" variant="primary" disabled={busy || !valid || !dirty} data-testid="delivery-save">
-            Save
-          </Button>
-        </FormActions>
-      </FormStack>
-    </form>
   );
 }

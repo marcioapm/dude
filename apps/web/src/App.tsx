@@ -30,6 +30,7 @@ import { EpicMetricsSection } from "./screens/MetricsSection.tsx";
 import { MySettingsScreen } from "./screens/MySettingsScreen.tsx";
 import { OrganizationSettingsScreen } from "./screens/OrganizationSettingsScreen.tsx";
 import { ProjectSettingsScreen } from "./screens/ProjectSettingsScreen.tsx";
+import { ProjectEpics } from "./screens/ProjectEpics.tsx";
 import { RunScreen } from "./screens/RunScreen.tsx";
 import { existingTask, TaskDialog, type ExistingTask } from "./screens/TaskDialog.tsx";
 import { TaskScreen } from "./screens/TaskScreen.tsx";
@@ -190,7 +191,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
           return project ? setOpen({ kind: "task", projectId: project.id, epicId: null, editing: intent.taskId }) : undefined;
         }
         case "projectSettings":
-          return go({ view: "projectSettings", projectId: intent.projectId });
+          return go({ view: "projectSettings", projectId: intent.projectId, ...(intent.page ? { page: intent.page } : {}) });
         case "moveEpic":
           return quietly(client.updateEpic(intent.epicId, { position: intent.position }));
         case "moveTask":
@@ -230,8 +231,10 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   let main;
   // Settings that are not a project's come first: a new organization with
   // no projects yet still sets up its GitHub connection, and you your view.
+  const openRun = (runId: string) => go(inTree({ kind: "session", id: runId }));
   if (place?.view === "orgSettings") {
-    main = <OrganizationSettingsScreen client={client} me={people.me} people={people.all} onPeopleChanged={() => void people.refresh()} />;
+    main = <OrganizationSettingsScreen client={client} me={people.me} people={people.all} onPeopleChanged={() => void people.refresh()}
+      page={place.page} onOpenRun={openRun} onPage={(page) => go({ view: "orgSettings", page }, true)} />;
   } else if (place?.view === "mySettings") {
     main = <MySettingsScreen client={client} me={people.me} onChanged={() => void people.refresh()} />;
   } else if (!projects) {
@@ -257,6 +260,10 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         key={place.projectId}
         client={client}
         projectId={place.projectId}
+        page={place.page}
+        onPage={(page) => go({ view: "projectSettings", projectId: place.projectId, page }, true)}
+        onOrganization={(page) => go({ view: "orgSettings", page })}
+        onOpenRun={openRun}
         onChanged={() => void load()}
         onBack={() => go(inTree({ kind: "project", id: place.projectId }))}
       />
@@ -269,7 +276,8 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         project={project}
         you={people.you}
         epic={scope.epic}
-        overview={scope.epic ? <EpicMetricsSection client={client} epicId={scope.epic.id} version={version} /> : undefined}
+        overview={scope.epic ? <EpicMetricsSection client={client} epicId={scope.epic.id} version={version} />
+          : <ProjectEpics client={client} projectId={project.id} version={version} onOpenEpic={(id) => go(inTree({ kind: "epic", id }))} />}
         selected={selected}
         onSelect={(ref) => go(inTree(ref))}
         groupBy={groupByEpic ? "epic" : null}

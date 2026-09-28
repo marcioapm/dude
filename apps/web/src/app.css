@@ -284,6 +284,36 @@ body {
   color: var(--ds-color-text-muted);
 }
 
+/* A project's epics above its board: cards for those in progress, then the
+   planned and done lists side by side. */
+.projectEpics {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-24);
+  margin-bottom: var(--ds-space-16);
+}
+.epicCards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: var(--ds-space-16);
+}
+.epicLists {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--ds-space-32);
+}
+
+/* A settings page that is one form: its sections spaced as the page's are. */
+.settingsForm {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--ds-space-24);
+}
+.settingsForm > section {
+  align-self: stretch;
+}
+
 /* -- The task page -------------------------------------------------- */
 
 .taskScreen {

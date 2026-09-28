@@ -9,7 +9,7 @@
  */
 
 import { z } from "zod";
-import { EventTypes, newId } from "@dude/domain";
+import { EventTypes, epicState, epicStateSchema, newId, type EpicState } from "@dude/domain";
 import { withOrg, type OrgScope } from "../../db/client.ts";
 import { badRequest, conflict, json, noContent, notFound, parseBody } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
@@ -18,8 +18,16 @@ import { ownerJson, peopleJson, personOf, recordAs, setTaskPeople } from "./peop
 
 const REPOSITORY_SELECT = `id, project_id AS "projectId", name, url, default_branch AS "defaultBranch", trust,
   created_at AS "createdAt"`;
-const EPIC_SELECT = `id, project_id AS "projectId", title, description, position,
+// An epic's state is stored only when a person sets it; otherwise it is what
+// its tasks say (epicState, @dude/domain).
+const EPIC_SELECT = `id, project_id AS "projectId", title, description, position, state AS "storedState",
+  (SELECT COALESCE(array_agg(t.status::text), '{}') FROM tasks t WHERE t.epic_id = epics.id) AS "taskStatuses",
   created_at AS "createdAt", updated_at AS "updatedAt"`;
+
+/** An epic as the API gives it: its state resolved, the statuses it came from dropped. */
+function epicJson({ taskStatuses, ...row }: Record<string, unknown>) {
+  return { ...row, state: epicState(row.storedState as EpicState | null, taskStatuses as string[]) };
+}
 
 /** Record a structural change as the person who made it. */
 function record(scope: OrgScope, ctx: RequestContext, eventType: string, projectId: string,
@@ -157,10 +165,14 @@ async function removeRepository(ctx: RequestContext): Promise<Response> {
 const epicInput = z.object({
   title: z.string().trim().min(1).max(200),
   description: z.string().max(10_000).default(""),
+  /** Omitted: as its tasks say. */
+  state: epicStateSchema.nullable().default(null),
 });
 const updateEpicInput = z.object({
   title: epicInput.shape.title,
   description: z.string().max(10_000),
+  /** null: back to what its tasks say. */
+  state: epicStateSchema.nullable(),
   /** Where it sits among its project's epics, 0 first. */
   position: z.number().int().min(0),
 }).partial();
@@ -168,10 +180,12 @@ const updateEpicInput = z.object({
 async function listEpics(ctx: RequestContext): Promise<Response> {
   const projectId = ctx.params.id!;
   const epics = await withOrg(ctx.principal.organizationId, async (scope) => {
-    return await scope.sql`
-      SELECT ${scope.sql.unsafe(EPIC_SELECT)} FROM epics WHERE project_id = ${projectId} ORDER BY position, created_at`;
+    return (await scope.sql`
+      SELECT ${scope.sql.unsafe(EPIC_SELECT)} FROM epics WHERE project_id = ${projectId} ORDER BY position, created_at`) as Array<
+      Record<string, unknown>
+    >;
   });
-  return json({ epics });
+  return json({ epics: epics.map(epicJson) });
 }
 
 async function createEpic(ctx: RequestContext): Promise<Response> {
@@ -181,15 +195,15 @@ async function createEpic(ctx: RequestContext): Promise<Response> {
     // The project row serialises changes to its epics' order.
     if ((await scope.sql`SELECT 1 FROM projects WHERE id = ${projectId} FOR UPDATE`).length === 0) return null;
     const rows = (await scope.sql`
-      INSERT INTO epics (id, organization_id, project_id, title, description, position)
-      VALUES (${newId("epic")}, ${ctx.principal.organizationId}, ${projectId}, ${input.title}, ${input.description},
+      INSERT INTO epics (id, organization_id, project_id, title, description, state, position)
+      VALUES (${newId("epic")}, ${ctx.principal.organizationId}, ${projectId}, ${input.title}, ${input.description}, ${input.state},
               (SELECT COALESCE(max(position) + 1, 0) FROM epics WHERE project_id = ${projectId}))
       RETURNING ${scope.sql.unsafe(EPIC_SELECT)}`) as Array<Record<string, unknown>>;
     await record(scope, ctx, EventTypes.EpicCreated, projectId, { epicId: rows[0]!.id, title: input.title });
     return rows[0]!;
   });
   if (!result) throw notFound(`project ${projectId} not found`);
-  return json(result, 201);
+  return json(epicJson(result), 201);
 }
 
 /** Edit an epic; a new position moves it, and the others close up around it. */
@@ -220,6 +234,7 @@ async function updateEpic(ctx: RequestContext): Promise<Response> {
       UPDATE epics SET
         title = COALESCE(${input.title ?? null}, title),
         description = COALESCE(${input.description ?? null}, description),
+        state = CASE WHEN ${input.state !== undefined} THEN ${input.state ?? null} ELSE state END,
         updated_at = now()
       WHERE id = ${id}
       RETURNING ${scope.sql.unsafe(EPIC_SELECT)}`) as Array<Record<string, unknown>>;
@@ -227,7 +242,7 @@ async function updateEpic(ctx: RequestContext): Promise<Response> {
     return rows[0]!;
   });
   if (!epic) throw notFound(`epic ${id} not found`);
-  return json(epic);
+  return json(epicJson(epic));
 }
 
 /**

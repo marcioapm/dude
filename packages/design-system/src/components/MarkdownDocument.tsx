@@ -14,6 +14,10 @@ export interface MarkdownDocumentProps extends Omit<HTMLAttributes<HTMLDivElemen
   readonly meta?: ReactNode;
   /** Label for the source field, for screen readers. */
   readonly label?: string | undefined;
+  /** Start in the editor (a new document, nothing to read yet). Needs onSave. */
+  readonly defaultEditing?: boolean | undefined;
+  /** Told when editing starts and ends, so the caller can hold other controls meanwhile. */
+  readonly onEditingChange?: ((editing: boolean) => void) | undefined;
 }
 
 /** A line of source as spans: what is Markdown syntax, what is a variable, what is code. */
@@ -64,8 +68,22 @@ export function highlightMarkdown(source: string): HighlightSpan[][] {
  * selection and undo are the browser's own — and Save or Cancel swaps it
  * back. No split view: one thing at a time, the thing you are doing.
  */
-export function MarkdownDocument({ source, onSave, emptyText = "Nothing here yet.", meta, label = "Markdown source", className, ...rest }: MarkdownDocumentProps) {
-  const [draft, setDraft] = useState<string | null>(null);
+export function MarkdownDocument({
+  source,
+  onSave,
+  emptyText = "Nothing here yet.",
+  meta,
+  label = "Markdown source",
+  defaultEditing = false,
+  onEditingChange,
+  className,
+  ...rest
+}: MarkdownDocumentProps) {
+  const [draft, setDraftState] = useState<string | null>(defaultEditing && onSave ? source : null);
+  const setDraft = (next: string | null) => {
+    if ((next === null) !== (draft === null)) onEditingChange?.(next !== null);
+    setDraftState(next);
+  };
   const [saving, setSaving] = useState(false);
   const area = useRef<HTMLTextAreaElement>(null);
   const editing = draft !== null;
@@ -114,15 +132,15 @@ export function MarkdownDocument({ source, onSave, emptyText = "Nothing here yet
         <span className={styles["spacer"]} />
         {!onSave ? null : editing ? (
           <>
-            <Button size="sm" variant="quiet" onClick={() => setDraft(null)} disabled={saving}>
+            <Button size="sm" variant="quiet" onClick={() => setDraft(null)} disabled={saving} data-testid="markdown-cancel">
               Cancel
             </Button>
-            <Button size="sm" variant="primary" onClick={() => void save()} loading={saving} disabled={draft === source}>
+            <Button size="sm" variant="primary" onClick={() => void save()} loading={saving} disabled={draft === source} data-testid="markdown-save">
               Save
             </Button>
           </>
         ) : (
-          <Button size="sm" variant="secondary" leadingIcon="edit" onClick={start}>
+          <Button size="sm" variant="secondary" leadingIcon="edit" onClick={start} data-testid="markdown-edit">
             Edit
           </Button>
         )}
@@ -147,6 +165,7 @@ export function MarkdownDocument({ source, onSave, emptyText = "Nothing here yet
             value={draft}
             spellCheck={false}
             aria-label={label}
+            data-testid="markdown-source"
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Escape") {
@@ -160,7 +179,7 @@ export function MarkdownDocument({ source, onSave, emptyText = "Nothing here yet
           />
         </div>
       ) : (
-        <div className={styles["view"]}>{source.trim() ? <Markdown source={source} variant="document" /> : <p className={styles["empty"]}>{emptyText}</p>}</div>
+        <div className={styles["view"]} data-testid="markdown-view">{source.trim() ? <Markdown source={source} variant="document" /> : <p className={styles["empty"]}>{emptyText}</p>}</div>
       )}
     </div>
   );

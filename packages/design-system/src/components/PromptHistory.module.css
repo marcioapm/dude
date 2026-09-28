@@ -1,0 +1,156 @@
+/*
+ * A prompt's history: the versions down the left on the chrome shade, the
+ * selected one on the right. Rows are what you touch, so they take the
+ * control radius; the rest is square.
+ */
+
+.root {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  min-height: 0;
+  height: min(70vh, 720px);
+}
+
+.list {
+  margin: 0;
+  padding: var(--ds-space-8);
+  list-style: none;
+  overflow: auto;
+  background: var(--ds-color-chrome);
+}
+.item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--ds-space-8);
+  width: 100%;
+  padding: var(--ds-space-8);
+  font: inherit;
+  text-align: left;
+  color: var(--ds-color-text-primary);
+  background: transparent;
+  border: 0;
+  border-radius: var(--ds-radius-control);
+}
+.item:hover {
+  background: var(--ds-color-hover-wash);
+}
+.item:focus-visible {
+  outline: var(--ds-focus-ring-width) solid var(--ds-color-focus-ring);
+}
+.itemCurrent {
+  background: var(--ds-color-active-wash);
+}
+.itemText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.itemText small {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.itemHead {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
+.itemHead b {
+  color: var(--ds-color-text-strong);
+}
+.itemNote {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.currentTag {
+  padding: 0 var(--ds-space-6);
+  font-size: var(--ds-text-2xs);
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-tone-success-fg);
+  background: var(--ds-tone-success-bg);
+  border-radius: var(--ds-radius-mark);
+}
+.stats {
+  margin-left: auto;
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-2xs);
+}
+.add {
+  color: var(--ds-diff-add-fg);
+}
+.del {
+  color: var(--ds-diff-del-fg);
+}
+
+.main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-12);
+  min-width: 0;
+  padding: var(--ds-space-16) var(--ds-space-24);
+  overflow: auto;
+}
+.mainHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8) var(--ds-space-12);
+}
+.mainTitle {
+  font-size: var(--ds-text-lg);
+  color: var(--ds-color-text-strong);
+}
+.by,
+.compared {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+.compared {
+  margin: 0;
+}
+.spacer {
+  flex: 1;
+}
+.note {
+  margin: 0;
+  color: var(--ds-color-text-strong);
+}
+.whole {
+  padding: var(--ds-space-8) var(--ds-space-16);
+  background: var(--ds-color-chrome);
+}
+
+.used {
+  margin-top: var(--ds-space-8);
+  padding: var(--ds-space-12) var(--ds-space-16);
+  background: var(--ds-color-chrome);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.used p {
+  margin: var(--ds-space-6) 0 0;
+}
+.used b {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-strong);
+}
+.sessions {
+  margin: var(--ds-space-6) 0 0;
+  padding-left: var(--ds-space-16);
+}
+.sessionLink {
+  padding: 0;
+  font: inherit;
+  color: var(--ds-color-accent-text);
+  background: none;
+  border: 0;
+  text-align: left;
+}
+.sessionLink:hover {
+  text-decoration: underline;
+}
+.empty {
+  margin: 0;
+  padding: var(--ds-space-24);
+  color: var(--ds-color-text-muted);
+}
