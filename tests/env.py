@@ -153,7 +153,9 @@ class TestEnvironment:
         addr_file.unlink(missing_ok=True)
         self.lux_proc = subprocess.Popen(
             [str(REPO_ROOT / "orchestrator" / "bin" / "fake-lux"), "-root", str(self.git_root),
-             "-key", self.lux_key, "-addr-file", str(addr_file)],
+             "-key", self.lux_key, "-addr-file", str(addr_file),
+             # Each Run's checkout, removed with the rest of the run's files.
+             "-workspaces", str(self.git_root.parent)],
             stdout=self._log("fake-lux"), stderr=subprocess.STDOUT,
         )
         deadline = time.time() + 10
@@ -182,6 +184,9 @@ class TestEnvironment:
                 # An agent waiting on a person is parked after seconds, not
                 # the policy's minutes, so the suite sees it happen.
                 "DUDE_PARK_AFTER": "3s",
+                # A working agent's diff is read every few seconds besides
+                # after each edit, so a test sees the slow path too.
+                "DUDE_DIFF_EVERY": "3s",
                 **self._tools_env(),
             },
             stdout=self._log("orchestrator"), stderr=subprocess.STDOUT,

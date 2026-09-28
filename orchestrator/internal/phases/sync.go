@@ -53,6 +53,12 @@ type Syncer struct {
 	// DUDE_IDLE_AFTER; finer than the policy's minutes, for tests). Zero
 	// takes delivery.DefaultPolicy's.
 	ParkAfter, IdleAfter time.Duration
+	// How soon after an edit a working Run's live diff is read, and how
+	// often besides (DUDE_DIFF_EVERY); zero takes the defaults.
+	DiffDelay, DiffEvery time.Duration
+	// The hourly rate of the machine a Run runs on, recorded with each Run
+	// when it is submitted (DUDE_MACHINE_USD_PER_HOUR); zero records none.
+	MachineUSDPerHour float64
 
 	// One follower per live lux Run. The follower is the only writer of a
 	// Run's cursor, so two must never run for the same Run.
@@ -62,7 +68,11 @@ type Syncer struct {
 
 // follower is one goroutine reading a Run's output. A pointer, so a
 // finishing follower can tell whether the entry is still its own.
-type follower struct{ cancel context.CancelFunc }
+// poke asks its live diff to be read soon.
+type follower struct {
+	cancel context.CancelFunc
+	poke   chan struct{}
+}
 
 // Run statuses (run_status) the syncer decides on.
 const (
@@ -317,9 +327,10 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 		}
 		tag, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, next_attempt_at = NULL,
 			harness = $4, model = $5, push_branch = NULLIF($6, ''), lux_repositories = $7, lux_pushes = $8,
+			machine_usd_per_hour = COALESCE(machine_usd_per_hour, NULLIF($9::float8, 0)),
 			status = CASE WHEN status = 'pending' THEN 'scheduled'::run_status ELSE status END
 			WHERE id = $1`, r.ID, lr.ID, lr.State, spec.Labels["dude.harness"], spec.Labels["dude.model"], pushBranch,
-			db.NonNil(repos), db.NonNil(pushes))
+			db.NonNil(repos), db.NonNil(pushes), s.MachineUSDPerHour)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
@@ -489,8 +500,15 @@ func (s *Syncer) follow(r phaseRun) {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	mine := &follower{cancel}
+	mine := &follower{cancel: cancel, poke: make(chan struct{}, 1)}
 	s.following[r.ID] = mine
+	// The live diff is read for as long as the Run's output is followed.
+	delay, every := s.diffTiming()
+	go watchDiff(ctx, mine.poke, delay, every, func(ctx context.Context) {
+		if err := s.refreshDiff(ctx, r); err != nil && ctx.Err() == nil {
+			s.Log.Debug("reading the live diff failed", "run", r.ID, "error", err)
+		}
+	})
 	go func() {
 		defer func() {
 			s.mu.Lock()
@@ -654,6 +672,9 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 		}
 	}
 
+	// What the agent's checkout held, once more before it stops: the diff
+	// that stays with the Run.
+	s.lastDiff(ctx, r)
 	// Stopped rather than cancelled: the workspace and the agent's session
 	// are kept, so a person can still look at or resume a finished phase.
 	if err := s.ask(ctx, r, s.Lux.Stop); err != nil {

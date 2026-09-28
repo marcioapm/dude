@@ -48,6 +48,12 @@ export const EventTypes = {
   RunCompleted: "run.completed",
   RunFailed: "run.failed",
   RunAborted: "run.aborted",
+  /**
+   * A running agent's checkout changed: its live diff against the commit it
+   * started from. Payload: the diff, as `GET /v1/runs/:id/diff` returns it
+   * (`RunDiff`).
+   */
+  RunDiffUpdated: "run.diff.updated",
 
   // Worker / capacity
   WorkerRegistered: "worker.registered",
