@@ -4,7 +4,7 @@ import { HumanAvatar, HumanAvatarStack, identitySlot } from "../../components/Hu
 import { AgentAvatar } from "../../components/AgentAvatar.tsx";
 import { TriageRollup } from "../../components/TriageRollup.tsx";
 import { NavTree } from "../../components/NavTree.tsx";
-import { Sidebar } from "../../components/Sidebar.tsx";
+import { SidebarLink, SidebarProfile, Sidebar } from "../../components/Sidebar.tsx";
 import { StatusBadge } from "../../components/StatusBadge.tsx";
 import { IconButton } from "../../primitives/Button.tsx";
 import type { RowMenuItem } from "../../primitives/RowMenu.tsx";
@@ -135,7 +135,7 @@ export function NavigationSection({ mode }: { readonly mode: PaneMode }) {
               [
                 ["quiet org", <Sidebar projects={navProjectsQuiet} title="quiet org" width="100%" />],
                 ["filtered: active", <Sidebar projects={navProjects} title="filtered" width="100%" triage="active" query="" />],
-                ["narrow (200px)", <Sidebar projects={navProjects} title="narrow" width={200} hideAttention />],
+                ["narrow (200px)", <Sidebar projects={navProjects} title="narrow" width={200} />],
                 ["no matches", <Sidebar projects={navProjects} title="no matches" width="100%" query="zzzz" />],
                 ["empty", <Sidebar projects={[]} title="empty" width="100%" />],
                 ["loading", <Sidebar projects={[]} title="loading" width="100%" loading />],
@@ -244,32 +244,35 @@ function TreeMenuDemo() {
 
 function SidebarDemo() {
   const [selected, setSelected] = useState<NavRef | null>({ kind: "task", id: "wi_2402" });
+  const [waiting, setWaiting] = useState(false);
+  const online = [people["marcio"]!, people["ana"]!, people["tom"]!].map((p) => ({ ...p, online: true }));
   return (
     <Col>
-      <div style={{ display: "flex", height: 640, border: "1px solid var(--ds-color-border-subtle)", borderRadius: 6, overflow: "hidden" }}>
+      <div style={{ display: "flex", height: 760, overflow: "hidden" }}>
         <Sidebar
           projects={navProjects}
-          selected={selected}
-          onSelect={(ref) => setSelected(ref)}
-          title="dude"
-          headerActions={
-            <>
-              <IconButton icon="plus" label="New task" size="sm" />
-              <IconButton icon="more" label="More" size="sm" />
-            </>
-          }
+          selected={waiting ? null : selected}
+          onSelect={(ref) => {
+            setWaiting(false);
+            setSelected(ref);
+          }}
+          you="u_marcio"
+          online={online}
+          onWaitingSelect={() => setWaiting(true)}
+          waitingSelected={waiting}
+          title="El Duderino"
+          treeActions={<IconButton icon="plus" label="New project" size="sm" />}
           footer={
             <>
-              <HumanAvatar person={people["marcio"]!} size="xs" showName />
-              <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 6 }}>
-                <StatusBadge status="running" variant="dot" iconOnly />
-                <span>connected</span>
-              </span>
+              <SidebarLink icon="building" trailing={<span className="ds-label">Admin</span>}>
+                Organisation settings
+              </SidebarLink>
+              <SidebarProfile person={{ ...people["marcio"]!, online: true }} detail="marcio@example.com" onOpen={() => {}} />
             </>
           }
         />
-        <div style={{ flex: 1, display: "grid", placeItems: "center", background: "var(--ds-color-canvas)", color: "var(--ds-color-text-muted)", fontSize: 12 }}>
-          {selected ? `${selected.kind} · ${selected.id}` : "transcript goes here"}
+        <div style={{ flex: 1, display: "grid", placeItems: "center", background: "var(--ds-color-surface)", color: "var(--ds-color-text-muted)", fontSize: 12 }}>
+          {waiting ? "Waiting on you" : selected ? `${selected.kind} · ${selected.id}` : "transcript goes here"}
         </div>
       </div>
     </Col>

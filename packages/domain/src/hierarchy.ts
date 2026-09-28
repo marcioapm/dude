@@ -482,3 +482,114 @@ export const pullRequestSchema = z.object({
   updatedAt: z.string(),
 });
 export type PullRequest = z.infer<typeof pullRequestSchema>;
+
+// ---------------------------------------------------------------------------
+// What a pull request shows as: one state, by priority
+// ---------------------------------------------------------------------------
+
+/**
+ * The one state a pull request is shown as, most pressing first: merged or
+ * closed says it is over; then what stands between it and a merge, in the
+ * order a person deals with it (red CI, CI still running, nobody has
+ * looked, changes asked for, a conflict, open threads); then ready. The
+ * rest of what is true goes in the chip's tooltip.
+ */
+export const PR_DISPLAY_STATES = [
+  "merged",
+  "closed",
+  "ci_red",
+  "ci_running",
+  "awaiting",
+  "changes",
+  "conflict",
+  "comments",
+  "ready",
+] as const;
+export type PrDisplayState = (typeof PR_DISPLAY_STATES)[number];
+
+/** A check run as GitHub reports it (`checks_json`). */
+export interface PrCheck {
+  name: string;
+  /** `queued`, `in_progress`, `completed`… */
+  status: string;
+  /** Set once completed: `success`, `failure`, `neutral`, `skipped`, `cancelled`, `timed_out`… */
+  conclusion: string | null;
+  url?: string | null | undefined;
+  durationMs?: number | null | undefined;
+}
+
+/** A review as GitHub reports it (`reviews_json`); each person's latest verdict counts. */
+export interface PrReview {
+  login: string;
+  /** `APPROVED`, `CHANGES_REQUESTED`, `COMMENTED`, `DISMISSED`. */
+  state: string;
+  submittedAt?: string | null | undefined;
+}
+
+export type PrMergeable = "clean" | "behind" | "conflicting" | "unknown";
+
+/**
+ * What `prDisplayState` reads: the fields a PR has today (`state`, and
+ * `checks` and `review` as one word each) and the richer ones the GitHub
+ * work adds — `checks` as the list of runs, `reviews` by person,
+ * `mergeable`, `unresolvedThreads`. A richer field wins when present;
+ * absent, the summary decides, so the state is right before and after.
+ */
+export interface PrDisplayInput {
+  state: PullRequest["state"];
+  checks: PullRequest["checks"] | ReadonlyArray<PrCheck>;
+  review: PullRequest["review"];
+  reviews?: ReadonlyArray<PrReview> | null | undefined;
+  mergeable?: PrMergeable | null | undefined;
+  unresolvedThreads?: number | null | undefined;
+}
+
+const FAILED_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled", "action_required", "startup_failure"]);
+
+/** Whether a check run ended badly. */
+export function prCheckFailed(check: PrCheck): boolean {
+  return check.conclusion !== null && FAILED_CONCLUSIONS.has(check.conclusion.toLowerCase());
+}
+
+/** The checks' verdict: one failing run outweighs running ones, which outweigh all green. */
+export function prChecksSummary(checks: PrDisplayInput["checks"]): PullRequest["checks"] {
+  if (typeof checks === "string") return checks;
+  if (checks.length === 0) return "unknown";
+  if (checks.some(prCheckFailed)) return "failing";
+  if (checks.some((c) => c.status.toLowerCase() !== "completed")) return "pending";
+  return "passing";
+}
+
+/**
+ * The review verdict: each person's latest, where a comment is not a
+ * verdict and leaves theirs standing; one change request outweighs any
+ * number of approvals, as GitHub has it.
+ */
+export function prReviewSummary(pr: Pick<PrDisplayInput, "review" | "reviews">): PullRequest["review"] {
+  if (!pr.reviews || pr.reviews.length === 0) return pr.review;
+  const latest = new Map<string, string>();
+  const ordered = [...pr.reviews].sort((a, b) => (a.submittedAt ?? "").localeCompare(b.submittedAt ?? ""));
+  for (const r of ordered) {
+    const state = r.state.toUpperCase();
+    if (state !== "COMMENTED") latest.set(r.login, state);
+  }
+  const verdicts = [...latest.values()];
+  if (verdicts.includes("CHANGES_REQUESTED")) return "changes_requested";
+  if (verdicts.includes("APPROVED")) return "approved";
+  return "pending";
+}
+
+/** The one state to show a pull request as; `PR_DISPLAY_STATES` is the order. */
+export function prDisplayState(pr: PrDisplayInput): PrDisplayState {
+  if (pr.state === "merged") return "merged";
+  if (pr.state === "closed") return "closed";
+  const checks = prChecksSummary(pr.checks);
+  if (checks === "failing") return "ci_red";
+  if (checks === "pending") return "ci_running";
+  const review = prReviewSummary(pr);
+  if (review === "pending") return "awaiting";
+  if (review === "changes_requested") return "changes";
+  if (pr.mergeable === "conflicting") return "conflict";
+  if ((pr.unresolvedThreads ?? 0) > 0) return "comments";
+  return "ready";
+}

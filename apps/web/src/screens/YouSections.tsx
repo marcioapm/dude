@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Duration, HumanAvatar } from "@dude/design-system/components";
+import { Duration, PersonAvatar } from "@dude/design-system/components";
 import {
   Button,
   Callout,
@@ -29,7 +29,6 @@ import {
 } from "@dude/design-system/primitives";
 import type { ApiClient, ApiKeyInfo, Member } from "../api/client.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
-import { avatarOf } from "../hooks/usePeople.ts";
 
 /** The photo's side, in pixels: twice the largest face drawn, for sharp screens. */
 const PHOTO_PX = 160;
@@ -60,7 +59,7 @@ export function ProfileSection({ client, me, onChanged }: { client: ApiClient; m
         <FormStack>
           <p className="muted">How your teammates see you, on tasks and in chats.</p>
           <div className="profilePhoto">
-            <HumanAvatar person={avatarOf(me)} size="lg" className="profileFace" data-testid="profile-photo" />
+            <PersonAvatar person={me} size={56} ring={false} data-testid="profile-photo" />
             <Button variant="secondary" disabled={busy} onClick={() => file.current?.click()} data-testid="photo-upload">
               Upload…
             </Button>

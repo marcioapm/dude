@@ -8,7 +8,7 @@
  * needs a backoff timer, a retained cursor, or a dedupe of its own.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { PersistedEvent } from "@dude/domain";
 import type { ApiClient } from "../api/client.ts";
 
@@ -34,6 +34,12 @@ export interface UseEventStreamOptions {
 export interface EventStreamState {
   events: PersistedEvent[];
   status: StreamStatus;
+  /**
+   * How many times the stream has come back after being down. A view that
+   * reads anything besides the events re-reads it when this changes: its
+   * subject may have moved while nothing could say so.
+   */
+  reconnects: number;
 }
 
 const DEFAULT_LIMIT = 2_000;
@@ -43,18 +49,40 @@ export function useEventStream(options: UseEventStreamOptions): EventStreamState
 
   const [events, setEvents] = useState<PersistedEvent[]>([]);
   const [status, setStatus] = useState<StreamStatus>("connecting");
+  const [reconnects, setReconnects] = useState(0);
+  const previous = useRef<StreamStatus>(status);
+  useEffect(() => {
+    if (cameBack(previous.current, status)) setReconnects((n) => n + 1);
+    previous.current = status;
+  }, [status]);
+  // Bumped when the network comes back: the stream reopens from where it was.
+  const [generation, setGeneration] = useState(0);
+  const lastCursor = useRef(0);
+  const scope = useRef<{ client: ApiClient; key: string } | null>(null);
+  const key = [runId, sessionId, taskId, all, live, limit].join("|");
 
   useEffect(() => {
     if (!runId && !sessionId && !taskId && !all) return;
 
     // A new scope is a new history: keeping the previous run's events would
-    // show its transcript under this run's header.
-    setEvents([]);
-    setStatus("connecting");
+    // show its transcript under this run's header. The same scope reopened
+    // (the network came back) resumes after the last event it had.
+    const fresh = scope.current?.client !== client || scope.current.key !== key;
+    scope.current = { client, key };
+    if (fresh) {
+      setEvents([]);
+      lastCursor.current = 0;
+      setStatus("connecting");
+    } else {
+      // Reopened (the network changed): until it is open it is catching up,
+      // which is what tells a live-only watcher to re-read what it missed.
+      setStatus("reconnecting");
+    }
+    const after = fresh || lastCursor.current === 0 ? undefined : lastCursor.current;
 
     // An organization-wide stream, or one only watched for change, starts
     // from now rather than replaying the ledger.
-    const source = new EventSource(client.streamUrl({ runId, sessionId, taskId, live }));
+    const source = new EventSource(client.streamUrl({ runId, sessionId, taskId, live, after }));
 
     source.onopen = () => setStatus("live");
 
@@ -71,7 +99,7 @@ export function useEventStream(options: UseEventStreamOptions): EventStreamState
         // A malformed frame must not tear down a working stream.
         return;
       }
-
+      lastCursor.current = Math.max(lastCursor.current, event.cursor);
       setEvents((previous) => {
         const next = [...previous, event];
         return next.length > limit ? next.slice(next.length - limit) : next;
@@ -82,10 +110,25 @@ export function useEventStream(options: UseEventStreamOptions): EventStreamState
     // control plane restart heals without leaving a dead panel.
     source.onerror = () => setStatus("reconnecting");
 
-    return () => source.close();
-  }, [client, runId, sessionId, taskId, all, limit, live]);
+    // The browser knows the network went before the socket does, which can
+    // hang on a dead connection for minutes: say so at once, and reopen
+    // when the network is back.
+    const offline = () => {
+      source.close();
+      setStatus("reconnecting");
+    };
+    const online = () => setGeneration((g) => g + 1);
+    window.addEventListener("offline", offline);
+    window.addEventListener("online", online);
 
-  return { events, status };
+    return () => {
+      source.close();
+      window.removeEventListener("offline", offline);
+      window.removeEventListener("online", online);
+    };
+  }, [client, key, generation]); // eslint-disable-line react-hooks/exhaustive-deps -- `key` stands for the scope's fields
+
+  return { events, status, reconnects };
 }
 
 /**
@@ -105,23 +148,38 @@ export function useReloadOnEvents(
   everyMs = 300,
   /** Sees each event first; returning true means it needs no reload (presence). */
   onEvent?: (event: PersistedEvent) => boolean,
-): void {
+): StreamStatus {
   // Only whether something arrived matters, so the stream keeps almost
   // nothing.
-  const { events } = useEventStream({ ...options, limit: 1, live: true });
+  const { events, status, reconnects } = useEventStream({ ...options, limit: 1, live: true });
   const latest = useRef(reload);
   latest.current = reload;
   const handle = useRef(onEvent);
   handle.current = onEvent;
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-
-  useEffect(() => {
-    const event = events[0];
-    if (!event || (handle.current?.(event) ?? false) || timer.current !== undefined) return;
+  const schedule = useCallback(() => {
+    if (timer.current !== undefined) return;
     timer.current = setTimeout(() => {
       timer.current = undefined;
       latest.current();
     }, everyMs);
-  }, [events, everyMs]);
+  }, [everyMs]);
+
+  useEffect(() => {
+    const event = events[0];
+    if (event && !(handle.current?.(event) ?? false)) schedule();
+  }, [events, schedule]);
+
+  // A live-only stream replays nothing when it comes back: whatever
+  // happened while it was down is only on the server. Re-read once.
+  useEffect(() => {
+    if (reconnects > 0) schedule();
+  }, [reconnects, schedule]);
   useEffect(() => () => clearTimeout(timer.current), []);
+  return status;
+}
+
+/** A stream that was down is up again: what it missed must be re-read. */
+export function cameBack(before: StreamStatus, now: StreamStatus): boolean {
+  return before === "reconnecting" && now === "live";
 }

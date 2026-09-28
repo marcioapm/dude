@@ -1,18 +1,16 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type HTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ButtonHTMLAttributes, type HTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import { focusedElement, returnFocus } from "../util/focusReturn.ts";
-import { Icon } from "../icons/index.tsx";
+import { Icon, type IconName } from "../icons/index.tsx";
 import { IconButton, type IconButtonProps } from "../primitives/Button.tsx";
 import { EmptyState, Skeleton } from "../primitives/Feedback.tsx";
 import { ScrollArea } from "../primitives/ScrollArea.tsx";
-import { COUNTED_TRIAGE_KINDS, TRIAGE_SPECS, type TriageKind } from "../tokens/triage.ts";
+import type { TriageKind } from "../tokens/triage.ts";
 import {
   attentionItems,
   flattenNav,
-  ownerOf,
-  splitAttention,
-  globalCounts,
   navKey,
+  waitingSplit,
   type AttentionItem,
   type NavFilter,
   type NavOverrides,
@@ -21,7 +19,10 @@ import {
   type NavRow,
   waitingWords,
 } from "../util/navModel.ts";
-import { HumanAvatar, HumanAvatarStack, type Person } from "./HumanAvatar.tsx";
+import { HumanAvatar } from "./HumanAvatar.tsx";
+import { PersonAvatar, PersonAvatarStack, type Person } from "./PersonAvatar.tsx";
+import { NeedsYouCount } from "./StatusMark.tsx";
+import { Segmented } from "./ScreenHeader.tsx";
 import { NavTree, type NavRowMenuControls } from "./NavTree.tsx";
 import type { RowMenuItem } from "../primitives/RowMenu.tsx";
 import { StatusBadge } from "./StatusBadge.tsx";
@@ -30,41 +31,41 @@ import styles from "./Sidebar.module.css";
 
 export interface SidebarProps extends Omit<HTMLAttributes<HTMLElement>, "onSelect" | "title"> {
   readonly projects: ReadonlyArray<NavProject>;
-  /**
-   * The viewer's person id. Only what they can answer is counted and
-   * pinned as Needs you; what waits on others is one quiet row
-   * (`onShowOthers`). Undefined: every ask is the viewer's.
-   */
-  readonly you?: string | undefined;
-  /** Where "Waiting on others" goes (the full inbox). */
-  readonly onShowOthers?: (() => void) | undefined;
-  /** Between the header and the search: who is online (`OnlineRow`). */
-  readonly presence?: ReactNode;
   readonly selected?: NavRef | null | undefined;
   readonly onSelect?: ((ref: NavRef, node: NavRow["node"]) => void) | undefined;
-  /** Header line: the organisation, or the product name. */
+  /** The brand at the top: dude, and the organisation. */
   readonly title?: ReactNode;
-  /** Right side of the header: a new-task button, settings. */
+  /** Right side of the brand line. */
   readonly headerActions?: ReactNode;
-  /** Below the tree: the signed-in person, connection state. */
+  /** The profile band at the bottom, on its own shade: organisation settings, you. */
   readonly footer?: ReactNode;
-  /** The very bottom, unwrapped: a `ProfileBand`, which brings its own shade. */
-  readonly band?: ReactNode;
   /** Data has not arrived yet. Skeleton rows instead of "no projects". */
   readonly loading?: boolean | undefined;
   /** Controlled search text. Uncontrolled when omitted. */
   readonly query?: string | undefined;
   readonly onQueryChange?: ((q: string) => void) | undefined;
-  /** Controlled bucket filter. Uncontrolled when omitted. */
+  /** Controlled bucket filter (no control of its own; the app's). */
   readonly triage?: TriageKind | null | undefined;
-  readonly onTriageChange?: ((t: TriageKind | null) => void) | undefined;
   /** Open/closed overrides for the tree; see `NavTree`. */
   readonly expanded?: NavOverrides | undefined;
   readonly onExpandedChange?: ((next: NavOverrides) => void) | undefined;
-  /** Hide the pinned "Needs you" section (e.g. a dedicated inbox exists). */
-  readonly hideAttention?: boolean | undefined;
-  /** Where "and N more" in the "Needs you" section goes (a full inbox). */
-  readonly onShowAllAttention?: (() => void) | undefined;
+  /**
+   * The signed-in person's id: what waits on them is theirs, the rest is
+   * others', and "Mine" filters the tree to their tasks. Without it, all
+   * of it is yours and there is no Mine.
+   */
+  readonly you?: string | null | undefined;
+  /** Who is online, when the app knows: faces under the brand. */
+  readonly online?: ReadonlyArray<Person> | undefined;
+  /** Open "Waiting on you" (or on others): a full inbox. Without it the rows are not drawn. */
+  readonly onWaitingSelect?: ((whose: "you" | "others") => void) | undefined;
+  /** The inbox is what is open: its row is current. */
+  readonly waitingSelected?: boolean | undefined;
+  /** Controlled "Mine" (the tree shows only your tasks). Uncontrolled when omitted. */
+  readonly mine?: boolean | undefined;
+  readonly onMineChange?: ((mine: boolean) => void) | undefined;
+  /** Beside the Projects label: a new-project button. */
+  readonly treeActions?: ReactNode;
   /** Row "…" menus for the tree; see `NavTree`. */
   readonly menuItems?: ((row: NavRow) => ReadonlyArray<RowMenuItem> | null | undefined) | undefined;
   readonly menu?: ((row: NavRow, controls: NavRowMenuControls) => ReactNode) | undefined;
@@ -90,44 +91,45 @@ function isDrawerViewport(): boolean {
 }
 
 /**
- * The persistent navigation next to the transcript. Top to bottom:
+ * The persistent navigation beside everything else. Top to bottom:
  *
- *   header      who / where, plus actions
+ *   brand       dude, and the organisation
+ *   online      who is here now, as faces (when the app knows)
  *   search      `/` from anywhere in the tree; ↓ moves into the tree
- *   chips       needs you · active · ready · failed — global counts, each
- *               a filter; the needs-you chip is the only loud one
- *   needs you   pinned: every blocked task across all projects, with
- *               who is asking and who it waits on. Findable without
- *               expanding anything. Absent when nothing is blocked.
- *   tree        Project → Epic → Task → Session
- *   footer      the signed-in person, connection state
+ *   waiting     "Waiting on you" with the one loud count, and "Waiting on
+ *               others" — what needs a person, answerable without
+ *               expanding anything
+ *   projects    Everyone / Mine, then the tree: projects with their faces,
+ *               epics, tasks with their people, and under a task only the
+ *               agents working now
+ *   band        on its own shade: organisation settings, and you
  *
- * Calm at fifty tasks: colour appears only on the status marks, and
- * the one amber area is the needs-you block.
+ * Calm at fifty tasks: colour is on faces and marks, and the one amber
+ * thing is the count of what waits on you.
  */
 export function Sidebar({
   projects,
-  you,
-  onShowOthers,
-  presence,
   selected,
   onSelect,
   title,
   headerActions,
   footer,
-  band,
   loading,
   query,
   onQueryChange,
   triage,
-  onTriageChange,
   expanded,
   onExpandedChange,
-  hideAttention,
-  onShowAllAttention,
+  you,
+  online,
+  onWaitingSelect,
+  waitingSelected,
+  mine,
+  onMineChange,
+  treeActions,
   menuItems,
   menu,
-  width = 304,
+  width = 300,
   collapsible,
   open,
   onOpenChange,
@@ -144,29 +146,16 @@ export function Sidebar({
     },
     [onQueryChange, query],
   );
-  const [localTriage, setLocalTriage] = useState<TriageKind | null>(null);
-  const t = triage === undefined ? localTriage : triage;
-  const setTriage = useCallback(
-    (v: TriageKind | null) => {
-      onTriageChange?.(v);
-      if (triage === undefined) setLocalTriage(v);
-    },
-    [onTriageChange, triage],
-  );
+  const [localMine, setLocalMine] = useState(false);
+  const isMine = Boolean(you) && (mine ?? localMine);
+  const setMine = (v: boolean) => {
+    onMineChange?.(v);
+    if (mine === undefined) setLocalMine(v);
+  };
 
-  const filter = useMemo<NavFilter>(() => ({ query: q, triage: t, you }), [q, t, you]);
-  const counts = useMemo(() => globalCounts(projects, you), [projects, you]);
-  const { yours: attention, others } = useMemo(() => splitAttention(attentionItems(projects, you)), [projects, you]);
-  // Whom the others wait on, a face each however many of theirs wait.
-  const othersOwners = useMemo(() => {
-    const byId = new Map<string, Person>();
-    for (const it of others) {
-      const owner = ownerOf(it.task);
-      if (owner) byId.set(owner.id ?? owner.name, owner);
-    }
-    return [...byId.values()];
-  }, [others]);
-  const filtering = q.trim().length > 0 || t !== null;
+  const filter = useMemo<NavFilter>(() => ({ query: q, triage: triage ?? null, person: isMine ? (you ?? null) : null, you }), [q, triage, isMine, you]);
+  const waiting = useMemo(() => waitingSplit(attentionItems(projects), you), [projects, you]);
+  const filtering = q.trim().length > 0 || (triage ?? null) !== null || isMine;
   const visible = useMemo(() => (filtering ? flattenNav(projects, expanded ?? new Map(), filter).length : -1), [filtering, projects, expanded, filter]);
 
   const searchRef = useRef<HTMLInputElement>(null);
@@ -185,7 +174,7 @@ export function Sidebar({
 
   const clear = () => {
     setQuery("");
-    setTriage(null);
+    if (isMine) setMine(false);
   };
 
   // The drawer: focus moves into it on open and back to what opened it
@@ -215,6 +204,10 @@ export function Sidebar({
     },
     [onSelect, drawerOpen, onOpenChange],
   );
+  const openWaiting = (whose: "you" | "others") => {
+    onWaitingSelect?.(whose);
+    if (drawerOpen) onOpenChange?.(false);
+  };
 
   const aside = (
     <aside
@@ -231,7 +224,13 @@ export function Sidebar({
         </header>
       ) : null}
 
-      {presence}
+      {online && online.length > 0 ? (
+        <div className={styles["online"]}>
+          <span className={cx(styles["label"], "ds-label")}>Online</span>
+          <PersonAvatarStack people={online} size={24} max={6} />
+          <span className={styles["onlineCount"]}>{online.length}</span>
+        </div>
+      ) : null}
 
       <div className={styles["search"]}>
         <Icon name="search" size={14} className={styles["searchIcon"]} />
@@ -259,37 +258,33 @@ export function Sidebar({
         )}
       </div>
 
-      <div className={styles["chips"]} role="group" aria-label="Filter by state">
-        {COUNTED_TRIAGE_KINDS.map((k) => {
-          const spec = TRIAGE_SPECS[k];
-          const n = counts[k];
-          const on = t === k;
-          return (
-            <button
-              key={k}
-              type="button"
-              className={cx(styles["chip"], styles[`chip-${k}`], on && styles["chipOn"], n === 0 && styles["chipZero"])}
-              aria-pressed={on}
-              title={spec.description}
-              onClick={() => setTriage(on ? null : k)}
-              disabled={n === 0 && !on}
-            >
-              <StatusBadge status={spec.status} variant="dot" iconOnly className={styles["chipMark"]} />
-              <span className={cx(styles["chipLabel"], "ds-cap")}>{spec.label}</span>
-              <span className={cx(styles["chipCount"], "ds-cap")}>{n}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      {!hideAttention && !loading && attention.length > 0 && !filtering ? <AttentionList items={attention} selected={selected} onSelect={select} onShowAll={onShowAllAttention} /> : null}
-      {!hideAttention && !loading && others.length > 0 && !filtering ? (
-        <button type="button" className={styles["othersRow"]} onClick={onShowOthers} disabled={!onShowOthers} data-testid="waiting-on-others">
-          <span className={styles["othersTitle"]}>Waiting on others</span>
-          <HumanAvatarStack people={othersOwners} size="xs" max={3} aria-hidden />
-          <span className={styles["othersCount"]}>{others.length}</span>
-        </button>
+      {onWaitingSelect ? (
+        <nav className={styles["waiting"]} aria-label="Waiting">
+          <SidebarLink
+            current={waitingSelected}
+            onClick={() => openWaiting("you")}
+            leading={waiting.yours.length > 0 ? <NeedsYouCount count={waiting.yours.length} /> : undefined}
+            data-testid="waiting-on-you"
+          >
+            Waiting on you
+          </SidebarLink>
+          {waiting.others.length > 0 ? (
+            <SidebarLink onClick={() => openWaiting("others")} count={waiting.others.length} data-testid="waiting-on-others">
+              Waiting on others
+            </SidebarLink>
+          ) : null}
+        </nav>
       ) : null}
+
+      <div className={styles["treeHead"]}>
+        <span className="ds-label">Projects</span>
+        <span className={styles["spacer"]} />
+        {you ? (
+          <Segmented label="Whose tasks" size="sm" value={isMine ? "mine" : "everyone"} onChange={(v) => setMine(v === "mine")}
+            options={[{ value: "everyone", label: "Everyone" }, { value: "mine", label: "Mine" }]} />
+        ) : null}
+        {treeActions}
+      </div>
 
       <ScrollArea fill className={styles["scroll"]}>
         {loading ? (
@@ -301,7 +296,7 @@ export function Sidebar({
             compact
             icon="search"
             title="No matches"
-            description={t ? `Nothing is ${TRIAGE_SPECS[t].label.toLowerCase()}${q ? ` matching “${q}”` : ""}.` : `Nothing matches “${q}”.`}
+            description={isMine && !q ? "Nothing of yours here." : q ? `Nothing matches “${q}”.` : "Nothing here."}
             action={
               <button type="button" className={styles["link"]} onClick={clear}>
                 Clear
@@ -314,8 +309,7 @@ export function Sidebar({
         )}
       </ScrollArea>
 
-      {footer ? <footer className={styles["footer"]}>{footer}</footer> : null}
-      {band}
+      {footer ? <footer className={styles["band"]}>{footer}</footer> : null}
     </aside>
   );
   if (!collapsible) return aside;
@@ -324,6 +318,60 @@ export function Sidebar({
       {aside}
       <div className={cx(styles["scrim"], drawerOpen && styles["scrimOn"])} aria-hidden onClick={() => onOpenChange?.(false)} />
     </>
+  );
+}
+
+export interface SidebarLinkProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "type"> {
+  /** An icon before the words. */
+  readonly icon?: IconName | undefined;
+  /** Anything before the words instead: a count pill, a face. */
+  readonly leading?: ReactNode;
+  /** A muted number at the end. */
+  readonly count?: number | undefined;
+  /** At the end, after the count: a tag ("Admin"). */
+  readonly trailing?: ReactNode;
+  /** It is what is open. */
+  readonly current?: boolean | undefined;
+}
+
+/** A place in the sidebar that is not in the tree: an inbox, settings. A row, not a button-looking button. */
+export function SidebarLink({ icon, leading, count, trailing, current, className, children, ...rest }: SidebarLinkProps) {
+  return (
+    <button type="button" className={cx(styles["navRow"], current && styles["navRowCurrent"], className)} aria-current={current ? "page" : undefined} {...rest}>
+      {icon ? <Icon name={icon} size={14} className={styles["navIcon"]} /> : null}
+      {leading}
+      <span className={styles["navText"]}>{children}</span>
+      {count !== undefined ? <span className={styles["navCount"]}>{count}</span> : null}
+      {trailing}
+    </button>
+  );
+}
+
+export interface SidebarProfileProps extends Omit<HTMLAttributes<HTMLDivElement>, "children"> {
+  readonly person: Person;
+  /** Under the name: an email, a role. */
+  readonly detail?: ReactNode;
+  /** Open your settings. */
+  readonly onOpen: () => void;
+  /** At the end: a sign-out button. */
+  readonly actions?: ReactNode;
+  readonly openProps?: Record<string, string> | undefined;
+}
+
+/** You, at the bottom of the sidebar: your face, your name, and the way to your settings. */
+export function SidebarProfile({ person, detail, onOpen, actions, openProps, className, ...rest }: SidebarProfileProps) {
+  return (
+    <div className={cx(styles["profile"], className)} {...rest}>
+      <button type="button" className={styles["profileOpen"]} onClick={onOpen} title="Your settings" {...openProps}>
+        <PersonAvatar person={person} size={40} aria-hidden title="" />
+        <span className={styles["profileText"]}>
+          <span className={styles["profileName"]}>{person.name}</span>
+          {detail ? <span className={styles["profileDetail"]}>{detail}</span> : null}
+        </span>
+        <Icon name="settings" size={14} className={styles["profileGear"]} />
+      </button>
+      {actions}
+    </div>
   );
 }
 
@@ -366,13 +414,6 @@ export interface AttentionListProps {
   readonly onShowAll?: (() => void) | undefined;
   /** A heading of its own (a full inbox), not the sidebar's collapsible one. */
   readonly title?: string | undefined;
-  /**
-   * Asks that wait on someone else: calm (no attention wash — only yours
-   * are loud), the owner's face leads the row, and each offers Take over.
-   */
-  readonly others?: boolean | undefined;
-  /** "Take over": make the task yours, so its asks are yours to answer. */
-  readonly onTakeOver?: ((item: AttentionItem) => void) | undefined;
 }
 
 /**
@@ -380,16 +421,15 @@ export interface AttentionListProps {
  * every project, in the order given (the caller sorts — oldest wait first
  * is the sensible default). Each row says what, who is asking, what they
  * ask and who it waits on; where it lives (project · epic) is the row's
- * tooltip, so the ask gets the width. It is a list, not a tree. With
- * `others`, the same list for what waits on someone else, quietly.
+ * tooltip, so the ask gets the width. It is a list, not a tree.
  */
-export function AttentionList({ items, selected, onSelect, max = 5, onShowAll, title, others, onTakeOver }: AttentionListProps) {
+export function AttentionList({ items, selected, onSelect, max = 5, onShowAll, title }: AttentionListProps) {
   const [open, setOpen] = useState(true);
   const shown = open ? items.slice(0, max) : [];
   const more = items.length - shown.length;
   const selectedKey = selected ? navKey(selected) : null;
   return (
-    <section className={cx(styles["attention"], others && styles["attentionOthers"])} aria-label={title ?? "Needs you"}>
+    <section className={styles["attention"]} aria-label={title ?? "Needs you"}>
       {title === undefined ? (
         <button type="button" className={styles["attentionHead"]} aria-expanded={open} onClick={() => setOpen((v) => !v)}>
           <Icon name="chevron-right" size={14} className={cx(styles["attentionChevron"], open && styles["attentionChevronOpen"])} />
@@ -399,7 +439,7 @@ export function AttentionList({ items, selected, onSelect, max = 5, onShowAll, t
         </button>
       ) : (
         <h2 className={cx(styles["attentionHead"], styles["attentionHeadStatic"])}>
-          {others ? null : <StatusBadge status="awaiting_input" variant="dot" iconOnly className={styles["attentionMark"]} />}
+          <StatusBadge status="awaiting_input" variant="dot" iconOnly className={styles["attentionMark"]} />
           <span className={styles["attentionTitle"]}>{title}</span>
           <span className={styles["attentionCount"]}>{items.length}</span>
         </h2>
@@ -412,9 +452,8 @@ export function AttentionList({ items, selected, onSelect, max = 5, onShowAll, t
             const where = it.epic ? `${it.project.name} · ${it.epic.title}` : it.project.name;
             const people = it.task.people ?? [];
             const names = people.map((p) => p.name).join(", ");
-            const owner = ownerOf(it.task);
             return (
-              <li key={it.task.id} className={styles["attentionItem"]}>
+              <li key={it.task.id}>
                 <button
                   type="button"
                   className={cx(styles["attentionRow"], isSel && styles["attentionRowSelected"])}
@@ -434,30 +473,20 @@ export function AttentionList({ items, selected, onSelect, max = 5, onShowAll, t
                       <span className={styles["attentionAsker"]}>{it.session ? <AgentAvatar role={it.session.role} size="xs" /> : null}</span>
                       {it.session ? (
                         <span className={styles["attentionAsk"]} title={it.session.activity}>
-                          {/* Others' asks name whose they are first: that is what the list is sorted by in your head. */}
-                          {others && owner
-                            ? (it.session.activity ? `waiting for ${owner.name} · ${it.session.activity}` : `is waiting for ${owner.name}`)
-                            : (it.session.activity ?? "is waiting for you")}
+                          {it.session.activity ?? "is waiting for you"}
                         </span>
                       ) : (
-                        <span className={styles["attentionAsk"]} title={waitingWords(it.task)}>
-                          {others && owner ? `waiting for ${owner.name}` : waitingWords(it.task)}
-                        </span>
+                        <span className={styles["attentionAsk"]} title={waitingWords(it.task)}>{waitingWords(it.task)}</span>
                       )}
                     </span>
                   </span>
                   {people.length > 0 ? (
                     <span className={styles["attentionPeople"]} role="group" aria-label={names} title={names}>
-                      <HumanAvatar person={people[0]!} size={others ? "md" : "xs"} aria-hidden />
+                      <HumanAvatar person={people[0]!} size="xs" aria-hidden />
                       {people.length > 1 ? <span className={styles["attentionPeopleMore"]}>+{people.length - 1}</span> : null}
                     </span>
                   ) : null}
                 </button>
-                {onTakeOver ? (
-                  <button type="button" className={styles["takeOver"]} onClick={() => onTakeOver(it)} data-testid="take-over">
-                    Take over
-                  </button>
-                ) : null}
               </li>
             );
           })}

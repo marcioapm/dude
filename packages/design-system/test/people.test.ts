@@ -6,7 +6,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { boardColumns } from "../src/util/boardModel.ts";
-import { attentionItems, globalCounts, isYours, splitAttention, taskTriage, type NavProject, type NavTask } from "../src/util/navModel.ts";
+import { attentionItems, globalCounts, isYours, taskTriage, waitingSplit, type NavProject, type NavTask } from "../src/util/navModel.ts";
 
 const ana = { id: "per_ana", name: "Ana" };
 const bo = { id: "per_bo", name: "Bo" };
@@ -39,7 +39,7 @@ describe("the viewer", () => {
 
   test("with no viewer, every ask needs you, as before people", () => {
     expect(globalCounts(projects).needs_you).toBe(3);
-    expect(attentionItems(projects).every((it) => it.yours)).toBe(true);
+    expect(waitingSplit(attentionItems(projects), null).others).toEqual([]);
   });
 
   test("the chips count only yours", () => {
@@ -48,7 +48,7 @@ describe("the viewer", () => {
   });
 
   test("waiting on you, then on others, each oldest first", () => {
-    const { yours, others } = splitAttention(attentionItems(projects, ana.id));
+    const { yours, others } = waitingSplit(attentionItems(projects), ana.id);
     expect(yours.map((it) => it.task.id)).toEqual(["anas", "nobodys"]);
     expect(others.map((it) => it.task.id)).toEqual(["bos"]);
   });

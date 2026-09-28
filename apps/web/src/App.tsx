@@ -12,12 +12,13 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { boardScope, type NavProject, type NavRow } from "@dude/design-system";
-import { Board, Breadcrumb, OnlineRow, ProfileBand, Sidebar, SidebarToggle, type BreadcrumbItem } from "@dude/design-system/components";
+import { boardScope, type NavProject, type NavRow, type NavTask } from "@dude/design-system";
+import { Board, Breadcrumb, Sidebar, SidebarLink, SidebarProfile, SidebarToggle, type BreadcrumbItem, type PrChipPullRequest } from "@dude/design-system/components";
 import { Button, Callout, EmptyState, IconButton, RowMenu, Spinner, useToast } from "@dude/design-system/primitives";
-import { ApiError, type ApiClient } from "./api/client.ts";
+import { ApiError, type ApiClient, type PullRequest } from "./api/client.ts";
+import { usePeople } from "./people.tsx";
+import { Reconnecting } from "./Reconnecting.tsx";
 import { useReloadOnEvents } from "./hooks/useEventStream.ts";
-import { avatarOf, usePeople, whereWords } from "./hooks/usePeople.ts";
 import { errorText } from "./hooks/useSave.tsx";
 import { formatPlace, inTree, parsePlace, treeSelection, type Place } from "./place.ts";
 import { startPush } from "./push.ts";
@@ -74,8 +75,33 @@ function locate(projects: readonly NavProject[], id: string) {
   return null;
 }
 
+/**
+ * The tree with each task's pull requests on it, so a card and a row can
+ * show the one state that matters. The navigation read does not carry
+ * them; one read of the organisation's recent pull requests does.
+ */
+export function withPullRequests(projects: NavProject[], prs: readonly PullRequest[]): NavProject[] {
+  if (prs.length === 0) return projects;
+  const byTask = new Map<string, PrChipPullRequest[]>();
+  for (const pr of [...prs].sort((a, b) => a.createdAt.localeCompare(b.createdAt))) {
+    const list = byTask.get(pr.taskId) ?? [];
+    list.push(pr);
+    byTask.set(pr.taskId, list);
+  }
+  const task = (t: NavTask): NavTask => (byTask.has(t.id) ? { ...t, pullRequests: byTask.get(t.id) } : t);
+  return projects.map((p) => ({
+    ...p,
+    ...(p.epics ? { epics: p.epics.map((e) => ({ ...e, tasks: e.tasks.map(task) })) } : {}),
+    ...(p.tasks ? { tasks: p.tasks.map(task) } : {}),
+  }));
+}
+
+const MINE = "dude.tree.mine";
+
 export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   const [projects, setProjects] = useState<NavProject[] | null>(null);
+  const people = usePeople();
+  const [mine, setMine] = useState(() => localStorage.getItem(MINE) === "1");
   // The sidebar drawer, on a narrow screen.
   const [navOpen, setNavOpen] = useState(false);
   const [place, setPlaceState] = useState<Place | null>(() => parsePlace(window.location.hash));
@@ -110,8 +136,12 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   const [version, setVersion] = useState(0);
   const load = useCallback(async () => {
     try {
-      const { projects: found } = await client.navigation();
-      setProjects(found);
+      const [{ projects: found }, prs] = await Promise.all([
+        client.navigation(),
+        // Chips are a nicety: the tree is drawn without them if this fails.
+        client.recentPullRequests().catch(() => ({ pullRequests: [] as PullRequest[] })),
+      ]);
+      setProjects(withPullRequests(found, prs.pullRequests));
       setVersion((v) => v + 1);
       setProblem(null);
     } catch (err) {
@@ -126,10 +156,8 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
     void load();
   }, [load]);
 
-  const { me, people, seen, reload: reloadPeople } = usePeople(client);
-  const you = me?.id;
   // Someone seen is presence, not a change to the tree: no reload for it.
-  useReloadOnEvents({ client, all: true }, () => void load(), 400, seen);
+  const stream = useReloadOnEvents({ client, all: true }, () => void load(), 400, people.seen);
 
   // First load with nothing selected: open the first project's board rather
   // than an empty pane.
@@ -197,13 +225,15 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
     [projects, act],
   );
 
+  // The board fills the pane edge to edge; everything else sits in it with a margin.
+  let flush = false;
   let main;
   // Settings that are not a project's come first: a new organization with
   // no projects yet still sets up its GitHub connection, and you your view.
   if (place?.view === "orgSettings") {
-    main = <OrganizationSettingsScreen client={client} me={me} people={people} onPeopleChanged={reloadPeople} />;
+    main = <OrganizationSettingsScreen client={client} me={people.me} people={people.all} onPeopleChanged={() => void people.refresh()} />;
   } else if (place?.view === "mySettings") {
-    main = <MySettingsScreen client={client} me={me} onChanged={reloadPeople} />;
+    main = <MySettingsScreen client={client} me={people.me} onChanged={() => void people.refresh()} />;
   } else if (!projects) {
     main = <div className="centered"><Spinner label="Loading…" /></div>;
   } else if (projects.length === 0) {
@@ -219,11 +249,8 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
       />
     );
   } else if (place?.view === "inbox") {
-    main = (
-      <InboxScreen projects={projects} you={you} selected={selected} onSelect={(ref) => go(inTree(ref))}
-        onTakeOver={(taskId) => you ? void client.reassignTask(taskId, you).then(() => load(),
-          (err: unknown) => toast({ title: errorText(err), tone: "danger" })) : undefined} />
-    );
+    flush = true;
+    main = <InboxScreen client={client} projects={projects} onSelect={(ref) => go(inTree(ref))} onChanged={() => void load()} />;
   } else if (place?.view === "projectSettings") {
     main = (
       <ProjectSettingsScreen
@@ -236,10 +263,11 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
     );
   } else if (scope) {
     const project = scope.project;
+    flush = true;
     main = (
       <Board
         project={project}
-        you={you}
+        you={people.you}
         epic={scope.epic}
         overview={scope.epic ? <EpicMetricsSection client={client} epicId={scope.epic.id} version={version} /> : undefined}
         selected={selected}
@@ -253,7 +281,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         headerActions={
           <>
             {scope.epic ? (
-              <Button size="sm" variant="secondary" leadingIcon="edit" data-testid="edit-epic-button"
+              <Button size="sm" variant="quiet" leadingIcon="edit" data-testid="edit-epic-button"
                 onClick={() => act({ kind: "editEpic", epic: epicRef(project.id, scope.epic!) })}>
                 Edit epic
               </Button>
@@ -267,11 +295,11 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
                   }}>
                   Group by epic
                 </Button>
-                <Button size="sm" variant="quiet" leadingIcon="layers" data-testid="new-epic"
+                <Button size="sm" variant="secondary" leadingIcon="layers" data-testid="new-epic"
                   onClick={() => act({ kind: "newEpic", projectId: project.id })}>
                   New epic
                 </Button>
-                <Button size="sm" variant="secondary" leadingIcon="settings" data-testid="project-settings-button"
+                <Button size="sm" variant="quiet" leadingIcon="settings" data-testid="project-settings-button"
                   onClick={() => go({ view: "projectSettings", projectId: project.id })}>
                   Settings
                 </Button>
@@ -286,6 +314,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
       />
     );
   } else if (selected?.kind === "task") {
+    flush = true;
     main = (
       <TaskScreen
         key={selected.id}
@@ -298,6 +327,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
     );
   } else if (selected && (selected.kind === "session" || selected.kind === "run")) {
     const where = locate(projects, selected.id);
+    flush = true;
     main = (
       <RunScreen
         key={selected.id}
@@ -342,6 +372,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   }
 
   const saved = () => void load();
+  const you = people.me;
 
   return (
     <div className="shell" data-testid="shell">
@@ -358,42 +389,44 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         open={navOpen}
         onOpenChange={setNavOpen}
         projects={projects ?? []}
-        you={you}
         loading={!projects}
         selected={selected}
         onSelect={(ref) => go(inTree(ref))}
-        onShowAllAttention={() => go({ view: "inbox" })}
-        onShowOthers={() => go({ view: "inbox" })}
+        you={people.you}
+        // You first, then the others as the organization lists them.
+        online={people.all.filter((p) => p.online).sort((a, b) => Number(b.id === people.you) - Number(a.id === people.you))}
+        onWaitingSelect={() => go({ view: "inbox" })}
+        waitingSelected={place?.view === "inbox"}
+        mine={mine}
+        onMineChange={(m) => {
+          localStorage.setItem(MINE, m ? "1" : "0");
+          setMine(m);
+        }}
         menuItems={menuItems}
-        title={<span className="brand"><DudeMark size={24} />El Duderino</span>}
-        presence={
-          // You first, then the others as the organization lists them.
-          <OnlineRow data-testid="online"
-            people={people.filter((p) => p.online).sort((a, b) => Number(b.id === you) - Number(a.id === you)).map((p) => ({ ...avatarOf(p), where: whereWords(p) }))} />
+        title={<span className="brand"><DudeMark size={30} />El Duderino</span>}
+        treeActions={
+          <IconButton size="sm" icon="plus" label="New project" onClick={() => setOpen({ kind: "newProject" })} data-testid="new-project" />
         }
-        band={
-          <ProfileBand
-            className="profileBand"
-            person={me ? avatarOf(me) : { name: "…" }}
-            detail={me?.email ?? (me?.role === "admin" ? "Organization admin" : undefined)}
-            onOpen={() => go({ view: "mySettings" })}
-            openTestId="my-settings-button"
-            actions={
-              <Button size="sm" variant="quiet" onClick={onSignOut} data-testid="sign-out">
-                Sign out
-              </Button>
-            }
-          >
-            <div className="sidebarFooter">
-              <Button size="sm" variant="quiet" leadingIcon="plus" onClick={() => setOpen({ kind: "newProject" })} data-testid="new-project">
-                New project
-              </Button>
-              <Button size="sm" variant="quiet" leadingIcon="settings" onClick={() => go({ view: "orgSettings" })}
-                data-testid="org-settings-button">
-                Organization
-              </Button>
-            </div>
-          </ProfileBand>
+        footer={
+          <>
+            <SidebarLink icon="building" current={place?.view === "orgSettings"} onClick={() => go({ view: "orgSettings" })}
+              data-testid="org-settings-button">
+              Organisation settings
+            </SidebarLink>
+            {you ? (
+              <SidebarProfile person={you} detail={you.email ?? undefined} onOpen={() => go({ view: "mySettings" })} openProps={{ "data-testid": "my-settings-button" }}
+                actions={<IconButton size="sm" icon="arrow-right" label="Sign out" onClick={onSignOut} data-testid="sign-out" />} />
+            ) : (
+              <>
+                <SidebarLink icon="human" onClick={() => go({ view: "mySettings" })} data-testid="my-settings-button">
+                  Your settings
+                </SidebarLink>
+                <SidebarLink icon="arrow-right" onClick={onSignOut} data-testid="sign-out">
+                  Sign out
+                </SidebarLink>
+              </>
+            )}
+          </>
         }
       />
       {open?.kind === "newProject" ? (
@@ -440,9 +473,10 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
           }}
         />
       ) : null}
-      <main className="main" id="main" tabIndex={-1}>
+      <main className={flush ? "main flush" : "main"} id="main" tabIndex={-1}>
         {/* The sidebar is a drawer on a narrow screen; this opens it. */}
         <SidebarToggle open={navOpen} onOpenChange={setNavOpen} controls="nav" size="sm" />
+        {stream === "reconnecting" ? <Reconnecting /> : null}
         {problem ? <Callout tone="danger">{problem}</Callout> : null}
         {main}
       </main>

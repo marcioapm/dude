@@ -6,7 +6,7 @@
  */
 
 import { useState } from "react";
-import { HumanAvatar } from "@dude/design-system/components";
+import { PersonAvatar } from "@dude/design-system/components";
 import {
   Badge,
   Button,
@@ -27,7 +27,7 @@ import {
 import type { PersonRole } from "@dude/domain";
 import type { ApiClient, Member } from "../api/client.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
-import { avatarOf, whereWords } from "../hooks/usePeople.ts";
+import { whereWords } from "../people.tsx";
 import { KeyShownOnce } from "./YouSections.tsx";
 
 const ROLES = [
@@ -39,7 +39,7 @@ const ROLES = [
 export function MembersSection({ client, me, people, onChanged }: {
   client: ApiClient;
   me: Member | null;
-  people: Member[];
+  people: readonly Member[];
   onChanged: () => void;
 }) {
   const [problem, setProblem] = useState<string | null>(null);
@@ -84,10 +84,16 @@ export function MembersSection({ client, me, people, onChanged }: {
                 return (
                   <Tr key={p.id} data-testid="member" data-member={p.name}>
                     <Td>
-                      {/* "you" beside the name, not in it: the face's initials are the name's. */}
-                      <HumanAvatar person={avatarOf(p)} size="lg" showName
-                        detail={[you ? "you" : null, p.email, p.online ? "online" : whereWords(p) ? `active ${whereWords(p)}` : "not seen yet"]
-                          .filter(Boolean).join(" · ")} />
+                      <span className="member">
+                        <PersonAvatar person={p} size={32} aria-hidden title="" />
+                        <span className="memberText">
+                          <span className="memberName">{p.name}</span>
+                          <span className="memberDetail">
+                            {[you ? "you" : null, p.email, p.online ? "online" : whereWords(p) ? `active ${whereWords(p)}` : "not seen yet"]
+                              .filter(Boolean).join(" · ")}
+                          </span>
+                        </span>
+                      </span>
                     </Td>
                     <Td>
                       {admin && !you ? (

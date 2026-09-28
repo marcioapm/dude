@@ -79,12 +79,12 @@ describe("boardSwimlanes", () => {
     expect(lanes.map((l) => l.count)).toEqual([1, 0, 2]);
   });
   test("each lane has all five columns", () => {
-    for (const lane of boardSwimlanes(project)) expect(lane.columns.map((c) => c.kind)).toEqual(["intake", "queued", "running", "review", "closed"]);
+    for (const lane of boardSwimlanes(project)) expect(lane.columns.map((c) => c.kind)).toEqual(["backlog", "running", "review", "ready", "closed"]);
   });
   test("cards land in their column within the lane", () => {
     const none = boardSwimlanes(project)[2]!;
     expect(none.columns.find((c) => c.kind === "closed")!.cards.map((c) => c.task.id)).toEqual(["w2"]);
-    expect(none.columns.find((c) => c.kind === "queued")!.cards.map((c) => c.task.id)).toEqual(["w3"]);
+    expect(none.columns.find((c) => c.kind === "backlog")!.cards.map((c) => c.task.id)).toEqual(["w3"]);
   });
   test("no loose tasks: no No-epic lane", () => {
     expect(boardSwimlanes({ ...project, tasks: [] }).map((l) => l.key)).toEqual(["epic:e2", "epic:e1"]);
