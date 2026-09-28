@@ -3,7 +3,6 @@ package servers
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -51,8 +50,7 @@ type Previews struct {
 
 type previewRun struct {
 	ID, Org, ProjectID, TaskID, Status string
-	LuxRunID, LuxState, LuxStopReason  string
-	DudePause                          string
+	LuxRunID, LuxState                 string
 	PendingStarts                      []string
 	// Its last sign of use, and the project's idle limit in minutes.
 	ActiveSince *time.Time
@@ -64,7 +62,7 @@ func (p *Previews) Sweep(ctx context.Context) (int, error) {
 	var runs []previewRun
 	if err := p.DB.InSystem(ctx, "previews", func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.project_id, r.task_id, r.status::text,
-				COALESCE(r.lux_run_id, ''), COALESCE(r.lux_state, ''), COALESCE(r.lux_stop_reason, ''), COALESCE(r.dude_pause, ''),
+				COALESCE(r.lux_run_id, ''), COALESCE(r.lux_state, ''),
 				r.pending_starts, r.active_since,
 				(preview_settings(pr)->>'idleTimeoutMinutes')::float8
 			FROM runs r JOIN projects pr ON pr.id = r.project_id
@@ -84,8 +82,8 @@ func (p *Previews) Sweep(ctx context.Context) (int, error) {
 		}
 		runs, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (previewRun, error) {
 			var r previewRun
-			return r, row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.TaskID, &r.Status, &r.LuxRunID, &r.LuxState, &r.LuxStopReason,
-				&r.DudePause, &r.PendingStarts, &r.ActiveSince, &r.IdleMinutes)
+			return r, row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.TaskID, &r.Status, &r.LuxRunID, &r.LuxState,
+				&r.PendingStarts, &r.ActiveSince, &r.IdleMinutes)
 		})
 		return err
 	}); err != nil {
@@ -673,7 +671,7 @@ func (s *Service) wake(ctx context.Context, org string, r runRow, names []string
 			return err
 		}
 		if tag.RowsAffected() == 0 {
-			return errors.New("the preview is no longer parked; try again")
+			return refuse(http.StatusConflict, "conflict", "the preview is no longer parked; try again")
 		}
 		return phases.ServersChanged(ctx, tx, org, r.ProjectID, r.TaskID, r.ID, map[string]any{"change": "waking"})
 	})

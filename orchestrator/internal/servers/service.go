@@ -18,11 +18,8 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
-// Run kinds (runs.kind).
-const (
-	KindAgent   = "agent"
-	KindPreview = "preview"
-)
+// KindPreview is a branch preview's runs.kind; an agent's is "agent".
+const KindPreview = "preview"
 
 // Service answers for a task's servers: which Run a person sees, its
 // servers as lux has them, and the actions a person takes on them.
@@ -99,8 +96,6 @@ type runRow struct {
 	Repos                               []string
 	StartedAt                           *time.Time
 	StartedBy                           *PersonRef
-	DudePause                           string
-	PendingStarts                       []string
 	Settings                            PreviewSettings
 	// The project's recipes with a setup step: a preview's server of that
 	// name starting is its setup running, as far as dude can tell.
@@ -112,7 +107,6 @@ const runSelect = `SELECT r.id, r.project_id, r.task_id, r.kind, r.status::text,
 	r.started_at,
 	(SELECT json_build_object('id', p.id, 'name', p.name) FROM people p WHERE p.id = CASE WHEN r.kind = 'preview'
 		THEN r.started_by ELSE (SELECT k.person_id FROM tasks t JOIN api_keys k ON k.id = t.owner_key_id WHERE t.id = r.task_id) END),
-	COALESCE(r.dude_pause, ''), r.pending_starts,
 	(SELECT preview_settings(pr) FROM projects pr WHERE pr.id = r.project_id),
 	ARRAY(SELECT s.name FROM project_servers s WHERE s.project_id = r.project_id AND COALESCE(s.setup, '') <> '')
 	FROM runs r`
@@ -121,7 +115,7 @@ func scanRun(row pgx.Row) (runRow, error) {
 	var r runRow
 	var settings []byte
 	err := row.Scan(&r.ID, &r.ProjectID, &r.TaskID, &r.Kind, &r.Status, &r.Phase, &r.LuxRunID, &r.LuxState, &r.Branch,
-		&r.BaseSHAs, &r.Repos, &r.StartedAt, &r.StartedBy, &r.DudePause, &r.PendingStarts, &settings, &r.WithSetup)
+		&r.BaseSHAs, &r.Repos, &r.StartedAt, &r.StartedBy, &settings, &r.WithSetup)
 	if err == nil {
 		err = json.Unmarshal(settings, &r.Settings)
 	}
