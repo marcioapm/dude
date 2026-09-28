@@ -301,7 +301,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   // The session's views: one switch, in the same place on each, with the
   // diff's own controls beside it on Changes rather than on a row of their own.
   const switcher = (
-    <Segmented<SessionView> label="Show" size="sm" value={view} onChange={showView} data-testid="session-view"
+    <Segmented<SessionView> label="Show" value={view} onChange={showView} data-testid="session-view"
       options={[
         { value: "chat", label: <><Icon name="message" size={13} />Conversation</> },
         // The agent's checkout, as it changes: only for a Run with one.

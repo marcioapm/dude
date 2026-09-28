@@ -459,8 +459,8 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   to its task when it ends.
 - The open session is `SessionHeader` (whose agent, for whom, its model,
   status, cost, tokens and elapsed, Pause / Abort — on every view, so the
-  numbers never depend on the rail being there), then **one bar**: a small
-  `Segmented` switch between **Conversation**, **Changes** and **Events**
+  numbers never depend on the rail being there), then **one bar**: a
+  `Segmented` switch at the control size (it follows the density) between **Conversation**, **Changes** and **Events**
   (debugging, last), and on Changes the diff's own controls after it
   (`LiveDiff`'s `leading`). One row, one left edge, whichever view is
   shown: never a row of tabs over a row of tools. Each view fills the same
