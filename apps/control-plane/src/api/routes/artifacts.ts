@@ -116,6 +116,9 @@ function fetchContent(organizationId: string, id: string): Promise<Response> {
 async function artifactContent(ctx: RequestContext): Promise<Response> {
   const { organizationId } = ctx.principal;
   const id = ctx.params.id!;
+  // Its name is needed only once the bytes come; asked for meanwhile.
+  const named = artifactNamed(organizationId, id);
+  named.catch(() => undefined);
   const res = await fetchContent(organizationId, id);
   const headers = new Headers({
     "x-content-type-options": "nosniff",
@@ -129,7 +132,7 @@ async function artifactContent(ctx: RequestContext): Promise<Response> {
     headers.set("content-type", res.headers.get("content-type") ?? "application/json");
     return new Response(res.body, { status: res.status, headers });
   }
-  const artifact = await artifactNamed(organizationId, id);
+  const artifact = await named;
   const name = artifact?.name ?? "file";
   let type = artifactType(res.headers.get("content-type"), name);
   let body: ReadableStream<Uint8Array> = res.body;
@@ -175,7 +178,7 @@ async function artifactsZip(ctx: RequestContext): Promise<Response> {
   const { organizationId } = ctx.principal;
   const key = await withOrg(organizationId, async ({ sql }) => {
     const [row] = (await sql`
-      SELECT p.key_prefix || '-' || t.number AS key
+      SELECT p.key_prefix || '-' || t.number AS key -- see navigation.ts
       FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = ${taskId}`) as Array<{ key: string }>;
     return row?.key;
   });

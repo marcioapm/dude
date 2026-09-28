@@ -226,12 +226,8 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 		published[name] = text + "\n"
 	}
 	// Every phase plans and looks around first, as an agent does.
-	now := map[string]string{}
-	for name, text := range step.PublishNow {
-		now[name] = text
-	}
 	return Behaviour{Reply: step.Reply, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask,
-		Publish: published, Tools: []string{"todowrite", "read"}, CallTools: step.Tools, Edits: step.Edits, PublishNow: now,
+		Publish: published, Tools: []string{"todowrite", "read"}, CallTools: step.Tools, Edits: step.Edits, PublishNow: step.PublishNow,
 		FinishEdits: step.FinishEdits}
 }
 

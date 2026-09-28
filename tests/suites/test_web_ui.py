@@ -16,25 +16,16 @@ import pytest
 from playwright.sync_api import Page, expect
 
 from fake_github import FakeGitHub
-from helpers import ApiClient, create_api_key, toast, wait_until
+from helpers import ApiClient, create_api_key, sign_in, toast, wait_until
 
 pytestmark = pytest.mark.ui
-
-
-def _sign_in(page: Page, web_url: str, api_key: str) -> None:
-    page.goto(web_url)
-    page.evaluate("localStorage.clear()")
-    page.goto(web_url)
-    page.fill('input[type="password"]', api_key)
-    page.click('button[type="submit"]')
-    expect(page.get_by_test_id("shell")).to_be_visible()
 
 
 def test_the_board_shows_projects_and_opens_tasks(
     page: Page, web_url: str, client: ApiClient, forge_project: dict, org: dict, console_errors: list
 ):
     client.create_task(forge_project["id"], "Already queued up")
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
 
     # With nothing selected, the first project's board is what opens.
     expect(page.get_by_text("Greeter").first).to_be_visible()
@@ -55,7 +46,7 @@ def test_delivering_from_the_ui_reaches_a_pull_request_and_back(
     fake_github: FakeGitHub,
     console_errors: list,
 ):
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
 
     # Create the task from the board, as an operator would.
     page.get_by_test_id("new-task").click()
@@ -113,7 +104,7 @@ def test_a_task_is_edited_and_moved_from_its_screen(
 ):
     epic = client.post(f"/v1/projects/{forge_project['id']}/epics", {"title": "Greetings"}).json()
     item = client.create_task(forge_project["id"], "Draft title")
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.get_by_text("Draft title").first.click()
     expect(page.get_by_test_id("task-screen")).to_be_visible()
 
@@ -138,7 +129,7 @@ def test_a_task_names_the_repositories_it_changes_and_reads(
     target = forge_project["repositories"][0]
     docs = client.post(f"/v1/projects/{forge_project['id']}/repositories",
                        {"name": "docs", "url": "https://github.com/acme/docs.git"}).json()
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.get_by_test_id("new-task").click()
     page.get_by_test_id("task-title").fill("Document the greeting")
     chooser = page.get_by_test_id("task-repositories")
@@ -162,7 +153,7 @@ def test_a_task_names_the_repositories_it_changes_and_reads(
 def test_project_settings_manage_repositories_and_delivery(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
 ):
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.get_by_test_id("project-settings-button").click()
     expect(page.get_by_test_id("project-settings")).to_be_visible()
 
@@ -200,7 +191,7 @@ def test_project_settings_manage_repositories_and_delivery(
 
 def test_a_new_project_starts_from_the_empty_screen(page: Page, web_url: str, client: ApiClient, org: dict, console_errors: list):
     """An organization with nothing yet is offered a project, not told to use the API."""
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.get_by_test_id("new-project-empty").click()
     page.get_by_test_id("project-name").fill("Payments API")
     page.get_by_test_id("project-repository").fill("https://github.com/acme/payments-api.git")
@@ -217,7 +208,7 @@ def test_a_new_project_starts_from_the_empty_screen(page: Page, web_url: str, cl
 def test_the_github_connection_is_checked_and_replaced_in_settings(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
 ):
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.get_by_test_id("org-settings-button").click()
     expect(page.get_by_test_id("org-settings")).to_contain_text("Connected")
     expect(page.get_by_test_id("org-settings")).to_contain_text("…oken")
@@ -241,7 +232,7 @@ def test_epics_are_made_ordered_and_removed_from_the_sidebar_and_board(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
 ):
     item = client.create_task(forge_project["id"], "Loose work")
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
 
     # Two epics, from the board. A new one opens, which reveals it in the tree.
     for title in ("Onboarding", "Billing"):
@@ -309,7 +300,7 @@ def test_back_and_forward_move_between_places(
     page: Page, web_url: str, client: ApiClient, forge_project: dict, org: dict, console_errors: list
 ):
     client.create_task(forge_project["id"], "Somewhere to go")
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.get_by_text("Somewhere to go").last.click()
     expect(page.get_by_test_id("task-screen")).to_be_visible()
     page.get_by_test_id("org-settings-button").click()
@@ -343,7 +334,7 @@ def test_an_agents_progress_shows_in_its_chat(
     wait_until(lambda: [e for e in client.events(runId=implement["id"]) if e["eventType"] == "agent.custom.progress"][1:],
                timeout=30, message="the progress never reached the ledger")
 
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/session/{implement['id']}")
     progress = page.get_by_test_id("chat-progress")
     expect(progress).to_have_count(1)
@@ -369,7 +360,7 @@ def test_a_person_approves_a_repository_an_agent_asked_for(
     wait_until(lambda: client.get("/v1/repository-requests", params={"runId": implement["id"]}).json()["repositoryRequests"],
                timeout=30, message="the agent never asked")
 
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/session/{implement['id']}")
     card = page.get_by_test_id("repository-request")
     expect(card).to_contain_text("Read web")
@@ -396,7 +387,7 @@ def test_a_parked_agent_is_answered_from_its_chat(
         lambda: next((r for r in client.task_runs(item["id"]) if r["phase"] == "implement" and r["status"] == "paused"), None),
         timeout=30, message="the waiting agent was never parked")
 
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/session/{implement['id']}")
     expect(page.get_by_test_id("chat-notice")).to_contain_text("Parked while it waits for you")
     # Paused, yet the composer takes the answer: that is what resumes it.
@@ -423,7 +414,7 @@ def test_an_agent_parked_on_a_repository_request_says_what_resumes_it(
         lambda: next((r for r in client.task_runs(item["id"]) if r["phase"] == "implement" and r.get("dudePause") == "person"), None),
         timeout=30, message="the waiting agent was never parked")
 
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/session/{implement['id']}")
     expect(page.get_by_test_id("chat-notice")).to_contain_text("Parked while it waits for you")
     # No question to answer: the composer says what does resume it.
@@ -436,7 +427,7 @@ def test_an_agent_parked_on_a_repository_request_says_what_resumes_it(
 
 def test_theme_and_density_are_this_browsers_and_remembered(page: Page, web_url: str, org: dict, console_errors: list):
     """You choose how dude looks; it stays so after a reload."""
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.get_by_test_id("my-settings-button").click()
     expect(page.get_by_test_id("my-settings")).to_be_visible()
     html = page.locator("html")
@@ -474,7 +465,7 @@ def test_a_browser_turns_notifications_on_and_off(
       PushManager.prototype.getSubscription = async function () { return sub; };
       PushManager.prototype.subscribe = async function (o) { window.__pushKey = o.applicationServerKey; sub = fake(); return sub; };
     """)
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.get_by_test_id("my-settings-button").click()
     state = page.get_by_test_id("push-state")
     expect(state).to_have_attribute("data-state", "off")
@@ -518,7 +509,7 @@ def test_everything_waiting_on_you_is_in_one_place(
     client.post(f"/v1/tasks/{requesting['id']}/deliver")
     wait_until(lambda: client.get("/v1/repository-requests").json()["repositoryRequests"], timeout=30, message="no request")
 
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/waiting")
     inbox = page.get_by_test_id("inbox")
     rows = inbox.get_by_role("listitem")
@@ -556,7 +547,7 @@ def test_only_a_tasks_owner_answers_and_anyone_can_take_it_over(
     assert refused.json()["error"]["code"] == "not_owner"
     assert "only e2e user can answer this" in refused.json()["error"]["message"]
 
-    _sign_in(page, web_url, bo_key)
+    sign_in(page, web_url, bo_key)
     page.goto(f"{web_url}#/session/{question['runId']}")
     expect(page.get_by_test_id("waiting-on")).to_have_text("Waiting for e2e user to answer")
     expect(page.get_by_role("group", name="Answer with one of")).to_have_count(0)
@@ -596,7 +587,7 @@ def test_a_tasks_time_and_cost_show_on_its_page_and_its_epics(
     wait_until(lambda: any(r["phase"] == "review" and r["status"] == "completed" for r in client.task_runs(task["id"])),
                timeout=60, message="no finished review")
 
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/task/{task['id']}")
     metrics = page.get_by_test_id("task-metrics")
     expect(metrics).to_contain_text("Agents working")
@@ -612,7 +603,7 @@ def test_a_project_can_have_its_changes_tested_in_a_browser(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
 ):
     """The tester phase is a project's choice, off by default."""
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/project/{forge_project['id']}/settings")
     page.get_by_role("tab", name="Delivery").click()
     box = page.get_by_role("checkbox", name="Test it in a browser")
@@ -640,7 +631,7 @@ def test_a_failed_implementer_says_why_on_its_task_and_its_chat(
     assert task["escalation"]["reason"] == "implement_failed", task["escalation"]
     implement = next(r for r in task["runs"] if r["phase"] == "implement")
 
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/task/{item['id']}")
     escalation = page.get_by_test_id("escalation")
     expect(escalation).to_contain_text("Implementer failed")
@@ -678,7 +669,7 @@ def test_a_person_decides_how_a_stopped_delivery_goes_on(
                timeout=60, message="delivery never stopped for a person")
     assert client.get(f"/v1/tasks/{item['id']}").json()["escalation"]["actions"] == ["retry", "stop"]
 
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/task/{item['id']}")
     escalation = page.get_by_test_id("escalation")
     expect(escalation.get_by_test_id("escalation-retry")).to_have_text("Try again")
@@ -721,7 +712,7 @@ def test_a_link_to_something_gone_says_so(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
 ):
     """A task, run or epic that does not exist is said to, with a way back."""
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     for kind in ("task", "run", "epic"):
         page.goto(f"{web_url}#/{kind}/{kind}_doesnotexist")
         expect(page.get_by_test_id("not-found")).to_contain_text(f"This {kind} doesn't exist")

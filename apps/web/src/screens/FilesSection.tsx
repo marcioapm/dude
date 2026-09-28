@@ -11,12 +11,13 @@
  * it sandboxed as well.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArtifactPreview, FileGallery, FileViewer, artifactKind } from "@dude/design-system/components";
 import type { FileVersion, GalleryFile } from "@dude/design-system/components";
 import { useToast } from "@dude/design-system/primitives";
 import { DEFAULT_RUN_ROLE, runLabel } from "@dude/domain";
 import type { ApiClient, Artifact } from "../api/client.ts";
+import { errorText } from "../hooks/useSave.tsx";
 
 /** Past this, a text file is downloaded rather than shown: the tab would not survive it. */
 const PREVIEW_LIMIT = 2 * 1024 * 1024;
@@ -62,7 +63,7 @@ export function FilesSection({ client, taskId, taskKey, artifacts, onOpenRun }: 
   const files = useMemo(() => filesOf(artifacts), [artifacts]);
   const [open, setOpen] = useState<string | null>(null);
   const [version, setVersion] = useState<string | undefined>(undefined);
-  const fail = (err: unknown) => toast({ title: err instanceof Error ? err.message : String(err), tone: "danger" });
+  const fail = (err: unknown) => toast({ title: errorText(err), tone: "danger" });
   const download = (v: FileVersion) => void client.artifactContent(v.id).then((b) => save(b, v.name.split("/").pop() ?? v.name), fail);
   const thumbnails = useThumbnails(client, files);
   if (files.length === 0) return null;
@@ -103,28 +104,39 @@ export function FilesSection({ client, taskId, taskKey, artifacts, onOpenRun }: 
   );
 }
 
-/** Thumbnails for the gallery's images: read once each, freed when gone. */
+/**
+ * Thumbnails for the gallery's images: each read once, when it appears, and
+ * freed when it goes — a new screenshot does not read the others again.
+ */
 function useThumbnails(client: ApiClient, files: readonly GalleryFile[]): Map<string, string> {
   const [urls, setUrls] = useState(new Map<string, string>());
   const ids = files.map((f) => f.versions[0]!).filter((v) => artifactKind(v.contentType, v.name) === "image" && v.sizeBytes <= PREVIEW_LIMIT)
     .map((v) => v.id).join(",");
+  const made = useRef(new Map<string, string>());
   useEffect(() => {
-    if (!ids) return;
+    const wanted = new Set(ids ? ids.split(",") : []);
+    for (const [id, url] of made.current) {
+      if (!wanted.has(id)) {
+        URL.revokeObjectURL(url);
+        made.current.delete(id);
+      }
+    }
+    setUrls(new Map(made.current));
     let current = true;
-    const made: string[] = [];
-    void Promise.all(ids.split(",").map((id) => client.artifactContent(id).then((b) => [id, URL.createObjectURL(b)] as const, () => null)))
-      .then((pairs) => {
-        const found = pairs.filter((p): p is readonly [string, string] => p !== null);
-        // Gone before they came: freed at once, or they would never be.
-        if (!current) return found.forEach(([, u]) => URL.revokeObjectURL(u));
-        made.push(...found.map(([, u]) => u));
-        setUrls(new Map(found));
-      });
+    for (const id of wanted) {
+      if (made.current.has(id)) continue;
+      void client.artifactContent(id).then((b) => {
+        if (!current) return;
+        made.current.set(id, URL.createObjectURL(b));
+        setUrls(new Map(made.current));
+      }, () => undefined);
+    }
     return () => {
       current = false;
-      made.forEach((u) => URL.revokeObjectURL(u));
     };
   }, [client, ids]);
+  // Freed with the gallery.
+  useEffect(() => () => made.current.forEach((u) => URL.revokeObjectURL(u)), []);
   return urls;
 }
 
@@ -149,7 +161,7 @@ function Content({ client, version }: { client: ApiClient; version: FileVersion 
           if (current) setContent({ text });
         }
       },
-      (err: unknown) => current && setContent({ error: err instanceof Error ? err.message : String(err) }),
+      (err: unknown) => current && setContent({ error: errorText(err) }),
     );
     return () => {
       current = false;

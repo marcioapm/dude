@@ -558,8 +558,6 @@ func ParseFrame(event string, data []byte) (Frame, bool) {
 type ExecResult struct {
 	Stdout, Stderr []byte
 	ExitCode       int
-	// Stdout went past ExecLimit: the rest was dropped.
-	Truncated bool
 }
 
 // ExecLimit caps what Exec keeps of a command's output. Past it the
@@ -632,8 +630,7 @@ func (c *HTTPClient) Exec(ctx context.Context, runID string, command []string) (
 			}
 		default:
 			if len(out.Stdout)+len(d.Data) > ExecLimit {
-				out.Truncated = true
-				continue
+				continue // past the limit: dropped
 			}
 			out.Stdout = append(out.Stdout, d.Data...)
 		}
