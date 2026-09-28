@@ -172,7 +172,7 @@ body {
 }
 @media (max-width: 1280px) {
   .taskSessions {
-    grid-template-columns: 240px minmax(0, 1fr);
+    grid-template-columns: 200px minmax(0, 1fr);
   }
 }
 /* Narrow: the sessions above, as a short scrolling list, the open one under them. */
@@ -497,7 +497,7 @@ body {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
+  grid-template-columns: 260px minmax(0, 1fr);
   margin-top: var(--ds-space-panel-gap);
 }
 .taskSessionList {
