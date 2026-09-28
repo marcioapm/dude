@@ -48,50 +48,48 @@ export function OrganizationSettingsScreen({ client, me, people, onPeopleChanged
   const page = settingsPage(given, PAGES);
   const { scope, problem } = useSettings(client, () => client.organizationSettings(), (p) => client.updateOrganizationSettings(p));
   const settings = scope?.settings;
+  // Members and GitHub are the backend's own: they show at once, and still
+  // work while the orchestrator (defaults, built-in prompts) is away. Only
+  // the pages that need its settings wait for them.
+  const needsSettings = page === "general" || page === "delivery" || isRole(page);
   return (
     <SettingsFrame
       testId="org-settings"
-      loading={!scope}
-      problem={problem}
+      loading={false}
+      problem={null}
       page={page}
       onPage={onPage}
-      scope={{ title: settings?.organization.name ?? "", subtitle: "Organisation settings", leading: <AgentAvatar role="orchestrator" size="lg" /> }}
-      items={
-        settings
-          ? [
-              { id: "members", label: "Members", icon: "human" },
-              { id: "general", label: "General", icon: "settings" },
-              { id: "github", label: "GitHub", icon: "git-branch" },
-              agentsNav(settings),
-              deliveryNav(settings),
-            ]
-          : []
-      }
+      scope={{ title: settings?.organization.name ?? "Organisation", subtitle: "Organisation settings", leading: <AgentAvatar role="orchestrator" size="lg" /> }}
+      items={[
+        { id: "members", label: "Members", icon: "human" },
+        { id: "general", label: "General", icon: "settings" },
+        { id: "github", label: "GitHub", icon: "git-branch" },
+        agentsNav(settings),
+        deliveryNav(settings),
+      ]}
     >
-      {scope ? (
+      <SettingsNote icon="info">
+        Organisation admins only change these. Every project starts from them; an admin can change them for one project in its own settings.
+      </SettingsNote>
+      {page === "members" ? (
+        <MembersSection client={client} me={me} people={people} onChanged={onPeopleChanged} />
+      ) : page === "github" ? (
+        <GitHubPage client={client} />
+      ) : needsSettings && !scope ? (
+        <div className="centered">{problem ? <Callout tone="danger">{problem}</Callout> : <Spinner label="Loading…" />}</div>
+      ) : scope && page === "general" ? (
         <>
-          <SettingsNote icon="info">
-            Organisation admins only. Every project starts from these; a project’s admins can change them for their project.
-          </SettingsNote>
-          {page === "members" ? (
-            <MembersSection client={client} me={me} people={people} onChanged={onPeopleChanged} />
-          ) : page === "general" ? (
-            <>
-              <SettingsHeader title="General" />
-              <SettingsSection title="Organisation">
-                <SettingRow label="Name" help="How dude names this organisation, and what “From …” says in a project’s settings.">
-                  <span data-testid="org-name">{scope.settings.organization.name}</span>
-                </SettingRow>
-              </SettingsSection>
-            </>
-          ) : page === "github" ? (
-            <GitHubPage client={client} />
-          ) : page === "delivery" ? (
-            <DeliveryPage scope={scope} />
-          ) : isRole(page) ? (
-            <RolePage key={page} scope={scope} role={page} onOpenRun={onOpenRun} />
-          ) : null}
+          <SettingsHeader title="General" />
+          <SettingsSection title="Organisation">
+            <SettingRow label="Name" help="How dude names this organisation, and what “From …” says in a project’s settings.">
+              <span data-testid="org-name">{scope.settings.organization.name}</span>
+            </SettingRow>
+          </SettingsSection>
         </>
+      ) : scope && page === "delivery" ? (
+        <DeliveryPage scope={scope} />
+      ) : scope && isRole(page) ? (
+        <RolePage key={page} scope={scope} role={page} onOpenRun={onOpenRun} />
       ) : null}
     </SettingsFrame>
   );

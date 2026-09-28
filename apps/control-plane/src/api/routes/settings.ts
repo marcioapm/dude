@@ -110,9 +110,9 @@ interface VersionRow {
 }
 
 const VERSION_SELECT = `v.id, v.project_id AS "projectId", v.role, v.mode, v.body, v.note, v.created_at AS "createdAt",
-  v.created_by AS "createdById", k.name AS "createdByName", v.restored_from AS "restoredFrom",
+  COALESCE(k.person_id, v.created_by) AS "createdById", COALESCE(p.name, k.name) AS "createdByName", v.restored_from AS "restoredFrom",
   (row_number() OVER w)::int AS number, (count(*) OVER (PARTITION BY v.role, v.project_id))::int AS total`;
-const VERSION_FROM = `prompt_versions v LEFT JOIN api_keys k ON k.id = v.created_by`;
+const VERSION_FROM = `prompt_versions v LEFT JOIN api_keys k ON k.id = v.created_by LEFT JOIN people p ON p.id = k.person_id`;
 const VERSION_WINDOW = `WINDOW w AS (PARTITION BY v.role, v.project_id ORDER BY v.created_at, v.id)`;
 
 /** Every version of the prompts at one layer (the organization's with no project), newest first. */

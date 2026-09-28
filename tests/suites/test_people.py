@@ -366,3 +366,28 @@ def test_an_admin_manages_members(page: Page, web_url: str, client: ApiClient, e
     expect(page.get_by_test_id("invite")).to_have_count(0)
     expect(page.get_by_test_id("member-remove")).to_have_count(0)
     assert console_errors == []
+
+
+def test_a_member_cannot_change_what_only_admins_may(client: ApiClient, env, project: dict):
+    """The organisation's settings, its prompts, a project's settings and the
+    GitHub connection are an admin's: a member reads settings, changes none."""
+    _, bo = _invite(client, env, "Bo")
+    pid = project["id"]
+    refused = [
+        bo.patch("/v1/settings/organization", {"roles": {"implementer": {"model": "fake/scripted"}}}),
+        bo.post("/v1/prompts/implementer", {"body": "# Mine now"}),
+        bo.patch(f"/v1/projects/{pid}/settings", {"roles": {"reviewer": {"model": "fake/scripted"}}}),
+        bo.post("/v1/prompts/implementer", {"projectId": pid, "mode": "add", "body": "More"}),
+        bo.get("/v1/forge/webhook-secret"),
+        bo.post("/v1/forge/webhook-secret/rotate", {}),
+        bo.post("/v1/forge/webhooks/register", {}),
+        bo.patch("/v1/forge/settings", {"whoCanWake": "anyone"}),
+        bo.post("/v1/forge/credential", {"auth": "pat", "secret": "a-token-of-my-own"}),
+    ]
+    assert [r.status_code for r in refused] == [403] * len(refused), [(r.request.url, r.status_code, r.text[:80]) for r in refused]
+    assert all(r.json()["error"]["code"] == "not_admin" for r in refused), [r.text[:80] for r in refused]
+    # Reading is anyone's; the screen shows the controls disabled.
+    settings = bo.get("/v1/settings/organization")
+    assert settings.status_code == 200 and settings.json()["canEdit"] is False, settings.text[:200]
+    # The admin still may.
+    assert client.post("/v1/prompts/implementer", {"body": "# Ours"}).status_code in (200, 201)

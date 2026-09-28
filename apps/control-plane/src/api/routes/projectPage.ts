@@ -37,7 +37,7 @@ interface EpicRow {
   createdAt: string;
   updatedAt: string;
   statuses: string[];
-  owners: Array<{ id: string; name: string }>;
+  owners: Array<{ id: string; name: string; photoUrl: string | null; online: boolean }>;
   prs: Record<string, number>;
   costUsd: number;
   lastActivity: string | null;
@@ -53,10 +53,12 @@ async function projectOverview(ctx: RequestContext): Promise<Response> {
       SELECT e.id, e.title, e.description, e.position, e.state AS "storedState",
              e.created_at AS "createdAt", e.updated_at AS "updatedAt",
              COALESCE((SELECT array_agg(t.status::text) FROM tasks t WHERE t.epic_id = e.id), '{}') AS statuses,
-             -- Who drives its tasks, most tasks first.
-             COALESCE((SELECT json_agg(json_build_object('id', o.id, 'name', o.name) ORDER BY o.n DESC, o.name)
-                       FROM (SELECT k.id, k.name, count(*) AS n FROM tasks t JOIN api_keys k ON k.id = t.owner_key_id
-                             WHERE t.epic_id = e.id AND k.revoked_at IS NULL GROUP BY k.id, k.name) o), '[]') AS owners,
+             -- Who owns its tasks, as people, most tasks first.
+             COALESCE((SELECT json_agg(person_ref(p) ORDER BY o.n DESC, p.name)
+                       FROM (SELECT tp.person_id, count(*) AS n
+                             FROM tasks t JOIN task_people tp ON tp.task_id = t.id AND tp.position = 0
+                             WHERE t.epic_id = e.id GROUP BY tp.person_id) o
+                       JOIN people p ON p.id = o.person_id AND p.removed_at IS NULL), '[]') AS owners,
              COALESCE((SELECT json_object_agg(s.state, s.n) FROM (
                          SELECT pr.state::text AS state, count(*) AS n FROM pull_requests pr JOIN tasks t ON t.id = pr.task_id
                          WHERE t.epic_id = e.id GROUP BY pr.state) s), '{}') AS prs,
