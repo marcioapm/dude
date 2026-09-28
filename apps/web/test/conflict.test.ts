@@ -37,4 +37,14 @@ describe("conflictNotice", () => {
     const n = conflictNotice("resume this run", "not paused", [ev("run.resumed", { type: "human", id: "key_x", name: "Cy Okafor" })], people, "running");
     expect(n.by).toBe("Cy Okafor");
   });
+
+  test("an act that does not explain where the Run is names no one", () => {
+    const n = conflictNotice("pause this run", "run r is completed", [ev("run.paused", { type: "human", id: "key_bo" })], people, "completed");
+    expect(n.by).toBeNull();
+  });
+
+  test("without knowing who you are, no one is named", () => {
+    const n = conflictNotice("pause this run", "already paused", [ev("run.paused", { type: "human", id: "key_you" })], { ...people, you: null }, "paused");
+    expect(n.by).toBeNull();
+  });
 });

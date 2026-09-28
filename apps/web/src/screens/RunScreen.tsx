@@ -75,7 +75,8 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   // Someone else acted first: said calmly, and gone once the Run catches up.
-  const [notice, setNotice] = useState<Notice | null>(null);
+  // It remembers the status it was about: once the Run moves on, it has said its piece.
+  const [notice, setNotice] = useState<(Notice & { about: RunDetail["status"] | undefined }) | null>(null);
   const [confirmAbort, setConfirmAbort] = useState(false);
   const [abortReason, setAbortReason] = useState("");
   const people = usePeople();
@@ -167,14 +168,16 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
       } catch (err) {
         if (err instanceof ApiError && err.status === 409) {
           // The Run moved on: read where it is now, and who moved it —
-          // someone the page may not have met yet.
-          const [recent, fresh, known] = await Promise.all([
-            client.events({ runId, after: Math.max(0, (events.at(-1)?.cursor ?? 0) - 50) }).then((r) => r.events, () => events),
+          // someone the page may not have met yet. The act is in what the
+          // page had not seen, or had only just seen before a re-read.
+          const [unseen, fresh, known] = await Promise.all([
+            client.events({ runId, after: events.at(-1)?.cursor ?? 0 }).then((r) => r.events, () => []),
             client.getRun(runId).then((r) => r, () => null),
             people.refresh(),
           ]);
           if (fresh) setRun(fresh);
-          setNotice(conflictNotice(label, err.message, recent, known, fresh?.status ?? run?.status));
+          const status = fresh?.status ?? run?.status;
+          setNotice({ ...conflictNotice(label, err.message, [...events.slice(-50), ...unseen], known, status), about: status });
         } else {
           setProblem(err instanceof ApiError ? `Could not ${label}: ${err.message}` : `Could not ${label}.`);
         }
@@ -185,15 +188,9 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
     [client, runId, events, people, run?.status],
   );
 
-  // A notice says the Run moved on; once it has (its status changed), it has said its piece.
-  const noticeFor = useRef<string | undefined>(undefined);
+  // A notice says the Run moved on; once it moves again, it has said its piece.
   useEffect(() => {
-    if (!notice) return;
-    if (noticeFor.current === undefined) noticeFor.current = run?.status;
-    else if (noticeFor.current !== run?.status) {
-      setNotice(null);
-      noticeFor.current = undefined;
-    }
+    if (notice && run?.status !== notice.about) setNotice(null);
   }, [notice, run?.status]);
 
   const send = useCallback(

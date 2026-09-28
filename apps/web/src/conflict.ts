@@ -18,15 +18,18 @@ export interface Notice {
   by: string | null;
 }
 
-/** What a person's act on a Run was, as a verb phrase. */
-const ACTED: Record<string, string> = {
-  "run.paused": "paused it",
-  "run.resumed": "resumed it",
-  "run.aborted": "aborted it",
-  "run.steered": "steered it",
-  "question.answered": "answered it",
-  "repository.approved": "approved the request",
-  "repository.denied": "declined the request",
+/**
+ * What a person's act on a Run was, as a verb phrase, and the status it
+ * leaves the Run in when that is what it is about: a pause explains a
+ * paused Run, not a finished one.
+ */
+const ACTED: Record<string, { verb: string; leaves?: RunStatus }> = {
+  "run.paused": { verb: "paused it", leaves: "paused" },
+  "run.resumed": { verb: "resumed it", leaves: "running" },
+  "run.aborted": { verb: "aborted it", leaves: "aborted" },
+  "question.answered": { verb: "answered it" },
+  "repository.approved": { verb: "approved the request" },
+  "repository.denied": { verb: "declined the request" },
 };
 
 /** What the Run is now, as the end of a sentence. */
@@ -38,6 +41,11 @@ const NOW: Partial<Record<RunStatus, string>> = {
   aborted: "It was aborted.",
 };
 
+/**
+ * `events` are what the page had not seen when it acted: the one who acted
+ * first is among them. Without knowing who you are, no one is named — it
+ * could be you, in another tab.
+ */
 export function conflictNotice(
   attempted: string,
   serverMessage: string,
@@ -45,13 +53,16 @@ export function conflictNotice(
   people: Pick<People, "you" | "names">,
   status?: RunStatus,
 ): Notice {
-  for (let i = events.length - 1; i >= 0; i--) {
-    const event = events[i]!;
-    const verb = ACTED[event.eventType];
-    const by = humanActor(event);
-    if (!verb || !by || by.id === people.you) continue;
-    const name = actorName(by, people.names) ?? "Someone else";
-    return { text: `${name} ${verb} first, so you did not ${attempted}. ${NOW[status ?? "running"] ?? ""}`.trim(), by: name };
+  if (people.you) {
+    for (let i = events.length - 1; i >= 0; i--) {
+      const event = events[i]!;
+      const act = ACTED[event.eventType];
+      const by = humanActor(event);
+      if (!act || !by || by.id === people.you) continue;
+      if (act.leaves && status && act.leaves !== status) continue;
+      const name = actorName(by, people.names) ?? "Someone else";
+      return { text: `${name} ${act.verb} first, so you did not ${attempted}. ${NOW[status ?? "running"] ?? ""}`.trim(), by: name };
+    }
   }
   return { text: `Could not ${attempted}: ${serverMessage}`, by: null };
 }

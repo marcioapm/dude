@@ -15,7 +15,7 @@
  * is said by the shell, and the page re-reads when it is back.
  */
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AgentAvatar,
   Duration,
@@ -71,6 +71,7 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [pullRequests, setPullRequests] = useState<PullRequest[]>([]);
   const [events, setEvents] = useState<PersistedEvent[]>([]);
+  const ledger = useRef<PersistedEvent[]>([]);
   const [problem, setProblem] = useState<string | null>(null);
   const [delivering, setDelivering] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -78,7 +79,12 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
   // Bumped on each reload, for the sections that read their own data.
   const [version, setVersion] = useState(0);
 
+  // Loads overlap when events come quickly: a slower, older one must not
+  // put back what a newer one replaced.
+  const loads = useRef(0);
+  const applied = useRef(0);
   const load = useCallback(async () => {
+    const seq = ++loads.current;
     setVersion((v) => v + 1);
     try {
       const [fresh, f, p, a] = await Promise.all([
@@ -87,17 +93,27 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
         client.listPullRequests(taskId),
         client.listArtifacts(taskId),
       ]);
-      setItem(fresh);
-      setFindings(f.findings);
-      setArtifacts(a.artifacts);
-      setPullRequests(p.pullRequests);
+      if (seq > applied.current) {
+        applied.current = seq;
+        setItem(fresh);
+        setFindings(f.findings);
+        setArtifacts(a.artifacts);
+        setPullRequests(p.pullRequests);
+      }
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) setMissing(true);
       else setProblem(err instanceof Error ? err.message : String(err));
     }
-    // The ledger is for who did what and the plans; the page stands without it.
+    // The ledger is for who did what and the plans; the page stands without
+    // it. Only what is new since the last read is fetched.
     try {
-      setEvents(await allEvents(client, taskId));
+      const more = await allEvents(client, taskId, ledger.current.at(-1)?.cursor ?? 0);
+      const last = ledger.current.at(-1)?.cursor ?? 0;
+      const fresh = more.filter((e) => e.cursor > last);
+      if (fresh.length > 0) {
+        ledger.current = [...ledger.current, ...fresh];
+        setEvents(ledger.current);
+      }
     } catch {
       // Activity says it could not be read; nothing else depends on it.
     }
@@ -324,10 +340,9 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
   );
 }
 
-/** Every event of a task, oldest first, in pages. */
-async function allEvents(client: ApiClient, taskId: string): Promise<PersistedEvent[]> {
+/** A task's events after a cursor, oldest first, in pages. */
+async function allEvents(client: ApiClient, taskId: string, after: number): Promise<PersistedEvent[]> {
   const out: PersistedEvent[] = [];
-  let after = 0;
   for (let page = 0; page < 20; page++) {
     const { events, nextCursor } = await client.events({ taskId, after, limit: 1000 });
     out.push(...events);

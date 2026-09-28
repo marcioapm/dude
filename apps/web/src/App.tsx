@@ -411,10 +411,14 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
               <SidebarProfile person={you} onOpen={() => go({ view: "mySettings" })} openProps={{ "data-testid": "my-settings-button" }}
                 actions={<IconButton size="sm" icon="arrow-right" label="Sign out" onClick={onSignOut} data-testid="sign-out" />} />
             ) : (
-              <SidebarLink icon="human" onClick={() => go({ view: "mySettings" })} data-testid="my-settings-button"
-                trailing={<Button size="sm" variant="quiet" onClick={(e) => { e.stopPropagation(); onSignOut(); }} data-testid="sign-out">Sign out</Button>}>
-                Your settings
-              </SidebarLink>
+              <>
+                <SidebarLink icon="human" onClick={() => go({ view: "mySettings" })} data-testid="my-settings-button">
+                  Your settings
+                </SidebarLink>
+                <SidebarLink icon="arrow-right" onClick={onSignOut} data-testid="sign-out">
+                  Sign out
+                </SidebarLink>
+              </>
             )}
           </>
         }
