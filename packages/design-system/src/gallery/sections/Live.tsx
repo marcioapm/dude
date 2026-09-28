@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { Block, Col, Label, Panes, Section, type PaneMode } from "../Frame.tsx";
+import { AgentAvatar } from "../../components/AgentAvatar.tsx";
+import { ChangedFiles, SessionFacts, SessionRail, SessionRailBlock, ToolUsage } from "../../components/SessionRail.tsx";
+import { Segmented } from "../../components/ScreenHeader.tsx";
+import { Icon } from "../../icons/index.tsx";
 import { Cost } from "../../components/Cost.tsx";
 import { LiveDiff, type LiveDiffFile } from "../../components/LiveDiff.tsx";
 import { FileGallery, FileViewer, type GalleryFile } from "../../components/FileGallery.tsx";
@@ -41,6 +45,19 @@ const NEXT: LiveDiffFile = {
   ] }],
 };
 
+/** A session's Conversation / Changes switch, as the app draws it. */
+function SessionSwitch({ value: start = "chat" }: { readonly value?: "chat" | "changes" | "events" }) {
+  const [value, setValue] = useState(start);
+  return (
+    <Segmented label="Show" value={value} onChange={setValue}
+      options={[
+        { value: "chat", label: <><Icon name="message" size={13} />Conversation</> },
+        { value: "changes", label: <><Icon name="git-branch" size={13} />Changes 3<span className="ds-live-dot" /></> },
+        { value: "events", label: <><Icon name="list" size={13} />Events 128</> },
+      ]} />
+  );
+}
+
 /** Every few seconds the agent writes a little more. */
 function LiveDemo() {
   const [files, setFiles] = useState(FILES);
@@ -50,7 +67,8 @@ function LiveDemo() {
   }, []);
   return (
     <div style={{ height: 420, display: "flex" }}>
-      <LiveDiff files={files} base="0fff44b9a1" live lastChange={<>Write <code>revenue.test.ts</code> · just now</>} />
+      <LiveDiff files={files} base="0fff44b9a1" live onOpenFile={() => {}} leading={<SessionSwitch value="changes" />}
+        lastChange={<><AgentAvatar role="implementer" size="xs" live /> Write <code>revenue.test.ts</code> · just now</>} />
     </div>
   );
 }
@@ -83,7 +101,7 @@ function FilesDemo() {
 export function LiveSection({ mode }: { readonly mode: PaneMode }) {
   return (
     <Section id="live" title="Live work" intro="What an agent is doing to the code as it does it, the files it leaves, and what it cost.">
-      <Block id="l-diff" title="LiveDiff" note="The agent's checkout against the commit it started from, as it changes. Files on the left with status and counts; each file's diff under a header that sticks. New lines flash and keep a mark down their side for a moment; the file they are in lights up. Follow the agent scrolls to the newest change; picking a file shows it alone and turns Follow off.">
+      <Block id="l-diff" title="LiveDiff" note="The agent's checkout against the commit it started from, as it changes. Files on the left with status and counts; each file's diff under a header that sticks. New lines flash and keep a mark down their side for a moment; the file they are in lights up. Follow the agent scrolls to the newest change; picking a file shows it alone and turns Follow off. Unified or Split; each file opens in the viewer. The last change carries the agent's face.">
         <Panes mode={mode}>
           <LiveDemo />
         </Panes>
@@ -91,6 +109,26 @@ export function LiveSection({ mode }: { readonly mode: PaneMode }) {
         <Panes mode={mode}>
           <div style={{ height: 160, display: "flex" }}>
             <LiveDiff files={[]} base="0fff44b" emptyMessage="The agent has not changed anything yet." />
+          </div>
+        </Panes>
+      </Block>
+      <Block id="l-session" title="A session's bar and its rail" note="Under a session's header, one bar: Conversation / Changes / Events as a small Segmented (Changes with its count and, while the agent changes files, the breathing dot; Events last, with its count), each view in the same place below it, and — on Changes — the diff's own controls after the switch (the LiveDiff demo above shows that row). Beside the conversation, the rail on the chrome shade: what the header does not say, the tools used, the files changed so far (each opens Changes on it alone).">
+        <Panes mode={mode}>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 260px", height: 360 }}>
+            <div>
+              <SessionSwitch />
+            </div>
+            <SessionRail aria-label="This session">
+              <SessionRailBlock label="Session">
+                <SessionFacts facts={[{ label: "Model", value: "claude-sonnet-5", mono: true }, { label: "Agent", value: "opencode" }, { label: "Attempt", value: 1 }]} />
+              </SessionRailBlock>
+              <SessionRailBlock label="Tools used">
+                <ToolUsage tools={[{ name: "Read", count: 9 }, { name: "Edit", count: 5 }, { name: "Bash", count: 4 }, { name: "Grep", count: 3 }, { name: "Write", count: 1 }]} />
+              </SessionRailBlock>
+              <SessionRailBlock label="Files changed" live>
+                <ChangedFiles files={FILES.map((f) => ({ path: f.path, additions: f.additions, deletions: f.deletions }))} onOpen={() => {}} />
+              </SessionRailBlock>
+            </SessionRail>
           </div>
         </Panes>
       </Block>

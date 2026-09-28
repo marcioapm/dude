@@ -13,7 +13,8 @@
 .root {
   --md-gap: var(--ds-md-gap);
   --md-h-gap: 1.25em;
-  --md-measure: var(--ds-measure-message);
+  /* A chat turn spans its column: the transcript's width is the measure. */
+  --md-measure: none;
   font-size: var(--ds-text-prose);
   line-height: var(--ds-leading-chat);
   color: var(--ds-color-text-primary);
