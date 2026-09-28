@@ -62,12 +62,11 @@ describe("LiveDiff", () => {
 
   test("the page's controls share its toolbar, and the last change heads the files", () => {
     const html = renderToStaticMarkup(
-      <LiveDiff base="b" live files={[file("a.ts", "M", [["+", "x"]])]} leading={<i data-x="lead" />} trailing={<i data-x="trail" />}
+      <LiveDiff base="b" live files={[file("a.ts", "M", [["+", "x"]])]} leading={<i data-x="lead" />}
         lastChange="Write a.ts" />,
     );
     const head = html.slice(0, html.indexOf('aria-label="Changed files"'));
     expect(head.indexOf('data-x="lead"')).toBeLessThan(head.indexOf("Since"));
-    expect(head).toContain('data-x="trail"');
     expect(html.indexOf('data-testid="last-change"')).toBeGreaterThan(html.indexOf('aria-label="Changed files"'));
   });
 

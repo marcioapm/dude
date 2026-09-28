@@ -63,6 +63,9 @@ export interface RunScreenProps {
   task?: { owner: Person | null; key?: string | undefined } | undefined;
 }
 
+/** What a session shows: its conversation, its checkout's changes, or its event ledger. */
+type SessionView = "chat" | "changes" | "events";
+
 /**
  * Events that can change a Run's status, and so are worth a re-read.
  *
@@ -80,13 +83,11 @@ const STATUS_EVENTS: ReadonlySet<string> = new Set([
 ]);
 
 export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, onBack, task: given }: RunScreenProps) {
-  const [view, setView] = useState<"chat" | "changes">("chat");
-  // The event ledger, for debugging: over the page, not a view of its own.
-  const [showEvents, setShowEvents] = useState(false);
+  const [view, setView] = useState<SessionView>("chat");
   // The file Changes shows alone, picked there or in the rail. Leaving
   // Changes forgets it, so coming back finds all of them.
   const [selected, setSelected] = useState<string | null>(null);
-  const showView = (next: "chat" | "changes") => {
+  const showView = (next: SessionView) => {
     if (next !== "changes") setSelected(null);
     setView(next);
   };
@@ -297,25 +298,23 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     </>
   ) : undefined;
 
-  // Conversation or Changes: one switch, in the same place on both, with the
-  // diff's own controls beside it rather than on a row of their own.
-  const switcher = hasChanges ? (
-    <Segmented<"chat" | "changes"> label="Show" size="sm" value={view} onChange={showView} data-testid="session-view"
+  // The session's views: one switch, in the same place on each, with the
+  // diff's own controls beside it on Changes rather than on a row of their own.
+  const switcher = (
+    <Segmented<SessionView> label="Show" size="sm" value={view} onChange={showView} data-testid="session-view"
       options={[
         { value: "chat", label: <><Icon name="message" size={13} />Conversation</> },
-        { value: "changes", label: (
+        // The agent's checkout, as it changes: only for a Run with one.
+        ...(hasChanges ? [{ value: "changes" as const, label: (
           <>
             <Icon name="git-branch" size={13} />Changes
             {changed.length > 0 ? <span className="ds-tnum runCount">{changed.length}</span> : null}
             {liveDiff && changed.length > 0 ? <span className="ds-live-dot" aria-label="changing now" /> : null}
           </>
-        ) },
+        ) }] : []),
+        // Debugging, not the daily view — hence last.
+        { value: "events", label: <><Icon name="list" size={13} />Events<span className="ds-tnum runCount">{events.length}</span></> },
       ]} />
-  ) : null;
-  const eventLog = (
-    <Button size="sm" variant="quiet" leadingIcon="list" onClick={() => setShowEvents(true)} data-testid="open-event-log">
-      Event log
-    </Button>
   );
 
   return (
@@ -323,14 +322,31 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
       <SessionHeader session={session} actions={actions} />
       {view === "changes" && hasChanges ? (
         <ChangesPanel client={client} runId={runId} role={role} events={events} checksum={diffSummary?.checksum ?? ""} live={liveDiff}
-          selected={selected} onSelectedChange={setSelected} leading={switcher} trailing={eventLog} />
+          selected={selected} onSelectedChange={setSelected} leading={switcher} />
+      ) : view === "events" ? (
+        <>
+          <div className="runBar">{switcher}</div>
+          <div className="runEvents" data-testid="event-log">
+          <EventStream>
+            {events.map((event) => (
+              <EventRow
+                key={event.eventId}
+                occurredAt={event.occurredAt}
+                eventType={event.eventType}
+                actor={{ type: event.actor.type, id: event.actor.id, ...namedActor(event, people) }}
+                summary={summarize(event)}
+                // An element, not a string: EventRow only renders the detail
+                // when the row is open, so the JSON is built for the handful
+                // of rows an operator actually expands.
+                detail={<PayloadDetail payload={event.payload} />}
+              />
+            ))}
+          </EventStream>
+          </div>
+        </>
       ) : (
         <>
-          <div className="runBar">
-            {switcher}
-            <span className="runBarSpacer" />
-            {eventLog}
-          </div>
+          <div className="runBar">{switcher}</div>
           <div className="runChat">
             <ChatTranscript
               fill
@@ -414,28 +430,6 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
         </>
       )}
 
-      {showEvents ? (
-        <Dialog open size="xl" onOpenChange={(o) => !o && setShowEvents(false)} title="Event log"
-          description="Everything this session recorded, oldest first: for when something looks wrong.">
-          <div className="dialogFill" data-testid="event-log">
-            <EventStream>
-              {events.map((event) => (
-                <EventRow
-                  key={event.eventId}
-                  occurredAt={event.occurredAt}
-                  eventType={event.eventType}
-                  actor={{ type: event.actor.type, id: event.actor.id, ...namedActor(event, people) }}
-                  summary={summarize(event)}
-                  // An element, not a string: EventRow only renders the detail
-                  // when the row is open, so the JSON is built for the handful
-                  // of rows an operator actually expands.
-                  detail={<PayloadDetail payload={event.payload} />}
-                />
-              ))}
-            </EventStream>
-          </div>
-        </Dialog>
-      ) : null}
 
       {notice ? (
         <Callout tone="neutral" data-testid="conflict-notice">

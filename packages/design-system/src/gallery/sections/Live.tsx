@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { Block, Col, Label, Panes, Section, type PaneMode } from "../Frame.tsx";
 import { AgentAvatar } from "../../components/AgentAvatar.tsx";
 import { ChangedFiles, SessionFacts, SessionRail, SessionRailBlock, ToolUsage } from "../../components/SessionRail.tsx";
-import { Button } from "../../primitives/Button.tsx";
 import { Segmented } from "../../components/ScreenHeader.tsx";
 import { Icon } from "../../icons/index.tsx";
 import { Cost } from "../../components/Cost.tsx";
@@ -47,13 +46,14 @@ const NEXT: LiveDiffFile = {
 };
 
 /** A session's Conversation / Changes switch, as the app draws it. */
-function SessionSwitch({ value: start = "chat" }: { readonly value?: "chat" | "changes" }) {
+function SessionSwitch({ value: start = "chat" }: { readonly value?: "chat" | "changes" | "events" }) {
   const [value, setValue] = useState(start);
   return (
     <Segmented label="Show" size="sm" value={value} onChange={setValue}
       options={[
         { value: "chat", label: <><Icon name="message" size={13} />Conversation</> },
         { value: "changes", label: <><Icon name="git-branch" size={13} />Changes 3<span className="ds-live-dot" /></> },
+        { value: "events", label: <><Icon name="list" size={13} />Events 128</> },
       ]} />
   );
 }
@@ -68,7 +68,6 @@ function LiveDemo() {
   return (
     <div style={{ height: 420, display: "flex" }}>
       <LiveDiff files={files} base="0fff44b9a1" live onOpenFile={() => {}} leading={<SessionSwitch value="changes" />}
-        trailing={<Button size="sm" variant="quiet" leadingIcon="list">Event log</Button>}
         lastChange={<><AgentAvatar role="implementer" size="xs" live /> Write <code>revenue.test.ts</code> · just now</>} />
     </div>
   );
@@ -113,13 +112,11 @@ export function LiveSection({ mode }: { readonly mode: PaneMode }) {
           </div>
         </Panes>
       </Block>
-      <Block id="l-session" title="A session's bar and its rail" note="Under a session's header, one bar: Conversation / Changes as a small Segmented (Changes with its count and, while the agent changes files, the breathing dot), the event log as a quiet button at the far end, and — on Changes — the diff's own controls between them (the LiveDiff demo above shows that row). Beside the conversation, the rail on the chrome shade: what the header does not say, the tools used, the files changed so far (each opens Changes on it alone).">
+      <Block id="l-session" title="A session's bar and its rail" note="Under a session's header, one bar: Conversation / Changes / Events as a small Segmented (Changes with its count and, while the agent changes files, the breathing dot; Events last, with its count), each view in the same place below it, and — on Changes — the diff's own controls after the switch (the LiveDiff demo above shows that row). Beside the conversation, the rail on the chrome shade: what the header does not say, the tools used, the files changed so far (each opens Changes on it alone).">
         <Panes mode={mode}>
           <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 260px", height: 360 }}>
-            <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+            <div>
               <SessionSwitch />
-              <span style={{ flex: 1 }} />
-              <Button size="sm" variant="quiet" leadingIcon="list">Event log</Button>
             </div>
             <SessionRail aria-label="This session">
               <SessionRailBlock label="Session">
