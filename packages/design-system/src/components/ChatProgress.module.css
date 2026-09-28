@@ -94,7 +94,7 @@
   right: var(--ds-space-8);
   bottom: 0;
   height: 2px;
-  border-radius: 1px;
+  border-radius: var(--ds-radius-mark);
   background: var(--cp-bg);
   overflow: hidden;
 }
@@ -103,7 +103,7 @@
   left: 0;
   top: 0;
   bottom: 0;
-  border-radius: 1px;
+  border-radius: var(--ds-radius-mark);
   background: var(--cp-solid);
   transition: width var(--ds-duration-slow) var(--ds-ease-standard);
 }
@@ -116,7 +116,7 @@
   top: 0;
   bottom: 0;
   width: 28%;
-  border-radius: 1px;
+  border-radius: var(--ds-radius-mark);
   background: var(--cp-solid);
   /* The stripe sits mid-track when still, so an ended or reduced-motion bar reads as "somewhere", not empty. */
   transform: translateX(130%);

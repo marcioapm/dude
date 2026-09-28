@@ -13,7 +13,6 @@
   align-items: stretch;
   gap: var(--ds-space-2);
   flex-shrink: 0;
-  border-bottom: 1px solid var(--ds-color-border-subtle);
 }
 
 .trigger {
@@ -46,7 +45,7 @@
   pointer-events: none;
 }
 .trigger:focus-visible {
-  border-radius: var(--ds-radius-sm);
+  border-radius: var(--ds-radius-mark);
   outline-offset: -2px;
 }
 
@@ -56,15 +55,14 @@
   gap: 0;
   padding: 2px;
   background: var(--ds-color-sunken);
-  border: 1px solid var(--ds-color-border-subtle);
-  border-radius: var(--ds-radius-md);
+  border-radius: var(--ds-radius-control);
   align-self: flex-start;
 }
 .segmented .trigger {
   height: 22px;
   margin: 0;
   border: 0;
-  border-radius: var(--ds-radius-sm);
+  border-radius: var(--ds-radius-mark);
   font-size: var(--ds-text-sm);
 }
 .segmented .trigger[data-state="active"] {

@@ -53,16 +53,29 @@ type Syncer struct {
 	// DUDE_IDLE_AFTER; finer than the policy's minutes, for tests). Zero
 	// takes delivery.DefaultPolicy's.
 	ParkAfter, IdleAfter time.Duration
+	// How soon after an edit a Run's live diff is read, how often while its
+	// agent works (DUDE_DIFF_EVERY), and how often once several reads found
+	// nothing new; zero takes the defaults.
+	DiffDelay, DiffEvery, DiffSlow time.Duration
+	// The hourly rate of the machine a Run runs on, recorded with each Run
+	// when it is submitted (DUDE_MACHINE_USD_PER_HOUR); zero records none.
+	MachineUSDPerHour float64
 
 	// One follower per live lux Run. The follower is the only writer of a
 	// Run's cursor, so two must never run for the same Run.
 	mu        sync.Mutex
 	following map[string]*follower
+	// What each Run's live diff last was (livediff.go).
+	diffs map[string]*diffState
 }
 
 // follower is one goroutine reading a Run's output. A pointer, so a
 // finishing follower can tell whether the entry is still its own.
-type follower struct{ cancel context.CancelFunc }
+// poke asks its live diff to be read soon.
+type follower struct {
+	cancel context.CancelFunc
+	poke   chan struct{}
+}
 
 // Run statuses (run_status) the syncer decides on.
 const (
@@ -132,12 +145,15 @@ const runColumns = `r.id, r.organization_id, r.project_id, r.task_id, r.phase::t
 // open for a person (ask.open, delivery.OpenAsk: asked once per row, read
 // in several places), and how long its project
 // lets an agent wait on a person (park_secs) or stay quiet (idle_secs, 0 for
-// never) — the project's delivery policy, over the factory's defaults.
+// never) — the project's delivery policy, over its organization's, over the
+// factory's defaults.
 // Its parameters are Syncer.limits.
-const runFrom = `runs r JOIN projects p ON p.id = r.project_id
+const runFrom = `runs r JOIN projects p ON p.id = r.project_id JOIN organizations o ON o.id = r.organization_id
 	CROSS JOIN LATERAL (SELECT
-		COALESCE((p.delivery_policy->>'parkAfterMinutes')::float8 * 60, $1::float8) AS park_secs,
-		COALESCE((p.delivery_policy->>'idleNudgeMinutes')::float8 * 60, $2::float8) AS idle_secs) lim
+		COALESCE((p.delivery_policy->>'parkAfterMinutes')::float8 * 60, (o.delivery_policy->>'parkAfterMinutes')::float8 * 60,
+			$1::float8) AS park_secs,
+		COALESCE((p.delivery_policy->>'idleNudgeMinutes')::float8 * 60, (o.delivery_policy->>'idleNudgeMinutes')::float8 * 60,
+			$2::float8) AS idle_secs) lim
 	CROSS JOIN LATERAL (SELECT ` + delivery.OpenAsk + ` AS open) ask`
 
 // quiet (SQL, over runFrom): the agent is mid-turn, running no tool, waiting
@@ -317,9 +333,10 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 		}
 		tag, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, next_attempt_at = NULL,
 			harness = $4, model = $5, push_branch = NULLIF($6, ''), lux_repositories = $7, lux_pushes = $8,
+			machine_usd_per_hour = COALESCE(machine_usd_per_hour, NULLIF($9::float8, 0)),
 			status = CASE WHEN status = 'pending' THEN 'scheduled'::run_status ELSE status END
 			WHERE id = $1`, r.ID, lr.ID, lr.State, spec.Labels["dude.harness"], spec.Labels["dude.model"], pushBranch,
-			db.NonNil(repos), db.NonNil(pushes))
+			db.NonNil(repos), db.NonNil(pushes), s.MachineUSDPerHour)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
@@ -336,16 +353,20 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 	var criteria, projectModels, orgModels json.RawMessage
 	var findings []delivery.Finding
 	var feedback []forge.ActionableFeedback
+	var prompts delivery.Prompts
 	_ = json.Unmarshal(r.PRFeedback, &feedback)
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
-			SELECT w.title, w.goal, w.acceptance_criteria, COALESCE(p.runtime_image, ''), p.agent_models
-			FROM tasks w JOIN projects p ON p.id = w.project_id
+			SELECT w.title, w.goal, w.acceptance_criteria, COALESCE(p.runtime_image, ''), p.agent_models, o.default_agent_models
+			FROM tasks w JOIN projects p ON p.id = w.project_id JOIN organizations o ON o.id = p.organization_id
 			WHERE w.id = $1`, r.TaskID).
-			Scan(&title, &goal, &criteria, &image, &projectModels); err != nil {
+			Scan(&title, &goal, &criteria, &image, &projectModels, &orgModels); err != nil {
 			return fmt.Errorf("load task: %w", err)
 		}
 		var err error
+		if prompts, err = delivery.LoadPrompts(ctx, tx, r.ID, r.ProjectID, r.Phase); err != nil {
+			return err
+		}
 		if repos, err = delivery.TaskRepositories(ctx, tx, r.TaskID); err != nil {
 			return fmt.Errorf("load repositories: %w", err)
 		}
@@ -379,13 +400,9 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 	if err != nil {
 		return lux.Spec{}, err
 	}
-	// Organizations are not tenant rows; read their defaults separately.
-	if err := s.DB.Pool.QueryRow(ctx, `SELECT default_agent_models FROM organizations WHERE id = $1`, r.Org).Scan(&orgModels); err != nil {
-		return lux.Spec{}, err
-	}
 	role := delivery.RoleForPhase[r.Phase]
-	model, context := resolveModel(role, projectModels, orgModels)
-	if model == "" {
+	settings := delivery.ResolveRole(delivery.PromptRoleForPhase[r.Phase], projectModels, orgModels)
+	if settings.Model == "" {
 		return lux.Spec{}, fmt.Errorf("no model is configured for the %s role", role)
 	}
 
@@ -403,16 +420,18 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 		promptRepos = append(promptRepos, delivery.PromptRepo{Name: repo.Name, Path: RepoPath(repo.Name), ReadOnly: readOnly})
 	}
 	in.RunID, in.OrganizationID, in.TaskID, in.Phase, in.Role = r.ID, r.Org, r.TaskID, r.Phase, role
-	in.Model = model
+	in.Model, in.Effort, in.TimeLimitMinutes = settings.Model, settings.Effort, settings.TimeLimitMinutes
 	in.Image = image
 	if in.Image == "" {
 		in.Image = s.Agent.DefaultImage
 	}
-	in.Prompt = delivery.Prompt(r.Phase, delivery.PromptInput{
+	promptIn := delivery.PromptInput{
 		Title: title, Goal: goal, AcceptanceCriteria: ac, Category: r.Category,
-		Findings: findings, PRFeedback: feedback, BlockingSeverities: r.BlockingSeverities, Context: context,
+		Findings: findings, PRFeedback: feedback, BlockingSeverities: r.BlockingSeverities, Context: settings.Context,
 		Repositories: promptRepos, Decisions: decisions, Tools: s.Agent.ToolsURL != "", CLI: s.Agent.ToolsURL != "" && s.Agent.ToolsService,
-	})
+		OrgPrompt: prompts.Org, ProjectPrompt: prompts.Project, ProjectPromptMode: prompts.ProjectMode,
+	}
+	in.Prompt = delivery.Prompt(r.Phase, promptIn)
 	// Pushed only by a phase that publishes. Even with nowhere to change
 	// yet: a repository a person lets it change mid-Run arrives at a
 	// resume, and lux pushes only to the branch the spec named at submit.
@@ -461,20 +480,6 @@ func runBranch(r phaseRun) string {
 	return fmt.Sprintf("dude/%s/run-%s", r.TaskID, r.ID)
 }
 
-// resolveModel: the project's setting for a role, else the organization's.
-func resolveModel(role string, project, org json.RawMessage) (model, context string) {
-	for _, layer := range []json.RawMessage{project, org} {
-		var m map[string]struct {
-			Model   string `json:"model"`
-			Context string `json:"context"`
-		}
-		if json.Unmarshal(layer, &m) == nil && m[role].Model != "" {
-			return m[role].Model, m[role].Context
-		}
-	}
-	return "", ""
-}
-
 // follow starts reading a Run's lux output, if nothing is reading it yet.
 func (s *Syncer) follow(r phaseRun) {
 	if r.LuxRunID == "" {
@@ -489,8 +494,17 @@ func (s *Syncer) follow(r phaseRun) {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	mine := &follower{cancel}
+	mine := &follower{cancel: cancel, poke: make(chan struct{}, 1)}
 	s.following[r.ID] = mine
+	// The live diff is read for as long as the Run's output is followed.
+	delay, every, slow := s.diffTimings()
+	go watchDiff(ctx, mine.poke, delay, every, slow, func(ctx context.Context, periodic bool) bool {
+		changed, err := s.readDiff(ctx, r, periodic)
+		if err != nil && ctx.Err() == nil {
+			s.Log.Debug("reading the live diff failed", "run", r.ID, "error", err)
+		}
+		return changed
+	})
 	go func() {
 		defer func() {
 			s.mu.Lock()
@@ -498,6 +512,7 @@ func (s *Syncer) follow(r phaseRun) {
 			// after this one was told to stop.
 			if s.following[r.ID] == mine {
 				delete(s.following, r.ID)
+				delete(s.diffs, r.ID)
 			}
 			s.mu.Unlock()
 			cancel()

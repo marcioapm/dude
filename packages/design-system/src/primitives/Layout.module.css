@@ -93,8 +93,7 @@
   align-items: flex-start;
   gap: var(--ds-space-8);
   padding: var(--ds-space-8) var(--ds-space-12);
-  border: 1px solid var(--ds-tone-neutral-border);
-  border-radius: var(--ds-radius-md);
+  border-radius: 0;
   background: var(--ds-tone-neutral-bg);
   color: var(--ds-color-text-primary);
   font-size: var(--ds-text-sm);
@@ -109,28 +108,24 @@
   overflow-wrap: anywhere;
 }
 .callout[data-tone="danger"] {
-  border-color: var(--ds-tone-danger-border);
   background: var(--ds-tone-danger-bg);
 }
 .callout[data-tone="danger"] .calloutIcon {
   color: var(--ds-tone-danger-fg);
 }
 .callout[data-tone="attention"] {
-  border-color: var(--ds-tone-attention-border);
   background: var(--ds-tone-attention-bg);
 }
 .callout[data-tone="attention"] .calloutIcon {
   color: var(--ds-tone-attention-fg);
 }
 .callout[data-tone="info"] {
-  border-color: var(--ds-tone-info-border);
   background: var(--ds-tone-info-bg);
 }
 .callout[data-tone="info"] .calloutIcon {
   color: var(--ds-tone-info-fg);
 }
 .callout[data-tone="success"] {
-  border-color: var(--ds-tone-success-border);
   background: var(--ds-tone-success-bg);
 }
 .callout[data-tone="success"] .calloutIcon {

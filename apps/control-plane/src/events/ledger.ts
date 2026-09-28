@@ -10,7 +10,7 @@
  *   - high-volume streams (stdout bytes, model tokens) — NOT one row each.
  */
 
-import { newId, type EventInput, type PersistedEvent } from "@dude/domain";
+import { newId, type EventInput, type PersistedEvent, type PersonRef } from "@dude/domain";
 import { withOrg, type OrgScope } from "../db/client.ts";
 
 /**
@@ -35,7 +35,13 @@ const EVENT_COLUMNS = `
   source,
   correlation_id    AS "correlationId",
   causation_id      AS "causationId",
-  payload`;
+  payload,
+  -- A person acted: who, as the API names people, through the key the
+  -- ledger recorded. Keys from before people resolve through the person
+  -- migration 035 made for them.
+  CASE WHEN actor_type = 'human' THEN
+    (SELECT person_ref(p) FROM api_keys k JOIN people p ON p.id = k.person_id WHERE k.id = events.actor_id)
+  END               AS "actorPerson"`;
 
 interface EventRow {
   cursor: string | number;
@@ -54,6 +60,7 @@ interface EventRow {
   correlationId: string | null;
   causationId: string | null;
   payload: Record<string, unknown>;
+  actorPerson?: PersonRef | null;
 }
 
 function toPersisted(row: EventRow): PersistedEvent {
@@ -71,7 +78,9 @@ function toPersisted(row: EventRow): PersistedEvent {
     runId: row.runId,
     sessionId: row.sessionId,
     workflowRunId: row.workflowRunId,
-    actor: { type: row.actorType, id: row.actorId },
+    actor: row.actorPerson
+      ? { type: row.actorType, ...row.actorPerson, keyId: row.actorId }
+      : { type: row.actorType, id: row.actorId },
     source: row.source,
     correlationId: row.correlationId,
     causationId: row.causationId,

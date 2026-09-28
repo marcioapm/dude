@@ -7,9 +7,10 @@
  * it already built; nothing here fetches.
  *
  * Eleven task statuses would be eleven columns, which is a spreadsheet.
- * The five columns below are the stages the operator actually watches: is
- * work waiting to be shaped, waiting for a worker, being worked, waiting to
- * land, or finished. "Needs you" is deliberately not a column — it is a
+ * The five columns below are the stages a team actually watches: not
+ * started, being worked, in review, ready for a person to merge, done.
+ * "Ready to merge" has a lane of its own because it is the one stage that
+ * waits on a person's click, not on an agent or on GitHub. "Needs you" is deliberately not a column — it is a
  * condition that can strike at any stage, so it is a card treatment and a
  * sort order, exactly as it is a row treatment in the tree.
  *
@@ -21,7 +22,7 @@ import type { AgentRole, TaskStatus } from "@dude/domain";
 import { EMPTY_TRIAGE_COUNTS, TRIAGE_SPECS, addTriage, sumTriage, type TriageCounts, type TriageKind } from "../tokens/triage.ts";
 import { askingSession, currentRun, taskTriage, type NavEpic, type NavProject, type NavRef, type NavSession, type NavTask } from "./navModel.ts";
 
-export const BOARD_COLUMN_KINDS = ["intake", "queued", "running", "review", "closed"] as const;
+export const BOARD_COLUMN_KINDS = ["backlog", "running", "review", "ready", "closed"] as const;
 export type BoardColumnKind = (typeof BOARD_COLUMN_KINDS)[number];
 
 export interface BoardColumnSpec {
@@ -30,23 +31,23 @@ export interface BoardColumnSpec {
 }
 
 export const BOARD_COLUMN_SPECS: Record<BoardColumnKind, BoardColumnSpec> = {
-  intake: { label: "Intake", description: "Received, being analysed, or waiting for its plan to be confirmed." },
-  queued: { label: "Queued", description: "Plan approved; waiting for a worker." },
-  running: { label: "In progress", description: "A run is active, or blocked on a person mid-run." },
-  review: { label: "Review", description: "A PR is open: under review, or ready to merge." },
-  closed: { label: "Closed", description: "Merged, failed or aborted. Failed items sort first." },
+  backlog: { label: "Backlog", description: "Not started: received, being shaped, or waiting for a worker." },
+  running: { label: "In progress", description: "An agent is working on it, or asking a person mid-run." },
+  review: { label: "In review", description: "Its pull request is open, waiting on checks and people." },
+  ready: { label: "Ready to merge", description: "Approved, checks green: a person merges it." },
+  closed: { label: "Done", description: "Merged, or stopped: failed and aborted sort here too." },
 };
 
 /** Which lane each domain status sits in. */
 export const BOARD_COLUMN_FOR_STATUS: Record<TaskStatus, BoardColumnKind> = {
-  received: "intake",
-  intake: "intake",
-  awaiting_confirmation: "intake",
-  queued: "queued",
+  received: "backlog",
+  intake: "backlog",
+  awaiting_confirmation: "backlog",
+  queued: "backlog",
   running: "running",
   awaiting_input: "running",
   review: "review",
-  ready_to_merge: "review",
+  ready_to_merge: "ready",
   done: "closed",
   failed: "closed",
   aborted: "closed",
@@ -75,13 +76,13 @@ export interface BoardColumn {
   readonly costUsd: number;
 }
 
-function toCard(task: NavTask, epic: NavEpic | null): BoardCard {
+function toCard(task: NavTask, epic: NavEpic | null, you?: string | null): BoardCard {
   const run = currentRun(task);
   return {
     task,
     epic,
     column: boardColumnOf(task.status),
-    triage: taskTriage(task),
+    triage: taskTriage(task, you),
     asking: run ? askingSession(run.sessions) : null,
   };
 }
@@ -90,11 +91,11 @@ function toCard(task: NavTask, epic: NavEpic | null): BoardCard {
  * Every card in scope. With an epic, only its tasks; otherwise the
  * whole project — each epic in order, then the loose tasks.
  */
-export function boardCards(project: NavProject, epic?: NavEpic | null): BoardCard[] {
-  if (epic) return epic.tasks.map((wi) => toCard(wi, epic));
+export function boardCards(project: NavProject, epic?: NavEpic | null, you?: string | null): BoardCard[] {
+  if (epic) return epic.tasks.map((wi) => toCard(wi, epic, you));
   const out: BoardCard[] = [];
-  for (const e of project.epics ?? []) for (const wi of e.tasks) out.push(toCard(wi, e));
-  for (const wi of project.tasks ?? []) out.push(toCard(wi, null));
+  for (const e of project.epics ?? []) for (const wi of e.tasks) out.push(toCard(wi, e, you));
+  for (const wi of project.tasks ?? []) out.push(toCard(wi, null, you));
   return out;
 }
 
@@ -104,12 +105,12 @@ export function boardCards(project: NavProject, epic?: NavEpic | null): BoardCar
  * triage rank — needs-you at the top, then active, ready, failed — and are
  * otherwise left in the caller's order, which is where recency belongs.
  */
-export function boardColumns(project: NavProject, epic?: NavEpic | null): BoardColumn[] {
-  return columnsOf(boardCards(project, epic));
+export function boardColumns(project: NavProject, epic?: NavEpic | null, you?: string | null): BoardColumn[] {
+  return columnsOf(boardCards(project, epic, you));
 }
 
 function columnsOf(cards: ReadonlyArray<BoardCard>): BoardColumn[] {
-  const byKind: Record<BoardColumnKind, BoardCard[]> = { intake: [], queued: [], running: [], review: [], closed: [] };
+  const byKind: Record<BoardColumnKind, BoardCard[]> = { backlog: [], running: [], review: [], ready: [], closed: [] };
   for (const c of cards) byKind[c.column].push(c);
   return BOARD_COLUMN_KINDS.map((kind) => {
     const sorted = byKind[kind].sort((a, b) => TRIAGE_SPECS[a.triage].rank - TRIAGE_SPECS[b.triage].rank);
@@ -145,10 +146,10 @@ export interface BoardSwimlane {
  * any. An epic with nothing in it still gets its row — the order set in
  * the tree must be visible here — but the row is empty, not five rails.
  */
-export function boardSwimlanes(project: NavProject): BoardSwimlane[] {
+export function boardSwimlanes(project: NavProject, you?: string | null): BoardSwimlane[] {
   const out: BoardSwimlane[] = [];
-  for (const e of project.epics ?? []) out.push(swimlane(`epic:${e.id}`, e, e.title, e.tasks.map((wi) => toCard(wi, e))));
-  const loose = (project.tasks ?? []).map((wi) => toCard(wi, null));
+  for (const e of project.epics ?? []) out.push(swimlane(`epic:${e.id}`, e, e.title, e.tasks.map((wi) => toCard(wi, e, you))));
+  const loose = (project.tasks ?? []).map((wi) => toCard(wi, null, you));
   if (loose.length > 0) out.push(swimlane(NO_EPIC_LANE, null, "No epic", loose));
   return out;
 }

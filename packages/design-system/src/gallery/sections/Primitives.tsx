@@ -24,7 +24,7 @@ import { StatusBadge } from "../../components/StatusBadge.tsx";
 import { CostDisplay, Duration } from "../../components/Numbers.tsx";
 import { TONE_NAMES } from "../../tokens/palette.ts";
 
-const VARIANTS = ["primary", "secondary", "ghost", "destructive", "destructive-outline"] as const;
+const VARIANTS = ["primary", "secondary", "quiet", "danger"] as const;
 
 const moveToEpic: RowMenuItem = {
   kind: "submenu",
@@ -102,18 +102,18 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
               <IconButton icon="more" label="More actions" />
               <IconButton icon="copy" label="Copy" variant="secondary" />
               <IconButton icon="close" label="Close" size="sm" />
-              <IconButton icon="cross" label="Abort" variant="destructive-outline" />
+              <IconButton icon="cross" label="Abort" variant="danger" />
               <IconButton icon="search" label="Search" disabled />
             </Row>
             <Label>Toolbar composition</Label>
             <Row>
-              <Button size="sm" variant="ghost" leadingIcon="git-branch">
+              <Button size="sm" variant="quiet" leadingIcon="git-branch">
                 main
               </Button>
               <Button size="sm" variant="secondary" leadingIcon="pause">
                 Pause
               </Button>
-              <Button size="sm" variant="destructive-outline" leadingIcon="stop">
+              <Button size="sm" variant="danger" leadingIcon="stop">
                 Abort run
               </Button>
               <span style={{ flex: 1 }} />
@@ -355,7 +355,7 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
               footer={
                 <>
                   <DialogClose asChild>
-                    <Button variant="ghost">Cancel</Button>
+                    <Button variant="quiet">Cancel</Button>
                   </DialogClose>
                   <DialogClose asChild>
                     <Button variant="primary">Retry</Button>
@@ -366,7 +366,7 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
               <Input label="Note for the agent (optional)" placeholder="What changed since last time?" />
             </Dialog>
             <Dialog
-              trigger={<Button variant="destructive-outline">Abort run</Button>}
+              trigger={<Button variant="danger">Abort run</Button>}
               tone="danger"
               size="sm"
               title="Abort run 14?"
@@ -374,10 +374,10 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
               footer={
                 <>
                   <DialogClose asChild>
-                    <Button variant="ghost">Keep running</Button>
+                    <Button variant="quiet">Keep running</Button>
                   </DialogClose>
                   <DialogClose asChild>
-                    <Button variant="destructive">Abort</Button>
+                    <Button variant="danger" solid>Abort</Button>
                   </DialogClose>
                 </>
               }

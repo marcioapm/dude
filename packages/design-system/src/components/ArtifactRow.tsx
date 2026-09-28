@@ -15,7 +15,7 @@ import styles from "./ArtifactRow.module.css";
 // What kind of file is it — decides the glyph and the preview.
 // ---------------------------------------------------------------------------
 
-export type ArtifactKind = "markdown" | "text" | "json" | "image" | "other";
+export type ArtifactKind = "markdown" | "text" | "json" | "image" | "video" | "html" | "other";
 
 export interface ArtifactKindSpec {
   readonly label: string;
@@ -27,11 +27,14 @@ export const ARTIFACT_KIND_SPECS: Record<ArtifactKind, ArtifactKindSpec> = {
   text: { label: "Text", glyph: "file" },
   json: { label: "JSON", glyph: "list" },
   image: { label: "Image", glyph: "image" },
+  video: { label: "Video", glyph: "play" },
+  html: { label: "HTML", glyph: "globe" },
   other: { label: "File", glyph: "file" },
 };
 
-const TEXT_EXT = new Set(["txt", "log", "csv", "tsv", "yaml", "yml", "toml", "ini", "env", "sh", "py", "ts", "tsx", "js", "go", "rs", "sql", "css", "html", "xml", "diff", "patch"]);
+const TEXT_EXT = new Set(["txt", "log", "csv", "tsv", "yaml", "yml", "toml", "ini", "env", "sh", "py", "ts", "tsx", "js", "go", "rs", "sql", "css", "xml", "diff", "patch"]);
 const IMAGE_EXT = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "bmp"]);
+const VIDEO_EXT = new Set(["mp4", "m4v", "webm", "mov", "ogv"]);
 
 /**
  * The kind of an artifact from its content type, falling back to the file
@@ -43,7 +46,11 @@ export function artifactKind(contentType: string | null | undefined, name: strin
   const ext = name.toLowerCase().split(".").pop() ?? "";
   if (type === "text/markdown" || type === "text/x-markdown" || ext === "md" || ext === "markdown") return "markdown";
   if (type === "application/json" || type.endsWith("+json") || ext === "json") return "json";
-  if (type.startsWith("image/") || (type === "" || type === "application/octet-stream") && IMAGE_EXT.has(ext)) return "image";
+  const generic = type === "" || type === "application/octet-stream";
+  if (type.startsWith("image/") || generic && IMAGE_EXT.has(ext)) return "image";
+  if (type.startsWith("video/") || generic && VIDEO_EXT.has(ext)) return "video";
+  // A page an agent wrote: shown only in a sandbox, never as one of ours.
+  if (type === "text/html" || type === "application/xhtml+xml" || ext === "html" || ext === "htm") return "html";
   if (type.startsWith("text/") || type === "application/xml" || type === "application/x-yaml" || type === "application/yaml" || TEXT_EXT.has(ext)) return "text";
   return "other";
 }

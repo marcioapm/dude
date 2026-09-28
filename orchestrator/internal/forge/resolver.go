@@ -12,12 +12,14 @@ import (
 type Resolver struct{ DB *db.DB }
 
 // For returns nil, nil when the organization has no forge credential: a
-// local repository needs none, and not every step needs a forge.
+// local repository needs none, and not every step needs a forge. The
+// client carries the organization's GitHub settings.
 func (r Resolver) For(ctx context.Context, org string) (*GitHub, error) {
 	var c Credential
+	var settings []byte
 	err := r.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT auth::text, secret, api_base_url FROM forge_credentials WHERE forge = 'github' LIMIT 1`).
-			Scan(&c.Auth, &c.Secret, &c.APIBaseURL)
+		return tx.QueryRow(ctx, `SELECT auth::text, secret, api_base_url, settings FROM forge_credentials WHERE forge = 'github' LIMIT 1`).
+			Scan(&c.Auth, &c.Secret, &c.APIBaseURL, &settings)
 	})
 	if db.IsNotFound(err) {
 		return nil, nil
@@ -25,5 +27,7 @@ func (r Resolver) For(ctx context.Context, org string) (*GitHub, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewGitHub(c), nil
+	gh := NewGitHub(c)
+	gh.Settings = ReadSettings(settings)
+	return gh, nil
 }

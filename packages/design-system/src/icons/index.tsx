@@ -59,6 +59,8 @@ export type IconName =
   | "file"
   | "image"
   | "download"
+  | "play"
+  | "archive"
   | "folder"
   | "terminal"
   | "dollar"
@@ -76,7 +78,16 @@ export type IconName =
   | "globe"
   | "list-check"
   | "message"
-  | "brain";
+  | "brain"
+  // pull requests
+  | "circle-x"
+  | "circle-check"
+  | "file-diff"
+  | "git-conflict"
+  | "comments"
+  | "github"
+  | "wrench"
+  | "building";
 
 /** Path data on a 16x16 grid. `fill` marks icons that are filled shapes. */
 const PATHS: Record<IconName, { d: string; fill?: true; dashed?: true }> = {
@@ -137,6 +148,10 @@ const PATHS: Record<IconName, { d: string; fill?: true; dashed?: true }> = {
   image: { d: "M3 3.5h10a.5.5 0 0 1 .5.5v8a.5.5 0 0 1-.5.5H3a.5.5 0 0 1-.5-.5V4a.5.5 0 0 1 .5-.5ZM2.5 11l3.5-3.5 2.5 2.5 2-2 3 3M10.5 6.5h.01" },
   /* An arrow into a tray: get the file. */
   download: { d: "M8 2.5v7M5 6.5l3 3 3-3M2.5 10.5v1.5a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-1.5" },
+  /* A triangle pointing on: a recording to watch. */
+  play: { d: "M5 3.5v9l7-4.5-7-4.5Z" },
+  /* A box with a zipper down it: everything, in one download. */
+  archive: { d: "M4 2.5h8v11H4ZM8 2.5v1M8 5v1M8 7.5v1M7 9.5h2v2H7Z" },
   folder: { d: "M2.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h4.5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-7.5Z" },
   terminal: { d: "M3.5 4.5l3.5 3.5-3.5 3.5M8.5 11.5h4" },
   dollar: { d: "M8 2v12M10.75 5.25c0-1.1-1.2-1.75-2.75-1.75S5.25 4.15 5.25 5.25 6.5 7 8 7s2.75.65 2.75 1.75S9.55 10.5 8 10.5s-2.75-.65-2.75-1.75" },
@@ -164,6 +179,26 @@ const PATHS: Record<IconName, { d: string; fill?: true; dashed?: true }> = {
   brain: {
     d: "M8 3.5C7.1 2.4 5 2.7 5 4.5C3.5 4.5 2.7 6.1 3.5 7.4C2.5 8.6 3.2 10.3 4.8 10.3C4.8 11.9 6.5 12.8 8 11.7C9.5 12.8 11.2 11.9 11.2 10.3C12.8 10.3 13.5 8.6 12.5 7.4C13.3 6.1 12.5 4.5 11 4.5C11 2.7 8.9 2.4 8 3.5ZM8 3.5v8.2",
   },
+
+  /* A check that failed: a cross in a ring. */
+  "circle-x": { d: "M8 2.75a5.25 5.25 0 1 0 0 10.5a5.25 5.25 0 0 0 0-10.5ZM6 6l4 4M10 6l-4 4" },
+  /* All green: a tick in a ring. */
+  "circle-check": { d: "M8 2.75a5.25 5.25 0 1 0 0 10.5a5.25 5.25 0 0 0 0-10.5ZM5.6 8.2l1.7 1.7 3.1-3.4" },
+  /* A page with a change on it: changes requested. */
+  "file-diff": { d: "M4 2.5h5l3 3v8a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-10a1 1 0 0 1 1-1ZM6 9.5h4M8 7.5v4" },
+  /* Two branches that cross: a conflict with the base. */
+  "git-conflict": { d: "M4.5 2.5v11M11.5 2.5v3.5M11.5 10v3.5M4.5 8H8M13 6.5l-3 3M10 6.5l3 3" },
+  /* A speech bubble with dots: comments still open. */
+  comments: { d: "M3 3.5h10a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-.5.5H7l-3 2.5V10.5H3a.5.5 0 0 1-.5-.5V4a.5.5 0 0 1 .5-.5ZM5.75 7h.01M8 7h.01M10.25 7h.01" },
+  /* GitHub's cat, filled. */
+  github: {
+    d: "M8 1.8a6.2 6.2 0 0 0-2 12.1c.3 0 .4-.1.4-.3v-1.1c-1.7.4-2.1-.8-2.1-.8-.3-.7-.7-.9-.7-.9-.6-.4 0-.4 0-.4.6 0 1 .6 1 .6.5.9 1.4.7 1.8.5 0-.4.2-.7.4-.8-1.4-.2-2.8-.7-2.8-3 0-.7.2-1.2.6-1.6 0-.2-.3-.8.1-1.6 0 0 .5-.2 1.7.6a5.8 5.8 0 0 1 3 0c1.2-.8 1.7-.6 1.7-.6.3.8.1 1.4.1 1.6.4.4.6 1 .6 1.6 0 2.4-1.4 2.9-2.8 3 .2.2.4.6.4 1.1v1.7c0 .2.1.4.4.3A6.2 6.2 0 0 0 8 1.8Z",
+    fill: true,
+  },
+  /* A fixer: the implementer's colour, a wrench. */
+  wrench: { d: "M10 2.5a3 3 0 0 0-2.8 4.1L2.5 11.3l2.2 2.2 4.7-4.7A3 3 0 0 0 13.5 6l-2 .5-1-1 .5-2Z" },
+  /* The organisation: a building. */
+  building: { d: "M2.5 13.5h11M4 13.5V6l4-3.5L12 6v7.5M6.5 13.5v-4h3v4" },
 };
 
 export interface IconProps extends Omit<SVGProps<SVGSVGElement>, "name"> {

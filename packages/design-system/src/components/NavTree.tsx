@@ -6,8 +6,10 @@ import { statusSpec } from "../tokens/status.ts";
 import {
   ancestorKeys,
   flattenNav,
+  liveSessions,
   navKey,
-  workingRoles,
+  projectPeople,
+  ownerAgents,
   type NavEpic,
   type NavFilter,
   type NavOverrides,
@@ -19,10 +21,11 @@ import {
   type NavTask,
 } from "../util/navModel.ts";
 import { AgentAvatar, ROLE_LABEL } from "./AgentAvatar.tsx";
-import { HumanAvatar } from "./HumanAvatar.tsx";
+import { PersonAvatarStack } from "./PersonAvatar.tsx";
+import { PrChip } from "./PrChip.tsx";
+import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { StatusBadge } from "./StatusBadge.tsx";
-import { TriageRollup } from "./TriageRollup.tsx";
-import type { AgentRole } from "@dude/domain";
+import { NeedsYouCount } from "./StatusMark.tsx";
 import styles from "./NavTree.module.css";
 
 export interface NavTreeProps extends Omit<HTMLAttributes<HTMLDivElement>, "onSelect"> {
@@ -92,26 +95,35 @@ export const NavTree = forwardRef<HTMLDivElement, NavTreeProps>(function NavTree
   );
 
   const rows = useMemo(() => flattenNav(projects, overrides, filter), [projects, overrides, filter]);
-  const selectedKey = selected ? navKey(selected) : null;
+  const chosenKey = selected ? navKey(selected) : null;
+  // A finished agent has no row of its own (only what works now does):
+  // its task's row stands for it.
+  const selectedKey = useMemo(() => {
+    if (!selected || rows.some((r) => r.key === chosenKey)) return chosenKey;
+    return [...ancestorKeys(projects, selected)].reverse().find((k) => k.startsWith("task:") && rows.some((r) => r.key === k)) ?? chosenKey;
+  }, [selected, chosenKey, rows, projects]);
 
   // Selection is always visible: opening a deep node from elsewhere (a
   // notification, a link) unfolds its ancestors even if the user closed them.
   const lastRevealed = useRef<string | null>(null);
   useEffect(() => {
-    if (!selected || selectedKey === lastRevealed.current) return;
+    if (!selected || chosenKey === lastRevealed.current) return;
     const path = ancestorKeys(projects, selected);
     // Not in the tree yet — just created, the data still loading: try again
     // when it arrives rather than giving up on revealing it.
-    if (path.length === 0 && !rows.some((r) => r.key === selectedKey)) return;
-    lastRevealed.current = selectedKey;
-    const closed = path.filter((k) => overrides.get(k) === false || !rows.some((r) => r.key === k && r.expanded));
+    if (path.length === 0 && !rows.some((r) => r.key === chosenKey)) return;
+    lastRevealed.current = chosenKey;
+    // Pinned open, not just opened: an ancestor open only by default (a
+    // project with something active) would fold under the selection once
+    // that settles.
+    const closed = path.filter((k) => overrides.get(k) !== true);
     if (closed.length === 0) return;
     setOverrides((prev) => {
       const next = new Map(prev);
       for (const k of closed) next.set(k, true);
       return next;
     });
-  }, [selected, selectedKey, projects, overrides, rows, setOverrides]);
+  }, [selected, chosenKey, projects, overrides, rows, setOverrides]);
 
   const containerRef = useRef<HTMLDivElement>(null);
   useImperativeHandle(ref, () => containerRef.current as HTMLDivElement);
@@ -353,12 +365,14 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
 
   if (kind === "project") {
     const p = row.node as NavProject;
+    const people = projectPeople(p);
     return (
-      <div {...common} className={cx(styles["row"], styles["project"], selected && styles["selected"])}>
+      <div {...common} className={cx(styles["row"], styles["project"], selected && styles["selected"], menu ? styles["swapsForMenu"] : null)}>
         {chevron}
+        <ProjectAvatar project={p} size={20} aria-hidden title={undefined} />
         <span className={styles["projectName"]}>{p.name}</span>
-        {row.counts && !row.expanded ? <TriageRollup counts={row.counts} className={styles["rollup"]} /> : null}
-        {row.counts && row.expanded && row.counts.needs_you > 0 ? <TriageRollup counts={row.counts} only={["needs_you"]} className={styles["rollup"]} /> : null}
+        {row.counts && row.counts.needs_you > 0 && !row.expanded ? <NeedsYouCount count={row.counts.needs_you} className={styles["count"]} /> : null}
+        {people.length > 0 ? <PersonAvatarStack people={people} size={20} max={4} className={styles["rest"]} aria-hidden /> : null}
         {menuSlot}
       </div>
     );
@@ -369,11 +383,9 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
     return (
       <div {...common} className={cx(styles["row"], styles["epic"], selected && styles["selected"])}>
         {chevron}
-        <Icon name="layers" size={14} className={styles["epicGlyph"]} />
         <span className={styles["epicTitle"]}>{e.title}</span>
+        {row.counts && row.counts.needs_you > 0 ? <NeedsYouCount count={row.counts.needs_you} className={styles["count"]} /> : null}
         <span className={styles["epicCount"]}>{e.tasks.length}</span>
-        {row.counts && !row.expanded ? <TriageRollup counts={row.counts} className={styles["rollup"]} /> : null}
-        {row.counts && row.expanded && row.counts.needs_you > 0 ? <TriageRollup counts={row.counts} only={["needs_you"]} className={styles["rollup"]} /> : null}
         {menuSlot}
       </div>
     );
@@ -381,12 +393,14 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
 
   if (kind === "task") {
     const wi = row.node as NavTask;
-    const roles = row.expanded ? [] : workingRoles(wi);
     const spec = statusSpec(wi.status);
-    const finished = spec.terminal;
+    const live = liveSessions(wi);
+    const working = live.find((s) => s.status === "running");
+    const people = wi.people ?? [];
+    const agents = ownerAgents(wi, working);
+    const pr = wi.pullRequests?.[0];
     return (
-      <div {...common} className={cx(styles["row"], styles["task"], needsYou && styles["needsYou"], finished && styles["finished"], selected && styles["selected"])}>
-        {needsYou ? <span className={styles["pill"]} aria-hidden /> : null}
+      <div {...common} className={cx(styles["row"], styles["task"], needsYou && styles["needsYou"], spec.terminal && styles["finished"], selected && styles["selected"])}>
         {chevron}
         <span className={styles["wiMain"]}>
           {wi.key ? <span className={styles["wiKey"]}>{wi.key}</span> : null}
@@ -394,8 +408,14 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
             {wi.title}
           </span>
         </span>
-        <WhoTrailing people={wi.people ?? []} roles={roles} />
-        <StatusBadge status={wi.status} variant="dot" iconOnly className={styles["mark"]} />
+        {needsYou ? (
+          <NeedsYouCount count={1} className={styles["count"]} />
+        ) : pr ? (
+          <PrChip pr={pr} iconOnly size="sm" className={styles["pr"]} onClick={(e) => e.stopPropagation()} tabIndex={-1} />
+        ) : (
+          <StatusBadge status={wi.status} variant="dot" iconOnly className={styles["mark"]} />
+        )}
+        {people.length > 0 ? <PersonAvatarStack people={people} size={20} max={3} agents={agents} className={styles["wiPeople"]} /> : null}
         {menuSlot}
       </div>
     );
@@ -408,46 +428,29 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
         {chevron}
         <StatusBadge status={r.status} variant="dot" iconOnly className={styles["mark"]} />
         <span className={styles["runTitle"]}>Attempt {r.attempt}</span>
-        <span className={styles["runCount"]}>{r.sessions.length}</span>
         {menuSlot}
       </div>
     );
   }
 
+  // An agent working now: its tile, what it is and what it is doing, its plan.
   const s = row.node as NavSession;
-  const live = s.status === "running";
-  const sspec = statusSpec(s.status);
+  const title = s.title ?? ROLE_LABEL[s.role];
   return (
-    <div {...common} className={cx(styles["row"], styles["session"], needsYou && styles["needsYou"], sspec.terminal && styles["finished"], selected && styles["selected"])}>
-      {needsYou ? <span className={styles["pill"]} aria-hidden /> : null}
-      {chevron}
-      <AgentAvatar role={s.role} size="xs" live={live} className={styles["sessionAvatar"]} />
-      <span className={styles["sessionMain"]}>
-        <span className={styles["sessionTitle"]}>{s.title ?? ROLE_LABEL[s.role]}</span>
-        {s.activity && (live || needsYou) ? <span className={styles["sessionActivity"]}>{s.activity}</span> : null}
+    <div {...common} className={cx(styles["row"], styles["session"], needsYou && styles["needsYou"], selected && styles["selected"])}>
+      <AgentAvatar role={s.role} size="xs" live={s.status === "running"} className={styles["sessionAvatar"]} />
+      <span className={styles["sessionMain"]} title={s.activity ? `${title} · ${s.activity}` : title}>
+        <span className={styles["sessionTitle"]}>{title}</span>
+        {s.activity ? <span className={styles["sessionActivity"]}> · {s.activity}</span> : null}
       </span>
-      <StatusBadge status={s.status} variant="dot" iconOnly className={styles["mark"]} />
+      {s.plan && s.plan.total > 0 ? (
+        <span className={styles["sessionPlan"]} title={`Plan: ${s.plan.done} of ${s.plan.total}${s.plan.current ? `\nNow: ${s.plan.current}` : ""}`}>
+          {s.plan.done}/{s.plan.total}
+        </span>
+      ) : needsYou ? (
+        <StatusBadge status={s.status} variant="dot" iconOnly className={styles["mark"]} />
+      ) : null}
       {menuSlot}
     </div>
-  );
-}
-
-/**
- * Who is on a task, in the space of one avatar: the first person (or,
- * with nobody assigned, the first working role) and a muted "+N" for
- * everyone else, so the title keeps the width. The full list is the title
- * and the accessible name.
- */
-function WhoTrailing({ people, roles }: { readonly people: NonNullable<NavTask["people"]>; readonly roles: ReadonlyArray<AgentRole> }) {
-  const total = people.length + roles.length;
-  if (total === 0) return null;
-  const names = [...people.map((p) => p.name), ...roles.map((r) => ROLE_LABEL[r])].join(", ");
-  const first = people[0];
-  const firstRole = roles[0];
-  return (
-    <span className={styles["wiTrailing"]} role="group" aria-label={names} title={names}>
-      {first ? <HumanAvatar person={first} size="xs" aria-hidden /> : firstRole ? <AgentAvatar role={firstRole} size="xs" aria-hidden /> : null}
-      {total > 1 ? <span className={styles["more"]}>+{total - 1}</span> : null}
-    </span>
   );
 }

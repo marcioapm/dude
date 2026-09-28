@@ -120,6 +120,17 @@ others can read.
 | `DUDE_ORCHESTRATOR_TOKEN` | none | The same token as the orchestrator's. **Secret.** |
 | `PORT` | `3000` | Listening port, on all interfaces. |
 | `DUDE_WEB_DIR` | off | Serve the web app from this directory: `<prefix>/share/dude/web`. Unset, the backend serves only the API. |
+| `DUDE_S3_BUCKET` | off | The bucket people's photos and projects' images are kept in. Unset, uploads answer 503 and faces show initials. |
+| `DUDE_S3_ENDPOINT` | AWS | For MinIO, versitygw and other S3-compatible stores (path-style). |
+| `DUDE_S3_REGION` | `us-east-1` | |
+| `DUDE_S3_ACCESS_KEY`, `DUDE_S3_SECRET_KEY` | the AWS environment | Credentials for the bucket; unset, the usual `AWS_*` variables are read. The secret key is a **secret**. |
+
+Photos and project images are the only files the backend stores. They are
+small (the browser uploads a 160 px square, at most 512 KB is accepted),
+written once under a new key per upload, and served back through the
+backend under a token, so the bucket needs no public access and no CORS.
+The backend needs `s3:PutObject`, `s3:GetObject` and `s3:DeleteObject` on
+it; a replaced image's object is deleted.
 
 With `DUDE_WEB_DIR` set, GET and HEAD requests that match no API route and
 are outside `/v1` and `/health` are served from the directory, and unknown

@@ -14,6 +14,9 @@ import { ChatSection } from "./sections/Chat.tsx";
 import { NavigationSection } from "./sections/Navigation.tsx";
 import { BoardSection } from "./sections/Board.tsx";
 import { ShellSection } from "./sections/Shell.tsx";
+import { SettingsGallerySection } from "./sections/Settings.tsx";
+import { LiveSection } from "./sections/Live.tsx";
+import { CalmerSection } from "./sections/Calmer.tsx";
 
 const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, string]>]> = [
   ["App shell", [["shell-session", "Sidebar + transcript"]]],
@@ -56,6 +59,17 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
     ],
   ],
   [
+    "Faces, states, costs",
+    [
+      ["k-status", "StatusMark"],
+      ["k-faces", "PersonAvatar / ProjectAvatar"],
+      ["k-pr", "PrChip"],
+      ["k-cost", "Cost"],
+      ["k-plan", "AgentPlan / PlanMeter"],
+      ["k-document", "MarkdownDocument"],
+    ],
+  ],
+  [
     "Components",
     [
       ["c-status", "StatusBadge"],
@@ -92,8 +106,7 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
   [
     "Navigation",
     [
-      ["nav-human", "HumanAvatar"],
-      ["nav-triage", "Triage & TriageRollup"],
+      ["nav-triage", "Triage"],
       ["nav-tree", "NavTree"],
       ["nav-tree-menus", "NavTree row menus"],
       ["nav-sidebar", "Sidebar (realistic)"],
@@ -109,6 +122,23 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["board-swimlanes", "Group by epic"],
       ["board-composed", "Beside the sidebar"],
       ["board-states", "Board states"],
+    ],
+  ],
+  [
+    "Settings",
+    [
+      ["s-layout", "Settings page"],
+      ["s-markdown", "MarkdownDocument"],
+      ["s-history", "PromptHistory"],
+      ["s-epics", "EpicCard / EpicRow"],
+    ],
+  ],
+  [
+    "Live work",
+    [
+      ["l-diff", "LiveDiff"],
+      ["l-files", "FileGallery / FileViewer"],
+      ["l-cost", "Cost, both halves"],
     ],
   ],
 ];
@@ -207,10 +237,13 @@ function Shell() {
           <ShellSection mode={panes} />
           <TokensSection mode={panes} />
           <PrimitivesSection mode={panes} />
+          <CalmerSection mode={panes} />
           <ComponentsSection mode={panes} />
           <ChatSection mode={panes} />
           <NavigationSection mode={panes} />
           <BoardSection mode={panes} />
+          <SettingsGallerySection mode={panes} />
+          <LiveSection mode={panes} />
         </PaneDensityContext.Provider>
       </main>
     </div>

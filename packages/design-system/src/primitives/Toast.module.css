@@ -22,7 +22,7 @@
   align-items: start;
   padding: var(--ds-space-12) var(--ds-space-12);
   background: var(--ds-color-overlay);
-  border-radius: var(--ds-radius-lg);
+  border-radius: var(--ds-radius-float);
   box-shadow: var(--ds-shadow-3);
   border-left: 3px solid var(--toast-accent);
   font-size: var(--ds-text-md);

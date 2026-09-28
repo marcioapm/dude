@@ -1,0 +1,149 @@
+/*
+ * A person: a circle, a photo or initials on a muted identity colour. The
+ * online ring and the agent tile are drawn with shadows so they cost no
+ * layout: a face is the size it says, whatever sits on it.
+ */
+
+.root {
+  --id-fg: var(--ds-color-text-secondary);
+  --id-bg: var(--ds-color-overlay);
+  /* What the face sits on, so rings and tiles cut a clean gap. The app
+     sets it where faces sit on chrome or raised. */
+  --av-bed: var(--ds-avatar-bed, var(--ds-color-surface));
+
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: var(--av-size);
+  height: var(--av-size);
+  flex-shrink: 0;
+  border-radius: var(--ds-radius-full);
+  color: var(--id-fg);
+  background: var(--id-bg);
+  font-size: calc(var(--av-size) * 0.38);
+  font-weight: var(--ds-weight-semibold);
+  letter-spacing: 0.02em;
+  line-height: 1;
+  user-select: none;
+  vertical-align: middle;
+}
+.initials {
+  font-variant-numeric: tabular-nums;
+}
+.photo {
+  width: 100%;
+  height: 100%;
+  border-radius: var(--ds-radius-full);
+  object-fit: cover;
+  display: block;
+}
+
+/* Online: a green ring outside the face, with a gap of the bed colour. */
+.online {
+  box-shadow:
+    0 0 0 2px var(--av-bed),
+    0 0 0 3.5px var(--ds-color-live);
+}
+.root[data-size="16"].online,
+.root[data-size="20"].online {
+  box-shadow:
+    0 0 0 1.5px var(--av-bed),
+    0 0 0 2.5px var(--ds-color-live);
+}
+
+.root[data-identity="0"] { --id-fg: var(--ds-identity-0-fg); --id-bg: var(--ds-identity-0-bg); }
+.root[data-identity="1"] { --id-fg: var(--ds-identity-1-fg); --id-bg: var(--ds-identity-1-bg); }
+.root[data-identity="2"] { --id-fg: var(--ds-identity-2-fg); --id-bg: var(--ds-identity-2-bg); }
+.root[data-identity="3"] { --id-fg: var(--ds-identity-3-fg); --id-bg: var(--ds-identity-3-bg); }
+.root[data-identity="4"] { --id-fg: var(--ds-identity-4-fg); --id-bg: var(--ds-identity-4-bg); }
+.root[data-identity="5"] { --id-fg: var(--ds-identity-5-fg); --id-bg: var(--ds-identity-5-bg); }
+.root[data-identity="6"] { --id-fg: var(--ds-identity-6-fg); --id-bg: var(--ds-identity-6-bg); }
+.root[data-identity="7"] { --id-fg: var(--ds-identity-7-fg); --id-bg: var(--ds-identity-7-bg); }
+
+/* The agent working for them: its role tile on the face, bottom right. */
+.agent {
+  --role-fg: var(--ds-color-text-secondary);
+  --role-bg: var(--ds-color-sunken);
+  position: absolute;
+  right: calc(var(--av-size) * -0.14);
+  bottom: calc(var(--av-size) * -0.1);
+  display: grid;
+  place-items: center;
+  width: max(13px, calc(var(--av-size) * 0.46));
+  height: max(13px, calc(var(--av-size) * 0.46));
+  border-radius: var(--ds-radius-face-agent);
+  color: var(--role-fg);
+  background: var(--role-bg);
+  box-shadow: 0 0 0 2px var(--av-bed);
+}
+.agent[data-role="orchestrator"] { --role-fg: var(--ds-role-orchestrator-fg); --role-bg: var(--ds-role-orchestrator-bg); }
+.agent[data-role="investigator"] { --role-fg: var(--ds-role-investigator-fg); --role-bg: var(--ds-role-investigator-bg); }
+.agent[data-role="implementer"] { --role-fg: var(--ds-role-implementer-fg); --role-bg: var(--ds-role-implementer-bg); }
+.agent[data-role="reviewer"] { --role-fg: var(--ds-role-reviewer-fg); --role-bg: var(--ds-role-reviewer-bg); }
+.agent[data-role="simplifier"] { --role-fg: var(--ds-role-simplifier-fg); --role-bg: var(--ds-role-simplifier-bg); }
+.agent[data-role="qa_browser"] { --role-fg: var(--ds-role-qa-browser-fg); --role-bg: var(--ds-role-qa-browser-bg); }
+
+/* Working now: the tile pulses a ring at the live cadence. */
+.agentLive::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  --ds-ring-color: var(--ds-color-live);
+  animation: global(ds-ring) calc(var(--ds-cadence-breathe) / max(var(--ds-motion-live), 0.0001)) var(--ds-ease-exit) infinite;
+  pointer-events: none;
+}
+
+/* "+N": the same shape, no identity, so it reads as "more of these". */
+.overflow {
+  --id-fg: var(--ds-color-text-muted);
+  --id-bg: var(--ds-color-sunken);
+  font-weight: var(--ds-weight-medium);
+}
+
+/* A stack: overlap by a quarter, earlier faces on top, a gap of the bed colour between them. */
+.stack {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  isolation: isolate;
+}
+.stack > * + * {
+  margin-left: calc(var(--av-size) * -0.25);
+}
+.stack > .root:not(.online) {
+  box-shadow: 0 0 0 1.5px var(--av-bed);
+}
+.stack > :nth-child(1) { z-index: 5; }
+.stack > :nth-child(2) { z-index: 4; }
+.stack > :nth-child(3) { z-index: 3; }
+.stack > :nth-child(4) { z-index: 2; }
+.stack > :nth-child(5) { z-index: 1; }
+
+/* A face with a name and a line under it. */
+.line {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+  min-width: 0;
+}
+.lineText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: var(--ds-leading-tight);
+}
+.lineName {
+  font-size: var(--ds-text-md);
+  color: var(--ds-color-text-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lineDetail {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

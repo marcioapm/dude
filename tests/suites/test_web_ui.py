@@ -16,25 +16,16 @@ import pytest
 from playwright.sync_api import Page, expect
 
 from fake_github import FakeGitHub
-from helpers import ApiClient, create_api_key, toast, wait_until
+from helpers import ApiClient, create_api_key, sign_in, toast, wait_until
 
 pytestmark = pytest.mark.ui
-
-
-def _sign_in(page: Page, web_url: str, api_key: str) -> None:
-    page.goto(web_url)
-    page.evaluate("localStorage.clear()")
-    page.goto(web_url)
-    page.fill('input[type="password"]', api_key)
-    page.click('button[type="submit"]')
-    expect(page.get_by_test_id("shell")).to_be_visible()
 
 
 def test_the_board_shows_projects_and_opens_tasks(
     page: Page, web_url: str, client: ApiClient, forge_project: dict, org: dict, console_errors: list
 ):
     client.create_task(forge_project["id"], "Already queued up")
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
 
     # With nothing selected, the first project's board is what opens.
     expect(page.get_by_text("Greeter").first).to_be_visible()
@@ -55,7 +46,7 @@ def test_delivering_from_the_ui_reaches_a_pull_request_and_back(
     fake_github: FakeGitHub,
     console_errors: list,
 ):
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
 
     # Create the task from the board, as an operator would.
     page.get_by_test_id("new-task").click()
@@ -70,20 +61,33 @@ def test_delivering_from_the_ui_reaches_a_pull_request_and_back(
     # The reviewer raises something, the loop answers it, and a clean
     # re-review lets it through — all visible without a reload.
     expect(pipeline).to_contain_text("blocking", timeout=120_000)
-    expect(page.get_by_test_id("findings")).to_be_visible()
     expect(pipeline).to_contain_text("no findings", timeout=120_000)
+    # The fix says what woke it.
+    expect(page.get_by_test_id("phase").filter(has_text="Fix")).to_contain_text("for the review")
+    tabs = page.get_by_role("tablist", name="Task")
+    tabs.get_by_role("tab", name="Findings").click()
+    expect(page.get_by_test_id("findings")).to_be_visible()
     expect(page.get_by_test_id("finding").first).to_have_attribute("data-status", "resolved")
 
     # What the implementer published is there to read, rendered.
-    artifact = page.get_by_test_id("artifact").filter(has_text="NOTES.md")
-    expect(artifact).to_be_visible(timeout=60_000)
-    artifact.get_by_role("button", expanded=False).click()
-    expect(artifact.get_by_role("heading", name="What changed")).to_be_visible()
+    tabs.get_by_role("tab", name="Files").click()
+    notes = page.get_by_test_id("file-row").filter(has_text="NOTES.md")
+    expect(notes).to_be_visible(timeout=60_000)
+    notes.get_by_role("button").first.click()
+    expect(page.get_by_test_id("file-viewer").get_by_role("heading", name="What changed")).to_be_visible()
+    page.keyboard.press("Escape")
 
-    # The PR appears as the last step, linked to the forge.
+    # The PR appears as the last step, linked to the forge, and its one
+    # state is a chip in the header that links there too.
+    tabs.get_by_role("tab", name="Overview").click()
     expect(page.get_by_test_id("pr-step")).to_be_visible(timeout=180_000)
-    pr_number = int(page.get_by_test_id("pr-link").get_attribute("href").rsplit("/", 1)[-1])
+    chip = page.get_by_test_id("pr-link")
+    expect(chip).to_have_attribute("data-pr-state", "awaiting")
+    expect(chip).to_contain_text("Awaiting approval")
+    pr_number = int(chip.get_attribute("href").rsplit("/", 1)[-1])
     assert pr_number in fake_github.pulls
+    # The same state is on its row in the tree.
+    expect(page.get_by_role("tree").locator('[data-pr-state="awaiting"]')).to_have_count(1)
 
     # Every agent in the pipeline opens its own conversation.
     page.get_by_test_id("phase").nth(1).click()
@@ -110,7 +114,7 @@ def test_a_task_is_edited_and_moved_from_its_screen(
 ):
     epic = client.post(f"/v1/projects/{forge_project['id']}/epics", {"title": "Greetings"}).json()
     item = client.create_task(forge_project["id"], "Draft title")
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.get_by_text("Draft title").first.click()
     expect(page.get_by_test_id("task-screen")).to_be_visible()
 
@@ -135,7 +139,7 @@ def test_a_task_names_the_repositories_it_changes_and_reads(
     target = forge_project["repositories"][0]
     docs = client.post(f"/v1/projects/{forge_project['id']}/repositories",
                        {"name": "docs", "url": "https://github.com/acme/docs.git"}).json()
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.get_by_test_id("new-task").click()
     page.get_by_test_id("task-title").fill("Document the greeting")
     chooser = page.get_by_test_id("task-repositories")
@@ -159,7 +163,7 @@ def test_a_task_names_the_repositories_it_changes_and_reads(
 def test_project_settings_manage_repositories_and_delivery(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
 ):
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.get_by_test_id("project-settings-button").click()
     expect(page.get_by_test_id("project-settings")).to_be_visible()
 
@@ -181,7 +185,7 @@ def test_project_settings_manage_repositories_and_delivery(
     console_errors.clear()
 
     # Security joins correctness on every delivery.
-    page.get_by_role("tab", name="Delivery").click()
+    page.locator("[data-settings-nav='delivery']").click()
     page.get_by_role("checkbox", name="security").click()
     page.get_by_test_id("delivery-save").click()
     expect(toast(page, "Delivery saved")).to_be_visible()
@@ -194,10 +198,22 @@ def test_project_settings_manage_repositories_and_delivery(
     assert project["deliveryPolicy"] == {"requiredReviewers": ["correctness", "security"]}
     assert console_errors == []
 
+    # Its face: an image picked in General, resized in the browser, stored,
+    # and shown wherever the project is, the sidebar included.
+    page.locator("[data-settings-nav='general']").click()
+    png = bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+                        "0000000d49444154789c63f8cfc0f01f00050001ff89993d1d0000000049454e44ae426082")
+    page.get_by_test_id("project-image-file").set_input_files({"name": "logo.png", "mimeType": "image/png", "buffer": png})
+    expect(toast(page, "Image updated")).to_be_visible()
+    expect(page.get_by_test_id("project-face").locator("img")).to_have_count(1)
+    expect(page.locator(f"[data-nav-key='project:{forge_project['id']}'] img")).to_have_count(1)
+    assert client.get(f"/v1/projects/{forge_project['id']}").json()["imageUrl"].startswith("/v1/projects/")
+    assert console_errors == []
+
 
 def test_a_new_project_starts_from_the_empty_screen(page: Page, web_url: str, client: ApiClient, org: dict, console_errors: list):
     """An organization with nothing yet is offered a project, not told to use the API."""
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.get_by_test_id("new-project-empty").click()
     page.get_by_test_id("project-name").fill("Payments API")
     page.get_by_test_id("project-repository").fill("https://github.com/acme/payments-api.git")
@@ -214,8 +230,10 @@ def test_a_new_project_starts_from_the_empty_screen(page: Page, web_url: str, cl
 def test_the_github_connection_is_checked_and_replaced_in_settings(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
 ):
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.get_by_test_id("org-settings-button").click()
+    # Settings open on Members; GitHub is the next page.
+    page.locator('[data-settings-nav="github"]').click()
     expect(page.get_by_test_id("org-settings")).to_contain_text("Connected")
     expect(page.get_by_test_id("org-settings")).to_contain_text("…oken")
 
@@ -238,7 +256,7 @@ def test_epics_are_made_ordered_and_removed_from_the_sidebar_and_board(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
 ):
     item = client.create_task(forge_project["id"], "Loose work")
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
 
     # Two epics, from the board. A new one opens, which reveals it in the tree.
     for title in ("Onboarding", "Billing"):
@@ -306,7 +324,7 @@ def test_back_and_forward_move_between_places(
     page: Page, web_url: str, client: ApiClient, forge_project: dict, org: dict, console_errors: list
 ):
     client.create_task(forge_project["id"], "Somewhere to go")
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.get_by_text("Somewhere to go").last.click()
     expect(page.get_by_test_id("task-screen")).to_be_visible()
     page.get_by_test_id("org-settings-button").click()
@@ -340,7 +358,7 @@ def test_an_agents_progress_shows_in_its_chat(
     wait_until(lambda: [e for e in client.events(runId=implement["id"]) if e["eventType"] == "agent.custom.progress"][1:],
                timeout=30, message="the progress never reached the ledger")
 
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/session/{implement['id']}")
     progress = page.get_by_test_id("chat-progress")
     expect(progress).to_have_count(1)
@@ -366,7 +384,7 @@ def test_a_person_approves_a_repository_an_agent_asked_for(
     wait_until(lambda: client.get("/v1/repository-requests", params={"runId": implement["id"]}).json()["repositoryRequests"],
                timeout=30, message="the agent never asked")
 
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/session/{implement['id']}")
     card = page.get_by_test_id("repository-request")
     expect(card).to_contain_text("Read web")
@@ -393,7 +411,7 @@ def test_a_parked_agent_is_answered_from_its_chat(
         lambda: next((r for r in client.task_runs(item["id"]) if r["phase"] == "implement" and r["status"] == "paused"), None),
         timeout=30, message="the waiting agent was never parked")
 
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/session/{implement['id']}")
     expect(page.get_by_test_id("chat-notice")).to_contain_text("Parked while it waits for you")
     # Paused, yet the composer takes the answer: that is what resumes it.
@@ -420,7 +438,7 @@ def test_an_agent_parked_on_a_repository_request_says_what_resumes_it(
         lambda: next((r for r in client.task_runs(item["id"]) if r["phase"] == "implement" and r.get("dudePause") == "person"), None),
         timeout=30, message="the waiting agent was never parked")
 
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/session/{implement['id']}")
     expect(page.get_by_test_id("chat-notice")).to_contain_text("Parked while it waits for you")
     # No question to answer: the composer says what does resume it.
@@ -433,7 +451,7 @@ def test_an_agent_parked_on_a_repository_request_says_what_resumes_it(
 
 def test_theme_and_density_are_this_browsers_and_remembered(page: Page, web_url: str, org: dict, console_errors: list):
     """You choose how dude looks; it stays so after a reload."""
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.get_by_test_id("my-settings-button").click()
     expect(page.get_by_test_id("my-settings")).to_be_visible()
     html = page.locator("html")
@@ -471,7 +489,7 @@ def test_a_browser_turns_notifications_on_and_off(
       PushManager.prototype.getSubscription = async function () { return sub; };
       PushManager.prototype.subscribe = async function (o) { window.__pushKey = o.applicationServerKey; sub = fake(); return sub; };
     """)
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.get_by_test_id("my-settings-button").click()
     state = page.get_by_test_id("push-state")
     expect(state).to_have_attribute("data-state", "off")
@@ -515,7 +533,7 @@ def test_everything_waiting_on_you_is_in_one_place(
     client.post(f"/v1/tasks/{requesting['id']}/deliver")
     wait_until(lambda: client.get("/v1/repository-requests").json()["repositoryRequests"], timeout=30, message="no request")
 
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/waiting")
     inbox = page.get_by_test_id("inbox")
     rows = inbox.get_by_role("listitem")
@@ -524,7 +542,9 @@ def test_everything_waiting_on_you_is_in_one_place(
     expect(rows.nth(0)).to_contain_text("Should FACTORY.md be in English?")
     expect(rows.nth(1)).to_contain_text("Needs the client")
     expect(rows.nth(1)).to_contain_text("Read web?")
-    rows.nth(1).get_by_role("button").click()
+    # Both are yours (you own them): highlighted, each with its one action.
+    expect(inbox.locator("[data-mine]")).to_have_count(2)
+    rows.nth(1).get_by_role("button", name="Answer").click()
     expect(page.get_by_test_id("repository-request")).to_contain_text("Read web")
     assert console_errors == []
 
@@ -553,7 +573,7 @@ def test_only_a_tasks_owner_answers_and_anyone_can_take_it_over(
     assert refused.json()["error"]["code"] == "not_owner"
     assert "only e2e user can answer this" in refused.json()["error"]["message"]
 
-    _sign_in(page, web_url, bo_key)
+    sign_in(page, web_url, bo_key)
     page.goto(f"{web_url}#/session/{question['runId']}")
     expect(page.get_by_test_id("waiting-on")).to_have_text("Waiting for e2e user to answer")
     expect(page.get_by_role("group", name="Answer with one of")).to_have_count(0)
@@ -593,7 +613,7 @@ def test_a_tasks_time_and_cost_show_on_its_page_and_its_epics(
     wait_until(lambda: any(r["phase"] == "review" and r["status"] == "completed" for r in client.task_runs(task["id"])),
                timeout=60, message="no finished review")
 
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/task/{task['id']}")
     metrics = page.get_by_test_id("task-metrics")
     expect(metrics).to_contain_text("Agents working")
@@ -609,11 +629,11 @@ def test_a_project_can_have_its_changes_tested_in_a_browser(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
 ):
     """The tester phase is a project's choice, off by default."""
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/project/{forge_project['id']}/settings")
-    page.get_by_role("tab", name="Delivery").click()
-    box = page.get_by_role("checkbox", name="Test it in a browser")
-    expect(box).not_to_be_checked()
+    page.locator("[data-settings-nav='delivery']").click()
+    box = page.get_by_test_id("delivery-test").get_by_role("switch")
+    expect(box).to_have_attribute("aria-checked", "false")
     box.click()
     page.get_by_test_id("delivery-save").click()
     expect(toast(page, "Delivery saved")).to_be_visible()
@@ -637,7 +657,7 @@ def test_a_failed_implementer_says_why_on_its_task_and_its_chat(
     assert task["escalation"]["reason"] == "implement_failed", task["escalation"]
     implement = next(r for r in task["runs"] if r["phase"] == "implement")
 
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/task/{item['id']}")
     escalation = page.get_by_test_id("escalation")
     expect(escalation).to_contain_text("Implementer failed")
@@ -675,7 +695,7 @@ def test_a_person_decides_how_a_stopped_delivery_goes_on(
                timeout=60, message="delivery never stopped for a person")
     assert client.get(f"/v1/tasks/{item['id']}").json()["escalation"]["actions"] == ["retry", "stop"]
 
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/task/{item['id']}")
     escalation = page.get_by_test_id("escalation")
     expect(escalation.get_by_test_id("escalation-retry")).to_have_text("Try again")
@@ -718,7 +738,7 @@ def test_a_link_to_something_gone_says_so(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
 ):
     """A task, run or epic that does not exist is said to, with a way back."""
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     for kind in ("task", "run", "epic"):
         page.goto(f"{web_url}#/{kind}/{kind}_doesnotexist")
         expect(page.get_by_test_id("not-found")).to_contain_text(f"This {kind} doesn't exist")
@@ -726,3 +746,114 @@ def test_a_link_to_something_gone_says_so(
     expect(page.get_by_test_id("new-task")).to_be_visible()
     # The server's 404s for the task and the run are the only errors.
     assert all("404" in e for e in console_errors), console_errors
+
+
+def _hanging_run(client: ApiClient, forge_project: dict, title: str) -> dict:
+    """A task whose implementer is working and never finishes its turn."""
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
+        "implementer": {"model": "fake/hang"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
+    item = client.create_task(forge_project["id"], title)
+    assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
+    return wait_until(lambda: next((r for r in client.task_runs(item["id"]) if r["phase"] == "implement" and r["status"] == "running"), None),
+                      timeout=60, message="the implementer never started")
+
+
+def test_a_steer_is_sent_with_enter_and_signed_with_a_name(
+    page: Page, web_url: str, env, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    """Enter sends a steer (Shift+Enter is a new line); the chat and the
+    event log say who sent it, by name, not "Human"."""
+    run = _hanging_run(client, forge_project, "Steer me")
+    sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/session/{run['id']}")
+    field = page.get_by_placeholder("Steer the agent…")
+    field.fill("first line")
+    field.press("Shift+Enter")
+    field.type("second line")
+    expect(field).to_have_value("first line\nsecond line")
+    expect(page.get_by_text("Sent as e2e")).to_be_visible()
+    field.press("Enter")
+    turn = page.get_by_test_id("human-turn").last
+    expect(turn).to_contain_text("e2e user")
+    expect(turn).to_contain_text("second line")
+    expect(page.get_by_test_id("human-turn")).not_to_contain_text("Human")
+    steered = wait_until(lambda: [e for e in client.events(runId=run["id"]) if e["eventType"] == "run.steered"],
+                         timeout=15, message="no steer in the ledger")
+    assert steered[0]["payload"]["text"] == "first line\nsecond line" and steered[0]["payload"]["interrupt"] is False
+
+    # Someone else's steer is signed with their name.
+    bo = ApiClient(env.control_plane_url, create_api_key(env.owner_dsn, org["id"], name="Bo"))
+    assert bo.post(f"/v1/runs/{run['id']}/steer", {"text": "from Bo"}).status_code == 201
+    page.reload()
+    expect(page.get_by_test_id("human-turn").filter(has_text="from Bo")).to_contain_text("Bo")
+    assert console_errors == []
+
+
+def test_abort_asks_first_and_offers_to_pause_instead(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    """Abort is a request, confirmed in a dialog whose one solid button
+    aborts; "Pause instead" pauses. The chat then says who stopped it."""
+    run = _hanging_run(client, forge_project, "Stop me")
+    sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/session/{run['id']}")
+
+    page.get_by_test_id("abort").click()
+    dialog = page.get_by_role("dialog")
+    expect(dialog).to_contain_text("cannot be resumed")
+    dialog.get_by_test_id("abort-pause-instead").click()
+    expect(dialog).to_have_count(0)
+    wait_until(lambda: client.get_run(run["id"])["status"] == "paused", timeout=30, message="Pause instead did not pause")
+    assert client.get_run(run["id"])["status"] != "aborted"
+
+    page.get_by_test_id("abort").click()
+    page.get_by_role("dialog").get_by_label("Why (optional)").fill("wrong task")
+    page.get_by_role("dialog").get_by_test_id("abort-confirm").click()
+    wait_until(lambda: client.get_run(run["id"])["status"] == "aborted", timeout=30, message="the confirmed abort did not abort")
+    expect(page.get_by_test_id("chat-ended")).to_contain_text("Aborted by e2e user: wrong task")
+    assert console_errors == []
+
+
+def test_acting_second_is_a_calm_notice_naming_who_acted_first(
+    page: Page, web_url: str, env, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    """Two people on one agent: Bo pauses it while you look; your Pause is
+    refused (409), and the page says Bo did it — not an error — until the
+    page catches up."""
+    run = _hanging_run(client, forge_project, "Two hands")
+    sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/session/{run['id']}")
+    expect(page.get_by_role("button", name="Pause")).to_be_visible()
+    # Bo acts first; the page is told nothing yet: its live stream is cut,
+    # while its own requests still go through.
+    page.route("**/v1/events/stream**", lambda route: route.abort())
+    page.evaluate("window.dispatchEvent(new Event('offline'))")
+    bo = ApiClient(env.control_plane_url, create_api_key(env.owner_dsn, org["id"], name="Bo"))
+    assert bo.post(f"/v1/runs/{run['id']}/pause").status_code in (200, 201, 202)
+    wait_until(lambda: client.get_run(run["id"])["status"] == "paused", timeout=30, message="Bo's pause did not land")
+    page.get_by_role("button", name="Pause").click()
+    notice = page.get_by_test_id("conflict-notice")
+    expect(notice).to_contain_text("Bo paused it first")
+    expect(page.get_by_role("alert")).to_have_count(0)
+    # The refusal is the only error the page saw.
+    assert all("409" in e or "ERR_FAILED" in e for e in console_errors), console_errors
+
+
+def test_a_dropped_stream_says_so_and_catches_up(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    """The live stream drops: the page says it is reconnecting, and when it
+    is back it re-reads what it missed."""
+    client.create_task(forge_project["id"], "Before")
+    sign_in(page, web_url, org["api_key"])
+    expect(page.get_by_text("Before").first).to_be_visible()
+    page.context.set_offline(True)
+    expect(page.get_by_test_id("reconnecting")).to_be_visible(timeout=20_000)
+    # One banner, from the shell, with a way out if it never comes back.
+    expect(page.get_by_test_id("reconnecting")).to_have_count(1)
+    expect(page.get_by_test_id("reconnecting-reload")).to_be_visible()
+    client.create_task(forge_project["id"], "While away")
+    page.context.set_offline(False)
+    expect(page.get_by_test_id("reconnecting")).to_have_count(0, timeout=30_000)
+    expect(page.get_by_text("While away").first).to_be_visible(timeout=15_000)
+    assert all("ERR_INTERNET_DISCONNECTED" in e for e in console_errors), console_errors

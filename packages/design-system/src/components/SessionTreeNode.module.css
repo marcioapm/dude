@@ -10,8 +10,8 @@
   position: relative;
   font-size: var(--ds-text-sm);
   color: var(--ds-color-text-primary);
-  border-radius: var(--ds-radius-sm);
-  cursor: default;
+  border-radius: var(--ds-radius-control);
+  cursor: pointer;
   outline: none;
   transition: background-color var(--ds-duration-fast) var(--ds-ease-standard);
 }
@@ -46,7 +46,7 @@
   padding: 0;
   background: none;
   border: 0;
-  border-radius: var(--ds-radius-xs);
+  border-radius: var(--ds-radius-mark);
   color: var(--ds-color-text-muted);
 }
 .toggle:hover {
@@ -119,10 +119,9 @@
   height: 14px;
   display: inline-flex;
   align-items: center;
-  border-radius: var(--ds-radius-sm);
+  border-radius: var(--ds-radius-mark);
   background: var(--ds-color-sunken);
   color: var(--ds-color-text-muted);
-  border: 1px solid var(--ds-color-border-subtle);
 }
 
 .children {

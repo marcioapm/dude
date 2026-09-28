@@ -605,7 +605,7 @@ function PlanDemo() {
         <Button size="sm" onClick={advance}>
           Advance
         </Button>
-        <Button size="sm" variant="ghost" onClick={() => setItems(PLAN_BASE)}>
+        <Button size="sm" variant="quiet" onClick={() => setItems(PLAN_BASE)}>
           Reset
         </Button>
       </Row>
@@ -764,7 +764,7 @@ function LiveTranscriptDemo() {
         <Button size="sm" variant="primary" onClick={start} disabled={playing}>
           {s ? "Replay" : "Play scenario"}
         </Button>
-        <Button size="sm" variant="ghost" onClick={reset} disabled={!s}>
+        <Button size="sm" variant="quiet" onClick={reset} disabled={!s}>
           Reset
         </Button>
         {s ? <Caption>{playing ? `▶ ${s.stepLabel}` : s.question ? "⏸ waiting for your answer" : s.done ? "■ finished" : "⏸ paused"}</Caption> : null}

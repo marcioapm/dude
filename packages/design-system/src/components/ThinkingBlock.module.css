@@ -13,7 +13,7 @@
 .root {
   position: relative;
   min-width: 0;
-  border-radius: var(--ds-radius-md);
+  border-radius: 0;
 }
 
 .row {
@@ -25,9 +25,9 @@
   padding: 0 var(--ds-space-8) 0 var(--ds-space-6);
   font-size: var(--ds-text-sm);
   color: var(--ds-color-text-muted);
-  border-radius: var(--ds-radius-md);
+  border-radius: 0;
   outline: none;
-  cursor: default;
+  cursor: pointer;
 }
 .row:hover {
   background: var(--ds-color-hover-wash);
@@ -110,7 +110,7 @@
 .body {
   margin: 0 var(--ds-space-8) var(--ds-space-6) 7px;
   padding: var(--ds-space-2) 0 var(--ds-space-2) var(--ds-space-12);
-  border-left: 1px dotted var(--ds-color-border-strong);
+  border-left: 2px solid var(--ds-color-border-subtle);
   animation: global(ds-fade-in) var(--ds-duration-fast) var(--ds-ease-enter);
 }
 .body > div {
@@ -129,7 +129,7 @@
   height: 11px;
   margin-left: 2px;
   vertical-align: -1px;
-  border-radius: 1px;
+  border-radius: var(--ds-radius-mark);
   background: currentColor;
   animation: global(ds-blink) calc(var(--ds-cadence-blink) / max(var(--ds-motion-live), 0.0001)) steps(2, jump-none) infinite;
 }

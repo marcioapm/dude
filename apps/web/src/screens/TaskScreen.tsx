@@ -1,44 +1,71 @@
 /**
- * One task's delivery: what was asked, where it stands, and what each
+ * One task: what was asked, who is on it, where it stands, and what each
  * agent did about it.
  *
- * Top to bottom, the questions an operator asks in the order they ask them:
- * what is this, where is it (the phase pipeline), what did the agents leave
- * for a person to read (artifacts), is anything wrong (the findings), and is
- * it shippable (the pull request). Every agent in the
- * pipeline opens its own conversation, because the pipeline is a summary and
- * the chat is the truth.
+ * The header says what it is and who it is for: where it sits, its title,
+ * its pull requests' states, and its people (the owner with the agent
+ * working for them on their face). Below it, tabs in the order a person
+ * asks: Overview (the goal, the pipeline, time and cost, and the pull
+ * requests beside them), Findings (every review finding), Sessions (every
+ * agent that ran, opening its conversation), Files (what they left), and
+ * Activity (who did what, by name).
  *
  * Driven by the task's event stream, so a phase starting, a finding
- * landing or the PR opening appears without a reload.
+ * landing or the PR opening appears without a reload; a dropped stream
+ * is said by the shell, and the page re-reads when it is back.
  */
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { AgentAvatar, FindingGroup, FindingRow, StatusBadge, StepList, StepRow } from "@dude/design-system/components";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  AgentAvatar,
+  Duration,
+  FindingGroup,
+  FindingRow,
+  PersonAvatar,
+  PersonLine,
+  PlanMeter,
+  PrChip,
+  PullRequestPanel,
+  SessionItem,
+  SessionList,
+  StatusMark,
+  StepList,
+  StepRow,
+  Timeline,
+  TimelineItem,
+  planProgress,
+} from "@dude/design-system/components";
 import { Icon } from "@dude/design-system";
-import { Button, Callout, EmptyState, Page, PageHeader, Section, Spinner } from "@dude/design-system/primitives";
-import { DEFAULT_RUN_ROLE, runLabel } from "@dude/domain";
-import type { ApiClient, Artifact, Finding, PullRequest, Run, TaskDetail } from "../api/client.ts";
+import { Button, Callout, EmptyState, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
+import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, runLabel, type PersistedEvent } from "@dude/domain";
+import type { ApiClient, Artifact, Finding, MergeMethod, PullRequest, Run, TaskDetail } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
+import { actorName, humanActor, planFrom } from "../api/conversation.ts";
 import { shortError } from "../escalation.ts";
 import { useReloadOnEvents } from "../hooks/useEventStream.ts";
-import { ArtifactsSection } from "./ArtifactsSection.tsx";
+import { firstName } from "@dude/design-system";
+import { usePeople, type People } from "../people.tsx";
+import { FilesSection } from "./FilesSection.tsx";
+import { EscalationPanel } from "./EscalationPanel.tsx";
 import { TaskMetricsSection } from "./MetricsSection.tsx";
-import { existingTask, TaskDialog } from "./TaskDialog.tsx";
 import { NotFound } from "./NotFound.tsx";
 import { OwnerSelect } from "./OwnerSelect.tsx";
-import { errorText } from "../hooks/useSave.tsx";
-import { EscalationPanel } from "./EscalationPanel.tsx";
+import { existingTask, TaskDialog } from "./TaskDialog.tsx";
+import { PullRequestActions } from "./PullRequestActions.tsx";
+import { pullRequestActivity } from "../pullRequests.ts";
 
 export interface TaskScreenProps {
   client: ApiClient;
   taskId: string;
   onOpenRun: (runId: string) => void;
-  /** Where it sits, shown above its title. */
+  /** Where it sits, shown at the top: Project › Epic › KEY. */
   breadcrumb?: ReactNode;
   /** Leave for somewhere that exists, when this task does not. */
   onBack: () => void;
 }
+
+/** A run's plan, as its latest `agent.plan.updated` left it: for the running step's line. */
+type Plans = ReadonlyMap<string, { done: number; total: number; current: string | null }>;
 
 export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: TaskScreenProps) {
   const [item, setItem] = useState<TaskDetail | null>(null);
@@ -46,19 +73,31 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
   const [findings, setFindings] = useState<Finding[]>([]);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [pullRequests, setPullRequests] = useState<PullRequest[]>([]);
+  const [events, setEvents] = useState<PersistedEvent[]>([]);
+  const ledger = useRef<PersistedEvent[]>([]);
   const [problem, setProblem] = useState<string | null>(null);
   const [delivering, setDelivering] = useState(false);
   const [editing, setEditing] = useState(false);
-  // Who is reading: the owner decides what a stopped delivery does next.
-  const [you, setYou] = useState<string | null>(null);
-  useEffect(() => {
-    void client.listPeople().then((p) => setYou(p.you), (err: unknown) => setProblem(errorText(err)));
-  }, [client]);
+  const people = usePeople();
   // Bumped on each reload, for the sections that read their own data.
   const [version, setVersion] = useState(0);
+  // The organization's merge method, read once for every pull request here.
+  const [mergeMethod, setMergeMethod] = useState<MergeMethod>("squash");
+  useEffect(() => {
+    void client.githubSettings().then((s) => setMergeMethod(s.mergeMethod), () => undefined);
+  }, [client]);
 
+  // Loads overlap when events come quickly: a slower, older one must not
+  // put back what a newer one replaced.
+  const loads = useRef(0);
+  const applied = useRef(0);
   const load = useCallback(async () => {
+    const seq = ++loads.current;
     setVersion((v) => v + 1);
+    // The ledger is for who did what and the plans; the page stands without
+    // it. Only what is new since the last read is fetched, beside the rest.
+    const since = ledger.current.at(-1)?.cursor ?? 0;
+    const more = allEvents(client, taskId, since).catch(() => [] as PersistedEvent[]);
     try {
       const [fresh, f, p, a] = await Promise.all([
         client.getTask(taskId),
@@ -66,13 +105,22 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
         client.listPullRequests(taskId),
         client.listArtifacts(taskId),
       ]);
-      setItem(fresh);
-      setFindings(f.findings);
-      setArtifacts(a.artifacts);
-      setPullRequests(p.pullRequests);
+      if (seq > applied.current) {
+        applied.current = seq;
+        setItem(fresh);
+        setFindings(f.findings);
+        setArtifacts(a.artifacts);
+        setPullRequests(p.pullRequests);
+      }
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) setMissing(true);
       else setProblem(err instanceof Error ? err.message : String(err));
+    }
+    const last = ledger.current.at(-1)?.cursor ?? 0;
+    const unseen = (await more).filter((e) => e.cursor > last);
+    if (unseen.length > 0) {
+      ledger.current = [...ledger.current, ...unseen];
+      setEvents(ledger.current);
     }
   }, [client, taskId]);
 
@@ -99,10 +147,28 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
   const phases = useMemo(() => {
     const runs = [...(item?.runs ?? [])].filter((r) => r.phase);
     const attempt = Math.max(0, ...runs.map((r) => r.attempt));
-    return runs
-      .filter((r) => r.attempt === attempt)
-      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    return runs.filter((r) => r.attempt === attempt).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }, [item]);
+
+  // What a pull request heard, for why a fix ran: a few of the ledger's many.
+  const prEvents = useMemo(() => events.filter((e) => e.eventType.startsWith("pull_request.")), [events]);
+
+  // Each running phase's plan: the last it wrote, as the transcript has it.
+  const plans = useMemo<Plans>(() => {
+    const out = new Map<string, { done: number; total: number; current: string | null }>();
+    for (const run of phases) {
+      if (run.status !== "running") continue;
+      let plan: ReturnType<typeof planFrom> = null;
+      for (let i = events.length - 1; i >= 0 && !plan; i--) {
+        const e = events[i]!;
+        if (e.runId === run.id && e.eventType === EventTypes.PlanUpdated) plan = planFrom(e.payload as Record<string, unknown>);
+      }
+      if (!plan || plan.length === 0) continue;
+      const p = planProgress(plan);
+      out.set(run.id, { done: p.done, total: p.total, current: p.current?.content ?? null });
+    }
+    return out;
+  }, [phases, events]);
 
   if (missing) return <NotFound what="task" onBack={onBack} />;
   if (!item) {
@@ -112,211 +178,258 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
   const started = phases.length > 0;
   // One per repository the work changed, in the order they were opened.
   const prs = [...pullRequests].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-
-  const description = item.goal || item.acceptanceCriteria.length > 0 ? (
-    <>
-      {item.goal ? <p>{item.goal}</p> : null}
-      {item.acceptanceCriteria.length > 0 ? (
-        <ul aria-label="Acceptance criteria">
-          {item.acceptanceCriteria.map((c) => (
-            <li key={c}>{c}</li>
-          ))}
-        </ul>
-      ) : null}
-    </>
-  ) : undefined;
-
-  /**
-   * Where a finding was fixed, as a way there: the fix the re-review that
-   * resolved it judged — the last before that review — as "Fix 2" when
-   * there were several, or the review itself when no fix is known.
-   */
-  const resolvedIn = (reviewId: string) => {
-    const review = item.runs.find((r) => r.id === reviewId);
-    const fixes = item.runs
-      .filter((r) => r.phase === "fix" && r.attempt === review?.attempt)
-      .sort((x, y) => x.createdAt.localeCompare(y.createdAt));
-    const index = review ? fixes.findLastIndex((r) => r.createdAt < review.createdAt) : -1;
-    const fix = fixes[index];
-    const label = fix ? (fixes.length > 1 ? `${runLabel(fix)} ${index + 1}` : runLabel(fix)) : review ? runLabel(review) : "its review";
-    return (
-      <Button size="sm" variant="ghost" onClick={() => onOpenRun(fix?.id ?? reviewId)} data-testid="finding-fixed-in">
-        {label}
-      </Button>
-    );
-  };
+  const owner = item.owner ? (people.byId.get(item.owner.id) ?? item.owner) : null;
+  const working = phases.find((r) => r.status === "running");
 
   return (
-    <Page data-testid="task-screen">
-      <PageHeader
-        data-testid="task-header"
-        breadcrumb={breadcrumb}
-        status={<StatusBadge status={item.status} />}
-        itemKey={item.key ? <span title={item.id}>{item.key}</span> : undefined}
-        title={item.title}
-        description={description}
-        actions={
-          <>
-            <OwnerSelect client={client} task={item} onChanged={() => void load()} onProblem={setProblem} />
-            {!started ? (
-              <Button
-                variant="primary"
-                leadingIcon="zap"
-                onClick={() => void deliver()}
-                disabled={delivering}
-                data-testid="deliver"
-              >
-                {delivering ? "Starting…" : "Deliver"}
-              </Button>
-            ) : null}
-            {/* Work that changed no code ends waiting to be read, with no PR to merge. */}
-            {item.status === "review" && prs.length === 0 && phases.length > 0 &&
-            phases.every((r) => ["completed", "failed", "aborted"].includes(r.status)) ? (
-              <Button variant="primary" leadingIcon="check" data-testid="mark-done"
-                onClick={() => void client.markDone(taskId).then(() => load(),
-                  (err: unknown) => setProblem(err instanceof ApiError ? err.message : "Could not mark it done."))}>
-                Mark done
-              </Button>
-            ) : null}
-            <Button variant="secondary" leadingIcon="edit" onClick={() => setEditing(true)} data-testid="edit-task">
-              Edit
+    <div className="screen taskScreen" data-testid="task-screen">
+      <header className="taskTop">
+        <div className="taskCrumbs">{breadcrumb}</div>
+        <span className="taskTopActions">
+          {!started ? (
+            <Button variant="primary" leadingIcon="zap" onClick={() => void deliver()} disabled={delivering} data-testid="deliver">
+              {delivering ? "Starting…" : "Deliver"}
             </Button>
+          ) : null}
+          {/* Work that changed no code ends waiting to be read, with no PR to merge. */}
+          {item.status === "review" && prs.length === 0 && phases.length > 0 && phases.every((r) => TERMINAL_RUN_STATUSES.includes(r.status)) ? (
+            <Button variant="primary" leadingIcon="check" data-testid="mark-done"
+              onClick={() => void client.markDone(taskId).then(() => load(), (err: unknown) => setProblem(err instanceof ApiError ? err.message : "Could not mark it done."))}>
+              Mark done
+            </Button>
+          ) : null}
+          <Button variant="quiet" leadingIcon="edit" onClick={() => setEditing(true)} data-testid="edit-task">
+            Edit
+          </Button>
+        </span>
+      </header>
+
+      <div className="taskHead" data-testid="task-header">
+        <div className="taskHeadMain">
+          <h1 className="taskTitle">{item.title}</h1>
+          <div className="taskMeta">
+            <StatusMark status={item.status} size="sm" />
             {prs.map((pr) => (
-              <a key={pr.id} href={pr.url} target="_blank" rel="noreferrer" data-testid="pr-link" className="linkButton">
-                {prs.length > 1 ? `${pr.repositoryName} #${pr.number}` : `Pull request #${pr.number}`}
-                <Icon name="external" size={14} />
-                <span className="ds-sr-only"> (opens in a new tab)</span>
-              </a>
+              <PrChip key={pr.id} pr={pr} data-testid="pr-link" />
             ))}
-          </>
-        }
-      >
-        {item.escalation ? (
-          <EscalationPanel client={client} task={{ ...item, escalation: item.escalation }} you={you}
-            onOpenRun={onOpenRun} onDecided={() => void load()} />
-        ) : null}
-        {problem ? <Callout tone="danger">{problem}</Callout> : null}
-      </PageHeader>
+            {item.key ? <span className="ds-mono" title={item.id}>{item.key}</span> : null}
+            {phases[0]?.branch ? <span className="ds-mono">{phases[0].branch}</span> : null}
+            <span>created <Duration ms={Math.max(0, Date.now() - Date.parse(item.createdAt))} format="age" tone="muted" /> ago</span>
+          </div>
+        </div>
+        <div className="taskPeople">
+          {owner ? (
+            <PersonLine person={owner} size={56} {...(working ? { agent: working.role ?? DEFAULT_RUN_ROLE, live: true } : {})}
+              detail={working ? `Owner · ${firstName(owner.name)}'s ${runLabel(working).toLowerCase()} is working` : "Owner"} />
+          ) : null}
+          <OwnerSelect client={client} task={item} onChanged={() => void load()} onProblem={setProblem} />
+        </div>
+      </div>
+
+      {item.escalation || problem ? (
+        <div className="taskNotices">
+          {item.escalation ? (
+            <EscalationPanel client={client} task={{ ...item, escalation: item.escalation }} you={people.you}
+              onOpenRun={onOpenRun} onDecided={() => void load()} />
+          ) : null}
+          {problem ? <Callout tone="danger">{problem}</Callout> : null}
+        </div>
+      ) : null}
+
       {editing ? (
-        <TaskDialog
-          client={client}
-          projectId={item.projectId}
-          onClose={() => setEditing(false)}
-          existing={existingTask(item, started)}
-          onSaved={() => void load()}
-        />
+        <TaskDialog client={client} projectId={item.projectId} onClose={() => setEditing(false)} existing={existingTask(item, started)} onSaved={() => void load()} />
       ) : null}
 
-      <Section title="Pipeline">
-        {started ? (
-          <StepList data-testid="pipeline">
-            {phases.map((run, index) => (
-              <PhaseStep
-                key={run.id}
-                run={run}
-                step={index + 1}
-                findings={findings.filter((f) => f.runId === run.id)}
-                onOpen={() => onOpenRun(run.id)}
-              />
-            ))}
-            {prs.map((pr) => (
-              <PullRequestStep key={pr.id} pr={pr} named={prs.length > 1} />
-            ))}
-          </StepList>
-        ) : (
-          <EmptyState
-            compact
-            icon="git-pr"
-            title="Not started"
-            description="Deliver runs an implementer, reviewers, a fixer if they find problems, a simplifier, and opens a pull request."
-          />
-        )}
-      </Section>
+      <Tabs defaultValue="overview" fill>
+        <TabList aria-label="Task" className="tabsInset">
+          <Tab value="overview">Overview</Tab>
+          <Tab value="findings" count={findings.length > 0 ? findings.length : undefined}>Findings</Tab>
+          <Tab value="sessions" count={item.runs.length > 0 ? item.runs.length : undefined}>Sessions</Tab>
+          <Tab value="files" count={artifacts.length > 0 ? new Set(artifacts.map((a) => a.name)).size : undefined}>Files</Tab>
+          <Tab value="activity">Activity</Tab>
+        </TabList>
 
-      <TaskMetricsSection client={client} taskId={taskId} live={item.status === "running"}
-        done={["done", "failed", "aborted"].includes(item.status)} version={version} />
+        <TabPanel value="overview" className="taskPane">
+          <div className="taskOverview">
+            <div className="taskMain">
+              {item.goal || item.acceptanceCriteria.length > 0 ? (
+                <section className="taskBlock" aria-label="Goal">
+                  <h2 className="ds-label">Goal</h2>
+                  <div className="taskGoal">
+                    {item.goal ? <p>{item.goal}</p> : null}
+                    {item.acceptanceCriteria.length > 0 ? (
+                      <ul aria-label="Acceptance criteria">
+                        {item.acceptanceCriteria.map((c) => (
+                          <li key={c}>{c}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </div>
+                </section>
+              ) : null}
 
-      <ArtifactsSection client={client} artifacts={artifacts} />
+              <section className="taskBlock" aria-label="Pipeline">
+                <h2 className="ds-label">Pipeline</h2>
+                {started ? (
+                  <StepList data-testid="pipeline">
+                    {phases.map((run, index) => (
+                      <PhaseStep key={run.id} run={run} plan={plans.get(run.id)} why={whyItRan(run, index, phases, findings, prEvents)}
+                        findings={findings.filter((f) => f.runId === run.id)} onOpen={() => onOpenRun(run.id)} />
+                    ))}
+                    {prs.map((pr) => (
+                      <PullRequestStep key={pr.id} pr={pr} named={prs.length > 1} />
+                    ))}
+                  </StepList>
+                ) : (
+                  <EmptyState compact icon="git-pr" title="Not started"
+                    description="Deliver runs an implementer, reviewers, a fixer if they find problems, a simplifier, and opens a pull request." />
+                )}
+              </section>
 
-      {findings.length > 0 ? (
-        <FindingGroup
-          data-testid="findings"
-          findings={findings}
-          renderRow={(f) => (
-            <FindingRow
-              key={f.id}
-              data-testid="finding"
-              data-status={f.status}
-              severity={f.severity}
-              status={f.status}
-              category={f.category}
-              title={f.title}
-              file={f.file}
-              line={f.line}
-              description={f.description}
-              suggestedFix={f.suggestedFix}
-              resolutionNote={f.resolutionNote}
-              fixAttempts={f.fixAttempts}
-              fixedIn={f.resolvedByRunId ? resolvedIn(f.resolvedByRunId) : undefined}
-            />
+              <TaskMetricsSection client={client} taskId={taskId} live={item.status === "running"}
+                done={["done", "failed", "aborted"].includes(item.status)} version={version} />
+            </div>
+            {prs.length > 0 ? (
+              <aside className="taskAside" aria-label="Pull requests">
+                {prs.map((pr) => (
+                  <PullRequestActions key={pr.id} client={client} pr={pr} defaultMethod={mergeMethod} onChanged={() => void load()}>
+                    {(actions) => (
+                      <PullRequestPanel pr={pr} data-testid="pr-panel" data-pr={pr.id}
+                        face={(login) => <PersonAvatar person={{ name: login }} size={20} ring={false} />}
+                        factActions={actions.facts} note={actions.note}
+                        actions={
+                          <>
+                            {actions.merge}
+                            <a className="linkButton" href={pr.url} target="_blank" rel="noreferrer">
+                              Open on GitHub <Icon name="external" size={14} />
+                              <span className="ds-sr-only"> (opens in a new tab)</span>
+                            </a>
+                          </>
+                        } />
+                    )}
+                  </PullRequestActions>
+                ))}
+              </aside>
+            ) : null}
+          </div>
+        </TabPanel>
+
+        <TabPanel value="findings" className="taskPane">
+          {findings.length > 0 ? (
+            <FindingGroup data-testid="findings" findings={findings}
+              renderRow={(f) => (
+                <FindingRow key={f.id} data-testid="finding" data-status={f.status} severity={f.severity} status={f.status}
+                  category={f.category} title={f.title} file={f.file} line={f.line} description={f.description}
+                  suggestedFix={f.suggestedFix} resolutionNote={f.resolutionNote} fixAttempts={f.fixAttempts}
+                  fixedIn={f.resolvedByRunId ? resolvedIn(item, f.resolvedByRunId, onOpenRun) : undefined} />
+              )} />
+          ) : (
+            <EmptyState compact icon="check" title="No findings" description={started ? "The reviewers raised nothing, yet." : "Reviewers report here once delivery starts."} />
           )}
-        />
-      ) : null}
-    </Page>
+        </TabPanel>
+
+        <TabPanel value="sessions" className="taskPane">
+          {item.runs.length > 0 ? (
+            <SessionList className="taskSessions" data-testid="sessions">
+              {[...item.runs].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((run) => (
+                <SessionItem key={run.id} onOpen={() => onOpenRun(run.id)}
+                  avatar={<AgentAvatar role={run.role ?? DEFAULT_RUN_ROLE} size="lg" live={run.status === "running"} />}
+                  title={runLabel(run) + (run.attempt > 1 ? ` · attempt ${run.attempt}` : "")}
+                  detail={<>{run.model ?? run.harness ?? "agent"} · {run.startedAt ? <Duration since={run.startedAt} until={run.endedAt} live={run.status === "running"} tone="muted" /> : "not started"}</>}
+                  trailing={<StatusMark status={run.status} size="sm" iconOnly={run.status === "completed"} />} />
+              ))}
+            </SessionList>
+          ) : (
+            <EmptyState compact icon="agent" title="No sessions yet" description="Each agent that works on the task has a session here, with its conversation." />
+          )}
+        </TabPanel>
+
+        <TabPanel value="files" className="taskPane">
+          {artifacts.length > 0 ? (
+            <FilesSection client={client} taskId={taskId} taskKey={item.key} artifacts={artifacts} onOpenRun={onOpenRun} />
+          ) : (
+            <EmptyState compact icon="file" title="No files yet" description="What the agents save — notes, screenshots, reports, recordings — shows here." />
+          )}
+        </TabPanel>
+
+        <TabPanel value="activity" className="taskPane">
+          <Activity events={events} people={people} runs={item.runs} />
+        </TabPanel>
+      </Tabs>
+    </div>
   );
 }
 
-function PhaseStep(props: { run: Run; step: number; findings: Finding[]; onOpen: () => void }) {
-  const { run } = props;
-  const blocking = props.findings.filter((f) => f.severity === "blocking" || f.severity === "high");
-  const heads = Object.entries(run.heads);
+/** A task's events after a cursor, oldest first, in pages. */
+async function allEvents(client: ApiClient, taskId: string, after: number): Promise<PersistedEvent[]> {
+  const out: PersistedEvent[] = [];
+  for (let page = 0; page < 20; page++) {
+    const { events, nextCursor } = await client.events({ taskId, after, limit: 1000 });
+    out.push(...events);
+    if (events.length < 1000) break;
+    after = nextCursor;
+  }
+  return out;
+}
 
+/**
+ * What woke a step, when the record says: a fix for the review's findings,
+ * for a pull request's feedback (and whose), a re-review of a fix. Only
+ * what can be read from the runs, findings and events; nothing guessed.
+ */
+function whyItRan(run: Run, index: number, phases: readonly Run[], findings: readonly Finding[], prEvents: readonly PersistedEvent[]): string | undefined {
+  const earlier = phases.slice(0, index);
+  if (run.phase === "fix") {
+    if (prEvents.some((e) => e.eventType === "pull_request.opened" && e.occurredAt < run.createdAt)) {
+      const feedback = prEvents.findLast((e) => e.occurredAt <= run.createdAt &&
+        (e.eventType === "pull_request.commented" || e.eventType === "pull_request.reviewed" || e.eventType === "pull_request.checks_changed"));
+      if (feedback?.eventType === "pull_request.checks_changed") return "for failing CI";
+      const author = typeof feedback?.payload.author === "string" ? feedback.payload.author : null;
+      return author ? `for ${author}'s review` : "for the pull request's feedback";
+    }
+    return "for the review";
+  }
+  if (run.phase === "review" && earlier.some((r) => r.phase === "fix")) {
+    const found = findings.filter((f) => f.runId === run.id).length;
+    return found === 0 ? "no findings" : undefined;
+  }
+  return undefined;
+}
+
+function PhaseStep({ run, findings, plan, why, onOpen }: {
+  run: Run; findings: Finding[]; plan: { done: number; total: number; current: string | null } | undefined; why: string | undefined; onOpen: () => void;
+}) {
+  const blocking = findings.filter((f) => f.severity === "blocking" || f.severity === "high");
+  const heads = Object.entries(run.heads);
+  const running = run.status === "running";
+  const note = run.status === "failed" && run.error
+    ? <span title={run.error}>{shortError(run.error, 80)}</span>
+    : run.phase === "review" && run.status === "completed"
+      ? findings.length === 0 ? "no findings" : `${blocking.length} blocking${findings.length > blocking.length ? `, ${findings.length - blocking.length} more` : ""}`
+      : why;
   return (
     <StepRow
       data-testid="phase"
       data-phase={run.phase}
       data-status={run.status}
-      onOpen={props.onOpen}
-      step={props.step}
-      avatar={<AgentAvatar role={run.role ?? DEFAULT_RUN_ROLE} size="sm" live={run.status === "running"} />}
+      onOpen={onOpen}
+      avatar={<AgentAvatar role={run.role ?? DEFAULT_RUN_ROLE} size="lg" live={running} />}
       label={runLabel(run)}
-      status={<StatusBadge status={run.status} size="sm" />}
-      note={run.status === "failed" && run.error
-        ? <span title={run.error}>{shortError(run.error, 80)}</span>
-        : run.phase === "review" && run.status === "completed"
-          ? props.findings.length === 0 ? "no findings" : `${blocking.length} blocking`
-          : undefined}
-      meta={heads.length === 0 ? undefined : heads.length === 1
-        ? heads[0]![1].slice(0, 7)
-        : heads.map(([repo, sha]) => `${repo}@${sha.slice(0, 7)}`).join(" ")}
+      note={note}
+      status={<StatusMark status={run.status} size="sm" iconOnly={run.status === "completed"} />}
+      meta={heads.length === 0 ? undefined : heads.length === 1 ? heads[0]![1].slice(0, 7) : `${heads.length} repos`}
       metaTitle={heads.length > 0 ? heads.map(([repo, sha]) => `${repo} ${sha}`).join("\n") : undefined}
+      duration={run.startedAt ? <Duration since={run.startedAt} until={run.endedAt} live={running} tone="muted" /> : "—"}
+      below={running && plan ? (
+        <>
+          <PlanMeter done={plan.done} total={plan.total} width={72} />
+          <span className="ds-tnum">{plan.done} of {plan.total}</span>
+          {plan.current ? <span className="planNow">{plan.current}</span> : null}
+        </>
+      ) : undefined}
     />
   );
 }
-
-/**
- * A PR's state in the status vocabulary. Open is "in review", not
- * "running": nothing of ours is executing, it is waiting on people.
- */
-const PR_STATE_STATUS: Record<PullRequest["state"], "review" | "done" | "aborted" | "pending"> = {
-  draft: "pending",
-  open: "review",
-  merged: "done",
-  closed: "aborted",
-};
-
-/** What the forge says of its checks and review, in words; the state is the badge's. */
-const CHECKS_WORDS: Record<PullRequest["checks"], string> = {
-  unknown: "Checks not reported yet",
-  pending: "Checks running",
-  failing: "Checks failing",
-  passing: "Checks passing",
-};
-const REVIEW_WORDS: Record<PullRequest["review"], string> = {
-  pending: "Awaiting review",
-  approved: "Approved",
-  changes_requested: "Changes requested",
-};
 
 /**
  * A pull request as the pipeline's last step. With several (work across
@@ -329,13 +442,119 @@ function PullRequestStep({ pr, named }: { pr: PullRequest; named: boolean }) {
       data-phase="pr"
       data-status={pr.state}
       href={pr.url}
-      step="PR"
+      avatar={<AgentAvatar role="system" size="lg" />}
       label={named ? <><span className="ds-mono">{pr.repositoryName}</span> #{pr.number}</> : <>Pull request #{pr.number}</>}
-      status={<StatusBadge status={PR_STATE_STATUS[pr.state]} size="sm" />}
-      // Checks and review matter while it is open; once merged or closed,
-      // the badge says all there is.
-      note={pr.state === "open" || pr.state === "draft" ? `${CHECKS_WORDS[pr.checks]} · ${REVIEW_WORDS[pr.review]}` : undefined}
+      note={pr.title}
+      status={<PrChip pr={pr} size="sm" showNumber={false} tabIndex={-1} />}
       meta={pr.headBranch}
     />
   );
+}
+
+/**
+ * Where a finding was fixed, as a way there: the fix the re-review that
+ * resolved it judged — the last before that review — as "Fix 2" when
+ * there were several, or the review itself when no fix is known.
+ */
+function resolvedIn(item: TaskDetail, reviewId: string, onOpenRun: (id: string) => void) {
+  const review = item.runs.find((r) => r.id === reviewId);
+  const fixes = item.runs.filter((r) => r.phase === "fix" && r.attempt === review?.attempt).sort((x, y) => x.createdAt.localeCompare(y.createdAt));
+  const index = review ? fixes.findLastIndex((r) => r.createdAt < review.createdAt) : -1;
+  const fix = fixes[index];
+  const label = fix ? (fixes.length > 1 ? `${runLabel(fix)} ${index + 1}` : runLabel(fix)) : review ? runLabel(review) : "its review";
+  return (
+    <Button size="sm" variant="quiet" onClick={() => onOpenRun(fix?.id ?? reviewId)} data-testid="finding-fixed-in">
+      {label}
+    </Button>
+  );
+}
+
+/** What a person or dude did to the task, newest first, by name. */
+function Activity({ events, people, runs }: { events: readonly PersistedEvent[]; people: People; runs: readonly Run[] }) {
+  const lines = useMemo(() => activityLines(events, people, runs), [events, people, runs]);
+  if (lines.length === 0) return <EmptyState compact icon="list" title="Nothing yet" description="Who did what to the task shows here: deliveries, steers, answers, pull requests." />;
+  const now = Date.now();
+  return (
+    <Timeline data-testid="activity">
+      {lines.map((l) => (
+        <TimelineItem key={l.id} who={l.who} quote={l.quote} when={<Duration ms={Math.max(0, now - Date.parse(l.at))} format="age" tone="muted" />}
+          data-testid="activity-item">
+          {l.text}
+        </TimelineItem>
+      ))}
+    </Timeline>
+  );
+}
+
+interface ActivityLine {
+  id: string;
+  at: string;
+  who: ReactNode;
+  text: ReactNode;
+  quote?: ReactNode;
+}
+
+/** The ledger as sentences: the acts worth a line, each with who did it. */
+export function activityLines(events: readonly PersistedEvent[], people: People, runs: readonly Run[]): ActivityLine[] {
+  const out: ActivityLine[] = [];
+  // A task with pull requests in several repositories names each by its repository.
+  const named = new Set(events.filter((e) => e.eventType === "pull_request.opened").map((e) => e.payload.repo)).size > 1;
+  const labels = new Map(runs.map((r) => [r.id, runLabel(r).toLowerCase()]));
+  const phase = (runId: string | null) => (runId && labels.get(runId)) || "agent";
+  for (const e of events) {
+    const by = humanActor(e);
+    const name = actorName(by, people.names);
+    const face = by ? <PersonAvatar person={{ ...(people.byId.get(by.id) ?? {}), id: by.id, name: name ?? "Someone" }} size={32} /> : null;
+    const person = <b>{name ?? "Someone"}</b>;
+    const p = e.payload;
+    const base = { id: e.eventId, at: e.occurredAt };
+    switch (e.eventType) {
+      case "task.created":
+        out.push({ ...base, who: face, text: <>{person} created the task</> });
+        break;
+      case "workflow.transitioned":
+        break;
+      case "run.steered":
+        out.push({ ...base, who: face, text: <>{person} steered the {phase(e.runId)}</>, quote: String(p.text ?? "") });
+        break;
+      case "question.answered":
+        out.push({ ...base, who: face, text: <>{person} answered the {phase(e.runId)}</>, quote: String(p.answer ?? "") });
+        break;
+      case "run.paused":
+        if (by) out.push({ ...base, who: face, text: <>{person} paused the {phase(e.runId)}</> });
+        break;
+      case "run.resumed":
+        if (by) out.push({ ...base, who: face, text: <>{person} resumed the {phase(e.runId)}</> });
+        break;
+      case "run.aborted":
+        out.push({ ...base, who: face ?? <AgentAvatar role="system" size="lg" />, text: <>{by ? person : <b>dude</b>} aborted the {phase(e.runId)}</>, quote: p.reason ? String(p.reason) : undefined });
+        break;
+      case "task.owner_changed": {
+        const to = typeof p.to === "string" ? people.names.get(p.to) : undefined;
+        out.push({ ...base, who: face, text: <>{person} handed the task to <b>{to ?? "someone else"}</b></> });
+        break;
+      }
+      case "task.decided":
+        out.push({ ...base, who: face, text: <>{person} decided how delivery goes on: {String(p.action ?? "")}</>, quote: p.note ? String(p.note) : undefined });
+        break;
+      case "question.asked":
+        if (p.kind === "agent") out.push({ ...base, who: <AgentAvatar role="implementer" size="lg" />, text: <>The <b>{phase(e.runId)}</b> asked a question</>, quote: String(p.prompt ?? "") });
+        break;
+      case "run.created":
+        if (typeof p.phase === "string") out.push({ ...base, who: <AgentAvatar role={(typeof p.role === "string" ? p.role : DEFAULT_RUN_ROLE) as Run["role"] & string} size="lg" />, text: <>The <b>{phase(e.runId)}</b> started</> });
+        break;
+      default: {
+        // What happened to a pull request: by the GitHub login that did it,
+        // or the person who did it from here, or dude and GitHub.
+        const line = pullRequestActivity(e, named);
+        if (!line) break;
+        const who = line.actorId ? face : line.who
+          ? <PersonAvatar person={{ id: `gh:${line.who}`, name: line.who }} size={32} />
+          : <AgentAvatar role="integration" size="lg" />;
+        out.push({ ...base, who, text: line.actorId ? <>{person} {line.text}</> : line.text, quote: line.quote });
+        break;
+      }
+    }
+  }
+  return out.reverse();
 }

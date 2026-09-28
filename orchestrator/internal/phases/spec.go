@@ -120,7 +120,11 @@ type specInput struct {
 	RunID, OrganizationID, TaskID, Phase, Role string
 	Image                                      string
 	Model                                      string
-	Prompt                                     string
+	// The role's reasoning effort, "" for the model's own; and its running
+	// time per session in minutes, 0 for none of its own.
+	Effort           string
+	TimeLimitMinutes int
+	Prompt           string
 	// Every repository the task names, each at the commit this phase
 	// starts from.
 	Repos      []specRepo
@@ -143,6 +147,15 @@ func workdir(repos []specRepo) string {
 		return RepoPath(repos[0].Name)
 	}
 	return workspaceDir
+}
+
+// repoRefs is where each repository starts, by name.
+func repoRefs(repos []specRepo) map[string]string {
+	refs := make(map[string]string, len(repos))
+	for _, r := range repos {
+		refs[r.Name] = r.Ref
+	}
+	return refs
 }
 
 // RepoPath is where a repository is checked out in the container.
@@ -173,6 +186,9 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 			Adapter: "opencode",
 			Prompt:  in.Prompt,
 			Workdir: workdir(in.Repos),
+			// On every stop lux can see coming, the checkout's final diff
+			// (livediff.go).
+			BeforeStop: beforeStop(repoRefs(in.Repos)),
 		},
 		Volumes: []lux.Volume{
 			// The checkout, and the agent's session transcript: the two
@@ -181,6 +197,14 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 			{Name: "home", Path: agentHome, Kind: "state"},
 		},
 		Timeout: c.Timeout,
+	}
+	// A role's own limit is the organization's or project's choice, and
+	// wins over the operator's blanket one.
+	if in.TimeLimitMinutes > 0 {
+		spec.Timeout = fmt.Sprintf("%dm", in.TimeLimitMinutes)
+	}
+	if in.Effort != "" {
+		spec.Labels["dude.effort"] = in.Effort
 	}
 	if len(in.Repos) > 0 || in.PushBranch != "" {
 		spec.Git = &lux.Git{}
@@ -238,7 +262,18 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 	}
 
 	spec.Env = colourEnv
-	config, _ := json.Marshal(map[string]any{"provider": c.OpenCodeProviders, "model": in.Model})
+	opencode := map[string]any{"provider": c.OpenCodeProviders, "model": in.Model}
+	if in.Effort != "" {
+		// OpenCode passes an agent's unknown options to the provider as
+		// model options; reasoningEffort is the one providers read. Their
+		// scale stops at high, so dude's "max" is the most they take.
+		effort := in.Effort
+		if effort == "max" {
+			effort = "high"
+		}
+		opencode["agent"] = map[string]any{"build": map[string]any{"reasoningEffort": effort}}
+	}
+	config, _ := json.Marshal(opencode)
 	spec.Secrets = append(spec.Secrets,
 		lux.Secret{Name: "opencode_auth", Value: c.OpenCodeAuth, As: "file", Path: agentHome + "/.local/share/opencode/auth.json"},
 		lux.Secret{Name: "opencode_config", Value: string(config), As: "file", Path: agentHome + "/.config/opencode/opencode.json"},

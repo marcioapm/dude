@@ -4,8 +4,10 @@ import { cx } from "../util/cx.ts";
 import { statusSpec, type Status } from "../tokens/status.ts";
 import { Button } from "../primitives/Button.tsx";
 import { AgentAvatar, ROLE_LABEL } from "./AgentAvatar.tsx";
+import { PersonAvatar, type Person } from "./PersonAvatar.tsx";
 import { StatusBadge } from "./StatusBadge.tsx";
 import { CostDisplay, Duration, TokenCount } from "./Numbers.tsx";
+import { Cost } from "./Cost.tsx";
 import styles from "./ChatTranscript.module.css";
 
 export interface ChatTranscriptSession {
@@ -36,6 +38,10 @@ export interface ChatTranscriptSession {
   readonly costUsd?: number | null | undefined;
   readonly budgetUsd?: number | undefined;
   readonly tokens?: number | undefined;
+  /** Whom the agent works for: their face carries its tile, in place of the bare tile. */
+  readonly owner?: Person | undefined;
+  /** Under the title, in place of role · model: "for Ana · sonnet · started 2m ago". */
+  readonly subtitle?: ReactNode;
 }
 
 export interface ChatTranscriptProps extends Omit<HTMLAttributes<HTMLDivElement>, "children" | "title"> {
@@ -180,7 +186,11 @@ function TranscriptHeader({ session, actions }: { readonly session: ChatTranscri
   const ids = [session.taskId ? `task ${session.taskId}` : null, `session ${session.id}`].filter(Boolean).join(" · ");
   return (
     <header className={styles["header"]} data-status={session.status}>
-      <AgentAvatar role={session.role} size="md" live={session.status === "running"} />
+      {session.owner ? (
+        <PersonAvatar person={session.owner} size={40} agent={session.role} live={session.status === "running"} />
+      ) : (
+        <AgentAvatar role={session.role} size="lg" live={session.status === "running"} />
+      )}
       <div className={styles["headerMain"]}>
         <div className={styles["headerTitle"]}>
           {session.taskKey ? (
@@ -192,21 +202,29 @@ function TranscriptHeader({ session, actions }: { readonly session: ChatTranscri
           <StatusBadge status={session.status} size="sm" />
         </div>
         <div className={styles["headerSub"]}>
-          <span title={ids}>{ROLE_LABEL[session.role]}</span>
-          {session.model ? <code>{session.model}</code> : null}
-          {session.repo ? (
-            <code>
-              {session.repo}
-              {session.branch ? <span className={styles["headerBranch"]}> @ {session.branch}</span> : null}
-            </code>
-          ) : null}
+          {session.subtitle ?? (
+            <>
+              <span title={ids}>{ROLE_LABEL[session.role]}</span>
+              {session.model ? <code>{session.model}</code> : null}
+              {session.repo ? (
+                <code>
+                  {session.repo}
+                  {session.branch ? <span className={styles["headerBranch"]}> @ {session.branch}</span> : null}
+                </code>
+              ) : null}
+            </>
+          )}
         </div>
       </div>
       <div className={styles["headerStats"]}>
         {session.costUsd !== undefined ? (
           <span className={styles["stat"]}>
             <span className={styles["statLabel"]}>Cost</span>
-            <CostDisplay usd={session.costUsd} budgetUsd={session.budgetUsd} live={spec.live && session.costUsd !== null} />
+            {session.budgetUsd !== undefined ? (
+              <CostDisplay usd={session.costUsd} budgetUsd={session.budgetUsd} live={spec.live && session.costUsd !== null} />
+            ) : (
+              <Cost tokensUsd={session.costUsd} />
+            )}
           </span>
         ) : null}
         {session.tokens !== undefined ? (

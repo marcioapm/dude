@@ -90,7 +90,7 @@ function ToastItem({ record, onClose }: { readonly record: ToastRecord; readonly
       <div className={styles["actions"]}>
         {record.action ? (
           <RadixToast.Action asChild altText={record.action.label}>
-            <Button size="sm" variant="ghost" onClick={record.action.onClick}>
+            <Button size="sm" variant="quiet" onClick={record.action.onClick}>
               {record.action.label}
             </Button>
           </RadixToast.Action>

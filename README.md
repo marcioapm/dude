@@ -79,9 +79,30 @@ DATABASE_URL="postgres://dude:dude@localhost:5433/dude" bun run migrate
 (cd orchestrator && go build -o bin/ ./cmd/...)
 ```
 
+Photos are kept in S3 (`DUDE_S3_*`, see [`docs/operations.md`](docs/operations.md)).
+The test suite and the demo start their own S3, a versitygw container
+(`dude-e2e-s3`, port 59200), and make a bucket per run.
+
 Migrations run as the owner role. Everything else connects as `dude_app`,
 which has neither `SUPERUSER` nor `BYPASSRLS`, so the row-level security that
 isolates tenants is a real boundary rather than a convention.
+
+### A seeded demo, with nothing else to run
+
+One command gives a dude to click through: its own database on the dev
+Postgres, the fake lux running scripted agents, a fake GitHub that opens real
+pull requests on local repositories, and four people in one organisation with
+tasks in every state — delivered to a pull request, asking a question,
+running (watch its live Changes), CI failing, changes requested, ready to
+merge, merged, conflicting.
+
+```bash
+cd tests && uv run python demo.py          # prints the URL and each person's key
+```
+
+Sign in as one person, and as another in a private window, to see two
+people at once. Ctrl-C stops it and removes what it made. `--port` picks the
+web app's port (default 5180), `--no-build` skips the builds.
 
 ### Running the whole thing
 
@@ -105,10 +126,14 @@ DATABASE_URL="postgres://dude_app:dude_app@localhost:5433/dude" \
 DUDE_ORCHESTRATOR_URL=http://127.0.0.1:3100 DUDE_ORCHESTRATOR_TOKEN=dev-token \
   bun run dev
 
-# 4. An organization and a user key (organizations are provisioned, not self-served)
+# 4. An organization, its people and some tasks (organizations are provisioned, not self-served)
 OWNER_DSN="postgres://dude:dude@localhost:5433/dude" \
 DATABASE_URL="postgres://dude_app:dude_app@localhost:5433/dude" \
-  bun run scripts/seed-demo.ts            # prints { organizationId, userKey }
+  bun run scripts/seed-demo.ts            # prints { organizationId, userKey, people }
+
+# Someone else, later (admins can also invite from Organization → Members)
+DATABASE_URL="postgres://dude_app:dude_app@localhost:5433/dude" \
+  bun run scripts/add-person.ts <organizationId> "Ada Lovelace" ada@example.com admin
 
 # 5. The web app on :5180, proxying /v1 to the backend
 (cd apps/web && bun run dev)

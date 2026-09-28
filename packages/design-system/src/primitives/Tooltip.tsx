@@ -1,5 +1,5 @@
 import * as RadixTooltip from "@radix-ui/react-tooltip";
-import type { ReactNode } from "react";
+import { createContext, useContext, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import styles from "./Tooltip.module.css";
 
@@ -15,11 +15,11 @@ export interface TooltipProps {
 }
 
 /**
- * Tooltip. Wrap the app once in `TooltipProvider`. Content is supplementary
+ * Tooltip. Wrap the app once in `TooltipProvider` (one shared delay). Content is supplementary
  * — never the only place a label lives. Icon buttons already carry a title.
  */
 export function Tooltip({ content, shortcut, side = "top", mono, delay, children }: TooltipProps) {
-  return (
+  const root = (
     <RadixTooltip.Root {...(delay !== undefined ? { delayDuration: delay } : {})}>
       <RadixTooltip.Trigger asChild>{children}</RadixTooltip.Trigger>
       <RadixTooltip.Portal>
@@ -31,12 +31,22 @@ export function Tooltip({ content, shortcut, side = "top", mono, delay, children
       </RadixTooltip.Portal>
     </RadixTooltip.Root>
   );
+  // Radix refuses a tooltip outside a provider. A component that carries
+  // one (a PR chip, a cost) must still render where nobody set one up — a
+  // test, a static page — so it brings its own there.
+  return useContext(HasProvider) ? root : <Provider>{root}</Provider>;
+}
+
+const HasProvider = createContext(false);
+
+function Provider({ children }: { readonly children?: ReactNode }) {
+  return (
+    <RadixTooltip.Provider delayDuration={400} skipDelayDuration={200}>
+      <HasProvider.Provider value>{children}</HasProvider.Provider>
+    </RadixTooltip.Provider>
+  );
 }
 
 export function TooltipProvider({ children }: { readonly children?: ReactNode }) {
-  return (
-    <RadixTooltip.Provider delayDuration={400} skipDelayDuration={200}>
-      {children}
-    </RadixTooltip.Provider>
-  );
+  return <Provider>{children}</Provider>;
 }

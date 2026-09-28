@@ -23,10 +23,12 @@ export const ID_PREFIXES = {
   workflowRun: "wfr",
   workflowSignal: "sig",
   apiKey: "key",
+  person: "per",
   directive: "dir",
   pullRequest: "pr",
   forgeCredential: "forge",
   finding: "find",
+  promptVersion: "pv",
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIXES;

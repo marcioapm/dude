@@ -117,6 +117,12 @@ class ApiClient:
     def patch(self, path: str, json: dict | None = None) -> requests.Response:
         return self.request("PATCH", path, json=json or {})
 
+    def put(self, path: str, json: dict | None = None) -> requests.Response:
+        return self.request("PUT", path, json=json or {})
+
+    def delete(self, path: str) -> requests.Response:
+        return self.request("DELETE", path)
+
     # -- convenience wrappers, raising on unexpected failures ---------------
 
     def create_project(self, **body) -> dict:
@@ -157,6 +163,18 @@ class ApiClient:
 # ---------------------------------------------------------------------------
 # Waiting
 # ---------------------------------------------------------------------------
+
+
+def sign_in(page, web_url: str, api_key: str) -> None:
+    """Sign the web app in with a key, from a clean slate."""
+    from playwright.sync_api import expect
+
+    page.goto(web_url)
+    page.evaluate("localStorage.clear()")
+    page.goto(web_url)
+    page.fill('input[type="password"]', api_key)
+    page.click('button[type="submit"]')
+    expect(page.get_by_test_id("shell")).to_be_visible()
 
 
 def toast(page, text: str):

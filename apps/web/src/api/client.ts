@@ -14,7 +14,6 @@ import type {
   TaskRepository,
   DeliveryPolicy,
   Directive,
-  FullDeliveryPolicy,
   DirectiveScope,
   Epic,
   Escalation,
@@ -24,10 +23,22 @@ import type {
   PullRequest,
   PauseMode,
   Person,
+  PersonDetail,
+  PersonRef,
+  PersonRole,
   Project,
+  CostSplit,
+  PersistedEvent,
   Run,
+  RunDiff,
   Session,
   Task,
+  EpicState,
+  ProjectPromptMode,
+  PromptHistory,
+  PromptRole,
+  SettingsPatch,
+  SettingsResponse,
 } from "@dude/domain";
 
 // ---------------------------------------------------------------------------
@@ -44,6 +55,9 @@ export type {
   EscalationAction,
   Finding,
   Person,
+  PersonDetail,
+  PersonRef,
+  PersonRole,
   Project,
   PullRequest,
   Repository,
@@ -51,6 +65,20 @@ export type {
   Session,
   Task,
 } from "@dude/domain";
+
+/** A person as `/v1/people` lists them: where they were last seen, too. */
+export type Member = PersonDetail & { lastSeenWhere: string | null };
+
+/** One of your keys: its prefix, never the key. */
+export interface ApiKeyInfo {
+  id: string;
+  name: string;
+  prefix: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+  /** The key this browser signed in with. */
+  current: boolean;
+}
 
 /** A project with its repositories. `GET /v1/projects/:id`. */
 export interface ProjectDetail extends Project {
@@ -68,7 +96,38 @@ export type ForgeConnection =
       apiBaseUrl: string | null;
       webhookPath: string;
       updatedAt: string;
+      webhook: WebhookHealth;
     };
+
+/** Whether GitHub's webhooks reach dude, and each repository's hook. */
+export interface WebhookHealth {
+  lastDeliveryAt: string | null;
+  lastFailureAt: string | null;
+  lastFailure: string | null;
+  failedToday: number;
+  rotatedAt: string | null;
+  publicUrl: string | null;
+  /** Deliveries dude has yet to act on, retrying. */
+  retrying: number;
+  lastError: string | null;
+  repositories: Array<{ id: string; name: string; url: string; projectName: string; hookId: string | null;
+    registeredAt: string | null; error: string | null }>;
+}
+
+/** How dude behaves on GitHub for the organization. */
+export interface GithubSettings {
+  whoCanWake: "collaborators" | "members" | "anyone";
+  openAs: "ready" | "draft";
+  requestReviewFrom: "nobody" | "codeowners" | "logins";
+  reviewLogins: string[];
+  mergeMethod: "squash" | "merge" | "rebase";
+  whenBehind: "update" | "tell";
+  /** 0: no limit but each round's. */
+  fixRoundsPerPr: number;
+  ciStuckMinutes: number;
+}
+
+export type MergeMethod = GithubSettings["mergeMethod"];
 
 /** What a task asks for, and where it sits. */
 export interface TaskFields {
@@ -103,10 +162,39 @@ function withWaitingFor(projects: NavProject[]): NavProject[] {
   }));
 }
 
+/** One epic on its project's page. `GET /v1/projects/:id/overview`. */
+export interface EpicOverview {
+  id: string;
+  title: string;
+  description: string;
+  position: number;
+  state: EpicState;
+  /** A person chose the state; otherwise it is what the tasks say. */
+  stateSet: boolean;
+  tasks: number;
+  lanes: { done: number; review: number; progress: number; backlog: number };
+  prs: Record<string, number>;
+  owners: Array<{ id: string; name: string; photoUrl: string | null; online: boolean }>;
+  /** Tokens and machine time, as the epic's metrics count them. */
+  costUsd: number;
+  machineUsd: number;
+  lastActivity: string | null;
+  needsYou: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectOverview {
+  project: { id: string; name: string };
+  epics: EpicOverview[];
+}
+
 /** A Run with the sessions it spawned. `GET /v1/runs/:id`. */
 export interface RunDetail extends Run {
   sessions: Session[];
 }
+
+export type { CostSplit, RunDiff, RunDiffFile, RunDiffSummary } from "@dude/domain";
 
 /** What the API returns when something goes wrong. */
 export class ApiError extends Error {
@@ -168,11 +256,17 @@ export interface Artifact {
   createdAt: string;
   phase: string | null;
   role: AgentRole | null;
+  /** 1 for the first of its name; a later Run saving the same name adds one. */
+  version: number;
+  /** How many of its name there are. */
+  versions: number;
 }
 
 export class ApiClient {
   readonly #baseUrl: string;
   readonly #apiKey: string;
+  /** What this browser has open, for presence ("TEXT-14"): see `setWhere`. */
+  #where = "";
 
   constructor(options: ApiClientOptions) {
     this.#baseUrl = (options.baseUrl ?? "").replace(/\/$/, "");
@@ -181,13 +275,16 @@ export class ApiClient {
 
   /** A request that throws ApiError for a refusal; the caller reads the body. */
   async #fetch(method: string, path: string, body?: unknown): Promise<Response> {
+    // A Blob goes as itself (an image upload); anything else as JSON.
+    const raw = body instanceof Blob;
     const res = await fetch(`${this.#baseUrl}${path}`, {
       method,
       headers: {
         authorization: `Bearer ${this.#apiKey}`,
-        "content-type": "application/json",
+        "content-type": raw ? body.type : "application/json",
+        ...(this.#where ? { "x-dude-where": this.#where } : {}),
       },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      ...(body === undefined ? {} : { body: raw ? body : JSON.stringify(body) }),
     });
     if (!res.ok) {
       const text = await res.text();
@@ -202,9 +299,19 @@ export class ApiClient {
     return res;
   }
 
+  #upload<T>(method: string, path: string, body: Blob): Promise<T> {
+    return this.#request(method, path, body);
+  }
+
   async #request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const text = await (await this.#fetch(method, path, body)).text();
     return (text ? JSON.parse(text) : null) as T;
+  }
+
+  /** Say what this browser has open; teammates see it beside your face. */
+  setWhere(where: string): void {
+    // Header values are Latin-1: anything else would make fetch throw.
+    this.#where = where.replace(/[^\x20-\x7e]/g, "").slice(0, 80);
   }
 
   // -- reads --------------------------------------------------------------
@@ -237,6 +344,16 @@ export class ApiClient {
     return this.#request("GET", `/v1/pull-requests${qs({ taskId })}`);
   }
 
+  /** The organisation's latest pull requests, for the chips on cards and tree rows. */
+  recentPullRequests(): Promise<{ pullRequests: PullRequest[] }> {
+    return this.#request("GET", "/v1/pull-requests");
+  }
+
+  /** A scope's events, oldest first, from a cursor: for who did what, and a task's activity. */
+  events(params: { runId?: string; taskId?: string; after?: number; limit?: number }): Promise<{ events: PersistedEvent[]; nextCursor: number }> {
+    return this.#request("GET", `/v1/events${qs(params)}`);
+  }
+
   listArtifacts(taskId: string): Promise<{ artifacts: Artifact[] }> {
     return this.#request("GET", `/v1/artifacts${qs({ taskId })}`);
   }
@@ -245,17 +362,26 @@ export class ApiClient {
    * An artifact's bytes. Fetched with the key in a header, never in a URL,
    * so the page makes blob URLs from it for images and downloads.
    */
-  async artifactContent(id: string): Promise<Blob> {
-    return (await this.#fetch("GET", `/v1/artifacts/${encodeURIComponent(id)}/content`)).blob();
+  /**
+   * An artifact's bytes. `inline` asks for a page (HTML, SVG) to be sent
+   * for a sandboxed frame rather than as an attachment.
+   */
+  async artifactContent(id: string, inline = false): Promise<Blob> {
+    return (await this.#fetch("GET", `/v1/artifacts/${encodeURIComponent(id)}/content${inline ? "?inline=1" : ""}`)).blob();
+  }
+
+  /** The latest version of each of a task's files, as a zip. */
+  async artifactsZip(taskId: string): Promise<Blob> {
+    return (await this.#fetch("GET", `/v1/tasks/${encodeURIComponent(taskId)}/artifacts.zip`)).blob();
+  }
+
+  /** A Run's checkout against where it started, uncommitted work included. */
+  runDiff(runId: string): Promise<RunDiff> {
+    return this.#request("GET", `/v1/runs/${encodeURIComponent(runId)}/diff`);
   }
 
   listFindings(taskId: string): Promise<{ findings: Finding[] }> {
     return this.#request("GET", `/v1/findings${qs({ taskId })}`);
-  }
-
-  /** The factory's delivery policy, which a project's settings layer over. */
-  deliveryDefaults(): Promise<FullDeliveryPolicy> {
-    return this.#request("GET", "/v1/delivery-defaults");
   }
 
   forgeConnection(): Promise<ForgeConnection> {
@@ -271,6 +397,45 @@ export class ApiClient {
     return this.#request("POST", "/v1/forge/credential", { auth: "pat", secret: token, ...(apiBaseUrl ? { apiBaseUrl } : {}) });
   }
 
+  githubSettings(): Promise<GithubSettings> {
+    return this.#request("GET", "/v1/forge/settings");
+  }
+
+  updateGithubSettings(changes: Partial<GithubSettings>): Promise<GithubSettings> {
+    return this.#request("PATCH", "/v1/forge/settings", changes);
+  }
+
+  /** Register dude's webhook on every repository (or one), delivering to `url`. */
+  registerWebhooks(url: string): Promise<{ repositories: Array<{ name: string; slug: string; hookId?: string; error?: string }> }> {
+    return this.#request("POST", "/v1/forge/webhooks/register", { url });
+  }
+
+  revealWebhookSecret(): Promise<{ secret: string }> {
+    return this.#request("GET", "/v1/forge/webhook-secret");
+  }
+
+  rotateWebhookSecret(url?: string): Promise<{ secret: string }> {
+    return this.#request("POST", "/v1/forge/webhook-secret/rotate", url ? { url } : {});
+  }
+
+  /** Merge a pull request on GitHub, when dude would call it ready. */
+  mergePullRequest(id: string, method?: MergeMethod): Promise<unknown> {
+    return this.#request("POST", `/v1/pull-requests/${id}/merge`, method ? { method } : {});
+  }
+
+  /** Merge its base into its branch on GitHub, as "Update branch" does. */
+  updatePullRequestBranch(id: string): Promise<unknown> {
+    return this.#request("POST", `/v1/pull-requests/${id}/update-branch`, {});
+  }
+
+  rerunFailedChecks(id: string): Promise<{ rerun: number }> {
+    return this.#request("POST", `/v1/pull-requests/${id}/rerun-failed`, {});
+  }
+
+  requestReview(id: string, logins: string[]): Promise<unknown> {
+    return this.#request("POST", `/v1/pull-requests/${id}/reviewers`, { logins });
+  }
+
   getProject(id: string): Promise<ProjectDetail> {
     return this.#request("GET", `/v1/projects/${id}`);
   }
@@ -279,9 +444,50 @@ export class ApiClient {
     return this.#request("GET", `/v1/projects/${projectId}/epics`);
   }
 
-  /** The organization's people, who a task can be handed to; `you` is the signed-in one. */
-  listPeople(): Promise<{ people: Person[]; you: string }> {
+  /** The organization's people, who a task can be handed to; `you` is the signed-in one's person id. */
+  listPeople(): Promise<{ people: Member[]; you: string }> {
     return this.#request("GET", "/v1/people");
+  }
+
+  /** Who you are, and your organization. */
+  me(): Promise<{ person: Member; organization: { id: string; name: string } }> {
+    return this.#request("GET", "/v1/me");
+  }
+
+  updateMe(changes: { name?: string; photoUrl?: string | null }): Promise<{ person: Member }> {
+    return this.#request("PATCH", "/v1/me", changes);
+  }
+
+  /** Your photo: the image itself, stored and served back by the backend. */
+  uploadMyPhoto(image: Blob): Promise<{ person: Member }> {
+    return this.#upload("PUT", "/v1/me/photo", image);
+  }
+
+  listMyKeys(): Promise<{ keys: ApiKeyInfo[] }> {
+    return this.#request("GET", "/v1/me/keys");
+  }
+
+  /** A new key for you; `key` is shown this once. */
+  createMyKey(name: string): Promise<{ id: string; name: string; prefix: string; key: string }> {
+    return this.#request("POST", "/v1/me/keys", { name });
+  }
+
+  revokeMyKey(id: string): Promise<void> {
+    return this.#request("DELETE", `/v1/me/keys/${id}`);
+  }
+
+  /** Admins: add someone, with a key shown this once. */
+  invitePerson(input: { name: string; email: string; role: PersonRole }): Promise<{ person: Member; key: string }> {
+    return this.#request("POST", "/v1/people", input);
+  }
+
+  updatePerson(id: string, changes: { name?: string; role?: PersonRole }): Promise<{ person: Member }> {
+    return this.#request("PATCH", `/v1/people/${id}`, changes);
+  }
+
+  /** Admins: remove someone; every key of theirs stops working. */
+  removePerson(id: string): Promise<void> {
+    return this.#request("DELETE", `/v1/people/${id}`);
   }
 
   // -- writes -------------------------------------------------------------
@@ -304,6 +510,11 @@ export class ApiClient {
     return this.#request("PATCH", `/v1/tasks/${id}`, { ownerId });
   }
 
+  /** Everyone on a task, in order; the first owns it. */
+  setTaskPeople(id: string, people: string[]): Promise<{ owner: PersonRef | null; people: PersonRef[] }> {
+    return this.#request("PUT", `/v1/tasks/${id}/people`, { people });
+  }
+
   createProject(input: {
     name: string;
     slug: string;
@@ -318,6 +529,11 @@ export class ApiClient {
       agentModels: Project["agentModels"]; deliveryPolicy: DeliveryPolicy }>,
   ): Promise<ProjectDetail> {
     return this.#request("PATCH", `/v1/projects/${id}`, changes);
+  }
+
+  /** A project's face: an image, or null for its initials again. */
+  setProjectImage(id: string, image: Blob | null): Promise<ProjectDetail> {
+    return image ? this.#upload("PUT", `/v1/projects/${id}/image`, image) : this.#request("DELETE", `/v1/projects/${id}/image`);
   }
 
   addRepository(projectId: string, repo: { name: string; url: string; defaultBranch?: string;
@@ -337,8 +553,44 @@ export class ApiClient {
     return this.#request("POST", `/v1/projects/${projectId}/epics`, epic);
   }
 
-  updateEpic(id: string, changes: Partial<{ title: string; description: string; position: number }>): Promise<Epic> {
+  updateEpic(id: string, changes: Partial<{ title: string; description: string; position: number; state: EpicState | null }>): Promise<Epic> {
     return this.#request("PATCH", `/v1/epics/${id}`, changes);
+  }
+
+  // -- settings: the organization's defaults, a project's overrides ----------
+
+  organizationSettings(): Promise<SettingsResponse> {
+    return this.#request("GET", "/v1/settings/organization");
+  }
+
+  updateOrganizationSettings(patch: SettingsPatch): Promise<SettingsResponse> {
+    return this.#request("PATCH", "/v1/settings/organization", patch);
+  }
+
+  projectSettings(projectId: string): Promise<SettingsResponse> {
+    return this.#request("GET", `/v1/projects/${projectId}/settings`);
+  }
+
+  updateProjectSettings(projectId: string, patch: SettingsPatch): Promise<SettingsResponse> {
+    return this.#request("PATCH", `/v1/projects/${projectId}/settings`, patch);
+  }
+
+  /** Save a role's prompt: the organization's, or (with a project) the project's and how it goes with the organization's. */
+  savePrompt(role: PromptRole, prompt: { projectId?: string; mode?: ProjectPromptMode; body?: string; note?: string }): Promise<SettingsResponse> {
+    return this.#request("POST", `/v1/prompts/${role}`, prompt);
+  }
+
+  promptHistory(role: PromptRole, projectId?: string): Promise<PromptHistory> {
+    return this.#request("GET", `/v1/prompts/${role}/history${qs(projectId ? { projectId } : {})}`);
+  }
+
+  restorePrompt(versionId: string): Promise<SettingsResponse> {
+    return this.#request("POST", `/v1/prompts/versions/${versionId}/restore`);
+  }
+
+  /** A project's page: its epics by state, with lanes, pull requests, people and cost. */
+  projectOverview(projectId: string): Promise<ProjectOverview> {
+    return this.#request("GET", `/v1/projects/${projectId}/overview`);
   }
 
   deleteEpic(id: string): Promise<void> {
@@ -399,9 +651,13 @@ export class ApiClient {
     return this.#request("POST", `/v1/questions/${questionId}/answer`, { text });
   }
 
-  /** Redirect a running agent. Produces a durable, auditable directive. */
-  steer(runId: string, text: string, scope: DirectiveScope = "run"): Promise<Directive> {
-    return this.#request("POST", `/v1/runs/${runId}/steer`, { text, scope });
+  /**
+   * Redirect a running agent. Produces a durable, auditable directive. An
+   * agent mid-turn hears it when the turn ends, unless `interrupt` stops
+   * the turn so it hears it now.
+   */
+  steer(runId: string, text: string, options: { scope?: DirectiveScope; interrupt?: boolean } = {}): Promise<Directive> {
+    return this.#request("POST", `/v1/runs/${runId}/steer`, { text, scope: options.scope ?? "run", ...(options.interrupt ? { interrupt: true } : {}) });
   }
 
   /**
@@ -462,7 +718,9 @@ export interface TaskMetrics {
   activeMs: number;
   humanWaitMs: number;
   reviewMs: number;
+  /** The model's tokens; `cost` has the whole. */
   costUsd: number;
+  cost: CostSplit;
   tokens: Tokens;
   runs: Array<{
     id: string;
@@ -473,6 +731,7 @@ export interface TaskMetrics {
     activeMs: number;
     parkedMs: number;
     costUsd: number;
+    cost: CostSplit;
     tokens: Tokens;
   }>;
 }
@@ -486,5 +745,6 @@ export interface EpicMetrics {
   humanWaitMs: number;
   reviewMs: number;
   costUsd: number;
+  cost: CostSplit;
   tokens: Tokens;
 }

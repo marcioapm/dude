@@ -34,6 +34,14 @@ const (
 	EvPullRequestCommented = "pull_request.commented"
 	EvPullRequestMerged    = "pull_request.merged"
 	EvPullRequestClosed    = "pull_request.closed"
+	// Someone other than dude pushed to the pull request's branch: the
+	// next fix starts from their commit.
+	EvPullRequestPushed = "pull_request.pushed"
+	// A person acted on a pull request through dude: merge, update the
+	// branch, re-run failed checks, request a review.
+	EvPullRequestAction = "pull_request.action"
+	// Mergeability or distance from the base changed.
+	EvPullRequestMergeable = "pull_request.mergeable_changed"
 	EvGitCommitCreated     = "git.commit_created"
 )
 
@@ -598,7 +606,10 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 		body += fmt.Sprintf("\n\nOne of %d pull requests for this work, all from `%s`; the others are in %s.",
 			len(all), st.Branch, strings.Join(others, ", "))
 	}
-	ref, err := gh.OpenPullRequest(ctx, forge.OpenPullRequest{Slug: slug, Title: title, Body: body, Head: st.Branch, Base: repo.DefaultBranch})
+	draft := gh.Settings.OpenAs == "draft"
+	ref, err := gh.OpenPullRequest(ctx, forge.OpenPullRequest{Slug: slug, Title: title, Body: body, Head: st.Branch,
+		Base: repo.DefaultBranch, Draft: draft})
+	fresh := err == nil
 	if e, ok := err.(*forge.Error); ok && e.AlreadyExists() {
 		// A replay after a crash between opening the PR and recording it:
 		// adopt the one GitHub already has.
@@ -613,6 +624,15 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 	}
 	if err != nil {
 		return "", err
+	}
+	// Whom the organization asks for a review. CODEOWNERS GitHub asks by
+	// itself. Best effort, and asked once: a login GitHub will not ask (not
+	// a collaborator, the author), or GitHub failing now, must not keep the
+	// pull request from being recorded — a person can ask from the task.
+	var asked []string
+	if fresh && gh.Settings.RequestReviewFrom == "logins" && len(gh.Settings.ReviewLogins) > 0 &&
+		gh.RequestReviewers(ctx, slug, ref.Number, gh.Settings.ReviewLogins) == nil {
+		asked = gh.Settings.ReviewLogins
 	}
 	id := ids.New(ids.PullRequest)
 	err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
@@ -637,7 +657,8 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 			RunID: st.HeadRunID, ActorType: ledger.ActorSystem, ActorID: "workflow", Source: ledger.SourceOrchestrator,
 			CorrelationID: st.TaskID,
 			Payload: map[string]any{"number": ref.Number, "url": ref.URL, "repo": repo.Name,
-				"headBranch": st.Branch, "baseBranch": repo.DefaultBranch, "draft": false},
+				"headBranch": st.Branch, "baseBranch": repo.DefaultBranch, "draft": ref.State == forge.StateDraft,
+				"reviewersRequested": db.NonNil(asked)},
 		})
 		return err
 	})
@@ -665,19 +686,36 @@ func prBody(goal string, criteria []string, findings []struct{ Category, Severit
 	return joinNonEmpty(sections, "\n\n")
 }
 
-// PullRequestState is a task's pull request as last synced from the forge.
-type PullRequestState struct{ State, Checks, Review string }
+// PullRequestState is a task's pull request as last synced from the forge,
+// with what finds it on GitHub.
+type PullRequestState struct {
+	forge.Status
+	Repo, Slug string
+}
 
 // PullRequestStates reads the pull requests as last synced.
 func (s *Store) PullRequestStates(ctx context.Context, org string, prIDs []string) ([]PullRequestState, error) {
 	var out []PullRequestState
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT state::text, checks::text, review::text FROM pull_requests WHERE id = ANY($1)`, prIDs)
+		rows, err := tx.Query(ctx, `SELECT pr.state::text, pr.checks::text, pr.review::text, pr.mergeable_state,
+				pr.unresolved_threads, pr.number, COALESCE(pr.head_sha, ''), r.name, r.url
+			FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
+			WHERE pr.id = ANY($1) ORDER BY pr.created_at, pr.id`, prIDs)
 		if err != nil {
 			return err
 		}
-		out, err = pgx.CollectRows(rows, pgx.RowToStructByPos[PullRequestState])
-		return err
+		defer rows.Close()
+		for rows.Next() {
+			var p PullRequestState
+			var url string
+			if err := rows.Scan(&p.State, &p.Checks, &p.Review, &p.Mergeable, &p.UnresolvedThreads, &p.Number,
+				&p.HeadSHA, &p.Repo, &url); err != nil {
+				return err
+			}
+			p.Slug = forge.SlugFromURL(url)
+			out = append(out, p)
+		}
+		return rows.Err()
 	})
 	return out, err
 }
