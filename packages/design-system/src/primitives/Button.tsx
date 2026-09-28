@@ -1,4 +1,4 @@
-import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { forwardRef, type AnchorHTMLAttributes, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import { Icon, type IconName } from "../icons/index.tsx";
 import styles from "./Button.module.css";
@@ -104,5 +104,45 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
     >
       <Icon name={icon} size={16} />
     </Button>
+  );
+});
+
+export interface LinkButtonProps extends AnchorHTMLAttributes<HTMLAnchorElement> {
+  readonly href: string;
+  readonly variant?: ButtonVariant | undefined;
+  readonly size?: ButtonSize | undefined;
+  readonly leadingIcon?: IconName | undefined;
+  /** Opens elsewhere, in a new tab, and says so: the default. */
+  readonly external?: boolean | undefined;
+  readonly children?: ReactNode;
+}
+
+/**
+ * A real link drawn as a button, for a way out among actions — a pull
+ * request on GitHub, a run's terminal on lux. A link, not a button with a
+ * handler, so middle-click, copy address and a new tab work. External by
+ * default, with the glyph that says so.
+ */
+export const LinkButton = forwardRef<HTMLAnchorElement, LinkButtonProps>(function LinkButton(
+  { href, variant = "quiet", size = "md", leadingIcon, external = true, className, children, ...rest },
+  ref,
+) {
+  return (
+    <a
+      ref={ref}
+      href={href}
+      className={cx(styles["root"], VARIANT_CLASS[variant], variant === "primary" && styles["filled"], size !== "md" && styles[size], styles["link"], className)}
+      {...(external ? { target: "_blank", rel: "noreferrer" } : {})}
+      {...rest}
+    >
+      {leadingIcon ? <Icon name={leadingIcon} /> : null}
+      {children}
+      {external ? (
+        <>
+          <Icon name="external" size={size === "sm" ? 13 : 14} />
+          <span className="ds-sr-only"> (opens in a new tab)</span>
+        </>
+      ) : null}
+    </a>
   );
 });

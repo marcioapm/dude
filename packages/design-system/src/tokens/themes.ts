@@ -77,6 +77,8 @@ export interface ThemeColors {
   readonly secondaryHover: string;
   readonly secondaryActive: string;
   readonly scrim: string;
+  /** The bed under a previewed page: white in both modes, since the page is someone else's and starts white. */
+  readonly previewBed: string;
 
   // Shadows (as rgba strings usable in box-shadow)
   readonly shadowColor: string;
@@ -175,6 +177,7 @@ export const themeColors: Record<ThemeMode, ThemeColors> = {
     secondaryHover: oklchHex(darkL.overlay),
     secondaryActive: oklchHex(darkL.surface),
     scrim: alpha("#000000", 0.55),
+    previewBed: white,
 
     shadowColor: alpha("#000000", 0.5),
     shadowColorStrong: alpha("#000000", 0.7),
@@ -217,6 +220,7 @@ export const themeColors: Record<ThemeMode, ThemeColors> = {
     secondaryHover: neutral[12],
     secondaryActive: oklchHex(lightL.borderSubtle, NEUTRAL_CHROMA * 0.6),
     scrim: alpha(oklchHex(lightL.textPrimary), 0.4),
+    previewBed: white,
 
     shadowColor: alpha(oklchHex(lightL.textPrimary), 0.12),
     shadowColorStrong: alpha(oklchHex(lightL.textPrimary), 0.22),
