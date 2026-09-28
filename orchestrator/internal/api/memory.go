@@ -61,9 +61,11 @@ func (s *Server) memorySearch(w http.ResponseWriter, r *http.Request, org string
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	var out memory.Outcome
+	// Embedded before the transaction: a slow embedder must not hold a connection.
+	emb := memory.EmbedQuery(r.Context(), s.Embedder, q.Get("q"))
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		var err error
-		out, err = memory.Search(r.Context(), tx, s.Embedder, memory.Query{
+		out, err = memory.Ranked(r.Context(), tx, emb, memory.Query{
 			Text: q.Get("q"), Project: q.Get("project"), Types: list(q.Get("types")), About: list(q.Get("about")), Limit: limit,
 		})
 		if err != nil {

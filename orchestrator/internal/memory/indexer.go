@@ -57,13 +57,19 @@ func (x *Indexer) Sweep(ctx context.Context) (int, error) {
 	}
 	model := x.Embedder.Model()
 	var batch []pending
-	// A document embedded with another model counts as not embedded: a
-	// change of model is a reindex.
 	err := x.DB.InSystem(ctx, "indexer", func(tx pgx.Tx) error {
+		// A change of model is a reindex: what another model embedded is
+		// cleared once, here, so what is pending is only ever what has no
+		// embedding, and the partial index finds it without a scan.
+		if _, err := tx.Exec(ctx, `UPDATE search_documents
+			SET embedding = NULL, embedding_model = NULL, embedded_at = NULL, attempts = 0, last_error = NULL, next_attempt_at = now()
+			WHERE embedding IS NOT NULL AND embedding_model IS DISTINCT FROM $1`, model); err != nil {
+			return err
+		}
 		rows, err := tx.Query(ctx, `SELECT source_type, source_id, content_hash, title || E'\n\n' || body, attempts
 			FROM search_documents
-			WHERE (embedding IS NULL OR embedding_model IS DISTINCT FROM $1) AND next_attempt_at <= $2
-			ORDER BY next_attempt_at LIMIT $3`, model, now(), embeddings.MaxBatch)
+			WHERE embedding IS NULL AND next_attempt_at <= $1
+			ORDER BY next_attempt_at LIMIT $2`, now(), embeddings.MaxBatch)
 		if err != nil {
 			return err
 		}
@@ -81,10 +87,19 @@ func (x *Indexer) Sweep(ctx context.Context) (int, error) {
 		texts[i] = clip(p.text)
 	}
 	vecs, err := x.Embedder.Embed(ctx, texts, embeddings.Document)
-	if err != nil && len(batch) > 1 && !embeddings.Retryable(err) {
+	if err != nil && len(batch) > 1 && embeddings.OneBad(err) {
 		// One document the endpoint will never take must not hold back the
 		// other ninety-nine: embed them one by one to find it.
 		return x.oneByOne(ctx, batch, texts, model, now)
+	}
+	if err != nil && embeddings.Systemic(err) {
+		// A bad key or an endpoint that is not there fails every document
+		// alike: no document is to blame, so none is backed off. The loop
+		// tries again on its next tick, and a fixed key works at once.
+		if x.Log != nil {
+			x.Log.Warn("embeddings unavailable", "error", err)
+		}
+		return 0, nil
 	}
 	if err != nil {
 		return 0, x.failed(ctx, batch, err, now())
@@ -137,9 +152,9 @@ func (x *Indexer) failed(ctx context.Context, batch []pending, cause error, at t
 	return x.DB.InSystem(ctx, "indexer", func(tx pgx.Tx) error {
 		for _, p := range batch {
 			if _, err := tx.Exec(ctx, `UPDATE search_documents
-				SET attempts = attempts + 1, last_error = $4, next_attempt_at = $5
+				SET attempts = attempts + 1, last_error = $4, last_attempt_at = $6, next_attempt_at = $5
 				WHERE source_type = $1 AND source_id = $2 AND content_hash = $3`,
-				p.typ, p.id, p.hash, msg, at.Add(after(p.attempts+1))); err != nil {
+				p.typ, p.id, p.hash, msg, at.Add(after(p.attempts+1)), at); err != nil {
 				return err
 			}
 		}

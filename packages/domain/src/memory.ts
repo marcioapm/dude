@@ -108,6 +108,7 @@ export interface IndexStatus {
     readonly title: string;
     readonly error: string;
     readonly attempts: number;
+    /** When embedding it last failed (ISO 8601). */
     readonly lastTry: string;
   }[];
 }

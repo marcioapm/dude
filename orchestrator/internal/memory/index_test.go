@@ -177,3 +177,45 @@ func TestTheAppsWritesKeepTheIndex(t *testing.T) {
 		t.Error("the app's memory is not indexed")
 	}
 }
+
+// The index is kept without touching what it indexes: a task's updated_at
+// is its last activity, and indexing it (or renaming its key) is not one.
+func TestIndexingNeverTouchesTheTask(t *testing.T) {
+	_, owner := dbtest.Open(t)
+	_, project, _, task := seed(t, owner)
+	// An old last activity, set past the trigger that stamps every update.
+	exec(t, owner, `ALTER TABLE tasks DISABLE TRIGGER tasks_updated_at`)
+	exec(t, owner, `UPDATE tasks SET updated_at = '2020-01-01' WHERE id = $1`, task)
+	exec(t, owner, `ALTER TABLE tasks ENABLE TRIGGER tasks_updated_at`)
+	exec(t, owner, `UPDATE projects SET key_prefix = 'CP' WHERE id = $1`, project)
+	exec(t, owner, `SELECT search_document_put_task($1)`, task)
+	var year int
+	if err := owner.QueryRow(context.Background(), `SELECT extract(year FROM updated_at) FROM tasks WHERE id = $1`, task).Scan(&year); err != nil {
+		t.Fatal(err)
+	}
+	if year != 2020 {
+		t.Errorf("indexing moved the task's updated_at to %d", year)
+	}
+}
+
+// The index functions run as their caller, under its row-level security:
+// the app cannot write another organization's index through them.
+func TestTheIndexFunctionsCannotReachAnotherOrganization(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	a, _, _, _ := seed(t, owner)
+	b, _, _, taskB := seed(t, owner)
+	err := app.InOrg(context.Background(), a, func(tx pgx.Tx) error {
+		_, err := tx.Exec(context.Background(), `SELECT search_document_put('memory', 'mem_planted', $1, NULL, 'planted', 'x')`, b)
+		return err
+	})
+	if err == nil {
+		t.Error("organization A planted a document in B's index")
+	}
+	_ = app.InOrg(context.Background(), a, func(tx pgx.Tx) error {
+		_, err := tx.Exec(context.Background(), `SELECT search_document_drop('task', $1)`, taskB)
+		return err
+	})
+	if _, ok := document(t, owner, "task", taskB); !ok {
+		t.Error("organization A dropped B's document")
+	}
+}

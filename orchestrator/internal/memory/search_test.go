@@ -2,6 +2,7 @@ package memory_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -151,9 +152,16 @@ func TestWithoutAnEmbedderSearchIsByWordsAndSaysSo(t *testing.T) {
 	if out.Mode != "words" || len(out.Results) != 1 || out.Results[0].ID != task || out.Results[0].Embedded {
 		t.Errorf("outcome = %+v", out)
 	}
-	out = search(t, app, org, nil, memory.Query{Text: "dedupe -deliveries"})
-	if len(out.Results) != 0 {
-		t.Errorf("an excluded word still matched: %+v", out.Results)
+	// A -word excludes whatever has it, whichever of the other words matched.
+	for _, q := range []string{"dedupe -deliveries", "-deliveries dedupe", "webhook dedupe -restart"} {
+		for _, r := range search(t, app, org, nil, memory.Query{Text: q}).Results {
+			if r.ID == task {
+				t.Errorf("%q found the task it excludes", q)
+			}
+		}
+	}
+	if n := len(search(t, app, org, nil, memory.Query{Text: "-deliveries"}).Results); n != 0 {
+		t.Errorf("only a -word found %d documents", n)
 	}
 	out = search(t, app, org, nil, memory.Query{Text: "TEXT-1"})
 	if len(out.Results) == 0 || out.Results[0].ID != task {
@@ -190,4 +198,40 @@ func TestAboutNarrowsMemoriesToWhatTheyConcern(t *testing.T) {
 	if len(res) != 1 || res[0].ID != "mem_a" {
 		t.Errorf("about %s found %+v", task, res)
 	}
+}
+
+func TestALimitAboveTheMostIsTheMost(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	org, project, _, _ := seed(t, owner)
+	for i := 0; i < 60; i++ {
+		remember(t, owner, org, fmt.Sprintf("mem_%d", i), project, "Retries note", "retries")
+	}
+	if n := len(search(t, app, org, nil, memory.Query{Text: "retries", Limit: 100}).Results); n != 50 {
+		t.Errorf("a limit of 100 gave %d results, want the most, 50", n)
+	}
+}
+
+// A key that is wrong fails every document alike: none is backed off, so
+// the key fixed, everything embeds at once.
+func TestABadKeyBacksOffNothing(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	org, _, _, _ := seed(t, owner)
+	x := &memory.Indexer{DB: app, Embedder: unauthorized{&embeddings.Fake{Dims: 768}}}
+	if _, err := x.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var backedOff int
+	if err := owner.QueryRow(context.Background(), `SELECT count(*) FROM search_documents
+		WHERE organization_id = $1 AND (attempts > 0 OR next_attempt_at > now())`, org).Scan(&backedOff); err != nil {
+		t.Fatal(err)
+	}
+	if backedOff != 0 {
+		t.Errorf("a bad key backed off %d documents", backedOff)
+	}
+}
+
+type unauthorized struct{ *embeddings.Fake }
+
+func (unauthorized) Embed(context.Context, []string, embeddings.Purpose) ([][]float32, error) {
+	return nil, &embeddings.Error{Status: 401, Body: "invalid key"}
 }

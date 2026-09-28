@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -26,12 +27,12 @@ type Kind struct {
 }
 
 type Failure struct {
-	Type     string `json:"type"`
-	ID       string `json:"id"`
-	Title    string `json:"title"`
-	Error    string `json:"error"`
-	Attempts int    `json:"attempts"`
-	LastTry  string `json:"lastTry"`
+	Type     string    `json:"type"`
+	ID       string    `json:"id"`
+	Title    string    `json:"title"`
+	Error    string    `json:"error"`
+	Attempts int       `json:"attempts"`
+	LastTry  time.Time `json:"lastTry"`
 }
 
 // Described is an embedder that can say where it sends text, for the page.
@@ -71,7 +72,7 @@ func IndexStatus(ctx context.Context, tx pgx.Tx, e embeddings.Embedder, project 
 	if err := rows.Err(); err != nil {
 		return s, err
 	}
-	rows, err = tx.Query(ctx, `SELECT source_type, source_id, title, last_error, attempts, to_char(updated_at, 'YYYY-MM-DD"T"HH24:MI:SSOF')
+	rows, err = tx.Query(ctx, `SELECT source_type, source_id, title, last_error, attempts, coalesce(last_attempt_at, updated_at)
 		FROM search_documents
 		WHERE embedding IS NULL AND last_error IS NOT NULL AND ($1 = '' OR project_id = $1 OR project_id IS NULL)
 		ORDER BY next_attempt_at LIMIT 50`, project)
