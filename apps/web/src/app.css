@@ -75,6 +75,9 @@ body {
 .reconnectingIcon {
   color: var(--ds-tone-attention-fg);
 }
+.reconnectingText {
+  flex: 1;
+}
 
 
 /* Off-screen until focused: the first Tab stop, past the sidebar to the page. */
