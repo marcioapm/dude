@@ -120,7 +120,6 @@
 .plain {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  max-width: var(--ds-measure-message);
   line-height: var(--ds-leading-normal);
 }
 .caret {

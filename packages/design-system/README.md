@@ -174,7 +174,7 @@ gallery for every value.
 | Radius | `--ds-radius-{none,mark,control,float,full}`, `--ds-radius-face-{agent,project}` | Roles, not sizes: structure `none`, inline marks `mark` 3, controls `control` 6 (5 compact), floats `float` 10, people and dots `full`. Agent and project faces take a share of their size (28%, 22%). |
 | Size | `--ds-size-control-sm/md/lg`, `--ds-size-row-compact/default/comfortable`, `--ds-size-avatar-{xs,sm,md,lg,chat}`, `--ds-size-badge-{sm,md}`, `--ds-size-chip`, `--ds-size-icon-*` | Controls 28/32/36, rows 28/32/40. Avatars 16/20/24/32 and 40 for the transcript's own. Badges 16/18, chips 22, in both densities. |
 | Motion | `--ds-duration-fast/base/slow/deliberate`, `--ds-ease-*`, `--ds-motion-live`, `--ds-cadence-{spin,breathe,drift,sweep,blink}` | Reduced motion zeroes durations and sets `motion-live` to 0. Cadences are the periods of the live loops; every loop divides by `motion-live`. |
-| Measure | `--ds-measure-message`, `--ds-measure-document` | Chat turns 70ch (72ch compact); documents 700px in both. |
+| Measure | `--ds-measure-message`, `--ds-measure-document` | Prose outside the transcript (help text, settings) 70ch (72ch compact); documents 700px in both. Chat turns have none: they span the transcript's column. |
 | Density | `data-density="compact"` | Overrides the tokens listed under Density below; everything else is shared. |
 | Layers | `--ds-z-base…tooltip` | |
 
@@ -626,7 +626,7 @@ shrinking something already small makes it cramped, not dense:
 | controls (`size-control-md` / `-lg`) | 32 / 36 | 30 / 34 | a couple of px |
 | body, prose (`text-md`, `text-prose`) | 15 / 16 | 14 / 15 | 1px |
 | control radius (`radius-control`) | 6 | 5 | 1px |
-| chat measure (`measure-message`) | 70ch | 72ch | `ch` follows the font, so two more characters a line |
+| prose measure (`measure-message`) | 70ch | 72ch | `ch` follows the font, so two more characters a line; not chat turns, which span their column |
 
 Everything else is shared: icons, `control-sm` and `row-compact` (28, the
 floor), `text-2xs`/`xs`/`sm`/`nav` (11/12/13/14) and `text-mono` (13), badge
