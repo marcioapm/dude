@@ -23,14 +23,17 @@ import {
   ToolCallCard,
   summarizeToolArgs,
 } from "@dude/design-system/components";
-import { Button, Callout, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
+import { Button, Callout, Dialog, Spinner, Tab, TabList, TabPanel, Tabs, Textarea } from "@dude/design-system/primitives";
 import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, runLabel } from "@dude/domain";
 import type { AgentRole, PersistedEvent } from "@dude/domain";
 import type { ApiClient, Person, RunDetail } from "../api/client.ts";
 import { ApiError, reportedCost } from "../api/client.ts";
-import { PAUSE_WORDS, apply, emptyProjection, snapshot, type Turn } from "../api/conversation.ts";
+import { PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, snapshot, type Turn } from "../api/conversation.ts";
 import type { ComposerSubmission } from "@dude/design-system/components";
-import { useEventStream } from "../hooks/useEventStream.ts";
+import { cameBack, useEventStream } from "../hooks/useEventStream.ts";
+import { Reconnecting } from "../Reconnecting.tsx";
+import { conflictNotice, type Notice } from "../conflict.ts";
+import { firstName, usePeople, type People } from "../people.tsx";
 import { NotFound } from "./NotFound.tsx";
 
 export interface RunScreenProps {
@@ -72,6 +75,11 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
   const [taskKey, setTaskKey] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  // Someone else acted first: said calmly, and gone once the Run catches up.
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const [confirmAbort, setConfirmAbort] = useState(false);
+  const [abortReason, setAbortReason] = useState("");
+  const people = usePeople();
 
   const { events, status: streamStatus } = useEventStream({ client, runId });
 
@@ -81,6 +89,14 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
     () => events.reduce((n, e) => (STATUS_EVENTS.has(e.eventType) ? n + 1 : n), 0),
     [events],
   );
+  // The Run is re-read when the stream comes back, too: its status may
+  // have moved while nothing could say so.
+  const [reconnects, setReconnects] = useState(0);
+  const lastStream = useRef(streamStatus);
+  useEffect(() => {
+    if (cameBack(lastStream.current, streamStatus)) setReconnects((n) => n + 1);
+    lastStream.current = streamStatus;
+  }, [streamStatus]);
 
   useEffect(() => {
     let cancelled = false;
@@ -97,7 +113,7 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
     return () => {
       cancelled = true;
     };
-  }, [client, runId, statusEventCount]);
+  }, [client, runId, statusEventCount, reconnects]);
 
   // Who drives the task is read once per task, not on every status change,
   // and apart from the Run: failing to learn it only leaves the asks
@@ -136,33 +152,56 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
   }, [events, runId, run?.status]);
   const isLive = run ? !TERMINAL_RUN_STATUSES.includes(run.status) : false;
 
-  /** Run an intervention, surfacing conflicts as readable text. */
+  /**
+   * Run an intervention. A conflict (409) means the Run moved on while
+   * you were deciding — usually because someone else acted: that is a
+   * calm notice naming them, not an error, and it clears when the Run's
+   * state catches up. Anything else is a problem, said plainly.
+   */
   const intervene = useCallback(
     async (action: () => Promise<unknown>, label: string) => {
       setBusy(true);
       setProblem(null);
+      setNotice(null);
       try {
         await action();
       } catch (err) {
-        // A 409 usually means the Run moved on while the operator was
-        // deciding — worth saying plainly rather than showing a stack.
-        setProblem(
-          err instanceof ApiError
-            ? `Could not ${label}: ${err.message}`
-            : `Could not ${label}.`,
-        );
+        if (err instanceof ApiError && err.status === 409) {
+          // The Run moved on: read where it is now, and who moved it —
+          // someone the page may not have met yet.
+          const [recent, fresh, known] = await Promise.all([
+            client.events({ runId, after: Math.max(0, (events.at(-1)?.cursor ?? 0) - 50) }).then((r) => r.events, () => events),
+            client.getRun(runId).then((r) => r, () => null),
+            people.refresh(),
+          ]);
+          if (fresh) setRun(fresh);
+          setNotice(conflictNotice(label, err.message, recent, known, fresh?.status ?? run?.status));
+        } else {
+          setProblem(err instanceof ApiError ? `Could not ${label}: ${err.message}` : `Could not ${label}.`);
+        }
       } finally {
         setBusy(false);
       }
     },
-    [],
+    [client, runId, events, people, run?.status],
   );
+
+  // A notice says the Run moved on; once it has (its status changed), it has said its piece.
+  const noticeFor = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!notice) return;
+    if (noticeFor.current === undefined) noticeFor.current = run?.status;
+    else if (noticeFor.current !== run?.status) {
+      setNotice(null);
+      noticeFor.current = undefined;
+    }
+  }, [notice, run?.status]);
 
   const send = useCallback(
     (submission: ComposerSubmission) =>
       void (submission.mode === "answer"
         ? intervene(() => client.answer(submission.questionId, submission.text), "answer the agent")
-        : intervene(() => client.steer(runId, submission.text), "steer this run")),
+        : intervene(() => client.steer(runId, submission.text, { interrupt: submission.mode === "steer" && submission.interrupt }), "steer this run")),
     [client, runId, intervene],
   );
 
@@ -180,6 +219,8 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
 
   // Someone else's to answer: their name. A task nobody owns is anyone's.
   const waitingOn = driver?.owner && driver.owner.id !== driver.you ? driver.owner.name : undefined;
+  const owner = driver?.owner ? (people.byId.get(driver.owner.id) ?? driver.owner) : undefined;
+  const youName = people.you ? people.names.get(people.you) : undefined;
 
   // The agent this Run is. A phase Run carries its role; one created
   // directly through the API runs as an orchestrator.
@@ -190,6 +231,14 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
     id: run.id,
     role,
     status: run.status,
+    ...(owner ? { owner } : {}),
+    subtitle: (
+      <>
+        {owner ? <span>for {firstName(owner.name)}</span> : <span>{runLabel(run)}</span>}
+        {run.model ? <code>{run.model}</code> : null}
+        {taskKey ? <code title={`task ${run.taskId} · run ${run.id}`}>{taskKey}</code> : null}
+      </>
+    ),
     // The id is already shown beside the title; repeating it as the title
     // leaves the header saying nothing about the work. The attempt only
     // once there is more than one to tell apart.
@@ -207,7 +256,8 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
 
   return (
     <div className="runScreen">
-      {breadcrumb}
+      {streamStatus === "reconnecting" ? <Reconnecting /> : null}
+      {breadcrumb ? <div className="runCrumbs">{breadcrumb}</div> : null}
       <Tabs defaultValue="chat" fill>
         <TabList>
           <Tab value="chat">Conversation</Tab>
@@ -243,20 +293,15 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
                       Pause
                     </Button>
                   )}
-                  <Button
-                    size="sm"
-                    variant="danger"
-                    disabled={busy}
-                    onClick={() => void intervene(() => client.abort(runId), "abort this run")}
-                  >
-                    Abort
+                  <Button size="sm" variant="danger" disabled={busy} onClick={() => setConfirmAbort(true)} data-testid="abort">
+                    Abort…
                   </Button>
                 </>
               ) : null
             }
             pinned={
               conversation.plan.length > 0 ? (
-                <AgentPlan items={conversation.plan} defaultCollapsed sticky />
+                <AgentPlan items={conversation.plan} defaultCollapsed data-testid="plan" />
               ) : null
             }
             footer={!isLive ? <RunEnded run={run} onOpenTask={() => onOpenTask(run.taskId)} /> : (
@@ -286,11 +331,13 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
                     : "This run is paused. Resume it to steer."
                 }
                 onSubmit={send}
+                sentAs={youName ? firstName(youName) : undefined}
+                canInterrupt
               />
             )}
             emptyMessage="Waiting for the agent to start."
           >
-            {conversation.turns.map((turn) => renderTurn(turn, role, conversation.contextWindow, !isLive, decide, waitingOn))}
+            {conversation.turns.map((turn) => renderTurn(turn, role, conversation.contextWindow, !isLive, people, decide, waitingOn))}
             {conversation.activity ? (
               <ChatMessage
                 role={role}
@@ -312,7 +359,7 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
                 key={event.eventId}
                 occurredAt={event.occurredAt}
                 eventType={event.eventType}
-                actor={{ type: event.actor.type, id: event.actor.id }}
+                actor={{ type: event.actor.type, id: event.actor.id, ...namedActor(event, people) }}
                 summary={summarize(event)}
                 // An element, not a string: EventRow only renders the detail
                 // when the row is open, so the JSON is built for the handful
@@ -324,13 +371,66 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
         </TabPanel>
       </Tabs>
 
+      {notice ? (
+        <Callout tone="neutral" data-testid="conflict-notice">
+          <span className="noticeLine">
+            {notice.text}
+            <Button size="sm" variant="quiet" onClick={() => setNotice(null)}>
+              Dismiss
+            </Button>
+          </span>
+        </Callout>
+      ) : null}
       {problem ? <Callout tone="danger">{problem}</Callout> : null}
-      {streamStatus === "reconnecting" ? <Callout tone="attention">Reconnecting…</Callout> : null}
+      {confirmAbort ? (
+        <Dialog
+          open
+          onOpenChange={(o) => !o && setConfirmAbort(false)}
+          tone="danger"
+          size="sm"
+          title={`Abort ${runLabel(run).toLowerCase()}?`}
+          description={
+            owner && owner.id !== people.you
+              ? `It stops for good and cannot be resumed. It works for ${firstName(owner.name)}, who will see you stopped it.`
+              : "It stops for good and cannot be resumed. Its work so far stays on its branch."
+          }
+          footer={
+            <>
+              {run.status !== "paused" ? (
+                <Button variant="secondary" data-testid="abort-pause-instead" onClick={() => {
+                  setConfirmAbort(false);
+                  void intervene(() => client.pause(runId), "pause this run");
+                }}>
+                  Pause instead
+                </Button>
+              ) : null}
+              <Button variant="quiet" onClick={() => setConfirmAbort(false)}>
+                Cancel
+              </Button>
+              <Button variant="danger" solid data-testid="abort-confirm" onClick={() => {
+                setConfirmAbort(false);
+                void intervene(() => client.abort(runId, abortReason.trim() || undefined), "abort this run");
+              }}>
+                Abort run
+              </Button>
+            </>
+          }
+        >
+          <Textarea label="Why (optional)" hint="Shown in the conversation beside your name." rows={2} value={abortReason}
+            onChange={(e) => setAbortReason(e.target.value)} />
+        </Dialog>
+      ) : null}
     </div>
   );
 }
 
-function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: boolean,
+/** The actor's name for the event ledger, when it is a person the organisation knows. */
+function namedActor(event: PersistedEvent, people: People): { name?: string } {
+  const name = actorName(humanActor(event), people.names);
+  return name ? { name } : {};
+}
+
+function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: boolean, people: People,
   decide?: (requestId: string, approve: boolean) => void, waitingOn?: string) {
   switch (turn.kind) {
     case "repositoryRequest": {
@@ -362,7 +462,7 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
       return (
         <Callout key={turn.id} data-testid="chat-ended" data-outcome={turn.outcome}
           tone={turn.outcome === "failed" ? "danger" : "neutral"}>
-          {turn.text}
+          {turn.outcome === "aborted" ? abortedBy(turn, people) : turn.text}
         </Callout>
       );
     case "progress":
@@ -417,17 +517,24 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
           costUsd={null}
         />
       );
-    case "human":
+    case "human": {
+      // Signed: the person's face and name when known; "Someone" only when the ledger kept no one.
+      const name = actorName(turn.by, people.names);
+      const person = name && turn.by ? { ...(people.byId.get(turn.by.id) ?? {}), id: turn.by.id, name } : undefined;
       return (
         <ChatMessage
           key={turn.id}
+          data-testid="human-turn"
           role="human"
           intent={turn.intent}
           content={turn.text}
           startedAt={turn.at}
           deliveredAt={turn.deliveredAt}
+          person={person}
+          name={name ?? "Someone"}
         />
       );
+    }
     case "tool":
       return (
         <ToolCallCard
@@ -443,6 +550,13 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
         />
       );
   }
+}
+
+/** "Aborted by Ana: wrong task" — who stopped it, and why, when known. */
+function abortedBy(turn: Extract<Turn, { kind: "ended" }>, people: People): string {
+  const name = actorName(turn.by, people.names);
+  const who = name ? `Aborted by ${name}` : "Aborted";
+  return turn.why ? `${who}: ${turn.why}` : `${who}.`;
 }
 
 const ENDED_WORDS: Record<"completed" | "failed" | "aborted", string> = {

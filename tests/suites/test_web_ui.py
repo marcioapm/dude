@@ -70,20 +70,32 @@ def test_delivering_from_the_ui_reaches_a_pull_request_and_back(
     # The reviewer raises something, the loop answers it, and a clean
     # re-review lets it through — all visible without a reload.
     expect(pipeline).to_contain_text("blocking", timeout=120_000)
-    expect(page.get_by_test_id("findings")).to_be_visible()
     expect(pipeline).to_contain_text("no findings", timeout=120_000)
+    # The fix says what woke it.
+    expect(page.get_by_test_id("phase").filter(has_text="Fix")).to_contain_text("for the review")
+    tabs = page.get_by_role("tablist", name="Task")
+    tabs.get_by_role("tab", name="Findings").click()
+    expect(page.get_by_test_id("findings")).to_be_visible()
     expect(page.get_by_test_id("finding").first).to_have_attribute("data-status", "resolved")
 
     # What the implementer published is there to read, rendered.
+    tabs.get_by_role("tab", name="Files").click()
     artifact = page.get_by_test_id("artifact").filter(has_text="NOTES.md")
     expect(artifact).to_be_visible(timeout=60_000)
     artifact.get_by_role("button", expanded=False).click()
     expect(artifact.get_by_role("heading", name="What changed")).to_be_visible()
 
-    # The PR appears as the last step, linked to the forge.
+    # The PR appears as the last step, linked to the forge, and its one
+    # state is a chip in the header that links there too.
+    tabs.get_by_role("tab", name="Overview").click()
     expect(page.get_by_test_id("pr-step")).to_be_visible(timeout=180_000)
-    pr_number = int(page.get_by_test_id("pr-link").get_attribute("href").rsplit("/", 1)[-1])
+    chip = page.get_by_test_id("pr-link")
+    expect(chip).to_have_attribute("data-pr-state", "awaiting")
+    expect(chip).to_contain_text("Awaiting approval")
+    pr_number = int(chip.get_attribute("href").rsplit("/", 1)[-1])
     assert pr_number in fake_github.pulls
+    # The same state is on its row in the tree.
+    expect(page.get_by_role("tree").locator('[data-pr-state="awaiting"]')).to_have_count(1)
 
     # Every agent in the pipeline opens its own conversation.
     page.get_by_test_id("phase").nth(1).click()
@@ -524,7 +536,9 @@ def test_everything_waiting_on_you_is_in_one_place(
     expect(rows.nth(0)).to_contain_text("Should FACTORY.md be in English?")
     expect(rows.nth(1)).to_contain_text("Needs the client")
     expect(rows.nth(1)).to_contain_text("Read web?")
-    rows.nth(1).get_by_role("button").click()
+    # Both are yours (you own them): highlighted, each with its one action.
+    expect(inbox.locator("[data-mine]")).to_have_count(2)
+    rows.nth(1).get_by_role("button", name="Answer").click()
     expect(page.get_by_test_id("repository-request")).to_contain_text("Read web")
     assert console_errors == []
 
@@ -726,3 +740,112 @@ def test_a_link_to_something_gone_says_so(
     expect(page.get_by_test_id("new-task")).to_be_visible()
     # The server's 404s for the task and the run are the only errors.
     assert all("404" in e for e in console_errors), console_errors
+
+
+def _hanging_run(client: ApiClient, forge_project: dict, title: str) -> dict:
+    """A task whose implementer is working and never finishes its turn."""
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
+        "implementer": {"model": "fake/hang"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
+    item = client.create_task(forge_project["id"], title)
+    assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
+    return wait_until(lambda: next((r for r in client.task_runs(item["id"]) if r["phase"] == "implement" and r["status"] == "running"), None),
+                      timeout=60, message="the implementer never started")
+
+
+def test_a_steer_is_sent_with_enter_and_signed_with_a_name(
+    page: Page, web_url: str, env, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    """Enter sends a steer (Shift+Enter is a new line); the chat and the
+    event log say who sent it, by name, not "Human"."""
+    run = _hanging_run(client, forge_project, "Steer me")
+    _sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/session/{run['id']}")
+    field = page.get_by_placeholder("Steer the agent…")
+    field.fill("first line")
+    field.press("Shift+Enter")
+    field.type("second line")
+    expect(field).to_have_value("first line\nsecond line")
+    expect(page.get_by_text("Sent as e2e")).to_be_visible()
+    field.press("Enter")
+    turn = page.get_by_test_id("human-turn").last
+    expect(turn).to_contain_text("e2e user")
+    expect(turn).to_contain_text("second line")
+    expect(page.get_by_test_id("human-turn")).not_to_contain_text("Human")
+    steered = wait_until(lambda: [e for e in client.events(runId=run["id"]) if e["eventType"] == "run.steered"],
+                         timeout=15, message="no steer in the ledger")
+    assert steered[0]["payload"]["text"] == "first line\nsecond line" and steered[0]["payload"]["interrupt"] is False
+
+    # Someone else's steer is signed with their name.
+    bo = ApiClient(env.control_plane_url, create_api_key(env.owner_dsn, org["id"], name="Bo"))
+    assert bo.post(f"/v1/runs/{run['id']}/steer", {"text": "from Bo"}).status_code == 201
+    page.reload()
+    expect(page.get_by_test_id("human-turn").filter(has_text="from Bo")).to_contain_text("Bo")
+    assert console_errors == []
+
+
+def test_abort_asks_first_and_offers_to_pause_instead(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    """Abort is a request, confirmed in a dialog whose one solid button
+    aborts; "Pause instead" pauses. The chat then says who stopped it."""
+    run = _hanging_run(client, forge_project, "Stop me")
+    _sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/session/{run['id']}")
+
+    page.get_by_test_id("abort").click()
+    dialog = page.get_by_role("dialog")
+    expect(dialog).to_contain_text("cannot be resumed")
+    dialog.get_by_test_id("abort-pause-instead").click()
+    expect(dialog).to_have_count(0)
+    wait_until(lambda: client.get_run(run["id"])["status"] == "paused", timeout=30, message="Pause instead did not pause")
+    assert client.get_run(run["id"])["status"] != "aborted"
+
+    page.get_by_test_id("abort").click()
+    page.get_by_role("dialog").get_by_label("Why (optional)").fill("wrong task")
+    page.get_by_role("dialog").get_by_test_id("abort-confirm").click()
+    wait_until(lambda: client.get_run(run["id"])["status"] == "aborted", timeout=30, message="the confirmed abort did not abort")
+    expect(page.get_by_test_id("chat-ended")).to_contain_text("Aborted by e2e user: wrong task")
+    assert console_errors == []
+
+
+def test_acting_second_is_a_calm_notice_naming_who_acted_first(
+    page: Page, web_url: str, env, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    """Two people on one agent: Bo pauses it while you look; your Pause is
+    refused (409), and the page says Bo did it — not an error — until the
+    page catches up."""
+    run = _hanging_run(client, forge_project, "Two hands")
+    _sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/session/{run['id']}")
+    expect(page.get_by_role("button", name="Pause")).to_be_visible()
+    # Bo acts first; the page is told nothing yet (the stream is closed).
+    page.context.set_offline(True)
+    bo = ApiClient(env.control_plane_url, create_api_key(env.owner_dsn, org["id"], name="Bo"))
+    assert bo.post(f"/v1/runs/{run['id']}/pause").status_code in (200, 201, 202)
+    wait_until(lambda: client.get_run(run["id"])["status"] == "paused", timeout=30, message="Bo's pause did not land")
+    page.context.set_offline(False)
+    page.get_by_role("button", name="Pause").click()
+    page.wait_for_timeout(2000)
+    print("DBG", client.get_run(run["id"])["status"], [(e["eventType"], e["actor"]) for e in client.events(runId=run["id"]) if e["actor"]["type"] == "human" or e["eventType"].startswith("run.")])
+    notice = page.get_by_test_id("conflict-notice")
+    expect(notice).to_contain_text("Bo paused it first")
+    expect(page.get_by_role("alert")).to_have_count(0)
+    # The refusal is the only error the page saw.
+    assert all("409" in e or "ERR_INTERNET_DISCONNECTED" in e for e in console_errors), console_errors
+
+
+def test_a_dropped_stream_says_so_and_catches_up(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    """The live stream drops: the page says it is reconnecting, and when it
+    is back it re-reads what it missed."""
+    client.create_task(forge_project["id"], "Before")
+    _sign_in(page, web_url, org["api_key"])
+    expect(page.get_by_text("Before").first).to_be_visible()
+    page.context.set_offline(True)
+    expect(page.get_by_test_id("reconnecting")).to_be_visible(timeout=20_000)
+    client.create_task(forge_project["id"], "While away")
+    page.context.set_offline(False)
+    expect(page.get_by_test_id("reconnecting")).to_have_count(0, timeout=30_000)
+    expect(page.get_by_text("While away").first).to_be_visible(timeout=15_000)
+    assert all("ERR_INTERNET_DISCONNECTED" in e for e in console_errors), console_errors
