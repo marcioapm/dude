@@ -1,5 +1,6 @@
 import type { HTMLAttributes, ReactNode } from "react";
 import { cx } from "../util/cx.ts";
+import { shortId } from "../util/format.ts";
 import { bareUrl } from "../util/servers.ts";
 import { Icon } from "../icons/index.tsx";
 import { Button, IconButton, LinkButton } from "../primitives/Button.tsx";
@@ -103,7 +104,8 @@ export function ServerRow({
           ) : null}
           {running ? (
             <>
-              {live && onRestart ? <IconButton size="sm" icon="retry" label={`Restart ${name}`} disabled={busy} onClick={onRestart} /> : null}
+              {/* Restart is the way back for a server that went unreachable; Start would be lux's no-op. */}
+              {(live || state === "unreachable") && onRestart ? <IconButton size="sm" icon="retry" label={`Restart ${name}`} disabled={busy} onClick={onRestart} /> : null}
               {onStop ? <Button size="sm" variant="quiet" leadingIcon="stop" disabled={busy} onClick={onStop} data-testid="server-stop">Stop</Button> : null}
             </>
           ) : state === "waiting" ? (
@@ -250,5 +252,6 @@ export function ServersDrawer({ count, actions, onClose, className, children, ..
 
 /** The first characters of an id with an ellipsis, the whole in its title. */
 export function ShortId({ id, length = 12 }: { readonly id: string; readonly length?: number | undefined }) {
-  return <code title={id}>{id.length > length ? `${id.slice(0, length)}…` : id}</code>;
+  const short = shortId(id, length);
+  return <code title={id}>{short === id ? id : `${short}…`}</code>;
 }

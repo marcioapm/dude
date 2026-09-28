@@ -43,10 +43,12 @@ export function useServers(client: ApiClient, scope: ServersScope, version = 0):
   const key = scope.taskId ? `task:${scope.taskId}` : `run:${scope.runId}`;
   // Only the latest read may land: an action's re-read and an event's can
   // overlap. And one read at a time: a burst of events (a replayed history)
-  // asks once more when the read in flight lands, not once per event.
+  // asks once more when the read in flight lands, not once per event — and
+  // that once more is the newest `reload`, in case the scope moved meanwhile.
   const latest = useRef(0);
   const inFlight = useRef(false);
   const again = useRef(false);
+  const newest = useRef<() => Promise<void>>(async () => undefined);
 
   const reload = useCallback(async () => {
     if (inFlight.current) {
@@ -66,28 +68,29 @@ export function useServers(client: ApiClient, scope: ServersScope, version = 0):
       inFlight.current = false;
       if (again.current) {
         again.current = false;
-        void reload();
+        void newest.current();
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` stands for the scope
   }, [client, key]);
+  newest.current = reload;
 
   useEffect(() => {
     setData(null);
+    // A read in flight is the old scope's: it may finish, but not land.
+    latest.current++;
     void reload();
   }, [reload]);
 
   // The caller's stream said the servers changed: read them again. Only on
   // the version moving — the scope's own effect above reads on a new scope.
-  const latestReload = useRef(reload);
-  latestReload.current = reload;
   const first = useRef(true);
   useEffect(() => {
     if (first.current) {
       first.current = false;
       return;
     }
-    void latestReload.current();
+    void newest.current();
   }, [version]);
 
   const act = useCallback(

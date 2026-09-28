@@ -97,7 +97,11 @@ export interface Server {
   error?: string | null | undefined;
   /** When the state last changed. */
   since: string;
-  /** When it last became ready; null when it never has. */
+  /**
+   * When it became ready. lux keeps it only while the server is ready
+   * (null otherwise); a backend that leaves the last value on a stopped
+   * server lets the UI say how long it had been up.
+   */
   readySince: string | null;
   /** Why it is stopped. */
   stopReason: ServerStopReason | null;

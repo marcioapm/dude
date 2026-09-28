@@ -47,9 +47,11 @@ export interface ServersSummaryRowProps extends Omit<HTMLAttributes<HTMLLIElemen
   readonly detail?: ReactNode;
   readonly onPreview?: (() => void) | undefined;
   readonly onStart?: (() => void) | undefined;
+  /** For a server that went unreachable: Start would be lux's no-op. */
+  readonly onRestart?: (() => void) | undefined;
 }
 
-export function ServersSummaryRow({ name, state, stateLabel, url, detail, onPreview, onStart, className, ...rest }: ServersSummaryRowProps) {
+export function ServersSummaryRow({ name, state, stateLabel, url, detail, onPreview, onStart, onRestart, className, ...rest }: ServersSummaryRowProps) {
   const ready = state === "ready";
   return (
     <li className={cx(styles["row"], className)} data-server={name} data-state={state} {...rest}>
@@ -60,7 +62,9 @@ export function ServersSummaryRow({ name, state, stateLabel, url, detail, onPrev
       </span>
       {ready && onPreview ? (
         <IconButton size="sm" icon="eye" label={`Preview ${name}`} onClick={onPreview} />
-      ) : !ready && state !== "starting" && state !== "waiting" && onStart ? (
+      ) : state === "unreachable" && onRestart ? (
+        <IconButton size="sm" icon="retry" label={`Restart ${name}`} onClick={onRestart} />
+      ) : (state === "stopped" || state === "exited") && onStart ? (
         <IconButton size="sm" icon="play" label={`Start ${name}`} onClick={onStart} />
       ) : null}
     </li>

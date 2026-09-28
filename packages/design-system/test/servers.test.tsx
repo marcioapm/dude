@@ -87,16 +87,22 @@ describe("summaries", () => {
     expect(summarizeServers([list[0]!, list[2]!])).toEqual({ bad: null, ready: 1 });
   });
 
-  test("start all and stop all know when there is nothing to do", () => {
+  test("start all and stop all know when there is nothing to do; an unreachable server is restarted, not started", () => {
     expect(canStartAny(list)).toBe(true);
     expect(canStopAny(list)).toBe(true);
     expect(canStartAny([server({ state: "ready" })])).toBe(false);
+    expect(canStartAny([server({ state: "unreachable" })])).toBe(false);
+    expect(canStopAny([server({ state: "unreachable" })])).toBe(true);
     expect(canStopAny([server({ state: "stopped" })])).toBe(false);
   });
 
-  test("lux's log lines keep their stream and mark the runtime's own", () => {
-    const lines = serverLogLines([{ t: 1, stream: "stdout", text: "[lux] starting web" }, { t: 2, stream: "stderr", text: "boom" }]);
-    expect(lines.map((l) => [l.seq, l.channel, l.level])).toEqual([[0, "stdout", "system"], [1, "stderr", undefined]]);
+  test("lux's log lines keep their stream, mark the runtime's own, and keep their key across re-reads", () => {
+    const lines = serverLogLines([{ t: 1000, stream: "stdout", text: "[lux] starting web" }, { t: 1000, stream: "stderr", text: "boom" }, { t: 1001, stream: "stdout", text: "ok" }]);
+    expect(lines.map((l) => [l.seq, l.channel, l.level])).toEqual([[1_000_000, "stdout", "system"], [1_000_001, "stderr", undefined], [1_001_000, "stdout", undefined]]);
+    // The same tail, slid on by one line: the lines kept have the seq they had.
+    const later = serverLogLines([{ t: 1000, stream: "stderr", text: "boom" }, { t: 1001, stream: "stdout", text: "ok" }, { t: 1002, stream: "stdout", text: "more" }]);
+    expect(later[1]!.seq).toBe(1_001_000);
+    expect(later[2]!.seq).toBeGreaterThan(lines[2]!.seq);
   });
 });
 
@@ -118,9 +124,12 @@ describe("ServerRow", () => {
     expect(buttons(row(server({ state: "exited", exitCode: 1 })))).toEqual(["Logs", "Start"]);
   });
 
-  test("waiting: Start now, disabled; starting: Stop only", () => {
+  test("waiting: Start now, disabled; starting: Stop only; unreachable: Restart and Stop", () => {
     expect(row(server({ state: "stopped" }), { state: "waiting" })).toMatch(/<button[^>]*disabled[^>]*>(?:(?!<\/button>).)*Start now<\/button>/);
     expect(buttons(row(server({ state: "starting" })))).toEqual(["Logs", "Stop"]);
+    const unreachable = row(server({ state: "unreachable" }));
+    expect(buttons(unreachable)).toEqual(["Logs", "Stop"]);
+    expect(unreachable).toContain('aria-label="Restart web"');
   });
 
   test("the log folds under the row as server:<name>", () => {
