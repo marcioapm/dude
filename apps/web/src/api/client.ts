@@ -24,6 +24,7 @@ import type {
   PauseMode,
   Person,
   Project,
+  PersistedEvent,
   Run,
   Session,
   Task,
@@ -267,6 +268,16 @@ export class ApiClient {
     return this.#request("GET", `/v1/pull-requests${qs({ taskId })}`);
   }
 
+  /** The organisation's latest pull requests, for the chips on cards and tree rows. */
+  recentPullRequests(): Promise<{ pullRequests: PullRequest[] }> {
+    return this.#request("GET", "/v1/pull-requests");
+  }
+
+  /** A scope's events, oldest first, from a cursor: for who did what, and a task's activity. */
+  events(params: { runId?: string; taskId?: string; after?: number; limit?: number }): Promise<{ events: PersistedEvent[]; nextCursor: number }> {
+    return this.#request("GET", `/v1/events${qs(params)}`);
+  }
+
   listArtifacts(taskId: string): Promise<{ artifacts: Artifact[] }> {
     return this.#request("GET", `/v1/artifacts${qs({ taskId })}`);
   }
@@ -460,9 +471,13 @@ export class ApiClient {
     return this.#request("POST", `/v1/questions/${questionId}/answer`, { text });
   }
 
-  /** Redirect a running agent. Produces a durable, auditable directive. */
-  steer(runId: string, text: string, scope: DirectiveScope = "run"): Promise<Directive> {
-    return this.#request("POST", `/v1/runs/${runId}/steer`, { text, scope });
+  /**
+   * Redirect a running agent. Produces a durable, auditable directive. An
+   * agent mid-turn hears it when the turn ends, unless `interrupt` stops
+   * the turn so it hears it now.
+   */
+  steer(runId: string, text: string, options: { scope?: DirectiveScope; interrupt?: boolean } = {}): Promise<Directive> {
+    return this.#request("POST", `/v1/runs/${runId}/steer`, { text, scope: options.scope ?? "run", ...(options.interrupt ? { interrupt: true } : {}) });
   }
 
   /**

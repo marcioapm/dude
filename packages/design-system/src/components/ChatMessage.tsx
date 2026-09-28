@@ -5,6 +5,7 @@ import { toMs } from "../util/useNow.ts";
 import { type ActivityKind } from "../tokens/activity.ts";
 import { Icon } from "../icons/index.tsx";
 import { AgentAvatar, ROLE_LABEL, type AvatarKind } from "./AgentAvatar.tsx";
+import { PersonAvatar, type Person } from "./PersonAvatar.tsx";
 import { ActivityIndicator, type ActivityIndicatorProps } from "./ActivityIndicator.tsx";
 import { CostDisplay, Duration, TokenCount } from "./Numbers.tsx";
 import { Markdown } from "./Markdown.tsx";
@@ -73,6 +74,12 @@ export interface ChatMessageProps extends Omit<HTMLAttributes<HTMLElement>, "chi
   readonly continued?: boolean | undefined;
   /** Row actions (copy, quote…). Float over the row's top-right corner on hover or focus. */
   readonly actions?: ReactNode;
+  /**
+   * The person who wrote a human turn: their face in the gutter and their
+   * name in the header, instead of the anonymous human glyph. A steer or
+   * an answer is signed whenever the name is known.
+   */
+  readonly person?: Person | undefined;
 }
 
 const INTENT_LABEL: Record<HumanIntent, string> = {
@@ -128,6 +135,7 @@ export function ChatMessage({
   isNew,
   continued,
   actions,
+  person,
   className,
   ...rest
 }: ChatMessageProps) {
@@ -187,6 +195,9 @@ export function ChatMessage({
               {formatTimestamp(ts, "time-short")}
             </time>
           ) : null
+        ) : person ? (
+          // The chat avatar's size follows the density, as an agent's does.
+          <PersonAvatar person={person} size={40} style={{ ["--av-size" as string]: "var(--ds-size-avatar-chat)" }} />
         ) : (
           <AgentAvatar role={role} size="chat" live={live} />
         )}
@@ -194,7 +205,7 @@ export function ChatMessage({
       <div className={styles["main"]}>
         {continued ? null : (
           <header className={styles["header"]}>
-            <span className={styles["name"]}>{name ?? ROLE_LABEL[role]}</span>
+            <span className={styles["name"]}>{name ?? person?.name ?? ROLE_LABEL[role]}</span>
             {k === "agent" && name ? <span className={styles["roleName"]}>{ROLE_LABEL[role]}</span> : null}
             {k === "human" ? <span className={cx(styles["intent"], styles[`intentTag-${humanIntent}`])}><span className="ds-cap">{INTENT_LABEL[humanIntent]}</span></span> : null}
             {queued ? (

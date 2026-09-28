@@ -33,25 +33,52 @@ body {
   display: flex;
   flex-direction: column;
   gap: var(--ds-space-12);
-  padding: var(--ds-space-main-pad);
+  padding: var(--ds-space-main-pad) var(--ds-space-32);
   overflow: auto;
+  background: var(--ds-color-surface);
+}
+/* The board, a task and an agent's conversation lay themselves out to the edges. */
+.main.flush {
+  padding: 0;
+  gap: 0;
 }
 
-/* New project on the left, settings and signing out as icons on the right. */
-.sidebarFooter {
+/* A screen that lays itself out: a header line, then its body, scrolling. */
+.screen {
   display: flex;
+  flex-direction: column;
   flex: 1;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--ds-space-4);
+  min-height: 0;
   min-width: 0;
 }
+.screenBody {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--ds-space-4) var(--ds-space-24) var(--ds-space-32);
+}
+.screenBody.narrow {
+  max-width: 1000px;
+}
 
-.sidebarFooterEnd {
+/* The live connection is down: one calm line at the top, until it is back. */
+.reconnecting {
   display: flex;
   align-items: center;
-  gap: var(--ds-space-2);
+  gap: var(--ds-space-8);
+  flex-shrink: 0;
+  padding: var(--ds-space-6) var(--ds-space-24);
+  background: var(--ds-tone-attention-bg);
+  color: var(--ds-color-text-primary);
+  font-size: var(--ds-text-sm);
 }
+.reconnectingIcon {
+  color: var(--ds-tone-attention-fg);
+}
+.reconnectingText {
+  flex: 1;
+}
+
 
 /* Off-screen until focused: the first Tab stop, past the sidebar to the page. */
 .skipLink {
@@ -102,6 +129,23 @@ body {
   flex-direction: column;
   flex: 1;
   min-height: 0;
+}
+.runCrumbs {
+  padding: var(--ds-space-16) var(--ds-space-24) var(--ds-space-4);
+}
+.runScreen > [role="tabpanel"],
+.runScreen [role="tablist"] {
+  padding-left: var(--ds-space-24);
+  padding-right: var(--ds-space-24);
+}
+.runScreen [role="tabpanel"] {
+  padding: 0;
+}
+/* A notice with its dismiss, on one line. */
+.noticeLine {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: var(--ds-space-8);
 }
 
@@ -193,7 +237,7 @@ body {
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: var(--ds-space-8);
+  gap: var(--ds-space-12);
 }
 .dudeMark {
   display: inline-block;
@@ -241,4 +285,135 @@ body {
 }
 .settingsForm > section {
   align-self: stretch;
+}
+
+/* -- The task page -------------------------------------------------- */
+
+.taskScreen {
+  overflow: auto;
+}
+.taskTop {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+  min-height: 60px;
+  padding: var(--ds-space-8) var(--ds-space-24);
+}
+.taskCrumbs {
+  flex: 1;
+  min-width: 0;
+}
+.taskTopActions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
+.taskHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--ds-space-16) var(--ds-space-24);
+  padding: 0 var(--ds-space-24) var(--ds-space-16);
+}
+.taskHeadMain {
+  flex: 1 1 420px;
+  min-width: 0;
+}
+.taskTitle {
+  margin: 0;
+  font-size: var(--ds-text-2xl);
+  font-weight: var(--ds-weight-semibold);
+  line-height: var(--ds-leading-tight);
+  color: var(--ds-color-text-strong);
+  overflow-wrap: anywhere;
+}
+.taskMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8) var(--ds-space-12);
+  margin-top: var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+.taskPeople {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-16);
+}
+.taskNotices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  padding: 0 var(--ds-space-24) var(--ds-space-16);
+}
+.taskTabs > [role="tablist"] {
+  padding: 0 var(--ds-space-24);
+}
+.taskPane {
+  padding: var(--ds-space-16) var(--ds-space-24) var(--ds-space-32);
+}
+.taskOverview {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 440px);
+  gap: var(--ds-space-32);
+  align-items: start;
+}
+.taskOverview:not(:has(.taskAside)) {
+  grid-template-columns: minmax(0, 1fr);
+}
+@media (max-width: 1200px) {
+  .taskOverview {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.taskMain {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-32);
+  min-width: 0;
+}
+.taskBlock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+}
+.taskBlock > h2 {
+  margin: 0;
+}
+.taskGoal {
+  max-width: 720px;
+  color: var(--ds-color-text-secondary);
+}
+.taskGoal p {
+  margin: 0;
+}
+.taskGoal ul {
+  margin: var(--ds-space-8) 0 0;
+  padding-left: var(--ds-space-20);
+}
+.taskAside {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-12);
+}
+.planNow {
+  color: var(--ds-color-text-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.taskSessions {
+  max-width: 640px;
+}
+
+/* A line of figures under a header: an epic's progress, time and cost. */
+.figures {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8) var(--ds-space-24);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
 }

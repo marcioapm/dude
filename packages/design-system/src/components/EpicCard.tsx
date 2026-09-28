@@ -1,8 +1,8 @@
 import type { HTMLAttributes, ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import { Icon } from "../icons/index.tsx";
-import { CostDisplay } from "./Numbers.tsx";
-import { HumanAvatarStack, type Person } from "./HumanAvatar.tsx";
+import { Cost } from "./Cost.tsx";
+import { PersonAvatarStack, type Person } from "./PersonAvatar.tsx";
 import styles from "./EpicCard.module.css";
 
 /** A project's epics by how far along they are: done, in review, in progress, not started. */
@@ -108,10 +108,10 @@ export function EpicCard({ epic, onOpen, actions, className, ...rest }: EpicCard
         <span>
           {epic.tasks} {epic.tasks === 1 ? "task" : "tasks"}
         </span>
-        <CostDisplay usd={epic.costUsd} />
+        <Cost tokensUsd={epic.costUsd} size="sm" tone="secondary" />
         {epic.when ? <span>{epic.when}</span> : null}
         <span className={styles["spacer"]} />
-        {epic.people.length ? <HumanAvatarStack people={epic.people} size="sm" max={5} /> : null}
+        <PersonAvatarStack people={epic.people} size={24} max={5} />
       </div>
     </article>
   );
@@ -139,7 +139,7 @@ export function EpicRow({ epic, onOpen, detail, actions, className, ...rest }: E
         {detail ? <small className={styles["rowDetail"]}>{detail}</small> : null}
       </div>
       <span className={styles["rowWhen"]}>{epic.when}</span>
-      {epic.people.length ? <HumanAvatarStack people={epic.people} size="sm" max={4} /> : <span />}
+      {epic.people.length ? <PersonAvatarStack people={epic.people} size={20} max={4} /> : <span />}
       {actions}
     </div>
   );

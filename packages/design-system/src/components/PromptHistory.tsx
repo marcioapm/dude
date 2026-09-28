@@ -6,7 +6,7 @@ import { DiffFile } from "./DiffView.tsx";
 import { HumanAvatar } from "./HumanAvatar.tsx";
 import { AgentAvatar } from "./AgentAvatar.tsx";
 import { Markdown } from "./Markdown.tsx";
-import { SegmentedControl } from "./Settings.tsx";
+import { Segmented } from "./ScreenHeader.tsx";
 import styles from "./PromptHistory.module.css";
 
 export interface PromptHistoryVersion {
@@ -100,10 +100,11 @@ export function PromptHistory({ versions, onRestore, emptyText = "No versions ye
             {version.mode ? <> · {version.mode}</> : null}
           </span>
           <span className={styles["spacer"]} />
-          <SegmentedControl
-            aria-label="Show"
+          <Segmented
+            label="Show"
+            size="sm"
             value={view}
-            onValueChange={setView}
+            onChange={setView}
             options={[
               { value: "changes", label: "Changes" },
               { value: "whole", label: "Whole prompt" },

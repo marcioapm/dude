@@ -1,0 +1,70 @@
+/*
+ * A cost: the total, and under it a 2px hairline split into model tokens
+ * (implementer green) and machine time (orchestrator violet). The hairline
+ * is the split at a glance; the tooltip has the parts.
+ */
+
+.root {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: help;
+  vertical-align: middle;
+}
+.root:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-color-focus-ring);
+  border-radius: var(--ds-radius-mark);
+}
+.sm {
+  font-size: var(--ds-text-xs);
+}
+.md {
+  font-size: var(--ds-text-sm);
+}
+.lg {
+  font-size: var(--ds-text-xl);
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
+}
+.secondary {
+  color: var(--ds-color-text-secondary);
+}
+.muted {
+  color: var(--ds-color-text-muted);
+}
+.unknown {
+  color: var(--ds-color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.bar {
+  display: block;
+  width: 100%;
+  min-width: 24px;
+  height: 2px;
+  background: var(--ds-role-orchestrator-solid);
+  opacity: 0.55;
+  font-style: normal;
+}
+.bar b {
+  display: block;
+  height: 100%;
+  background: var(--ds-role-implementer-solid);
+}
+.root:hover .bar,
+.root:focus-visible .bar {
+  opacity: 1;
+}
+
+.tip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-variant-numeric: tabular-nums;
+}
+.tipTotal {
+  font-weight: var(--ds-weight-semibold);
+}
