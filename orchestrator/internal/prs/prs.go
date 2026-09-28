@@ -15,6 +15,7 @@ package prs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -56,22 +57,41 @@ type tracked struct {
 	HadCI                                                                                      bool
 	HeadSeenAt                                                                                 *time.Time
 	FeedbackCursor                                                                             *time.Time
+	UpdatedAt                                                                                  time.Time
 	ChecksJSON, ReviewsJSON                                                                    []byte
 }
 
+// errRaced: another sync of the same pull request recorded first.
+var errRaced = errors.New("pull request synced concurrently")
+
 // Sync reads one PR from GitHub, records what changed, and signals the
 // workflow if a change is actionable.
+//
+// Webhook deliveries, the reconciler and a person's action can each sync
+// the same pull request at once. Each compares GitHub with what it read
+// before asking; two at once would both record the same change. So the
+// write is conditional on nothing having been recorded since the read,
+// and the one that lost reads again.
 func (s *Syncer) Sync(ctx context.Context, org, prID string) error {
+	for range 3 {
+		if err := s.sync(ctx, org, prID); !errors.Is(err, errRaced) {
+			return err
+		}
+	}
+	return s.sync(ctx, org, prID)
+}
+
+func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	var pr tracked
 	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `SELECT pr.id, pr.project_id, pr.task_id, COALESCE(pr.run_id, ''), pr.state::text,
 			pr.checks::text, pr.review::text, COALESCE(pr.head_sha, ''), r.url, r.name, pr.mergeable_state,
 			pr.number, pr.behind_by, pr.unresolved_threads, pr.had_ci, pr.head_seen_at, pr.feedback_cursor,
-			pr.checks_json, pr.reviews_json
+			pr.checks_json, pr.reviews_json, pr.updated_at
 			FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id WHERE pr.id = $1`, prID).
 			Scan(&pr.ID, &pr.ProjectID, &pr.TaskID, &pr.RunID, &pr.State, &pr.Checks, &pr.Review, &pr.HeadSHA,
 				&pr.RepoURL, &pr.RepoName, &pr.Mergeable, &pr.Number, &pr.BehindBy, &pr.UnresolvedThreads,
-				&pr.HadCI, &pr.HeadSeenAt, &pr.FeedbackCursor, &pr.ChecksJSON, &pr.ReviewsJSON)
+				&pr.HadCI, &pr.HeadSeenAt, &pr.FeedbackCursor, &pr.ChecksJSON, &pr.ReviewsJSON, &pr.UpdatedAt)
 	}); err != nil {
 		return err
 	}
@@ -173,15 +193,19 @@ func (s *Syncer) Sync(ctx context.Context, org, prID string) error {
 				cursor = &t
 			}
 		}
-		if _, err := tx.Exec(ctx, `UPDATE pull_requests SET state = $2::pull_request_state, checks = $3::check_state,
+		tag, err := tx.Exec(ctx, `UPDATE pull_requests SET state = $2::pull_request_state, checks = $3::check_state,
 			review = $4::review_state, head_sha = $5, last_polled_at = now(), feedback_cursor = $6, updated_at = now(),
 			had_ci = $8, head_seen_at = $7, mergeable_state = $9, behind_by = $10, checks_json = $11::jsonb,
 			reviews_json = $12::jsonb, unresolved_threads = $13,
 			merged_at = CASE WHEN $2 = 'merged' THEN COALESCE(merged_at, now()) ELSE merged_at END,
 			closed_at = CASE WHEN $2 = 'closed' THEN COALESCE(closed_at, now()) ELSE closed_at END
-			WHERE id = $1`, pr.ID, status.State, status.Checks, status.Review, status.HeadSHA, cursor, headSeenAt, hadCI,
-			status.Mergeable, status.BehindBy, checksJSON, reviewsJSON, status.UnresolvedThreads); err != nil {
+			WHERE id = $1 AND updated_at = $14`, pr.ID, status.State, status.Checks, status.Review, status.HeadSHA, cursor, headSeenAt, hadCI,
+			status.Mergeable, status.BehindBy, checksJSON, reviewsJSON, status.UnresolvedThreads, pr.UpdatedAt)
+		if err != nil {
 			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return errRaced
 		}
 
 		// One event per thing that changed. "Nothing happened" is not an
@@ -244,7 +268,7 @@ func (s *Syncer) Sync(ctx context.Context, org, prID string) error {
 			}
 			recorded = append(recorded, id)
 		}
-		err := tx.QueryRow(ctx, `SELECT id FROM workflow_runs WHERE task_id = $1 AND status IN ('running', 'waiting')
+		err = tx.QueryRow(ctx, `SELECT id FROM workflow_runs WHERE task_id = $1 AND status IN ('running', 'waiting')
 			LIMIT 1`, pr.TaskID).Scan(&workflowRunID)
 		if db.IsNotFound(err) {
 			return nil
