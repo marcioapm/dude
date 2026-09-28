@@ -21,7 +21,8 @@ export interface MetricDelta {
 
 export interface MetricTileProps extends Omit<HTMLAttributes<HTMLDivElement>, "children"> {
   readonly label: ReactNode;
-  readonly value: number | string;
+  /** A number in `unit`, a string as it is, or a node that formats itself (a `Cost`). */
+  readonly value: number | string | ReactNode;
   readonly unit?: MetricUnit | undefined;
   /** Text shown after the number (only when unit is `none`/`count`). */
   readonly unitLabel?: string | undefined;
@@ -38,8 +39,8 @@ export interface MetricTileProps extends Omit<HTMLAttributes<HTMLDivElement>, "c
   readonly flat?: boolean | undefined;
 }
 
-function formatValue(value: number | string, unit: MetricUnit): { text: string; suffix?: string } {
-  if (typeof value === "string") return { text: value };
+function formatValue(value: number | string | ReactNode, unit: MetricUnit): { text: ReactNode; suffix?: string } {
+  if (typeof value !== "number") return { text: value };
   switch (unit) {
     case "usd":
       return { text: formatUsd(value, { compact: value >= 10_000 }) };
