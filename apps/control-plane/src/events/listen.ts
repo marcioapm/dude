@@ -22,12 +22,15 @@
  */
 
 import postgres from "postgres";
+import { EventTypes, type PersistedEvent, type PersonRef } from "@dude/domain";
 import { eventBus } from "./bus.ts";
 import * as ledger from "./ledger.ts";
 
 interface Notice {
   cursor: number;
   organizationId: string;
+  /** Presence (api/presence.ts): live only, not in the ledger. */
+  seen?: PersonRef & { where: string | null };
 }
 
 /** How long notifications are gathered before the events are read. */
@@ -85,6 +88,10 @@ export async function listenForEvents(databaseUrl: string): Promise<() => Promis
     } catch {
       return;
     }
+    if (notice.seen) {
+      eventBus.publish(seenEvent(notice.organizationId, notice.seen));
+      return;
+    }
     const pending = waiting.get(notice.organizationId);
     if (pending === undefined || notice.cursor < pending) waiting.set(notice.organizationId, notice.cursor);
     schedule(SETTLE_MS);
@@ -94,5 +101,30 @@ export async function listenForEvents(databaseUrl: string): Promise<() => Promis
     if (timer) clearTimeout(timer);
     await unlisten();
     await sql.end({ timeout: 2 });
+  };
+}
+
+/**
+ * Someone was seen, as an event on the live stream. Cursor 0: it is not
+ * in the ledger, so a stream sends it without an id and a reconnect does
+ * not ask for it again (routes/events.ts).
+ */
+export function seenEvent(organizationId: string, person: PersonRef & { where: string | null }): PersistedEvent {
+  return {
+    cursor: 0,
+    eventId: `seen_${person.id}_${Date.now()}`,
+    eventType: EventTypes.PersonSeen,
+    occurredAt: new Date().toISOString(),
+    organizationId,
+    projectId: null,
+    taskId: null,
+    runId: null,
+    sessionId: null,
+    workflowRunId: null,
+    actor: { type: "human", id: person.id, name: person.name, photoUrl: person.photoUrl, online: true },
+    source: "control-plane",
+    correlationId: null,
+    causationId: null,
+    payload: { person },
   };
 }

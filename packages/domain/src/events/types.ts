@@ -26,8 +26,23 @@ export const EventTypes = {
   TaskSteered: "task.steered",
   TaskAborted: "task.aborted",
   TaskStatusChanged: "task.status_changed",
-  /** Handed to someone else to drive. Payload: `{ from, to }`, api key ids. */
+  /** Handed to someone else to drive. Payload: `{ from, to }`, person ids. */
   TaskOwnerChanged: "task.owner_changed",
+  /** Who is on it changed. Payload: `{ people }`, person ids, the owner first. */
+  TaskPeopleChanged: "task.people_changed",
+
+  // People
+  /** An admin added someone. Payload: `{ personId, role }`. */
+  PersonInvited: "person.invited",
+  /** Payload: `{ personId, from, to }`. */
+  PersonRoleChanged: "person.role_changed",
+  /** Their keys were revoked with them. Payload: `{ personId }`. */
+  PersonRemoved: "person.removed",
+  /**
+   * Someone was seen (any request of theirs, at most once a minute). Live
+   * only, never in the ledger: no cursor. Payload: `{ person: PersonRef }`.
+   */
+  PersonSeen: "person.seen",
 
   // Workflow
   WorkflowTransitioned: "workflow.transitioned",
