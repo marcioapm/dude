@@ -37,13 +37,14 @@ import {
 } from "@dude/design-system/components";
 import { Icon } from "@dude/design-system";
 import { Button, Callout, EmptyState, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
-import { DEFAULT_RUN_ROLE, TERMINAL_RUN_STATUSES, runLabel, type PersistedEvent } from "@dude/domain";
+import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, runLabel, type PersistedEvent } from "@dude/domain";
 import type { ApiClient, Artifact, Finding, MergeMethod, PullRequest, Run, TaskDetail } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
-import { actorName, humanActor, project as foldConversation } from "../api/conversation.ts";
+import { actorName, humanActor, planFrom } from "../api/conversation.ts";
 import { shortError } from "../escalation.ts";
 import { useReloadOnEvents } from "../hooks/useEventStream.ts";
-import { firstName, usePeople, type People } from "../people.tsx";
+import { firstName } from "@dude/design-system";
+import { usePeople, type People } from "../people.tsx";
 import { FilesSection } from "./FilesSection.tsx";
 import { EscalationPanel } from "./EscalationPanel.tsx";
 import { TaskMetricsSection } from "./MetricsSection.tsx";
@@ -152,14 +153,18 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
   // What a pull request heard, for why a fix ran: a few of the ledger's many.
   const prEvents = useMemo(() => events.filter((e) => e.eventType.startsWith("pull_request.")), [events]);
 
-  // Each running phase's plan, from its events.
+  // Each running phase's plan: the last it wrote, as the transcript has it.
   const plans = useMemo<Plans>(() => {
     const out = new Map<string, { done: number; total: number; current: string | null }>();
     for (const run of phases) {
       if (run.status !== "running") continue;
-      const conv = foldConversation(events.filter((e) => e.runId === run.id));
-      if (conv.plan.length === 0) continue;
-      const p = planProgress(conv.plan);
+      let plan: ReturnType<typeof planFrom> = null;
+      for (let i = events.length - 1; i >= 0 && !plan; i--) {
+        const e = events[i]!;
+        if (e.runId === run.id && e.eventType === EventTypes.PlanUpdated) plan = planFrom(e.payload as Record<string, unknown>);
+      }
+      if (!plan || plan.length === 0) continue;
+      const p = planProgress(plan);
       out.set(run.id, { done: p.done, total: p.total, current: p.current?.content ?? null });
     }
     return out;
@@ -235,8 +240,8 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
         <TaskDialog client={client} projectId={item.projectId} onClose={() => setEditing(false)} existing={existingTask(item, started)} onSaved={() => void load()} />
       ) : null}
 
-      <Tabs defaultValue="overview" fill className="taskTabs">
-        <TabList aria-label="Task">
+      <Tabs defaultValue="overview" fill>
+        <TabList aria-label="Task" className="tabsInset">
           <Tab value="overview">Overview</Tab>
           <Tab value="findings" count={findings.length > 0 ? findings.length : undefined}>Findings</Tab>
           <Tab value="sessions" count={item.runs.length > 0 ? item.runs.length : undefined}>Sessions</Tab>

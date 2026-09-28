@@ -9,6 +9,7 @@
  */
 
 import type { Escalation } from "@dude/domain";
+import { plural } from "@dude/design-system";
 
 export interface EscalationWords {
   /** A few words, for a row: "Implementer failed". */
@@ -19,8 +20,6 @@ export interface EscalationWords {
   runId: string | null;
 }
 
-/** "1 fix", "3 fixes": a count and its noun. */
-export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 /** The first line of an error, short enough for a sentence. */
 export function shortError(error: string, max = 160): string {

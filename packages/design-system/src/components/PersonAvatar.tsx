@@ -13,8 +13,6 @@ export interface Person {
   readonly name: string;
   /** A photo. Without one, initials on the person's identity colour. */
   readonly photoUrl?: string | null | undefined;
-  /** @deprecated the old name for `photoUrl`. */
-  readonly imageUrl?: string | undefined;
   /** Acted in the last five minutes. Unknown (undefined) draws no ring. */
   readonly online?: boolean | undefined;
 }
@@ -80,7 +78,7 @@ export function personTitle(person: Person, agent?: AgentRole, live?: boolean): 
  * for" and "is anything happening" are one glance.
  */
 export function PersonAvatar({ person, size = 24, agent, live, title, ring = true, className, style, ...rest }: PersonAvatarProps) {
-  const photo = person.photoUrl ?? person.imageUrl ?? null;
+  const photo = person.photoUrl ?? null;
   return (
     <span
       className={cx(styles["root"], ring && person.online && styles["online"], className)}

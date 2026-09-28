@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 import { Cost, Duration, MetricGroup, MetricTile, TokenCount } from "@dude/design-system/components";
 import { Section, Table, TBody, Td, Th, THead, Tr } from "@dude/design-system/primitives";
 import { runLabel } from "@dude/domain";
+import { plural } from "@dude/design-system";
 import type { ApiClient, CostSplit, EpicMetrics, TaskMetrics } from "../api/client.ts";
 import { reportedCost } from "../api/client.ts";
 
@@ -16,8 +17,6 @@ import { reportedCost } from "../api/client.ts";
  * reloads on its own stream, and passes that on rather than each section
  * opening another.
  */
-
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 /**
  * A cost as a total of model tokens and machine time. Tokens of zero are

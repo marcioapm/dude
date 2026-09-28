@@ -106,8 +106,7 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
   [
     "Navigation",
     [
-      ["nav-human", "HumanAvatar"],
-      ["nav-triage", "Triage & TriageRollup"],
+      ["nav-triage", "Triage"],
       ["nav-tree", "NavTree"],
       ["nav-tree-menus", "NavTree row menus"],
       ["nav-sidebar", "Sidebar (realistic)"],

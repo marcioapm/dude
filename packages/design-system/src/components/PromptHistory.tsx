@@ -3,7 +3,7 @@ import { cx } from "../util/cx.ts";
 import { lineDiff } from "../util/lineDiff.ts";
 import { Button } from "../primitives/Button.tsx";
 import { DiffFile } from "./DiffView.tsx";
-import { HumanAvatar } from "./HumanAvatar.tsx";
+import { PersonAvatar } from "./PersonAvatar.tsx";
 import { AgentAvatar } from "./AgentAvatar.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { Segmented } from "./ScreenHeader.tsx";
@@ -73,7 +73,7 @@ export function PromptHistory({ versions, onRestore, emptyText = "No versions ye
                 data-version={v.number}
                 onClick={() => setSelected(v.id)}
               >
-                {v.author ? <HumanAvatar person={v.author} size="md" /> : <AgentAvatar role="system" size="md" />}
+                {v.author ? <PersonAvatar person={v.author} size={24} /> : <AgentAvatar role="system" size="md" />}
                 <span className={styles["itemText"]}>
                   <span className={styles["itemHead"]}>
                     <b>v{v.number}</b>

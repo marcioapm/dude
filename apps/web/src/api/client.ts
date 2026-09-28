@@ -175,7 +175,9 @@ export interface EpicOverview {
   lanes: { done: number; review: number; progress: number; backlog: number };
   prs: Record<string, number>;
   owners: Array<{ id: string; name: string; photoUrl: string | null; online: boolean }>;
+  /** Tokens and machine time, as the epic's metrics count them. */
   costUsd: number;
+  machineUsd: number;
   lastActivity: string | null;
   needsYou: number;
   createdAt: string;

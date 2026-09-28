@@ -105,4 +105,3 @@ export function whereWords(person: Pick<Someone, "lastSeenAt" | "lastSeenWhere">
   return person.lastSeenWhere ? `on ${person.lastSeenWhere} · ${when}` : when;
 }
 
-export { firstName } from "@dude/design-system";

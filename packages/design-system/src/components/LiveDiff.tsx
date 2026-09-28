@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
 import type { RunDiffFile, RunDiffHunk, RunDiffLine } from "@dude/domain";
 import { cx } from "../util/cx.ts";
+import { Switch } from "./Settings.tsx";
 import styles from "./LiveDiff.module.css";
 
 /** A live diff's file, line and hunk: the API's (GET /v1/runs/:id/diff). */
@@ -111,20 +112,15 @@ export function LiveDiff({ files, base, live, lastChange, emptyMessage, classNam
         <span className={styles["spacer"]} />
         {lastChange ? <span className={styles["last"]}>{lastChange}</span> : null}
         {live ? (
-          <button
-            type="button"
-            role="switch"
-            aria-checked={follow}
-            className={styles["follow"]}
-            onClick={() => {
-              if (!follow) setSelected(null);
-              setFollow(!follow);
+          <Switch
+            checked={follow}
+            onCheckedChange={(on) => {
+              if (on) setSelected(null);
+              setFollow(on);
             }}
-            data-testid="follow"
-          >
-            <span className={cx(styles["toggle"], follow && styles["on"])} aria-hidden />
-            Follow the agent
-          </button>
+            label="Follow the agent"
+            testId="follow"
+          />
         ) : null}
       </div>
       {files.length === 0 ? (

@@ -10,14 +10,14 @@ import { ChatComposer } from "../src/components/ChatComposer.tsx";
 import { ChatMessage } from "../src/components/ChatMessage.tsx";
 import { NavTreeRow } from "../src/components/NavTree.tsx";
 import { QuestionCard } from "../src/components/QuestionCard.tsx";
-import { AttentionList, Sidebar, SidebarToggle } from "../src/components/Sidebar.tsx";
+import { Sidebar, SidebarToggle } from "../src/components/Sidebar.tsx";
 import { ChatTranscript } from "../src/components/ChatTranscript.tsx";
 import { FindingRow } from "../src/components/FindingRow.tsx";
 import { EventRow } from "../src/components/EventRow.tsx";
 import { ToolCallCard } from "../src/components/ToolCallCard.tsx";
 import { Icon } from "../src/icons/index.tsx";
 import { formatTimestamp } from "../src/util/format.ts";
-import type { AttentionItem, NavProject, NavRow, NavTask } from "../src/util/navModel.ts";
+import type { NavProject, NavRow, NavTask } from "../src/util/navModel.ts";
 
 const noop = () => {};
 const html = (el: React.ReactElement) => renderToStaticMarkup(el);
@@ -194,39 +194,6 @@ describe("the tree under a task: only what works now", () => {
       ],
     };
     expect(flattenNav([project], new Map()).map((r) => r.key)).toEqual(["project:p", "task:t", "session:fix"]);
-  });
-});
-
-describe("AttentionList", () => {
-  const project: NavProject = { id: "p", name: "Webhooks" };
-  const item = (people: NavTask["people"], withSession: boolean): AttentionItem => ({
-    task: { id: `wi-${people?.length ?? 0}-${withSession}`, key: "WI-9", title: "Retry", status: "awaiting_input", people },
-    project,
-    epic: { id: "e", title: "Reliability", tasks: [] },
-    session: withSession ? { id: "s", role: "orchestrator", status: "awaiting_input", activity: "Which backoff?" } : null,
-  });
-
-  test("where is the row's title, not visible text", () => {
-    const h = html(<AttentionList items={[item([], true)]} />);
-    expect(h).toContain('title="Webhooks · Reliability"');
-    expect(h.replace(/<[^>]+>/g, "|")).not.toContain("Webhooks · Reliability");
-  });
-
-  test("people are a named group with +N", () => {
-    const h = html(<AttentionList items={[item([{ name: "Ann" }, { name: "Bo" }], true)]} />);
-    expect(groups(h)).toEqual(["Ann, Bo"]);
-    expect(h).toMatch(/>\+1<\/span>/);
-  });
-
-  test("without a session the asker slot is kept empty", () => {
-    const h = html(<AttentionList items={[item([], false)]} />);
-    expect(h).toContain('<span></span><span title="waiting for you">waiting for you</span>');
-  });
-
-  test("a task that says what it waits for says so", () => {
-    const it = item([], false);
-    const h = html(<AttentionList items={[{ ...it, task: { ...it.task, waitingFor: "Review stuck on 2 findings" } }]} />);
-    expect(h).toContain(">Review stuck on 2 findings</span>");
   });
 });
 

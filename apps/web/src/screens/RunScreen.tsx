@@ -32,7 +32,8 @@ import { PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, snapshot, t
 import type { ComposerSubmission } from "@dude/design-system/components";
 import { useEventStream } from "../hooks/useEventStream.ts";
 import { conflictNotice, type Notice } from "../conflict.ts";
-import { firstName, usePeople, type People } from "../people.tsx";
+import { firstName } from "@dude/design-system";
+import { usePeople, type People } from "../people.tsx";
 import { NotFound } from "./NotFound.tsx";
 import { ChangesPanel } from "./ChangesPanel.tsx";
 
@@ -68,11 +69,10 @@ const STATUS_EVENTS: ReadonlySet<string> = new Set([
 export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack }: RunScreenProps) {
   const [run, setRun] = useState<RunDetail | null>(null);
   const [missing, setMissing] = useState(false);
-  // Who drives the task, and who is reading: only its owner answers its
-  // agents, so anyone else sees the asks read-only, with whom they wait on.
-  const [driver, setDriver] = useState<{ owner: Person | null; you: string } | null>(null);
-  // The task's key (TEXT-14), which people know it by, for the header.
-  const [taskKey, setTaskKey] = useState<string | undefined>(undefined);
+  // Who drives the task: only its owner answers its agents, so anyone else
+  // sees the asks read-only, with whom they wait on. And the task's key
+  // (TEXT-14), which people know it by, for the header.
+  const [task, setTask] = useState<{ owner: Person | null; key?: string | undefined } | null>(null);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   // Someone else acted first: said calmly, and gone once the Run catches up.
@@ -115,11 +115,9 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
   useEffect(() => {
     if (!taskId) return;
     let cancelled = false;
-    Promise.all([client.getTask(taskId), client.listPeople()])
-      .then(([task, people]) => {
-        if (cancelled) return;
-        setDriver({ owner: task.owner, you: people.you });
-        setTaskKey(task.key);
+    client.getTask(taskId)
+      .then((t) => {
+        if (!cancelled) setTask({ owner: t.owner, key: t.key });
       })
       .catch(() => {});
     return () => {
@@ -213,8 +211,10 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
   }
 
   // Someone else's to answer: their name. A task nobody owns is anyone's.
-  const waitingOn = driver?.owner && driver.owner.id !== driver.you ? driver.owner.name : undefined;
-  const owner = driver?.owner ? (people.byId.get(driver.owner.id) ?? driver.owner) : undefined;
+  // Until you are known, nobody is waited on: the orchestrator still checks.
+  const waitingOn = task?.owner && people.you && task.owner.id !== people.you ? task.owner.name : undefined;
+  const owner = task?.owner ? (people.byId.get(task.owner.id) ?? task.owner) : undefined;
+  const taskKey = task?.key;
   const youName = people.you ? people.names.get(people.you) : undefined;
 
   // The agent this Run is. A phase Run carries its role; one created
@@ -253,7 +253,7 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
     <div className="runScreen">
       {breadcrumb ? <div className="runCrumbs">{breadcrumb}</div> : null}
       <Tabs defaultValue="chat" fill>
-        <TabList>
+        <TabList className="tabsInset">
           <Tab value="chat" icon="message">Conversation</Tab>
           {/* The agent's checkout, as it changes: only for a Run with one. */}
           {Object.keys(run.baseRefs).length > 0 || run.phase ? (

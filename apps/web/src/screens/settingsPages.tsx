@@ -26,7 +26,7 @@ import {
   TextButton,
   Markdown,
 } from "@dude/design-system/components";
-import { formatTimestamp } from "@dude/design-system";
+import { formatTimestamp, plural } from "@dude/design-system";
 import { Button, Callout, Checkbox, Dialog, Input, Select } from "@dude/design-system/primitives";
 import {
   EFFORTS,
@@ -76,7 +76,6 @@ function Source<T>({ scope, setting, reset }: { scope: SettingsScope; setting: S
 // An agent role
 // ---------------------------------------------------------------------------
 
-const lineCount = (body: string) => { const n = body.split("\n").length; return `${n} ${n === 1 ? "line" : "lines"}`; };
 
 const NONE = "__none__";
 
@@ -239,7 +238,7 @@ function PromptSection({ scope, role, onHistory }: { scope: SettingsScope; role:
         <SettingsDisclosure
           summary={
             <>
-              <b>{orgName}’s {SETTINGS_ROLE_LABEL[role].toLowerCase()} prompt</b> · {lineCount(org.body)} ·{" "}
+              <b>{orgName}’s {SETTINGS_ROLE_LABEL[role].toLowerCase()} prompt</b> · {plural(org.body.split("\n").length, "line")} ·{" "}
               {mode === "add" ? `comes first; ${project.name}’s is added after it` : `what ${project.name}’s agents are told`}
             </>
           }

@@ -1,7 +1,7 @@
 # Calmer, for a team: the plan
 
-How the mockups in `mockups/` (v1–v8; v8 is the latest and includes the
-rest) become the product, and how the design system keeps them honest.
+How the mockup (`mockups/calmer-team-v8.html`, the last of eight rounds;
+the earlier ones are on the `design/calmer-mockups` branch) becomes the product, and how the design system keeps them honest.
 
 ## Two tracks
 

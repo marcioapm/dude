@@ -12,6 +12,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { EventTypes } from "@dude/domain";
 import { boardScope, type NavProject, type NavRow, type NavTask } from "@dude/design-system";
 import { Board, Breadcrumb, Sidebar, SidebarLink, SidebarProfile, SidebarToggle, type BreadcrumbItem, type PrChipPullRequest } from "@dude/design-system/components";
 import { Button, Callout, EmptyState, IconButton, RowMenu, Spinner, useToast } from "@dude/design-system/primitives";
@@ -99,6 +100,13 @@ export function withPullRequests(projects: NavProject[], prs: readonly PullReque
 
 const MINE = "dude.tree.mine";
 
+/** An agent at work: what it says and does, its plan, diff and spend. None of it is in the tree. */
+const QUIET_EVENTS: ReadonlySet<string> = new Set([
+  EventTypes.AgentMessage, EventTypes.AgentThought, EventTypes.ToolCalled, EventTypes.ToolCompleted,
+  EventTypes.ModelRequestStarted, EventTypes.ModelRequestCompleted, EventTypes.PromptDelivered,
+  EventTypes.PlanUpdated, EventTypes.RunDiffUpdated, EventTypes.CostSampled, EventTypes.WorkerHeartbeat,
+]);
+
 export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   const [projects, setProjects] = useState<NavProject[] | null>(null);
   const people = usePeople();
@@ -159,8 +167,10 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
     void load();
   }, [load]);
 
-  // Someone seen is presence, not a change to the tree: no reload for it.
-  const stream = useReloadOnEvents({ client, all: true }, () => void load(), 400, people.seen);
+  // Someone seen is presence, and an agent at work (its words, tools, plan,
+  // diff, spend) changes nothing the tree shows: no reload for either.
+  const stream = useReloadOnEvents({ client, all: true }, () => void load(), 400,
+    (e) => people.seen(e) || QUIET_EVENTS.has(e.eventType));
 
   // First load with nothing selected: open the first project's board rather
   // than an empty pane.
