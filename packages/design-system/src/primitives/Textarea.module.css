@@ -48,10 +48,6 @@
   color: inherit;
   overflow-y: auto;
 }
-/* The control's frame is the focus ring: no second one on the field. */
-.textarea:focus-visible {
-  outline: none;
-}
 .textarea::placeholder {
   color: var(--ds-color-text-muted);
 }
