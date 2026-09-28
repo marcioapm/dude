@@ -263,26 +263,25 @@ def test_waiting_on_you_is_split_by_whose_it_is(
     wait_until(lambda: client.get("/v1/questions", params={"taskId": task["id"]}).json()["questions"], timeout=30,
                message="the agent never asked")
 
-    # Bo: his, in the sidebar's Needs you and the inbox's own list.
+    # Bo: his, counted on "Waiting on you" and listed as his in the inbox.
     _sign_in(page, web_url, bo_client.api_key)
-    expect(page.get_by_role("region", name="Needs you")).to_contain_text("Bo's question")
-    page.goto(f"{web_url}#/waiting")
-    expect(page.get_by_test_id("inbox-yours")).to_contain_text("Bo's question")
-    expect(page.get_by_test_id("inbox-others")).to_have_count(0)
+    expect(page.get_by_test_id("waiting-on-you")).to_contain_text("1")
+    page.get_by_test_id("waiting-on-you").click()
+    expect(page.get_by_role("region", name="Yours")).to_contain_text("Bo's question")
+    expect(page.get_by_role("region", name="Waiting on others")).to_have_count(0)
 
-    # The first person: not theirs — calm, under Waiting on others.
+    # The first person: not theirs, so calm, under Waiting on others.
     _sign_in(page, web_url, client.api_key)
     expect(page.get_by_test_id("waiting-on-others")).to_contain_text("1")
-    expect(page.get_by_role("region", name="Needs you")).to_have_count(0)
     page.get_by_test_id("waiting-on-others").click()
-    others = page.get_by_test_id("inbox-others")
+    others = page.get_by_role("region", name="Waiting on others")
     expect(others).to_contain_text("Bo's question")
-    expect(others).to_contain_text("waiting for Bo")
-    expect(page.get_by_test_id("inbox-yours")).to_have_count(0)
+    expect(others).to_contain_text("Bo's task")
+    expect(page.get_by_role("region", name="Yours")).not_to_contain_text("Bo's question")
 
-    others.get_by_test_id("take-over").click()
-    expect(page.get_by_test_id("inbox-yours")).to_contain_text("Bo's question")
-    expect(page.get_by_test_id("inbox-others")).to_have_count(0)
+    others.get_by_role("button", name="Take over").click()
+    expect(page.get_by_role("region", name="Yours")).to_contain_text("Bo's question")
+    expect(page.get_by_role("region", name="Waiting on others")).to_have_count(0)
     after = client.get(f"/v1/tasks/{task['id']}").json()
     assert [p["name"] for p in after["people"]] == ["e2e user", "Bo"]
     assert console_errors == []
