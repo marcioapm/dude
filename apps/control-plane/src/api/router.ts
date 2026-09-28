@@ -6,6 +6,7 @@
  */
 
 import { type Principal, authenticate } from "./auth.ts";
+import { touch } from "./presence.ts";
 import { errorResponse, notFound, unauthorized } from "./http.ts";
 
 export interface RequestContext {
@@ -77,6 +78,9 @@ export class Router {
   patch(pattern: string, handler: Handler, opts?: RouteOptions): this {
     return this.#add("PATCH", pattern, handler, opts);
   }
+  put(pattern: string, handler: Handler, opts?: RouteOptions): this {
+    return this.#add("PUT", pattern, handler, opts);
+  }
   delete(pattern: string, handler: Handler, opts?: RouteOptions): this {
     return this.#add("DELETE", pattern, handler, opts);
   }
@@ -121,6 +125,7 @@ export class Router {
             (route.allowKeyInQuery ? url.searchParams.get("key") : null),
         );
         if (!principal) throw unauthorized();
+        await touch(principal, request.headers.get("x-dude-where"));
 
         return await (route.handler as Handler)({ request, url, params, principal });
       }

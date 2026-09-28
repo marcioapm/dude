@@ -16,8 +16,10 @@ CREATE TABLE people (
   -- short URL rather than the image.
   photo_url       text,
   photo_token     text,
-  -- Touched at most once a minute by any request of theirs: presence.
+  -- Touched at most once a minute by any request of theirs: presence,
+  -- and what they had open then ("TEXT-14"), as their browser named it.
   last_seen_at    timestamptz,
+  last_seen_where text,
   created_at      timestamptz NOT NULL DEFAULT now(),
   -- Removed people keep their row, so what they did still has a name.
   removed_at      timestamptz
@@ -31,6 +33,16 @@ CREATE POLICY people_isolation ON people
   USING (organization_id = current_setting('app.organization_id', true))
   WITH CHECK (organization_id = current_setting('app.organization_id', true));
 GRANT SELECT, INSERT, UPDATE ON people TO dude_app;
+
+-- A person as every API response names one (PersonRef): a photo kept
+-- here is served by the backend under its token, so lists carry a short
+-- URL and never the image; online is seen in the last five minutes.
+CREATE FUNCTION person_ref(p people) RETURNS json LANGUAGE sql STABLE AS $$
+  SELECT json_build_object('id', p.id, 'name', p.name,
+    'photoUrl', CASE WHEN p.photo_url LIKE 'data:%' THEN '/v1/people/' || p.id || '/photo?t=' || p.photo_token
+                     ELSE p.photo_url END,
+    'online', p.removed_at IS NULL AND COALESCE(p.last_seen_at > now() - interval '5 minutes', false))
+$$;
 
 ALTER TABLE api_keys ADD COLUMN person_id text REFERENCES people(id) ON DELETE CASCADE;
 CREATE INDEX api_keys_person_idx ON api_keys (person_id) WHERE person_id IS NOT NULL;

@@ -23,6 +23,7 @@ export const ID_PREFIXES = {
   workflowRun: "wfr",
   workflowSignal: "sig",
   apiKey: "key",
+  person: "per",
   directive: "dir",
   pullRequest: "pr",
   forgeCredential: "forge",

@@ -85,4 +85,15 @@ export type EventInput = Pick<EventEnvelope, "eventType" | "organizationId" | "a
  */
 export interface PersistedEvent extends EventEnvelope {
   cursor: number;
+  /**
+   * In API output, a human actor is the person, not their key: `id` is
+   * the person's, the rest is their `PersonRef`, and `keyId` the key the
+   * ledger recorded. An actor the ledger cannot resolve stays as recorded.
+   */
+  actor: EventEnvelope["actor"] & {
+    name?: string;
+    photoUrl?: string | null;
+    online?: boolean;
+    keyId?: string;
+  };
 }

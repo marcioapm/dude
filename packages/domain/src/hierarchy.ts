@@ -205,7 +205,31 @@ export const taskRepositorySchema = z.object({
 });
 export type TaskRepository = z.infer<typeof taskRepositorySchema>;
 
-/** A person, by the id and name of the API key they use. */
+/**
+ * A person, wherever the API names one: an organization's member, by the
+ * id of their `people` row. `online` is whether they were seen in the last
+ * five minutes. `photoUrl` is an https URL or one the backend serves.
+ */
+export const personRefSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  photoUrl: z.string().nullable(),
+  online: z.boolean(),
+});
+export type PersonRef = z.infer<typeof personRefSchema>;
+
+/** Organization admins manage members and the organization's settings. */
+export const personRoleSchema = z.enum(["admin", "member"]);
+export type PersonRole = z.infer<typeof personRoleSchema>;
+
+/** A person as `GET /v1/me` and `GET /v1/people` describe them. */
+export interface PersonDetail extends PersonRef {
+  email: string | null;
+  role: PersonRole;
+  lastSeenAt: string | null;
+}
+
+/** A person, by id and name; any `PersonRef` is one. */
 export const personSchema = z.object({ id: z.string(), name: z.string() });
 export type Person = z.infer<typeof personSchema>;
 
@@ -225,10 +249,12 @@ export const taskSchema = z.object({
   requestedBy: z.string().nullable().default(null),
   /**
    * Who drives it: told when it waits on someone, and the only one who
-   * answers its agents. Until there are users, a person is a named API key.
-   * Null for a task nobody owns, which anyone may answer for.
+   * answers its agents. Null for a task nobody owns, which anyone may
+   * answer for.
    */
-  owner: personSchema.nullable().default(null),
+  owner: personRefSchema.nullable().default(null),
+  /** Everyone on it, the owner first. */
+  people: z.array(personRefSchema).default([]),
   createdAt: z.string().datetime({ offset: true }),
   updatedAt: z.string().datetime({ offset: true }),
 });

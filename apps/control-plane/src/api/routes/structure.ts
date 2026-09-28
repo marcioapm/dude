@@ -15,7 +15,7 @@ import { appendInScope } from "../../events/ledger.ts";
 import { badRequest, conflict, json, noContent, notFound, parseBody } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
 import { REPOSITORIES_JSON, setTaskRepositories, taskRepositoriesInput } from "./taskRepositories.ts";
-import { isPerson, ownerJson } from "./people.ts";
+import { ownerJson, peopleJson, personOf, setTaskPeople } from "./people.ts";
 
 const REPOSITORY_SELECT = `id, project_id AS "projectId", name, url, default_branch AS "defaultBranch", trust,
   created_at AS "createdAt"`;
@@ -272,7 +272,7 @@ const updateTaskInput = z.object({
   epicId: z.string().min(1).nullable(),
   /** The repositories it works on; fixed, like the task, once delivery starts. */
   repositories: taskRepositoriesInput,
-  /** Hand it to another of the organization's people (a user key's id). */
+  /** Hand it to another of the organization's people (a person's id; one of their keys' still works). */
   ownerId: z.string().min(1),
 }).partial();
 
@@ -283,14 +283,13 @@ const updateTaskInput = z.object({
  * handing it to someone else, never is.
  */
 async function updateTask(ctx: RequestContext): Promise<Response> {
-  const { ownerId, ...input } = await parseBody(ctx.request, updateTaskInput);
+  const { ownerId: ownerGiven, ...input } = await parseBody(ctx.request, updateTaskInput);
   const id = ctx.params.id!;
   const result = await withOrg(ctx.principal.organizationId, async (scope) => {
     const current = (await scope.sql`
-      SELECT project_id AS "projectId", status, owner_key_id AS "ownerId" FROM tasks WHERE id = ${id} FOR UPDATE`) as Array<{
+      SELECT project_id AS "projectId", status FROM tasks WHERE id = ${id} FOR UPDATE`) as Array<{
       projectId: string;
       status: string;
-      ownerId: string | null;
     }>;
     if (!current[0]) return { missing: true as const };
     const { projectId, status } = current[0];
@@ -304,31 +303,30 @@ async function updateTask(ctx: RequestContext): Promise<Response> {
       const epic = await scope.sql`SELECT 1 FROM epics WHERE id = ${input.epicId} AND project_id = ${projectId}`;
       if (epic.length === 0) return { noEpic: input.epicId };
     }
-    if (ownerId !== undefined && !(await isPerson(scope, ownerId))) return { noPerson: ownerId };
+    const ownerId = ownerGiven === undefined ? undefined : await personOf(scope, ownerGiven);
+    if (ownerId === null) return { noPerson: ownerGiven };
     if (Object.keys(input).length === 0 && ownerId === undefined) return { unchanged: true as const };
     if (input.repositories) {
       const missing = await setTaskRepositories(scope, ctx.principal.organizationId, projectId, id, input.repositories);
       if (missing) return { noRepository: missing };
     }
-    const rows = (await scope.sql`
+    await scope.sql`
       UPDATE tasks SET
         title = COALESCE(${input.title ?? null}, title),
         goal = COALESCE(${input.goal ?? null}, goal),
         acceptance_criteria = CASE WHEN ${input.acceptanceCriteria !== undefined}
                                    THEN ${input.acceptanceCriteria ?? []}::jsonb ELSE acceptance_criteria END,
         epic_id = CASE WHEN ${input.epicId !== undefined} THEN ${input.epicId ?? null} ELSE epic_id END,
-        owner_key_id = COALESCE(${ownerId ?? null}, owner_key_id),
         updated_at = now()
-      WHERE id = ${id}
-      RETURNING id, project_id AS "projectId", epic_id AS "epicId", ${scope.sql.unsafe(REPOSITORIES_JSON)}, title, goal,
-        acceptance_criteria AS "acceptanceCriteria", status, ${scope.sql.unsafe(ownerJson())},
-        updated_at AS "updatedAt"`) as Array<Record<string, unknown>>;
+      WHERE id = ${id}`;
     if (Object.keys(input).length > 0) await record(scope, ctx, EventTypes.TaskUpdated, projectId, { ...input }, id);
-    // Its own event: who drives a task is not what it asks for, and the
-    // history of who held it is worth reading on its own.
-    if (ownerId !== undefined && ownerId !== current[0].ownerId) {
-      await record(scope, ctx, EventTypes.TaskOwnerChanged, projectId, { from: current[0].ownerId, to: ownerId }, id);
-    }
+    // The new owner goes first; everyone else on it stays, after them.
+    if (ownerId !== undefined) await setTaskPeople(scope, ctx, id, projectId, [ownerId], true);
+    const rows = (await scope.sql`
+      SELECT id, project_id AS "projectId", epic_id AS "epicId", ${scope.sql.unsafe(REPOSITORIES_JSON)}, title, goal,
+        acceptance_criteria AS "acceptanceCriteria", status, ${scope.sql.unsafe(ownerJson())},
+        ${scope.sql.unsafe(peopleJson())}, updated_at AS "updatedAt"
+      FROM tasks WHERE id = ${id}`) as Array<Record<string, unknown>>;
     return { task: rows[0]! };
   });
   if ("missing" in result) throw notFound(`task ${id} not found`);
@@ -339,6 +337,41 @@ async function updateTask(ctx: RequestContext): Promise<Response> {
   if ("noRepository" in result) throw notFound(`repository ${result.noRepository} is not in this task's project`);
   if ("noPerson" in result) throw notFound(`${result.noPerson} is not one of this organization's people`);
   if ("unchanged" in result) throw badRequest("nothing to change");
+  return json(result.task);
+}
+
+const taskPeopleInput = z.object({
+  /** Everyone on it, in order: the first is its owner. */
+  people: z.array(z.string().min(1)).min(1, "a task needs an owner").max(50),
+}).strict();
+
+/**
+ * Who is on a task, in order: the first owns it (answers its agents and
+ * is told when it waits), the rest follow it. Replaces the list.
+ */
+async function putTaskPeople(ctx: RequestContext): Promise<Response> {
+  const input = await parseBody(ctx.request, taskPeopleInput);
+  const id = ctx.params.id!;
+  const result = await withOrg(ctx.principal.organizationId, async (scope) => {
+    const task = (await scope.sql`SELECT project_id AS "projectId" FROM tasks WHERE id = ${id} FOR UPDATE`) as Array<{
+      projectId: string;
+    }>;
+    if (!task[0]) return { missing: true as const };
+    const ids: string[] = [];
+    for (const given of input.people) {
+      const person = await personOf(scope, given);
+      if (!person) return { noPerson: given };
+      if (!ids.includes(person)) ids.push(person);
+    }
+    await setTaskPeople(scope, ctx, id, task[0].projectId, ids, false);
+    const rows = (await scope.sql`
+      SELECT ${scope.sql.unsafe(ownerJson())}, ${scope.sql.unsafe(peopleJson())} FROM tasks WHERE id = ${id}`) as Array<
+      Record<string, unknown>
+    >;
+    return { task: { id, ...rows[0]! } };
+  });
+  if ("missing" in result) throw notFound(`task ${id} not found`);
+  if ("noPerson" in result) throw notFound(`${result.noPerson} is not one of this organization's people`);
   return json(result.task);
 }
 
@@ -353,4 +386,5 @@ export function registerStructureRoutes(router: Router): void {
   router.delete("/v1/epics/:id", deleteEpic);
 
   router.patch("/v1/tasks/:id", updateTask);
+  router.put("/v1/tasks/:id/people", putTaskPeople);
 }

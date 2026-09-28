@@ -14,14 +14,14 @@ import { appendInScope } from "../../events/ledger.ts";
 import { badRequest, conflict, json, notFound, parseBody } from "../http.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
 import { REPOSITORIES_JSON, setTaskRepositories, taskRepositoriesInput } from "./taskRepositories.ts";
-import { ownerJson } from "./people.ts";
+import { ownerJson, peopleJson } from "./people.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 const TASK_SELECT = `
   id, organization_id AS "organizationId", project_id AS "projectId", epic_id AS "epicId", ${REPOSITORIES_JSON},
   title, goal, acceptance_criteria AS "acceptanceCriteria", status,
   (SELECT key_prefix FROM projects p WHERE p.id = tasks.project_id) || '-' || number AS key, -- see navigation.ts
-  requested_by AS "requestedBy", ${ownerJson()}, created_at AS "createdAt", updated_at AS "updatedAt"`;
+  requested_by AS "requestedBy", ${ownerJson()}, ${peopleJson()}, created_at AS "createdAt", updated_at AS "updatedAt"`;
 
 const RUN_SELECT = `
   id, organization_id AS "organizationId", project_id AS "projectId",
