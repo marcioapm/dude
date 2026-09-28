@@ -12,7 +12,7 @@
  * dude keeps a Run's diff, not its files, so that is what there is to show.
  */
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AgentAvatar, LiveDiff, summarizeToolArgs } from "@dude/design-system/components";
 import { Callout, Dialog } from "@dude/design-system/primitives";
 import type { AgentRole } from "@dude/domain";
@@ -23,7 +23,7 @@ import { errorText } from "../hooks/useSave.tsx";
 
 const EDIT_TOOLS = /^(edit|write|patch|multiedit|apply_patch)$/i;
 
-export function ChangesPanel({ client, runId, role, events, checksum: latest, live, selected, onSelectedChange, leading }: {
+export function ChangesPanel({ client, runId, role, events, checksum: latest, live, selected, onSelectedChange, toolbarIn }: {
   client: ApiClient;
   runId: string;
   /** The agent's, for its face beside what it last wrote. */
@@ -37,8 +37,8 @@ export function ChangesPanel({ client, runId, role, events, checksum: latest, li
   /** The file shown alone, which the session's rail can pick too. */
   selected: string | null;
   onSelectedChange: (path: string | null) => void;
-  /** The session's view switch, first on the diff's own toolbar. */
-  leading?: ReactNode;
+  /** The session's bar, which the diff's own controls are drawn into. */
+  toolbarIn: HTMLElement | null;
 }) {
   const [diff, setDiff] = useState<RunDiff | null>(null);
   const [viewing, setViewing] = useState<string | null>(null);
@@ -82,16 +82,14 @@ export function ChangesPanel({ client, runId, role, events, checksum: latest, li
     return (
       <>
         <AgentAvatar role={role} size="xs" live />
-        {tool.charAt(0).toUpperCase()}{tool.slice(1)}
+        <span>{tool.charAt(0).toUpperCase()}{tool.slice(1)}</span>
         {path ? <code>{path.split("/").pop()}</code> : null}
       </>
     );
   }, [events, role]);
 
-  // Without a diff the bar still stands: the way back to the conversation.
-  const bar = <div className="runBar">{leading}</div>;
-  if (problem) return <>{bar}<div className="runChanges"><Callout tone="danger">{problem}</Callout></div></>;
-  if (!diff) return bar;
+  if (problem) return <div className="runChanges"><Callout tone="danger">{problem}</Callout></div>;
+  if (!diff) return null;
   return (
     <>
       <LiveDiff
@@ -103,7 +101,7 @@ export function ChangesPanel({ client, runId, role, events, checksum: latest, li
         selected={selected}
         onSelectedChange={onSelectedChange}
         onOpenFile={setViewing}
-        leading={leading}
+        toolbarIn={toolbarIn}
         lastChange={live && lastChange ? lastChange : undefined}
         emptyMessage={live ? "The agent has not changed anything yet." : "This session changed nothing."}
       />

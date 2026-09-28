@@ -44,8 +44,9 @@
   display: inline-flex;
   align-items: center;
   gap: var(--ds-space-6);
-  /* The control's height, less the track's 2px on each side: it follows the density. */
-  height: calc(var(--ds-size-control-md) - 4px);
+  /* The control's height, less the track's 2px on each side: it follows the
+     density, down to the 28px floor (README, Density). */
+  height: max(var(--ds-size-control-sm), calc(var(--ds-size-control-md) - 4px));
   padding: 0 var(--ds-space-12);
   border: 0;
   border-radius: var(--ds-radius-control);

@@ -54,6 +54,12 @@ export interface ChatTranscriptProps extends Omit<HTMLAttributes<HTMLDivElement>
   readonly footer?: ReactNode;
   /** Monotonic counter of content changes; bump it when turns arrive or stream. */
   readonly revision?: number | undefined;
+  /**
+   * How many turns there are, for "N new turns". Defaults to the children
+   * counted; give it when children group several turns (a `ChatAside`
+   * holding a run of tool calls), so each still counts.
+   */
+  readonly turns?: number | undefined;
   /** Still receiving. Controls aria-live. */
   readonly live?: boolean | undefined;
   /** Fill the parent's height instead of `maxHeight`. */
@@ -81,6 +87,7 @@ export function ChatTranscript({
   pinned,
   footer,
   revision = 0,
+  turns,
   live,
   fill,
   maxHeight = 560,
@@ -98,7 +105,7 @@ export function ChatTranscript({
   /** Anything (including streamed text) changed while scrolled up. */
   const [stale, setStale] = useState(false);
   const lastRevision = useRef(revision);
-  const turnCount = Children.count(children);
+  const turnCount = turns ?? Children.count(children);
   const lastCount = useRef(turnCount);
 
   const scrollToBottom = useCallback((smooth: boolean) => {

@@ -550,6 +550,9 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
   // A task with pull requests in several repositories names each by its repository.
   const named = new Set(events.filter((e) => e.eventType === "pull_request.opened").map((e) => e.payload.repo)).size > 1;
   const labels = new Map(runs.map((r) => [r.id, runLabel(r).toLowerCase()]));
+  // One task's events: dude goes by the same name throughout.
+  const taskId = events.find((e) => e.taskId)?.taskId;
+  const dude = dudeName(taskId ?? "");
   const phase = (runId: string | null) => (runId && labels.get(runId)) || "agent";
   for (const e of events) {
     const by = humanActor(e);
@@ -577,7 +580,7 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
         if (by) out.push({ ...base, who: face, text: <>{person} resumed the {phase(e.runId)}</> });
         break;
       case "run.aborted":
-        out.push({ ...base, who: face ?? <DudeMark size={32} />, text: <>{by ? person : <b>{dudeName(e.taskId ?? "")}</b>} aborted the {phase(e.runId)}</>, quote: p.reason ? String(p.reason) : undefined });
+        out.push({ ...base, who: face ?? <DudeMark size={32} />, text: <>{by ? person : <b>{dude}</b>} aborted the {phase(e.runId)}</>, quote: p.reason ? String(p.reason) : undefined });
         break;
       case "task.owner_changed": {
         const to = typeof p.to === "string" ? people.names.get(p.to) : undefined;
@@ -601,7 +604,7 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
         const who = line.actorId ? face : line.who
           ? <PersonAvatar person={{ id: `gh:${line.who}`, name: line.who }} size={32} />
           : line.byDude ? <DudeMark size={32} /> : <AgentAvatar role="integration" size="lg" />;
-        const text = line.actorId ? <>{person} {line.text}</> : line.byDude ? <><b>{dudeName(e.taskId ?? "")}</b> {line.text}</> : line.text;
+        const text = line.actorId ? <>{person} {line.text}</> : line.byDude ? <><b>{dude}</b> {line.text}</> : line.text;
         out.push({ ...base, who, text, quote: line.quote });
         break;
       }

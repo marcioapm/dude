@@ -79,6 +79,8 @@
 }
 
 .body {
+  /* A chat turn spans its column: the transcript's width is the measure. */
+  --md-measure: none;
   min-width: 0;
   color: var(--ds-color-text-primary);
 }
