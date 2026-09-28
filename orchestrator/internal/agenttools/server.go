@@ -33,6 +33,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/embeddings"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
 
@@ -43,11 +44,22 @@ const EventType = "agent.tool.dude"
 type Server struct {
 	DB  *db.DB
 	Log *slog.Logger
+	// Embedder lets search_memory search by meaning; nil, by words alone.
+	Embedder embeddings.Embedder
+	// Kick wakes the orchestrator's loops: a memory saved is embedded now.
+	Kick func()
 }
 
 // Caller is the Run a token names: who is calling, and all it may reach.
 type Caller struct {
 	RunID, Org, ProjectID, TaskID, Role, Status string
+	// The server's, for the memory tools: set on each call.
+	memory memoryDeps
+}
+
+type memoryDeps struct {
+	embedder embeddings.Embedder
+	kick     func()
 }
 
 func (c Caller) run() delivery.RunRef {
@@ -306,6 +318,7 @@ const (
 func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessage) (json.RawMessage, error) {
 	var out json.RawMessage
 	err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
+		c.memory = memoryDeps{embedder: s.Embedder, kick: s.Kick}
 		if err := withinLimits(ctx, tx, c, t.name); err != nil {
 			return err
 		}
@@ -352,7 +365,8 @@ func withinLimits(ctx context.Context, tx pgx.Tx, c Caller, tool string) error {
 		FROM events WHERE run_id = $1 AND event_type = $2`, c.RunID, EventType, tool, oldName(tool)).Scan(&recent, &sameTool); err != nil {
 		return err
 	}
-	limit := map[string]int{"create_task": createsPerRun, "emit_event": eventsPerRun, "request_repository": requestsPerRun}[tool]
+	limit := map[string]int{"create_task": createsPerRun, "emit_event": eventsPerRun, "request_repository": requestsPerRun,
+		"remember": remembersPerRun}[tool]
 	switch {
 	case recent >= callsPerMinute:
 		return refuse("too many calls: at most %d a minute; slow down", callsPerMinute)
