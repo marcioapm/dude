@@ -74,7 +74,7 @@ export function OrganizationSettingsScreen({ client, me, people, onPeopleChanged
       {page === "members" ? (
         <MembersSection client={client} me={me} people={people} onChanged={onPeopleChanged} />
       ) : page === "github" ? (
-        <GitHubPage client={client} />
+        <GitHubPage client={client} admin={me?.role === "admin"} />
       ) : needsSettings && !scope ? (
         <div className="centered">{problem ? <Callout tone="danger">{problem}</Callout> : <Spinner label="Loading…" />}</div>
       ) : scope && page === "general" ? (
@@ -96,7 +96,7 @@ export function OrganizationSettingsScreen({ client, me, people, onPeopleChanged
 }
 
 /** Where every project's pull requests are opened — the one thing most often wrong in a way nobody notices until an agent's work cannot land. */
-function GitHubPage({ client }: { client: ApiClient }) {
+function GitHubPage({ client, admin }: { client: ApiClient; admin: boolean }) {
   const [connection, setConnection] = useState<ForgeConnection | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
@@ -167,15 +167,17 @@ function GitHubPage({ client }: { client: ApiClient }) {
               {verifying ? "Checking…" : "Verify"}
             </Button>
           ) : null}
-          <Button variant={connection.connected ? "quiet" : "primary"} onClick={() => setReplacing(true)} data-testid="forge-connect">
-            {connection.connected ? "Replace token" : "Connect GitHub"}
-          </Button>
+          {admin ? (
+            <Button variant={connection.connected ? "quiet" : "primary"} onClick={() => setReplacing(true)} data-testid="forge-connect">
+              {connection.connected ? "Replace token" : "Connect GitHub"}
+            </Button>
+          ) : null}
         </CardFooter>
       </Card>
       {connection.connected ? (
         <>
-          <WebhookCard client={client} health={connection.webhook} onChanged={() => void load()} />
-          <GithubBehaviour client={client} />
+          <WebhookCard client={client} health={connection.webhook} onChanged={() => void load()} admin={admin} />
+          <GithubBehaviour client={client} admin={admin} />
         </>
       ) : null}
       {replacing ? (

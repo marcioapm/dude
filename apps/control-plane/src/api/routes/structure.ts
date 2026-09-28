@@ -13,6 +13,7 @@ import { EventTypes, epicState, epicStateSchema, newId, type EpicState } from "@
 import { withOrg, type OrgScope } from "../../db/client.ts";
 import { badRequest, conflict, json, noContent, notFound, parseBody } from "../http.ts";
 import { registerRepositoryWebhook } from "./pullRequests.ts";
+import { requireProjectEditor } from "../access.ts";
 import type { RequestContext, Router } from "../router.ts";
 import { REPOSITORIES_JSON, setTaskRepositories, taskRepositoriesInput } from "./taskRepositories.ts";
 import { ownerJson, peopleJson, personOf, recordAs, setTaskPeople } from "./people.ts";
@@ -383,10 +384,29 @@ async function putTaskPeople(ctx: RequestContext): Promise<Response> {
   return json(result.task);
 }
 
+/** The project a repository belongs to, or 404. */
+async function repositoryProject(ctx: RequestContext): Promise<string> {
+  const rows = (await withOrg(ctx.principal.organizationId, (scope) => scope.sql`
+    SELECT project_id AS "projectId" FROM repositories WHERE id = ${ctx.params.id!}`)) as Array<{ projectId: string }>;
+  if (!rows[0]) throw notFound(`repository ${ctx.params.id!} not found`);
+  return rows[0].projectId;
+}
+
 export function registerStructureRoutes(router: Router): void {
-  router.post("/v1/projects/:id/repositories", addRepository);
-  router.patch("/v1/repositories/:id", updateRepository);
-  router.delete("/v1/repositories/:id", removeRepository);
+  // What agents check out, how far they are trusted, and where webhooks are
+  // registered: part of a project's settings.
+  router.post("/v1/projects/:id/repositories", async (ctx) => {
+    await requireProjectEditor(ctx, ctx.params.id!);
+    return addRepository(ctx);
+  });
+  router.patch("/v1/repositories/:id", async (ctx) => {
+    await requireProjectEditor(ctx, await repositoryProject(ctx));
+    return updateRepository(ctx);
+  });
+  router.delete("/v1/repositories/:id", async (ctx) => {
+    await requireProjectEditor(ctx, await repositoryProject(ctx));
+    return removeRepository(ctx);
+  });
 
   router.get("/v1/projects/:id/epics", listEpics);
   router.post("/v1/projects/:id/epics", createEpic);

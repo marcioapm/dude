@@ -383,6 +383,9 @@ def test_a_member_cannot_change_what_only_admins_may(client: ApiClient, env, pro
         bo.post("/v1/forge/webhooks/register", {}),
         bo.patch("/v1/forge/settings", {"whoCanWake": "anyone"}),
         bo.post("/v1/forge/credential", {"auth": "pat", "secret": "a-token-of-my-own"}),
+        # The same settings by the project's own route, and its repositories.
+        bo.patch(f"/v1/projects/{pid}", {"agentModels": {"implementer": {"model": "fake/scripted"}}}),
+        bo.post(f"/v1/projects/{pid}/repositories", {"name": "extra", "url": "https://github.com/acme/extra.git"}),
     ]
     assert [r.status_code for r in refused] == [403] * len(refused), [(r.request.url, r.status_code, r.text[:80]) for r in refused]
     assert all(r.json()["error"]["code"] == "not_admin" for r in refused), [r.text[:80] for r in refused]

@@ -483,3 +483,12 @@ body {
   flex-wrap: wrap;
   gap: var(--ds-space-8);
 }
+
+/* A fieldset only to disable a form's controls at once: no box of its own. */
+.plainFieldset {
+  display: contents;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
