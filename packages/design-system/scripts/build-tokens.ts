@@ -22,6 +22,7 @@ import {
   letterSpacing,
   lineHeight,
   measure,
+  faceRadius,
   radius,
   size,
   space,
@@ -41,6 +42,7 @@ function staticVars(): Record<string, string> {
   for (const [k, v] of Object.entries(space)) out[`space-${k}`] = `${v}px`;
   for (const [k, v] of Object.entries(spaceNamed)) out[`space-${kebab(k)}`] = `${v}px`;
   for (const [k, v] of Object.entries(radius)) out[`radius-${k}`] = `${v}px`;
+  for (const [k, v] of Object.entries(faceRadius)) out[`radius-face-${k}`] = v;
   for (const [k, v] of Object.entries(fontFamily)) out[`font-${k}`] = v;
   for (const [k, v] of Object.entries(fontSize)) out[`text-${k}`] = `${v}px`;
   for (const [k, v] of Object.entries(lineHeight)) out[`leading-${k}`] = `${v}`;

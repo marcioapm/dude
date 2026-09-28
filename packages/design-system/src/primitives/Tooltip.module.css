@@ -4,7 +4,7 @@
   padding: var(--ds-space-4) var(--ds-space-8);
   background: var(--ds-color-text-primary);
   color: var(--ds-color-text-inverse);
-  border-radius: var(--ds-radius-md);
+  border-radius: var(--ds-radius-float);
   font-size: var(--ds-text-sm);
   line-height: var(--ds-leading-snug);
   box-shadow: var(--ds-shadow-2);

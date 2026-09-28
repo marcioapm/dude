@@ -8,7 +8,7 @@
   --tc-accent: transparent;
   --tc-fill: var(--ds-color-hover-wash);
   position: relative;
-  border-radius: var(--ds-radius-md);
+  border-radius: 0;
   background: var(--tc-fill);
   box-shadow: inset 2px 0 0 var(--tc-accent);
   min-width: 0;
@@ -47,7 +47,7 @@
   padding: 0 var(--ds-space-8);
   font-size: var(--ds-text-sm);
   outline: none;
-  cursor: default;
+  cursor: pointer;
 }
 .row[role="button"]:hover {
   background: var(--ds-color-hover-wash);
@@ -122,8 +122,7 @@
   align-items: center;
   height: 16px;
   padding: 0 4px;
-  border-radius: var(--ds-radius-sm);
-  border: 1px solid var(--ds-tone-danger-border);
+  border-radius: var(--ds-radius-mark);
   background: var(--ds-tone-danger-bg);
   font-family: var(--ds-font-mono);
   font-size: var(--ds-text-2xs);
@@ -191,7 +190,7 @@
   left: 0;
   width: 28%;
   background: var(--ds-tone-info-solid);
-  border-radius: 1px;
+  border-radius: var(--ds-radius-mark);
   animation: global(ds-sweep) calc(var(--ds-cadence-sweep) / max(var(--ds-motion-live), 0.0001)) var(--ds-ease-standard) infinite;
 }
 .slow .track {
@@ -238,7 +237,7 @@
   margin: 0;
   padding: var(--ds-space-8) var(--ds-space-12);
   background: var(--ds-color-sunken);
-  border-radius: var(--ds-radius-md);
+  border-radius: 0;
   font-family: var(--ds-font-mono);
   font-size: var(--ds-text-mono);
   line-height: 18px;
@@ -264,12 +263,10 @@
   letter-spacing: 0;
   text-transform: none;
   padding: 0 4px;
-  border-radius: var(--ds-radius-sm);
-  border: 1px solid var(--ds-color-border-subtle);
+  border-radius: var(--ds-radius-mark);
   color: var(--ds-color-text-secondary);
 }
 .exitChipBad {
-  border-color: var(--ds-tone-danger-border);
   background: var(--ds-tone-danger-bg);
   color: var(--ds-tone-danger-fg);
   font-weight: var(--ds-weight-medium);
@@ -319,7 +316,6 @@
 .elisionLine {
   flex: 1;
   height: 0;
-  border-top: 1px dashed var(--ds-color-border-strong);
 }
 .elisionText {
   white-space: nowrap;
@@ -332,7 +328,7 @@
   height: 13px;
   margin-left: 1px;
   vertical-align: text-bottom;
-  border-radius: 1px;
+  border-radius: var(--ds-radius-mark);
   background: var(--ds-tone-info-fg);
   animation: global(ds-blink) calc(var(--ds-cadence-blink) / max(var(--ds-motion-live), 0.0001)) steps(2, jump-none) infinite;
 }

@@ -1,11 +1,13 @@
 /**
- * The organization's settings: for now, its GitHub connection — the one
- * thing every project's pull requests depend on, and the one most often
- * wrong in a way nobody notices until an agent's work cannot land.
+ * The organization's settings: who is in it (everyone sees; admins manage),
+ * then, for its admins, its GitHub connection and
+ * the defaults every project starts from — each agent role (a sub-page of
+ * Agents in the menu) and delivery. A project changes any of them for
+ * itself in its own settings.
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Breadcrumb } from "@dude/design-system/components";
+import { AgentAvatar, SettingRow, SettingsHeader, SettingsNote, SettingsSection } from "@dude/design-system/components";
 import {
   Badge,
   Button,
@@ -16,14 +18,85 @@ import {
   CardHeader,
   Input,
   KeyValueList,
-  Page,
-  PageHeader,
   Spinner,
 } from "@dude/design-system/primitives";
-import type { ApiClient, ForgeConnection } from "../api/client.ts";
+import type { ApiClient, ForgeConnection, Member } from "../api/client.ts";
+import { MembersSection } from "./MembersSection.tsx";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
+import { settingsPage } from "../settings.ts";
+import { SETTINGS_ROLES } from "@dude/domain";
+import { agentsNav, deliveryNav, isRole, SettingsFrame, useSettings } from "./SettingsFrame.tsx";
+import { DeliveryPage, RolePage } from "./settingsPages.tsx";
+import { GithubBehaviour, WebhookCard } from "./GithubSettings.tsx";
 
-export function OrganizationSettingsScreen({ client }: { client: ApiClient }) {
+// The first is where the screen opens: who is in the organization, then
+// GitHub, what a new organization sets up first.
+const PAGES = ["members", "github", "general", ...SETTINGS_ROLES, "delivery"] as const;
+
+export interface OrganizationSettingsScreenProps {
+  client: ApiClient;
+  /** You: admins manage the members. */
+  me: Member | null;
+  people: readonly Member[];
+  onPeopleChanged: () => void;
+  page?: string | undefined;
+  onPage: (page: string) => void;
+  onOpenRun?: ((runId: string) => void) | undefined;
+}
+
+export function OrganizationSettingsScreen({ client, me, people, onPeopleChanged, page: given, onPage, onOpenRun }: OrganizationSettingsScreenProps) {
+  const page = settingsPage(given, PAGES);
+  const { scope, problem } = useSettings(client, () => client.organizationSettings(), (p) => client.updateOrganizationSettings(p));
+  const settings = scope?.settings;
+  // Members and GitHub are the backend's own: they show at once, and still
+  // work while the orchestrator (defaults, built-in prompts) is away. Only
+  // the pages that need its settings wait for them.
+  const needsSettings = page === "general" || page === "delivery" || isRole(page);
+  return (
+    <SettingsFrame
+      testId="org-settings"
+      loading={false}
+      problem={null}
+      page={page}
+      onPage={onPage}
+      scope={{ title: settings?.organization.name ?? "Organisation", subtitle: "Organisation settings", leading: <AgentAvatar role="orchestrator" size="lg" /> }}
+      items={[
+        { id: "members", label: "Members", icon: "human" },
+        { id: "general", label: "General", icon: "settings" },
+        { id: "github", label: "GitHub", icon: "git-branch" },
+        agentsNav(settings),
+        deliveryNav(settings),
+      ]}
+    >
+      <SettingsNote icon="info">
+        Organisation admins only change these. Every project starts from them; an admin can change them for one project in its own settings.
+      </SettingsNote>
+      {page === "members" ? (
+        <MembersSection client={client} me={me} people={people} onChanged={onPeopleChanged} />
+      ) : page === "github" ? (
+        <GitHubPage client={client} admin={me?.role === "admin"} />
+      ) : needsSettings && !scope ? (
+        <div className="centered">{problem ? <Callout tone="danger">{problem}</Callout> : <Spinner label="Loading…" />}</div>
+      ) : scope && page === "general" ? (
+        <>
+          <SettingsHeader title="General" />
+          <SettingsSection title="Organisation">
+            <SettingRow label="Name" help="How dude names this organisation, and what “From …” says in a project’s settings.">
+              <span data-testid="org-name">{scope.settings.organization.name}</span>
+            </SettingRow>
+          </SettingsSection>
+        </>
+      ) : scope && page === "delivery" ? (
+        <DeliveryPage scope={scope} />
+      ) : scope && isRole(page) ? (
+        <RolePage key={page} scope={scope} role={page} onOpenRun={onOpenRun} />
+      ) : null}
+    </SettingsFrame>
+  );
+}
+
+/** Where every project's pull requests are opened — the one thing most often wrong in a way nobody notices until an agent's work cannot land. */
+function GitHubPage({ client, admin }: { client: ApiClient; admin: boolean }) {
   const [connection, setConnection] = useState<ForgeConnection | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
@@ -64,9 +137,8 @@ export function OrganizationSettingsScreen({ client }: { client: ApiClient }) {
   const webhookUrl = connection.connected ? `${window.location.origin}${connection.webhookPath}` : null;
 
   return (
-    <Page data-testid="org-settings">
-      <PageHeader breadcrumb={<Breadcrumb items={[{ id: "org", label: "Organization" }]} />} title="Settings"
-        description="For every project: where pull requests are opened." />
+    <>
+      <SettingsHeader title="GitHub" description="Where every project’s pull requests are opened, and how dude behaves there." />
       <Card>
         <CardHeader
           title="GitHub"
@@ -95,11 +167,19 @@ export function OrganizationSettingsScreen({ client }: { client: ApiClient }) {
               {verifying ? "Checking…" : "Verify"}
             </Button>
           ) : null}
-          <Button variant={connection.connected ? "ghost" : "primary"} onClick={() => setReplacing(true)} data-testid="forge-connect">
-            {connection.connected ? "Replace token" : "Connect GitHub"}
-          </Button>
+          {admin ? (
+            <Button variant={connection.connected ? "quiet" : "primary"} onClick={() => setReplacing(true)} data-testid="forge-connect">
+              {connection.connected ? "Replace token" : "Connect GitHub"}
+            </Button>
+          ) : null}
         </CardFooter>
       </Card>
+      {connection.connected ? (
+        <>
+          <WebhookCard client={client} health={connection.webhook} onChanged={() => void load()} admin={admin} />
+          <GithubBehaviour client={client} admin={admin} />
+        </>
+      ) : null}
       {replacing ? (
       <TokenDialog
         client={client}
@@ -111,7 +191,7 @@ export function OrganizationSettingsScreen({ client }: { client: ApiClient }) {
         }}
       />
       ) : null}
-    </Page>
+    </>
   );
 }
 

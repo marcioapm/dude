@@ -82,7 +82,7 @@ export function FormDialog(props: FormDialogProps) {
       description={props.description}
       footer={
         <>
-          <Button variant="ghost" onClick={() => props.onOpenChange(false)}>
+          <Button variant="quiet" onClick={() => props.onOpenChange(false)}>
             Cancel
           </Button>
           <Button type="submit" form={formId} variant={props.extraActions ? "secondary" : "primary"}

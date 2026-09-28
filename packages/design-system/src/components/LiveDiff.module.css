@@ -1,0 +1,272 @@
+/*
+ * LiveDiff: a working agent's changes, as they happen. The files on the
+ * left, on the chrome shade; the diffs on the surface, each under a header
+ * that sticks while its lines scroll. Changed lines carry their sign and a
+ * tint; a line new since the last update flashes and keeps a mark down its
+ * side for a moment, and the file it is in lights up in the list.
+ */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  gap: var(--ds-space-12);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+  min-width: 0;
+  /* Clear of the pane's edges, where the file list and diff meet them. */
+  padding-inline: var(--ds-space-12);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+.live {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  padding: 2px var(--ds-space-8);
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-tone-success-bg);
+  color: var(--ds-tone-success-fg);
+  font-size: var(--ds-text-xs);
+  font-weight: var(--ds-weight-semibold);
+}
+.live i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: global(ds-pulse) var(--ds-cadence-breathe) infinite;
+}
+.since {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.since b {
+  color: var(--ds-color-text-strong);
+  font-weight: var(--ds-weight-medium);
+}
+.mono {
+  font-family: var(--ds-font-mono);
+  font-feature-settings: "tnum", "zero";
+}
+.muted {
+  color: var(--ds-color-text-muted);
+}
+.spacer {
+  flex: 1;
+}
+.last {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  font-size: var(--ds-text-xs);
+  white-space: nowrap;
+}
+.add {
+  color: var(--ds-diff-add-fg);
+}
+.del {
+  color: var(--ds-diff-del-fg);
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  background: var(--ds-color-chrome);
+}
+.files {
+  overflow: auto;
+  padding: var(--ds-space-8);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.file {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: var(--ds-space-8);
+  align-items: center;
+  width: 100%;
+  padding: var(--ds-space-6) var(--ds-space-8);
+  border: 0;
+  border-radius: var(--ds-radius-control);
+  background: none;
+  color: var(--ds-color-text-primary);
+  font: inherit;
+  font-size: var(--ds-text-sm);
+  text-align: left;
+}
+.file:hover {
+  background: var(--ds-color-hover-wash);
+}
+.file:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--ds-color-focus-ring);
+}
+.file.current {
+  background: var(--ds-color-active-wash);
+}
+.file.all {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+.touched {
+  animation: global(ds-flash) calc(1.6s * var(--ds-motion-live, 1)) var(--ds-ease-exit);
+}
+.path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.path b {
+  font-weight: var(--ds-weight-regular);
+  color: var(--ds-color-text-strong);
+}
+.dir {
+  color: var(--ds-color-text-muted);
+}
+.counts {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+}
+.note {
+  margin: var(--ds-space-12) var(--ds-space-8) var(--ds-space-4);
+  font-size: var(--ds-text-xs);
+  line-height: var(--ds-leading-normal);
+  color: var(--ds-color-text-muted);
+}
+
+.status {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--ds-radius-mark);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-2xs);
+  font-weight: var(--ds-weight-semibold);
+}
+.statusM {
+  background: var(--ds-tone-attention-bg);
+  color: var(--ds-tone-attention-fg);
+}
+.statusA {
+  background: var(--ds-tone-success-bg);
+  color: var(--ds-tone-success-fg);
+}
+.statusD {
+  background: var(--ds-tone-danger-bg);
+  color: var(--ds-tone-danger-fg);
+}
+.statusR {
+  background: var(--ds-tone-info-bg);
+  color: var(--ds-tone-info-fg);
+}
+
+.diffs {
+  overflow: auto;
+  background: var(--ds-color-surface);
+  padding-bottom: var(--ds-space-32);
+  position: relative;
+}
+.section {
+  margin-bottom: var(--ds-space-8);
+}
+.fileHead {
+  position: sticky;
+  top: 0;
+  z-index: var(--ds-z-raised);
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  padding: var(--ds-space-8) var(--ds-space-12);
+  background: var(--ds-color-surface);
+  box-shadow: 0 1px 0 var(--ds-color-border-subtle);
+  font-size: var(--ds-text-sm);
+}
+.fileHead b {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-strong);
+}
+.hunk {
+  padding: 3px var(--ds-space-12);
+  background: var(--ds-diff-hunk-bg);
+  color: var(--ds-diff-hunk-fg);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+}
+.line {
+  position: relative;
+  display: grid;
+  grid-template-columns: 44px 44px 18px minmax(0, 1fr);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-mono);
+  line-height: 1.65;
+  color: var(--ds-color-text-primary);
+}
+.n {
+  padding-right: var(--ds-space-8);
+  text-align: right;
+  color: var(--ds-color-text-disabled);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+.sign {
+  user-select: none;
+  opacity: 0.8;
+}
+.text {
+  padding-right: var(--ds-space-12);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.added {
+  background: var(--ds-diff-add-bg);
+}
+.added .text,
+.added .sign {
+  color: var(--ds-diff-add-fg);
+}
+.removed {
+  background: var(--ds-diff-del-bg);
+}
+.removed .text,
+.removed .sign {
+  color: var(--ds-diff-del-fg);
+}
+/* New since the last update: a flash over the line, and a mark down its side. */
+.fresh {
+  box-shadow: inset 3px 0 0 var(--ds-tone-info-mark);
+}
+.fresh::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  animation: global(ds-flash) calc(2.2s * var(--ds-motion-live, 1)) var(--ds-ease-exit) both;
+}
+/* The flash sits under the line's text, not over it. */
+.fresh > span {
+  position: relative;
+  z-index: 1;
+}
+
+.empty {
+  padding: var(--ds-space-16);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}

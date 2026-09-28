@@ -22,7 +22,7 @@
   min-width: 120px;
   background: var(--ds-color-raised);
   border: 1px solid var(--ds-color-border);
-  border-radius: var(--ds-radius-md);
+  border-radius: var(--ds-radius-control);
   color: var(--ds-color-text-primary);
   font-size: var(--ds-text-md);
   line-height: 1;
@@ -37,7 +37,8 @@
 .trigger[data-placeholder] {
   color: var(--ds-color-text-muted);
 }
-.trigger[data-disabled] {
+.trigger[data-disabled],
+.trigger:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -59,7 +60,7 @@
   min-width: var(--radix-select-trigger-width);
   max-height: var(--radix-select-content-available-height);
   background: var(--ds-color-overlay);
-  border-radius: var(--ds-radius-lg);
+  border-radius: var(--ds-radius-float);
   box-shadow: var(--ds-shadow-2);
   overflow: hidden;
   animation: global(ds-pop) var(--ds-duration-base) var(--ds-ease-enter);
@@ -76,7 +77,7 @@
   height: var(--ds-size-row-default);
   padding: 0 var(--ds-space-8) 0 var(--ds-space-24);
   position: relative;
-  border-radius: var(--ds-radius-sm);
+  border-radius: var(--ds-radius-control);
   font-size: var(--ds-text-md);
   color: var(--ds-color-text-primary);
   user-select: none;

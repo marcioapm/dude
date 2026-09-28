@@ -1,6 +1,7 @@
 package forge
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"unicode"
@@ -9,12 +10,20 @@ import (
 // Signal is what the workflow is told about a change on a pull request.
 // Nil, most of the time.
 type Signal struct {
-	// "terminal" (merged or closed), "actionable" (something to fix), or
-	// "readiness" (its approval or checks changed: it may now be ready to
-	// merge, or no longer).
+	// "terminal" (merged or closed), "actionable" (something to fix),
+	// "readiness" (its approval, checks, mergeability or threads changed:
+	// it may now be ready to merge, or no longer), "conflict" (it no longer
+	// merges: a person resolves it), or "ci_stuck" (checks pending on its
+	// head for longer than the organization allows).
 	Kind     string               `json:"kind"`
 	State    string               `json:"state,omitempty"`
 	Feedback []ActionableFeedback `json:"feedback,omitempty"`
+	// It turned conflicting as well: set on an actionable signal too, so
+	// the conflict is not lost to the fix it arrived with.
+	Conflict bool `json:"conflict,omitempty"`
+	// Which pull request, for a person reading the escalation.
+	Repo   string `json:"repo,omitempty"`
+	Number int    `json:"number,omitempty"`
 }
 
 // ActionableFeedback is one thing a fixer is sent to address.
@@ -26,6 +35,29 @@ type ActionableFeedback struct {
 	Author string `json:"author,omitempty"`
 	Body   string `json:"body"`
 	Path   string `json:"path,omitempty"`
+	// What kind of feedback it was (Feedback.Kind): a submitted review
+	// starts a new round of fixes, a comment does not.
+	Kind string `json:"kind,omitempty"`
+	// For failing checks: which, where their logs are, and what they said.
+	Checks []FailingCheck `json:"checks,omitempty"`
+}
+
+// IsReview says it came through GitHub's review — its text, or a line
+// comment, which GitHub files under a review: a new round, as a person
+// sees it. A conversation comment, or CI, is not.
+func (f ActionableFeedback) IsReview() bool {
+	return f.Kind == KindReview || f.Kind == KindChangesRequested || f.Kind == KindLineComment
+}
+
+// FailingCheck is one check that failed, as a fixer is told about it.
+type FailingCheck struct {
+	Name string `json:"name"`
+	URL  string `json:"url,omitempty"`
+	// The end of what it reported (its output and annotations), when the
+	// checks API has it.
+	Log string `json:"log,omitempty"`
+	// The check run, to read its log from.
+	RunID int64 `json:"runId,omitempty"`
 }
 
 // Words that carry approval or thanks and nothing else.
@@ -122,8 +154,12 @@ func IsActionableComment(f Feedback, factoryLogins []string) bool {
 //
 // Most of what happens on a PR — an approval, a green check, a bot comment —
 // only updates state. Two things are worth waking a fixer for: a person
-// asking for a change, and a check that turned red. Returns nil otherwise,
-// which is the common case and the reason this exists.
+// asking for a change, and a check that turned red; and one is worth
+// stopping for a person: the branch turning conflicting. Returns nil
+// otherwise, which is the common case and the reason this exists.
+//
+// feedback is what may wake a fixer: its authors already passed the
+// organization's rule for who may (MayWake).
 func Classify(prior, current Status, feedback []Feedback, factoryLogins []string) *Signal {
 	if current.State == StateMerged || current.State == StateClosed {
 		if prior.State == current.State {
@@ -135,32 +171,69 @@ func Classify(prior, current Status, feedback []Feedback, factoryLogins []string
 	var actionable []ActionableFeedback
 	for _, f := range feedback {
 		if IsActionableComment(f, factoryLogins) {
-			actionable = append(actionable, ActionableFeedback{Source: "review", Author: f.Author, Body: f.Body, Path: f.Path})
+			actionable = append(actionable, ActionableFeedback{Source: "review", Author: f.Author, Body: f.Body, Path: f.Path, Kind: f.Kind})
 		}
 	}
 	// A check turning red is worth a fixer; one already red is not news, and
 	// waking again would spend the loop's budget on a failure the last fix
 	// already saw.
 	if current.Checks == ChecksFailing && prior.Checks != ChecksFailing {
-		actionable = append(actionable, ActionableFeedback{
-			Source: "checks",
-			Body:   "Continuous integration is failing on this branch. Find out why and fix it.",
-		})
+		f := ActionableFeedback{Source: "checks",
+			Body: "Continuous integration is failing on this branch. Find out why and fix it."}
+		for _, c := range current.CheckList {
+			if c.Failed() {
+				f.Checks = append(f.Checks, FailingCheck{Name: c.Name, URL: c.URL, RunID: c.RunID})
+			}
+		}
+		actionable = append(actionable, f)
 	}
+	conflict := current.Mergeable == MergeConflicting && prior.Mergeable != MergeConflicting
 	if len(actionable) > 0 {
-		return &Signal{Kind: "actionable", Feedback: actionable}
+		return &Signal{Kind: "actionable", Feedback: actionable, Conflict: conflict}
 	}
-	// Approval or green checks gained or lost: the task may be ready to
-	// merge, or no longer. Worth telling the workflow, not a fixer.
-	if Ready(current.Review, current.Checks) != Ready(prior.Review, prior.Checks) {
+	if conflict {
+		return &Signal{Kind: "conflict"}
+	}
+	// Ready or no longer: the task may be ready to merge, or no longer.
+	// Worth telling the workflow, not a fixer.
+	if Ready(current) != Ready(prior) {
 		return &Signal{Kind: "readiness"}
 	}
 	return nil
 }
 
-// Ready says a pull request has what merging it needs: approved, and its
-// checks passing — or none configured, which GitHub reports as unknown.
-// The factory never merges; this is what a person is told.
-func Ready(review, checks string) bool {
-	return review == ReviewApproved && (checks == ChecksPassing || checks == ChecksUnknown)
+// Ready says a pull request has what merging it needs: approved; its
+// checks passing — or none configured, which GitHub reports as unknown;
+// no conflict with its base; and no review thread left unresolved. The
+// factory merges only when a person says so; this is what a person is told.
+func Ready(s Status) bool { return len(Blockers(s)) == 0 }
+
+// Blockers says, in a person's words, what keeps a pull request from
+// being merged: nothing, when it is ready.
+func Blockers(s Status) []string {
+	var out []string
+	if s.State == StateDraft {
+		// GitHub merges no draft: it is marked ready for review first.
+		out = append(out, "it is a draft")
+	}
+	switch s.Checks {
+	case ChecksFailing:
+		out = append(out, "checks are failing")
+	case ChecksPending:
+		out = append(out, "checks are still running")
+	}
+	switch s.Review {
+	case ReviewChangesRequested:
+		out = append(out, "changes were requested")
+	case ReviewApproved:
+	default:
+		out = append(out, "nobody has approved it")
+	}
+	if s.Mergeable == MergeConflicting {
+		out = append(out, "it conflicts with its base")
+	}
+	if s.UnresolvedThreads > 0 {
+		out = append(out, fmt.Sprintf("%d review thread(s) unresolved", s.UnresolvedThreads))
+	}
+	return out
 }

@@ -32,8 +32,19 @@ export const ALL_AGENT_ROLES = agentRoleSchema.options;
  * express "any harness that satisfies the capabilities" and let policy
  * pick — plan §45 capability negotiation.
  */
+/** How hard a model thinks. */
+export const EFFORTS = ["low", "medium", "high", "max"] as const;
+export const effortSchema = z.enum(EFFORTS);
+export type Effort = z.infer<typeof effortSchema>;
+/** Running time allowed per session, in minutes: up to a week. */
+export const timeLimitMinutesSchema = z.number().int().min(1).max(10_080);
+
 export const agentModelConfigSchema = z.object({
-  model: z.string().min(1),
+  /**
+   * Optional at each layer: a project that changes only a role's effort
+   * keeps its organization's model (resolveAgentModel, field by field).
+   */
+  model: z.string().min(1).optional(),
   harness: z.string().min(1).optional(),
   /** Overrides the harness default when set. */
   maxTokens: z.number().int().positive().optional(),
@@ -49,6 +60,10 @@ export const agentModelConfigSchema = z.object({
    * spend context on every turn to say nothing.
    */
   context: z.string().max(20_000).optional(),
+  /** How hard the model thinks; unset leaves it to the model. */
+  effort: effortSchema.optional(),
+  /** Running time allowed per session, in minutes. */
+  timeLimitMinutes: timeLimitMinutesSchema.optional(),
 });
 export type AgentModelConfig = z.infer<typeof agentModelConfigSchema>;
 
@@ -56,7 +71,11 @@ export type AgentModelConfig = z.infer<typeof agentModelConfigSchema>;
  * Per-project, per-role model configuration. Partial: any role left unset
  * falls back to the organization default, then to the system default.
  */
-export const agentModelsSchema = z.record(agentRoleSchema, agentModelConfigSchema).default({});
+export const agentModelsSchema = z
+  // The fixer is the implementer told something else; it takes the
+  // implementer's settings except where it is given its own.
+  .record(z.union([agentRoleSchema, z.literal("fixer")]), agentModelConfigSchema)
+  .default({});
 export type AgentModels = z.infer<typeof agentModelsSchema>;
 
 // ---------------------------------------------------------------------------
@@ -121,6 +140,8 @@ export const deliveryPolicySchema = z
     requiredReviewers: z.array(z.enum(REVIEWER_CATEGORIES)).min(1),
     blockingSeverities: z.array(findingSeveritySchema).min(1),
     maxReviewIterations: z.number().int().min(1).max(20),
+    /** Fix attempts one finding may survive before it is escalated on its own. */
+    maxAttemptsPerFinding: z.number().int().min(1).max(20),
     maxPrFixIterations: z.number().int().min(0).max(20),
     simplify: z.boolean(),
     /** A browser tester exercises the change and publishes a video, before the pull request. */
@@ -150,6 +171,8 @@ export const projectSchema = z.object({
   /** How its work is delivered, over the factory's defaults. */
   deliveryPolicy: deliveryPolicySchema.default({}),
   createdAt: z.string().datetime({ offset: true }),
+  /** Its face: an uploaded image's URL, or null for initials. */
+  imageUrl: z.string().nullable().default(null),
 });
 export type Project = z.infer<typeof projectSchema>;
 
@@ -205,7 +228,31 @@ export const taskRepositorySchema = z.object({
 });
 export type TaskRepository = z.infer<typeof taskRepositorySchema>;
 
-/** A person, by the id and name of the API key they use. */
+/**
+ * A person, wherever the API names one: an organization's member, by the
+ * id of their `people` row. `online` is whether they were seen in the last
+ * five minutes. `photoUrl` is an https URL or one the backend serves.
+ */
+export const personRefSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  photoUrl: z.string().nullable(),
+  online: z.boolean(),
+});
+export type PersonRef = z.infer<typeof personRefSchema>;
+
+/** Organization admins manage members and the organization's settings. */
+export const personRoleSchema = z.enum(["admin", "member"]);
+export type PersonRole = z.infer<typeof personRoleSchema>;
+
+/** A person as `GET /v1/me` and `GET /v1/people` describe them. */
+export interface PersonDetail extends PersonRef {
+  email: string | null;
+  role: PersonRole;
+  lastSeenAt: string | null;
+}
+
+/** A person, by id and name; any `PersonRef` is one. */
 export const personSchema = z.object({ id: z.string(), name: z.string() });
 export type Person = z.infer<typeof personSchema>;
 
@@ -225,10 +272,12 @@ export const taskSchema = z.object({
   requestedBy: z.string().nullable().default(null),
   /**
    * Who drives it: told when it waits on someone, and the only one who
-   * answers its agents. Until there are users, a person is a named API key.
-   * Null for a task nobody owns, which anyone may answer for.
+   * answers its agents. Null for a task nobody owns, which anyone may
+   * answer for.
    */
-  owner: personSchema.nullable().default(null),
+  owner: personRefSchema.nullable().default(null),
+  /** Everyone on it, the owner first. */
+  people: z.array(personRefSchema).default([]),
   createdAt: z.string().datetime({ offset: true }),
   updatedAt: z.string().datetime({ offset: true }),
 });
@@ -385,8 +434,9 @@ export const sessionSchema = z.object({
 export type Session = z.infer<typeof sessionSchema>;
 
 /**
- * Resolve the model config for a role: project → organization → default.
- * Returns null when no layer configures the role.
+ * Resolve the model config for a role: project → organization → default,
+ * field by field, so a project that sets only a role's effort keeps its
+ * organization's model. Returns null when no layer configures the role.
  */
 export function resolveAgentModel(
   role: AgentRole,
@@ -394,9 +444,8 @@ export function resolveAgentModel(
   organization: Pick<Organization, "defaultAgentModels">,
   systemDefaults: AgentModels = {},
 ): AgentModelConfig | null {
-  return (
-    project.agentModels[role] ?? organization.defaultAgentModels[role] ?? systemDefaults[role] ?? null
-  );
+  const layers = [systemDefaults[role], organization.defaultAgentModels[role], project.agentModels[role]].filter(Boolean);
+  return layers.length ? Object.assign({}, ...layers) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -437,6 +486,17 @@ export const pullRequestStateSchema = z.enum(["draft", "open", "merged", "closed
 export const checkStateSchema = z.enum(["pending", "passing", "failing", "unknown"]);
 export const reviewStateSchema = z.enum(["pending", "approved", "changes_requested"]);
 
+/** A check on a pull request's head, by the name GitHub shows (`PrCheck`). */
+export const prCheckSchema = z.object({
+  name: z.string(),
+  status: z.string(),
+  conclusion: z.string().nullable(),
+  url: z.string().nullable().optional(),
+  durationMs: z.number().nullable().optional(),
+});
+/** A reviewer's latest word (`PrReview`); `REQUESTED` for one asked who has not answered. */
+export const prReviewSchema = z.object({ login: z.string(), state: z.string(), submittedAt: z.string().nullable().optional() });
+
 export const pullRequestSchema = z.object({
   id: z.string(),
   taskId: z.string(),
@@ -450,9 +510,149 @@ export const pullRequestSchema = z.object({
   baseBranch: z.string(),
   title: z.string(),
   state: pullRequestStateSchema,
-  checks: checkStateSchema,
+  /** Every check by name, as GitHub reports them. */
+  checks: z.array(prCheckSchema),
+  /**
+   * The checks' verdict as dude decides on it: pending too for a new head
+   * CI has yet to report on, and for checks the token cannot read.
+   */
+  checkState: checkStateSchema,
+  /** The review verdict: one change request outweighs approvals. */
   review: reviewStateSchema,
+  /** Each reviewer's latest word, and those asked who have not answered. */
+  reviews: z.array(prReviewSchema),
+  mergeable: z.enum(["clean", "behind", "conflicting", "unknown"]),
+  /** Commits its base has that it lacks. */
+  behindBy: z.number().int(),
+  unresolvedThreads: z.number().int(),
+  /** The one state it shows as (`prDisplayState`, below). */
+  display: z.lazy(() => z.enum(PR_DISPLAY_STATES)),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
 export type PullRequest = z.infer<typeof pullRequestSchema>;
+
+// ---------------------------------------------------------------------------
+// What a pull request shows as: one state, by priority
+// ---------------------------------------------------------------------------
+
+/**
+ * The one state a pull request is shown as, most pressing first: merged or
+ * closed says it is over; then what stands between it and a merge, in the
+ * order a person deals with it (red CI, CI still running, nobody has
+ * looked, changes asked for, a conflict, open threads); then ready. The
+ * rest of what is true goes in the chip's tooltip.
+ */
+export const PR_DISPLAY_STATES = [
+  "merged",
+  "closed",
+  "ci_red",
+  "ci_running",
+  "awaiting",
+  "changes",
+  "conflict",
+  "comments",
+  "ready",
+] as const;
+export type PrDisplayState = (typeof PR_DISPLAY_STATES)[number];
+
+/** A check run as GitHub reports it (`checks_json`). */
+export interface PrCheck {
+  name: string;
+  /** `queued`, `in_progress`, `completed`… */
+  status: string;
+  /** Set once completed: `success`, `failure`, `neutral`, `skipped`, `cancelled`, `timed_out`… */
+  conclusion: string | null;
+  url?: string | null | undefined;
+  durationMs?: number | null | undefined;
+}
+
+/** A review as GitHub reports it (`reviews_json`); each person's latest verdict counts. */
+export interface PrReview {
+  login: string;
+  /** `APPROVED`, `CHANGES_REQUESTED`, `COMMENTED`, `DISMISSED`. */
+  state: string;
+  submittedAt?: string | null | undefined;
+}
+
+export type PrMergeable = "clean" | "behind" | "conflicting" | "unknown";
+
+/**
+ * What `prDisplayState` reads: the fields a PR has today (`state`, and
+ * `checks` and `review` as one word each) and the richer ones the GitHub
+ * work adds — `checks` as the list of runs, `reviews` by person,
+ * `mergeable`, `unresolvedThreads`. A richer field wins when present;
+ * absent, the summary decides, so the state is right before and after.
+ */
+export interface PrDisplayInput {
+  state: PullRequest["state"];
+  checks: PullRequest["checkState"] | ReadonlyArray<PrCheck>;
+  review: PullRequest["review"];
+  reviews?: ReadonlyArray<PrReview> | null | undefined;
+  mergeable?: PrMergeable | null | undefined;
+  unresolvedThreads?: number | null | undefined;
+}
+
+/**
+ * One check's reading, as the orchestrator's checkRunState has it (forge,
+ * github.go): running is pending; finished, its conclusion decides. Neutral
+ * and skipped pass. Cancelled, waiting on a person, or superseded is not a
+ * failure an agent could fix: pending, never failed, never re-run.
+ */
+function prCheckState(check: PrCheck): "passing" | "pending" | "failing" {
+  if (check.status.toLowerCase() !== "completed") return "pending";
+  switch ((check.conclusion ?? "").toLowerCase()) {
+    case "success": case "neutral": case "skipped": return "passing";
+    case "cancelled": case "action_required": case "stale": return "pending";
+  }
+  return "failing";
+}
+
+/** Whether a check run ended badly. */
+export function prCheckFailed(check: PrCheck): boolean {
+  return prCheckState(check) === "failing";
+}
+
+/** The checks' verdict: one failing run outweighs pending ones, which outweigh all green. */
+export function prChecksSummary(checks: PrDisplayInput["checks"]): PullRequest["checkState"] {
+  if (typeof checks === "string") return checks;
+  if (checks.length === 0) return "unknown";
+  const states = checks.map(prCheckState);
+  if (states.includes("failing")) return "failing";
+  if (states.includes("pending")) return "pending";
+  return "passing";
+}
+
+/**
+ * The review verdict: each person's latest, where a comment is not a
+ * verdict and leaves theirs standing; one change request outweighs any
+ * number of approvals, as GitHub has it.
+ */
+export function prReviewSummary(pr: Pick<PrDisplayInput, "review" | "reviews">): PullRequest["review"] {
+  if (!pr.reviews || pr.reviews.length === 0) return pr.review;
+  const latest = new Map<string, string>();
+  const ordered = [...pr.reviews].sort((a, b) => (a.submittedAt ?? "").localeCompare(b.submittedAt ?? ""));
+  for (const r of ordered) {
+    const state = r.state.toUpperCase();
+    if (state !== "COMMENTED") latest.set(r.login, state);
+  }
+  const verdicts = [...latest.values()];
+  if (verdicts.includes("CHANGES_REQUESTED")) return "changes_requested";
+  if (verdicts.includes("APPROVED")) return "approved";
+  return "pending";
+}
+
+/** The one state to show a pull request as; `PR_DISPLAY_STATES` is the order. */
+export function prDisplayState(pr: PrDisplayInput): PrDisplayState {
+  if (pr.state === "merged") return "merged";
+  if (pr.state === "closed") return "closed";
+  const checks = prChecksSummary(pr.checks);
+  if (checks === "failing") return "ci_red";
+  if (checks === "pending") return "ci_running";
+  const review = prReviewSummary(pr);
+  if (review === "pending") return "awaiting";
+  if (review === "changes_requested") return "changes";
+  if (pr.mergeable === "conflicting") return "conflict";
+  if ((pr.unresolvedThreads ?? 0) > 0) return "comments";
+  return "ready";
+}

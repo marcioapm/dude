@@ -1,0 +1,73 @@
+/* The top line of a screen, and the segmented control that sits in it. */
+
+.root {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8) var(--ds-space-12);
+  min-height: 60px;
+  padding: var(--ds-space-8) var(--ds-space-24);
+  flex-shrink: 0;
+}
+.title {
+  margin: 0;
+  font-size: var(--ds-text-xl);
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
+  line-height: var(--ds-leading-tight);
+}
+.meta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+.spacer {
+  flex: 1;
+}
+.actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
+
+.seg {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-active-wash);
+}
+.seg button {
+  height: 28px;
+  padding: 0 var(--ds-space-12);
+  border: 0;
+  border-radius: var(--ds-radius-control);
+  background: none;
+  color: var(--ds-color-text-secondary);
+  font: inherit;
+  font-size: var(--ds-text-sm);
+  white-space: nowrap;
+}
+.segSm button {
+  height: 22px;
+  padding: 0 var(--ds-space-8);
+  font-size: var(--ds-text-xs);
+}
+.seg button:disabled {
+  cursor: not-allowed;
+  color: var(--ds-color-text-disabled);
+}
+.seg button:hover:not(:disabled) {
+  color: var(--ds-color-text-strong);
+}
+.seg button[aria-pressed="true"] {
+  background: var(--ds-color-surface);
+  color: var(--ds-color-text-strong);
+  box-shadow: var(--ds-shadow-1);
+}
+.seg button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--ds-color-focus-ring);
+}

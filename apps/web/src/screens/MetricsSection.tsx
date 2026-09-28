@@ -5,10 +5,11 @@
  */
 
 import { useEffect, useState } from "react";
-import { CostDisplay, Duration, MetricGroup, MetricTile, TokenCount } from "@dude/design-system/components";
+import { Cost, Duration, MetricGroup, MetricTile, TokenCount } from "@dude/design-system/components";
 import { Section, Table, TBody, Td, Th, THead, Tr } from "@dude/design-system/primitives";
 import { runLabel } from "@dude/domain";
-import type { ApiClient, EpicMetrics, TaskMetrics } from "../api/client.ts";
+import { plural } from "@dude/design-system";
+import type { ApiClient, CostSplit, EpicMetrics, TaskMetrics } from "../api/client.ts";
 import { reportedCost } from "../api/client.ts";
 
 /**
@@ -17,14 +18,23 @@ import { reportedCost } from "../api/client.ts";
  * opening another.
  */
 
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+/**
+ * A cost as a total of model tokens and machine time. Tokens of zero are
+ * "not reported", never $0.00 — as the run's header shows them.
+ */
+function CostOf({ cost, tokens, activeMs, size }: { cost: CostSplit; tokens?: number; activeMs?: number; size?: "sm" | "md" | "lg" }) {
+  return (
+    <Cost tokensUsd={reportedCost(cost.tokensUsd)} machineUsd={cost.machineUsd > 0 ? cost.machineUsd : null}
+      {...(tokens !== undefined ? { tokens } : {})} {...(activeMs !== undefined ? { machineMs: activeMs } : {})} size={size} />
+  );
+}
 
-/** A cost tile: "—", said to be not reported, for a cost of zero — as the run's header shows it. */
-function CostTile({ usd, sub }: { usd: number; sub?: string }) {
-  const known = reportedCost(usd);
-  return known === null
-    ? <MetricTile size="sm" label="Cost" value="—" title="Cost not reported" {...(sub ? { sub } : {})} />
-    : <MetricTile size="sm" label="Cost" value={known} unit="usd" {...(sub ? { sub } : {})} />;
+/** A cost tile: the total, split under it. */
+function CostTile({ cost, tokens, activeMs, sub }: { cost: CostSplit; tokens: number; activeMs: number; sub?: string }) {
+  return (
+    <MetricTile size="sm" label="Cost" data-testid="cost-tile"
+      value={<CostOf cost={cost} tokens={tokens} activeMs={activeMs} size="lg" />} {...(sub ? { sub } : {})} />
+  );
 }
 
 export function TaskMetricsSection({ client, taskId, live, done, version }: {
@@ -43,7 +53,7 @@ export function TaskMetricsSection({ client, taskId, live, done, version }: {
         <MetricTile size="sm" label="Agents working" value={m.activeMs} unit="ms" live={live} />
         <MetricTile size="sm" label="Waiting on people" value={m.humanWaitMs} unit="ms" />
         <MetricTile size="sm" label="In review" value={m.reviewMs} unit="ms" />
-        <CostTile usd={m.costUsd} sub={plural(m.runs.length, "run")} />
+        <CostTile cost={m.cost} tokens={m.tokens.input + m.tokens.output} activeMs={m.activeMs} sub={plural(m.runs.length, "run")} />
       </MetricGroup>
       <Table density="compact" data-testid="run-metrics">
         <THead>
@@ -64,7 +74,7 @@ export function TaskMetricsSection({ client, taskId, live, done, version }: {
               <Td align="right" mono>
                 <TokenCount tokens={r.tokens.input} /> / <TokenCount tokens={r.tokens.output} />
               </Td>
-              <Td align="right" mono><CostDisplay usd={reportedCost(r.costUsd)} /></Td>
+              <Td align="right" mono><CostOf cost={r.cost} tokens={r.tokens.input + r.tokens.output} activeMs={r.activeMs} /></Td>
             </Tr>
           ))}
         </TBody>
@@ -73,18 +83,18 @@ export function TaskMetricsSection({ client, taskId, live, done, version }: {
   );
 }
 
+/** An epic's figures, as one quiet line under its header: how far along, how long, what it cost. */
 export function EpicMetricsSection({ client, epicId, version }: { client: ApiClient; epicId: string; version: number }) {
   const [m, setM] = useState<EpicMetrics | null>(null);
   useEffect(() => void client.epicMetrics(epicId).then(setM, () => {}), [client, epicId, version]);
   if (!m || m.tasks === 0) return null;
   return (
-    <MetricGroup joined data-testid="epic-metrics">
-      <MetricTile size="sm" label="Done" value={m.done} unit="count" sub={`of ${plural(m.tasks, "task")}`} />
-      <MetricTile size="sm" label="Typical lead time" value={m.leadMsMedian ?? "—"} unit={m.leadMsMedian === null ? "none" : "ms"}
-        sub="median, finished tasks" />
-      <MetricTile size="sm" label="Agents working" value={m.activeMs} unit="ms" />
-      <MetricTile size="sm" label="Waiting on people" value={m.humanWaitMs} unit="ms" />
-      <CostTile usd={m.costUsd} />
-    </MetricGroup>
+    <div className="figures" data-testid="epic-metrics">
+      <span>{m.done} of {plural(m.tasks, "task")} done</span>
+      {m.leadMsMedian !== null ? <span title="Median lead time of its finished tasks">typically <Duration ms={m.leadMsMedian} /> each</span> : null}
+      <span>agents <Duration ms={m.activeMs} /></span>
+      {m.humanWaitMs > 0 ? <span>waiting on people <Duration ms={m.humanWaitMs} /></span> : null}
+      <CostOf cost={m.cost} tokens={m.tokens.input + m.tokens.output} activeMs={m.activeMs} size="sm" />
+    </div>
   );
 }

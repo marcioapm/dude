@@ -60,17 +60,31 @@ export const spaceNamed = {
   fieldY: 10,
 } as const;
 
+/**
+ * Radii are roles, not sizes. Structure — panels, board columns, cards,
+ * tables, the pipeline, the transcript — is square: `none`. What you touch is
+ * `control`; what floats above the page is `float`; a small inline mark (a
+ * kbd, a code span, a checkbox) is `mark`. Faces carry their kind in their
+ * shape: people are round (`full`), agents and projects are rounded squares
+ * whose corner scales with their size (percentages, emitted as-is).
+ * `test/radius.test.ts` holds every stylesheet to these.
+ */
 export const radius = {
   none: 0,
-  xs: 2,
-  sm: 4,
-  /** Default control radius. */
-  md: 6,
-  /** Cards. */
-  lg: 8,
-  /** Dialogs. */
-  xl: 12,
+  /** Small inline marks: kbd, a code span, a checkbox, a progress track. */
+  mark: 3,
+  /** Buttons, fields, menu rows, chips, a selectable row. */
+  control: 6,
+  /** Dialogs, popovers, menus, toasts, tooltips. */
+  float: 10,
+  /** A person's face, a live dot, the one pill (Needs you). */
   full: 9999,
+} as const;
+
+/** Rounded-square faces: the corner is a share of the size, so it holds at every size. */
+export const faceRadius = {
+  agent: "28%",
+  project: "22%",
 } as const;
 
 // Obsidian's stack: the platform UI face (SF Pro on macOS, Noto Sans or the

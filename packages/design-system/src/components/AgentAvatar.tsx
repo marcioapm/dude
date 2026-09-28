@@ -19,7 +19,8 @@ export const ROLE_LABEL: Record<AvatarKind, string> = {
   integration: "Integration",
 };
 
-const ROLE_ICON: Record<AvatarKind, IconName> = {
+/** Each kind's glyph: an agent always carries its role's, never a letter. */
+export const ROLE_ICON: Record<AvatarKind, IconName> = {
   orchestrator: "orchestrator",
   investigator: "investigator",
   implementer: "implementer",

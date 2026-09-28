@@ -8,7 +8,8 @@ import { useEffect, useState } from "react";
 import { useTheme } from "@dude/design-system";
 import { Breadcrumb } from "@dude/design-system/components";
 import { Button, Callout, Card, CardBody, CardHeader, FormActions, FormStack, Page, PageHeader, Select } from "@dude/design-system/primitives";
-import type { ApiClient } from "../api/client.ts";
+import type { ApiClient, Member } from "../api/client.ts";
+import { KeysSection, ProfileSection } from "./YouSections.tsx";
 import { useSave } from "../hooks/useSave.tsx";
 import { pushState, showTestNotification, turnPushOff, turnPushOn, type PushState } from "../push.ts";
 
@@ -19,7 +20,12 @@ const PUSH_TEXT: Record<PushState, string> = {
   unsupported: "This browser cannot show dude's notifications here (it needs a secure connection and push support).",
 };
 
-export function MySettingsScreen({ client }: { client: ApiClient }) {
+export function MySettingsScreen({ client, me, onChanged }: {
+  client: ApiClient;
+  /** You, as the shell has you (`usePeople`); `onChanged` reads you again. */
+  me: Member | null;
+  onChanged: () => void;
+}) {
   const theme = useTheme();
   const [push, setPush] = useState<PushState | null>(null);
   const { busy, problem, save } = useSave();
@@ -33,7 +39,9 @@ export function MySettingsScreen({ client }: { client: ApiClient }) {
   return (
     <Page data-testid="my-settings">
       <PageHeader breadcrumb={<Breadcrumb items={[{ id: "me", label: "You" }]} />} title="Settings"
-        description="Yours, in this browser: how dude looks, and what it tells you." />
+        description="Only you see these: how teammates see you, your keys, and — in this browser — how dude looks and what it tells you." />
+      {me ? <ProfileSection key={me.id} client={client} me={me} onChanged={onChanged} /> : null}
+      <KeysSection client={client} />
       <Card>
         <CardHeader title="Appearance" />
         <CardBody>
@@ -78,7 +86,7 @@ export function MySettingsScreen({ client }: { client: ApiClient }) {
                     <Button variant="secondary" disabled={busy} onClick={() => void showTestNotification()}>
                       Send a test notification
                     </Button>
-                    <Button variant="ghost" disabled={busy} onClick={() => void change(() => turnPushOff(client))} data-testid="push-off">
+                    <Button variant="quiet" disabled={busy} onClick={() => void change(() => turnPushOff(client))} data-testid="push-off">
                       Turn off
                     </Button>
                   </>

@@ -16,6 +16,10 @@ export const EventTypes = {
   EpicCreated: "epic.created",
   EpicUpdated: "epic.updated",
   EpicDeleted: "epic.deleted",
+  /** Organization or project settings changed. Payload: `{ scope, projectId?, changed }`. */
+  SettingsUpdated: "settings.updated",
+  /** A role's prompt was saved or restored. Payload: `{ role, versionId, projectId?, restoredFrom? }`. */
+  PromptSaved: "prompt.saved",
 
   // Task lifecycle
   TaskCreated: "task.created",
@@ -26,8 +30,23 @@ export const EventTypes = {
   TaskSteered: "task.steered",
   TaskAborted: "task.aborted",
   TaskStatusChanged: "task.status_changed",
-  /** Handed to someone else to drive. Payload: `{ from, to }`, api key ids. */
+  /** Handed to someone else to drive. Payload: `{ from, to }`, person ids. */
   TaskOwnerChanged: "task.owner_changed",
+  /** Who is on it changed. Payload: `{ people }`, person ids, the owner first. */
+  TaskPeopleChanged: "task.people_changed",
+
+  // People
+  /** An admin added someone. Payload: `{ personId, role }`. */
+  PersonInvited: "person.invited",
+  /** Payload: `{ personId, from, to }`. */
+  PersonRoleChanged: "person.role_changed",
+  /** Their keys were revoked with them. Payload: `{ personId }`. */
+  PersonRemoved: "person.removed",
+  /**
+   * Someone was seen (any request of theirs, at most once a minute). Live
+   * only, never in the ledger: no cursor. Payload: `{ person: PersonRef }`.
+   */
+  PersonSeen: "person.seen",
 
   // Workflow
   WorkflowTransitioned: "workflow.transitioned",
@@ -48,6 +67,13 @@ export const EventTypes = {
   RunCompleted: "run.completed",
   RunFailed: "run.failed",
   RunAborted: "run.aborted",
+  /**
+   * A Run's checkout changed: its diff against the commit it started from,
+   * read live or left by the beforeStop hook as it stopped. Payload: a
+   * summary with no lines (`RunDiffSummary`); the lines are
+   * `GET /v1/runs/:id/diff`.
+   */
+  RunDiffUpdated: "run.diff.updated",
 
   // Worker / capacity
   WorkerRegistered: "worker.registered",

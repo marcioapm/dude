@@ -36,12 +36,12 @@
   --ds-space-composer-gap: 6px;
   --ds-space-field-y: 10px;
   --ds-radius-none: 0px;
-  --ds-radius-xs: 2px;
-  --ds-radius-sm: 4px;
-  --ds-radius-md: 6px;
-  --ds-radius-lg: 8px;
-  --ds-radius-xl: 12px;
+  --ds-radius-mark: 3px;
+  --ds-radius-control: 6px;
+  --ds-radius-float: 10px;
   --ds-radius-full: 9999px;
+  --ds-radius-face-agent: 28%;
+  --ds-radius-face-project: 22%;
   --ds-font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", Roboto, "Inter Variable", "Inter", sans-serif;
   --ds-font-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, "Liberation Mono", monospace;
   --ds-text-2xs: 11px;
@@ -241,6 +241,8 @@
   --ds-diff-del-fg: #fc9697;
   --ds-diff-hunk-bg: #1d2a37;
   --ds-diff-hunk-fg: #7ca9d5;
+  --ds-merged-fg: #c3a5f9;
+  --ds-merged-bg: #332647;
   --ds-ansi-black: #919294;
   --ds-ansi-red: #fe8b83;
   --ds-ansi-green: #68ca80;
@@ -376,6 +378,8 @@
   --ds-diff-del-fg: #a52836;
   --ds-diff-hunk-bg: #dceeff;
   --ds-diff-hunk-fg: #286193;
+  --ds-merged-fg: #6e3ead;
+  --ds-merged-bg: #f1ebff;
   --ds-ansi-black: #1e1f21;
   --ds-ansi-red: #a83634;
   --ds-ansi-green: #0e7737;
@@ -512,6 +516,8 @@
     --ds-diff-del-fg: #a52836;
     --ds-diff-hunk-bg: #dceeff;
     --ds-diff-hunk-fg: #286193;
+    --ds-merged-fg: #6e3ead;
+    --ds-merged-bg: #f1ebff;
     --ds-ansi-black: #1e1f21;
     --ds-ansi-red: #a83634;
     --ds-ansi-green: #0e7737;
@@ -542,7 +548,7 @@
 [data-density="comfortable"] {
   --ds-text-md: 15px;
   --ds-text-prose: 16px;
-  --ds-radius-md: 6px;
+  --ds-radius-control: 6px;
   --ds-size-control-md: 32px;
   --ds-size-control-lg: 36px;
   --ds-size-row-default: 32px;
@@ -577,7 +583,7 @@
 [data-density="compact"] {
   --ds-text-md: 14px;
   --ds-text-prose: 15px;
-  --ds-radius-md: 5px;
+  --ds-radius-control: 5px;
   --ds-size-control-md: 30px;
   --ds-size-control-lg: 34px;
   --ds-size-row-default: 28px;

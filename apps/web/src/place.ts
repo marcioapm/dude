@@ -11,24 +11,27 @@ import type { NavRef } from "@dude/design-system";
 
 export type Place =
   | { view: "tree"; ref: NavRef }
-  | { view: "projectSettings"; projectId: string }
-  | { view: "orgSettings" }
+  | { view: "projectSettings"; projectId: string; page?: string }
+  | { view: "orgSettings"; page?: string }
   | { view: "mySettings" }
   | { view: "inbox" };
 
 const TREE_KINDS: ReadonlyArray<NavRef["kind"]> = ["project", "epic", "task", "run", "session"];
 
 export function parsePlace(hash: string): Place | null {
-  const [given, id, view] = hash.replace(/^#\/?/, "").split("/");
+  const [given, id, view, page] = hash.replace(/^#\/?/, "").split("/");
   // Links from before "work item" became "task": bookmarks, and
   // notifications already delivered.
   const kind = given === "workItem" ? "task" : given;
-  if (kind === "org" && id === "settings") return { view: "orgSettings" };
+  // A settings page (a role under Agents, Delivery) is part of the place.
+  if (kind === "org" && id === "settings") return view ? { view: "orgSettings", page: view } : { view: "orgSettings" };
   if (kind === "me" && id === "settings") return { view: "mySettings" };
   if (kind === "waiting") return { view: "inbox" };
   if (!kind || !id || !TREE_KINDS.includes(kind as NavRef["kind"])) return null;
   const decoded = decodeURIComponent(id);
-  if (kind === "project" && view === "settings") return { view: "projectSettings", projectId: decoded };
+  if (kind === "project" && view === "settings") {
+    return page ? { view: "projectSettings", projectId: decoded, page } : { view: "projectSettings", projectId: decoded };
+  }
   return { view: "tree", ref: { kind: kind as NavRef["kind"], id: decoded } };
 }
 
@@ -36,13 +39,13 @@ export function formatPlace(place: Place | null): string {
   if (!place) return "";
   switch (place.view) {
     case "orgSettings":
-      return "#/org/settings";
+      return place.page ? `#/org/settings/${place.page}` : "#/org/settings";
     case "mySettings":
       return "#/me/settings";
     case "inbox":
       return "#/waiting";
     case "projectSettings":
-      return `#/project/${encodeURIComponent(place.projectId)}/settings`;
+      return `#/project/${encodeURIComponent(place.projectId)}/settings${place.page ? `/${place.page}` : ""}`;
     case "tree":
       return `#/${place.ref.kind}/${encodeURIComponent(place.ref.id)}`;
   }

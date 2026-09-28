@@ -47,7 +47,7 @@
   padding: 0 var(--ds-space-4);
   margin: 0;
   border: 0;
-  border-radius: var(--ds-radius-sm);
+  border-radius: var(--ds-radius-control);
   background: none;
   font: inherit;
   color: inherit;

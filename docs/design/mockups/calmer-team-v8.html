@@ -1,0 +1,1797 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dude — calmer, for a team · v8 (mockups)</title>
+<style>
+/* Colours are dude's real tokens (packages/design-system/src/tokens/tokens.css):
+   tones for status, roles for agents, identity for people, accent for interaction.
+   New: --merged (one violet, GitHub's convention) and the radius/border rules. */
+:root, [data-theme="light"] {
+  --canvas:#f2f3f5; --surface:#ffffff; --chrome:#f7f8fa; --line:#e6e7e9; --field-line:#ccced0;
+  --strong:#101213; --text:#313335; --secondary:#515354; --muted:#626365;
+  --accent:#166daf; --accent-hover:#0a5e9b; --accent-subtle:#dceeff; --accent-text:#035b98;
+  --wash:rgba(49,51,53,.045); --wash-2:rgba(49,51,53,.08); --live:#06786c;
+  --neutral-fg:#50565c; --neutral-bg:#e5ecf3; --neutral-mark:#5e646a;
+  --info-fg:#074a7c; --info-bg:#dcedfe; --info-mark:#1375bf;
+  --attn-fg:#7e580c; --attn-bg:#fae9ce; --attn-mark:#bf7c15; --attn-solid:#efa810;
+  --ok-fg:#06786c; --ok-bg:#d9f3e2; --ok-mark:#11915b;
+  --bad-fg:#89051c; --bad-bg:#fee9e7; --bad-mark:#d33944; --bad-solid:#d33944;
+  --merged:#6f42c1; --merged-bg:#efe7fb;
+  --r-impl:#0c644e; --r-impl-bg:#d2f4e7; --r-rev:#98370c; --r-rev-bg:#ffe5dc; --r-simp:#6b7f04; --r-simp-bg:#e7f0d2;
+  --r-qa:#b25083; --r-qa-bg:#ffe2ee; --r-orch:#5a358c; --r-orch-bg:#eee7ff;
+  --id0:#763638; --id0b:#fce0e0; --id1:#6e4108; --id1b:#f7e4d4; --id2:#505103; --id2b:#e9ead3; --id3:#185b37; --id3b:#d9eedf;
+  --id4:#04585c; --id4b:#d2eef0; --id5:#19517b; --id5b:#d8ebfb; --id6:#4d437a; --id6b:#e7e5fb; --id7:#6a3860; --id7b:#f5e1f0;
+  --float:0 1px 2px rgba(49,51,53,.08), 0 8px 24px rgba(49,51,53,.16);
+}
+[data-theme="dark"] {
+  --canvas:#1d1e20; --surface:#252728; --chrome:#2a2b2d; --line:#2f3032; --field-line:#393b3c;
+  --strong:#f1f2f3; --text:#dee0e1; --secondary:#b6b7b9; --muted:#9ea0a2;
+  --accent:#2779bc; --accent-hover:#166daf; --accent-subtle:#1d3246; --accent-text:#77b7f4;
+  --wash:rgba(255,255,255,.05); --wash-2:rgba(255,255,255,.09); --live:#63d99b;
+  --neutral-fg:#a5acb2; --neutral-bg:#272c31; --neutral-mark:#a5acb2;
+  --info-fg:#5ab1ff; --info-bg:#173047; --info-mark:#5ab1ff;
+  --attn-fg:#fcb52c; --attn-bg:#422f0d; --attn-mark:#fcb52c; --attn-solid:#f5af20;
+  --ok-fg:#63d99b; --ok-bg:#163524; --ok-mark:#63d99b;
+  --bad-fg:#ff6367; --bad-bg:#4a1e1e; --bad-mark:#ff6367; --bad-solid:#c92e3b;
+  --merged:#b995f0; --merged-bg:#2f2442;
+  --r-impl:#3fb996; --r-impl-bg:#0d362a; --r-rev:#d07758; --r-rev-bg:#43251a; --r-simp:#c7dd81; --r-simp-bg:#2b3113;
+  --r-qa:#ffa3cf; --r-qa-bg:#412331; --r-orch:#9e80d1; --r-orch-bg:#322843;
+  --id0:#f5b9b8; --id0b:#4b3333; --id1:#ebc29b; --id1b:#473727; --id2:#cdcf9a; --id2b:#3b3c27; --id3:#a7d9b7; --id3b:#2c4033;
+  --id4:#93d9dc; --id4b:#234042; --id5:#a5d0f6; --id5b:#2b3d4c; --id6:#c9c3f6; --id6b:#3a384c; --id7:#e8badd; --id7b:#463442;
+  --float:0 0 0 1px #393b3c, 0 12px 32px rgba(0,0,0,.6);
+}
+:root { --r-control:6px; --r-float:10px;
+  --sans: ui-sans-serif,-apple-system,BlinkMacSystemFont,system-ui,"Segoe UI",Roboto,"Inter",sans-serif;
+  --mono: "JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace; }
+
+* { box-sizing:border-box; }
+html,body { margin:0; background:var(--canvas); color:var(--text); font:15px/1.45 var(--sans); }
+/* Rule: anything that does something when clicked shows a pointer. */
+a, button, select, label, summary, .click { cursor:pointer; }
+a { color:var(--accent-text); text-decoration:none; } a:hover { text-decoration:underline; }
+.mono { font-family:var(--mono); font-size:13px; } .muted { color:var(--muted); } .sec2 { color:var(--secondary); }
+.num { font-variant-numeric:tabular-nums; }
+/* A cost is always a total; its tooltip splits it into model tokens and machine time. The hairline under it is the split, at a glance. */
+.cost { display:inline-flex; flex-direction:column; gap:2px; cursor:help; }
+.costbar { display:block; height:2px; width:100%; min-width:24px; background:var(--r-orch); opacity:.55; border-radius:1px; font-style:normal; }
+.costbar b { display:block; height:100%; background:var(--r-impl); border-radius:1px; }
+.cost:hover .costbar { opacity:1; }
+.costkey { display:inline-flex; gap:14px; font-size:12px; color:var(--muted); }
+.costkey i { display:inline-block; width:10px; height:3px; margin-right:6px; vertical-align:middle; }
+.label { font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); font-weight:600; }
+.row { display:flex; align-items:center; gap:8px; } .sp { flex:1; }
+svg.i { width:16px; height:16px; flex:none; fill:none; stroke:currentColor; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round; }
+svg.i.sm { width:14px; height:14px; }
+
+/* ---- Mockup chrome (not the design) ---- */
+.mk { position:sticky; top:0; z-index:90; display:flex; gap:2px; align-items:center; padding:8px 16px; background:#111; color:#ddd; font-size:13px; flex-wrap:wrap; }
+.mk b { margin-right:12px; color:#fff; }
+.mk button { background:none; border:0; color:#bbb; padding:6px 10px; border-radius:6px; font:inherit; }
+.mk button[aria-pressed="true"] { background:#333; color:#fff; }
+.screen { display:none; } .screen.on { display:block; }
+.note { max-width:1180px; margin:22px auto 0; padding:0 24px; color:var(--secondary); font-size:14px; }
+.note h1 { font-size:22px; color:var(--strong); margin:0 0 6px; font-weight:600; }
+.note ul { margin:6px 0 0; padding-left:18px; } .note li { margin:3px 0; }
+.frame { margin:16px auto 40px; max-width:1480px; height:900px; display:flex; overflow:hidden; background:var(--canvas); box-shadow:0 0 0 1px var(--line); position:relative; }
+
+/* ---- Buttons: four kinds, one rule each ----
+   primary  = the one main action of a view or panel (Deliver, Merge, Answer, Save)
+   secondary= any other action (filled, neutral)
+   quiet    = row and toolbar actions (text only until hovered)
+   danger   = destroys something; red text on secondary, solid only inside its confirmation
+   Links only navigate; they never act. */
+.btn { display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 12px; border-radius:var(--r-control); border:0;
+  background:var(--wash-2); color:var(--text); font:inherit; font-size:14px; white-space:nowrap; }
+.btn:hover { background:var(--field-line); }
+.btn.primary { background:var(--accent); color:#fff; } .btn.primary:hover { background:var(--accent-hover); }
+.btn.quiet { background:none; color:var(--secondary); } .btn.quiet:hover { background:var(--wash-2); color:var(--strong); }
+.btn.danger { color:var(--bad-fg); } .btn.danger.solid { background:var(--bad-solid); color:#fff; }
+.btn.sm { height:28px; padding:0 10px; font-size:13px; }
+.btn[disabled] { opacity:.5; cursor:not-allowed; }
+.btn .caret { opacity:.7; margin-left:2px; }
+.split { display:inline-flex; } .split .btn:first-child { border-radius:var(--r-control) 0 0 var(--r-control); }
+.split .btn:last-child { border-radius:0 var(--r-control) var(--r-control) 0; padding:0 8px; margin-left:1px; }
+.field { height:32px; border-radius:var(--r-control); border:1px solid var(--field-line); background:var(--surface); padding:0 10px; font:inherit; font-size:14px; color:var(--text); }
+textarea.field { height:auto; padding:8px 10px; resize:vertical; line-height:1.45; width:100%; }
+.field:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
+.kbd { font:11px var(--mono); padding:1px 5px; border-radius:4px; background:var(--wash-2); color:var(--secondary); }
+.seg { display:inline-flex; background:var(--wash-2); border-radius:var(--r-control); padding:2px; }
+.seg span { padding:4px 12px; border-radius:5px; font-size:13px; color:var(--secondary); cursor:pointer; }
+.seg span.on { background:var(--surface); color:var(--strong); box-shadow:0 1px 2px rgba(0,0,0,.1); }
+.tog { width:30px; height:18px; border-radius:9px; background:var(--field-line); position:relative; display:inline-block; cursor:pointer; flex:none; }
+.tog::after { content:""; position:absolute; top:2px; left:2px; width:14px; height:14px; border-radius:50%; background:#fff; }
+.tog.on { background:var(--accent); } .tog.on::after { left:14px; }
+
+/* ---- Tooltips ---- */
+[data-tip] { position:relative; }
+[data-tip]:hover::after { content:attr(data-tip); position:absolute; z-index:80; left:50%; bottom:calc(100% + 8px); transform:translateX(-50%);
+  width:max-content; max-width:300px; white-space:pre-line; padding:8px 10px; border-radius:8px; background:#1b1c1e; color:#eee;
+  font:12px/1.45 var(--sans); text-align:left; box-shadow:0 6px 20px rgba(0,0,0,.25); pointer-events:none; }
+[data-tip].tip-down:hover::after { bottom:auto; top:calc(100% + 8px); }
+[data-tip].tip-left:hover::after { left:auto; right:0; transform:none; }
+
+/* ---- Status: glyph + word. The only filled pill is Needs you. ---- */
+.st { display:inline-flex; align-items:center; gap:6px; font-size:13px; white-space:nowrap; }
+.st .d { width:8px; height:8px; border-radius:50%; background:currentColor; }
+.st.run { color:var(--info-fg); } .st.run .d { animation:breathe 2.4s ease-in-out infinite; }
+.st.ok { color:var(--ok-fg); } .st.bad { color:var(--bad-fg); } .st.idle { color:var(--muted); }
+.st.idle .d { background:none; box-shadow:inset 0 0 0 1.5px currentColor; }
+.needs { display:inline-flex; align-items:center; gap:6px; padding:2px 9px; border-radius:999px; background:var(--attn-solid); color:#000; font-size:12px; font-weight:600; white-space:nowrap; }
+.needs::before { content:""; width:6px; height:6px; background:#000; transform:rotate(45deg); }
+@keyframes breathe { 50% { opacity:.35; } }
+@keyframes ring { 0% { box-shadow:0 0 0 0 var(--live); } 70%,100% { box-shadow:0 0 0 5px transparent; } }
+@keyframes spin { to { transform:rotate(360deg); } }
+
+/* ---- PR state chip: one state (by priority), icon + word, the rest in its tooltip ---- */
+.prs { display:inline-flex; align-items:center; gap:6px; height:24px; padding:0 8px 0 6px; border-radius:var(--r-control); font-size:12px; font-weight:500; white-space:nowrap; }
+.prs b { font:500 12px var(--mono); opacity:.8; }
+.prs.merged { background:var(--merged-bg); color:var(--merged); }
+.prs.ci_red, .prs.changes, .prs.conflict { background:var(--bad-bg); color:var(--bad-fg); }
+.prs.ci_running, .prs.comments { background:var(--attn-bg); color:var(--attn-fg); }
+.prs.ci_running svg { animation:spin 2.4s linear infinite; }
+.prs.awaiting { background:var(--neutral-bg); color:var(--neutral-fg); }
+.prs.ready { background:var(--ok-bg); color:var(--ok-fg); }
+a.prs:hover { text-decoration:none; filter:brightness(.97); }
+
+/* ---- Avatars: the defining element ----
+   People are round (photo, or initials on their identity colour). Agents are rounded squares in their role colour.
+   A person's avatar carries their agent when one is working for them (bottom-right tile, pulsing while live).
+   A green ring means online (acted in the last 5 minutes). */
+.av { position:relative; display:inline-grid; place-items:center; flex:none; border-radius:50%; font-weight:650; letter-spacing:.02em; }
+.av img { width:100%; height:100%; border-radius:50%; object-fit:cover; display:block; }
+.av.s20 { width:20px; height:20px; font-size:9px; } .av.s22 { width:22px; height:22px; font-size:9px; }
+.av.s28 { width:28px; height:28px; font-size:11px; }
+.av.s32 { width:32px; height:32px; font-size:12px; } .av.s40 { width:40px; height:40px; font-size:14px; }
+.av.s56 { width:56px; height:56px; font-size:19px; }
+.av.on { box-shadow:0 0 0 2px var(--surface), 0 0 0 4px var(--live); }
+.side .av.on, .card .av.on, .epic .av.on { box-shadow:0 0 0 2px var(--chrome), 0 0 0 4px var(--live); }
+.av.s20.on { box-shadow:0 0 0 1.5px var(--chrome), 0 0 0 3px var(--live); }
+.av .ag { position:absolute; right:-5px; bottom:-4px; width:45%; height:45%; min-width:13px; min-height:13px; border-radius:30%;
+  display:grid; place-items:center; box-shadow:0 0 0 2px var(--surface); }
+.side .av .ag, .card .av .ag, .epic .av .ag { box-shadow:0 0 0 2px var(--chrome); }
+.av .ag svg { width:70%; height:70%; }
+.av .ag.live::before { content:""; position:absolute; inset:0; border-radius:30%; animation:ring 2.4s infinite; }
+.stack { display:inline-flex; } .stack .av + .av { margin-left:-6px; }
+.stack .av { box-shadow:0 0 0 2px var(--surface); } .side .stack .av, .card .stack .av, .epic .stack .av { box-shadow:0 0 0 2px var(--chrome); }
+.agent { display:inline-grid; place-items:center; border-radius:28%; flex:none; position:relative; }
+.agent svg { width:62%; height:62%; }
+.agent.live::after { content:""; position:absolute; right:-2px; bottom:-2px; width:8px; height:8px; border-radius:50%; background:var(--live); box-shadow:0 0 0 2px var(--surface); }
+.impl { background:var(--r-impl-bg); color:var(--r-impl); } .rev { background:var(--r-rev-bg); color:var(--r-rev); }
+.simp { background:var(--r-simp-bg); color:var(--r-simp); } .qa { background:var(--r-qa-bg); color:var(--r-qa); }
+.orch { background:var(--r-orch-bg); color:var(--r-orch); } .sys { background:var(--wash-2); color:var(--secondary); }
+
+/* ---- Shell ---- */
+.side { width:300px; flex:none; background:var(--chrome); display:flex; flex-direction:column; padding:12px 8px 10px; overflow:hidden; }
+.brand { display:flex; align-items:center; gap:10px; padding:2px 8px 12px; font-weight:600; color:var(--strong); }
+.brand .logo { width:24px; height:24px; border-radius:6px; background:var(--strong); color:var(--canvas); display:grid; place-items:center; font-size:13px; }
+.online { display:flex; align-items:center; gap:10px; padding:6px 8px 12px; }
+.online .stack .av + .av { margin-left:-4px; }
+.search { margin:0 4px 8px; height:32px; border-radius:var(--r-control); background:var(--wash-2); display:flex; align-items:center; padding:0 10px; color:var(--muted); font-size:14px; justify-content:space-between; cursor:text; }
+.nav { display:flex; align-items:center; gap:8px; min-height:30px; padding:3px 8px; border-radius:var(--r-control); font-size:14px; color:var(--text); cursor:pointer; }
+.nav:hover { background:var(--wash); } .nav.cur { background:var(--wash-2); color:var(--strong); font-weight:500; }
+.nav .t { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.nav .k { color:var(--muted); font:11px var(--mono); flex:none; } .nav .c { color:var(--muted); font-size:12px; }
+.nav .chev { width:12px; color:var(--muted); flex:none; transition:transform .12s; font-size:10px; text-align:center; }
+.nav .chev.open { transform:rotate(90deg); }
+.tree { flex:1; overflow:auto; margin-top:6px; padding-bottom:8px; }
+.tree .l1 { padding-left:22px; } .tree .l2 { padding-left:38px; } .tree .l3 { padding-left:56px; font-size:13px; }
+.tree .hdr { padding:12px 8px 4px; display:flex; align-items:center; }
+.me { display:flex; align-items:center; gap:10px; padding:10px 8px 0; }
+.me .who { flex:1; line-height:1.25; font-size:14px; color:var(--strong); } .me small { display:block; color:var(--muted); font-size:12px; }
+.main { flex:1; min-width:0; display:flex; flex-direction:column; background:var(--surface); }
+.top { display:flex; align-items:center; gap:12px; min-height:60px; padding:0 28px; flex:none; }
+.top h2 { margin:0; font-size:20px; font-weight:600; color:var(--strong); }
+.crumbs { color:var(--muted); font-size:14px; } .crumbs a { color:var(--muted); } .crumbs b { color:var(--strong); font-weight:500; }
+.scroll { flex:1; overflow:auto; padding:4px 28px 36px; }
+.tabs { display:flex; gap:24px; padding:0 28px; flex:none; }
+.tabs span { padding:8px 0 10px; font-size:14px; color:var(--muted); cursor:pointer; }
+.tabs span:hover { color:var(--strong); }
+.tabs span.on { color:var(--strong); box-shadow:inset 0 -2px 0 var(--accent); }
+.tabs span .c { margin-left:4px; color:var(--muted); font-size:12px; }
+
+/* ---- Project: epics with details ---- */
+.epics { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:16px; }
+.epic { background:var(--chrome); padding:18px 20px; cursor:pointer; }
+.epic:hover { background:var(--wash-2); }
+.epic h3 { margin:0; font-size:16px; font-weight:600; color:var(--strong); }
+.epic p { margin:6px 0 14px; color:var(--secondary); font-size:14px; }
+.bar { display:flex; height:6px; gap:2px; margin:10px 0 6px; }
+.bar i { display:block; height:100%; }
+.bar .dn { background:var(--ok-mark); } .bar .rv { background:var(--info-mark); } .bar .ip { background:var(--attn-mark); } .bar .bl { background:var(--field-line); }
+.legend { display:flex; gap:14px; font-size:12px; color:var(--muted); flex-wrap:wrap; }
+.legend i { display:inline-block; width:8px; height:8px; margin-right:5px; vertical-align:0; }
+.epic .people { display:flex; gap:14px; align-items:center; margin-top:14px; flex-wrap:wrap; }
+.epic .foot { display:flex; gap:14px; align-items:center; margin-top:14px; font-size:13px; color:var(--muted); flex-wrap:wrap; }
+.loose { margin-top:30px; }
+.lrow { display:grid; grid-template-columns:70px 1fr auto auto 40px; gap:14px; align-items:center; padding:10px 12px; margin:0 -12px; cursor:pointer; }
+.lrow:hover { background:var(--wash); }
+
+/* ---- Epic board ---- */
+.board { display:grid; grid-template-columns:repeat(5, minmax(0,1fr)); gap:16px; }
+.col h4 { display:flex; align-items:center; gap:8px; margin:0 0 10px; font-size:13px; font-weight:600; color:var(--secondary); }
+.col h4 .c { color:var(--muted); font-weight:400; }
+.card { background:var(--chrome); padding:12px; margin-bottom:8px; cursor:pointer; }
+.card:hover { background:var(--wash-2); }
+.card.attn { background:var(--attn-bg); box-shadow:inset 3px 0 0 var(--attn-mark); }
+.card .top1 { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted); }
+.card .ttl { margin:4px 0 10px; color:var(--strong); font-size:14px; line-height:1.35; }
+.card .foot { display:flex; align-items:center; gap:10px; }
+.card .doing { font-size:12px; color:var(--secondary); line-height:1.3; flex:1; min-width:0; }
+.card .doing b { display:block; color:var(--strong); font-weight:500; font-size:13px; }
+.card .q { font-size:13px; color:var(--attn-fg); margin:-4px 0 10px; }
+
+/* ---- Task ---- */
+.thead { display:flex; gap:18px; align-items:flex-start; }
+.thead h1 { margin:0; font-size:24px; font-weight:600; color:var(--strong); line-height:1.25; }
+.thead .meta { margin-top:8px; display:flex; gap:14px; align-items:center; color:var(--muted); font-size:13px; flex-wrap:wrap; }
+.who-block { display:flex; gap:12px; align-items:center; }
+.who-block .nm { font-size:14px; color:var(--strong); line-height:1.25; } .who-block .nm small { display:block; color:var(--muted); font-size:12px; }
+.grid2 { display:grid; grid-template-columns:minmax(0,1fr) 440px; gap:36px; margin-top:24px; }
+.blk { margin-bottom:30px; } .blk > .label { display:flex; align-items:center; gap:8px; margin-bottom:10px; }
+.step { display:grid; grid-template-columns:28px 1fr auto 76px 70px; gap:12px; align-items:center; min-height:40px; padding:4px 8px; margin:0 -8px; cursor:pointer; }
+.step:hover { background:var(--wash); }
+.step .what { color:var(--strong); font-size:14px; } .step .why { color:var(--muted); font-size:13px; margin-left:6px; }
+.step .m { color:var(--muted); font-size:12px; text-align:right; }
+.pr { background:var(--chrome); padding:16px 18px; margin-bottom:12px; }
+.pr .h { display:flex; align-items:center; gap:10px; }
+.pr .h a.t { color:var(--strong); font-weight:600; font-size:15px; }
+.pr .repo { color:var(--muted); font:12px var(--mono); }
+.facts { list-style:none; margin:12px 0 0; padding:0; }
+.facts li { display:flex; align-items:center; gap:10px; min-height:28px; font-size:13px; }
+.facts li svg { flex:none; }
+.facts .ok { color:var(--ok-mark); } .facts .bad { color:var(--bad-mark); } .facts .at { color:var(--attn-mark); } .facts .ne { color:var(--neutral-mark); }
+.checks { margin:2px 0 0 26px; padding:0; list-style:none; }
+.checks li { display:flex; align-items:center; gap:8px; min-height:24px; font-size:13px; color:var(--secondary); }
+.acts { display:flex; gap:8px; margin-top:14px; flex-wrap:wrap; }
+.tl { list-style:none; margin:0; padding:0; }
+.tl li { display:grid; grid-template-columns:32px 1fr auto; gap:12px; padding:8px 0; align-items:start; font-size:14px; }
+.tl .when { color:var(--muted); font-size:12px; white-space:nowrap; padding-top:5px; }
+.tl .body { color:var(--secondary); padding-top:5px; } .tl .body b { color:var(--strong); font-weight:500; }
+.tl blockquote { margin:6px 0 0; padding:8px 12px; background:var(--chrome); color:var(--text); }
+.metrics { display:grid; grid-template-columns:repeat(4, auto); gap:12px 36px; justify-content:start; }
+.metrics b { display:block; font-size:20px; font-weight:600; color:var(--strong); } .metrics span { font-size:12px; color:var(--muted); }
+
+/* Findings */
+.frow { display:grid; grid-template-columns:22px minmax(0,1fr) 210px 170px 130px; gap:14px; align-items:center; padding:12px; margin:0 -12px; cursor:pointer; }
+.frow:hover { background:var(--wash); } .frow.open { background:var(--chrome); }
+.frow .ttl { color:var(--strong); font-size:14px; } .frow .ttl small { display:block; color:var(--muted); font-size:12px; margin-top:2px; }
+.sev { width:18px; height:18px; display:grid; place-items:center; }
+.sev.block { color:var(--bad-mark); } .sev.sugg { color:var(--attn-mark); } .sev.nit { color:var(--neutral-mark); }
+.fbody { background:var(--chrome); margin:0 -12px 8px; padding:4px 12px 16px 48px; display:grid; grid-template-columns:1fr 1fr; gap:24px; font-size:14px; }
+.diff { font:12.5px/1.6 var(--mono); background:var(--surface); overflow:hidden; }
+.diff div { padding:0 10px; white-space:pre; } .diff .a { background:var(--ok-bg); color:var(--ok-fg); } .diff .r { background:var(--bad-bg); color:var(--bad-fg); }
+.diff .h { color:var(--muted); background:var(--wash); }
+.filters { display:flex; gap:10px; align-items:center; margin-bottom:12px; flex-wrap:wrap; }
+
+/* Sessions / transcript */
+.sess { display:grid; grid-template-columns:320px minmax(0,1fr); height:100%; }
+.slist { background:var(--chrome); overflow:auto; padding:10px 8px; }
+.sitem { display:grid; grid-template-columns:32px 1fr auto; gap:10px; align-items:center; padding:8px; border-radius:var(--r-control); cursor:pointer; }
+.sitem:hover { background:var(--wash); } .sitem.cur { background:var(--wash-2); }
+.sitem .n { font-size:14px; color:var(--strong); } .sitem small { display:block; font-size:12px; color:var(--muted); }
+.runhdr { display:flex; align-items:center; gap:14px; padding:14px 28px; }
+.runhdr .t { flex:1; } .runhdr .t b { color:var(--strong); font-size:16px; font-weight:600; } .runhdr .t small { display:block; color:var(--muted); font-size:13px; }
+.chatwrap { display:grid; grid-template-columns:minmax(0,1fr) 250px; flex:1; min-height:0; }
+.chat { overflow:auto; padding:8px 28px 20px; }
+.turn { display:grid; grid-template-columns:40px 1fr; gap:14px; margin-bottom:22px; max-width:860px; }
+.turn .who { font-size:14px; color:var(--strong); font-weight:600; display:flex; gap:8px; align-items:baseline; }
+.turn .who small { color:var(--muted); font-weight:400; font-size:12px; }
+.turn .txt { margin-top:2px; }
+.turn.steer .txt { padding:8px 12px; background:var(--accent-subtle); display:inline-block; }
+.tool { margin-top:8px; background:var(--chrome); font-size:13px; }
+.tool .th { display:flex; gap:10px; align-items:center; padding:7px 10px; cursor:pointer; color:var(--secondary); }
+.tool .th:hover { background:var(--wash); }
+.tool .th .nm { font-weight:600; color:var(--strong); font-family:var(--sans); }
+.tool .th .arg { font-family:var(--mono); font-size:12.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tool .out { padding:0 10px 10px; } .tool pre { margin:0; font:12.5px/1.55 var(--mono); color:var(--secondary); white-space:pre-wrap; }
+.plan { list-style:none; margin:8px 0 0; padding:10px 12px; background:var(--chrome); font-size:14px; }
+.plan li { display:flex; gap:10px; align-items:center; min-height:26px; }
+.plan .ok { color:var(--ok-mark); } .plan .at { color:var(--info-mark); }
+.plan .dn { color:var(--muted); text-decoration:line-through; }
+.event { display:flex; gap:10px; align-items:center; color:var(--muted); font-size:13px; margin:0 0 20px 54px; }
+.event b { color:var(--secondary); font-weight:500; }
+.rail { background:var(--chrome); padding:16px 18px; overflow:auto; font-size:13px; }
+.rail .blk { margin-bottom:22px; } .rail dl { display:grid; grid-template-columns:auto 1fr; gap:6px 12px; margin:0; }
+.rail dt { color:var(--muted); } .rail dd { margin:0; text-align:right; color:var(--strong); }
+.rail .bars div { display:grid; grid-template-columns:60px 1fr 24px; gap:8px; align-items:center; min-height:22px; }
+.rail .bars i { display:block; height:6px; background:var(--r-impl); opacity:.7; }
+.rail .files div { font:12px var(--mono); color:var(--secondary); display:flex; justify-content:space-between; min-height:22px; align-items:center; }
+.composer { padding:10px 28px 16px; }
+.composer .box { background:var(--canvas); border-radius:var(--r-control); padding:10px 12px; }
+.composer textarea { border:0; background:none; width:100%; resize:none; font:inherit; color:var(--text); outline:none; }
+.composer .r { display:flex; align-items:center; gap:10px; margin-top:6px; font-size:12px; color:var(--muted); }
+
+/* Inbox */
+.group { margin-bottom:28px; } .group > .label { display:block; margin-bottom:6px; }
+.item { display:grid; grid-template-columns:40px 1fr auto auto; gap:14px; align-items:center; padding:10px 12px; margin:0 -12px; cursor:pointer; }
+.item:hover { background:var(--wash); }
+.item .q { color:var(--strong); font-size:14px; } .item .q small { display:block; color:var(--muted); font-size:13px; margin-top:1px; }
+.item.mine { background:var(--attn-bg); margin-bottom:4px; box-shadow:inset 3px 0 0 var(--attn-mark); }
+
+/* Settings */
+.snav { width:220px; flex:none; padding:4px 12px; }
+.snav .label { display:block; padding:14px 8px 6px; }
+.pane { max-width:860px; flex:1; }
+.pane h3 { font-size:17px; margin:0 0 4px; color:var(--strong); font-weight:600; }
+.pane .lead { color:var(--secondary); margin:0 0 20px; font-size:14px; }
+.table { width:100%; border-collapse:collapse; font-size:14px; }
+.table th { text-align:left; font-weight:600; font-size:12px; color:var(--muted); padding:0 12px 8px 0; }
+.table td { padding:10px 12px 10px 0; vertical-align:middle; }
+.table tr.click:hover td { background:var(--wash); }
+.form { display:grid; grid-template-columns:200px 1fr; gap:18px 24px; align-items:start; font-size:14px; }
+.form > .k { color:var(--strong); padding-top:6px; } .form > .k small { display:block; color:var(--muted); font-size:12px; font-weight:400; margin-top:2px; }
+.okline { display:flex; gap:10px; align-items:center; padding:12px 14px; background:var(--ok-bg); color:var(--ok-fg); font-size:14px; margin-bottom:22px; }
+.rolecard { display:grid; grid-template-columns:40px 1fr; gap:14px; padding:18px 0; }
+.rolecard + .rolecard { box-shadow:0 -1px 0 var(--line); }
+.rolecard h4 { margin:0; font-size:15px; color:var(--strong); display:flex; gap:10px; align-items:center; }
+.rolecard .grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin-top:12px; }
+.rolecard .grid label { display:block; font-size:12px; color:var(--muted); margin-bottom:4px; cursor:default; }
+.rolecard .grid .field { width:100%; }
+.chips { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+.chip { display:inline-flex; gap:8px; align-items:center; height:28px; padding:0 10px; border-radius:var(--r-control); background:var(--wash-2); font-size:13px; cursor:pointer; }
+.chip.on { background:var(--accent-subtle); color:var(--accent-text); }
+
+/* Rules sheet */
+.rules { max-width:1180px; margin:16px auto 40px; padding:0 24px; display:grid; grid-template-columns:1fr 1fr; gap:24px; }
+.rule { background:var(--surface); padding:20px 22px; }
+.rule.wide { grid-column:1 / -1; }
+.rule h3 { margin:0 0 6px; font-size:16px; color:var(--strong); }
+.rule p { margin:0 0 14px; color:var(--secondary); font-size:14px; }
+.ladder { display:grid; grid-template-columns:28px 190px 1fr; gap:8px 14px; align-items:center; font-size:14px; }
+.ladder .n { color:var(--muted); font-size:12px; text-align:right; }
+.sw { display:flex; gap:18px; flex-wrap:wrap; align-items:center; }
+.sw figure { margin:0; display:grid; justify-items:center; gap:6px; font-size:12px; color:var(--muted); }
+.fixlist { margin:0; padding-left:18px; font-size:14px; color:var(--secondary); } .fixlist li { margin:4px 0; }
+.fixlist b { color:var(--strong); font-weight:500; }
+
+/* ================= v3 ================= */
+/* Session view switch */
+.svtabs { display:flex; gap:4px; padding:0 28px 10px; }
+.svtabs > span { display:inline-flex; gap:7px; align-items:center; padding:6px 12px; border-radius:var(--r-control); font-size:14px; color:var(--secondary); }
+.svtabs > span:hover { background:var(--wash); } .svtabs > span.on { background:var(--wash-2); color:var(--strong); font-weight:500; }
+.svtabs .c { color:var(--muted); font-size:12px; font-weight:400; }
+.livedot { width:7px; height:7px; min-width:7px; flex:none; border-radius:50%; background:var(--live); animation:breathe 2.4s ease-in-out infinite; display:inline-block; }
+/* Live diff */
+.livediff { flex:1; min-height:0; flex-direction:column; }
+.lhead { display:flex; gap:12px; align-items:center; padding:0 28px 12px; }
+.lhead > .muted:first-of-type { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.livepill { display:inline-flex; gap:6px; align-items:center; font-size:12px; font-weight:600; color:var(--ok-fg); background:var(--ok-bg); padding:2px 8px; border-radius:999px; }
+.livepill i { width:6px; height:6px; border-radius:50%; background:currentColor; animation:breathe 1.6s infinite; }
+.add { color:var(--ok-fg); font:12px var(--mono); } .del { color:var(--bad-fg); font:12px var(--mono); }
+.lbody { flex:1; min-height:0; display:grid; grid-template-columns:260px minmax(0,1fr); margin:0 28px 16px; background:var(--chrome); }
+.lfiles { overflow:auto; padding:8px; }
+.lf.all { grid-template-columns:minmax(0,1fr) auto; }
+.lf { display:grid; grid-template-columns:18px minmax(0,1fr) auto; gap:8px; align-items:center; padding:6px 8px; border-radius:var(--r-control); font-size:13px; }
+.lf:hover { background:var(--wash); } .lf.cur { background:var(--wash-2); }
+.lf.flash { animation:flash 1.6s ease-out; }
+@keyframes flash { 0% { background:var(--info-bg); } 100% { background:transparent; } }
+.lp { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--muted); direction:rtl; text-align:left; } .lp b { color:var(--strong); font-weight:500; }
+.lf .lp { direction:ltr; } .lp { direction:ltr !important; }
+.lc { white-space:nowrap; color:var(--muted); font-size:12px; }
+.lst { display:inline-grid; place-items:center; width:16px; height:16px; border-radius:4px; font:700 10px var(--mono); }
+.lst.M { background:var(--attn-bg); color:var(--attn-fg); } .lst.A { background:var(--ok-bg); color:var(--ok-fg); } .lst.D { background:var(--bad-bg); color:var(--bad-fg); }
+.lnote { margin:14px 8px 4px; font-size:12px; color:var(--muted); line-height:1.5; }
+.ldiffs { overflow:auto; background:var(--surface); padding:0 0 30px; }
+.ldf { margin-bottom:10px; }
+.ldh { position:sticky; top:0; z-index:1; display:flex; gap:10px; align-items:center; padding:9px 14px; background:var(--surface); box-shadow:0 1px 0 var(--line); font-size:13px; }
+.ldh b { color:var(--strong); font:500 13px var(--mono); }
+.lhk { font:12px var(--mono); color:var(--muted); background:var(--wash); padding:3px 14px; }
+.ll { display:grid; grid-template-columns:44px 44px 18px minmax(0,1fr); font:12.5px/1.65 var(--mono); }
+.ll .n { color:var(--muted); text-align:right; padding-right:10px; opacity:.7; user-select:none; }
+.ll .tx { white-space:pre-wrap; overflow-wrap:anywhere; padding-right:14px; color:var(--text); }
+.ll.a { background:var(--ok-bg); } .ll.a .tx, .ll.a .sg { color:var(--ok-fg); }
+.ll.r { background:var(--bad-bg); } .ll.r .tx, .ll.r .sg { color:var(--bad-fg); }
+.ll.fresh { animation:fresh 2.2s ease-out; box-shadow:inset 3px 0 0 var(--info-mark); }
+@keyframes fresh { 0% { background:var(--info-bg); } 100% { } }
+/* The plan */
+.pg { display:inline-grid; place-items:center; width:16px; color:var(--muted); flex:none; } .pg.ok { color:var(--ok-mark); } .pg.at { color:var(--info-mark); } .pg.at svg { animation:spin 2.4s linear infinite; }
+.pmeter { display:inline-flex; gap:2px; height:6px; flex:none; } .pmeter i { flex:1; background:var(--field-line); border-radius:1px; }
+.pmeter i.d { background:var(--ok-mark); } .pmeter i.c { background:var(--info-mark); animation:breathe 2.4s ease-in-out infinite; }
+.planbar { margin:0 28px 4px; background:var(--chrome); position:relative; z-index:2; }
+.pb-head { display:flex; gap:10px; align-items:center; padding:10px 14px; font-size:13px; }
+.pb-head b { color:var(--strong); font-weight:600; } .pb-head:hover { background:var(--wash); }
+.pb-cur { display:inline-flex; gap:6px; align-items:center; color:var(--strong); min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.planbar.open .pb-cur { visibility:hidden; }
+.pb-list, .pb-foot { display:none; } .planbar.open .pb-list { display:block; } .planbar.open .pb-foot { display:flex; }
+.pb-list { list-style:none; margin:0; padding:2px 14px 8px; }
+.pb-list li { display:grid; grid-template-columns:16px minmax(0,1fr) auto 44px; gap:10px; align-items:center; min-height:32px; font-size:14px; }
+.pb-list li.completed .pc { color:var(--muted); text-decoration:line-through; } .pb-list li.cancelled .pc { color:var(--muted); text-decoration:line-through; opacity:.8; }
+.pb-list li.in_progress .pc { color:var(--strong); font-weight:500; }
+.pb-list li.in_progress { background:var(--info-bg); margin:0 -14px; padding:0 14px; box-shadow:inset 3px 0 0 var(--info-mark); }
+.pb-list .pc small { display:block; font-size:12px; text-decoration:none; color:var(--muted); }
+.pb-list .pt { font-size:12px; color:var(--muted); text-align:right; }
+.padd { display:inline-flex; gap:6px; align-items:center; font-size:12px; color:var(--accent-text); }
+.pb-foot { gap:12px; align-items:center; padding:8px 14px 12px; font-size:12px; }
+.planmark { display:flex; gap:10px; align-items:center; margin:10px 0 4px; font-size:13px; color:var(--muted); }
+.planmark .ch { color:var(--secondary); } .planmark .ch b { color:var(--strong); font-weight:500; }
+.stepplan { grid-column:2 / -1; padding:2px 0 8px; font-size:13px; color:var(--secondary); display:flex; gap:10px; align-items:center; }
+.cardplan { display:flex; gap:8px; align-items:center; font-size:12px; color:var(--secondary); margin:-4px 0 10px; }
+/* Files */
+.athumb { display:inline-grid; place-items:center; flex:none; background:var(--wash-2); color:var(--secondary); border-radius:6px; overflow:hidden; position:relative; }
+.athumb img { width:100%; height:100%; object-fit:cover; } .athumb.dark { background:#1b1c1e; color:#fff; }
+.athumb em { position:absolute; bottom:3px; font:600 8px var(--mono); font-style:normal; text-transform:uppercase; color:var(--muted); }
+.athumb:has(em) svg { margin-top:-8px; }
+.arow { display:grid; grid-template-columns:auto minmax(0,1fr) auto auto auto; gap:14px; align-items:center; padding:8px 12px; margin:0 -12px; }
+.arow:hover { background:var(--wash); }
+.rail .arow { grid-template-columns:auto minmax(0,1fr) auto; gap:10px; padding:6px 8px; margin:0 -8px; }
+.an { min-width:0; } .an b { display:block; color:var(--strong); font-weight:500; font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.an small { color:var(--muted); font-size:12px; } .ver { color:var(--accent-text); }
+.agrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:16px; }
+.acard { background:var(--chrome); } .acard:hover { background:var(--wash-2); }
+.aimg { aspect-ratio:16/9; background:var(--canvas); overflow:hidden; display:grid; place-items:center; }
+.aimg img { width:100%; height:100%; object-fit:cover; display:block; }
+.vid { width:100%; height:100%; background:#1b1c1e; color:#fff; display:grid; place-items:center; position:relative; }
+.vid svg { width:36px; height:36px; } .vid span { position:absolute; right:8px; bottom:6px; font:12px var(--mono); color:#ccc; }
+.vid.big { aspect-ratio:16/9; width:min(100%, 1000px); height:auto; } .vid.big svg { width:64px; height:64px; }
+.acap { display:flex; gap:10px; align-items:center; padding:10px 12px; }
+/* The viewer: a large overlay, one file at a time */
+.viewer { position:fixed; inset:0; z-index:95; background:rgba(15,16,18,.55); display:none; place-items:center; padding:32px; }
+.viewer.on { display:grid; }
+.vbox { width:100%; max-width:1280px; height:100%; max-height:920px; background:var(--surface); border-radius:var(--r-float); box-shadow:var(--float); display:flex; flex-direction:column; overflow:hidden; }
+.vhead { display:flex; gap:12px; align-items:center; padding:12px 16px; background:var(--chrome); }
+.vhead .ib { width:30px; height:30px; font-size:18px; }
+.vmain { flex:1; min-height:0; display:flex; }
+.vimg { flex:1; display:grid; place-items:center; background:var(--canvas); padding:24px; overflow:auto; }
+.vimg img { max-width:100%; max-height:100%; box-shadow:0 2px 12px rgba(0,0,0,.12); }
+.vdoc { flex:1; overflow:auto; padding:32px 48px; }
+.vpre { font:13px/1.65 var(--mono); color:var(--text); margin:0; white-space:pre-wrap; }
+.vvers { width:220px; flex:none; background:var(--chrome); padding:14px 8px; overflow:auto; } .vvers .label { display:block; padding:0 8px 8px; }
+.prose table { border-collapse:collapse; margin:0 0 14px; font-size:14px; } .prose th, .prose td { text-align:left; padding:6px 14px 6px 0; } .prose th { color:var(--muted); font-size:12px; font-weight:600; }
+/* History */
+.hist { flex:1; min-height:0; display:grid; grid-template-columns:320px minmax(0,1fr); }
+.hlist { background:var(--chrome); overflow:auto; padding:10px 8px; }
+.hitem { display:grid; grid-template-columns:32px minmax(0,1fr); gap:10px; padding:10px; border-radius:var(--r-control); }
+.hitem:hover { background:var(--wash); } .hitem.cur { background:var(--wash-2); }
+.hitem b { color:var(--strong); font-size:14px; } .hitem small { color:var(--muted); font-size:12px; }
+.hnote { font-size:13px; color:var(--secondary); margin-top:3px; }
+.hmain { overflow:auto; padding:22px 28px; }
+.hmsg { font-size:15px; color:var(--strong); margin-bottom:16px; }
+.hdiff { font-size:13px; line-height:1.7; } .hdiff div { white-space:pre-wrap; padding:1px 12px; }
+.hused { margin-top:22px; padding:14px 16px; background:var(--chrome); }
+.pav { display:inline-grid; place-items:center; flex:none; font-weight:700; letter-spacing:.02em; overflow:hidden; }
+.pav img { width:100%; height:100%; object-fit:cover; display:block; }
+.nav.proj .hov { display:none; gap:2px; } .nav.proj:hover .hov, .nav.proj.hold .hov { display:inline-flex; } .nav.proj:hover .rest, .nav.proj.hold .rest { display:none; }
+.ib { width:24px; height:24px; display:grid; place-items:center; border:0; background:none; border-radius:5px; color:var(--secondary); font:inherit; font-size:14px; }
+.ib:hover { background:var(--wash-2); color:var(--strong); }
+.menu { position:absolute; z-index:85; width:230px; background:var(--surface); border-radius:var(--r-float); box-shadow:var(--float); padding:6px; }
+.menu .mi { display:flex; gap:10px; align-items:center; height:32px; padding:0 10px; border-radius:var(--r-control); font-size:14px; cursor:pointer; color:var(--text); }
+.menu .mi:hover { background:var(--wash-2); } .menu .mi svg { color:var(--muted); } .menu .sepm { height:1px; margin:5px 4px; background:var(--line); }
+.menu .mi.danger { color:var(--bad-fg); }
+.brand img { width:30px; height:30px; display:block; }
+.brand .dk { display:none; } [data-theme="dark"] .brand .lt { display:none; } [data-theme="dark"] .brand .dk { display:block; }
+.brand .nm { line-height:1.15; } .brand .nm small { display:block; font-weight:400; font-size:12px; color:var(--muted); }
+/* The profile band: its own shade, apart from the tree above it. */
+.band { margin:6px -8px -10px; padding:6px 8px 12px; background:var(--wash-2); }
+.band .nav { font-size:13px; color:var(--secondary); }
+.band .me { padding:8px 8px 0; }
+.tag { font-size:11px; font-weight:600; padding:1px 6px; border-radius:4px; background:var(--wash-2); color:var(--secondary); }
+.tag.admin { background:var(--r-orch-bg); color:var(--r-orch); }
+.tree .agentrow { font-size:13px; color:var(--secondary); min-height:26px; }
+.tree .agentrow .doing { color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0; }
+
+/* Project: epics by state */
+.sech { display:flex; align-items:baseline; gap:10px; margin:30px 0 12px; }
+.sech h3 { margin:0; font-size:15px; font-weight:600; color:var(--strong); } .sech .c { color:var(--muted); font-size:13px; }
+.cols2 { display:grid; grid-template-columns:1fr 1fr; gap:36px; }
+.erow { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:16px; align-items:center; padding:12px 14px; margin:0 -14px; cursor:pointer; }
+.erow:hover { background:var(--wash); }
+.erow .nm { color:var(--strong); font-size:14px; font-weight:500; } .erow .nm small { display:block; color:var(--muted); font-size:13px; font-weight:400; margin-top:2px; }
+
+/* Settings */
+.set { display:flex; flex:1; min-height:0; }
+.set-nav { width:236px; flex:none; padding:22px 12px; overflow:auto; }
+.set-nav .scope { display:flex; gap:12px; align-items:center; padding:0 8px 18px; }
+.set-nav .scope b { display:block; color:var(--strong); font-size:15px; } .set-nav .scope small { color:var(--muted); font-size:12px; }
+.set-nav .nav { min-height:34px; }
+.set-nav .nav svg { color:var(--muted); }
+.set-main { flex:1; min-width:0; overflow:auto; padding:26px 44px 60px; }
+.set-h { max-width:1000px; margin-bottom:26px; }
+.set-h h2 { margin:0; font-size:24px; font-weight:600; color:var(--strong); }
+.set-h p { margin:6px 0 0; color:var(--secondary); font-size:14px; max-width:680px; }
+.scope-note { display:flex; gap:10px; align-items:center; max-width:1000px; padding:10px 14px; margin-bottom:28px; font-size:13px; color:var(--secondary); background:var(--chrome); }
+.scope-note svg { color:var(--muted); }
+.set-sec { max-width:1000px; margin-bottom:44px; }
+.set-sec > h3 { margin:0; font-size:13px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); }
+.srow { display:grid; grid-template-columns:300px minmax(0,1fr); gap:40px; padding:18px 0; align-items:start; }
+.srow .lbl { font-size:14px; font-weight:500; color:var(--strong); padding-top:6px; }
+.srow .lbl small { display:block; margin-top:4px; font-size:13px; font-weight:400; color:var(--muted); line-height:1.45; }
+.srow .ctl { display:flex; flex-direction:column; gap:8px; align-items:flex-start; }
+.srow .ctl .hint { font-size:13px; color:var(--muted); }
+.inh { display:inline-flex; gap:6px; align-items:center; font-size:12px; color:var(--muted); }
+.ovr { display:inline-flex; gap:8px; align-items:center; font-size:12px; }
+.ovr .tag { background:var(--accent-subtle); color:var(--accent-text); }
+.ovr a { font-size:12px; }
+.person { display:flex; gap:12px; align-items:center; }
+.person b { display:block; color:var(--strong); font-weight:500; font-size:14px; } .person small { color:var(--muted); font-size:12px; }
+.plist { width:100%; }
+.plist .pr1 { display:grid; grid-template-columns:minmax(0,1fr) 150px 110px 110px; gap:16px; align-items:center; padding:10px 12px; margin:0 -12px; }
+.plist .pr1:hover { background:var(--wash); }
+.plist .hd { font-size:12px; font-weight:600; color:var(--muted); padding-top:0; padding-bottom:6px; } .plist .hd:hover { background:none; }
+.ntable { display:grid; grid-template-columns:minmax(0,1fr) 80px 80px 80px; gap:0 16px; align-items:center; width:100%; }
+.ntable > div { padding:11px 0; font-size:14px; } .ntable .h { font-size:12px; font-weight:600; color:var(--muted); padding-top:0; }
+.ntable .c { text-align:center; }
+
+/* Agents settings */
+.roles { display:flex; gap:6px; max-width:1100px; margin-bottom:24px; flex-wrap:wrap; }
+.roletab { display:flex; gap:10px; align-items:center; padding:8px 14px 8px 8px; border-radius:var(--r-control); cursor:pointer; font-size:14px; color:var(--secondary); }
+.roletab:hover { background:var(--wash); } .roletab.on { background:var(--wash-2); color:var(--strong); font-weight:500; }
+.roletab small { display:block; font-size:12px; color:var(--muted); font-weight:400; }
+.rolehead { display:flex; gap:16px; align-items:center; max-width:1100px; }
+.rolehead h3 { margin:0; font-size:20px; color:var(--strong); font-weight:600; } .rolehead p { margin:3px 0 0; color:var(--secondary); font-size:14px; }
+.strip { display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:16px; max-width:1100px; margin:22px 0 26px; }
+.strip label { display:block; font-size:12px; color:var(--muted); margin-bottom:6px; cursor:default; }
+.strip .field { width:100%; }
+.cats { display:flex; gap:4px; margin:0 0 14px; flex-wrap:wrap; }
+.cats span { padding:5px 12px; border-radius:var(--r-control); font-size:13px; color:var(--secondary); cursor:pointer; }
+.cats span:hover { background:var(--wash); } .cats span.on { background:var(--rev-bg, var(--r-rev-bg)); color:var(--r-rev); font-weight:500; }
+.inherit { max-width:1100px; margin-bottom:14px; padding:12px 16px; background:var(--chrome); font-size:13px; color:var(--secondary); }
+.inherit summary { display:flex; gap:10px; align-items:center; list-style:none; }
+.inherit summary::-webkit-details-marker { display:none; }
+.inherit .prose { margin-top:12px; max-height:260px; overflow:auto; opacity:.85; }
+
+/* Markdown editor: source with light highlighting, and a live preview */
+.md { max-width:1100px; background:var(--surface); box-shadow:0 0 0 1px var(--field-line); border-radius:var(--r-control); display:flex; flex-direction:column; }
+.md:focus-within { box-shadow:0 0 0 1px var(--accent), 0 0 0 3px var(--accent-subtle); }
+.md-bar { display:flex; align-items:center; gap:4px; padding:6px 8px; background:var(--chrome); border-radius:var(--r-control) var(--r-control) 0 0; flex-wrap:wrap; }
+.md-bar .tb { width:30px; height:28px; display:grid; place-items:center; border-radius:5px; color:var(--secondary); font-size:13px; font-weight:600; cursor:pointer; border:0; background:none; }
+.md-bar .tb:hover { background:var(--wash-2); color:var(--strong); }
+.md-bar .gap { width:1px; height:18px; margin:0 6px; background:var(--field-line); }
+.md-bar .count { font-size:12px; color:var(--muted); margin:0 8px; }
+.md { box-shadow:none; background:var(--chrome); }
+.md.editing { box-shadow:0 0 0 1px var(--accent), 0 0 0 3px var(--accent-subtle); background:var(--surface); }
+.md-bar { background:transparent; padding:8px 12px; }
+.md-rw { display:none !important; } .md.editing .md-rw { display:inline-flex !important; } .md.editing .md-ro { display:none !important; }
+.md-view { padding:8px 36px 36px; } .md.editing .md-view { display:none; }
+.md-src { display:none; position:relative; } .md.editing .md-src { display:block; }
+.md-src .stackc { display:grid; }
+.md-src .stackc > * { grid-area:1 / 1; margin:0; padding:14px 36px 40px; font:13.5px/1.7 var(--mono); white-space:pre-wrap; overflow-wrap:anywhere; tab-size:2; border:0; }
+.md-src textarea { resize:none; background:transparent; color:transparent; caret-color:var(--strong); outline:none; overflow:hidden; min-height:100%; }
+.md-src textarea::selection { background:var(--accent-subtle); color:transparent; }
+.md-src pre { color:var(--text); pointer-events:none; }
+.hl-h { color:var(--strong); font-weight:700; } .hl-hm { color:var(--accent-text); }
+.hl-code { color:var(--r-impl); } .hl-fence { color:var(--muted); } .hl-var { color:var(--accent-text); background:var(--accent-subtle); border-radius:3px; }
+.hl-li { color:var(--r-rev); } .hl-b { color:var(--strong); font-weight:700; } .hl-q { color:var(--muted); font-style:italic; }
+.md-prev { overflow:auto; padding:22px 30px 40px; background:var(--canvas); }
+.md.preview .md-prev { background:var(--surface); }
+.md-foot { display:flex; align-items:center; gap:10px; padding:8px 12px; background:var(--chrome); font-size:12px; color:var(--muted); border-radius:0 0 var(--r-control) var(--r-control); }
+.md.full { position:fixed; inset:28px; z-index:95; max-width:none; box-shadow:var(--float); }
+.md.full .md-body { height:auto; flex:1; min-height:0; }
+.mdscrim { position:fixed; inset:0; z-index:94; background:rgba(15,16,18,.45); display:none; } .mdscrim.on { display:block; }
+
+/* Prose: how a prompt reads */
+.prose { font-size:15px; line-height:1.65; color:var(--text); max-width:72ch; }
+.prose h1 { font-size:22px; margin:0 0 12px; color:var(--strong); line-height:1.3; }
+.prose h2 { font-size:17px; margin:28px 0 8px; color:var(--strong); }
+.prose h3 { font-size:15px; margin:22px 0 6px; color:var(--strong); }
+.prose p { margin:0 0 12px; } .prose ul, .prose ol { margin:0 0 12px; padding-left:22px; } .prose li { margin:3px 0; }
+.prose code { font:13px var(--mono); padding:1px 5px; border-radius:4px; background:var(--wash-2); }
+.prose pre { font:13px/1.6 var(--mono); padding:12px 14px; background:var(--chrome); overflow:auto; margin:0 0 14px; white-space:pre; }
+.prose blockquote { margin:0 0 12px; padding:2px 0 2px 14px; box-shadow:inset 3px 0 0 var(--field-line); color:var(--secondary); }
+.prose .var { font:12.5px var(--mono); padding:1px 6px; border-radius:4px; background:var(--accent-subtle); color:var(--accent-text); }
+.prose b { color:var(--strong); }
+
+</style>
+</head>
+<body>
+
+<div class="viewer" id="viewer"></div>
+<div class="mk">
+  <b>dude · v8</b>
+  <button data-s="rules" aria-pressed="true">0 · Rules</button>
+  <button data-s="project">1 · Project (epics)</button>
+  <button data-s="epic">2 · Epic (tasks)</button>
+  <button data-s="task">3 · Task</button>
+  <button data-s="inbox">4 · Waiting on you</button>
+  <button data-s="settings">5 · Settings</button>
+  <span class="sp"></span>
+  <button id="theme">Dark / light</button>
+</div>
+
+<!-- ============================================================ 0 RULES -->
+<section class="screen on" id="rules">
+  <div class="note"><h1>The rules behind the design</h1>
+    Hover PR chips, avatars and online faces for their tooltips. Everything clickable shows a pointer.</div>
+  <div class="rules">
+    <div class="rule wide">
+      <h3>Pull request state: one chip, picked by priority</h3>
+      <p>A task shows the <b>first</b> state below that is true for its PR, as an icon, a word and the PR number (a link to GitHub).
+        The tooltip lists everything else that is true. A task with two PRs shows two chips.</p>
+      <div class="ladder" id="ladder"></div>
+    </div>
+    <div class="rule">
+      <h3>Avatars are the defining element</h3>
+      <p>Three kinds of face. <b>People</b> are circles: a photo, or initials on their identity colour. <b>Projects</b> are rounded squares: an uploaded image, or initials on their colour. <b>Agents</b> are rounder squares that always carry their role's glyph, never letters. When an agent works for a person it sits on that person's avatar, pulsing while live; a green ring means online.</p>
+      <div class="sw" id="avatarSwatch"></div>
+    </div>
+    <div class="rule">
+      <h3>Four kinds of button, and links only navigate</h3>
+      <p>v1 mixed a filled "Answer" with a grey "Decide" in the same list, text-only "Take over" beside a filled "Pause", and "Update branch" as a link. Now:</p>
+      <div class="row" style="flex-wrap:wrap;gap:10px"><button class="btn primary">Primary</button><span class="muted" style="font-size:13px">one per view or panel</span></div>
+      <div class="row" style="flex-wrap:wrap;gap:10px;margin-top:8px"><button class="btn">Secondary</button><span class="muted" style="font-size:13px">every other action</span></div>
+      <div class="row" style="flex-wrap:wrap;gap:10px;margin-top:8px"><button class="btn quiet">Quiet</button><span class="muted" style="font-size:13px">row and toolbar actions</span></div>
+      <div class="row" style="flex-wrap:wrap;gap:10px;margin-top:8px"><button class="btn danger">Abort…</button><button class="btn danger solid">Abort run</button><span class="muted" style="font-size:13px">red text; solid only in its confirmation</span></div>
+    </div>
+    <div class="rule wide">
+      <h3>Cost is a total; hover for what it is made of</h3>
+      <p>Every cost on screen is model tokens <b>plus</b> machine time. The number is the total; a hairline under it shows the split at a glance, and its tooltip gives both parts with their units. Machine cost is each run's time on a lux host multiplied by that host's rate (lux already records a run's time and CPU seconds).</p>
+      <div class="row" style="gap:30px"><span style="font-size:20px;font-weight:600" id="costDemo"></span>
+        <span class="costkey"><span><i style="background:var(--r-impl)"></i>model tokens</span><span><i style="background:var(--r-orch);opacity:.55"></i>machine time</span></span></div>
+    </div>
+    <div class="rule wide">
+      <h3>Colour: four families, each with one job — fixed from v1</h3>
+      <ul class="fixlist">
+        <li><b>Accent blue</b> is interaction only: primary buttons, links, focus, selected tab. v1 also used it for the "running" dot — running now uses the info tone's mark, which the design system already defines.</li>
+        <li><b>Tones</b> are status only. v1 invented a darker red and used a grey "wait" style for an amber warning; both now come from the real tones.</li>
+        <li><b>Roles</b> are agents only, from the real role palette. v1 invented a purple "fixer" — a fixer is an implementer, so it now wears the implementer's colour with a wrench glyph.</li>
+        <li><b>Identity</b> colours are for faces — people and projects — from the real eight slots, picked by hashing the id (a project can pick its own). Never used for status. v1 approximated them.</li>
+        <li>One new token: <span style="color:var(--merged);font-weight:600">merged violet</span>, because every GitHub user reads violet as merged.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ 1 PROJECT -->
+<section class="screen" id="project">
+  <div class="note"><h1>Project: epics in progress, planned and done</h1><ul>
+    <li>In progress: the full cards, with everyone working in them and what their agents are doing right now.</li>
+    <li>Planned (not started) and Done sit side by side below as quiet lists — who leads them, how big they are, and for Done what they cost and how long they took.</li></ul></div>
+  <div class="frame"><aside class="side" data-side="project"></aside>
+    <main class="main">
+      <div class="top"><span id="projFace"></span><h2>Dashboard</h2><span class="muted" style="font-size:13px">acme/dashboard · 8 epics · <span id="projCost" style="display:inline-flex;vertical-align:middle"></span> this week</span>
+        <span class="sp"></span><span class="seg" data-seg><span class="on">Everyone</span><span>Mine</span></span>
+        <button class="btn quiet" data-set="proj:agents">Settings</button><button class="btn">New epic</button><button class="btn primary">＋ New task</button></div>
+      <div class="scroll">
+        <div class="sech" style="margin-top:8px"><h3>In progress</h3><span class="c">2</span></div>
+        <div class="epics" id="epicCards"></div>
+        <div class="cols2">
+          <div><div class="sech"><h3>Planned</h3><span class="c">3 · not started</span></div><div id="epicsPlanned"></div></div>
+          <div><div class="sech"><h3>Done</h3><span class="c">9</span></div><div id="epicsDone"></div></div></div>
+        <div class="sech"><h3>Not in an epic</h3><span class="c">2</span></div><div id="loose"></div></div>
+    </main></div>
+</section>
+
+<!-- ============================================================ 2 EPIC -->
+<section class="screen" id="epic">
+  <div class="note"><h1>Epic: its tasks by lane</h1><ul>
+    <li>Every card leads with its people — the owner first, then everyone else on the task — each carrying the agent working for them. DASH-3 has two people, each with a live agent.</li>
+    <li>Cards with a PR show its one priority state; hover for everything else. "Ready to merge" is its own lane.</li></ul></div>
+  <div class="frame"><aside class="side" data-side="epic"></aside>
+    <main class="main">
+      <div class="top"><span class="crumbs row" style="gap:8px"><span class="pface20"></span><a href="#" data-go="project">Dashboard</a> › </span><h2>Charts v2</h2>
+        <span class="stack" id="epicPeople"></span><span class="sp"></span>
+        <span class="seg" data-seg><span class="on">Everyone</span><span>Mine</span></span>
+        <button class="btn quiet">Edit epic</button><button class="btn primary">＋ New task</button></div>
+      <div style="padding:0 28px 14px;display:flex;gap:28px;align-items:center;font-size:13px;color:var(--muted)">
+        <span style="max-width:560px">Replace the hand-rolled SVG charts with one library, and move data loading out of the components.</span>
+        <span class="sp"></span><span>6 of 9 done</span><span id="epicCost"></span><span>started 4 days ago</span></div>
+      <div class="scroll"><div class="board" id="board"></div></div>
+    </main></div>
+</section>
+
+<!-- ============================================================ 3 TASK -->
+<section class="screen" id="task">
+  <div class="note"><h1>Task: overview, findings, sessions, activity</h1><ul>
+    <li>Two PRs (the task touched two repositories), each with its state, checks, reviews and the actions GitHub would give you: merge, update branch, re-run checks, request review.</li>
+    <li><b>Findings</b> lists every review finding with where it is, who found it, and what became of it. <b>Sessions</b> is every agent's transcript, with its tools, plan and files.</li>
+    <li><b>Plan</b>: an agent's todo list is pinned above its session's chat — one line (progress, the step it's on) that opens to the whole list. The running step on Overview, cards and the sidebar show its progress too.</li>
+    <li><b>Changes</b> (in a session): the agent's working tree against where the session started, updating live as it writes — new lines flash in, the file it's touching lights up, and <i>Follow the agent</i> keeps it in view. Open it and watch for ~10s.</li>
+    <li><b>Files</b>: everything the task's sessions saved — images and video as a gallery, documents as a list — each opening in a viewer with its versions, and one-click download (or all as a zip).</li></ul></div>
+  <div class="frame"><aside class="side" data-side="task"></aside>
+    <main class="main">
+      <div class="top"><span class="crumbs row" style="gap:8px"><span class="pface20"></span><a href="#" data-go="project">Dashboard</a> › <a href="#" data-go="epic">Charts v2</a> › <b>DASH-1</b></span>
+        <span class="sp"></span><span class="muted" style="font-size:13px">Here now</span><span class="stack" id="hereNow"></span>
+        <button class="btn quiet">Edit</button><button class="btn quiet">⋯</button></div>
+      <div style="padding:0 28px 18px"><div class="thead">
+        <div style="flex:1"><h1>Pick the chart library and port the revenue chart</h1>
+          <div class="meta"><span id="taskChips" class="row"></span><span class="mono">dude/dash-1/attempt-1</span><span>created 2h ago</span></div></div>
+        <div class="who-block" id="taskOwner"></div></div></div>
+      <div class="tabs" id="taskTabs"><span class="on" data-t="ov">Overview</span><span data-t="fi">Findings<span class="c">5</span></span><span data-t="se">Sessions<span class="c">9</span></span><span data-t="fl">Files<span class="c">7</span></span><span data-t="ac">Activity</span></div>
+      <div style="flex:1;min-height:0;display:flex;flex-direction:column">
+        <div class="scroll tpane" data-p="ov" id="tOverview"></div>
+        <div class="scroll tpane" data-p="fi" id="tFindings" style="display:none"></div>
+        <div class="tpane" data-p="se" id="tSessions" style="display:none;flex:1;min-height:0"></div>
+        <div class="scroll tpane" data-p="fl" id="tFiles" style="display:none"></div>
+        <div class="scroll tpane" data-p="ac" id="tActivity" style="display:none"></div>
+      </div>
+    </main></div>
+</section>
+
+<!-- ============================================================ 4 INBOX -->
+<section class="screen" id="inbox">
+  <div class="note"><h1>Waiting on you, then on others</h1><ul>
+    <li>Only what <b>you</b> can answer is counted and highlighted. Others' items are listed with their face, and "Take over".</li></ul></div>
+  <div class="frame"><aside class="side" data-side="inbox"></aside>
+    <main class="main">
+      <div class="top"><h2>Waiting on you</h2><span class="sp"></span><span class="seg" data-seg><span class="on">Oldest first</span><span>By project</span></span></div>
+      <div class="scroll" style="max-width:1000px" id="inboxList"></div>
+    </main></div>
+</section>
+
+<!-- ============================================================ 5 SETTINGS -->
+<section class="screen" id="settings">
+  <div class="note"><h1>Settings, in three places</h1><ul>
+    <li><b>Your settings</b> (click your name, bottom left): profile, keys, notifications — everyone.</li>
+    <li><b>Organisation settings</b> (above your name): members, GitHub, and the defaults for agents and delivery — organisation admins only. No projects in here.</li>
+    <li><b>Project settings</b> (a project's ⋯ menu in the sidebar, or its Settings button): the same pages, with every value marked “From Acme” or “Overridden”, one-click reset — project admins.</li>
+    <li>Agents: pick a role under Agents in the left menu. Its prompt reads as a document; <b>Edit</b> turns it into Markdown source in place, <b>Save</b> or <b>Cancel</b> turns it back.</li></ul>
+    <div class="row" style="margin-top:10px;gap:6px"><span class="muted">Jump to:</span><button class="btn sm" data-set="me:profile">Your settings</button><button class="btn sm" data-set="org:agents">Organisation · Agents</button><button class="btn sm" data-set="proj:agents">Project · Agents</button><button class="btn sm" data-set="proj:delivery">Project · Delivery</button></div></div>
+  <div class="frame"><aside class="side" data-side="settings"></aside>
+    <main class="main">
+      <div class="top"><span class="crumbs"></span></div>
+      <div class="set"><nav class="set-nav" id="setNav"></nav><div class="set-main" id="setMain"></div></div>
+    </main></div>
+</section>
+
+<script>
+/* ------------------------------------------------------------------ icons (16px, stroke) */
+const P = {
+  merge:'M5 3.5v9M5 5.5c0 3 6 2 6 5M11 10.5v2', // drawn with circles below
+  x:'M5.5 5.5l5 5M10.5 5.5l-5 5', check:'M3.5 8.5l3 3 6-7', dot:'',
+  eye:'M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8Z',
+  diffm:'M4 2.5h5.5l3 3v8H4ZM6.5 9h4',
+  conflict:'M4 2.5v11M12 2.5v4M12 9.5v4M4 8h3.5M12 6.5L9.5 9.5M9.5 6.5L12 9.5',
+  bubble:'M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2Z', bubbleDots:'M5.5 7h.01M8 7h.01M10.5 7h.01',
+  ready:'M3 8.5l3 3 7-7', running:'',
+  pen:'M10.5 2.5l3 3-8 8H2.5v-3Z', wrench:'M10 2.5a3 3 0 0 0-2.8 4.1L2.5 11.3l2.2 2.2 4.7-4.7A3 3 0 0 0 13.5 6l-2 .5-1-1 .5-2Z',
+  eyeglass:'M2 9.5a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0M9 9.5a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0M7 9.5h2M2.5 8l1.5-4M13.5 8l-1.5-4',
+  scissors:'M4 4.5a1.5 1.5 0 1 0 0 .01M4 11.5a1.5 1.5 0 1 0 0 .01M5.2 5.4L13 12M5.2 10.6L13 4',
+  browser:'M2 3.5h12v9H2ZM2 6h12',
+  star:'M8 2l1.8 3.8 4.2.5-3.1 2.9.8 4.1L8 11.3 4.3 13.3l.8-4.1L2 6.3l4.2-.5Z',
+  gh:'M8 1.8a6.2 6.2 0 0 0-2 12.1c.3 0 .4-.1.4-.3v-1.1c-1.7.4-2.1-.8-2.1-.8-.3-.7-.7-.9-.7-.9-.6-.4 0-.4 0-.4.6 0 1 .6 1 .6.5.9 1.4.7 1.8.5 0-.4.2-.7.4-.8-1.4-.2-2.8-.7-2.8-3 0-.7.2-1.2.6-1.6 0-.2-.3-.8.1-1.6 0 0 .5-.2 1.7.6a5.8 5.8 0 0 1 3 0c1.2-.8 1.7-.6 1.7-.6.3.8.1 1.4.1 1.6.4.4.6 1 .6 1.6 0 2.4-1.4 2.9-2.8 3 .2.2.4.6.4 1.1v1.7c0 .2.1.4.4.3A6.2 6.2 0 0 0 8 1.8Z',
+  bolt:'M9 1.5L3.5 9H8l-1 5.5L12.5 7H8Z', ext:'M9.5 2.5h4v4M13.5 2.5L8 8M11.5 9.5v4h-9v-9h4',
+  up:'M8 13V3M4 7l4-4 4 4', play:'M5 3l8 5-8 5Z', file:'M4 2.5h5.5l3 3v8H4Z', search:'M7 3a4 4 0 1 0 0 8a4 4 0 1 0 0-8M10 10l3.5 3.5',
+  term:'M2.5 3.5h11v9h-11ZM5 7l2 1.5L5 10M8.5 10.5h2.5', list:'M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.01M2.5 8h.01M2.5 12h.01',
+  block:'M4 4h8v8H4Z', tri:'M8 2.5l6 10.5H2Z', circ:'M8 3a5 5 0 1 0 0 10a5 5 0 1 0 0-10',
+};
+function ic(name, cls='') {
+  if (name==='merge') return `<svg class="i ${cls}" viewBox="0 0 16 16"><circle cx="5" cy="3.5" r="1.5"/><circle cx="5" cy="12.5" r="1.5"/><circle cx="11" cy="10.5" r="1.5"/><path d="M5 5v6M5 5.5c0 3 6 1.5 6 3.5"/></svg>`;
+  if (name==='running') return `<svg class="i ${cls}" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5" stroke-dasharray="3 2.2"/></svg>`;
+  if (name==='ci_red') return `<svg class="i ${cls}" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="${P.x}" transform="translate(0 0) scale(1)"/></svg>`;
+  if (name==='ready') return `<svg class="i ${cls}" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M5.5 8.2l1.8 1.8 3.3-3.6"/></svg>`;
+  if (name==='bubble') return `<svg class="i ${cls}" viewBox="0 0 16 16"><path d="${P.bubble}"/><path d="${P.bubbleDots}" stroke-width="2"/></svg>`;
+  if (name==='gh') return `<svg class="i ${cls}" viewBox="0 0 16 16" style="fill:currentColor;stroke:none"><path d="${P.gh}"/></svg>`;
+  if (name==='block') return `<svg class="i ${cls}" viewBox="0 0 16 16" style="fill:currentColor;stroke:none"><rect x="3.5" y="3.5" width="9" height="9" rx="1"/></svg>`;
+  return `<svg class="i ${cls}" viewBox="0 0 16 16"><path d="${P[name]}"/></svg>`;
+}
+
+/* ------------------------------------------------------------------ people & agents */
+const PEOPLE = {
+  ana:{n:'Ana Ribeiro', s:'Ana', ini:'AR', id:3, photo:'photos/ana.jpg', on:true, where:'on DASH-1 · just now'},
+  bo:{n:'Bo Lindqvist', s:'Bo', ini:'BL', id:0, on:true, where:'on the Charts v2 board · 2m ago'},
+  cy:{n:'Cy Okafor', s:'Cy', ini:'CO', id:5, photo:'photos/cy.jpg', on:true, where:'on DASH-1 · 1m ago'},
+  dee:{n:'Dee Marsh', s:'Dee', ini:'DM', id:1, on:false, where:'last seen 3h ago'},
+  eli:{n:'Eli Park', s:'Eli', ini:'EP', id:6, photo:'photos/eli.jpg', on:true, where:'in Settings › Agents · 4m ago'},
+  gus:{n:'Gus Tavares', s:'Gus', ini:'GT', id:4, photo:'photos/gus.jpg', on:false, where:'last seen yesterday'},
+};
+const ROLES = { impl:['Implementer','pen','impl'], fix:['Fixer','wrench','impl'], rev:['Reviewer','eyeglass','rev'],
+  simp:['Simplifier','scissors','simp'], qa:['Tester','browser','qa'], sys:['dude','star','orch'] };
+function agent(role, size=28, live=false, tip) {
+  const [name, icon, cls] = ROLES[role];
+  return `<span class="agent ${cls} ${live?'live':''}" style="width:${size}px;height:${size}px" ${tip!==false?`data-tip="${tip||name+(live?' · working now':'')}"`:''}>${ic(icon)}</span>`;
+}
+/* av(person, size, {agent:'impl', live:true, doing:'...', ring:true}) */
+function av(k, size=28, o={}) {
+  const p = PEOPLE[k]; const ring = (o.ring!==false) && p.on;
+  const inner = p.photo ? `<img src="${p.photo}" alt="">` : p.ini;
+  const style = p.photo ? '' : `background:var(--id${p.id}b);color:var(--id${p.id})`;
+  let tip = `${p.n}${p.on?' — online, '+p.where:' — '+p.where}`;
+  let badge = '';
+  if (o.agent) { const [rn, icn, cls] = ROLES[o.agent];
+    badge = `<span class="ag ${cls} ${o.live?'live':''}">${ic(icn)}</span>`;
+    tip += `\n${rn} ${o.live?'working for '+p.s+' now':'last worked for '+p.s}${o.doing?': '+o.doing:''}`; }
+  const dim = `width:${size}px;height:${size}px;font-size:${Math.round(size*.36)}px;`;
+  return `<span class="av s${size} ${ring?'on':''}" style="${dim}${style}" data-tip="${o.tip||tip}">${inner}${badge}</span>`;
+}
+
+/* ------------------------------------------------------------------ projects have faces too */
+/* Rounded squares, like a person's circle: an uploaded image, or initials on the project's identity colour.
+   Agents are also rounded squares but always carry their role glyph, never letters, and are rounder. */
+const PROJECTS = {
+  Dashboard:{ini:'DA', id:5, repo:'acme/dashboard'},
+  'Billing API':{ini:'BA', id:3, img:'photos/billing.svg', repo:'acme/billing'},
+  Greeter:{ini:'GR', id:7, repo:'acme/greeter'},
+};
+function pav(name, size=20, o={}) {
+  const x = PROJECTS[name];
+  const inner = x.img ? `<img src="${x.img}" alt="">` : x.ini;
+  const style = `width:${size}px;height:${size}px;font-size:${Math.round(size*.38)}px;border-radius:${Math.max(4, Math.round(size*.22))}px;` + (x.img ? '' : `background:var(--id${x.id}b);color:var(--id${x.id});`);
+  return `<span class="pav" style="${style}" data-tip="${o.tip||name+' · '+x.repo}">${inner}</span>`;
+}
+
+/* ------------------------------------------------------------------ cost: the total, split in its tooltip */
+/* cost(total, {tok, mach, detail}) — tokens + machine time. When only a total is given, 72% / 28% is assumed for the mock. */
+function cost(total, o={}) {
+  const t = parseFloat(String(total).replace(/[$,]/g,''));
+  const tok = o.tok ?? +(t*0.72).toFixed(2), mach = o.mach ?? +(t - tok).toFixed(2);
+  const f = v => '$' + v.toLocaleString('en-US',{minimumFractionDigits:2, maximumFractionDigits:2});
+  const pct = Math.round(tok / t * 100);
+  const tip = `${f(t)} total\n• Model tokens  ${f(tok)}${o.tokens?'  ('+o.tokens+')':''}\n• Machine time  ${f(mach)}${o.time?'  ('+o.time+')':''}` + (o.detail?`\n${o.detail}`:'');
+  return `<span class="cost num" data-tip="${tip}">${o.label??f(t)}<i class="costbar"><b style="width:${pct}%"></b></i></span>`;
+}
+
+/* ------------------------------------------------------------------ PR states, by priority */
+const PR_ORDER = [
+  ['merged','Merged','merge','The pull request was merged. The task is done.'],
+  ['ci_red','CI failing','ci_red','At least one required check failed. dude wakes a fixer with the failing check\'s log.'],
+  ['ci_running','CI running','running','Checks are still running on the latest commit.'],
+  ['awaiting','Awaiting approval','eye','Checks pass; nobody has approved or requested changes yet.'],
+  ['changes','Changes requested','diffm','A reviewer requested changes. dude wakes a fixer with their comments.'],
+  ['conflict','Conflicts','conflict','The branch conflicts with its base. Update the branch or resolve by hand.'],
+  ['comments','Unresolved comments','bubble','Approved, but unresolved review threads block the merge.'],
+  ['ready','Ready to merge','ready','Approved, checks green, mergeable. Merge it here or on GitHub.'],
+];
+function prState(pr) {
+  if (pr.merged) return 'merged';
+  if (pr.ci==='fail') return 'ci_red';
+  if (pr.ci==='run') return 'ci_running';
+  if (!pr.approved && !pr.changes) return 'awaiting';
+  if (pr.changes) return 'changes';
+  if (pr.conflict) return 'conflict';
+  if (pr.unresolved) return 'comments';
+  return 'ready';
+}
+function prFacts(pr) {
+  const f = [];
+  if (pr.merged) f.push(`Merged by ${pr.mergedBy||'Ana'} · ${pr.when||'2d ago'}`);
+  f.push(pr.ci==='fail' ? `Checks: ${pr.failing||'e2e (chrome)'} failing` : pr.ci==='run' ? 'Checks: running (2 of 4 done)' : 'Checks: all passing');
+  f.push(pr.approved ? `Approved by ${pr.approvedBy||'Cy'}` : pr.changes ? `Changes requested by ${pr.changesBy||'Cy'}` : 'No review yet');
+  if (pr.conflict) f.push('Conflicts with main'); else if (pr.behind) f.push(`${pr.behind} commits behind main, no conflicts`); else f.push('Up to date with main');
+  if (pr.unresolved) f.push(`${pr.unresolved} unresolved comment${pr.unresolved>1?'s':''}`);
+  return f;
+}
+function prChip(pr, withNum=true) {
+  const k = prState(pr); const [, label, icon] = PR_ORDER.find(s => s[0]===k);
+  const tip = `${pr.repo}#${pr.n} · ${label}\n` + prFacts(pr).map(x=>'• '+x).join('\n') + '\nClick to open on GitHub';
+  return `<a class="prs ${k}" href="#" data-tip="${tip}" onclick="return false">${ic(icon,'sm')}${label}${withNum?` <b>#${pr.n}</b>`:''}</a>`;
+}
+
+/* ------------------------------------------------------------------ v3 data: several people per task */
+/* who: [person, role-on-task]; the first is the owner. agents: [role, working-for, live, doing]. */
+const T = {
+  'DASH-1':{t:'Pick the chart library and port the revenue chart', who:['ana','cy'], lane:'review',
+    agents:[['fix','ana',true,'fixing Cy\'s 2 comments on #41']],
+    prs:[{repo:'acme/dashboard', n:41, ci:'fail', changes:true, changesBy:'Cy', behind:3, unresolved:2}, {repo:'acme/design-tokens', n:12, ci:'pass', approved:true}]},
+  'DASH-2':{t:'Localise the dashboard', who:['ana'], lane:'prog', agents:[['impl','ana',false,'parked, waiting on Ana']], needs:'“Should FACTORY.md be in English or Portuguese?”'},
+  'DASH-3':{t:'Move data loading into useDashboardData', who:['bo','gus'], lane:'prog',
+    agents:[['impl','bo',true,'running bun test src/data'],['impl','gus',true,'porting the cost chart']]},
+  'DASH-4':{t:'Tooltip formatting with formatUsd', who:['cy'], lane:'prog', agents:[['rev','cy',true,'reviewing · correctness']]},
+  'DASH-5':{t:'Area chart for weekly cost', who:['bo','eli'], lane:'review', prs:[{repo:'acme/dashboard', n:44, ci:'run'}]},
+  'DASH-6':{t:'Legend toggles series', who:['cy'], lane:'review', prs:[{repo:'acme/dashboard', n:45, ci:'pass', approved:true, conflict:true}]},
+  'DASH-7':{t:'Remove the hand-rolled SVG helpers', who:['ana','bo'], lane:'ready', prs:[{repo:'acme/dashboard', n:39, ci:'pass', approved:true, approvedBy:'Bo'}]},
+  'DASH-8':{t:'Axis labels respect locale', who:['eli'], lane:'review', prs:[{repo:'acme/dashboard', n:46, ci:'pass', approved:true, unresolved:1}]},
+  'DASH-9':{t:'Chart skeletons while loading', who:['gus'], lane:'review', prs:[{repo:'acme/dashboard', n:47, ci:'pass'}]},
+  'DASH-10':{t:'Revenue chart zoom', who:['dee'], lane:'back'},
+  'DASH-11':{t:'Pie chart for cost by role', who:['eli'], lane:'done', prs:[{repo:'acme/dashboard', n:36, merged:true, ci:'pass', approved:true, mergedBy:'Eli'}]},
+  'DASH-12':{t:'Colour-blind safe palette', who:['bo','dee','cy'], lane:'done', prs:[{repo:'acme/dashboard', n:34, merged:true, ci:'pass', approved:true, mergedBy:'Bo', when:'4d ago'}]},
+};
+const EPICS = {
+  active:[
+    {name:'Charts v2', desc:'Replace the hand-rolled SVG charts with one library; move data loading out of the components.', counts:[2,5,3,1], lead:'ana', cost:'$8.40', needs:1, updated:'just now',
+      working:[['ana','fix',true,'fixing Cy\'s 2 comments on DASH-1'],['bo','impl',true,'running bun test on DASH-3'],['gus','impl',true,'porting the cost chart on DASH-3'],['cy','rev',true,'reviewing DASH-4']], idle:['eli','dee'],
+      prs:['DASH-1','DASH-5','DASH-6','DASH-7','DASH-8','DASH-9','DASH-11'].map(k=>T[k].prs[0])},
+    {name:'Localisation', desc:'English, Portuguese and German for every screen, with number and date formats per locale.', counts:[1,1,1,2], lead:'bo', cost:'$3.10', needs:1, updated:'12m ago',
+      working:[['bo','impl',true,'translating settings strings']], idle:['dee','ana'],
+      prs:[{repo:'acme/dashboard', n:50, ci:'pass', approved:true, unresolved:2},{repo:'acme/dashboard', n:48, merged:true, ci:'pass', approved:true}]},
+  ],
+  planned:[
+    {name:'Exports', desc:'PNG, CSV and PDF for every chart, from one menu.', tasks:4, lead:'eli', people:['eli','gus'], when:'next'},
+    {name:'Alerts', desc:'Notify a channel when a metric crosses a threshold.', tasks:6, lead:'cy', people:['cy'], when:'after Exports'},
+    {name:'Embeds', desc:'Share a chart as a read-only iframe.', tasks:0, lead:'dee', people:['dee'], when:'not scheduled'},
+  ],
+  done:[
+    {name:'Dark mode', tasks:3, prs:3, cost:'$2.70', people:['cy','gus'], when:'finished 2d ago', took:'6 days'},
+    {name:'Auth refresh', tasks:7, prs:8, cost:'$11.90', people:['ana','bo','eli'], when:'finished Sep 14', took:'11 days'},
+    {name:'Project setup', tasks:5, prs:5, cost:'$4.05', people:['ana'], when:'finished Sep 2', took:'3 days'},
+  ],
+};
+const ME = 'ana';
+
+/* People stacked on one card: the owner first and larger, each carrying the agent working for them. */
+function peopleOn(x, size=32) {
+  const ag = k => (x.agents||[]).find(a => a[1]===k);
+  return `<span class="stack">${x.who.map((k,i) => { const a = ag(k);
+    return av(k, i===0?size:size-6, {agent:a?a[0]:null, live:a?a[2]:false, doing:a?a[3]:null,
+      tip: `${PEOPLE[k].n}${i===0?' — owner':' — on this task'}${PEOPLE[k].on?' · online':''}${a?`\n${ROLES[a[0]][0]} ${a[2]?'working for '+PEOPLE[k].s:'waiting'}: ${a[3]}`:''}`}); }).join('')}</span>`;
+}
+function doingLine(x) {
+  if (x.needs) return `<b>${PEOPLE[x.who[0]].s}</b>implementer is waiting on ${PEOPLE[x.who[0]].s}`;
+  const live = (x.agents||[]).filter(a=>a[2]);
+  if (live.length > 1) return `<b>${live.length} agents working</b>${live.map(a=>PEOPLE[a[1]].s).join(' and ')}`;
+  if (live.length) { const a = live[0]; return `<b>${PEOPLE[a[1]].s} · ${ROLES[a[0]][0]}</b>${a[3]}`; }
+  const names = x.who.map(k=>PEOPLE[k].s).join(', ');
+  return `<b>${names}</b>${x.lane==='done'?'merged':x.lane==='back'?'not started':'waiting on GitHub'}`;
+}
+
+/* ------------------------------------------------------------------ sidebar */
+const openState = { 'p:Dashboard':true, 'e:Charts v2':true };
+function sideHTML(cur) {
+  const online = Object.keys(PEOPLE).filter(k => PEOPLE[k].on);
+  const tri = key => `<span class="chev ${openState[key]?'open':''}">▶</span>`;
+  const taskRow = (k, lvl) => { const x = T[k];
+    const right = x.needs ? '<span class="needs" style="padding:0 7px">1</span>' : (x.prs ? prChip(x.prs[0], false).replace('class="prs','class="prs tip-left" style="height:20px;padding:0 5px"').replace(/>([A-Za-z ]+) ?<\/a>$/, '></a>') : '');
+    let h = `<div class="nav l${lvl} ${cur===k?'cur':''}" data-go="task"><span class="chev"></span><span class="k">${k}</span><span class="t">${x.t}</span>${right}${peopleOn(x,20)}</div>`;
+    /* Only what is running now — the phases live on the task page. */
+    for (const [r, who, live, doing] of (x.agents||[]).filter(a=>a[2]))
+      h += `<div class="nav l${lvl+1} agentrow" data-go="task">${agent(r,18,true,false)}<span class="doing">${ROLES[r][0]} · ${doing}</span>${(q=>q?`<span class="c num" data-tip="Plan: ${q[0]} of ${q[1]}\nNow: ${q[2]}">${q[0]}/${q[1]}</span>`:'')(AGENT_PLANS[k+':'+who])}</div>`;
+    return h; };
+  let tree = '';
+  const projects = [['Dashboard', ['Charts v2','Localisation'], ['ana','bo','cy','gus']], ['Billing API', ['Invoices','Tax rules'], ['cy','eli']], ['Greeter', [], ['dee']]];
+  for (const [p, eps, ppl] of projects) {
+    /* A project row: its face, name and people at rest; on hover (or while its settings are open) the ⋯ menu, which holds its settings. */
+    const setOpen = cur==='settings' && curSet.scope==='proj' && p==='Dashboard';
+    tree += `<div class="nav proj ${cur==='project'&&p==='Dashboard'||setOpen?'cur':''} ${setOpen?'hold':''}" data-toggle="p:${p}">${tri('p:'+p)}${pav(p,20)}<span class="t">${p}</span><span class="stack rest">${ppl.slice(0,4).map(k=>av(k,20)).join('')}</span>
+      <span class="hov"><button class="ib" data-pmenu="${p}" data-tip="Project menu">⋯</button></span></div>`;
+    if (!openState['p:'+p]) continue;
+    for (const e of eps) {
+      const n = e==='Charts v2' ? 12 : e==='Localisation' ? 5 : 3;
+      tree += `<div class="nav l1 ${cur==='epic'&&e==='Charts v2'?'cur':''}" data-toggle="e:${e}">${tri('e:'+e)}<span class="t">${e}</span>${e!=='Tax rules'&&e!=='Invoices'?'<span class="needs" style="padding:0 7px">1</span>':''}<span class="c">${n}</span></div>`;
+      if (openState['e:'+e] && e==='Charts v2') { for (const k of ['DASH-1','DASH-2','DASH-3','DASH-4','DASH-5']) tree += taskRow(k, 2);
+        tree += `<div class="nav l2 muted" style="font-size:13px"><span class="chev"></span>7 more…</div>`; }
+    }
+    if (p==='Dashboard') tree += `<div class="nav l1 muted" style="font-size:13px"><span class="chev"></span>3 planned · 3 done</div>`;
+  }
+  const inSettings = cur==='settings';
+  return `<div class="brand"><img class="lt" src="../brand/dude.svg" alt=""><img class="dk" src="../brand/dude-outlined.svg" alt=""><span class="nm">El Duderino<small>Acme</small></span></div>
+    <div class="online"><span class="label">Online</span><span class="stack">${online.map(k=>av(k,28,{tip:`${PEOPLE[k].n} — ${PEOPLE[k].where}`})).join('')}</span><span class="muted" style="font-size:12px">${online.length}</span></div>
+    <div class="search">Find work… <span class="kbd">/</span></div>
+    <div class="nav ${cur==='inbox'?'cur':''}" data-go="inbox"><span class="needs">2</span><span class="t">Waiting on you</span></div>
+    <div class="nav" data-go="inbox"><span class="chev"></span><span class="t">Waiting on others</span><span class="c">3</span></div>
+    <div class="tree"><div class="hdr"><span class="label">Projects</span><span class="sp"></span><span class="seg" data-seg style="transform:scale(.9);transform-origin:right"><span class="on">Everyone</span><span>Mine</span></span></div>${tree}</div>
+    <div class="band">
+      <div class="nav ${inSettings&&curSet.scope==='org'?'cur':''}" data-set="org:members">${ic('build','sm')}<span class="t">Organisation settings</span><span class="tag admin">Admin</span></div>
+      <div class="me click" data-set="me:profile">${av('ana',40,{ring:true, tip:'You — Ana Ribeiro'})}<div class="who">Ana Ribeiro<small>ana@acme.dev</small></div><span class="btn quiet sm" data-tip="Your settings" style="pointer-events:none">⚙</span></div>
+    </div>`;
+}
+function renderSides() { document.querySelectorAll('[data-side]').forEach(s => s.innerHTML = sideHTML(s.dataset.side)); }
+
+/* ------------------------------------------------------------------ project */
+function prSummary(prs) {
+  const byState = {}; prs.forEach(p => { const s = prState(p); (byState[s] ||= []).push(p); });
+  return PR_ORDER.filter(s => byState[s[0]]).map(([k,l,icn]) =>
+    `<span class="prs ${k}" data-tip="${byState[k].map(p=>p.repo+'#'+p.n).join('\n')}">${ic(icn,'sm')}${byState[k].length} ${l.toLowerCase()}</span>`).join('');
+}
+function renderProject() {
+  document.getElementById('epicCards').innerHTML = EPICS.active.map(e => {
+    const [dn, rv, ip, bl] = e.counts; const tot = dn+rv+ip+bl;
+    return `<div class="epic" data-go="epic">
+      <div class="row"><h3>${e.name}</h3>${e.needs?'<span class="needs">'+e.needs+' needs you</span>':''}<span class="sp"></span><span class="muted" style="font-size:12px">lead</span>${av(e.lead,28,{tip:PEOPLE[e.lead].n+' leads this epic'})}</div>
+      <p>${e.desc}</p>
+      <div class="bar">${[['dn',dn],['rv',rv],['ip',ip],['bl',bl]].map(([c,n])=>n?`<i class="${c}" style="flex:${n}"></i>`:'').join('')}</div>
+      <div class="legend"><span><i style="background:var(--ok-mark)"></i>${dn} done</span><span><i style="background:var(--info-mark)"></i>${rv} in review</span><span><i style="background:var(--attn-mark)"></i>${ip} in progress</span><span><i style="background:var(--field-line)"></i>${bl} backlog</span></div>
+      <div class="chips" style="margin-top:14px">${prSummary(e.prs)}</div>
+      <div class="people" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">${e.working.map(([k,r,l,d]) => `<span class="row" style="gap:10px;align-items:center">${av(k,32,{agent:r,live:l,doing:d})}<span style="font-size:13px;line-height:1.3;min-width:0"><b style="color:var(--strong);font-weight:500">${PEOPLE[k].s}</b><br><span class="muted">${d}</span></span></span>`).join('')}</div>
+      <div class="foot"><span>${tot} tasks</span>${cost(e.cost)}<span>updated ${e.updated}</span><span class="sp"></span><span class="stack">${e.idle.map(k=>av(k,24)).join('')}</span></div></div>`;
+  }).join('');
+  document.getElementById('epicsPlanned').innerHTML = EPICS.planned.map(e =>
+    `<div class="erow" data-go="epic"><div class="nm">${e.name}<small>${e.desc}</small></div><span class="muted" style="font-size:13px;text-align:right">${e.tasks?e.tasks+' tasks':'no tasks yet'}<br>${e.when}</span><span class="stack">${e.people.map(k=>av(k,28)).join('')}</span></div>`).join('')
+    + `<div style="margin-top:10px"><button class="btn quiet sm">＋ Plan an epic</button></div>`;
+  document.getElementById('epicsDone').innerHTML = EPICS.done.map(e =>
+    `<div class="erow" data-go="epic"><div class="nm"><span class="row" style="gap:8px">${e.name}<span class="prs merged" style="height:20px">${ic('merge','sm')}${e.prs} merged</span></span><small class="row" style="gap:6px">${e.tasks} tasks · ${cost(e.cost)} · took ${e.took}</small></div><span class="muted" style="font-size:13px">${e.when}</span><span class="stack">${e.people.map(k=>av(k,28)).join('')}</span></div>`).join('')
+    + `<div style="margin-top:10px"><button class="btn quiet sm">Show all 9 finished epics</button></div>`;
+  document.getElementById('loose').innerHTML = [
+    ['DASH-13','Bump Vite to 7', {who:['gus']}, prChip({repo:'acme/dashboard', n:49, ci:'pass', approved:true})],
+    ['DASH-14','Flaky screenshot test on CI', {who:['dee','bo']}, '<span class="st idle"><span class="d"></span>Backlog</span>']].map(([k,t,x,s]) =>
+    `<div class="lrow" data-go="task"><span class="mono muted">${k}</span><span style="color:var(--strong)">${t}</span>${s}<span></span>${peopleOn(x,28)}</div>`).join('');
+}
+
+/* ------------------------------------------------------------------ epic board */
+function renderEpic() {
+  const lanes = [['back','Backlog'],['prog','In progress'],['review','In review'],['ready','Ready to merge'],['done','Done']];
+  document.getElementById('board').innerHTML = lanes.map(([l, name]) => {
+    const ks = Object.keys(T).filter(k => T[k].lane===l);
+    return `<div class="col"><h4>${name}<span class="c">${ks.length}</span></h4>${ks.map(k => { const x = T[k];
+      return `<div class="card ${x.needs?'attn':''}" data-go="task">
+        <div class="top1"><span class="mono">${k}</span><span class="sp"></span>${x.needs?'<span class="needs">Needs you</span>':''}</div>
+        <div class="ttl">${x.t}</div>${x.needs?`<div class="q">${x.needs}</div>`:''}
+        ${x.prs?`<div class="chips" style="margin:-2px 0 10px">${x.prs.map(p=>prChip(p)).join('')}</div>`:''}
+        ${PLANS[k]?`<div class="cardplan" data-tip="Plan: ${PLANS[k][0]} of ${PLANS[k][1]} done
+Now: ${PLANS[k][2]}">${planMeter(PLANS[k][0],PLANS[k][1],64)}<span class="num">${PLANS[k][0]}/${PLANS[k][1]}</span></div>`:''}
+        <div class="foot">${peopleOn(x,32)}<span class="doing">${doingLine(x)}</span></div></div>`; }).join('')}</div>`;
+  }).join('');
+  document.getElementById('epicPeople').innerHTML = ['ana','bo','cy','eli','gus','dee'].map(k=>av(k,28)).join('');
+}
+
+/* ------------------------------------------------------------------ task */
+function renderTask() {
+  const x = T['DASH-1'];
+  document.getElementById('taskChips').innerHTML = x.prs.map(p=>prChip(p)).join('');
+  document.getElementById('hereNow').innerHTML = av('ana',28) + av('cy',28);
+  document.getElementById('taskOwner').innerHTML = `<div class="row" style="gap:14px">${av('ana',56,{agent:'fix',live:true,doing:'fixing Cy\'s 2 comments on #41'})}<div class="nm">Ana Ribeiro<small>Owner · her fixer is on Cy's comments</small></div></div>
+    <div class="row" style="gap:10px">${av('cy',40)}<div class="nm">Cy Okafor<small>On this task</small></div></div><button class="btn quiet sm" data-tip="Add someone, or hand the task over">＋ Person</button>`;
+
+  const steps = [['impl','Implement','',  'ok','d4ef040','4m 10s'],['rev','Review · correctness','1 blocking, 2 suggestions','ok','','1m 02s'],
+    ['fix','Fix','for the review','ok','0fff44b','2m 31s'],['rev','Review · correctness','no findings','ok','','58s'],['simp','Simplify','','ok','dc5889c','1m 47s'],
+    ['sys','Opened 2 pull requests','#41, design-tokens#12','ok','','—'],['fix','Fix','for CI: e2e (chrome)','ok','a91be02','3m 12s'],['fix','Fix','for Cy\'s review · 2 comments','run','','running 2m']];
+  const facts41 = `<ul class="facts">
+      <li class="bad">${ic('ci_red')}<span><b style="color:var(--strong);font-weight:500">1 of 4 checks failing</b></span><span class="sp"></span><button class="btn quiet sm">Re-run failed</button></li>
+      <ul class="checks"><li><span style="color:var(--bad-mark)">${ic('x','sm')}</span>e2e (chrome)<span class="sp"></span><span class="muted">4m 12s</span><a href="#">log</a></li>
+        <li><span style="color:var(--ok-mark)">${ic('check','sm')}</span>unit<span class="sp"></span><span class="muted">48s</span></li>
+        <li><span style="color:var(--ok-mark)">${ic('check','sm')}</span>lint<span class="sp"></span><span class="muted">21s</span></li>
+        <li><span style="color:var(--ok-mark)">${ic('check','sm')}</span>typecheck<span class="sp"></span><span class="muted">33s</span></li></ul>
+      <li class="bad">${ic('diffm')}<span>${av('cy',20,{ring:false})}</span><span><b style="color:var(--strong);font-weight:500">Cy</b> requested changes</span><span class="sp"></span><span class="muted">4m</span></li>
+      <li class="ne">${ic('eye')}<span>${av('bo',20,{ring:false})}</span><span>Bo · review requested</span><span class="sp"></span><button class="btn quiet sm">Request review ▾</button></li>
+      <li class="at">${ic('bubble')}<span>2 unresolved comments</span><span class="sp"></span><a href="#">show</a></li>
+      <li class="ne">${ic('up')}<span>3 commits behind main · no conflicts</span><span class="sp"></span><button class="btn sm">Update branch</button></li></ul>`;
+  const facts12 = `<ul class="facts">
+      <li class="ok">${ic('ready')}<span>All 3 checks passing</span></li>
+      <li class="ok">${ic('check')}<span>${av('cy',20,{ring:false})}</span><span><b style="color:var(--strong);font-weight:500">Cy</b> approved</span><span class="sp"></span><span class="muted">20m</span></li>
+      <li class="ok">${ic('up')}<span>Up to date with main</span></li></ul>`;
+  document.getElementById('tOverview').innerHTML = `<div class="grid2"><div>
+    <div class="blk"><span class="label">Goal</span><div style="color:var(--secondary);max-width:720px">Choose between Recharts and visx, add it, and port the revenue chart as its first user. Export the chart colours from <span class="mono">acme/design-tokens</span>.
+      <ul style="margin:8px 0 0;padding-left:18px"><li>Revenue chart renders with the new library</li><li>Tooltip values use formatUsd</li><li>No direct fetches left in src/charts</li></ul></div></div>
+    <div class="blk"><span class="label">Pipeline<span class="sp"></span><span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">PR fix rounds: 2 of 5</span></span>
+      ${steps.map(([r,w,why,st,sha,d],i)=>`<div class="step" data-tab="se">${agent(r,28,st==='run')}<span class="what">${w}<span class="why">${why}</span></span>
+        ${st==='run'?'<span class="st run"><span class="d"></span>Running</span>':'<span class="st ok">'+ic('check','sm')+'</span>'}<span class="m mono">${sha}</span><span class="m num">${d}</span>
+        ${st==='run'?`<span class="stepplan">${planMeter(3,6,72)}<span class="num">3 of 6</span>${planGlyph('in_progress')}<span style="color:var(--strong)">Keep fetchRevenue as a thin wrapper for billing</span></span>`:''}</div>`).join('')}</div>
+    <div class="blk"><span class="label">Time &amp; cost</span><div class="metrics"><div><b class="num">2h 04m</b><span>lead time</span></div><div><b class="num">18m</b><span>agents working</span></div><div><b class="num">6m</b><span>waiting on people</span></div><div><b>${cost('$0.87',{tok:0.62,mach:0.25,tokens:'412k tokens',time:'23m on lux-host-a, -b'})}</b><span>9 sessions · 412k tokens</span></div></div></div>
+  </div><div>
+    <div class="pr"><div class="h">${ic('gh')}<a class="t" href="#">#41 Chart library: visx, and the revenue chart</a><span class="sp"></span>${prChip(x.prs[0],false)}</div>
+      <div class="repo" style="margin:4px 0 0 26px">acme/dashboard · dude/dash-1/attempt-1 → main · +412 −188</div>${facts41}
+      <div class="acts"><span class="split" data-tip="Blocked: e2e (chrome) is failing and Cy requested changes"><button class="btn primary" disabled>Squash and merge</button><button class="btn primary" disabled>▾</button></span><button class="btn quiet">Open on GitHub ${ic('ext','sm')}</button></div></div>
+    <div class="pr"><div class="h">${ic('gh')}<a class="t" href="#">#12 Export the chart palette</a><span class="sp"></span>${prChip(x.prs[1],false)}</div>
+      <div class="repo" style="margin:4px 0 0 26px">acme/design-tokens · dude/dash-1/attempt-1 → main · +36 −2</div>${facts12}
+      <div class="acts"><span class="split"><button class="btn primary">Squash and merge</button><button class="btn primary">▾</button></span><button class="btn quiet">Open on GitHub ${ic('ext','sm')}</button></div>
+      <div class="muted" style="font-size:12px;margin-top:8px">Merges on its own; #41 imports it, so merge this one first.</div></div>
+  </div></div>`;
+
+  const F = [
+    ['block','Tooltip values are not formatted as money','correctness','src/charts/Revenue.tsx:88','rev','Review #1','fixed','Fixed in Fix #1 · 0fff44b', true],
+    ['block','Bundle imports all of visx','Cy on GitHub','package.json:14','cy','PR #41 review','fixing','Fixer working now', false],
+    ['sugg','Old fetchRevenue export still used by billing','Cy on GitHub','src/data/revenue.ts:12','cy','PR #41 review','fixing','Fixer working now', false],
+    ['sugg','useDashboardData refetches on every render','performance','src/data/useDashboardData.ts:31','rev','Review #1','fixed','Fixed in Fix #1 · 0fff44b', false],
+    ['nit','Chart colour constants duplicated','simplicity','src/charts/colors.ts:4','rev','Review #1','dismissed','Dismissed by Ana — “moving to design-tokens in #12”', false]];
+  const stCell = s => s==='fixed' ? `<span class="st ok">${ic('check','sm')} Fixed</span>` : s==='fixing' ? '<span class="st run"><span class="d"></span>Being fixed</span>' : s==='open' ? '<span class="st bad">Open</span>' : '<span class="st idle"><span class="d"></span>Dismissed</span>';
+  document.getElementById('tFindings').innerHTML = `<div style="padding-top:18px">
+    <div class="filters"><span class="seg"><span class="on">All 5</span><span>Open 2</span><span>Fixed 2</span><span>Dismissed 1</span></span><span class="sp"></span><span class="muted" style="font-size:13px">From 2 agent reviews and 1 GitHub review</span></div>
+    <div class="frow" style="cursor:default;color:var(--muted);font-size:12px;font-weight:600"><span></span><span>FINDING</span><span>WHERE</span><span>FOUND BY</span><span>STATUS</span></div>
+    ${F.map(([sev,t,cat,where,by,src,st,stx,open]) => `<div class="frow ${open?'open':''}">
+      <span class="sev ${sev==='block'?'block':sev==='sugg'?'sugg':'nit'}" data-tip="${sev==='block'?'Blocking — the loop will not finish until it is fixed':sev==='sugg'?'Suggestion':'Nit'}">${sev==='block'?ic('block','sm'):sev==='sugg'?ic('tri','sm'):ic('circ','sm')}</span>
+      <span class="ttl">${t}<small>${cat}</small></span><span class="mono muted" style="font-size:12px">${where}</span>
+      <span class="row" style="font-size:13px">${by==='rev'?agent('rev',22,false):av(by,22,{ring:false})}${src}</span>
+      <span class="row" data-tip="${stx}">${stCell(st)}${st==='fixing'?'':''}</span></div>
+      ${open?`<div class="fbody"><div><div style="color:var(--text)">Tooltip values are rendered with <span class="mono">toFixed(2)</span>, so large revenue reads <span class="mono">12345.60</span> and the currency is missing. The rest of the app uses <span class="mono">formatUsd</span>.</div>
+        <div class="muted" style="margin-top:10px;font-size:13px">Acceptance: tooltip shows <span class="mono">$12,345.60</span>.</div>
+        <div class="acts"><button class="btn sm">Reopen</button><button class="btn quiet sm">Open in session</button></div></div>
+        <div><div class="label" style="margin-bottom:6px">The fix · 0fff44b</div><div class="diff"><div class="h">@@ src/charts/Revenue.tsx:86</div><div class="r">-  label: (v) =&gt; v.toFixed(2),</div><div class="a">+  label: (v) =&gt; formatUsd(v),</div></div></div></div>`:''}`).join('')}
+    <div class="muted" style="font-size:13px;margin-top:12px">Row actions on an open finding: <button class="btn quiet sm">Send to a fixer</button> <button class="btn quiet sm">Dismiss…</button></div></div>`;
+
+  const S = [['impl','Implement','claude-sonnet-5 · 4m 10s · $0.21',false],['rev','Review · correctness','claude-opus-5-5 · 1m 02s · $0.14',false],['rev','Review · security','claude-opus-5-5 · 48s · $0.09',false],
+    ['fix','Fix · for the review','claude-sonnet-5 · 2m 31s · $0.10',false],['rev','Review · correctness','claude-opus-5-5 · 58s · $0.08',false],['simp','Simplify','claude-sonnet-5 · 1m 47s · $0.07',false],
+    ['fix','Fix · CI e2e (chrome)','claude-sonnet-5 · 3m 12s · $0.11',false],['fix','Fix · Cy\'s review','claude-sonnet-5 · running 2m · $0.07',true]];
+  document.getElementById('tSessions').innerHTML = `<div class="sess"><div class="slist">
+    ${S.map(([r,n,m,l],i)=>`<div class="sitem ${l?'cur':''}">${agent(r,32,l)}<div><div class="n">${n}</div><small class="row" style="gap:4px">${m.replace(/ · \$[0-9.]+$/,'')} · ${cost(m.match(/\$[0-9.]+$/)[0])}</small></div>${l?'<span class="st run"><span class="d"></span></span>':''}</div>`).reverse().join('')}</div>
+    <div style="display:flex;flex-direction:column;min-height:0">
+      <div class="runhdr">${av('ana',40,{agent:'fix',live:true,doing:'fixing Cy\'s 2 comments'})}<div class="t"><b>Fix · Cy's review on #41</b><small>for Ana · claude-sonnet-5 · started 2m ago · woken by Cy's review</small></div>
+        <span class="st run"><span class="d"></span>Running</span><button class="btn">Pause</button><button class="btn danger">Abort…</button></div>
+      <div class="svtabs"><span class="on click" data-sv="chat">${ic('bubble','sm')}Conversation</span><span class="click" data-sv="diff">${ic('diffm','sm')}Changes <span class="c">3</span><span class="livedot"></span></span></div>
+      <div class="sv" data-svp="chat" style="display:flex;flex-direction:column;flex:1;min-height:0">
+      ${planBar(false)}
+      <div class="chatwrap"><div class="chat">
+        <div class="turn">${agent('sys',40)}<div><div class="who">dude <small>14:31 · the prompt</small></div><div class="txt">Cy requested changes on <a href="#">#41</a>. Fix only what is raised:</div>
+          <div class="tool"><div class="th">${av('cy',20,{ring:false})}<span class="nm">Cy</span><span class="arg">package.json:14</span></div><div class="out"><pre>Please don't pull in all of visx — import the chart packages you use.</pre></div></div>
+          <div class="tool"><div class="th">${av('cy',20,{ring:false})}<span class="nm">Cy</span><span class="arg">src/data/revenue.ts:12</span></div><div class="out"><pre>billing still imports fetchRevenue — keep it, as a thin wrapper.</pre></div></div></div></div>
+        <div class="turn">${agent('fix',40,true)}<div><div class="who">Fixer <small>14:31</small></div><div class="txt">Two comments. I'll swap the umbrella package for the three visx packages we use, then keep <span class="mono">fetchRevenue</span> as a wrapper.</div>
+          <div class="planmark click" data-plantoggle>${ic('list','sm')}<span class="ch"><b>Made a plan</b> · 5 steps</span>${planMeter(0,5,50)}</div>
+          <div class="tool"><div class="th">${ic('search','sm')}<span class="nm">Grep</span><span class="arg">"from '@visx/visx'" src/</span><span class="sp"></span><span class="muted">6 matches · 0.1s</span></div></div>
+          <div class="tool"><div class="th">${ic('pen','sm')}<span class="nm">Edit</span><span class="arg">package.json</span><span class="sp"></span><span class="mono" style="color:var(--ok-fg)">+3</span><span class="mono" style="color:var(--bad-fg)">−1</span></div>
+            <div class="out"><div class="diff"><div class="h">@@ package.json:14</div><div class="r">-    "@visx/visx": "^3.12.0",</div><div class="a">+    "@visx/scale": "^3.12.0",</div><div class="a">+    "@visx/shape": "^3.12.0",</div><div class="a">+    "@visx/tooltip": "^3.12.0",</div></div></div></div>
+          <div class="tool"><div class="th">${ic('term','sm')}<span class="nm">Bash</span><span class="arg">bun install &amp;&amp; bun run typecheck</span><span class="sp"></span><span class="st ok">${ic('check','sm')} exit 0 · 9.4s</span></div></div></div></div>
+        <div class="turn steer">${av('ana',40)}<div><div class="who">Ana <small>14:33 · steer · waits for the turn to end</small></div><div class="txt">Also drop the old SVG helper import in Revenue.tsx while you're there.</div></div></div>
+        <div class="planmark click" data-plantoggle style="margin:-6px 0 18px 54px">${ic('list','sm')}<span class="ch"><b>Updated the plan</b> · added “Drop the old SVG helper import” after Ana's steer · 2 of 6 done</span>${planMeter(2,6,60)}</div>
+        <div class="event">${av('cy',20,{ring:false})}<b>Cy</b> is watching this session</div>
+        <div class="turn">${agent('fix',40,true)}<div><div class="who">Fixer <small>14:34</small></div>
+          <div class="tool"><div class="th">${ic('file','sm')}<span class="nm">Read</span><span class="arg">src/data/revenue.ts</span><span class="sp"></span><span class="muted">64 lines</span></div></div>
+          <div class="tool"><div class="th">${ic('term','sm')}<span class="nm">Bash</span><span class="arg">bun test src/data</span><span class="sp"></span><span class="st run"><span class="d"></span>running 18s</span></div><div class="out"><pre>✓ useDashboardData › caches per range (12ms)
+✓ useDashboardData › refetches when the range changes (9ms)
+… running revenue.test.ts</pre></div></div></div></div>
+      </div>
+      <aside class="rail">
+        <div class="blk"><span class="label">Session</span><dl style="margin-top:8px"><dt>Model</dt><dd>claude-sonnet-5</dd><dt>Tokens in / out</dt><dd class="num">38k / 4.1k</dd><dt>Machine</dt><dd class="num">2m 41s · 2 CPU</dd><dt>Cost</dt><dd>${cost('$0.07',{tok:0.05,mach:0.02,tokens:'42k tokens',time:'2m 41s at $0.45/h'})}</dd><dt>Elapsed</dt><dd class="num">2m 41s</dd><dt>Host</dt><dd class="mono" style="font-size:12px">lux-host-b</dd></dl></div>
+        <div class="blk"><span class="label">Tools used</span><div class="bars" style="margin-top:8px">
+          ${[['Read',9],['Edit',5],['Bash',4],['Grep',3],['Write',1]].map(([n,c])=>`<div><span>${n}</span><i style="width:${c*11}%"></i><span class="num" style="text-align:right">${c}</span></div>`).join('')}</div></div>
+        <div class="blk"><span class="label row" style="gap:6px">Files changed<span class="livedot"></span></span><div class="files click" data-sv="diff" style="margin-top:8px">
+          <div><span>package.json</span><span><span style="color:var(--ok-fg)">+3</span> <span style="color:var(--bad-fg)">−1</span></span></div>
+          <div><span>src/data/revenue.ts</span><span><span style="color:var(--ok-fg)">+8</span> <span style="color:var(--bad-fg)">−21</span></span></div>
+          <div><span>src/charts/Revenue.tsx</span><span><span style="color:var(--ok-fg)">+2</span> <span style="color:var(--bad-fg)">−6</span></span></div></div></div>
+        <div class="blk"><span class="label">Files from this session</span><div style="margin-top:6px">${[ARTIFACTS[5]].map(a=>artRow(a,true)).join('')}</div><div class="muted" style="font-size:12px;margin-top:4px">Saved when the session stops. <a href="#" data-tab="fl">All 7 files</a></div></div>
+        <div class="blk"><span class="label">Watching</span><div class="stack" style="margin-top:8px">${av('ana',28)}${av('cy',28)}</div></div>
+      </aside></div>
+      </div>
+      <div class="sv livediff" data-svp="diff" id="livediff" style="display:none"></div>
+      <div class="composer"><div class="box"><textarea rows="2" placeholder="Steer the fixer…"></textarea>
+        <div class="r"><span>Sent as <b style="color:var(--text)">Ana</b></span><label class="row" style="gap:6px"><input type="checkbox"> interrupt now</label><span class="sp"></span><span class="kbd">Enter</span> send <span class="kbd">⇧ Enter</span> new line <button class="btn primary sm">Steer</button></div></div></div>
+    </div></div>`;
+
+  document.getElementById('tActivity').innerHTML = `<div style="max-width:820px;padding-top:14px"><ul class="tl">
+    <li>${agent('fix',32,true)}<div class="body"><b>Fixer</b> started on Cy's 2 comments, for Ana</div><span class="when">2m</span></li>
+    <li>${av('cy',32)}<div class="body"><b>Cy</b> requested changes on <a href="#">#41</a><blockquote>Please don't pull in all of visx — import the chart packages you use. And keep fetchRevenue, billing imports it.</blockquote></div><span class="when">4m</span></li>
+    <li>${av('cy',32)}<div class="body"><b>Cy</b> approved <a href="#">design-tokens#12</a></div><span class="when">20m</span></li>
+    <li>${agent('sys',32)}<div class="body"><b>CI</b> e2e (chrome) failed on a91be02 — a fixer was started with its log</div><span class="when">31m</span></li>
+    <li>${av('gus',32)}<div class="body"><b>Gus</b> pushed 1 commit to the branch on GitHub — the next fix starts from it</div><span class="when">40m</span></li>
+    <li>${av('bo',32)}<div class="body"><b>Bo</b> steered the implementer: “keep the old chart behind a flag”</div><span class="when">1h</span></li>
+    <li>${agent('sys',32)}<div class="body"><b>dude</b> opened <a href="#">#41</a> and <a href="#">design-tokens#12</a>, requested review from Cy and Bo</div><span class="when">52m</span></li>
+    <li>${av('ana',32)}<div class="body"><b>Ana</b> delivered the task</div><span class="when">2h</span></li></ul></div>`;
+}
+
+/* ------------------------------------------------------------------ artifacts: files sessions leave behind */
+const ARTIFACTS = [
+  {id:'a1', name:'DECISION.md', kind:'markdown', size:'3.2 KB', by:'impl', session:'Implement', when:'1h 50m ago', versions:2, text:`# Chart library: visx
+
+We compared **Recharts** and **visx** against what the dashboard needs.
+
+## What mattered
+
+| | Recharts | visx |
+|---|---|---|
+| Bundle (gzip) | 96 KB | 31 KB, per package |
+| Custom tooltips | limited | full control |
+| Theming with our tokens | via props | CSS variables |
+
+## Decision
+
+Use **visx**, importing only \`@visx/scale\`, \`@visx/shape\` and \`@visx/tooltip\`.
+
+- The revenue chart is ported as the first user.
+- Tooltip values go through \`formatUsd\`.
+
+> Revisit if we need maps or 3D; neither is planned.`},
+  {id:'a2', name:'revenue-chart.png', kind:'image', size:'84 KB', by:'qa', session:'Test · browser', when:'40m ago', versions:3, url:'artifacts/revenue-chart.svg', dims:'1600 × 900'},
+  {id:'a3', name:'tooltip-hover.png', kind:'image', size:'61 KB', by:'qa', session:'Test · browser', when:'40m ago', versions:1, url:'artifacts/revenue-chart.svg', dims:'1600 × 900'},
+  {id:'a4', name:'session.webm', kind:'video', size:'4.8 MB', by:'qa', session:'Test · browser', when:'40m ago', versions:1, dur:'1:42'},
+  {id:'a5', name:'bundle-report.json', kind:'json', size:'12 KB', by:'impl', session:'Implement', when:'1h 50m ago', versions:1, text:`{
+  "before": { "total_kb": 412, "charts_kb": 118 },
+  "after":  { "total_kb": 325, "charts_kb": 31 },
+  "saved_kb": 87,
+  "packages": ["@visx/scale", "@visx/shape", "@visx/tooltip"]
+}`},
+  {id:'a6', name:'test-output.log', kind:'text', size:'28 KB', by:'fix', session:'Fix · CI e2e (chrome)', when:'31m ago', versions:1, text:`$ bun test
+✓ useDashboardData › caches per range (12ms)
+✓ useDashboardData › refetches when the range changes (9ms)
+✓ Revenue › renders 12 weeks (41ms)
+✓ Revenue › tooltip formats money (18ms)
+… 84 more
+
+ 88 pass
+ 0 fail
+Ran 88 tests across 14 files. [2.31s]`},
+  {id:'a7', name:'coverage.html', kind:'html', size:'212 KB', by:'impl', session:'Implement', when:'1h 50m ago', versions:1},
+];
+const KIND = { markdown:['Markdown','file'], image:['Image','img'], video:['Video','play'], json:['JSON','list'], text:['Text','term'], html:['HTML','ext'] };
+Object.assign(P, { img:'M2.5 3.5h11v9h-11ZM2.5 10.5l3-3 3 3 2-2 3 3M10 6h.01', download:'M8 2.5v8M4.5 7.5L8 11l3.5-3.5M3 13.5h10', history:'M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2.5 2.5v3h3M8 5v3l2 1.5', restore:'M3 8a5 5 0 1 0 1.5-3.5M3 3v3h3', zip:'M4 2.5h8v11H4ZM8 2.5v1M8 5v1M8 7.5v1M7 9.5h2v2H7Z' });
+
+function artThumb(a, size=44) {
+  const s = `width:${size}px;height:${size}px;`;
+  if (a.kind==='image') return `<span class="athumb" style="${s}"><img src="${a.url}" alt=""></span>`;
+  if (a.kind==='video') return `<span class="athumb dark" style="${s}">${ic('play','sm')}</span>`;
+  return `<span class="athumb" style="${s}">${ic(KIND[a.kind][1])}<em>${a.name.split('.').pop()}</em></span>`;
+}
+function artRow(a, compact) {
+  return `<div class="arow click" data-art="${a.id}">${artThumb(a, compact?36:44)}
+    <div class="an"><b>${a.name}</b><small>${KIND[a.kind][0]} · ${a.size}${a.versions>1?` · <span class="ver">v${a.versions}</span>`:''}</small></div>
+    ${compact?'':`<span class="row" style="gap:8px;font-size:13px;color:var(--secondary)">${agent(a.by,22,false,false)}${a.session}</span><span class="muted" style="font-size:13px">${a.when}</span>`}
+    <button class="ib" data-tip="Download" onclick="event.stopPropagation()">${ic('download','sm')}</button></div>`;
+}
+function renderArtifacts() {
+  const imgs = ARTIFACTS.filter(a=>a.kind==='image'||a.kind==='video');
+  const docs = ARTIFACTS.filter(a=>!(a.kind==='image'||a.kind==='video'));
+  document.getElementById('tFiles').innerHTML = `<div style="padding-top:18px">
+    <div class="filters"><span class="seg"><span class="on">All 7</span><span>Documents 4</span><span>Images &amp; video 3</span></span>
+      <span class="seg"><span class="on">Newest</span><span>By session</span></span><span class="sp"></span>
+      <span class="muted" style="font-size:13px">5.2 MB · kept 90 days</span><button class="btn">${ic('zip','sm')} Download all</button></div>
+    <div class="label" style="margin:18px 0 10px;display:block">Images &amp; video</div>
+    <div class="agrid">${imgs.map(a => `<div class="acard click" data-art="${a.id}">
+      <div class="aimg">${a.kind==='image'?`<img src="${a.url}" alt="">`:`<div class="vid">${ic('play')}<span>${a.dur}</span></div>`}</div>
+      <div class="acap"><div class="an"><b>${a.name}</b><small>${a.kind==='image'?a.dims:'Video · '+a.dur} · ${a.size}${a.versions>1?` · <span class="ver">v${a.versions}</span>`:''}</small></div><span class="row muted" style="gap:6px;font-size:12px;white-space:nowrap">${agent(a.by,20,false,false)}${ROLES[a.by][0]}</span></div></div>`).join('')}</div>
+    <div class="label" style="margin:26px 0 6px;display:block">Documents</div>
+    ${docs.map(a=>artRow(a)).join('')}</div>`;
+}
+/* The viewer: one file at a time, big, with its neighbours a keystroke away. */
+function openArt(id, ver) {
+  const a = ARTIFACTS.find(x=>x.id===id); const i = ARTIFACTS.indexOf(a);
+  const body = a.kind==='image' ? `<div class="vimg"><img src="${a.url}" alt=""></div>`
+    : a.kind==='video' ? `<div class="vimg"><div class="vid big">${ic('play')}<span>${a.dur}</span></div></div>`
+    : a.kind==='markdown' ? `<div class="vdoc"><div class="prose">${mdToHtml(a.text)}</div></div>`
+    : a.kind==='html' ? `<div class="vdoc" style="display:grid;place-items:center;color:var(--muted);text-align:center">${ic('ext')}<p>HTML opens in a sandboxed tab — scripts off, no cookies.</p><button class="btn primary">Open coverage.html</button></div>`
+    : `<div class="vdoc"><pre class="vpre">${a.text.replace(/</g,'&lt;')}</pre></div>`;
+  const vers = a.versions>1 ? `<div class="vvers"><span class="label">Versions</span>${Array.from({length:a.versions},(_,k)=>a.versions-k).map(v=>`<div class="nav ${v===(ver||a.versions)?'cur':''}" data-artver="${id}:${v}"><span class="t">v${v}${v===a.versions?' · latest':''}</span><span class="c">${v===a.versions?a.when:v===a.versions-1?'1h ago':'2h ago'}</span></div>`).join('')}</div>` : '';
+  document.getElementById('viewer').innerHTML = `<div class="vbox">
+    <div class="vhead">${artThumb(a,36)}<div class="an" style="flex:1"><b>${a.name}</b><small class="row" style="gap:6px">${KIND[a.kind][0]} · ${a.size} · ${agent(a.by,16,false,false)} ${a.session} · ${a.when}</small></div>
+      <span class="muted" style="font-size:12px">${i+1} of ${ARTIFACTS.length}</span>
+      <button class="ib" data-artnav="${(i-1+ARTIFACTS.length)%ARTIFACTS.length}" data-tip="Previous (←)">‹</button><button class="ib" data-artnav="${(i+1)%ARTIFACTS.length}" data-tip="Next (→)">›</button>
+      ${a.kind==='markdown'||a.kind==='text'||a.kind==='json'?`<button class="btn quiet sm">Copy</button>`:''}
+      <button class="btn quiet sm">Open in session</button><button class="btn sm">${ic('download','sm')} Download</button><button class="ib" data-artclose data-tip="Close (Esc)">✕</button></div>
+    <div class="vmain">${body}${vers}</div></div>`;
+  document.getElementById('viewer').classList.add('on');
+}
+
+/* ------------------------------------------------------------------ prompt history */
+const HISTORY = [
+  {v:14, who:'eli', when:'yesterday, 16:42', note:'Ask a person before touching CI config', add:4, del:1, cur:true},
+  {v:13, who:'ana', when:'Sep 24, 11:05', note:'Summary format for reviewers', add:9, del:3},
+  {v:12, who:'bo',  when:'Sep 22, 18:30', note:'Read AGENTS.md / CLAUDE.md first', add:2, del:1},
+  {v:11, who:'eli', when:'Sep 19, 09:12', note:'Split “how to work” into steps', add:14, del:11},
+  {v:10, who:'ana', when:'Sep 15, 14:20', note:'', add:3, del:0},
+  {v:9,  who:'cy',  when:'Sep 12, 10:02', note:'Never weaken tests', add:5, del:0},
+];
+const HDIFF = `<div class="h">@@ ## What you must not do</div>
+<div>   - Don't disable, skip or weaken tests to make them pass.</div>
+<div class="r">−  - Don't change CI configuration or lockfiles.</div>
+<div class="a">+  - Don't change CI configuration, lockfiles or generated files unless the task is about them.</div>
+<div>   - Don't push to any branch but your own. Don't open pull requests — dude does that.</div>
+<div class="h">@@ ## When you are unsure</div>
+<div>   - If you need another repository, use \`request_repository\` and say why.</div>
+<div class="a">+  - If a change would touch CI configuration, **ask a person** first.</div>
+<div class="a">+  - Never guess at credentials, production data or anything outside the checkout.</div>
+<div class="a">+  </div>`;
+function openHistory(sel=14) {
+  const h = HISTORY.find(x=>x.v===sel);
+  document.getElementById('viewer').innerHTML = `<div class="vbox" style="max-width:1180px">
+    <div class="vhead">${agent('impl',36,false,false)}<div class="an" style="flex:1"><b>Implementer prompt · history</b><small>Acme · 14 versions · every save is kept</small></div>
+      <button class="ib" data-artclose data-tip="Close (Esc)">✕</button></div>
+    <div class="hist">
+      <div class="hlist">${HISTORY.map(x => `<div class="hitem click ${x.v===sel?'cur':''}" data-histv="${x.v}">${av(x.who,32,{ring:false})}
+        <div style="min-width:0"><div class="row" style="gap:8px"><b>v${x.v}</b>${x.cur?'<span class="tag" style="background:var(--ok-bg);color:var(--ok-fg)">current</span>':''}<span class="sp"></span><span class="mono" style="font-size:11px"><span style="color:var(--ok-fg)">+${x.add}</span> <span style="color:var(--bad-fg)">−${x.del}</span></span></div>
+        <small>${PEOPLE[x.who].s} · ${x.when}</small>${x.note?`<div class="hnote">${x.note}</div>`:''}</div></div>`).join('')}
+        <div class="muted" style="font-size:12px;padding:10px 8px">Show 8 older</div></div>
+      <div class="hmain">
+        <div class="row" style="gap:10px;margin-bottom:14px"><b style="color:var(--strong);font-size:16px">v${h.v}</b><span class="muted" style="font-size:13px">by ${PEOPLE[h.who].s} · ${h.when}</span><span class="sp"></span>
+          ${seg(['Changes','Whole prompt'])}${h.cur?'':`<button class="btn">${ic('restore','sm')} Restore v${h.v}</button>`}</div>
+        ${h.note?`<div class="hmsg">“${h.note}”</div>`:''}
+        <div class="row" style="gap:10px;margin:0 0 8px;font-size:13px;color:var(--muted)">Compared with v${h.v-1} ${sel===14?'':`· <a href="#" onclick="return false">compare with current</a>`}</div>
+        <div class="diff hdiff">${HDIFF}</div>
+        <div class="hused"><span class="label">Used by</span><div style="margin-top:8px;font-size:13px;color:var(--secondary)">${h.cur?'<b style="color:var(--strong);font-weight:500">31 sessions</b> since it was saved, in Dashboard, Billing API and Greeter. Dashboard adds its own text after it.':'<b style="color:var(--strong);font-weight:500">22 sessions</b> ran with this version — <a href="#" onclick="return false">see them</a>.'}</div></div>
+      </div></div></div>`;
+  document.getElementById('viewer').classList.add('on');
+}
+
+/* ------------------------------------------------------------------ the agent's plan */
+/* An agent's todo list, from its latest todowrite (agent.plan.updated): pending, in_progress, completed, cancelled. */
+const PLAN = {
+  updated:'12s ago', revision:4,
+  items:[
+    {c:'Find every visx import', s:'completed', t:'14:31'},
+    {c:'Replace the umbrella package with scale, shape and tooltip', s:'completed', t:'14:32'},
+    {c:'Keep fetchRevenue as a thin wrapper for billing', s:'in_progress', t:'14:34', added:false},
+    {c:'Drop the old SVG helper import in Revenue.tsx', s:'pending', added:'Ana'},
+    {c:'Run bun test and bun run typecheck', s:'pending'},
+    {c:'Pin @visx/* to one minor version', s:'cancelled', why:'already pinned by the lockfile'},
+  ]};
+const AGENT_PLANS = { 'DASH-1:ana':[3,6,'Keep fetchRevenue as a thin wrapper'], 'DASH-3:bo':[5,6,'Run bun test src/data'], 'DASH-3:gus':[2,5,'Port the cost chart'], 'DASH-4:cy':[1,3,'Check tooltip rounding'] };
+const PLANS = { 'DASH-1':[3,6,'Keep fetchRevenue as a thin wrapper'], 'DASH-3':[7,11,'Bo: Run bun test src/data (5 of 6)\nGus: Port the cost chart (2 of 5)'], 'DASH-4':[1,3,'Check tooltip rounding'] };
+function planGlyph(st) { return st==='completed' ? `<span class="pg ok">${ic('check','sm')}</span>` : st==='in_progress' ? `<span class="pg at">${ic('running','sm')}</span>`
+  : st==='cancelled' ? `<span class="pg cx">${ic('x','sm')}</span>` : `<span class="pg">${ic('circ','sm')}</span>`; }
+function planMeter(done, total, w=56) { return `<span class="pmeter" style="width:${w}px">${Array.from({length:total},(_,i)=>`<i class="${i<done?'d':i===done?'c':''}"></i>`).join('')}</span>`; }
+/* The live plan: pinned above the chat, one line when folded, the whole list when open. */
+function planBar(open) {
+  const it = PLAN.items, done = it.filter(x=>x.s==='completed'||x.s==='cancelled').length, cur = it.find(x=>x.s==='in_progress');
+  return `<div class="planbar ${open?'open':''}" id="planbar">
+    <div class="pb-head click" data-plantoggle>${ic('list','sm')}<b>Plan</b><span class="num muted">${done} of ${it.length}</span>${planMeter(done,it.length,90)}
+      <span class="pb-cur">${planGlyph('in_progress')}${cur.c}</span><span class="sp"></span><span class="muted" style="font-size:12px">updated ${PLAN.updated}</span><span class="chev ${open?'open':''}" style="font-size:10px;color:var(--muted)">▶</span></div>
+    <ol class="pb-list">${it.map((x,i)=>`<li class="${x.s}">${planGlyph(x.s)}<span class="pc">${x.c}${x.why?`<small>${x.why}</small>`:''}</span>
+      ${x.added?`<span class="padd" data-tip="Added after ${x.added} steered">${av(x.added.toLowerCase(),18,{ring:false})} from ${x.added}'s steer</span>`:''}<span class="pt">${x.t||''}</span></li>`).join('')}</ol>
+    <div class="pb-foot"><span class="muted">The agent keeps this list; it changed 4 times this session.</span><a href="#" data-planhist onclick="return false">See how it changed</a></div></div>`;
+}
+
+/* ------------------------------------------------------------------ the live diff: what the agent has changed so far */
+/* The working tree against where the session started (its base commit), refreshed as the agent writes.
+   Each file: status, and hunks of [kind, oldNo, newNo, text] lines — ' ' context, '-' removed, '+' added. */
+const LIVE = {
+  files:[
+    {path:'package.json', st:'M', hunks:[{h:'@@ -11,7 +11,9 @@ "dependencies"', lines:[
+      [' ',11,11,'    "react": "^19.1.0",'], [' ',12,12,'    "react-dom": "^19.1.0",'], [' ',13,13,'    "@acme/design-tokens": "^4.2.0",'],
+      ['-',14,null,'    "@visx/visx": "^3.12.0",'], ['+',null,14,'    "@visx/scale": "^3.12.0",'], ['+',null,15,'    "@visx/shape": "^3.12.0",'], ['+',null,16,'    "@visx/tooltip": "^3.12.0",'],
+      [' ',15,17,'    "zustand": "^5.0.2"'], [' ',16,18,'  },']]}]},
+    {path:'src/data/revenue.ts', st:'M', hunks:[{h:'@@ -1,24 +1,11 @@', lines:[
+      [' ',1,1,"import { useDashboardData } from './useDashboardData';"], ['-',2,null,"import { apiGet } from '../api';"], [' ',3,2,''],
+      ['-',4,null,'/** Fetches revenue for a range. Used by billing too. */'], ['-',5,null,'export async function fetchRevenue(range: Range) {'],
+      ['-',6,null,"  const res = await apiGet(`/revenue?from=${range.from}&to=${range.to}`);"], ['-',7,null,'  return res.weeks.map(toPoint);'], ['-',8,null,'}'],
+      ['+',null,3,'/**'], ['+',null,4,' * Kept for billing, which imports it: a thin wrapper over the'], ['+',null,5," * dashboard's loader, so there is one cache."], ['+',null,6,' */'],
+      ['+',null,7,'export async function fetchRevenue(range: Range) {'], ['+',null,8,"  return useDashboardData.load('revenue', range);"], ['+',null,9,'}']]}]},
+    {path:'src/charts/Revenue.tsx', st:'M', hunks:[{h:'@@ -2,9 +2,7 @@', lines:[
+      [' ',2,2,"import { scaleLinear } from '@visx/scale';"], ['-',3,null,"import { drawAxis, drawArea } from '../svg/helpers';"], [' ',4,3,"import { formatUsd } from '../format';"]]}]},
+  ],
+  /* What the agent writes next, streamed in during the mock. */
+  next:[
+    {at:'src/charts/Revenue.tsx', tool:'Edit', add:[[' ',5,4,''], ['+',null,5,"import { AreaClosed } from '@visx/shape';"], ['+',null,6,"import { useTooltip } from '@visx/tooltip';"]]},
+    {at:'src/data/revenue.test.ts', tool:'Write', newFile:true, add:[['+',null,1,"import { test, expect } from 'bun:test';"], ['+',null,2,"import { fetchRevenue } from './revenue';"], ['+',null,3,''],
+      ['+',null,4,"test('fetchRevenue shares the dashboard cache', async () => {"], ['+',null,5,"  const a = await fetchRevenue(WEEKS_12);"], ['+',null,6,"  const b = await fetchRevenue(WEEKS_12);"], ['+',null,7,'  expect(b).toBe(a);'], ['+',null,8,'});']]},
+    {at:'src/charts/Revenue.tsx', tool:'Edit', add:[['-',48,null,'      label: (v) => v.toFixed(2),'], ['+',null,50,'      label: (v) => formatUsd(v),']]},
+  ],
+};
+let liveStep = 0, liveTimer = null, liveFollow = true, liveSel = null, liveNew = new Set();
+const cnt = f => f.hunks.flatMap(h=>h.lines).reduce((a,l)=>(l[0]==='+'?a[0]++:l[0]==='-'?a[1]++:0,a),[0,0]);
+function liveTotals() { return LIVE.files.reduce((a,f)=>{ const [p,m]=cnt(f); return [a[0]+p,a[1]+m]; },[0,0]); }
+function liveDiffHTML() {
+  const [ta, td] = liveTotals();
+  const esc = t => t.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  const files = LIVE.files.map(f => { const [p,m] = cnt(f);
+    return `<div class="lf click ${liveSel===f.path?'cur':''} ${liveNew.has(f.path)?'flash':''}" data-lf="${f.path}"><span class="lst ${f.st}">${f.st}</span><span class="lp">${f.path.split('/').slice(0,-1).join('/')}${f.path.includes('/')?'/':''}<b>${f.path.split('/').pop()}</b></span><span class="lc"><span class="add">+${p}</span> <span class="del">−${m}</span></span></div>`; }).join('');
+  const shown = liveSel ? LIVE.files.filter(f=>f.path===liveSel) : LIVE.files;
+  const diffs = shown.map(f => `<section class="ldf" id="ldf-${f.path.replace(/\W/g,'_')}"><div class="ldh"><span class="lst ${f.st}">${f.st}</span><b>${f.path}</b>${f.st==='A'?'<span class="muted">new file</span>':''}<span class="sp"></span><span class="lc"><span class="add">+${cnt(f)[0]}</span> <span class="del">−${cnt(f)[1]}</span></span><button class="ib" data-tip="Open in the viewer">${ic('ext','sm')}</button></div>
+    ${f.hunks.map(h=>`<div class="lhk">${esc(h.h)}</div>${h.lines.map(l=>`<div class="ll ${l[0]==='+'?'a':l[0]==='-'?'r':''} ${l[4]?'fresh':''}"><span class="n">${l[1]??''}</span><span class="n">${l[2]??''}</span><span class="sg">${l[0]===' '?'':l[0]==='-'?'−':'+'}</span><span class="tx">${esc(l[3])||' '}</span></div>`).join('')}`).join('')}</section>`).join('');
+  return `<div class="lhead">
+      <span class="livepill"><i></i>Live</span><span class="muted" style="font-size:13px" data-tip="The agent's checkout now, against 0fff44b — the commit this session started from. Uncommitted work included.">Since <span class="mono">0fff44b</span> · <b style="color:var(--strong);font-weight:500">${LIVE.files.length} files</b> <span class="add">+${ta}</span> <span class="del">−${td}</span></span>
+      <span class="sp"></span><span class="muted" id="lastw" style="font-size:12px"></span>
+      <label class="row click" style="gap:6px;font-size:13px;color:var(--secondary)"><span class="tog ${liveFollow?'on':''}" data-follow></span>Follow the agent</label>
+      ${seg(['Unified','Split'])}</div>
+    <div class="lbody"><div class="lfiles"><div class="lf all click ${liveSel?'':'cur'}" data-lf=""><span class="lp"><b>All files</b></span><span class="lc">${LIVE.files.length}</span></div>${files}
+        <div class="lnote">Uncommitted work counts: this is what the agent's checkout looks like now, not what it has pushed.</div></div>
+      <div class="ldiffs" id="ldiffs">${diffs}</div></div>`;
+}
+function renderLive() { const el = document.getElementById('livediff'); if (el) el.innerHTML = liveDiffHTML(); }
+/* The mock's stand-in for lux: every 2.5s the agent writes a little more. */
+function liveTick() {
+  const ev = LIVE.next[liveStep % LIVE.next.length]; liveStep++;
+  if (liveStep > LIVE.next.length) { clearInterval(liveTimer); liveTimer = null; return; }
+  let f = LIVE.files.find(x=>x.path===ev.at);
+  if (!f) { f = {path:ev.at, st:'A', hunks:[{h:'@@ -0,0 +1,8 @@', lines:[]}]}; LIVE.files.push(f); }
+  const h = f.hunks[f.hunks.length-1];
+  LIVE.files.forEach(x=>x.hunks.forEach(hh=>hh.lines.forEach(l=>l[4]=false)));
+  ev.add.forEach(l => h.lines.push([...l, true]));
+  liveNew = new Set([ev.at]);
+  if (liveFollow) liveSel = null;
+  renderLive();
+  const w = document.getElementById('lastw'); if (w) w.innerHTML = `${agent('fix',16,true,false)} ${ev.tool} <span class="mono">${ev.at.split('/').pop()}</span> · just now`;
+  if (liveFollow) { const sec = document.getElementById('ldf-'+ev.at.replace(/\W/g,'_')); const box = document.getElementById('ldiffs');
+    if (sec && box) { const fr = sec.querySelectorAll('.fresh'); const tgt = fr[fr.length-1] || sec; box.scrollTo({top: tgt.offsetTop - box.offsetTop - 120, behavior:'smooth'}); } }
+  const b = document.querySelector('[data-sv="diff"] .c'); if (b) b.textContent = LIVE.files.length;
+}
+function startLive() { if (!liveTimer && liveStep <= LIVE.next.length) liveTimer = setInterval(liveTick, 2500); }
+
+/* ------------------------------------------------------------------ inbox */
+function renderInbox() {
+  document.getElementById('inboxList').innerHTML = `
+  <div class="group"><span class="label">Yours · 2</span>
+    <div class="item mine">${av('ana',40,{agent:'impl',ring:false})}<div class="q">Should FACTORY.md be in English or Portuguese?<small class="row" style="gap:6px">${pav('Dashboard',16)} DASH-2 · Localise the dashboard · your implementer is parked</small></div><span class="muted num" style="font-size:13px">38m</span><button class="btn primary sm">Answer</button></div>
+    <div class="item mine">${av('ana',40,{agent:'rev',ring:false})}<div class="q">Review loop hit its limit (5 rounds)<small>GREE-7 · Greet in Klingon · decide how it goes on</small></div><span class="muted num" style="font-size:13px">2h</span><button class="btn primary sm">Decide</button></div></div>
+  <div class="group"><span class="label">Waiting on others · 3</span>
+    <div class="item">${av('bo',40,{agent:'impl'})}<div class="q">May the implementer add <span class="mono">acme/design-tokens</span> to its workspace?<small>BILL-4 · Bo's task · repository request</small></div><span class="muted num" style="font-size:13px">12m</span><button class="btn quiet sm">Take over</button></div>
+    <div class="item">${av('cy',40,{agent:'impl'})}<div class="q">Which currency should invoices default to?<small>BILL-2 · Cy's task · question</small></div><span class="muted num" style="font-size:13px">1h 05m</span><button class="btn quiet sm">Take over</button></div>
+    <div class="item">${av('dee',40)}<div class="q">${prChip({repo:'acme/greeter', n:44, ci:'pass', approved:true, conflict:true})} needs a rebase dude can't do<small>GREE-9 · Dee's task · Dee is offline</small></div><span class="muted num" style="font-size:13px">3h</span><button class="btn quiet sm">Take over</button></div></div>
+  <div class="group"><span class="label">Needs an admin · 1</span>
+    <div class="item">${agent('sys',40)}<div class="q">No GitHub webhooks from <span class="mono">acme/greeter</span> for 6 hours<small>PR updates are arriving only every 15 minutes</small></div><span class="muted num" style="font-size:13px">6h</span><button class="btn quiet sm">Open settings</button></div></div>`;
+}
+
+/* ------------------------------------------------------------------ prompts (what agents are told) */
+const PROMPTS = {
+impl: `# Implementer
+
+You are the implementer on a software team. You take one task, change the repository so the task is done, and prove it with tests. Other agents will review your work, and people will read your pull request, so write code that a careful colleague would be glad to maintain.
+
+## The task
+
+**Goal:** {{task.goal}}
+
+**Acceptance criteria:**
+{{task.criteria}}
+
+The repository is checked out at \`{{run.base_ref}}\` on branch \`{{run.branch}}\`. You own this branch until your turn ends.
+
+## How to work
+
+1. **Read before you write.** Find where the behaviour lives today. Read the tests around it. If the project has a \`CONTRIBUTING.md\`, \`AGENTS.md\` or \`CLAUDE.md\`, read it first and follow it over anything below.
+2. **Make the smallest change that fully does the task.** Don't refactor what you weren't asked to touch. If you see something worth fixing nearby, say so in your summary instead.
+3. **Match the code around you**: naming, comment density, error handling, file layout. A reviewer should not be able to tell which lines are yours by style.
+4. **Test what you changed.** Add or update tests that fail without your change. Run the project's test command before you finish, and include its result.
+5. **Commit in logical steps** with messages that say *why*, in the project's style.
+
+## When you are unsure
+
+- If the task is ambiguous in a way that changes what you'd build, **ask a person** with \`ask_person\` — one clear question, with the options you see and the one you'd pick. Then stop and wait.
+- If you need another repository, use \`request_repository\` and say why.
+- Never guess at credentials, production data or anything outside the checkout.
+
+## What you must not do
+
+- Don't disable, skip or weaken tests to make them pass.
+- Don't change CI configuration, lockfiles or generated files unless the task is about them.
+- Don't push to any branch but your own. Don't open pull requests — dude does that.
+
+## Finishing
+
+End your turn with a short summary:
+
+\`\`\`
+## What changed
+- …
+## How I tested it
+- the command, and its result
+## Worth a look
+- anything a reviewer should know, or you noticed but left alone
+\`\`\`
+
+> The reviewers will see your summary and your diff. Write the summary for them.
+`,
+rev_correctness: `# Reviewer · correctness
+
+You review one change for **correctness**: does it do what the task asks, without breaking anything else? You can read and run the code, but you never change it and never push.
+
+## What you are given
+
+- The task: {{task.goal}}
+- The diff from \`{{run.base_ref}}\` to \`{{run.head}}\`, and the whole repository at that commit.
+- Findings already raised on earlier rounds, and what became of them: {{review.previous_findings}}
+
+## How to review
+
+1. Read the task and its acceptance criteria. Decide what "done" means before you read the diff.
+2. Read the diff in full, then the code it calls and the code that calls it.
+3. **Run the tests.** Run anything else that would prove or disprove a doubt.
+4. Look hardest at: edge cases, error paths, concurrency, off-by-one, time zones, empty and huge inputs, and behaviour that changed without a test.
+
+## What counts as a finding
+
+- **blocking** — the change is wrong, incomplete against the criteria, or breaks something. The loop won't finish until it is fixed.
+- **suggestion** — it works, but a clear improvement is worth making now.
+- **nit** — taste. Use sparingly; the simplifier will tidy style.
+
+Don't report style, naming or formatting as blocking. Don't re-raise a finding a fixer already addressed unless it is still wrong — say why.
+
+## Reporting
+
+Reply with YAML only:
+
+\`\`\`yaml
+findings:
+  - severity: blocking
+    title: Tooltip values are not formatted as money
+    file: src/charts/Revenue.tsx
+    line: 88
+    detail: |
+      What is wrong, why it matters, and how you know (a test, a run, a trace).
+    acceptance: What must be true for this to be fixed.
+\`\`\`
+
+An empty list means the change is correct. Say so plainly; don't invent findings.
+`,
+rev_security: `# Reviewer · security
+
+You review one change for **security**. Assume the code runs on the internet, with hostile input.
+
+## Look for
+
+- Injection: SQL, shell, template, path traversal, SSRF.
+- Authentication and authorisation: every new route checks who is asking and what they may see.
+- Secrets in code, logs, error messages or test fixtures.
+- Unsafe deserialisation, weak crypto, missing CSRF on state-changing routes.
+- New dependencies: are they maintained, and needed?
+
+Report findings in the same YAML shape as every reviewer. **blocking** is anything exploitable.
+`,
+fix: `# Fixer
+
+You fix **exactly** the findings or pull request comments you are given — nothing else.
+
+## What to fix
+
+{{fix.items}}
+
+## How
+
+- One commit per finding when you can, each message naming the finding.
+- If a finding is wrong, don't fix it: explain why in your summary, and dude will ask a person.
+- Run the tests before you finish.
+`,
+simp: `# Simplifier
+
+Tidy the branch without changing what it does.
+
+- Remove dead code, duplicated helpers and needless indirection the change introduced.
+- Keep the public behaviour and the tests exactly as they are; every test must still pass.
+- Small commits. If nothing needs simplifying, say so and change nothing.
+`,
+qa: `# Tester
+
+Drive the app in a browser the way a person would, and prove the task works.
+
+## Starting the app
+
+{{project.app_start}}
+
+## What to check
+
+- Every acceptance criterion, one by one, with a screenshot of each.
+- The golden path, then one unhappy path per criterion.
+
+Record a video of the session. Report failures as findings.
+`,
+};
+const PROJECT_ADD = {
+impl: `## In this repository
+
+- Package manager is **bun**. Run \`bun test\` and \`bun run typecheck\` before you finish.
+- Charts live in \`src/charts\`, one component per file. Data loading goes through \`useDashboardData\` — never \`fetch\` from a component.
+- Money is always formatted with \`formatUsd\` from \`src/format.ts\`.
+- Don't edit anything under \`src/gen/\`; it is generated by \`bun run gen\`.
+
+## Design tokens
+
+Colours come from \`@acme/design-tokens\`. If you need a new one, request that repository rather than hard-coding a hex value.
+`,
+};
+
+/* ------------------------------------------------------------------ settings: three scopes */
+/* me = your own (everyone); org = organisation defaults (org admins); proj = a project's overrides (project admins). */
+const SCOPES = {
+  me:{ title:'Your settings', sub:'Only you see these', pages:[['profile','Profile','person'],['keys','Sign-in & keys','key'],['notif','Notifications','bell'],['look','Appearance','eye']] },
+  org:{ title:'Acme', sub:'Organisation · admins only', pages:[['members','Members','people'],['general','General','build'],['github','GitHub','gh'],['agents','Agents','pen'],['delivery','Delivery','list']] },
+  proj:{ title:'Dashboard', sub:'Project · acme/dashboard', pages:[['p-general','General','build'],['p-people','People','people'],['p-repos','Repositories','gh'],['agents','Agents','pen'],['delivery','Delivery','list']] },
+};
+let curSet = { scope:'org', page:'agents', role:'impl' };
+const ROLE_SET = [['impl','Implementer'],['rev','Reviewer'],['fix','Fixer'],['simp','Simplifier'],['qa','Tester']];
+const PROJ_CHANGED = { impl:'•', rev:'•' };
+Object.assign(P, { gear:'M8 5.5a2.5 2.5 0 1 0 0 5a2.5 2.5 0 0 0 0-5ZM8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4', person:'M8 8a2.75 2.75 0 1 0 0-5.5a2.75 2.75 0 0 0 0 5.5ZM2.5 14c.6-2.8 2.8-4.25 5.5-4.25S12.9 11.2 13.5 14',
+  people:'M6 7.5a2.5 2.5 0 1 0 0-5a2.5 2.5 0 0 0 0 5ZM1.5 13.5c.5-2.4 2.3-3.75 4.5-3.75s4 1.35 4.5 3.75M10.5 2.6a2.5 2.5 0 0 1 0 4.8M12 9.9c1.3.5 2.2 1.7 2.5 3.6',
+  key:'M10 2.5a3.5 3.5 0 1 0 0 7a3.5 3.5 0 0 0 0-7ZM7.5 8.5L2.5 13.5M4 12l1.5 1.5M5.5 10.5L7 12',
+  bell:'M4 11V7a4 4 0 0 1 8 0v4l1.5 1.5h-11ZM6.5 14h3', build:'M2.5 13.5h11M4 13.5V6l4-3.5L12 6v7.5M6.5 13.5v-4h3v4',
+  lock:'M4 7.5h8v6H4ZM5.5 7.5V5a2.5 2.5 0 0 1 5 0v2.5', undo:'M5 5.5H10a3 3 0 0 1 0 6H6M5 5.5l2.5-2.5M5 5.5l2.5 2.5',
+  expand:'M9.5 2.5h4v4M6.5 13.5h-4v-4M13.5 2.5L9 7M2.5 13.5L7 9', link:'M7 9a3 3 0 0 0 4.2 0l2-2a3 3 0 0 0-4.2-4.2l-.8.8M9 7a3 3 0 0 0-4.2 0l-2 2a3 3 0 0 0 4.2 4.2l.8-.8' });
+
+const inherited = (from='Acme') => `<span class="inh">${ic('link','sm')}From ${from}</span>`;
+const overridden = (was) => `<span class="ovr"><span class="tag">Overridden</span><span class="muted">Acme: ${was}</span><a href="#" onclick="return false">Reset</a></span>`;
+const srow = (lbl, help, ctl) => `<div class="srow"><div class="lbl">${lbl}${help?`<small>${help}</small>`:''}</div><div class="ctl">${ctl}</div></div>`;
+const sel = (opts, w=320) => `<select class="field" style="width:${w}px">${opts.map(o=>`<option>${o}</option>`).join('')}</select>`;
+const seg = (opts, on=0) => `<span class="seg" data-seg>${opts.map((o,i)=>`<span class="${i===on?'on':''}">${o}</span>`).join('')}</span>`;
+const tog = on => `<span class="tog ${on?'on':''}" onclick="this.classList.toggle('on')"></span>`;
+const sec = (title, body) => `<section class="set-sec"><h3>${title}</h3>${body}</section>`;
+const P_ = () => curSet.scope==='proj';
+
+const PAGES = {
+profile: () => `<div class="set-h"><h2>Profile</h2><p>How your teammates see you across dude, on tasks, in chats and on GitHub activity.</p></div>
+  ${sec('You', srow('Photo','Shown on every task and message. Without one, your initials on your colour.', `<div class="row" style="gap:16px">${av('ana',56,{ring:false})}<button class="btn">Upload…</button><button class="btn quiet">Use initials</button></div>`)
+   + srow('Name','', `<input class="field" style="width:340px" value="Ana Ribeiro">`)
+   + srow('Email','From your Google account.', `<span class="sec2">ana@acme.dev</span>`)
+   + srow('GitHub account','Links your GitHub comments and reviews to you here.', `<div class="row"><span class="av s28" style="background:var(--wash-2)">${ic('gh')}</span><b style="color:var(--strong);font-weight:500">ana-ribeiro</b><button class="btn quiet sm">Unlink</button></div>`))}
+  ${sec('Your roles', `<div class="plist" style="margin-top:10px">
+    <div class="pr1 hd"><span>Where</span><span>Role</span><span></span><span></span></div>
+    <div class="pr1"><span>Acme <span class="muted">· organisation</span></span><span><span class="tag admin">Admin</span></span><span></span><span></span></div>
+    <div class="pr1"><span>Dashboard</span><span><span class="tag admin">Project admin</span></span><span></span><span></span></div>
+    <div class="pr1"><span>Billing API</span><span>Member</span><span></span><span></span></div></div>`)}
+  <button class="btn primary">Save</button>`,
+keys: () => `<div class="set-h"><h2>Sign-in &amp; keys</h2><p>You sign in with Google. Keys are for the <span class="mono">dude</span> CLI and scripts; each acts as you.</p></div>
+  ${sec('Keys', `<div class="plist" style="margin-top:10px"><div class="pr1 hd"><span>Name</span><span>Created</span><span>Last used</span><span></span></div>
+    <div class="pr1"><span>Laptop CLI</span><span class="muted">Sep 12</span><span class="muted">now</span><span><button class="btn quiet sm">Revoke…</button></span></div>
+    <div class="pr1"><span>CI release script</span><span class="muted">Sep 20</span><span class="muted">2d ago</span><span><button class="btn quiet sm">Revoke…</button></span></div></div>
+    <div style="margin-top:12px"><button class="btn">New key</button></div>`)}
+  ${sec('Sessions', srow('Signed in on','', `<span>This browser · Chrome on Linux <span class="muted">· now</span></span><span>Phone · Safari on iOS <span class="muted">· 2d ago</span></span><button class="btn quiet sm">Sign out everywhere else</button>`))}`,
+notif: () => `<div class="set-h"><h2>Notifications</h2><p>Only about things that are yours, unless you ask for more.</p></div>
+  ${sec('Where', srow('Slack','Direct messages from His Dudeness.', `<div class="row">${tog(true)}<span>@ana in acme.slack.com</span></div>`)
+    + srow('Browser','Needs this browser to allow notifications.', `<div class="row">${tog(true)}<span>On for this browser</span></div>`)
+    + srow('Email','', `<div class="row">${tog(false)}<span class="muted">ana@acme.dev</span></div>`))}
+  ${sec('When', `<div class="ntable" style="margin-top:10px"><div class="h">Tell me when</div><div class="h c">Slack</div><div class="h c">Browser</div><div class="h c">Email</div>
+    ${[['An agent asks me something',1,1,0],['A delivery of mine needs a decision',1,1,0],['My PR is ready to merge',1,1,0],['CI fails on my PR and dude can\'t fix it',1,1,1],['Someone steers or aborts my agent',1,0,0],['I\'m added to a task',1,1,0],['Someone asks me on GitHub',1,0,0]].map(([w,...c]) =>
+      `<div>${w}</div>${c.map(v=>`<div class="c">${tog(v)}</div>`).join('')}`).join('')}</div>`)}`,
+look: () => `<div class="set-h"><h2>Appearance</h2></div>${sec('Display',
+    srow('Theme','', seg(['System','Light','Dark'])) + srow('Density','Compact fits more on screen; text never gets smaller than readable.', seg(['Comfortable','Compact']))
+    + srow('Reduce motion','Live states stay visible; they stop pulsing.', tog(false)))}`,
+
+members: () => `<div class="set-h"><h2>Members</h2><p>Everyone in Acme can create, deliver and steer tasks in projects they belong to. Admins manage the organisation: members, GitHub, and the defaults every project starts from.</p></div>
+  <div class="row" style="max-width:1000px;margin-bottom:14px"><input class="field" style="width:280px" placeholder="Find a person…"><span class="sp"></span><button class="btn primary">＋ Invite people</button></div>
+  <div class="plist" style="max-width:1000px"><div class="pr1 hd"><span>Person</span><span>Role</span><span>Projects</span><span></span></div>
+  ${[['ana','Admin','3','now',true],['eli','Admin','2','4m ago'],['bo','Member','2','2m ago'],['cy','Member','2','1m ago'],['gus','Member','1','yesterday'],['dee','Member','1','3h ago']].map(([k,r,pr,l,me]) =>
+    `<div class="pr1"><span class="person">${av(k,40)}<span><b>${PEOPLE[k].n}${me?' <span class="muted" style="font-weight:400">(you)</span>':''}</b><small>${k}@acme.dev · active ${l}</small></span></span>
+    <span>${me?'<span class="tag admin">Admin</span>':sel([r, r==='Admin'?'Member':'Admin'],130)}</span><span class="muted">${pr} projects</span><span style="text-align:right">${me?'':'<button class="btn quiet sm">Remove…</button>'}</span></div>`).join('')}
+  <div class="pr1"><span class="person"><span class="av s40" style="background:var(--wash-2);color:var(--muted)">?</span><span><b>fran@acme.dev</b><small>Invited by Ana · 1d ago</small></span></span><span class="muted">Member</span><span></span><span style="text-align:right"><button class="btn quiet sm">Resend</button></span></div></div>`,
+general: () => `<div class="set-h"><h2>General</h2></div>${sec('Organisation',
+    srow('Name','', `<input class="field" style="width:340px" value="Acme">`) + srow('Public URL','Used in webhook addresses and in notifications’ links.', `<input class="field" style="width:420px" value="https://dude.acme.dev">`))}
+  ${sec('Sign-in', srow('How people sign in','', seg(['Google','GitHub','Keys only'])) + srow('Allowed domain','Anyone with an address here can join as a Member.', `<input class="field" style="width:240px" value="acme.dev">`))}
+  <button class="btn primary">Save</button>`,
+github: () => `<div class="set-h"><h2>GitHub</h2><p>Pull requests are opened as <b>acme-dude[bot]</b>. These are the defaults; a project can change any of them.</p></div>
+  <div class="okline" style="max-width:1000px">${ic('check')} App installed on 3 repositories · webhooks healthy · last delivery 12s ago · 0 failed today<span class="sp"></span><button class="btn sm">Manage on GitHub</button></div>
+  ${sec('Pull requests', srow('Open pull requests as','', seg(['Ready for review','Draft'])) + srow('Request review from','', seg(['Nobody','CODEOWNERS','The task\'s people'],1))
+    + srow('Merge method','Used by the Merge button in dude.', seg(['Squash','Merge commit','Rebase'])))}
+  ${sec('Reacting to GitHub', srow('Who can wake a fixer','A comment from anyone else is shown on the task, not acted on.', sel(['Collaborators with write access','Organisation members only','Anyone who can comment'],340))
+    + srow('When main moves ahead','', sel(['Update the branch if it merges cleanly, else ask','Only tell the task\'s people'],380))
+    + srow('Fix rounds per pull request','Then the owner decides how it goes on.', `<input class="field" style="width:80px" value="5">`))}
+  <button class="btn primary">Save</button>`,
+delivery: () => { const p = P_(); return `<div class="set-h"><h2>Delivery</h2><p>How a task goes from Deliver to a pull request.</p></div>
+  ${sec('Loop', srow('Review rounds','Before the owner is asked.', `<div class="row"><input class="field" style="width:80px" value="5">${p?inherited():''}</div>`)
+    + srow('Attempts per finding','', `<div class="row"><input class="field" style="width:80px" value="2">${p?inherited():''}</div>`)
+    + srow('Simplify pass','After review, before the pull request.', `<div class="row">${tog(true)}${p?inherited():''}</div>`)
+    + srow('Browser test','Needs the tester to know how to start the app.', `<div class="row">${tog(p)}${p?overridden('off'):''}</div>`))}
+  ${sec('Waiting on people', srow('Park an agent after','An agent waiting on a person gives up its machine.', `<div class="row">${sel(['10 minutes','30 minutes','Never'],160)}${p?inherited():''}</div>`)
+    + srow('Nudge a quiet agent after','', `<div class="row">${sel(['Off','15 minutes','30 minutes'],160)}${p?inherited():''}</div>`))}<button class="btn primary">Save</button>`; },
+'p-general': () => `<div class="set-h"><h2>General</h2></div>${sec('Project', srow('Image','Shown beside the project everywhere. Without one, its initials on its colour.', `<div class="row" style="gap:16px">${pav('Dashboard',56)}<button class="btn">Upload…</button><span class="muted" style="font-size:13px">Colour</span>${[5,3,7,1,6].map((i,n)=>`<span class="click" style="width:22px;height:22px;border-radius:5px;background:var(--id${i}b);box-shadow:${n===0?'0 0 0 2px var(--surface),0 0 0 4px var(--accent)':'inset 0 0 0 1px var(--wash-2)'}"></span>`).join('')}</div>`)
+    + srow('Name','', `<input class="field" style="width:340px" value="Dashboard">`)
+    + srow('Key','Prefix for task numbers.', `<input class="field mono" style="width:100px" value="DASH">`) + srow('Description','', `<textarea class="field" rows="3" style="max-width:560px">Acme's internal metrics dashboard: costs, revenue, usage.</textarea>`))}
+  ${sec('Danger', srow('Archive this project','Tasks stay readable; nothing new can start.', `<button class="btn danger">Archive project…</button>`))}<button class="btn primary">Save</button>`,
+'p-people': () => `<div class="set-h"><h2>People</h2><p>Who can work in Dashboard. Project admins change this project's settings; organisation admins can always.</p></div>
+  <div class="row" style="max-width:1000px;margin-bottom:14px"><span class="sp"></span><button class="btn primary">＋ Add people</button></div>
+  <div class="plist" style="max-width:1000px"><div class="pr1 hd"><span>Person</span><span>Role here</span><span>Tasks</span><span></span></div>
+  ${[['ana','Project admin','5',true],['bo','Project admin','4'],['cy','Member','3'],['gus','Member','2'],['dee','Member','2']].map(([k,r,t,me]) =>
+    `<div class="pr1"><span class="person">${av(k,40)}<span><b>${PEOPLE[k].n}${me?' <span class="muted" style="font-weight:400">(you)</span>':''}</b><small>${k==='ana'?'Organisation admin':'Member of Acme'}</small></span></span>
+    <span>${sel([r, r==='Member'?'Project admin':'Member'],150)}</span><span class="muted">${t} open</span><span style="text-align:right">${me?'':'<button class="btn quiet sm">Remove</button>'}</span></div>`).join('')}</div>`,
+'p-repos': () => `<div class="set-h"><h2>Repositories</h2><p>What agents check out. The first is where tasks start; the others can be requested.</p></div>
+  ${sec('Repositories', `<div class="plist" style="margin-top:10px"><div class="pr1 hd"><span>Repository</span><span>Base branch</span><span>Webhook</span><span></span></div>
+    <div class="pr1"><span class="row">${ic('gh')}<b style="color:var(--strong);font-weight:500">acme/dashboard</b><span class="tag">primary</span></span><span class="mono">main</span><span class="st ok">${ic('check','sm')} healthy</span><span style="text-align:right"><button class="btn quiet sm">⋯</button></span></div>
+    <div class="pr1"><span class="row">${ic('gh')}<b style="color:var(--strong);font-weight:500">acme/design-tokens</b></span><span class="mono">main</span><span class="st ok">${ic('check','sm')} healthy</span><span style="text-align:right"><button class="btn quiet sm">⋯</button></span></div></div>
+    <div style="margin-top:12px"><button class="btn">＋ Add repository</button></div>`)}
+  ${sec('GitHub', srow('Request review from','', `<div class="row">${seg(['Nobody','CODEOWNERS','The task\'s people'],2)}${overridden('CODEOWNERS')}</div>`)
+    + srow('Merge method','', `<div class="row">${seg(['Squash','Merge commit','Rebase'])}${inherited()}</div>`)
+    + srow('Who can wake a fixer','', `<div class="row">${sel(['Collaborators with write access'],300)}${inherited()}</div>`))}`,
+
+agents: () => {
+  const p = P_(); const r = curSet.role;
+  const R = ROLE_SET.find(x=>x[0]===r); const name = R[1];
+  const key = r==='rev' ? 'rev_correctness' : r;
+  const meta = { impl:['claude-sonnet-5','Medium','45 min','Writes the change and its tests.'], rev:['claude-opus-5-5','High','20 min','Reviews the diff by category; reports findings, never pushes.'],
+    fix:['claude-sonnet-5','Medium','45 min','Fixes exactly the findings or comments it is given.'], simp:['claude-sonnet-5','Low','20 min','Tidies the branch without changing behaviour.'], qa:['claude-sonnet-5','Medium','30 min','Drives the app in a browser and records a video.'] }[r];
+  const model = p && r==='rev' ? 'claude-fable-5-1' : meta[0];
+  const src = p ? (PROJECT_ADD[r] || '') : PROMPTS[key];
+  const field = (lbl, opts, note) => `<div><label>${lbl}</label>${sel(opts,0).replace('width:0px','')}${note?`<div style="margin-top:6px">${note}</div>`:''}</div>`;
+  return `<div class="rolehead" style="margin-bottom:6px">${agent(r,48,false,false)}<div style="flex:1"><h3>${name}</h3><p>${meta[3]}</p></div>
+      ${r==='qa'?`<span class="row" style="font-size:14px">${tog(p)} ${p?'On in Dashboard':'Off by default'}</span>`:`<span class="row muted" style="font-size:13px">${tog(true)} On</span>`}</div>
+  <div class="strip">
+    ${field('Model',[model,'claude-opus-5-5','claude-sonnet-5','claude-haiku-4-5'], p?(r==='rev'?overridden(meta[0]):inherited()):'')}
+    ${field('Reasoning effort',[meta[1],'Low','High','Max'], p?inherited():'')}
+    ${field('Time limit per session',[meta[2],'20 min','1 hour','None'], p?inherited():'')}
+    ${field('Tools',['Default for the role','Read-only','No network'], p?inherited():'')}</div>
+  ${r==='rev' && !p ? `<div class="label" style="margin-bottom:8px;display:block">Review categories</div><div class="cats"><span class="on">correctness · always</span><span>security · auth, api, sql</span><span>tests · always</span><span>performance</span><span>accessibility · *.tsx</span><span style="color:var(--accent-text)">＋ Category</span></div>`:''}
+  <div class="row" style="max-width:1100px;margin:8px 0 10px"><span class="label">Prompt</span><span class="sp"></span>
+    ${p?seg(['Add to Acme’s','Replace Acme’s','Use Acme’s'], src?0:2):`<span class="muted" style="font-size:12px">Last changed by Eli · yesterday · <a href="#" data-hist onclick="return false">History</a></span>`}</div>
+  ${p?`<details class="inherit"><summary class="click">${ic('link','sm')}<span><b style="color:var(--strong)">Acme’s ${name.toLowerCase()} prompt</b> · ${PROMPTS[key].split('\n').length} lines · comes first; Dashboard’s is added after it</span><span class="sp"></span><span class="muted">Show</span></summary><div class="prose">${mdToHtml(PROMPTS[key])}</div></details>`:''}
+  ${mdEditor(src, p ? 'Nothing added — Dashboard uses Acme’s prompt as is.' : 'No prompt yet.')}`;
+},
+};
+
+function mdEditor(src, empty) {
+  /* Reading is the default; Edit swaps the rendered prompt for its source, in place, at the same size. */
+  return `<div class="md" id="md" data-src="${encodeURIComponent(src)}">
+    <div class="md-bar"><span class="count" id="mdcount" style="margin-left:4px"></span><span class="sp"></span>
+      <span class="md-ro row" style="gap:8px"><button class="btn sm" data-mdedit>${ic('pen','sm')} Edit</button></span>
+      <span class="md-rw row" style="gap:6px"><button class="tb" data-tip="Heading">H</button><button class="tb" data-tip="Bold" style="font-weight:800">B</button><button class="tb" data-tip="Code" style="font-family:var(--mono)">&lt;&gt;</button><button class="tb" data-tip="Insert a variable" style="font-family:var(--mono);width:auto;padding:0 8px">{{ }}</button>
+        <span class="gap"></span><button class="btn quiet sm" data-mdcancel>Cancel</button><button class="btn primary sm" data-mddone>Save</button></span></div>
+    <div class="md-view"><div class="prose" id="mdprev"></div></div>
+    <div class="md-src"><div class="stackc"><pre id="mdhl" aria-hidden="true"></pre><textarea id="mdsrc" spellcheck="false" placeholder="${empty}">${src.replace(/</g,'&lt;')}</textarea></div></div>
+  </div>`;
+}
+function wireEditor() {
+  const ta = document.getElementById('mdsrc'); if (!ta) return;
+  const upd = () => { document.getElementById('mdhl').innerHTML = mdHighlight(ta.value);
+    document.getElementById('mdprev').innerHTML = ta.value.trim() ? mdToHtml(ta.value) : `<p class="muted">${ta.placeholder}</p>`;
+    const words = ta.value.trim() ? ta.value.trim().split(/\s+/).length : 0;
+    document.getElementById('mdcount').textContent = `Markdown · ${ta.value.split('\n').length} lines · ${words} words`;
+    ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; };
+  ta.addEventListener('input', upd); upd();
+}
+function mdToHtml(md) {
+  const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  const inline = s => esc(s).replace(/\{\{([^}]+)\}\}/g,'<span class="var">$1</span>').replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>').replace(/(^|\W)\*([^*]+)\*/g,'$1<i>$2</i>');
+  let out = '', list = null, code = null;
+  const close = () => { if (list) { out += `</${list}>`; list = null; } };
+  for (const line of md.split('\n')) {
+    if (code !== null) { if (line.startsWith('```')) { out += `<pre>${esc(code)}</pre>`; code = null; } else code += line + '\n'; continue; }
+    if (line.startsWith('```')) { close(); code = ''; continue; }
+    if (/^\|.*\|$/.test(line.trim())) { const cells = line.trim().slice(1,-1).split('|').map(c=>c.trim());
+      if (cells.every(c=>/^-+$/.test(c))) continue;
+      if (list!=='table') { close(); out += '<table>'; list='table'; out += '<tr>'+cells.map(c=>`<th>${inline(c)}</th>`).join('')+'</tr>'; }
+      else out += '<tr>'+cells.map(c=>`<td>${inline(c)}</td>`).join('')+'</tr>'; continue; }
+    let m;
+    if ((m = line.match(/^(#{1,3}) (.*)/))) { close(); out += `<h${m[1].length}>${inline(m[2])}</h${m[1].length}>`; }
+    else if ((m = line.match(/^\s*[-*] (.*)/))) { if (list!=='ul') { close(); out += '<ul>'; list='ul'; } out += `<li>${inline(m[1])}</li>`; }
+    else if ((m = line.match(/^\s*\d+\. (.*)/))) { if (list!=='ol') { close(); out += '<ol>'; list='ol'; } out += `<li>${inline(m[1])}</li>`; }
+    else if ((m = line.match(/^> (.*)/))) { close(); out += `<blockquote>${inline(m[1])}</blockquote>`; }
+    else if (!line.trim()) close();
+    else { close(); out += `<p>${inline(line)}</p>`; }
+  }
+  close(); return out;
+}
+function mdHighlight(md) {
+  const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  let inCode = false;
+  return md.split('\n').map(l => {
+    if (l.startsWith('```')) { inCode = !inCode; return `<span class="hl-fence">${esc(l)}</span>`; }
+    if (inCode) return `<span class="hl-code">${esc(l)}</span>`;
+    let m; if ((m = l.match(/^(#{1,3} )(.*)/))) return `<span class="hl-hm">${m[1]}</span><span class="hl-h">${esc(m[2])}</span>`;
+    let s = esc(l);
+    if ((m = s.match(/^(\s*(?:[-*]|\d+\.) )(.*)/))) s = `<span class="hl-li">${m[1]}</span>${m[2]}`;
+    if (s.startsWith('&gt; ')) return `<span class="hl-q">${s}</span>`;
+    return s.replace(/\{\{[^}]+\}\}/g,'<span class="hl-var">$&</span>').replace(/`[^`]+`/g,'<span class="hl-code">$&</span>').replace(/\*\*[^*]+\*\*/g,'<span class="hl-b">$&</span>');
+  }).join('\n') + '\n';
+}
+function wireEditor() {
+  const ta = document.getElementById('mdsrc'); if (!ta) return;
+  const upd = () => { document.getElementById('mdhl').innerHTML = mdHighlight(ta.value);
+    document.getElementById('mdprev').innerHTML = ta.value.trim() ? mdToHtml(ta.value) : '<p class="muted">Nothing here yet.</p>';
+    const words = ta.value.trim() ? ta.value.trim().split(/\s+/).length : 0;
+    document.getElementById('mdcount').textContent = `${ta.value.split('\n').length} lines · ${words} words`;
+    ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; };
+  ta.addEventListener('input', upd); upd();
+}
+function renderSettings() {
+  const S = SCOPES[curSet.scope]; const p = curSet.scope==='proj';
+  const head = curSet.scope==='me' ? `${av('ana',40,{ring:false})}<span><b>Your settings</b><small>Only you see these</small></span>`
+    : p ? `${pav('Dashboard',40)}<span><b>Dashboard</b><small>Project settings</small></span>`
+    : `<span class="agent orch" style="width:40px;height:40px">${ic('build')}</span><span><b>Acme</b><small>Organisation settings</small></span>`;
+  const items = S.pages.map(([k,n,icn]) => {
+    const changed = p && k==='agents' ? '<span class="c" style="color:var(--accent-text)">2 changed</span>' : p && k==='delivery' ? '<span class="c" style="color:var(--accent-text)">1 changed</span>' : '';
+    let h = `<div class="nav ${k===curSet.page?'cur':''}" data-set="${curSet.scope}:${k}">${ic(icn,'sm')}<span class="t">${n}</span>${changed}</div>`;
+    /* The roles are the Agents page's sub-pages, not tabs inside it. */
+    if (k==='agents' && curSet.page==='agents') h += ROLE_SET.map(([rk,rn]) =>
+      `<div class="nav sub ${rk===curSet.role?'cur':''}" data-role="${rk}" style="padding-left:30px">${agent(rk,20,false,false)}<span class="t">${rn}</span>${p&&PROJ_CHANGED[rk]?`<span class="c" style="color:var(--accent-text);font-size:18px;line-height:0" data-tip="${rk==='impl'?'Prompt added to':'Model overridden'}">●</span>`:!p&&rk==='qa'?'<span class="c">off</span>':''}</div>`).join('');
+    return h; }).join('');
+  document.getElementById('setNav').innerHTML = `<div class="scope">${head}</div>${items}
+    ${p?`<div style="margin:22px 8px 0;font-size:12px;color:var(--muted);line-height:1.5">Anything not changed here follows <a href="#" data-set="org:${curSet.page==='agents'||curSet.page==='delivery'?curSet.page:'agents'}">Acme’s settings</a>.</div>`:''}`;
+  const note = curSet.scope==='org' ? `<div class="scope-note">${ic('lock','sm')}Organisation admins only. Every project starts from these; a project’s admins can change them for their project.</div>`
+    : p ? `<div class="scope-note">${ic('link','sm')}Project admins: Ana, Bo. Values marked “From Acme” follow the organisation; change one to override it here.</div>` : '';
+  const title = curSet.page==='agents' ? '' : '';
+  document.getElementById('setMain').innerHTML = note + PAGES[curSet.page]();
+  wireEditor();
+  document.querySelector('#settings .crumbs').innerHTML = curSet.scope==='me' ? '<b>Your settings</b>'
+    : curSet.scope==='org' ? `<b>Acme</b> › Settings${curSet.page==='agents'?' › Agents':''}`
+    : `<span class="row" style="gap:8px">${pav('Dashboard',20)}<a href="#" data-go="project">Dashboard</a> › <b>Settings</b>${curSet.page==='agents'?' › Agents':''}</span>`;
+  renderSides();
+}
+
+
+/* ------------------------------------------------------------------ rules sheet */
+function renderRules() {
+  const demo = {merged:{merged:true,ci:'pass',approved:true}, ci_red:{ci:'fail',approved:true}, ci_running:{ci:'run'}, awaiting:{ci:'pass'},
+    changes:{ci:'pass',changes:true,unresolved:3}, conflict:{ci:'pass',approved:true,conflict:true}, comments:{ci:'pass',approved:true,unresolved:2}, ready:{ci:'pass',approved:true}};
+  document.getElementById('ladder').innerHTML = PR_ORDER.map(([k,l,,d],i) =>
+    `<span class="n">${i+1}</span><span>${prChip({repo:'acme/dashboard', n:40+i, ...demo[k]})}</span><span class="sec2">${d}</span>`).join('');
+  document.getElementById('avatarSwatch').innerHTML = [
+    [av('ana',56,{ring:false}),'photo'],[av('bo',56,{ring:false}),'initials'],[av('cy',56),'online'],
+    [av('bo',56,{agent:'impl',live:true,doing:'running bun test'}),'agent working'],[av('dee',56,{agent:'rev'}),'agent idle'],
+    [agent('fix',56,true),'an agent'],[pav('Dashboard',56),'project'],[pav('Billing API',56),'project image'],[`<span class="stack">${av('ana',32)}${av('bo',32)}${av('cy',32)}${av('eli',32)}</span>`,'online now']]
+    .map(([h,c])=>`<figure>${h}<figcaption>${c}</figcaption></figure>`).join('');
+}
+
+/* ------------------------------------------------------------------ wiring */
+function go(s) {
+  document.querySelectorAll('.mk [data-s]').forEach(x => x.setAttribute('aria-pressed', x.dataset.s===s));
+  document.querySelectorAll('.screen').forEach(x => x.classList.toggle('on', x.id===s));
+  history.replaceState(null,'','#'+s); window.scrollTo(0,0);
+}
+document.addEventListener('keydown', e => { if (e.key==='Escape') document.getElementById('viewer').classList.remove('on'); });
+function tab(t) {
+  document.querySelectorAll('#taskTabs span').forEach(x => x.classList.toggle('on', x.dataset.t===t));
+  document.querySelectorAll('.tpane').forEach(p => p.style.display = p.dataset.p===t ? (t==='se'?'flex':'block') : 'none');
+}
+document.addEventListener('click', e => {
+  const s = e.target.closest('.mk [data-s]'); if (s) return go(s.dataset.s);
+  const pm = e.target.closest('[data-pmenu]'); document.querySelectorAll('.menu').forEach(m=>m.remove());
+  if (pm) { const r = pm.getBoundingClientRect(), fr = pm.closest('.frame').getBoundingClientRect(); const m = document.createElement('div'); m.className = 'menu';
+    m.style.left = (r.left - fr.left) + 'px'; m.style.top = (r.bottom - fr.top + 4) + 'px';
+    m.innerHTML = `<div class="mi" data-set="proj:p-general">${ic('gear','sm')}Project settings</div><div class="mi" data-set="proj:agents">${ic('pen','sm')}Agents &amp; prompts</div><div class="mi" data-set="proj:p-people">${ic('people','sm')}People</div><div class="mi" data-set="proj:p-repos">${ic('gh','sm')}Repositories</div>
+      <div class="sepm"></div><div class="mi">${ic('build','sm')}New epic</div><div class="mi">＋ New task</div><div class="sepm"></div><div class="mi">Rename…</div><div class="mi danger">Archive…</div>`;
+    pm.closest('.frame').appendChild(m); return; }
+  const st2 = e.target.closest('[data-set]'); if (st2) { const [sc, pg] = st2.dataset.set.split(':'); curSet.scope = sc; curSet.page = pg; go('settings'); renderSettings(); return; }
+  const tg = e.target.closest('[data-toggle]');
+  if (tg && e.target.closest('.chev')) { openState[tg.dataset.toggle] = !openState[tg.dataset.toggle]; renderSides(); return; }
+  if (tg) { const k = tg.dataset.toggle; return go(k.startsWith('p:')?'project':k.startsWith('e:')?'epic':'task'); }
+  const t = e.target.closest('#taskTabs [data-t]'); if (t) return tab(t.dataset.t);
+  const st = e.target.closest('[data-tab]'); if (st) return tab(st.dataset.tab);
+  const ro = e.target.closest('[data-role]'); if (ro) { curSet.role = ro.dataset.role; renderSettings(); return; }
+  const sv = e.target.closest('[data-sv]'); if (sv) { const k = sv.dataset.sv;
+    document.querySelectorAll('.svtabs [data-sv]').forEach(x=>x.classList.toggle('on', x.dataset.sv===k));
+    document.querySelectorAll('[data-svp]').forEach(x=>x.style.display = x.dataset.svp===k ? 'flex' : 'none');
+    if (k==='diff') { renderLive(); startLive(); } return; }
+  const lf = e.target.closest('[data-lf]'); if (lf) { liveSel = lf.dataset.lf || null; liveFollow = false; renderLive(); return; }
+  const fo = e.target.closest('[data-follow]'); if (fo) { liveFollow = !liveFollow; if (liveFollow) liveSel = null; renderLive(); return; }
+  const pt = e.target.closest('[data-plantoggle]'); if (pt) { const b = document.getElementById('planbar'); const on = b.classList.toggle('open'); b.querySelector('.pb-head .chev').classList.toggle('open', on); return; }
+  const hs = e.target.closest('[data-hist]'); if (hs) { openHistory(); return; }
+  const hv = e.target.closest('[data-histv]'); if (hv) { openHistory(+hv.dataset.histv); return; }
+  const av_ = e.target.closest('[data-artver]'); if (av_) { const [i,v] = av_.dataset.artver.split(':'); openArt(i,+v); return; }
+  const an = e.target.closest('[data-artnav]'); if (an) { openArt(ARTIFACTS[+an.dataset.artnav].id); return; }
+  const ac = e.target.closest('[data-artclose]') || (e.target.id==='viewer' && e.target); if (ac) { document.getElementById('viewer').classList.remove('on'); return; }
+  const ar = e.target.closest('[data-art]'); if (ar) { openArt(ar.dataset.art); return; }
+  const ed = e.target.closest('[data-mdedit]'); if (ed) { const md = document.getElementById('md'); md.classList.add('editing'); md.dataset.orig = document.getElementById('mdsrc').value; const t = document.getElementById('mdsrc'); t.focus(); t.setSelectionRange(0,0); t.dispatchEvent(new Event('input')); return; }
+  const cn = e.target.closest('[data-mdcancel]'); if (cn) { const md = document.getElementById('md'); const t = document.getElementById('mdsrc'); t.value = md.dataset.orig; t.dispatchEvent(new Event('input')); md.classList.remove('editing'); return; }
+  const dn = e.target.closest('[data-mddone]'); if (dn) { document.getElementById('md').classList.remove('editing'); return; }
+  const seg = e.target.closest('[data-seg] span'); if (seg) { seg.parentNode.querySelectorAll('span').forEach(x=>x.classList.toggle('on', x===seg)); return; }
+  const g = e.target.closest('[data-go]'); if (g && !e.target.closest('a.prs')) { e.preventDefault(); return go(g.dataset.go); }
+});
+document.getElementById('theme').onclick = () => { const h = document.documentElement; h.dataset.theme = h.dataset.theme==='dark'?'light':'dark'; };
+document.getElementById('projCost').innerHTML = cost('$14.20',{tok:9.80,mach:4.40,tokens:'3.1M tokens',time:'22h on 2 hosts'});
+document.getElementById('epicCost').innerHTML = cost('$8.40',{tok:6.10,mach:2.30,tokens:'1.9M tokens',time:'11h 30m'});
+document.getElementById('costDemo').innerHTML = cost('$0.87',{tok:0.62,mach:0.25,tokens:'412k tokens',time:'23m on 2 hosts'});
+document.getElementById('projFace').innerHTML = pav('Dashboard',32);
+document.querySelectorAll('.pface20').forEach(e => e.innerHTML = pav('Dashboard',20));
+renderRules(); renderSides(); renderProject(); renderEpic(); renderTask(); renderArtifacts(); renderInbox(); renderSettings();
+const start = location.hash.slice(1); if (start && document.getElementById(start)) go(start);
+</script>
+</body>
+</html>

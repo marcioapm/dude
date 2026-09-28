@@ -2,7 +2,7 @@ import type { CSSProperties } from "react";
 import { Block, Caption, Col, Label, Panes, Row, Section, type PaneMode } from "../Frame.tsx";
 import styles from "../gallery.module.css";
 import { AGENT_ROLE_NAMES, TONE_NAMES, accent, diff, neutral, roleColors, themeColors, tones } from "../../tokens/palette-and-themes.ts";
-import { duration, easing, fontSize, radius, space, zIndex } from "../../tokens/scale.ts";
+import { duration, easing, faceRadius, fontSize, radius, space, zIndex } from "../../tokens/scale.ts";
 import { densityTokens, type Density, type DensityToken } from "../../tokens/density.ts";
 import { ALL_STATUSES, STATUS_SPECS } from "../../tokens/status.ts";
 import { Icon, ICON_NAMES } from "../../icons/index.tsx";
@@ -182,7 +182,7 @@ export function TokensSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
 
-      <Block id="tokens-space" title="Spacing, radii, elevation" note="Spacing on a 4px grid with 2 and 6 for hairline gaps. Radii are soft but small — 6px is the default control radius, 8px cards, 12px dialogs; nothing should look like a pill except a status dot.">
+      <Block id="tokens-space" title="Spacing, radii, elevation" note="Spacing on a 4px grid with 2 and 6 for hairline gaps. Radii are roles: structure is square, inline marks 3px, controls 6px, floats 10px; people and dots are round, agent and project faces take a share of their size.">
         <Panes mode={mode}>
           {(theme) => (
             <Col>
@@ -197,6 +197,14 @@ export function TokensSection({ mode }: { readonly mode: PaneMode }) {
                     <div className={styles["radiusBox"]} style={{ borderRadius: radius[k] }} />
                     <Caption>
                       {k} {radius[k]}
+                    </Caption>
+                  </Col>
+                ))}
+                {(Object.keys(faceRadius) as Array<keyof typeof faceRadius>).map((k) => (
+                  <Col key={k}>
+                    <div className={styles["radiusBox"]} style={{ borderRadius: faceRadius[k] }} />
+                    <Caption>
+                      face {k} {faceRadius[k]}
                     </Caption>
                   </Col>
                 ))}

@@ -13,15 +13,16 @@ import { withOrg, withoutTenant } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { badRequest, conflict, json, notFound, parseBody } from "../http.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
+import { requireOrgAdmin } from "../access.ts";
 import { REPOSITORIES_JSON, setTaskRepositories, taskRepositoriesInput } from "./taskRepositories.ts";
-import { ownerJson } from "./people.ts";
+import { ownerJson, peopleJson } from "./people.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 const TASK_SELECT = `
   id, organization_id AS "organizationId", project_id AS "projectId", epic_id AS "epicId", ${REPOSITORIES_JSON},
   title, goal, acceptance_criteria AS "acceptanceCriteria", status,
   (SELECT key_prefix FROM projects p WHERE p.id = tasks.project_id) || '-' || number AS key, -- see navigation.ts
-  requested_by AS "requestedBy", ${ownerJson()}, created_at AS "createdAt", updated_at AS "updatedAt"`;
+  requested_by AS "requestedBy", ${ownerJson()}, ${peopleJson()}, created_at AS "createdAt", updated_at AS "updatedAt"`;
 
 const RUN_SELECT = `
   id, organization_id AS "organizationId", project_id AS "projectId",
@@ -135,6 +136,8 @@ const deliverInput = z.object({
  */
 async function deliverTask(ctx: RequestContext): Promise<Response> {
   const input = await parseBody(ctx.request, deliverInput);
+  // The policy is what admins set: only they may loosen it for one task.
+  if (input.policy) await requireOrgAdmin(ctx);
   return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${ctx.params.id}/deliver`,
     JSON.stringify(input), ctx.principal.apiKeyId);
 }
@@ -285,6 +288,8 @@ const DEFAULT_HARNESS = "opencode";
 async function createSession(ctx: RequestContext): Promise<Response> {
   const runId = ctx.params.id!;
   const input = await parseBody(ctx.request, createSessionInput);
+  // The models are what admins set: only they may pick another for one session.
+  if (input.model || input.harness) await requireOrgAdmin(ctx);
   const { organizationId } = ctx.principal;
 
   // organizations is not tenant-scoped, so the org defaults are read outside

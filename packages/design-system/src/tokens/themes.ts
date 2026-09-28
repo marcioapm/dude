@@ -17,6 +17,7 @@ import {
   accent,
   ansiColors,
   diff,
+  merged,
   identityColors,
   neutral,
   roleColors,
@@ -263,6 +264,8 @@ export function flattenTheme(mode: ThemeMode): Record<string, string> {
   out["diff-del-fg"] = d.delFg;
   out["diff-hunk-bg"] = d.hunkBg;
   out["diff-hunk-fg"] = d.hunkFg;
+  out["merged-fg"] = merged[mode].fg;
+  out["merged-bg"] = merged[mode].bg;
   for (const name of ANSI_COLOR_NAMES) out[`ansi-${name}`] = ansiColors[mode][name];
 
   // Elevation is theme-dependent: light uses shadow, dark uses a lighter

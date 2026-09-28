@@ -34,6 +34,15 @@ describe("resolveAgentModel", () => {
     expect(resolved?.model).toBe("system-model");
   });
 
+  test("resolves field by field: a project's effort keeps the organization's model", () => {
+    const resolved = resolveAgentModel(
+      "reviewer",
+      project({ reviewer: { effort: "low" } }),
+      org({ reviewer: { model: "org-model", effort: "high", timeLimitMinutes: 20 } }),
+    );
+    expect(resolved).toEqual({ model: "org-model", effort: "low", timeLimitMinutes: 20 });
+  });
+
   test("returns null when no layer configures the role", () => {
     expect(resolveAgentModel("qa_browser", project({}), org({}))).toBeNull();
   });
@@ -59,9 +68,11 @@ describe("resolveAgentModel", () => {
 });
 
 describe("agentModelConfigSchema", () => {
-  test("requires a non-empty model", () => {
+  test("a model, when given, is not empty — and a layer may give none", () => {
     expect(agentModelConfigSchema.safeParse({ model: "" }).success).toBe(false);
-    expect(agentModelConfigSchema.safeParse({}).success).toBe(false);
+    expect(agentModelConfigSchema.safeParse({}).success).toBe(true);
+    expect(agentModelConfigSchema.safeParse({ effort: "high" }).success).toBe(true);
+    expect(agentModelConfigSchema.safeParse({ effort: "extreme" }).success).toBe(false);
   });
 
   test("accepts optional tuning and cost fields", () => {

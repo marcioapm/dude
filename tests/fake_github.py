@@ -11,7 +11,9 @@ repository nobody else touches. This provides both locally:
     reading branches straight out of that bare repository.
 
 Only what the factory uses is implemented. A test drives the "human" side —
-leaving a comment, merging — through `FakeGitHub` directly.
+leaving a comment, reviewing, pushing, reporting CI, merging — through
+`FakeGitHub` directly, and each tells dude by a signed webhook as GitHub
+would.
 """
 
 from __future__ import annotations
@@ -49,6 +51,11 @@ class PullRequest:
     merged_at: str | None = None
     comments: list[dict] = field(default_factory=list)
     reviews: list[dict] = field(default_factory=list)
+    requested_reviewers: list[str] = field(default_factory=list)
+    # GitHub says the branch conflicts with its base.
+    conflicting: bool = False
+    # Review threads nobody has resolved (only GraphQL says).
+    unresolved_threads: int = 0
 
 
 class FakeGitHub:
@@ -63,7 +70,6 @@ class FakeGitHub:
         self.repo = repo
         self.root = root
         self.bare = root / owner / f"{repo}.git"
-        self.pulls: dict[int, PullRequest] = {}
         self._next_id = 1000
         self._lock = threading.Lock()
         self._daemon: subprocess.Popen | None = None
@@ -74,20 +80,39 @@ class FakeGitHub:
         # by the test once dude has stored a credential and minted a secret.
         self.webhook_url: str | None = None
         self.webhook_secret: str | None = None
+        # Other repositories of the same owner are served by this one's
+        # daemon and API (add_repository).
+        self._parent: FakeGitHub | None = None
+        # Repository permission by login (admin, write, read, none); anyone
+        # not named has write access, as the people in these tests are the
+        # team. And the owner organization's members.
+        self.permissions: dict[str, str] = {}
+        self.members: set[str] = set()
+        self._init_repository()
+
+    def _init_repository(self) -> None:
+        """What each repository has of its own; the rest a sibling shares."""
+        self.pulls: dict[int, PullRequest] = {}
         self.hooks: list[dict] = []
         self.deliveries: list[tuple[str, int]] = []
-        # Other repositories of the same owner, served by this one's daemon
-        # and API (add_repository).
         self.siblings: dict[str, "FakeGitHub"] = {}
-        self._parent: FakeGitHub | None = None
+        # CI, by commit: each check by name — a check run (GitHub Actions,
+        # an app) or a commit status.
+        self.checks: dict[str, dict[str, dict]] = {}
+        # What dude asked GitHub to do. An Actions check run is a job,
+        # re-run through the Actions API.
+        self.merges: list[dict] = []
+        self.updates: list[int] = []
+        self.jobs_rerun: list[int] = []
+        self.review_requests: list[tuple[int, list[str]]] = []
 
     def add_repository(self, repo: str) -> "FakeGitHub":
         """Another repository, served alongside this one: same owner, same
         git daemon, same API, its own branches and pull requests."""
         sib = FakeGitHub.__new__(FakeGitHub)
-        sib.__dict__.update({k: v for k, v in self.__dict__.items() if k not in ("siblings", "pulls", "hooks", "deliveries")})
+        sib.__dict__.update(self.__dict__)
+        sib._init_repository()
         sib.repo, sib.bare = repo, self.root / self.owner / f"{repo}.git"
-        sib.pulls, sib.hooks, sib.deliveries, sib.siblings = {}, [], [], {}
         sib._lock, sib._parent = threading.Lock(), self
         sib._seed(suffix=repo)
         self.siblings[repo] = sib
@@ -99,6 +124,9 @@ class FakeGitHub:
         if len(parts) > 3 and parts[1] == "repos" and parts[3] in self.siblings:
             return self.siblings[parts[3]]
         return self
+
+    def _for_repo(self, repo: str) -> "FakeGitHub":
+        return self.siblings.get(repo, self)
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -204,10 +232,17 @@ class FakeGitHub:
 
     def approve(self, number: int, reviewer: str = "alice") -> None:
         """A reviewer approves the pull request, and GitHub says so by webhook."""
+        self.review(number, "APPROVED", reviewer=reviewer)
+
+    def review(self, number: int, state: str, body: str = "", reviewer: str = "alice") -> None:
+        """A review: APPROVED, CHANGES_REQUESTED, COMMENTED or DISMISSED."""
         with self._lock:
             self._next_id += 1
-            self.pulls[number].reviews.append({"id": self._next_id, "user": {"login": reviewer}, "state": "APPROVED",
-                                               "body": "", "submitted_at": _now()})
+            pr = self.pulls[number]
+            pr.reviews.append({"id": self._next_id, "user": {"login": reviewer}, "state": state,
+                               "body": body, "submitted_at": _now()})
+            if reviewer in pr.requested_reviewers:
+                pr.requested_reviewers.remove(reviewer)
         self.send_webhook("pull_request_review", {"action": "submitted", "pull_request": {"number": number}})
 
     def merge(self, number: int) -> None:
@@ -216,6 +251,70 @@ class FakeGitHub:
             pr.state = "closed"
             pr.merged_at = _now()
         self.send_webhook("pull_request", {"action": "closed", "pull_request": {"number": number}})
+
+    def close(self, number: int) -> None:
+        """Closed without merging."""
+        with self._lock:
+            self.pulls[number].state = "closed"
+        self.send_webhook("pull_request", {"action": "closed", "pull_request": {"number": number}})
+
+    def reopen(self, number: int) -> None:
+        with self._lock:
+            self.pulls[number].state = "open"
+        self.send_webhook("pull_request", {"action": "reopened", "pull_request": {"number": number}})
+
+    def set_conflicting(self, number: int, conflicting: bool = True) -> None:
+        """GitHub works out the branch no longer merges (main moved into it)."""
+        with self._lock:
+            self.pulls[number].conflicting = conflicting
+        self.send_webhook("pull_request", {"action": "synchronize", "pull_request": {"number": number}})
+
+    def set_unresolved(self, number: int, threads: int) -> None:
+        with self._lock:
+            self.pulls[number].unresolved_threads = threads
+        self.send_webhook("pull_request_review_thread", {"action": "resolved", "pull_request": {"number": number}})
+
+    def commit(self, branch: str, message: str, author: str = "Gus Human") -> str:
+        """A person pushes a commit to a branch on GitHub; its sha. A push to
+        a pull request's branch is a `synchronize`."""
+        tree = self._git_out("rev-parse", f"refs/heads/{branch}^{{tree}}")
+        email = author.split()[0].lower() + "@example.com"
+        env = {"GIT_AUTHOR_NAME": author, "GIT_AUTHOR_EMAIL": email, "GIT_COMMITTER_NAME": author,
+               "GIT_COMMITTER_EMAIL": email}
+        sha = self._git_out("commit-tree", tree, "-p", f"refs/heads/{branch}", "-m", message, env=env)
+        self._git_out("update-ref", f"refs/heads/{branch}", sha)
+        for pr in list(self.pulls.values()):
+            if pr.head == branch and pr.state == "open":
+                self.send_webhook("pull_request", {"action": "synchronize", "pull_request": {"number": pr.number}})
+        return sha
+
+    def _git_out(self, *args: str, env: dict | None = None) -> str:
+        import os
+
+        result = subprocess.run(["git", *args], cwd=self.bare, capture_output=True, text=True, check=True,
+                                env={**os.environ, **(env or {})})
+        return result.stdout.strip()
+
+    def set_check(self, number: int, name: str, status: str = "completed", conclusion: str | None = "success",
+                  kind: str = "check_run") -> None:
+        """CI reports on the pull request's head, by name: a check run
+        (`check_run`, then its suite) or a commit status (`status`) — and
+        tells dude by the webhook each sends."""
+        sha = self.branch_sha(self.pulls[number].head)
+        with self._lock:
+            checks = self.checks.setdefault(sha, {})
+            prior = checks.get(name)
+            self._next_id += 1
+            checks[name] = {"id": prior["id"] if prior else self._next_id, "name": name, "kind": kind,
+                            "status": status, "conclusion": conclusion if status == "completed" else None,
+                            "started_at": _now(), "completed_at": _now() if status == "completed" else None}
+        if kind == "status":
+            state = "pending" if status != "completed" else conclusion
+            self.send_webhook("status", {"sha": sha, "state": state, "context": name})
+        else:
+            self.send_webhook("check_run", {"action": status, "check_run": {"head_sha": sha, "name": name}})
+            if status == "completed":
+                self.send_webhook("check_suite", {"action": "completed", "check_suite": {"head_sha": sha}})
 
     def send_webhook(self, event: str, payload: dict, secret: str | None = None) -> int:
         """Deliver a signed webhook to dude, as GitHub would. Returns the status."""
@@ -268,6 +367,10 @@ class FakeGitHub:
                     "state": pr.state,
                     "merged_at": pr.merged_at,
                     "head": {"sha": self.github.branch_sha(pr.head) or "0" * 40},
+                    "base": {"ref": pr.base},
+                    "mergeable": not pr.conflicting,
+                    "mergeable_state": "dirty" if pr.conflicting else "clean",
+                    "requested_reviewers": [{"login": login} for login in pr.requested_reviewers],
                 }
 
             def _body(self) -> dict:
@@ -278,6 +381,14 @@ class FakeGitHub:
                 return subprocess.run(["git", *args], cwd=self.github.bare, capture_output=True, text=True)
 
             def do_PATCH(self) -> None:
+                if m := re.fullmatch(rf"/repos/{self.github.owner}/{self.github.repo}/hooks/(\d+)", self.path):
+                    body = self._body()
+                    with self.github._lock:
+                        for hook in self.github.hooks:
+                            if hook["id"] == int(m[1]):
+                                hook.update(body)
+                                return self._send(200, hook)
+                    return self._send(404, {"message": "Not Found"})
                 prefix = f"/repos/{self.github.owner}/{self.github.repo}/git/refs/heads/"
                 if not self.path.startswith(prefix):
                     return self._send(404, {"message": "Not Found"})
@@ -293,6 +404,45 @@ class FakeGitHub:
                 self._git("update-ref", f"refs/heads/{branch}", body["sha"])
                 self._send(200, {"ref": f"refs/heads/{branch}"})
 
+            def do_PUT(self) -> None:
+                gh, body = self.github, self._body()
+                prefix = f"/repos/{gh.owner}/{gh.repo}"
+                if m := re.fullmatch(rf"{prefix}/pulls/(\d+)/merge", self.path):
+                    pr = gh.pulls[int(m[1])]
+                    if pr.state != "open":
+                        return self._send(405, {"message": "Pull Request is not mergeable"})
+                    if body.get("sha") and body["sha"] != gh.branch_sha(pr.head):
+                        return self._send(409, {"message": "Head branch was modified. Review and try the merge again."})
+                    if pr.conflicting:
+                        return self._send(405, {"message": "Pull Request is not mergeable"})
+                    # The head's commits onto the base, as a merge would.
+                    self._git("update-ref", f"refs/heads/{pr.base}", gh.branch_sha(pr.head))
+                    with gh._lock:
+                        gh.merges.append({"number": pr.number, "method": body.get("merge_method")})
+                        pr.state, pr.merged_at = "closed", _now()
+                    self._send(200, {"merged": True, "sha": gh.branch_sha(pr.head), "message": "Pull Request successfully merged"})
+                    gh.send_webhook("pull_request", {"action": "closed", "pull_request": {"number": pr.number}})
+                    return None
+                if m := re.fullmatch(rf"{prefix}/pulls/(\d+)/update-branch", self.path):
+                    pr = gh.pulls[int(m[1])]
+                    with gh._lock:
+                        gh.updates.append(pr.number)
+                    if pr.conflicting:
+                        return self._send(422, {"message": "merge conflict between base and head"})
+                    if body.get("expected_head_sha") and body["expected_head_sha"] != gh.branch_sha(pr.head):
+                        return self._send(422, {"message": "expected head sha didn't match current head ref"})
+                    # A merge commit of the base into the head, as GitHub makes.
+                    tree = self._git("rev-parse", f"refs/heads/{pr.head}^{{tree}}").stdout.strip()
+                    sha = gh._git_out("commit-tree", tree, "-p", f"refs/heads/{pr.head}", "-p", f"refs/heads/{pr.base}",
+                                      "-m", f"Merge branch '{pr.base}' into {pr.head}",
+                                      env={"GIT_AUTHOR_NAME": "GitHub", "GIT_AUTHOR_EMAIL": "noreply@github.com",
+                                           "GIT_COMMITTER_NAME": "GitHub", "GIT_COMMITTER_EMAIL": "noreply@github.com"})
+                    self._git("update-ref", f"refs/heads/{pr.head}", sha)
+                    self._send(202, {"message": "Updating pull request branch."})
+                    gh.send_webhook("pull_request", {"action": "synchronize", "pull_request": {"number": pr.number}})
+                    return None
+                self._send(404, {"message": "Not Found"})
+
             def do_DELETE(self) -> None:
                 prefix = f"/repos/{self.github.owner}/{self.github.repo}/git/refs/heads/"
                 if not self.path.startswith(prefix) or self._git("update-ref", "-d", f"refs/heads/{self.path[len(prefix):]}").returncode:
@@ -302,6 +452,24 @@ class FakeGitHub:
 
             def do_POST(self) -> None:
                 body = self._body()
+                if self.path == "/graphql":
+                    return self._graphql(body)
+                gh = self.github
+                prefix = f"/repos/{gh.owner}/{gh.repo}"
+                if m := re.fullmatch(rf"{prefix}/check-runs/(\d+)/rerequest", self.path):
+                    # Only the app that owns a check run may re-request it;
+                    # a token may not, as on GitHub.
+                    return self._send(403, {"message": "Invalid OAuth application client_id or secret."})
+                if m := re.fullmatch(rf"{prefix}/actions/jobs/(\d+)/rerun", self.path):
+                    with gh._lock:
+                        gh.jobs_rerun.append(int(m[1]))
+                    return self._send(201, {})
+                if m := re.fullmatch(rf"{prefix}/pulls/(\d+)/requested_reviewers", self.path):
+                    pr = gh.pulls[int(m[1])]
+                    with gh._lock:
+                        gh.review_requests.append((pr.number, list(body.get("reviewers", []))))
+                        pr.requested_reviewers += [r for r in body.get("reviewers", []) if r not in pr.requested_reviewers]
+                    return self._send(201, self._pull_json(pr))
                 if self.path == f"/repos/{self.github.owner}/{self.github.repo}/git/refs":
                     if self._git("update-ref", body["ref"], body["sha"], "").returncode:
                         return self._send(422, {"message": "Reference already exists"})
@@ -326,6 +494,22 @@ class FakeGitHub:
                         self.github.pulls[number] = pr
                     return self._send(201, self._pull_json(pr))
                 self._send(404, {"message": "Not Found"})
+
+            def _graphql(self, body: dict) -> None:
+                """The one query dude sends: a pull request's review threads."""
+                v = body.get("variables") or {}
+                gh = root._for_repo(v.get("name", "")) if v.get("owner") == root.owner else None
+                pr = gh.pulls.get(int(v.get("number") or 0)) if gh else None
+                if pr is None:
+                    return self._send(200, {"data": {"repository": None}, "errors": [
+                        {"type": "NOT_FOUND", "message": "Could not resolve to a Repository"}]})
+                nodes = [{"isResolved": True}] + [{"isResolved": False}] * pr.unresolved_threads
+                self._send(200, {"data": {"repository": {"pullRequest": {"reviewThreads": {
+                    "nodes": nodes, "pageInfo": {"hasNextPage": False, "endCursor": None}}}}}})
+
+            def _checks(self, sha: str, kind: str) -> list[dict]:
+                with self.github._lock:
+                    return [dict(c) for c in self.github.checks.get(sha, {}).values() if c["kind"] == kind]
 
             def do_GET(self) -> None:
                 path, _, query = self.path.partition("?")
@@ -352,15 +536,49 @@ class FakeGitHub:
                     if diff.returncode:
                         return self._send(404, {"message": "Not Found"})
                     files = [{"filename": f} for f in diff.stdout.splitlines() if f]
-                    return self._send(200, {"files": files})
+                    # Commits on the base the head lacks: how far behind it is.
+                    behind = self._git("rev-list", "--count", f"{m[2]}..{m[1]}").stdout.strip()
+                    return self._send(200, {"files": files, "behind_by": int(behind or 0)})
                 if m := re.fullmatch(rf"{prefix}/pulls/(\d+)", path):
                     return self._send(200, self._pull_json(self.github.pulls[int(m[1])]))
-                if re.fullmatch(rf"{prefix}/commits/[^/]+/check-runs", path):
-                    # No GitHub Actions in the fixture either.
-                    return self._send(200, {"total_count": 0, "check_runs": []})
-                if re.fullmatch(rf"{prefix}/commits/[^/]+/status", path):
-                    # No CI in the fixture: GitHub reports zero statuses.
-                    return self._send(200, {"state": "pending", "total_count": 0})
+                if m := re.fullmatch(rf"/orgs/([^/]+)/members/([^/]+)", path):
+                    if m[2] not in root.members:
+                        return self._send(404, {"message": "Not Found"})
+                    self.send_response(204)
+                    return self.end_headers()
+                if m := re.fullmatch(rf"{prefix}/collaborators/([^/]+)/permission", path):
+                    permission = self.github.permissions.get(m[1], "write")
+                    if permission == "none":
+                        return self._send(404, {"message": f"{m[1]} is not a user"})
+                    return self._send(200, {"permission": permission, "role_name": permission})
+                if m := re.fullmatch(rf"{prefix}/commits/([0-9a-f]+)", path):
+                    author = self._git("log", "-1", "--format=%an", m[1])
+                    if author.returncode:
+                        return self._send(404, {"message": "No commit found"})
+                    return self._send(200, {"sha": m[1], "author": None,
+                                            "commit": {"author": {"name": author.stdout.strip()}}})
+                if m := re.fullmatch(rf"{prefix}/commits/([^/]+)/check-runs", path):
+                    runs = [{"id": c["id"], "name": c["name"], "status": c["status"], "conclusion": c["conclusion"],
+                             "html_url": f"https://github.test/{self.github.owner}/{self.github.repo}/runs/{c['id']}",
+                             "started_at": c["started_at"], "completed_at": c["completed_at"], "app": {"slug": "github-actions"}}
+                            for c in self._checks(m[1], "check_run")]
+                    return self._send(200, {"total_count": len(runs), "check_runs": runs})
+                if m := re.fullmatch(rf"{prefix}/commits/([^/]+)/status", path):
+                    statuses = [{"context": c["name"], "state": c["conclusion"] or "pending",
+                                 "target_url": f"https://ci.test/{c['id']}", "created_at": c["started_at"],
+                                 "updated_at": c["completed_at"] or c["started_at"]}
+                                for c in self._checks(m[1], "status")]
+                    # GitHub's combined state: failure over pending over
+                    # success; with no statuses at all, pending and a count of 0.
+                    states = {st["state"] for st in statuses}
+                    combined = next((x for x in ("failure", "error", "pending") if x in states), "success" if states else "pending")
+                    return self._send(200, {"state": combined, "total_count": len(statuses), "statuses": statuses})
+                if m := re.fullmatch(rf"{prefix}/check-runs/(\d+)", path):
+                    return self._send(200, {"id": int(m[1]), "output": {
+                        "title": "1 test failed", "summary": "test_greeting: expected hello, got hi", "text": ""}})
+                if m := re.fullmatch(rf"{prefix}/check-runs/(\d+)/annotations", path):
+                    return self._send(200, [{"path": "greet.py", "start_line": 12, "annotation_level": "failure",
+                                             "message": "expected hello"}])
                 if m := re.fullmatch(rf"{prefix}/pulls/(\d+)/reviews", path):
                     return self._send(200, self.github.pulls[int(m[1])].reviews)
                 if m := re.fullmatch(rf"{prefix}/issues/(\d+)/comments", path):

@@ -85,7 +85,7 @@
   min-width: 0;
   background: var(--ds-color-field-raised);
   border: 1px solid var(--ds-color-border-subtle);
-  border-radius: var(--ds-radius-lg);
+  border-radius: var(--ds-radius-control);
   transition:
     border-color var(--ds-duration-fast) var(--ds-ease-standard),
     box-shadow var(--ds-duration-fast) var(--ds-ease-standard);
@@ -134,9 +134,6 @@
   color: var(--ds-color-text-muted);
   white-space: nowrap;
 }
-.hintSteer {
-  color: var(--ds-color-accent-text);
-}
 .kbd {
   font-family: var(--ds-font-mono);
   font-size: var(--ds-text-2xs);
@@ -144,9 +141,7 @@
   height: 16px;
   display: inline-grid;
   place-items: center;
-  border: 1px solid var(--ds-color-border);
-  border-bottom-width: 2px;
-  border-radius: var(--ds-radius-sm);
+  border-radius: var(--ds-radius-mark);
   background: var(--ds-color-raised);
   color: var(--ds-color-text-secondary);
 }
@@ -162,4 +157,29 @@
   --btn-fg: var(--ds-tone-attention-on-solid);
   --btn-bg-hover: color-mix(in srgb, var(--ds-tone-attention-solid) 88%, black);
   --btn-bg-active: color-mix(in srgb, var(--ds-tone-attention-solid) 78%, black);
+}
+
+/* Who it goes out as, and whether it interrupts: quiet, at the start of the action row. */
+.sentAs {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+}
+.sentAs b {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-primary);
+}
+.interrupt {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.interrupt input {
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--ds-color-accent);
 }

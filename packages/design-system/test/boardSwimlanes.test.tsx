@@ -40,8 +40,8 @@ const cardsIn = (html: string) => [...html.matchAll(/data-board-key="task:([^"]+
 describe("boardSwimlanes: cards in one column only", () => {
   test("the lane keeps all five columns; the one with cards has them, the rest are empty", () => {
     const lane = boardSwimlanes(textkit)[0]!;
-    expect(lane.columns.map((c) => c.kind)).toEqual(["intake", "queued", "running", "review", "closed"]);
-    expect(lane.columns.map((c) => c.cards.length)).toEqual([0, 0, 0, 4, 0]);
+    expect(lane.columns.map((c) => c.kind)).toEqual(["backlog", "running", "review", "ready", "closed"]);
+    expect(lane.columns.map((c) => c.cards.length)).toEqual([0, 0, 4, 0, 0]);
     expect(lane.count).toBe(4);
   });
   test("No epic comes after the empty epic and holds every loose item", () => {

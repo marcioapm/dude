@@ -35,7 +35,7 @@ behind all of these, reached when something looks off.
 
 1. **Calm under load.** Readable is the goal; noise is the enemy. Readable
    means 15px UI body, 16/22px transcript text, 1.5 for long-form Markdown,
-   32px rows, 6px radii, a 40px avatar on every speaker, and air between
+   32px rows, square structure, a 40px avatar on every speaker, and air between
    speakers but not within one — turns are separated by whitespace, not boxes.
    Calm means one accent color, charcoal surfaces told apart by small, even
    shade steps rather than lines, text in close shades rather than white on
@@ -68,6 +68,31 @@ behind all of these, reached when something looks off.
    its motion: thinking drifts, writing blinks, a tool sweeps, a retry counts
    down, needs-you rings. Two states never share a rhythm, so they separate
    in peripheral vision and in grayscale.
+8. **Structure is square; only what you touch or what floats is round.**
+   Panels, board columns, cards, tables, the pipeline and the transcript
+   have no radius. Buttons, fields and menu rows are `control` (6px);
+   dialogs, popovers, menus and toasts are `float` (10px); a kbd, a code span
+   or a checkbox is `mark` (3px). `test/radius.test.ts` fails on anything
+   else.
+9. **Lines are for fields and focus, not for separating things.** Regions
+   and rows are told apart by shade and space. A border is kept only where
+   it is the thing's shape or meaning: a field's edge, a checkbox, a diff's
+   gutter, a bar down one side that carries a tone or a thread.
+   `test/borders.test.ts` lists each one and why, and fails on the rest.
+10. **Every person has a face, and every action a name.** People are
+   circles (a photo, or initials on their identity colour); projects are
+   rounded squares (an image, or initials on theirs); agents are rounder
+   squares that always carry their role's glyph, never letters. When an
+   agent works for a person it sits on that person's avatar. "Human" and
+   "a person" never appear where a name is known.
+11. **Clickable things say so.** Anything that acts on a click shows a
+   pointer (`base.css` sets it for every button, link, tab and
+   `role="button"`), and nothing takes it away. Links navigate; buttons
+   act. Buttons come in four kinds: `primary` (one per view or panel),
+   `secondary` (any other action), `quiet` (row and toolbar actions) and
+   `danger` (red text; `solid` only inside its own confirmation).
+12. **A cost is a total.** Every cost shown is model tokens plus machine
+   time; the number is the sum and its tooltip gives the parts.
 
 ## Styling approach
 
@@ -142,10 +167,11 @@ gallery for every value.
 | Roles | `--ds-role-{orchestrator,…,qa-browser}-{fg,bg,solid,on-solid}` | Categorical identity, fixed order, never used for status. |
 | Identity | `--ds-identity-{0…7}-{fg,bg}` | Eight muted slots for human avatars, picked by hashing the person's id. About half the chroma of a role colour. |
 | Diff | `--ds-diff-{add,del}-{bg,bg-strong,fg}`, `--ds-diff-hunk-{bg,fg}` | Softer than the tones; read for minutes. |
+| Merged | `--ds-merged-{fg,bg}` | GitHub's violet, for a merged pull request and nothing else. Not a tone. |
 | Elevation | `--ds-shadow-1/2/3` | Includes the hairline ring. Theme-dependent. |
 | Type | `--ds-font-sans/mono`, `--ds-text-2xs…4xl`, `--ds-text-nav`, `--ds-text-prose`, `--ds-text-mono`, `--ds-weight-*`, `--ds-leading-*`, `--ds-tracking-*` | UI body `text-md` 15px (14 compact); `sm`/`xs` 13/12 and `nav` 14 in both densities; prose 16px (15 compact). Transcript text runs at `leading-chat` 1.375 (22px at 16px); documents and multi-block Markdown at `leading-prose` 1.5; headings at `leading-tight` 1.3. `2xs` 11px for small-caps labels only; `mono` 13px. Headings `lg…4xl` are 16/20/22/26/34. |
 | Space | `--ds-space-0…64`, `--ds-space-{main-pad,card-pad,chat-pad-x,chat-gap,chat-avatar-gap,panel-gap,tree-indent,nav-row-gap}` | 4px grid plus 2 and 6. The named spaces are layout: main pane 24, board card 12, chat turn 16 across and 17 between speakers, avatar gap 16 (so transcript text starts at 16 + 40 + 16 = 72px), panel gap 24, tree indent 16, 2 between sidebar rows. |
-| Radius | `--ds-radius-xs…xl, full` | `md` = 6px is the default (5 compact); `lg` 8 for cards and panels, `xl` 12 for dialogs. |
+| Radius | `--ds-radius-{none,mark,control,float,full}`, `--ds-radius-face-{agent,project}` | Roles, not sizes: structure `none`, inline marks `mark` 3, controls `control` 6 (5 compact), floats `float` 10, people and dots `full`. Agent and project faces take a share of their size (28%, 22%). |
 | Size | `--ds-size-control-sm/md/lg`, `--ds-size-row-compact/default/comfortable`, `--ds-size-avatar-{xs,sm,md,lg,chat}`, `--ds-size-badge-{sm,md}`, `--ds-size-chip`, `--ds-size-icon-*` | Controls 28/32/36, rows 28/32/40. Avatars 16/20/24/32 and 40 for the transcript's own. Badges 16/18, chips 22, in both densities. |
 | Motion | `--ds-duration-fast/base/slow/deliberate`, `--ds-ease-*`, `--ds-motion-live`, `--ds-cadence-{spin,breathe,drift,sweep,blink}` | Reduced motion zeroes durations and sets `motion-live` to 0. Cadences are the periods of the live loops; every loop divides by `motion-live`. |
 | Measure | `--ds-measure-message`, `--ds-measure-document` | Chat turns 70ch (72ch compact); documents 700px in both. |
@@ -288,14 +314,15 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 ### Human intervention
 
 - The two ways a person acts on a session are distinct on four channels in
-  `ChatComposer`: focus tint, hint text, button label, button icon.
+  `ChatComposer`: focus tint, context line, button label, button colour.
   **Answer** (session blocked on a question) has an attention-filled button —
-  the same hue as needs-you, so the answer visibly closes it — and plain
-  Enter submits because the agent is waiting. Its context line ("Answering
+  the same hue as needs-you, so the answer visibly closes it. Its context line ("Answering
   Orchestrator: …") and the offered choices are neutral at rest; a choice
-  chip takes the attention tint only on hover. **Steer** (session running) is accent-toned,
-  says plainly that it interrupts the current turn, and requires ⌘/Ctrl+Enter
-  because an accidental interrupt costs a turn.
+  chip takes the attention tint only on hover. **Steer** (session running) is
+  accent-toned. A steer waits for the agent's turn to end, so sending one
+  costs nothing and plain Enter sends it; **interrupt now** — the costly
+  one, which stops the turn — is a checkbox, never a key. Shift+Enter is a
+  new line in both. The action row says who it is sent as (`sentAs`).
 - The question itself is a turn: `QuestionCard`. While it waits it is the
   one loud turn a transcript is allowed, and it is loud once: the attention
   wash and 2px bar. Inside it the ink is neutral — the transcript header's
@@ -345,11 +372,6 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - A task's bucket is the most urgent of its own status and the sessions
   of its current run (`taskTriage`). A `running` task whose reviewer
   is `awaiting_input` needs you, whatever the macro state says.
-- `TriageRollup` is the one way a collapsed parent says what is inside it:
-  a `StatusBadge` dot per non-empty counted bucket, most urgent first. It
-  reuses the dot shapes (diamond = needs you, round = active, square =
-  failed), so the roll-up never invents a second mark. The needs-you count
-  is semibold; its hue is on the diamond beside it.
 - **Amber once per region.** In the sidebar the pinned needs-you block (tint
   and bar) is the one amber area; the filter chip, the tree row's pill, the
   asking session's activity and the roll-up counts are neutral ink, and the
@@ -399,7 +421,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   Failed sits in Closed with its danger mark; aborted stays neutral.
 - A card is three lines and nothing more: status dot, mono key, epic (project
   boards only) and time in lane; the title, clamped to two lines; who and
-  what it cost. Running cards show the working roles (`RoleStack`) and the
+  what it cost. Running cards show the working roles and the
   deepest live activity. Needs-you cards show the asker and the question in
   attention ink and take the attention wash and bar. Nothing else on the
   surface is coloured.
@@ -475,7 +497,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   here fetches.
 
 
-- `HumanAvatar` is for an identified person; `AgentAvatar role="human"` is
+- `PersonAvatar` is for an identified person; `AgentAvatar role="human"` is
   the anonymous human *actor* glyph in event rows. Do not use one for the
   other.
 - Humans and agents differ on three channels at once: a human is a full
@@ -484,10 +506,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   take a vivid role colour. Nothing about a person is ever a role colour or
   a tone.
 - Identity colour is `identitySlot(person)` — a hash of the id, so the same
-  person is the same colour on every screen with no profile record. Profile
-  images are not in the product yet; `imageUrl` replaces the initials when
-  they arrive and nothing else changes.
-- `HumanAvatarStack` overlaps by a quarter and puts the *first* person on
+  person is the same colour on every screen with no profile record. A
+  `photoUrl` replaces the initials and nothing else changes.
+- `PersonAvatarStack` overlaps by a quarter and puts the *first* person on
   top: order the list by relevance (the one it waits on, then the
   requester). Past `max`, a "+N" chip in the same shape stands for the rest
   with the full list in the title.
@@ -509,13 +530,13 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   document. `variant="document"` is for published artifacts: 1em between
   blocks, 2.5em above headings, h1/h2/h3 at 1.618/1.462/1.318em, a 700px
   measure and an optional outline.
-- Inline code: 0.85em mono on the sunken fill, 4px radius, a subtle inset
-  ring. Code blocks: a sunken well, 8px radius, 12×16 padding, no frame; the
+- Inline code: 0.85em mono on the sunken fill, `mark` radius, a subtle inset
+  ring. Code blocks: a square sunken well, 12×16 padding, no frame; the
   language and copy control appear on hover; long lines scroll sideways
   under a thin scrollbar and a shadow on the clipped edge, never wrap or
   clip. Blockquotes: a 2px muted bar and secondary ink. Lists: 1.5em
-  hanging indent. Tables: a 1px `border` rule under the header, fainter
-  hairlines between body rows, no vertical rules, no header fill.
+  hanging indent. Tables: no rules; a muted small header and air between
+  rows.
 - Code blocks share their type with `LogStream`; a ```` ```diff ```` fence hands
   off to `DiffView`, so diff colouring exists in one place.
 
@@ -553,13 +574,13 @@ shrinking something already small makes it cramped, not dense:
 | sidebar row gap / project gap (`space-nav-row-gap`, `-nav-section-gap`) | 2 / 12 | 1 / 6 | |
 | controls (`size-control-md` / `-lg`) | 32 / 36 | 30 / 34 | a couple of px |
 | body, prose (`text-md`, `text-prose`) | 15 / 16 | 14 / 15 | 1px |
-| default radius (`radius-md`) | 6 | 5 | 1px |
+| control radius (`radius-control`) | 6 | 5 | 1px |
 | chat measure (`measure-message`) | 70ch | 72ch | `ch` follows the font, so two more characters a line |
 
 Everything else is shared: icons, `control-sm` and `row-compact` (28, the
 floor), `text-2xs`/`xs`/`sm`/`nav` (11/12/13/14) and `text-mono` (13), badge
 and chip heights and padding, the document measure, the
-2–6px inner gaps, the tree indent, card and dialog radii, focus rings.
+2–6px inner gaps, the tree indent, the mark and float radii, focus rings.
 `src/tokens/density.ts` is the list; `test/density.test.ts` holds it to
 the rule — compact is never roomier, text and radius move at most 1px,
 small tokens are not listed, the big spacing moves at least 4px and the
@@ -572,8 +593,9 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 - Rows 32px by default. Use `row-compact` (28px) for logs, event streams and
   anything the operator scans rather than reads. Use `row-comfortable` (40px)
   only for rows with two lines of content.
-- One `primary` button per view. Most actions are `secondary` or `ghost`.
-- Cards do not nest. Divide with `CardHeader`/`CardFooter` borders instead.
+- One `primary` button per view. Most actions are `secondary` or `quiet`.
+- Cards do not nest. A card's header and footer are told from its body by
+  shade (`chrome`), not a rule.
 - Empty states are one line of text and a hint, never an illustration.
 - Whitespace is a signal, not a default: a section gets `space-24` above it
   because it *is* a new section, not to look airy.
@@ -592,10 +614,11 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
   corners on the bar side square so the bar runs straight. A steer (accent), a waiting question and the
   sidebar's needs-you block (attention), a failed tool call (danger) use
   it. Nothing else gets a coloured edge.
-- A line is kept where it means something: focus, the composer's outline
-  (the one raised field), inline code, the divider under a date or
-  session-start label, diff and table row rules, a lane rule on the board.
-  Kept lines are `border-subtle`.
+- A line is kept only where it is the thing's shape or meaning: a field's
+  edge (the composer's is the one raised field), focus, a checkbox, a
+  diff's gutter, a document's own `---` rule, a selected tab's underline.
+  Table rows, dates, lanes and headers are separated by space and shade.
+  `test/borders.test.ts` is the list.
 - Badges, chips and pills centre their label on cap height: the label
   carries `ds-cap` (`text-box: trim-both cap alphabetic`), so capitals and
   digits sit in the optical middle instead of 1–1.5px low.
@@ -651,7 +674,9 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | `<CostDisplay usd={run.costUsd} budgetUsd={run.budgetUsd} />` | `${run.costUsd.toFixed(2)}` |
 | `<Td align="right" mono><Duration ms={ms} /></Td>` | `<Td>{ms / 1000}s</Td>` |
 | `<AgentAvatar role="reviewer" name="reviewer-2" />` | a coloured circle with an initial |
-| `variant="destructive"` behind a `Dialog tone="danger"` | a red button that acts immediately |
+| `variant="danger"` that opens a `Dialog tone="danger"` whose confirm is `variant="danger" solid` | a red button that acts immediately |
+| square panels and cards told apart by shade | a rounded card with a hairline inside a rounded panel |
+| `cursor: pointer` on everything that acts | a clickable row with the arrow cursor |
 | Event stripe only for `success` / `attention` / `danger` | a stripe on every row |
 | `EmptyState title="Nothing needs you"` | an SVG of a mailbox |
 | `<ActivityIndicator kind="retrying" attempt={2} retryAt={t} />` | a spinner with "retrying…" |
@@ -664,8 +689,7 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | `<ChatComposer question={q} />` for a blocking question | one generic text box for everything |
 | `<QuestionCard role="implementer" text={q} options={opts} askedAt={t} />` until `answeredAt` lands | the question only in the composer, gone from the history once answered |
 | `<Markdown source={text} streaming />` while tokens arrive | re-parsing strictly on every token |
-| `<TriageRollup counts={projectCounts(p)} />` on a collapsed project | "12 items" |
-| `<HumanAvatarStack people={[waitingOn, requester]} />` | a row of role-coloured circles with letters |
+| `<PersonAvatarStack people={[waitingOn, requester]} />` | a row of role-coloured circles with letters |
 | `<Sidebar projects={nav} selected={ref} />` and let defaults open the blocked item | expanding three levels to find "Needs you" |
 | `<Board project={p} epic={e} selected={ref} />` with needs-you sorted first | eleven columns, or a draggable card for a transition the workflow owns |
 | `<RowMenu items={[…, { id: "delete", tone: "danger", disabled, disabledReason }]} />` | a row of icon buttons, or a greyed item that does not say why |
@@ -748,19 +772,12 @@ EmptyState, ScrollArea.
 - **Sidebar** — header, search (`/`), four triage chips with global counts,
   the pinned Needs-you list across every project, the tree, a footer.
   Loading (skeleton rows), empty, and no-match states. Search and filter are
-  controlled or uncontrolled. `AttentionList` is exported on its own.
+  controlled or uncontrolled.
 - **NavTree** — Project → Epic → Task → Session, flat with `aria-level`,
   full keyboard navigation, per-row open/closed overrides (controlled via
   `expanded` / `onExpandedChange` so the app can persist them), triage-derived
   defaults, and a filter that forces ancestors open. Earlier runs fold into
   "Attempt n" rows.
-- **TriageRollup** — the counted buckets of a subtree as `StatusBadge` dots
-  with counts, most urgent first.
-- **HumanAvatar / HumanAvatarStack** — a person by initials and a hashed
-  identity colour; stacks overflow to "+N". `identitySlot` and `initialsOf`
-  are exported.
-- **RoleStack** — the roles working on something right now, as xs agent
-  avatars side by side (never overlapped: each must stay readable).
 - The view model is pure and exported from `src/util/navModel.ts`:
   `flattenNav`, `attentionItems`, `globalCounts`, `projectCounts`,
   `taskTriage`, `workingRoles`, `ancestorKeys`. The app maps domain

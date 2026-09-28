@@ -58,8 +58,7 @@
 .badge {
   height: 18px;
   padding: 0 var(--ds-space-6) 0 5px;
-  border-radius: var(--ds-radius-sm);
-  border: 1px solid var(--ai-border);
+  border-radius: var(--ds-radius-control);
   background: var(--ai-bg);
   color: var(--ai-fg);
   font-size: var(--ds-text-xs);
@@ -101,9 +100,8 @@
   font-family: var(--ds-font-mono);
   font-size: var(--ds-text-xs);
   padding: 0 4px;
-  border-radius: var(--ds-radius-xs);
+  border-radius: var(--ds-radius-mark);
   background: var(--ds-color-sunken);
-  border: 1px solid var(--ds-color-border-subtle);
   color: var(--ds-color-text-primary);
 }
 .attempt {
@@ -145,7 +143,7 @@
   display: block;
   width: 6px;
   height: 12px;
-  border-radius: 1px;
+  border-radius: var(--ds-radius-mark);
   background: var(--ai-fg);
   animation: global(ds-blink) calc(var(--ds-cadence-blink) / max(var(--ds-motion-live), 0.0001)) steps(2, jump-none) infinite;
 }
@@ -157,7 +155,7 @@
   right: 0;
   bottom: 0;
   height: 2px;
-  border-radius: 1px;
+  border-radius: var(--ds-radius-mark);
   background: var(--ai-bg);
   overflow: hidden;
 }
@@ -167,7 +165,7 @@
   top: 0;
   bottom: 0;
   width: 28%;
-  border-radius: 1px;
+  border-radius: var(--ds-radius-mark);
   background: var(--ai-solid);
   animation: global(ds-sweep) calc(var(--ds-cadence-sweep) / max(var(--ds-motion-live), 0.0001)) var(--ds-ease-standard) infinite;
 }

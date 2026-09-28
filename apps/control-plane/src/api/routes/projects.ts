@@ -7,11 +7,15 @@
 
 import { z } from "zod";
 import { agentModelsSchema, deliveryPolicySchema, newId, EventTypes } from "@dude/domain";
-import { withOrg } from "../../db/client.ts";
+import { withOrg, withoutTenant } from "../../db/client.ts";
+import { requireOrgAdmin, requireProjectEditor } from "../access.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { conflict, json, notFound, parseBody } from "../http.ts";
-import type { RequestContext, Router } from "../router.ts";
+import type { PublicContext, RequestContext, Router } from "../router.ts";
+import { replaceImage, serveImage } from "../faces.ts";
+import { deleteObject } from "../../storage.ts";
 import { repositoryFields } from "./structure.ts";
+import { registerRepositoryWebhook } from "./pullRequests.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
 
 const slugPattern = /^[a-z0-9][a-z0-9-]*$/;
@@ -47,12 +51,17 @@ interface ProjectRow {
   runtimeImage: string | null;
   deliveryPolicy: Record<string, unknown>;
   createdAt: string;
+  imageUrl: string | null;
 }
+
+/** A project's image as its URL (served under its token), for the `projects` row in scope. */
+export const PROJECT_IMAGE_URL = `CASE WHEN image_key IS NOT NULL THEN '/v1/projects/' || id || '/image?t=' || image_token END`;
 
 const PROJECT_SELECT = `
   id, organization_id AS "organizationId", name, slug, description,
   agent_models AS "agentModels", runtime_image AS "runtimeImage",
-  delivery_policy AS "deliveryPolicy", created_at AS "createdAt"`;
+  delivery_policy AS "deliveryPolicy", created_at AS "createdAt",
+  ${PROJECT_IMAGE_URL} AS "imageUrl"`;
 
 /** The start of a project's task keys (TK-12): the slug's first letters. */
 export function keyPrefix(slug: string): string {
@@ -100,6 +109,7 @@ async function createProject(ctx: RequestContext): Promise<Response> {
   });
 
   if ("conflict" in result) throw conflict(`a project with slug "${input.slug}" already exists`);
+  for (const repo of result.project.repositories) await registerRepositoryWebhook(ctx, repo.id as string);
   return json(result.project, 201);
 }
 
@@ -160,10 +170,81 @@ async function deliveryDefaults(ctx: RequestContext): Promise<Response> {
   return orchestrator(ctx.principal.organizationId, "GET", "/internal/delivery-defaults", undefined);
 }
 
+/** Set a project's image (key and token) or clear it (null); returns the project and the key it had. */
+async function recordProjectImage(ctx: RequestContext, projectId: string, image: { key: string; token: string } | null) {
+  const { organizationId } = ctx.principal;
+  return withOrg(organizationId, async (scope) => {
+    const [before] = (await scope.sql`
+      SELECT image_key AS key FROM projects WHERE id = ${projectId} FOR UPDATE`) as Array<{ key: string | null }>;
+    if (!before) throw notFound(`project ${projectId} not found`);
+    const [project] = (await scope.sql`
+      UPDATE projects SET image_key = ${image?.key ?? null}, image_token = ${image?.token ?? null}, updated_at = now()
+      WHERE id = ${projectId}
+      RETURNING ${scope.sql.unsafe(PROJECT_SELECT)}`) as ProjectRow[];
+    await appendInScope(scope, {
+      eventType: EventTypes.ProjectUpdated,
+      organizationId,
+      projectId,
+      actor: { type: "human", id: ctx.principal.apiKeyId },
+      source: "control-plane",
+      payload: { changed: ["image"] },
+    });
+    return { result: project!, old: before.key };
+  });
+}
+
+/** A project in the caller's organization, by id, or 404: its id is then safe to name storage by. */
+async function existingProject(ctx: RequestContext): Promise<string> {
+  const projectId = ctx.params.id!;
+  const rows = await withOrg(ctx.principal.organizationId, (scope) => scope.sql`
+    SELECT id FROM projects WHERE id = ${projectId}`) as Array<{ id: string }>;
+  if (!rows[0]) throw notFound(`project ${projectId} not found`);
+  return rows[0].id;
+}
+
+/** Replace a project's image with the one in the body (see api/faces.ts). */
+async function uploadProjectImage(ctx: RequestContext): Promise<Response> {
+  const projectId = await existingProject(ctx);
+  await requireProjectEditor(ctx, projectId);
+  return json(await replaceImage(ctx.request, `${ctx.principal.organizationId}/projects/${projectId}`,
+    (image) => recordProjectImage(ctx, projectId, image)));
+}
+
+/** A project's initials again: its image, and the object, go. */
+async function removeProjectImage(ctx: RequestContext): Promise<Response> {
+  const projectId = await existingProject(ctx);
+  await requireProjectEditor(ctx, projectId);
+  const { result, old } = await recordProjectImage(ctx, projectId, null);
+  if (old) await deleteObject(old);
+  return json(result);
+}
+
+/** A project's image for an `<img>`: it sends no key, so the URL carries a token. */
+async function getProjectImage(ctx: PublicContext): Promise<Response> {
+  const token = ctx.url.searchParams.get("t") ?? "";
+  const rows = await withoutTenant(async ({ sql }) =>
+    (await sql`SELECT project_image(${ctx.params.id!}, ${token}) AS key`) as Array<{ key: string | null }>);
+  return serveImage(rows[0]?.key);
+}
+
 export function registerProjectRoutes(router: Router): void {
   router.get("/v1/delivery-defaults", deliveryDefaults);
-  router.post("/v1/projects", createProject);
+  // A project brings its own models, image, delivery policy and trusted
+  // repositories: making one is changing them, so it is an admin's too.
+  router.post("/v1/projects", async (ctx) => {
+    await requireOrgAdmin(ctx);
+    return createProject(ctx);
+  });
   router.get("/v1/projects", listProjects);
   router.get("/v1/projects/:id", getProject);
-  router.patch("/v1/projects/:id", updateProject);
+  // A project's name, runtime image, models and delivery policy: the same
+  // settings its settings route guards, so the same people may change them.
+  router.patch("/v1/projects/:id", async (ctx) => {
+    await requireProjectEditor(ctx, ctx.params.id!);
+    return updateProject(ctx);
+  });
+  // Its face: an image, uploaded as the body, or initials again.
+  router.put("/v1/projects/:id/image", uploadProjectImage);
+  router.delete("/v1/projects/:id/image", removeProjectImage);
+  router.publicRoute("GET", "/v1/projects/:id/image", getProjectImage);
 }

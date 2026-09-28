@@ -35,12 +35,11 @@
   text-transform: uppercase;
   color: var(--ds-color-text-muted);
   background: var(--ds-color-surface);
-  border-bottom: 1px solid var(--ds-color-border);
   white-space: nowrap;
   user-select: none;
 }
 .thSortable {
-  cursor: default;
+  cursor: pointer;
 }
 .thSortable:hover {
   color: var(--ds-color-text-secondary);
@@ -72,7 +71,6 @@
   height: var(--row-h);
   padding: 0 var(--ds-space-8);
   vertical-align: middle;
-  border-bottom: 1px solid var(--ds-color-border-subtle);
   color: var(--ds-color-text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -108,7 +106,7 @@
   background: var(--ds-color-hover-wash);
 }
 .trInteractive {
-  cursor: default;
+  cursor: pointer;
 }
 .trSelected > .td {
   background: var(--ds-color-accent-subtle);

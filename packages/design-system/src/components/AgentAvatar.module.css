@@ -11,7 +11,7 @@
   width: var(--av-size);
   height: var(--av-size);
   flex-shrink: 0;
-  border-radius: var(--ds-radius-md);
+  border-radius: var(--ds-radius-face-agent);
   color: var(--role-fg);
   background: var(--role-bg);
   font-size: calc(var(--av-size) * 0.5);
@@ -27,7 +27,7 @@
 
 .xs {
   --av-size: var(--ds-size-avatar-xs);
-  border-radius: var(--ds-radius-sm);
+  border-radius: var(--ds-radius-face-agent);
 }
 .sm {
   --av-size: var(--ds-size-avatar-sm);
@@ -37,13 +37,13 @@
 }
 .lg {
   --av-size: var(--ds-size-avatar-lg);
-  border-radius: var(--ds-radius-lg);
+  border-radius: var(--ds-radius-face-agent);
 }
 /* The transcript's own avatar: density-sensitive (see `tokens/density.ts`),
    larger than the shared `lg` because it anchors a whole turn, not a row. */
 .chat {
   --av-size: var(--ds-size-avatar-chat);
-  border-radius: var(--ds-radius-lg);
+  border-radius: var(--ds-radius-face-agent);
 }
 
 /* Roles. Shape channel: each role has its own glyph; the orchestrator is

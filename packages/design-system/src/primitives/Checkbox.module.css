@@ -2,10 +2,11 @@
   display: inline-flex;
   align-items: flex-start;
   gap: var(--ds-space-8);
-  cursor: default;
+  cursor: pointer;
   min-width: 0;
 }
-.root[data-disabled="true"] {
+.root[data-disabled="true"],
+.root:has(button:disabled) {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -20,7 +21,7 @@
   padding: 0;
   background: var(--ds-color-field-bg);
   border: 1px solid var(--ds-color-border-strong);
-  border-radius: var(--ds-radius-sm);
+  border-radius: var(--ds-radius-mark);
   color: var(--ds-color-on-accent);
   transition:
     background-color var(--ds-duration-fast) var(--ds-ease-standard),

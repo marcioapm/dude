@@ -35,7 +35,7 @@ const densityPairs = {
   "text-md": shrink(fontSize.md, 1),
   "text-prose": shrink(fontSize.prose, 1),
 
-  "radius-md": shrink(radius.md, 1),
+  "radius-control": shrink(radius.control, 1),
 
   "size-control-md": shrink(size.controlMd, 2),
   "size-control-lg": shrink(size.controlLg, 2),
