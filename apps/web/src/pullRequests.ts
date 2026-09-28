@@ -17,6 +17,8 @@ export function reviewWords(state: string): string {
   switch (state.toUpperCase()) {
     case "APPROVED":
       return "approved";
+    case "COMMENTED":
+      return "commented";
     case "CHANGES_REQUESTED":
       return "requested changes";
     case "REQUESTED":
@@ -24,7 +26,7 @@ export function reviewWords(state: string): string {
     case "DISMISSED":
       return "review dismissed";
     default:
-      return "commented";
+      return state.toLowerCase().replaceAll("_", " ");
   }
 }
 
@@ -76,7 +78,10 @@ export function pullRequestActivity(e: PersistedEvent, named: boolean): PullRequ
     }
     case "pull_request.reviewed": {
       const reviews = Array.isArray(p.reviews) ? (p.reviews as Array<{ login: string; state: string }>) : [];
-      if (reviews.length === 1) return person(reviews[0]!.login, `${reviews[0]!.login} ${reviewWords(reviews[0]!.state)} ${pr}`);
+      if (reviews.length === 1) {
+        const [r] = reviews as [{ login: string; state: string }];
+        return person(r.login, `${r.login} ${reviewWords(r.state)}${r.state === "APPROVED" ? "" : " on"} ${pr}`);
+      }
       if (reviews.length > 1) return system(reviews.map((r) => `${r.login} ${reviewWords(r.state)}`).join(", ") + ` on ${pr}`);
       return system(`The review on ${pr} is now ${str(p.to).replace("_", " ")}`);
     }
