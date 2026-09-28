@@ -70,6 +70,17 @@ export interface TaskScreenProps {
   onBack: () => void;
 }
 
+/** An agent at work: many a second, and none of them this page's to re-read for. */
+const QUIET: ReadonlySet<string> = new Set([
+  EventTypes.ToolCalled,
+  EventTypes.ToolCompleted,
+  EventTypes.ModelRequestStarted,
+  EventTypes.ModelRequestCompleted,
+  EventTypes.AgentMessage,
+  EventTypes.AgentThought,
+  EventTypes.RunDiffUpdated,
+]);
+
 /** A run's plan, as its latest `agent.plan.updated` left it: for the running step's line. */
 type Plans = ReadonlyMap<string, { done: number; total: number; current: string | null }>;
 
@@ -79,9 +90,13 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, bread
   useEffect(() => {
     if (runId) setTab("sessions");
   }, [runId]);
-  // With none asked for, the session shown is picked once and kept: a phase
-  // ending and the next starting must not swap it under someone reading.
+  // The session shown when none is asked for: the last one open, else one
+  // picked the first time Sessions shows (what is running, else the newest)
+  // and kept — a phase ending must not swap it under someone reading.
   const [picked, setPicked] = useState<string | null>(null);
+  useEffect(() => {
+    if (runId) setPicked(runId);
+  }, [runId]);
   const [item, setItem] = useState<TaskDetail | null>(null);
   const [missing, setMissing] = useState(false);
   const [findings, setFindings] = useState<Finding[]>([]);
@@ -142,7 +157,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, bread
     void load();
   }, [load]);
 
-  useReloadOnEvents({ client, taskId }, () => void load());
+  // What an agent says and does as it works changes nothing on this page
+  // but the open session, which has its own stream: no re-read for those.
+  useReloadOnEvents({ client, taskId }, () => void load(), undefined, (e) => QUIET.has(e.eventType));
 
   const deliver = async () => {
     setDelivering(true);
@@ -200,7 +217,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, bread
   const openRun = (runId && sessions.some((r) => r.id === runId) ? runId : undefined)
     ?? (picked && sessions.some((r) => r.id === picked) ? picked : undefined)
     ?? sessions.find((r) => r.status === "running")?.id ?? sessions[0]?.id;
-  if (!runId && openRun && openRun !== picked) setPicked(openRun);
+  if (tab === "sessions" && openRun && openRun !== picked) setPicked(openRun);
 
   return (
     // On Sessions the page holds still and the session scrolls inside it.
@@ -366,7 +383,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, bread
                 ))}
               </SessionList>
               {openRun && tab === "sessions" ? (
-                <RunScreen key={openRun} embedded client={client} runId={openRun} onBack={onBack} />
+                <RunScreen key={openRun} client={client} runId={openRun} onBack={onBack} task={{ owner: item.owner, key: item.key }} />
               ) : null}
             </div>
           ) : (

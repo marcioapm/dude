@@ -53,8 +53,11 @@ export interface RunScreenProps {
   onOpenTask?: ((taskId: string) => void) | undefined;
   /** Leave for somewhere that exists, when this Run does not. */
   onBack: () => void;
-  /** On its task's page: the task's key and title are already above it. */
-  embedded?: boolean;
+  /**
+   * On its task's page, which already has the task: its owner and key,
+   * so they are not read again, and the key is not repeated.
+   */
+  task?: { owner: Person | null; key?: string | undefined } | undefined;
 }
 
 /**
@@ -73,7 +76,8 @@ const STATUS_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.RunResumed,
 ]);
 
-export function RunScreen({ client, runId, onOpenTask, onBack, embedded }: RunScreenProps) {
+export function RunScreen({ client, runId, onOpenTask, onBack, task: given }: RunScreenProps) {
+  const embedded = given !== undefined;
   const [view, setView] = useState("chat");
   // A file picked in the rail, for Changes to show alone — once: leaving
   // Changes forgets it, so coming back finds it as the person left it.
@@ -87,7 +91,8 @@ export function RunScreen({ client, runId, onOpenTask, onBack, embedded }: RunSc
   // Who drives the task: only its owner answers its agents, so anyone else
   // sees the asks read-only, with whom they wait on. And the task's key
   // (TEXT-14), which people know it by, for the header.
-  const [task, setTask] = useState<{ owner: Person | null; key?: string | undefined } | null>(null);
+  const [read, setTask] = useState<{ owner: Person | null; key?: string | undefined } | null>(null);
+  const task = given ?? read;
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   // Someone else acted first: said calmly, and gone once the Run catches up.
@@ -126,7 +131,7 @@ export function RunScreen({ client, runId, onOpenTask, onBack, embedded }: RunSc
   // Who drives the task is read once per task, not on every status change,
   // and apart from the Run: failing to learn it only leaves the asks
   // answerable here, which the orchestrator still checks.
-  const taskId = run?.taskId;
+  const taskId = embedded ? undefined : run?.taskId;
   useEffect(() => {
     if (!taskId) return;
     let cancelled = false;
@@ -163,18 +168,20 @@ export function RunScreen({ client, runId, onOpenTask, onBack, embedded }: RunSc
     () => events.findLast((e) => e.eventType === EventTypes.RunDiffUpdated)?.payload as RunDiffSummary | undefined,
     [events],
   );
-  // Which tools it called, and how often: for the rail. Counted forward
-  // from the last event seen, as the projection is, not from the start.
-  const toolCounts = useRef({ runId, seen: 0, counts: new Map<string, number>() });
+  // Which tools it called, and how often: for the rail. Counted forward by
+  // cursor, as the projection is: the stream keeps only its newest events,
+  // so neither a recount nor a position in the list would do.
+  const toolCounts = useRef({ runId, cursor: 0, counts: new Map<string, number>() });
   const tools = useMemo(() => {
     let t = toolCounts.current;
-    if (t.runId !== runId || events.length < t.seen) t = toolCounts.current = { runId, seen: 0, counts: new Map() };
-    for (const e of events.slice(t.seen)) {
+    if (t.runId !== runId) t = toolCounts.current = { runId, cursor: 0, counts: new Map() };
+    for (const e of events) {
+      if (e.cursor <= t.cursor) continue;
+      t.cursor = e.cursor;
       if (e.eventType !== EventTypes.ToolCalled || typeof e.payload.tool !== "string") continue;
       const name = e.payload.tool.charAt(0).toUpperCase() + e.payload.tool.slice(1);
       t.counts.set(name, (t.counts.get(name) ?? 0) + 1);
     }
-    t.seen = events.length;
     return [...t.counts].map(([name, count]) => ({ name, count }));
   }, [events, runId]);
 
@@ -249,7 +256,6 @@ export function RunScreen({ client, runId, onOpenTask, onBack, embedded }: RunSc
   // The agent this Run is. A phase Run carries its role; one created
   // directly through the API runs as an orchestrator.
   const role: AgentRole = run.role ?? DEFAULT_RUN_ROLE;
-  const phase = run.phase ? runLabel(run) : null;
 
   const session = {
     id: run.id,
@@ -260,13 +266,13 @@ export function RunScreen({ client, runId, onOpenTask, onBack, embedded }: RunSc
       <>
         {owner ? <span>for {firstName(owner.name)}</span> : <span>{runLabel(run)}</span>}
         {run.model ? <code>{run.model}</code> : null}
-        {taskKey ? <code title={`task ${run.taskId} · run ${run.id}`}>{taskKey}</code> : null}
+        {taskKey && !embedded ? <code title={`task ${run.taskId} · run ${run.id}`}>{taskKey}</code> : null}
       </>
     ),
     // The id is already shown beside the title; repeating it as the title
     // leaves the header saying nothing about the work. The attempt only
     // once there is more than one to tell apart.
-    title: [phase ?? runLabel(run), run.attempt > 1 ? `attempt ${run.attempt}` : null].filter(Boolean).join(" · "),
+    title: [runLabel(run), run.attempt > 1 ? `attempt ${run.attempt}` : null].filter(Boolean).join(" · "),
     taskId: run.taskId,
     ...(taskKey && !embedded ? { taskKey } : {}),
     startedAt: run.startedAt ?? run.createdAt,

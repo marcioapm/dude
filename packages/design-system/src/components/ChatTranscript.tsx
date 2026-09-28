@@ -181,18 +181,13 @@ export function ChatTranscript({
 export interface SessionHeaderProps {
   readonly session: ChatTranscriptSession;
   readonly actions?: ReactNode;
-  /**
-   * Cost, tokens and elapsed on the right. Off where a rail beside the
-   * conversation already lists them (a session on its task's page).
-   */
-  readonly stats?: boolean | undefined;
 }
 
 /**
  * Whose agent this is and what it is doing: the transcript's own header,
  * and — above a session's Conversation / Changes tabs — the header both share.
  */
-export function SessionHeader({ session, actions, stats = true }: SessionHeaderProps) {
+export function SessionHeader({ session, actions }: SessionHeaderProps) {
   // `live` and `needsHuman` are properties of the status itself, so the
   // header asks the spec rather than re-listing which statuses count.
   const spec = statusSpec(session.status);
@@ -230,7 +225,7 @@ export function SessionHeader({ session, actions, stats = true }: SessionHeaderP
           )}
         </div>
       </div>
-      {stats ? <div className={styles["headerStats"]}>
+      <div className={styles["headerStats"]}>
         {session.costUsd !== undefined ? (
           <span className={styles["stat"]}>
             <span className={styles["statLabel"]}>Cost</span>
@@ -253,7 +248,7 @@ export function SessionHeader({ session, actions, stats = true }: SessionHeaderP
             <Duration since={session.startedAt} until={session.endedAt} live={spec.live} />
           </span>
         ) : null}
-      </div> : null}
+      </div>
       {actions !== undefined ? <div className={styles["headerActions"]}>{actions}</div> : null}
     </header>
   );

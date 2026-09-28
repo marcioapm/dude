@@ -187,20 +187,29 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   // A session opens on its task's page. The tree names the task for the
   // sessions it holds; one it does not (an attempt older than the tree
   // keeps) is read once to learn its task.
+  // Only an answer is kept (null: no such Run); a failed read is tried
+  // again the next time the session is opened.
   const [runTasks, setRunTasks] = useState<ReadonlyMap<string, string | null>>(new Map());
   const sessionId = selected?.kind === "session" || selected?.kind === "run" ? selected.id : null;
   const inTreeTask = sessionId && projects ? (locate(projects, sessionId)?.item.id ?? null) : null;
+  const loaded = projects !== null;
+  const [lookupFailed, setLookupFailed] = useState<string | null>(null);
   useEffect(() => {
-    if (!sessionId || !projects || inTreeTask || runTasks.has(sessionId)) return;
+    // The tree reloads often; the lookup waits on it having loaded, not on each reload.
+    if (!sessionId || !loaded || inTreeTask || runTasks.has(sessionId)) return;
     let current = true;
     client.getRun(sessionId).then(
       (run) => current && setRunTasks((m) => new Map(m).set(sessionId, run.taskId)),
-      () => current && setRunTasks((m) => new Map(m).set(sessionId, null)),
+      (err: unknown) => {
+        if (!current) return;
+        if (err instanceof ApiError && err.status === 404) setRunTasks((m) => new Map(m).set(sessionId, null));
+        else setLookupFailed(sessionId);
+      },
     );
     return () => {
       current = false;
     };
-  }, [client, sessionId, projects, inTreeTask, runTasks]);
+  }, [client, sessionId, loaded, inTreeTask, runTasks]);
   const sessionTask = sessionId ? (inTreeTask ?? runTasks.get(sessionId) ?? null) : null;
   const scope = useMemo(() => (projects ? boardScope(projects, selected) : null), [projects, selected]);
   const toBoard = useCallback(() => go(projects?.[0] ? inTree({ kind: "project", id: projects[0].id }) : null), [go, projects]);
@@ -372,10 +381,10 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         breadcrumb={trail(taskId)}
       />
     );
-  } else if (sessionId && !runTasks.has(sessionId) && !inTreeTask) {
+  } else if (sessionId && !runTasks.has(sessionId) && !inTreeTask && lookupFailed !== sessionId) {
     main = <div className="centered"><Spinner label="Loading…" /></div>;
   } else if (selected && (selected.kind === "session" || selected.kind === "run")) {
-    // Its task could not be read: the session on its own.
+    // Its task could not be learned: the session on its own, with the way to it.
     flush = true;
     main = (
       <RunScreen

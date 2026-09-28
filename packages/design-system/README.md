@@ -455,8 +455,8 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   separate session page: a link to a session (`#/session/<id>`) opens its
   task on that tab with that session open, so the task's people, pull
   requests and findings stay one tab away while you watch an agent. Only a
-  Run the tree does not hold (made through the API alone) stands on its
-  own, with a breadcrumb.
+  session whose task cannot be learned stands on its own, and says the way
+  to its task when it ends.
 - The open session is `SessionHeader` (whose agent, for whom, its model,
   status, cost, tokens and elapsed, Pause / Abort — on every view, so the
   numbers never depend on the rail being there), then its
@@ -861,7 +861,7 @@ EmptyState, ScrollArea.
   the agent, `onOpenFile` for the viewer, `focus` to show a file picked
   elsewhere, `fileList={false}` for one file on its own.
 - **SessionHeader** — the transcript's header on its own, for a session
-  whose views sit under it; `stats={false}` drops cost, tokens and elapsed.
+  whose views sit under it.
 - **SessionRail / SessionRailBlock / SessionFacts / ToolUsage /
   ChangedFiles** — the column beside a session's conversation.
 - **SessionList / SessionItem** — a task's sessions, the open one `current`.
