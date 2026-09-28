@@ -3,9 +3,9 @@
  * agent did about it.
  *
  * Top to bottom, the questions an operator asks in the order they ask them:
- * what is this, where is it (the phase pipeline), what did the agents leave
- * for a person to read (artifacts), is anything wrong (the findings), and is
- * it shippable (the pull request). Every agent in the
+ * what is this, where is it (the phase pipeline), is anything wrong (the
+ * findings), and is it shippable (the pull request). What the agents left
+ * for a person — notes, screenshots, reports — is under Files. Every agent in the
  * pipeline opens its own conversation, because the pipeline is a summary and
  * the chat is the truth.
  *
@@ -16,13 +16,13 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { AgentAvatar, FindingGroup, FindingRow, StatusBadge, StepList, StepRow } from "@dude/design-system/components";
 import { Icon } from "@dude/design-system";
-import { Button, Callout, EmptyState, Page, PageHeader, Section, Spinner } from "@dude/design-system/primitives";
+import { Button, Callout, EmptyState, Page, PageHeader, Section, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
 import { DEFAULT_RUN_ROLE, runLabel } from "@dude/domain";
 import type { ApiClient, Artifact, Finding, PullRequest, Run, TaskDetail } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
 import { shortError } from "../escalation.ts";
 import { useReloadOnEvents } from "../hooks/useEventStream.ts";
-import { ArtifactsSection } from "./ArtifactsSection.tsx";
+import { FilesSection } from "./FilesSection.tsx";
 import { TaskMetricsSection } from "./MetricsSection.tsx";
 import { existingTask, TaskDialog } from "./TaskDialog.tsx";
 import { NotFound } from "./NotFound.tsx";
@@ -207,61 +207,74 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
         />
       ) : null}
 
-      <Section title="Pipeline">
-        {started ? (
-          <StepList data-testid="pipeline">
-            {phases.map((run, index) => (
-              <PhaseStep
-                key={run.id}
-                run={run}
-                step={index + 1}
-                findings={findings.filter((f) => f.runId === run.id)}
-                onOpen={() => onOpenRun(run.id)}
+      <Tabs defaultValue="overview">
+        <TabList aria-label="Task">
+          <Tab value="overview">Overview</Tab>
+          <Tab value="files" count={new Set(artifacts.map((a) => a.name)).size}>Files</Tab>
+        </TabList>
+        <TabPanel value="files">
+          <FilesSection client={client} taskId={taskId} taskKey={item.key} artifacts={artifacts} onOpenRun={onOpenRun} />
+          {artifacts.length === 0 ? (
+            <EmptyState compact icon="file" title="No files yet"
+              description="What agents save for people — notes, screenshots, reports, recordings — shows here." />
+          ) : null}
+        </TabPanel>
+        <TabPanel value="overview">
+          <Section title="Pipeline">
+            {started ? (
+              <StepList data-testid="pipeline">
+                {phases.map((run, index) => (
+                  <PhaseStep
+                    key={run.id}
+                    run={run}
+                    step={index + 1}
+                    findings={findings.filter((f) => f.runId === run.id)}
+                    onOpen={() => onOpenRun(run.id)}
+                  />
+                ))}
+                {prs.map((pr) => (
+                  <PullRequestStep key={pr.id} pr={pr} named={prs.length > 1} />
+                ))}
+              </StepList>
+            ) : (
+              <EmptyState
+                compact
+                icon="git-pr"
+                title="Not started"
+                description="Deliver runs an implementer, reviewers, a fixer if they find problems, a simplifier, and opens a pull request."
               />
-            ))}
-            {prs.map((pr) => (
-              <PullRequestStep key={pr.id} pr={pr} named={prs.length > 1} />
-            ))}
-          </StepList>
-        ) : (
-          <EmptyState
-            compact
-            icon="git-pr"
-            title="Not started"
-            description="Deliver runs an implementer, reviewers, a fixer if they find problems, a simplifier, and opens a pull request."
-          />
-        )}
-      </Section>
+            )}
+          </Section>
 
-      <TaskMetricsSection client={client} taskId={taskId} live={item.status === "running"}
-        done={["done", "failed", "aborted"].includes(item.status)} version={version} />
+          <TaskMetricsSection client={client} taskId={taskId} live={item.status === "running"}
+            done={["done", "failed", "aborted"].includes(item.status)} version={version} />
 
-      <ArtifactsSection client={client} artifacts={artifacts} />
-
-      {findings.length > 0 ? (
-        <FindingGroup
-          data-testid="findings"
-          findings={findings}
-          renderRow={(f) => (
-            <FindingRow
-              key={f.id}
-              data-testid="finding"
-              data-status={f.status}
-              severity={f.severity}
-              status={f.status}
-              category={f.category}
-              title={f.title}
-              file={f.file}
-              line={f.line}
-              description={f.description}
-              suggestedFix={f.suggestedFix}
-              resolutionNote={f.resolutionNote}
-              fixAttempts={f.fixAttempts}
-              fixedIn={f.resolvedByRunId ? resolvedIn(f.resolvedByRunId) : undefined}
+          {findings.length > 0 ? (
+            <FindingGroup
+              data-testid="findings"
+              findings={findings}
+              renderRow={(f) => (
+                <FindingRow
+                  key={f.id}
+                  data-testid="finding"
+                  data-status={f.status}
+                  severity={f.severity}
+                  status={f.status}
+                  category={f.category}
+                  title={f.title}
+                  file={f.file}
+                  line={f.line}
+                  description={f.description}
+                  suggestedFix={f.suggestedFix}
+                  resolutionNote={f.resolutionNote}
+                  fixAttempts={f.fixAttempts}
+                  fixedIn={f.resolvedByRunId ? resolvedIn(f.resolvedByRunId) : undefined}
+                />
+              )}
             />
-          )}
-        />
-      ) : null}
+          ) : null}
+        </TabPanel>
+      </Tabs>
     </Page>
   );
 }

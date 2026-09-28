@@ -25,7 +25,9 @@ import type {
   PauseMode,
   Person,
   Project,
+  CostSplit,
   Run,
+  RunDiff,
   Session,
   Task,
 } from "@dude/domain";
@@ -106,7 +108,11 @@ function withWaitingFor(projects: NavProject[]): NavProject[] {
 /** A Run with the sessions it spawned. `GET /v1/runs/:id`. */
 export interface RunDetail extends Run {
   sessions: Session[];
+  /** What it cost: the model's tokens and its time on a host. */
+  cost: CostSplit;
 }
+
+export type { CostSplit, RunDiff, RunDiffFile, RunDiffSummary } from "@dude/domain";
 
 /** What the API returns when something goes wrong. */
 export class ApiError extends Error {
@@ -168,6 +174,10 @@ export interface Artifact {
   createdAt: string;
   phase: string | null;
   role: AgentRole | null;
+  /** 1 for the first of its name; a later Run saving the same name adds one. */
+  version: number;
+  /** How many of its name there are. */
+  versions: number;
 }
 
 export class ApiClient {
@@ -245,8 +255,22 @@ export class ApiClient {
    * An artifact's bytes. Fetched with the key in a header, never in a URL,
    * so the page makes blob URLs from it for images and downloads.
    */
-  async artifactContent(id: string): Promise<Blob> {
-    return (await this.#fetch("GET", `/v1/artifacts/${encodeURIComponent(id)}/content`)).blob();
+  /**
+   * An artifact's bytes. `inline` asks for a page (HTML, SVG) to be sent
+   * for a sandboxed frame rather than as an attachment.
+   */
+  async artifactContent(id: string, inline = false): Promise<Blob> {
+    return (await this.#fetch("GET", `/v1/artifacts/${encodeURIComponent(id)}/content${inline ? "?inline=1" : ""}`)).blob();
+  }
+
+  /** The latest version of each of a task's files, as a zip. */
+  async artifactsZip(taskId: string): Promise<Blob> {
+    return (await this.#fetch("GET", `/v1/tasks/${encodeURIComponent(taskId)}/artifacts.zip`)).blob();
+  }
+
+  /** A Run's checkout against where it started, uncommitted work included. */
+  runDiff(runId: string): Promise<RunDiff> {
+    return this.#request("GET", `/v1/runs/${encodeURIComponent(runId)}/diff`);
   }
 
   listFindings(taskId: string): Promise<{ findings: Finding[] }> {
@@ -462,7 +486,9 @@ export interface TaskMetrics {
   activeMs: number;
   humanWaitMs: number;
   reviewMs: number;
+  /** The model's tokens; `cost` has the whole. */
   costUsd: number;
+  cost: CostSplit;
   tokens: Tokens;
   runs: Array<{
     id: string;
@@ -473,6 +499,7 @@ export interface TaskMetrics {
     activeMs: number;
     parkedMs: number;
     costUsd: number;
+    cost: CostSplit;
     tokens: Tokens;
   }>;
 }
@@ -486,5 +513,6 @@ export interface EpicMetrics {
   humanWaitMs: number;
   reviewMs: number;
   costUsd: number;
+  cost: CostSplit;
   tokens: Tokens;
 }

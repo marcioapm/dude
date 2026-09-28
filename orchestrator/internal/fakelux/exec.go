@@ -50,8 +50,9 @@ func (s *Server) edit(run *Run, files map[string]string) {
 			"content": map[string]any{"type": "text", "text": "could not check out: " + err.Error() + "\n"}})
 		return
 	}
-	for i, path := range slices.Sorted(maps.Keys(files)) {
-		id := fmt.Sprintf("edit_%d", i)
+	for _, path := range slices.Sorted(maps.Keys(files)) {
+		run.edits++
+		id := fmt.Sprintf("edit_%d", run.edits)
 		input := map[string]any{"filePath": path, "content": files[path]}
 		s.agent(run, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id, "title": "write", "kind": "edit",
 			"status": "in_progress", "rawInput": input})

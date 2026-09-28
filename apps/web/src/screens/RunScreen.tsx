@@ -32,6 +32,7 @@ import { PAUSE_WORDS, apply, emptyProjection, snapshot, type Turn } from "../api
 import type { ComposerSubmission } from "@dude/design-system/components";
 import { useEventStream } from "../hooks/useEventStream.ts";
 import { NotFound } from "./NotFound.tsx";
+import { ChangesPanel } from "./ChangesPanel.tsx";
 
 export interface RunScreenProps {
   client: ApiClient;
@@ -135,6 +136,14 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
     return snapshot(apply(projection.current, events), run?.status);
   }, [events, runId, run?.status]);
   const isLive = run ? !TERMINAL_RUN_STATUSES.includes(run.status) : false;
+  // How many files its latest diff touches, for the Changes tab.
+  const diffFiles = useMemo(() => {
+    for (let i = events.length - 1; i >= 0; i--) {
+      const e = events[i]!;
+      if (e.eventType === EventTypes.RunDiffUpdated && Array.isArray(e.payload.files)) return e.payload.files.length;
+    }
+    return null;
+  }, [events]);
 
   /** Run an intervention, surfacing conflicts as readable text. */
   const intervene = useCallback(
@@ -210,8 +219,12 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
       {breadcrumb}
       <Tabs defaultValue="chat" fill>
         <TabList>
-          <Tab value="chat">Conversation</Tab>
-          {/* Debugging, not the daily view — hence second and quieter. */}
+          <Tab value="chat" icon="message">Conversation</Tab>
+          {/* The agent's checkout, as it changes: only for a Run with one. */}
+          {Object.keys(run.baseRefs).length > 0 || run.phase ? (
+            <Tab value="changes" icon="git-branch" count={diffFiles ?? undefined}>Changes</Tab>
+          ) : null}
+          {/* Debugging, not the daily view — hence last and quieter. */}
           <Tab value="events" count={events.length}>Events</Tab>
         </TabList>
 
@@ -303,6 +316,10 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
               />
             ) : null}
           </ChatTranscript>
+        </TabPanel>
+
+        <TabPanel value="changes" fill>
+          <ChangesPanel client={client} runId={runId} events={events} live={isLive && run.status !== "paused"} />
         </TabPanel>
 
         <TabPanel value="events" fill>

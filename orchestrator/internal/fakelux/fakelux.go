@@ -75,6 +75,12 @@ type Behaviour struct {
 	// an edit tool call, in its first turn: uncommitted work, which exec
 	// sees and the live diff shows. Paths are in the first repository.
 	Edits map[string]string
+	// Files written into $LUX_ARTIFACTS in its first turn, as it works —
+	// before a Hang — rather than as it finishes (Publish).
+	PublishNow map[string]string
+	// Files written into its checkout in the turn that finishes, after a
+	// Hang is woken.
+	FinishEdits map[string]string
 }
 
 type Run struct {
@@ -106,6 +112,8 @@ type Run struct {
 	// Its checkout, a real git clone made when first needed: the
 	// container's /workspace.
 	workspace string
+	// Edit tool calls made, so each has an id of its own.
+	edits int
 
 	busy     bool
 	woken    bool
@@ -218,8 +226,13 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 		published[name] = text + "\n"
 	}
 	// Every phase plans and looks around first, as an agent does.
+	now := map[string]string{}
+	for name, text := range step.PublishNow {
+		now[name] = text
+	}
 	return Behaviour{Reply: step.Reply, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask,
-		Publish: published, Tools: []string{"todowrite", "read"}, CallTools: step.Tools, Edits: step.Edits}
+		Publish: published, Tools: []string{"todowrite", "read"}, CallTools: step.Tools, Edits: step.Edits, PublishNow: now,
+		FinishEdits: step.FinishEdits}
 }
 
 // Runs returns every Run submitted, in order.
@@ -386,6 +399,12 @@ func (s *Server) turn(run *Run) {
 			s.callTool(run, c[0], c[1])
 		}
 		s.edit(run, b.Edits)
+		for name, content := range b.PublishNow {
+			if run.published == nil {
+				run.published = map[string]string{}
+			}
+			run.published[name] = content
+		}
 	}
 	if asking {
 		s.callTool(run, "ask_person", b.Ask)
@@ -396,6 +415,9 @@ func (s *Server) turn(run *Run) {
 	if b.Crash {
 		s.setState(run, "failed")
 		return
+	}
+	if run.woken {
+		s.edit(run, b.FinishEdits)
 	}
 	reply := b.Reply
 	if asking {
