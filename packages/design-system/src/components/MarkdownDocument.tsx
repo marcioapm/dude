@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState, type HTMLAttributes, type KeyboardEv
 import { cx } from "../util/cx.ts";
 import { Button, IconButton } from "../primitives/Button.tsx";
 import { RowMenu } from "../primitives/RowMenu.tsx";
+import { isPromptVariable } from "@dude/domain";
 import { Markdown, type MarkdownVariant } from "./Markdown.tsx";
 import styles from "./MarkdownDocument.module.css";
 
@@ -106,7 +107,8 @@ export function highlightMarkdown(source: string): HighlightSpan[][] {
     for (const m of rest.matchAll(inline)) {
       if (m.index! > at) out.push(["text", rest.slice(at, m.index)]);
       const t = m[0];
-      out.push([t.startsWith("{{") ? "var" : t.startsWith("`") ? "code" : "bold", t]);
+      // A name dude does not fill in reads as text, as the agent will get it.
+      out.push([t.startsWith("{{") ? (isPromptVariable(t) ? "var" : "text") : t.startsWith("`") ? "code" : "bold", t]);
       at = m.index! + t.length;
     }
     if (at < rest.length) out.push(["text", rest.slice(at)]);
