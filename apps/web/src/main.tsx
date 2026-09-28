@@ -8,7 +8,7 @@
  * unchanged inside the desktop shell (plan §117).
  */
 
-import { StrictMode, useCallback, useMemo, useState } from "react";
+import { StrictMode, useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Button, Card, CardBody, CardHeader, FormStack, Input, ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { ThemeProvider } from "@dude/design-system";
@@ -19,19 +19,39 @@ import "./app.css";
 
 import { ApiClient } from "./api/client.ts";
 import { App } from "./App.tsx";
-import { FixtureClient, fixtureScenario, installFixtureStream } from "./fixtures/client.ts";
+import { fixtureScenario, type FixtureScenario } from "./fixtures/scenario.ts";
 import { turnPushOff } from "./push.ts";
 import { PeopleProvider } from "./people.tsx";
+import { PreviewDocumentContext } from "./preview.tsx";
 import { DudeMark } from "./DudeMark.tsx";
 
 const KEY_STORAGE = "dude.apiKey";
+
+/**
+ * The mockups' world in place of the API, outside production: loaded only
+ * when asked for, so a production build carries none of it. What the
+ * preview frame shows stands in for a server there is no way to reach.
+ */
+interface Fixtures {
+  client: ApiClient;
+  previewDocument: string;
+}
+async function loadFixtures(scenario: FixtureScenario): Promise<Fixtures> {
+  const { FixtureClient, installFixtureStream, PREVIEW_PAGE } = await import("./fixtures/client.ts");
+  installFixtureStream();
+  return { client: new FixtureClient(scenario), previewDocument: PREVIEW_PAGE };
+}
 
 function Root() {
   const [apiKey, setApiKey] = useState(() => localStorage.getItem(KEY_STORAGE) ?? "");
   // The server refused the key it was given: the prompt says so.
   const [refused, setRefused] = useState(false);
   // Outside production, `?fixtures=a` … `f` answers the API from the mockups' world.
-  const scenario = useMemo(() => fixtureScenario(), []);
+  const scenario = useMemo(() => (import.meta.env.DEV || import.meta.env.MODE === "fixtures" ? fixtureScenario() : null), []);
+  const [fixtures, setFixtures] = useState<Fixtures | null>(null);
+  useEffect(() => {
+    if (scenario) void loadFixtures(scenario).then(setFixtures);
+  }, [scenario]);
 
   // Same-origin in the browser (Vite proxies /v1), loopback in the desktop
   // shell — so no base URL is needed in either.
@@ -40,13 +60,14 @@ function Root() {
   // instance per render would tear down and re-establish the event stream.
   // Declared before the early return: hooks must run in the same order on
   // every render, and signing out changes which branch is taken.
-  const client = useMemo(() => (scenario ? new FixtureClient(scenario) : new ApiClient({ apiKey })), [apiKey, scenario]);
+  const client = useMemo(() => fixtures?.client ?? new ApiClient({ apiKey }), [apiKey, fixtures]);
   const keyRefused = useCallback(() => {
     localStorage.removeItem(KEY_STORAGE);
     setRefused(true);
     setApiKey("");
   }, []);
 
+  if (scenario && !fixtures) return null;
   if (!apiKey && !scenario) {
     return <KeyPrompt refused={refused} onSubmit={(key) => {
       localStorage.setItem(KEY_STORAGE, key);
@@ -59,17 +80,19 @@ function Root() {
     <TooltipProvider>
       <ToastProvider>
         <PeopleProvider client={client}>
-          <App
-            client={client}
-            onKeyRefused={keyRefused}
-            onSignOut={() => {
-              // This browser stops hearing about the organization it leaves.
-              void turnPushOff(client).finally(() => {
-                localStorage.removeItem(KEY_STORAGE);
-                setApiKey("");
-              });
-            }}
-          />
+          <PreviewDocumentContext.Provider value={fixtures?.previewDocument}>
+            <App
+              client={client}
+              onKeyRefused={keyRefused}
+              onSignOut={() => {
+                // This browser stops hearing about the organization it leaves.
+                void turnPushOff(client).finally(() => {
+                  localStorage.removeItem(KEY_STORAGE);
+                  setApiKey("");
+                });
+              }}
+            />
+          </PreviewDocumentContext.Provider>
         </PeopleProvider>
       </ToastProvider>
     </TooltipProvider>
@@ -116,9 +139,6 @@ function KeyPrompt({ refused, onSubmit }: { refused: boolean; onSubmit: (key: st
 
 const container = document.getElementById("root");
 if (!container) throw new Error("#root is missing from index.html");
-
-// The fixtures have no stream: an EventSource that opens and says nothing.
-if (fixtureScenario()) installFixtureStream();
 
 // Around everything, the key prompt too: theme and density are this
 // browser's, remembered across sign-ins.

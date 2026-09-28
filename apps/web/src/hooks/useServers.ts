@@ -7,9 +7,14 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { RunServerInput, TaskServers } from "@dude/domain";
+import { TERMINAL_RUN_STATUSES, type RunServerInput, type RunStatus, type ServersRun, type TaskServers } from "@dude/domain";
 import type { ApiClient } from "../api/client.ts";
 import { errorText } from "./useSave.tsx";
+
+/** Whether the run the servers live on is still going: its status is dude's, and may be missing. */
+export function runIsLive(run: Pick<ServersRun, "state">): boolean {
+  return !TERMINAL_RUN_STATUSES.includes((run.state || "running") as RunStatus);
+}
 
 export type ServersScope = { taskId: string; runId?: undefined } | { runId: string; taskId?: undefined };
 
@@ -36,10 +41,19 @@ export function useServers(client: ApiClient, scope: ServersScope, version = 0):
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const key = scope.taskId ? `task:${scope.taskId}` : `run:${scope.runId}`;
-  // Only the latest read may land: an action's re-read and an event's can overlap.
+  // Only the latest read may land: an action's re-read and an event's can
+  // overlap. And one read at a time: a burst of events (a replayed history)
+  // asks once more when the read in flight lands, not once per event.
   const latest = useRef(0);
+  const inFlight = useRef(false);
+  const again = useRef(false);
 
   const reload = useCallback(async () => {
+    if (inFlight.current) {
+      again.current = true;
+      return;
+    }
+    inFlight.current = true;
     const mine = ++latest.current;
     try {
       const fresh = await (scope.taskId !== undefined ? client.taskServers(scope.taskId) : client.runServers(scope.runId));
@@ -48,6 +62,12 @@ export function useServers(client: ApiClient, scope: ServersScope, version = 0):
       setProblem(null);
     } catch (err) {
       if (mine === latest.current) setProblem(errorText(err));
+    } finally {
+      inFlight.current = false;
+      if (again.current) {
+        again.current = false;
+        void reload();
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` stands for the scope
   }, [client, key]);
@@ -76,6 +96,8 @@ export function useServers(client: ApiClient, scope: ServersScope, version = 0):
       setProblem(null);
       try {
         await action();
+        // Read what the action left, whatever read is in flight: `reload`
+        // folds a second ask into one more read.
         await reload();
         return true;
       } catch (err) {

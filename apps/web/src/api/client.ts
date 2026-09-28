@@ -39,7 +39,6 @@ import type {
   PromptRole,
   PreviewSettings,
   RunServerInput,
-  Server,
   ServerLogLine,
   ServerRecipe,
   ServerRecipeInput,
@@ -716,15 +715,6 @@ export class ApiClient {
 
   stopPreview(taskId: string): Promise<void> {
     return this.#request("DELETE", `/v1/tasks/${encodeURIComponent(taskId)}/preview`);
-  }
-
-  /**
-   * What the preview frame shows in place of a server's URL, when there is
-   * something to show without the network: nothing here — the frame loads
-   * the URL — and the mockup's page in the fixtures.
-   */
-  previewDocument(_server: Server): string | undefined {
-    return undefined;
   }
 
   /**

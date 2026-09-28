@@ -34,12 +34,14 @@ export function AddServerDialog({ recipes, present, busy, problem, onClose, onAd
   const nameProblem = touched || name ? serverNameProblem(name) : null;
   const portProblem = touched || port ? serverPortProblem(Number(port)) : null;
   const adhocOk = name !== "" && port !== "" && !serverNameProblem(name) && !serverPortProblem(Number(port)) && !present.has(name);
-  const canSubmit = !busy && (kind === "recipe" ? chosen.size > 0 : adhocOk);
+  // What is still to add: a recipe that landed on an earlier try is on the run now, and is skipped.
+  const toAdd = recipes.filter((r) => chosen.has(r.name) && !present.has(r.name));
+  const canSubmit = !busy && (kind === "recipe" ? toAdd.length > 0 : adhocOk);
 
   const submit = async () => {
     setTouched(true);
     if (kind === "recipe") {
-      for (const r of recipes) if (chosen.has(r.name) && !(await onAdd({ recipe: r.name }))) return;
+      for (const r of toAdd) if (!(await onAdd({ recipe: r.name }))) return;
     } else if (!(await onAdd({ name: name.trim(), port: Number(port), ...(command.trim() ? { command: command.trim() } : {}), ...(workdir.trim() ? { workdir: workdir.trim() } : {}) }))) {
       return;
     }

@@ -52,9 +52,11 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, onCount
       void load();
     }, `Server ${recipe.name} saved`);
   const savePreviews = (patch: Partial<PreviewSettings>, done: string) => {
+    // Shown at once; put back from the server if it refuses.
     const next = { ...previews, ...patch };
     setPreviews(next);
-    void save(() => client.updatePreviewSettings(project.id, { image: next.image, egress: next.egress, idleTimeoutMinutes: next.idleTimeoutMinutes }), () => void load(), done);
+    void save(() => client.updatePreviewSettings(project.id, { image: next.image, egress: next.egress, idleTimeoutMinutes: next.idleTimeoutMinutes }), undefined, done)
+      .then(() => load());
   };
 
   return (
@@ -87,7 +89,7 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, onCount
             ) : null}
           </>
         )}
-        {saveProblem && !editing ? <Callout tone="danger">{saveProblem}</Callout> : null}
+        {saveProblem && !editing && !removing ? <Callout tone="danger">{saveProblem}</Callout> : null}
       </SettingsSection>
 
       <SettingsSection title="Branch previews" data-testid="preview-settings">
