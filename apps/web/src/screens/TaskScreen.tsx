@@ -43,7 +43,7 @@ import type { ApiClient, Artifact, Finding, MergeMethod, PullRequest, Run, TaskD
 import { ApiError } from "../api/client.ts";
 import { actorName, humanActor, planFrom } from "../api/conversation.ts";
 import { shortError } from "../escalation.ts";
-import { useReloadOnEvents } from "../hooks/useEventStream.ts";
+import { AGENT_CHATTER, useReloadOnEvents } from "../hooks/useEventStream.ts";
 import { firstName } from "@dude/design-system";
 import { usePeople, type People } from "../people.tsx";
 import { FilesSection } from "./FilesSection.tsx";
@@ -70,33 +70,23 @@ export interface TaskScreenProps {
   onBack: () => void;
 }
 
-/** An agent at work: many a second, and none of them this page's to re-read for. */
-const QUIET: ReadonlySet<string> = new Set([
-  EventTypes.ToolCalled,
-  EventTypes.ToolCompleted,
-  EventTypes.ModelRequestStarted,
-  EventTypes.ModelRequestCompleted,
-  EventTypes.AgentMessage,
-  EventTypes.AgentThought,
-  EventTypes.RunDiffUpdated,
-]);
-
 /** A run's plan, as its latest `agent.plan.updated` left it: for the running step's line. */
 type Plans = ReadonlyMap<string, { done: number; total: number; current: string | null }>;
 
 export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, breadcrumb, onBack }: TaskScreenProps) {
-  // Opening a session shows it here, on the Sessions tab; the URL says which.
+  // Opening a session shows it here, on the Sessions tab; the URL says
+  // which. Going from a session's URL back to the task's (the tree, Back)
+  // goes back to the overview.
   const [tab, setTab] = useState(runId ? "sessions" : "overview");
-  useEffect(() => {
-    if (runId) setTab("sessions");
-  }, [runId]);
+  const [lastRunId, setLastRunId] = useState(runId);
+  if (runId !== lastRunId) {
+    setLastRunId(runId);
+    setTab(runId ? "sessions" : "overview");
+  }
   // The session shown when none is asked for: the last one open, else one
   // picked the first time Sessions shows (what is running, else the newest)
   // and kept — a phase ending must not swap it under someone reading.
   const [picked, setPicked] = useState<string | null>(null);
-  useEffect(() => {
-    if (runId) setPicked(runId);
-  }, [runId]);
   const [item, setItem] = useState<TaskDetail | null>(null);
   const [missing, setMissing] = useState(false);
   const [findings, setFindings] = useState<Finding[]>([]);
@@ -159,7 +149,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, bread
 
   // What an agent says and does as it works changes nothing on this page
   // but the open session, which has its own stream: no re-read for those.
-  useReloadOnEvents({ client, taskId }, () => void load(), undefined, (e) => QUIET.has(e.eventType));
+  // (Its plan and what it spends still re-read: the pipeline and cost show them.)
+  useReloadOnEvents({ client, taskId }, () => void load(), undefined, (e) => AGENT_CHATTER.has(e.eventType));
 
   const deliver = async () => {
     setDelivering(true);
@@ -281,7 +272,11 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, bread
 
       <Tabs value={tab} onValueChange={(next) => {
         setTab(next);
-        if (next !== "sessions" && runId) onCloseRun?.();
+        if (next !== "sessions" && runId) {
+          // The URL follows; it is the tab change, not a way back.
+          setLastRunId(undefined);
+          onCloseRun?.();
+        }
       }} fill>
         <TabList aria-label="Task" className="tabsInset">
           <Tab value="overview">Overview</Tab>
@@ -382,7 +377,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, bread
                     trailing={<StatusMark status={run.status} size="sm" iconOnly={run.status === "completed"} />} />
                 ))}
               </SessionList>
-              {openRun && tab === "sessions" ? (
+              {openRun ? (
                 <RunScreen key={openRun} client={client} runId={openRun} onBack={onBack} task={{ owner: item.owner, key: item.key }} />
               ) : null}
             </div>
