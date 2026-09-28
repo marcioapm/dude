@@ -159,6 +159,10 @@ def test_a_profile_has_a_name_and_a_photo_kept_in_storage(client: ApiClient, env
     assert _upload(client, "/v1/me/photo", b"<script>alert(1)</script>", "text/html").status_code == 400
     assert _upload(client, "/v1/me/photo", b"<svg onload=alert(1)>", "image/png").status_code == 400
     assert _upload(client, "/v1/me/photo", PNG[:8] + b"\0" * 600_000).status_code == 400
+    # Sent without a length, a large body is cut off at the cap all the same.
+    chunked = requests.put(client.base_url + "/v1/me/photo", data=(PNG[:8] + b"\0" * 65536 for _ in range(40)), timeout=30,
+                           headers={"authorization": f"Bearer {client.api_key}", "content-type": "image/png"})
+    assert chunked.status_code == 400 and "at most" in chunked.text, chunked.text
 
     # An https photo is kept as given; anything else, data: URLs included, is refused.
     assert client.patch("/v1/me", {"photoUrl": "https://example.com/a.jpg"}).json()["person"]["photoUrl"] == "https://example.com/a.jpg"
@@ -181,6 +185,8 @@ def test_a_project_has_an_image_only_admins_set(client: ApiClient, env, project:
     _, bo = _invite(client, env, "Bo")
     assert _upload(bo, f"/v1/projects/{pid}/image", PNG).status_code == 403
     assert bo.delete(f"/v1/projects/{pid}/image").status_code == 403
+    # A project it cannot find is not one it stores anything for.
+    assert _upload(client, "/v1/projects/..%2F..%2Fsomeone-else%2Fpeople%2Fx/image", PNG).status_code == 404
     # Back to initials; the object goes with it.
     assert client.delete(f"/v1/projects/{pid}/image").json()["imageUrl"] is None
     assert requests.get(env.control_plane_url + url, timeout=10).status_code == 404
