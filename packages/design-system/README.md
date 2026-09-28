@@ -458,18 +458,22 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   Run the tree does not hold (made through the API alone) stands on its
   own, with a breadcrumb.
 - The open session is `SessionHeader` (whose agent, for whom, its model,
-  status, Pause / Abort — no cost or tokens: the rail has them), then its
+  status, cost, tokens and elapsed, Pause / Abort — on every view, so the
+  numbers never depend on the rail being there), then its
   views as `TabList variant="pills"` — the second level under the page's
   underline tabs, told apart by a wash, not a line: **Conversation**,
   **Changes**, **Events** (debugging; last, quiet).
 - **Changes** carries its file count and, while the agent is changing
   files, a breathing dot (`Tab live`). Nothing else on the tab moves.
-- Beside the conversation, a `SessionRail` on the chrome shade: the
-  session's facts, the tools it used (`ToolUsage`), and the files it has
+- Beside the conversation, a `SessionRail` on the chrome shade: what the
+  header does not say (agent, attempt), the tools it used (`ToolUsage`), and the files it has
   changed so far (`ChangedFiles`, a breathing dot on the label while live).
   Picking a file there opens Changes on that file alone, as picking it in
-  the diff's own list does. Below 1280px the rail goes; the conversation
-  keeps the width.
+  the diff's own list does. When the session is narrower than about 820px
+  the rail goes and the conversation keeps the width. Narrower than 900px
+  the sessions list sits above the session.
+- With no session asked for, the one shown is picked once (running, else
+  newest) and kept: a phase ending must not swap it under someone reading.
 - **Changes is `LiveDiff`**: the agent's checkout against the commit the
   session started from, uncommitted work included. Its header reads *Live ·
   Since abc1234 · N files +a −d*, then the last change with the agent's
@@ -857,7 +861,7 @@ EmptyState, ScrollArea.
   the agent, `onOpenFile` for the viewer, `focus` to show a file picked
   elsewhere, `fileList={false}` for one file on its own.
 - **SessionHeader** — the transcript's header on its own, for a session
-  whose views sit under it; `stats={false}` where a rail lists them.
+  whose views sit under it; `stats={false}` drops cost, tokens and elapsed.
 - **SessionRail / SessionRailBlock / SessionFacts / ToolUsage /
   ChangedFiles** — the column beside a session's conversation.
 - **SessionList / SessionItem** — a task's sessions, the open one `current`.

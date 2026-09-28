@@ -29,7 +29,7 @@ export function SessionRailBlock({ label, live, children, ...rest }: Omit<HTMLAt
     <section className={styles["block"]} {...rest}>
       <h3 className={cx("ds-label", styles["label"])}>
         {label}
-        {live ? <span className={styles["live"]} aria-label="live" /> : null}
+        {live ? <span className="ds-live-dot" aria-label="live" /> : null}
       </h3>
       {children}
     </section>

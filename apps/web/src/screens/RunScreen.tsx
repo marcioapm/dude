@@ -10,7 +10,7 @@
  * wrong, not watched continuously.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AgentPlan,
   ChatComposer,
@@ -22,15 +22,12 @@ import {
   EventRow,
   EventStream,
   ChangedFiles,
-  Cost,
-  Duration,
   QuestionCard,
   SessionFacts,
   SessionHeader,
   SessionRail,
   SessionRailBlock,
   ThinkingBlock,
-  TokenCount,
   ToolUsage,
   ToolCallCard,
   summarizeToolArgs,
@@ -52,12 +49,8 @@ import { ChangesPanel } from "./ChangesPanel.tsx";
 export interface RunScreenProps {
   client: ApiClient;
   runId: string;
-  /** The task's title, when the caller already knows it. */
-  title?: string | undefined;
-  /** Where this conversation sits, shown above it: a way back up. */
-  breadcrumb?: ReactNode;
-  /** Open the task this Run works on. */
-  onOpenTask: (taskId: string) => void;
+  /** Open the task this Run works on. Not given on the task's own page. */
+  onOpenTask?: ((taskId: string) => void) | undefined;
   /** Leave for somewhere that exists, when this Run does not. */
   onBack: () => void;
   /** On its task's page: the task's key and title are already above it. */
@@ -80,10 +73,15 @@ const STATUS_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.RunResumed,
 ]);
 
-export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack, embedded }: RunScreenProps) {
+export function RunScreen({ client, runId, onOpenTask, onBack, embedded }: RunScreenProps) {
   const [view, setView] = useState("chat");
-  // A file picked in the rail, for Changes to show alone.
+  // A file picked in the rail, for Changes to show alone — once: leaving
+  // Changes forgets it, so coming back finds it as the person left it.
   const [focus, setFocus] = useState<{ path: string } | null>(null);
+  const showView = (next: string) => {
+    if (next !== "changes") setFocus(null);
+    setView(next);
+  };
   const [run, setRun] = useState<RunDetail | null>(null);
   const [missing, setMissing] = useState(false);
   // Who drives the task: only its owner answers its agents, so anyone else
@@ -165,16 +163,20 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
     () => events.findLast((e) => e.eventType === EventTypes.RunDiffUpdated)?.payload as RunDiffSummary | undefined,
     [events],
   );
-  // Which tools it called, and how often: for the rail.
+  // Which tools it called, and how often: for the rail. Counted forward
+  // from the last event seen, as the projection is, not from the start.
+  const toolCounts = useRef({ runId, seen: 0, counts: new Map<string, number>() });
   const tools = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const e of events) {
+    let t = toolCounts.current;
+    if (t.runId !== runId || events.length < t.seen) t = toolCounts.current = { runId, seen: 0, counts: new Map() };
+    for (const e of events.slice(t.seen)) {
       if (e.eventType !== EventTypes.ToolCalled || typeof e.payload.tool !== "string") continue;
       const name = e.payload.tool.charAt(0).toUpperCase() + e.payload.tool.slice(1);
-      counts.set(name, (counts.get(name) ?? 0) + 1);
+      t.counts.set(name, (t.counts.get(name) ?? 0) + 1);
     }
-    return [...counts].map(([name, count]) => ({ name, count }));
-  }, [events]);
+    t.seen = events.length;
+    return [...t.counts].map(([name, count]) => ({ name, count }));
+  }, [events, runId]);
 
   /**
    * Run an intervention. A conflict (409) means the Run moved on while
@@ -264,7 +266,7 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
     // The id is already shown beside the title; repeating it as the title
     // leaves the header saying nothing about the work. The attempt only
     // once there is more than one to tell apart.
-    title: [embedded ? null : title, phase, run.attempt > 1 ? `attempt ${run.attempt}` : null].filter(Boolean).join(" · "),
+    title: [phase ?? runLabel(run), run.attempt > 1 ? `attempt ${run.attempt}` : null].filter(Boolean).join(" · "),
     taskId: run.taskId,
     ...(taskKey && !embedded ? { taskKey } : {}),
     startedAt: run.startedAt ?? run.createdAt,
@@ -299,9 +301,8 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
 
   return (
     <div className={embedded ? "runScreen embedded" : "runScreen"} data-testid="run-screen">
-      {breadcrumb ? <div className="runCrumbs">{breadcrumb}</div> : null}
-      <SessionHeader session={session} stats={false} actions={actions} />
-      <Tabs value={view} onValueChange={setView} fill>
+      <SessionHeader session={session} actions={actions} />
+      <Tabs value={view} onValueChange={showView} fill>
         <TabList variant="pills" className="tabsInset runTabs">
           <Tab value="chat" icon="message">Conversation</Tab>
           {/* The agent's checkout, as it changes: only for a Run with one. */}
@@ -323,7 +324,7 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
                   <AgentPlan items={conversation.plan} defaultCollapsed data-testid="plan" />
                 ) : null
               }
-              footer={!isLive ? <RunEnded run={run} onOpenTask={() => onOpenTask(run.taskId)} embedded={embedded} /> : (
+              footer={!isLive ? <RunEnded run={run} onOpenTask={onOpenTask ? () => onOpenTask(run.taskId) : undefined} /> : (
                 <ChatComposer
                   // The agent waiting on a question takes an answer; otherwise
                   // anything said steers it.
@@ -369,14 +370,13 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
                 />
               ) : null}
             </ChatTranscript>
+            {/* Cost, tokens and elapsed are the header's, on every view: the rail has the rest. */}
             <SessionRail className="runRail" aria-label="This session" data-testid="session-rail">
               <SessionRailBlock label="Session">
                 <SessionFacts facts={[
                   ...(run.model ? [["Model", <code key="model">{run.model}</code>] as const] : []),
-                  ["Tokens in / out", <span key="tokens"><TokenCount tokens={run.tokens.input} /> / <TokenCount tokens={run.tokens.output} /></span>],
-                  ["Cost", <Cost key="cost" tokensUsd={session.costUsd} size="sm" />],
-                  ["Elapsed", run.startedAt ? <Duration key="elapsed" since={run.startedAt} until={run.endedAt} live={isLive} /> : "not started"],
                   ...(run.harness ? [["Agent", run.harness] as const] : []),
+                  ["Attempt", String(run.attempt)],
                 ]} />
               </SessionRailBlock>
               {tools.length > 0 ? (
@@ -388,7 +388,7 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
                 <SessionRailBlock label="Files changed" live={liveDiff}>
                   <ChangedFiles files={changed} onOpen={(path) => {
                     setFocus({ path });
-                    setView("changes");
+                    showView("changes");
                   }} />
                 </SessionRailBlock>
               ) : null}
@@ -618,7 +618,7 @@ const ENDED_WORDS: Record<"completed" | "failed" | "aborted", string> = {
  * steer: how it ended, and the way back to its task, where what happens
  * next is decided. Why it failed is the transcript's last line, just above.
  */
-function RunEnded({ run, onOpenTask, embedded }: { run: RunDetail; onOpenTask: () => void; embedded?: boolean | undefined }) {
+function RunEnded({ run, onOpenTask }: { run: RunDetail; onOpenTask?: (() => void) | undefined }) {
   const outcome = run.status === "failed" || run.status === "aborted" ? run.status : "completed";
   return (
     <Callout data-testid="run-ended" data-outcome={outcome}
@@ -626,7 +626,7 @@ function RunEnded({ run, onOpenTask, embedded }: { run: RunDetail; onOpenTask: (
       <span className="runEnded">
         <span>{ENDED_WORDS[outcome]}</span>
         {/* On its task's page, the task is already here. */}
-        {embedded ? null : (
+        {!onOpenTask ? null : (
           <Button size="sm" variant="quiet" trailingIcon="arrow-right" onClick={onOpenTask} data-testid="run-ended-task">
             Back to the task
           </Button>

@@ -183,6 +183,25 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   }, [projects, place, go]);
 
   const selected = treeSelection(place);
+
+  // A session opens on its task's page. The tree names the task for the
+  // sessions it holds; one it does not (an attempt older than the tree
+  // keeps) is read once to learn its task.
+  const [runTasks, setRunTasks] = useState<ReadonlyMap<string, string | null>>(new Map());
+  const sessionId = selected?.kind === "session" || selected?.kind === "run" ? selected.id : null;
+  const inTreeTask = sessionId && projects ? (locate(projects, sessionId)?.item.id ?? null) : null;
+  useEffect(() => {
+    if (!sessionId || !projects || inTreeTask || runTasks.has(sessionId)) return;
+    let current = true;
+    client.getRun(sessionId).then(
+      (run) => current && setRunTasks((m) => new Map(m).set(sessionId, run.taskId)),
+      () => current && setRunTasks((m) => new Map(m).set(sessionId, null)),
+    );
+    return () => {
+      current = false;
+    };
+  }, [client, sessionId, projects, inTreeTask, runTasks]);
+  const sessionTask = sessionId ? (inTreeTask ?? runTasks.get(sessionId) ?? null) : null;
   const scope = useMemo(() => (projects ? boardScope(projects, selected) : null), [projects, selected]);
   const toBoard = useCallback(() => go(projects?.[0] ? inTree({ kind: "project", id: projects[0].id }) : null), [go, projects]);
 
@@ -337,24 +356,26 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         }
       />
     );
-  } else if (selected?.kind === "task" || ((selected?.kind === "session" || selected?.kind === "run") && locate(projects, selected.id))) {
+  } else if (selected?.kind === "task" || sessionTask) {
     // A session opens on its task's page, beside the task's other sessions.
-    const taskId = selected.kind === "task" ? selected.id : locate(projects, selected.id)!.item.id;
+    const taskId = selected?.kind === "task" ? selected.id : sessionTask!;
     flush = true;
     main = (
       <TaskScreen
         key={taskId}
         client={client}
         taskId={taskId}
-        runId={selected.kind === "task" ? undefined : selected.id}
+        runId={selected?.kind === "task" ? undefined : sessionId ?? undefined}
         onOpenRun={(runId) => go(inTree({ kind: "session", id: runId }))}
         onCloseRun={() => go(inTree({ kind: "task", id: taskId }))}
         onBack={toBoard}
         breadcrumb={trail(taskId)}
       />
     );
+  } else if (sessionId && !runTasks.has(sessionId) && !inTreeTask) {
+    main = <div className="centered"><Spinner label="Loading…" /></div>;
   } else if (selected && (selected.kind === "session" || selected.kind === "run")) {
-    // Not in the tree (a Run made through the API alone): on its own.
+    // Its task could not be read: the session on its own.
     flush = true;
     main = (
       <RunScreen
