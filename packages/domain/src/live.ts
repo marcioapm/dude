@@ -31,12 +31,27 @@ export interface RunDiffFile {
 
 /**
  * A Run's checkout against the commit it started from, uncommitted work
- * included. `GET /v1/runs/:id/diff`, and the `run.diff.updated` payload.
+ * included. `GET /v1/runs/:id/diff`.
  */
 export interface RunDiff {
   base: string;
   files: RunDiffFile[];
+  /** Identifies the diff: a summary with the same checksum is this one. */
+  checksum: string;
+  /** Left as the container stopped (lux's beforeStop hook), not read live. */
+  final: boolean;
   updatedAt: string;
+}
+
+/**
+ * The `run.diff.updated` payload: which files changed and how much, with
+ * no lines — the ledger stays small; the lines are `GET /v1/runs/:id/diff`.
+ */
+export interface RunDiffSummary {
+  checksum: string;
+  updatedAt: string;
+  final: boolean;
+  files: Array<Pick<RunDiffFile, "path" | "status" | "additions" | "deletions">>;
 }
 
 /** A cost as its two halves: model tokens and machine time. */
