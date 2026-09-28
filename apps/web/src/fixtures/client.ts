@@ -9,13 +9,17 @@
  */
 
 import type { ServerScenario } from "@dude/design-system/fixtures/servers";
-import { previewRun, serverRecipes } from "@dude/design-system/fixtures/servers";
+import { PREVIEW_DOMAIN, RUN_SUFFIX, previewEgress, previewRun, server, serverRecipes } from "@dude/design-system/fixtures/servers";
 import type { NavProject } from "@dude/design-system";
-import type { PersistedEvent, PreviewSettings, RunServerInput, Server, ServerLogLine, ServerRecipe, ServerRecipeInput, SettingsResponse, TaskServers } from "@dude/domain";
+import { canStart, canStop } from "@dude/design-system";
+import type { AddServer, PersistedEvent, PreviewSettings, Recipe, RecipeInput, RunServer, SettingsResponse, TaskServers } from "@dude/domain";
+import type { ServerLogLine } from "@dude/design-system";
 import { ApiClient, ApiError, type Member, type ProjectDetail, type RunDetail, type TaskDetail, type TaskMetrics } from "../api/client.ts";
 import { EPIC, FINDINGS, METRICS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RUN_ID, SETTINGS, TASK_ID, YOU, eventsFor, logsFor, navigationFor, runDetailFor, serversFor, taskFor } from "./data.ts";
 
 export { PREVIEW_PAGE } from "@dude/design-system/fixtures/servers";
+
+type LedgerQuery = { runId?: string | undefined; taskId?: string | undefined; after?: number | undefined };
 
 /**
  * An EventSource over the fixtures: on open it replays the scope's ledger
@@ -25,7 +29,7 @@ export { PREVIEW_PAGE } from "@dude/design-system/fixtures/servers";
  */
 const streams = new Set<QuietEventSource>();
 let streamCursor = 1_000_000;
-let ledger: ((params: { runId?: string; taskId?: string; after?: number }) => PersistedEvent[]) | null = null;
+let ledger: ((params: LedgerQuery) => PersistedEvent[]) | null = null;
 class QuietEventSource extends EventTarget {
   static readonly CONNECTING = 0;
   static readonly OPEN = 1;
@@ -75,7 +79,7 @@ export class FixtureClient extends ApiClient {
   #scenario: ServerScenario;
   #servers: TaskServers;
   #logs: Record<string, ServerLogLine[]>;
-  #recipes: ServerRecipe[];
+  #recipes: Recipe[];
   #previews: PreviewSettings;
   #task: TaskDetail;
   #events: PersistedEvent[];
@@ -87,15 +91,16 @@ export class FixtureClient extends ApiClient {
     this.#servers = serversFor(scenario);
     this.#logs = logsFor(scenario);
     this.#recipes = [...serverRecipes];
-    this.#previews = { image: null, egress: ["registry.npmjs.org", "proxy.golang.org", "sum.golang.org", "api.absmartly.com", "sandbox.absmartly.io"], idleTimeoutMinutes: 30, domain: "lux.absmartly.dev" };
+    this.#previews = { image: null, egress: [...previewEgress], idleTimeoutMinutes: 30 };
     this.#task = taskFor(scenario);
     this.#events = eventsFor(scenario);
     this.#nav = navigationFor(scenario);
-    ledger = (params) => this.#events.filter((e) => e.cursor > (params.after ?? 0) && (!params.runId || e.runId === params.runId) && (!params.taskId || e.taskId === params.taskId));
+    ledger = (params) => this.#ledger(params);
   }
 
-  get scenario(): ServerScenario {
-    return this.#scenario;
+  /** The scope's events after a cursor, as the API and the stream's backfill both answer. */
+  #ledger({ runId, taskId, after = 0 }: LedgerQuery): PersistedEvent[] {
+    return this.#events.filter((e) => e.cursor > after && (!runId || e.runId === runId) && (!taskId || e.taskId === taskId));
   }
 
   /** After a change a backend would announce: the stream says `servers.changed`. */
@@ -141,10 +146,9 @@ export class FixtureClient extends ApiClient {
   override getProject(id: string): Promise<ProjectDetail> {
     return id === PROJECT.id ? Promise.resolve(PROJECT) : Promise.reject(new ApiError(404, "not_found", "No such project."));
   }
-  override events(params: { runId?: string; taskId?: string; after?: number; limit?: number }) {
-    const after = params.after ?? 0;
-    const events = this.#events.filter((e) => e.cursor > after && (!params.runId || e.runId === params.runId) && (!params.taskId || e.taskId === params.taskId));
-    return Promise.resolve({ events, nextCursor: events.at(-1)?.cursor ?? after });
+  override events(params: LedgerQuery & { limit?: number }) {
+    const events = this.#ledger(params);
+    return Promise.resolve({ events, nextCursor: events.at(-1)?.cursor ?? params.after ?? 0 });
   }
   override listFindings(taskId: string) {
     return Promise.resolve({ findings: this.#scenario === "d" && taskId === TASK_ID ? FINDINGS : [] });
@@ -179,23 +183,21 @@ export class FixtureClient extends ApiClient {
 
   // -- servers --------------------------------------------------------------
 
-  override projectServers(): Promise<{ servers: ServerRecipe[]; previews: PreviewSettings }> {
-    return Promise.resolve({ servers: this.#recipes, previews: this.#previews });
+  override projectServers(): Promise<{ servers: Recipe[]; previews: PreviewSettings }> {
+    return Promise.resolve({ servers: [...this.#recipes], previews: this.#previews });
   }
-  override async putProjectServer(_projectId: string, name: string, recipe: ServerRecipeInput): Promise<ServerRecipe> {
+  override async putProjectServer(_projectId: string, name: string, recipe: RecipeInput): Promise<Recipe> {
     await wait(150);
     if (recipe.name !== name && this.#recipes.some((r) => r.name === recipe.name)) throw new ApiError(409, "name_taken", `There is already a server called ${recipe.name}.`);
-    const saved: ServerRecipe = { ...recipe, updatedAt: new Date().toISOString(), updatedBy: { id: YOU, name: PEOPLE[0]!.name, photoUrl: null, online: true } };
+    const saved: Recipe = { ...recipe, updatedAt: new Date().toISOString(), updatedBy: { id: YOU, name: PEOPLE[0]!.name } };
     const at = this.#recipes.findIndex((r) => r.name === name);
     if (at >= 0) this.#recipes[at] = saved;
     else this.#recipes.push(saved);
-    this.#servers.recipes = [...this.#recipes];
     return saved;
   }
   override async removeProjectServer(_projectId: string, name: string): Promise<void> {
     await wait(100);
     this.#recipes = this.#recipes.filter((r) => r.name !== name);
-    this.#servers.recipes = [...this.#recipes];
   }
   override async updatePreviewSettings(_projectId: string, settings: PreviewSettings): Promise<PreviewSettings> {
     await wait(100);
@@ -208,19 +210,20 @@ export class FixtureClient extends ApiClient {
   override runServers(): Promise<TaskServers> {
     return Promise.resolve(this.#snapshot());
   }
+  /** What a read returns: copies, and the recipes as they are now. */
   #snapshot(): TaskServers {
-    return { ...this.#servers, servers: this.#servers.servers.map((s) => ({ ...s })) };
+    return { ...this.#servers, servers: this.#servers.servers.map((s) => ({ ...s })), recipes: [...this.#recipes] };
   }
-  #find(name: string): Server {
+  #find(name: string): RunServer {
     const s = this.#servers.servers.find((x) => x.name === name);
     if (!s) throw new ApiError(404, "not_found", `No server called ${name} on this run.`);
     return s;
   }
-  #set(name: string, patch: Partial<Server>) {
+  #set(name: string, patch: Partial<RunServer>) {
     Object.assign(this.#find(name), patch, { since: new Date().toISOString() });
     this.#changed();
   }
-  override async serverAction(_runId: string, name: string, action: "start" | "stop" | "restart"): Promise<unknown> {
+  override async serverAction(_runId: string, name: string, action: "start" | "stop" | "restart"): Promise<RunServer> {
     await wait(120);
     const s = this.#find(name);
     if (!this.#servers.run) throw new ApiError(409, "not_running", "The run is not running.");
@@ -229,7 +232,10 @@ export class FixtureClient extends ApiClient {
       return s;
     }
     if (!s.command) throw new ApiError(409, "no_command", `${name} has no command; start it by hand in the container.`);
-    this.#set(name, { state: "starting", exitCode: null, error: null });
+    // A fresh start forgets how the last one ended.
+    delete s.exitCode;
+    delete s.error;
+    this.#set(name, { state: "starting" });
     // The port answers a moment later — unless it is api's in scenario c, where it never does.
     later(() => {
       const now = this.#servers.servers.find((x) => x.name === name);
@@ -240,33 +246,35 @@ export class FixtureClient extends ApiClient {
     if (this.#servers.moved && this.#servers.servers.every((x) => x.name === name || x.state !== "stopped")) this.#servers.moved = null;
     return s;
   }
-  override async serversAll(_runId: string, action: "start-all" | "stop-all"): Promise<unknown> {
+  override async serversAll(_runId: string, action: "start-all" | "stop-all"): Promise<TaskServers> {
     for (const s of this.#servers.servers) {
-      if (action === "start-all" && s.command && (s.state === "stopped" || s.state === "exited" || s.state === "unreachable")) await this.serverAction(_runId, s.name, "start");
-      if (action === "stop-all" && (s.state === "ready" || s.state === "starting" || s.state === "unreachable")) await this.serverAction(_runId, s.name, "stop");
+      if (action === "start-all" && s.command && canStart(s)) await this.serverAction(_runId, s.name, "start");
+      if (action === "stop-all" && canStop(s)) await this.serverAction(_runId, s.name, "stop");
     }
     if (action === "start-all") this.#servers.moved = null;
-    return {};
+    return this.#snapshot();
   }
-  override async addRunServer(_runId: string, input: RunServerInput): Promise<unknown> {
+  override async addRunServer(_runId: string, input: AddServer): Promise<RunServer> {
     await wait(150);
     const recipe = "recipe" in input ? this.#recipes.find((r) => r.name === input.recipe) : null;
     if ("recipe" in input && !recipe) throw new ApiError(404, "not_found", `The project has no server called ${input.recipe}.`);
     const name = recipe ? recipe.name : (input as { name: string }).name;
     if (this.#servers.servers.some((s) => s.name === name)) throw new ApiError(409, "name_taken", `${name} is already on this run.`);
     const port = recipe ? recipe.port : (input as { port: number }).port;
-    const command = recipe ? `exec ${recipe.command}` : (input as { command?: string }).command;
-    const suffix = this.#servers.run?.luxRunId.replace(/^run_/, "") ?? "k3jq7x2mfa9vbn4z";
-    const server: Server = {
-      name, port, command: command ? ["sh", "-c", command] : null, workdir: recipe?.workdir ?? (input as { workdir?: string }).workdir ?? "", env: {},
-      fromSpec: false, state: "stopped", since: new Date().toISOString(), readySince: null, stopReason: null, stoppedEpoch: null, epoch: 1,
-      url: `https://${name}-${suffix}.lux.absmartly.dev`,
-    };
-    this.#servers.servers.push(server);
+    const given = recipe ? `exec ${recipe.command}` : (input as { command?: string | string[] | null }).command;
+    const command = Array.isArray(given) ? given : given ? ["sh", "-c", given] : null;
+    const suffix = this.#servers.run?.luxRunId.replace(/^run_/, "") ?? RUN_SUFFIX;
+    const added = server(name, port, {
+      state: "stopped",
+      command,
+      workdir: recipe?.workdir ?? (input as { workdir?: string }).workdir ?? "",
+      since: new Date().toISOString(),
+    }, suffix);
+    this.#servers.servers.push(added);
     this.#logs[name] = [];
     this.#changed();
     if (command) await this.serverAction(_runId, name, "start");
-    return server;
+    return added;
   }
   override async removeRunServer(_runId: string, name: string): Promise<void> {
     await wait(100);
@@ -279,15 +287,12 @@ export class FixtureClient extends ApiClient {
   }
   override async startPreview(): Promise<TaskServers> {
     await wait(200);
-    if (this.#servers.run) throw new ApiError(409, "conflict", "A run is already serving this task.");
+    if (this.#servers.run) throw new ApiError(409, "preview_running", "A run is already serving this task.");
     const run = { ...previewRun, id: "run_preview_1", startedAt: new Date().toISOString(), previewStage: "scheduling" as const };
     const suffix = run.luxRunId.replace(/^run_/, "");
     this.#servers = {
       run,
-      servers: this.#recipes.map((r) => ({
-        name: r.name, port: r.port, command: ["sh", "-c", `exec ${r.command}`], workdir: r.workdir, env: {}, fromSpec: r.autostartInPreviews, state: "stopped" as const,
-        since: new Date().toISOString(), readySince: null, stopReason: null, stoppedEpoch: null, epoch: 1, url: `https://${r.name}-${suffix}.lux.absmartly.dev`,
-      })),
+      servers: this.#recipes.map((r) => server(r.name, r.port, { state: "stopped", fromSpec: r.autostartInPreviews, since: new Date().toISOString() }, suffix)),
       moved: null,
       recipes: [...this.#recipes],
     };
@@ -304,11 +309,13 @@ export class FixtureClient extends ApiClient {
     }, 2_500 * (i + 1)));
     return this.#snapshot();
   }
-  override async stopPreview(): Promise<void> {
+  override async stopPreview(): Promise<TaskServers> {
     await wait(150);
+    if (this.#servers.run?.kind !== "preview") throw new ApiError(404, "not_found", "No branch preview is live.");
     this.#servers = { ...this.#servers, run: null, servers: [], moved: null };
     this.#task = { ...this.#task, status: "review" };
     this.#changed();
+    return this.#snapshot();
   }
 
   // -- writes the screens can reach that change nothing here -----------------

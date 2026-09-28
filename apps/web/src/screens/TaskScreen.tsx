@@ -35,14 +35,13 @@ import {
   TimelineItem,
   planProgress,
 } from "@dude/design-system/components";
-import { Icon } from "@dude/design-system";
-import { Button, Callout, EmptyState, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
+import { Button, Callout, EmptyState, LinkButton, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
 import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, runLabel, type PersistedEvent } from "@dude/domain";
 import type { ApiClient, Artifact, Finding, MergeMethod, PullRequest, Run, TaskDetail } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
 import { actorName, humanActor, planFrom } from "../api/conversation.ts";
 import { shortError } from "../escalation.ts";
-import { useReloadOnEvents } from "../hooks/useEventStream.ts";
+import { useReloadOnEvents, cameBack } from "../hooks/useEventStream.ts";
 import { useServers } from "../hooks/useServers.ts";
 import { firstName } from "@dude/design-system";
 import { usePeople, type People } from "../people.tsx";
@@ -132,20 +131,22 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
     void load();
   }, [load]);
 
-  // The servers change on their own stream event; the rest of the page on
-  // any other. A stream that comes back replays nothing, so its re-read
-  // takes the servers along: they may have moved while nothing could say so.
+  // The servers change on their own stream event, and the rest of the page
+  // on any other. A stream that comes back replays nothing, so its return
+  // re-reads the servers too: they may have moved while nothing could say so.
   const [serversVersion, setServersVersion] = useState(0);
-  useReloadOnEvents({ client, taskId }, () => {
-    void load();
-    setServersVersion((v) => v + 1);
-  }, 300, (e) => {
+  const stream = useReloadOnEvents({ client, taskId }, () => void load(), 300, (e) => {
     if (e.eventType === EventTypes.ServersChanged) {
       setServersVersion((v) => v + 1);
       return true;
     }
     return false;
   });
+  const wasStream = useRef(stream);
+  useEffect(() => {
+    if (cameBack(wasStream.current, stream)) setServersVersion((v) => v + 1);
+    wasStream.current = stream;
+  }, [stream]);
   const servers = useServers(client, { taskId }, serversVersion);
 
   const deliver = async () => {
@@ -322,10 +323,7 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
                         actions={
                           <>
                             {actions.merge}
-                            <a className="linkButton" href={pr.url} target="_blank" rel="noreferrer">
-                              Open on GitHub <Icon name="external" size={14} />
-                              <span className="ds-sr-only"> (opens in a new tab)</span>
-                            </a>
+                            <LinkButton href={pr.url}>Open on GitHub</LinkButton>
                           </>
                         } />
                     )}

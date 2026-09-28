@@ -6,13 +6,10 @@
  */
 
 import type { NavProject } from "@dude/design-system";
-import { serverLogs, serverLogsExited, serverScenarios, serverRecipes, type ServerScenario } from "@dude/design-system/fixtures/servers";
-import type { Finding, PersistedEvent, PullRequest, Run, ServerLogLine, SettingsResponse, Task, TaskServers } from "@dude/domain";
+import { MIN, iso, serverLogs, serverLogsExited, serverScenarios, serverRecipes, type ServerScenario } from "@dude/design-system/fixtures/servers";
+import type { ServerLogLine } from "@dude/design-system";
+import type { Finding, PersistedEvent, PullRequest, Run, SettingsResponse, Task, TaskServers } from "@dude/domain";
 import type { Member, ProjectDetail, RunDetail, TaskDetail, TaskMetrics } from "../api/client.ts";
-
-const NOW = Date.now();
-const MIN = 60_000;
-const iso = (agoMs: number) => new Date(NOW - agoMs).toISOString();
 
 export const ORG = { id: "org_absmartly", name: "ABsmartly" };
 

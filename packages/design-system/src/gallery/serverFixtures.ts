@@ -5,21 +5,23 @@
  * now so ages read sensibly.
  */
 
-import type { Server, ServerLogLine, ServerRecipe, ServersRun, TaskServers } from "@dude/domain";
+import type { Recipe, RunServer, TaskServers } from "@dude/domain";
+import type { ServerLogLine, ServersRun } from "../util/servers.ts";
 
-const NOW = Date.now();
-const MIN = 60_000;
-const iso = (agoMs: number) => new Date(NOW - agoMs).toISOString();
+export const NOW = Date.now();
+export const MIN = 60_000;
+export const iso = (agoMs: number) => new Date(NOW - agoMs).toISOString();
 
 export const PREVIEW_DOMAIN = "lux.absmartly.dev";
-const RUN_SUFFIX = "k3jq7x2mfa9vbn4z";
+export const RUN_SUFFIX = "k3jq7x2mfa9vbn4z";
 const PREVIEW_SUFFIX = "p8d2wq5nzr7m4kx1";
 export const serverUrl = (name: string, suffix = RUN_SUFFIX) => `https://${name}-${suffix}.${PREVIEW_DOMAIN}`;
+export const previewEgress = ["registry.npmjs.org", "proxy.golang.org", "sum.golang.org", "api.absmartly.com", "sandbox.absmartly.io"];
 
-const ana = { id: "u_ana", name: "Ana Ribeiro", photoUrl: null, online: true };
-const marcio = { id: "u_marcio", name: "Márcio Martins", photoUrl: null, online: true };
+const ana = { id: "u_ana", name: "Ana Ribeiro" };
+const marcio = { id: "u_marcio", name: "Márcio Martins" };
 
-export const serverRecipes: ServerRecipe[] = [
+export const serverRecipes: Recipe[] = [
   { name: "web", port: 3000, command: "npm run dev -- --host 0.0.0.0 --port 3000", workdir: "apps/web", setup: "npm ci", env: [{ name: "VITE_API_URL", value: "http://localhost:8080" }, { name: "VITE_ABSMARTLY_ENV", value: "preview" }], autostartInPreviews: true, updatedAt: iso(2 * 24 * 60 * MIN), updatedBy: ana },
   { name: "api", port: 8080, command: "go run ./cmd/api --port 8080 --dev", workdir: "services/api", setup: "make deps", env: [{ name: "DATABASE_URL", value: "postgres://dev@localhost:5432/console" }, { name: "LOG_LEVEL", value: "debug" }], autostartInPreviews: true, updatedAt: iso(2 * 24 * 60 * MIN), updatedBy: ana },
   { name: "storybook", port: 6006, command: "npm run storybook -- --ci --port 6006", workdir: "apps/web", setup: null, env: [], autostartInPreviews: false, updatedAt: iso(9 * 24 * 60 * MIN), updatedBy: marcio },
@@ -59,7 +61,8 @@ export const previewRun: ServersRun = {
   terminalUrl: `https://lux.absmartly.dev/runs/run_${PREVIEW_SUFFIX}/terminal`,
 };
 
-function server(name: string, port: number, patch: Partial<Server> & { state: Server["state"] }, suffix = RUN_SUFFIX): Server {
+/** A Server as lux reports it, from a recipe's command and directory when it has one; `patch` says the rest. */
+export function server(name: string, port: number, patch: Partial<RunServer> & { state: RunServer["state"] }, suffix = RUN_SUFFIX): RunServer {
   return {
     name,
     port,

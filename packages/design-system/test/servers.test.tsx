@@ -6,7 +6,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { Server } from "@dude/domain";
+import type { RunServer } from "@dude/domain";
 import { PreviewStages } from "../src/components/PreviewStages.tsx";
 import { draftOf, draftProblems, recipeOf } from "../src/components/ServerRecipe.tsx";
 import { ServerRow } from "../src/components/ServerRow.tsx";
@@ -22,7 +22,7 @@ const NOW = Date.parse("2026-09-28T14:44:00Z");
 const at = (agoMs: number) => new Date(NOW - agoMs).toISOString();
 const MIN = 60_000;
 
-function server(patch: Partial<Server> & { state: Server["state"] }): Server {
+function server(patch: Partial<RunServer> & { state: RunServer["state"] }): RunServer {
   return {
     name: "web", port: 3000, command: ["sh", "-c", "exec npm run dev"], workdir: "apps/web", env: {}, fromSpec: false,
     since: at(0), readySince: null, stopReason: null, stoppedEpoch: null, epoch: 1, url: "https://web-abc.lux.example",
@@ -72,10 +72,10 @@ describe("describeServer", () => {
   });
 
   test("on a preview before its servers' turn, a spec server waits; a runtime one is manual", () => {
-    const ctx = { runKind: "preview" as const, previewStage: "setup" as const };
-    expect(describeServer(server({ state: "stopped", fromSpec: true }), NOW, ctx)).toEqual({ state: "waiting", detail: "starts after setup" });
-    expect(describeServer(server({ state: "stopped" }), NOW, ctx)).toEqual({ state: "stopped", detail: "manual" });
-    expect(describeServer(server({ state: "stopped", fromSpec: true }), NOW, { ...ctx, previewStage: "starting" }).state).toBe("stopped");
+    const run = { kind: "preview" as const, previewStage: "setup" as const };
+    expect(describeServer(server({ state: "stopped", fromSpec: true }), NOW, run)).toEqual({ state: "waiting", detail: "starts after setup" });
+    expect(describeServer(server({ state: "stopped" }), NOW, run)).toEqual({ state: "stopped", detail: "manual" });
+    expect(describeServer(server({ state: "stopped", fromSpec: true }), NOW, { ...run, previewStage: "starting" }).state).toBe("stopped");
   });
 });
 
@@ -107,7 +107,7 @@ describe("summaries", () => {
 });
 
 describe("ServerRow", () => {
-  const row = (s: Server, extra = {}) => html(<ServerRow name={s.name} port={s.port} state={s.state} url={s.url} onPreview={() => {}} onStart={() => {}} onStop={() => {}} onRestart={() => {}} logs={{ open: false, onToggle: () => {}, lines: [] }} {...extra} />);
+  const row = (s: RunServer, extra = {}) => html(<ServerRow name={s.name} port={s.port} state={s.state} url={s.url} onPreview={() => {}} onStart={() => {}} onStop={() => {}} onRestart={() => {}} logs={{ open: false, onToggle: () => {}, lines: [] }} {...extra} />);
 
   test("ready: Preview, Logs, Restart, Stop; the URL opens", () => {
     const h = row(server({ state: "ready" }));
@@ -154,12 +154,12 @@ describe("the recipe form", () => {
     const d = draftOf(null);
     expect(draftProblems(d, false)).toEqual({});
     expect(draftProblems(d, true)).toMatchObject({ command: expect.any(String) });
-    expect(draftProblems({ ...d, name: "Web_App", port: "80" }, false)).toMatchObject({ name: expect.stringContaining("Lowercase"), port: "Between 1024 and 65535." });
+    expect(draftProblems({ ...d, name: "Web_App", port: "70000" }, false)).toMatchObject({ name: expect.stringContaining("Lowercase"), port: "Between 1 and 65535." });
     expect(draftProblems({ ...d, name: "web", port: "3000", command: "npm run dev" }, true)).toEqual({});
   });
 
   test("what is saved: trimmed, the directory without slashes, empty setup as null, blank vars dropped", () => {
     const d = { ...draftOf(null), name: " web ", port: "3000", command: " npm run dev ", workdir: "/apps/web/", setup: "  ", env: [{ name: "", value: "x" }, { name: "A", value: "1" }] };
-    expect(recipeOf(d)).toEqual({ name: "web", port: 3000, command: "npm run dev", workdir: "apps/web", setup: null, env: [{ name: "A", value: "1" }], autostartInPreviews: true });
+    expect(recipeOf(d)).toEqual({ name: "web", port: 3000, command: "npm run dev", workdir: "apps/web", setup: null, env: [{ name: "A", value: "1" }], autostartInPreviews: false });
   });
 });

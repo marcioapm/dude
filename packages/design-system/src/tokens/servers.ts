@@ -8,9 +8,12 @@
  * servers" yet — stopped on the wire, but nobody stopped it.
  */
 
-import { SERVER_STATES, type ServerState } from "@dude/domain";
+import type { ServerState } from "@dude/domain";
 import type { ToneName } from "./palette.ts";
 import type { StatusGlyph } from "./status.ts";
+
+/** lux's states, in a server's life order. */
+export const SERVER_STATES = ["stopped", "starting", "ready", "unreachable", "exited"] as const satisfies readonly ServerState[];
 
 export type ServerDisplayState = ServerState | "waiting";
 

@@ -1,6 +1,6 @@
 import type { HTMLAttributes, ReactNode } from "react";
 import { cx } from "../util/cx.ts";
-import { bareUrl } from "../util/servers.ts";
+import { bareUrl, canStart } from "../util/servers.ts";
 import { Icon } from "../icons/index.tsx";
 import { IconButton } from "../primitives/Button.tsx";
 import { ServerStateMark } from "./ServerStateMark.tsx";
@@ -64,7 +64,7 @@ export function ServersSummaryRow({ name, state, stateLabel, url, detail, onPrev
         <IconButton size="sm" icon="eye" label={`Preview ${name}`} onClick={onPreview} />
       ) : state === "unreachable" && onRestart ? (
         <IconButton size="sm" icon="retry" label={`Restart ${name}`} onClick={onRestart} />
-      ) : (state === "stopped" || state === "exited") && onStart ? (
+      ) : canStart({ state }) && onStart ? (
         <IconButton size="sm" icon="play" label={`Start ${name}`} onClick={onStart} />
       ) : null}
     </li>

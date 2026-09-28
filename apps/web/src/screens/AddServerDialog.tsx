@@ -7,24 +7,25 @@
 
 import { useState } from "react";
 import { Segmented } from "@dude/design-system/components";
+import { serverNameProblem, serverPortProblem, toggled } from "@dude/design-system";
 import { Badge, Checkbox, Input } from "@dude/design-system/primitives";
-import { serverNameProblem, serverPortProblem, type RunServerInput, type ServerRecipe } from "@dude/domain";
+import type { AddServer, Recipe } from "@dude/domain";
 import { FormDialog } from "../hooks/useSave.tsx";
 
 export interface AddServerDialogProps {
-  recipes: readonly ServerRecipe[];
+  recipes: readonly Recipe[];
   /** Names already on the run. */
   present: ReadonlySet<string>;
   busy: boolean;
   problem: string | null;
   onClose: () => void;
   /** One call per server added; resolves whether it landed. */
-  onAdd: (input: RunServerInput) => Promise<boolean>;
+  onAdd: (input: AddServer) => Promise<boolean>;
 }
 
 export function AddServerDialog({ recipes, present, busy, problem, onClose, onAdd }: AddServerDialogProps) {
   const [kind, setKind] = useState<"recipe" | "adhoc">(recipes.length > 0 ? "recipe" : "adhoc");
-  const [chosen, setChosen] = useState<Set<string>>(() => new Set(recipes.filter((r) => !present.has(r.name)).map((r) => r.name)));
+  const [chosen, setChosen] = useState<ReadonlySet<string>>(() => new Set(recipes.filter((r) => !present.has(r.name)).map((r) => r.name)));
   const [name, setName] = useState("");
   const [port, setPort] = useState("");
   const [command, setCommand] = useState("");
@@ -69,22 +70,14 @@ export function AddServerDialog({ recipes, present, busy, problem, onClose, onAd
             {recipes.map((r) => {
               const on = present.has(r.name);
               return (
-                <li key={r.name} className="recipeChoice" data-server={r.name} aria-disabled={on || undefined}>
+                <li key={r.name} className="recipeChoice" data-server={r.name}>
                   <Checkbox
                     checked={on || chosen.has(r.name)}
                     disabled={on}
-                    aria-label={r.name}
-                    onCheckedChange={(c) => setChosen((s) => {
-                      const next = new Set(s);
-                      if (c === true) next.add(r.name);
-                      else next.delete(r.name);
-                      return next;
-                    })}
+                    onCheckedChange={(c) => setChosen((s) => toggled(s, r.name, c === true))}
+                    label={<span className="ds-mono">{r.name} <span className="muted">:{r.port}</span></span>}
+                    description={<span className="ds-mono">{r.command}</span>}
                   />
-                  <span className="recipeChoiceText">
-                    <span className="recipeChoiceTitle ds-mono">{r.name} <span className="muted">:{r.port}</span></span>
-                    <span className="recipeChoiceDetail ds-mono">{r.command}</span>
-                  </span>
                   {on ? <Badge size="sm">On this run</Badge> : null}
                 </li>
               );
@@ -98,7 +91,7 @@ export function AddServerDialog({ recipes, present, busy, problem, onClose, onAd
           <Input label="Name" mono autoFocus value={name} error={nameProblem ?? (present.has(name) ? "Already on this run." : undefined)} data-testid="adhoc-name"
             hint="Lowercase letters, digits and dashes: the first label of the URL." onChange={(e) => setName(e.target.value)} />
           <Input label="Port" mono type="number" inputMode="numeric" value={port} error={portProblem ?? undefined} data-testid="adhoc-port"
-            hint="1024–65535." onChange={(e) => setPort(e.target.value)} />
+            hint="1–65535." onChange={(e) => setPort(e.target.value)} />
           <Input label="Command" mono value={command} placeholder="python -m http.server 8000" data-testid="adhoc-command"
             hint="Optional: without one, the port is only watched — something else starts the server." onChange={(e) => setCommand(e.target.value)} />
           <Input label="Working directory" mono value={workdir} placeholder="apps/web" hint="Relative to the checkout." onChange={(e) => setWorkdir(e.target.value)} />
