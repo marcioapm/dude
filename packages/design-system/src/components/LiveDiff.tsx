@@ -1,7 +1,8 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
 import type { RunDiffFile, RunDiffHunk, RunDiffLine } from "@dude/domain";
 import { cx } from "../util/cx.ts";
 import { IconButton } from "../primitives/Button.tsx";
+import { DiffStat } from "./DiffStat.tsx";
 import { Segmented } from "./ScreenHeader.tsx";
 import { Switch } from "./Settings.tsx";
 import styles from "./LiveDiff.module.css";
@@ -26,11 +27,13 @@ export interface LiveDiffProps extends Omit<HTMLAttributes<HTMLDivElement>, "chi
   /** Side by side or one column; unified until the person picks. */
   readonly defaultView?: LiveDiffView | undefined;
   /**
-   * A file to show alone, picked outside the diff (a list of changed files
-   * beside it). As picking it here does, it turns Follow off. A new object
-   * each time, so picking the same file again still takes.
+   * The file shown alone, null for all of them. Give it (with
+   * `onSelectedChange`) to pick one from outside — a list of changed files
+   * beside the diff; left out, the diff keeps its own. A file picked, here
+   * or outside, turns Follow off: the person has taken over.
    */
-  readonly focus?: { readonly path: string } | null | undefined;
+  readonly selected?: string | null | undefined;
+  readonly onSelectedChange?: ((path: string | null) => void) | undefined;
   /** The list of files down the left; off for one file on its own (in a viewer). */
   readonly fileList?: boolean | undefined;
 }
@@ -88,11 +91,24 @@ const SIGN = { "+": "+", "-": "−", " ": "" } as const;
  * the new. Changes are told apart by sign and gutter as well as tint
  * (+, −), so the diff reads without colour.
  */
-export function LiveDiff({ files, base, live, lastChange, emptyMessage, onOpenFile, defaultView = "unified", focus, fileList = true, className, ...rest }: LiveDiffProps) {
+export function LiveDiff({ files, base, live, lastChange, emptyMessage, onOpenFile, defaultView = "unified", selected: given, onSelectedChange, fileList = true, className, ...rest }: LiveDiffProps) {
   const [view, setView] = useState<LiveDiffView>(defaultView);
   // Keep the latest change in view: on while live, until the person picks a file.
   const [follow, setFollow] = useState(live ?? false);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [own, setOwn] = useState<string | null>(null);
+  // A file that is gone is no longer shown alone.
+  const picked = given !== undefined ? given : own;
+  const selected = picked && files.some((f) => f.path === picked) ? picked : null;
+  const select = (path: string | null) => {
+    if (given === undefined) setOwn(path);
+    onSelectedChange?.(path);
+  };
+  // Picked, here or outside: the person has taken over.
+  const [lastSelected, setLastSelected] = useState(selected);
+  if (selected !== lastSelected) {
+    setLastSelected(selected);
+    if (selected) setFollow(false);
+  }
 
   // What is new since the last files: lines, and the files they are in.
   // The first render has nothing to compare against, so nothing flashes.
@@ -123,6 +139,11 @@ export function LiveDiff({ files, base, live, lastChange, emptyMessage, onOpenFi
     [files],
   );
   const shown = selected ? files.filter((f) => f.path === selected) : files;
+  // Side by side, each hunk's rows once per diff, not on every render.
+  const split = useMemo(
+    () => (view === "split" ? new Map(files.map((f) => [f.path, f.hunks.map((h) => splitRows(h.lines))])) : null),
+    [files, view],
+  );
 
   // Following: bring the newest change into view.
   const scroller = useRef<HTMLDivElement>(null);
@@ -136,25 +157,13 @@ export function LiveDiff({ files, base, live, lastChange, emptyMessage, onOpenFi
     }
   }, [follow, fresh]);
 
-  // Picked from outside: shown alone, and the person has taken over.
-  useEffect(() => {
-    if (!focus) return;
-    setSelected(focus.path);
-    setFollow(false);
-  }, [focus]);
-
-  // A file that is gone is no longer selectable.
-  useEffect(() => {
-    if (selected && !files.some((f) => f.path === selected)) setSelected(null);
-  }, [files, selected]);
-
   const short = base.slice(0, 7);
   return (
     <div className={cx(styles["root"], className)} {...rest}>
       <div className={styles["head"]}>
         {live ? (
           <span className={styles["live"]} data-testid="live-pill">
-            <i aria-hidden /> Live
+            <i className="ds-live-dot" aria-hidden /> Live
           </span>
         ) : null}
         {files.length > 0 ? (
@@ -164,8 +173,7 @@ export function LiveDiff({ files, base, live, lastChange, emptyMessage, onOpenFi
                 Since <span className={styles["mono"]}>{short}</span> ·{" "}
               </>
             ) : null}
-            <b>{files.length} {files.length === 1 ? "file" : "files"}</b> <span className={styles["add"]}>+{totals.a}</span>{" "}
-            <span className={styles["del"]}>−{totals.d}</span>
+            <b>{files.length} {files.length === 1 ? "file" : "files"}</b> <DiffStat additions={totals.a} deletions={totals.d} />
           </span>
         ) : null}
         <span className={styles["spacer"]} />
@@ -174,7 +182,7 @@ export function LiveDiff({ files, base, live, lastChange, emptyMessage, onOpenFi
           <Switch
             checked={follow}
             onCheckedChange={(on) => {
-              if (on) setSelected(null);
+              if (on) select(null);
               setFollow(on);
             }}
             label="Follow the agent"
@@ -193,7 +201,7 @@ export function LiveDiff({ files, base, live, lastChange, emptyMessage, onOpenFi
           {fileList ? (
             <nav className={styles["files"]} aria-label="Changed files">
               <button type="button" className={cx(styles["file"], styles["all"], !selected && styles["current"])}
-                aria-pressed={!selected} onClick={() => setSelected(null)}>
+                aria-pressed={!selected} onClick={() => select(null)}>
                 <span className={styles["path"]}>
                   <b>All files</b>
                 </span>
@@ -208,10 +216,7 @@ export function LiveDiff({ files, base, live, lastChange, emptyMessage, onOpenFi
                     className={cx(styles["file"], selected === f.path && styles["current"], fresh.paths.has(f.path) && styles["touched"])}
                     aria-pressed={selected === f.path}
                     title={`${f.path} · ${STATUS_WORD[f.status]}`}
-                    onClick={() => {
-                      setSelected(f.path);
-                      setFollow(false);
-                    }}
+                    onClick={() => select(f.path)}
                     data-testid="diff-file"
                     data-path={f.path}
                   >
@@ -220,9 +225,7 @@ export function LiveDiff({ files, base, live, lastChange, emptyMessage, onOpenFi
                       {slash >= 0 ? <span className={styles["dir"]}>{f.path.slice(0, slash + 1)}</span> : null}
                       <b>{f.path.slice(slash + 1)}</b>
                     </span>
-                    <span className={styles["counts"]}>
-                      <span className={styles["add"]}>+{f.additions}</span> <span className={styles["del"]}>−{f.deletions}</span>
-                    </span>
+                    <DiffStat className={styles["counts"]} additions={f.additions} deletions={f.deletions} />
                   </button>
                 );
               })}
@@ -238,9 +241,7 @@ export function LiveDiff({ files, base, live, lastChange, emptyMessage, onOpenFi
                   {f.status === "A" ? <span className={styles["muted"]}>new file</span> : null}
                   {f.status === "D" ? <span className={styles["muted"]}>deleted</span> : null}
                   <span className={styles["spacer"]} />
-                  <span className={styles["counts"]}>
-                    <span className={styles["add"]}>+{f.additions}</span> <span className={styles["del"]}>−{f.deletions}</span>
-                  </span>
+                  <DiffStat className={styles["counts"]} additions={f.additions} deletions={f.deletions} />
                   {onOpenFile && f.status !== "D" ? (
                     <IconButton icon="external" label="Open in the viewer" size="sm" onClick={() => onOpenFile(f.path)} data-testid="diff-open" />
                   ) : null}
@@ -265,8 +266,11 @@ export function LiveDiff({ files, base, live, lastChange, emptyMessage, onOpenFi
                             </div>
                           );
                         })
-                      : splitRows(h.lines).map((row, ri) => {
-                          const isFresh = [row.left, row.right].some((l) => l !== null && fresh.lines.has(lineKey(f.path, l)));
+                      : split!.get(f.path)![hi]!.map((row, ri) => {
+                          // Context sits on both sides and is never fresh: one side is enough to ask.
+                          const changed = row.left?.kind === " " ? null : (row.left ?? row.right);
+                          const isFresh = changed !== null && (fresh.lines.has(lineKey(f.path, changed)) ||
+                            (row.right !== null && row.right !== changed && fresh.lines.has(lineKey(f.path, row.right))));
                           return (
                             <div key={ri} className={cx(styles["split"], isFresh && styles["fresh"])} data-fresh={isFresh ? "" : undefined}
                               data-testid="split-row">

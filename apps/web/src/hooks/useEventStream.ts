@@ -132,17 +132,6 @@ export function useEventStream(options: UseEventStreamOptions): EventStreamState
 }
 
 /**
- * Call `reload` when events arrive on a scope, at most once per `everyMs`.
- *
- * For views that re-read their data rather than folding events themselves:
- * the sidebar, the delivery view, the metrics. A phase emits dozens of
- * events in a burst, and re-reading once per interval rather than once per
- * event is what keeps a busy organization from turning each open panel into
- * a request storm. A throttle, not a debounce: an agent at work sends events
- * steadily, and a debounce would never fire until it stopped — exactly
- * when the view is changing.
- */
-/**
  * An agent at work: what it says and does, and its diff — many a second.
  * Nothing but its own session shows them, and that has its own stream, so
  * a page re-reading on events leaves these out. Its plan and what it
@@ -153,6 +142,17 @@ export const AGENT_CHATTER: ReadonlySet<string> = new Set([
   EventTypes.ModelRequestStarted, EventTypes.PromptDelivered, EventTypes.RunDiffUpdated,
 ]);
 
+/**
+ * Call `reload` when events arrive on a scope, at most once per `everyMs`.
+ *
+ * For views that re-read their data rather than folding events themselves:
+ * the sidebar, the delivery view, the metrics. A phase emits dozens of
+ * events in a burst, and re-reading once per interval rather than once per
+ * event is what keeps a busy organization from turning each open panel into
+ * a request storm. A throttle, not a debounce: an agent at work sends events
+ * steadily, and a debounce would never fire until it stopped — exactly
+ * when the view is changing.
+ */
 export function useReloadOnEvents(
   options: Omit<UseEventStreamOptions, "limit">,
   reload: () => void,

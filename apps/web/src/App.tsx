@@ -190,10 +190,10 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   const sessionId = selected?.kind === "session" || selected?.kind === "run" ? selected.id : null;
   const inTreeTask = sessionId && projects ? (locate(projects, sessionId)?.item.id ?? null) : null;
   if (sessionId && inTreeTask && runTasks.get(sessionId) !== inTreeTask) setRunTasks((m) => new Map(m).set(sessionId, inTreeTask));
-  const loaded = projects !== null;
-  const [lookup, setLookup] = useState<{ id: string; tries: number; failed: boolean } | null>(null);
+  const [lookup, setLookup] = useState<{ id: string; tries: number } | null>(null);
   const tries = lookup?.id === sessionId ? lookup.tries : 0;
-  const lookupFailed = lookup?.id === sessionId && lookup.failed;
+  const lookupFailed = tries >= 3;
+  const loaded = projects !== null;
   useEffect(() => {
     // The tree reloads often; the lookup waits on it having loaded, not on each reload.
     if (!sessionId || !loaded || inTreeTask || runTasks.has(sessionId) || lookupFailed) return;
@@ -204,7 +204,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
       (err: unknown) => {
         if (!current) return;
         if (err instanceof ApiError && err.status === 404) setRunTasks((m) => new Map(m).set(sessionId, null));
-        else setLookup({ id: sessionId, tries: tries + 1, failed: tries + 1 >= 3 });
+        else setLookup({ id: sessionId, tries: tries + 1 });
       },
     ), wait);
     return () => {
@@ -213,7 +213,6 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
     };
   }, [client, sessionId, loaded, inTreeTask, runTasks, tries, lookupFailed]);
   const sessionTask = sessionId ? (inTreeTask ?? runTasks.get(sessionId) ?? null) : null;
-  // Given up on its task after a few tries: the session on its own.
   const scope = useMemo(() => (projects ? boardScope(projects, selected) : null), [projects, selected]);
   const toBoard = useCallback(() => go(projects?.[0] ? inTree({ kind: "project", id: projects[0].id }) : null), [go, projects]);
 
@@ -384,7 +383,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         breadcrumb={trail(taskId)}
       />
     );
-  } else if (sessionId && !runTasks.has(sessionId) && !inTreeTask && !lookupFailed) {
+  } else if (sessionId && !runTasks.has(sessionId) && !lookupFailed) {
     main = <div className="centered"><Spinner label="Loading…" /></div>;
   } else if (selected && (selected.kind === "session" || selected.kind === "run")) {
     // Its task could not be learned: the session on its own, with the way to it.

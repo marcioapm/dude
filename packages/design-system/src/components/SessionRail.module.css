@@ -20,24 +20,11 @@
   margin: 0 0 var(--ds-space-8);
 }
 
+/* A rail reads its facts label left, value right, each on one line. */
 .facts {
-  display: grid;
-  gap: var(--ds-space-6);
-  margin: 0;
+  grid-template-columns: max-content minmax(0, 1fr);
 }
-.fact {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--ds-space-12);
-  min-width: 0;
-}
-.fact dt {
-  color: var(--ds-color-text-muted);
-  white-space: nowrap;
-}
-.fact dd {
-  margin: 0;
-  min-width: 0;
+.facts dd {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -97,10 +84,10 @@
   text-align: left;
   box-sizing: content-box;
 }
-button.file:hover {
+.file:hover {
   background: var(--ds-color-hover-wash);
 }
-button.file:focus-visible {
+.file:focus-visible {
   outline: none;
   box-shadow: inset 0 0 0 2px var(--ds-color-focus-ring);
 }
@@ -109,16 +96,6 @@ button.file:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.fileCounts {
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-.add {
-  color: var(--ds-diff-add-fg);
-}
-.del {
-  color: var(--ds-diff-del-fg);
 }
 .more {
   margin-top: var(--ds-space-4);

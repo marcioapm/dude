@@ -1,5 +1,7 @@
 import type { HTMLAttributes, ReactNode } from "react";
 import { cx } from "../util/cx.ts";
+import { KeyValueList } from "../primitives/Layout.tsx";
+import { DiffStat } from "./DiffStat.tsx";
 import styles from "./SessionRail.module.css";
 
 export interface SessionRailProps extends HTMLAttributes<HTMLElement> {
@@ -36,18 +38,9 @@ export function SessionRailBlock({ label, live, children, ...rest }: Omit<HTMLAt
   );
 }
 
-/** Label and value pairs, the values on the right: Model, Tokens, Elapsed. */
-export function SessionFacts({ facts }: { readonly facts: ReadonlyArray<readonly [ReactNode, ReactNode]> }) {
-  return (
-    <dl className={styles["facts"]}>
-      {facts.map(([k, v], i) => (
-        <div key={i} className={styles["fact"]}>
-          <dt>{k}</dt>
-          <dd>{v}</dd>
-        </div>
-      ))}
-    </dl>
-  );
+/** Label and value pairs (a `KeyValueList`), the values on the right as a rail reads them. */
+export function SessionFacts({ facts }: { readonly facts: ReadonlyArray<{ readonly label: ReactNode; readonly value: ReactNode; readonly mono?: boolean }> }) {
+  return <KeyValueList className={styles["facts"]} items={facts} />;
 }
 
 export interface ToolCount {
@@ -84,31 +77,20 @@ export interface ChangedFile {
  */
 export function ChangedFiles({ files, onOpen, max = 8 }: {
   readonly files: ReadonlyArray<ChangedFile>;
-  readonly onOpen?: ((path: string) => void) | undefined;
+  readonly onOpen: (path: string) => void;
   readonly max?: number;
 }) {
   const shown = files.slice(0, max);
   return (
     <ul className={styles["files"]} data-testid="changed-files">
-      {shown.map((f) => {
-        const body = (
-          <>
+      {shown.map((f) => (
+        <li key={f.path}>
+          <button type="button" className={styles["file"]} title={f.path} onClick={() => onOpen(f.path)}>
             <span className={styles["filePath"]}>{f.path.slice(f.path.lastIndexOf("/") + 1)}</span>
-            <span className={styles["fileCounts"]}>
-              <span className={styles["add"]}>+{f.additions}</span> <span className={styles["del"]}>−{f.deletions}</span>
-            </span>
-          </>
-        );
-        return (
-          <li key={f.path}>
-            {onOpen ? (
-              <button type="button" className={styles["file"]} title={f.path} onClick={() => onOpen(f.path)}>{body}</button>
-            ) : (
-              <span className={styles["file"]} title={f.path}>{body}</span>
-            )}
-          </li>
-        );
-      })}
+            <DiffStat additions={f.additions} deletions={f.deletions} />
+          </button>
+        </li>
+      ))}
       {files.length > shown.length ? <li className={styles["more"]}>{files.length - shown.length} more</li> : null}
     </ul>
   );

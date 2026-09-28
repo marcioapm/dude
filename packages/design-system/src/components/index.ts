@@ -89,6 +89,8 @@ export type { FactKind, PullRequestPanelProps } from "./PullRequestPanel.tsx";
 export { Timeline, TimelineItem } from "./Timeline.tsx";
 export type { TimelineProps, TimelineItemProps } from "./Timeline.tsx";
 export { SessionList, SessionItem } from "./SessionList.tsx";
+export { DiffStat } from "./DiffStat.tsx";
+export type { DiffStatProps } from "./DiffStat.tsx";
 export { SessionRail, SessionRailBlock, SessionFacts, ToolUsage, ChangedFiles } from "./SessionRail.tsx";
 export type { ChangedFile, ToolCount } from "./SessionRail.tsx";
 export type { SessionListProps, SessionItemProps } from "./SessionList.tsx";

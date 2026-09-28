@@ -23,7 +23,7 @@ import { errorText } from "../hooks/useSave.tsx";
 
 const EDIT_TOOLS = /^(edit|write|patch|multiedit|apply_patch)$/i;
 
-export function ChangesPanel({ client, runId, role, events, checksum: latest, live, focus }: {
+export function ChangesPanel({ client, runId, role, events, checksum: latest, live, selected, onSelectedChange }: {
   client: ApiClient;
   runId: string;
   /** The agent's, for its face beside what it last wrote. */
@@ -34,8 +34,9 @@ export function ChangesPanel({ client, runId, role, events, checksum: latest, li
   checksum: string;
   /** Its agent is at work: the diff may still change. */
   live: boolean;
-  /** A file picked elsewhere (the session's rail), to show alone. */
-  focus?: { path: string } | null;
+  /** The file shown alone, which the session's rail can pick too. */
+  selected: string | null;
+  onSelectedChange: (path: string | null) => void;
 }) {
   const [diff, setDiff] = useState<RunDiff | null>(null);
   const [viewing, setViewing] = useState<string | null>(null);
@@ -95,7 +96,8 @@ export function ChangesPanel({ client, runId, role, events, checksum: latest, li
         files={diff.files}
         base={diff.base}
         live={live}
-        focus={focus}
+        selected={selected}
+        onSelectedChange={onSelectedChange}
         onOpenFile={setViewing}
         lastChange={live && lastChange ? lastChange : undefined}
         emptyMessage={live ? "The agent has not changed anything yet." : "This session changed nothing."}
