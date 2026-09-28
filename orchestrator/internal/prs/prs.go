@@ -222,9 +222,9 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 			}
 			changes = append(changes, change{delivery.EvPullRequestChecks, p})
 		}
-		if status.Review != pr.Review || reviewsChanged(pr.ReviewsJSON, status.Reviews) {
+		if byWhom := newReviews(pr.ReviewsJSON, status.Reviews); status.Review != pr.Review || len(byWhom) > 0 {
 			changes = append(changes, change{delivery.EvPullRequestReviewed, map[string]any{"from": pr.Review, "to": status.Review,
-				"reviews": newReviews(pr.ReviewsJSON, status.Reviews)}})
+				"reviews": byWhom}})
 		}
 		if status.Mergeable != pr.Mergeable && status.Mergeable != forge.MergeUnknown || status.BehindBy != pr.BehindBy {
 			changes = append(changes, change{delivery.EvPullRequestMergeable, map[string]any{"from": pr.Mergeable,
@@ -381,10 +381,6 @@ func newReviews(before []byte, after []forge.Review) []forge.Review {
 		}
 	}
 	return out
-}
-
-func reviewsChanged(before []byte, after []forge.Review) bool {
-	return len(newReviews(before, after)) > 0
 }
 
 // permissionTTL: how long what GitHub said of a login is believed. Long
