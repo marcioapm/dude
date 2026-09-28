@@ -94,3 +94,5 @@ export type { DiffStatProps } from "./DiffStat.tsx";
 export { SessionRail, SessionRailBlock, SessionFacts, ToolUsage, ChangedFiles } from "./SessionRail.tsx";
 export type { ChangedFile, ToolCount } from "./SessionRail.tsx";
 export type { SessionListProps, SessionItemProps } from "./SessionList.tsx";
+export { SearchResultList, SearchResultRow } from "./SearchResultRow.tsx";
+export type { SearchResultRowProps } from "./SearchResultRow.tsx";

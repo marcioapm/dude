@@ -1,0 +1,116 @@
+/*
+ * SearchResultRow: ArtifactRow's anatomy — a 32px row, chevron first, quiet
+ * facts at the end, the body indented to the title. The lead carries the
+ * only colour there is (a task's status mark).
+ */
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.root {
+  list-style: none;
+  border-radius: 0;
+}
+.open {
+  background: var(--ds-color-raised);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-default);
+  padding: 0 var(--ds-space-8) 0 var(--ds-space-4);
+  border-radius: 0;
+  color: var(--ds-color-text-primary);
+}
+.row:has(.headButton:hover) {
+  background: var(--ds-color-hover-wash);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: var(--ds-size-row-default);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  outline: none;
+}
+.headButton:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--ds-color-focus-ring);
+  border-radius: var(--ds-radius-control);
+}
+
+.chevron {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--ds-color-text-muted);
+}
+.chevronIcon {
+  transition: transform var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.open .chevronIcon {
+  transform: rotate(90deg);
+}
+.rank {
+  width: 16px;
+  flex-shrink: 0;
+  text-align: right;
+  font-size: var(--ds-text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--ds-color-text-muted);
+}
+.lead {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  flex-shrink: 0;
+  color: var(--ds-color-text-secondary);
+}
+.title {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.trailing {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.fact {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+}
+
+/* Indented to the title: chevron, rank and lead's widths and gaps. */
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-12);
+  padding: var(--ds-space-8) var(--ds-space-12) var(--ds-space-12)
+    calc(var(--ds-space-4) + 14px + var(--ds-space-8) + 16px + var(--ds-space-8));
+  font-size: var(--ds-text-sm);
+  min-width: 0;
+}
