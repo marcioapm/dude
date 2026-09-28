@@ -75,10 +75,13 @@ def test_delivering_from_the_ui_reaches_a_pull_request_and_back(
     expect(page.get_by_test_id("finding").first).to_have_attribute("data-status", "resolved")
 
     # What the implementer published is there to read, rendered.
-    artifact = page.get_by_test_id("artifact").filter(has_text="NOTES.md")
-    expect(artifact).to_be_visible(timeout=60_000)
-    artifact.get_by_role("button", expanded=False).click()
-    expect(artifact.get_by_role("heading", name="What changed")).to_be_visible()
+    page.get_by_role("tab", name="Files").click()
+    notes = page.get_by_test_id("file-row").filter(has_text="NOTES.md")
+    expect(notes).to_be_visible(timeout=60_000)
+    notes.get_by_role("button").first.click()
+    expect(page.get_by_test_id("file-viewer").get_by_role("heading", name="What changed")).to_be_visible()
+    page.keyboard.press("Escape")
+    page.get_by_role("tab", name="Overview").click()
 
     # The PR appears as the last step, linked to the forge.
     expect(page.get_by_test_id("pr-step")).to_be_visible(timeout=180_000)
