@@ -174,7 +174,7 @@ export interface EpicOverview {
   tasks: number;
   lanes: { done: number; review: number; progress: number; backlog: number };
   prs: Record<string, number>;
-  owners: Array<{ id: string; name: string }>;
+  owners: Array<{ id: string; name: string; photoUrl: string | null; online: boolean }>;
   costUsd: number;
   lastActivity: string | null;
   needsYou: number;

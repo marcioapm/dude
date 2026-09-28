@@ -151,7 +151,9 @@ export function useReloadOnEvents(
 ): StreamStatus {
   // Only whether something arrived matters, so the stream keeps almost
   // nothing.
-  const { events, status, reconnects } = useEventStream({ ...options, limit: 1, live: true });
+  // A few, not one: a presence event arriving just after a change must not
+  // be the only one kept, or the change is never re-read.
+  const { events, status, reconnects } = useEventStream({ ...options, limit: 8, live: true });
   const latest = useRef(reload);
   latest.current = reload;
   const handle = useRef(onEvent);
@@ -165,9 +167,19 @@ export function useReloadOnEvents(
     }, everyMs);
   }, [everyMs]);
 
+  // Each batch is handled once: every event is offered to onEvent, and any
+  // it does not take (a ledger change) schedules the re-read.
+  // The last event handled, by identity: presence events are never stored,
+  // so they have no id or cursor of their own to go by.
+  const seen = useRef<PersistedEvent | null>(null);
   useEffect(() => {
-    const event = events[0];
-    if (event && !(handle.current?.(event) ?? false)) schedule();
+    // Oldest first: the new ones are at the end, after the last one seen.
+    const fresh: PersistedEvent[] = [];
+    for (let i = events.length - 1; i >= 0 && events[i] !== seen.current; i--) fresh.push(events[i]!);
+    if (events.length > 0) seen.current = events[events.length - 1]!;
+    let unhandled = false;
+    for (const e of fresh) if (!(handle.current?.(e) ?? false)) unhandled = true;
+    if (unhandled) schedule();
   }, [events, schedule]);
 
   // A live-only stream replays nothing when it comes back: whatever

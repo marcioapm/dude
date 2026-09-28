@@ -55,28 +55,29 @@ export function useSettings(client: ApiClient, load: () => Promise<SettingsRespo
 export const isRole = (page: string): page is SettingsRole => (SETTINGS_ROLES as readonly string[]).includes(page);
 
 /** Agents, with a sub-page per role; on a project, a mark on each role it changes. */
-export function agentsNav(settings: SettingsResponse): SettingsNavItem {
-  const project = Boolean(settings.project);
-  const changed = SETTINGS_ROLES.filter((r) => roleChanged(settings.roles[r])).length;
+/** Agents in the menu; before the settings have loaded, its roles without notes. */
+export function agentsNav(settings: SettingsResponse | undefined): SettingsNavItem {
+  const project = Boolean(settings?.project);
+  const changed = settings ? SETTINGS_ROLES.filter((r) => roleChanged(settings.roles[r])).length : 0;
   return {
     id: "agents",
     label: "Agents",
     icon: "agent",
     note: project && changed ? `${changed} changed` : undefined,
     items: SETTINGS_ROLES.map((role) => {
-      const r = settings.roles[role];
+      const r = settings?.roles[role];
       return {
         id: role,
         label: SETTINGS_ROLE_LABEL[role],
         leading: <AgentAvatar role={role === "fixer" ? "implementer" : role} size="sm" />,
-        note: project ? (roleChanged(r) ? "changed" : undefined) : r.enabled && !r.enabled.value ? "off" : undefined,
+        note: !r ? undefined : project ? (roleChanged(r) ? "changed" : undefined) : r.enabled && !r.enabled.value ? "off" : undefined,
       };
     }),
   };
 }
 
-export function deliveryNav(settings: SettingsResponse): SettingsNavItem {
-  const n = settings.project ? deliveryChanged(settings.delivery) : 0;
+export function deliveryNav(settings: SettingsResponse | undefined): SettingsNavItem {
+  const n = settings?.project ? deliveryChanged(settings.delivery) : 0;
   return { id: "delivery", label: "Delivery", icon: "list-check", note: n ? `${n} changed` : undefined };
 }
 

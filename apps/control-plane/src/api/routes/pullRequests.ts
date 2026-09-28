@@ -11,6 +11,7 @@
  * restarting, and GitHub always gets a fast answer.
  */
 
+import { requireOrgAdmin } from "../access.ts";
 import { z } from "zod";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { newId, prDisplayState, type PullRequest } from "@dude/domain";
@@ -394,13 +395,22 @@ async function updateGithubSettings(ctx: RequestContext): Promise<Response> {
     ctx.principal.apiKeyId);
 }
 
+function adminOnly(handler: (ctx: RequestContext) => Promise<Response>) {
+  return async (ctx: RequestContext): Promise<Response> => {
+    await requireOrgAdmin(ctx);
+    return handler(ctx);
+  };
+}
+
 export function registerPullRequestRoutes(router: Router): void {
   router.get("/v1/forge/settings", getGithubSettings);
-  router.patch("/v1/forge/settings", updateGithubSettings);
-  router.get("/v1/forge/webhook-secret", revealWebhookSecret);
-  router.post("/v1/forge/webhook-secret/rotate", rotateWebhookSecret);
-  router.post("/v1/forge/webhooks/register", registerWebhooks);
-  router.post("/v1/forge/credential", putCredential);
+  // Who wakes a fixer, the signing secret, where hooks point and whose
+  // token opens pull requests: the organization's admins decide.
+  router.patch("/v1/forge/settings", adminOnly(updateGithubSettings));
+  router.get("/v1/forge/webhook-secret", adminOnly(revealWebhookSecret));
+  router.post("/v1/forge/webhook-secret/rotate", adminOnly(rotateWebhookSecret));
+  router.post("/v1/forge/webhooks/register", adminOnly(registerWebhooks));
+  router.post("/v1/forge/credential", adminOnly(putCredential));
   router.get("/v1/forge/credential", getCredential);
   router.post("/v1/forge/credential/verify", verifyCredential);
   router.get("/v1/pull-requests", listPullRequests);
