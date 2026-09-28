@@ -1,0 +1,171 @@
+/*
+ * The preview: a wide side sheet with a browser-chrome bar over a frame,
+ * or docked beside the conversation on the run screen. The frame's bed is
+ * white whatever the theme: it is someone else's page.
+ */
+
+.panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: var(--ds-z-dialog);
+  width: min(1040px, calc(100vw - 96px));
+  display: flex;
+  flex-direction: column;
+  background: var(--ds-color-overlay);
+  box-shadow: var(--ds-shadow-3);
+  animation: global(ds-slide-in-right) var(--ds-duration-slow) var(--ds-ease-enter);
+}
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  padding: var(--ds-space-8) var(--ds-space-12) var(--ds-space-8) var(--ds-space-16);
+  flex-shrink: 0;
+}
+.headTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  font-size: var(--ds-text-md);
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
+  min-width: 0;
+}
+.headTitle code {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.headSpacer {
+  flex: 1;
+}
+.chrome {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  height: 40px;
+  padding: 0 var(--ds-space-8);
+  background: var(--ds-color-chrome);
+  flex-shrink: 0;
+  box-shadow: inset 0 -1px 0 var(--ds-color-border-subtle);
+}
+.nav {
+  display: inline-flex;
+  gap: 0;
+}
+.nav button {
+  --btn-h: 28px;
+}
+.back {
+  transform: scaleX(-1);
+}
+.urlbar {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  height: 28px;
+  padding: 0 var(--ds-space-8);
+  background: var(--ds-color-field-bg);
+  border: 1px solid var(--ds-color-border-subtle);
+  border-radius: var(--ds-radius-control);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+  min-width: 0;
+}
+.lock {
+  color: var(--ds-tone-success-mark);
+  display: inline-grid;
+}
+.host {
+  color: var(--ds-color-text-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.access {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  font-family: var(--ds-font-sans);
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+}
+.frameWrap {
+  flex: 1;
+  min-height: 0;
+  background: var(--ds-color-preview-bed);
+  position: relative;
+  display: flex;
+  justify-content: center;
+}
+.frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: var(--ds-color-preview-bed);
+}
+/* A phone's width, centred on the sunken bed. */
+.mobile {
+  background: var(--ds-color-sunken);
+}
+.mobile .frame {
+  width: 390px;
+  max-width: 100%;
+}
+.foot {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+  min-height: 32px;
+  padding: 0 var(--ds-space-16);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  flex-shrink: 0;
+  background: var(--ds-color-chrome);
+}
+.footNote {
+  margin-left: auto;
+}
+
+/* Docked beside the conversation (the run screen): in the split, not over it. */
+.docked {
+  position: static;
+  flex: none;
+  width: min(720px, 58%);
+  height: auto;
+  min-height: 0;
+  box-shadow: -1px 0 0 var(--ds-color-border-subtle);
+  animation: none;
+  background: var(--ds-color-chrome);
+}
+.docked .frameWrap {
+  min-height: 0;
+}
+.docked .access,
+.docked .headAction {
+  display: none;
+}
+.docked .head {
+  padding-top: var(--ds-space-6);
+  padding-bottom: var(--ds-space-6);
+}
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--ds-z-overlay);
+  background: var(--ds-color-scrim);
+  animation: global(ds-fade-in) var(--ds-duration-base) var(--ds-ease-enter);
+}

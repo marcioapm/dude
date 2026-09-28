@@ -119,3 +119,15 @@
   display: flex;
   width: 100%;
 }
+
+/* A link drawn as a button keeps a link's ink and never underlines. */
+.link {
+  text-decoration: none;
+}
+.link:hover {
+  text-decoration: none;
+  background: var(--btn-bg-hover);
+}
+.link.quiet {
+  --btn-fg: var(--ds-color-accent-text);
+}

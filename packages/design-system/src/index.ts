@@ -79,3 +79,5 @@ export {
 export type { BoardColumnKind, BoardColumnSpec, BoardCard, BoardColumn, BoardScope, BoardSwimlane, LiveActivity } from "./util/boardModel.ts";
 export { ThemeProvider, useTheme } from "./theme.tsx";
 export type { ThemePreference, ThemeContextValue } from "./theme.tsx";
+export { describeServer, summarizeServers, canStartAny, canStopAny, bareUrl } from "./util/servers.ts";
+export type { ServerWords, ServerContext } from "./util/servers.ts";

@@ -1,0 +1,31 @@
+/* A server's state as a bare dot, for a tab's corner: the tone, round, breathing while live. */
+
+.dot {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.mark {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--ds-radius-full);
+  background: var(--srv-mark);
+}
+.neutral {
+  --srv-mark: var(--ds-tone-neutral-mark);
+}
+.info {
+  --srv-mark: var(--ds-tone-info-mark);
+}
+.attention {
+  --srv-mark: var(--ds-tone-attention-mark);
+}
+.success {
+  --srv-mark: var(--ds-tone-success-mark);
+}
+.danger {
+  --srv-mark: var(--ds-tone-danger-mark);
+}
+.live .mark {
+  animation: global(ds-pulse) calc(var(--ds-cadence-breathe) / max(var(--ds-motion-live), 0.0001)) ease-in-out infinite;
+}

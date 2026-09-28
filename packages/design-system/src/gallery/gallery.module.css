@@ -397,3 +397,42 @@
   padding: var(--ds-space-main-pad);
   overflow: hidden;
 }
+
+/* Servers section: the task's tab as apps/web lays it out, and the run
+   screen's split with the drawer or the docked preview beside it. */
+.serversTab {
+  padding: var(--ds-space-16) var(--ds-space-8);
+}
+.serversEmpty {
+  max-width: 640px;
+}
+.serversSection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+}
+.serversSection > h2 {
+  margin: 0;
+}
+.serversNote {
+  margin: 0;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.serversAccess {
+  font-size: var(--ds-text-sm);
+}
+.serversSplit {
+  display: flex;
+  height: 640px;
+  min-width: 0;
+  background: var(--ds-color-surface);
+}
+.serversSplitMain {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  place-items: center;
+  color: var(--ds-color-text-disabled);
+  font-size: var(--ds-text-sm);
+}
