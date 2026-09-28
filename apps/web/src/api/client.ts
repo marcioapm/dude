@@ -37,6 +37,13 @@ import type {
   ProjectPromptMode,
   PromptHistory,
   PromptRole,
+  PreviewSettings,
+  RunServerInput,
+  Server,
+  ServerLogLine,
+  ServerRecipe,
+  ServerRecipeInput,
+  TaskServers,
   SettingsPatch,
   SettingsResponse,
 } from "@dude/domain";
@@ -649,6 +656,75 @@ export class ApiClient {
   /** Answer the question an agent stopped on; the answer starts its next turn. */
   answer(questionId: string, text: string): Promise<{ id: string; status: "answered" }> {
     return this.#request("POST", `/v1/questions/${questionId}/answer`, { text });
+  }
+
+  // -- servers: a project's recipes, and what a run serves ---------------
+
+  /** The project's server recipes, and how its branch previews run. */
+  projectServers(projectId: string): Promise<{ servers: ServerRecipe[]; previews: PreviewSettings }> {
+    return this.#request("GET", `/v1/projects/${encodeURIComponent(projectId)}/servers`);
+  }
+
+  /** Create or replace a recipe; `name` in the path is the one being replaced, the body's may differ (a rename). */
+  putProjectServer(projectId: string, name: string, recipe: ServerRecipeInput): Promise<ServerRecipe> {
+    return this.#request("PUT", `/v1/projects/${encodeURIComponent(projectId)}/servers/${encodeURIComponent(name)}`, recipe);
+  }
+
+  removeProjectServer(projectId: string, name: string): Promise<void> {
+    return this.#request("DELETE", `/v1/projects/${encodeURIComponent(projectId)}/servers/${encodeURIComponent(name)}`);
+  }
+
+  updatePreviewSettings(projectId: string, settings: PreviewSettings): Promise<PreviewSettings> {
+    return this.#request("PUT", `/v1/projects/${encodeURIComponent(projectId)}/preview-settings`, settings);
+  }
+
+  /** The run serving a task — its agent's, else its branch preview — and that run's servers. */
+  taskServers(taskId: string): Promise<TaskServers> {
+    return this.#request("GET", `/v1/tasks/${encodeURIComponent(taskId)}/servers`);
+  }
+
+  runServers(runId: string): Promise<TaskServers> {
+    return this.#request("GET", `/v1/runs/${encodeURIComponent(runId)}/servers`);
+  }
+
+  /** Add a server to a run: one of the project's recipes by name, or a port and command just for this run. */
+  addRunServer(runId: string, input: RunServerInput): Promise<unknown> {
+    return this.#request("POST", `/v1/runs/${encodeURIComponent(runId)}/servers`, input);
+  }
+
+  serverAction(runId: string, name: string, action: "start" | "stop" | "restart"): Promise<unknown> {
+    return this.#request("POST", `/v1/runs/${encodeURIComponent(runId)}/servers/${encodeURIComponent(name)}/${action}`, {});
+  }
+
+  removeRunServer(runId: string, name: string): Promise<void> {
+    return this.#request("DELETE", `/v1/runs/${encodeURIComponent(runId)}/servers/${encodeURIComponent(name)}`);
+  }
+
+  serversAll(runId: string, action: "start-all" | "stop-all"): Promise<unknown> {
+    return this.#request("POST", `/v1/runs/${encodeURIComponent(runId)}/servers/${action}`, {});
+  }
+
+  /** A server's output, current and earlier placements, newest last. */
+  serverLog(runId: string, name: string, tail = 200): Promise<{ lines: ServerLogLine[] }> {
+    return this.#request("GET", `/v1/runs/${encodeURIComponent(runId)}/servers/${encodeURIComponent(name)}/log${qs({ tail })}`);
+  }
+
+  /** Bring the project's servers up on a run of their own, at the task's branch: no agent, just the checkout. */
+  startPreview(taskId: string): Promise<TaskServers> {
+    return this.#request("POST", `/v1/tasks/${encodeURIComponent(taskId)}/preview`, {});
+  }
+
+  stopPreview(taskId: string): Promise<void> {
+    return this.#request("DELETE", `/v1/tasks/${encodeURIComponent(taskId)}/preview`);
+  }
+
+  /**
+   * What the preview frame shows in place of a server's URL, when there is
+   * something to show without the network: nothing here — the frame loads
+   * the URL — and the mockup's page in the fixtures.
+   */
+  previewDocument(_server: Server): string | undefined {
+    return undefined;
   }
 
   /**

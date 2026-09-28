@@ -49,6 +49,15 @@ export function PreviewFrame({ name, state, stateLabel, url, access, docked, onC
   const [location, setLocation] = useState(url);
   const [history, setHistory] = useState<{ back: number; forward: number }>({ back: 0, forward: 0 });
   useEffect(() => setLocation(url), [url]);
+  // A sheet over the page closes on Escape, as a dialog does; docked, it is part of the page.
+  useEffect(() => {
+    if (docked) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [docked, onClose]);
   const parsed = safeParse(location);
 
   const reload = () => {

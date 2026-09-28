@@ -62,6 +62,12 @@ export const previewSettingsSchema = z.object({
   egress: z.array(z.string().min(1)).default([]),
   /** With no request for this long, the preview run is parked. */
   idleTimeoutMinutes: z.number().int().positive().default(PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES),
+  /**
+   * The preview domain (`lux.example.com`), for showing what URL a name
+   * makes before a server exists. Not in the build contract: read when the
+   * backend sends it, a placeholder otherwise.
+   */
+  domain: z.string().nullable().optional(),
 });
 export type PreviewSettings = z.infer<typeof previewSettingsSchema>;
 

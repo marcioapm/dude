@@ -5,7 +5,6 @@
  * now so ages read sensibly.
  */
 
-import type { LogLine } from "../components/LogStream.tsx";
 import type { Server, ServerLogLine, ServerRecipe, ServersRun, TaskServers } from "@dude/domain";
 
 const NOW = Date.now();
@@ -192,17 +191,6 @@ export const apiStartingLog: ServerLogLine[] = lines(9_000, [
 
 export const serverLogs: Record<string, ServerLogLine[]> = { web: webLog, api: apiStartingLog, storybook: [] };
 export const serverLogsExited: Record<string, ServerLogLine[]> = { web: webLog, api: apiExitedLog, storybook: [] };
-
-/** lux's log lines as LogStream draws them: a `[lux]` line is the system's, stderr keeps its channel. */
-export function toLogLines(log: ReadonlyArray<ServerLogLine>): LogLine[] {
-  return log.map((l, i) => ({
-    seq: i,
-    text: l.text,
-    ts: l.t,
-    channel: l.stream,
-    ...(l.text.includes("[lux]") ? { level: "system" as const } : {}),
-  }));
-}
 
 /** A page for the preview frame, so the gallery needs no server. */
 export const PREVIEW_PAGE = `<!doctype html><html><head><meta charset="utf-8"><style>

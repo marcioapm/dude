@@ -114,6 +114,9 @@ export interface LinkButtonProps extends AnchorHTMLAttributes<HTMLAnchorElement>
   readonly leadingIcon?: IconName | undefined;
   /** Opens elsewhere, in a new tab, and says so: the default. */
   readonly external?: boolean | undefined;
+  /** Only the leading icon, square, with `label` as its name: an IconButton that is a link. */
+  readonly iconOnly?: boolean | undefined;
+  readonly label?: string | undefined;
   readonly children?: ReactNode;
 }
 
@@ -124,20 +127,21 @@ export interface LinkButtonProps extends AnchorHTMLAttributes<HTMLAnchorElement>
  * default, with the glyph that says so.
  */
 export const LinkButton = forwardRef<HTMLAnchorElement, LinkButtonProps>(function LinkButton(
-  { href, variant = "quiet", size = "md", leadingIcon, external = true, className, children, ...rest },
+  { href, variant = "quiet", size = "md", leadingIcon, external = true, iconOnly = false, label, className, children, ...rest },
   ref,
 ) {
   return (
     <a
       ref={ref}
       href={href}
-      className={cx(styles["root"], VARIANT_CLASS[variant], variant === "primary" && styles["filled"], size !== "md" && styles[size], styles["link"], className)}
+      className={cx(styles["root"], VARIANT_CLASS[variant], variant === "primary" && styles["filled"], size !== "md" && styles[size], styles["link"], iconOnly && styles["iconOnly"], className)}
       {...(external ? { target: "_blank", rel: "noreferrer" } : {})}
+      {...(iconOnly && label ? { "aria-label": label, title: label } : {})}
       {...rest}
     >
-      {leadingIcon ? <Icon name={leadingIcon} /> : null}
-      {children}
-      {external ? (
+      {leadingIcon ? <Icon name={leadingIcon} size={iconOnly ? 16 : undefined} /> : null}
+      {iconOnly ? null : children}
+      {external && !iconOnly ? (
         <>
           <Icon name="external" size={size === "sm" ? 13 : 14} />
           <span className="ds-sr-only"> (opens in a new tab)</span>

@@ -43,6 +43,7 @@ import { ApiError } from "../api/client.ts";
 import { actorName, humanActor, planFrom } from "../api/conversation.ts";
 import { shortError } from "../escalation.ts";
 import { useReloadOnEvents } from "../hooks/useEventStream.ts";
+import { useServers } from "../hooks/useServers.ts";
 import { firstName } from "@dude/design-system";
 import { usePeople, type People } from "../people.tsx";
 import { FilesSection } from "./FilesSection.tsx";
@@ -50,6 +51,8 @@ import { EscalationPanel } from "./EscalationPanel.tsx";
 import { TaskMetricsSection } from "./MetricsSection.tsx";
 import { NotFound } from "./NotFound.tsx";
 import { OwnerSelect } from "./OwnerSelect.tsx";
+import { ServersAside } from "./ServersAside.tsx";
+import { ServersSection, serversTabTrailing } from "./ServersSection.tsx";
 import { existingTask, TaskDialog } from "./TaskDialog.tsx";
 import { PullRequestActions } from "./PullRequestActions.tsx";
 import { pullRequestActivity } from "../pullRequests.ts";
@@ -78,6 +81,7 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
   const [problem, setProblem] = useState<string | null>(null);
   const [delivering, setDelivering] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [tab, setTab] = useState("overview");
   const people = usePeople();
   // Bumped on each reload, for the sections that read their own data.
   const [version, setVersion] = useState(0);
@@ -128,7 +132,14 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
     void load();
   }, [load]);
 
-  useReloadOnEvents({ client, taskId }, () => void load());
+  // The servers change on their own stream event; the rest of the page on
+  // any other. Both re-read, since a `servers.changed` is also a change.
+  const [serversVersion, setServersVersion] = useState(0);
+  useReloadOnEvents({ client, taskId }, () => void load(), 300, (e) => {
+    if (e.eventType === EventTypes.ServersChanged) setServersVersion((v) => v + 1);
+    return false;
+  });
+  const servers = useServers(client, { taskId }, serversVersion);
 
   const deliver = async () => {
     setDelivering(true);
@@ -240,12 +251,13 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
         <TaskDialog client={client} projectId={item.projectId} onClose={() => setEditing(false)} existing={existingTask(item, started)} onSaved={() => void load()} />
       ) : null}
 
-      <Tabs defaultValue="overview" fill>
+      <Tabs value={tab} onValueChange={setTab} fill>
         <TabList aria-label="Task" className="tabsInset">
           <Tab value="overview">Overview</Tab>
           <Tab value="findings" count={findings.length > 0 ? findings.length : undefined}>Findings</Tab>
           <Tab value="sessions" count={item.runs.length > 0 ? item.runs.length : undefined}>Sessions</Tab>
           <Tab value="files" count={artifacts.length > 0 ? new Set(artifacts.map((a) => a.name)).size : undefined}>Files</Tab>
+          <Tab value="servers" trailing={serversTabTrailing(servers.data)}>Servers</Tab>
           <Tab value="activity">Activity</Tab>
         </TabList>
 
@@ -289,8 +301,8 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
               <TaskMetricsSection client={client} taskId={taskId} live={item.status === "running"}
                 done={["done", "failed", "aborted"].includes(item.status)} version={version} />
             </div>
-            {prs.length > 0 ? (
-              <aside className="taskAside" aria-label="Pull requests">
+            {prs.length > 0 || servers.data ? (
+              <aside className="taskAside" aria-label="Beside">
                 {prs.map((pr) => (
                   <PullRequestActions key={pr.id} client={client} pr={pr} defaultMethod={mergeMethod} onChanged={() => void load()}>
                     {(actions) => (
@@ -309,6 +321,9 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
                     )}
                   </PullRequestActions>
                 ))}
+                {servers.data ? (
+                  <ServersAside client={client} taskId={taskId} servers={servers} onAll={() => setTab("servers")} />
+                ) : null}
               </aside>
             ) : null}
           </div>
@@ -350,6 +365,10 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
           ) : (
             <EmptyState compact icon="file" title="No files yet" description="What the agents save — notes, screenshots, reports, recordings — shows here." />
           )}
+        </TabPanel>
+
+        <TabPanel value="servers" className="taskPane">
+          <ServersSection client={client} servers={servers} taskId={taskId} />
         </TabPanel>
 
         <TabPanel value="activity" className="taskPane">

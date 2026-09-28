@@ -19,10 +19,10 @@ import { FormActions } from "../../primitives/Layout.tsx";
 import { RowMenu } from "../../primitives/RowMenu.tsx";
 import { Select } from "../../primitives/Select.tsx";
 import { SERVER_DISPLAY_STATES } from "../../tokens/servers.ts";
-import { canStartAny, canStopAny, describeServer, summarizeServers } from "../../util/servers.ts";
+import { canStartAny, canStopAny, describeServer, serverLogLines, summarizeServers } from "../../util/servers.ts";
 import { formatTimestamp } from "../../util/format.ts";
 import type { PreviewStage, Server, ServerEnvVar, TaskServers } from "@dude/domain";
-import { PREVIEW_DOMAIN, PREVIEW_PAGE, serverLogs, serverLogsExited, serverRecipes, serverScenarios, serverUrl, toLogLines, type ServerScenario } from "../serverFixtures.ts";
+import { PREVIEW_DOMAIN, PREVIEW_PAGE, serverLogs, serverLogsExited, serverRecipes, serverScenarios, serverUrl, type ServerScenario } from "../serverFixtures.ts";
 import { people } from "../navFixtures.ts";
 
 const SCENARIO_WORDS: Record<ServerScenario, string> = {
@@ -121,7 +121,7 @@ function Panel({ data, compact, logHeight, openLogs = [] }: { readonly data: Tas
                 onStop={() => undefined}
                 onRestart={() => undefined}
                 menu={<RowMenu size="sm" label={`Actions for ${s.name}`} items={[{ id: "remove", label: "Remove", tone: "danger" }]} />}
-                logs={{ open: open.has(s.name), onToggle: () => toggle(s.name), lines: toLogLines(logs[s.name] ?? []), live: s.state === "ready" || s.state === "starting", maxHeight: logHeight, onFull: () => undefined }}
+                logs={{ open: open.has(s.name), onToggle: () => toggle(s.name), lines: serverLogLines(logs[s.name] ?? []), live: s.state === "ready" || s.state === "starting", maxHeight: logHeight, onFull: () => undefined }}
               />
             );
           })}
@@ -372,7 +372,7 @@ function RowDemo({ server, openLogs }: { readonly server: Server; readonly openL
       onStop={() => undefined}
       onRestart={() => undefined}
       menu={<IconButton size="sm" icon="more" label={`Actions for ${server.name}`} />}
-      logs={{ open, onToggle: () => setOpen(!open), lines: toLogLines(logs[server.name] ?? []), live: server.state === "ready" }}
+      logs={{ open, onToggle: () => setOpen(!open), lines: serverLogLines(logs[server.name] ?? []), live: server.state === "ready" }}
     />
   );
 }
