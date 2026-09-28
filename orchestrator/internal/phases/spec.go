@@ -253,8 +253,13 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 	opencode := map[string]any{"provider": c.OpenCodeProviders, "model": in.Model}
 	if in.Effort != "" {
 		// OpenCode passes an agent's unknown options to the provider as
-		// model options; reasoningEffort is the one providers read.
-		opencode["agent"] = map[string]any{"build": map[string]any{"reasoningEffort": in.Effort}}
+		// model options; reasoningEffort is the one providers read. Their
+		// scale stops at high, so dude's "max" is the most they take.
+		effort := in.Effort
+		if effort == "max" {
+			effort = "high"
+		}
+		opencode["agent"] = map[string]any{"build": map[string]any{"reasoningEffort": effort}}
 	}
 	config, _ := json.Marshal(opencode)
 	spec.Secrets = append(spec.Secrets,

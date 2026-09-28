@@ -76,6 +76,8 @@ function Source<T>({ scope, setting, reset }: { scope: SettingsScope; setting: S
 // An agent role
 // ---------------------------------------------------------------------------
 
+const lineCount = (body: string) => { const n = body.split("\n").length; return `${n} ${n === 1 ? "line" : "lines"}`; };
+
 const NONE = "__none__";
 
 export function RolePage({ scope, role, onOpenRun }: { scope: SettingsScope; role: SettingsRole; onOpenRun?: ((runId: string) => void) | undefined }) {
@@ -236,7 +238,7 @@ function PromptSection({ scope, role, onHistory }: { scope: SettingsScope; role:
         <SettingsDisclosure
           summary={
             <>
-              <b>{orgName}’s {SETTINGS_ROLE_LABEL[role].toLowerCase()} prompt</b> · {org.body.split("\n").length} lines ·{" "}
+              <b>{orgName}’s {SETTINGS_ROLE_LABEL[role].toLowerCase()} prompt</b> · {lineCount(org.body)} ·{" "}
               {mode === "add" ? `comes first; ${project.name}’s is added after it` : `what ${project.name}’s agents are told`}
             </>
           }
