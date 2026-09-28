@@ -109,19 +109,15 @@ export interface PersonAvatarStackProps extends Omit<HTMLAttributes<HTMLSpanElem
   readonly max?: number | undefined;
   /** Per person, the agent working for them (the first person is usually the owner). */
   readonly agents?: ReadonlyMap<string, { readonly role: AgentRole; readonly live: boolean }> | undefined;
-  /** The first face one size up: the owner leads. */
-  readonly leadLarger?: boolean | undefined;
   readonly children?: ReactNode;
 }
-
-const STEP_UP: Partial<Record<PersonAvatarSize, PersonAvatarSize>> = { 16: 20, 20: 24, 24: 28, 28: 32, 32: 40, 40: 56 };
 
 /**
  * Faces overlapping by a quarter, the first on top: order by relevance
  * (the owner, then everyone else on the task). Past `max`, a "+N" in the
  * same shape stands for the rest; every name is in the group's label.
  */
-export function PersonAvatarStack({ people, size = 20, max = 4, agents, leadLarger, className, ...rest }: PersonAvatarStackProps) {
+export function PersonAvatarStack({ people, size = 20, max = 4, agents, className, ...rest }: PersonAvatarStackProps) {
   if (people.length === 0) return null;
   const shown = people.length > max ? people.slice(0, Math.max(1, max - 1)) : people;
   const more = people.length - shown.length;
@@ -134,7 +130,7 @@ export function PersonAvatarStack({ people, size = 20, max = 4, agents, leadLarg
           <PersonAvatar
             key={p.id ?? `${p.name}-${i}`}
             person={p}
-            size={i === 0 && leadLarger ? (STEP_UP[size] ?? size) : size}
+            size={size}
             {...(a ? { agent: a.role, live: a.live } : {})}
           />
         );

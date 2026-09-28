@@ -446,6 +446,12 @@ export function taskOwner(wi: NavTask): Person | null {
   return wi.people?.[0] ?? null;
 }
 
+/** Agents work for the task's owner: the one working now, keyed for the owner's face. */
+export function ownerAgents(wi: NavTask, working: NavSession | undefined): Map<string, { role: AgentRole; live: true }> | undefined {
+  const owner = taskOwner(wi);
+  return owner && working ? new Map([[owner.id ?? owner.name, { role: working.role, live: true as const }]]) : undefined;
+}
+
 /**
  * What needs a person, split by whose it is: yours (you own the task, or
  * nobody does, so anyone may act) and others'. With no `you`, all of it

@@ -9,7 +9,7 @@
  */
 
 import { useMemo, useState } from "react";
-import { attentionItems, useNow, waitingSplit, waitingWords, type AttentionItem, type NavProject, type NavRef } from "@dude/design-system";
+import { attentionItems, taskOwner, toMs, useNow, waitingSplit, waitingWords, type AttentionItem, type NavProject, type NavRef } from "@dude/design-system";
 import { Duration, PersonAvatar, ProjectAvatar, ScreenHeader, WaitingGroup, WaitingRow } from "@dude/design-system/components";
 import { Button, EmptyState, useToast } from "@dude/design-system/primitives";
 import type { ApiClient } from "../api/client.ts";
@@ -45,8 +45,8 @@ export function InboxScreen({ client, projects, onSelect, onChanged }: {
   };
 
   const row = (it: AttentionItem, mine: boolean) => {
-    const owner = it.task.people?.[0];
-    const since = it.task.statusSince !== undefined ? new Date(it.task.statusSince).getTime() : NaN;
+    const owner = taskOwner(it.task);
+    const since = toMs(it.task.statusSince);
     const ask = it.session ? (it.session.activity ?? "is waiting for you") : waitingWords(it.task);
     const whose = mine ? (it.session ? "your agent is waiting" : "decide how it goes on") : owner ? `${firstName(owner.name)}'s task` : "nobody's task";
     return (
@@ -58,7 +58,7 @@ export function InboxScreen({ client, projects, onSelect, onChanged }: {
         ask={ask}
         whereTitle={it.epic ? `${it.project.name} · ${it.epic.title}` : it.project.name}
         where={<><ProjectAvatar project={it.project} size={16} aria-hidden title={undefined} />{[it.task.key, it.task.title, whose].filter(Boolean).join(" · ")}</>}
-        age={Number.isFinite(since) ? <Duration ms={Math.max(0, now - since)} format="age" tone="muted" /> : null}
+        age={since !== null ? <Duration ms={Math.max(0, now - since)} format="age" tone="muted" /> : null}
         action={mine ? (
           <Button size="sm" variant="primary" onClick={() => open(it)}>
             {it.session ? "Answer" : "Decide"}

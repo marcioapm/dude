@@ -34,6 +34,12 @@ export interface UseEventStreamOptions {
 export interface EventStreamState {
   events: PersistedEvent[];
   status: StreamStatus;
+  /**
+   * How many times the stream has come back after being down. A view that
+   * reads anything besides the events re-reads it when this changes: its
+   * subject may have moved while nothing could say so.
+   */
+  reconnects: number;
 }
 
 const DEFAULT_LIMIT = 2_000;
@@ -43,6 +49,12 @@ export function useEventStream(options: UseEventStreamOptions): EventStreamState
 
   const [events, setEvents] = useState<PersistedEvent[]>([]);
   const [status, setStatus] = useState<StreamStatus>("connecting");
+  const [reconnects, setReconnects] = useState(0);
+  const previous = useRef<StreamStatus>(status);
+  useEffect(() => {
+    if (cameBack(previous.current, status)) setReconnects((n) => n + 1);
+    previous.current = status;
+  }, [status]);
   // Bumped when the network comes back: the stream reopens from where it was.
   const [generation, setGeneration] = useState(0);
   const lastCursor = useRef(0);
@@ -116,7 +128,7 @@ export function useEventStream(options: UseEventStreamOptions): EventStreamState
     };
   }, [client, key, generation]); // eslint-disable-line react-hooks/exhaustive-deps -- `key` stands for the scope's fields
 
-  return { events, status };
+  return { events, status, reconnects };
 }
 
 /**
@@ -137,7 +149,7 @@ export function useReloadOnEvents(
 ): StreamStatus {
   // Only whether something arrived matters, so the stream keeps almost
   // nothing.
-  const { events, status } = useEventStream({ ...options, limit: 1, live: true });
+  const { events, status, reconnects } = useEventStream({ ...options, limit: 1, live: true });
   const latest = useRef(reload);
   latest.current = reload;
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -155,11 +167,9 @@ export function useReloadOnEvents(
 
   // A live-only stream replays nothing when it comes back: whatever
   // happened while it was down is only on the server. Re-read once.
-  const previous = useRef<StreamStatus>(status);
   useEffect(() => {
-    if (cameBack(previous.current, status)) schedule();
-    previous.current = status;
-  }, [status, schedule]);
+    if (reconnects > 0) schedule();
+  }, [reconnects, schedule]);
   useEffect(() => () => clearTimeout(timer.current), []);
   return status;
 }

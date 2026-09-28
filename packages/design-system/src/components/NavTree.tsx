@@ -9,6 +9,7 @@ import {
   liveSessions,
   navKey,
   projectPeople,
+  ownerAgents,
   type NavEpic,
   type NavFilter,
   type NavOverrides,
@@ -396,9 +397,7 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
     const live = liveSessions(wi);
     const working = live.find((s) => s.status === "running");
     const people = wi.people ?? [];
-    const owner = people[0];
-    // Agents work for the task's owner: the one working now sits on their face.
-    const agents = owner && working ? new Map([[owner.id ?? owner.name, { role: working.role, live: true }]]) : undefined;
+    const agents = ownerAgents(wi, working);
     const pr = wi.pullRequests?.[0];
     return (
       <div {...common} className={cx(styles["row"], styles["task"], needsYou && styles["needsYou"], spec.terminal && styles["finished"], selected && styles["selected"])}>

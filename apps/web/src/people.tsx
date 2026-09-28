@@ -67,7 +67,4 @@ export function usePeople(): People {
   return useContext(PeopleContext);
 }
 
-/** "Ana" from "Ana Ribeiro": what a sentence calls someone. */
-export function firstName(name: string): string {
-  return name.split(/\s+/)[0] || name;
-}
+export { firstName } from "@dude/design-system";
