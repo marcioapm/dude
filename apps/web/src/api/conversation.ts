@@ -200,6 +200,10 @@ export const PAUSE_WORDS: Record<DudePause, { parked: string; composer: string }
     composer: "Parked after going quiet. Resume it to steer.",
   },
   repository: { parked: "Paused to bring in a repository.", composer: "Bringing in a repository; it carries on in a moment." },
+  unused: {
+    parked: "Parked: nobody opened the preview for a while. Starting a server wakes it.",
+    composer: "A parked branch preview: start a server to wake it.",
+  },
 };
 
 /** What the transcript says for what dude did to a Run, by event type. */

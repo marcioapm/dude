@@ -166,6 +166,7 @@ describe("a project's servers", () => {
       { ...web, workdir: "../other" },
       { ...web, env: [{ name: "1BAD", value: "x" }] },
       { ...web, env: [{ name: "A", value: "1" }, { name: "A", value: "2" }] },
+      { ...web, env: [{ name: "LUX_TOKEN", value: "x" }] },
     ]) {
       const res = await call(adminKey, "PUT", `/v1/projects/${PROJECT}/servers/${bad.name}`, bad);
       expect(res.status).toBe(400);

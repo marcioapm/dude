@@ -75,6 +75,9 @@ func TestAServerAPersonTypesRunsAsTheyTypedIt(t *testing.T) {
 	if _, err := (ManualServer{Name: "x", Port: 1, Command: json.RawMessage(`3`)}).Input(""); err == nil {
 		t.Error("a number as a command was taken")
 	}
+	if _, err := (ManualServer{Name: "x", Port: 1, Env: json.RawMessage(`{"LUX_TOKEN":"x"}`)}).Input(""); err == nil {
+		t.Error("an env name with lux's reserved prefix was taken")
+	}
 }
 
 func TestAPreviewsEgressIsWhatItsSettingsAllow(t *testing.T) {
