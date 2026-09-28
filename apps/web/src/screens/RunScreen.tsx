@@ -23,6 +23,7 @@ import {
   EventStream,
   ChangedFiles,
   QuestionCard,
+  Segmented,
   SessionFacts,
   SessionHeader,
   SessionRail,
@@ -32,7 +33,7 @@ import {
   ToolCallCard,
   summarizeToolArgs,
 } from "@dude/design-system/components";
-import { Button, Callout, Dialog, Spinner, Tab, TabList, TabPanel, Tabs, Textarea } from "@dude/design-system/primitives";
+import { Button, Callout, Dialog, Spinner, Textarea } from "@dude/design-system/primitives";
 import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, runLabel } from "@dude/domain";
 import type { AgentRole, PersistedEvent } from "@dude/domain";
 import type { ApiClient, Person, RunDetail, RunDiffSummary } from "../api/client.ts";
@@ -41,9 +42,10 @@ import { PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, snapshot, t
 import type { ComposerSubmission } from "@dude/design-system/components";
 import { useEventStream } from "../hooks/useEventStream.ts";
 import { conflictNotice, type Notice } from "../conflict.ts";
-import { firstName } from "@dude/design-system";
+import { firstName, Icon } from "@dude/design-system";
 import { usePeople, type People } from "../people.tsx";
 import { NotFound } from "./NotFound.tsx";
+import { DudeMark, dudeName } from "../DudeMark.tsx";
 import { ChangesPanel } from "./ChangesPanel.tsx";
 
 export interface RunScreenProps {
@@ -78,11 +80,13 @@ const STATUS_EVENTS: ReadonlySet<string> = new Set([
 ]);
 
 export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, onBack, task: given }: RunScreenProps) {
-  const [view, setView] = useState("chat");
+  const [view, setView] = useState<"chat" | "changes">("chat");
+  // The event ledger, for debugging: over the page, not a view of its own.
+  const [showEvents, setShowEvents] = useState(false);
   // The file Changes shows alone, picked there or in the rail. Leaving
   // Changes forgets it, so coming back finds all of them.
   const [selected, setSelected] = useState<string | null>(null);
-  const showView = (next: string) => {
+  const showView = (next: "chat" | "changes") => {
     if (next !== "changes") setSelected(null);
     setView(next);
   };
@@ -291,21 +295,40 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     </>
   ) : undefined;
 
+  // Conversation or Changes: one switch, in the same place on both, with the
+  // diff's own controls beside it rather than on a row of their own.
+  const switcher = hasChanges ? (
+    <Segmented<"chat" | "changes"> label="Show" size="sm" value={view} onChange={showView} data-testid="session-view"
+      options={[
+        { value: "chat", label: <><Icon name="message" size={13} />Conversation</> },
+        { value: "changes", label: (
+          <>
+            <Icon name="git-branch" size={13} />Changes
+            {changed.length > 0 ? <span className="ds-tnum runCount">{changed.length}</span> : null}
+            {liveDiff && changed.length > 0 ? <span className="ds-live-dot" aria-label="changing now" /> : null}
+          </>
+        ) },
+      ]} />
+  ) : null;
+  const eventLog = (
+    <Button size="sm" variant="quiet" leadingIcon="list" onClick={() => setShowEvents(true)} data-testid="open-event-log">
+      Event log
+    </Button>
+  );
+
   return (
     <div className="runScreen" data-testid="run-screen">
       <SessionHeader session={session} actions={actions} />
-      <Tabs value={view} onValueChange={showView} fill>
-        <TabList variant="pills" className="tabsInset runTabs">
-          <Tab value="chat" icon="message">Conversation</Tab>
-          {/* The agent's checkout, as it changes: only for a Run with one. */}
-          {hasChanges ? (
-            <Tab value="changes" icon="git-branch" count={diffSummary?.files.length} live={liveDiff && changed.length > 0}>Changes</Tab>
-          ) : null}
-          {/* Debugging, not the daily view — hence last and quieter. */}
-          <Tab value="events" count={events.length}>Events</Tab>
-        </TabList>
-
-        <TabPanel value="chat" fill>
+      {view === "changes" && hasChanges ? (
+        <ChangesPanel client={client} runId={runId} role={role} events={events} checksum={diffSummary?.checksum ?? ""} live={liveDiff}
+          selected={selected} onSelectedChange={setSelected} leading={switcher} trailing={eventLog} />
+      ) : (
+        <>
+          <div className="runBar">
+            {switcher}
+            <span className="runBarSpacer" />
+            {eventLog}
+          </div>
           <div className="runChat">
             <ChatTranscript
               fill
@@ -349,7 +372,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
               )}
               emptyMessage="Waiting for the agent to start."
             >
-              {conversation.turns.map((turn) => renderTurn(turn, role, conversation.contextWindow, !isLive, people, decide, waitingOn))}
+              {conversation.turns.map((turn) => renderTurn(turn, role, conversation.contextWindow, !isLive, people, dudeName(run.taskId), decide, waitingOn))}
               {conversation.activity ? (
                 <ChatMessage
                   role={role}
@@ -386,31 +409,31 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
               ) : null}
             </SessionRail>
           </div>
-        </TabPanel>
+        </>
+      )}
 
-        <TabPanel value="changes" fill>
-          <ChangesPanel client={client} runId={runId} role={role} events={events} checksum={diffSummary?.checksum ?? ""} live={liveDiff}
-            selected={selected} onSelectedChange={setSelected} />
-        </TabPanel>
-
-        <TabPanel value="events" fill>
-          <EventStream>
-            {events.map((event) => (
-              <EventRow
-                key={event.eventId}
-                occurredAt={event.occurredAt}
-                eventType={event.eventType}
-                actor={{ type: event.actor.type, id: event.actor.id, ...namedActor(event, people) }}
-                summary={summarize(event)}
-                // An element, not a string: EventRow only renders the detail
-                // when the row is open, so the JSON is built for the handful
-                // of rows an operator actually expands.
-                detail={<PayloadDetail payload={event.payload} />}
-              />
-            ))}
-          </EventStream>
-        </TabPanel>
-      </Tabs>
+      {showEvents ? (
+        <Dialog open size="xl" onOpenChange={(o) => !o && setShowEvents(false)} title="Event log"
+          description="Everything this session recorded, oldest first: for when something looks wrong.">
+          <div className="eventLog" data-testid="event-log">
+            <EventStream>
+              {events.map((event) => (
+                <EventRow
+                  key={event.eventId}
+                  occurredAt={event.occurredAt}
+                  eventType={event.eventType}
+                  actor={{ type: event.actor.type, id: event.actor.id, ...namedActor(event, people) }}
+                  summary={summarize(event)}
+                  // An element, not a string: EventRow only renders the detail
+                  // when the row is open, so the JSON is built for the handful
+                  // of rows an operator actually expands.
+                  detail={<PayloadDetail payload={event.payload} />}
+                />
+              ))}
+            </EventStream>
+          </div>
+        </Dialog>
+      ) : null}
 
       {notice ? (
         <Callout tone="neutral" data-testid="conflict-notice">
@@ -471,7 +494,7 @@ function namedActor(event: PersistedEvent, people: People): { name?: string } {
   return name ? { name } : {};
 }
 
-function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: boolean, people: People,
+function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: boolean, people: People, dude: string,
   decide?: (requestId: string, approve: boolean) => void, waitingOn?: string) {
   switch (turn.kind) {
     case "repositoryRequest": {
@@ -531,7 +554,7 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
     case "prompt":
       // Written by the factory, not a person: the avatar and name say so.
       return (
-        <ChatMessage key={turn.id} role="system" name="dude" intent="prompt" content={turn.text} startedAt={turn.at} />
+        <ChatMessage key={turn.id} role="system" name={dude} avatar={<DudeMark size={40} />} intent="prompt" content={turn.text} startedAt={turn.at} />
       );
     case "message":
       return (

@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { Block, Col, Label, Panes, Section, type PaneMode } from "../Frame.tsx";
 import { AgentAvatar } from "../../components/AgentAvatar.tsx";
 import { ChangedFiles, SessionFacts, SessionRail, SessionRailBlock, ToolUsage } from "../../components/SessionRail.tsx";
-import { Tab, TabList, TabPanel, Tabs } from "../../primitives/Tabs.tsx";
+import { Button } from "../../primitives/Button.tsx";
+import { Segmented } from "../../components/ScreenHeader.tsx";
+import { Icon } from "../../icons/index.tsx";
 import { Cost } from "../../components/Cost.tsx";
 import { LiveDiff, type LiveDiffFile } from "../../components/LiveDiff.tsx";
 import { FileGallery, FileViewer, type GalleryFile } from "../../components/FileGallery.tsx";
@@ -44,6 +46,18 @@ const NEXT: LiveDiffFile = {
   ] }],
 };
 
+/** A session's Conversation / Changes switch, as the app draws it. */
+function SessionSwitch({ value: start = "chat" }: { readonly value?: "chat" | "changes" }) {
+  const [value, setValue] = useState(start);
+  return (
+    <Segmented label="Show" size="sm" value={value} onChange={setValue}
+      options={[
+        { value: "chat", label: <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Icon name="message" size={13} />Conversation</span> },
+        { value: "changes", label: <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Icon name="git-branch" size={13} />Changes 3<span className="ds-live-dot" /></span> },
+      ]} />
+  );
+}
+
 /** Every few seconds the agent writes a little more. */
 function LiveDemo() {
   const [files, setFiles] = useState(FILES);
@@ -53,7 +67,8 @@ function LiveDemo() {
   }, []);
   return (
     <div style={{ height: 420, display: "flex" }}>
-      <LiveDiff files={files} base="0fff44b9a1" live onOpenFile={() => {}}
+      <LiveDiff files={files} base="0fff44b9a1" live onOpenFile={() => {}} leading={<SessionSwitch value="changes" />}
+        trailing={<Button size="sm" variant="quiet" leadingIcon="list">Event log</Button>}
         lastChange={<><AgentAvatar role="implementer" size="xs" live /> Write <code>revenue.test.ts</code> · just now</>} />
     </div>
   );
@@ -98,19 +113,14 @@ export function LiveSection({ mode }: { readonly mode: PaneMode }) {
           </div>
         </Panes>
       </Block>
-      <Block id="l-session" title="A session's views and its rail" note="Under a session's header, its views as pill tabs — the second level under the page's underline tabs. Changes carries its count and, while the agent changes files, a breathing dot. Beside the conversation, the rail on the chrome shade: what the header does not say, the tools used, the files changed so far (each opens Changes on it alone).">
+      <Block id="l-session" title="A session's bar and its rail" note="Under a session's header, one bar: Conversation / Changes as a small Segmented (Changes with its count and, while the agent changes files, the breathing dot), the event log as a quiet button at the far end, and — on Changes — the diff's own controls between them (the LiveDiff demo above shows that row). Beside the conversation, the rail on the chrome shade: what the header does not say, the tools used, the files changed so far (each opens Changes on it alone).">
         <Panes mode={mode}>
           <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 260px", height: 360 }}>
-            <Tabs defaultValue="chat" fill>
-              <TabList variant="pills">
-                <Tab value="chat" icon="message">Conversation</Tab>
-                <Tab value="changes" icon="git-branch" count={3} live>Changes</Tab>
-                <Tab value="events" count={128}>Events</Tab>
-              </TabList>
-              <TabPanel value="chat" fill><div /></TabPanel>
-              <TabPanel value="changes" fill><div /></TabPanel>
-              <TabPanel value="events" fill><div /></TabPanel>
-            </Tabs>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+              <SessionSwitch />
+              <span style={{ flex: 1 }} />
+              <Button size="sm" variant="quiet" leadingIcon="list">Event log</Button>
+            </div>
             <SessionRail aria-label="This session">
               <SessionRailBlock label="Session">
                 <SessionFacts facts={[{ label: "Model", value: "claude-sonnet-5", mono: true }, { label: "Agent", value: "opencode" }, { label: "Attempt", value: 1 }]} />

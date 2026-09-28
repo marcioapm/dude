@@ -459,12 +459,17 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   to its task when it ends.
 - The open session is `SessionHeader` (whose agent, for whom, its model,
   status, cost, tokens and elapsed, Pause / Abort — on every view, so the
-  numbers never depend on the rail being there), then its
-  views as `TabList variant="pills"` — the second level under the page's
-  underline tabs, told apart by a wash, not a line: **Conversation**,
-  **Changes**, **Events** (debugging; last, quiet).
-- **Changes** carries its file count and, while the agent is changing
-  files, a breathing dot (`Tab live`). Nothing else on the tab moves.
+  numbers never depend on the rail being there), then **one bar**: a small
+  `Segmented` switch between **Conversation** and **Changes** first, the
+  **Event log** (debugging) as a quiet button last, and on Changes the
+  diff's own controls between them (`LiveDiff`'s `leading` / `trailing`).
+  One row, one left edge, whichever view is shown: never a row of tabs over
+  a row of tools.
+- **Changes** in the switch carries its file count and, while the agent is
+  changing files, the breathing dot. That dot is the one "live" on the bar:
+  the header's status already says Running, so the diff has no Live pill.
+- The event log opens over the page (`Dialog`, xl): it is read when
+  something looks wrong, not watched, so it is not a view beside the others.
 - Beside the conversation, a `SessionRail` on the chrome shade: what the
   header does not say (agent, attempt), the tools it used (`ToolUsage`), and the files it has
   changed so far (`ChangedFiles`, a breathing dot on the label while live).
@@ -475,12 +480,12 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - With no session asked for, the one shown is picked once (running, else
   newest) and kept: a phase ending must not swap it under someone reading.
 - **Changes is `LiveDiff`**: the agent's checkout against the commit the
-  session started from, uncommitted work included. Its header reads *Live ·
-  Since abc1234 · N files +a −d*, then the last change with the agent's
-  face (*[face] Write `revenue.ts` · just now*), *Follow the agent*, and
-  Unified / Split (`Segmented`). The header wraps before it truncates: the
-  summary is never cut to "3 fil…". With nothing changed there is no
-  summary, only the empty message.
+  session started from, uncommitted work included. Its toolbar reads
+  *Since abc1234 · N files +a −d*, then *Follow the agent* and Unified /
+  Split (`Segmented`). It wraps before it truncates: the summary is never
+  cut to "3 fil…". With nothing changed there is no summary, only the empty
+  message. The last change, with the agent's face (*[face] Write
+  `revenue.ts`*), heads the file list, where the change lands.
 - Files down the left with their status letter (M / A / D / R on its tone)
   and counts; each file's diff under a header that sticks, with an **Open
   in the viewer** icon button (not on a deleted file). The viewer is the
@@ -748,9 +753,7 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 
 `src/primitives/` — Button, IconButton, Input, Textarea, Select, Checkbox,
 Badge, Card, Table (THead/TBody/Tr/Th/Td/TableEmpty), Tabs (underline for a
-page, pills for a second level under it, segmented in a toolbar; a tab can
-carry a count and a live dot — `.ds-live-dot`, the one breathing dot on
-`--ds-color-live`), Dialog, Toast,
+page, segmented in a toolbar; a tab can carry a count), Dialog, Toast,
 Tooltip, RowMenu (+ `rowMenuOpeners`), Skeleton/SkeletonLines/Spinner,
 EmptyState, ScrollArea.
 
@@ -866,6 +869,8 @@ EmptyState, ScrollArea.
   added and removed.
 - **SessionHeader** — the transcript's header on its own, for a session
   whose views sit under it.
+- **`.ds-live-dot`** (base.css) — the one breathing dot, on
+  `--ds-color-live`: beside what is changing now (a view's name, a label).
 - **SessionRail / SessionRailBlock / SessionFacts / ToolUsage /
   ChangedFiles** — the column beside a session's conversation; its facts
   are a `KeyValueList`, values to the right.

@@ -16,10 +16,17 @@ export interface LiveDiffProps extends Omit<HTMLAttributes<HTMLDivElement>, "chi
   readonly files: ReadonlyArray<LiveDiffFile>;
   /** The commit it is against; shown short. */
   readonly base: string;
-  /** Still changing: the agent is at work. Shows "Live". */
+  /** Still changing: the agent is at work. Offers Follow the agent. */
   readonly live?: boolean | undefined;
-  /** What the agent did last ("Write LIVE.md · just now"), beside the toggle. */
+  /** What the agent did last ("Write LIVE.md · just now"), at the top of the file list. */
   readonly lastChange?: ReactNode;
+  /**
+   * First and last in the toolbar: what the diff sits among — a session's
+   * view switch, its event log — so the diff's controls and the page's
+   * share one row rather than stacking.
+   */
+  readonly leading?: ReactNode;
+  readonly trailing?: ReactNode;
   /** Shown when nothing changed yet. */
   readonly emptyMessage?: ReactNode;
   /** Opens a file in the viewer; each file's header offers it when given. */
@@ -91,7 +98,7 @@ const SIGN = { "+": "+", "-": "−", " ": "" } as const;
  * the new. Changes are told apart by sign and gutter as well as tint
  * (+, −), so the diff reads without colour.
  */
-export function LiveDiff({ files, base, live, lastChange, emptyMessage, onOpenFile, defaultView = "unified", selected: given, onSelectedChange, fileList = true, className, ...rest }: LiveDiffProps) {
+export function LiveDiff({ files, base, live, lastChange, leading, trailing, emptyMessage, onOpenFile, defaultView = "unified", selected: given, onSelectedChange, fileList = true, className, ...rest }: LiveDiffProps) {
   const [view, setView] = useState<LiveDiffView>(defaultView);
   // Keep the latest change in view: on while live, until the person picks a file.
   const [follow, setFollow] = useState(live ?? false);
@@ -161,11 +168,7 @@ export function LiveDiff({ files, base, live, lastChange, emptyMessage, onOpenFi
   return (
     <div className={cx(styles["root"], className)} {...rest}>
       <div className={styles["head"]}>
-        {live ? (
-          <span className={styles["live"]} data-testid="live-pill">
-            <i className="ds-live-dot" aria-hidden /> Live
-          </span>
-        ) : null}
+        {leading}
         {files.length > 0 ? (
           <span className={styles["since"]} title={base ? `The agent's checkout against ${base}, the commit it started from. Uncommitted work included.` : undefined}>
             {base ? (
@@ -177,8 +180,7 @@ export function LiveDiff({ files, base, live, lastChange, emptyMessage, onOpenFi
           </span>
         ) : null}
         <span className={styles["spacer"]} />
-        {lastChange ? <span className={styles["last"]}>{lastChange}</span> : null}
-        {live ? (
+        {live && files.length > 0 ? (
           <Switch
             checked={follow}
             onCheckedChange={(on) => {
@@ -193,6 +195,7 @@ export function LiveDiff({ files, base, live, lastChange, emptyMessage, onOpenFi
           <Segmented label="Show the diff" size="sm" value={view} onChange={setView} data-testid="diff-view"
             options={[{ value: "unified", label: "Unified" }, { value: "split", label: "Split" }]} />
         ) : null}
+        {trailing}
       </div>
       {files.length === 0 ? (
         <div className={styles["empty"]}>{emptyMessage ?? "No changes yet."}</div>
@@ -200,6 +203,7 @@ export function LiveDiff({ files, base, live, lastChange, emptyMessage, onOpenFi
         <div className={cx(styles["body"], !fileList && styles["bodyAlone"])}>
           {fileList ? (
             <nav className={styles["files"]} aria-label="Changed files">
+              {lastChange ? <div className={styles["last"]} data-testid="last-change">{lastChange}</div> : null}
               <button type="button" className={cx(styles["file"], styles["all"], !selected && styles["current"])}
                 aria-pressed={!selected} onClick={() => select(null)}>
                 <span className={styles["path"]}>

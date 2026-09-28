@@ -131,8 +131,30 @@ body {
   min-height: 0;
 }
 /* A session's Conversation / Changes / Events, under its header. */
-.runTabs {
-  padding-bottom: var(--ds-space-8);
+/* A session's one toolbar: the view switch first, the event log last, and
+   — on Changes — the diff's own controls between them. */
+.runBar {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+  padding: 0 var(--ds-space-24) var(--ds-space-12);
+}
+.runBarSpacer {
+  flex: 1;
+}
+/* The switch's options carry an icon, and Changes its count and live dot. */
+[data-testid="session-view"] button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+}
+.runCount {
+  color: var(--ds-color-text-muted);
+}
+/* The event ledger in its dialog: tall enough to scroll through. */
+.eventLog {
+  display: flex;
+  max-height: min(70vh, 720px);
 }
 /* The conversation, and the rail beside it once there is room for both. */
 .runChat {

@@ -80,6 +80,11 @@ export interface ChatMessageProps extends Omit<HTMLAttributes<HTMLElement>, "chi
    * an answer is signed whenever the name is known.
    */
   readonly person?: Person | undefined;
+  /**
+   * A face of its own in the gutter, in place of the role's tile: dude's,
+   * which the app owns (the design system carries no brand image).
+   */
+  readonly avatar?: ReactNode;
 }
 
 const INTENT_LABEL: Record<HumanIntent, string> = {
@@ -136,6 +141,7 @@ export function ChatMessage({
   continued,
   actions,
   person,
+  avatar,
   className,
   ...rest
 }: ChatMessageProps) {
@@ -195,6 +201,8 @@ export function ChatMessage({
               {formatTimestamp(ts, "time-short")}
             </time>
           ) : null
+        ) : avatar ? (
+          <span className={styles["ownAvatar"]}>{avatar}</span>
         ) : person ? (
           // The chat avatar's size follows the density, as an agent's does.
           <PersonAvatar person={person} size={40} style={{ ["--av-size" as string]: "var(--ds-size-avatar-chat)" }} />
