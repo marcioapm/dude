@@ -57,6 +57,12 @@
   color: var(--ds-color-text-muted);
   white-space: nowrap;
   overflow: hidden;
+}
+/* Each part of the last change gives way with an ellipsis, the file name last. */
+.last > :global(*) {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
 }
 .last code {

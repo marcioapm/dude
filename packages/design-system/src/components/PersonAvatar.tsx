@@ -25,10 +25,14 @@ export type PersonAvatarSize = 16 | 20 | 24 | 28 | 32 | 40 | 56;
  * colour on every screen, with no profile record. djb2 over the id or name.
  */
 export function identitySlot(who: { readonly id?: string | undefined; readonly name: string }): number {
-  const key = (who.id ?? who.name).trim().toLowerCase();
+  return stringSlot((who.id ?? who.name).trim().toLowerCase(), IDENTITY_SLOTS);
+}
+
+/** A string's steady place among `slots` (djb2): the same string, the same place. */
+export function stringSlot(key: string, slots: number): number {
   let h = 5381;
   for (let i = 0; i < key.length; i++) h = ((h << 5) + h + key.charCodeAt(i)) | 0;
-  return Math.abs(h) % IDENTITY_SLOTS;
+  return Math.abs(h) % slots;
 }
 
 /**
