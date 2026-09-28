@@ -178,7 +178,6 @@ export function registerServerRoutes(router: Router): void {
 
   router.get("/v1/runs/:runId/servers", (ctx) => forward(ctx, "GET", runPath(ctx)));
   router.post("/v1/runs/:runId/servers", addRunServer);
-  // Before /:name/…, which would take "start-all" for a name.
   router.post("/v1/runs/:runId/servers/start-all", allServers("start-all"));
   router.post("/v1/runs/:runId/servers/stop-all", allServers("stop-all"));
   router.post("/v1/runs/:runId/servers/:name/start", serverAction("start"));
