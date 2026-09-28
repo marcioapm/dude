@@ -47,6 +47,8 @@ describe("activity", () => {
 
   test("reviews by person; CI by the check's name", () => {
     expect(pullRequestActivity(event("pull_request.reviewed", { reviews: [{ login: "cy", state: "APPROVED" }] }), false)?.text).toBe("cy approved #41");
+    expect(pullRequestActivity(event("pull_request.reviewed", { reviews: [{ login: "cy", state: "CHANGES_REQUESTED" }] }), false)?.text)
+      .toBe("cy requested changes on #41");
     expect(pullRequestActivity(event("pull_request.checks_changed", { to: "failing", failing: ["e2e (chrome)"] }), false)?.text)
       .toBe("CI e2e (chrome) failed on #41");
   });
