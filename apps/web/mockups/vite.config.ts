@@ -37,7 +37,8 @@ export default defineConfig({
   plugins: [react(), inline()],
   build: {
     outDir: fileURLToPath(new URL(`../../../docs/design/mockups/${mockup}`, import.meta.url)),
-    emptyOutDir: true,
+    // The folder also holds the mockup's screenshots; only index.html is ours to replace.
+    emptyOutDir: false,
     assetsInlineLimit: 100_000_000,
     cssCodeSplit: false,
     rollupOptions: { output: { inlineDynamicImports: true } },
