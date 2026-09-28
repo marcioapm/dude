@@ -111,7 +111,8 @@ type ask struct {
 	Cursor                         int64
 	Org, Type, RunID, TaskID, Task string
 	Role                           string
-	// The task's owner's key; empty for a task nobody owns.
+	// The task's owner, as a person (or their key, from before people);
+	// empty for a task nobody owns.
 	Owner   string
 	Payload json.RawMessage
 }
@@ -132,7 +133,7 @@ func (n *Notifier) Sweep(ctx context.Context) (int, error) {
 	if err := n.DB.InSystem(ctx, "notify", func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT e.cursor, e.organization_id, e.event_type, COALESCE(e.run_id, ''),
 				COALESCE(e.task_id, ''), COALESCE(p.key_prefix || '-' || w.number, ''), COALESCE(r.role::text, ''),
-				COALESCE(k.id, ''), e.payload
+				COALESCE(k.person_id, k.id, ''), e.payload
 			FROM events e
 			LEFT JOIN tasks w ON w.id = e.task_id
 			-- An owner who can no longer sign in is no owner: everyone hears.
@@ -153,8 +154,11 @@ func (n *Notifier) Sweep(ctx context.Context) (int, error) {
 		for _, a := range found {
 			orgs = append(orgs, a.Org)
 		}
-		rows, err = tx.Query(ctx, `SELECT organization_id, endpoint, p256dh, auth, COALESCE(api_key_id, '')
-			FROM push_subscriptions WHERE organization_id = ANY ($1)`, orgs)
+		// A browser is its key's person's: the owner hears on any key of theirs.
+		// One signed in with a key since revoked hears nothing more.
+		rows, err = tx.Query(ctx, `SELECT s.organization_id, s.endpoint, s.p256dh, s.auth, COALESCE(k.person_id, s.api_key_id, '')
+			FROM push_subscriptions s LEFT JOIN api_keys k ON k.id = s.api_key_id
+			WHERE s.organization_id = ANY ($1) AND (s.api_key_id IS NULL OR k.revoked_at IS NULL)`, orgs)
 		if err != nil {
 			return err
 		}

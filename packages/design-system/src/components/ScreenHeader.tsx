@@ -38,14 +38,15 @@ export interface SegmentedProps<T extends string> extends Omit<HTMLAttributes<HT
   /** Names the group for a screen reader: "Whose tasks". */
   readonly label: string;
   readonly size?: "sm" | "md" | undefined;
+  readonly disabled?: boolean | undefined;
 }
 
 /** Two or three views of the same thing, one chosen: Everyone / Mine, All / Open / Fixed. */
-export function Segmented<T extends string>({ options, value, onChange, label, size = "md", className, ...rest }: SegmentedProps<T>) {
+export function Segmented<T extends string>({ options, value, onChange, label, size = "md", disabled, className, ...rest }: SegmentedProps<T>) {
   return (
     <span className={cx(styles["seg"], size === "sm" && styles["segSm"], className)} role="group" aria-label={label} {...rest}>
       {options.map((o) => (
-        <button key={o.value} type="button" aria-pressed={o.value === value} onClick={() => onChange(o.value)}>
+        <button key={o.value} type="button" aria-pressed={o.value === value} disabled={disabled} onClick={() => onChange(o.value)}>
           {o.label}
         </button>
       ))}

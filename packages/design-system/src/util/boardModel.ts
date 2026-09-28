@@ -76,13 +76,13 @@ export interface BoardColumn {
   readonly costUsd: number;
 }
 
-function toCard(task: NavTask, epic: NavEpic | null): BoardCard {
+function toCard(task: NavTask, epic: NavEpic | null, you?: string | null): BoardCard {
   const run = currentRun(task);
   return {
     task,
     epic,
     column: boardColumnOf(task.status),
-    triage: taskTriage(task),
+    triage: taskTriage(task, you),
     asking: run ? askingSession(run.sessions) : null,
   };
 }
@@ -91,11 +91,11 @@ function toCard(task: NavTask, epic: NavEpic | null): BoardCard {
  * Every card in scope. With an epic, only its tasks; otherwise the
  * whole project — each epic in order, then the loose tasks.
  */
-export function boardCards(project: NavProject, epic?: NavEpic | null): BoardCard[] {
-  if (epic) return epic.tasks.map((wi) => toCard(wi, epic));
+export function boardCards(project: NavProject, epic?: NavEpic | null, you?: string | null): BoardCard[] {
+  if (epic) return epic.tasks.map((wi) => toCard(wi, epic, you));
   const out: BoardCard[] = [];
-  for (const e of project.epics ?? []) for (const wi of e.tasks) out.push(toCard(wi, e));
-  for (const wi of project.tasks ?? []) out.push(toCard(wi, null));
+  for (const e of project.epics ?? []) for (const wi of e.tasks) out.push(toCard(wi, e, you));
+  for (const wi of project.tasks ?? []) out.push(toCard(wi, null, you));
   return out;
 }
 
@@ -105,8 +105,8 @@ export function boardCards(project: NavProject, epic?: NavEpic | null): BoardCar
  * triage rank — needs-you at the top, then active, ready, failed — and are
  * otherwise left in the caller's order, which is where recency belongs.
  */
-export function boardColumns(project: NavProject, epic?: NavEpic | null): BoardColumn[] {
-  return columnsOf(boardCards(project, epic));
+export function boardColumns(project: NavProject, epic?: NavEpic | null, you?: string | null): BoardColumn[] {
+  return columnsOf(boardCards(project, epic, you));
 }
 
 function columnsOf(cards: ReadonlyArray<BoardCard>): BoardColumn[] {
@@ -146,10 +146,10 @@ export interface BoardSwimlane {
  * any. An epic with nothing in it still gets its row — the order set in
  * the tree must be visible here — but the row is empty, not five rails.
  */
-export function boardSwimlanes(project: NavProject): BoardSwimlane[] {
+export function boardSwimlanes(project: NavProject, you?: string | null): BoardSwimlane[] {
   const out: BoardSwimlane[] = [];
-  for (const e of project.epics ?? []) out.push(swimlane(`epic:${e.id}`, e, e.title, e.tasks.map((wi) => toCard(wi, e))));
-  const loose = (project.tasks ?? []).map((wi) => toCard(wi, null));
+  for (const e of project.epics ?? []) out.push(swimlane(`epic:${e.id}`, e, e.title, e.tasks.map((wi) => toCard(wi, e, you))));
+  const loose = (project.tasks ?? []).map((wi) => toCard(wi, null, you));
   if (loose.length > 0) out.push(swimlane(NO_EPIC_LANE, null, "No epic", loose));
   return out;
 }

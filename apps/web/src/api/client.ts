@@ -14,7 +14,6 @@ import type {
   TaskRepository,
   DeliveryPolicy,
   Directive,
-  FullDeliveryPolicy,
   DirectiveScope,
   Epic,
   Escalation,
@@ -24,11 +23,20 @@ import type {
   PullRequest,
   PauseMode,
   Person,
+  PersonDetail,
+  PersonRef,
+  PersonRole,
   Project,
   PersistedEvent,
   Run,
   Session,
   Task,
+  EpicState,
+  ProjectPromptMode,
+  PromptHistory,
+  PromptRole,
+  SettingsPatch,
+  SettingsResponse,
 } from "@dude/domain";
 
 // ---------------------------------------------------------------------------
@@ -45,6 +53,9 @@ export type {
   EscalationAction,
   Finding,
   Person,
+  PersonDetail,
+  PersonRef,
+  PersonRole,
   Project,
   PullRequest,
   Repository,
@@ -52,6 +63,20 @@ export type {
   Session,
   Task,
 } from "@dude/domain";
+
+/** A person as `/v1/people` lists them: where they were last seen, too. */
+export type Member = PersonDetail & { lastSeenWhere: string | null };
+
+/** One of your keys: its prefix, never the key. */
+export interface ApiKeyInfo {
+  id: string;
+  name: string;
+  prefix: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+  /** The key this browser signed in with. */
+  current: boolean;
+}
 
 /** A project with its repositories. `GET /v1/projects/:id`. */
 export interface ProjectDetail extends Project {
@@ -135,6 +160,31 @@ function withWaitingFor(projects: NavProject[]): NavProject[] {
   }));
 }
 
+/** One epic on its project's page. `GET /v1/projects/:id/overview`. */
+export interface EpicOverview {
+  id: string;
+  title: string;
+  description: string;
+  position: number;
+  state: EpicState;
+  /** A person chose the state; otherwise it is what the tasks say. */
+  stateSet: boolean;
+  tasks: number;
+  lanes: { done: number; review: number; progress: number; backlog: number };
+  prs: Record<string, number>;
+  owners: Array<{ id: string; name: string }>;
+  costUsd: number;
+  lastActivity: string | null;
+  needsYou: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectOverview {
+  project: { id: string; name: string };
+  epics: EpicOverview[];
+}
+
 /** A Run with the sessions it spawned. `GET /v1/runs/:id`. */
 export interface RunDetail extends Run {
   sessions: Session[];
@@ -205,6 +255,8 @@ export interface Artifact {
 export class ApiClient {
   readonly #baseUrl: string;
   readonly #apiKey: string;
+  /** What this browser has open, for presence ("TEXT-14"): see `setWhere`. */
+  #where = "";
 
   constructor(options: ApiClientOptions) {
     this.#baseUrl = (options.baseUrl ?? "").replace(/\/$/, "");
@@ -218,6 +270,7 @@ export class ApiClient {
       headers: {
         authorization: `Bearer ${this.#apiKey}`,
         "content-type": "application/json",
+        ...(this.#where ? { "x-dude-where": this.#where } : {}),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
@@ -237,6 +290,12 @@ export class ApiClient {
   async #request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const text = await (await this.#fetch(method, path, body)).text();
     return (text ? JSON.parse(text) : null) as T;
+  }
+
+  /** Say what this browser has open; teammates see it beside your face. */
+  setWhere(where: string): void {
+    // Header values are Latin-1: anything else would make fetch throw.
+    this.#where = where.replace(/[^\x20-\x7e]/g, "").slice(0, 80);
   }
 
   // -- reads --------------------------------------------------------------
@@ -293,11 +352,6 @@ export class ApiClient {
 
   listFindings(taskId: string): Promise<{ findings: Finding[] }> {
     return this.#request("GET", `/v1/findings${qs({ taskId })}`);
-  }
-
-  /** The factory's delivery policy, which a project's settings layer over. */
-  deliveryDefaults(): Promise<FullDeliveryPolicy> {
-    return this.#request("GET", "/v1/delivery-defaults");
   }
 
   forgeConnection(): Promise<ForgeConnection> {
@@ -360,9 +414,45 @@ export class ApiClient {
     return this.#request("GET", `/v1/projects/${projectId}/epics`);
   }
 
-  /** The organization's people, who a task can be handed to; `you` is the signed-in one. */
-  listPeople(): Promise<{ people: Person[]; you: string }> {
+  /** The organization's people, who a task can be handed to; `you` is the signed-in one's person id. */
+  listPeople(): Promise<{ people: Member[]; you: string }> {
     return this.#request("GET", "/v1/people");
+  }
+
+  /** Who you are, and your organization. */
+  me(): Promise<{ person: Member; organization: { id: string; name: string } }> {
+    return this.#request("GET", "/v1/me");
+  }
+
+  updateMe(changes: { name?: string; photoUrl?: string | null }): Promise<{ person: Member }> {
+    return this.#request("PATCH", "/v1/me", changes);
+  }
+
+  listMyKeys(): Promise<{ keys: ApiKeyInfo[] }> {
+    return this.#request("GET", "/v1/me/keys");
+  }
+
+  /** A new key for you; `key` is shown this once. */
+  createMyKey(name: string): Promise<{ id: string; name: string; prefix: string; key: string }> {
+    return this.#request("POST", "/v1/me/keys", { name });
+  }
+
+  revokeMyKey(id: string): Promise<void> {
+    return this.#request("DELETE", `/v1/me/keys/${id}`);
+  }
+
+  /** Admins: add someone, with a key shown this once. */
+  invitePerson(input: { name: string; email: string; role: PersonRole }): Promise<{ person: Member; key: string }> {
+    return this.#request("POST", "/v1/people", input);
+  }
+
+  updatePerson(id: string, changes: { name?: string; role?: PersonRole }): Promise<{ person: Member }> {
+    return this.#request("PATCH", `/v1/people/${id}`, changes);
+  }
+
+  /** Admins: remove someone; every key of theirs stops working. */
+  removePerson(id: string): Promise<void> {
+    return this.#request("DELETE", `/v1/people/${id}`);
   }
 
   // -- writes -------------------------------------------------------------
@@ -383,6 +473,11 @@ export class ApiClient {
   /** Hand a task to someone else to drive: they hear of it, and answer for it. */
   reassignTask(id: string, ownerId: string): Promise<Task> {
     return this.#request("PATCH", `/v1/tasks/${id}`, { ownerId });
+  }
+
+  /** Everyone on a task, in order; the first owns it. */
+  setTaskPeople(id: string, people: string[]): Promise<{ owner: PersonRef | null; people: PersonRef[] }> {
+    return this.#request("PUT", `/v1/tasks/${id}/people`, { people });
   }
 
   createProject(input: {
@@ -418,8 +513,44 @@ export class ApiClient {
     return this.#request("POST", `/v1/projects/${projectId}/epics`, epic);
   }
 
-  updateEpic(id: string, changes: Partial<{ title: string; description: string; position: number }>): Promise<Epic> {
+  updateEpic(id: string, changes: Partial<{ title: string; description: string; position: number; state: EpicState | null }>): Promise<Epic> {
     return this.#request("PATCH", `/v1/epics/${id}`, changes);
+  }
+
+  // -- settings: the organization's defaults, a project's overrides ----------
+
+  organizationSettings(): Promise<SettingsResponse> {
+    return this.#request("GET", "/v1/settings/organization");
+  }
+
+  updateOrganizationSettings(patch: SettingsPatch): Promise<SettingsResponse> {
+    return this.#request("PATCH", "/v1/settings/organization", patch);
+  }
+
+  projectSettings(projectId: string): Promise<SettingsResponse> {
+    return this.#request("GET", `/v1/projects/${projectId}/settings`);
+  }
+
+  updateProjectSettings(projectId: string, patch: SettingsPatch): Promise<SettingsResponse> {
+    return this.#request("PATCH", `/v1/projects/${projectId}/settings`, patch);
+  }
+
+  /** Save a role's prompt: the organization's, or (with a project) the project's and how it goes with the organization's. */
+  savePrompt(role: PromptRole, prompt: { projectId?: string; mode?: ProjectPromptMode; body?: string; note?: string }): Promise<SettingsResponse> {
+    return this.#request("POST", `/v1/prompts/${role}`, prompt);
+  }
+
+  promptHistory(role: PromptRole, projectId?: string): Promise<PromptHistory> {
+    return this.#request("GET", `/v1/prompts/${role}/history${qs(projectId ? { projectId } : {})}`);
+  }
+
+  restorePrompt(versionId: string): Promise<SettingsResponse> {
+    return this.#request("POST", `/v1/prompts/versions/${versionId}/restore`);
+  }
+
+  /** A project's page: its epics by state, with lanes, pull requests, people and cost. */
+  projectOverview(projectId: string): Promise<ProjectOverview> {
+    return this.#request("GET", `/v1/projects/${projectId}/overview`);
   }
 
   deleteEpic(id: string): Promise<void> {

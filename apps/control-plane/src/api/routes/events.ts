@@ -72,6 +72,13 @@ function streamEvents({ url, principal, request }: RequestContext): Response {
       const encoder = new TextEncoder();
       let closed = false;
       let highWater = after ?? 0;
+      /*
+       * `live=1` skips the backfill: a client that only wants to know *that*
+       * something changed — the shell refreshing its sidebar — has no use
+       * for the organization's entire history, and replaying it on every
+       * page load would be the most expensive thing the page does.
+       */
+      const liveOnly = url.searchParams.get("live") === "1";
 
       // Flush a comment immediately so the client's response headers arrive
       // before the first event. Without this a stream whose backfill is empty
@@ -99,17 +106,14 @@ function streamEvents({ url, principal, request }: RequestContext): Response {
       const pending: PersistedEvent[] = [];
       let backfilled = false;
       unsubscribe = eventBus.subscribe(filter, (event) => {
-        if (backfilled) send(event);
+        // Not in the ledger (presence, cursor 0): sent at once and without
+        // an id, so a reconnect's Last-Event-ID stays the last ledger
+        // event's. Only for streams watching what happens now.
+        if (event.cursor === 0) {
+          if (liveOnly && !closed) controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+        } else if (backfilled) send(event);
         else pending.push(event);
       });
-
-      /*
-       * `live=1` skips the backfill: a client that only wants to know *that*
-       * something changed — the shell refreshing its sidebar — has no use
-       * for the organization's entire history, and replaying it on every
-       * page load would be the most expensive thing the page does.
-       */
-      const liveOnly = url.searchParams.get("live") === "1";
 
       try {
         /*

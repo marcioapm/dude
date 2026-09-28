@@ -14,6 +14,7 @@ import { ChatSection } from "./sections/Chat.tsx";
 import { NavigationSection } from "./sections/Navigation.tsx";
 import { BoardSection } from "./sections/Board.tsx";
 import { ShellSection } from "./sections/Shell.tsx";
+import { SettingsGallerySection } from "./sections/Settings.tsx";
 import { CalmerSection } from "./sections/Calmer.tsx";
 
 const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, string]>]> = [
@@ -123,6 +124,15 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["board-states", "Board states"],
     ],
   ],
+  [
+    "Settings",
+    [
+      ["s-layout", "Settings page"],
+      ["s-markdown", "MarkdownDocument"],
+      ["s-history", "PromptHistory"],
+      ["s-epics", "EpicCard / EpicRow"],
+    ],
+  ],
 ];
 
 const PANE_DENSITY_KEY = "dude.gallery.paneDensity";
@@ -224,6 +234,7 @@ function Shell() {
           <ChatSection mode={panes} />
           <NavigationSection mode={panes} />
           <BoardSection mode={panes} />
+          <SettingsGallerySection mode={panes} />
         </PaneDensityContext.Provider>
       </main>
     </div>

@@ -193,7 +193,7 @@ def test_project_settings_manage_repositories_and_delivery(
     console_errors.clear()
 
     # Security joins correctness on every delivery.
-    page.get_by_role("tab", name="Delivery").click()
+    page.locator("[data-settings-nav='delivery']").click()
     page.get_by_role("checkbox", name="security").click()
     page.get_by_test_id("delivery-save").click()
     expect(toast(page, "Delivery saved")).to_be_visible()
@@ -228,6 +228,8 @@ def test_the_github_connection_is_checked_and_replaced_in_settings(
 ):
     _sign_in(page, web_url, org["api_key"])
     page.get_by_test_id("org-settings-button").click()
+    # Settings open on Members; GitHub is the next page.
+    page.locator('[data-settings-nav="github"]').click()
     expect(page.get_by_test_id("org-settings")).to_contain_text("Connected")
     expect(page.get_by_test_id("org-settings")).to_contain_text("…oken")
 
@@ -625,9 +627,9 @@ def test_a_project_can_have_its_changes_tested_in_a_browser(
     """The tester phase is a project's choice, off by default."""
     _sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/project/{forge_project['id']}/settings")
-    page.get_by_role("tab", name="Delivery").click()
-    box = page.get_by_role("checkbox", name="Test it in a browser")
-    expect(box).not_to_be_checked()
+    page.locator("[data-settings-nav='delivery']").click()
+    box = page.get_by_test_id("delivery-test").get_by_role("switch")
+    expect(box).to_have_attribute("aria-checked", "false")
     box.click()
     page.get_by_test_id("delivery-save").click()
     expect(toast(page, "Delivery saved")).to_be_visible()
