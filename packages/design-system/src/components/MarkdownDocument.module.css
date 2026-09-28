@@ -34,6 +34,17 @@
 .spacer {
   flex: 1;
 }
+.tools {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+}
+.divider {
+  width: 1px;
+  height: var(--ds-space-16);
+  margin: 0 var(--ds-space-4);
+  background: var(--ds-color-border-subtle);
+}
 
 .view {
   padding: var(--ds-space-8) var(--ds-space-32) var(--ds-space-32);
@@ -71,6 +82,10 @@
   background: transparent;
   color: transparent;
   caret-color: var(--ds-color-text-strong);
+  outline: none;
+}
+/* The document's own frame is the focus ring while editing: no second one. */
+.field:focus-visible {
   outline: none;
 }
 .field::selection {

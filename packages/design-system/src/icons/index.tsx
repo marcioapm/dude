@@ -87,7 +87,12 @@ export type IconName =
   | "comments"
   | "github"
   | "wrench"
-  | "building";
+  | "building"
+  // writing
+  | "heading"
+  | "bold"
+  | "code"
+  | "braces";
 
 /** Path data on a 16x16 grid. `fill` marks icons that are filled shapes. */
 const PATHS: Record<IconName, { d: string; fill?: true; dashed?: true }> = {
@@ -172,6 +177,10 @@ const PATHS: Record<IconName, { d: string; fill?: true; dashed?: true }> = {
   retry: { d: "M13 8a5 5 0 1 1-1.6-3.7M13 2.5v2.5h-2.5" },
   send: { d: "M13.5 2.5L2.5 7l5 1.5 1.5 5 4.5-11ZM7.5 8.5l6-6" },
   edit: { d: "M10.5 3l2.5 2.5-7 7H3.5V10l7-7ZM9.25 4.25l2.5 2.5" },
+  heading: { d: "M4 3v10M12 3v10M4 8h8" },
+  bold: { d: "M5 3h4a2.5 2.5 0 0 1 0 5H5V3ZM5 8h4.5a2.5 2.5 0 0 1 0 5H5V8Z" },
+  code: { d: "M6 4.5 2.5 8 6 11.5M10 4.5 13.5 8 10 11.5" },
+  braces: { d: "M6 3H5a1.5 1.5 0 0 0-1.5 1.5v2L2.5 8l1 1.5v2A1.5 1.5 0 0 0 5 13h1M10 3h1a1.5 1.5 0 0 1 1.5 1.5v2l1 1.5-1 1.5v2A1.5 1.5 0 0 1 11 13h-1" },
   globe: { d: "M8 2.75a5.25 5.25 0 1 0 0 10.5a5.25 5.25 0 0 0 0-10.5ZM2.75 8h10.5M8 2.75c1.6 1.6 2.4 3.4 2.4 5.25S9.6 11.65 8 13.25M8 2.75C6.4 4.35 5.6 6.15 5.6 8s.8 3.65 2.4 5.25" },
   "list-check": { d: "M2.75 4.5l1 1 2-2M2.75 8.5l1 1 2-2M2.75 12.5l1 1 2-2M8 4.5h5.25M8 8.5h5.25M8 12.5h5.25" },
   message: { d: "M3 3.5h10a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-.5.5H7l-3 2.5V10.5H3a.5.5 0 0 1-.5-.5V4a.5.5 0 0 1 .5-.5Z" },

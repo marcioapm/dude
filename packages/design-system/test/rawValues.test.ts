@@ -46,3 +46,17 @@ describe("pointer", () => {
     }
   });
 });
+
+describe("entrances", () => {
+  // An entrance animated with `transform` replaces the element's own while
+  // it runs: a dialog centred by translate(-50%, -50%) starts off-centre and
+  // snaps back. Entrances move with `translate` and `scale`, which compose.
+  test("no entrance keyframe animates transform", () => {
+    const base = readFileSync(`${ROOT}/packages/design-system/src/styles/base.css`, "utf8");
+    for (const name of ["ds-pop", "ds-slide-in-right", "ds-fade-in"]) {
+      const body = new RegExp(`@keyframes ${name} \\{([\\s\\S]*?)\\n\\}`).exec(base)?.[1];
+      expect(body, name).toBeDefined();
+      expect(body!, name).not.toMatch(/\btransform\s*:/);
+    }
+  });
+});
