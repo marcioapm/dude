@@ -12,11 +12,11 @@
 
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
-import { EventTypes, newId, personRoleSchema, type PersonRef } from "@dude/domain";
+import { EventTypes, personRoleSchema, type PersonRef } from "@dude/domain";
 import type { OrgScope } from "../../db/client.ts";
 import { withOrg, withoutTenant } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
-import { insertApiKey } from "../auth.ts";
+import { insertApiKey, insertPerson } from "../auth.ts";
 import { HttpError, badRequest, conflict, json, noContent, notFound, parseBody } from "../http.ts";
 import type { PublicContext, RequestContext, Router } from "../router.ts";
 
@@ -75,32 +75,17 @@ export async function setTaskPeople(scope: OrgScope, ctx: RequestContext, taskId
   if (next.length === was.length && next.every((id, i) => id === was[i])) return;
 
   await scope.sql`DELETE FROM task_people WHERE task_id = ${taskId}`;
-  for (const [position, personId] of next.entries()) {
-    await scope.sql`
-      INSERT INTO task_people (task_id, person_id, organization_id, position)
-      VALUES (${taskId}, ${personId}, ${scope.organizationId}, ${position})`;
-  }
+  await scope.sql`
+    INSERT INTO task_people (task_id, person_id, organization_id, position)
+    SELECT ${taskId}, id, ${scope.organizationId}, n - 1
+    FROM jsonb_array_elements_text(${next}::jsonb) WITH ORDINALITY AS t(id, n)`;
   const owner = next[0]!;
   if (owner !== was[0]) {
     // The trigger that follows this write finds the owner already first.
     await scope.sql`UPDATE tasks SET owner_key_id = ${await keyOf(scope, owner)} WHERE id = ${taskId}`;
-    await recordOnTask(scope, ctx, EventTypes.TaskOwnerChanged, projectId, taskId, { from: was[0] ?? null, to: owner });
+    await recordAs(scope, ctx, EventTypes.TaskOwnerChanged, { from: was[0] ?? null, to: owner }, { projectId, taskId });
   }
-  await recordOnTask(scope, ctx, EventTypes.TaskPeopleChanged, projectId, taskId, { people: next });
-}
-
-function recordOnTask(scope: OrgScope, ctx: RequestContext, eventType: string, projectId: string, taskId: string,
-  payload: Record<string, unknown>) {
-  return appendInScope(scope, {
-    eventType,
-    organizationId: ctx.principal.organizationId,
-    projectId,
-    taskId,
-    correlationId: taskId,
-    actor: { type: "human", id: ctx.principal.apiKeyId },
-    source: "control-plane",
-    payload,
-  });
+  await recordAs(scope, ctx, EventTypes.TaskPeopleChanged, { people: next }, { projectId, taskId });
 }
 
 const PERSON_DETAIL = `person_ref(p)::jsonb || jsonb_build_object('email', p.email, 'role', p.role,
@@ -134,11 +119,19 @@ async function otherAdmins(scope: OrgScope, except: string): Promise<number> {
   return rows[0]!.n;
 }
 
-/** Record a change to the organization's people, by whoever made it. */
-function record(scope: OrgScope, ctx: RequestContext, eventType: string, payload: Record<string, unknown>) {
+/**
+ * Record a change as the person making the request, in the part of the
+ * hierarchy it belongs to (none: the organization's). A task's changes
+ * correlate by the task.
+ */
+export function recordAs(scope: OrgScope, ctx: RequestContext, eventType: string, payload: Record<string, unknown>,
+  where: { projectId?: string; taskId?: string | null } = {}) {
   return appendInScope(scope, {
     eventType,
     organizationId: ctx.principal.organizationId,
+    projectId: where.projectId ?? null,
+    taskId: where.taskId ?? null,
+    correlationId: where.taskId ?? null,
     actor: { type: "human", id: ctx.principal.apiKeyId },
     source: "control-plane",
     payload,
@@ -205,7 +198,7 @@ async function getPhoto(ctx: PublicContext): Promise<Response> {
   const rows = await withoutTenant(async ({ sql }) =>
     (await sql`SELECT person_photo(${ctx.params.id!}, ${token}) AS url`) as Array<{ url: string | null }>);
   const match = DATA_URL.exec(rows[0]?.url ?? "");
-  if (!match) return json({ error: { code: "not_found", message: "no such photo" } }, 404);
+  if (!match) throw notFound("no such photo");
   return new Response(Buffer.from(match[2]!, "base64"), {
     headers: {
       "content-type": `image/${match[1]}`,
@@ -293,16 +286,10 @@ async function invite(ctx: RequestContext): Promise<Response> {
   const input = await parseBody(ctx.request, inviteInput);
   const out = await withOrg(ctx.principal.organizationId, async (scope) => {
     await requireAdmin(scope, ctx);
-    const taken = await scope.sql`
-      SELECT 1 FROM people WHERE email = ${input.email} AND removed_at IS NULL`;
-    if (taken.length > 0) return null;
-    const id = newId("person");
-    await scope.sql`
-      INSERT INTO people (id, organization_id, name, email, role)
-      VALUES (${id}, ${ctx.principal.organizationId}, ${input.name}, ${input.email}, ${input.role})`;
-    const made = await insertApiKey(scope, { name: input.name, personId: id });
-    await record(scope, ctx, EventTypes.PersonInvited, { personId: id, role: input.role });
-    return { person: await personDetail(scope, id), key: made.key };
+    const made = await insertPerson(scope, input);
+    if (!made) return null;
+    await recordAs(scope, ctx, EventTypes.PersonInvited, { personId: made.personId, role: input.role });
+    return { person: await personDetail(scope, made.personId), key: made.key };
   });
   if (!out) throw conflict(`${input.email} is already a member`);
   return json(out, 201);
@@ -329,7 +316,7 @@ async function updatePerson(ctx: RequestContext): Promise<Response> {
       UPDATE people SET name = COALESCE(${input.name ?? null}, name), role = COALESCE(${input.role ?? null}, role)
       WHERE id = ${id}`;
     if (input.role && input.role !== rows[0].role) {
-      await record(scope, ctx, EventTypes.PersonRoleChanged, { personId: id, from: rows[0].role, to: input.role });
+      await recordAs(scope, ctx, EventTypes.PersonRoleChanged, { personId: id, from: rows[0].role, to: input.role });
     }
     return { person: await personDetail(scope, id) };
   });
@@ -356,7 +343,7 @@ async function passOnTasks(scope: OrgScope, ctx: RequestContext, personId: strin
     const to = next[0]?.id ?? null;
     // The trigger that follows finds the next owner already first.
     await scope.sql`UPDATE tasks SET owner_key_id = ${to ? await keyOf(scope, to) : null} WHERE id = ${taskId}`;
-    await recordOnTask(scope, ctx, EventTypes.TaskOwnerChanged, projectId, taskId, { from: personId, to });
+    await recordAs(scope, ctx, EventTypes.TaskOwnerChanged, { from: personId, to }, { projectId, taskId });
   }
 }
 
@@ -377,7 +364,7 @@ async function removePerson(ctx: RequestContext): Promise<Response> {
     await scope.sql`UPDATE people SET removed_at = now() WHERE id = ${id}`;
     await scope.sql`UPDATE api_keys SET revoked_at = now() WHERE person_id = ${id} AND revoked_at IS NULL`;
     await passOnTasks(scope, ctx, id);
-    await record(scope, ctx, EventTypes.PersonRemoved, { personId: id });
+    await recordAs(scope, ctx, EventTypes.PersonRemoved, { personId: id });
     return "removed";
   });
   if (out === "yourself") throw conflict("you cannot remove yourself; ask another admin");

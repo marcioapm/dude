@@ -4,7 +4,7 @@
  * by the design system's ThemeProvider; reduced motion follows the system.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useTheme } from "@dude/design-system";
 import { Breadcrumb } from "@dude/design-system/components";
 import { Button, Callout, Card, CardBody, CardHeader, FormActions, FormStack, Page, PageHeader, Select } from "@dude/design-system/primitives";
@@ -20,11 +20,13 @@ const PUSH_TEXT: Record<PushState, string> = {
   unsupported: "This browser cannot show dude's notifications here (it needs a secure connection and push support).",
 };
 
-export function MySettingsScreen({ client, onChanged }: { client: ApiClient; onChanged: () => void }) {
+export function MySettingsScreen({ client, me, onChanged }: {
+  client: ApiClient;
+  /** You, as the shell has you (`usePeople`); `onChanged` reads you again. */
+  me: Member | null;
+  onChanged: () => void;
+}) {
   const theme = useTheme();
-  const [me, setMe] = useState<Member | null>(null);
-  const reloadMe = useCallback(() => void client.me().then((m) => setMe(m.person), () => {}), [client]);
-  useEffect(reloadMe, [reloadMe]);
   const [push, setPush] = useState<PushState | null>(null);
   const { busy, problem, save } = useSave();
 
@@ -38,7 +40,7 @@ export function MySettingsScreen({ client, onChanged }: { client: ApiClient; onC
     <Page data-testid="my-settings">
       <PageHeader breadcrumb={<Breadcrumb items={[{ id: "me", label: "You" }]} />} title="Settings"
         description="Only you see these: how teammates see you, your keys, and — in this browser — how dude looks and what it tells you." />
-      {me ? <ProfileSection key={me.id} client={client} me={me} onChanged={() => { reloadMe(); onChanged(); }} /> : null}
+      {me ? <ProfileSection key={me.id} client={client} me={me} onChanged={onChanged} /> : null}
       <KeysSection client={client} />
       <Card>
         <CardHeader title="Appearance" />

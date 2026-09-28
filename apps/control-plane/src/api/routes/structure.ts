@@ -11,11 +11,10 @@
 import { z } from "zod";
 import { EventTypes, newId } from "@dude/domain";
 import { withOrg, type OrgScope } from "../../db/client.ts";
-import { appendInScope } from "../../events/ledger.ts";
 import { badRequest, conflict, json, noContent, notFound, parseBody } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
 import { REPOSITORIES_JSON, setTaskRepositories, taskRepositoriesInput } from "./taskRepositories.ts";
-import { ownerJson, peopleJson, personOf, setTaskPeople } from "./people.ts";
+import { ownerJson, peopleJson, personOf, recordAs, setTaskPeople } from "./people.ts";
 
 const REPOSITORY_SELECT = `id, project_id AS "projectId", name, url, default_branch AS "defaultBranch", trust,
   created_at AS "createdAt"`;
@@ -25,15 +24,7 @@ const EPIC_SELECT = `id, project_id AS "projectId", title, description, position
 /** Record a structural change as the person who made it. */
 function record(scope: OrgScope, ctx: RequestContext, eventType: string, projectId: string,
   payload: Record<string, unknown>, taskId: string | null = null) {
-  return appendInScope(scope, {
-    eventType,
-    organizationId: ctx.principal.organizationId,
-    projectId,
-    taskId,
-    actor: { type: "human", id: ctx.principal.apiKeyId },
-    source: "control-plane",
-    payload,
-  });
+  return recordAs(scope, ctx, eventType, payload, { projectId, taskId });
 }
 
 // ---------------------------------------------------------------------------
