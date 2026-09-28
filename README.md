@@ -120,7 +120,13 @@ DUDE_ORCHESTRATOR_TOKEN=dev-token \
 LUX_URL=<luxd_url> LUX_API_KEY=<api_key> \
 DUDE_AGENT_IMAGE=docker.io/library/dude-runtime:dev \
   orchestrator/bin/dude-orchestrator         # internal API on 127.0.0.1:3100
+```
 
+`LUX_CONSOLE_URL` is where lux's console is, for the terminal links on a
+task's Servers tab; it defaults to `LUX_URL`, which is right when luxd
+serves its console itself.
+
+```bash
 # 3. The backend, on :3000
 DATABASE_URL="postgres://dude_app:dude_app@localhost:5433/dude" \
 DUDE_ORCHESTRATOR_URL=http://127.0.0.1:3100 DUDE_ORCHESTRATOR_TOKEN=dev-token \
