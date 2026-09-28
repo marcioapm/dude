@@ -23,7 +23,7 @@ import { errorText } from "../hooks/useSave.tsx";
 
 const EDIT_TOOLS = /^(edit|write|patch|multiedit|apply_patch)$/i;
 
-export function ChangesPanel({ client, runId, role, events, checksum: latest, live, selected, onSelectedChange, leading, trailing }: {
+export function ChangesPanel({ client, runId, role, events, checksum: latest, live, selected, onSelectedChange, leading }: {
   client: ApiClient;
   runId: string;
   /** The agent's, for its face beside what it last wrote. */
@@ -37,9 +37,8 @@ export function ChangesPanel({ client, runId, role, events, checksum: latest, li
   /** The file shown alone, which the session's rail can pick too. */
   selected: string | null;
   onSelectedChange: (path: string | null) => void;
-  /** The session's view switch and event log, on the diff's own toolbar. */
+  /** The session's view switch, first on the diff's own toolbar. */
   leading?: ReactNode;
-  trailing?: ReactNode;
 }) {
   const [diff, setDiff] = useState<RunDiff | null>(null);
   const [viewing, setViewing] = useState<string | null>(null);
@@ -90,7 +89,7 @@ export function ChangesPanel({ client, runId, role, events, checksum: latest, li
   }, [events, role]);
 
   // Without a diff the bar still stands: the way back to the conversation.
-  const bar = <div className="runBar">{leading}<span className="runBarSpacer" />{trailing}</div>;
+  const bar = <div className="runBar">{leading}</div>;
   if (problem) return <>{bar}<div className="runChanges"><Callout tone="danger">{problem}</Callout></div></>;
   if (!diff) return bar;
   return (
@@ -105,7 +104,6 @@ export function ChangesPanel({ client, runId, role, events, checksum: latest, li
         onSelectedChange={onSelectedChange}
         onOpenFile={setViewing}
         leading={leading}
-        trailing={trailing}
         lastChange={live && lastChange ? lastChange : undefined}
         emptyMessage={live ? "The agent has not changed anything yet." : "This session changed nothing."}
       />

@@ -460,16 +460,14 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - The open session is `SessionHeader` (whose agent, for whom, its model,
   status, cost, tokens and elapsed, Pause / Abort — on every view, so the
   numbers never depend on the rail being there), then **one bar**: a small
-  `Segmented` switch between **Conversation** and **Changes** first, the
-  **Event log** (debugging) as a quiet button last, and on Changes the
-  diff's own controls between them (`LiveDiff`'s `leading` / `trailing`).
-  One row, one left edge, whichever view is shown: never a row of tabs over
-  a row of tools.
+  `Segmented` switch between **Conversation**, **Changes** and **Events**
+  (debugging, last), and on Changes the diff's own controls after it
+  (`LiveDiff`'s `leading`). One row, one left edge, whichever view is
+  shown: never a row of tabs over a row of tools. Each view fills the same
+  place under the bar; none opens over the page.
 - **Changes** in the switch carries its file count and, while the agent is
   changing files, the breathing dot. That dot is the one "live" on the bar:
   the header's status already says Running, so the diff has no Live pill.
-- The event log opens over the page (`Dialog`, xl): it is read when
-  something looks wrong, not watched, so it is not a view beside the others.
 - Beside the conversation, a `SessionRail` on the chrome shade: what the
   header does not say (agent, attempt), the tools it used (`ToolUsage`), and the files it has
   changed so far (`ChangedFiles`, a breathing dot on the label while live).
@@ -862,7 +860,7 @@ EmptyState, ScrollArea.
   it changes (the rules are under *Sessions*): files with status and
   counts, sticky file headers, Unified / Split (`splitRows` pairs each
   removed run with the added run after it), fresh lines flashing, Follow
-  the agent, `onOpenFile` for the viewer, `selected` / `onSelectedChange`
+  the agent, `leading` for the page's controls first in its toolbar, `onOpenFile` for the viewer, `selected` / `onSelectedChange`
   to pick the file shown alone from outside, `fileList={false}` for one
   file on its own.
 - **DiffStat** — "+12 −3" in the diff's colours; every count of lines

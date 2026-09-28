@@ -188,10 +188,10 @@ def test_a_sessions_changes_update_as_the_agent_works(
     expect(changes.get_by_test_id("diff-section")).to_have_count(1)
     changes.get_by_test_id("follow").click()
 
-    # The event log is over the page, not a view of its own.
-    page.get_by_test_id("open-event-log").click()
+    # Events is the third view, in the same place as the other two.
+    page.get_by_test_id("session-view").get_by_role("button", name="Events").click()
     expect(page.get_by_test_id("event-log")).to_be_visible()
-    page.keyboard.press("Escape")
+    page.get_by_test_id("session-view").get_by_role("button", name="Changes").click()
 
     # Paused and resumed, the agent finishes with one more file: it arrives.
     client.post(f"/v1/runs/{run['id']}/pause", {})

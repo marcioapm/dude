@@ -21,12 +21,11 @@ export interface LiveDiffProps extends Omit<HTMLAttributes<HTMLDivElement>, "chi
   /** What the agent did last ("Write LIVE.md · just now"), at the top of the file list. */
   readonly lastChange?: ReactNode;
   /**
-   * First and last in the toolbar: what the diff sits among — a session's
-   * view switch, its event log — so the diff's controls and the page's
-   * share one row rather than stacking.
+   * First in the toolbar: what the diff sits among — a session's view
+   * switch — so the diff's controls and the page's share one row rather
+   * than stacking.
    */
   readonly leading?: ReactNode;
-  readonly trailing?: ReactNode;
   /** Shown when nothing changed yet. */
   readonly emptyMessage?: ReactNode;
   /** Opens a file in the viewer; each file's header offers it when given. */
@@ -98,7 +97,7 @@ const SIGN = { "+": "+", "-": "−", " ": "" } as const;
  * the new. Changes are told apart by sign and gutter as well as tint
  * (+, −), so the diff reads without colour.
  */
-export function LiveDiff({ files, base, live, lastChange, leading, trailing, emptyMessage, onOpenFile, defaultView = "unified", selected: given, onSelectedChange, fileList = true, className, ...rest }: LiveDiffProps) {
+export function LiveDiff({ files, base, live, lastChange, leading, emptyMessage, onOpenFile, defaultView = "unified", selected: given, onSelectedChange, fileList = true, className, ...rest }: LiveDiffProps) {
   const [view, setView] = useState<LiveDiffView>(defaultView);
   // Keep the latest change in view: on while live, until the person picks a file.
   const [follow, setFollow] = useState(live ?? false);
@@ -195,7 +194,6 @@ export function LiveDiff({ files, base, live, lastChange, leading, trailing, emp
           <Segmented label="Show the diff" size="sm" value={view} onChange={setView} data-testid="diff-view"
             options={[{ value: "unified", label: "Unified" }, { value: "split", label: "Split" }]} />
         ) : null}
-        {trailing}
       </div>
       {files.length === 0 ? (
         <div className={styles["empty"]}>
