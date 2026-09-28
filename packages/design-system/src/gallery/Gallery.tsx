@@ -15,6 +15,7 @@ import { NavigationSection } from "./sections/Navigation.tsx";
 import { BoardSection } from "./sections/Board.tsx";
 import { ShellSection } from "./sections/Shell.tsx";
 import { LiveSection } from "./sections/Live.tsx";
+import { CalmerSection } from "./sections/Calmer.tsx";
 
 const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, string]>]> = [
   ["App shell", [["shell-session", "Sidebar + transcript"]]],
@@ -54,6 +55,17 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["p-loading", "Skeleton / Spinner"],
       ["p-empty", "EmptyState"],
       ["p-scroll", "ScrollArea"],
+    ],
+  ],
+  [
+    "Faces, states, costs",
+    [
+      ["k-status", "StatusMark"],
+      ["k-faces", "PersonAvatar / ProjectAvatar"],
+      ["k-pr", "PrChip"],
+      ["k-cost", "Cost"],
+      ["k-plan", "AgentPlan / PlanMeter"],
+      ["k-document", "MarkdownDocument"],
     ],
   ],
   [
@@ -216,6 +228,7 @@ function Shell() {
           <ShellSection mode={panes} />
           <TokensSection mode={panes} />
           <PrimitivesSection mode={panes} />
+          <CalmerSection mode={panes} />
           <ComponentsSection mode={panes} />
           <ChatSection mode={panes} />
           <NavigationSection mode={panes} />

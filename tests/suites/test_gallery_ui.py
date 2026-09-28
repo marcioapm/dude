@@ -246,16 +246,16 @@ def test_board_keeps_needs_you_first_and_is_a_keyboard_grid(gallery_page: Page, 
 
     lanes = board.locator("section[data-column]")
     assert [lanes.nth(i).get_attribute("data-column") for i in range(lanes.count())] == [
-        "intake", "queued", "running", "review", "closed",
+        "backlog", "running", "review", "ready", "closed",
     ], "the five lanes must always be drawn, in lifecycle order"
 
-    for lane in ("intake", "running"):
-        first = board.locator(f"section[data-column='{lane}'] button[data-board-key]").first
+    for lane in ("backlog", "running"):
+        first = board.locator(f"section[data-column='{lane}'] [data-board-key]").first
         assert first.get_attribute("data-triage") == "needs_you", f"{lane}: needs-you card is not first"
 
     # One tab stop, on the selected card; arrows move focus without changing
     # selection. The tab stop roves with focus, so read the key first.
-    stops = board.locator("button[data-board-key][tabindex='0']")
+    stops = board.locator("[data-board-key][tabindex='0']")
     assert stops.count() == 1
     start = stops.first.get_attribute("data-board-key")
     stops.first.focus()

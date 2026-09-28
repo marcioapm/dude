@@ -4,9 +4,8 @@
   gap: var(--ds-space-4);
   min-width: 0;
   padding: var(--ds-space-8) var(--ds-space-12);
-  background: var(--ds-color-surface);
+  background: var(--ds-color-chrome);
   border-radius: 0;
-  box-shadow: var(--ds-shadow-1);
 }
 .flat {
   padding: 0;
@@ -127,17 +126,13 @@
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: var(--ds-space-8);
 }
+/* Joined: figures in a row on the page, no box — the numbers are the structure. */
 .groupJoined {
-  gap: 0;
-  background: var(--ds-color-surface);
-  border-radius: 0;
-  box-shadow: var(--ds-shadow-1);
-  overflow: hidden;
+  gap: var(--ds-space-12) var(--ds-space-32);
+  grid-template-columns: repeat(auto-fit, minmax(120px, max-content));
 }
 .groupJoined > .root {
-  box-shadow: none;
-  border-radius: 0;
+  padding: 0;
+  background: transparent;
 }
-.groupJoined > .root:last-child {
-  border-right: 0;
-}
+
