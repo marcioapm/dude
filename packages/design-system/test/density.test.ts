@@ -41,8 +41,8 @@ describe("density", () => {
       "size-icon-sm",
       "size-icon-md",
       "size-icon-lg",
-      "radius-sm",
-      "radius-xs",
+      "radius-mark",
+      "radius-float",
     ];
     for (const k of small) expect(keys as string[]).not.toContain(k);
   });

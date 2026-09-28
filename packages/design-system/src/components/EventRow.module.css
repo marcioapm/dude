@@ -9,12 +9,11 @@
   min-height: var(--ds-size-row-default);
   padding: 0 var(--ds-space-8) 0 var(--ds-space-6);
   border-left: 2px solid var(--row-accent);
-  border-bottom: 1px solid var(--ds-color-border-subtle);
   font-size: var(--ds-text-sm);
   line-height: var(--ds-leading-snug);
   color: var(--ds-color-text-primary);
   transition: background-color var(--ds-duration-fast) var(--ds-ease-standard);
-  cursor: default;
+  cursor: pointer;
   outline: none;
 }
 .row:hover {
@@ -88,7 +87,7 @@
   font-size: var(--ds-text-xs);
   padding: 0 3px;
   background: var(--ds-color-sunken);
-  border-radius: var(--ds-radius-xs);
+  border-radius: var(--ds-radius-mark);
 }
 
 .trailing {
@@ -115,7 +114,6 @@
 .detail {
   padding: var(--ds-space-8) var(--ds-space-12) var(--ds-space-12) calc(92px + 20px + var(--ds-space-8) * 2 + var(--ds-space-6));
   background: var(--ds-color-hover-wash);
-  border-bottom: 1px solid var(--ds-color-border-subtle);
   border-left: 2px solid var(--row-accent);
   font-size: var(--ds-text-sm);
   color: var(--ds-color-text-secondary);
@@ -125,8 +123,7 @@
   margin: 0;
   padding: var(--ds-space-8);
   background: var(--ds-color-sunken);
-  border: 1px solid var(--ds-color-border-subtle);
-  border-radius: var(--ds-radius-md);
+  border-radius: 0;
   font-size: var(--ds-text-xs);
   line-height: var(--ds-leading-normal);
   overflow: auto;
@@ -168,7 +165,6 @@
   top: 0;
   z-index: var(--ds-z-raised);
   background: var(--ds-color-surface);
-  border-bottom: 1px solid var(--ds-color-border);
   font-size: var(--ds-text-2xs);
   font-weight: var(--ds-weight-medium);
   letter-spacing: var(--ds-tracking-caps);
@@ -183,5 +179,4 @@
   text-transform: uppercase;
   color: var(--ds-color-text-muted);
   background: var(--ds-color-sunken);
-  border-bottom: 1px solid var(--ds-color-border-subtle);
 }

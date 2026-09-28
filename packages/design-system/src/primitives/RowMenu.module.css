@@ -15,7 +15,7 @@
   max-width: 320px;
   padding: var(--ds-space-4);
   background: var(--ds-color-overlay);
-  border-radius: var(--ds-radius-lg);
+  border-radius: var(--ds-radius-float);
   box-shadow: var(--ds-shadow-2);
   animation: global(ds-pop) var(--ds-duration-base) var(--ds-ease-enter);
   outline: none;
@@ -27,12 +27,12 @@
   gap: var(--ds-space-8);
   height: var(--ds-size-row-default);
   padding: 0 var(--ds-space-8) 0 var(--ds-space-6);
-  border-radius: var(--ds-radius-sm);
+  border-radius: var(--ds-radius-control);
   font-size: var(--ds-text-md);
   color: var(--ds-color-text-primary);
   user-select: none;
   outline: none;
-  cursor: default;
+  cursor: pointer;
 }
 .item[data-highlighted] {
   background: var(--ds-color-hover-wash);

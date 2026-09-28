@@ -133,7 +133,7 @@ function Transcript() {
           <Button size="sm" variant="secondary">
             Pause
           </Button>
-          <Button size="sm" variant="destructive-outline">
+          <Button size="sm" variant="danger">
             Abort
           </Button>
         </>

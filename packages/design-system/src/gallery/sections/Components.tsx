@@ -440,7 +440,7 @@ function ArtifactDemo() {
     <ArtifactGroup
       artifacts={ARTIFACTS}
       actions={
-        <Button size="sm" variant="ghost" leadingIcon="download">
+        <Button size="sm" variant="quiet" leadingIcon="download">
           Download all
         </Button>
       }
@@ -486,7 +486,7 @@ function FindingGroupDemo() {
     <FindingGroup
       findings={FINDINGS}
       actions={
-        <Button size="sm" variant="ghost" leadingIcon="reviewer">
+        <Button size="sm" variant="quiet" leadingIcon="reviewer">
           Review run
         </Button>
       }
@@ -558,7 +558,7 @@ function BulkLogDemo() {
       live={running}
       maxHeight={240}
       toolbar={
-        <Button size="sm" variant="ghost" onClick={() => setRunning((v) => !v)}>
+        <Button size="sm" variant="quiet" onClick={() => setRunning((v) => !v)}>
           {running ? "Stop" : "Stream"}
         </Button>
       }

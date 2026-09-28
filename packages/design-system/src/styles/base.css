@@ -57,8 +57,28 @@ textarea {
   letter-spacing: inherit;
 }
 
+/* A button is drawn by its fill; the browser's bevel never shows. */
 button {
-  cursor: default;
+  border: 0;
+}
+
+/* Anything that does something when clicked says so. Disabled things do not. */
+button,
+summary,
+label[for],
+select,
+[role="button"],
+[role="tab"],
+[role="menuitem"],
+[role="option"],
+[role="checkbox"],
+[role="switch"],
+a[href] {
+  cursor: pointer;
+}
+:disabled,
+[aria-disabled="true"] {
+  cursor: not-allowed;
 }
 
 code,
@@ -86,7 +106,7 @@ a:hover {
 :focus-visible {
   outline: var(--ds-focus-ring-width) solid var(--ds-color-focus-ring);
   outline-offset: var(--ds-focus-ring-offset);
-  border-radius: var(--ds-radius-sm);
+  border-radius: var(--ds-radius-mark);
 }
 
 /* WebKit scrollbars (Tauri on macOS/iOS uses WebKit; also Chromium). */

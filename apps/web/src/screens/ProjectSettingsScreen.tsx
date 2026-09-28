@@ -227,11 +227,11 @@ function RepositoriesTab({ client, project, onSaved }: TabProps) {
         description="Tasks pointing at it will need another. Refused while work is being delivered to it, or if it has pull requests from past work."
         footer={
           <>
-            <Button variant="ghost" onClick={() => setRemoving(null)}>
+            <Button variant="quiet" onClick={() => setRemoving(null)}>
               Cancel
             </Button>
             <Button
-              variant="destructive"
+              variant="danger" solid
               disabled={busy}
               onClick={() => {
                 const r = removing!;

@@ -12,10 +12,9 @@
   font-weight: var(--ds-weight-medium);
   line-height: 1;
   white-space: nowrap;
-  border-radius: var(--ds-radius-sm);
+  border-radius: var(--ds-radius-mark);
   color: var(--badge-fg);
   background: var(--badge-bg);
-  border: 1px solid transparent;
   vertical-align: middle;
   max-width: 100%;
 }
@@ -29,7 +28,6 @@
 /* Emphasis */
 .subtle {
   background: transparent;
-  border-color: var(--badge-border);
 }
 .tinted {
   /* default */

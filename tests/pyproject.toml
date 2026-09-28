@@ -12,6 +12,9 @@ dependencies = [
     "pytest-xdist>=3.6",
     "requests>=2.32",
     "psycopg[binary]>=3.2",
+    # The browser suites drive the system Chrome (see conftest.py).
+    "playwright>=1.63",
+    "pytest-playwright>=0.9",
 ]
 
 [tool.pytest.ini_options]

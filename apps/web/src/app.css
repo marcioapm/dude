@@ -60,7 +60,7 @@ body {
   left: var(--ds-space-8);
   z-index: 100;
   padding: var(--ds-space-6) var(--ds-space-12);
-  border-radius: var(--ds-radius-md);
+  border-radius: var(--ds-radius-control);
   background: var(--ds-color-surface);
   box-shadow: var(--ds-shadow-2);
   transform: translateY(-200%);
@@ -159,7 +159,7 @@ body {
   gap: var(--ds-space-6);
   height: var(--ds-size-control-md);
   padding: 0 var(--ds-space-12);
-  border-radius: var(--ds-radius-md);
+  border-radius: var(--ds-radius-control);
   font-weight: var(--ds-weight-medium);
   white-space: nowrap;
 }

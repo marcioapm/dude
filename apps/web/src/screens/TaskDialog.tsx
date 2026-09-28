@@ -156,7 +156,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
             ) : null}
           </div>
         ))}
-        <Button size="sm" variant="ghost" leadingIcon="plus" onClick={() => setCriteria((all) => [...all, ""])}>
+        <Button size="sm" variant="quiet" leadingIcon="plus" onClick={() => setCriteria((all) => [...all, ""])}>
           Add criterion
         </Button>
       </Fieldset>

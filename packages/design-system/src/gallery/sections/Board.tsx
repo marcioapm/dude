@@ -165,7 +165,7 @@ function SwimlaneDemo() {
           }
           headerActions={
             <>
-              <Button size="sm" variant={grouped ? "secondary" : "ghost"} leadingIcon="layers" aria-pressed={grouped} onClick={() => setGrouped((g) => !g)}>
+              <Button size="sm" variant={grouped ? "secondary" : "quiet"} leadingIcon="layers" aria-pressed={grouped} onClick={() => setGrouped((g) => !g)}>
                 Group by epic
               </Button>
               <Button size="sm" variant="primary" leadingIcon="plus">

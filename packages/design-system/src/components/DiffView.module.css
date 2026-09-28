@@ -3,8 +3,7 @@
   flex-direction: column;
   min-width: 0;
   background: var(--ds-color-surface);
-  border: 1px solid var(--ds-color-border-subtle);
-  border-radius: var(--ds-radius-lg);
+  border-radius: 0;
   overflow: hidden;
 }
 
@@ -18,7 +17,7 @@
   position: sticky;
   top: 0;
   z-index: var(--ds-z-raised);
-  cursor: default;
+  cursor: pointer;
   user-select: none;
 }
 .fileHeader:hover {
@@ -78,7 +77,7 @@
   width: 6px;
   height: 8px;
   background: var(--ds-color-border);
-  border-radius: 1px;
+  border-radius: var(--ds-radius-mark);
 }
 .statBar i[data-k="add"] {
   background: var(--ds-diff-add-fg);
@@ -93,10 +92,9 @@
   letter-spacing: var(--ds-tracking-wide);
   text-transform: uppercase;
   padding: 1px 4px;
-  border-radius: var(--ds-radius-xs);
+  border-radius: 0;
   background: var(--ds-color-sunken);
   color: var(--ds-color-text-muted);
-  border: 1px solid var(--ds-color-border-subtle);
 }
 
 .body {
@@ -182,7 +180,7 @@
 }
 
 .emphasis {
-  border-radius: 2px;
+  border-radius: var(--ds-radius-mark);
 }
 .add .emphasis {
   background: var(--ds-diff-add-bg-strong);

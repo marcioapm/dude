@@ -5,7 +5,7 @@
   min-width: 0;
   padding: var(--ds-space-8) var(--ds-space-12);
   background: var(--ds-color-surface);
-  border-radius: var(--ds-radius-lg);
+  border-radius: 0;
   box-shadow: var(--ds-shadow-1);
 }
 .flat {
@@ -130,14 +130,13 @@
 .groupJoined {
   gap: 0;
   background: var(--ds-color-surface);
-  border-radius: var(--ds-radius-lg);
+  border-radius: 0;
   box-shadow: var(--ds-shadow-1);
   overflow: hidden;
 }
 .groupJoined > .root {
   box-shadow: none;
   border-radius: 0;
-  border-right: 1px solid var(--ds-color-border-subtle);
 }
 .groupJoined > .root:last-child {
   border-right: 0;

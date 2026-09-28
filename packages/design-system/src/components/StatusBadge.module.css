@@ -16,8 +16,7 @@
   line-height: 1;
   letter-spacing: 0.01em;
   white-space: nowrap;
-  border-radius: var(--ds-radius-sm);
-  border: 1px solid transparent;
+  border-radius: var(--ds-radius-mark);
   color: var(--sb-fg);
   background: var(--sb-bg);
   vertical-align: middle;
@@ -40,7 +39,6 @@
 
 .subtle {
   background: transparent;
-  border-color: var(--sb-border);
 }
 .solid {
   color: var(--sb-on-solid);
@@ -153,10 +151,10 @@
    Squares take the full mark colour: faded to 60%, failed and done fall
    under 3:1 and red reads as pink. */
 .dot.terminal .dotMark {
-  border-radius: 1px;
+  border-radius: var(--ds-radius-mark);
 }
 .dot.needsHuman .dotMark {
-  border-radius: 1px;
+  border-radius: var(--ds-radius-mark);
   transform: rotate(45deg) scale(0.9);
 }
 .dot.pending .dotMark {

@@ -78,7 +78,7 @@ export function MySettingsScreen({ client }: { client: ApiClient }) {
                     <Button variant="secondary" disabled={busy} onClick={() => void showTestNotification()}>
                       Send a test notification
                     </Button>
-                    <Button variant="ghost" disabled={busy} onClick={() => void change(() => turnPushOff(client))} data-testid="push-off">
+                    <Button variant="quiet" disabled={busy} onClick={() => void change(() => turnPushOff(client))} data-testid="push-off">
                       Turn off
                     </Button>
                   </>
