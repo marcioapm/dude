@@ -264,6 +264,9 @@ def test_a_prompt_is_edited_saved_and_cancelled_in_place(page: Page, web_url: st
     expect(doc.get_by_test_id("markdown-bold")).to_be_focused()
     page.keyboard.press("End")
     expect(doc.get_by_test_id("markdown-variable")).to_be_focused()
+    # And Tab leaves it for the next control, not its next button.
+    page.keyboard.press("Tab")
+    expect(doc.get_by_test_id("markdown-cancel")).to_be_focused()
     doc.get_by_test_id("markdown-cancel").click()
     history = client.get("/v1/prompts/implementer/history").json()["versions"]
     assert [v["number"] for v in history] == [2, 1]

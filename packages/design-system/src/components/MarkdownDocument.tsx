@@ -26,17 +26,19 @@ export interface MarkdownDocumentProps extends Omit<HTMLAttributes<HTMLDivElemen
 }
 
 /**
- * A toolbar's keys: ← and → move between its buttons, Home and End to the
- * ends, so it is one Tab stop's worth of controls to a keyboard.
+ * A toolbar is one Tab stop: only the button last moved to takes Tab (a
+ * roving tabindex, `stop`), and ← → Home End move along it. Returns the
+ * index moved to, or null for any other key.
  */
-function moveAlongToolbar(e: KeyboardEvent<HTMLElement>) {
-  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
-  const buttons = [...e.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
+function moveAlongToolbar(e: KeyboardEvent<HTMLElement>): number | null {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return null;
+  const buttons = [...e.currentTarget.querySelectorAll<HTMLButtonElement>("button")];
   const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
-  if (at === -1) return;
+  if (at === -1) return null;
   e.preventDefault();
   const next = e.key === "Home" ? 0 : e.key === "End" ? buttons.length - 1 : (at + (e.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length;
   buttons[next]?.focus();
+  return next;
 }
 
 /**
@@ -137,6 +139,8 @@ export function MarkdownDocument({
     setDraftState(next);
   };
   const [saving, setSaving] = useState(false);
+  // Which formatting button takes Tab (see moveAlongToolbar).
+  const [stop, setStop] = useState(0);
   const area = useRef<HTMLTextAreaElement>(null);
   const editing = draft !== null;
 
@@ -206,7 +210,16 @@ export function MarkdownDocument({
         <span className={styles["spacer"]} />
         {!onSave ? null : editing ? (
           <>
-            <span className={styles["tools"]} role="toolbar" aria-label="Formatting" onKeyDownCapture={moveAlongToolbar}>
+            <span
+              className={styles["tools"]}
+              role="toolbar"
+              aria-label="Formatting"
+              onKeyDownCapture={(e) => {
+                const moved = moveAlongToolbar(e);
+                if (moved !== null) setStop(moved);
+              }}
+              ref={(bar) => bar?.querySelectorAll<HTMLButtonElement>("button").forEach((b, i) => (b.tabIndex = i === stop ? 0 : -1))}
+            >
               <IconButton size="sm" icon="heading" label="Heading" onClick={() => format("heading")} data-testid="markdown-heading" />
               <IconButton size="sm" icon="bold" label="Bold" onClick={() => format("bold")} data-testid="markdown-bold" />
               <IconButton size="sm" icon="code" label="Code" onClick={() => format("code")} data-testid="markdown-code" />
