@@ -22,7 +22,7 @@ import pytest
 import requests
 from playwright.sync_api import Page, expect
 
-from helpers import ApiClient, wait_until
+from helpers import ApiClient, sign_in, wait_until
 
 LIVE_MODELS = {"implementer": {"model": "fake/live"}, "reviewer": {"model": "fake/scripted"},
                "simplifier": {"model": "fake/scripted"}}
@@ -146,15 +146,6 @@ def test_a_page_an_agent_saved_is_never_served_as_one_of_ours(client: ApiClient,
     assert "sandbox" in inline.headers["content-security-policy"]
 
 
-def _sign_in(page: Page, web_url: str, api_key: str) -> None:
-    page.goto(web_url)
-    page.evaluate("localStorage.clear()")
-    page.goto(web_url)
-    page.fill('input[type="password"]', api_key)
-    page.click('button[type="submit"]')
-    expect(page.get_by_test_id("shell")).to_be_visible()
-
-
 @pytest.mark.ui
 def test_a_sessions_changes_update_as_the_agent_works(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
@@ -163,7 +154,7 @@ def test_a_sessions_changes_update_as_the_agent_works(
     task, run = _live_task(client, forge_project, "Watch the changes")
     wait_until(lambda: _diff_paths(client, run["id"]), timeout=30, message="no live diff")
 
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/session/{run['id']}")
     page.get_by_role("tab", name="Changes").click()
     changes = page.get_by_test_id("changes")
@@ -199,7 +190,7 @@ def test_a_tasks_files_open_in_a_viewer_with_their_versions(
     wait_until(lambda: sum(a["name"] == "NOTES.md" for a in client.get("/v1/artifacts", params={"taskId": task["id"]}).json()["artifacts"]) == 2,
                timeout=90, message="the second version was never collected")
 
-    _sign_in(page, web_url, org["api_key"])
+    sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/task/{task['id']}")
     page.get_by_role("tab", name="Files").click()
     files = page.get_by_test_id("files")

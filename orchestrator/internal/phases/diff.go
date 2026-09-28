@@ -309,8 +309,8 @@ func diffCommand(dest string, bases map[string]string) []string {
 
 // diffChecksum identifies what diffScript printed — every repository's
 // name, base and diff — so an identical read is known without parsing it.
-func diffChecksum(text string) string {
-	sum := sha256.Sum256([]byte(text))
+func diffChecksum(text []byte) string {
+	sum := sha256.Sum256(text)
 	return hex.EncodeToString(sum[:])
 }
 
@@ -335,7 +335,7 @@ func splitDiff(text string) []diffSection {
 // the first repository's base, and a checksum of it all, which is how a
 // read identical to the last is known before anything else is done.
 func parseRunDiff(text string) RunDiff {
-	diff := RunDiff{Files: []DiffFile{}, Checksum: diffChecksum(text)}
+	diff := RunDiff{Files: []DiffFile{}, Checksum: diffChecksum([]byte(text))}
 	sections := splitDiff(text)
 	for i, sec := range sections {
 		if i == 0 {

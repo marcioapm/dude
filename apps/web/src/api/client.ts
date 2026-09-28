@@ -108,8 +108,6 @@ function withWaitingFor(projects: NavProject[]): NavProject[] {
 /** A Run with the sessions it spawned. `GET /v1/runs/:id`. */
 export interface RunDetail extends Run {
   sessions: Session[];
-  /** What it cost: the model's tokens and its time on a host. */
-  cost: CostSplit;
 }
 
 export type { CostSplit, RunDiff, RunDiffFile, RunDiffSummary } from "@dude/domain";

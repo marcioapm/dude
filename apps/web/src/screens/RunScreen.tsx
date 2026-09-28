@@ -26,7 +26,7 @@ import {
 import { Button, Callout, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
 import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, runLabel } from "@dude/domain";
 import type { AgentRole, PersistedEvent } from "@dude/domain";
-import type { ApiClient, Person, RunDetail } from "../api/client.ts";
+import type { ApiClient, Person, RunDetail, RunDiffSummary } from "../api/client.ts";
 import { ApiError, reportedCost } from "../api/client.ts";
 import { PAUSE_WORDS, apply, emptyProjection, snapshot, type Turn } from "../api/conversation.ts";
 import type { ComposerSubmission } from "@dude/design-system/components";
@@ -136,14 +136,12 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
     return snapshot(apply(projection.current, events), run?.status);
   }, [events, runId, run?.status]);
   const isLive = run ? !TERMINAL_RUN_STATUSES.includes(run.status) : false;
-  // How many files its latest diff touches, for the Changes tab.
-  const diffFiles = useMemo(() => {
-    for (let i = events.length - 1; i >= 0; i--) {
-      const e = events[i]!;
-      if (e.eventType === EventTypes.RunDiffUpdated && Array.isArray(e.payload.files)) return e.payload.files.length;
-    }
-    return null;
-  }, [events]);
+  // The latest diff's summary: its file count for the Changes tab, its
+  // checksum for the panel to know when to fetch.
+  const diffSummary = useMemo(
+    () => events.findLast((e) => e.eventType === EventTypes.RunDiffUpdated)?.payload as RunDiffSummary | undefined,
+    [events],
+  );
 
   /** Run an intervention, surfacing conflicts as readable text. */
   const intervene = useCallback(
@@ -222,7 +220,7 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
           <Tab value="chat" icon="message">Conversation</Tab>
           {/* The agent's checkout, as it changes: only for a Run with one. */}
           {Object.keys(run.baseRefs).length > 0 || run.phase ? (
-            <Tab value="changes" icon="git-branch" count={diffFiles ?? undefined}>Changes</Tab>
+            <Tab value="changes" icon="git-branch" count={diffSummary?.files.length}>Changes</Tab>
           ) : null}
           {/* Debugging, not the daily view — hence last and quieter. */}
           <Tab value="events" count={events.length}>Events</Tab>
@@ -319,7 +317,7 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
         </TabPanel>
 
         <TabPanel value="changes" fill>
-          <ChangesPanel client={client} runId={runId} events={events} live={isLive && run.status !== "paused"} />
+          <ChangesPanel client={client} runId={runId} events={events} checksum={diffSummary?.checksum ?? ""} live={isLive && run.status !== "paused"} />
         </TabPanel>
 
         <TabPanel value="events" fill>

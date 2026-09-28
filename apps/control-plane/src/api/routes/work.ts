@@ -7,7 +7,7 @@
  */
 
 import { z } from "zod";
-import { EventTypes, agentRoleSchema, costSplit, newId, resolveAgentModel } from "@dude/domain";
+import { EventTypes, agentRoleSchema, newId, resolveAgentModel } from "@dude/domain";
 import type { AgentModels } from "@dude/domain";
 import { withOrg, withoutTenant } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
@@ -257,9 +257,7 @@ async function getRun(ctx: RequestContext): Promise<Response> {
     const sessions = await scope.sql`
       SELECT ${scope.sql.unsafe(SESSION_SELECT)} FROM sessions WHERE run_id = ${id}
       ORDER BY created_at ASC`;
-    // Its usage as a cost: the model's tokens and its time on a host.
-    const [m] = (await scope.sql`SELECT cost_usd, machine_usd FROM run_metrics(${id})`) as Array<Record<string, unknown>>;
-    return { ...rows[0], sessions, cost: costSplit(Number(m?.cost_usd ?? 0), Number(m?.machine_usd ?? 0)) };
+    return { ...rows[0], sessions };
   });
 
   if (!run) throw notFound(`run ${id} not found`);

@@ -68,14 +68,12 @@ var editTools = map[string]bool{"edit": true, "write": true, "patch": true, "mul
 // isEdit says whether a recorded tool call changes files.
 func isEdit(name string) bool { return editTools[strings.ToLower(name)] }
 
-// RunDiff is a Run's diff as stored (run_diffs) and served.
+// RunDiff is a Run's diff as run_diffs stores it; the API adds when, and
+// whether it is final.
 type RunDiff struct {
-	Base      string     `json:"base"`
-	Files     []DiffFile `json:"files"`
-	Checksum  string     `json:"checksum"`
-	UpdatedAt time.Time  `json:"updatedAt"`
-	// Left by the beforeStop hook: what the checkout held when it stopped.
-	Final bool `json:"final"`
+	Base     string
+	Files    []DiffFile
+	Checksum string
 }
 
 // diffState is what the syncer remembers of a Run's live diff: the
@@ -211,11 +209,11 @@ func (s *Syncer) readDiff(ctx context.Context, r phaseRun, periodic bool) (bool,
 	if res.ExitCode != 0 {
 		return false, fmt.Errorf("the diff exited %d: %s", res.ExitCode, strings.TrimSpace(string(res.Stderr)))
 	}
-	text := string(res.Stdout)
-	sum := diffChecksum(text)
+	sum := diffChecksum(res.Stdout)
 	if sum == st.checksum {
 		return false, nil // the same as the last: not parsed, not written
 	}
+	text := string(res.Stdout)
 	// The placement is the session's: until a resumed one reports its
 	// session, a read counts as the last one's and yields to its final diff.
 	changed, err := recordRunDiff(ctx, s.DB.InOrg, r.Org, r.ProjectID, r.TaskID, r.ID, text, epoch, false)
@@ -235,7 +233,6 @@ type inOrg func(ctx context.Context, org string, fn func(pgx.Tx) error) error
 // fetched from the API by whoever is looking.
 func recordRunDiff(ctx context.Context, in inOrg, org, projectID, taskID, runID, text string, epoch int, final bool) (bool, error) {
 	diff := parseRunDiff(text)
-	diff.Final = final
 	files, err := json.Marshal(diff.Files)
 	if err != nil {
 		return false, err
@@ -255,7 +252,7 @@ func recordRunDiff(ctx context.Context, in inOrg, org, projectID, taskID, runID,
 			WHERE (run_diffs.checksum <> EXCLUDED.checksum OR run_diffs.final <> EXCLUDED.final)
 				AND (EXCLUDED.epoch > run_diffs.epoch
 					OR EXCLUDED.epoch = run_diffs.epoch AND (EXCLUDED.final OR NOT run_diffs.final))
-			RETURNING updated_at`, runID, org, diff.Base, files, diff.Checksum, diff.Final, epoch).Scan(&at)
+			RETURNING updated_at`, runID, org, diff.Base, files, diff.Checksum, final, epoch).Scan(&at)
 		if err == pgx.ErrNoRows {
 			return nil
 		}
@@ -266,7 +263,7 @@ func recordRunDiff(ctx context.Context, in inOrg, org, projectID, taskID, runID,
 		_, err = ledger.Append(ctx, tx, ledger.Event{
 			Type: EvDiffUpdated, OrganizationID: org, ProjectID: projectID, TaskID: taskID, RunID: runID,
 			ActorType: ledger.ActorAgent, ActorID: runID, Source: ledger.SourceRunner, CorrelationID: taskID,
-			Payload: map[string]any{"checksum": diff.Checksum, "updatedAt": at, "final": diff.Final, "files": summary},
+			Payload: map[string]any{"checksum": diff.Checksum, "updatedAt": at, "final": final, "files": summary},
 		})
 		return err
 	})

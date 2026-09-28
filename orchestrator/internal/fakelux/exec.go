@@ -3,6 +3,7 @@ package fakelux
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"maps"
@@ -128,13 +129,7 @@ func (s *Server) beforeStop(run *Run) {
 	cmd := exec.CommandContext(ctx, hook.Command[0], s.inWorkspace(run, hook.Command[1:])...)
 	cmd.Dir = run.workspace
 	cmd.Env = append(os.Environ(), "LUX_ARTIFACTS="+out)
-	code := 0
-	if err := cmd.Run(); err != nil {
-		code = -1
-		if ee, ok := err.(*exec.ExitError); ok {
-			code = ee.ExitCode()
-		}
-	}
+	code := exitCode(cmd.Run(), -1)
 	s.recordEvent(run, "lux.beforeStop", map[string]any{"phase": "done", "exitCode": code, "timedOut": ctx.Err() != nil})
 	_ = filepath.WalkDir(out, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || !d.Type().IsRegular() {
@@ -224,13 +219,7 @@ func (s *Server) exec(w http.ResponseWriter, r *http.Request) {
 	cmd.Dir = dir
 	var stdout, stderr strings.Builder
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	code := 0
-	if err := cmd.Run(); err != nil {
-		code = 127
-		if ee, ok := err.(*exec.ExitError); ok {
-			code = ee.ExitCode()
-		}
-	}
+	code := exitCode(cmd.Run(), 127)
 	send := func(ch, text string) {
 		for len(text) > 0 {
 			n := min(len(text), 64<<10)
@@ -242,4 +231,17 @@ func (s *Server) exec(w http.ResponseWriter, r *http.Request) {
 	send("stderr", stderr.String())
 	_ = wsjson.Write(context.WithoutCancel(ctx), ws, map[string]any{"exitCode": code})
 	_ = ws.Close(websocket.StatusNormalClosure, "")
+}
+
+// exitCode is how a command run to its end exited: its own code, or
+// otherwise (it could not start, or was killed) the one given.
+func exitCode(err error, otherwise int) int {
+	var ee *exec.ExitError
+	switch {
+	case err == nil:
+		return 0
+	case errors.As(err, &ee):
+		return ee.ExitCode()
+	}
+	return otherwise
 }

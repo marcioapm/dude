@@ -208,7 +208,7 @@ func TestTheDiffScriptSeesTrackedAndUntrackedWork(t *testing.T) {
 	if err != nil || string(saved) != printed {
 		t.Errorf("saved %q (%v), printed %q", saved, err, printed)
 	}
-	if diffChecksum(string(saved)) != diff.Checksum {
+	if diffChecksum(saved) != diff.Checksum {
 		t.Error("the same diff has another checksum")
 	}
 

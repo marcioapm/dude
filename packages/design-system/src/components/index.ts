@@ -59,7 +59,7 @@ export type { BreadcrumbProps, BreadcrumbItem } from "./Breadcrumb.tsx";
 export { ArtifactRow, ArtifactGroup, artifactKind, ARTIFACT_KIND_SPECS } from "./ArtifactRow.tsx";
 export type { ArtifactRowProps, ArtifactGroupProps, ArtifactLike, ArtifactKind, ArtifactKindSpec, ArtifactChange, ArtifactProducer } from "./ArtifactRow.tsx";
 export { ArtifactPreview, prettyJson } from "./ArtifactPreview.tsx";
-export { FileGallery, FileViewer, galleryOrder } from "./FileGallery.tsx";
+export { FileGallery, FileViewer } from "./FileGallery.tsx";
 export type { FileGalleryProps, FileViewerProps, GalleryFile, FileVersion } from "./FileGallery.tsx";
 export type { ArtifactPreviewProps } from "./ArtifactPreview.tsx";
 export { ChatEvent, summarizeEventData, eventDetail, eventHasDetail, EVENT_SUMMARY_PAIRS } from "./ChatEvent.tsx";

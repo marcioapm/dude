@@ -7,7 +7,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { crc32, safeEntryName, zipStream } from "../src/api/zip.ts";
+import { safeEntryName, zipStream } from "../src/api/zip.ts";
 
 let dir: string;
 beforeAll(async () => {
@@ -18,13 +18,6 @@ afterAll(async () => {
 });
 
 const bytes = (s: string) => new TextEncoder().encode(s);
-
-test("crc32 is the zip one", () => {
-  expect(crc32(bytes("123456789"))).toBe(0xcbf43926);
-  expect(crc32(new Uint8Array())).toBe(0);
-  // Continued across chunks, the same as at once.
-  expect(crc32(bytes("6789"), crc32(bytes("12345")))).toBe(0xcbf43926);
-});
 
 test("an archive unzip reads back, byte for byte", async () => {
   const big = new Uint8Array(300_000).map((_, i) => (i * 31) % 256);

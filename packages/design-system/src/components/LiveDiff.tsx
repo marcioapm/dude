@@ -1,29 +1,12 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
+import type { RunDiffFile, RunDiffHunk, RunDiffLine } from "@dude/domain";
 import { cx } from "../util/cx.ts";
 import styles from "./LiveDiff.module.css";
 
-/** One line of a live diff, as the API sends it. */
-export interface LiveDiffLine {
-  readonly kind: " " | "+" | "-";
-  readonly old: number | null;
-  readonly new: number | null;
-  readonly text: string;
-}
-
-export interface LiveDiffHunk {
-  readonly header: string;
-  readonly lines: ReadonlyArray<LiveDiffLine>;
-}
-
-export interface LiveDiffFile {
-  readonly path: string;
-  readonly status: "M" | "A" | "D" | "R";
-  readonly additions: number;
-  readonly deletions: number;
-  readonly hunks: ReadonlyArray<LiveDiffHunk>;
-  readonly truncated?: boolean | undefined;
-  readonly binary?: boolean | undefined;
-}
+/** A live diff's file, line and hunk: the API's (GET /v1/runs/:id/diff). */
+export type LiveDiffFile = Readonly<RunDiffFile>;
+export type LiveDiffHunk = RunDiffHunk;
+export type LiveDiffLine = RunDiffLine;
 
 export interface LiveDiffProps extends Omit<HTMLAttributes<HTMLDivElement>, "children"> {
   readonly files: ReadonlyArray<LiveDiffFile>;
@@ -31,9 +14,6 @@ export interface LiveDiffProps extends Omit<HTMLAttributes<HTMLDivElement>, "chi
   readonly base: string;
   /** Still changing: the agent is at work. Shows "Live". */
   readonly live?: boolean | undefined;
-  /** Keep the latest change in view. Default on while live. */
-  readonly follow?: boolean | undefined;
-  readonly onFollowChange?: ((follow: boolean) => void) | undefined;
   /** What the agent did last ("Write LIVE.md · just now"), beside the toggle. */
   readonly lastChange?: ReactNode;
   /** Shown when nothing changed yet. */
@@ -58,13 +38,9 @@ const lineKey = (path: string, l: LiveDiffLine) => `${path}\u0000${l.kind}\u0000
  * Changes are told apart by sign and gutter as well as tint (+, −), so the
  * diff reads without colour.
  */
-export function LiveDiff({ files, base, live, follow: followProp, onFollowChange, lastChange, emptyMessage, className, ...rest }: LiveDiffProps) {
-  const [followState, setFollowState] = useState(live ?? false);
-  const follow = followProp ?? followState;
-  const setFollow = (v: boolean) => {
-    setFollowState(v);
-    onFollowChange?.(v);
-  };
+export function LiveDiff({ files, base, live, lastChange, emptyMessage, className, ...rest }: LiveDiffProps) {
+  // Keep the latest change in view: on while live, until the person picks a file.
+  const [follow, setFollow] = useState(live ?? false);
   const [selected, setSelected] = useState<string | null>(null);
 
   // What is new since the last files: lines, and the files they are in.
