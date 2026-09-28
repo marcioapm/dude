@@ -20,9 +20,6 @@ import { mergeBlockedBy } from "../pullRequests.ts";
 
 const METHOD_LABEL: Record<MergeMethod, string> = { squash: "Squash and merge", merge: "Create a merge commit", rebase: "Rebase and merge" };
 
-/** The organization's merge method, read once per page: what Merge does first. */
-let defaultMethod: Promise<MergeMethod> | null = null;
-
 export interface PullRequestActionSlots {
   facts: Partial<Record<FactKind, ReactNode>>;
   merge: ReactNode;
@@ -41,10 +38,10 @@ export function PullRequestActions({ client, pr, onChanged, children }: {
   const [asking, setAsking] = useState(false);
   const [logins, setLogins] = useState("");
 
+  // The organization's merge method, as it is now: what Merge does first.
   useEffect(() => {
-    defaultMethod ??= client.githubSettings().then((s) => s.mergeMethod, () => "squash" as const);
     let live = true;
-    void defaultMethod.then((m) => live && setMethod((cur) => cur ?? m));
+    void client.githubSettings().then((s) => live && setMethod((cur) => cur ?? s.mergeMethod), () => undefined);
     return () => {
       live = false;
     };

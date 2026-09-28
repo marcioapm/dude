@@ -99,17 +99,19 @@ class FakeGitHub:
         self.merges: list[dict] = []
         self.updates: list[int] = []
         self.rerequested: list[int] = []
+        # Actions jobs asked to run again (an Actions check run is a job).
+        self.jobs_rerun: list[int] = []
         self.review_requests: list[tuple[int, list[str]]] = []
 
     def add_repository(self, repo: str) -> "FakeGitHub":
         """Another repository, served alongside this one: same owner, same
         git daemon, same API, its own branches and pull requests."""
         sib = FakeGitHub.__new__(FakeGitHub)
-        own = ("siblings", "pulls", "hooks", "deliveries", "checks", "merges", "updates", "rerequested", "review_requests")
+        own = ("siblings", "pulls", "hooks", "deliveries", "checks", "merges", "updates", "rerequested", "jobs_rerun", "review_requests")
         sib.__dict__.update({k: v for k, v in self.__dict__.items() if k not in own})
         sib.repo, sib.bare = repo, self.root / self.owner / f"{repo}.git"
         sib.pulls, sib.hooks, sib.deliveries, sib.siblings = {}, [], [], {}
-        sib.checks, sib.merges, sib.updates, sib.rerequested, sib.review_requests = {}, [], [], [], []
+        sib.checks, sib.merges, sib.updates, sib.rerequested, sib.jobs_rerun, sib.review_requests = {}, [], [], [], [], []
         sib._lock, sib._parent = threading.Lock(), self
         sib._seed(suffix=repo)
         self.siblings[repo] = sib
@@ -454,8 +456,12 @@ class FakeGitHub:
                 gh = self.github
                 prefix = f"/repos/{gh.owner}/{gh.repo}"
                 if m := re.fullmatch(rf"{prefix}/check-runs/(\d+)/rerequest", self.path):
+                    # Only the app that owns a check run may re-request it;
+                    # a token may not, as on GitHub.
+                    return self._send(403, {"message": "Invalid OAuth application client_id or secret."})
+                if m := re.fullmatch(rf"{prefix}/actions/jobs/(\d+)/rerun", self.path):
                     with gh._lock:
-                        gh.rerequested.append(int(m[1]))
+                        gh.jobs_rerun.append(int(m[1]))
                     return self._send(201, {})
                 if m := re.fullmatch(rf"{prefix}/pulls/(\d+)/requested_reviewers", self.path):
                     pr = gh.pulls[int(m[1])]
@@ -553,7 +559,7 @@ class FakeGitHub:
                 if m := re.fullmatch(rf"{prefix}/commits/([^/]+)/check-runs", path):
                     runs = [{"id": c["id"], "name": c["name"], "status": c["status"], "conclusion": c["conclusion"],
                              "html_url": f"https://github.test/{self.github.owner}/{self.github.repo}/runs/{c['id']}",
-                             "started_at": c["started_at"], "completed_at": c["completed_at"]}
+                             "started_at": c["started_at"], "completed_at": c["completed_at"], "app": {"slug": "github-actions"}}
                             for c in self._checks(m[1], "check_run")]
                     return self._send(200, {"total_count": len(runs), "check_runs": runs})
                 if m := re.fullmatch(rf"{prefix}/commits/([^/]+)/status", path):

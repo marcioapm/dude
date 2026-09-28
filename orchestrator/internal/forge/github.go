@@ -98,6 +98,9 @@ type Check struct {
 	// A check run's id, for its log and for running it again; 0 for a
 	// commit status, which has neither.
 	RunID int64 `json:"runId,omitempty"`
+	// The app that reported it: "github-actions" for Actions, whose check
+	// run is a job, re-run through the Actions API.
+	App string `json:"app,omitempty"`
 }
 
 // Failed says the check finished and failed: what wakes a fixer.
@@ -417,6 +420,9 @@ func (g *GitHub) checks(ctx context.Context, slug, sha string) (string, []Check,
 				DetailsURL  string `json:"details_url"`
 				StartedAt   string `json:"started_at"`
 				CompletedAt string `json:"completed_at"`
+				App         *struct {
+					Slug string `json:"slug"`
+				} `json:"app"`
 			} `json:"check_runs"`
 		}
 		err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/commits/%s/check-runs?per_page=100&page=%d", slug, sha, page), nil, &runs)
@@ -436,8 +442,12 @@ func (g *GitHub) checks(ctx context.Context, slug, sha string) (string, []Check,
 			if link == "" {
 				link = r.DetailsURL
 			}
-			list = append(list, Check{Name: r.Name, Status: r.Status, Conclusion: r.Conclusion, URL: link,
-				DurationMs: elapsed(r.StartedAt, r.CompletedAt), RunID: r.ID})
+			c := Check{Name: r.Name, Status: r.Status, Conclusion: r.Conclusion, URL: link,
+				DurationMs: elapsed(r.StartedAt, r.CompletedAt), RunID: r.ID}
+			if r.App != nil {
+				c.App = r.App.Slug
+			}
+			list = append(list, c)
 		}
 		seen += len(runs.CheckRuns)
 		if len(runs.CheckRuns) == 0 || seen >= runs.TotalCount {
@@ -774,17 +784,22 @@ func (g *GitHub) Merge(ctx context.Context, slug string, number int, method, sha
 	return out.SHA, err
 }
 
-// RerunFailed asks GitHub to run each failed check run again. A check run
-// an app owns is re-requested through the checks API; GitHub Actions
-// re-runs the failed jobs of the workflow run the check belongs to, which
-// the checks API does the same for.
+// RerunFailed asks GitHub to run each failed check run again. An Actions
+// check run is a job, re-run through the Actions API (its id is the
+// job's). Any other app's is re-requested through the checks API, which
+// GitHub allows only the app that owns it: with a token, GitHub refuses,
+// and says so.
 func (g *GitHub) RerunFailed(ctx context.Context, slug string, checks []Check) (int, error) {
 	n := 0
 	for _, c := range checks {
 		if !c.Failed() || c.RunID == 0 {
 			continue
 		}
-		if err := g.do(ctx, "POST", fmt.Sprintf("/repos/%s/check-runs/%d/rerequest", slug, c.RunID), map[string]any{}, nil); err != nil {
+		path := fmt.Sprintf("/repos/%s/check-runs/%d/rerequest", slug, c.RunID)
+		if c.App == "github-actions" {
+			path = fmt.Sprintf("/repos/%s/actions/jobs/%d/rerun", slug, c.RunID)
+		}
+		if err := g.do(ctx, "POST", path, map[string]any{}, nil); err != nil {
 			return n, err
 		}
 		n++
@@ -917,8 +932,10 @@ func (g *GitHub) EnsureWebhook(ctx context.Context, slug, target, secret string)
 	var created struct {
 		ID int64 `json:"id"`
 	}
-	err := g.do(ctx, "POST", "/repos/"+slug+"/hooks", hook, &created)
-	return fmt.Sprint(created.ID), err
+	if err := g.do(ctx, "POST", "/repos/"+slug+"/hooks", hook, &created); err != nil {
+		return "", err
+	}
+	return fmt.Sprint(created.ID), nil
 }
 
 // WebhookEvents are the events that can change what dude does about a PR.

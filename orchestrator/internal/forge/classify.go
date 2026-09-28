@@ -212,6 +212,10 @@ func Ready(s Status) bool { return len(Blockers(s)) == 0 }
 // being merged: nothing, when it is ready.
 func Blockers(s Status) []string {
 	var out []string
+	if s.State == StateDraft {
+		// GitHub merges no draft: it is marked ready for review first.
+		out = append(out, "it is a draft")
+	}
 	switch s.Checks {
 	case ChecksFailing:
 		out = append(out, "checks are failing")

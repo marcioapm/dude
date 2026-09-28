@@ -2568,8 +2568,9 @@ func TestPullRequestActionsOnAPersonsBehalf(t *testing.T) {
 	if code, body := w.callAs(me, "/internal/pull-requests/"+prID+"/rerun-failed", map[string]any{}); code != 200 {
 		t.Fatalf("rerun: %d %v", code, body)
 	}
-	if len(w.gh.Rerequested) != 1 || w.gh.Rerequested[0] != 77 {
-		t.Errorf("re-requested %v", w.gh.Rerequested)
+	// An Actions check run is a job: re-run through the Actions API.
+	if len(w.gh.JobsRerun) != 1 || w.gh.JobsRerun[0] != 77 || len(w.gh.Rerequested) != 0 {
+		t.Errorf("jobs re-run %v, check runs re-requested %v", w.gh.JobsRerun, w.gh.Rerequested)
 	}
 	if code, body := w.callAs(me, "/internal/pull-requests/"+prID+"/reviewers", map[string]any{"logins": []string{"cy"}}); code != 200 {
 		t.Fatalf("reviewers: %d %v", code, body)
@@ -2655,5 +2656,93 @@ func TestSyncsAtOnceRecordAChangeOnce(t *testing.T) {
 	wg.Wait()
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.pushed'`, wi); n != 1 {
 		t.Errorf("%d push events for one push", n)
+	}
+}
+
+// GitHub's "not worked out yet" after a push is not a reading: a
+// conflicting pull request does not read as ready in between, nor count
+// as a new conflict after.
+func TestMergeableUnknownKeepsTheLastReading(t *testing.T) {
+	w := newWorld(t)
+	wi := w.reviewing()
+	w.gh.Review(1, "alice", "APPROVED")
+	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = true })
+	w.until("escalated", func() bool { w.sync(); return w.taskStatus(wi) == "awaiting_input" })
+	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1] = true })
+	for range 3 {
+		w.sync()
+		w.pump()
+	}
+	if s := w.taskStatus(wi); s == "ready_to_merge" {
+		t.Fatal("ready while GitHub had not worked out a conflicting pull request")
+	}
+	var m string
+	_ = w.owner.QueryRow(context.Background(), `SELECT mergeable_state FROM pull_requests WHERE task_id = $1`, wi).Scan(&m)
+	if m != "conflicting" {
+		t.Errorf("mergeable = %s", m)
+	}
+	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1] = false })
+	w.sync()
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'question.asked'
+		AND payload->>'reason' = 'pull_request_conflict'`, wi); n != 1 {
+		t.Errorf("%d conflict escalations for one conflict", n)
+	}
+}
+
+// A token that may not read collaborators does not stop a pull request
+// syncing: the comment is shown, not acted on.
+func TestAPermissionGitHubWillNotShareIsNotPermitted(t *testing.T) {
+	w := newWorld(t)
+	wi := w.reviewing()
+	w.gh.Set(func(s *fakegithub.Server) { s.PermissionRefused = true })
+	w.gh.Comment(1, "alice", "Please rename the greeting.")
+	w.gh.Merge(1)
+	w.until("done", func() bool { w.sync(); return w.taskStatus(wi) == "done" })
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.commented'
+		AND payload->>'ignored' = 'not_permitted'`, wi); n != 1 {
+		t.Errorf("%d comments shown as not acted on", n)
+	}
+}
+
+// Feedback that arrives with falling behind is fixed even when GitHub
+// fails the branch update; and the update is not made under a fix at work.
+func TestAFailedBranchUpdateLosesNoFeedback(t *testing.T) {
+	w := newWorld(t)
+	wi := w.reviewing()
+	w.gh.Set(func(s *fakegithub.Server) { s.UpdateDown = true })
+	w.gh.AdvanceBase("main", "Someone else's work")
+	w.gh.Comment(1, "alice", "Please rename the greeting.")
+	w.until("a fix", func() bool { w.sync(); return w.fixes(wi) == 1 })
+	w.gh.Set(func(s *fakegithub.Server) { s.UpdateDown = false })
+	w.until("the branch updated once back in review", func() bool {
+		w.sync()
+		return w.taskStatus(wi) == "review" && w.count(`SELECT count(*) FROM events WHERE task_id = $1
+			AND event_type = 'pull_request.action' AND payload->>'action' = 'update-branch' AND payload->>'refused' IS NULL`, wi) == 1
+	})
+}
+
+// A stuck-CI signal that waited while a person decided is not acted on
+// once CI has passed.
+func TestAStaleStuckSignalDoesNotStopAgain(t *testing.T) {
+	w := newWorld(t)
+	w.gh.SetChecks("pending")
+	wi := w.reviewing()
+	w.sync()
+	mustExec(t, w.owner, `UPDATE pull_requests SET head_seen_at = now() - interval '61 minutes' WHERE task_id = $1`, wi)
+	w.until("escalated", func() bool { w.sync(); return w.taskStatus(wi) == "awaiting_input" })
+	// Another hour passes while the person decides: a second signal waits.
+	mustExec(t, w.owner, `UPDATE pull_requests SET head_seen_at = now() - interval '121 minutes' WHERE task_id = $1`, wi)
+	w.sync()
+	w.gh.SetChecks("success")
+	w.sync()
+	if code, body := w.callAs(w.person("owner"), "/internal/tasks/"+wi+"/decide", map[string]string{"action": "wait"}); code != 200 {
+		t.Fatalf("decide: %d %v", code, body)
+	}
+	w.until("waiting again", func() bool { w.pump(); return w.taskStatus(wi) == "review" || w.taskStatus(wi) == "ready_to_merge" })
+	for range 3 {
+		w.pump()
+	}
+	if s := w.taskStatus(wi); s == "awaiting_input" {
+		t.Error("stopped again for CI that has passed")
 	}
 }
