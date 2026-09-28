@@ -157,6 +157,15 @@ export function Sidebar({
   const filter = useMemo<NavFilter>(() => ({ query: q, triage: t, you }), [q, t, you]);
   const counts = useMemo(() => globalCounts(projects, you), [projects, you]);
   const { yours: attention, others } = useMemo(() => splitAttention(attentionItems(projects, you)), [projects, you]);
+  // Whom the others wait on, a face each however many of theirs wait.
+  const othersOwners = useMemo(() => {
+    const byId = new Map<string, Person>();
+    for (const it of others) {
+      const owner = ownerOf(it.task);
+      if (owner) byId.set(owner.id ?? owner.name, owner);
+    }
+    return [...byId.values()];
+  }, [others]);
   const filtering = q.trim().length > 0 || t !== null;
   const visible = useMemo(() => (filtering ? flattenNav(projects, expanded ?? new Map(), filter).length : -1), [filtering, projects, expanded, filter]);
 
@@ -277,7 +286,7 @@ export function Sidebar({
       {!hideAttention && !loading && others.length > 0 && !filtering ? (
         <button type="button" className={styles["othersRow"]} onClick={onShowOthers} disabled={!onShowOthers} data-testid="waiting-on-others">
           <span className={styles["othersTitle"]}>Waiting on others</span>
-          <HumanAvatarStack people={others.map((it) => ownerOf(it.task)).filter((p): p is Person => p !== null)} size="xs" max={3} aria-hidden />
+          <HumanAvatarStack people={othersOwners} size="xs" max={3} aria-hidden />
           <span className={styles["othersCount"]}>{others.length}</span>
         </button>
       ) : null}
@@ -425,7 +434,10 @@ export function AttentionList({ items, selected, onSelect, max = 5, onShowAll, t
                       <span className={styles["attentionAsker"]}>{it.session ? <AgentAvatar role={it.session.role} size="xs" /> : null}</span>
                       {it.session ? (
                         <span className={styles["attentionAsk"]} title={it.session.activity}>
-                          {it.session.activity ?? (others && owner ? `is waiting for ${owner.name}` : "is waiting for you")}
+                          {/* Others' asks name whose they are first: that is what the list is sorted by in your head. */}
+                          {others && owner
+                            ? (it.session.activity ? `waiting for ${owner.name} · ${it.session.activity}` : `is waiting for ${owner.name}`)
+                            : (it.session.activity ?? "is waiting for you")}
                         </span>
                       ) : (
                         <span className={styles["attentionAsk"]} title={waitingWords(it.task)}>

@@ -367,8 +367,9 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         menuItems={menuItems}
         title={<span className="brand"><DudeMark size={24} />El Duderino</span>}
         presence={
+          // You first, then the others as the organization lists them.
           <OnlineRow data-testid="online"
-            people={people.filter((p) => p.online).map((p) => ({ id: p.id, name: p.name, imageUrl: photoOf(p), where: whereWords(p) }))} />
+            people={people.filter((p) => p.online).sort((a, b) => Number(b.id === you) - Number(a.id === you)).map((p) => ({ id: p.id, name: p.name, imageUrl: photoOf(p), where: whereWords(p) }))} />
         }
         band={
           <ProfileBand
