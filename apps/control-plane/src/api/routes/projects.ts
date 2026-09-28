@@ -8,7 +8,7 @@
 import { z } from "zod";
 import { agentModelsSchema, deliveryPolicySchema, newId, EventTypes } from "@dude/domain";
 import { withOrg } from "../../db/client.ts";
-import { requireProjectEditor } from "../access.ts";
+import { requireOrgAdmin, requireProjectEditor } from "../access.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { conflict, json, notFound, parseBody } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
@@ -165,7 +165,12 @@ async function deliveryDefaults(ctx: RequestContext): Promise<Response> {
 
 export function registerProjectRoutes(router: Router): void {
   router.get("/v1/delivery-defaults", deliveryDefaults);
-  router.post("/v1/projects", createProject);
+  // A project brings its own models, image, delivery policy and trusted
+  // repositories: making one is changing them, so it is an admin's too.
+  router.post("/v1/projects", async (ctx) => {
+    await requireOrgAdmin(ctx);
+    return createProject(ctx);
+  });
   router.get("/v1/projects", listProjects);
   router.get("/v1/projects/:id", getProject);
   // A project's name, runtime image, models and delivery policy: the same

@@ -127,12 +127,12 @@ export function ProjectSettingsScreen({ client, projectId, page: given, onPage, 
           {page === "general" ? (
             <>
               <SettingsHeader title="General" />
-              <GeneralTab client={client} project={project} onSaved={saved} />
+              <GeneralTab client={client} project={project} canEdit={scope.settings.canEdit} onSaved={saved} />
             </>
           ) : page === "repositories" ? (
             <>
               <SettingsHeader title="Repositories" description="What agents check out. The first is where tasks start; the others can be requested." />
-              <RepositoriesTab client={client} project={project} onSaved={saved} />
+              <RepositoriesTab client={client} project={project} canEdit={scope.settings.canEdit} onSaved={saved} />
             </>
           ) : page === "delivery" ? (
             <DeliveryPage scope={scope} />
@@ -148,10 +148,12 @@ export function ProjectSettingsScreen({ client, projectId, page: given, onPage, 
 interface TabProps {
   client: ApiClient;
   project: ProjectDetail;
+  /** An admin's: others see the project as it is, without the controls. */
+  canEdit: boolean;
   onSaved: () => void;
 }
 
-function GeneralTab({ client, project, onSaved }: TabProps) {
+function GeneralTab({ client, project, canEdit, onSaved }: TabProps) {
   const [name, setName] = useState(project.name);
   const [image, setImage] = useState(project.runtimeImage ?? "");
   const { busy, problem, save } = useSave();
@@ -166,6 +168,7 @@ function GeneralTab({ client, project, onSaved }: TabProps) {
         }), onSaved, "General settings saved");
       }}
     >
+      <fieldset disabled={!canEdit} className="plainFieldset">
       <FormStack>
         <Input label="Name" value={name} required maxLength={200} onChange={(e) => setName(e.target.value)} />
         <Input label="Slug" value={project.slug} mono disabled hint="Fixed: it names the project in paths and keys." />
@@ -178,17 +181,20 @@ function GeneralTab({ client, project, onSaved }: TabProps) {
           onChange={(e) => setImage(e.target.value)}
         />
         {problem ? <Callout tone="danger">{problem}</Callout> : null}
-        <FormActions>
-          <Button type="submit" variant="primary" disabled={!dirty || busy || !name.trim()}>
-            Save
-          </Button>
-        </FormActions>
+        {canEdit ? (
+          <FormActions>
+            <Button type="submit" variant="primary" disabled={!dirty || busy || !name.trim()}>
+              Save
+            </Button>
+          </FormActions>
+        ) : null}
       </FormStack>
+      </fieldset>
     </form>
   );
 }
 
-function RepositoriesTab({ client, project, onSaved }: TabProps) {
+function RepositoriesTab({ client, project, canEdit, onSaved }: TabProps) {
   const [editing, setEditing] = useState<Repository | "new" | null>(null);
   const [removing, setRemoving] = useState<Repository | null>(null);
   const { busy, problem, save } = useSave();
@@ -223,22 +229,22 @@ function RepositoriesTab({ client, project, onSaved }: TabProps) {
                 <Td mono>{r.defaultBranch}</Td>
                 <Td>{r.trust === "untrusted_external" ? "External" : "Internal"}</Td>
                 <Td align="right">
-                  <RowMenu label={`Actions for ${r.name}`} items={[
+                  {canEdit ? <RowMenu label={`Actions for ${r.name}`} items={[
                     { id: "edit", label: "Edit", icon: "edit", onSelect: () => setEditing(r) },
                     { kind: "separator" },
                     { id: "remove", label: "Remove", tone: "danger", onSelect: () => setRemoving(r) },
-                  ]} />
+                  ]} /> : null}
                 </Td>
               </Tr>
             ))}
           </TBody>
         </Table>
       )}
-      <FormActions>
+      {canEdit ? <FormActions>
         <Button ref={addButton} variant="secondary" leadingIcon="plus" onClick={() => setEditing("new")} data-testid="add-repository">
           Add repository
         </Button>
-      </FormActions>
+      </FormActions> : null}
       {problem ? <Callout tone="danger">{problem}</Callout> : null}
       {editing ? (
         <RepositoryDialog
