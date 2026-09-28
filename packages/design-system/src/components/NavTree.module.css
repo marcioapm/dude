@@ -1,10 +1,9 @@
 /*
- * The navigation tree, Discord-channel style. Every row is a sibling (flat
- * tree), indented by --depth. No borders: hover is a wash, selection a
- * stronger rounded wash with strong ink and a short accent rail. Needs-you
- * rows carry a small neutral pill at the row's left edge and
- * medium-weight text. Status marks for tasks and
- * sessions share one column at the right edge, before the row menu.
+ * The navigation tree. Every row is a sibling (flat tree), indented by
+ * --depth. No borders: hover is a wash, selection a stronger wash with
+ * strong ink. Projects wear their face, tasks their people (the agent
+ * working for the owner on the owner's face), and under a task only the
+ * agents working now. The one loud thing is the needs-you count.
  */
 
 .tree {
@@ -44,41 +43,14 @@
 .selected:hover {
   background: var(--ds-color-active-wash);
 }
-.selected::before {
-  content: "";
-  position: absolute;
-  left: 2px;
-  top: 8px;
-  bottom: 8px;
-  width: 2px;
-  border-radius: var(--ds-radius-mark);
-  background: var(--ds-color-accent);
-}
 .selected,
 .selected .epicTitle,
 .selected .wiTitle,
 .selected .sessionTitle {
   color: var(--ds-color-text-strong);
+  font-weight: var(--ds-weight-medium);
 }
 
-/* The needs-you pill: 3×8 in strong ink, inside the row where the
-   selection rail sits (so the scroll area never clips it). Neutral: the
-   diamond in the mark column carries the state's hue, and the needs-you
-   block above is the sidebar's one amber signal. */
-.pill {
-  position: absolute;
-  left: 1px;
-  top: 50%;
-  width: 3px;
-  height: 8px;
-  margin-top: -4px;
-  border-radius: var(--ds-radius-mark);
-  background: var(--ds-color-text-strong);
-}
-/* Selected, the rail is the row's mark; the diamond still says needs-you. */
-.selected > .pill {
-  display: none;
-}
 
 .toggle {
   display: inline-grid;
@@ -120,17 +92,6 @@
   justify-content: center;
   width: 14px;
 }
-.rollup {
-  margin-left: auto;
-}
-/* Counts read before their mark, and the 8px mark is centred in a 14px
-   cell, so the last mark lands in the mark column. */
-.rollup > * {
-  flex-direction: row-reverse;
-}
-.rollup > * > [aria-hidden] {
-  margin: 0 3px;
-}
 
 /* The row's "…" menu: space reserved so nothing shifts, invisible until
    the row is hovered, focused, or the menu is open. Sits after whatever
@@ -143,8 +104,9 @@
   opacity: 0;
   transition: opacity var(--ds-duration-fast) var(--ds-ease-standard);
 }
-.rollup ~ .menuSlot,
-.wiTrailing ~ .menuSlot {
+.wiPeople ~ .menuSlot,
+.rest ~ .menuSlot,
+.epicCount ~ .menuSlot {
   margin-left: 0;
 }
 .row:hover .menuSlot,
@@ -154,52 +116,53 @@
   opacity: 1;
 }
 
-/* -- Project: a sentence-case section label that sticks to the top. -- */
+/* -- Project: its face, its name, its people; on hover the ⋯ menu takes the people's place. -- */
 .project {
-  position: sticky;
-  top: 0;
-  z-index: var(--ds-z-raised);
   min-height: var(--ds-size-row-item);
-  margin-top: var(--ds-space-nav-section-gap);
-  /* Opaque so rows scroll under it; the sidebar sits on the canvas. */
-  background: var(--ds-color-canvas);
+  margin-top: var(--ds-space-2);
 }
 .project:first-child {
-  margin-top: var(--ds-space-4);
-}
-.project:hover {
-  background: var(--ds-color-canvas);
-}
-.project:hover .projectName {
-  color: var(--ds-color-text-primary);
-}
-.project.selected,
-.project.selected:hover {
-  background: var(--ds-color-active-wash);
+  margin-top: 0;
 }
 .projectName {
+  flex: 1;
   font-size: var(--ds-text-nav);
-  font-weight: var(--ds-weight-medium);
-  color: var(--ds-color-text-muted);
+  color: var(--ds-color-text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
 }
-
-/* -- Epic: medium text with the layers glyph and a total. -- */
-.epic {
-  color: var(--ds-color-text-secondary);
-}
-.epic:hover .epicTitle {
-  color: var(--ds-color-text-primary);
-}
-.epicGlyph {
-  color: var(--ds-color-text-muted);
+.rest {
   flex-shrink: 0;
 }
+/* A project's people give way to its menu on hover, focus, or while open. */
+.swapsForMenu .menuSlot {
+  display: none;
+}
+.swapsForMenu:hover .menuSlot,
+.swapsForMenu:focus-visible .menuSlot,
+.swapsForMenu:focus-within .menuSlot,
+.swapsForMenu .menuSlot[data-open="true"] {
+  display: inline-flex;
+}
+.swapsForMenu:hover .rest,
+.swapsForMenu:focus-visible .rest,
+.swapsForMenu:focus-within .rest,
+.swapsForMenu:has(.menuSlot[data-open="true"]) .rest {
+  display: none;
+}
+
+.count {
+  flex-shrink: 0;
+}
+
+/* -- Epic: its title, what needs you in it, how many. -- */
+.epic {
+  color: var(--ds-color-text-primary);
+}
 .epicTitle {
-  font-weight: var(--ds-weight-medium);
+  flex: 1;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -211,7 +174,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* -- Task: status mark · mono key · title · who. -- */
+/* -- Task: mono key · title · its one state · its people. -- */
 .task {
   min-height: var(--ds-size-row-item);
 }
@@ -228,57 +191,42 @@
   color: var(--ds-color-text-muted);
   flex-shrink: 0;
 }
-/* The title truncates last: the key and the one-avatar trailer keep their size. */
 .wiTitle {
-  color: var(--ds-color-text-secondary);
+  color: var(--ds-color-text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
 }
-.row:hover .wiTitle {
-  color: var(--ds-color-text-primary);
-}
-.finished .wiTitle,
-.finished .sessionTitle {
+.finished .wiTitle {
   color: var(--ds-color-text-muted);
 }
-.wiTrailing {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
+.pr {
   flex-shrink: 0;
-  margin-left: auto;
 }
-.more {
-  font-size: var(--ds-text-2xs);
-  font-variant-numeric: tabular-nums;
-  color: var(--ds-color-text-muted);
+.wiPeople {
+  flex-shrink: 0;
 }
 /* Muted falls under 4.5:1 on the hover and selection washes (light). */
 .row:hover .wiKey,
-.row:hover .more,
 .row:hover .epicCount,
 .selected .wiKey,
-.selected .more,
 .selected .epicCount {
   color: var(--ds-color-text-secondary);
 }
-/* In a narrow sidebar the title wins; the people stay in the row's title. */
-@container (max-width: 200px) {
-  .wiTrailing {
+/* In a narrow sidebar the title wins; the people stay in the row's label. */
+@container (max-width: 220px) {
+  .wiPeople,
+  .rest {
     display: none;
   }
 }
-/* Needs you: the left-edge pill and primary, medium-weight text. The
-   diamond in the mark column (with its ring) is the status itself. */
-.needsYou .wiTitle,
-.needsYou .sessionTitle {
+.needsYou .wiTitle {
   color: var(--ds-color-text-strong);
   font-weight: var(--ds-weight-medium);
 }
 
-/* -- Run (earlier attempt): muted, folded. -- */
+/* -- Run (an earlier attempt, when shown). -- */
 .run {
   color: var(--ds-color-text-muted);
   font-size: var(--ds-text-xs);
@@ -287,51 +235,37 @@
   flex: 1;
   min-width: 0;
 }
-.runCount {
-  font-size: var(--ds-text-2xs);
-  font-variant-numeric: tabular-nums;
-}
 
-/* -- Session: role avatar on a guide line. -- */
+/* -- An agent working now, under its task: tile, what it is and does, its plan. -- */
 .session {
+  min-height: var(--ds-size-row-item-sm);
   font-size: var(--ds-text-sm);
-}
-/* Guide: a hairline from the parent task's mark down through its sessions. */
-.session::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: calc(var(--ds-space-4) + (var(--depth) - 1) * var(--indent) + 7px);
-  width: 1px;
-  background: var(--ds-color-border-subtle);
-  pointer-events: none;
+  color: var(--ds-color-text-secondary);
 }
 .sessionAvatar {
   flex-shrink: 0;
 }
 .sessionMain {
-  display: flex;
-  align-items: baseline;
-  gap: var(--ds-space-6);
-  min-width: 0;
+  display: block;
   flex: 1;
-}
-.sessionTitle {
-  font-weight: var(--ds-weight-medium);
-  color: var(--ds-color-text-primary);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-.sessionActivity {
-  color: var(--ds-color-text-muted);
-  font-style: italic;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  min-width: 0;
 }
-.needsYou .sessionActivity {
+.sessionTitle {
   color: var(--ds-color-text-secondary);
-  font-style: normal;
+}
+.sessionActivity {
+  color: var(--ds-color-text-muted);
+}
+.needsYou .sessionTitle,
+.needsYou .sessionActivity {
+  color: var(--ds-color-text-primary);
+}
+.sessionPlan {
+  flex-shrink: 0;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  font-variant-numeric: tabular-nums;
 }

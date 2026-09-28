@@ -1,0 +1,36 @@
+/* A project's face: a rounded square, an image or initials on its identity colour. */
+
+.root {
+  --id-fg: var(--ds-color-text-secondary);
+  --id-bg: var(--ds-color-overlay);
+  display: inline-grid;
+  place-items: center;
+  width: var(--pv-size);
+  height: var(--pv-size);
+  flex-shrink: 0;
+  overflow: hidden;
+  border-radius: var(--ds-radius-face-project);
+  color: var(--id-fg);
+  background: var(--id-bg);
+  font-size: calc(var(--pv-size) * 0.38);
+  font-weight: var(--ds-weight-semibold);
+  letter-spacing: 0.02em;
+  line-height: 1;
+  user-select: none;
+  vertical-align: middle;
+}
+.image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.root[data-identity="0"] { --id-fg: var(--ds-identity-0-fg); --id-bg: var(--ds-identity-0-bg); }
+.root[data-identity="1"] { --id-fg: var(--ds-identity-1-fg); --id-bg: var(--ds-identity-1-bg); }
+.root[data-identity="2"] { --id-fg: var(--ds-identity-2-fg); --id-bg: var(--ds-identity-2-bg); }
+.root[data-identity="3"] { --id-fg: var(--ds-identity-3-fg); --id-bg: var(--ds-identity-3-bg); }
+.root[data-identity="4"] { --id-fg: var(--ds-identity-4-fg); --id-bg: var(--ds-identity-4-bg); }
+.root[data-identity="5"] { --id-fg: var(--ds-identity-5-fg); --id-bg: var(--ds-identity-5-bg); }
+.root[data-identity="6"] { --id-fg: var(--ds-identity-6-fg); --id-bg: var(--ds-identity-6-bg); }
+.root[data-identity="7"] { --id-fg: var(--ds-identity-7-fg); --id-bg: var(--ds-identity-7-bg); }

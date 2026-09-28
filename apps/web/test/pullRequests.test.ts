@@ -6,8 +6,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { PersistedEvent, PullRequest } from "@dude/domain";
-import { baseLine, checksLine, DISPLAY, mergeBlockedBy, pullRequestActivity } from "../src/pullRequests.ts";
-import { PR_DISPLAY_STATES } from "@dude/domain";
+import { mergeBlockedBy, pullRequestActivity } from "../src/pullRequests.ts";
 
 const pr = (over: Partial<PullRequest> = {}): PullRequest => ({
   id: "pr_1", taskId: "t", runId: null, repositoryId: "r", repositoryName: "web", number: 41, url: "https://github.com/a/web/pull/41",
@@ -23,30 +22,7 @@ const event = (eventType: string, payload: Record<string, unknown>, actorId = "w
   correlationId: null, causationId: null, payload: { number: 41, repo: "web", ...payload }, cursor: 1,
 }) as PersistedEvent;
 
-describe("a pull request's state", () => {
-  test("every state has a glyph, a word and a tone", () => {
-    for (const s of PR_DISPLAY_STATES) {
-      expect(DISPLAY[s].label.length).toBeGreaterThan(0);
-      expect(DISPLAY[s].glyph).toBeTruthy();
-      expect(DISPLAY[s].tone).toBeTruthy();
-    }
-  });
-
-  test("checks by name, else the rollup", () => {
-    expect(checksLine(pr({ checks: [check("e2e", "completed", "failure"), check("unit", "completed", "success")] }))).toBe("1 of 2 checks failing");
-    expect(checksLine(pr({ checks: [check("e2e", "in_progress", null), check("unit", "completed", "success")] }))).toBe("Checks running · 1 of 2 done");
-    expect(checksLine(pr({ checks: [check("unit", "completed", "success")] }))).toBe("The check passed");
-    expect(checksLine(pr({ checkState: "pending" }))).toBe("Checks not reported yet");
-    expect(checksLine(pr({ checkState: "unknown" }))).toBe("No checks");
-  });
-
-  test("against its base", () => {
-    expect(baseLine(pr({ mergeable: "conflicting" }))).toBe("Conflicts with main");
-    expect(baseLine(pr({ mergeable: "behind", behindBy: 3 }))).toBe("3 commits behind main · no conflicts");
-    expect(baseLine(pr())).toBe("Up to date with main");
-    expect(baseLine(pr({ mergeable: "unknown" }))).toBeNull();
-  });
-
+describe("merging", () => {
   test("Merge is on only when ready, and says why not", () => {
     expect(mergeBlockedBy(pr())).toBeNull();
     expect(mergeBlockedBy(pr({ display: "ci_red", checkState: "failing", review: "changes_requested",

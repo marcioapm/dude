@@ -172,3 +172,8 @@ function pad2(n: number): string {
 function trimZeros(s: string): string {
   return s.includes(".") ? s.replace(/\.?0+$/, "") : s;
 }
+
+/** "Ana" from "Ana Ribeiro": what a sentence calls someone. */
+export function firstName(name: string): string {
+  return name.split(/\s+/)[0] || name;
+}

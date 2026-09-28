@@ -20,6 +20,7 @@ import "./app.css";
 import { ApiClient } from "./api/client.ts";
 import { App } from "./App.tsx";
 import { turnPushOff } from "./push.ts";
+import { PeopleProvider } from "./people.tsx";
 import { DudeMark } from "./DudeMark.tsx";
 
 const KEY_STORAGE = "dude.apiKey";
@@ -54,17 +55,19 @@ function Root() {
   return (
     <TooltipProvider>
       <ToastProvider>
-        <App
-          client={client}
-          onKeyRefused={keyRefused}
-          onSignOut={() => {
-            // This browser stops hearing about the organization it leaves.
-            void turnPushOff(client).finally(() => {
-              localStorage.removeItem(KEY_STORAGE);
-              setApiKey("");
-            });
-          }}
-        />
+        <PeopleProvider client={client}>
+          <App
+            client={client}
+            onKeyRefused={keyRefused}
+            onSignOut={() => {
+              // This browser stops hearing about the organization it leaves.
+              void turnPushOff(client).finally(() => {
+                localStorage.removeItem(KEY_STORAGE);
+                setApiKey("");
+              });
+            }}
+          />
+        </PeopleProvider>
       </ToastProvider>
     </TooltipProvider>
   );
