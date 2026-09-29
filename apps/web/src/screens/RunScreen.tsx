@@ -288,7 +288,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   const render = (turn: Turn) => renderTurn(turn, role, conversation.contextWindow, !isLive, people, dude, decide, waitingOn);
   // A checkout to show: a Run with one, or any Run that has reported a diff
   // (the rail's files open Changes, so Changes must be there to open).
-  const hasChanges = Object.keys(run.baseRefs).length > 0 || run.phase !== null || (diffSummary?.files.length ?? 0) > 0;
+  const hasChanges = Object.keys(run.baseRefs).length > 0 || run.phase !== null || changed.length > 0;
   // Changes gone from the switch (its diff emptied, with no checkout to fall back on): back to the conversation.
   if (view === "changes" && !hasChanges) showView("chat");
   const liveDiff = isLive && run.status !== "paused";
