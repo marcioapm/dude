@@ -1,0 +1,32 @@
+/*
+ * RefLead: what a thing is, before its title. Glyphs take secondary ink; a
+ * task's status mark keeps its tone; the key is mono.
+ */
+
+.root {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  flex-shrink: 0;
+  min-width: 0;
+  white-space: nowrap;
+}
+.glyph {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  color: var(--ds-color-text-secondary);
+}
+.key {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-mono);
+  font-feature-settings: "tnum", "zero";
+  color: var(--ds-color-text-secondary);
+}
+.name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--ds-color-text-primary);
+}

@@ -6,7 +6,7 @@
  */
 
 import { useState } from "react";
-import { PersonAvatar } from "@dude/design-system/components";
+import { EntityLine, PersonAvatar } from "@dude/design-system/components";
 import {
   Badge,
   Button,
@@ -70,7 +70,7 @@ export function MembersSection({ client, me, people, onChanged }: {
         </p>
         {problem ? <Callout tone="danger">{problem}</Callout> : null}
         {people.length > 0 ? (
-          <Table>
+          <Table density="comfortable">
             <THead>
               <Tr>
                 <Th>Person</Th>
@@ -84,16 +84,12 @@ export function MembersSection({ client, me, people, onChanged }: {
                 return (
                   <Tr key={p.id} data-testid="member" data-member={p.name}>
                     <Td>
-                      <span className="member">
-                        <PersonAvatar person={p} size={32} aria-hidden title="" />
-                        <span className="memberText">
-                          <span className="memberName">{p.name}</span>
-                          <span className="memberDetail">
-                            {[you ? "you" : null, p.email, p.online ? "online" : whereWords(p) ? `active ${whereWords(p)}` : "not seen yet"]
-                              .filter(Boolean).join(" · ")}
-                          </span>
-                        </span>
-                      </span>
+                      <EntityLine
+                        lead={<PersonAvatar person={p} size={32} aria-hidden title="" />}
+                        name={p.name}
+                        detail={[you ? "you" : null, p.email, p.online ? "online" : whereWords(p) ? `active ${whereWords(p)}` : "not seen yet"]
+                          .filter(Boolean).join(" · ")}
+                      />
                     </Td>
                     <Td>
                       {admin && !you ? (

@@ -3,7 +3,8 @@ import type { AgentRole } from "@dude/domain";
 import { cx } from "../util/cx.ts";
 import { IDENTITY_SLOTS } from "../tokens/palette.ts";
 import { Icon } from "../icons/index.tsx";
-import { ROLE_ICON, ROLE_LABEL } from "./AgentAvatar.tsx";
+import { AgentAvatar, ROLE_ICON, ROLE_LABEL } from "./AgentAvatar.tsx";
+import { EntityLine } from "./EntityLine.tsx";
 import styles from "./PersonAvatar.module.css";
 
 /** Anyone with a face: a name, and a photo when there is one. */
@@ -154,12 +155,47 @@ export interface PersonLineProps extends Omit<HTMLAttributes<HTMLSpanElement>, "
 /** A face with a name and a line under it: the people on a task, the owner of a session. */
 export function PersonLine({ person, size = 40, detail, agent, live, className, ...rest }: PersonLineProps) {
   return (
-    <span className={cx(styles["line"], className)} {...rest}>
-      <PersonAvatar person={person} size={size} {...(agent ? { agent, live } : {})} />
-      <span className={styles["lineText"]}>
-        <span className={styles["lineName"]}>{person.name}</span>
-        {detail ? <span className={styles["lineDetail"]}>{detail}</span> : null}
-      </span>
-    </span>
+    <EntityLine
+      className={className}
+      lead={<PersonAvatar person={person} size={size} {...(agent ? { agent, live } : {})} />}
+      name={person.name}
+      detail={detail}
+      {...rest}
+    />
   );
+}
+
+export interface AuthorLineProps extends Omit<HTMLAttributes<HTMLSpanElement>, "children"> {
+  /** Whoever wrote it: a person; dude itself, with why; or an agent on the face of the person it worked for. */
+  readonly author:
+    | { readonly kind: "person"; readonly person: Person }
+    | { readonly kind: "system"; readonly reason?: string | undefined }
+    | { readonly kind: "agent"; readonly person: Person; readonly role: AgentRole; readonly task?: string | undefined };
+  readonly size?: PersonAvatarSize | undefined;
+}
+
+/**
+ * Who wrote something, as a byline: `PersonLine` for a person, and for an
+ * agent the person it worked for with its role's tile on their face and
+ * "Role on KEY" beneath. dude's own is the `system` avatar and why it wrote
+ * it, at the same size, so a column of authors lines up.
+ */
+export function AuthorLine({ author, size = 24, ...rest }: AuthorLineProps) {
+  if (author.kind === "system") {
+    return (
+      <EntityLine
+        lead={<span className={styles["system"]} style={{ width: size, height: size }}><AgentAvatar role="system" size={size >= 32 ? "md" : "sm"} /></span>}
+        name="dude"
+        detail={author.reason}
+        {...rest}
+      />
+    );
+  }
+  if (author.kind === "agent") {
+    return (
+      <PersonLine person={author.person} size={size} agent={author.role}
+        detail={`${ROLE_LABEL[author.role]}${author.task ? ` on ${author.task}` : ""}`} {...rest} />
+    );
+  }
+  return <PersonLine person={author.person} size={size} {...rest} />;
 }

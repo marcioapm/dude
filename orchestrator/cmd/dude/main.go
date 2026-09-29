@@ -7,6 +7,9 @@
 //	dude repo list | request NAME --reason R [--write]
 //	dude task create --title T --goal G [--epic E] [--criterion C]...
 //	dude ask "question" [--choice C]...   ask a person; end your turn after
+//	dude memory search QUERY [--type T]... [--limit N]
+//	dude memory show ID                   one memory in full
+//	dude memory add --title T --content C [--kind K] [--about KEY]... [--org]
 //	dude event TYPE [--data JSON]         record an event on this run
 //	dude publish FILE [--name NAME]       keep a file for people (local)
 //	dude tools                            what this run may use
@@ -61,7 +64,7 @@ func run(args []string, out io.Writer) error {
 		return nil
 	}
 	cmd, rest := args[0], args[1:]
-	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") && (cmd == "task" || cmd == "epic" || cmd == "repo") {
+	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") && (cmd == "task" || cmd == "epic" || cmd == "repo" || cmd == "memory") {
 		cmd, rest = cmd+" "+rest[0], rest[1:]
 	}
 	fs := flag.NewFlagSet("dude "+cmd, flag.ContinueOnError)
@@ -112,6 +115,66 @@ func run(args []string, out io.Writer) error {
 		}
 		return show(out, *asJSON, call("create_task", map[string]any{"title": *title, "goal": *goal,
 			"epic": *epic, "acceptanceCriteria": []string(criteria)}))
+	case "memory search":
+		var types many
+		fs.Var(&types, "type", "only memory, task, epic or project (repeatable)")
+		limit := fs.Int("limit", 0, "how many results, 1 to 20 (default 8)")
+		args, err := parse(fs, rest)
+		if err != nil {
+			return err
+		}
+		if len(args) == 0 {
+			return errors.New(`usage: dude memory search "what you want to know" [--type T]... [--limit N]`)
+		}
+		body := map[string]any{"query": strings.Join(args, " ")}
+		if len(types) > 0 {
+			body["types"] = []string(types)
+		}
+		if *limit > 0 {
+			body["limit"] = *limit
+		}
+		return show(out, *asJSON, call("search_memory", body))
+	case "memory show":
+		args, err := parse(fs, rest)
+		if err != nil {
+			return err
+		}
+		if len(args) != 1 {
+			return errors.New("usage: dude memory show ID")
+		}
+		return show(out, *asJSON, call("get_memory", map[string]any{"id": args[0]}))
+	case "memory add":
+		title := fs.String("title", "", "one line another agent can scan in a list")
+		content := fs.String("content", "", "the fact, procedure or note, in Markdown; - reads it from stdin")
+		kind := fs.String("kind", "", "fact (default), procedure or note")
+		org := fs.Bool("org", false, "true in every project of the organization, not only this one")
+		var about many
+		fs.Var(&about, "about", "a task key (TEXT-12) or epic title it is about (repeatable)")
+		if _, err := parse(fs, rest); err != nil {
+			return err
+		}
+		text := *content
+		if text == "-" {
+			b, err := io.ReadAll(io.LimitReader(os.Stdin, 64<<10))
+			if err != nil {
+				return err
+			}
+			text = string(b)
+		}
+		if *title == "" || strings.TrimSpace(text) == "" {
+			return errors.New(`usage: dude memory add --title "one line" --content "what to remember" [--kind K] [--about KEY]... [--org]`)
+		}
+		body := map[string]any{"title": *title, "content": text}
+		if *kind != "" {
+			body["kind"] = *kind
+		}
+		if len(about) > 0 {
+			body["about"] = []string(about)
+		}
+		if *org {
+			body["scope"] = "organization"
+		}
+		return show(out, *asJSON, call("remember", body))
 	case "ask":
 		var choices many
 		fs.Var(&choices, "choice", "an answer to offer (repeatable)")
@@ -303,6 +366,13 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
                                              ask a person for another of them
   dude ask "question" [--choice C]...        ask a person; then end your turn —
                                              the answer is your next message
+  dude memory search QUERY [--type T]... [--limit N]
+                                             what is known here: memories, tasks, epics
+                                             and projects, by words and meaning, best first
+  dude memory show ID                        one memory in full
+  dude memory add --title T --content C [--kind fact|procedure|note]
+                  [--about KEY]... [--org]   save what the next agent should know
+                                             (--content - reads stdin); live at once
   dude event TYPE [--data JSON]              record an event on this run, e.g.
                                              dude event progress --data '{"done":3,"of":10}'
   dude publish FILE [--name NAME]            keep a file for people, shown with the task

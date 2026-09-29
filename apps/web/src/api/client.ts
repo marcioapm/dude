@@ -39,6 +39,10 @@ import type {
   PromptRole,
   SettingsPatch,
   SettingsResponse,
+  IndexStatus,
+  Memory,
+  MemoryInput,
+  SearchOutcome,
 } from "@dude/domain";
 
 // ---------------------------------------------------------------------------
@@ -555,6 +559,45 @@ export class ApiClient {
 
   updateEpic(id: string, changes: Partial<{ title: string; description: string; position: number; state: EpicState | null }>): Promise<Epic> {
     return this.#request("PATCH", `/v1/epics/${id}`, changes);
+  }
+
+  // -- memory: what dude and its agents remember, and the index they search --
+
+  /** `mode: "words"` skips meaning: a lookup by name (the About picker) needs no embedding. */
+  searchMemory(params: { q: string; project?: string; types?: string; limit?: number; mode?: "words" }): Promise<SearchOutcome> {
+    return this.#request("GET", `/v1/memory/search${qs(params)}`);
+  }
+
+  listMemories(params: { project?: string; scope?: string; author?: string; q?: string; archived?: boolean } = {}): Promise<{ memories: Memory[] }> {
+    return this.#request("GET", `/v1/memory/memories${qs(params)}`);
+  }
+
+  getMemory(id: string): Promise<Memory> {
+    return this.#request("GET", `/v1/memory/memories/${encodeURIComponent(id)}`);
+  }
+
+  createMemory(input: MemoryInput): Promise<Memory> {
+    return this.#request("POST", "/v1/memory/memories", input);
+  }
+
+  updateMemory(id: string, input: MemoryInput): Promise<Memory> {
+    return this.#request("PATCH", `/v1/memory/memories/${encodeURIComponent(id)}`, input);
+  }
+
+  archiveMemory(id: string, archived: boolean): Promise<Memory> {
+    return this.#request("POST", `/v1/memory/memories/${encodeURIComponent(id)}/${archived ? "archive" : "restore"}`);
+  }
+
+  memoryIndex(project?: string): Promise<IndexStatus> {
+    return this.#request("GET", `/v1/memory/index${qs({ project })}`);
+  }
+
+  retryIndex(target: { type?: string; id?: string } = {}): Promise<{ due: number }> {
+    return this.#request("POST", "/v1/memory/index/retry", target);
+  }
+
+  reindexMemory(): Promise<{ due: number }> {
+    return this.#request("POST", "/v1/memory/index/reindex");
   }
 
   // -- settings: the organization's defaults, a project's overrides ----------

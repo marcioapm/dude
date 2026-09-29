@@ -1,0 +1,224 @@
+/*
+ * Only what the design system does not already lay out. The result row is
+ * ArtifactRow's anatomy (32px, chevron first, quiet facts trailing, the
+ * body indented to the text); the memory cell is the members table's
+ * face-then-two-lines. Nothing here carries colour.
+ */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  flex-wrap: wrap;
+}
+.query {
+  flex: 1 1 360px;
+}
+.filter {
+  flex: 0 1 240px;
+}
+.spacer {
+  flex: 1;
+}
+.glyph {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--ds-color-text-secondary);
+}
+.lead,
+.ref {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  flex-shrink: 0;
+  min-width: 0;
+  white-space: nowrap;
+}
+.inherited {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+
+/* -- Result rows (ArtifactRow's anatomy) -- */
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.row {
+  list-style: none;
+}
+.open {
+  background: var(--ds-color-raised);
+}
+.rowLine {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-default);
+  padding: 0 var(--ds-space-8) 0 var(--ds-space-4);
+  color: var(--ds-color-text-primary);
+}
+.rowLine:has(.head:hover) {
+  background: var(--ds-color-hover-wash);
+}
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: var(--ds-size-row-default);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  outline: none;
+}
+.head:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--ds-color-focus-ring);
+  border-radius: var(--ds-radius-control);
+}
+.chevron {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--ds-color-text-muted);
+}
+.chevronIcon {
+  transition: transform var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.open .chevronIcon {
+  transform: rotate(90deg);
+}
+.rank {
+  width: 16px;
+  flex-shrink: 0;
+  text-align: right;
+  font-size: var(--ds-text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--ds-color-text-muted);
+}
+.title {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.trailing {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.fact {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+}
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-12);
+  padding: var(--ds-space-8) var(--ds-space-12) var(--ds-space-12) calc(var(--ds-space-4) + 14px + var(--ds-space-8) + 16px + var(--ds-space-8));
+  font-size: var(--ds-text-sm);
+  min-width: 0;
+}
+.snippet {
+  margin: 0;
+  max-width: var(--ds-measure-message);
+  color: var(--ds-color-text-secondary);
+}
+.bodyActions {
+  display: flex;
+  gap: var(--ds-space-8);
+}
+
+/* -- Memories table: the members table's face, then two lines -- */
+.memory {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+  min-width: 0;
+}
+.memoryText,
+.dudeText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.memoryName {
+  color: var(--ds-color-text-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.memoryDetail,
+.dudeDetail {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+.archived {
+  opacity: 0.6;
+}
+.dude {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
+.dudeName {
+  color: var(--ds-color-text-primary);
+}
+
+/* -- Dialog -- */
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-16);
+}
+.formRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--ds-space-12);
+}
+.about {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.about li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: var(--ds-size-row-compact);
+  padding: 0 var(--ds-space-4) 0 var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+}
+.about li:hover {
+  background: var(--ds-color-hover-wash);
+}
+
+.docCell {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  min-width: 0;
+}

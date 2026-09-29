@@ -1,0 +1,33 @@
+/*
+ * RemovableList: rows 2px apart, as artifacts are; a hover wash, no lines.
+ * The default row, so they follow the density as every list of things you
+ * act on does (`row-compact` holds in both: it is for logs one scans).
+ */
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-default);
+  padding: 0 var(--ds-space-4) 0 var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+}
+.item:hover {
+  background: var(--ds-color-hover-wash);
+}
+.content {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-width: 0;
+}
