@@ -467,3 +467,25 @@ func Labels(ctx context.Context, tx pgx.Tx, refs []Ref) (map[string]Ref, error) 
 	}
 	return out, nil
 }
+
+// LabelTasks fills each task result's key and status, and takes the key off
+// its title (the index titles a task "KEY title"), as the tree shows tasks.
+func LabelTasks(ctx context.Context, tx pgx.Tx, results []Result) error {
+	var refs []Ref
+	for _, r := range results {
+		if r.Type == "task" {
+			refs = append(refs, Ref{Type: "task", ID: r.ID})
+		}
+	}
+	labels, err := Labels(ctx, tx, refs)
+	if err != nil {
+		return err
+	}
+	for i, r := range results {
+		if l, ok := labels["task/"+r.ID]; ok {
+			results[i].Key, results[i].Status = l.Label, l.Status
+			results[i].Title = strings.TrimPrefix(r.Title, l.Label+" ")
+		}
+	}
+	return nil
+}

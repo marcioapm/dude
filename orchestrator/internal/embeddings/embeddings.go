@@ -82,27 +82,19 @@ type Error struct {
 
 func (e *Error) Error() string { return fmt.Sprintf("%d: %s", e.Status, e.Body) }
 
-// Systemic reports a failure no document is to blame for: a key that is
-// wrong or not allowed, an endpoint that is not there. Every document would
-// fail alike, so none should be backed off for it.
-func Systemic(err error) bool {
-	var e *Error
-	if errors.As(err, &e) {
-		switch e.Status {
-		case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusMethodNotAllowed:
-			return true
-		}
-	}
-	return false
-}
-
-// OneBad reports a refusal of the request's content (a 4xx that is not
-// systemic nor a rate limit): some text in the batch the endpoint will not
-// take, which one by one finds.
+// OneBad reports a refusal that may be one text's fault: a 4xx that is not
+// the key (401, 403), the address (404, 405) or a rate limit (429). The
+// indexer finds out whose by embedding the batch one by one.
 func OneBad(err error) bool {
 	var e *Error
-	return errors.As(err, &e) && e.Status >= 400 && e.Status < 500 &&
-		e.Status != http.StatusTooManyRequests && !Systemic(err)
+	if !errors.As(err, &e) || e.Status < 400 || e.Status >= 500 {
+		return false
+	}
+	switch e.Status {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusTooManyRequests:
+		return false
+	}
+	return true
 }
 
 func (c *Client) Embed(ctx context.Context, texts []string, purpose Purpose) ([][]float32, error) {

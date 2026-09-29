@@ -48,7 +48,12 @@ a stored credential.
 Postgres 17 with the pgvector extension is what the tests run against
 (`pgvector/pgvector:pg17-trixie`, the same Debian as `postgres:17`, so an
 existing database keeps its collation): memory's index needs it
-(migration 054 creates the extension). One database, two login roles:
+(migration 054 creates the extension). pgvector is not a trusted extension,
+so creating it needs a superuser: where the owner below is not one (a
+managed Postgres, RDS, Cloud SQL), a superuser creates it once in dude's
+database, `CREATE EXTENSION vector;`, before the first migration that needs
+it (054), and on a managed service it must be allowed there first. One
+database, two login roles:
 
 - **The owner** (e.g. `dude`) runs `dude-migrate`, and nothing else. It must
   bypass row-level security (`SUPERUSER` or `BYPASSRLS`): `dude-migrate`

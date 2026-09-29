@@ -64,16 +64,25 @@ collation change).
 ## The indexer
 
 A loop in the orchestrator (`indexer`, like the others in
-`dude-orchestrator`): take up to 100 documents without a current embedding,
-across organizations (`InSystem`), embed them in one call, write them back.
-A failure backs off that document (1m, 5m, 30m, 2h, then daily) and keeps
-the error for the Index page. A memory saved wakes it. Without
-`DUDE_EMBEDDINGS_URL` it does nothing and search is by words alone.
+`dude-orchestrator`): take up to 100 documents without an embedding, across
+organizations (`InSystem`), embed them in one call, write them back. A
+memory saved wakes it. Without `DUDE_EMBEDDINGS_URL` it does nothing and
+search is by words alone.
+
+One rule for failures: **a document is blamed only when its neighbours
+embed.** A refusal that may be one text's (a 4xx that is not the key, the
+address or a rate limit) is embedded one by one to find it; that document
+backs off (1m, 5m, 30m, 2h, then daily) and keeps its error. Anything else
+— a bad key, a wrong model, a rate limit, the endpoint down, or every text
+refused alike — is the embedder's: the indexer waits as a whole (15s
+doubling to at most 10 minutes, so a fix is picked up soon), the Index page
+says it is failing and why, and no document's backoff moves.
 
 `Embedder` is one interface with two implementations: OpenAI-compatible
 `/v1/embeddings` (what llm-proxy serves) and a deterministic fake for tests.
-A model change is a reindex, not a migration: documents embedded with
-another model count as not embedded.
+A model change is a reindex, not a migration: at start, and hourly after,
+the indexer clears what another model embedded (hourly, not every sweep,
+so an old orchestrator in a rolling deploy cannot undo it for long).
 
 ## Search
 

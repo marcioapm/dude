@@ -29,6 +29,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/embeddings"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
+	"github.com/marciomartins/dude/orchestrator/internal/memory"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
 	"github.com/marciomartins/dude/orchestrator/internal/prs"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
@@ -52,6 +53,8 @@ type Server struct {
 	PRs    *prs.Syncer
 	// Search by meaning for the memory pages; nil, by words alone.
 	Embedder embeddings.Embedder
+	// The indexer, for how the embedder is doing.
+	Indexer interface{ Health() memory.Health }
 }
 
 func (s *Server) Handler() http.Handler {

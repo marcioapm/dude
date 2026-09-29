@@ -50,26 +50,13 @@ func searchMemory(ctx context.Context, tx pgx.Tx, c Caller, in searchMemoryIn) (
 	if err != nil {
 		return nil, err
 	}
-	var refs []memory.Ref
-	for _, r := range out.Results {
-		if r.Type == "task" {
-			refs = append(refs, memory.Ref{Type: "task", ID: r.ID})
-		}
-	}
-	labels, err := memory.Labels(ctx, tx, refs)
-	if err != nil {
+	if err := memory.LabelTasks(ctx, tx, out.Results); err != nil {
 		return nil, err
 	}
 	hits := make([]searchHit, 0, len(out.Results))
 	for _, r := range out.Results {
-		h := searchHit{Type: r.Type, ID: r.ID, Title: r.Title,
-			Snippet: strings.NewReplacer("⟦", "", "⟧", "").Replace(r.Snippet)}
-		if r.Type == "task" {
-			l := labels["task/"+r.ID]
-			// The index titles a task "KEY title"; the key has its own field.
-			h.Key, h.Status, h.Title = l.Label, l.Status, strings.TrimPrefix(r.Title, l.Label+" ")
-		}
-		hits = append(hits, h)
+		hits = append(hits, searchHit{Type: r.Type, ID: r.ID, Key: r.Key, Status: r.Status, Title: r.Title,
+			Snippet: strings.NewReplacer("⟦", "", "⟧", "").Replace(r.Snippet)})
 	}
 	return hits, nil
 }

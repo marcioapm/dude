@@ -8,7 +8,7 @@
  * and changed only in the organisation's settings.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   AgentAvatar,
   Markdown,
@@ -95,7 +95,7 @@ export function useIndexSummary(client: ApiClient, project?: string): IndexSumma
   useEffect(() => {
     let live = true;
     client.memoryIndex(project).then(
-      (s) => live && setSummary({ failed: s.kinds.reduce((n, k) => n + k.failed, 0), embedder: Boolean(s.model) }),
+      (s) => live && setSummary({ failed: s.failed, embedder: Boolean(s.model) }),
       () => undefined,
     );
     return () => {
@@ -125,10 +125,10 @@ export function MemoryPages({ client, scope, page, projects, admin, index, onPag
       {page === "memory-search" ? (
         <SearchPage client={client} scope={scope} projects={projects} version={version} onOpen={(id) => void open(id)} />
       ) : page === "memory-list" ? (
-        <MemoriesPage key={version} client={client} scope={scope} projects={projects} embedder={index.embedder} onOpen={setEditing}
+        <MemoriesPage version={version} client={client} scope={scope} projects={projects} embedder={index.embedder} onOpen={setEditing}
           add={<Button variant="primary" leadingIcon="plus" onClick={() => setEditing("new")} data-testid="memory-add">Add memory</Button>} />
       ) : (
-        <IndexPage client={client} project={project} admin={admin} onMemories={() => onPage("memory-list")} />
+        <IndexPage client={client} scope={scope} admin={admin} onMemories={() => onPage("memory-list")} />
       )}
       {editing ? (
         <MemoryDialog client={client} scope={scope} projects={projects} admin={admin}
@@ -387,7 +387,9 @@ function agentView(query: string, results: readonly SearchResult[]): string {
 // Memories
 // ---------------------------------------------------------------------------
 
-function MemoriesPage({ client, scope, projects, embedder, onOpen, add }: {
+function MemoriesPage({ version, client, scope, projects, embedder, onOpen, add }: {
+  /** Bumped by a save: the list reads again, keeping its filters. */
+  version: number;
   client: ApiClient;
   scope: MemoryScope;
   projects: readonly ProjectChoice[];
@@ -424,7 +426,7 @@ function MemoriesPage({ client, scope, projects, embedder, onOpen, add }: {
   useEffect(() => {
     const t = setTimeout(() => void load(), 200);
     return () => clearTimeout(t);
-  }, [load]);
+  }, [load, version]);
 
   const act = useSave();
   const toggleArchive = (m: Memory) =>
@@ -670,6 +672,8 @@ function AboutPicker({ client, project, onPick, onCancel }: {
 // Index
 // ---------------------------------------------------------------------------
 
+const waitingTotal = (s: IndexStatus) => s.kinds.reduce((n, k) => n + k.waiting, 0);
+
 const KIND_TEXT: Record<string, [string, string]> = {
   memory: ["Memories", "title, content"],
   task: ["Tasks", "key, title, goal, acceptance criteria"],
@@ -677,12 +681,14 @@ const KIND_TEXT: Record<string, [string, string]> = {
   project: ["Projects", "name, description"],
 };
 
-function IndexPage({ client, project, admin, onMemories }: {
+function IndexPage({ client, scope, admin, onMemories }: {
   client: ApiClient;
-  project: string | undefined;
+  scope: MemoryScope;
   admin: boolean;
   onMemories: () => void;
 }) {
+  const project = scope.kind === "project" ? scope.id : undefined;
+  const org = scope.kind === "project" ? scope.organization : scope.name;
   const [status, setStatus] = useState<IndexStatus | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [confirm, setConfirm] = useState(false);
@@ -702,9 +708,20 @@ function IndexPage({ client, project, admin, onMemories }: {
     return () => clearInterval(t);
   }, [load]);
 
-  const total = useMemo(() => status?.kinds.reduce((n, k) => n + k.total, 0) ?? 0, [status]);
+  // Reindex and Retry act on the organisation's whole index, whatever page
+  // they are pressed on: the count they name is the organisation's.
+  const [orgTotal, setOrgTotal] = useState<number | null>(null);
+  useEffect(() => {
+    if (!confirm) return;
+    let live = true;
+    client.memoryIndex().then((s) => live && setOrgTotal(s.kinds.reduce((n, k) => n + k.total, 0)), () => undefined);
+    return () => {
+      live = false;
+    };
+  }, [client, confirm]);
   if (!status) return <div className="centered">{problem ? <Callout tone="danger">{problem}</Callout> : <Spinner label="Loading…" />}</div>;
-  const failed = status.failures.length;
+  const failed = status.failed;
+  const broken = status.health.error;
 
   return (
     <>
@@ -713,8 +730,17 @@ function IndexPage({ client, project, admin, onMemories }: {
       {problem || act.problem ? <Callout tone="danger">{problem ?? act.problem}</Callout> : null}
       <Card data-testid="memory-embedder">
         <CardHeader title="Embeddings" actions={!status.model ? <Badge>Words only</Badge>
-          : failed ? <Badge tone="danger" icon="alert">{failed} not embedded</Badge> : <Badge tone="success" icon="check">Up to date</Badge>} />
+          : broken ? <Badge tone="danger" icon="alert">Failing</Badge>
+          : failed ? <Badge tone="danger" icon="alert">{failed} not embedded</Badge>
+          : waitingTotal(status) ? <Badge icon="clock">Embedding {waitingTotal(status).toLocaleString("en-US")}</Badge>
+          : <Badge tone="success" icon="check">Up to date</Badge>} />
         <CardBody>
+          {broken ? (
+            <Callout tone="danger" data-testid="memory-embedder-failing">
+              The embedder has failed since {status.health.since ? ago(status.health.since) : "a moment ago"}: {broken}. Nothing is embedded
+              until it works; search is by words meanwhile. Tried again {status.health.retry ? `at ${new Date(status.health.retry).toLocaleTimeString()}` : "soon"}.
+            </Callout>
+          ) : null}
           {status.model ? (
             <KeyValueList items={[
               { label: "Model", value: `${status.model} · ${status.dimensions} dimensions`, mono: true },
@@ -727,7 +753,7 @@ function IndexPage({ client, project, admin, onMemories }: {
         </CardBody>
         {status.model && admin ? (
           <CardFooter>
-            <Button variant="secondary" onClick={() => setConfirm(true)}>Reindex everything…</Button>
+            <Button variant="secondary" onClick={() => setConfirm(true)}>Reindex all of {org}…</Button>
           </CardFooter>
         ) : null}
       </Card>
@@ -762,7 +788,8 @@ function IndexPage({ client, project, admin, onMemories }: {
       {failed ? (
         <SettingsSection title="Not embedded"
           actions={<Button size="sm" variant="secondary" leadingIcon="retry" disabled={act.busy}
-            onClick={() => void act.save(() => client.retryIndex(), () => void load(), "Retrying now")}>Retry all</Button>}>
+            onClick={() => void act.save(() => client.retryIndex(), () => void load(), "Retrying now")}>
+            {scope.kind === "project" ? `Retry all of ${org}’s` : "Retry all"}</Button>}>
           <Table density="compact" data-testid="memory-failures">
             <THead>
               <Tr>
@@ -796,8 +823,8 @@ function IndexPage({ client, project, admin, onMemories }: {
         </SettingsSection>
       ) : null}
 
-      <Dialog open={confirm} onOpenChange={setConfirm} tone="attention" title="Reindex everything?"
-        description={`Embeds all ${total.toLocaleString("en-US")} documents again${status.model ? ` with ${status.model}` : ""}. It takes a few minutes; until each is done, search finds it by its words.`}
+      <Dialog open={confirm} onOpenChange={setConfirm} tone="attention" title={`Reindex all of ${org}?`}
+        description={`Embeds ${orgTotal === null ? "every" : `all ${orgTotal.toLocaleString("en-US")}`} document${orgTotal === 1 ? "" : "s"} in ${org} again${status.model ? ` with ${status.model}` : ""}, every project's. It takes a while; until each is done, search finds it by its words.`}
         footer={
           <>
             <Button variant="secondary" onClick={() => setConfirm(false)}>Cancel</Button>
