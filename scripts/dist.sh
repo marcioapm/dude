@@ -57,6 +57,7 @@ for arch in arm64 amd64; do
     --target="bun-linux-$bun_arch" "${BUN_DEFINES[@]}"
 
   cp -R "$ROOT/apps/web/dist" "$work/share/dude/web"
+  cp "$ROOT/LICENSE" "$work/share/dude/LICENSE"
 
   chmod 0755 "$work/bin/"*
   chmod -R u+rwX,go+rX,go-w "$work/share"
