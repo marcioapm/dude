@@ -26,7 +26,7 @@ import { badRequest, conflict, intParam, json, noContent, notFound, parseBody } 
 import { orchestrator } from "../../orchestrator/client.ts";
 import type { RequestContext, Router } from "../router.ts";
 
-/** A project's recipes and preview settings, as the API shows them (server_recipe, preview_settings: migration 054). */
+/** A project's recipes and preview settings, as the API shows them (server_recipe, preview_settings: migration 055). */
 async function projectServers(scope: OrgScope, projectId: string): Promise<{ servers: Recipe[]; previews: PreviewSettings }> {
   const [row] = (await scope.sql`
     SELECT preview_settings(p) AS previews,

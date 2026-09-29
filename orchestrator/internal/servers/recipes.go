@@ -119,7 +119,7 @@ func LoadRecipes(ctx context.Context, tx pgx.Tx, projectID string) ([]Recipe, er
 }
 
 // recipesJSON reads a project's recipes as the API shows them
-// (server_recipe, migration 054).
+// (server_recipe, migration 055).
 func recipesJSON(ctx context.Context, tx pgx.Tx, projectID string) (json.RawMessage, error) {
 	var out json.RawMessage
 	err := tx.QueryRow(ctx, `SELECT COALESCE(json_agg(server_recipe(s) ORDER BY s.name), '[]')
@@ -128,7 +128,7 @@ func recipesJSON(ctx context.Context, tx pgx.Tx, projectID string) (json.RawMess
 }
 
 // PreviewSettings is how a project's branch previews run (preview_settings,
-// migration 054, fills in the defaults).
+// migration 055, fills in the defaults).
 type PreviewSettings struct {
 	// nil: the project's runtime image.
 	Image              *string  `json:"image"`

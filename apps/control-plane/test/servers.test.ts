@@ -291,7 +291,7 @@ describe("a task's and a Run's servers", () => {
   });
 });
 
-describe("migration 054", () => {
+describe("migration 055", () => {
   test("a Run is an agent's unless it says otherwise, and a task has one live preview", async () => {
     await owner`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES ('wi_m', ${ORG}, ${PROJECT}, 1, 't')`;
     await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt) VALUES ('run_a', ${ORG}, ${PROJECT}, 'wi_m', 1)`;
