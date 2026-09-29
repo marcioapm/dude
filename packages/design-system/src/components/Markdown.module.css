@@ -13,14 +13,17 @@
 .root {
   --md-gap: var(--ds-md-gap);
   --md-h-gap: 1.25em;
-  /* A chat turn spans its column: the transcript's width is the measure. */
-  --md-measure: none;
+  --md-measure: var(--ds-measure-message);
   font-size: var(--ds-text-prose);
   line-height: var(--ds-leading-chat);
   color: var(--ds-color-text-primary);
   max-width: var(--md-measure);
   min-width: 0;
   overflow-wrap: anywhere;
+}
+/* A chat turn: the transcript's column is its width (whatever the variant). */
+.root.unmeasured {
+  --md-measure: none;
 }
 .long,
 .document {
@@ -88,7 +91,6 @@
 .prompt {
   --md-gap: 0.75em;
   --md-h-gap: 1.6em;
-  --md-measure: var(--ds-measure-message);
   font-size: var(--ds-text-md);
   line-height: var(--ds-leading-prose);
 }

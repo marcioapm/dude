@@ -57,14 +57,31 @@
   color: var(--ds-color-text-muted);
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
-.last code {
+.lastFace {
+  display: inline-flex;
+  flex: none;
+}
+.lastTool,
+.lastPath,
+.lastWhen {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* The tool word gives way first, the file name last. */
+.lastTool,
+.lastWhen {
+  flex: 0 100 auto;
+}
+.lastPath {
+  flex: 0 1 auto;
   font-family: var(--ds-font-mono);
   color: var(--ds-color-text-secondary);
+}
+/* The toolbar drawn into a page's bar: its controls laid out as here. */
+.headIn {
+  flex: 1;
 }
 /* The toggle's words stay on one line beside it. */
 .head label {

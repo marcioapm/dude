@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import { useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
 import type { RunDiffFile, RunDiffHunk, RunDiffLine } from "@dude/domain";
 import { cx } from "../util/cx.ts";
@@ -18,14 +19,21 @@ export interface LiveDiffProps extends Omit<HTMLAttributes<HTMLDivElement>, "chi
   readonly base: string;
   /** Still changing: the agent is at work. Offers Follow the agent. */
   readonly live?: boolean | undefined;
-  /** What the agent did last ("Write LIVE.md · just now"), at the top of the file list. */
-  readonly lastChange?: ReactNode;
+  /** What the agent did last ("Write LIVE.md · just now"): at the top of the file list, or above the diff without one. */
+  readonly lastChange?: LastChange | undefined;
   /**
-   * First in the toolbar: what the diff sits among — a session's view
-   * switch — so the diff's controls and the page's share one row rather
-   * than stacking.
+   * First in the diff's own toolbar, when it draws one (no `toolbarIn`):
+   * what the diff sits among, so its controls and the page's share one row
+   * rather than stacking.
    */
   readonly leading?: ReactNode;
+  /**
+   * Draw the toolbar's controls into this element instead of above the
+   * files: a bar the page keeps mounted (so its own controls, and the
+   * focus on them, survive the diff coming and going). `leading` is then
+   * the page's to place.
+   */
+  readonly toolbarIn?: HTMLElement | null | undefined;
   /** Shown when nothing changed yet. */
   readonly emptyMessage?: ReactNode;
   /** Opens a file in the viewer; each file's header offers it when given. */
@@ -45,6 +53,26 @@ export interface LiveDiffProps extends Omit<HTMLAttributes<HTMLDivElement>, "chi
 }
 
 export type LiveDiffView = "unified" | "split";
+
+/** What the agent did last: its face, the tool ("Write"), the file's name, and when. */
+export interface LastChange {
+  readonly face?: ReactNode;
+  readonly tool: string;
+  readonly path?: string | undefined;
+  readonly when?: ReactNode;
+}
+
+/** The last change on one line: the face stays whole, the words give way — the tool first, the file name last. */
+function LastChangeLine({ change }: { readonly change: LastChange }) {
+  return (
+    <div className={styles["last"]} data-testid="last-change">
+      {change.face ? <span className={styles["lastFace"]}>{change.face}</span> : null}
+      <span className={styles["lastTool"]}>{change.tool}</span>
+      {change.path ? <code className={styles["lastPath"]}>{change.path}</code> : null}
+      {change.when ? <span className={styles["lastWhen"]}>· {change.when}</span> : null}
+    </div>
+  );
+}
 
 const STATUS_WORD: Record<LiveDiffFile["status"], string> = { M: "modified", A: "added", D: "deleted", R: "renamed" };
 
@@ -97,7 +125,7 @@ const SIGN = { "+": "+", "-": "−", " ": "" } as const;
  * the new. Changes are told apart by sign and gutter as well as tint
  * (+, −), so the diff reads without colour.
  */
-export function LiveDiff({ files, base, live, lastChange, leading, emptyMessage, onOpenFile, defaultView = "unified", selected: given, onSelectedChange, fileList = true, className, ...rest }: LiveDiffProps) {
+export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, emptyMessage, onOpenFile, defaultView = "unified", selected: given, onSelectedChange, fileList = true, className, ...rest }: LiveDiffProps) {
   const [view, setView] = useState<LiveDiffView>(defaultView);
   // Keep the latest change in view: on while live, until the person picks a file.
   const [follow, setFollow] = useState(live ?? false);
@@ -164,10 +192,9 @@ export function LiveDiff({ files, base, live, lastChange, leading, emptyMessage,
   }, [follow, fresh]);
 
   const short = base.slice(0, 7);
-  return (
-    <div className={cx(styles["root"], className)} {...rest}>
-      <div className={styles["head"]}>
-        {leading}
+  const last = lastChange ? <LastChangeLine change={lastChange} /> : null;
+  const tools = (
+    <>
         {files.length > 0 ? (
           <span className={styles["since"]} title={base ? `The agent's checkout against ${base}, the commit it started from. Uncommitted work included.` : undefined}>
             {base ? (
@@ -194,17 +221,26 @@ export function LiveDiff({ files, base, live, lastChange, leading, emptyMessage,
           <Segmented label="Show the diff" size="sm" value={view} onChange={setView} data-testid="diff-view"
             options={[{ value: "unified", label: "Unified" }, { value: "split", label: "Split" }]} />
         ) : null}
-      </div>
+    </>
+  );
+  return (
+    <div className={cx(styles["root"], className)} {...rest}>
+      {toolbarIn ? createPortal(<div className={cx(styles["head"], styles["headIn"])}>{tools}</div>, toolbarIn) : (
+        <div className={styles["head"]}>
+          {leading}
+          {tools}
+        </div>
+      )}
       {files.length === 0 ? (
         <div className={styles["empty"]}>
-          {lastChange ? <div className={styles["last"]} data-testid="last-change">{lastChange}</div> : null}
+          {last}
           {emptyMessage ?? "No changes yet."}
         </div>
       ) : (
         <div className={cx(styles["body"], !fileList && styles["bodyAlone"])}>
           {fileList ? (
             <nav className={styles["files"]} aria-label="Changed files">
-              {lastChange ? <div className={styles["last"]} data-testid="last-change">{lastChange}</div> : null}
+              {last}
               <button type="button" className={cx(styles["file"], styles["all"], !selected && styles["current"])}
                 aria-pressed={!selected} onClick={() => select(null)}>
                 <span className={styles["path"]}>
@@ -238,6 +274,7 @@ export function LiveDiff({ files, base, live, lastChange, leading, emptyMessage,
             </nav>
           ) : null}
           <div className={styles["diffs"]} ref={scroller} data-testid="diffs">
+            {fileList ? null : last}
             {shown.map((f) => (
               <section key={f.path} className={styles["section"]} data-testid="diff-section" data-path={f.path}>
                 <header className={styles["fileHead"]}>
