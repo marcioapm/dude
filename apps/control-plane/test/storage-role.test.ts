@@ -77,19 +77,24 @@ afterAll(() => {
 });
 
 function signed(req: { method: string; url: string; headers: Headers }, generation: number) {
+  signedWith(req, keys[generation]!, secrets[generation]!, tokens[generation]!);
+}
+
+// Recomputes the SigV4 signature with the given secret; a null session token must be absent.
+function signedWith(req: { method: string; url: string; headers: Headers }, key: string, secret: string, session: string | null) {
   const auth = req.headers.get("authorization") ?? "";
-  expect(auth).toContain(`Credential=${keys[generation]}/`);
-  expect(req.headers.get("x-amz-security-token")).toBe(tokens[generation]!);
+  expect(auth).toContain(`Credential=${key}/`);
+  expect(req.headers.get("x-amz-security-token")).toBe(session);
   const match = auth.match(/Credential=([^, ]+), SignedHeaders=([^, ]+), Signature=([0-9a-f]+)/);
   expect(match).not.toBeNull();
   const url = new URL(req.url);
   const headers = match![2]!.split(";");
   const canonical = `${req.method}\n${url.pathname}\n${url.searchParams.toString()}\n${headers.map((h) => `${h}:${req.headers.get(h)?.trim()}\n`).join("")}\n${match![2]}\n${req.headers.get("x-amz-content-sha256")}`;
-  const scope = match![1]!.slice(keys[generation]!.length + 1);
+  const scope = match![1]!.slice(key.length + 1);
   const hash = (v: string) => createHash("sha256").update(v).digest("hex");
   const hmac = (key: Buffer | string, value: string) => createHmac("sha256", key).update(value).digest();
   const [date, region, service] = scope.split("/");
-  const signature = createHmac("sha256", hmac(hmac(hmac(hmac(`AWS4${secrets[generation]!}`, date!), region!), service!), "aws4_request"))
+  const signature = createHmac("sha256", hmac(hmac(hmac(hmac(`AWS4${secret}`, date!), region!), service!), "aws4_request"))
     .update(`AWS4-HMAC-SHA256\n${req.headers.get("x-amz-date")}\n${scope}\n${hash(canonical)}`).digest("hex");
   expect(match![3]).toBe(signature);
 }
@@ -234,4 +239,53 @@ test("an IMDS token with CR/LF is rejected without its value reaching the logs",
   expect(output).toContain("photo storage put failed (MetadataTokenInvalid)");
   expect(output).not.toContain("FAKE_IMDS_TOKEN_VALUE");
   expect(output).not.toContain("fakeInjectedValue");
+});
+
+// Runs with the given DUDE_S3_*KEY values and IMDS denying everything, then restores both.
+async function withExplicitKeys(access: string | undefined, secret: string | undefined, run: () => Promise<void>) {
+  const set = (name: string, value: string | undefined) => { if (value === undefined) delete process.env[name]; else process.env[name] = value; };
+  set("DUDE_S3_ACCESS_KEY", access);
+  set("DUDE_S3_SECRET_KEY", secret);
+  denied = true;
+  try { await run(); } finally {
+    delete process.env.DUDE_S3_ACCESS_KEY;
+    delete process.env.DUDE_S3_SECRET_KEY;
+    denied = false;
+  }
+}
+
+test("explicit DUDE_S3 keys sign put, read and delete without any metadata request", async () => {
+  const storage = await fresh();
+  metadataCalls = 0;
+  requests.length = 0;
+  objects.clear();
+  const bytes = new Uint8Array([4, 5, 6]);
+  await withExplicitKeys("FAKEEXPLICITKEY", "fakeExplicitSecret", async () => {
+    await storage.putObject("explicit", bytes, "image/png");
+    expect(new Uint8Array((await storage.getObject("explicit"))!)).toEqual(bytes);
+    const output = await logged(() => storage.deleteObject("explicit"));
+    expect(output).toBe("");
+  });
+  expect(objects.size).toBe(0);
+  expect(metadataCalls).toBe(0);
+  expect(requests.map((r) => r.method)).toEqual(["PUT", "GET", "DELETE"]);
+  for (const request of requests) signedWith(request, "FAKEEXPLICITKEY", "fakeExplicitSecret", null);
+});
+
+test("one explicit DUDE_S3 key alone fails without falling back to IMDS", async () => {
+  metadataCalls = 0;
+  requests.length = 0;
+  for (const [access, secret] of [["FAKEEXPLICITKEY", undefined], [undefined, "fakeExplicitSecret"]] as const) {
+    const storage = await fresh();
+    await withExplicitKeys(access, secret, async () => {
+      // Metadata would answer here, so a fallback would reach S3.
+      denied = false;
+      const error = await storage.putObject("one-key", new Uint8Array([1]), "image/png").then(() => undefined, (err: unknown) => err);
+      expect(error).toBeInstanceOf(storage.StorageError);
+      expect((error as { code?: string }).code).toBe("CredentialsIncomplete");
+      await expect(storage.getObject("one-key")).rejects.toThrow("CredentialsIncomplete");
+    });
+  }
+  expect(metadataCalls).toBe(0);
+  expect(requests.length).toBe(0);
 });
