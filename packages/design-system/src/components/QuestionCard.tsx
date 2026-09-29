@@ -78,7 +78,6 @@ function toDate(v: string | number | Date | null | undefined): Date | null {
  *             `ChatMessage intent="answer"` turn that follows; the card
  *             does not quote it, so nothing in the transcript is said twice.
  */
-
 export function QuestionCard({ role, name, text, options, askedAt, answeredAt, dismissed, onChoose, waitingOn, verb = "answer", isNew, className, ...rest }: QuestionCardProps) {
   const takeOver = `Take over this task to ${verb}`;
   const answered = toDate(answeredAt);
@@ -173,7 +172,7 @@ export function QuestionCard({ role, name, text, options, askedAt, answeredAt, d
             <Icon name="hand" size={12} />
             Waiting for {waitingOn} to {verb}
             {/* How to make it yours, in words everyone sees: mouse, keyboard, touch, screen reader. */}
-            <span className={styles["takeOver"]} data-testid="take-over">· {takeOver}</span>
+            {" "}<span className={styles["takeOver"]} data-testid="take-over">· {takeOver}</span>
           </p>
         ) : null}
         {hasOptions ? (
@@ -181,7 +180,7 @@ export function QuestionCard({ role, name, text, options, askedAt, answeredAt, d
           // again, and a press (which does nothing) leaves those words up.
           someoneElse ? (
             <Tooltip content={takeOver} side="bottom" keepOnPress>
-              <div className={styles["optionsTrigger"]}>{list}</div>
+              {list}
             </Tooltip>
           ) : list
         ) : null}

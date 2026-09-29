@@ -130,13 +130,12 @@
 }
 /* Someone else's choices: muted, so they read as not yours rather than as
    buttons that fail; the hint comes on hover. */
-.optionsTrigger {
-  display: block;
-  width: fit-content;
-}
 /* The way to make someone else's question yours, after whom it waits on. */
 .takeOver {
   color: var(--ds-color-text-muted);
+}
+.optionsElse {
+  width: fit-content;
 }
 .optionsElse .option {
   background: transparent;

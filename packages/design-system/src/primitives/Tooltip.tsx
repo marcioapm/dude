@@ -1,5 +1,5 @@
 import * as RadixTooltip from "@radix-ui/react-tooltip";
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext, useRef, useState, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import styles from "./Tooltip.module.css";
 
@@ -25,12 +25,30 @@ export interface TooltipProps {
  * — never the only place a label lives. Icon buttons already carry a title.
  */
 export function Tooltip({ content, shortcut, side = "top", mono, delay, keepOnPress, children }: TooltipProps) {
+  // keepOnPress: the tooltip's state is ours, so a close asked for while the
+  // trigger is pressed is simply not taken. No event is cancelled: the press
+  // reaches every listener, and the trigger's own behaviour is untouched.
+  const [open, setOpen] = useState(false);
+  const pressed = useRef(false);
+  const onOpenChange = (next: boolean) => {
+    if (next || !pressed.current) setOpen(next);
+  };
+  const pressKeeper = {
+    onPointerDown: () => {
+      pressed.current = true;
+      const release = () => {
+        // After the click that follows the release, so its close is not taken either.
+        setTimeout(() => (pressed.current = false));
+      };
+      document.addEventListener("pointerup", release, { once: true });
+      document.addEventListener("pointercancel", release, { once: true });
+    },
+  };
   const root = (
-    <RadixTooltip.Root {...(delay !== undefined ? { delayDuration: delay } : {})}>
-      <RadixTooltip.Trigger asChild {...(keepOnPress ? { onPointerDown: handled, onClick: handled } : {})}>{children}</RadixTooltip.Trigger>
+    <RadixTooltip.Root {...(delay !== undefined ? { delayDuration: delay } : {})} {...(keepOnPress ? { open, onOpenChange } : {})}>
+      <RadixTooltip.Trigger asChild {...(keepOnPress ? pressKeeper : {})}>{children}</RadixTooltip.Trigger>
       <RadixTooltip.Portal>
-        <RadixTooltip.Content className={cx(styles["content"], mono && styles["mono"])} side={side} sideOffset={4}
-          {...(keepOnPress ? { onPointerDownOutside: handled } : {})}>
+        <RadixTooltip.Content className={cx(styles["content"], mono && styles["mono"])} side={side} sideOffset={4}>
           {content}
           {shortcut ? <kbd className={styles["kbd"]}>{shortcut}</kbd> : null}
           <RadixTooltip.Arrow className={styles["arrow"]} width={8} height={4} />
@@ -43,9 +61,6 @@ export function Tooltip({ content, shortcut, side = "top", mono, delay, keepOnPr
   // test, a static page — so it brings its own there.
   return useContext(HasProvider) ? root : <Provider>{root}</Provider>;
 }
-
-/** Radix skips its own close for an event already handled. */
-const handled = (e: { preventDefault(): void }) => e.preventDefault();
 
 const HasProvider = createContext(false);
 
