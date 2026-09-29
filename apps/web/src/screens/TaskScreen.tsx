@@ -7,8 +7,9 @@
  * working for them on their face). Below it, tabs in the order a person
  * asks: Overview (the goal, the pipeline, time and cost, and the pull
  * requests beside them), Findings (every review finding), Sessions (every
- * agent that ran, opening its conversation), Files (what they left), and
- * Activity (who did what, by name).
+ * agent that ran down the left, the one open beside them: its conversation
+ * and its changes), Files (what they left), and Activity (who did what, by
+ * name).
  *
  * Driven by the task's event stream, so a phase starting, a finding
  * landing or the PR opening appears without a reload; a dropped stream
@@ -41,7 +42,7 @@ import type { ApiClient, Artifact, Finding, MergeMethod, PullRequest, Run, TaskD
 import { ApiError } from "../api/client.ts";
 import { actorName, humanActor, planFrom } from "../api/conversation.ts";
 import { shortError } from "../escalation.ts";
-import { useReloadOnEvents, cameBack } from "../hooks/useEventStream.ts";
+import { AGENT_CHATTER, cameBack, useReloadOnEvents } from "../hooks/useEventStream.ts";
 import { useServers } from "../hooks/useServers.ts";
 import { firstName } from "@dude/design-system";
 import { usePeople, type People } from "../people.tsx";
@@ -49,6 +50,8 @@ import { FilesSection } from "./FilesSection.tsx";
 import { EscalationPanel } from "./EscalationPanel.tsx";
 import { TaskMetricsSection } from "./MetricsSection.tsx";
 import { NotFound } from "./NotFound.tsx";
+import { DudeMark, dudeName } from "../DudeMark.tsx";
+import { RunScreen } from "./RunScreen.tsx";
 import { OwnerSelect } from "./OwnerSelect.tsx";
 import { ServersAside } from "./ServersAside.tsx";
 import { ServersSection, serversTabTrailing } from "./ServersSection.tsx";
@@ -59,7 +62,11 @@ import { pullRequestActivity } from "../pullRequests.ts";
 export interface TaskScreenProps {
   client: ApiClient;
   taskId: string;
+  /** A session to show open on the Sessions tab: the page opens there. */
+  runId?: string | undefined;
   onOpenRun: (runId: string) => void;
+  /** Left the Sessions tab with a session open: the URL should say the task again. */
+  onCloseRun?: (() => void) | undefined;
   /** Where it sits, shown at the top: Project › Epic › KEY. */
   breadcrumb?: ReactNode;
   /** Leave for somewhere that exists, when this task does not. */
@@ -81,7 +88,21 @@ function changesRun(payload: unknown): boolean {
   return RUN_CHANGES.has(String(p.change)) || typeof p.luxState === "string";
 }
 
-export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: TaskScreenProps) {
+export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, breadcrumb, onBack }: TaskScreenProps) {
+  // A session's URL is the Sessions tab with it open; the task's URL is
+  // whichever tab was picked here, Overview first. Coming back to the
+  // task's URL from a session's (the tree, Back) is the overview again.
+  const [chosenTab, setTab] = useState("overview");
+  const tab = runId ? "sessions" : chosenTab;
+  const [lastRunId, setLastRunId] = useState(runId);
+  if (runId !== lastRunId) {
+    setLastRunId(runId);
+    if (!runId) setTab("overview");
+  }
+  // The session shown when none is asked for: the last one open, else one
+  // picked the first time Sessions shows (what is running, else the newest)
+  // and kept — a phase ending must not swap it under someone reading.
+  const [picked, setPicked] = useState<string | null>(null);
   const [item, setItem] = useState<TaskDetail | null>(null);
   const [missing, setMissing] = useState(false);
   const [findings, setFindings] = useState<Finding[]>([]);
@@ -92,8 +113,11 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
   const [problem, setProblem] = useState<string | null>(null);
   const [delivering, setDelivering] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [tab, setTab] = useState("overview");
   const people = usePeople();
+  // What the open session shows of its task: the owner, the same object while
+  // it is the same person, so the session is not redrawn for every reload here.
+  const ownerId = item?.owner?.id ?? null;
+  const sessionTask = useMemo(() => ({ owner: item?.owner ?? null }), [ownerId]); // eslint-disable-line react-hooks/exhaustive-deps -- `ownerId` stands for the owner
   // Bumped on each reload, for the sections that read their own data.
   const [version, setVersion] = useState(0);
   // The organization's merge method, read once for every pull request here.
@@ -143,18 +167,21 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
     void load();
   }, [load]);
 
-  // The servers change on their own stream event, and the rest of the page
-  // on any other — and on a servers.changed that starts or ends a preview
-  // run (RUN_CHANGES), not on each server's state change. A stream that
-  // comes back replays nothing, so its return re-reads the servers too:
-  // they may have moved while nothing could say so.
+  // What an agent says and does as it works changes nothing on this page
+  // but the open session, which has its own stream: no re-read for those.
+  // (Its plan and what it spends still re-read: the pipeline and cost show them.)
+  // The servers change on their own stream event: they are re-read, and
+  // the rest of the page only for a servers.changed that starts or ends a
+  // preview run (RUN_CHANGES), not for each server's state change. A
+  // stream that comes back replays nothing, so its return re-reads the
+  // servers too: they may have moved while nothing could say so.
   const [serversVersion, setServersVersion] = useState(0);
-  const stream = useReloadOnEvents({ client, taskId }, () => void load(), 300, (e) => {
+  const stream = useReloadOnEvents({ client, taskId }, () => void load(), undefined, (e) => {
     if (e.eventType === EventTypes.ServersChanged) {
       setServersVersion((v) => v + 1);
       return !changesRun(e.payload);
     }
-    return false;
+    return AGENT_CHATTER.has(e.eventType);
   });
   const wasStream = useRef(stream);
   useEffect(() => {
@@ -216,9 +243,17 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
   // The aside says what serves the task when something does, or could: a
   // project with no servers defined has nothing to say there.
   const showServers = Boolean(servers.data && (servers.data.run || servers.data.recipes.length > 0));
+  // Newest first; the one open is the one asked for, else the one picked
+  // on first sight (what was running, else the newest).
+  const sessions = [...item.runs].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const openRun = (runId && sessions.some((r) => r.id === runId) ? runId : undefined)
+    ?? (picked && sessions.some((r) => r.id === picked) ? picked : undefined)
+    ?? sessions.find((r) => r.status === "running")?.id ?? sessions[0]?.id;
+  if (tab === "sessions" && openRun && openRun !== picked) setPicked(openRun);
 
   return (
-    <div className="screen taskScreen" data-testid="task-screen">
+    // On Sessions the page holds still and the session scrolls inside it.
+    <div className={tab === "sessions" ? "screen taskScreen fixed" : "screen taskScreen"} data-testid="task-screen">
       <header className="taskTop">
         <div className="taskCrumbs">{breadcrumb}</div>
         <span className="taskTopActions">
@@ -276,7 +311,14 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
         <TaskDialog client={client} projectId={item.projectId} onClose={() => setEditing(false)} existing={existingTask(item, started)} onSaved={() => void load()} />
       ) : null}
 
-      <Tabs value={tab} onValueChange={setTab} fill>
+      <Tabs value={tab} onValueChange={(next) => {
+        setTab(next);
+        // Leaving a session's tab: the URL says the task again.
+        if (runId && next !== "sessions") {
+          setLastRunId(undefined);
+          onCloseRun?.();
+        }
+      }} fill>
         <TabList aria-label="Task" className="tabsInset">
           <Tab value="overview">Overview</Tab>
           <Tab value="findings" count={findings.length > 0 ? findings.length : undefined}>Findings</Tab>
@@ -365,19 +407,26 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
           )}
         </TabPanel>
 
-        <TabPanel value="sessions" className="taskPane">
-          {item.runs.length > 0 ? (
-            <SessionList className="taskSessions" data-testid="sessions">
-              {[...item.runs].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((run) => (
-                <SessionItem key={run.id} onOpen={() => onOpenRun(run.id)}
-                  avatar={<AgentAvatar role={run.role ?? DEFAULT_RUN_ROLE} size="lg" live={run.status === "running"} />}
-                  title={runLabel(run) + (run.attempt > 1 ? ` · attempt ${run.attempt}` : "")}
-                  detail={<>{run.model ?? run.harness ?? "agent"} · {run.startedAt ? <Duration since={run.startedAt} until={run.endedAt} live={run.status === "running"} tone="muted" /> : "not started"}</>}
-                  trailing={<StatusMark status={run.status} size="sm" iconOnly={run.status === "completed"} />} />
-              ))}
-            </SessionList>
+        <TabPanel value="sessions" fill>
+          {sessions.length > 0 ? (
+            <div className="taskSessions">
+              <SessionList className="taskSessionList" data-testid="sessions">
+                {sessions.map((run) => (
+                  <SessionItem key={run.id} onOpen={() => onOpenRun(run.id)} current={run.id === openRun}
+                    avatar={<AgentAvatar role={run.role ?? DEFAULT_RUN_ROLE} size="lg" live={run.status === "running"} />}
+                    title={runLabel(run) + (run.attempt > 1 ? ` · attempt ${run.attempt}` : "")}
+                    detail={<>{run.model ?? run.harness ?? "agent"} · {run.startedAt ? <Duration since={run.startedAt} until={run.endedAt} live={run.status === "running"} tone="muted" /> : "not started"}</>}
+                    trailing={<StatusMark status={run.status} size="sm" iconOnly={run.status === "completed"} />} />
+                ))}
+              </SessionList>
+              {openRun ? (
+                <RunScreen key={openRun} client={client} runId={openRun} onBack={onBack} task={sessionTask} />
+              ) : null}
+            </div>
           ) : (
-            <EmptyState compact icon="agent" title="No sessions yet" description="Each agent that works on the task has a session here, with its conversation." />
+            <div className="taskPane">
+              <EmptyState compact icon="agent" title="No sessions yet" description="Each agent that works on the task has a session here, with its conversation." />
+            </div>
           )}
         </TabPanel>
 
@@ -483,7 +532,7 @@ function PullRequestStep({ pr, named }: { pr: PullRequest; named: boolean }) {
       data-phase="pr"
       data-status={pr.state}
       href={pr.url}
-      avatar={<AgentAvatar role="system" size="lg" />}
+      avatar={<DudeMark size={32} />}
       label={named ? <><span className="ds-mono">{pr.repositoryName}</span> #{pr.number}</> : <>Pull request #{pr.number}</>}
       note={pr.title}
       status={<PrChip pr={pr} size="sm" showNumber={false} tabIndex={-1} />}
@@ -541,6 +590,9 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
   // A task with pull requests in several repositories names each by its repository.
   const named = new Set(events.filter((e) => e.eventType === "pull_request.opened").map((e) => e.payload.repo)).size > 1;
   const labels = new Map(runs.map((r) => [r.id, runLabel(r).toLowerCase()]));
+  // One task's events: dude goes by the same name throughout.
+  const taskId = events.find((e) => e.taskId)?.taskId;
+  const dude = dudeName(taskId ?? "");
   const phase = (runId: string | null) => (runId && labels.get(runId)) || "agent";
   for (const e of events) {
     const by = humanActor(e);
@@ -568,7 +620,7 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
         if (by) out.push({ ...base, who: face, text: <>{person} resumed the {phase(e.runId)}</> });
         break;
       case "run.aborted":
-        out.push({ ...base, who: face ?? <AgentAvatar role="system" size="lg" />, text: <>{by ? person : <b>dude</b>} aborted the {phase(e.runId)}</>, quote: p.reason ? String(p.reason) : undefined });
+        out.push({ ...base, who: face ?? <DudeMark size={32} />, text: <>{by ? person : <b>{dude}</b>} aborted the {phase(e.runId)}</>, quote: p.reason ? String(p.reason) : undefined });
         break;
       case "task.owner_changed": {
         const to = typeof p.to === "string" ? people.names.get(p.to) : undefined;
@@ -586,13 +638,14 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
         break;
       default: {
         // What happened to a pull request: by the GitHub login that did it,
-        // or the person who did it from here, or dude and GitHub.
+        // or the person who did it from here, or dude, or GitHub.
         const line = pullRequestActivity(e, named);
         if (!line) break;
         const who = line.actorId ? face : line.who
           ? <PersonAvatar person={{ id: `gh:${line.who}`, name: line.who }} size={32} />
-          : <AgentAvatar role="integration" size="lg" />;
-        out.push({ ...base, who, text: line.actorId ? <>{person} {line.text}</> : line.text, quote: line.quote });
+          : line.byDude ? <DudeMark size={32} /> : <AgentAvatar role="integration" size="lg" />;
+        const text = line.actorId ? <>{person} {line.text}</> : line.byDude ? <><b>{dude}</b> {line.text}</> : line.text;
+        out.push({ ...base, who, text, quote: line.quote });
         break;
       }
     }

@@ -14,6 +14,10 @@ export interface RowMenuAction {
   readonly icon?: IconName | undefined;
   /** Display only — the menu does not bind it. "⌘E", "Del". */
   readonly shortcut?: string | undefined;
+  /** A second, quieter line under the label: what the item is. */
+  readonly description?: string | undefined;
+  /** Set the label in mono: a name, a path, a `{{variable}}`. */
+  readonly mono?: boolean | undefined;
   /** Danger: the action loses work. Rendered in danger ink; still needs a confirm dialog behind it. */
   readonly tone?: "default" | "danger" | undefined;
   readonly disabled?: boolean | undefined;
@@ -161,7 +165,7 @@ function MenuItems({ items, onSelect }: { readonly items: ReadonlyArray<RowMenuI
         return (
           <WithReason key={it.id} reason={disabled ? it.disabledReason : undefined}>
             <RadixMenu.Item
-              className={cx(styles["item"], it.tone === "danger" && styles["danger"])}
+              className={cx(styles["item"], it.tone === "danger" && styles["danger"], it.description && styles["twoLine"])}
               disabled={disabled}
               data-testid={`rowmenu-${it.id}`}
               onSelect={() => {
@@ -169,7 +173,7 @@ function MenuItems({ items, onSelect }: { readonly items: ReadonlyArray<RowMenuI
                 onSelect?.(it.id);
               }}
             >
-              <ItemBody icon={it.icon} label={it.label} reason={disabled ? it.disabledReason : undefined} />
+              <ItemBody icon={it.icon} label={it.label} reason={disabled ? it.disabledReason : undefined} description={it.description} mono={it.mono} />
               {it.shortcut ? (
                 <kbd className={styles["shortcut"]} aria-hidden>
                   {it.shortcut}
@@ -183,13 +187,26 @@ function MenuItems({ items, onSelect }: { readonly items: ReadonlyArray<RowMenuI
   );
 }
 
-function ItemBody({ icon, label, reason }: { readonly icon: IconName | undefined; readonly label: string; readonly reason: string | undefined }) {
+function ItemBody({ icon, label, reason, description, mono }: {
+  readonly icon: IconName | undefined;
+  readonly label: string;
+  readonly reason: string | undefined;
+  readonly description?: string | undefined;
+  readonly mono?: boolean | undefined;
+}) {
   return (
     <>
       <span className={styles["icon"]} aria-hidden>
         {icon ? <Icon name={icon} size={12} /> : null}
       </span>
-      <span className={styles["label"]}>{label}</span>
+      {description ? (
+        <span className={styles["label"]}>
+          <span className={cx(styles["name"], mono && styles["mono"])}>{label}</span>
+          <span className={styles["description"]}>{description}</span>
+        </span>
+      ) : (
+        <span className={cx(styles["label"], mono && styles["mono"])}>{label}</span>
+      )}
       {reason ? <span className="ds-sr-only">. {reason}</span> : null}
     </>
   );

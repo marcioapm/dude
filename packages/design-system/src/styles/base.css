@@ -188,6 +188,17 @@ a:hover {
   color: var(--ds-color-text-muted);
 }
 
+/* Something beside it is changing now: a tab's, a label's. One dot, one rhythm. */
+.ds-live-dot {
+  display: inline-block;
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-color-live);
+  animation: ds-pulse calc(var(--ds-cadence-breathe) / max(var(--ds-motion-live), 0.0001)) ease-in-out infinite;
+}
+
 /* ---------------------------------------------------------------- */
 /* Keyframes. Anything "live" multiplies by --ds-motion-live so reduced   */
 /* motion turns it into a static state instead of a jump.               */
@@ -245,24 +256,30 @@ a:hover {
   }
 }
 
+/* Entrances move with `translate` and `scale`, never `transform`: those
+   compose with an element's own transform (a dialog centred with
+   translate(-50%, -50%), a pill centred on its edge) instead of replacing
+   it while they run, which would start it off-centre and snap it back. */
 @keyframes ds-slide-in-right {
   from {
-    transform: translateX(16px);
+    translate: 16px 0;
     opacity: 0;
   }
   to {
-    transform: none;
+    translate: none;
     opacity: 1;
   }
 }
 
 @keyframes ds-pop {
   from {
-    transform: translateY(4px) scale(0.98);
+    translate: 0 4px;
+    scale: 0.98;
     opacity: 0;
   }
   to {
-    transform: none;
+    translate: none;
+    scale: none;
     opacity: 1;
   }
 }

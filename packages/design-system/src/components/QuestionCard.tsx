@@ -139,7 +139,7 @@ export function QuestionCard({ role, name, text, options, askedAt, answeredAt, d
             </time>
           ) : null}
         </header>
-        <Markdown source={text} className={styles["body"]} />
+        <Markdown source={text} unmeasured className={styles["body"]} />
         {someoneElse ? (
           <p className={styles["waitingOn"]} data-testid="waiting-on">
             <Icon name="hand" size={12} />

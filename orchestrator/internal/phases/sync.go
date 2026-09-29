@@ -430,6 +430,13 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun) (lux.Spec, error) {
 		Findings: findings, PRFeedback: feedback, BlockingSeverities: r.BlockingSeverities, Context: settings.Context,
 		Repositories: promptRepos, Decisions: decisions, Tools: s.Agent.ToolsURL != "", CLI: s.Agent.ToolsURL != "" && s.Agent.ToolsService,
 		OrgPrompt: prompts.Org, ProjectPrompt: prompts.Project, ProjectPromptMode: prompts.ProjectMode,
+		Branch: runBranch(r),
+	}
+	// What the branch started from: the first repository's, which is where
+	// the task starts (a prompt names one base; several repositories each
+	// have theirs, in the workspace note).
+	if len(in.Repos) > 0 {
+		promptIn.BaseRef = in.Repos[0].Ref
 	}
 	in.Prompt = delivery.Prompt(r.Phase, promptIn)
 	// Pushed only by a phase that publishes. Even with nowhere to change

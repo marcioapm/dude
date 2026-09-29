@@ -327,3 +327,11 @@
   padding: var(--ds-space-aside-y) var(--ds-space-chat-pad-x) var(--ds-space-2) calc(var(--ds-space-chat-pad-x) + var(--ds-size-avatar-chat) + var(--ds-space-chat-avatar-gap));
   min-width: 0;
 }
+
+/* A face of the app's own (dude's), at the chat avatar's size: the face fills it. */
+.ownAvatar {
+  display: inline-flex;
+  width: var(--ds-size-avatar-chat);
+  height: var(--ds-size-avatar-chat);
+}
+

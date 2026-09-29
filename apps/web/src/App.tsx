@@ -19,7 +19,7 @@ import { Button, Callout, EmptyState, IconButton, RowMenu, Spinner, useToast } f
 import { ApiError, type ApiClient, type PullRequest } from "./api/client.ts";
 import { usePeople } from "./people.tsx";
 import { Reconnecting } from "./Reconnecting.tsx";
-import { useReloadOnEvents } from "./hooks/useEventStream.ts";
+import { AGENT_CHATTER, useReloadOnEvents } from "./hooks/useEventStream.ts";
 import { errorText } from "./hooks/useSave.tsx";
 import { formatPlace, inTree, parsePlace, treeSelection, type Place } from "./place.ts";
 import { startPush } from "./push.ts";
@@ -101,15 +101,11 @@ export function withPullRequests(projects: NavProject[], prs: readonly PullReque
 const MINE = "dude.tree.mine";
 
 /**
- * An agent at work: what it says and does, its plan and diff. None of it is
- * in the tree. What it spends is (a card's, a lane's, an epic's cost), so a
- * finished model request and a cost sample still reload.
+ * An agent at work, and its plan and heartbeat: none of it is in the tree.
+ * What it spends is (a card's, a lane's, an epic's cost), so a finished
+ * model request and a cost sample still reload.
  */
-const QUIET_EVENTS: ReadonlySet<string> = new Set([
-  EventTypes.AgentMessage, EventTypes.AgentThought, EventTypes.ToolCalled, EventTypes.ToolCompleted,
-  EventTypes.ModelRequestStarted, EventTypes.PromptDelivered, EventTypes.PlanUpdated,
-  EventTypes.RunDiffUpdated, EventTypes.WorkerHeartbeat,
-]);
+const QUIET_EVENTS: ReadonlySet<string> = new Set([...AGENT_CHATTER, EventTypes.PlanUpdated, EventTypes.WorkerHeartbeat]);
 
 export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   const [projects, setProjects] = useState<NavProject[] | null>(null);
@@ -183,6 +179,40 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   }, [projects, place, go]);
 
   const selected = treeSelection(place);
+
+  // A session opens on its task's page. The tree names the task for the
+  // sessions it holds; one it does not (an attempt older than the tree
+  // keeps) is read once to learn its task.
+  // A session's task never changes, so once known it is kept: a reload that
+  // drops the session from the tree (a newer attempt) must not unmount its
+  // page. Null: no such Run. A failed read is tried again a few times.
+  const [runTasks, setRunTasks] = useState<ReadonlyMap<string, string | null>>(new Map());
+  const sessionId = selected?.kind === "session" || selected?.kind === "run" ? selected.id : null;
+  const inTreeTask = sessionId && projects ? (locate(projects, sessionId)?.item.id ?? null) : null;
+  if (sessionId && inTreeTask && runTasks.get(sessionId) !== inTreeTask) setRunTasks((m) => new Map(m).set(sessionId, inTreeTask));
+  const [lookup, setLookup] = useState<{ id: string; tries: number } | null>(null);
+  const tries = lookup?.id === sessionId ? lookup.tries : 0;
+  const lookupFailed = tries >= 3;
+  const loaded = projects !== null;
+  useEffect(() => {
+    // The tree reloads often; the lookup waits on it having loaded, not on each reload.
+    if (!sessionId || !loaded || inTreeTask || runTasks.has(sessionId) || lookupFailed) return;
+    let current = true;
+    const wait = tries === 0 ? 0 : Math.min(8000, 1000 * 2 ** tries);
+    const timer = setTimeout(() => client.getRun(sessionId).then(
+      (run) => current && setRunTasks((m) => new Map(m).set(sessionId, run.taskId)),
+      (err: unknown) => {
+        if (!current) return;
+        if (err instanceof ApiError && err.status === 404) setRunTasks((m) => new Map(m).set(sessionId, null));
+        else setLookup({ id: sessionId, tries: tries + 1 });
+      },
+    ), wait);
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
+  }, [client, sessionId, loaded, inTreeTask, runTasks, tries, lookupFailed]);
+  const sessionTask = sessionId ? (inTreeTask ?? runTasks.get(sessionId) ?? null) : null;
   const scope = useMemo(() => (projects ? boardScope(projects, selected) : null), [projects, selected]);
   const toBoard = useCallback(() => go(projects?.[0] ? inTree({ kind: "project", id: projects[0].id }) : null), [go, projects]);
 
@@ -337,28 +367,32 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         }
       />
     );
-  } else if (selected?.kind === "task") {
+  } else if (selected?.kind === "task" || sessionTask) {
+    // A session opens on its task's page, beside the task's other sessions.
+    const taskId = selected?.kind === "task" ? selected.id : sessionTask!;
     flush = true;
     main = (
       <TaskScreen
-        key={selected.id}
+        key={taskId}
         client={client}
-        taskId={selected.id}
+        taskId={taskId}
+        runId={selected?.kind === "task" ? undefined : sessionId ?? undefined}
         onOpenRun={(runId) => go(inTree({ kind: "session", id: runId }))}
+        onCloseRun={() => go(inTree({ kind: "task", id: taskId }))}
         onBack={toBoard}
-        breadcrumb={trail(selected.id)}
+        breadcrumb={trail(taskId)}
       />
     );
+  } else if (sessionId && !runTasks.has(sessionId) && !lookupFailed) {
+    main = <div className="centered"><Spinner label="Loading…" /></div>;
   } else if (selected && (selected.kind === "session" || selected.kind === "run")) {
-    const where = locate(projects, selected.id);
+    // Its task could not be learned: the session on its own, with the way to it.
     flush = true;
     main = (
       <RunScreen
         key={selected.id}
         client={client}
         runId={selected.id}
-        title={where?.item.title}
-        breadcrumb={trail(selected.id)}
         onOpenTask={(taskId) => go(inTree({ kind: "task", id: taskId }))}
         onBack={toBoard}
       />
