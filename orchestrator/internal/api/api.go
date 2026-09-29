@@ -121,10 +121,36 @@ type handler func(w http.ResponseWriter, r *http.Request, org string) error
 
 // actor is who the backend says made the request.
 func actor(r *http.Request) string {
-	if a := r.Header.Get("X-Dude-Actor"); a != "" {
-		return a
+	return principalOf(r).Actor
+}
+
+// principal is who the backend says is asking, as it sends it on every
+// call: the key acting, its person, and whether they are an admin. The
+// backend has authenticated them; this trusts it for that, as for the
+// organization.
+type principal struct {
+	Actor, Person string
+	Admin         bool
+}
+
+func principalOf(r *http.Request) principal {
+	p := principal{Actor: r.Header.Get("X-Dude-Actor"), Person: r.Header.Get("X-Dude-Person"),
+		Admin: r.Header.Get("X-Dude-Role") == "admin"}
+	if p.Actor == "" {
+		p.Actor = "unknown"
 	}
-	return "unknown"
+	return p
+}
+
+// split reads a comma-separated query value.
+func split(v string) []string {
+	var out []string
+	for _, s := range strings.Split(v, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // httpError is an error with a status for the caller.

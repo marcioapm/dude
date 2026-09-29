@@ -3,23 +3,22 @@
  * the work (docs/design/memory.md). The orchestrator owns it — the index,
  * the embedder, the search — so these pass through, adding who is asking.
  *
- * Anyone in the organization searches and adds. A person changes and
- * archives their own; an admin, anyone's (an agent's and dude's too);
- * only an admin reindexes. The orchestrator enforces that from the
- * person and role named here, which travel in headers, never the body.
+ * Anyone in the organization searches and adds; only an admin reindexes
+ * (checked here, as every admin-only route is). A person changes and
+ * archives their own, an admin anyone's: whose a memory is, only the
+ * orchestrator knows, so it checks that against the principal sent with
+ * every call (in headers, never the body).
  */
 
 import { orchestrator } from "../../orchestrator/client.ts";
+import { requireOrgAdmin } from "../access.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 function forward(method: string, path: (ctx: RequestContext) => string) {
   return async (ctx: RequestContext): Promise<Response> => {
     const target = path(ctx) + (method === "GET" ? ctx.url.search : "");
     return orchestrator(ctx.principal.organizationId, method, target,
-      method === "GET" ? "{}" : await ctx.request.text(), ctx.principal.apiKeyId, {
-        "x-dude-person": ctx.principal.personId,
-        "x-dude-admin": ctx.principal.role === "admin" ? "true" : "false",
-      });
+      method === "GET" ? "{}" : await ctx.request.text(), ctx.principal);
   };
 }
 
@@ -35,5 +34,9 @@ export function registerMemoryRoutes(router: Router): void {
   router.post("/v1/memory/memories/:id/restore", forward("POST", (ctx) => `${memory(ctx)}/restore`));
   router.get("/v1/memory/index", forward("GET", () => "/internal/memory/index"));
   router.post("/v1/memory/index/retry", forward("POST", () => "/internal/memory/index/retry"));
-  router.post("/v1/memory/index/reindex", forward("POST", () => "/internal/memory/index/reindex"));
+  const reindex = forward("POST", () => "/internal/memory/index/reindex");
+  router.post("/v1/memory/index/reindex", async (ctx) => {
+    await requireOrgAdmin(ctx);
+    return reindex(ctx);
+  });
 }

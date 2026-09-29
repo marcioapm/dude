@@ -33,8 +33,8 @@ CREATE TABLE memories (
   author_person_id  text REFERENCES people(id) ON DELETE SET NULL,
   created_by_run_id text REFERENCES runs(id) ON DELETE SET NULL,
   system_reason     text,
-  -- Where it was learned, when it was: a task, epic, project or run.
-  source_type       text CHECK (source_type IN ('task', 'epic', 'project', 'run')),
+  -- Where it was learned, when it was: a task, epic or project.
+  source_type       text CHECK (source_type IN ('task', 'epic', 'project')),
   source_id         text,
   archived_at       timestamptz,
   archived_by       text,
@@ -173,8 +173,13 @@ BEGIN
   END IF;
   RETURN NULL;
 END $$;
-CREATE TRIGGER memories_index AFTER INSERT OR UPDATE OF title, content, project_id, archived_at OR DELETE ON memories
+-- An UPDATE naming a column fires it even when the value is the same (an
+-- edit that saves every field): the WHEN clauses skip those.
+CREATE TRIGGER memories_index AFTER INSERT OR DELETE ON memories
   FOR EACH ROW EXECUTE FUNCTION memories_index();
+CREATE TRIGGER memories_reindex AFTER UPDATE ON memories FOR EACH ROW
+  WHEN ((OLD.title, OLD.content, OLD.project_id, OLD.archived_at) IS DISTINCT FROM (NEW.title, NEW.content, NEW.project_id, NEW.archived_at))
+  EXECUTE FUNCTION memories_index();
 
 CREATE FUNCTION tasks_index() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
@@ -185,8 +190,11 @@ BEGIN
   END IF;
   RETURN NULL;
 END $$;
-CREATE TRIGGER tasks_index AFTER INSERT OR UPDATE OF title, goal, acceptance_criteria, number, project_id OR DELETE ON tasks
+CREATE TRIGGER tasks_index AFTER INSERT OR DELETE ON tasks
   FOR EACH ROW EXECUTE FUNCTION tasks_index();
+CREATE TRIGGER tasks_reindex AFTER UPDATE ON tasks FOR EACH ROW
+  WHEN ((OLD.title, OLD.goal, OLD.acceptance_criteria, OLD.number, OLD.project_id) IS DISTINCT FROM (NEW.title, NEW.goal, NEW.acceptance_criteria, NEW.number, NEW.project_id))
+  EXECUTE FUNCTION tasks_index();
 
 CREATE FUNCTION epics_index() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
@@ -197,8 +205,11 @@ BEGIN
   END IF;
   RETURN NULL;
 END $$;
-CREATE TRIGGER epics_index AFTER INSERT OR UPDATE OF title, description, project_id OR DELETE ON epics
+CREATE TRIGGER epics_index AFTER INSERT OR DELETE ON epics
   FOR EACH ROW EXECUTE FUNCTION epics_index();
+CREATE TRIGGER epics_reindex AFTER UPDATE ON epics FOR EACH ROW
+  WHEN ((OLD.title, OLD.description, OLD.project_id) IS DISTINCT FROM (NEW.title, NEW.description, NEW.project_id))
+  EXECUTE FUNCTION epics_index();
 
 CREATE FUNCTION projects_index() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
@@ -209,8 +220,11 @@ BEGIN
   END IF;
   RETURN NULL;
 END $$;
-CREATE TRIGGER projects_index AFTER INSERT OR UPDATE OF name, description OR DELETE ON projects
+CREATE TRIGGER projects_index AFTER INSERT OR DELETE ON projects
   FOR EACH ROW EXECUTE FUNCTION projects_index();
+CREATE TRIGGER projects_reindex AFTER UPDATE ON projects FOR EACH ROW
+  WHEN ((OLD.name, OLD.description) IS DISTINCT FROM (NEW.name, NEW.description))
+  EXECUTE FUNCTION projects_index();
 
 -- A project's new key prefix renames every task's key, in the index only.
 CREATE FUNCTION projects_reindex_tasks() RETURNS trigger LANGUAGE plpgsql AS $$

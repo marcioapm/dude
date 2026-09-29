@@ -14,11 +14,15 @@
   min-width: 0;
 }
 .root {
+  /* The widths before the title, so the body indents to it. */
+  --srr-chevron: 14px;
+  --srr-rank: 16px;
   list-style: none;
   border-radius: 0;
 }
+/* The same open shade as ArtifactRow's. */
 .open {
-  background: var(--ds-color-raised);
+  background: var(--ds-color-surface);
 }
 
 .row {
@@ -58,8 +62,8 @@
 .chevron {
   display: inline-grid;
   place-items: center;
-  width: 14px;
-  height: 14px;
+  width: var(--srr-chevron);
+  height: var(--srr-chevron);
   flex-shrink: 0;
   color: var(--ds-color-text-muted);
 }
@@ -70,19 +74,12 @@
   transform: rotate(90deg);
 }
 .rank {
-  width: 16px;
+  width: var(--srr-rank);
   flex-shrink: 0;
   text-align: right;
   font-size: var(--ds-text-xs);
   font-variant-numeric: tabular-nums;
   color: var(--ds-color-text-muted);
-}
-.lead {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--ds-space-6);
-  flex-shrink: 0;
-  color: var(--ds-color-text-secondary);
 }
 .title {
   min-width: 0;
@@ -104,13 +101,19 @@
   white-space: nowrap;
 }
 
-/* Indented to the title: chevron, rank and lead's widths and gaps. */
+/* Indented to the lead (it varies: a glyph, a task's key): past the
+   chevron and the rank, where what it is starts. */
 .body {
   display: flex;
   flex-direction: column;
   gap: var(--ds-space-12);
   padding: var(--ds-space-8) var(--ds-space-12) var(--ds-space-12)
-    calc(var(--ds-space-4) + 14px + var(--ds-space-8) + 16px + var(--ds-space-8));
+    calc(var(--ds-space-4) + var(--srr-chevron) + var(--ds-space-8) + var(--srr-rank) + var(--ds-space-8));
   font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
   min-width: 0;
+}
+/* Prose in the body (a snippet) keeps a readable measure. */
+.body > span {
+  max-width: var(--ds-measure-message);
 }

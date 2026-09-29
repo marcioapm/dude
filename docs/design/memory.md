@@ -34,12 +34,13 @@ Decided (2026-09-28):
 | `author_kind` | `person` \| `system` \| `agent` |
 | `author_person_id`, `created_by_run_id` | who, for a person or an agent; an agent's run gives the person it worked for and its task |
 | `system_reason` | for dude's own: "from an answer" |
-| `source_type`, `source_id` | where it was learned: a task, epic, project or run; the run's task by default |
+| `source_type`, `source_id` | where it was learned: a task, epic or project; an agent's, its run's task |
 | `archived_at`, `archived_by` | out of every search; restorable |
 
 `memory_refs(memory_id, ref_type, ref_id)` is what a memory is **about**:
-any number of tasks, epics and projects. Search can be narrowed to it.
-Provenance says where it came from; refs say what it concerns.
+any number of tasks, epics and projects, shown with the memory.
+Provenance says where it came from; refs say what it concerns. (Narrowing
+search to what a memory is about waits for a caller that needs it.)
 
 ## The index
 
@@ -96,10 +97,12 @@ One function in Go, used by the tool and the settings alike:
 3. fuse by rank: score = Σ 1 / (60 + rank). A result found both ways
    outranks one found by either alone.
 
-Filters: types, project (a project's search includes its organization's
-memories), and `about`. Each result carries both ranks, the text score, the
-distance and the fused score, which the settings show and the tool does
-not.
+Filters: types, and project (a project's search includes its
+organization's memories). Each result carries both ranks, the text score,
+the distance and the fused score, which the settings show and the tool does
+not. What is shown (snippet, a task's key) is read for the results that
+survive fusion only. `mode=words` searches by words alone and pays for no
+embedding: the settings' picker, which looks things up by name.
 
 ## Agent tools
 
@@ -119,9 +122,11 @@ records `memory.created`.
 
 The orchestrator serves `/internal/memory/…` (search, list, get, create,
 update, archive, restore, index status, retry, reindex); the backend
-proxies `/v1/memory/…` to it with the principal as the actor, as it does
-GitHub settings. Anyone in the organization searches and adds; a person
-edits and archives their own; admins any.
+proxies `/v1/memory/…` to it with the principal (key, person, role), as
+every orchestrator call now carries. Anyone in the organization searches
+and adds; a person edits and archives their own, admins any (checked by
+the orchestrator, which knows whose a memory is); only admins reindex
+(checked by the backend, as every admin-only route is).
 
 Settings, organization's and each project's: **Memory** in the menu, with
 three pages: **Search** (ranked, "As the agent sees it"), **Memories** (the

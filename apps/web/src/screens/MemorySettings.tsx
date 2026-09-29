@@ -10,16 +10,21 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  AgentAvatar,
+  AuthorLine,
+  EntityLine,
   Markdown,
-  PersonLine,
-  ProjectAvatar,
+  RefLead,
+  RemovableList,
+  SearchPicker,
   SearchResultList,
   SearchResultRow,
   Segmented,
+  SettingSource,
   SettingsHeader,
+  SettingsNote,
   SettingsSection,
-  StatusMark,
+  ROLE_LABEL,
+  type AuthorLineProps,
   type SettingsNavItem,
 } from "@dude/design-system/components";
 import {
@@ -33,7 +38,8 @@ import {
   Checkbox,
   Dialog,
   EmptyState,
-  IconButton,
+  FormRow,
+  FormStack,
   Input,
   KeyValueList,
   RowMenu,
@@ -47,8 +53,20 @@ import {
   THead,
   Tr,
 } from "@dude/design-system/primitives";
-import { Icon, cx } from "@dude/design-system";
-import { MEMORY_KINDS, type IndexStatus, type Memory, type MemoryKind, type MemoryRef, type SearchOutcome, type SearchResult, type TaskStatus } from "@dude/domain";
+import { formatTimestamp, Icon } from "@dude/design-system";
+import {
+  MEMORY_KINDS,
+  SEARCH_TYPES,
+  type AgentRole,
+  type IndexStatus,
+  type Memory,
+  type MemoryKind,
+  type MemoryRef,
+  type SearchOutcome,
+  type SearchResult,
+  type SearchType,
+  type TaskStatus,
+} from "@dude/domain";
 import type { ApiClient } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
 import { usePeople } from "../people.tsx";
@@ -79,30 +97,51 @@ export function memoryNav(failed?: number): SettingsNavItem {
   };
 }
 
+const ago = (iso: string) => formatTimestamp(iso, "relative");
+
 /**
- * The index, read once by the settings screen: how many documents failed
- * (the menu's note), and whether there is an embedder at all — without
- * one everything is found by its words, and "Text only" on every row
- * would say nothing.
+ * The index, read by the settings screen and kept current by the Index page:
+ * the menu's failure note, and whether there is an embedder at all —
+ * without one everything is found by its words, and "Text only" on every
+ * row would say nothing.
  */
 export interface IndexSummary {
-  readonly failed?: number;
-  readonly embedder: boolean;
+  readonly status: IndexStatus | null;
+  readonly problem: string | null;
+  readonly reload: () => Promise<void>;
 }
 
 export function useIndexSummary(client: ApiClient, project?: string): IndexSummary {
-  const [summary, setSummary] = useState<IndexSummary>({ embedder: false });
-  useEffect(() => {
-    let live = true;
-    client.memoryIndex(project).then(
-      (s) => live && setSummary({ failed: s.failed, embedder: Boolean(s.model) }),
-      () => undefined,
-    );
-    return () => {
-      live = false;
-    };
+  const [status, setStatus] = useState<IndexStatus | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  const latest = useRef(0);
+  const reload = useCallback(async () => {
+    const mine = ++latest.current;
+    try {
+      const s = await client.memoryIndex(project);
+      if (mine === latest.current) {
+        setStatus(s);
+        setProblem(null);
+      }
+    } catch (err) {
+      if (mine === latest.current) setProblem(errorText(err));
+    }
   }, [client, project]);
-  return summary;
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+  return { status, problem, reload };
+}
+
+/** The note a memory page sits under: who may do what here. */
+function MemoryNote({ scope }: { scope: MemoryScope }) {
+  return (
+    <SettingsNote icon="info">
+      {scope.kind === "organization"
+        ? "Everyone here searches and adds memories; a person changes their own, and organisation admins anyone’s."
+        : `Memories added here apply to ${scope.name} only. ${scope.organization}’s are shown too, marked “From ${scope.organization}”, and are changed in ${scope.organization}’s settings.`}
+    </SettingsNote>
+  );
 }
 
 export function MemoryPages({ client, scope, page, projects, admin, index, onPage }: {
@@ -116,19 +155,20 @@ export function MemoryPages({ client, scope, page, projects, admin, index, onPag
   onPage: (page: MemoryPage) => void;
 }) {
   const [editing, setEditing] = useState<Memory | "new" | null>(null);
-  // A save bumps it: the open page reads again.
+  // A save bumps it: the open page reads again, keeping its words and filters.
   const [version, setVersion] = useState(0);
-  const project = scope.kind === "project" ? scope.id : undefined;
   const open = useCallback(async (id: string) => setEditing(await client.getMemory(id)), [client]);
+  const embedder = Boolean(index.status?.model);
   return (
     <>
+      <MemoryNote scope={scope} />
       {page === "memory-search" ? (
         <SearchPage client={client} scope={scope} projects={projects} version={version} onOpen={(id) => void open(id)} />
       ) : page === "memory-list" ? (
-        <MemoriesPage version={version} client={client} scope={scope} projects={projects} embedder={index.embedder} onOpen={setEditing}
+        <MemoriesPage version={version} client={client} scope={scope} projects={projects} embedder={embedder} onOpen={setEditing}
           add={<Button variant="primary" leadingIcon="plus" onClick={() => setEditing("new")} data-testid="memory-add">Add memory</Button>} />
       ) : (
-        <IndexPage client={client} scope={scope} admin={admin} onMemories={() => onPage("memory-list")} />
+        <IndexPage client={client} scope={scope} admin={admin} index={index} onMemories={() => onPage("memory-list")} />
       )}
       {editing ? (
         <MemoryDialog client={client} scope={scope} projects={projects} admin={admin}
@@ -137,6 +177,7 @@ export function MemoryPages({ client, scope, page, projects, admin, index, onPag
           onSaved={() => {
             setEditing(null);
             setVersion((v) => v + 1);
+            void index.reload();
           }} />
       ) : null}
     </>
@@ -147,86 +188,48 @@ export function MemoryPages({ client, scope, page, projects, admin, index, onPag
 // Shared pieces
 // ---------------------------------------------------------------------------
 
-/** What a thing is, in the sidebar's grammar: a task's status mark and key, an epic's layers, a project's face. */
-function Lead({ type, id, label, status }: { type: string; id: string; label?: string | undefined; status?: string | undefined }) {
-  if (type === "task" || type === "run") {
-    return (
-      <span className="memoryLead">
-        {status ? <StatusMark status={status as TaskStatus} iconOnly size="sm" /> : null}
-        <span className="ds-mono">{label ?? id}</span>
-      </span>
-    );
-  }
-  if (type === "epic") return <Icon name="layers" size={14} />;
-  if (type === "project") return <ProjectAvatar project={{ id, name: label ?? id }} size={16} />;
-  return <Icon name="memory" size={14} />;
+/** A ref as the design system names things: a task's key and status, an epic's or project's name. */
+function refLead(r: MemoryRef) {
+  return r.type === "task"
+    ? { type: "task" as const, taskKey: r.label ?? r.id, status: r.status as TaskStatus | undefined }
+    : { type: r.type, id: r.id, name: r.label ?? r.id };
 }
 
-function RefText({ r }: { r: MemoryRef }) {
-  return (
-    <span className="memoryRef">
-      <Lead type={r.type} id={r.id} label={r.label} status={r.status} />
-      {r.type === "task" || r.type === "run" ? null : <span>{r.label ?? r.id}</span>}
-    </span>
-  );
+function isRole(role: string | undefined): role is AgentRole {
+  return role !== undefined && role in ROLE_LABEL && role !== "human" && role !== "system" && role !== "integration";
 }
 
 /** Who wrote it: a person; an agent on the face of the person it worked for; dude, and why. */
+function authorOf(memory: Memory, people: ReturnType<typeof usePeople>): AuthorLineProps["author"] {
+  const a = memory.author;
+  if (a.kind === "system") return { kind: "system", reason: a.reason };
+  const person = (a.personId ? people.byId.get(a.personId) : undefined) ?? { id: a.personId ?? "unknown", name: a.personName || "Someone" };
+  if (a.kind === "agent" && isRole(a.role)) return { kind: "agent", person, role: a.role, task: a.taskKey };
+  return { kind: "person", person };
+}
+
 function Writer({ memory }: { memory: Memory }) {
   const people = usePeople();
-  const a = memory.author;
-  if (a.kind === "system") {
-    return (
-      <span className="memoryDude">
-        <AgentAvatar role="system" size="md" />
-        <span className="memoryText">
-          <span>dude</span>
-          {a.reason ? <span className="memoryDetail">{a.reason}</span> : null}
-        </span>
-      </span>
-    );
-  }
-  const who = (a.personId ? people.byId.get(a.personId) : undefined) ?? { id: a.personId ?? "unknown", name: a.personName || "Someone" };
-  if (a.kind === "agent") {
-    const role = (a.role || "implementer") as "implementer";
-    return <PersonLine person={who} size={24} agent={role} detail={`${roleWord(a.role)}${a.taskKey ? ` on ${a.taskKey}` : ""}`} />;
-  }
-  return <PersonLine person={who} size={24} />;
+  return <AuthorLine author={authorOf(memory, people)} />;
 }
-
-const roleWord = (r?: string) => (r ? r[0]!.toUpperCase() + r.slice(1).replace("_", " ") : "An agent");
 
 const KIND_LABEL: Record<MemoryKind, string> = { fact: "Fact", procedure: "Procedure", note: "Note" };
-
-function ago(iso: string): string {
-  const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
-  if (s < 60) return "just now";
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
-}
 
 function Scope({ memory, scope, projects }: { memory: Memory; scope: MemoryScope; projects: readonly ProjectChoice[] }) {
   if (memory.projectId) {
     const name = projects.find((p) => p.id === memory.projectId)?.name ?? memory.projectId;
-    return <span className="memoryRef"><ProjectAvatar project={{ id: memory.projectId, name }} size={16} /><span className="memoryClip">{name}</span></span>;
+    return <RefLead type="project" id={memory.projectId} name={name} named />;
   }
-  const org = scope.kind === "project" ? scope.organization : scope.name;
-  if (scope.kind === "project") return <span className="memoryInherited"><Icon name="layers" size={12} />From {org}</span>;
-  return <span className="memoryRef"><Icon name="building" size={14} /><span className="memoryClip" title={`All of ${org}`}>All of {org}</span></span>;
+  if (scope.kind === "project") return <SettingSource source="organization" from={scope.organization} />;
+  return <EntityLine size="sm" lead={<Icon name="building" size={14} />} name={`All of ${scope.name}`} />;
 }
 
 // ---------------------------------------------------------------------------
 // Search
 // ---------------------------------------------------------------------------
 
-const TYPE_OPTIONS = [
-  { value: "all", label: "Everything" },
-  { value: "memory", label: "Memories" },
-  { value: "task", label: "Tasks" },
-  { value: "epic", label: "Epics" },
-  { value: "project", label: "Projects" },
-];
+const TYPE_LABEL: Record<SearchType, string> = { memory: "Memories", task: "Tasks", epic: "Epics", project: "Projects" };
+const TYPE_OPTIONS = [{ value: "all", label: "Everything" }, ...SEARCH_TYPES.map((t) => ({ value: t, label: TYPE_LABEL[t] }))];
 
 function SearchPage({ client, scope, projects, version, onOpen }: {
   client: ApiClient;
@@ -244,6 +247,7 @@ function SearchPage({ client, scope, projects, version, onOpen }: {
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const latest = useRef(0);
+  const pending = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const run = useCallback(async () => {
     const q = query.trim();
@@ -273,15 +277,20 @@ function SearchPage({ client, scope, projects, version, onOpen }: {
 
   // Types and project change the search at once; the words, on Enter or a pause.
   useEffect(() => {
-    const t = setTimeout(() => void run(), 300);
-    return () => clearTimeout(t);
+    pending.current = setTimeout(() => void run(), 300);
+    return () => clearTimeout(pending.current);
   }, [run, version]);
 
   return (
     <>
       <SettingsHeader title="Search"
         description="What an agent finds when it calls search_memory: memories, tasks, epics and projects, ranked by their words and their meaning together." />
-      <form className="memoryToolbar" onSubmit={(e) => { e.preventDefault(); void run(); }}>
+      <form className="memoryToolbar" onSubmit={(e) => {
+        e.preventDefault();
+        // Enter searches now; the pause's search is not needed too.
+        clearTimeout(pending.current);
+        void run();
+      }}>
         <Input className="memoryQuery" leading={<Icon name="search" size={14} />} value={query} autoFocus
           placeholder="Ask as an agent would: webhook retries, how to run the tests…" aria-label="Search memory"
           onChange={(e) => setQuery(e.target.value)} data-testid="memory-query" />
@@ -323,13 +332,13 @@ function SearchPage({ client, scope, projects, version, onOpen }: {
   );
 }
 
-/** A snippet as text: no match marks, no Markdown emphasis or code ticks. */
-function plain(snippet: string): string {
-  return snippet.replace(/[⟦⟧]/g, "").replace(/(\*\*|__|`)/g, "");
-}
-
 function found(r: SearchResult): string {
   return r.textRank && r.vectorRank ? "words and meaning" : r.textRank ? "words only" : "meaning only";
+}
+
+function resultLead(r: SearchResult) {
+  if (r.type === "task") return { type: "task" as const, taskKey: r.key ?? r.id, status: r.status as TaskStatus | undefined };
+  return { type: r.type, id: r.id, name: r.title };
 }
 
 function ResultRow({ r, rank, open, projects, model, onOpen }: {
@@ -341,24 +350,24 @@ function ResultRow({ r, rank, open, projects, model, onOpen }: {
   onOpen: (id: string) => void;
 }) {
   const project = r.type !== "project" && r.projectId ? projects.find((p) => p.id === r.projectId)?.name : undefined;
-  const terms = [r.textRank ? { rank: r.textRank } : null, r.vectorRank ? { rank: r.vectorRank } : null].filter((x) => x !== null);
+  const terms = [r.textRank, r.vectorRank].filter((rank) => rank > 0);
   return (
     <SearchResultRow
       rank={rank}
       data-result={`${r.type}/${r.id}`}
       defaultExpanded={open}
-      lead={<Lead type={r.type} id={r.id} label={r.type === "task" ? r.key : r.title} status={r.status} />}
+      lead={resultLead(r)}
       title={r.title}
       badge={!r.embedded && model ? <Badge size="sm" emphasis="subtle" icon="clock">Text only</Badge> : undefined}
       facts={[found(r), ...(project ? [project] : [])]}
     >
-      {r.snippet ? <p className="memorySnippet">{plain(r.snippet)}</p> : null}
+      {r.snippet ? <span>{r.snippet}</span> : null}
       <KeyValueList items={[
         { label: "Words", value: r.textRank ? `#${r.textRank} · ts_rank_cd ${(r.textScore ?? 0).toFixed(3)}` : "not matched", mono: true },
         ...(model ? [
           { label: "Meaning", value: r.vectorRank ? `#${r.vectorRank} · cosine distance ${(r.distance ?? 0).toFixed(3)}` : r.embedded ? "not among the nearest" : "not embedded yet", mono: true },
         ] : []),
-        { label: "Score", value: `${r.score.toFixed(4)} = ${terms.map((t) => `1/(60+${t.rank})`).join(" + ")}`, mono: true },
+        { label: "Score", value: `${r.score.toFixed(4)} = ${terms.map((t) => `1/(60+${t})`).join(" + ")}`, mono: true },
         ...(model ? [{ label: "Indexed", value: r.embedded ? model : "by words; meaning queued", mono: true }] : []),
       ]} />
       {r.type === "memory" ? (
@@ -377,7 +386,7 @@ function agentView(query: string, results: readonly SearchResult[]): string {
     const head = r.type === "task" ? `task ${r.key ?? r.id}${r.status ? ` · ${r.status.replace(/_/g, " ")}` : ""} · ${r.title}`
       : r.type === "memory" ? `memory · ${r.id} · ${r.title}` : `${r.type} · ${r.title}`;
     lines.push(`${i + 1}. ${head}`);
-    const snip = plain(r.snippet).replace(/\s+/g, " ").trim();
+    const snip = r.snippet.replace(/\s+/g, " ").trim();
     if (snip) lines.push(`   ${snip.length > 160 ? snip.slice(0, 159) + "…" : snip}`);
   });
   return lines.join("\n");
@@ -447,7 +456,7 @@ function MemoriesPage({ version, client, scope, projects, embedder, onOpen, add 
             options={[{ value: "all", label: "Everywhere" }, { value: "organization", label: `All of ${org}` }, ...projects.map((p) => ({ value: p.id, label: p.name }))]} />
         ) : null}
         <Select size="sm" aria-label="Written by" value={author} onValueChange={setAuthor}
-          options={[{ value: "any", label: "Written by anyone" }, { value: "person", label: "People" }, { value: "agent", label: "Agents" }, { value: "system", label: "dude" }]} />
+          options={[{ value: "any", label: "Written by anyone" }, { value: "person", label: "People" }, { value: "agent", label: "Agents" }]} />
         <span className="memorySpacer" />
         <Checkbox checked={archived} onCheckedChange={(c) => setArchived(c === true)} label="Show archived" />
       </div>
@@ -471,21 +480,20 @@ function MemoriesPage({ version, client, scope, projects, embedder, onOpen, add 
             {memories.map((m) => {
               const inherited = scope.kind === "project" && !m.projectId;
               return (
-                <Tr key={m.id} interactive className={cx(m.archivedAt && "memoryArchived")} onClick={() => onOpen(m)} data-memory={m.id}>
+                <Tr key={m.id} interactive onClick={() => onOpen(m)} data-memory={m.id}>
                   <Td>
-                    <span className="memoryCell">
-                      <span className="memoryGlyph"><Icon name="memory" size={16} /></span>
-                      <span className="memoryText">
-                        <span className="memoryName">{m.title}</span>
-                        <span className="memoryDetail">
-                          {[KIND_LABEL[m.kind], m.source?.label ? `learned on ${m.source.label}` : null, ago(m.createdAt)].filter(Boolean).join(" · ")}
-                        </span>
-                      </span>
-                      <span className="memorySpacer" />
-                      {m.archivedAt ? <Badge size="sm" icon="archive">Archived</Badge> : null}
-                      {m.index === "waiting" && embedder ? <Badge size="sm" emphasis="subtle" icon="clock">Text only</Badge> : null}
-                      {m.index === "failed" ? <Badge size="sm" tone="danger" icon="alert" title={m.indexNote}>Not embedded</Badge> : null}
-                    </span>
+                    <EntityLine
+                      lead={<Icon name="memory" size={16} />}
+                      name={m.title}
+                      detail={[KIND_LABEL[m.kind], m.source?.label ? `learned on ${m.source.label}` : null, ago(m.createdAt)].filter(Boolean).join(" · ")}
+                      trailing={
+                        <>
+                          {m.archivedAt ? <Badge size="sm" icon="archive">Archived</Badge> : null}
+                          {m.index === "waiting" && embedder && !m.archivedAt ? <Badge size="sm" emphasis="subtle" icon="clock">Text only</Badge> : null}
+                          {m.index === "failed" && !m.archivedAt ? <Badge size="sm" tone="danger" icon="alert" title={m.indexNote}>Not embedded</Badge> : null}
+                        </>
+                      }
+                    />
                   </Td>
                   <Td><Scope memory={m} scope={scope} projects={projects} /></Td>
                   <Td><Writer memory={m} /></Td>
@@ -542,6 +550,12 @@ function MemoryDialog({ client, scope, projects, admin, memory, onClose, onSaved
     projectId: appliesTo === "organization" ? "" : appliesTo,
     about: about.map(({ type, id }) => ({ type, id })),
   };
+  // A lookup by name (a task's key, an epic's title): words, not meaning.
+  const find = useCallback(
+    async (q: string) => (await client.searchMemory({ q, types: "task,epic,project", limit: 8, mode: "words",
+      ...(appliesTo !== "organization" ? { project: appliesTo } : {}) })).results,
+    [client, appliesTo],
+  );
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()} size="lg"
@@ -567,11 +581,11 @@ function MemoryDialog({ client, scope, projects, admin, memory, onClose, onSaved
         </>
       }
     >
-      <div className="memoryForm">
+      <FormStack>
         {memory ? (
           <KeyValueList items={[
             { label: "Written by", value: <Writer memory={memory} /> },
-            ...(memory.source?.label ? [{ label: "Learned on", value: <RefText r={memory.source} /> }] : []),
+            ...(memory.source?.label ? [{ label: "Learned on", value: <RefLead {...refLead(memory.source)} named /> }] : []),
             { label: "Id", value: memory.id, mono: true },
           ]} />
         ) : null}
@@ -580,91 +594,49 @@ function MemoryDialog({ client, scope, projects, admin, memory, onClose, onSaved
         ) : !canChange ? (
           <Callout tone="neutral">Only the person who wrote it, or an organisation admin, changes it.</Callout>
         ) : null}
-        <fieldset disabled={!canChange} className="plainFieldset memoryForm">
-          <Input label="Title" value={title} maxLength={200} autoFocus={!memory} data-testid="memory-title"
-            placeholder="One line an agent can scan in a list of results" onChange={(e) => setTitle(e.target.value)} />
-          <Textarea label="What to remember" rows={5} value={content} maxLength={20000} data-testid="memory-content"
-            placeholder="Markdown. Say it the way you would tell a new colleague." hint="One fact, procedure or note per memory."
-            onChange={(e) => setContent(e.target.value)} />
-          <div className="memoryFormRow">
-            <Select label="Kind" value={kind} onValueChange={(v) => setKind(v as MemoryKind)}
-              options={MEMORY_KINDS.map((k) => ({ value: k, label: KIND_LABEL[k] }))} />
-            <Select label="Applies to" value={appliesTo} onValueChange={setAppliesTo}
-              options={[{ value: "organization", label: `All of ${org}` }, ...projects.map((p) => ({ value: p.id, label: p.name }))]} />
-          </div>
+        <fieldset disabled={!canChange} className="plainFieldset">
+          <FormStack>
+            <Input label="Title" value={title} maxLength={200} autoFocus={!memory} data-testid="memory-title"
+              placeholder="One line an agent can scan in a list of results" onChange={(e) => setTitle(e.target.value)} />
+            <Textarea label="What to remember" rows={5} value={content} maxLength={20000} data-testid="memory-content"
+              placeholder="Markdown. Say it the way you would tell a new colleague." hint="One fact, procedure or note per memory."
+              onChange={(e) => setContent(e.target.value)} />
+            <FormRow>
+              <Select label="Kind" value={kind} onValueChange={(v) => setKind(v as MemoryKind)}
+                options={MEMORY_KINDS.map((k) => ({ value: k, label: KIND_LABEL[k] }))} />
+              <Select label="Applies to" value={appliesTo} onValueChange={setAppliesTo}
+                options={[{ value: "organization", label: `All of ${org}` }, ...projects.map((p) => ({ value: p.id, label: p.name }))]} />
+            </FormRow>
+          </FormStack>
         </fieldset>
         <SettingsSection title="About" actions={canChange ? <Button size="sm" variant="quiet" leadingIcon="plus" onClick={() => setAdding(true)}>Add</Button> : undefined}>
           {about.length ? (
-            <ul className="memoryAbout">
-              {about.map((r) => (
-                <li key={`${r.type}/${r.id}`}>
-                  <RefText r={r} />
-                  {canChange ? <IconButton size="sm" icon="close" label={`Remove ${r.label ?? r.id}`} onClick={() => setAbout(about.filter((x) => x !== r))} /> : null}
-                </li>
-              ))}
-            </ul>
+            <RemovableList
+              items={about.map((r) => ({ id: `${r.type}/${r.id}`, label: r.label ?? r.id, content: <RefLead {...refLead(r)} named /> }))}
+              onRemove={canChange ? (key) => setAbout(about.filter((r) => `${r.type}/${r.id}` !== key)) : undefined} />
           ) : (
-            <p className="muted">Nothing yet. Search can be narrowed to the tasks, epics and projects a memory is about.</p>
+            <p className="muted">Nothing yet: the tasks, epics and projects this memory is about.</p>
           )}
           {adding ? (
-            <AboutPicker client={client} project={appliesTo === "organization" ? undefined : appliesTo}
+            <SearchPicker<SearchResult>
+              label="Find a task, epic or project"
+              placeholder="A task key, an epic, a project"
+              autoFocus
+              find={find}
+              optionKey={(r) => `${r.type}/${r.id}`}
+              renderOption={(r) => <><RefLead {...resultLead(r)} /><span>{r.title}</span></>}
               onPick={(r) => {
-                if (!about.some((x) => x.type === r.type && x.id === r.id)) setAbout([...about, r]);
+                if (r.type !== "memory" && !about.some((x) => x.type === r.type && x.id === r.id)) {
+                  setAbout([...about, { type: r.type, id: r.id, label: r.type === "task" ? r.key : r.title, status: r.status }]);
+                }
                 setAdding(false);
               }}
               onCancel={() => setAdding(false)} />
           ) : null}
         </SettingsSection>
         {problem ? <Callout tone="danger">{problem}</Callout> : null}
-      </div>
+      </FormStack>
     </Dialog>
-  );
-}
-
-/** Find a task, epic or project to add to "About", by the same search. */
-function AboutPicker({ client, project, onPick, onCancel }: {
-  client: ApiClient;
-  project: string | undefined;
-  onPick: (r: MemoryRef) => void;
-  onCancel: () => void;
-}) {
-  const [q, setQ] = useState("");
-  const [found, setFound] = useState<readonly SearchResult[]>([]);
-  useEffect(() => {
-    if (!q.trim()) {
-      setFound([]);
-      return;
-    }
-    let live = true;
-    const t = setTimeout(() => {
-      client.searchMemory({ q, types: "task,epic,project", limit: 8, ...(project ? { project } : {}) }).then(
-        (out) => live && setFound(out.results),
-        () => undefined,
-      );
-    }, 200);
-    return () => {
-      live = false;
-      clearTimeout(t);
-    };
-  }, [client, q, project]);
-  return (
-    <div className="memoryPicker">
-      <Input size="sm" autoFocus leading={<Icon name="search" size={14} />} placeholder="A task key, an epic, a project"
-        aria-label="Find a task, epic or project" value={q} onChange={(e) => setQ(e.target.value)}
-        onKeyDown={(e) => e.key === "Escape" && (e.stopPropagation(), onCancel())} />
-      {found.length ? (
-        <ul className="memoryAbout">
-          {found.map((r) => (
-            <li key={`${r.type}/${r.id}`}>
-              <button type="button" className="memoryPick" onClick={() => onPick({ type: r.type as MemoryRef["type"], id: r.id, label: r.type === "task" ? r.key : r.title, status: r.status })}>
-                <Lead type={r.type} id={r.id} label={r.type === "task" ? r.key : r.title} status={r.status} />
-                <span>{r.title}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-    </div>
   );
 }
 
@@ -672,41 +644,38 @@ function AboutPicker({ client, project, onPick, onCancel }: {
 // Index
 // ---------------------------------------------------------------------------
 
-const waitingTotal = (s: IndexStatus) => s.kinds.reduce((n, k) => n + k.waiting, 0);
-
-const KIND_TEXT: Record<string, [string, string]> = {
+const KIND_TEXT: Record<SearchType, [string, string]> = {
   memory: ["Memories", "title, content"],
   task: ["Tasks", "key, title, goal, acceptance criteria"],
   epic: ["Epics", "title, description"],
   project: ["Projects", "name, description"],
 };
 
-function IndexPage({ client, scope, admin, onMemories }: {
+function IndexPage({ client, scope, admin, index, onMemories }: {
   client: ApiClient;
   scope: MemoryScope;
   admin: boolean;
+  index: IndexSummary;
   onMemories: () => void;
 }) {
-  const project = scope.kind === "project" ? scope.id : undefined;
   const org = scope.kind === "project" ? scope.organization : scope.name;
-  const [status, setStatus] = useState<IndexStatus | null>(null);
-  const [problem, setProblem] = useState<string | null>(null);
+  const { status, problem, reload } = index;
   const [confirm, setConfirm] = useState(false);
   const act = useSave();
-  const load = useCallback(async () => {
-    try {
-      setStatus(await client.memoryIndex(project));
-      setProblem(null);
-    } catch (err) {
-      setProblem(errorText(err));
-    }
-  }, [client, project]);
+  const busy = Boolean(status && (status.waiting > 0 || status.health.error));
+
+  // Embedding happens in the background: watch it land while there is
+  // something to watch, and not while the page is hidden.
   useEffect(() => {
-    void load();
-    // Embedding happens in the background: watch it land.
-    const t = setInterval(() => void load(), 10_000);
+    void reload();
+  }, [reload]);
+  useEffect(() => {
+    if (!busy) return;
+    const t = setInterval(() => {
+      if (!document.hidden) void reload();
+    }, 10_000);
     return () => clearInterval(t);
-  }, [load]);
+  }, [busy, reload]);
 
   // Reindex and Retry act on the organisation's whole index, whatever page
   // they are pressed on: the count they name is the organisation's.
@@ -714,13 +683,13 @@ function IndexPage({ client, scope, admin, onMemories }: {
   useEffect(() => {
     if (!confirm) return;
     let live = true;
-    client.memoryIndex().then((s) => live && setOrgTotal(s.kinds.reduce((n, k) => n + k.total, 0)), () => undefined);
+    client.memoryIndex().then((s) => live && setOrgTotal(s.total), () => undefined);
     return () => {
       live = false;
     };
   }, [client, confirm]);
+
   if (!status) return <div className="centered">{problem ? <Callout tone="danger">{problem}</Callout> : <Spinner label="Loading…" />}</div>;
-  const failed = status.failed;
   const broken = status.health.error;
 
   return (
@@ -731,14 +700,14 @@ function IndexPage({ client, scope, admin, onMemories }: {
       <Card data-testid="memory-embedder">
         <CardHeader title="Embeddings" actions={!status.model ? <Badge>Words only</Badge>
           : broken ? <Badge tone="danger" icon="alert">Failing</Badge>
-          : failed ? <Badge tone="danger" icon="alert">{failed} not embedded</Badge>
-          : waitingTotal(status) ? <Badge icon="clock">Embedding {waitingTotal(status).toLocaleString("en-US")}</Badge>
+          : status.failed ? <Badge tone="danger" icon="alert">{status.failed} not embedded</Badge>
+          : status.waiting ? <Badge icon="clock">Embedding {status.waiting.toLocaleString("en-US")}</Badge>
           : <Badge tone="success" icon="check">Up to date</Badge>} />
         <CardBody>
           {broken ? (
             <Callout tone="danger" data-testid="memory-embedder-failing">
               The embedder has failed since {status.health.since ? ago(status.health.since) : "a moment ago"}: {broken}. Nothing is embedded
-              until it works; search is by words meanwhile. Tried again {status.health.retry ? `at ${new Date(status.health.retry).toLocaleTimeString()}` : "soon"}.
+              until it works; search is by words meanwhile. Tried again {status.health.retry ? `at ${formatTimestamp(status.health.retry, "time-short")}` : "soon"}.
             </Callout>
           ) : null}
           {status.model ? (
@@ -773,8 +742,8 @@ function IndexPage({ client, scope, admin, onMemories }: {
           <TBody>
             {status.kinds.map((k) => (
               <Tr key={k.type} interactive={k.type === "memory"} onClick={k.type === "memory" ? onMemories : undefined}>
-                <Td>{KIND_TEXT[k.type]?.[0] ?? k.type}</Td>
-                <Td muted>{KIND_TEXT[k.type]?.[1]}</Td>
+                <Td>{KIND_TEXT[k.type][0]}</Td>
+                <Td muted>{KIND_TEXT[k.type][1]}</Td>
                 <Td align="right" mono>{k.total.toLocaleString("en-US")}</Td>
                 <Td align="right" mono>{k.embedded.toLocaleString("en-US")}</Td>
                 <Td align="right" mono muted={!k.waiting}>{k.waiting}</Td>
@@ -785,10 +754,10 @@ function IndexPage({ client, scope, admin, onMemories }: {
         </Table>
       </SettingsSection>
 
-      {failed ? (
+      {status.failed ? (
         <SettingsSection title="Not embedded"
           actions={<Button size="sm" variant="secondary" leadingIcon="retry" disabled={act.busy}
-            onClick={() => void act.save(() => client.retryIndex(), () => void load(), "Retrying now")}>
+            onClick={() => void act.save(() => client.retryIndex(), () => void reload(), "Retrying now")}>
             {scope.kind === "project" ? `Retry all of ${org}’s` : "Retry all"}</Button>}>
           <Table density="compact" data-testid="memory-failures">
             <THead>
@@ -804,17 +773,16 @@ function IndexPage({ client, scope, admin, onMemories }: {
               {status.failures.map((f) => (
                 <Tr key={`${f.type}/${f.id}`}>
                   <Td title={f.title}>
-                    <span className="memoryRef">
-                      <Lead type={f.type} id={f.id} />
-                      <span className="memoryName">{f.title}</span>
-                    </span>
+                    <EntityLine size="sm" lead={<RefLead type={f.type} />} name={f.title} />
                   </Td>
                   <Td mono muted title={f.error}>{f.error}</Td>
                   <Td align="right" mono>{f.attempts}</Td>
                   <Td align="right" muted>{ago(f.lastTry)}</Td>
                   <Td align="right" fit>
-                    <IconButton size="sm" icon="retry" label={`Retry ${f.title}`} disabled={act.busy}
-                      onClick={() => void act.save(() => client.retryIndex({ type: f.type, id: f.id }), () => void load(), "Retrying now")} />
+                    <Button size="sm" variant="quiet" leadingIcon="retry" aria-label={`Retry ${f.title}`} disabled={act.busy}
+                      onClick={() => void act.save(() => client.retryIndex({ type: f.type, id: f.id }), () => void reload(), "Retrying now")}>
+                      Retry
+                    </Button>
                   </Td>
                 </Tr>
               ))}
@@ -829,7 +797,7 @@ function IndexPage({ client, scope, admin, onMemories }: {
           <>
             <Button variant="secondary" onClick={() => setConfirm(false)}>Cancel</Button>
             <Button variant="primary" disabled={act.busy}
-              onClick={() => void act.save(() => client.reindexMemory(), () => { setConfirm(false); void load(); }, "Reindexing")}>
+              onClick={() => void act.save(() => client.reindexMemory(), () => { setConfirm(false); void reload(); }, "Reindexing")}>
               Reindex
             </Button>
           </>

@@ -566,17 +566,39 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   `Card` with a `KeyValueList` and its actions in the footer; `SettingRow`
   is for a value you change.
 - **SearchResultRow** is the one way a search result is drawn (Memory's
-  search): ArtifactRow's anatomy — a 32px row, chevron, rank, a lead that
-  says what it is in the sidebar's grammar (a task's `StatusMark` and mono
-  key, the `layers` glyph for an epic, a project's face, the `memory` glyph)
-  and the title; at the end, as muted facts, which search found it ("words
-  and meaning", "words only", "meaning only") and where it lives. Why it
-  ranked where it did is behind the click, as a `KeyValueList` in mono. A
-  score is never a chip or a bar, and matched words are not highlighted in
-  a hue. `SearchResultList` is the ordered list of them.
-- A memory's author is a `PersonLine`: a person as themselves, an agent as
-  the person it worked for with its role's tile on their face and "Role on
-  KEY" beneath; dude's own is the `system` avatar and why it wrote it.
+  search): ArtifactRow's anatomy and open shade — a 32px row, chevron,
+  rank, a `RefLead` for what it is, and the title; at the end, as muted
+  facts, which search found it ("words and meaning", "words only",
+  "meaning only") and where it lives. Why it ranked where it did is behind
+  the click, as a `KeyValueList` in mono. A score is never a chip or a bar,
+  and matched words are not highlighted in a hue. `SearchResultList` is the
+  ordered list of them. The widths before the lead are the row's own
+  custom properties, so the body indents with them.
+- **RefLead** is what a thing is, in the sidebar's grammar, wherever tasks,
+  epics, projects and memories are named side by side: a task's
+  `StatusMark` and its key in mono, the `layers` glyph for an epic, a
+  project's face, the `memory` glyph. `named` says the name after it.
+  The app passes a spec (`{ type, taskKey, status, name }`), never glyphs.
+- **EntityLine** is something named in a row: a face or glyph, its name in
+  strong ink (`--ds-color-text-strong`: the one ink stronger than primary,
+  for a name) over one muted line of detail, and badges at the end. A
+  member in a table, a memory in a list. `PersonLine` is it with a face;
+  **AuthorLine** is whoever wrote something: a person as themselves, an
+  agent as the person it worked for with its role's tile on their face and
+  "Role on KEY" beneath, and dude as the `system` avatar and why it wrote
+  it — at a person's size, so a column of authors lines up. The app draws
+  none of these itself.
+- **RemovableList** is what something is attached to or about, each with
+  a quiet remove button: compact rows 2px apart, a wash on hover, no lines.
+- **SearchPicker** finds one thing by name: an `Input` that is a combobox
+  over a listbox in the menu's row grammar — ↑↓ move, Enter picks, Escape
+  closes the list, then the picker. The app finds (`find`), the picker
+  debounces and keeps only the latest answer. Build a lookup this way, not
+  from a `Select` or a list of bare buttons.
+- A page's own note: a settings page with its own audience (Memory: who
+  may add, who may change) renders its own `SettingsNote`; the frame's
+  default is for the rest. "From <organisation>" is `SettingSource`
+  wherever it appears, a table cell too.
 - **ArtifactPreview** renders by kind: Markdown as `Markdown
   variant="document"`, text and JSON in mono (JSON pretty-printed when it
   parses, as typed when it does not — a half-written result is still worth
@@ -741,7 +763,7 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 
 ### Colour
 
-- Text is always a text token (`text-primary/secondary/muted`), never a tone
+- Text is always a text token (`text-strong` for a name, `text-primary/secondary/muted`), never a tone
   or role colour, except inside a badge/avatar where the component owns it.
 - Role colours identify *who*; tones identify *what state*. Never swap them.
 - The accent is for interaction (links, focus, selection, the one primary
@@ -788,7 +810,9 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | `<FindingRow severity="blocking" status="resolved" … />` | `f.severity.toUpperCase()` in red, struck through when done |
 | `<Breadcrumb items={[project, epic, key]} />` in the header | a ghost `Back` button under the content |
 | a settings page's sub-pages as `items` of its `SettingsNavItem` | `Tabs` inside a settings page |
-| `<SearchResultRow rank={1} lead="memory" facts={["words and meaning"]} />` | a score chip and a progress bar on every result |
+| `<SearchResultRow rank={1} lead={{ type: "memory" }} facts={["words and meaning"]} />` | a score chip and a progress bar on every result |
+| `<EntityLine lead={face} name={…} detail={…} />`, `<AuthorLine author={…} />` | a face and two spans styled in the app's CSS |
+| `<SearchPicker find={…} onPick={…} />` | an `Input` over a list of bare buttons |
 
 ## Components
 
@@ -900,6 +924,11 @@ EmptyState, ScrollArea.
   `ARTIFACT_KIND_SPECS` are the vocabulary.
 - **SearchResultRow / SearchResultList** — a ranked search result, in
   ArtifactRow's anatomy, expandable to why it ranked where it did.
+- **RefLead** — a task, epic, project or memory, as the sidebar draws it.
+- **EntityLine / PersonLine / AuthorLine** — a named thing, a person, an
+  author (person, agent for a person, or dude) in a row.
+- **RemovableList** — attached things, each removable.
+- **SearchPicker** — a combobox that finds one thing by name.
 
 `src/components/` — live work:
 

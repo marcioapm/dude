@@ -1,0 +1,32 @@
+/*
+ * RemovableList: compact rows 2px apart, as artifacts are; a hover wash,
+ * no lines.
+ */
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-compact);
+  padding: 0 var(--ds-space-4) 0 var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+}
+.item:hover {
+  background: var(--ds-color-hover-wash);
+}
+.content {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-width: 0;
+}

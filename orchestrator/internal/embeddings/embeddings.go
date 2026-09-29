@@ -128,11 +128,9 @@ func (c *Client) Embed(ctx context.Context, texts []string, purpose Purpose) ([]
 		return nil, err
 	}
 	if res.StatusCode != http.StatusOK {
-		msg := strings.TrimSpace(string(raw))
-		if len(msg) > 300 {
-			msg = msg[:300] + "…"
-		}
-		return nil, &Error{Status: res.StatusCode, Body: msg}
+		// The body goes to the log, not to people (the indexer describes
+		// failures in its own words), so it is only bounded here.
+		return nil, &Error{Status: res.StatusCode, Body: string(bytes.TrimSpace(raw[:min(len(raw), 2000)]))}
 	}
 	var out response
 	if err := json.Unmarshal(raw, &out); err != nil {

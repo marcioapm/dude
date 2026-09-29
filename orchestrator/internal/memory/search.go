@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -18,9 +19,6 @@ type Query struct {
 	Project string
 	// Types to include: memory, task, epic, project. Empty: all.
 	Types []string
-	// About narrows memories to those about any of these ids (tasks, epics,
-	// projects); other types are unaffected.
-	About []string
 	Limit int
 }
 
@@ -60,14 +58,6 @@ const rrfK = 60
 
 // candidates is how far down each list fusion looks.
 const candidates = 50
-
-// Search ranks by words and by meaning apart, then fuses the two by rank.
-// It embeds the query itself: for a caller without a transaction open.
-// Inside one, embed first (EmbedQuery) and call Ranked, so no connection
-// is held while the embedder answers.
-func Search(ctx context.Context, tx pgx.Tx, e embeddings.Embedder, q Query) (Outcome, error) {
-	return Ranked(ctx, tx, EmbedQuery(ctx, e, q.Text), q)
-}
 
 // Embedded is a query's vector, or why there is none.
 type Embedded struct {
@@ -155,14 +145,11 @@ func Ranked(ctx context.Context, tx pgx.Tx, emb Embedded, q Query) (Outcome, err
 	}
 	types := q.Types
 	if len(types) == 0 {
-		types = []string{"memory", "task", "epic", "project"}
+		types = Types
 	}
 	// A document is in scope when it is the project's, or the whole
-	// organization's (memories only), and a memory, when About is given, is
-	// about one of those.
-	const scope = `source_type = ANY($2) AND ($3 = '' OR project_id = $3 OR project_id IS NULL)
-		AND (coalesce(cardinality($4::text[]), 0) = 0 OR source_type <> 'memory' OR EXISTS (
-			SELECT 1 FROM memory_refs r WHERE r.memory_id = d.source_id AND r.ref_id = ANY($4)))`
+	// organization's (memories only).
+	const scope = `source_type = ANY($2) AND ($3 = '' OR project_id = $3 OR project_id IS NULL)`
 	any, none := wordQuery(q.Text)
 
 	byKey := map[string]*Result{}
@@ -176,30 +163,28 @@ func Ranked(ctx context.Context, tx pgx.Tx, emb Embedded, q Query) (Outcome, err
 		return r
 	}
 
-	// $6 excludes: a document with any -word is out of both lists.
-	const excluded = `($6 = '' OR NOT tsv @@ (websearch_to_tsquery('english', $6) || websearch_to_tsquery('simple', $6)))`
+	// $4 excludes: a document with any -word is out of both lists.
+	const excluded = `($4 = '' OR NOT tsv @@ (websearch_to_tsquery('english', $4) || websearch_to_tsquery('simple', $4)))`
+	// Ranked by rank alone: what is shown (snippet, key) is read for the
+	// few results that survive fusion, not for every candidate.
 	rows, err := tx.Query(ctx, `WITH q AS (SELECT websearch_to_tsquery('english', $1) || websearch_to_tsquery('simple', $1) AS q)
-		SELECT source_type, source_id, coalesce(project_id, ''), title,
-			ts_headline('english', body, q.q, 'MaxFragments=1,MaxWords=24,MinWords=8,StartSel=⟦,StopSel=⟧'),
-			ts_rank_cd(tsv, q.q), embedding IS NOT NULL
+		SELECT source_type, source_id, ts_rank_cd(tsv, q.q)
 		FROM search_documents d, q
 		WHERE numnode(q.q) > 0 AND tsv @@ q.q AND `+excluded+` AND `+scope+`
-		ORDER BY 6 DESC, updated_at DESC LIMIT $5`, any, types, q.Project, q.About, candidates, none)
+		ORDER BY 3 DESC, updated_at DESC LIMIT $5`, any, types, q.Project, none, candidates)
 	if err != nil {
 		return out, err
 	}
 	rank := 0
 	for rows.Next() {
-		var typ, id, project, title, snippet string
+		var typ, id string
 		var score float64
-		var embedded bool
-		if err := rows.Scan(&typ, &id, &project, &title, &snippet, &score, &embedded); err != nil {
+		if err := rows.Scan(&typ, &id, &score); err != nil {
 			rows.Close()
 			return out, err
 		}
 		rank++
 		r := take(typ, id)
-		r.ProjectID, r.Title, r.Snippet, r.Embedded = project, title, snippet, embedded
 		r.TextRank, r.TextScore = rank, score
 	}
 	rows.Close()
@@ -210,38 +195,31 @@ func Ranked(ctx context.Context, tx pgx.Tx, emb Embedded, q Query) (Outcome, err
 	if emb.Vector != nil {
 		out.Mode, out.Model = "hybrid", emb.Model
 		// The HNSW index returns its nearest before the organization and
-		// scope filter them; let it keep looking until enough are left.
-		// pgvector before 0.8 has no such setting: without it, search still
-		// works, and may find fewer by meaning in a large index.
-		if _, err := tx.Exec(ctx, `DO $$ BEGIN
-				IF (SELECT string_to_array(extversion, '.')::int[] >= '{0,8}' FROM pg_extension WHERE extname = 'vector') THEN
-					SET LOCAL hnsw.iterative_scan = relaxed_order;
-				END IF;
-			END $$`); err != nil {
-			return out, err
+		// scope filter them; let it keep looking until enough are left
+		// (pgvector 0.8+; before it, search works and finds fewer).
+		if iterativeScan(ctx, tx) {
+			if _, err := tx.Exec(ctx, `SET LOCAL hnsw.iterative_scan = relaxed_order`); err != nil {
+				return out, err
+			}
 		}
-		rows, err := tx.Query(ctx, `SELECT source_type, source_id, coalesce(project_id, ''), title, left(body, 200),
-				embedding <=> $1::halfvec
+		rows, err := tx.Query(ctx, `SELECT source_type, source_id, embedding <=> $1::halfvec
 			FROM search_documents d
-			WHERE embedding IS NOT NULL AND embedding_model = $7 AND `+excluded+` AND `+scope+`
-			ORDER BY embedding <=> $1::halfvec LIMIT $5`, Vector(emb.Vector), types, q.Project, q.About, candidates, none, emb.Model)
+			WHERE embedding IS NOT NULL AND embedding_model = $6 AND `+excluded+` AND `+scope+`
+			ORDER BY embedding <=> $1::halfvec LIMIT $5`, Vector(emb.Vector), types, q.Project, none, candidates, emb.Model)
 		if err != nil {
 			return out, err
 		}
 		rank := 0
 		for rows.Next() {
-			var typ, id, project, title, body string
+			var typ, id string
 			var dist float64
-			if err := rows.Scan(&typ, &id, &project, &title, &body, &dist); err != nil {
+			if err := rows.Scan(&typ, &id, &dist); err != nil {
 				rows.Close()
 				return out, err
 			}
 			rank++
 			r := take(typ, id)
-			if r.TextRank == 0 {
-				r.ProjectID, r.Title, r.Snippet = project, title, body
-			}
-			r.Embedded, r.VectorRank, r.Distance = true, rank, dist
+			r.VectorRank, r.Distance = rank, dist
 		}
 		rows.Close()
 		if err := rows.Err(); err != nil {
@@ -269,5 +247,68 @@ func Ranked(ctx context.Context, tx pgx.Tx, emb Embedded, q Query) (Outcome, err
 	if len(out.Results) > q.Limit {
 		out.Results = out.Results[:q.Limit]
 	}
-	return out, nil
+	return out, show(ctx, tx, any, out.Results)
+}
+
+// show reads what is shown of the results that survived: title, project,
+// a snippet around the words (or the start, found by meaning alone), and a
+// task's key and status. One query, for at most Limit documents.
+func show(ctx context.Context, tx pgx.Tx, words string, results []Result) error {
+	if len(results) == 0 {
+		return nil
+	}
+	types, ids := make([]string, len(results)), make([]string, len(results))
+	at := map[string]int{}
+	for i, r := range results {
+		types[i], ids[i] = r.Type, r.ID
+		at[r.Type+"/"+r.ID] = i
+	}
+	rows, err := tx.Query(ctx, `WITH q AS (SELECT websearch_to_tsquery('english', $3) || websearch_to_tsquery('simple', $3) AS q)
+		SELECT d.source_type, d.source_id, coalesce(d.project_id, ''), d.title, d.embedding IS NOT NULL,
+			CASE WHEN numnode(q.q) > 0 AND d.tsv @@ q.q
+				THEN ts_headline('english', d.body, q.q, 'MaxFragments=1,MaxWords=24,MinWords=8,StartSel="",StopSel=""')
+				ELSE left(d.body, 200) END,
+			coalesce(p.key_prefix || '-' || t.number, ''), coalesce(t.status::text, '')
+		FROM unnest($1::text[], $2::text[]) u(typ, id)
+		JOIN search_documents d ON d.source_type = u.typ AND d.source_id = u.id
+		LEFT JOIN tasks t ON u.typ = 'task' AND t.id = u.id
+		LEFT JOIN projects p ON p.id = t.project_id, q`, types, ids, words)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var typ, id, project, title, snippet, key, status string
+		var embedded bool
+		if err := rows.Scan(&typ, &id, &project, &title, &embedded, &snippet, &key, &status); err != nil {
+			return err
+		}
+		r := &results[at[typ+"/"+id]]
+		r.ProjectID, r.Snippet, r.Embedded, r.Key, r.Status = project, markdownless.Replace(snippet), embedded, key, status
+		// The index titles a task "KEY title"; the key has its own field.
+		r.Title = strings.TrimPrefix(title, key+" ")
+	}
+	return rows.Err()
+}
+
+// markdownless drops Markdown's emphasis and code marks from a snippet: a
+// memory is Markdown, and a snippet is read as a line of text.
+var markdownless = strings.NewReplacer("**", "", "__", "", "`", "")
+
+// Types are what the index holds, in the order pages list them.
+var Types = []string{"memory", "task", "epic", "project"}
+
+var (
+	scanOnce sync.Once
+	scanOK   bool
+)
+
+// iterativeScan: whether this pgvector has hnsw.iterative_scan (0.8+).
+// Asked once; the extension does not change under a running process.
+func iterativeScan(ctx context.Context, tx pgx.Tx) bool {
+	scanOnce.Do(func() {
+		_ = tx.QueryRow(ctx, `SELECT coalesce((SELECT string_to_array(extversion, '.')::int[] >= '{0,8}'
+			FROM pg_extension WHERE extname = 'vector'), false)`).Scan(&scanOK)
+	})
+	return scanOK
 }
