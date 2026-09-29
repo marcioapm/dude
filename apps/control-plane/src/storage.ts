@@ -16,38 +16,91 @@ let roleCredentials: Credentials | undefined;
 let roleS3: S3Client | undefined;
 let refresh: Promise<Credentials> | undefined;
 
+type Operation = "put" | "get" | "delete";
+
+/**
+ * The only error storage lets out besides HttpError. Its fields are the
+ * operation, the metadata HTTP status and an S3 or metadata error code: raw
+ * S3 and metadata errors can carry response bodies, header values or URLs,
+ * and those can hold credentials.
+ */
+export class StorageError extends Error {
+  constructor(
+    readonly operation: Operation,
+    readonly status?: number,
+    readonly code?: string,
+  ) {
+    super(`photo storage ${operation} failed${status ? ` (HTTP ${status})` : ""}${code ? ` (${code})` : ""}`);
+    this.name = "StorageError";
+  }
+}
+
+// A failure inside storage, with a fixed reason and the metadata HTTP status only.
+class Failure extends Error {
+  constructor(readonly reason: string, readonly status?: number) {
+    super(reason);
+  }
+}
+
+const S3_CODE = /^[A-Za-z0-9.]{1,64}$/;
+
+function safeError(operation: Operation, error: unknown): Error {
+  if (error instanceof HttpError) return error;
+  if (error instanceof Failure) return new StorageError(operation, error.status, error.reason);
+  const code = (error as { code?: unknown } | null)?.code;
+  if ((error as { name?: unknown } | null)?.name === "S3Error" && typeof code === "string" && S3_CODE.test(code)) {
+    return new StorageError(operation, undefined, code);
+  }
+  return new StorageError(operation);
+}
+
+// Visible ASCII only: no CR, LF or other characters invalid in a header value.
+const IMDS_TOKEN = /^[\x21-\x7e]{1,1024}$/;
+
 async function metadata(path: string, token?: string, method = "GET"): Promise<Response> {
   const endpoint = process.env.AWS_EC2_METADATA_SERVICE_ENDPOINT || "http://169.254.169.254";
   for (let attempt = 0; attempt < 2; attempt++) {
+    let response: Response;
     try {
-      const response = await fetch(`${endpoint}${path}`, {
+      response = await fetch(`${endpoint}${path}`, {
         method,
         headers: token ? { "X-aws-ec2-metadata-token": token } : { "X-aws-ec2-metadata-token-ttl-seconds": "21600" },
         signal: AbortSignal.timeout(1500),
       });
-      if (response.ok) return response;
-      if (response.status < 500 || attempt === 1) throw new Error(`EC2 metadata request failed (${response.status})`);
-    } catch (error) {
-      if (attempt === 1 || (error instanceof Error && error.message.startsWith("EC2 metadata request failed"))) throw error;
+    } catch {
+      if (attempt === 1) throw new Failure("MetadataUnreachable");
+      continue;
     }
+    if (response.ok) return response;
+    if (response.status < 500 || attempt === 1) throw new Failure("MetadataRequestFailed", response.status);
   }
-  throw new Error("EC2 metadata unavailable");
+  throw new Failure("MetadataUnreachable");
+}
+
+async function metadataText(response: Response): Promise<string> {
+  try { return await response.text(); } catch { throw new Failure("MetadataUnreachable"); }
 }
 
 async function loadRoleCredentials(): Promise<Credentials> {
   // IMDSv2 requires a token before either role or credential endpoint is accessible.
-  const token = await (await metadata("/latest/api/token", undefined, "PUT")).text();
-  if (!token) throw new Error("EC2 metadata returned an empty token");
-  const role = (await (await metadata("/latest/meta-data/iam/security-credentials/", token)).text()).trim();
-  if (!role || role.includes("/") || role.includes("\n")) throw new Error("EC2 metadata returned an invalid role");
-  const data: unknown = await (await metadata(`/latest/meta-data/iam/security-credentials/${encodeURIComponent(role)}`, token)).json();
-  if (!data || typeof data !== "object") throw new Error("EC2 metadata returned invalid credentials");
+  const token = await metadataText(await metadata("/latest/api/token", undefined, "PUT"));
+  if (!IMDS_TOKEN.test(token)) throw new Failure("MetadataTokenInvalid");
+  const role = (await metadataText(await metadata("/latest/meta-data/iam/security-credentials/", token))).trim();
+  if (!role || role.includes("/") || role.includes("\n")) throw new Failure("MetadataRoleInvalid");
+  let data: unknown;
+  try {
+    data = JSON.parse(await metadataText(await metadata(`/latest/meta-data/iam/security-credentials/${encodeURIComponent(role)}`, token)));
+  } catch (error) {
+    if (error instanceof Failure) throw error;
+    throw new Failure("MetadataCredentialsInvalid");
+  }
+  if (!data || typeof data !== "object") throw new Failure("MetadataCredentialsInvalid");
   const value = data as Record<string, unknown>;
   const expires = Date.parse(String(value.Expiration));
   if (value.Code !== "Success" || typeof value.AccessKeyId !== "string" || !value.AccessKeyId ||
       typeof value.SecretAccessKey !== "string" || !value.SecretAccessKey ||
       typeof value.Token !== "string" || !value.Token || !Number.isFinite(expires) || expires <= Date.now()) {
-    throw new Error("EC2 metadata returned invalid credentials");
+    throw new Failure("MetadataCredentialsInvalid");
   }
   return { accessKeyId: value.AccessKeyId, secretAccessKey: value.SecretAccessKey, sessionToken: value.Token, expires };
 }
@@ -102,7 +155,7 @@ async function roleClient(bucket: string): Promise<S3Client> {
       if (!usable(roleCredentials, Date.now())) throw error;
     }
   }
-  if (!usable(roleCredentials, Date.now())) throw new Error("EC2 role credentials unavailable");
+  if (!usable(roleCredentials, Date.now())) throw new Failure("CredentialsUnavailable");
   return roleS3!;
 }
 
@@ -125,7 +178,7 @@ async function required(): Promise<S3Client> {
   const bucket = process.env.DUDE_S3_BUCKET;
   if (!bucket) throw new HttpError(503, "photo storage is not configured (DUDE_S3_BUCKET)", "storage_unconfigured");
   if (process.env.DUDE_S3_ACCESS_KEY || process.env.DUDE_S3_SECRET_KEY) {
-    if (!process.env.DUDE_S3_ACCESS_KEY || !process.env.DUDE_S3_SECRET_KEY) throw new Error("Incomplete DUDE_S3 credentials");
+    if (!process.env.DUDE_S3_ACCESS_KEY || !process.env.DUDE_S3_SECRET_KEY) throw new Failure("CredentialsIncomplete");
     return configured()!;
   }
   return roleClient(bucket);
@@ -133,7 +186,11 @@ async function required(): Promise<S3Client> {
 
 /** Store an object; it is never rewritten: a new photo is a new key. */
 export async function putObject(key: string, bytes: Uint8Array, type: string): Promise<void> {
-  await (await required()).write(key, bytes, { type });
+  try {
+    await (await required()).write(key, bytes, { type });
+  } catch (err) {
+    throw safeError("put", err);
+  }
 }
 
 /** An object's bytes, or null when there is no such object. */
@@ -141,8 +198,9 @@ export async function getObject(key: string): Promise<ArrayBuffer | null> {
   try {
     return await (await required()).file(key).arrayBuffer();
   } catch (err) {
-    if ((err as { code?: string }).code === "NoSuchKey") return null;
-    throw err;
+    const error = safeError("get", err);
+    if (error instanceof StorageError && error.code === "NoSuchKey") return null;
+    throw error;
   }
 }
 
@@ -152,6 +210,6 @@ export async function deleteObject(key: string): Promise<void> {
   try {
     await (await required()).delete(key);
   } catch (err) {
-    console.error(`storage: could not delete ${key}:`, err);
+    console.error(`storage: could not delete ${key}: ${safeError("delete", err).message}`);
   }
 }
