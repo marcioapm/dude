@@ -261,7 +261,7 @@ export class FixtureClient extends ApiClient {
     const name = recipe ? recipe.name : (input as { name: string }).name;
     if (this.#servers.servers.some((s) => s.name === name)) throw new ApiError(409, "name_taken", `${name} is already on this run.`);
     const port = recipe ? recipe.port : (input as { port: number }).port;
-    const given = recipe ? `exec ${recipe.command}` : (input as { command?: string | string[] | null }).command;
+    const given = recipe ? recipe.command : (input as { command?: string | string[] | null }).command;
     const command = Array.isArray(given) ? given : given ? ["sh", "-c", given] : null;
     const suffix = this.#servers.run?.luxRunId.replace(/^run_/, "") ?? RUN_SUFFIX;
     const added = server(name, port, {

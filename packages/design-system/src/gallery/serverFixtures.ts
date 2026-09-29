@@ -66,7 +66,7 @@ export function server(name: string, port: number, patch: Partial<RunServer> & {
   return {
     name,
     port,
-    command: ["sh", "-c", `exec ${serverRecipes.find((r) => r.name === name)?.command ?? "true"}`],
+    command: ["sh", "-c", `${serverRecipes.find((r) => r.name === name)?.command ?? "true"}`],
     workdir: serverRecipes.find((r) => r.name === name)?.workdir ?? "",
     env: {},
     fromSpec: false,

@@ -24,7 +24,7 @@ const MIN = 60_000;
 
 function server(patch: Partial<RunServer> & { state: RunServer["state"] }): RunServer {
   return {
-    name: "web", port: 3000, command: ["sh", "-c", "exec npm run dev"], workdir: "apps/web", env: {}, fromSpec: false,
+    name: "web", port: 3000, command: ["sh", "-c", "npm run dev"], workdir: "apps/web", env: {}, fromSpec: false,
     since: at(0), readySince: null, stopReason: null, stoppedEpoch: null, epoch: 1, url: "https://web-abc.lux.example",
     ...patch,
   };

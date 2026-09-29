@@ -56,7 +56,7 @@ func serverState(c *lux.HTTPClient, run, name string) lux.Server {
 
 var preview = lux.Spec{
 	Image:    lux.Image{Ref: "node:22"},
-	Workload: lux.Workload{Adapter: "generic", Command: []string{"sleep", "infinity"}, Servers: []lux.ServerInput{{Name: "web", Port: 3000, Command: []string{"sh", "-c", "exec npm run dev"}}}},
+	Workload: lux.Workload{Adapter: "generic", Command: []string{"sleep", "infinity"}, Servers: []lux.ServerInput{{Name: "web", Port: 3000, Command: []string{"sh", "-c", "npm run dev"}}}},
 }
 
 func TestAServerStartsThenIsReadyAndSaysSoOnTheStream(t *testing.T) {
@@ -72,7 +72,7 @@ func TestAServerStartsThenIsReadyAndSaysSoOnTheStream(t *testing.T) {
 	}
 
 	// One added at runtime starts at once (it has a command) …
-	if _, err := c.AddServer(ctx, run, lux.ServerInput{Name: "api", Port: 8080, Command: []string{"sh", "-c", "exec api"}}); err != nil {
+	if _, err := c.AddServer(ctx, run, lux.ServerInput{Name: "api", Port: 8080, Command: []string{"sh", "-c", "api"}}); err != nil {
 		t.Fatal(err)
 	}
 	if st := serverState(c, run, "api").State; st != "starting" {
