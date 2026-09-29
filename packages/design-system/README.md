@@ -648,7 +648,9 @@ shrinking something already small makes it cramped, not dense:
 | prose measure (`measure-message`) | 70ch | 72ch | `ch` follows the font, so two more characters a line; not chat turns, which span their column |
 
 Everything else is shared: icons, `control-sm` and `row-compact` (28, the
-floor), `text-2xs`/`xs`/`sm`/`nav` (11/12/13/14) and `text-mono` (13), badge
+floor for anything standing on its own; a `Segmented` option sits inside a
+track that is the control's height, as a button is, so its option is that
+less the track: 28 comfortable, 26 compact), `text-2xs`/`xs`/`sm`/`nav` (11/12/13/14) and `text-mono` (13), badge
 and chip heights and padding, the document measure, the
 2–6px inner gaps, the tree indent, the mark and float radii, focus rings.
 `src/tokens/density.ts` is the list; `test/density.test.ts` holds it to

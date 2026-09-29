@@ -123,7 +123,7 @@ export function ThinkingBlock({
               {live ? <span className={styles["caret"]} aria-hidden /> : null}
             </div>
           ) : (
-            <Markdown source={text} streaming={live} />
+            <Markdown source={text} streaming={live} fill />
           )}
         </div>
       ) : null}

@@ -4,7 +4,9 @@ import { cx } from "../util/cx.ts";
 import { IDENTITY_SLOTS } from "../tokens/palette.ts";
 import { Icon } from "../icons/index.tsx";
 import { ROLE_ICON, ROLE_LABEL } from "./AgentAvatar.tsx";
+import { stringSlot } from "../util/slot.ts";
 import styles from "./PersonAvatar.module.css";
+
 
 /** Anyone with a face: a name, and a photo when there is one. */
 export interface Person {
@@ -28,12 +30,6 @@ export function identitySlot(who: { readonly id?: string | undefined; readonly n
   return stringSlot((who.id ?? who.name).trim().toLowerCase(), IDENTITY_SLOTS);
 }
 
-/** A string's steady place among `slots` (djb2): the same string, the same place. */
-export function stringSlot(key: string, slots: number): number {
-  let h = 5381;
-  for (let i = 0; i < key.length; i++) h = ((h << 5) + h + key.charCodeAt(i)) | 0;
-  return Math.abs(h) % slots;
-}
 
 /**
  * Up to two initials. "Márcio Martins" → "MM"; "marcio" → "MA";

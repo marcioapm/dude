@@ -21,6 +21,10 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
+/* A chat turn: the transcript's column is its width (whatever the variant). */
+.root.fill {
+  --md-measure: none;
+}
 .long,
 .document {
   line-height: var(--ds-leading-prose);

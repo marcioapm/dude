@@ -204,7 +204,7 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
   );
   return (
     <div className={cx(styles["root"], className)} {...rest}>
-      {toolbarIn ? createPortal(tools, toolbarIn) : (
+      {toolbarIn ? createPortal(<div className={cx(styles["head"], styles["headIn"])}>{tools}</div>, toolbarIn) : (
         <div className={styles["head"]}>
           {leading}
           {tools}
