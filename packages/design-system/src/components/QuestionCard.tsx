@@ -78,6 +78,8 @@ function toDate(v: string | number | Date | null | undefined): Date | null {
  *             `ChatMessage intent="answer"` turn that follows; the card
  *             does not quote it, so nothing in the transcript is said twice.
  */
+const stop = (e: { stopPropagation(): void }) => e.stopPropagation();
+
 export function QuestionCard({ role, name, text, options, askedAt, answeredAt, dismissed, onChoose, waitingOn, verb = "answer", isNew, className, ...rest }: QuestionCardProps) {
   const takeOver = `Take over this task to ${verb}`;
   const answered = toDate(answeredAt);
@@ -170,14 +172,23 @@ export function QuestionCard({ role, name, text, options, askedAt, answeredAt, d
         {someoneElse ? (
           <p className={styles["waitingOn"]} data-testid="waiting-on">
             <Icon name="hand" size={12} />
-            Waiting for {waitingOn} to answer
-            {/* The chips' hint, for whoever does not hover them. */}
-            <span className="ds-sr-only">. {takeOver}.</span>
+            Waiting for {waitingOn} to {verb}
+            {/* How to make it yours, in words everyone sees: mouse, keyboard, touch, screen reader. */}
+            <span className={styles["takeOver"]} data-testid="take-over">· {takeOver}</span>
           </p>
         ) : null}
         {hasOptions ? (
-          // Someone else's: shown but not offered, and hovering them says how to make them yours.
-          someoneElse ? <Tooltip content={takeOver}>{list}</Tooltip> : list
+          // Someone else's: shown but not offered; hovering them says it again,
+          // and a click (which does nothing) leaves the hint open rather than closing it.
+          someoneElse ? (
+            <Tooltip content={takeOver} side="bottom">
+              {/* A press on the chips does nothing, so it must not close the words that say why:
+                  it stops at the chips, before the trigger that would close the hint. */}
+              <span className={styles["optionsTrigger"]}>
+                <span onPointerDown={stop} onClick={stop}>{list}</span>
+              </span>
+            </Tooltip>
+          ) : list
         ) : null}
       </div>
     </article>

@@ -422,6 +422,8 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
             <QuestionCard role="reviewer" name="reviewer-2" text="The PR body says the route's retry is a product decision. Is there a task for it, or should I file one?" askedAt={Date.now() - 38_000} />
             <Label>waiting with onChoose — the chips become one-click replies</Label>
             <QuestionCard role="orchestrator" text="Should 4xx responses be retried? The existing code retries everything, but 4xx usually means our request is wrong." options={["Retry 5xx and network only", "Retry everything (current behaviour)"]} askedAt={Date.now() - 125_000} onChoose={() => undefined} />
+            <Label>waiting on someone else — the note says how to make it yours; the choices are muted, and hovering them says it again</Label>
+            <QuestionCard role="implementer" text={QUESTION_TEXT} options={QUESTION_OPTIONS} askedAt={Date.now() - 90_000} waitingOn="Ana" onChoose={() => undefined} data-testid="q-someone-else" />
             <Label>answered — calm; the answer is the next turn, not quoted here</Label>
             <QuestionCard role="implementer" text={QUESTION_TEXT} options={QUESTION_OPTIONS} askedAt={at(45_600)} answeredAt={at(45_600 + 4 * 60_000 + 12_000)} />
             <ChatMessage role="human" name="marcio" intent="answer" inReplyTo="Should I leave the route's retry in place, or fold it into this change?" content={ANSWER_TEXT} startedAt={at(45_600 + 4 * 60_000 + 12_000)} deliveredAt={at(45_600 + 4 * 60_000 + 13_000)} />
