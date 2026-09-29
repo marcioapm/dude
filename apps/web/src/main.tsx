@@ -30,13 +30,10 @@ const KEY_STORAGE = "dude.apiKey";
  * The mockups' world in place of the API, outside production: loaded only
  * when asked for, so a production build carries none of it.
  */
-interface Fixtures {
-  client: ApiClient;
-}
-async function loadFixtures(scenario: FixtureScenario): Promise<Fixtures> {
+async function fixtureClient(scenario: FixtureScenario): Promise<ApiClient> {
   const { FixtureClient, installFixtureStream } = await import("./fixtures/client.ts");
   installFixtureStream();
-  return { client: new FixtureClient(scenario) };
+  return new FixtureClient(scenario);
 }
 
 function Root() {
@@ -45,9 +42,9 @@ function Root() {
   const [refused, setRefused] = useState(false);
   // Outside production, `?fixtures=a` … `e` answers the API from the mockups' world.
   const scenario = useMemo(() => (import.meta.env.DEV || import.meta.env.MODE === "fixtures" ? fixtureScenario() : null), []);
-  const [fixtures, setFixtures] = useState<Fixtures | null>(null);
+  const [fixtures, setFixtures] = useState<ApiClient | null>(null);
   useEffect(() => {
-    if (scenario) void loadFixtures(scenario).then(setFixtures);
+    if (scenario) void fixtureClient(scenario).then(setFixtures);
   }, [scenario]);
 
   // Same-origin in the browser (Vite proxies /v1), loopback in the desktop
@@ -57,7 +54,7 @@ function Root() {
   // instance per render would tear down and re-establish the event stream.
   // Declared before the early return: hooks must run in the same order on
   // every render, and signing out changes which branch is taken.
-  const client = useMemo(() => fixtures?.client ?? new ApiClient({ apiKey }), [apiKey, fixtures]);
+  const client = useMemo(() => fixtures ?? new ApiClient({ apiKey }), [apiKey, fixtures]);
   const keyRefused = useCallback(() => {
     localStorage.removeItem(KEY_STORAGE);
     setRefused(true);
