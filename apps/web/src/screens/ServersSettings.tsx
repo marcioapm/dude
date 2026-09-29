@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { HostChips, ServerRecipeDialog, ServerRecipeTable, SettingRow, SettingSource, SettingsHeader, SettingsMeta, SettingsNote, SettingsSection } from "@dude/design-system/components";
 import { formatTimestamp, Icon, PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES } from "@dude/design-system";
 import { Button, Callout, Dialog, EmptyState, FormActions, Input, RowMenu, Select, Spinner } from "@dude/design-system/primitives";
-import type { PreviewSettings, Recipe, RecipeInput } from "@dude/domain";
+import { egressProblem, type PreviewSettings, type Recipe, type RecipeInput } from "@dude/domain";
 import type { ApiClient, ProjectDetail } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
 
@@ -104,7 +104,7 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, onCount
           <ImageField key={previewRound} value={previews.image} fallback={project.runtimeImage} disabled={!canEdit || previewSave.busy} onSave={(image) => savePreviews({ image }, "Image saved")} />
         </SettingRow>
         <SettingRow label="Egress allowlist" help="Hosts a preview run may reach, beyond the repository. Everything else is refused; * allows anywhere.">
-          <HostChips hosts={previews.egress} disabled={!canEdit || previewSave.busy} onChange={(egress) => savePreviews({ egress }, "Allowlist saved")} data-testid="preview-egress" />
+          <HostChips hosts={previews.egress} validate={egressProblem} disabled={!canEdit || previewSave.busy} onChange={(egress) => savePreviews({ egress }, "Allowlist saved")} data-testid="preview-egress" />
         </SettingRow>
         <SettingRow label="Idle timeout" help="With no request for this long, the preview run is parked. Starting a server wakes it."
           source={previews.idleTimeoutMinutes !== PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES

@@ -104,17 +104,23 @@ func TestAServerAPersonTypesRunsAsTheyTypedIt(t *testing.T) {
 }
 
 func TestAPreviewsEgressIsWhatItsSettingsAllow(t *testing.T) {
-	n := Egress([]string{"registry.npmjs.org", "10.0.0.5", "192.168.0.0/16", " ", "2001:db8::1"})
+	n, refused := Egress([]string{"registry.npmjs.org", "10.0.0.5", "192.168.0.0/16", " ", "2001:db8::1"})
 	want := []lux.EgressRule{{Host: "registry.npmjs.org"}, {CIDR: "10.0.0.5/32"}, {CIDR: "192.168.0.0/16"}, {CIDR: "2001:db8::1/128"}}
-	if n.Unrestricted || !reflect.DeepEqual(n.Egress, want) {
-		t.Errorf("egress = %+v", n)
+	if n.Unrestricted || !reflect.DeepEqual(n.Egress, want) || refused != nil {
+		t.Errorf("egress = %+v, refused %q", n, refused)
 	}
-	if !Egress([]string{"a.com", "*"}).Unrestricted {
+	if n, _ := Egress([]string{"a.com", "*"}); !n.Unrestricted {
 		t.Error(`"*" does not turn filtering off`)
 	}
 	// Nothing allowed is nothing allowed, not everything.
-	if n := Egress(nil); n.Unrestricted || len(n.Egress) != 0 {
+	if n, _ := Egress(nil); n.Unrestricted || len(n.Egress) != 0 {
 		t.Errorf("no egress = %+v", n)
+	}
+	// What lux would refuse, failing the whole preview, is left out.
+	n, refused = Egress([]string{"*.github.com", "10.0.0.0/33", "not a host", "10.0.0.0/8", "github.com"})
+	if !reflect.DeepEqual(n.Egress, []lux.EgressRule{{CIDR: "10.0.0.0/8"}, {Host: "github.com"}}) ||
+		!reflect.DeepEqual(refused, []string{"*.github.com", "10.0.0.0/33", "not a host"}) {
+		t.Errorf("egress = %+v, refused %q", n, refused)
 	}
 }
 

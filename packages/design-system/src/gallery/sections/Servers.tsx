@@ -22,7 +22,7 @@ import { SERVER_DISPLAY_STATES } from "../../tokens/servers.ts";
 import { canStartAny, canStopAny, describeServer, isMoving, serverLogLines, summarizeServers } from "../../util/servers.ts";
 import { toggled } from "../../util/sets.ts";
 import { formatTimestamp } from "../../util/format.ts";
-import type { PreviewStage, RunServer, TaskServers } from "@dude/domain";
+import { egressProblem, type PreviewStage, type RunServer, type TaskServers } from "@dude/domain";
 import type { RecipeEnvVar } from "../../components/ServerRecipe.tsx";
 import { PREVIEW_DOMAIN, PREVIEW_PAGE, previewEgress, serverLogs, serverLogsExited, serverRecipes, serverScenarios, serverUrl, type ServerScenario } from "../serverFixtures.ts";
 import { people } from "../navFixtures.ts";
@@ -182,7 +182,7 @@ function PreviewSettingsDemo() {
         <Select aria-label="Image" value="ghcr.io/example/runner:node22-go1.23" options={[{ value: "ghcr.io/example/runner:node22-go1.23", label: <span className="ds-mono">ghcr.io/example/runner:node22-go1.23</span> }]} />
       </SettingRow>
       <SettingRow label="Egress allowlist" help="Hosts a preview run may reach, beyond the repository. Everything else is refused.">
-        <HostChips hosts={hosts} onChange={setHosts} />
+        <HostChips hosts={hosts} onChange={setHosts} validate={egressProblem} />
       </SettingRow>
       <SettingRow label="Idle timeout" help="With no request for this long, the preview run is parked. Starting a server wakes it." source={<SettingSource source="project" from="Example" inherited="15 minutes" onReset={() => setIdle("15")} />}>
         <Select aria-label="Idle timeout" value={idle} onValueChange={setIdle} options={["15", "30", "60", "120"].map((m) => ({ value: m, label: `${m} minutes` }))} />

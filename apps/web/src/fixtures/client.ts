@@ -13,6 +13,7 @@ import { PREVIEW_DOMAIN, RUN_SUFFIX, previewEgress, previewRun, server, serverRe
 import type { NavProject } from "@dude/design-system";
 import { canStart, canStop } from "@dude/design-system";
 import type { AddServer, PersistedEvent, PreviewSettings, Recipe, RecipeInput, RunServer, SettingsResponse, TaskServers } from "@dude/domain";
+import { egressProblem } from "@dude/domain";
 import type { ServerLogLine } from "@dude/design-system";
 import { ApiClient, ApiError, type Member, type ProjectDetail, type RunDetail, type TaskDetail, type TaskMetrics } from "../api/client.ts";
 import { EPIC, FINDINGS, METRICS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RUN_ID, SETTINGS, TASK_ID, YOU, eventsFor, logsFor, navigationFor, runDetailFor, serversFor, taskFor } from "./data.ts";
@@ -201,6 +202,8 @@ export class FixtureClient extends ApiClient {
   }
   override async updatePreviewSettings(_projectId: string, settings: PreviewSettings): Promise<PreviewSettings> {
     await wait(100);
+    const refused = settings.egress.map(egressProblem).find((p) => p !== null);
+    if (refused) throw new ApiError(400, "invalid_request", `egress: ${refused}`);
     this.#previews = { ...this.#previews, ...settings };
     return this.#previews;
   }
