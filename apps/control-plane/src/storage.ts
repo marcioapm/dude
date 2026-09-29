@@ -11,10 +11,10 @@ import { S3Client } from "bun";
 import { HttpError } from "./api/http.ts";
 
 type Credentials = { accessKeyId: string; secretAccessKey: string; sessionToken: string; expires: number };
-let client: S3Client | null | undefined;
+let client: S3Client | undefined;
 let roleCredentials: Credentials | undefined;
 let roleS3: S3Client | undefined;
-let refresh: Promise<Credentials> | undefined;
+let refresh: Promise<void> | undefined;
 
 type Operation = "put" | "get" | "delete";
 
@@ -143,7 +143,6 @@ async function roleClient(bucket: string): Promise<S3Client> {
         });
       }
       roleCredentials = credentials;
-      return credentials;
     }, (error: unknown) => {
       nextRefresh = Date.now() + Math.min(FAILURE_BACKOFF_MS * 2 ** failures, FAILURE_BACKOFF_MAX_MS);
       failures++;
@@ -159,27 +158,24 @@ async function roleClient(bucket: string): Promise<S3Client> {
   return roleS3!;
 }
 
-function configured(): S3Client | null {
-  if (client !== undefined) return client;
-  const bucket = process.env.DUDE_S3_BUCKET;
-  client = bucket && process.env.DUDE_S3_ACCESS_KEY && process.env.DUDE_S3_SECRET_KEY
-    ? new S3Client({
-        bucket,
-        region: process.env.DUDE_S3_REGION || "us-east-1",
-        ...(process.env.DUDE_S3_ENDPOINT ? { endpoint: process.env.DUDE_S3_ENDPOINT } : {}),
-        accessKeyId: process.env.DUDE_S3_ACCESS_KEY,
-        secretAccessKey: process.env.DUDE_S3_SECRET_KEY,
-      })
-    : null;
-  return client;
+function configured(bucket: string, accessKeyId: string, secretAccessKey: string): S3Client {
+  return client ??= new S3Client({
+    bucket,
+    region: process.env.DUDE_S3_REGION || "us-east-1",
+    ...(process.env.DUDE_S3_ENDPOINT ? { endpoint: process.env.DUDE_S3_ENDPOINT } : {}),
+    accessKeyId,
+    secretAccessKey,
+  });
 }
 
 async function required(): Promise<S3Client> {
   const bucket = process.env.DUDE_S3_BUCKET;
   if (!bucket) throw new HttpError(503, "photo storage is not configured (DUDE_S3_BUCKET)", "storage_unconfigured");
-  if (process.env.DUDE_S3_ACCESS_KEY || process.env.DUDE_S3_SECRET_KEY) {
-    if (!process.env.DUDE_S3_ACCESS_KEY || !process.env.DUDE_S3_SECRET_KEY) throw new Failure("CredentialsIncomplete");
-    return configured()!;
+  const accessKeyId = process.env.DUDE_S3_ACCESS_KEY;
+  const secretAccessKey = process.env.DUDE_S3_SECRET_KEY;
+  if (accessKeyId || secretAccessKey) {
+    if (!accessKeyId || !secretAccessKey) throw new Failure("CredentialsIncomplete");
+    return configured(bucket, accessKeyId, secretAccessKey);
   }
   return roleClient(bucket);
 }
