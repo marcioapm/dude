@@ -54,7 +54,7 @@ try {
   await owner`
     INSERT INTO organizations (id, name, slug, default_agent_models)
     VALUES (${organizationId}, 'Demo', ${slug},
-            ${{ reviewer: { model: "anthropic/claude-sonnet-5" } }}::jsonb)`;
+            ${{ reviewer: { model: "llm-anthropic/claude-sonnet-5" } }}::jsonb)`;
 
   // Written through the app role, so the same row-level security that
   // protects production applies to the demo's data too.

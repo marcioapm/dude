@@ -260,7 +260,7 @@ others can read.
 | `DUDE_VAPID_SUBJECT` | `mailto:dude@localhost` | Who push services may contact (`mailto:` or `https:`). |
 | `DUDE_FACTORY_LOGINS` | none | Comma-separated GitHub logins whose PR comments are the factory's own, and wake no agent. |
 | `DUDE_EMBEDDINGS_URL` | `DUDE_LLM_URL` | An OpenAI-compatible embeddings API, before `/embeddings` (llm-proxy: `https://…/v1`), for a provider other than the agents'. `off` disables embeddings; `off`, or neither this nor `DUDE_LLM_URL` set, and memory is searched by words alone. |
-| `DUDE_EMBEDDINGS_KEY` | `DUDE_LLM_KEY` | Its key: the deployment's own virtual key, never a person's. One of the two is required when embeddings are on. **Secret.** |
+| `DUDE_EMBEDDINGS_KEY` | `DUDE_LLM_KEY`, when the embeddings URL is `DUDE_LLM_URL` or on its origin | Its key: the deployment's own virtual key, never a person's. `DUDE_LLM_KEY` is never sent to another origin (scheme, host, port): an explicit `DUDE_EMBEDDINGS_URL` elsewhere without this key fails startup. With only `DUDE_LLM_URL` and no key at all, embeddings are off. **Secret.** |
 | `DUDE_EMBEDDINGS_MODEL` | `gemini-embedding-2` | Changing it re-embeds everything in the background; search keeps working by words meanwhile. |
 | `DUDE_EMBEDDINGS_DIMENSIONS` | `768` | The index's size: only 768 is accepted, another is a migration. |
 
@@ -273,36 +273,65 @@ to end: a query sharing no word with a memory finds it by meaning.
 
 ### Agent image contract
 
-dude gives every real agent Run the same three things and nothing else about
-its model:
+dude gives every real agent Run these, and nothing else about its model:
 
 - `DUDE_LLM_URL` (plain env) and `DUDE_LLM_KEY` (a lux env secret), from the
   orchestrator's variables of the same names;
 - `OPENCODE_CONFIG_CONTENT`, the Run's model and effort as inline OpenCode
-  config, e.g. `{"model":"llm/claude-sonnet-5","agent":{"build":{"reasoningEffort":"high"}}}`
+  config, e.g. `{"model":"llm-anthropic/claude-sonnet-5","agent":{"build":{"reasoningEffort":"high"}}}`
   (effort `max` is sent as `high`; no effort, no `agent` key). OpenCode merges
   it over its file config.
 
 Provider definitions are not secret and belong to the image. An agent image
 sets `OPENCODE_CONFIG` to a config file baked into it whose providers read
-the URL and key from the environment:
+the URL and key from the environment. The dev image
+(`images/runtime/opencode.json`) and the production image define the same
+two providers, `llm-anthropic` (`@ai-sdk/anthropic`) and `llm-openai`
+(`@ai-sdk/openai-compatible`), so model names in settings work in both:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
+  "autoupdate": false,
   "provider": {
-    "llm": {
+    "llm-anthropic": {
+      "npm": "@ai-sdk/anthropic",
+      "options": { "baseURL": "{env:DUDE_LLM_URL}", "apiKey": "{env:DUDE_LLM_KEY}" },
+      "models": { "claude-sonnet-5": { "name": "Claude Sonnet 5" } }
+    },
+    "llm-openai": {
       "npm": "@ai-sdk/openai-compatible",
       "options": { "baseURL": "{env:DUDE_LLM_URL}", "apiKey": "{env:DUDE_LLM_KEY}" },
-      "models": { "claude-sonnet-5": {} }
+      "models": { "gpt-5.6-sol": { "name": "GPT 5.6 Sol" } }
     }
   }
 }
 ```
 
+The file must not live in `/etc/opencode/`: on Linux that is OpenCode's
+managed config directory, merged above `OPENCODE_CONFIG_CONTENT`, so anything
+it sets would override each Run's model and effort. Both images use
+`/usr/local/share/dude/opencode.json`.
+
 A role's model in dude's settings is `<provider>/<model>` for a provider that
-file defines (`llm/claude-sonnet-5` above). dude sends no provider
+file defines (`llm-anthropic/claude-sonnet-5` above). dude sends no provider
 definitions and no OpenCode files.
+
+### Upgrading from DUDE_OPENCODE_*
+
+Earlier versions shipped OpenCode's `auth.json` and `opencode.json` into each
+Run as the secrets `opencode_auth` and `opencode_config`
+(`DUDE_OPENCODE_AUTH`, `DUDE_OPENCODE_CONFIG`, now ignored with a warning).
+
+- Runs parked or paused before the upgrade cannot resume after it: lux holds
+  refs to `opencode_auth` and `opencode_config`, answers 422
+  `secrets_required` when they are not supplied, and the Run fails. Finish or
+  cancel parked real-model Runs before upgrading, or accept that they fail.
+- Role models in project and organization settings must name a provider the
+  image defines (`llm-anthropic/…`, `llm-openai/…`); a provider from a
+  person's own OpenCode config no longer exists in the Run.
+- A Run keeps the URL, model and effort it started with; only the key is
+  supplied again on each resume.
 
 ### dude-backend
 

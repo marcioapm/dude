@@ -149,12 +149,15 @@ Open http://localhost:5180 and sign in with the `userKey`.
 
 Agents reach their model through one LLM API: set `DUDE_LLM_URL` (its base
 URL, e.g. `https://llmproxy.absmartly-dev.com/v1`) and `DUDE_LLM_KEY` on the
-orchestrator. Every Run gets both, the key as a lux secret; memory's
+orchestrator. Without `DUDE_LLM_URL` the orchestrator starts with a warning
+and only `fake/` models can run; a real model's Run fails at its first model
+call. Every Run gets both, the key as a lux secret; memory's
 embeddings use them too unless `DUDE_EMBEDDINGS_*` say otherwise. Provider
 definitions live in the agent image (`images/runtime/opencode.json`; see
 "Agent image contract" in [`docs/operations.md`](docs/operations.md)). Set a
 role's model in the project's `agentModels` as `<provider>/<model>` for a
-provider the image defines (e.g. `{"implementer": {"model": "llm/claude-sonnet-5"}}`);
+provider the image defines, `llm-anthropic` or `llm-openai` (e.g.
+`{"implementer": {"model": "llm-anthropic/claude-sonnet-5"}}`);
 `fake/scripted` runs the whole pipeline without a model — deterministic,
 free, and what the tests use.
 
