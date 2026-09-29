@@ -16,7 +16,16 @@ BEGIN
 END $$;
 
 -- Explicitly ensure the app role can never sidestep row-level security.
-ALTER ROLE dude_app NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
+-- Only when it holds one of these: since PostgreSQL 16, clearing SUPERUSER or
+-- CREATEDB needs a role that has it, so an owner that is not a superuser could
+-- not run this unconditionally, even on the role created just above.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'dude_app'
+             AND (rolsuper OR rolbypassrls OR rolcreatedb OR rolcreaterole)) THEN
+    ALTER ROLE dude_app NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
+  END IF;
+END $$;
 
 GRANT USAGE ON SCHEMA public TO dude_app;
 

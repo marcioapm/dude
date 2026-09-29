@@ -90,6 +90,16 @@ async function requireBypassRLS(sql: SQL): Promise<void> {
   }
 }
 
+/**
+ * Checksums a migration was released with before an edit, still accepted from a
+ * database that applied it then. Only for an edit that leaves such a database
+ * the same: 002's ALTER ROLE became conditional so an owner that is not a
+ * superuser can apply it; wherever the old text ran, it ran as a superuser.
+ */
+export const PRIOR_CHECKSUMS: Readonly<Record<string, readonly string[]>> = {
+  "002": ["9629d868e268365046359588f469a4834f20a1418c6f3954f8f56797d649cb86"],
+};
+
 function checksum(contents: string): string {
   return createHash("sha256").update(contents).digest("hex");
 }
@@ -116,7 +126,7 @@ export async function migrate(
       if (priorSum !== undefined) {
         // An edited migration means the DB and the repo disagree about what
         // the schema is. Refuse rather than silently diverge.
-        if (priorSum !== sum) {
+        if (priorSum !== sum && !PRIOR_CHECKSUMS[file.version]?.includes(priorSum)) {
           throw new Error(
             `Migration ${file.name} was modified after it was applied ` +
               `(recorded ${priorSum.slice(0, 12)}, now ${sum.slice(0, 12)}). ` +
