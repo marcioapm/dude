@@ -280,7 +280,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   const openRun = (runId: string) => go(inTree({ kind: "session", id: runId }));
   if (place?.view === "orgSettings") {
     main = <OrganizationSettingsScreen client={client} me={people.me} people={people.all} onPeopleChanged={() => void people.refresh()}
-      page={place.page} onOpenRun={openRun} onPage={(page) => go({ view: "orgSettings", page }, true)} />;
+      projects={projects ?? []} page={place.page} onOpenRun={openRun} onPage={(page) => go({ view: "orgSettings", page }, true)} />;
   } else if (place?.view === "mySettings") {
     main = <MySettingsScreen client={client} me={people.me} onChanged={() => void people.refresh()} />;
   } else if (!projects) {
@@ -306,6 +306,8 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         key={place.projectId}
         client={client}
         projectId={place.projectId}
+        projects={projects}
+        admin={isAdmin}
         page={place.page}
         onPage={(page) => go({ view: "projectSettings", projectId: place.projectId, page }, true)}
         onOrganization={(page) => go({ view: "orgSettings", page })}

@@ -26,6 +26,7 @@ import { registerSettingsRoutes } from "./api/routes/settings.ts";
 import { registerProjectPageRoutes } from "./api/routes/projectPage.ts";
 import { registerLiveRoutes } from "./api/routes/live.ts";
 import { registerServerRoutes } from "./api/routes/servers.ts";
+import { registerMemoryRoutes } from "./api/routes/memory.ts";
 import { webApp } from "./api/web.ts";
 import { version } from "./build.ts";
 import { closePool, getPool } from "./db/client.ts";
@@ -46,6 +47,7 @@ export function buildRouter(webDir = process.env.DUDE_WEB_DIR): Router {
   registerEventRoutes(router);
   registerNavigationRoutes(router);
   registerPullRequestRoutes(router);
+  registerMemoryRoutes(router);
   registerFindingRoutes(router);
   registerArtifactRoutes(router);
   registerProjectRoutes(router);

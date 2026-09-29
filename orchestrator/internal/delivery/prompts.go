@@ -263,15 +263,20 @@ const askToolNote = "If you cannot go on without a decision only a person can ma
 
 // toolsNote tells an agent about dude's tools.
 const toolsNote = "The dude tools (list_tasks, list_epics, list_repositories, create_task, emit_event, " +
-	"request_repository) " +
+	"request_repository, search_memory, get_memory, remember) " +
 	"act on the work you are part of: record work you find outside your task (a person decides on it), report " +
-	"progress people can follow, ask for another repository you need."
+	"progress people can follow, ask for another repository you need. Memory is what people and agents here " +
+	"learned before you: search it (search_memory) before investigating something that may already be known, " +
+	"and when you learn something the next agent should know — a fact that holds, a procedure that works, a trap " +
+	"and its way around — save it (remember), after searching so you do not save it twice. Do not save what the " +
+	"code or the task already says."
 
 // cliNote tells an agent about the dude CLI.
 const cliNote = "The same, from the shell: the `dude` command (see `dude help`) — " +
 	"`dude task list`, `dude epic list`, `dude task create` for work you find outside your task (a person " +
 	"decides on it), `dude event progress --data '{\"done\":3,\"of\":10}'` for progress people can follow, " +
-	"`dude repo list` and `dude repo request`, and `dude publish FILE` to keep a file for people."
+	"`dude repo list` and `dude repo request`, `dude memory search QUERY`, `dude memory show ID` and " +
+	"`dude memory add --title T --content C` for memory, and `dude publish FILE` to keep a file for people."
 
 // PromptRoleForPhase is whose prompt and settings each phase runs with: an
 // agent role, or the fixer's — the implementer's model, told something

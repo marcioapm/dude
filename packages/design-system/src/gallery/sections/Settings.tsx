@@ -7,6 +7,16 @@ import { EpicCard, EpicRow, type EpicSummary } from "../../components/EpicCard.t
 import { Segmented } from "../../components/ScreenHeader.tsx";
 import { SettingRow, SettingSource, SettingsHeader, SettingsLayout, SettingsNote, SettingsSection, Switch } from "../../components/Settings.tsx";
 import { Input } from "../../primitives/Input.tsx";
+import { Badge } from "../../primitives/Badge.tsx";
+import { Button } from "../../primitives/Button.tsx";
+import { KeyValueList } from "../../primitives/Layout.tsx";
+import { SearchResultList, SearchResultRow } from "../../components/SearchResultRow.tsx";
+import { EntityLine } from "../../components/EntityLine.tsx";
+import { AuthorLine } from "../../components/PersonAvatar.tsx";
+import { RefLead } from "../../components/RefLead.tsx";
+import { RemovableList } from "../../components/RemovableList.tsx";
+import { SearchPicker } from "../../components/SearchPicker.tsx";
+import { Icon } from "../../icons/index.tsx";
 import { Select } from "../../primitives/Select.tsx";
 
 const PROMPT = `# Implementer
@@ -91,6 +101,61 @@ export function SettingsGallerySection({ mode }: { readonly mode: PaneMode }) {
       <Block id="s-layout" title="Settings page" note="A left menu with sub-pages (the roles under Agents), rows of label and control, and on a project each value's source with Reset.">
         <Panes mode={mode}>
           <SettingsDemo />
+        </Panes>
+      </Block>
+      <Block id="s-search" title="SearchResultRow" note="Memory's search: a ranked row per memory, task, epic or project in ArtifactRow's anatomy. The lead says what it is in the sidebar's grammar; which search found it is a quiet fact; why it ranked where it did is behind the click. No score chips, no bars.">
+        <Panes mode={mode}>
+          <SearchResultList>
+            <SearchResultRow rank={1} lead={{ type: "memory" }} title="GitHub retries a delivery for up to 3 days; dedupe on X-GitHub-Delivery"
+              facts={["words and meaning", "control-plane"]} defaultExpanded>
+              <span>GitHub re-sends a webhook delivery it thinks failed for up to 3 days, with the same X-GitHub-Delivery id.</span>
+              <KeyValueList items={[
+                { label: "Words", value: "#1 · ts_rank_cd 0.612", mono: true },
+                { label: "Meaning", value: "#1 · cosine distance 0.182", mono: true },
+                { label: "Score", value: "0.0328 = 1/(60+1) + 1/(60+1)", mono: true },
+              ]} />
+              <div><Button size="sm" variant="secondary" leadingIcon="edit">Open memory</Button></div>
+            </SearchResultRow>
+            <SearchResultRow rank={2} lead={{ type: "task", taskKey: "WI-2402", status: "running" }}
+              title="Dedupe deliveries by X-GitHub-Delivery across restarts" facts={["words and meaning", "control-plane"]}>
+              <span>Goal: a redelivered webhook is processed once.</span>
+            </SearchResultRow>
+            <SearchResultRow rank={3} lead={{ type: "epic" }} title="Webhook reliability" facts={["words and meaning", "control-plane"]}>
+              <span>Every GitHub webhook is verified, deduplicated and retried.</span>
+            </SearchResultRow>
+            <SearchResultRow rank={4} lead={{ type: "memory" }} title="4xx from a webhook consumer is never retried"
+              badge={<Badge size="sm" emphasis="subtle" icon="clock">Text only</Badge>} facts={["words only", "control-plane"]}>
+              <span>Only 5xx and timeouts are retried.</span>
+            </SearchResultRow>
+            <SearchResultRow rank={5} lead={{ type: "project", id: "p", name: "control-plane" }} title="control-plane" facts={["meaning only"]} />
+          </SearchResultList>
+        </Panes>
+      </Block>
+      <Block id="s-lines" title="EntityLine / AuthorLine / RefLead / RemovableList / SearchPicker" note="A face, a strong name, a muted line: a member, a memory, whoever wrote it — dude too, at a person's size. RefLead is what a thing is in the sidebar's grammar. RemovableList is what something is about; SearchPicker finds more, a combobox (↑↓, Enter, Escape).">
+        <Panes mode={mode}>
+          <Col>
+            <Label>EntityLine, in a table cell</Label>
+            <EntityLine lead={<Icon name="memory" size={16} />} name="Run the control-plane tests against a throwaway database"
+              detail="Procedure · learned on WI-2402 · 2h ago" trailing={<Badge size="sm" icon="archive">Archived</Badge>} />
+            <Label>AuthorLine: a person, an agent for a person, dude</Label>
+            <AuthorLine author={{ kind: "person", person: { id: "ana", name: "Ana Ribeiro" } }} />
+            <AuthorLine author={{ kind: "agent", person: { id: "marcio", name: "Márcio Martins" }, role: "implementer", task: "WI-2402" }} />
+            <AuthorLine author={{ kind: "system", reason: "from an answer" }} />
+            <Label>RefLead, named</Label>
+            <RemovableList onRemove={() => {}} items={[
+              { id: "e", label: "Webhook reliability", content: <RefLead type="epic" name="Webhook reliability" named /> },
+              { id: "t", label: "WI-2402", content: <RefLead type="task" taskKey="WI-2402" status="running" /> },
+              { id: "p", label: "control-plane", content: <RefLead type="project" id="p" name="control-plane" named /> },
+            ]} />
+            <Label>SearchPicker</Label>
+            <SearchPicker<{ id: string; key: string; title: string }>
+              label="Find a task" placeholder="A task key or words"
+              find={async (q) => [{ id: "1", key: "WI-2401", title: "Add retry with backoff" }, { id: "2", key: "WI-2402", title: "Dedupe deliveries" }]
+                .filter((t) => (t.key + t.title).toLowerCase().includes(q.toLowerCase()))}
+              optionKey={(t) => t.id}
+              renderOption={(t) => <><RefLead type="task" taskKey={t.key} status="queued" /><span>{t.title}</span></>}
+              onPick={() => {}} />
+          </Col>
         </Panes>
       </Block>
       <Block id="s-markdown" title="MarkdownDocument" note="Reads rendered; Edit swaps in the Markdown source, lightly highlighted, in place; Save or Cancel returns to reading.">

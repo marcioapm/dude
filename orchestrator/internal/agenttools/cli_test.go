@@ -87,6 +87,23 @@ func TestTheCLIWorksThroughLuxsSocketWithoutTheToken(t *testing.T) {
 		t.Errorf("a bad event type: %v\n%s", err, out)
 	}
 
+	// Memory, from the shell: add, find, read.
+	out, err = dude("memory", "add", "--title", "Hyphenated words stay whole", "--content", "Truncate never splits re-enter.",
+		"--kind", "fact", "--about", "TEXT-1")
+	var added struct{ ID string }
+	if err != nil || json.Unmarshal([]byte(out), &added) != nil || !strings.HasPrefix(added.ID, "mem_") {
+		t.Fatalf("memory add: %v\n%s", err, out)
+	}
+	if out, err = dude("memory", "search", "hyphenated", "words", "--type", "memory"); err != nil || !strings.Contains(out, added.ID) {
+		t.Errorf("memory search: %v\n%s", err, out)
+	}
+	if out, err = dude("memory", "show", added.ID); err != nil || !strings.Contains(out, "re-enter") || !strings.Contains(out, "TEXT-1") {
+		t.Errorf("memory show: %v\n%s", err, out)
+	}
+	if out, err = dude("memory", "add", "--title", "x"); err == nil || !strings.Contains(out, "usage") {
+		t.Errorf("memory add without content: %v\n%s", err, out)
+	}
+
 	// Publishing is local: into $LUX_ARTIFACTS, nothing sent anywhere.
 	notes := filepath.Join(t.TempDir(), "notes.md")
 	_ = os.WriteFile(notes, []byte("# Notes\n"), 0o644)

@@ -45,7 +45,15 @@ a stored credential.
 
 ## Postgres
 
-Postgres 17 is what the tests run against. One database, two login roles:
+Postgres 17 with the pgvector extension is what the tests run against
+(`pgvector/pgvector:pg17-trixie`, the same Debian as `postgres:17`, so an
+existing database keeps its collation): memory's index needs it
+(migration 054 creates the extension). pgvector is not a trusted extension,
+so creating it needs a superuser: where the owner below is not one (a
+managed Postgres, RDS, Cloud SQL), a superuser creates it once in dude's
+database, `CREATE EXTENSION vector;`, before the first migration that needs
+it (054), and on a managed service it must be allowed there first. One
+database, two login roles:
 
 - **The owner** (e.g. `dude`) runs `dude-migrate`, and nothing else. It must
   bypass row-level security (`SUPERUSER` or `BYPASSRLS`): `dude-migrate`
@@ -110,6 +118,14 @@ others can read.
 | `DUDE_VAPID_PUBLIC_KEY`, `DUDE_VAPID_PRIVATE_KEY` | made once, kept in `push_config` | Web Push keys. The private key is a **secret**. Changing them invalidates existing browser subscriptions. |
 | `DUDE_VAPID_SUBJECT` | `mailto:dude@localhost` | Who push services may contact (`mailto:` or `https:`). |
 | `DUDE_FACTORY_LOGINS` | none | Comma-separated GitHub logins whose PR comments are the factory's own, and wake no agent. |
+| `DUDE_EMBEDDINGS_URL` | off | An OpenAI-compatible embeddings API, before `/embeddings` (llm-proxy: `https://…/v1`). Unset, memory is searched by words alone. |
+| `DUDE_EMBEDDINGS_KEY` | required with the URL | Its key: the deployment's own virtual key, never a person's. **Secret.** |
+| `DUDE_EMBEDDINGS_MODEL` | `gemini-embedding-2` | Changing it re-embeds everything in the background; search keeps working by words meanwhile. |
+| `DUDE_EMBEDDINGS_DIMENSIONS` | `768` | The index's size: only 768 is accepted, another is a migration. |
+
+With `DUDE_EMBEDDINGS_URL` and `DUDE_EMBEDDINGS_KEY` in its environment,
+`go test ./internal/memory -run RealEmbedder` checks the real embedder end
+to end: a query sharing no word with a memory finds it by meaning.
 | `HOME` | the service user's | Where the OpenCode defaults above are read from, when not set explicitly. |
 
 ### dude-backend
