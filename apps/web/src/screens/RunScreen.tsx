@@ -290,7 +290,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   // (the rail's files open Changes, so Changes must be there to open).
   const hasChanges = Object.keys(run.baseRefs).length > 0 || run.phase !== null || (diffSummary?.files.length ?? 0) > 0;
   // Changes gone from the switch (its diff emptied, with no checkout to fall back on): back to the conversation.
-  if (view === "changes" && !hasChanges) setView("chat");
+  if (view === "changes" && !hasChanges) showView("chat");
   const liveDiff = isLive && run.status !== "paused";
 
   const actions = isLive ? (
@@ -338,7 +338,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
         {switcher}
         <div className="runBarTools" ref={setToolbar} />
       </div>
-      {view === "changes" && hasChanges ? (
+      {view === "changes" ? (
         <ChangesPanel client={client} runId={runId} role={role} events={events} checksum={diffSummary?.checksum ?? ""} live={liveDiff}
           selected={selected} onSelectedChange={setSelected} toolbarIn={toolbar} />
       ) : view === "events" ? (

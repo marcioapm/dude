@@ -22,7 +22,7 @@
   overflow-wrap: anywhere;
 }
 /* A chat turn: the transcript's column is its width (whatever the variant). */
-.root.fill {
+.root.unmeasured {
   --md-measure: none;
 }
 .long,

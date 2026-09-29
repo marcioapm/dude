@@ -20,7 +20,7 @@ export interface LiveDiffProps extends Omit<HTMLAttributes<HTMLDivElement>, "chi
   /** Still changing: the agent is at work. Offers Follow the agent. */
   readonly live?: boolean | undefined;
   /** What the agent did last ("Write LIVE.md · just now"): at the top of the file list, or above the diff without one. */
-  readonly lastChange?: ReactNode;
+  readonly lastChange?: LastChange | undefined;
   /**
    * First in the toolbar: what the diff sits among — a session's view
    * switch — so the diff's controls and the page's share one row rather
@@ -53,6 +53,26 @@ export interface LiveDiffProps extends Omit<HTMLAttributes<HTMLDivElement>, "chi
 }
 
 export type LiveDiffView = "unified" | "split";
+
+/** What the agent did last: its face, the tool ("Write"), the file's name, and when. */
+export interface LastChange {
+  readonly face?: ReactNode;
+  readonly tool: string;
+  readonly path?: string | undefined;
+  readonly when?: ReactNode;
+}
+
+/** The last change on one line: the face stays whole, the words give way — the tool first, the file name last. */
+function LastChangeLine({ change }: { readonly change: LastChange }) {
+  return (
+    <div className={styles["last"]} data-testid="last-change">
+      {change.face ? <span className={styles["lastFace"]}>{change.face}</span> : null}
+      <span className={styles["lastTool"]}>{change.tool}</span>
+      {change.path ? <code className={styles["lastPath"]}>{change.path}</code> : null}
+      {change.when ? <span className={styles["lastWhen"]}>· {change.when}</span> : null}
+    </div>
+  );
+}
 
 const STATUS_WORD: Record<LiveDiffFile["status"], string> = { M: "modified", A: "added", D: "deleted", R: "renamed" };
 
@@ -212,14 +232,14 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
       )}
       {files.length === 0 ? (
         <div className={styles["empty"]}>
-          {lastChange ? <div className={styles["last"]} data-testid="last-change">{lastChange}</div> : null}
+          {lastChange ? <LastChangeLine change={lastChange} /> : null}
           {emptyMessage ?? "No changes yet."}
         </div>
       ) : (
         <div className={cx(styles["body"], !fileList && styles["bodyAlone"])}>
           {fileList ? (
             <nav className={styles["files"]} aria-label="Changed files">
-              {lastChange ? <div className={styles["last"]} data-testid="last-change">{lastChange}</div> : null}
+              {lastChange ? <LastChangeLine change={lastChange} /> : null}
               <button type="button" className={cx(styles["file"], styles["all"], !selected && styles["current"])}
                 aria-pressed={!selected} onClick={() => select(null)}>
                 <span className={styles["path"]}>
@@ -253,7 +273,7 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
             </nav>
           ) : null}
           <div className={styles["diffs"]} ref={scroller} data-testid="diffs">
-            {!fileList && lastChange ? <div className={styles["last"]} data-testid="last-change">{lastChange}</div> : null}
+            {!fileList && lastChange ? <LastChangeLine change={lastChange} /> : null}
             {shown.map((f) => (
               <section key={f.path} className={styles["section"]} data-testid="diff-section" data-path={f.path}>
                 <header className={styles["fileHead"]}>

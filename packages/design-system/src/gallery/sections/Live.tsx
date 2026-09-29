@@ -68,7 +68,7 @@ function LiveDemo() {
   return (
     <div style={{ height: 420, display: "flex" }}>
       <LiveDiff files={files} base="0fff44b9a1" live onOpenFile={() => {}} leading={<SessionSwitch value="changes" />}
-        lastChange={<><AgentAvatar role="implementer" size="xs" live /> Write <code>revenue.test.ts</code> · just now</>} />
+        lastChange={{ face: <AgentAvatar role="implementer" size="xs" live />, tool: "Write", path: "revenue.test.ts", when: "just now" }} />
     </div>
   );
 }

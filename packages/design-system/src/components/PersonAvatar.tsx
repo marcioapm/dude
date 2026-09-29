@@ -7,7 +7,6 @@ import { ROLE_ICON, ROLE_LABEL } from "./AgentAvatar.tsx";
 import { stringSlot } from "../util/slot.ts";
 import styles from "./PersonAvatar.module.css";
 
-
 /** Anyone with a face: a name, and a photo when there is one. */
 export interface Person {
   /** Stable identity for colour and keys; falls back to `name`. */
@@ -29,7 +28,6 @@ export type PersonAvatarSize = 16 | 20 | 24 | 28 | 32 | 40 | 56;
 export function identitySlot(who: { readonly id?: string | undefined; readonly name: string }): number {
   return stringSlot((who.id ?? who.name).trim().toLowerCase(), IDENTITY_SLOTS);
 }
-
 
 /**
  * Up to two initials. "Márcio Martins" → "MM"; "marcio" → "MA";
