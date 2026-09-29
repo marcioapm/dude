@@ -114,7 +114,9 @@ For every role:
 | `get_memory(id)` | one memory in full, with where it was learned and what it is about |
 | `remember(title, content, kind?, about?, scope?)` | a new memory, live at once, by this run: the run's project unless `scope: "organization"`, learned on the run's task |
 
-`remember` has its own budget (20 per run) so a looping agent cannot flood
+The same, from a shell in the container (`dude memory search QUERY`,
+`dude memory show ID`, `dude memory add --title … --content …`), for an
+agent that prefers the CLI and for scripts. `remember` has its own budget (20 per run) so a looping agent cannot flood
 it. Each call is an `agent.tool.dude` event like every tool; saving also
 records `memory.created`.
 

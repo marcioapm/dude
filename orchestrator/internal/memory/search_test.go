@@ -248,7 +248,6 @@ func TestAProjectSearchesItselfAndItsOrganizationsMemoriesOnly(t *testing.T) {
 	}
 }
 
-
 func TestALimitAboveTheMostIsTheMost(t *testing.T) {
 	app, owner := dbtest.Open(t)
 	org, project, _, _ := seed(t, owner)
