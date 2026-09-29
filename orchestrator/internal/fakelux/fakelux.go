@@ -17,6 +17,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"mime"
 	"net/http"
 	"os/exec"
@@ -99,8 +100,10 @@ type Run struct {
 	Stopped     int
 	Resumed     int
 	Interrupted int
-	// The secrets each accepted resume carried, in order.
-	ResumeSecrets [][]lux.Secret
+	// The secrets each accepted resume carried, in order, decoded and as
+	// sent (every field of each descriptor).
+	ResumeSecrets    [][]lux.Secret
+	ResumeSecretsRaw []json.RawMessage
 	// Forgotten: lux lost it. Open streams drop, as lux's connection would.
 	Forgotten bool
 	// What was asked of it, in order: "exec", "stop", "cancel".
@@ -1019,7 +1022,12 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 			Repositories []map[string]any `json:"repositories"`
 		} `json:"git"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&in)
+	body, _ := io.ReadAll(r.Body)
+	_ = json.Unmarshal(body, &in)
+	var raw struct {
+		Secrets json.RawMessage `json:"secrets"`
+	}
+	_ = json.Unmarshal(body, &raw)
 	s.mu.Lock()
 	if run.State != "stopped" && run.State != "failed" && run.State != "lost" {
 		s.mu.Unlock()
@@ -1071,6 +1079,7 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	}
 	run.Resumed++
 	run.ResumeSecrets = append(run.ResumeSecrets, in.Secrets)
+	run.ResumeSecretsRaw = append(run.ResumeSecretsRaw, raw.Secrets)
 	run.Epoch++
 	if in.Input != nil {
 		// Delivered once the agent is back, as lux does: it is the input the

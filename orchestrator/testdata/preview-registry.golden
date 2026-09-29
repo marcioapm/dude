@@ -1,0 +1,77 @@
+{
+  "name": "preview <task>",
+  "labels": {
+    "dude.kind": "preview",
+    "dude.org": "<org>",
+    "dude.run": "<run>",
+    "dude.task": "<task>"
+  },
+  "image": {
+    "ref": "123456789012.dkr.ecr.eu-west-1.amazonaws.com/dude/agent:1",
+    "registryAuth": [
+      {
+        "registry": "123456789012.dkr.ecr.eu-west-1.amazonaws.com",
+        "secret": "DUDE_REGISTRY_AUTH"
+      }
+    ]
+  },
+  "workload": {
+    "adapter": "generic",
+    "command": [
+      "sleep",
+      "infinity"
+    ],
+    "workdir": "/workspace/repos/target",
+    "servers": [
+      {
+        "name": "web",
+        "port": 3000,
+        "command": [
+          "sh",
+          "-c",
+          "npm run dev"
+        ],
+        "workdir": "/workspace/repos/target",
+        "env": {
+          "PORT": "1"
+        }
+      }
+    ]
+  },
+  "secrets": [
+    {
+      "name": "GIT_TOKEN",
+      "value": "ghp_test"
+    },
+    {
+      "name": "DUDE_REGISTRY_AUTH",
+      "value": "AWS:ecr-password-1-1790409600000000000"
+    }
+  ],
+  "git": {
+    "repositories": [
+      {
+        "name": "target",
+        "url": "https://github.com/acme/target.git",
+        "ref": "main",
+        "credential": "GIT_TOKEN",
+        "path": "/workspace/repos/target",
+        "push": false
+      }
+    ]
+  },
+  "volumes": [
+    {
+      "name": "workspace",
+      "path": "/workspace",
+      "kind": "state"
+    }
+  ],
+  "network": {
+    "egress": [
+      {
+        "host": "registry.npmjs.org"
+      }
+    ]
+  }
+}
