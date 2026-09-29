@@ -573,20 +573,18 @@ func (p *Previews) resume(ctx context.Context, r previewRun) error {
 	if err != nil {
 		return err
 	}
-	var secrets []lux.Secret
+	var spec lux.Spec
 	token, err := p.forgeToken(ctx, r.Org)
 	if err != nil {
 		return err
 	}
 	if token != "" {
-		secrets = []lux.Secret{{Name: "GIT_TOKEN", Value: token}}
+		spec.Secrets = []lux.Secret{{Name: "GIT_TOKEN", Value: token}}
 	}
-	withLogin := lux.Spec{Secrets: secrets}
-	login.Apply(&withLogin)
-	secrets = withLogin.Secrets
+	login.Apply(&spec)
 	// lux answers a Run already resuming as it did the first time; a
 	// refusal (cancelled or finished meanwhile) is for good.
-	lr, err = p.Lux.Resume(ctx, r.LuxRunID, lux.ResumeInput{Secrets: secrets, RequestID: "resume-" + r.ID})
+	lr, err = p.Lux.Resume(ctx, r.LuxRunID, lux.ResumeInput{Secrets: spec.Secrets, RequestID: "resume-" + r.ID})
 	if le, ok := lux.AsError(err); ok && !le.Retryable() {
 		return p.fail(ctx, r, "lux refused to resume the preview: "+le.Message)
 	}
