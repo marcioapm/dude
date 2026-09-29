@@ -383,131 +383,129 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
         </TabToggle>
       </div>
       <div className="runSplit">
-      {view === "changes" ? (
-        <ChangesPanel client={client} runId={runId} role={role} events={events} checksum={diffSummary?.checksum ?? ""} live={liveDiff}
-          selected={selected} onSelectedChange={setSelected} toolbarIn={toolbar} />
-      ) : view === "events" ? (
-        <>
-          <div className="runEvents" data-testid="event-log">
-          <EventStream>
-            {events.map((event) => (
-              <EventRow
-                key={event.eventId}
-                occurredAt={event.occurredAt}
-                eventType={event.eventType}
-                actor={{ type: event.actor.type, id: event.actor.id, ...namedActor(event, people) }}
-                summary={summarize(event)}
-                // An element, not a string: EventRow only renders the detail
-                // when the row is open, so the JSON is built for the handful
-                // of rows an operator actually expands.
-                detail={<PayloadDetail payload={event.payload} />}
-              />
-            ))}
-          </EventStream>
-          </div>
-        </>
-      ) : (
-        <>
-          <div className="runChat">
-            <ChatTranscript
-              fill
-              live={isLive}
-              revision={events.length}
-              turns={conversation.turns.length}
-              pinned={
-                conversation.plan.length > 0 ? (
-                  <AgentPlan items={conversation.plan} defaultCollapsed data-testid="plan" />
-                ) : null
-              }
-              footer={!isLive ? <RunEnded run={run} onOpenTask={onOpenTask ? () => onOpenTask(run.taskId) : undefined} /> : isPreviewRun ? (
-                // A preview run has no agent to steer: its servers are the whole of it.
-                <Callout tone="neutral" data-testid="preview-run-note">A branch preview has no agent. Start, stop and open its servers from the Servers panel; its checkout is the branch as it stood.</Callout>
-              ) : (
-                <ChatComposer
-                  // The agent waiting on a question takes an answer; otherwise
-                  // anything said steers it.
-                  mode={conversation.openQuestion ? "answer" : "steer"}
-                  question={
-                    conversation.openQuestion
-                      ? {
-                          id: conversation.openQuestion.questionId,
-                          text: conversation.openQuestion.text,
-                          askedBy: runLabel(run),
-                          askedAt: conversation.openQuestion.at,
-                          // Choices only for whoever may choose.
-                          options: waitingOn ? [] : conversation.openQuestion.options,
-                        }
-                      : undefined
-                  }
-                  // A paused Run takes an answer (a parked one is resumed by it),
-                  // not a steer; a question is its owner's to answer.
-                  disabled={(run.status === "paused" && !conversation.openQuestion) ||
-                    (conversation.openQuestion !== null && waitingOn !== undefined)}
-                  disabledReason={
-                    waitingOn && (conversation.openQuestion || run.dudePause === "person") ? `Waiting for ${waitingOn} to answer.`
-                      : run.dudePause ? PAUSE_WORDS[run.dudePause].composer
-                      : "This run is paused. Resume it to steer."
-                  }
-                  onSubmit={send}
-                  sentAs={youName ? firstName(youName) : undefined}
-                  canInterrupt
-                />
-              )}
-              emptyMessage="Waiting for the agent to start."
-            >
-              {grouped.map((group) => Array.isArray(group)
-                ? <ChatAside key={group[0]!.id}>{group.map(render)}</ChatAside>
-                : render(group))}
-              {conversation.activity ? (
-                <ChatMessage
-                  role={role}
-                  activity={conversation.activity}
-                  activityProps={
-                    conversation.activeTool
-                      ? { label: conversation.activeTool.name, since: conversation.activeTool.since }
-                      : undefined
-                  }
-                />
-              ) : null}
-            </ChatTranscript>
-            {/* Cost, tokens and elapsed are the header's, on every view: the rail has the rest. */}
-            <SessionRail className="runRail" aria-label="This session" data-testid="session-rail">
-              <SessionRailBlock label="Session">
-                <SessionFacts facts={[
-                  ...(run.model ? [{ label: "Model", value: run.model, mono: true }] : []),
-                  ...(run.harness ? [{ label: "Agent", value: run.harness }] : []),
-                  { label: "Attempt", value: run.attempt },
-                ]} />
-              </SessionRailBlock>
-              {tools.length > 0 ? (
-                <SessionRailBlock label="Tools used">
-                  <ToolUsage tools={tools} />
+        <div className="runView">
+          {view === "changes" ? (
+            <ChangesPanel client={client} runId={runId} role={role} events={events} checksum={diffSummary?.checksum ?? ""} live={liveDiff}
+              selected={selected} onSelectedChange={setSelected} toolbarIn={toolbar} />
+          ) : view === "events" ? (
+            <div className="runEvents" data-testid="event-log">
+              <EventStream>
+                {events.map((event) => (
+                  <EventRow
+                    key={event.eventId}
+                    occurredAt={event.occurredAt}
+                    eventType={event.eventType}
+                    actor={{ type: event.actor.type, id: event.actor.id, ...namedActor(event, people) }}
+                    summary={summarize(event)}
+                    // An element, not a string: EventRow only renders the detail
+                    // when the row is open, so the JSON is built for the handful
+                    // of rows an operator actually expands.
+                    detail={<PayloadDetail payload={event.payload} />}
+                  />
+                ))}
+              </EventStream>
+            </div>
+          ) : (
+            <div className="runChat">
+              <ChatTranscript
+                fill
+                live={isLive}
+                revision={events.length}
+                turns={conversation.turns.length}
+                pinned={
+                  conversation.plan.length > 0 ? (
+                    <AgentPlan items={conversation.plan} defaultCollapsed data-testid="plan" />
+                  ) : null
+                }
+                footer={!isLive ? <RunEnded run={run} onOpenTask={onOpenTask ? () => onOpenTask(run.taskId) : undefined} /> : isPreviewRun ? (
+                  // A preview run has no agent to steer: its servers are the whole of it.
+                  <Callout tone="neutral" data-testid="preview-run-note">A branch preview has no agent. Start, stop and open its servers from the Servers panel; its checkout is the branch as it stood.</Callout>
+                ) : (
+                  <ChatComposer
+                    // The agent waiting on a question takes an answer; otherwise
+                    // anything said steers it.
+                    mode={conversation.openQuestion ? "answer" : "steer"}
+                    question={
+                      conversation.openQuestion
+                        ? {
+                            id: conversation.openQuestion.questionId,
+                            text: conversation.openQuestion.text,
+                            askedBy: runLabel(run),
+                            askedAt: conversation.openQuestion.at,
+                            // Choices only for whoever may choose.
+                            options: waitingOn ? [] : conversation.openQuestion.options,
+                          }
+                        : undefined
+                    }
+                    // A paused Run takes an answer (a parked one is resumed by it),
+                    // not a steer; a question is its owner's to answer.
+                    disabled={(run.status === "paused" && !conversation.openQuestion) ||
+                      (conversation.openQuestion !== null && waitingOn !== undefined)}
+                    disabledReason={
+                      waitingOn && (conversation.openQuestion || run.dudePause === "person") ? `Waiting for ${waitingOn} to answer.`
+                        : run.dudePause ? PAUSE_WORDS[run.dudePause].composer
+                        : "This run is paused. Resume it to steer."
+                    }
+                    onSubmit={send}
+                    sentAs={youName ? firstName(youName) : undefined}
+                    canInterrupt
+                  />
+                )}
+                emptyMessage="Waiting for the agent to start."
+              >
+                {grouped.map((group) => Array.isArray(group)
+                  ? <ChatAside key={group[0]!.id}>{group.map(render)}</ChatAside>
+                  : render(group))}
+                {conversation.activity ? (
+                  <ChatMessage
+                    role={role}
+                    activity={conversation.activity}
+                    activityProps={
+                      conversation.activeTool
+                        ? { label: conversation.activeTool.name, since: conversation.activeTool.since }
+                        : undefined
+                    }
+                  />
+                ) : null}
+              </ChatTranscript>
+              {/* Cost, tokens and elapsed are the header's, on every view: the rail has the rest. */}
+              <SessionRail className="runRail" aria-label="This session" data-testid="session-rail">
+                <SessionRailBlock label="Session">
+                  <SessionFacts facts={[
+                    ...(run.model ? [{ label: "Model", value: run.model, mono: true }] : []),
+                    ...(run.harness ? [{ label: "Agent", value: run.harness }] : []),
+                    { label: "Attempt", value: run.attempt },
+                  ]} />
                 </SessionRailBlock>
-              ) : null}
-              {changed.length > 0 ? (
-                <SessionRailBlock label="Files changed" live={liveDiff}>
-                  <ChangedFiles files={changed} onOpen={(path) => {
-                    setSelected(path);
-                    showView("changes");
-                  }} />
-                </SessionRailBlock>
-              ) : null}
-            </SessionRail>
-          </div>
-        </>
-      )}
-      {drawer ? (
-        <ServersDrawer
-          data-testid="servers-drawer"
-          count={servers.data?.run
-            ? servers.data.run.kind === "preview" ? "preview run" : `${summarizeServers(servers.data.servers).ready} of ${servers.data.servers.length} ready`
-            : undefined}
-          actions={<ServersRunActions servers={servers} variant="quiet" />}
-          onClose={() => toggleDrawer(false)}
-        >
-          <ServersSection client={client} servers={servers} inDrawer />
-        </ServersDrawer>
-      ) : null}
+                {tools.length > 0 ? (
+                  <SessionRailBlock label="Tools used">
+                    <ToolUsage tools={tools} />
+                  </SessionRailBlock>
+                ) : null}
+                {changed.length > 0 ? (
+                  <SessionRailBlock label="Files changed" live={liveDiff}>
+                    <ChangedFiles files={changed} onOpen={(path) => {
+                      setSelected(path);
+                      showView("changes");
+                    }} />
+                  </SessionRailBlock>
+                ) : null}
+              </SessionRail>
+            </div>
+          )}
+        </div>
+        {drawer ? (
+          <ServersDrawer
+            data-testid="servers-drawer"
+            count={servers.data?.run
+              ? servers.data.run.kind === "preview" ? "preview run" : `${summarizeServers(servers.data.servers).ready} of ${servers.data.servers.length} ready`
+              : undefined}
+            actions={<ServersRunActions servers={servers} variant="quiet" />}
+            onClose={() => toggleDrawer(false)}
+          >
+            <ServersSection client={client} servers={servers} inDrawer />
+          </ServersDrawer>
+        ) : null}
       </div>
 
       {notice ? (
