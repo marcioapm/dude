@@ -319,25 +319,6 @@ body {
   gap: var(--ds-space-12);
 }
 
-/* A member: face, then name over email, role and when seen. */
-.member {
-  display: flex;
-  align-items: center;
-  gap: var(--ds-space-12);
-  min-width: 0;
-}
-.memberText {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-.memberName {
-  color: var(--ds-color-text-strong);
-}
-.memberDetail {
-  font-size: var(--ds-text-sm);
-  color: var(--ds-color-text-muted);
-}
 
 /* A project's epics above its board: cards for those in progress, then the
    planned and done lists side by side. */
@@ -609,4 +590,26 @@ body {
 }
 .previewAccess > svg {
   color: var(--ds-color-text-muted);
+}
+
+/* Memory's settings pages: layout only. The rows, lines, leads, lists and
+   picker are the design system's. */
+.memoryToolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  flex-wrap: wrap;
+}
+.memoryQuery {
+  flex: 1 1 360px;
+}
+.memoryFilter {
+  flex: 0 1 240px;
+}
+.memorySpacer {
+  flex: 1;
+}
+.memoryActions {
+  display: flex;
+  gap: var(--ds-space-8);
 }

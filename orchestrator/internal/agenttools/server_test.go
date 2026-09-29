@@ -173,8 +173,9 @@ func TestAReviewerCannotCreateWork(t *testing.T) {
 	for _, tool := range list.Tools {
 		names = append(names, tool.Name)
 	}
-	// Seeing work and recording events, not making work or stopping for a person.
-	if strings.Join(names, ",") != "emit_event,list_epics,list_repositories,list_tasks,request_repository" {
+	// Seeing work, recording events and what it learned, not making work or
+	// stopping for a person.
+	if strings.Join(names, ",") != "emit_event,get_memory,list_epics,list_repositories,list_tasks,remember,request_repository,search_memory" {
 		t.Errorf("a reviewer sees %v", names)
 	}
 }

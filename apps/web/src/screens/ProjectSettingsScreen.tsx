@@ -34,13 +34,18 @@ import { agentsNav, deliveryNav, isRole, SettingsFrame, useSettings } from "./Se
 import { DeliveryPage, RolePage } from "./settingsPages.tsx";
 import { FacePicker } from "./FacePicker.tsx";
 import { ServersSettingsPage } from "./ServersSettings.tsx";
+import { isMemoryPage, MEMORY_PAGES, MemoryPages, memoryNav, useIndexSummary, type ProjectChoice } from "./MemorySettings.tsx";
 
 // The first is where the screen opens: a new project needs its repositories first.
-const PAGES = ["repositories", "general", "servers", ...SETTINGS_ROLES, "delivery"] as const;
+const PAGES = ["repositories", "general", "servers", ...SETTINGS_ROLES, "delivery", ...MEMORY_PAGES] as const;
 
 export interface ProjectSettingsScreenProps {
   client: ApiClient;
   projectId: string;
+  /** For Memory's "Applies to". */
+  projects: readonly ProjectChoice[];
+  /** An organisation admin: changes anyone's memory, reindexes. */
+  admin: boolean;
   page?: string | undefined;
   onPage: (page: string) => void;
   onChanged: () => void;
@@ -50,8 +55,9 @@ export interface ProjectSettingsScreenProps {
   onOpenRun?: ((runId: string) => void) | undefined;
 }
 
-export function ProjectSettingsScreen({ client, projectId, page: given, onPage, onChanged, onBack, onOrganization, onOpenRun }: ProjectSettingsScreenProps) {
+export function ProjectSettingsScreen({ client, projectId, projects, admin, page: given, onPage, onChanged, onBack, onOrganization, onOpenRun }: ProjectSettingsScreenProps) {
   const page = settingsPage(given, PAGES);
+  const index = useIndexSummary(client, projectId);
   const [project, setProject] = useState<ProjectDetail | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   // How many servers the project defines, for the menu. The Servers page
@@ -117,6 +123,7 @@ export function ProjectSettingsScreen({ client, projectId, page: given, onPage, 
               { id: "servers", label: "Servers", icon: "globe", note: serverCount || undefined },
               agentsNav(settings),
               deliveryNav(settings),
+              memoryNav(index.status?.failed),
             ]
           : []
       }
@@ -151,6 +158,9 @@ export function ProjectSettingsScreen({ client, projectId, page: given, onPage, 
             <DeliveryPage scope={scope} />
           ) : isRole(page) ? (
             <RolePage key={page} scope={scope} role={page} onOpenRun={onOpenRun} />
+          ) : isMemoryPage(page) ? (
+            <MemoryPages client={client} page={page} projects={projects} admin={admin} index={index} onPage={onPage}
+              scope={{ kind: "project", id: project.id, name: project.name, organization: orgName }} />
           ) : null}
         </>
       ) : null}

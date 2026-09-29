@@ -33,6 +33,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/embeddings"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
 
@@ -43,11 +44,25 @@ const EventType = "agent.tool.dude"
 type Server struct {
 	DB  *db.DB
 	Log *slog.Logger
+	// Embedder lets search_memory search by meaning; nil, by words alone.
+	Embedder embeddings.Embedder
+	// Kick wakes the orchestrator's loops: a memory saved is embedded now.
+	Kick func()
 }
 
 // Caller is the Run a token names: who is calling, and all it may reach.
 type Caller struct {
 	RunID, Org, ProjectID, TaskID, Role, Status string
+	// What the server lends a call: set on each, not part of who calls.
+	env env
+}
+
+// env is the server's, for the tools that need more than the database, and
+// what a tool's prepare step made before its transaction opened.
+type env struct {
+	embedder embeddings.Embedder
+	kick     func()
+	prepared any
 }
 
 func (c Caller) run() delivery.RunRef {
@@ -237,6 +252,12 @@ type tool struct {
 	roles             []string // empty: every role
 	schema            any
 	run               func(ctx context.Context, tx pgx.Tx, c Caller, args json.RawMessage) (any, error)
+	// perRun: how many calls a Run may make in its lifetime; 0, no limit
+	// beyond the per-minute one.
+	perRun int
+	// prepare runs before the transaction opens, for slow work that must not
+	// hold a connection (an embedding); its result is c.env.prepared.
+	prepare func(ctx context.Context, c Caller, args json.RawMessage) any
 }
 
 func (t tool) allowed(role string) bool {
@@ -291,6 +312,18 @@ func define[In, Out any](name, description string, roles []string,
 		}}
 }
 
+// limit caps how many calls a Run may make to the tool in its lifetime.
+func (t tool) limit(perRun int) tool {
+	t.perRun = perRun
+	return t
+}
+
+// before gives the tool a step outside its transaction (see tool.prepare).
+func (t tool) before(prepare func(ctx context.Context, c Caller, args json.RawMessage) any) tool {
+	t.prepare = prepare
+	return t
+}
+
 // Calls a Run may make in a minute, and tasks and events it may
 // create in its lifetime: enough for real work, not for a runaway loop.
 const (
@@ -305,8 +338,12 @@ const (
 // transaction as what the tool did.
 func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessage) (json.RawMessage, error) {
 	var out json.RawMessage
+	c.env = env{embedder: s.Embedder, kick: s.Kick}
+	if t.prepare != nil {
+		c.env.prepared = t.prepare(ctx, c, args)
+	}
 	err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
-		if err := withinLimits(ctx, tx, c, t.name); err != nil {
+		if err := withinLimits(ctx, tx, c, t); err != nil {
 			return err
 		}
 		result, err := t.run(ctx, tx, c, args)
@@ -344,7 +381,8 @@ func oldName(tool string) string {
 
 // withinLimits refuses a call past the Run's budget: counted from the
 // ledger, where every call is.
-func withinLimits(ctx context.Context, tx pgx.Tx, c Caller, tool string) error {
+func withinLimits(ctx context.Context, tx pgx.Tx, c Caller, t tool) error {
+	tool := t.name
 	var recent, sameTool int
 	if err := tx.QueryRow(ctx, `SELECT
 			count(*) FILTER (WHERE occurred_at > now() - interval '1 minute'),
@@ -352,7 +390,7 @@ func withinLimits(ctx context.Context, tx pgx.Tx, c Caller, tool string) error {
 		FROM events WHERE run_id = $1 AND event_type = $2`, c.RunID, EventType, tool, oldName(tool)).Scan(&recent, &sameTool); err != nil {
 		return err
 	}
-	limit := map[string]int{"create_task": createsPerRun, "emit_event": eventsPerRun, "request_repository": requestsPerRun}[tool]
+	limit := t.perRun
 	switch {
 	case recent >= callsPerMinute:
 		return refuse("too many calls: at most %d a minute; slow down", callsPerMinute)

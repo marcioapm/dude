@@ -120,30 +120,10 @@
 .stack > :nth-child(4) { z-index: 2; }
 .stack > :nth-child(5) { z-index: 1; }
 
-/* A face with a name and a line under it. */
-.line {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--ds-space-12);
-  min-width: 0;
-}
-.lineText {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  line-height: var(--ds-leading-tight);
-}
-.lineName {
-  font-size: var(--ds-text-md);
-  color: var(--ds-color-text-strong);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.lineDetail {
-  font-size: var(--ds-text-xs);
-  color: var(--ds-color-text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+
+/* The system author's face: dude's avatar in a person's box, so authors line up. */
+.system {
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
 }

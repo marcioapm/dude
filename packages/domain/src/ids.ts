@@ -29,6 +29,7 @@ export const ID_PREFIXES = {
   forgeCredential: "forge",
   finding: "find",
   promptVersion: "pv",
+  memory: "mem",
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIXES;
