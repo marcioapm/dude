@@ -3,6 +3,7 @@ package agenttools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -38,7 +39,7 @@ var tools = []tool{
 		[]string{"implementer", "investigator"}, askPerson),
 	define("emit_event", "Record an event on your run for the people following it: progress (type progress, "+
 		"data like {\"done\": 3, \"of\": 10, \"step\": \"tests\"}), a milestone, a measurement. It shows in "+
-		"your chat and the run's events.", nil, emitEvent),
+		"your chat and the run's events.", nil, emitEvent).limit(eventsPerRun),
 	define("list_repositories", "The project's repositories: which this work has checked out (and whether it may "+
 		"change them), and which it could ask for with request_repository. Not for waiting on a request: you are "+
 		"told when one is decided.", nil, listRepositories),
@@ -46,10 +47,20 @@ var tools = []tool{
 		"to read code this depends on, or (an implementer) to change it too. A person decides. Carry on meanwhile if "+
 		"you can; if you cannot go on without it, ask with wait: true and end your turn — you are resumed with it, "+
 		"or told it was declined.",
-		nil, requestRepository),
+		nil, requestRepository).limit(requestsPerRun),
 	define("create_task", "Record a piece of work you found that is outside your task — a bug, a "+
 		"follow-up, a part to split out — as a new task in this project. It is not started: a person reads it "+
-		"and decides. Say what and why in the goal.", creators, createTask),
+		"and decides. Say what and why in the goal.", creators, createTask).limit(createsPerRun),
+	define("search_memory", "Search what is known here: memories people and agents saved (facts, procedures, "+
+		"notes), and this project's tasks, epics and the project itself — by words and by meaning, best first. "+
+		"Search before you investigate something that may already be known, and before you remember something.",
+		nil, searchMemory).before(embedQuery),
+	define("get_memory", "Read one memory in full, by the id search_memory gave, with where it was learned "+
+		"and what it is about.", nil, getMemory),
+	define("remember", "Save something worth knowing next time, for every agent and person on this project: "+
+		"a fact that holds (\"the billing API paginates by cursor\"), a procedure that works, a trap and its way "+
+		"around. It is live at once, and marked as yours. Search first so you do not save it twice; do not save "+
+		"what the code or the task already says.", nil, remember).limit(remembersPerRun),
 }
 
 // ---- list_tasks --------------------------------------------------------------
@@ -91,7 +102,7 @@ func listTasks(ctx context.Context, tx pgx.Tx, c Caller, in listTasksIn) (listTa
 		FROM tasks w JOIN projects p ON p.id = w.project_id LEFT JOIN epics e ON e.id = w.epic_id
 		WHERE w.project_id = $1
 		  AND ($3 = '' OR w.title ILIKE '%' || $3 || '%' ESCAPE '\' OR w.goal ILIKE '%' || $3 || '%' ESCAPE '\')
-		ORDER BY w.number`, c.ProjectID, c.TaskID, likeLiteral(strings.TrimSpace(in.Text)))
+		ORDER BY w.number`, c.ProjectID, c.TaskID, db.LikeLiteral(strings.TrimSpace(in.Text)))
 	if err != nil {
 		return out, err
 	}
@@ -122,13 +133,12 @@ func createTask(ctx context.Context, tx pgx.Tx, c Caller, in createTaskIn) (crea
 	}
 	var epicID *string
 	if e := strings.TrimSpace(in.Epic); e != "" {
-		var id string
-		if err := tx.QueryRow(ctx, `SELECT id FROM epics WHERE project_id = $1 AND lower(title) = lower($2) LIMIT 1`,
-			c.ProjectID, e).Scan(&id); err != nil {
-			if err == pgx.ErrNoRows {
-				return createTaskOut{}, refuse("no epic called %q in this project (list_tasks shows them)", e)
-			}
+		id, err := epicByTitle(ctx, tx, c.ProjectID, e)
+		if err != nil {
 			return createTaskOut{}, err
+		}
+		if id == "" {
+			return createTaskOut{}, refuse("no epic called %q in this project (list_tasks shows them)", e)
 		}
 		epicID = &id
 	}
@@ -161,9 +171,15 @@ func createTask(ctx context.Context, tx pgx.Tx, c Caller, in createTaskIn) (crea
 	return createTaskOut{Key: fmt.Sprintf("%s-%d", prefix, number)}, nil
 }
 
-// likeLiteral escapes text for LIKE: % and _ match themselves.
-func likeLiteral(s string) string {
-	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+// epicByTitle finds an epic as an agent names it: by its title, in its
+// project, whatever the case. "" when there is none.
+func epicByTitle(ctx context.Context, tx pgx.Tx, project, title string) (string, error) {
+	var id string
+	err := tx.QueryRow(ctx, `SELECT id FROM epics WHERE project_id = $1 AND lower(title) = lower($2) LIMIT 1`, project, title).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
 }
 
 // ---- list_epics -------------------------------------------------------------
@@ -307,7 +323,7 @@ func requestRepository(ctx context.Context, tx pgx.Tx, c Caller, in requestRepoI
 	err := tx.QueryRow(ctx, `SELECT id, name FROM repositories
 		WHERE project_id = $1
 		  AND (lower(name) = lower($2) OR lower(regexp_replace(url, '(\.git)?/*$', '')) LIKE '%/' || lower($3) ESCAPE '\')
-		LIMIT 1`, c.ProjectID, name, likeLiteral(name)).Scan(&repo.ID, &repo.Name)
+		LIMIT 1`, c.ProjectID, name, db.LikeLiteral(name)).Scan(&repo.ID, &repo.Name)
 	if err == pgx.ErrNoRows {
 		return requestRepoOut{}, refuse("no repository %q in this project (a person can add one to the project)", name)
 	}

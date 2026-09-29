@@ -26,8 +26,10 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/embeddings"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
+	"github.com/marciomartins/dude/orchestrator/internal/memory"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
 	"github.com/marciomartins/dude/orchestrator/internal/prs"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
@@ -49,6 +51,14 @@ type Server struct {
 	// pull request sync that reads one back after.
 	Forges delivery.Forges
 	PRs    *prs.Syncer
+	// Search by meaning for the memory pages; nil, by words alone.
+	Embedder embeddings.Embedder
+	// The indexer: how the embedder is doing, and ending its wait when a
+	// person asks to retry.
+	Indexer interface {
+		Health() memory.Health
+		Resume()
+	}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -88,6 +98,7 @@ func (s *Server) Handler() http.Handler {
 		return nil
 	}))
 	s.githubRoutes(mux)
+	s.memoryRoutes(mux)
 	// dude's own prompt for each role: what an organization that never
 	// edits runs, and where its first edit starts from.
 	mux.Handle("GET /internal/prompts/builtin", s.auth(func(w http.ResponseWriter, r *http.Request, _ string) error {
@@ -110,10 +121,36 @@ type handler func(w http.ResponseWriter, r *http.Request, org string) error
 
 // actor is who the backend says made the request.
 func actor(r *http.Request) string {
-	if a := r.Header.Get("X-Dude-Actor"); a != "" {
-		return a
+	return principalOf(r).Actor
+}
+
+// principal is who the backend says is asking, as it sends it on every
+// call: the key acting, its person, and whether they are an admin. The
+// backend has authenticated them; this trusts it for that, as for the
+// organization.
+type principal struct {
+	Actor, Person string
+	Admin         bool
+}
+
+func principalOf(r *http.Request) principal {
+	p := principal{Actor: r.Header.Get("X-Dude-Actor"), Person: r.Header.Get("X-Dude-Person"),
+		Admin: r.Header.Get("X-Dude-Role") == "admin"}
+	if p.Actor == "" {
+		p.Actor = "unknown"
 	}
-	return "unknown"
+	return p
+}
+
+// split reads a comma-separated query value.
+func split(v string) []string {
+	var out []string
+	for _, s := range strings.Split(v, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // httpError is an error with a status for the caller.

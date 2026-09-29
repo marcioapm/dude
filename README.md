@@ -73,7 +73,7 @@ OpenCode credentials.
 bun install
 docker run -d --name dude-postgres \
   -e POSTGRES_USER=dude -e POSTGRES_PASSWORD=dude -e POSTGRES_DB=dude \
-  -p 5433:5432 postgres:17
+  -p 5433:5432 pgvector/pgvector:pg17-trixie
 
 DATABASE_URL="postgres://dude:dude@localhost:5433/dude" bun run migrate
 (cd orchestrator && go build -o bin/ ./cmd/...)

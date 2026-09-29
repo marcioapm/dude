@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -87,4 +88,9 @@ func NonNil[T any](s []T) []T {
 		return []T{}
 	}
 	return s
+}
+
+// LikeLiteral escapes text for LIKE: % and _ match themselves.
+func LikeLiteral(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
 }

@@ -1,0 +1,59 @@
+/*
+ * EntityLine: a face, then a strong name over a muted detail. The name is
+ * the only strong ink; the detail one step down in size and ink.
+ */
+
+.line {
+  display: inline-flex;
+  align-items: center;
+  /* Inline, it sits on the text's baseline: a photo would add a descender's
+     gap under it, so a row with a face would be taller than one with
+     initials. */
+  vertical-align: middle;
+  gap: var(--ds-space-12);
+  min-width: 0;
+  max-width: 100%;
+}
+.fill {
+  display: flex;
+  width: 100%;
+}
+.sm {
+  gap: var(--ds-space-8);
+}
+.lead {
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: var(--ds-color-text-secondary);
+}
+.text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: var(--ds-leading-tight);
+}
+.name {
+  font-size: var(--ds-text-md);
+  color: var(--ds-color-text-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.detail {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sm .detail {
+  font-size: var(--ds-text-xs);
+}
+.trailing {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  flex-shrink: 0;
+  margin-left: auto;
+}

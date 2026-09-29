@@ -9,6 +9,7 @@
  */
 
 import { HttpError } from "../api/http.ts";
+import type { Principal } from "../api/auth.ts";
 
 const TIMEOUT_MS = 15_000;
 
@@ -30,11 +31,12 @@ export async function orchestrator(
   method: string,
   path: string,
   body: string = "{}",
-  actorId?: string,
+  /** Who is asking: a principal (its key, person and role all travel), or a key's id alone. */
+  actor?: string | Principal,
 ): Promise<Response> {
   const res = await call(organizationId, method, path, {
     signal: AbortSignal.timeout(TIMEOUT_MS),
-    headers: { ...(actorId ? { "x-dude-actor": actorId } : {}), "content-type": "application/json" },
+    headers: { ...identity(actor), "content-type": "application/json" },
     ...(method === "GET" ? {} : { body: body || "{}" }),
   });
   return new Response(await res.text(), {
@@ -56,6 +58,17 @@ export async function orchestratorStream(organizationId: string, path: string): 
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Who is asking, as the orchestrator reads it (api.principalOf): the key
+ * acting, and for a principal its person and role, so what only the
+ * orchestrator can check (whose a memory is) is checked against them.
+ */
+function identity(actor: string | Principal | undefined): Record<string, string> {
+  if (!actor) return {};
+  if (typeof actor === "string") return { "x-dude-actor": actor };
+  return { "x-dude-actor": actor.apiKeyId, "x-dude-person": actor.personId, "x-dude-role": actor.role };
 }
 
 async function call(organizationId: string, method: string, path: string, init: RequestInit): Promise<Response> {
