@@ -36,6 +36,8 @@ type Run struct {
 	Activity  string `json:"activity"`
 	Epoch     int    `json:"epoch"`
 	SessionID string `json:"sessionId"`
+	// The name of the host of its current placement; "" while it has none.
+	Host string `json:"host,omitempty"`
 	// Where it ran, one per start; only filled in by Get.
 	Placements []Placement `json:"placements,omitempty"`
 }
@@ -43,6 +45,8 @@ type Run struct {
 // Placement is one start of a Run on a host.
 type Placement struct {
 	Epoch int `json:"epoch"`
+	// The host's name, as people know it.
+	HostName string `json:"hostName,omitempty"`
 	// assigned, starting, running, stopping; then exited, or lost with its
 	// host.
 	State string `json:"state"`
@@ -84,6 +88,28 @@ func Terminal(state string) bool {
 		return true
 	}
 	return false
+}
+
+// Moved says a Run lux stopped for this reason is moving host, not
+// stopping: lux resumes it elsewhere on its own (a drain, a preemption, an
+// operator's migrate), and reports "stopped" on the way.
+func Moved(reason string) bool {
+	switch reason {
+	case "drain", "preempt", "migrate":
+		return true
+	}
+	return false
+}
+
+// Recorded is the state to keep for a Run lux reports in state for
+// reason: one stopped to move is as good as resuming — lux resumes it at
+// once — and must not read as over (Terminal) to anything that decides on
+// it meanwhile (an abort, a push, a pause).
+func Recorded(state, reason string) string {
+	if state == "stopped" && Moved(reason) {
+		return "resuming"
+	}
+	return state
 }
 
 type Secret struct {
@@ -128,6 +154,8 @@ type Workload struct {
 	// signalled: dude's stop, cancel and pause, and lux's own (a timeout, a
 	// drain). Not after a crash or a lost host.
 	BeforeStop *BeforeStop `json:"beforeStop,omitempty"`
+	// Servers lux starts on every start of the Run (a branch preview's).
+	Servers []ServerInput `json:"servers,omitempty"`
 }
 
 // BeforeStop is a command lux runs inside the container, as the workload's
@@ -257,6 +285,71 @@ func AsError(err error) (*Error, bool) {
 	return e, ok
 }
 
+// ServerInput is a server as a spec declares it or a person adds it: a
+// named port of the Run, and optionally the command lux starts to serve it.
+type ServerInput struct {
+	Name    string            `json:"name"`
+	Port    int               `json:"port"`
+	Command []string          `json:"command,omitempty"`
+	Workdir string            `json:"workdir,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+	// Added at runtime: start it now (lux's default when it has a command).
+	Start *bool `json:"start,omitempty"`
+}
+
+// Server is one of a Run's servers as lux reports it. dude reads a few of
+// its fields and passes the object on as lux sent it (Raw), so what a
+// person sees is lux's word, whatever lux adds to it later.
+type Server struct {
+	Name string `json:"name"`
+	Port int    `json:"port"`
+	// nil for a server that is only a port someone else serves on.
+	Command []string `json:"command"`
+	// Declared in the Run's spec: lux starts it on every start of the Run.
+	FromSpec bool `json:"fromSpec"`
+	// stopped, starting, ready, unreachable or exited.
+	State string `json:"state"`
+	// When it last became ready; nil unless it is.
+	ReadySince *time.Time `json:"readySince"`
+	Since      *time.Time `json:"since"`
+	// Why it is stopped: "stopped", "run stopped", "migrated", "host lost".
+	StopReason *string `json:"stopReason"`
+	// The placement it stopped in, and the one its state is from.
+	StoppedEpoch *int `json:"stoppedEpoch"`
+	Epoch        int  `json:"epoch"`
+	// When a preview request last reached it (lux flushes it every 30s).
+	LastRequestAt *time.Time `json:"lastRequestAt"`
+
+	Raw json.RawMessage `json:"-"`
+}
+
+func (s *Server) UnmarshalJSON(b []byte) error {
+	type plain Server
+	var p plain
+	if err := json.Unmarshal(b, &p); err != nil {
+		return err
+	}
+	*s = Server(p)
+	s.Raw = append(json.RawMessage(nil), b...)
+	return nil
+}
+
+func (s Server) MarshalJSON() ([]byte, error) {
+	if s.Raw != nil {
+		return s.Raw, nil
+	}
+	type plain Server
+	return json.Marshal(plain(s))
+}
+
+// Server states and stop reasons dude decides on.
+const (
+	ServerStopped  = "stopped"
+	ServerStarting = "starting"
+	ServerReady    = "ready"
+	StopMigrated   = "migrated"
+)
+
 // Client is what dude calls on lux. An interface so tests can stand in.
 type Client interface {
 	Submit(ctx context.Context, spec Spec, idempotencyKey string) (Run, error)
@@ -275,6 +368,15 @@ type Client interface {
 	// Exec runs a command in a running Run's container, as its workload
 	// user with its environment, and returns what it printed.
 	Exec(ctx context.Context, runID string, command []string) (ExecResult, error)
+
+	// A Run's servers: listed, added, started, stopped, restarted, removed,
+	// and each one's log ({lines: [{t, stream, text}]}, as lux answers).
+	Servers(ctx context.Context, runID string) ([]Server, error)
+	AddServer(ctx context.Context, runID string, in ServerInput) (Server, error)
+	// ServerAction is start, stop or restart.
+	ServerAction(ctx context.Context, runID, name, action string) (Server, error)
+	RemoveServer(ctx context.Context, runID, name string) error
+	ServerLog(ctx context.Context, runID, name string, tail int) (json.RawMessage, error)
 }
 
 type HTTPClient struct {
@@ -442,6 +544,45 @@ func (c *HTTPClient) Download(ctx context.Context, artifactID string) (io.ReadCl
 		return nil, err
 	}
 	return res.Body, nil
+}
+
+func serverPath(runID, name string) string {
+	return "/v1/runs/" + url.PathEscape(runID) + "/servers/" + url.PathEscape(name)
+}
+
+func (c *HTTPClient) Servers(ctx context.Context, runID string) ([]Server, error) {
+	var out struct {
+		Servers []Server `json:"servers"`
+	}
+	err := c.do(ctx, "GET", "/v1/runs/"+url.PathEscape(runID)+"/servers", nil, nil, &out)
+	return out.Servers, err
+}
+
+func (c *HTTPClient) AddServer(ctx context.Context, runID string, in ServerInput) (Server, error) {
+	var s Server
+	err := c.do(ctx, "POST", "/v1/runs/"+url.PathEscape(runID)+"/servers", in, nil, &s)
+	return s, err
+}
+
+func (c *HTTPClient) ServerAction(ctx context.Context, runID, name, action string) (Server, error) {
+	switch action {
+	case "start", "stop", "restart":
+	default:
+		return Server{}, fmt.Errorf("no server action %q", action)
+	}
+	var s Server
+	err := c.do(ctx, "POST", serverPath(runID, name)+"/"+action, nil, nil, &s)
+	return s, err
+}
+
+func (c *HTTPClient) RemoveServer(ctx context.Context, runID, name string) error {
+	return c.do(ctx, "DELETE", serverPath(runID, name), nil, nil, nil)
+}
+
+func (c *HTTPClient) ServerLog(ctx context.Context, runID, name string, tail int) (json.RawMessage, error) {
+	var out json.RawMessage
+	err := c.do(ctx, "GET", serverPath(runID, name)+"/log?tail="+fmt.Sprint(tail), nil, nil, &out)
+	return out, err
 }
 
 // Output follows the SSE stream. Two positions, because lux keeps two

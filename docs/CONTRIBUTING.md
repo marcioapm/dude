@@ -51,6 +51,7 @@ loops (`cmd/dude-orchestrator/main.go`):
 | `phase-sync` | Drives each phase Run on lux: submit, follow its output into the ledger, deliver directives, pause, resume, cancel, and when the agent's turn ends, push, fast-forward the branch, record findings, stop. |
 | `phase-notifier` | Turns a finished phase Run into a `phase.finished` signal for its workflow. |
 | `webhooks` | Acts on stored GitHub deliveries: syncs the pull request each is about. |
+| `previews` | Drives branch previews on lux: submit, follow their state and servers, park one nobody has opened for its project's idle timeout, resume a parked one a person starts a server on, cancel a stopped one. |
 | `pr-reconciler` | Re-reads open pull requests not seen for 15 minutes — the backstop for webhooks GitHub never sent. |
 
 **lux** is the runtime (`~/git/lux`, its own repository and docs). It runs
@@ -137,6 +138,42 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
 - **Asks die with their Run.** Questions and repository requests still open
   when a Run ends are cancelled (triggers). Answering one returns a 409 that
   says so. Design: [`design/agent-tools.md`](design/agent-tools.md).
+
+### Servers and branch previews
+
+`orchestrator/internal/servers`; the API is `apps/control-plane/src/api/routes/servers.ts`.
+
+- **A project's servers are recipes** (`project_servers`): a port, a
+  command, a workdir in the repository, a setup step. A person adds one to
+  a task's Run, and lux runs it as `sh -c "[setup &&] <command>"` in
+  `/workspace/repos/<repo>/<workdir>`, giving it a URL. The command is a
+  shell line as typed (`PORT=3000 npm start`, `cd web && npm run dev`), not
+  exec'd: lux stops a server by signalling its whole process group.
+- **lux owns a server's state.** dude keeps none: it asks lux, and passes
+  lux's Server object on as it came. lux's `server.*` events on a Run's
+  stream become `servers.changed`, and the browser reads again.
+- **Which Run a task shows**: its agent at work (the publishing one), else
+  its live branch preview, else none. A live preview behind an agent at
+  work is still named (`preview` in a task's servers), so it can be stopped.
+- **A migration stops servers.** lux does not restart them after a move
+  (only a spec's servers start on every start); `moved` says so, and a
+  person starts them again. A move is also not the agent dying: a Run lux
+  stopped with a move's reason (`lux.Moved`) is left running.
+- **A branch preview is a Run with no agent** (`runs.kind = 'preview'`, no
+  phase), serving the task's branch with the recipes marked to start in
+  previews as the spec's `workload.servers`. It is parked (`dude_pause =
+  'unused'`) after the project's idle timeout without a request, by lux's
+  `lastRequestAt`; starting a server on it resumes it. One per task.
+  Steer, pause, resume and abort refuse it; it is stopped with `DELETE
+  /v1/tasks/:id/preview`, or ends when its task does (done, failed,
+  aborted). A stopped preview's lux Run is cancelled, a lost one too (lux
+  keeps a lost Run to resume).
+- **Previews open in a new tab**, never in a frame: a preview's sign-in
+  cookie is SameSite=Lax and does not reach a cross-site iframe. Only an
+  `https://` server URL becomes a link.
+- **Egress entries are what lux takes**: `*`, a hostname (no wildcards —
+  lux resolves each), an address or a CIDR range. The API refuses others;
+  the orchestrator leaves out any saved before it did.
 
 ## Decisions already made
 
@@ -256,6 +293,7 @@ In rough priority order.
 | Change the delivery sequence or its bounds | `orchestrator/internal/delivery/workflow.go`, `policy.go` |
 | Change what an agent is told | `orchestrator/internal/delivery/prompts.go` |
 | Change what lux is asked to run | `orchestrator/internal/phases/spec.go` |
+| Change what a branch preview runs, or when it parks | `orchestrator/internal/servers/previews.go` |
 | Change what an agent's output becomes in the ledger | `orchestrator/internal/phases/translate.go` |
 | Change how a finished phase is collected | `finish` and `publish` in `orchestrator/internal/phases/sync.go` |
 | Change what wakes an agent on a PR | `orchestrator/internal/forge/classify.go` |

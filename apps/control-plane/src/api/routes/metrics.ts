@@ -31,7 +31,7 @@ async function taskMetrics(ctx: RequestContext): Promise<Response> {
     const runs = (await sql`
       SELECT r.id, r.phase, r.role, r.category, r.status, m.*
       FROM runs r CROSS JOIN LATERAL run_metrics(r.id) m
-      WHERE r.task_id = ${id} ORDER BY r.created_at`) as Array<Record<string, unknown>>;
+      WHERE r.task_id = ${id} AND r.kind = 'agent' ORDER BY r.created_at`) as Array<Record<string, unknown>>;
     return {
       leadMs: ms(task.lead_seconds),
       activeMs: ms(task.active_seconds),

@@ -1,0 +1,60 @@
+/* Branch preview lifecycle: the StepList, smaller, in the panel. */
+
+.root {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ds-space-4) var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+.item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
+.step {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+}
+.done {
+  color: var(--ds-color-text-secondary);
+}
+.now {
+  color: var(--ds-color-text-strong);
+  font-weight: var(--ds-weight-medium);
+}
+.glyph {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+}
+.done .glyph {
+  color: var(--ds-tone-success-mark);
+}
+.now .glyph {
+  color: var(--ds-tone-info-mark);
+}
+.elapsed {
+  color: var(--ds-color-text-muted);
+  font-weight: var(--ds-weight-regular);
+  font-variant-numeric: tabular-nums;
+}
+.sep {
+  color: var(--ds-color-text-disabled);
+  display: inline-grid;
+}
+
+/* The moved notice: its words, and Start all at the end of the line. */
+.moved {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ds-space-8);
+}
+.moved b {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-strong);
+}

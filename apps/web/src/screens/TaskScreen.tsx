@@ -36,14 +36,14 @@ import {
   TimelineItem,
   planProgress,
 } from "@dude/design-system/components";
-import { Icon } from "@dude/design-system";
-import { Button, Callout, EmptyState, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
+import { Button, Callout, EmptyState, LinkButton, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
 import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, runLabel, type PersistedEvent } from "@dude/domain";
 import type { ApiClient, Artifact, Finding, MergeMethod, PullRequest, Run, TaskDetail } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
 import { actorName, humanActor, planFrom } from "../api/conversation.ts";
 import { shortError } from "../escalation.ts";
-import { AGENT_CHATTER, useReloadOnEvents } from "../hooks/useEventStream.ts";
+import { AGENT_CHATTER, cameBack, useReloadOnEvents } from "../hooks/useEventStream.ts";
+import { useServers } from "../hooks/useServers.ts";
 import { firstName } from "@dude/design-system";
 import { usePeople, type People } from "../people.tsx";
 import { FilesSection } from "./FilesSection.tsx";
@@ -53,6 +53,8 @@ import { NotFound } from "./NotFound.tsx";
 import { DudeMark, dudeName } from "../DudeMark.tsx";
 import { RunScreen } from "./RunScreen.tsx";
 import { OwnerSelect } from "./OwnerSelect.tsx";
+import { ServersAside } from "./ServersAside.tsx";
+import { ServersSection, serversTabTrailing } from "./ServersSection.tsx";
 import { existingTask, TaskDialog } from "./TaskDialog.tsx";
 import { PullRequestActions } from "./PullRequestActions.tsx";
 import { pullRequestActivity } from "../pullRequests.ts";
@@ -73,6 +75,18 @@ export interface TaskScreenProps {
 
 /** A run's plan, as its latest `agent.plan.updated` left it: for the running step's line. */
 type Plans = ReadonlyMap<string, { done: number; total: number; current: string | null }>;
+
+/**
+ * The servers.changed that start, end, park or wake a preview run, or
+ * carry its lux state (running, or failed on its own): the Sessions tab
+ * lists it, so the task is read again. Not a server's own state change,
+ * which only the servers re-read for.
+ */
+const RUN_CHANGES: ReadonlySet<string> = new Set(["created", "submitted", "stopped", "failed", "parked", "resumed"]);
+function changesRun(payload: unknown): boolean {
+  const p = (payload ?? {}) as { change?: unknown; luxState?: unknown };
+  return RUN_CHANGES.has(String(p.change)) || typeof p.luxState === "string";
+}
 
 export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, breadcrumb, onBack }: TaskScreenProps) {
   // A session's URL is the Sessions tab with it open; the task's URL is
@@ -156,7 +170,25 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, bread
   // What an agent says and does as it works changes nothing on this page
   // but the open session, which has its own stream: no re-read for those.
   // (Its plan and what it spends still re-read: the pipeline and cost show them.)
-  useReloadOnEvents({ client, taskId }, () => void load(), undefined, (e) => AGENT_CHATTER.has(e.eventType));
+  // The servers change on their own stream event: they are re-read, and
+  // the rest of the page only for a servers.changed that starts or ends a
+  // preview run (RUN_CHANGES), not for each server's state change. A
+  // stream that comes back replays nothing, so its return re-reads the
+  // servers too: they may have moved while nothing could say so.
+  const [serversVersion, setServersVersion] = useState(0);
+  const stream = useReloadOnEvents({ client, taskId }, () => void load(), undefined, (e) => {
+    if (e.eventType === EventTypes.ServersChanged) {
+      setServersVersion((v) => v + 1);
+      return !changesRun(e.payload);
+    }
+    return AGENT_CHATTER.has(e.eventType);
+  });
+  const wasStream = useRef(stream);
+  useEffect(() => {
+    if (cameBack(wasStream.current, stream)) setServersVersion((v) => v + 1);
+    wasStream.current = stream;
+  }, [stream]);
+  const servers = useServers(client, { taskId }, serversVersion);
 
   const deliver = async () => {
     setDelivering(true);
@@ -208,6 +240,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, bread
   const prs = [...pullRequests].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const owner = item.owner ? (people.byId.get(item.owner.id) ?? item.owner) : null;
   const working = phases.find((r) => r.status === "running");
+  // The aside says what serves the task when something does, or could: a
+  // project with no servers defined has nothing to say there.
+  const showServers = Boolean(servers.data && (servers.data.run || servers.data.recipes.length > 0));
   // Newest first; the one open is the one asked for, else the one picked
   // on first sight (what was running, else the newest).
   const sessions = [...item.runs].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -289,6 +324,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, bread
           <Tab value="findings" count={findings.length > 0 ? findings.length : undefined}>Findings</Tab>
           <Tab value="sessions" count={item.runs.length > 0 ? item.runs.length : undefined}>Sessions</Tab>
           <Tab value="files" count={artifacts.length > 0 ? new Set(artifacts.map((a) => a.name)).size : undefined}>Files</Tab>
+          <Tab value="servers" trailing={serversTabTrailing(servers.data)}>Servers</Tab>
           <Tab value="activity">Activity</Tab>
         </TabList>
 
@@ -332,8 +368,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, bread
               <TaskMetricsSection client={client} taskId={taskId} live={item.status === "running"}
                 done={["done", "failed", "aborted"].includes(item.status)} version={version} />
             </div>
-            {prs.length > 0 ? (
-              <aside className="taskAside" aria-label="Pull requests">
+            {prs.length > 0 || showServers ? (
+              <aside className="taskAside" aria-label="Pull requests and servers">
                 {prs.map((pr) => (
                   <PullRequestActions key={pr.id} client={client} pr={pr} defaultMethod={mergeMethod} onChanged={() => void load()}>
                     {(actions) => (
@@ -343,15 +379,15 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, bread
                         actions={
                           <>
                             {actions.merge}
-                            <a className="linkButton" href={pr.url} target="_blank" rel="noreferrer">
-                              Open on GitHub <Icon name="external" size={14} />
-                              <span className="ds-sr-only"> (opens in a new tab)</span>
-                            </a>
+                            <LinkButton href={pr.url}>Open on GitHub</LinkButton>
                           </>
                         } />
                     )}
                   </PullRequestActions>
                 ))}
+                {showServers ? (
+                  <ServersAside client={client} taskId={taskId} servers={servers} onAll={() => setTab("servers")} />
+                ) : null}
               </aside>
             ) : null}
           </div>
@@ -400,6 +436,10 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, bread
           ) : (
             <EmptyState compact icon="file" title="No files yet" description="What the agents save — notes, screenshots, reports, recordings — shows here." />
           )}
+        </TabPanel>
+
+        <TabPanel value="servers" className="taskPane">
+          <ServersSection client={client} servers={servers} taskId={taskId} />
         </TabPanel>
 
         <TabPanel value="activity" className="taskPane">

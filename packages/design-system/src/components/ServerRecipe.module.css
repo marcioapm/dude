@@ -1,0 +1,53 @@
+/* Project settings: server definitions and their editor. */
+
+.form {
+  max-width: none;
+}
+.namePort {
+  grid-template-columns: minmax(0, 1fr) 160px;
+}
+.urlPreview {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  padding: var(--ds-space-6) var(--ds-space-8);
+  background: var(--ds-color-chrome);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+  align-self: flex-start;
+  max-width: 100%;
+}
+.urlPreview b {
+  color: var(--ds-color-text-strong);
+  font-weight: var(--ds-weight-medium);
+}
+.urlPreview i {
+  font-style: normal;
+  color: var(--ds-color-text-muted);
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+  min-width: 0;
+}
+.fieldLabel {
+  font-size: var(--ds-text-sm);
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-secondary);
+}
+.envs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-6);
+}
+.env {
+  display: grid;
+  grid-template-columns: minmax(120px, 200px) minmax(0, 1fr) 28px;
+  gap: var(--ds-space-6);
+  align-items: center;
+}
+.envActions {
+  margin-top: var(--ds-space-4);
+}

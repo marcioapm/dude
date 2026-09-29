@@ -168,7 +168,9 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 
 	switch f.EventType {
 	case "state":
-		state := str("state")
+		// A Run lux is moving to another host stops on the way, and is
+		// resumed by lux itself: recorded as resuming, not over.
+		state := lux.Recorded(str("state"), str("reason"))
 		if _, err := tx.Exec(ctx, `UPDATE runs SET lux_state = $2,
 			started_at = CASE WHEN $2 = 'running' THEN COALESCE(started_at, now()) ELSE started_at END,
 			status = CASE WHEN $2 = 'running' AND status IN ('scheduled', 'starting') THEN 'running'::run_status ELSE status END
@@ -207,6 +209,12 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 		raw, _ := json.Marshal(d)
 		_, err := tx.Exec(ctx, `UPDATE runs SET push_result = $2::jsonb WHERE id = $1`, t.run.ID, raw)
 		return err
+	}
+	if strings.HasPrefix(f.EventType, "server.") {
+		// A server of the agent's Run changed (a person started it, it became
+		// ready, the Run moved and it stopped): the browser reads it again.
+		r := t.run
+		return ServerEvent(ctx, tx, r.Org, r.ProjectID, r.TaskID, r.ID, f.EventType, f.EventData)
 	}
 	return nil
 }

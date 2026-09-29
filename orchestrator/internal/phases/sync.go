@@ -640,6 +640,11 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 		if lux.Terminal(r.LuxState) {
 			return true, s.fail(ctx, r, "the agent's container stopped before its work was pushed")
 		}
+		if r.LuxState == "resuming" {
+			// lux is moving it to another host (lux.Recorded): pushed once
+			// it runs there, its checkout with it.
+			return false, nil
+		}
 		if r.PushRequestID != "" {
 			// Asked; the git.push event will arrive on the stream. Nothing to
 			// do meanwhile, so the loop may rest.

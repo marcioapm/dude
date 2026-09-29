@@ -25,6 +25,7 @@ import {
   ChatAside,
   QuestionCard,
   Segmented,
+  ServersDrawer,
   SessionFacts,
   SessionHeader,
   SessionRail,
@@ -34,7 +35,8 @@ import {
   ToolCallCard,
   summarizeToolArgs,
 } from "@dude/design-system/components";
-import { Button, Callout, Dialog, Spinner, Textarea } from "@dude/design-system/primitives";
+import { Button, Callout, Dialog, LinkButton, Spinner, TabToggle, Textarea } from "@dude/design-system/primitives";
+import { summarizeServers } from "@dude/design-system";
 import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, runLabel } from "@dude/domain";
 import type { AgentRole, PersistedEvent } from "@dude/domain";
 import type { ApiClient, Person, RunDetail, RunDiffSummary } from "../api/client.ts";
@@ -42,12 +44,17 @@ import { ApiError, reportedCost } from "../api/client.ts";
 import { PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, snapshot, type Turn } from "../api/conversation.ts";
 import type { ComposerSubmission } from "@dude/design-system/components";
 import { useEventStream } from "../hooks/useEventStream.ts";
+import { useServers } from "../hooks/useServers.ts";
 import { conflictNotice, type Notice } from "../conflict.ts";
 import { firstName, Icon } from "@dude/design-system";
 import { usePeople, type People } from "../people.tsx";
 import { NotFound } from "./NotFound.tsx";
 import { DudeMark, dudeName } from "../DudeMark.tsx";
 import { ChangesPanel } from "./ChangesPanel.tsx";
+import { ServersRunActions, ServersSection, serversTabTrailing } from "./ServersSection.tsx";
+
+/** Whether the servers drawer is open: this browser's choice, kept across runs. */
+const DRAWER = "dude.run.servers";
 
 export interface RunScreenProps {
   client: ApiClient;
@@ -109,8 +116,29 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   const [confirmAbort, setConfirmAbort] = useState(false);
   const [abortReason, setAbortReason] = useState("");
   const people = usePeople();
+  // The servers panel beside the conversation. Open by this browser's last choice; with none made, open once the
+  // run turns out to have servers — they are why someone would look.
+  const [drawer, setDrawer] = useState(() => localStorage.getItem(DRAWER) === "1");
+  const chose = useRef(localStorage.getItem(DRAWER) !== null);
+  const toggleDrawer = useCallback((open: boolean) => {
+    chose.current = true;
+    localStorage.setItem(DRAWER, open ? "1" : "0");
+    setDrawer(open);
+  }, []);
 
   const { events, reconnects } = useEventStream({ client, runId });
+
+  // The servers are re-read on their own event; the Run on its status
+  // events. The latest such event's cursor, not a count: the stream keeps
+  // a window, and a count stands still when an old one drops off the front
+  // as a new one arrives. A replayed history moves it once per event, and
+  // `useServers` folds the burst into one read in flight and one after it.
+  // A stream that came back may have missed one: its return counts too.
+  const serversVersion = useMemo(() => (events.findLast((e) => e.eventType === EventTypes.ServersChanged)?.cursor ?? 0) + reconnects * 1e9, [events, reconnects]);
+  const servers = useServers(client, { runId }, serversVersion);
+  useEffect(() => {
+    if (!chose.current && servers.data?.run && servers.data.servers.length > 0) setDrawer(true);
+  }, [servers.data]);
 
   // Re-read the Run whenever the ledger says its status changed, rather than
   // polling: the stream already tells us when something happened.
@@ -174,6 +202,11 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   // the same one, appended to and changed in place.
   const grouped = useMemo(() => asides(conversation.turns), [conversation]);
   const isLive = run ? !TERMINAL_RUN_STATUSES.includes(run.status) : false;
+  // A branch preview is a run with no agent: nothing to steer, pause or abort
+  // from here (the API says 409 not_an_agent); the servers are all of it.
+  // The Run says so itself, so the agent's controls never flash (or a
+  // parked preview's pause words go missing) before the servers are read.
+  const isPreviewRun = run?.kind === "preview";
   // The latest diff's summary: its file count for the Changes tab, its
   // checksum for the panel to know when to fetch.
   const diffSummary = useMemo(
@@ -293,9 +326,13 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   if (view === "changes" && !hasChanges) showView("chat");
   const liveDiff = isLive && run.status !== "paused";
 
+  // A branch preview has no agent to pause or abort: only its terminal.
   const actions = isLive ? (
     <>
-      {run.status === "paused" ? (
+      {run.status === "running" && servers.data?.run?.terminalUrl ? (
+        <LinkButton size="sm" iconOnly leadingIcon="terminal" label="Open terminal in lux" href={servers.data.run.terminalUrl} data-testid="terminal-icon" />
+      ) : null}
+      {isPreviewRun ? null : run.status === "paused" ? (
         <Button size="sm" variant="secondary" disabled={busy} onClick={() => void intervene(() => client.resume(runId), "resume this run")}>
           Resume
         </Button>
@@ -304,9 +341,11 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
           Pause
         </Button>
       )}
-      <Button size="sm" variant="danger" disabled={busy} onClick={() => setConfirmAbort(true)} data-testid="abort">
-        Abort…
-      </Button>
+      {isPreviewRun ? null : (
+        <Button size="sm" variant="danger" disabled={busy} onClick={() => setConfirmAbort(true)} data-testid="abort">
+          Abort…
+        </Button>
+      )}
     </>
   ) : undefined;
 
@@ -333,123 +372,142 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     <div className="runScreen" data-testid="run-screen">
       <SessionHeader session={session} actions={actions} />
       {/* One bar, kept mounted whichever view shows, so the switch keeps its
-          focus; Changes draws its own controls into the slot after it. */}
+          focus; Changes draws its own controls into the slot after it. The
+          servers are not a view: a panel beside it, so someone can steer
+          the agent and watch its server together. */}
       <div className="runBar">
         {switcher}
         <div className="runBarTools" ref={setToolbar} />
+        <TabToggle pressed={drawer} onPressedChange={toggleDrawer} icon="globe" title="Servers on this run" trailing={serversTabTrailing(servers.data)} data-testid="servers-toggle">
+          Servers
+        </TabToggle>
       </div>
-      {view === "changes" ? (
-        <ChangesPanel client={client} runId={runId} role={role} events={events} checksum={diffSummary?.checksum ?? ""} live={liveDiff}
-          selected={selected} onSelectedChange={setSelected} toolbarIn={toolbar} />
-      ) : view === "events" ? (
-        <>
-          <div className="runEvents" data-testid="event-log">
-          <EventStream>
-            {events.map((event) => (
-              <EventRow
-                key={event.eventId}
-                occurredAt={event.occurredAt}
-                eventType={event.eventType}
-                actor={{ type: event.actor.type, id: event.actor.id, ...namedActor(event, people) }}
-                summary={summarize(event)}
-                // An element, not a string: EventRow only renders the detail
-                // when the row is open, so the JSON is built for the handful
-                // of rows an operator actually expands.
-                detail={<PayloadDetail payload={event.payload} />}
-              />
-            ))}
-          </EventStream>
-          </div>
-        </>
-      ) : (
-        <>
-          <div className="runChat">
-            <ChatTranscript
-              fill
-              live={isLive}
-              revision={events.length}
-              turns={conversation.turns.length}
-              pinned={
-                conversation.plan.length > 0 ? (
-                  <AgentPlan items={conversation.plan} defaultCollapsed data-testid="plan" />
-                ) : null
-              }
-              footer={!isLive ? <RunEnded run={run} onOpenTask={onOpenTask ? () => onOpenTask(run.taskId) : undefined} /> : (
-                <ChatComposer
-                  // The agent waiting on a question takes an answer; otherwise
-                  // anything said steers it.
-                  mode={conversation.openQuestion ? "answer" : "steer"}
-                  question={
-                    conversation.openQuestion
-                      ? {
-                          id: conversation.openQuestion.questionId,
-                          text: conversation.openQuestion.text,
-                          askedBy: runLabel(run),
-                          askedAt: conversation.openQuestion.at,
-                          // Choices only for whoever may choose.
-                          options: waitingOn ? [] : conversation.openQuestion.options,
-                        }
-                      : undefined
-                  }
-                  // A paused Run takes an answer (a parked one is resumed by it),
-                  // not a steer; a question is its owner's to answer.
-                  disabled={(run.status === "paused" && !conversation.openQuestion) ||
-                    (conversation.openQuestion !== null && waitingOn !== undefined)}
-                  disabledReason={
-                    waitingOn && (conversation.openQuestion || run.dudePause === "person")
-                      ? `Waiting for ${waitingOn} to ${!conversation.openQuestion && conversation.openRequest ? "decide" : "answer"}.`
-                      : run.dudePause ? PAUSE_WORDS[run.dudePause].composer
-                      : "This run is paused. Resume it to steer."
-                  }
-                  onSubmit={send}
-                  sentAs={youName ? firstName(youName) : undefined}
-                  canInterrupt
-                />
-              )}
-              emptyMessage="Waiting for the agent to start."
-            >
-              {grouped.map((group) => Array.isArray(group)
-                ? <ChatAside key={group[0]!.id}>{group.map(render)}</ChatAside>
-                : render(group))}
-              {conversation.activity ? (
-                <ChatMessage
-                  role={role}
-                  activity={conversation.activity}
-                  activityProps={
-                    conversation.activeTool
-                      ? { label: conversation.activeTool.name, since: conversation.activeTool.since }
-                      : undefined
-                  }
-                />
-              ) : null}
-            </ChatTranscript>
-            {/* Cost, tokens and elapsed are the header's, on every view: the rail has the rest. */}
-            <SessionRail className="runRail" aria-label="This session" data-testid="session-rail">
-              <SessionRailBlock label="Session">
-                <SessionFacts facts={[
-                  ...(run.model ? [{ label: "Model", value: run.model, mono: true }] : []),
-                  ...(run.harness ? [{ label: "Agent", value: run.harness }] : []),
-                  { label: "Attempt", value: run.attempt },
-                ]} />
-              </SessionRailBlock>
-              {tools.length > 0 ? (
-                <SessionRailBlock label="Tools used">
-                  <ToolUsage tools={tools} />
+      <div className="runSplit">
+        <div className="runView">
+          {view === "changes" ? (
+            <ChangesPanel client={client} runId={runId} role={role} events={events} checksum={diffSummary?.checksum ?? ""} live={liveDiff}
+              selected={selected} onSelectedChange={setSelected} toolbarIn={toolbar} />
+          ) : view === "events" ? (
+            <div className="runEvents" data-testid="event-log">
+              <EventStream>
+                {events.map((event) => (
+                  <EventRow
+                    key={event.eventId}
+                    occurredAt={event.occurredAt}
+                    eventType={event.eventType}
+                    actor={{ type: event.actor.type, id: event.actor.id, ...namedActor(event, people) }}
+                    summary={summarize(event)}
+                    // An element, not a string: EventRow only renders the detail
+                    // when the row is open, so the JSON is built for the handful
+                    // of rows an operator actually expands.
+                    detail={<PayloadDetail payload={event.payload} />}
+                  />
+                ))}
+              </EventStream>
+            </div>
+          ) : (
+            <div className="runChat">
+              <ChatTranscript
+                fill
+                live={isLive}
+                revision={events.length}
+                turns={conversation.turns.length}
+                pinned={
+                  conversation.plan.length > 0 ? (
+                    <AgentPlan items={conversation.plan} defaultCollapsed data-testid="plan" />
+                  ) : null
+                }
+                footer={!isLive ? <RunEnded run={run} onOpenTask={onOpenTask ? () => onOpenTask(run.taskId) : undefined} /> : isPreviewRun ? (
+                  // A preview run has no agent to steer: its servers are the whole of it.
+                  <Callout tone="neutral" data-testid="preview-run-note">A branch preview has no agent. Start, stop and open its servers from the Servers panel; its checkout is the branch as it stood.</Callout>
+                ) : (
+                  <ChatComposer
+                    // The agent waiting on a question takes an answer; otherwise
+                    // anything said steers it.
+                    mode={conversation.openQuestion ? "answer" : "steer"}
+                    question={
+                      conversation.openQuestion
+                        ? {
+                            id: conversation.openQuestion.questionId,
+                            text: conversation.openQuestion.text,
+                            askedBy: runLabel(run),
+                            askedAt: conversation.openQuestion.at,
+                            // Choices only for whoever may choose.
+                            options: waitingOn ? [] : conversation.openQuestion.options,
+                          }
+                        : undefined
+                    }
+                    // A paused Run takes an answer (a parked one is resumed by it),
+                    // not a steer; a question is its owner's to answer.
+                    disabled={(run.status === "paused" && !conversation.openQuestion) ||
+                      (conversation.openQuestion !== null && waitingOn !== undefined)}
+                    disabledReason={
+                      waitingOn && (conversation.openQuestion || run.dudePause === "person")
+                        ? `Waiting for ${waitingOn} to ${!conversation.openQuestion && conversation.openRequest ? "decide" : "answer"}.`
+                        : run.dudePause ? PAUSE_WORDS[run.dudePause].composer
+                        : "This run is paused. Resume it to steer."
+                    }
+                    onSubmit={send}
+                    sentAs={youName ? firstName(youName) : undefined}
+                    canInterrupt
+                  />
+                )}
+                emptyMessage="Waiting for the agent to start."
+              >
+                {grouped.map((group) => Array.isArray(group)
+                  ? <ChatAside key={group[0]!.id}>{group.map(render)}</ChatAside>
+                  : render(group))}
+                {conversation.activity ? (
+                  <ChatMessage
+                    role={role}
+                    activity={conversation.activity}
+                    activityProps={
+                      conversation.activeTool
+                        ? { label: conversation.activeTool.name, since: conversation.activeTool.since }
+                        : undefined
+                    }
+                  />
+                ) : null}
+              </ChatTranscript>
+              {/* Cost, tokens and elapsed are the header's, on every view: the rail has the rest. */}
+              <SessionRail className="runRail" aria-label="This session" data-testid="session-rail">
+                <SessionRailBlock label="Session">
+                  <SessionFacts facts={[
+                    ...(run.model ? [{ label: "Model", value: run.model, mono: true }] : []),
+                    ...(run.harness ? [{ label: "Agent", value: run.harness }] : []),
+                    { label: "Attempt", value: run.attempt },
+                  ]} />
                 </SessionRailBlock>
-              ) : null}
-              {changed.length > 0 ? (
-                <SessionRailBlock label="Files changed" live={liveDiff}>
-                  <ChangedFiles files={changed} onOpen={(path) => {
-                    setSelected(path);
-                    showView("changes");
-                  }} />
-                </SessionRailBlock>
-              ) : null}
-            </SessionRail>
-          </div>
-        </>
-      )}
-
+                {tools.length > 0 ? (
+                  <SessionRailBlock label="Tools used">
+                    <ToolUsage tools={tools} />
+                  </SessionRailBlock>
+                ) : null}
+                {changed.length > 0 ? (
+                  <SessionRailBlock label="Files changed" live={liveDiff}>
+                    <ChangedFiles files={changed} onOpen={(path) => {
+                      setSelected(path);
+                      showView("changes");
+                    }} />
+                  </SessionRailBlock>
+                ) : null}
+              </SessionRail>
+            </div>
+          )}
+        </div>
+        {drawer ? (
+          <ServersDrawer
+            data-testid="servers-drawer"
+            count={servers.data?.run
+              ? servers.data.run.kind === "preview" ? "preview run" : `${summarizeServers(servers.data.servers).ready} of ${servers.data.servers.length} ready`
+              : undefined}
+            actions={<ServersRunActions servers={servers} variant="quiet" />}
+            onClose={() => toggleDrawer(false)}
+          >
+            <ServersSection client={client} servers={servers} inDrawer />
+          </ServersDrawer>
+        ) : null}
+      </div>
 
       {notice ? (
         <Callout tone="neutral" data-testid="conflict-notice">
