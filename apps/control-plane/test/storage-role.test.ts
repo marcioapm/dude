@@ -1,5 +1,7 @@
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
 import { createHmac, createHash } from "node:crypto";
+
+type Storage = typeof import("../src/storage.ts");
 
 const keys = ["FAKEROLEKEYONE", "FAKEROLEKEYTWO"];
 const secrets = ["fakeRoleSecretOne", "fakeRoleSecretTwo"];
@@ -36,6 +38,13 @@ const s3 = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
   return bytes ? new Response(bytes) : new Response("missing", { status: 404 });
 }});
 
+// Counts S3Client constructions; storage.ts resolves `S3Client` from Bun at construction time.
+const RealS3Client = Bun.S3Client;
+let clientsBuilt = 0;
+(Bun as { S3Client: unknown }).S3Client = new Proxy(RealS3Client, {
+  construct(target, args) { clientsBuilt++; return Reflect.construct(target, args); },
+});
+
 for (const key of Object.keys(process.env)) if (key.startsWith("AWS_") || key.startsWith("S3_")) delete process.env[key];
 process.env.AWS_EC2_METADATA_SERVICE_ENDPOINT = `http://127.0.0.1:${meta.port}`;
 process.env.DUDE_S3_BUCKET = "fake-bucket";
@@ -44,7 +53,20 @@ process.env.DUDE_S3_ENDPOINT = `http://127.0.0.1:${s3.port}`;
 delete process.env.DUDE_S3_ACCESS_KEY;
 delete process.env.DUDE_S3_SECRET_KEY;
 const { putObject, getObject, deleteObject } = await import("../src/storage.ts");
-afterAll(() => { meta.stop(true); s3.stop(true); });
+
+// A storage module with none of the cached credentials or clients of earlier imports.
+let freshCount = 0;
+const fresh = (): Promise<Storage> => import(`../src/storage.ts?fresh=${++freshCount}`);
+
+const realNow = Date.now;
+function setClock(offsetMs: number) { Date.now = () => realNow() + offsetMs; }
+
+afterAll(() => {
+  Date.now = realNow;
+  (Bun as { S3Client: unknown }).S3Client = RealS3Client;
+  meta.stop(true);
+  s3.stop(true);
+});
 
 function signed(req: { method: string; url: string; headers: Headers }, generation: number) {
   const auth = req.headers.get("authorization") ?? "";
@@ -100,4 +122,25 @@ test("denied and malformed refresh fail closed without S3 requests", async () =>
     malformed = false;
   }
   expect(requests.length).toBe(count);
+});
+
+test("an unchanged near-expiry credential is rechecked on a throttle and keeps one client", async () => {
+  const storage = await fresh();
+  generation = 0;
+  expiry = Date.now() + 240_000;
+  metadataCalls = 0;
+  requests.length = 0;
+  clientsBuilt = 0;
+  try {
+    // One photo request per second for a minute, all inside the refresh window.
+    for (let second = 0; second < 60; second++) {
+      setClock(second * 1000);
+      await storage.putObject(`flood-${second}`, new Uint8Array([1]), "image/png");
+    }
+  } finally { Date.now = realNow; }
+  // The initial load plus one recheck at 30 s: three metadata calls each.
+  expect(metadataCalls).toBe(6);
+  expect(clientsBuilt).toBe(1);
+  expect(requests.length).toBe(60);
+  for (const request of requests) signed(request, 0);
 });

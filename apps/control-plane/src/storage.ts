@@ -52,18 +52,33 @@ async function loadRoleCredentials(): Promise<Credentials> {
   return { accessKeyId: value.AccessKeyId, secretAccessKey: value.SecretAccessKey, sessionToken: value.Token, expires };
 }
 
+// Refresh starts this long before expiry; inside that window, IMDS is asked at
+// most once per REFRESH_INTERVAL_MS, since it may keep returning the same credential.
+const REFRESH_WINDOW_MS = 300_000;
+const REFRESH_INTERVAL_MS = 30_000;
+let nextRefresh = 0;
+
+function sameCredentials(a: Credentials, b: Credentials): boolean {
+  return a.accessKeyId === b.accessKeyId && a.secretAccessKey === b.secretAccessKey && a.sessionToken === b.sessionToken;
+}
+
 async function roleClient(bucket: string): Promise<S3Client> {
-  if (!roleCredentials || roleCredentials.expires - Date.now() < 300_000) {
+  const now = Date.now();
+  if (!roleCredentials || roleCredentials.expires <= now ||
+      (roleCredentials.expires - now < REFRESH_WINDOW_MS && now >= nextRefresh)) {
     refresh ??= loadRoleCredentials().then((credentials) => {
+      nextRefresh = Date.now() + REFRESH_INTERVAL_MS;
+      if (!roleS3 || !roleCredentials || !sameCredentials(roleCredentials, credentials)) {
+        roleS3 = new S3Client({
+          bucket,
+          region: process.env.DUDE_S3_REGION || "us-east-1",
+          ...(process.env.DUDE_S3_ENDPOINT ? { endpoint: process.env.DUDE_S3_ENDPOINT } : {}),
+          accessKeyId: credentials.accessKeyId,
+          secretAccessKey: credentials.secretAccessKey,
+          sessionToken: credentials.sessionToken,
+        });
+      }
       roleCredentials = credentials;
-      roleS3 = new S3Client({
-        bucket,
-        region: process.env.DUDE_S3_REGION || "us-east-1",
-        ...(process.env.DUDE_S3_ENDPOINT ? { endpoint: process.env.DUDE_S3_ENDPOINT } : {}),
-        accessKeyId: credentials.accessKeyId,
-        secretAccessKey: credentials.secretAccessKey,
-        sessionToken: credentials.sessionToken,
-      });
       return credentials;
     }).finally(() => { refresh = undefined; });
     // Never use an old credential after a failed refresh, even if it has not expired yet.
