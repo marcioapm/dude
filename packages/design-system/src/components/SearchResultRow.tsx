@@ -1,13 +1,14 @@
 import { useId, type HTMLAttributes, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
-import { Icon, type IconName } from "../icons/index.tsx";
+import { Icon } from "../icons/index.tsx";
+import { RefLead, type RefLeadSpec } from "./RefLead.tsx";
 import { useDisclosure } from "../util/useDisclosure.ts";
 import styles from "./SearchResultRow.module.css";
 
 /*
  * One search result: ArtifactRow's anatomy, for what a search found. A
- * 32px row — chevron, rank, what it is (the app's lead: a task's status
- * mark and key, an epic's layers, a project's face, the memory glyph), the
+ * 32px row — chevron, rank, what it is (a `RefLead`: a task's status mark
+ * and key, an epic's layers, a project's face, the memory glyph), the
  * title — and quiet facts at the end: which search found it, where it
  * lives. Why it ranked where it did, and what it says, are behind the
  * click. Nothing is coloured but what the lead carries; a score is never a
@@ -16,8 +17,8 @@ import styles from "./SearchResultRow.module.css";
 
 export interface SearchResultRowProps extends Omit<HTMLAttributes<HTMLLIElement>, "title"> {
   readonly rank: number;
-  /** What it is, before the title. A glyph name draws the glyph; anything else is drawn as given. */
-  readonly lead: IconName | ReactNode;
+  /** What it is, before the title, in the sidebar's grammar (`RefLead`). */
+  readonly lead: RefLeadSpec;
   readonly title: ReactNode;
   /** Muted facts at the end: "words and meaning", the project. */
   readonly facts?: ReadonlyArray<ReactNode>;
@@ -53,7 +54,7 @@ export function SearchResultRow({
         {expandable ? <Icon name="chevron-right" size={12} className={styles["chevronIcon"]} /> : null}
       </span>
       <span className={styles["rank"]}>{rank}</span>
-      <span className={styles["lead"]}>{typeof lead === "string" ? <Icon name={lead as IconName} size={14} /> : lead}</span>
+      <RefLead {...lead} />
       <span className={styles["title"]}>{title}</span>
     </>
   );

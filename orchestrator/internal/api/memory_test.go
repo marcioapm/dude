@@ -88,7 +88,7 @@ func TestAPersonAddsAMemoryAndOnlyTheyOrAnAdminChangeIt(t *testing.T) {
 	if status, out := m.do(t, "PATCH", "/internal/memory/memories/"+id, `{"title": "Ana's edit"}`, "X-Dude-Person", "per_ana"); status != 200 || out["title"] != "Ana's edit" {
 		t.Errorf("Ana's own edit: %d %v", status, out)
 	}
-	if status, out := m.do(t, "POST", "/internal/memory/memories/"+id+"/archive", "", "X-Dude-Person", "per_bo", "X-Dude-Admin", "true"); status != 200 || out["archivedAt"] == nil {
+	if status, out := m.do(t, "POST", "/internal/memory/memories/"+id+"/archive", "", "X-Dude-Person", "per_bo", "X-Dude-Role", "admin"); status != 200 || out["archivedAt"] == nil {
 		t.Errorf("an admin's archive: %d %v", status, out)
 	}
 	if _, out := m.do(t, "GET", "/internal/memory/memories?project=prj_m", ""); len(out["memories"].([]any)) != 0 {
@@ -135,17 +135,16 @@ func TestInvalidMemoriesAreRefusedWithAReason(t *testing.T) {
 	}
 }
 
-func TestOnlyAnAdminReindexes(t *testing.T) {
+// Who may reindex is the backend's to decide (admins; test_memory.py);
+// here, what it does.
+func TestReindexMakesEverythingDueAndTheIndexSaysSo(t *testing.T) {
 	m := setupMemory(t)
-	if status, _ := m.do(t, "POST", "/internal/memory/index/reindex", ""); status != 403 {
-		t.Errorf("a member reindexed: %d", status)
-	}
-	status, out := m.do(t, "POST", "/internal/memory/index/reindex", "", "X-Dude-Admin", "true")
+	status, out := m.do(t, "POST", "/internal/memory/index/reindex", "", "X-Dude-Role", "admin")
 	if status != 200 || out["due"] == nil {
 		t.Errorf("reindex: %d %v", status, out)
 	}
 	status, out = m.do(t, "GET", "/internal/memory/index", "")
-	if status != 200 || out["model"] != "fake" || len(out["kinds"].([]any)) != 4 {
+	if status != 200 || out["model"] != "fake" || len(out["kinds"].([]any)) != 4 || out["total"] == float64(0) {
 		t.Errorf("index: %d %v", status, out)
 	}
 }

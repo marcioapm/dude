@@ -113,7 +113,7 @@ export function ProjectSettingsScreen({ client, projectId, projects, admin, page
               { id: "repositories", label: "Repositories", icon: "git-branch", note: project.repositories.length || undefined },
               agentsNav(settings),
               deliveryNav(settings),
-              memoryNav(index.failed),
+              memoryNav(index.status?.failed),
             ]
           : []
       }

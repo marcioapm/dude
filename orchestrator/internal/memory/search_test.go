@@ -33,7 +33,7 @@ func search(t *testing.T, app *db.DB, org string, e embeddings.Embedder, q memor
 	var out memory.Outcome
 	if err := app.InOrg(context.Background(), org, func(tx pgx.Tx) error {
 		var err error
-		out, err = memory.Search(context.Background(), tx, e, q)
+		out, err = memory.Ranked(context.Background(), tx, memory.EmbedQuery(context.Background(), e, q.Text), q)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -196,6 +196,9 @@ func TestWordsAndMeaningTogetherOutrankEitherAlone(t *testing.T) {
 	if len(out.Results) == 0 || out.Results[0].ID != "mem_hook" || out.Results[0].TextRank == 0 || out.Results[0].VectorRank == 0 {
 		t.Fatalf("top result = %+v", out.Results)
 	}
+	if !strings.Contains(out.Results[0].Snippet, "Dedupe webhook deliveries") || strings.ContainsAny(out.Results[0].Snippet, "⟦*`") {
+		t.Errorf("snippet is not the plain text around the words: %q", out.Results[0].Snippet)
+	}
 	for _, r := range out.Results {
 		if r.ID == "mem_font" && r.Score >= out.Results[0].Score {
 			t.Errorf("an unrelated memory scored as high: %+v", r)
@@ -245,18 +248,6 @@ func TestAProjectSearchesItselfAndItsOrganizationsMemoriesOnly(t *testing.T) {
 	}
 }
 
-func TestAboutNarrowsMemoriesToWhatTheyConcern(t *testing.T) {
-	app, owner := dbtest.Open(t)
-	org, project, epic, task := seed(t, owner)
-	remember(t, owner, org, "mem_a", project, "Retries on this task", "about the task")
-	remember(t, owner, org, "mem_b", project, "Retries elsewhere", "about nothing")
-	exec(t, owner, `INSERT INTO memory_refs (memory_id, organization_id, ref_type, ref_id) VALUES ('mem_a', $1, 'task', $2)`, org, task)
-
-	res := search(t, app, org, nil, memory.Query{Text: "retries", Types: []string{"memory"}, About: []string{task, epic}}).Results
-	if len(res) != 1 || res[0].ID != "mem_a" {
-		t.Errorf("about %s found %+v", task, res)
-	}
-}
 
 func TestALimitAboveTheMostIsTheMost(t *testing.T) {
 	app, owner := dbtest.Open(t)

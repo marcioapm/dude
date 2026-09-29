@@ -2,15 +2,14 @@ package api
 
 // Memory, for the settings pages: search with why each result ranked where
 // it did, the memories themselves, and the index behind both. The backend
-// has decided who may do what (docs/design/memory.md); it names the person
-// acting (X-Dude-Person) and whether they are an admin (X-Dude-Admin), and
-// this refuses an edit of another's memory to anyone else.
+// has decided who may reach each route (reindex: admins); what only the
+// memory knows — whose it is — is checked here, from the principal the
+// backend names (principalOf).
 
 import (
 	"errors"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -31,17 +30,7 @@ func (s *Server) memoryRoutes(mux *http.ServeMux) {
 }
 
 func person(r *http.Request) memory.Actor {
-	return memory.Actor{Type: ledger.ActorHuman, ID: actor(r)}
-}
-
-func list(v string) []string {
-	var out []string
-	for _, s := range strings.Split(v, ",") {
-		if s = strings.TrimSpace(s); s != "" {
-			out = append(out, s)
-		}
-	}
-	return out
+	return memory.Actor{Type: ledger.ActorHuman, ID: principalOf(r).Actor}
 }
 
 // memoryError turns the package's refusals into the caller's.
@@ -60,17 +49,19 @@ func (s *Server) memorySearch(w http.ResponseWriter, r *http.Request, org string
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	var out memory.Outcome
-	// Embedded before the transaction: a slow embedder must not hold a connection.
-	emb := memory.EmbedQuery(r.Context(), s.Embedder, q.Get("q"))
+	// Embedded before the transaction: a slow embedder must not hold a
+	// connection. mode=words is a lookup by name (the About picker): no
+	// meaning, no embedding paid for.
+	var emb memory.Embedded
+	if q.Get("mode") != "words" {
+		emb = memory.EmbedQuery(r.Context(), s.Embedder, q.Get("q"))
+	}
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		var err error
 		out, err = memory.Ranked(r.Context(), tx, emb, memory.Query{
-			Text: q.Get("q"), Project: q.Get("project"), Types: list(q.Get("types")), About: list(q.Get("about")), Limit: limit,
+			Text: q.Get("q"), Project: q.Get("project"), Types: split(q.Get("types")), Limit: limit,
 		})
-		if err != nil {
-			return err
-		}
-		return memory.LabelTasks(r.Context(), tx, out.Results)
+		return err
 	})
 	if err != nil {
 		return err
@@ -111,7 +102,8 @@ func (s *Server) memoryGet(w http.ResponseWriter, r *http.Request, org string) e
 	return nil
 }
 
-type memoryBody struct {
+// memoryPatch is an edit: what is absent stays as it is.
+type memoryPatch struct {
 	ProjectID *string       `json:"projectId"`
 	Title     *string       `json:"title"`
 	Content   *string       `json:"content"`
@@ -120,27 +112,18 @@ type memoryBody struct {
 }
 
 func (s *Server) memoryCreate(w http.ResponseWriter, r *http.Request, org string) error {
-	var b memoryBody
+	var b struct {
+		ProjectID string       `json:"projectId"`
+		Title     string       `json:"title"`
+		Content   string       `json:"content"`
+		Kind      string       `json:"kind"`
+		About     []memory.Ref `json:"about"`
+	}
 	if err := read(r, &b); err != nil {
 		return err
 	}
-	who := r.Header.Get("X-Dude-Person")
-	n := memory.New{Author: memory.Author{Kind: "person", PersonID: who}}
-	if b.ProjectID != nil {
-		n.ProjectID = *b.ProjectID
-	}
-	if b.Title != nil {
-		n.Title = *b.Title
-	}
-	if b.Content != nil {
-		n.Content = *b.Content
-	}
-	if b.Kind != nil {
-		n.Kind = *b.Kind
-	}
-	if b.About != nil {
-		n.About = *b.About
-	}
+	n := memory.New{ProjectID: b.ProjectID, Title: b.Title, Content: b.Content, Kind: b.Kind, About: b.About,
+		Author: memory.Author{Kind: "person", PersonID: principalOf(r).Person}}
 	var m memory.Memory
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		var err error
@@ -158,17 +141,15 @@ func (s *Server) memoryCreate(w http.ResponseWriter, r *http.Request, org string
 // mayChange: a person changes their own memories; an admin, anyone's —
 // an agent's and dude's too.
 func mayChange(r *http.Request, m memory.Memory) error {
-	if r.Header.Get("X-Dude-Admin") == "true" {
-		return nil
-	}
-	if p := r.Header.Get("X-Dude-Person"); p != "" && m.Author.Kind == "person" && m.Author.PersonID == p {
+	p := principalOf(r)
+	if p.Admin || p.Person != "" && m.Author.Kind == "person" && m.Author.PersonID == p.Person {
 		return nil
 	}
 	return fail(http.StatusForbidden, "not_admin", "only an organisation admin changes a memory someone else wrote")
 }
 
 func (s *Server) memoryUpdate(w http.ResponseWriter, r *http.Request, org string) error {
-	var b memoryBody
+	var b memoryPatch
 	if err := read(r, &b); err != nil {
 		return err
 	}
@@ -181,7 +162,7 @@ func (s *Server) memoryUpdate(w http.ResponseWriter, r *http.Request, org string
 		if err := mayChange(r, cur); err != nil {
 			return err
 		}
-		m, err = memory.Update(r.Context(), tx, org, cur.ID, memory.Patch{
+		m, err = memory.Update(r.Context(), tx, org, cur, memory.Patch{
 			Title: b.Title, Content: b.Content, Kind: b.Kind, ProjectID: b.ProjectID, About: b.About,
 		}, person(r))
 		return err
@@ -208,7 +189,7 @@ func (s *Server) memoryArchive(w http.ResponseWriter, r *http.Request, org strin
 		if err := mayChange(r, cur); err != nil {
 			return err
 		}
-		m, err = memory.Archive(r.Context(), tx, org, cur.ID, action == "archive", person(r))
+		m, err = memory.Archive(r.Context(), tx, org, cur, action == "archive", person(r))
 		return err
 	})
 	if err != nil {
@@ -268,9 +249,6 @@ func (s *Server) memoryRetry(w http.ResponseWriter, r *http.Request, org string)
 }
 
 func (s *Server) memoryReindex(w http.ResponseWriter, r *http.Request, org string) error {
-	if r.Header.Get("X-Dude-Admin") != "true" {
-		return fail(http.StatusForbidden, "not_admin", "only an organisation admin reindexes")
-	}
 	var n int64
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		var err error

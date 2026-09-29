@@ -157,28 +157,41 @@ func (x *Indexer) probe(ctx context.Context) bool {
 }
 
 // oneByOne embeds a batch the embedder refused, knowing the embedder works:
-// each document it refuses is that document's fault and backs off at once.
-// A failure that is not a refusal (a rate limit, the endpoint going down)
-// stops it: what is done is kept, and the next sweep decides again.
+// each document it refuses is that document's fault and backs off. A
+// failure that is not a refusal (a rate limit, the endpoint going down)
+// stops it: what is done is kept, and the next sweep decides again. What it
+// learned is written in one transaction at the end.
 func (x *Indexer) oneByOne(ctx context.Context, batch []pending, texts []string, model string, now func() time.Time) (int, error) {
-	done := 0
+	var done []pending
+	var vecs [][]float32
+	var refused []pending
+	var causes []error
 	for i, p := range batch {
-		vecs, err := x.Embedder.Embed(ctx, texts[i:i+1], embeddings.Document)
+		v, err := x.Embedder.Embed(ctx, texts[i:i+1], embeddings.Document)
 		if err != nil && !embeddings.OneBad(err) {
-			return done, nil
+			break
 		}
 		if err != nil {
-			if err := x.refused(ctx, p, err, now()); err != nil {
-				return done, err
-			}
+			refused, causes = append(refused, p), append(causes, err)
 			continue
 		}
-		if err := x.store(ctx, []pending{p}, vecs, model, now()); err != nil {
-			return done, err
-		}
-		done++
+		done, vecs = append(done, p), append(vecs, v[0])
 	}
-	return done, nil
+	at := now()
+	return len(done), x.DB.InSystem(ctx, "indexer", func(tx pgx.Tx) error {
+		if err := storeIn(ctx, tx, done, vecs, model, at); err != nil {
+			return err
+		}
+		for i, p := range refused {
+			if _, err := tx.Exec(ctx, `UPDATE search_documents
+				SET attempts = attempts + 1, last_error = $4, last_attempt_at = $6, next_attempt_at = $5
+				WHERE source_type = $1 AND source_id = $2 AND content_hash = $3`,
+				p.typ, p.id, p.hash, truncate(causes[i].Error(), 500), at.Add(after(p.attempts+1)), at); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // Resume ends a wait: a person pressed Retry or Reindex, and expects it now.
@@ -246,50 +259,45 @@ func describe(err error) string {
 	}
 }
 
-func short(msg string) string {
-	if len(msg) > 500 {
-		return msg[:500] + "…"
-	}
-	return msg
-}
-
 // store writes each vector back unless the words changed while it was
 // being made: then the new words are what is pending.
 func (x *Indexer) store(ctx context.Context, batch []pending, vecs [][]float32, model string, at time.Time) error {
-	return x.DB.InSystem(ctx, "indexer", func(tx pgx.Tx) error {
-		for i, p := range batch {
-			if _, err := tx.Exec(ctx, `UPDATE search_documents
-				SET embedding = $4::halfvec, embedding_model = $5, embedded_at = $6, attempts = 0, last_error = NULL
-				WHERE source_type = $1 AND source_id = $2 AND content_hash = $3`,
-				p.typ, p.id, p.hash, Vector(vecs[i]), model, at); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	return x.DB.InSystem(ctx, "indexer", func(tx pgx.Tx) error { return storeIn(ctx, tx, batch, vecs, model, at) })
 }
 
-// refused backs one document off: the endpoint took its neighbours, not it.
-func (x *Indexer) refused(ctx context.Context, p pending, cause error, at time.Time) error {
-	return x.DB.InSystem(ctx, "indexer", func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE search_documents
-			SET attempts = attempts + 1, last_error = $4, last_attempt_at = $6, next_attempt_at = $5
-			WHERE source_type = $1 AND source_id = $2 AND content_hash = $3`,
-			p.typ, p.id, p.hash, short(cause.Error()), at.Add(after(p.attempts+1)), at)
-		return err
-	})
+// storeIn writes a batch's vectors in one statement.
+func storeIn(ctx context.Context, tx pgx.Tx, batch []pending, vecs [][]float32, model string, at time.Time) error {
+	if len(batch) == 0 {
+		return nil
+	}
+	types, ids, hashes, vs := make([]string, len(batch)), make([]string, len(batch)), make([]string, len(batch)), make([]string, len(batch))
+	for i, p := range batch {
+		types[i], ids[i], hashes[i], vs[i] = p.typ, p.id, p.hash, Vector(vecs[i])
+	}
+	_, err := tx.Exec(ctx, `UPDATE search_documents d
+		SET embedding = u.v::halfvec, embedding_model = $5, embedded_at = $6, attempts = 0, last_error = NULL
+		FROM unnest($1::text[], $2::text[], $3::text[], $4::text[]) u(typ, id, hash, v)
+		WHERE d.source_type = u.typ AND d.source_id = u.id AND d.content_hash = u.hash`,
+		types, ids, hashes, vs, model, at)
+	return err
 }
 
 // clip keeps a text within what one embedding reads well: the start of a
-// long task says what it is. Cut on a rune boundary.
-func clip(s string) string {
-	const max = 8000
-	if len(s) <= max {
+// long task says what it is.
+func clip(s string) string { return truncate(s, 8000) }
+
+// truncate cuts s to at most n bytes, on a rune boundary, marking the cut
+// with … when it is text people read (n below the clip size).
+func truncate(s string, n int) string {
+	if len(s) <= n {
 		return s
 	}
-	s = s[:max]
+	s = s[:n]
 	for !utf8.ValidString(s) {
 		s = s[:len(s)-1]
+	}
+	if n < 8000 {
+		s += "…"
 	}
 	return s
 }

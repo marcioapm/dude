@@ -563,7 +563,8 @@ export class ApiClient {
 
   // -- memory: what dude and its agents remember, and the index they search --
 
-  searchMemory(params: { q: string; project?: string; types?: string; about?: string; limit?: number }): Promise<SearchOutcome> {
+  /** `mode: "words"` skips meaning: a lookup by name (the About picker) needs no embedding. */
+  searchMemory(params: { q: string; project?: string; types?: string; limit?: number; mode?: "words" }): Promise<SearchOutcome> {
     return this.#request("GET", `/v1/memory/search${qs(params)}`);
   }
 

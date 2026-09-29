@@ -16,7 +16,10 @@ type Status struct {
 	Endpoint   string `json:"endpoint,omitempty"`
 	// The embedder as the indexer last found it: failing, since when.
 	Health Health `json:"health"`
-	// Documents that failed on their own, all of them (Failures is the first 50).
+	// All documents, those waiting, and those that failed on their own (all
+	// of them: Failures lists the first 50).
+	Total    int       `json:"total"`
+	Waiting  int       `json:"waiting"`
 	Failed   int       `json:"failed"`
 	Kinds    []Kind    `json:"kinds"`
 	Failures []Failure `json:"failures"`
@@ -39,18 +42,13 @@ type Failure struct {
 	LastTry  time.Time `json:"lastTry"`
 }
 
-// Described is an embedder that can say where it sends text, for the page.
-type Described interface {
-	Endpoint() string
-}
-
 func IndexStatus(ctx context.Context, tx pgx.Tx, e embeddings.Embedder, health Health, project string) (Status, error) {
 	s := Status{Kinds: []Kind{}, Failures: []Failure{}, Health: health}
-	model := ""
 	if e != nil {
-		s.Model, s.Dimensions, model = e.Model(), e.Dimensions(), e.Model()
-		if d, ok := e.(Described); ok {
-			s.Endpoint = d.Endpoint()
+		s.Model, s.Dimensions = e.Model(), e.Dimensions()
+		// Where text is sent, when the embedder is a client that says (not the fake).
+		if c, ok := e.(*embeddings.Client); ok {
+			s.Endpoint = c.Endpoint()
 		}
 	}
 	rows, err := tx.Query(ctx, `SELECT t.type,
@@ -58,9 +56,9 @@ func IndexStatus(ctx context.Context, tx pgx.Tx, e embeddings.Embedder, health H
 			count(d.source_id) FILTER (WHERE d.embedding IS NOT NULL AND d.embedding_model = $1),
 			count(d.source_id) FILTER (WHERE (d.embedding IS NULL OR d.embedding_model IS DISTINCT FROM $1) AND d.last_error IS NULL),
 			count(d.source_id) FILTER (WHERE (d.embedding IS NULL OR d.embedding_model IS DISTINCT FROM $1) AND d.last_error IS NOT NULL)
-		FROM unnest(ARRAY['memory', 'task', 'epic', 'project']) WITH ORDINALITY AS t(type, n)
+		FROM unnest($3::text[]) WITH ORDINALITY AS t(type, n)
 		LEFT JOIN search_documents d ON d.source_type = t.type AND ($2 = '' OR d.project_id = $2 OR d.project_id IS NULL)
-		GROUP BY t.type, t.n ORDER BY t.n`, model, project)
+		GROUP BY t.type, t.n ORDER BY t.n`, s.Model, project, Types)
 	if err != nil {
 		return s, err
 	}
@@ -71,6 +69,8 @@ func IndexStatus(ctx context.Context, tx pgx.Tx, e embeddings.Embedder, health H
 			return s, err
 		}
 		s.Kinds = append(s.Kinds, k)
+		s.Total += k.Total
+		s.Waiting += k.Waiting
 		s.Failed += k.Failed
 	}
 	rows.Close()

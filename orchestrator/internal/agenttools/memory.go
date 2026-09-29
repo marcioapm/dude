@@ -2,8 +2,10 @@ package agenttools
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -33,30 +35,36 @@ type searchHit struct {
 	Snippet string `json:"snippet"`
 }
 
+// embedQuery embeds search_memory's query before its transaction opens, so
+// a slow embedder holds no connection (EmbedQuery waits at most 5s).
+func embedQuery(ctx context.Context, c Caller, args json.RawMessage) any {
+	var in struct{ Query string }
+	_ = json.Unmarshal(args, &in)
+	return memory.EmbedQuery(ctx, c.env.embedder, in.Query)
+}
+
 func searchMemory(ctx context.Context, tx pgx.Tx, c Caller, in searchMemoryIn) ([]searchHit, error) {
 	if strings.TrimSpace(in.Query) == "" {
 		return nil, refuse("a query is required")
 	}
 	for _, t := range in.Types {
-		if t != "memory" && t != "task" && t != "epic" && t != "project" {
+		if !slices.Contains(memory.Types, t) {
 			return nil, refuse("types are memory, task, epic and project, not %q", t)
 		}
 	}
+	emb, _ := c.env.prepared.(memory.Embedded)
 	limit := in.Limit
 	if limit <= 0 {
 		limit = 8
 	}
-	out, err := memory.Ranked(ctx, tx, c.memory.query, memory.Query{Text: in.Query, Project: c.ProjectID, Types: in.Types, Limit: min(limit, 20)})
+	out, err := memory.Ranked(ctx, tx, emb, memory.Query{Text: in.Query, Project: c.ProjectID, Types: in.Types, Limit: min(limit, 20)})
 	if err != nil {
-		return nil, err
-	}
-	if err := memory.LabelTasks(ctx, tx, out.Results); err != nil {
 		return nil, err
 	}
 	hits := make([]searchHit, 0, len(out.Results))
 	for _, r := range out.Results {
 		hits = append(hits, searchHit{Type: r.Type, ID: r.ID, Key: r.Key, Status: r.Status, Title: r.Title,
-			Snippet: strings.NewReplacer("⟦", "", "⟧", "").Replace(r.Snippet)})
+			Snippet: r.Snippet})
 	}
 	return hits, nil
 }
@@ -126,8 +134,8 @@ func remember(ctx context.Context, tx pgx.Tx, c Caller, in rememberIn) (remember
 	if err != nil {
 		return rememberOut{}, err
 	}
-	if c.memory.kick != nil {
-		c.memory.kick()
+	if c.env.kick != nil {
+		c.env.kick()
 	}
 	return rememberOut{ID: m.ID}, nil
 }
@@ -145,12 +153,8 @@ func resolveAbout(ctx context.Context, tx pgx.Tx, project, name string) (memory.
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return memory.Ref{}, err
 	}
-	err = tx.QueryRow(ctx, `SELECT id FROM epics WHERE project_id = $1 AND lower(title) = lower($2) LIMIT 1`, project, name).Scan(&id)
-	if err == nil {
-		return memory.Ref{Type: "epic", ID: id}, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return memory.Ref{}, err
+	if id, err = epicByTitle(ctx, tx, project, name); err != nil || id != "" {
+		return memory.Ref{Type: "epic", ID: id}, err
 	}
 	return memory.Ref{}, refuse("%s", fmt.Sprintf("no task %q or epic %q in this project (list_tasks shows them)", name, name))
 }

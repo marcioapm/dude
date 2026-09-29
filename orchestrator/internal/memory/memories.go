@@ -156,12 +156,11 @@ type Patch struct {
 	About     *[]Ref
 }
 
-func Update(ctx context.Context, tx pgx.Tx, org, id string, p Patch, by Actor) (Memory, error) {
-	m, err := Get(ctx, tx, id)
-	if err != nil {
-		return Memory{}, err
-	}
+// Update changes m, already read (and checked by the caller).
+func Update(ctx context.Context, tx pgx.Tx, org string, m Memory, p Patch, by Actor) (Memory, error) {
+	id := m.ID
 	title, content, kind, project := m.Title, m.Content, m.Kind, m.ProjectID
+	var err error
 	if p.Title != nil {
 		title = *p.Title
 	}
@@ -204,15 +203,13 @@ func Update(ctx context.Context, tx pgx.Tx, org, id string, p Patch, by Actor) (
 	return Get(ctx, tx, id)
 }
 
-// Archive takes a memory out of every search, or puts it back.
-func Archive(ctx context.Context, tx pgx.Tx, org, id string, archived bool, by Actor) (Memory, error) {
-	m, err := Get(ctx, tx, id)
-	if err != nil {
-		return Memory{}, err
-	}
+// Archive takes m, already read, out of every search, or puts it back.
+func Archive(ctx context.Context, tx pgx.Tx, org string, m Memory, archived bool, by Actor) (Memory, error) {
 	if (m.ArchivedAt != nil) == archived {
 		return m, nil
 	}
+	id := m.ID
+	var err error
 	ev := EvRestored
 	if archived {
 		ev = EvArchived
@@ -241,19 +238,44 @@ func record(ctx context.Context, tx pgx.Tx, org string, by Actor, typ, id, proje
 	return err
 }
 
+var refTables = map[string]string{"task": "tasks", "epic": "epics", "project": "projects"}
+
 func exists(ctx context.Context, tx pgx.Tx, typ, id string) error {
-	table := map[string]string{"task": "tasks", "epic": "epics", "project": "projects"}[typ]
-	if table == "" {
-		return invalid("%q is not a task, epic or project", typ)
-	}
-	var ok bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM `+table+` WHERE id = $1)`, id).Scan(&ok); err != nil {
+	missing, err := absent(ctx, tx, []Ref{{Type: typ, ID: id}})
+	if err != nil {
 		return err
 	}
-	if !ok {
+	if len(missing) > 0 {
 		return invalid("no %s %s", typ, id)
 	}
 	return nil
+}
+
+// absent returns the refs that name nothing here: one query per type.
+func absent(ctx context.Context, tx pgx.Tx, refs []Ref) ([]Ref, error) {
+	byType := map[string][]string{}
+	for _, r := range refs {
+		if refTables[r.Type] == "" {
+			return nil, invalid("%q is not a task, epic or project", r.Type)
+		}
+		byType[r.Type] = append(byType[r.Type], r.ID)
+	}
+	var missing []Ref
+	for typ, list := range byType {
+		rows, err := tx.Query(ctx, `SELECT u.id FROM unnest($1::text[]) u(id)
+			WHERE NOT EXISTS (SELECT 1 FROM `+refTables[typ]+` x WHERE x.id = u.id)`, list)
+		if err != nil {
+			return nil, err
+		}
+		gone, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range gone {
+			missing = append(missing, Ref{Type: typ, ID: id})
+		}
+	}
+	return missing, nil
 }
 
 func checkRefs(ctx context.Context, tx pgx.Tx, refs []Ref) ([]Ref, error) {
@@ -264,26 +286,32 @@ func checkRefs(ctx context.Context, tx pgx.Tx, refs []Ref) ([]Ref, error) {
 	var out []Ref
 	for _, r := range refs {
 		r = Ref{Type: r.Type, ID: strings.TrimSpace(r.ID)}
-		if seen[r] {
-			continue
+		if !seen[r] {
+			seen[r] = true
+			out = append(out, r)
 		}
-		if err := exists(ctx, tx, r.Type, r.ID); err != nil {
-			return nil, err
-		}
-		seen[r] = true
-		out = append(out, r)
+	}
+	missing, err := absent(ctx, tx, out)
+	if err != nil {
+		return nil, err
+	}
+	if len(missing) > 0 {
+		return nil, invalid("no %s %s", missing[0].Type, missing[0].ID)
 	}
 	return out, nil
 }
 
 func setRefs(ctx context.Context, tx pgx.Tx, org, id string, refs []Ref) error {
-	for _, r := range refs {
-		if _, err := tx.Exec(ctx, `INSERT INTO memory_refs (memory_id, organization_id, ref_type, ref_id) VALUES ($1, $2, $3, $4)`,
-			id, org, r.Type, r.ID); err != nil {
-			return err
-		}
+	if len(refs) == 0 {
+		return nil
 	}
-	return nil
+	types, ids := make([]string, len(refs)), make([]string, len(refs))
+	for i, r := range refs {
+		types[i], ids[i] = r.Type, r.ID
+	}
+	_, err := tx.Exec(ctx, `INSERT INTO memory_refs (memory_id, organization_id, ref_type, ref_id)
+		SELECT $1, $2, t, i FROM unnest($3::text[], $4::text[]) u(t, i)`, id, org, types, ids)
+	return err
 }
 
 // selectMemory reads a memory as people see it: who wrote it (an agent's
@@ -293,8 +321,7 @@ const selectMemory = `SELECT m.id, coalesce(m.project_id, ''), m.title, m.conten
 		coalesce(r.role::text, ''), coalesce(m.created_by_run_id, ''), coalesce(tp.key_prefix || '-' || t.number, ''),
 		coalesce(m.system_reason, ''), coalesce(m.source_type, ''), coalesce(m.source_id, ''),
 		m.archived_at, m.created_at, m.updated_at,
-		CASE WHEN m.archived_at IS NOT NULL THEN 'archived' WHEN d.embedding IS NOT NULL THEN 'embedded'
-		     WHEN d.last_error IS NOT NULL THEN 'failed' ELSE 'waiting' END,
+		CASE WHEN d.embedding IS NOT NULL THEN 'embedded' WHEN d.last_error IS NOT NULL THEN 'failed' ELSE 'waiting' END,
 		coalesce(d.last_error, '')
 	FROM memories m
 	LEFT JOIN people p ON p.id = m.author_person_id
@@ -357,7 +384,7 @@ func List(ctx context.Context, tx pgx.Tx, q ListQuery) ([]Memory, error) {
 		  AND ($4 = '' OR m.title ILIKE '%' || $4 || '%' ESCAPE '\' OR m.content ILIKE '%' || $4 || '%' ESCAPE '\')
 		  AND ($5 OR m.archived_at IS NULL)
 		ORDER BY m.archived_at IS NOT NULL, m.created_at DESC LIMIT $6`,
-		q.Project, q.Scope, q.Author, likeLiteral(strings.TrimSpace(q.Text)), q.Archived, q.Limit)
+		q.Project, q.Scope, q.Author, db.LikeLiteral(strings.TrimSpace(q.Text)), q.Archived, q.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -366,10 +393,6 @@ func List(ctx context.Context, tx pgx.Tx, q ListQuery) ([]Memory, error) {
 		return nil, err
 	}
 	return labelled(ctx, tx, all)
-}
-
-func likeLiteral(s string) string {
-	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
 }
 
 // labelled fills each memory's refs and source with what a person reads:
@@ -441,7 +464,6 @@ func Labels(ctx context.Context, tx pgx.Tx, refs []Ref) (map[string]Ref, error) 
 		"task":    `SELECT t.id, p.key_prefix || '-' || t.number, t.status::text FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = ANY($1)`,
 		"epic":    `SELECT id, title, '' FROM epics WHERE id = ANY($1)`,
 		"project": `SELECT id, name, '' FROM projects WHERE id = ANY($1)`,
-		"run":     `SELECT r.id, p.key_prefix || '-' || t.number, t.status::text FROM runs r JOIN tasks t ON t.id = r.task_id JOIN projects p ON p.id = t.project_id WHERE r.id = ANY($1)`,
 	}
 	for typ, list := range byType {
 		q, ok := queries[typ]
@@ -466,26 +488,4 @@ func Labels(ctx context.Context, tx pgx.Tx, refs []Ref) (map[string]Ref, error) 
 		}
 	}
 	return out, nil
-}
-
-// LabelTasks fills each task result's key and status, and takes the key off
-// its title (the index titles a task "KEY title"), as the tree shows tasks.
-func LabelTasks(ctx context.Context, tx pgx.Tx, results []Result) error {
-	var refs []Ref
-	for _, r := range results {
-		if r.Type == "task" {
-			refs = append(refs, Ref{Type: "task", ID: r.ID})
-		}
-	}
-	labels, err := Labels(ctx, tx, refs)
-	if err != nil {
-		return err
-	}
-	for i, r := range results {
-		if l, ok := labels["task/"+r.ID]; ok {
-			results[i].Key, results[i].Status = l.Label, l.Status
-			results[i].Title = strings.TrimPrefix(r.Title, l.Label+" ")
-		}
-	}
-	return nil
 }

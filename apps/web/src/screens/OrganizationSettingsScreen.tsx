@@ -70,41 +70,40 @@ export function OrganizationSettingsScreen({ client, me, people, onPeopleChanged
         { id: "github", label: "GitHub", icon: "git-branch" },
         agentsNav(settings),
         deliveryNav(settings),
-        memoryNav(index.failed),
+        memoryNav(index.status?.failed),
       ]}
     >
       {isMemoryPage(page) ? (
-        <SettingsNote icon="info">
-          Everyone here searches and adds memories; a person changes their own, and organisation admins anyone’s.
-        </SettingsNote>
-      ) : (
-        <SettingsNote icon="info">
-          Organisation admins only change these. Every project starts from them; an admin can change them for one project in its own settings.
-        </SettingsNote>
-      )}
-      {isMemoryPage(page) ? (
+        // A page with another audience says so itself: Memory says who may do what there.
         <MemoryPages client={client} page={page} projects={projects} admin={me?.role === "admin"} index={index} onPage={onPage}
           scope={{ kind: "organization", name: settings?.organization.name ?? "the organisation" }} />
-      ) : page === "members" ? (
-        <MembersSection client={client} me={me} people={people} onChanged={onPeopleChanged} />
-      ) : page === "github" ? (
-        <GitHubPage client={client} admin={me?.role === "admin"} />
-      ) : needsSettings && !scope ? (
-        <div className="centered">{problem ? <Callout tone="danger">{problem}</Callout> : <Spinner label="Loading…" />}</div>
-      ) : scope && page === "general" ? (
+      ) : (
         <>
-          <SettingsHeader title="General" />
-          <SettingsSection title="Organisation">
-            <SettingRow label="Name" help="How dude names this organisation, and what “From …” says in a project’s settings.">
-              <span data-testid="org-name">{scope.settings.organization.name}</span>
-            </SettingRow>
-          </SettingsSection>
+          <SettingsNote icon="info">
+            Organisation admins only change these. Every project starts from them; an admin can change them for one project in its own settings.
+          </SettingsNote>
+          {page === "members" ? (
+            <MembersSection client={client} me={me} people={people} onChanged={onPeopleChanged} />
+          ) : page === "github" ? (
+            <GitHubPage client={client} admin={me?.role === "admin"} />
+          ) : needsSettings && !scope ? (
+            <div className="centered">{problem ? <Callout tone="danger">{problem}</Callout> : <Spinner label="Loading…" />}</div>
+          ) : scope && page === "general" ? (
+            <>
+              <SettingsHeader title="General" />
+              <SettingsSection title="Organisation">
+                <SettingRow label="Name" help="How dude names this organisation, and what “From …” says in a project’s settings.">
+                  <span data-testid="org-name">{scope.settings.organization.name}</span>
+                </SettingRow>
+              </SettingsSection>
+            </>
+          ) : scope && page === "delivery" ? (
+            <DeliveryPage scope={scope} />
+          ) : scope && isRole(page) ? (
+            <RolePage key={page} scope={scope} role={page} onOpenRun={onOpenRun} />
+          ) : null}
         </>
-      ) : scope && page === "delivery" ? (
-        <DeliveryPage scope={scope} />
-      ) : scope && isRole(page) ? (
-        <RolePage key={page} scope={scope} role={page} onOpenRun={onOpenRun} />
-      ) : null}
+      )}
     </SettingsFrame>
   );
 }

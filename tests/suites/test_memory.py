@@ -27,6 +27,7 @@ def test_a_memory_is_found_listed_edited_and_archived(client: ApiClient, project
     assert found["mode"] == "words"
     assert [r["id"] for r in found["results"]][:1] == [memory["id"]]
     assert found["results"][0]["textRank"] == 1 and found["results"][0]["vectorRank"] == 0
+    assert "⟦" not in found["results"][0]["snippet"]
 
     edited = client.patch(f"/v1/memory/memories/{memory['id']}", {"title": "Run tests on a throwaway database"})
     assert edited.status_code == 200 and edited.json()["title"] == "Run tests on a throwaway database"
@@ -50,7 +51,9 @@ def test_only_the_author_or_an_admin_changes_a_memory(client: ApiClient, org: di
     execute(env.owner_dsn, "UPDATE people SET role = 'member' WHERE id = (SELECT person_id FROM api_keys WHERE name = 'member' AND organization_id = %s)", (org["id"],))
     assert member.patch(f"/v1/memory/memories/{memory['id']}", {"title": "Mine now"}).status_code == 403
     assert member.post(f"/v1/memory/memories/{memory['id']}/archive").status_code == 403
+    # Reindexing is an admin's, decided by the backend like every admin route.
     assert member.post("/v1/memory/index/reindex").status_code == 403
+    assert client.post("/v1/memory/index/reindex").status_code == 200
     # They add their own, and change it.
     theirs = member.post("/v1/memory/memories", {"title": "Mine", "content": "x"}).json()
     assert member.patch(f"/v1/memory/memories/{theirs['id']}", {"content": "y"}).status_code == 200
@@ -69,6 +72,7 @@ def test_the_index_says_what_is_waiting_without_an_embedder(client: ApiClient, p
     assert "model" not in status
     memories = next(k for k in status["kinds"] if k["type"] == "memory")
     assert memories["total"] >= 1 and memories["embedded"] == 0
+    assert status["total"] == sum(k["total"] for k in status["kinds"])
 
 
 @pytest.mark.ui

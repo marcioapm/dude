@@ -12,7 +12,7 @@ export type SearchType = (typeof SEARCH_TYPES)[number];
 
 /** What a memory is about, or where it was learned; labelled when read. */
 export interface MemoryRef {
-  readonly type: "task" | "epic" | "project" | "run";
+  readonly type: "task" | "epic" | "project";
   readonly id: string;
   /** A task's key (TEXT-12), an epic's title, a project's name. */
   readonly label?: string | undefined;
@@ -47,8 +47,8 @@ export interface Memory {
   readonly archivedAt?: string;
   readonly createdAt: string;
   readonly updatedAt: string;
-  /** Searchable by meaning, by words only for now, or failed (indexNote says why). */
-  readonly index: "embedded" | "waiting" | "failed" | "archived";
+  /** Searchable by meaning, by words only for now, or failed (indexNote says why). An archived one is in no search (archivedAt). */
+  readonly index: "embedded" | "waiting" | "failed";
   readonly indexNote?: string;
 }
 
@@ -69,7 +69,7 @@ export interface SearchResult {
   readonly key?: string;
   readonly status?: string;
   readonly title: string;
-  /** Matched words are between ⟦ and ⟧. */
+  /** Where the words matched, as plain text. */
   readonly snippet: string;
   /** 1-based; 0 when that search did not find it. */
   readonly textRank: number;
@@ -97,7 +97,9 @@ export interface IndexStatus {
   readonly endpoint?: string;
   /** The embedder as the indexer last found it. */
   readonly health: { readonly error?: string; readonly since?: string; readonly retry?: string };
-  /** Documents that failed on their own, all of them (failures lists the first 50). */
+  /** Across kinds: documents, waiting to be embedded, and failed on their own (failures lists the first 50). */
+  readonly total: number;
+  readonly waiting: number;
   readonly failed: number;
   readonly kinds: readonly {
     readonly type: SearchType;
