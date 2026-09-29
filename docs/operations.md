@@ -143,13 +143,34 @@ to end: a query sharing no word with a memory finds it by meaning.
 | `DUDE_S3_ACCESS_KEY`, `DUDE_S3_SECRET_KEY` | off | Explicit credentials for local S3-compatible stores such as MinIO; set both. The secret key is a **secret**. Unset, the backend obtains temporary EC2 instance-role credentials through IMDSv2; it does not use Bun's AWS environment credential fallback. |
 
 On EC2, set `DUDE_S3_BUCKET` and `DUDE_S3_REGION`, grant the instance role
-`s3:PutObject`, `s3:GetObject` and `s3:DeleteObject` on the bucket, and leave
-both `DUDE_S3_*KEY` variables unset. The backend must reach the host's
-`169.254.169.254` metadata service (IMDSv2); an isolated container without
-host metadata access cannot use the role. Credentials are refreshed five
-minutes before expiry. Metadata errors stop reads and uploads rather than
-using expired credentials. `AWS_EC2_METADATA_SERVICE_ENDPOINT` overrides the
-metadata address for local tests only; do not point it at an untrusted server.
+`s3:PutObject`, `s3:GetObject` and `s3:DeleteObject` on the bucket's objects
+only (`arn:aws:s3:::<bucket>/*`), and leave both `DUDE_S3_*KEY` variables
+unset.
+
+The instance role is the instance's, not the backend's: every process on the
+host that can reach the metadata service — the orchestrator, anything else
+running there — gets the same bucket permissions. Keep the bucket's public
+access blocked, and never give agent or runner containers access to the
+host's metadata service. If the backend needs permissions no
+other process on the host may have, run it on its own instance with its own
+role.
+
+Set the instance's metadata options to `HttpTokens=required`, so no process
+on the host can use IMDSv1; the backend uses IMDSv2 only. Production runs the
+backend directly on the host, where the default hop limit of 1 is enough. A
+backend in a container needs a metadata hop limit of at least 2 and a route
+to `169.254.169.254`, or explicit keys.
+
+Credentials are refreshed from five minutes before expiry, at most once every
+30 seconds. A failed refresh is retried after 5 seconds, doubling to at most
+60 seconds; meanwhile the current credential is used until 60 seconds before
+it expires. When the metadata service is unreachable or denies access beyond
+that, uploads and image reads fail (500), deletes of replaced images are
+best-effort and leave the old object behind, and `/health` stays green: it
+checks only the database. Storage errors are logged as the operation, HTTP
+status and S3 or metadata error code only.
+`AWS_EC2_METADATA_SERVICE_ENDPOINT` overrides the metadata address for local
+tests only; do not point it at an untrusted server.
 
 Photos and project images are the only files the backend stores. They are
 small (the browser uploads a 160 px square, at most 512 KB is accepted),
