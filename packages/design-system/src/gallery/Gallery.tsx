@@ -151,7 +151,6 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["sv-drawer", "ServersDrawer"],
       ["sv-stages", "PreviewStages / ServersMoved"],
       ["sv-summary", "ServersSummary"],
-      ["sv-preview", "PreviewFrame"],
       ["sv-recipes", "ServerRecipeTable / Dialog"],
     ],
   ],

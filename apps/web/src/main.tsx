@@ -22,31 +22,28 @@ import { App } from "./App.tsx";
 import { fixtureScenario, type FixtureScenario } from "./fixtures/scenario.ts";
 import { turnPushOff } from "./push.ts";
 import { PeopleProvider } from "./people.tsx";
-import { PreviewDocumentContext } from "./preview.tsx";
 import { DudeMark } from "./DudeMark.tsx";
 
 const KEY_STORAGE = "dude.apiKey";
 
 /**
  * The mockups' world in place of the API, outside production: loaded only
- * when asked for, so a production build carries none of it. What the
- * preview frame shows stands in for a server there is no way to reach.
+ * when asked for, so a production build carries none of it.
  */
 interface Fixtures {
   client: ApiClient;
-  previewDocument: string;
 }
 async function loadFixtures(scenario: FixtureScenario): Promise<Fixtures> {
-  const { FixtureClient, installFixtureStream, PREVIEW_PAGE } = await import("./fixtures/client.ts");
+  const { FixtureClient, installFixtureStream } = await import("./fixtures/client.ts");
   installFixtureStream();
-  return { client: new FixtureClient(scenario), previewDocument: PREVIEW_PAGE };
+  return { client: new FixtureClient(scenario) };
 }
 
 function Root() {
   const [apiKey, setApiKey] = useState(() => localStorage.getItem(KEY_STORAGE) ?? "");
   // The server refused the key it was given: the prompt says so.
   const [refused, setRefused] = useState(false);
-  // Outside production, `?fixtures=a` … `f` answers the API from the mockups' world.
+  // Outside production, `?fixtures=a` … `e` answers the API from the mockups' world.
   const scenario = useMemo(() => (import.meta.env.DEV || import.meta.env.MODE === "fixtures" ? fixtureScenario() : null), []);
   const [fixtures, setFixtures] = useState<Fixtures | null>(null);
   useEffect(() => {
@@ -80,19 +77,17 @@ function Root() {
     <TooltipProvider>
       <ToastProvider>
         <PeopleProvider client={client}>
-          <PreviewDocumentContext.Provider value={fixtures?.previewDocument}>
-            <App
-              client={client}
-              onKeyRefused={keyRefused}
-              onSignOut={() => {
-                // This browser stops hearing about the organization it leaves.
-                void turnPushOff(client).finally(() => {
-                  localStorage.removeItem(KEY_STORAGE);
-                  setApiKey("");
-                });
-              }}
-            />
-          </PreviewDocumentContext.Provider>
+          <App
+            client={client}
+            onKeyRefused={keyRefused}
+            onSignOut={() => {
+              // This browser stops hearing about the organization it leaves.
+              void turnPushOff(client).finally(() => {
+                localStorage.removeItem(KEY_STORAGE);
+                setApiKey("");
+              });
+            }}
+          />
         </PeopleProvider>
       </ToastProvider>
     </TooltipProvider>

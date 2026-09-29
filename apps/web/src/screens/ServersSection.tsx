@@ -2,7 +2,7 @@
  * The servers a task or a run has, as one section: the run they live on
  * (the agent's, or a branch preview's), a notice when the run moved host,
  * a preview's stages, the list with each server's log folding open under
- * it, and Preview opening the page in a sheet. The task's Servers tab and
+ * it, and Preview opening the page in a new tab. The task's Servers tab and
  * the run screen's drawer are the same section; the drawer carries the
  * run's actions in its own head, through `ServersRunActions`.
  */
@@ -12,8 +12,6 @@ import {
   AgentAvatar,
   Duration,
   PersonAvatar,
-  PreviewFrame,
-  PreviewScrim,
   PreviewStages,
   ServerList,
   ServerRow,
@@ -29,12 +27,11 @@ import {
 import { anyMoving, canStartAny, canStop, canStopAny, describeServer, firstName, formatTimestamp, isMoving, PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES, serverLogLines, summarizeServers, toggled, useNow, type ServersRun } from "@dude/design-system";
 import { Button, Callout, Dialog, EmptyState, FormActions, RowMenu, Spinner, TabCount } from "@dude/design-system/primitives";
 import { ALL_STATUSES } from "@dude/design-system/tokens";
-import type { RunServer, RunStatus, TaskServers } from "@dude/domain";
+import type { RunStatus, TaskServers } from "@dude/domain";
 import type { LogLine } from "@dude/design-system/components";
 import type { ApiClient } from "../api/client.ts";
 import { runIsLive, type ServersState } from "../hooks/useServers.ts";
 import { usePeople } from "../people.tsx";
-import { usePreviewDocument } from "../preview.tsx";
 import { AddServerDialog } from "./AddServerDialog.tsx";
 
 export interface ServersSectionProps {
@@ -44,10 +41,6 @@ export interface ServersSectionProps {
   taskId?: string | undefined;
   /** In a drawer: the run's actions sit in its head (`ServersRunActions`), the logs are shorter. */
   inDrawer?: boolean | undefined;
-  /** The preview, when the parent lays it out itself (docked beside a conversation). */
-  onPreview?: ((name: string | null) => void) | undefined;
-  /** Which server's preview is open, when the parent owns it. */
-  previewing?: string | null | undefined;
 }
 
 /** The run status as StatusMark says it: a preview's own word until its servers are up; a word the vocabulary lacks, as it came. */
@@ -69,7 +62,7 @@ export function ServersRunActions({ servers, variant = "secondary" }: { servers:
   );
 }
 
-export const ServersSection = memo(function ServersSection({ client, servers, taskId, inDrawer, onPreview, previewing }: ServersSectionProps) {
+export const ServersSection = memo(function ServersSection({ client, servers, taskId, inDrawer }: ServersSectionProps) {
   const { data, problem, busy } = servers;
   const people = usePeople();
   const now = useNow(Boolean(data && anyMoving(data.servers)), 30_000);
@@ -78,9 +71,6 @@ export const ServersSection = memo(function ServersSection({ client, servers, ta
   const [logs, setLogs] = useState<Record<string, LogLine[] | "loading">>({});
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<string | null>(null);
-  const [ownPreview, setOwnPreview] = useState<string | null>(null);
-  const preview = onPreview ? previewing ?? null : ownPreview;
-  const setPreview = onPreview ?? setOwnPreview;
 
   const run = data?.run ?? null;
   const runId = run?.id ?? null;
@@ -158,7 +148,6 @@ export const ServersSection = memo(function ServersSection({ client, servers, ta
   const isPreview = run.kind === "preview";
   const owner = run.startedBy ? (people.byId.get(run.startedBy.id) ?? run.startedBy) : null;
   const live = runIsLive(run);
-  const previewed = preview ? data.servers.find((s) => s.name === preview) ?? null : null;
   const setup = data.recipes.filter((r) => r.autostartInPreviews && r.setup).map((r) => r.setup).join(", ");
 
   const host = run.host ? <> · {run.host}</> : null;
@@ -232,7 +221,6 @@ export const ServersSection = memo(function ServersSection({ client, servers, ta
                 error={s.error}
                 url={s.url}
                 busy={rowBusy}
-                onPreview={s.url ? () => setPreview(s.name) : undefined}
                 onStart={live && s.command ? () => void servers.start(s.name) : undefined}
                 onStop={live ? () => void servers.stop(s.name) : undefined}
                 onRestart={live && s.command ? () => void servers.restart(s.name) : undefined}
@@ -294,56 +282,9 @@ export const ServersSection = memo(function ServersSection({ client, servers, ta
         }
       />
 
-      {!onPreview && previewed ? (
-        <ServerPreview server={previewed} run={run} now={now} servers={servers} onClose={() => setPreview(null)}
-          onLogs={() => {
-            setPreview(null);
-            setOpenLogs((o) => toggled(o, previewed.name, true));
-          }} />
-      ) : null}
     </>
   );
 });
-
-/**
- * The preview sheet, or the docked frame, for one server: the words the
- * row uses, who is signed in, Restart while the run is live, and the scrim
- * behind a sheet. Three screens open it; what it needs, it works out.
- */
-export function ServerPreview({ server, run, now, servers, docked, onClose, onLogs }: {
-  server: RunServer;
-  run: ServersRun;
-  now: number;
-  servers: ServersState;
-  docked?: boolean | undefined;
-  onClose: () => void;
-  onLogs?: (() => void) | undefined;
-}) {
-  const people = usePeople();
-  const srcDoc = usePreviewDocument();
-  if (!server.url) return null;
-  const words = describeServer(server, now, run);
-  const you = people.me?.email ?? null;
-  return (
-    <>
-      {docked ? null : <PreviewScrim onClose={onClose} />}
-      <PreviewFrame
-        name={server.name}
-        state={words.state}
-        stateLabel={words.label}
-        url={server.url}
-        srcDoc={srcDoc}
-        docked={docked}
-        access={you ? `Signed in as ${you}` : undefined}
-        onClose={onClose}
-        onLogs={onLogs}
-        onRestart={runIsLive(run) && server.command ? () => void servers.restart(server.name) : undefined}
-        foot={<span>{server.name} · {words.detail}</span>}
-        footNote="Opens with your own sign-in; the agent cannot open this."
-      />
-    </>
-  );
-}
 
 /** What the Servers tab shows beside its name: the first bad server as a dot, else how many are ready. */
 export function serversTabTrailing(data: TaskServers | null): ReactNode {

@@ -1,8 +1,8 @@
 import type { HTMLAttributes, ReactNode } from "react";
 import { cx } from "../util/cx.ts";
-import { bareUrl, canStart } from "../util/servers.ts";
+import { bareUrl, canStart, safeServerUrl } from "../util/servers.ts";
 import { Icon } from "../icons/index.tsx";
-import { IconButton } from "../primitives/Button.tsx";
+import { IconButton, LinkButton } from "../primitives/Button.tsx";
 import { ServerStateMark } from "./ServerStateMark.tsx";
 import type { ServerDisplayState } from "../tokens/servers.ts";
 import styles from "./ServersSummary.module.css";
@@ -42,26 +42,26 @@ export interface ServersSummaryRowProps extends Omit<HTMLAttributes<HTMLLIElemen
   readonly name: string;
   readonly state: ServerDisplayState;
   readonly stateLabel?: string | undefined;
-  /** Its URL while ready; else the state's words. */
+  /** Its URL while ready (a link, and Preview opens it in a new tab); else the state's words. */
   readonly url?: string | null | undefined;
   readonly detail?: ReactNode;
-  readonly onPreview?: (() => void) | undefined;
   readonly onStart?: (() => void) | undefined;
   /** For a server that went unreachable: Start would be lux's no-op. */
   readonly onRestart?: (() => void) | undefined;
 }
 
-export function ServersSummaryRow({ name, state, stateLabel, url, detail, onPreview, onStart, onRestart, className, ...rest }: ServersSummaryRowProps) {
+export function ServersSummaryRow({ name, state, stateLabel, url, detail, onStart, onRestart, className, ...rest }: ServersSummaryRowProps) {
   const ready = state === "ready";
+  const href = safeServerUrl(url);
   return (
     <li className={cx(styles["row"], className)} data-server={name} data-state={state} {...rest}>
       <span className={styles["name"]}>{name}</span>
       <ServerStateMark state={state} size="sm" iconOnly label={stateLabel} />
       <span className={styles["url"]}>
-        {ready && url ? <a href={url} target="_blank" rel="noreferrer" title={url}>{bareUrl(url)}</a> : detail}
+        {ready && href ? <a href={href} target="_blank" rel="noopener noreferrer" title={href}>{bareUrl(href)}</a> : detail}
       </span>
-      {ready && onPreview ? (
-        <IconButton size="sm" icon="eye" label={`Preview ${name}`} onClick={onPreview} />
+      {ready && href ? (
+        <LinkButton href={href} size="sm" iconOnly leadingIcon="eye" label={`Preview ${name} (opens in a new tab)`} external={false} target="_blank" rel="noopener noreferrer" />
       ) : state === "unreachable" && onRestart ? (
         <IconButton size="sm" icon="retry" label={`Restart ${name}`} onClick={onRestart} />
       ) : canStart({ state }) && onStart ? (

@@ -1,7 +1,7 @@
 /**
  * The mockups' world, as the API would return it: one project, one epic,
  * the task WC-214 and its runs, the implementer's conversation, and the
- * servers in each of the scenarios a–f. For `FixtureClient`, so the
+ * servers in each of the scenarios a–e. For `FixtureClient`, so the
  * screens can be seen without a backend. Deterministic, anchored to now.
  */
 
