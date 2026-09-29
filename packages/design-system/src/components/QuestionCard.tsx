@@ -78,7 +78,6 @@ function toDate(v: string | number | Date | null | undefined): Date | null {
  *             `ChatMessage intent="answer"` turn that follows; the card
  *             does not quote it, so nothing in the transcript is said twice.
  */
-const stop = (e: { stopPropagation(): void }) => e.stopPropagation();
 
 export function QuestionCard({ role, name, text, options, askedAt, answeredAt, dismissed, onChoose, waitingOn, verb = "answer", isNew, className, ...rest }: QuestionCardProps) {
   const takeOver = `Take over this task to ${verb}`;
@@ -118,7 +117,7 @@ export function QuestionCard({ role, name, text, options, askedAt, answeredAt, d
       className={cx(styles["root"], styles[state], isNew && styles["new"], className)}
       data-state={state}
       data-role={role}
-      aria-label={someoneElse ? `${who} asks a question and is waiting for ${waitingOn} to answer`
+      aria-label={someoneElse ? `${who} asks a question and is waiting for ${waitingOn} to ${verb}`
         : waiting ? `${who} asks a question and is waiting for an answer`
         : state === "dismissed" ? `${who} asked a question that is no longer needed: its run ended` : `${who} asked a question`}
       {...rest}
@@ -134,7 +133,7 @@ export function QuestionCard({ role, name, text, options, askedAt, answeredAt, d
           {/* Announced once when it appears; the clock lives outside the live region so it is not re-read every second. */}
           {someoneElse ? (
             <span role="status" aria-live="polite" className="ds-sr-only">
-              Blocked until {waitingOn} answers.
+              Blocked until {waitingOn} {verb === "decide" ? "decides" : "answers"}.
             </span>
           ) : waiting ? (
             <span role="status" aria-live="polite" className="ds-sr-only">
@@ -178,15 +177,11 @@ export function QuestionCard({ role, name, text, options, askedAt, answeredAt, d
           </p>
         ) : null}
         {hasOptions ? (
-          // Someone else's: shown but not offered; hovering them says it again,
-          // and a click (which does nothing) leaves the hint open rather than closing it.
+          // Someone else's: shown but not offered. With a mouse, hovering them says it
+          // again, and a press (which does nothing) leaves those words up.
           someoneElse ? (
-            <Tooltip content={takeOver} side="bottom">
-              {/* A press on the chips does nothing, so it must not close the words that say why:
-                  it stops at the chips, before the trigger that would close the hint. */}
-              <span className={styles["optionsTrigger"]}>
-                <span onPointerDown={stop} onClick={stop}>{list}</span>
-              </span>
+            <Tooltip content={takeOver} side="bottom" keepOnPress>
+              <div className={styles["optionsTrigger"]}>{list}</div>
             </Tooltip>
           ) : list
         ) : null}
