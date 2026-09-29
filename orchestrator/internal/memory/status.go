@@ -11,11 +11,15 @@ import (
 
 // Status is the Index page: the embedder, what is indexed, what failed.
 type Status struct {
-	Model      string    `json:"model,omitempty"`
-	Dimensions int       `json:"dimensions,omitempty"`
-	Endpoint   string    `json:"endpoint,omitempty"`
-	Kinds      []Kind    `json:"kinds"`
-	Failures   []Failure `json:"failures"`
+	Model      string `json:"model,omitempty"`
+	Dimensions int    `json:"dimensions,omitempty"`
+	Endpoint   string `json:"endpoint,omitempty"`
+	// The embedder as the indexer last found it: failing, since when.
+	Health Health `json:"health"`
+	// Documents that failed on their own, all of them (Failures is the first 50).
+	Failed   int       `json:"failed"`
+	Kinds    []Kind    `json:"kinds"`
+	Failures []Failure `json:"failures"`
 }
 
 type Kind struct {
@@ -40,8 +44,8 @@ type Described interface {
 	Endpoint() string
 }
 
-func IndexStatus(ctx context.Context, tx pgx.Tx, e embeddings.Embedder, project string) (Status, error) {
-	s := Status{Kinds: []Kind{}, Failures: []Failure{}}
+func IndexStatus(ctx context.Context, tx pgx.Tx, e embeddings.Embedder, health Health, project string) (Status, error) {
+	s := Status{Kinds: []Kind{}, Failures: []Failure{}, Health: health}
 	model := ""
 	if e != nil {
 		s.Model, s.Dimensions, model = e.Model(), e.Dimensions(), e.Model()
@@ -67,6 +71,7 @@ func IndexStatus(ctx context.Context, tx pgx.Tx, e embeddings.Embedder, project 
 			return s, err
 		}
 		s.Kinds = append(s.Kinds, k)
+		s.Failed += k.Failed
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {

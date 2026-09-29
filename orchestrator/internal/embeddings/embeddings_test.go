@@ -37,17 +37,16 @@ func TestTheClientSpeaksOpenAIsEmbeddingsAndKeepsTheOrder(t *testing.T) {
 	}
 }
 
-func TestARefusalSaysWhoIsToBlame(t *testing.T) {
-	// status → systemic (no document to blame), one bad (find it one by one)
-	for status, want := range map[int][2]bool{429: {false, false}, 502: {false, false}, 400: {false, true}, 413: {false, true}, 401: {true, false}, 403: {true, false}, 404: {true, false}} {
+func TestARefusalSaysWhetherATextMayBeToBlame(t *testing.T) {
+	for status, oneBad := range map[int]bool{400: true, 413: true, 422: true, 401: false, 403: false, 404: false, 429: false, 502: false} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			http.Error(w, "no", status)
 		}))
 		c := &embeddings.Client{BaseURL: srv.URL, Key: "k", ModelName: "m", Dims: 3}
 		_, err := c.Embed(context.Background(), []string{"a"}, embeddings.Document)
 		srv.Close()
-		if err == nil || embeddings.Systemic(err) != want[0] || embeddings.OneBad(err) != want[1] {
-			t.Errorf("%d: err %v, systemic %v, one bad %v, want %v", status, err, embeddings.Systemic(err), embeddings.OneBad(err), want)
+		if err == nil || embeddings.OneBad(err) != oneBad {
+			t.Errorf("%d: err %v, one bad %v, want %v", status, err, embeddings.OneBad(err), oneBad)
 		}
 	}
 }

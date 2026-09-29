@@ -95,6 +95,10 @@ export interface IndexStatus {
   readonly model?: string;
   readonly dimensions?: number;
   readonly endpoint?: string;
+  /** The embedder as the indexer last found it. */
+  readonly health: { readonly error?: string; readonly since?: string; readonly retry?: string };
+  /** Documents that failed on their own, all of them (failures lists the first 50). */
+  readonly failed: number;
   readonly kinds: readonly {
     readonly type: SearchType;
     readonly total: number;

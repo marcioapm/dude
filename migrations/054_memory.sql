@@ -7,7 +7,17 @@
 -- are indexed at once (tsv); its meaning when the orchestrator's indexer
 -- embeds it. A change of text clears the embedding, an unchanged one keeps
 -- it, so saving a task's status does not cost an embedding.
-CREATE EXTENSION IF NOT EXISTS vector;
+--
+-- pgvector is not a trusted extension: creating it needs a superuser. An
+-- owner that is not one (a managed Postgres) needs it created beforehand,
+-- once, by one that is: CREATE EXTENSION vector; (docs/operations.md).
+DO $$
+BEGIN
+  CREATE EXTENSION IF NOT EXISTS vector;
+EXCEPTION WHEN insufficient_privilege THEN
+  RAISE EXCEPTION 'memory needs the pgvector extension, and this role may not create it'
+    USING HINT = 'As a superuser, in this database, once: CREATE EXTENSION vector; then migrate again. See docs/operations.md, Postgres.';
+END $$;
 
 CREATE TABLE memories (
   id                text PRIMARY KEY,

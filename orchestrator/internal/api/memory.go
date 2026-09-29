@@ -7,7 +7,6 @@ package api
 // this refuses an edit of another's memory to anyone else.
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -71,34 +70,12 @@ func (s *Server) memorySearch(w http.ResponseWriter, r *http.Request, org string
 		if err != nil {
 			return err
 		}
-		return labelResults(r.Context(), tx, out.Results)
+		return memory.LabelTasks(r.Context(), tx, out.Results)
 	})
 	if err != nil {
 		return err
 	}
 	write(w, http.StatusOK, out)
-	return nil
-}
-
-// labelResults puts a task's key before its title and its status beside it,
-// as the tree shows tasks.
-func labelResults(ctx context.Context, tx pgx.Tx, results []memory.Result) error {
-	var refs []memory.Ref
-	for _, r := range results {
-		if r.Type == "task" {
-			refs = append(refs, memory.Ref{Type: "task", ID: r.ID})
-		}
-	}
-	labels, err := memory.Labels(ctx, tx, refs)
-	if err != nil {
-		return err
-	}
-	for i, r := range results {
-		if l, ok := labels["task/"+r.ID]; ok {
-			results[i].Key, results[i].Status = l.Label, l.Status
-			results[i].Title = strings.TrimPrefix(r.Title, l.Label+" ")
-		}
-	}
 	return nil
 }
 
@@ -246,7 +223,11 @@ func (s *Server) memoryIndex(w http.ResponseWriter, r *http.Request, org string)
 	var out memory.Status
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		var err error
-		out, err = memory.IndexStatus(r.Context(), tx, s.Embedder, r.URL.Query().Get("project"))
+		var health memory.Health
+		if s.Indexer != nil {
+			health = s.Indexer.Health()
+		}
+		out, err = memory.IndexStatus(r.Context(), tx, s.Embedder, health, r.URL.Query().Get("project"))
 		return err
 	})
 	if err != nil {

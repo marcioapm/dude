@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -76,13 +77,20 @@ type Embedded struct {
 	Degraded string
 }
 
+// queryTimeout is how long a search waits for its query's embedding before
+// searching by words alone: well under the backend's 15s for the whole
+// request, and short for an agent waiting on it.
+const queryTimeout = 5 * time.Second
+
 // EmbedQuery embeds the words searched for. With no embedder, or when it
-// fails, search is by words alone and says why.
+// fails or is slow, search is by words alone and says why.
 func EmbedQuery(ctx context.Context, e embeddings.Embedder, text string) Embedded {
 	text = strings.TrimSpace(text)
 	if e == nil || text == "" {
 		return Embedded{}
 	}
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
 	vecs, err := e.Embed(ctx, []string{text}, embeddings.Query)
 	if err != nil {
 		return Embedded{Degraded: err.Error()}

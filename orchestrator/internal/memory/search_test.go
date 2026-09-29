@@ -90,6 +90,9 @@ func TestAFailureBacksOffOnlyTheDocumentThatFailed(t *testing.T) {
 	now := time.Now()
 	x := &memory.Indexer{DB: app, Embedder: &permanent{fake}, Now: func() time.Time { return now }}
 	drain(t, x)
+	if h := x.Health(); h.Error != "" {
+		t.Errorf("one refused document made the embedder look broken: %+v", h)
+	}
 
 	var embedded, failed int
 	var errText string
@@ -211,27 +214,63 @@ func TestALimitAboveTheMostIsTheMost(t *testing.T) {
 	}
 }
 
-// A key that is wrong fails every document alike: none is backed off, so
-// the key fixed, everything embeds at once.
-func TestABadKeyBacksOffNothing(t *testing.T) {
-	app, owner := dbtest.Open(t)
-	org, _, _, _ := seed(t, owner)
-	x := &memory.Indexer{DB: app, Embedder: unauthorized{&embeddings.Fake{Dims: 768}}}
-	if _, err := x.Sweep(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	var backedOff int
-	if err := owner.QueryRow(context.Background(), `SELECT count(*) FROM search_documents
-		WHERE organization_id = $1 AND (attempts > 0 OR next_attempt_at > now())`, org).Scan(&backedOff); err != nil {
-		t.Fatal(err)
-	}
-	if backedOff != 0 {
-		t.Errorf("a bad key backed off %d documents", backedOff)
+// When no document embeds, the embedder is to blame, not them: whatever it
+// said — a bad key, a wrong model, a rate limit, the endpoint down — no
+// document is backed off, the indexer waits as a whole and says why, and
+// once it works again everything embeds.
+func TestAnEmbedderThatFailsBacksOffNoDocument(t *testing.T) {
+	for _, status := range []int{401, 400, 429, 502} {
+		app, owner := dbtest.Open(t)
+		org, _, _, _ := seed(t, owner)
+		now := time.Now()
+		failing := &statusFake{Fake: &embeddings.Fake{Dims: 768}, status: status}
+		x := &memory.Indexer{DB: app, Embedder: failing, Now: func() time.Time { return now }}
+		if _, err := x.Sweep(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		var backedOff int
+		if err := owner.QueryRow(context.Background(), `SELECT count(*) FROM search_documents
+			WHERE organization_id = $1 AND (attempts > 0 OR last_error IS NOT NULL)`, org).Scan(&backedOff); err != nil {
+			t.Fatal(err)
+		}
+		if backedOff != 0 {
+			t.Errorf("%d: backed off %d documents", status, backedOff)
+		}
+		if h := x.Health(); h.Error == "" || h.Retry == nil {
+			t.Errorf("%d: health does not say it is failing: %+v", status, h)
+		}
+		// It waits as a whole: the next sweep makes no call.
+		calls := failing.Calls
+		_, _ = x.Sweep(context.Background())
+		if failing.Calls != calls {
+			t.Errorf("%d: called the embedder again before the wait was over", status)
+		}
+		// Fixed, and the wait over: everything embeds, and it says so.
+		failing.status = 0
+		now = now.Add(11 * time.Minute)
+		drain(t, x)
+		var left int
+		if err := owner.QueryRow(context.Background(), `SELECT count(*) FROM search_documents
+			WHERE organization_id = $1 AND embedding IS NULL`, org).Scan(&left); err != nil {
+			t.Fatal(err)
+		}
+		if left != 0 || x.Health().Error != "" {
+			t.Errorf("%d: once fixed, %d left unembedded, health %+v", status, left, x.Health())
+		}
 	}
 }
 
-type unauthorized struct{ *embeddings.Fake }
-
-func (unauthorized) Embed(context.Context, []string, embeddings.Purpose) ([][]float32, error) {
-	return nil, &embeddings.Error{Status: 401, Body: "invalid key"}
+// statusFake answers every call with status, until it is 0.
+type statusFake struct {
+	*embeddings.Fake
+	status int
 }
+
+func (f *statusFake) Embed(ctx context.Context, texts []string, p embeddings.Purpose) ([][]float32, error) {
+	if f.status != 0 {
+		f.Calls++
+		return nil, &embeddings.Error{Status: f.status, Body: "no"}
+	}
+	return f.Fake.Embed(ctx, texts, p)
+}
+
