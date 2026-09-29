@@ -70,11 +70,16 @@ export interface TaskScreenProps {
 type Plans = ReadonlyMap<string, { done: number; total: number; current: string | null }>;
 
 /**
- * The servers.changed that start, end, park or wake a preview run: the
- * Sessions tab lists it, so the task is read again. Not a server's own
- * state change, which only the servers re-read for.
+ * The servers.changed that start, end, park or wake a preview run, or
+ * carry its lux state (running, or failed on its own): the Sessions tab
+ * lists it, so the task is read again. Not a server's own state change,
+ * which only the servers re-read for.
  */
 const RUN_CHANGES: ReadonlySet<string> = new Set(["created", "submitted", "stopped", "failed", "parked", "resumed"]);
+function changesRun(payload: unknown): boolean {
+  const p = (payload ?? {}) as { change?: unknown; luxState?: unknown };
+  return RUN_CHANGES.has(String(p.change)) || typeof p.luxState === "string";
+}
 
 export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: TaskScreenProps) {
   const [item, setItem] = useState<TaskDetail | null>(null);
@@ -147,7 +152,7 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
   const stream = useReloadOnEvents({ client, taskId }, () => void load(), 300, (e) => {
     if (e.eventType === EventTypes.ServersChanged) {
       setServersVersion((v) => v + 1);
-      return !RUN_CHANGES.has(String((e.payload as { change?: unknown } | null)?.change));
+      return !changesRun(e.payload);
     }
     return false;
   });
