@@ -1266,9 +1266,13 @@ func (e errLoginUnavailable) Error() string {
 		e.Registry, now, e.Registry)
 }
 
-// loginRetry is how long a Run waiting for its registry login is left
-// before the next check: a configuration change needs a restart anyway.
-const loginRetry = time.Minute
+// LoginRetry is how long a Run or preview waiting for its registry login is
+// left before the next check: a configuration change needs a restart anyway.
+const LoginRetry = time.Minute
+
+// IsLoginUnavailable says whether err, from LoginFor, is a resume's login
+// this orchestrator is not configured to supply.
+func IsLoginUnavailable(err error) bool { return errors.As(err, new(errLoginUnavailable)) }
 
 // waitForLogin leaves a Run paused, still due to resume, until its login
 // is configured again.
@@ -1276,7 +1280,7 @@ func (s *Syncer) waitForLogin(ctx context.Context, r phaseRun, cause errLoginUna
 	s.Log.Warn("paused Run not resumed: "+cause.Error(), "run", r.ID)
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE runs SET next_attempt_at = now() + make_interval(secs => $2) WHERE id = $1`,
-			r.ID, loginRetry.Seconds())
+			r.ID, LoginRetry.Seconds())
 		return err
 	})
 }

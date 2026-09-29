@@ -558,14 +558,6 @@ func (p *Previews) minute() time.Duration {
 // and the ones people asked for are started once it runs. lux keeps no
 // secret, so every one comes again, the registry login freshly minted.
 func (p *Previews) resume(ctx context.Context, r previewRun) error {
-	var secrets []lux.Secret
-	token, err := p.forgeToken(ctx, r.Org)
-	if err != nil {
-		return err
-	}
-	if token != "" {
-		secrets = []lux.Secret{{Name: "GIT_TOKEN", Value: token}}
-	}
 	// lux's stored spec says whether the submit logged in, and to where.
 	lr, err := p.Lux.Get(ctx, r.LuxRunID)
 	if le, ok := lux.AsError(err); ok && !le.Retryable() {
@@ -575,8 +567,19 @@ func (p *Previews) resume(ctx context.Context, r previewRun) error {
 		return err
 	}
 	login, err := phases.LoginFor(ctx, p.Registry, lr.Spec.Image.Ref, &lr.Spec)
+	if phases.IsLoginUnavailable(err) {
+		return p.waitForLogin(ctx, r, err)
+	}
 	if err != nil {
 		return err
+	}
+	var secrets []lux.Secret
+	token, err := p.forgeToken(ctx, r.Org)
+	if err != nil {
+		return err
+	}
+	if token != "" {
+		secrets = []lux.Secret{{Name: "GIT_TOKEN", Value: token}}
 	}
 	withLogin := lux.Spec{Secrets: secrets}
 	login.Apply(&withLogin)
@@ -691,6 +694,18 @@ func (p *Previews) fail(ctx context.Context, r previewRun, reason string) error 
 func (p *Previews) retryLater(ctx context.Context, r previewRun) error {
 	return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE runs SET next_attempt_at = now() + interval '5 seconds' WHERE id = $1`, r.ID)
+		return err
+	})
+}
+
+// waitForLogin leaves a parked preview parked, its pending starts kept,
+// until the registry login it was submitted with is configured again, and
+// checks every phases.LoginRetry rather than every sweep.
+func (p *Previews) waitForLogin(ctx context.Context, r previewRun, cause error) error {
+	p.Log.Warn("parked preview not resumed: "+cause.Error(), "run", r.ID)
+	return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE runs SET next_attempt_at = now() + make_interval(secs => $2) WHERE id = $1`,
+			r.ID, phases.LoginRetry.Seconds())
 		return err
 	})
 }

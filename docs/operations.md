@@ -94,9 +94,9 @@ same login is configured again: if the orchestrator restarts with
 not sent to lux, the orchestrator logs a warning naming the registry and
 `DUDE_REGISTRY_AUTH`, and checks again every minute. Restore the setting
 and restart, and the Run resumes with a fresh token. A parked preview in
-the same state stays parked and is retried every few seconds, with a
-`preview sync failed` warning. If ECR cannot be reached, starts and
-resumes wait and are retried.
+the same state stays parked, its requested servers kept, with a `parked
+preview not resumed` warning, and is checked again every minute. If ECR
+cannot be reached, starts and resumes wait and are retried.
 
 ## Processes
 
