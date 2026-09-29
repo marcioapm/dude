@@ -96,6 +96,7 @@ func TestAnECROutageDelaysAPreview(t *testing.T) {
 		t.Fatalf("a preview was submitted without its login")
 	}
 	api.setFail(nil)
+	api.advance(registry.FirstRetry) // past the provider's back-off
 	mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE id = $1`, runID)
 	w.until("the submit", func() bool { return len(w.lux.Runs()) == 1 })
 	if v, _ := loginIn(submitted(t, w.lux.Runs()[0]).Secrets); v != "AWS:"+api.tokens()[0] {
