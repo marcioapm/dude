@@ -36,3 +36,14 @@ func TestAnLLMURLThatIsNotHTTPIsRefusedAtStartup(t *testing.T) {
 		t.Errorf("unset: %v", err)
 	}
 }
+
+func TestARefusedURLsErrorDoesNotRepeatItsPassword(t *testing.T) {
+	for _, bad := range []string{"ftp://user:pw@host", "https://user:pw@ho st/v1", "https://user:pw@llm.example/v1"} {
+		err := ValidateHTTPURL(bad)
+		if err == nil {
+			t.Errorf("%q accepted", bad)
+		} else if strings.Contains(err.Error(), "pw") {
+			t.Errorf("%q: error %q repeats the password", bad, err)
+		}
+	}
+}

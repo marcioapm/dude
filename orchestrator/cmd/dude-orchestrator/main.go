@@ -89,6 +89,12 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("agent configuration: %w", err)
 	}
+	if agent.LLMURL == "" {
+		log.Warn("agents have no LLM: DUDE_LLM_URL is not set; only fake/ models can run")
+	}
+	if os.Getenv("DUDE_OPENCODE_AUTH") != "" || os.Getenv("DUDE_OPENCODE_CONFIG") != "" {
+		log.Warn("DUDE_OPENCODE_AUTH and DUDE_OPENCODE_CONFIG are ignored: agents get their model access from DUDE_LLM_URL and DUDE_LLM_KEY")
+	}
 	registryLogin, err := registry.FromEnv(ctx, os.Getenv, agent.DefaultImage, registry.WithLog(log))
 	if err != nil {
 		return fmt.Errorf("registry login: %w", err)

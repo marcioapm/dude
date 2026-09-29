@@ -2,6 +2,7 @@ package phases
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"net"
@@ -16,7 +17,7 @@ import (
 
 // AgentConfig is how the orchestrator gives agents their model access.
 //
-// Every harness gets the same two things: the LLM API's base URL, as plain
+// Every OpenCode Run gets the same two things: the LLM API's base URL, as plain
 // env, and its key, as a lux env secret (never stored by lux, supplied again
 // on every resume). The agent image defines the providers that read them.
 type AgentConfig struct {
@@ -76,14 +77,15 @@ func LoadAgentConfig() (AgentConfig, error) {
 // ValidateHTTPURL accepts an http or https URL with a host and no
 // credentials in it.
 func ValidateHTTPURL(raw string) error {
+	// Errors name the scheme and host at most: the value may hold a secret.
 	u, err := url.Parse(raw)
 	switch {
 	case err != nil:
-		return err
-	case (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "":
-		return fmt.Errorf("need an http or https URL with a host, not %q", raw)
+		return errors.New("not a URL")
 	case u.User != nil:
-		return fmt.Errorf("the URL must not carry credentials")
+		return errors.New("the URL must not carry credentials")
+	case (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "":
+		return fmt.Errorf("need an http or https URL with a host, not scheme %q host %q", u.Scheme, u.Host)
 	}
 	return nil
 }

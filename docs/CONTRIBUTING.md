@@ -89,8 +89,8 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   a lux RunSpec: image, adapter, prompt, model and effort (inline OpenCode
   config in `OPENCODE_CONFIG_CONTENT`), the LLM's URL and key (`DUDE_LLM_URL`
   env, `DUDE_LLM_KEY` env secret), repository at `base_ref`, egress to the
-  LLM's host, and the
-  agent's home as a state volume so a resume keeps the conversation.
+  LLM's host, and the agent's home as a state volume so a resume keeps the
+  conversation.
 - **Handoff is via git.** Each publishing phase pushes to a branch of its
   own (`dude/<task>/run-<run>`) — lux lets a Run's first push go only to
   a branch that does not exist — and the orchestrator fast-forwards the work
