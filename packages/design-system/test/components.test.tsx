@@ -34,7 +34,7 @@ function text(html: string, attr: string): string {
   const open = html.lastIndexOf("<", from);
   const tag = html.slice(open + 1, html.indexOf(" ", open));
   const end = html.indexOf(`</${tag}>`, from);
-  return html.slice(html.indexOf(">", from) + 1, end).replace(/<[^>]+>/g, "").replace(/<!-- -->/g, "");
+  return html.slice(html.indexOf(">", from) + 1, end).replace(/<[^>]+>/g, "");
 }
 
 describe("QuestionCard choices", () => {
@@ -64,7 +64,7 @@ describe("QuestionCard choices", () => {
     const h = html(<QuestionCard role="orchestrator" text="Ship it?" options={options} onChoose={noop} waitingOn="Ana" />);
     expect(buttons(h)).toEqual([]);
     // Whom it waits on, and how to make it yours, in words everyone sees.
-    expect(text(h, 'data-testid="waiting-on"')).toBe("Waiting for Ana to answer· Take over this task to answer");
+    expect(text(h, 'data-testid="waiting-on"')).toBe("Waiting for Ana to answer · Take over this task to answer");
     expect(h).not.toContain("tabindex");
     expect(h).toContain('aria-label="Choices offered"');
     expect(h).not.toContain("Needs you");
@@ -76,7 +76,7 @@ describe("QuestionCard choices", () => {
 
   test("a request waiting on someone else is theirs to decide", () => {
     const h = html(<QuestionCard role="orchestrator" text="Read web?" options={["Approve", "Decline"]} onChoose={noop} waitingOn="Ana" verb="decide" />);
-    expect(text(h, 'data-testid="waiting-on"')).toBe("Waiting for Ana to decide· Take over this task to decide");
+    expect(text(h, 'data-testid="waiting-on"')).toBe("Waiting for Ana to decide · Take over this task to decide");
     expect(h).toContain("is waiting for Ana to decide");
     expect(h).toContain("Blocked until Ana decides.");
   });

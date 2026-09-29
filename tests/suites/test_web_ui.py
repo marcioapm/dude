@@ -596,10 +596,13 @@ def test_only_a_tasks_owner_answers_and_anyone_can_take_it_over(
     expect(choices.get_by_role("button")).to_have_count(0)
     choices.get_by_text("yes").hover()
     expect(page.get_by_role("tooltip")).to_have_text("Take over this task to answer")
+    # Watch the trigger across the press: it must never close, not merely be open again after.
+    choices.evaluate("""el => { window.__closed = false;
+        new MutationObserver(() => { if (el.dataset.state === 'closed') window.__closed = true; })
+          .observe(el, { attributes: true, attributeFilter: ['data-state'] }); }""")
     choices.get_by_text("yes").click()
-    page.wait_for_timeout(500)
     expect(page.get_by_role("tooltip")).to_have_text("Take over this task to answer")
-    expect(page.locator('[data-state="closed"]:has([data-testid="choices-someone-else"])')).to_have_count(0)
+    assert page.evaluate("window.__closed") is False
 
     # Bo takes it over from the task's page.
     page.goto(f"{web_url}#/task/{item['id']}")
