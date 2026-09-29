@@ -488,8 +488,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   (`--ds-space-chat-pad-x`): the session header's face, the bar's switch,
   the plan's icon (`--plan-pad-x`), every turn's face, the composer, the
   Changes and Events views. Nothing in a session uses the page's 24px pad.
-- A turn's text spans its column: chat turns have no measure, so a long
-  line wraps at the column's edge, not beside empty space.
+- A turn's text spans its column: chat turns have no measure (`Markdown
+  unmeasured`: messages, thoughts, questions), so a long line wraps at the
+  column's edge, not beside empty space.
 - What an agent does between its messages — a run of tool calls and
   thoughts — is one `ChatAside`: on the message text column (past the
   avatar gutter, so its left edge lines up with the words above), 4px
@@ -883,7 +884,10 @@ EmptyState, ScrollArea.
   it changes (the rules are under *Sessions*): files with status and
   counts, sticky file headers, Unified / Split (`splitRows` pairs each
   removed run with the added run after it), fresh lines flashing, Follow
-  the agent, `leading` for the page's controls first in its toolbar, `onOpenFile` for the viewer, `selected` / `onSelectedChange`
+  the agent, `leading` for the page's controls first in its toolbar, `toolbarIn` to draw its controls into a bar the page keeps mounted,
+  `lastChange` as `{ face, tool, path, when }` (the face stays whole; the
+  tool gives way before the file name), `onOpenFile` for the viewer,
+  `selected` / `onSelectedChange`
   to pick the file shown alone from outside, `fileList={false}` for one
   file on its own.
 - **DiffStat** — "+12 −3" in the diff's colours; every count of lines

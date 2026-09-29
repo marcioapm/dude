@@ -79,13 +79,11 @@ export function ChangesPanel({ client, runId, role, events, checksum: latest, li
     if (!e) return null;
     const tool = String(e.payload.tool);
     const path = summarizeToolArgs(e.payload.input);
-    return (
-      <>
-        <AgentAvatar role={role} size="xs" live />
-        <span>{tool.charAt(0).toUpperCase()}{tool.slice(1)}</span>
-        {path ? <code>{path.split("/").pop()}</code> : null}
-      </>
-    );
+    return {
+      face: <AgentAvatar role={role} size="xs" live />,
+      tool: tool.charAt(0).toUpperCase() + tool.slice(1),
+      path: path ? path.split("/").pop() : undefined,
+    };
   }, [events, role]);
 
   if (problem) return <div className="runChanges"><Callout tone="danger">{problem}</Callout></div>;

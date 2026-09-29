@@ -58,27 +58,32 @@
   white-space: nowrap;
   overflow: hidden;
 }
-/* The words give way with an ellipsis, the tool first, the file name last;
-   the agent's face never does. */
-.last > span:not([class]) {
-  flex: 0 100 auto;
+.lastFace {
+  display: inline-flex;
+  flex: none;
+}
+.lastTool,
+.lastPath,
+.lastWhen {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.last code {
+/* The tool word gives way first, the file name last. */
+.lastTool,
+.lastWhen {
+  flex: 0 100 auto;
+}
+.lastPath {
   flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
   font-family: var(--ds-font-mono);
   color: var(--ds-color-text-secondary);
 }
-/* The toggle's words stay on one line beside it. */
 /* The toolbar drawn into a page's bar: its controls laid out as here. */
 .headIn {
   flex: 1;
 }
+/* The toggle's words stay on one line beside it. */
 .head label {
   white-space: nowrap;
 }

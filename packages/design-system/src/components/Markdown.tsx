@@ -32,7 +32,7 @@ export interface MarkdownProps extends Omit<HTMLAttributes<HTMLDivElement>, "chi
    * spans the transcript's column, with no reading measure. Other prose
    * (a finding, help text) keeps the measure.
    */
-  readonly fill?: boolean | undefined;
+  readonly unmeasured?: boolean | undefined;
   /** Document variant only: show a heading outline beside the text. */
   readonly outline?: boolean | undefined;
   /** Where links open. Defaults to a new tab with `rel="noopener noreferrer"`. */
@@ -53,7 +53,7 @@ export function Markdown({
   source,
   variant = "message",
   streaming,
-  fill,
+  unmeasured,
   outline,
   linkTarget = "_blank",
   diffs = true,
@@ -65,7 +65,7 @@ export function Markdown({
   const ctx: RenderCtx = { linkTarget, diffs, streaming: streaming === true, variables: variant === "prompt" };
 
   const body = (
-    <div className={cx(styles["root"], variant === "message" ? styles["message"] : styles[variant], variant === "message" && !streaming && blocks.length > 1 && styles["long"], streaming && styles["streaming"], fill && styles["fill"], className)} {...rest}>
+    <div className={cx(styles["root"], variant === "message" ? styles["message"] : styles[variant], variant === "message" && !streaming && blocks.length > 1 && styles["long"], streaming && styles["streaming"], unmeasured && styles["unmeasured"], className)} {...rest}>
       {blocks.length === 0 && streaming ? (
         <p className={styles["p"]}>
           <Caret />
