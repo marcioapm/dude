@@ -1,6 +1,7 @@
 /*
- * RemovableList: compact rows 2px apart, as artifacts are; a hover wash,
- * no lines.
+ * RemovableList: rows 2px apart, as artifacts are; a hover wash, no lines.
+ * The default row, so they follow the density as every list of things you
+ * act on does (`row-compact` holds in both: it is for logs one scans).
  */
 
 .list {
@@ -17,7 +18,7 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--ds-space-8);
-  min-height: var(--ds-size-row-compact);
+  min-height: var(--ds-size-row-default);
   padding: 0 var(--ds-space-4) 0 var(--ds-space-8);
   font-size: var(--ds-text-sm);
 }
