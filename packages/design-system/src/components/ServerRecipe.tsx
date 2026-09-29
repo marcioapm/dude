@@ -207,7 +207,7 @@ export function ServerRecipeDialog({ open, onOpenChange, existing, repository, d
           </FormRow>
           <ServerUrlPreview name={draft.name.trim()} domain={domain} />
           <Input label="Command" mono value={draft.command} error={problems.command} placeholder="npm run dev -- --host 0.0.0.0 --port 3000" data-testid="server-recipe-command"
-            hint="Started in the working directory. Bind 0.0.0.0, not localhost: the URL reaches it from outside the container." onChange={(e) => set("command", e.target.value)} />
+            hint="A shell line, run in the working directory: PORT=3000 npm start and cd web && npm run dev work. Bind 0.0.0.0, not localhost: the URL reaches it from outside the container." onChange={(e) => set("command", e.target.value)} />
           <FormRow>
             <Input label="Working directory" mono value={draft.workdir} placeholder="apps/web" leading={repository ? `${repository}/` : undefined}
               hint="Relative to the repository." onChange={(e) => set("workdir", e.target.value)} />

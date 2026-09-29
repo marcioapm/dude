@@ -15,13 +15,36 @@ func TestARecipeRunsThroughAShellAfterItsSetup(t *testing.T) {
 		setup *string
 		want  []string
 	}{
-		{nil, []string{"sh", "-c", "exec npm run dev"}},
-		{&setup, []string{"sh", "-c", "npm ci && exec npm run dev"}},
-		{new(string), []string{"sh", "-c", "exec npm run dev"}},
+		{nil, []string{"sh", "-c", "npm run dev"}},
+		{&setup, []string{"sh", "-c", "npm ci && npm run dev"}},
+		{new(string), []string{"sh", "-c", "npm run dev"}},
 	} {
 		if got := ShellCommand(c.setup, "npm run dev"); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("ShellCommand(%v) = %q, want %q", c.setup, got, c.want)
 		}
+	}
+}
+
+// A command is a shell line as a person would type it: an assignment before
+// it, a cd, a chain. None of them survives an `exec` in front.
+func TestACommandIsAShellLineAsTyped(t *testing.T) {
+	for _, line := range []string{"PORT=3000 npm start", "cd web && npm run dev", "npm run build && npm start"} {
+		want := []string{"sh", "-c", line}
+		if got := ShellCommand(nil, line); !reflect.DeepEqual(got, want) {
+			t.Errorf("ShellCommand(%q) = %q, want %q", line, got, want)
+		}
+		if got := (Recipe{Name: "web", Port: 3000, Command: line}).Input("app").Command; !reflect.DeepEqual(got, want) {
+			t.Errorf("recipe %q runs %q, want %q", line, got, want)
+		}
+		cmd, _ := json.Marshal(line)
+		in, err := ManualServer{Name: "web", Port: 3000, Command: cmd}.Input("app")
+		if err != nil || !reflect.DeepEqual(in.Command, want) {
+			t.Errorf("manual %q runs %q (%v), want %q", line, in.Command, err, want)
+		}
+	}
+	setup := "npm ci"
+	if got, want := ShellCommand(&setup, "PORT=3000 npm start"), []string{"sh", "-c", "npm ci && PORT=3000 npm start"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("with setup: %q, want %q", got, want)
 	}
 }
 
@@ -59,7 +82,7 @@ func TestOnlyNamesLuxTakes(t *testing.T) {
 
 func TestAServerAPersonTypesRunsAsTheyTypedIt(t *testing.T) {
 	line, _ := ManualServer{Name: "x", Port: 1, Command: json.RawMessage(`"make serve"`)}.Input("app")
-	if !reflect.DeepEqual(line.Command, []string{"sh", "-c", "exec make serve"}) || line.Workdir != "/workspace/repos/app" {
+	if !reflect.DeepEqual(line.Command, []string{"sh", "-c", "make serve"}) || line.Workdir != "/workspace/repos/app" {
 		t.Errorf("a line = %+v", line)
 	}
 	argv, _ := ManualServer{Name: "x", Port: 1, Command: json.RawMessage(`["python3","-m","http.server"]`),

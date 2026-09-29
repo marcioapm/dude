@@ -53,11 +53,13 @@ func ValidName(name string) bool {
 	return NamePattern.MatchString(name) && !strings.HasSuffix(name, "-")
 }
 
-// ShellCommand is how a recipe's command runs: through a shell, after its
-// setup if it has one, exec'd so that the server is the process lux starts
-// and stops.
+// ShellCommand is how a recipe's command runs: a shell line, after its
+// setup if it has one, so that `PORT=3000 npm start`, `cd web && npm run
+// dev` and `npm run build && npm start` mean what they say. Not exec'd: lux
+// stops a server by signalling its whole process group, the shell and
+// everything under it.
 func ShellCommand(setup *string, command string) []string {
-	line := "exec " + command
+	line := command
 	if setup != nil && strings.TrimSpace(*setup) != "" {
 		line = *setup + " && " + line
 	}

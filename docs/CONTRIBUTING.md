@@ -145,8 +145,10 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
 
 - **A project's servers are recipes** (`project_servers`): a port, a
   command, a workdir in the repository, a setup step. A person adds one to
-  a task's Run, and lux runs it as `sh -c "[setup &&] exec <command>"` in
-  `/workspace/repos/<repo>/<workdir>`, giving it a URL.
+  a task's Run, and lux runs it as `sh -c "[setup &&] <command>"` in
+  `/workspace/repos/<repo>/<workdir>`, giving it a URL. The command is a
+  shell line as typed (`PORT=3000 npm start`, `cd web && npm run dev`), not
+  exec'd: lux stops a server by signalling its whole process group.
 - **lux owns a server's state.** dude keeps none: it asks lux, and passes
   lux's Server object on as it came. lux's `server.*` events on a Run's
   stream become `servers.changed`, and the browser reads again.
