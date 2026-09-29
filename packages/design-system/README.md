@@ -839,7 +839,7 @@ EmptyState, ScrollArea.
   `onChoose`; otherwise they live in the composer. Settled, they are listed.
   Waiting on someone else (`waitingOn`), the note says so and how to make
   it yours, in words everyone sees: "Waiting for Ana to answer · Take over
-  this task to answer" (`verb` "decide" for a request: "…to decide"). The
+  this task to answer" (`kind="request"`: "…to decide"). The
   choices are shown muted and do nothing; with a mouse, hovering them says
   it again (`Tooltip keepOnPress`: a press leaves it up). The note is what
   reaches keyboard, touch and screen readers. No tab stop that does nothing.

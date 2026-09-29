@@ -75,9 +75,9 @@ describe("QuestionCard choices", () => {
   });
 
   test("a request waiting on someone else is theirs to decide", () => {
-    const h = html(<QuestionCard role="orchestrator" text="Read web?" options={["Approve", "Decline"]} onChoose={noop} waitingOn="Ana" verb="decide" />);
+    const h = html(<QuestionCard role="orchestrator" text="Read web?" options={["Approve", "Decline"]} onChoose={noop} waitingOn="Ana" kind="request" />);
     expect(text(h, 'data-testid="waiting-on"')).toBe("Waiting for Ana to decide · Take over this task to decide");
-    expect(h).toContain("is waiting for Ana to decide");
+    expect(h).toContain("asks for a repository and is waiting for Ana to decide");
     expect(h).toContain("Blocked until Ana decides.");
   });
 

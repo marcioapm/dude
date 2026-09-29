@@ -36,12 +36,15 @@ export function Tooltip({ content, shortcut, side = "top", mono, delay, keepOnPr
   const pressKeeper = {
     onPointerDown: () => {
       pressed.current = true;
+      // Whichever ends the press, up or cancel, takes both listeners with it.
+      const ends = new AbortController();
       const release = () => {
+        ends.abort();
         // After the click that follows the release, so its close is not taken either.
         setTimeout(() => (pressed.current = false));
       };
-      document.addEventListener("pointerup", release, { once: true });
-      document.addEventListener("pointercancel", release, { once: true });
+      document.addEventListener("pointerup", release, { signal: ends.signal });
+      document.addEventListener("pointercancel", release, { signal: ends.signal });
     },
   };
   const root = (
