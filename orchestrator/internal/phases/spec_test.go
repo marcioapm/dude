@@ -39,9 +39,12 @@ func goldenInput(model string) (AgentConfig, specInput) {
 // What dude sends lux for a phase Run, byte for byte: a change to the spec
 // shows up here as a diff to read, not as a silent change on the wire.
 func TestTheSpecIsTheGoldenOne(t *testing.T) {
-	for name, model := range map[string]string{"opencode": "llm/impl", "scripted": "fake/scripted"} {
+	for name, model := range map[string]string{"opencode": "llm/impl", "scripted": "fake/scripted", "registry": "llm/impl"} {
 		t.Run(name, func(t *testing.T) {
 			c, in := goldenInput(model)
+			if name == "registry" {
+				in.Registry = &RegistryLogin{Registry: "registry.example", Credential: "AWS:pw-golden"}
+			}
 			got, err := json.MarshalIndent(buildSpec(c, in), "", "  ")
 			if err != nil {
 				t.Fatal(err)

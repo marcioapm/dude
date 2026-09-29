@@ -1,0 +1,139 @@
+{
+  "name": "implement wi_1",
+  "labels": {
+    "dude.harness": "opencode",
+    "dude.model": "llm/impl",
+    "dude.org": "org_1",
+    "dude.phase": "implement",
+    "dude.run": "run_1",
+    "dude.task": "wi_1"
+  },
+  "image": {
+    "ref": "registry.example/dude/agent:1",
+    "registryAuth": [
+      {
+        "registry": "registry.example",
+        "secret": "DUDE_REGISTRY_AUTH"
+      }
+    ]
+  },
+  "workload": {
+    "adapter": "opencode",
+    "prompt": "Do the thing.",
+    "workdir": "/workspace",
+    "mcpServers": [
+      {
+        "name": "dude",
+        "service": "dude"
+      }
+    ],
+    "services": [
+      {
+        "name": "dude",
+        "url": "http://10.9.8.7:3120/mcp",
+        "headers": [
+          {
+            "name": "Authorization",
+            "secret": "DUDE_TOOLS_AUTH"
+          }
+        ],
+        "loopback": true
+      }
+    ],
+    "beforeStop": {
+      "command": [
+        "sh",
+        "-c",
+        "set -u\ndest=$1; shift\nbase_of() {\n  if first=$(git -C \"$1\" reflog show --format=%H \"refs/heads/$2\" -- 2\u003e/dev/null | tail -n 1) \u0026\u0026 [ -n \"$first\" ]; then\n    echo \"$first\"\n  else\n    git -C \"$1\" rev-parse -q --verify \"$2^{commit}\" 2\u003e/dev/null || git -C \"$1\" rev-parse -q --verify \"origin/$2^{commit}\"\n  fi\n}\ndiffs() {\n  while [ $# -ge 3 ]; do\n    name=$1 dir=$2 ref=$3; shift 3\n    [ -d \"$dir\" ] || continue\n    base=$(base_of \"$dir\" \"$ref\") || continue\n    echo \"# dude-diff $name $base\"\n    idx=$(mktemp) || exit 3\n    real=$(git -C \"$dir\" rev-parse --git-path index)\n    case $real in /*) ;; *) real=$dir/$real ;; esac\n    if [ -f \"$real\" ]; then cp \"$real\" \"$idx\"; else rm -f \"$idx\"; fi\n    GIT_INDEX_FILE=$idx git -C \"$dir\" add -A -N . 2\u003e/dev/null\n    GIT_INDEX_FILE=$idx git -C \"$dir\" -c core.quotePath=off diff --no-color --no-ext-diff --find-renames \"$base\" --\n    rm -f \"$idx\"\n  done\n}\nif [ \"$dest\" = - ]; then\n  diffs \"$@\" | head -c 8388608\nelse\n  out=${LUX_ARTIFACTS:?}/.dude-final-diff\n  mkdir -p \"$out\" || exit 3\n  while [ $# -ge 3 ]; do\n    diffs \"$1\" \"$2\" \"$3\" | head -c 8388608 \u003e \"$out/.$1.tmp\" \u0026\u0026 mv \"$out/.$1.tmp\" \"$out/$1.patch\"\n    shift 3\n  done\nfi",
+        "dude-diff",
+        "artifacts",
+        "api",
+        "/workspace/repos/api",
+        "main",
+        "web",
+        "/workspace/repos/web",
+        "abc123"
+      ],
+      "timeout": "10s"
+    }
+  },
+  "env": {
+    "CLICOLOR_FORCE": "1",
+    "FORCE_COLOR": "1",
+    "GIT_CONFIG_COUNT": "1",
+    "GIT_CONFIG_KEY_0": "color.ui",
+    "GIT_CONFIG_VALUE_0": "always",
+    "PY_COLORS": "1",
+    "TERM": "xterm-256color"
+  },
+  "secrets": [
+    {
+      "name": "DUDE_REGISTRY_AUTH",
+      "value": "AWS:pw-golden"
+    },
+    {
+      "name": "GIT_TOKEN",
+      "value": "ghp_golden"
+    },
+    {
+      "name": "DUDE_TOOLS_AUTH",
+      "value": "Bearer tok_golden"
+    },
+    {
+      "name": "opencode_auth",
+      "value": "{\"llm\":{\"type\":\"api\",\"key\":\"sk-golden\"}}",
+      "as": "file",
+      "path": "/home/agent/.local/share/opencode/auth.json"
+    },
+    {
+      "name": "opencode_config",
+      "value": "{\"model\":\"llm/impl\",\"provider\":{\"llm\":{\"options\":{\"baseURL\":\"https://llm.example/v1\"}}}}",
+      "as": "file",
+      "path": "/home/agent/.config/opencode/opencode.json"
+    }
+  ],
+  "git": {
+    "repositories": [
+      {
+        "name": "api",
+        "url": "https://github.com/acme/api.git",
+        "ref": "main",
+        "credential": "GIT_TOKEN",
+        "path": "/workspace/repos/api"
+      },
+      {
+        "name": "web",
+        "url": "https://github.com/acme/web.git",
+        "ref": "abc123",
+        "credential": "GIT_TOKEN",
+        "path": "/workspace/repos/web",
+        "push": false
+      }
+    ],
+    "push": {
+      "branch": "dude/wi_1/run-run_1"
+    }
+  },
+  "volumes": [
+    {
+      "name": "workspace",
+      "path": "/workspace",
+      "kind": "state"
+    },
+    {
+      "name": "home",
+      "path": "/home/agent",
+      "kind": "state"
+    }
+  ],
+  "network": {
+    "egress": [
+      {
+        "host": "llm.example"
+      },
+      {
+        "cidr": "10.9.8.7/32"
+      }
+    ]
+  }
+}
