@@ -139,3 +139,26 @@ func TestAParkedPreviewWaitsForTheLoginItStartedWith(t *testing.T) {
 		t.Errorf("the preview is no longer parked: %s", w.describeRuns())
 	}
 }
+
+// A parked preview whose lux Run lux no longer has fails when a person
+// wakes it, as a refused resume does; it is not retried for good.
+func TestAPreviewLuxLostFailsWhenWoken(t *testing.T) {
+	w := newWorld(t)
+	w.withECR()
+	w.previews.Registry = w.syncer.Registry
+	w.previews.Minute = time.Millisecond
+	w.recipe("docs", 4000, "npm run docs", "docs", nil, false)
+	mustExec(t, w.owner, `UPDATE projects SET preview_settings = '{"idleTimeoutMinutes":5}' WHERE id = $1`, w.project)
+	wi := w.task()
+	_, out := w.do("POST", "/internal/tasks/"+wi+"/preview", nil)
+	runID := out["run"].(map[string]any)["id"].(string)
+	w.until("the preview to be parked", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, runID) == 1
+	})
+	w.previews.Minute = time.Hour
+	mustExec(t, w.owner, `UPDATE runs SET pending_starts = '{docs}' WHERE id = $1`, runID)
+	w.lux.Forget()
+	w.until("the preview to fail", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed'`, runID) == 1
+	})
+}
