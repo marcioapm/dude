@@ -32,23 +32,15 @@ export interface TabListProps {
   readonly "aria-label"?: string | undefined;
   readonly className?: string | undefined;
   readonly children?: ReactNode;
-  /** At the row's end, after a gap: a toggle for a panel beside the content, not a tab. */
-  readonly trailing?: ReactNode;
 }
 
-export function TabList({ variant = "underline", className, children, trailing, "aria-label": ariaLabel }: TabListProps) {
+export function TabList({ variant = "underline", className, children, "aria-label": ariaLabel }: TabListProps) {
   return (
     <RadixTabs.List
       className={cx(styles["list"], variant === "segmented" && styles["segmented"], className)}
       {...compact({ "aria-label": ariaLabel })}
     >
       {children}
-      {trailing ? (
-        <>
-          <span className={styles["spacer"]} />
-          {trailing}
-        </>
-      ) : null}
     </RadixTabs.List>
   );
 }
@@ -93,8 +85,7 @@ export interface TabToggleProps {
 /**
  * A toggle drawn as a tab, for a panel that opens beside the tabs' content
  * rather than in its place (the run screen's Servers drawer). Not a tab
- * to the keyboard: a pressed button in the tab's grammar, placed by
- * `TabList`'s `trailing` slot.
+ * to the keyboard: a pressed button in the tab's grammar.
  */
 export function TabToggle({ pressed, onPressedChange, icon, title, trailing, children, "data-testid": testId }: TabToggleProps) {
   return (

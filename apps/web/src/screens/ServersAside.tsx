@@ -36,27 +36,25 @@ export function ServersAside({ client, taskId, servers, onAll }: { client: ApiCl
 
   const live = runIsLive(run);
   return (
-    <>
-      <ServersSummary
-        data-testid="servers-summary"
-        where={run.kind === "preview" ? "on the branch preview" : `on the ${run.label.toLowerCase()}`}
-        notice={data.moved ? `Stopped when the run moved host at ${formatTimestamp(data.moved.at, "time-short")}.` : servers.problem ?? undefined}
-        actions={
-          <>
-            <Button size="sm" variant="quiet" trailingIcon="arrow-right" onClick={onAll} data-testid="servers-all">All servers</Button>
-            {live && run.terminalUrl ? <TerminalLink href={run.terminalUrl}>Terminal</TerminalLink> : null}
-          </>
-        }
-      >
-        {data.servers.map((s) => {
-          const words = describeServer(s, now, run);
-          return (
-            <ServersSummaryRow key={s.name} name={s.name} state={words.state} stateLabel={words.label} url={s.url} detail={words.detail}
-              onStart={live && s.command ? () => void servers.start(s.name) : undefined}
-              onRestart={live && s.command ? () => void servers.restart(s.name) : undefined} />
-          );
-        })}
-      </ServersSummary>
-    </>
+    <ServersSummary
+      data-testid="servers-summary"
+      where={run.kind === "preview" ? "on the branch preview" : `on the ${run.label.toLowerCase()}`}
+      notice={data.moved ? `Stopped when the run moved host at ${formatTimestamp(data.moved.at, "time-short")}.` : servers.problem ?? undefined}
+      actions={
+        <>
+          <Button size="sm" variant="quiet" trailingIcon="arrow-right" onClick={onAll} data-testid="servers-all">All servers</Button>
+          {live && run.terminalUrl ? <TerminalLink href={run.terminalUrl}>Terminal</TerminalLink> : null}
+        </>
+      }
+    >
+      {data.servers.map((s) => {
+        const words = describeServer(s, now, run);
+        return (
+          <ServersSummaryRow key={s.name} name={s.name} state={words.state} stateLabel={words.label} url={s.url} detail={words.detail}
+            onStart={live && s.command ? () => void servers.start(s.name) : undefined}
+            onRestart={live && s.command ? () => void servers.restart(s.name) : undefined} />
+        );
+      })}
+    </ServersSummary>
   );
 }
