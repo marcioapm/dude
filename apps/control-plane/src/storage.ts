@@ -42,13 +42,19 @@ class Failure extends Error {
   }
 }
 
-const S3_CODE = /^[A-Za-z0-9.]{1,64}$/;
+// S3 error codes a log may name. An endpoint controls the code it returns,
+// so only these known ones pass; any other is reported without a code.
+const S3_CODES = new Set([
+  "AccessDenied", "AllAccessDisabled", "ExpiredToken", "InternalError", "InvalidAccessKeyId",
+  "InvalidBucketName", "InvalidToken", "NoSuchBucket", "NoSuchKey", "RequestTimeTooSkewed",
+  "ServiceUnavailable", "SignatureDoesNotMatch", "SlowDown", "TokenRefreshRequired",
+]);
 
 function safeError(operation: Operation, error: unknown): Error {
   if (error instanceof HttpError) return error;
   if (error instanceof Failure) return new StorageError(operation, error.status, error.reason);
   const code = (error as { code?: unknown } | null)?.code;
-  if ((error as { name?: unknown } | null)?.name === "S3Error" && typeof code === "string" && S3_CODE.test(code)) {
+  if ((error as { name?: unknown } | null)?.name === "S3Error" && typeof code === "string" && S3_CODES.has(code)) {
     return new StorageError(operation, undefined, code);
   }
   return new StorageError(operation);
@@ -206,6 +212,7 @@ export async function deleteObject(key: string): Promise<void> {
   try {
     await (await required()).delete(key);
   } catch (err) {
-    console.error(`storage: could not delete ${key}: ${safeError("delete", err).message}`);
+    // Not the key: it holds the random token that authorizes serving the image.
+    console.error(`storage: could not delete an object: ${safeError("delete", err).message}`);
   }
 }

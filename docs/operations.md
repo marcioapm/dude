@@ -168,7 +168,8 @@ it expires. When the metadata service is unreachable or denies access beyond
 that, uploads and image reads fail (500), deletes of replaced images are
 best-effort and leave the old object behind, and `/health` stays green: it
 checks only the database. Storage errors are logged as the operation, HTTP
-status and S3 or metadata error code only.
+status and a metadata error code or a known S3 error code only; never an
+object key, which holds the random token that authorizes serving the image.
 `AWS_EC2_METADATA_SERVICE_ENDPOINT` overrides the metadata address for local
 tests only; do not point it at an untrusted server.
 
