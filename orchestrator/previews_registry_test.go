@@ -3,9 +3,13 @@ package orchestrator_test
 import (
 	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/registry"
 )
@@ -104,40 +108,137 @@ func TestAnECROutageDelaysAPreview(t *testing.T) {
 	}
 }
 
-// A preview started with a login, resumed by an orchestrator that no longer
-// logs in there, is left parked rather than resumed without it (lux would
-// refuse the resume, which fails the preview for good).
-func TestAParkedPreviewWaitsForTheLoginItStartedWith(t *testing.T) {
-	w := newWorld(t)
-	w.withECR()
-	w.previews.Registry = w.syncer.Registry
+// countingLux is the world's lux client, counting Gets and Resumes; a
+// set refuseResume answers the next Resume instead of lux.
+type countingLux struct {
+	lux.Client
+	mu            sync.Mutex
+	gets, resumes int
+	refuseResume  error
+}
+
+func (c *countingLux) Get(ctx context.Context, id string) (lux.Run, error) {
+	c.mu.Lock()
+	c.gets++
+	c.mu.Unlock()
+	return c.Client.Get(ctx, id)
+}
+
+func (c *countingLux) Resume(ctx context.Context, id string, in lux.ResumeInput) (lux.Run, error) {
+	c.mu.Lock()
+	c.resumes++
+	refuse := c.refuseResume
+	c.refuseResume = nil
+	c.mu.Unlock()
+	if refuse != nil {
+		return lux.Run{}, refuse
+	}
+	return c.Client.Resume(ctx, id, in)
+}
+
+func (c *countingLux) counts() (gets, resumes int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.gets, c.resumes
+}
+
+// countingForges counts forge credential lookups.
+type countingForges struct {
+	delivery.Forges
+	n atomic.Int64
+}
+
+func (c *countingForges) For(ctx context.Context, org string) (*forge.GitHub, error) {
+	c.n.Add(1)
+	return c.Forges.For(ctx, org)
+}
+
+// countPreviewCalls routes the previews loop's lux calls and forge lookups
+// through counters.
+func (w *world) countPreviewCalls() (*countingLux, *countingForges) {
+	l := &countingLux{Client: w.previews.Lux}
+	f := &countingForges{Forges: w.previews.Forges}
+	w.previews.Lux, w.previews.Forges = l, f
+	return l, f
+}
+
+// parkedPreview starts a preview of the ECR agent image, waits for it to
+// be parked, and asks for its docs server, which wakes it. Returns the
+// preview's Run id.
+func (w *world) parkedPreview() string {
+	w.t.Helper()
 	w.previews.Minute = time.Millisecond
 	w.recipe("docs", 4000, "npm run docs", "docs", nil, false)
-	mustExec(t, w.owner, `UPDATE projects SET preview_settings = '{"idleTimeoutMinutes":5}' WHERE id = $1`, w.project)
+	mustExec(w.t, w.owner, `UPDATE projects SET preview_settings = '{"idleTimeoutMinutes":5}' WHERE id = $1`, w.project)
 	wi := w.task()
-	_, out := w.do("POST", "/internal/tasks/"+wi+"/preview", nil)
+	code, out := w.do("POST", "/internal/tasks/"+wi+"/preview", nil)
+	if code != 201 {
+		w.t.Fatalf("start = %d %v", code, out)
+	}
 	runID := out["run"].(map[string]any)["id"].(string)
 	w.until("the preview to be parked", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, runID) == 1
 	})
 	w.previews.Minute = time.Hour
-	other, err := registry.NewStatic("ghcr.io", "bot:tok")
+	return runID
+}
+
+// A preview started with a login, woken on an orchestrator that no longer
+// logs in there, stays parked: its resume is not sent (lux would refuse it,
+// which fails the preview for good), and it is checked again every
+// phases.LoginRetry, not every sweep — no lux Get, no forge lookup between.
+// Once the login is configured again, it resumes with a fresh one.
+func TestAParkedPreviewWaitsForTheLoginItStartedWith(t *testing.T) {
+	ghcr, err := registry.NewStatic("ghcr.io", "bot:tok")
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.previews.Registry = other
-	if code, body := w.do("POST", "/internal/runs/"+runID+"/servers", map[string]any{"recipe": "docs"}); code != 201 {
-		t.Fatalf("add docs while parked = %d %v", code, body)
-	}
-	w.pump()
-	if _, err := w.previews.Sweep(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if r := w.lux.Runs()[0]; r.Resumed != 0 {
-		t.Errorf("resumed without the login it was started with: %+v", r.ResumeSecrets)
-	}
-	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, runID); n != 1 {
-		t.Errorf("the preview is no longer parked: %s", w.describeRuns())
+	for name, restarted := range map[string]registry.Provider{
+		"logins turned off":  nil,
+		"another registry's": ghcr,
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newWorld(t)
+			api := w.withECR()
+			ecrLogin := w.syncer.Registry
+			w.previews.Registry = ecrLogin
+			runID := w.parkedPreview()
+			calls, forges := w.countPreviewCalls()
+			w.previews.Registry = restarted
+			if code, body := w.do("POST", "/internal/runs/"+runID+"/servers", map[string]any{"recipe": "docs"}); code != 201 {
+				t.Fatalf("add docs while parked = %d %v", code, body)
+			}
+
+			// Ten sweeps five seconds apart: under a minute in all.
+			for range 10 {
+				if _, err := w.previews.Sweep(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = next_attempt_at - interval '5 seconds' WHERE id = $1`, runID)
+			}
+			if gets, resumes := calls.counts(); gets != 1 || resumes != 0 || forges.n.Load() != 0 {
+				t.Errorf("in under a minute of sweeps: %d lux Gets, %d Resumes, %d forge lookups; want 1, 0, 0",
+					gets, resumes, forges.n.Load())
+			}
+			if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND pending_starts = '{docs}'
+				AND next_attempt_at > now()`, runID); n != 1 {
+				t.Fatalf("the preview is no longer parked awaiting its login: %s", w.describeRuns())
+			}
+
+			// Restored, and past the retry.
+			api.advance(11 * time.Hour)
+			w.previews.Registry = ecrLogin
+			mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = next_attempt_at - interval '1 minute' WHERE id = $1`, runID)
+			r := w.lux.Runs()[0]
+			w.until("the preview to be resumed", func() bool { return r.Resumed == 1 })
+			fresh, _ := loginIn(r.ResumeSecrets[0])
+			if tokens := api.tokens(); len(tokens) != 2 || fresh != "AWS:"+tokens[1] {
+				t.Errorf("resumed with %q, ECR minted %d; want the second token", fresh, len(tokens))
+			}
+			w.until("the docs server to start", func() bool {
+				return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND pending_starts = '{}'`, runID) == 1
+			})
+		})
 	}
 }
 
