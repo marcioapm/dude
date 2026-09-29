@@ -240,3 +240,17 @@ Against the plan's self-hosting order (§81):
 | 6 — Remote execution, Slack/Jira | not started |
 
 What is next, and why, is in [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md#whats-next).
+
+## License
+
+dude is source-available under the [PolyForm Perimeter License 1.0.1](LICENSE).
+Copyright 2026 Márcio Martins. It is not an OSI-approved open-source license.
+
+Personal use, internal business use, and use in noncompeting commercial products
+are permitted. For example, using dude for your team's development work, including building commercial products
+is permitted. Using dude to provide others with a competing agent-development platform
+is not permitted, even if that offering is free or uses a different interface.
+
+These examples summarize the license; they do not change its terms. The full
+[license](LICENSE) governs. Third-party components retain their own licenses.
+For a separate license permitting a competing offering, contact the maintainer.
