@@ -147,18 +147,9 @@ body {
   flex: 1;
   min-width: 0;
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  row-gap: var(--ds-space-8);
-  column-gap: var(--ds-space-12);
-  font-size: var(--ds-text-sm);
-  color: var(--ds-color-text-muted);
 }
 .runBarTools:empty {
   display: none;
-}
-.runBarTools label {
-  white-space: nowrap;
 }
 /* Events: the session's ledger, in the same place as its conversation and changes. */
 .runEvents {

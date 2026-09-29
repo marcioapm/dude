@@ -1,5 +1,3 @@
-import { stringSlot } from "@dude/design-system/components";
-
 /** What dude goes by in a task's conversation and activity (docs/design/brand). */
 export const DUDE_NAMES = ["The Dude", "El Duderino", "His Dudeness", "Duder"] as const;
 
@@ -8,7 +6,10 @@ export const DUDE_NAMES = ["The Dude", "El Duderino", "His Dudeness", "Duder"] a
  * the task's id, so a task always hears from the same one and tasks vary.
  */
 export function dudeName(taskId: string): (typeof DUDE_NAMES)[number] {
-  return DUDE_NAMES[stringSlot(taskId, DUDE_NAMES.length)]!;
+  // This hash, not another: tasks already carry the name it gave them.
+  let h = 0;
+  for (let i = 0; i < taskId.length; i++) h = (Math.imul(h, 31) + taskId.charCodeAt(i)) | 0;
+  return DUDE_NAMES[Math.abs(h) % DUDE_NAMES.length]!;
 }
 
 /**

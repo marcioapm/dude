@@ -58,14 +58,16 @@
   white-space: nowrap;
   overflow: hidden;
 }
-/* Each part of the last change gives way with an ellipsis, the file name last. */
-.last > :global(*) {
-  flex: 0 1 auto;
+/* The words give way with an ellipsis, the tool first, the file name last;
+   the agent's face never does. */
+.last > span:not([class]) {
+  flex: 0 100 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .last code {
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -73,6 +75,10 @@
   color: var(--ds-color-text-secondary);
 }
 /* The toggle's words stay on one line beside it. */
+/* The toolbar drawn into a page's bar: its controls laid out as here. */
+.headIn {
+  flex: 1;
+}
 .head label {
   white-space: nowrap;
 }

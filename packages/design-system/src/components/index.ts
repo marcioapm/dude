@@ -2,7 +2,7 @@ export { StatusBadge } from "./StatusBadge.tsx";
 export type { StatusBadgeProps } from "./StatusBadge.tsx";
 export { NeedsYouCount, StatusMark } from "./StatusMark.tsx";
 export type { NeedsYouCountProps, StatusMarkProps } from "./StatusMark.tsx";
-export { PersonAvatar, PersonAvatarStack, PersonLine, personTitle, stringSlot } from "./PersonAvatar.tsx";
+export { PersonAvatar, PersonAvatarStack, PersonLine, personTitle } from "./PersonAvatar.tsx";
 export type { PersonAvatarProps, PersonAvatarStackProps, PersonAvatarSize, PersonLineProps } from "./PersonAvatar.tsx";
 export { ProjectAvatar } from "./ProjectAvatar.tsx";
 export type { ProjectAvatarProps, ProjectFace } from "./ProjectAvatar.tsx";

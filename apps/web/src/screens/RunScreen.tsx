@@ -169,11 +169,10 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     }
     return snapshot(apply(projection.current, events), run?.status);
   }, [events, runId, run?.status]);
-  // A run of tool calls and thoughts is one group. Re-grouped on every
-  // snapshot: the projection appends to one array and changes turns in place
-  // (a tool call completing), so neither its identity nor its length says
-  // when the turns changed.
-  const grouped = asides(conversation.turns);
+  // A run of tool calls and thoughts is one group, worked out once per
+  // snapshot: each fold gives a new conversation, though its turns array is
+  // the same one, appended to and changed in place.
+  const grouped = useMemo(() => asides(conversation.turns), [conversation]);
   const isLive = run ? !TERMINAL_RUN_STATUSES.includes(run.status) : false;
   // The latest diff's summary: its file count for the Changes tab, its
   // checksum for the panel to know when to fetch.
@@ -290,6 +289,8 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   // A checkout to show: a Run with one, or any Run that has reported a diff
   // (the rail's files open Changes, so Changes must be there to open).
   const hasChanges = Object.keys(run.baseRefs).length > 0 || run.phase !== null || (diffSummary?.files.length ?? 0) > 0;
+  // Changes gone from the switch (its diff emptied, with no checkout to fall back on): back to the conversation.
+  if (view === "changes" && !hasChanges) setView("chat");
   const liveDiff = isLive && run.status !== "paused";
 
   const actions = isLive ? (
@@ -337,7 +338,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
         {switcher}
         <div className="runBarTools" ref={setToolbar} />
       </div>
-      {view === "changes" ? (
+      {view === "changes" && hasChanges ? (
         <ChangesPanel client={client} runId={runId} role={role} events={events} checksum={diffSummary?.checksum ?? ""} live={liveDiff}
           selected={selected} onSelectedChange={setSelected} toolbarIn={toolbar} />
       ) : view === "events" ? (
