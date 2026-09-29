@@ -211,7 +211,13 @@ func Ranked(ctx context.Context, tx pgx.Tx, emb Embedded, q Query) (Outcome, err
 		out.Mode, out.Model = "hybrid", emb.Model
 		// The HNSW index returns its nearest before the organization and
 		// scope filter them; let it keep looking until enough are left.
-		if _, err := tx.Exec(ctx, `SET LOCAL hnsw.iterative_scan = relaxed_order`); err != nil {
+		// pgvector before 0.8 has no such setting: without it, search still
+		// works, and may find fewer by meaning in a large index.
+		if _, err := tx.Exec(ctx, `DO $$ BEGIN
+				IF (SELECT string_to_array(extversion, '.')::int[] >= '{0,8}' FROM pg_extension WHERE extname = 'vector') THEN
+					SET LOCAL hnsw.iterative_scan = relaxed_order;
+				END IF;
+			END $$`); err != nil {
 			return out, err
 		}
 		rows, err := tx.Query(ctx, `SELECT source_type, source_id, coalesce(project_id, ''), title, left(body, 200),

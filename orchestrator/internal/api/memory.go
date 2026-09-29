@@ -237,6 +237,14 @@ func (s *Server) memoryIndex(w http.ResponseWriter, r *http.Request, org string)
 	return nil
 }
 
+// resumeIndexer ends the indexer's wait, so a person's Retry or Reindex is now.
+func (s *Server) resumeIndexer() {
+	if s.Indexer != nil {
+		s.Indexer.Resume()
+	}
+	s.kick()
+}
+
 func (s *Server) memoryRetry(w http.ResponseWriter, r *http.Request, org string) error {
 	var b struct {
 		Type string `json:"type"`
@@ -254,7 +262,7 @@ func (s *Server) memoryRetry(w http.ResponseWriter, r *http.Request, org string)
 	if err != nil {
 		return err
 	}
-	s.kick()
+	s.resumeIndexer()
 	write(w, http.StatusOK, map[string]any{"due": n})
 	return nil
 }
@@ -272,7 +280,7 @@ func (s *Server) memoryReindex(w http.ResponseWriter, r *http.Request, org strin
 	if err != nil {
 		return err
 	}
-	s.kick()
+	s.resumeIndexer()
 	write(w, http.StatusOK, map[string]any{"due": n})
 	return nil
 }

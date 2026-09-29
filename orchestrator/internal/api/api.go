@@ -53,8 +53,12 @@ type Server struct {
 	PRs    *prs.Syncer
 	// Search by meaning for the memory pages; nil, by words alone.
 	Embedder embeddings.Embedder
-	// The indexer, for how the embedder is doing.
-	Indexer interface{ Health() memory.Health }
+	// The indexer: how the embedder is doing, and ending its wait when a
+	// person asks to retry.
+	Indexer interface {
+		Health() memory.Health
+		Resume()
+	}
 }
 
 func (s *Server) Handler() http.Handler {
