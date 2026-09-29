@@ -142,7 +142,8 @@ func run(log *slog.Logger) error {
 	defer syncer.Stop()
 	serverService := &servers.Service{DB: database, Lux: luxClient, Log: log,
 		ConsoleURL: env("LUX_CONSOLE_URL", os.Getenv("LUX_URL"))}
-	previews := &servers.Previews{Service: serverService, Forges: forges, DefaultImage: agent.DefaultImage}
+	previews := &servers.Previews{Service: serverService, Forges: forges, DefaultImage: agent.DefaultImage,
+		Registry: registryLogin}
 	defer previews.Stop()
 	pullRequests := &prs.Syncer{DB: database, Forges: forges, Signal: signalWorkflow, Log: log,
 		FactoryLogins: list(os.Getenv("DUDE_FACTORY_LOGINS"))}
