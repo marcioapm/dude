@@ -221,7 +221,7 @@ func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 			  AND (r.status IN ('pending', 'scheduled', 'starting', 'running')
 			       OR `+resumable+`
 			       -- Aborted in dude but not yet cancelled in lux.
-			       OR (r.status = 'aborted' AND r.lux_run_id IS NOT NULL AND r.lux_stop_reason IS DISTINCT FROM 'cancel'))
+			       OR (r.status IN ('aborted', 'failed') AND r.lux_run_id IS NOT NULL AND r.lux_stop_reason IS DISTINCT FROM 'cancel'))
 			  -- An abort does not wait out the back-off of the step it ends.
 			  AND (r.status = 'aborted' OR r.next_attempt_at IS NULL
 			       OR r.next_attempt_at <= now() + make_interval(secs => $3::float8))
@@ -264,7 +264,7 @@ func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 // it did anything, so the sweeper keeps going while there is work.
 func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 	switch {
-	case r.Status == statusAborted:
+	case r.Status == statusAborted || r.Status == "failed":
 		return true, s.cancel(ctx, r)
 	case r.Status == statusPending && r.LuxRunID == "":
 		return true, s.submit(ctx, r)
