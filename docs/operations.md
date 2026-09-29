@@ -202,11 +202,16 @@ Before the first `DUDE_REGISTRY_AUTH=ecr` (or `static`):
 1. Upgrade lux's control plane and every runner host to a version with
    `image.registryAuth` ([lux version for private images](#lux-version-for-private-images)),
    or drain the hosts that cannot be upgraded.
-2. Set the IAM policies ([A pull-only role for ECR](#a-pull-only-role-for-ecr)),
-   `DUDE_REGISTRY_AUTH`, `DUDE_ECR_ROLE_ARN` and `DUDE_AGENT_IMAGE`, and
-   restart the orchestrator. Check its startup log for `agent images are
-   pulled with a registry login` and the expected `minted_by`, and that no
-   `registry login refused by AWS` error follows.
+2. Set the login and restart the orchestrator:
+   - `ecr`: the IAM policies ([A pull-only role for ECR](#a-pull-only-role-for-ecr)),
+     `DUDE_REGISTRY_AUTH=ecr`, `DUDE_ECR_ROLE_ARN` and `DUDE_AGENT_IMAGE`.
+     Its startup log says `agent images are pulled with a registry login`
+     with the expected `minted_by`, and no `registry login refused by AWS`
+     error follows.
+   - `static`: `DUDE_REGISTRY_AUTH=static`, `DUDE_REGISTRY` and
+     `DUDE_REGISTRY_CREDENTIAL`, and no `DUDE_ECR_ROLE_ARN` (the
+     orchestrator refuses to start with one). Its startup log says `agent
+     images are pulled with a registry login`.
 3. Against the real lux, with a project whose image is the private one:
    - start one Run, see it pull and start; pause it, resume it, and see it
      start again (a resume carries a new login);
