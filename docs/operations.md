@@ -140,7 +140,16 @@ to end: a query sharing no word with a memory finds it by meaning.
 | `DUDE_S3_BUCKET` | off | The bucket people's photos and projects' images are kept in. Unset, uploads answer 503 and faces show initials. |
 | `DUDE_S3_ENDPOINT` | AWS | For MinIO, versitygw and other S3-compatible stores (path-style). |
 | `DUDE_S3_REGION` | `us-east-1` | |
-| `DUDE_S3_ACCESS_KEY`, `DUDE_S3_SECRET_KEY` | the AWS environment | Credentials for the bucket; unset, the usual `AWS_*` variables are read. The secret key is a **secret**. |
+| `DUDE_S3_ACCESS_KEY`, `DUDE_S3_SECRET_KEY` | off | Explicit credentials for local S3-compatible stores such as MinIO; set both. The secret key is a **secret**. Unset, the backend obtains temporary EC2 instance-role credentials through IMDSv2; it does not use Bun's AWS environment credential fallback. |
+
+On EC2, set `DUDE_S3_BUCKET` and `DUDE_S3_REGION`, grant the instance role
+`s3:PutObject`, `s3:GetObject` and `s3:DeleteObject` on the bucket, and leave
+both `DUDE_S3_*KEY` variables unset. The backend must reach the host's
+`169.254.169.254` metadata service (IMDSv2); an isolated container without
+host metadata access cannot use the role. Credentials are refreshed five
+minutes before expiry. Metadata errors stop reads and uploads rather than
+using expired credentials. `AWS_EC2_METADATA_SERVICE_ENDPOINT` overrides the
+metadata address for local tests only; do not point it at an untrusted server.
 
 Photos and project images are the only files the backend stores. They are
 small (the browser uploads a 160 px square, at most 512 KB is accepted),
