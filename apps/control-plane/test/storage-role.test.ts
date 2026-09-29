@@ -14,6 +14,8 @@ let generation = 0;
 let denied = false;
 let malformed = false;
 let imdsToken = "fake-imds-token";
+// When set, the role credential endpoint answers with exactly this body.
+let credentialBody: string | undefined;
 let metadataCalls = 0;
 let expiry = Date.now() + 360_000;
 const meta = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(req) {
@@ -26,6 +28,7 @@ const meta = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(req) {
   }
   if (req.headers.get("x-aws-ec2-metadata-token") !== "fake-imds-token") return new Response(null, { status: 401 });
   if (path === "/latest/meta-data/iam/security-credentials/") return new Response("fake-role\n");
+  if (path === "/latest/meta-data/iam/security-credentials/fake-role" && credentialBody !== undefined) return new Response(credentialBody);
   if (path === "/latest/meta-data/iam/security-credentials/fake-role") return Response.json(malformed ? { Code: "Failure" } : {
     Code: "Success", AccessKeyId: keys[generation], SecretAccessKey: secrets[generation],
     Token: tokens[generation], Expiration: new Date(expiry).toISOString(),
@@ -287,5 +290,43 @@ test("one explicit DUDE_S3 key alone fails without falling back to IMDS", async 
     });
   }
   expect(metadataCalls).toBe(0);
+  expect(requests.length).toBe(0);
+});
+
+test("a first request fails with no S3 request when metadata denies or returns unusable credentials", async () => {
+  const credential = { Code: "Success", AccessKeyId: keys[0], SecretAccessKey: secrets[0], Token: tokens[0] };
+  const cases: [string, string, () => void][] = [
+    ["denied", "MetadataRequestFailed", () => { denied = true; }],
+    ["malformed JSON", "MetadataCredentialsInvalid", () => { credentialBody = "{not json"; }],
+    ["failure code", "MetadataCredentialsInvalid", () => { credentialBody = JSON.stringify({ ...credential, Code: "Failure", Expiration: new Date(Date.now() + 3_600_000).toISOString() }); }],
+    ["empty body", "MetadataCredentialsInvalid", () => { credentialBody = ""; }],
+    ["empty credentials", "MetadataCredentialsInvalid", () => { credentialBody = JSON.stringify({ Code: "Success", AccessKeyId: "", SecretAccessKey: "", Token: "", Expiration: new Date(Date.now() + 3_600_000).toISOString() }); }],
+    ["expired", "MetadataCredentialsInvalid", () => { credentialBody = JSON.stringify({ ...credential, Expiration: new Date(Date.now() - 1_000).toISOString() }); }],
+    ["inside the safety margin", "CredentialsUnavailable", () => { credentialBody = JSON.stringify({ ...credential, Expiration: new Date(Date.now() + 30_000).toISOString() }); }],
+  ];
+  requests.length = 0;
+  const operations = [
+    (storage: Storage) => storage.putObject("first", new Uint8Array([1]), "image/png"),
+    (storage: Storage) => storage.getObject("first"),
+  ];
+  for (const [name, code, arrange] of cases) {
+    for (const run of operations) {
+      const storage = await fresh();
+      metadataCalls = 0;
+      arrange();
+      try {
+        const error = await run(storage).then(() => undefined, (err: unknown) => err);
+        expect({ name, error: error instanceof storage.StorageError, code: (error as { code?: string }).code }).toEqual({ name, error: true, code });
+        // Inside the failure backoff the next request fails without asking metadata again.
+        const calls = metadataCalls;
+        await expect(run(storage)).rejects.toThrow("CredentialsUnavailable");
+        expect(metadataCalls).toBe(calls);
+      } finally {
+        denied = false;
+        credentialBody = undefined;
+      }
+      expect({ name, metadataCalls: metadataCalls > 0 }).toEqual({ name, metadataCalls: true });
+    }
+  }
   expect(requests.length).toBe(0);
 });
