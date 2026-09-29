@@ -153,7 +153,8 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   lux's Server object on as it came. lux's `server.*` events on a Run's
   stream become `servers.changed`, and the browser reads again.
 - **Which Run a task shows**: its agent at work (the publishing one), else
-  its live branch preview, else none.
+  its live branch preview, else none. A live preview behind an agent at
+  work is still named (`preview` in a task's servers), so it can be stopped.
 - **A migration stops servers.** lux does not restart them after a move
   (only a spec's servers start on every start); `moved` says so, and a
   person starts them again. A move is also not the agent dying: a Run lux
@@ -164,7 +165,15 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   'unused'`) after the project's idle timeout without a request, by lux's
   `lastRequestAt`; starting a server on it resumes it. One per task.
   Steer, pause, resume and abort refuse it; it is stopped with `DELETE
-  /v1/tasks/:id/preview`.
+  /v1/tasks/:id/preview`, or ends when its task does (done, failed,
+  aborted). A stopped preview's lux Run is cancelled, a lost one too (lux
+  keeps a lost Run to resume).
+- **Previews open in a new tab**, never in a frame: a preview's sign-in
+  cookie is SameSite=Lax and does not reach a cross-site iframe. Only an
+  `https://` server URL becomes a link.
+- **Egress entries are what lux takes**: `*`, a hostname (no wildcards —
+  lux resolves each), an address or a CIDR range. The API refuses others;
+  the orchestrator leaves out any saved before it did.
 
 ## Decisions already made
 

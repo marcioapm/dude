@@ -150,6 +150,11 @@ export interface TaskServers {
   servers: RunServer[];
   moved: null | { at: string; fromHost: string | null; toHost: string | null };
   recipes: Recipe[];
+  /**
+   * The task's live branch preview, when the Run shown is its agent's (a
+   * task's servers only): so it can still be stopped. null otherwise.
+   */
+  preview: null | { id: string; luxRunId: string; state: string };
 }
 
 /** What a person adds to a Run: a recipe, or a server of their own. */
@@ -161,7 +166,7 @@ export const addServerSchema = z.union([
     /** A shell command line, or argv. */
     command: z.union([z.string().max(4000), z.array(z.string()).min(1)]).nullish(),
     workdir: serverWorkdirSchema.optional(),
-    env: z.union([z.record(z.string()), z.array(z.object({ name: envNameSchema, value: z.string() }))]).optional(),
+    env: z.union([z.record(envNameSchema, z.string()), z.array(z.object({ name: envNameSchema, value: z.string() }))]).optional(),
   }).strict(),
 ]);
 export type AddServer = z.infer<typeof addServerSchema>;

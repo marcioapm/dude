@@ -149,7 +149,7 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["sv-row", "ServerRow / ServerList"],
       ["sv-panel", "ServersPanel"],
       ["sv-drawer", "ServersDrawer"],
-      ["sv-stages", "PreviewStages / ServersMoved"],
+      ["sv-stages", "PreviewStages / ServersMoved / PreviewAlsoRunning"],
       ["sv-summary", "ServersSummary"],
       ["sv-recipes", "ServerRecipeTable / Dialog"],
     ],

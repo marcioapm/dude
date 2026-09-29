@@ -12,6 +12,7 @@ import {
   AgentAvatar,
   Duration,
   PersonAvatar,
+  PreviewAlsoRunning,
   PreviewStages,
   ServerList,
   ServerRow,
@@ -197,6 +198,9 @@ export const ServersSection = memo(function ServersSection({ client, servers, ta
           }
         />
         {problem ? <Callout tone="danger">{problem}</Callout> : null}
+        {data.preview && taskId ? (
+          <PreviewAlsoRunning parked={data.preview.state === "paused"} busy={busy !== null} onStop={stopPreview} />
+        ) : null}
         {data.moved ? (
           <ServersMoved at={formatTimestamp(data.moved.at, "time-short")} fromHost={data.moved.fromHost} toHost={data.moved.toHost}
             busy={busy !== null} onStartAll={live ? () => void servers.startAll() : undefined} />

@@ -8,7 +8,7 @@ import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { egressProblem, type RunServer } from "@dude/domain";
 import { HostChips } from "../src/components/HostChips.tsx";
-import { PreviewStages } from "../src/components/PreviewStages.tsx";
+import { PreviewAlsoRunning, PreviewStages } from "../src/components/PreviewStages.tsx";
 import { draftOf, draftProblems, recipeOf } from "../src/components/ServerRecipe.tsx";
 import { ServerRow } from "../src/components/ServerRow.tsx";
 import { ServerStateMark } from "../src/components/ServerStateMark.tsx";
@@ -166,6 +166,11 @@ describe("PreviewStages", () => {
     expect(h).toContain('data-stage="setup"');
     expect(text(h)).toBe("Scheduling Cloning feature/x Setup: npm ci · 24s Starting servers Ready");
     expect((h.match(/aria-current="step"/g) ?? []).length).toBe(1);
+  });
+
+  test("a preview behind the agent's run is said, with its Stop", () => {
+    expect(text(html(<PreviewAlsoRunning onStop={() => {}} />))).toBe("A branch preview is also running. Stop preview");
+    expect(text(html(<PreviewAlsoRunning parked />))).toBe("A branch preview is also parked.");
   });
 });
 

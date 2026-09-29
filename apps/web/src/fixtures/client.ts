@@ -296,6 +296,7 @@ export class FixtureClient extends ApiClient {
       servers: this.#recipes.map((r) => server(r.name, r.port, { state: "stopped", fromSpec: r.autostartInPreviews, since: new Date().toISOString() }, suffix)),
       moved: null,
       recipes: [...this.#recipes],
+      preview: null,
     };
     this.#task = { ...this.#task, status: "running" };
     this.#changed();

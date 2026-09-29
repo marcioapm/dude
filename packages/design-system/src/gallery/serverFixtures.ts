@@ -85,7 +85,7 @@ const apiStarting = server("api", 8080, { state: "starting", since: iso(9_000) }
 const storybookOff = server("storybook", 6006, { state: "stopped" });
 
 /** a: the implementer's run, web ready, api starting, storybook never started. */
-export const serversRunning: TaskServers = { run: agentRun, servers: [webReady, apiStarting, storybookOff], moved: null, recipes: serverRecipes };
+export const serversRunning: TaskServers = { run: agentRun, servers: [webReady, apiStarting, storybookOff], moved: null, recipes: serverRecipes, preview: null };
 
 /** b: the run moved host; every server stopped with the old placement. */
 const movedAt = iso(11 * MIN);
@@ -98,6 +98,7 @@ export const serversMigrated: TaskServers = {
   ],
   moved: { at: movedAt, fromHost: "lux-c7", toHost: "lux-c9" },
   recipes: serverRecipes,
+  preview: null,
 };
 
 /** c: api exited 1 — the port was taken. */
@@ -110,10 +111,11 @@ export const serversExited: TaskServers = {
   ],
   moved: null,
   recipes: serverRecipes,
+  preview: null,
 };
 
 /** d: no run serves the task: the implementer finished and its run ended. */
-export const serversNoRun: TaskServers = { run: null, servers: [], moved: null, recipes: serverRecipes };
+export const serversNoRun: TaskServers = { run: null, servers: [], moved: null, recipes: serverRecipes, preview: null };
 
 /** e: a branch preview coming up, in setup. */
 export const serversPreviewBooting: TaskServers = {
@@ -125,6 +127,7 @@ export const serversPreviewBooting: TaskServers = {
   ],
   moved: null,
   recipes: serverRecipes,
+  preview: null,
 };
 
 export const serverScenarios = {
