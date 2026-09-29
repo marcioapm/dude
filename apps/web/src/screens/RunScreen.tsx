@@ -397,7 +397,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                     (conversation.openQuestion !== null && waitingOn !== undefined)}
                   disabledReason={
                     waitingOn && (conversation.openQuestion || run.dudePause === "person")
-                      ? `Waiting for ${waitingOn} to ${!conversation.openQuestion && conversation.turns.some((t) => t.kind === "repositoryRequest" && t.decision === null) ? "decide" : "answer"}.`
+                      ? `Waiting for ${waitingOn} to ${!conversation.openQuestion && conversation.openRequest ? "decide" : "answer"}.`
                       : run.dudePause ? PAUSE_WORDS[run.dudePause].composer
                       : "This run is paused. Resume it to steer."
                   }
@@ -544,7 +544,7 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
           // The agent's reason, quoted: its words cannot pass for the card's.
           text={`**${what}?**\n\n${turn.reason.split("\n").map((line) => `> ${line}`).join("\n")}`}
           options={turn.decision === null && !ended ? ["Approve", "Decline"] : []}
-          verb="decide"
+          kind="request"
           askedAt={turn.at}
           answeredAt={turn.decidedAt}
           dismissed={ended && turn.decision === null}

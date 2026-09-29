@@ -128,12 +128,12 @@
   padding: 0;
   list-style: none;
 }
-/* Someone else's choices: muted, so they read as not yours rather than as
-   buttons that fail; the hint comes on hover. */
 /* The way to make someone else's question yours, after whom it waits on. */
 .takeOver {
   color: var(--ds-color-text-muted);
 }
+/* Someone else's choices: muted, so they read as not yours rather than as
+   buttons that fail; the hint comes on hover. */
 .optionsElse {
   width: fit-content;
 }
