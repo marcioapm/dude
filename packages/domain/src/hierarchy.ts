@@ -39,12 +39,23 @@ export type Effort = z.infer<typeof effortSchema>;
 /** Running time allowed per session, in minutes: up to a week. */
 export const timeLimitMinutesSchema = z.number().int().min(1).max(10_080);
 
+export const MODEL_PROVIDERS = ["llm-anthropic", "llm-openai"] as const;
+// Explicit exceptions for orchestrator/internal/fakeagent's test harness, not image providers.
+export const TEST_HARNESS_MODELS = ["fake/scripted", "fake/hang", "fake/tools", "fake/request", "fake/wait", "fake/live", "fake/ask"] as const;
+export const MODEL_ACCEPTED_FORM = `model must be ${MODEL_PROVIDERS.map((provider) => `${provider}/<model>`).join(" or ")} (non-empty model, no whitespace or extra slash, at most 200 characters); test harness exceptions: ${TEST_HARNESS_MODELS.join(", ")}`;
+export const modelSelectionSchema = z.string().refine((value) => {
+  if (value.length > 200) return false;
+  if ((TEST_HARNESS_MODELS as readonly string[]).includes(value)) return true;
+  const [provider, model, extra] = value.split("/");
+  return (MODEL_PROVIDERS as readonly string[]).includes(provider ?? "") && Boolean(model) && extra === undefined && !/\s/u.test(value);
+}, MODEL_ACCEPTED_FORM);
+
 export const agentModelConfigSchema = z.object({
   /**
    * Optional at each layer: a project that changes only a role's effort
    * keeps its organization's model (resolveAgentModel, field by field).
    */
-  model: z.string().min(1).optional(),
+  model: modelSelectionSchema.optional(),
   harness: z.string().min(1).optional(),
   /** Overrides the harness default when set. */
   maxTokens: z.number().int().positive().optional(),
