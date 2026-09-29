@@ -942,6 +942,32 @@ EmptyState, ScrollArea.
 - **RemovableList** — attached things, each removable.
 - **SearchPicker** — a combobox that finds one thing by name.
 
+`src/components/` — servers and previews (what a run serves):
+
+- **ServerStateMark / ServerStateDot** — a server's state in StatusMark's
+  grammar; `src/tokens/servers.ts` is the vocabulary (lux's five states
+  and `waiting`, for a preview's spec server before its turn).
+- **ServerRow / ServerList / ServerRecipeRow** — one row per server in
+  StepList's grammar: mono name and port, the state with what it means
+  (`describeServer` turns lux's Server into the words, in one place), the
+  URL to copy or open, the actions its state allows, its log folded under
+  it as `server:<name>`. Preview opens the server's URL in a new tab:
+  there is no in-app frame (a preview's sign-in cookie would not reach a
+  cross-site iframe). `safeServerUrl` keeps anything but an `https://` URL
+  out of an `href`.
+- **ServersRunLine / ServersPanel / ServersDrawer** — the run the servers
+  live on as a line, the panel (a container: rows stack in a narrow
+  drawer), and the run screen's 440px drawer on chrome.
+- **PreviewStages / ServersMoved** — a branch preview's stages, and the
+  notice with Start all after a run moved host.
+- **ServersSummary** — the overview aside's block, in PullRequestPanel's
+  grammar.
+- **ServerRecipeTable / ServerRecipeDialog / EnvVarRows / HostChips** —
+  project settings: the definitions, the editor with validation in words,
+  and a preview's egress allowlist as chips.
+- **LinkButton** (a primitive) — a real link drawn as a button, for a way
+  out among actions ("Open terminal in lux ↗").
+
 `src/components/` — live work:
 
 - **LiveDiff** — a working agent's checkout against where it started, as

@@ -341,6 +341,8 @@ export const runSchema = z.object({
   workspacePath: z.string().nullable().default(null),
   /** Why the Run failed, when it did. */
   error: z.string().nullable().default(null),
+  /** An agent's, or a branch preview's: no agent, the task's branch serving its servers. */
+  kind: z.enum(["agent", "preview"]).default("agent"),
   /**
    * Which step of the delivery workflow this Run is. Null for a Run created
    * directly through the API, which executes as an orchestrator.
@@ -370,10 +372,11 @@ export const runSchema = z.object({
    * Why dude paused it itself, and so what takes it up again: "person" —
    * parked while it waits for an answer or a decision, which resumes it;
    * "idle" — parked after going quiet, until a person resumes it;
-   * "repository" — stopped a moment to bring one in. Null when not paused,
-   * or when a person paused it.
+   * "repository" — stopped a moment to bring one in; "unused" — a branch
+   * preview nobody opened for a while, until a person starts a server. Null
+   * when not paused, or when a person paused it.
    */
-  dudePause: z.enum(["person", "idle", "repository"]).nullable().default(null),
+  dudePause: z.enum(["person", "idle", "repository", "unused"]).nullable().default(null),
   /** Tokens as the agent reported them. Context is the latest size, not a sum. */
   tokens: z
     .object({
@@ -397,7 +400,8 @@ export const DEFAULT_RUN_ROLE: AgentRole = "orchestrator";
  * How a Run is named to a person: its phase, and for a review its category.
  * "Review · security", "Fix", "Agent" for a Run with no phase at all.
  */
-export function runLabel(run: { phase?: string | null; category?: string | null }): string {
+export function runLabel(run: { phase?: string | null; category?: string | null; kind?: string }): string {
+  if (run.kind === "preview") return "Branch preview";
   if (!run.phase) return "Agent";
   const phase = run.phase.charAt(0).toUpperCase() + run.phase.slice(1);
   return run.category ? `${phase} · ${run.category}` : phase;

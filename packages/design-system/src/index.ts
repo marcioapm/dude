@@ -79,3 +79,6 @@ export {
 export type { BoardColumnKind, BoardColumnSpec, BoardCard, BoardColumn, BoardScope, BoardSwimlane, LiveActivity } from "./util/boardModel.ts";
 export { ThemeProvider, useTheme } from "./theme.tsx";
 export type { ThemePreference, ThemeContextValue } from "./theme.tsx";
+export { describeServer, summarizeServers, canStart, canStop, isMoving, canStartAny, canStopAny, anyMoving, bareUrl, safeServerUrl, serverLogLines, serverNameProblem, serverPortProblem, PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES } from "./util/servers.ts";
+export type { ServerWords, ServerRunContext, ServersRun, ServerLogLine } from "./util/servers.ts";
+export { toggled } from "./util/sets.ts";

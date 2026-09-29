@@ -9,6 +9,7 @@
 //	DUDE_ORCHESTRATOR_TOKEN      the service token the backend authenticates with
 //	DUDE_ORCHESTRATOR_LISTEN     internal API address (default 127.0.0.1:3100)
 //	LUX_URL, LUX_API_KEY         the lux control plane and a `run`-scoped key
+//	LUX_CONSOLE_URL              lux's console, for terminal links (default: LUX_URL)
 //	DUDE_AGENT_IMAGE             image for agents when a project names none
 //	DUDE_OPENCODE_AUTH/_CONFIG   OpenCode credentials (default: this machine's)
 //	DUDE_PR_RECONCILE            how often open PRs are re-read as a backstop to webhooks (default 15m)
@@ -49,6 +50,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/notify"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
 	"github.com/marciomartins/dude/orchestrator/internal/prs"
+	"github.com/marciomartins/dude/orchestrator/internal/servers"
 	"github.com/marciomartins/dude/orchestrator/internal/version"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
@@ -121,6 +123,10 @@ func run(log *slog.Logger) error {
 		DiffEvery: diffEvery, MachineUSDPerHour: machineRate,
 	}
 	defer syncer.Stop()
+	serverService := &servers.Service{DB: database, Lux: luxClient, Log: log,
+		ConsoleURL: env("LUX_CONSOLE_URL", os.Getenv("LUX_URL"))}
+	previews := &servers.Previews{Service: serverService, Forges: forges, DefaultImage: agent.DefaultImage}
+	defer previews.Stop()
 	pullRequests := &prs.Syncer{DB: database, Forges: forges, Signal: signalWorkflow, Log: log,
 		FactoryLogins: list(os.Getenv("DUDE_FACTORY_LOGINS"))}
 
@@ -159,6 +165,7 @@ func run(log *slog.Logger) error {
 					map[string]string{"runId": runID, "status": status}, "phase-finished:"+runID)
 			})
 		}},
+		{"previews", time.Second, previews.Sweep},
 		{"artifacts", time.Second, (&phases.Artifacts{DB: database, Lux: luxClient}).Sweep},
 		{"webhooks", time.Second, pullRequests.ProcessDeliveries},
 		{"notify", 2 * time.Second, notifier.Sweep},
@@ -178,6 +185,12 @@ func run(log *slog.Logger) error {
 			l.run(ctx, log, wake)
 		}()
 	}
+	serverService.Kick = func() {
+		select {
+		case kick <- struct{}{}:
+		default:
+		}
+	}
 	go func() {
 		for range kick {
 			for _, w := range wakers {
@@ -192,13 +205,8 @@ func run(log *slog.Logger) error {
 	srv := &http.Server{
 		Addr: env("DUDE_ORCHESTRATOR_LISTEN", "127.0.0.1:3100"),
 		Handler: (&api.Server{DB: database, Lux: luxClient, Workflow: runtime, Token: require("DUDE_ORCHESTRATOR_TOKEN"), Log: log,
-			PushKeys: notifier.Keys, Forges: forges, PRs: pullRequests, Embedder: embedder, Indexer: indexer,
-			Kick: func() {
-				select {
-				case kick <- struct{}{}:
-				default:
-				}
-			}}).Handler(),
+			PushKeys: notifier.Keys, Forges: forges, PRs: pullRequests, Servers: serverService,
+			Embedder: embedder, Indexer: indexer, Kick: serverService.Kick}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	// dude's tools for agents, on a listener of their own: agents reach it
@@ -207,12 +215,7 @@ func run(log *slog.Logger) error {
 	var tools *http.Server
 	if addr := os.Getenv("DUDE_TOOLS_LISTEN"); addr != "" {
 		tools = &http.Server{Addr: addr, Handler: (&agenttools.Server{DB: database, Log: log, Embedder: embedder,
-			Kick: func() {
-				select {
-				case kick <- struct{}{}:
-				default:
-				}
-			}}).Handler(),
+			Kick: serverService.Kick}).Handler(),
 			ReadHeaderTimeout: 10 * time.Second}
 		go func() {
 			log.Info("agent tools listening", "addr", addr, "url", agent.ToolsURL)

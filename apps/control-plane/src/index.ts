@@ -25,6 +25,7 @@ import { registerMetricsRoutes } from "./api/routes/metrics.ts";
 import { registerSettingsRoutes } from "./api/routes/settings.ts";
 import { registerProjectPageRoutes } from "./api/routes/projectPage.ts";
 import { registerLiveRoutes } from "./api/routes/live.ts";
+import { registerServerRoutes } from "./api/routes/servers.ts";
 import { registerMemoryRoutes } from "./api/routes/memory.ts";
 import { webApp } from "./api/web.ts";
 import { version } from "./build.ts";
@@ -59,6 +60,7 @@ export function buildRouter(webDir = process.env.DUDE_WEB_DIR): Router {
   registerSettingsRoutes(router);
   registerProjectPageRoutes(router);
   registerLiveRoutes(router);
+  registerServerRoutes(router);
 
   if (webDir) router.fallback(webApp(webDir));
 

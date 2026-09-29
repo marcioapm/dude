@@ -17,6 +17,7 @@ import { ShellSection } from "./sections/Shell.tsx";
 import { SettingsGallerySection } from "./sections/Settings.tsx";
 import { LiveSection } from "./sections/Live.tsx";
 import { CalmerSection } from "./sections/Calmer.tsx";
+import { ServersSection } from "./sections/Servers.tsx";
 
 const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, string]>]> = [
   ["App shell", [["shell-session", "Sidebar + transcript"]]],
@@ -141,6 +142,18 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["l-cost", "Cost, both halves"],
     ],
   ],
+  [
+    "Servers",
+    [
+      ["sv-state", "ServerStateMark"],
+      ["sv-row", "ServerRow / ServerList"],
+      ["sv-panel", "ServersPanel"],
+      ["sv-drawer", "ServersDrawer"],
+      ["sv-stages", "PreviewStages / ServersMoved / PreviewAlsoRunning"],
+      ["sv-summary", "ServersSummary"],
+      ["sv-recipes", "ServerRecipeTable / Dialog"],
+    ],
+  ],
 ];
 
 const PANE_DENSITY_KEY = "dude.gallery.paneDensity";
@@ -244,6 +257,7 @@ function Shell() {
           <BoardSection mode={panes} />
           <SettingsGallerySection mode={panes} />
           <LiveSection mode={panes} />
+          <ServersSection mode={panes} />
         </PaneDensityContext.Provider>
       </main>
     </div>

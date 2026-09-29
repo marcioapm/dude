@@ -1,0 +1,279 @@
+/*
+ * A server: one row on the page in StepList's grammar — name and port,
+ * state and what it means, the URL, the actions — with its log folded
+ * under it. The panel is a container: in the run screen's 440px drawer
+ * the row stacks.
+ */
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.row {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--ds-space-16);
+  min-height: 44px;
+  padding: var(--ds-space-6) var(--ds-space-8);
+  margin: 0 calc(-1 * var(--ds-space-8));
+  border-radius: var(--ds-radius-control);
+}
+.row:hover {
+  background: var(--ds-color-row-hover);
+}
+.row.open {
+  background: var(--ds-color-hover-wash);
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.nameText {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-md);
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-strong);
+  white-space: nowrap;
+}
+.port {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.mid {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.state {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-width: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+.since {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.err {
+  color: var(--ds-tone-danger-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.url {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+  min-width: 0;
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+}
+.url a {
+  color: var(--ds-color-accent-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.url.off a {
+  color: var(--ds-color-text-muted);
+  text-decoration: none;
+  pointer-events: none;
+}
+/* The copy and open controls: as small as the text beside them. */
+.url button,
+.url .openLink {
+  --btn-h: 22px;
+  --btn-px: 0;
+  width: 22px;
+  --btn-fg: var(--ds-color-text-muted);
+}
+.url .openLink {
+  display: inline-grid;
+  place-items: center;
+  height: 22px;
+  flex-shrink: 0;
+  color: var(--ds-color-text-muted);
+  border-radius: var(--ds-radius-control);
+}
+.url .openLink:hover {
+  background: var(--ds-color-hover-wash);
+  color: var(--ds-color-text-primary);
+}
+.actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+  flex-shrink: 0;
+}
+.logs {
+  margin: 0 calc(-1 * var(--ds-space-8)) var(--ds-space-8);
+}
+
+/* Whether a preview starts a recipe: a check or a dash, then the word. */
+.previewIn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.previewGlyph {
+  color: var(--ds-tone-success-mark);
+  display: inline-grid;
+}
+.previewOff {
+  color: var(--ds-color-text-muted);
+}
+.previewOff .previewGlyph {
+  color: var(--ds-color-text-disabled);
+}
+
+/* The run the servers live on: a line, not a card. */
+.host {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8) var(--ds-space-12);
+  min-height: 40px;
+}
+.hostText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: var(--ds-leading-tight);
+}
+.hostTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  font-size: var(--ds-text-md);
+  color: var(--ds-color-text-strong);
+}
+.hostDetail {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hostDetail code {
+  font-size: inherit;
+  color: var(--ds-color-text-secondary);
+}
+.hostActions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
+.panel {
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-16);
+  min-width: 0;
+}
+.note {
+  margin: 0;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+/* What a preview would start: a labelled list, at a reading width. */
+.recipes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+}
+.recipes > h2 {
+  margin: 0;
+}
+/* The container is narrow (the run screen's drawer): the row stacks. */
+@container (max-width: 560px) {
+  .row {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: var(--ds-space-6);
+    padding: var(--ds-space-8);
+  }
+  .name {
+    flex-direction: row;
+    align-items: baseline;
+    gap: var(--ds-space-8);
+  }
+  .actions {
+    justify-content: flex-start;
+  }
+  .hostActions {
+    margin-left: 0;
+  }
+}
+
+/* The run screen's drawer: the panel beside the conversation, on chrome. */
+.drawer {
+  flex: none;
+  width: 440px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--ds-color-chrome);
+  --ds-avatar-bed: var(--ds-color-chrome);
+  box-shadow: -1px 0 0 var(--ds-color-border-subtle);
+}
+.drawerHead {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: 44px;
+  padding: var(--ds-space-6) var(--ds-space-8) var(--ds-space-6) var(--ds-space-16);
+  flex-shrink: 0;
+}
+.drawerTitle {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--ds-text-md);
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--ds-space-6);
+}
+.drawerCount {
+  font-size: var(--ds-text-xs);
+  font-weight: var(--ds-weight-regular);
+  color: var(--ds-color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.drawerBody {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--ds-space-4) var(--ds-space-16) var(--ds-space-24);
+}
+.drawer .row {
+  margin: 0;
+}
+.drawer .row:hover {
+  background: var(--ds-color-hover-wash);
+}
+.drawer .row.open {
+  background: var(--ds-color-active-wash);
+}
+.drawer .logs {
+  margin: 0 0 var(--ds-space-8);
+}

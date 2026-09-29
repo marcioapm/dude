@@ -32,6 +32,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/memory"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
 	"github.com/marciomartins/dude/orchestrator/internal/prs"
+	"github.com/marciomartins/dude/orchestrator/internal/servers"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
@@ -51,6 +52,8 @@ type Server struct {
 	// pull request sync that reads one back after.
 	Forges delivery.Forges
 	PRs    *prs.Syncer
+	// A task's servers and branch preview, through lux.
+	Servers *servers.Service
 	// Search by meaning for the memory pages; nil, by words alone.
 	Embedder embeddings.Embedder
 	// The indexer: how the embedder is doing, and ending its wait when a
@@ -98,6 +101,7 @@ func (s *Server) Handler() http.Handler {
 		return nil
 	}))
 	s.githubRoutes(mux)
+	s.serverRoutes(mux)
 	s.memoryRoutes(mux)
 	// dude's own prompt for each role: what an organization that never
 	// edits runs, and where its first edit starts from.
@@ -274,10 +278,17 @@ var liveStatuses = []string{"pending", "scheduled", "starting", "running", "paus
 
 func loadRun(ctx context.Context, tx pgx.Tx, runID string) (runInfo, error) {
 	var ri runInfo
-	err := tx.QueryRow(ctx, `SELECT project_id, task_id, status::text, dude_pause IS NOT NULL FROM runs WHERE id = $1 FOR UPDATE`, runID).
-		Scan(&ri.ProjectID, &ri.TaskID, &ri.Status, &ri.DudePaused)
+	var kind string
+	err := tx.QueryRow(ctx, `SELECT project_id, task_id, status::text, dude_pause IS NOT NULL, kind FROM runs WHERE id = $1 FOR UPDATE`, runID).
+		Scan(&ri.ProjectID, &ri.TaskID, &ri.Status, &ri.DudePaused, &kind)
 	if db.IsNotFound(err) {
 		return ri, fail(http.StatusNotFound, "not_found", "run %s not found", runID)
+	}
+	if err == nil && kind != "agent" {
+		// A branch preview has no agent to steer or answer, and is stopped
+		// as the task's preview (DELETE /v1/tasks/{id}/preview), not
+		// aborted — which would abort its task.
+		return ri, fail(http.StatusConflict, "not_an_agent", "run %s is a branch preview, not an agent's", runID)
 	}
 	return ri, err
 }

@@ -1,5 +1,5 @@
-export { Button, IconButton } from "./Button.tsx";
-export type { ButtonProps, ButtonVariant, ButtonSize, IconButtonProps } from "./Button.tsx";
+export { Button, IconButton, LinkButton } from "./Button.tsx";
+export type { ButtonProps, ButtonVariant, ButtonSize, IconButtonProps, LinkButtonProps } from "./Button.tsx";
 export { Input } from "./Input.tsx";
 export type { InputProps } from "./Input.tsx";
 export { Select } from "./Select.tsx";
@@ -12,8 +12,8 @@ export { Card, CardHeader, CardBody, CardFooter } from "./Card.tsx";
 export type { CardProps, CardHeaderProps, CardBodyProps } from "./Card.tsx";
 export { Table, THead, TBody, Tr, Th, Td, TableEmpty } from "./Table.tsx";
 export type { TableProps, TrProps, ThProps, TdProps, TableDensity, SortDirection, Align } from "./Table.tsx";
-export { Tabs, TabList, Tab, TabPanel } from "./Tabs.tsx";
-export type { TabsProps, TabListProps, TabProps, TabPanelProps } from "./Tabs.tsx";
+export { Tabs, TabList, Tab, TabCount, TabPanel, TabToggle } from "./Tabs.tsx";
+export type { TabsProps, TabListProps, TabProps, TabPanelProps, TabToggleProps } from "./Tabs.tsx";
 export { Dialog, DialogClose } from "./Dialog.tsx";
 export type { DialogProps } from "./Dialog.tsx";
 export { ToastProvider, useToast } from "./Toast.tsx";
