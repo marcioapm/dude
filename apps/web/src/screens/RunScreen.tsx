@@ -543,6 +543,7 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
           // The agent's reason, quoted: its words cannot pass for the card's.
           text={`**${what}?**\n\n${turn.reason.split("\n").map((line) => `> ${line}`).join("\n")}`}
           options={turn.decision === null && !ended ? ["Approve", "Decline"] : []}
+          verb="decide"
           askedAt={turn.at}
           answeredAt={turn.decidedAt}
           dismissed={ended && turn.decision === null}

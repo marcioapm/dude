@@ -589,9 +589,13 @@ def test_only_a_tasks_owner_answers_and_anyone_can_take_it_over(
     expect(page.get_by_test_id("waiting-on")).to_have_text("Waiting for e2e user to answer")
     expect(page.get_by_role("group", name="Answer with one of")).to_have_count(0)
     expect(page.get_by_placeholder("Waiting for e2e user to answer.")).to_be_disabled()
-    # The choices shown do nothing for Bo; hovering them says what would.
-    page.get_by_test_id("choices-someone-else").hover()
+    # The choices shown do nothing for Bo: clicking one sends nothing, and
+    # hovering them says what would.
+    choices = page.get_by_test_id("choices-someone-else")
+    choices.get_by_text("yes").click()
+    choices.hover()
     expect(page.get_by_role("tooltip")).to_have_text("Take over this task to answer")
+    assert client.get("/v1/questions", params={"taskId": item["id"]}).json()["questions"][0].get("answeredAt") is None
 
     # Bo takes it over from the task's page.
     page.goto(f"{web_url}#/task/{item['id']}")
