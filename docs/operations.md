@@ -259,7 +259,7 @@ others can read.
 | `DUDE_VAPID_PUBLIC_KEY`, `DUDE_VAPID_PRIVATE_KEY` | made once, kept in `push_config` | Web Push keys. The private key is a **secret**. Changing them invalidates existing browser subscriptions. |
 | `DUDE_VAPID_SUBJECT` | `mailto:dude@localhost` | Who push services may contact (`mailto:` or `https:`). |
 | `DUDE_FACTORY_LOGINS` | none | Comma-separated GitHub logins whose PR comments are the factory's own, and wake no agent. |
-| `DUDE_EMBEDDINGS_URL` | `DUDE_LLM_URL` | An OpenAI-compatible embeddings API, before `/embeddings` (llm-proxy: `https://…/v1`), for a provider other than the agents'. `off` disables embeddings; `off`, or neither this nor `DUDE_LLM_URL` set, and memory is searched by words alone. |
+| `DUDE_EMBEDDINGS_URL` | `DUDE_LLM_URL` | An OpenAI-compatible embeddings API, before `/embeddings` (llm-proxy: `https://…/v1`), for a provider other than the agents'. `off`, or neither this nor `DUDE_LLM_URL` set, and memory is searched by words alone. |
 | `DUDE_EMBEDDINGS_KEY` | `DUDE_LLM_KEY`, when the embeddings URL is `DUDE_LLM_URL` or on its origin | Its key: the deployment's own virtual key, never a person's. `DUDE_LLM_KEY` is never sent to another origin (scheme, host, port): an explicit `DUDE_EMBEDDINGS_URL` elsewhere without this key fails startup. With only `DUDE_LLM_URL` and no key at all, embeddings are off. **Secret.** |
 | `DUDE_EMBEDDINGS_MODEL` | `gemini-embedding-2` | Changing it re-embeds everything in the background; search keeps working by words meanwhile. |
 | `DUDE_EMBEDDINGS_DIMENSIONS` | `768` | The index's size: only 768 is accepted, another is a migration. |
@@ -314,8 +314,7 @@ it sets would override each Run's model and effort. Both images use
 `/usr/local/share/dude/opencode.json`.
 
 A role's model in dude's settings is `<provider>/<model>` for a provider that
-file defines (`llm-anthropic/claude-sonnet-5` above). dude sends no provider
-definitions and no OpenCode files.
+file defines (`llm-anthropic/claude-sonnet-5` above).
 
 ### Upgrading from DUDE_OPENCODE_*
 

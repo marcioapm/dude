@@ -1,24 +1,20 @@
 package main
 
 import (
+	"maps"
 	"strings"
 	"testing"
 )
 
 func TestEmbeddingsComeFromTheLLMUnlessOverriddenOrOff(t *testing.T) {
 	llm := map[string]string{"DUDE_LLM_URL": "https://llm.example/v1", "DUDE_LLM_KEY": "sk-llm"}
-	with := func(extra map[string]string) func(string) string {
-		env := map[string]string{}
-		for k, v := range llm {
-			env[k] = v
-		}
-		for k, v := range extra {
-			env[k] = v
-		}
-		return func(k string) string { return env[k] }
-	}
 	only := func(env map[string]string) func(string) string {
 		return func(k string) string { return env[k] }
+	}
+	with := func(extra map[string]string) func(string) string {
+		env := maps.Clone(llm)
+		maps.Copy(env, extra)
+		return only(env)
 	}
 	for name, tc := range map[string]struct {
 		env       func(string) string
