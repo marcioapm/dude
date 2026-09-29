@@ -84,3 +84,29 @@ export function ServersMoved({ at, fromHost, toHost, onStartAll, busy }: Servers
     </Callout>
   );
 }
+
+export interface PreviewAlsoRunningProps {
+  /** Parked rather than serving: said so. */
+  readonly parked?: boolean | undefined;
+  readonly onStop?: (() => void) | undefined;
+  readonly busy?: boolean | undefined;
+}
+
+/**
+ * A task's branch preview, live behind its agent's run (which the panel
+ * shows): one line, so it can still be stopped.
+ */
+export function PreviewAlsoRunning({ parked, onStop, busy }: PreviewAlsoRunningProps) {
+  return (
+    <Callout tone="neutral" data-testid="preview-also-running">
+      <span className={styles["moved"]}>
+        <span>A branch preview is also {parked ? "parked" : "running"}.</span>
+        {onStop ? (
+          <Button size="sm" variant="quiet" leadingIcon="stop" disabled={busy} onClick={onStop} data-testid="stop-hidden-preview">
+            Stop preview
+          </Button>
+        ) : null}
+      </span>
+    </Callout>
+  );
+}

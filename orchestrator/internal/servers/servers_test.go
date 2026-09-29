@@ -33,8 +33,8 @@ func TestACommandIsAShellLineAsTyped(t *testing.T) {
 		if got := ShellCommand(nil, line); !reflect.DeepEqual(got, want) {
 			t.Errorf("ShellCommand(%q) = %q, want %q", line, got, want)
 		}
-		if got := (Recipe{Name: "web", Port: 3000, Command: line}).Input("app").Command; !reflect.DeepEqual(got, want) {
-			t.Errorf("recipe %q runs %q, want %q", line, got, want)
+		if got, _ := (Recipe{Name: "web", Port: 3000, Command: line}).Input("app"); !reflect.DeepEqual(got.Command, want) {
+			t.Errorf("recipe %q runs %q, want %q", line, got.Command, want)
 		}
 		cmd, _ := json.Marshal(line)
 		in, err := ManualServer{Name: "web", Port: 3000, Command: cmd}.Input("app")
@@ -60,9 +60,13 @@ func TestARecipesWorkdirIsUnderTheRepositorysCheckout(t *testing.T) {
 	}
 	r := Recipe{Name: "web", Port: 3000, Command: "npm run dev", Workdir: "apps/web",
 		Env: []EnvVar{{"VITE_API_URL", "http://localhost:8080"}}}
-	in := r.Input("app")
-	if in.Workdir != "/workspace/repos/app/apps/web" || in.Env["VITE_API_URL"] != "http://localhost:8080" || in.Start != nil {
-		t.Errorf("input = %+v", in)
+	in, err := r.Input("app")
+	if err != nil || in.Workdir != "/workspace/repos/app/apps/web" || in.Env["VITE_API_URL"] != "http://localhost:8080" || in.Start != nil {
+		t.Errorf("input = %+v (%v)", in, err)
+	}
+	// lux's own names are refused, as a person's typed ones are.
+	if _, err := (Recipe{Name: "web", Port: 3000, Command: "x", Env: []EnvVar{{"LUX_TOKEN", "x"}}}).Input("app"); err == nil {
+		t.Error("a recipe's env name with lux's reserved prefix was taken")
 	}
 }
 

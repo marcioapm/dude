@@ -94,7 +94,8 @@ beforeAll(async () => {
       if (url.pathname.endsWith("/start")) {
         return Response.json({ error: { code: "not_running", message: "run is stopped" } }, { status: 409 });
       }
-      return Response.json({ run: null, servers: [], moved: null, recipes: [] }, { status: req.method === "POST" ? 201 : 200 });
+      const preview = url.pathname.startsWith("/internal/tasks/") ? { id: "run_p", luxRunId: "lux_p", state: "paused" } : null;
+      return Response.json({ run: null, servers: [], moved: null, recipes: [], preview }, { status: req.method === "POST" ? 201 : 200 });
     },
   });
   process.env.DUDE_ORCHESTRATOR_URL = `http://localhost:${orchestratorServer.port}`;
@@ -260,6 +261,8 @@ describe("a task's and a Run's servers", () => {
       expect(last.org).toBe(ORG);
       expect(last.actor).toStartWith("key_");
     }
+    // The orchestrator's answer, as it came: a preview hidden behind an agent's run too.
+    expect((await body(await call(memberKey, "GET", "/v1/tasks/wi_1/servers"))).preview).toEqual({ id: "run_p", luxRunId: "lux_p", state: "paused" });
     // lux's refusal, as it came.
     const refused = await call(memberKey, "POST", "/v1/runs/run_1/servers/web/start");
     expect((await body(refused)).error.code).toBe("not_running");
@@ -272,6 +275,8 @@ describe("a task's and a Run's servers", () => {
       ["POST", "/v1/runs/run_1/servers", { name: "ok", port: 99999 }],
       ["POST", "/v1/runs/run_1/servers", { recipe: "web", port: 1 }],
       ["POST", "/v1/runs/run_1/servers", { name: "ok", port: 1, workdir: "../x" }],
+      ["POST", "/v1/runs/run_1/servers", { name: "ok", port: 1, env: { LUX_TOKEN: "x" } }],
+      ["POST", "/v1/runs/run_1/servers", { name: "ok", port: 1, env: { "1BAD": "x" } }],
       ["GET", "/v1/runs/run_1/servers/web/log?tail=0", undefined],
       ["POST", "/v1/tasks/wi_1/preview", { image: "x" }],
     ] as const) {

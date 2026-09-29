@@ -29,7 +29,7 @@ import (
 //
 //	pending ─submit─▶ scheduled ─lux running─▶ running ─unused─▶ paused (parked)
 //	   paused ─a person starts a server─▶ running (resumed; that server started)
-//	   any ─DELETE─▶ completed (lux Run cancelled)
+//	   any ─DELETE, or its task ends─▶ completed (lux Run cancelled)
 //
 // Like the phase syncer, every step is keyed on durable columns and is safe
 // to repeat, so any orchestrator picks up where another left off. What
@@ -52,7 +52,9 @@ type Previews struct {
 type previewRun struct {
 	ID, Org, ProjectID, TaskID, Status string
 	LuxRunID, LuxState                 string
-	PendingStarts                      []string
+	// Its task is done, failed or aborted: the preview ends with it.
+	TaskEnded     bool
+	PendingStarts []string
 	// Its last sign of use, and the project's idle limit in minutes.
 	ActiveSince *time.Time
 	IdleMinutes float64
@@ -65,18 +67,22 @@ func (p *Previews) Sweep(ctx context.Context) (int, error) {
 		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.project_id, r.task_id, r.status::text,
 				COALESCE(r.lux_run_id, ''), COALESCE(r.lux_state, ''),
 				r.pending_starts, r.active_since,
-				(preview_settings(pr)->>'idleTimeoutMinutes')::float8
-			FROM runs r JOIN projects pr ON pr.id = r.project_id
+				(preview_settings(pr)->>'idleTimeoutMinutes')::float8,
+				t.status IN ('done', 'failed', 'aborted')
+			FROM runs r JOIN projects pr ON pr.id = r.project_id JOIN tasks t ON t.id = r.task_id
 			WHERE r.kind = 'preview'
 			  AND (r.status IN ('pending', 'scheduled', 'starting', 'running')
 			       OR (r.status = 'paused' AND cardinality(r.pending_starts) > 0)
 			       OR (r.status = 'paused' AND r.lux_state IS DISTINCT FROM 'stopped')
+			       -- Parked, and its task is over: it ends with it.
+			       OR (r.status = 'paused' AND t.status IN ('done', 'failed', 'aborted'))
 			       -- Stopped in dude, not yet cancelled in lux (parked ones too).
 			       OR (r.status IN ('completed', 'failed') AND r.lux_run_id IS NOT NULL
 			           AND r.lux_stop_reason IS DISTINCT FROM 'cancel'))
 			  AND (r.next_attempt_at IS NULL OR r.next_attempt_at <= now())
 			-- Every live preview, those with something to do first.
-			ORDER BY (r.status IN ('pending', 'completed', 'failed') OR cardinality(r.pending_starts) > 0) DESC, r.created_at
+			ORDER BY (r.status IN ('pending', 'completed', 'failed') OR cardinality(r.pending_starts) > 0
+			          OR t.status IN ('done', 'failed', 'aborted')) DESC, r.created_at
 			LIMIT 1000`)
 		if err != nil {
 			return err
@@ -84,7 +90,7 @@ func (p *Previews) Sweep(ctx context.Context) (int, error) {
 		runs, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (previewRun, error) {
 			var r previewRun
 			return r, row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.TaskID, &r.Status, &r.LuxRunID, &r.LuxState,
-				&r.PendingStarts, &r.ActiveSince, &r.IdleMinutes)
+				&r.PendingStarts, &r.ActiveSince, &r.IdleMinutes, &r.TaskEnded)
 		})
 		return err
 	}); err != nil {
@@ -121,6 +127,8 @@ func (p *Previews) advance(ctx context.Context, r previewRun) (bool, error) {
 	switch {
 	case r.Status == "completed" || r.Status == "failed":
 		return true, p.cancel(ctx, r)
+	case r.TaskEnded:
+		return true, p.endWithTask(ctx, r)
 	case r.Status == "pending" && r.LuxRunID == "":
 		return true, p.submit(ctx, r)
 	case r.Status == "paused":
@@ -285,9 +293,16 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, er
 		}
 	}
 	for _, rc := range recipes {
-		if rc.Autostart {
-			spec.Workload.Servers = append(spec.Workload.Servers, rc.Input(primary))
+		if !rc.Autostart {
+			continue
 		}
+		// One lux would refuse would fail the whole preview: left out.
+		in, err := rc.Input(primary)
+		if err != nil {
+			p.Log.Warn("a preview server lux would refuse was left out", "run", r.ID, "server", rc.Name, "error", err)
+			continue
+		}
+		spec.Workload.Servers = append(spec.Workload.Servers, in)
 	}
 	return spec, branch, nil
 }
@@ -588,10 +603,11 @@ func (p *Previews) startPending(ctx context.Context, r previewRun) error {
 }
 
 // cancel ends the lux Run of a preview a person stopped. Cancelled, not
-// stopped: nothing about a finished preview is worth keeping.
+// stopped: nothing about a finished preview is worth keeping. A lost one
+// too: lux can resume a lost Run, so it holds a snapshot until cancelled.
 func (p *Previews) cancel(ctx context.Context, r previewRun) error {
 	p.unfollow(r.ID)
-	if !lux.Terminal(r.LuxState) || r.LuxState == "stopped" {
+	if !lux.Terminal(r.LuxState) || r.LuxState == "stopped" || r.LuxState == "lost" {
 		if err := p.Lux.Cancel(ctx, r.LuxRunID); err != nil {
 			if le, ok := lux.AsError(err); !ok || le.Retryable() {
 				return err
@@ -602,6 +618,32 @@ func (p *Previews) cancel(ctx context.Context, r previewRun) error {
 		_, err := tx.Exec(ctx, `UPDATE runs SET lux_stop_reason = 'cancel', lux_state = 'cancelled' WHERE id = $1`, r.ID)
 		return err
 	})
+}
+
+// endWithTask ends a live or parked preview whose task is over, as a
+// person's DELETE would, and cancels its lux Run.
+func (p *Previews) endWithTask(ctx context.Context, r previewRun) error {
+	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE runs r SET status = 'completed', ended_at = now(), pending_starts = '{}'
+			WHERE r.id = $1 AND `+livePreview, r.ID)
+		if err != nil || tag.RowsAffected() == 0 {
+			return err
+		}
+		if _, err := ledger.Append(ctx, tx, ledger.Event{Type: "run.completed", OrganizationID: r.Org, ProjectID: r.ProjectID,
+			TaskID: r.TaskID, RunID: r.ID, ActorType: ledger.ActorSystem, ActorID: r.ID, Source: ledger.SourceOrchestrator,
+			CorrelationID: r.TaskID, Payload: map[string]any{"status": "completed", "kind": KindPreview, "reason": "task ended"}}); err != nil {
+			return err
+		}
+		return phases.ServersChanged(ctx, tx, r.Org, r.ProjectID, r.TaskID, r.ID, map[string]any{"change": "stopped"})
+	}); err != nil {
+		return err
+	}
+	if r.LuxRunID == "" {
+		// Not submitted yet; one in flight is cancelled by a later sweep.
+		p.unfollow(r.ID)
+		return nil
+	}
+	return p.cancel(ctx, r)
 }
 
 func (p *Previews) fail(ctx context.Context, r previewRun, reason string) error {

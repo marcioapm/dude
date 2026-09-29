@@ -52,6 +52,17 @@ type TaskServers struct {
 	Servers []lux.Server    `json:"servers"`
 	Moved   *Moved          `json:"moved"`
 	Recipes json.RawMessage `json:"recipes"`
+	// The task's live branch preview when the Run shown is its agent's:
+	// hidden behind it otherwise, and so beyond a person's reach to stop.
+	Preview *PreviewRef `json:"preview"`
+}
+
+// PreviewRef is a live preview the view does not show.
+type PreviewRef struct {
+	ID       string `json:"id"`
+	LuxRunID string `json:"luxRunId"`
+	// dude's status for it: pending … running, or paused (parked).
+	State string `json:"state"`
 }
 
 // RunView is the Run the servers are on.
@@ -152,6 +163,7 @@ func loadRun(ctx context.Context, tx pgx.Tx, runID string) (runRow, error) {
 // ForTask is a task's servers: its Run's, and the project's recipes.
 func (s *Service) ForTask(ctx context.Context, org, taskID string) (TaskServers, error) {
 	var run *runRow
+	var preview *PreviewRef
 	var recipes json.RawMessage
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		var projectID string
@@ -165,13 +177,26 @@ func (s *Service) ForTask(ctx context.Context, org, taskID string) (TaskServers,
 		if run, err = taskRun(ctx, tx, taskID); err != nil {
 			return err
 		}
+		if run != nil && run.Kind != KindPreview {
+			var p PreviewRef
+			err := tx.QueryRow(ctx, `SELECT r.id, COALESCE(r.lux_run_id, ''), r.status::text FROM runs r
+				WHERE r.task_id = $1 AND `+livePreview, taskID).Scan(&p.ID, &p.LuxRunID, &p.State)
+			switch {
+			case err == nil:
+				preview = &p
+			case !db.IsNotFound(err):
+				return err
+			}
+		}
 		recipes, err = recipesJSON(ctx, tx, projectID)
 		return err
 	})
 	if err != nil {
 		return TaskServers{}, err
 	}
-	return s.view(ctx, run, recipes), nil
+	out := s.view(ctx, run, recipes)
+	out.Preview = preview
+	return out, nil
 }
 
 // ForRun is one Run's servers, whatever its state.
@@ -415,7 +440,9 @@ func (s *Service) Add(ctx context.Context, org, runID string, in AddInput) (lux.
 		if i < 0 {
 			return refuse(http.StatusNotFound, "not_found", "the project has no server %q", in.Recipe)
 		}
-		input = recipes[i].Input(repo)
+		if input, err = recipes[i].Input(repo); err != nil {
+			return refuse(http.StatusBadRequest, "bad_request", "server %q: %s", in.Recipe, err.Error())
+		}
 		return nil
 	}); err != nil {
 		return lux.Server{}, err

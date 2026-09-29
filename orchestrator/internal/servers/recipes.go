@@ -78,8 +78,9 @@ func Workdir(repo, workdir string) string {
 }
 
 // Input is the recipe as a lux server of a Run whose checkout of the
-// project's code is repo.
-func (r Recipe) Input(repo string) lux.ServerInput {
+// project's code is repo. An env name lux reserves is refused: the API
+// refuses it too, so only a recipe saved before it did has one.
+func (r Recipe) Input(repo string) (lux.ServerInput, error) {
 	in := lux.ServerInput{Name: r.Name, Port: r.Port, Command: ShellCommand(r.Setup, r.Command), Workdir: Workdir(repo, r.Workdir)}
 	if len(r.Env) > 0 {
 		in.Env = map[string]string{}
@@ -87,7 +88,17 @@ func (r Recipe) Input(repo string) lux.ServerInput {
 			in.Env[e.Name] = e.Value
 		}
 	}
-	return in
+	return in, reservedEnv(in.Env)
+}
+
+// reservedEnv refuses an env name lux keeps for itself (LUX_*).
+func reservedEnv(env map[string]string) error {
+	for k := range env {
+		if strings.HasPrefix(k, "LUX_") {
+			return fmt.Errorf("env: %q: the LUX_ prefix is reserved", k)
+		}
+	}
+	return nil
 }
 
 // LoadRecipes reads a project's recipes, by name.
@@ -176,13 +187,8 @@ func (m ManualServer) Input(repo string) (lux.ServerInput, error) {
 				in.Env[e.Name] = e.Value
 			}
 		}
-		for k := range in.Env {
-			if strings.HasPrefix(k, "LUX_") {
-				return in, fmt.Errorf("env: %q: the LUX_ prefix is reserved", k)
-			}
-		}
 	}
-	return in, nil
+	return in, reservedEnv(in.Env)
 }
 
 // ValidWorkdir: a workdir is inside the checkout — relative, never climbing

@@ -4,7 +4,7 @@ import styles from "../gallery.module.css";
 import { AgentAvatar } from "../../components/AgentAvatar.tsx";
 import { Duration } from "../../components/Numbers.tsx";
 import { PersonAvatar } from "../../components/PersonAvatar.tsx";
-import { PreviewStages, ServersMoved } from "../../components/PreviewStages.tsx";
+import { PreviewAlsoRunning, PreviewStages, ServersMoved } from "../../components/PreviewStages.tsx";
 import { EnvVarRows, ServerRecipeDialog, ServerRecipeTable, ServerUrlPreview } from "../../components/ServerRecipe.tsx";
 import { AutostartMark, ServerList, ServerRecipeRow, ServerRow, ServersDrawer, ServersPanel, ServersRecipesPreview, ServersRunLine, ShortId, TerminalLink } from "../../components/ServerRow.tsx";
 import { ServerStateDot, ServerStateMark } from "../../components/ServerStateMark.tsx";
@@ -251,11 +251,13 @@ export function ServersSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
 
-      <Block id="sv-stages" title="PreviewStages / ServersMoved" note="A branch preview coming up, stage by stage; and the notice when a run moved host and its servers stopped with the old placement.">
+      <Block id="sv-stages" title="PreviewStages / ServersMoved / PreviewAlsoRunning" note="A branch preview coming up, stage by stage; the notice when a run moved host and its servers stopped with the old placement; and a preview live behind the agent run the panel shows, with its Stop.">
         <Panes mode={mode}>
           <Col>
             <States items={(["scheduling", "cloning", "setup", "starting", "ready"] as PreviewStage[]).map((s) => [s, <PreviewStages key={s} stage={s} branch="feature/checkout-v2" setup="npm ci, make deps" elapsed="24s" />])} />
             <ServersMoved at="14:32" fromHost="lux-c7" toHost="lux-c9" onStartAll={() => undefined} />
+            <PreviewAlsoRunning onStop={() => undefined} />
+            <PreviewAlsoRunning parked onStop={() => undefined} />
           </Col>
         </Panes>
       </Block>
