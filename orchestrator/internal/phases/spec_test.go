@@ -69,7 +69,7 @@ func TestARegistryLoginAddsRegistryAuthAndItsSecretOnly(t *testing.T) {
 	for _, model := range []string{"llm/impl", "fake/scripted"} {
 		c, in := goldenInput(model)
 		without := buildSpec(c, in)
-		in.Registry = &registryLogin{Registry: "registry.example", Credential: "AWS:pw-golden"}
+		in.Registry = &RegistryLogin{Registry: "registry.example", Credential: "AWS:pw-golden"}
 		with := buildSpec(c, in)
 
 		want := []lux.RegistryAuth{{Registry: "registry.example", Secret: "DUDE_REGISTRY_AUTH"}}

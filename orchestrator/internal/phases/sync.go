@@ -441,7 +441,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec) (
 	if in.Image == "" {
 		in.Image = s.Agent.DefaultImage
 	}
-	if in.Registry, err = s.registryLogin(ctx, in.Image, stored); err != nil {
+	if in.Registry, err = LoginFor(ctx, s.Registry, in.Image, stored); err != nil {
 		return lux.Spec{}, err
 	}
 	promptIn := delivery.PromptInput{
@@ -1010,39 +1010,6 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (lux.Run,
 		return lux.Run{}, err
 	}
 	return s.Lux.Resume(ctx, r.LuxRunID, in)
-}
-
-// registryLogin is the login a start of the Run pulls image with: the
-// provider's, if image is in its registry. A resume (stored set) logs in
-// where its submit did, or returns errLoginUnavailable if this orchestrator
-// cannot: lux would refuse the resume, and a refusal fails the Run for good.
-func (s *Syncer) registryLogin(ctx context.Context, image string, stored *lux.StoredSpec) (*registryLogin, error) {
-	var host string
-	if s.Registry != nil {
-		host = s.Registry.Registry()
-	}
-	if stored != nil {
-		auth := stored.Image.RegistryAuth
-		if len(auth) == 0 {
-			return nil, nil
-		}
-		if host == "" || len(auth) != 1 || auth[0].Registry != host || auth[0].Secret != registrySecret {
-			wanted := make([]string, len(auth))
-			for i, a := range auth {
-				wanted[i] = a.Registry
-			}
-			return nil, errLoginUnavailable{Registry: strings.Join(wanted, ", "), Configured: host}
-		}
-	} else if host == "" || registry.ImageRegistry(image) != host {
-		// No login, or another registry: a project's own image gets no
-		// credential of the factory's.
-		return nil, nil
-	}
-	credential, err := s.Registry.Credential(ctx)
-	if err != nil {
-		return nil, errRegistry{err}
-	}
-	return &registryLogin{Registry: host, Credential: credential}, nil
 }
 
 // requestPause asks for a graceful pause, saying why, marked as dude's own
