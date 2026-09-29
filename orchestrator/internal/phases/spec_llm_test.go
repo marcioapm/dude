@@ -26,18 +26,15 @@ func TestTheLLMKeyIsAnEnvSecretAndNowhereElse(t *testing.T) {
 	if s := spec.Secrets[i]; s.As != "env" || s.Value != "sk-secret-key" || s.Path != "" {
 		t.Errorf("DUDE_LLM_KEY = %+v, want the key delivered as an env var", s)
 	}
-	for k, v := range spec.Env {
-		if strings.Contains(v, "sk-secret-key") {
-			t.Errorf("env %s holds the key", k)
+	for where, m := range map[string]map[string]string{"env": spec.Env, "label": spec.Labels} {
+		for k, v := range m {
+			if strings.Contains(v, "sk-secret-key") {
+				t.Errorf("%s %s holds the key", where, k)
+			}
 		}
 	}
 	if _, ok := spec.Env["DUDE_LLM_KEY"]; ok {
 		t.Error("DUDE_LLM_KEY is plain env")
-	}
-	for k, v := range spec.Labels {
-		if strings.Contains(v, "sk-secret-key") {
-			t.Errorf("label %s holds the key", k)
-		}
 	}
 	if spec.Env["DUDE_LLM_URL"] != "https://llm.example/v1" {
 		t.Errorf("DUDE_LLM_URL = %q", spec.Env["DUDE_LLM_URL"])
