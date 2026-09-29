@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import { createHmac, createHash } from "node:crypto";
 
 type Storage = typeof import("../src/storage.ts");
@@ -8,9 +8,12 @@ const secrets = ["fakeRoleSecretOne", "fakeRoleSecretTwo"];
 const tokens = ["fakeRoleSessionOne", "fakeRoleSessionTwo"];
 const requests: { method: string; url: string; headers: Headers }[] = [];
 const objects = new Map<string, Uint8Array>();
+// What an S3 gateway could reflect from a signed request: a key, secret and session token.
+const LEAKED = "FAKELEAKEDKEY fakeLeakedSecret fakeLeakedSessionToken";
 let generation = 0;
 let denied = false;
 let malformed = false;
+let imdsToken = "fake-imds-token";
 let metadataCalls = 0;
 let expiry = Date.now() + 360_000;
 const meta = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(req) {
@@ -19,7 +22,7 @@ const meta = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(req) {
   if (denied) return new Response("denied", { status: 403 });
   if (path === "/latest/api/token") {
     if (req.method !== "PUT" || !req.headers.get("x-aws-ec2-metadata-token-ttl-seconds")) return new Response(null, { status: 400 });
-    return new Response("fake-imds-token");
+    return new Response(imdsToken);
   }
   if (req.headers.get("x-aws-ec2-metadata-token") !== "fake-imds-token") return new Response(null, { status: 401 });
   if (path === "/latest/meta-data/iam/security-credentials/") return new Response("fake-role\n");
@@ -32,6 +35,10 @@ const meta = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(req) {
 const s3 = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
   requests.push({ method: req.method, url: req.url, headers: new Headers(req.headers) });
   const key = new URL(req.url).pathname;
+  if (key.includes("leak-plain")) return new Response(LEAKED, { status: 403 });
+  if (key.includes("leak-xml")) {
+    return new Response(`<?xml version="1.0"?><Error><Code>AccessDenied</Code><Message>${LEAKED}</Message></Error>`, { status: 403 });
+  }
   if (req.method === "PUT") { objects.set(key, new Uint8Array(await req.arrayBuffer())); return new Response(null, { status: 200 }); }
   if (req.method === "DELETE") { objects.delete(key); return new Response(null, { status: 204 }); }
   const bytes = objects.get(key);
@@ -53,6 +60,7 @@ process.env.DUDE_S3_ENDPOINT = `http://127.0.0.1:${s3.port}`;
 delete process.env.DUDE_S3_ACCESS_KEY;
 delete process.env.DUDE_S3_SECRET_KEY;
 const { putObject, getObject, deleteObject } = await import("../src/storage.ts");
+const { errorResponse } = await import("../src/api/http.ts");
 
 // A storage module with none of the cached credentials or clients of earlier imports.
 let freshCount = 0;
@@ -176,4 +184,54 @@ test("an IMDS outage backs off, serves while the cached credential is valid, the
   for (const request of requests) signed(request, 0);
   // Attempts at 30, 35, 45, 65, 105, 165, 225 s; a denied token PUT is one call each.
   expect(metadataCalls).toBe(7);
+});
+
+// Everything console.error would print for these operations, rendered as the console renders it.
+async function logged(run: () => Promise<void>): Promise<string> {
+  const spy = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    await run();
+    return spy.mock.calls.map((args) => args.map((arg) => (typeof arg === "string" ? arg : Bun.inspect(arg))).join(" ")).join("\n");
+  } finally { spy.mockRestore(); }
+}
+
+test("S3 error bodies holding credentials never reach the logs", async () => {
+  const storage = await fresh();
+  generation = 0;
+  expiry = Date.now() + 3_600_000;
+  const statuses: number[] = [];
+  const output = await logged(async () => {
+    for (const key of ["leak-plain", "leak-xml"]) {
+      for (const run of [() => storage.putObject(key, new Uint8Array([1]), "image/png"), () => storage.getObject(key)]) {
+        const error = await run().then(() => undefined, (err: unknown) => err);
+        expect(error).toBeInstanceOf(storage.StorageError);
+        statuses.push(errorResponse(error).status);
+      }
+      await storage.deleteObject(key);
+    }
+  });
+  expect(statuses).toEqual([500, 500, 500, 500]);
+  expect(output).toContain("photo storage put failed (AccessDenied)");
+  expect(output).toContain("photo storage delete failed (AccessDenied)");
+  for (const secret of LEAKED.split(" ")) expect(output).not.toContain(secret);
+});
+
+test("an IMDS token with CR/LF is rejected without its value reaching the logs", async () => {
+  const storage = await fresh();
+  imdsToken = "FAKE_IMDS_TOKEN_VALUE\r\nX-Injected: fakeInjectedValue";
+  metadataCalls = 0;
+  requests.length = 0;
+  let error: unknown;
+  const output = await logged(async () => {
+    error = await storage.putObject("token", new Uint8Array([1]), "image/png").then(() => undefined, (err: unknown) => err);
+    errorResponse(error);
+    await storage.deleteObject("token");
+  }).finally(() => { imdsToken = "fake-imds-token"; });
+  expect((error as { code?: string }).code).toBe("MetadataTokenInvalid");
+  // Only the token PUT: the token is never sent on a role or credential request.
+  expect(metadataCalls).toBe(1);
+  expect(requests.length).toBe(0);
+  expect(output).toContain("photo storage put failed (MetadataTokenInvalid)");
+  expect(output).not.toContain("FAKE_IMDS_TOKEN_VALUE");
+  expect(output).not.toContain("fakeInjectedValue");
 });
