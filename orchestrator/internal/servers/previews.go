@@ -621,12 +621,14 @@ func (p *Previews) cancel(ctx context.Context, r previewRun) error {
 }
 
 // endWithTask ends a live or parked preview whose task is over, as a
-// person's DELETE would, and cancels its lux Run.
+// person's DELETE would, and cancels its lux Run. The task is read again:
+// one retried since the sweep read it keeps its preview.
 func (p *Previews) endWithTask(ctx context.Context, r previewRun) error {
+	var ended bool
 	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE runs r SET status = 'completed', ended_at = now(), pending_starts = '{}'
-			WHERE r.id = $1 AND `+livePreview, r.ID)
-		if err != nil || tag.RowsAffected() == 0 {
+			FROM tasks t WHERE r.id = $1 AND t.id = r.task_id AND t.status IN ('done', 'failed', 'aborted') AND `+livePreview, r.ID)
+		if ended = err == nil && tag.RowsAffected() > 0; !ended {
 			return err
 		}
 		if _, err := ledger.Append(ctx, tx, ledger.Event{Type: "run.completed", OrganizationID: r.Org, ProjectID: r.ProjectID,
@@ -635,7 +637,9 @@ func (p *Previews) endWithTask(ctx context.Context, r previewRun) error {
 			return err
 		}
 		return phases.ServersChanged(ctx, tx, r.Org, r.ProjectID, r.TaskID, r.ID, map[string]any{"change": "stopped"})
-	}); err != nil {
+	}); err != nil || !ended {
+		// Not ended here: stopped meanwhile (the next sweep cancels it),
+		// or its task was taken up again.
 		return err
 	}
 	if r.LuxRunID == "" {
@@ -666,17 +670,23 @@ func (p *Previews) retryLater(ctx context.Context, r previewRun) error {
 }
 
 // StartPreview starts a branch preview of a task, on behalf of the key
-// actor: 409 if the task has one live already.
+// actor: 409 if the task has one live already, or is over.
 func (s *Service) StartPreview(ctx context.Context, org, taskID, actor string) (TaskServers, error) {
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		var projectID string
 		var attempt int
-		if err := tx.QueryRow(ctx, `SELECT t.project_id, COALESCE((SELECT max(attempt) FROM runs WHERE task_id = t.id), 1)
-			FROM tasks t WHERE t.id = $1 FOR UPDATE`, taskID).Scan(&projectID, &attempt); err != nil {
+		var over bool
+		if err := tx.QueryRow(ctx, `SELECT t.project_id, COALESCE((SELECT max(attempt) FROM runs WHERE task_id = t.id), 1),
+				t.status IN ('done', 'failed', 'aborted')
+			FROM tasks t WHERE t.id = $1 FOR UPDATE`, taskID).Scan(&projectID, &attempt, &over); err != nil {
 			if db.IsNotFound(err) {
 				return refuse(http.StatusNotFound, "not_found", "task %s not found", taskID)
 			}
 			return err
+		}
+		if over {
+			// Its preview would end with it at the next sweep.
+			return refuse(http.StatusConflict, "task_finished", "task %s is over; a preview ends with its task", taskID)
 		}
 		var live bool
 		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = $1 AND `+livePreview+`)`,
