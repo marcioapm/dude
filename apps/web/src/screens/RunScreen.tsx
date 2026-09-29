@@ -85,6 +85,8 @@ const STATUS_EVENTS: ReadonlySet<string> = new Set([
 
 export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, onBack, task: given }: RunScreenProps) {
   const [view, setView] = useState<SessionView>("chat");
+  // The bar's slot where Changes draws the diff's own controls.
+  const [toolbar, setToolbar] = useState<HTMLDivElement | null>(null);
   // The file Changes shows alone, picked there or in the rail. Leaving
   // Changes forgets it, so coming back finds all of them.
   const [selected, setSelected] = useState<string | null>(null);
@@ -167,6 +169,10 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     }
     return snapshot(apply(projection.current, events), run?.status);
   }, [events, runId, run?.status]);
+  // A run of tool calls and thoughts is one group, worked out once per
+  // snapshot: each fold gives a new conversation, though its turns array is
+  // the same one, appended to and changed in place.
+  const grouped = useMemo(() => asides(conversation.turns), [conversation]);
   const isLive = run ? !TERMINAL_RUN_STATUSES.includes(run.status) : false;
   // The latest diff's summary: its file count for the Changes tab, its
   // checksum for the panel to know when to fetch.
@@ -279,7 +285,12 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   const changed = diffSummary?.files ?? [];
   // The name dude signs this task's messages with.
   const dude = dudeName(run.taskId);
-  const hasChanges = Object.keys(run.baseRefs).length > 0 || run.phase !== null;
+  const render = (turn: Turn) => renderTurn(turn, role, conversation.contextWindow, !isLive, people, dude, decide, waitingOn);
+  // A checkout to show: a Run with one, or any Run that has reported a diff
+  // (the rail's files open Changes, so Changes must be there to open).
+  const hasChanges = Object.keys(run.baseRefs).length > 0 || run.phase !== null || changed.length > 0;
+  // Changes gone from the switch (its diff emptied, with no checkout to fall back on): back to the conversation.
+  if (view === "changes" && !hasChanges) showView("chat");
   const liveDiff = isLive && run.status !== "paused";
 
   const actions = isLive ? (
@@ -321,12 +332,17 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   return (
     <div className="runScreen" data-testid="run-screen">
       <SessionHeader session={session} actions={actions} />
-      {view === "changes" && hasChanges ? (
+      {/* One bar, kept mounted whichever view shows, so the switch keeps its
+          focus; Changes draws its own controls into the slot after it. */}
+      <div className="runBar">
+        {switcher}
+        <div className="runBarTools" ref={setToolbar} />
+      </div>
+      {view === "changes" ? (
         <ChangesPanel client={client} runId={runId} role={role} events={events} checksum={diffSummary?.checksum ?? ""} live={liveDiff}
-          selected={selected} onSelectedChange={setSelected} leading={switcher} />
+          selected={selected} onSelectedChange={setSelected} toolbarIn={toolbar} />
       ) : view === "events" ? (
         <>
-          <div className="runBar">{switcher}</div>
           <div className="runEvents" data-testid="event-log">
           <EventStream>
             {events.map((event) => (
@@ -347,12 +363,12 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
         </>
       ) : (
         <>
-          <div className="runBar">{switcher}</div>
           <div className="runChat">
             <ChatTranscript
               fill
               live={isLive}
               revision={events.length}
+              turns={conversation.turns.length}
               pinned={
                 conversation.plan.length > 0 ? (
                   <AgentPlan items={conversation.plan} defaultCollapsed data-testid="plan" />
@@ -391,9 +407,9 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
               )}
               emptyMessage="Waiting for the agent to start."
             >
-              {asides(conversation.turns).map((group) => Array.isArray(group)
-                ? <ChatAside key={group[0]!.id}>{group.map((turn) => renderTurn(turn, role, conversation.contextWindow, !isLive, people, dude, decide, waitingOn))}</ChatAside>
-                : renderTurn(group, role, conversation.contextWindow, !isLive, people, dude, decide, waitingOn))}
+              {grouped.map((group) => Array.isArray(group)
+                ? <ChatAside key={group[0]!.id}>{group.map(render)}</ChatAside>
+                : render(group))}
               {conversation.activity ? (
                 <ChatMessage
                   role={role}

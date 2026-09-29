@@ -488,8 +488,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   (`--ds-space-chat-pad-x`): the session header's face, the bar's switch,
   the plan's icon (`--plan-pad-x`), every turn's face, the composer, the
   Changes and Events views. Nothing in a session uses the page's 24px pad.
-- A turn's text spans its column: chat turns have no measure, so a long
-  line wraps at the column's edge, not beside empty space.
+- A turn's text spans its column: chat turns have no measure (`Markdown
+  unmeasured`: messages, thoughts, questions), so a long line wraps at the
+  column's edge, not beside empty space.
 - What an agent does between its messages — a run of tool calls and
   thoughts — is one `ChatAside`: on the message text column (past the
   avatar gutter, so its left edge lines up with the words above), 4px
@@ -648,7 +649,9 @@ shrinking something already small makes it cramped, not dense:
 | prose measure (`measure-message`) | 70ch | 72ch | `ch` follows the font, so two more characters a line; not chat turns, which span their column |
 
 Everything else is shared: icons, `control-sm` and `row-compact` (28, the
-floor), `text-2xs`/`xs`/`sm`/`nav` (11/12/13/14) and `text-mono` (13), badge
+floor for anything standing on its own; a `Segmented` option sits inside a
+track that is the control's height, as a button is, so its option is that
+less the track: 28 comfortable, 26 compact), `text-2xs`/`xs`/`sm`/`nav` (11/12/13/14) and `text-mono` (13), badge
 and chip heights and padding, the document measure, the
 2–6px inner gaps, the tree indent, the mark and float radii, focus rings.
 `src/tokens/density.ts` is the list; `test/density.test.ts` holds it to
@@ -881,7 +884,10 @@ EmptyState, ScrollArea.
   it changes (the rules are under *Sessions*): files with status and
   counts, sticky file headers, Unified / Split (`splitRows` pairs each
   removed run with the added run after it), fresh lines flashing, Follow
-  the agent, `leading` for the page's controls first in its toolbar, `onOpenFile` for the viewer, `selected` / `onSelectedChange`
+  the agent, `leading` for the page's controls first in its toolbar, `toolbarIn` to draw its controls into a bar the page keeps mounted,
+  `lastChange` as `{ face, tool, path, when }` (the face stays whole; the
+  tool gives way before the file name), `onOpenFile` for the viewer,
+  `selected` / `onSelectedChange`
   to pick the file shown alone from outside, `fileList={false}` for one
   file on its own.
 - **DiffStat** — "+12 −3" in the diff's colours; every count of lines

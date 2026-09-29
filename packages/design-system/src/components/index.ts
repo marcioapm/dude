@@ -24,7 +24,7 @@ export { SessionTreeNode, SessionTree } from "./SessionTreeNode.tsx";
 export type { SessionTreeNodeProps, SessionTreeProps, SessionNodeData } from "./SessionTreeNode.tsx";
 export { DiffView, DiffFile, parseUnifiedDiff } from "./DiffView.tsx";
 export { LiveDiff } from "./LiveDiff.tsx";
-export type { LiveDiffProps, LiveDiffFile, LiveDiffHunk, LiveDiffLine } from "./LiveDiff.tsx";
+export type { LiveDiffProps, LiveDiffFile, LiveDiffHunk, LiveDiffLine, LastChange } from "./LiveDiff.tsx";
 export type { DiffViewProps, DiffFileProps, FileDiff, DiffHunk, DiffLine, DiffLineKind, FileChangeKind } from "./DiffView.tsx";
 export { LogStream } from "./LogStream.tsx";
 export type { LogStreamProps, LogLine, LogLevel, LogChannel } from "./LogStream.tsx";

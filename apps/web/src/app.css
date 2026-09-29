@@ -142,6 +142,15 @@ body {
 .runCount {
   color: var(--ds-color-text-muted);
 }
+/* Where Changes draws the diff's controls: the rest of the bar's row. */
+.runBarTools {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+.runBarTools:empty {
+  display: none;
+}
 /* Events: the session's ledger, in the same place as its conversation and changes. */
 .runEvents {
   flex: 1;
