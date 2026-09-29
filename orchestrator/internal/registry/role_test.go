@@ -153,8 +153,8 @@ func verifySigV4(r *http.Request, body []byte) (string, error) {
 // ecrServer is ECR's API over HTTP, for a real *ecr.Client signing as the
 // host (hostKey): it verifies each GetAuthorizationToken's signature and
 // session token (403 otherwise), records the access key that signed it,
-// and answers with a 12-hour token.
-func ecrServer(t *testing.T) (*ecr.Client, func() []string) {
+// and answers with a token valid 12 hours from now().
+func ecrServer(t *testing.T, now func() time.Time) (*ecr.Client, func() []string) {
 	var mu sync.Mutex
 	var keys []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -176,7 +176,7 @@ func ecrServer(t *testing.T) (*ecr.Client, func() []string) {
 		w.Header().Set("Content-Type", "application/x-amz-json-1.1")
 		_ = json.NewEncoder(w).Encode(map[string]any{"authorizationData": []map[string]any{{
 			"authorizationToken": base64.StdEncoding.EncodeToString([]byte("AWS:pw-" + key)),
-			"expiresAt":          time.Now().Add(12 * time.Hour).Unix(),
+			"expiresAt":          now().Add(12 * time.Hour).Unix(),
 		}}})
 	}))
 	t.Cleanup(srv.Close)
@@ -192,7 +192,7 @@ func ecrServer(t *testing.T) (*ecr.Client, func() []string) {
 // The fake ECR takes only a request signed by the identity it claims: the
 // right secret, and the session token of that identity alone.
 func TestTheFakeECRRejectsAnotherIdentitysSignature(t *testing.T) {
-	client, signers := ecrServer(t)
+	client, signers := ecrServer(t, time.Now)
 	// Each key ID signs with one secret only: the SDK's signer caches the
 	// signing key it derives by access key ID, not by secret.
 	for name, c := range map[string]aws.Credentials{
@@ -221,9 +221,9 @@ func TestTheFakeECRRejectsAnotherIdentitysSignature(t *testing.T) {
 }
 
 func TestTokensAreMintedWithTheAssumedRolesCredentials(t *testing.T) {
-	client, signers := ecrServer(t)
-	api := &fakeSTS{ttl: time.Hour}
 	c := &clock{time.Now()}
+	client, signers := ecrServer(t, c.now)
+	api := &fakeSTS{ttl: time.Hour}
 	p := NewECRWithRole(ecrHost, role, client, api, c.now)
 
 	v, err := p.Credential(context.Background())
@@ -253,9 +253,9 @@ func TestTokensAreMintedWithTheAssumedRolesCredentials(t *testing.T) {
 // plus margin are outside the window for margin, then inside it.
 func TestTheRoleIsAssumedAgainBeforeItsCredentialsExpire(t *testing.T) {
 	const margin = 750 * time.Millisecond
-	client, signers := ecrServer(t)
-	api := &fakeSTS{ttl: RoleExpiryWindow + margin}
 	c := &clock{time.Now()}
+	client, signers := ecrServer(t, c.now)
+	api := &fakeSTS{ttl: RoleExpiryWindow + margin}
 	p := NewECRWithRole(ecrHost, role, client, api, c.now)
 	issued := time.Now()
 	if _, err := p.Credential(context.Background()); err != nil {
@@ -286,7 +286,7 @@ func TestTheRoleIsAssumedAgainBeforeItsCredentialsExpire(t *testing.T) {
 }
 
 func TestWithoutARoleTheHostsCredentialsMint(t *testing.T) {
-	client, signers := ecrServer(t)
+	client, signers := ecrServer(t, time.Now)
 	p := NewECR(ecrHost, client, time.Now)
 	if v, err := p.Credential(context.Background()); err != nil || v != "AWS:pw-AKIAHOST" {
 		t.Fatalf("credential = %q, %v", v, err)
@@ -297,9 +297,9 @@ func TestWithoutARoleTheHostsCredentialsMint(t *testing.T) {
 }
 
 func TestAFailedAssumeRoleIsAnErrorWithoutAnECRCall(t *testing.T) {
-	client, signers := ecrServer(t)
-	api := &fakeSTS{ttl: time.Hour, err: errors.New("AccessDenied: not authorized to perform sts:AssumeRole")}
 	c := &clock{time.Now()}
+	client, signers := ecrServer(t, c.now)
+	api := &fakeSTS{ttl: time.Hour, err: errors.New("AccessDenied: not authorized to perform sts:AssumeRole")}
 	p := NewECRWithRole(ecrHost, role, client, api, c.now)
 	v, err := p.Credential(context.Background())
 	if err == nil || v != "" || !strings.Contains(err.Error(), "AssumeRole") {

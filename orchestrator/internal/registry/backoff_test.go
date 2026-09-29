@@ -156,9 +156,9 @@ func TestAnAccessDeniedIsReportedOnceAndRetriedRarely(t *testing.T) {
 // A failed AssumeRole is throttled as a failed GetAuthorizationToken is:
 // STS is not called again until the back-off is over.
 func TestAFailedAssumeRoleIsThrottled(t *testing.T) {
-	client, signers := ecrServer(t)
-	api := &fakeSTS{ttl: time.Hour, err: &smithy.GenericAPIError{Code: "AccessDenied", Message: "not authorized to perform: sts:AssumeRole"}}
 	c := &clock{time.Now()}
+	client, signers := ecrServer(t, c.now)
+	api := &fakeSTS{ttl: time.Hour, err: &smithy.GenericAPIError{Code: "AccessDenied", Message: "not authorized to perform: sts:AssumeRole"}}
 	logs, buf := logTo()
 	p := NewECRWithRole(ecrHost, role, client, api, c.now, logs)
 	for range 50 {
