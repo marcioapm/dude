@@ -28,6 +28,15 @@ const buttons = (h: string) => [...h.matchAll(/<button\b([^>]*)>([\s\S]*?)<\/but
 /** `aria-label`s of `role="group"` elements. */
 const groups = (h: string) => [...h.matchAll(/<[a-z]+\b[^>]*role="group"[^>]*>/g)].map((m) => /aria-label="([^"]*)"/.exec(m[0])?.[1] ?? null);
 
+/** The text inside the first element carrying `attr`, tags stripped. */
+function text(html: string, attr: string): string {
+  const from = html.indexOf(attr);
+  const open = html.lastIndexOf("<", from);
+  const tag = html.slice(open + 1, html.indexOf(" ", open));
+  const end = html.indexOf(`</${tag}>`, from);
+  return html.slice(html.indexOf(">", from) + 1, end).replace(/<[^>]+>/g, "").replace(/<!-- -->/g, "");
+}
+
 describe("QuestionCard choices", () => {
   const options = ["Yes", "No"];
 
@@ -55,8 +64,7 @@ describe("QuestionCard choices", () => {
     const h = html(<QuestionCard role="orchestrator" text="Ship it?" options={options} onChoose={noop} waitingOn="Ana" />);
     expect(buttons(h)).toEqual([]);
     // Whom it waits on, and how to make it yours, in words everyone sees.
-    expect(h).toContain("Waiting for Ana to answer");
-    expect(h).toContain("· Take over this task to answer</span>");
+    expect(text(h, 'data-testid="waiting-on"')).toBe("Waiting for Ana to answer· Take over this task to answer");
     expect(h).not.toContain("tabindex");
     expect(h).toContain('aria-label="Choices offered"');
     expect(h).not.toContain("Needs you");
@@ -68,8 +76,9 @@ describe("QuestionCard choices", () => {
 
   test("a request waiting on someone else is theirs to decide", () => {
     const h = html(<QuestionCard role="orchestrator" text="Read web?" options={["Approve", "Decline"]} onChoose={noop} waitingOn="Ana" verb="decide" />);
-    expect(h).toContain("Waiting for Ana to decide");
-    expect(h).toContain("Take over this task to decide");
+    expect(text(h, 'data-testid="waiting-on"')).toBe("Waiting for Ana to decide· Take over this task to decide");
+    expect(h).toContain("is waiting for Ana to decide");
+    expect(h).toContain("Blocked until Ana decides.");
   });
 
   test("waiting announces once in a status region", () => {
