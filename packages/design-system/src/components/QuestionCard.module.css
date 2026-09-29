@@ -128,15 +128,14 @@
   padding: 0;
   list-style: none;
 }
-/* Someone else's choices: a hint on hover and focus, and no pointer — they do nothing. */
+/* Someone else's choices: muted, so they read as not yours rather than as
+   buttons that fail; the hint comes on hover. */
 .optionsElse {
   width: fit-content;
-  cursor: help;
-  border-radius: var(--ds-radius-control);
 }
-.optionsElse:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px var(--ds-color-focus-ring);
+.optionsElse .option {
+  background: transparent;
+  color: var(--ds-color-text-muted);
 }
 .optionItem {
   display: flex;

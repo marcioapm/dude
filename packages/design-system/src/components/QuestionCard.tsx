@@ -47,6 +47,11 @@ export interface QuestionCardProps extends Omit<HTMLAttributes<HTMLElement>, "ch
    * they may answer.
    */
   readonly waitingOn?: string | undefined;
+  /**
+   * What the person does with it: "answer" a question (the default) or
+   * "decide" a request. Says how, to whoever it is not waiting on.
+   */
+  readonly verb?: "answer" | "decide" | undefined;
   /** Flash once on mount (a question that just arrived). */
   readonly isNew?: boolean | undefined;
 }
@@ -73,10 +78,8 @@ function toDate(v: string | number | Date | null | undefined): Date | null {
  *             `ChatMessage intent="answer"` turn that follows; the card
  *             does not quote it, so nothing in the transcript is said twice.
  */
-/** Why the choices on someone else's question do nothing, and what does. */
-const TAKE_OVER = "Take over this task to answer";
-
-export function QuestionCard({ role, name, text, options, askedAt, answeredAt, dismissed, onChoose, waitingOn, isNew, className, ...rest }: QuestionCardProps) {
+export function QuestionCard({ role, name, text, options, askedAt, answeredAt, dismissed, onChoose, waitingOn, verb = "answer", isNew, className, ...rest }: QuestionCardProps) {
+  const takeOver = `Take over this task to ${verb}`;
   const answered = toDate(answeredAt);
   const state: QuestionState = answered ? "answered" : dismissed ? "dismissed" : "waiting";
   const waiting = state === "waiting";
@@ -88,6 +91,26 @@ export function QuestionCard({ role, name, text, options, askedAt, answeredAt, d
   // lists them, as a record of what they will choose from.
   const hasOptions = options !== undefined && options.length > 0 && (!waiting || clickable || someoneElse);
 
+  const list = hasOptions ? (
+    <ul className={cx(styles["options"], someoneElse && styles["optionsElse"])}
+      aria-label={clickable ? "Reply with one of" : "Choices offered"} data-testid={someoneElse ? "choices-someone-else" : undefined}>
+      {options.map((o, i) => (
+        <li key={i} className={styles["optionItem"]}>
+          {clickable ? (
+            <button type="button" className={cx(styles["option"], styles["optionButton"])} onClick={() => onChoose(o)}>
+              <span className={styles["optionIndex"]}>{i + 1}</span>
+              {o}
+            </button>
+          ) : (
+            <span className={styles["option"]}>
+              <span className={styles["optionIndex"]}>{i + 1}</span>
+              {o}
+            </span>
+          )}
+        </li>
+      ))}
+    </ul>
+  ) : null;
   return (
     <article
       className={cx(styles["root"], styles[state], isNew && styles["new"], className)}
@@ -148,41 +171,13 @@ export function QuestionCard({ role, name, text, options, askedAt, answeredAt, d
           <p className={styles["waitingOn"]} data-testid="waiting-on">
             <Icon name="hand" size={12} />
             Waiting for {waitingOn} to answer
+            {/* The chips' hint, for whoever does not hover them. */}
+            <span className="ds-sr-only">. {takeOver}.</span>
           </p>
         ) : null}
-        {hasOptions && someoneElse ? (
-          // Someone else's to answer: the choices say how to make it yours.
-          <Tooltip content={TAKE_OVER}>
-            <ul className={cx(styles["options"], styles["optionsElse"])} aria-label={`Choices offered. ${TAKE_OVER}.`} tabIndex={0}
-              data-testid="choices-someone-else">
-              {options.map((o, i) => (
-                <li key={i} className={styles["optionItem"]}>
-                  <span className={styles["option"]}>
-                    <span className={styles["optionIndex"]}>{i + 1}</span>
-                    {o}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </Tooltip>
-        ) : hasOptions ? (
-          <ul className={styles["options"]} aria-label={clickable ? "Reply with one of" : "Choices offered"}>
-            {options.map((o, i) => (
-              <li key={i} className={styles["optionItem"]}>
-                {clickable ? (
-                  <button type="button" className={cx(styles["option"], styles["optionButton"])} onClick={() => onChoose(o)}>
-                    <span className={styles["optionIndex"]}>{i + 1}</span>
-                    {o}
-                  </button>
-                ) : (
-                  <span className={styles["option"]}>
-                    <span className={styles["optionIndex"]}>{i + 1}</span>
-                    {o}
-                  </span>
-                )}
-              </li>
-            ))}
-          </ul>
+        {hasOptions ? (
+          // Someone else's: shown but not offered, and hovering them says how to make them yours.
+          someoneElse ? <Tooltip content={takeOver}>{list}</Tooltip> : list
         ) : null}
       </div>
     </article>
