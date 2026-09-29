@@ -122,11 +122,11 @@ others can read.
 | `DUDE_EMBEDDINGS_KEY` | required with the URL | Its key: the deployment's own virtual key, never a person's. **Secret.** |
 | `DUDE_EMBEDDINGS_MODEL` | `gemini-embedding-2` | Changing it re-embeds everything in the background; search keeps working by words meanwhile. |
 | `DUDE_EMBEDDINGS_DIMENSIONS` | `768` | The index's size: only 768 is accepted, another is a migration. |
+| `HOME` | the service user's | Where the OpenCode defaults above are read from, when not set explicitly. |
 
 With `DUDE_EMBEDDINGS_URL` and `DUDE_EMBEDDINGS_KEY` in its environment,
 `go test ./internal/memory -run RealEmbedder` checks the real embedder end
 to end: a query sharing no word with a memory finds it by meaning.
-| `HOME` | the service user's | Where the OpenCode defaults above are read from, when not set explicitly. |
 
 ### dude-backend
 
