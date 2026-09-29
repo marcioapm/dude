@@ -706,7 +706,13 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
   and only in small-caps labels and badges.
 - Rows 32px by default. Use `row-compact` (28px) for logs, event streams and
   anything the operator scans rather than reads. Use `row-comfortable` (40px)
-  only for rows with two lines of content.
+  only for rows with two lines of content — an `EntityLine` with a detail
+  (members, memories) is one: `<Table density="comfortable">`. In a default
+  table its two lines outgrow the 32px row in both densities, so compact
+  shows no difference at all. A list of things you act on (a
+  `RemovableList`, a picker's options) takes the default row and the
+  default control, so it follows the density; `row-compact` and `control-sm`
+  hold in both and are for what one scans or for toolbars.
 - One `primary` button per view. Most actions are `secondary` or `quiet`.
 - Cards do not nest. A card's header and footer are told from its body by
   shade (`chrome`), not a rule.

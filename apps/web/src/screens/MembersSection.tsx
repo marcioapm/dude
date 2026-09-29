@@ -70,7 +70,7 @@ export function MembersSection({ client, me, people, onChanged }: {
         </p>
         {problem ? <Callout tone="danger">{problem}</Callout> : null}
         {people.length > 0 ? (
-          <Table>
+          <Table density="comfortable">
             <THead>
               <Tr>
                 <Th>Person</Th>

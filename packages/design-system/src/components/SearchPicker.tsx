@@ -84,7 +84,6 @@ export function SearchPicker<T>({ find, optionKey, renderOption, onPick, onCance
   return (
     <div className={styles["root"]}>
       <Input
-        size="sm"
         role="combobox"
         aria-label={label}
         aria-expanded={open}

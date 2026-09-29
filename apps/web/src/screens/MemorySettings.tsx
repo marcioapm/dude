@@ -467,7 +467,7 @@ function MemoriesPage({ version, client, scope, projects, embedder, onOpen, add 
         <EmptyState icon="memory" title="Nothing remembered yet"
           description="Agents save what they learn with remember; add what every agent here should know." />
       ) : (
-        <Table data-testid="memories">
+        <Table density="comfortable" data-testid="memories">
           <THead>
             <Tr>
               <Th>Memory</Th>
