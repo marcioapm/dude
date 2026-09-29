@@ -320,13 +320,11 @@ const (
 func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessage) (json.RawMessage, error) {
 	var out json.RawMessage
 	c.memory = memoryDeps{kick: s.Kick}
-	if t.name == "search_memory" && s.Embedder != nil {
+	if t.name == "search_memory" {
 		// Embedded before the transaction, so a slow embedder holds no
-		// connection — and only for a call the budget allows (checked
-		// again with the call), so a refused one costs nothing.
-		if err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error { return withinLimits(ctx, tx, c, t.name) }); err != nil {
-			return nil, err
-		}
+		// connection (EmbedQuery waits at most 5s). A call the budget then
+		// refuses has cost one embedding of one line, which is cheaper than
+		// counting the budget twice on every call.
 		var in struct{ Query string }
 		_ = json.Unmarshal(args, &in)
 		c.memory.query = memory.EmbedQuery(ctx, s.Embedder, in.Query)

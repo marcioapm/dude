@@ -3,6 +3,7 @@ package memory_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -126,6 +127,60 @@ func (p permanent) Embed(ctx context.Context, texts []string, purpose embeddings
 	return v, nil
 }
 
+// Refused documents at the head of the queue, however many, and a refused
+// document alone: each is blamed alone, the rest embed, and the embedder
+// is not reported broken.
+func TestRefusedDocumentsNeverWedgeTheQueue(t *testing.T) {
+	for _, n := range []int{1, 4} {
+		app, owner := dbtest.Open(t)
+		org := dbtest.Org(t, owner)
+		for i := 0; i < n; i++ {
+			remember(t, owner, org, fmt.Sprintf("mem_bad%d", i), nil, "Poison", "refused")
+		}
+		now := time.Now()
+		x := &memory.Indexer{DB: app, Embedder: &permanent{&embeddings.Fake{Dims: 768, Fail: "Poison"}}, Now: func() time.Time { return now }}
+		drain(t, x)
+		if h := x.Health(); h.Error != "" {
+			t.Errorf("%d refused alone: the embedder is reported broken: %+v", n, h)
+		}
+		var backedOff int
+		if err := owner.QueryRow(context.Background(), `SELECT count(*) FROM search_documents
+			WHERE organization_id = $1 AND last_error IS NOT NULL AND next_attempt_at > $2`, org, now).Scan(&backedOff); err != nil {
+			t.Fatal(err)
+		}
+		if backedOff != n {
+			t.Errorf("%d refused: %d backed off", n, backedOff)
+		}
+		// Behind them, new work embeds (due by the database's clock, after
+		// the test's).
+		remember(t, owner, org, "mem_good", nil, "Fine", "embeds")
+		now = time.Now().Add(time.Second)
+		drain(t, x)
+		var good bool
+		if err := owner.QueryRow(context.Background(), `SELECT embedding IS NOT NULL FROM search_documents WHERE source_id = 'mem_good'`).Scan(&good); err != nil {
+			t.Fatal(err)
+		}
+		if !good {
+			t.Errorf("%d refused: a new memory behind them was never embedded", n)
+		}
+	}
+}
+
+// A person's Retry ends the indexer's wait at once.
+func TestRetryEndsTheWait(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	seed(t, owner)
+	now := time.Now()
+	failing := &statusFake{Fake: &embeddings.Fake{Dims: 768}, status: 502}
+	x := &memory.Indexer{DB: app, Embedder: failing, Now: func() time.Time { return now }}
+	_, _ = x.Sweep(context.Background())
+	failing.status = 0
+	x.Resume()
+	if n, err := x.Sweep(context.Background()); err != nil || n == 0 {
+		t.Errorf("after Resume the sweep embedded %d (%v)", n, err)
+	}
+}
+
 func TestWordsAndMeaningTogetherOutrankEitherAlone(t *testing.T) {
 	app, owner := dbtest.Open(t)
 	org, project, _, _ := seed(t, owner)
@@ -236,8 +291,8 @@ func TestAnEmbedderThatFailsBacksOffNoDocument(t *testing.T) {
 		if backedOff != 0 {
 			t.Errorf("%d: backed off %d documents", status, backedOff)
 		}
-		if h := x.Health(); h.Error == "" || h.Retry == nil {
-			t.Errorf("%d: health does not say it is failing: %+v", status, h)
+		if h := x.Health(); h.Error == "" || h.Retry == nil || strings.Contains(h.Error, "no") && status == 400 && strings.Contains(h.Error, ": no") {
+			t.Errorf("%d: health does not say it is failing, or quotes the endpoint: %+v", status, h)
 		}
 		// It waits as a whole: the next sweep makes no call.
 		calls := failing.Calls
@@ -273,4 +328,3 @@ func (f *statusFake) Embed(ctx context.Context, texts []string, p embeddings.Pur
 	}
 	return f.Fake.Embed(ctx, texts, p)
 }
-

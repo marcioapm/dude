@@ -69,14 +69,16 @@ organizations (`InSystem`), embed them in one call, write them back. A
 memory saved wakes it. Without `DUDE_EMBEDDINGS_URL` it does nothing and
 search is by words alone.
 
-One rule for failures: **a document is blamed only when its neighbours
-embed.** A refusal that may be one text's (a 4xx that is not the key, the
-address or a rate limit) is embedded one by one to find it; that document
-backs off (1m, 5m, 30m, 2h, then daily) and keeps its error. Anything else
-— a bad key, a wrong model, a rate limit, the endpoint down, or every text
-refused alike — is the embedder's: the indexer waits as a whole (15s
-doubling to at most 10 minutes, so a fix is picked up soon), the Index page
-says it is failing and why, and no document's backoff moves.
+One rule for failures, decided by a **probe**: when a batch fails, a
+one-word text every model takes is embedded. If that fails too, the
+embedder is to blame (a bad key, a wrong model, a rate limit, the endpoint
+down): the indexer waits as a whole (15s doubling to at most 10 minutes, or
+until a person presses Retry), the Index page says it is failing — in
+dude's words, never the endpoint's body, which may quote another
+organization's text — and no document's backoff moves. If the probe
+embeds, the documents are to blame: they are embedded one by one, and each
+one refused backs off on its own (1m, 5m, 30m, 2h, then daily), so no
+number of refused documents can hold the queue.
 
 `Embedder` is one interface with two implementations: OpenAI-compatible
 `/v1/embeddings` (what llm-proxy serves) and a deterministic fake for tests.

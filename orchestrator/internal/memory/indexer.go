@@ -8,6 +8,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -26,11 +27,13 @@ import (
 // organizations, a batch at a time. Without an Embedder it does nothing and
 // search is by words.
 //
-// One rule for failures: a document is blamed only when its neighbours
-// embed. Anything else — a bad key, a wrong model, a rate limit, the
-// endpoint down — is the embedder's: the indexer backs off as a whole (at
-// most ten minutes, so a fix is picked up soon) and says why (Health), and
-// no document's own backoff moves.
+// One rule for failures, decided by a probe: when a batch fails, a short
+// text every model takes is embedded. If that fails too, the embedder is
+// to blame (a bad key, a wrong model, a rate limit, the endpoint down): the
+// indexer waits as a whole (at most ten minutes, or until a person asks it
+// to retry) and says why (Health), and no document's backoff moves. If the
+// probe embeds, the batch's documents are to blame: they are embedded one
+// by one, and each one refused backs off on its own.
 type Indexer struct {
 	DB       *db.DB
 	Embedder embeddings.Embedder
@@ -136,32 +139,38 @@ func (x *Indexer) Sweep(ctx context.Context) (int, error) {
 		x.worked()
 		return len(batch), x.store(ctx, batch, vecs, model, now())
 	}
-	if len(batch) > 1 && embeddings.OneBad(err) {
-		return x.oneByOne(ctx, batch, texts, model, now, err)
+	if !x.probe(ctx) {
+		x.broke(err, now())
+		return 0, nil
 	}
-	x.broke(err, now())
-	return 0, nil
+	x.worked()
+	return x.oneByOne(ctx, batch, texts, model, now)
 }
 
-// oneByOne finds the document the endpoint will not take, so it does not
-// hold back the rest. When the first few fail alone too, no document is to
-// blame: the embedder is, and the rest are not tried.
-func (x *Indexer) oneByOne(ctx context.Context, batch []pending, texts []string, model string, now func() time.Time, cause error) (int, error) {
-	const giveUpAfter = 3
+// probeText is what every embedding model takes: the probe that tells the
+// embedder's failure from a document's.
+const probeText = "dude"
+
+func (x *Indexer) probe(ctx context.Context) bool {
+	_, err := x.Embedder.Embed(ctx, []string{probeText}, embeddings.Document)
+	return err == nil
+}
+
+// oneByOne embeds a batch the embedder refused, knowing the embedder works:
+// each document it refuses is that document's fault and backs off at once.
+// A failure that is not a refusal (a rate limit, the endpoint going down)
+// stops it: what is done is kept, and the next sweep decides again.
+func (x *Indexer) oneByOne(ctx context.Context, batch []pending, texts []string, model string, now func() time.Time) (int, error) {
 	done := 0
-	var refused []int
 	for i, p := range batch {
-		if done == 0 && len(refused) == giveUpAfter {
-			x.broke(cause, now())
-			return 0, nil
-		}
 		vecs, err := x.Embedder.Embed(ctx, texts[i:i+1], embeddings.Document)
+		if err != nil && !embeddings.OneBad(err) {
+			return done, nil
+		}
 		if err != nil {
-			if !embeddings.OneBad(err) {
-				x.broke(err, now())
-				return done, nil
+			if err := x.refused(ctx, p, err, now()); err != nil {
+				return done, err
 			}
-			refused = append(refused, i)
 			continue
 		}
 		if err := x.store(ctx, []pending{p}, vecs, model, now()); err != nil {
@@ -169,17 +178,14 @@ func (x *Indexer) oneByOne(ctx context.Context, batch []pending, texts []string,
 		}
 		done++
 	}
-	if done == 0 {
-		x.broke(cause, now())
-		return 0, nil
-	}
-	x.worked()
-	for _, i := range refused {
-		if err := x.refused(ctx, batch[i], cause, now()); err != nil {
-			return done, err
-		}
-	}
 	return done, nil
+}
+
+// Resume ends a wait: a person pressed Retry or Reindex, and expects it now.
+func (x *Indexer) Resume() {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.health.Retry = nil
 }
 
 func (x *Indexer) worked() {
@@ -197,7 +203,7 @@ func (x *Indexer) broke(cause error, at time.Time) {
 	if x.health.Since != nil {
 		since = *x.health.Since
 	}
-	x.health = Health{Error: short(cause.Error()), Since: &since, Retry: &retry}
+	x.health = Health{Error: describe(cause), Since: &since, Retry: &retry}
 	if x.Log != nil {
 		x.Log.Warn("embeddings failed", "error", cause, "retry", retry)
 	}
@@ -213,6 +219,31 @@ func (x *Indexer) clearOtherModels(ctx context.Context, model string) error {
 		}
 		return err
 	})
+}
+
+// describe says what went wrong without the endpoint's body: a batch spans
+// organisations, and a body may echo their text (or the key), while Health
+// is shown to every organisation. The body is in the orchestrator's log.
+func describe(err error) string {
+	var e *embeddings.Error
+	if !errors.As(err, &e) {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return "the embedder did not answer in time"
+		}
+		return "the embedder could not be reached"
+	}
+	switch {
+	case e.Status == 401 || e.Status == 403:
+		return fmt.Sprintf("the embedder refused the key (%d)", e.Status)
+	case e.Status == 404 || e.Status == 405:
+		return fmt.Sprintf("no embeddings API at the configured URL (%d)", e.Status)
+	case e.Status == 429:
+		return "the embedder is rate limiting (429)"
+	case e.Status >= 500:
+		return fmt.Sprintf("the embedder failed (%d)", e.Status)
+	default:
+		return fmt.Sprintf("the embedder refused the request (%d): check the model and dimensions", e.Status)
+	}
 }
 
 func short(msg string) string {
