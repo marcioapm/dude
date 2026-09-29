@@ -14,7 +14,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { listMigrationFiles, PRIOR_CHECKSUMS, repoMigrationsDir } from "../src/db/migrate.ts";
+import { listMigrationFiles, repoMigrationsDir } from "../src/db/migrate.ts";
 
 const OWNER_URL = process.env.DATABASE_URL ?? "postgres://dude:dude@localhost:5433/dude";
 const ROOT = join(import.meta.dir, "../../..");
@@ -149,14 +149,14 @@ test("an owner that is not a superuser applies every migration", async () => {
   expect(app).toEqual({ rolsuper: false, rolbypassrls: false, rolcreatedb: false, rolcreaterole: false });
 }, 120_000);
 
-test("a database that applied a migration's prior released text is still up to date", async () => {
+test("a database migrated by v0.1.0 is still up to date", async () => {
   const url = await createDatabase();
   expect(run([binary], { DATABASE_URL: url }).code).toBe(0);
   const sql = new SQL(url);
   try {
-    for (const [version, [prior]] of Object.entries(PRIOR_CHECKSUMS)) {
-      await sql`UPDATE schema_migrations SET checksum = ${prior} WHERE version = ${version}`;
-    }
+    // What v0.1.0 recorded for 002, before its ALTER ROLE became conditional.
+    const released002 = "9629d868e268365046359588f469a4834f20a1418c6f3954f8f56797d649cb86";
+    await sql`UPDATE schema_migrations SET checksum = ${released002} WHERE version = '002'`;
     expect(run([binary], { DATABASE_URL: url })).toEqual({ code: 0, out: "up to date\n" });
 
     // Any other checksum is still an edit made after the migration was applied.
@@ -166,5 +166,21 @@ test("a database that applied a migration's prior released text is still up to d
     expect(refused.out).toContain("was modified after it was applied");
   } finally {
     await sql.end();
+  }
+}, 120_000);
+
+test("002 strips every privilege from a dude_app that already holds them", async () => {
+  // dude_app is cluster-wide: 002 finds this one instead of creating its own.
+  const [exists] = await admin`SELECT 1 FROM pg_roles WHERE rolname = 'dude_app'`;
+  if (!exists) await admin.unsafe(`CREATE ROLE dude_app LOGIN PASSWORD 'dude_app'`);
+  await admin.unsafe("ALTER ROLE dude_app SUPERUSER BYPASSRLS CREATEDB CREATEROLE");
+  try {
+    const url = await createDatabase();
+    const migrated = run([binary], { DATABASE_URL: url });
+    expect(migrated.code, migrated.out).toBe(0);
+    const [app] = await admin`SELECT rolsuper, rolbypassrls, rolcreatedb, rolcreaterole FROM pg_roles WHERE rolname = 'dude_app'`;
+    expect(app).toEqual({ rolsuper: false, rolbypassrls: false, rolcreatedb: false, rolcreaterole: false });
+  } finally {
+    await admin.unsafe("ALTER ROLE dude_app NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE");
   }
 }, 120_000);
