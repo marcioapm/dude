@@ -586,9 +586,23 @@ def test_only_a_tasks_owner_answers_and_anyone_can_take_it_over(
 
     sign_in(page, web_url, bo_key)
     page.goto(f"{web_url}#/session/{question['runId']}")
-    expect(page.get_by_test_id("waiting-on")).to_have_text("Waiting for e2e user to answer")
+    expect(page.get_by_test_id("waiting-on")).to_contain_text("Waiting for e2e user to answer")
+    expect(page.get_by_test_id("take-over")).to_have_text("· Take over this task to answer")
     expect(page.get_by_role("group", name="Answer with one of")).to_have_count(0)
     expect(page.get_by_placeholder("Waiting for e2e user to answer.")).to_be_disabled()
+    # The choices shown are not buttons for Bo; hovering says how to make
+    # them his, and clicking one leaves that said rather than closing it.
+    choices = page.get_by_test_id("choices-someone-else")
+    expect(choices.get_by_role("button")).to_have_count(0)
+    choices.get_by_text("yes").hover()
+    expect(page.get_by_role("tooltip")).to_have_text("Take over this task to answer")
+    # Watch the trigger across the press: it must never close, not merely be open again after.
+    choices.evaluate("""el => { window.__closed = false;
+        new MutationObserver(() => { if (el.dataset.state === 'closed') window.__closed = true; })
+          .observe(el, { attributes: true, attributeFilter: ['data-state'] }); }""")
+    choices.get_by_text("yes").click()
+    expect(page.get_by_role("tooltip")).to_have_text("Take over this task to answer")
+    assert page.evaluate("window.__closed") is False
 
     # Bo takes it over from the task's page.
     page.goto(f"{web_url}#/task/{item['id']}")

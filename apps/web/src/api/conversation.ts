@@ -231,6 +231,8 @@ export interface Conversation {
   contextWindow: number;
   /** The question the agent is waiting on, if it is. */
   openQuestion: QuestionTurn | null;
+  /** The repository request waiting on a person's decision, if one is. */
+  openRequest: RepositoryRequestTurn | null;
   /** What the agent is doing right now, or null when it is not working. */
   activity: Extract<ActivityKind, "thinking" | "streaming" | "tool"> | null;
   /** The tool being waited on, when activity is "tool". */
@@ -618,6 +620,7 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
       contextTokens: state.contextTokens,
       contextWindow: state.contextWindow,
       openQuestion: openQuestion(state),
+      openRequest: openRequest(state),
       activity: state.activity,
       activeTool: state.activeTool,
       toolCounts: state.toolCounts,
@@ -646,6 +649,7 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
     contextWindow: state.contextWindow,
     // A finished Run asks nothing, whatever it asked before it ended.
     openQuestion: null,
+    openRequest: null,
     activity: null,
     activeTool: null,
     toolCounts: state.toolCounts,
@@ -656,6 +660,12 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
 function openQuestion(state: Projection): QuestionTurn | null {
   let open: QuestionTurn | null = null;
   for (const q of state.questionsById.values()) if (q.answeredAt === null) open = q;
+  return open;
+}
+
+function openRequest(state: Projection): RepositoryRequestTurn | null {
+  let open: RepositoryRequestTurn | null = null;
+  for (const r of state.repoRequestsById.values()) if (r.decision === null) open = r;
   return open;
 }
 
