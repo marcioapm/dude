@@ -92,7 +92,7 @@ func NewStatic(registry, credential string) (Provider, error) {
 			"optional port 1-65535, no scheme or path, not localhost, loopback, unspecified or link-local)", registry)
 	}
 	if credential == "" {
-		return nil, errors.New("DUDE_REGISTRY_CREDENTIAL is empty: want user:password")
+		return nil, errors.New("DUDE_REGISTRY_CREDENTIAL is empty: want user:password or a bare token")
 	}
 	return static{registry, credential}, nil
 }
