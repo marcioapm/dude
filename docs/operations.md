@@ -245,9 +245,9 @@ others can read.
 | `DUDE_REGISTRY_CREDENTIAL` | none | `static` only: `user:password` for `DUDE_REGISTRY`. **Secret.** |
 | `DUDE_ECR_ROLE_ARN` | none (host credentials) | `ecr` only: a pull-only IAM role to assume and mint tokens as. See [A pull-only role for ECR](#a-pull-only-role-for-ecr). |
 | `AWS_PROFILE`, other `AWS_*` | the instance role | `ecr` only: the AWS default credential chain. The region is always the image's registry's. |
-| `DUDE_OPENCODE_AUTH` | `~/.local/share/opencode/auth.json` | OpenCode's `auth.json`: a path to it, or its contents. Given to agents as a file secret. **Secret.** |
-| `DUDE_OPENCODE_CONFIG` | `~/.config/opencode/opencode.json` | OpenCode's config, path or contents; only its `provider` object is used. Its providers' `baseURL` hosts become agents' allowed egress. **Secret** if it holds keys. |
-| `DUDE_AGENT_EGRESS` | none | Comma-separated hosts agents may reach besides their model provider; `*` turns egress filtering off. With neither this nor a provider `baseURL`, egress is unrestricted. |
+| `DUDE_LLM_URL` | none | The LLM API agents use, as a base URL before the API path, e.g. `https://llmproxy.absmartly-dev.com/v1`; must be http(s). Given to each Run as the plain env var `DUDE_LLM_URL`; its host is agents' model egress. See [Agent image contract](#agent-image-contract). |
+| `DUDE_LLM_KEY` | none | That API's key. Given to each Run as a lux secret delivered as the env var `DUDE_LLM_KEY`: never in the spec's env or labels, never stored by lux. **Secret.** |
+| `DUDE_AGENT_EGRESS` | none | Comma-separated hosts agents may reach besides `DUDE_LLM_URL`'s host; `*` turns egress filtering off. With neither this nor `DUDE_LLM_URL`, egress is unrestricted. |
 | `DUDE_AGENT_TIMEOUT` | none | A limit on a Run's running time, passed to lux. |
 | `DUDE_TOOLS_LISTEN` | off | Address the agent tools listen on, e.g. `0.0.0.0:3200`. Unset, agents get no dude tools. |
 | `DUDE_TOOLS_URL` | none | The tools as agents' containers reach them, e.g. `http://10.0.1.5:3200`. Unset, agents get no dude tools. Must not be the lux host or lux's own address: lux never lets a Run reach either. |
@@ -259,15 +259,50 @@ others can read.
 | `DUDE_VAPID_PUBLIC_KEY`, `DUDE_VAPID_PRIVATE_KEY` | made once, kept in `push_config` | Web Push keys. The private key is a **secret**. Changing them invalidates existing browser subscriptions. |
 | `DUDE_VAPID_SUBJECT` | `mailto:dude@localhost` | Who push services may contact (`mailto:` or `https:`). |
 | `DUDE_FACTORY_LOGINS` | none | Comma-separated GitHub logins whose PR comments are the factory's own, and wake no agent. |
-| `DUDE_EMBEDDINGS_URL` | off | An OpenAI-compatible embeddings API, before `/embeddings` (llm-proxy: `https://…/v1`). Unset, memory is searched by words alone. |
-| `DUDE_EMBEDDINGS_KEY` | required with the URL | Its key: the deployment's own virtual key, never a person's. **Secret.** |
+| `DUDE_EMBEDDINGS_URL` | `DUDE_LLM_URL` | An OpenAI-compatible embeddings API, before `/embeddings` (llm-proxy: `https://…/v1`), for a provider other than the agents'. `off` disables embeddings; `off`, or neither this nor `DUDE_LLM_URL` set, and memory is searched by words alone. |
+| `DUDE_EMBEDDINGS_KEY` | `DUDE_LLM_KEY` | Its key: the deployment's own virtual key, never a person's. One of the two is required when embeddings are on. **Secret.** |
 | `DUDE_EMBEDDINGS_MODEL` | `gemini-embedding-2` | Changing it re-embeds everything in the background; search keeps working by words meanwhile. |
 | `DUDE_EMBEDDINGS_DIMENSIONS` | `768` | The index's size: only 768 is accepted, another is a migration. |
-| `HOME` | the service user's | Where the OpenCode defaults above are read from, when not set explicitly. |
+
+At startup the orchestrator logs which variables the embeddings URL and key
+came from (`url_from`, `key_from`), never the key.
 
 With `DUDE_EMBEDDINGS_URL` and `DUDE_EMBEDDINGS_KEY` in its environment,
 `go test ./internal/memory -run RealEmbedder` checks the real embedder end
 to end: a query sharing no word with a memory finds it by meaning.
+
+### Agent image contract
+
+dude gives every real agent Run the same three things and nothing else about
+its model:
+
+- `DUDE_LLM_URL` (plain env) and `DUDE_LLM_KEY` (a lux env secret), from the
+  orchestrator's variables of the same names;
+- `OPENCODE_CONFIG_CONTENT`, the Run's model and effort as inline OpenCode
+  config, e.g. `{"model":"llm/claude-sonnet-5","agent":{"build":{"reasoningEffort":"high"}}}`
+  (effort `max` is sent as `high`; no effort, no `agent` key). OpenCode merges
+  it over its file config.
+
+Provider definitions are not secret and belong to the image. An agent image
+sets `OPENCODE_CONFIG` to a config file baked into it whose providers read
+the URL and key from the environment:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "llm": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": { "baseURL": "{env:DUDE_LLM_URL}", "apiKey": "{env:DUDE_LLM_KEY}" },
+      "models": { "claude-sonnet-5": {} }
+    }
+  }
+}
+```
+
+A role's model in dude's settings is `<provider>/<model>` for a provider that
+file defines (`llm/claude-sonnet-5` above). dude sends no provider
+definitions and no OpenCode files.
 
 ### dude-backend
 

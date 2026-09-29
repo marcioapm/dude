@@ -51,13 +51,7 @@ func TestAnOrganizationsSettingsAndPromptsReachTheAgent(t *testing.T) {
 	if spec.Timeout != "45m" {
 		t.Errorf("timeout = %q, want the organization's 45m", spec.Timeout)
 	}
-	var config string
-	for _, s := range spec.Secrets {
-		if s.Name == "opencode_config" {
-			config = s.Value
-		}
-	}
-	if !strings.Contains(config, `"reasoningEffort":"high"`) {
+	if config := spec.Env["OPENCODE_CONFIG_CONTENT"]; !strings.Contains(config, `"reasoningEffort":"high"`) {
 		t.Errorf("opencode config lacks the effort: %s", config)
 	}
 	p := spec.Workload.Prompt

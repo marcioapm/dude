@@ -119,8 +119,7 @@ func newWorld(t *testing.T) *world {
 	w.runtime = workflow.New(app, "test", quiet)
 	w.runtime.Register(delivery.Workflow(&delivery.Store{DB: app}, forges))
 	w.syncer = &phases.Syncer{DB: app, Lux: lux.New(luxSrv.URL, "lux-key"), Forges: forges, Log: quiet,
-		Agent: phases.AgentConfig{DefaultImage: "default:img", OpenCodeAuth: `{"k":"secret-key"}`,
-			OpenCodeProviders: json.RawMessage(`{"llm":{"options":{"baseURL":"https://llm.example/v1"}}}`)}}
+		Agent: phases.AgentConfig{DefaultImage: "default:img", LLMURL: "https://llm.example/v1", LLMKey: "secret-key"}}
 	t.Cleanup(w.syncer.Stop)
 	w.artifacts = &phases.Artifacts{DB: app, Lux: w.syncer.Lux}
 	w.prs = &prs.Syncer{DB: app, Forges: forges, Log: quiet,
@@ -825,8 +824,11 @@ func TestWhatDudeSendsLux(t *testing.T) {
 	if secrets["GIT_TOKEN"].Value != "ghp_test" {
 		t.Errorf("the forge token was not passed as the git credential")
 	}
-	if s := secrets["opencode_config"]; s.As != "file" || !strings.Contains(s.Value, `"model":"llm/impl"`) {
-		t.Errorf("opencode config = %+v, want the implementer's model as a file secret", s)
+	if s := secrets["DUDE_LLM_KEY"]; s.As != "env" || s.Value != "secret-key" {
+		t.Errorf("DUDE_LLM_KEY = %+v, want the LLM key as an env secret", s)
+	}
+	if !strings.Contains(spec.Env["OPENCODE_CONFIG_CONTENT"], `"model":"llm/impl"`) || spec.Env["DUDE_LLM_URL"] != "https://llm.example/v1" {
+		t.Errorf("env = %v, want the implementer's model inline and the LLM URL", spec.Env)
 	}
 	if spec.Network == nil || len(spec.Network.Egress) != 1 || spec.Network.Egress[0].Host != "llm.example" {
 		t.Errorf("network = %+v, want egress to the model provider only", spec.Network)

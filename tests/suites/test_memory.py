@@ -2,7 +2,7 @@
 
 Driven through the public API as the settings pages use it, and in a
 browser as a person does. The suite's orchestrator has no embedder
-(DUDE_EMBEDDINGS_URL is unset), so search here is by words alone and says
+(DUDE_EMBEDDINGS_URL is off), so search here is by words alone and says
 so; search by meaning is the orchestrator's own tests', with a fake.
 """
 

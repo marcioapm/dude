@@ -16,7 +16,8 @@
 //	                             credential chain, e.g. the instance role, minted fresh for each start)
 //	DUDE_ECR_ROLE_ARN            ecr: a pull-only role to assume and mint tokens as (default: the host's credentials)
 //	DUDE_REGISTRY, DUDE_REGISTRY_CREDENTIAL  static: the registry host and its user:password
-//	DUDE_OPENCODE_AUTH/_CONFIG   OpenCode credentials (default: this machine's)
+//	DUDE_LLM_URL                 the LLM API's base URL for agents, before the API path (https://…/v1)
+//	DUDE_LLM_KEY                 its key, given to agents as a secret env var
 //	DUDE_PR_RECONCILE            how often open PRs are re-read as a backstop to webhooks (default 15m)
 //	DUDE_PARK_AFTER/IDLE_AFTER   the grace before parking a Run waiting on a person, and the idle limit,
 //	                             for projects that set none (durations; default: the delivery policy's)
@@ -24,8 +25,9 @@
 //	DUDE_VAPID_SUBJECT           who push services may contact about this factory (mailto: or https:)
 //	DUDE_FACTORY_LOGINS          comma-separated logins whose PR comments are the factory's own
 //	DUDE_EMBEDDINGS_URL          an OpenAI-compatible embeddings API, before /embeddings (llm-proxy:
-//	                             https://…/v1); unset, memory is searched by words alone
-//	DUDE_EMBEDDINGS_KEY          its key: a deployment's own, kept as a secret
+//	                             https://…/v1); default DUDE_LLM_URL; off, or neither set: memory is
+//	                             searched by words alone
+//	DUDE_EMBEDDINGS_KEY          its key (default DUDE_LLM_KEY): a deployment's own, kept as a secret
 //	DUDE_EMBEDDINGS_MODEL        default gemini-embedding-2
 //	DUDE_EMBEDDINGS_DIMENSIONS   default 768; the index's size, so another is a migration
 package main
@@ -149,16 +151,21 @@ func run(log *slog.Logger) error {
 		FactoryLogins: list(os.Getenv("DUDE_FACTORY_LOGINS"))}
 
 	var embedder embeddings.Embedder
-	if url := os.Getenv("DUDE_EMBEDDINGS_URL"); url != "" {
+	emb, err := embeddingsFromEnv(os.Getenv)
+	if err != nil {
+		return err
+	}
+	if emb.URL != "" {
 		dims, err := strconv.Atoi(env("DUDE_EMBEDDINGS_DIMENSIONS", "768"))
 		if err != nil || dims != 768 {
 			return fmt.Errorf("DUDE_EMBEDDINGS_DIMENSIONS: the index holds 768 dimensions, not %q", os.Getenv("DUDE_EMBEDDINGS_DIMENSIONS"))
 		}
-		embedder = &embeddings.Client{BaseURL: url, Key: require("DUDE_EMBEDDINGS_KEY"),
+		embedder = &embeddings.Client{BaseURL: emb.URL, Key: emb.Key,
 			ModelName: env("DUDE_EMBEDDINGS_MODEL", "gemini-embedding-2"), Dims: dims}
-		log.Info("memory searches by meaning", "model", embedder.Model(), "url", url)
+		log.Info("memory searches by meaning", "model", embedder.Model(), "url", emb.URL,
+			"url_from", emb.URLFrom, "key_from", emb.KeyFrom)
 	} else {
-		log.Info("memory searches by words only: DUDE_EMBEDDINGS_URL is not set")
+		log.Info("memory searches by words only", "reason", emb.Off)
 	}
 	indexer := &memory.Indexer{DB: database, Embedder: embedder, Log: log}
 
