@@ -6,9 +6,19 @@ import { Icon } from "../icons/index.tsx";
 import { AgentAvatar, ROLE_LABEL, type AvatarKind } from "./AgentAvatar.tsx";
 import { Duration } from "./Numbers.tsx";
 import { Markdown } from "./Markdown.tsx";
+import { Tooltip } from "../primitives/Tooltip.tsx";
 import styles from "./QuestionCard.module.css";
 
 export type QuestionState = "waiting" | "answered" | "dismissed";
+
+/** A question the agent asks, or a request (for a repository) it makes. */
+export type QuestionKind = "question" | "request";
+
+/** How each kind is spoken of: what it is, what a person does with it, and what the agent waits for. */
+const WORDS: Record<QuestionKind, { noun: string; verb: string; awaited: string }> = {
+  question: { noun: "a question", verb: "answer", awaited: "an answer" },
+  request: { noun: "for a repository", verb: "decide", awaited: "a decision" },
+};
 
 export interface QuestionCardProps extends Omit<HTMLAttributes<HTMLElement>, "children" | "title"> {
   /** Who is asking — the role that is blocked. */
@@ -46,6 +56,8 @@ export interface QuestionCardProps extends Omit<HTMLAttributes<HTMLElement>, "ch
    * they may answer.
    */
   readonly waitingOn?: string | undefined;
+  /** A question to answer (the default), or a request to decide: every word the card says follows. */
+  readonly kind?: QuestionKind | undefined;
   /** Flash once on mount (a question that just arrived). */
   readonly isNew?: boolean | undefined;
 }
@@ -72,7 +84,9 @@ function toDate(v: string | number | Date | null | undefined): Date | null {
  *             `ChatMessage intent="answer"` turn that follows; the card
  *             does not quote it, so nothing in the transcript is said twice.
  */
-export function QuestionCard({ role, name, text, options, askedAt, answeredAt, dismissed, onChoose, waitingOn, isNew, className, ...rest }: QuestionCardProps) {
+export function QuestionCard({ role, name, text, options, askedAt, answeredAt, dismissed, onChoose, waitingOn, kind = "question", isNew, className, ...rest }: QuestionCardProps) {
+  const words = WORDS[kind];
+  const takeOver = `Take over this task to ${words.verb}`;
   const answered = toDate(answeredAt);
   const state: QuestionState = answered ? "answered" : dismissed ? "dismissed" : "waiting";
   const waiting = state === "waiting";
@@ -84,13 +98,33 @@ export function QuestionCard({ role, name, text, options, askedAt, answeredAt, d
   // lists them, as a record of what they will choose from.
   const hasOptions = options !== undefined && options.length > 0 && (!waiting || clickable || someoneElse);
 
+  const list = hasOptions ? (
+    <ul className={cx(styles["options"], someoneElse && styles["optionsElse"])}
+      aria-label={clickable ? "Reply with one of" : "Choices offered"} data-testid={someoneElse ? "choices-someone-else" : undefined}>
+      {options.map((o, i) => (
+        <li key={i} className={styles["optionItem"]}>
+          {clickable ? (
+            <button type="button" className={cx(styles["option"], styles["optionButton"])} onClick={() => onChoose(o)}>
+              <span className={styles["optionIndex"]}>{i + 1}</span>
+              {o}
+            </button>
+          ) : (
+            <span className={styles["option"]}>
+              <span className={styles["optionIndex"]}>{i + 1}</span>
+              {o}
+            </span>
+          )}
+        </li>
+      ))}
+    </ul>
+  ) : null;
   return (
     <article
       className={cx(styles["root"], styles[state], isNew && styles["new"], className)}
       data-state={state}
       data-role={role}
-      aria-label={someoneElse ? `${who} asks a question and is waiting for ${waitingOn} to answer`
-        : waiting ? `${who} asks a question and is waiting for an answer`
+      aria-label={someoneElse ? `${who} asks ${words.noun} and is waiting for ${waitingOn} to ${words.verb}`
+        : waiting ? `${who} asks ${words.noun} and is waiting for ${words.awaited}`
         : state === "dismissed" ? `${who} asked a question that is no longer needed: its run ended` : `${who} asked a question`}
       {...rest}
     >
@@ -105,7 +139,7 @@ export function QuestionCard({ role, name, text, options, askedAt, answeredAt, d
           {/* Announced once when it appears; the clock lives outside the live region so it is not re-read every second. */}
           {someoneElse ? (
             <span role="status" aria-live="polite" className="ds-sr-only">
-              Blocked until {waitingOn} answers.
+              Blocked until {waitingOn} {words.verb}s.
             </span>
           ) : waiting ? (
             <span role="status" aria-live="polite" className="ds-sr-only">
@@ -143,28 +177,18 @@ export function QuestionCard({ role, name, text, options, askedAt, answeredAt, d
         {someoneElse ? (
           <p className={styles["waitingOn"]} data-testid="waiting-on">
             <Icon name="hand" size={12} />
-            Waiting for {waitingOn} to answer
+            Waiting for {waitingOn} to {words.verb}
+            {/* How to make it yours, in words everyone sees: mouse, keyboard, touch, screen reader. */}
+            {" "}<span className={styles["takeOver"]} data-testid="take-over">· {takeOver}</span>
           </p>
         ) : null}
-        {hasOptions ? (
-          <ul className={styles["options"]} aria-label={clickable ? "Reply with one of" : "Choices offered"}>
-            {options.map((o, i) => (
-              <li key={i} className={styles["optionItem"]}>
-                {clickable ? (
-                  <button type="button" className={cx(styles["option"], styles["optionButton"])} onClick={() => onChoose(o)}>
-                    <span className={styles["optionIndex"]}>{i + 1}</span>
-                    {o}
-                  </button>
-                ) : (
-                  <span className={styles["option"]}>
-                    <span className={styles["optionIndex"]}>{i + 1}</span>
-                    {o}
-                  </span>
-                )}
-              </li>
-            ))}
-          </ul>
-        ) : null}
+        {/* Someone else's: shown but not offered. With a mouse, hovering them says it
+            again, and a press (which does nothing) leaves those words up. */}
+        {list && someoneElse ? (
+          <Tooltip content={takeOver} side="bottom" keepOnPress>
+            {list}
+          </Tooltip>
+        ) : list}
       </div>
     </article>
   );

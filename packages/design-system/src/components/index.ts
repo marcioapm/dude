@@ -47,7 +47,7 @@ export type { ChatThreadProps } from "./ChatThread.tsx";
 export { ChatTranscript, SessionHeader } from "./ChatTranscript.tsx";
 export type { ChatTranscriptProps, ChatTranscriptSession, SessionHeaderProps } from "./ChatTranscript.tsx";
 export { QuestionCard } from "./QuestionCard.tsx";
-export type { QuestionCardProps, QuestionState } from "./QuestionCard.tsx";
+export type { QuestionCardProps, QuestionState, QuestionKind } from "./QuestionCard.tsx";
 export { ChatComposer } from "./ChatComposer.tsx";
 export type { ChatComposerProps, ComposerMode, ComposerSubmission, PendingQuestion } from "./ChatComposer.tsx";
 export { NavTree, NavTreeRow, rowLabel } from "./NavTree.tsx";
