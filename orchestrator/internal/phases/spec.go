@@ -3,6 +3,7 @@ package phases
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net"
 	"net/url"
 	"os"
@@ -13,16 +14,17 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
-// AgentConfig is how the orchestrator gives agents their credentials.
+// AgentConfig is how the orchestrator gives agents their model access.
 //
-// OpenCode reads providers from opencode.json and keys from auth.json. Both
-// travel to lux as file secrets: tmpfs, never snapshotted, supplied again on
-// every resume, never stored by lux.
+// Every harness gets the same two things: the LLM API's base URL, as plain
+// env, and its key, as a lux env secret (never stored by lux, supplied again
+// on every resume). The agent image defines the providers that read them.
 type AgentConfig struct {
-	// Contents of OpenCode's auth.json.
-	OpenCodeAuth string
-	// OpenCode's provider definitions (the "provider" object of opencode.json).
-	OpenCodeProviders json.RawMessage
+	// DUDE_LLM_URL: the LLM API's base URL, before the API path
+	// (https://…/v1). Its host is agents' model egress.
+	LLMURL string
+	// DUDE_LLM_KEY: the LLM API's key.
+	LLMKey string
 	// Image used when a project names none.
 	DefaultImage string
 	// Hosts every agent may reach besides its model provider. "*" turns
@@ -47,35 +49,21 @@ type AgentConfig struct {
 	ToolsService bool
 }
 
-// LoadAgentConfig reads the agent configuration from the environment,
-// falling back to this machine's OpenCode setup, so a developer with
-// OpenCode configured can run real agents without another step.
+// LoadAgentConfig reads the agent configuration from the environment.
 func LoadAgentConfig() (AgentConfig, error) {
 	c := AgentConfig{
+		LLMURL:       os.Getenv("DUDE_LLM_URL"),
+		LLMKey:       os.Getenv("DUDE_LLM_KEY"),
 		DefaultImage: envOr("DUDE_AGENT_IMAGE", "localhost/dude-runtime:dev"),
 		Timeout:      os.Getenv("DUDE_AGENT_TIMEOUT"),
 		ToolsURL:     os.Getenv("DUDE_TOOLS_URL"),
 		ToolsService: os.Getenv("DUDE_TOOLS_SERVICE") != "off",
 		ToolsKey:     []byte(envOr("DUDE_TOOLS_KEY", os.Getenv("DUDE_ORCHESTRATOR_TOKEN"))),
 	}
-	home, _ := os.UserHomeDir()
-	if b, err := readEnvOrFile("DUDE_OPENCODE_AUTH", home+"/.local/share/opencode/auth.json"); err != nil {
-		return c, err
-	} else {
-		c.OpenCodeAuth = string(b)
-	}
-	cfg, err := readEnvOrFile("DUDE_OPENCODE_CONFIG", home+"/.config/opencode/opencode.json")
-	if err != nil {
-		return c, err
-	}
-	if len(cfg) > 0 {
-		var full struct {
-			Provider json.RawMessage `json:"provider"`
+	if c.LLMURL != "" {
+		if err := ValidateHTTPURL(c.LLMURL); err != nil {
+			return c, fmt.Errorf("DUDE_LLM_URL: %w", err)
 		}
-		if err := json.Unmarshal(cfg, &full); err != nil {
-			return c, fmt.Errorf("opencode config: %w", err)
-		}
-		c.OpenCodeProviders = full.Provider
 	}
 	for _, h := range strings.Split(os.Getenv("DUDE_AGENT_EGRESS"), ",") {
 		if h = strings.TrimSpace(h); h != "" {
@@ -85,21 +73,19 @@ func LoadAgentConfig() (AgentConfig, error) {
 	return c, nil
 }
 
-// readEnvOrFile reads $name as a path if it names a file and as the value
-// otherwise; unset, it reads the fallback file if there is one.
-func readEnvOrFile(name, fallback string) ([]byte, error) {
-	v := os.Getenv(name)
-	if v == "" {
-		b, err := os.ReadFile(fallback)
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return b, err
+// ValidateHTTPURL accepts an http or https URL with a host and no
+// credentials in it.
+func ValidateHTTPURL(raw string) error {
+	u, err := url.Parse(raw)
+	switch {
+	case err != nil:
+		return err
+	case (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "":
+		return fmt.Errorf("need an http or https URL with a host, not %q", raw)
+	case u.User != nil:
+		return fmt.Errorf("the URL must not carry credentials")
 	}
-	if b, err := os.ReadFile(v); err == nil {
-		return b, nil
-	}
-	return []byte(v), nil
+	return nil
 }
 
 func envOr(name, fallback string) string {
@@ -264,25 +250,35 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		return spec
 	}
 
-	spec.Env = colourEnv
-	opencode := map[string]any{"provider": c.OpenCodeProviders, "model": in.Model}
-	if in.Effort != "" {
-		// OpenCode passes an agent's unknown options to the provider as
-		// model options; reasoningEffort is the one providers read. Their
-		// scale stops at high, so dude's "max" is the most they take.
-		effort := in.Effort
+	spec.Env = maps.Clone(colourEnv)
+	// The image's OpenCode config defines the providers, reading the URL and
+	// key from these; the Run adds only its model and effort, which
+	// OpenCode merges over that file (OPENCODE_CONFIG_CONTENT).
+	if c.LLMURL != "" {
+		spec.Env["DUDE_LLM_URL"] = c.LLMURL
+	}
+	spec.Env["OPENCODE_CONFIG_CONTENT"] = openCodeConfig(in.Model, in.Effort)
+	if c.LLMKey != "" {
+		spec.Secrets = append(spec.Secrets, lux.Secret{Name: "DUDE_LLM_KEY", Value: c.LLMKey, As: "env"})
+	}
+	spec.Network = egress(c)
+	return spec
+}
+
+// openCodeConfig is a Run's model and reasoning effort as OpenCode config.
+// OpenCode passes an agent's unknown options to the provider as model
+// options; reasoningEffort is the one providers read. Their scale stops at
+// high, so dude's "max" is the most they take.
+func openCodeConfig(model, effort string) string {
+	config := map[string]any{"model": model}
+	if effort != "" {
 		if effort == "max" {
 			effort = "high"
 		}
-		opencode["agent"] = map[string]any{"build": map[string]any{"reasoningEffort": effort}}
+		config["agent"] = map[string]any{"build": map[string]any{"reasoningEffort": effort}}
 	}
-	config, _ := json.Marshal(opencode)
-	spec.Secrets = append(spec.Secrets,
-		lux.Secret{Name: "opencode_auth", Value: c.OpenCodeAuth, As: "file", Path: agentHome + "/.local/share/opencode/auth.json"},
-		lux.Secret{Name: "opencode_config", Value: string(config), As: "file", Path: agentHome + "/.config/opencode/opencode.json"},
-	)
-	spec.Network = egress(c)
-	return spec
+	b, _ := json.Marshal(config)
+	return string(b)
 }
 
 // colourEnv makes the tools an agent runs colour their output, though it
@@ -299,9 +295,9 @@ var colourEnv = map[string]string{
 	"GIT_CONFIG_VALUE_0": "always",
 }
 
-// egress allows the model providers' hosts and anything configured. Without
-// either, filtering is off rather than leaving an agent that cannot reach
-// its own model.
+// egress allows the LLM API's host and anything configured. Without either,
+// filtering is off rather than leaving an agent that cannot reach its own
+// model.
 func egress(c AgentConfig) *lux.Network {
 	hosts := map[string]bool{}
 	var cidrs []string
@@ -311,16 +307,8 @@ func egress(c AgentConfig) *lux.Network {
 		}
 		hosts[h] = true
 	}
-	var providers map[string]struct {
-		Options struct {
-			BaseURL string `json:"baseURL"`
-		} `json:"options"`
-	}
-	_ = json.Unmarshal(c.OpenCodeProviders, &providers)
-	for _, p := range providers {
-		if u, err := url.Parse(p.Options.BaseURL); err == nil && u.Hostname() != "" {
-			hosts[u.Hostname()] = true
-		}
+	if u, err := url.Parse(c.LLMURL); err == nil && u.Hostname() != "" {
+		hosts[u.Hostname()] = true
 	}
 	if len(hosts) == 0 && !c.toolsOnly {
 		// Nothing configured to restrict to: the agent could not reach its

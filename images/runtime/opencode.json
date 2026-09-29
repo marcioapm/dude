@@ -1,0 +1,17 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "llm": {
+      "name": "LLM (DUDE_LLM_URL)",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "{env:DUDE_LLM_URL}",
+        "apiKey": "{env:DUDE_LLM_KEY}"
+      },
+      "models": {
+        "claude-sonnet-5": {},
+        "claude-opus-5-5": {}
+      }
+    }
+  }
+}
