@@ -98,8 +98,6 @@ export { PreviewStages, ServersMoved, PREVIEW_STAGES } from "./PreviewStages.tsx
 export type { PreviewStagesProps, ServersMovedProps } from "./PreviewStages.tsx";
 export { ServersSummary, ServersSummaryRow } from "./ServersSummary.tsx";
 export type { ServersSummaryProps, ServersSummaryRowProps } from "./ServersSummary.tsx";
-export { PreviewFrame, PreviewScrim } from "./PreviewFrame.tsx";
-export type { PreviewFrameProps, PreviewViewport } from "./PreviewFrame.tsx";
 export { ServerRecipeDialog, ServerRecipeTable, EnvVarRows, ServerUrlPreview } from "./ServerRecipe.tsx";
 export type { EnvVarRowsProps, RecipeEnvVar, ServerRecipeDialogProps, ServerRecipeDraft, ServerRecipeTableProps, ServerUrlPreviewProps } from "./ServerRecipe.tsx";
 export { HostChips } from "./HostChips.tsx";

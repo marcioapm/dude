@@ -114,6 +114,14 @@ export function bareUrl(url: string): string {
 }
 
 /**
+ * A server's URL fit for an `href`: lux's are https, always; anything else
+ * (a `javascript:` URL, plain http) is shown as text and never followed.
+ */
+export function safeServerUrl(url: string | null | undefined): string | null {
+  return url && /^https:\/\//i.test(url) ? url : null;
+}
+
+/**
  * lux's log lines as LogStream draws them: a `[lux]` line is the runtime's
  * own word, stderr keeps its channel. The sequence is the line's time, so
  * a re-read tail — the same window, slid on — keeps each line's key and

@@ -1,5 +1,5 @@
 /**
- * Servers fixtures: the mockups' scenarios a–f as the API would return
+ * Servers fixtures: the mockups' scenarios a–e as the API would return
  * them (`TaskServers`, contract §C), so the gallery and the web app's dev
  * mode draw the same thing without a backend. Deterministic, anchored to
  * now so ages read sensibly.
@@ -127,16 +127,12 @@ export const serversPreviewBooting: TaskServers = {
   recipes: serverRecipes,
 };
 
-/** f: a, with the preview of web open. */
-export const serversPreviewOpen = serversRunning;
-
 export const serverScenarios = {
   a: serversRunning,
   b: serversMigrated,
   c: serversExited,
   d: serversNoRun,
   e: serversPreviewBooting,
-  f: serversPreviewOpen,
 } as const;
 export type ServerScenario = keyof typeof serverScenarios;
 
@@ -194,42 +190,3 @@ export const apiStartingLog: ServerLogLine[] = lines(9_000, [
 
 export const serverLogs: Record<string, ServerLogLine[]> = { web: webLog, api: apiStartingLog, storybook: [] };
 export const serverLogsExited: Record<string, ServerLogLine[]> = { web: webLog, api: apiExitedLog, storybook: [] };
-
-/** A page for the preview frame, so the gallery needs no server. */
-export const PREVIEW_PAGE = `<!doctype html><html><head><meta charset="utf-8"><style>
-  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,sans-serif;color:#1c2430;background:#f6f7f9}
-  .top{display:flex;align-items:center;gap:16px;padding:0 28px;height:56px;background:#fff;border-bottom:1px solid #e6e8ec}
-  .logo{font-weight:700;letter-spacing:-.01em;color:#0f172a;display:flex;align-items:center;gap:8px}.logo i{display:inline-block;width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,#2779bc,#63d99b)}
-  .top nav{display:flex;gap:18px;color:#5b6472;font-size:14px}.top nav b{color:#0f172a;font-weight:600}
-  .top .me{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:13px;color:#5b6472}.me span{display:inline-grid;place-items:center;width:28px;height:28px;border-radius:50%;background:#d8ebfb;color:#19517b;font-weight:600;font-size:11px}
-  .wrap{max-width:1040px;margin:32px auto;padding:0 28px;display:grid;grid-template-columns:1fr 360px;gap:28px}
-  h1{font-size:22px;margin:0 0 4px}.sub{color:#5b6472;font-size:14px;margin:0 0 22px}
-  .steps{display:flex;gap:8px;margin:0 0 22px;font-size:13px}.steps span{padding:6px 12px;border-radius:999px;background:#eef0f3;color:#5b6472}.steps span.on{background:#0f172a;color:#fff}.steps span.done{background:#d9f3e2;color:#06786c}
-  .card{background:#fff;border:1px solid #e6e8ec;border-radius:10px;padding:20px 22px;margin-bottom:16px}
-  .card h2{font-size:15px;margin:0 0 14px}
-  .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}.f{display:flex;flex-direction:column;gap:6px;font-size:12px;color:#5b6472}
-  .f input{height:36px;border:1px solid #cfd4db;border-radius:6px;padding:0 10px;font:inherit;font-size:14px;color:#1c2430;background:#fff}
-  .f input.err{border-color:#d33944;background:#fff7f7}.help{font-size:12px;color:#d33944}
-  .split{display:flex;gap:10px;margin-bottom:14px}.split label{flex:1;display:flex;gap:10px;align-items:center;padding:12px 14px;border:1px solid #cfd4db;border-radius:8px;font-size:14px;cursor:pointer}.split label.on{border-color:#2779bc;box-shadow:0 0 0 2px #dceeff}
-  .split small{display:block;color:#5b6472;font-size:12px}
-  .btn{height:40px;padding:0 18px;border:0;border-radius:8px;background:#166daf;color:#fff;font:inherit;font-weight:600;font-size:14px}
-  .ghost{background:transparent;color:#166daf}
-  .sum dl{display:grid;grid-template-columns:1fr auto;gap:10px 16px;margin:0;font-size:14px}.sum dt{color:#5b6472}.sum dd{margin:0;text-align:right}.sum .tot{font-weight:700;font-size:16px;border-top:1px solid #e6e8ec;padding-top:12px}
-  .tag{display:inline-block;font-size:11px;padding:2px 6px;border-radius:4px;background:#fae9ce;color:#7e580c;margin-left:8px;vertical-align:middle}
-  .foot{display:flex;justify-content:flex-end;gap:10px;align-items:center}
-  @media (max-width:700px){.wrap{grid-template-columns:1fr}}
-</style></head><body>
-<div class="top"><div class="logo"><i></i>ABsmartly</div><nav><span>Experiments</span><span>Goals</span><span>Segments</span><b>Billing</b></nav><div class="me">preview · marcio@absmartly.com <span>MM</span></div></div>
-<div class="wrap"><div>
-  <h1>Upgrade to Scale <span class="tag">checkout v2</span></h1><p class="sub">Step 2 of 3 — Payment</p>
-  <div class="steps"><span class="done">✓ Plan</span><span class="on">Payment</span><span>Review</span></div>
-  <div class="card"><h2>Payment method</h2>
-    <div class="split"><label class="on"><input type="radio" checked> <span>Card<small>Visa, Mastercard, Amex</small></span></label><label><input type="radio"> <span>SEPA direct debit<small>EUR accounts, 2–3 days</small></span></label><label><input type="radio"> <span>Invoice<small>Annual plans only</small></span></label></div>
-    <div class="row"><div class="f">Name on card<input value="Márcio Martins"></div><div class="f">Card number<input class="err" value="4242 4242 4242 42"><span class="help">Card number is incomplete.</span></div></div>
-    <div class="row" style="margin-top:12px"><div class="f">Expiry<input value="08 / 28"></div><div class="f">CVC<input value="•••"></div></div>
-  </div>
-  <div class="card"><h2>Billing address</h2><div class="row"><div class="f">Company<input value="ABsmartly, Lda"></div><div class="f">VAT number<input value="PT 515 0…"></div></div></div>
-  <div class="foot"><button class="btn ghost">← Back to plan</button><button class="btn">Continue to review</button></div>
-</div>
-<div class="card sum"><h2>Order summary</h2><dl><dt>Scale · monthly</dt><dd>€1,200.00</dd><dt>Extra seats × 4</dt><dd>€160.00</dd><dt>VAT 23%</dt><dd>€312.80</dd><dt class="tot">Due today</dt><dd class="tot">€1,672.80</dd></dl><p style="font-size:12px;color:#5b6472;margin:14px 0 0">Renews 28 Oct 2025. Cancel any time.</p></div>
-</div></body></html>`;

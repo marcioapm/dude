@@ -4,7 +4,6 @@ import styles from "../gallery.module.css";
 import { AgentAvatar } from "../../components/AgentAvatar.tsx";
 import { Duration } from "../../components/Numbers.tsx";
 import { PersonAvatar } from "../../components/PersonAvatar.tsx";
-import { PreviewFrame, PreviewScrim } from "../../components/PreviewFrame.tsx";
 import { PreviewStages, ServersMoved } from "../../components/PreviewStages.tsx";
 import { EnvVarRows, ServerRecipeDialog, ServerRecipeTable, ServerUrlPreview } from "../../components/ServerRecipe.tsx";
 import { AutostartMark, ServerList, ServerRecipeRow, ServerRow, ServersDrawer, ServersPanel, ServersRecipesPreview, ServersRunLine, ShortId, TerminalLink } from "../../components/ServerRow.tsx";
@@ -24,7 +23,7 @@ import { toggled } from "../../util/sets.ts";
 import { formatTimestamp } from "../../util/format.ts";
 import { egressProblem, type PreviewStage, type RunServer, type TaskServers } from "@dude/domain";
 import type { RecipeEnvVar } from "../../components/ServerRecipe.tsx";
-import { PREVIEW_DOMAIN, PREVIEW_PAGE, previewEgress, serverLogs, serverLogsExited, serverRecipes, serverScenarios, serverUrl, type ServerScenario } from "../serverFixtures.ts";
+import { PREVIEW_DOMAIN, previewEgress, serverLogs, serverLogsExited, serverRecipes, serverScenarios, type ServerScenario } from "../serverFixtures.ts";
 import { people } from "../navFixtures.ts";
 
 const SCENARIO_WORDS: Record<ServerScenario, string> = {
@@ -33,13 +32,11 @@ const SCENARIO_WORDS: Record<ServerScenario, string> = {
   c: "c · api exited 1",
   d: "d · no run: Preview branch",
   e: "e · branch preview booting",
-  f: "f · preview open",
 };
 
 /** The servers panel as the app composes it, for one scenario. */
 function Panel({ data, compact, logHeight, openLogs = [] }: { readonly data: TaskServers; readonly compact?: boolean | undefined; readonly logHeight?: number | undefined; readonly openLogs?: readonly string[] | undefined }) {
   const [open, setOpen] = useState<Set<string>>(() => new Set(openLogs));
-  const [preview, setPreview] = useState<string | null>(null);
   const now = Date.now();
   const run = data.run;
   if (!run) {
@@ -105,7 +102,6 @@ function Panel({ data, compact, logHeight, openLogs = [] }: { readonly data: Tas
                 detail={words.detail}
                 error={s.error}
                 url={s.url}
-                onPreview={() => setPreview(s.name)}
                 onStart={() => undefined}
                 onStop={() => undefined}
                 onRestart={() => undefined}
@@ -116,23 +112,6 @@ function Panel({ data, compact, logHeight, openLogs = [] }: { readonly data: Tas
           })}
         </ServerList>
       </ServersPanel>
-      {preview ? (
-        <>
-          <PreviewScrim onClose={() => setPreview(null)} />
-          <PreviewFrame
-            name={preview}
-            state="ready"
-            url={`${serverUrl(preview)}/billing/upgrade/payment`}
-            access="Cloudflare Access · marcio@absmartly.com"
-            onClose={() => setPreview(null)}
-            onLogs={() => undefined}
-            onRestart={() => undefined}
-            srcDoc={PREVIEW_PAGE}
-            foot={<><span>{preview} · ready for 12m</span><span>200 OK · 84 ms</span><span>hmr connected</span></>}
-            footNote="Signed in through Cloudflare Access; the agent cannot open this."
-          />
-        </>
-      ) : null}
     </>
   );
 }
@@ -157,7 +136,7 @@ function Summary({ data }: { readonly data: TaskServers }) {
     >
       {data.servers.map((s) => {
         const words = describeServer(s, now, data.run);
-        return <ServersSummaryRow key={s.name} name={s.name} state={words.state} stateLabel={words.label} url={s.url} detail={words.detail} onPreview={() => undefined} onStart={() => undefined} />;
+        return <ServersSummaryRow key={s.name} name={s.name} state={words.state} stateLabel={words.label} url={s.url} detail={words.detail} onStart={() => undefined} />;
       })}
     </ServersSummary>
   );
@@ -198,28 +177,6 @@ function PreviewSettingsDemo() {
 function EnvDemo() {
   const [vars, setVars] = useState<RecipeEnvVar[]>([{ name: "VITE_API_URL", value: "http://localhost:8080" }, { name: "VITE_ABSMARTLY_ENV", value: "preview" }]);
   return <EnvVarRows vars={vars} onChange={setVars} />;
-}
-
-function DockedPreview() {
-  const [closed, setClosed] = useState(false);
-  if (closed) return <Button onClick={() => setClosed(false)}>Show the docked preview</Button>;
-  return (
-    <div className={styles["serversSplit"]}>
-      <div className={styles["serversSplitMain"]}>the conversation</div>
-      <PreviewFrame
-        docked
-        name="web"
-        state="ready"
-        url={`${serverUrl("web")}/billing/upgrade/payment`}
-        onClose={() => setClosed(true)}
-        onLogs={() => undefined}
-        onRestart={() => undefined}
-        srcDoc={PREVIEW_PAGE}
-        foot={<><span>web · ready for 12m</span><span>200 OK · 84 ms</span><span>hmr connected</span></>}
-        footNote="Signed in through Cloudflare Access; the agent cannot open this."
-      />
-    </div>
-  );
 }
 
 const ROW_STATES: ReadonlyArray<readonly [string, RunServer, readonly string[]]> = [
@@ -271,7 +228,7 @@ export function ServersSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
 
-      <Block id="sv-panel" title="ServersPanel" note="The task's Servers tab: the run the servers live on as a line, a notice when it moved host, a preview's stages, the list, and a note. Pick a scenario; Preview opens the side sheet over the page.">
+      <Block id="sv-panel" title="ServersPanel" note="The task's Servers tab: the run the servers live on as a line, a notice when it moved host, a preview's stages, the list, and a note. Pick a scenario; Preview opens a ready server in a new tab.">
         <div className={styles["row"]} style={{ marginBottom: 12 }}>
           <Select aria-label="Scenario" size="sm" value={scenario} onValueChange={setScenario} options={(Object.keys(SCENARIO_WORDS) as ServerScenario[]).map((k) => ({ value: k, label: SCENARIO_WORDS[k] }))} />
         </div>
@@ -313,12 +270,6 @@ export function ServersSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
 
-      <Block id="sv-preview" title="PreviewFrame" note="A server's page in a frame under a browser's chrome: back, forward, reload, the URL, who is signed in, Desktop or Mobile. Docked beside a conversation here; the side sheet opens from a row's Preview above.">
-        <Panes mode={mode} surface>
-          <DockedPreview />
-        </Panes>
-      </Block>
-
       <Block id="sv-recipes" title="ServerRecipeTable / ServerRecipeDialog" note="Project settings → Servers: the definitions as a table, the editor as a dialog with the URL the name makes, validation in words, environment variables as rows, and the preview settings.">
         <Panes mode={mode}>
           <Col>
@@ -356,7 +307,6 @@ function RowDemo({ server, openLogs }: { readonly server: RunServer; readonly op
       detail={words.detail}
       error={server.error}
       url={server.url}
-      onPreview={() => undefined}
       onStart={() => undefined}
       onStop={() => undefined}
       onRestart={() => undefined}

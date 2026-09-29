@@ -12,8 +12,9 @@ import { PreviewStages } from "../src/components/PreviewStages.tsx";
 import { draftOf, draftProblems, recipeOf } from "../src/components/ServerRecipe.tsx";
 import { ServerRow } from "../src/components/ServerRow.tsx";
 import { ServerStateMark } from "../src/components/ServerStateMark.tsx";
+import { ServersSummaryRow } from "../src/components/ServersSummary.tsx";
 import { SERVER_DISPLAY_STATES, SERVER_STATE_SPECS } from "../src/tokens/servers.ts";
-import { canStartAny, canStopAny, describeServer, serverLogLines, summarizeServers } from "../src/util/servers.ts";
+import { canStartAny, canStopAny, describeServer, safeServerUrl, serverLogLines, summarizeServers } from "../src/util/servers.ts";
 
 const html = (el: React.ReactElement) => renderToStaticMarkup(el);
 const text = (h: string) => h.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
@@ -108,13 +109,31 @@ describe("summaries", () => {
 });
 
 describe("ServerRow", () => {
-  const row = (s: RunServer, extra = {}) => html(<ServerRow name={s.name} port={s.port} state={s.state} url={s.url} onPreview={() => {}} onStart={() => {}} onStop={() => {}} onRestart={() => {}} logs={{ open: false, onToggle: () => {}, lines: [] }} {...extra} />);
+  const row = (s: RunServer, extra = {}) => html(<ServerRow name={s.name} port={s.port} state={s.state} url={s.url} onStart={() => {}} onStop={() => {}} onRestart={() => {}} logs={{ open: false, onToggle: () => {}, lines: [] }} {...extra} />);
+  const preview = (h: string) => h.match(/<a\b[^>]*data-testid="server-preview"[^>]*>/)?.[0] ?? null;
 
-  test("ready: Preview, Logs, Restart, Stop; the URL opens", () => {
+  test("ready: Preview (a link to a new tab), Logs, Restart, Stop; the URL opens", () => {
     const h = row(server({ state: "ready" }));
-    expect(buttons(h)).toEqual(["Preview", "Logs", "Stop"]);
+    expect(buttons(h)).toEqual(["Logs", "Stop"]);
+    expect(preview(h)).toContain('href="https://web-abc.lux.example"');
+    expect(preview(h)).toContain('target="_blank"');
+    expect(preview(h)).toContain('rel="noopener noreferrer"');
     expect(h).toContain('aria-label="Restart web"');
     expect(h).toContain('aria-label="Open in a new tab"');
+  });
+
+  test("only an https URL is ever a link", () => {
+    for (const url of ["javascript:alert(1)", "http://web-abc.lux.example", "data:text/html,x"]) {
+      const h = row(server({ state: "ready", url }));
+      expect(preview(h)).toBeNull();
+      expect(h).not.toContain(`href="${url}"`);
+      expect(h).not.toContain("Open in a new tab");
+      const summary = html(<ServersSummaryRow name="web" state="ready" url={url} />);
+      expect(summary).not.toContain("href=");
+    }
+    expect(safeServerUrl("https://web-abc.lux.example")).toBe("https://web-abc.lux.example");
+    expect(safeServerUrl(null)).toBeNull();
+    expect(html(<ServersSummaryRow name="web" state="ready" url="https://web-abc.lux.example" />)).toContain('href="https://web-abc.lux.example"');
   });
 
   test("stopped and exited: Start; the URL is there to copy but not to open", () => {

@@ -1,7 +1,7 @@
 /**
  * The API without a backend: the mockups' world, answered from memory.
  * For seeing the screens and the gallery's scenarios in the real app —
- * `?fixtures=a` … `f` (or `dude.fixtures` in localStorage), outside
+ * `?fixtures=a` … `e` (or `dude.fixtures` in localStorage), outside
  * production builds, which never load this module. Reads come from
  * `data.ts`; writes to servers change what the next read returns, so
  * Start, Stop and Preview branch move things as a backend would, if a
@@ -17,8 +17,6 @@ import { egressProblem } from "@dude/domain";
 import type { ServerLogLine } from "@dude/design-system";
 import { ApiClient, ApiError, type Member, type ProjectDetail, type RunDetail, type TaskDetail, type TaskMetrics } from "../api/client.ts";
 import { EPIC, FINDINGS, METRICS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RUN_ID, SETTINGS, TASK_ID, YOU, eventsFor, logsFor, navigationFor, runDetailFor, serversFor, taskFor } from "./data.ts";
-
-export { PREVIEW_PAGE } from "@dude/design-system/fixtures/servers";
 
 type LedgerQuery = { runId?: string | undefined; taskId?: string | undefined; after?: number | undefined };
 

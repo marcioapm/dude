@@ -4,7 +4,7 @@
  * fixtures at all, so a production build carries none of them.
  */
 
-export const SCENARIOS = ["a", "b", "c", "d", "e", "f"] as const;
+export const SCENARIOS = ["a", "b", "c", "d", "e"] as const;
 export type FixtureScenario = (typeof SCENARIOS)[number];
 
 const KEY = "dude.fixtures";

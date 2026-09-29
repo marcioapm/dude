@@ -39,7 +39,7 @@ import { firstName } from "@dude/design-system";
 import { usePeople, type People } from "../people.tsx";
 import { NotFound } from "./NotFound.tsx";
 import { ChangesPanel } from "./ChangesPanel.tsx";
-import { ServerPreview, ServersRunActions, ServersSection, serversTabTrailing } from "./ServersSection.tsx";
+import { ServersRunActions, ServersSection, serversTabTrailing } from "./ServersSection.tsx";
 
 /** Whether the servers drawer is open: this browser's choice, kept across runs. */
 const DRAWER = "dude.run.servers";
@@ -88,8 +88,7 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
   const [confirmAbort, setConfirmAbort] = useState(false);
   const [abortReason, setAbortReason] = useState("");
   const people = usePeople();
-  // The servers panel beside the conversation, and the one previewed in its
-  // place. Open by this browser's last choice; with none made, open once the
+  // The servers panel beside the conversation. Open by this browser's last choice; with none made, open once the
   // run turns out to have servers — they are why someone would look.
   const [drawer, setDrawer] = useState(() => localStorage.getItem(DRAWER) === "1");
   const chose = useRef(localStorage.getItem(DRAWER) !== null);
@@ -98,7 +97,6 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
     localStorage.setItem(DRAWER, open ? "1" : "0");
     setDrawer(open);
   }, []);
-  const [previewing, setPreviewing] = useState<string | null>(null);
 
   const { events, reconnects } = useEventStream({ client, runId });
 
@@ -110,7 +108,6 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
   // A stream that came back may have missed one: its return counts too.
   const serversVersion = useMemo(() => (events.findLast((e) => e.eventType === EventTypes.ServersChanged)?.cursor ?? 0) + reconnects * 1e9, [events, reconnects]);
   const servers = useServers(client, { runId }, serversVersion);
-  const previewed = previewing ? servers.data?.servers.find((s) => s.name === previewing) ?? null : null;
   useEffect(() => {
     if (!chose.current && servers.data?.run && servers.data.servers.length > 0) setDrawer(true);
   }, [servers.data]);
@@ -422,10 +419,7 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
           </EventStream>
         </TabPanel>
       </Tabs>
-      {/* The preview docks beside the conversation and takes the drawer's place: one thing at the right. */}
-      {previewed && servers.data?.run ? (
-        <ServerPreview docked server={previewed} run={servers.data.run} now={Date.now()} servers={servers} onClose={() => setPreviewing(null)} />
-      ) : drawer ? (
+      {drawer ? (
         <ServersDrawer
           data-testid="servers-drawer"
           count={servers.data?.run
@@ -434,7 +428,7 @@ export function RunScreen({ client, runId, title, breadcrumb, onOpenTask, onBack
           actions={<ServersRunActions servers={servers} variant="quiet" />}
           onClose={() => toggleDrawer(false)}
         >
-          <ServersSection client={client} servers={servers} inDrawer onPreview={setPreviewing} previewing={previewing} />
+          <ServersSection client={client} servers={servers} inDrawer />
         </ServersDrawer>
       ) : null}
       </div>
