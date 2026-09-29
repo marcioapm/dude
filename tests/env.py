@@ -204,9 +204,11 @@ class TestEnvironment:
                 # lux-fake's image when the lux is real: it is preloaded on
                 # every host, and it is what the fake models run.
                 "DUDE_AGENT_IMAGE": "localhost/lux-fake:test" if self.real_lux else "dude-runtime:test",
-                # No real agent credentials in the suite; fake models only.
-                "DUDE_OPENCODE_AUTH": "{}",
-                "DUDE_OPENCODE_CONFIG": "{}",
+                # No real agent credentials in the suite; fake models only,
+                # and memory searched by words.
+                "DUDE_LLM_URL": "",
+                "DUDE_LLM_KEY": "",
+                "DUDE_EMBEDDINGS_URL": "off",
                 # An agent waiting on a person is parked after seconds, not
                 # the policy's minutes, so the suite sees it happen.
                 "DUDE_PARK_AFTER": "3s",

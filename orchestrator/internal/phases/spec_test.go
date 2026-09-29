@@ -15,11 +15,11 @@ var update = flag.Bool("update", false, "rewrite testdata/*.golden from the curr
 // tools. One egress host only, so the rules' order is fixed.
 func goldenInput(model string) (AgentConfig, specInput) {
 	c := AgentConfig{
-		OpenCodeAuth:      `{"llm":{"type":"api","key":"sk-golden"}}`,
-		OpenCodeProviders: json.RawMessage(`{"llm":{"options":{"baseURL":"https://llm.example/v1"}}}`),
-		DefaultImage:      "registry.example/dude/agent:1",
-		ToolsURL:          "http://10.9.8.7:3120/mcp",
-		ToolsService:      true,
+		LLMURL:       "https://llm.example/v1",
+		LLMKey:       "sk-golden",
+		DefaultImage: "registry.example/dude/agent:1",
+		ToolsURL:     "http://10.9.8.7:3120/mcp",
+		ToolsService: true,
 	}
 	in := specInput{
 		RunID: "run_1", OrganizationID: "org_1", TaskID: "wi_1", Phase: "implement", Role: "implementer",

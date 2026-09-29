@@ -53,10 +53,12 @@
   },
   "env": {
     "CLICOLOR_FORCE": "1",
+    "DUDE_LLM_URL": "https://llm.example/v1",
     "FORCE_COLOR": "1",
     "GIT_CONFIG_COUNT": "1",
     "GIT_CONFIG_KEY_0": "color.ui",
     "GIT_CONFIG_VALUE_0": "always",
+    "OPENCODE_CONFIG_CONTENT": "{\"model\":\"llm/impl\"}",
     "PY_COLORS": "1",
     "TERM": "xterm-256color"
   },
@@ -70,16 +72,9 @@
       "value": "Bearer tok_golden"
     },
     {
-      "name": "opencode_auth",
-      "value": "{\"llm\":{\"type\":\"api\",\"key\":\"sk-golden\"}}",
-      "as": "file",
-      "path": "/home/agent/.local/share/opencode/auth.json"
-    },
-    {
-      "name": "opencode_config",
-      "value": "{\"model\":\"llm/impl\",\"provider\":{\"llm\":{\"options\":{\"baseURL\":\"https://llm.example/v1\"}}}}",
-      "as": "file",
-      "path": "/home/agent/.config/opencode/opencode.json"
+      "name": "DUDE_LLM_KEY",
+      "value": "sk-golden",
+      "as": "env"
     }
   ],
   "git": {

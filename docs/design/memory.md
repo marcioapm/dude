@@ -67,7 +67,8 @@ collation change).
 A loop in the orchestrator (`indexer`, like the others in
 `dude-orchestrator`): take up to 100 documents without an embedding, across
 organizations (`InSystem`), embed them in one call, write them back. A
-memory saved wakes it. Without `DUDE_EMBEDDINGS_URL` it does nothing and
+memory saved wakes it. Without an embeddings URL (`DUDE_EMBEDDINGS_URL`,
+else `DUDE_LLM_URL`), or with `DUDE_EMBEDDINGS_URL=off`, it does nothing and
 search is by words alone.
 
 One rule for failures, decided by a **probe**: when a batch fails, a
@@ -140,8 +141,8 @@ Acme", changed only in the organization's settings.
 
 | | |
 |---|---|
-| `DUDE_EMBEDDINGS_URL` | e.g. `https://llm.example.com/v1` (…`/embeddings` is appended). Unset: search by words only |
-| `DUDE_EMBEDDINGS_KEY` | **Secret.** A virtual key for the deployment, never a person's |
+| `DUDE_EMBEDDINGS_URL` | e.g. `https://llm.example.com/v1` (…`/embeddings` is appended). Default `DUDE_LLM_URL`; `off`, or neither set: search by words only |
+| `DUDE_EMBEDDINGS_KEY` | **Secret.** A virtual key for the deployment, never a person's. Default `DUDE_LLM_KEY`, only when the embeddings URL is `DUDE_LLM_URL` or on its origin; an explicit `DUDE_EMBEDDINGS_URL` elsewhere needs this key or startup fails |
 | `DUDE_EMBEDDINGS_MODEL` | default `gemini-embedding-2` |
 | `DUDE_EMBEDDINGS_DIMENSIONS` | default `768`; must match the column. Changing it is a migration |
 

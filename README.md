@@ -67,7 +67,7 @@ containers on Podman hosts and moves it between them. See
 Bun, Go 1.25, Docker, Python 3.14 with `uv`, git, and Google Chrome (the
 browser tests drive the system Chrome; Playwright's bundled Chromium has no
 build for Ubuntu 26.04). To run real agents, a lux (`~/git/lux`) and
-OpenCode credentials.
+an LLM API's URL and key.
 
 ```bash
 bun install
@@ -147,11 +147,17 @@ DATABASE_URL="postgres://dude_app:dude_app@localhost:5433/dude" \
 
 Open http://localhost:5180 and sign in with the `userKey`.
 
-The orchestrator gives agents this machine's OpenCode credentials
-(`~/.local/share/opencode/auth.json` and the providers in
-`~/.config/opencode/opencode.json`) unless `DUDE_OPENCODE_AUTH` and
-`DUDE_OPENCODE_CONFIG` say otherwise. Set a role's model in the project's
-`agentModels` (e.g. `{"implementer": {"model": "llmproxy-anthropic/claude-sonnet-5"}}`);
+Agents reach their model through one LLM API: set `DUDE_LLM_URL` (its base
+URL, e.g. `https://llmproxy.example.com/v1`) and `DUDE_LLM_KEY` on the
+orchestrator. Without `DUDE_LLM_URL` the orchestrator starts with a warning
+and only `fake/` models can run; a real model's Run fails at its first model
+call. Every Run gets both, the key as a lux secret; memory's
+embeddings use them too unless `DUDE_EMBEDDINGS_*` say otherwise. Provider
+definitions live in the agent image (`images/runtime/opencode.json`; see
+"Agent image contract" in [`docs/operations.md`](docs/operations.md)). Set a
+role's model in the project's `agentModels` as `<provider>/<model>` for a
+provider the image defines, `llm-anthropic` or `llm-openai` (e.g.
+`{"implementer": {"model": "llm-anthropic/claude-sonnet-5"}}`);
 `fake/scripted` runs the whole pipeline without a model — deterministic,
 free, and what the tests use.
 

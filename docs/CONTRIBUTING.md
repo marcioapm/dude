@@ -86,9 +86,11 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
 
 - Each phase is a Run with `phase`, `role`, `base_ref` (the commit it starts
   from) and, for reviews, `category`. `internal/phases/spec.go` turns it into
-  a lux RunSpec: image, adapter, prompt, model (as OpenCode config, a file
-  secret), repository at `base_ref`, egress to the model provider, and the
-  agent's home as a state volume so a resume keeps the conversation.
+  a lux RunSpec: image, adapter, prompt, model and effort (inline OpenCode
+  config in `OPENCODE_CONFIG_CONTENT`), the LLM's URL and key (`DUDE_LLM_URL`
+  env, `DUDE_LLM_KEY` env secret), repository at `base_ref`, egress to the
+  LLM's host, and the agent's home as a state volume so a resume keeps the
+  conversation.
 - **Handoff is via git.** Each publishing phase pushes to a branch of its
   own (`dude/<task>/run-<run>`) — lux lets a Run's first push go only to
   a branch that does not exist — and the orchestrator fast-forwards the work
