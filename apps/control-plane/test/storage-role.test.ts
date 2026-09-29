@@ -39,6 +39,9 @@ const s3 = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
   requests.push({ method: req.method, url: req.url, headers: new Headers(req.headers) });
   const key = new URL(req.url).pathname;
   if (key.includes("leak-plain")) return new Response(LEAKED, { status: 403 });
+  if (key.includes("leak-code")) {
+    return new Response(`<?xml version="1.0"?><Error><Code>FAKECODESECRET123</Code><Message>denied</Message></Error>`, { status: 403 });
+  }
   if (key.includes("leak-xml")) {
     return new Response(`<?xml version="1.0"?><Error><Code>AccessDenied</Code><Message>${LEAKED}</Message></Error>`, { status: 403 });
   }
@@ -222,6 +225,24 @@ test("S3 error bodies holding credentials never reach the logs", async () => {
   expect(output).toContain("photo storage put failed (AccessDenied)");
   expect(output).toContain("photo storage delete failed (AccessDenied)");
   for (const secret of LEAKED.split(" ")) expect(output).not.toContain(secret);
+});
+
+test("an S3 error code outside the known set, and the object key, never reach the logs", async () => {
+  const storage = await fresh();
+  generation = 0;
+  expiry = Date.now() + 3_600_000;
+  const key = "org/person/leak-code-SECRETIMAGETOKEN.png";
+  const output = await logged(async () => {
+    const error = await storage.putObject(key, new Uint8Array([1]), "image/png").then(() => undefined, (err: unknown) => err);
+    expect(error).toBeInstanceOf(storage.StorageError);
+    expect((error as { code?: string }).code).toBeUndefined();
+    errorResponse(error);
+    await storage.deleteObject(key);
+  });
+  expect(output).toContain("photo storage put failed");
+  expect(output).toContain("could not delete an object");
+  expect(output).not.toContain("FAKECODESECRET123");
+  expect(output).not.toContain("SECRETIMAGETOKEN");
 });
 
 test("an IMDS token with CR/LF is rejected without its value reaching the logs", async () => {
