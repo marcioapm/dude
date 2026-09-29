@@ -20,6 +20,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
+	"github.com/marciomartins/dude/orchestrator/internal/registry"
 )
 
 // Previews runs branch previews on lux: a Run with no agent that checks
@@ -42,6 +43,9 @@ type Previews struct {
 	// The image when neither the project's preview settings nor the
 	// project name one (DUDE_AGENT_IMAGE).
 	DefaultImage string
+	// The login for the registry agent images come from (DUDE_REGISTRY_AUTH);
+	// nil for none. A preview of the agent image pulls it the same way.
+	Registry registry.Provider
 	// The idle limit's unit, for tests; zero is a minute.
 	Minute time.Duration
 
@@ -304,6 +308,12 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, er
 		}
 		spec.Workload.Servers = append(spec.Workload.Servers, in)
 	}
+	// A login that cannot be had now is an error the sweep retries.
+	login, err := phases.LoginFor(ctx, p.Registry, image, nil)
+	if err != nil {
+		return lux.Spec{}, "", err
+	}
+	login.Apply(&spec)
 	return spec, branch, nil
 }
 
@@ -545,19 +555,36 @@ func (p *Previews) minute() time.Duration {
 
 // resume takes a parked preview up again because a person started one of
 // its servers: its checkout is as it was; lux starts its spec's servers,
-// and the ones people asked for are started once it runs.
+// and the ones people asked for are started once it runs. lux keeps no
+// secret, so every one comes again, the registry login freshly minted.
 func (p *Previews) resume(ctx context.Context, r previewRun) error {
-	var secrets []lux.Secret
+	// lux's stored spec says whether the submit logged in, and to where.
+	lr, err := p.Lux.Get(ctx, r.LuxRunID)
+	if le, ok := lux.AsError(err); ok && !le.Retryable() {
+		return p.fail(ctx, r, "lux refused to resume the preview: "+le.Message)
+	}
+	if err != nil {
+		return err
+	}
+	login, err := phases.LoginFor(ctx, p.Registry, lr.Spec.Image.Ref, &lr.Spec)
+	if phases.IsLoginUnavailable(err) {
+		return p.waitForLogin(ctx, r, err)
+	}
+	if err != nil {
+		return err
+	}
+	var spec lux.Spec
 	token, err := p.forgeToken(ctx, r.Org)
 	if err != nil {
 		return err
 	}
 	if token != "" {
-		secrets = []lux.Secret{{Name: "GIT_TOKEN", Value: token}}
+		spec.Secrets = []lux.Secret{{Name: "GIT_TOKEN", Value: token}}
 	}
+	login.Apply(&spec)
 	// lux answers a Run already resuming as it did the first time; a
 	// refusal (cancelled or finished meanwhile) is for good.
-	lr, err := p.Lux.Resume(ctx, r.LuxRunID, lux.ResumeInput{Secrets: secrets, RequestID: "resume-" + r.ID})
+	lr, err = p.Lux.Resume(ctx, r.LuxRunID, lux.ResumeInput{Secrets: spec.Secrets, RequestID: "resume-" + r.ID})
 	if le, ok := lux.AsError(err); ok && !le.Retryable() {
 		return p.fail(ctx, r, "lux refused to resume the preview: "+le.Message)
 	}
@@ -665,6 +692,18 @@ func (p *Previews) fail(ctx context.Context, r previewRun, reason string) error 
 func (p *Previews) retryLater(ctx context.Context, r previewRun) error {
 	return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE runs SET next_attempt_at = now() + interval '5 seconds' WHERE id = $1`, r.ID)
+		return err
+	})
+}
+
+// waitForLogin leaves a parked preview parked, its pending starts kept,
+// until the registry login it was submitted with is configured again, and
+// checks every phases.LoginRetry rather than every sweep.
+func (p *Previews) waitForLogin(ctx context.Context, r previewRun, cause error) error {
+	p.Log.Warn("parked preview not resumed: "+cause.Error(), "run", r.ID)
+	return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE runs SET next_attempt_at = now() + make_interval(secs => $2) WHERE id = $1`,
+			r.ID, phases.LoginRetry.Seconds())
 		return err
 	})
 }

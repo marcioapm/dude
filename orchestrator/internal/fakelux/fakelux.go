@@ -17,6 +17,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"mime"
 	"net/http"
 	"os/exec"
@@ -28,6 +29,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
+	"github.com/marciomartins/dude/orchestrator/internal/registry"
 )
 
 // Behaviour is what a Run's agent does. Chosen per Run by the test, from the
@@ -98,6 +100,10 @@ type Run struct {
 	Stopped     int
 	Resumed     int
 	Interrupted int
+	// The secrets each accepted resume carried, in order, decoded and as
+	// sent (every field of each descriptor).
+	ResumeSecrets    [][]lux.Secret
+	ResumeSecretsRaw []json.RawMessage
 	// Forgotten: lux lost it. Open streams drop, as lux's connection would.
 	Forgotten bool
 	// What was asked of it, in order: "exec", "stop", "cancel".
@@ -320,6 +326,10 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 	}
 	var spec map[string]any
 	_ = json.Unmarshal(raw, &spec)
+	if msg := registryAuthProblem(raw); msg != "" {
+		writeErr(w, 422, "invalid_spec", msg)
+		return
+	}
 	s.mu.Lock()
 	if id, ok := s.byKey[r.Header.Get("Idempotency-Key")]; ok && id != "" {
 		run := s.runs[id]
@@ -645,8 +655,18 @@ func (s *Server) view(run *Run) map[string]any {
 			host = p.HostName
 		}
 	}
+	// The stored spec, as lux returns it: every secret's value dropped.
+	var spec map[string]any
+	_ = json.Unmarshal(run.Spec, &spec)
+	if secrets, ok := spec["secrets"].([]any); ok {
+		for _, sec := range secrets {
+			if m, ok := sec.(map[string]any); ok {
+				delete(m, "value")
+			}
+		}
+	}
 	return map[string]any{"id": run.ID, "state": run.State, "epoch": run.Epoch, "sessionId": run.SessionID,
-		"host": host, "placements": placements, "servers": s.serverViews(run)}
+		"host": host, "placements": placements, "servers": s.serverViews(run), "spec": spec}
 }
 
 // generic: the spec's workload is a plain command, no agent (a branch
@@ -840,6 +860,43 @@ func workloadCredential(rawSpec json.RawMessage, added []lux.Repository) string 
 	return ""
 }
 
+// registryAuthProblem refuses, as lux's spec validation does, a registry
+// lux's validRegistry would not take, a login naming a secret the spec
+// does not declare, or a registry twice.
+func registryAuthProblem(rawSpec json.RawMessage) string {
+	var spec lux.Spec
+	_ = json.Unmarshal(rawSpec, &spec)
+	seen := map[string]bool{}
+	for i, a := range spec.Image.RegistryAuth {
+		if !registry.ValidRegistry(a.Registry) {
+			return fmt.Sprintf("image.registryAuth[%d].registry: %q is not a registry host", i, a.Registry)
+		}
+		if seen[a.Registry] {
+			return fmt.Sprintf("image.registryAuth: duplicate registry %q", a.Registry)
+		}
+		seen[a.Registry] = true
+		if !slices.ContainsFunc(spec.Secrets, func(s lux.Secret) bool { return s.Name == a.Secret }) {
+			return fmt.Sprintf("image.registryAuth[%d].secret: no secret named %q", i, a.Secret)
+		}
+	}
+	return ""
+}
+
+// missingSecrets are the Run's secrets a resume brings no value for. A
+// repository a resume adds with a credential the spec lacks is left out,
+// as it is here.
+func missingSecrets(rawSpec json.RawMessage, given []lux.Secret) []string {
+	var spec lux.Spec
+	_ = json.Unmarshal(rawSpec, &spec)
+	var missing []string
+	for _, sec := range spec.Secrets {
+		if !slices.ContainsFunc(given, func(g lux.Secret) bool { return g.Name == sec.Name && g.Value != "" }) {
+			missing = append(missing, sec.Name)
+		}
+	}
+	return missing
+}
+
 // specRepos are a spec's repositories as lux reads them.
 func specRepos(spec map[string]any) []specRepo {
 	git, _ := spec["git"].(map[string]any)
@@ -956,10 +1013,8 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Secrets []struct {
-			Name, Value string
-		} `json:"secrets"`
-		Input *struct {
+		Secrets []lux.Secret `json:"secrets"`
+		Input   *struct {
 			Text string `json:"text"`
 		} `json:"input"`
 		RequestID string `json:"requestId"`
@@ -967,11 +1022,23 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 			Repositories []map[string]any `json:"repositories"`
 		} `json:"git"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&in)
+	body, _ := io.ReadAll(r.Body)
+	_ = json.Unmarshal(body, &in)
+	var raw struct {
+		Secrets json.RawMessage `json:"secrets"`
+	}
+	_ = json.Unmarshal(body, &raw)
 	s.mu.Lock()
 	if run.State != "stopped" && run.State != "failed" && run.State != "lost" {
 		s.mu.Unlock()
 		writeErr(w, 409, "not_resumable", "run is "+run.State)
+		return
+	}
+	// As lux does (resumeRun, requireSecrets): it kept no value, so every
+	// secret the Run has must come again, non-empty.
+	if missing := missingSecrets(run.Spec, in.Secrets); len(missing) > 0 {
+		s.mu.Unlock()
+		writeErr(w, 422, "secrets_required", "secret values required: "+strings.Join(missing, ", "))
 		return
 	}
 	if in.Git != nil && len(in.Git.Repositories) > 0 {
@@ -1011,6 +1078,8 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		run.Spec, _ = json.Marshal(spec)
 	}
 	run.Resumed++
+	run.ResumeSecrets = append(run.ResumeSecrets, in.Secrets)
+	run.ResumeSecretsRaw = append(run.ResumeSecretsRaw, raw.Secrets)
 	run.Epoch++
 	if in.Input != nil {
 		// Delivered once the agent is back, as lux does: it is the input the
