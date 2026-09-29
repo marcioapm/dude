@@ -55,7 +55,9 @@ describe("QuestionCard choices", () => {
     const h = html(<QuestionCard role="orchestrator" text="Ship it?" options={options} onChoose={noop} waitingOn="Ana" />);
     expect(buttons(h)).toEqual([]);
     expect(h).toContain("Waiting for Ana to answer</p>");
-    expect(h).toContain('aria-label="Choices offered"');
+    // Their choices say how to make it yours, to a pointer and a screen reader alike.
+    expect(h).toContain('aria-label="Choices offered. Take over this task to answer."');
+    expect(h).toContain('tabindex="0"');
     expect(h).not.toContain("Needs you");
   });
 

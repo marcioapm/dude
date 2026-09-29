@@ -6,6 +6,7 @@ import { Icon } from "../icons/index.tsx";
 import { AgentAvatar, ROLE_LABEL, type AvatarKind } from "./AgentAvatar.tsx";
 import { Duration } from "./Numbers.tsx";
 import { Markdown } from "./Markdown.tsx";
+import { Tooltip } from "../primitives/Tooltip.tsx";
 import styles from "./QuestionCard.module.css";
 
 export type QuestionState = "waiting" | "answered" | "dismissed";
@@ -72,6 +73,9 @@ function toDate(v: string | number | Date | null | undefined): Date | null {
  *             `ChatMessage intent="answer"` turn that follows; the card
  *             does not quote it, so nothing in the transcript is said twice.
  */
+/** Why the choices on someone else's question do nothing, and what does. */
+const TAKE_OVER = "Take over this task to answer";
+
 export function QuestionCard({ role, name, text, options, askedAt, answeredAt, dismissed, onChoose, waitingOn, isNew, className, ...rest }: QuestionCardProps) {
   const answered = toDate(answeredAt);
   const state: QuestionState = answered ? "answered" : dismissed ? "dismissed" : "waiting";
@@ -146,7 +150,22 @@ export function QuestionCard({ role, name, text, options, askedAt, answeredAt, d
             Waiting for {waitingOn} to answer
           </p>
         ) : null}
-        {hasOptions ? (
+        {hasOptions && someoneElse ? (
+          // Someone else's to answer: the choices say how to make it yours.
+          <Tooltip content={TAKE_OVER}>
+            <ul className={cx(styles["options"], styles["optionsElse"])} aria-label={`Choices offered. ${TAKE_OVER}.`} tabIndex={0}
+              data-testid="choices-someone-else">
+              {options.map((o, i) => (
+                <li key={i} className={styles["optionItem"]}>
+                  <span className={styles["option"]}>
+                    <span className={styles["optionIndex"]}>{i + 1}</span>
+                    {o}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </Tooltip>
+        ) : hasOptions ? (
           <ul className={styles["options"]} aria-label={clickable ? "Reply with one of" : "Choices offered"}>
             {options.map((o, i) => (
               <li key={i} className={styles["optionItem"]}>
