@@ -837,6 +837,12 @@ EmptyState, ScrollArea.
   dismissed it becomes a plain row with an "Answered" / "Not answered" tag
   and how long it waited. While waiting, choices are chips only with
   `onChoose`; otherwise they live in the composer. Settled, they are listed.
+  Waiting on someone else (`waitingOn`), the note says so and how to make
+  it yours, in words everyone sees: "Waiting for Ana to answer · Take over
+  this task to answer" (`kind="request"`: "…to decide"). The
+  choices are shown muted and do nothing; with a mouse, hovering them says
+  it again (`Tooltip keepOnPress`: a press leaves it up). The note is what
+  reaches keyboard, touch and screen readers. No tab stop that does nothing.
 - **ChatComposer** — answer (blocked on a question, with one-click options)
   vs steer (interrupts a running turn) vs prompt, visibly different.
 - **Markdown** — untrusted Markdown to React from a typed AST; streaming-safe;
