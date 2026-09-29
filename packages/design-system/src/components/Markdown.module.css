@@ -91,7 +91,6 @@
 .prompt {
   --md-gap: 0.75em;
   --md-h-gap: 1.6em;
-  --md-measure: var(--ds-measure-message);
   font-size: var(--ds-text-md);
   line-height: var(--ds-leading-prose);
 }

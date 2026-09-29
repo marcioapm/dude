@@ -4,7 +4,6 @@ import { cx } from "../util/cx.ts";
 import { IDENTITY_SLOTS } from "../tokens/palette.ts";
 import { Icon } from "../icons/index.tsx";
 import { ROLE_ICON, ROLE_LABEL } from "./AgentAvatar.tsx";
-import { stringSlot } from "../util/slot.ts";
 import styles from "./PersonAvatar.module.css";
 
 /** Anyone with a face: a name, and a photo when there is one. */
@@ -26,7 +25,10 @@ export type PersonAvatarSize = 16 | 20 | 24 | 28 | 32 | 40 | 56;
  * colour on every screen, with no profile record. djb2 over the id or name.
  */
 export function identitySlot(who: { readonly id?: string | undefined; readonly name: string }): number {
-  return stringSlot((who.id ?? who.name).trim().toLowerCase(), IDENTITY_SLOTS);
+  const key = (who.id ?? who.name).trim().toLowerCase();
+  let h = 5381;
+  for (let i = 0; i < key.length; i++) h = ((h << 5) + h + key.charCodeAt(i)) | 0;
+  return Math.abs(h) % IDENTITY_SLOTS;
 }
 
 /**

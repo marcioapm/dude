@@ -22,9 +22,9 @@ export interface LiveDiffProps extends Omit<HTMLAttributes<HTMLDivElement>, "chi
   /** What the agent did last ("Write LIVE.md · just now"): at the top of the file list, or above the diff without one. */
   readonly lastChange?: LastChange | undefined;
   /**
-   * First in the toolbar: what the diff sits among — a session's view
-   * switch — so the diff's controls and the page's share one row rather
-   * than stacking.
+   * First in the diff's own toolbar, when it draws one (no `toolbarIn`):
+   * what the diff sits among, so its controls and the page's share one row
+   * rather than stacking.
    */
   readonly leading?: ReactNode;
   /**
@@ -192,6 +192,7 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
   }, [follow, fresh]);
 
   const short = base.slice(0, 7);
+  const last = lastChange ? <LastChangeLine change={lastChange} /> : null;
   const tools = (
     <>
         {files.length > 0 ? (
@@ -232,14 +233,14 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
       )}
       {files.length === 0 ? (
         <div className={styles["empty"]}>
-          {lastChange ? <LastChangeLine change={lastChange} /> : null}
+          {last}
           {emptyMessage ?? "No changes yet."}
         </div>
       ) : (
         <div className={cx(styles["body"], !fileList && styles["bodyAlone"])}>
           {fileList ? (
             <nav className={styles["files"]} aria-label="Changed files">
-              {lastChange ? <LastChangeLine change={lastChange} /> : null}
+              {last}
               <button type="button" className={cx(styles["file"], styles["all"], !selected && styles["current"])}
                 aria-pressed={!selected} onClick={() => select(null)}>
                 <span className={styles["path"]}>
@@ -273,7 +274,7 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
             </nav>
           ) : null}
           <div className={styles["diffs"]} ref={scroller} data-testid="diffs">
-            {!fileList && lastChange ? <LastChangeLine change={lastChange} /> : null}
+            {fileList ? null : last}
             {shown.map((f) => (
               <section key={f.path} className={styles["section"]} data-testid="diff-section" data-path={f.path}>
                 <header className={styles["fileHead"]}>
