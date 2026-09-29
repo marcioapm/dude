@@ -56,17 +56,28 @@ async function loadRoleCredentials(): Promise<Credentials> {
 // most once per REFRESH_INTERVAL_MS, since it may keep returning the same credential.
 const REFRESH_WINDOW_MS = 300_000;
 const REFRESH_INTERVAL_MS = 30_000;
+// A credential is not signed with inside this margin of its expiry, so a request
+// in flight cannot outlive it.
+const SAFETY_MARGIN_MS = 60_000;
+// Failed refreshes back off 5 s, 10 s, 20 s, 40 s, then every 60 s; shared by all requests.
+const FAILURE_BACKOFF_MS = 5_000;
+const FAILURE_BACKOFF_MAX_MS = 60_000;
 let nextRefresh = 0;
+let failures = 0;
 
 function sameCredentials(a: Credentials, b: Credentials): boolean {
   return a.accessKeyId === b.accessKeyId && a.secretAccessKey === b.secretAccessKey && a.sessionToken === b.sessionToken;
 }
 
+const usable = (credentials: Credentials | undefined, now: number) =>
+  credentials !== undefined && credentials.expires - now > SAFETY_MARGIN_MS;
+
 async function roleClient(bucket: string): Promise<S3Client> {
   const now = Date.now();
-  if (!roleCredentials || roleCredentials.expires <= now ||
-      (roleCredentials.expires - now < REFRESH_WINDOW_MS && now >= nextRefresh)) {
+  const due = !roleCredentials || roleCredentials.expires - now < REFRESH_WINDOW_MS;
+  if (due && now >= nextRefresh) {
     refresh ??= loadRoleCredentials().then((credentials) => {
+      failures = 0;
       nextRefresh = Date.now() + REFRESH_INTERVAL_MS;
       if (!roleS3 || !roleCredentials || !sameCredentials(roleCredentials, credentials)) {
         roleS3 = new S3Client({
@@ -80,11 +91,18 @@ async function roleClient(bucket: string): Promise<S3Client> {
       }
       roleCredentials = credentials;
       return credentials;
+    }, (error: unknown) => {
+      nextRefresh = Date.now() + Math.min(FAILURE_BACKOFF_MS * 2 ** failures, FAILURE_BACKOFF_MAX_MS);
+      failures++;
+      throw error;
     }).finally(() => { refresh = undefined; });
-    // Never use an old credential after a failed refresh, even if it has not expired yet.
-    await refresh;
+    try {
+      await refresh;
+    } catch (error) {
+      if (!usable(roleCredentials, Date.now())) throw error;
+    }
   }
-  if (roleCredentials!.expires <= Date.now()) throw new Error("EC2 role credentials expired");
+  if (!usable(roleCredentials, Date.now())) throw new Error("EC2 role credentials unavailable");
   return roleS3!;
 }
 
