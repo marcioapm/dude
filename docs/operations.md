@@ -39,9 +39,10 @@ login:
   the repository for the runners' pull. A token lasts 12 hours; dude
   reuses it until an hour before it expires. Set `DUDE_ECR_ROLE_ARN`
   (recommended; see below) to mint tokens as a pull-only role instead.
-- `static`: `DUDE_REGISTRY` (a host, e.g. `ghcr.io`) and
-  `DUDE_REGISTRY_CREDENTIAL` (`user:password`), for GHCR and other
-  registries with long-lived tokens.
+- `static`: `DUDE_REGISTRY` (a host with an optional port, e.g. `ghcr.io`;
+  no scheme or path) and `DUDE_REGISTRY_CREDENTIAL` (`user:password`, or
+  a bare token, which lux sends as the password with the user `lux`), for
+  GHCR and other registries with long-lived tokens.
 
 #### A pull-only role for ECR
 
@@ -78,17 +79,24 @@ host's credentials instead.
 
 The login goes to lux as the secret `DUDE_REGISTRY_AUTH`, on the Run's
 submit and again on every resume (lux keeps no secret), so a Run parked
-for days resumes with a new token. It is the runner's: it never enters the
-agent's container. dude neither logs nor stores it. Only images in that
-registry get it: a project whose `runtimeImage` is elsewhere pulls without.
+for days resumes with a new token. This holds for every lux Run dude
+starts: agents' phase Runs and branch previews alike. A preview runs its
+project's preview image, else its `runtimeImage`, else `DUDE_AGENT_IMAGE`,
+and is resumed, when a person starts a server on a parked one, with a
+fresh login. The login is the runner's: it never enters the container.
+dude neither logs nor stores it. Only images in that registry get it: a
+project whose `runtimeImage` or preview image is elsewhere (`node:22` from
+Docker Hub) pulls without.
 A Run is resumed with the login it was started with: one started without a
 login resumes without. One started with a login waits, paused, until the
 same login is configured again: if the orchestrator restarts with
 `DUDE_REGISTRY_AUTH=none`, or logging in to another registry, its resume is
 not sent to lux, the orchestrator logs a warning naming the registry and
 `DUDE_REGISTRY_AUTH`, and checks again every minute. Restore the setting
-and restart, and the Run resumes with a fresh token. If ECR cannot be
-reached, starts and resumes wait and are retried.
+and restart, and the Run resumes with a fresh token. A parked preview in
+the same state stays parked and is retried every few seconds, with a
+`preview sync failed` warning. If ECR cannot be reached, starts and
+resumes wait and are retried.
 
 ## Processes
 
