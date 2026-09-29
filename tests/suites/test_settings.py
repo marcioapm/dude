@@ -14,26 +14,26 @@ from helpers import ApiClient, execute, query, wait_until
 
 
 def test_an_organizations_default_is_overridden_by_a_project_and_reset(client: ApiClient, project: dict):
-    org = client.patch("/v1/settings/organization", {"roles": {"reviewer": {"model": "org/review", "effort": "high"}}})
+    org = client.patch("/v1/settings/organization", {"roles": {"reviewer": {"model": "llm-anthropic/org-review", "effort": "high"}}})
     assert org.status_code == 200, org.text
-    assert org.json()["roles"]["reviewer"]["model"] == {"value": "org/review", "source": "organization"}
+    assert org.json()["roles"]["reviewer"]["model"] == {"value": "llm-anthropic/org-review", "source": "organization"}
 
     # The project follows it until it says otherwise.
     settings = client.get(f"/v1/projects/{project['id']}/settings").json()
-    assert settings["roles"]["reviewer"]["model"] == {"value": "org/review", "source": "organization"}
+    assert settings["roles"]["reviewer"]["model"] == {"value": "llm-anthropic/org-review", "source": "organization"}
     assert settings["roles"]["reviewer"]["effort"] == {"value": "high", "source": "organization"}
 
     # An override of one field leaves the others inherited.
     changed = client.patch(f"/v1/projects/{project['id']}/settings", {"roles": {"reviewer": {"effort": "low"}}}).json()
     assert changed["roles"]["reviewer"]["effort"] == {"value": "low", "source": "project"}
-    assert changed["roles"]["reviewer"]["model"] == {"value": "org/review", "source": "organization"}
+    assert changed["roles"]["reviewer"]["model"] == {"value": "llm-anthropic/org-review", "source": "organization"}
     # Stored as an override only.
     assert client.get(f"/v1/projects/{project['id']}").json()["agentModels"]["reviewer"] == {"effort": "low"}
 
     # The organization's later change still reaches what the project did not override.
-    client.patch("/v1/settings/organization", {"roles": {"reviewer": {"model": "org/review-2"}}})
+    client.patch("/v1/settings/organization", {"roles": {"reviewer": {"model": "llm-anthropic/org-review-2"}}})
     settings = client.get(f"/v1/projects/{project['id']}/settings").json()
-    assert settings["roles"]["reviewer"]["model"]["value"] == "org/review-2"
+    assert settings["roles"]["reviewer"]["model"]["value"] == "llm-anthropic/org-review-2"
 
     # Reset is a delete: the value is the organization's again, and the
     # project stores nothing for the role.
@@ -45,12 +45,12 @@ def test_an_organizations_default_is_overridden_by_a_project_and_reset(client: A
 def test_the_fixer_follows_the_implementer_without_calling_it_its_own(client: ApiClient, project: dict):
     # The project overrides the implementer's model; the fixer runs it too,
     # but has nothing of its own to reset.
-    settings = client.patch(f"/v1/projects/{project['id']}/settings", {"roles": {"implementer": {"model": "proj/impl"}}}).json()
-    assert settings["roles"]["implementer"]["model"] == {"value": "proj/impl", "source": "project"}
-    assert settings["roles"]["fixer"]["model"] == {"value": "proj/impl", "source": "organization"}
+    settings = client.patch(f"/v1/projects/{project['id']}/settings", {"roles": {"implementer": {"model": "llm-openai/proj-impl"}}}).json()
+    assert settings["roles"]["implementer"]["model"] == {"value": "llm-openai/proj-impl", "source": "project"}
+    assert settings["roles"]["fixer"]["model"] == {"value": "llm-openai/proj-impl", "source": "organization"}
 
-    settings = client.patch(f"/v1/projects/{project['id']}/settings", {"roles": {"fixer": {"model": "proj/fix"}}}).json()
-    assert settings["roles"]["fixer"]["model"] == {"value": "proj/fix", "source": "project"}
+    settings = client.patch(f"/v1/projects/{project['id']}/settings", {"roles": {"fixer": {"model": "llm-openai/proj-fix"}}}).json()
+    assert settings["roles"]["fixer"]["model"] == {"value": "llm-openai/proj-fix", "source": "project"}
 
 
 def test_delivery_is_the_factorys_then_the_organizations_then_the_projects(client: ApiClient, project: dict):
