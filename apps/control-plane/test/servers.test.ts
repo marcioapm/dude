@@ -209,6 +209,18 @@ describe("a project's servers", () => {
     expect((await call(adminKey, "PUT", `/v1/projects/${PROJECT}/preview-settings`, { idleTimeoutMinutes: 0 })).status).toBe(400);
   });
 
+  test("egress lux would refuse is refused, saying why", async () => {
+    for (const entry of ["*.github.com", "10.0.0.0/33", "10.0.0/8", "not a host", "::1/129"]) {
+      const res = await call(adminKey, "PUT", `/v1/projects/${PROJECT}/preview-settings`, { egress: ["github.com", entry] });
+      expect(res.status).toBe(400);
+      expect(JSON.stringify(await body(res))).toContain(entry);
+    }
+    const ok = ["*", "github.com", "10.0.0.5", "10.0.0.0/8", "2001:db8::/32", "2001:db8::1", "host_1.internal"];
+    const res = await call(adminKey, "PUT", `/v1/projects/${PROJECT}/preview-settings`, { egress: ok });
+    expect(res.status).toBe(200);
+    expect((await body(res)).egress).toEqual(ok);
+  });
+
   test("another organization sees no such project", async () => {
     expect((await call(otherKey, "GET", `/v1/projects/${PROJECT}/servers`)).status).toBe(404);
   });

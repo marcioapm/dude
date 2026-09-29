@@ -6,7 +6,8 @@
 
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { RunServer } from "@dude/domain";
+import { egressProblem, type RunServer } from "@dude/domain";
+import { HostChips } from "../src/components/HostChips.tsx";
 import { PreviewStages } from "../src/components/PreviewStages.tsx";
 import { draftOf, draftProblems, recipeOf } from "../src/components/ServerRecipe.tsx";
 import { ServerRow } from "../src/components/ServerRow.tsx";
@@ -161,5 +162,17 @@ describe("the recipe form", () => {
   test("what is saved: trimmed, the directory without slashes, empty setup as null, blank vars dropped", () => {
     const d = { ...draftOf(null), name: " web ", port: "3000", command: " npm run dev ", workdir: "/apps/web/", setup: "  ", env: [{ name: "", value: "x" }, { name: "A", value: "1" }] };
     expect(recipeOf(d)).toEqual({ name: "web", port: 3000, command: "npm run dev", workdir: "apps/web", setup: null, env: [{ name: "A", value: "1" }], autostartInPreviews: false });
+  });
+});
+
+describe("the egress allowlist", () => {
+  test("what lux would refuse is said so, and a host listed already that it would is marked", () => {
+    expect(egressProblem("*")).toBeNull();
+    for (const ok of ["github.com", "10.0.0.5", "10.0.0.0/8", "2001:db8::/32", "::1"]) expect(egressProblem(ok)).toBeNull();
+    expect(egressProblem("*.github.com")).toContain("wildcards");
+    expect(egressProblem("10.0.0.0/33")).toContain("CIDR");
+    const h = html(<HostChips hosts={["github.com", "*.npmjs.org"]} validate={egressProblem} onChange={() => {}} />);
+    expect(h).toMatch(/data-host="\*\.npmjs\.org" data-invalid="true"/);
+    expect(h).not.toMatch(/data-host="github\.com" data-invalid/);
   });
 });

@@ -53,12 +53,53 @@ export interface Recipe extends RecipeInput {
   updatedBy: { id: string; name: string } | null;
 }
 
+/** A concrete hostname: labels of letters, digits, '-' and '_'; no wildcards. */
+const HOSTNAME = /^[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?(\.[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?)*\.?$/i;
+const IPV4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
+
+function isIPv6(s: string): boolean {
+  if (!/^[0-9a-f:.]+$/i.test(s) || !s.includes(":")) return false;
+  try {
+    new URL(`http://[${s}]/`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Why lux would refuse an egress entry, or null if it takes it: "*"
+ * (anywhere), an address, a CIDR range, or a concrete hostname. lux
+ * resolves each host it allows, so a wildcard host is refused (and would
+ * fail every preview); list the hosts themselves. Mirrored by the
+ * orchestrator's servers.EgressRule.
+ */
+export function egressProblem(entry: string): string | null {
+  const e = entry.trim();
+  if (e === "*" || IPV4.test(e) || isIPv6(e)) return null;
+  if (e.includes("/")) {
+    const [ip, bits, ...rest] = e.split("/");
+    const max = IPV4.test(ip!) ? 32 : isIPv6(ip!) ? 128 : -1;
+    if (rest.length === 0 && max > 0 && /^\d{1,3}$/.test(bits!) && Number(bits) <= max) return null;
+    return `${e}: not a CIDR range (an address, '/', and a prefix length up to ${max > 0 ? max : 32})`;
+  }
+  if (e.includes("*")) return `${e}: wildcards cannot be resolved; list each host (or "*" for anywhere)`;
+  if (e.length > 253 || !HOSTNAME.test(e)) return `${e}: not a hostname, address or CIDR range`;
+  return null;
+}
+
 /** How a project's branch previews run (`PUT /v1/projects/:id/preview-settings`). */
 export const previewSettingsSchema = z.object({
   /** null: the project's runtime image. */
   image: z.string().trim().min(1).max(500).nullable().default(null),
   /** Hosts (or addresses, CIDR ranges) a preview may reach; "*" for anywhere. */
-  egress: z.array(z.string().trim().min(1).max(253)).max(200).default([]),
+  egress: z
+    .array(z.string().trim().min(1).max(253).superRefine((e, ctx) => {
+      const problem = egressProblem(e);
+      if (problem) ctx.addIssue({ code: z.ZodIssueCode.custom, message: problem });
+    }))
+    .max(200)
+    .default([]),
   idleTimeoutMinutes: z.number().int().min(1).max(7 * 24 * 60).default(30),
 });
 export type PreviewSettings = z.infer<typeof previewSettingsSchema>;
