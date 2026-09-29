@@ -69,6 +69,13 @@ export interface TaskScreenProps {
 /** A run's plan, as its latest `agent.plan.updated` left it: for the running step's line. */
 type Plans = ReadonlyMap<string, { done: number; total: number; current: string | null }>;
 
+/**
+ * The servers.changed that start, end, park or wake a preview run: the
+ * Sessions tab lists it, so the task is read again. Not a server's own
+ * state change, which only the servers re-read for.
+ */
+const RUN_CHANGES: ReadonlySet<string> = new Set(["created", "submitted", "stopped", "failed", "parked", "resumed"]);
+
 export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: TaskScreenProps) {
   const [item, setItem] = useState<TaskDetail | null>(null);
   const [missing, setMissing] = useState(false);
@@ -132,13 +139,15 @@ export function TaskScreen({ client, taskId, onOpenRun, breadcrumb, onBack }: Ta
   }, [load]);
 
   // The servers change on their own stream event, and the rest of the page
-  // on any other. A stream that comes back replays nothing, so its return
-  // re-reads the servers too: they may have moved while nothing could say so.
+  // on any other — and on a servers.changed that starts or ends a preview
+  // run (RUN_CHANGES), not on each server's state change. A stream that
+  // comes back replays nothing, so its return re-reads the servers too:
+  // they may have moved while nothing could say so.
   const [serversVersion, setServersVersion] = useState(0);
   const stream = useReloadOnEvents({ client, taskId }, () => void load(), 300, (e) => {
     if (e.eventType === EventTypes.ServersChanged) {
       setServersVersion((v) => v + 1);
-      return true;
+      return !RUN_CHANGES.has(String((e.payload as { change?: unknown } | null)?.change));
     }
     return false;
   });
