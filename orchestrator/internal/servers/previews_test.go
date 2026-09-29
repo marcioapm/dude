@@ -2,6 +2,7 @@ package servers
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"slices"
@@ -97,6 +98,33 @@ func TestAPreviewEndsWithItsTaskAndALostOneIsCancelled(t *testing.T) {
 	if n := len(fake.Cancelled()); n != 3 {
 		t.Errorf("a second sweep cancelled again: %v", fake.Cancelled())
 	}
+
+	// A task taken up again after the sweep read it as over keeps its
+	// preview, in dude and in lux.
+	retried := "wi_" + org + "_retried"
+	exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status) VALUES ($1, $2, 'prj_'||$2, 5, 'T', 'G', 'running')`, retried, org)
+	preview("run_retried", retried, "running", "running")
+	if err := p.endWithTask(ctx, previewRun{ID: "run_retried", Org: org, ProjectID: "prj_" + org, TaskID: retried,
+		Status: "running", LuxRunID: "lux_run_retried", LuxState: "running", TaskEnded: true}); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	if err := owner.QueryRow(ctx, `SELECT status::text FROM runs WHERE id = 'run_retried'`).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "running" || len(fake.Cancelled()) != 3 {
+		t.Errorf("a retried task's preview is %s; cancelled %v", status, fake.Cancelled())
+	}
+
+	// And a task that is over takes no new one.
+	if _, err := p.StartPreview(ctx, org, "wi_"+org+"_done", ""); !isRefusal(err, 409, "task_finished") {
+		t.Errorf("a preview of a finished task = %v", err)
+	}
+}
+
+func isRefusal(err error, status int, code string) bool {
+	var e *Error
+	return errors.As(err, &e) && e.Status == status && e.Code == code
 }
 
 // readLux answers the reads a task's servers take: no servers, the Run as
