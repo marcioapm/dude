@@ -41,6 +41,8 @@ type fakeECR struct {
 	clock  time.Time
 	minted []string
 	fail   error
+	// calls counts every GetAuthorizationToken, failed ones included.
+	calls int
 	// signers is the access key of the credentials each call was given
 	// (options' Credentials), "" for the client's own.
 	signers []string
@@ -91,6 +93,7 @@ func (f *fakeECR) GetAuthorizationToken(ctx context.Context, _ *ecr.GetAuthoriza
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.calls++
 	if f.fail != nil {
 		return nil, f.fail
 	}
@@ -107,7 +110,7 @@ func (f *fakeECR) GetAuthorizationToken(ctx context.Context, _ *ecr.GetAuthoriza
 // come from, through a fake ECR.
 func (w *world) withECR() *fakeECR {
 	api := &fakeECR{clock: time.Date(2026, 9, 26, 8, 0, 0, 0, time.UTC)}
-	w.syncer.Registry = registry.NewECR(ecrRegistry, api, api.now)
+	w.syncer.Registry = registry.NewECR(ecrRegistry, api, api.now, registry.WithLog(quiet))
 	mustExec(w.t, w.owner, `UPDATE projects SET runtime_image = $2 WHERE id = $1`, w.project, ecrImage)
 	return api
 }
@@ -536,7 +539,86 @@ func TestAnECROutageDelaysARunAndDoesNotFailIt(t *testing.T) {
 		t.Fatalf("a Run went ahead or failed without its login")
 	}
 	api.setFail(nil)
+	api.advance(registry.FirstRetry) // past the provider's back-off
 	w.retried(w.runOf(wi), 5*time.Second, func() bool { return len(w.lux.Runs()) == 1 })
+}
+
+func (f *fakeECR) attempts() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
+// Runs waiting on a failing login — three phase Runs and a preview to be
+// submitted, and a parked Run to be resumed — share the provider's one
+// back-off: sweeps every five seconds for ten minutes ask ECR once per
+// back-off step, not once per Run per sweep. None is submitted, resumed
+// or failed meanwhile, and all go ahead once ECR answers.
+func TestRunsWaitingOnAFailingLoginShareOneBackOff(t *testing.T) {
+	w := newWorld(t)
+	api := w.withECR()
+	// The top of each delay's range: steps of 5, 10, 20… seconds exactly.
+	w.syncer.Registry = registry.NewECR(ecrRegistry, api, api.now, registry.WithLog(quiet),
+		registry.WithJitter(func() float64 { return 0.999999999 }))
+	w.previews.Registry = w.syncer.Registry
+	w.lux.Decide = hang
+
+	parked := w.task()
+	w.deliver(parked)
+	parkedRun := w.parked(parked)
+	api.advance(11 * time.Hour) // its token past the refresh point
+	api.setFail(errors.New("dial tcp: lookup api.ecr.eu-west-1.amazonaws.com: i/o timeout"))
+	w.call("/internal/runs/"+parkedRun+"/resume", map[string]any{})
+	var pending []string
+	for range 3 {
+		wi := w.task()
+		w.deliver(wi)
+		pending = append(pending, wi)
+	}
+	previewTask := w.task()
+	if code, out := w.do("POST", "/internal/tasks/"+previewTask+"/preview", nil); code != 201 {
+		t.Fatalf("start preview = %d %v", code, out)
+	}
+	w.until("every Run to wait on its login", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE organization_id = $1 AND next_attempt_at IS NOT NULL`, w.org) == 5
+	})
+
+	// Ten minutes of sweeps five seconds apart, each Run due every time.
+	before := api.attempts()
+	for range 120 {
+		mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE organization_id = $1`, w.org)
+		w.pump()
+		api.advance(5 * time.Second)
+	}
+	// 5, 15, 35, 75, 155, 315 and 615 seconds from the first failure.
+	if n := api.attempts() - before; n > 7 {
+		t.Fatalf("ECR asked %d times in ten minutes by 5 waiting Runs, want at most 7", n)
+	}
+	if len(w.lux.Runs()) != 1 || w.lux.Runs()[0].Resumed != 0 {
+		t.Fatalf("a Run went ahead without its login: %d lux Runs", len(w.lux.Runs()))
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE organization_id = $1 AND status = 'failed'`, w.org); n != 0 {
+		t.Fatalf("%d Runs failed while waiting on their login:\n%s", n, w.describeRuns())
+	}
+
+	api.setFail(nil)
+	api.advance(registry.MaxRetry)
+	w.until("every Run to go ahead", func() bool {
+		mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE organization_id = $1`, w.org)
+		return len(w.lux.Runs()) == 5 && w.lux.Runs()[0].Resumed == 1
+	})
+	tokens := api.tokens()
+	if len(tokens) != 2 {
+		t.Fatalf("ECR minted %d tokens, want the first submit's and one after the outage", len(tokens))
+	}
+	for _, r := range w.lux.Runs()[1:] {
+		if v, _ := loginIn(submitted(t, r).Secrets); v != "AWS:"+tokens[1] {
+			t.Errorf("a Run submitted with %q, want the token minted after the outage", v)
+		}
+	}
+	if v, _ := loginIn(w.lux.Runs()[0].ResumeSecrets[0]); v != "AWS:"+tokens[1] {
+		t.Errorf("the parked Run resumed with %q, want the token minted after the outage", v)
+	}
 }
 
 const pullRole = "arn:aws:iam::123456789012:role/dude-ecr-pull"
@@ -595,6 +677,7 @@ func TestAFailedAssumeRoleDelaysASubmitAndDoesNotFailIt(t *testing.T) {
 	}
 
 	roles.setFail(nil)
+	api.advance(registry.FirstRetry) // past the provider's back-off
 	w.retried(w.runOf(wi), 5*time.Second, func() bool { return len(w.lux.Runs()) == 1 })
 	sent, _ := loginIn(submitted(t, w.lux.Runs()[0]).Secrets)
 	if tokens, signers := api.tokens(), api.signedBy(); len(tokens) != 1 || sent != "AWS:"+tokens[0] || signers[0] != "ASIAPULL1" {
@@ -636,6 +719,7 @@ func TestAFailedAssumeRoleDelaysAResumeAndDoesNotFailIt(t *testing.T) {
 	}
 
 	roles.setFail(nil)
+	api.advance(registry.FirstRetry) // past the provider's back-off
 	w.retried(runID, 5*time.Second, func() bool { return r.Resumed == 1 })
 	fresh, _ := loginIn(r.ResumeSecrets[0])
 	tokens := api.tokens()
@@ -669,6 +753,7 @@ func TestTheRegistryLoginIsNeverLoggedOrStored(t *testing.T) {
 		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND next_attempt_at IS NOT NULL`, wi) == 1
 	})
 	api.setFail(nil)
+	api.advance(registry.FirstRetry) // past the provider's back-off
 	w.retried(w.runOf(wi), 5*time.Second, func() bool { return len(w.lux.Runs()) == 1 })
 
 	runID := w.parked(wi)
@@ -679,6 +764,7 @@ func TestTheRegistryLoginIsNeverLoggedOrStored(t *testing.T) {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND next_attempt_at IS NOT NULL`, runID) == 1
 	})
 	api.setFail(nil)
+	api.advance(registry.FirstRetry) // past the provider's back-off
 	w.retried(runID, 5*time.Second, func() bool { return w.lux.Runs()[0].Resumed == 1 })
 	w.until("the implementer to finish", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1

@@ -87,7 +87,7 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("agent configuration: %w", err)
 	}
-	registryLogin, err := registry.FromEnv(ctx, os.Getenv, agent.DefaultImage)
+	registryLogin, err := registry.FromEnv(ctx, os.Getenv, agent.DefaultImage, registry.WithLog(log))
 	if err != nil {
 		return fmt.Errorf("registry login: %w", err)
 	}

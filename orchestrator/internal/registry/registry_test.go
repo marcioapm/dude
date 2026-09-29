@@ -21,9 +21,12 @@ type fakeECR struct {
 	ttl   time.Duration
 	calls int
 	err   error
+	// attempts counts every call, failed ones included.
+	attempts int
 }
 
 func (f *fakeECR) GetAuthorizationToken(context.Context, *ecr.GetAuthorizationTokenInput, ...func(*ecr.Options)) (*ecr.GetAuthorizationTokenOutput, error) {
+	f.attempts++
 	if f.err != nil {
 		return nil, f.err
 	}

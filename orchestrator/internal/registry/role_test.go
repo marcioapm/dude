@@ -69,11 +69,14 @@ type fakeSTS struct {
 	ttl   time.Duration
 	calls []string
 	err   error
+	// attempts counts every call, failed ones included.
+	attempts int
 }
 
 func (f *fakeSTS) AssumeRole(_ context.Context, in *sts.AssumeRoleInput, _ ...func(*sts.Options)) (*sts.AssumeRoleOutput, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.attempts++
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -296,7 +299,8 @@ func TestWithoutARoleTheHostsCredentialsMint(t *testing.T) {
 func TestAFailedAssumeRoleIsAnErrorWithoutAnECRCall(t *testing.T) {
 	client, signers := ecrServer(t)
 	api := &fakeSTS{ttl: time.Hour, err: errors.New("AccessDenied: not authorized to perform sts:AssumeRole")}
-	p := NewECRWithRole(ecrHost, role, client, api, time.Now)
+	c := &clock{time.Now()}
+	p := NewECRWithRole(ecrHost, role, client, api, c.now)
 	v, err := p.Credential(context.Background())
 	if err == nil || v != "" || !strings.Contains(err.Error(), "AssumeRole") {
 		t.Fatalf("got %q, %v; want an AssumeRole error", v, err)
@@ -307,6 +311,7 @@ func TestAFailedAssumeRoleIsAnErrorWithoutAnECRCall(t *testing.T) {
 	api.mu.Lock()
 	api.err = nil
 	api.mu.Unlock()
+	c.t = c.t.Add(FirstRetry)
 	if v, err := p.Credential(context.Background()); err != nil || v != "AWS:pw-ASIAROLE1" {
 		t.Fatalf("after recovery: %q, %v", v, err)
 	}
