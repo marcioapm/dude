@@ -255,6 +255,12 @@ func (p *ecrProvider) mint(ctx context.Context) (string, time.Time, error) {
 	if err != nil || !strings.Contains(string(decoded), ":") {
 		return "", time.Time{}, errors.New("ECR GetAuthorizationToken returned a token that is not base64 of user:password")
 	}
+	// A token that would be replaced at once is no better than none: a Run
+	// started with it could lose its login while queued or pulling.
+	if left := data.ExpiresAt.Sub(p.now()); left <= RefreshBefore {
+		return "", time.Time{}, fmt.Errorf("ECR GetAuthorizationToken returned a token valid for %s, want more than %s",
+			left.Round(time.Second), RefreshBefore)
+	}
 	return string(decoded), *data.ExpiresAt, nil
 }
 

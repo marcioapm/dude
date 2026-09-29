@@ -63,6 +63,26 @@ func TestAnECRTokenIsCachedUntilAnHourBeforeItExpires(t *testing.T) {
 	}
 }
 
+// A freshly minted token valid for RefreshBefore or less (clock skew, a
+// stale response) is a failed mint, retried after the back-off, and is
+// neither returned nor cached; one valid for longer is.
+func TestAFreshTokenTooCloseToExpiryIsAFailedMint(t *testing.T) {
+	for _, ttl := range []time.Duration{-time.Minute, 0, 30 * time.Minute, RefreshBefore} {
+		c := &clock{time.Date(2026, 9, 26, 8, 0, 0, 0, time.UTC)}
+		api := &fakeECR{now: c.now, ttl: ttl}
+		logs, _ := logTo()
+		p := NewECR(ecrHost, api, c.now, logs)
+		if v, err := p.Credential(context.Background()); err == nil || v != "" || Permanent(err) {
+			t.Fatalf("ttl %v: got %q, %v; want a passing error", ttl, v, err)
+		}
+		api.ttl = RefreshBefore + time.Second
+		c.t = c.t.Add(FirstRetry)
+		if v, err := p.Credential(context.Background()); err != nil || v != "AWS:pw-2" {
+			t.Fatalf("ttl %v, then a good token: %q, %v; want the second token", ttl, v, err)
+		}
+	}
+}
+
 func TestAnECRFailureIsAnErrorAndNotAStaleToken(t *testing.T) {
 	c := &clock{time.Now()}
 	api := &fakeECR{now: c.now, ttl: 12 * time.Hour}
