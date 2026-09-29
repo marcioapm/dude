@@ -54,17 +54,22 @@ describe("QuestionCard choices", () => {
   test("waiting on someone else: says who, lists the choices, offers none", () => {
     const h = html(<QuestionCard role="orchestrator" text="Ship it?" options={options} onChoose={noop} waitingOn="Ana" />);
     expect(buttons(h)).toEqual([]);
+    // Whom it waits on, and how to make it yours, in words everyone sees.
     expect(h).toContain("Waiting for Ana to answer");
-    // How to make it yours: on hover for a pointer, in the note for a screen reader — no dead tab stop.
-    expect(h).toContain("Take over this task to answer.");
+    expect(h).toContain("· Take over this task to answer</span>");
     expect(h).not.toContain("tabindex");
     expect(h).toContain('aria-label="Choices offered"');
     expect(h).not.toContain("Needs you");
   });
 
-  test("a request waiting on someone else is theirs to decide, not answer", () => {
+  test("a question with no choices still says how to make it yours", () => {
+    expect(html(<QuestionCard role="orchestrator" text="Which locale?" onChoose={noop} waitingOn="Ana" />)).toContain("Take over this task to answer");
+  });
+
+  test("a request waiting on someone else is theirs to decide", () => {
     const h = html(<QuestionCard role="orchestrator" text="Read web?" options={["Approve", "Decline"]} onChoose={noop} waitingOn="Ana" verb="decide" />);
-    expect(h).toContain("Take over this task to decide.");
+    expect(h).toContain("Waiting for Ana to decide");
+    expect(h).toContain("Take over this task to decide");
   });
 
   test("waiting announces once in a status region", () => {
