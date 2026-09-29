@@ -90,8 +90,9 @@ func EmbedQuery(ctx context.Context, e embeddings.Embedder, text string) Embedde
 
 // wordQuery is the query's words for Postgres: any of the plain words and
 // quoted phrases (an agent asks in sentences; ranking puts documents with
-// more of them first), and none of the -words. In English stems
-// (deliveries → deliveri) and as the simple words (keys, names) both.
+// more of them first), and none of the -words. Parsed as English only: it
+// stems (deliveries → deliveri), keeps keys whole (TEXT-12), and drops stop
+// words — which, any of them matching, would match nearly everything.
 func wordQuery(text string) (any string, none string) {
 	var pos, neg []string
 	for _, t := range terms(text) {
@@ -164,10 +165,10 @@ func Ranked(ctx context.Context, tx pgx.Tx, emb Embedded, q Query) (Outcome, err
 	}
 
 	// $4 excludes: a document with any -word is out of both lists.
-	const excluded = `($4 = '' OR NOT tsv @@ (websearch_to_tsquery('english', $4) || websearch_to_tsquery('simple', $4)))`
+	const excluded = `($4 = '' OR NOT tsv @@ websearch_to_tsquery('english', $4))`
 	// Ranked by rank alone: what is shown (snippet, key) is read for the
 	// few results that survive fusion, not for every candidate.
-	rows, err := tx.Query(ctx, `WITH q AS (SELECT websearch_to_tsquery('english', $1) || websearch_to_tsquery('simple', $1) AS q)
+	rows, err := tx.Query(ctx, `WITH q AS (SELECT websearch_to_tsquery('english', $1) AS q)
 		SELECT source_type, source_id, ts_rank_cd(tsv, q.q)
 		FROM search_documents d, q
 		WHERE numnode(q.q) > 0 AND tsv @@ q.q AND `+excluded+` AND `+scope+`
@@ -237,10 +238,21 @@ func Ranked(ctx context.Context, tx pgx.Tx, emb Embedded, q Query) (Outcome, err
 		}
 		out.Results = append(out.Results, *r)
 	}
+	// Equal scores (each first in one list) go to the nearer in meaning,
+	// then the better by words: a tie is not settled by an id.
 	sort.Slice(out.Results, func(i, j int) bool {
 		a, b := out.Results[i], out.Results[j]
 		if a.Score != b.Score {
 			return a.Score > b.Score
+		}
+		if (a.VectorRank > 0) != (b.VectorRank > 0) {
+			return a.VectorRank > 0
+		}
+		if a.VectorRank != b.VectorRank {
+			return a.VectorRank < b.VectorRank
+		}
+		if a.TextScore != b.TextScore {
+			return a.TextScore > b.TextScore
 		}
 		return a.Type+a.ID < b.Type+b.ID
 	})
@@ -263,7 +275,7 @@ func show(ctx context.Context, tx pgx.Tx, words string, results []Result) error 
 		types[i], ids[i] = r.Type, r.ID
 		at[r.Type+"/"+r.ID] = i
 	}
-	rows, err := tx.Query(ctx, `WITH q AS (SELECT websearch_to_tsquery('english', $3) || websearch_to_tsquery('simple', $3) AS q)
+	rows, err := tx.Query(ctx, `WITH q AS (SELECT websearch_to_tsquery('english', $3) AS q)
 		SELECT d.source_type, d.source_id, coalesce(d.project_id, ''), d.title, d.embedding IS NOT NULL,
 			CASE WHEN numnode(q.q) > 0 AND d.tsv @@ q.q
 				THEN ts_headline('english', d.body, q.q, 'MaxFragments=1,MaxWords=24,MinWords=8,StartSel="",StopSel=""')
