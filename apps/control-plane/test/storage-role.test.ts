@@ -110,12 +110,17 @@ test("denied and malformed refresh fail closed without S3 requests", async () =>
   const count = requests.length;
   denied = true;
   const now = Date.now;
-  Date.now = () => now() + 3_400_000;
+  // About 40 s before expiry: inside the safety margin, so the cached credential is not used.
+  Date.now = () => now() + 3_630_000;
   try {
     await expect(putObject("denied", new Uint8Array([1]), "image/png")).rejects.toThrow();
     denied = false;
     malformed = true;
+    const calls = metadataCalls;
+    // Past the 5 s backoff of the denied attempt.
+    Date.now = () => now() + 3_636_000;
     await expect(getObject("malformed")).rejects.toThrow();
+    expect(metadataCalls).toBe(calls + 3);
   } finally {
     Date.now = now;
     denied = false;
@@ -143,4 +148,32 @@ test("an unchanged near-expiry credential is rechecked on a throttle and keeps o
   expect(clientsBuilt).toBe(1);
   expect(requests.length).toBe(60);
   for (const request of requests) signed(request, 0);
+});
+
+test("an IMDS outage backs off, serves while the cached credential is valid, then fails closed", async () => {
+  const storage = await fresh();
+  generation = 0;
+  expiry = Date.now() + 240_000;
+  await storage.putObject("outage-start", new Uint8Array([1]), "image/png");
+  metadataCalls = 0;
+  requests.length = 0;
+  denied = true;
+  const outcomes: boolean[] = [];
+  try {
+    // One request per second from the start of the outage until past expiry.
+    for (let second = 0; second < 240; second++) {
+      setClock(second * 1000);
+      outcomes.push(await storage.putObject(`outage-${second}`, new Uint8Array([1]), "image/png").then(() => true, () => false));
+    }
+  } finally {
+    Date.now = realNow;
+    denied = false;
+  }
+  // Credential expires at 240 s; the 60 s margin ends usable service at 180 s.
+  expect(outcomes.slice(0, 180).every(Boolean)).toBe(true);
+  expect(outcomes.slice(180).some(Boolean)).toBe(false);
+  expect(requests.length).toBe(180);
+  for (const request of requests) signed(request, 0);
+  // Attempts at 30, 35, 45, 65, 105, 165, 225 s; a denied token PUT is one call each.
+  expect(metadataCalls).toBe(7);
 });
