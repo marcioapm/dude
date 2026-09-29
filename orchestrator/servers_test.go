@@ -123,7 +123,7 @@ func TestAWorkingAgentsServersAreItsRunsThroughLux(t *testing.T) {
 	_, out = w.do("GET", "/internal/runs/"+runID+"/servers", nil)
 	raw, _ := json.Marshal(serverNamed(out, "web"))
 	_ = json.Unmarshal(raw, &spec)
-	if !slices.Equal(spec.Command, []string{"sh", "-c", "npm ci && exec npm run dev -- --port 3000"}) ||
+	if !slices.Equal(spec.Command, []string{"sh", "-c", "npm ci && npm run dev -- --port 3000"}) ||
 		spec.Workdir != "/workspace/repos/target/apps/web" || spec.Env["PORT"] != "1" {
 		t.Errorf("lux has web as %s", raw)
 	}
