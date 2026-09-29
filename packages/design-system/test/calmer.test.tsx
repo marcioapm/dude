@@ -9,7 +9,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { PR_DISPLAY_STATES, type PrDisplayState } from "@dude/domain";
 import { AgentPlan, PlanMeter } from "../src/components/AgentPlan.tsx";
 import { Cost } from "../src/components/Cost.tsx";
-import { MarkdownDocument, highlightMarkdown } from "../src/components/MarkdownDocument.tsx";
+import { MarkdownDocument, applyFormat, highlightMarkdown } from "../src/components/MarkdownDocument.tsx";
+import { Markdown } from "../src/components/Markdown.tsx";
 import { PersonAvatar, PersonAvatarStack } from "../src/components/PersonAvatar.tsx";
 import { PR_DISPLAY_SPECS, PrChip, prFacts, type PrChipPullRequest } from "../src/components/PrChip.tsx";
 import { ProjectAvatar } from "../src/components/ProjectAvatar.tsx";
@@ -177,6 +178,32 @@ describe("AgentPlan", () => {
     const h = html(<PlanMeter done={2} total={5} />);
     expect((h.match(/<i /g) ?? []).length).toBe(5);
     expect(h).toContain('data-s="current"');
+  });
+});
+
+describe("prompt editing", () => {
+  test("bold and code wrap the selection and keep it selected", () => {
+    expect(applyFormat("say hi now", 4, 6, "bold")).toEqual({ text: "say **hi** now", start: 6, end: 8 });
+    expect(applyFormat("run bun", 4, 7, "code")).toEqual({ text: "run `bun`", start: 5, end: 8 });
+  });
+  test("heading toggles on every selected line", () => {
+    const on = applyFormat("one\ntwo\nthree", 0, 7, "heading");
+    expect(on.text).toBe("## one\n## two\nthree");
+    expect(applyFormat(on.text, on.start, on.end, "heading").text).toBe("one\ntwo\nthree");
+  });
+  test("a variable goes in at the caret", () => {
+    expect(applyFormat("Goal: ", 6, 6, { insert: "{{task.goal}}" })).toEqual({ text: "Goal: {{task.goal}}", start: 19, end: 19 });
+  });
+  test("a prompt reads the variables dude fills as chips, and nothing else", () => {
+    const h = html(<Markdown source={"Goal: {{task.goal}} on `{{run.branch}}`, `bun test`, {{task.goals}}"} variant="prompt" />);
+    expect(h.match(/title="Filled in for each run: [\w.]+"/g)).toEqual([
+      'title="Filled in for each run: task.goal"',
+      'title="Filled in for each run: run.branch"',
+    ]);
+    // A backticked variable is still code; a typo stays as the agent reads it.
+    expect(h).toMatch(/<code[^>]*><span[^>]*title="Filled in for each run: run.branch"/);
+    expect(h).toContain(">bun test</code>");
+    expect(text(h)).toContain("{{task.goals}}");
   });
 });
 

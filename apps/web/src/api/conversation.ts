@@ -235,6 +235,8 @@ export interface Conversation {
   activity: Extract<ActivityKind, "thinking" | "streaming" | "tool"> | null;
   /** The tool being waited on, when activity is "tool". */
   activeTool: { name: string; since: string } | null;
+  /** How often it called each tool, by the tool's name as the harness gives it. */
+  toolCounts: ReadonlyMap<string, number>;
 }
 
 /** A todo as the harness emits it inside a `todowrite` call. */
@@ -272,6 +274,7 @@ export interface Projection {
   contextWindow: number;
   activity: Conversation["activity"];
   activeTool: Conversation["activeTool"];
+  toolCounts: Map<string, number>;
   /** Highest cursor folded in; lets a caller skip what it already applied. */
   cursor: number;
 }
@@ -291,6 +294,7 @@ export function emptyProjection(): Projection {
     contextWindow: 0,
     activity: null,
     activeTool: null,
+    toolCounts: new Map(),
     cursor: 0,
   };
 }
@@ -358,6 +362,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       }
 
       case EventTypes.ToolCalled: {
+        state.toolCounts.set(tool, (state.toolCounts.get(tool) ?? 0) + 1);
         const callId = String(payload.callId ?? event.eventId);
         const turn: ToolTurn = {
           kind: "tool",
@@ -615,6 +620,7 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
       openQuestion: openQuestion(state),
       activity: state.activity,
       activeTool: state.activeTool,
+      toolCounts: state.toolCounts,
     };
   }
 
@@ -642,6 +648,7 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
     openQuestion: null,
     activity: null,
     activeTool: null,
+    toolCounts: state.toolCounts,
   };
 }
 

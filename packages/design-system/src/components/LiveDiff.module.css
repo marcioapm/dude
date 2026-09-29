@@ -16,34 +16,17 @@
 
 .head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  row-gap: var(--ds-space-8);
   gap: var(--ds-space-12);
   min-width: 0;
-  /* Clear of the pane's edges, where the file list and diff meet them. */
-  padding-inline: var(--ds-space-12);
   font-size: var(--ds-text-sm);
   color: var(--ds-color-text-muted);
 }
-.live {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--ds-space-6);
-  padding: 2px var(--ds-space-8);
-  border-radius: var(--ds-radius-full);
-  background: var(--ds-tone-success-bg);
-  color: var(--ds-tone-success-fg);
-  font-size: var(--ds-text-xs);
-  font-weight: var(--ds-weight-semibold);
-}
-.live i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  animation: global(ds-pulse) var(--ds-cadence-breathe) infinite;
-}
 .since {
-  min-width: 0;
+  min-width: 12ch;
+  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -63,26 +46,56 @@
 .spacer {
   flex: 1;
 }
+/* What the agent did last: above the files, where the change lands. */
 .last {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: var(--ds-space-6);
+  min-width: 0;
+  padding: var(--ds-space-4) var(--ds-space-8) var(--ds-space-8);
   font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.lastFace {
+  display: inline-flex;
+  flex: none;
+}
+.lastTool,
+.lastPath,
+.lastWhen {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The tool word gives way first, the file name last. */
+.lastTool,
+.lastWhen {
+  flex: 0 100 auto;
+}
+.lastPath {
+  flex: 0 1 auto;
+  font-family: var(--ds-font-mono);
+  color: var(--ds-color-text-secondary);
+}
+/* The toolbar drawn into a page's bar: its controls laid out as here. */
+.headIn {
+  flex: 1;
+}
+/* The toggle's words stay on one line beside it. */
+.head label {
   white-space: nowrap;
 }
-.add {
-  color: var(--ds-diff-add-fg);
-}
-.del {
-  color: var(--ds-diff-del-fg);
-}
-
 .body {
   flex: 1;
   min-height: 0;
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
   background: var(--ds-color-chrome);
+}
+.bodyAlone {
+  grid-template-columns: minmax(0, 1fr);
 }
 .files {
   overflow: auto;
@@ -129,7 +142,7 @@
   white-space: nowrap;
 }
 .path b {
-  font-weight: var(--ds-weight-regular);
+  font-weight: var(--ds-weight-medium);
   color: var(--ds-color-text-strong);
 }
 .dir {
@@ -201,14 +214,16 @@
   font-weight: var(--ds-weight-medium);
   color: var(--ds-color-text-strong);
 }
+/* Where a hunk starts: quiet, on a wash, so the changes stay the loudest thing. */
 .hunk {
   padding: 3px var(--ds-space-12);
-  background: var(--ds-diff-hunk-bg);
-  color: var(--ds-diff-hunk-fg);
+  background: var(--ds-color-hover-wash);
+  color: var(--ds-color-text-muted);
   font-family: var(--ds-font-mono);
   font-size: var(--ds-text-xs);
 }
-.line {
+.line,
+.split {
   position: relative;
   display: grid;
   grid-template-columns: 44px 44px 18px minmax(0, 1fr);
@@ -247,6 +262,22 @@
 .removed .sign {
   color: var(--ds-diff-del-fg);
 }
+/* Split: the old side and the new, each with its own number column. */
+.split {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+.side {
+  display: grid;
+  grid-template-columns: 44px 18px minmax(0, 1fr);
+  min-width: 0;
+}
+.side + .side {
+  box-shadow: inset 1px 0 0 var(--ds-color-border-subtle);
+}
+.gap {
+  background: var(--ds-color-hover-wash);
+}
+
 /* New since the last update: a flash over the line, and a mark down its side. */
 .fresh {
   box-shadow: inset 3px 0 0 var(--ds-tone-info-mark);

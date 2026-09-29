@@ -141,7 +141,7 @@ export function PromptHistory({ versions, onRestore, emptyText = "No versions ye
           </>
         ) : (
           <div className={styles["whole"]}>
-            <Markdown source={version.body || "_Empty: nothing added._"} variant="document" />
+            <Markdown source={version.body || "_Empty: nothing added._"} variant="prompt" />
           </div>
         )}
         <div className={styles["used"]}>

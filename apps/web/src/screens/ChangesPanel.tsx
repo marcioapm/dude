@@ -7,11 +7,15 @@
  * the one shown is the cue to fetch the diff. Opened on a finished session,
  * it shows the last diff — the final one its container left when it
  * stopped, or the last read while it worked.
+ *
+ * A file opens in the viewer: its diff alone, side by side, over the page.
+ * dude keeps a Run's diff, not its files, so that is what there is to show.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { LiveDiff, summarizeToolArgs } from "@dude/design-system/components";
-import { Callout } from "@dude/design-system/primitives";
+import { AgentAvatar, LiveDiff, summarizeToolArgs } from "@dude/design-system/components";
+import { Callout, Dialog } from "@dude/design-system/primitives";
+import type { AgentRole } from "@dude/domain";
 import { EventTypes } from "@dude/domain";
 import type { PersistedEvent } from "@dude/domain";
 import type { ApiClient, RunDiff } from "../api/client.ts";
@@ -19,17 +23,35 @@ import { errorText } from "../hooks/useSave.tsx";
 
 const EDIT_TOOLS = /^(edit|write|patch|multiedit|apply_patch)$/i;
 
-export function ChangesPanel({ client, runId, events, checksum: latest, live }: {
+export function ChangesPanel({ client, runId, role, events, checksum: latest, live, selected, onSelectedChange, toolbarIn }: {
   client: ApiClient;
   runId: string;
+  /** The agent's, for its face beside what it last wrote. */
+  role: AgentRole;
   /** The Run's event stream, already open for its conversation. */
   events: readonly PersistedEvent[];
   /** The newest run.diff.updated summary's: another than shown means a newer diff to fetch. */
   checksum: string;
   /** Its agent is at work: the diff may still change. */
   live: boolean;
+  /** The file shown alone, which the session's rail can pick too. */
+  selected: string | null;
+  onSelectedChange: (path: string | null) => void;
+  /** The session's bar, which the diff's own controls are drawn into. */
+  toolbarIn: HTMLElement | null;
 }) {
   const [diff, setDiff] = useState<RunDiff | null>(null);
+  const [viewing, setViewing] = useState<string | null>(null);
+  // The file in the viewer, as one list: the same list while the file is
+  // unchanged, so the viewer's diff does not re-read it on every event.
+  const openedFiles = useMemo(() => {
+    const f = viewing ? diff?.files.find((x) => x.path === viewing) : undefined;
+    return f ? [f] : null;
+  }, [diff, viewing]);
+  // A file that left the diff closes its viewer for good: it does not come back by itself.
+  useEffect(() => {
+    if (viewing && diff && !diff.files.some((f) => f.path === viewing)) setViewing(null);
+  }, [diff, viewing]);
   const [problem, setProblem] = useState<string | null>(null);
 
   const shown = useRef<string | null>(null);
@@ -57,19 +79,37 @@ export function ChangesPanel({ client, runId, events, checksum: latest, live }: 
     if (!e) return null;
     const tool = String(e.payload.tool);
     const path = summarizeToolArgs(e.payload.input);
-    return `${tool.charAt(0).toUpperCase()}${tool.slice(1)}${path ? ` ${path.split("/").pop()}` : ""}`;
-  }, [events]);
+    return {
+      face: <AgentAvatar role={role} size="xs" live />,
+      tool: tool.charAt(0).toUpperCase() + tool.slice(1),
+      path: path ? path.split("/").pop() : undefined,
+    };
+  }, [events, role]);
 
-  if (problem) return <Callout tone="danger">{problem}</Callout>;
+  if (problem) return <div className="runChanges"><Callout tone="danger">{problem}</Callout></div>;
   if (!diff) return null;
   return (
-    <LiveDiff
-      data-testid="changes"
-      files={diff.files}
-      base={diff.base}
-      live={live}
-      lastChange={live && lastChange ? lastChange : undefined}
-      emptyMessage={live ? "The agent has not changed anything yet." : "This session changed nothing."}
-    />
+    <>
+      <LiveDiff
+        data-testid="changes"
+        className="runChanges"
+        files={diff.files}
+        base={diff.base}
+        live={live}
+        selected={selected}
+        onSelectedChange={onSelectedChange}
+        onOpenFile={setViewing}
+        toolbarIn={toolbarIn}
+        lastChange={live && lastChange ? lastChange : undefined}
+        emptyMessage={live ? "The agent has not changed anything yet." : "This session changed nothing."}
+      />
+      {openedFiles ? (
+        <Dialog open size="xl" onOpenChange={(o) => !o && setViewing(null)} title={<code>{openedFiles[0]!.path}</code>}>
+          <div className="dialogFill" data-testid="diff-viewer">
+            <LiveDiff files={openedFiles} base={diff.base} fileList={false} defaultView="split" />
+          </div>
+        </Dialog>
+      ) : null}
+    </>
   );
 }

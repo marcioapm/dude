@@ -54,6 +54,12 @@ export interface ChatTranscriptProps extends Omit<HTMLAttributes<HTMLDivElement>
   readonly footer?: ReactNode;
   /** Monotonic counter of content changes; bump it when turns arrive or stream. */
   readonly revision?: number | undefined;
+  /**
+   * How many turns there are, for "N new turns". Defaults to the children
+   * counted; give it when children group several turns (a `ChatAside`
+   * holding a run of tool calls), so each still counts.
+   */
+  readonly turns?: number | undefined;
   /** Still receiving. Controls aria-live. */
   readonly live?: boolean | undefined;
   /** Fill the parent's height instead of `maxHeight`. */
@@ -81,6 +87,7 @@ export function ChatTranscript({
   pinned,
   footer,
   revision = 0,
+  turns,
   live,
   fill,
   maxHeight = 560,
@@ -98,7 +105,7 @@ export function ChatTranscript({
   /** Anything (including streamed text) changed while scrolled up. */
   const [stale, setStale] = useState(false);
   const lastRevision = useRef(revision);
-  const turnCount = Children.count(children);
+  const turnCount = turns ?? Children.count(children);
   const lastCount = useRef(turnCount);
 
   const scrollToBottom = useCallback((smooth: boolean) => {
@@ -159,7 +166,7 @@ export function ChatTranscript({
 
   return (
     <div className={cx(styles["root"], fill && styles["fill"], className)} style={fill ? undefined : { maxHeight }} data-following={following ? "true" : "false"} {...rest}>
-      {session ? <TranscriptHeader session={session} actions={headerActions} /> : null}
+      {session ? <SessionHeader session={session} actions={headerActions} /> : null}
       {pinned !== undefined ? <div className={styles["pinned"]}>{pinned}</div> : null}
       <div className={styles["scroller"]}>
         <div ref={viewportRef} className={styles["viewport"]} onScroll={onScroll} role="log" aria-live={live ? "polite" : "off"} aria-relevant="additions text" tabIndex={0}>
@@ -178,7 +185,16 @@ export function ChatTranscript({
   );
 }
 
-function TranscriptHeader({ session, actions }: { readonly session: ChatTranscriptSession; readonly actions: ReactNode }) {
+export interface SessionHeaderProps {
+  readonly session: ChatTranscriptSession;
+  readonly actions?: ReactNode;
+}
+
+/**
+ * Whose agent this is and what it is doing: the transcript's own header,
+ * and — above a session's Conversation / Changes tabs — the header both share.
+ */
+export function SessionHeader({ session, actions }: SessionHeaderProps) {
   // `live` and `needsHuman` are properties of the status itself, so the
   // header asks the spec rather than re-listing which statuses count.
   const spec = statusSpec(session.status);

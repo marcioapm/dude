@@ -93,6 +93,10 @@
   font-size: var(--ds-text-nav);
   color: inherit;
 }
+/* The box's own frame is the focus ring: no second one inside it. */
+.searchInput:focus-visible {
+  outline: none;
+}
 .searchInput::placeholder {
   color: var(--ds-color-text-muted);
 }

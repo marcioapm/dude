@@ -130,8 +130,74 @@ body {
   flex: 1;
   min-height: 0;
 }
-.runCrumbs {
-  padding: var(--ds-space-16) var(--ds-space-24) var(--ds-space-4);
+/* A session's one toolbar: the view switch first and, on Changes, the
+   diff's own controls after it. */
+.runBar {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+  /* On the transcript's inset, so the switch lines up with the turns' faces. */
+  padding: 0 var(--ds-space-chat-pad-x) var(--ds-space-12);
+}
+.runCount {
+  color: var(--ds-color-text-muted);
+}
+/* Where Changes draws the diff's controls: the rest of the bar's row. */
+.runBarTools {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+.runBarTools:empty {
+  display: none;
+}
+/* Events: the session's ledger, in the same place as its conversation and changes. */
+.runEvents {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  margin: 0 var(--ds-space-chat-pad-x) var(--ds-space-16);
+}
+/* A dialog's body that scrolls within it (a file's diff): tall enough to read. */
+.dialogFill {
+  display: flex;
+  max-height: min(70vh, 720px);
+}
+/* The conversation, and the rail beside it once there is room for both. */
+.runChat {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  container-type: inline-size;
+}
+.runRail {
+  flex: none;
+  width: 260px;
+}
+/* Too narrow for both: the conversation keeps the width. */
+@container (max-width: 820px) {
+  .runRail {
+    display: none;
+  }
+}
+@media (max-width: 1280px) {
+  .taskSessions {
+    grid-template-columns: 200px minmax(0, 1fr);
+  }
+}
+/* Narrow: the sessions above, as a short scrolling list, the open one under them. */
+@media (max-width: 900px) {
+  .taskSessions {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .taskSessionList {
+    max-height: 168px;
+  }
+}
+/* Changes, in line with the session's header and tabs. */
+.runChanges {
+  padding: 0 var(--ds-space-chat-pad-x) var(--ds-space-16);
 }
 /* The conversation, and beside it the servers drawer. */
 .runSplit {
@@ -306,6 +372,18 @@ body {
 .taskScreen {
   overflow: auto;
 }
+/* On Sessions the page holds still and the session scrolls inside it — while
+   there is height for that; a short window scrolls the page as before. */
+@media (min-height: 640px) {
+  .taskScreen.fixed {
+    overflow: hidden;
+  }
+}
+@media (max-height: 639px) {
+  .taskSessions {
+    min-height: 560px;
+  }
+}
 .taskTop {
   display: flex;
   align-items: center;
@@ -415,8 +493,16 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Sessions: the task's sessions down the left, the one open beside them. */
 .taskSessions {
-  max-width: 640px;
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  margin-top: var(--ds-space-panel-gap);
+}
+.taskSessionList {
+  overflow: auto;
 }
 
 /* A line of figures under a header: an epic's progress, time and cost. */
