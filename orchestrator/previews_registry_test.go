@@ -343,3 +343,73 @@ func TestAPreviewLuxLostFailsWhenWoken(t *testing.T) {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed'`, runID) == 1
 	})
 }
+
+// A parked preview woken while ECR is down stays parked with its pending
+// start, and is neither resumed without its login nor failed; once ECR
+// answers, one resume goes to lux, with a fresh login and the forge token.
+func TestAPreviewWokenDuringAnECROutageResumesOnceItEnds(t *testing.T) {
+	w := newWorld(t)
+	api := w.withECR()
+	w.previews.Registry = w.syncer.Registry
+	runID := w.parkedPreview()
+	calls, _ := w.countPreviewCalls()
+
+	api.advance(11 * time.Hour) // the submit's token past its refresh point
+	api.setFail(errors.New("dial tcp: lookup api.ecr.eu-west-1.amazonaws.com: i/o timeout"))
+	if code, body := w.do("POST", "/internal/runs/"+runID+"/servers", map[string]any{"recipe": "docs"}); code != 201 {
+		t.Fatalf("add docs while parked = %d %v", code, body)
+	}
+	for range 5 {
+		mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE id = $1`, runID)
+		w.pump()
+	}
+	if _, resumes := calls.counts(); resumes != 0 {
+		t.Fatalf("lux asked to resume %d times during the outage", resumes)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND pending_starts = '{docs}'`, runID); n != 1 {
+		t.Fatalf("the preview is no longer parked with its pending start:\n%s", w.describeRuns())
+	}
+
+	api.setFail(nil)
+	api.advance(registry.FirstRetry) // past the provider's back-off
+	r := w.lux.Runs()[0]
+	w.until("the docs server to start", func() bool {
+		mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE id = $1`, runID)
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND pending_starts = '{}'`, runID) == 1
+	})
+	if _, resumes := calls.counts(); resumes != 1 || r.Resumed != 1 {
+		t.Fatalf("%d resumes asked, %d accepted; want one", resumes, r.Resumed)
+	}
+	tokens := api.tokens()
+	if len(tokens) != 2 {
+		t.Fatalf("ECR minted %d tokens, want the submit's and one after the outage", len(tokens))
+	}
+	checkPreviewSecrets(t, "resume", r.ResumeSecretsRaw[0], "AWS:"+tokens[1])
+}
+
+// A resume lux refuses for good (422) after its Get succeeded fails the
+// preview, with lux's reason, rather than retrying it or marking it running.
+func TestAPreviewResumeLuxRefusesFailsIt(t *testing.T) {
+	w := newWorld(t)
+	w.withECR()
+	w.previews.Registry = w.syncer.Registry
+	runID := w.parkedPreview()
+	calls, _ := w.countPreviewCalls()
+	calls.refuseResume = &lux.Error{Status: 422, Code: "secrets_required", Message: "secret values required: DUDE_REGISTRY_AUTH"}
+	if code, body := w.do("POST", "/internal/runs/"+runID+"/servers", map[string]any{"recipe": "docs"}); code != 201 {
+		t.Fatalf("add docs while parked = %d %v", code, body)
+	}
+	w.until("the preview to fail", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed'`, runID) == 1
+	})
+	if gets, resumes := calls.counts(); gets != 1 || resumes != 1 {
+		t.Errorf("%d Gets, %d Resumes; want the one of each that failed it", gets, resumes)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND error LIKE '%lux refused to resume the preview: secret values required%'
+		AND pending_starts = '{}' AND ended_at IS NOT NULL`, runID); n != 1 {
+		t.Errorf("the preview failed without lux's reason:\n%s", w.describeRuns())
+	}
+	if r := w.lux.Runs()[0]; r.Resumed != 0 {
+		t.Errorf("lux resumed it %d times", r.Resumed)
+	}
+}
