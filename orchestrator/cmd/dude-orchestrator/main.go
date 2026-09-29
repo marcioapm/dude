@@ -11,7 +11,7 @@
 //	LUX_URL, LUX_API_KEY         the lux control plane and a `run`-scoped key
 //	LUX_CONSOLE_URL              lux's console, for terminal links (default: LUX_URL)
 //	DUDE_AGENT_IMAGE             image for agents when a project names none
-//	DUDE_REGISTRY_AUTH           how lux logs in to pull agent images: none (default), static, or ecr
+//	DUDE_REGISTRY_AUTH           how lux logs in to pull agent and preview images: none (default), static, or ecr
 //	                             (DUDE_AGENT_IMAGE's ECR registry, a token from the AWS default
 //	                             credential chain, e.g. the instance role, minted fresh for each start)
 //	DUDE_ECR_ROLE_ARN            ecr: a pull-only role to assume and mint tokens as (default: the host's credentials)
