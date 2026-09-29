@@ -10,39 +10,103 @@
 import { S3Client } from "bun";
 import { HttpError } from "./api/http.ts";
 
+type Credentials = { accessKeyId: string; secretAccessKey: string; sessionToken: string; expires: number };
 let client: S3Client | null | undefined;
+let roleCredentials: Credentials | undefined;
+let roleS3: S3Client | undefined;
+let refresh: Promise<Credentials> | undefined;
+
+async function metadata(path: string, token?: string, method = "GET"): Promise<Response> {
+  const endpoint = process.env.AWS_EC2_METADATA_SERVICE_ENDPOINT || "http://169.254.169.254";
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const response = await fetch(`${endpoint}${path}`, {
+        method,
+        headers: token ? { "X-aws-ec2-metadata-token": token } : { "X-aws-ec2-metadata-token-ttl-seconds": "21600" },
+        signal: AbortSignal.timeout(1500),
+      });
+      if (response.ok) return response;
+      if (response.status < 500 || attempt === 1) throw new Error(`EC2 metadata request failed (${response.status})`);
+    } catch (error) {
+      if (attempt === 1 || (error instanceof Error && error.message.startsWith("EC2 metadata request failed"))) throw error;
+    }
+  }
+  throw new Error("EC2 metadata unavailable");
+}
+
+async function loadRoleCredentials(): Promise<Credentials> {
+  // IMDSv2 requires a token before either role or credential endpoint is accessible.
+  const token = await (await metadata("/latest/api/token", undefined, "PUT")).text();
+  if (!token) throw new Error("EC2 metadata returned an empty token");
+  const role = (await (await metadata("/latest/meta-data/iam/security-credentials/", token)).text()).trim();
+  if (!role || role.includes("/") || role.includes("\n")) throw new Error("EC2 metadata returned an invalid role");
+  const data: unknown = await (await metadata(`/latest/meta-data/iam/security-credentials/${encodeURIComponent(role)}`, token)).json();
+  if (!data || typeof data !== "object") throw new Error("EC2 metadata returned invalid credentials");
+  const value = data as Record<string, unknown>;
+  const expires = Date.parse(String(value.Expiration));
+  if (value.Code !== "Success" || typeof value.AccessKeyId !== "string" || !value.AccessKeyId ||
+      typeof value.SecretAccessKey !== "string" || !value.SecretAccessKey ||
+      typeof value.Token !== "string" || !value.Token || !Number.isFinite(expires) || expires <= Date.now()) {
+    throw new Error("EC2 metadata returned invalid credentials");
+  }
+  return { accessKeyId: value.AccessKeyId, secretAccessKey: value.SecretAccessKey, sessionToken: value.Token, expires };
+}
+
+async function roleClient(bucket: string): Promise<S3Client> {
+  if (!roleCredentials || roleCredentials.expires - Date.now() < 300_000) {
+    refresh ??= loadRoleCredentials().then((credentials) => {
+      roleCredentials = credentials;
+      roleS3 = new S3Client({
+        bucket,
+        region: process.env.DUDE_S3_REGION || "us-east-1",
+        ...(process.env.DUDE_S3_ENDPOINT ? { endpoint: process.env.DUDE_S3_ENDPOINT } : {}),
+        accessKeyId: credentials.accessKeyId,
+        secretAccessKey: credentials.secretAccessKey,
+        sessionToken: credentials.sessionToken,
+      });
+      return credentials;
+    }).finally(() => { refresh = undefined; });
+    // Never use an old credential after a failed refresh, even if it has not expired yet.
+    await refresh;
+  }
+  if (roleCredentials!.expires <= Date.now()) throw new Error("EC2 role credentials expired");
+  return roleS3!;
+}
 
 function configured(): S3Client | null {
   if (client !== undefined) return client;
   const bucket = process.env.DUDE_S3_BUCKET;
-  client = bucket
+  client = bucket && process.env.DUDE_S3_ACCESS_KEY && process.env.DUDE_S3_SECRET_KEY
     ? new S3Client({
         bucket,
         region: process.env.DUDE_S3_REGION || "us-east-1",
         ...(process.env.DUDE_S3_ENDPOINT ? { endpoint: process.env.DUDE_S3_ENDPOINT } : {}),
-        // Unset, Bun reads the usual AWS environment (AWS_ACCESS_KEY_ID…).
-        ...(process.env.DUDE_S3_ACCESS_KEY ? { accessKeyId: process.env.DUDE_S3_ACCESS_KEY } : {}),
-        ...(process.env.DUDE_S3_SECRET_KEY ? { secretAccessKey: process.env.DUDE_S3_SECRET_KEY } : {}),
+        accessKeyId: process.env.DUDE_S3_ACCESS_KEY,
+        secretAccessKey: process.env.DUDE_S3_SECRET_KEY,
       })
     : null;
   return client;
 }
 
-function required(): S3Client {
-  const s3 = configured();
-  if (!s3) throw new HttpError(503, "photo storage is not configured (DUDE_S3_BUCKET)", "storage_unconfigured");
-  return s3;
+async function required(): Promise<S3Client> {
+  const bucket = process.env.DUDE_S3_BUCKET;
+  if (!bucket) throw new HttpError(503, "photo storage is not configured (DUDE_S3_BUCKET)", "storage_unconfigured");
+  if (process.env.DUDE_S3_ACCESS_KEY || process.env.DUDE_S3_SECRET_KEY) {
+    if (!process.env.DUDE_S3_ACCESS_KEY || !process.env.DUDE_S3_SECRET_KEY) throw new Error("Incomplete DUDE_S3 credentials");
+    return configured()!;
+  }
+  return roleClient(bucket);
 }
 
 /** Store an object; it is never rewritten: a new photo is a new key. */
 export async function putObject(key: string, bytes: Uint8Array, type: string): Promise<void> {
-  await required().write(key, bytes, { type });
+  await (await required()).write(key, bytes, { type });
 }
 
 /** An object's bytes, or null when there is no such object. */
 export async function getObject(key: string): Promise<ArrayBuffer | null> {
   try {
-    return await required().file(key).arrayBuffer();
+    return await (await required()).file(key).arrayBuffer();
   } catch (err) {
     if ((err as { code?: string }).code === "NoSuchKey") return null;
     throw err;
@@ -51,7 +115,10 @@ export async function getObject(key: string): Promise<ArrayBuffer | null> {
 
 /** Remove an object, best effort: one left behind costs a few KB, never a wrong face. */
 export async function deleteObject(key: string): Promise<void> {
-  const s3 = configured();
-  if (!s3) return;
-  await s3.delete(key).catch((err) => console.error(`storage: could not delete ${key}:`, err));
+  if (!process.env.DUDE_S3_BUCKET) return;
+  try {
+    await (await required()).delete(key);
+  } catch (err) {
+    console.error(`storage: could not delete ${key}:`, err);
+  }
 }
