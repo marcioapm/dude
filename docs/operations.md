@@ -73,7 +73,7 @@ malformed or the mode is not `ecr`. It assumes the role through STS with the
 host's credentials, reuses the role's credentials until five minutes before
 they expire, and calls `GetAuthorizationToken` with them. At startup it logs
 which identity mints tokens (`minted_by`: the role's ARN, or
-`host credentials`). A failed `AssumeRole` is treated as an ECR outage:
+`host credentials`). A failed `AssumeRole` is treated as a failed mint (below):
 starts and resumes wait and are retried, and no token is minted with the
 host's credentials instead.
 
@@ -95,8 +95,38 @@ not sent to lux, the orchestrator logs a warning naming the registry and
 `DUDE_REGISTRY_AUTH`, and checks again every minute. Restore the setting
 and restart, and the Run resumes with a fresh token. A parked preview in
 the same state stays parked, its requested servers kept, with a `parked
-preview not resumed` warning, and is checked again every minute. If ECR
-cannot be reached, starts and resumes wait and are retried.
+preview not resumed` warning, and is checked again every minute.
+
+A failed mint (`AssumeRole` or `GetAuthorizationToken`) holds back every
+start and resume that needs the login: Runs stay pending or paused and
+previews parked; none is submitted or resumed without it, and none fails
+for it. The provider backs off once for all of them: while the back-off
+lasts, no AWS call is made, however many Runs wait. A failure that may pass
+(ECR or STS unreachable, throttled, a 5xx) is retried after 5 seconds,
+doubling to 5 minutes, with jitter, and logged as a warning on its first
+failure. A refusal only an operator fixes (`AccessDenied` from STS,
+`AccessDeniedException` from ECR, an unknown access key, STS disabled in
+the region) is logged once at **error** level (`registry login refused by
+AWS`) and retried every 15 minutes, so a fixed IAM policy or trust takes
+effect without a restart. A new token must be valid for more than an hour;
+one that is not (clock skew) is a failed mint too.
+
+### lux version for private images
+
+`image.registryAuth` and the runner-only secret it names are new in lux's
+RunSpec. Both lux's control plane (`luxd`) and **every runner** that can
+take a dude Run must understand them. A control plane without them
+refuses the submit or drops the login (lux's current schema rejects unknown
+fields: `additionalProperties: false`). A runner without them cannot pull the
+private image, and a resume can land on any runner.
+The OpenAPI document dude was built against (lux `main`, `info.version:
+dev`) pins no release, so the minimum version cannot be stated here:
+**verify** it in lux's changelog, as the first lux release whose
+`Image` schema has `registryAuth` and whose `Secret` has `runnerOnly`, and
+check the running version of `luxd` and of each runner host.
+
+Upgrade or drain every runner host before setting `DUDE_REGISTRY_AUTH` to
+`ecr` or `static`, or pointing `DUDE_AGENT_IMAGE` at a private registry.
 
 ## Processes
 
@@ -164,6 +194,30 @@ mode.
    A Run that has started keeps its image across resumes.
 
 Between steps 2 and 3 the old processes run against the new schema.
+
+### Turning on a registry login
+
+Before the first `DUDE_REGISTRY_AUTH=ecr` (or `static`):
+
+1. Upgrade lux's control plane and every runner host to a version with
+   `image.registryAuth` ([lux version for private images](#lux-version-for-private-images)),
+   or drain the hosts that cannot be upgraded.
+2. Set the IAM policies ([A pull-only role for ECR](#a-pull-only-role-for-ecr)),
+   `DUDE_REGISTRY_AUTH`, `DUDE_ECR_ROLE_ARN` and `DUDE_AGENT_IMAGE`, and
+   restart the orchestrator. Check its startup log for `agent images are
+   pulled with a registry login` and the expected `minted_by`, and that no
+   `registry login refused by AWS` error follows.
+3. Against the real lux, with a project whose image is the private one:
+   - start one Run, see it pull and start; pause it, resume it, and see it
+     start again (a resume carries a new login);
+   - start one branch preview, see its autostart server come up; let it
+     park (or stop its servers), start a server on it, and see it resume.
+
+   This is the contract check dude's own tests cannot make: they run
+   against a fake lux, which accepts a spec real lux may refuse and never
+   pulls an image. Also check, on a runner host, that the Run's container
+   has no `DUDE_REGISTRY_AUTH` in its environment or files.
+4. Only then point more projects at the private image.
 
 ## Environment
 
