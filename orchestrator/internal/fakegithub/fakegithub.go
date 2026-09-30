@@ -76,6 +76,17 @@ type Server struct {
 	PermissionRefused bool
 	// Update-branch requests fail as GitHub does when it is down.
 	UpdateDown bool
+	// The check-runs listing refuses, as for a token without Checks: read.
+	CheckRunsForbidden bool
+	// When set, the check-runs listing answers 403 with this message and
+	// no rate-limit headers, as GitHub's abuse-detection limit does.
+	CheckRunsForbiddenMessage string
+	ReceiveStatus             int
+	ReceiveBody               string
+	ReceiveHeaders            http.Header
+	ReceiveToken              string
+	ReceiveRequests           []string
+	ReceiveDisconnect         bool
 }
 
 // Comment and review ids, unique across repositories as GitHub's are.
@@ -205,6 +216,38 @@ func (s *Server) Merge(number int) {
 func (s *Server) Handler() http.Handler {
 	prefix := "/repos/" + s.Slug
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /"+s.Slug+".git/info/refs", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.RawQuery != "service=git-receive-pack" {
+			fail(w, 400, "expected receive-pack discovery")
+			return
+		}
+		user, token, ok := r.BasicAuth()
+		s.mu.Lock()
+		s.ReceiveRequests = append(s.ReceiveRequests, token)
+		status, expected, disconnect := s.ReceiveStatus, s.ReceiveToken, s.ReceiveDisconnect
+		body, headers := s.ReceiveBody, s.ReceiveHeaders.Clone()
+		s.mu.Unlock()
+		if disconnect {
+			conn, _, _ := w.(http.Hijacker).Hijack()
+			_ = conn.Close()
+			return
+		}
+		if !ok || user != "x-access-token" || token == "" || expected != "" && token != expected {
+			status = 401
+		}
+		if status == 0 {
+			status = 200
+		}
+		w.Header().Set("Content-Type", "application/x-git-receive-pack-advertisement")
+		for name, values := range headers {
+			w.Header()[name] = values
+		}
+		w.WriteHeader(status)
+		if body == "" {
+			body = "001f# service=git-receive-pack\n0000"
+		}
+		_, _ = w.Write([]byte(body))
+	})
 	mux.HandleFunc("POST "+prefix+"/pulls", s.openPull)
 	mux.HandleFunc("GET "+prefix+"/pulls/{n}", s.getPull)
 	mux.HandleFunc("GET "+prefix+"/pulls/{n}/reviews", s.reviews)
@@ -470,8 +513,16 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 // reports through check runs instead of statuses.
 func (s *Server) checkRuns(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
-	state := s.checks
+	state, forbidden, message := s.checks, s.CheckRunsForbidden, s.CheckRunsForbiddenMessage
 	s.mu.Unlock()
+	if message != "" {
+		fail(w, 403, message)
+		return
+	}
+	if forbidden {
+		fail(w, 403, "Resource not accessible by personal access token")
+		return
+	}
 	runs := []any{}
 	if conclusion, ok := strings.CutPrefix(state, "run:"); ok {
 		status := "completed"

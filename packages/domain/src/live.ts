@@ -59,9 +59,29 @@ export interface CostSplit {
   totalUsd: number;
   tokensUsd: number;
   machineUsd: number;
+  /** Who priced each half, when known (a Run's, a task's, an epic's). */
+  origin?: CostProvenance;
+}
+
+/**
+ * Who priced model tokens: lux's cost plugins, or the agent's harness
+ * (its own running total, an estimate).
+ */
+export type CostOrigin = "lux" | "agent";
+
+/**
+ * Who priced each half of a cost: tokens by lux or the harness, machine
+ * time by lux or dude's machine-rate estimate. `settled`: lux has made
+ * every lux figure in it final. A total over several Runs is from lux only
+ * if every Run's is.
+ */
+export interface CostProvenance {
+  tokens: CostOrigin;
+  machine: "lux" | "estimate";
+  settled: boolean;
 }
 
 /** The split of a tokens cost and a machine cost. */
-export function costSplit(tokensUsd: number, machineUsd: number): CostSplit {
-  return { totalUsd: tokensUsd + machineUsd, tokensUsd, machineUsd };
+export function costSplit(tokensUsd: number, machineUsd: number, origin?: CostProvenance): CostSplit {
+  return { totalUsd: tokensUsd + machineUsd, tokensUsd, machineUsd, ...(origin ? { origin } : {}) };
 }

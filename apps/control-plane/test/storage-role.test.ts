@@ -1,5 +1,8 @@
 import { afterAll, expect, spyOn, test } from "bun:test";
 import { createHmac, createHash } from "node:crypto";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 type Storage = typeof import("../src/storage.ts");
 
@@ -65,6 +68,9 @@ process.env.DUDE_S3_REGION = "us-east-1";
 process.env.DUDE_S3_ENDPOINT = `http://127.0.0.1:${s3.port}`;
 delete process.env.DUDE_S3_ACCESS_KEY;
 delete process.env.DUDE_S3_SECRET_KEY;
+const { useConfig, Config } = await import("../src/config.ts");
+// Settings are resolved once; each change to the variables above is read again.
+useConfig(null);
 const { putObject, getObject, deleteObject } = await import("../src/storage.ts");
 const { errorResponse } = await import("../src/api/http.ts");
 
@@ -270,10 +276,12 @@ async function withExplicitKeys(access: string | undefined, secret: string | und
   const set = (name: string, value: string | undefined) => { if (value === undefined) delete process.env[name]; else process.env[name] = value; };
   set("DUDE_S3_ACCESS_KEY", access);
   set("DUDE_S3_SECRET_KEY", secret);
+  useConfig(null);
   denied = true;
   try { await run(); } finally {
     delete process.env.DUDE_S3_ACCESS_KEY;
     delete process.env.DUDE_S3_SECRET_KEY;
+    useConfig(null);
     denied = false;
   }
 }
@@ -350,4 +358,84 @@ test("a first request fails with no S3 request when metadata denies or returns u
     }
   }
   expect(requests.length).toBe(0);
+});
+
+// The signing region of a SigV4 request: the scope's second part.
+const signingRegion = (req: { headers: Headers }) =>
+  (req.headers.get("authorization") ?? "").match(/Credential=[^/]+\/[^/]+\/([^/]+)\//)?.[1];
+
+// Installs settings from a 0600 file holding text, with no variable of the
+// environment but DUDE_CONFIG and `vars`, then restores process.env's.
+async function withConfigFile(text: string, vars: Record<string, string>, run: () => Promise<void>) {
+  const dir = mkdtempSync(join(tmpdir(), "dude-storage-"));
+  const path = join(dir, "dude.toml");
+  writeFileSync(path, text);
+  chmodSync(path, 0o600);
+  useConfig(Config.load({ env: { DUDE_CONFIG: path, ...vars }, defaultPath: join(dir, "absent.toml") }));
+  try { await run(); } finally {
+    useConfig(null);
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("a config file alone gives the bucket, endpoint, region and static keys", async () => {
+  const storage = await fresh();
+  metadataCalls = 0;
+  requests.length = 0;
+  objects.clear();
+  denied = true;
+  const bytes = new Uint8Array([7, 8]);
+  try {
+    await withConfigFile(`[s3]
+bucket = "file-bucket"
+endpoint = "http://127.0.0.1:${s3.port}"
+region = "eu-west-3"
+access_key = "FAKEFILEKEY"
+secret_key = "fakeFileSecret"
+`, {}, async () => {
+      await storage.putObject("from-file", bytes, "image/png");
+      expect(new Uint8Array((await storage.getObject("from-file"))!)).toEqual(bytes);
+    });
+  } finally { denied = false; }
+  expect(metadataCalls).toBe(0);
+  expect(requests.map((r) => new URL(r.url).pathname)).toEqual(["/file-bucket/from-file", "/file-bucket/from-file"]);
+  for (const request of requests) {
+    expect(signingRegion(request)).toBe("eu-west-3");
+    signedWith(request, "FAKEFILEKEY", "fakeFileSecret", null);
+  }
+});
+
+test("a file with no region signs for us-east-1; the variable overrides the file's bucket", async () => {
+  const storage = await fresh();
+  requests.length = 0;
+  await withConfigFile(`[s3]
+bucket = "file-bucket"
+endpoint = "http://127.0.0.1:${s3.port}"
+access_key = "FAKEFILEKEY"
+secret_key = "fakeFileSecret"
+`, { DUDE_S3_BUCKET: "env-bucket" }, async () => {
+    await storage.putObject("default-region", new Uint8Array([1]), "image/png");
+  });
+  expect(requests.map((r) => new URL(r.url).pathname)).toEqual(["/env-bucket/default-region"]);
+  expect(signingRegion(requests[0]!)).toBe("us-east-1");
+  signedWith(requests[0]!, "FAKEFILEKEY", "fakeFileSecret", null);
+});
+
+test("a file with no static keys signs with the role's credentials", async () => {
+  const storage = await fresh();
+  generation = 0;
+  expiry = Date.now() + 3_600_000;
+  metadataCalls = 0;
+  requests.length = 0;
+  await withConfigFile(`[s3]
+bucket = "file-bucket"
+endpoint = "http://127.0.0.1:${s3.port}"
+region = "eu-west-3"
+`, {}, async () => {
+    await storage.putObject("role-file", new Uint8Array([1]), "image/png");
+  });
+  expect(metadataCalls).toBe(3);
+  expect(requests.map((r) => new URL(r.url).pathname)).toEqual(["/file-bucket/role-file"]);
+  expect(signingRegion(requests[0]!)).toBe("eu-west-3");
+  signed(requests[0]!, 0);
 });

@@ -1,24 +1,147 @@
-# dude backend configuration, read once at startup from the file DUDE_CONFIG
-# names. Without DUDE_CONFIG, API keys are the only way to sign in. Database,
-# service and port settings stay in the environment.
+# dude's configuration: one file for dude-backend and dude-orchestrator.
+#
+# Both read DUDE_CONFIG if it is set (a file that cannot be read stops
+# startup), else /etc/dude/dude.toml if it exists, else nothing: every setting
+# can come from the environment alone. Every key has a variable, named beside
+# it, and a variable that is set and not empty overrides the file. Lists are
+# arrays here and comma-separated in the variable.
+#
+# Strict: a key neither process knows, a value of the wrong type or an invalid
+# value stops the process at startup, naming the key. Each process checks only
+# the keys it uses, so both read the same file.
+#
+# Secrets (marked "secret") belong in the environment, not in a file committed
+# anywhere. A process warns at startup when this file is readable by group or
+# others and holds one.
+#
+# Keys set below are at their defaults; commented ones have none.
+
+[database]
+# The shared Postgres, as dude_app. Required by both. Secret: holds a password.
+# url = "postgres://dude_app:…@db.example:5432/dude"     # DATABASE_URL
+
+[backend]
+# Listening port, on all interfaces.
+port = 3000                                              # PORT
+# Serve the web app from this directory (<prefix>/share/dude/web); unset, the
+# backend serves only the API.
+# web_dir = "/opt/dude/share/dude/web"                   # DUDE_WEB_DIR
+
+[orchestrator]
+# The orchestrator's internal API, as the backend reaches it. Unset, anything
+# that changes what runs answers 503. Backend.
+# url = "http://127.0.0.1:3100"                          # DUDE_ORCHESTRATOR_URL
+# The service token the backend authenticates with; also signs agents' tool
+# tokens unless tools.key is set. Required by the orchestrator. Secret.
+# token = "…"                                            # DUDE_ORCHESTRATOR_TOKEN
+# Internal API address.
+listen = "127.0.0.1:3100"                                # DUDE_ORCHESTRATOR_LISTEN
+# How often open pull requests are re-read as a backstop to webhooks.
+pr_reconcile = "15m"                                     # DUDE_PR_RECONCILE
+# Grace before a Run waiting on a person is parked, and quiet time before an
+# idle Run is nudged and parked, for projects that set none. "0s": the
+# delivery policy's.
+park_after = "0s"                                        # DUDE_PARK_AFTER
+idle_after = "0s"                                        # DUDE_IDLE_AFTER
+# How often a working agent's diff is read besides after its edits.
+diff_every = "15s"                                       # DUDE_DIFF_EVERY
+# What an hour of a lux host costs, recorded with each Run. Not negative.
+machine_usd_per_hour = 0.20                              # DUDE_MACHINE_USD_PER_HOUR
+# How often an agent's Run's cost is read from lux, until lux reports it
+# final or eight days after the Run ended. Positive.
+lux_cost_every = "2m"                                    # DUDE_LUX_COST_EVERY
+
+[s3]
+# The bucket people's photos and projects' images are kept in (backend).
+# Unset, uploads answer 503 and faces show initials.
+# bucket = "dude-photos"                                 # DUDE_S3_BUCKET
+# For MinIO, versitygw and other S3-compatible stores (path-style); unset, AWS.
+# endpoint = "http://127.0.0.1:9000"                     # DUDE_S3_ENDPOINT
+region = "us-east-1"                                     # DUDE_S3_REGION
+# Explicit credentials, both or neither; unset, the EC2 instance role (IMDSv2).
+# access_key = "…"                                       # DUDE_S3_ACCESS_KEY
+# secret_key = "…"                                       # DUDE_S3_SECRET_KEY (secret)
+
+[lux]
+# The lux control plane, and a lux API key with the run scope. Both required
+# by the orchestrator.
+# url = "https://lux.example"                            # LUX_URL
+# api_key = "…"                                          # LUX_API_KEY (secret)
+# lux's console, for terminal links; unset, lux.url.
+# console_url = "https://console.lux.example"            # LUX_CONSOLE_URL
+
+[llm]
+# The LLM API agents use, before the API path; http(s). Unset, only fake/
+# models run.
+# url = "https://llm.example/v1"                         # DUDE_LLM_URL
+# key = "…"                                              # DUDE_LLM_KEY (secret)
+
+[embeddings]
+# An OpenAI-compatible embeddings API for memory; unset, llm.url. "off", or
+# neither set: memory is searched by words alone.
+# url = "https://embeddings.example/v1"                  # DUDE_EMBEDDINGS_URL
+# Its key; unset, llm.key when the URL is llm.url or on its origin.
+# key = "…"                                              # DUDE_EMBEDDINGS_KEY (secret)
+model = "gemini-embedding-2"                             # DUDE_EMBEDDINGS_MODEL
+# The index's size: only 768 is accepted; another is a migration.
+dimensions = 768                                         # DUDE_EMBEDDINGS_DIMENSIONS
+
+[agent]
+# Image for agents when a project names none: the operator's own, by digest.
+image = "localhost/dude-runtime:dev"                     # DUDE_AGENT_IMAGE
+# A limit on a Run's running time, passed to lux; unset, none.
+# timeout = "48h"                                        # DUDE_AGENT_TIMEOUT
+# Hosts agents may reach besides llm.url's host; "*" turns filtering off.
+# egress = ["pypi.org", "registry.npmjs.org"]            # DUDE_AGENT_EGRESS
+
+[registry]
+# How lux logs in to pull agent and preview images: none, static or ecr.
+auth = "none"                                            # DUDE_REGISTRY_AUTH
+# static: the registry host and user:password.
+# host = "ghcr.io"                                       # DUDE_REGISTRY
+# credential = "user:token"                              # DUDE_REGISTRY_CREDENTIAL (secret)
+# ecr: a pull-only role to mint tokens as; unset, the host's credentials.
+# ecr_role_arn = "arn:aws:iam::123456789012:role/dude-pull"   # DUDE_ECR_ROLE_ARN
+
+[tools]
+# Where dude's tools for agents listen, and where agents reach them. Unset,
+# agents get no dude tools.
+# listen = "0.0.0.0:3200"                                # DUDE_TOOLS_LISTEN
+# url = "http://10.0.1.5:3200"                           # DUDE_TOOLS_URL
+# false for a lux without workload services.
+service = true                                           # DUDE_TOOLS_SERVICE
+# Derives each Run's tool token; unset, orchestrator.token.
+# key = "…"                                              # DUDE_TOOLS_KEY (secret)
+
+[vapid]
+# Web Push keys; unset, made once and kept in the database.
+# public_key = "B…"                                      # DUDE_VAPID_PUBLIC_KEY
+# private_key = "…"                                      # DUDE_VAPID_PRIVATE_KEY (secret)
+subject = "mailto:dude@localhost"                        # DUDE_VAPID_SUBJECT
+
+[factory]
+# GitHub logins whose PR comments are the factory's own and wake no agent.
+# logins = ["dude-bot"]                                  # DUDE_FACTORY_LOGINS
 
 [auth]
-# "api_key" (the default when absent) or "cloudflare_access". API keys keep
-# working either way, for scripts and for anyone who signs in with one.
-provider = "cloudflare_access"
-# The origin people open dude at. Changes signed in by Access must come from
-# it (the Origin header); required with cloudflare_access.
-public_url = "https://dude.absmartly.dev"
+# How people sign in to the backend: "api_key", or "cloudflare_access". API
+# keys keep working either way, for scripts and anyone who signs in with one.
+provider = "api_key"                                     # DUDE_AUTH_PROVIDER
+# cloudflare_access only, and then required unless noted:
+# The origin people open dude at; changes signed in by Access must come from
+# it (the Origin header).
+# public_url = "https://dude.example.com"                # DUDE_AUTH_PUBLIC_URL
 # Someone Access lets in who is not yet one of the organization's people
 # becomes a member (never an admin, never with a key). false refuses them.
-auto_create = true
-# The slug of an existing organization Access sign-ins belong to. It is never
+# Optional.
+auto_create = true                                       # DUDE_AUTH_AUTO_CREATE
+# The slug of an existing organization Access sign-ins belong to. Never
 # created: startup fails if no organization has it.
-default_organization = "absmartly"
+# default_organization = "example"                       # DUDE_AUTH_DEFAULT_ORGANIZATION
 
 [auth.cloudflare_access]
 # The Zero Trust team name: tokens are verified against
 # https://<team>.cloudflareaccess.com only.
-team = "absmartly"
+# team = "example"                                       # DUDE_AUTH_CLOUDFLARE_ACCESS_TEAM
 # The Access application's audience (AUD) tag.
-aud = "application-audience"
+# aud = "application-audience"                           # DUDE_AUTH_CLOUDFLARE_ACCESS_AUD

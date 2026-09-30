@@ -6,9 +6,9 @@
 
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { PR_DISPLAY_STATES, type PrDisplayState } from "@dude/domain";
+import { CHECK_RUNS_FORBIDDEN, PR_DISPLAY_STATES, prCheckDiagnosticReason, type PrDisplayState } from "@dude/domain";
 import { AgentPlan, PlanMeter } from "../src/components/AgentPlan.tsx";
-import { Cost } from "../src/components/Cost.tsx";
+import { Cost, costWords } from "../src/components/Cost.tsx";
 import { MarkdownDocument, applyFormat, highlightMarkdown } from "../src/components/MarkdownDocument.tsx";
 import { Markdown } from "../src/components/Markdown.tsx";
 import { PersonAvatar, PersonAvatarStack } from "../src/components/PersonAvatar.tsx";
@@ -116,6 +116,65 @@ describe("PrChip", () => {
     }));
     expect(facts).toEqual(["Checks: e2e (chrome) failing", "Changes requested by cy", "3 commits behind main, no conflicts", "2 unresolved comments"]);
   });
+  test("pending with no reason is CI pending, not CI at work", () => {
+    const h = html(<PrChip pr={pr({ checks: "pending", display: "ci_running" })} />);
+    expect(text(h)).toBe("CI pending#41");
+    expect(prFacts(pr({ checks: "pending" }))).toContain("Checks: pending");
+  });
+});
+
+describe("checks that cannot be read", () => {
+  const denied = { name: "GitHub check runs", status: "unavailable", conclusion: "", url: "", durationMs: 0, diagnostic: CHECK_RUNS_FORBIDDEN };
+  const codeRabbit = { name: "CodeRabbit", status: "completed", conclusion: "success" };
+  const lint = { name: "lint", status: "completed", conclusion: "failure" };
+  // As the API sends it: the scalar decides `display`, the list goes out as stored.
+  const pr = (checks: PrChipPullRequest["checks"], display: PrDisplayState, over: Partial<PrChipPullRequest> = {}) => ({
+    number: 101, url: "https://github.com/acme/dude/pull/101", title: "First run", repositoryName: "acme/dude",
+    state: "open" as const, review: "approved" as const, checks, display, ...over,
+  });
+
+  test("the chip says CI unavailable, in its word, tooltip and accessible name", () => {
+    const h = html(<PrChip pr={pr([codeRabbit, denied], "ci_running")} />);
+    expect(text(h)).toBe("CI unavailable#101");
+    expect(h).toContain('data-pr-state="ci_running"');
+    const icon = html(<PrChip pr={pr([codeRabbit, denied], "ci_running")} iconOnly />);
+    expect(icon).toContain('aria-label="CI unavailable, pull request acme/dude#101 (opens on GitHub)"');
+    expect(prFacts(pr([codeRabbit, denied], "ci_running"))).toEqual(["Checks: 1 readable passing", prCheckDiagnosticReason(CHECK_RUNS_FORBIDDEN), "Approved"]);
+  });
+
+  test("a real failure, or the pull request being over, still wins the chip", () => {
+    expect(text(html(<PrChip pr={pr([lint, denied], "ci_red")} />))).toBe("CI failing#101");
+    expect(prFacts(pr([lint, denied], "ci_red"))).toEqual(["Checks: lint failing", prCheckDiagnosticReason(CHECK_RUNS_FORBIDDEN), "Approved"]);
+    expect(text(html(<PrChip pr={pr([denied], "merged", { state: "merged" })} />))).toBe("Merged#101");
+  });
+
+  // What a reader sees, entities decoded.
+  const seen = (el: React.ReactElement) => text(html(el)).replaceAll("&#x27;", "'");
+
+  test("the panel warns without a hover and counts only real checks", () => {
+    const h = seen(<PullRequestPanel pr={pr([codeRabbit, denied], "ci_running")} />);
+    expect(h).toContain(prCheckDiagnosticReason(CHECK_RUNS_FORBIDDEN));
+    expect(h).toContain("1 readable check passing");
+    // One job row, CodeRabbit's: the diagnostic is no row of its own.
+    const jobs = html(<PullRequestPanel pr={pr([codeRabbit, denied], "ci_running")} />).match(/data-fact="checks"[^]*?<ul[^>]*>([^]*?)<\/ul>/)?.[1] ?? "";
+    expect((jobs.match(/<li[^>]*>[^]*?<\/li>/g) ?? []).map(text)).toEqual(["CodeRabbit"]);
+    // Its checks line is not drawn green.
+    const checksLine = html(<PullRequestPanel pr={pr([codeRabbit, denied], "ci_running")} />).match(/data-fact="checks"[^]*?data-icon="([^"]+)"/)?.[1];
+    expect(checksLine).toBe("circle-dotted");
+    expect(h).not.toMatch(/All \d+ checks passing/);
+    const none = seen(<PullRequestPanel pr={pr([denied], "ci_running")} />);
+    expect(none).toContain("No checks could be read");
+    expect(none).toContain("Checks: Read");
+    const failing = seen(<PullRequestPanel pr={pr([lint, denied], "ci_red")} />);
+    expect(failing).toContain("1 of 1 checks failing");
+    expect(failing).toContain("Checks: Read");
+  });
+
+  test("without a diagnostic the panel is as before", () => {
+    const h = seen(<PullRequestPanel pr={pr([codeRabbit], "ready")} />);
+    expect(h).toContain("All 1 checks passing");
+    expect(h).not.toContain("Checks: Read");
+  });
 });
 
 describe("PullRequestPanel", () => {
@@ -151,6 +210,37 @@ describe("Cost", () => {
     const h = html(<Cost tokensUsd={null} />);
     expect(text(h)).toBe("—");
     expect(h).toContain('title="Cost not reported"');
+    // Even when told the parts would have come from lux.
+    expect(text(html(<Cost tokensUsd={null} tokensFrom="lux" machineFrom="lux" settled />))).toBe("—");
+  });
+  // The tooltip's lines and the label come from costWords; the label is
+  // what renders without a pointer.
+  const label = (h: string) => /aria-label="([^"]*)"/.exec(h)?.[1] ?? "";
+  test("without an origin it says nothing of one, as before", () => {
+    expect(label(html(<Cost tokensUsd={0.62} machineUsd={0.25} />))).toBe("$0.87: model tokens $0.62, machine time $0.25");
+  });
+  test("a figure lux has settled is reported by lux; one it has not is still an estimate", () => {
+    expect(label(html(<Cost tokensUsd={1.81} machineUsd={0.0077} tokensFrom="lux" machineFrom="lux" settled />)))
+      .toBe("$1.82: model tokens $1.81 · reported by lux, machine time $0.0077 · lux");
+    expect(label(html(<Cost tokensUsd={1.2} machineUsd={0.004} tokensFrom="lux" machineFrom="lux" />)))
+      .toBe("$1.20: model tokens $1.20 · estimate, lux settling, machine time $0.0040 · lux, settling");
+  });
+  test("the harness's figure and dude's machine rate are estimates, settled or not", () => {
+    expect(label(html(<Cost tokensUsd={0.3} machineUsd={0.2} tokensFrom="agent" machineFrom="estimate" settled />)))
+      .toBe("$0.50: model tokens $0.30 · estimate, machine time $0.20 · estimated");
+  });
+  test("the tooltip's lines say what the label says, with the units", () => {
+    expect(costWords({ tokensUsd: 1.81, machineUsd: 0.0077, tokens: 412_000, machineMs: 23 * 60_000,
+      tokensFrom: "lux", machineFrom: "lux", settled: true }).lines).toEqual([
+      "$1.82 total",
+      "Model tokens $1.81 (412k tokens) · reported by lux",
+      "Machine time $0.0077 (23m 00s) · lux",
+    ]);
+    expect(costWords({ tokensUsd: 0.3, tokensFrom: "agent" }).lines)
+      .toEqual(["$0.30 total", "Model tokens $0.30 · estimate", "Machine time not counted yet"]);
+    const w = costWords({ tokensUsd: null, machineUsd: 0.2, tokensFrom: "lux", machineFrom: "estimate" });
+    expect(w.lines.slice(1)).toEqual(["Model tokens not reported", "Machine time $0.20 · estimated"]);
+    expect(w.label).toBe("$0.20: model tokens not reported, machine time $0.20 · estimated");
   });
 });
 
