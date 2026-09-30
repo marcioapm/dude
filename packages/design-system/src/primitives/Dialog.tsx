@@ -133,8 +133,10 @@ export function Dialog({
     ref: writing,
     "data-covered": isReading ? "true" : undefined,
     ...(isReading ? { inert: true } : {}),
+    // React bubbles focus from portalled popups (a Select's options) through
+    // here too; those unmount, so only the writing's own elements are kept.
     onFocusCapture: (e: FocusEvent<HTMLDivElement>) => {
-      if (e.target instanceof HTMLElement) lastFocused.current = e.target;
+      if (e.target instanceof HTMLElement && e.currentTarget.contains(e.target)) lastFocused.current = e.target;
     },
   };
   const body = split ? (

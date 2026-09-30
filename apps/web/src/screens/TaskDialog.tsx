@@ -180,6 +180,9 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
       onKeyDown={(e) => {
         if (!isReadKey(e)) return;
         e.preventDefault();
+        // From a popup portalled out of the dialog (the Epic Select's list), which
+        // Read would leave open over the document: it has to close first.
+        if (!(e.target instanceof Node && e.currentTarget.contains(e.target))) return;
         setReading(!reading);
       }}
       footerStart={
