@@ -104,9 +104,9 @@ export function accessProfiles(team: string, fetchImpl: FetchLike = fetch, now: 
     cache.set(email, { profile, until: now() + ttl });
     return profile;
   };
-  return async (token: string, email: string): Promise<Profile | null> => {
-    const hit = cache.get(email);
-    if (hit && hit.until > now()) return hit.profile;
+  // One fetch per email at a time: concurrent first requests share it.
+  const pending = new Map<string, Promise<Profile | null>>();
+  const ask = async (token: string, email: string): Promise<Profile | null> => {
     try {
       const response = await fetchImpl(url, {
         headers: { cookie: `CF_Authorization=${token}` },
@@ -124,6 +124,15 @@ export function accessProfiles(team: string, fetchImpl: FetchLike = fetch, now: 
     } catch {
       return remember(email, null, PROFILE_FAILURE_TTL_MS);
     }
+  };
+  return (token: string, email: string): Promise<Profile | null> => {
+    const hit = cache.get(email);
+    if (hit && hit.until > now()) return Promise.resolve(hit.profile);
+    const inFlight = pending.get(email);
+    if (inFlight) return inFlight;
+    const started = ask(token, email).finally(() => pending.delete(email));
+    pending.set(email, started);
+    return started;
   };
 }
 
@@ -176,41 +185,6 @@ export interface AccessDeps {
 
 export type Membership = { personId: string } | "removed" | "unknown";
 
-/**
- * The organization's person with `email`, making them a member if nobody
- * has it and `autoCreate` allows. Removed people stay removed: only an
- * admin's invitation brings someone back. Creation takes the same lock as
- * any change to the organization's people, so a first sign-in and a
- * removal, or two first sign-ins, take turns.
- */
-export async function memberFor(scope: OrgScope, email: string, autoCreate: boolean,
-  profile: () => Promise<Profile | null>): Promise<Membership> {
-  const find = async () => (await scope.sql`
-    SELECT id, removed_at IS NOT NULL AS removed, name, email::text AS email, photo_url AS "photoUrl",
-           photo_key AS "photoKey"
-    FROM people WHERE email = ${email}`) as Array<PersonRow>;
-  let rows = await find();
-  const active = rows.find((r) => !r.removed);
-  if (active) {
-    await fillProfile(scope, active, profile);
-    return { personId: active.id };
-  }
-  if (rows.length > 0 || !autoCreate) return rows.length > 0 ? "removed" : "unknown";
-
-  // Asked before the lock, so a slow identity endpoint holds up nobody else.
-  const seed = await profile();
-  await scope.sql`SELECT pg_advisory_xact_lock(hashtext('people:' || ${scope.organizationId}))`;
-  rows = await find();
-  const now = rows.find((r) => !r.removed);
-  if (now) return { personId: now.id };
-  if (rows.length > 0) return "removed";
-  const personId = newId("person");
-  await scope.sql`
-    INSERT INTO people (id, organization_id, name, email, role, photo_url)
-    VALUES (${personId}, ${scope.organizationId}, ${seed?.name ?? email}, ${email}, 'member', ${seed?.picture ?? null})`;
-  return { personId };
-}
-
 interface PersonRow {
   id: string;
   removed: boolean;
@@ -220,26 +194,65 @@ interface PersonRow {
   photoKey: string | null;
 }
 
+const findByEmail = async (scope: OrgScope, email: string) => (await scope.sql`
+  SELECT id, removed_at IS NOT NULL AS removed, name, email::text AS email, photo_url AS "photoUrl",
+         photo_key AS "photoKey"
+  FROM people WHERE email = ${email}`) as PersonRow[];
+
 /**
- * Fill in what a person has not set themselves: a name that is still their
- * email (what a sign-in without a profile left), a missing photo. A name or
- * photo they chose is never replaced.
+ * The organization's person with `email`, making them a member if nobody
+ * has it and `autoCreate` allows. Removed people stay removed: only an
+ * admin's invitation brings someone back. Creation takes the same lock as
+ * any change to the organization's people, so a first sign-in and a
+ * removal, or two first sign-ins, take turns.
+ *
+ * The identity endpoint can take seconds, so `profile` is only ever awaited
+ * between transactions: a short read decides whether it is needed, and a
+ * second short transaction rechecks membership before writing anything.
  */
-async function fillProfile(scope: OrgScope, person: PersonRow, profile: () => Promise<Profile | null>) {
-  const wantsName = person.name.trim() === "" || person.name.toLowerCase() === person.email.toLowerCase();
-  const wantsPhoto = !person.photoUrl && !person.photoKey;
-  if (!wantsName && !wantsPhoto) return;
-  const got = await profile();
-  const name = wantsName ? got?.name ?? null : null;
-  const picture = wantsPhoto ? got?.picture ?? null : null;
-  if (!name && !picture) return;
-  // Rechecked in the statement: the person may have edited it meanwhile.
-  await scope.sql`
-    UPDATE people SET
-      name = CASE WHEN ${name}::text IS NOT NULL AND (btrim(name) = '' OR lower(name) = lower(email::text))
-                  THEN ${name}::text ELSE name END,
-      photo_url = CASE WHEN photo_url IS NULL AND photo_key IS NULL THEN ${picture}::text ELSE photo_url END
-    WHERE id = ${person.id} AND removed_at IS NULL`;
+export async function memberFor(organizationId: string, email: string, autoCreate: boolean,
+  profile: () => Promise<Profile | null>): Promise<Membership> {
+  const rows = await withOrg(organizationId, (scope) => findByEmail(scope, email));
+  const active = rows.find((r) => !r.removed);
+  if (active) {
+    const wantsName = active.name.trim() === "" || active.name.toLowerCase() === active.email.toLowerCase();
+    const wantsPhoto = !active.photoUrl && !active.photoKey;
+    if (!wantsName && !wantsPhoto) return { personId: active.id };
+    const got = await profile();
+    const name = wantsName ? got?.name ?? null : null;
+    const picture = wantsPhoto ? got?.picture ?? null : null;
+    return withOrg(organizationId, async (scope) => {
+      // Rechecked in the statement: the person may have been removed, or
+      // set their own name or photo, while the profile was fetched.
+      const kept = !name && !picture
+        ? await scope.sql`SELECT id FROM people WHERE id = ${active.id} AND removed_at IS NULL`
+        : await scope.sql`
+        UPDATE people SET
+          name = CASE WHEN ${name}::text IS NOT NULL AND (btrim(name) = '' OR lower(name) = lower(email::text))
+                      THEN ${name}::text ELSE name END,
+          photo_url = CASE WHEN photo_url IS NULL AND photo_key IS NULL THEN ${picture}::text ELSE photo_url END
+        WHERE id = ${active.id} AND removed_at IS NULL
+        RETURNING id`;
+      return kept.length > 0 ? { personId: active.id } : "removed";
+    });
+  }
+  if (rows.length > 0) return "removed";
+  if (!autoCreate) return "unknown";
+
+  const seed = await profile();
+  return withOrg(organizationId, async (scope) => {
+    await scope.sql`SELECT pg_advisory_xact_lock(hashtext('people:' || ${scope.organizationId}))`;
+    const now = await findByEmail(scope, email);
+    const current = now.find((r) => !r.removed);
+    if (current) return { personId: current.id };
+    // Removed while the profile was fetched: stays removed, never recreated.
+    if (now.length > 0) return "removed";
+    const personId = newId("person");
+    await scope.sql`
+      INSERT INTO people (id, organization_id, name, email, role, photo_url)
+      VALUES (${personId}, ${scope.organizationId}, ${seed?.name ?? email}, ${email}, 'member', ${seed?.picture ?? null})`;
+    return { personId };
+  });
 }
 
 /**
@@ -253,8 +266,8 @@ export function accessAuthenticator(config: AccessConfig, organizationId: string
     checkBrowserOrigin(request, config.public_url);
     const identity = await deps.verify(token);
     if (!identity) return null;
-    const membership = await withOrg(organizationId, (scope) =>
-      memberFor(scope, identity.email, config.auto_create, () => deps.profile(token, identity.email)));
+    const membership = await memberFor(organizationId, identity.email, config.auto_create,
+      () => deps.profile(token, identity.email));
     if (typeof membership === "string") return null;
     return {
       credentialKind: "person", organizationId, personId: membership.personId, kind: "user",

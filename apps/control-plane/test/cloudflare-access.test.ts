@@ -3,7 +3,7 @@ import { SQL } from "bun";
 import { SignJWT, exportJWK, generateKeyPair, type JWK } from "jose";
 import { createApiKey, requestAuthenticator } from "../src/api/auth.ts";
 import {
-  accessAuthenticator, accessProfiles, accessVerifier, type FetchLike, type Profile,
+  accessAuthenticator, accessProfiles, accessVerifier, type AccessDeps, type FetchLike, type Profile,
 } from "../src/api/cloudflareAccess.ts";
 import { Router } from "../src/api/router.ts";
 import { registerPeopleRoutes } from "../src/api/routes/people.ts";
@@ -37,6 +37,9 @@ class Edge {
   profiles = new Map<string, unknown>();
   profileCalls = 0;
   profileStatus = 200;
+  // While set, identity responses wait for it; `profileStarted` fires on each request.
+  profileGate: Promise<void> | null = null;
+  profileStarted: () => void = () => {};
   urls: string[] = [];
   fetch: FetchLike = async (input, init) => {
     this.urls.push(String(input));
@@ -47,6 +50,8 @@ class Edge {
     }
     if (String(input) === `${ISSUER}/cdn-cgi/access/get-identity`) {
       this.profileCalls++;
+      this.profileStarted();
+      if (this.profileGate) await this.profileGate;
       const token = /CF_Authorization=([^;]+)/.exec(new Headers(init?.headers).get("cookie") ?? "")?.[1] ?? "";
       const email = JSON.parse(atob(token.split(".")[1]!.replace(/-/g, "+").replace(/_/g, "/"))).email;
       return Response.json(this.profiles.get(email.toLowerCase()) ?? { email }, { status: this.profileStatus });
@@ -72,10 +77,11 @@ const config = (over: Partial<AccessConfig> = {}): AccessConfig => ({
   cloudflare_access: { team: TEAM, aud: AUD }, ...over,
 });
 
-function routerFor(edge: Edge, over: Partial<AccessConfig> = {}, organizationId = org) {
+function routerFor(edge: Edge, over: Partial<AccessConfig> = {}, organizationId = org,
+  wrapProfile: (profile: AccessDeps["profile"]) => AccessDeps["profile"] = (p) => p) {
   const router = new Router(requestAuthenticator(accessAuthenticator(config(over), organizationId, {
     verify: accessVerifier(TEAM, AUD, edge.fetch),
-    profile: accessProfiles(TEAM, edge.fetch),
+    profile: wrapProfile(accessProfiles(TEAM, edge.fetch)),
   })));
   registerPeopleRoutes(router);
   registerEventRoutes(router);
@@ -322,6 +328,55 @@ describe("signing in", () => {
     expect(results.map((r) => r.status)).toEqual(Array(6).fill(200));
     expect(new Set(results.map((r) => r.body!.person.id)).size).toBe(1);
     expect(await peopleByEmail("race@example.com")).toHaveLength(1);
+  });
+
+  test("a slow profile holds no database transaction while another request completes", async () => {
+    const slow = new Edge();
+    slow.keys = [signer.jwk];
+    const gate = Promise.withResolvers<void>();
+    const bothAsked = Promise.withResolvers<void>();
+    slow.profileGate = gate.promise;
+    slow.profileStarted = () => { if (slow.profileCalls === 2) bothAsked.resolve(); };
+    // One first sign-in (the creation path) and one person whose name is still their email (the fill path).
+    await owner`INSERT INTO people (id, organization_id, name, email) VALUES (${`${org}_unnamed`}, ${org}, 'unnamed@example.com', 'unnamed@example.com')`;
+    slow.profiles.set("unnamed@example.com", { email: "unnamed@example.com", name: "Named Later" });
+    const r = routerFor(slow);
+    const waiting = Promise.all(["slowfirst@example.com", "unnamed@example.com"]
+      .map(async (email) => me(r, cookie(await sign(signer, { email })))));
+    await bothAsked.promise;
+    const [open] = await owner`
+      SELECT count(*)::int AS n FROM pg_stat_activity
+      WHERE datname = current_database() AND usename = 'dude_app' AND state LIKE 'idle in transaction%'`;
+    expect(open.n).toBe(0);
+    expect((await me(router, cookie(await sign(signer, { email: "meanwhile@example.com" })))).status).toBe(200);
+    gate.resolve();
+    const [first, filled] = await waiting;
+    expect(first!.status).toBe(200);
+    expect(filled!.body!.person.name).toBe("Named Later");
+  });
+
+  test("concurrent first requests for one email share one profile fetch", async () => {
+    const slow = new Edge();
+    slow.keys = [signer.jwk];
+    slow.profiles.set("herd@example.com", { email: "herd@example.com", name: "Herd" });
+    const gate = Promise.withResolvers<void>();
+    slow.profileGate = gate.promise;
+    const allAsked = Promise.withResolvers<void>();
+    let asks = 0;
+    const r = routerFor(slow, {}, org, (profile) => (token, email) => {
+      if (++asks === 6) allAsked.resolve();
+      return profile(token, email);
+    });
+    const tokens = await Promise.all(Array.from({ length: 6 }, () => sign(signer, { email: "herd@example.com" })));
+    const results = Promise.all(tokens.map((t) => me(r, cookie(t))));
+    await allAsked.promise;
+    gate.resolve();
+    const done = await results;
+    expect(done.map((d) => d.status)).toEqual(Array(6).fill(200));
+    expect(new Set(done.map((d) => d.body!.person.id)).size).toBe(1);
+    expect(done[0]!.body!.person.name).toBe("Herd");
+    expect(slow.profileCalls).toBe(1);
+    expect(await peopleByEmail("herd@example.com")).toHaveLength(1);
   });
 
   test("organizations stay apart; a person with no email is never linked", async () => {
