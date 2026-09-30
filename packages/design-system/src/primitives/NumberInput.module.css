@@ -1,0 +1,109 @@
+/* A number moved in steps: the Input's anatomy, − and + inside its edge. */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+  min-width: 0;
+}
+
+.label {
+  font-size: var(--ds-text-sm);
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-secondary);
+}
+
+.control {
+  --num-h: var(--ds-size-control-md);
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  height: var(--num-h);
+  padding: 0 var(--ds-space-4);
+  background: var(--ds-color-field-bg);
+  border: 1px solid var(--ds-color-border);
+  border-radius: var(--ds-radius-control);
+  color: var(--ds-color-text-primary);
+  transition:
+    border-color var(--ds-duration-fast) var(--ds-ease-standard),
+    box-shadow var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.control:hover {
+  border-color: var(--ds-color-border-strong);
+}
+.control:focus-within {
+  border-color: var(--ds-color-accent);
+  box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-color-selection);
+}
+.control[data-invalid="true"] {
+  border-color: var(--ds-tone-danger-border);
+}
+.control[data-invalid="true"]:focus-within {
+  border-color: var(--ds-tone-danger-fg);
+  box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-tone-danger-bg);
+}
+.control[data-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.sm {
+  --num-h: var(--ds-size-control-sm);
+  font-size: var(--ds-text-sm);
+}
+
+.step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: calc(var(--num-h) - var(--ds-space-8));
+  height: calc(var(--num-h) - var(--ds-space-8));
+  padding: 0;
+  background: var(--ds-color-raised);
+  border: 0;
+  border-radius: var(--ds-radius-control);
+  color: var(--ds-color-text-secondary);
+}
+.step:hover:not(:disabled) {
+  background: var(--ds-color-hover-wash);
+  color: var(--ds-color-text-primary);
+}
+.step:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0 var(--ds-space-2);
+  background: none;
+  border: 0;
+  outline: none;
+  color: inherit;
+  font-size: var(--ds-text-md);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.sm .input {
+  font-size: var(--ds-text-sm);
+}
+.input:focus-visible {
+  outline: none;
+}
+
+.unit {
+  flex-shrink: 0;
+  padding-right: var(--ds-space-4);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+
+.hint {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.hintError {
+  color: var(--ds-tone-danger-fg);
+}

@@ -24,6 +24,7 @@ const ALLOWED: Record<string, Record<string, string>> = {
     '.frame[data-locked="true"], .frame[data-locked="true"]:hover': "a field's edge, fixed",
   },
   "packages/design-system/src/primitives/Select.module.css": { "*": "a field's edge" },
+  "packages/design-system/src/primitives/NumberInput.module.css": { "*": "a field's edge" },
   "packages/design-system/src/primitives/Checkbox.module.css": { "*": "a checkbox is its outline" },
   "packages/design-system/src/components/ChatComposer.module.css": { ".field": "a field's edge", ".field:hover": "a field's edge", ".field:focus-within": "focus" },
   "packages/design-system/src/components/Sidebar.module.css": { ".search": "a field's edge", ".search:hover": "a field's edge", ".search:focus-within": "focus" },

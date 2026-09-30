@@ -708,7 +708,6 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   content gets no control. The app fetches text and passes URLs; nothing
   here fetches.
 
-
 - `PersonAvatar` is for an identified person; `AgentAvatar role="human"` is
   the anonymous human *actor* glyph in event rows. Do not use one for the
   other.
@@ -964,6 +963,54 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
   Count, mark and tip come from one `summarizeTaskServers`, so they never
   disagree.
 
+### Machines
+
+- **A number moved in steps is a `NumberInput`**: − value + inside one
+  field's edge, the unit muted after the number, ↑ ↓ a step (Page Up /
+  Down ten, Home / End the bounds). − and + stop at `min` and `max` and
+  are not tab stops. What a person types stays as typed; the caller
+  refuses an off-step value with `error`, and the error names the step
+  ("Whole or half CPUs: 0.5, 1, 1.5…"), in place of the hint ("In steps
+  of 0.5"). A step from an off-step value lands back on the grid. Never an
+  `<input type="number">`: its spinners are the browser's, not ours, and
+  it throws away what it cannot parse.
+- **A choice with a spec is a `Select` with `meta`**: the option's label,
+  then its facts muted on the same line ("8 CPUs · 16 GiB · 80 GiB"),
+  which follow it into the closed trigger and are cut before the label is.
+  `description` is a line under an option in the list only ("Follows
+  whichever size is the default"); `footer` sits under the list on the
+  chrome shade (a note, or a link to where the options are managed).
+- **How much of a host a size takes is a `FitBar`**: a 40px track in the
+  success tone and the words ("50% of a host"). An unknown share draws no
+  track, only "Unknown" in muted ink: nothing known must not look like
+  nothing used.
+- **A whole split into shares is a `ProportionBar`**: square segments as
+  wide as their share, a 2px gap between them, labels inside where they
+  fit. What nobody gets (`kind: "reserved"`) is hatched on the sunken
+  shade; the legend under the bar repeats the hatch (`ReservedSwatch`) and
+  names it, and says what the whole is on the right. Given parts take the
+  info tint. It is a figure with an `aria-label` that says the same in
+  words.
+- **The machine a session runs on is a `MachineChip`** in its header,
+  after the model and effort: the `chip` glyph, the size's name strong,
+  its spec muted, on the raised shade at the chip height. Its tooltip
+  (`MachineTip`) says where the size came from, that it is fixed for the
+  session, and what the container actually got when lux says. It opens on
+  focus and hover and stays open on a press; the chip acts on nothing.
+- **The Machines settings page** (an organisation's): its note says only
+  admins change sizes and that a change reaches sessions that start after
+  it. Sizes are a `Table` — the name with a Default badge, CPUs, memory
+  and disk right-aligned and tabular, the pool in mono ("Default pool" for
+  none), a `FitBar`, who uses it (faces and words), and a `RowMenu` (Edit,
+  Make default, Remove…; Remove disabled with its reason on the default).
+  lux's pools are a second `Table` with a "read … ago" meta line; then the
+  memory explainer, a `Callout`-shaped box around a `ProportionBar`. A
+  member sees the same page with no Add and no row menu. A size is edited
+  in a `Dialog` of `NumberInput`s and the pool `Select`, with the fit as a
+  `Callout` under them (success, danger, or neutral when unknown), and
+  removed through a `Dialog tone="danger"` that says who uses it and where
+  they move.
+
 ### Do / Don't
 
 | Do | Don't |
@@ -1002,11 +1049,16 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | `<SearchPicker find={…} onPick={…} />` | an `Input` over a list of bare buttons |
 | a run's servers on its task's Servers tab; `<TerminalLink>` in the session's rail | a servers panel or drawer inside a session |
 | `<Tab count={on} tooltip={<ServersTabTip summary={s} />}>` | a native `title` on a tab, or "N ready" beside it |
+| `<NumberInput step={0.5} min={0.5} unit="CPUs" error="Whole or half CPUs: 0.5, 1, 1.5…" />` | `<input type="number" step="0.5">`, rounding what was typed without saying |
+| `<Select options={[{ value, label: "Large", meta: "8 CPUs · 16 GiB · 80 GiB" }]} />` | a label string with the spec glued on in the same ink |
+| `<ProportionBar segments={[{ kind: "reserved", … }, …]} legend={…} />` | a chart library, or an app-local bar in its own CSS |
 
 ## Components
 
 `src/primitives/` — Button, IconButton, Input (`size="title"` for a
-document's heading), Textarea, MarkdownEditor (`fill`), Select, Checkbox,
+document's heading), NumberInput (`step`, `min`, `max`, `unit`), Textarea,
+MarkdownEditor (`fill`), Select (options with `meta` and `description`, a
+`footer`), Checkbox,
 Badge, Card, Table (THead/TBody/Tr/Th/Td/TableEmpty), Tabs (underline for a
 page, segmented in a toolbar; a tab can carry a count, a trailing mark and
 a `tooltip`), Dialog (`size=
@@ -1171,6 +1223,14 @@ MarkdownCheatsheet.
   ("Open terminal in lux ↗"): in a session's rail, and in a branch
   preview's run line; the overview's `ServersSummary` carries it short,
   as "Terminal".
+
+`src/components/` — machines (what an agent runs on):
+
+- **FitBar** — how much of one host a size takes, or "Unknown".
+- **ProportionBar / ReservedSwatch** — a whole split into shares, the part
+  nobody gets hatched; the memory of one host between Linux and its runs.
+- **MachineChip / MachineTip** — the machine in a session's header, and
+  its tooltip. The rules are under *Machines*.
 
 `src/components/` — live work:
 
