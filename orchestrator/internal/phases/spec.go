@@ -30,6 +30,10 @@ type AgentConfig struct {
 	// Hosts every agent may reach besides its model provider. "*" turns
 	// egress filtering off.
 	Egress []string
+	// Agents may run docker or podman in their Run
+	// (DUDE_AGENT_NESTED_CONTAINERS). lux places such Runs only on hosts
+	// offering nested containers, so it is off unless its hosts do.
+	NestedContainers bool
 	// A limit on a Run's running time (DUDE_AGENT_TIMEOUT), for an operator
 	// who wants one; none by default. Agents work for days, and one waiting
 	// on a person is parked, not timed out: lux counts only time spent
@@ -60,6 +64,8 @@ func LoadAgentConfig(cfg *config.Config) (AgentConfig, error) {
 		ToolsService: cfg.Bool("DUDE_TOOLS_SERVICE"),
 		ToolsKey:     []byte(cfg.String("DUDE_TOOLS_KEY")),
 		Egress:       cfg.List("DUDE_AGENT_EGRESS"),
+
+		NestedContainers: cfg.Bool("DUDE_AGENT_NESTED_CONTAINERS"),
 	}
 	if len(c.ToolsKey) == 0 {
 		c.ToolsKey = []byte(cfg.String("DUDE_ORCHESTRATOR_TOKEN"))
@@ -226,6 +232,12 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 			spec.Workload.MCPServers = []lux.Service{{Name: "dude", URL: c.ToolsURL, Headers: auth}}
 		}
 		spec.Secrets = append(spec.Secrets, lux.Secret{Name: "DUDE_TOOLS_AUTH", Value: "Bearer " + in.ToolsToken})
+	}
+
+	// Before the scripted agent returns: the contract suite runs it on a
+	// real lux, which must place it like the agent it stands in for.
+	if c.NestedContainers {
+		spec.Sandbox = &lux.Sandbox{NestedContainers: true}
 	}
 
 	// The scripted agent, for tests: lux-fake speaking ACP, following the
