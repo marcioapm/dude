@@ -34,8 +34,9 @@ export const PR_SELECT = `
 /**
  * A pull request as the API returns it: with the one state it shows as.
  * Decided on dude's rollup of the checks, not the list: a new head CI has
- * yet to report on, or checks the token cannot read, are running, not
- * absent.
+ * yet to report on, or checks the token cannot read, are pending, not
+ * absent. The list goes out as stored, diagnostic entries included, for the
+ * chip to say why.
  */
 export function withDisplay(pr: Record<string, unknown>): Record<string, unknown> {
   return {

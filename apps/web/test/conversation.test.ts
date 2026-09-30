@@ -10,9 +10,14 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { EventRow } from "@dude/design-system/components";
+import { summarize } from "../src/screens/RunScreen.tsx";
 import { EventTypes } from "@dude/domain";
 import type { PersistedEvent } from "@dude/domain";
 import { actorName, apply, emptyProjection, humanActor, project, snapshot } from "../src/api/conversation.ts";
+import { modelCostShown } from "../src/api/client.ts";
 
 let cursor = 0;
 
@@ -37,6 +42,26 @@ function ev(eventType: string, payload: Record<string, unknown> = {}): Persisted
     occurredAt: new Date(Date.UTC(2026, 0, 1, 0, 0, cursor)).toISOString(),
   } as unknown as PersistedEvent;
 }
+
+describe("git event labels", () => {
+  test("clone and checkout render truthful outcomes and checkout coordinates", () => {
+    const labels = [
+      [EventTypes.GitClone, { repo: "target", ref: "main", status: "cloned" }, "Cloned · target · at main"],
+      [EventTypes.GitClone, { repo: "web", ref: "missing", status: "failed", error: "ref not found" }, "Clone · web · at missing · failed · ref not found"],
+      [EventTypes.GitCheckout, { repo: "target", ref: "main", branch: "dude/task", base: "abc123" }, "Checked out · target · at main · on dude/task · from abc123"],
+    ] as const;
+    for (const [type, payload, label] of labels) {
+      const event = ev(type, payload);
+      const summary = summarize(event);
+      expect(summary).toBe(label);
+      const html = renderToStaticMarkup(createElement(EventRow, {
+        occurredAt: event.occurredAt, actor: { type: "system" }, eventType: type, summary,
+      }));
+      expect(html).toContain(label);
+      expect(html).toContain(type);
+    }
+  });
+});
 
 describe("turns", () => {
   test("an agent message becomes a message turn", () => {
@@ -227,6 +252,59 @@ describe("usage", () => {
 
     expect(costUsd).toBe(0);
     expect(tokens).toBe(0);
+  });
+
+  test("lux's reported AI cost replaces the harness's sum, latest wins, and is settled only when final", () => {
+    const events = [
+      ev(EventTypes.ModelRequestCompleted, { costUsd: 0.02 }),
+      ev(EventTypes.ModelRequestCompleted, { costUsd: 0.03 }),
+    ];
+    expect(project(events)).toMatchObject({ costSource: { from: "agent", settled: false } });
+
+    events.push(ev(EventTypes.RunCostReported, { aiUsd: 1.2, computeUsd: 0.004, status: "incomplete" }));
+    let c = project(events);
+    expect(c.costUsd).toBe(1.2);
+    expect(c.costSource).toEqual({ from: "lux", settled: false });
+
+    // Harness deltas after lux reported are the same tokens: not added on.
+    events.push(ev(EventTypes.ModelRequestCompleted, { costUsd: 0.5 }));
+    events.push(ev(EventTypes.RunCostReported, { aiUsd: 1.810247, computeUsd: 0.007659225, status: "final" }));
+    c = project(events);
+    expect(c.costUsd).toBe(1.810247);
+    expect(c.costSource).toEqual({ from: "lux", settled: true });
+
+    // The same answer folded one event at a time.
+    let state = emptyProjection();
+    for (const e of events) state = apply(state, [e]);
+    expect(snapshot(state, "completed").costUsd).toBe(1.810247);
+  });
+
+  test("a report with no AI amount leaves the harness's cost standing", () => {
+    const c = project([
+      ev(EventTypes.ModelRequestCompleted, { costUsd: 0.04 }),
+      ev(EventTypes.RunCostReported, { aiUsd: null, computeUsd: 0.001, status: "pending" }),
+    ]);
+    expect(c.costUsd).toBeCloseTo(0.04, 9);
+    expect(c.costSource.from).toBe("agent");
+  });
+
+  test("lux's zero is a price; the agent's zero is not reported", () => {
+    expect(modelCostShown(0, "lux")).toBe(0);
+    expect(modelCostShown(0, "agent")).toBeNull();
+    expect(modelCostShown(0.3, "agent")).toBe(0.3);
+    expect(modelCostShown(1.81, "lux")).toBe(1.81);
+  });
+
+  test("a later report with no AI amount clears lux's figure, as the Run's row does", () => {
+    const events = [
+      ev(EventTypes.ModelRequestCompleted, { costUsd: 0.04 }),
+      ev(EventTypes.RunCostReported, { aiUsd: 1.2, computeUsd: 0.001, status: "incomplete" }),
+    ];
+    expect(project(events).costUsd).toBe(1.2);
+    events.push(ev(EventTypes.RunCostReported, { aiUsd: null, computeUsd: 0.001, status: "incomplete" }));
+    const c = project(events);
+    expect(c.costUsd).toBeCloseTo(0.04, 9);
+    expect(c.costSource).toEqual({ from: "agent", settled: false });
   });
 });
 

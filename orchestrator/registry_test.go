@@ -271,7 +271,7 @@ func TestEveryResumeCarriesAFreshlyMintedLogin(t *testing.T) {
 			w.withTools()
 			w.syncer.ParkAfter = 300 * time.Millisecond
 			mustExec(w.t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
-				VALUES ($1, $2, $3, 'web', 'https://github.com/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
+				VALUES ($1, $2, $3, 'web', 'git://127.0.0.1/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
 			w.lux.Decide = func(map[string]any) fakelux.Behaviour {
 				return fakelux.Behaviour{CallTools: [][2]string{{"request_repository", `{"repository":"web","reason":"r","wait":true}`}},
 					Reply: "Done.", Commit: map[string]string{"a.md": "x\n"}, Message: "work"}

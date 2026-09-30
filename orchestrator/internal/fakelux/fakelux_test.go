@@ -9,6 +9,36 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
+// Before any plugin priced a Run, lux answers pending with no amounts; a
+// priced one comes back as the test set it, through the real client.
+func TestCostIsPendingUntilPriced(t *testing.T) {
+	fake := New("", "k", func(map[string]any) Behaviour { return Behaviour{Hang: true} })
+	srv := httptest.NewServer(fake.Handler())
+	t.Cleanup(srv.Close)
+	client := lux.New(srv.URL, "k")
+	run, err := client.Submit(context.Background(), lux.Spec{Image: lux.Image{Ref: "agent:1"},
+		Workload: lux.Workload{Adapter: "generic", Command: []string{"true"}}}, "cost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := client.Cost(context.Background(), run.ID)
+	if err != nil || c.Status != lux.CostPending {
+		t.Fatalf("got %+v %v", c, err)
+	}
+	if _, ok := c.FamilyUSD(lux.FamilyAI); ok {
+		t.Error("an unpriced Run has an AI amount")
+	}
+	fake.SetCost(run.ID, lux.RunCost{Status: lux.CostFinal, Final: true,
+		ByFamily: []lux.FamilyCost{{Family: lux.FamilyAI, Currency: "USD", Amount: "1.810247"}}})
+	c, err = client.Cost(context.Background(), run.ID)
+	if ai, _ := c.FamilyUSD(lux.FamilyAI); err != nil || c.Status != lux.CostFinal || ai != "1.810247" {
+		t.Errorf("got %+v %v", c, err)
+	}
+	if _, err := client.Cost(context.Background(), "lrun_404"); !lux.IsNotFound(err) {
+		t.Errorf("unknown Run: %v", err)
+	}
+}
+
 // A registry login real lux would refuse (lux internal/spec/spec.go
 // validRegistry) is refused here too, so a spec cannot pass only the fake.
 func TestASubmitWithARegistryLuxWouldRefuseIsRefused(t *testing.T) {

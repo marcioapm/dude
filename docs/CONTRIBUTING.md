@@ -289,9 +289,20 @@ Escape, CSS suppression, or shared input changes are involved.
 Cloudflare Access is not implemented yet. Enabling keyless sign-in requires the
 coordinated person-principal, ownership, push and attribution migration in both
 processes first; a person ID must never be substituted for an API-key ID.
-Eventual aiverse rendering must supply `DUDE_CONFIG` with backend `[auth]`
-configuration, including the fixed trusted `public_url` and Access team/audience,
-without changing the default API-key mode. No aiverse wiring is included here.
+Eventual aiverse rendering must supply the `[auth]` settings in dude's
+configuration file (or their `DUDE_AUTH_*` variables), including the fixed
+trusted `public_url` and Access team/audience, without changing the default
+API-key mode. No aiverse wiring is included here.
+
+**Configuration** is one TOML file for both processes plus the environment
+(docs/operations.md, "Configuration"). The key table lives once per language
+— `orchestrator/internal/config` and `apps/control-plane/src/config.ts` —
+and both suites compare it to `tests/fixtures/config/keys.json` and resolve
+`full.toml` to `full.json`: a new setting is a row in all three and a line
+in `full.toml`, `full.json` and `docs/dude.example.toml`. Every file in
+`tests/fixtures/config/invalid/` must be refused by both suites with the
+error its first comment line names. Read sites take
+values from the resolved config, never `os.Getenv`/`process.env`.
 
 ## What's next
 
