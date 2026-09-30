@@ -55,6 +55,7 @@ function run(patch: Partial<Run> & { id: string; phase: Run["phase"]; role: Run[
     category: null, parentRunId: null, baseRefs: { "web-console": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0" }, heads: {},
     branch: BRANCH, harness: "opencode", model: "claude-sonnet-4.5", dudePause: null,
     tokens: { input: 380_000, output: 32_000, cacheRead: 0, cacheWrite: 0, context: 118_200 },
+    machine: { sizeId: "msz_large", name: "Large", cpus: 8, memoryMiB: 16384, diskGiB: 80, pool: null, from: "organization" },
     createdAt: iso(40 * MIN), startedAt: iso(38 * MIN), endedAt: null,
     ...patch,
   };

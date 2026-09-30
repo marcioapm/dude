@@ -75,6 +75,8 @@ export const agentModelConfigSchema = z.object({
   effort: effortSchema.optional(),
   /** Running time allowed per session, in minutes. */
   timeLimitMinutes: timeLimitMinutesSchema.optional(),
+  /** The machine size its sessions run on (an organization's size id); unset is the default size. */
+  machineSize: z.string().min(1).optional(),
 });
 export type AgentModelConfig = z.infer<typeof agentModelConfigSchema>;
 
@@ -411,6 +413,25 @@ export const runSchema = z.object({
       context: z.number(),
     })
     .default({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, context: 0 }),
+  /**
+   * What it ran on, as it was when its spec was built: the size's name and
+   * spec then, whatever happened to the size since. Null for a Run from
+   * before sizes, or not yet submitted.
+   */
+  machine: z
+    .object({
+      sizeId: z.string().nullable(),
+      name: z.string(),
+      cpus: z.number(),
+      memoryMiB: z.number(),
+      diskGiB: z.number(),
+      pool: z.string().nullable(),
+      from: z.string().optional(),
+      /** The memory limit lux gave its container, in bytes, when lux reports one. */
+      memoryLimit: z.number().nullable().optional(),
+    })
+    .nullable()
+    .default(null),
   createdAt: z.string().datetime({ offset: true }),
   startedAt: z.string().datetime({ offset: true }).nullable().default(null),
   endedAt: z.string().datetime({ offset: true }).nullable().default(null),

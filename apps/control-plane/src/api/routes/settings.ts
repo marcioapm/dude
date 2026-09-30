@@ -204,6 +204,7 @@ async function settingsResponse(ctx: RequestContext, projectId?: string): Promis
             model: field(role, "model"),
             effort: field(role, "effort"),
             timeLimitMinutes: field(role, "timeLimitMinutes"),
+            machineSize: field(role, "machineSize"),
             enabled: enabledBy ? delivery[enabledBy] : null,
             prompt: {
               organization: promptState(orgCurrent, builtin[role]),
