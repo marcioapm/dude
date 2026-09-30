@@ -89,8 +89,8 @@ test("legacy key and direct person audits resolve without inventing a key", asyn
     const principal = who === "key" ? keyed : person;
     const project = await (await call(who, "POST", "/v1/projects", { name: who, slug: who })).json() as { id: string };
     await call(who, "DELETE", `/v1/projects/${project.id}/image`);
-    await call(who, "PATCH", `/v1/projects/${project.id}/settings`, { roles: { implementer: { model: "test/model" } } });
-    await call(who, "PATCH", "/v1/settings/organization", { roles: { implementer: { model: "test/model" } } });
+    await call(who, "PATCH", `/v1/projects/${project.id}/settings`, { roles: { implementer: { model: "llm-anthropic/test-model" } } });
+    await call(who, "PATCH", "/v1/settings/organization", { roles: { implementer: { model: "llm-anthropic/test-model" } } });
     const task = `${project.id}_task`;
     const finding = `${project.id}_finding`;
     await owner`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES (${task}, ${org}, ${project.id}, 1, 'Task')`;
