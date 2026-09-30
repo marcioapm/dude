@@ -252,6 +252,40 @@ describe("usage", () => {
     expect(costUsd).toBe(0);
     expect(tokens).toBe(0);
   });
+
+  test("lux's reported AI cost replaces the harness's sum, latest wins, and is settled only when final", () => {
+    const events = [
+      ev(EventTypes.ModelRequestCompleted, { costUsd: 0.02 }),
+      ev(EventTypes.ModelRequestCompleted, { costUsd: 0.03 }),
+    ];
+    expect(project(events)).toMatchObject({ costSource: { from: "harness", settled: false } });
+
+    events.push(ev(EventTypes.RunCostReported, { aiUsd: 1.2, computeUsd: 0.004, status: "incomplete" }));
+    let c = project(events);
+    expect(c.costUsd).toBe(1.2);
+    expect(c.costSource).toEqual({ from: "lux", settled: false });
+
+    // Harness deltas after lux reported are the same tokens: not added on.
+    events.push(ev(EventTypes.ModelRequestCompleted, { costUsd: 0.5 }));
+    events.push(ev(EventTypes.RunCostReported, { aiUsd: 1.810247, computeUsd: 0.007659225, status: "final" }));
+    c = project(events);
+    expect(c.costUsd).toBe(1.810247);
+    expect(c.costSource).toEqual({ from: "lux", settled: true });
+
+    // The same answer folded one event at a time.
+    let state = emptyProjection();
+    for (const e of events) state = apply(state, [e]);
+    expect(snapshot(state, "completed").costUsd).toBe(1.810247);
+  });
+
+  test("a report with no AI amount leaves the harness's cost standing", () => {
+    const c = project([
+      ev(EventTypes.ModelRequestCompleted, { costUsd: 0.04 }),
+      ev(EventTypes.RunCostReported, { aiUsd: null, computeUsd: 0.001, status: "pending" }),
+    ]);
+    expect(c.costUsd).toBeCloseTo(0.04, 9);
+    expect(c.costSource.from).toBe("harness");
+  });
 });
 
 describe("what the agent received, thought and got back", () => {
