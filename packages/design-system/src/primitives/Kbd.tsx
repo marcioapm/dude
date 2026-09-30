@@ -51,40 +51,41 @@ export interface MarkdownCheatsheetProps {
   readonly title?: string | undefined;
   /**
    * More `[source, meaning]` rows, for what the text means where it is
-   * written. A row whose source is already listed replaces its meaning:
-   * `["- [ ] item", "a criterion"]`.
+   * written. A row whose source is already listed gives it that meaning
+   * instead of adding a row: `["- [ ] item", "a criterion"]`. A shortcut
+   * row keeps its keys after the meaning.
    */
   readonly extra?: ReadonlyArray<readonly [string, string]> | undefined;
 }
 
 /** The Markdown `MarkdownEditor` reads, and its shortcuts, for the column beside it. */
 export function MarkdownCheatsheet({ title = "Markdown", extra = [] }: MarkdownCheatsheetProps) {
-  const shortcuts = (Object.keys(FORMAT_KEYS) as MarkdownFormat[]).flatMap((f) => {
+  // One row per source, in order of first appearance: shortcuts, the rows without one, then extras.
+  const rows = new Map<string, { meaning?: string; keys?: ReadonlyArray<string> }>();
+  for (const f of Object.keys(FORMAT_KEYS) as MarkdownFormat[]) {
     const source = SHORTCUT_SOURCE[f];
-    return source ? [[source, ["mod", FORMAT_KEYS[f]!.toUpperCase()]] as const] : [];
-  });
-  const meanings = new Map<string, string>(WITHOUT_SHORTCUT);
-  for (const [source, what] of extra) meanings.set(source, what);
-  const rows: ReadonlyArray<readonly [string, ReadonlyArray<string> | string]> = [...shortcuts, ...meanings];
+    if (source) rows.set(source, { keys: ["mod", FORMAT_KEYS[f]!.toUpperCase()] });
+  }
+  for (const [source, meaning] of [...WITHOUT_SHORTCUT, ...extra]) rows.set(source, { ...rows.get(source), meaning });
   return (
     <section className={styles["help"]}>
       <h3 className={cx("ds-label", styles["helpTitle"])}>{title}</h3>
       <dl className={styles["cheats"]}>
-        {rows.map(([source, what]) => (
+        {[...rows].map(([source, { meaning, keys }]) => (
           <div key={source} className={styles["cheat"]}>
             <dt>
               <code className={styles["source"]}>{source}</code>
             </dt>
             <dd>
-              {typeof what === "string" ? (
-                what
-              ) : (
+              {meaning}
+              {meaning && keys ? " " : null}
+              {keys ? (
                 <span className={styles["keys"]}>
-                  {what.map((k) => (
+                  {keys.map((k) => (
                     <Kbd key={k}>{k}</Kbd>
                   ))}
                 </span>
-              )}
+              ) : null}
             </dd>
           </div>
         ))}
