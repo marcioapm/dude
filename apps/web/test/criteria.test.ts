@@ -5,7 +5,8 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { criteriaFromMarkdown, criteriaToMarkdown, criterionTooLong } from "../src/screens/criteria.ts";
+import { parseMarkdown } from "@dude/design-system";
+import { criteriaFromMarkdown, criteriaToMarkdown, criterionTooLong, type ParsedCriteria } from "../src/screens/criteria.ts";
 
 const from = (src: string) => criteriaFromMarkdown(src);
 const roundTrip = (items: string[]) => from(criteriaToMarkdown(items)).items;
@@ -92,6 +93,22 @@ describe("criteriaFromMarkdown", () => {
 
   test("a list written with CRLF line endings is the same criteria", () => {
     expect(from("- [ ] one\r\n- [x] two\r\n  more\r\n")).toEqual({ items: ["one", "two\r\nmore"], stray: false });
+  });
+
+  test("around a fence in an item, the saved criterion holds what Preview shows in it", () => {
+    const cases: [string, ParsedCriteria][] = [
+      ["- ```\n  code\nlazy", { items: ["```\ncode\nlazy"], stray: false }],
+      ["- ```\n  code\n  ```\nlazy", { items: ["```\ncode\n```\nlazy"], stray: false }],
+      ["- ```\n  code\n\ntext", { items: ["```\ncode"], stray: true }],
+      ["- intro\n  ```\n  code\nlazy\n- next", { items: ["intro\n```\ncode\nlazy", "next"], stray: false }],
+    ];
+    for (const [src, expected] of cases) {
+      const saved = from(src);
+      expect(saved).toEqual(expected);
+      const list = parseMarkdown(src)[0];
+      if (list?.t !== "list") throw new Error(`no list parsed from ${JSON.stringify(src)}`);
+      expect(saved.items.map((c) => parseMarkdown(c))).toEqual(list.items.map((item) => item.c));
+    }
   });
 });
 
