@@ -104,6 +104,13 @@ export function FormDialog(props: FormDialogProps) {
     if (!open && unsaved > 0) setConfirming(true);
     else props.onOpenChange(open);
   };
+  // Radix can leave this dialog's Escape listener the highest layer when the
+  // confirmation opened from an Escape; an Escape then belongs to the confirmation.
+  const onEscapeKeyDown = (e: KeyboardEvent) => {
+    if (!confirming) return;
+    e.preventDefault();
+    setConfirming(false);
+  };
   return (
     <>
       <Dialog
@@ -116,6 +123,7 @@ export function FormDialog(props: FormDialogProps) {
         aside={props.open ? props.aside : undefined}
         asideLabel={props.asideLabel}
         footerStart={props.footerStart}
+        onEscapeKeyDown={onEscapeKeyDown}
         // A document's column scrolls: under the fields the reason would be out of sight.
         footerProblem={document ? props.problem : undefined}
         onKeyDown={(e) => {
