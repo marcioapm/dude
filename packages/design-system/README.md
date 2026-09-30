@@ -1020,7 +1020,8 @@ EmptyState, ScrollArea.
 - **LinkButton** (a primitive) — a real link drawn as a button, for a way
   out among actions. **TerminalLink** is it for a run's lux terminal
   ("Open terminal in lux ↗"): in a session's rail, and in a branch
-  preview's run line.
+  preview's run line; the overview's `ServersSummary` carries it short,
+  as "Terminal".
 
 `src/components/` — live work:
 
