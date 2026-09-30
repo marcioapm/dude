@@ -31,6 +31,8 @@ const (
 	evDirectiveDelivered = "run.directive.delivered"
 	evDirectiveAccepted  = "run.directive.accepted"
 	evDirectiveFailed    = "run.directive.failed"
+	// inputConsumed: directiveReceipt's name for a lux.input.consumed.
+	inputConsumed = "consumed"
 )
 
 // translator turns one lux Run's output into dude's ledger, and into the
@@ -250,11 +252,16 @@ func (t *translator) shimEvent(ctx context.Context, tx pgx.Tx, s *Syncer, typ st
 		return t.session(ctx, tx, s, str("sessionId"), epoch)
 	case "lux.activity":
 		return t.activity(ctx, tx, s, str("activity"))
-	case "lux.input":
-		// The task itself: recorded when the agent has it, as lux delivered
-		// it — from the first receipt that carries it.
+	case lux.RecordInputConsumed, lux.RecordInputFailed:
 		if str("requestId") == promptRequestID {
-			if str("error") != "" || str("phase") == "consumed" {
+			return nil
+		}
+		return t.directiveReceipt(ctx, tx, s, typ, data)
+	case lux.RecordInput:
+		// The task itself: recorded when the agent has it, as lux delivered
+		// it — from its first answer.
+		if str("requestId") == promptRequestID {
+			if str("error") != "" || str("phase") == lux.InputFailed {
 				return nil
 			}
 			// Once per Run: an agent resumed on another host is not given its
@@ -274,21 +281,24 @@ func (t *translator) shimEvent(ctx context.Context, tx pgx.Tx, s *Syncer, typ st
 			}
 			return s.event(ctx, tx, t.run, evPromptDelivered, ledger.ActorSystem, payload)
 		}
-		return t.directiveReceipt(ctx, tx, s, data)
+		return t.directiveReceipt(ctx, tx, s, typ, data)
 	}
 	return nil
 }
 
-// directiveReceipt records what lux says became of a person's steer:
+// directiveReceipt records what lux says became of a person's steer, typ
+// being the record (lux.RecordInput and those following it):
 //
-//   - phase "accepted": the harness took it; lands says when the agent
-//     reads it (next_step, or next_turn for a harness that reads only
-//     between turns). With receipt false no "consumed" follows, so it is
-//     delivered now.
-//   - phase "consumed": the agent's next model step has it in context.
-//   - no phase: a lux from before the two receipts, which acknowledges
-//     once, on handoff. Delivered then, as it always was.
-//   - error: it will not reach the agent.
+//   - lux.input phase "accepted": the harness took it; lands says when the
+//     agent reads it (next_step, or next_turn for a harness that reads only
+//     between turns). With receipt false no lux.input.consumed follows, so
+//     it is delivered now.
+//   - lux.input.consumed: the agent's next model step has it in context.
+//   - lux.input with no phase and no error: a lux from before the phases,
+//     which acknowledges once, on handoff. Delivered then, as it always was.
+//   - lux.input phase "failed" (never accepted), lux.input.failed (after
+//     it was), or an older lux's lux.input with an error: it will not reach
+//     the agent.
 //
 // Each transition happens once per directive and Run however often lux
 // repeats a receipt (a reconnect, a resumed shim): the update is guarded on
@@ -300,10 +310,28 @@ func (t *translator) shimEvent(ctx context.Context, tx pgx.Tx, s *Syncer, typ st
 // failure wins: it is the agent's own report that it has the words, so the
 // failure and its error are cleared with it and run.directive.delivered is
 // written.
-func (t *translator) directiveReceipt(ctx context.Context, tx pgx.Tx, s *Syncer, data map[string]any) error {
+func (t *translator) directiveReceipt(ctx context.Context, tx pgx.Tx, s *Syncer, typ string, data map[string]any) error {
 	id, _ := data["requestId"].(string)
-	phase, _ := data["phase"].(string)
-	if msg, _ := data["error"].(string); msg != "" {
+	msg, _ := data["error"].(string)
+	var phase string
+	switch typ {
+	case lux.RecordInputConsumed:
+		phase = inputConsumed
+	case lux.RecordInputFailed:
+		phase = lux.InputFailed
+	default:
+		phase, _ = data["phase"].(string)
+		if phase != "" && phase != lux.InputAccepted && phase != lux.InputFailed {
+			return nil // lux.input carries no other phase
+		}
+		if phase == "" && msg != "" {
+			phase = lux.InputFailed
+		}
+	}
+	if phase == lux.InputFailed {
+		if msg == "" {
+			msg = "lux could not deliver it"
+		}
 		tag, err := tx.Exec(ctx, `UPDATE directives SET failed_at = now(), error = $3
 			WHERE id = $1 AND run_id = $2 AND delivered_at IS NULL AND failed_at IS NULL`, id, t.run.ID, msg)
 		if err != nil || tag.RowsAffected() == 0 {
@@ -322,7 +350,7 @@ func (t *translator) directiveReceipt(ctx context.Context, tx pgx.Tx, s *Syncer,
 			RETURNING d.id`, id, t.run.ID, msg)
 	}
 	receipt, _ := data["receipt"].(bool)
-	if phase == "accepted" {
+	if phase == lux.InputAccepted {
 		lands, _ := data["lands"].(string)
 		if lands != "next_step" && lands != "next_turn" {
 			lands = ""
@@ -349,14 +377,14 @@ func (t *translator) directiveReceipt(ctx context.Context, tx pgx.Tx, s *Syncer,
 	// first; a consumed or handoff receipt delivers even a failed one.
 	tag, err := tx.Exec(ctx, `UPDATE directives SET delivered_at = now(), accepted_at = COALESCE(accepted_at, now()),
 			failed_at = NULL, error = NULL
-		WHERE id = $1 AND run_id = $2 AND delivered_at IS NULL AND (failed_at IS NULL OR $3)`, id, t.run.ID, phase != "accepted")
+		WHERE id = $1 AND run_id = $2 AND delivered_at IS NULL AND (failed_at IS NULL OR $3)`, id, t.run.ID, phase != lux.InputAccepted)
 	if err != nil || tag.RowsAffected() == 0 {
 		return err
 	}
 	payload := map[string]any{"directiveId": id}
 	// Only a consumed receipt says when the agent read it; the other two
 	// say only that it was handed over.
-	if phase == "consumed" {
+	if phase == inputConsumed {
 		payload["read"] = true
 	}
 	if err := s.event(ctx, tx, t.run, evDirectiveDelivered, ledger.ActorSystem, payload); err != nil {
@@ -371,7 +399,7 @@ func (t *translator) directiveReceipt(ctx context.Context, tx pgx.Tx, s *Syncer,
 		FROM directives c WHERE c.id = $1 AND c.run_id = $2 AND c.interrupt_only IS FALSE
 		  AND d.run_id = c.run_id AND d.resends = COALESCE(c.resends, c.id) AND d.interrupt_only
 		  AND d.delivered_at IS NULL AND (d.failed_at IS NULL OR $3)
-		RETURNING d.id`, id, t.run.ID, phase != "accepted")
+		RETURNING d.id`, id, t.run.ID, phase != lux.InputAccepted)
 }
 
 // session records the placement the agent's session is established in. The

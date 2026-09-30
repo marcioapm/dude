@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // receiptWorld is one Run with one queued directive, and a translator for
@@ -39,13 +40,32 @@ func newReceiptWorld(t *testing.T) *receiptWorld {
 	return &receiptWorld{t: t, s: &Syncer{DB: app}, tr: &translator{run: run}, owner: owner, org: org}
 }
 
-func (w *receiptWorld) receive(data map[string]any) {
+// receive feeds one record lux's shim writes about an input (typ: lux.input,
+// lux.input.consumed, lux.input.failed).
+func (w *receiptWorld) receive(typ string, data map[string]any) {
 	w.t.Helper()
 	if err := w.s.DB.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
-		return w.tr.shimEvent(context.Background(), tx, w.s, "lux.input", data, 1)
+		return w.tr.shimEvent(context.Background(), tx, w.s, typ, data, 1)
 	}); err != nil {
 		w.t.Fatal(err)
 	}
+}
+
+// The records, as lux writes them.
+func accepted(id string, receipt bool, lands string) (string, map[string]any) {
+	return lux.RecordInput, map[string]any{"requestId": id, "phase": "accepted", "receipt": receipt, "lands": lands, "text": "also add a test"}
+}
+func consumed(id string) (string, map[string]any) {
+	return lux.RecordInputConsumed, map[string]any{"requestId": id}
+}
+func failedAfterAccepted(id, reason string) (string, map[string]any) {
+	return lux.RecordInputFailed, map[string]any{"requestId": id, "error": reason}
+}
+func failedFirst(id, reason string) (string, map[string]any) {
+	return lux.RecordInput, map[string]any{"requestId": id, "phase": "failed", "error": reason}
+}
+func legacyHandoff(id string) (string, map[string]any) {
+	return lux.RecordInput, map[string]any{"requestId": id, "text": "also add a test"}
 }
 
 func (w *receiptWorld) events(typ string) int {
@@ -69,9 +89,8 @@ func (w *receiptWorld) directive() (accepted, delivered bool, lands string) {
 // repeats it.
 func TestASteerIsAcceptedThenReadEachOnce(t *testing.T) {
 	w := newReceiptWorld(t)
-	accepted := map[string]any{"requestId": "dir_1", "phase": "accepted", "receipt": true, "lands": "next_step", "text": "also add a test"}
-	w.receive(accepted)
-	w.receive(accepted)
+	w.receive(accepted("dir_1", true, "next_step"))
+	w.receive(accepted("dir_1", true, "next_step"))
 	if a, d, lands := w.directive(); !a || d || lands != "next_step" {
 		t.Fatalf("after accepted: accepted=%v delivered=%v lands=%q", a, d, lands)
 	}
@@ -82,9 +101,8 @@ func TestASteerIsAcceptedThenReadEachOnce(t *testing.T) {
 		t.Errorf("a steer the harness only took was reported delivered")
 	}
 
-	consumed := map[string]any{"requestId": "dir_1", "phase": "consumed"}
-	w.receive(consumed)
-	w.receive(consumed)
+	w.receive(consumed("dir_1"))
+	w.receive(consumed("dir_1"))
 	if _, d, _ := w.directive(); !d {
 		t.Fatal("a consumed steer was not delivered")
 	}
@@ -92,7 +110,7 @@ func TestASteerIsAcceptedThenReadEachOnce(t *testing.T) {
 		t.Errorf("%d delivered events for one directive, want 1", n)
 	}
 	// A late accepted after the read changes nothing.
-	w.receive(accepted)
+	w.receive(accepted("dir_1", true, "next_step"))
 	if n := w.events(evDirectiveAccepted); n != 1 {
 		t.Errorf("an accepted after the read was recorded again")
 	}
@@ -101,7 +119,7 @@ func TestASteerIsAcceptedThenReadEachOnce(t *testing.T) {
 // With no read receipt to come, accepted is all there will be: delivered then.
 func TestAnAcceptedSteerWithNoReceiptIsDeliveredAtOnce(t *testing.T) {
 	w := newReceiptWorld(t)
-	w.receive(map[string]any{"requestId": "dir_1", "phase": "accepted", "receipt": false, "lands": "next_turn"})
+	w.receive(accepted("dir_1", false, "next_turn"))
 	if a, d, lands := w.directive(); !a || !d || lands != "next_turn" {
 		t.Fatalf("accepted=%v delivered=%v lands=%q", a, d, lands)
 	}
@@ -113,9 +131,8 @@ func TestAnAcceptedSteerWithNoReceiptIsDeliveredAtOnce(t *testing.T) {
 // An older lux acknowledges once, with no phase: delivered on it, once.
 func TestALegacyReceiptDeliversOnce(t *testing.T) {
 	w := newReceiptWorld(t)
-	legacy := map[string]any{"requestId": "dir_1", "text": "also add a test"}
-	w.receive(legacy)
-	w.receive(legacy)
+	w.receive(legacyHandoff("dir_1"))
+	w.receive(legacyHandoff("dir_1"))
 	if _, d, _ := w.directive(); !d {
 		t.Fatal("a legacy receipt did not deliver")
 	}
@@ -132,7 +149,7 @@ func TestALegacyReceiptDeliversOnce(t *testing.T) {
 func TestAReceiptOnAnotherRunDoesNothing(t *testing.T) {
 	w := newReceiptWorld(t)
 	w.tr.run.ID = "other_" + w.org
-	w.receive(map[string]any{"requestId": "dir_1", "phase": "consumed"})
+	w.receive(consumed("dir_1"))
 	if _, d, _ := w.directive(); d {
 		t.Error("another Run's receipt delivered the directive")
 	}
@@ -140,9 +157,8 @@ func TestAReceiptOnAnotherRunDoesNothing(t *testing.T) {
 
 func TestAFailedSteerIsRecordedOnceAndNotDelivered(t *testing.T) {
 	w := newReceiptWorld(t)
-	failed := map[string]any{"requestId": "dir_1", "error": "the agent exited"}
-	w.receive(failed)
-	w.receive(failed)
+	w.receive(failedFirst("dir_1", "the agent exited"))
+	w.receive(failedFirst("dir_1", "the agent exited"))
 	if _, d, _ := w.directive(); d {
 		t.Error("a failed steer was delivered")
 	}
@@ -166,8 +182,8 @@ func TestAnAcceptedReceiptAfterAFailureChangesNothing(t *testing.T) {
 	for _, receipt := range []bool{true, false} {
 		t.Run(map[bool]string{true: "receipt", false: "no receipt"}[receipt], func(t *testing.T) {
 			w := newReceiptWorld(t)
-			w.receive(map[string]any{"requestId": "dir_1", "error": "the agent exited"})
-			w.receive(map[string]any{"requestId": "dir_1", "phase": "accepted", "receipt": receipt, "lands": "next_step"})
+			w.receive(failedAfterAccepted("dir_1", "the agent exited"))
+			w.receive(accepted("dir_1", receipt, "next_step"))
 			if a, d, _ := w.directive(); a || d {
 				t.Errorf("accepted=%v delivered=%v after a failure", a, d)
 			}
@@ -184,15 +200,13 @@ func TestAnAcceptedReceiptAfterAFailureChangesNothing(t *testing.T) {
 // A failure, then the agent's own read receipt (or an older lux's
 // handoff): the read wins, and the failure goes with it.
 func TestAReadReceiptAfterAFailureDeliversAndClearsIt(t *testing.T) {
-	for _, receipt := range []map[string]any{
-		{"requestId": "dir_1", "phase": "consumed"},
-		{"requestId": "dir_1", "text": "also add a test"},
-	} {
-		t.Run(map[bool]string{true: "consumed", false: "legacy"}[receipt["phase"] != nil], func(t *testing.T) {
+	type record func(string) (string, map[string]any)
+	for name, read := range map[string]record{"consumed": consumed, "legacy": legacyHandoff} {
+		t.Run(name, func(t *testing.T) {
 			w := newReceiptWorld(t)
-			w.receive(map[string]any{"requestId": "dir_1", "error": "the agent exited"})
-			w.receive(receipt)
-			w.receive(receipt)
+			w.receive(failedAfterAccepted("dir_1", "the agent exited"))
+			w.receive(read("dir_1"))
+			w.receive(read("dir_1"))
 			if _, d, _ := w.directive(); !d {
 				t.Error("a read receipt after a failure did not deliver")
 			}
@@ -208,14 +222,14 @@ func TestAReadReceiptAfterAFailureDeliversAndClearsIt(t *testing.T) {
 
 // Delivered is final: a failure reported after it changes nothing.
 func TestAFailureAfterDeliveryChangesNothing(t *testing.T) {
-	for _, first := range []map[string]any{
-		{"requestId": "dir_1", "phase": "consumed"},
-		{"requestId": "dir_1", "phase": "accepted", "receipt": false, "lands": "next_turn"},
+	for name, first := range map[string]func() (string, map[string]any){
+		"consumed": func() (string, map[string]any) { return consumed("dir_1") },
+		"accepted": func() (string, map[string]any) { return accepted("dir_1", false, "next_turn") },
 	} {
-		t.Run(first["phase"].(string), func(t *testing.T) {
+		t.Run(name, func(t *testing.T) {
 			w := newReceiptWorld(t)
-			w.receive(first)
-			w.receive(map[string]any{"requestId": "dir_1", "error": "the agent exited"})
+			w.receive(first())
+			w.receive(failedAfterAccepted("dir_1", "the agent exited"))
 			if _, d, _ := w.directive(); !d {
 				t.Error("a failure undid a delivery")
 			}
@@ -232,8 +246,8 @@ func TestAFailureAfterDeliveryChangesNothing(t *testing.T) {
 // Accepted, then failed: the failure stands against a steer only taken.
 func TestAFailureAfterAcceptedIsRecorded(t *testing.T) {
 	w := newReceiptWorld(t)
-	w.receive(map[string]any{"requestId": "dir_1", "phase": "accepted", "receipt": true, "lands": "next_step"})
-	w.receive(map[string]any{"requestId": "dir_1", "error": "the turn was cancelled before the agent read it"})
+	w.receive(accepted("dir_1", true, "next_step"))
+	w.receive(failedAfterAccepted("dir_1", "the turn was cancelled before the agent read it"))
 	if _, d, _ := w.directive(); d {
 		t.Error("a failed steer was delivered")
 	}
@@ -251,8 +265,8 @@ func TestAReadOriginalClearsItsFailedInterrupt(t *testing.T) {
 		VALUES ('dir_2', $1, 'wi_'||$1, 'run_'||$1, 'also add a test', 'dir_1', 'dir_1', true, true, now())`, w.org); err != nil {
 		t.Fatal(err)
 	}
-	w.receive(map[string]any{"requestId": "dir_2", "error": "workload not reachable"})
-	w.receive(map[string]any{"requestId": "dir_1", "phase": "consumed"})
+	w.receive(failedFirst("dir_2", "workload not reachable"))
+	w.receive(consumed("dir_1"))
 	var delivered, failed bool
 	_ = w.owner.QueryRow(context.Background(), `SELECT delivered_at IS NOT NULL, failed_at IS NOT NULL OR error IS NOT NULL FROM directives WHERE id = 'dir_2'`).
 		Scan(&delivered, &failed)
@@ -286,9 +300,8 @@ func TestAnInterruptAloneFailsWithItsWords(t *testing.T) {
 	w := newReceiptWorld(t)
 	w.interruptOnly("dir_2")
 	w.interruptOnly("dir_3")
-	failed := map[string]any{"requestId": "dir_1", "error": "the turn was cancelled before the agent read it"}
-	w.receive(failed)
-	w.receive(failed)
+	w.receive(failedAfterAccepted("dir_1", "the turn was cancelled before the agent read it"))
+	w.receive(failedAfterAccepted("dir_1", "the turn was cancelled before the agent read it"))
 	for _, id := range []string{"dir_2", "dir_3"} {
 		if d, f := w.state(id); d || f != "the turn was cancelled before the agent read it" {
 			t.Errorf("%s: delivered=%v error=%q, want failed with the words' reason", id, d, f)
@@ -298,7 +311,7 @@ func TestAnInterruptAloneFailsWithItsWords(t *testing.T) {
 		t.Errorf("%d failed events, want one for each of three", n)
 	}
 	// Read after all: the words and both interrupts are delivered.
-	w.receive(map[string]any{"requestId": "dir_1", "phase": "consumed"})
+	w.receive(consumed("dir_1"))
 	for _, id := range []string{"dir_2", "dir_3"} {
 		if d, f := w.state(id); !d || f != "" {
 			t.Errorf("%s: delivered=%v error=%q after the read", id, d, f)
@@ -315,11 +328,11 @@ func TestAnInterruptAloneWaitsOnARetryCarryingItsWords(t *testing.T) {
 		VALUES ('dir_3', $1, 'wi_'||$1, 'run_'||$1, 'also add a test', 'dir_2', 'dir_1', true, false, now())`, w.org); err != nil {
 		t.Fatal(err)
 	}
-	w.receive(map[string]any{"requestId": "dir_1", "error": "the agent exited"})
+	w.receive(failedAfterAccepted("dir_1", "the agent exited"))
 	if d, f := w.state("dir_2"); d || f != "" {
 		t.Fatalf("interrupt: delivered=%v error=%q while a retry carries its words", d, f)
 	}
-	w.receive(map[string]any{"requestId": "dir_3", "phase": "consumed"})
+	w.receive(consumed("dir_3"))
 	if d, f := w.state("dir_2"); !d || f != "" {
 		t.Errorf("interrupt: delivered=%v error=%q after the retry was read", d, f)
 	}
@@ -328,5 +341,39 @@ func TestAnInterruptAloneWaitsOnARetryCarryingItsWords(t *testing.T) {
 		AND payload->>'directiveId' = 'dir_2' AND (payload->>'interruptOnly')::boolean`, evDirectiveDelivered).Scan(&n)
 	if n != 1 {
 		t.Errorf("%d interrupt-only delivered events, want 1", n)
+	}
+}
+
+// Every shape lux can write a failure in: the first answer failed, a
+// failure after acceptance, and an older lux's error with no phase.
+func TestEachFormOfFailureIsRecordedOnce(t *testing.T) {
+	for name, rec := range map[string]func() (string, map[string]any){
+		"never accepted": func() (string, map[string]any) { return failedFirst("dir_1", "the agent exited") },
+		"after accepted": func() (string, map[string]any) { return failedAfterAccepted("dir_1", "the agent exited") },
+		"older lux error": func() (string, map[string]any) {
+			return lux.RecordInput, map[string]any{"requestId": "dir_1", "error": "the agent exited"}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newReceiptWorld(t)
+			w.receive(rec())
+			w.receive(rec())
+			if f, msg := w.failure(); !f || msg != "the agent exited" {
+				t.Errorf("failed=%v error=%q", f, msg)
+			}
+			if _, d, _ := w.directive(); d || w.events(evDirectiveFailed) != 1 {
+				t.Errorf("delivered=%v, %d failed events, want not delivered and 1", d, w.events(evDirectiveFailed))
+			}
+		})
+	}
+}
+
+// A lux.input with a phase this contract does not know is not a legacy
+// handoff: it delivers nothing.
+func TestAnUnknownInputPhaseDeliversNothing(t *testing.T) {
+	w := newReceiptWorld(t)
+	w.receive(lux.RecordInput, map[string]any{"requestId": "dir_1", "phase": "consumed"})
+	if a, d, _ := w.directive(); a || d {
+		t.Errorf("accepted=%v delivered=%v from a phase lux.input does not carry", a, d)
 	}
 }
