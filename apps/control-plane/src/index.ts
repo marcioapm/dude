@@ -148,7 +148,7 @@ export function validate(args: string[], opts?: LoadOptions,
 }
 
 if (import.meta.main) {
-  if (process.argv.includes("--version")) {
+  if (process.argv[2] === "--version") {
     console.log(version);
     process.exit(0);
   }

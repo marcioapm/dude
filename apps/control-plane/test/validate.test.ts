@@ -54,10 +54,10 @@ function file(text: string, mode = 0o600): string {
   return path;
 }
 
-async function run(path: string, ...args: string[]) {
-  const proc = Bun.spawn(["bun", entry, "validate", ...args], {
-    // Only the file configures it: none of this machine's own settings.
-    env: { PATH: process.env.PATH!, HOME: dir, DUDE_CONFIG: path },
+// The backend's entry point with `args`, configured by `env` alone.
+async function backend(args: string[], env: Record<string, string>) {
+  const proc = Bun.spawn(["bun", entry, ...args], {
+    env: { PATH: process.env.PATH!, HOME: dir, ...env },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -67,6 +67,9 @@ async function run(path: string, ...args: string[]) {
   expect(stdout + stderr).not.toContain(SECRET);
   return { exit, stdout, stderr };
 }
+
+// Only the file configures it: none of this machine's own settings.
+const run = (path: string, ...args: string[]) => backend(["validate", ...args], { DUDE_CONFIG: path });
 
 // Startup's own message for a refused file.
 const startupError = (path: string) => resolveSettings({ env: { DUDE_CONFIG: path }, defaultPath: join(dir, "absent") }).error;
@@ -116,6 +119,14 @@ describe("dude-backend validate", () => {
 
   test("an extra argument: exit 2 with usage", async () => {
     expect(await run(file(good), "extra")).toEqual({ exit: 2, stdout: "", stderr: "usage: dude-backend validate\n" });
+  });
+
+  test("--version after validate: exit 2 with usage, not the version", async () => {
+    expect(await run(file(good), "--version")).toEqual({ exit: 2, stdout: "", stderr: "usage: dude-backend validate\n" });
+  });
+
+  test("--version alone: the version, with no configuration at all", async () => {
+    expect(await backend(["--version"], {})).toEqual({ exit: 0, stdout: "dev\n", stderr: "" });
   });
 
   test("no file: ok with no file", () => {
