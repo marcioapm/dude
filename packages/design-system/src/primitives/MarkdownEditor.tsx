@@ -137,8 +137,16 @@ export function MarkdownEditor({
 
   const switchTo = (next: MarkdownEditorMode) => {
     if (next === mode) return;
-    // Preview keeps the source's height, so the dialog does not jump.
-    if (next === "preview" && area.current?.offsetHeight) setPreviewMin(area.current.offsetHeight);
+    // Preview keeps the source's height, so the dialog does not jump. Filling,
+    // that is its content (or minRows) height without the flex surplus, which
+    // belongs to the container's size then: Preview flexes into whatever the
+    // container has now, and a smaller viewport later takes the surplus back.
+    const el = area.current;
+    if (next === "preview" && el?.offsetHeight) {
+      if (fill) el.style.flexGrow = "0";
+      setPreviewMin(el.offsetHeight);
+      if (fill) el.style.flexGrow = "";
+    }
     setChosen(next);
   };
 

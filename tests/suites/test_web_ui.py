@@ -324,6 +324,55 @@ def test_on_a_phone_the_task_dialogs_writing_fills_the_screen_before_the_aside(
     assert console_errors == []
 
 
+def test_the_task_dialog_refits_when_the_window_shrinks_in_write_and_in_preview(
+    page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list
+):
+    page.set_viewport_size({"width": 1280, "height": 900})
+    sign_in(page, web_url, org["api_key"])
+    page.get_by_test_id("new-task").click()
+    expect(page.get_by_role("dialog", name="New task").get_by_text(forge_project["name"], exact=True)).to_be_visible()
+    page.wait_for_function(
+        "document.querySelector('[role=dialog]').getAnimations().every(a => a.playState === 'finished')")
+
+    def fits() -> dict:
+        m = page.evaluate(_TASK_COLUMN)
+        assert m["scrollHeight"] <= m["clientHeight"], m
+        assert abs(m["criteriaTop"] - m["gap"] - m["goalBottom"]) <= 2, m
+        assert abs(m["columnInnerBottom"] - m["criteriaBottom"]) <= 2, m
+        return m
+
+    # Write, in the same open dialog: 900 → 720 → 900.
+    tall = fits()
+    page.set_viewport_size({"width": 1280, "height": 720})
+    short = fits()
+    assert short["goalBottom"] < tall["goalBottom"] - 100
+    page.set_viewport_size({"width": 1280, "height": 900})
+    fits()
+
+    # Preview entered at 900, then 720: it gives the surplus back, and fills again at 900.
+    goal_view = page.get_by_role("tablist", name="Goal view")
+    page.get_by_test_id("task-goal").fill("A short goal.")
+    goal_view.get_by_role("tab", name="Preview").click()
+    expect(page.get_by_test_id("task-goal-preview")).to_contain_text("A short goal.")
+    fits()
+    page.set_viewport_size({"width": 1280, "height": 720})
+    fits()
+    page.set_viewport_size({"width": 1280, "height": 900})
+    fits()
+
+    # A long source still keeps its height in Preview; the column scrolls.
+    goal_view.get_by_role("tab", name="Write").click()
+    page.get_by_test_id("task-goal").fill("\n\n".join(f"Line {i}" for i in range(40)))
+    source = page.get_by_test_id("task-goal").evaluate("el => el.offsetHeight")
+    goal_view.get_by_role("tab", name="Preview").click()
+    preview = page.get_by_test_id("task-goal-preview")
+    expect(preview).to_contain_text("Line 39")
+    assert preview.evaluate("el => el.offsetHeight") >= source
+    m = page.evaluate(_TASK_COLUMN)
+    assert m["scrollHeight"] > m["clientHeight"], m
+    assert console_errors == []
+
+
 READ_CRITERIA = "- [ ] SEPA appears on the payment step\n- Invoice only for annual plans,\nnever monthly ones"
 
 
