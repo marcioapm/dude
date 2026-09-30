@@ -1013,7 +1013,9 @@ EmptyState, ScrollArea.
 - **ServersRunLine / ServersPanel** — the run the servers live on as a
   line, and the panel: the task's Servers tab (a container: under 560px,
   a phone, its rows stack). A session has no servers panel; its servers
-  are its task's.
+  are its task's. A live run's line offers Start all, Stop all and Add
+  server; a branch preview's adds Stop preview, which ends the run, where
+  Stop all leaves it live.
 - **PreviewStages / ServersMoved** — a branch preview's stages, and the
   notice with Start all after a run moved host.
 - **ServersSummary** — the overview aside's block, in PullRequestPanel's
