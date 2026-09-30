@@ -25,6 +25,7 @@ import { appendInScope } from "../../events/ledger.ts";
 import { requireProjectEditor } from "../access.ts";
 import { badRequest, conflict, intParam, json, noContent, notFound, parseBody } from "../http.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
+import { requireSize } from "./machines.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 /** A project's recipes and preview settings, as the API shows them (server_recipe, preview_settings: migration 055). */
@@ -109,8 +110,10 @@ async function putPreviewSettings(ctx: RequestContext): Promise<Response> {
     ...(input.image ? { image: input.image } : {}),
     egress: [...new Set(input.egress)],
     idleTimeoutMinutes: input.idleTimeoutMinutes,
+    ...(input.machineSize ? { machineSize: input.machineSize } : {}),
   };
   const previews = await withOrg(ctx.principal.organizationId, async (scope) => {
+    if (input.machineSize) await requireSize(scope, input.machineSize);
     const rows = await scope.sql`
       UPDATE projects SET preview_settings = ${stored}::jsonb, updated_at = now()
       WHERE id = ${projectId} RETURNING id`;
