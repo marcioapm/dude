@@ -12,7 +12,7 @@ import { Router } from "../src/api/router.ts";
 import { registerPeopleRoutes } from "../src/api/routes/people.ts";
 import { registerEventRoutes } from "../src/api/routes/events.ts";
 import { type AccessConfig, Config, ConfigError } from "../src/config.ts";
-import { authFor } from "../src/index.ts";
+import { authFor, routerFor as backendRouter } from "../src/index.ts";
 import { closePool, setPool } from "../src/db/client.ts";
 
 const suffix = Bun.randomUUIDv7("hex").slice(-12);
@@ -218,6 +218,66 @@ aud = "application-audience"
     await expect(authFor(config({ default_organization: `missing_${suffix}` }))).rejects.toThrow(ConfigError);
     expect(await owner`SELECT count(*)::int AS n FROM organizations`).toEqual(before);
     expect(typeof await authFor(config())).toBe("function");
+  });
+});
+
+describe("the backend's startup", () => {
+  const dir = mkdtempSync(join(tmpdir(), "dude-startup-auth-"));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  // Every [auth] key in the file is wrong for this test's edge; the variables below correct them.
+  const file = `
+[auth]
+provider = "cloudflare_access"
+public_url = "https://file.example.test"
+default_organization = "${other}"
+auto_create = false
+[auth.cloudflare_access]
+team = "fileteam"
+aud = "file-audience"
+`;
+  const env = {
+    DUDE_AUTH_PUBLIC_URL: ORIGIN, DUDE_AUTH_DEFAULT_ORGANIZATION: org,
+    DUDE_AUTH_CLOUDFLARE_ACCESS_TEAM: TEAM, DUDE_AUTH_CLOUDFLARE_ACCESS_AUD: AUD,
+  };
+  const started = (extra: Record<string, string> = {}) => {
+    const path = join(dir, "dude.toml");
+    writeFileSync(path, file, { mode: 0o600 });
+    const edge = new Edge();
+    edge.keys = [signer.jwk];
+    const settings = Config.load({ env: { DUDE_CONFIG: path, ...env, ...extra }, defaultPath: join(dir, "absent.toml") });
+    return backendRouter(settings, edge.fetch);
+  };
+
+  test("serves the file's [auth] with the environment over it", async () => {
+    const router = await started();
+    const id = `${org}_startup`;
+    await owner`INSERT INTO people (id, organization_id, name, email) VALUES (${id}, ${org}, 'Startup', 'startup@example.com')`;
+    const known = await me(router, cookie(await sign(signer, { email: "startup@example.com" })));
+    expect(known.status).toBe(200);
+    expect(known.body!.person.id).toBe(id);
+    expect(known.body!.authMethod).toBe("cloudflare_access");
+    // The file's audience was overridden, so a token for it is refused.
+    expect((await me(router, cookie(await sign(signer, { email: "startup@example.com" }, { aud: "file-audience" })))).status).toBe(401);
+    // A change without the configured origin is refused; with it, allowed.
+    const patch = (headers: Record<string, string>) => router.handle(new Request(`${ORIGIN}/v1/me`, {
+      method: "PATCH", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify({ name: "Startup" }),
+    }));
+    const token = await sign(signer, { email: "startup@example.com" });
+    expect((await patch(cookie(token))).status).toBe(403);
+    expect((await patch({ ...cookie(token), origin: "https://file.example.test" })).status).toBe(403);
+    expect((await patch({ ...cookie(token), origin: ORIGIN })).status).toBe(200);
+    // auto_create = false from the file: a stranger is refused and not created.
+    expect((await me(router, cookie(await sign(signer, { email: "startup-stranger@example.com" })))).status).toBe(401);
+    expect(await peopleByEmail("startup-stranger@example.com")).toHaveLength(0);
+  });
+
+  test("DUDE_AUTH_PROVIDER=api_key switches off the file's Access", async () => {
+    const router = await started({ DUDE_AUTH_PROVIDER: "api_key" });
+    expect((await me(router, cookie(await sign(signer, { email: "startup@example.com" })))).status).toBe(401);
+    const made = await createApiKey({ organizationId: org, name: "Startup key" });
+    const keyed = await me(router, { authorization: `Bearer ${made.key}` });
+    expect(keyed.status).toBe(200);
+    expect(keyed.body!.authMethod).toBe("api_key");
   });
 });
 

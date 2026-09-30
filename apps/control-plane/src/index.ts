@@ -10,7 +10,7 @@
 
 import { Router } from "./api/router.ts";
 import { type RequestAuthenticator, authenticate, requestAuthenticator } from "./api/auth.ts";
-import { accessAuthenticator, accessProfiles, accessVerifier } from "./api/cloudflareAccess.ts";
+import { type FetchLike, accessAuthenticator, accessProfiles, accessVerifier } from "./api/cloudflareAccess.ts";
 import { type AuthConfig, Config, config, organizationBySlug, useConfig } from "./config.ts";
 import { json } from "./api/http.ts";
 import { registerEventRoutes } from "./api/routes/events.ts";
@@ -75,7 +75,7 @@ export function buildRouter(webDir = config().webDir, auth: RequestAuthenticator
  * Cloudflare Access. Resolves the configured organization, so a name that
  * matches none stops startup rather than every sign-in.
  */
-export async function authFor(auth: AuthConfig, fetchImpl: typeof fetch = fetch): Promise<RequestAuthenticator> {
+export async function authFor(auth: AuthConfig, fetchImpl: FetchLike = fetch): Promise<RequestAuthenticator> {
   if (auth.provider === "api_key") return authenticate;
   const organizationId = await organizationBySlug(auth.default_organization);
   const { team, aud } = auth.cloudflare_access;
@@ -85,9 +85,12 @@ export async function authFor(auth: AuthConfig, fetchImpl: typeof fetch = fetch)
   }));
 }
 
-export function startServer(port = config().port, auth: RequestAuthenticator = authenticate) {
-  const router = buildRouter(undefined, auth);
+/** The router the backend serves under `settings`: its web app and its [auth]. */
+export async function routerFor(settings: Config, fetchImpl: FetchLike = fetch): Promise<Router> {
+  return buildRouter(settings.webDir, await authFor(settings.auth, fetchImpl));
+}
 
+export function startServer(port = config().port, router: Router = buildRouter()) {
   const server = Bun.serve({
     port,
     // SSE streams are long-lived; the default idle timeout would cut them off.
@@ -119,14 +122,14 @@ if (import.meta.main) {
     process.exit(1);
   }
 
-  let auth: RequestAuthenticator;
+  let router: Router;
   try {
-    auth = await authFor(settings.auth);
+    router = await routerFor(settings);
   } catch (err) {
     console.error(`configuration: ${(err as Error).message}`);
     process.exit(1);
   }
-  const server = startServer(settings.port, auth);
+  const server = startServer(settings.port, router);
   console.log(`backend listening on http://localhost:${server.port}`);
 
   // Events are written by the orchestrator as well as here; the live stream
