@@ -2,8 +2,12 @@ package main
 
 import (
 	"maps"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/marciomartins/dude/orchestrator/internal/config"
 )
 
 func TestEmbeddingsComeFromTheLLMUnlessOverriddenOrOff(t *testing.T) {
@@ -78,5 +82,34 @@ func TestEmbeddingsComeFromTheLLMUnlessOverriddenOrOff(t *testing.T) {
 				t.Errorf("got url %q key %q, want %q %q", c.URL, c.Key, tc.url, tc.key)
 			}
 		})
+	}
+}
+
+// The resolved configuration's getter feeds embeddingsFromEnv, so the file's
+// [llm] and [embeddings] tables reach it and a variable overrides them.
+func TestEmbeddingsComeFromTheConfigFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dude.toml")
+	if err := os.WriteFile(path, []byte("[llm]\nurl = \"https://llm.example/v1\"\nkey = \"sk-file\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	vars := map[string]string{"DUDE_CONFIG": path}
+	load := func() embeddingsConfig {
+		cfg, err := config.Load(config.Orchestrator, config.Options{Getenv: func(k string) string { return vars[k] },
+			DefaultPath: filepath.Join(t.TempDir(), "absent.toml")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := embeddingsFromEnv(cfg.Getenv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	if c := load(); c.URL != "https://llm.example/v1" || c.Key != "sk-file" {
+		t.Errorf("got %+v, want the file's LLM", c)
+	}
+	vars["DUDE_EMBEDDINGS_URL"] = "off"
+	if c := load(); c.URL != "" || c.Off != "DUDE_EMBEDDINGS_URL is off" {
+		t.Errorf("got %+v, want the variable to turn them off", c)
 	}
 }
