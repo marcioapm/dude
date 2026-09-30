@@ -122,6 +122,16 @@ export function MachineChip({ name, spec, tooltip, "data-testid": testId }: Mach
   return tooltip ? <Tooltip content={tooltip} side="bottom" keepOnPress>{chip}</Tooltip> : chip;
 }
 
+/** Who uses something: a row of small faces (agents' tiles, projects' squares), then the words. */
+export function UsedBy({ faces, children }: { readonly faces: ReadonlyArray<ReactNode>; readonly children: ReactNode }) {
+  return (
+    <span className={styles["usedBy"]}>
+      {faces.length ? <span className={styles["usedFaces"]}>{faces}</span> : null}
+      <span className={styles["usedWords"]}>{children}</span>
+    </span>
+  );
+}
+
 /** A tooltip's body for a machine: its name as a heading, then the words. */
 export function MachineTip({ name, children }: { readonly name: string; readonly children: ReactNode }) {
   return (

@@ -11,6 +11,11 @@
   color: var(--ds-color-text-secondary);
 }
 
+.hint {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+
 .trigger {
   --sel-h: var(--ds-size-control-md);
   display: inline-flex;

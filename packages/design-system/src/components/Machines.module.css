@@ -124,6 +124,25 @@
   color: var(--ds-color-text-muted);
 }
 
+.usedBy {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-width: 0;
+  white-space: nowrap;
+}
+.usedFaces {
+  display: inline-flex;
+  gap: var(--ds-space-2);
+  flex-shrink: 0;
+}
+.usedWords {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+
 .tip {
   display: flex;
   flex-direction: column;
