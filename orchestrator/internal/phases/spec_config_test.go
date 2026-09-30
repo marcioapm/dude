@@ -59,6 +59,7 @@ token = "file-service-token"
 image = "img:2"
 timeout = "48h"
 egress = ["a.example"]
+nested_containers = true
 [tools]
 service = false
 url = "http://10.0.0.7:3200/"
@@ -71,8 +72,13 @@ url = "http://10.0.0.7:3200/"
 	}
 	if c.LLMURL != "https://llm.example/v1" || c.LLMKey != "sk-file" || c.DefaultImage != "img:env" || c.Timeout != "48h" ||
 		len(c.Egress) != 1 || c.Egress[0] != "a.example" || c.ToolsService || c.ToolsURL != "http://10.0.0.7:3200/" ||
-		string(c.ToolsKey) != "file-service-token" {
+		string(c.ToolsKey) != "file-service-token" || !c.NestedContainers {
 		t.Errorf("config = %+v", c)
+	}
+	// The environment overrides the file, false included.
+	c, err = LoadAgentConfig(settings(t, map[string]string{"DUDE_CONFIG": path, "DUDE_AGENT_NESTED_CONTAINERS": "false"}))
+	if err != nil || c.NestedContainers {
+		t.Errorf("env false over file true: nested = %v, %v", c.NestedContainers, err)
 	}
 }
 
