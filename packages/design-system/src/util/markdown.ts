@@ -194,10 +194,12 @@ function parseBlocks(lines: readonly string[], streaming: boolean, usedIds: Map<
         for (; k < lines.length; k++) {
           const l2 = lines[k] ?? "";
           if (l2.trim() === "") {
-            // Blank: keep only if the next non-blank line continues the item.
+            // A blank run stays with the item only if the next non-blank line
+            // continues it. The run is scanned once, then skipped whole.
             const next = nextNonBlank(lines, k);
             if (next !== -1 && leadingSpaces(lines[next] ?? "") >= contentIndent) {
-              buf.push("");
+              for (; k < next; k++) buf.push("");
+              k--;
               continue;
             }
             break;
