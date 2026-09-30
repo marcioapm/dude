@@ -38,6 +38,9 @@ import type {
   ProjectPromptMode,
   PromptHistory,
   PromptRole,
+  MachineSizeInput,
+  MachineSizeWithUse,
+  MachinePools,
   AddServer,
   PreviewSettings,
   Recipe,
@@ -650,6 +653,33 @@ export class ApiClient {
 
   restorePrompt(versionId: string): Promise<SettingsResponse> {
     return this.#request("POST", `/v1/prompts/versions/${versionId}/restore`);
+  }
+
+  // -- machines: the organization's sizes, lux's pools -----------------------
+
+  machineSizes(): Promise<{ sizes: MachineSizeWithUse[]; canEdit: boolean }> {
+    return this.#request("GET", "/v1/machines/sizes");
+  }
+
+  addMachineSize(size: MachineSizeInput): Promise<{ sizes: MachineSizeWithUse[]; canEdit: boolean }> {
+    return this.#request("POST", "/v1/machines/sizes", size);
+  }
+
+  updateMachineSize(id: string, size: MachineSizeInput): Promise<{ sizes: MachineSizeWithUse[]; canEdit: boolean }> {
+    return this.#request("PUT", `/v1/machines/sizes/${encodeURIComponent(id)}`, size);
+  }
+
+  makeDefaultMachineSize(id: string): Promise<{ sizes: MachineSizeWithUse[]; canEdit: boolean }> {
+    return this.#request("POST", `/v1/machines/sizes/${encodeURIComponent(id)}/default`);
+  }
+
+  /** Remove a size, moving what named it to `replacement` (null: the default). */
+  removeMachineSize(id: string, replacement: string | null): Promise<{ sizes: MachineSizeWithUse[]; canEdit: boolean }> {
+    return this.#request("DELETE", `/v1/machines/sizes/${encodeURIComponent(id)}`, { replacement });
+  }
+
+  machinePools(): Promise<MachinePools> {
+    return this.#request("GET", "/v1/machines/pools");
   }
 
   /** A project's page: its epics by state, with lanes, pull requests, people and cost. */

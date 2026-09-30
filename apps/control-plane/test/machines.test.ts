@@ -194,16 +194,16 @@ describe("roles and previews name a size", () => {
     const half = await byName("Half");
     const org = await body(await call(adminKey, "PATCH", "/v1/settings/organization", { roles: { implementer: { machineSize: large.id } } }));
     expect(org.roles.implementer.machineSize).toEqual({ value: large.id, source: "organization" });
-    expect(org.roles.fixer.machineSize).toEqual({ value: large.id, source: "organization" });
+    expect(org.roles.fixer.machineSize).toEqual({ value: large.id, source: "organization", followsImplementer: true });
     expect(org.roles.investigator.machineSize).toEqual({ value: null, source: "organization" });
 
     const project = await body(await call(adminKey, "PATCH", `/v1/projects/${PROJECT}/settings`, { roles: { implementer: { machineSize: half.id } } }));
-    expect(project.roles.implementer.machineSize).toEqual({ value: half.id, source: "project" });
+    expect(project.roles.implementer.machineSize).toEqual({ value: half.id, source: "project", organization: large.id });
     const [stored] = await owner`SELECT agent_models FROM projects WHERE id = ${PROJECT}`;
     expect(stored.agent_models).toEqual({ implementer: { machineSize: half.id } });
 
     const reset = await body(await call(adminKey, "PATCH", `/v1/projects/${PROJECT}/settings`, { roles: { implementer: { machineSize: null } } }));
-    expect(reset.roles.implementer.machineSize).toEqual({ value: large.id, source: "organization" });
+    expect(reset.roles.implementer.machineSize).toEqual({ value: large.id, source: "organization", organization: large.id });
     const [after] = await owner`SELECT agent_models FROM projects WHERE id = ${PROJECT}`;
     expect(after.agent_models).toEqual({});
 

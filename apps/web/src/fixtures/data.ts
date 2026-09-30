@@ -8,7 +8,7 @@
 import type { NavProject } from "@dude/design-system";
 import { MIN, iso, serverLogs, serverLogsExited, serverScenarios, serverRecipes, type ServerScenario } from "@dude/design-system/fixtures/servers";
 import type { ServerLogLine } from "@dude/design-system";
-import type { Finding, PersistedEvent, PullRequest, Run, SettingsResponse, Task, TaskServers } from "@dude/domain";
+import type { Finding, MachineSizeWithUse, PersistedEvent, PullRequest, Run, SettingsResponse, Task, TaskServers } from "@dude/domain";
 import type { Member, ProjectDetail, RunDetail, TaskDetail, TaskMetrics } from "../api/client.ts";
 
 export const ORG = { id: "org_example", name: "Example" };
@@ -194,10 +194,11 @@ export const METRICS: TaskMetrics = {
 export const SETTINGS: SettingsResponse = {
   organization: ORG,
   project: { id: PROJECT.id, name: PROJECT.name },
-  roles: Object.fromEntries((["implementer", "reviewer", "fixer", "simplifier", "qa_browser"] as const).map((role) => [role, {
+  roles: Object.fromEntries((["investigator", "implementer", "reviewer", "fixer", "simplifier", "qa_browser"] as const).map((role) => [role, {
     model: { value: "anthropic/claude-sonnet-4.5", source: "organization" },
     effort: { value: null, source: "organization" },
     timeLimitMinutes: { value: null, source: "organization" },
+    machineSize: { value: null, source: "organization", organization: null },
     enabled: role === "simplifier" || role === "qa_browser" ? { value: role === "simplifier", source: "organization" } : null,
     prompt: { organization: { versionId: null, body: "", updatedAt: null, updatedBy: null, versions: 0 }, project: { versionId: null, body: "", updatedAt: null, updatedBy: null, versions: 0, mode: "inherit" } },
   }])) as SettingsResponse["roles"],
@@ -214,6 +215,13 @@ export const SETTINGS: SettingsResponse = {
   },
   canEdit: true,
 };
+
+/** The organisation's machine sizes: lux's own default, and a bigger one the implementer runs on. */
+export const MACHINE_SIZES: MachineSizeWithUse[] = [
+  { id: "msz_standard", name: "Standard", cpus: 2, memoryMiB: 8192, diskGiB: 20, pool: null, isDefault: true, updatedAt: iso(60 * MIN), updatedBy: null, usedBy: [] },
+  { id: "msz_large", name: "Large", cpus: 8, memoryMiB: 16384, diskGiB: 80, pool: null, isDefault: false, updatedAt: iso(60 * MIN), updatedBy: null,
+    usedBy: [{ kind: "organization", role: "implementer", project: null }] },
+];
 
 export function runDetailFor(scenario: ServerScenario): RunDetail {
   const r = scenario === "d" ? RUNS_REVIEW[0]! : RUN_IMPLEMENT;
