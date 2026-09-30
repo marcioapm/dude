@@ -12,9 +12,11 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { SQL } from "bun";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { closePool, setPool } from "../src/db/client.ts";
-import { buildRouter } from "../src/index.ts";
+import { closePool, getPool, setPool } from "../src/db/client.ts";
+import { buildRouter, startServer } from "../src/index.ts";
 import { Config, useConfig } from "../src/config.ts";
 import type { Router } from "../src/api/router.ts";
 import { createApiKey } from "../src/api/auth.ts";
@@ -313,5 +315,51 @@ describe("migration 055", () => {
       return tx`SELECT name FROM project_servers`;
     });
     expect(seen).toHaveLength(0);
+  });
+});
+
+describe("settings from the config file", () => {
+  // Resolves settings from a 0600 file and `vars` alone, runs `fn` with the
+  // module pool unset so getPool() builds its own, then restores this suite's.
+  async function withFile(text: string, vars: Record<string, string>, fn: () => Promise<void>) {
+    const dir = mkdtempSync(join(tmpdir(), "dude-servers-"));
+    const path = join(dir, "dude.toml");
+    writeFileSync(path, text);
+    chmodSync(path, 0o600);
+    useConfig(Config.load({ env: { DUDE_CONFIG: path, ...vars }, defaultPath: join(dir, "absent.toml") }));
+    setPool(null);
+    try { await fn(); } finally {
+      await closePool();
+      setPool(app);
+      useConfig(Config.load({ env: { ...process.env,
+        DUDE_ORCHESTRATOR_URL: `http://localhost:${orchestratorServer.port}`, DUDE_ORCHESTRATOR_TOKEN: "svc" } }));
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  const who = async () => (await getPool()`SELECT current_database() AS db, current_user AS role`)[0];
+
+  test("getPool connects to the file's database.url, and DATABASE_URL overrides it", async () => {
+    const file = `[database]\nurl = "${databaseUrl("app", NAME)}"\n`;
+    await withFile(file, {}, async () => {
+      expect(await who()).toEqual({ db: NAME, role: "dude_app" });
+    });
+    await withFile(file, { DATABASE_URL: databaseUrl("owner", NAME) }, async () => {
+      expect(await who()).toEqual({ db: NAME, role: new URL(OWNER_URL).username });
+    });
+  });
+
+  test("startServer listens on the file's port 0 and answers health from the file's database", async () => {
+    await withFile(`[backend]\nport = 0\n[database]\nurl = "${databaseUrl("app", NAME)}"\n`, {}, async () => {
+      const server = startServer();
+      try {
+        // Port 0 is an ephemeral port, never the 3000 default.
+        expect(server.port).toBeGreaterThan(0);
+        expect(server.port).not.toBe(3000);
+        const res = await fetch(`http://127.0.0.1:${server.port}/health`);
+        expect(await res.json()).toEqual({ status: "ok" });
+      } finally {
+        await server.stop(true);
+      }
+    });
   });
 });
