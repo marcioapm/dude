@@ -12,7 +12,7 @@
 import { describe, expect, test } from "bun:test";
 import { EventTypes } from "@dude/domain";
 import type { PersistedEvent } from "@dude/domain";
-import { actorName, apply, emptyProjection, humanActor, project, snapshot } from "../src/api/conversation.ts";
+import { actorName, apply, emptyProjection, humanActor, landsHint, project, snapshot, steerWait, type HumanTurn } from "../src/api/conversation.ts";
 
 let cursor = 0;
 
@@ -376,6 +376,45 @@ describe("a steer read at the agent's next step", () => {
     const { turns } = project(events);
     expect(turns.map((t) => t.kind)).toEqual(["progress", "human"]);
     expect(turns[0]).toMatchObject({ done: 2 });
+  });
+});
+
+describe("what a queued steer waits for, and what the composer promises", () => {
+  const queued = (lands: "next_step" | "next_turn" | null = null) =>
+    ({ ...(project([ev(EventTypes.RunSteered, { text: "S", directiveId: "d" })]).turns[0] as HumanTurn), lands });
+
+  test("the run's own state comes first", () => {
+    expect(steerWait(queued("next_step"), "paused", "bash", "next_step")).toEqual({ kind: "paused" });
+    expect(steerWait(queued(), "starting", null, null)).toEqual({ kind: "starting" });
+    expect(steerWait(queued(), "scheduled", null, null)).toEqual({ kind: "starting" });
+  });
+
+  test("next step: after the running tool, named, or at the next step", () => {
+    expect(steerWait(queued("next_step"), "running", "bash", null)).toEqual({ kind: "tool", tool: "bash" });
+    expect(steerWait(queued(), "running", null, "next_step")).toEqual({ kind: "next_step" });
+  });
+
+  test("a harness that reads between turns, or a lux that has not said, waits for the turn", () => {
+    expect(steerWait(queued("next_turn"), "running", "bash", "next_step")).toEqual({ kind: "next_turn" });
+    expect(steerWait(queued(), "running", "bash", null)).toEqual({ kind: "next_turn" });
+  });
+
+  test("the composer's hint follows the same capability, and says nothing when not running", () => {
+    expect(landsHint("running", "bash", "next_step")).toBe("Lands after the current tool");
+    expect(landsHint("running", null, "next_step")).toBe("Lands at the agent's next step");
+    expect(landsHint("running", "bash", "next_turn")).toBe("Lands when the turn ends");
+    expect(landsHint("running", null, null)).toBe("Lands when the turn ends");
+    expect(landsHint("paused", null, "next_step")).toBeNull();
+  });
+
+  test("retrying a failed steer keeps it one turn, queued again", () => {
+    const { turns } = project([
+      ev(EventTypes.RunSteered, { text: "S", directiveId: "dir_1" }),
+      ev(EventTypes.DirectiveFailed, { directiveId: "dir_1", error: "gone" }),
+      ev(EventTypes.RunSteered, { text: "S", directiveId: "dir_2", supersedes: "dir_1" }),
+    ]);
+    expect(turns).toHaveLength(1);
+    expect(turns[0]).toMatchObject({ failed: null, deliveredAt: null, interrupting: false, directiveId: "dir_2" });
   });
 });
 

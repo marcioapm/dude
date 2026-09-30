@@ -326,8 +326,37 @@ export class FixtureClient extends ApiClient {
   override reassignTask(): Promise<never> {
     return Promise.reject(new ApiError(400, "fixtures", "Not in the fixtures."));
   }
-  override steer(): Promise<never> {
-    return Promise.reject(new ApiError(400, "fixtures", "Not in the fixtures: the agent is a recording."));
+  /**
+   * A steer plays as lux now reports one: taken at once while the agent's
+   * command runs, then read at its next step — the command finishes, the
+   * delivery lands, the agent's next call follows.
+   */
+  override async steer(runId: string, text: string, options: { interrupt?: boolean; supersedes?: string } = {}) {
+    await wait(150);
+    const id = `dir_fx_${++streamCursor}`;
+    const record = (eventType: string, payload: Record<string, unknown>, actor: PersistedEvent["actor"] = { type: "system", id: "dude" }) => {
+      const cursor = ++streamCursor;
+      const e = {
+        eventId: `evt_fx_${cursor}`, cursor, eventType, occurredAt: new Date().toISOString(), organizationId: ORG.id,
+        projectId: PROJECT.id, taskId: TASK_ID, runId, sessionId: `${runId}-s`, workflowRunId: null, actor,
+        source: "orchestrator", correlationId: null, causationId: null, payload,
+      } as unknown as PersistedEvent;
+      this.#events.push(e);
+      emit(e);
+    };
+    record("run.steered", { directiveId: id, text, scope: "run", interrupt: options.interrupt === true, supersedes: options.supersedes ?? null },
+      { type: "person", id: YOU });
+    later(() => record("run.directive.accepted", { directiveId: id, lands: "next_step", receipt: true }), 400);
+    const open = [...this.#events].reverse().find((e) => e.eventType === "agent.tool.called");
+    const done = open && !this.#events.some((e) => e.eventType === "agent.tool.completed" && e.payload?.callId === open.payload?.callId);
+    later(() => {
+      if (done) record("agent.tool.completed", { tool: open!.payload?.tool, callId: open!.payload?.callId, status: "completed", exitCode: 0 },
+        { type: "agent", id: "implementer" });
+      record("run.directive.delivered", { directiveId: id, read: true });
+      record("agent.tool.called", { tool: "read", callId: `c_fx_${streamCursor}`, input: { file_path: "apps/web/src/checkout/PaymentStep.tsx" } },
+        { type: "agent", id: "implementer" });
+    }, options.interrupt ? 600 : 6000);
+    return { id } as unknown as Awaited<ReturnType<ApiClient["steer"]>>;
   }
   override pause(): Promise<never> {
     return Promise.reject(new ApiError(400, "fixtures", "Not in the fixtures."));
