@@ -163,7 +163,7 @@ function Transcript() {
         <ToolCallCard name="bash" status="failed" args={{ command: "bun test apps/control-plane" }} startedAt={ts(14_100)} endedAt={ts(18_310)} exitCode={1} error="1 failing: retries when response is 502" output={LONG_TEST_OUTPUT_FAILED} maxResultLines={8} />
         <ThinkingBlock text={THOUGHT_2} startedAt={ts(18_400)} endedAt={ts(29_800)} />
       </Aside>
-      <ChatMessage role="human" name="marcio" intent="steer" content="Keep the jitter, but make it injectable so the tests can seed it." startedAt={ts(20 * SEC)} deliveredAt={ts(29_800)} />
+      <ChatMessage role="human" name="marcio" intent="steer" content="Keep the jitter, but make it injectable so the tests can seed it." startedAt={ts(20 * SEC)} deliveredAt={ts(29_800)} read />
       <ChatMessage
         role="orchestrator"
         model="claude-opus-4"

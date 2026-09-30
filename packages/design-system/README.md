@@ -319,10 +319,15 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   the same hue as needs-you, so the answer visibly closes it. Its context line ("Answering
   Orchestrator: …") and the offered choices are neutral at rest; a choice
   chip takes the attention tint only on hover. **Steer** (session running) is
-  accent-toned. A steer waits for the agent's turn to end, so sending one
-  costs nothing and plain Enter sends it; **interrupt now** — the costly
-  one, which stops the turn — is a checkbox, never a key. Shift+Enter is a
-  new line in both. The action row says who it is sent as (`sentAs`).
+  accent-toned. A steer lands at the agent's next step — the harness takes
+  it while a tool runs and the model reads it before its next call, in the
+  same turn, nothing cancelled — so sending one costs nothing and plain
+  Enter sends it. `landsHint` says where, beside the keys: "Lands after the
+  current tool", "Lands at the agent's next step", or "Lands when the turn
+  ends" for a harness that reads only between turns. **Interrupt now** —
+  the costly one, which stops the turn — is a checkbox, never a key, and
+  never a fallback the app takes on its own. Shift+Enter is a new line in
+  both. The action row says who it is sent as (`sentAs`).
 - The question itself is a turn: `QuestionCard`. While it waits it is the
   one loud turn a transcript is allowed, and it is loud once: the attention
   wash and 2px bar. Inside it the ink is neutral — the transcript header's
@@ -339,11 +344,25 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - The same tints mark the human turns in the transcript (`ChatMessage
   intent="answer" | "steer"`), so interventions are scannable in a long
   conversation.
-- A steer sent mid-turn is held by lux until the turn ends. `ChatMessage
-  pending` shows it as queued on three channels — a dashed frame, a
-  "Queued" chip with a clock, and a line under the body saying why — and
-  `deliveredAt` puts the delivery time in the header once the agent has
-  it. The intent tint is kept throughout: it is still a steer.
+- A steer the agent has not read yet is queued. `ChatMessage
+  deliveredAt={null}` shows it on three channels — a dashed bar, a
+  "Queued" chip with a clock, and one line under the body saying where it
+  lands (`pendingReason`): "Lands after **Bash** finishes." (the running
+  tool, named), "Lands at the agent's next step.", "This agent reads
+  messages only between turns — lands when this turn ends.", "Lands when
+  the run resumes.", "Lands when the agent starts.". `onInterrupt` puts
+  "Interrupt now" on that line: re-sending it to be heard at once is a
+  person's named choice, never something the app falls back to. The intent
+  tint is kept throughout: it is still a steer.
+- Once read (`deliveredAt` with `read`) it loses the queued treatment and
+  **sits in the transcript where the agent read it**: between the tool call
+  it waited for and the next one, not where it was typed. Its header says
+  "sent 14:30 · read 14:30:41, after Bash" (`readAfter`). A lux that reports
+  only the handoff gives `deliveredAt` without `read`: the header says
+  "delivered" and claims no read time, and the turn stays where it was typed.
+- `failed` replaces the queued line with a danger one, "Not delivered:
+  <reason>", and `onRetry` puts Retry on it. It is not queued any more:
+  nothing will land.
 - The task prompt is usually authored by dude, not a person. It is
   `ChatMessage role="system" intent="prompt"`: the neutral prompt frame,
   dude's face (`avatar`, which the app gives — the design system carries no
@@ -805,7 +824,7 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | `<ThinkingBlock text={reasoning} streaming />` between turns | reasoning styled as an agent message |
 | `<ChatMessage contextTokens={n} contextWindowTokens={w} costUsd={null} />` | `$0.00` for a cost nobody reported |
 | `<ChatMessage role="system" intent="prompt" content={phasePrompt} />` | the factory's prompt shown as a person's, unclamped |
-| `<ChatMessage intent="steer" pending />` until lux delivers it | a steer that looks read before the agent has it |
+| `<ChatMessage intent="steer" deliveredAt={null} pendingReason={<>Lands after <b>Bash</b> finishes.</>} onInterrupt={…} />` until the agent reads it, then `read readAfter="Bash"` where it was read | a steer that looks read before the agent has it, a fixed "waiting for the turn" line whatever the harness does, or an interrupt taken for the person |
 | `<ChatComposer question={q} />` for a blocking question | one generic text box for everything |
 | `<QuestionCard role="implementer" text={q} options={opts} askedAt={t} />` until `answeredAt` lands | the question only in the composer, gone from the history once answered |
 | `<Markdown source={text} streaming />` while tokens arrive | re-parsing strictly on every token |
@@ -858,7 +877,8 @@ EmptyState, ScrollArea.
 - **ChatMessage** — one turn: gutter + column, not a bubble. Agent turns
   carry model, elapsed, context and output tokens, cost and the live
   activity in the foot; turns addressed to the agent are framed and tinted
-  by intent (task / answer / steer), can be queued, and clamp when long;
+  by intent (task / answer / steer), can be queued (with where it lands),
+  read (sent · read, after what), or failed, and clamp when long;
   system turns are a hairline with a label. Body is `Markdown` and grows in
   place. `avatar` puts a face of the app's own in the gutter (dude's).
 - **ActivityIndicator** — thinking / streaming / tool / retrying /
@@ -895,7 +915,8 @@ EmptyState, ScrollArea.
   it again (`Tooltip keepOnPress`: a press leaves it up). The note is what
   reaches keyboard, touch and screen readers. No tab stop that does nothing.
 - **ChatComposer** — answer (blocked on a question, with one-click options)
-  vs steer (interrupts a running turn) vs prompt, visibly different.
+  vs steer (lands at the agent's next step; `landsHint` says where;
+  interrupt now is a tick) vs prompt, visibly different.
 - **Markdown** — untrusted Markdown to React from a typed AST; streaming-safe;
   `message` and `document` variants; ```` ```diff ```` hands off to `DiffView`.
   `parseMarkdown` / `safeUrl` are exported for consumers that need the AST.

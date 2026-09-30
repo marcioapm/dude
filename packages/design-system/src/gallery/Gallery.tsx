@@ -97,6 +97,7 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["ch-plan", "AgentPlan"],
       ["ch-markdown", "Markdown"],
       ["ch-message", "ChatMessage"],
+      ["ch-steer", "Steer delivery"],
       ["ch-thread", "ChatThread"],
       ["ch-question", "QuestionCard"],
       ["ch-composer", "ChatComposer"],
