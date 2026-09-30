@@ -17,7 +17,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { Badge, Breadcrumb, Button, Checkbox, Fieldset, FormStack, HelpList, Input, KeyHint, MarkdownCheatsheet, MarkdownEditor, Select } from "@dude/design-system";
+import { Badge, Breadcrumb, Button, Checkbox, Fieldset, FormStack, HelpList, Input, KeyHint, MarkdownCheatsheet, MarkdownEditor, Select, Skeleton } from "@dude/design-system";
 import type { ApiClient, Epic, Repository, TaskDetail, TaskFields, TaskRepository } from "../api/client.ts";
 import { unsavedWords } from "../hooks/discard.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
@@ -121,12 +121,15 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
       open
       onOpenChange={(open) => !open && onClose()}
       size="document"
+      // The line is there from the start, so the fields do not move down when the choices arrive.
       context={choices ? (
         <Breadcrumb size="sm" current={false} items={[
           { id: "project", label: choices.projectName },
           ...(epicTitle ? [{ id: "epic", label: epicTitle, icon: "layers" as const }] : []),
         ]} />
-      ) : undefined}
+      ) : (
+        <Skeleton variant="text" width={160} />
+      )}
       title={existing ? "Edit task" : "New task"}
       description={locked ? "Delivery has started, so what it asks for is fixed. You can still move it to another epic." : undefined}
       submitLabel={existing ? "Save" : "Create"}

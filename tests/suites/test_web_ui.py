@@ -224,6 +224,36 @@ def test_enter_in_the_title_moves_to_the_goal_and_does_not_create(
     assert console_errors == []
 
 
+def test_the_task_dialog_does_not_move_when_where_it_sits_arrives(
+    page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list
+):
+    sign_in(page, web_url, org["api_key"])
+    held = []
+    page.route(f"**/v1/projects/{forge_project['id']}",
+               lambda route: held.append(route) if route.request.method == "GET" else route.continue_())
+    page.get_by_test_id("new-task").click()
+    title = page.get_by_test_id("task-title")
+    expect(title).to_be_visible()
+    # Route handlers run while Playwright is called, so poll through it.
+    for _ in range(100):
+        if held:
+            break
+        page.wait_for_timeout(50)
+    assert held, "the project was never asked for"
+    # The dialog pops in with a scale; measure once it has settled.
+    page.wait_for_function(
+        "document.querySelector('[role=dialog]').getAnimations().every(a => a.playState === 'finished')")
+    before = title.bounding_box()["y"]
+    for route in held:
+        route.continue_()
+    dialog = page.get_by_role("dialog", name="New task")
+    expect(dialog.get_by_text(forge_project["name"], exact=True)).to_be_visible()
+    assert title.bounding_box()["y"] == before
+    # A plain path: nothing to navigate, so no landmark.
+    expect(dialog.get_by_role("navigation")).to_have_count(0)
+    assert console_errors == []
+
+
 def test_a_task_that_fails_to_save_says_why_beside_the_buttons(
     page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list
 ):
