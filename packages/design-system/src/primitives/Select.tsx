@@ -36,6 +36,8 @@ export interface SelectProps<T extends string = string> {
   readonly name?: string | undefined;
   readonly className?: string | undefined;
   readonly "aria-label"?: string | undefined;
+  /** Under the field, muted, as an Input's hint: what the choice does. */
+  readonly hint?: ReactNode;
   /** Under the list, on the chrome shade: a note, or a link to where the options are managed. */
   readonly footer?: ReactNode;
   /** The trigger's id, so an outside label names it. */
@@ -66,6 +68,7 @@ export function Select<T extends string = string>({
   name,
   className,
   "aria-label": ariaLabel,
+  hint,
   footer,
   id: givenId,
   "data-testid": testId,
@@ -140,6 +143,7 @@ export function Select<T extends string = string>({
           </RadixSelect.Content>
         </RadixSelect.Portal>
       </RadixSelect.Root>
+      {hint ? <div className={styles["hint"]}>{hint}</div> : null}
     </div>
   );
 }
