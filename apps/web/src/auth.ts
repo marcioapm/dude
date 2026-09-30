@@ -67,8 +67,10 @@ export class AuthSession {
     }
   }
 
-  refused = (): void => {
-    if (this.#signedOut || this.#state.kind !== "authenticated") return;
+  // `client` is the one whose request was refused: a refusal still in flight from a
+  // client this session has already replaced says nothing about the current one.
+  refused = (client: ApiClient): void => {
+    if (this.#signedOut || this.#state.kind !== "authenticated" || this.#state.client !== client) return;
     this.storage.removeItem(KEY_STORAGE);
     // A session accepted by /v1/me but refused elsewhere gets one reprobe, not a loop.
     if (this.#reprobed) {

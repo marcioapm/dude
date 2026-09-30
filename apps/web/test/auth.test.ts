@@ -97,17 +97,27 @@ describe("session-first authentication", () => {
   });
 
   test("a live refusal unmounts and checks cookies without duplicate probes", async () => {
-    const { session, keys, values } = setup("valid", [me, { ...me, authMethod: "cloudflare_access" }]);
+    const { session, keys, values, clients } = setup("valid", [me, { ...me, authMethod: "cloudflare_access" }]);
     await session.check();
-    session.refused();
-    session.refused();
+    session.refused(clients[0]!);
+    session.refused(clients[0]!);
     expect(session.snapshot().kind).toBe("checking");
     await session.check();
     expect(session.snapshot().kind).toBe("authenticated");
     expect(keys).toEqual(["valid", undefined]);
     expect(values.has(KEY_STORAGE)).toBe(false);
-    session.refused();
+    session.refused(clients[1]!);
     expect(session.snapshot()).toEqual({ kind: "key-prompt", refused: true });
+    expect(keys).toEqual(["valid", undefined]);
+  });
+
+  test("a refusal from a replaced client leaves the recovered session", async () => {
+    const { session, keys, clients } = setup("valid", [me, { ...me, authMethod: "cloudflare_access" }]);
+    await session.check();
+    session.refused(clients[0]!);
+    await session.check();
+    session.refused(clients[0]!);
+    expect(session.snapshot()).toEqual({ kind: "authenticated", client: clients[1], authMethod: "cloudflare_access" });
     expect(keys).toEqual(["valid", undefined]);
   });
 
@@ -123,13 +133,13 @@ describe("session-first authentication", () => {
     expect(session.snapshot()).toEqual({ kind: "key-prompt", refused: false });
     expect(values.has(KEY_STORAGE)).toBe(false);
     await session.check();
-    session.refused();
+    session.refused(clients[0]!);
     expect(keys).toEqual(["valid"]);
     expect(assigned).toEqual([]);
   });
 
   test("Access signout clears state before fixed navigation and cannot remount", async () => {
-    const { session, keys, values } = setup("valid", [{ ...me, authMethod: "cloudflare_access", logoutUrl: "https://untrusted.invalid" } as unknown as MeResponse]);
+    const { session, keys, values, clients } = setup("valid", [{ ...me, authMethod: "cloudflare_access", logoutUrl: "https://untrusted.invalid" } as unknown as MeResponse]);
     await session.check();
     const order: string[] = [];
     await session.signOut(async () => { order.push("unsubscribe"); }, (url) => {
@@ -139,7 +149,7 @@ describe("session-first authentication", () => {
       order.push("assign");
     }, (update) => { update(); order.push("unmount"); });
     await session.check();
-    session.refused();
+    session.refused(clients[0]!);
     expect(keys).toEqual(["valid"]);
     expect(order).toEqual(["unsubscribe", "unmount", "assign"]);
   });
