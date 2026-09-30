@@ -42,7 +42,7 @@ import type { AgentRole, PersistedEvent } from "@dude/domain";
 import type { ApiClient, Person, RunDetail, RunDiffSummary } from "../api/client.ts";
 import { ApiError, reportedCost } from "../api/client.ts";
 import {
-  PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, landsHint, snapshot, steerWait, toolLabel, type HumanTurn, type Turn,
+  PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, landsHint, snapshot, steerWait, toolLabel, type HumanTurn, type SteerWait, type Turn,
 } from "../api/conversation.ts";
 import type { ComposerSubmission } from "@dude/design-system/components";
 import { useEventStream } from "../hooks/useEventStream.ts";
@@ -610,12 +610,12 @@ function namedActor(event: PersistedEvent, people: People): { name?: string } {
 
 /** A live Run's queued steers: what each waits for, and sending one again (interrupting, or after a failure). */
 interface SteerActions {
-  wait: (turn: HumanTurn) => ReturnType<typeof steerWait>;
+  wait: (turn: HumanTurn) => SteerWait;
   resend: (turn: HumanTurn, interrupt: boolean) => void;
 }
 
 /** The one line under a queued steer. */
-function pendingReason(wait: ReturnType<typeof steerWait>) {
+function pendingReason(wait: SteerWait) {
   switch (wait.kind) {
     case "tool": return <>Lands after <b>{toolLabel(wait.tool)}</b> finishes.</>;
     case "next_step": return "Lands at the agent's next step.";
@@ -717,8 +717,9 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
       // Signed: the person's face and name when known; "Someone" only when the ledger kept no one.
       const name = actorName(turn.by, people.names);
       const person = name && turn.by ? { ...(people.byId.get(turn.by.id) ?? {}), id: turn.by.id, name } : undefined;
-      const queuedSteer = turn.intent === "steer" && turn.deliveredAt === null && !turn.failed;
-      const interruptible = (wait: ReturnType<typeof steerWait>) => wait.kind === "tool" || wait.kind === "next_step" || wait.kind === "next_turn";
+      const wait = steer && turn.intent === "steer" && turn.deliveredAt === null && !turn.failed ? steer.wait(turn) : null;
+      // Only where there is a turn to stop, and not twice.
+      const interruptible = (wait?.kind === "tool" || wait?.kind === "next_step" || wait?.kind === "next_turn") && !turn.interrupting;
       return (
         <ChatMessage
           key={turn.id}
@@ -731,11 +732,8 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
           read={turn.read}
           readAfter={turn.after ? toolLabel(turn.after) : undefined}
           failed={turn.failed ?? undefined}
-          {...(queuedSteer && steer ? {
-            pendingReason: pendingReason(steer.wait(turn)),
-            // Only where there is a turn to stop, and not twice.
-            ...(interruptible(steer.wait(turn)) && !turn.interrupting ? { onInterrupt: () => steer.resend(turn, true) } : {}),
-          } : {})}
+          {...(wait ? { pendingReason: pendingReason(wait) } : {})}
+          {...(interruptible && steer ? { onInterrupt: () => steer.resend(turn, true) } : {})}
           {...(turn.failed && steer && turn.intent === "steer" ? { onRetry: () => steer.resend(turn, false) } : {})}
           person={person}
           name={name ?? "Someone"}
