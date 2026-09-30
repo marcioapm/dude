@@ -142,6 +142,7 @@ type Spec struct {
 	Sandbox  *Sandbox          `json:"sandbox,omitempty"`
 }
 
+// Sandbox relaxes a Run's container for what its workload needs.
 type Sandbox struct {
 	// Requires a host offering nested containers and an image with the engine.
 	NestedContainers bool `json:"nestedContainers,omitempty"`
