@@ -426,11 +426,13 @@ def _assert_reads_as_the_task(page: Page, title: str) -> None:
     expect(doc.get_by_role("heading", level=1)).to_have_text(title)
     expect(doc.get_by_role("heading", name="What exists today")).to_be_visible()
     expect(doc.get_by_role("heading", name="Acceptance criteria")).to_be_visible()
-    # The criteria as a checklist of what would be saved: the lazy line is part of the second.
+    # The criteria as a checklist of what would be saved: the lazy line is part of the second, on a line of its own.
     checklist = doc.locator("li:has(> [aria-hidden] svg)")
     expect(checklist).to_have_count(2)
     expect(checklist.nth(0)).to_have_text("SEPA appears on the payment step")
-    expect(checklist.nth(1)).to_have_text("Invoice only for annual plans, never monthly ones")
+    expect(checklist.nth(1).locator("br")).to_have_count(1)
+    assert checklist.nth(1).evaluate("el => el.innerText.trim().split('\\n')") == [
+        "Invoice only for annual plans,", "never monthly ones"]
     # The fields and the aside are out of sight, and out of reach.
     expect(page.get_by_test_id("task-goal")).not_to_be_visible()
     expect(page.get_by_test_id("task-criteria")).not_to_be_visible()
