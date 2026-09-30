@@ -1,0 +1,103 @@
+package delivery
+
+// Machine sizes: the organization's (machine_sizes, migration 063), named
+// by each role's settings (machineSize, over the same layers as its model)
+// and by a project's branch previews. What names none, or names a size
+// that is gone, runs on the organization's default.
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+
+	"github.com/jackc/pgx/v5"
+)
+
+// Machine is a size as a Run records what it ran on (runs.machine).
+type Machine struct {
+	SizeID    string  `json:"sizeId"`
+	Name      string  `json:"name"`
+	CPUs      float64 `json:"cpus"`
+	MemoryMiB int64   `json:"memoryMiB"`
+	DiskGiB   int64   `json:"diskGiB"`
+	// nil: the organization's default pool in lux.
+	Pool *string `json:"pool"`
+	// Where the size came from: "project", "organization", "implementer"
+	// (a fixer with none of its own), or "default".
+	From string `json:"from"`
+}
+
+// Sizes are an organization's machine sizes by id, and its default's id.
+type Sizes struct {
+	ByID    map[string]Machine
+	Default string
+}
+
+// LoadSizes reads the organization's sizes, in its transaction.
+func LoadSizes(ctx context.Context, tx pgx.Tx) (Sizes, error) {
+	out := Sizes{ByID: map[string]Machine{}}
+	rows, err := tx.Query(ctx, `SELECT id, name, cpus::float8, memory_mib, disk_gib, pool, is_default FROM machine_sizes`)
+	if err != nil {
+		return out, fmt.Errorf("load machine sizes: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var m Machine
+		var isDefault bool
+		if err := rows.Scan(&m.SizeID, &m.Name, &m.CPUs, &m.MemoryMiB, &m.DiskGiB, &m.Pool, &isDefault); err != nil {
+			return out, err
+		}
+		out.ByID[m.SizeID] = m
+		if isDefault {
+			out.Default = m.SizeID
+		}
+	}
+	return out, rows.Err()
+}
+
+// ForRole is the size role runs on over a project's agent_models and its
+// organization's: the first that names one of the sizes, the fixer then
+// following the implementer (modelFallback), else the default. false when
+// the organization has no size at all.
+func (s Sizes) ForRole(role string, project, org json.RawMessage) (Machine, bool) {
+	chain := []string{role}
+	if f, ok := modelFallback[role]; ok {
+		chain = append(chain, f)
+	}
+	layers := []struct {
+		name string
+		raw  json.RawMessage
+	}{{"project", project}, {"organization", org}}
+	for _, r := range chain {
+		for _, l := range layers {
+			var m map[string]roleLayer
+			if json.Unmarshal(l.raw, &m) != nil || m[r].MachineSize == nil {
+				continue
+			}
+			if size, ok := s.ByID[*m[r].MachineSize]; ok {
+				size.From = l.name
+				if r != role {
+					size.From = r
+				}
+				return size, true
+			}
+		}
+	}
+	return s.fallback()
+}
+
+// ForPreview is the size a project's branch previews run on: the one its
+// preview settings name, else the default.
+func (s Sizes) ForPreview(sizeID string) (Machine, bool) {
+	if size, ok := s.ByID[sizeID]; ok {
+		size.From = "project"
+		return size, true
+	}
+	return s.fallback()
+}
+
+func (s Sizes) fallback() (Machine, bool) {
+	size, ok := s.ByID[s.Default]
+	size.From = "default"
+	return size, ok
+}

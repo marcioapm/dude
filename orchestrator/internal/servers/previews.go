@@ -207,6 +207,7 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, er
 	var recipes []Recipe
 	var settings PreviewSettings
 	var projectImage string
+	var machine *delivery.Machine
 	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		var raw []byte
 		if err := tx.QueryRow(ctx, `SELECT preview_settings(p), COALESCE(p.runtime_image, '') FROM projects p WHERE p.id = $1`,
@@ -215,6 +216,21 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, er
 		}
 		if err := json.Unmarshal(raw, &settings); err != nil {
 			return err
+		}
+		sizes, err := delivery.LoadSizes(ctx, tx)
+		if err != nil {
+			return err
+		}
+		sizeID := ""
+		if settings.MachineSize != nil {
+			sizeID = *settings.MachineSize
+		}
+		if m, ok := sizes.ForPreview(sizeID); ok {
+			machine = &m
+			// What it runs on, kept as it is now (as a phase Run's is).
+			if _, err := tx.Exec(ctx, `UPDATE runs SET machine = $2 WHERE id = $1 AND lux_run_id IS NULL`, r.ID, m); err != nil {
+				return err
+			}
 		}
 		taskRepos, err := delivery.TaskRepositories(ctx, tx, r.TaskID)
 		if err != nil {
@@ -314,6 +330,7 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, er
 		return lux.Spec{}, "", err
 	}
 	login.Apply(&spec)
+	phases.MachineSpec(machine, &spec)
 	return spec, branch, nil
 }
 

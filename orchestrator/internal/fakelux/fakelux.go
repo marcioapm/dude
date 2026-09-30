@@ -370,6 +370,12 @@ type Server struct {
 	// agent's records arrive.
 	InputGate chan struct{}
 
+	// Pools is what GET /v1/pools lists; nil is DefaultPools.
+	Pools []lux.Pool
+	// MemoryShare is the part of what a Run asks for that its container is
+	// given, reported as each placement's memoryLimit (a newer lux); zero
+	// reports none, as today's lux.
+	MemoryShare float64
 	// closed ends everything the fake waits on in the background (Close).
 	closed    chan struct{}
 	closeOnce sync.Once
@@ -552,6 +558,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/runs/{id}/servers/{name}", s.removeServer)
 	mux.HandleFunc("GET /v1/runs/{id}/servers/{name}/log", s.serverLog)
 	mux.HandleFunc("GET /v1/runs/{id}/cost", s.getCost)
+	mux.HandleFunc("GET /v1/pools", s.listPools)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+s.Key {
 			writeErr(w, 401, "unauthorized", "invalid API key")
@@ -919,8 +926,12 @@ func (s *Server) view(run *Run) map[string]any {
 	placements := []any{}
 	host := ""
 	for _, p := range run.placements {
-		placements = append(placements, map[string]any{"epoch": p.Epoch, "hostName": p.HostName, "state": p.State,
-			"workloadStartedAt": p.WorkloadStartedAt, "exitedAt": p.ExitedAt, "snapshotDoneAt": p.SnapshotDoneAt})
+		view := map[string]any{"epoch": p.Epoch, "hostName": p.HostName, "state": p.State,
+			"workloadStartedAt": p.WorkloadStartedAt, "exitedAt": p.ExitedAt, "snapshotDoneAt": p.SnapshotDoneAt}
+		if limit := s.memoryLimit(run); limit != nil {
+			view["memoryLimit"] = *limit
+		}
+		placements = append(placements, view)
 		if p.Epoch == run.Epoch && p.ExitedAt == nil {
 			host = p.HostName
 		}
