@@ -10,6 +10,7 @@ import (
 	"slices"
 
 	"github.com/marciomartins/dude/orchestrator/internal/config"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -119,6 +120,21 @@ type specInput struct {
 	ToolsToken string
 	// The login for Image's registry; nil when it needs none.
 	Registry *RegistryLogin
+	// The machine it runs on; nil leaves lux's default size and pool.
+	Machine *delivery.Machine
+}
+
+// MachineSpec puts a machine size on a lux spec: its resources, memory and
+// disk in bytes, and its pool when it names one (none is the tenant's
+// default pool in lux). A nil machine leaves lux's defaults.
+func MachineSpec(m *delivery.Machine, spec *lux.Spec) {
+	if m == nil {
+		return
+	}
+	spec.Resources = &lux.Resources{CPUs: m.CPUs, Memory: m.MemoryMiB << 20, Disk: m.DiskGiB << 30}
+	if m.Pool != nil && *m.Pool != "" {
+		spec.Placement = &lux.PlacementSpec{Pool: *m.Pool}
+	}
 }
 
 type specRepo struct {
@@ -194,6 +210,7 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		spec.Labels["dude.effort"] = in.Effort
 	}
 	in.Registry.Apply(&spec)
+	MachineSpec(in.Machine, &spec)
 	if len(in.Repos) > 0 || in.PushBranch != "" {
 		spec.Git = &lux.Git{}
 		for _, r := range in.Repos {

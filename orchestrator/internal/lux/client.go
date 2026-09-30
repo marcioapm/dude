@@ -65,6 +65,10 @@ type Placement struct {
 	// When the host reported what it kept at exit — the snapshot, and the
 	// artifacts with it. Nil while it is still running or uploading.
 	SnapshotDoneAt *time.Time `json:"snapshotDoneAt,omitempty"`
+	// The memory limit its container was given, in bytes: what the Run
+	// asked for less the host's share (a newer lux; nil from one that does
+	// not say).
+	MemoryLimit *int64 `json:"memoryLimit,omitempty"`
 }
 
 // Artifact is a file a Run produced, kept by lux after the Run ends.
@@ -140,6 +144,49 @@ type Spec struct {
 	Timeout  string            `json:"timeout,omitempty"`
 	Network  *Network          `json:"network,omitempty"`
 	Sandbox  *Sandbox          `json:"sandbox,omitempty"`
+	// What the Run gets and its host reserves; nil is lux's default size.
+	Resources *Resources `json:"resources,omitempty"`
+	// Where it may run; nil is the tenant's default pool.
+	Placement *PlacementSpec `json:"placement,omitempty"`
+}
+
+// Resources is a Run's size. Memory and disk are bytes, which lux takes as
+// well as its size strings ("8Gi").
+type Resources struct {
+	CPUs   float64 `json:"cpus,omitempty"`
+	Memory int64   `json:"memory,omitempty"`
+	Disk   int64   `json:"disk,omitempty"`
+}
+
+// PlacementSpec names the pool a Run is placed in.
+type PlacementSpec struct {
+	Pool string `json:"pool,omitempty"`
+}
+
+// Pool is one of lux's pools dude's key can use (GET /v1/pools). HostSize,
+// HostSizeFrom and InstanceType are from a newer lux: nil or "" from one
+// that does not say.
+type Pool struct {
+	Name     string `json:"name"`
+	Provider string `json:"provider,omitempty"`
+	Platform bool   `json:"platform,omitempty"`
+	Shared   bool   `json:"shared,omitempty"`
+	// Where lux puts a Run that names no pool.
+	IsDefault bool `json:"isDefault,omitempty"`
+	// One host's size: what the biggest Run it can hold may ask for.
+	HostSize *HostSize `json:"hostSize,omitempty"`
+	// "running": from hosts up now; "history": from its last hosts.
+	HostSizeFrom string `json:"hostSizeFrom,omitempty"`
+	InstanceType string `json:"instanceType,omitempty"`
+	HostsRunning *int   `json:"hostsRunning,omitempty"`
+}
+
+// HostSize is one host's resources: memory and disk in bytes, disk 0 when
+// the host reserves none.
+type HostSize struct {
+	CPUs   float64 `json:"cpus"`
+	Memory int64   `json:"memory"`
+	Disk   int64   `json:"disk"`
 }
 
 // Sandbox relaxes a Run's container for what its workload needs.
@@ -420,6 +467,9 @@ type Client interface {
 
 	// Cost is what lux's cost plugins have priced for a Run so far.
 	Cost(ctx context.Context, runID string) (RunCost, error)
+
+	// Pools are the pools dude's key can place Runs in.
+	Pools(ctx context.Context) ([]Pool, error)
 }
 
 type HTTPClient struct {
@@ -632,6 +682,15 @@ func (c *HTTPClient) Cost(ctx context.Context, runID string) (RunCost, error) {
 	var out RunCost
 	err := c.do(ctx, "GET", "/v1/runs/"+url.PathEscape(runID)+"/cost", nil, nil, &out)
 	return out, err
+}
+
+// Pools reads GET /v1/pools. The key's `run` scope includes `read`.
+func (c *HTTPClient) Pools(ctx context.Context) ([]Pool, error) {
+	var out struct {
+		Pools []Pool `json:"pools"`
+	}
+	err := c.do(ctx, "GET", "/v1/pools", nil, nil, &out)
+	return out.Pools, err
 }
 
 // Output follows the SSE stream. Two positions, because lux keeps two

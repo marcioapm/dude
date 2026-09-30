@@ -406,6 +406,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec) (
 	var findings []delivery.Finding
 	var feedback []forge.ActionableFeedback
 	var prompts delivery.Prompts
+	var sizes delivery.Sizes
 	_ = json.Unmarshal(r.PRFeedback, &feedback)
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
@@ -416,6 +417,9 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec) (
 			return fmt.Errorf("load task: %w", err)
 		}
 		var err error
+		if sizes, err = delivery.LoadSizes(ctx, tx); err != nil {
+			return err
+		}
 		if prompts, err = delivery.LoadPrompts(ctx, tx, r.ID, r.ProjectID, r.Phase); err != nil {
 			return err
 		}
@@ -473,6 +477,20 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec) (
 	}
 	in.RunID, in.OrganizationID, in.TaskID, in.Phase, in.Role = r.ID, r.Org, r.TaskID, r.Phase, role
 	in.Model, in.Effort, in.TimeLimitMinutes = settings.Model, settings.Effort, settings.TimeLimitMinutes
+	if m, ok := sizes.ForRole(delivery.PromptRoleForPhase[r.Phase], projectModels, orgModels); ok {
+		in.Machine = &m
+		if stored == nil {
+			// What it runs on, kept as it is now: a later edit or removal of
+			// the size changes the next session, not this one's history.
+			// Fixed once lux has the Run; a retried submit writes it again.
+			if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+				_, err := tx.Exec(ctx, `UPDATE runs SET machine = $2 WHERE id = $1 AND lux_run_id IS NULL`, r.ID, m)
+				return err
+			}); err != nil {
+				return lux.Spec{}, err
+			}
+		}
+	}
 	in.Image = image
 	if in.Image == "" {
 		in.Image = s.Agent.DefaultImage
