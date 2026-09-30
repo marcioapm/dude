@@ -191,6 +191,26 @@ export function MarkdownEditor({
 
   // The toolbar is one Tab stop; ← → Home End move along the buttons shown.
   const [stop, setStop] = useState<MarkdownFormat>("heading");
+  const toolbar = useRef<HTMLDivElement>(null);
+  const focusedFormat = useRef<MarkdownFormat | null>(null);
+  // Quote hides under a container query. When it holds the Tab stop, the
+  // stop (and focus, if Quote had it) moves to the button before it, or the
+  // toolbar would have no Tab stop left.
+  useEffect(() => {
+    const bar = toolbar.current;
+    if (!bar || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      const quote = bar.querySelector<HTMLButtonElement>('[data-format="quote"]');
+      if (!quote || quote.offsetParent !== null) return;
+      setStop((s) => (s === "quote" ? "link" : s));
+      const active = document.activeElement;
+      if (focusedFormat.current === "quote" && (active === quote || active === null || active === document.body)) {
+        bar.querySelector<HTMLButtonElement>('[data-format="link"]')?.focus();
+      }
+    });
+    ro.observe(bar);
+    return () => ro.disconnect();
+  }, []);
   const moveAlongToolbar = (e: KeyboardEvent<HTMLDivElement>) => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
     const buttons = [...e.currentTarget.querySelectorAll<HTMLButtonElement>("button")].filter((b) => b.offsetParent !== null);
@@ -246,6 +266,7 @@ export function MarkdownEditor({
             role="toolbar"
             aria-label="Formatting"
             aria-controls={fieldId}
+            ref={toolbar}
             aria-hidden={mode === "preview" ? true : undefined}
             {...(mode === "preview" ? { inert: true } : {})}
             onKeyDown={moveAlongToolbar}
@@ -262,7 +283,14 @@ export function MarkdownEditor({
                     title={undefined}
                     className={f.optional ? styles["optional"] : undefined}
                     tabIndex={f.format === stop ? 0 : -1}
-                    onFocus={() => setStop(f.format)}
+                    onFocus={() => {
+                      focusedFormat.current = f.format;
+                      setStop(f.format);
+                    }}
+                    onBlur={(e) => {
+                      // A button blurred because it stopped rendering still counts as holding focus.
+                      if (e.currentTarget.offsetParent !== null) focusedFormat.current = null;
+                    }}
                     // The field keeps focus and its selection while a button is pressed.
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => format(f.format)}

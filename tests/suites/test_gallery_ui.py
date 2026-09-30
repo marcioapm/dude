@@ -265,3 +265,26 @@ def test_board_keeps_needs_you_first_and_is_a_keyboard_grid(gallery_page: Page, 
     assert board.locator("[aria-current='true']").get_attribute("data-board-key") == start, "moving focus must not change selection"
 
     assert console_errors == [], f"console errors on the board: {console_errors}"
+
+
+def test_markdown_toolbar_keeps_its_tab_stop_when_quote_hides(gallery_page: Page, console_errors: list):
+    """Quote hides when the editor narrows. If it held the toolbar's one Tab
+    stop, the stop and focus move to a button still shown, so the toolbar
+    stays reachable by Tab."""
+    gallery_page.set_viewport_size({"width": 2400, "height": 900})
+    gallery_page.get_by_role("link", name="MarkdownEditor").click()
+    toolbar = gallery_page.locator("#p-markdown-editor").get_by_role("toolbar", name="Formatting").first
+    toolbar.scroll_into_view_if_needed()
+    expect(toolbar.locator('[data-format="quote"]')).to_be_visible()
+    toolbar.locator('[data-format="heading"]').focus()
+    for _ in range(5):
+        gallery_page.keyboard.press("ArrowRight")
+    assert gallery_page.evaluate("document.activeElement?.getAttribute('data-format')") == "quote"
+
+    gallery_page.set_viewport_size({"width": 480, "height": 900})
+    expect(toolbar.locator('[data-format="quote"]')).to_be_hidden()
+    expect(toolbar.locator('[data-format="link"]')).to_be_focused()
+    stops = toolbar.locator("button[tabindex='0']")
+    expect(stops).to_have_count(1)
+    assert stops.first.get_attribute("data-format") == "link"
+    assert console_errors == []
