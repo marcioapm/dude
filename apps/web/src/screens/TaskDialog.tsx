@@ -18,16 +18,23 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Badge, Breadcrumb, Button, Checkbox, Fieldset, FormStack, HelpList, Input, KeyHint, MarkdownCheatsheet, MarkdownEditor, Select, Skeleton } from "@dude/design-system";
+import { TASK_CRITERIA_MAX, TASK_GOAL_MAX } from "@dude/domain";
 import type { ApiClient, Epic, Repository, TaskDetail, TaskFields, TaskRepository } from "../api/client.ts";
 import { unsavedWords } from "../hooks/discard.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
-import { criteriaFromMarkdown, criteriaToMarkdown, criterionTooLong } from "./criteria.ts";
+import { criteriaFromMarkdown, criteriaToMarkdown } from "./criteria.ts";
 
 const NO_EPIC = "__none__";
-const GOAL_MAX = 10_000;
-// The server caps each criterion (2,000) and not the list; this bounds the
-// source so a paste cannot make a request the browser struggles to send.
-const CRITERIA_MAX = 20_000;
+// The server bounds the criteria's total; the editor bounds their source.
+// Reading a source only strips markers and indentation, never adds, so the
+// source is at least as long as what it saves and this is the binding limit.
+const CRITERIA_MAX = TASK_CRITERIA_MAX;
+
+/** Past the editor's limit (text that arrived longer than it, not typed): what to do about it. */
+function overBy(value: string, max: number): string | undefined {
+  const over = value.length - max;
+  return over > 0 ? `${over.toLocaleString("en-US")} ${over === 1 ? "character" : "characters"} over the limit; shorten it to save.` : undefined;
+}
 
 export type ExistingTask = { id: string; delivering: boolean } & TaskFields;
 
@@ -81,8 +88,9 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
   // task says otherwise.
   const choosing = repositories.length > 1;
   const criteria = useMemo(() => criteriaFromMarkdown(criteriaSource), [criteriaSource]);
-  const criteriaError = locked ? null : criterionTooLong(criteria.items);
-  const canSave = choices !== null && Boolean(title.trim()) && !criteriaError && !busy;
+  const goalError = locked ? undefined : overBy(goal, TASK_GOAL_MAX);
+  const criteriaError = locked ? undefined : overBy(criteriaSource, CRITERIA_MAX);
+  const canSave = choices !== null && Boolean(title.trim()) && !goalError && !criteriaError && !busy;
   const unsaved = locked ? 0 : unsavedWords(opened, [title, goal, criteriaSource]);
 
   function submit(deliver: boolean) {
@@ -187,8 +195,9 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
         onChange={setGoal}
         fill
         minRows={4}
-        maxLength={GOAL_MAX}
+        maxLength={TASK_GOAL_MAX}
         locked={locked}
+        error={goalError}
         data-testid="task-goal"
       />
       <MarkdownEditor
@@ -200,7 +209,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
         minRows={3}
         maxLength={CRITERIA_MAX}
         locked={locked}
-        error={criteriaError ?? undefined}
+        error={criteriaError}
         summary={criteriaSource.trim() ? (
           <Badge tone="neutral" size="sm" data-testid="task-criteria-count">
             {criteria.items.length} {criteria.items.length === 1 ? "criterion" : "criteria"}

@@ -66,7 +66,7 @@ describe("MarkdownEditor markup", () => {
   });
 
   test("an error is tied to the textarea and marks it invalid", () => {
-    const h = html({ error: "Criterion 2 is over 2,000 characters" });
+    const h = html({ error: "12 characters over the limit; shorten it to save." });
     const area = tag(h, "<textarea");
     expect(area).toContain('aria-invalid="true"');
     const ids = /aria-describedby="([^"]+)"/.exec(area)![1]!.split(" ");
@@ -75,7 +75,7 @@ describe("MarkdownEditor markup", () => {
       const m = new RegExp(`<(\\w+)[^>]*\\bid="${id.replace(/[^\w-]/g, (c) => `\\${c}`)}"[^>]*>(.*?)</\\1>`).exec(h);
       return m ? m[2]!.replace(/<[^>]+>/g, "") : null;
     });
-    expect(described).toContain("Criterion 2 is over 2,000 characters");
+    expect(described).toContain("12 characters over the limit; shorten it to save.");
   });
 
   test("the formatting buttons are named, with the shortcut in their tooltips' keys", () => {
@@ -123,11 +123,11 @@ describe("MarkdownEditor markup", () => {
   });
 
   test("the footer says Markdown, carries the summary and a notice, and counts against the limit", () => {
-    const h = html({ value: "abc", maxLength: 10_000, summary: <span>2 criteria</span>, notice: "Text outside a list item isn't saved as a criterion" });
+    const h = html({ value: "abc", maxLength: 65_536, summary: <span>2 criteria</span>, notice: "Text outside a list item isn't saved as a criterion" });
     expect(h).toContain("Markdown");
     expect(h).toContain("2 criteria");
     expect(h).toContain("Text outside a list item");
-    expect(h).toContain("3 / 10,000");
+    expect(h).toContain("3 / 65,536");
     // The summary is read with the field.
     const described = /aria-describedby="([^"]+)"/.exec(tag(h, "<textarea"))![1]!.split(" ");
     expect(described.length).toBe(1);

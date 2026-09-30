@@ -287,6 +287,38 @@ func TestTheCLIsJSONAPICallsTheSameTools(t *testing.T) {
 	}
 }
 
+func TestATaskTakesA64KGoalAnd16KOfCriteriaInAllAndNoMore(t *testing.T) {
+	f := setup(t)
+	token := f.run(t, "run_lim", "implementer", "running")
+	body := func(goal int, criteria ...int) string {
+		cs := make([]string, len(criteria))
+		for i, n := range criteria {
+			cs[i] = strings.Repeat("c", n)
+		}
+		b, _ := json.Marshal(map[string]any{"title": "Limits", "goal": strings.Repeat("g", goal), "acceptanceCriteria": cs})
+		return string(b)
+	}
+	// One criterion far past the old 2,000 each, and the whole allowance split unevenly.
+	for _, ok := range []string{body(agenttools.GoalMax, 3000), body(10, agenttools.CriteriaMax-5000, 5000)} {
+		if status, out := f.post(t, token, "create_task", ok); status != 200 {
+			t.Errorf("within the limits: %d %v", status, out)
+		}
+	}
+	status, out := f.post(t, token, "create_task", body(agenttools.GoalMax+1))
+	if status != 422 || !strings.Contains(fmt.Sprint(out["error"]), "a goal of 65536") {
+		t.Errorf("a goal over 64K: %d %v", status, out)
+	}
+	status, out = f.post(t, token, "create_task", body(10, agenttools.CriteriaMax-5000, 5001))
+	if status != 422 || out["error"] != "acceptance criteria too long: at most 16384 characters in all" {
+		t.Errorf("criteria over 16K in all: %d %v", status, out)
+	}
+	var made int
+	_ = f.owner.QueryRow(context.Background(), `SELECT count(*) FROM tasks WHERE project_id = $1 AND title = 'Limits'`, f.project).Scan(&made)
+	if made != 2 {
+		t.Errorf("%d tasks made, want the 2 within the limits", made)
+	}
+}
+
 func TestAnAgentAsksAPersonThroughATool(t *testing.T) {
 	f := setup(t)
 	token := f.run(t, "run_ask", "implementer", "running")
