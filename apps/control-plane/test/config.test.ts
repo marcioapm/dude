@@ -111,6 +111,9 @@ describe("strictness", () => {
     ["[nonsense]\nx = 1\n", "nonsense"],
     ["top = 1\n", "top"],
     ["[auth.cloudflare_access]\nteam_name = \"x\"\n", "auth.cloudflare_access.team_name"],
+    ["[Orchestrator]\nlisten = \"127.0.0.1:1\"\n", "Orchestrator"],
+    ["[orchestrator]\nListen = \"127.0.0.1:1\"\n", "orchestrator.Listen"],
+    ["[orchestrator]\nlisten = \"127.0.0.1:1\"\nListen = \"0.0.0.0:1\"\n", "orchestrator.Listen"],
   ])("an unknown key is refused by name: %j", (text, name) => {
     expect(() => load({ DUDE_CONFIG: file(text) })).toThrow(ConfigError);
     expect(() => load({ DUDE_CONFIG: file(text) })).toThrow(`unknown key ${name}`);
