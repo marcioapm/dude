@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { SQL } from "bun";
 import { SignJWT, exportJWK, generateKeyPair, type JWK } from "jose";
-import { createApiKey, requestAuthenticator } from "../src/api/auth.ts";
+import { createApiKey, requestAuthenticator, type Principal } from "../src/api/auth.ts";
 import {
   accessAuthenticator, accessProfiles, accessVerifier, type AccessDeps, type FetchLike, type Profile,
 } from "../src/api/cloudflareAccess.ts";
@@ -490,4 +490,39 @@ test("a person principal's profile never sets their role", async () => {
   edge.profiles.set("role@example.com", { email: "role@example.com", name: "R", role: "admin", groups: ["admin"] } as unknown as Profile);
   const got = await me(routerFor(edge), cookie(await sign(signer, { email: "role@example.com", role: "admin" })));
   expect(got.body!.person.role).toBe("member");
+});
+
+describe("the resolved principal", () => {
+  test("carries the person's current name and role from the sign-in's own read", async () => {
+    const edge = new Edge();
+    edge.keys = [signer.jwk];
+    const authenticate = accessAuthenticator(config(), org, {
+      verify: accessVerifier(TEAM, AUD, edge.fetch), profile: accessProfiles(TEAM, edge.fetch),
+    });
+    const request = async (email: string) =>
+      new Request(`${ORIGIN}/v1/me`, { headers: cookie(await sign(signer, { email })) });
+    edge.profiles.set("resolved@example.com", { email: "resolved@example.com", name: "Resolved" });
+    const created = await authenticate(await request("resolved@example.com"));
+    expect(created).toMatchObject({ credentialKind: "person", name: "Resolved", role: "member", resolved: true });
+    await owner`UPDATE people SET role = 'admin', name = 'Promoted' WHERE id = ${created!.personId}`;
+    expect(await authenticate(await request("resolved@example.com")))
+      .toMatchObject({ personId: created!.personId, name: "Promoted", role: "admin", resolved: true });
+    await owner`UPDATE people SET removed_at = now() WHERE id = ${created!.personId}`;
+    expect(await authenticate(await request("resolved@example.com"))).toBeNull();
+  });
+
+  test("the router rereads only people the authenticator did not resolve", async () => {
+    // A person id with no row: rereading it refuses the request, trusting it does not.
+    const ghost = { credentialKind: "person" as const, organizationId: org, personId: `${org}_ghost`,
+      kind: "user" as const, name: "Ghost", role: "admin" as const };
+    const status = async (principal: Principal) => {
+      const r = new Router(async () => principal);
+      registerPeopleRoutes(r);
+      r.get("/v1/whoami", async (ctx) => Response.json(ctx.principal));
+      const res = await r.handle(new Request(`${ORIGIN}/v1/whoami`));
+      return { status: res.status, body: res.status === 200 ? await res.json() : null };
+    };
+    expect((await status(ghost)).status).toBe(401);
+    expect(await status({ ...ghost, resolved: true })).toEqual({ status: 200, body: { ...ghost, resolved: true } });
+  });
 });

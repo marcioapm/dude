@@ -26,7 +26,9 @@ interface PersonIdentity {
 export type Principal = PersonIdentity & (
   | { credentialKind: "api_key"; apiKeyId: string }
   // expiresAt: when the credential that proved it lapses, seconds since the epoch.
-  | { credentialKind: "person"; expiresAt?: number }
+  // resolved: name and role were read from the person's current, active row
+  // while authenticating; otherwise the router rereads them.
+  | { credentialKind: "person"; expiresAt?: number; resolved?: true }
 );
 
 /**
