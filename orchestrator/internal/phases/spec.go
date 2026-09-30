@@ -235,6 +235,12 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		spec.Secrets = append(spec.Secrets, lux.Secret{Name: "DUDE_TOOLS_AUTH", Value: "Bearer " + in.ToolsToken})
 	}
 
+	// Before the scripted agent returns: the contract suite runs it on a
+	// real lux, which must place it as it would the agent it stands in for.
+	if c.NestedContainers {
+		spec.Sandbox = &lux.Sandbox{NestedContainers: true}
+	}
+
 	// The scripted agent, for tests: lux-fake speaking ACP, following the
 	// script fakeagent writes for this phase. The model is a label too, so a
 	// stand-in for lux can play the same agent without parsing the script.
@@ -262,9 +268,6 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		spec.Secrets = append(spec.Secrets, lux.Secret{Name: "DUDE_LLM_KEY", Value: c.LLMKey, As: "env"})
 	}
 	spec.Network = egress(c)
-	if c.NestedContainers {
-		spec.Sandbox = &lux.Sandbox{NestedContainers: true}
-	}
 	return spec
 }
 
