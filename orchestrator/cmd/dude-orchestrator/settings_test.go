@@ -74,6 +74,7 @@ park_after = "20m"
 idle_after = "1h"
 diff_every = "30s"
 machine_usd_per_hour = 0.35
+lux_cost_every = "5m"
 [lux]
 url = "https://lux.file"
 api_key = "lux-file-key"
@@ -103,7 +104,7 @@ logins = ["file-bot"]
 		LuxURL: "https://lux.file", LuxKey: "lux-file-key", ConsoleURL: "https://console.file",
 		Registry:       registrySettings{Mode: "ecr", ECRRoleARN: "arn:aws:iam::123456789012:role/file"},
 		ReconcileEvery: 30 * time.Minute, ParkAfter: 20 * time.Minute, IdleAfter: time.Hour, DiffEvery: 30 * time.Second,
-		MachineUSDPerHour: 0.35, FactoryLogins: []string{"file-bot"},
+		MachineUSDPerHour: 0.35, LuxCostEvery: 5 * time.Minute, FactoryLogins: []string{"file-bot"},
 		VAPIDPublic: "BFile", VAPIDPrivate: "vapid-file-private", VAPIDSubject: "mailto:file@example.com",
 		Embeddings: embeddingsConfig{URL: "https://llm.file/v1", Key: "llm-file-key",
 			URLFrom: "DUDE_LLM_URL", KeyFrom: "DUDE_LLM_KEY"},
@@ -136,7 +137,7 @@ subject = "mailto:file@example.com"
 		"DATABASE_URL": "postgres://env/dude", "DUDE_ORCHESTRATOR_TOKEN": "env-token", "LUX_URL": "https://lux.env",
 		"LUX_API_KEY": "lux-env-key", "DUDE_ORCHESTRATOR_LISTEN": "127.0.0.1:4200", "DUDE_TOOLS_LISTEN": "0.0.0.0:4300",
 		"DUDE_PR_RECONCILE": "5m", "DUDE_PARK_AFTER": "1m", "DUDE_IDLE_AFTER": "2m", "DUDE_DIFF_EVERY": "3s",
-		"DUDE_MACHINE_USD_PER_HOUR": "1.5", "DUDE_FACTORY_LOGINS": "a,b",
+		"DUDE_MACHINE_USD_PER_HOUR": "1.5", "DUDE_LUX_COST_EVERY": "30s", "DUDE_FACTORY_LOGINS": "a,b",
 		"DUDE_REGISTRY_AUTH": "static", "DUDE_REGISTRY": "ghcr.io", "DUDE_REGISTRY_CREDENTIAL": "u:p",
 		"DUDE_VAPID_PUBLIC_KEY": "BEnv", "DUDE_VAPID_PRIVATE_KEY": "vapid-env", "DUDE_VAPID_SUBJECT": "mailto:env@example.com",
 		"DUDE_EMBEDDINGS_URL": "https://emb.env/v1", "DUDE_EMBEDDINGS_KEY": "emb-env", "DUDE_EMBEDDINGS_MODEL": "env-model",
@@ -144,7 +145,7 @@ subject = "mailto:file@example.com"
 	if s.DatabaseURL != "postgres://env/dude" || s.Token != "env-token" || s.LuxURL != "https://lux.env" ||
 		s.LuxKey != "lux-env-key" || s.Listen != "127.0.0.1:4200" || s.ToolsListen != "0.0.0.0:4300" ||
 		s.ReconcileEvery != 5*time.Minute || s.ParkAfter != time.Minute || s.IdleAfter != 2*time.Minute ||
-		s.DiffEvery != 3*time.Second || s.MachineUSDPerHour != 1.5 || !reflect.DeepEqual(s.FactoryLogins, []string{"a", "b"}) ||
+		s.DiffEvery != 3*time.Second || s.MachineUSDPerHour != 1.5 || s.LuxCostEvery != 30*time.Second || !reflect.DeepEqual(s.FactoryLogins, []string{"a", "b"}) ||
 		s.Registry != (registrySettings{Mode: "static", Host: "ghcr.io", Credential: "u:p"}) ||
 		s.VAPIDPublic != "BEnv" || s.VAPIDPrivate != "vapid-env" || s.VAPIDSubject != "mailto:env@example.com" ||
 		s.Embeddings.URL != "https://emb.env/v1" || s.Embeddings.Key != "emb-env" || s.EmbeddingsModel != "env-model" {
@@ -193,7 +194,7 @@ credential = "file-user:file-pass"
 func TestSettingsDefaults(t *testing.T) {
 	s := mustSettings(t, loadConfig(t, required, 0o600, nil))
 	if s.Listen != "127.0.0.1:3100" || s.ToolsListen != "" || s.ReconcileEvery != 15*time.Minute ||
-		s.DiffEvery != 15*time.Second || s.ParkAfter != 0 || s.IdleAfter != 0 || s.MachineUSDPerHour != 0.2 ||
+		s.DiffEvery != 15*time.Second || s.ParkAfter != 0 || s.IdleAfter != 0 || s.MachineUSDPerHour != 0.2 || s.LuxCostEvery != 2*time.Minute ||
 		s.VAPIDSubject != "mailto:dude@localhost" || s.Registry.Mode != "none" || s.FactoryLogins != nil ||
 		s.Embeddings.URL != "" || s.Embeddings.Off == "" || s.Agent.DefaultImage != "localhost/dude-runtime:dev" {
 		t.Errorf("settings = %+v", s)
@@ -264,6 +265,12 @@ func TestAMissingRequiredSettingIsNamed(t *testing.T) {
 	}
 	if _, err := settingsFrom(loadConfig(t, required, 0o600, map[string]string{"DUDE_MACHINE_USD_PER_HOUR": "-1"})); err == nil {
 		t.Error("a negative rate was accepted")
+	}
+	for _, v := range []string{"0s", "-1m"} {
+		if _, err := settingsFrom(loadConfig(t, required, 0o600, map[string]string{"DUDE_LUX_COST_EVERY": v})); err == nil ||
+			!strings.Contains(err.Error(), "orchestrator.lux_cost_every (DUDE_LUX_COST_EVERY)") {
+			t.Errorf("lux cost cadence %s: err = %v, want refused", v, err)
+		}
 	}
 }
 

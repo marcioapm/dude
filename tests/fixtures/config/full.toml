@@ -19,6 +19,7 @@ park_after = "20m"
 idle_after = "1h"
 diff_every = "30s"
 machine_usd_per_hour = 0.35
+lux_cost_every = "5m"
 
 [s3]
 bucket = "dude-photos"

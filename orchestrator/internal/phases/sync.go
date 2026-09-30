@@ -964,8 +964,11 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		// The agent is starting a new turn; the old "done" no longer holds.
 		// lux_state is what lux says now ("resuming"), so directives wait for
-		// the stream to report it running.
+		// the stream to report it running. A resumed lux Run's cost is no
+		// longer final, so it goes back on the cost work list; the stored
+		// amounts stand until the next read replaces them.
 		_, err := tx.Exec(ctx, `UPDATE runs SET status = 'running', lux_state = $2, lux_stop_reason = NULL,
+			lux_cost_next_at = now(),
 			control = 'none', control_requested_at = NULL, control_reason = NULL, dude_pause = NULL,
 			tool_starts = tool_starts + 1, idle_nudged_at = NULL, agent_active_at = NULL,
 			-- Still waiting on a person (a person resumed it anyway): the

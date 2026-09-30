@@ -10,6 +10,7 @@
   "DUDE_IDLE_AFTER": "1h",
   "DUDE_DIFF_EVERY": "30s",
   "DUDE_MACHINE_USD_PER_HOUR": 0.35,
+  "DUDE_LUX_COST_EVERY": "5m",
   "DUDE_S3_BUCKET": "dude-photos",
   "DUDE_S3_ENDPOINT": "http://127.0.0.1:9000",
   "DUDE_S3_REGION": "eu-west-1",

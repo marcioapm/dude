@@ -47,6 +47,9 @@ idle_after = "0s"                                        # DUDE_IDLE_AFTER
 diff_every = "15s"                                       # DUDE_DIFF_EVERY
 # What an hour of a lux host costs, recorded with each Run. Not negative.
 machine_usd_per_hour = 0.20                              # DUDE_MACHINE_USD_PER_HOUR
+# How often an agent's Run's cost is read from lux, until lux reports it
+# final or eight days after the Run ended. Positive.
+lux_cost_every = "2m"                                    # DUDE_LUX_COST_EVERY
 
 [s3]
 # The bucket people's photos and projects' images are kept in (backend).

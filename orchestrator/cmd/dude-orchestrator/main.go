@@ -167,6 +167,9 @@ func run(log *slog.Logger) error {
 		}},
 		{"previews", time.Second, previews.Sweep},
 		{"artifacts", time.Second, (&phases.Artifacts{DB: database, Lux: luxClient}).Sweep},
+		// Each Run carries its own next read (every set.LuxCostEvery); the
+		// loop only looks for the ones due.
+		{"lux-cost", 15 * time.Second, (&phases.Costs{DB: database, Lux: luxClient, Log: log, Every: set.LuxCostEvery}).Sweep},
 		{"webhooks", time.Second, pullRequests.ProcessDeliveries},
 		{"notify", 2 * time.Second, notifier.Sweep},
 		{"indexer", 5 * time.Second, indexer.Sweep},

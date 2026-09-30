@@ -118,6 +118,9 @@ type Run struct {
 
 	// Its servers (servers.go).
 	servers []*server
+	// What GET /cost answers; nil is lux's answer before any plugin priced
+	// anything: pending, no amounts.
+	cost *lux.RunCost
 
 	// Starts of the Run, as lux lists them; the last is the current one.
 	placements []*placement
@@ -285,6 +288,53 @@ func (s *Server) Crash(id string) {
 	}
 }
 
+// SetCost sets what lux's cost API answers for a Run, as its cost plugins
+// would have priced it.
+func (s *Server) SetCost(id string, cost lux.RunCost) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		cost.RunID = id
+		// lux always sends every amount; a test that set none means zero.
+		for i := range cost.ByFamily {
+			f := &cost.ByFamily[i]
+			zeroIfUnset(&f.Amount)
+			zeroIfUnset(&f.Final, &f.Estimate)
+		}
+		for i := range cost.Totals {
+			t := &cost.Totals[i]
+			zeroIfUnset(&t.Amount, &t.Final, &t.Estimate)
+		}
+		for i := range cost.Lines {
+			zeroIfUnset(&cost.Lines[i].Amount)
+		}
+		run.cost = &cost
+	}
+}
+
+func zeroIfUnset[T ~string](amounts ...*T) {
+	for _, a := range amounts {
+		if *a == "" {
+			*a = "0"
+		}
+	}
+}
+
+func (s *Server) getCost(w http.ResponseWriter, r *http.Request) {
+	run := s.find(w, r)
+	if run == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := lux.RunCost{RunID: run.ID, Status: lux.CostPending, Basis: "list",
+		Totals: []lux.CostAmount{}, ByFamily: []lux.FamilyCost{}, Lines: []lux.CostLine{}, Sources: []lux.CostSource{}}
+	if run.cost != nil {
+		out = *run.cost
+	}
+	writeJSON(w, 200, out)
+}
+
 // Forget drops every Run, as a lux that lost its data would.
 func (s *Server) Forget() {
 	s.mu.Lock()
@@ -316,6 +366,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/runs/{id}/servers/{name}/{action}", s.serverAction)
 	mux.HandleFunc("DELETE /v1/runs/{id}/servers/{name}", s.removeServer)
 	mux.HandleFunc("GET /v1/runs/{id}/servers/{name}/log", s.serverLog)
+	mux.HandleFunc("GET /v1/runs/{id}/cost", s.getCost)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+s.Key {
 			writeErr(w, 401, "unauthorized", "invalid API key")

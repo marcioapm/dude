@@ -8,7 +8,7 @@ import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { CHECK_RUNS_FORBIDDEN, PR_DISPLAY_STATES, prCheckDiagnosticReason, type PrDisplayState } from "@dude/domain";
 import { AgentPlan, PlanMeter } from "../src/components/AgentPlan.tsx";
-import { Cost } from "../src/components/Cost.tsx";
+import { Cost, costWords } from "../src/components/Cost.tsx";
 import { MarkdownDocument, applyFormat, highlightMarkdown } from "../src/components/MarkdownDocument.tsx";
 import { Markdown } from "../src/components/Markdown.tsx";
 import { PersonAvatar, PersonAvatarStack } from "../src/components/PersonAvatar.tsx";
@@ -210,6 +210,37 @@ describe("Cost", () => {
     const h = html(<Cost tokensUsd={null} />);
     expect(text(h)).toBe("—");
     expect(h).toContain('title="Cost not reported"');
+    // Even when told the parts would have come from lux.
+    expect(text(html(<Cost tokensUsd={null} tokensFrom="lux" machineFrom="lux" settled />))).toBe("—");
+  });
+  // The tooltip's lines and the label come from costWords; the label is
+  // what renders without a pointer.
+  const label = (h: string) => /aria-label="([^"]*)"/.exec(h)?.[1] ?? "";
+  test("without an origin it says nothing of one, as before", () => {
+    expect(label(html(<Cost tokensUsd={0.62} machineUsd={0.25} />))).toBe("$0.87: model tokens $0.62, machine time $0.25");
+  });
+  test("a figure lux has settled is reported by lux; one it has not is still an estimate", () => {
+    expect(label(html(<Cost tokensUsd={1.81} machineUsd={0.0077} tokensFrom="lux" machineFrom="lux" settled />)))
+      .toBe("$1.82: model tokens $1.81 · reported by lux, machine time $0.0077 · lux");
+    expect(label(html(<Cost tokensUsd={1.2} machineUsd={0.004} tokensFrom="lux" machineFrom="lux" />)))
+      .toBe("$1.20: model tokens $1.20 · estimate, lux settling, machine time $0.0040 · lux, settling");
+  });
+  test("the harness's figure and dude's machine rate are estimates, settled or not", () => {
+    expect(label(html(<Cost tokensUsd={0.3} machineUsd={0.2} tokensFrom="agent" machineFrom="estimate" settled />)))
+      .toBe("$0.50: model tokens $0.30 · estimate, machine time $0.20 · estimated");
+  });
+  test("the tooltip's lines say what the label says, with the units", () => {
+    expect(costWords({ tokensUsd: 1.81, machineUsd: 0.0077, tokens: 412_000, machineMs: 23 * 60_000,
+      tokensFrom: "lux", machineFrom: "lux", settled: true }).lines).toEqual([
+      "$1.82 total",
+      "Model tokens $1.81 (412k tokens) · reported by lux",
+      "Machine time $0.0077 (23m 00s) · lux",
+    ]);
+    expect(costWords({ tokensUsd: 0.3, tokensFrom: "agent" }).lines)
+      .toEqual(["$0.30 total", "Model tokens $0.30 · estimate", "Machine time not counted yet"]);
+    const w = costWords({ tokensUsd: null, machineUsd: 0.2, tokensFrom: "lux", machineFrom: "estimate" });
+    expect(w.lines.slice(1)).toEqual(["Model tokens not reported", "Machine time $0.20 · estimated"]);
+    expect(w.label).toBe("$0.20: model tokens not reported, machine time $0.20 · estimated");
   });
 });
 
