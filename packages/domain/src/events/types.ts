@@ -161,6 +161,13 @@ export const EventTypes = {
 
   // Cost
   CostSampled: "cost.sampled",
+  /**
+   * lux's cost for a Run changed, as its cost plugins priced it. Payload:
+   * `{ aiUsd, computeUsd, status }`: USD amounts, each null while lux has
+   * priced nothing in that family; status is lux's (pending, incomplete,
+   * complete, final). The latest replaces the harness-reported model cost.
+   */
+  RunCostReported: "run.cost.reported",
   BudgetSoftLimitReached: "budget.soft_limit_reached",
   BudgetHardLimitReached: "budget.hard_limit_reached",
 } as const;
