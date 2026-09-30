@@ -1,8 +1,9 @@
 import * as RadixTabs from "@radix-ui/react-tabs";
-import type { ReactNode } from "react";
+import { forwardRef, type ComponentPropsWithoutRef, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import { compact } from "../util/compact.ts";
 import { Icon, type IconName } from "../icons/index.tsx";
+import { Tooltip } from "./Tooltip.tsx";
 import styles from "./Tabs.module.css";
 
 export interface TabsProps {
@@ -50,24 +51,41 @@ export interface TabProps {
   readonly icon?: IconName | undefined;
   /** Small trailing count, e.g. number of findings. */
   readonly count?: number | undefined;
-  /** After the count: a mark that says more than a number (a state's dot, "1 ready"). */
+  /** After the count: a mark that says more than a number (a state's dot). */
   readonly trailing?: ReactNode;
+  /**
+   * What the tab's count stands for, told on hover and on keyboard focus
+   * (a `Tooltip`). Supplementary: the tab's name and count stay its label.
+   */
+  readonly tooltip?: ReactNode;
   readonly disabled?: boolean | undefined;
   readonly children?: ReactNode;
 }
 
-export function Tab({ value, icon, count, trailing, disabled, children }: TabProps) {
-  return (
-    <RadixTabs.Trigger value={value} className={styles["trigger"]} disabled={disabled ?? false}>
+/**
+ * Radix's tab trigger, keeping its own `data-state`: a tooltip around it
+ * passes the tooltip's ("delayed-open", "closed"), which would take the
+ * selected tab's underline and colour away.
+ */
+const TabTrigger = forwardRef<HTMLButtonElement, ComponentPropsWithoutRef<typeof RadixTabs.Trigger> & { "data-state"?: string }>(
+  function TabTrigger({ "data-state": _tooltipState, ...props }, ref) {
+    return <RadixTabs.Trigger ref={ref} {...props} />;
+  },
+);
+
+export function Tab({ value, icon, count, trailing, tooltip, disabled, children }: TabProps) {
+  const trigger = (
+    <TabTrigger value={value} className={styles["trigger"]} disabled={disabled ?? false}>
       {icon ? <Icon name={icon} size={13} /> : null}
       {children}
       {count !== undefined ? <span className={cx(styles["count"], "ds-cap")}>{count}</span> : null}
       {trailing}
-    </RadixTabs.Trigger>
+    </TabTrigger>
   );
+  return tooltip ? <Tooltip content={tooltip} side="bottom">{trigger}</Tooltip> : trigger;
 }
 
-/** A tab's count, for something in its row that is not a tab: "1 ready" on a toggle. */
+/** A tab's count, drawn apart: for a `trailing` that carries a count of its own. */
 export function TabCount({ children }: { readonly children: ReactNode }) {
   return <span className={cx(styles["count"], "ds-cap")}>{children}</span>;
 }

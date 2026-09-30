@@ -54,7 +54,7 @@ import { DudeMark, dudeName } from "../DudeMark.tsx";
 import { RunScreen } from "./RunScreen.tsx";
 import { OwnerSelect } from "./OwnerSelect.tsx";
 import { ServersAside } from "./ServersAside.tsx";
-import { ServersSection, serversTabTrailing } from "./ServersSection.tsx";
+import { ServersSection, serversTab } from "./ServersSection.tsx";
 import { existingTask, TaskDialog } from "./TaskDialog.tsx";
 import { PullRequestActions } from "./PullRequestActions.tsx";
 import { pullRequestActivity } from "../pullRequests.ts";
@@ -338,7 +338,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
           <Tab value="findings" count={findings.length > 0 ? findings.length : undefined}>Findings</Tab>
           <Tab value="sessions" count={item.runs.length > 0 ? item.runs.length : undefined}>Sessions</Tab>
           <Tab value="files" count={artifacts.length > 0 ? new Set(artifacts.map((a) => a.name)).size : undefined}>Files</Tab>
-          <Tab value="servers" trailing={serversTabTrailing(servers.data)}>Servers</Tab>
+          <Tab value="servers" {...serversTab(servers.data)}>Servers</Tab>
           <Tab value="activity">Activity</Tab>
         </TabList>
 

@@ -302,7 +302,7 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
 
-      <Block id="p-tabs" title="Tabs" note="Underline for page-level navigation; segmented for view switches inside a toolbar. Counts are quiet.">
+      <Block id="p-tabs" title="Tabs" note="Underline for page-level navigation; segmented for view switches inside a toolbar. Counts are quiet. A tab's tooltip says what its count stands for, on hover and on keyboard focus (Questions here); ←→ still walk the tabs.">
         <Panes mode={mode}>
           <Col>
             <Tabs defaultValue="timeline">
@@ -314,7 +314,7 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
                 <Tab value="sessions" count={5}>
                   Sessions
                 </Tab>
-                <Tab value="questions" count={1}>
+                <Tab value="questions" count={1} tooltip="1 question waits on you">
                   Questions
                 </Tab>
                 <Tab value="disabled" disabled>

@@ -1,12 +1,12 @@
 import type { HTMLAttributes, ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import { shortId } from "../util/format.ts";
-import { bareUrl, canStop, safeServerUrl } from "../util/servers.ts";
+import { bareUrl, canStop, safeServerUrl, type TaskServersSummary } from "../util/servers.ts";
 import { Icon } from "../icons/index.tsx";
 import { Button, IconButton, LinkButton } from "../primitives/Button.tsx";
 import { LogStream, type LogLine } from "./LogStream.tsx";
 import { ServerStateMark } from "./ServerStateMark.tsx";
-import type { ServerDisplayState } from "../tokens/servers.ts";
+import { serverStateSpec, type ServerDisplayState } from "../tokens/servers.ts";
 import styles from "./ServerRow.module.css";
 
 export interface ServerListProps extends HTMLAttributes<HTMLUListElement> {
@@ -234,6 +234,39 @@ export function ServersPanel({ note, className, children, ...rest }: ServersPane
       {children}
       {note ? <p className={styles["note"]}>{note}</p> : null}
     </div>
+  );
+}
+
+export interface ServersTabTipProps {
+  /** `summarizeTaskServers`'s reading of the task's servers. */
+  readonly summary: TaskServersSummary;
+}
+
+/**
+ * The task's Servers tab tooltip: how many are on, one line per server on
+ * (its mark, its name in mono, its state and port), then the rest, muted.
+ * The same reading as the tab's count, so the two never disagree.
+ */
+export function ServersTabTip({ summary }: ServersTabTipProps) {
+  const { on, off } = summary;
+  return (
+    <span className={styles["tip"]} data-testid="servers-tab-tip">
+      <span className={styles["tipHead"]}>{on.length === 0 ? "No servers on" : `${on.length} ${on.length === 1 ? "server" : "servers"} on`}</span>
+      {on.map((s) => (
+        <span key={s.name} className={styles["tipRow"]} data-server={s.name}>
+          {/* The word follows: the mark is its glyph alone, with no title of its own. */}
+          <ServerStateMark state={s.state} size="sm" iconOnly className={styles["tipMark"]} title={undefined} aria-hidden />
+          <span className={styles["tipName"]}>{s.name}</span>
+          <span>{serverStateSpec(s.state).label.toLowerCase()}</span>
+          <span className={styles["tipPort"]}>:{s.port}</span>
+        </span>
+      ))}
+      {off.length > 0 ? (
+        <span className={styles["tipOff"]}>
+          Off: {off.map((s) => (s.state === "exited" ? `${s.name} (exited)` : s.name)).join(", ")}
+        </span>
+      ) : null}
+    </span>
   );
 }
 
