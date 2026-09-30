@@ -106,6 +106,7 @@ class FakeGitHub:
         self.updates: list[int] = []
         self.jobs_rerun: list[int] = []
         self.review_requests: list[tuple[int, list[str]]] = []
+        self.receive_requests: list[str] = []
 
     def add_repository(self, repo: str) -> "FakeGitHub":
         """Another repository, served alongside this one: same owner, same
@@ -148,7 +149,7 @@ class FakeGitHub:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        self._server = ThreadingHTTPServer(("127.0.0.1", self.api_port), self._handler())
+        self._server = ThreadingHTTPServer((self.listen, self.api_port), self._handler())
         threading.Thread(target=self._server.serve_forever, daemon=True).start()
         self._wait_for_daemon()
 
@@ -168,7 +169,7 @@ class FakeGitHub:
 
     @property
     def api_url(self) -> str:
-        return f"http://127.0.0.1:{self.api_port}"
+        return f"http://{self.listen}:{self.api_port}"
 
     def _seed(self, suffix: str = "") -> None:
         seed = self.root / f"seed-{self.owner}{suffix}"
@@ -517,6 +518,8 @@ class FakeGitHub:
                 if m := re.fullmatch(rf"/{root.owner}/([^/]+)\.git/info/refs", path):
                     if m[1] != root.repo and m[1] not in root.siblings:
                         return self._send(404, {"message": "Not Found"})
+                    with root._lock:
+                        root.receive_requests.append(self.path)
                     expected = "Basic " + base64.b64encode(b"x-access-token:fake-token").decode()
                     if self.headers.get("authorization") != expected:
                         return self._send(401, {"message": "Bad credentials"})
