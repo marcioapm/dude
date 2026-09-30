@@ -6,6 +6,8 @@ import { Router } from "../src/api/router.ts";
 import { registerProjectRoutes } from "../src/api/routes/projects.ts";
 import { registerSettingsRoutes } from "../src/api/routes/settings.ts";
 import { registerFindingRoutes } from "../src/api/routes/findings.ts";
+import { registerInterventionRoutes } from "../src/api/routes/intervention.ts";
+import { registerWorkRoutes } from "../src/api/routes/work.ts";
 import { closePool, setPool } from "../src/db/client.ts";
 import { append, query } from "../src/events/ledger.ts";
 import { seenEvent } from "../src/events/listen.ts";
@@ -20,6 +22,9 @@ let router: Router;
 let defaults: ReturnType<typeof Bun.serve>;
 const oldUrl = process.env.DUDE_ORCHESTRATOR_URL;
 const oldToken = process.env.DUDE_ORCHESTRATOR_TOKEN;
+// Identity headers of each /internal/tasks and /internal/questions request the receiver got.
+const forwarded: Array<{ path: string; headers: Record<string, string | null> }> = [];
+const IDENTITY = ["x-dude-credential-kind", "x-dude-actor", "x-dude-person", "x-dude-role", "x-dude-organization"];
 
 async function call(who: "key" | "person", method: string, path: string, body?: unknown) {
   const response = await router.handle(new Request(`http://dude.test${path}`, {
@@ -51,8 +56,18 @@ beforeAll(async () => {
   registerProjectRoutes(router);
   registerSettingsRoutes(router);
   registerFindingRoutes(router);
+  registerWorkRoutes(router);
+  registerInterventionRoutes(router);
   defaults = Bun.serve({ port: 0, fetch(request) {
-    return Response.json(new URL(request.url).pathname.endsWith("builtin") ? { implementer: "Built-in prompt" } : {});
+    const path = new URL(request.url).pathname;
+    if (path.startsWith("/internal/tasks/") || path.startsWith("/internal/questions/")) {
+      forwarded.push({ path, headers: Object.fromEntries(IDENTITY.map((h) => [h, request.headers.get(h)])) });
+      if (path.includes("q_refused")) {
+        return Response.json({ error: { code: "forbidden", message: "only the task's owner may answer" } }, { status: 403 });
+      }
+      return Response.json({ ok: true, path });
+    }
+    return Response.json(path.endsWith("builtin") ? { implementer: "Built-in prompt" } : {});
   } });
   process.env.DUDE_ORCHESTRATOR_URL = `http://localhost:${defaults.port}`;
   process.env.DUDE_ORCHESTRATOR_TOKEN = "test";
@@ -136,4 +151,31 @@ test("readers retain unresolved identities and do not enrich foreign people", as
   expect(await query(other)).toHaveLength(0);
   expect(seenEvent(org, { id: person.personId, name: person.name, photoUrl: null, online: true, where: null }).actor)
     .toMatchObject({ type: "person", id: person.personId });
+});
+
+test("the orchestrator hears who is asking, by person or by key, and its refusal comes back", async () => {
+  const expected = (principal: Principal) => ({
+    "x-dude-credential-kind": principal.credentialKind,
+    "x-dude-actor": principal.credentialKind === "api_key" ? principal.apiKeyId : principal.personId,
+    "x-dude-person": principal.personId,
+    "x-dude-role": principal.role,
+    "x-dude-organization": org,
+  });
+  for (const who of ["person", "key"] as const) {
+    const principal = who === "key" ? keyed : person;
+    forwarded.length = 0;
+    await call(who, "POST", "/v1/tasks/task_forwarded/deliver", {});
+    await call(who, "POST", "/v1/questions/q_forwarded/answer", { text: "Yes" });
+    expect(forwarded).toEqual([
+      { path: "/internal/tasks/task_forwarded/deliver", headers: expected(principal) },
+      { path: "/internal/questions/q_forwarded/answer", headers: expected(principal) },
+    ]);
+  }
+  expect(expected(keyed)["x-dude-actor"]).not.toBe(keyed.personId);
+
+  const refused = await router.handle(new Request("http://dude.test/v1/questions/q_refused/answer", {
+    method: "POST", headers: { authorization: "person", "content-type": "application/json" }, body: JSON.stringify({ text: "Yes" }),
+  }));
+  expect(refused.status).toBe(403);
+  expect(await refused.json()).toEqual({ error: { code: "forbidden", message: "only the task's owner may answer" } });
 });
