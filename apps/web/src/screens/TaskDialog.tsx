@@ -173,7 +173,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
         </Tooltip>
       }
       reading={reading ? (
-        <Markdown title={title} untitled="Untitled task" source={readingSource} data-testid="task-reading" />
+        <Markdown title={title} untitled="Untitled task" source={readingSource} breaks data-testid="task-reading" />
       ) : undefined}
       readingLabel="The task as it reads"
       onCloseReading={() => setReading(false)}
@@ -231,6 +231,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
         value={goal}
         onChange={setGoal}
         fill
+        breaks
         minRows={4}
         maxLength={TASK_GOAL_MAX}
         locked={locked}
@@ -243,6 +244,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
         placeholder="- [ ] A thing that must be true when it's done"
         value={criteriaSource}
         onChange={setCriteriaSource}
+        breaks
         minRows={3}
         maxLength={CRITERIA_MAX}
         locked={locked}

@@ -47,6 +47,8 @@ export interface MarkdownEditorProps {
    * text published as an artifact.
    */
   readonly variant?: "message" | "document" | undefined;
+  /** Preview renders a single newline as a line break (`Markdown breaks`): on where a person writes. */
+  readonly breaks?: boolean | undefined;
   readonly id?: string | undefined;
   readonly name?: string | undefined;
   readonly autoFocus?: boolean | undefined;
@@ -115,6 +117,7 @@ export function MarkdownEditor({
   notice,
   defaultMode = "write",
   variant = "message",
+  breaks,
   id,
   name,
   autoFocus,
@@ -359,7 +362,7 @@ export function MarkdownEditor({
           data-testid={testId ? `${testId}-preview` : undefined}
         >
           {mode !== "preview" ? null : value.trim() ? (
-            <Markdown source={value} variant={variant} unmeasured />
+            <Markdown source={value} variant={variant} breaks={breaks} unmeasured />
           ) : (
             <p className={styles["empty"]}>Nothing to preview yet.</p>
           )}

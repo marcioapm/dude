@@ -141,7 +141,8 @@ export function PromptHistory({ versions, onRestore, emptyText = "No versions ye
           </>
         ) : (
           <div className={styles["whole"]}>
-            <Markdown source={version.body || "_Empty: nothing added._"} variant="prompt" />
+            {/* A prompt is written by a person: a single newline is the break they typed. */}
+            <Markdown source={version.body || "_Empty: nothing added._"} variant="prompt" breaks />
           </div>
         )}
         <div className={styles["used"]}>

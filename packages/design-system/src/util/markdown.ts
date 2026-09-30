@@ -56,6 +56,13 @@ export type Block =
 export interface ParseOptions {
   /** Treat unterminated constructs at end of input as open (see above). */
   readonly streaming?: boolean | undefined;
+  /**
+   * A single newline inside a paragraph, list item, quote or table cell is
+   * a line break, as a person writing expects, not CommonMark's space.
+   * Code blocks, code spans and headings are unaffected. Default off: agent
+   * output keeps the standard rule.
+   */
+  readonly breaks?: boolean | undefined;
   /** Heading ids already taken, shared by the sections of one document so each id is unique in it. */
   readonly usedIds?: Map<string, number> | undefined;
 }
@@ -101,12 +108,20 @@ const MAX_BLOCK_DEPTH = 32;
 
 export function parseMarkdown(src: string, opts: ParseOptions = {}): Block[] {
   const streaming = opts.streaming === true;
+  const breaks = opts.breaks === true;
   const lines = src.replace(/\r\n?/g, "\n").split("\n");
   const usedIds = opts.usedIds ?? new Map<string, number>();
-  return parseBlocks(lines, streaming, usedIds, 0);
+  return parseBlocks(lines, { streaming, breaks, usedIds }, 0);
 }
 
-function parseBlocks(lines: readonly string[], streaming: boolean, usedIds: Map<string, number>, depth: number): Block[] {
+interface BlockCtx {
+  readonly streaming: boolean;
+  readonly breaks: boolean;
+  readonly usedIds: Map<string, number>;
+}
+
+function parseBlocks(lines: readonly string[], ctx: BlockCtx, depth: number): Block[] {
+  const { streaming, breaks, usedIds } = ctx;
   if (depth > MAX_BLOCK_DEPTH) {
     const v = lines.filter((l) => l.trim() !== "").join("\n");
     return v === "" ? [] : [{ t: "paragraph", c: [{ t: "text", v }] }];
@@ -170,7 +185,7 @@ function parseBlocks(lines: readonly string[], streaming: boolean, usedIds: Map<
         else if (l.trim() !== "" && inner.length > 0 && !isBlockStart(l)) inner.push(l); // lazy continuation
         else break;
       }
-      out.push({ t: "quote", c: parseBlocks(inner, streaming, usedIds, depth + 1) });
+      out.push({ t: "quote", c: parseBlocks(inner, ctx, depth + 1) });
       i = j;
       continue;
     }
@@ -228,7 +243,7 @@ function parseBlocks(lines: readonly string[], streaming: boolean, usedIds: Map<
           }
           break;
         }
-        items.push({ c: parseBlocks(buf, streaming, usedIds, depth + 1), task });
+        items.push({ c: parseBlocks(buf, ctx, depth + 1), task });
         j = k;
       }
       out.push({ t: "list", ordered, start, items });
@@ -238,7 +253,7 @@ function parseBlocks(lines: readonly string[], streaming: boolean, usedIds: Map<
 
     // Table: a header row followed by a separator row.
     if (line.includes("|") && TABLE_SEP_RE.test(lines[i + 1] ?? "")) {
-      const head = splitRow(line).map((c) => parseInline(c, streaming));
+      const head = splitRow(line).map((c) => parseInline(c, streaming, breaks));
       const align = splitRow(lines[i + 1] ?? "").map<TableAlign>((c) => {
         const s = c.trim();
         const l = s.startsWith(":");
@@ -250,7 +265,7 @@ function parseBlocks(lines: readonly string[], streaming: boolean, usedIds: Map<
       for (; j < lines.length; j++) {
         const l = lines[j] ?? "";
         if (l.trim() === "" || !l.includes("|")) break;
-        rows.push(splitRow(l).map((c) => parseInline(c, streaming)));
+        rows.push(splitRow(l).map((c) => parseInline(c, streaming, breaks)));
       }
       out.push({ t: "table", align, head, rows });
       i = j;
@@ -266,7 +281,7 @@ function parseBlocks(lines: readonly string[], streaming: boolean, usedIds: Map<
       if (l.includes("|") && TABLE_SEP_RE.test(lines[j + 1] ?? "")) break;
       buf.push(l);
     }
-    out.push({ t: "paragraph", c: parseInline(buf.join("\n"), streaming) });
+    out.push({ t: "paragraph", c: parseInline(buf.join("\n"), streaming, breaks) });
     i = j;
   }
   return out;
@@ -379,14 +394,15 @@ interface LinkResult {
 interface InlineCtx {
   readonly src: string;
   readonly streaming: boolean;
+  readonly breaks: boolean;
   partners: { readonly bracket: Int32Array; readonly paren: Int32Array } | null;
   readonly runs: Map<number, InlineResult>;
   readonly links: Map<number, LinkResult | null>;
   readonly tickMiss: Map<number, number>;
 }
 
-export function parseInline(src: string, streaming: boolean): Inline[] {
-  const ctx: InlineCtx = { src, streaming, partners: null, runs: new Map(), links: new Map(), tickMiss: new Map() };
+export function parseInline(src: string, streaming: boolean, breaks = false): Inline[] {
+  const ctx: InlineCtx = { src, streaming, breaks, partners: null, runs: new Map(), links: new Map(), tickMiss: new Map() };
   return parseInlineRange(ctx, 0, src.length, null, 0).nodes;
 }
 
@@ -432,9 +448,10 @@ function parseInlineRange(ctx: InlineCtx, from: number, to: number, closer: stri
       }
     }
 
-    // Hard break: two+ spaces before newline. Soft break otherwise.
+    // Hard break: two+ spaces before newline. Soft break otherwise, which
+    // `breaks` renders as a line break too.
     if (ch === "\n") {
-      if (text.endsWith("  ")) {
+      if (ctx.breaks || text.endsWith("  ")) {
         text = text.replace(/ +$/, "");
         flush();
         nodes.push({ t: "br" });

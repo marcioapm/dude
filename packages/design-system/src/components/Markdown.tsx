@@ -48,6 +48,12 @@ export interface MarkdownProps extends Omit<HTMLAttributes<HTMLDivElement>, "chi
   readonly title?: string | undefined;
   /** In place of a blank `title`. Default "Untitled". */
   readonly untitled?: string | undefined;
+  /**
+   * A single newline is a line break (`parseMarkdown`'s `breaks`). On where
+   * a person writes the Markdown (a task, a prompt, a steer); off, the
+   * default, for agent output.
+   */
+  readonly breaks?: boolean | undefined;
   /** Where links open. Defaults to a new tab with `rel="noopener noreferrer"`. */
   readonly linkTarget?: "_blank" | "_self" | undefined;
   /** Render fenced ```diff / ```patch blocks with DiffView (default true). */
@@ -66,6 +72,7 @@ export function Markdown({
   source,
   variant = "message",
   streaming,
+  breaks,
   unmeasured,
   outline,
   title,
@@ -80,9 +87,9 @@ export function Markdown({
       const sections = typeof source === "string" ? [source] : source;
       const usedIds = new Map<string, number>();
       // Only the last section can still be arriving.
-      return sections.flatMap((section, i) => parseMarkdown(section, { streaming: (streaming ?? false) && i === sections.length - 1, usedIds }));
+      return sections.flatMap((section, i) => parseMarkdown(section, { streaming: (streaming ?? false) && i === sections.length - 1, breaks, usedIds }));
     },
-    [source, streaming],
+    [source, streaming, breaks],
   );
   const headings = useMemo(() => (outline && variant === "document" ? buildOutline(blocks) : []), [blocks, outline, variant]);
   const ctx: RenderCtx = { linkTarget, diffs, streaming: streaming === true, variables: variant === "prompt" };
