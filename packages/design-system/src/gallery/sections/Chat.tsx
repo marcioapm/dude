@@ -415,13 +415,13 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
             <Label>delivered by an older lux — handed over, no read time</Label>
             <ChatMessage role="human" name="marcio" intent="steer" content="Also check the migration renames the column." startedAt={at(1_900_000)} deliveredAt={at(1_940_000)} />
             <Label>composer hint, following the same capability</Label>
-            <div className={styles["composerFrame"]}>
+            <div style={{ border: "1px solid var(--ds-color-border-subtle)", borderRadius: "var(--ds-radius-control)", overflow: "hidden" }}>
               <ChatComposer running canInterrupt landsHint="Lands after the current tool" onSubmit={() => undefined} />
             </div>
-            <div className={styles["composerFrame"]}>
+            <div style={{ border: "1px solid var(--ds-color-border-subtle)", borderRadius: "var(--ds-radius-control)", overflow: "hidden" }}>
               <ChatComposer running canInterrupt landsHint="Lands at the agent's next step" onSubmit={() => undefined} />
             </div>
-            <div className={styles["composerFrame"]}>
+            <div style={{ border: "1px solid var(--ds-color-border-subtle)", borderRadius: "var(--ds-radius-control)", overflow: "hidden" }}>
               <ChatComposer running canInterrupt landsHint="Lands when the turn ends" onSubmit={() => undefined} />
             </div>
           </Col>
