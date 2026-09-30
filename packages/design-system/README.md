@@ -169,7 +169,7 @@ gallery for every value.
 | Diff | `--ds-diff-{add,del}-{bg,bg-strong,fg}`, `--ds-diff-hunk-{bg,fg}` | Softer than the tones; read for minutes. |
 | Merged | `--ds-merged-{fg,bg}` | GitHub's violet, for a merged pull request and nothing else. Not a tone. |
 | Elevation | `--ds-shadow-1/2/3` | Includes the hairline ring. Theme-dependent. |
-| Type | `--ds-font-sans/mono`, `--ds-text-2xs…4xl`, `--ds-text-nav`, `--ds-text-prose`, `--ds-text-mono`, `--ds-weight-*`, `--ds-leading-*`, `--ds-tracking-*` | UI body `text-md` 15px (14 compact); `sm`/`xs` 13/12 and `nav` 14 in both densities; prose 16px (15 compact). Transcript text runs at `leading-chat` 1.375 (22px at 16px); documents and multi-block Markdown at `leading-prose` 1.5; headings at `leading-tight` 1.3. `2xs` 11px for small-caps labels only; `mono` 13px. Headings `lg…4xl` are 16/20/22/26/34. |
+| Type | `--ds-font-sans/mono`, `--ds-text-2xs…4xl`, `--ds-text-nav`, `--ds-text-prose`, `--ds-text-mono`, `--ds-weight-*`, `--ds-leading-*`, `--ds-tracking-*` | UI body `text-md` 15px (14 compact); `sm`/`xs` 13/12 and `nav` 14 in both densities; prose 16px (15 compact). Transcript text runs at `leading-chat` 1.375 (22px at 16px); documents and multi-block Markdown at `leading-prose` 1.5; headings at `leading-tight` 1.3. `2xs` 11px for small-caps labels, badges and key caps only; `mono` 13px. Headings `lg…4xl` are 16/20/22/26/34. |
 | Space | `--ds-space-0…64`, `--ds-space-{main-pad,card-pad,chat-pad-x,chat-gap,chat-avatar-gap,panel-gap,tree-indent,nav-row-gap}` | 4px grid plus 2 and 6. The named spaces are layout: main pane 24, board card 12, chat turn 16 across and 17 between speakers, avatar gap 16 (so transcript text starts at 16 + 40 + 16 = 72px), panel gap 24, tree indent 16, 2 between sidebar rows. |
 | Radius | `--ds-radius-{none,mark,control,float,full}`, `--ds-radius-face-{agent,project}` | Roles, not sizes: structure `none`, inline marks `mark` 3, controls `control` 6 (5 compact), floats `float` 10, people and dots `full`. Agent and project faces take a share of their size (28%, 22%). |
 | Size | `--ds-size-control-sm/md/lg`, `--ds-size-row-compact/default/comfortable`, `--ds-size-avatar-{xs,sm,md,lg,chat}`, `--ds-size-badge-{sm,md}`, `--ds-size-chip`, `--ds-size-icon-*` | Controls 28/32/36, rows 28/32/40. Avatars 16/20/24/32 and 40 for the transcript's own. Badges 16/18, chips 22, in both densities. |
@@ -754,7 +754,7 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 17) than comfortable.
 
 - Body text 15px (14 compact); captions 12–13px; nothing smaller than 11px
-  and only in small-caps labels and badges.
+  and only in small-caps labels, badges and key caps.
 - Rows 32px by default. Use `row-compact` (28px) for logs, event streams and
   anything the operator scans rather than reads. Use `row-comfortable` (40px)
   only for rows with two lines of content — an `EntityLine` with a detail
