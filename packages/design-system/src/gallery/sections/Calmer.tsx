@@ -156,13 +156,16 @@ export function CalmerSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
 
-      <Block id="k-cost" title="Cost" note="Every cost is model tokens plus machine time: the number is the total, a 2px hairline under it is the split, and the tooltip has the parts. Until machine time is measured the total is tokens only and says so. Nothing reported is a dash, never $0.00.">
+      <Block id="k-cost" title="Cost" note="Every cost is model tokens plus machine time: the number is the total, a 2px hairline under it is the split, and the tooltip has the parts. Until machine time is measured the total is tokens only and says so. Nothing reported is a dash, never $0.00. Given where each part came from, the tooltip says it: a figure lux has settled is reported by lux; one it is still settling, the harness's, and dude's machine rate are estimates.">
         <Panes mode={mode}>
           <States
             items={[
               ["tokens and machine", <><Cost tokensUsd={0.62} machineUsd={0.25} tokens={412_000} machineMs={23 * 60_000} /><Cost tokensUsd={9.8} machineUsd={4.4} size="lg" /></>],
               ["tokens only (machine not measured)", <><Cost tokensUsd={0.07} tokens={42_000} /><Cost tokensUsd={8.4} size="lg" /></>],
               ["small, muted", <Cost tokensUsd={0.21} machineUsd={0.03} size="sm" tone="muted" />],
+              ["reported by lux, settled", <Cost tokensUsd={1.810247} machineUsd={0.007659225} tokensFrom="lux" machineFrom="lux" settled />],
+              ["lux, still settling", <Cost tokensUsd={1.2} machineUsd={0.004} tokensFrom="lux" machineFrom="lux" />],
+              ["harness and machine estimate", <Cost tokensUsd={0.3} machineUsd={0.2} tokensFrom="agent" machineFrom="estimate" />],
               ["not reported", <Cost tokensUsd={null} />],
             ]}
           />

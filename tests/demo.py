@@ -83,6 +83,15 @@ def main() -> None:
 gh_ref: list = []
 
 
+def seed_forge_credential(client: ApiClient, gh: FakeGitHub) -> requests.Response:
+    response = client.post(
+        "/v1/forge/credential",
+        {"auth": "pat", "secret": "fake-token", "apiBaseUrl": gh.api_url},
+    )
+    response.raise_for_status()
+    return response
+
+
 def run(env: TestEnvironment, args) -> None:
     env.setup()
     if not env.wait_healthy(60):
@@ -117,8 +126,7 @@ def run(env: TestEnvironment, args) -> None:
     gh = FakeGitHub(env.git_root, owner="acme", repo="dashboard")
     gh.start()
     gh_ref.append(gh)
-    r = ana.post("/v1/forge/credential", {"auth": "pat", "secret": "demo-token", "apiBaseUrl": gh.api_url})
-    r.raise_for_status()
+    r = seed_forge_credential(ana, gh)
     gh.webhook_url = env.control_plane_url + r.json()["webhookPath"]
     gh.webhook_secret = webhook_secret(env.owner_dsn, org)
 

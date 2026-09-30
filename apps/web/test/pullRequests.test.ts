@@ -15,6 +15,7 @@ const pr = (over: Partial<PullRequest> = {}): PullRequest => ({
   display: "ready", createdAt: "", updatedAt: "", ...over,
 });
 const check = (name: string, status: string, conclusion: string | null) => ({ name, status, conclusion });
+const refused = "GitHub refused the check-runs read; check the token's Checks: Read permission and its repository/organization access (SSO, token approval)";
 
 const event = (eventType: string, payload: Record<string, unknown>, actorId = "workflow"): PersistedEvent => ({
   eventId: "e", eventType, occurredAt: "2026-09-28T10:00:00Z", organizationId: "o", projectId: null, taskId: "t", runId: null,
@@ -29,6 +30,16 @@ describe("merging", () => {
       checks: [check("e2e (chrome)", "completed", "failure")] }))).toBe("Blocked: e2e (chrome) failing, changes requested");
     expect(mergeBlockedBy(pr({ display: "comments", unresolvedThreads: 2 }))).toBe("Blocked: 2 threads unresolved");
     expect(mergeBlockedBy(pr({ state: "draft", display: "ready" }))).toBe("It is a draft");
+  });
+
+  test("pending says pending, and unreadable check runs say why rather than running", () => {
+    expect(mergeBlockedBy(pr({ display: "ci_running", checkState: "pending" }))).toBe("Blocked: checks pending");
+    const denied = { ...check("GitHub check runs", "unavailable", ""), diagnostic: "check_runs_forbidden" };
+    const unreadable = mergeBlockedBy(pr({ display: "ci_running", checkState: "pending", checks: [check("CodeRabbit", "completed", "success"), denied] }));
+    expect(unreadable).toBe(`Blocked: ${refused}`);
+    // A real failure is said first, and the unreadable runs beside it.
+    const both = mergeBlockedBy(pr({ display: "ci_red", checkState: "failing", checks: [check("lint", "completed", "failure"), denied] }));
+    expect(both).toBe(`Blocked: lint failing, ${refused}`);
   });
 });
 
@@ -52,6 +63,19 @@ describe("activity", () => {
       .toBe("cy requested changes on #41");
     expect(pullRequestActivity(event("pull_request.checks_changed", { to: "failing", failing: ["e2e (chrome)"] }), false)?.text)
       .toBe("CI e2e (chrome) failed on #41");
+  });
+
+  test("checks pending is not checks started; losing and regaining read access say so", () => {
+    expect(pullRequestActivity(event("pull_request.checks_changed", { from: "passing", to: "pending" }), false)?.text).toBe("Checks pending on #41");
+    expect(pullRequestActivity(event("pull_request.checks_changed", { from: "pending", to: "pending", diagnostic: "check_runs_forbidden" }), false)?.text)
+      .toBe("GitHub refused the check-runs read on #41");
+    expect(pullRequestActivity(event("pull_request.checks_changed", { from: "pending", to: "pending", fromDiagnostic: "check_runs_forbidden" }), false)?.text)
+      .toBe("GitHub check runs on #41 can be read again");
+    expect(pullRequestActivity(event("pull_request.checks_changed", { from: "pending", to: "passing", fromDiagnostic: "check_runs_forbidden" }), false)?.text)
+      .toBe("GitHub check runs on #41 can be read again; Checks passed on #41");
+    // Still unreadable while a real check fails: the failure is the news.
+    expect(pullRequestActivity(event("pull_request.checks_changed", { from: "pending", to: "failing", failing: ["lint"],
+      fromDiagnostic: "check_runs_forbidden", diagnostic: "check_runs_forbidden" }), false)?.text).toBe("CI lint failed on #41");
   });
 
   test("a push, a conflict, falling behind, a reopen", () => {

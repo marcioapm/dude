@@ -180,10 +180,11 @@ open pull requests every 15 minutes.
 ### Signing in with Cloudflare Access
 
 By default people sign in with an API key. To let an existing organization's
-people sign in through a Cloudflare Access application instead, point the
-backend's `DUDE_CONFIG` at a TOML file like
-[`docs/dude.example.toml`](docs/dude.example.toml). The backend reads it once,
-before listening, and refuses to start if it is unreadable or invalid, or if
+people sign in through a Cloudflare Access application instead, set the
+`[auth]` table of dude's configuration file (`DUDE_CONFIG`, else
+`/etc/dude/dude.toml`; see [`docs/dude.example.toml`](docs/dude.example.toml))
+or its `DUDE_AUTH_*` variables. The backend reads them once,
+before listening, and refuses to start if they are invalid, or if
 `default_organization` names no organization (it never creates one). A
 deployment renders this file itself; the aiverse host configuration does not
 yet.
