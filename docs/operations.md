@@ -4,6 +4,14 @@ What a deployment of dude needs: the release, the processes, their
 configuration, and the order of an upgrade. Building a release is in the
 [README](../README.md#releases).
 
+## GitHub credentials
+
+Before running tasks against GitHub, configure the organization’s token
+with the permissions for the operations it should perform. See
+[GitHub credentials and permissions](github.md) for fine-grained and classic
+PAT checklists, workflow-file access, CI reruns, webhooks and troubleshooting.
+A successful connection or clone does not prove push/workflow access.
+
 ## The release
 
 A GitHub Release per `v*` tag holds:
@@ -313,8 +321,23 @@ managed config directory, merged above `OPENCODE_CONFIG_CONTENT`, so anything
 it sets would override each Run's model and effort. Both images use
 `/usr/local/share/dude/opencode.json`.
 
-A role's model in dude's settings is `<provider>/<model>` for a provider that
-file defines (`llm-anthropic/claude-sonnet-5` above).
+A role's model in dude's settings must be `llm-anthropic/<model>` or
+`llm-openai/<model>`, with a non-empty model name, no whitespace or extra
+slash, and at most 200 characters. Model names are not a fixed catalog:
+the agent image must define the selected model. Check the selected image's
+OpenCode `provider.models` catalog, not only the LLM endpoint: an endpoint
+serving a model does not register it with OpenCode. The dev catalog is
+`images/runtime/opencode.json`; custom images can define other model names
+under the same providers. There is no shared runtime catalog API, so settings
+validate provider/form rather than pinning custom images to the dev catalog.
+Settings writes and project
+creation/updates reject other providers with a 400; legacy stored strings
+remain readable so they can be corrected or reset.
+
+The only exceptions are the test harness models `fake/scripted`, `fake/hang`,
+`fake/tools`, `fake/request`, `fake/wait`, `fake/live`, and `fake/ask`, implemented
+by `orchestrator/internal/fakeagent`. These are deterministic test/demo agents,
+not production image providers; arbitrary `fake/<model>` values are not accepted.
 
 ### Upgrading from DUDE_OPENCODE_*
 
