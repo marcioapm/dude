@@ -165,8 +165,15 @@ test("legacy invalid stored strings read safely, allow unrelated patches, correc
     const patch = await call("PATCH", path, { roles: { implementer: { effort: "low" } } });
     expect(patch.status).toBe(200);
     expect((await body(patch)).roles.implementer.model.value).toBe("old-provider/old-model");
-    expect((await call("PATCH", path, { roles: { implementer: { model: "llm-openai/gpt" } } })).status).toBe(200);
-    expect((await call("PATCH", path, { roles: { implementer: { model: null } } })).status).toBe(200);
+    const corrected = await call("PATCH", path, { roles: { implementer: { model: "llm-openai/gpt" } } });
+    expect(corrected.status).toBe(200);
+    expect((await body(corrected)).roles.implementer.model.value).toBe("llm-openai/gpt");
+    expect((await body(await call("GET", path))).roles.implementer.model.value).toBe("llm-openai/gpt");
+    const reset = await call("PATCH", path, { roles: { implementer: { model: null } } });
+    expect(reset.status).toBe(200);
+    const resetModel = (await body(reset)).roles.implementer.model;
+    expect(resetModel.value).not.toBe("llm-openai/gpt");
+    expect((await body(await call("GET", path))).roles.implementer.model).toEqual(resetModel);
   }
   expect((await call("PATCH", `/v1/projects/${PROJECT}`, { name: "Renamed" })).status).toBe(200);
 });
