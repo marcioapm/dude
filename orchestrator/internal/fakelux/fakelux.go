@@ -378,7 +378,14 @@ func (s *Server) play(run *Run, spec map[string]any, resumed bool) {
 	s.setState(run, "running")
 	if !resumed {
 		for _, repo := range specRepos(spec) {
-			s.luxEvent(run, "git.checkout", map[string]any{"repo": repo.Name, "ref": repo.Ref, "base": head(s.repoPath(repo.URL), repo.Ref)})
+			base := head(s.repoPath(repo.URL), repo.Ref)
+			if base == "" {
+				s.luxEvent(run, "git.clone", map[string]any{"repo": repo.Name, "ref": repo.Ref, "status": "failed", "error": "ref not found"})
+				s.setState(run, "failed")
+				return
+			}
+			s.luxEvent(run, "git.clone", map[string]any{"repo": repo.Name, "ref": repo.Ref, "status": "cloned", "commit": base})
+			s.luxEvent(run, "git.checkout", map[string]any{"repo": repo.Name, "ref": repo.Ref, "base": base})
 		}
 		run.SessionID = fmt.Sprintf("ses_%s", run.ID)
 	}
