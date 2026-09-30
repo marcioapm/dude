@@ -29,12 +29,16 @@ func TestEveryPhaseIsToldWhatPeopleDecided(t *testing.T) {
 func TestAMultiLineCriterionStaysOneItem(t *testing.T) {
 	in := PromptInput{Title: "Checkout keeps SEPA", AcceptanceCriteria: []string{
 		"Each step fires its funnel event once:\n- `checkout.plan_selected`\n- `checkout.completed`",
+		// A fence keeps its own indentation under the marker, and a blank line
+		// between paragraphs does not end the item.
+		"Runs:\n```python\nif ready:\n    ship()\n```\n\nThen it ships.",
 		"Invoice only for annual plans",
 	}}
 	want := "Acceptance criteria:\n" +
 		"- Each step fires its funnel event once:\n  - `checkout.plan_selected`\n  - `checkout.completed`\n" +
+		"- Runs:\n  ```python\n  if ready:\n      ship()\n  ```\n  \n  Then it ships.\n" +
 		"- Invoice only for annual plans"
-	for _, phase := range []string{PhaseImplement, PhaseReview, PhaseFix, PhaseSimplify, PhaseTest} {
+	for _, phase := range []string{PhaseInvestigate, PhaseImplement, PhaseReview, PhaseFix, PhaseSimplify, PhaseTest} {
 		if got := Prompt(phase, in); !strings.Contains(got, want) {
 			t.Errorf("%s: criteria not one item each:\n%s", phase, got)
 		}
