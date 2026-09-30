@@ -108,12 +108,13 @@ async function createTask(ctx: RequestContext): Promise<Response> {
     const rows = (await scope.sql`
       SELECT ${scope.sql.unsafe(TASK_SELECT)} FROM tasks WHERE id = ${taskId}`) as Array<Record<string, unknown>>;
 
+    const actor = auditActor(ctx.principal);
     const event = await appendInScope(scope, {
       eventType: EventTypes.TaskCreated,
       organizationId,
       projectId: input.projectId,
       taskId,
-      actor: { type: ctx.principal.credentialKind === "api_key" ? "human" : "person", id: auditActor(ctx.principal).id },
+      actor: { type: actor.kind, id: actor.id },
       source: "control-plane",
       correlationId: taskId,
       payload: { title: input.title, goal: input.goal },
@@ -230,13 +231,14 @@ async function createRun(ctx: RequestContext): Promise<Response> {
 
     await scope.sql`UPDATE tasks SET status = 'queued' WHERE id = ${taskId}`;
 
+    const actor = auditActor(ctx.principal);
     const event = await appendInScope(scope, {
       eventType: EventTypes.RunCreated,
       organizationId,
       projectId: task.project_id,
       taskId,
       runId,
-      actor: { type: ctx.principal.credentialKind === "api_key" ? "human" : "person", id: auditActor(ctx.principal).id },
+      actor: { type: actor.kind, id: actor.id },
       source: "control-plane",
       correlationId: taskId,
       payload: { attempt },
