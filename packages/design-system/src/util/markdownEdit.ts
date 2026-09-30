@@ -37,8 +37,10 @@ export function formatEdit(source: string, start: number, end: number, format: M
       return wrap(source, start, end, WRAPS[format].mark, WRAPS[format].placeholder);
     case "code":
       if (selected.includes("\n")) {
-        // Directly inside a fence it made: the fence comes off.
-        if (source.slice(start - 4, start) === "```\n" && source.slice(end, end + 4) === "\n```" && (start === 4 || source[start - 5] === "\n")) {
+        // Directly inside a fence it made: the fence comes off. Each fence
+        // must be the whole line, so a longer or suffixed closer is not taken.
+        const closerEnds = end + 4 === source.length || source[end + 4] === "\n";
+        if (source.slice(start - 4, start) === "```\n" && source.slice(end, end + 4) === "\n```" && closerEnds && (start === 4 || source[start - 5] === "\n")) {
           return { from: start - 4, to: end + 4, insert: selected, selectionStart: start - 4, selectionEnd: end - 4 };
         }
         const insert = "```\n" + selected + "\n```";

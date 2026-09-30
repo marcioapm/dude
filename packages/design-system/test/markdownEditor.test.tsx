@@ -201,6 +201,12 @@ describe("formatEdit wraps the selection", () => {
     const inline = "x```\na\nb\n```";
     expect(apply(inline, formatEdit(inline, 5, 8, "code"))[0]).toBe("x```\n```\na\nb\n```\n```");
   });
+  test("a closing line that is not exactly the fence it made is left alone: a new fence goes inside", () => {
+    const longer = "```\na\nb\n````";
+    expect(apply(longer, formatEdit(longer, 4, 7, "code"))).toEqual(["```\n```\na\nb\n```\n````", "a\nb"]);
+    const suffixed = "```\na\nb\n```suffix";
+    expect(apply(suffixed, formatEdit(suffixed, 4, 7, "code"))).toEqual(["```\n```\na\nb\n```\n```suffix", "a\nb"]);
+  });
   test("a link selects what is left to write", () => {
     expect(apply("see docs", formatEdit("see docs", 4, 8, "link"))).toEqual(["see [docs](https://)", "https://"]);
     expect(apply("", formatEdit("", 0, 0, "link"))).toEqual(["[text](https://)", "text"]);
