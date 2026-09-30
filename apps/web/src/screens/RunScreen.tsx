@@ -145,8 +145,10 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   const taskId = given ? undefined : run?.taskId;
   // The lux terminal's link, for the rail while the Run is running. The Run
   // itself does not carry it (lux's console URL is the orchestrator's), so
-  // it is read from the Run's servers, once per start or resume.
-  const terminalUrl = useTerminalUrl(client, runId, run?.status === "running", reconnects);
+  // it is read from the Run's servers. Until it is known, a servers.changed
+  // (lux took the Run) or a stream that came back asks again.
+  const askAgain = useMemo(() => (events.findLast((e) => e.eventType === EventTypes.ServersChanged)?.cursor ?? 0) + reconnects * 1e9, [events, reconnects]);
+  const terminalUrl = useTerminalUrl(client, runId, run?.status === "running", askAgain);
 
   useEffect(() => {
     if (!taskId) return;
@@ -736,10 +738,10 @@ export function PreviewRunNote({ openServers }: { openServers?: (() => void) | u
 
 /**
  * The Run's lux terminal URL, read from its servers when it is running and
- * kept: it names the lux Run, which a resume keeps. Read again after a
- * stream that came back, in case it was missed. Null until known.
+ * kept: it names the lux Run, which a resume keeps. Until known, read again
+ * whenever `askAgain` moves. Null until known.
  */
-function useTerminalUrl(client: ApiClient, runId: string, running: boolean, reconnects: number): string | null {
+function useTerminalUrl(client: ApiClient, runId: string, running: boolean, askAgain: number): string | null {
   const [url, setUrl] = useState<{ runId: string; url: string } | null>(null);
   const known = url?.runId === runId ? url.url : null;
   useEffect(() => {
@@ -751,7 +753,7 @@ function useTerminalUrl(client: ApiClient, runId: string, running: boolean, reco
     return () => {
       cancelled = true;
     };
-  }, [client, runId, running, known, reconnects]);
+  }, [client, runId, running, known, askAgain]);
   return known;
 }
 

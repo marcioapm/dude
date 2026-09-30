@@ -113,6 +113,23 @@ describe("the terminal", () => {
     });
   }
 
+  test("a run lux has not taken yet gets it once lux has", async () => {
+    let luxHasIt = false;
+    class Early extends RunClient {
+      override async runServers() {
+        const s = await super.runServers();
+        return luxHasIt ? s : { ...s, run: s.run ? { ...s.run, terminalUrl: null } : null };
+      }
+    }
+    const page = await session({ client: new Early({}) });
+    await until(() => page.querySelector("[data-testid=session-rail]"), "the rail");
+    expect(page.querySelector("[data-testid=terminal-link]") !== null).toBe(false);
+    luxHasIt = true;
+    const { emitForTest } = await import("./dom.ts");
+    await emitForTest("servers.changed");
+    await until(() => page.querySelector("[data-testid=terminal-link]"), "the terminal once lux has the run");
+  });
+
   test("a run that pauses loses it", async () => {
     let status: RunDetail["status"] = "running";
     class Pausing extends FixtureClient {
