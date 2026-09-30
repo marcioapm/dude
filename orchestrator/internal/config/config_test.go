@@ -379,6 +379,29 @@ func TestTheSharedFixtureResolvesAsBothSuitesExpect(t *testing.T) {
 	}
 }
 
+// invalid/*.toml are files both processes, in both languages, must refuse;
+// each file's first line is "# <the error it must contain>".
+func TestTheSharedInvalidFilesAreRefused(t *testing.T) {
+	paths, err := filepath.Glob(fixture(t, "invalid/*.toml"))
+	if err != nil || len(paths) == 0 {
+		t.Fatalf("no invalid fixtures: %v", err)
+	}
+	for _, path := range paths {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		first, _, _ := strings.Cut(string(raw), "\n")
+		want := strings.TrimPrefix(first, "# ")
+		for _, p := range []Process{Orchestrator, Backend} {
+			_, err := load(t, p, map[string]string{"DUDE_CONFIG": path})
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Errorf("%s %s: err = %v, want %q", p, filepath.Base(path), err, want)
+			}
+		}
+	}
+}
+
 func TestTheDocumentedExampleLoads(t *testing.T) {
 	for _, p := range []Process{Orchestrator, Backend} {
 		if _, err := load(t, p, map[string]string{"DUDE_CONFIG": fixture(t, "../../../docs/dude.example.toml")}); err != nil {

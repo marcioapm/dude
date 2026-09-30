@@ -5,7 +5,7 @@
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Config, ConfigError, KEYS } from "../src/config.ts";
@@ -114,6 +114,8 @@ describe("strictness", () => {
     ["[Orchestrator]\nlisten = \"127.0.0.1:1\"\n", "Orchestrator"],
     ["[orchestrator]\nListen = \"127.0.0.1:1\"\n", "orchestrator.Listen"],
     ["[orchestrator]\nlisten = \"127.0.0.1:1\"\nListen = \"0.0.0.0:1\"\n", "orchestrator.Listen"],
+    ["\"database.url\" = \"x\"\n", "\"database.url\""],
+    ["[\"orchestrator.listen\"]\nx = 1\n", "\"orchestrator.listen\""],
   ])("an unknown key is refused by name: %j", (text, name) => {
     expect(() => load({ DUDE_CONFIG: file(text) })).toThrow(ConfigError);
     expect(() => load({ DUDE_CONFIG: file(text) })).toThrow(`unknown key ${name}`);
@@ -201,5 +203,15 @@ describe("the shared fixture", () => {
 
   test("the documented example loads", () => {
     expect(() => load({ DUDE_CONFIG: `${import.meta.dir}/../../../docs/dude.example.toml` })).not.toThrow();
+  });
+
+  // invalid/*.toml are refused by the Go suite too; each file's first line
+  // is "# <the error it must contain>".
+  const invalid = [...new Bun.Glob("*.toml").scanSync(`${fixtures}/invalid`)].sort();
+  test("there are shared invalid files", () => expect(invalid.length).toBeGreaterThan(0));
+  test.each(invalid)("invalid/%s is refused", (name) => {
+    const path = `${fixtures}/invalid/${name}`;
+    const want = readFileSync(path, "utf8").split("\n")[0]!.replace(/^# /, "");
+    expect(() => load({ DUDE_CONFIG: path })).toThrow(want);
   });
 });

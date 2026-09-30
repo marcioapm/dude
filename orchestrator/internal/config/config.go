@@ -263,6 +263,20 @@ func dot(prefix string) string {
 	return "."
 }
 
+// quoteSegment writes a key segment as TOML would need it: bare when it can
+// be, quoted otherwise, so "database.url" is not reported as database.url.
+func quoteSegment(s string) string {
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-') {
+			return strconv.Quote(s)
+		}
+	}
+	if s == "" {
+		return `""`
+	}
+	return s
+}
+
 // unknownKeys walks the parsed document segment by segment. go-toml's struct
 // decoder matches names case-insensitively, so [Orchestrator] or Listen
 // would otherwise be read as a known key, and listen and Listen as one.
@@ -271,7 +285,7 @@ func unknownKeys(doc map[string]any) []string {
 	var walk func(m map[string]any, table string)
 	walk = func(m map[string]any, table string) {
 		for name, v := range m {
-			full := table + dot(table) + name
+			full := table + dot(table) + quoteSegment(name)
 			leaf, known := tables[table][name]
 			switch {
 			case !known:

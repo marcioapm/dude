@@ -298,7 +298,9 @@ API-key mode. No aiverse wiring is included here.
 — `orchestrator/internal/config` and `apps/control-plane/src/config.ts` —
 and both suites compare it to `tests/fixtures/config/keys.json` and resolve
 `full.toml` to `full.json`: a new setting is a row in all three and a line
-in `full.toml`, `full.json` and `docs/dude.example.toml`. Read sites take
+in `full.toml`, `full.json` and `docs/dude.example.toml`. Every file in
+`tests/fixtures/config/invalid/` must be refused by both suites with the
+error its first comment line names. Read sites take
 values from the resolved config, never `os.Getenv`/`process.env`.
 
 ## What's next
