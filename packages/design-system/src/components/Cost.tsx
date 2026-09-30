@@ -41,6 +41,34 @@ function machineNote(from: CostProvenance["machine"] | undefined, settled: boole
   return " · estimated";
 }
 
+export type CostWordsInput = Pick<CostProps, "tokensUsd" | "machineUsd" | "tokens" | "machineMs" | "tokensFrom" | "machineFrom" | "settled">;
+
+/**
+ * What a known cost says, in words: the tooltip's lines (total, tokens,
+ * machine) and the aria-label, built from the same parts so they cannot
+ * say different things.
+ */
+export function costWords({ tokensUsd, machineUsd, tokens, machineMs, tokensFrom, machineFrom, settled = false }: CostWordsInput): {
+  total: number; lines: [string, string, string]; label: string;
+} {
+  const tok = tokensUsd ?? 0;
+  const machineKnown = machineUsd !== null && machineUsd !== undefined;
+  const mach = machineKnown ? machineUsd : 0;
+  const total = tok + mach;
+  const tokensPart = `model tokens ${tokensUsd === null ? "not reported" : formatUsd(tok)}`
+    + (tokens !== undefined ? ` (${formatTokens(tokens)} tokens)` : "")
+    + (tokensUsd === null ? "" : tokensNote(tokensFrom, settled));
+  const machinePart = machineKnown
+    ? `machine time ${formatUsd(mach)}${machineMs !== undefined ? ` (${formatDuration(machineMs)})` : ""}${machineNote(machineFrom, settled)}`
+    : null;
+  const line = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+  return {
+    total,
+    lines: [`${formatUsd(total)} total`, line(tokensPart), machinePart ? line(machinePart) : "Machine time not counted yet"],
+    label: `${formatUsd(total)}: ${tokensPart}${machinePart ? `, ${machinePart}` : ""}`,
+  };
+}
+
 /**
  * A cost is a total: model tokens plus machine time. The number is the
  * sum; a 2px hairline under it shows the split at a glance (tokens, then
@@ -63,26 +91,16 @@ export function Cost({ tokensUsd, machineUsd, tokens, machineMs, size = "md", to
       </span>
     );
   }
-  const tok = tokensUsd ?? 0;
+  const words = costWords({ tokensUsd, machineUsd, tokens, machineMs, tokensFrom, machineFrom, settled });
   const machineKnown = machineUsd !== null && machineUsd !== undefined;
-  const mach = machineKnown ? machineUsd : 0;
-  const total = tok + mach;
-  const share = total > 0 ? Math.round((tok / total) * 100) : 100;
-  const tokensSource = tokensUsd === null ? "" : tokensNote(tokensFrom, settled);
-  const machineSource = machineKnown ? machineNote(machineFrom, settled) : "";
+  const { total } = words;
+  const share = total > 0 ? Math.round(((tokensUsd ?? 0) / total) * 100) : 100;
+  const [totalLine, tokensLine, machineLine] = words.lines;
   const tip = (
     <span className={styles["tip"]}>
-      <span className={styles["tipTotal"]}>{formatUsd(total)} total</span>
-      <span data-part="tokens">
-        Model tokens {tokensUsd === null ? "not reported" : formatUsd(tok)}
-        {tokens !== undefined ? ` (${formatTokens(tokens)} tokens)` : ""}
-        {tokensSource}
-      </span>
-      <span data-part="machine">
-        {machineKnown
-          ? `Machine time ${formatUsd(mach)}${machineMs !== undefined ? ` (${formatDuration(machineMs)})` : ""}${machineSource}`
-          : "Machine time not counted yet"}
-      </span>
+      <span className={styles["tipTotal"]}>{totalLine}</span>
+      <span>{tokensLine}</span>
+      <span>{machineLine}</span>
     </span>
   );
   return (
@@ -90,7 +108,7 @@ export function Cost({ tokensUsd, machineUsd, tokens, machineMs, size = "md", to
       <span
         className={cx(styles["root"], styles[size], tone !== "default" && styles[tone], className)}
         tabIndex={0}
-        aria-label={`${formatUsd(total)}: model tokens ${formatUsd(tok)}${tokensSource}${machineKnown ? `, machine time ${formatUsd(mach)}${machineSource}` : ""}`}
+        aria-label={words.label}
         data-split={machineKnown ? "both" : "tokens"}
         {...rest}
       >

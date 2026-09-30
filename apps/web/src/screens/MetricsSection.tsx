@@ -10,7 +10,7 @@ import { Section, Table, TBody, Td, Th, THead, Tr } from "@dude/design-system/pr
 import { runLabel } from "@dude/domain";
 import { plural } from "@dude/design-system";
 import type { ApiClient, CostSplit, EpicMetrics, TaskMetrics } from "../api/client.ts";
-import { reportedCost } from "../api/client.ts";
+import { modelCostShown } from "../api/client.ts";
 
 /**
  * Both re-read when `version` changes: the screen they sit in already
@@ -25,10 +25,9 @@ import { reportedCost } from "../api/client.ts";
  */
 function CostOf({ cost, tokens, activeMs, size }: { cost: CostSplit; tokens?: number; activeMs?: number; size?: "sm" | "md" | "lg" }) {
   const origin = cost.origin;
-  const luxTokens = origin?.tokens === "lux";
   const luxMachine = origin?.machine === "lux";
   return (
-    <Cost tokensUsd={luxTokens ? cost.tokensUsd : reportedCost(cost.tokensUsd)}
+    <Cost tokensUsd={modelCostShown(cost.tokensUsd, origin?.tokens ?? "agent")}
       machineUsd={luxMachine || cost.machineUsd > 0 ? cost.machineUsd : null}
       {...(origin ? { tokensFrom: origin.tokens, machineFrom: origin.machine, settled: origin.settled } : {})}
       {...(tokens !== undefined ? { tokens } : {})} {...(activeMs !== undefined ? { machineMs: activeMs } : {})} size={size} />

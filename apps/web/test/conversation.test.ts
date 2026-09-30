@@ -17,6 +17,7 @@ import { summarize } from "../src/screens/RunScreen.tsx";
 import { EventTypes } from "@dude/domain";
 import type { PersistedEvent } from "@dude/domain";
 import { actorName, apply, emptyProjection, humanActor, project, snapshot } from "../src/api/conversation.ts";
+import { modelCostShown } from "../src/api/client.ts";
 
 let cursor = 0;
 
@@ -285,6 +286,13 @@ describe("usage", () => {
     ]);
     expect(c.costUsd).toBeCloseTo(0.04, 9);
     expect(c.costSource.from).toBe("agent");
+  });
+
+  test("lux's zero is a price; the agent's zero is not reported", () => {
+    expect(modelCostShown(0, "lux")).toBe(0);
+    expect(modelCostShown(0, "agent")).toBeNull();
+    expect(modelCostShown(0.3, "agent")).toBe(0.3);
+    expect(modelCostShown(1.81, "lux")).toBe(1.81);
   });
 
   test("a later report with no AI amount clears lux's figure, as the Run's row does", () => {

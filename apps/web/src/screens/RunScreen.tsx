@@ -40,7 +40,7 @@ import { summarizeServers } from "@dude/design-system";
 import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, runLabel } from "@dude/domain";
 import type { AgentRole, PersistedEvent } from "@dude/domain";
 import type { ApiClient, Person, RunDetail, RunDiffSummary } from "../api/client.ts";
-import { ApiError, reportedCost } from "../api/client.ts";
+import { ApiError, modelCostShown } from "../api/client.ts";
 import { PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, snapshot, type Turn } from "../api/conversation.ts";
 import type { ComposerSubmission } from "@dude/design-system/components";
 import { useEventStream } from "../hooks/useEventStream.ts";
@@ -309,8 +309,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     startedAt: run.startedAt ?? run.createdAt,
     endedAt: run.endedAt,
     ...(run.model ? { model: run.model } : {}),
-    // A harness's zero is "not priced"; lux's is a price.
-    costUsd: conversation.costSource.from === "lux" ? conversation.costUsd : reportedCost(conversation.costUsd),
+    costUsd: modelCostShown(conversation.costUsd, conversation.costSource.from),
     tokensFrom: conversation.costSource.from,
     settled: conversation.costSource.settled,
     // The Run's own totals are exact; the projection's are what has streamed
