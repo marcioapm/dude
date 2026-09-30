@@ -7,14 +7,17 @@ Against the fixture client; no backend or external network required.
 Run with: python3 apps/web/test/browser_terminal.py
 Requires installed Playwright and system Chrome.
 """
+import os
 import re
+import signal
 import subprocess
 import unittest
 from pathlib import Path
 from time import sleep
+from unittest import mock
 from urllib.request import urlopen
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import BrowserType, sync_playwright
 
 WEB = Path(__file__).resolve().parents[1]
 PORT = 5198
@@ -28,33 +31,55 @@ WIDE = (1440, 900)
 NARROW = [(1024, 768), (375, 812)]
 
 
-class TerminalPlacement(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.server = subprocess.Popen(
-            ["bun", "run", "dev", "--host", "127.0.0.1", "--port", str(PORT), "--strictPort"],
-            cwd=WEB, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+def start_vite():
+    """Vite on PORT in its own process group, returned once it answers; stopped again if it never does."""
+    # `bun run` spawns vite as a child: only the group reaches both.
+    server = subprocess.Popen(
+        ["bun", "run", "dev", "--host", "127.0.0.1", "--port", str(PORT), "--strictPort"],
+        cwd=WEB, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    try:
         for _ in range(100):
-            if cls.server.poll() is not None:
+            if server.poll() is not None:
                 raise RuntimeError("Local Vite server failed to start")
             try:
                 with urlopen(URL, timeout=1):
-                    break
+                    return server
             except OSError:
                 sleep(0.1)
-        else:
-            cls.server.terminate()
-            raise RuntimeError("Local Vite server did not become ready")
-        cls.playwright = sync_playwright().start()
-        cls.browser = cls.playwright.chromium.launch(channel="chrome", headless=True)
+        raise RuntimeError("Local Vite server did not become ready")
+    except BaseException:
+        stop_vite(server)
+        raise
 
+
+def stop_vite(server):
+    """SIGTERM to the server's group, 10 s to exit, then SIGKILL and wait."""
+    try:
+        os.killpg(server.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        server.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(server.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    server.wait(timeout=10)
+
+
+class TerminalPlacement(unittest.TestCase):
     @classmethod
-    def tearDownClass(cls):
-        cls.browser.close()
-        cls.playwright.stop()
-        cls.server.terminate()
-        cls.server.wait(timeout=10)
-
+    def setUpClass(cls):
+        # Each cleanup is registered as its resource is acquired: unittest
+        # runs class cleanups even when setUpClass raises, tearDownClass not.
+        cls.server = start_vite()
+        cls.addClassCleanup(stop_vite, cls.server)
+        cls.playwright = sync_playwright().start()
+        cls.addClassCleanup(cls.playwright.stop)
+        cls.browser = cls.playwright.chromium.launch(channel="chrome", headless=True)
+        cls.addClassCleanup(cls.browser.close)
     def session(self, viewport, run_as=None, view="Conversation"):
         """The fixture Run's session at `viewport`; `run_as` is the fixtures' run knob ("paused")."""
         width, height = viewport
@@ -76,9 +101,8 @@ class TerminalPlacement(unittest.TestCase):
             page.wait_for_selector("[data-testid=run-screen] [data-testid=terminal-link], [data-testid=run-screen] [data-testid=terminal-icon]",
                                    state="attached", timeout=10000)
         else:
-            # Nothing to wait for that says "no terminal": wait for the view, then for the Run's reads to land.
-            page.get_by_test_id("session-rail" if view == "Conversation" else "event-log").wait_for(state="attached", timeout=10000)
-            page.wait_for_timeout(500)
+            # The terminal shows only for a running Run: once the header offers Resume, the paused Run has landed.
+            screen.get_by_role("button", name="Resume").wait_for(timeout=10000)
         return page, screen.evaluate("e => e.getBoundingClientRect().width")
 
     @staticmethod
@@ -116,6 +140,26 @@ class TerminalPlacement(unittest.TestCase):
                 with self.subTest(view=view, viewport=viewport):
                     page, _ = self.session(viewport, run_as="paused", view=view)
                     self.assertEqual(self.visible_terminals(page), [])
+
+
+class FailedSetup(unittest.TestCase):
+    """A setup that fails after Vite is up still stops the Vite it started."""
+
+    def test_a_browser_that_will_not_launch_leaves_no_server(self):
+        suite = unittest.defaultTestLoader.loadTestsFromName("test_a_wide_conversation_has_it_in_the_rail_only", TerminalPlacement)
+        with mock.patch.object(BrowserType, "launch", side_effect=RuntimeError("no Chrome")):
+            result = unittest.TestResult()
+            suite.run(result)
+        server = TerminalPlacement.server
+        # Should the cleanup be missing, stop the server here so the port is free for the next run.
+        self.addCleanup(stop_vite, server)
+        self.assertTrue(any("no Chrome" in e for _, e in result.errors), result.errors)
+        self.assertIsNotNone(server.poll(), f"Vite (pid {server.pid}) still running")
+        # Vite itself, a child of `bun run`, is gone too: nothing left in the group, nothing on the port.
+        with self.assertRaises(ProcessLookupError):
+            os.killpg(server.pid, 0)
+        with self.assertRaises(OSError):
+            urlopen(URL, timeout=1)
 
 
 if __name__ == "__main__":
