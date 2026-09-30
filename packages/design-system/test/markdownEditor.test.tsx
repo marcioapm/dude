@@ -70,7 +70,12 @@ describe("MarkdownEditor markup", () => {
     const area = tag(h, "<textarea");
     expect(area).toContain('aria-invalid="true"');
     const ids = /aria-describedby="([^"]+)"/.exec(area)![1]!.split(" ");
-    expect(ids.some((id) => tag(h, `id="${id}"`) && h.includes("Criterion 2 is over"))).toBe(true);
+    // The text of each element the field is described by: the error must be one of them, whole.
+    const described = ids.map((id) => {
+      const m = new RegExp(`<(\\w+)[^>]*\\bid="${id.replace(/[^\w-]/g, (c) => `\\${c}`)}"[^>]*>(.*?)</\\1>`).exec(h);
+      return m ? m[2]!.replace(/<[^>]+>/g, "") : null;
+    });
+    expect(described).toContain("Criterion 2 is over 2,000 characters");
   });
 
   test("the formatting buttons are named, with the shortcut in their tooltips' keys", () => {
