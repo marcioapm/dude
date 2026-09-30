@@ -10,7 +10,7 @@ import { Section, Table, TBody, Td, Th, THead, Tr } from "@dude/design-system/pr
 import { runLabel } from "@dude/domain";
 import { plural } from "@dude/design-system";
 import type { ApiClient, CostSplit, EpicMetrics, TaskMetrics } from "../api/client.ts";
-import { reportedCost } from "../api/client.ts";
+import { modelCostShown } from "../api/client.ts";
 
 /**
  * Both re-read when `version` changes: the screen they sit in already
@@ -19,12 +19,17 @@ import { reportedCost } from "../api/client.ts";
  */
 
 /**
- * A cost as a total of model tokens and machine time. Tokens of zero are
- * "not reported", never $0.00 — as the run's header shows them.
+ * A cost as a total of model tokens and machine time. The harness's zero
+ * is "not reported", never $0.00 — as the run's header shows it; lux's
+ * zero is a price. The tooltip says who priced each half, when known.
  */
 function CostOf({ cost, tokens, activeMs, size }: { cost: CostSplit; tokens?: number; activeMs?: number; size?: "sm" | "md" | "lg" }) {
+  const origin = cost.origin;
+  const luxMachine = origin?.machine === "lux";
   return (
-    <Cost tokensUsd={reportedCost(cost.tokensUsd)} machineUsd={cost.machineUsd > 0 ? cost.machineUsd : null}
+    <Cost tokensUsd={modelCostShown(cost.tokensUsd, origin?.tokens ?? "agent")}
+      machineUsd={luxMachine || cost.machineUsd > 0 ? cost.machineUsd : null}
+      {...(origin ? { tokensFrom: origin.tokens, machineFrom: origin.machine, settled: origin.settled } : {})}
       {...(tokens !== undefined ? { tokens } : {})} {...(activeMs !== undefined ? { machineMs: activeMs } : {})} size={size} />
   );
 }

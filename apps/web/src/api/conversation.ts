@@ -14,7 +14,7 @@
  *    conversation. Nothing lives only in component state.
  */
 
-import type { PersistedEvent, Run, RunStatus } from "@dude/domain";
+import type { CostOrigin, PersistedEvent, Run, RunStatus } from "@dude/domain";
 import { EventTypes, TERMINAL_RUN_STATUSES } from "@dude/domain";
 import type { HumanIntent, PlanItem, ToolOutput } from "@dude/design-system/components";
 import { TODO_STATUSES, type ActivityKind, type ToolCallStatus } from "@dude/design-system/tokens";
@@ -219,12 +219,26 @@ const NOTICES: Record<string, { notice: NoticeTurn["notice"]; text: (payload: Re
 /** Custom events live under this prefix in the ledger (agenttools.CustomPrefix). */
 export const CUSTOM_EVENT_PREFIX = "agent.custom.";
 
+/**
+ * Who priced a Run's model cost. lux's cost plugins meter every token and
+ * settle the price over days (`settled` once its status is final); the
+ * agent's harness's own running total is never settled.
+ */
+export type CostSource =
+  | { readonly from: Extract<CostOrigin, "lux">; readonly settled: boolean }
+  | { readonly from: Extract<CostOrigin, "agent">; readonly settled: false };
+
 export interface Conversation {
   turns: Turn[];
   /** The agent's current plan, rebuilt from the latest todowrite. */
   plan: PlanItem[];
   /** Running totals, so the header needs no separate query. */
   costUsd: number;
+  /**
+   * Where `costUsd` is from: lux's cost plugins (`run.cost.reported`), with
+   * whether lux has settled it, or the harness's own running total.
+   */
+  costSource: CostSource;
   tokens: number;
   /** The latest context size, and the window it fills, when reported. */
   contextTokens: number;
@@ -270,7 +284,14 @@ export interface Projection {
   /** Where the progress row is in `turns`, once there is one. */
   progressIndex: number | null;
   plan: PlanItem[];
+  /** The harness's cost deltas, summed. */
   costUsd: number;
+  /**
+   * lux's latest AI cost for the Run and its status, once a
+   * `run.cost.reported` carried one. It replaces `costUsd`, never adds to
+   * it: both price the same tokens.
+   */
+  luxCost: { usd: number; status: string } | null;
   tokens: number;
   contextTokens: number;
   contextWindow: number;
@@ -291,6 +312,7 @@ export function emptyProjection(): Projection {
     progressIndex: null,
     plan: [],
     costUsd: 0,
+    luxCost: null,
     tokens: 0,
     contextTokens: 0,
     contextWindow: 0,
@@ -438,6 +460,14 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       case EventTypes.DirectiveDelivered: {
         const steer = state.steersByDirective.get(String(payload.directiveId ?? ""));
         if (steer) steer.deliveredAt = event.occurredAt;
+        break;
+      }
+
+      case EventTypes.RunCostReported: {
+        // Mirrors lux_ai_usd: null (lux has priced no AI) puts the harness's
+        // figure back, as run_model_usd does.
+        const usd = payload.aiUsd;
+        state.luxCost = typeof usd === "number" && Number.isFinite(usd) ? { usd, status: String(payload.status ?? "") } : null;
         break;
       }
 
@@ -615,7 +645,7 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
     return {
       turns: state.turns,
       plan: state.plan,
-      costUsd: state.costUsd,
+      ...modelCost(state),
       tokens: state.tokens,
       contextTokens: state.contextTokens,
       contextWindow: state.contextWindow,
@@ -643,7 +673,7 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
         : turn,
     ),
     plan: state.plan,
-    costUsd: state.costUsd,
+    ...modelCost(state),
     tokens: state.tokens,
     contextTokens: state.contextTokens,
     contextWindow: state.contextWindow,
@@ -654,6 +684,14 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
     activeTool: null,
     toolCounts: state.toolCounts,
   };
+}
+
+/** The Run's model cost: lux's latest once it reported one, else the harness's sum. */
+function modelCost(state: Projection): Pick<Conversation, "costUsd" | "costSource"> {
+  if (state.luxCost) {
+    return { costUsd: state.luxCost.usd, costSource: { from: "lux", settled: state.luxCost.status === "final" } };
+  }
+  return { costUsd: state.costUsd, costSource: { from: "agent", settled: false } };
 }
 
 /** The latest question still waiting for an answer. */

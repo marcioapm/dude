@@ -28,6 +28,7 @@ import type {
   PersonRole,
   Project,
   CostSplit,
+  CostOrigin,
   PersistedEvent,
   Run,
   RunDiff,
@@ -829,6 +830,14 @@ export class ApiClient {
  */
 export function reportedCost(usd: number): number | null {
   return usd > 0 ? usd : null;
+}
+
+/**
+ * A model cost as shown, given who priced it: lux's figure is a price even
+ * at zero; the agent's zero is "not reported" (reportedCost).
+ */
+export function modelCostShown(costUsd: number, from: CostOrigin): number | null {
+  return from === "lux" ? costUsd : reportedCost(costUsd);
 }
 
 export interface Tokens {

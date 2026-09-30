@@ -27,6 +27,7 @@ type settings struct {
 	ParkAfter, IdleAfter time.Duration
 	DiffEvery            time.Duration
 	MachineUSDPerHour    float64
+	LuxCostEvery         time.Duration
 
 	FactoryLogins []string
 
@@ -101,6 +102,9 @@ func settingsFrom(cfg *config.Config) (settings, error) {
 	// One rate for every lux host until lux reports each host's own.
 	if s.MachineUSDPerHour = cfg.Float("DUDE_MACHINE_USD_PER_HOUR"); s.MachineUSDPerHour < 0 {
 		return settings{}, fmt.Errorf("%s: not a rate: %v", cfg.Label("DUDE_MACHINE_USD_PER_HOUR"), s.MachineUSDPerHour)
+	}
+	if s.LuxCostEvery = cfg.Duration("DUDE_LUX_COST_EVERY"); s.LuxCostEvery <= 0 {
+		return settings{}, fmt.Errorf("%s: not a positive duration: %v", cfg.Label("DUDE_LUX_COST_EVERY"), s.LuxCostEvery)
 	}
 	s.FactoryLogins = cfg.List("DUDE_FACTORY_LOGINS")
 	s.VAPIDPublic, s.VAPIDPrivate = cfg.String("DUDE_VAPID_PUBLIC_KEY"), cfg.String("DUDE_VAPID_PRIVATE_KEY")
