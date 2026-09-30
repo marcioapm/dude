@@ -3195,6 +3195,29 @@ func TestUnreadableCheckRunsAreRecordedAndClearedOnce(t *testing.T) {
 	}
 }
 
+// A check run appearing while CI stays pending changes job details only,
+// which is no occurrence: the details are stored, and no event is added.
+func TestAPendingCheckRunAppearingRecordsNoChecksEvent(t *testing.T) {
+	w := newWorld(t)
+	w.gh.SetChecks("pending")
+	wi := w.reviewing()
+	w.sync()
+	if rollup, list := w.storedChecks(wi); rollup != forge.ChecksPending || len(list) != 0 {
+		t.Fatalf("stored %s %+v, want pending with no check runs", rollup, list)
+	}
+	before := len(w.checksEvents(wi))
+
+	w.gh.SetChecks("run:pending")
+	w.sync()
+	rollup, list := w.storedChecks(wi)
+	if rollup != forge.ChecksPending || len(list) != 1 || list[0].Name != "e2e" || list[0].Status != "in_progress" {
+		t.Fatalf("stored %s %+v, want pending with e2e in progress", rollup, list)
+	}
+	if n := len(w.checksEvents(wi)); n != before {
+		t.Errorf("%d checks events for job details alone, want none", n-before)
+	}
+}
+
 // A headerless 403 saying "abuse detection" is GitHub's secondary limit:
 // the sync fails, to be tried again, and records no diagnostic.
 func TestAnAbuseDetectionLimitOnCheckRunsRecordsNoDiagnostic(t *testing.T) {
