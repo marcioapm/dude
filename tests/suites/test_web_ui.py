@@ -234,6 +234,24 @@ def test_closing_a_task_with_writing_in_it_asks_first(
     assert console_errors == []
 
 
+def test_closing_an_edited_task_says_its_changes_are_unsaved_without_a_count(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    # Most of the goal was there already: a count of every word in it would be false.
+    long_goal = " ".join(f"word{i}" for i in range(60))
+    client.create_task(forge_project["id"], "Edited goal", goal=long_goal)
+    sign_in(page, web_url, org["api_key"])
+    page.get_by_text("Edited goal").first.click()
+    page.get_by_test_id("edit-task").click()
+    page.get_by_test_id("task-goal").fill(long_goal + " more")
+    page.keyboard.press("Escape")
+    confirm = page.get_by_role("dialog", name="Discard your changes to this task?")
+    expect(confirm).to_be_visible()
+    expect(confirm.get_by_text("Your changes to this task haven't been saved.", exact=True)).to_be_visible()
+    expect(confirm).not_to_contain_text("words")
+    assert console_errors == []
+
+
 def test_a_task_names_the_repositories_it_changes_and_reads(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
 ):

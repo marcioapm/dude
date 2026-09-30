@@ -77,6 +77,11 @@ export interface FormDialogProps {
   /** The confirmation's question: "Discard this task?". */
   discardTitle?: string;
   /**
+   * What would be lost. Default: the count of words written, which is only
+   * true when every word is new (creating); an edit says so without a count.
+   */
+  discardDescription?: string;
+  /**
    * The fields. Rendered only while the dialog is open, so a component
    * holding their state starts fresh each time it opens.
    */
@@ -151,7 +156,7 @@ export function FormDialog(props: FormDialogProps) {
         size="sm"
         tone="danger"
         title={props.discardTitle ?? "Discard your changes?"}
-        description={`You have written ${unsaved.toLocaleString("en-US")} ${unsaved === 1 ? "word" : "words"} that haven't been saved.`}
+        description={props.discardDescription ?? `You have written ${unsaved.toLocaleString("en-US")} ${unsaved === 1 ? "word" : "words"} that haven't been saved.`}
         onOpenAutoFocus={(e) => {
           e.preventDefault();
           keep.current?.focus();
