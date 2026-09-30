@@ -768,15 +768,22 @@ def test_a_refused_key_asks_for_another(page: Page, web_url: str, org: dict, con
     assert all("401" in e for e in console_errors), console_errors
 
 
-def test_manual_login_check_failure_can_retry(page: Page, web_url: str, org: dict):
+@pytest.mark.parametrize("failure", ["html_401", "html_503", "network"])
+def test_manual_login_check_failure_can_retry(page: Page, web_url: str, org: dict, failure: str):
     page.goto(web_url)
     page.evaluate("localStorage.clear()")
     page.goto(web_url)
     page.evaluate("window.loginDocumentMarker = 'original'")
-    page.route("**/v1/me", lambda route: route.fulfill(status=503, content_type="text/html", body="<h1>Unavailable</h1>"))
+    if failure == "network":
+        page.route("**/v1/me", lambda route: route.abort())
+    else:
+        page.route("**/v1/me", lambda route: route.fulfill(
+            status=401 if failure == "html_401" else 503,
+            content_type="text/html", body="<h1>Unavailable</h1>"))
     page.fill('input[type="password"]', org["api_key"])
     page.click('button[type="submit"]')
-    expect(page.get_by_text("Could not check that key. Please try again.")).to_be_visible()
+    message = "That key was not accepted" if failure == "html_401" else "Could not check that key. Please try again."
+    expect(page.get_by_text(message)).to_be_visible()
     assert page.evaluate("localStorage.getItem('dude.apiKey')") is None
     assert page.evaluate("window.loginDocumentMarker") == "original"
     expect(page.get_by_role("button", name="Continue")).to_be_enabled()
