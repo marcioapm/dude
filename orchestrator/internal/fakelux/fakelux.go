@@ -296,29 +296,27 @@ func (s *Server) SetCost(id string, cost lux.RunCost) {
 	if run := s.runs[id]; run != nil {
 		cost.RunID = id
 		// lux always sends every amount; a test that set none means zero.
-		zero := func(d *string) {
-			if *d == "" {
-				*d = "0"
-			}
-		}
 		for i := range cost.ByFamily {
 			f := &cost.ByFamily[i]
-			if f.Amount == "" {
-				f.Amount = "0"
-			}
-			zero(&f.Final)
-			zero(&f.Estimate)
+			zeroIfUnset(&f.Amount)
+			zeroIfUnset(&f.Final, &f.Estimate)
 		}
 		for i := range cost.Totals {
 			t := &cost.Totals[i]
-			zero(&t.Amount)
-			zero(&t.Final)
-			zero(&t.Estimate)
+			zeroIfUnset(&t.Amount, &t.Final, &t.Estimate)
 		}
 		for i := range cost.Lines {
-			zero(&cost.Lines[i].Amount)
+			zeroIfUnset(&cost.Lines[i].Amount)
 		}
 		run.cost = &cost
+	}
+}
+
+func zeroIfUnset[T ~string](amounts ...*T) {
+	for _, a := range amounts {
+		if *a == "" {
+			*a = "0"
+		}
 	}
 }
 
