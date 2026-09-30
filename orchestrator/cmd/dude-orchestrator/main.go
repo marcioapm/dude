@@ -87,49 +87,38 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("configuration: %w", err)
 	}
-	if cfg.Path != "" {
-		log.Info("configuration file read", "path", cfg.Path)
+	logConfig(log, cfg)
+	set, err := settingsFrom(cfg)
+	if missing := (missingError{}); errors.As(err, &missing) {
+		fmt.Fprintln(os.Stderr, missing.Error())
+		os.Exit(2)
 	}
-	for _, w := range cfg.Warnings {
-		log.Warn(w)
+	if err != nil {
+		return err
 	}
-	database, err := db.Open(ctx, require(cfg, "DATABASE_URL"))
+	database, err := db.Open(ctx, set.DatabaseURL)
 	if err != nil {
 		return err
 	}
 	defer database.Close()
 
-	agent, err := phases.LoadAgentConfig(cfg)
-	if err != nil {
-		return fmt.Errorf("agent configuration: %w", err)
-	}
+	agent := set.Agent
 	if agent.LLMURL == "" {
 		log.Warn("agents have no LLM: DUDE_LLM_URL is not set; only fake/ models can run")
 	}
 	if os.Getenv("DUDE_OPENCODE_AUTH") != "" || os.Getenv("DUDE_OPENCODE_CONFIG") != "" {
 		log.Warn("DUDE_OPENCODE_AUTH and DUDE_OPENCODE_CONFIG are ignored: agents get their model access from DUDE_LLM_URL and DUDE_LLM_KEY")
 	}
-	registryLogin, err := registry.FromEnv(ctx, cfg.Getenv, agent.DefaultImage, registry.WithLog(log))
+	registryLogin, err := registry.FromEnv(ctx, set.Registry.getenv, agent.DefaultImage, registry.WithLog(log))
 	if err != nil {
 		return fmt.Errorf("registry login: %w", err)
 	}
 	if registryLogin != nil {
-		attrs := []any{"mode", cfg.String("DUDE_REGISTRY_AUTH"), "registry", registryLogin.Registry()}
+		attrs := []any{"mode", set.Registry.Mode, "registry", registryLogin.Registry()}
 		if by := registry.MintedBy(registryLogin); by != "" {
 			attrs = append(attrs, "minted_by", by)
 		}
 		log.Info("agent images are pulled with a registry login", attrs...)
-	}
-	reconcileEvery := cfg.Duration("DUDE_PR_RECONCILE")
-	parkAfter, idleAfter := cfg.Duration("DUDE_PARK_AFTER"), cfg.Duration("DUDE_IDLE_AFTER")
-	// How often a working agent's diff is read besides after its edits.
-	diffEvery := cfg.Duration("DUDE_DIFF_EVERY")
-	// What an hour of a lux host costs, recorded with each Run so its
-	// machine time has a price. One rate for every host until lux reports
-	// each host's own.
-	machineRate := cfg.Float("DUDE_MACHINE_USD_PER_HOUR")
-	if machineRate < 0 {
-		return fmt.Errorf("%s: not a rate: %v", cfg.Label("DUDE_MACHINE_USD_PER_HOUR"), machineRate)
 	}
 	host, _ := os.Hostname()
 
@@ -141,37 +130,25 @@ func run(log *slog.Logger) error {
 	signalWorkflow := func(ctx context.Context, org, wf, name string, payload any, key string) error {
 		return runtime.Signal(ctx, org, wf, name, payload, key)
 	}
-	luxClient := lux.New(require(cfg, "LUX_URL"), require(cfg, "LUX_API_KEY"))
+	luxClient := lux.New(set.LuxURL, set.LuxKey)
 	syncer := &phases.Syncer{
 		DB: database, Lux: luxClient,
 		Forges: forges, Agent: agent, Registry: registryLogin, Log: log,
-		ParkAfter: parkAfter, IdleAfter: idleAfter,
-		DiffEvery: diffEvery, MachineUSDPerHour: machineRate,
+		ParkAfter: set.ParkAfter, IdleAfter: set.IdleAfter,
+		DiffEvery: set.DiffEvery, MachineUSDPerHour: set.MachineUSDPerHour,
 	}
 	defer syncer.Stop()
-	consoleURL := cfg.String("LUX_CONSOLE_URL")
-	if consoleURL == "" {
-		consoleURL = cfg.String("LUX_URL")
-	}
-	serverService := &servers.Service{DB: database, Lux: luxClient, Log: log, ConsoleURL: consoleURL}
+	serverService := &servers.Service{DB: database, Lux: luxClient, Log: log, ConsoleURL: set.ConsoleURL}
 	previews := &servers.Previews{Service: serverService, Forges: forges, DefaultImage: agent.DefaultImage,
 		Registry: registryLogin}
 	defer previews.Stop()
 	pullRequests := &prs.Syncer{DB: database, Forges: forges, Signal: signalWorkflow, Log: log,
-		FactoryLogins: cfg.List("DUDE_FACTORY_LOGINS")}
+		FactoryLogins: set.FactoryLogins}
 
 	var embedder embeddings.Embedder
-	emb, err := embeddingsFromEnv(cfg.Getenv)
-	if err != nil {
-		return err
-	}
-	if emb.URL != "" {
-		dims := cfg.Int("DUDE_EMBEDDINGS_DIMENSIONS")
-		if dims != 768 {
-			return fmt.Errorf("%s: the index holds 768 dimensions, not %d", cfg.Label("DUDE_EMBEDDINGS_DIMENSIONS"), dims)
-		}
+	if emb := set.Embeddings; emb.URL != "" {
 		embedder = &embeddings.Client{BaseURL: emb.URL, Key: emb.Key,
-			ModelName: cfg.String("DUDE_EMBEDDINGS_MODEL"), Dims: int(dims)}
+			ModelName: set.EmbeddingsModel, Dims: set.EmbeddingsDimension}
 		log.Info("memory searches by meaning", "model", embedder.Model(), "url", emb.URL,
 			"url_from", emb.URLFrom, "key_from", emb.KeyFrom)
 	} else {
@@ -180,8 +157,8 @@ func run(log *slog.Logger) error {
 	indexer := &memory.Indexer{DB: database, Embedder: embedder, Log: log}
 
 	notifier := &notify.Notifier{DB: database, Log: log,
-		Subject:   cfg.String("DUDE_VAPID_SUBJECT"),
-		PublicKey: cfg.String("DUDE_VAPID_PUBLIC_KEY"), PrivateKey: cfg.String("DUDE_VAPID_PRIVATE_KEY"),
+		Subject:   set.VAPIDSubject,
+		PublicKey: set.VAPIDPublic, PrivateKey: set.VAPIDPrivate,
 	}
 
 	// Each loop sleeps when idle and runs again at once while there is work.
@@ -206,7 +183,7 @@ func run(log *slog.Logger) error {
 		{"notify", 2 * time.Second, notifier.Sweep},
 		{"indexer", 5 * time.Second, indexer.Sweep},
 		{"pr-reconciler", time.Minute, func(ctx context.Context) (int, error) {
-			return pullRequests.Reconcile(ctx, reconcileEvery)
+			return pullRequests.Reconcile(ctx, set.ReconcileEvery)
 		}},
 	}
 	var wakers []chan struct{}
@@ -238,8 +215,8 @@ func run(log *slog.Logger) error {
 	}()
 
 	srv := &http.Server{
-		Addr: cfg.String("DUDE_ORCHESTRATOR_LISTEN"),
-		Handler: (&api.Server{DB: database, Lux: luxClient, Workflow: runtime, Token: require(cfg, "DUDE_ORCHESTRATOR_TOKEN"), Log: log,
+		Addr: set.Listen,
+		Handler: (&api.Server{DB: database, Lux: luxClient, Workflow: runtime, Token: set.Token, Log: log,
 			PushKeys: notifier.Keys, Forges: forges, PRs: pullRequests, Servers: serverService,
 			Embedder: embedder, Indexer: indexer, Kick: serverService.Kick}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -248,7 +225,7 @@ func run(log *slog.Logger) error {
 	// from lux's hosts (DUDE_TOOLS_URL is how they see it), so it is not the
 	// internal API's loopback.
 	var tools *http.Server
-	if addr := cfg.String("DUDE_TOOLS_LISTEN"); addr != "" {
+	if addr := set.ToolsListen; addr != "" {
 		tools = &http.Server{Addr: addr, Handler: (&agenttools.Server{DB: database, Log: log, Embedder: embedder,
 			Kick: serverService.Kick}).Handler(),
 			ReadHeaderTimeout: 10 * time.Second}
@@ -299,13 +276,4 @@ func (l loop) run(ctx context.Context, log *slog.Logger, wake <-chan struct{}) {
 		case <-time.After(l.interval):
 		}
 	}
-}
-
-func require(cfg *config.Config, name string) string {
-	v := cfg.String(name)
-	if v == "" {
-		fmt.Fprintf(os.Stderr, "%s is required\n", cfg.Label(name))
-		os.Exit(2)
-	}
-	return v
 }
