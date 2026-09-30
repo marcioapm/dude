@@ -55,6 +55,8 @@ class BrowserAuth(unittest.TestCase):
         # Answers to /v1/navigation in order, then the empty tree.
         self.nav_responses = []
         self.nav_calls = []
+        # /v1/navigation requests answered "hold": fulfilled by the test itself.
+        self.held = []
         self.navigation = []
         self.context.route("**/*", self.route)
         self.page.on("request", lambda req: self.navigation.append(req.url)
@@ -87,7 +89,9 @@ class BrowserAuth(unittest.TestCase):
         elif "/v1/navigation" in req.url:
             self.nav_calls.append(req.headers.get("authorization"))
             response = self.nav_responses.pop(0) if self.nav_responses else None
-            if response is None:
+            if response == "hold":
+                self.held.append(route)
+            elif response is None:
                 route.fulfill(json={"projects": []})
             else:
                 route.fulfill(status=response, content_type="application/json",
@@ -173,6 +177,28 @@ class BrowserAuth(unittest.TestCase):
         self.assertTrue(self.nav_calls)
         self.assertEqual(set(self.nav_calls), {"Bearer valid"})
         self.assertIsNone(self.page.evaluate("localStorage.getItem('dude.apiKey')"))
+
+    def settle(self):
+        # Two frames: long enough for a fulfilled fetch's handler to have re-rendered.
+        self.page.evaluate("new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
+
+    def test_stale_refusal_after_cookie_recovery_keeps_access_session(self):
+        self.responses = [{"authMethod": "api_key"}, {"authMethod": "cloudflare_access"}]
+        # Dev StrictMode issues the first tree read twice with the key: refuse one, hold the other.
+        self.nav_responses = [401, "hold"]
+        with self.page.expect_request(lambda r: "/v1/navigation" in r.url
+                                      and r.headers.get("authorization") is None):
+            self.open("valid")
+        self.shell()
+        self.assertEqual(self.probes, ["Bearer valid", None])
+        self.assertEqual(len(self.held), 1)
+        with self.page.expect_response(lambda r: "/v1/navigation" in r.url and r.status == 401):
+            self.held.pop().fulfill(status=401, content_type="application/json",
+                                    body=json.dumps({"error": {"code": "refused", "message": "Refused"}}))
+        self.settle()
+        self.shell()
+        expect(self.page.get_by_label("API key", exact=True)).to_have_count(0)
+        self.assertEqual(self.probes, ["Bearer valid", None])
 
     def test_keyless_refusal_shows_prompt(self):
         self.responses = [401]
