@@ -244,12 +244,16 @@ func TestDimensionsOtherThanTheIndexAreRefusedOnlyWithEmbeddings(t *testing.T) {
 }
 
 func TestAMissingRequiredSettingIsNamed(t *testing.T) {
-	for _, drop := range []string{"url = \"postgres://file/dude\"\n", "token = \"file-token\"\n",
-		"url = \"https://lux.file\"\n", "api_key = \"lux-file-key\"\n"} {
+	for drop, want := range map[string]string{
+		"url = \"postgres://file/dude\"\n": "database.url (DATABASE_URL) is required",
+		"token = \"file-token\"\n":         "orchestrator.token (DUDE_ORCHESTRATOR_TOKEN) is required",
+		"url = \"https://lux.file\"\n":     "lux.url (LUX_URL) is required",
+		"api_key = \"lux-file-key\"\n":     "lux.api_key (LUX_API_KEY) is required",
+	} {
 		_, err := settingsFrom(loadConfig(t, strings.Replace(required, drop, "", 1), 0o600, nil))
 		var missing missingError
-		if !errors.As(err, &missing) || !strings.Contains(err.Error(), "(") {
-			t.Errorf("without %q: err = %v, want a missing setting named", drop, err)
+		if !errors.As(err, &missing) || err.Error() != want {
+			t.Errorf("without %q: err = %v, want %q", drop, err, want)
 		}
 	}
 	// Empty in the file is missing too.
