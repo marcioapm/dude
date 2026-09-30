@@ -77,13 +77,10 @@ function Panel({ data, openLogs = [] }: { readonly data: TaskServers; readonly o
             <>
               {/* An agent's terminal is in its session's rail; a preview has no session. */}
               {isPreview ? <TerminalLink href={run.terminalUrl ?? "#"} /> : null}
-              {isPreview ? <Button size="sm" variant="quiet" leadingIcon="stop">Stop preview</Button> : (
-                <>
-                  <Button size="sm" variant="secondary" leadingIcon="play" disabled={!canStartAny(data.servers)}>Start all</Button>
-                  <Button size="sm" variant="quiet" leadingIcon="stop" disabled={!canStopAny(data.servers)}>Stop all</Button>
-                  <Button size="sm" variant="quiet" leadingIcon="plus">Add server</Button>
-                </>
-              )}
+              <Button size="sm" variant="secondary" leadingIcon="play" disabled={!canStartAny(data.servers)}>Start all</Button>
+              <Button size="sm" variant="quiet" leadingIcon="stop" disabled={!canStopAny(data.servers)}>Stop all</Button>
+              {isPreview ? <Button size="sm" variant="quiet" leadingIcon="stop">Stop preview</Button> : null}
+              <Button size="sm" variant="quiet" leadingIcon="plus">Add server</Button>
             </>
           }
         />

@@ -175,13 +175,15 @@ export const ServersSection = memo(function ServersSection({ client, servers, ta
             <>
               {/* An agent's terminal is its session's (the rail); a preview has no session to hold it. */}
               {isPreview && live && run.terminalUrl ? <TerminalLink href={run.terminalUrl} /> : null}
-              {isPreview && taskId ? (
-                <Button size="sm" variant="quiet" leadingIcon="stop" disabled={busy !== null} onClick={stopPreview} data-testid="stop-preview">Stop preview</Button>
-              ) : live ? (
+              {live ? (
                 <>
                   <Button size="sm" variant="secondary" leadingIcon="play" disabled={busy !== null || !canStartAny(data.servers)} onClick={() => void servers.startAll()} data-testid="start-all">Start all</Button>
                   <Button size="sm" variant="quiet" leadingIcon="stop" disabled={busy !== null || !canStopAny(data.servers)} onClick={() => void servers.stopAll()} data-testid="stop-all">Stop all</Button>
                 </>
+              ) : null}
+              {/* Stopping a preview ends its run; Stop all leaves the run live. */}
+              {isPreview && taskId ? (
+                <Button size="sm" variant="quiet" leadingIcon="stop" disabled={busy !== null} onClick={stopPreview} data-testid="stop-preview">Stop preview</Button>
               ) : null}
               <Button size="sm" variant="quiet" leadingIcon="plus" disabled={!live} onClick={() => setAdding(true)} data-testid="add-server">Add server</Button>
             </>

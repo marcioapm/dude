@@ -4,7 +4,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { act, mount, settle, until } from "./dom.ts";
+import { act, click, mount, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { TASK_ID } from "../src/fixtures/data.ts";
 import { PeopleProvider } from "../src/people.tsx";
@@ -115,5 +115,44 @@ describe("the task's Servers tab", () => {
     await act(async () => tab.focus());
     await settle(50);
     expect(document.querySelector("[role=tooltip]") !== null).toBe(false);
+  });
+});
+
+describe("a branch preview on the Servers tab", () => {
+  /** Scenario e's preview, past its stages: ready, lux running it. */
+  class ReadyPreview extends FixtureClient {
+    override taskServers() {
+      return super.taskServers().then((d) => ({ ...d, run: d.run ? { ...d.run, previewStage: "ready" as const, luxState: "running" } : null }));
+    }
+  }
+  const states = (page: HTMLElement) =>
+    Object.fromEntries([...page.querySelectorAll("[data-testid=servers-panel] [data-server][data-state]")].map((el) => [el.getAttribute("data-server"), el.getAttribute("data-state")]));
+  // Every server of the three in one of `want`: an empty panel is not a pass.
+  const all = (page: HTMLElement, ...want: string[]) => {
+    const s = Object.values(states(page));
+    return s.length === 3 && s.every((x) => want.includes(x!)) ? true : null;
+  };
+  const button = (page: HTMLElement, id: string) => page.querySelector<HTMLButtonElement>(`[data-testid=${id}]`);
+
+  test("offers Start all and Stop all beside Stop preview, and they leave the preview live", async () => {
+    const page = await taskPage(new ReadyPreview("e"), { tab: "servers" });
+    await until(() => page.querySelector("[data-testid=servers-panel][data-run=preview]"), "the preview's panel");
+    expect(button(page, "stop-preview") !== null).toBe(true);
+    const startAll = await until(() => button(page, "start-all"), "Start all on the preview");
+    expect(button(page, "stop-all") !== null).toBe(true);
+
+    await click(startAll);
+    await until(() => all(page, "starting", "ready"), "every server starting");
+    await until(() => (button(page, "stop-all")?.disabled === false ? true : null), "Stop all ready to press");
+    await click(button(page, "stop-all")!);
+    await until(() => all(page, "stopped"), "every server stopped");
+    // Stop all is not Stop preview: the preview run is still there, still live.
+    expect(page.querySelector("[data-testid=servers-panel][data-run=preview]") !== null).toBe(true);
+    expect(button(page, "stop-preview") !== null).toBe(true);
+    expect(button(page, "add-server")?.disabled).toBe(false);
+
+    await until(() => (button(page, "start-all")?.disabled === false ? true : null), "Start all ready to press");
+    await click(button(page, "start-all")!);
+    await until(() => all(page, "starting", "ready"), "every server started again");
   });
 });
