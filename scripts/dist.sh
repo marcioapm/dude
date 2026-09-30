@@ -10,6 +10,9 @@
 #                              migrations/*.sql embedded (build-migrate.sh)
 #     share/dude/web/          the built web app (DUDE_WEB_DIR)
 #     share/dude/third-party/  licences of code bundled into the binaries
+#     FEATURES                 what this release supports, one per line:
+#                              a deployment tool reads it before relying on
+#                              a subcommand an older release lacks
 #
 # Unpacking a tarball into a prefix gives that layout under it.
 # The bun binaries link glibc dynamically; the Go ones link nothing.
@@ -21,6 +24,8 @@ DIST="$ROOT/dist"
 GO_LDFLAGS="-s -w -X github.com/marciomartins/dude/orchestrator/internal/version.Version=$VERSION"
 # Read by apps/control-plane/src/build.ts.
 BUN_DEFINES=(--define "DUDE_BUILD_VERSION=\"$VERSION\"")
+# The archive's FEATURES file, one per line; see below.
+FEATURES=(validate)
 # Reproducible tarballs: root-owned regardless of the builder's uid, sorted,
 # and a fixed mtime (the commit's own date, so a rebuild of the same tag has
 # the same timestamps) rather than each build's wall clock. GNU tar only:
@@ -78,9 +83,14 @@ for arch in arm64 amd64; do
 
   chmod 0755 "$work/bin/"*
   chmod -R u+rwX,go+rX,go-w "$work/share"
+  # validate: `dude-orchestrator validate` and `dude-backend validate` check
+  # the configuration and exit. An older release has no such subcommand, and
+  # its orchestrator would start instead.
+  printf '%s\n' "${FEATURES[@]}" > "$work/FEATURES"
+  chmod 0644 "$work/FEATURES"
   # gzip -n: no name or timestamp in the gzip header, which tar -z leaves
   # to whichever gzip is installed.
-  "$TAR" "${TAR_REPRO_FLAGS[@]}" -C "$work" -cf - bin share | gzip -9n > "$DIST/dude_${VERSION}_linux_${arch}.tar.gz"
+  "$TAR" "${TAR_REPRO_FLAGS[@]}" -C "$work" -cf - FEATURES bin share | gzip -9n > "$DIST/dude_${VERSION}_linux_${arch}.tar.gz"
   rm -rf "$work"
 done
 

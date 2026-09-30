@@ -25,6 +25,17 @@ Unpack the tarball into a prefix ([layout](../README.md#releases)).
 `dude-migrate` carries its migrations inside itself; it reads no SQL from
 disk.
 
+### Release archive
+
+At the archive's root, beside `bin/` and `share/`, `FEATURES` lists what
+the release supports, one word per line. A deployment tool reads it from
+the archive before it relies on anything an older release lacks: a release
+without the file, or without the word, does not support the feature.
+
+| Feature | What it promises |
+| --- | --- |
+| `validate` | `dude-orchestrator validate` and `dude-backend validate` exist ([Validating a configuration](#validating-a-configuration)). Check it first: an older `dude-orchestrator` ignores the argument and **starts the service**. |
+
 A release holds no agent image. `DUDE_AGENT_IMAGE` is the operator's own:
 any registry lux's runners can pull from, pinned by digest
 (`registry.example/agents@sha256:…`). A project's own `runtimeImage`
@@ -203,7 +214,8 @@ mode.
 ## Upgrading
 
 1. Verify the tarball against `SHA256SUMS` and unpack it beside the running
-   release.
+   release. If its `FEATURES` lists `validate`, run both `validate`s
+   ([below](#validating-a-configuration)) and stop on a failure.
 2. Run the new `dude-migrate` with `DATABASE_URL` as the owner. It applies
    what is new, each file in a transaction, and is safe to run again. It
    refuses a migration whose file changed after it was applied.
@@ -214,6 +226,39 @@ mode.
    A Run that has started keeps its image across resumes.
 
 Between steps 2 and 3 the old processes run against the new schema.
+
+### Validating a configuration
+
+Before migrating or switching, run the new release's `validate` against the
+host's real configuration, as the service user with the services'
+environment files (only if its `FEATURES` lists `validate`):
+
+```
+dude-orchestrator validate
+dude-backend validate
+```
+
+Each reads the configuration exactly as its startup does (`DUDE_CONFIG`,
+else `/etc/dude/dude.toml`, and the environment) and runs every check
+startup makes before it opens a connection: unknown keys, types and
+values, required settings, and for the orchestrator durations, the machine
+rate, embeddings and their dimensions, the registry login's inputs and the
+LLM URL; for the backend, the whole `[auth]` section. It connects to
+nothing (Postgres, lux, S3, the LLM, AWS, Cloudflare), listens on nothing,
+writes nothing, and exits.
+
+- Exit 0: `ok: <file>` (or `ok: no file`) on stdout; each loader warning
+  (a secret in a readable file, a retired setting) on stderr as
+  `warning: …`, naming keys, never values.
+- Exit 1: startup's own error on stderr. Keep the running release.
+- Exit 2: an unexpected argument; usage on stderr.
+
+What it cannot check needs a connection: that the database, lux and the
+rest are reachable and accept the credentials, and, with Cloudflare Access,
+that `auth.default_organization` names an existing organization
+(`dude-backend validate` says `not checked: default_organization exists`).
+A migration that fails, or a service that fails to start, is still possible
+after a clean validate.
 
 ### Turning on a registry login
 
