@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { parseMarkdown } from "../src/util/markdown";
+import { parseMarkdown, type Block } from "../src/util/markdown";
 
-const para = (v: string) => ({ t: "paragraph", c: [{ t: "text", v }] });
+const para = (v: string): Block => ({ t: "paragraph", c: [{ t: "text", v }] });
 
 describe("a run of blank lines inside a list item", () => {
   test("followed by an indented line, the run stays in the item", () => {
