@@ -100,6 +100,15 @@ const peopleByEmail = async (email: string, organizationId = org): Promise<Perso
   (await owner`SELECT id, name, role, photo_url, removed_at FROM people WHERE organization_id = ${organizationId} AND email = ${email}`) as PersonRow[];
 const keysOf = (personId: string) => owner`SELECT id FROM api_keys WHERE person_id = ${personId}`;
 
+// Polls `ready` every 20 ms, failing after `ms`: for states only the database can report.
+async function waitFor(ready: () => Promise<boolean>, ms = 5_000) {
+  const until = Date.now() + ms;
+  while (!(await ready())) {
+    if (Date.now() > until) throw new Error("condition not reached");
+    await Bun.sleep(20);
+  }
+}
+
 let signer: Key;
 let rotated: Key;
 let stranger: Key;
@@ -521,6 +530,40 @@ describe("the live stream", () => {
     const fresh = await sign(signer, { email: "stream@example.com" });
     expect((await router.handle(new Request(`${ORIGIN}/v1/events/stream?live=1&key=`, { headers: cookie(fresh) }))).status).toBe(401);
   }, 10_000);
+
+  test("a token expiring during a slow backfill ends the stream without the backfill", async () => {
+    const edge = new Edge();
+    edge.keys = [signer.jwk];
+    const router = routerFor(edge);
+    await owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source)
+      SELECT 'evt_backfill_' || ${suffix} || '_' || n, ${org}, 'test.backfill', 'system', 'test', 'control-plane'
+      FROM generate_series(1, 3) n`;
+    const token = await sign(signer, { email: "slowbackfill@example.com" }, { exp: Math.floor(Date.now() / 1000) + 2 });
+    // Signed in once beforehand, so the streamed request itself writes nothing.
+    expect((await me(router, cookie(token))).status).toBe(200);
+    const unlock = Promise.withResolvers<void>();
+    const locked = Promise.withResolvers<void>();
+    // Holds the ledger so the backfill's query waits until after the token has expired.
+    const holder = owner.begin(async (tx) => {
+      await tx`LOCK TABLE events IN ACCESS EXCLUSIVE MODE`;
+      locked.resolve();
+      await unlock.promise;
+    });
+    try {
+      await locked.promise;
+      const res = await router.handle(new Request(`${ORIGIN}/v1/events/stream`, { headers: cookie(token) }));
+      expect(res.status).toBe(200);
+      await waitFor(async () => (await owner`
+        SELECT count(*)::int AS n FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+        WHERE NOT l.granted AND l.relation = 'events'::regclass AND a.usename = 'dude_app'`)[0].n > 0);
+      // Ends at the token's expiry while the backfill is still blocked.
+      const ended = await Promise.race([res.text(), Bun.sleep(6_000).then(() => null)]);
+      expect(ended).toBe(": open\n\n");
+    } finally {
+      unlock.resolve();
+      await holder;
+    }
+  }, 15_000);
 });
 
 test("a person principal's profile never sets their role", async () => {

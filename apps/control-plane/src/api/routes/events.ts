@@ -66,15 +66,51 @@ function streamEvents({ url, principal, request }: RequestContext): Response {
     intParam(url, "after", { min: 0 }) ??
     (Number.isSafeInteger(resume) && resume > 0 ? resume : undefined);
 
+  const openedAt = Date.now();
   let unsubscribe: (() => void) | undefined;
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   let lifetime: ReturnType<typeof setTimeout> | undefined;
+  let closed = false;
+  const release = () => {
+    closed = true;
+    unsubscribe?.();
+    if (heartbeat) clearInterval(heartbeat);
+    if (lifetime) clearTimeout(lifetime);
+  };
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const encoder = new TextEncoder();
-      let closed = false;
       let highWater = after ?? 0;
+
+      const end = () => {
+        if (closed) return;
+        release();
+        try {
+          controller.close();
+        } catch {
+          // Already closed by the runtime.
+        }
+      };
+
+      /*
+       * A session-authenticated stream ends by the time its token does, and
+       * at the latest SESSION_STREAM_MS after it opened, so EventSource's
+       * reconnect (resuming by Last-Event-ID) authenticates again: someone
+       * removed or signed out stops receiving within that bound. The bound
+       * is armed before the backfill, which can be long, and covers it.
+       * API keys are checked per connection as before.
+       */
+      if (principal.credentialKind === "person") {
+        const deadline = Math.min(
+          principal.expiresAt !== undefined ? principal.expiresAt * 1000 : Infinity,
+          openedAt + SESSION_STREAM_MS,
+        );
+        if (deadline <= Date.now()) return end();
+        lifetime = setTimeout(end, deadline - Date.now());
+      }
+      if (request.signal.aborted) return end();
+      request.signal.addEventListener("abort", end);
       /*
        * `live=1` skips the backfill: a client that only wants to know *that*
        * something changed — the shell refreshing its sidebar — has no use
@@ -140,6 +176,8 @@ function streamEvents({ url, principal, request }: RequestContext): Response {
         console.error("event stream backfill failed:", err);
       }
 
+      // Ended during the backfill: nothing more is sent or installed.
+      if (closed) return;
       backfilled = true;
       // `send` drops anything at or below the high-water mark, so events that
       // appeared in both the buffer and the backfill are not delivered twice.
@@ -150,38 +188,8 @@ function streamEvents({ url, principal, request }: RequestContext): Response {
       heartbeat = setInterval(() => {
         if (!closed) controller.enqueue(encoder.encode(": heartbeat\n\n"));
       }, 15_000);
-
-      /*
-       * A session-authenticated stream ends by the time its token does, and
-       * at the latest after SESSION_STREAM_MS, so EventSource's reconnect
-       * (resuming by Last-Event-ID) authenticates again: someone removed or
-       * signed out stops receiving within that bound. API keys are checked
-       * per connection as before.
-       */
-      if (principal.credentialKind === "person") {
-        const untilExpiry = principal.expiresAt !== undefined ? principal.expiresAt * 1000 - Date.now() : Infinity;
-        lifetime = setTimeout(end, Math.max(0, Math.min(untilExpiry, SESSION_STREAM_MS)));
-      }
-
-      request.signal.addEventListener("abort", end);
-      function end() {
-        if (closed) return;
-        closed = true;
-        unsubscribe?.();
-        if (heartbeat) clearInterval(heartbeat);
-        if (lifetime) clearTimeout(lifetime);
-        try {
-          controller.close();
-        } catch {
-          // Already closed by the runtime.
-        }
-      }
     },
-    cancel() {
-      unsubscribe?.();
-      if (heartbeat) clearInterval(heartbeat);
-      if (lifetime) clearTimeout(lifetime);
-    },
+    cancel: release,
   });
 
   return new Response(stream, {
