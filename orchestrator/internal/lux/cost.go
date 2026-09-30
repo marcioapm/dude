@@ -24,11 +24,16 @@ const (
 // Decimal is an amount as lux sends it: a decimal string, kept as text so
 // no digit is lost to a float on the way to a numeric column. Held to the
 // JSON number grammar, so it can be written into an event as a number.
+// JSON null is "": not reported, like a missing amount.
 type Decimal string
 
 var decimalPattern = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?$`)
 
 func (d *Decimal) UnmarshalJSON(b []byte) error {
+	if string(b) == "null" {
+		*d = ""
+		return nil
+	}
 	var s string
 	if err := json.Unmarshal(b, &s); err != nil {
 		return fmt.Errorf("amount %s: not a decimal string", b)
@@ -42,8 +47,9 @@ func (d *Decimal) UnmarshalJSON(b []byte) error {
 
 // RunCost is GET /v1/runs/{id}/cost: what a Run cost so far, per currency,
 // per family and per priced line. dude reads only a family's amount, so
-// only that is a checked Decimal: an odd value elsewhere cannot reject the
-// answer.
+// only that is a checked Decimal. The fields it does not read are strings
+// and are not checked; a JSON number in one still fails decoding, which
+// lux, sending every amount as a string, does not produce.
 type RunCost struct {
 	RunID    string       `json:"runId"`
 	Status   string       `json:"status"`
