@@ -488,13 +488,19 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   session whose task cannot be learned stands on its own, and says the way
   to its task when it ends.
 - The open session is `SessionHeader` (whose agent, for whom, its model,
-  status, cost, tokens and elapsed, Pause / Abort — on every view, so the
+  status, cost, tokens and elapsed, Pause / Abort, and the terminal where
+  the rail is not — on every view, so the
   numbers never depend on the rail being there), then **one bar**: a
   `Segmented` switch at the control size (it follows the density) between **Conversation**, **Changes** and **Events**
   (debugging, last), and on Changes the diff's own controls after it
   (`LiveDiff`'s `leading`). One row, one left edge, whichever view is
   shown: never a row of tabs over a row of tools. Each view fills the same
   place under the bar; none opens over the page.
+- **Servers live on the task's tab**, not in a session: a Run's servers
+  are the task's while that Run serves it, so the session bar has no
+  Servers toggle and nothing opens beside the conversation for them. A
+  branch preview's session, which has no agent, says so in place of the
+  composer and links to its task's Servers tab (`#/task/<id>/servers`).
 - **Changes** in the switch carries its file count and, while the agent is
   changing files, the breathing dot. That dot is the one "live" on the bar:
   the header's status already says Running, so the diff has no Live pill.
@@ -505,6 +511,15 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   the diff's own list does. When the session is narrower than about 820px
   the rail goes and the conversation keeps the width. Narrower than 900px
   the sessions list sits above the session.
+- **The terminal is the rail's.** While the Run is alive and running
+  (not paused, starting or ended) and lux gave it a terminal, the rail's
+  Session block ends with `TerminalLink` ("Open terminal in lux", a new
+  tab). Where the rail is not — the session narrower than about 820px, or
+  on Changes or Events — the header keeps the same link as a terminal icon
+  (`LinkButton iconOnly`), chosen by the same container query on the
+  session's width, so the terminal is never unreachable and never shown
+  twice. A branch preview has no agent session to hold it: its terminal
+  stays in the run line of the task's Servers tab.
 - With no session asked for, the one shown is picked once (running, else
   newest) and kept: a phase ending must not swap it under someone reading.
 - **Two edges.** Everything in a session shares one outer edge and one
@@ -915,6 +930,40 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
   `StatusBadge.module.css`) so reduced motion freezes it in a legible state.
   Loop periods come from `--ds-cadence-*`, never from a literal.
 
+### Tabs
+
+- A page's tabs are `Tabs` > `TabList` > `Tab`. A tab says how many with
+  `count` (a number, nothing at zero), and more than a number with
+  `trailing` — one mark, a `ServerStateDot` or a `.ds-live-dot`.
+- What the count stands for goes in `tooltip`: the tab is wrapped in a
+  `Tooltip` below it, which opens on hover and on keyboard focus and
+  closes on a press. The tab keeps its role, its selected state (its own
+  `data-state`, not the tooltip's) and its place in the ←→ walk; a focus
+  that selects it also shows the tip. The tooltip is supplementary: the
+  name and count are still the tab's label. Never a native `title`.
+- A tooltip may come and go with its data (the Servers tab has none until
+  its servers load). Every `Tab` sits in the same `Tooltip` wrapper, held
+  shut (`Tooltip disabled`) when it has no `tooltip`, so the button is
+  never remounted and a keyboard user on it keeps focus. A tip that comes
+  back stays shut until a fresh focus or hover on its tab.
+
+### Servers
+
+- **The task's Servers tab counts what is on**: servers with a process
+  running, `starting`, `ready` or `unreachable` (`isOn`). The label is
+  "Servers" and that number as the tab's count, with no count at zero.
+  After it, one mark: the first `exited` or `unreachable` server's danger
+  or attention dot; else the breathing `starting` dot while a server
+  starts or a branch preview comes up; else the attention dot for servers
+  a move stopped.
+- Its tooltip (`ServersTabTip`) is headed "N servers on" or "No servers
+  on", then a line per server on — its mark (icon only), its name in
+  mono, its state's word and `:port` — then "Off: a, b" in muted ink for
+  the rest (an exited one says so). With no run, the project's servers
+  are all off. With no run and no servers defined the tab has no tooltip.
+  Count, mark and tip come from one `summarizeTaskServers`, so they never
+  disagree.
+
 ### Do / Don't
 
 | Do | Don't |
@@ -951,13 +1000,16 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | `<SearchResultRow rank={1} lead={{ type: "memory" }} facts={["words and meaning"]} />` | a score chip and a progress bar on every result |
 | `<EntityLine lead={face} name={…} detail={…} />`, `<AuthorLine author={…} />` | a face and two spans styled in the app's CSS |
 | `<SearchPicker find={…} onPick={…} />` | an `Input` over a list of bare buttons |
+| a run's servers on its task's Servers tab; `<TerminalLink>` in the session's rail | a servers panel or drawer inside a session |
+| `<Tab count={on} tooltip={<ServersTabTip summary={s} />}>` | a native `title` on a tab, or "N ready" beside it |
 
 ## Components
 
 `src/primitives/` — Button, IconButton, Input (`size="title"` for a
 document's heading), Textarea, MarkdownEditor (`fill`), Select, Checkbox,
 Badge, Card, Table (THead/TBody/Tr/Th/Td/TableEmpty), Tabs (underline for a
-page, segmented in a toolbar; a tab can carry a count), Dialog (`size=
+page, segmented in a toolbar; a tab can carry a count, a trailing mark and
+a `tooltip`), Dialog (`size=
 "document"` with `aside`, `context`, `headerActions` and `reading`), DiscardConfirm, Toast, Tooltip,
 RowMenu (+ `rowMenuOpeners`), Skeleton/SkeletonLines/Spinner, EmptyState,
 ScrollArea, FormStack (`fill`), Kbd/KeyHint (+ `modKey`)/HelpList/
@@ -1089,6 +1141,10 @@ MarkdownCheatsheet.
 - **ServerStateMark / ServerStateDot** — a server's state in StatusMark's
   grammar; `src/tokens/servers.ts` is the vocabulary (lux's five states
   and `waiting`, for a preview's spec server before its turn).
+- **ServersTabTip** and `summarizeTaskServers` — the task's Servers tab:
+  one reading of its servers (which are on, which are off, the first bad
+  one, whether something is starting) gives the tab its count and mark and
+  the tooltip its lines. The rules are under *Servers*.
 - **ServerRow / ServerList / ServerRecipeRow** — one row per server in
   StepList's grammar: mono name and port, the state with what it means
   (`describeServer` turns lux's Server into the words, in one place), the
@@ -1097,9 +1153,12 @@ MarkdownCheatsheet.
   there is no in-app frame (a preview's sign-in cookie would not reach a
   cross-site iframe). `safeServerUrl` keeps anything but an `https://` URL
   out of an `href`.
-- **ServersRunLine / ServersPanel / ServersDrawer** — the run the servers
-  live on as a line, the panel (a container: rows stack in a narrow
-  drawer), and the run screen's 440px drawer on chrome.
+- **ServersRunLine / ServersPanel** — the run the servers live on as a
+  line, and the panel: the task's Servers tab (a container: under 560px,
+  a phone, its rows stack). A session has no servers panel; its servers
+  are its task's. A live run's line offers Start all, Stop all and Add
+  server; a branch preview's adds Stop preview, which ends the run, where
+  Stop all leaves it live.
 - **PreviewStages / ServersMoved** — a branch preview's stages, and the
   notice with Start all after a run moved host.
 - **ServersSummary** — the overview aside's block, in PullRequestPanel's
@@ -1108,7 +1167,10 @@ MarkdownCheatsheet.
   project settings: the definitions, the editor with validation in words,
   and a preview's egress allowlist as chips.
 - **LinkButton** (a primitive) — a real link drawn as a button, for a way
-  out among actions ("Open terminal in lux ↗").
+  out among actions. **TerminalLink** is it for a run's lux terminal
+  ("Open terminal in lux ↗"): in a session's rail, and in a branch
+  preview's run line; the overview's `ServersSummary` carries it short,
+  as "Terminal".
 
 `src/components/` — live work:
 

@@ -6,15 +6,15 @@
 
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { egressProblem, type RunServer } from "@dude/domain";
+import { egressProblem, type RunServer, type TaskServers } from "@dude/domain";
 import { HostChips } from "../src/components/HostChips.tsx";
 import { PreviewAlsoRunning, PreviewStages } from "../src/components/PreviewStages.tsx";
 import { draftOf, draftProblems, recipeOf } from "../src/components/ServerRecipe.tsx";
-import { ServerRow } from "../src/components/ServerRow.tsx";
+import { ServerRow, ServersTabTip } from "../src/components/ServerRow.tsx";
 import { ServerStateMark } from "../src/components/ServerStateMark.tsx";
 import { ServersSummaryRow } from "../src/components/ServersSummary.tsx";
 import { SERVER_DISPLAY_STATES, SERVER_STATE_SPECS } from "../src/tokens/servers.ts";
-import { canStartAny, canStopAny, describeServer, safeServerUrl, serverLogLines, summarizeServers } from "../src/util/servers.ts";
+import { canStartAny, canStopAny, describeServer, isOn, safeServerUrl, serverLogLines, summarizeServers, summarizeTaskServers } from "../src/util/servers.ts";
 
 const html = (el: React.ReactElement) => renderToStaticMarkup(el);
 const text = (h: string) => h.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
@@ -87,6 +87,78 @@ describe("summaries", () => {
   test("the tab shows the first bad server, else how many are ready", () => {
     expect(summarizeServers(list)).toEqual({ bad: list[1]!, ready: 1 });
     expect(summarizeServers([list[0]!, list[2]!])).toEqual({ bad: null, ready: 1 });
+  });
+
+  const agent = { id: "run_1", luxRunId: "run_x", kind: "agent" as const, label: "Implementer run", state: "running", luxState: "running", host: null, startedAt: null,
+    startedBy: null, branch: null, commit: null, previewStage: null, parksAfterMinutes: null, terminalUrl: null };
+  const task = (servers: RunServer[], patch: Partial<TaskServers> = {}): TaskServers =>
+    ({ run: agent, servers, moved: null, recipes: [], preview: null, ...patch });
+
+  test("the task's tab counts the servers that are on: starting, ready or unreachable", () => {
+    const all = [
+      server({ name: "web", state: "ready" }),
+      server({ name: "api", state: "starting" }),
+      server({ name: "worker", state: "unreachable" }),
+      server({ name: "docs", state: "stopped" }),
+      server({ name: "jobs", state: "exited", exitCode: 1 }),
+    ];
+    const s = summarizeTaskServers(task(all))!;
+    expect(s.on.map((x) => x.name)).toEqual(["web", "api", "worker"]);
+    expect(s.off.map((x) => [x.name, x.state])).toEqual([["docs", "stopped"], ["jobs", "exited"]]);
+    // The first bad one, by the rule the tab has always had: unreachable before a later exit.
+    expect(s.bad?.name).toBe("worker");
+    expect(s.starting).toBe(true);
+    for (const state of ["starting", "ready", "unreachable"] as const) expect(isOn({ state })).toBe(true);
+    for (const state of ["stopped", "exited", "waiting"] as const) expect(isOn({ state })).toBe(false);
+  });
+
+  test("nothing on is none, a bad one with nothing on is still bad, and nothing starting is still", () => {
+    const off = summarizeTaskServers(task([server({ state: "stopped" }), server({ name: "api", state: "exited", exitCode: 1 })]))!;
+    expect(off.on).toEqual([]);
+    expect(off.bad?.name).toBe("api");
+    expect(off.starting).toBe(false);
+    expect(summarizeTaskServers(task([server({ state: "ready" })]))!.starting).toBe(false);
+  });
+
+  test("a branch preview still coming up is starting before any server is; a finished one is not", () => {
+    const preview = { ...agent, kind: "preview" as const, previewStage: "setup" as const };
+    const booting = summarizeTaskServers(task([server({ state: "stopped", fromSpec: true })], { run: preview }))!;
+    expect([booting.starting, booting.booting]).toEqual([true, true]);
+    const ready = summarizeTaskServers(task([server({ state: "stopped" })], { run: { ...preview, previewStage: "ready" } }))!;
+    expect([ready.starting, ready.booting]).toEqual([false, false]);
+    // A preview that ended is not coming up, whatever stage it last reported.
+    const ended = summarizeTaskServers(task([], { run: { ...preview, state: "aborted" } }))!;
+    expect(ended.booting).toBe(false);
+  });
+
+  test("with no run, the recipes are all off; with no run and no recipes there is nothing to say", () => {
+    const recipes = [{ name: "web" }, { name: "api" }] as TaskServers["recipes"];
+    const none = summarizeTaskServers(task([], { run: null, recipes }))!;
+    expect(none.on).toEqual([]);
+    expect(none.off.map((x) => x.name)).toEqual(["web", "api"]);
+    expect(summarizeTaskServers(task([], { run: null }))).toBeNull();
+    expect(summarizeTaskServers(null)).toBeNull();
+  });
+
+  test("a move is remembered for the tab's mark", () => {
+    expect(summarizeTaskServers(task([server({ state: "stopped" })], { moved: { at: at(0), fromHost: "a", toHost: "b" } }))!.moved).toBe(true);
+  });
+
+  test("the tab's tooltip: how many are on, a line for each with its word and port, then the rest", () => {
+    const s = summarizeTaskServers(task([
+      server({ name: "web", port: 3000, state: "ready" }),
+      server({ name: "api", port: 8080, state: "starting" }),
+      server({ name: "docs", port: 6006, state: "stopped" }),
+      server({ name: "jobs", port: 9000, state: "exited", exitCode: 1 }),
+    ]))!;
+    const tip = html(<ServersTabTip summary={s} />);
+    // What is read: the mark is aria-hidden, its screen-reader word with it, and the word after it is said once.
+    const read = (h: string) => text(h.replace(/<span[^>]*aria-hidden="true"[^>]*>(?:<svg[\s\S]*?<\/svg>)?<span class="ds-sr-only">[^<]*<\/span><\/span>/g, ""));
+    expect(read(tip)).toBe("2 servers on web ready :3000 api starting :8080 Off: docs, jobs (exited)");
+    // The mark is its glyph: the word beside it is the one said.
+    expect(tip).toContain('data-server-state="ready"');
+    expect(text(html(<ServersTabTip summary={summarizeTaskServers(task([server({ state: "ready" })]))!} />))).toStartWith("1 server on");
+    expect(text(html(<ServersTabTip summary={summarizeTaskServers(task([server({ state: "stopped" })]))!} />))).toBe("No servers on Off: web");
   });
 
   test("start all and stop all know when there is nothing to do; an unreachable server is restarted, not started", () => {
