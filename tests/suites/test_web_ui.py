@@ -309,6 +309,38 @@ def test_a_task_that_fails_to_save_says_why_beside_the_buttons(
     assert all("400" in e for e in console_errors), console_errors
 
 
+def test_a_criterion_over_the_limit_blocks_saving_until_it_fits(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    def titled(title: str) -> list[dict]:
+        items = client.get("/v1/tasks", params={"projectId": forge_project["id"]}).json()["tasks"]
+        return [i for i in items if i["title"] == title]
+
+    sign_in(page, web_url, org["api_key"])
+    page.get_by_test_id("new-task").click()
+    page.get_by_test_id("task-title").fill("Long criterion")
+    criteria = page.get_by_test_id("task-criteria")
+    criteria.fill("- " + "x" * 2001)
+    expect(page.get_by_text("Criterion 1 is 2,001 characters; each can be at most 2,000.", exact=True)).to_be_visible()
+    expect(page.get_by_test_id("task-save")).to_be_disabled()
+    expect(page.get_by_test_id("task-create-deliver")).to_be_disabled()
+    criteria.press("ControlOrMeta+Enter")
+    expect(page.get_by_test_id("task-title")).to_be_visible()
+    assert titled("Long criterion") == []
+
+    # At exactly the limit it saves, whole, with Ctrl/⌘+Enter: created once, not delivered.
+    criteria.fill("- " + "x" * 2000)
+    expect(page.get_by_test_id("task-save")).to_be_enabled()
+    criteria.press("ControlOrMeta+Enter")
+    expect(page.get_by_test_id("task-screen")).to_be_visible()
+    saved = titled("Long criterion")
+    assert len(saved) == 1
+    detail = client.get(f"/v1/tasks/{saved[0]['id']}").json()
+    assert detail["acceptanceCriteria"] == ["x" * 2000]
+    assert detail["runs"] == []
+    assert console_errors == []
+
+
 def test_closing_a_task_with_writing_in_it_asks_first(
     page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list
 ):
