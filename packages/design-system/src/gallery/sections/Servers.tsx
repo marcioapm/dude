@@ -6,7 +6,7 @@ import { Duration } from "../../components/Numbers.tsx";
 import { PersonAvatar } from "../../components/PersonAvatar.tsx";
 import { PreviewAlsoRunning, PreviewStages, ServersMoved } from "../../components/PreviewStages.tsx";
 import { EnvVarRows, ServerRecipeDialog, ServerRecipeTable, ServerUrlPreview } from "../../components/ServerRecipe.tsx";
-import { AutostartMark, ServerList, ServerRecipeRow, ServerRow, ServersPanel, ServersRecipesPreview, ServersRunLine, ShortId, TerminalLink } from "../../components/ServerRow.tsx";
+import { AutostartMark, ServerList, ServerRecipeRow, ServerRow, ServersPanel, ServersRecipesPreview, ServersRunLine, ServersTabTip, ShortId, TerminalLink } from "../../components/ServerRow.tsx";
 import { ServerStateDot, ServerStateMark } from "../../components/ServerStateMark.tsx";
 import { ServersSummary, ServersSummaryRow } from "../../components/ServersSummary.tsx";
 import { HostChips } from "../../components/HostChips.tsx";
@@ -18,7 +18,8 @@ import { FormActions } from "../../primitives/Layout.tsx";
 import { RowMenu } from "../../primitives/RowMenu.tsx";
 import { Select } from "../../primitives/Select.tsx";
 import { SERVER_DISPLAY_STATES } from "../../tokens/servers.ts";
-import { canStartAny, canStopAny, describeServer, isMoving, serverLogLines } from "../../util/servers.ts";
+import { canStartAny, canStopAny, describeServer, isMoving, serverLogLines, summarizeTaskServers } from "../../util/servers.ts";
+import { Tab, TabList, Tabs } from "../../primitives/Tabs.tsx";
 import { toggled } from "../../util/sets.ts";
 import { formatTimestamp } from "../../util/format.ts";
 import { egressProblem, type PreviewStage, type RunServer, type TaskServers } from "@dude/domain";
@@ -239,6 +240,21 @@ export function ServersSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
 
+      <Block id="sv-tab" title="The task's Servers tab" note={<>Its count is the servers that are on (starting, ready or unreachable), none at zero; after it the first bad server's dot, else the breathing dot while one starts or a preview comes up. Hover or focus a Servers tab for its tooltip, from the same <code>summarizeTaskServers</code>.</>}>
+        <Panes mode={mode}>
+          <Col>
+            <States items={TAB_STATES.map(([k, data]) => [k, <TabDemo key={k} data={data} />])} />
+            <Label>The tooltip, open</Label>
+            <Row style={{ alignItems: "flex-start", gap: 16 }}>
+              {TAB_STATES.map(([k, data]) => {
+                const summary = summarizeTaskServers(data);
+                return summary ? <span key={k} className={styles["serversTip"]}><ServersTabTip summary={summary} /></span> : null;
+              })}
+            </Row>
+          </Col>
+        </Panes>
+      </Block>
+
       <Block id="sv-stages" title="PreviewStages / ServersMoved / PreviewAlsoRunning" note="A branch preview coming up, stage by stage; the notice when a run moved host and its servers stopped with the old placement; and a preview live behind the agent run the panel shows, with its Stop.">
         <Panes mode={mode}>
           <Col>
@@ -281,6 +297,33 @@ export function ServersSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
     </Section>
+  );
+}
+
+/** The tab's four states, each from a scenario's servers. */
+const TAB_STATES: ReadonlyArray<readonly [string, TaskServers]> = [
+  ["0 on", serverScenarios.b],
+  ["2 on", { ...serverScenarios.a, servers: serverScenarios.a.servers.map((x) => (x.name === "api" ? { ...x, state: "ready" as const, readySince: x.since } : x)) }],
+  ["1 on, 1 exited", serverScenarios.c],
+  ["starting", serverScenarios.a],
+];
+
+/** A task's tab row with the Servers tab as the app draws it: count, mark and tooltip from one reading. */
+function TabDemo({ data }: { readonly data: TaskServers }) {
+  const summary = summarizeTaskServers(data);
+  const mark = !summary ? null : summary.bad ? <ServerStateDot state={summary.bad.state} label={`${summary.bad.name} ${summary.bad.state}`} />
+    : summary.starting ? <ServerStateDot state="starting" label="Starting" />
+    : summary.moved ? <ServerStateDot state="unreachable" label="Stopped when the run moved" />
+    : null;
+  return (
+    <Tabs defaultValue="overview">
+      <TabList aria-label="Task">
+        <Tab value="overview">Overview</Tab>
+        <Tab value="sessions" count={1}>Sessions</Tab>
+        <Tab value="servers" count={summary && summary.on.length > 0 ? summary.on.length : undefined} trailing={mark}
+          tooltip={summary ? <ServersTabTip summary={summary} /> : undefined}>Servers</Tab>
+      </TabList>
+    </Tabs>
   );
 }
 

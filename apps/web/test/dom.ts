@@ -1,19 +1,15 @@
 /**
- * A browser's globals for the screen tests: a happy-dom window, the
- * fixtures' quiet EventSource, and a way to mount a screen and wait for
- * what it reads. Import it before anything that touches `window`.
+ * For the screen tests: the fixtures' quiet EventSource, and a way to
+ * mount a screen and wait for what it reads. The browser's globals are
+ * the design system's preload (bunfig.toml).
  */
-
-import { GlobalRegistrator } from "@happy-dom/global-registrator";
-
-if (!("window" in globalThis)) GlobalRegistrator.register({ url: "http://localhost/" });
-// React reports updates outside act() unless it is told this is a test.
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const { act } = await import("react");
 const { createRoot } = await import("react-dom/client");
 const { installFixtureStream } = await import("../src/fixtures/client.ts");
 installFixtureStream();
+// The preload's `window` is happy-dom's own object, apart from the global scope the code reads.
+(globalThis as { EventSource?: unknown }).EventSource = (window as unknown as { EventSource: unknown }).EventSource;
 
 /** Mount `element` into a fresh container; `unmount` takes it down. */
 export async function mount(element: React.ReactNode): Promise<{ container: HTMLElement; unmount: () => Promise<void> }> {

@@ -223,3 +223,40 @@
     margin-left: 0;
   }
 }
+
+/* The Servers tab's tooltip, on the tooltip's inverse ink: the marks keep
+   their glyphs and take the tooltip's ink, since a tone's text colour is
+   made for the page's surface, not the tooltip's. */
+.tip {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+  min-width: 180px;
+}
+.tipHead {
+  font-weight: var(--ds-weight-semibold);
+  margin-bottom: var(--ds-space-2);
+}
+.tipRow {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  font-variant-numeric: tabular-nums;
+}
+.tipMark {
+  --sm-fg: currentColor;
+}
+.tipName {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  font-weight: var(--ds-weight-medium);
+}
+.tipPort {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  opacity: 0.7;
+}
+.tipOff {
+  margin-top: var(--ds-space-4);
+  opacity: 0.7;
+}

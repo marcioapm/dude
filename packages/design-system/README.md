@@ -791,6 +791,35 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
   `StatusBadge.module.css`) so reduced motion freezes it in a legible state.
   Loop periods come from `--ds-cadence-*`, never from a literal.
 
+### Tabs
+
+- A page's tabs are `Tabs` > `TabList` > `Tab`. A tab says how many with
+  `count` (a number, nothing at zero), and more than a number with
+  `trailing` — one mark, a `ServerStateDot` or a `.ds-live-dot`.
+- What the count stands for goes in `tooltip`: the tab is wrapped in a
+  `Tooltip` below it, which opens on hover and on keyboard focus and
+  closes on a press. The tab keeps its role, its selected state (its own
+  `data-state`, not the tooltip's) and its place in the ←→ walk; a focus
+  that selects it also shows the tip. The tooltip is supplementary: the
+  name and count are still the tab's label. Never a native `title`.
+
+### Servers
+
+- **The task's Servers tab counts what is on**: servers with a process
+  running, `starting`, `ready` or `unreachable` (`isOn`). The label is
+  "Servers" and that number as the tab's count, with no count at zero.
+  After it, one mark: the first `exited` or `unreachable` server's danger
+  or attention dot; else the breathing `starting` dot while a server
+  starts or a branch preview comes up; else the attention dot for servers
+  a move stopped.
+- Its tooltip (`ServersTabTip`) is headed "N servers on" or "No servers
+  on", then a line per server on — its mark (icon only), its name in
+  mono, its state's word and `:port` — then "Off: a, b" in muted ink for
+  the rest (an exited one says so). With no run, the project's servers
+  are all off. With no run and no servers defined the tab has no tooltip.
+  Count, mark and tip come from one `summarizeTaskServers`, so they never
+  disagree.
+
 ### Do / Don't
 
 | Do | Don't |
@@ -829,7 +858,8 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 
 `src/primitives/` — Button, IconButton, Input, Textarea, Select, Checkbox,
 Badge, Card, Table (THead/TBody/Tr/Th/Td/TableEmpty), Tabs (underline for a
-page, segmented in a toolbar; a tab can carry a count), Dialog, Toast,
+page, segmented in a toolbar; a tab can carry a count, a trailing mark and
+a `tooltip`), Dialog, Toast,
 Tooltip, RowMenu (+ `rowMenuOpeners`), Skeleton/SkeletonLines/Spinner,
 EmptyState, ScrollArea.
 
@@ -952,6 +982,10 @@ EmptyState, ScrollArea.
 - **ServerStateMark / ServerStateDot** — a server's state in StatusMark's
   grammar; `src/tokens/servers.ts` is the vocabulary (lux's five states
   and `waiting`, for a preview's spec server before its turn).
+- **ServersTabTip** and `summarizeTaskServers` — the task's Servers tab:
+  one reading of its servers (which are on, which are off, the first bad
+  one, whether something is starting) gives the tab its count and mark and
+  the tooltip its lines. The rules are under *Servers*.
 - **ServerRow / ServerList / ServerRecipeRow** — one row per server in
   StepList's grammar: mono name and port, the state with what it means
   (`describeServer` turns lux's Server into the words, in one place), the

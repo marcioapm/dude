@@ -1,0 +1,4 @@
+[test]
+# A browser's globals before any module loads (the design system's):
+# Radix decides at import time whether it has a document.
+preload = ["../../packages/design-system/test/dom.ts"]

@@ -5,7 +5,8 @@
  * production builds, which never load this module. Reads come from
  * `data.ts`; writes to servers change what the next read returns, so
  * Start, Stop and Preview branch move things as a backend would, if a
- * little faster.
+ * little faster. `dude.fixtures.run` in localStorage turns the task's run
+ * paused, or into a branch preview (no agent), for the screens' other states.
  */
 
 import type { ServerScenario } from "@dude/design-system/fixtures/servers";
@@ -83,6 +84,7 @@ export class FixtureClient extends ApiClient {
   #task: TaskDetail;
   #events: PersistedEvent[];
   #nav: NavProject[];
+  #runPatch: Partial<RunDetail> = {};
 
   constructor(scenario: ServerScenario) {
     super({ apiKey: "fixtures" });
@@ -93,6 +95,14 @@ export class FixtureClient extends ApiClient {
     this.#previews = { image: null, egress: [...previewEgress], idleTimeoutMinutes: 30 };
     this.#task = taskFor(scenario);
     this.#events = eventsFor(scenario);
+    const as = localStorage.getItem("dude.fixtures.run");
+    if (as === "paused" || as === "preview") {
+      const patch: Partial<RunDetail> = as === "paused" ? { status: "paused" } : { kind: "preview", phase: null, role: null };
+      this.#runPatch = patch;
+      this.#task = { ...this.#task, runs: this.#task.runs.map((r) => (r.id === RUN_ID ? { ...r, ...patch } : r)) };
+      // A preview has no agent: nothing of the implementer's conversation.
+      if (as === "preview") this.#events = this.#events.filter((e) => e.runId !== RUN_ID || e.eventType === "run.created" || e.eventType === "run.started");
+    }
     this.#nav = navigationFor(scenario);
     ledger = (params) => this.#ledger(params);
   }
@@ -140,7 +150,9 @@ export class FixtureClient extends ApiClient {
   }
   override getRun(id: string): Promise<RunDetail> {
     const detail = runDetailFor(this.#scenario);
-    return id === RUN_ID || this.#task.runs.some((r) => r.id === id) ? Promise.resolve({ ...detail, ...(this.#task.runs.find((r) => r.id === id) ?? {}) } as RunDetail) : Promise.reject(new ApiError(404, "not_found", "No such run."));
+    return id === RUN_ID || this.#task.runs.some((r) => r.id === id)
+      ? Promise.resolve({ ...detail, ...(id === RUN_ID ? this.#runPatch : {}), ...(this.#task.runs.find((r) => r.id === id) ?? {}) } as RunDetail)
+      : Promise.reject(new ApiError(404, "not_found", "No such run."));
   }
   override getProject(id: string): Promise<ProjectDetail> {
     return id === PROJECT.id ? Promise.resolve(PROJECT) : Promise.reject(new ApiError(404, "not_found", "No such project."));

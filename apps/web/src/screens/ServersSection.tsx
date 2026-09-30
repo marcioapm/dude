@@ -20,12 +20,13 @@ import {
   ServersPanel,
   ServersRecipesPreview,
   ServersRunLine,
+  ServersTabTip,
   ShortId,
   StatusMark,
   TerminalLink,
 } from "@dude/design-system/components";
-import { anyMoving, canStartAny, canStop, canStopAny, describeServer, firstName, formatTimestamp, isMoving, PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES, serverLogLines, summarizeServers, toggled, useNow, type ServersRun } from "@dude/design-system";
-import { Button, Callout, Dialog, EmptyState, FormActions, RowMenu, Spinner, TabCount } from "@dude/design-system/primitives";
+import { anyMoving, canStartAny, canStop, canStopAny, describeServer, firstName, formatTimestamp, isMoving, PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES, serverLogLines, summarizeTaskServers, toggled, useNow, type ServersRun } from "@dude/design-system";
+import { Button, Callout, Dialog, EmptyState, FormActions, RowMenu, Spinner } from "@dude/design-system/primitives";
 import { ALL_STATUSES } from "@dude/design-system/tokens";
 import type { RunStatus, TaskServers } from "@dude/domain";
 import type { LogLine } from "@dude/design-system/components";
@@ -278,13 +279,24 @@ export const ServersSection = memo(function ServersSection({ client, servers, ta
   );
 });
 
-/** What the Servers tab shows beside its name: the first bad server as a dot, else how many are ready. */
-export function serversTabTrailing(data: TaskServers | null): ReactNode {
-  if (!data?.run) return null;
-  const { bad, ready } = summarizeServers(data.servers);
-  if (bad) return <ServerStateDot state={bad.state} label={`${bad.name} ${bad.state}`} />;
-  if (ready > 0) return <TabCount>{ready} ready</TabCount>;
-  if (data.run.kind === "preview" && data.run.previewStage !== "ready" && runIsLive(data.run)) return <ServerStateDot state="starting" label="Preview starting" />;
-  if (data.moved) return <ServerStateDot state="unreachable" label="Stopped when the run moved" />;
-  return null;
+/**
+ * The Servers tab's count, mark and tooltip, from one reading of the
+ * task's servers: how many are on (no count at none), the first bad
+ * server's dot, else a breathing dot while something starts, else the
+ * dot for servers a move stopped; the tooltip names each. Nothing at all
+ * when no run serves the task and the project defines no servers.
+ */
+export function serversTab(data: TaskServers | null): { count?: number; trailing?: ReactNode; tooltip?: ReactNode } {
+  const summary = summarizeTaskServers(data);
+  if (!summary) return {};
+  const { on, bad, starting, booting, moved } = summary;
+  const trailing = bad ? <ServerStateDot state={bad.state} label={`${bad.name} ${bad.state}`} />
+    : starting ? <ServerStateDot state="starting" label={booting ? "Preview starting" : "Starting"} />
+    : moved ? <ServerStateDot state="unreachable" label="Stopped when the run moved" />
+    : undefined;
+  return {
+    ...(on.length > 0 ? { count: on.length } : {}),
+    ...(trailing ? { trailing } : {}),
+    tooltip: <ServersTabTip summary={summary} />,
+  };
 }
