@@ -83,6 +83,13 @@ type Behaviour struct {
 	// Files written into its checkout in the turn that finishes, after a
 	// Hang is woken.
 	FinishEdits map[string]string
+	// Every turn fails at once with this error, as lux's ACP adapter reports
+	// a session/prompt the agent answered with a JSON-RPC error (a model it
+	// cannot reach): turn_end carries it, formatted "session/prompt:
+	// <message> (<code>)", and the agent goes idle.
+	TurnError string
+	// A Hang is woken by any input, not only one after a resume.
+	WakeOnInput bool
 }
 
 type Run struct {
@@ -114,6 +121,9 @@ type Run struct {
 
 	// Its servers (servers.go).
 	servers []*server
+	// What GET /cost answers; nil is lux's answer before any plugin priced
+	// anything: pending, no amounts.
+	cost *lux.RunCost
 
 	// Starts of the Run, as lux lists them; the last is the current one.
 	placements []*placement
@@ -288,8 +298,8 @@ func (s *Server) deliverQueued(run *Run) {
 	s.consume(run)
 	// Input after a resume is what a paused agent was waiting for: it
 	// finishes its work this time. Without input it waits, as a real one
-	// does.
-	run.woken = run.Resumed > 0
+	// does. WakeOnInput has any input wake it, a nudge included.
+	run.woken = run.Resumed > 0 || run.behavior.WakeOnInput
 	s.turn(run)
 }
 
@@ -463,6 +473,53 @@ func (s *Server) Crash(id string) {
 	}
 }
 
+// SetCost sets what lux's cost API answers for a Run, as its cost plugins
+// would have priced it.
+func (s *Server) SetCost(id string, cost lux.RunCost) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		cost.RunID = id
+		// lux always sends every amount; a test that set none means zero.
+		for i := range cost.ByFamily {
+			f := &cost.ByFamily[i]
+			zeroIfUnset(&f.Amount)
+			zeroIfUnset(&f.Final, &f.Estimate)
+		}
+		for i := range cost.Totals {
+			t := &cost.Totals[i]
+			zeroIfUnset(&t.Amount, &t.Final, &t.Estimate)
+		}
+		for i := range cost.Lines {
+			zeroIfUnset(&cost.Lines[i].Amount)
+		}
+		run.cost = &cost
+	}
+}
+
+func zeroIfUnset[T ~string](amounts ...*T) {
+	for _, a := range amounts {
+		if *a == "" {
+			*a = "0"
+		}
+	}
+}
+
+func (s *Server) getCost(w http.ResponseWriter, r *http.Request) {
+	run := s.find(w, r)
+	if run == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := lux.RunCost{RunID: run.ID, Status: lux.CostPending, Basis: "list",
+		Totals: []lux.CostAmount{}, ByFamily: []lux.FamilyCost{}, Lines: []lux.CostLine{}, Sources: []lux.CostSource{}}
+	if run.cost != nil {
+		out = *run.cost
+	}
+	writeJSON(w, 200, out)
+}
+
 // Forget drops every Run, as a lux that lost its data would.
 func (s *Server) Forget() {
 	s.mu.Lock()
@@ -494,6 +551,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/runs/{id}/servers/{name}/{action}", s.serverAction)
 	mux.HandleFunc("DELETE /v1/runs/{id}/servers/{name}", s.removeServer)
 	mux.HandleFunc("GET /v1/runs/{id}/servers/{name}/log", s.serverLog)
+	mux.HandleFunc("GET /v1/runs/{id}/cost", s.getCost)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+s.Key {
 			writeErr(w, 401, "unauthorized", "invalid API key")
@@ -556,7 +614,14 @@ func (s *Server) play(run *Run, spec map[string]any, resumed bool) {
 	s.setState(run, "running")
 	if !resumed {
 		for _, repo := range specRepos(spec) {
-			s.luxEvent(run, "git.checkout", map[string]any{"repo": repo.Name, "ref": repo.Ref, "base": head(s.repoPath(repo.URL), repo.Ref)})
+			base := head(s.repoPath(repo.URL), repo.Ref)
+			if base == "" {
+				s.luxEvent(run, "git.clone", map[string]any{"repo": repo.Name, "ref": repo.Ref, "status": "failed", "error": "ref not found"})
+				s.setState(run, "failed")
+				return
+			}
+			s.luxEvent(run, "git.clone", map[string]any{"repo": repo.Name, "ref": repo.Ref, "status": "cloned", "commit": base})
+			s.luxEvent(run, "git.checkout", map[string]any{"repo": repo.Name, "ref": repo.Ref, "base": base})
 		}
 		run.SessionID = fmt.Sprintf("ses_%s", run.ID)
 	}
@@ -596,6 +661,12 @@ func (s *Server) turn(run *Run) {
 	run.busy = true
 	run.openTools = nil
 	b := run.behavior
+	if b.TurnError != "" {
+		s.recordEvent(run, "acp.turn_end", map[string]any{"stopReason": "", "error": b.TurnError})
+		s.recordEvent(run, "lux.activity", map[string]any{"activity": "idle"})
+		run.busy = false
+		return
+	}
 	for _, chunk := range chunks(b.Thought, 7) {
 		s.agent(run, map[string]any{"sessionUpdate": "agent_thought_chunk", "content": map[string]any{"type": "text", "text": chunk}})
 	}

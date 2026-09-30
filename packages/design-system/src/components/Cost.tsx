@@ -1,4 +1,5 @@
 import type { HTMLAttributes } from "react";
+import type { CostOrigin, CostProvenance } from "@dude/domain";
 import { cx } from "../util/cx.ts";
 import { formatDuration, formatTokens, formatUsd } from "../util/format.ts";
 import { Tooltip } from "../primitives/Tooltip.tsx";
@@ -15,6 +16,68 @@ export interface CostProps extends Omit<HTMLAttributes<HTMLSpanElement>, "childr
   readonly machineMs?: number | undefined;
   readonly size?: "sm" | "md" | "lg" | undefined;
   readonly tone?: "default" | "secondary" | "muted" | undefined;
+  /**
+   * Who priced the tokens: `"lux"` (the runtime's metering) or `"agent"`
+   * (the harness's own figure, an estimate). Absent: the tooltip says nothing
+   * of where the numbers came from.
+   */
+  readonly tokensFrom?: CostOrigin | undefined;
+  /** Who priced the machine time: `"lux"` or dude's own `"estimate"`. */
+  readonly machineFrom?: CostProvenance["machine"] | undefined;
+  /** lux has settled its figures (its cost is final). Only read for a part from lux. */
+  readonly settled?: boolean | undefined;
+}
+
+/** "· reported by lux" for a settled lux figure; every other origin is an estimate. */
+function tokensNote(from: CostOrigin | undefined, settled: boolean): string {
+  if (from === undefined) return "";
+  if (from === "lux") return settled ? " · reported by lux" : " · estimate, lux settling";
+  return " · estimate";
+}
+
+function machineNote(from: CostProvenance["machine"] | undefined, settled: boolean): string {
+  if (from === undefined) return "";
+  if (from === "lux") return settled ? " · lux" : " · lux, settling";
+  return " · estimated";
+}
+
+type CostWordsInput = Pick<CostProps, "tokensUsd" | "machineUsd" | "tokens" | "machineMs" | "tokensFrom" | "machineFrom" | "settled">;
+
+interface CostWords {
+  readonly total: number;
+  readonly machineKnown: boolean;
+  /** The tokens' percentage of the total, for the hairline; all tokens at $0. */
+  readonly share: number;
+  /** The tooltip's lines: total, tokens, machine. */
+  readonly lines: [string, string, string];
+  readonly label: string;
+}
+
+/**
+ * What a known cost says, in words: the tooltip's lines and the
+ * aria-label, built from the same parts so they cannot say different
+ * things.
+ */
+export function costWords({ tokensUsd, machineUsd, tokens, machineMs, tokensFrom, machineFrom, settled = false }: CostWordsInput): CostWords {
+  const tok = tokensUsd ?? 0;
+  const machineKnown = machineUsd !== null && machineUsd !== undefined;
+  const mach = machineKnown ? machineUsd : 0;
+  const total = tok + mach;
+  const share = total > 0 ? Math.round((tok / total) * 100) : 100;
+  const tokensPart = `model tokens ${tokensUsd === null ? "not reported" : formatUsd(tok)}`
+    + (tokens !== undefined ? ` (${formatTokens(tokens)} tokens)` : "")
+    + (tokensUsd === null ? "" : tokensNote(tokensFrom, settled));
+  const machinePart = machineKnown
+    ? `machine time ${formatUsd(mach)}${machineMs !== undefined ? ` (${formatDuration(machineMs)})` : ""}${machineNote(machineFrom, settled)}`
+    : null;
+  const line = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+  return {
+    total,
+    machineKnown,
+    share,
+    lines: [`${formatUsd(total)} total`, line(tokensPart), machinePart ? line(machinePart) : "Machine time not counted yet"],
+    label: `${formatUsd(total)}: ${tokensPart}${machinePart ? `, ${machinePart}` : ""}`,
+  };
 }
 
 /**
@@ -25,32 +88,28 @@ export interface CostProps extends Omit<HTMLAttributes<HTMLSpanElement>, "childr
  * Until machine time is measured the total is the tokens alone — the
  * hairline is one colour and the tooltip says machine time is not
  * counted yet. An unreported cost is "—" with a title, never $0.00.
+ *
+ * With `tokensFrom` / `machineFrom` each part also says where it came
+ * from and whether it is settled: only a lux figure lux has made final is
+ * "reported"; the rest are estimates and say so.
  */
-export function Cost({ tokensUsd, machineUsd, tokens, machineMs, size = "md", tone = "default", className, ...rest }: CostProps) {
-  if (tokensUsd === null && (machineUsd === null || machineUsd === undefined)) {
+export function Cost({ tokensUsd, machineUsd, tokens, machineMs, size = "md", tone = "default",
+  tokensFrom, machineFrom, settled, className, ...rest }: CostProps) {
+  const words = costWords({ tokensUsd, machineUsd, tokens, machineMs, tokensFrom, machineFrom, settled });
+  if (tokensUsd === null && !words.machineKnown) {
     return (
       <span className={cx(styles["unknown"], styles[size], className)} title="Cost not reported" aria-label="Cost not reported" {...rest}>
         —
       </span>
     );
   }
-  const tok = tokensUsd ?? 0;
-  const machineKnown = machineUsd !== null && machineUsd !== undefined;
-  const mach = machineKnown ? machineUsd : 0;
-  const total = tok + mach;
-  const share = total > 0 ? Math.round((tok / total) * 100) : 100;
+  const { total, machineKnown, share } = words;
+  const [totalLine, tokensLine, machineLine] = words.lines;
   const tip = (
     <span className={styles["tip"]}>
-      <span className={styles["tipTotal"]}>{formatUsd(total)} total</span>
-      <span>
-        Model tokens {tokensUsd === null ? "not reported" : formatUsd(tok)}
-        {tokens !== undefined ? ` (${formatTokens(tokens)} tokens)` : ""}
-      </span>
-      <span>
-        {machineKnown
-          ? `Machine time ${formatUsd(mach)}${machineMs !== undefined ? ` (${formatDuration(machineMs)})` : ""}`
-          : "Machine time not counted yet"}
-      </span>
+      <span className={styles["tipTotal"]}>{totalLine}</span>
+      <span>{tokensLine}</span>
+      <span>{machineLine}</span>
     </span>
   );
   return (
@@ -58,7 +117,7 @@ export function Cost({ tokensUsd, machineUsd, tokens, machineMs, size = "md", to
       <span
         className={cx(styles["root"], styles[size], tone !== "default" && styles[tone], className)}
         tabIndex={0}
-        aria-label={`${formatUsd(total)}: model tokens ${formatUsd(tok)}${machineKnown ? `, machine time ${formatUsd(mach)}` : ""}`}
+        aria-label={words.label}
         data-split={machineKnown ? "both" : "tokens"}
         {...rest}
       >

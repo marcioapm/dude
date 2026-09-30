@@ -77,7 +77,7 @@ describe("agentModelConfigSchema", () => {
 
   test("accepts optional tuning and cost fields", () => {
     const parsed = agentModelConfigSchema.parse({
-      model: "m",
+      model: "llm-openai/gpt-test",
       harness: "opencode",
       maxTokens: 1000,
       temperature: 0.2,
@@ -88,8 +88,8 @@ describe("agentModelConfigSchema", () => {
   });
 
   test("rejects out-of-range tuning values", () => {
-    expect(agentModelConfigSchema.safeParse({ model: "m", temperature: 3 }).success).toBe(false);
-    expect(agentModelConfigSchema.safeParse({ model: "m", maxTokens: 0 }).success).toBe(false);
-    expect(agentModelConfigSchema.safeParse({ model: "m", costLimitUsd: -1 }).success).toBe(false);
+    expect(agentModelConfigSchema.safeParse({ model: "llm-openai/gpt-test", temperature: 3 }).success).toBe(false);
+    expect(agentModelConfigSchema.safeParse({ model: "llm-openai/gpt-test", maxTokens: 0 }).success).toBe(false);
+    expect(agentModelConfigSchema.safeParse({ model: "llm-openai/gpt-test", costLimitUsd: -1 }).success).toBe(false);
   });
 });

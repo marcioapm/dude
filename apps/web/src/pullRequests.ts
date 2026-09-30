@@ -8,7 +8,7 @@
  */
 
 import type { PersistedEvent, PullRequest } from "@dude/domain";
-import { prCheckFailed } from "@dude/domain";
+import { CHECK_RUNS_FORBIDDEN, prCheckDiagnostic, prCheckFailed } from "@dude/domain";
 import { plural } from "@dude/design-system";
 
 /** GitHub logins as a person types them: "@cy, bo". */
@@ -40,8 +40,11 @@ export function mergeBlockedBy(pr: PullRequest): string | null {
   if (pr.display === "ready") return null;
   const why: string[] = [];
   const failing = pr.checks.filter(prCheckFailed).map((c) => c.name);
+  const unreadable = prCheckDiagnostic(pr.checks);
   if (pr.checkState === "failing") why.push(failing.length ? `${failing.join(", ")} failing` : "checks failing");
-  if (pr.checkState === "pending") why.push("checks still running");
+  if (unreadable === CHECK_RUNS_FORBIDDEN) why.push("GitHub refused the check-runs read; check the token's Checks: Read permission and its repository/organization access (SSO, token approval)");
+  else if (unreadable) why.push("some checks cannot be read");
+  else if (pr.checkState === "pending") why.push("checks pending");
   if (pr.review === "changes_requested") why.push("changes requested");
   if (pr.review === "pending") why.push("nobody has approved it");
   if (pr.mergeable === "conflicting") why.push("it conflicts with its base");
@@ -95,10 +98,18 @@ export function pullRequestActivity(e: PersistedEvent, named: boolean): PullRequ
     }
     case "pull_request.checks_changed": {
       const failing = Array.isArray(p.failing) ? (p.failing as string[]) : [];
-      if (p.to === "failing") return system(`CI ${failing.length ? `${failing.join(", ")} ` : ""}failed on ${pr}`);
-      if (p.to === "passing") return system(`Checks passed on ${pr}`);
-      if (p.to === "pending") return system(`Checks started on ${pr}`);
-      return null;
+      // Losing or regaining read access is its own line; a verdict that
+      // changed with it is said after it.
+      const access = p.diagnostic && p.diagnostic !== p.fromDiagnostic
+        ? `GitHub refused the check-runs read on ${pr}`
+        : p.fromDiagnostic && !p.diagnostic ? `GitHub check runs on ${pr} can be read again` : null;
+      const verdict = p.to === p.from ? null
+        : p.to === "failing" ? `CI ${failing.length ? `${failing.join(", ")} ` : ""}failed on ${pr}`
+        : p.to === "passing" ? `Checks passed on ${pr}`
+        : p.to === "pending" ? `Checks pending on ${pr}`
+        : null;
+      const line = [access, verdict].filter(Boolean).join("; ");
+      return line ? system(line) : null;
     }
     case "pull_request.pushed":
       return person(str(p.author), `${str(p.author) || "Someone"} pushed to ${pr} on GitHub — the next fix starts from it`);

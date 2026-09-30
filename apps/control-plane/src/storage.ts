@@ -9,6 +9,7 @@
 
 import { S3Client } from "bun";
 import { HttpError } from "./api/http.ts";
+import { config } from "./config.ts";
 
 type Credentials = { accessKeyId: string; secretAccessKey: string; sessionToken: string; expires: number };
 let client: S3Client | undefined;
@@ -141,8 +142,7 @@ async function roleClient(bucket: string): Promise<S3Client> {
       if (!roleS3 || !roleCredentials || !sameCredentials(roleCredentials, credentials)) {
         roleS3 = new S3Client({
           bucket,
-          region: process.env.DUDE_S3_REGION || "us-east-1",
-          ...(process.env.DUDE_S3_ENDPOINT ? { endpoint: process.env.DUDE_S3_ENDPOINT } : {}),
+          ...location(),
           accessKeyId: credentials.accessKeyId,
           secretAccessKey: credentials.secretAccessKey,
           sessionToken: credentials.sessionToken,
@@ -164,21 +164,25 @@ async function roleClient(bucket: string): Promise<S3Client> {
   return roleS3!;
 }
 
+function location(): { region: string; endpoint?: string } {
+  const endpoint = config().string("DUDE_S3_ENDPOINT");
+  return { region: config().string("DUDE_S3_REGION")!, ...(endpoint ? { endpoint } : {}) };
+}
+
 function configured(bucket: string, accessKeyId: string, secretAccessKey: string): S3Client {
   return client ??= new S3Client({
     bucket,
-    region: process.env.DUDE_S3_REGION || "us-east-1",
-    ...(process.env.DUDE_S3_ENDPOINT ? { endpoint: process.env.DUDE_S3_ENDPOINT } : {}),
+    ...location(),
     accessKeyId,
     secretAccessKey,
   });
 }
 
 async function required(): Promise<S3Client> {
-  const bucket = process.env.DUDE_S3_BUCKET;
+  const bucket = config().string("DUDE_S3_BUCKET");
   if (!bucket) throw new HttpError(503, "photo storage is not configured (DUDE_S3_BUCKET)", "storage_unconfigured");
-  const accessKeyId = process.env.DUDE_S3_ACCESS_KEY;
-  const secretAccessKey = process.env.DUDE_S3_SECRET_KEY;
+  const accessKeyId = config().string("DUDE_S3_ACCESS_KEY");
+  const secretAccessKey = config().string("DUDE_S3_SECRET_KEY");
   if (accessKeyId || secretAccessKey) {
     if (!accessKeyId || !secretAccessKey) throw new Failure("CredentialsIncomplete");
     return configured(bucket, accessKeyId, secretAccessKey);
@@ -208,7 +212,7 @@ export async function getObject(key: string): Promise<ArrayBuffer | null> {
 
 /** Remove an object, best effort: one left behind costs a few KB, never a wrong face. */
 export async function deleteObject(key: string): Promise<void> {
-  if (!process.env.DUDE_S3_BUCKET) return;
+  if (!config().string("DUDE_S3_BUCKET")) return;
   try {
     await (await required()).delete(key);
   } catch (err) {

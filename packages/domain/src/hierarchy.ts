@@ -39,12 +39,23 @@ export type Effort = z.infer<typeof effortSchema>;
 /** Running time allowed per session, in minutes: up to a week. */
 export const timeLimitMinutesSchema = z.number().int().min(1).max(10_080);
 
+export const MODEL_PROVIDERS = ["llm-anthropic", "llm-openai"] as const;
+// Explicit exceptions for orchestrator/internal/fakeagent's test harness, not image providers.
+export const TEST_HARNESS_MODELS = ["fake/scripted", "fake/hang", "fake/tools", "fake/request", "fake/wait", "fake/live", "fake/ask"] as const;
+export const MODEL_ACCEPTED_FORM = `model must be ${MODEL_PROVIDERS.map((provider) => `${provider}/<model>`).join(" or ")} (non-empty model, no whitespace or extra slash, at most 200 characters); test harness exceptions: ${TEST_HARNESS_MODELS.join(", ")}`;
+export const modelSelectionSchema = z.string().refine((value) => {
+  if (value.length > 200) return false;
+  if ((TEST_HARNESS_MODELS as readonly string[]).includes(value)) return true;
+  const [provider, model, extra] = value.split("/");
+  return (MODEL_PROVIDERS as readonly string[]).includes(provider ?? "") && Boolean(model) && extra === undefined && !/\s/u.test(value);
+}, MODEL_ACCEPTED_FORM);
+
 export const agentModelConfigSchema = z.object({
   /**
    * Optional at each layer: a project that changes only a role's effort
    * keeps its organization's model (resolveAgentModel, field by field).
    */
-  model: z.string().min(1).optional(),
+  model: modelSelectionSchema.optional(),
   harness: z.string().min(1).optional(),
   /** Overrides the harness default when set. */
   maxTokens: z.number().int().positive().optional(),
@@ -490,13 +501,18 @@ export const pullRequestStateSchema = z.enum(["draft", "open", "merged", "closed
 export const checkStateSchema = z.enum(["pending", "passing", "failing", "unknown"]);
 export const reviewStateSchema = z.enum(["pending", "approved", "changes_requested"]);
 
-/** A check on a pull request's head, by the name GitHub shows (`PrCheck`). */
+/**
+ * A check on a pull request's head, by the name GitHub shows (`PrCheck`).
+ * An entry with `diagnostic` is no check but a source that could not be
+ * read (`prCheckDiagnostic`).
+ */
 export const prCheckSchema = z.object({
   name: z.string(),
   status: z.string(),
   conclusion: z.string().nullable(),
   url: z.string().nullable().optional(),
   durationMs: z.number().nullable().optional(),
+  diagnostic: z.string().nullable().optional(),
 });
 /** A reviewer's latest word (`PrReview`); `REQUESTED` for one asked who has not answered. */
 export const prReviewSchema = z.object({ login: z.string(), state: z.string(), submittedAt: z.string().nullable().optional() });
@@ -543,7 +559,7 @@ export type PullRequest = z.infer<typeof pullRequestSchema>;
 /**
  * The one state a pull request is shown as, most pressing first: merged or
  * closed says it is over; then what stands between it and a merge, in the
- * order a person deals with it (red CI, CI still running, nobody has
+ * order a person deals with it (red CI, CI pending, nobody has
  * looked, changes asked for, a conflict, open threads); then ready. The
  * rest of what is true goes in the chip's tooltip.
  */
@@ -569,6 +585,29 @@ export interface PrCheck {
   conclusion: string | null;
   url?: string | null | undefined;
   durationMs?: number | null | undefined;
+  /** Set on an entry that says why checks could not be read; it is not a check. */
+  diagnostic?: string | null | undefined;
+}
+
+/** GitHub refused the token the check-runs listing: CI may exist that dude cannot see. */
+export const CHECK_RUNS_FORBIDDEN = "check_runs_forbidden";
+
+/** The first diagnostic in a check list, or null. */
+export function prCheckDiagnostic(checks: PrDisplayInput["checks"]): string | null {
+  if (typeof checks === "string") return null;
+  return checks.find((c) => c.diagnostic)?.diagnostic ?? null;
+}
+
+/** The checks GitHub reported, without diagnostic entries: what rows and counts are made of. */
+export function prActualChecks(checks: ReadonlyArray<PrCheck>): PrCheck[] {
+  return checks.filter((c) => !c.diagnostic);
+}
+
+/** Why the checks could not all be read, in a person's words. */
+export function prCheckDiagnosticReason(code: string): string {
+  return code === CHECK_RUNS_FORBIDDEN
+    ? "GitHub refused the check-runs read; check the token's Checks: Read permission and its repository/organization access (SSO, token approval)."
+    : "Some GitHub checks cannot be read.";
 }
 
 /** A review as GitHub reports it (`reviews_json`); each person's latest verdict counts. */

@@ -18,6 +18,7 @@ would.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -105,6 +106,7 @@ class FakeGitHub:
         self.updates: list[int] = []
         self.jobs_rerun: list[int] = []
         self.review_requests: list[tuple[int, list[str]]] = []
+        self.receive_requests: list[str] = []
 
     def add_repository(self, repo: str) -> "FakeGitHub":
         """Another repository, served alongside this one: same owner, same
@@ -147,7 +149,7 @@ class FakeGitHub:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        self._server = ThreadingHTTPServer(("127.0.0.1", self.api_port), self._handler())
+        self._server = ThreadingHTTPServer((self.listen, self.api_port), self._handler())
         threading.Thread(target=self._server.serve_forever, daemon=True).start()
         self._wait_for_daemon()
 
@@ -167,7 +169,7 @@ class FakeGitHub:
 
     @property
     def api_url(self) -> str:
-        return f"http://127.0.0.1:{self.api_port}"
+        return f"http://{self.listen}:{self.api_port}"
 
     def _seed(self, suffix: str = "") -> None:
         seed = self.root / f"seed-{self.owner}{suffix}"
@@ -513,6 +515,23 @@ class FakeGitHub:
 
             def do_GET(self) -> None:
                 path, _, query = self.path.partition("?")
+                if m := re.fullmatch(rf"/{root.owner}/([^/]+)\.git/info/refs", path):
+                    if m[1] != root.repo and m[1] not in root.siblings:
+                        return self._send(404, {"message": "Not Found"})
+                    with root._lock:
+                        root.receive_requests.append(self.path)
+                    expected = "Basic " + base64.b64encode(b"x-access-token:fake-token").decode()
+                    if self.headers.get("authorization") != expected:
+                        return self._send(401, {"message": "Bad credentials"})
+                    if query != "service=git-receive-pack":
+                        return self._send(400, {"message": "Expected receive-pack discovery"})
+                    data = b"001f# service=git-receive-pack\n0000"
+                    self.send_response(200)
+                    self.send_header("content-type", "application/x-git-receive-pack-advertisement")
+                    self.send_header("content-length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
                 since = None
                 if m := re.search(r"since=([^&]+)", query):
                     from urllib.parse import unquote

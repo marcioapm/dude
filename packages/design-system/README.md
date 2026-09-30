@@ -92,7 +92,11 @@ behind all of these, reached when something looks off.
    `secondary` (any other action), `quiet` (row and toolbar actions) and
    `danger` (red text; `solid` only inside its own confirmation).
 12. **A cost is a total.** Every cost shown is model tokens plus machine
-   time; the number is the sum and its tooltip gives the parts.
+   time; the number is the sum and its tooltip gives the parts. Given
+   where each part came from (`tokensFrom`, `machineFrom`, `settled`), the
+   tooltip says it: only a figure lux has made final is "reported by lux";
+   one lux is still settling, the harness's, and a machine-rate estimate are
+   each called an estimate. Without them it says nothing of an origin.
 
 ## Styling approach
 
@@ -1014,7 +1018,8 @@ EmptyState, ScrollArea.
   are a `KeyValueList`, values to the right.
 - **SessionList / SessionItem** — a task's sessions, the open one `current`.
 - **FileGallery / FileViewer** — a task's files and their versions.
-- **Cost** — a total, with the tokens / machine split as a hairline.
+- **Cost** — a total, with the tokens / machine split as a hairline, and
+  optionally where each part came from and whether lux has settled it.
 
 ## What is deliberately not here
 
