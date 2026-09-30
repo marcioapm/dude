@@ -150,8 +150,9 @@
   color: var(--ds-color-text-primary);
 }
 /* 16px at the top, so text scrolled under the header is cut in whitespace.
-   A flex column, so a `FormStack fill` (directly or in the form around it)
-   can take the column's height. */
+   A flex column, as a document's body without an aside is, so a
+   `FormStack fill` (directly or in the form around it) can take the
+   column's height. */
 .main {
   min-width: 0;
   overflow: auto;
@@ -159,7 +160,12 @@
   flex-direction: column;
   padding: var(--ds-space-16) var(--ds-space-panel-gap) var(--ds-space-panel-gap);
 }
-.main > form {
+.document .body {
+  display: flex;
+  flex-direction: column;
+}
+.main > form,
+.document .body > form {
   flex: 1 0 auto;
   display: flex;
   flex-direction: column;

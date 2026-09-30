@@ -369,3 +369,32 @@ def test_compact_tightens_a_filled_form_stack_and_leaves_a_plain_one(gallery_pag
     assert gaps["compact"][0] < gaps["comfortable"][0], gaps
     assert gaps["compact"][1] == gaps["comfortable"][1], gaps
     assert console_errors == []
+
+
+def test_a_filling_field_fills_a_document_dialog_without_an_aside(gallery_page: Page, console_errors: list):
+    """The body is the one column: the Note fills it to the body's foot, and grows past it with its text."""
+    gallery_page.set_viewport_size({"width": 1280, "height": 900})
+    gallery_page.get_by_role("link", name="Dialog", exact=True).click()
+    gallery_page.locator("#p-dialog").get_by_role("button", name="Note dialog").first.click()
+    dialog = gallery_page.get_by_role("dialog", name="New note")
+    expect(dialog).to_be_visible()
+    gallery_page.wait_for_function(
+        "document.querySelector('[role=dialog]').getAnimations().every(a => a.playState === 'finished')")
+    measure = """() => {
+      const note = document.querySelector('[data-testid="note-body"]');
+      const frame = note.closest('[data-mode]');
+      let body = frame.parentElement;
+      while (getComputedStyle(body).overflowY !== 'auto') body = body.parentElement;
+      const b = body.getBoundingClientRect(), cs = getComputedStyle(body);
+      return { frameBottom: frame.getBoundingClientRect().bottom, bodyInnerBottom: b.top + body.clientHeight - parseFloat(cs.paddingBottom),
+               frameHeight: frame.getBoundingClientRect().height, scrollHeight: body.scrollHeight, clientHeight: body.clientHeight };
+    }"""
+    m = gallery_page.evaluate(measure)
+    assert m["scrollHeight"] <= m["clientHeight"], m
+    assert abs(m["bodyInnerBottom"] - m["frameBottom"]) <= 2, m
+    assert m["frameHeight"] > 500, m
+    dialog.get_by_role("textbox", name="Note").fill("\n".join(f"Line {i}" for i in range(80)))
+    m = gallery_page.evaluate(measure)
+    assert m["scrollHeight"] > m["clientHeight"], m
+    gallery_page.keyboard.press("Escape")
+    assert console_errors == []

@@ -376,6 +376,7 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
         <Panes mode={mode}>
           <Row>
             <TaskDialogExample />
+            <NoteDialogExample />
             <DiscardConfirmExample />
             <Dialog
               trigger={<Button>Open dialog</Button>}
@@ -738,6 +739,30 @@ function TaskDialogExample() {
         <MarkdownEditor label="Goal" hint="Why it matters, what exists today, and anything an agent can't guess." value={goal} onChange={setGoal} fill minRows={4} maxLength={65_536} />
         <MarkdownEditor label="Acceptance criteria" hint="One list item per criterion. Reviewers check each one." value={criteria} onChange={setCriteria} minRows={3}
           placeholder="- [ ] A thing that must be true when it's done" summary={<Badge tone="neutral" size="sm">4 criteria</Badge>} />
+      </FormStack>
+    </Dialog>
+  );
+}
+
+/** A document with nothing beside it: the body is the one column, and the field fills it. */
+function NoteDialogExample() {
+  const [note, setNote] = useState("");
+  return (
+    <Dialog
+      trigger={<Button>Note dialog</Button>}
+      size="document"
+      title="New note"
+      footer={
+        <>
+          <DialogClose asChild>
+            <Button variant="quiet">Cancel</Button>
+          </DialogClose>
+          <Button variant="primary">Save</Button>
+        </>
+      }
+    >
+      <FormStack fill>
+        <MarkdownEditor label="Note" value={note} onChange={setNote} fill minRows={4} data-testid="note-body" />
       </FormStack>
     </Dialog>
   );
