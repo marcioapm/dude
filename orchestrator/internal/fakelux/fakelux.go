@@ -126,6 +126,8 @@ type Run struct {
 
 	busy  bool
 	woken bool
+	// Turns the agent finished (went idle after), for TurnsEnded.
+	turnsEnded int
 	// Tool calls started and not finished (KeepToolsOpen), until FinishTools.
 	openTools []string
 	queued    []queuedInput
@@ -336,6 +338,28 @@ func (s *Server) CallsOf(id string) []string {
 		return slices.Clone(run.Calls)
 	}
 	return nil
+}
+
+// TurnsEnded is closed once the Run's agent has finished n turns and gone
+// idle: a lifecycle boundary a test waits on instead of a sleep.
+func (s *Server) TurnsEnded(id string, n int) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for {
+			run := s.runs[id]
+			if run != nil && run.turnsEnded >= n {
+				close(done)
+				return
+			}
+			if run == nil || run.Forgotten || lux.Terminal(run.State) {
+				return
+			}
+			run.cond.Wait()
+		}
+	}()
+	return done
 }
 
 // Crash ends a Run's agent as a dead container would.
@@ -559,6 +583,7 @@ func (s *Server) turn(run *Run) {
 		"inputTokens": 12, "outputTokens": 34, "totalTokens": 1046, "cachedReadTokens": 900, "cachedWriteTokens": 100}})
 	s.recordEvent(run, "lux.activity", map[string]any{"activity": "idle"})
 	run.busy = false
+	run.turnsEnded++
 	if b.ExitAfterTurn {
 		s.setState(run, "failed")
 		return

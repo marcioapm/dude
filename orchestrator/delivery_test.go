@@ -1870,9 +1870,14 @@ func TestASteerSentAsTheTurnEndsIsDeliveredBeforeTheRunFinishes(t *testing.T) {
 			})
 			var runID string
 			_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1`, wi).Scan(&runID)
-			// The fake agent finishes its turn at once; this sweep reads the
-			// Run before anything was followed, and starts the follower.
-			time.Sleep(100 * time.Millisecond)
+			// The fake agent finishes its first turn on its own; once it has,
+			// this sweep reads the Run before anything was followed, and
+			// starts the follower.
+			select {
+			case <-w.lux.TurnsEnded(w.lux.Runs()[0].ID, 1):
+			case <-time.After(10 * time.Second):
+				t.Fatal("the agent's first turn never ended")
+			}
 			if _, err := w.syncer.Sweep(context.Background()); err != nil {
 				t.Fatal(err)
 			}
