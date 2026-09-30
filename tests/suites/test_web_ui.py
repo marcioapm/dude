@@ -324,6 +324,141 @@ def test_on_a_phone_the_task_dialogs_writing_fills_the_screen_before_the_aside(
     assert console_errors == []
 
 
+READ_CRITERIA = "- [ ] SEPA appears on the payment step\n- Invoice only for annual plans,\nnever monthly ones"
+
+
+def _assert_reads_as_the_task(page: Page, title: str) -> None:
+    doc = page.get_by_test_id("task-reading")
+    expect(doc).to_be_visible()
+    expect(doc.get_by_role("heading", level=1)).to_have_text(title)
+    expect(doc.get_by_role("heading", name="What exists today")).to_be_visible()
+    expect(doc.get_by_role("heading", name="Acceptance criteria")).to_be_visible()
+    # The criteria as a checklist of what would be saved: the lazy line is part of the second.
+    checklist = doc.locator("li:has(> [aria-hidden] svg)")
+    expect(checklist).to_have_count(2)
+    expect(checklist.nth(0)).to_have_text("SEPA appears on the payment step")
+    expect(checklist.nth(1)).to_have_text("Invoice only for annual plans, never monthly ones")
+    # The fields and the aside are out of sight, and out of reach.
+    expect(page.get_by_test_id("task-goal")).not_to_be_visible()
+    expect(page.get_by_test_id("task-criteria")).not_to_be_visible()
+    expect(page.get_by_test_id("task-title")).not_to_be_visible()
+    expect(page.get_by_role("complementary", name="Where it sits")).to_have_count(0)
+
+
+def test_read_shows_the_task_as_one_document_and_escape_goes_back_to_writing(
+    page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list
+):
+    sign_in(page, web_url, org["api_key"])
+    page.get_by_test_id("new-task").click()
+    dialog = page.get_by_role("dialog", name="New task")
+    page.get_by_test_id("task-title").fill("Keep SEPA at checkout")
+    goal = page.get_by_test_id("task-goal")
+    goal.fill(GOAL_MARKDOWN + "\n" + "\n".join(f"Line {i}" for i in range(60)))
+    criteria = page.get_by_test_id("task-criteria")
+    criteria.fill(READ_CRITERIA)
+    # The goal in Preview, the column scrolled, the caret in the criteria: all of it comes back.
+    page.get_by_role("tablist", name="Goal view").get_by_role("tab", name="Preview").click()
+    criteria.focus()
+    criteria.evaluate("el => el.setSelectionRange(6, 10)")
+    column = "() => document.querySelector('[data-testid=task-title]').closest('form').parentElement.scrollTop"
+    scrolled = page.evaluate(column)
+    assert scrolled > 0
+
+    read = page.get_by_test_id("task-read")
+    expect(read).to_have_text("Read")
+    read.click()
+    expect(read).to_have_text("Back to writing")
+    _assert_reads_as_the_task(page, "Keep SEPA at checkout")
+    expect(dialog).to_contain_text("back to writing")
+
+    # Escape leaves Read, not the dialog, and asks nothing.
+    page.keyboard.press("Escape")
+    expect(page.get_by_test_id("task-reading")).to_have_count(0)
+    expect(dialog).to_be_visible()
+    expect(page.get_by_role("dialog", name="Discard this task?")).to_have_count(0)
+    expect(read).to_have_text("Read")
+    expect(criteria).to_have_value(READ_CRITERIA)
+    expect(page.get_by_role("tablist", name="Goal view").get_by_role("tab", name="Preview")).to_have_attribute("aria-selected", "true")
+    assert page.evaluate(column) == scrolled
+    expect(criteria).to_be_focused()
+    assert criteria.evaluate("el => [el.selectionStart, el.selectionEnd]") == [6, 10]
+
+    # The shortcut toggles both ways, from inside a field.
+    criteria.press("ControlOrMeta+Shift+r")
+    _assert_reads_as_the_task(page, "Keep SEPA at checkout")
+    page.keyboard.press("ControlOrMeta+Shift+r")
+    expect(page.get_by_test_id("task-reading")).to_have_count(0)
+    expect(criteria).to_be_focused()
+
+    # An empty title reads as untitled; an empty goal and no criteria leave their sections out.
+    page.get_by_test_id("task-title").fill("")
+    goal_view = page.get_by_role("tablist", name="Goal view")
+    goal_view.get_by_role("tab", name="Write").click()
+    goal.fill("")
+    criteria.fill("")
+    read.click()
+    doc = page.get_by_test_id("task-reading")
+    expect(doc.get_by_role("heading")).to_have_count(1)
+    expect(doc.get_by_role("heading", level=1)).to_have_text("Untitled task")
+    assert console_errors == []
+
+
+def test_a_task_saves_from_read_and_a_locked_task_reads_too(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    sign_in(page, web_url, org["api_key"])
+    page.get_by_test_id("new-task").click()
+    page.get_by_test_id("task-title").fill("Read then saved")
+    page.get_by_test_id("task-goal").fill(GOAL_MARKDOWN)
+    page.get_by_test_id("task-criteria").fill(READ_CRITERIA)
+    page.get_by_test_id("task-read").click()
+    expect(page.get_by_test_id("task-reading")).to_be_visible()
+    # Ctrl/⌘+Enter saves from Read, as it does from the fields.
+    page.keyboard.press("ControlOrMeta+Enter")
+    expect(page.get_by_test_id("task-screen")).to_be_visible()
+    items = client.get("/v1/tasks", params={"projectId": forge_project["id"]}).json()["tasks"]
+    task_id = next(i["id"] for i in items if i["title"] == "Read then saved")
+    saved = client.get(f"/v1/tasks/{task_id}").json()
+    assert saved["acceptanceCriteria"] == ["SEPA appears on the payment step", "Invoice only for annual plans,\nnever monthly ones"]
+
+    # Once delivery has started it is fixed, and still reads.
+    assert client.post(f"/v1/tasks/{task_id}/deliver").status_code == 201
+    page.reload()
+    expect(page.get_by_test_id("task-screen")).to_be_visible()
+    expect(page.get_by_test_id("phase").first).to_be_visible(timeout=30_000)
+    page.get_by_test_id("edit-task").click()
+    dialog = page.get_by_role("dialog", name="Edit task")
+    expect(dialog).to_contain_text("Delivery has started")
+    page.get_by_test_id("task-read").click()
+    _assert_reads_as_the_task(page, "Read then saved")
+    page.keyboard.press("Escape")
+    expect(page.get_by_test_id("task-reading")).to_have_count(0)
+    expect(dialog).to_be_visible()
+    expect(page.get_by_test_id("task-goal-preview")).to_be_visible()
+    assert console_errors == []
+
+
+def test_read_on_a_phone_is_the_same_document(
+    page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list
+):
+    page.set_viewport_size({"width": 375, "height": 812})
+    sign_in(page, web_url, org["api_key"])
+    page.get_by_test_id("new-task").click()
+    page.get_by_test_id("task-title").fill("Keep SEPA at checkout")
+    page.get_by_test_id("task-goal").fill(GOAL_MARKDOWN)
+    page.get_by_test_id("task-criteria").fill(READ_CRITERIA)
+    page.get_by_test_id("task-read").click()
+    _assert_reads_as_the_task(page, "Keep SEPA at checkout")
+    # The document fits the screen's width, and the buttons stay on screen.
+    doc = page.get_by_test_id("task-reading")
+    assert doc.evaluate("el => el.getBoundingClientRect().right") <= 375
+    expect(page.get_by_test_id("task-save")).to_be_in_viewport()
+    page.keyboard.press("Escape")
+    expect(page.get_by_test_id("task-title")).to_have_value("Keep SEPA at checkout")
+    expect(page.get_by_test_id("task-title")).to_be_visible()
+    assert console_errors == []
+
+
 def test_the_task_dialog_does_not_move_when_where_it_sits_arrives(
     page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list
 ):

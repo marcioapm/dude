@@ -170,6 +170,40 @@
   padding: var(--ds-space-16);
   background: var(--ds-color-chrome);
 }
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+}
+
+/* Reading it: the document over the writing, in the same cell. The writing
+   stays laid out (and inert) under it, so it comes back as it was. */
+.stage {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+}
+.stage > * {
+  grid-area: 1 / 1;
+}
+.stage > [data-covered="true"] {
+  visibility: hidden;
+}
+/* One column at the document measure, centred, scrolling on its own. */
+.reading {
+  min-height: 0;
+  overflow: auto;
+  padding: var(--ds-space-16) var(--ds-space-panel-gap) var(--ds-space-panel-gap);
+  outline: none;
+}
+.reading:focus-visible {
+  box-shadow: inset 0 0 0 var(--ds-focus-ring-width) var(--ds-color-focus-ring);
+}
+.readingMeasure {
+  max-width: var(--ds-measure-document);
+  margin: 0 auto;
+}
 
 /* Too narrow for two columns: the aside follows the writing, one scroll.
    The writing takes at least the whole view, so a filling field still fills it. */
@@ -204,7 +238,8 @@
     padding-left: var(--ds-space-16);
   }
   .document .main,
-  .document .body {
+  .document .body,
+  .document .reading {
     padding-left: var(--ds-space-16);
     padding-right: var(--ds-space-16);
   }

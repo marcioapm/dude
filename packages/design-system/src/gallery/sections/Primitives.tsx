@@ -5,6 +5,7 @@ import { Button, IconButton } from "../../primitives/Button.tsx";
 import { Input } from "../../primitives/Input.tsx";
 import { Textarea } from "../../primitives/Textarea.tsx";
 import { MarkdownEditor, type MarkdownEditorProps } from "../../primitives/MarkdownEditor.tsx";
+import { Markdown } from "../../components/Markdown.tsx";
 import { HelpList, KeyHint, MarkdownCheatsheet } from "../../primitives/Kbd.tsx";
 import { RowMenu, RowMenuTrigger, rowMenuOpeners, type RowMenuItem } from "../../primitives/RowMenu.tsx";
 import { Select } from "../../primitives/Select.tsx";
@@ -371,7 +372,7 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
 
-      <Block id="p-dialog" title="Dialog" note="For decisions and small forms — and for writing one document: size='document' is a fixed 1120×900 (full screen under 640px) with an optional aside on the chrome shade that scrolls on its own and stacks under the writing below 960px; context puts where the thing sits above the title. Destructive confirmations get the danger tone and a destructive primary action. DiscardConfirm is the one asked before closing loses writing: Keep writing (quiet, focused) and Discard (danger solid).">
+      <Block id="p-dialog" title="Dialog" note="For decisions and small forms — and for writing one document: size='document' is a fixed 1120×900 (full screen under 640px) with an optional aside on the chrome shade that scrolls on its own and stacks under the writing below 960px; context puts where the thing sits above the title; headerActions puts quiet actions before Close; reading shows the whole thing as one document over the writing (the Task dialog's Read), and Escape leaves it rather than the dialog. Destructive confirmations get the danger tone and a destructive primary action. DiscardConfirm is the one asked before closing loses writing: Keep writing (quiet, focused) and Discard (danger solid).">
         <Panes mode={mode}>
           <Row>
             <TaskDialogExample />
@@ -692,10 +693,21 @@ function TaskDialogExample() {
   const [goal, setGoal] = useState(SAMPLE_GOAL);
   const [criteria, setCriteria] = useState(SAMPLE_CRITERIA);
   const [epic, setEpic] = useState("checkout");
+  const [reading, setReading] = useState(false);
   return (
     <Dialog
       trigger={<Button>Task dialog</Button>}
       size="document"
+      headerActions={
+        <Button variant="quiet" size="sm" leadingIcon={reading ? "edit" : "book-open"} onClick={() => setReading(!reading)}>
+          {reading ? "Back to writing" : "Read"}
+        </Button>
+      }
+      reading={reading ? (
+        <Markdown variant="document" title={title} untitled="Untitled task" source={[goal, "## Acceptance criteria", criteria]} />
+      ) : undefined}
+      readingLabel="The task as it reads"
+      onCloseReading={() => setReading(false)}
       context={<Breadcrumb size="sm" current={false} items={[{ id: "p", label: "Customer portal" }, { id: "e", label: "Checkout v2", icon: "layers" }]} />}
       title="New task"
       asideLabel="Where it sits"
@@ -710,7 +722,7 @@ function TaskDialogExample() {
           <MarkdownCheatsheet />
         </FormStack>
       }
-      footerStart={<><KeyHint keys={["mod", "Enter"]}>create</KeyHint><KeyHint keys={["mod", "Shift", "P"]}>toggle preview</KeyHint></>}
+      footerStart={<><KeyHint keys={["mod", "Enter"]}>create</KeyHint><KeyHint keys={["mod", "Shift", "P"]}>toggle preview</KeyHint><KeyHint keys={["mod", "Shift", "R"]}>read</KeyHint></>}
       footer={
         <>
           <DialogClose asChild>

@@ -12,6 +12,7 @@ import { MarkdownEditor, type MarkdownEditorProps } from "../src/primitives/Mark
 import { modKey } from "../src/util/keys.ts";
 import { Input } from "../src/primitives/Input.tsx";
 import { Breadcrumb } from "../src/components/Breadcrumb.tsx";
+import { Markdown } from "../src/components/Markdown.tsx";
 import { HelpList, KeyHint, MarkdownCheatsheet } from "../src/primitives/Kbd.tsx";
 import { continueList, countState, editorKey, formatEdit, type TextEdit } from "../src/util/markdownEdit.ts";
 
@@ -348,5 +349,30 @@ describe("HelpList", () => {
     const h = renderToStaticMarkup(<HelpList title="What makes a good task" items={[<><strong>Goal:</strong> why</>, "Criteria"]} />);
     expect(h).toMatch(/<h3[^>]*>What makes a good task<\/h3>/);
     expect([...h.matchAll(/<li>(.*?)<\/li>/g)].map((m) => m[1])).toEqual(["<strong>Goal:</strong> why", "Criteria"]);
+  });
+});
+
+describe("Markdown as one document from its parts", () => {
+  const doc = (props: { title?: string; untitled?: string; source: string | string[] }) =>
+    renderToStaticMarkup(<Markdown variant="document" {...props} />);
+  const headings = (h: string) => [...h.matchAll(/<(h[1-6])[^>]*>(.*?)<\/\1>/g)].map((m) => [m[1], m[2]!.replace(/<[^>]+>/g, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">")]);
+
+  test("the title is the first heading, as plain text", () => {
+    const h = doc({ title: "Keep **SEPA** <b>now</b>", source: "## What exists today\n\nText" });
+    expect(headings(h)).toEqual([["h1", "Keep **SEPA** <b>now</b>"], ["h2", "What exists today"]]);
+    expect(h).not.toContain("<strong>");
+  });
+
+  test("a blank title reads as untitled, and nothing else is added", () => {
+    const h = doc({ title: "  ", untitled: "Untitled task", source: [] });
+    expect(headings(h)).toEqual([["h1", "Untitled task"]]);
+  });
+
+  test("each section is parsed on its own: an open fence does not swallow the next", () => {
+    const h = doc({ source: ["```\nnever closed", "## Acceptance criteria", "- [ ] one\n- [ ] two"] });
+    expect(headings(h)).toEqual([["h2", "Acceptance criteria"]]);
+    expect([...h.matchAll(/<li\b/g)]).toHaveLength(2);
+    // Joined into one string, the fence would hold all of it.
+    expect(headings(doc({ source: "```\nnever closed\n\n## Acceptance criteria\n\n- [ ] one" }))).toEqual([]);
   });
 });

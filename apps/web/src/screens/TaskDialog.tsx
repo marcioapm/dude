@@ -12,12 +12,16 @@
  * where it sits (its epic) can change; the fields say so rather than failing
  * on save.
  *
+ * Read shows the whole task as one document, as it stands (saved or not),
+ * in place of the fields; Back to writing, Escape or Ctrl/⌘+Shift+R return
+ * to them as they were.
+ *
  * Mounted by its opener only while open, so each opening starts from the
  * task (or empty).
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { Badge, Breadcrumb, Button, Checkbox, Fieldset, FormStack, HelpList, Input, KeyHint, MarkdownCheatsheet, MarkdownEditor, Select, Skeleton } from "@dude/design-system";
+import { Badge, Breadcrumb, Button, Checkbox, Fieldset, FormStack, HelpList, Input, KeyHint, Markdown, MarkdownCheatsheet, MarkdownEditor, Select, Skeleton, Tooltip } from "@dude/design-system";
 import { TASK_CRITERIA_MAX, TASK_GOAL_MAX } from "@dude/domain";
 import type { ApiClient, Epic, Repository, TaskDetail, TaskFields, TaskRepository } from "../api/client.ts";
 import { unsavedWords } from "../hooks/discard.ts";
@@ -25,6 +29,10 @@ import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
 import { criteriaFromMarkdown, criteriaToMarkdown } from "./criteria.ts";
 
 const NO_EPIC = "__none__";
+// Read. Reload (Ctrl/⌘+R's family) is not one of the keys a browser keeps from a page, so the dialog takes it.
+const READ_KEYS = ["mod", "Shift", "R"];
+const isReadKey = (e: { key: string; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean }) =>
+  (e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === "r";
 // The server bounds the criteria's total; the editor bounds their source.
 // Reading a source only strips markers and indentation, never adds, so the
 // source is at least as long as what it saves and this is the binding limit.
@@ -70,6 +78,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
   // than creating a second.
   const [created, setCreated] = useState<string | null>(null);
   const { busy, problem, save } = useSave();
+  const [reading, setReading] = useState(false);
 
   useEffect(() => {
     let current = true;
@@ -123,6 +132,11 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
   }
 
   const epicTitle = choices?.epics.find((e) => e.id === epic)?.title;
+  // Each part parsed on its own, so an unclosed fence in the goal cannot swallow the criteria.
+  const readingSource = reading ? [
+    ...(goal.trim() ? [goal] : []),
+    ...(criteria.items.length > 0 ? ["## Acceptance criteria", criteriaToMarkdown(criteria.items)] : []),
+  ] : [];
 
   return (
     <FormDialog
@@ -151,10 +165,28 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
       unsavedWords={unsaved}
       discardTitle={existing ? "Discard your changes to this task?" : "Discard this task?"}
       discardDescription={existing ? "Your changes to this task haven't been saved." : undefined}
+      headerActions={
+        <Tooltip content={reading ? "Back to writing" : "Read it as one document"} shortcut={READ_KEYS}>
+          <Button variant="quiet" size="sm" leadingIcon={reading ? "edit" : "book-open"} onClick={() => setReading(!reading)} data-testid="task-read">
+            {reading ? "Back to writing" : "Read"}
+          </Button>
+        </Tooltip>
+      }
+      reading={reading ? (
+        <Markdown variant="document" title={title} untitled="Untitled task" source={readingSource} data-testid="task-reading" />
+      ) : undefined}
+      readingLabel="The task as it reads"
+      onCloseReading={() => setReading(false)}
+      onKeyDown={(e) => {
+        if (!isReadKey(e)) return;
+        e.preventDefault();
+        setReading(!reading);
+      }}
       footerStart={
         <>
           <KeyHint keys={["mod", "Enter"]}>{existing ? "save" : "create"}</KeyHint>
-          {locked ? null : <KeyHint keys={["mod", "Shift", "P"]}>toggle preview</KeyHint>}
+          {locked || reading ? null : <KeyHint keys={["mod", "Shift", "P"]}>toggle preview</KeyHint>}
+          <KeyHint keys={READ_KEYS}>{reading ? "back to writing" : "read"}</KeyHint>
         </>
       }
       extraActions={

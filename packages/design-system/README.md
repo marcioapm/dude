@@ -789,6 +789,19 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
   tightens them. Key hints go in `footerStart`, and hide under 640px, where
   there is rarely a keyboard; a failed save shows there instead, at every
   width. In a document, Ctrl/⌘+Enter submits and plain Enter never does.
+  `headerActions` puts quiet actions before Close — a document's **Read**
+  (`book-open`, "Back to writing" with `edit` while reading), whose key is
+  Ctrl/⌘+Shift+R (browsers let a page take it; it is named in
+  `footerStart`). `reading` shows the whole thing as one document in place
+  of the writing and the aside: a centred column at `measure-document`,
+  scrolling on its own, the footer kept (saving from Read is allowed).
+  Build it as one `Markdown variant="document"` with `title` (the name as
+  its `h1`, plain text; blank reads `untitled`, muted) and `source` as a
+  list of sections, each parsed on its own so an open fence in one cannot
+  swallow the next. The writing stays laid out, hidden and inert,
+  underneath, so its scroll, its editors' modes and selections survive, and
+  focus returns to the field that had it. Escape while reading calls
+  `onCloseReading` — back to writing, never closing or asking to discard.
 - Cards do not nest. A card's header and footer are told from its body by
   shade (`chrome`), not a rule.
 - Empty states are one line of text and a hint, never an illustration.
@@ -892,6 +905,7 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | `<Breadcrumb items={[project, epic, key]} />` in the header | a ghost `Back` button under the content |
 | `<MarkdownEditor label="Goal" value={goal} onChange={setGoal} fill minRows={4} maxLength={65_536} />` | a `Textarea` for Markdown with a hand-rolled preview beside it, or a `minRows={12}` that scrolls the empty dialog |
 | `<Dialog size="document" aside={…} context={…}>` with a `DiscardConfirm` for writing a task | a 400px dialog that loses three paragraphs to a stray Escape |
+| `<Dialog reading={<Markdown variant="document" title={title} source={[goal, "## Acceptance criteria", list]} />}>` | a second modal over the first to show the same text, or one string joined from the parts |
 | a settings page's sub-pages as `items` of its `SettingsNavItem` | `Tabs` inside a settings page |
 | `<SearchResultRow rank={1} lead={{ type: "memory" }} facts={["words and meaning"]} />` | a score chip and a progress bar on every result |
 | `<EntityLine lead={face} name={…} detail={…} />`, `<AuthorLine author={…} />` | a face and two spans styled in the app's CSS |
@@ -903,7 +917,7 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 document's heading), Textarea, MarkdownEditor (`fill`), Select, Checkbox,
 Badge, Card, Table (THead/TBody/Tr/Th/Td/TableEmpty), Tabs (underline for a
 page, segmented in a toolbar; a tab can carry a count), Dialog (`size=
-"document"` with `aside` and `context`), DiscardConfirm, Toast, Tooltip,
+"document"` with `aside`, `context`, `headerActions` and `reading`), DiscardConfirm, Toast, Tooltip,
 RowMenu (+ `rowMenuOpeners`), Skeleton/SkeletonLines/Spinner, EmptyState,
 ScrollArea, FormStack (`fill`), Kbd/KeyHint (+ `modKey`)/HelpList/
 MarkdownCheatsheet.
@@ -978,6 +992,8 @@ MarkdownCheatsheet.
   vs steer (interrupts a running turn) vs prompt, visibly different.
 - **Markdown** — untrusted Markdown to React from a typed AST; streaming-safe;
   `message` and `document` variants; ```` ```diff ```` hands off to `DiffView`.
+  `title` renders a plain-text name as the first `h1` (blank: `untitled`,
+  muted); `source` may be a list of sections, each parsed on its own.
   `parseMarkdown` / `safeUrl` are exported for consumers that need the AST.
 
 `src/components/` — navigation (the other half of the screen):
