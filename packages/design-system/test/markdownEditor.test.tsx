@@ -185,6 +185,16 @@ describe("formatEdit wraps the selection", () => {
     const src = "a\nb";
     expect(apply(src, formatEdit(src, 0, 3, "code"))).toEqual(["```\na\nb\n```", "a\nb"]);
   });
+  test("code again over the lines directly inside a fence takes the fence off", () => {
+    const src = "x\na\nb\ny";
+    const once = formatEdit(src, 2, 5, "code");
+    const [fenced] = apply(src, once);
+    expect(fenced).toBe("x\n```\na\nb\n```\ny");
+    expect(apply(fenced, formatEdit(fenced, once.selectionStart, once.selectionEnd, "code"))).toEqual([src, "a\nb"]);
+    // Backticks that are not a fence of their own line stay: a new fence goes inside.
+    const inline = "x```\na\nb\n```";
+    expect(apply(inline, formatEdit(inline, 5, 8, "code"))[0]).toBe("x```\n```\na\nb\n```\n```");
+  });
   test("a link selects what is left to write", () => {
     expect(apply("see docs", formatEdit("see docs", 4, 8, "link"))).toEqual(["see [docs](https://)", "https://"]);
     expect(apply("", formatEdit("", 0, 0, "link"))).toEqual(["[text](https://)", "text"]);

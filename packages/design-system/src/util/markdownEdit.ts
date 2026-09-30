@@ -37,6 +37,10 @@ export function formatEdit(source: string, start: number, end: number, format: M
       return wrap(source, start, end, WRAPS[format].mark, WRAPS[format].placeholder);
     case "code":
       if (selected.includes("\n")) {
+        // Directly inside a fence it made: the fence comes off.
+        if (source.slice(start - 4, start) === "```\n" && source.slice(end, end + 4) === "\n```" && (start === 4 || source[start - 5] === "\n")) {
+          return { from: start - 4, to: end + 4, insert: selected, selectionStart: start - 4, selectionEnd: end - 4 };
+        }
         const insert = "```\n" + selected + "\n```";
         return { from: start, to: end, insert, selectionStart: start + 4, selectionEnd: start + 4 + selected.length };
       }
