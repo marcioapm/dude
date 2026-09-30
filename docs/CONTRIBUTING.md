@@ -126,8 +126,13 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   `accepted` when the harness took it (`run.directive.accepted`, with
   `lands`: `next_step` or `next_turn`), and `delivered` when the agent's
   step has it (`run.directive.delivered`). An older lux reports only the
-  handoff, which counts as delivered. Each is recorded once per directive
-  and Run.
+  handoff, which counts as delivered. `failed` (`run.directive.failed`,
+  with lux's `error`) is a steer lux says will not reach the agent. Each is
+  recorded once per directive and Run. Precedence: delivered is final, and
+  a later failure changes nothing; a failure is final against `accepted`;
+  a read receipt (or an older lux's handoff) after a failure wins, since it
+  is the agent's own report that it has the words: the failure and its
+  error are cleared and `run.directive.delivered` is written.
   "Interrupt now" on a queued steer is a directive superseding it with the
   same words and `interrupt: true`; the API marks it `interrupt_only` when
   it is created, and lux is sent only the interrupt, with no text, however

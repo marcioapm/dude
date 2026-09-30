@@ -293,6 +293,13 @@ func (t *translator) shimEvent(ctx context.Context, tx pgx.Tx, s *Syncer, typ st
 // Each transition happens once per directive and Run however often lux
 // repeats a receipt (a reconnect, a resumed shim): the update is guarded on
 // the state it moves from, and the event is written only when a row moved.
+//
+// Delivered is final: a failure after it changes nothing. A failure is
+// final against "accepted" (with or without receipt), which only says the
+// harness took it. A delivery (consumed, or an older lux's handoff) after a
+// failure wins: it is the agent's own report that it has the words, so the
+// failure and its error are cleared with it and run.directive.delivered is
+// written.
 func (t *translator) directiveReceipt(ctx context.Context, tx pgx.Tx, s *Syncer, data map[string]any) error {
 	id, _ := data["requestId"].(string)
 	phase, _ := data["phase"].(string)
@@ -311,7 +318,7 @@ func (t *translator) directiveReceipt(ctx context.Context, tx pgx.Tx, s *Syncer,
 			lands = ""
 		}
 		tag, err := tx.Exec(ctx, `UPDATE directives SET accepted_at = now(), lands = NULLIF($3, '')
-			WHERE id = $1 AND run_id = $2 AND accepted_at IS NULL AND delivered_at IS NULL`, id, t.run.ID, lands)
+			WHERE id = $1 AND run_id = $2 AND accepted_at IS NULL AND delivered_at IS NULL AND failed_at IS NULL`, id, t.run.ID, lands)
 		if err != nil {
 			return err
 		}
@@ -328,16 +335,21 @@ func (t *translator) directiveReceipt(ctx context.Context, tx pgx.Tx, s *Syncer,
 			return nil
 		}
 	}
-	tag, err := tx.Exec(ctx, `UPDATE directives SET delivered_at = now(), accepted_at = COALESCE(accepted_at, now())
-		WHERE id = $1 AND run_id = $2 AND delivered_at IS NULL`, id, t.run.ID)
+	// Accepted with no receipt to follow is delivered now, unless it failed
+	// first; a consumed or handoff receipt delivers even a failed one.
+	tag, err := tx.Exec(ctx, `UPDATE directives SET delivered_at = now(), accepted_at = COALESCE(accepted_at, now()),
+			failed_at = NULL, error = NULL
+		WHERE id = $1 AND run_id = $2 AND delivered_at IS NULL AND (failed_at IS NULL OR $3)`, id, t.run.ID, phase != "accepted")
 	if err != nil || tag.RowsAffected() == 0 {
 		return err
 	}
 	// An "interrupt now" on it carries no text of its own (interrupt_only,
-	// see QueueDirective): it is delivered with it, sent yet or not. No
-	// event: the transcript knows them as one steer.
-	if _, err := tx.Exec(ctx, `UPDATE directives SET delivered_at = now(), accepted_at = COALESCE(accepted_at, now())
-		WHERE supersedes = $1 AND run_id = $2 AND interrupt_only AND delivered_at IS NULL`, id, t.run.ID); err != nil {
+	// see QueueDirective): it is delivered with it, sent yet or not, on the
+	// same precedence. No event: the transcript knows them as one steer.
+	if _, err := tx.Exec(ctx, `UPDATE directives SET delivered_at = now(), accepted_at = COALESCE(accepted_at, now()),
+			failed_at = NULL, error = NULL
+		WHERE supersedes = $1 AND run_id = $2 AND interrupt_only AND delivered_at IS NULL AND (failed_at IS NULL OR $3)`,
+		id, t.run.ID, phase != "accepted"); err != nil {
 		return err
 	}
 	payload := map[string]any{"directiveId": id}
