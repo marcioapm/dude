@@ -155,12 +155,40 @@ func (s *Server) accept(run *Run, in *queuedInput) {
 		return
 	}
 	in.accepted = true
+	s.recordAccepted(run, in.requestID, in.text)
+}
+
+// recordAccepted writes the harness's accepted answer, with a read receipt
+// to follow. Callers hold s.mu.
+func (s *Server) recordAccepted(run *Run, requestID, text string) {
 	lands := "next_step"
 	if s.NextTurnInput {
 		lands = "next_turn"
 	}
-	s.recordEvent(run, lux.RecordInput, map[string]any{"requestId": in.requestID, "phase": lux.InputAccepted, "receipt": true,
-		"lands": lands, "text": in.text})
+	s.recordEvent(run, lux.RecordInput, map[string]any{"requestId": requestID, "phase": lux.InputAccepted, "receipt": true,
+		"lands": lands, "text": text})
+}
+
+// recordFailed writes the failure of input the agent never read, in the
+// shape this lux writes it. Callers hold s.mu.
+func (s *Server) recordFailed(run *Run, in queuedInput, reason string) {
+	switch {
+	case s.LegacyInput:
+		s.recordEvent(run, lux.RecordInput, map[string]any{"requestId": in.requestID, "error": reason})
+	case in.accepted:
+		s.recordEvent(run, lux.RecordInputFailed, map[string]any{"requestId": in.requestID, "error": reason})
+	default:
+		s.recordEvent(run, lux.RecordInput, map[string]any{"requestId": in.requestID, "phase": lux.InputFailed, "error": reason})
+	}
+}
+
+// completeOpenTools finishes the tool calls KeepToolsOpen left running.
+// Callers hold s.mu.
+func (s *Server) completeOpenTools(run *Run) {
+	for _, call := range run.openTools {
+		s.agent(run, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": call, "status": "completed"})
+	}
+	run.openTools = nil
 }
 
 // consume is the agent's step reading everything queued: its read receipt
@@ -189,10 +217,7 @@ func (s *Server) FinishTools(id string) {
 	if run == nil || run.State != "running" {
 		return
 	}
-	for _, call := range run.openTools {
-		s.agent(run, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": call, "status": "completed"})
-	}
-	run.openTools = nil
+	s.completeOpenTools(run)
 	if run.busy && !s.NextTurnInput && !s.LegacyInput {
 		s.consume(run)
 	}
@@ -211,14 +236,7 @@ func (s *Server) FailInput(id, requestID, reason string) {
 	for i, q := range run.queued {
 		if q.requestID == requestID {
 			run.queued = slices.Delete(run.queued, i, i+1)
-			switch {
-			case s.LegacyInput:
-				s.recordEvent(run, lux.RecordInput, map[string]any{"requestId": requestID, "error": reason})
-			case q.accepted:
-				s.recordEvent(run, lux.RecordInputFailed, map[string]any{"requestId": requestID, "error": reason})
-			default:
-				s.recordEvent(run, lux.RecordInput, map[string]any{"requestId": requestID, "phase": lux.InputFailed, "error": reason})
-			}
+			s.recordFailed(run, q, reason)
 			return
 		}
 	}
@@ -234,10 +252,7 @@ func (s *Server) EndTurn(id string) {
 	if run == nil || run.State != "running" || !run.busy {
 		return
 	}
-	for _, call := range run.openTools {
-		s.agent(run, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": call, "status": "completed"})
-	}
-	run.openTools = nil
+	s.completeOpenTools(run)
 	s.recordEvent(run, "acp.turn_end", map[string]any{"stopReason": "end_turn"})
 	s.recordEvent(run, "lux.activity", map[string]any{"activity": "idle"})
 	run.busy = false
@@ -561,12 +576,7 @@ func (s *Server) play(run *Run, spec map[string]any, resumed bool) {
 		if s.LegacyInput {
 			s.recordEvent(run, lux.RecordInput, map[string]any{"requestId": "prompt", "text": prompt})
 		} else {
-			lands := "next_step"
-			if s.NextTurnInput {
-				lands = "next_turn"
-			}
-			s.recordEvent(run, lux.RecordInput, map[string]any{"requestId": "prompt", "phase": lux.InputAccepted, "receipt": true,
-				"lands": lands, "text": prompt})
+			s.recordAccepted(run, "prompt", prompt)
 			s.recordEvent(run, lux.RecordInputConsumed, map[string]any{"requestId": "prompt"})
 		}
 	}
@@ -961,18 +971,13 @@ func (s *Server) input(w http.ResponseWriter, r *http.Request) {
 		if s.FailUnreadOnInterrupt {
 			// A legacy lux holds input it never acknowledges; it fails it
 			// with a phase-less lux.input carrying the error.
-			const reason = "the turn was cancelled before the agent read it"
 			kept := run.queued[:0]
 			for _, q := range run.queued {
 				if q.requestID == in.RequestID || !(q.accepted || s.LegacyInput) {
 					kept = append(kept, q)
 					continue
 				}
-				if s.LegacyInput {
-					s.recordEvent(run, lux.RecordInput, map[string]any{"requestId": q.requestID, "error": reason})
-				} else {
-					s.recordEvent(run, lux.RecordInputFailed, map[string]any{"requestId": q.requestID, "error": reason})
-				}
+				s.recordFailed(run, q, "the turn was cancelled before the agent read it")
 			}
 			run.queued = kept
 		}
