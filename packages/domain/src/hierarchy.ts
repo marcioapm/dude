@@ -501,13 +501,18 @@ export const pullRequestStateSchema = z.enum(["draft", "open", "merged", "closed
 export const checkStateSchema = z.enum(["pending", "passing", "failing", "unknown"]);
 export const reviewStateSchema = z.enum(["pending", "approved", "changes_requested"]);
 
-/** A check on a pull request's head, by the name GitHub shows (`PrCheck`). */
+/**
+ * A check on a pull request's head, by the name GitHub shows (`PrCheck`).
+ * An entry with `diagnostic` is no check but a source that could not be
+ * read (`prCheckDiagnostic`).
+ */
 export const prCheckSchema = z.object({
   name: z.string(),
   status: z.string(),
   conclusion: z.string().nullable(),
   url: z.string().nullable().optional(),
   durationMs: z.number().nullable().optional(),
+  diagnostic: z.string().nullable().optional(),
 });
 /** A reviewer's latest word (`PrReview`); `REQUESTED` for one asked who has not answered. */
 export const prReviewSchema = z.object({ login: z.string(), state: z.string(), submittedAt: z.string().nullable().optional() });
@@ -554,7 +559,7 @@ export type PullRequest = z.infer<typeof pullRequestSchema>;
 /**
  * The one state a pull request is shown as, most pressing first: merged or
  * closed says it is over; then what stands between it and a merge, in the
- * order a person deals with it (red CI, CI still running, nobody has
+ * order a person deals with it (red CI, CI pending, nobody has
  * looked, changes asked for, a conflict, open threads); then ready. The
  * rest of what is true goes in the chip's tooltip.
  */
@@ -580,6 +585,29 @@ export interface PrCheck {
   conclusion: string | null;
   url?: string | null | undefined;
   durationMs?: number | null | undefined;
+  /** Set on an entry that says why checks could not be read; it is not a check. */
+  diagnostic?: string | null | undefined;
+}
+
+/** GitHub refused the token the check-runs listing: CI may exist that dude cannot see. */
+export const CHECK_RUNS_FORBIDDEN = "check_runs_forbidden";
+
+/** The first diagnostic in a check list, or null. */
+export function prCheckDiagnostic(checks: PrDisplayInput["checks"]): string | null {
+  if (typeof checks === "string") return null;
+  return checks.find((c) => c.diagnostic)?.diagnostic ?? null;
+}
+
+/** The checks GitHub reported, without diagnostic entries: what rows and counts are made of. */
+export function prActualChecks(checks: ReadonlyArray<PrCheck>): PrCheck[] {
+  return checks.filter((c) => !c.diagnostic);
+}
+
+/** Why the checks could not all be read, in a person's words. */
+export function prCheckDiagnosticReason(code: string): string {
+  return code === CHECK_RUNS_FORBIDDEN
+    ? "Cannot read GitHub check runs (access denied). Check the token's Checks: Read permission and repository/organization access."
+    : "Some GitHub checks cannot be read.";
 }
 
 /** A review as GitHub reports it (`reviews_json`); each person's latest verdict counts. */

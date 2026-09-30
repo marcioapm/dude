@@ -8,7 +8,7 @@ export { EntityLine } from "./EntityLine.tsx";
 export type { EntityLineProps } from "./EntityLine.tsx";
 export { ProjectAvatar } from "./ProjectAvatar.tsx";
 export type { ProjectAvatarProps, ProjectFace } from "./ProjectAvatar.tsx";
-export { PrChip, PR_DISPLAY_SPECS, prFacts, prStateOf } from "./PrChip.tsx";
+export { PrChip, PR_DISPLAY_SPECS, prFacts, prSpecOf, prStateOf } from "./PrChip.tsx";
 export type { PrChipProps, PrChipPullRequest, PrDisplaySpec } from "./PrChip.tsx";
 export { Cost } from "./Cost.tsx";
 export type { CostProps } from "./Cost.tsx";
