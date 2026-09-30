@@ -1,0 +1,78 @@
+# Every key of dude's configuration file, each set to a value other than its
+# default. Read by both the Go (orchestrator/internal/config) and the
+# TypeScript (apps/control-plane/test/config.test.ts) suites, which must both
+# resolve it to full.json.
+
+[database]
+url = "postgres://dude_app:pw@db.example:5432/dude"
+
+[backend]
+port = 3001
+web_dir = "/opt/dude/share/dude/web"
+
+[orchestrator]
+url = "http://127.0.0.1:3101"
+token = "service-token"
+listen = "127.0.0.1:3101"
+pr_reconcile = "30m"
+park_after = "20m"
+idle_after = "1h"
+diff_every = "30s"
+machine_usd_per_hour = 0.35
+
+[s3]
+bucket = "dude-photos"
+endpoint = "http://127.0.0.1:9000"
+region = "eu-west-1"
+access_key = "AKIAEXAMPLE"
+secret_key = "s3-secret"
+
+[lux]
+url = "https://lux.example"
+console_url = "https://console.lux.example"
+api_key = "lux-key"
+
+[llm]
+url = "https://llm.example/v1"
+key = "llm-key"
+
+[embeddings]
+url = "https://embeddings.example/v1"
+key = "embeddings-key"
+model = "text-embedding-3-small"
+dimensions = 768
+
+[agent]
+image = "registry.example/agents@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+timeout = "48h"
+egress = ["pypi.org", "registry.npmjs.org"]
+
+[registry]
+auth = "static"
+host = "ghcr.io"
+credential = "user:token"
+ecr_role_arn = "arn:aws:iam::123456789012:role/dude-pull"
+
+[tools]
+listen = "0.0.0.0:3200"
+url = "http://10.0.1.5:3200"
+service = false
+key = "tools-key"
+
+[vapid]
+public_key = "BPublicKey"
+private_key = "private-key"
+subject = "mailto:ops@example.com"
+
+[factory]
+logins = ["dude-bot", "dude-factory"]
+
+[auth]
+provider = "cloudflare_access"
+public_url = "https://dude.example.com"
+auto_create = false
+default_organization = "example"
+
+[auth.cloudflare_access]
+team = "example"
+aud = "application-audience"

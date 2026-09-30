@@ -1,5 +1,8 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { SQL } from "bun";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { actorTypeSchema, type PromptHistory, type SettingsResponse } from "@dude/domain";
 import { createApiKey, type Principal } from "../src/api/auth.ts";
 import { Router } from "../src/api/router.ts";
@@ -9,6 +12,7 @@ import { registerFindingRoutes } from "../src/api/routes/findings.ts";
 import { registerInterventionRoutes } from "../src/api/routes/intervention.ts";
 import { registerWorkRoutes } from "../src/api/routes/work.ts";
 import { closePool, setPool } from "../src/db/client.ts";
+import { Config, useConfig } from "../src/config.ts";
 import { append, query } from "../src/events/ledger.ts";
 import { seenEvent } from "../src/events/listen.ts";
 
@@ -20,11 +24,12 @@ let keyed: Extract<Principal, { credentialKind: "api_key" }>;
 let person: Extract<Principal, { credentialKind: "person" }>;
 let router: Router;
 let defaults: ReturnType<typeof Bun.serve>;
-const oldUrl = process.env.DUDE_ORCHESTRATOR_URL;
-const oldToken = process.env.DUDE_ORCHESTRATOR_TOKEN;
 // Identity headers of each /internal/tasks and /internal/questions request the receiver got.
 const forwarded: Array<{ path: string; headers: Record<string, string | null> }> = [];
+// The bearer token of each request the receiver got.
+const bearers: string[] = [];
 const IDENTITY = ["x-dude-credential-kind", "x-dude-actor", "x-dude-person", "x-dude-role", "x-dude-organization"];
+const configDir = mkdtempSync(join(tmpdir(), "dude-attribution-"));
 
 async function call(who: "key" | "person", method: string, path: string, body?: unknown) {
   const response = await router.handle(new Request(`http://dude.test${path}`, {
@@ -60,6 +65,7 @@ beforeAll(async () => {
   registerInterventionRoutes(router);
   defaults = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
+    bearers.push(request.headers.get("authorization") ?? "");
     if (path.startsWith("/internal/tasks/") || path.startsWith("/internal/questions/")) {
       forwarded.push({ path, headers: Object.fromEntries(IDENTITY.map((h) => [h, request.headers.get(h)])) });
       if (path.includes("q_refused")) {
@@ -69,16 +75,14 @@ beforeAll(async () => {
     }
     return Response.json(path.endsWith("builtin") ? { implementer: "Built-in prompt" } : {});
   } });
-  process.env.DUDE_ORCHESTRATOR_URL = `http://localhost:${defaults.port}`;
-  process.env.DUDE_ORCHESTRATOR_TOKEN = "test";
+  useConfig(Config.load({ env: { ...process.env,
+    DUDE_ORCHESTRATOR_URL: `http://localhost:${defaults.port}`, DUDE_ORCHESTRATOR_TOKEN: "test" } }));
 });
 
 afterAll(async () => {
   defaults?.stop(true);
-  if (oldUrl === undefined) delete process.env.DUDE_ORCHESTRATOR_URL;
-  else process.env.DUDE_ORCHESTRATOR_URL = oldUrl;
-  if (oldToken === undefined) delete process.env.DUDE_ORCHESTRATOR_TOKEN;
-  else process.env.DUDE_ORCHESTRATOR_TOKEN = oldToken;
+  useConfig(null);
+  rmSync(configDir, { recursive: true, force: true });
   await closePool(app);
   await owner`DELETE FROM organizations WHERE id IN (${org}, ${other})`;
   await owner.end();
@@ -178,4 +182,27 @@ test("the orchestrator hears who is asking, by person or by key, and its refusal
   }));
   expect(refused.status).toBe(403);
   expect(await refused.json()).toEqual({ error: { code: "forbidden", message: "only the task's owner may answer" } });
+});
+
+test("the orchestrator's URL and token come from the config file, and a variable overrides the token", async () => {
+  const path = join(configDir, "dude.toml");
+  writeFileSync(path, `[orchestrator]\nurl = "http://localhost:${defaults.port}/"\ntoken = "file-bearer-token"\n`);
+  chmodSync(path, 0o600);
+  // Only the file: no orchestrator variable reaches the loader.
+  const isolated = { DUDE_CONFIG: path };
+  const absent = join(configDir, "absent.toml");
+  const deliver = async () => {
+    bearers.length = 0;
+    await call("key", "POST", "/v1/tasks/task_file/deliver", {});
+    return bearers.slice();
+  };
+  try {
+    useConfig(Config.load({ env: isolated, defaultPath: absent }));
+    expect(await deliver()).toEqual(["Bearer file-bearer-token"]);
+    useConfig(Config.load({ env: { ...isolated, DUDE_ORCHESTRATOR_TOKEN: "env-bearer-token" }, defaultPath: absent }));
+    expect(await deliver()).toEqual(["Bearer env-bearer-token"]);
+  } finally {
+    useConfig(Config.load({ env: { ...process.env,
+      DUDE_ORCHESTRATOR_URL: `http://localhost:${defaults.port}`, DUDE_ORCHESTRATOR_TOKEN: "test" } }));
+  }
 });
