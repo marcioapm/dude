@@ -5,7 +5,6 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -70,21 +69,25 @@ func TestTheSpecIsTheGoldenOne(t *testing.T) {
 // them, so an unset operator must not get Runs that wait for one.
 func TestNestedContainersAreAskedForOnlyWhenSet(t *testing.T) {
 	for _, model := range []string{"llm/impl", "fake/scripted"} {
-		c, in := goldenInput(model)
-		if sp := buildSpec(c, in); sp.Sandbox != nil {
-			t.Errorf("%s: unset, sandbox = %+v", model, *sp.Sandbox)
-		}
-	}
-	for _, model := range []string{"llm/impl", "fake/scripted"} {
-		c, in := goldenInput(model)
-		c.NestedContainers = true
-		sp := buildSpec(c, in)
-		if sp.Sandbox == nil || !sp.Sandbox.NestedContainers {
-			t.Fatalf("%s: set, sandbox = %+v", model, sp.Sandbox)
-		}
-		b, _ := json.Marshal(sp)
-		if !strings.Contains(string(b), `"sandbox":{"nestedContainers":true}`) {
-			t.Errorf("%s: wire form: %s", model, b)
+		for _, set := range []bool{false, true} {
+			c, in := goldenInput(model)
+			c.NestedContainers = set
+			b, err := json.Marshal(buildSpec(c, in))
+			if err != nil {
+				t.Fatal(err)
+			}
+			// At the top of the spec, where lux reads it.
+			var wire map[string]json.RawMessage
+			if err := json.Unmarshal(b, &wire); err != nil {
+				t.Fatal(err)
+			}
+			sandbox, present := wire["sandbox"]
+			if want := `{"nestedContainers":true}`; set && string(sandbox) != want {
+				t.Errorf("%s set: sandbox = %s, want %s", model, sandbox, want)
+			}
+			if !set && present {
+				t.Errorf("%s unset: sandbox = %s", model, sandbox)
+			}
 		}
 	}
 }
