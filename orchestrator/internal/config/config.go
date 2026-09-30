@@ -271,7 +271,9 @@ func (c *Config) loadFile(text []byte) error {
 			}
 			k := keys[i]
 			i++
-			if field.IsNil() {
+			// An empty string is unset, as an empty variable is: the default
+			// applies, and a required key is still missing.
+			if field.IsNil() || (k.Kind == "string" || k.Kind == "duration") && field.Interface() == "" {
 				continue
 			}
 			val, err := fromFile(k, field.Interface())

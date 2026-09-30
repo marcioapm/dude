@@ -299,6 +299,9 @@ export class Config {
       }
       for (const [name, raw] of found) {
         const k = byName.get(name)!;
+        // An empty string is unset, as an empty variable is: the default
+        // applies, and a required key is still missing.
+        if (raw === "" && (k.kind === "string" || k.kind === "duration")) continue;
         let v: Value;
         try {
           v = fromFile(k, raw);

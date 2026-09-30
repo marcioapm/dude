@@ -77,6 +77,22 @@ egress = ["file.example"]
     expect(load({ DUDE_CONFIG: path, DUDE_WEB_DIR: "" }).webDir).toBe("/file");
   });
 
+  test("an empty string in the file is unset: the default applies, a required key is missing", () => {
+    const path = file(`[s3]\nregion = ""\nbucket = ""\n[backend]\nweb_dir = ""\n[auth]\nprovider = ""\n` +
+      `[orchestrator]\nlisten = ""\nurl = ""\npr_reconcile = ""\n[database]\nurl = ""\n`);
+    const c = load({ DUDE_CONFIG: path });
+    expect(c.string("DUDE_S3_REGION")).toBe("us-east-1");
+    expect(c.from("DUDE_S3_REGION")).toBeUndefined();
+    expect(c.string("DUDE_S3_BUCKET")).toBeUndefined();
+    expect(c.webDir).toBeUndefined();
+    expect(c.databaseUrl).toBeUndefined();
+    expect(c.string("DUDE_ORCHESTRATOR_URL")).toBeUndefined();
+    expect(c.auth).toEqual({ provider: "api_key" });
+    // Nor are the orchestrator's empty keys recorded, as the Go loader records none.
+    expect(c.set()).toEqual({});
+    expect(load({ DUDE_CONFIG: path, DUDE_S3_REGION: "eu-west-2" }).string("DUDE_S3_REGION")).toBe("eu-west-2");
+  });
+
   test("DUDE_CONFIG naming a missing file is refused", () => {
     expect(() => load({ DUDE_CONFIG: join(dir, "missing.toml") })).toThrow(/DUDE_CONFIG/);
   });

@@ -232,7 +232,8 @@ lists every key with its default and its variable.
 
 **Precedence.** Every setting has an environment variable, and a variable
 that is set and not empty overrides the file's key; a key in neither is its
-default. Lists (`agent.egress`, `factory.logins`) are TOML arrays in the file
+default. An empty string in the file (`listen = ""`) counts as unset, as an
+empty variable does. Lists (`agent.egress`, `factory.logins`) are TOML arrays in the file
 and comma-separated in the variable. Booleans in a variable are `true`,
 `false`, `on`, `off`, `1` or `0`. With no file, the environment alone
 configures dude, exactly as before the file existed.
