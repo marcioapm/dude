@@ -1330,8 +1330,14 @@ func (s *Syncer) retryLater(ctx context.Context, r phaseRun, cause error) error 
 		return s.fail(ctx, r, "lux no longer has this Run")
 	}
 	s.Log.Info("lux call failed; retrying later", "run", r.ID, "error", cause)
+	// GitHub penalises requests made during a limit it asked to be waited out.
+	delay := 5 * time.Second
+	if wait := forge.RetryAfter(cause); wait > delay {
+		delay = wait
+	}
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE runs SET next_attempt_at = now() + interval '5 seconds' WHERE id = $1`, r.ID)
+		_, err := tx.Exec(ctx, `UPDATE runs SET next_attempt_at = now() + make_interval(secs => $2) WHERE id = $1`,
+			r.ID, delay.Seconds())
 		return err
 	})
 }

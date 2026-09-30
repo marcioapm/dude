@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -162,6 +163,36 @@ type Feedback struct {
 type Error struct {
 	Status  int
 	Message string
+	// How long GitHub asked to be left alone (Retry-After, or the primary
+	// limit's reset), capped at MaxRetryAfter; 0 when it did not say.
+	RetryAfter time.Duration
+}
+
+// MaxRetryAfter bounds a wait GitHub asks for, so a garbled header cannot
+// park a Run for days.
+const MaxRetryAfter = time.Hour
+
+// RetryAfter is the wait a forge error carries, or 0.
+func RetryAfter(err error) time.Duration {
+	var e *Error
+	if errors.As(err, &e) {
+		return e.RetryAfter
+	}
+	return 0
+}
+
+// retryAfter reads GitHub's wait from a limited response: Retry-After in
+// seconds, else X-RateLimit-Reset (epoch seconds) once no requests remain.
+func retryAfter(h http.Header, now time.Time) time.Duration {
+	var wait time.Duration
+	if s, err := strconv.ParseInt(strings.TrimSpace(h.Get("Retry-After")), 10, 64); err == nil {
+		wait = time.Duration(min(s, int64(MaxRetryAfter/time.Second))) * time.Second
+	} else if h.Get("X-RateLimit-Remaining") == "0" {
+		if reset, err := strconv.ParseInt(strings.TrimSpace(h.Get("X-RateLimit-Reset")), 10, 64); err == nil {
+			wait = time.Unix(reset, 0).Sub(now)
+		}
+	}
+	return max(0, min(wait, MaxRetryAfter))
 }
 
 func (e *Error) Error() string { return fmt.Sprintf("github %d: %s", e.Status, e.Message) }
@@ -332,6 +363,9 @@ func (g *GitHub) CheckPushAccess(ctx context.Context, repository string) error {
 	}
 	refusal := &Error{Status: res.StatusCode, Message: message}
 	markRateLimit(refusal, res.Header, "Git receive-pack discovery rate limit: ")
+	if Transient(refusal) {
+		refusal.RetryAfter = retryAfter(res.Header, time.Now())
+	}
 	if !Transient(refusal) && (res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden) {
 		refusal.Message = "Git push access denied: grant Contents: Read and write to the fine-grained PAT for this repository (classic PAT: repo or public_repo), and check repository selection, owner access and organization approval/SSO"
 	}

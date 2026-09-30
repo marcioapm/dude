@@ -2057,13 +2057,28 @@ func TestPushPreflightRateLimitsWaitBeforePausedResume(t *testing.T) {
 	testPushPreflightRateLimits(t, true)
 }
 
+// GitHub's wait on a limited preflight is honoured: the Run is not tried
+// again before it, nor is lux asked. Without one, the usual 5 s back-off.
 func testPushPreflightRateLimits(t *testing.T, resume bool) {
 	t.Helper()
+	const secondary = "You have exceeded a secondary rate limit. Please wait a few minutes before you try again."
 	for _, limit := range []struct {
-		name, message, remaining string
+		name, message string
+		headers       func() http.Header
+		wait          time.Duration
 	}{
-		{"primary", "API rate limit exceeded for 127.0.0.1.", "0"},
-		{"secondary", "You have exceeded a secondary rate limit. Please wait a few minutes before you try again.", "4999"},
+		{"primary", "API rate limit exceeded for 127.0.0.1.", func() http.Header {
+			return http.Header{"Retry-After": {"60"}, "X-Ratelimit-Remaining": {"0"},
+				"X-Ratelimit-Reset": {fmt.Sprint(time.Now().Add(time.Minute).Unix())}}
+		}, time.Minute},
+		{"secondary", secondary, func() http.Header {
+			return http.Header{"Retry-After": {"60"}, "X-Ratelimit-Remaining": {"4999"}}
+		}, time.Minute},
+		{"reset only", "API rate limit exceeded for 127.0.0.1.", func() http.Header {
+			return http.Header{"X-Ratelimit-Remaining": {"0"}, "X-Ratelimit-Reset": {fmt.Sprint(time.Now().Add(2 * time.Minute).Unix())}}
+		}, 2 * time.Minute},
+		{"capped", secondary, func() http.Header { return http.Header{"Retry-After": {"86400"}} }, time.Hour},
+		{"no timing", secondary, func() http.Header { return http.Header{"X-Ratelimit-Remaining": {"4999"}} }, 5 * time.Second},
 	} {
 		t.Run(limit.name, func(t *testing.T) {
 			w := newWorld(t)
@@ -2087,17 +2102,16 @@ func testPushPreflightRateLimits(t *testing.T, resume bool) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			headers := limit.headers()
+			headers.Set("Content-Type", "application/json")
 			w.gh.Set(func(s *fakegithub.Server) {
 				s.ReceiveStatus = http.StatusForbidden
 				s.ReceiveBody = string(body)
-				s.ReceiveHeaders = http.Header{
-					"Content-Type":          {"application/json"},
-					"Retry-After":           {"60"},
-					"X-Ratelimit-Remaining": {limit.remaining},
-					"X-Ratelimit-Reset":     {fmt.Sprint(time.Now().Add(time.Minute).Unix())},
-				}
+				s.ReceiveHeaders = headers
 			})
+			before := time.Now()
 			w.pump()
+			after := time.Now()
 			readBackoff := func() time.Time {
 				t.Helper()
 				var status, control string
@@ -2106,13 +2120,17 @@ func testPushPreflightRateLimits(t *testing.T, resume bool) {
 					FROM runs WHERE task_id = $1`, wi).Scan(&status, &control, &due); err != nil {
 					t.Fatal(err)
 				}
-				if status != wantStatus || control != wantControl || due == nil || !due.After(time.Now()) {
-					t.Fatalf("rate limit: status=%s control=%s next_attempt_at=%v, want %s/%s with future backoff",
+				if status != wantStatus || control != wantControl || due == nil {
+					t.Fatalf("rate limit: status=%s control=%s next_attempt_at=%v, want %s/%s with a backoff",
 						status, control, due, wantStatus, wantControl)
 				}
 				return *due
 			}
 			due := readBackoff()
+			// Header timing is whole seconds from a clock read in between.
+			if earliest, latest := before.Add(limit.wait-time.Second), after.Add(limit.wait+time.Second); due.Before(earliest) || due.After(latest) {
+				t.Fatalf("next_attempt_at = %v, want %v after the preflight (%v..%v)", due, limit.wait, earliest, latest)
+			}
 			assertNoAttempt := func() {
 				t.Helper()
 				if runs := w.lux.Runs(); len(runs) != wantLuxRuns || resume && runs[0].Resumed != 0 {
@@ -2131,17 +2149,21 @@ func testPushPreflightRateLimits(t *testing.T, resume bool) {
 				}
 			}
 			assertNoAttempt()
+			if limit.wait > 5*time.Second {
+				// The sweep looks half the wait ahead: a 5 s back-off would be
+				// due by then, and the preflight asked again.
+				w.syncer.RetryAhead = limit.wait / 2
+			}
 			for range 3 {
 				w.pump()
 				assertNoAttempt()
 			}
+			w.syncer.RetryAhead = 0
 			w.gh.Set(func(s *fakegithub.Server) {
 				s.ReceiveStatus = http.StatusOK
 				s.ReceiveBody = ""
 				s.ReceiveHeaders = nil
 			})
-			w.pump()
-			assertNoAttempt()
 			// Make the persisted retry due without sleeping through the backoff.
 			mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = now() - interval '1 second' WHERE task_id = $1`, wi)
 			w.until("recovery after rate limit", func() bool {
