@@ -91,6 +91,8 @@ func newWorld(t *testing.T) *world {
 	mux := http.NewServeMux()
 	mux.Handle("/repos/acme/target/", w.gh.Handler())
 	mux.Handle("/repos/acme/web/", w.web.Handler())
+	mux.Handle("/acme/target.git/", w.gh.Handler())
+	mux.Handle("/acme/web.git/", w.web.Handler())
 	mux.Handle("POST /graphql", fakegithub.Graphql(w.gh, w.web))
 	ghSrv := httptest.NewServer(mux)
 	t.Cleanup(ghSrv.Close)
@@ -111,7 +113,7 @@ func newWorld(t *testing.T) *world {
 	mustExec(t, owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix, agent_models, runtime_image)
 		VALUES ($1, $2, 'P', $1, 'P', $3::jsonb, 'agent:test')`, w.project, w.org, models)
 	mustExec(t, owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
-		VALUES ($1, $2, $3, 'target', 'https://github.com/acme/target.git', 'main')`, w.repoID, w.org, w.project)
+		VALUES ($1, $2, $3, 'target', 'git://127.0.0.1/acme/target.git', 'main')`, w.repoID, w.org, w.project)
 	mustExec(t, owner, `INSERT INTO forge_credentials (id, organization_id, auth, secret, api_base_url)
 		VALUES ($1, $2, 'pat', 'ghp_test', $3)`, "forge_"+w.org, w.org, ghSrv.URL)
 
@@ -348,7 +350,7 @@ func TestADeliveryReachesAPullRequestAndAMergeFinishesIt(t *testing.T) {
 func (w *world) addWeb(wi, access string) string {
 	webID := "repo_web_" + w.org
 	mustExec(w.t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
-		VALUES ($1, $2, $3, 'web', 'https://github.com/acme/web.git', 'main') ON CONFLICT DO NOTHING`, webID, w.org, w.project)
+		VALUES ($1, $2, $3, 'web', 'git://127.0.0.1/acme/web.git', 'main') ON CONFLICT DO NOTHING`, webID, w.org, w.project)
 	mustExec(w.t, w.owner, `INSERT INTO task_repositories (organization_id, task_id, repository_id, access)
 		VALUES ($1, $2, $3, 'write'), ($1, $2, $4, $5::repository_access)`, w.org, wi, w.repoID, webID, access)
 	return webID
@@ -441,7 +443,7 @@ func TestWorkOnNoRepositoryEndsWithWhatTheAgentPublished(t *testing.T) {
 	w := newWorld(t)
 	// A second repository, so none is implied: this work names none.
 	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
-		VALUES ($1, $2, $3, 'web', 'https://github.com/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
+		VALUES ($1, $2, $3, 'web', 'git://127.0.0.1/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
 	wi := w.task()
 	w.deliver(wi)
 	w.until("the delivery to end", func() bool {
@@ -662,7 +664,7 @@ func TestAnAgentIsGivenARepositoryAPersonApproved(t *testing.T) {
 	t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL = tools.URL
 	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
-		VALUES ($1, $2, $3, 'web', 'https://github.com/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
+		VALUES ($1, $2, $3, 'web', 'git://127.0.0.1/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour {
 		return fakelux.Behaviour{Hang: true, Reply: "Done.", Commit: map[string]string{"A.md": "a\n"}}
 	}
@@ -720,7 +722,7 @@ func TestAResumedCloneFailureRetainsApprovalSemantics(t *testing.T) {
 	t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL = tools.URL
 	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
-		VALUES ($1, $2, $3, 'web', 'https://github.com/acme/web.git', 'missing-ref')`, "repo_web_"+w.org, w.org, w.project)
+		VALUES ($1, $2, $3, 'web', 'git://127.0.0.1/acme/web.git', 'missing-ref')`, "repo_web_"+w.org, w.org, w.project)
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
 	wi := w.task()
 	w.names(wi, w.repoID)
@@ -761,7 +763,7 @@ func TestAPersonsPauseIsNotUndoneByAnApproval(t *testing.T) {
 	t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL = tools.URL
 	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
-		VALUES ($1, $2, $3, 'web', 'https://github.com/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
+		VALUES ($1, $2, $3, 'web', 'git://127.0.0.1/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
 	wi := w.task()
 	w.names(wi, w.repoID)
@@ -801,7 +803,7 @@ func TestADeclinedRepositoryRequestIsToldToTheAgent(t *testing.T) {
 	t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL = tools.URL
 	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
-		VALUES ($1, $2, $3, 'web', 'https://github.com/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
+		VALUES ($1, $2, $3, 'web', 'git://127.0.0.1/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
 	wi := w.task()
 	w.names(wi, w.repoID)
@@ -847,7 +849,7 @@ func TestWhatDudeSendsLux(t *testing.T) {
 		t.Errorf("workload = %+v", spec.Workload)
 	}
 	repo := spec.Git.Repositories[0]
-	if repo.URL != "https://github.com/acme/target.git" || repo.Ref != "main" || repo.Credential != "GIT_TOKEN" {
+	if repo.URL != "git://127.0.0.1/acme/target.git" || repo.Ref != "main" || repo.Credential != "GIT_TOKEN" {
 		t.Errorf("repository = %+v", repo)
 	}
 	if spec.Git.Push == nil || !strings.HasPrefix(spec.Git.Push.Branch, "dude/"+wi+"/run-") {
@@ -1148,7 +1150,7 @@ func TestOnlyATasksOwnerAnswersAndDecides(t *testing.T) {
 	w := newWorld(t)
 	ana, bo := w.person("Ana"), w.person("Bo")
 	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
-		VALUES ($1, $2, $3, 'web', 'https://github.com/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
+		VALUES ($1, $2, $3, 'web', 'git://127.0.0.1/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
 	wi, _ := w.asking()
 	mustExec(t, w.owner, `UPDATE tasks SET owner_key_id = $2 WHERE id = $1`, wi, ana)
 	qid := w.questionID(wi)
@@ -1343,7 +1345,7 @@ func TestAnAgentWaitingOnARepositoryIsParkedAndTheApprovalResumesIt(t *testing.T
 	w.withTools()
 	w.syncer.ParkAfter = 300 * time.Millisecond
 	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
-		VALUES ($1, $2, $3, 'web', 'https://github.com/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
+		VALUES ($1, $2, $3, 'web', 'git://127.0.0.1/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
 		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
 			return fakelux.Behaviour{Hang: true}
@@ -1380,7 +1382,7 @@ func TestARequestTheAgentDoesNotWaitOnLetsItsTurnEnd(t *testing.T) {
 	w.withTools()
 	w.syncer.ParkAfter = 100 * time.Millisecond
 	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
-		VALUES ($1, $2, $3, 'web', 'https://github.com/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
+		VALUES ($1, $2, $3, 'web', 'git://127.0.0.1/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
 		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
 			return fakelux.Behaviour{Hang: true}
@@ -1407,7 +1409,7 @@ func TestWorkGivenARepositoryToChangeMidRunIsPushed(t *testing.T) {
 	w.withTools()
 	w.syncer.ParkAfter = 100 * time.Millisecond
 	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
-		VALUES ($1, $2, $3, 'web', 'https://github.com/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
+		VALUES ($1, $2, $3, 'web', 'git://127.0.0.1/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
 		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
 			return fakelux.Behaviour{Hang: true}
@@ -1439,7 +1441,7 @@ func TestWorkGivenARepositoryToChangeMidRunIsPushed(t *testing.T) {
 func TestAPublishingRunWithNothingToPushFinishesAfterItsContainerIsGone(t *testing.T) {
 	w := newWorld(t)
 	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
-		VALUES ($1, $2, $3, 'web', 'https://github.com/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
+		VALUES ($1, $2, $3, 'web', 'git://127.0.0.1/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
 		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
 			return fakelux.Behaviour{Hang: true}
@@ -1881,6 +1883,130 @@ func TestLuxRefusingASpecFailsThePhaseRatherThanRetryingForever(t *testing.T) {
 	}
 	if len(w.lux.Runs()) != 0 {
 		t.Errorf("a run with no model reached lux")
+	}
+}
+
+func TestPushPreflightRefusesBeforeLuxSubmission(t *testing.T) {
+	for _, status := range []int{201, 302, 401, 403, 404} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			w := newWorld(t)
+			w.gh.Set(func(s *fakegithub.Server) { s.ReceiveStatus = status })
+			wi := w.task()
+			w.deliver(wi)
+			w.until("preflight failure", func() bool {
+				return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'failed'`, wi) == 1
+			})
+			if len(w.lux.Runs()) != 0 {
+				t.Fatal("submitted after refused preflight")
+			}
+			var reason string
+			_ = w.owner.QueryRow(context.Background(), `SELECT error FROM runs WHERE task_id = $1`, wi).Scan(&reason)
+			if !strings.Contains(reason, "target") || (status == 401 || status == 403) && !strings.Contains(reason, "Contents: Read and write") {
+				t.Fatalf("reason: %s", reason)
+			}
+		})
+	}
+}
+
+func TestPushPreflightRetriesWithFreshCredential(t *testing.T) {
+	for _, network := range []bool{false, true} {
+		t.Run(fmt.Sprint(network), func(t *testing.T) {
+			w := newWorld(t)
+			w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+			w.gh.Set(func(s *fakegithub.Server) { s.ReceiveStatus = 503; s.ReceiveDisconnect = network })
+			wi := w.task()
+			w.deliver(wi)
+			w.pump()
+			if len(w.lux.Runs()) != 0 || w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'pending' AND next_attempt_at > now()`, wi) != 1 {
+				t.Fatal("transient preflight did not back off before submit")
+			}
+			mustExec(t, w.owner, `UPDATE forge_credentials SET secret = 'replacement' WHERE organization_id = $1`, w.org)
+			w.gh.Set(func(s *fakegithub.Server) {
+				s.ReceiveStatus = 200
+				s.ReceiveDisconnect = false
+				s.ReceiveToken = "replacement"
+			})
+			w.syncer.RetryAhead = time.Minute
+			w.until("fresh-token submission", func() bool { return len(w.lux.Runs()) == 1 })
+			w.gh.Set(func(s *fakegithub.Server) {
+				if len(s.ReceiveRequests) != 2 || s.ReceiveRequests[0] != "ghp_test" || s.ReceiveRequests[1] != "replacement" {
+					t.Errorf("requests: %v", s.ReceiveRequests)
+				}
+			})
+			if !bytes.Contains(w.lux.Runs()[0].Spec, []byte("replacement")) {
+				t.Fatal("lux did not get the checked credential")
+			}
+		})
+	}
+}
+
+func TestPushPreflightChecksEveryWritableNamedRepository(t *testing.T) {
+	for _, readOnly := range []bool{false, true} {
+		t.Run(fmt.Sprint(readOnly), func(t *testing.T) {
+			w := newWorld(t)
+			w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+			wi := w.task()
+			w.addWeb(wi, "write")
+			if readOnly {
+				mustExec(t, w.owner, `UPDATE task_repositories SET access = 'read' WHERE task_id = $1 AND repository_id = $2`, wi, "repo_web_"+w.org)
+			}
+			w.web.Set(func(s *fakegithub.Server) { s.ReceiveStatus = 403 })
+			w.deliver(wi)
+			w.until("preflight outcome", func() bool {
+				return len(w.lux.Runs()) == 1 || w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'failed'`, wi) == 1
+			})
+			if (len(w.lux.Runs()) == 1) != readOnly {
+				t.Fatal("wrong submit outcome")
+			}
+			w.web.Set(func(s *fakegithub.Server) {
+				if (len(s.ReceiveRequests) == 0) != readOnly {
+					t.Errorf("readonly checked or writable unchecked: %v", s.ReceiveRequests)
+				}
+			})
+		})
+	}
+}
+
+func TestPushPreflightSkipsNonPublishingPhases(t *testing.T) {
+	w := newWorld(t)
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	w.gh.Set(func(s *fakegithub.Server) { s.ReceiveStatus = 403 })
+	wi := w.task()
+	w.deliver(wi)
+	if _, err := w.runtime.Tick(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, w.owner, `UPDATE runs SET phase = 'review' WHERE task_id = $1`, wi)
+	w.until("review submission", func() bool { return len(w.lux.Runs()) == 1 })
+	w.gh.Set(func(s *fakegithub.Server) {
+		if len(s.ReceiveRequests) != 0 {
+			t.Fatal("review checked push access")
+		}
+	})
+}
+
+func TestWorkflowPushFailureRetainsGitErrorAndExplainsBothTokenTypes(t *testing.T) {
+	w := newWorld(t)
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	wi := w.task()
+	w.deliver(wi)
+	w.until("running", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running'`, wi) == 1
+	})
+	original := "refusing to allow a Personal Access Token to create or update workflow .github/workflows/ci.yml without workflow scope"
+	raw, _ := json.Marshal(map[string]any{"results": []map[string]string{{"repo": "target", "status": "failed", "error": original}}})
+	mustExec(t, w.owner, `UPDATE runs SET turn_done_at = now(), push_result = $2::jsonb WHERE task_id = $1`, wi, raw)
+	w.until("push failure", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'failed'`, wi) == 1
+	})
+	var reason string
+	if err := w.owner.QueryRow(context.Background(), `SELECT error FROM runs WHERE task_id = $1`, wi).Scan(&reason); err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{original, "Workflows: Read and write", "workflow scope", "preflight does not establish"} {
+		if !strings.Contains(reason, text) {
+			t.Errorf("missing %q: %s", text, reason)
+		}
 	}
 }
 

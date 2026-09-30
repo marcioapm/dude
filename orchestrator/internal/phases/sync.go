@@ -312,7 +312,7 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 // submit builds the Run's spec and hands it to lux.
 func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 	spec, err := s.spec(ctx, r, nil)
-	if passing(err) {
+	if passing(err) || forge.Transient(err) {
 		return s.retryLater(ctx, r, err)
 	}
 	if err != nil {
@@ -474,6 +474,16 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec) (
 	if gh != nil {
 		if in.ForgeToken, err = gh.Token(); err != nil {
 			return lux.Spec{}, errForge{err}
+		}
+		if delivery.Publishes[r.Phase] {
+			for _, repo := range repos {
+				if repo.Access == "read" {
+					continue
+				}
+				if err := gh.CheckPushAccess(ctx, repo.URL); err != nil {
+					return lux.Spec{}, fmt.Errorf("push preflight for %s: %w", repo.Name, err)
+				}
+			}
 		}
 	}
 	if s.Agent.ToolsURL != "" {
@@ -763,7 +773,11 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		case !known:
 			return nil, fmt.Errorf("lux pushed %s, which this task does not name", res.Repo)
 		case res.Status != "pushed" && res.Status != "up-to-date":
-			return nil, fmt.Errorf("push %s %s: %s", res.Repo, res.Status, res.Error)
+			guidance := ""
+			if strings.Contains(strings.ToLower(res.Error), "refusing to allow a personal access token to create or update workflow") && strings.Contains(strings.ToLower(res.Error), "workflow") && strings.Contains(strings.ToLower(res.Error), "scope") {
+				guidance = "; workflow-file pushes require Workflows: Read and write on a fine-grained PAT, or the workflow scope on a classic PAT; ordinary push preflight does not establish this permission"
+			}
+			return nil, fmt.Errorf("push %s %s: %s%s", res.Repo, res.Status, res.Error, guidance)
 		}
 		if res.Commit == "" {
 			continue // nothing committed there
@@ -999,7 +1013,7 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (lux.Run,
 		return lux.Run{}, err
 	}
 	spec, err := s.spec(ctx, r, &lr.Spec)
-	if passing(err) || errors.As(err, new(errLoginUnavailable)) {
+	if passing(err) || forge.Transient(err) || errors.As(err, new(errLoginUnavailable)) {
 		return lux.Run{}, err
 	}
 	if err != nil {
