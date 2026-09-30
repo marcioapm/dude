@@ -333,6 +333,14 @@ func (t *translator) directiveReceipt(ctx context.Context, tx pgx.Tx, s *Syncer,
 	if err != nil || tag.RowsAffected() == 0 {
 		return err
 	}
+	// An "interrupt now" that re-sent it carried no text of its own (the
+	// syncer's deliverDirectives): it is delivered with it. No event: the
+	// transcript knows them as one steer.
+	if _, err := tx.Exec(ctx, `UPDATE directives d SET delivered_at = now(), accepted_at = COALESCE(d.accepted_at, now())
+		FROM directives s WHERE s.id = $1 AND d.supersedes = s.id AND d.run_id = $2 AND d.interrupt
+		  AND d.text = s.text AND d.delivered_at IS NULL`, id, t.run.ID); err != nil {
+		return err
+	}
 	payload := map[string]any{"directiveId": id}
 	// Only a consumed receipt says when the agent read it; the other two
 	// say only that it was handed over.
