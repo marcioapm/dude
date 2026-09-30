@@ -47,6 +47,7 @@ dimensions = 768
 image = "registry.example/agents@sha256:0000000000000000000000000000000000000000000000000000000000000000"
 timeout = "48h"
 egress = ["pypi.org", "registry.npmjs.org"]
+nested_containers = true
 
 [registry]
 auth = "static"

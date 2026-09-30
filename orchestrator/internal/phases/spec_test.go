@@ -63,3 +63,29 @@ func TestTheSpecIsTheGoldenOne(t *testing.T) {
 		})
 	}
 }
+
+// Unset Runs must not wait for a host offering nested containers.
+func TestNestedContainersAreAskedForOnlyWhenSet(t *testing.T) {
+	for _, model := range []string{"llm/impl", "fake/scripted"} {
+		for _, set := range []bool{false, true} {
+			c, in := goldenInput(model)
+			c.NestedContainers = set
+			b, err := json.Marshal(buildSpec(c, in))
+			if err != nil {
+				t.Fatal(err)
+			}
+			// lux reads sandbox at the spec's top level.
+			var wire map[string]json.RawMessage
+			if err := json.Unmarshal(b, &wire); err != nil {
+				t.Fatal(err)
+			}
+			sandbox, present := wire["sandbox"]
+			if want := `{"nestedContainers":true}`; set && string(sandbox) != want {
+				t.Errorf("%s set: sandbox = %s, want %s", model, sandbox, want)
+			}
+			if !set && present {
+				t.Errorf("%s unset: sandbox = %s", model, sandbox)
+			}
+		}
+	}
+}
