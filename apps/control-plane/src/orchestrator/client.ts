@@ -10,12 +10,13 @@
 
 import { auditActor, type Principal } from "../api/auth.ts";
 import { HttpError } from "../api/http.ts";
+import { config as settings } from "../config.ts";
 
 const TIMEOUT_MS = 15_000;
 
 function config(): { url: string; token: string } {
-  const url = process.env.DUDE_ORCHESTRATOR_URL;
-  const token = process.env.DUDE_ORCHESTRATOR_TOKEN;
+  const url = settings().string("DUDE_ORCHESTRATOR_URL");
+  const token = settings().string("DUDE_ORCHESTRATOR_TOKEN");
   if (!url || !token) {
     throw new HttpError(503, "the orchestrator is not configured", "unavailable");
   }

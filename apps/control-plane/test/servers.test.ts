@@ -15,6 +15,7 @@ import { SQL } from "bun";
 import { join } from "node:path";
 import { closePool, setPool } from "../src/db/client.ts";
 import { buildRouter } from "../src/index.ts";
+import { Config, useConfig } from "../src/config.ts";
 import type { Router } from "../src/api/router.ts";
 import { createApiKey } from "../src/api/auth.ts";
 
@@ -98,12 +99,13 @@ beforeAll(async () => {
       return Response.json({ run: null, servers: [], moved: null, recipes: [], preview }, { status: req.method === "POST" ? 201 : 200 });
     },
   });
-  process.env.DUDE_ORCHESTRATOR_URL = `http://localhost:${orchestratorServer.port}`;
-  process.env.DUDE_ORCHESTRATOR_TOKEN = "svc";
+  useConfig(Config.load({ env: { ...process.env,
+    DUDE_ORCHESTRATOR_URL: `http://localhost:${orchestratorServer.port}`, DUDE_ORCHESTRATOR_TOKEN: "svc" } }));
   router = buildRouter("");
 });
 
 afterAll(async () => {
+  useConfig(null);
   await orchestratorServer?.stop(true);
   await closePool(app);
   await owner?.end();
