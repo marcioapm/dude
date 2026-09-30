@@ -9,6 +9,7 @@ import { registerFindingRoutes } from "../src/api/routes/findings.ts";
 import { registerInterventionRoutes } from "../src/api/routes/intervention.ts";
 import { registerWorkRoutes } from "../src/api/routes/work.ts";
 import { closePool, setPool } from "../src/db/client.ts";
+import { Config, useConfig } from "../src/config.ts";
 import { append, query } from "../src/events/ledger.ts";
 import { seenEvent } from "../src/events/listen.ts";
 
@@ -20,8 +21,6 @@ let keyed: Extract<Principal, { credentialKind: "api_key" }>;
 let person: Extract<Principal, { credentialKind: "person" }>;
 let router: Router;
 let defaults: ReturnType<typeof Bun.serve>;
-const oldUrl = process.env.DUDE_ORCHESTRATOR_URL;
-const oldToken = process.env.DUDE_ORCHESTRATOR_TOKEN;
 // Identity headers of each /internal/tasks and /internal/questions request the receiver got.
 const forwarded: Array<{ path: string; headers: Record<string, string | null> }> = [];
 const IDENTITY = ["x-dude-credential-kind", "x-dude-actor", "x-dude-person", "x-dude-role", "x-dude-organization"];
@@ -69,16 +68,13 @@ beforeAll(async () => {
     }
     return Response.json(path.endsWith("builtin") ? { implementer: "Built-in prompt" } : {});
   } });
-  process.env.DUDE_ORCHESTRATOR_URL = `http://localhost:${defaults.port}`;
-  process.env.DUDE_ORCHESTRATOR_TOKEN = "test";
+  useConfig(Config.load({ env: { ...process.env,
+    DUDE_ORCHESTRATOR_URL: `http://localhost:${defaults.port}`, DUDE_ORCHESTRATOR_TOKEN: "test" } }));
 });
 
 afterAll(async () => {
   defaults?.stop(true);
-  if (oldUrl === undefined) delete process.env.DUDE_ORCHESTRATOR_URL;
-  else process.env.DUDE_ORCHESTRATOR_URL = oldUrl;
-  if (oldToken === undefined) delete process.env.DUDE_ORCHESTRATOR_TOKEN;
-  else process.env.DUDE_ORCHESTRATOR_TOKEN = oldToken;
+  useConfig(null);
   await closePool(app);
   await owner`DELETE FROM organizations WHERE id IN (${org}, ${other})`;
   await owner.end();

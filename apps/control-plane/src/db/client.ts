@@ -15,6 +15,7 @@
  */
 
 import { SQL, type TransactionSQL } from "bun";
+import { config } from "../config.ts";
 
 /** A transaction already scoped to one organization. */
 export interface OrgScope {
@@ -24,9 +25,10 @@ export interface OrgScope {
 
 let pool: SQL | null = null;
 
-export function getPool(databaseUrl = process.env.DATABASE_URL): SQL {
+export function getPool(databaseUrl?: string): SQL {
   if (!pool) {
-    if (!databaseUrl) throw new Error("DATABASE_URL is not set");
+    databaseUrl ??= config().databaseUrl;
+    if (!databaseUrl) throw new Error("database.url (DATABASE_URL) is not set");
     pool = new SQL(databaseUrl);
   }
   return pool;

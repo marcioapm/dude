@@ -65,6 +65,9 @@ process.env.DUDE_S3_REGION = "us-east-1";
 process.env.DUDE_S3_ENDPOINT = `http://127.0.0.1:${s3.port}`;
 delete process.env.DUDE_S3_ACCESS_KEY;
 delete process.env.DUDE_S3_SECRET_KEY;
+const { useConfig } = await import("../src/config.ts");
+// Settings are resolved once; each change to the variables above is read again.
+useConfig(null);
 const { putObject, getObject, deleteObject } = await import("../src/storage.ts");
 const { errorResponse } = await import("../src/api/http.ts");
 
@@ -270,10 +273,12 @@ async function withExplicitKeys(access: string | undefined, secret: string | und
   const set = (name: string, value: string | undefined) => { if (value === undefined) delete process.env[name]; else process.env[name] = value; };
   set("DUDE_S3_ACCESS_KEY", access);
   set("DUDE_S3_SECRET_KEY", secret);
+  useConfig(null);
   denied = true;
   try { await run(); } finally {
     delete process.env.DUDE_S3_ACCESS_KEY;
     delete process.env.DUDE_S3_SECRET_KEY;
+    useConfig(null);
     denied = false;
   }
 }
