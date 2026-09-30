@@ -66,9 +66,15 @@ function wrap(source: string, start: number, end: number, mark: string, placehol
   return { from: start, to: end, insert: mark + inner + mark, selectionStart: start + n, selectionEnd: start + n + inner.length };
 }
 
+// Where the line holding `at` starts. `lastIndexOf` clamps a negative
+// position to 0 and would find a newline there, so position 0 is its own case.
+function lineStart(source: string, at: number): number {
+  return at === 0 ? 0 : source.lastIndexOf("\n", at - 1) + 1;
+}
+
 /** `prefix` at the start of every line the selection touches; if all have it, it comes off. */
 function prefixLines(source: string, start: number, end: number, prefix: string): TextEdit {
-  const from = source.lastIndexOf("\n", start - 1) + 1;
+  const from = lineStart(source, start);
   const lineEnd = source.indexOf("\n", Math.max(end - (end > start ? 1 : 0), from));
   const to = lineEnd === -1 ? source.length : lineEnd;
   const lines = source.slice(from, to).split("\n");
@@ -90,14 +96,14 @@ const LIST_ITEM = /^(\s*)([-*+]|(\d{1,9})([.)]))( \[[ xX]\])?[ \t]+(.*)$/;
  * of the list. Null when the line is not a list item, so Enter is Enter.
  */
 export function continueList(source: string, caret: number): TextEdit | null {
-  const lineStart = source.lastIndexOf("\n", caret - 1) + 1;
-  const m = LIST_ITEM.exec(source.slice(lineStart, caret));
+  const start = lineStart(source, caret);
+  const m = LIST_ITEM.exec(source.slice(start, caret));
   if (!m) return null;
   const [, indent = "", bullet = "", num, delim = "", task, content = ""] = m;
   const nextEol = source.indexOf("\n", caret);
   const rest = source.slice(caret, nextEol === -1 ? source.length : nextEol);
   if (!content.trim() && !rest.trim()) {
-    return { from: lineStart, to: caret, insert: "", selectionStart: lineStart, selectionEnd: lineStart };
+    return { from: start, to: caret, insert: "", selectionStart: start, selectionEnd: start };
   }
   const marker = num !== undefined ? `${Number(num) + 1}${delim}` : bullet;
   const insert = `\n${indent}${marker}${task ? " [ ]" : ""} `;

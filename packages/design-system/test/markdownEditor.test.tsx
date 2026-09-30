@@ -206,6 +206,14 @@ describe("formatEdit prefixes lines", () => {
     expect(on).toBe("- one\n- two\nthree");
     expect(apply(on, formatEdit(on, 0, 11, "bullet"))[0]).toBe(src);
   });
+  test("a caret at 0 before a leading newline prefixes that first, empty line", () => {
+    const src = "\nnext";
+    expect(apply(src, formatEdit(src, 0, 0, "bullet"))).toEqual(["- \nnext", ""]);
+    expect(formatEdit(src, 0, 0, "bullet").selectionStart).toBe(2);
+    expect(apply(src, formatEdit(src, 0, 0, "heading"))[0]).toBe("## \nnext");
+    expect(apply(src, formatEdit(src, 0, 0, "quote"))[0]).toBe("> \nnext");
+    expect(apply(src, formatEdit(src, 0, 0, "checklist"))[0]).toBe("- [ ] \nnext");
+  });
   test("a selection ending at the start of a line leaves that line alone", () => {
     const src = "one\ntwo";
     expect(apply(src, formatEdit(src, 0, 4, "bullet"))[0]).toBe("- one\ntwo");
@@ -240,6 +248,9 @@ describe("continueList", () => {
   });
   test("mid-item, the rest of the line moves to the new item", () => {
     expect(enter("- one two", 5)).toBe("- one\n-  two|8");
+  });
+  test("a caret at 0 reads the first line, not the one after a leading newline", () => {
+    expect(continueList("\n- item", 0)).toBeNull();
   });
   test("not a list line: Enter is Enter", () => {
     expect(continueList("plain", 5)).toBeNull();
