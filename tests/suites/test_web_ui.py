@@ -459,6 +459,44 @@ def test_read_on_a_phone_is_the_same_document(
     assert console_errors == []
 
 
+def test_the_read_shortcut_waits_for_an_open_select_to_close(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    client.post(f"/v1/projects/{forge_project['id']}/epics", {"title": "Epic A"})
+    client.post(f"/v1/projects/{forge_project['id']}/epics", {"title": "Epic B"})
+    sign_in(page, web_url, org["api_key"])
+    page.get_by_test_id("new-task").click()
+    page.get_by_test_id("task-title").fill("Read over a popup")
+    epic = page.get_by_role("combobox", name="Epic")
+    epic.click()
+    listbox = page.get_by_role("listbox")
+    option = listbox.get_by_role("option", name="Epic A")
+    option.focus()
+    expect(option).to_be_focused()
+
+    # The listbox lives outside the dialog: the shortcut is taken (no reload) but Read waits.
+    page.evaluate("""() => { window.readKey = null;
+      document.addEventListener('keydown', e => { if (e.key.toLowerCase() === 'r') window.readKey = e.defaultPrevented; }); }""")
+    page.keyboard.press("ControlOrMeta+Shift+r")
+    assert page.evaluate("window.readKey") is True
+    expect(page.get_by_test_id("task-reading")).to_have_count(0)
+    expect(listbox).to_be_visible()
+    expect(page.get_by_test_id("task-read")).to_have_text("Read")
+
+    # Closed, the Select has focus back; Read and back to writing return to it, not to the option.
+    page.keyboard.press("Escape")
+    expect(listbox).to_have_count(0)
+    expect(page.get_by_role("dialog", name="New task")).to_be_visible()
+    expect(epic).to_be_focused()
+    page.keyboard.press("ControlOrMeta+Shift+r")
+    expect(page.get_by_test_id("task-reading")).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(page.get_by_test_id("task-reading")).to_have_count(0)
+    expect(epic).to_be_focused()
+    expect(epic).to_have_text("No epic")
+    assert console_errors == []
+
+
 def test_the_task_dialog_does_not_move_when_where_it_sits_arrives(
     page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list
 ):
