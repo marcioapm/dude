@@ -57,7 +57,7 @@ export interface ParseOptions {
   /** Treat unterminated constructs at end of input as open (see above). */
   readonly streaming?: boolean | undefined;
   /**
-   * A single newline inside a paragraph, list item, quote or table cell is
+   * A single newline inside a paragraph, list item or quote is
    * a line break, as a person writing expects, not CommonMark's space.
    * Code blocks, code spans and headings are unaffected. Default off: agent
    * output keeps the standard rule.
@@ -369,7 +369,13 @@ function slug(text: string, used: Map<string, number>): string {
 const URL_RE = /^https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"]/;
 
 // Emphasis and link labels nest by recursion; past this depth their markers
-// render literally, so hostile input cannot exhaust the stack.
+// render literally, so hostile input cannot exhaust the stack. Links and
+// emphasis count their own nesting. A link's depth is the number of links
+// around it, which the text alone decides, so a link parsed while an emphasis
+// run is still being tried reads the same when that run fails and the scan
+// passes over the link again (links are memoised by position).
+// Emphasis runs are memoised without depth: only 32 runs nested inside each
+// other and behind unmatched delimiters can move where their fallback starts.
 const MAX_INLINE_DEPTH = 32;
 
 const DELIMS = ["*", "_", "**", "__", "~~"] as const;
@@ -403,7 +409,7 @@ interface InlineCtx {
 
 export function parseInline(src: string, streaming: boolean, breaks = false): Inline[] {
   const ctx: InlineCtx = { src, streaming, breaks, partners: null, runs: new Map(), links: new Map(), tickMiss: new Map() };
-  return parseInlineRange(ctx, 0, src.length, null, 0).nodes;
+  return parseInlineRange(ctx, 0, src.length, null, 0, 0).nodes;
 }
 
 /**
@@ -412,7 +418,7 @@ export function parseInline(src: string, streaming: boolean, breaks = false): In
  * the index just past it. When not found: if streaming, the run extends
  * to `to` and stays open; if not, the caller renders the opener literally.
  */
-function parseInlineRange(ctx: InlineCtx, from: number, to: number, closer: string | null, depth: number): InlineResult {
+function parseInlineRange(ctx: InlineCtx, from: number, to: number, closer: string | null, depth: number, links: number): InlineResult {
   const { src, streaming } = ctx;
   const nodes: Inline[] = [];
   let text = "";
@@ -422,7 +428,7 @@ function parseInlineRange(ctx: InlineCtx, from: number, to: number, closer: stri
       text = "";
     }
   };
-  const nests = depth < MAX_INLINE_DEPTH;
+  const nests = links < MAX_INLINE_DEPTH;
   let i = from;
   while (i < to) {
     const ch = src.charAt(i);
@@ -486,7 +492,7 @@ function parseInlineRange(ctx: InlineCtx, from: number, to: number, closer: stri
 
     // Image / link
     if (nests && ch === "!" && src.charAt(i + 1) === "[") {
-      const link = parseLink(ctx, i + 1, to, depth);
+      const link = parseLink(ctx, i + 1, to, depth, links);
       if (link) {
         flush();
         const s = safeUrl(link.href);
@@ -498,7 +504,7 @@ function parseInlineRange(ctx: InlineCtx, from: number, to: number, closer: stri
       }
     }
     if (nests && ch === "[") {
-      const link = parseLink(ctx, i, to, depth);
+      const link = parseLink(ctx, i, to, depth, links);
       if (link) {
         flush();
         const s = safeUrl(link.href);
@@ -536,7 +542,7 @@ function parseInlineRange(ctx: InlineCtx, from: number, to: number, closer: stri
     // Emphasis / strong / strikethrough
     const delim = matchDelimiter(src, i, to);
     if (delim) {
-      const inner = emphasisRun(ctx, i + delim.length, to, delim, depth + 1);
+      const inner = emphasisRun(ctx, i + delim.length, to, delim, depth + 1, links);
       const closed = inner.end <= to && src.startsWith(delim, inner.end - delim.length);
       if (closed && inner.nodes.length > 0) {
         flush();
@@ -572,12 +578,12 @@ function parseInlineRange(ctx: InlineCtx, from: number, to: number, closer: stri
 // One run per (range, delimiter, start), whatever path reaches it. Past the
 // nesting bound the run fails without scanning and is not memoised, so a
 // shallower opener at the same position still gets a real scan.
-function emphasisRun(ctx: InlineCtx, from: number, to: number, delim: string, depth: number): InlineResult {
+function emphasisRun(ctx: InlineCtx, from: number, to: number, delim: string, depth: number, links: number): InlineResult {
   if (depth > MAX_INLINE_DEPTH) return { nodes: [], end: to + delim.length };
   const key = (to * (ctx.src.length + 1) + from) * DELIMS.length + DELIMS.indexOf(delim as (typeof DELIMS)[number]);
   let run = ctx.runs.get(key);
   if (run === undefined) {
-    run = parseInlineRange(ctx, from, to, delim, depth);
+    run = parseInlineRange(ctx, from, to, delim, depth, links);
     ctx.runs.set(key, run);
   }
   return run;
@@ -682,23 +688,23 @@ function partnerOf(ctx: InlineCtx, at: number, to: number, kind: "bracket" | "pa
   return found !== -1 && found < to ? found : -1;
 }
 
-function parseLink(ctx: InlineCtx, from: number, to: number, depth: number): LinkResult | null {
+function parseLink(ctx: InlineCtx, from: number, to: number, depth: number, links: number): LinkResult | null {
   const key = to * (ctx.src.length + 1) + from;
   const known = ctx.links.get(key);
   if (known !== undefined) return known;
-  const link = scanLink(ctx, from, to, depth);
+  const link = scanLink(ctx, from, to, depth, links);
   ctx.links.set(key, link);
   return link;
 }
 
-function scanLink(ctx: InlineCtx, from: number, to: number, depth: number): LinkResult | null {
+function scanLink(ctx: InlineCtx, from: number, to: number, depth: number, links: number): LinkResult | null {
   const src = ctx.src;
   // from points at "["
   const j = partnerOf(ctx, from, to, "bracket");
   if (j === -1 || src.charAt(j + 1) !== "(") return null;
   const k = partnerOf(ctx, j + 1, to, "paren");
   if (k === -1) return null;
-  const label = parseInlineRange(ctx, from + 1, j, null, depth + 1).nodes;
+  const label = parseInlineRange(ctx, from + 1, j, null, depth, links + 1).nodes;
   let href = src.slice(j + 2, k).trim();
   // Strip an optional title: (url "title")
   const tm = /^(\S+)\s+["'(].*["')]$/.exec(href);

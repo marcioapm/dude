@@ -697,7 +697,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   bold — so nothing flickers when the closer lands. Finished messages parse
   strictly.
 - `breaks` (`parseMarkdown`'s `breaks` option) renders a single newline
-  inside a paragraph, list item, quote or table cell as a line break, as
+  inside a paragraph, list item or quote as a line break, as
   the person who pressed Enter meant, rather than CommonMark's space. Code
   blocks, code spans and headings are unaffected; the two-space and `\`
   hard breaks work either way. **The rule: on where a person writes the
