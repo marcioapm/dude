@@ -96,6 +96,10 @@ export const EventTypes = {
   RuntimeDestroyed: "runtime.destroyed",
 
   // Workspace / git
+  /** lux clone outcome, at submit or resume. Payload: `{ repo, status, ref?, branch?, commit?, error?, requestId? }`. */
+  GitClone: "git.clone",
+  /** lux checkout's actual starting commit. Payload: `{ repo, ref, base, branch? }`. */
+  GitCheckout: "git.checkout",
   WorkspaceCreated: "workspace.created",
   RepoMaterialized: "repo.materialized",
   RepoBranchCreated: "repo.branch_created",

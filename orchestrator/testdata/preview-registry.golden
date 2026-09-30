@@ -52,7 +52,7 @@
     "repositories": [
       {
         "name": "target",
-        "url": "https://github.com/acme/target.git",
+        "url": "git://127.0.0.1/acme/target.git",
         "ref": "main",
         "credential": "GIT_TOKEN",
         "path": "/workspace/repos/target",

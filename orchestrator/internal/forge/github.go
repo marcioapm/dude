@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -103,10 +104,31 @@ type Check struct {
 	// The app that reported it: "github-actions" for Actions, whose check
 	// run is a job, re-run through the Actions API.
 	App string `json:"app,omitempty"`
+	// Set only on an entry that is not a check but a source dude could not
+	// read (CheckRunsForbidden). Its Status is CheckUnavailable, which
+	// readers without this field take as pending: blocking, never failed.
+	Diagnostic string `json:"diagnostic,omitempty"`
 }
+
+// CheckRunsForbidden: GitHub refused the check-runs listing (403, not a
+// rate limit). CI may exist that the token cannot see.
+const (
+	CheckRunsForbidden = "check_runs_forbidden"
+	CheckUnavailable   = "unavailable"
+)
 
 // Failed says the check finished and failed: what wakes a fixer.
 func (c Check) Failed() bool { return checkRunState(c.Status, c.Conclusion) == ChecksFailing }
+
+// CheckDiagnostic is the first diagnostic code in a check list, or "".
+func CheckDiagnostic(checks []Check) string {
+	for _, c := range checks {
+		if c.Diagnostic != "" {
+			return c.Diagnostic
+		}
+	}
+	return ""
+}
 
 // Review is one reviewer's latest word on a pull request: APPROVED,
 // CHANGES_REQUESTED, COMMENTED, DISMISSED, or REQUESTED for one asked and
@@ -141,6 +163,36 @@ type Feedback struct {
 type Error struct {
 	Status  int
 	Message string
+	// How long GitHub asked to be left alone (Retry-After, or the primary
+	// limit's reset), capped at MaxRetryAfter; 0 when it did not say.
+	RetryAfter time.Duration
+}
+
+// MaxRetryAfter bounds a wait GitHub asks for, so a garbled header cannot
+// park a Run for days.
+const MaxRetryAfter = time.Hour
+
+// RetryAfter is the wait a forge error carries, or 0.
+func RetryAfter(err error) time.Duration {
+	var e *Error
+	if errors.As(err, &e) {
+		return e.RetryAfter
+	}
+	return 0
+}
+
+// retryAfter reads GitHub's wait from a limited response: Retry-After in
+// seconds, else X-RateLimit-Reset (epoch seconds) once no requests remain.
+func retryAfter(h http.Header, now time.Time) time.Duration {
+	var wait time.Duration
+	if s, err := strconv.ParseInt(strings.TrimSpace(h.Get("Retry-After")), 10, 64); err == nil {
+		wait = time.Duration(min(s, int64(MaxRetryAfter/time.Second))) * time.Second
+	} else if h.Get("X-RateLimit-Remaining") == "0" {
+		if reset, err := strconv.ParseInt(strings.TrimSpace(h.Get("X-RateLimit-Reset")), 10, 64); err == nil {
+			wait = time.Unix(reset, 0).Sub(now)
+		}
+	}
+	return max(0, min(wait, MaxRetryAfter))
 }
 
 func (e *Error) Error() string { return fmt.Sprintf("github %d: %s", e.Status, e.Message) }
@@ -152,11 +204,14 @@ func (e *Error) AlreadyExists() bool {
 }
 
 // Transient says whether trying again later could succeed: the forge was
-// unreachable, rate-limiting or failing, rather than refusing.
+// unreachable, rate-limiting or failing, rather than refusing. GitHub's
+// older secondary-limit 403 says "abuse detection" instead of "rate limit".
 func Transient(err error) bool {
 	var e *Error
 	if errors.As(err, &e) {
-		return e.Status == 429 || e.Status >= 500 || e.Status == 403 && strings.Contains(strings.ToLower(e.Message), "rate limit")
+		msg := strings.ToLower(e.Message)
+		return e.Status == 429 || e.Status >= 500 ||
+			e.Status == 403 && (strings.Contains(msg, "rate limit") || strings.Contains(msg, "abuse detection"))
 	}
 	// No answer from GitHub at all: the request never completed.
 	var u *Unreachable
@@ -185,18 +240,29 @@ func (e *Error) NotFound() bool { return e.Status == 404 }
 const requestTimeout = 15 * time.Second
 
 type GitHub struct {
-	cred Credential
-	http *http.Client
+	cred        Credential
+	http        *http.Client
+	testGitHost string
 	// How the organization wants dude to behave on GitHub.
 	Settings Settings
 }
 
-func NewGitHub(c Credential) *GitHub {
+// WithTestGitHost permits the test git daemon's separate port only on this
+// exact HTTP API host. Discovery and authentication still run against the API.
+func WithTestGitHost(host string) func(*GitHub) {
+	return func(g *GitHub) { g.testGitHost = host }
+}
+
+func NewGitHub(c Credential, options ...func(*GitHub)) *GitHub {
 	if c.APIBaseURL == "" {
 		c.APIBaseURL = "https://api.github.com"
 	}
 	c.APIBaseURL = strings.TrimRight(c.APIBaseURL, "/")
-	return &GitHub{cred: c, http: &http.Client{Timeout: requestTimeout}, Settings: DefaultSettings()}
+	g := &GitHub{cred: c, http: &http.Client{Timeout: requestTimeout}, Settings: DefaultSettings()}
+	for _, option := range options {
+		option(g)
+	}
+	return g
 }
 
 // Token is the credential to hand lux for cloning and pushing. With a PAT it
@@ -207,6 +273,112 @@ func (g *GitHub) Token() (string, error) {
 		return g.cred.Secret, nil
 	}
 	return "", fmt.Errorf("github_app authentication is not implemented yet")
+}
+
+// CheckPushAccess discovers receive-pack without publishing a ref. It does not
+// establish permission to change workflow files or bypass branch rules.
+func (g *GitHub) CheckPushAccess(ctx context.Context, repository string) error {
+	base, err := url.Parse(g.cred.APIBaseURL)
+	if err != nil || base.Host == "" || base.User != nil || base.RawQuery != "" || base.Fragment != "" || (base.Scheme != "https" && base.Scheme != "http") {
+		return fmt.Errorf("invalid GitHub APIBaseURL for push preflight")
+	}
+	switch base.Path {
+	case "", "/api/v3":
+		base.Path = ""
+	default:
+		return fmt.Errorf("GitHub APIBaseURL must be an origin or end in /api/v3")
+	}
+	if base.Host == "api.github.com" {
+		if base.Scheme != "https" {
+			return fmt.Errorf("GitHub requires HTTPS")
+		}
+		base.Host = "github.com"
+	}
+	if strings.HasPrefix(repository, "git@") {
+		host, path, ok := strings.Cut(strings.TrimPrefix(repository, "git@"), ":")
+		if !ok || !strings.EqualFold(host, base.Hostname()) || base.Port() != "" {
+			return fmt.Errorf("SSH repository host does not match the configured GitHub origin")
+		}
+		repository = base.Scheme + "://" + base.Host + "/" + path
+	}
+	clone, err := url.Parse(repository)
+	if err == nil && clone.Scheme == "ssh" && clone.User != nil && clone.User.String() == "git" && strings.EqualFold(clone.Host, base.Host) {
+		clone.Scheme, clone.User = base.Scheme, nil
+	}
+	if err != nil || clone.User != nil || clone.RawQuery != "" || clone.Fragment != "" || clone.Host == "" {
+		return fmt.Errorf("invalid repository URL for GitHub push preflight")
+	}
+	// The local git-daemon harness uses a separate port on the API's host.
+	localGit := clone.Scheme == "git" && base.Scheme == "http" && (base.Hostname() == "127.0.0.1" || base.Hostname() == "localhost" || (g.testGitHost != "" && base.Hostname() == g.testGitHost)) && clone.Hostname() == base.Hostname()
+	if !localGit && (clone.Scheme != base.Scheme || !strings.EqualFold(clone.Host, base.Host)) {
+		return fmt.Errorf("repository origin does not match the configured GitHub origin")
+	}
+	slug := strings.TrimSuffix(strings.TrimSuffix(strings.TrimPrefix(clone.Path, "/"), "/"), ".git")
+	if !regexp.MustCompile(`^[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+$`).MatchString(slug) || strings.HasSuffix(slug, "/.") || strings.HasSuffix(slug, "/..") {
+		return fmt.Errorf("invalid GitHub repository path")
+	}
+	base.Path = "/" + slug + ".git/info/refs"
+	base.RawQuery = "service=git-receive-pack"
+	token, err := g.Token()
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base.String(), nil)
+	if err != nil {
+		return err
+	}
+	req.SetBasicAuth("x-access-token", token)
+	client := *g.http
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	res, err := client.Do(req)
+	if err != nil {
+		return &Unreachable{err}
+	}
+	defer res.Body.Close()
+	if res.StatusCode == http.StatusOK {
+		if strings.TrimSpace(strings.Split(res.Header.Get("Content-Type"), ";")[0]) != "application/x-git-receive-pack-advertisement" {
+			return &Error{Status: http.StatusBadGateway, Message: "Git receive-pack discovery returned no Git advertisement (possibly an authentication gateway)"}
+		}
+		// Reach EOF for connection reuse, but leave oversized advertisements unread.
+		if _, err := io.Copy(io.Discard, io.LimitReader(res.Body, (1<<20)+1)); err != nil {
+			return &Unreachable{err}
+		}
+		return nil
+	}
+	// Error bodies are diagnostic, not an unbounded Git advertisement.
+	data, err := io.ReadAll(io.LimitReader(res.Body, 64<<10))
+	if err != nil {
+		return &Unreachable{err}
+	}
+	var response struct {
+		Message string `json:"message"`
+	}
+	_ = json.Unmarshal(data, &response)
+	message := response.Message
+	if message == "" {
+		message = strings.TrimSpace(string(data))
+	}
+	if message == "" {
+		message = "Git receive-pack discovery failed"
+	}
+	refusal := &Error{Status: res.StatusCode, Message: message}
+	markRateLimit(refusal, res.Header, "Git receive-pack discovery rate limit: ")
+	if Transient(refusal) {
+		refusal.RetryAfter = retryAfter(res.Header, time.Now())
+	}
+	if !Transient(refusal) && (res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden) {
+		refusal.Message = "Git push access denied: grant Contents: Read and write to the fine-grained PAT for this repository (classic PAT: repo or public_repo), and check repository selection, owner access and organization approval/SSO"
+	}
+	return refusal
+}
+
+// markRateLimit makes a 403 that GitHub marks as a rate limit only by its
+// headers (a secondary limit's Retry-After, or no requests remaining)
+// Transient, keeping GitHub's message after the prefix.
+func markRateLimit(e *Error, h http.Header, prefix string) {
+	if e.Status == http.StatusForbidden && (h.Get("Retry-After") != "" || h.Get("X-RateLimit-Remaining") == "0") {
+		e.Message = prefix + e.Message
+	}
 }
 
 func (g *GitHub) do(ctx context.Context, method, path string, body, out any) error {
@@ -253,7 +425,9 @@ func (g *GitHub) doURL(ctx context.Context, method, target string, body, out any
 		if e.Message == "" {
 			e.Message = fmt.Sprintf("%s %s failed", method, target)
 		}
-		return &Error{Status: res.StatusCode, Message: e.Message}
+		refusal := &Error{Status: res.StatusCode, Message: e.Message}
+		markRateLimit(refusal, res.Header, "rate limit: ")
+		return refusal
 	}
 	if out != nil && len(data) > 0 {
 		return json.Unmarshal(data, out)
@@ -390,8 +564,9 @@ func mergeable(ok *bool, state string, behindBy int) string {
 // such endpoint (404): no check runs. A token without Checks: read is
 // refused (403): there may be CI it cannot see, so the checks are never
 // read as passing — pending, which holds readiness back without waking a
-// fixer; the token needs Checks: read. A rate limit is also a 403, and is
-// neither: it fails the sync, to be tried again.
+// fixer — and the list says why with a CheckRunsForbidden entry beside the
+// checks it could read. A rate limit is also a 403, and is neither: it
+// fails the sync, to be tried again.
 func (g *GitHub) checks(ctx context.Context, slug, sha string) (string, []Check, error) {
 	var combined struct {
 		State      string `json:"state"`
@@ -439,6 +614,7 @@ func (g *GitHub) checks(ctx context.Context, slug, sha string) (string, []Check,
 		if err != nil && asError(err, &e) && !Transient(err) && (e.NotFound() || e.Status == 403) {
 			if e.Status == 403 {
 				rollup = worseChecks(rollup, ChecksPending)
+				list = append(list, Check{Name: "GitHub check runs", Status: CheckUnavailable, Diagnostic: CheckRunsForbidden})
 			}
 			break
 		}

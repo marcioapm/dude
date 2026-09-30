@@ -83,6 +83,13 @@ type Behaviour struct {
 	// Files written into its checkout in the turn that finishes, after a
 	// Hang is woken.
 	FinishEdits map[string]string
+	// Every turn fails at once with this error, as lux's ACP adapter reports
+	// a session/prompt the agent answered with a JSON-RPC error (a model it
+	// cannot reach): turn_end carries it, formatted "session/prompt:
+	// <message> (<code>)", and the agent goes idle.
+	TurnError string
+	// A Hang is woken by any input, not only one after a resume.
+	WakeOnInput bool
 }
 
 type Run struct {
@@ -164,8 +171,8 @@ func (s *Server) deliverQueued(run *Run) {
 	run.queued = nil
 	// Input after a resume is what a paused agent was waiting for: it
 	// finishes its work this time. Without input it waits, as a real one
-	// does.
-	run.woken = run.Resumed > 0
+	// does. WakeOnInput has any input wake it, a nudge included.
+	run.woken = run.Resumed > 0 || run.behavior.WakeOnInput
 	s.turn(run)
 }
 
@@ -371,7 +378,14 @@ func (s *Server) play(run *Run, spec map[string]any, resumed bool) {
 	s.setState(run, "running")
 	if !resumed {
 		for _, repo := range specRepos(spec) {
-			s.luxEvent(run, "git.checkout", map[string]any{"repo": repo.Name, "ref": repo.Ref, "base": head(s.repoPath(repo.URL), repo.Ref)})
+			base := head(s.repoPath(repo.URL), repo.Ref)
+			if base == "" {
+				s.luxEvent(run, "git.clone", map[string]any{"repo": repo.Name, "ref": repo.Ref, "status": "failed", "error": "ref not found"})
+				s.setState(run, "failed")
+				return
+			}
+			s.luxEvent(run, "git.clone", map[string]any{"repo": repo.Name, "ref": repo.Ref, "status": "cloned", "commit": base})
+			s.luxEvent(run, "git.checkout", map[string]any{"repo": repo.Name, "ref": repo.Ref, "base": base})
 		}
 		run.SessionID = fmt.Sprintf("ses_%s", run.ID)
 	}
@@ -405,6 +419,12 @@ func (s *Server) turn(run *Run) {
 	s.recordEvent(run, "lux.activity", map[string]any{"activity": "busy"})
 	run.busy = true
 	b := run.behavior
+	if b.TurnError != "" {
+		s.recordEvent(run, "acp.turn_end", map[string]any{"stopReason": "", "error": b.TurnError})
+		s.recordEvent(run, "lux.activity", map[string]any{"activity": "idle"})
+		run.busy = false
+		return
+	}
 	for _, chunk := range chunks(b.Thought, 7) {
 		s.agent(run, map[string]any{"sessionUpdate": "agent_thought_chunk", "content": map[string]any{"type": "text", "text": chunk}})
 	}

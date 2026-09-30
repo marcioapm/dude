@@ -267,7 +267,9 @@ func TestBlockersNameWhatStopsAMerge(t *testing.T) {
 	if b := Blockers(s); len(b) != 4 || b[0] != "checks are failing" || b[3] != "2 review thread(s) unresolved" {
 		t.Errorf("blockers = %v", b)
 	}
-	if b := Blockers(Status{Checks: ChecksPending}); len(b) != 2 || b[1] != "nobody has approved it" {
+	// Pending is not known to be running: it may be CI yet to start, or
+	// cancelled, or waiting on a person.
+	if b := Blockers(Status{Checks: ChecksPending}); len(b) != 2 || b[0] != "checks are pending" || b[1] != "nobody has approved it" {
 		t.Errorf("blockers = %v", b)
 	}
 	draft := ready
