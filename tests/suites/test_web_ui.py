@@ -364,6 +364,14 @@ def test_closing_a_task_with_writing_in_it_asks_first(
     expect(confirm).to_have_count(0)
     expect(page.get_by_test_id("task-goal")).to_have_value(goal)
 
+    # Escape inside the confirmation closes only it; the writing stays, and closing asks again.
+    page.keyboard.press("Escape")
+    expect(confirm).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(confirm).to_have_count(0)
+    expect(page.get_by_role("dialog", name="New task")).to_be_visible()
+    expect(page.get_by_test_id("task-goal")).to_have_value(goal)
+
     # Cancel asks too, and Discard closes without saving.
     page.get_by_role("button", name="Cancel").click()
     page.get_by_test_id("discard-confirm").click()

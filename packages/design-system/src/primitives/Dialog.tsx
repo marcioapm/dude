@@ -45,6 +45,8 @@ export interface DialogProps {
   readonly children?: ReactNode;
   readonly className?: string | undefined;
   readonly onKeyDown?: ((event: KeyboardEvent<HTMLDivElement>) => void) | undefined;
+  /** Escape, before the dialog closes; `preventDefault()` keeps it open. */
+  readonly onEscapeKeyDown?: ((event: globalThis.KeyboardEvent) => void) | undefined;
   /** Where focus goes on open; call `preventDefault()` to place it yourself. */
   readonly onOpenAutoFocus?: ((event: Event) => void) | undefined;
   /**
@@ -79,6 +81,7 @@ export function Dialog({
   children,
   className,
   onKeyDown,
+  onEscapeKeyDown,
   onOpenAutoFocus,
   onCloseAutoFocus,
 }: DialogProps) {
@@ -99,6 +102,7 @@ export function Dialog({
           }}
           onCloseAutoFocus={closeAutoFocus(() => opener.current, onCloseAutoFocus)}
           {...(onKeyDown ? { onKeyDown } : {})}
+          {...(onEscapeKeyDown ? { onEscapeKeyDown } : {})}
         >
           <div className={styles["header"]}>
             {tone ? (
