@@ -68,7 +68,8 @@
 .seg button:hover:not(:disabled) {
   color: var(--ds-color-text-strong);
 }
-.seg button[aria-pressed="true"] {
+.seg button[aria-pressed="true"],
+.seg button[aria-selected="true"] {
   background: var(--ds-color-surface);
   color: var(--ds-color-text-strong);
   box-shadow: var(--ds-shadow-1);
