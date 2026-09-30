@@ -109,11 +109,10 @@ func (c *Costs) log() *slog.Logger {
 	return slog.Default()
 }
 
-// read asks lux for one Run's cost, stores it, and records it in the
-// ledger when it changed. lux's error and the database's are apart: only
-// the second leaves the Run due at once. The Run leaves the work list
-// (next_at NULL) once lux says final or it ended more than costPatience
-// ago, whether lux answered or not.
+// read asks lux for one Run's cost and stores the answer. lux's error and
+// the database's are apart: only the second leaves the Run due at once.
+// The Run leaves the work list (next_at NULL) once lux says final or it
+// ended more than costPatience ago, whether lux answered or not.
 func (c *Costs) read(ctx context.Context, r costRun) (luxErr, dbErr error) {
 	cost, err := c.Lux.Cost(ctx, r.LuxRunID)
 	if err != nil {
@@ -121,18 +120,29 @@ func (c *Costs) read(ctx context.Context, r costRun) (luxErr, dbErr error) {
 		if lux.IsNotFound(err) {
 			wait = costNotFoundBackoff
 		}
-		return err, c.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, `UPDATE runs SET lux_cost_next_at = CASE
-					WHEN ended_at < now() - make_interval(secs => $3) THEN NULL
-					ELSE now() + make_interval(secs => $2) END
-				WHERE id = $1`,
-				r.ID, wait.Seconds(), costPatience.Seconds())
-			return err
-		})
+		return err, c.putOff(ctx, r, wait)
 	}
+	return nil, c.store(ctx, r, cost)
+}
+
+// putOff schedules the next read of a Run lux did not answer for.
+func (c *Costs) putOff(ctx context.Context, r costRun, wait time.Duration) error {
+	return c.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE runs SET lux_cost_next_at = CASE
+				WHEN ended_at < now() - make_interval(secs => $3) THEN NULL
+				ELSE now() + make_interval(secs => $2) END
+			WHERE id = $1`,
+			r.ID, wait.Seconds(), costPatience.Seconds())
+		return err
+	})
+}
+
+// store keeps lux's answer on the Run, schedules its next read, and
+// appends EvCostReported when an amount or the status changed.
+func (c *Costs) store(ctx context.Context, r costRun, cost lux.RunCost) error {
 	ai, hasAI := cost.FamilyUSD(lux.FamilyAI)
 	compute, hasCompute := cost.FamilyUSD(lux.FamilyCompute)
-	return nil, c.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+	return c.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		var changed bool
 		err := tx.QueryRow(ctx, `WITH old AS (
 				SELECT lux_ai_usd, lux_compute_usd, lux_cost_status FROM runs WHERE id = $1 FOR UPDATE)
