@@ -377,3 +377,20 @@ func TestAnUnknownInputPhaseDeliversNothing(t *testing.T) {
 		t.Errorf("accepted=%v delivered=%v from a phase lux.input does not carry", a, d)
 	}
 }
+
+// The task prompt's first answer with a phase lux.input does not carry is
+// ignored: the accepted answer after it records the text and where input lands.
+func TestAnUnknownPromptPhaseLeavesThePromptToItsAcceptedAnswer(t *testing.T) {
+	w := newReceiptWorld(t)
+	w.receive(lux.RecordInput, map[string]any{"requestId": promptRequestID, "phase": "consumed"})
+	w.receive(lux.RecordInput, map[string]any{"requestId": promptRequestID, "phase": "accepted", "receipt": false, "lands": "next_turn", "text": "Task instructions"})
+	var n int
+	var text, lands string
+	if err := w.owner.QueryRow(context.Background(), `SELECT count(*), coalesce(max(payload->>'text'), ''), coalesce(max(payload->>'lands'), '')
+		FROM events WHERE event_type = $1`, evPromptDelivered).Scan(&n, &text, &lands); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 || text != "Task instructions" || lands != "next_turn" {
+		t.Errorf("%d prompt events, text=%q lands=%q; want one, with the accepted answer's text and next_turn", n, text, lands)
+	}
+}
