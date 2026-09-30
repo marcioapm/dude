@@ -774,7 +774,8 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 			return nil, fmt.Errorf("lux pushed %s, which this task does not name", res.Repo)
 		case res.Status != "pushed" && res.Status != "up-to-date":
 			guidance := ""
-			if strings.Contains(strings.ToLower(res.Error), "refusing to allow a personal access token to create or update workflow") && strings.Contains(strings.ToLower(res.Error), "workflow") && strings.Contains(strings.ToLower(res.Error), "scope") {
+			message := strings.ToLower(res.Error)
+			if strings.Contains(message, "refusing to allow a personal access token to create or update workflow") && strings.Contains(message, "scope") {
 				guidance = "; workflow-file pushes require Workflows: Read and write on a fine-grained PAT, or the workflow scope on a classic PAT; ordinary push preflight does not establish this permission"
 			}
 			return nil, fmt.Errorf("push %s %s: %s%s", res.Repo, res.Status, res.Error, guidance)
