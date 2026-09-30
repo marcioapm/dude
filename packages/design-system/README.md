@@ -1231,6 +1231,11 @@ MarkdownCheatsheet.
   nobody gets hatched; the memory of one host between Linux and its runs.
 - **MachineChip / MachineTip** — the machine in a session's header, and
   its tooltip. The rules are under *Machines*.
+- **UsedBy** — who uses something: small faces (agents' tiles, projects'
+  squares), then the words.
+- **SettingsExplainer** (with the Settings pieces) — how something a
+  settings page depends on works, explained once: a titled box on the
+  chrome shade at the prose measure, a figure after the words.
 
 `src/components/` — live work:
 
