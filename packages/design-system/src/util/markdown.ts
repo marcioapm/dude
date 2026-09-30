@@ -259,7 +259,11 @@ function parseBlocks(lines: readonly string[], streaming: boolean, usedIds: Map<
   return out;
 }
 
-function isBlockStart(l: string): boolean {
+/**
+ * The line opens a block (fence, heading, rule, quote or list item), so it
+ * cannot lazily continue the paragraph above it.
+ */
+export function isBlockStart(l: string): boolean {
   return FENCE_RE.test(l) || HEADING_RE.test(l) || HR_RE.test(l) || QUOTE_RE.test(l) || matchListMarker(l) !== null;
 }
 

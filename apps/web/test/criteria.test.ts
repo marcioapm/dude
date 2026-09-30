@@ -69,6 +69,30 @@ describe("criteriaFromMarkdown", () => {
   test("a dash without a space is text, not an item", () => {
     expect(from("-not a list")).toEqual({ items: [], stray: true });
   });
+
+  test("an unindented line straight after an item's text continues it, as Preview shows", () => {
+    expect(from("- first line\ncontinuation line\n- second")).toEqual({ items: ["first line\ncontinuation line", "second"], stray: false });
+    expect(from("1. one\ntwo\nthree")).toEqual({ items: ["one\ntwo\nthree"], stray: false });
+    expect(from("- a\n  indented\nlazy")).toEqual({ items: ["a\nindented\nlazy"], stray: false });
+  });
+
+  test("a line that opens a block, or follows a blank line, does not continue the item", () => {
+    expect(from("- one\n\nseparate")).toEqual({ items: ["one"], stray: true });
+    expect(from("- one\n# heading")).toEqual({ items: ["one"], stray: true });
+    expect(from("- one\n> quote")).toEqual({ items: ["one"], stray: true });
+    expect(from("- one\n***")).toEqual({ items: ["one"], stray: true });
+    expect(from("-\nafter an empty item")).toEqual({ items: [], stray: true });
+  });
+
+  test("a lazy continuation reads back indented, as the same criterion", () => {
+    const first = from("- first line\ncontinuation line\n- second").items;
+    expect(criteriaToMarkdown(first)).toBe("- [ ] first line\n  continuation line\n- [ ] second");
+    expect(roundTrip(first)).toEqual(first);
+  });
+
+  test("a list written with CRLF line endings is the same criteria", () => {
+    expect(from("- [ ] one\r\n- [x] two\r\n  more\r\n")).toEqual({ items: ["one", "two\r\nmore"], stray: false });
+  });
 });
 
 describe("criteriaToMarkdown", () => {

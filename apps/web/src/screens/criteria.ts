@@ -4,6 +4,8 @@
  * write. Each top-level list item is one criterion.
  */
 
+import { isMarkdownBlockStart } from "@dude/design-system";
+
 /** The server's limit on one criterion (`z.string().max(2000)` in the task routes). */
 export const CRITERION_MAX = 2000;
 
@@ -58,7 +60,9 @@ function fenceStep(text: string, open: string | null): { open: string | null } {
  * `1)`), less an optional `[ ]` / `[x]`, starts a criterion. Lines indented
  * under it — nested lists, more paragraphs, code — belong to it, dedented by
  * the item's content column, as do blank lines between them and anything
- * inside a fence opened in it. Text anywhere else is `stray`.
+ * inside a fence opened in it. So does an unindented line straight after
+ * the item's text that opens no block (a lazy continuation, which Preview
+ * shows inside the item). Text anywhere else is `stray`.
  */
 export function criteriaFromMarkdown(source: string): ParsedCriteria {
   const items: string[] = [];
@@ -103,6 +107,13 @@ export function criteriaFromMarkdown(source: string): ParsedCriteria {
       current.push(...blanks, text);
       blanks = [];
       fence = fenceStep(text, null).open;
+      continue;
+    }
+    // Lazy continuation, as `parseMarkdown` reads it: a line that opens no
+    // block, straight after the item's text, is more of that paragraph.
+    const last = current ? current[current.length - 1] : undefined;
+    if (current && fence === null && blanks.length === 0 && last !== undefined && last.trim() !== "" && !isMarkdownBlockStart(line)) {
+      current.push(line.trim());
       continue;
     }
     if (marker && indent <= 3) {
