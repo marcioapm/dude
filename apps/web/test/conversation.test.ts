@@ -366,6 +366,59 @@ describe("a steer read at the agent's next step", () => {
     expect(turns).toHaveLength(2);
   });
 
+  const interruptNow = [
+    ev(EventTypes.RunSteered, { text: "S", directiveId: "dir_a" }),
+    ev(EventTypes.ToolCalled, { tool: "bash", callId: "c1" }),
+    ev(EventTypes.ToolCompleted, { tool: "bash", callId: "c1", status: "completed" }),
+    ev(EventTypes.DirectiveDelivered, { directiveId: "dir_a", read: true }),
+    ev(EventTypes.RunSteered, { text: "S", directiveId: "dir_b", supersedes: "dir_a", interrupt: true }),
+    ev(EventTypes.DirectiveDelivered, { directiveId: "dir_b", interruptOnly: true }),
+  ];
+
+  test("Interrupt now clicked after the steer was read stays its one turn, read where it was read", () => {
+    const { turns } = project(interruptNow);
+    expect(turns.map((t) => t.kind)).toEqual(["tool", "human"]);
+    expect(turns[1]).toMatchObject({ read: true, after: "bash", deliveredAt: interruptNow[3]!.occurredAt, failed: null });
+  });
+
+  test("Interrupt now before the read, then the read and the interrupt's delivery: the same one turn", () => {
+    const live = [
+      ev(EventTypes.RunSteered, { text: "S", directiveId: "dir_a" }),
+      ev(EventTypes.ToolCalled, { tool: "bash", callId: "c1" }),
+      ev(EventTypes.RunSteered, { text: "S", directiveId: "dir_b", supersedes: "dir_a", interrupt: true }),
+      ev(EventTypes.ToolCompleted, { tool: "bash", callId: "c1", status: "cancelled" }),
+      ev(EventTypes.DirectiveDelivered, { directiveId: "dir_a", read: true }),
+      ev(EventTypes.DirectiveDelivered, { directiveId: "dir_b", interruptOnly: true }),
+    ];
+    const { turns } = project(live);
+    expect(turns.map((t) => t.kind)).toEqual(["tool", "human"]);
+    expect(turns[1]).toMatchObject({ read: true, after: "bash", deliveredAt: live[4]!.occurredAt, interrupting: true });
+  });
+
+  test("an older lux fails the steer the interrupt cancelled, and the interrupt with it: one failed turn to retry", () => {
+    const { turns } = project([
+      ev(EventTypes.RunSteered, { text: "S", directiveId: "dir_a" }),
+      ev(EventTypes.RunSteered, { text: "S", directiveId: "dir_b", supersedes: "dir_a", interrupt: true }),
+      ev(EventTypes.DirectiveFailed, { directiveId: "dir_a", error: "the turn was cancelled before the agent read it" }),
+      ev(EventTypes.DirectiveFailed, { directiveId: "dir_b", error: "the turn was cancelled before the agent read it" }),
+    ]);
+    expect(turns).toHaveLength(1);
+    expect(turns[0]).toMatchObject({ failed: "the turn was cancelled before the agent read it", deliveredAt: null, directiveId: "dir_b" });
+  });
+
+  test("the steer fails while the interrupt carrying its words is on its way: not failed, then read once", () => {
+    const events = [
+      ev(EventTypes.RunSteered, { text: "S", directiveId: "dir_a" }),
+      ev(EventTypes.RunSteered, { text: "S", directiveId: "dir_b", supersedes: "dir_a", interrupt: true }),
+      ev(EventTypes.DirectiveFailed, { directiveId: "dir_a", error: "the agent exited" }),
+    ];
+    expect(project(events).turns[0]).toMatchObject({ failed: null, deliveredAt: null, interrupting: true });
+    events.push(ev(EventTypes.DirectiveDelivered, { directiveId: "dir_b", read: true }));
+    const { turns } = project(events);
+    expect(turns).toHaveLength(1);
+    expect(turns[0]).toMatchObject({ failed: null, read: true, deliveredAt: events[3]!.occurredAt });
+  });
+
   test("the progress row stays found when a steer moves past it", () => {
     const events = [
       ev(EventTypes.RunSteered, { text: "S", directiveId: "dir_1" }),

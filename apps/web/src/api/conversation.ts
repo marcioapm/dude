@@ -524,8 +524,13 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       }
 
       case EventTypes.DirectiveFailed: {
-        const steer = state.steersByDirective.get(String(payload.directiveId ?? ""));
-        if (steer && steer.deliveredAt === null) steer.failed = String(payload.error ?? "") || "lux could not deliver it";
+        const id = String(payload.directiveId ?? "");
+        const steer = state.steersByDirective.get(id);
+        // Only its latest attempt's failure fails the turn: an Interrupt now
+        // that carries the words still may deliver them.
+        if (steer && steer.deliveredAt === null && steer.directiveId === id) {
+          steer.failed = String(payload.error ?? "") || "lux could not deliver it";
+        }
         break;
       }
 
@@ -563,7 +568,15 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         // "Interrupt now" on a queued steer, or Retry on a failed one, sends
         // it again superseding it: one steer, not two turns saying the same thing.
         const earlier = typeof payload.supersedes === "string" ? state.steersByDirective.get(payload.supersedes) : undefined;
-        if (earlier && earlier.deliveredAt === null && earlier.text === String(payload.text ?? "")) {
+        const same = earlier !== undefined && earlier.text === String(payload.text ?? "");
+        if (same && earlier.deliveredAt !== null && payload.interrupt === true) {
+          // Interrupt now clicked on a steer already read (the page had not
+          // caught up): it stays where and when it was read, and the
+          // interrupt's own delivery, flagged interruptOnly, settles nothing new.
+          if (directiveId) state.steersByDirective.set(directiveId, earlier);
+          break;
+        }
+        if (same && earlier.deliveredAt === null) {
           // A retry replaces a failed attempt, interrupt and all: it is
           // interrupting only if this attempt is.
           earlier.interrupting = payload.interrupt === true || (earlier.failed === null && earlier.interrupting);
