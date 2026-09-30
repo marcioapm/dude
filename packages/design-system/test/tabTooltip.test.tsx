@@ -7,6 +7,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { Dialog } from "../src/primitives/Dialog.tsx";
 import { Tab, TabList, TabPanel, Tabs } from "../src/primitives/Tabs.tsx";
 import { TooltipProvider } from "../src/primitives/Tooltip.tsx";
 
@@ -126,6 +127,50 @@ describe("a tab with a tooltip", () => {
       expect(focused()).toBe("Overview");
     });
   }
+
+  // The tip goes while the tab has focus, focus moves on, the tip returns:
+  // it must wait for a fresh focus or hover, not bring back the old one.
+  test("a returning tooltip stays shut until the tab is focused or hovered again", async () => {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    const draw = (tip: string | undefined) =>
+      root!.render(
+        <TooltipProvider>
+          <Dialog open title="Task">
+            <Tabs defaultValue="overview">
+              <TabList aria-label="Task">
+                <Tab value="overview">Overview</Tab>
+                <Tab value="servers" tooltip={tip}>Servers</Tab>
+                <Tab value="other">Other</Tab>
+              </TabList>
+              <TabPanel value="overview">o</TabPanel>
+              <TabPanel value="servers">s</TabPanel>
+              <TabPanel value="other">x</TabPanel>
+            </Tabs>
+          </Dialog>
+        </TooltipProvider>,
+      );
+    await act(async () => draw("1 server on"));
+    await act(async () => tab("Servers").focus());
+    expect(tooltip()).toContain("1 server on");
+    await act(async () => draw(undefined));
+    await wait(20);
+    expect(tooltip()).toBeNull();
+    await act(async () => tab("Other").focus());
+    await act(async () => draw("1 server on"));
+    await wait(20);
+    expect(focused()).toBe("Other");
+    expect(tooltip()).toBeNull();
+    await act(async () => tab("Servers").focus());
+    expect(tooltip()).toContain("1 server on");
+    await act(async () => tab("Other").focus());
+    await wait(20);
+    expect(tooltip()).toBeNull();
+    await act(async () => void tab("Servers").dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse" })));
+    await wait(500);
+    expect(tooltip()).toContain("1 server on");
+  });
 
   test("a tab without one is the tab it always was", async () => {
     await render();

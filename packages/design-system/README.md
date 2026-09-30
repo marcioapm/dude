@@ -815,7 +815,8 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 - A tooltip may come and go with its data (the Servers tab has none until
   its servers load). Every `Tab` sits in the same `Tooltip` wrapper, held
   shut (`Tooltip disabled`) when it has no `tooltip`, so the button is
-  never remounted and a keyboard user on it keeps focus.
+  never remounted and a keyboard user on it keeps focus. A tip that comes
+  back stays shut until a fresh focus or hover on its tab.
 
 ### Servers
 
