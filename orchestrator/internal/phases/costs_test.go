@@ -78,11 +78,26 @@ func (f *costFixture) run(id, endedAgo string) {
 	f.runOf("agent", id, endedAgo)
 }
 
+// runOf inserts the Run without a lux Run and then gives it one, the way
+// Syncer.submit does, so the work list is joined through the UPDATE path.
 func (f *costFixture) runOf(kind, id, endedAgo string) {
 	f.t.Helper()
+	f.insertRun(kind, id, endedAgo, false)
+	f.setLuxRun(id)
+}
+
+func (f *costFixture) insertRun(kind, id, endedAgo string, withLux bool) {
+	f.t.Helper()
 	if _, err := f.owner.Exec(f.ctx, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, kind, lux_run_id, started_at, ended_at)
-		VALUES ($1, $2, 'prj_'||$2, 'wi_'||$2, 1, $4, 'lux_'||$1, now() - interval '9 days',
-		        CASE WHEN $3 = '' THEN NULL ELSE now() - $3::interval END)`, id, f.org, endedAgo, kind); err != nil {
+		VALUES ($1, $2, 'prj_'||$2, 'wi_'||$2, 1, $4, CASE WHEN $5 THEN 'lux_'||$1 END, now() - interval '9 days',
+		        CASE WHEN $3 = '' THEN NULL ELSE now() - $3::interval END)`, id, f.org, endedAgo, kind, withLux); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+func (f *costFixture) setLuxRun(id string) {
+	f.t.Helper()
+	if _, err := f.owner.Exec(f.ctx, `UPDATE runs SET lux_run_id = 'lux_'||$1 WHERE id = $1`, id); err != nil {
 		f.t.Fatal(err)
 	}
 }
@@ -272,12 +287,14 @@ func TestAReadWaitsItsTurnAndALostRunWaitsAnHour(t *testing.T) {
 	f.run("run_aging", "7 days")
 	f.run("run_aging_down", "7 days")
 	f.runOf("preview", "run_prev", "")
+	// A Run inserted with its lux Run already set is due from the start.
+	f.insertRun("agent", "run_direct", "", true)
 	// Both ended within costPatience when they got their lux Run, and have
 	// aged past it since.
 	if _, err := f.owner.Exec(f.ctx, `UPDATE runs SET ended_at = now() - interval '9 days' WHERE id IN ('run_aging', 'run_aging_down')`); err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []string{"lux_run_ok", "lux_run_aging", "lux_run_prev"} {
+	for _, id := range []string{"lux_run_ok", "lux_run_aging", "lux_run_prev", "lux_run_direct"} {
 		f.lux.set(id, lux.RunCost{Status: lux.CostIncomplete, ByFamily: []lux.FamilyCost{usd(lux.FamilyAI, "0.1")}})
 	}
 	f.lux.set("lux_run_final", lux.RunCost{Status: lux.CostFinal, Final: true})
@@ -285,8 +302,11 @@ func TestAReadWaitsItsTurnAndALostRunWaitsAnHour(t *testing.T) {
 	f.lux.errs["lux_run_aging_down"] = &lux.Error{Status: 503, Code: "unavailable"}
 	f.lux.errs["lux_run_gone"] = &lux.Error{Status: 404, Code: "not_found"}
 
-	if n, err := f.costs.Sweep(f.ctx); err != nil || n != 6 {
-		t.Fatalf("first sweep read %d (%v), want the 6 agent Runs", n, err)
+	if n, err := f.costs.Sweep(f.ctx); err != nil || n != 7 {
+		t.Fatalf("first sweep read %d (%v), want the 7 agent Runs", n, err)
+	}
+	if f.lux.asked["lux_run_direct"] != 1 {
+		t.Error("a Run inserted with its lux Run was not read")
 	}
 	if n, err := f.costs.Sweep(f.ctx); err != nil || n != 0 {
 		t.Fatalf("second sweep at once read %d (%v), want none due", n, err)
@@ -310,6 +330,11 @@ func TestAReadWaitsItsTurnAndALostRunWaitsAnHour(t *testing.T) {
 		if w, ok := f.nextIn(id); ok {
 			t.Errorf("%s: still due in %v after its last read, want off the work list", id, w)
 		}
+	}
+	// Writing the same lux Run again is not a new lux Run.
+	f.setLuxRun("run_final")
+	if w, ok := f.nextIn("run_final"); ok {
+		t.Errorf("re-setting the same lux Run put a final Run back, due in %v", w)
 	}
 }
 
