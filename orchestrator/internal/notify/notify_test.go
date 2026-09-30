@@ -121,6 +121,9 @@ func TestAnAskReachesItsOwnersBrowsersOnce(t *testing.T) {
 	exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ($1, $2, 'P', $1, 'TEXT')`, "prj_"+org, org)
 	exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, owner_key_id) VALUES ($1, $2, $3, 19, 'Count sentences', $4)`,
 		"wi_"+org, org, "prj_"+org, "key_me_"+org)
+	exec(`INSERT INTO task_people (task_id, organization_id, person_id, position)
+		SELECT $1, $2, person_id, 0 FROM api_keys WHERE id = $3`, "wi_"+org, org, "key_me_"+org)
+	exec(`INSERT INTO people (id, organization_id, name) VALUES ($1, $2, 'Other organization')`, "per_theirs_"+other, other)
 	exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role)
 		VALUES ($1, $2, $3, $4, 1, 'running', 'implement', 'implementer')`, "run_"+org, org, "prj_"+org, "wi_"+org)
 	// And one from before there were owners.
@@ -144,10 +147,14 @@ func TestAnAskReachesItsOwnersBrowsersOnce(t *testing.T) {
 		{"/colleague", org, "key_colleague_" + org, colleague}, {"/theirs", other, "", theirs},
 	} {
 		p256dh, auth := s.b.keys()
-		exec(`INSERT INTO push_subscriptions (endpoint, organization_id, api_key_id, p256dh, auth) VALUES ($1, $2, NULLIF($3, ''), $4, $5)`,
-			push.URL+s.path, s.org, s.key, p256dh, auth)
+		exec(`INSERT INTO push_subscriptions (endpoint, organization_id, api_key_id, person_id, p256dh, auth)
+			VALUES ($1, $2, NULLIF($3, ''), COALESCE((SELECT person_id FROM api_keys WHERE id = $3), $6), $4, $5)`,
+			push.URL+s.path, s.org, s.key, p256dh, auth, "per_theirs_"+other)
 	}
 
+	// The owner can sign in without a key; revocation leaves browser ownership intact.
+	exec(`UPDATE api_keys SET revoked_at = now() WHERE id = $1`, "key_me_"+org)
+	exec(`UPDATE push_subscriptions SET api_key_id = NULL WHERE endpoint = $1`, push.URL+"/mine")
 	n := &notify.Notifier{DB: app, Log: slog.New(slog.DiscardHandler), Subject: "ops@example.com", HTTP: push.Client()}
 	if _, _, err := n.Keys(ctx); err != nil {
 		t.Fatal(err)
