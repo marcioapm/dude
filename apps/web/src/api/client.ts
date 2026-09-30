@@ -299,7 +299,12 @@ export class ApiClient {
     });
     if (!res.ok) {
       const text = await res.text();
-      const error = (text ? JSON.parse(text) : null)?.error ?? {};
+      let error: { code?: string; message?: string; details?: unknown } = {};
+      try {
+        error = (text ? JSON.parse(text) : null)?.error ?? {};
+      } catch {
+        // Proxy and Access refusals may be HTML; the HTTP status still applies.
+      }
       throw new ApiError(
         res.status,
         error.code ?? "error",
