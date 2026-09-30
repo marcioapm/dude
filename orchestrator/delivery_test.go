@@ -2089,25 +2089,30 @@ func TestInterruptNowCarriesTheWordsWhenTheSteerFailedBeforeItWasSent(t *testing
 // the interrupt cancelled: the interrupt, which carried no words, fails
 // with it, for the same reason, and nothing is left queued.
 func TestInterruptNowOnAnOlderLuxFailsWithTheSteer(t *testing.T) {
-	w := newWorld(t)
-	w.lux.FailUnreadOnInterrupt = true
-	wi := w.task()
-	runID, interruptID := w.interruptQueuedSteer(wi)
-	w.until("both to fail", func() bool {
-		return w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND failed_at IS NOT NULL AND delivered_at IS NULL
-			AND error = 'the turn was cancelled before the agent read it'`, runID) == 2
-	})
-	for range 3 {
-		w.pump()
-	}
-	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.directive.failed'`, runID); n != 2 {
-		t.Errorf("%d failed events, want one for each", n)
-	}
-	if n := w.count(`SELECT count(*) FROM directives WHERE id = $1 AND interrupt_only AND sent_at IS NOT NULL`, interruptID); n != 1 {
-		t.Error("the interrupt was not sent as the interrupt alone")
-	}
-	if r := w.lux.Runs()[0]; r.Interrupted != 1 || len(r.Inputs) != 0 {
-		t.Errorf("interrupted=%d inputs=%q, want one interrupt and the words never read", r.Interrupted, r.Inputs)
+	for _, legacy := range []bool{false, true} {
+		t.Run(map[bool]string{false: "receipts", true: "legacy lux"}[legacy], func(t *testing.T) {
+			w := newWorld(t)
+			w.lux.LegacyInput = legacy
+			w.lux.FailUnreadOnInterrupt = true
+			wi := w.task()
+			runID, interruptID := w.interruptQueuedSteer(wi)
+			w.until("both to fail", func() bool {
+				return w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND failed_at IS NOT NULL AND delivered_at IS NULL
+					AND error = 'the turn was cancelled before the agent read it'`, runID) == 2
+			})
+			for range 3 {
+				w.pump()
+			}
+			if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.directive.failed'`, runID); n != 2 {
+				t.Errorf("%d failed events, want one for each", n)
+			}
+			if n := w.count(`SELECT count(*) FROM directives WHERE id = $1 AND interrupt_only AND sent_at IS NOT NULL`, interruptID); n != 1 {
+				t.Error("the interrupt was not sent as the interrupt alone")
+			}
+			if r := w.lux.Runs()[0]; r.Interrupted != 1 || len(r.Inputs) != 0 {
+				t.Errorf("interrupted=%d inputs=%q, want one interrupt and the words never read", r.Interrupted, r.Inputs)
+			}
+		})
 	}
 }
 
@@ -2154,15 +2159,19 @@ func TestInterruptNowOnASteerAlreadyReadIsSettledWhenSent(t *testing.T) {
 	}
 }
 
-// interruptQueuedSteer is a steer the harness took while a tool runs, and a
-// person's "Interrupt now" on it, recorded by the API and not yet sent:
+// interruptQueuedSteer is a steer the harness took (sent, to a legacy lux)
+// while a tool runs, and a person's "Interrupt now" on it, recorded by the API and not yet sent:
 // returns the Run and the interrupt's directive.
 func (w *world) interruptQueuedSteer(wi string) (runID, interruptID string) {
 	w.t.Helper()
 	runID = w.steerDuringTool(wi)
-	w.until("the harness to take it", func() bool {
-		return w.count(`SELECT count(*) FROM directives WHERE id = 'dir_s' AND accepted_at IS NOT NULL`) == 1
-	})
+	// A legacy lux says nothing until it hands the steer over: sent is all
+	// there is to wait on.
+	if !w.lux.LegacyInput {
+		w.until("the harness to take it", func() bool {
+			return w.count(`SELECT count(*) FROM directives WHERE id = 'dir_s' AND accepted_at IS NOT NULL`) == 1
+		})
+	}
 	code, out := w.call("/internal/runs/"+runID+"/steer", map[string]any{
 		"text": "check the migration too", "supersedes": "dir_s", "interrupt": true})
 	if code != http.StatusCreated {
