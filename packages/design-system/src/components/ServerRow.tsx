@@ -226,7 +226,7 @@ export interface ServersPanelProps extends HTMLAttributes<HTMLDivElement> {
 
 /**
  * The servers panel: the run line, a notice when the run moved, a preview's
- * stages, the list, a note. A container: in a narrow drawer the rows stack.
+ * stages, the list, a note. A container: on a narrow page the rows stack.
  */
 export function ServersPanel({ note, className, children, ...rest }: ServersPanelProps) {
   return (
@@ -234,28 +234,6 @@ export function ServersPanel({ note, className, children, ...rest }: ServersPane
       {children}
       {note ? <p className={styles["note"]}>{note}</p> : null}
     </div>
-  );
-}
-
-export interface ServersDrawerProps extends HTMLAttributes<HTMLElement> {
-  /** After "Servers": "1 of 3 ready", "preview run". */
-  readonly count?: ReactNode;
-  readonly actions?: ReactNode;
-  readonly onClose: () => void;
-  readonly children?: ReactNode;
-}
-
-/** The run screen's drawer: the panel beside the conversation, on chrome, 440px. */
-export function ServersDrawer({ count, actions, onClose, className, children, ...rest }: ServersDrawerProps) {
-  return (
-    <aside className={cx(styles["drawer"], className)} aria-label="Servers" {...rest}>
-      <div className={styles["drawerHead"]}>
-        <span className={styles["drawerTitle"]}>Servers{count ? <span className={styles["drawerCount"]}>{count}</span> : null}</span>
-        {actions}
-        <IconButton size="sm" icon="close" label="Close servers" onClick={onClose} data-testid="servers-drawer-close" />
-      </div>
-      <div className={styles["drawerBody"]}>{children}</div>
-    </aside>
   );
 }
 

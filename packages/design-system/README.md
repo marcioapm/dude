@@ -470,6 +470,11 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   (`LiveDiff`'s `leading`). One row, one left edge, whichever view is
   shown: never a row of tabs over a row of tools. Each view fills the same
   place under the bar; none opens over the page.
+- **Servers live on the task's tab**, not in a session: a Run's servers
+  are the task's while that Run serves it, so the session bar has no
+  Servers toggle and nothing opens beside the conversation for them. A
+  branch preview's session, which has no agent, says so in place of the
+  composer and links to its task's Servers tab (`#/task/<id>/servers`).
 - **Changes** in the switch carries its file count and, while the agent is
   changing files, the breathing dot. That dot is the one "live" on the bar:
   the header's status already says Running, so the diff has no Live pill.
@@ -955,9 +960,10 @@ EmptyState, ScrollArea.
   there is no in-app frame (a preview's sign-in cookie would not reach a
   cross-site iframe). `safeServerUrl` keeps anything but an `https://` URL
   out of an `href`.
-- **ServersRunLine / ServersPanel / ServersDrawer** — the run the servers
-  live on as a line, the panel (a container: rows stack in a narrow
-  drawer), and the run screen's 440px drawer on chrome.
+- **ServersRunLine / ServersPanel** — the run the servers live on as a
+  line, and the panel: the task's Servers tab (a container: under 560px,
+  a phone, its rows stack). A session has no servers panel; its servers
+  are its task's.
 - **PreviewStages / ServersMoved** — a branch preview's stages, and the
   notice with Start all after a run moved host.
 - **ServersSummary** — the overview aside's block, in PullRequestPanel's

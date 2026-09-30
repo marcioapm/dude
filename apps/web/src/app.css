@@ -142,8 +142,7 @@ body {
 .runCount {
   color: var(--ds-color-text-muted);
 }
-/* Where Changes draws the diff's controls: the rest of the bar's row, so
-   the Servers toggle after it sits at the row's end. */
+/* Where Changes draws the diff's controls: the rest of the bar's row. */
 .runBarTools {
   flex: 1;
   min-width: 0;
@@ -197,14 +196,7 @@ body {
 .runChanges {
   padding: 0 var(--ds-space-chat-pad-x) var(--ds-space-16);
 }
-/* The session's view, and beside it the servers drawer. The view keeps
-   the screen's column, so each view fills it as it would alone. */
-.runSplit {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-  min-width: 0;
-}
+/* The session's view under its bar: each view fills it as it would alone. */
 .runView {
   display: flex;
   flex-direction: column;

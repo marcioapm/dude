@@ -6,7 +6,7 @@ import { Duration } from "../../components/Numbers.tsx";
 import { PersonAvatar } from "../../components/PersonAvatar.tsx";
 import { PreviewAlsoRunning, PreviewStages, ServersMoved } from "../../components/PreviewStages.tsx";
 import { EnvVarRows, ServerRecipeDialog, ServerRecipeTable, ServerUrlPreview } from "../../components/ServerRecipe.tsx";
-import { AutostartMark, ServerList, ServerRecipeRow, ServerRow, ServersDrawer, ServersPanel, ServersRecipesPreview, ServersRunLine, ShortId, TerminalLink } from "../../components/ServerRow.tsx";
+import { AutostartMark, ServerList, ServerRecipeRow, ServerRow, ServersPanel, ServersRecipesPreview, ServersRunLine, ShortId, TerminalLink } from "../../components/ServerRow.tsx";
 import { ServerStateDot, ServerStateMark } from "../../components/ServerStateMark.tsx";
 import { ServersSummary, ServersSummaryRow } from "../../components/ServersSummary.tsx";
 import { HostChips } from "../../components/HostChips.tsx";
@@ -18,7 +18,7 @@ import { FormActions } from "../../primitives/Layout.tsx";
 import { RowMenu } from "../../primitives/RowMenu.tsx";
 import { Select } from "../../primitives/Select.tsx";
 import { SERVER_DISPLAY_STATES } from "../../tokens/servers.ts";
-import { canStartAny, canStopAny, describeServer, isMoving, serverLogLines, summarizeServers } from "../../util/servers.ts";
+import { canStartAny, canStopAny, describeServer, isMoving, serverLogLines } from "../../util/servers.ts";
 import { toggled } from "../../util/sets.ts";
 import { formatTimestamp } from "../../util/format.ts";
 import { egressProblem, type PreviewStage, type RunServer, type TaskServers } from "@dude/domain";
@@ -35,7 +35,7 @@ const SCENARIO_WORDS: Record<ServerScenario, string> = {
 };
 
 /** The servers panel as the app composes it, for one scenario. */
-function Panel({ data, compact, logHeight, openLogs = [] }: { readonly data: TaskServers; readonly compact?: boolean | undefined; readonly logHeight?: number | undefined; readonly openLogs?: readonly string[] | undefined }) {
+function Panel({ data, openLogs = [] }: { readonly data: TaskServers; readonly openLogs?: readonly string[] | undefined }) {
   const [open, setOpen] = useState<Set<string>>(() => new Set(openLogs));
   const now = Date.now();
   const run = data.run;
@@ -77,8 +77,8 @@ function Panel({ data, compact, logHeight, openLogs = [] }: { readonly data: Tas
               <TerminalLink href={run.terminalUrl ?? "#"} />
               {isPreview ? <Button size="sm" variant="quiet" leadingIcon="stop">Stop preview</Button> : (
                 <>
-                  {compact ? null : <Button size="sm" variant="secondary" leadingIcon="play" disabled={!canStartAny(data.servers)}>Start all</Button>}
-                  {compact ? null : <Button size="sm" variant="quiet" leadingIcon="stop" disabled={!canStopAny(data.servers)}>Stop all</Button>}
+                  <Button size="sm" variant="secondary" leadingIcon="play" disabled={!canStartAny(data.servers)}>Start all</Button>
+                  <Button size="sm" variant="quiet" leadingIcon="stop" disabled={!canStopAny(data.servers)}>Stop all</Button>
                   <Button size="sm" variant="quiet" leadingIcon="plus">Add server</Button>
                 </>
               )}
@@ -106,7 +106,7 @@ function Panel({ data, compact, logHeight, openLogs = [] }: { readonly data: Tas
                 onStop={() => undefined}
                 onRestart={() => undefined}
                 menu={<RowMenu size="sm" label={`Actions for ${s.name}`} items={[{ id: "remove", label: "Remove", tone: "danger" }]} />}
-                logs={{ open: open.has(s.name), onToggle: () => toggle(s.name), lines: serverLogLines(logs[s.name] ?? []), live: isMoving(s), maxHeight: logHeight, onFull: () => undefined }}
+                logs={{ open: open.has(s.name), onToggle: () => toggle(s.name), lines: serverLogLines(logs[s.name] ?? []), live: isMoving(s), onFull: () => undefined }}
               />
             );
           })}
@@ -235,18 +235,6 @@ export function ServersSection({ mode }: { readonly mode: PaneMode }) {
         <Panes mode={mode} surface>
           <div className={styles["serversTab"]}>
             <Panel data={serverScenarios[scenario]} openLogs={scenario === "c" ? ["api"] : []} />
-          </div>
-        </Panes>
-      </Block>
-
-      <Block id="sv-drawer" title="ServersDrawer" note="The run screen's drawer: the same panel at 440px on the chrome shade, its rows stacked by the container query, beside the conversation.">
-        <Panes mode={mode} surface>
-          <div className={styles["serversSplit"]}>
-            <div className={styles["serversSplitMain"]}>the conversation</div>
-            <ServersDrawer count={`${summarizeServers(serverScenarios.a.servers).ready} of ${serverScenarios.a.servers.length} ready`} onClose={() => undefined}
-              actions={<Button size="sm" variant="quiet" leadingIcon="play">Start all</Button>}>
-              <Panel data={serverScenarios.a} compact logHeight={200} />
-            </ServersDrawer>
           </div>
         </Panes>
       </Block>
