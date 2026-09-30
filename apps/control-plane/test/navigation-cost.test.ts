@@ -62,6 +62,17 @@ afterAll(async () => {
   await admin?.end();
 });
 
+// The origin of a cost no part of which lux priced.
+const NOT_LUX = { tokens: "agent", machine: "estimate", settled: false };
+
+type MetricsCost = { cost: { tokensUsd: number; origin?: unknown } };
+
+async function get<T>(path: string): Promise<T> {
+  const res = await router.handle(new Request(`http://dude.test${path}`, { headers: { authorization: `Bearer ${key}` } }));
+  expect(res.status).toBe(200);
+  return (await res.json()) as T;
+}
+
 test("a task's spend on the board is its agents' effective model cost, the task page's", async () => {
   await owner`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES ('wi_1', ${ORG}, ${PROJECT}, 1, 'Priced')`;
   // lux priced the implementer: its $1.81 replaces the harness's $0.30.
@@ -78,18 +89,15 @@ test("a task's spend on the board is its agents' effective model cost, the task 
   await owner`INSERT INTO events (id, organization_id, event_type, task_id, run_id, actor_type, actor_id, source, payload)
               VALUES ('evt_1', ${ORG}, 'agent.model.request.completed', 'wi_1', 'run_impl', 'agent', 'run_impl', 'runner', '{"costUsd": 0.30}')`;
 
-  const res = await router.handle(new Request("http://dude.test/v1/navigation", { headers: { authorization: `Bearer ${key}` } }));
-  expect(res.status).toBe(200);
-  const nav = (await res.json()) as { projects: Array<{ tasks: Array<{ id: string; costUsd: number }> }> };
+  const nav = await get<{ projects: Array<{ tasks: Array<{ id: string; costUsd: number }> }> }>("/v1/navigation");
   const board = nav.projects[0]!.tasks.find((t) => t.id === "wi_1")!;
   expect(board.costUsd).toBeCloseTo(1.810247 + 0.25, 9);
 
-  const metrics = (await (await router.handle(new Request("http://dude.test/v1/tasks/wi_1/metrics",
-    { headers: { authorization: `Bearer ${key}` } }))).json()) as {
+  const metrics = await get<{
     costUsd: number;
     cost: { origin?: unknown };
     runs: Array<{ id: string; cost: { tokensUsd: number; origin?: unknown } }>;
-  };
+  }>("/v1/tasks/wi_1/metrics");
   expect(board.costUsd).toBeCloseTo(metrics.costUsd, 9);
 
   // Who priced it: lux for the Run it priced, settled; the task's total is
@@ -97,8 +105,8 @@ test("a task's spend on the board is its agents' effective model cost, the task 
   const impl = metrics.runs.find((r) => r.id === "run_impl")!;
   expect(impl.cost.tokensUsd).toBeCloseTo(1.810247, 9);
   expect(impl.cost.origin).toEqual({ tokens: "lux", machine: "estimate", settled: true });
-  expect(metrics.runs.find((r) => r.id === "run_rev")!.cost.origin).toEqual({ tokens: "agent", machine: "estimate", settled: false });
-  expect(metrics.cost.origin).toEqual({ tokens: "agent", machine: "estimate", settled: false });
+  expect(metrics.runs.find((r) => r.id === "run_rev")!.cost.origin).toEqual(NOT_LUX);
+  expect(metrics.cost.origin).toEqual(NOT_LUX);
 });
 
 test("an epic whose every agent Run lux priced says so, even at $0", async () => {
@@ -109,27 +117,20 @@ test("an epic whose every agent Run lux priced says so, even at $0", async () =>
   // A preview lux has not priced is not one of the epic's agents.
   await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, kind)
               VALUES ('run_free_prev', ${ORG}, ${PROJECT}, 'wi_2', 1, 'preview')`;
-  const get = async (path: string) =>
-    (await (await router.handle(new Request(`http://dude.test${path}`, { headers: { authorization: `Bearer ${key}` } }))).json()) as {
-      cost: { tokensUsd: number; origin?: unknown };
-    };
 
-  const epic = await get("/v1/epics/epc_free/metrics");
+  const epic = await get<MetricsCost>("/v1/epics/epc_free/metrics");
   expect(epic.cost.tokensUsd).toBe(0);
   expect(epic.cost.origin).toEqual({ tokens: "lux", machine: "lux", settled: true });
-  expect((await get("/v1/tasks/wi_2/metrics")).cost.origin).toEqual(epic.cost.origin);
+  expect((await get<MetricsCost>("/v1/tasks/wi_2/metrics")).cost.origin).toEqual(epic.cost.origin);
 
   // One Run lux has not priced makes the total the harness's again.
   await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, agent_cost_usd)
               VALUES ('run_unpriced', ${ORG}, ${PROJECT}, 'wi_2', 2, 0.10)`;
-  expect((await get("/v1/epics/epc_free/metrics")).cost.origin).toEqual({ tokens: "agent", machine: "estimate", settled: false });
+  expect((await get<MetricsCost>("/v1/epics/epc_free/metrics")).cost.origin).toEqual(NOT_LUX);
 });
 
 test("an epic with no agent Runs yet is not lux's", async () => {
   await owner`INSERT INTO epics (id, organization_id, project_id, title) VALUES ('epc_new', ${ORG}, ${PROJECT}, 'New')`;
   await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, epic_id) VALUES ('wi_3', ${ORG}, ${PROJECT}, 3, 'New', 'epc_new')`;
-  const res = await router.handle(new Request("http://dude.test/v1/epics/epc_new/metrics", { headers: { authorization: `Bearer ${key}` } }));
-  expect(res.status).toBe(200);
-  const epic = (await res.json()) as { cost: { origin?: unknown } };
-  expect(epic.cost.origin).toEqual({ tokens: "agent", machine: "estimate", settled: false });
+  expect((await get<MetricsCost>("/v1/epics/epc_new/metrics")).cost.origin).toEqual(NOT_LUX);
 });
