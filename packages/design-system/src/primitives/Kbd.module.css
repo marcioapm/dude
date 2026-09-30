@@ -46,6 +46,14 @@
   line-height: var(--ds-leading-prose);
   color: var(--ds-color-text-secondary);
 }
+.helpList code {
+  padding: 0.1em 0.3em;
+  border-radius: var(--ds-radius-mark);
+  background: var(--ds-color-sunken);
+  box-shadow: inset 0 0 0 1px var(--ds-color-border-subtle);
+  font-family: var(--ds-font-mono);
+  font-size: 0.85em;
+}
 .helpList strong {
   font-weight: var(--ds-weight-semibold);
   color: var(--ds-color-text-primary);
