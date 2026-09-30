@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -90,5 +91,74 @@ func TestClosingTheFakeReleasesGatedInput(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatalf("%d gated workers after Close", inputWorkers())
 		}
+	}
+}
+
+// inputReceipts is each lux.input receipt of the Run for requestID, in
+// order: its phase, or "error".
+func inputReceipts(s *Server, id, requestID string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []string
+	for _, r := range s.runs[id].records {
+		data, _ := r.Event["data"].(map[string]any)
+		if r.Event["type"] != "lux.input" || data["requestId"] != requestID {
+			continue
+		}
+		if _, failed := data["error"]; failed {
+			out = append(out, "error")
+		} else {
+			out = append(out, data["phase"].(string))
+		}
+	}
+	return out
+}
+
+// A steer the harness took while a tool ran, then an interrupt with no
+// text: lux now carries the steer into the next turn, where it is read
+// once; an older lux fails it.
+func TestAnInterruptCarriesAnUnreadSteerIntoTheNextTurn(t *testing.T) {
+	for _, old := range []bool{false, true} {
+		t.Run(map[bool]string{false: "carries", true: "older lux fails it"}[old], func(t *testing.T) {
+			fake := New("", "k", func(map[string]any) Behaviour {
+				return Behaviour{Hang: true, Tools: []string{"bash"}, KeepToolsOpen: true}
+			})
+			fake.FailUnreadOnInterrupt = old
+			srv := httptest.NewServer(fake.Handler())
+			t.Cleanup(srv.Close)
+			c := lux.New(srv.URL, "k")
+			run, err := c.Submit(context.Background(), lux.Spec{Workload: lux.Workload{Adapter: "opencode", Prompt: "go"}}, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+				fake.mu.Lock()
+				open := len(fake.runs[run.ID].openTools)
+				fake.mu.Unlock()
+				if open == 1 {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("the tool never started")
+				}
+			}
+			if err := c.Input(context.Background(), run.ID, "check the migration", "dir_a", false); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Input(context.Background(), run.ID, "", "dir_b", true); err != nil {
+				t.Fatal(err)
+			}
+			got, inputs := inputReceipts(fake, run.ID, "dir_a"), fake.Runs()[0].Inputs
+			want, wantInputs := []string{"accepted", "consumed"}, []string{"check the migration"}
+			if old {
+				want, wantInputs = []string{"accepted", "error"}, nil
+			}
+			if !slices.Equal(got, want) || !slices.Equal(inputs, wantInputs) {
+				t.Errorf("receipts %v inputs %q, want %v %q", got, inputs, want, wantInputs)
+			}
+			if r := inputReceipts(fake, run.ID, "dir_b"); len(r) != 0 {
+				t.Errorf("an interrupt alone got receipts %v", r)
+			}
+		})
 	}
 }

@@ -28,10 +28,12 @@ func main() {
 	workspaces := flag.String("workspaces", "", "where each Run's checkout is made (default: the system's temporary directory)")
 	legacyInput := flag.Bool("legacy-input", false, "acknowledge input as a lux before accepted/consumed receipts: once, at the turn's end")
 	nextTurnInput := flag.Bool("next-turn-input", false, "a harness that reads input only between turns (lands next_turn)")
+	failUnreadOnInterrupt := flag.Bool("fail-unread-on-interrupt", false, "an interrupt fails input the agent took and had not read, as a lux before it carried it into the next turn")
 	flag.Parse()
 
 	srv := fakelux.New("", *key, nil)
 	srv.LegacyInput, srv.NextTurnInput = *legacyInput, *nextTurnInput
+	srv.FailUnreadOnInterrupt = *failUnreadOnInterrupt
 	srv.Workspaces = *workspaces
 	srv.RepoFor = func(u string) string { return repoPath(*root, u) }
 	ln, err := net.Listen("tcp", *listen)

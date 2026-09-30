@@ -198,6 +198,24 @@ func (s *Server) FinishTools(id string) {
 	}
 }
 
+// FailInput is the harness failing input it took and the agent has not
+// read (an agent error): its error receipt, and it is never read.
+func (s *Server) FailInput(id, requestID, reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	run := s.runs[id]
+	if run == nil {
+		return
+	}
+	for i, q := range run.queued {
+		if q.requestID == requestID {
+			run.queued = slices.Delete(run.queued, i, i+1)
+			s.recordEvent(run, "lux.input", map[string]any{"requestId": requestID, "error": reason})
+			return
+		}
+	}
+}
+
 // EndTurn ends a busy agent's turn as the agent would on its own (a Hang
 // agent finishing, not interrupted): what it was steered with and has not
 // read is read now, as the input of its next turn.
@@ -302,6 +320,11 @@ type Server struct {
 	// only between turns: accepted at once with lands "next_turn", read
 	// when the turn ends.
 	LegacyInput, NextTurnInput bool
+	// FailUnreadOnInterrupt is a lux from before interrupts carried unread
+	// input over: an interrupt fails what the harness took and the agent had
+	// not read ("the turn was cancelled before the agent read it"), rather
+	// than starting the next turn with it.
+	FailUnreadOnInterrupt bool
 	// BeforeInput, when set, runs as each input request arrives, before the
 	// fake acts on it; false refuses the request (503), as a lux that is
 	// briefly unavailable. Called without the fake's lock.
@@ -919,10 +942,24 @@ func (s *Server) input(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if in.Interrupt && run.busy && run.State == "running" {
-		// The turn is cancelled, and the agent is free to hear it.
+		// The turn is cancelled, and the agent is free to hear it. What the
+		// harness took and the agent had not read starts the next turn,
+		// under the same request ids; FailUnreadOnInterrupt fails it instead.
 		run.Interrupted++
 		s.recordEvent(run, "acp.turn_end", map[string]any{"stopReason": "cancelled"})
 		run.busy = false
+		if s.FailUnreadOnInterrupt {
+			kept := run.queued[:0]
+			for _, q := range run.queued {
+				if q.accepted && q.requestID != in.RequestID {
+					s.recordEvent(run, "lux.input", map[string]any{"requestId": q.requestID,
+						"error": "the turn was cancelled before the agent read it"})
+					continue
+				}
+				kept = append(kept, q)
+			}
+			run.queued = kept
+		}
 	}
 	if !run.busy {
 		if gate := s.InputGate; gate != nil {
