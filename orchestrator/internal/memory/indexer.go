@@ -38,10 +38,8 @@ type Indexer struct {
 	DB       *db.DB
 	Embedder embeddings.Embedder
 	Log      *slog.Logger
-	// Now is for tests. next_attempt_at is compared with it, so the only
-	// real time ever stored there is a refusal's backoff, stamped on this
-	// clock; work due at once is -infinity (migration 063), never the
-	// database's now(), which may be ahead of this clock.
+	// Now overrides the indexer's clock for tests. Refusal backoff uses this
+	// clock; immediately due work uses -infinity to avoid database clock skew.
 	Now func() time.Time
 
 	mu       sync.Mutex

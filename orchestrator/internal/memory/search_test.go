@@ -328,10 +328,7 @@ func (f *statusFake) Embed(ctx context.Context, texts []string, p embeddings.Pur
 	return f.Fake.Embed(ctx, texts, p)
 }
 
-// The orchestrator's clock is compared with next_attempt_at, and the
-// database's may be ahead of it (Docker on a Mac runs tens of milliseconds
-// ahead). What is due at once must not wait for the two to agree: here the
-// orchestrator's clock is an hour behind the database's.
+// An indexer clock an hour behind must not delay immediately due work.
 func TestWorkDueAtOnceIsDueWhateverTheClocksSay(t *testing.T) {
 	app, owner := dbtest.Open(t)
 	org := dbtest.Org(t, owner)
@@ -361,14 +358,12 @@ func TestWorkDueAtOnceIsDueWhateverTheClocksSay(t *testing.T) {
 		t.Error("a new document waited for the database's clock")
 	}
 
-	// New words.
 	exec(t, owner, `UPDATE memories SET content = 'rewritten' WHERE id = 'mem_new'`)
 	drain(t, x)
 	if !embedded("mem_new") {
 		t.Error("a document whose words changed waited for the database's clock")
 	}
 
-	// Retry.
 	fake.Fail = ""
 	inOrg(func(tx pgx.Tx) error {
 		n, err := memory.Retry(context.Background(), tx, "", "")
@@ -382,7 +377,6 @@ func TestWorkDueAtOnceIsDueWhateverTheClocksSay(t *testing.T) {
 		t.Error("a retried document waited for the database's clock")
 	}
 
-	// Reindex.
 	inOrg(func(tx pgx.Tx) error {
 		_, err := memory.Reindex(context.Background(), tx)
 		return err
@@ -392,7 +386,6 @@ func TestWorkDueAtOnceIsDueWhateverTheClocksSay(t *testing.T) {
 		t.Error("a reindexed document waited for the database's clock")
 	}
 
-	// Another model.
 	drain(t, &memory.Indexer{DB: app, Embedder: &renamed{&embeddings.Fake{Dims: 768}}, Now: at})
 	var left int
 	if err := owner.QueryRow(context.Background(), `SELECT count(*) FROM search_documents

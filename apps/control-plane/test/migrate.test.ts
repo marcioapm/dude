@@ -117,12 +117,8 @@ test("a database migrated from the repository is up to date for the binary, and 
   expect(repoOnBin.out).toContain("up to date\n");
 }, 120_000);
 
-/**
- * An empty database owned by a role that is not a superuser, as on the aiverse
- * host or a managed Postgres: the owner bypasses row-level security and
- * creates roles, and a superuser created vector beforehand. Its URL logs in
- * as that owner.
- */
+// As on the aiverse host or a managed Postgres: the owner bypasses row-level
+// security and creates roles, and a superuser created vector beforehand.
 async function ownedByANonSuperuser(): Promise<string> {
   const owner = `dude_migrate_owner_${Bun.randomUUIDv7("hex").slice(-12)}`;
   const db = `dude_migrate_test_${Bun.randomUUIDv7("hex").slice(-12)}`;
@@ -194,8 +190,7 @@ test("002 strips every privilege from a dude_app that already holds them", async
 }, 120_000);
 
 test("063 makes waiting work due on any clock, and keeps a refusal's backoff", async () => {
-  // A database with work in it, upgraded by its owner: everything up to 062
-  // applied as the runner applies it, and the index stamped as 054 did.
+  // Seed work under 062 before upgrading as the non-superuser owner.
   const url = await ownedByANonSuperuser();
   const sql = new SQL(url);
   try {
