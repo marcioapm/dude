@@ -3,7 +3,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { DISCARD_GUARD_WORDS, unsavedWords, wordCount } from "../src/hooks/discard.ts";
+import { unsavedWords, wordCount } from "../src/hooks/discard.ts";
 
 const words = (n: number) => Array.from({ length: n }, (_, i) => `w${i}`).join(" ");
 
@@ -12,9 +12,10 @@ describe("unsavedWords", () => {
     expect(unsavedWords([words(500), "x"], [words(500), "x"])).toBe(0);
   });
 
-  test("a few new words are not worth a confirmation; past the threshold they are", () => {
-    expect(unsavedWords(["", ""], [words(DISCARD_GUARD_WORDS), ""])).toBe(0);
-    expect(unsavedWords(["", ""], [words(DISCARD_GUARD_WORDS + 1), ""])).toBe(DISCARD_GUARD_WORDS + 1);
+  test("twenty new words or fewer are not worth a confirmation; twenty-one are", () => {
+    expect(unsavedWords(["", ""], [words(19), ""])).toBe(0);
+    expect(unsavedWords(["", ""], [words(20), ""])).toBe(0);
+    expect(unsavedWords(["", ""], [words(21), ""])).toBe(21);
   });
 
   test("counts the words of every changed field and only those", () => {
