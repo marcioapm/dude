@@ -1940,6 +1940,116 @@ func TestPushPreflightRetriesWithFreshCredential(t *testing.T) {
 	}
 }
 
+func TestPushPreflightRateLimitsWaitBeforeLuxSubmission(t *testing.T) {
+	testPushPreflightRateLimits(t, false)
+}
+
+func TestPushPreflightRateLimitsWaitBeforePausedResume(t *testing.T) {
+	testPushPreflightRateLimits(t, true)
+}
+
+func testPushPreflightRateLimits(t *testing.T, resume bool) {
+	t.Helper()
+	for _, limit := range []struct {
+		name, message, remaining string
+	}{
+		{"primary", "API rate limit exceeded for 127.0.0.1.", "0"},
+		{"secondary", "You have exceeded a secondary rate limit. Please wait a few minutes before you try again.", "4999"},
+	} {
+		t.Run(limit.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+			wi := w.task()
+			w.deliver(wi)
+			wantStatus, wantControl, wantLuxRuns, wantRequests := "pending", "none", 0, 1
+			if resume {
+				w.until("running before pause", func() bool {
+					return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running'`, wi) == 1
+				})
+				mustExec(t, w.owner, `UPDATE runs SET control = 'pause_graceful' WHERE task_id = $1`, wi)
+				w.until("paused before rate limit", func() bool {
+					return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'paused'
+						AND lux_state = 'stopped'`, wi) == 1
+				})
+				mustExec(t, w.owner, `UPDATE runs SET control = 'resume' WHERE task_id = $1`, wi)
+				wantStatus, wantControl, wantLuxRuns, wantRequests = "paused", "resume", 1, 2
+			}
+			body, err := json.Marshal(map[string]string{"message": limit.message})
+			if err != nil {
+				t.Fatal(err)
+			}
+			w.gh.Set(func(s *fakegithub.Server) {
+				s.ReceiveStatus = http.StatusForbidden
+				s.ReceiveBody = string(body)
+				s.ReceiveHeaders = http.Header{
+					"Content-Type":          {"application/json"},
+					"Retry-After":           {"60"},
+					"X-Ratelimit-Remaining": {limit.remaining},
+					"X-Ratelimit-Reset":     {fmt.Sprint(time.Now().Add(time.Minute).Unix())},
+				}
+			})
+			w.pump()
+			readBackoff := func() time.Time {
+				t.Helper()
+				var status, control string
+				var due *time.Time
+				if err := w.owner.QueryRow(context.Background(), `SELECT status::text, control::text, next_attempt_at
+					FROM runs WHERE task_id = $1`, wi).Scan(&status, &control, &due); err != nil {
+					t.Fatal(err)
+				}
+				if status != wantStatus || control != wantControl || due == nil || !due.After(time.Now()) {
+					t.Fatalf("rate limit: status=%s control=%s next_attempt_at=%v, want %s/%s with future backoff",
+						status, control, due, wantStatus, wantControl)
+				}
+				return *due
+			}
+			due := readBackoff()
+			assertNoAttempt := func() {
+				t.Helper()
+				if runs := w.lux.Runs(); len(runs) != wantLuxRuns || resume && runs[0].Resumed != 0 {
+					t.Fatalf("rate-limited preflight reached lux: runs=%d", len(runs))
+				}
+				w.gh.Set(func(s *fakegithub.Server) {
+					if len(s.ReceiveRequests) != wantRequests {
+						t.Errorf("preflight requests=%d, want %d (no retry before due)", len(s.ReceiveRequests), wantRequests)
+					}
+				})
+				if got := readBackoff(); !got.Equal(due) {
+					t.Fatalf("backoff changed before due: %v -> %v", due, got)
+				}
+				if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'run.failed'`, wi); n != 0 {
+					t.Fatalf("rate limit permanently failed the run: %d failure events", n)
+				}
+			}
+			assertNoAttempt()
+			for range 3 {
+				w.pump()
+				assertNoAttempt()
+			}
+			w.gh.Set(func(s *fakegithub.Server) {
+				s.ReceiveStatus = http.StatusOK
+				s.ReceiveBody = ""
+				s.ReceiveHeaders = nil
+			})
+			w.pump()
+			assertNoAttempt()
+			// Make the persisted retry due without sleeping through the backoff.
+			mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = now() - interval '1 second' WHERE task_id = $1`, wi)
+			w.until("recovery after rate limit", func() bool {
+				return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running'`, wi) == 1
+			})
+			if runs := w.lux.Runs(); len(runs) != 1 || resume && runs[0].Resumed != 1 {
+				t.Fatalf("recovery: lux runs=%d, want one run and exactly one resume if paused", len(runs))
+			}
+			w.gh.Set(func(s *fakegithub.Server) {
+				if len(s.ReceiveRequests) != wantRequests+1 {
+					t.Errorf("recovery preflight requests=%d, want %d", len(s.ReceiveRequests), wantRequests+1)
+				}
+			})
+		})
+	}
+}
+
 func TestPushPreflightChecksEveryWritableNamedRepository(t *testing.T) {
 	for _, readOnly := range []bool{false, true} {
 		t.Run(fmt.Sprint(readOnly), func(t *testing.T) {
