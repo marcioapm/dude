@@ -286,6 +286,18 @@ describe("usage", () => {
     expect(c.costUsd).toBeCloseTo(0.04, 9);
     expect(c.costSource.from).toBe("agent");
   });
+
+  test("a later report with no AI amount clears lux's figure, as the Run's row does", () => {
+    const events = [
+      ev(EventTypes.ModelRequestCompleted, { costUsd: 0.04 }),
+      ev(EventTypes.RunCostReported, { aiUsd: 1.2, computeUsd: 0.001, status: "incomplete" }),
+    ];
+    expect(project(events).costUsd).toBe(1.2);
+    events.push(ev(EventTypes.RunCostReported, { aiUsd: null, computeUsd: 0.001, status: "incomplete" }));
+    const c = project(events);
+    expect(c.costUsd).toBeCloseTo(0.04, 9);
+    expect(c.costSource).toEqual({ from: "agent", settled: false });
+  });
 });
 
 describe("what the agent received, thought and got back", () => {

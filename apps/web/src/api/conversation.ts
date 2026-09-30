@@ -464,11 +464,10 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       }
 
       case EventTypes.RunCostReported: {
-        // null: lux has priced no AI for it yet; the harness's figure stands.
+        // Mirrors lux_ai_usd: null (lux has priced no AI) puts the harness's
+        // figure back, as run_model_usd does.
         const usd = payload.aiUsd;
-        if (typeof usd === "number" && Number.isFinite(usd)) {
-          state.luxCost = { usd, status: String(payload.status ?? "") };
-        }
+        state.luxCost = typeof usd === "number" && Number.isFinite(usd) ? { usd, status: String(payload.status ?? "") } : null;
         break;
       }
 
