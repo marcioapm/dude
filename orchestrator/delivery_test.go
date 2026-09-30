@@ -2029,6 +2029,129 @@ func TestInterruptNowOnAQueuedSteerIsHeardOnce(t *testing.T) {
 	if r.Interrupted != 1 || len(r.Inputs) != 1 || r.Inputs[0] != "check the migration too" {
 		t.Errorf("interrupted=%d inputs=%v, want one interrupt and the text once", r.Interrupted, r.Inputs)
 	}
+	// The interrupt is settled with the steer, its delivery flagged as the
+	// interrupt alone, not a second read.
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.directive.delivered'
+		AND payload->>'directiveId' = $2 AND (payload->>'interruptOnly')::boolean AND payload->'read' IS NULL`, runID, out["id"]); n != 1 {
+		t.Errorf("%d interrupt-only delivered events for the interrupt, want 1", n)
+	}
+}
+
+// interruptNow is a person's "Interrupt now" on a queued directive, through
+// the API: its directive.
+func (w *world) interruptNow(runID, supersedes string) string {
+	w.t.Helper()
+	code, out := w.call("/internal/runs/"+runID+"/steer", map[string]any{
+		"text": "check the migration too", "supersedes": supersedes, "interrupt": true})
+	if code != http.StatusCreated {
+		w.t.Fatalf("steer: %d %v", code, out)
+	}
+	return out["id"].(string)
+}
+
+// The steer fails after the click and before the interrupt is first sent:
+// the interrupt carries the words, and the agent hears them once.
+func TestInterruptNowCarriesTheWordsWhenTheSteerFailedBeforeItWasSent(t *testing.T) {
+	w := newWorld(t)
+	wi := w.task()
+	runID, interruptID := w.interruptQueuedSteer(wi)
+	w.lux.FailInput(w.lux.Runs()[0].ID, "dir_s", "the agent exited")
+	deadline := time.Now().Add(10 * time.Second)
+	for w.count(`SELECT count(*) FROM directives WHERE id = 'dir_s' AND failed_at IS NOT NULL`) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the steer's failure was never recorded")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	w.until("the interrupt to be sent", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE id = $1 AND sent_at IS NOT NULL`, interruptID) == 1
+	})
+	r := w.lux.Runs()[0]
+	if bodies := r.InputBodies[interruptID]; len(bodies) != 1 || !strings.Contains(bodies[0], `"text":"check the migration too"`) {
+		t.Fatalf("interrupt request bodies %q, want one carrying the words", bodies)
+	}
+	w.until("the interrupt to be read", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE id = $1 AND delivered_at IS NOT NULL AND failed_at IS NULL`, interruptID) == 1
+	})
+	if r := w.lux.Runs()[0]; r.Interrupted != 1 || !slices.Equal(r.Inputs, []string{"check the migration too"}) {
+		t.Errorf("interrupted=%d inputs=%q, want one interrupt and the words once", r.Interrupted, r.Inputs)
+	}
+	if n := w.count(`SELECT count(*) FROM directives WHERE id = $1 AND interrupt_only = false AND resends = 'dir_s'`, interruptID); n != 1 {
+		t.Error("the interrupt's decision to carry the words was not kept")
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.directive.delivered'
+		AND payload->>'directiveId' = $2 AND (payload->>'read')::boolean`, runID, interruptID); n != 1 {
+		t.Errorf("%d read events for the interrupt that carried the words, want 1", n)
+	}
+}
+
+// A lux from before interrupts carried unread input over fails the steer
+// the interrupt cancelled: the interrupt, which carried no words, fails
+// with it, for the same reason, and nothing is left queued.
+func TestInterruptNowOnAnOlderLuxFailsWithTheSteer(t *testing.T) {
+	w := newWorld(t)
+	w.lux.FailUnreadOnInterrupt = true
+	wi := w.task()
+	runID, interruptID := w.interruptQueuedSteer(wi)
+	w.until("both to fail", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND failed_at IS NOT NULL AND delivered_at IS NULL
+			AND error = 'the turn was cancelled before the agent read it'`, runID) == 2
+	})
+	for range 3 {
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.directive.failed'`, runID); n != 2 {
+		t.Errorf("%d failed events, want one for each", n)
+	}
+	if n := w.count(`SELECT count(*) FROM directives WHERE id = $1 AND interrupt_only AND sent_at IS NOT NULL`, interruptID); n != 1 {
+		t.Error("the interrupt was not sent as the interrupt alone")
+	}
+	if r := w.lux.Runs()[0]; r.Interrupted != 1 || len(r.Inputs) != 0 {
+		t.Errorf("interrupted=%d inputs=%q, want one interrupt and the words never read", r.Interrupted, r.Inputs)
+	}
+}
+
+// "Interrupt now" on an "Interrupt now" not yet heard: both resend the
+// first steer, carry no words, and are delivered when it is read.
+func TestInterruptNowTwiceIsOneInstruction(t *testing.T) {
+	w := newWorld(t)
+	wi := w.task()
+	runID, first := w.interruptQueuedSteer(wi)
+	second := w.interruptNow(runID, first)
+	w.until("all three to be delivered", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND delivered_at IS NOT NULL`, runID) == 3
+	})
+	if n := w.count(`SELECT count(*) FROM directives WHERE id IN ($1, $2) AND resends = 'dir_s' AND interrupt_only`, first, second); n != 2 {
+		t.Errorf("%d of the two interrupts resend the steer as the interrupt alone, want 2", n)
+	}
+	if r := w.lux.Runs()[0]; !slices.Equal(r.Inputs, []string{"check the migration too"}) {
+		t.Errorf("inputs %q, want the words once", r.Inputs)
+	}
+}
+
+// A click from a transcript that still showed the steer queued after the
+// agent read it: the interrupt goes alone, is delivered as it is sent with
+// a delivery event of its own, and holds no finished turn open.
+func TestInterruptNowOnASteerAlreadyReadIsSettledWhenSent(t *testing.T) {
+	w := newWorld(t)
+	wi := w.task()
+	runID := w.steerDuringTool(wi)
+	w.lux.FinishTools(w.lux.Runs()[0].ID)
+	w.waitRead()
+	interruptID := w.interruptNow(runID, "dir_s")
+	w.until("the run to finish", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM directives WHERE id = $1 AND interrupt_only AND delivered_at IS NOT NULL AND failed_at IS NULL`, interruptID); n != 1 {
+		t.Error("the interrupt was not delivered as the interrupt alone")
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.directive.delivered'
+		AND payload->>'directiveId' = $2 AND (payload->>'interruptOnly')::boolean AND payload->'read' IS NULL`, runID, interruptID); n != 1 {
+		t.Errorf("%d interrupt-only delivered events, want 1", n)
+	}
+	if r := w.lux.Runs()[0]; !slices.Equal(r.Inputs, []string{"check the migration too"}) {
+		t.Errorf("inputs %q, want the words once", r.Inputs)
+	}
 }
 
 // interruptQueuedSteer is a steer the harness took while a tool runs, and a
@@ -2076,8 +2199,15 @@ func TestInterruptNowOnASteerReadBeforeItIsSentSendsNoWords(t *testing.T) {
 	if r.Interrupted != 1 || len(r.Inputs) != 1 {
 		t.Errorf("interrupted=%d inputs=%v, want one interrupt and the words once", r.Interrupted, r.Inputs)
 	}
-	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.directive.delivered'`, runID); n != 1 {
-		t.Errorf("%d delivered events, want the original's alone", n)
+	// One read, the original's; the interrupt's delivery is flagged as the
+	// interrupt alone.
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.directive.delivered'
+		AND (payload->>'read')::boolean`, runID); n != 1 {
+		t.Errorf("%d read events, want the original's alone", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.directive.delivered'
+		AND payload->>'directiveId' = $2 AND (payload->>'interruptOnly')::boolean`, runID, interruptID); n != 1 {
+		t.Errorf("%d interrupt-only delivered events, want 1", n)
 	}
 }
 

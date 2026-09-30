@@ -247,8 +247,8 @@ func TestAFailureAfterAcceptedIsRecorded(t *testing.T) {
 // superseding row.
 func TestAReadOriginalClearsItsFailedInterrupt(t *testing.T) {
 	w := newReceiptWorld(t)
-	if _, err := w.owner.Exec(context.Background(), `INSERT INTO directives (id, organization_id, task_id, run_id, text, supersedes, interrupt, interrupt_only, sent_at)
-		VALUES ('dir_2', $1, 'wi_'||$1, 'run_'||$1, 'also add a test', 'dir_1', true, true, now())`, w.org); err != nil {
+	if _, err := w.owner.Exec(context.Background(), `INSERT INTO directives (id, organization_id, task_id, run_id, text, supersedes, resends, interrupt, interrupt_only, sent_at)
+		VALUES ('dir_2', $1, 'wi_'||$1, 'run_'||$1, 'also add a test', 'dir_1', 'dir_1', true, true, now())`, w.org); err != nil {
 		t.Fatal(err)
 	}
 	w.receive(map[string]any{"requestId": "dir_2", "error": "workload not reachable"})
@@ -258,5 +258,75 @@ func TestAReadOriginalClearsItsFailedInterrupt(t *testing.T) {
 		Scan(&delivered, &failed)
 	if !delivered || failed {
 		t.Errorf("interrupt: delivered=%v failed=%v, want delivered with no failure", delivered, failed)
+	}
+}
+
+// interruptOnly adds an "Interrupt now" resending dir_1, sent as the
+// interrupt alone.
+func (w *receiptWorld) interruptOnly(id string) {
+	w.t.Helper()
+	if _, err := w.owner.Exec(context.Background(), `INSERT INTO directives (id, organization_id, task_id, run_id, text, supersedes, resends, interrupt, interrupt_only, sent_at)
+		VALUES ($2, $1, 'wi_'||$1, 'run_'||$1, 'also add a test', 'dir_1', 'dir_1', true, true, now())`, w.org, id); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+func (w *receiptWorld) state(id string) (delivered bool, failed string) {
+	var e *string
+	_ = w.owner.QueryRow(context.Background(), `SELECT delivered_at IS NOT NULL, error FROM directives WHERE id = $1`, id).Scan(&delivered, &e)
+	if e != nil {
+		failed = *e
+	}
+	return
+}
+
+// The words fail: each interrupt that relied on them fails with the same
+// reason, one failed event each, however often lux repeats the error.
+func TestAnInterruptAloneFailsWithItsWords(t *testing.T) {
+	w := newReceiptWorld(t)
+	w.interruptOnly("dir_2")
+	w.interruptOnly("dir_3")
+	failed := map[string]any{"requestId": "dir_1", "error": "the turn was cancelled before the agent read it"}
+	w.receive(failed)
+	w.receive(failed)
+	for _, id := range []string{"dir_2", "dir_3"} {
+		if d, f := w.state(id); d || f != "the turn was cancelled before the agent read it" {
+			t.Errorf("%s: delivered=%v error=%q, want failed with the words' reason", id, d, f)
+		}
+	}
+	if n := w.events(evDirectiveFailed); n != 3 {
+		t.Errorf("%d failed events, want one for each of three", n)
+	}
+	// Read after all: the words and both interrupts are delivered.
+	w.receive(map[string]any{"requestId": "dir_1", "phase": "consumed"})
+	for _, id := range []string{"dir_2", "dir_3"} {
+		if d, f := w.state(id); !d || f != "" {
+			t.Errorf("%s: delivered=%v error=%q after the read", id, d, f)
+		}
+	}
+}
+
+// The words fail while a retry carrying them is still with lux: the
+// interrupt waits on the retry, and is delivered when it is read.
+func TestAnInterruptAloneWaitsOnARetryCarryingItsWords(t *testing.T) {
+	w := newReceiptWorld(t)
+	w.interruptOnly("dir_2")
+	if _, err := w.owner.Exec(context.Background(), `INSERT INTO directives (id, organization_id, task_id, run_id, text, supersedes, resends, interrupt, interrupt_only, sent_at)
+		VALUES ('dir_3', $1, 'wi_'||$1, 'run_'||$1, 'also add a test', 'dir_2', 'dir_1', true, false, now())`, w.org); err != nil {
+		t.Fatal(err)
+	}
+	w.receive(map[string]any{"requestId": "dir_1", "error": "the agent exited"})
+	if d, f := w.state("dir_2"); d || f != "" {
+		t.Fatalf("interrupt: delivered=%v error=%q while a retry carries its words", d, f)
+	}
+	w.receive(map[string]any{"requestId": "dir_3", "phase": "consumed"})
+	if d, f := w.state("dir_2"); !d || f != "" {
+		t.Errorf("interrupt: delivered=%v error=%q after the retry was read", d, f)
+	}
+	var n int
+	_ = w.owner.QueryRow(context.Background(), `SELECT count(*) FROM events WHERE event_type = $1
+		AND payload->>'directiveId' = 'dir_2' AND (payload->>'interruptOnly')::boolean`, evDirectiveDelivered).Scan(&n)
+	if n != 1 {
+		t.Errorf("%d interrupt-only delivered events, want 1", n)
 	}
 }

@@ -960,6 +960,12 @@ func (s *Server) input(w http.ResponseWriter, r *http.Request) {
 			}
 			run.queued = kept
 		}
+		// Nothing left to hear: the agent goes idle, as lux's interrupt
+		// alone starts no turn.
+		if len(run.queued) == 0 {
+			s.recordEvent(run, "lux.activity", map[string]any{"activity": "idle"})
+			run.turnsEnded++
+		}
 	}
 	if !run.busy {
 		if gate := s.InputGate; gate != nil {

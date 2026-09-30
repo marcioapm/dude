@@ -114,6 +114,8 @@ type phaseRun struct {
 	// A directive lux has, sent within unreadGraceSecs, that the agent has
 	// not read, or read after its last turn ended (by ledger order: in one
 	// transaction the two carry the same now()): a new turn is starting.
+	// An interrupt alone starts no turn: the directive carrying its words
+	// is the one waited on.
 	// Evaluated only where advance reads it (a finished turn of a running
 	// Run not yet pushed); false otherwise. Its lookups use the partial
 	// indexes of migration 060.
@@ -146,9 +148,10 @@ const runColumns = `r.id, r.organization_id, r.project_id, r.task_id, r.phase::t
 	COALESCE(r.category, ''),
 	COALESCE(r.lux_run_id, ''), COALESCE(r.lux_state, ''), COALESCE(r.lux_stop_reason, ''),
 	COALESCE(r.push_request_id, ''), COALESCE(r.push_branch, ''), cardinality(r.lux_pushes) > 0, r.base_refs, r.base_shas, r.turn_done_at IS NOT NULL,
-	EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL),
+	EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL AND d.failed_at IS NULL),
 	CASE WHEN r.turn_done_at IS NOT NULL AND r.status = 'running' AND r.lux_state = 'running' AND r.push_request_id IS NULL
 	THEN EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NOT NULL AND d.failed_at IS NULL
+	        AND d.interrupt_only IS NOT TRUE
 	        AND d.sent_at > now() - make_interval(secs => ` + unreadGraceSecs + `)
 	        AND (d.delivered_at IS NULL OR (SELECT max(e.cursor) FROM events e WHERE e.run_id = r.id
 	              AND e.event_type = 'run.directive.delivered' AND e.payload->>'directiveId' = d.id)
@@ -1196,17 +1199,14 @@ func (s *Syncer) deliverDirectives(ctx context.Context, r phaseRun) (bool, error
 	type directive struct {
 		ID, Text  string
 		Interrupt bool
-		// "Interrupt now" on an instruction already submitted (decided when
-		// it was created, QueueDirective): lux is asked only to stop the
-		// turn. The words are the original's, sent with it however far it
-		// has got since, so the agent hears them once, and the request body
-		// is the same on every retry.
-		InterruptOnly bool
+		// Resends: the root of an "Interrupt now" (QueueDirective), "" for
+		// any other directive.
+		Resends string
 	}
 	var pending []directive
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT id, text, interrupt, interrupt_only
-			FROM directives WHERE run_id = $1 AND sent_at IS NULL ORDER BY created_at`, r.ID)
+		rows, err := tx.Query(ctx, `SELECT id, text, interrupt, COALESCE(resends, '')
+			FROM directives WHERE run_id = $1 AND sent_at IS NULL AND failed_at IS NULL ORDER BY created_at`, r.ID)
 		if err != nil {
 			return err
 		}
@@ -1217,8 +1217,14 @@ func (s *Syncer) deliverDirectives(ctx context.Context, r phaseRun) (bool, error
 	}
 	for _, d := range pending {
 		text := d.Text
-		if d.InterruptOnly {
-			text = ""
+		if d.Resends != "" {
+			only, err := s.interruptOnly(ctx, r, d.ID)
+			if err != nil {
+				return true, err
+			}
+			if only {
+				text = ""
+			}
 		}
 		// The directive id is the request id, so a retried send is delivered
 		// once.
@@ -1226,19 +1232,75 @@ func (s *Syncer) deliverDirectives(ctx context.Context, r phaseRun) (bool, error
 			return true, s.retryLater(ctx, r, err)
 		}
 		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-			// lux sends no receipt for an interrupt alone: one whose original
-			// the agent already has is delivered with it; otherwise the
-			// original's receipt delivers it (directiveReceipt).
-			_, err := tx.Exec(ctx, `UPDATE directives d SET sent_at = now(),
-				delivered_at = COALESCE(d.delivered_at, CASE WHEN d.interrupt_only THEN
-					(SELECT s.delivered_at FROM directives s WHERE s.id = d.supersedes AND s.run_id = d.run_id) END)
-				WHERE d.id = $1`, d.ID)
-			return err
+			if _, err := tx.Exec(ctx, `UPDATE directives SET sent_at = now() WHERE id = $1`, d.ID); err != nil {
+				return err
+			}
+			// lux sends no receipt for an interrupt alone: one whose words
+			// the agent already has is delivered now; otherwise with the
+			// directive carrying them (directiveReceipt).
+			return settleInterrupts(ctx, tx, s, r, evDirectiveDelivered, nil,
+				`UPDATE directives d SET delivered_at = now(), accepted_at = COALESCE(d.accepted_at, now())
+				WHERE d.id = $1 AND d.interrupt_only AND d.delivered_at IS NULL AND d.failed_at IS NULL
+				  AND EXISTS (SELECT 1 FROM directives c WHERE c.run_id = d.run_id AND `+carrierOf+`
+				    AND c.delivered_at IS NOT NULL)
+				RETURNING d.id`, d.ID)
 		}); err != nil {
 			return true, err
 		}
 	}
 	return true, nil
+}
+
+// carrierOf (SQL): c is a directive carrying the words of d's instruction,
+// its root or a resend sent with them (d an "Interrupt now", resends set).
+const carrierOf = `(c.id = d.resends OR c.resends = d.resends) AND c.id <> d.id AND c.interrupt_only IS FALSE`
+
+// interruptOnly decides, at an "Interrupt now"'s first send attempt,
+// whether it goes as the interrupt alone: when a directive carrying its
+// words is with lux and has not failed. Otherwise (the root failed, or
+// never went) it carries them. Stored then, so every retry of the request
+// is the same.
+func (s *Syncer) interruptOnly(ctx context.Context, r phaseRun, id string) (only bool, err error) {
+	err = s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		// Locked, so a failure of the words committing meanwhile either is
+		// seen here or sees this decision and fails the interrupt with it.
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM directives d JOIN directives c ON c.run_id = d.run_id AND `+carrierOf+`
+			WHERE d.id = $1 FOR UPDATE OF c`, id); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE directives d SET interrupt_only = EXISTS (SELECT 1 FROM directives c
+				WHERE c.run_id = d.run_id AND `+carrierOf+` AND c.sent_at IS NOT NULL AND c.failed_at IS NULL)
+			WHERE d.id = $1 AND d.interrupt_only IS NULL`, id); err != nil {
+			return err
+		}
+		return tx.QueryRow(ctx, `SELECT interrupt_only FROM directives WHERE id = $1`, id).Scan(&only)
+	})
+	return only, err
+}
+
+// settleInterrupts runs update, which moves interrupt-only directives with
+// the directive carrying their words and returns their ids, and writes an
+// event for each: delivered (flagged interruptOnly, never read), or failed
+// with fail as its error.
+func settleInterrupts(ctx context.Context, tx pgx.Tx, s *Syncer, r phaseRun, typ string, fail *string, update string, args ...any) error {
+	rows, err := tx.Query(ctx, update, args...)
+	if err != nil {
+		return err
+	}
+	moved, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return err
+	}
+	for _, id := range moved {
+		payload := map[string]any{"directiveId": id, "interruptOnly": true}
+		if fail != nil {
+			payload = map[string]any{"directiveId": id, "error": *fail}
+		}
+		if err := s.event(ctx, tx, r, typ, ledger.ActorSystem, payload); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Syncer) unfollow(runID string) {
