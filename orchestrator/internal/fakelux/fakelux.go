@@ -126,6 +126,8 @@ type Run struct {
 
 	busy     bool
 	woken    bool
+	// Tool calls started and not finished (KeepToolsOpen), until FinishTools.
+	openTools []string
 	queued   []queuedInput
 	records  []record
 	events   []event
@@ -133,7 +135,63 @@ type Run struct {
 	cond     *sync.Cond
 }
 
-type queuedInput struct{ text, requestID string }
+// queuedInput is input the agent has not read yet. accepted: its accepted
+// receipt is on the stream already.
+type queuedInput struct {
+	text, requestID string
+	accepted        bool
+}
+
+// accept acknowledges input the harness took, as lux's shim does, once: in
+// the legacy contract there is no accepted receipt, only the delivery.
+// Callers hold s.mu.
+func (s *Server) accept(run *Run, in *queuedInput) {
+	if s.LegacyInput || in.accepted {
+		return
+	}
+	in.accepted = true
+	lands := "next_step"
+	if s.NextTurnInput {
+		lands = "next_turn"
+	}
+	s.recordEvent(run, "lux.input", map[string]any{"requestId": in.requestID, "phase": "accepted", "receipt": true,
+		"lands": lands, "text": in.text})
+}
+
+// consume is the agent's step reading everything queued: its read receipt
+// (or, from a legacy lux, its one acknowledgement). Callers hold s.mu.
+func (s *Server) consume(run *Run) {
+	for _, in := range run.queued {
+		run.Inputs = append(run.Inputs, in.text)
+		if s.LegacyInput {
+			s.recordEvent(run, "lux.input", map[string]any{"requestId": in.requestID, "text": in.text})
+		} else {
+			s.recordEvent(run, "lux.input", map[string]any{"requestId": in.requestID, "phase": "consumed"})
+		}
+	}
+	run.queued = nil
+}
+
+// FinishTools completes the Run's open tool calls (KeepToolsOpen), as a
+// long command finishing: the agent's next step starts, and reads what it
+// was steered with while the tool ran, in the same turn — unless the
+// harness reads input only between turns, or the lux is a legacy one that
+// holds it until then. A Hang agent carries on hanging.
+func (s *Server) FinishTools(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	run := s.runs[id]
+	if run == nil || run.State != "running" {
+		return
+	}
+	for _, call := range run.openTools {
+		s.agent(run, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": call, "status": "completed"})
+	}
+	run.openTools = nil
+	if run.busy && !s.NextTurnInput && !s.LegacyInput {
+		s.consume(run)
+	}
+}
 
 type placement struct {
 	Epoch int
@@ -157,11 +215,10 @@ func (s *Server) deliverQueued(run *Run) {
 	if len(run.queued) == 0 || run.State != "running" {
 		return
 	}
-	for _, in := range run.queued {
-		run.Inputs = append(run.Inputs, in.text)
-		s.recordEvent(run, "lux.input", map[string]any{"requestId": in.requestID, "text": in.text})
+	for i := range run.queued {
+		s.accept(run, &run.queued[i])
 	}
-	run.queued = nil
+	s.consume(run)
 	// Input after a resume is what a paused agent was waiting for: it
 	// finishes its work this time. Without input it waits, as a real one
 	// does.
@@ -207,6 +264,18 @@ type Server struct {
 	// The preview domain servers' URLs are under; "" gives them none, as a
 	// lux without previews configured.
 	PreviewDomain string
+	// How lux acknowledges input. By default as lux does now: "accepted"
+	// when the harness takes it (at once, even mid-turn), "consumed" when
+	// the agent's next step reads it — after the tool it was running
+	// finishes, or at the turn's end. A Hang agent mid-step with no tool
+	// open reaches no boundary until its turn ends.
+	//
+	// LegacyInput is a lux from before the two receipts: input to a busy
+	// agent waits for its turn to end, and is acknowledged once, with no
+	// phase, when handed over. NextTurnInput is a harness that reads input
+	// only between turns: accepted at once with lands "next_turn", read
+	// when the turn ends.
+	LegacyInput, NextTurnInput bool
 }
 
 // New serves a fake lux. With decide nil, every Run plays dude's scripted
@@ -388,7 +457,13 @@ func (s *Server) play(run *Run, spec map[string]any, resumed bool) {
 	if !resumed {
 		// The task, acknowledged when the agent takes it, with what it got.
 		prompt, _ := spec["workload"].(map[string]any)["prompt"].(string)
-		s.recordEvent(run, "lux.input", map[string]any{"requestId": "prompt", "text": prompt})
+		if s.LegacyInput {
+			s.recordEvent(run, "lux.input", map[string]any{"requestId": "prompt", "text": prompt})
+		} else {
+			s.recordEvent(run, "lux.input", map[string]any{"requestId": "prompt", "phase": "accepted", "receipt": true,
+				"lands": "next_step", "text": prompt})
+			s.recordEvent(run, "lux.input", map[string]any{"requestId": "prompt", "phase": "consumed"})
+		}
 	}
 	if resumed {
 		// A resumed agent has its conversation back and waits for input, as
@@ -404,6 +479,7 @@ func (s *Server) play(run *Run, spec map[string]any, resumed bool) {
 func (s *Server) turn(run *Run) {
 	s.recordEvent(run, "lux.activity", map[string]any{"activity": "busy"})
 	run.busy = true
+	run.openTools = nil
 	b := run.behavior
 	for _, chunk := range chunks(b.Thought, 7) {
 		s.agent(run, map[string]any{"sessionUpdate": "agent_thought_chunk", "content": map[string]any{"type": "text", "text": chunk}})
@@ -416,6 +492,7 @@ func (s *Server) turn(run *Run) {
 		}
 		s.agent(run, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id, "title": tool, "kind": "execute", "status": "in_progress", "rawInput": input})
 		if b.KeepToolsOpen {
+			run.openTools = append(run.openTools, id)
 			continue
 		}
 		// As OpenCode reports it: the completion names neither the tool nor
@@ -746,10 +823,14 @@ func (s *Server) input(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 409, "not_running", "run is "+run.State)
 		return
 	}
-	// As lux's ACP adapter does: ACP has no way to add to a turn in
-	// progress, so input to a busy agent waits for the turn to end, and is
-	// acknowledged when it is actually delivered.
-	run.queued = append(run.queued, queuedInput{in.Text, in.RequestID})
+	// A busy agent: lux (the harness) takes input at once and the agent
+	// reads it at its next step (FinishTools, or the turn's end). A legacy
+	// lux, as its ACP adapter did, holds it until the turn ends and
+	// acknowledges it only then.
+	run.queued = append(run.queued, queuedInput{text: in.Text, requestID: in.RequestID})
+	if run.busy && run.State == "running" {
+		s.accept(run, &run.queued[len(run.queued)-1])
+	}
 	if in.Interrupt && run.busy && run.State == "running" {
 		// The turn is cancelled, and the agent is free to hear it.
 		run.Interrupted++
