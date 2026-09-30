@@ -340,13 +340,41 @@ function slug(text: string, used: Map<string, number>): string {
 
 const URL_RE = /^https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"]/;
 
-export function parseInline(src: string, streaming: boolean): Inline[] {
-  return parseInlineRange(src, 0, src.length, streaming, null).nodes;
-}
+// Emphasis and link labels nest by recursion; past this depth their markers
+// render literally, so hostile input cannot exhaust the stack.
+const MAX_INLINE_DEPTH = 32;
+
+const DELIMS = ["*", "_", "**", "__", "~~"] as const;
 
 interface InlineResult {
   readonly nodes: Inline[];
   readonly end: number;
+}
+
+interface LinkResult {
+  readonly nodes: Inline[];
+  readonly href: string;
+  readonly end: number;
+}
+
+/**
+ * Per-source state that keeps every scanner linear. Each opener is resolved
+ * once: bracket and paren partners come from one stack pass, emphasis runs
+ * and links are memoised by position, and a backtick run that found no
+ * closer records where the search failed.
+ */
+interface InlineCtx {
+  readonly src: string;
+  readonly streaming: boolean;
+  partners: { readonly bracket: Int32Array; readonly paren: Int32Array } | null;
+  readonly runs: Map<number, InlineResult>;
+  readonly links: Map<number, LinkResult | null>;
+  readonly tickMiss: Map<number, number>;
+}
+
+export function parseInline(src: string, streaming: boolean): Inline[] {
+  const ctx: InlineCtx = { src, streaming, partners: null, runs: new Map(), links: new Map(), tickMiss: new Map() };
+  return parseInlineRange(ctx, 0, src.length, null, 0).nodes;
 }
 
 /**
@@ -355,7 +383,8 @@ interface InlineResult {
  * the index just past it. When not found: if streaming, the run extends
  * to `to` and stays open; if not, the caller renders the opener literally.
  */
-function parseInlineRange(src: string, from: number, to: number, streaming: boolean, closer: string | null): InlineResult {
+function parseInlineRange(ctx: InlineCtx, from: number, to: number, closer: string | null, depth: number): InlineResult {
+  const { src, streaming } = ctx;
   const nodes: Inline[] = [];
   let text = "";
   const flush = () => {
@@ -364,6 +393,7 @@ function parseInlineRange(src: string, from: number, to: number, streaming: bool
       text = "";
     }
   };
+  const nests = depth < MAX_INLINE_DEPTH;
   let i = from;
   while (i < to) {
     const ch = src.charAt(i);
@@ -406,8 +436,7 @@ function parseInlineRange(src: string, from: number, to: number, streaming: bool
     if (ch === "`") {
       let n = 0;
       while (src.charAt(i + n) === "`" && i + n < to) n++;
-      const ticks = "`".repeat(n);
-      const close = src.indexOf(ticks, i + n);
+      const close = findTicks(ctx, n, i + n);
       if (close !== -1 && close < to) {
         flush();
         nodes.push({ t: "code", v: src.slice(i + n, close).replace(/\n/g, " ").trim() });
@@ -420,14 +449,14 @@ function parseInlineRange(src: string, from: number, to: number, streaming: bool
         i = to;
         continue;
       }
-      text += ticks;
+      text += "`".repeat(n);
       i += n;
       continue;
     }
 
     // Image / link
-    if (ch === "!" && src.charAt(i + 1) === "[") {
-      const link = parseLink(src, i + 1, to, streaming);
+    if (nests && ch === "!" && src.charAt(i + 1) === "[") {
+      const link = parseLink(ctx, i + 1, to, depth);
       if (link) {
         flush();
         const s = safeUrl(link.href);
@@ -438,8 +467,8 @@ function parseInlineRange(src: string, from: number, to: number, streaming: bool
         continue;
       }
     }
-    if (ch === "[") {
-      const link = parseLink(src, i, to, streaming);
+    if (nests && ch === "[") {
+      const link = parseLink(ctx, i, to, depth);
       if (link) {
         flush();
         const s = safeUrl(link.href);
@@ -477,7 +506,7 @@ function parseInlineRange(src: string, from: number, to: number, streaming: bool
     // Emphasis / strong / strikethrough
     const delim = matchDelimiter(src, i, to);
     if (delim) {
-      const inner = parseInlineRange(src, i + delim.length, to, streaming, delim);
+      const inner = emphasisRun(ctx, i + delim.length, to, delim, depth + 1);
       const closed = inner.end <= to && src.startsWith(delim, inner.end - delim.length);
       if (closed && inner.nodes.length > 0) {
         flush();
@@ -491,6 +520,12 @@ function parseInlineRange(src: string, from: number, to: number, streaming: bool
         i = to;
         continue;
       }
+      // The failed run scanned the rest of the range for this same closer
+      // from this same position, so this run cannot close either.
+      if (!streaming && inner.end > to && delim === closer) {
+        flush();
+        return { nodes, end: to + closer.length };
+      }
       text += delim;
       i += delim.length;
       continue;
@@ -502,6 +537,29 @@ function parseInlineRange(src: string, from: number, to: number, streaming: bool
   flush();
   // Reached `to` without a closer.
   return { nodes, end: to + (closer?.length ?? 0) };
+}
+
+// One run per (range, delimiter, start), whatever path reaches it. Past the
+// nesting bound the run fails without scanning and is not memoised, so a
+// shallower opener at the same position still gets a real scan.
+function emphasisRun(ctx: InlineCtx, from: number, to: number, delim: string, depth: number): InlineResult {
+  if (depth > MAX_INLINE_DEPTH) return { nodes: [], end: to + delim.length };
+  const key = (to * (ctx.src.length + 1) + from) * DELIMS.length + DELIMS.indexOf(delim as (typeof DELIMS)[number]);
+  let run = ctx.runs.get(key);
+  if (run === undefined) {
+    run = parseInlineRange(ctx, from, to, delim, depth);
+    ctx.runs.set(key, run);
+  }
+  return run;
+}
+
+/** First run of `n` backticks at or after `from`, or -1. */
+function findTicks(ctx: InlineCtx, n: number, from: number): number {
+  const miss = ctx.tickMiss.get(n);
+  if (miss !== undefined && from >= miss) return -1;
+  const at = ctx.src.indexOf("`".repeat(n), from);
+  if (at === -1) ctx.tickMiss.set(n, Math.min(from, miss ?? from));
+  return at;
 }
 
 function wrap(delim: string, c: Inline[]): Inline {
@@ -537,39 +595,80 @@ function isFlankingSpace(src: string, i: number, closer: string): boolean {
   return false;
 }
 
-function parseLink(src: string, from: number, to: number, streaming: boolean): { nodes: Inline[]; href: string; end: number } | null {
-  // from points at "["
+// Partner index of each `[` and `(` (-1 when unmatched, -2 when the
+// character is backslash-escaped), from one pass with a stack per kind.
+// Inside a matched pair every bracket is matched within it, so the partner
+// equals what a depth-counting scan from that opener would find.
+function partners(ctx: InlineCtx): { readonly bracket: Int32Array; readonly paren: Int32Array } {
+  if (ctx.partners) return ctx.partners;
+  const src = ctx.src;
+  const bracket = new Int32Array(src.length).fill(-1);
+  const paren = new Int32Array(src.length).fill(-1);
+  const bs: number[] = [];
+  const ps: number[] = [];
+  for (let k = 0; k < src.length; k++) {
+    const c = src.charCodeAt(k);
+    if (c === 92 /* \ */) {
+      k++;
+      if (k < src.length) {
+        bracket[k] = -2;
+        paren[k] = -2;
+      }
+      continue;
+    }
+    if (c === 91 /* [ */) bs.push(k);
+    else if (c === 93 /* ] */) {
+      const o = bs.pop();
+      if (o !== undefined) bracket[o] = k;
+    } else if (c === 40 /* ( */) ps.push(k);
+    else if (c === 41 /* ) */) {
+      const o = ps.pop();
+      if (o !== undefined) paren[o] = k;
+    }
+  }
+  ctx.partners = { bracket, paren };
+  return ctx.partners;
+}
+
+// Depth-counting scan from `from` (an opener) for its partner before `to`;
+// used only when the opener's escape state differs from the global pass.
+function scanPartner(src: string, from: number, to: number, open: string, close: string): number {
   let depth = 0;
-  let j = from;
-  for (; j < to; j++) {
+  for (let j = from; j < to; j++) {
     const c = src.charAt(j);
     if (c === "\\") {
       j++;
       continue;
     }
-    if (c === "[") depth++;
-    else if (c === "]") {
-      depth--;
-      if (depth === 0) break;
-    }
+    if (c === open) depth++;
+    else if (c === close && --depth === 0) return j;
   }
-  if (j >= to || src.charAt(j + 1) !== "(") return null;
-  let k = j + 2;
-  let pd = 0;
-  for (; k < to; k++) {
-    const c = src.charAt(k);
-    if (c === "\\") {
-      k++;
-      continue;
-    }
-    if (c === "(") pd++;
-    else if (c === ")") {
-      if (pd === 0) break;
-      pd--;
-    }
-  }
-  if (k >= to) return null;
-  const label = parseInlineRange(src, from + 1, j, streaming, null).nodes;
+  return -1;
+}
+
+function partnerOf(ctx: InlineCtx, at: number, to: number, kind: "bracket" | "paren"): number {
+  const p = partners(ctx)[kind][at] ?? -1;
+  const found = p === -2 ? (kind === "bracket" ? scanPartner(ctx.src, at, to, "[", "]") : scanPartner(ctx.src, at, to, "(", ")")) : p;
+  return found !== -1 && found < to ? found : -1;
+}
+
+function parseLink(ctx: InlineCtx, from: number, to: number, depth: number): LinkResult | null {
+  const key = to * (ctx.src.length + 1) + from;
+  const known = ctx.links.get(key);
+  if (known !== undefined) return known;
+  const link = scanLink(ctx, from, to, depth);
+  ctx.links.set(key, link);
+  return link;
+}
+
+function scanLink(ctx: InlineCtx, from: number, to: number, depth: number): LinkResult | null {
+  const src = ctx.src;
+  // from points at "["
+  const j = partnerOf(ctx, from, to, "bracket");
+  if (j === -1 || src.charAt(j + 1) !== "(") return null;
+  const k = partnerOf(ctx, j + 1, to, "paren");
+  if (k === -1) return null;
+  const label = parseInlineRange(ctx, from + 1, j, null, depth + 1).nodes;
   let href = src.slice(j + 2, k).trim();
   // Strip an optional title: (url "title")
   const tm = /^(\S+)\s+["'(].*["')]$/.exec(href);
