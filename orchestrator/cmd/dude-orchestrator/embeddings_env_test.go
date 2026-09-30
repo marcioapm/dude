@@ -88,28 +88,58 @@ func TestEmbeddingsComeFromTheLLMUnlessOverriddenOrOff(t *testing.T) {
 // The resolved configuration's getter feeds embeddingsFromEnv, so the file's
 // [llm] and [embeddings] tables reach it and a variable overrides them.
 func TestEmbeddingsComeFromTheConfigFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "dude.toml")
-	if err := os.WriteFile(path, []byte("[llm]\nurl = \"https://llm.example/v1\"\nkey = \"sk-file\"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	vars := map[string]string{"DUDE_CONFIG": path}
-	load := func() embeddingsConfig {
-		cfg, err := config.Load(config.Orchestrator, config.Options{Getenv: func(k string) string { return vars[k] },
-			DefaultPath: filepath.Join(t.TempDir(), "absent.toml")})
-		if err != nil {
-			t.Fatal(err)
-		}
-		c, err := embeddingsFromEnv(cfg.Getenv)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return c
-	}
-	if c := load(); c.URL != "https://llm.example/v1" || c.Key != "sk-file" {
-		t.Errorf("got %+v, want the file's LLM", c)
-	}
-	vars["DUDE_EMBEDDINGS_URL"] = "off"
-	if c := load(); c.URL != "" || c.Off != "DUDE_EMBEDDINGS_URL is off" {
-		t.Errorf("got %+v, want the variable to turn them off", c)
+	const llm = "[llm]\nurl = \"https://llm.example/v1\"\nkey = \"sk-file\"\n"
+	for name, tc := range map[string]struct {
+		text     string
+		vars     map[string]string
+		url, key string
+		off      string
+		fail     []string // what the error must name
+	}{
+		"the file's LLM": {text: llm, url: "https://llm.example/v1", key: "sk-file"},
+		"explicit override": {text: llm + "[embeddings]\nurl = \"https://emb.example/v1\"\nkey = \"sk-emb-file\"\n",
+			url: "https://emb.example/v1", key: "sk-emb-file"},
+		"same origin inherits the LLM key": {text: llm + "[embeddings]\nurl = \"https://llm.example/embed\"\n",
+			url: "https://llm.example/embed", key: "sk-file"},
+		"cross origin without a key is refused": {text: llm + "[embeddings]\nurl = \"https://emb.example/v1\"\n",
+			fail: []string{"DUDE_EMBEDDINGS_URL", "DUDE_EMBEDDINGS_KEY"}},
+		"env key over the file's key": {text: llm + "[embeddings]\nurl = \"https://emb.example/v1\"\nkey = \"sk-emb-file\"\n",
+			vars: map[string]string{"DUDE_EMBEDDINGS_KEY": "sk-emb-env"}, url: "https://emb.example/v1", key: "sk-emb-env"},
+		"file off":              {text: llm + "[embeddings]\nurl = \"off\"\n", off: "DUDE_EMBEDDINGS_URL is off"},
+		"env off over the file": {text: llm, vars: map[string]string{"DUDE_EMBEDDINGS_URL": "off"}, off: "DUDE_EMBEDDINGS_URL is off"},
+		"env URL over file off": {text: llm + "[embeddings]\nurl = \"off\"\n",
+			vars: map[string]string{"DUDE_EMBEDDINGS_URL": "https://llm.example/v2"}, url: "https://llm.example/v2", key: "sk-file"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "dude.toml")
+			if err := os.WriteFile(path, []byte(tc.text), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			vars := map[string]string{"DUDE_CONFIG": path}
+			maps.Copy(vars, tc.vars)
+			cfg, err := config.Load(config.Orchestrator, config.Options{Getenv: func(k string) string { return vars[k] },
+				DefaultPath: filepath.Join(t.TempDir(), "absent.toml")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			c, err := embeddingsFromEnv(cfg.Getenv)
+			if tc.fail != nil {
+				if err == nil {
+					t.Fatalf("got %+v, want an error", c)
+				}
+				for _, v := range tc.fail {
+					if !strings.Contains(err.Error(), v) {
+						t.Errorf("error %q does not name %s", err, v)
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.URL != tc.url || c.Key != tc.key || c.Off != tc.off {
+				t.Errorf("got %+v, want url %q key %q off %q", c, tc.url, tc.key, tc.off)
+			}
+		})
 	}
 }

@@ -51,12 +51,16 @@ func TestAgentConfigReadsTheFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`
 [llm]
 url = "https://llm.example/v1"
+key = "sk-file"
+[orchestrator]
+token = "file-service-token"
 [agent]
 image = "img:2"
 timeout = "48h"
 egress = ["a.example"]
 [tools]
 service = false
+url = "http://10.0.0.7:3200/"
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -64,9 +68,44 @@ service = false
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.LLMURL != "https://llm.example/v1" || c.DefaultImage != "img:env" || c.Timeout != "48h" ||
-		len(c.Egress) != 1 || c.Egress[0] != "a.example" || c.ToolsService {
+	if c.LLMURL != "https://llm.example/v1" || c.LLMKey != "sk-file" || c.DefaultImage != "img:env" || c.Timeout != "48h" ||
+		len(c.Egress) != 1 || c.Egress[0] != "a.example" || c.ToolsService || c.ToolsURL != "http://10.0.0.7:3200/" ||
+		string(c.ToolsKey) != "file-service-token" {
 		t.Errorf("config = %+v", c)
+	}
+}
+
+// tools.key signs Runs' tool tokens; without one of its own it is the
+// service token, from wherever that came.
+func TestTheToolsKeyFallsBackToTheServiceToken(t *testing.T) {
+	file := func(text string) string {
+		path := filepath.Join(t.TempDir(), "dude.toml")
+		if err := os.WriteFile(path, []byte("[orchestrator]\ntoken = \"file-token\"\n"+text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	for name, tc := range map[string]struct {
+		text string
+		vars map[string]string
+		want string
+	}{
+		"absent":                    {text: "", want: "file-token"},
+		"empty":                     {text: "[tools]\nkey = \"\"\n", want: "file-token"},
+		"explicit in the file":      {text: "[tools]\nkey = \"file-tools-key\"\n", want: "file-tools-key"},
+		"env over the file's key":   {text: "[tools]\nkey = \"file-tools-key\"\n", vars: map[string]string{"DUDE_TOOLS_KEY": "env-tools-key"}, want: "env-tools-key"},
+		"env token, no tools key":   {text: "", vars: map[string]string{"DUDE_ORCHESTRATOR_TOKEN": "env-token"}, want: "env-token"},
+		"env token, empty key":      {text: "[tools]\nkey = \"\"\n", vars: map[string]string{"DUDE_ORCHESTRATOR_TOKEN": "env-token"}, want: "env-token"},
+		"env token, file tools key": {text: "[tools]\nkey = \"file-tools-key\"\n", vars: map[string]string{"DUDE_ORCHESTRATOR_TOKEN": "env-token"}, want: "file-tools-key"},
+	} {
+		vars := map[string]string{"DUDE_CONFIG": file(tc.text)}
+		for k, v := range tc.vars {
+			vars[k] = v
+		}
+		c, err := LoadAgentConfig(settings(t, vars))
+		if err != nil || string(c.ToolsKey) != tc.want {
+			t.Errorf("%s: tools key %q, %v; want %q", name, c.ToolsKey, err, tc.want)
+		}
 	}
 }
 
