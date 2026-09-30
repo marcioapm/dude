@@ -18,6 +18,7 @@ import { PeopleProvider } from "./people.tsx";
 import { DudeMark } from "./DudeMark.tsx";
 
 import { AuthSession, KEY_STORAGE } from "./auth.ts";
+import { AuthRefusal } from "./authRefusal.ts";
 
 /**
  * The mockups' world in place of the API, outside production: loaded only
@@ -61,15 +62,17 @@ function Root() {
   return (
     <TooltipProvider>
       <ToastProvider>
-        <PeopleProvider client={client}>
-          <App
-            client={client}
-            onKeyRefused={session.refused}
-            onSignOut={() => {
-              void session.signOut(turnPushOff, (url) => location.assign(url), flushSync);
-            }}
-          />
-        </PeopleProvider>
+        <AuthRefusal.Provider value={session.refused}>
+          <PeopleProvider client={client}>
+            <App
+              client={client}
+              onKeyRefused={session.refused}
+              onSignOut={() => {
+                void session.signOut(turnPushOff, (url) => location.assign(url), flushSync);
+              }}
+            />
+          </PeopleProvider>
+        </AuthRefusal.Provider>
       </ToastProvider>
     </TooltipProvider>
   );
