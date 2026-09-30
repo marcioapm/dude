@@ -1,14 +1,18 @@
-"""Settings in two layers, prompts with a history, and epics with a state.
+"""Settings in two layers, prompts with a history, epics with a state, and
+machine sizes.
 
 The organization sets the defaults every project starts from; a project
 stores only what it overrides, and its settings say where each value comes
 from. Prompts keep every save, and a Run records the version it ran with.
+Every agent and preview runs on one of the organization's machine sizes.
 Driven through the public API, as the settings screens use it.
 """
 
 from __future__ import annotations
 
 import os
+
+import requests
 
 from helpers import ApiClient, execute, query, wait_until
 
@@ -341,3 +345,189 @@ def test_the_project_page_shows_epics_by_state(page: Page, web_url: str, client:
     expect(epics.locator("[data-epic-state='done']")).to_contain_text("Charts")
     assert {e["title"]: e["state"] for e in client.get(f"/v1/projects/{pid}/epics").json()["epics"]}["Charts"] == "done"
     assert console_errors == []
+
+
+# ---------------------------------------------------------------------------
+# Machine sizes
+# ---------------------------------------------------------------------------
+
+
+def _sizes(client: ApiClient) -> dict:
+    return {s["name"]: s for s in client.get("/v1/machines/sizes").json()["sizes"]}
+
+
+def _invite_member(admin: ApiClient, env, name: str) -> tuple[ApiClient, str]:
+    resp = admin.post("/v1/people", {"name": name, "email": f"{name.lower()}-{os.urandom(2).hex()}@acme.dev", "role": "member"})
+    assert resp.status_code == 201, resp.text
+    key = resp.json()["key"]
+    return ApiClient(env.control_plane_url, key), key
+
+
+def _pick(page: Page, trigger, option: str) -> None:
+    """Open a Select and choose the option showing `option` (a label, or a size's spec)."""
+    trigger.click()
+    page.get_by_role("option").filter(has_text=option).first.click()
+
+
+@pytest.mark.ui
+def test_an_admin_adds_a_size_in_half_steps_and_one_off_step_or_too_big_is_refused(
+    page: Page, web_url: str, client: ApiClient, org: dict, console_errors: list
+):
+    _sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/org/settings/machines")
+    machines = page.get_by_test_id("machines-page")
+    # Every organisation starts with lux's own default, and sees lux's pools.
+    expect(machines.locator("[data-size='Standard']")).to_contain_text("Default")
+    expect(machines.locator("[data-size='Standard']")).to_contain_text("2 CPUs")
+    expect(machines.get_by_test_id("machine-pools").locator("[data-pool='big']")).to_contain_text("c7a.8xlarge")
+    expect(machines.get_by_test_id("memory-share")).to_contain_text("Run A · asks 16 · gets 15")
+
+    machines.get_by_test_id("add-machine-size").click()
+    page.get_by_test_id("machine-size-name").fill("Large (Java)")
+    cpus = page.get_by_test_id("machine-size-cpus")
+    # ↑ is a step.
+    cpus.fill("6")
+    cpus.press("ArrowUp")
+    expect(cpus).to_have_value("6.5")
+    page.get_by_test_id("machine-size-memory").fill("22.5")
+    page.get_by_test_id("machine-size-disk").fill("120")
+    expect(page.get_by_test_id("machine-fit")).to_have_attribute("data-fit", "fits")
+    expect(page.get_by_test_id("machine-fit")).to_contain_text("Fits ‘default’")
+
+    # Off the step: refused in place, naming it.
+    cpus.fill("2.3")
+    expect(page.get_by_role("dialog")).to_contain_text("Whole or half CPUs: 0.5, 1, 1.5…")
+    expect(page.get_by_test_id("machine-size-save")).to_be_disabled()
+    cpus.fill("6.5")
+
+    # Too big for the pool's hosts: refused, saying what does not fit.
+    _pick(page, page.get_by_test_id("machine-size-pool"), "big — EC2 · c7a.8xlarge · 32 CPUs · 64 GiB · 380 GiB")
+    page.get_by_test_id("machine-size-memory").fill("72")
+    expect(page.get_by_test_id("machine-fit")).to_have_attribute("data-fit", "too_big")
+    expect(page.get_by_test_id("machine-fit")).to_contain_text("72 GiB memory (it offers 64)")
+    expect(page.get_by_role("dialog")).to_contain_text("Most a big host has: 64 GiB")
+    expect(page.get_by_test_id("machine-size-save")).to_be_disabled()
+    # The API refuses it too, whatever a browser sends.
+    too_big = client.post("/v1/machines/sizes", {"name": "Huge", "cpus": 16, "memoryMiB": 72 * 1024, "diskGiB": 200, "pool": "big"})
+    assert too_big.status_code == 422 and "72 GiB memory (it offers 64)" in too_big.json()["error"]["message"]
+
+    page.get_by_test_id("machine-size-memory").fill("22.5")
+    page.get_by_test_id("machine-size-save").click()
+    expect(toast(page, "Large (Java) added")).to_be_visible()
+    row = machines.locator("[data-size='Large (Java)']")
+    expect(row).to_contain_text("6.5 CPUs")
+    expect(row).to_contain_text("22.5 GiB")
+    size = _sizes(client)["Large (Java)"]
+    assert (size["cpus"], size["memoryMiB"], size["diskGiB"], size["pool"]) == (6.5, 23040, 120, "big")
+    assert console_errors == []
+
+
+@pytest.mark.ui
+def test_a_size_is_set_on_the_implementer_overridden_in_a_project_and_reset(
+    page: Page, web_url: str, client: ApiClient, org: dict, project: dict, console_errors: list
+):
+    for body in ({"name": "Large", "cpus": 8, "memoryMiB": 16384, "diskGiB": 80}, {"name": "XL", "cpus": 16, "memoryMiB": 49152, "diskGiB": 200, "pool": "big"}):
+        assert client.post("/v1/machines/sizes", body).status_code == 201
+    sizes = _sizes(client)
+    _sign_in(page, web_url, org["api_key"])
+
+    # The organisation's implementer: Large. The fixer follows it.
+    page.goto(f"{web_url}#/org/settings/implementer")
+    settings = page.get_by_test_id("org-settings")
+    _pick(page, settings.get_by_test_id("role-machine"), "8 CPUs · 16 GiB · 80 GiB")
+    expect(toast(page, "Machine saved")).to_be_visible()
+    assert client.get("/v1/settings/organization").json()["roles"]["implementer"]["machineSize"]["value"] == sizes["Large"]["id"]
+    page.locator("[data-settings-nav='fixer']").click()
+    expect(settings.get_by_test_id("role-machine")).to_contain_text("The implementer’s")
+    expect(settings.get_by_test_id("role-machine")).to_contain_text("Large")
+
+    # The project overrides it with XL, says so, and Reset puts Acme's back.
+    page.goto(f"{web_url}#/project/{project['id']}/settings/implementer")
+    ps = page.get_by_test_id("project-settings")
+    expect(ps.get_by_test_id("role-machine")).to_contain_text("From ")
+    _pick(page, ps.get_by_test_id("role-machine"), "16 CPUs · 48 GiB · 200 GiB · big")
+    expect(toast(page, "Machine saved")).to_be_visible()
+    overridden = ps.locator("[data-source='project']").filter(has_text="Large")
+    expect(overridden).to_contain_text("Overridden")
+    assert client.get(f"/v1/projects/{project['id']}").json()["agentModels"]["implementer"]["machineSize"] == sizes["XL"]["id"]
+    overridden.get_by_role("button", name="Reset").click()
+    expect(ps.locator("[data-source='project']").filter(has_text="Large")).to_have_count(0)
+    assert "machineSize" not in client.get(f"/v1/projects/{project['id']}").json()["agentModels"].get("implementer", {})
+
+    # The investigator is configurable like the others.
+    page.goto(f"{web_url}#/org/settings/investigator")
+    expect(page.get_by_test_id("org-settings").get_by_test_id("role-machine")).to_contain_text("Default")
+    assert console_errors == []
+
+
+@pytest.mark.ui
+def test_removing_a_size_in_use_moves_what_named_it(
+    page: Page, web_url: str, client: ApiClient, org: dict, project: dict, console_errors: list
+):
+    for body in ({"name": "Large", "cpus": 8, "memoryMiB": 16384, "diskGiB": 80}, {"name": "XL", "cpus": 16, "memoryMiB": 32768, "diskGiB": 100}):
+        assert client.post("/v1/machines/sizes", body).status_code == 201
+    sizes = _sizes(client)
+    client.patch("/v1/settings/organization", {"roles": {"implementer": {"machineSize": sizes["Large"]["id"]}}})
+    client.patch(f"/v1/projects/{project['id']}/settings", {"roles": {"reviewer": {"machineSize": sizes["Large"]["id"]}}})
+    _sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/org/settings/machines")
+    machines = page.get_by_test_id("machines-page")
+    # The implementer, the fixer that follows it, and a project's reviewer.
+    expect(machines.locator("[data-size='Large']")).to_contain_text("2 agents · 1 project")
+
+    # The default cannot be removed: its menu says why.
+    machines.get_by_role("button", name="Actions for Standard").click()
+    expect(page.get_by_role("menuitem", name="Remove…")).to_be_disabled()
+    page.keyboard.press("Escape")
+
+    machines.get_by_role("button", name="Actions for Large").click()
+    page.get_by_role("menuitem", name="Remove…").click()
+    uses = page.get_by_test_id("machine-size-uses")
+    expect(uses).to_contain_text("Implementer")
+    expect(uses).to_contain_text("follows the implementer")
+    expect(uses).to_contain_text("E2E Project · Reviewer")
+    _pick(page, page.get_by_test_id("machine-size-move"), "16 CPUs · 32 GiB · 100 GiB")
+    page.get_by_test_id("remove-machine-size").click()
+    expect(toast(page, "Large removed")).to_be_visible()
+    expect(machines.locator("[data-size='Large']")).to_have_count(0)
+    assert client.get("/v1/settings/organization").json()["roles"]["implementer"]["machineSize"]["value"] == sizes["XL"]["id"]
+    assert client.get(f"/v1/projects/{project['id']}").json()["agentModels"]["reviewer"]["machineSize"] == sizes["XL"]["id"]
+    assert console_errors == []
+
+
+@pytest.mark.ui
+def test_a_member_sees_machines_read_only(page: Page, web_url: str, client: ApiClient, env, console_errors: list):
+    _, key = _invite_member(client, env, "Bo")
+    _sign_in(page, web_url, key)
+    page.goto(f"{web_url}#/org/settings/machines")
+    machines = page.get_by_test_id("machines-page")
+    expect(machines.locator("[data-size='Standard']")).to_be_visible()
+    expect(machines.get_by_test_id("add-machine-size")).to_have_count(0)
+    expect(machines.get_by_role("button", name="Actions for Standard")).to_have_count(0)
+    assert console_errors == []
+
+
+def test_a_phase_run_goes_to_lux_on_its_roles_size_and_pool(client: ApiClient, env, owner_dsn: str):
+    """The scripted agent runs the implementer; the spec the fake lux was
+    sent carries the size as resources and its pool, and the Run records it."""
+    project = client.create_project(
+        name="Sized", slug=f"sized-{os.urandom(3).hex()}", runtimeImage="dude-runtime:test",
+        agentModels={r: {"model": "fake/scripted"} for r in ("implementer", "reviewer", "simplifier")},
+    )
+    size = client.post("/v1/machines/sizes", {"name": "Half", "cpus": 6.5, "memoryMiB": 23040, "diskGiB": 120, "pool": "big"}).json()
+    half = next(s for s in size["sizes"] if s["name"] == "Half")
+    client.patch(f"/v1/projects/{project['id']}/settings", {"roles": {"implementer": {"machineSize": half["id"]}}})
+
+    task = client.create_task(project["id"], "Write it up")
+    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+
+    def submitted():
+        rows = query(owner_dsn, "SELECT id, lux_run_id, machine FROM runs WHERE task_id = %s AND phase = 'implement' AND lux_run_id IS NOT NULL", (task["id"],))
+        return rows[0] if rows else None
+
+    run = wait_until(submitted, timeout=60, message="the implementer never reached lux")
+    spec = requests.get(f"{env.fake_lux_url}/v1/runs/{run['lux_run_id']}", headers={"authorization": f"Bearer {env.lux_key}"}, timeout=10).json()["spec"]
+    assert spec["resources"] == {"cpus": 6.5, "memory": 23040 * 1024 * 1024, "disk": 120 * 1024 ** 3}
+    assert spec["placement"] == {"pool": "big"}
+    assert run["machine"]["name"] == "Half" and run["machine"]["from"] == "project"
+    assert client.get(f"/v1/runs/{run['id']}").json()["machine"]["cpus"] == 6.5

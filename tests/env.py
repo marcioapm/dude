@@ -364,6 +364,11 @@ class TestEnvironment:
     def web_url(self) -> str:
         return f"http://127.0.0.1:{self.web_port}"
 
+    @property
+    def fake_lux_url(self) -> str:
+        """The fake lux's address, as it wrote it on start: a test reads what it was sent (GET /v1/runs/<id>)."""
+        return f"http://{(self.log_dir / 'fake-lux.addr').read_text()}"
+
     def _log(self, name: str):
         """An append-mode log file for one of the suite's processes."""
         return open(self.log_dir / f"{name}.log", "ab")
