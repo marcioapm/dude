@@ -11,6 +11,7 @@ import { withOrg, withoutTenant } from "../../db/client.ts";
 import { requireOrgAdmin, requireProjectEditor } from "../access.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { conflict, json, notFound, parseBody } from "../http.ts";
+import { auditActor } from "../auth.ts";
 import type { PublicContext, RequestContext, Router } from "../router.ts";
 import { replaceImage, serveImage } from "../faces.ts";
 import { deleteObject } from "../../storage.ts";
@@ -100,7 +101,7 @@ async function createProject(ctx: RequestContext): Promise<Response> {
       eventType: EventTypes.ProjectCreated,
       organizationId,
       projectId,
-      actor: { type: "human", id: ctx.principal.apiKeyId },
+      actor: { type: auditActor(ctx.principal).kind, id: auditActor(ctx.principal).id },
       source: "control-plane",
       payload: { name: input.name, slug: input.slug },
     });
@@ -185,7 +186,7 @@ async function recordProjectImage(ctx: RequestContext, projectId: string, image:
       eventType: EventTypes.ProjectUpdated,
       organizationId,
       projectId,
-      actor: { type: "human", id: ctx.principal.apiKeyId },
+      actor: { type: auditActor(ctx.principal).kind, id: auditActor(ctx.principal).id },
       source: "control-plane",
       payload: { changed: ["image"] },
     });

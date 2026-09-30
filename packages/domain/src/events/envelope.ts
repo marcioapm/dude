@@ -8,7 +8,7 @@ import { z } from "zod";
  * explains how that state came to be.
  */
 
-export const actorTypeSchema = z.enum(["system", "human", "agent", "integration"]);
+export const actorTypeSchema = z.enum(["system", "human", "person", "agent", "integration"]);
 export type ActorType = z.infer<typeof actorTypeSchema>;
 
 export const actorSchema = z.object({
@@ -86,9 +86,9 @@ export type EventInput = Pick<EventEnvelope, "eventType" | "organizationId" | "a
 export interface PersistedEvent extends EventEnvelope {
   cursor: number;
   /**
-   * In API output, a human actor is the person, not their key: `id` is
-   * the person's, the rest is their `PersonRef`, and `keyId` the key the
-   * ledger recorded. An actor the ledger cannot resolve stays as recorded.
+   * In API output, human and person actors resolve to a `PersonRef`.
+   * Legacy human actors also carry `keyId`, the key the ledger recorded.
+   * An actor the ledger cannot resolve stays as recorded.
    */
   actor: EventEnvelope["actor"] & {
     name?: string;
