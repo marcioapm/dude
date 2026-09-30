@@ -6,7 +6,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { PR_DISPLAY_STATES, type PrDisplayState } from "@dude/domain";
+import { CHECK_RUNS_FORBIDDEN, PR_DISPLAY_STATES, prCheckDiagnosticReason, type PrDisplayState } from "@dude/domain";
 import { AgentPlan, PlanMeter } from "../src/components/AgentPlan.tsx";
 import { Cost } from "../src/components/Cost.tsx";
 import { MarkdownDocument, applyFormat, highlightMarkdown } from "../src/components/MarkdownDocument.tsx";
@@ -115,6 +115,68 @@ describe("PrChip", () => {
       mergeable: "behind", behindBy: 3, baseBranch: "main", unresolvedThreads: 2,
     }));
     expect(facts).toEqual(["Checks: e2e (chrome) failing", "Changes requested by cy", "3 commits behind main, no conflicts", "2 unresolved comments"]);
+  });
+  test("pending with no reason is CI pending, not CI at work", () => {
+    const h = html(<PrChip pr={pr({ checks: "pending", display: "ci_running" })} />);
+    expect(text(h)).toBe("CI pending#41");
+    expect(prFacts(pr({ checks: "pending" }))).toContain("Checks: pending");
+  });
+});
+
+describe("checks that cannot be read", () => {
+  const denied = { name: "GitHub check runs", status: "unavailable", conclusion: "", url: "", durationMs: 0, diagnostic: CHECK_RUNS_FORBIDDEN };
+  const codeRabbit = { name: "CodeRabbit", status: "completed", conclusion: "success" };
+  const lint = { name: "lint", status: "completed", conclusion: "failure" };
+  // As the API sends it: the scalar decides `display`, the list goes out as stored.
+  const pr = (checks: PrChipPullRequest["checks"], display: PrDisplayState, over: Partial<PrChipPullRequest> = {}) => ({
+    number: 101, url: "https://github.com/acme/dude/pull/101", title: "First run", repositoryName: "acme/dude",
+    state: "open" as const, review: "approved" as const, checks, display, ...over,
+  });
+
+  test("the chip says CI unavailable, in its word, tooltip and accessible name", () => {
+    const h = html(<PrChip pr={pr([codeRabbit, denied], "ci_running")} />);
+    expect(text(h)).toBe("CI unavailable#101");
+    expect(h).toContain('data-pr-state="ci_running"');
+    const icon = html(<PrChip pr={pr([codeRabbit, denied], "ci_running")} iconOnly />);
+    expect(icon).toContain('aria-label="CI unavailable, pull request acme/dude#101 (opens on GitHub)"');
+    const facts = prFacts(pr([codeRabbit, denied], "ci_running"));
+    expect(facts).toContain("Checks: 1 readable passing");
+    expect(facts.some((f) => f.includes("Checks: Read"))).toBe(true);
+    expect(facts.some((f) => /all .* passing/i.test(f) || f.includes("running"))).toBe(false);
+  });
+
+  test("a real failure, or the pull request being over, still wins the chip", () => {
+    expect(text(html(<PrChip pr={pr([lint, denied], "ci_red")} />))).toBe("CI failing#101");
+    expect(prFacts(pr([lint, denied], "ci_red"))).toEqual(["Checks: lint failing", prCheckDiagnosticReason(CHECK_RUNS_FORBIDDEN), "Approved"]);
+    expect(text(html(<PrChip pr={pr([denied], "merged", { state: "merged" })} />))).toBe("Merged#101");
+  });
+
+  // What a reader sees, entities decoded.
+  const seen = (el: React.ReactElement) => text(html(el)).replaceAll("&#x27;", "'");
+
+  test("the panel warns without a hover and counts only real checks", () => {
+    const h = seen(<PullRequestPanel pr={pr([codeRabbit, denied], "ci_running")} />);
+    expect(h).toContain(prCheckDiagnosticReason(CHECK_RUNS_FORBIDDEN));
+    expect(h).toContain("1 readable check passing");
+    // One job row, CodeRabbit's: the diagnostic is no row of its own.
+    const rows = html(<PullRequestPanel pr={pr([codeRabbit, denied], "ci_running")} />).match(/<li><svg[^]*?<\/li>/g) ?? [];
+    expect(rows.map(text)).toEqual(["CodeRabbit"]);
+    // Its checks line is not drawn green.
+    const checksLine = html(<PullRequestPanel pr={pr([codeRabbit, denied], "ci_running")} />).match(/data-fact="checks"[^]*?data-icon="([^"]+)"/)?.[1];
+    expect(checksLine).toBe("circle-dotted");
+    expect(h).not.toMatch(/All \d+ checks passing/);
+    const none = seen(<PullRequestPanel pr={pr([denied], "ci_running")} />);
+    expect(none).toContain("No checks could be read");
+    expect(none).toContain("Checks: Read");
+    const failing = seen(<PullRequestPanel pr={pr([lint, denied], "ci_red")} />);
+    expect(failing).toContain("1 of 1 checks failing");
+    expect(failing).toContain("Checks: Read");
+  });
+
+  test("without a diagnostic the panel is as before", () => {
+    const h = seen(<PullRequestPanel pr={pr([codeRabbit], "ready")} />);
+    expect(h).toContain("All 1 checks passing");
+    expect(h).not.toContain("Checks: Read");
   });
 });
 

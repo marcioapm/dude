@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { PR_DISPLAY_STATES, prCheckFailed, prChecksSummary, prDisplayState, prReviewSummary, type PrCheck, type PrDisplayInput } from "../src/hierarchy.ts";
+import { CHECK_RUNS_FORBIDDEN, PR_DISPLAY_STATES, prActualChecks, prCheckDiagnostic, prCheckDiagnosticReason, prCheckFailed, prCheckSchema, prChecksSummary, prDisplayState, prReviewSummary, type PrCheck, type PrDisplayInput } from "../src/hierarchy.ts";
 
 const open = (over: Partial<PrDisplayInput> = {}): PrDisplayInput => ({ state: "open", checks: "passing", review: "approved", ...over });
 const check = (name: string, status: string, conclusion: string | null): PrCheck => ({ name, status, conclusion });
@@ -86,5 +86,34 @@ describe("prReviewSummary", () => {
   test("without reviews the summary stands", () => {
     expect(prReviewSummary({ review: "approved", reviews: [] })).toBe("approved");
     expect(prReviewSummary({ review: "pending" })).toBe("pending");
+  });
+});
+
+describe("checks that cannot be read", () => {
+  // As the orchestrator stores it beside the checks it could read.
+  const denied: PrCheck = { name: "GitHub check runs", status: "unavailable", conclusion: "", url: "", durationMs: 0, diagnostic: CHECK_RUNS_FORBIDDEN };
+
+  test("hold the verdict at pending, never passing or failing, and a real failure still wins", () => {
+    expect(prChecksSummary([denied])).toBe("pending");
+    expect(prChecksSummary([check("CodeRabbit", "completed", "success"), denied])).toBe("pending");
+    expect(prCheckFailed(denied)).toBe(false);
+    expect(prDisplayState(open({ checks: [check("CodeRabbit", "completed", "success"), denied] }))).toBe("ci_running");
+    expect(prDisplayState(open({ checks: [check("lint", "completed", "failure"), denied] }))).toBe("ci_red");
+    expect(prDisplayState(open({ state: "merged", checks: [denied] }))).toBe("merged");
+  });
+
+  test("are named apart from the checks", () => {
+    const checks = [check("CodeRabbit", "completed", "success"), denied];
+    expect(prCheckDiagnostic(checks)).toBe(CHECK_RUNS_FORBIDDEN);
+    expect(prCheckDiagnostic([check("CodeRabbit", "completed", "success")])).toBeNull();
+    expect(prCheckDiagnostic("pending")).toBeNull();
+    expect(prActualChecks(checks).map((c) => c.name)).toEqual(["CodeRabbit"]);
+    expect(prCheckDiagnosticReason(CHECK_RUNS_FORBIDDEN)).toContain("Checks: Read");
+  });
+
+  test("survive the API schema", () => {
+    const parsed = prCheckSchema.parse(denied);
+    expect(parsed.diagnostic).toBe(CHECK_RUNS_FORBIDDEN);
+    expect(prCheckSchema.parse(check("unit", "completed", "success")).diagnostic).toBeUndefined();
   });
 });
