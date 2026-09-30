@@ -145,21 +145,8 @@ func run(log *slog.Logger) error {
 	pullRequests := &prs.Syncer{DB: database, Forges: forges, Signal: signalWorkflow, Log: log,
 		FactoryLogins: set.FactoryLogins}
 
-	var embedder embeddings.Embedder
-	if emb := set.Embeddings; emb.URL != "" {
-		embedder = &embeddings.Client{BaseURL: emb.URL, Key: emb.Key,
-			ModelName: set.EmbeddingsModel, Dims: set.EmbeddingsDimension}
-		log.Info("memory searches by meaning", "model", embedder.Model(), "url", emb.URL,
-			"url_from", emb.URLFrom, "key_from", emb.KeyFrom)
-	} else {
-		log.Info("memory searches by words only", "reason", emb.Off)
-	}
+	embedder, notifier := memoryAndPush(set, database, log)
 	indexer := &memory.Indexer{DB: database, Embedder: embedder, Log: log}
-
-	notifier := &notify.Notifier{DB: database, Log: log,
-		Subject:   set.VAPIDSubject,
-		PublicKey: set.VAPIDPublic, PrivateKey: set.VAPIDPrivate,
-	}
 
 	// Each loop sleeps when idle and runs again at once while there is work.
 	// A kick wakes them all: a person's action should take effect now, not
@@ -251,6 +238,25 @@ func run(log *slog.Logger) error {
 	}
 	wg.Wait()
 	return nil
+}
+
+// memoryAndPush builds the embedder (nil when embeddings are off) and the
+// Web Push notifier from set.
+func memoryAndPush(set settings, database *db.DB, log *slog.Logger) (embeddings.Embedder, *notify.Notifier) {
+	var embedder embeddings.Embedder
+	if emb := set.Embeddings; emb.URL != "" {
+		embedder = &embeddings.Client{BaseURL: emb.URL, Key: emb.Key,
+			ModelName: set.EmbeddingsModel, Dims: set.EmbeddingsDimension}
+		log.Info("memory searches by meaning", "model", embedder.Model(), "url", emb.URL,
+			"url_from", emb.URLFrom, "key_from", emb.KeyFrom)
+	} else {
+		log.Info("memory searches by words only", "reason", emb.Off)
+	}
+	notifier := &notify.Notifier{DB: database, Log: log,
+		Subject:   set.VAPIDSubject,
+		PublicKey: set.VAPIDPublic, PrivateKey: set.VAPIDPrivate,
+	}
+	return embedder, notifier
 }
 
 type loop struct {
