@@ -307,3 +307,23 @@ def test_segmented_tabs_move_with_home_and_end(gallery_page: Page, console_error
     bold = gallery_page.locator("#p-markdown-editor").get_by_role("button", name="Bold").first
     assert view.evaluate("el => el.getBoundingClientRect().height") == bold.evaluate("el => el.getBoundingClientRect().height")
     assert console_errors == []
+
+
+def test_tooltips_draw_a_key_list_as_caps_and_a_string_as_it_is(gallery_page: Page, console_errors: list):
+    """The editor's Bold names its shortcut as caps, the platform's modifier first."""
+    gallery_page.get_by_role("link", name="MarkdownEditor").click()
+    bold = gallery_page.locator("#p-markdown-editor").get_by_role("button", name="Bold").first
+    bold.hover()
+    tip = gallery_page.get_by_role("tooltip", name="Bold")
+    caps = tip.locator("kbd")
+    expect(tip).to_be_visible()
+    modifier = gallery_page.evaluate(
+        "/mac|iphone|ipad|ipod/i.test(navigator.userAgentData?.platform || navigator.platform) ? '⌘' : 'Ctrl'")
+    expect(caps).to_have_text([modifier, "B"])
+
+    gallery_page.get_by_role("link", name="Tooltip").click()
+    gallery_page.locator("#p-tooltip").get_by_role("button", name="Hover me").first.hover()
+    string_tip = gallery_page.get_by_role("tooltip").filter(has_text="Open the session in a side panel")
+    expect(string_tip).to_be_visible()
+    expect(string_tip.locator("kbd")).to_have_text(["⏎"])
+    assert console_errors == []
