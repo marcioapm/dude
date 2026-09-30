@@ -220,6 +220,34 @@ def test_enter_in_the_title_moves_to_the_goal_and_does_not_create(
     assert console_errors == []
 
 
+def test_a_task_that_fails_to_save_says_why_beside_the_buttons(
+    page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list
+):
+    """The document's column scrolls, so the reason shows in the footer, where the button was pressed."""
+    sign_in(page, web_url, org["api_key"])
+    page.get_by_test_id("new-task").click()
+    page.get_by_test_id("task-title").fill("Refused")
+    page.get_by_test_id("task-goal").fill("\n".join(f"Line {i}" for i in range(60)))
+    reason = "Tasks cannot be created in this project right now."
+
+    def refuse(route):
+        if route.request.method == "POST":
+            route.fulfill(status=400, content_type="application/json",
+                          body='{"error":{"code":"invalid","message":"%s"}}' % reason)
+        else:
+            route.continue_()
+
+    page.route("**/v1/tasks", refuse)
+    page.get_by_test_id("task-save").click()
+    alert = page.get_by_role("dialog", name="New task").get_by_role("alert")
+    expect(alert).to_have_text(reason)
+    expect(alert).to_be_in_viewport()
+    assert alert.get_attribute("title") == reason
+    # The key hints give way to it.
+    expect(page.get_by_role("dialog", name="New task")).not_to_contain_text("toggle preview")
+    assert all("400" in e for e in console_errors), console_errors
+
+
 def test_closing_a_task_with_writing_in_it_asks_first(
     page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list
 ):

@@ -34,8 +34,14 @@ export interface DialogProps {
   /** Danger/attention prefix icon; use for destructive confirmations. */
   readonly tone?: "danger" | "attention" | undefined;
   readonly footer?: ReactNode;
-  /** At the footer's start, muted: key hints. Hidden when the footer wraps on a phone. */
+  /** At the footer's start, muted: key hints. Hidden under 640px, where there is rarely a keyboard. */
   readonly footerStart?: ReactNode;
+  /**
+   * Why the last save or load failed, in the footer's start slot in place of
+   * `footerStart`: one line of danger ink beside the buttons that were just
+   * pressed, the whole text in its tooltip. Shown at every width.
+   */
+  readonly footerProblem?: string | null | undefined;
   readonly children?: ReactNode;
   readonly className?: string | undefined;
   readonly onKeyDown?: ((event: KeyboardEvent<HTMLDivElement>) => void) | undefined;
@@ -69,6 +75,7 @@ export function Dialog({
   tone,
   footer,
   footerStart,
+  footerProblem,
   children,
   className,
   onKeyDown,
@@ -125,7 +132,13 @@ export function Dialog({
           ) : null}
           {footer ? (
             <div className={styles["footer"]}>
-              {footerStart ? <div className={styles["footerStart"]}>{footerStart}</div> : null}
+              {footerProblem ? (
+                <div className={styles["footerProblem"]} role="alert" title={footerProblem}>
+                  {footerProblem}
+                </div>
+              ) : footerStart ? (
+                <div className={styles["footerStart"]}>{footerStart}</div>
+              ) : null}
               {footer}
             </div>
           ) : null}

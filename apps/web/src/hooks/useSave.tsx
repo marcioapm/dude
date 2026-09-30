@@ -80,7 +80,7 @@ export interface FormDialogProps {
    * What would be lost. Default: the count of words written, which is only
    * true when every word is new (creating); an edit says so without a count.
    */
-  discardDescription?: string;
+  discardDescription?: string | undefined;
   /**
    * The fields. Rendered only while the dialog is open, so a component
    * holding their state starts fresh each time it opens.
@@ -91,7 +91,8 @@ export interface FormDialogProps {
 /**
  * A dialog that is one form: Enter submits it (in a document, Ctrl/⌘+Enter
  * does, and Enter in a one-line field moves to the next), Cancel closes it,
- * and the server's reason for refusing shows under the fields.
+ * and the server's reason for refusing shows under the fields (in a
+ * document, in the footer beside its buttons).
  */
 export function FormDialog(props: FormDialogProps) {
   const formId = useId();
@@ -116,6 +117,8 @@ export function FormDialog(props: FormDialogProps) {
         aside={props.open ? props.aside : undefined}
         asideLabel={props.asideLabel}
         footerStart={props.footerStart}
+        // A document's column scrolls: under the fields the reason would be out of sight.
+        footerProblem={document ? props.problem : undefined}
         onKeyDown={(e) => {
           // A document's fields are multi-line: Enter is a new line there, so Ctrl/⌘+Enter submits.
           if (!document || e.key !== "Enter" || !(e.ctrlKey || e.metaKey) || e.defaultPrevented) return;
@@ -154,7 +157,7 @@ export function FormDialog(props: FormDialogProps) {
           >
             <FormStack fill={document}>
               {props.children}
-              {props.problem ? <Callout tone="danger">{props.problem}</Callout> : null}
+              {props.problem && !document ? <Callout tone="danger">{props.problem}</Callout> : null}
             </FormStack>
           </form>
         ) : null}

@@ -103,7 +103,16 @@
   font-size: var(--ds-text-xs);
   color: var(--ds-color-text-muted);
 }
-.footer:has(.footerStart) {
+.footerProblem {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-tone-danger-fg);
+}
+.footer:has(.footerStart, .footerProblem) {
   align-items: center;
 }
 
@@ -183,6 +192,9 @@
     flex-wrap: wrap;
   }
   .document .footerStart {
+    display: none;
+  }
+  .document .footerProblem {
     flex-basis: 100%;
   }
 }
