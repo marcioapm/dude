@@ -80,3 +80,53 @@ describe("unmatched inline markers at the 64K goal limit", () => {
     ]);
   });
 });
+
+function depthOf(blocks: readonly Block[]): number {
+  let d = 0;
+  for (const b of blocks) {
+    if (b.t === "quote") d = Math.max(d, 1 + depthOf(b.c));
+    if (b.t === "list") for (const it of b.items) d = Math.max(d, 1 + depthOf(it.c));
+  }
+  return d;
+}
+
+function deepest(blocks: readonly Block[]): Block | undefined {
+  const b = blocks.at(-1);
+  if (b?.t === "quote") return deepest(b.c);
+  if (b?.t === "list") return deepest(b.items.at(-1)?.c ?? []);
+  return b;
+}
+
+describe("nesting at the 64K goal limit", () => {
+  test("32,766 quote markers parse without throwing; the rest shows as literal text", () => {
+    const src = `${"> ".repeat(32_766)}text`;
+    expect(src.length).toBe(LIMIT);
+    const { blocks, ms } = timed(src);
+    expect(ms).toBeLessThan(BUDGET_MS);
+    expect(depthOf(blocks)).toBe(33);
+    const leaf = deepest(blocks);
+    expect(leaf?.t).toBe("paragraph");
+    if (leaf?.t !== "paragraph") return;
+    expect(plain(leaf.c).endsWith("> > text")).toBe(true);
+    expect(plain(leaf.c).length).toBe(LIMIT - 33 * 2);
+  });
+
+  test("lists nested by marker or by indentation parse; the rest shows as literal text", () => {
+    const byMarker = `${"- ".repeat(32_766)}text`;
+    const byIndent = Array.from({ length: 300 }, (_, i) => `${" ".repeat(i * 2)}- item ${i}`).join("\n").slice(0, LIMIT);
+    const mixed = `${"> 1. ".repeat(13_106)}text`;
+    for (const src of [byMarker, byIndent, mixed]) {
+      const { blocks, ms } = timed(src);
+      expect(ms).toBeLessThan(BUDGET_MS);
+      expect(depthOf(blocks)).toBe(33);
+      expect(deepest(blocks)?.t).toBe("paragraph");
+    }
+    const leaf = deepest(parseMarkdown(byIndent));
+    expect(leaf?.t === "paragraph" && plain(leaf.c).startsWith("item 32\n- item 33\n  - item 34")).toBe(true);
+  });
+
+  test("ordinary nesting is unchanged", () => {
+    expect(depthOf(parseMarkdown("> - a\n>   > b"))).toBe(3);
+    expect(deepest(parseMarkdown("> > > x"))).toEqual({ t: "paragraph", c: [{ t: "text", v: "x" }] });
+  });
+});
