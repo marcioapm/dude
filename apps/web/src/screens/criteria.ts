@@ -110,9 +110,10 @@ export function criteriaFromMarkdown(source: string): ParsedCriteria {
       continue;
     }
     // Lazy continuation, as `parseMarkdown` reads it: a line that opens no
-    // block, straight after the item's text, is more of that paragraph.
+    // block, straight after the item's text, is more of that paragraph — or
+    // of the item's open fence, which Preview also keeps it in.
     const last = current ? current[current.length - 1] : undefined;
-    if (current && fence === null && blanks.length === 0 && last !== undefined && last.trim() !== "" && !isMarkdownBlockStart(line)) {
+    if (current && blanks.length === 0 && last !== undefined && last.trim() !== "" && !isMarkdownBlockStart(line)) {
       current.push(line.trim());
       continue;
     }
