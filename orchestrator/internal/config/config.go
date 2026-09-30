@@ -106,9 +106,9 @@ type schema struct {
 		Logins any `toml:"logins" env:"DUDE_FACTORY_LOGINS" kind:"list" use:"orchestrator"`
 	} `toml:"factory"`
 	Auth struct {
-		Provider            any `toml:"provider" env:"DUDE_AUTH_PROVIDER" kind:"string" use:"backend"`
+		Provider            any `toml:"provider" env:"DUDE_AUTH_PROVIDER" kind:"string" use:"backend" default:"api_key"`
 		PublicURL           any `toml:"public_url" env:"DUDE_AUTH_PUBLIC_URL" kind:"string" use:"backend"`
-		AutoCreate          any `toml:"auto_create" env:"DUDE_AUTH_AUTO_CREATE" kind:"bool" use:"backend"`
+		AutoCreate          any `toml:"auto_create" env:"DUDE_AUTH_AUTO_CREATE" kind:"bool" use:"backend" default:"true"`
 		DefaultOrganization any `toml:"default_organization" env:"DUDE_AUTH_DEFAULT_ORGANIZATION" kind:"string" use:"backend"`
 		CloudflareAccess    struct {
 			Team any `toml:"team" env:"DUDE_AUTH_CLOUDFLARE_ACCESS_TEAM" kind:"string" use:"backend"`

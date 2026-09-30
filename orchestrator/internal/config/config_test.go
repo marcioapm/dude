@@ -303,3 +303,30 @@ func TestTheDocumentedExampleLoads(t *testing.T) {
 		}
 	}
 }
+
+// keys.json is the schema as data: every key's name, variable, kind, user,
+// default and secrecy. The TypeScript suite compares its schema to the same
+// file, so the two languages cannot drift apart.
+func TestTheSchemaIsTheSharedKeyTable(t *testing.T) {
+	raw, err := os.ReadFile(fixture(t, "keys.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want []struct {
+		Name, Env, Kind, Use, Default string
+		Secret                        bool
+	}
+	if err := json.Unmarshal(raw, &want); err != nil {
+		t.Fatal(err)
+	}
+	got := Keys()
+	if len(got) != len(want) {
+		t.Fatalf("schema has %d keys, keys.json %d", len(got), len(want))
+	}
+	for i, w := range want {
+		if g := got[i]; g.Name != w.Name || g.Env != w.Env || g.Kind != w.Kind || g.Use != w.Use ||
+			g.Default != w.Default || g.Secret != w.Secret {
+			t.Errorf("key %d: schema %+v, keys.json %+v", i, g, w)
+		}
+	}
+}
