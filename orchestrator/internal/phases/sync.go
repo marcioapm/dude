@@ -1238,7 +1238,7 @@ func (s *Syncer) deliverDirectives(ctx context.Context, r phaseRun) (bool, error
 			// lux sends no receipt for an interrupt alone: one whose words
 			// the agent already has is delivered now; otherwise with the
 			// directive carrying them (directiveReceipt).
-			return settleInterrupts(ctx, tx, s, r, evDirectiveDelivered, nil,
+			return settleInterrupts(ctx, tx, s, r, nil,
 				`UPDATE directives d SET delivered_at = now(), accepted_at = COALESCE(d.accepted_at, now())
 				WHERE d.id = $1 AND d.interrupt_only AND d.delivered_at IS NULL AND d.failed_at IS NULL
 				  AND EXISTS (SELECT 1 FROM directives c WHERE c.run_id = d.run_id AND `+carrierOf+`
@@ -1280,9 +1280,9 @@ func (s *Syncer) interruptOnly(ctx context.Context, r phaseRun, id string) (only
 
 // settleInterrupts runs update, which moves interrupt-only directives with
 // the directive carrying their words and returns their ids, and writes an
-// event for each: delivered (flagged interruptOnly, never read), or failed
-// with fail as its error.
-func settleInterrupts(ctx context.Context, tx pgx.Tx, s *Syncer, r phaseRun, typ string, fail *string, update string, args ...any) error {
+// event for each: run.directive.delivered (flagged interruptOnly, never
+// read), or with fail, run.directive.failed with fail as its error.
+func settleInterrupts(ctx context.Context, tx pgx.Tx, s *Syncer, r phaseRun, fail *string, update string, args ...any) error {
 	rows, err := tx.Query(ctx, update, args...)
 	if err != nil {
 		return err
@@ -1292,9 +1292,9 @@ func settleInterrupts(ctx context.Context, tx pgx.Tx, s *Syncer, r phaseRun, typ
 		return err
 	}
 	for _, id := range moved {
-		payload := map[string]any{"directiveId": id, "interruptOnly": true}
+		typ, payload := evDirectiveDelivered, map[string]any{"directiveId": id, "interruptOnly": true}
 		if fail != nil {
-			payload = map[string]any{"directiveId": id, "error": *fail}
+			typ, payload = evDirectiveFailed, map[string]any{"directiveId": id, "error": *fail}
 		}
 		if err := s.event(ctx, tx, r, typ, ledger.ActorSystem, payload); err != nil {
 			return err
