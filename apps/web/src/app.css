@@ -129,6 +129,9 @@ body {
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  /* The session's width decides whether the rail shows (below): one
+     container, so the header's terminal fallback reads the same width. */
+  container: session / inline-size;
 }
 /* A session's one toolbar: the view switch first and, on Changes, the
    diff's own controls after it. */
@@ -165,16 +168,29 @@ body {
   flex: 1;
   min-height: 0;
   display: flex;
-  container-type: inline-size;
 }
 .runRail {
   flex: none;
   width: 260px;
 }
-/* Too narrow for both: the conversation keeps the width. */
-@container (max-width: 820px) {
+/* The terminal in the rail, under the session's facts. */
+.runRailTerminal {
+  display: flex;
+  margin-top: var(--ds-space-8);
+}
+/* The header's terminal is the fallback for where the rail is not: on the
+   conversation, with room for the rail, the rail has it. */
+.runScreen[data-view="chat"] .runTerminalFallback {
+  display: none;
+}
+/* Too narrow for both: the conversation keeps the width, and the header
+   keeps the terminal. */
+@container session (max-width: 820px) {
   .runRail {
     display: none;
+  }
+  .runScreen[data-view="chat"] .runTerminalFallback {
+    display: inline-flex;
   }
 }
 @media (max-width: 1280px) {

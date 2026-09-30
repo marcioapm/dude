@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Block, Col, Label, Panes, Section, type PaneMode } from "../Frame.tsx";
 import { AgentAvatar } from "../../components/AgentAvatar.tsx";
 import { ChangedFiles, SessionFacts, SessionRail, SessionRailBlock, ToolUsage } from "../../components/SessionRail.tsx";
+import { TerminalLink } from "../../components/ServerRow.tsx";
 import { Segmented } from "../../components/ScreenHeader.tsx";
 import { Icon } from "../../icons/index.tsx";
 import { Cost } from "../../components/Cost.tsx";
@@ -112,7 +113,7 @@ export function LiveSection({ mode }: { readonly mode: PaneMode }) {
           </div>
         </Panes>
       </Block>
-      <Block id="l-session" title="A session's bar and its rail" note="Under a session's header, one bar: Conversation / Changes / Events as a small Segmented (Changes with its count and, while the agent changes files, the breathing dot; Events last, with its count), each view in the same place below it, and — on Changes — the diff's own controls after the switch (the LiveDiff demo above shows that row). Beside the conversation, the rail on the chrome shade: what the header does not say, the tools used, the files changed so far (each opens Changes on it alone).">
+      <Block id="l-session" title="A session's bar and its rail" note="Under a session's header, one bar — no Servers: a run's servers are its task's tab — Conversation / Changes / Events as a small Segmented (Changes with its count and, while the agent changes files, the breathing dot; Events last, with its count), each view in the same place below it, and — on Changes — the diff's own controls after the switch (the LiveDiff demo above shows that row). Beside the conversation, the rail on the chrome shade: what the header does not say and, while the run is running, its lux terminal; the tools used; the files changed so far (each opens Changes on it alone). Narrower than about 820px the rail goes and the header keeps the terminal as an icon.">
         <Panes mode={mode}>
           <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 260px", height: 360 }}>
             <div>
@@ -121,6 +122,7 @@ export function LiveSection({ mode }: { readonly mode: PaneMode }) {
             <SessionRail aria-label="This session">
               <SessionRailBlock label="Session">
                 <SessionFacts facts={[{ label: "Model", value: "claude-sonnet-5", mono: true }, { label: "Agent", value: "opencode" }, { label: "Attempt", value: 1 }]} />
+                <div style={{ display: "flex", marginTop: 8 }}><TerminalLink href="https://lux.example.com/runs/run_k3jq7x2mfa9vbn4z/terminal" /></div>
               </SessionRailBlock>
               <SessionRailBlock label="Tools used">
                 <ToolUsage tools={[{ name: "Read", count: 9 }, { name: "Edit", count: 5 }, { name: "Bash", count: 4 }, { name: "Grep", count: 3 }, { name: "Write", count: 1 }]} />

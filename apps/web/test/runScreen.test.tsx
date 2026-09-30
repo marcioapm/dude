@@ -44,7 +44,7 @@ describe("the session's bar", () => {
     const options = [...bar.querySelectorAll("button, [role=radio]")].map((b) => b.textContent?.replace(/\d+/g, "").trim());
     expect(options).toEqual(["Conversation", "Changes", "Events"]);
     expect(page.textContent).not.toContain("Servers");
-    expect(page.querySelector("[aria-label=Servers]")).toBeNull();
+    expect(page.querySelector("[aria-label=Servers]") !== null).toBe(false);
   });
 });
 
@@ -54,7 +54,7 @@ describe("a branch preview's session", () => {
     const page = await session({ client: new RunClient({ kind: "preview", phase: null, role: null }, "e"), onOpenServers: () => void opened++ });
     const note = await until(() => page.querySelector("[data-testid=preview-run-note]"), "the preview note");
     expect(note.textContent).toContain("Servers tab");
-    expect(page.querySelector("textarea")).toBeNull();
+    expect(page.querySelector("textarea") !== null).toBe(false);
     await click(note.querySelector("[data-testid=preview-run-servers]")!);
     expect(opened).toBe(1);
   });
@@ -76,6 +76,58 @@ describe("a branch preview's session", () => {
     const page = await session({ client: new NoTask({ kind: "preview", phase: null, role: null }, "e"), onOpenTask: () => {} });
     const note = await until(() => page.querySelector("[data-testid=preview-run-note]"), "the preview note");
     expect(note.textContent).toContain("on its task’s page, under the Servers tab");
-    expect(note.querySelector("button")).toBeNull();
+    expect(note.querySelector("button") !== null).toBe(false);
+  });
+});
+
+describe("the terminal", () => {
+  const rail = (page: HTMLElement) => page.querySelector("[data-testid=session-rail]")!;
+
+  test("while the run is running, is in the session's rail, opening lux in a new tab", async () => {
+    const page = await session({ client: new RunClient({}) });
+    const link = await until(() => rail(page).querySelector<HTMLAnchorElement>("[data-testid=terminal-link]"), "the rail's terminal");
+    expect(link.textContent).toContain("Open terminal in lux");
+    expect(link.getAttribute("href")).toBe("https://lux.example.com/runs/run_k3jq7x2mfa9vbn4z/terminal");
+    expect(link.getAttribute("target")).toBe("_blank");
+    // The header keeps its icon as the fallback for where the rail is not.
+    // Which of the two shows is a container query on the session's width
+    // (app.css), which happy-dom does not lay out: the browser check covers it.
+    expect(page.querySelector("[data-testid=terminal-icon]")?.getAttribute("href")).toBe(link.getAttribute("href"));
+  });
+
+  for (const status of ["paused", "completed", "aborted"] as const) {
+    test(`a run that is ${status} has none, in the rail or the header`, async () => {
+      let reads = 0;
+      class Counting extends RunClient {
+        override runServers() {
+          reads++;
+          return super.runServers();
+        }
+      }
+      const page = await session({ client: new Counting({ status, endedAt: status === "paused" ? null : new Date().toISOString() }) });
+      await until(() => page.querySelector("[data-testid=session-rail]"), "the rail");
+      expect(page.querySelector("[data-testid=terminal-link]") !== null).toBe(false);
+      expect(page.querySelector("[data-testid=terminal-icon]") !== null).toBe(false);
+      // Nothing is read for a link that would not show.
+      expect(reads).toBe(0);
+    });
+  }
+
+  test("a run that pauses loses it", async () => {
+    let status: RunDetail["status"] = "running";
+    class Pausing extends FixtureClient {
+      override async getRun(id: string): Promise<RunDetail> {
+        return { ...(await super.getRun(id)), status };
+      }
+    }
+    const client = new Pausing("a");
+    const page = await session({ client });
+    await until(() => page.querySelector("[data-testid=terminal-link]"), "the terminal while running");
+    status = "paused";
+    // A status event makes the page read the Run again.
+    const { emitForTest } = await import("./dom.ts");
+    await emitForTest("run.paused");
+    await until(() => (page.querySelector("[data-testid=terminal-link]") ? null : true), "the terminal gone once paused");
+    expect(page.querySelector("[data-testid=terminal-icon]") !== null).toBe(false);
   });
 });

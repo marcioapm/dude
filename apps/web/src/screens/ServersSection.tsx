@@ -173,7 +173,8 @@ export const ServersSection = memo(function ServersSection({ client, servers, ta
           detail={detail}
           actions={
             <>
-              {live && run.terminalUrl ? <TerminalLink href={run.terminalUrl} /> : null}
+              {/* An agent's terminal is its session's (the rail); a preview has no session to hold it. */}
+              {isPreview && live && run.terminalUrl ? <TerminalLink href={run.terminalUrl} /> : null}
               {isPreview && taskId ? (
                 <Button size="sm" variant="quiet" leadingIcon="stop" disabled={busy !== null} onClick={stopPreview} data-testid="stop-preview">Stop preview</Button>
               ) : live ? (

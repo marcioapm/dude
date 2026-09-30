@@ -6,7 +6,7 @@
 
 const { act } = await import("react");
 const { createRoot } = await import("react-dom/client");
-const { installFixtureStream } = await import("../src/fixtures/client.ts");
+const { emit, installFixtureStream } = await import("../src/fixtures/client.ts");
 installFixtureStream();
 // The preload's `window` is happy-dom's own object, apart from the global scope the code reads.
 (globalThis as { EventSource?: unknown }).EventSource = (window as unknown as { EventSource: unknown }).EventSource;
@@ -51,3 +51,13 @@ export async function click(el: Element): Promise<void> {
 }
 
 export { act };
+
+/** An event on the fixture Run's stream, as the backend sends one, and what it causes settled. */
+export async function emitForTest(eventType: string, payload: Record<string, unknown> = {}): Promise<void> {
+  const { ORG, PROJECT, RUN_ID, TASK_ID } = await import("../src/fixtures/data.ts");
+  await act(async () => {
+    emit({ eventType, occurredAt: new Date().toISOString(), organizationId: ORG.id, projectId: PROJECT.id, taskId: TASK_ID, runId: RUN_ID,
+      sessionId: null, workflowRunId: null, actor: { type: "system", id: "dude" }, source: "control-plane", correlationId: null, causationId: null, payload });
+  });
+  await settle(50);
+}

@@ -463,7 +463,8 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   session whose task cannot be learned stands on its own, and says the way
   to its task when it ends.
 - The open session is `SessionHeader` (whose agent, for whom, its model,
-  status, cost, tokens and elapsed, Pause / Abort — on every view, so the
+  status, cost, tokens and elapsed, Pause / Abort, and the terminal where
+  the rail is not — on every view, so the
   numbers never depend on the rail being there), then **one bar**: a
   `Segmented` switch at the control size (it follows the density) between **Conversation**, **Changes** and **Events**
   (debugging, last), and on Changes the diff's own controls after it
@@ -485,6 +486,15 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   the diff's own list does. When the session is narrower than about 820px
   the rail goes and the conversation keeps the width. Narrower than 900px
   the sessions list sits above the session.
+- **The terminal is the rail's.** While the Run is alive and running
+  (not paused, starting or ended) and lux gave it a terminal, the rail's
+  Session block ends with `TerminalLink` ("Open terminal in lux", a new
+  tab). Where the rail is not — the session narrower than about 820px, or
+  on Changes or Events — the header keeps the same link as a terminal icon
+  (`LinkButton iconOnly`), chosen by the same container query on the
+  session's width, so the terminal is never unreachable and never shown
+  twice. A branch preview has no agent session to hold it: its terminal
+  stays in the run line of the task's Servers tab.
 - With no session asked for, the one shown is picked once (running, else
   newest) and kept: a phase ending must not swap it under someone reading.
 - **Two edges.** Everything in a session shares one outer edge and one
@@ -853,6 +863,8 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | `<SearchResultRow rank={1} lead={{ type: "memory" }} facts={["words and meaning"]} />` | a score chip and a progress bar on every result |
 | `<EntityLine lead={face} name={…} detail={…} />`, `<AuthorLine author={…} />` | a face and two spans styled in the app's CSS |
 | `<SearchPicker find={…} onPick={…} />` | an `Input` over a list of bare buttons |
+| a run's servers on its task's Servers tab; `<TerminalLink>` in the session's rail | a servers panel or drawer inside a session |
+| `<Tab count={on} tooltip={<ServersTabTip summary={s} />}>` | a native `title` on a tab, or "N ready" beside it |
 
 ## Components
 
@@ -1006,7 +1018,9 @@ EmptyState, ScrollArea.
   project settings: the definitions, the editor with validation in words,
   and a preview's egress allowlist as chips.
 - **LinkButton** (a primitive) — a real link drawn as a button, for a way
-  out among actions ("Open terminal in lux ↗").
+  out among actions. **TerminalLink** is it for a run's lux terminal
+  ("Open terminal in lux ↗"): in a session's rail, and in a branch
+  preview's run line.
 
 `src/components/` — live work:
 

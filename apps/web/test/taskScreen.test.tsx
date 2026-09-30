@@ -114,6 +114,6 @@ describe("the task's Servers tab", () => {
     await settle(100);
     await act(async () => tab.focus());
     await settle(50);
-    expect(document.querySelector("[role=tooltip]")).toBeNull();
+    expect(document.querySelector("[role=tooltip]") !== null).toBe(false);
   });
 });

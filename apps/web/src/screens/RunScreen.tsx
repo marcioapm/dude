@@ -25,6 +25,7 @@ import {
   ChatAside,
   QuestionCard,
   Segmented,
+  TerminalLink,
   SessionFacts,
   SessionHeader,
   SessionRail,
@@ -42,7 +43,6 @@ import { ApiError, reportedCost } from "../api/client.ts";
 import { PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, snapshot, type Turn } from "../api/conversation.ts";
 import type { ComposerSubmission } from "@dude/design-system/components";
 import { useEventStream } from "../hooks/useEventStream.ts";
-import { useServers } from "../hooks/useServers.ts";
 import { conflictNotice, type Notice } from "../conflict.ts";
 import { firstName, Icon } from "@dude/design-system";
 import { usePeople, type People } from "../people.tsx";
@@ -115,15 +115,6 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
 
   const { events, reconnects } = useEventStream({ client, runId });
 
-  // The servers are re-read on their own event; the Run on its status
-  // events. The latest such event's cursor, not a count: the stream keeps
-  // a window, and a count stands still when an old one drops off the front
-  // as a new one arrives. A replayed history moves it once per event, and
-  // `useServers` folds the burst into one read in flight and one after it.
-  // A stream that came back may have missed one: its return counts too.
-  const serversVersion = useMemo(() => (events.findLast((e) => e.eventType === EventTypes.ServersChanged)?.cursor ?? 0) + reconnects * 1e9, [events, reconnects]);
-  const servers = useServers(client, { runId }, serversVersion);
-
   // Re-read the Run whenever the ledger says its status changed, rather than
   // polling: the stream already tells us when something happened.
   const statusEventCount = useMemo(
@@ -152,6 +143,11 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   // and apart from the Run: failing to learn it only leaves the asks
   // answerable here, which the orchestrator still checks.
   const taskId = given ? undefined : run?.taskId;
+  // The lux terminal's link, for the rail while the Run is running. The Run
+  // itself does not carry it (lux's console URL is the orchestrator's), so
+  // it is read from the Run's servers, once per start or resume.
+  const terminalUrl = useTerminalUrl(client, runId, run?.status === "running", reconnects);
+
   useEffect(() => {
     if (!taskId) return;
     let cancelled = false;
@@ -310,11 +306,15 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   if (view === "changes" && !hasChanges) showView("chat");
   const liveDiff = isLive && run.status !== "paused";
 
+  // The terminal, while the Run is running: in the rail, and in the header
+  // only where the rail is not (a narrow session, or a view other than the
+  // conversation), so it is always one click away and never shown twice.
+  const terminal = run.status === "running" ? terminalUrl : null;
   // A branch preview has no agent to pause or abort: only its terminal.
   const actions = isLive ? (
     <>
-      {run.status === "running" && servers.data?.run?.terminalUrl ? (
-        <LinkButton size="sm" iconOnly leadingIcon="terminal" label="Open terminal in lux" href={servers.data.run.terminalUrl} data-testid="terminal-icon" />
+      {terminal ? (
+        <LinkButton size="sm" iconOnly leadingIcon="terminal" label="Open terminal in lux" href={terminal} className="runTerminalFallback" data-testid="terminal-icon" />
       ) : null}
       {isPreviewRun ? null : run.status === "paused" ? (
         <Button size="sm" variant="secondary" disabled={busy} onClick={() => void intervene(() => client.resume(runId), "resume this run")}>
@@ -353,7 +353,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   );
 
   return (
-    <div className="runScreen" data-testid="run-screen">
+    <div className="runScreen" data-view={view} data-testid="run-screen">
       <SessionHeader session={session} actions={actions} />
       {/* One bar, kept mounted whichever view shows, so the switch keeps its
           focus; Changes draws its own controls into the slot after it. */}
@@ -457,6 +457,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                   ...(run.harness ? [{ label: "Agent", value: run.harness }] : []),
                   { label: "Attempt", value: run.attempt },
                 ]} />
+                {terminal ? <div className="runRailTerminal"><TerminalLink href={terminal} /></div> : null}
               </SessionRailBlock>
               {tools.length > 0 ? (
                 <SessionRailBlock label="Tools used">
@@ -731,6 +732,27 @@ export function PreviewRunNote({ openServers }: { openServers?: (() => void) | u
       </span>
     </Callout>
   );
+}
+
+/**
+ * The Run's lux terminal URL, read from its servers when it is running and
+ * kept: it names the lux Run, which a resume keeps. Read again after a
+ * stream that came back, in case it was missed. Null until known.
+ */
+function useTerminalUrl(client: ApiClient, runId: string, running: boolean, reconnects: number): string | null {
+  const [url, setUrl] = useState<{ runId: string; url: string } | null>(null);
+  const known = url?.runId === runId ? url.url : null;
+  useEffect(() => {
+    if (!running || known) return;
+    let cancelled = false;
+    client.runServers(runId).then((s) => {
+      if (!cancelled && s.run?.terminalUrl) setUrl({ runId, url: s.run.terminalUrl });
+    }, () => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [client, runId, running, known, reconnects]);
+  return known;
 }
 
 /** A message's token foot: the context then, against the window when known, and the turn's output. */
