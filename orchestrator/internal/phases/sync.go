@@ -875,11 +875,13 @@ func judged(shown []string, verdicts map[int]bool) map[string]bool {
 	return out
 }
 
-// cancel ends the lux Run of a Run a person aborted.
+// cancel ends the lux Run of a failed or aborted Run, including resumable stopped and lost Runs.
 func (s *Syncer) cancel(ctx context.Context, r phaseRun) error {
 	s.unfollow(r.ID)
-	if err := s.ask(ctx, r, s.Lux.Cancel); err != nil {
-		return err
+	if r.LuxRunID != "" && r.LuxState != "cancelled" && r.LuxState != "succeeded" && r.LuxState != "failed" {
+		if err := s.askControl(ctx, r, s.Lux.Cancel); err != nil {
+			return err
+		}
 	}
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE runs SET lux_stop_reason = 'cancel', control = 'none' WHERE id = $1`, r.ID)
@@ -1213,13 +1215,16 @@ func (s *Syncer) fail(ctx context.Context, r phaseRun, reason string) error {
 	})
 }
 
-// ask stops or cancels the Run's lux Run, if it is still going. An answer
-// that may change later backs the Run off and returns errRetry; lux refusing
-// outright (the Run is already over) counts as done.
+// ask stops the Run's lux Run if it is still going.
 func (s *Syncer) ask(ctx context.Context, r phaseRun, call func(context.Context, string) error) error {
 	if r.LuxRunID == "" || lux.Terminal(r.LuxState) {
 		return nil
 	}
+	return s.askControl(ctx, r, call)
+}
+
+// askControl retries transient failures; a definitive refusal counts as done.
+func (s *Syncer) askControl(ctx context.Context, r phaseRun, call func(context.Context, string) error) error {
 	err := call(ctx, r.LuxRunID)
 	if le, ok := lux.AsError(err); err == nil || ok && !le.Retryable() {
 		return nil
