@@ -163,6 +163,28 @@ url = ""
 	}
 }
 
+func TestANonFiniteRateIsRefused(t *testing.T) {
+	for _, v := range []string{"nan", "inf", "-inf", "+inf", "+nan"} {
+		path := writeFile(t, "[orchestrator]\nmachine_usd_per_hour = "+v+"\n", 0o600)
+		_, err := load(t, Orchestrator, map[string]string{"DUDE_CONFIG": path})
+		if err == nil || !strings.Contains(err.Error(), "orchestrator.machine_usd_per_hour (DUDE_MACHINE_USD_PER_HOUR)") {
+			t.Errorf("%s: err = %v, want it refused naming the key", v, err)
+		}
+	}
+	for v, want := range map[string]float64{"2": 2, "0.35": 0.35, "0": 0} {
+		path := writeFile(t, "[orchestrator]\nmachine_usd_per_hour = "+v+"\n", 0o600)
+		c := mustLoad(t, Orchestrator, map[string]string{"DUDE_CONFIG": path})
+		if got := c.Float("DUDE_MACHINE_USD_PER_HOUR"); got != want {
+			t.Errorf("%s: rate = %v, want %v", v, got, want)
+		}
+	}
+	for _, v := range []string{"NaN", "Inf", "-Inf"} {
+		if _, err := load(t, Orchestrator, map[string]string{"DUDE_MACHINE_USD_PER_HOUR": v}); err == nil {
+			t.Errorf("DUDE_MACHINE_USD_PER_HOUR=%s accepted", v)
+		}
+	}
+}
+
 func TestAnUnknownKeyIsRefusedByName(t *testing.T) {
 	for text, want := range map[string]string{
 		"[lux]\nurl = \"x\"\ntoken = \"y\"\n":           "lux.token",

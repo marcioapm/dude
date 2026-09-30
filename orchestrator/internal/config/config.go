@@ -312,6 +312,9 @@ func fromFile(k Key, v any) (any, error) {
 	case "float":
 		switch n := v.(type) {
 		case float64:
+			if math.IsNaN(n) || math.IsInf(n, 0) {
+				return nil, fmt.Errorf("not a finite number: %v", n)
+			}
 			return n, nil
 		case int64:
 			return float64(n), nil

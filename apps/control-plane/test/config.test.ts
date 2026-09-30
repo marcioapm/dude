@@ -133,6 +133,17 @@ describe("strictness", () => {
     expect(() => load({ DUDE_AUTH_AUTO_CREATE: "maybe" })).toThrow("DUDE_AUTH_AUTO_CREATE");
   });
 
+  test("a non-finite rate is never resolved; it is the orchestrator's to refuse", () => {
+    // Bun 1.3's TOML parser yields "nan"/"inf" as strings and folds +inf/-inf/±nan to ±0,
+    // so only the bare spellings are distinguishable here; the backend reads no float key.
+    for (const v of ["nan", "inf"]) {
+      const c = load({ DUDE_CONFIG: file(`[orchestrator]\nmachine_usd_per_hour = ${v}\n`) });
+      expect(c.set()).not.toHaveProperty("DUDE_MACHINE_USD_PER_HOUR");
+    }
+    expect(load({ DUDE_CONFIG: file(`[orchestrator]\nmachine_usd_per_hour = 2\n`) }).set().DUDE_MACHINE_USD_PER_HOUR).toBe(2);
+    expect(load({ DUDE_CONFIG: file(`[orchestrator]\nmachine_usd_per_hour = 0.35\n`) }).set().DUDE_MACHINE_USD_PER_HOUR).toBe(0.35);
+  });
+
   test("the orchestrator's sections are accepted; its values are its own to refuse", () => {
     const path = file(`
 [lux]
