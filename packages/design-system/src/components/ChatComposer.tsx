@@ -42,10 +42,16 @@ export interface ChatComposerProps extends Omit<HTMLAttributes<HTMLFormElement>,
   readonly sentAs?: string | undefined;
   /**
    * Steer only: offer "interrupt now", which stops the current turn so
-   * the agent hears the steer at once. Off by default: a steer waits for
-   * the turn to end.
+   * the agent hears the steer at once. Off by default: a steer lands at
+   * the agent's next step (or its next turn), without stopping anything.
    */
   readonly canInterrupt?: boolean | undefined;
+  /**
+   * Steer only: where a steer sent now lands, beside the keys — "Lands
+   * after the current tool", "Lands at the agent's next step", "Lands when
+   * the turn ends". The app knows; the composer only says it.
+   */
+  readonly landsHint?: ReactNode;
 }
 
 export type ComposerSubmission =
@@ -75,11 +81,12 @@ const MODE_PLACEHOLDER: Record<ComposerMode, string> = {
  *           unblocks the session.
  *
  *   steer   the session is running. The frame is accent-tinted and the
- *           button says "Steer". A steer waits for the agent's turn to
- *           end, so sending one costs nothing: plain Enter sends it, as
- *           in any chat. "Interrupt now" (off unless ticked) stops the
- *           turn so it is heard at once — that is the costly one, and it
- *           is a deliberate tick, not a key.
+ *           button says "Steer". A steer lands at the agent's next step
+ *           without stopping it (`landsHint` says where), so sending one
+ *           costs nothing: plain Enter sends it, as in any chat.
+ *           "Interrupt now" (off unless ticked) stops the turn so it is
+ *           heard at once — that is the costly one, and it is a
+ *           deliberate tick, not a key.
  *
  * Enter sends in both modes; Shift+Enter always inserts a newline. The
  * action row says who it is sent as.
@@ -99,6 +106,7 @@ export function ChatComposer({
   autoFocus,
   sentAs,
   canInterrupt,
+  landsHint,
   className,
   ...rest
 }: ChatComposerProps) {
@@ -207,7 +215,7 @@ export function ChatComposer({
           </span>
         ) : null}
         {mode === "steer" && canInterrupt && !isDisabled ? (
-          <label className={styles["interrupt"]} title="Stop the agent's current turn so it hears this now. Otherwise it reads it when the turn ends.">
+          <label className={styles["interrupt"]} title="Stop the agent's current turn so it hears this now. Otherwise it reads it at its next step.">
             <input type="checkbox" checked={interrupt} onChange={(e) => setInterrupt(e.target.checked)} />
             interrupt now
           </label>
@@ -216,6 +224,7 @@ export function ChatComposer({
         <span id={`${id}-hint`} className={cx(styles["hint"], answerOptions.length > 0 && "ds-sr-only")}>
           {isDisabled ? null : (
             <>
+              {mode === "steer" && landsHint && !interrupt ? <span className={styles["lands"]} data-testid="lands-hint">{landsHint}</span> : null}
               <kbd className={styles["kbd"]}>Enter</kbd> {mode === "answer" ? "answer" : "send"} <kbd className={styles["kbd"]}>⇧ Enter</kbd> new line
             </>
           )}

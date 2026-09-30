@@ -134,6 +134,11 @@
   color: var(--ds-color-text-muted);
   white-space: nowrap;
 }
+/* Where a steer lands, before the keys: the same muted ink, set off by space. */
+.lands {
+  margin-right: var(--ds-space-8);
+  color: var(--ds-color-text-secondary);
+}
 .kbd {
   font-family: var(--ds-font-mono);
   font-size: var(--ds-text-2xs);

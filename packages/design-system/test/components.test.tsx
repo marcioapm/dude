@@ -240,6 +240,63 @@ describe("ChatMessage gutter time and actions", () => {
   });
 });
 
+describe("a steer's delivery states", () => {
+  const sent = new Date(2026, 8, 24, 14, 30, 5);
+  const readAt = new Date(2026, 8, 24, 14, 30, 41);
+  const steer = (props: Partial<React.ComponentProps<typeof ChatMessage>>) =>
+    html(<ChatMessage role="human" name="Márcio" intent="steer" content="Check the migration too" startedAt={sent} {...props} />);
+  const plain = (h: string) => h.replace(/<[^>]+>/g, "").replaceAll("&#x27;", "'");
+
+  test("queued: the Queued mark, and the reason it is given, with Interrupt now when offered", () => {
+    const h = steer({ deliveredAt: null, pendingReason: <>Lands after <b>Bash</b> finishes.</>, onInterrupt: noop });
+    expect(h).toContain('data-pending="true"');
+    expect(plain(h)).toContain("Queued");
+    expect(plain(h)).toContain("Lands after Bash finishes.");
+    expect(buttons(h).map((b) => b.text)).toEqual(["Interrupt now"]);
+  });
+
+  test("queued with no reason given lands at the agent's next step, and offers no interrupt unless asked", () => {
+    const h = steer({ deliveredAt: null });
+    expect(plain(h)).toContain("Lands at the agent's next step.");
+    expect(buttons(h)).toEqual([]);
+  });
+
+  test("read: no queued mark, and the header says when it was sent and read, after what", () => {
+    const h = steer({ deliveredAt: readAt, read: true, readAfter: "Bash" });
+    expect(h).not.toContain("data-pending");
+    expect(plain(h)).not.toContain("Queued");
+    expect(plain(h)).toContain("sent 14:30 · read 14:30:41, after Bash");
+  });
+
+  test("delivered by an older lux: no read time is claimed", () => {
+    const h = steer({ deliveredAt: readAt });
+    expect(plain(h)).toContain("delivered");
+    expect(plain(h)).not.toContain("read 14:30:41");
+    expect(plain(h)).not.toContain("Queued");
+  });
+
+  test("failed: not queued, a Not delivered line with the reason, and Retry", () => {
+    const h = steer({ deliveredAt: null, failed: "the agent exited", onRetry: noop, pendingReason: "Lands at the agent's next step." });
+    expect(h).not.toContain("data-pending");
+    expect(h).toContain('data-failed="true"');
+    expect(plain(h)).toContain("Not delivered: the agent exited");
+    expect(plain(h)).not.toContain("Lands at");
+    expect(buttons(h).map((b) => b.text)).toEqual(["Retry"]);
+  });
+});
+
+describe("ChatComposer lands hint", () => {
+  test("a steer says where it lands beside the keys", () => {
+    const h = html(<ChatComposer mode="steer" landsHint="Lands after the current tool" onSubmit={noop} />);
+    expect(text(h, 'data-testid="lands-hint"')).toBe("Lands after the current tool");
+  });
+
+  test("an answer, or a finished session, says nothing about landing", () => {
+    expect(html(<ChatComposer question={{ id: "q", text: "?" }} landsHint="Lands after the current tool" onSubmit={noop} />)).not.toContain("lands-hint");
+    expect(html(<ChatComposer mode="steer" disabled landsHint="Lands after the current tool" onSubmit={noop} />)).not.toContain("lands-hint");
+  });
+});
+
 describe("Icon stroke width", () => {
   const stroke = (size?: number | string) => /stroke-width="([\d.]+)"/.exec(html(<Icon name="check" size={size} />))?.[1];
 
