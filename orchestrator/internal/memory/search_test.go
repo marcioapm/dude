@@ -335,6 +335,12 @@ func (f *statusFake) Embed(ctx context.Context, texts []string, p embeddings.Pur
 func TestWorkDueAtOnceIsDueWhateverTheClocksSay(t *testing.T) {
 	app, owner := dbtest.Open(t)
 	org := dbtest.Org(t, owner)
+	inOrg := func(action func(pgx.Tx) error) {
+		t.Helper()
+		if err := app.InOrg(context.Background(), org, action); err != nil {
+			t.Fatal(err)
+		}
+	}
 	behind := time.Now().Add(-time.Hour)
 	at := func() time.Time { return behind }
 	embedded := func(id string) bool {
@@ -364,27 +370,23 @@ func TestWorkDueAtOnceIsDueWhateverTheClocksSay(t *testing.T) {
 
 	// Retry.
 	fake.Fail = ""
-	if err := app.InOrg(context.Background(), org, func(tx pgx.Tx) error {
+	inOrg(func(tx pgx.Tx) error {
 		n, err := memory.Retry(context.Background(), tx, "", "")
 		if err == nil && n != 1 {
 			t.Errorf("Retry made %d documents due, want 1", n)
 		}
 		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 	drain(t, x)
 	if !embedded("mem_bad") {
 		t.Error("a retried document waited for the database's clock")
 	}
 
 	// Reindex.
-	if err := app.InOrg(context.Background(), org, func(tx pgx.Tx) error {
+	inOrg(func(tx pgx.Tx) error {
 		_, err := memory.Reindex(context.Background(), tx)
 		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 	drain(t, x)
 	if !embedded("mem_new") || !embedded("mem_bad") {
 		t.Error("a reindexed document waited for the database's clock")
