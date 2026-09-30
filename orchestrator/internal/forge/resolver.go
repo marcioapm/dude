@@ -9,7 +9,10 @@ import (
 )
 
 // Resolver finds an organization's GitHub client from its stored credential.
-type Resolver struct{ DB *db.DB }
+type Resolver struct {
+	DB          *db.DB
+	TestGitHost string
+}
 
 // For returns nil, nil when the organization has no forge credential: a
 // local repository needs none, and not every step needs a forge. The
@@ -27,7 +30,7 @@ func (r Resolver) For(ctx context.Context, org string) (*GitHub, error) {
 	if err != nil {
 		return nil, err
 	}
-	gh := NewGitHub(c)
+	gh := NewGitHub(c, WithTestGitHost(r.TestGitHost))
 	gh.Settings = ReadSettings(settings)
 	return gh, nil
 }

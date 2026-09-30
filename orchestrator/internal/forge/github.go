@@ -185,18 +185,29 @@ func (e *Error) NotFound() bool { return e.Status == 404 }
 const requestTimeout = 15 * time.Second
 
 type GitHub struct {
-	cred Credential
-	http *http.Client
+	cred        Credential
+	http        *http.Client
+	testGitHost string
 	// How the organization wants dude to behave on GitHub.
 	Settings Settings
 }
 
-func NewGitHub(c Credential) *GitHub {
+// WithTestGitHost permits the test git daemon's separate port only on this
+// exact HTTP API host. Discovery and authentication still run against the API.
+func WithTestGitHost(host string) func(*GitHub) {
+	return func(g *GitHub) { g.testGitHost = host }
+}
+
+func NewGitHub(c Credential, options ...func(*GitHub)) *GitHub {
 	if c.APIBaseURL == "" {
 		c.APIBaseURL = "https://api.github.com"
 	}
 	c.APIBaseURL = strings.TrimRight(c.APIBaseURL, "/")
-	return &GitHub{cred: c, http: &http.Client{Timeout: requestTimeout}, Settings: DefaultSettings()}
+	g := &GitHub{cred: c, http: &http.Client{Timeout: requestTimeout}, Settings: DefaultSettings()}
+	for _, option := range options {
+		option(g)
+	}
+	return g
 }
 
 // Token is the credential to hand lux for cloning and pushing. With a PAT it
@@ -243,7 +254,7 @@ func (g *GitHub) CheckPushAccess(ctx context.Context, repository string) error {
 		return fmt.Errorf("invalid repository URL for GitHub push preflight")
 	}
 	// The local git-daemon harness uses a separate port on the API's host.
-	localGit := clone.Scheme == "git" && base.Scheme == "http" && (base.Hostname() == "127.0.0.1" || base.Hostname() == "localhost") && clone.Hostname() == base.Hostname()
+	localGit := clone.Scheme == "git" && base.Scheme == "http" && (base.Hostname() == "127.0.0.1" || base.Hostname() == "localhost" || (g.testGitHost != "" && base.Hostname() == g.testGitHost)) && clone.Hostname() == base.Hostname()
 	if !localGit && (clone.Scheme != base.Scheme || !strings.EqualFold(clone.Host, base.Host)) {
 		return fmt.Errorf("repository origin does not match the configured GitHub origin")
 	}
