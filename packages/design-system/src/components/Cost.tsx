@@ -41,21 +41,28 @@ function machineNote(from: CostProvenance["machine"] | undefined, settled: boole
   return " · estimated";
 }
 
-export type CostWordsInput = Pick<CostProps, "tokensUsd" | "machineUsd" | "tokens" | "machineMs" | "tokensFrom" | "machineFrom" | "settled">;
+type CostWordsInput = Pick<CostProps, "tokensUsd" | "machineUsd" | "tokens" | "machineMs" | "tokensFrom" | "machineFrom" | "settled">;
+
+interface CostWords {
+  readonly total: number;
+  readonly machineKnown: boolean;
+  /** The tokens' percentage of the total, for the hairline; all tokens at $0. */
+  readonly share: number;
+  /** The tooltip's lines: total, tokens, machine. */
+  readonly lines: [string, string, string];
+  readonly label: string;
+}
 
 /**
- * What a known cost says, in words: the tooltip's lines (total, tokens,
- * machine) and the aria-label, built from the same parts so they cannot
- * say different things.
+ * What a known cost says, in words: the tooltip's lines and the
+ * aria-label, built from the same parts so they cannot say different
+ * things.
  */
-export function costWords({ tokensUsd, machineUsd, tokens, machineMs, tokensFrom, machineFrom, settled = false }: CostWordsInput): {
-  total: number; machineKnown: boolean; share: number; lines: [string, string, string]; label: string;
-} {
+export function costWords({ tokensUsd, machineUsd, tokens, machineMs, tokensFrom, machineFrom, settled = false }: CostWordsInput): CostWords {
   const tok = tokensUsd ?? 0;
   const machineKnown = machineUsd !== null && machineUsd !== undefined;
   const mach = machineKnown ? machineUsd : 0;
   const total = tok + mach;
-  // The tokens' percentage of the total, for the hairline; all tokens at $0.
   const share = total > 0 ? Math.round((tok / total) * 100) : 100;
   const tokensPart = `model tokens ${tokensUsd === null ? "not reported" : formatUsd(tok)}`
     + (tokens !== undefined ? ` (${formatTokens(tokens)} tokens)` : "")
@@ -87,7 +94,7 @@ export function costWords({ tokensUsd, machineUsd, tokens, machineMs, tokensFrom
  * "reported"; the rest are estimates and say so.
  */
 export function Cost({ tokensUsd, machineUsd, tokens, machineMs, size = "md", tone = "default",
-  tokensFrom, machineFrom, settled = false, className, ...rest }: CostProps) {
+  tokensFrom, machineFrom, settled, className, ...rest }: CostProps) {
   const words = costWords({ tokensUsd, machineUsd, tokens, machineMs, tokensFrom, machineFrom, settled });
   if (tokensUsd === null && !words.machineKnown) {
     return (
