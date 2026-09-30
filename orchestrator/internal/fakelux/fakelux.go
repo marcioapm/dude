@@ -107,6 +107,9 @@ type Run struct {
 	Stopped     int
 	Resumed     int
 	Interrupted int
+	// Each input request's body as received (refused ones too), by request
+	// id, in order: a retry of one request adds another.
+	InputBodies map[string][]string
 	// The secrets each accepted resume carried, in order, decoded and as
 	// sent (every field of each descriptor).
 	ResumeSecrets    [][]lux.Secret
@@ -134,16 +137,138 @@ type Run struct {
 	// Edit tool calls made, so each has an id of its own.
 	edits int
 
-	busy     bool
-	woken    bool
-	queued   []queuedInput
-	records  []record
-	events   []event
-	behavior Behaviour
-	cond     *sync.Cond
+	busy  bool
+	woken bool
+	// Turns the agent finished (went idle after), for TurnsEnded.
+	turnsEnded int
+	// Tool calls started and not finished (KeepToolsOpen), until FinishTools.
+	openTools []string
+	queued    []queuedInput
+	records   []record
+	events    []event
+	behavior  Behaviour
+	cond      *sync.Cond
 }
 
-type queuedInput struct{ text, requestID string }
+// queuedInput is input the agent has not read yet. accepted: its accepted
+// receipt is on the stream already.
+type queuedInput struct {
+	text, requestID string
+	accepted        bool
+}
+
+// accept acknowledges input the harness took, as lux's shim does, once: in
+// the legacy contract there is no accepted receipt, only the delivery.
+// Callers hold s.mu.
+func (s *Server) accept(run *Run, in *queuedInput) {
+	if s.LegacyInput || in.accepted {
+		return
+	}
+	in.accepted = true
+	s.recordAccepted(run, in.requestID, in.text)
+}
+
+// recordAccepted writes the harness's accepted answer, with a read receipt
+// to follow. Callers hold s.mu.
+func (s *Server) recordAccepted(run *Run, requestID, text string) {
+	lands := "next_step"
+	if s.NextTurnInput {
+		lands = "next_turn"
+	}
+	s.recordEvent(run, lux.RecordInput, map[string]any{"requestId": requestID, "phase": lux.InputAccepted, "receipt": true,
+		"lands": lands, "text": text})
+}
+
+// recordFailed writes the failure of input the agent never read, in the
+// shape this lux writes it. Callers hold s.mu.
+func (s *Server) recordFailed(run *Run, in queuedInput, reason string) {
+	switch {
+	case s.LegacyInput:
+		s.recordEvent(run, lux.RecordInput, map[string]any{"requestId": in.requestID, "error": reason})
+	case in.accepted:
+		s.recordEvent(run, lux.RecordInputFailed, map[string]any{"requestId": in.requestID, "error": reason})
+	default:
+		s.recordEvent(run, lux.RecordInput, map[string]any{"requestId": in.requestID, "phase": lux.InputFailed, "error": reason})
+	}
+}
+
+// completeOpenTools finishes the tool calls KeepToolsOpen left running.
+// Callers hold s.mu.
+func (s *Server) completeOpenTools(run *Run) {
+	for _, call := range run.openTools {
+		s.agent(run, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": call, "status": "completed"})
+	}
+	run.openTools = nil
+}
+
+// consume is the agent's step reading everything queued: its read receipt
+// (or, from a legacy lux, its one acknowledgement). Callers hold s.mu.
+func (s *Server) consume(run *Run) {
+	for _, in := range run.queued {
+		run.Inputs = append(run.Inputs, in.text)
+		if s.LegacyInput {
+			s.recordEvent(run, lux.RecordInput, map[string]any{"requestId": in.requestID, "text": in.text})
+		} else {
+			s.recordEvent(run, lux.RecordInputConsumed, map[string]any{"requestId": in.requestID})
+		}
+	}
+	run.queued = nil
+}
+
+// FinishTools completes the Run's open tool calls (KeepToolsOpen), as a
+// long command finishing: the agent's next step starts, and reads what it
+// was steered with while the tool ran, in the same turn — unless the
+// harness reads input only between turns, or the lux is a legacy one that
+// holds it until then. A Hang agent carries on hanging.
+func (s *Server) FinishTools(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	run := s.runs[id]
+	if run == nil || run.State != "running" {
+		return
+	}
+	s.completeOpenTools(run)
+	if run.busy && !s.NextTurnInput && !s.LegacyInput {
+		s.consume(run)
+	}
+}
+
+// FailInput is the harness failing input the agent has not read (an agent
+// error), as lux reports it: lux.input.failed after its accepted answer,
+// else a failed first answer (an older lux: lux.input with the error).
+func (s *Server) FailInput(id, requestID, reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	run := s.runs[id]
+	if run == nil {
+		return
+	}
+	for i, q := range run.queued {
+		if q.requestID == requestID {
+			run.queued = slices.Delete(run.queued, i, i+1)
+			s.recordFailed(run, q, reason)
+			return
+		}
+	}
+}
+
+// EndTurn ends a busy agent's turn as the agent would on its own (a Hang
+// agent finishing, not interrupted): what it was steered with and has not
+// read is read now, as the input of its next turn.
+func (s *Server) EndTurn(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	run := s.runs[id]
+	if run == nil || run.State != "running" || !run.busy {
+		return
+	}
+	s.completeOpenTools(run)
+	s.recordEvent(run, "acp.turn_end", map[string]any{"stopReason": "end_turn"})
+	s.recordEvent(run, "lux.activity", map[string]any{"activity": "idle"})
+	run.busy = false
+	run.turnsEnded++
+	s.deliverQueued(run)
+}
 
 type placement struct {
 	Epoch int
@@ -167,11 +292,10 @@ func (s *Server) deliverQueued(run *Run) {
 	if len(run.queued) == 0 || run.State != "running" {
 		return
 	}
-	for _, in := range run.queued {
-		run.Inputs = append(run.Inputs, in.text)
-		s.recordEvent(run, "lux.input", map[string]any{"requestId": in.requestID, "text": in.text})
+	for i := range run.queued {
+		s.accept(run, &run.queued[i])
 	}
-	run.queued = nil
+	s.consume(run)
 	// Input after a resume is what a paused agent was waiting for: it
 	// finishes its work this time. Without input it waits, as a real one
 	// does. WakeOnInput has any input wake it, a nudge included.
@@ -217,12 +341,51 @@ type Server struct {
 	// The preview domain servers' URLs are under; "" gives them none, as a
 	// lux without previews configured.
 	PreviewDomain string
+	// How lux acknowledges input. By default as lux does now: "accepted"
+	// when the harness takes it (at once, even mid-turn), "consumed" when
+	// the agent's next step reads it — after the tool it was running
+	// finishes, or at the turn's end. A Hang agent mid-step with no tool
+	// open reaches no boundary until its turn ends.
+	//
+	// LegacyInput is a lux from before the two receipts: input to a busy
+	// agent waits for its turn to end, and is acknowledged once, with no
+	// phase, when handed over. NextTurnInput is a harness that reads input
+	// only between turns: accepted at once with lands "next_turn", read
+	// when the turn ends.
+	LegacyInput, NextTurnInput bool
+	// FailUnreadOnInterrupt is a lux from before interrupts carried unread
+	// input over: an interrupt fails what the harness took and the agent had
+	// not read ("the turn was cancelled before the agent read it"), rather
+	// than starting the next turn with it. With LegacyInput, which is what
+	// production lux is today, that is everything queued, failed with a
+	// phase-less lux.input {requestId, error}.
+	FailUnreadOnInterrupt bool
+	// BeforeInput, when set, runs as each input request arrives, before the
+	// fake acts on it; false refuses the request (503), as a lux that is
+	// briefly unavailable. Called without the fake's lock.
+	BeforeInput func(runID, requestID string) bool
+	// InputGate, when set, holds what input starts in an idle agent (its
+	// receipts, and the turn it takes) until the channel is closed. The
+	// request is answered first, as lux answers the POST before the
+	// agent's records arrive.
+	InputGate chan struct{}
+
+	// closed ends everything the fake waits on in the background (Close).
+	closed    chan struct{}
+	closeOnce sync.Once
+}
+
+// Close is the fake lux shutting down: work held on InputGate is dropped,
+// so no goroutine outlives the test that served it.
+func (s *Server) Close() {
+	s.closeOnce.Do(func() { close(s.closed) })
 }
 
 // New serves a fake lux. With decide nil, every Run plays dude's scripted
 // agent (fakeagent), as a real lux running lux-fake would.
 func New(repo, key string, decide func(map[string]any) Behaviour) *Server {
-	s := &Server{runs: map[string]*Run{}, byKey: map[string]string{}, Decide: decide, Repo: repo, Key: key}
+	s := &Server{runs: map[string]*Run{}, byKey: map[string]string{}, Decide: decide, Repo: repo, Key: key,
+		closed: make(chan struct{})}
 	if decide == nil {
 		s.Decide = s.scripted
 	}
@@ -277,6 +440,28 @@ func (s *Server) CallsOf(id string) []string {
 		return slices.Clone(run.Calls)
 	}
 	return nil
+}
+
+// TurnsEnded is closed once the Run's agent has finished n turns and gone
+// idle: a lifecycle boundary a test waits on instead of a sleep.
+func (s *Server) TurnsEnded(id string, n int) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for {
+			run := s.runs[id]
+			if run != nil && run.turnsEnded >= n {
+				close(done)
+				return
+			}
+			if run == nil || run.Forgotten || lux.Terminal(run.State) {
+				return
+			}
+			run.cond.Wait()
+		}
+	}()
+	return done
 }
 
 // Crash ends a Run's agent as a dead container would.
@@ -453,7 +638,12 @@ func (s *Server) play(run *Run, spec map[string]any, resumed bool) {
 	if !resumed {
 		// The task, acknowledged when the agent takes it, with what it got.
 		prompt, _ := spec["workload"].(map[string]any)["prompt"].(string)
-		s.recordEvent(run, "lux.input", map[string]any{"requestId": "prompt", "text": prompt})
+		if s.LegacyInput {
+			s.recordEvent(run, lux.RecordInput, map[string]any{"requestId": "prompt", "text": prompt})
+		} else {
+			s.recordAccepted(run, "prompt", prompt)
+			s.recordEvent(run, lux.RecordInputConsumed, map[string]any{"requestId": "prompt"})
+		}
 	}
 	if resumed {
 		// A resumed agent has its conversation back and waits for input, as
@@ -469,6 +659,7 @@ func (s *Server) play(run *Run, spec map[string]any, resumed bool) {
 func (s *Server) turn(run *Run) {
 	s.recordEvent(run, "lux.activity", map[string]any{"activity": "busy"})
 	run.busy = true
+	run.openTools = nil
 	b := run.behavior
 	if b.TurnError != "" {
 		s.recordEvent(run, "acp.turn_end", map[string]any{"stopReason": "", "error": b.TurnError})
@@ -487,6 +678,7 @@ func (s *Server) turn(run *Run) {
 		}
 		s.agent(run, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id, "title": tool, "kind": "execute", "status": "in_progress", "rawInput": input})
 		if b.KeepToolsOpen {
+			run.openTools = append(run.openTools, id)
 			continue
 		}
 		// As OpenCode reports it: the completion names neither the tool nor
@@ -549,6 +741,7 @@ func (s *Server) turn(run *Run) {
 		"inputTokens": 12, "outputTokens": 34, "totalTokens": 1046, "cachedReadTokens": 900, "cachedWriteTokens": 100}})
 	s.recordEvent(run, "lux.activity", map[string]any{"activity": "idle"})
 	run.busy = false
+	run.turnsEnded++
 	if b.ExitAfterTurn {
 		s.setState(run, "failed")
 		return
@@ -806,7 +999,18 @@ func (s *Server) input(w http.ResponseWriter, r *http.Request) {
 		RequestID string `json:"requestId"`
 		Interrupt bool   `json:"interrupt"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&in)
+	body, _ := io.ReadAll(r.Body)
+	_ = json.Unmarshal(body, &in)
+	s.mu.Lock()
+	if run.InputBodies == nil {
+		run.InputBodies = map[string][]string{}
+	}
+	run.InputBodies[in.RequestID] = append(run.InputBodies[in.RequestID], string(body))
+	s.mu.Unlock()
+	if s.BeforeInput != nil && !s.BeforeInput(run.ID, in.RequestID) {
+		writeErr(w, 503, "unavailable", "try again")
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// lux takes input for a Run that is live or about to be, and delivers
@@ -817,18 +1021,61 @@ func (s *Server) input(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 409, "not_running", "run is "+run.State)
 		return
 	}
-	// As lux's ACP adapter does: ACP has no way to add to a turn in
-	// progress, so input to a busy agent waits for the turn to end, and is
-	// acknowledged when it is actually delivered.
-	run.queued = append(run.queued, queuedInput{in.Text, in.RequestID})
+	// A busy agent: lux (the harness) takes input at once and the agent
+	// reads it at its next step (FinishTools, or the turn's end). A legacy
+	// lux, as its ACP adapter did, holds it until the turn ends and
+	// acknowledges it only then. An interrupt with no text only stops the
+	// turn, as lux's interrupt message does: nothing to deliver.
+	if in.Text != "" {
+		run.queued = append(run.queued, queuedInput{text: in.Text, requestID: in.RequestID})
+		if run.busy && run.State == "running" {
+			s.accept(run, &run.queued[len(run.queued)-1])
+		}
+	}
 	if in.Interrupt && run.busy && run.State == "running" {
-		// The turn is cancelled, and the agent is free to hear it.
+		// The turn is cancelled, and the agent is free to hear it. What the
+		// harness took and the agent had not read starts the next turn,
+		// under the same request ids; FailUnreadOnInterrupt fails it instead.
 		run.Interrupted++
 		s.recordEvent(run, "acp.turn_end", map[string]any{"stopReason": "cancelled"})
 		run.busy = false
+		if s.FailUnreadOnInterrupt {
+			// A legacy lux holds input it never acknowledges; it fails it
+			// with a phase-less lux.input carrying the error.
+			kept := run.queued[:0]
+			for _, q := range run.queued {
+				if q.requestID == in.RequestID || !(q.accepted || s.LegacyInput) {
+					kept = append(kept, q)
+					continue
+				}
+				s.recordFailed(run, q, "the turn was cancelled before the agent read it")
+			}
+			run.queued = kept
+		}
+		// Nothing left to hear: the agent goes idle, as lux's interrupt
+		// alone starts no turn.
+		if len(run.queued) == 0 {
+			s.recordEvent(run, "lux.activity", map[string]any{"activity": "idle"})
+			run.turnsEnded++
+		}
 	}
 	if !run.busy {
-		s.deliverQueued(run)
+		if gate := s.InputGate; gate != nil {
+			go func() {
+				select {
+				case <-gate:
+				case <-s.closed:
+					return
+				}
+				s.mu.Lock()
+				defer s.mu.Unlock()
+				if !run.busy {
+					s.deliverQueued(run)
+				}
+			}()
+		} else {
+			s.deliverQueued(run)
+		}
 	}
 	writeJSON(w, 202, map[string]any{"requestId": in.RequestID})
 }

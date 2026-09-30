@@ -184,9 +184,11 @@
 
 /* --- Queued: sent, not yet read ---------------------------------------- */
 
-/* A steer that arrived mid-turn is held until the turn ends. Three
+/* A steer the agent has not read yet: it lands at the agent's next step,
+   after the tool it is running, or only when the turn ends. Three
    channels: a dashed bar, a "Queued" mark with a clock, and a line under
-   the body. The tint stays — it is still a steer — but paler. */
+   the body saying where it lands. The tint stays — it is still a steer —
+   but paler. Once read, it is a plain steer where the agent read it. */
 .queued {
   --turn-bar: transparent;
   --turn-wash: color-mix(in srgb, var(--ds-color-accent) 5%, transparent);
@@ -217,9 +219,45 @@
   color: var(--ds-color-text-secondary);
 }
 .queuedNote {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--ds-space-8);
   font-size: var(--ds-text-xs);
-  color: var(--ds-color-text-muted);
-  font-style: italic;
+  color: var(--ds-color-text-secondary);
+}
+.queuedNote b {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-primary);
+}
+/* The note's one action, as a link would sit in the sentence. */
+.noteAction {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-accent-text);
+}
+.noteAction:hover {
+  text-decoration: underline;
+}
+
+/* Failed: it will not reach the agent. The steer's bar and wash stay; the
+   line is danger ink with a glyph and the words "Not delivered". */
+.failedNote {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--ds-space-6);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-tone-danger-fg);
+}
+.failedNote b {
+  font-weight: var(--ds-weight-semibold);
+}
+.failedNote .noteAction {
+  margin-left: var(--ds-space-2);
 }
 
 /* --- Clamped body ------------------------------------------------------- */

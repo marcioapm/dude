@@ -49,6 +49,8 @@ export interface ScenarioTurn {
   readonly inReplyTo?: string | undefined;
   /** `null`: a steer sent mid-turn, not yet read by the agent. */
   readonly deliveredAt?: number | null | undefined;
+  /** The agent's step read it at `deliveredAt`. */
+  readonly read?: boolean | undefined;
   // question-only
   readonly options?: ReadonlyArray<string> | undefined;
   readonly answeredAt?: number | null | undefined;
@@ -452,26 +454,28 @@ export function buildAnswerSteps(t0: number, answer: string): ReadonlyArray<Step
 }
 
 /**
- * Steps after a steer while running. lux holds the message until the
- * current turn ends, so it is queued first and delivered a little later.
- */
+  * Steps after a steer while running. The harness takes it at once and the
+  * agent reads it at its next step: queued first, then read, and moved to
+  * where it was read.
+  */
 export function buildSteerSteps(t0: number, instruction: string): ReadonlyArray<Step> {
   const T = (s: number) => t0 + s * 1000;
   const id = `st${t0}`;
   return [
     {
-      label: "Steer sent — queued until the turn ends",
+      label: "Steer sent — queued until the agent's next step",
       at: 0,
       apply: (s) => {
         s.turns.push({ id, kind: "human", role: "human", name: "marcio", intent: "steer", deliveredAt: null, text: instruction, shown: 999, startedAt: T(0), tools: [] });
       },
     },
     {
-      label: "Steer delivered",
+      label: "Steer read at the agent's next step",
       at: 4,
       apply: (s) => {
-        upd(s.turns, id, { deliveredAt: T(4) });
-        s.turns.push({ id: `sys${t0}`, kind: "system", role: "system", text: "Turn ended · directive delivered to the agent", shown: 999, startedAt: T(4), tools: [] });
+        const i = s.turns.findIndex((t) => t.id === id);
+        if (i >= 0) s.turns.push(...s.turns.splice(i, 1));
+        upd(s.turns, id, { deliveredAt: T(4), read: true });
       },
     },
   ];

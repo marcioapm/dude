@@ -107,6 +107,7 @@ func newWorld(t *testing.T) *world {
 	}
 	luxSrv := httptest.NewServer(w.lux.Handler())
 	t.Cleanup(luxSrv.Close)
+	t.Cleanup(w.lux.Close)
 
 	w.project, w.repoID = "prj_"+w.org, "repo_"+w.org
 	models := `{"implementer":{"model":"fake/scripted"},"reviewer":{"model":"fake/scripted"},"simplifier":{"model":"fake/scripted"}}`
@@ -1745,7 +1746,16 @@ func TestAReviewerIsToldWhatTheDeliverysPolicyBlocksOn(t *testing.T) {
 }
 
 func TestSteeringReachesTheAgentAndIsAcknowledged(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		t.Run(map[bool]string{false: "receipts", true: "legacy lux"}[legacy], func(t *testing.T) {
+			steeringReachesTheAgent(t, legacy)
+		})
+	}
+}
+
+func steeringReachesTheAgent(t *testing.T, legacy bool) {
 	w := newWorld(t)
+	w.lux.LegacyInput = legacy
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
 	wi := w.task()
 	w.deliver(wi)
@@ -1755,12 +1765,14 @@ func TestSteeringReachesTheAgentAndIsAcknowledged(t *testing.T) {
 	var runID string
 	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1`, wi).Scan(&runID)
 
-	// An agent that cannot take a message mid-turn holds it until the turn
-	// ends: sent, but not yet delivered.
+	// An agent in the middle of a step with no tool running reaches no step
+	// boundary until its turn ends: the harness took it (a legacy lux holds
+	// it, and says nothing), the agent has not read it.
 	mustExec(t, w.owner, `INSERT INTO directives (id, organization_id, task_id, run_id, text) VALUES ('dir_1', $1, $2, $3, 'also add a test')`,
 		w.org, wi, runID)
 	w.until("the directive to be sent", func() bool {
-		return w.count(`SELECT count(*) FROM directives WHERE id = 'dir_1' AND sent_at IS NOT NULL`) == 1
+		return w.count(`SELECT count(*) FROM directives WHERE id = 'dir_1' AND sent_at IS NOT NULL
+			AND (accepted_at IS NOT NULL OR $1)`, legacy) == 1
 	})
 	if n := w.count(`SELECT count(*) FROM directives WHERE id = 'dir_1' AND delivered_at IS NOT NULL`); n != 0 {
 		t.Errorf("a directive to a busy agent was reported delivered before the agent had it")
@@ -1782,6 +1794,492 @@ func TestSteeringReachesTheAgentAndIsAcknowledged(t *testing.T) {
 	}
 	if got := w.lux.Runs()[0].Inputs; len(got) != 2 {
 		t.Errorf("directives sent %d times", len(got))
+	}
+}
+
+// steerDuringTool starts an agent that hangs in a long bash command, and
+// steers it: the fake lux in the mode the test set. Returns the Run.
+func (w *world) steerDuringTool(wi string) string {
+	w.t.Helper()
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour {
+		return fakelux.Behaviour{Hang: true, Tools: []string{"bash"}, KeepToolsOpen: true}
+	}
+	w.deliver(wi)
+	w.until("the agent to be running its command", func() bool {
+		return w.count(`SELECT count(*) FROM events e JOIN runs r ON r.id = e.run_id
+			WHERE r.task_id = $1 AND e.event_type = 'agent.tool.called'`, wi) == 1
+	})
+	var runID string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1`, wi).Scan(&runID)
+	mustExec(w.t, w.owner, `INSERT INTO directives (id, organization_id, task_id, run_id, text) VALUES ('dir_s', $1, $2, $3, 'check the migration too')`,
+		w.org, wi, runID)
+	w.until("the directive to be sent", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE id = 'dir_s' AND sent_at IS NOT NULL`) == 1
+	})
+	return runID
+}
+
+// A steer sent while a tool runs is taken at once and read at the agent's
+// next step — after the tool, in the same turn, the tool never cancelled —
+// and the ledger says so in that order.
+func TestASteerLandsAtTheAgentsNextStep(t *testing.T) {
+	w := newWorld(t)
+	wi := w.task()
+	runID := w.steerDuringTool(wi)
+	w.until("the harness to take it", func() bool {
+		return w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.directive.accepted'
+			AND payload->>'directiveId' = 'dir_s' AND payload->>'lands' = 'next_step'`, runID) == 1
+	})
+	w.pump()
+	if n := w.count(`SELECT count(*) FROM directives WHERE id = 'dir_s' AND delivered_at IS NOT NULL`); n != 0 {
+		t.Fatal("a steer was delivered while the tool it waits for still ran")
+	}
+	w.lux.FinishTools(w.lux.Runs()[0].ID)
+	w.until("the agent's next step to read it", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE id = 'dir_s' AND delivered_at IS NOT NULL`) == 1
+	})
+	if r := w.lux.Runs()[0]; r.Interrupted != 0 {
+		t.Errorf("the turn was interrupted %d times for a plain steer", r.Interrupted)
+	}
+	// Read after the tool it waited for, not where it was typed.
+	if n := w.count(`SELECT count(*) FROM events d JOIN events c ON c.run_id = d.run_id
+		WHERE d.run_id = $1 AND d.event_type = 'run.directive.delivered' AND (d.payload->>'read')::boolean
+		  AND c.event_type = 'agent.tool.completed' AND c.cursor < d.cursor`, runID); n != 1 {
+		t.Error("the delivery is not recorded after the tool's completion")
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND turn_done_at IS NULL AND status = 'running'`, runID); n != 1 {
+		t.Error("reading the steer ended the agent's turn")
+	}
+}
+
+// An older lux acknowledges once, when it hands the input over at the
+// turn's end: no accepted event, delivered then.
+func TestASteerToALegacyLuxIsDeliveredOnItsOneReceipt(t *testing.T) {
+	w := newWorld(t)
+	w.lux.LegacyInput = true
+	wi := w.task()
+	runID := w.steerDuringTool(wi)
+	w.lux.FinishTools(w.lux.Runs()[0].ID)
+	for range 3 {
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM directives WHERE id = 'dir_s' AND (delivered_at IS NOT NULL OR accepted_at IS NOT NULL)`); n != 0 {
+		t.Fatal("a legacy lux's held input counted as taken before its receipt")
+	}
+	// Heard now, by a person's choice: the turn ends and the input is handed over.
+	mustExec(t, w.owner, `INSERT INTO directives (id, organization_id, task_id, run_id, text, interrupt) VALUES ('dir_i', $1, $2, $3, 'stop', true)`,
+		w.org, wi, runID)
+	w.until("both to be delivered", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND delivered_at IS NOT NULL`, runID) == 2
+	})
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.directive.accepted'`, runID); n != 0 {
+		t.Errorf("a legacy receipt wrote %d accepted events", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.directive.delivered'`, runID); n != 2 {
+		t.Errorf("%d delivered events for two directives", n)
+	}
+}
+
+// A harness that reads input only between turns says so when it takes the
+// steer, and the agent reads it when its turn ends, not after the tool.
+func TestASteerToANextTurnHarnessWaitsForTheTurn(t *testing.T) {
+	w := newWorld(t)
+	w.lux.NextTurnInput = true
+	wi := w.task()
+	runID := w.steerDuringTool(wi)
+	w.until("the harness to take it for the next turn", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE id = 'dir_s' AND lands = 'next_turn'`) == 1
+	})
+	w.lux.FinishTools(w.lux.Runs()[0].ID)
+	for range 3 {
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM directives WHERE id = 'dir_s' AND delivered_at IS NOT NULL`); n != 0 {
+		t.Fatal("a next-turn steer was read mid-turn")
+	}
+	// The turn ends on its own: the agent reads it then, as its next turn.
+	w.lux.EndTurn(w.lux.Runs()[0].ID)
+	w.until("the agent to read it as the turn ends", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE id = 'dir_s' AND delivered_at IS NOT NULL`) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM events d JOIN events s ON s.run_id = d.run_id
+		WHERE d.run_id = $1 AND d.event_type = 'run.directive.delivered' AND (d.payload->>'read')::boolean
+		  AND d.payload->>'directiveId' = 'dir_s' AND s.event_type = 'agent.session.stopped' AND s.cursor < d.cursor`, runID); n != 1 {
+		t.Error("the read is not recorded after the turn's end")
+	}
+	if r := w.lux.Runs()[0]; r.Interrupted != 0 || len(r.Inputs) != 1 {
+		t.Errorf("interrupted=%d inputs=%v, want no interrupt and the words once", r.Interrupted, r.Inputs)
+	}
+}
+
+// turnDoneWithSteer plays an agent that finishes its first turn, seen done
+// by the follower alone (no sweep acting on it), and a steer that reaches
+// dude then: the Run, with the steer queued as 'dir_late'.
+func (w *world) turnDoneWithSteer(wi string) string {
+	t := w.t
+	t.Helper()
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Reply: "Done."} }
+	w.deliver(wi)
+	w.until("the run to reach lux", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND lux_run_id IS NOT NULL`, wi) == 1
+	})
+	var runID string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1`, wi).Scan(&runID)
+	// The fake agent finishes its first turn on its own; once it has, this
+	// sweep reads the Run before anything was followed, and starts the
+	// follower.
+	select {
+	case <-w.lux.TurnsEnded(w.lux.Runs()[0].ID, 1):
+	case <-time.After(10 * time.Second):
+		t.Fatal("the agent's first turn never ended")
+	}
+	if _, err := w.syncer.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	w.await("the agent's turn never ended", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND turn_done_at IS NOT NULL`, runID) > 0
+	})
+	mustExec(t, w.owner, `INSERT INTO directives (id, organization_id, task_id, run_id, text) VALUES ('dir_late', $1, $2, $3, 'one more thing')`,
+		w.org, wi, runID)
+	return runID
+}
+
+// A steer sent as the agent's turn ends is not dropped: the Run waits to
+// be collected until the agent has it, and it takes it as its next turn.
+func TestASteerSentAsTheTurnEndsIsDeliveredBeforeTheRunFinishes(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		t.Run(map[bool]string{false: "receipts", true: "legacy lux"}[legacy], func(t *testing.T) {
+			w := newWorld(t)
+			w.lux.LegacyInput = legacy
+			wi := w.task()
+			runID := w.turnDoneWithSteer(wi)
+			w.until("the run to finish", func() bool {
+				return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status IN ('completed', 'failed')`, runID) == 1
+			})
+			if n := w.count(`SELECT count(*) FROM directives WHERE id = 'dir_late' AND delivered_at IS NOT NULL`); n != 1 {
+				t.Error("a steer sent as the turn ended was dropped when the run finished")
+			}
+			if in := w.lux.Runs()[0].Inputs; !slices.Contains(in, "one more thing") {
+				t.Errorf("the agent never had it: inputs %v", in)
+			}
+			// It was heard as a turn of its own, which the Run finished after.
+			if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'agent.session.stopped'`, runID); n != 2 {
+				t.Errorf("%d turns ended, want 2", n)
+			}
+		})
+	}
+}
+
+// gateInput holds what input starts in an idle agent (fakelux InputGate)
+// until release, which the test's cleanup also calls, so a failed
+// assertion strands no fake worker.
+func (w *world) gateInput() (release func()) {
+	gate := make(chan struct{})
+	w.lux.InputGate = gate
+	var once sync.Once
+	release = func() { once.Do(func() { close(gate) }) }
+	w.t.Cleanup(release)
+	return release
+}
+
+// lux answers the input POST before the agent's records for it arrive. In
+// that window the steer is sent and unread: the Run is not collected. Once
+// the agent takes it, the turn it starts ends before the Run is.
+func TestASteerSentButNotYetReadHoldsTheFinishedTurn(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		t.Run(map[bool]string{false: "receipts", true: "legacy lux"}[legacy], func(t *testing.T) {
+			w := newWorld(t)
+			w.lux.LegacyInput = legacy
+			release := w.gateInput()
+			wi := w.task()
+			runID := w.turnDoneWithSteer(wi)
+			w.until("the steer to be sent", func() bool {
+				return w.count(`SELECT count(*) FROM directives WHERE id = 'dir_late' AND sent_at IS NOT NULL`) == 1
+			})
+			for range 5 {
+				w.pump()
+			}
+			if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND push_request_id IS NULL AND status = 'running'`, runID); n != 1 {
+				t.Fatalf("a Run with a sent, unread steer was collected\nruns:\n%s", w.describeRuns())
+			}
+			if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.completed'`, runID); n != 0 {
+				t.Fatal("a Run with a sent, unread steer completed")
+			}
+			release()
+			w.until("the run to finish", func() bool {
+				return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status IN ('completed', 'failed')`, runID) == 1
+			})
+			if n := w.count(`SELECT count(*) FROM directives WHERE id = 'dir_late' AND delivered_at IS NOT NULL AND failed_at IS NULL`); n != 1 {
+				t.Error("the steer was not delivered")
+			}
+			// Both turns ended before the Run completed.
+			if n := w.count(`SELECT count(*) FROM events s JOIN events c ON c.run_id = s.run_id AND c.event_type = 'run.completed'
+				WHERE s.run_id = $1 AND s.event_type = 'agent.session.stopped' AND s.cursor < c.cursor`, runID); n != 2 {
+				t.Errorf("%d turns ended before the run completed, want 2", n)
+			}
+		})
+	}
+}
+
+// A steer lux took and never reported is waited on for unreadGraceSecs
+// only: then the Run is collected, and the steer is marked failed.
+func TestASteerNeverReadStopsHoldingTheRunAfterTheCap(t *testing.T) {
+	w := newWorld(t)
+	w.gateInput()
+	wi := w.task()
+	runID := w.turnDoneWithSteer(wi)
+	w.until("the steer to be sent", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE id = 'dir_late' AND sent_at IS NOT NULL`) == 1
+	})
+	w.pump()
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND push_request_id IS NULL`, runID); n != 1 {
+		t.Fatal("a Run with a steer sent a moment ago was collected")
+	}
+	// Sent longer ago than the cap: no receipt is coming.
+	mustExec(t, w.owner, `UPDATE directives SET sent_at = now() - interval '121 seconds' WHERE id = 'dir_late'`)
+	w.until("the run to finish", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM directives WHERE id = 'dir_late' AND delivered_at IS NULL
+		AND failed_at IS NOT NULL AND error = 'the run finished before the agent read it'`); n != 1 {
+		t.Error("the unread steer was not marked failed when the run completed")
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.directive.failed'
+		AND payload->>'directiveId' = 'dir_late'`, runID); n != 1 {
+		t.Errorf("%d failed events for the unread steer, want 1", n)
+	}
+}
+
+// "Interrupt now" on a queued steer re-sends it to be heard at once, as a
+// directive superseding it with the same words: the turn stops, the agent
+// hears the text once, and both count as delivered with it.
+func TestInterruptNowOnAQueuedSteerIsHeardOnce(t *testing.T) {
+	w := newWorld(t)
+	wi := w.task()
+	runID, interruptID := w.interruptQueuedSteer(wi)
+	w.until("both to be delivered", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND delivered_at IS NOT NULL`, runID) == 2
+	})
+	r := w.lux.Runs()[0]
+	if r.Interrupted != 1 || len(r.Inputs) != 1 || r.Inputs[0] != "check the migration too" {
+		t.Errorf("interrupted=%d inputs=%v, want one interrupt and the text once", r.Interrupted, r.Inputs)
+	}
+	// The interrupt is settled with the steer, its delivery flagged as the
+	// interrupt alone, not a second read.
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.directive.delivered'
+		AND payload->>'directiveId' = $2 AND (payload->>'interruptOnly')::boolean AND payload->'read' IS NULL`, runID, interruptID); n != 1 {
+		t.Errorf("%d interrupt-only delivered events for the interrupt, want 1", n)
+	}
+}
+
+// interruptNow is a person's "Interrupt now" on a queued directive, through
+// the API: its directive.
+func (w *world) interruptNow(runID, supersedes string) string {
+	w.t.Helper()
+	code, out := w.call("/internal/runs/"+runID+"/steer", map[string]any{
+		"text": "check the migration too", "supersedes": supersedes, "interrupt": true})
+	if code != http.StatusCreated {
+		w.t.Fatalf("steer: %d %v", code, out)
+	}
+	return out["id"].(string)
+}
+
+// The steer fails after the click and before the interrupt is first sent:
+// the interrupt carries the words, and the agent hears them once.
+func TestInterruptNowCarriesTheWordsWhenTheSteerFailedBeforeItWasSent(t *testing.T) {
+	w := newWorld(t)
+	wi := w.task()
+	runID, interruptID := w.interruptQueuedSteer(wi)
+	w.lux.FailInput(w.lux.Runs()[0].ID, "dir_s", "the agent exited")
+	w.await("the steer's failure was never recorded", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE id = 'dir_s' AND failed_at IS NOT NULL`) > 0
+	})
+	w.until("the interrupt to be sent", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE id = $1 AND sent_at IS NOT NULL`, interruptID) == 1
+	})
+	r := w.lux.Runs()[0]
+	if bodies := r.InputBodies[interruptID]; len(bodies) != 1 || !strings.Contains(bodies[0], `"text":"check the migration too"`) {
+		t.Fatalf("interrupt request bodies %q, want one carrying the words", bodies)
+	}
+	w.until("the interrupt to be read", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE id = $1 AND delivered_at IS NOT NULL AND failed_at IS NULL`, interruptID) == 1
+	})
+	if r := w.lux.Runs()[0]; r.Interrupted != 1 || !slices.Equal(r.Inputs, []string{"check the migration too"}) {
+		t.Errorf("interrupted=%d inputs=%q, want one interrupt and the words once", r.Interrupted, r.Inputs)
+	}
+	if n := w.count(`SELECT count(*) FROM directives WHERE id = $1 AND interrupt_only = false AND resends = 'dir_s'`, interruptID); n != 1 {
+		t.Error("the interrupt's decision to carry the words was not kept")
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.directive.delivered'
+		AND payload->>'directiveId' = $2 AND (payload->>'read')::boolean`, runID, interruptID); n != 1 {
+		t.Errorf("%d read events for the interrupt that carried the words, want 1", n)
+	}
+}
+
+// A lux from before interrupts carried unread input over fails the steer
+// the interrupt cancelled: the interrupt, which carried no words, fails
+// with it, for the same reason, and nothing is left queued.
+func TestInterruptNowOnAnOlderLuxFailsWithTheSteer(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		t.Run(map[bool]string{false: "receipts", true: "legacy lux"}[legacy], func(t *testing.T) {
+			w := newWorld(t)
+			w.lux.LegacyInput = legacy
+			w.lux.FailUnreadOnInterrupt = true
+			wi := w.task()
+			runID, interruptID := w.interruptQueuedSteer(wi)
+			w.until("both to fail", func() bool {
+				return w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND failed_at IS NOT NULL AND delivered_at IS NULL
+					AND error = 'the turn was cancelled before the agent read it'`, runID) == 2
+			})
+			for range 3 {
+				w.pump()
+			}
+			if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.directive.failed'`, runID); n != 2 {
+				t.Errorf("%d failed events, want one for each", n)
+			}
+			if n := w.count(`SELECT count(*) FROM directives WHERE id = $1 AND interrupt_only AND sent_at IS NOT NULL`, interruptID); n != 1 {
+				t.Error("the interrupt was not sent as the interrupt alone")
+			}
+			if r := w.lux.Runs()[0]; r.Interrupted != 1 || len(r.Inputs) != 0 {
+				t.Errorf("interrupted=%d inputs=%q, want one interrupt and the words never read", r.Interrupted, r.Inputs)
+			}
+		})
+	}
+}
+
+// "Interrupt now" on an "Interrupt now" not yet heard: both resend the
+// first steer, carry no words, and are delivered when it is read.
+func TestInterruptNowTwiceIsOneInstruction(t *testing.T) {
+	w := newWorld(t)
+	wi := w.task()
+	runID, first := w.interruptQueuedSteer(wi)
+	second := w.interruptNow(runID, first)
+	w.until("all three to be delivered", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND delivered_at IS NOT NULL`, runID) == 3
+	})
+	if n := w.count(`SELECT count(*) FROM directives WHERE id IN ($1, $2) AND resends = 'dir_s' AND interrupt_only`, first, second); n != 2 {
+		t.Errorf("%d of the two interrupts resend the steer as the interrupt alone, want 2", n)
+	}
+	if r := w.lux.Runs()[0]; !slices.Equal(r.Inputs, []string{"check the migration too"}) {
+		t.Errorf("inputs %q, want the words once", r.Inputs)
+	}
+}
+
+// A click from a transcript that still showed the steer queued after the
+// agent read it: the interrupt goes alone, is delivered as it is sent with
+// a delivery event of its own, and holds no finished turn open.
+func TestInterruptNowOnASteerAlreadyReadIsSettledWhenSent(t *testing.T) {
+	w := newWorld(t)
+	wi := w.task()
+	runID := w.steerDuringTool(wi)
+	w.lux.FinishTools(w.lux.Runs()[0].ID)
+	w.waitRead()
+	interruptID := w.interruptNow(runID, "dir_s")
+	w.until("the run to finish", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM directives WHERE id = $1 AND interrupt_only AND delivered_at IS NOT NULL AND failed_at IS NULL`, interruptID); n != 1 {
+		t.Error("the interrupt was not delivered as the interrupt alone")
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.directive.delivered'
+		AND payload->>'directiveId' = $2 AND (payload->>'interruptOnly')::boolean AND payload->'read' IS NULL`, runID, interruptID); n != 1 {
+		t.Errorf("%d interrupt-only delivered events, want 1", n)
+	}
+	if r := w.lux.Runs()[0]; !slices.Equal(r.Inputs, []string{"check the migration too"}) {
+		t.Errorf("inputs %q, want the words once", r.Inputs)
+	}
+}
+
+// interruptQueuedSteer is a steer the harness took (sent, to a legacy lux)
+// while a tool runs, and a person's "Interrupt now" on it, recorded by the API and not yet sent:
+// returns the Run and the interrupt's directive.
+func (w *world) interruptQueuedSteer(wi string) (runID, interruptID string) {
+	w.t.Helper()
+	runID = w.steerDuringTool(wi)
+	// A legacy lux says nothing until it hands the steer over: sent is all
+	// there is to wait on.
+	if !w.lux.LegacyInput {
+		w.until("the harness to take it", func() bool {
+			return w.count(`SELECT count(*) FROM directives WHERE id = 'dir_s' AND accepted_at IS NOT NULL`) == 1
+		})
+	}
+	return runID, w.interruptNow(runID, "dir_s")
+}
+
+// waitRead waits, without sweeping, for the follower to record the
+// original steer read.
+func (w *world) waitRead() {
+	w.t.Helper()
+	w.await("the steer was never read", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE id = 'dir_s' AND delivered_at IS NOT NULL`) > 0
+	})
+}
+
+// await polls cond for 10 s without sweeping, for what the follower alone
+// records, and fails the test with failure if it never holds.
+func (w *world) await(failure string, cond func() bool) {
+	w.t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); !cond(); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			w.t.Fatal(failure)
+		}
+	}
+}
+
+// The agent reads the original steer after the click and before the syncer
+// sends the interrupt: the interrupt still goes, the words do not go again.
+func TestInterruptNowOnASteerReadBeforeItIsSentSendsNoWords(t *testing.T) {
+	w := newWorld(t)
+	wi := w.task()
+	runID, interruptID := w.interruptQueuedSteer(wi)
+	w.lux.FinishTools(w.lux.Runs()[0].ID)
+	w.waitRead()
+	w.until("the interrupt to be sent and delivered", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE id = $1 AND sent_at IS NOT NULL AND delivered_at IS NOT NULL`, interruptID) == 1
+	})
+	r := w.lux.Runs()[0]
+	if r.Interrupted != 1 || len(r.Inputs) != 1 {
+		t.Errorf("interrupted=%d inputs=%v, want one interrupt and the words once", r.Interrupted, r.Inputs)
+	}
+	// One read, the original's; the interrupt's delivery is flagged as the
+	// interrupt alone.
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.directive.delivered'
+		AND (payload->>'read')::boolean`, runID); n != 1 {
+		t.Errorf("%d read events, want the original's alone", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.directive.delivered'
+		AND payload->>'directiveId' = $2 AND (payload->>'interruptOnly')::boolean`, runID, interruptID); n != 1 {
+		t.Errorf("%d interrupt-only delivered events, want 1", n)
+	}
+}
+
+// The agent reads the original between the syncer's reading the interrupt
+// and lux answering it, and lux refuses that first request: the retry is
+// the same request, still with no words.
+func TestInterruptNowRetriedAfterTheSteerWasReadSendsTheSameRequest(t *testing.T) {
+	w := newWorld(t)
+	w.syncer.RetryAhead = time.Minute
+	wi := w.task()
+	_, interruptID := w.interruptQueuedSteer(wi)
+	var once sync.Once
+	w.lux.BeforeInput = func(luxRunID, requestID string) bool {
+		first := false
+		once.Do(func() {
+			first = true
+			w.lux.FinishTools(luxRunID)
+			w.waitRead()
+		})
+		return !first
+	}
+	w.until("the interrupt to be sent", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE id = $1 AND sent_at IS NOT NULL`, interruptID) == 1
+	})
+	r := w.lux.Runs()[0]
+	if bodies := r.InputBodies[interruptID]; len(bodies) != 2 || bodies[0] != bodies[1] {
+		t.Errorf("request bodies for one request id: %q, want two identical", bodies)
+	}
+	if r.Interrupted != 1 || len(r.Inputs) != 1 {
+		t.Errorf("interrupted=%d inputs=%v, want one interrupt and the words once", r.Interrupted, r.Inputs)
 	}
 }
 

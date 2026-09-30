@@ -112,7 +112,27 @@ export interface HumanTurn {
   at: string;
   /** When the agent took it. A steer is queued until then (null); an answer is delivered as given. */
   deliveredAt: string | null;
+  /** When the harness took it (lux's accepted receipt); null before, or from a lux that sends none. */
+  acceptedAt: string | null;
+  /** Where the harness said it lands: at the agent's next step, or only when its turn ends. */
+  lands: SteerLands | null;
+  /**
+   * lux reported the agent's step reading it: `deliveredAt` is when it was
+   * read, and the turn sits where it was read, not where it was typed.
+   * False for a delivery that only says it was handed over (an older lux).
+   */
+  read: boolean;
+  /** The tool the agent finished just before reading it ("read … after Bash"). */
+  after: string | null;
+  /** Why it will not reach the agent, once lux or dude says so. */
+  failed: string | null;
+  /** A person asked for it to be heard now: re-sent with interrupt. */
+  interrupting: boolean;
+  /** The directive it was sent as, to re-send it (Interrupt now, Retry); null for an answer given directly. */
+  directiveId: string | null;
 }
+
+export type SteerLands = "next_step" | "next_turn";
 
 /**
  * An event the agent (or a script it ran) recorded with `dude event`: a
@@ -220,6 +240,37 @@ const NOTICES: Record<string, { notice: NoticeTurn["notice"]; text: (payload: Re
 export const CUSTOM_EVENT_PREFIX = "agent.custom.";
 
 /**
+ * Why a queued steer has not been read, as its one line says: the Run's
+ * state first (paused, starting), then what lux said the harness does,
+ * then what the agent is running now. `tool` is the open tool call's name;
+ * null when nothing is running. An older lux (lands unknown) holds a steer
+ * until the turn ends, and is described so.
+ */
+export type SteerWait =
+  | { kind: "paused" } | { kind: "starting" } | { kind: "next_turn" }
+  | { kind: "tool"; tool: string } | { kind: "next_step" };
+
+export function steerWait(turn: HumanTurn, runStatus: RunStatus, activeTool: string | null, lands: SteerLands | null): SteerWait {
+  if (runStatus === "paused") return { kind: "paused" };
+  if (runStatus === "pending" || runStatus === "scheduled" || runStatus === "starting") return { kind: "starting" };
+  const where = turn.lands ?? lands;
+  if (where !== "next_step") return { kind: "next_turn" };
+  return activeTool ? { kind: "tool", tool: activeTool } : { kind: "next_step" };
+}
+
+/** The composer's hint for a steer sent now, following the same capability. */
+export function landsHint(runStatus: RunStatus, activeTool: string | null, lands: SteerLands | null): string | null {
+  if (runStatus !== "running") return null;
+  if (lands !== "next_step") return "Lands when the turn ends";
+  return activeTool ? "Lands after the current tool" : "Lands at the agent's next step";
+}
+
+/** A tool's name as a person reads it: "bash" → "Bash". */
+export function toolLabel(name: string): string {
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
+/**
  * Who priced a Run's model cost. lux's cost plugins meter every token and
  * settle the price over days (`settled` once its status is final); the
  * agent's harness's own running total is never settled.
@@ -253,6 +304,12 @@ export interface Conversation {
   activeTool: { name: string; since: string } | null;
   /** How often it called each tool, by the tool's name as the harness gives it. */
   toolCounts: ReadonlyMap<string, number>;
+  /**
+   * Where a steer sent now lands, as this Run's lux last said: `next_step`,
+   * `next_turn`, or null when it has said nothing (an older lux, which
+   * holds a steer until the turn ends).
+   */
+  lands: SteerLands | null;
 }
 
 /** A todo as the harness emits it inside a `todowrite` call. */
@@ -298,6 +355,7 @@ export interface Projection {
   activity: Conversation["activity"];
   activeTool: Conversation["activeTool"];
   toolCounts: Map<string, number>;
+  lands: SteerLands | null;
   /** Highest cursor folded in; lets a caller skip what it already applied. */
   cursor: number;
 }
@@ -319,6 +377,7 @@ export function emptyProjection(): Projection {
     activity: null,
     activeTool: null,
     toolCounts: new Map(),
+    lands: null,
     cursor: 0,
   };
 }
@@ -341,7 +400,9 @@ export function project(events: readonly PersistedEvent[], runStatus?: RunStatus
  * turn's token totals update a turn already pushed, rather than replacing
  * it. Nothing memoizes turns today, so that re-renders correctly; a turn
  * component wrapped in `React.memo` would need these updates to replace the
- * turn instead.
+ * turn instead. A steer the agent read moves to where it was read — the
+ * same object, spliced out and pushed — so the turns after it shift up by
+ * one; callers key on turn ids, not positions.
  */
 export function apply(state: Projection, events: readonly PersistedEvent[]): Projection {
   const { turns, toolsByCall } = state;
@@ -451,15 +512,47 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       }
 
       case EventTypes.PromptDelivered: {
+        const lands = landsOf(payload.lands);
+        if (lands) state.lands = lands;
         const text = typeof payload.text === "string" ? payload.text : "";
         if (!text.trim()) break;
         turns.push({ kind: "prompt", id: event.eventId, text, at: event.occurredAt });
         break;
       }
 
+      case EventTypes.DirectiveAccepted: {
+        const lands = landsOf(payload.lands);
+        if (lands) state.lands = lands;
+        const steer = state.steersByDirective.get(String(payload.directiveId ?? ""));
+        if (steer && steer.acceptedAt === null) {
+          steer.acceptedAt = event.occurredAt;
+          steer.lands = lands;
+        }
+        break;
+      }
+
       case EventTypes.DirectiveDelivered: {
         const steer = state.steersByDirective.get(String(payload.directiveId ?? ""));
-        if (steer) steer.deliveredAt = event.occurredAt;
+        // Once: a re-sent steer (interrupt now) is the same turn under two ids.
+        if (!steer || steer.deliveredAt !== null) break;
+        steer.deliveredAt = event.occurredAt;
+        steer.failed = null;
+        if (payload.read === true) {
+          steer.read = true;
+          steer.after = toolBefore(turns, steer);
+          moveToEnd(state, steer);
+        }
+        break;
+      }
+
+      case EventTypes.DirectiveFailed: {
+        const id = String(payload.directiveId ?? "");
+        const steer = state.steersByDirective.get(id);
+        // Only its latest attempt's failure fails the turn: an Interrupt now
+        // that carries the words still may deliver them.
+        if (steer && steer.deliveredAt === null && steer.directiveId === id) {
+          steer.failed = String(payload.error ?? "") || "lux could not deliver it";
+        }
         break;
       }
 
@@ -501,16 +594,35 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       }
 
       case EventTypes.RunSteered: {
+        const directiveId = typeof payload.directiveId === "string" ? payload.directiveId : null;
+        // "Interrupt now" on a queued steer, or Retry on a failed one, sends
+        // it again superseding it: one steer, not two turns saying the same thing.
+        const earlier = typeof payload.supersedes === "string" ? state.steersByDirective.get(payload.supersedes) : undefined;
+        const same = earlier !== undefined && earlier.text === String(payload.text ?? "");
+        if (same && earlier.deliveredAt !== null && payload.interrupt === true) {
+          // Interrupt now clicked on a steer already read (the page had not
+          // caught up): it stays where and when it was read, and the
+          // interrupt's own delivery, flagged interruptOnly, settles nothing new.
+          if (directiveId) state.steersByDirective.set(directiveId, earlier);
+          break;
+        }
+        if (same && earlier.deliveredAt === null) {
+          // A retry replaces a failed attempt, interrupt and all: it is
+          // interrupting only if this attempt is.
+          earlier.interrupting = payload.interrupt === true || (earlier.failed === null && earlier.interrupting);
+          earlier.failed = null;
+          if (directiveId) {
+            state.steersByDirective.set(directiveId, earlier);
+            earlier.directiveId = directiveId;
+          }
+          break;
+        }
         const turn: HumanTurn = {
-          kind: "human",
-          id: event.eventId,
-          intent: "steer",
-          by: humanActor(event),
-          text: String(payload.text ?? ""),
-          at: event.occurredAt,
-          deliveredAt: null,
+          ...humanTurn(event, "steer", String(payload.text ?? ""), null),
+          interrupting: payload.interrupt === true,
+          directiveId,
         };
-        if (typeof payload.directiveId === "string") state.steersByDirective.set(payload.directiveId, turn);
+        if (directiveId) state.steersByDirective.set(directiveId, turn);
         turns.push(turn);
         break;
       }
@@ -540,16 +652,9 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         const question = state.questionsById.get(String(payload.questionId ?? ""));
         if (question) question.answeredAt = event.occurredAt;
         // Delivered the way a steer is: queued until the agent takes it.
-        const turn: HumanTurn = {
-          kind: "human",
-          id: event.eventId,
-          intent: "answer",
-          by: humanActor(event),
-          text: String(payload.answer ?? ""),
-          at: event.occurredAt,
-          deliveredAt: typeof payload.directiveId === "string" ? null : event.occurredAt,
-        };
-        if (typeof payload.directiveId === "string") state.steersByDirective.set(payload.directiveId, turn);
+        const directiveId = typeof payload.directiveId === "string" ? payload.directiveId : null;
+        const turn = { ...humanTurn(event, "answer", String(payload.answer ?? ""), directiveId ? null : event.occurredAt), directiveId };
+        if (directiveId !== null) state.steersByDirective.set(directiveId, turn);
         turns.push(turn);
         break;
       }
@@ -654,6 +759,7 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
       activity: state.activity,
       activeTool: state.activeTool,
       toolCounts: state.toolCounts,
+      lands: state.lands,
     };
   }
 
@@ -683,6 +789,7 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
     activity: null,
     activeTool: null,
     toolCounts: state.toolCounts,
+    lands: state.lands,
   };
 }
 
@@ -761,6 +868,46 @@ function withoutQuestion(text: string): string {
   const last = blocks[blocks.length - 1];
   if (!last || last.index === undefined) return text;
   return (text.slice(0, last.index) + text.slice(last.index + last[0].length)).trimEnd();
+}
+
+/**
+ * The tool the agent last finished before now, if nothing it said came
+ * after it: what a steer read at this point waited for. Other people's
+ * turns in between (another steer) say nothing about the agent's step.
+ */
+function toolBefore(turns: readonly Turn[], steer: HumanTurn): string | null {
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const turn = turns[i]!;
+    if (turn === steer || turn.kind === "human") continue;
+    if (turn.kind === "tool") return turn.tool;
+    if (turn.kind !== "thought" && turn.kind !== "usage" && turn.kind !== "progress" && turn.kind !== "event") return null;
+  }
+  return null;
+}
+
+/**
+ * Move a turn already in the transcript to its end — where the event now
+ * being folded sits — as the same object, so it keeps its identity (and
+ * its React key). The progress row's index follows the shift.
+ */
+function moveToEnd(state: Projection, turn: Turn): void {
+  const { turns } = state;
+  const from = turns.indexOf(turn);
+  if (from < 0 || from === turns.length - 1) return;
+  turns.splice(from, 1);
+  turns.push(turn);
+  if (state.progressIndex !== null && state.progressIndex > from) state.progressIndex -= 1;
+}
+
+function landsOf(value: unknown): SteerLands | null {
+  return value === "next_step" || value === "next_turn" ? value : null;
+}
+
+function humanTurn(event: PersistedEvent, intent: HumanTurn["intent"], text: string, deliveredAt: string | null): HumanTurn {
+  return {
+    kind: "human", id: event.eventId, intent, by: humanActor(event), text, at: event.occurredAt, deliveredAt,
+    acceptedAt: null, lands: null, read: false, after: null, failed: null, interrupting: false, directiveId: null,
+  };
 }
 
 /**

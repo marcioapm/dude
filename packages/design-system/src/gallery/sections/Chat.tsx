@@ -4,7 +4,7 @@ import styles from "../gallery.module.css";
 import { ActivityIndicator } from "../../components/ActivityIndicator.tsx";
 import { AgentPlan, type PlanItem } from "../../components/AgentPlan.tsx";
 import { ChatComposer, type ComposerSubmission } from "../../components/ChatComposer.tsx";
-import { ChatMessage } from "../../components/ChatMessage.tsx";
+import { ChatAside, ChatMessage } from "../../components/ChatMessage.tsx";
 import { ChatThread } from "../../components/ChatThread.tsx";
 import { ChatTranscript } from "../../components/ChatTranscript.tsx";
 import { Markdown } from "../../components/Markdown.tsx";
@@ -358,7 +358,7 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
       <Block
         id="ch-message"
         title="ChatMessage"
-        note="A turn is a gutter and a column, not a bubble, so text aligns down the page. Agent turns carry model, elapsed, the context size at that point ('ctx 15.2k / 744k', coloured at 80% and 100% of the window), the output tokens ('out 1.2k'), cost and the live activity in the foot; a cost the harness does not report is '—', never $0.00. Turns addressed to the agent get a hairline frame tinted by intent — an answer is attention-toned (it closes the needs-you state), a steer is accent-toned (the operator reaching in) — so interventions are scannable in a long transcript. The task prompt keeps the neutral frame: when dude authored it, the system avatar and the Task tag say so, and a long phase prompt clamps at eight lines with Show all. A steer that arrives mid-turn is queued until the turn ends: dashed frame, a Queued mark with a clock, and a line saying why; once the agent has it, the frame is solid and the header shows when."
+        note="A turn is a gutter and a column, not a bubble, so text aligns down the page. Agent turns carry model, elapsed, the context size at that point ('ctx 15.2k / 744k', coloured at 80% and 100% of the window), the output tokens ('out 1.2k'), cost and the live activity in the foot; a cost the harness does not report is '—', never $0.00. Turns addressed to the agent get a hairline frame tinted by intent — an answer is attention-toned (it closes the needs-you state), a steer is accent-toned (the operator reaching in) — so interventions are scannable in a long transcript. The task prompt keeps the neutral frame: when dude authored it, the system avatar and the Task tag say so, and a long phase prompt clamps at eight lines with Show all. A steer the agent has not read yet is queued: dashed bar, a Queued mark with a clock, and a line saying where it lands; once read, the bar is solid and the header says when it was sent and read (Steer delivery, below, has every state)."
       >
         <Panes mode={mode} surface>
           <Col>
@@ -376,11 +376,54 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
             <ChatMessage role="implementer" model="claude-opus-4" content="Added `isRetryable` and a bounded loop. Running the tests" streaming startedAt={Date.now() - 38_000} costUsd={0.21} contextTokens={48_000} contextWindowTokens={CONTEXT_WINDOW} activity="streaming" activityProps={{ since: Date.now() - 6_000, detail: "312 tokens" }} />
             <ChatMessage role="implementer" model="claude-opus-4" content="Tests are running." continued attachments={<ToolCallCard name="bash" status="running" args={{ command: "bun test src/integrations/github" }} startedAt={Date.now() - 44_000} />} activity="tool" activityProps={{ tool: "bash", since: Date.now() - 44_000 }} startedAt={Date.now() - 61_000} costUsd={0.23} />
             <ChatMessage role="orchestrator" model="claude-opus-4" content="Before I open the PR I need a decision from you." startedAt={Date.now() - 125_000} costUsd={0.002} activity="awaiting_input" activityProps={{ since: Date.now() - 125_000, detail: "Should 4xx be retried?" }} />
-            <Label>interventions: answer · steer queued (agent mid-turn) · steer delivered</Label>
+            <Label>interventions: answer · steer queued (lands at the next step) · steer read</Label>
             <ChatMessage role="human" name="marcio" intent="answer" inReplyTo="Should 4xx responses be retried? The existing code retries everything." content="No — only retry 5xx and network errors." startedAt={at(1_520_000)} />
             <ChatMessage role="human" name="marcio" intent="steer" content="Do not change the public API of GithubClient. Add the retry inside `post` only." startedAt={at(1_530_000)} deliveredAt={null} />
-            <ChatMessage role="human" name="marcio" intent="steer" content="Do not change the public API of GithubClient. Add the retry inside `post` only." startedAt={at(1_530_000)} deliveredAt={at(1_571_000)} />
+            <ChatMessage role="human" name="marcio" intent="steer" content="Do not change the public API of GithubClient. Add the retry inside `post` only." startedAt={at(1_530_000)} deliveredAt={at(1_571_000)} read />
             <ChatMessage role="reviewer" model="claude-opus-4" content="Backoff jitter uses `Math.random`; consider seeding for tests (minor)." startedAt={at(1_640_000)} endedAt={at(1_650_000)} costUsd={0.03} activity="failed" activityProps={{ detail: "upstream 500 after 5 attempts" }} />
+          </Col>
+        </Panes>
+      </Block>
+
+      <Block
+        id="ch-steer"
+        title="Steer delivery"
+        note="A steer lands at the agent's next step: the harness takes it while a tool runs, and the model reads it before its next call, in the same turn, the tool never cancelled. Until it is read it keeps the queued treatment — dashed bar, Queued mark, and one line saying where it lands (pendingReason): after the named running tool, at the next step, when the turn ends (a harness that reads only between turns), when the run resumes, when the agent starts. Interrupt now is always a named choice on the line, never a fallback. Read, it loses the queued treatment and sits where the agent read it — between the tool it waited for and the next one — with 'sent · read …, after Bash' in its header. An older lux reports only the handoff: 'delivered', no read time. Failed is a danger line with Retry."
+      >
+        <Panes mode={mode} surface>
+          <Col>
+            <Label>(a) queued while a tool runs — lands after it, in this turn</Label>
+            <ChatAside><ToolCallCard name="bash" status="running" args={{ command: "bun test src/integrations/github" }} startedAt={Date.now() - 14_000} /></ChatAside>
+            <ChatMessage role="human" name="marcio" intent="steer" content="Also check the migration renames the column, not just the index." startedAt={Date.now() - 6_000} deliveredAt={null}
+              pendingReason={<>Lands after <b>Bash</b> finishes.</>} onInterrupt={() => undefined} />
+            <Label>queued with nothing running — the agent is thinking or writing</Label>
+            <ChatMessage role="human" name="marcio" intent="steer" content="Keep the jitter injectable." startedAt={Date.now() - 3_000} deliveredAt={null}
+              pendingReason="Lands at the agent's next step." onInterrupt={() => undefined} />
+            <Label>(b) taken — read after Bash, placed where it was read, between that call and the next</Label>
+            <ChatAside><ToolCallCard name="bash" status="completed" args={{ command: "bun test src/integrations/github" }} startedAt={at(1_800_000)} endedAt={at(1_836_000)} /></ChatAside>
+            <ChatMessage role="human" name="marcio" intent="steer" content="Also check the migration renames the column, not just the index." startedAt={at(1_800_000 + 5_000)} deliveredAt={at(1_836_300)} read readAfter="Bash" />
+            <ChatAside><ToolCallCard name="read" status="completed" args={{ path: "migrations/060_rename.sql" }} startedAt={at(1_838_000)} endedAt={at(1_838_100)} /></ChatAside>
+            <Label>(c) a harness that reads only between turns</Label>
+            <ChatMessage role="human" name="marcio" intent="steer" content="Also check the migration renames the column, not just the index." startedAt={Date.now() - 6_000} deliveredAt={null}
+              pendingReason="This agent reads messages only between turns — lands when this turn ends." onInterrupt={() => undefined} />
+            <Label>paused · starting</Label>
+            <ChatMessage role="human" name="marcio" intent="steer" content="Use the staging database for this one." startedAt={Date.now() - 60_000} deliveredAt={null} pendingReason="Lands when the run resumes." />
+            <ChatMessage role="human" name="marcio" intent="steer" content="Start from the failing test." startedAt={Date.now() - 4_000} deliveredAt={null} pendingReason="Lands when the agent starts." />
+            <Label>failed — danger line, Retry</Label>
+            <ChatMessage role="human" name="marcio" intent="steer" content="Also check the migration renames the column." startedAt={at(1_900_000)} deliveredAt={null}
+              failed="the run finished before the agent read it" onRetry={() => undefined} />
+            <Label>delivered by an older lux — handed over, no read time</Label>
+            <ChatMessage role="human" name="marcio" intent="steer" content="Also check the migration renames the column." startedAt={at(1_900_000)} deliveredAt={at(1_940_000)} />
+            <Label>composer hint, following the same capability</Label>
+            <div style={{ border: "1px solid var(--ds-color-border-subtle)", borderRadius: "var(--ds-radius-control)", overflow: "hidden" }}>
+              <ChatComposer running canInterrupt landsHint="Lands after the current tool" onSubmit={() => undefined} />
+            </div>
+            <div style={{ border: "1px solid var(--ds-color-border-subtle)", borderRadius: "var(--ds-radius-control)", overflow: "hidden" }}>
+              <ChatComposer running canInterrupt landsHint="Lands at the agent's next step" onSubmit={() => undefined} />
+            </div>
+            <div style={{ border: "1px solid var(--ds-color-border-subtle)", borderRadius: "var(--ds-radius-control)", overflow: "hidden" }}>
+              <ChatComposer running canInterrupt landsHint="Lands when the turn ends" onSubmit={() => undefined} />
+            </div>
           </Col>
         </Panes>
       </Block>
@@ -444,7 +487,7 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
       <Block
         id="ch-composer"
         title="ChatComposer"
-        note="The two ways a human intervenes are distinct on four channels: frame tint, hint text, button label and button icon. Answer is attention-toned with the question quoted above and one-click options; Enter submits because the agent is waiting. Steer is accent-toned, says plainly that it interrupts the current turn, and needs ⌘/Ctrl+Enter — an accidental interrupt costs a turn."
+        note="The two ways a human intervenes are distinct on four channels: frame tint, hint text, button label and button icon. Answer is attention-toned with the question quoted above and one-click options; Enter submits because the agent is waiting. Steer is accent-toned and says where it lands; Enter sends it, because it waits for the agent's next step rather than stopping anything. Interrupt now, which stops the turn, is a deliberate tick."
       >
         <Panes mode={mode} surface>
           <Col>
@@ -481,7 +524,7 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
       <Block
         id="ch-transcript"
         title="ChatTranscript — live scenario"
-        note="The whole thing, played back: a task arrives, the orchestrator thinks (a ThinkingBlock streams above its first message), writes a plan, delegates to an investigator (nested), delegates to an implementer whose bash call runs long and then fails with a capped output and exit 1, hits a 429 and backs off twice, recovers, then asks you a question. Answer it in the composer to let it finish; steer it while it runs — the steer shows as queued until the current turn ends. Scroll up mid-stream: the view stops following and offers 'Jump to latest' with a count. The tool 'slow' threshold is 6s here (20s in the product) so the state is reachable."
+        note="The whole thing, played back: a task arrives, the orchestrator thinks (a ThinkingBlock streams above its first message), writes a plan, delegates to an investigator (nested), delegates to an implementer whose bash call runs long and then fails with a capped output and exit 1, hits a 429 and backs off twice, recovers, then asks you a question. Answer it in the composer to let it finish; steer it while it runs — the steer shows as queued until the agent's next step reads it, then moves to where it was read. Scroll up mid-stream: the view stops following and offers 'Jump to latest' with a count. The tool 'slow' threshold is 6s here (20s in the product) so the state is reachable."
       >
         <Panes mode={mode}>
           <LiveTranscriptDemo />
@@ -547,7 +590,7 @@ function RealisticTranscript() {
         <ToolCallCard name="bash" status="failed" args={{ command: "bun test apps/control-plane" }} startedAt={at(14_100)} endedAt={at(18_310)} exitCode={1} error="1 failing: retries when response is 502" output={LONG_TEST_OUTPUT_FAILED} />
         <ThinkingBlock text={THOUGHT_2} startedAt={at(18_400)} endedAt={at(29_800)} />
       </Aside>
-      <ChatMessage role="human" name="marcio" intent="steer" content="Keep the jitter, but make it injectable so the tests can seed it." startedAt={at(20_000)} deliveredAt={at(29_800)} />
+      <ChatMessage role="human" name="marcio" intent="steer" content="Keep the jitter, but make it injectable so the tests can seed it." startedAt={at(20_000)} deliveredAt={at(29_800)} read />
       <ChatMessage role="implementer" model="claude-opus-4" content={MSG_3} startedAt={at(29_800)} endedAt={at(33_000)} costUsd={null} contextTokens={52_800} contextWindowTokens={CONTEXT_WINDOW} outputTokens={380} />
       <Aside>
         <ToolCallCard name="edit" status="completed" args={{ file_path: "apps/control-plane/src/integrations/github/client.ts" }} startedAt={at(33_100)} endedAt={at(33_109)} />
@@ -842,7 +885,7 @@ function TurnNode({ turn, depth }: { readonly turn: ScenarioTurn; readonly depth
   if (turn.kind === "question" && turn.role !== "human" && turn.role !== "system") {
     return <QuestionCard role={turn.role} text={turn.text} options={turn.options} askedAt={turn.startedAt} answeredAt={turn.answeredAt} isNew />;
   }
-  if (turn.kind === "human") return <ChatMessage role="human" name={turn.name} intent={turn.intent} inReplyTo={turn.inReplyTo} content={turn.text} startedAt={turn.startedAt} deliveredAt={turn.deliveredAt} isNew />;
+  if (turn.kind === "human") return <ChatMessage role="human" name={turn.name} intent={turn.intent} inReplyTo={turn.inReplyTo} content={turn.text} startedAt={turn.startedAt} deliveredAt={turn.deliveredAt} read={turn.read} isNew />;
   if (turn.role === "human" || turn.role === "system") return null;
   const streaming = turn.activity === "streaming";
   const thought = turn.thought;

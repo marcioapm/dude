@@ -4,7 +4,11 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
+	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -73,6 +77,160 @@ func TestASubmitWithARegistryLuxWouldRefuseIsRefused(t *testing.T) {
 			t.Errorf("%q: refused: %v", registry, err)
 		case !ok && (!refused || le.Status != http.StatusUnprocessableEntity || le.Code != "invalid_spec"):
 			t.Errorf("%q: err = %v, want 422 invalid_spec", registry, err)
+		}
+	}
+}
+
+// submitRun serves fake and submits one opencode Run to it.
+func submitRun(t *testing.T, fake *Server) (*lux.HTTPClient, lux.Run) {
+	t.Helper()
+	srv := httptest.NewServer(fake.Handler())
+	t.Cleanup(srv.Close)
+	c := lux.New(srv.URL, "k")
+	run, err := c.Submit(context.Background(), lux.Spec{Workload: lux.Workload{Adapter: "opencode", Prompt: "go"}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c, run
+}
+
+// awaitRun polls the Run under the fake's lock for 5 s until cond holds,
+// and fails the test with failure if it never does.
+func awaitRun(t *testing.T, fake *Server, id, failure string, cond func(*Run) bool) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		fake.mu.Lock()
+		ok := cond(fake.runs[id])
+		fake.mu.Unlock()
+		if ok {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal(failure)
+		}
+	}
+}
+
+// inputWorkers counts goroutines holding gated input (InputGate).
+func inputWorkers() int {
+	buf := make([]byte, 1<<22)
+	return strings.Count(string(buf[:runtime.Stack(buf, true)]), "fakelux.(*Server).input.func")
+}
+
+// Input held on a gate that is never opened is dropped when the fake
+// closes: no worker outlives it.
+func TestClosingTheFakeReleasesGatedInput(t *testing.T) {
+	fake := New("", "k", func(map[string]any) Behaviour { return Behaviour{Reply: "Done."} })
+	fake.InputGate = make(chan struct{})
+	c, run := submitRun(t, fake)
+	awaitRun(t, fake, run.ID, "the first turn never ended", func(r *Run) bool { return r.turnsEnded == 1 })
+	if err := c.Input(context.Background(), run.ID, "more", "req_1", false); err != nil {
+		t.Fatal(err)
+	}
+	if n := inputWorkers(); n != 1 {
+		t.Fatalf("%d gated workers, want 1", n)
+	}
+	fake.Close()
+	for deadline := time.Now().Add(2 * time.Second); inputWorkers() > 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d gated workers after Close", inputWorkers())
+		}
+	}
+}
+
+// inputReceipts is each input record of the Run for requestID, in order:
+// lux.input's phase, "consumed" (lux.input.consumed) or "failed"
+// (lux.input.failed); an older lux's phase-less lux.input is "handoff", or
+// "error" when it carries one.
+func inputReceipts(s *Server, id, requestID string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []string
+	for _, r := range s.runs[id].records {
+		data, _ := r.Event["data"].(map[string]any)
+		if data["requestId"] != requestID {
+			continue
+		}
+		switch r.Event["type"] {
+		case lux.RecordInput:
+			phase, _ := data["phase"].(string)
+			switch {
+			case phase != "":
+				out = append(out, phase)
+			case data["error"] != nil:
+				out = append(out, "error")
+			default:
+				out = append(out, "handoff")
+			}
+		case lux.RecordInputConsumed:
+			out = append(out, "consumed")
+		case lux.RecordInputFailed:
+			out = append(out, "failed")
+		}
+	}
+	return out
+}
+
+func cancelledTurns(s *Server, id string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, r := range s.runs[id].records {
+		data, _ := r.Event["data"].(map[string]any)
+		if r.Event["type"] == "acp.turn_end" && data["stopReason"] == "cancelled" {
+			n++
+		}
+	}
+	return n
+}
+
+// A steer the harness took while a tool ran, then an interrupt with no
+// text: lux now carries the steer into the next turn, where it is read
+// once; an older lux fails it. In both input contracts: a legacy lux hands
+// the steer over (or fails it) with one phase-less lux.input.
+func TestAnInterruptCarriesAnUnreadSteerIntoTheNextTurn(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		for _, old := range []bool{false, true} {
+			name := map[bool]string{false: "receipts", true: "legacy"}[legacy] + "/" + map[bool]string{false: "carries", true: "older lux fails it"}[old]
+			t.Run(name, func(t *testing.T) {
+				fake := New("", "k", func(map[string]any) Behaviour {
+					return Behaviour{Hang: true, Tools: []string{"bash"}, KeepToolsOpen: true}
+				})
+				fake.LegacyInput = legacy
+				fake.FailUnreadOnInterrupt = old
+				c, run := submitRun(t, fake)
+				awaitRun(t, fake, run.ID, "the tool never started", func(r *Run) bool { return len(r.openTools) == 1 })
+				if err := c.Input(context.Background(), run.ID, "check the migration", "dir_a", false); err != nil {
+					t.Fatal(err)
+				}
+				if err := c.Input(context.Background(), run.ID, "", "dir_b", true); err != nil {
+					t.Fatal(err)
+				}
+				got, inputs := inputReceipts(fake, run.ID, "dir_a"), fake.Runs()[0].Inputs
+				var want, wantInputs []string
+				switch {
+				case legacy && old:
+					want = []string{"error"}
+				case legacy:
+					want, wantInputs = []string{"handoff"}, []string{"check the migration"}
+				case old:
+					want = []string{"accepted", "failed"}
+				default:
+					want, wantInputs = []string{"accepted", "consumed"}, []string{"check the migration"}
+				}
+				if !slices.Equal(got, want) || !slices.Equal(inputs, wantInputs) {
+					t.Errorf("receipts %v inputs %q, want %v %q", got, inputs, want, wantInputs)
+				}
+				if r := inputReceipts(fake, run.ID, "dir_b"); len(r) != 0 {
+					t.Errorf("an interrupt alone got receipts %v", r)
+				}
+				if r := fake.Runs()[0]; r.Interrupted != 1 {
+					t.Errorf("interrupted=%d, want one", r.Interrupted)
+				}
+				if n := cancelledTurns(fake, run.ID); n != 1 {
+					t.Errorf("%d cancelled turns, want 1", n)
+				}
+			})
 		}
 	}
 }

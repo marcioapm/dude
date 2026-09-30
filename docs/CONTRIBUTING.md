@@ -117,10 +117,51 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   signals the workflow only for what the classifier deems actionable — a
   change request or a failing check. Merged → task `done`; closed →
   `aborted`.
-- **Steering** goes to the agent as a message. OpenCode (ACP) cannot take a
-  message mid-turn, so lux holds it until the turn ends; `interrupt: true`
-  stops the turn so it is heard now. A directive is `sent` when lux has it
-  and `delivered` when the agent does.
+- **Steering** goes to the agent as a message, read at its next step: the
+  harness takes it while a tool runs and the model reads it before its
+  next call, in the same turn, without cancelling the tool. A harness that
+  reads messages only between turns takes it when the turn ends.
+  `interrupt: true` stops the turn so it is heard now; it is only ever a
+  person's explicit choice. lux answers each input once with a `lux.input`
+  record, `{requestId, phase: "accepted", lands, receipt, text?}` or
+  `{requestId, phase: "failed", error}` (never accepted); what follows an
+  acceptance has record types of its own, `lux.input.consumed
+  {requestId}` (only when `receipt`) or `lux.input.failed {requestId,
+  error}`, so a reader of `lux.input` alone sees one answer per input. An
+  older lux writes one `lux.input` with no phase, on handoff (`text`) or
+  with an `error`. A directive is `sent` when lux has it, `accepted` when
+  the harness took it (`run.directive.accepted`, with `lands`:
+  `next_step` or `next_turn`), and `delivered` when the agent's step has
+  it (`run.directive.delivered`, from `lux.input.consumed`; at once for an
+  acceptance with `receipt: false`). An older lux's handoff counts as
+  delivered. `failed` (`run.directive.failed`, with lux's `error`) is a
+  steer lux says will not reach the agent. Each is recorded once per
+  directive and Run. Precedence: delivered is final, and
+  a later failure changes nothing; a failure is final against `accepted`;
+  a read receipt (or an older lux's handoff) after a failure wins, since it
+  is the agent's own report that it has the words: the failure and its
+  error are cleared and `run.directive.delivered` is written.
+  "Interrupt now" on a queued steer is a directive superseding it with the
+  same words and `interrupt: true`. Its `resends` names the root
+  instruction (an Interrupt now on an Interrupt now names the first), so
+  repeated clicks are one instruction. Whether it carries the words is
+  decided at its first send attempt and then fixed (`interrupt_only`), so
+  every retry sends the same request: if a directive carrying the words is
+  with lux and not failed, lux is sent the interrupt alone; if the root
+  failed or was never sent, the interrupt carries the words, and the agent
+  hears them once. lux sends no receipt for an interrupt alone: it is
+  delivered in the same transaction as the directive carrying its words
+  (consumed, or a legacy handoff), or when sent if that one was already
+  read, each time with `run.directive.delivered` `{interruptOnly: true}`
+  (never `read`). If the words fail and no directive left carries them, the
+  interrupt fails with the same error, one `run.directive.failed` each. lux
+  carries steers an interrupt left unread into the next turn, under the same
+  request ids, so the root is normally consumed in the turn after the
+  interrupt; they fail only when the Run stops or the harness errors. An
+  older lux fails them on the cancel: the root fails, the interrupt fails
+  with it, and the transcript shows one failed steer with Retry. The
+  transcript folds every attempt into the root's turn, at the position and
+  time it was read, even when the click came after the read.
 - **Pause** stops the lux Run, keeping its workspace and session; **resume**
   continues it, on any host, with the agent's conversation intact.
 - **Parking.** dude pauses a Run itself (`runs.dude_pause`) so that one

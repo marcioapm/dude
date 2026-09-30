@@ -56,8 +56,32 @@ export const EventTypes = {
 
   // Human intervention on a Run (plan §24)
   RunSteered: "run.steered",
-  /** A steer reached the agent. Payload: `{ directiveId }`. */
+  /**
+   * The harness took a steer. Payload: `{ directiveId, lands, receipt }`:
+   * `lands` is `next_step` (the agent reads it at its next model step, in
+   * this turn) or `next_turn` (only once the turn ends); `receipt` says
+   * whether a delivery follows when it is read. Absent from an older lux.
+   */
+  DirectiveAccepted: "run.directive.accepted",
+  /**
+   * A steer reached the agent. Payload: `{ directiveId, read?, interruptOnly? }`:
+   * `read` when lux reported the agent's step reading it, so the event's
+   * time and place in the ledger are where it was read; without it (an
+   * older lux, a harness with no read receipt) it was handed over then.
+   * `interruptOnly`: an "Interrupt now" sent as the interrupt alone, settled
+   * with the steer whose words it resends (in the same transaction, or when
+   * sent if they were already read); it is not a second read.
+   */
   DirectiveDelivered: "run.directive.delivered",
+  /**
+   * A steer will not reach the agent. Payload: `{ directiveId, error }`.
+   * Never after its delivery; a `DirectiveDelivered` after it (the agent
+   * read it after all) supersedes it, and the failure is cleared. An
+   * "Interrupt now" sent as the interrupt alone fails with the steer whose
+   * words it resends, with the same error (an older lux fails that steer
+   * when the interrupt cancels its turn).
+   */
+  DirectiveFailed: "run.directive.failed",
   RunPaused: "run.paused",
   RunResumed: "run.resumed",
 
@@ -133,7 +157,8 @@ export const EventTypes = {
   AgentThought: "agent.thought",
   /**
    * The task, as the agent received it — recorded when the agent takes it,
-   * not when dude sends it. Payload: `{ text }`.
+   * not when dude sends it. Payload: `{ text, truncated?, lands? }`; `lands`
+   * is where this harness takes a steer (see `DirectiveAccepted`).
    */
   PromptDelivered: "agent.prompt.delivered",
   /**
