@@ -624,7 +624,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         // Delivered the way a steer is: queued until the agent takes it.
         const directiveId = typeof payload.directiveId === "string" ? payload.directiveId : null;
         const turn = { ...humanTurn(event, "answer", String(payload.answer ?? ""), directiveId ? null : event.occurredAt), directiveId };
-        if (directiveId) state.steersByDirective.set(directiveId, turn);
+        if (directiveId !== null) state.steersByDirective.set(directiveId, turn);
         turns.push(turn);
         break;
       }
