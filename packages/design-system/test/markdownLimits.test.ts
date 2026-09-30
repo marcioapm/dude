@@ -139,7 +139,7 @@ describe("the nesting bound does not leak between paths that reach the same text
   const inner = (blocks: readonly Block[]) => {
     const p = blocks[0];
     if (p?.t !== "paragraph") throw new Error("expected a paragraph");
-    return p.c;
+    return [...p.c];
   };
 
   test.each([1, 2, 16, 31, 32])("%i nested links read the same after an unmatched star", (n) => {
