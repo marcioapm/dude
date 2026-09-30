@@ -1902,6 +1902,30 @@ func TestASteerSentAsTheTurnEndsIsDeliveredBeforeTheRunFinishes(t *testing.T) {
 	}
 }
 
+// "Interrupt now" on a queued steer re-sends it to be heard at once, as a
+// directive superseding it with the same words: the turn stops, the agent
+// hears the text once, and both count as delivered with it.
+func TestInterruptNowOnAQueuedSteerIsHeardOnce(t *testing.T) {
+	w := newWorld(t)
+	wi := w.task()
+	runID := w.steerDuringTool(wi)
+	w.until("the harness to take it", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE id = 'dir_s' AND accepted_at IS NOT NULL`) == 1
+	})
+	code, out := w.call("/internal/runs/"+runID+"/steer", map[string]any{
+		"text": "check the migration too", "supersedes": "dir_s", "interrupt": true})
+	if code != http.StatusCreated {
+		t.Fatalf("steer: %d %v", code, out)
+	}
+	w.until("both to be delivered", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND delivered_at IS NOT NULL`, runID) == 2
+	})
+	r := w.lux.Runs()[0]
+	if r.Interrupted != 1 || len(r.Inputs) != 1 || r.Inputs[0] != "check the migration too" {
+		t.Errorf("interrupted=%d inputs=%v, want one interrupt and the text once", r.Interrupted, r.Inputs)
+	}
+}
+
 func TestPauseKeepsTheRunAndResumeContinuesIt(t *testing.T) {
 	w := newWorld(t)
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour {

@@ -1191,10 +1191,20 @@ func (s *Syncer) deliverDirectives(ctx context.Context, r phaseRun) (bool, error
 	type directive struct {
 		ID, Text  string
 		Interrupt bool
+		// This re-sends, to be heard now, a directive lux already holds and
+		// the agent has not read (Interrupt now): lux is asked only to stop
+		// the turn, so the agent hears the text once. Echoes: the directive
+		// it would re-send, when that is still unsent (sent in this loop).
+		Resends bool
+		Echoes  string
 	}
 	var pending []directive
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT id, text, interrupt FROM directives WHERE run_id = $1 AND sent_at IS NULL ORDER BY created_at`, r.ID)
+		rows, err := tx.Query(ctx, `SELECT d.id, d.text, d.interrupt,
+				d.interrupt AND COALESCE(s.sent_at IS NOT NULL AND s.delivered_at IS NULL AND s.failed_at IS NULL AND s.text = d.text, false),
+				CASE WHEN d.interrupt AND s.sent_at IS NULL AND s.text = d.text THEN s.id ELSE '' END
+			FROM directives d LEFT JOIN directives s ON s.id = d.supersedes AND s.run_id = d.run_id
+			WHERE d.run_id = $1 AND d.sent_at IS NULL ORDER BY d.created_at`, r.ID)
 		if err != nil {
 			return err
 		}
@@ -1203,10 +1213,15 @@ func (s *Syncer) deliverDirectives(ctx context.Context, r phaseRun) (bool, error
 	}); err != nil || len(pending) == 0 {
 		return false, err
 	}
+	sent := map[string]bool{}
 	for _, d := range pending {
+		text := d.Text
+		if d.Resends || sent[d.Echoes] {
+			text = ""
+		}
 		// The directive id is the request id, so a retried send is delivered
 		// once.
-		if err := s.Lux.Input(ctx, r.LuxRunID, d.Text, d.ID, d.Interrupt); err != nil {
+		if err := s.Lux.Input(ctx, r.LuxRunID, text, d.ID, d.Interrupt); err != nil {
 			return true, s.retryLater(ctx, r, err)
 		}
 		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
@@ -1215,6 +1230,7 @@ func (s *Syncer) deliverDirectives(ctx context.Context, r phaseRun) (bool, error
 		}); err != nil {
 			return true, err
 		}
+		sent[d.ID] = true
 	}
 	return true, nil
 }

@@ -830,10 +830,13 @@ func (s *Server) input(w http.ResponseWriter, r *http.Request) {
 	// A busy agent: lux (the harness) takes input at once and the agent
 	// reads it at its next step (FinishTools, or the turn's end). A legacy
 	// lux, as its ACP adapter did, holds it until the turn ends and
-	// acknowledges it only then.
-	run.queued = append(run.queued, queuedInput{text: in.Text, requestID: in.RequestID})
-	if run.busy && run.State == "running" {
-		s.accept(run, &run.queued[len(run.queued)-1])
+	// acknowledges it only then. An interrupt with no text only stops the
+	// turn, as lux's interrupt message does: nothing to deliver.
+	if in.Text != "" {
+		run.queued = append(run.queued, queuedInput{text: in.Text, requestID: in.RequestID})
+		if run.busy && run.State == "running" {
+			s.accept(run, &run.queued[len(run.queued)-1])
+		}
 	}
 	if in.Interrupt && run.busy && run.State == "running" {
 		// The turn is cancelled, and the agent is free to hear it.
