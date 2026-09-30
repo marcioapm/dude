@@ -514,28 +514,183 @@ func TestCheckRunsCountAndTheWorstWins(t *testing.T) {
 	}
 }
 
-// A token without Checks: read still reads the pull request, but never
-// as passing: there may be CI it cannot see.
-func TestCheckRunsItCannotReadAreNone(t *testing.T) {
+// checksServer answers a pull request whose head has the given combined
+// status, and whose check-runs listing is answered by runs(page).
+func checksServer(t *testing.T, status string, runs func(w http.ResponseWriter, page string)) *GitHub {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/repos/acme/api/pulls/1":
+		switch r.URL.Path {
+		case "/repos/acme/api/pulls/1":
 			fmt.Fprint(w, `{"number":1,"state":"open","head":{"sha":"abc"}}`)
-		case r.URL.Path == "/repos/acme/api/commits/abc/status":
-			fmt.Fprint(w, `{"state":"success","total_count":1}`)
-		case r.URL.Path == "/repos/acme/api/commits/abc/check-runs":
-			w.WriteHeader(403)
-			fmt.Fprint(w, `{"message":"Resource not accessible by personal access token"}`)
-		case r.URL.Path == "/repos/acme/api/pulls/1/reviews":
-			fmt.Fprint(w, `[]`)
+		case "/repos/acme/api/commits/abc/status":
+			fmt.Fprint(w, status)
+		case "/repos/acme/api/commits/abc/check-runs":
+			runs(w, r.URL.Query().Get("page"))
+		case "/repos/acme/api/pulls/1/reviews":
+			fmt.Fprint(w, `[{"user":{"login":"alice"},"state":"APPROVED"}]`)
+		case "/graphql":
+			fmt.Fprint(w, `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}`)
+		case "/repos/acme/api/compare/...abc":
+			fmt.Fprint(w, `{"behind_by":0}`)
 		default:
 			w.WriteHeader(404)
 		}
 	}))
-	defer srv.Close()
-	st, err := NewGitHub(Credential{Auth: "pat", Secret: "x", APIBaseURL: srv.URL}).PullRequest(context.Background(), "acme/api", 1)
-	if err != nil || st.Checks != ChecksPending {
+	t.Cleanup(srv.Close)
+	return NewGitHub(Credential{Auth: "pat", Secret: "ghp_secret_token", APIBaseURL: srv.URL})
+}
+
+func forbidden(w http.ResponseWriter) {
+	w.WriteHeader(403)
+	fmt.Fprint(w, `{"message":"Resource not accessible by personal access token"}`)
+}
+
+const codeRabbitPassed = `{"state":"success","total_count":1,"statuses":[{"context":"CodeRabbit","state":"success"}]}`
+
+// A token without Checks: read still reads the pull request, but never as
+// passing: there may be CI it cannot see. The list says why, beside every
+// check it could read, and the entry saying so is no check that failed.
+func TestCheckRunsItCannotReadArePendingAndSayWhy(t *testing.T) {
+	for _, tc := range []struct {
+		name, status string
+		runs         func(w http.ResponseWriter, page string)
+		checks       string
+		actual       []string // the real checks read, by name
+		failed       []string
+	}{
+		{name: "no statuses", status: `{"state":"pending","total_count":0}`,
+			runs: func(w http.ResponseWriter, _ string) { forbidden(w) }, checks: ChecksPending},
+		{name: "a successful subset", status: codeRabbitPassed,
+			runs: func(w http.ResponseWriter, _ string) { forbidden(w) }, checks: ChecksPending, actual: []string{"CodeRabbit"}},
+		{name: "a real failure", status: `{"state":"failure","total_count":1,"statuses":[{"context":"lint","state":"failure"}]}`,
+			runs: func(w http.ResponseWriter, _ string) { forbidden(w) }, checks: ChecksFailing, actual: []string{"lint"}, failed: []string{"lint"}},
+		{name: "refused on a later page", status: codeRabbitPassed, runs: func(w http.ResponseWriter, page string) {
+			if page == "2" {
+				forbidden(w)
+				return
+			}
+			fmt.Fprint(w, `{"total_count":2,"check_runs":[{"id":5,"name":"backend","status":"completed","conclusion":"success"}]}`)
+		}, checks: ChecksPending, actual: []string{"CodeRabbit", "backend"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st, err := checksServer(t, tc.status, tc.runs).PullRequest(context.Background(), "acme/api", 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if st.Checks != tc.checks {
+				t.Errorf("checks = %s, want %s", st.Checks, tc.checks)
+			}
+			if d := CheckDiagnostic(st.CheckList); d != CheckRunsForbidden {
+				t.Errorf("diagnostic = %q in %+v", d, st.CheckList)
+			}
+			var actual, failed []string
+			for _, c := range st.CheckList {
+				if c.Diagnostic != "" {
+					if c.Status != CheckUnavailable || c.Conclusion != "" || c.RunID != 0 || c.App != "" || c.URL != "" || c.Failed() {
+						t.Errorf("the diagnostic reads as a check: %+v", c)
+					}
+					continue
+				}
+				actual = append(actual, c.Name)
+				if c.Failed() {
+					failed = append(failed, c.Name)
+				}
+			}
+			if fmt.Sprint(actual) != fmt.Sprint(tc.actual) || fmt.Sprint(failed) != fmt.Sprint(tc.failed) {
+				t.Errorf("checks read %v failed %v, want %v failed %v", actual, failed, tc.actual, tc.failed)
+			}
+			if Ready(st) {
+				t.Error("ready with check runs unreadable")
+			}
+			blockers := strings.Join(Blockers(st), "; ")
+			if !strings.Contains(blockers, "Checks: Read") || strings.Contains(blockers, "running") {
+				t.Errorf("blockers = %q", blockers)
+			}
+			if (tc.checks == ChecksFailing) != strings.Contains(blockers, "checks are failing") {
+				t.Errorf("blockers = %q", blockers)
+			}
+		})
+	}
+}
+
+// Access restored: the next read has no diagnostic, and its checks decide.
+func TestCheckRunsReadableAgainClearTheDiagnostic(t *testing.T) {
+	var denied atomic.Bool
+	denied.Store(true)
+	g := checksServer(t, codeRabbitPassed, func(w http.ResponseWriter, _ string) {
+		if denied.Load() {
+			forbidden(w)
+			return
+		}
+		fmt.Fprint(w, `{"total_count":1,"check_runs":[{"id":5,"name":"backend","status":"completed","conclusion":"success"}]}`)
+	})
+	if st, err := g.PullRequest(context.Background(), "acme/api", 1); err != nil || CheckDiagnostic(st.CheckList) == "" {
+		t.Fatalf("denied: %+v %v", st, err)
+	}
+	denied.Store(false)
+	st, err := g.PullRequest(context.Background(), "acme/api", 1)
+	if err != nil || st.Checks != ChecksPassing || CheckDiagnostic(st.CheckList) != "" || len(st.CheckList) != 2 {
+		t.Fatalf("restored: %+v %v", st, err)
+	}
+	if !Ready(st) {
+		t.Errorf("not ready once readable and green: %v", Blockers(st))
+	}
+}
+
+// A 403 GitHub marks as a rate limit only by its headers is a rate limit:
+// the sync fails, to be tried again, and no diagnostic is recorded.
+func TestAHeaderOnlyRateLimitOnCheckRunsFailsTheSync(t *testing.T) {
+	for name, header := range map[string][2]string{
+		"Retry-After":    {"Retry-After", "60"},
+		"none remaining": {"X-RateLimit-Remaining", "0"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := checksServer(t, codeRabbitPassed, func(w http.ResponseWriter, _ string) {
+				w.Header().Set(header[0], header[1])
+				w.WriteHeader(403)
+				fmt.Fprint(w, `{"message":"You have been blocked"}`)
+			}).PullRequest(context.Background(), "acme/api", 1)
+			var e *Error
+			if !errors.As(err, &e) || !Transient(err) || !strings.Contains(e.Message, "You have been blocked") ||
+				strings.Contains(err.Error(), "ghp_secret_token") {
+				t.Fatalf("err = %v, want a transient error keeping GitHub's message", err)
+			}
+		})
+	}
+}
+
+// GitHub Enterprise without Actions has no check-runs endpoint: the
+// statuses are the whole reading, with nothing said to be unreadable.
+func TestNoCheckRunsEndpointIsNoCheckRuns(t *testing.T) {
+	st, err := checksServer(t, codeRabbitPassed, func(w http.ResponseWriter, _ string) { w.WriteHeader(404) }).
+		PullRequest(context.Background(), "acme/api", 1)
+	if err != nil || st.Checks != ChecksPassing || CheckDiagnostic(st.CheckList) != "" || len(st.CheckList) != 1 {
 		t.Fatalf("status %+v, err %v", st, err)
+	}
+}
+
+// Losing sight of check runs is not a failure an agent could fix, nor a
+// change in readiness; a real failure beside it still is, and names only
+// the real check.
+func TestUnreadableCheckRunsWakeNobody(t *testing.T) {
+	diag := Check{Name: "GitHub check runs", Status: CheckUnavailable, Diagnostic: CheckRunsForbidden}
+	was := Status{PullRequestRef: PullRequestRef{State: StateOpen}, Checks: ChecksPending, Review: ReviewApproved}
+	now := was
+	now.CheckList = []Check{{Name: "CodeRabbit", Status: "completed", Conclusion: "success"}, diag}
+	if s := Classify(was, now, nil, nil); s != nil {
+		t.Errorf("denied read signalled %+v", s)
+	}
+	now.Checks = ChecksFailing
+	now.CheckList = append(now.CheckList, Check{Name: "lint", Status: "completed", Conclusion: "failure"})
+	s := Classify(was, now, nil, nil)
+	if s == nil || s.Kind != "actionable" || len(s.Feedback) != 1 || len(s.Feedback[0].Checks) != 1 || s.Feedback[0].Checks[0].Name != "lint" {
+		t.Errorf("real failure beside a denied read: %+v", s)
+	}
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { requests.Add(1) }))
+	defer srv.Close()
+	n, err := NewGitHub(Credential{Secret: "x", APIBaseURL: srv.URL}).RerunFailed(context.Background(), "acme/api", []Check{diag})
+	if n != 0 || err != nil || requests.Load() != 0 {
+		t.Errorf("re-ran %d (%v) with %d requests for a diagnostic", n, err, requests.Load())
 	}
 }
 

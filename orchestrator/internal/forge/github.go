@@ -103,10 +103,31 @@ type Check struct {
 	// The app that reported it: "github-actions" for Actions, whose check
 	// run is a job, re-run through the Actions API.
 	App string `json:"app,omitempty"`
+	// Set only on an entry that is not a check but a source dude could not
+	// read (CheckRunsForbidden). Its Status is CheckUnavailable, which
+	// readers without this field take as pending: blocking, never failed.
+	Diagnostic string `json:"diagnostic,omitempty"`
 }
+
+// CheckRunsForbidden: GitHub refused the check-runs listing (403, not a
+// rate limit). CI may exist that the token cannot see.
+const (
+	CheckRunsForbidden = "check_runs_forbidden"
+	CheckUnavailable   = "unavailable"
+)
 
 // Failed says the check finished and failed: what wakes a fixer.
 func (c Check) Failed() bool { return checkRunState(c.Status, c.Conclusion) == ChecksFailing }
+
+// CheckDiagnostic is the first diagnostic code in a check list, or "".
+func CheckDiagnostic(checks []Check) string {
+	for _, c := range checks {
+		if c.Diagnostic != "" {
+			return c.Diagnostic
+		}
+	}
+	return ""
+}
 
 // Review is one reviewer's latest word on a pull request: APPROVED,
 // CHANGES_REQUESTED, COMMENTED, DISMISSED, or REQUESTED for one asked and
@@ -307,13 +328,20 @@ func (g *GitHub) CheckPushAccess(ctx context.Context, repository string) error {
 		message = "Git receive-pack discovery failed"
 	}
 	refusal := &Error{Status: res.StatusCode, Message: message}
-	if res.StatusCode == http.StatusForbidden && (res.Header.Get("Retry-After") != "" || res.Header.Get("X-RateLimit-Remaining") == "0") {
-		refusal.Message = "Git receive-pack discovery rate limit: " + message
-	}
+	markRateLimit(refusal, res.Header, "Git receive-pack discovery rate limit: ")
 	if !Transient(refusal) && (res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden) {
 		refusal.Message = "Git push access denied: grant Contents: Read and write to the fine-grained PAT for this repository (classic PAT: repo or public_repo), and check repository selection, owner access and organization approval/SSO"
 	}
 	return refusal
+}
+
+// markRateLimit makes a 403 that GitHub marks as a rate limit only by its
+// headers (a secondary limit's Retry-After, or no requests remaining)
+// Transient, keeping GitHub's message after the prefix.
+func markRateLimit(e *Error, h http.Header, prefix string) {
+	if e.Status == http.StatusForbidden && (h.Get("Retry-After") != "" || h.Get("X-RateLimit-Remaining") == "0") {
+		e.Message = prefix + e.Message
+	}
 }
 
 func (g *GitHub) do(ctx context.Context, method, path string, body, out any) error {
@@ -360,7 +388,9 @@ func (g *GitHub) doURL(ctx context.Context, method, target string, body, out any
 		if e.Message == "" {
 			e.Message = fmt.Sprintf("%s %s failed", method, target)
 		}
-		return &Error{Status: res.StatusCode, Message: e.Message}
+		refusal := &Error{Status: res.StatusCode, Message: e.Message}
+		markRateLimit(refusal, res.Header, "rate limit: ")
+		return refusal
 	}
 	if out != nil && len(data) > 0 {
 		return json.Unmarshal(data, out)
@@ -497,8 +527,9 @@ func mergeable(ok *bool, state string, behindBy int) string {
 // such endpoint (404): no check runs. A token without Checks: read is
 // refused (403): there may be CI it cannot see, so the checks are never
 // read as passing — pending, which holds readiness back without waking a
-// fixer; the token needs Checks: read. A rate limit is also a 403, and is
-// neither: it fails the sync, to be tried again.
+// fixer — and the list says why with a CheckRunsForbidden entry beside the
+// checks it could read. A rate limit is also a 403, and is neither: it
+// fails the sync, to be tried again.
 func (g *GitHub) checks(ctx context.Context, slug, sha string) (string, []Check, error) {
 	var combined struct {
 		State      string `json:"state"`
@@ -546,6 +577,7 @@ func (g *GitHub) checks(ctx context.Context, slug, sha string) (string, []Check,
 		if err != nil && asError(err, &e) && !Transient(err) && (e.NotFound() || e.Status == 403) {
 			if e.Status == 403 {
 				rollup = worseChecks(rollup, ChecksPending)
+				list = append(list, Check{Name: "GitHub check runs", Status: CheckUnavailable, Diagnostic: CheckRunsForbidden})
 			}
 			break
 		}

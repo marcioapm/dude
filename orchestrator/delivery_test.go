@@ -3086,6 +3086,118 @@ func TestPullRequestActionsOnAPersonsBehalf(t *testing.T) {
 	}
 }
 
+// storedChecks is the pull request's recorded rollup and check list, as
+// the backend reads them.
+func (w *world) storedChecks(wi string) (string, []forge.Check) {
+	w.t.Helper()
+	var rollup string
+	var raw []byte
+	if err := w.owner.QueryRow(context.Background(), `SELECT checks::text, checks_json FROM pull_requests WHERE task_id = $1`,
+		wi).Scan(&rollup, &raw); err != nil {
+		w.t.Fatal(err)
+	}
+	var list []forge.Check
+	if err := json.Unmarshal(raw, &list); err != nil {
+		w.t.Fatal(err)
+	}
+	return rollup, list
+}
+
+// checksEvents are the task's checks_changed payloads, oldest first.
+func (w *world) checksEvents(wi string) []map[string]any {
+	w.t.Helper()
+	rows, err := w.owner.Query(context.Background(), `SELECT payload FROM events WHERE task_id = $1
+		AND event_type = 'pull_request.checks_changed' ORDER BY cursor`, wi)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	out, err := pgx.CollectRows(rows, pgx.RowTo[map[string]any])
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return out
+}
+
+// Losing, then regaining, sight of check runs while CI stays pending: each
+// is recorded once, for the task's page to read again, and neither wakes
+// the workflow.
+func TestUnreadableCheckRunsAreRecordedAndClearedOnce(t *testing.T) {
+	w := newWorld(t)
+	w.gh.SetChecks("pending")
+	wi := w.reviewing()
+	w.sync()
+	before := len(w.checksEvents(wi))
+	signals := w.count(`SELECT count(*) FROM workflow_signals s JOIN workflow_runs r ON r.id = s.workflow_run_id
+		WHERE r.task_id = $1`, wi)
+
+	w.gh.Set(func(s *fakegithub.Server) { s.CheckRunsForbidden = true })
+	for range 3 {
+		w.sync()
+		w.pump()
+	}
+	rollup, list := w.storedChecks(wi)
+	if rollup != forge.ChecksPending || forge.CheckDiagnostic(list) != forge.CheckRunsForbidden {
+		t.Fatalf("stored %s %+v", rollup, list)
+	}
+	events := w.checksEvents(wi)
+	if len(events) != before+1 {
+		t.Fatalf("%d checks events for a denied read, want 1: %v", len(events)-before, events[before:])
+	}
+	if e := events[before]; e["from"] != "pending" || e["to"] != "pending" || e["diagnostic"] != forge.CheckRunsForbidden ||
+		e["fromDiagnostic"] != nil || e["number"] == nil {
+		t.Errorf("denied event %v", e)
+	}
+
+	w.gh.Set(func(s *fakegithub.Server) { s.CheckRunsForbidden = false })
+	for range 3 {
+		w.sync()
+		w.pump()
+	}
+	rollup, list = w.storedChecks(wi)
+	if rollup != forge.ChecksPending || forge.CheckDiagnostic(list) != "" {
+		t.Fatalf("restored: stored %s %+v", rollup, list)
+	}
+	events = w.checksEvents(wi)
+	if len(events) != before+2 {
+		t.Fatalf("%d checks events after restoring, want 2", len(events)-before)
+	}
+	if e := events[before+1]; e["fromDiagnostic"] != forge.CheckRunsForbidden || e["diagnostic"] != nil {
+		t.Errorf("restored event %v", e)
+	}
+	if n := w.count(`SELECT count(*) FROM workflow_signals s JOIN workflow_runs r ON r.id = s.workflow_run_id
+		WHERE r.task_id = $1`, wi); n != signals {
+		t.Errorf("%d workflow signals for a diagnostic, want none", n-signals)
+	}
+	if s := w.taskStatus(wi); s != "review" || w.fixes(wi) != 0 {
+		t.Errorf("task %s with %d fixes", s, w.fixes(wi))
+	}
+}
+
+// A ready pull request whose check runs become unreadable is ready no
+// more, and merging it is refused with the reason; there is nothing to
+// re-run.
+func TestUnreadableCheckRunsBlockAMergeAndSayWhy(t *testing.T) {
+	w := newWorld(t)
+	wi := w.reviewing()
+	w.gh.Review(1, "alice", "APPROVED")
+	w.until("ready to merge", func() bool { w.sync(); return w.taskStatus(wi) == "ready_to_merge" })
+	w.gh.Set(func(s *fakegithub.Server) { s.CheckRunsForbidden = true })
+	w.until("back in review", func() bool { w.sync(); return w.taskStatus(wi) == "review" })
+	var prID string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM pull_requests WHERE task_id = $1`, wi).Scan(&prID)
+	me := w.person("owner")
+	code, body := w.callAs(me, "/internal/pull-requests/"+prID+"/merge", map[string]any{})
+	if msg := fmt.Sprint(body); code != 409 || !strings.Contains(msg, "Checks: Read") || strings.Contains(msg, "running") {
+		t.Fatalf("merging with check runs unreadable: %d %v", code, body)
+	}
+	if code, _ := w.callAs(me, "/internal/pull-requests/"+prID+"/rerun-failed", map[string]any{}); code != 409 {
+		t.Errorf("re-running a diagnostic: %d", code)
+	}
+	if len(w.gh.Merges) != 0 || len(w.gh.JobsRerun) != 0 || len(w.gh.Rerequested) != 0 || w.fixes(wi) != 0 {
+		t.Errorf("merges %v, reruns %v %v, fixes %d", w.gh.Merges, w.gh.JobsRerun, w.gh.Rerequested, w.fixes(wi))
+	}
+}
+
 // escalationReason is why the task's delivery last stopped for a person.
 func (w *world) escalationReason(wi string) string {
 	var r string
