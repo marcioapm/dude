@@ -423,3 +423,8 @@
   color: var(--ds-color-text-disabled);
   font-size: var(--ds-text-sm);
 }
+.composerFrame {
+  border: 1px solid var(--ds-color-border-subtle);
+  border-radius: var(--ds-radius-control);
+  overflow: hidden;
+}
