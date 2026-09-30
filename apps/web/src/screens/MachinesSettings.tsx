@@ -118,11 +118,11 @@ export function MachinesPage({ client, orgName }: { client: ApiClient; orgName: 
           <THead>
             <Tr>
               <Th>Name</Th>
-              <Th align="right" width="96px">CPUs</Th>
-              <Th align="right" width="88px">Memory</Th>
-              <Th align="right" width="80px">Disk</Th>
-              <Th width="112px">Pool</Th>
-              <Th width="156px">Fits</Th>
+              <Th align="right">CPUs</Th>
+              <Th align="right">Memory</Th>
+              <Th align="right">Disk</Th>
+              <Th>Pool</Th>
+              <Th>Fits</Th>
               <Th>Used by</Th>
               {canEdit ? <Th align="right" width="48px"><span className="ds-sr-only">Actions</span></Th> : null}
             </Tr>
@@ -133,14 +133,15 @@ export function MachinesPage({ client, orgName }: { client: ApiClient; orgName: 
               return (
                 <Tr key={s.id} data-size={s.name}>
                   <Td fit>
-                    <EntityLine size="sm" name={s.name} trailing={s.isDefault ? <Badge tone="info" size="sm" icon="system">Default</Badge> : undefined} />
+                    <EntityLine size="sm" name={s.name} />{" "}
+                    {s.isDefault ? <Badge tone="info" size="sm" icon="system">Default</Badge> : null}
                   </Td>
-                  <Td align="right" className="ds-tnum">{s.cpus} CPUs</Td>
-                  <Td align="right" className="ds-tnum">{gib(s.memoryMiB * 1024 * 1024)} GiB</Td>
-                  <Td align="right" className="ds-tnum">{s.diskGiB} GiB</Td>
-                  <Td mono={s.pool !== null} muted={s.pool === null}>{s.pool ?? "Default pool"}</Td>
-                  <Td><FitBar share={fit.share}>{fit.text}</FitBar></Td>
-                  <Td><UsedBy faces={faces(s.usedBy)}>{usedByWords(s, s.usedBy)}</UsedBy></Td>
+                  <Td align="right" fit className="ds-tnum">{s.cpus} CPUs</Td>
+                  <Td align="right" fit className="ds-tnum">{gib(s.memoryMiB * 1024 * 1024)} GiB</Td>
+                  <Td align="right" fit className="ds-tnum">{s.diskGiB} GiB</Td>
+                  <Td fit mono={s.pool !== null} muted={s.pool === null}>{s.pool ?? "Default pool"}</Td>
+                  <Td fit><FitBar share={fit.share}>{fit.text}</FitBar></Td>
+                  <Td wrap><UsedBy faces={faces(s.usedBy)}>{usedByWords(s, s.usedBy)}</UsedBy></Td>
                   {canEdit ? (
                     <Td align="right">
                       <RowMenu size="sm" label={`Actions for ${s.name}`} items={[
@@ -171,9 +172,9 @@ export function MachinesPage({ client, orgName }: { client: ApiClient; orgName: 
               <Tr>
                 <Th>Pool</Th>
                 <Th>Machines</Th>
-                <Th align="right" width="72px">CPUs</Th>
-                <Th align="right" width="88px">Memory</Th>
-                <Th align="right" width="104px">Disk</Th>
+                <Th align="right">CPUs</Th>
+                <Th align="right">Memory</Th>
+                <Th align="right">Disk</Th>
                 <Th>Known from</Th>
               </Tr>
             </THead>
@@ -181,16 +182,17 @@ export function MachinesPage({ client, orgName }: { client: ApiClient; orgName: 
               {poolList.map((p) => (
                 <Tr key={p.name} data-pool={p.name}>
                   <Td fit>
-                    <EntityLine size="sm" name={<span className="ds-mono">{p.name}</span>}
-                      trailing={p.isDefault || p.platform ? <>{p.isDefault ? <Badge size="sm">{orgName}’s default</Badge> : null}{p.platform ? <Badge size="sm">Platform</Badge> : null}</> : undefined} />
+                    <span className="ds-mono">{p.name}</span>{" "}
+                    {p.isDefault ? <Badge size="sm">{orgName}’s default</Badge> : null}{" "}
+                    {p.platform ? <Badge size="sm">Platform</Badge> : null}
                   </Td>
-                  <Td>{poolMachines(p)}</Td>
-                  <Td align="right" className="ds-tnum">{p.hostSize ? p.hostSize.cpus : "—"}</Td>
-                  <Td align="right" className="ds-tnum">{p.hostSize ? `${gib(p.hostSize.memory)} GiB` : "—"}</Td>
-                  <Td align="right" muted={p.hostSize?.disk === 0} className="ds-tnum">
+                  <Td fit>{poolMachines(p)}</Td>
+                  <Td align="right" fit className="ds-tnum">{p.hostSize ? p.hostSize.cpus : "—"}</Td>
+                  <Td align="right" fit className="ds-tnum">{p.hostSize ? `${gib(p.hostSize.memory)} GiB` : "—"}</Td>
+                  <Td align="right" fit muted={p.hostSize?.disk === 0} className="ds-tnum">
                     {p.hostSize ? (p.hostSize.disk > 0 ? `${gib(p.hostSize.disk)} GiB` : "not reserved") : "—"}
                   </Td>
-                  <Td muted>{poolKnownFrom(p)}</Td>
+                  <Td fit muted>{poolKnownFrom(p)}</Td>
                 </Tr>
               ))}
             </TBody>
@@ -393,7 +395,7 @@ function RemoveDialog({ client, orgName, size, others, onClose, onRemoved }: {
                 const line = useLine(u, orgName);
                 return (
                   <Tr key={i}>
-                    <Td><EntityLine size="sm" lead={faceOf(u)} name={line.what} /></Td>
+                    <Td wrap><UsedBy faces={[faceOf(u)]}>{line.what}</UsedBy></Td>
                     <Td align="right" muted fit>{line.where}</Td>
                   </Tr>
                 );

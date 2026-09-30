@@ -88,10 +88,12 @@ export function Select<T extends string = string>({
       </RadixSelect.ItemIndicator>
       <span className={styles["itemBody"]}>
         <span className={styles["itemLine"]}>
-          {/* Label and meta are the item's text: the trigger shows both. */}
-          <RadixSelect.ItemText className={styles["itemText"]}>
-            <span className={styles["itemLabel"]}>{o.label}</span>
-            {o.meta ? <span className={styles["meta"]}>{o.meta}</span> : null}
+          {/* Label and meta are the item's text: the trigger shows both. Radix drops ItemText's className, so the layout is on a span inside it. */}
+          <RadixSelect.ItemText>
+            <span className={styles["itemText"]}>
+              <span className={styles["itemLabel"]}>{o.label}</span>
+              {o.meta ? <span className={styles["meta"]}>{o.meta}</span> : null}
+            </span>
           </RadixSelect.ItemText>
         </span>
         {o.description ? <span className={styles["description"]}>{o.description}</span> : null}
