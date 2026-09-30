@@ -30,7 +30,7 @@
   "DUDE_REGISTRY_AUTH": "static",
   "DUDE_REGISTRY": "ghcr.io",
   "DUDE_REGISTRY_CREDENTIAL": "user:token",
-  "DUDE_ECR_ROLE_ARN": "",
+  "DUDE_ECR_ROLE_ARN": "arn:aws:iam::123456789012:role/dude-pull",
   "DUDE_TOOLS_LISTEN": "0.0.0.0:3200",
   "DUDE_TOOLS_URL": "http://10.0.1.5:3200",
   "DUDE_TOOLS_SERVICE": false,

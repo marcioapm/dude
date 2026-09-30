@@ -51,7 +51,7 @@ egress = ["pypi.org", "registry.npmjs.org"]
 auth = "static"
 host = "ghcr.io"
 credential = "user:token"
-ecr_role_arn = ""
+ecr_role_arn = "arn:aws:iam::123456789012:role/dude-pull"
 
 [tools]
 listen = "0.0.0.0:3200"

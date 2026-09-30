@@ -118,6 +118,51 @@ logins = ["file-bot"]
 	}
 }
 
+func TestAnEmptyStringInTheFileIsUnset(t *testing.T) {
+	path := writeFile(t, `
+[orchestrator]
+listen = ""
+pr_reconcile = ""
+[agent]
+image = ""
+[registry]
+auth = ""
+[vapid]
+subject = ""
+[embeddings]
+model = ""
+[tools]
+listen = ""
+[lux]
+url = ""
+`, 0o600)
+	c := mustLoad(t, Orchestrator, map[string]string{"DUDE_CONFIG": path})
+	for env, want := range map[string]string{
+		"DUDE_ORCHESTRATOR_LISTEN": "127.0.0.1:3100", "DUDE_AGENT_IMAGE": "localhost/dude-runtime:dev",
+		"DUDE_REGISTRY_AUTH": "none", "DUDE_VAPID_SUBJECT": "mailto:dude@localhost",
+		"DUDE_EMBEDDINGS_MODEL": "gemini-embedding-2", "DUDE_TOOLS_LISTEN": "", "LUX_URL": "",
+	} {
+		if got := c.String(env); got != want || c.From(env) != "" {
+			t.Errorf("%s = %q from %q, want the default %q", env, got, c.From(env), want)
+		}
+	}
+	if c.Duration("DUDE_PR_RECONCILE") != 15*time.Minute {
+		t.Errorf("pr_reconcile = %v, want the default", c.Duration("DUDE_PR_RECONCILE"))
+	}
+	if len(c.Set()) != 0 {
+		t.Errorf("empty strings were recorded as set: %v", c.Set())
+	}
+	// The variable still overrides an empty file value.
+	c = mustLoad(t, Orchestrator, map[string]string{"DUDE_CONFIG": path, "DUDE_ORCHESTRATOR_LISTEN": "127.0.0.1:9"})
+	if c.String("DUDE_ORCHESTRATOR_LISTEN") != "127.0.0.1:9" {
+		t.Errorf("listen = %q", c.String("DUDE_ORCHESTRATOR_LISTEN"))
+	}
+	c = mustLoad(t, Backend, map[string]string{"DUDE_CONFIG": writeFile(t, "[s3]\nregion = \"\"\n", 0o600)})
+	if c.String("DUDE_S3_REGION") != "us-east-1" {
+		t.Errorf("s3.region = %q, want the default", c.String("DUDE_S3_REGION"))
+	}
+}
+
 func TestAnUnknownKeyIsRefusedByName(t *testing.T) {
 	for text, want := range map[string]string{
 		"[lux]\nurl = \"x\"\ntoken = \"y\"\n":           "lux.token",
