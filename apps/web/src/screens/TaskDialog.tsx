@@ -1,21 +1,33 @@
 /**
  * Create or edit a task: what it asks for, and where it sits.
  *
- * One dialog for both, because they are the same fields. Once a delivery
- * has started, what the task asks for (title, goal, criteria,
- * repository) is fixed — agents are working to it — and only where it sits
- * (its epic) can change; the fields say so rather than failing on save.
+ * One dialog for both, because they are the same fields. It is a document
+ * being written: the title as its heading, the goal and the acceptance
+ * criteria as Markdown, and where it sits (epic, repositories) beside them
+ * with help for writing a good one. Criteria are edited as one Markdown list
+ * and saved as the list of strings the API keeps (`criteria.ts`).
+ *
+ * Once a delivery has started, what the task asks for (title, goal,
+ * criteria, repository) is fixed — agents are working to it — and only
+ * where it sits (its epic) can change; the fields say so rather than failing
+ * on save.
  *
  * Mounted by its opener only while open, so each opening starts from the
  * task (or empty).
  */
 
-import { useEffect, useState } from "react";
-import { Button, Checkbox, Fieldset, FormRow, IconButton, Input, Select } from "@dude/design-system/primitives";
+import { useEffect, useMemo, useState } from "react";
+import { Badge, Breadcrumb, Button, Checkbox, Fieldset, HelpList, Input, KeyHint, MarkdownCheatsheet, MarkdownEditor, Select } from "@dude/design-system";
 import type { ApiClient, Epic, Repository, TaskDetail, TaskFields, TaskRepository } from "../api/client.ts";
+import { unsavedWords } from "../hooks/discard.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
+import { criteriaFromMarkdown, criteriaToMarkdown, criterionTooLong } from "./criteria.ts";
 
 const NO_EPIC = "__none__";
+const GOAL_MAX = 10_000;
+// The server caps each criterion (2,000) and not the list; this bounds the
+// source so a paste cannot make a request the browser struggles to send.
+const CRITERIA_MAX = 20_000;
 
 export type ExistingTask = { id: string; delivering: boolean } & TaskFields;
 
@@ -37,14 +49,15 @@ export interface TaskDialogProps {
 }
 
 export function TaskDialog({ client, projectId, onClose, existing, epicId, onSaved }: TaskDialogProps) {
-  const [title, setTitle] = useState(existing?.title ?? "");
-  const [goal, setGoal] = useState(existing?.goal ?? "");
-  const [criteria, setCriteria] = useState<string[]>(existing?.acceptanceCriteria.length ? [...existing.acceptanceCriteria] : [""]);
+  const [opened] = useState(() => [existing?.title ?? "", existing?.goal ?? "", criteriaToMarkdown(existing?.acceptanceCriteria ?? [])]);
+  const [title, setTitle] = useState(opened[0]!);
+  const [goal, setGoal] = useState(opened[1]!);
+  const [criteriaSource, setCriteriaSource] = useState(opened[2]!);
   const [epic, setEpic] = useState<string>(existing?.epicId ?? epicId ?? NO_EPIC);
   const [chosen, setChosen] = useState<TaskRepository[]>(existing?.repositories ?? []);
   // The choices arrive after it opens; until they have, a save could miss
   // a repository the project needs named.
-  const [choices, setChoices] = useState<{ epics: Epic[]; repositories: Repository[] } | null>(null);
+  const [choices, setChoices] = useState<{ projectName: string; epics: Epic[]; repositories: Repository[] } | null>(null);
   const [loadProblem, setLoadProblem] = useState<string | null>(null);
   // Created, but its delivery did not start: a retry delivers it rather
   // than creating a second.
@@ -54,7 +67,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
   useEffect(() => {
     let current = true;
     void Promise.all([client.listEpics(projectId), client.getProject(projectId)]).then(
-      ([{ epics }, project]) => current && setChoices({ epics, repositories: project.repositories }),
+      ([{ epics }, project]) => current && setChoices({ projectName: project.name, epics, repositories: project.repositories }),
       (err: unknown) => current && setLoadProblem(errorText(err)),
     );
     return () => {
@@ -67,7 +80,10 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
   // One repository needs no choosing: it is where the work goes unless the
   // task says otherwise.
   const choosing = repositories.length > 1;
-  const canSave = choices !== null && Boolean(title.trim()) && !busy;
+  const criteria = useMemo(() => criteriaFromMarkdown(criteriaSource), [criteriaSource]);
+  const criteriaError = locked ? null : criterionTooLong(criteria.items);
+  const canSave = choices !== null && Boolean(title.trim()) && !criteriaError && !busy;
+  const unsaved = locked ? 0 : unsavedWords(opened, [title, goal, criteriaSource]);
 
   function submit(deliver: boolean) {
     const fields: Partial<TaskFields> = { epicId: epic === NO_EPIC ? null : epic };
@@ -75,7 +91,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
       Object.assign(fields, {
         title: title.trim(),
         goal: goal.trim(),
-        acceptanceCriteria: criteria.map((c) => c.trim()).filter(Boolean),
+        acceptanceCriteria: criteria.items,
         // One repository needs no choosing, but is named: adding a second
         // later must not leave this work with no checkout.
         repositories: choosing ? chosen : repositories.map((r) => ({ id: r.id, access: "write" as const })),
@@ -98,11 +114,20 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
     );
   }
 
+  const epicTitle = choices?.epics.find((e) => e.id === epic)?.title;
+  const fixedHint = "Fixed once delivery has started.";
+
   return (
     <FormDialog
       open
       onOpenChange={(open) => !open && onClose()}
-      size="md"
+      size="document"
+      context={choices ? (
+        <Breadcrumb size="sm" items={[
+          { id: "project", label: choices.projectName },
+          ...(epicTitle ? [{ id: "epic", label: epicTitle, icon: "layers" as const }] : []),
+        ]} />
+      ) : undefined}
       title={existing ? "Edit task" : "New task"}
       description={locked ? "Delivery has started, so what it asks for is fixed. You can still move it to another epic." : undefined}
       submitLabel={existing ? "Save" : "Create"}
@@ -110,6 +135,14 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
       canSubmit={canSave}
       onSubmit={() => submit(false)}
       problem={problem ?? loadProblem}
+      unsavedWords={unsaved}
+      discardTitle={existing ? "Discard your changes to this task?" : "Discard this task?"}
+      footerStart={
+        <>
+          <KeyHint keys={["mod", "Enter"]}>{existing ? "save" : "create"}</KeyHint>
+          {locked ? null : <KeyHint keys={["mod", "Shift", "P"]}>toggle preview</KeyHint>}
+        </>
+      }
       extraActions={
         existing ? undefined : (
           <Button variant="primary" disabled={!canSave} onClick={() => submit(true)} data-testid="task-create-deliver">
@@ -117,49 +150,58 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
           </Button>
         )
       }
+      asideLabel="Where it sits"
+      aside={
+        <div className="taskDialogAside">
+          <Select
+            label="Epic"
+            value={epic}
+            onValueChange={setEpic}
+            options={[{ value: NO_EPIC, label: "No epic" }, ...(choices?.epics ?? []).map((e) => ({ value: e.id, label: e.title }))]}
+          />
+          {choosing ? (
+            <RepositoryChooser repositories={repositories} chosen={chosen} onChange={setChosen} disabled={locked} />
+          ) : null}
+          <HelpList title="What makes a good task">
+            <li><strong>Goal:</strong> why it matters, what exists today, and the constraints an agent can't guess.</li>
+            <li><strong>Criteria:</strong> one checkable statement per list item — reviewers check every one.</li>
+            <li>Link issues, designs and logs; paste error output in a <code>```</code> block.</li>
+          </HelpList>
+          <MarkdownCheatsheet />
+        </div>
+      }
     >
-      <Input label="Title" autoFocus required placeholder="What should change?" value={title} disabled={locked}
-        maxLength={500} onChange={(e) => setTitle(e.target.value)} data-testid="task-title" />
-      <Input label="Goal" hint="Why, and any detail an agent needs." value={goal} disabled={locked}
-        maxLength={10_000} onChange={(e) => setGoal(e.target.value)} data-testid="task-goal" />
-      <FormRow>
-        <Select
-          label="Epic"
-          value={epic}
-          onValueChange={setEpic}
-          options={[{ value: NO_EPIC, label: "No epic" }, ...(choices?.epics ?? []).map((e) => ({ value: e.id, label: e.title }))]}
-        />
-      </FormRow>
-      {choosing ? (
-        <RepositoryChooser repositories={repositories} chosen={chosen} onChange={setChosen} disabled={locked} />
-      ) : null}
-      <Fieldset legend="Acceptance criteria" className="criteria" disabled={locked}>
-        {criteria.map((c, i) => (
-          <div className="criterion" key={i}>
-            <Input
-              size="sm"
-              aria-label={`Criterion ${i + 1}`}
-              placeholder="A thing that must be true when it is done"
-              value={c}
-              maxLength={2000}
-              onChange={(e) => setCriteria((all) => all.map((x, j) => (j === i ? e.target.value : x)))}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && c.trim()) {
-                  e.preventDefault();
-                  setCriteria((all) => [...all.slice(0, i + 1), "", ...all.slice(i + 1)]);
-                }
-              }}
-            />
-            {criteria.length > 1 ? (
-              <IconButton icon="close" label={`Remove criterion ${i + 1}`} size="sm"
-                onClick={() => setCriteria((all) => all.filter((_, j) => j !== i))} />
-            ) : null}
-          </div>
-        ))}
-        <Button size="sm" variant="quiet" leadingIcon="plus" onClick={() => setCriteria((all) => [...all, ""])}>
-          Add criterion
-        </Button>
-      </Fieldset>
+      <Input size="title" label="Title" labelNote={locked ? undefined : "required"} autoFocus required placeholder="What should change?"
+        value={title} disabled={locked} maxLength={500} onChange={(e) => setTitle(e.target.value)} data-testid="task-title" />
+      <MarkdownEditor
+        label="Goal"
+        hint={locked ? fixedHint : "Why it matters, what exists today, and anything an agent can't guess."}
+        placeholder="Why does this matter? What exists today? What must an agent not break?"
+        value={goal}
+        onChange={setGoal}
+        minRows={12}
+        maxLength={GOAL_MAX}
+        locked={locked}
+        data-testid="task-goal"
+      />
+      <MarkdownEditor
+        label="Acceptance criteria"
+        hint={locked ? fixedHint : "One list item per criterion. Reviewers check each one."}
+        placeholder="- [ ] A thing that must be true when it's done"
+        value={criteriaSource}
+        onChange={setCriteriaSource}
+        minRows={7}
+        maxLength={CRITERIA_MAX}
+        locked={locked}
+        error={criteriaError ?? undefined}
+        summary={criteriaSource.trim() ? (
+          <Badge tone="neutral" size="sm" data-testid="task-criteria-count">
+            {criteria.items.length} {criteria.items.length === 1 ? "criterion" : "criteria"}
+          </Badge>
+        ) : undefined}
+        notice={criteria.stray && !locked ? "Text outside a list item isn't saved as a criterion" : undefined}
+        data-testid="task-criteria"
+      />
     </FormDialog>
   );
 }

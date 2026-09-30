@@ -54,7 +54,7 @@ def test_delivering_from_the_ui_reaches_a_pull_request_and_back(
     page.get_by_test_id("new-task").click()
     page.get_by_test_id("task-title").fill("Greet people by their full name")
     page.get_by_test_id("task-goal").fill("Use the full name, not just the first.")
-    page.get_by_label("Criterion 1").fill("Greets with the full name")
+    page.get_by_test_id("task-criteria").fill("- [ ] Greets with the full name")
     page.get_by_test_id("task-create-deliver").click()
     expect(page.get_by_test_id("task-screen")).to_be_visible()
 
@@ -131,7 +131,7 @@ def test_a_task_is_edited_and_moved_from_its_screen(
 
     page.get_by_test_id("edit-task").click()
     page.get_by_test_id("task-title").fill("Greet by full name")
-    page.get_by_label("Criterion 1").fill("Uses the full name")
+    page.get_by_test_id("task-criteria").fill("- Uses the full name")
     page.get_by_role("combobox", name="Epic").click()
     page.get_by_role("listbox").get_by_text("Greetings").click()
     page.get_by_test_id("task-save").click()
