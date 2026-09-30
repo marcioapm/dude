@@ -416,6 +416,22 @@ describe("what a queued steer waits for, and what the composer promises", () => 
     expect(turns).toHaveLength(1);
     expect(turns[0]).toMatchObject({ failed: null, deliveredAt: null, interrupting: false, directiveId: "dir_2" });
   });
+
+  test("retrying a failed interrupt queues a plain steer, which can be interrupted again", () => {
+    const events = [
+      ev(EventTypes.RunSteered, { text: "S", directiveId: "dir_1" }),
+      ev(EventTypes.RunSteered, { text: "S", directiveId: "dir_2", supersedes: "dir_1", interrupt: true }),
+      ev(EventTypes.DirectiveFailed, { directiveId: "dir_2", error: "workload not reachable" }),
+      ev(EventTypes.RunSteered, { text: "S", directiveId: "dir_3", supersedes: "dir_2" }),
+    ];
+    let { turns } = project(events);
+    expect(turns).toHaveLength(1);
+    expect(turns[0]).toMatchObject({ failed: null, deliveredAt: null, interrupting: false, directiveId: "dir_3" });
+    events.push(ev(EventTypes.RunSteered, { text: "S", directiveId: "dir_4", supersedes: "dir_3", interrupt: true }));
+    ({ turns } = project(events));
+    expect(turns).toHaveLength(1);
+    expect(turns[0]).toMatchObject({ interrupting: true, directiveId: "dir_4" });
+  });
 });
 
 describe("tokens", () => {

@@ -564,7 +564,9 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         // it again superseding it: one steer, not two turns saying the same thing.
         const earlier = typeof payload.supersedes === "string" ? state.steersByDirective.get(payload.supersedes) : undefined;
         if (earlier && earlier.deliveredAt === null && earlier.text === String(payload.text ?? "")) {
-          earlier.interrupting = earlier.interrupting || payload.interrupt === true;
+          // A retry replaces a failed attempt, interrupt and all: it is
+          // interrupting only if this attempt is.
+          earlier.interrupting = payload.interrupt === true || (earlier.failed === null && earlier.interrupting);
           earlier.failed = null;
           if (directiveId) {
             state.steersByDirective.set(directiveId, earlier);
