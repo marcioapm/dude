@@ -2,10 +2,13 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { SQL } from "bun";
 import { authenticate, auditActor, createApiKey, personPrincipal } from "../src/api/auth.ts";
 import { Router } from "../src/api/router.ts";
+import { registerWorkRoutes } from "../src/api/routes/work.ts";
 import { closePool, setPool } from "../src/db/client.ts";
 
 const org = `org_identity_${Bun.randomUUIDv7("hex").slice(-12)}`;
 const person = `${org}_person`;
+const creator = `${org}_creator`;
+const project = `${org}_project`;
 let owner: SQL;
 let app: SQL;
 beforeAll(async () => {
@@ -15,6 +18,8 @@ beforeAll(async () => {
   app = new SQL(url.toString()); setPool(app);
   await owner`INSERT INTO organizations (id, name, slug) VALUES (${org}, ${org}, ${org})`;
   await owner`INSERT INTO people (id, organization_id, name, role) VALUES (${person}, ${org}, 'Person', 'admin')`;
+  await owner`INSERT INTO people (id, organization_id, name, role) VALUES (${creator}, ${org}, 'Creator', 'member')`;
+  await owner`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES (${project}, ${org}, 'Keyless', 'keyless', 'KL')`;
 });
 afterAll(async () => {
   await closePool(app);
@@ -45,4 +50,28 @@ test("real API key authentication keeps its actual credential and audit actor", 
   expect(auditActor(principal!)).toEqual({ kind: "human", id: made.id });
   await owner`UPDATE api_keys SET revoked_at = now() WHERE id = ${made.id}`;
   expect(await authenticate(`Bearer ${made.key}`)).toBeNull();
+});
+test("a person with no key creates a task that is theirs alone, or nothing on bad input", async () => {
+  const principal = await personPrincipal(org, creator);
+  const router = new Router(async () => principal);
+  registerWorkRoutes(router);
+  const create = (body: Record<string, unknown>) => router.handle(new Request("http://dude.test/v1/tasks", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ projectId: project, ...body }),
+  }));
+
+  const res = await create({ title: "Keyless task" });
+  expect(res.status).toBe(201);
+  const task = await res.json() as { id: string; owner: { id: string } | null };
+  expect(task.owner?.id).toBe(creator);
+  expect(await owner`SELECT person_id, position FROM task_people WHERE task_id = ${task.id}`)
+    .toEqual([{ person_id: creator, position: 0 }]);
+  expect(await owner`SELECT actor_type, actor_id FROM events WHERE task_id = ${task.id} AND event_type = 'task.created'`)
+    .toEqual([{ actor_type: "person", actor_id: creator }]);
+  expect(await owner`SELECT id FROM api_keys WHERE person_id = ${creator}`).toHaveLength(0);
+
+  const numberBefore = await owner`SELECT next_task_number FROM projects WHERE id = ${project}`;
+  expect((await create({ title: "Bad repo", repositories: [{ id: `${org}_nowhere` }] })).status).toBe(404);
+  expect(await owner`SELECT id FROM tasks WHERE project_id = ${project}`).toEqual([{ id: task.id }]);
+  expect(await owner`SELECT next_task_number FROM projects WHERE id = ${project}`).toEqual(numberBefore);
+  expect(await owner`SELECT task_id FROM task_people WHERE organization_id = ${org}`).toEqual([{ task_id: task.id }]);
 });
