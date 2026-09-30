@@ -58,6 +58,12 @@
 /* What the closed trigger shows: the label, then its meta, which is cut before the label is. */
 .value {
   display: flex;
+  min-width: 0;
+  overflow: hidden;
+}
+/* Radix's value span holds the chosen item's text: label, then meta. */
+.value > span {
+  display: flex;
   align-items: baseline;
   gap: var(--ds-space-8);
   min-width: 0;

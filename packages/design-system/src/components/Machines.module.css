@@ -91,6 +91,7 @@
 /* MachineChip: a chip in the session header's subtitle line. */
 .chip {
   display: inline-flex;
+  align-self: flex-start;
   align-items: center;
   gap: var(--ds-space-6);
   height: var(--ds-size-chip);
