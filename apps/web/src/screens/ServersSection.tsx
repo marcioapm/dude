@@ -2,9 +2,8 @@
  * The servers a task or a run has, as one section: the run they live on
  * (the agent's, or a branch preview's), a notice when the run moved host,
  * a preview's stages, the list with each server's log folding open under
- * it, and Preview opening the page in a new tab. The task's Servers tab and
- * the run screen's drawer are the same section; the drawer carries the
- * run's actions in its own head, through `ServersRunActions`.
+ * it, and Preview opening the page in a new tab. It is the task's Servers
+ * tab: a session has no servers panel of its own.
  */
 
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
@@ -40,8 +39,6 @@ export interface ServersSectionProps {
   servers: ServersState;
   /** The task, for Preview branch (its branch is what a preview checks out). */
   taskId?: string | undefined;
-  /** In a drawer: the run's actions sit in its head (`ServersRunActions`), the logs are shorter. */
-  inDrawer?: boolean | undefined;
 }
 
 /** The run status as StatusMark says it: a preview's own word until its servers are up; a word the vocabulary lacks, as it came. */
@@ -51,19 +48,7 @@ function runMark(run: ServersRun) {
   return <StatusMark status={known ? (run.state as RunStatus) : "running"} size="sm" label={known ? undefined : run.state} />;
 }
 
-/** Start all and Stop all, wherever the run's actions sit: the section's run line, or the drawer's head. */
-export function ServersRunActions({ servers, variant = "secondary" }: { servers: ServersState; variant?: "secondary" | "quiet" | undefined }) {
-  const { data, busy } = servers;
-  if (!data?.run || !runIsLive(data.run)) return null;
-  return (
-    <>
-      <Button size="sm" variant={variant} leadingIcon="play" disabled={busy !== null || !canStartAny(data.servers)} onClick={() => void servers.startAll()} data-testid="start-all">Start all</Button>
-      <Button size="sm" variant="quiet" leadingIcon="stop" disabled={busy !== null || !canStopAny(data.servers)} onClick={() => void servers.stopAll()} data-testid="stop-all">Stop all</Button>
-    </>
-  );
-}
-
-export const ServersSection = memo(function ServersSection({ client, servers, taskId, inDrawer }: ServersSectionProps) {
+export const ServersSection = memo(function ServersSection({ client, servers, taskId }: ServersSectionProps) {
   const { data, problem, busy } = servers;
   const people = usePeople();
   const now = useNow(Boolean(data && anyMoving(data.servers)), 30_000);
@@ -190,9 +175,12 @@ export const ServersSection = memo(function ServersSection({ client, servers, ta
               {live && run.terminalUrl ? <TerminalLink href={run.terminalUrl} /> : null}
               {isPreview && taskId ? (
                 <Button size="sm" variant="quiet" leadingIcon="stop" disabled={busy !== null} onClick={stopPreview} data-testid="stop-preview">Stop preview</Button>
-              ) : inDrawer ? null : (
-                <ServersRunActions servers={servers} />
-              )}
+              ) : live ? (
+                <>
+                  <Button size="sm" variant="secondary" leadingIcon="play" disabled={busy !== null || !canStartAny(data.servers)} onClick={() => void servers.startAll()} data-testid="start-all">Start all</Button>
+                  <Button size="sm" variant="quiet" leadingIcon="stop" disabled={busy !== null || !canStopAny(data.servers)} onClick={() => void servers.stopAll()} data-testid="stop-all">Stop all</Button>
+                </>
+              ) : null}
               <Button size="sm" variant="quiet" leadingIcon="plus" disabled={!live} onClick={() => setAdding(true)} data-testid="add-server">Add server</Button>
             </>
           }
@@ -240,7 +228,7 @@ export const ServersSection = memo(function ServersSection({ client, servers, ta
                   lines: log === "loading" ? [] : log ?? [],
                   loading: log === "loading",
                   live: isMoving(s),
-                  maxHeight: inDrawer ? 200 : 240,
+                  maxHeight: 240,
                 }}
               />
             );

@@ -10,11 +10,15 @@
 import type { NavRef } from "@dude/design-system";
 
 export type Place =
-  | { view: "tree"; ref: NavRef }
+  // A task's page may name the tab it opens on: its Servers, where a Run's servers live.
+  | { view: "tree"; ref: NavRef; tab?: TaskTab }
   | { view: "projectSettings"; projectId: string; page?: string }
   | { view: "orgSettings"; page?: string }
   | { view: "mySettings" }
   | { view: "inbox" };
+
+/** The task tabs a URL can name. */
+export type TaskTab = "servers";
 
 const TREE_KINDS: ReadonlyArray<NavRef["kind"]> = ["project", "epic", "task", "run", "session"];
 
@@ -32,7 +36,8 @@ export function parsePlace(hash: string): Place | null {
   if (kind === "project" && view === "settings") {
     return page ? { view: "projectSettings", projectId: decoded, page } : { view: "projectSettings", projectId: decoded };
   }
-  return { view: "tree", ref: { kind: kind as NavRef["kind"], id: decoded } };
+  const ref = { kind: kind as NavRef["kind"], id: decoded };
+  return kind === "task" && view === "servers" ? { view: "tree", ref, tab: "servers" } : { view: "tree", ref };
 }
 
 export function formatPlace(place: Place | null): string {
@@ -47,12 +52,12 @@ export function formatPlace(place: Place | null): string {
     case "projectSettings":
       return `#/project/${encodeURIComponent(place.projectId)}/settings${place.page ? `/${place.page}` : ""}`;
     case "tree":
-      return `#/${place.ref.kind}/${encodeURIComponent(place.ref.id)}`;
+      return `#/${place.ref.kind}/${encodeURIComponent(place.ref.id)}${place.tab ? `/${place.tab}` : ""}`;
   }
 }
 
 /** A place in the tree, from a tree reference. */
-export const inTree = (ref: NavRef): Place => ({ view: "tree", ref });
+export const inTree = (ref: NavRef, tab?: TaskTab): Place => (tab ? { view: "tree", ref, tab } : { view: "tree", ref });
 
 /** What the tree has selected: nothing, for the places it does not contain. */
 export const treeSelection = (place: Place | null): NavRef | null => (place?.view === "tree" ? place.ref : null);

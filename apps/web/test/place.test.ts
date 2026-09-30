@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { formatPlace, parsePlace } from "../src/place.ts";
+import { formatPlace, inTree, parsePlace } from "../src/place.ts";
 
 describe("places", () => {
   test("a task's link reads back as the task", () => {
@@ -10,6 +10,16 @@ describe("places", () => {
 
   test("a link from before tasks were work items still opens the task", () => {
     expect(parsePlace("#/workItem/wi_1")).toEqual({ view: "tree", ref: { kind: "task", id: "wi_1" } });
+  });
+
+  test("a link to a task's Servers tab reads back as the task on that tab", () => {
+    const place = parsePlace("#/task/wi_1/servers");
+    expect(place).toEqual({ view: "tree", ref: { kind: "task", id: "wi_1" }, tab: "servers" });
+    expect(formatPlace(place)).toBe("#/task/wi_1/servers");
+    expect(formatPlace(inTree({ kind: "task", id: "wi_1" }, "servers"))).toBe("#/task/wi_1/servers");
+    // Only a task has tabs a URL names; anything else after the id is ignored.
+    expect(parsePlace("#/task/wi_1/nonsense")).toEqual({ view: "tree", ref: { kind: "task", id: "wi_1" } });
+    expect(parsePlace("#/session/run_1/servers")).toEqual({ view: "tree", ref: { kind: "session", id: "run_1" } });
   });
 
   test("a settings page is part of its place", () => {

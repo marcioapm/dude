@@ -58,6 +58,7 @@ import { ServersSection, serversTabTrailing } from "./ServersSection.tsx";
 import { existingTask, TaskDialog } from "./TaskDialog.tsx";
 import { PullRequestActions } from "./PullRequestActions.tsx";
 import { pullRequestActivity } from "../pullRequests.ts";
+import type { TaskTab } from "../place.ts";
 
 export interface TaskScreenProps {
   client: ApiClient;
@@ -65,8 +66,10 @@ export interface TaskScreenProps {
   /** A session to show open on the Sessions tab: the page opens there. */
   runId?: string | undefined;
   onOpenRun: (runId: string) => void;
-  /** Left the Sessions tab with a session open: the URL should say the task again. */
+  /** Left the Sessions tab with a session open, or the tab the URL named: the URL should say the task again. */
   onCloseRun?: (() => void) | undefined;
+  /** The tab the URL names, to open on. */
+  tab?: TaskTab | undefined;
   /** Where it sits, shown at the top: Project › Epic › KEY. */
   breadcrumb?: ReactNode;
   /** Leave for somewhere that exists, when this task does not. */
@@ -88,17 +91,35 @@ function changesRun(payload: unknown): boolean {
   return RUN_CHANGES.has(String(p.change)) || typeof p.luxState === "string";
 }
 
-export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, breadcrumb, onBack }: TaskScreenProps) {
+export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: openTab, breadcrumb, onBack }: TaskScreenProps) {
   // A session's URL is the Sessions tab with it open; the task's URL is
   // whichever tab was picked here, Overview first. Coming back to the
   // task's URL from a session's (the tree, Back) is the overview again.
-  const [chosenTab, setTab] = useState("overview");
+  // A URL that names a tab (`#/task/<id>/servers`) opens the page there.
+  const [chosenTab, setTab] = useState<string>(openTab ?? "overview");
   const tab = runId ? "sessions" : chosenTab;
   const [lastRunId, setLastRunId] = useState(runId);
   if (runId !== lastRunId) {
     setLastRunId(runId);
-    if (!runId) setTab("overview");
+    if (!runId) setTab(openTab ?? "overview");
   }
+  const [lastOpenTab, setLastOpenTab] = useState(openTab);
+  if (openTab !== lastOpenTab) {
+    setLastOpenTab(openTab);
+    if (openTab) setTab(openTab);
+  }
+  const pickTab = (next: string) => {
+    setTab(next);
+    // Leaving a session's tab, or the tab the URL named: the URL says the task again.
+    if ((runId && next !== "sessions") || (openTab && next !== openTab)) {
+      setLastRunId(undefined);
+      onCloseRun?.();
+    }
+  };
+  // For the open session, which is memoised: one function for the page's life.
+  const pickLatest = useRef(pickTab);
+  pickLatest.current = pickTab;
+  const openServers = useCallback(() => pickLatest.current("servers"), []);
   // The session shown when none is asked for: the last one open, else one
   // picked the first time Sessions shows (what is running, else the newest)
   // and kept — a phase ending must not swap it under someone reading.
@@ -311,14 +332,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, bread
         <TaskDialog client={client} projectId={item.projectId} onClose={() => setEditing(false)} existing={existingTask(item, started)} onSaved={() => void load()} />
       ) : null}
 
-      <Tabs value={tab} onValueChange={(next) => {
-        setTab(next);
-        // Leaving a session's tab: the URL says the task again.
-        if (runId && next !== "sessions") {
-          setLastRunId(undefined);
-          onCloseRun?.();
-        }
-      }} fill>
+      <Tabs value={tab} onValueChange={pickTab} fill>
         <TabList aria-label="Task" className="tabsInset">
           <Tab value="overview">Overview</Tab>
           <Tab value="findings" count={findings.length > 0 ? findings.length : undefined}>Findings</Tab>
@@ -420,7 +434,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, bread
                 ))}
               </SessionList>
               {openRun ? (
-                <RunScreen key={openRun} client={client} runId={openRun} onBack={onBack} task={sessionTask} />
+                <RunScreen key={openRun} client={client} runId={openRun} onBack={onBack} task={sessionTask} onOpenServers={openServers} />
               ) : null}
             </div>
           ) : (

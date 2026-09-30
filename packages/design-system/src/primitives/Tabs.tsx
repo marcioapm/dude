@@ -72,39 +72,6 @@ export function TabCount({ children }: { readonly children: ReactNode }) {
   return <span className={cx(styles["count"], "ds-cap")}>{children}</span>;
 }
 
-export interface TabToggleProps {
-  readonly pressed: boolean;
-  readonly onPressedChange: (pressed: boolean) => void;
-  readonly icon?: IconName | undefined;
-  readonly title?: string | undefined;
-  readonly trailing?: ReactNode;
-  readonly children?: ReactNode;
-  readonly "data-testid"?: string | undefined;
-}
-
-/**
- * A toggle drawn as a tab, for a panel that opens beside the tabs' content
- * rather than in its place (the run screen's Servers drawer). Not a tab
- * to the keyboard: a pressed button in the tab's grammar.
- */
-export function TabToggle({ pressed, onPressedChange, icon, title, trailing, children, "data-testid": testId }: TabToggleProps) {
-  return (
-    <button
-      type="button"
-      className={styles["trigger"]}
-      data-state={pressed ? "active" : "inactive"}
-      aria-pressed={pressed}
-      title={title}
-      onClick={() => onPressedChange(!pressed)}
-      data-testid={testId}
-    >
-      {icon ? <Icon name={icon} size={13} /> : null}
-      {children}
-      {trailing}
-    </button>
-  );
-}
-
 export interface TabPanelProps {
   readonly value: string;
   readonly fill?: boolean | undefined;
