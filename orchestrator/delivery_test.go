@@ -2013,15 +2013,7 @@ func TestASteerNeverReadStopsHoldingTheRunAfterTheCap(t *testing.T) {
 func TestInterruptNowOnAQueuedSteerIsHeardOnce(t *testing.T) {
 	w := newWorld(t)
 	wi := w.task()
-	runID := w.steerDuringTool(wi)
-	w.until("the harness to take it", func() bool {
-		return w.count(`SELECT count(*) FROM directives WHERE id = 'dir_s' AND accepted_at IS NOT NULL`) == 1
-	})
-	code, out := w.call("/internal/runs/"+runID+"/steer", map[string]any{
-		"text": "check the migration too", "supersedes": "dir_s", "interrupt": true})
-	if code != http.StatusCreated {
-		t.Fatalf("steer: %d %v", code, out)
-	}
+	runID, interruptID := w.interruptQueuedSteer(wi)
 	w.until("both to be delivered", func() bool {
 		return w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND delivered_at IS NOT NULL`, runID) == 2
 	})
@@ -2032,7 +2024,7 @@ func TestInterruptNowOnAQueuedSteerIsHeardOnce(t *testing.T) {
 	// The interrupt is settled with the steer, its delivery flagged as the
 	// interrupt alone, not a second read.
 	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.directive.delivered'
-		AND payload->>'directiveId' = $2 AND (payload->>'interruptOnly')::boolean AND payload->'read' IS NULL`, runID, out["id"]); n != 1 {
+		AND payload->>'directiveId' = $2 AND (payload->>'interruptOnly')::boolean AND payload->'read' IS NULL`, runID, interruptID); n != 1 {
 		t.Errorf("%d interrupt-only delivered events for the interrupt, want 1", n)
 	}
 }
@@ -2172,12 +2164,7 @@ func (w *world) interruptQueuedSteer(wi string) (runID, interruptID string) {
 			return w.count(`SELECT count(*) FROM directives WHERE id = 'dir_s' AND accepted_at IS NOT NULL`) == 1
 		})
 	}
-	code, out := w.call("/internal/runs/"+runID+"/steer", map[string]any{
-		"text": "check the migration too", "supersedes": "dir_s", "interrupt": true})
-	if code != http.StatusCreated {
-		w.t.Fatalf("steer: %d %v", code, out)
-	}
-	return runID, out["id"].(string)
+	return runID, w.interruptNow(runID, "dir_s")
 }
 
 // waitRead waits, without sweeping, for the follower to record the
