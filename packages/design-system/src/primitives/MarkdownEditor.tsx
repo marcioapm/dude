@@ -260,6 +260,7 @@ export function MarkdownEditor({
         <div className={styles["bar"]}>
           <Segmented
             label={`${label ?? ariaLabel ?? "Markdown"} view`}
+            size="toolbar"
             tabs={tabs}
             value={mode}
             onChange={switchTo}

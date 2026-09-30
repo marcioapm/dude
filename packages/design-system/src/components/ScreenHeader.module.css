@@ -61,6 +61,11 @@
   padding: 0 var(--ds-space-8);
   font-size: var(--ds-text-xs);
 }
+/* In a toolbar of sm buttons: the track is control-sm tall. */
+.segToolbar button {
+  height: calc(var(--ds-size-control-sm) - 4px);
+  padding: 0 var(--ds-space-8);
+}
 .seg button:disabled {
   cursor: not-allowed;
   color: var(--ds-color-text-disabled);

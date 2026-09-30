@@ -37,12 +37,14 @@ export interface SegmentedProps<T extends string> extends Omit<HTMLAttributes<HT
   readonly onChange: (value: T) => void;
   /** Names the group for a screen reader: "Whose tasks". */
   readonly label: string;
-  readonly size?: "sm" | "md" | undefined;
+  /** `toolbar`: level with `sm` buttons in a bar (its track is `control-sm`), words at the md size. */
+  readonly size?: "sm" | "md" | "toolbar" | undefined;
   readonly disabled?: boolean | undefined;
   /**
    * The options switch panels the caller renders: a `tablist` whose tabs
    * are `${tabs}-${value}-tab` and control `${tabs}-${value}-panel`, with
-   * one Tab stop and ← → between them. Omitted: a group of pressed buttons.
+   * one Tab stop, ← → between them and Home End to the ends. Omitted: a
+   * group of pressed buttons.
    */
   readonly tabs?: string | undefined;
 }
@@ -51,16 +53,17 @@ export interface SegmentedProps<T extends string> extends Omit<HTMLAttributes<HT
 export function Segmented<T extends string>({ options, value, onChange, label, size = "md", disabled, tabs, className, ...rest }: SegmentedProps<T>) {
   const enabled = options.filter((o) => !(disabled || o.disabled));
   const move = (e: KeyboardEvent<HTMLButtonElement>, from: T) => {
-    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
     e.preventDefault();
     const at = enabled.findIndex((o) => o.value === from);
-    const next = enabled[(at + (e.key === "ArrowRight" ? 1 : -1) + enabled.length) % enabled.length];
+    const to = e.key === "Home" ? 0 : e.key === "End" ? enabled.length - 1 : (at + (e.key === "ArrowRight" ? 1 : -1) + enabled.length) % enabled.length;
+    const next = enabled[to];
     if (!next) return;
     onChange(next.value);
     e.currentTarget.parentElement?.querySelector<HTMLButtonElement>(`#${CSS.escape(`${tabs}-${next.value}-tab`)}`)?.focus();
   };
   return (
-    <span className={cx(styles["seg"], size === "sm" && styles["segSm"], className)} role={tabs ? "tablist" : "group"} aria-label={label} {...rest}>
+    <span className={cx(styles["seg"], size === "sm" && styles["segSm"], size === "toolbar" && styles["segToolbar"], className)} role={tabs ? "tablist" : "group"} aria-label={label} {...rest}>
       {options.map((o) => {
         const off = disabled || o.disabled;
         const on = o.value === value;

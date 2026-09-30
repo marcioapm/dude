@@ -54,11 +54,6 @@
   padding: var(--ds-space-4);
   background: var(--ds-color-chrome);
 }
-/* The switch sits at the toolbar's size (control-sm), level with the buttons. */
-.bar > [role="tablist"] button {
-  height: calc(var(--ds-size-control-sm) - 4px);
-  padding: 0 var(--ds-space-8);
-}
 
 .tools {
   display: flex;
