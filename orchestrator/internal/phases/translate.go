@@ -29,6 +29,8 @@ const (
 	evRunStarted         = "run.started"
 	evRuntimeStopped     = "runtime.stopped"
 	evDirectiveDelivered = "run.directive.delivered"
+	evDirectiveAccepted  = "run.directive.accepted"
+	evDirectiveFailed    = "run.directive.failed"
 )
 
 // translator turns one lux Run's output into dude's ledger, and into the
@@ -249,11 +251,12 @@ func (t *translator) shimEvent(ctx context.Context, tx pgx.Tx, s *Syncer, typ st
 	case "lux.activity":
 		return t.activity(ctx, tx, s, str("activity"))
 	case "lux.input":
-		if str("error") != "" {
-			return nil
-		}
-		// The task itself: recorded when the agent has it, as lux delivered it.
+		// The task itself: recorded when the agent has it, as lux delivered
+		// it — from the first receipt that carries it.
 		if str("requestId") == promptRequestID {
+			if str("error") != "" || str("phase") == "consumed" {
+				return nil
+			}
 			// Once per Run: an agent resumed on another host is not given its
 			// task again, but a lux that acknowledged it again would repeat it.
 			if t.promptSeen {
@@ -267,13 +270,72 @@ func (t *translator) shimEvent(ctx context.Context, tx pgx.Tx, s *Syncer, typ st
 			}
 			return s.event(ctx, tx, t.run, evPromptDelivered, ledger.ActorSystem, payload)
 		}
-		tag, err := tx.Exec(ctx, `UPDATE directives SET delivered_at = COALESCE(delivered_at, now()) WHERE id = $1`, str("requestId"))
+		return t.directiveReceipt(ctx, tx, s, data)
+	}
+	return nil
+}
+
+// directiveReceipt records what lux says became of a person's steer:
+//
+//   - phase "accepted": the harness took it; lands says when the agent
+//     reads it (next_step, or next_turn for a harness that reads only
+//     between turns). With receipt false no "consumed" follows, so it is
+//     delivered now.
+//   - phase "consumed": the agent's next model step has it in context.
+//   - no phase: a lux from before the two receipts, which acknowledges
+//     once, on handoff. Delivered then, as it always was.
+//   - error: it will not reach the agent.
+//
+// Each transition happens once per directive and Run however often lux
+// repeats a receipt (a reconnect, a resumed shim): the update is guarded on
+// the state it moves from, and the event is written only when a row moved.
+func (t *translator) directiveReceipt(ctx context.Context, tx pgx.Tx, s *Syncer, data map[string]any) error {
+	id, _ := data["requestId"].(string)
+	phase, _ := data["phase"].(string)
+	if msg, _ := data["error"].(string); msg != "" {
+		tag, err := tx.Exec(ctx, `UPDATE directives SET failed_at = now(), error = $3
+			WHERE id = $1 AND run_id = $2 AND delivered_at IS NULL AND failed_at IS NULL`, id, t.run.ID, msg)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
-		return s.event(ctx, tx, t.run, evDirectiveDelivered, ledger.ActorSystem, map[string]any{"directiveId": str("requestId")})
+		return s.event(ctx, tx, t.run, evDirectiveFailed, ledger.ActorSystem, map[string]any{"directiveId": id, "error": msg})
 	}
-	return nil
+	receipt, _ := data["receipt"].(bool)
+	if phase == "accepted" {
+		lands, _ := data["lands"].(string)
+		if lands != "next_step" && lands != "next_turn" {
+			lands = ""
+		}
+		tag, err := tx.Exec(ctx, `UPDATE directives SET accepted_at = now(), lands = NULLIF($3, '')
+			WHERE id = $1 AND run_id = $2 AND accepted_at IS NULL AND delivered_at IS NULL`, id, t.run.ID, lands)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() > 0 {
+			payload := map[string]any{"directiveId": id, "receipt": receipt}
+			if lands != "" {
+				payload["lands"] = lands
+			}
+			if err := s.event(ctx, tx, t.run, evDirectiveAccepted, ledger.ActorSystem, payload); err != nil {
+				return err
+			}
+		}
+		if receipt {
+			return nil
+		}
+	}
+	tag, err := tx.Exec(ctx, `UPDATE directives SET delivered_at = now(), accepted_at = COALESCE(accepted_at, now())
+		WHERE id = $1 AND run_id = $2 AND delivered_at IS NULL`, id, t.run.ID)
+	if err != nil || tag.RowsAffected() == 0 {
+		return err
+	}
+	payload := map[string]any{"directiveId": id}
+	// Only a consumed receipt says when the agent read it; the other two
+	// say only that it was handed over.
+	if phase == "consumed" {
+		payload["read"] = true
+	}
+	return s.event(ctx, tx, t.run, evDirectiveDelivered, ledger.ActorSystem, payload)
 }
 
 // session records the placement the agent's session is established in. The

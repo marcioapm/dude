@@ -117,10 +117,17 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   signals the workflow only for what the classifier deems actionable — a
   change request or a failing check. Merged → task `done`; closed →
   `aborted`.
-- **Steering** goes to the agent as a message. OpenCode (ACP) cannot take a
-  message mid-turn, so lux holds it until the turn ends; `interrupt: true`
-  stops the turn so it is heard now. A directive is `sent` when lux has it
-  and `delivered` when the agent does.
+- **Steering** goes to the agent as a message, read at its next step: the
+  harness takes it while a tool runs and the model reads it before its
+  next call, in the same turn, without cancelling the tool. A harness that
+  reads messages only between turns takes it when the turn ends.
+  `interrupt: true` stops the turn so it is heard now; it is only ever a
+  person's explicit choice. A directive is `sent` when lux has it,
+  `accepted` when the harness took it (`run.directive.accepted`, with
+  `lands`: `next_step` or `next_turn`), and `delivered` when the agent's
+  step has it (`run.directive.delivered`). An older lux reports only the
+  handoff, which counts as delivered. Each is recorded once per directive
+  and Run.
 - **Pause** stops the lux Run, keeping its workspace and session; **resume**
   continues it, on any host, with the agent's conversation intact.
 - **Parking.** dude pauses a Run itself (`runs.dude_pause`) so that one
