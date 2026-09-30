@@ -7,6 +7,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/config"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
+	"github.com/marciomartins/dude/orchestrator/internal/registry"
 )
 
 // settings is every value run builds its services from, resolved from the
@@ -94,6 +95,9 @@ func settingsFrom(cfg *config.Config) (settings, error) {
 	s.Registry = registrySettings{
 		Mode: cfg.String("DUDE_REGISTRY_AUTH"), Host: cfg.String("DUDE_REGISTRY"),
 		Credential: cfg.String("DUDE_REGISTRY_CREDENTIAL"), ECRRoleARN: cfg.String("DUDE_ECR_ROLE_ARN"),
+	}
+	if err := registry.Check(s.Registry.getenv, agent.DefaultImage); err != nil {
+		return settings{}, fmt.Errorf("registry login: %w", err)
 	}
 
 	s.ReconcileEvery = cfg.Duration("DUDE_PR_RECONCILE")

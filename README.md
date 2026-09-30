@@ -248,7 +248,8 @@ real lux (the latest `run_tests.py --serve` in lux's repository, or
 tar) builds `dist/dude_<version>_linux_{arm64,amd64}.tar.gz` and
 `SHA256SUMS` over them. Each holds `bin/{dude-orchestrator,dude,dude-backend,dude-migrate}`
 and `share/dude/web`, with the licences of code bundled into the binaries under
-`share/dude/third-party`; unpack it into a prefix. `dude-migrate` carries every
+`share/dude/third-party`, and a `FEATURES` file listing what the release
+supports (docs/operations.md, "Release archive"); unpack it into a prefix. `dude-migrate` carries every
 `migrations/*.sql` inside itself (`scripts/build-migrate.sh`). The Go
 binaries are static; the Bun ones are `bun build --compile` and need glibc. Every
 binary answers `--version`. The tarballs are reproducible: the same commit

@@ -8,7 +8,8 @@
 // Settings come from one TOML file shared with the backend (DUDE_CONFIG, else
 // /etc/dude/dude.toml if present) and the environment, each variable
 // overriding its file key; internal/config is the schema and
-// docs/dude.example.toml lists every key. Among them:
+// docs/dude.example.toml lists every key. `dude-orchestrator validate`
+// checks them as startup does and exits, connecting to nothing. Among them:
 //
 //	DATABASE_URL                 the shared Postgres, as the dude_app role
 //	DUDE_ORCHESTRATOR_TOKEN      the service token the backend authenticates with
@@ -72,6 +73,9 @@ func main() {
 		fmt.Println(version.Version)
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "validate" {
+		os.Exit(validate(os.Args[2:], config.Options{}, os.Stdout, os.Stderr))
+	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	if err := run(log); err != nil {
 		log.Error("orchestrator stopped", "error", err)
@@ -83,12 +87,10 @@ func run(log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	cfg, err := config.Load(config.Orchestrator, config.Options{})
-	if err != nil {
-		return fmt.Errorf("configuration: %w", err)
+	cfg, set, err := resolve(config.Options{})
+	if cfg != nil {
+		logConfig(log, cfg)
 	}
-	logConfig(log, cfg)
-	set, err := settingsFrom(cfg)
 	if missing := (missingError{}); errors.As(err, &missing) {
 		fmt.Fprintln(os.Stderr, missing.Error())
 		os.Exit(2)

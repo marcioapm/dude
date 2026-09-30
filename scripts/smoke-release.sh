@@ -6,6 +6,8 @@
 #
 # It unpacks the tarball into a temporary prefix and checks that
 #   - every bin/* --version prints the version, with DATABASE_URL unset;
+#   - FEATURES lists validate, and dude-orchestrator and dude-backend
+#     validate accept a good file and refuse a bad one;
 #   - the tarball holds no .sql files;
 #   - bin/dude-migrate, run from a directory with no SQL in it, applies
 #     every migration in this repository's migrations/, reports them all
@@ -64,6 +66,28 @@ for cmd in dude-orchestrator dude dude-backend dude-migrate; do
   got="$(env -u DATABASE_URL "$bin" --version)" || fail "bin/$cmd --version exited $?"
   [[ "$got" == "$VERSION" ]] || fail "bin/$cmd --version printed '$got', want '$VERSION'"
   echo "ok  bin/$cmd --version = $got"
+done
+
+[[ -f "$prefix/FEATURES" ]] || fail "the tarball has no FEATURES"
+grep -qx validate "$prefix/FEATURES" || fail "FEATURES does not list validate: $(cat "$prefix/FEATURES")"
+echo "ok  FEATURES lists validate"
+
+# validate, on a good and a bad file, with none of this machine's settings.
+# Port 1 on loopback: were validate to connect, it would fail loudly.
+good="$prefix/good.toml"
+bad="$prefix/bad.toml"
+printf '[database]\nurl = "postgres://dude_app:x@127.0.0.1:1/dude"\n[orchestrator]\ntoken = "t"\n[lux]\nurl = "https://lux.invalid"\napi_key = "k"\n' > "$good"
+printf '[database]\nurl = "postgres://dude_app:x@127.0.0.1:1/dude"\n[lux]\nurll = "x"\n' > "$bad"
+chmod 0600 "$good" "$bad"
+for cmd in dude-orchestrator dude-backend; do
+  got="$(env -i PATH="$PATH" DUDE_CONFIG="$good" "$prefix/bin/$cmd" validate)" || fail "bin/$cmd validate on a good file exited $?"
+  [[ "$got" == "ok: $good" ]] || fail "bin/$cmd validate printed '$got', want 'ok: $good'"
+  set +e
+  err="$(env -i PATH="$PATH" DUDE_CONFIG="$bad" "$prefix/bin/$cmd" validate 2>&1 >/dev/null)"
+  code=$?
+  set -e
+  [[ $code == 1 && "$err" == *"unknown key lux.urll"* ]] || fail "bin/$cmd validate on a bad file: exit $code, '$err'"
+  echo "ok  bin/$cmd validate: good file accepted, bad refused"
 done
 
 # From an empty directory, so no SQL beside it or under it can be read.

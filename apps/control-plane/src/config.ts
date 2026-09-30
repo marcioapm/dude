@@ -92,6 +92,22 @@ const byName = new Map(KEYS.map((k) => [k.name, k]));
 const usedHere = (k: Key) => k.use !== "orchestrator";
 export const label = (k: Key) => `${k.name} (${k.env})`;
 
+/**
+ * A setting a release removed. For one more release both processes accept
+ * it, from the file or the environment, ignore it and warn, so the previous
+ * release's configuration still starts the new one.
+ */
+export interface RetiredKey {
+  readonly name: string;
+  readonly env: string;
+}
+
+// tests/fixtures/config/keys.json's "retired" must match it, as the Go list must.
+export const RETIRED: readonly RetiredKey[] = [];
+
+/** The warning for a retired setting: its key or variable, never its value. */
+const retiredWarning = (name: string) => `retired: ${name}; remove it`;
+
 type Value = string | number | boolean | string[];
 
 export class ConfigError extends Error {
@@ -184,21 +200,36 @@ for (const k of KEYS) {
   });
 }
 
-/** Every leaf of the parsed file, by dotted name; unknown keys and misplaced tables are refused. */
-function leaves(doc: Record<string, unknown>): Map<string, unknown> {
+/**
+ * Every leaf of the parsed file, by dotted name, and the retired keys it
+ * holds; unknown keys and misplaced tables are refused.
+ */
+function leaves(doc: Record<string, unknown>, retired: readonly RetiredKey[]): { found: Map<string, unknown>; gone: string[] } {
   const out = new Map<string, unknown>();
   const unknown: string[] = [];
+  const gone: string[] = [];
+  const retiredNames = new Set(retired.map((r) => r.name));
+  const retiredTables = new Set(retired.flatMap((r) => {
+    const parts = r.name.split(".");
+    return parts.slice(1).map((_, i) => parts.slice(0, i + 1).join("."));
+  }));
   const walk = (obj: Record<string, unknown>, path: string[]) => {
-    const children = shape.get(path.join(SEP))!;
+    const children = shape.get(path.join(SEP));
     for (const [k, v] of Object.entries(obj)) {
       const segments = [...path, k];
       const name = segments.map((s) => /^[A-Za-z0-9_-]+$/.test(s) ? s : JSON.stringify(s)).join(".");
-      const leaf = children.get(k);
+      const leaf = children?.get(k);
+      const table = v !== null && typeof v === "object" && !Array.isArray(v);
       if (leaf === false) {
-        if (v === null || typeof v !== "object" || Array.isArray(v)) throw new ConfigError(`${name}: want a table, not ${tomlType(v)}`);
+        if (!table) throw new ConfigError(`${name}: want a table, not ${tomlType(v)}`);
         walk(v as Record<string, unknown>, segments);
       } else if (leaf === true) {
         out.set(name, v);
+      } else if (retiredNames.has(name)) {
+        gone.push(name);
+      } else if (table && retiredTables.has(name)) {
+        // No schema table here (children is undefined): only retired keys pass.
+        walk(v as Record<string, unknown>, segments);
       } else {
         unknown.push(name);
       }
@@ -206,7 +237,7 @@ function leaves(doc: Record<string, unknown>): Map<string, unknown> {
   };
   walk(doc, []);
   if (unknown.length) throw new ConfigError(`unknown key ${unknown.join(", ")}`);
-  return out;
+  return { found: out, gone: gone.sort() };
 }
 
 function readFile(env: Env, defaultPath: string): { path: string; text: string } | null {
@@ -277,6 +308,8 @@ export interface LoadOptions {
   env?: Env;
   /** Replaces DEFAULT_PATH, for tests. */
   defaultPath?: string;
+  /** Replaces RETIRED, for tests. */
+  retired?: readonly RetiredKey[];
 }
 
 /** The backend's resolved settings. */
@@ -298,6 +331,7 @@ export class Config {
 
   static load(opts: LoadOptions = {}): Config {
     const env = opts.env ?? process.env;
+    const retired = opts.retired ?? RETIRED;
     const values = new Map<string, Value>();
     const sources = new Map<string, "file" | "env">();
     const warnings: string[] = [];
@@ -312,7 +346,9 @@ export class Config {
       }
       let found: Map<string, unknown>;
       try {
-        found = leaves(doc);
+        const read = leaves(doc, retired);
+        found = read.found;
+        warnings.push(...read.gone.map(retiredWarning));
       } catch (err) {
         throw where(err);
       }
@@ -333,6 +369,9 @@ export class Config {
       }
       const warning = secretWarning(file.path, [...sources.keys()]);
       if (warning) warnings.push(warning);
+    }
+    for (const r of retired) {
+      if (r.env && env[r.env]) warnings.push(retiredWarning(r.env));
     }
     for (const k of KEYS) {
       const raw = env[k.env];
