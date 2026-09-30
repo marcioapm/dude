@@ -443,10 +443,11 @@ body {
   max-width: 720px;
   color: var(--ds-color-text-secondary);
 }
-/* Each criterion is Markdown of its own; the list is the criteria's. */
+/* Each criterion is Markdown of its own; the list is the criteria's,
+   its markers on the goal's Markdown list indent. */
 .taskCriteria {
-  margin: var(--ds-space-8) 0 0;
-  padding-left: var(--ds-space-20);
+  margin: 0;
+  padding-left: calc(1.5 * var(--ds-text-prose));
 }
 .taskAside {
   display: flex;

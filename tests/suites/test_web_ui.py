@@ -159,7 +159,7 @@ def test_a_task_is_written_in_markdown_and_its_criteria_are_the_list_items(
     page.get_by_test_id("task-title").fill("Keep SEPA at checkout")
     page.get_by_test_id("task-goal").fill(GOAL_MARKDOWN)
     criteria = page.get_by_test_id("task-criteria")
-    criteria.fill("- [ ] SEPA appears on the payment step\n- Invoice only for annual plans")
+    criteria.fill("- [ ] SEPA appears on the payment step\n- Invoice only for **annual** plans")
     expect(page.get_by_test_id("task-criteria-count")).to_have_text("2 criteria")
 
     # Preview renders the goal through the safe Markdown path, heading and list.
@@ -180,9 +180,9 @@ def test_a_task_is_written_in_markdown_and_its_criteria_are_the_list_items(
     criteria.focus()
     criteria.evaluate("el => el.setSelectionRange(el.value.length, el.value.length)")
     criteria.press("Enter")
-    expect(criteria).to_have_value("- [ ] SEPA appears on the payment step\n- Invoice only for annual plans\n- ")
+    expect(criteria).to_have_value("- [ ] SEPA appears on the payment step\n- Invoice only for **annual** plans\n- ")
     criteria.press("Enter")
-    expect(criteria).to_have_value("- [ ] SEPA appears on the payment step\n- Invoice only for annual plans\n")
+    expect(criteria).to_have_value("- [ ] SEPA appears on the payment step\n- Invoice only for **annual** plans\n")
 
     page.get_by_test_id("task-save").click()
     expect(page.get_by_test_id("task-screen")).to_be_visible()
@@ -190,7 +190,7 @@ def test_a_task_is_written_in_markdown_and_its_criteria_are_the_list_items(
     items = client.get("/v1/tasks", params={"projectId": forge_project["id"]}).json()["tasks"]
     task_id = next(i["id"] for i in items if i["title"] == "Keep SEPA at checkout")
     saved = client.get(f"/v1/tasks/{task_id}").json()
-    assert saved["acceptanceCriteria"] == ["SEPA appears on the payment step", "Invoice only for annual plans"]
+    assert saved["acceptanceCriteria"] == ["SEPA appears on the payment step", "Invoice only for **annual** plans"]
     assert saved["goal"] == GOAL_MARKDOWN
 
     # The task shows what the preview showed: the goal's heading, each criterion.
@@ -198,12 +198,19 @@ def test_a_task_is_written_in_markdown_and_its_criteria_are_the_list_items(
     expect(screen.get_by_role("heading", name="What exists today")).to_be_visible()
     # Set as it was previewed: the same size and the same space above it.
     assert screen.get_by_role("heading", name="What exists today").evaluate(heading_style) == previewed
-    expect(screen.get_by_role("list", name="Acceptance criteria").locator(":scope > li")).to_have_count(2)
+    criteria_list = screen.get_by_role("list", name="Acceptance criteria")
+    expect(criteria_list.locator(":scope > li")).to_have_count(2)
+    expect(criteria_list.locator("strong")).to_have_text("annual")
+    # The criteria are a section of their own, their items where the goal's list items are.
+    expect(screen.get_by_role("region", name="Acceptance criteria").get_by_role("heading", name="Acceptance criteria")).to_be_visible()
+    goal_item = screen.get_by_role("region", name="Goal").get_by_role("listitem").first
+    left = "el => Math.round(el.getBoundingClientRect().left)"
+    assert criteria_list.locator(":scope > li").first.evaluate(left) == goal_item.evaluate(left)
 
     # Editing opens the criteria as the list they were saved from.
     page.get_by_test_id("edit-task").click()
     expect(page.get_by_test_id("task-criteria")).to_have_value(
-        "- [ ] SEPA appears on the payment step\n- [ ] Invoice only for annual plans")
+        "- [ ] SEPA appears on the payment step\n- [ ] Invoice only for **annual** plans")
     expect(page.get_by_test_id("task-goal")).to_have_value(GOAL_MARKDOWN)
     assert console_errors == []
 
