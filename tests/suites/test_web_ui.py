@@ -157,7 +157,27 @@ def test_a_task_is_written_in_markdown_and_its_criteria_are_the_list_items(
     sign_in(page, web_url, org["api_key"])
     page.get_by_test_id("new-task").click()
     page.get_by_test_id("task-title").fill("Keep SEPA at checkout")
-    page.get_by_test_id("task-goal").fill(GOAL_MARKDOWN)
+    goal = page.get_by_test_id("task-goal")
+    selected = "el => el.value.slice(el.selectionStart, el.selectionEnd)"
+
+    # The toolbar's Bold wraps the selection, which stays selected.
+    goal.fill("make it red")
+    goal.evaluate("el => el.setSelectionRange(8, 11)")
+    page.get_by_role("toolbar", name="Formatting").first.get_by_role("button", name="Bold", exact=True).click()
+    expect(goal).to_have_value("make it **red**")
+    assert goal.evaluate(selected) == "red"
+    expect(goal).to_be_focused()
+    # Ctrl+B again takes it off.
+    goal.press("Control+b")
+    expect(goal).to_have_value("make it red")
+    assert goal.evaluate(selected) == "red"
+    # Ctrl+B on, then Undo: the text is as it was.
+    goal.press("Control+b")
+    expect(goal).to_have_value("make it **red**")
+    goal.press("ControlOrMeta+z")
+    expect(goal).to_have_value("make it red")
+
+    goal.fill(GOAL_MARKDOWN)
     criteria = page.get_by_test_id("task-criteria")
     criteria.fill("- [ ] SEPA appears on the payment step\n- Invoice only for **annual** plans")
     expect(page.get_by_test_id("task-criteria-count")).to_have_text("2 criteria")
