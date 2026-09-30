@@ -565,13 +565,15 @@ size and shade, not weight: body 400, names and labels 500, headings at most
     `setRangeText` where that is gone, so Undo takes it back.
   - **Locked opens in Preview.** `locked` / `disabled`: Write is disabled
     and the caller's `hint` says why. Narrow, Quote is the first button to go.
-- **A dialog that holds writing asks before losing it.** `FormDialog
-  unsavedWords` (the app's `unsavedWords`: words in fields changed since
-  it opened, 0 at 20 or fewer) makes Escape, ×, Cancel and a click outside
-  open a small `Dialog tone="danger"`: the question ("Discard this
-  task?"), how many words, **Keep writing** (focused) and **Discard**
-  (`danger solid`, inside its own confirmation). Nothing worth asking
-  about closes at once.
+- **A dialog that holds writing asks before losing it.** When more than a
+  few words would be lost, every way out — Escape, ×, Cancel, a click
+  outside — opens a `DiscardConfirm` (a `Dialog size="sm" tone="danger"`):
+  the question ("Discard this task?"), what would be lost ("You have
+  written 195 words…" when creating; "Your changes haven't been saved."
+  when editing), **Keep writing** (`quiet`, focused on open) and
+  **Discard** (`danger solid`, inside its own confirmation). Saving never
+  asks. The app decides the threshold (dude's: more than 20 words in
+  fields that changed).
 - **Key hints** are `KeyHint keys={["mod", "Enter"]}` (`Kbd` for one cap;
   `mod` is ⌘ on Apple devices, Ctrl elsewhere), muted, at a dialog's
   `footerStart`. Help beside a form is a `HelpList` and, for Markdown,
@@ -865,7 +867,7 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | `<FindingRow severity="blocking" status="resolved" … />` | `f.severity.toUpperCase()` in red, struck through when done |
 | `<Breadcrumb items={[project, epic, key]} />` in the header | a ghost `Back` button under the content |
 | `<MarkdownEditor label="Goal" value={goal} onChange={setGoal} minRows={12} maxLength={10_000} />` | a `Textarea` for Markdown with a hand-rolled preview beside it |
-| `<FormDialog size="document" aside={…} unsavedWords={n} />` for writing a task | a 400px dialog that loses three paragraphs to a stray Escape |
+| `<Dialog size="document" aside={…} context={…}>` with a `DiscardConfirm` for writing a task | a 400px dialog that loses three paragraphs to a stray Escape |
 | a settings page's sub-pages as `items` of its `SettingsNavItem` | `Tabs` inside a settings page |
 | `<SearchResultRow rank={1} lead={{ type: "memory" }} facts={["words and meaning"]} />` | a score chip and a progress bar on every result |
 | `<EntityLine lead={face} name={…} detail={…} />`, `<AuthorLine author={…} />` | a face and two spans styled in the app's CSS |
@@ -877,9 +879,10 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 document's heading), Textarea, MarkdownEditor, Select, Checkbox,
 Badge, Card, Table (THead/TBody/Tr/Th/Td/TableEmpty), Tabs (underline for a
 page, segmented in a toolbar; a tab can carry a count), Dialog (`size=
-"document"` with `aside` and `context`), Toast, Tooltip, RowMenu (+
-`rowMenuOpeners`), Skeleton/SkeletonLines/Spinner, EmptyState, ScrollArea,
-Kbd/KeyHint/HelpList/MarkdownCheatsheet.
+"document"` with `aside` and `context`), DiscardConfirm, Toast, Tooltip,
+RowMenu (+ `rowMenuOpeners`), Skeleton/SkeletonLines/Spinner, EmptyState,
+ScrollArea, FormStack (`fill`), Kbd/KeyHint (+ `modKey`)/HelpList/
+MarkdownCheatsheet.
 
 `src/components/` — the factory vocabulary:
 

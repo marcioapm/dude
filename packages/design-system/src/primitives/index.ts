@@ -16,6 +16,8 @@ export { Tabs, TabList, Tab, TabCount, TabPanel, TabToggle } from "./Tabs.tsx";
 export type { TabsProps, TabListProps, TabProps, TabPanelProps, TabToggleProps } from "./Tabs.tsx";
 export { Dialog, DialogClose } from "./Dialog.tsx";
 export type { DialogProps } from "./Dialog.tsx";
+export { DiscardConfirm } from "./DiscardConfirm.tsx";
+export type { DiscardConfirmProps } from "./DiscardConfirm.tsx";
 export { ToastProvider, useToast } from "./Toast.tsx";
 export type { ToastOptions, ToastTone } from "./Toast.tsx";
 export { Tooltip, TooltipProvider } from "./Tooltip.tsx";

@@ -14,6 +14,7 @@ import { Card, CardBody, CardFooter, CardHeader } from "../../primitives/Card.ts
 import { Table, TBody, Td, Th, THead, Tr, TableEmpty, type SortDirection } from "../../primitives/Table.tsx";
 import { Tab, TabList, TabPanel, Tabs } from "../../primitives/Tabs.tsx";
 import { Dialog, DialogClose } from "../../primitives/Dialog.tsx";
+import { DiscardConfirm } from "../../primitives/DiscardConfirm.tsx";
 import { useToast } from "../../primitives/Toast.tsx";
 import { Tooltip } from "../../primitives/Tooltip.tsx";
 import { EmptyState, Skeleton, SkeletonLines, Spinner } from "../../primitives/Feedback.tsx";
@@ -370,10 +371,11 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
 
-      <Block id="p-dialog" title="Dialog" note="For decisions and small forms — and for writing one document: size='document' is a fixed 1120×900 (full screen under 640px) with an optional aside on the chrome shade that scrolls on its own and stacks under the writing below 960px; context puts where the thing sits above the title. Destructive confirmations get the danger tone and a destructive primary action.">
+      <Block id="p-dialog" title="Dialog" note="For decisions and small forms — and for writing one document: size='document' is a fixed 1120×900 (full screen under 640px) with an optional aside on the chrome shade that scrolls on its own and stacks under the writing below 960px; context puts where the thing sits above the title. Destructive confirmations get the danger tone and a destructive primary action. DiscardConfirm is the one asked before closing loses writing: Keep writing (quiet, focused) and Discard (danger solid).">
         <Panes mode={mode}>
           <Row>
             <TaskDialogExample />
+            <DiscardConfirmExample />
             <Dialog
               trigger={<Button>Open dialog</Button>}
               title="Retry run"
@@ -725,5 +727,21 @@ function TaskDialogExample() {
           placeholder="- [ ] A thing that must be true when it's done" summary={<Badge tone="neutral" size="sm">4 criteria</Badge>} />
       </FormStack>
     </Dialog>
+  );
+}
+
+function DiscardConfirmExample() {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button onClick={() => setOpen(true)}>Discard confirm</Button>
+      <DiscardConfirm
+        open={open}
+        title="Discard this task?"
+        description="You have written 195 words that haven't been saved."
+        onKeep={() => setOpen(false)}
+        onDiscard={() => setOpen(false)}
+      />
+    </>
   );
 }
