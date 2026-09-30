@@ -18,6 +18,12 @@ describe("conflictNotice", () => {
     expect(n).toEqual({ text: "Bo Lindqvist paused it first, so you did not pause this run. It is paused.", by: "Bo Lindqvist" });
   });
 
+  test("direct person actors name another person but not your own acts", () => {
+    const directPeople = { you: "per_you", names: new Map([["per_bo", "Bo Lindqvist"]]) };
+    expect(conflictNotice("pause this run", "already paused", [ev("run.paused", { type: "person", id: "per_bo" })], directPeople, "paused").by).toBe("Bo Lindqvist");
+    expect(conflictNotice("pause this run", "already paused", [ev("run.paused", { type: "person", id: "per_you" })], directPeople, "paused").by).toBeNull();
+  });
+
   test("your own acts are not the other person", () => {
     const n = conflictNotice("abort this run", "run r is already aborted", [ev("run.aborted", { type: "human", id: "key_you" })], people, "aborted");
     expect(n).toEqual({ text: "Could not abort this run: run r is already aborted", by: null });

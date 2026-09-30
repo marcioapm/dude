@@ -197,7 +197,7 @@ async function register(ctx: RequestContext, base: string, repositoryId?: string
     UPDATE forge_credentials SET public_url = ${origin} WHERE forge = 'github'`);
   const res = await orchestrator(organizationId, "POST", "/internal/webhooks/register",
     JSON.stringify({ url: `${origin}${webhookPath(organizationId)}`, ...(repositoryId ? { repositoryId } : {}) }),
-    ctx.principal.apiKeyId);
+    ctx.principal);
   const body = (await res.json()) as { error?: { message?: string; code?: string } };
   if (!res.ok) throw new HttpError(res.status, body.error?.message ?? "registering webhooks failed", body.error?.code ?? "error");
   return body;
@@ -379,7 +379,7 @@ async function noteDelivery(organizationId: string, failure: string | null): Pro
 function pullRequestAction(action: "merge" | "update-branch" | "rerun-failed" | "reviewers") {
   return async (ctx: RequestContext): Promise<Response> =>
     orchestrator(ctx.principal.organizationId, "POST", `/internal/pull-requests/${encodeURIComponent(ctx.params.id!)}/${action}`,
-      await ctx.request.text(), ctx.principal.apiKeyId);
+      await ctx.request.text(), ctx.principal);
 }
 
 /**
@@ -388,12 +388,12 @@ function pullRequestAction(action: "merge" | "update-branch" | "rerun-failed" | 
  * the fix budget. The orchestrator owns their meaning and defaults.
  */
 async function getGithubSettings(ctx: RequestContext): Promise<Response> {
-  return orchestrator(ctx.principal.organizationId, "GET", "/internal/github-settings");
+  return orchestrator(ctx.principal.organizationId, "GET", "/internal/github-settings", "{}", ctx.principal);
 }
 
 async function updateGithubSettings(ctx: RequestContext): Promise<Response> {
   return orchestrator(ctx.principal.organizationId, "PATCH", "/internal/github-settings", await ctx.request.text(),
-    ctx.principal.apiKeyId);
+    ctx.principal);
 }
 
 function adminOnly(handler: (ctx: RequestContext) => Promise<Response>) {

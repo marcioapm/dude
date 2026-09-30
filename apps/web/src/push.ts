@@ -64,7 +64,8 @@ export async function turnPushOn(client: ApiClient): Promise<PushState> {
 /** Stop: dude forgets this browser, and the browser its subscription. Also on sign-out. */
 export async function turnPushOff(client: ApiClient): Promise<PushState> {
   if (!supported()) return "unsupported";
-  const sub = await subscription();
+  const registration = await navigator.serviceWorker.getRegistration();
+  const sub = registration ? await registration.pushManager.getSubscription() : null;
   if (sub) {
     await client.unsubscribePush(sub.endpoint).catch(() => {});
     await sub.unsubscribe();

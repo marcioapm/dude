@@ -111,13 +111,12 @@ type ask struct {
 	Cursor                         int64
 	Org, Type, RunID, TaskID, Task string
 	Role                           string
-	// The task's owner, as a person (or their key, from before people);
-	// empty for a task nobody owns.
+	// The task's first active person; empty for a task nobody owns.
 	Owner   string
 	Payload json.RawMessage
 }
 
-type subscription struct{ Endpoint, P256dh, Auth, Key string }
+type subscription struct{ Endpoint, P256dh, Auth, Person string }
 
 // Sweep sends a notification for each ask recorded since the last sweep, to
 // the browsers of its task's owner — they are the one who answers it — or,
@@ -133,11 +132,15 @@ func (n *Notifier) Sweep(ctx context.Context) (int, error) {
 	if err := n.DB.InSystem(ctx, "notify", func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT e.cursor, e.organization_id, e.event_type, COALESCE(e.run_id, ''),
 				COALESCE(e.task_id, ''), COALESCE(p.key_prefix || '-' || w.number, ''), COALESCE(r.role::text, ''),
-				COALESCE(k.person_id, k.id, ''), e.payload
+				COALESCE(owner.person_id, ''), e.payload
 			FROM events e
 			LEFT JOIN tasks w ON w.id = e.task_id
-			-- An owner who can no longer sign in is no owner: everyone hears.
-			LEFT JOIN api_keys k ON k.id = w.owner_key_id AND k.revoked_at IS NULL
+			LEFT JOIN LATERAL (
+				SELECT tp.person_id FROM task_people tp JOIN people member ON member.id = tp.person_id
+				WHERE tp.task_id = w.id AND tp.organization_id = e.organization_id
+				  AND member.organization_id = e.organization_id AND member.removed_at IS NULL
+				ORDER BY tp.position, tp.person_id LIMIT 1
+			) owner ON true
 			LEFT JOIN projects p ON p.id = w.project_id
 			LEFT JOIN runs r ON r.id = e.run_id
 			WHERE e.cursor > (SELECT after_cursor FROM push_config)
@@ -154,17 +157,15 @@ func (n *Notifier) Sweep(ctx context.Context) (int, error) {
 		for _, a := range found {
 			orgs = append(orgs, a.Org)
 		}
-		// A browser is its key's person's: the owner hears on any key of theirs.
-		// One signed in with a key since revoked hears nothing more.
-		rows, err = tx.Query(ctx, `SELECT s.organization_id, s.endpoint, s.p256dh, s.auth, COALESCE(k.person_id, s.api_key_id, '')
-			FROM push_subscriptions s LEFT JOIN api_keys k ON k.id = s.api_key_id
-			WHERE s.organization_id = ANY ($1) AND (s.api_key_id IS NULL OR k.revoked_at IS NULL)`, orgs)
+		rows, err = tx.Query(ctx, `SELECT s.organization_id, s.endpoint, s.p256dh, s.auth, s.person_id
+			FROM push_subscriptions s JOIN people p ON p.id = s.person_id AND p.organization_id = s.organization_id
+			WHERE s.organization_id = ANY ($1) AND p.removed_at IS NULL`, orgs)
 		if err != nil {
 			return err
 		}
 		var org string
 		var sub subscription
-		_, err = pgx.ForEachRow(rows, []any{&org, &sub.Endpoint, &sub.P256dh, &sub.Auth, &sub.Key}, func() error {
+		_, err = pgx.ForEachRow(rows, []any{&org, &sub.Endpoint, &sub.P256dh, &sub.Auth, &sub.Person}, func() error {
 			subs[org] = append(subs[org], sub)
 			return nil
 		})
@@ -188,7 +189,7 @@ func (n *Notifier) Sweep(ctx context.Context) (int, error) {
 		}
 		body, _ := json.Marshal(msg)
 		for _, s := range subs[a.Org] {
-			if a.Owner != "" && s.Key != a.Owner {
+			if a.Owner != "" && s.Person != a.Owner {
 				continue
 			}
 			wg.Add(1)
