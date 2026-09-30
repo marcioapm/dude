@@ -183,21 +183,26 @@ export interface AccessDeps {
   profile: (token: string, email: string) => Promise<Profile | null>;
 }
 
-export type Membership = { personId: string } | "removed" | "unknown";
+export type Member = { personId: string; name: string; role: "admin" | "member" };
+export type Membership = Member | "removed" | "unknown";
 
 interface PersonRow {
   id: string;
   removed: boolean;
   name: string;
+  role: "admin" | "member";
   email: string;
   photoUrl: string | null;
   photoKey: string | null;
 }
 
 const findByEmail = async (scope: OrgScope, email: string) => (await scope.sql`
-  SELECT id, removed_at IS NOT NULL AS removed, name, email::text AS email, photo_url AS "photoUrl",
+  SELECT id, removed_at IS NOT NULL AS removed, name, role, email::text AS email, photo_url AS "photoUrl",
          photo_key AS "photoKey"
   FROM people WHERE email = ${email}`) as PersonRow[];
+
+const member = (row: { id: string; name: string; role: string }): Member =>
+  ({ personId: row.id, name: row.name, role: row.role === "admin" ? "admin" : "member" });
 
 /**
  * The organization's person with `email`, making them a member if nobody
@@ -217,7 +222,7 @@ export async function memberFor(organizationId: string, email: string, autoCreat
   if (active) {
     const wantsName = active.name.trim() === "" || active.name.toLowerCase() === active.email.toLowerCase();
     const wantsPhoto = !active.photoUrl && !active.photoKey;
-    if (!wantsName && !wantsPhoto) return { personId: active.id };
+    if (!wantsName && !wantsPhoto) return member(active);
     const got = await profile();
     const name = wantsName ? got?.name ?? null : null;
     const picture = wantsPhoto ? got?.picture ?? null : null;
@@ -225,15 +230,15 @@ export async function memberFor(organizationId: string, email: string, autoCreat
       // Rechecked in the statement: the person may have been removed, or
       // set their own name or photo, while the profile was fetched.
       const kept = !name && !picture
-        ? await scope.sql`SELECT id FROM people WHERE id = ${active.id} AND removed_at IS NULL`
+        ? await scope.sql`SELECT id, name, role FROM people WHERE id = ${active.id} AND removed_at IS NULL`
         : await scope.sql`
         UPDATE people SET
           name = CASE WHEN ${name}::text IS NOT NULL AND (btrim(name) = '' OR lower(name) = lower(email::text))
                       THEN ${name}::text ELSE name END,
           photo_url = CASE WHEN photo_url IS NULL AND photo_key IS NULL THEN ${picture}::text ELSE photo_url END
         WHERE id = ${active.id} AND removed_at IS NULL
-        RETURNING id`;
-      return kept.length > 0 ? { personId: active.id } : "removed";
+        RETURNING id, name, role`;
+      return kept[0] ? member(kept[0]) : "removed";
     });
   }
   if (rows.length > 0) return "removed";
@@ -244,14 +249,15 @@ export async function memberFor(organizationId: string, email: string, autoCreat
     await scope.sql`SELECT pg_advisory_xact_lock(hashtext('people:' || ${scope.organizationId}))`;
     const now = await findByEmail(scope, email);
     const current = now.find((r) => !r.removed);
-    if (current) return { personId: current.id };
+    if (current) return member(current);
     // Removed while the profile was fetched: stays removed, never recreated.
     if (now.length > 0) return "removed";
     const personId = newId("person");
+    const name = seed?.name ?? email;
     await scope.sql`
       INSERT INTO people (id, organization_id, name, email, role, photo_url)
-      VALUES (${personId}, ${scope.organizationId}, ${seed?.name ?? email}, ${email}, 'member', ${seed?.picture ?? null})`;
-    return { personId };
+      VALUES (${personId}, ${scope.organizationId}, ${name}, ${email}, 'member', ${seed?.picture ?? null})`;
+    return { personId, name, role: "member" };
   });
 }
 
@@ -269,10 +275,11 @@ export function accessAuthenticator(config: AccessConfig, organizationId: string
     const membership = await memberFor(organizationId, identity.email, config.auto_create,
       () => deps.profile(token, identity.email));
     if (typeof membership === "string") return null;
+    // Name and role come from the membership just read or written, so the
+    // router need not resolve the person again.
     return {
       credentialKind: "person", organizationId, personId: membership.personId, kind: "user",
-      // Name and role are reread by the router from the person's row.
-      name: identity.email, role: "member", expiresAt: identity.expiresAt,
+      name: membership.name, role: membership.role, expiresAt: identity.expiresAt, resolved: true,
     };
   };
 }

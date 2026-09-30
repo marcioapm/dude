@@ -127,7 +127,9 @@ export class Router {
         const explicit = request.headers.get("authorization") ??
           (route.allowKeyInQuery ? url.searchParams.get("key") : null);
         let principal = await this.authenticateRequest(explicit, request);
-        if (principal?.credentialKind === "person") {
+        // A person asserted by id only (test injection) is looked up here;
+        // one the authenticator already read from their current row is not.
+        if (principal?.credentialKind === "person" && !principal.resolved) {
           const { expiresAt } = principal;
           principal = await personPrincipal(principal.organizationId, principal.personId);
           if (principal?.credentialKind === "person" && expiresAt !== undefined) principal.expiresAt = expiresAt;
