@@ -46,34 +46,17 @@ type Provider interface {
 // is agentImage's, minting as DUDE_ECR_ROLE_ARN if set. getenv is
 // os.Getenv outside tests.
 func FromEnv(ctx context.Context, getenv func(string) string, agentImage string, opts ...Option) (Provider, error) {
+	if err := Check(getenv, agentImage); err != nil {
+		return nil, err
+	}
 	registry, credential := getenv("DUDE_REGISTRY"), getenv("DUDE_REGISTRY_CREDENTIAL")
 	role := getenv("DUDE_ECR_ROLE_ARN")
-	mode := getenv("DUDE_REGISTRY_AUTH")
-	if role != "" && mode != "ecr" {
-		return nil, errors.New("DUDE_ECR_ROLE_ARN needs DUDE_REGISTRY_AUTH=ecr")
-	}
-	switch mode {
-	case "", "none":
-		// Set without a mode, they would silently log in to nothing.
-		if registry != "" || credential != "" {
-			return nil, errors.New("DUDE_REGISTRY and DUDE_REGISTRY_CREDENTIAL need DUDE_REGISTRY_AUTH=static")
-		}
-		return nil, nil
+	switch getenv("DUDE_REGISTRY_AUTH") {
 	case "static":
 		return NewStatic(registry, credential)
 	case "ecr":
 		host := ImageRegistry(agentImage)
-		region, ok := ecrRegion(host)
-		if !ok {
-			return nil, fmt.Errorf("DUDE_REGISTRY_AUTH=ecr needs DUDE_AGENT_IMAGE in an ECR registry "+
-				"(<account>.dkr.ecr.<region>.amazonaws.com/...), not %q", agentImage)
-		}
-		if registry != "" || credential != "" {
-			return nil, errors.New("DUDE_REGISTRY_AUTH=ecr takes its registry from DUDE_AGENT_IMAGE: unset DUDE_REGISTRY and DUDE_REGISTRY_CREDENTIAL")
-		}
-		if role != "" && !roleARNRe.MatchString(role) {
-			return nil, fmt.Errorf("DUDE_ECR_ROLE_ARN: %q is not an IAM role ARN (arn:<partition>:iam::<account>:role/<name>)", role)
-		}
+		region, _ := ecrRegion(host)
 		cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(region))
 		if err != nil {
 			return nil, fmt.Errorf("AWS configuration for ECR: %w", err)
@@ -82,8 +65,43 @@ func FromEnv(ctx context.Context, getenv func(string) string, agentImage string,
 			return NewECRWithRole(host, role, ecr.NewFromConfig(cfg), sts.NewFromConfig(cfg), time.Now, opts...), nil
 		}
 		return NewECR(host, ecr.NewFromConfig(cfg), time.Now, opts...), nil
+	}
+	return nil, nil
+}
+
+// Check refuses the registry settings FromEnv would refuse, without
+// reading AWS configuration or building a provider.
+func Check(getenv func(string) string, agentImage string) error {
+	registry, credential := getenv("DUDE_REGISTRY"), getenv("DUDE_REGISTRY_CREDENTIAL")
+	role := getenv("DUDE_ECR_ROLE_ARN")
+	mode := getenv("DUDE_REGISTRY_AUTH")
+	if role != "" && mode != "ecr" {
+		return errors.New("DUDE_ECR_ROLE_ARN needs DUDE_REGISTRY_AUTH=ecr")
+	}
+	switch mode {
+	case "", "none":
+		// Set without a mode, they would silently log in to nothing.
+		if registry != "" || credential != "" {
+			return errors.New("DUDE_REGISTRY and DUDE_REGISTRY_CREDENTIAL need DUDE_REGISTRY_AUTH=static")
+		}
+		return nil
+	case "static":
+		_, err := NewStatic(registry, credential)
+		return err
+	case "ecr":
+		if _, ok := ecrRegion(ImageRegistry(agentImage)); !ok {
+			return fmt.Errorf("DUDE_REGISTRY_AUTH=ecr needs DUDE_AGENT_IMAGE in an ECR registry "+
+				"(<account>.dkr.ecr.<region>.amazonaws.com/...), not %q", agentImage)
+		}
+		if registry != "" || credential != "" {
+			return errors.New("DUDE_REGISTRY_AUTH=ecr takes its registry from DUDE_AGENT_IMAGE: unset DUDE_REGISTRY and DUDE_REGISTRY_CREDENTIAL")
+		}
+		if role != "" && !roleARNRe.MatchString(role) {
+			return fmt.Errorf("DUDE_ECR_ROLE_ARN: %q is not an IAM role ARN (arn:<partition>:iam::<account>:role/<name>)", role)
+		}
+		return nil
 	default:
-		return nil, fmt.Errorf("DUDE_REGISTRY_AUTH: %q is none of none, static, ecr", mode)
+		return fmt.Errorf("DUDE_REGISTRY_AUTH: %q is none of none, static, ecr", mode)
 	}
 }
 

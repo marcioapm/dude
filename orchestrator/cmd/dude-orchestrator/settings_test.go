@@ -85,7 +85,7 @@ key = "llm-file-key"
 [embeddings]
 model = "file-model"
 [agent]
-image = "img:file"
+image = "123456789012.dkr.ecr.eu-west-1.amazonaws.com/agents:file"
 [registry]
 auth = "ecr"
 ecr_role_arn = "arn:aws:iam::123456789012:role/file"
@@ -115,7 +115,7 @@ logins = ["file-bot"]
 	if !reflect.DeepEqual(s, want) {
 		t.Errorf("settings =\n%+v\nwant\n%+v", s, want)
 	}
-	if agent.LLMURL != "https://llm.file/v1" || agent.LLMKey != "llm-file-key" || agent.DefaultImage != "img:file" ||
+	if agent.LLMURL != "https://llm.file/v1" || agent.LLMKey != "llm-file-key" || agent.DefaultImage != "123456789012.dkr.ecr.eu-west-1.amazonaws.com/agents:file" ||
 		agent.ToolsURL != "http://10.0.0.5:3200" || string(agent.ToolsKey) != "file-token" {
 		t.Errorf("agent = %+v", agent)
 	}
@@ -187,6 +187,28 @@ credential = "file-user:file-pass"
 		}
 		if login.Registry() != tc.wantHost || secret != tc.wantSecret {
 			t.Errorf("%s: login = %q %q, want %q %q", name, login.Registry(), secret, tc.wantHost, tc.wantSecret)
+		}
+	}
+}
+
+// settingsFrom refuses what registry.FromEnv would, before run opens the
+// database, so validate refuses it too.
+func TestBadRegistrySettingsAreRefusedBySettings(t *testing.T) {
+	for name, tc := range map[string]struct {
+		text string
+		want string
+	}{
+		"unknown mode":   {"[registry]\nauth = \"gcr\"\n", `DUDE_REGISTRY_AUTH: "gcr" is none of none, static, ecr`},
+		"host, no mode":  {"[registry]\nhost = \"ghcr.io\"\n", "need DUDE_REGISTRY_AUTH=static"},
+		"static no cred": {"[registry]\nauth = \"static\"\nhost = \"ghcr.io\"\n", "DUDE_REGISTRY_CREDENTIAL is empty"},
+		"ecr elsewhere":  {"[registry]\nauth = \"ecr\"\n", "needs DUDE_AGENT_IMAGE in an ECR registry"},
+		"role, no ecr":   {"[registry]\necr_role_arn = \"arn:aws:iam::123456789012:role/r\"\n", "DUDE_ECR_ROLE_ARN needs DUDE_REGISTRY_AUTH=ecr"},
+		"bad role": {"[agent]\nimage = \"123456789012.dkr.ecr.eu-west-1.amazonaws.com/a:1\"\n[registry]\nauth = \"ecr\"\necr_role_arn = \"nope\"\n",
+			"is not an IAM role ARN"},
+	} {
+		_, err := settingsFrom(loadConfig(t, required+tc.text, 0o600, nil))
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", name, err, tc.want)
 		}
 	}
 }
