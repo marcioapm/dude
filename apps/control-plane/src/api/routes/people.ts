@@ -15,6 +15,7 @@ import type { OrgScope } from "../../db/client.ts";
 import { withOrg, withoutTenant } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { auditActor, insertApiKey, insertPerson } from "../auth.ts";
+import { ACCESS_LOGOUT_PATH } from "../cloudflareAccess.ts";
 import { HttpError, badRequest, conflict, json, noContent, notFound, parseBody } from "../http.ts";
 import { replaceImage, serveImage } from "../faces.ts";
 import { deleteObject } from "../../storage.ts";
@@ -148,7 +149,12 @@ async function getMe(ctx: RequestContext): Promise<Response> {
       SELECT id, name FROM organizations WHERE id = ${ctx.principal.organizationId}`) as Array<{ id: string; name: string }>;
     return { person, organization: org[0]! };
   });
-  return json(out);
+  // How the browser signed in decides how it signs out: a key is forgotten
+  // locally; an Access session ends at Access's own fixed logout path.
+  const auth = ctx.principal.credentialKind === "api_key"
+    ? { authMethod: "api_key" }
+    : { authMethod: "cloudflare_access", logoutUrl: ACCESS_LOGOUT_PATH };
+  return json({ ...out, ...auth });
 }
 
 /** A photo someone keeps elsewhere: an https URL. Uploads go to PUT /v1/me/photo. */
