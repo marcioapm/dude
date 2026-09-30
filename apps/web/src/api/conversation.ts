@@ -14,7 +14,7 @@
  *    conversation. Nothing lives only in component state.
  */
 
-import type { PersistedEvent, Run, RunStatus } from "@dude/domain";
+import type { CostOrigin, PersistedEvent, Run, RunStatus } from "@dude/domain";
 import { EventTypes, TERMINAL_RUN_STATUSES } from "@dude/domain";
 import type { HumanIntent, PlanItem, ToolOutput } from "@dude/design-system/components";
 import { TODO_STATUSES, type ActivityKind, type ToolCallStatus } from "@dude/design-system/tokens";
@@ -222,9 +222,11 @@ export const CUSTOM_EVENT_PREFIX = "agent.custom.";
 /**
  * Who priced a Run's model cost. lux's cost plugins meter every token and
  * settle the price over days (`settled` once its status is final); the
- * harness's own running total is never settled.
+ * agent's harness's own running total is never settled.
  */
-export type CostSource = { readonly from: "lux"; readonly settled: boolean } | { readonly from: "harness"; readonly settled: false };
+export type CostSource =
+  | { readonly from: Extract<CostOrigin, "lux">; readonly settled: boolean }
+  | { readonly from: Extract<CostOrigin, "agent">; readonly settled: false };
 
 export interface Conversation {
   turns: Turn[];
@@ -690,7 +692,7 @@ function modelCost(state: Projection): Pick<Conversation, "costUsd" | "costSourc
   if (state.luxCost) {
     return { costUsd: state.luxCost.usd, costSource: { from: "lux", settled: state.luxCost.status === "final" } };
   }
-  return { costUsd: state.costUsd, costSource: { from: "harness", settled: false } };
+  return { costUsd: state.costUsd, costSource: { from: "agent", settled: false } };
 }
 
 /** The latest question still waiting for an answer. */

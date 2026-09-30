@@ -1,4 +1,5 @@
 import type { HTMLAttributes } from "react";
+import type { CostOrigin, CostProvenance } from "@dude/domain";
 import { cx } from "../util/cx.ts";
 import { formatDuration, formatTokens, formatUsd } from "../util/format.ts";
 import { Tooltip } from "../primitives/Tooltip.tsx";
@@ -22,12 +23,10 @@ export interface CostProps extends Omit<HTMLAttributes<HTMLSpanElement>, "childr
    */
   readonly tokensFrom?: CostOrigin | undefined;
   /** Who priced the machine time: `"lux"` or dude's own `"estimate"`. */
-  readonly machineFrom?: "lux" | "estimate" | undefined;
+  readonly machineFrom?: CostProvenance["machine"] | undefined;
   /** lux has settled its figures (its cost is final). Only read for a part from lux. */
   readonly settled?: boolean | undefined;
 }
-
-export type CostOrigin = "lux" | "agent";
 
 /** "· reported by lux" for a settled lux figure; every other origin is an estimate. */
 function tokensNote(from: CostOrigin | undefined, settled: boolean): string {
@@ -36,7 +35,7 @@ function tokensNote(from: CostOrigin | undefined, settled: boolean): string {
   return " · estimate";
 }
 
-function machineNote(from: "lux" | "estimate" | undefined, settled: boolean): string {
+function machineNote(from: CostProvenance["machine"] | undefined, settled: boolean): string {
   if (from === undefined) return "";
   if (from === "lux") return settled ? " · lux" : " · lux, settling";
   return " · estimated";

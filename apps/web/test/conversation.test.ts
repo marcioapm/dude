@@ -258,7 +258,7 @@ describe("usage", () => {
       ev(EventTypes.ModelRequestCompleted, { costUsd: 0.02 }),
       ev(EventTypes.ModelRequestCompleted, { costUsd: 0.03 }),
     ];
-    expect(project(events)).toMatchObject({ costSource: { from: "harness", settled: false } });
+    expect(project(events)).toMatchObject({ costSource: { from: "agent", settled: false } });
 
     events.push(ev(EventTypes.RunCostReported, { aiUsd: 1.2, computeUsd: 0.004, status: "incomplete" }));
     let c = project(events);
@@ -284,7 +284,7 @@ describe("usage", () => {
       ev(EventTypes.RunCostReported, { aiUsd: null, computeUsd: 0.001, status: "pending" }),
     ]);
     expect(c.costUsd).toBeCloseTo(0.04, 9);
-    expect(c.costSource.from).toBe("harness");
+    expect(c.costSource.from).toBe("agent");
   });
 });
 

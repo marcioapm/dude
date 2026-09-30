@@ -11,7 +11,7 @@ export type { ProjectAvatarProps, ProjectFace } from "./ProjectAvatar.tsx";
 export { PrChip, PR_DISPLAY_SPECS, prFacts, prSpecOf, prStateOf } from "./PrChip.tsx";
 export type { PrChipProps, PrChipPullRequest, PrDisplaySpec } from "./PrChip.tsx";
 export { Cost } from "./Cost.tsx";
-export type { CostOrigin, CostProps } from "./Cost.tsx";
+export type { CostProps } from "./Cost.tsx";
 export { MarkdownDocument, highlightMarkdown } from "./MarkdownDocument.tsx";
 export type { MarkdownDocumentProps, HighlightKind, HighlightSpan } from "./MarkdownDocument.tsx";
 export { AgentAvatar, ROLE_ICON, ROLE_LABEL } from "./AgentAvatar.tsx";

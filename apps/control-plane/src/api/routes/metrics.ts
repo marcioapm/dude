@@ -5,7 +5,7 @@
  * Runs already record; seconds in the database, milliseconds here.
  */
 
-import { costSplit, type CostOrigin } from "@dude/domain";
+import { costSplit, type CostProvenance } from "@dude/domain";
 import { withOrg } from "../../db/client.ts";
 import { json, notFound } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
@@ -25,7 +25,7 @@ const costs = (row: Record<string, unknown>) => ({
   cost: costSplit(Number(row.cost_usd), Number(row.machine_usd), origin(row)),
 });
 
-function origin(row: Record<string, unknown>): CostOrigin | undefined {
+function origin(row: Record<string, unknown>): CostProvenance | undefined {
   if (row.lux_ai === undefined) return undefined;
   return {
     tokens: row.lux_ai === true ? "lux" : "agent",
