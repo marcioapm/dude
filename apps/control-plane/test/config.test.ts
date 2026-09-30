@@ -182,6 +182,14 @@ describe("secrets in the file", () => {
     expect(load({ DUDE_CONFIG: file(`[lux]\napi_key = "k"\n`, 0o644) }).warnings[0]).toContain("lux.api_key");
   });
 
+  test("the warning stands when the environment overrides the file's secret", () => {
+    const c = load({ DUDE_CONFIG: file(secret, 0o644), DUDE_ORCHESTRATOR_TOKEN: "env-token" });
+    expect(c.string("DUDE_ORCHESTRATOR_TOKEN")).toBe("env-token");
+    expect(c.warnings).toHaveLength(1);
+    expect(c.warnings[0]).toContain("orchestrator.token");
+    expect(c.warnings[0]).not.toContain("service-token");
+  });
+
   test("a private file, a file without secrets, or a secret by environment does not warn", () => {
     expect(load({ DUDE_CONFIG: file(secret, 0o600) }).warnings).toEqual([]);
     expect(load({ DUDE_CONFIG: file(`[backend]\nport = 3000\n`, 0o644) }).warnings).toEqual([]);
