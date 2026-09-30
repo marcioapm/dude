@@ -5,17 +5,14 @@ Requires installed Playwright and system Chrome.
 """
 import json
 import os
-import signal
-import subprocess
 import unittest
-from pathlib import Path
 from unittest import mock
 from urllib.request import urlopen
-from time import sleep
 
 from playwright.sync_api import BrowserType, expect, sync_playwright
 
-WEB = Path(__file__).resolve().parents[1]
+from vite_server import start_vite, stop_vite
+
 PORT = 5197
 URL = f"http://127.0.0.1:{PORT}"
 PERSON = {"id": "person", "name": "Local Person", "email": "local@example.invalid",
@@ -23,50 +20,12 @@ PERSON = {"id": "person", "name": "Local Person", "email": "local@example.invali
           "lastSeenWhere": None}
 
 
-def start_vite():
-    """Vite on PORT in its own process group, returned once it answers; stopped again if it never does."""
-    # `bun run` spawns vite as a child: only the group reaches both.
-    server = subprocess.Popen(
-        ["bun", "run", "dev", "--host", "127.0.0.1", "--port", str(PORT), "--strictPort"],
-        cwd=WEB, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-    try:
-        for _ in range(100):
-            if server.poll() is not None:
-                raise RuntimeError("Local Vite server failed to start")
-            try:
-                with urlopen(URL, timeout=1):
-                    return server
-            except OSError:
-                sleep(0.1)
-        raise RuntimeError("Local Vite server did not become ready")
-    except BaseException:
-        stop_vite(server)
-        raise
-
-
-def stop_vite(server):
-    """SIGTERM to the server's group, 10 s to exit, then SIGKILL and wait."""
-    try:
-        os.killpg(server.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    try:
-        server.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        pass
-    try:
-        os.killpg(server.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    server.wait(timeout=10)
-
-
 class BrowserAuth(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         # Each cleanup is registered as its resource is acquired: unittest
         # runs class cleanups even when setUpClass raises, tearDownClass not.
-        cls.server = start_vite()
+        cls.server = start_vite(PORT)
         cls.addClassCleanup(stop_vite, cls.server)
         cls.playwright = sync_playwright().start()
         cls.addClassCleanup(cls.playwright.stop)
