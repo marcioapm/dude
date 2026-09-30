@@ -185,6 +185,8 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
         if (!(e.target instanceof Node && e.currentTarget.contains(e.target))) return;
         setReading(!reading);
       }}
+      // Over the task, the confirmation takes the key from the browser (a hard reload loses the draft) and does nothing.
+      onConfirmKeyDown={(e) => isReadKey(e) && e.preventDefault()}
       footerStart={
         <>
           <KeyHint keys={["mod", "Enter"]}>{existing ? "save" : "create"}</KeyHint>
