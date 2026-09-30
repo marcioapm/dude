@@ -114,6 +114,17 @@ func TestAFailureBacksOffOnlyTheDocumentThatFailed(t *testing.T) {
 	if errText == "" {
 		t.Error("the failure's reason was not kept")
 	}
+
+	// Its backoff ends on the indexer's clock, and it is taken then.
+	fake.Fail = ""
+	now = next.Add(-time.Millisecond)
+	if n, err := x.Sweep(context.Background()); err != nil || n != 0 {
+		t.Errorf("before its backoff ends the sweep embedded %d (%v)", n, err)
+	}
+	now = next
+	if n, err := x.Sweep(context.Background()); err != nil || n != 1 {
+		t.Errorf("once its backoff ends the sweep embedded %d (%v)", n, err)
+	}
 }
 
 // permanent makes the fake's refusal one retrying cannot fix.
@@ -151,10 +162,8 @@ func TestRefusedDocumentsNeverWedgeTheQueue(t *testing.T) {
 		if backedOff != n {
 			t.Errorf("%d refused: %d backed off", n, backedOff)
 		}
-		// Behind them, new work embeds (due by the database's clock, after
-		// the test's).
+		// Behind them, new work embeds.
 		remember(t, owner, org, "mem_good", nil, "Fine", "embeds")
-		now = time.Now().Add(time.Second)
 		drain(t, x)
 		var good bool
 		if err := owner.QueryRow(context.Background(), `SELECT embedding IS NOT NULL FROM search_documents WHERE source_id = 'mem_good'`).Scan(&good); err != nil {
@@ -317,4 +326,78 @@ func (f *statusFake) Embed(ctx context.Context, texts []string, p embeddings.Pur
 		return nil, &embeddings.Error{Status: f.status, Body: "no"}
 	}
 	return f.Fake.Embed(ctx, texts, p)
+}
+
+// The orchestrator's clock is compared with next_attempt_at, and the
+// database's may be ahead of it (Docker on a Mac runs tens of milliseconds
+// ahead). What is due at once must not wait for the two to agree: here the
+// orchestrator's clock is an hour behind the database's.
+func TestWorkDueAtOnceIsDueWhateverTheClocksSay(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	org := dbtest.Org(t, owner)
+	behind := time.Now().Add(-time.Hour)
+	at := func() time.Time { return behind }
+	embedded := func(id string) bool {
+		t.Helper()
+		var ok bool
+		if err := owner.QueryRow(context.Background(), `SELECT embedding IS NOT NULL FROM search_documents WHERE source_id = $1`, id).Scan(&ok); err != nil {
+			t.Fatal(err)
+		}
+		return ok
+	}
+	fake := &embeddings.Fake{Dims: 768, Fail: "Poison"}
+	x := &memory.Indexer{DB: app, Embedder: &permanent{fake}, Now: at}
+
+	remember(t, owner, org, "mem_new", nil, "New", "just written")
+	remember(t, owner, org, "mem_bad", nil, "Poison", "refused")
+	drain(t, x)
+	if !embedded("mem_new") {
+		t.Error("a new document waited for the database's clock")
+	}
+
+	// New words.
+	exec(t, owner, `UPDATE memories SET content = 'rewritten' WHERE id = 'mem_new'`)
+	drain(t, x)
+	if !embedded("mem_new") {
+		t.Error("a document whose words changed waited for the database's clock")
+	}
+
+	// Retry.
+	fake.Fail = ""
+	if err := app.InOrg(context.Background(), org, func(tx pgx.Tx) error {
+		n, err := memory.Retry(context.Background(), tx, "", "")
+		if err == nil && n != 1 {
+			t.Errorf("Retry made %d documents due, want 1", n)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	drain(t, x)
+	if !embedded("mem_bad") {
+		t.Error("a retried document waited for the database's clock")
+	}
+
+	// Reindex.
+	if err := app.InOrg(context.Background(), org, func(tx pgx.Tx) error {
+		_, err := memory.Reindex(context.Background(), tx)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	drain(t, x)
+	if !embedded("mem_new") || !embedded("mem_bad") {
+		t.Error("a reindexed document waited for the database's clock")
+	}
+
+	// Another model.
+	drain(t, &memory.Indexer{DB: app, Embedder: &renamed{&embeddings.Fake{Dims: 768}}, Now: at})
+	var left int
+	if err := owner.QueryRow(context.Background(), `SELECT count(*) FROM search_documents
+		WHERE organization_id = $1 AND (embedding IS NULL OR embedding_model <> 'other')`, org).Scan(&left); err != nil {
+		t.Fatal(err)
+	}
+	if left != 0 {
+		t.Errorf("after a change of model %d documents waited for the database's clock", left)
+	}
 }
