@@ -165,27 +165,44 @@ function fromEnv(k: Key, raw: string): Value {
   }
 }
 
-// A table's name is a prefix of some key's name: "auth", "auth.cloudflare_access".
-const tables = new Set(KEYS.flatMap((k) => k.name.split(".").slice(0, -1).map((_, i, parts) => parts.slice(0, i + 1).join("."))));
+// The schema's shape: each table's exact child segments, by the table's
+// segment path ("" for the root, "auth\0cloudflare_access"); true marks a
+// leaf. Paths are joined with NUL so a quoted segment holding a dot
+// ("database.url" = …) cannot pass for two segments.
+const SEP = "\0";
+const shape = new Map<string, Map<string, boolean>>([["", new Map()]]);
+for (const k of KEYS) {
+  const parts = k.name.split(".");
+  parts.forEach((part, i) => {
+    const parent = parts.slice(0, i).join(SEP);
+    const leaf = i === parts.length - 1;
+    shape.get(parent)!.set(part, leaf);
+    const path = parts.slice(0, i + 1).join(SEP);
+    if (!leaf && !shape.has(path)) shape.set(path, new Map());
+  });
+}
 
 /** Every leaf of the parsed file, by dotted name; unknown keys and misplaced tables are refused. */
 function leaves(doc: Record<string, unknown>): Map<string, unknown> {
   const out = new Map<string, unknown>();
   const unknown: string[] = [];
-  const walk = (obj: Record<string, unknown>, prefix: string) => {
+  const walk = (obj: Record<string, unknown>, path: string[]) => {
+    const children = shape.get(path.join(SEP))!;
     for (const [k, v] of Object.entries(obj)) {
-      const name = prefix + k;
-      if (tables.has(name)) {
+      const segments = [...path, k];
+      const name = segments.map((s) => /^[A-Za-z0-9_-]+$/.test(s) ? s : JSON.stringify(s)).join(".");
+      const leaf = children.get(k);
+      if (leaf === false) {
         if (v === null || typeof v !== "object" || Array.isArray(v)) throw new ConfigError(`${name}: want a table, not ${tomlType(v)}`);
-        walk(v as Record<string, unknown>, `${name}.`);
-      } else if (byName.has(name)) {
+        walk(v as Record<string, unknown>, segments);
+      } else if (leaf === true) {
         out.set(name, v);
       } else {
         unknown.push(name);
       }
     }
   };
-  walk(doc, "");
+  walk(doc, []);
   if (unknown.length) throw new ConfigError(`unknown key ${unknown.join(", ")}`);
   return out;
 }
