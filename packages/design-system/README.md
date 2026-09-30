@@ -327,7 +327,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   ends" for a harness that reads only between turns. **Interrupt now** —
   the costly one, which stops the turn — is a checkbox, never a key, and
   never a fallback the app takes on its own. Shift+Enter is a new line in
-  both. The action row says who it is sent as (`sentAs`).
+  both. The action row says who it is sent as (`sentAs`). Narrower than
+  640px (a panel open beside the transcript) the row wraps, the button
+  stays at its end, and the key hints go before where a steer lands does.
 - The question itself is a turn: `QuestionCard`. While it waits it is the
   one loud turn a transcript is allowed, and it is loud once: the attention
   wash and 2px bar. Inside it the ink is neutral — the transcript header's
