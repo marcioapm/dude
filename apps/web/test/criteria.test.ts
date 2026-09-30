@@ -1,0 +1,148 @@
+/**
+ * Acceptance criteria as one Markdown list and back. The API keeps a list
+ * of strings; what the editor opens with must read back as exactly those
+ * strings, whatever a criterion holds.
+ */
+
+import { describe, expect, test } from "bun:test";
+import { criteriaFromMarkdown, criteriaToMarkdown, criterionTooLong } from "../src/screens/criteria.ts";
+
+const from = (src: string) => criteriaFromMarkdown(src);
+const roundTrip = (items: string[]) => from(criteriaToMarkdown(items)).items;
+
+describe("criteriaFromMarkdown", () => {
+  test("each top-level item is a criterion, whatever its marker", () => {
+    expect(from("- one\n* two\n+ three\n1. four\n2) five").items).toEqual(["one", "two", "three", "four", "five"]);
+  });
+
+  test("a task marker comes off, open or done", () => {
+    expect(from("- [ ] open\n- [x] done\n- [X] Done").items).toEqual(["open", "done", "Done"]);
+  });
+
+  test("only one task marker comes off: the rest is what it says", () => {
+    expect(from("- [ ] [x] the literal text").items).toEqual(["[x] the literal text"]);
+  });
+
+  test("lines indented under an item stay with it, dedented", () => {
+    const src = "- [ ] Each step fires its event once:\n  `plan_selected`, `payment_viewed`\n- [ ] Next";
+    expect(from(src).items).toEqual(["Each step fires its event once:\n`plan_selected`, `payment_viewed`", "Next"]);
+  });
+
+  test("a nested list stays with its item", () => {
+    expect(from("- parent\n  - child one\n  - child two\n- sibling").items).toEqual(["parent\n- child one\n- child two", "sibling"]);
+  });
+
+  test("an ordered item's continuation is indented to its content", () => {
+    expect(from("10. ten\n    more\n11. eleven").items).toEqual(["ten\nmore", "eleven"]);
+  });
+
+  test("a blank line followed by indented text stays inside the item", () => {
+    expect(from("- first\n\n  second paragraph\n- next").items).toEqual(["first\n\nsecond paragraph", "next"]);
+  });
+
+  test("blank lines between items separate them; trailing blanks are dropped", () => {
+    expect(from("- a\n\n\n- b\n\n").items).toEqual(["a", "b"]);
+  });
+
+  test("a fence inside an item stays with it, even where its lines look like items", () => {
+    const src = "- run it:\n  ```\n  - not an item\n  1. nor this\n\n  ```\n- after";
+    expect(from(src).items).toEqual(["run it:\n```\n- not an item\n1. nor this\n\n```", "after"]);
+  });
+
+  test("empty items are dropped", () => {
+    expect(from("- \n- [ ] \n- real\n-").items).toEqual(["real"]);
+  });
+
+  test("text outside a list item is stray, and not a criterion", () => {
+    expect(from("Some intro\n- one")).toEqual({ items: ["one"], stray: true });
+    expect(from("## Criteria\n\n- one")).toEqual({ items: ["one"], stray: true });
+    expect(from("- one\n\nA closing note")).toEqual({ items: ["one"], stray: true });
+    expect(from("- one\n- two")).toEqual({ items: ["one", "two"], stray: false });
+    expect(from("")).toEqual({ items: [], stray: false });
+    expect(from("\n  \n")).toEqual({ items: [], stray: false });
+  });
+
+  test("a stray fence is stray as a whole: list-like lines inside it are not criteria", () => {
+    expect(from("```\n- inside\n```\n- outside")).toEqual({ items: ["outside"], stray: true });
+  });
+
+  test("a dash without a space is text, not an item", () => {
+    expect(from("-not a list")).toEqual({ items: [], stray: true });
+  });
+});
+
+describe("criteriaToMarkdown", () => {
+  test("each criterion an open task, its other lines indented two spaces", () => {
+    expect(criteriaToMarkdown(["one", "two\nmore", "three\n\nafter a gap"])).toBe("- [ ] one\n- [ ] two\n  more\n- [ ] three\n\n  after a gap");
+  });
+
+  test("nothing is an empty editor", () => {
+    expect(criteriaToMarkdown([])).toBe("");
+  });
+});
+
+describe("the round trip is stable", () => {
+  const shapes: string[][] = [
+    ["Greets with the full name"],
+    ["Card, SEPA and Invoice all appear", "Invoice appears **only** for annual plans"],
+    ["A criterion\nover two lines"],
+    ["- starts with a dash"],
+    ["* starts with a star", "+ starts with a plus"],
+    ["1. starts with a number", "2) and another"],
+    ["line one\n- a dash line\n1. a number line\n  indented already"],
+    ["uses `code spans` and `- dashes` inside"],
+    ["[ ] looks like a task marker", "[x] looks like a done one"],
+    ["a fence\n```\n- item-like\n```\nafter it"],
+    ["an unterminated fence\n```\nstill code"],
+    ["```", "a criterion after an open fence"],
+    ["text then\n~~~ open", "next"],
+    ["~~~\ntilde fence\n~~~"],
+    ["two paragraphs\n\nwith a blank line"],
+    ["tabs\tinside\n\tand leading"],
+    ["# a heading-like line", "> a quote-like line"],
+    ["trailing spaces  \nhard break"],
+    ["Windows\r\nline ending"],
+    ["unicode: café — ✓ 日本語"],
+    ["x".repeat(2000)],
+  ];
+  for (const items of shapes) {
+    test(JSON.stringify(items).slice(0, 70), () => {
+      expect(roundTrip(items)).toEqual(items);
+      expect(from(criteriaToMarkdown(items)).stray).toBe(false);
+    });
+  }
+
+  test("criteria are trimmed and empties dropped on the way in, then stable", () => {
+    expect(roundTrip(["  padded  ", "", "   ", "ok"])).toEqual(["padded", "ok"]);
+  });
+
+  test("random criteria built from Markdown's awkward pieces survive", () => {
+    // A seeded generator (mulberry32), so a failure names the same case every run.
+    let seed = 0x2f6e2b1;
+    const rand = (n: number) => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return (((t ^ (t >>> 14)) >>> 0) / 4294967296) * n | 0;
+    };
+    const pieces = ["-", "- ", "* ", "+ ", "1. ", "2) ", "[ ] ", "[x] ", "```", "~~~", "`x`", "**b**", "  ", "\t", "#", "> ", "word", "text", "\n", "\n\n", "\n  ", "\n- ", "\n1. ", "\n```\n", " "];
+    for (let n = 0; n < 2000; n++) {
+      const items = Array.from({ length: 1 + rand(4) }, () => Array.from({ length: 1 + rand(8) }, () => pieces[rand(pieces.length)]).join(""))
+        .map((c) => c.trim())
+        .filter(Boolean);
+      const md = criteriaToMarkdown(items);
+      const back = from(md);
+      if (JSON.stringify(back.items) !== JSON.stringify(items)) {
+        throw new Error(`round trip changed ${JSON.stringify(items)} via ${JSON.stringify(md)} into ${JSON.stringify(back.items)}`);
+      }
+      expect(back.stray).toBe(false);
+    }
+  });
+});
+
+describe("criterionTooLong", () => {
+  test("names the first criterion over the server's limit", () => {
+    expect(criterionTooLong(["ok", "x".repeat(2000)])).toBeNull();
+    expect(criterionTooLong(["ok", "x".repeat(2001), "y".repeat(3000)])).toBe("Criterion 2 is 2,001 characters; each can be at most 2,000.");
+  });
+});
