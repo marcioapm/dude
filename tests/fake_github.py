@@ -18,6 +18,7 @@ would.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -513,6 +514,21 @@ class FakeGitHub:
 
             def do_GET(self) -> None:
                 path, _, query = self.path.partition("?")
+                if m := re.fullmatch(rf"/{root.owner}/([^/]+)\.git/info/refs", path):
+                    if m[1] != root.repo and m[1] not in root.siblings:
+                        return self._send(404, {"message": "Not Found"})
+                    expected = "Basic " + base64.b64encode(b"x-access-token:fake-token").decode()
+                    if self.headers.get("authorization") != expected:
+                        return self._send(401, {"message": "Bad credentials"})
+                    if query != "service=git-receive-pack":
+                        return self._send(400, {"message": "Expected receive-pack discovery"})
+                    data = b"001f# service=git-receive-pack\n0000"
+                    self.send_response(200)
+                    self.send_header("content-type", "application/x-git-receive-pack-advertisement")
+                    self.send_header("content-length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
                 since = None
                 if m := re.search(r"since=([^&]+)", query):
                     from urllib.parse import unquote

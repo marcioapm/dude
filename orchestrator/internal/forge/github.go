@@ -209,6 +209,79 @@ func (g *GitHub) Token() (string, error) {
 	return "", fmt.Errorf("github_app authentication is not implemented yet")
 }
 
+// CheckPushAccess discovers receive-pack without publishing a ref. It does not
+// establish permission to change workflow files or bypass branch rules.
+func (g *GitHub) CheckPushAccess(ctx context.Context, repository string) error {
+	base, err := url.Parse(g.cred.APIBaseURL)
+	if err != nil || base.Host == "" || base.User != nil || base.RawQuery != "" || base.Fragment != "" || (base.Scheme != "https" && base.Scheme != "http") {
+		return fmt.Errorf("invalid GitHub APIBaseURL for push preflight")
+	}
+	switch base.Path {
+	case "", "/api/v3":
+		base.Path = ""
+	default:
+		return fmt.Errorf("GitHub APIBaseURL must be an origin or end in /api/v3")
+	}
+	if base.Host == "api.github.com" {
+		if base.Scheme != "https" {
+			return fmt.Errorf("GitHub requires HTTPS")
+		}
+		base.Host = "github.com"
+	}
+	if strings.HasPrefix(repository, "git@") {
+		host, path, ok := strings.Cut(strings.TrimPrefix(repository, "git@"), ":")
+		if !ok || !strings.EqualFold(host, base.Hostname()) || base.Port() != "" {
+			return fmt.Errorf("SSH repository host does not match the configured GitHub origin")
+		}
+		repository = base.Scheme + "://" + base.Host + "/" + path
+	}
+	clone, err := url.Parse(repository)
+	if err == nil && clone.Scheme == "ssh" && clone.User != nil && clone.User.String() == "git" && strings.EqualFold(clone.Host, base.Host) {
+		clone.Scheme, clone.User = base.Scheme, nil
+	}
+	if err != nil || clone.User != nil || clone.RawQuery != "" || clone.Fragment != "" || clone.Host == "" {
+		return fmt.Errorf("invalid repository URL for GitHub push preflight")
+	}
+	// The local git-daemon harness uses a separate port on the API's host.
+	localGit := clone.Scheme == "git" && base.Scheme == "http" && (base.Hostname() == "127.0.0.1" || base.Hostname() == "localhost") && clone.Hostname() == base.Hostname()
+	if !localGit && (clone.Scheme != base.Scheme || !strings.EqualFold(clone.Host, base.Host)) {
+		return fmt.Errorf("repository origin does not match the configured GitHub origin")
+	}
+	slug := strings.TrimSuffix(strings.TrimPrefix(clone.Path, "/"), ".git")
+	if !regexp.MustCompile(`^[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+$`).MatchString(slug) || strings.HasSuffix(slug, "/.") || strings.HasSuffix(slug, "/..") {
+		return fmt.Errorf("invalid GitHub repository path")
+	}
+	base.Path = "/" + slug + ".git/info/refs"
+	base.RawQuery = "service=git-receive-pack"
+	token, err := g.Token()
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base.String(), nil)
+	if err != nil {
+		return err
+	}
+	req.SetBasicAuth("x-access-token", token)
+	client := *g.http
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	res, err := client.Do(req)
+	if err != nil {
+		return &Unreachable{err}
+	}
+	defer res.Body.Close()
+	if res.StatusCode == http.StatusOK {
+		if strings.TrimSpace(strings.Split(res.Header.Get("Content-Type"), ";")[0]) != "application/x-git-receive-pack-advertisement" {
+			return &Error{Status: http.StatusBadGateway, Message: "Git receive-pack discovery returned no Git advertisement (possibly an authentication gateway)"}
+		}
+		return nil
+	}
+	message := "Git receive-pack discovery failed"
+	if res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden {
+		message = "Git push access denied: grant Contents: Read and write to the fine-grained PAT for this repository (classic PAT: repo or public_repo), and check repository selection, owner access and organization approval/SSO"
+	}
+	return &Error{Status: res.StatusCode, Message: message}
+}
+
 func (g *GitHub) do(ctx context.Context, method, path string, body, out any) error {
 	return g.doURL(ctx, method, g.cred.APIBaseURL+path, body, out)
 }

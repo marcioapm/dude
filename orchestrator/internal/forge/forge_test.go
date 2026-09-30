@@ -6,8 +6,89 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 )
+
+func TestPushPreflightUsesEnterpriseOriginAndGitAuthentication(t *testing.T) {
+	fake := fakegithub.New("", "acme/repo")
+	fake.ReceiveToken = "same-token"
+	srv := httptest.NewServer(fake.Handler())
+	defer srv.Close()
+	for _, suffix := range []string{"", "/api/v3/"} {
+		g := NewGitHub(Credential{Secret: "same-token", APIBaseURL: srv.URL + suffix})
+		for _, repository := range []string{srv.URL + "/acme/repo.git", "ssh://git@" + strings.TrimPrefix(srv.URL, "http://") + "/acme/repo.git"} {
+			if err := g.CheckPushAccess(context.Background(), repository); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if len(fake.ReceiveRequests) != 4 {
+		t.Fatalf("requests: %v", fake.ReceiveRequests)
+	}
+}
+
+func TestPushPreflightNeverContactsAnUntrustedOrigin(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; w.WriteHeader(200) }))
+	defer srv.Close()
+	for _, base := range []string{"", "https://ghe.example/api/v3", srv.URL + "/unexpected", "ftp://ghe.example", "https://user:password@ghe.example"} {
+		g := NewGitHub(Credential{Secret: "secret", APIBaseURL: base})
+		if err := g.CheckPushAccess(context.Background(), srv.URL+"/acme/repo.git"); err == nil {
+			t.Fatalf("accepted untrusted origin with base %q", base)
+		}
+	}
+	for _, path := range []string{"/acme/repo.git?x=1", "/acme/repo.git#fragment", "/acme/../repo.git", "/acme/%2fother.git"} {
+		if err := NewGitHub(Credential{Secret: "secret", APIBaseURL: srv.URL}).CheckPushAccess(context.Background(), srv.URL+path); err == nil {
+			t.Fatalf("accepted %s", path)
+		}
+	}
+	if calls != 0 {
+		t.Fatalf("sent %d untrusted requests", calls)
+	}
+}
+
+func TestPushPreflightDoesNotFollowRedirects(t *testing.T) {
+	for _, status := range []int{301, 302, 307, 308} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			calls := 0
+			destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; w.WriteHeader(200) }))
+			defer destination.Close()
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, destination.URL, status) }))
+			defer srv.Close()
+			err := NewGitHub(Credential{Secret: "secret", APIBaseURL: srv.URL}).CheckPushAccess(context.Background(), srv.URL+"/acme/repo.git")
+			if err == nil || Transient(err) || calls != 0 {
+				t.Fatalf("redirect followed: calls %d, error %v", calls, err)
+			}
+		})
+	}
+}
+
+func TestPushPreflightRejectsAnHTMLGateway(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+	err := NewGitHub(Credential{Secret: "secret", APIBaseURL: srv.URL}).CheckPushAccess(context.Background(), srv.URL+"/acme/repo.git")
+	if err == nil || !Transient(err) || !strings.Contains(err.Error(), "no Git advertisement") {
+		t.Fatalf("gateway response: %v", err)
+	}
+}
+
+func TestPushPreflightTimeoutIsTransient(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
+	defer srv.Close()
+	g := NewGitHub(Credential{Secret: "secret", APIBaseURL: srv.URL})
+	g.http.Timeout = 20 * time.Millisecond
+	err := g.CheckPushAccess(context.Background(), srv.URL+"/acme/repo.git")
+	if !Transient(err) || !strings.Contains(err.Error(), "unreachable") {
+		t.Fatalf("timeout: %v", err)
+	}
+}
 
 // Every false positive here costs a fix Run; every false negative is a
 // person's request silently ignored. The tests pin both directions.
