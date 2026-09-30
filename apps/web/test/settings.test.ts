@@ -21,6 +21,7 @@ const role = (over: Partial<RoleSettings> = {}): RoleSettings => ({
   model: org("m"),
   effort: org(null),
   timeLimitMinutes: org(null),
+  machineSize: org(null),
   enabled: null,
   prompt: { organization: { versionId: null, body: "", updatedAt: null, updatedBy: null, versions: 0 } },
   ...over,
@@ -36,6 +37,7 @@ describe("settings helpers", () => {
     expect(deliveryChanged(delivery)).toBe(1);
     expect(roleChanged(role())).toBe(false);
     expect(roleChanged(role({ effort: proj("low") }))).toBe(true);
+    expect(roleChanged(role({ machineSize: proj("msz_xl") }))).toBe(true);
     const withPrompt = (mode: "add" | "replace" | "inherit") =>
       role({ prompt: { organization: role().prompt.organization, project: { ...role().prompt.organization, mode } } });
     expect(roleChanged(withPrompt("inherit"))).toBe(false);

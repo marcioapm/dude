@@ -48,6 +48,20 @@ describe("the session's bar", () => {
   });
 });
 
+describe("the session's machine", () => {
+  test("the header names the size the Run recorded, with its spec", async () => {
+    const page = await session({ client: new RunClient({}) });
+    const chip = await until(() => page.querySelector("[data-testid=run-machine]"), "the machine chip");
+    expect(chip.textContent).toContain("Large");
+    expect(chip.textContent).toContain("8 CPUs · 16 GiB · 80 GiB");
+  });
+
+  test("a Run from before sizes has no chip", async () => {
+    const page = await session({ client: new RunClient({ machine: null }) });
+    expect(page.querySelector("[data-testid=run-machine]")).toBeNull();
+  });
+});
+
 describe("a branch preview's session", () => {
   test("on its task's page, points at the task's Servers tab", async () => {
     let opened = 0;
