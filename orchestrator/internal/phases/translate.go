@@ -350,7 +350,7 @@ func (t *translator) directiveReceipt(ctx context.Context, tx pgx.Tx, s *Syncer,
 		}
 		// An interrupt alone that relied on these words fails with them, once
 		// no other directive carrying them is left to deliver them.
-		return settleInterrupts(ctx, tx, s, t.run, evDirectiveFailed, &msg, `UPDATE directives d SET failed_at = now(), error = $3
+		return settleInterrupts(ctx, tx, s, t.run, &msg, `UPDATE directives d SET failed_at = now(), error = $3
 			FROM directives f WHERE `+interruptAloneOf+` AND d.failed_at IS NULL
 			  AND NOT EXISTS (SELECT 1 FROM directives c WHERE c.run_id = d.run_id AND `+carrierOf+` AND c.failed_at IS NULL)
 			RETURNING d.id`, id, t.run.ID, msg)
@@ -398,7 +398,7 @@ func (t *translator) directiveReceipt(ctx context.Context, tx pgx.Tx, s *Syncer,
 	// deliverDirectives) has no receipt of its own: it is delivered with
 	// the directive carrying its words, on the same precedence, with an
 	// event flagged interruptOnly: the words were read once, here.
-	return settleInterrupts(ctx, tx, s, t.run, evDirectiveDelivered, nil, `UPDATE directives d
+	return settleInterrupts(ctx, tx, s, t.run, nil, `UPDATE directives d
 			SET delivered_at = now(), accepted_at = COALESCE(d.accepted_at, now()), failed_at = NULL, error = NULL
 		FROM directives f WHERE `+interruptAloneOf+` AND (d.failed_at IS NULL OR $3)
 		RETURNING d.id`, id, t.run.ID, overridesFailure)
