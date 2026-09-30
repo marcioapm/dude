@@ -95,8 +95,9 @@ const me = async (router: Router, headers: Record<string, string>) => {
     person: { id: string; name: string; role: string; photoUrl: string | null };
     authMethod: string; logoutUrl?: string; } : null };
 };
-const peopleByEmail = (email: string, organizationId = org) =>
-  owner`SELECT id, name, role, photo_url, removed_at FROM people WHERE organization_id = ${organizationId} AND email = ${email}`;
+type PersonRow = { id: string; name: string; role: string; photo_url: string | null; removed_at: Date | null };
+const peopleByEmail = async (email: string, organizationId = org): Promise<PersonRow[]> =>
+  (await owner`SELECT id, name, role, photo_url, removed_at FROM people WHERE organization_id = ${organizationId} AND email = ${email}`) as PersonRow[];
 const keysOf = (personId: string) => owner`SELECT id FROM api_keys WHERE person_id = ${personId}`;
 
 let signer: Key;
@@ -271,10 +272,10 @@ describe("signing in", () => {
     expect(JSON.stringify(got.body)).not.toContain("dude_sk_");
     const rows = await peopleByEmail("new@example.com");
     expect(rows).toHaveLength(1);
-    expect(await keysOf(rows[0].id)).toHaveLength(0);
+    expect(await keysOf(rows[0]!.id)).toHaveLength(0);
     // Second request: the same person.
     const again = await me(router, { "cf-access-jwt-assertion": await sign(signer, { email: "new@example.com" }) });
-    expect(again.body!.person.id).toBe(rows[0].id);
+    expect(again.body!.person.id).toBe(rows[0]!.id);
   });
 
   test("an existing admin keeps id, role and the name they set; an empty photo is filled", async () => {
