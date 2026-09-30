@@ -159,7 +159,7 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
       <Block
         id="p-markdown-editor"
         title="MarkdownEditor"
-        note="For writing one Markdown document — a task's goal, its criteria. Textarea's anatomy around a frame: Write / Preview on the chrome shade (Ctrl/⌘+Shift+P), quiet formatting (Ctrl/⌘+B I K E), the source in mono, growing with its content — the page scrolls, never the field. Enter continues a list; Enter on an empty item ends it. Preview is Markdown variant='document', the one safe renderer, at least as tall as the source was. Locked opens in Preview with Write disabled and says why in the hint. The count turns attention past 90% and danger over."
+        note="For writing one Markdown document — a task's goal, its criteria. Textarea's anatomy around a frame: Write / Preview on the chrome shade (Ctrl/⌘+Shift+P), quiet formatting (Ctrl/⌘+B I K E), the source in mono, growing with its content — the page scrolls, never the field. Enter continues a list; Enter on an empty item ends it. Preview is Markdown in the caller's variant (message by default: the variant the text is read in), the one safe renderer, at least as tall as the source was. Locked opens in Preview with Write disabled and says why in the hint. The count turns attention past 90% and danger over."
       >
         <Panes mode={mode}>
           <Col>

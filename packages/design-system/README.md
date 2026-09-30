@@ -540,17 +540,24 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   rendered — a task's goal, its acceptance criteria. A note, a command or
   a reason stays a `Textarea`. It has Textarea's anatomy (label, hint,
   error, `aria-describedby`, `maxLength`, the caller's `data-testid` on the
-  textarea) around a frame whose edge is its one line: a Write / Preview
-  `Segmented tabs` (tablist and tabpanels, one Tab stop, ← →;
-  Ctrl/⌘+Shift+P), its track at the toolbar's `control-sm`, and quiet
+  textarea), except that the hint sits beside the label, not under the
+  field — the frame's footer is under it; the error stays under the frame.
+  Empty, Preview says "Nothing to preview yet." In Preview the formatting
+  buttons hide (and leave no band when they had wrapped). The field is a
+  frame whose edge is its one line: a Write / Preview `Segmented tabs`
+  (tablist and tabpanels, one Tab stop, ← →; Ctrl/⌘+Shift+P), its track at
+  the toolbar's `control-sm`, and quiet
   formatting on the chrome shade — no rule under it — then the source in
   mono on the code pitch, then a footer: "Markdown", the caller's `summary`
   and `notice`, and `n / max` (attention past 90%, danger over).
   - **Grows, never scrolls.** The source grows from `minRows` with its
     content; the dialog or page scrolls. No resize handle.
-  - **Preview is the safe path.** It is `Markdown variant="document"
-    unmeasured` and nothing else — no HTML string, no second renderer — and
+  - **Preview is the safe path, and reads as the text will be read.** It is
+    `Markdown unmeasured` in the caller's `variant` (default `message`: the
+    long rhythm, 1.25em above headings) — the variant of the screen that
+    shows it — and nothing else: no HTML string, no second renderer. It
     keeps at least the source's height, so toggling does not jump.
+    `document` is for an editor whose output is published as an artifact.
   - **Edits stay undoable.** Ctrl/⌘+B I K E and the buttons wrap the
     selection (a placeholder, selected, when there is none); Enter
     continues a list (`- `, `2.` after `1.`, `- [ ] `) and ends it on an
