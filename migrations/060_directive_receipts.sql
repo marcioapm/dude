@@ -7,16 +7,21 @@
 -- receipt, sets it on the first. A failure is kept with lux's reason, so a
 -- steer that never reached the agent says so rather than staying queued.
 --
--- interrupt_only: "Interrupt now" on an instruction already submitted. It
--- supersedes that directive with the same words, and lux is sent only the
--- interrupt: the words went with the original, whatever became of it
--- since. Decided once, when the directive is created.
+-- resends: "Interrupt now" on a queued instruction, the root directive
+-- whose words it repeats (an interrupt re-sending a re-send names the
+-- first). The root and every directive resending it are one instruction:
+-- its words go once, with whichever of them carries them.
+-- interrupt_only: whether a resend is sent as the interrupt alone (true)
+-- or with the words (false). NULL until its first send attempt decides it
+-- (the words are carried by a root or resend that lux has and has not
+-- failed), then fixed, so every retry sends the same request.
 ALTER TABLE directives
   ADD COLUMN accepted_at    timestamptz,
   ADD COLUMN lands          text CHECK (lands IN ('next_step', 'next_turn')),
   ADD COLUMN failed_at      timestamptz,
   ADD COLUMN error          text,
-  ADD COLUMN interrupt_only boolean NOT NULL DEFAULT false;
+  ADD COLUMN resends        text REFERENCES directives(id) ON DELETE SET NULL,
+  ADD COLUMN interrupt_only boolean DEFAULT false;
 
 -- A finished turn is held open while a steer sent to it is unread: the
 -- sweep compares that steer's delivery with the Run's last turn end. Both

@@ -309,7 +309,17 @@ func (t *translator) directiveReceipt(ctx context.Context, tx pgx.Tx, s *Syncer,
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
-		return s.event(ctx, tx, t.run, evDirectiveFailed, ledger.ActorSystem, map[string]any{"directiveId": id, "error": msg})
+		if err := s.event(ctx, tx, t.run, evDirectiveFailed, ledger.ActorSystem, map[string]any{"directiveId": id, "error": msg}); err != nil {
+			return err
+		}
+		// An interrupt alone that relied on these words fails with them, once
+		// no other directive carrying them is left to deliver them.
+		return settleInterrupts(ctx, tx, s, t.run, evDirectiveFailed, &msg, `UPDATE directives d SET failed_at = now(), error = $3
+			FROM directives f WHERE f.id = $1 AND f.run_id = $2 AND f.interrupt_only IS FALSE
+			  AND d.run_id = f.run_id AND d.resends = COALESCE(f.resends, f.id) AND d.interrupt_only
+			  AND d.delivered_at IS NULL AND d.failed_at IS NULL
+			  AND NOT EXISTS (SELECT 1 FROM directives c WHERE c.run_id = d.run_id AND `+carrierOf+` AND c.failed_at IS NULL)
+			RETURNING d.id`, id, t.run.ID, msg)
 	}
 	receipt, _ := data["receipt"].(bool)
 	if phase == "accepted" {
@@ -343,22 +353,25 @@ func (t *translator) directiveReceipt(ctx context.Context, tx pgx.Tx, s *Syncer,
 	if err != nil || tag.RowsAffected() == 0 {
 		return err
 	}
-	// An "interrupt now" on it carries no text of its own (interrupt_only,
-	// see QueueDirective): it is delivered with it, sent yet or not, on the
-	// same precedence. No event: the transcript knows them as one steer.
-	if _, err := tx.Exec(ctx, `UPDATE directives SET delivered_at = now(), accepted_at = COALESCE(accepted_at, now()),
-			failed_at = NULL, error = NULL
-		WHERE supersedes = $1 AND run_id = $2 AND interrupt_only AND delivered_at IS NULL AND (failed_at IS NULL OR $3)`,
-		id, t.run.ID, phase != "accepted"); err != nil {
-		return err
-	}
 	payload := map[string]any{"directiveId": id}
 	// Only a consumed receipt says when the agent read it; the other two
 	// say only that it was handed over.
 	if phase == "consumed" {
 		payload["read"] = true
 	}
-	return s.event(ctx, tx, t.run, evDirectiveDelivered, ledger.ActorSystem, payload)
+	if err := s.event(ctx, tx, t.run, evDirectiveDelivered, ledger.ActorSystem, payload); err != nil {
+		return err
+	}
+	// An "Interrupt now" sent as the interrupt alone (interrupt_only, see
+	// deliverDirectives) has no receipt of its own: it is delivered with
+	// the directive carrying its words, on the same precedence, with an
+	// event flagged interruptOnly: the words were read once, here.
+	return settleInterrupts(ctx, tx, s, t.run, evDirectiveDelivered, nil, `UPDATE directives d
+			SET delivered_at = now(), accepted_at = COALESCE(d.accepted_at, now()), failed_at = NULL, error = NULL
+		FROM directives c WHERE c.id = $1 AND c.run_id = $2 AND c.interrupt_only IS FALSE
+		  AND d.run_id = c.run_id AND d.resends = COALESCE(c.resends, c.id) AND d.interrupt_only
+		  AND d.delivered_at IS NULL AND (d.failed_at IS NULL OR $3)
+		RETURNING d.id`, id, t.run.ID, phase != "accepted")
 }
 
 // session records the placement the agent's session is established in. The

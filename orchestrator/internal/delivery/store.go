@@ -418,16 +418,20 @@ type Directive struct {
 // QueueDirective records a directive for the Run, and returns its id and
 // when it was queued.
 //
-// An interrupt superseding a directive of this Run with the same words, not
-// failed, is interrupt_only ("Interrupt now"): the words go, or went, with
-// the original, so lux is sent only the interrupt, whatever becomes of the
-// original before the syncer sends it.
+// An interrupt superseding a directive of this Run with the same words is
+// "Interrupt now": it resends that directive's root (the directive itself,
+// or the one it resends in turn), so a chain of clicks is one instruction.
+// Whether it carries the words is decided at its first send attempt
+// (phases deliverDirectives), so interrupt_only is left unset.
 func QueueDirective(ctx context.Context, tx pgx.Tx, r RunRef, d Directive) (string, time.Time, error) {
 	id := ids.New(ids.Directive)
 	var createdAt time.Time
-	err := tx.QueryRow(ctx, `INSERT INTO directives (id, organization_id, task_id, run_id, text, scope, supersedes, interrupt, interrupt_only)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8 AND EXISTS (SELECT 1 FROM directives s
-			WHERE s.id = $7 AND s.run_id = $4 AND s.text = $5 AND s.failed_at IS NULL))
+	err := tx.QueryRow(ctx, `WITH root AS (
+			SELECT COALESCE(s.resends, s.id) AS id FROM directives s
+			WHERE $8 AND s.id = $7 AND s.run_id = $4 AND s.text = $5)
+		INSERT INTO directives (id, organization_id, task_id, run_id, text, scope, supersedes, interrupt, resends, interrupt_only)
+		SELECT $1, $2, $3, $4, $5, $6, $7, $8, root.id, CASE WHEN root.id IS NULL THEN false END
+		FROM (SELECT 1) one LEFT JOIN root ON true
 		RETURNING created_at`,
 		id, r.Org, r.TaskID, r.RunID, d.Text, d.Scope, db.Nullable(d.Supersedes), d.Interrupt).Scan(&createdAt)
 	return id, createdAt, err
