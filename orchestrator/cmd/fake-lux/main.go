@@ -26,7 +26,7 @@ func main() {
 	key := flag.String("key", "", "API key to accept")
 	addrFile := flag.String("addr-file", "", "write the bound address here once listening")
 	workspaces := flag.String("workspaces", "", "where each Run's checkout is made (default: the system's temporary directory)")
-	legacyInput := flag.Bool("legacy-input", false, "acknowledge input as a lux before accepted/consumed receipts: once, at the turn's end")
+	legacyInput := flag.Bool("legacy-input", false, "acknowledge input as a lux before input phases: one lux.input with no phase, at the turn's end")
 	nextTurnInput := flag.Bool("next-turn-input", false, "a harness that reads input only between turns (lands next_turn)")
 	failUnreadOnInterrupt := flag.Bool("fail-unread-on-interrupt", false, "an interrupt fails input the agent took and had not read, as a lux before it carried it into the next turn")
 	flag.Parse()

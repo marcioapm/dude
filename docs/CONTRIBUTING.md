@@ -122,13 +122,21 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   next call, in the same turn, without cancelling the tool. A harness that
   reads messages only between turns takes it when the turn ends.
   `interrupt: true` stops the turn so it is heard now; it is only ever a
-  person's explicit choice. A directive is `sent` when lux has it,
-  `accepted` when the harness took it (`run.directive.accepted`, with
-  `lands`: `next_step` or `next_turn`), and `delivered` when the agent's
-  step has it (`run.directive.delivered`). An older lux reports only the
-  handoff, which counts as delivered. `failed` (`run.directive.failed`,
-  with lux's `error`) is a steer lux says will not reach the agent. Each is
-  recorded once per directive and Run. Precedence: delivered is final, and
+  person's explicit choice. lux answers each input once with a `lux.input`
+  record, `{requestId, phase: "accepted", lands, receipt, text?}` or
+  `{requestId, phase: "failed", error}` (never accepted); what follows an
+  acceptance has record types of its own, `lux.input.consumed
+  {requestId}` (only when `receipt`) or `lux.input.failed {requestId,
+  error}`, so a reader of `lux.input` alone sees one answer per input. An
+  older lux writes one `lux.input` with no phase, on handoff (`text`) or
+  with an `error`. A directive is `sent` when lux has it, `accepted` when
+  the harness took it (`run.directive.accepted`, with `lands`:
+  `next_step` or `next_turn`), and `delivered` when the agent's step has
+  it (`run.directive.delivered`, from `lux.input.consumed`; at once for an
+  acceptance with `receipt: false`). An older lux's handoff counts as
+  delivered. `failed` (`run.directive.failed`, with lux's `error`) is a
+  steer lux says will not reach the agent. Each is recorded once per
+  directive and Run. Precedence: delivered is final, and
   a later failure changes nothing; a failure is final against `accepted`;
   a read receipt (or an older lux's handoff) after a failure wins, since it
   is the agent's own report that it has the words: the failure and its

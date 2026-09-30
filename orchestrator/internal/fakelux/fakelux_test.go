@@ -94,21 +94,25 @@ func TestClosingTheFakeReleasesGatedInput(t *testing.T) {
 	}
 }
 
-// inputReceipts is each lux.input receipt of the Run for requestID, in
-// order: its phase, or "error".
+// inputReceipts is each input record of the Run for requestID, in order:
+// lux.input's phase, "consumed" (lux.input.consumed) or "failed"
+// (lux.input.failed).
 func inputReceipts(s *Server, id, requestID string) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []string
 	for _, r := range s.runs[id].records {
 		data, _ := r.Event["data"].(map[string]any)
-		if r.Event["type"] != "lux.input" || data["requestId"] != requestID {
+		if data["requestId"] != requestID {
 			continue
 		}
-		if _, failed := data["error"]; failed {
-			out = append(out, "error")
-		} else {
+		switch r.Event["type"] {
+		case lux.RecordInput:
 			out = append(out, data["phase"].(string))
+		case lux.RecordInputConsumed:
+			out = append(out, "consumed")
+		case lux.RecordInputFailed:
+			out = append(out, "failed")
 		}
 	}
 	return out
@@ -151,10 +155,15 @@ func TestAnInterruptCarriesAnUnreadSteerIntoTheNextTurn(t *testing.T) {
 			got, inputs := inputReceipts(fake, run.ID, "dir_a"), fake.Runs()[0].Inputs
 			want, wantInputs := []string{"accepted", "consumed"}, []string{"check the migration"}
 			if old {
-				want, wantInputs = []string{"accepted", "error"}, nil
+				want, wantInputs = []string{"accepted", "failed"}, nil
 			}
 			if !slices.Equal(got, want) || !slices.Equal(inputs, wantInputs) {
 				t.Errorf("receipts %v inputs %q, want %v %q", got, inputs, want, wantInputs)
+			}
+			// One first answer (lux.input) per input; what follows has its own
+			// record type, so a reader of lux.input alone sees it once.
+			if got[0] != "accepted" || slices.Contains(got[1:], "accepted") {
+				t.Errorf("lux.input answers %v, want the accepted one first and alone", got)
 			}
 			if r := inputReceipts(fake, run.ID, "dir_b"); len(r) != 0 {
 				t.Errorf("an interrupt alone got receipts %v", r)

@@ -159,7 +159,7 @@ func (s *Server) accept(run *Run, in *queuedInput) {
 	if s.NextTurnInput {
 		lands = "next_turn"
 	}
-	s.recordEvent(run, "lux.input", map[string]any{"requestId": in.requestID, "phase": "accepted", "receipt": true,
+	s.recordEvent(run, lux.RecordInput, map[string]any{"requestId": in.requestID, "phase": lux.InputAccepted, "receipt": true,
 		"lands": lands, "text": in.text})
 }
 
@@ -169,9 +169,9 @@ func (s *Server) consume(run *Run) {
 	for _, in := range run.queued {
 		run.Inputs = append(run.Inputs, in.text)
 		if s.LegacyInput {
-			s.recordEvent(run, "lux.input", map[string]any{"requestId": in.requestID, "text": in.text})
+			s.recordEvent(run, lux.RecordInput, map[string]any{"requestId": in.requestID, "text": in.text})
 		} else {
-			s.recordEvent(run, "lux.input", map[string]any{"requestId": in.requestID, "phase": "consumed"})
+			s.recordEvent(run, lux.RecordInputConsumed, map[string]any{"requestId": in.requestID})
 		}
 	}
 	run.queued = nil
@@ -198,8 +198,9 @@ func (s *Server) FinishTools(id string) {
 	}
 }
 
-// FailInput is the harness failing input it took and the agent has not
-// read (an agent error): its error receipt, and it is never read.
+// FailInput is the harness failing input the agent has not read (an agent
+// error), as lux reports it: lux.input.failed after its accepted answer,
+// else a failed first answer (an older lux: lux.input with the error).
 func (s *Server) FailInput(id, requestID, reason string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -210,7 +211,14 @@ func (s *Server) FailInput(id, requestID, reason string) {
 	for i, q := range run.queued {
 		if q.requestID == requestID {
 			run.queued = slices.Delete(run.queued, i, i+1)
-			s.recordEvent(run, "lux.input", map[string]any{"requestId": requestID, "error": reason})
+			switch {
+			case s.LegacyInput:
+				s.recordEvent(run, lux.RecordInput, map[string]any{"requestId": requestID, "error": reason})
+			case q.accepted:
+				s.recordEvent(run, lux.RecordInputFailed, map[string]any{"requestId": requestID, "error": reason})
+			default:
+				s.recordEvent(run, lux.RecordInput, map[string]any{"requestId": requestID, "phase": lux.InputFailed, "error": reason})
+			}
 			return
 		}
 	}
@@ -549,15 +557,15 @@ func (s *Server) play(run *Run, spec map[string]any, resumed bool) {
 		// The task, acknowledged when the agent takes it, with what it got.
 		prompt, _ := spec["workload"].(map[string]any)["prompt"].(string)
 		if s.LegacyInput {
-			s.recordEvent(run, "lux.input", map[string]any{"requestId": "prompt", "text": prompt})
+			s.recordEvent(run, lux.RecordInput, map[string]any{"requestId": "prompt", "text": prompt})
 		} else {
 			lands := "next_step"
 			if s.NextTurnInput {
 				lands = "next_turn"
 			}
-			s.recordEvent(run, "lux.input", map[string]any{"requestId": "prompt", "phase": "accepted", "receipt": true,
+			s.recordEvent(run, lux.RecordInput, map[string]any{"requestId": "prompt", "phase": lux.InputAccepted, "receipt": true,
 				"lands": lands, "text": prompt})
-			s.recordEvent(run, "lux.input", map[string]any{"requestId": "prompt", "phase": "consumed"})
+			s.recordEvent(run, lux.RecordInputConsumed, map[string]any{"requestId": "prompt"})
 		}
 	}
 	if resumed {
@@ -952,7 +960,7 @@ func (s *Server) input(w http.ResponseWriter, r *http.Request) {
 			kept := run.queued[:0]
 			for _, q := range run.queued {
 				if q.accepted && q.requestID != in.RequestID {
-					s.recordEvent(run, "lux.input", map[string]any{"requestId": q.requestID,
+					s.recordEvent(run, lux.RecordInputFailed, map[string]any{"requestId": q.requestID,
 						"error": "the turn was cancelled before the agent read it"})
 					continue
 				}

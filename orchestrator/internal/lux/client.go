@@ -275,6 +275,22 @@ type RecordEvent struct {
 	Data json.RawMessage `json:"data"`
 }
 
+// What lux's shim records of an input, by request id ("prompt" for the
+// task). RecordInput is its one first answer: {requestId, phase: accepted,
+// lands, receipt, text?}, or {requestId, phase: failed, error} when it was
+// never accepted. An older lux writes it once with no phase, on handoff
+// ({requestId, text}), or {requestId, error}. After an accepted answer at
+// most one of RecordInputConsumed {requestId} (the agent's step has it;
+// only with receipt) or RecordInputFailed {requestId, error} follows.
+const (
+	RecordInput         = "lux.input"
+	RecordInputConsumed = "lux.input.consumed"
+	RecordInputFailed   = "lux.input.failed"
+
+	InputAccepted = "accepted"
+	InputFailed   = "failed"
+)
+
 // Error is lux refusing a request, with its stable error code.
 type Error struct {
 	Status  int
