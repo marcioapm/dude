@@ -4,7 +4,7 @@
  * file is a listener the test owns, and none may be connected to.
  */
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -54,18 +54,32 @@ function file(text: string, mode = 0o600): string {
   return path;
 }
 
-// The backend's entry point with `args`, configured by `env` alone.
+// The backend's entry point with `args`, configured by `env` alone. A run
+// past DEADLINE_MS is killed and fails the test.
+const DEADLINE_MS = 5000;
+// Above the deadline, so a hung child fails on the deadline, not bun's timeout.
+setDefaultTimeout(4 * DEADLINE_MS);
 async function backend(args: string[], env: Record<string, string>) {
   const proc = Bun.spawn(["bun", entry, ...args], {
     env: { PATH: process.env.PATH!, HOME: dir, ...env },
     stdout: "pipe",
     stderr: "pipe",
   });
-  const [stdout, stderr, exit] = await Promise.all([
-    new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited,
-  ]);
-  expect(stdout + stderr).not.toContain(SECRET);
-  return { exit, stdout, stderr };
+  let timedOut = false;
+  const deadline = setTimeout(() => { timedOut = true; proc.kill("SIGKILL"); }, DEADLINE_MS);
+  try {
+    // Drain both pipes while waiting, so a full pipe cannot stall the child.
+    const [stdout, stderr, exit] = await Promise.all([
+      new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited,
+    ]);
+    expect(timedOut).toBe(false);
+    expect(stdout + stderr).not.toContain(SECRET);
+    return { exit, stdout, stderr };
+  } finally {
+    clearTimeout(deadline);
+    proc.kill("SIGKILL");
+    await proc.exited;
+  }
 }
 
 // Only the file configures it: none of this machine's own settings.
