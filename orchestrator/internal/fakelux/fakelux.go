@@ -460,8 +460,12 @@ func (s *Server) play(run *Run, spec map[string]any, resumed bool) {
 		if s.LegacyInput {
 			s.recordEvent(run, "lux.input", map[string]any{"requestId": "prompt", "text": prompt})
 		} else {
+			lands := "next_step"
+			if s.NextTurnInput {
+				lands = "next_turn"
+			}
 			s.recordEvent(run, "lux.input", map[string]any{"requestId": "prompt", "phase": "accepted", "receipt": true,
-				"lands": "next_step", "text": prompt})
+				"lands": lands, "text": prompt})
 			s.recordEvent(run, "lux.input", map[string]any{"requestId": "prompt", "phase": "consumed"})
 		}
 	}

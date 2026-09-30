@@ -256,9 +256,130 @@ describe("what the agent received, thought and got back", () => {
     expect(project(events).turns[0]).toMatchObject({ deliveredAt: null });
 
     events.push(ev(EventTypes.DirectiveDelivered, { directiveId: "dir_1" }));
-    expect(project(events).turns[0]).toMatchObject({ deliveredAt: events[1]!.occurredAt });
+    expect(project(events).turns[0]).toMatchObject({ deliveredAt: events[1]!.occurredAt, read: false });
+  });
+});
+
+describe("a steer read at the agent's next step", () => {
+  // The agent is running bash; a person steers; the harness takes it; bash
+  // finishes; the next step reads it; the agent calls the next tool.
+  const script = () => [
+    ev(EventTypes.PromptDelivered, { text: "Do it", lands: "next_step" }),
+    ev(EventTypes.ToolCalled, { tool: "bash", callId: "c1", input: { command: "sleep 20" } }),
+    ev(EventTypes.RunSteered, { text: "Check the migration too", directiveId: "dir_1" }),
+    ev(EventTypes.DirectiveAccepted, { directiveId: "dir_1", lands: "next_step", receipt: true }),
+    ev(EventTypes.ToolCompleted, { tool: "bash", callId: "c1", status: "completed" }),
+    ev(EventTypes.DirectiveDelivered, { directiveId: "dir_1", read: true }),
+    ev(EventTypes.ToolCalled, { tool: "read", callId: "c2", input: { path: "migrations/060.sql" } }),
+  ];
+
+  test("while the tool runs it is accepted, queued where it was typed, and the running tool is known", () => {
+    const events = script().slice(0, 4);
+    const conversation = project(events);
+    expect(conversation.turns.map((t) => t.kind)).toEqual(["prompt", "tool", "human"]);
+    expect(conversation.turns[2]).toMatchObject({
+      deliveredAt: null, acceptedAt: events[3]!.occurredAt, lands: "next_step", read: false,
+    });
+    expect(conversation.activeTool).toMatchObject({ name: "bash" });
+    expect(conversation.lands).toBe("next_step");
   });
 
+  test("once read, it sits between the tool it waited for and the next one, saying which", () => {
+    const events = script();
+    const { turns } = project(events);
+    expect(turns.map((t) => (t.kind === "tool" ? t.tool : t.kind))).toEqual(["prompt", "bash", "human", "read"]);
+    expect(turns[2]).toMatchObject({ deliveredAt: events[5]!.occurredAt, read: true, after: "bash", at: events[2]!.occurredAt });
+  });
+
+  test("the move keeps the turn's identity, and folding one event at a time gives the same transcript", () => {
+    const events = script();
+    const state = emptyProjection();
+    for (const e of events.slice(0, 3)) apply(state, [e]);
+    const steer = state.turns[2];
+    const bash = state.turns[1];
+    for (const e of events.slice(3)) apply(state, [e]);
+    expect(state.turns[2]).toBe(steer!);
+    expect(state.turns[1]).toBe(bash!);
+    expect(snapshot(state).turns).toEqual(project(events).turns);
+  });
+
+  test("a steer typed before the tool's completion, read after a later tool, moves past both", () => {
+    const { turns } = project([
+      ev(EventTypes.RunSteered, { text: "S", directiveId: "dir_1" }),
+      ev(EventTypes.ToolCalled, { tool: "bash", callId: "c1" }),
+      ev(EventTypes.ToolCompleted, { tool: "bash", callId: "c1", status: "completed" }),
+      ev(EventTypes.AgentMessage, { text: "Done with bash." }),
+      ev(EventTypes.DirectiveDelivered, { directiveId: "dir_1", read: true }),
+    ]);
+    expect(turns.map((t) => t.kind)).toEqual(["tool", "message", "human"]);
+    // A message came between: it was not read right after a tool.
+    expect(turns[2]).toMatchObject({ after: null, read: true });
+  });
+
+  test("a delivery from an older lux leaves it where it was typed, with no read time", () => {
+    const { turns } = project([
+      ev(EventTypes.ToolCalled, { tool: "bash", callId: "c1" }),
+      ev(EventTypes.RunSteered, { text: "S", directiveId: "dir_1" }),
+      ev(EventTypes.ToolCompleted, { tool: "bash", callId: "c1", status: "completed" }),
+      ev(EventTypes.DirectiveDelivered, { directiveId: "dir_1" }),
+    ]);
+    expect(turns.map((t) => t.kind)).toEqual(["tool", "human"]);
+    expect(turns[1]).toMatchObject({ read: false, after: null });
+    expect((turns[1] as { deliveredAt: string | null }).deliveredAt).not.toBeNull();
+  });
+
+  test("a harness that reads between turns says so, and a repeated delivery changes nothing", () => {
+    const events = [
+      ev(EventTypes.RunSteered, { text: "S", directiveId: "dir_1" }),
+      ev(EventTypes.DirectiveAccepted, { directiveId: "dir_1", lands: "next_turn", receipt: true }),
+      ev(EventTypes.AgentMessage, { text: "Turn over." }),
+      ev(EventTypes.DirectiveDelivered, { directiveId: "dir_1", read: true }),
+      ev(EventTypes.AgentMessage, { text: "Next turn." }),
+      ev(EventTypes.DirectiveDelivered, { directiveId: "dir_1", read: true }),
+    ];
+    const conversation = project(events);
+    expect(conversation.lands).toBe("next_turn");
+    expect(conversation.turns.map((t) => t.kind)).toEqual(["message", "human", "message"]);
+    expect(conversation.turns[1]).toMatchObject({ lands: "next_turn", deliveredAt: events[3]!.occurredAt });
+  });
+
+  test("a failed steer says why, and interrupting it re-sends the same turn rather than adding one", () => {
+    const events = [
+      ev(EventTypes.RunSteered, { text: "S", directiveId: "dir_1" }),
+      ev(EventTypes.DirectiveFailed, { directiveId: "dir_1", error: "the agent exited" }),
+    ];
+    expect(project(events).turns[0]).toMatchObject({ failed: "the agent exited", deliveredAt: null });
+    events.push(
+      ev(EventTypes.RunSteered, { text: "S", directiveId: "dir_2", supersedes: "dir_1", interrupt: true }),
+      ev(EventTypes.DirectiveDelivered, { directiveId: "dir_2" }),
+    );
+    const { turns } = project(events);
+    expect(turns).toHaveLength(1);
+    expect(turns[0]).toMatchObject({ failed: null, interrupting: true, deliveredAt: events[3]!.occurredAt });
+  });
+
+  test("a new steer that supersedes with other words is a turn of its own", () => {
+    const { turns } = project([
+      ev(EventTypes.RunSteered, { text: "S", directiveId: "dir_1" }),
+      ev(EventTypes.RunSteered, { text: "Something else", directiveId: "dir_2", supersedes: "dir_1", interrupt: true }),
+    ]);
+    expect(turns).toHaveLength(2);
+  });
+
+  test("the progress row stays found when a steer moves past it", () => {
+    const events = [
+      ev(EventTypes.RunSteered, { text: "S", directiveId: "dir_1" }),
+      ev("agent.custom.progress", { data: { done: 1, of: 3 } }),
+      ev(EventTypes.DirectiveDelivered, { directiveId: "dir_1", read: true }),
+      ev("agent.custom.progress", { data: { done: 2, of: 3 } }),
+    ];
+    const { turns } = project(events);
+    expect(turns.map((t) => t.kind)).toEqual(["progress", "human"]);
+    expect(turns[0]).toMatchObject({ done: 2 });
+  });
+});
+
+describe("tokens", () => {
   test("tokens are counted when cost is unknown, and a turn's totals are shown where it ended", () => {
     const conversation = project([
       ev(EventTypes.ModelRequestCompleted, { contextTokens: 12000, contextWindow: 744000 }),

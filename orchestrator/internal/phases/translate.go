@@ -268,6 +268,10 @@ func (t *translator) shimEvent(ctx context.Context, tx pgx.Tx, s *Syncer, typ st
 			if truncated, _ := data["truncated"].(bool); truncated {
 				payload["truncated"] = true
 			}
+			// Where this harness lands input: what the composer promises a steer.
+			if lands := str("lands"); lands == "next_step" || lands == "next_turn" {
+				payload["lands"] = lands
+			}
 			return s.event(ctx, tx, t.run, evPromptDelivered, ledger.ActorSystem, payload)
 		}
 		return t.directiveReceipt(ctx, tx, s, data)
