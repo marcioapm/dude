@@ -31,13 +31,15 @@ TAR="${TAR:-$(command -v gtar || command -v tar)}"
 TAR_REPRO_FLAGS=(--owner=0 --group=0 --numeric-owner --sort=name --mtime="$MTIME")
 if command -v sha256sum >/dev/null; then SHA256=(sha256sum); else SHA256=(shasum -a 256); fi
 # The binaries embed the Bun that builds them, and Bun < 1.4.0 cannot upload
-# photos to a store that answers Connection: close (versitygw).
-BUN_VERSION="$(bun --version)"
-IFS=. read -r bun_major bun_minor _ <<<"${BUN_VERSION%%[-+]*}"
-if ! [[ "$bun_major" =~ ^[0-9]+$ && "$bun_minor" =~ ^[0-9]+$ ]] || (( bun_major < 1 || (bun_major == 1 && bun_minor < 4) )); then
-  echo "dist.sh needs Bun >= 1.4.0, found $BUN_VERSION: earlier Bun fails S3 uploads to versitygw" >&2
-  exit 1
-fi
+# photos to a store that answers Connection: close (versitygw). The floor is
+# package.json's engines.bun; Bun.semver orders a pre-release of it below it.
+(cd "$ROOT" && bun -e '
+  const floor = require("./package.json").engines.bun.replace(/^>=\s*/, "");
+  if (Bun.semver.order(Bun.version, floor) < 0) {
+    console.error(`dist.sh needs Bun >= ${floor}, found ${Bun.version}: earlier Bun fails S3 uploads to versitygw`);
+    process.exit(1);
+  }
+') || exit 1
 
 rm -rf "$DIST"
 mkdir -p "$DIST"
