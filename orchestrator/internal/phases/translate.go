@@ -278,7 +278,7 @@ func (t *translator) shimEvent(ctx context.Context, tx pgx.Tx, s *Syncer, typ st
 				payload["truncated"] = true
 			}
 			// Where this harness lands input: what the composer promises a steer.
-			if lands := str("lands"); lands == "next_step" || lands == "next_turn" {
+			if lands := landsOf(data); lands != "" {
 				payload["lands"] = lands
 			}
 			return s.event(ctx, tx, t.run, evPromptDelivered, ledger.ActorSystem, payload)
@@ -357,10 +357,7 @@ func (t *translator) directiveReceipt(ctx context.Context, tx pgx.Tx, s *Syncer,
 	}
 	receipt, _ := data["receipt"].(bool)
 	if phase == lux.InputAccepted {
-		lands, _ := data["lands"].(string)
-		if lands != "next_step" && lands != "next_turn" {
-			lands = ""
-		}
+		lands := landsOf(data)
 		tag, err := tx.Exec(ctx, `UPDATE directives SET accepted_at = now(), lands = NULLIF($3, '')
 			WHERE id = $1 AND run_id = $2 AND accepted_at IS NULL AND delivered_at IS NULL AND failed_at IS NULL`, id, t.run.ID, lands)
 		if err != nil {
@@ -405,6 +402,15 @@ func (t *translator) directiveReceipt(ctx context.Context, tx pgx.Tx, s *Syncer,
 			SET delivered_at = now(), accepted_at = COALESCE(d.accepted_at, now()), failed_at = NULL, error = NULL
 		FROM directives f WHERE `+interruptAloneOf+` AND (d.failed_at IS NULL OR $3)
 		RETURNING d.id`, id, t.run.ID, overridesFailure)
+}
+
+// landsOf is where an accepted answer says the harness lands input,
+// next_step or next_turn; "" for anything else.
+func landsOf(data map[string]any) string {
+	if lands, _ := data["lands"].(string); lands == "next_step" || lands == "next_turn" {
+		return lands
+	}
+	return ""
 }
 
 // session records the placement the agent's session is established in. The
