@@ -1808,10 +1808,15 @@ func TestPauseKeepsTheRunAndResumeContinuesIt(t *testing.T) {
 	// A directive given while paused, then the request to resume.
 	mustExec(t, w.owner, `INSERT INTO directives (id, organization_id, task_id, run_id, text) VALUES ('dir_r', $1, $2, $3, 'carry on')`,
 		w.org, wi, runID)
+	// Its cost read as final before the resume, which lux undoes.
+	mustExec(t, w.owner, `UPDATE runs SET lux_cost_status = 'final', lux_cost_next_at = NULL WHERE id = $1`, runID)
 	mustExec(t, w.owner, `UPDATE runs SET control = 'resume' WHERE id = $1`, runID)
 	w.until("the resumed run to finish its turn", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
 	})
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_cost_next_at IS NOT NULL`, runID); n != 1 {
+		t.Error("a resumed Run whose cost was final is not back on the cost work list")
+	}
 	r := w.lux.Runs()[0]
 	if r.Resumed != 1 {
 		t.Errorf("resumed %d times", r.Resumed)
