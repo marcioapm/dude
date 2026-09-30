@@ -70,7 +70,11 @@ export const EventTypes = {
    * harness with no read receipt) it was handed over then.
    */
   DirectiveDelivered: "run.directive.delivered",
-  /** A steer will not reach the agent. Payload: `{ directiveId, error }`. */
+  /**
+   * A steer will not reach the agent. Payload: `{ directiveId, error }`.
+   * Never after its delivery; a `DirectiveDelivered` after it (the agent
+   * read it after all) supersedes it, and the failure is cleared.
+   */
   DirectiveFailed: "run.directive.failed",
   RunPaused: "run.paused",
   RunResumed: "run.resumed",
