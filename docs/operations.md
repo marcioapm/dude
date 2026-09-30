@@ -236,7 +236,9 @@ default. An empty string in the file (`listen = ""`) counts as unset, as an
 empty variable does. Lists (`agent.egress`, `factory.logins`) are TOML arrays in the file
 and comma-separated in the variable. Booleans in a variable are `true`,
 `false`, `on`, `off`, `1` or `0`. With no file, the environment alone
-configures dude, exactly as before the file existed.
+configures dude, exactly as before the file existed. The backend relies on
+Bun's TOML parser, which reads special float values (`inf`, `nan`) as 0, so
+write ports as plain integers.
 
 **Strict.** Each process stops at startup, naming the file key and variable,
 on: `DUDE_CONFIG` set to a file it cannot read; a key neither process knows;
