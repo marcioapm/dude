@@ -22,6 +22,11 @@ export interface BreadcrumbProps extends Omit<HTMLAttributes<HTMLElement>, "chil
   /** Character budget for a crumb before it is elided in the middle; the last crumb keeps its full text. Default 32. */
   readonly maxChars?: number | undefined;
   readonly size?: "sm" | "md" | undefined;
+  /**
+   * `false`: a plain path, not navigation — where a thing sits, as a
+   * dialog's `context`. Same look; no `nav` landmark and no `aria-current`.
+   */
+  readonly current?: boolean | undefined;
 }
 
 /**
@@ -31,9 +36,10 @@ export interface BreadcrumbProps extends Omit<HTMLAttributes<HTMLElement>, "chil
  * tail both survive; the full text lives in the title. The last crumb is
  * never elided: it is the answer to "where am I".
  */
-export function Breadcrumb({ items, onSelect, maxChars = 32, size = "md", className, ...rest }: BreadcrumbProps) {
+export function Breadcrumb({ items, onSelect, maxChars = 32, size = "md", current = true, className, ...rest }: BreadcrumbProps) {
+  const Root = current ? "nav" : "div";
   return (
-    <nav aria-label="Breadcrumb" className={cx(styles["root"], size === "sm" && styles["sm"], className)} {...rest}>
+    <Root aria-label={current ? "Breadcrumb" : undefined} className={cx(styles["root"], size === "sm" && styles["sm"], className)} {...rest}>
       <ol className={styles["list"]}>
         {items.map((it, i) => {
           const last = i === items.length - 1;
@@ -64,7 +70,7 @@ export function Breadcrumb({ items, onSelect, maxChars = 32, size = "md", classN
               ) : null}
               <li className={cx(styles["item"], last && styles["current"])}>
                 {last || !clickable ? (
-                  <span className={styles["crumb"]} aria-current={last ? "page" : undefined} title={title} aria-label={ariaLabel}>
+                  <span className={styles["crumb"]} aria-current={last && current ? "page" : undefined} title={title} aria-label={ariaLabel}>
                     {inner}
                   </span>
                 ) : it.href ? (
@@ -81,7 +87,7 @@ export function Breadcrumb({ items, onSelect, maxChars = 32, size = "md", classN
           );
         })}
       </ol>
-    </nav>
+    </Root>
   );
 }
 

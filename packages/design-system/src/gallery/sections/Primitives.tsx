@@ -696,7 +696,7 @@ function TaskDialogExample() {
     <Dialog
       trigger={<Button>Task dialog</Button>}
       size="document"
-      context={<Breadcrumb size="sm" items={[{ id: "p", label: "Customer portal" }, { id: "e", label: "Checkout v2", icon: "layers" }]} />}
+      context={<Breadcrumb size="sm" current={false} items={[{ id: "p", label: "Customer portal" }, { id: "e", label: "Checkout v2", icon: "layers" }]} />}
       title="New task"
       asideLabel="Where it sits"
       aside={

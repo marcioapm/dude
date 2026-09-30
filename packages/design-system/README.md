@@ -589,6 +589,8 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   the last a link or button, the last `aria-current`. Middle crumbs elide in
   the middle (`elideMiddle`) so head and tail survive; the last never does.
   It replaces a Back button in the task and transcript headers.
+  `size="sm"` with `current={false}` is a dialog's `context`: where the
+  thing sits, as a plain path — no links, no `aria-current`, no landmark.
 - **FindingRow** is the only way a review finding is drawn: severity as
   glyph + word in its tone (`FINDING_SEVERITY_SPECS`, keyed on the domain
   union), category, title, `file:line` in mono, and the status as a neutral
