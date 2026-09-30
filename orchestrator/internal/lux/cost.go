@@ -22,10 +22,11 @@ const (
 )
 
 // Decimal is an amount as lux sends it: a decimal string, kept as text so
-// no digit is lost to a float on the way to a numeric column.
+// no digit is lost to a float on the way to a numeric column. Held to the
+// JSON number grammar, so it can be written into an event as a number.
 type Decimal string
 
-var decimalPattern = regexp.MustCompile(`^-?[0-9]+(\.[0-9]+)?$`)
+var decimalPattern = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?$`)
 
 func (d *Decimal) UnmarshalJSON(b []byte) error {
 	var s string
@@ -40,7 +41,9 @@ func (d *Decimal) UnmarshalJSON(b []byte) error {
 }
 
 // RunCost is GET /v1/runs/{id}/cost: what a Run cost so far, per currency,
-// per family and per priced line.
+// per family and per priced line. dude reads only a family's amount, so
+// only that is a checked Decimal: an odd value elsewhere cannot reject the
+// answer.
 type RunCost struct {
 	RunID    string       `json:"runId"`
 	Status   string       `json:"status"`
@@ -53,10 +56,10 @@ type RunCost struct {
 }
 
 type CostAmount struct {
-	Currency string  `json:"currency"`
-	Amount   Decimal `json:"amount"`
-	Final    Decimal `json:"final"`
-	Estimate Decimal `json:"estimate"`
+	Currency string `json:"currency"`
+	Amount   string `json:"amount"`
+	Final    string `json:"final"`
+	Estimate string `json:"estimate"`
 }
 
 type FamilyCost struct {
@@ -64,17 +67,17 @@ type FamilyCost struct {
 	DisplayName string  `json:"displayName"`
 	Currency    string  `json:"currency"`
 	Amount      Decimal `json:"amount"`
-	Final       Decimal `json:"final"`
-	Estimate    Decimal `json:"estimate"`
+	Final       string  `json:"final"`
+	Estimate    string  `json:"estimate"`
 }
 
 type CostLine struct {
-	Source   string  `json:"source"`
-	Family   string  `json:"family"`
-	Item     string  `json:"item"`
-	Amount   Decimal `json:"amount"`
-	Currency string  `json:"currency"`
-	Final    bool    `json:"final"`
+	Source   string `json:"source"`
+	Family   string `json:"family"`
+	Item     string `json:"item"`
+	Amount   string `json:"amount"`
+	Currency string `json:"currency"`
+	Final    bool   `json:"final"`
 }
 
 type CostSource struct {
@@ -82,11 +85,12 @@ type CostSource struct {
 	Status string `json:"status"`
 }
 
-// FamilyUSD is the family's USD amount, and false when lux reports none.
-// Amounts in other currencies are not dude's to convert and are ignored.
+// FamilyUSD is the family's USD amount, and false when lux reports none
+// (no such family, or one without an amount). Amounts in other currencies
+// are not dude's to convert and are ignored.
 func (c RunCost) FamilyUSD(family string) (Decimal, bool) {
 	for _, f := range c.ByFamily {
-		if f.Family == family && f.Currency == "USD" {
+		if f.Family == family && f.Currency == "USD" && f.Amount != "" {
 			return f.Amount, true
 		}
 	}

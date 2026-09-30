@@ -70,11 +70,33 @@ func TestCostIgnoresFamiliesInOtherCurrencies(t *testing.T) {
 }
 
 func TestCostRefusesAnAmountThatIsNotADecimalString(t *testing.T) {
-	for _, amount := range []string{`1.5`, `"1e3"`, `"NaN"`, `""`} {
+	// Leading zeros are not a JSON number: the amount could not go into the
+	// ledger event as one.
+	for _, amount := range []string{`1.5`, `"1e3"`, `"NaN"`, `""`, `"007"`, `"01.5"`, `"1."`, `null`} {
 		url, _ := costServer(t, 200, `{"runId":"r","status":"final","byFamily":[{"family":"ai","currency":"USD","amount":`+amount+`}]}`)
 		if _, err := lux.New(url, "k").Cost(context.Background(), "r"); err == nil {
 			t.Errorf("amount %s accepted", amount)
 		}
+	}
+}
+
+// A family without an amount has reported none; nulls in the parts dude
+// does not read leave the family's amount readable.
+func TestCostWithoutAFamilyAmountIsNotReported(t *testing.T) {
+	url, _ := costServer(t, 200, `{"runId":"r","status":"incomplete",
+		"totals":[{"currency":"USD","amount":null,"final":null,"estimate":null}],
+		"byFamily":[{"family":"ai","currency":"USD"},
+		            {"family":"compute","currency":"USD","amount":"0.5","final":null,"estimate":null}],
+		"lines":[{"source":"compute","family":"compute","item":"x","amount":null,"currency":"USD"}]}`)
+	c, err := lux.New(url, "k").Cost(context.Background(), "r")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ai, ok := c.FamilyUSD(lux.FamilyAI); ok {
+		t.Errorf("a family with no amount read as %q", ai)
+	}
+	if compute, ok := c.FamilyUSD(lux.FamilyCompute); !ok || compute != "0.5" {
+		t.Errorf("compute = %q %v", compute, ok)
 	}
 }
 
