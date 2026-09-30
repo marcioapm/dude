@@ -158,6 +158,12 @@ test("legacy invalid stored strings read safely, allow unrelated patches, correc
   const renamed = await call("PATCH", `/v1/projects/${PROJECT}`, { name: "Renamed" });
   expect(renamed.status).toBe(200);
   expect((await body(renamed)).agentModels).toEqual(legacy);
+  // The project path runs after the organization's reset, so it inherits
+  // the organization's now-empty model rather than the legacy one.
+  const afterReset: Record<string, unknown> = {
+    "/v1/settings/organization": { value: null, source: "organization" },
+    [`/v1/projects/${PROJECT}/settings`]: { value: null, source: "organization" },
+  };
   for (const path of paths) {
     const read = await call("GET", path);
     expect(read.status).toBe(200);
@@ -171,9 +177,8 @@ test("legacy invalid stored strings read safely, allow unrelated patches, correc
     expect((await body(await call("GET", path))).roles.implementer.model.value).toBe("llm-openai/gpt");
     const reset = await call("PATCH", path, { roles: { implementer: { model: null } } });
     expect(reset.status).toBe(200);
-    const resetModel = (await body(reset)).roles.implementer.model;
-    expect(resetModel.value).not.toBe("llm-openai/gpt");
-    expect((await body(await call("GET", path))).roles.implementer.model).toEqual(resetModel);
+    expect((await body(reset)).roles.implementer.model).toEqual(afterReset[path]);
+    expect((await body(await call("GET", path))).roles.implementer.model).toEqual(afterReset[path]);
   }
   expect((await call("PATCH", `/v1/projects/${PROJECT}`, { name: "Renamed" })).status).toBe(200);
 });
