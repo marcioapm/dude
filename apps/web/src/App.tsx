@@ -378,6 +378,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         client={client}
         taskId={taskId}
         runId={selected?.kind === "task" ? undefined : sessionId ?? undefined}
+        tab={place?.view === "tree" && selected?.kind === "task" ? place.tab : undefined}
         onOpenRun={(runId) => go(inTree({ kind: "session", id: runId }))}
         onCloseRun={() => go(inTree({ kind: "task", id: taskId }))}
         onBack={toBoard}
@@ -394,7 +395,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         key={selected.id}
         client={client}
         runId={selected.id}
-        onOpenTask={(taskId) => go(inTree({ kind: "task", id: taskId }))}
+        onOpenTask={(taskId, tab) => go(inTree({ kind: "task", id: taskId }, tab))}
         onBack={toBoard}
       />
     );
