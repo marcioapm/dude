@@ -331,7 +331,9 @@ type Server struct {
 	// FailUnreadOnInterrupt is a lux from before interrupts carried unread
 	// input over: an interrupt fails what the harness took and the agent had
 	// not read ("the turn was cancelled before the agent read it"), rather
-	// than starting the next turn with it.
+	// than starting the next turn with it. With LegacyInput, which is what
+	// production lux is today, that is everything queued, failed with a
+	// phase-less lux.input {requestId, error}.
 	FailUnreadOnInterrupt bool
 	// BeforeInput, when set, runs as each input request arrives, before the
 	// fake acts on it; false refuses the request (503), as a lux that is
@@ -957,14 +959,20 @@ func (s *Server) input(w http.ResponseWriter, r *http.Request) {
 		s.recordEvent(run, "acp.turn_end", map[string]any{"stopReason": "cancelled"})
 		run.busy = false
 		if s.FailUnreadOnInterrupt {
+			// A legacy lux holds input it never acknowledges; it fails it
+			// with a phase-less lux.input carrying the error.
+			const reason = "the turn was cancelled before the agent read it"
 			kept := run.queued[:0]
 			for _, q := range run.queued {
-				if q.accepted && q.requestID != in.RequestID {
-					s.recordEvent(run, lux.RecordInputFailed, map[string]any{"requestId": q.requestID,
-						"error": "the turn was cancelled before the agent read it"})
+				if q.requestID == in.RequestID || !(q.accepted || s.LegacyInput) {
+					kept = append(kept, q)
 					continue
 				}
-				kept = append(kept, q)
+				if s.LegacyInput {
+					s.recordEvent(run, lux.RecordInput, map[string]any{"requestId": q.requestID, "error": reason})
+				} else {
+					s.recordEvent(run, lux.RecordInputFailed, map[string]any{"requestId": q.requestID, "error": reason})
+				}
 			}
 			run.queued = kept
 		}

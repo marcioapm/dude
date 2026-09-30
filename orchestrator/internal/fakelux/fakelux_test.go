@@ -96,7 +96,8 @@ func TestClosingTheFakeReleasesGatedInput(t *testing.T) {
 
 // inputReceipts is each input record of the Run for requestID, in order:
 // lux.input's phase, "consumed" (lux.input.consumed) or "failed"
-// (lux.input.failed).
+// (lux.input.failed); an older lux's phase-less lux.input is "handoff", or
+// "error" when it carries one.
 func inputReceipts(s *Server, id, requestID string) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -108,7 +109,15 @@ func inputReceipts(s *Server, id, requestID string) []string {
 		}
 		switch r.Event["type"] {
 		case lux.RecordInput:
-			out = append(out, data["phase"].(string))
+			phase, _ := data["phase"].(string)
+			switch {
+			case phase != "":
+				out = append(out, phase)
+			case data["error"] != nil:
+				out = append(out, "error")
+			default:
+				out = append(out, "handoff")
+			}
 		case lux.RecordInputConsumed:
 			out = append(out, "consumed")
 		case lux.RecordInputFailed:
@@ -118,56 +127,82 @@ func inputReceipts(s *Server, id, requestID string) []string {
 	return out
 }
 
+func cancelledTurns(s *Server, id string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, r := range s.runs[id].records {
+		data, _ := r.Event["data"].(map[string]any)
+		if r.Event["type"] == "acp.turn_end" && data["stopReason"] == "cancelled" {
+			n++
+		}
+	}
+	return n
+}
+
 // A steer the harness took while a tool ran, then an interrupt with no
 // text: lux now carries the steer into the next turn, where it is read
-// once; an older lux fails it.
+// once; an older lux fails it. In both input contracts: a legacy lux hands
+// the steer over (or fails it) with one phase-less lux.input.
 func TestAnInterruptCarriesAnUnreadSteerIntoTheNextTurn(t *testing.T) {
-	for _, old := range []bool{false, true} {
-		t.Run(map[bool]string{false: "carries", true: "older lux fails it"}[old], func(t *testing.T) {
-			fake := New("", "k", func(map[string]any) Behaviour {
-				return Behaviour{Hang: true, Tools: []string{"bash"}, KeepToolsOpen: true}
+	for _, legacy := range []bool{false, true} {
+		for _, old := range []bool{false, true} {
+			name := map[bool]string{false: "receipts", true: "legacy"}[legacy] + "/" + map[bool]string{false: "carries", true: "older lux fails it"}[old]
+			t.Run(name, func(t *testing.T) {
+				fake := New("", "k", func(map[string]any) Behaviour {
+					return Behaviour{Hang: true, Tools: []string{"bash"}, KeepToolsOpen: true}
+				})
+				fake.LegacyInput = legacy
+				fake.FailUnreadOnInterrupt = old
+				srv := httptest.NewServer(fake.Handler())
+				t.Cleanup(srv.Close)
+				c := lux.New(srv.URL, "k")
+				run, err := c.Submit(context.Background(), lux.Spec{Workload: lux.Workload{Adapter: "opencode", Prompt: "go"}}, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+					fake.mu.Lock()
+					open := len(fake.runs[run.ID].openTools)
+					fake.mu.Unlock()
+					if open == 1 {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatal("the tool never started")
+					}
+				}
+				if err := c.Input(context.Background(), run.ID, "check the migration", "dir_a", false); err != nil {
+					t.Fatal(err)
+				}
+				if err := c.Input(context.Background(), run.ID, "", "dir_b", true); err != nil {
+					t.Fatal(err)
+				}
+				got, inputs := inputReceipts(fake, run.ID, "dir_a"), fake.Runs()[0].Inputs
+				var want, wantInputs []string
+				switch {
+				case legacy && old:
+					want = []string{"error"}
+				case legacy:
+					want, wantInputs = []string{"handoff"}, []string{"check the migration"}
+				case old:
+					want = []string{"accepted", "failed"}
+				default:
+					want, wantInputs = []string{"accepted", "consumed"}, []string{"check the migration"}
+				}
+				if !slices.Equal(got, want) || !slices.Equal(inputs, wantInputs) {
+					t.Errorf("receipts %v inputs %q, want %v %q", got, inputs, want, wantInputs)
+				}
+				if r := inputReceipts(fake, run.ID, "dir_b"); len(r) != 0 {
+					t.Errorf("an interrupt alone got receipts %v", r)
+				}
+				if r := fake.Runs()[0]; r.Interrupted != 1 {
+					t.Errorf("interrupted=%d, want one", r.Interrupted)
+				}
+				if n := cancelledTurns(fake, run.ID); n != 1 {
+					t.Errorf("%d cancelled turns, want 1", n)
+				}
 			})
-			fake.FailUnreadOnInterrupt = old
-			srv := httptest.NewServer(fake.Handler())
-			t.Cleanup(srv.Close)
-			c := lux.New(srv.URL, "k")
-			run, err := c.Submit(context.Background(), lux.Spec{Workload: lux.Workload{Adapter: "opencode", Prompt: "go"}}, "")
-			if err != nil {
-				t.Fatal(err)
-			}
-			for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-				fake.mu.Lock()
-				open := len(fake.runs[run.ID].openTools)
-				fake.mu.Unlock()
-				if open == 1 {
-					break
-				}
-				if time.Now().After(deadline) {
-					t.Fatal("the tool never started")
-				}
-			}
-			if err := c.Input(context.Background(), run.ID, "check the migration", "dir_a", false); err != nil {
-				t.Fatal(err)
-			}
-			if err := c.Input(context.Background(), run.ID, "", "dir_b", true); err != nil {
-				t.Fatal(err)
-			}
-			got, inputs := inputReceipts(fake, run.ID, "dir_a"), fake.Runs()[0].Inputs
-			want, wantInputs := []string{"accepted", "consumed"}, []string{"check the migration"}
-			if old {
-				want, wantInputs = []string{"accepted", "failed"}, nil
-			}
-			if !slices.Equal(got, want) || !slices.Equal(inputs, wantInputs) {
-				t.Errorf("receipts %v inputs %q, want %v %q", got, inputs, want, wantInputs)
-			}
-			// One first answer (lux.input) per input; what follows has its own
-			// record type, so a reader of lux.input alone sees it once.
-			if got[0] != "accepted" || slices.Contains(got[1:], "accepted") {
-				t.Errorf("lux.input answers %v, want the accepted one first and alone", got)
-			}
-			if r := inputReceipts(fake, run.ID, "dir_b"); len(r) != 0 {
-				t.Errorf("an interrupt alone got receipts %v", r)
-			}
-		})
+		}
 	}
 }
