@@ -4,8 +4,8 @@
  * refuses, an optional toast when it lands.
  */
 
-import { useCallback, useId, useRef, useState, type ReactNode } from "react";
-import { Button, Callout, Dialog, FormStack, useToast } from "@dude/design-system/primitives";
+import { useCallback, useId, useState, type ReactNode } from "react";
+import { Button, Callout, Dialog, DiscardConfirm, FormStack, useToast } from "@dude/design-system/primitives";
 import { ApiError } from "../api/client.ts";
 
 /** What went wrong, in words a person can act on. */
@@ -98,7 +98,6 @@ export function FormDialog(props: FormDialogProps) {
   const formId = useId();
   const document = props.size === "document";
   const [confirming, setConfirming] = useState(false);
-  const keep = useRef<HTMLButtonElement>(null);
   const unsaved = props.unsavedWords ?? 0;
   // Every way out of the dialog comes here; with writing at stake it asks.
   const requestOpenChange = (open: boolean) => {
@@ -162,31 +161,15 @@ export function FormDialog(props: FormDialogProps) {
           </form>
         ) : null}
       </Dialog>
-      <Dialog
+      <DiscardConfirm
         open={props.open && confirming}
-        onOpenChange={setConfirming}
-        size="sm"
-        tone="danger"
         title={props.discardTitle ?? "Discard your changes?"}
         description={props.discardDescription ?? `You have written ${unsaved.toLocaleString("en-US")} ${unsaved === 1 ? "word" : "words"} that haven't been saved.`}
-        onOpenAutoFocus={(e) => {
-          e.preventDefault();
-          keep.current?.focus();
+        onKeep={() => setConfirming(false)}
+        onDiscard={() => {
+          setConfirming(false);
+          props.onOpenChange(false);
         }}
-        footer={
-          <>
-            <Button ref={keep} variant="quiet" onClick={() => setConfirming(false)} data-testid="discard-keep">
-              Keep writing
-            </Button>
-            <Button variant="danger" solid data-testid="discard-confirm"
-              onClick={() => {
-                setConfirming(false);
-                props.onOpenChange(false);
-              }}>
-              Discard
-            </Button>
-          </>
-        }
       />
     </>
   );
