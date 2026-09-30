@@ -119,7 +119,8 @@
 /*
  * Writing one document. A fixed height, so the dialog does not grow as
  * the text does: the columns scroll inside it. The body's text starts on
- * the same 24px as the header's and the footer's.
+ * the same inset as the header's and the footer's: the density's panel
+ * gap (24px, 16px compact).
  */
 .document {
   --dialog-w: 1120px;
@@ -128,13 +129,13 @@
   max-height: none;
 }
 .document .header {
-  padding-left: var(--ds-space-24);
+  padding-left: var(--ds-space-panel-gap);
 }
 .document .body {
-  padding: var(--ds-space-8) var(--ds-space-24) var(--ds-space-24);
+  padding: var(--ds-space-8) var(--ds-space-panel-gap) var(--ds-space-panel-gap);
 }
 .document .footer {
-  padding-left: var(--ds-space-24);
+  padding-left: var(--ds-space-panel-gap);
 }
 
 .split {
@@ -148,7 +149,7 @@
 .main {
   min-width: 0;
   overflow: auto;
-  padding: var(--ds-space-8) var(--ds-space-24) var(--ds-space-24);
+  padding: var(--ds-space-8) var(--ds-space-panel-gap) var(--ds-space-panel-gap);
 }
 .aside {
   min-width: 0;

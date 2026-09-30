@@ -227,14 +227,6 @@ body {
 
 /* -- task dialog ------------------------------------------------------ */
 
-/* Where the task sits and how to write it, down the dialog's aside. */
-.taskDialogAside {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-20);
-  min-width: 0;
-}
-
 /* A repository, and what the work does in it once chosen. */
 .repositoryChoice {
   display: flex;
