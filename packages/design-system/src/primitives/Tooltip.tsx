@@ -19,6 +19,7 @@ export interface TooltipProps {
   /**
    * Never open. For a trigger whose tooltip comes and goes with its data:
    * the tree stays the same, so the trigger keeps focus across the change.
+   * Disabling closes it; re-enabling waits for a fresh focus or hover.
    */
   readonly disabled?: boolean | undefined;
   /** The trigger. Must accept a ref and forward props (asChild). */
@@ -30,13 +31,16 @@ export interface TooltipProps {
  * — never the only place a label lives. Icon buttons already carry a title.
  */
 export function Tooltip({ content, shortcut, side = "top", mono, delay, keepOnPress, disabled, children }: TooltipProps) {
-  // keepOnPress: the tooltip's state is ours, so a close asked for while the
-  // trigger is pressed is simply not taken. No event is cancelled: the press
-  // reaches every listener, and the trigger's own behaviour is untouched.
+  // The open state is always ours. Radix, left uncontrolled, would keep an
+  // open from before `disabled` and show it again on re-enable with no
+  // focus or hover on the trigger. keepOnPress: a close asked for while the
+  // trigger is pressed is not taken; no event is cancelled.
   const [open, setOpen] = useState(false);
   const pressed = useRef(false);
+  if (disabled && open) setOpen(false);
   const onOpenChange = (next: boolean) => {
-    if (next || !pressed.current) setOpen(next);
+    if (disabled) return;
+    if (next || !(keepOnPress && pressed.current)) setOpen(next);
   };
   const pressKeeper = {
     onPointerDown: () => {
@@ -52,10 +56,9 @@ export function Tooltip({ content, shortcut, side = "top", mono, delay, keepOnPr
       document.addEventListener("pointercancel", release, { signal: ends.signal });
     },
   };
-  const control = disabled ? { open: false } : keepOnPress ? { open, onOpenChange } : {};
   const root = (
-    <RadixTooltip.Root {...(delay !== undefined ? { delayDuration: delay } : {})} {...control}>
-      <RadixTooltip.Trigger asChild {...(keepOnPress ? pressKeeper : {})}>{children}</RadixTooltip.Trigger>
+    <RadixTooltip.Root {...(delay !== undefined ? { delayDuration: delay } : {})} open={open && !disabled} onOpenChange={onOpenChange}>
+      <RadixTooltip.Trigger asChild {...(keepOnPress && !disabled ? pressKeeper : {})}>{children}</RadixTooltip.Trigger>
       <RadixTooltip.Portal>
         <RadixTooltip.Content className={cx(styles["content"], mono && styles["mono"])} side={side} sideOffset={4}>
           {content}
