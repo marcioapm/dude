@@ -66,6 +66,7 @@ export const KEYS: readonly Key[] = [
   key("agent.image", "DUDE_AGENT_IMAGE", "string", "orchestrator", "localhost/dude-runtime:dev"),
   key("agent.timeout", "DUDE_AGENT_TIMEOUT", "string", "orchestrator"),
   key("agent.egress", "DUDE_AGENT_EGRESS", "list", "orchestrator"),
+  key("agent.nested_containers", "DUDE_AGENT_NESTED_CONTAINERS", "bool", "orchestrator", "false"),
   key("registry.auth", "DUDE_REGISTRY_AUTH", "string", "orchestrator", "none"),
   key("registry.host", "DUDE_REGISTRY", "string", "orchestrator"),
   key("registry.credential", "DUDE_REGISTRY_CREDENTIAL", "string", "orchestrator", "", true),

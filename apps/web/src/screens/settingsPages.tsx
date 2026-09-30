@@ -244,13 +244,14 @@ function PromptSection({ scope, role, onHistory }: { scope: SettingsScope; role:
             </>
           }
         >
-          <Markdown source={org.body} variant="prompt" />
+          <Markdown source={org.body} variant="prompt" breaks />
         </SettingsDisclosure>
       ) : null}
       {project && mode === "inherit" ? null : (
         <MarkdownDocument
           key={`${role}-${mode}`}
           data-testid="prompt-document"
+          breaks
           source={project ? (own?.mode === mode ? own.body : "") : org.body}
           emptyText={project ? `Nothing ${mode === "add" ? "added" : "here"} yet.` : "No prompt yet."}
           meta={project && own?.versions ? <SettingsMeta>{changedBy(own)} · {historyLink}</SettingsMeta> : undefined}

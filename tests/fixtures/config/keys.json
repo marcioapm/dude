@@ -28,6 +28,7 @@
   {"name": "agent.image", "env": "DUDE_AGENT_IMAGE", "kind": "string", "use": "orchestrator", "default": "localhost/dude-runtime:dev", "secret": false},
   {"name": "agent.timeout", "env": "DUDE_AGENT_TIMEOUT", "kind": "string", "use": "orchestrator", "default": "", "secret": false},
   {"name": "agent.egress", "env": "DUDE_AGENT_EGRESS", "kind": "list", "use": "orchestrator", "default": "", "secret": false},
+  {"name": "agent.nested_containers", "env": "DUDE_AGENT_NESTED_CONTAINERS", "kind": "bool", "use": "orchestrator", "default": "false", "secret": false},
   {"name": "registry.auth", "env": "DUDE_REGISTRY_AUTH", "kind": "string", "use": "orchestrator", "default": "none", "secret": false},
   {"name": "registry.host", "env": "DUDE_REGISTRY", "kind": "string", "use": "orchestrator", "default": "", "secret": false},
   {"name": "registry.credential", "env": "DUDE_REGISTRY_CREDENTIAL", "kind": "string", "use": "orchestrator", "default": "", "secret": true},

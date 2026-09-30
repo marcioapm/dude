@@ -59,6 +59,23 @@
   font-size: var(--ds-text-sm);
 }
 
+/* The heading of a document being written, still a field. */
+.title {
+  --input-h: 44px;
+  padding: 0 var(--ds-space-12);
+  font-size: var(--ds-text-xl);
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
+}
+.title .input::placeholder {
+  font-weight: var(--ds-weight-medium);
+}
+
+.labelNote {
+  font-weight: var(--ds-weight-regular);
+  color: var(--ds-color-text-muted);
+}
+
 .input {
   flex: 1;
   min-width: 0;

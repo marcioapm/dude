@@ -4,6 +4,9 @@ import styles from "../gallery.module.css";
 import { Button, IconButton } from "../../primitives/Button.tsx";
 import { Input } from "../../primitives/Input.tsx";
 import { Textarea } from "../../primitives/Textarea.tsx";
+import { MarkdownEditor, type MarkdownEditorProps } from "../../primitives/MarkdownEditor.tsx";
+import { Markdown } from "../../components/Markdown.tsx";
+import { HelpList, KeyHint, MarkdownCheatsheet } from "../../primitives/Kbd.tsx";
 import { RowMenu, RowMenuTrigger, rowMenuOpeners, type RowMenuItem } from "../../primitives/RowMenu.tsx";
 import { Select } from "../../primitives/Select.tsx";
 import { Checkbox } from "../../primitives/Checkbox.tsx";
@@ -12,12 +15,14 @@ import { Card, CardBody, CardFooter, CardHeader } from "../../primitives/Card.ts
 import { Table, TBody, Td, Th, THead, Tr, TableEmpty, type SortDirection } from "../../primitives/Table.tsx";
 import { Tab, TabList, TabPanel, Tabs } from "../../primitives/Tabs.tsx";
 import { Dialog, DialogClose } from "../../primitives/Dialog.tsx";
+import { DiscardConfirm } from "../../primitives/DiscardConfirm.tsx";
 import { useToast } from "../../primitives/Toast.tsx";
 import { Tooltip } from "../../primitives/Tooltip.tsx";
 import { EmptyState, Skeleton, SkeletonLines, Spinner } from "../../primitives/Feedback.tsx";
 import { ScrollArea } from "../../primitives/ScrollArea.tsx";
 import { Callout, Fieldset, FormActions, FormRow, FormStack, KeyValueList, Page, PageHeader, Section as PageSection } from "../../primitives/Layout.tsx";
 import { StepList, StepRow } from "../../components/StepList.tsx";
+import { Breadcrumb } from "../../components/Breadcrumb.tsx";
 import { AgentAvatar } from "../../components/AgentAvatar.tsx";
 import { Icon } from "../../icons/index.tsx";
 import { StatusBadge } from "../../components/StatusBadge.tsx";
@@ -134,6 +139,8 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
             <Input label="Repository URL" defaultValue="git@github" error="Must be an https:// or ssh:// URL" />
             <Input label="Disabled" defaultValue="Not editable" disabled />
             <Input size="sm" placeholder="Filter events…" leading={<Icon name="search" size={12} />} aria-label="Filter events" />
+            <Input size="title" label="Title" labelNote="required" placeholder="What should change?" />
+            <Input size="title" label="Title (locked)" defaultValue="Payment step keeps SEPA and Invoice" disabled />
           </div>
         </Panes>
       </Block>
@@ -141,13 +148,33 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
       <Block id="p-textarea" title="Textarea" note="The Input anatomy, taller. Grows with its content from `rows` to `maxRows` (default 3 → 12) and then scrolls; no resize handle. Mono for commands and config. Try typing past the limit.">
         <Panes mode={mode}>
           <div className={styles["grid2"]}>
-            <Textarea label="Goal" placeholder="Why, and any detail the agent should know…" hint="Markdown. Up to 10k characters." />
+            <Textarea label="Goal" placeholder="Why, and any detail the agent should know…" hint="Markdown. Up to 64K characters." />
             <Textarea label="Description" defaultValue={"Migrate every login flow to PKCE.\n\n- Web\n- Mobile\n- CLI"} />
             <Textarea label="Runtime command" mono rows={2} maxRows={6} defaultValue={"bun install --frozen-lockfile\nbun test"} />
-            <Textarea label="Acceptance criterion" defaultValue="" error="Each criterion must be under 2000 characters" rows={2} />
+            <Textarea label="Reason" defaultValue="" error="Say why, in a sentence or two" rows={2} />
             <Textarea label="Locked" defaultValue="Kind and repository are fixed once a run exists." disabled rows={2} />
             <ControlledTextarea />
           </div>
+        </Panes>
+      </Block>
+
+      <Block
+        id="p-markdown-editor"
+        title="MarkdownEditor"
+        note="For writing one Markdown document — a task's goal, its criteria. Textarea's anatomy around a frame: Write / Preview on the chrome shade (Ctrl/⌘+Shift+P), quiet formatting (Ctrl/⌘+B I K E), the source in mono, growing with its content — the page scrolls, never the field. Enter continues a list; Enter on an empty item ends it. Preview is Markdown in the caller's variant (message by default: the variant the text is read in), the one safe renderer, at least as tall as the source was. Locked opens in Preview with Write disabled and says why in the hint. The count turns attention past 90% and danger over."
+      >
+        <Panes mode={mode}>
+          <Col>
+            <MarkdownEditorDemo label="Write" initial={SAMPLE_GOAL} hint="Why it matters, what exists today, and anything an agent can't guess." />
+            <MarkdownEditorDemo label="Preview" initial={SAMPLE_GOAL} defaultMode="preview" />
+            <MarkdownEditorDemo label="Empty" initial="" placeholder="Why does this matter? What exists today? What must an agent not break?" minRows={4} />
+            <MarkdownEditorDemo label="Locked" initial={SAMPLE_CRITERIA} locked hint="Delivery has started, so what it asks for is fixed." />
+            <MarkdownEditorDemo label="Near the limit" initial={"- [ ] " + "Each step fires its funnel event exactly once. ".repeat(4)} maxLength={200} minRows={2} />
+            <MarkdownEditorDemo label="Over the limit" initial={"- [ ] " + "Each step fires its funnel event exactly once. ".repeat(5)} maxLength={200} minRows={2}
+              error="Criterion 1 is over 200 characters." />
+            <MarkdownEditorDemo label="With a summary" initial={SAMPLE_CRITERIA + "\n\nAnd a note that is not a criterion."} minRows={4}
+              summary={<Badge tone="neutral" size="sm">4 criteria</Badge>} notice="Text outside a list item isn't saved as a criterion" />
+          </Col>
         </Panes>
       </Block>
 
@@ -345,9 +372,12 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
 
-      <Block id="p-dialog" title="Dialog" note="For decisions, not browsing. Destructive confirmations get the danger tone and a destructive primary action.">
+      <Block id="p-dialog" title="Dialog" note="For decisions and small forms — and for writing one document: size='document' is a fixed 1120×900 (full screen under 640px) with an optional aside on the chrome shade that scrolls on its own and stacks under the writing below 960px; context puts where the thing sits above the title; headerActions puts quiet actions before Close; reading shows the whole thing as one document over the writing (the Task dialog's Read), and Escape leaves it rather than the dialog. Destructive confirmations get the danger tone and a destructive primary action. DiscardConfirm is the one asked before closing loses writing: Keep writing (quiet, focused) and Discard (danger solid).">
         <Panes mode={mode}>
           <Row>
+            <TaskDialogExample />
+            <NoteDialogExample />
+            <DiscardConfirmExample />
             <Dialog
               trigger={<Button>Open dialog</Button>}
               title="Retry run"
@@ -636,5 +666,120 @@ function ToastDemo() {
       <Button onClick={() => toast({ title: "Could not abort run", description: "Worker did not acknowledge within 10s.", tone: "danger", action: { label: "Retry", onClick: () => undefined } })}>Danger (sticky)</Button>
       <Caption>toasts render bottom-right of the page, in the active app theme</Caption>
     </Row>
+  );
+}
+
+const SAMPLE_GOAL = `Checkout v2 dropped **SEPA** and **Invoice** from the payment step. About 18% of annual plans paid that way last quarter, and sales has had [three escalations](https://example.com/issues/412) this month.
+
+## What exists today
+- The old flow lives behind \`checkout_v2\` in \`web/src/checkout/legacy/\`.
+- Payment methods come from \`GET /v1/billing/methods\`, which already returns \`sepa\` and \`invoice\`.
+
+> Keep the old flow available for one week after release, then remove it in a follow-up.`;
+
+export const SAMPLE_CRITERIA = `- [ ] Card, SEPA and Invoice all appear on the payment step
+- [ ] Invoice appears **only** for annual plans
+- [ ] The old flow still works behind \`checkout_v2=false\` for one week
+- [ ] Each step fires its funnel event exactly once:
+  \`checkout.plan_selected\`, \`checkout.payment_viewed\`, \`checkout.completed\``;
+
+function MarkdownEditorDemo({ initial, ...props }: { readonly initial: string } & Omit<MarkdownEditorProps, "value" | "onChange">) {
+  const [value, setValue] = useState(initial);
+  return <MarkdownEditor minRows={6} maxLength={65_536} {...props} value={value} onChange={setValue} />;
+}
+
+/** The task dialog as the web app draws it: a document with where it sits beside it. */
+function TaskDialogExample() {
+  const [title, setTitle] = useState("Payment step keeps SEPA and Invoice");
+  const [goal, setGoal] = useState(SAMPLE_GOAL);
+  const [criteria, setCriteria] = useState(SAMPLE_CRITERIA);
+  const [epic, setEpic] = useState("checkout");
+  const [reading, setReading] = useState(false);
+  return (
+    <Dialog
+      trigger={<Button>Task dialog</Button>}
+      size="document"
+      headerActions={
+        <Button variant="quiet" size="sm" leadingIcon={reading ? "edit" : "book-open"} onClick={() => setReading(!reading)}>
+          {reading ? "Back to writing" : "Read"}
+        </Button>
+      }
+      reading={reading ? (
+        <Markdown title={title} untitled="Untitled task" breaks source={[goal, "## Acceptance criteria", criteria]} />
+      ) : undefined}
+      readingLabel="The task as it reads"
+      onCloseReading={() => setReading(false)}
+      context={<Breadcrumb size="sm" current={false} items={[{ id: "p", label: "Customer portal" }, { id: "e", label: "Checkout v2", icon: "layers" }]} />}
+      title="New task"
+      asideLabel="Where it sits"
+      aside={
+        <FormStack fill>
+          <Select label="Epic" value={epic} onValueChange={setEpic} options={[{ value: "checkout", label: "Checkout v2" }, { value: "none", label: "No epic" }]} />
+          <HelpList title="What makes a good task" items={[
+            <><strong>Goal:</strong> why it matters, what exists today, and what an agent can't guess.</>,
+            <><strong>Criteria:</strong> one checkable statement per list item.</>,
+            <>Paste error output in a <code>```</code> block.</>,
+          ]} />
+          <MarkdownCheatsheet />
+        </FormStack>
+      }
+      footerStart={<><KeyHint keys={["mod", "Enter"]}>create</KeyHint><KeyHint keys={["mod", "Shift", "P"]}>toggle preview</KeyHint><KeyHint keys={["mod", "Shift", "R"]}>read</KeyHint></>}
+      footer={
+        <>
+          <DialogClose asChild>
+            <Button variant="quiet">Cancel</Button>
+          </DialogClose>
+          <Button variant="secondary">Create</Button>
+          <Button variant="primary">Create and deliver</Button>
+        </>
+      }
+    >
+      <FormStack fill>
+        <Input size="title" label="Title" labelNote="required" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="What should change?" />
+        <MarkdownEditor label="Goal" hint="Why it matters, what exists today, and anything an agent can't guess." value={goal} onChange={setGoal} fill breaks minRows={4} maxLength={65_536} />
+        <MarkdownEditor label="Acceptance criteria" hint="One list item per criterion. Reviewers check each one." value={criteria} onChange={setCriteria} breaks minRows={3}
+          placeholder="- [ ] A thing that must be true when it's done" summary={<Badge tone="neutral" size="sm">4 criteria</Badge>} />
+      </FormStack>
+    </Dialog>
+  );
+}
+
+/** A document with nothing beside it: the body is the one column, and the field fills it. */
+function NoteDialogExample() {
+  const [note, setNote] = useState("");
+  return (
+    <Dialog
+      trigger={<Button>Note dialog</Button>}
+      size="document"
+      title="New note"
+      footer={
+        <>
+          <DialogClose asChild>
+            <Button variant="quiet">Cancel</Button>
+          </DialogClose>
+          <Button variant="primary">Save</Button>
+        </>
+      }
+    >
+      <FormStack fill>
+        <MarkdownEditor label="Note" value={note} onChange={setNote} fill minRows={4} data-testid="note-body" />
+      </FormStack>
+    </Dialog>
+  );
+}
+
+function DiscardConfirmExample() {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button onClick={() => setOpen(true)}>Discard confirm</Button>
+      <DiscardConfirm
+        open={open}
+        title="Discard this task?"
+        description="You have written 195 words that haven't been saved."
+        onKeep={() => setOpen(false)}
+        onDiscard={() => setOpen(false)}
+      />
+    </>
   );
 }
