@@ -124,15 +124,15 @@ type Run struct {
 	// Edit tool calls made, so each has an id of its own.
 	edits int
 
-	busy     bool
-	woken    bool
+	busy  bool
+	woken bool
 	// Tool calls started and not finished (KeepToolsOpen), until FinishTools.
 	openTools []string
-	queued   []queuedInput
-	records  []record
-	events   []event
-	behavior Behaviour
-	cond     *sync.Cond
+	queued    []queuedInput
+	records   []record
+	events    []event
+	behavior  Behaviour
+	cond      *sync.Cond
 }
 
 // queuedInput is input the agent has not read yet. accepted: its accepted

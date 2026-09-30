@@ -1852,6 +1852,56 @@ func TestASteerToANextTurnHarnessWaitsForTheTurn(t *testing.T) {
 	_ = runID
 }
 
+// A steer sent as the agent's turn ends is not dropped: the Run waits to
+// be collected until the agent has it, and it takes it as its next turn.
+// Played step by step, without the sweeps racing the follower: the turn
+// is seen done by the follower alone, the steer lands, and only then does
+// the syncer sweep.
+func TestASteerSentAsTheTurnEndsIsDeliveredBeforeTheRunFinishes(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		t.Run(map[bool]string{false: "receipts", true: "legacy lux"}[legacy], func(t *testing.T) {
+			w := newWorld(t)
+			w.lux.LegacyInput = legacy
+			w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Reply: "Done."} }
+			wi := w.task()
+			w.deliver(wi)
+			w.until("the run to reach lux", func() bool {
+				return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND lux_run_id IS NOT NULL`, wi) == 1
+			})
+			var runID string
+			_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1`, wi).Scan(&runID)
+			// The fake agent finishes its turn at once; this sweep reads the
+			// Run before anything was followed, and starts the follower.
+			time.Sleep(100 * time.Millisecond)
+			if _, err := w.syncer.Sweep(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			deadline := time.Now().Add(10 * time.Second)
+			for w.count(`SELECT count(*) FROM runs WHERE id = $1 AND turn_done_at IS NOT NULL`, runID) == 0 {
+				if time.Now().After(deadline) {
+					t.Fatal("the agent's turn never ended")
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			mustExec(t, w.owner, `INSERT INTO directives (id, organization_id, task_id, run_id, text) VALUES ('dir_late', $1, $2, $3, 'one more thing')`,
+				w.org, wi, runID)
+			w.until("the run to finish", func() bool {
+				return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status IN ('completed', 'failed')`, runID) == 1
+			})
+			if n := w.count(`SELECT count(*) FROM directives WHERE id = 'dir_late' AND delivered_at IS NOT NULL`); n != 1 {
+				t.Error("a steer sent as the turn ended was dropped when the run finished")
+			}
+			if in := w.lux.Runs()[0].Inputs; !slices.Contains(in, "one more thing") {
+				t.Errorf("the agent never had it: inputs %v", in)
+			}
+			// It was heard as a turn of its own, which the Run finished after.
+			if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'agent.session.stopped'`, runID); n != 2 {
+				t.Errorf("%d turns ended, want 2", n)
+			}
+		})
+	}
+}
+
 func TestPauseKeepsTheRunAndResumeContinuesIt(t *testing.T) {
 	w := newWorld(t)
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour {
