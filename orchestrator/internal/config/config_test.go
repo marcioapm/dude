@@ -431,13 +431,17 @@ func TestTheSchemaIsTheSharedKeyTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var want []struct {
-		Name, Env, Kind, Use, Default string
-		Secret                        bool
+	var table struct {
+		Keys []struct {
+			Name, Env, Kind, Use, Default string
+			Secret                        bool
+		}
+		Retired []RetiredKey
 	}
-	if err := json.Unmarshal(raw, &want); err != nil {
+	if err := json.Unmarshal(raw, &table); err != nil {
 		t.Fatal(err)
 	}
+	want := table.Keys
 	got := Keys()
 	if len(got) != len(want) {
 		t.Fatalf("schema has %d keys, keys.json %d", len(got), len(want))
@@ -446,6 +450,73 @@ func TestTheSchemaIsTheSharedKeyTable(t *testing.T) {
 		if g := got[i]; g.Name != w.Name || g.Env != w.Env || g.Kind != w.Kind || g.Use != w.Use ||
 			g.Default != w.Default || g.Secret != w.Secret {
 			t.Errorf("key %d: schema %+v, keys.json %+v", i, g, w)
+		}
+	}
+	if table.Retired == nil {
+		t.Fatal(`keys.json has no "retired" array`)
+	}
+	if !reflect.DeepEqual(Retired(), table.Retired) {
+		t.Errorf("retired = %+v, keys.json %+v", Retired(), table.Retired)
+	}
+	// A retired key that is still a setting would be both read and ignored.
+	for _, r := range Retired() {
+		for _, k := range Keys() {
+			if r.Name == k.Name || r.Env == k.Env {
+				t.Errorf("%s (%s) is retired and a setting", r.Name, r.Env)
+			}
+		}
+	}
+}
+
+// A synthetic retired list: no real key is retired today.
+var testRetired = []RetiredKey{{Name: "lux.old_token", Env: "LUX_OLD_TOKEN"}, {Name: "gone.table.key", Env: "DUDE_GONE"}}
+
+func TestARetiredKeyIsAcceptedIgnoredAndWarnedAbout(t *testing.T) {
+	const value = "S3NT1NEL-retired-value"
+	path := writeFile(t, `[lux]
+url = "https://lux.file"
+old_token = "`+value+`"
+[gone.table]
+key = 7
+`, 0o600)
+	for _, p := range []Process{Orchestrator, Backend} {
+		c, err := Load(p, Options{Getenv: env(map[string]string{"DUDE_CONFIG": path, "DUDE_GONE": value}),
+			DefaultPath: noDefault(t), Retired: testRetired})
+		if err != nil {
+			t.Fatalf("%s: %v", p, err)
+		}
+		want := []string{"retired: gone.table.key; remove it", "retired: lux.old_token; remove it",
+			"retired: DUDE_GONE; remove it"}
+		if !reflect.DeepEqual(c.Warnings, want) {
+			t.Errorf("%s: warnings = %q, want %q", p, c.Warnings, want)
+		}
+		if p == Orchestrator && c.String("LUX_URL") != "https://lux.file" {
+			t.Errorf("the file's other keys were not read: %+v", c.Set())
+		}
+		for k, v := range c.Set() {
+			if v == value {
+				t.Errorf("%s: retired value read as %s", p, k)
+			}
+		}
+	}
+	// Without the list, the same file is refused: retiring is what accepts it.
+	if _, err := load(t, Orchestrator, map[string]string{"DUDE_CONFIG": path}); err == nil ||
+		!strings.Contains(err.Error(), "unknown key gone, lux.old_token") {
+		t.Errorf("err = %v, want both keys unknown", err)
+	}
+}
+
+func TestARetiredKeysNeighboursAreStillChecked(t *testing.T) {
+	for text, want := range map[string]string{
+		"[lux]\nold_token = \"x\"\nold_tokn = \"y\"\n": "unknown key lux.old_tokn",
+		"[gone.table]\nkey = 1\nother = 2\n":           "unknown key gone.table.other",
+		"[gone]\nkey = 1\n":                            "unknown key gone.key",
+		"[lux]\nold_token = \"x\"\nurl = 3\n":          "lux.url (LUX_URL): want a string, not an integer",
+	} {
+		_, err := Load(Orchestrator, Options{Getenv: env(map[string]string{"DUDE_CONFIG": writeFile(t, text, 0o600)}),
+			DefaultPath: noDefault(t), Retired: testRetired})
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: err = %v, want %q", text, err, want)
 		}
 	}
 }
