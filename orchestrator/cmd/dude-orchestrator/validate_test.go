@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -230,6 +232,47 @@ func TestStartupRefusesWhatValidateRefuses(t *testing.T) {
 	}
 	if n := connections(); n != 0 {
 		t.Errorf("startup or validate made %d connections", n)
+	}
+}
+
+// An ECR registry validates without reading AWS configuration: in an
+// environment where loading it fails, validate still accepts the file, and
+// asks the instance metadata service nothing.
+func TestValidateECRReadsNoAWSConfiguration(t *testing.T) {
+	addr, connections := listener(t)
+	var metadata atomic.Int64
+	imds := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		metadata.Add(1)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(imds.Close)
+	aws := t.TempDir()
+	env := []string{"AWS_PROFILE=dude-test-missing",
+		"AWS_CONFIG_FILE=" + filepath.Join(aws, "absent-config"),
+		"AWS_SHARED_CREDENTIALS_FILE=" + filepath.Join(aws, "absent-credentials"),
+		"AWS_EC2_METADATA_SERVICE_ENDPOINT=" + imds.URL}
+	ecrFile := validFile(addr, "lux-key") + `[agent]
+image = "123456789012.dkr.ecr.eu-west-1.amazonaws.com/dude-runtime:1"
+[registry]
+auth = "ecr"
+`
+	for name, text := range map[string]string{
+		"no role": ecrFile,
+		"role":    ecrFile + "ecr_role_arn = \"arn:aws:iam::123456789012:role/dude-ecr-pull\"\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := configFile(t, text, 0o600)
+			r := runMain(t, path, env, "validate")
+			if want := (validateRun{exit: 0, stdout: "ok: " + path + "\n"}); r != want {
+				t.Errorf("got %+v, want %+v", r, want)
+			}
+		})
+	}
+	if n := metadata.Load(); n != 0 {
+		t.Errorf("validate made %d instance metadata requests", n)
+	}
+	if n := connections(); n != 0 {
+		t.Errorf("validate made %d connections", n)
 	}
 }
 
