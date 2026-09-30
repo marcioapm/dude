@@ -287,6 +287,106 @@ func TestTheCLIsJSONAPICallsTheSameTools(t *testing.T) {
 	}
 }
 
+func TestATaskTakesA64KGoalAnd16KOfCriteriaInAllAndNoMore(t *testing.T) {
+	f := setup(t)
+	token := f.run(t, "run_lim", "implementer", "running")
+	body := func(goal int, criteria ...int) string {
+		cs := make([]string, len(criteria))
+		for i, n := range criteria {
+			cs[i] = strings.Repeat("c", n)
+		}
+		b, _ := json.Marshal(map[string]any{"title": "Limits", "goal": strings.Repeat("g", goal), "acceptanceCriteria": cs})
+		return string(b)
+	}
+	// One criterion far past the old 2,000 each, and the whole allowance split unevenly.
+	for _, ok := range []string{body(agenttools.GoalMax, 3000), body(10, agenttools.CriteriaMax-5000, 5000)} {
+		if status, out := f.post(t, token, "create_task", ok); status != 200 {
+			t.Errorf("within the limits: %d %v", status, out)
+		}
+	}
+	status, out := f.post(t, token, "create_task", body(agenttools.GoalMax+1))
+	if status != 422 || !strings.Contains(fmt.Sprint(out["error"]), "a goal of 65536") {
+		t.Errorf("a goal over 64K: %d %v", status, out)
+	}
+	status, out = f.post(t, token, "create_task", body(10, agenttools.CriteriaMax-5000, 5001))
+	if status != 422 || out["error"] != "acceptance criteria too long: at most 16384 characters in all" {
+		t.Errorf("criteria over 16K in all: %d %v", status, out)
+	}
+	var made int
+	_ = f.owner.QueryRow(context.Background(), `SELECT count(*) FROM tasks WHERE project_id = $1 AND title = 'Limits'`, f.project).Scan(&made)
+	if made != 2 {
+		t.Errorf("%d tasks made, want the 2 within the limits", made)
+	}
+}
+
+func TestTheLimitsCountUTF16UnitsAsTheAPIDoes(t *testing.T) {
+	f := setup(t)
+	token := f.run(t, "run_u16", "implementer", "running")
+	body := func(goal string, criteria ...string) string {
+		b, _ := json.Marshal(map[string]any{"title": "Units", "goal": goal, "acceptanceCriteria": criteria})
+		return string(b)
+	}
+	count := func() int {
+		var n int
+		_ = f.owner.QueryRow(context.Background(), `SELECT count(*) FROM tasks WHERE project_id = $1 AND title = 'Units'`, f.project).Scan(&n)
+		return n
+	}
+	// 😀 is two UTF-16 units (four bytes, one rune); é is one unit (two bytes).
+	emojiGoal := strings.Repeat("😀", 32768)
+	emojiCriterion := strings.Repeat("😀", 8192)
+	accepted := []string{
+		body(emojiGoal),
+		body("g", emojiCriterion),
+		body(strings.Repeat("é", 65536), strings.Repeat("é", 16384)),
+	}
+	for i, ok := range accepted {
+		if status, out := f.post(t, token, "create_task", ok); status != 200 {
+			t.Errorf("accepted case %d at the limits: %d %v", i, status, out)
+		}
+	}
+	if n := count(); n != 3 {
+		t.Fatalf("%d tasks made, want the 3 at the limits", n)
+	}
+	refused := []string{
+		body(emojiGoal + "g"),
+		body(strings.Repeat("😀", 32767) + "gg" + "g"),
+		body("g", emojiCriterion, "c"),
+		body("g", strings.Repeat("😀", 8191)+"cc", "c"),
+		body(strings.Repeat("é", 65537)),
+		body("g", strings.Repeat("é", 16385)),
+	}
+	for i, over := range refused {
+		if status, out := f.post(t, token, "create_task", over); status != 422 {
+			t.Errorf("refused case %d over the limits: %d %v", i, status, out)
+		}
+	}
+	if n := count(); n != 3 {
+		t.Errorf("%d tasks after the refusals, want still 3", n)
+	}
+}
+
+func TestA64KGoalThatJSONEscapesSixfoldIsStillATask(t *testing.T) {
+	f := setup(t)
+	token := f.run(t, "run_esc", "implementer", "running")
+	goal := strings.Repeat("<", 65536)
+	criteria := []string{strings.Repeat(">", 16384)}
+	b, _ := json.Marshal(map[string]any{"title": "Escaped", "goal": goal, "acceptanceCriteria": criteria})
+	if len(b) < 480_000 {
+		t.Fatalf("the body is %d bytes; json.Marshal was expected to escape it sixfold", len(b))
+	}
+	status, out := f.post(t, token, "create_task", string(b))
+	if status != 200 {
+		t.Fatalf("a %d-byte request within the limits: %d %v", len(b), status, out)
+	}
+	var gotGoal string
+	var gotCriteria []string
+	_ = f.owner.QueryRow(context.Background(), `SELECT goal, acceptance_criteria FROM tasks WHERE project_id = $1 AND title = 'Escaped'`,
+		f.project).Scan(&gotGoal, &gotCriteria)
+	if gotGoal != goal || len(gotCriteria) != 1 || gotCriteria[0] != criteria[0] {
+		t.Errorf("saved a goal of %d and criteria %d, want them as sent", len(gotGoal), len(gotCriteria))
+	}
+}
+
 func TestAnAgentAsksAPersonThroughATool(t *testing.T) {
 	f := setup(t)
 	token := f.run(t, "run_ask", "implementer", "running")

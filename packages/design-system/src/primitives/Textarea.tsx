@@ -30,7 +30,7 @@ export function textareaHeight(scrollHeight: number, rows: number, maxRows: numb
 }
 
 /** Every scrolled ancestor with its current offset, so a measurement can put them back. */
-function scrollPositions(el: HTMLElement): Array<[Element, number]> {
+export function scrollPositions(el: HTMLElement): Array<[Element, number]> {
   const out: Array<[Element, number]> = [];
   for (let n: HTMLElement | null = el.parentElement; n; n = n.parentElement) if (n.scrollTop > 0) out.push([n, n.scrollTop]);
   const doc = el.ownerDocument.scrollingElement;

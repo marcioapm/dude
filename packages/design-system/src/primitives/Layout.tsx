@@ -134,10 +134,15 @@ export function KeyValueList({ items, className, ...rest }: KeyValueListProps) {
   );
 }
 
-/** Fields stacked, at a width a form reads well at. */
-export function FormStack({ className, children, ...rest }: HTMLAttributes<HTMLDivElement>) {
+/**
+ * Fields stacked, at a width a form reads well at. `fill`: the column's
+ * whole width and height, a section's space apart — the fields of one
+ * document being written, in a `Dialog size="document"`, where a
+ * `MarkdownEditor fill` takes the height the others leave.
+ */
+export function FormStack({ fill, className, children, ...rest }: HTMLAttributes<HTMLDivElement> & { readonly fill?: boolean | undefined }) {
   return (
-    <div className={cx(styles["form"], className)} {...rest}>
+    <div className={cx(styles["form"], fill && styles["formFill"], className)} {...rest}>
       {children}
     </div>
   );

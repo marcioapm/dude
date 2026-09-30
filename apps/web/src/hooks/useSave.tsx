@@ -4,8 +4,8 @@
  * refuses, an optional toast when it lands.
  */
 
-import { useCallback, useId, useState, type ReactNode } from "react";
-import { Button, Callout, Dialog, FormStack, useToast } from "@dude/design-system/primitives";
+import { useCallback, useId, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { Button, Callout, Dialog, DiscardConfirm, FormStack, useToast } from "@dude/design-system/primitives";
 import { ApiError } from "../api/client.ts";
 
 /** What went wrong, in words a person can act on. */
@@ -52,7 +52,29 @@ export interface FormDialogProps {
   onOpenChange: (open: boolean) => void;
   title: ReactNode;
   description?: ReactNode;
-  size?: "sm" | "md";
+  /** Above the title: where the thing sits (a `Breadcrumb size="sm"`). */
+  context?: ReactNode;
+  /** `document`: writing one document, with `aside` beside the fields. */
+  size?: "sm" | "md" | "document";
+  /** `document` only: the column beside the fields — where it sits, help for writing it. */
+  aside?: ReactNode;
+  asideLabel?: string;
+  /** At the footer's start, muted: key hints. */
+  footerStart?: ReactNode;
+  /** In the header, before Close (a `Read` toggle). */
+  headerActions?: ReactNode;
+  /** `document` only: the whole thing as it reads, in place of the fields while set (`Dialog reading`). */
+  reading?: ReactNode;
+  readingLabel?: string;
+  /** Escape while `reading`: back to the fields, never closing or asking to discard. */
+  onCloseReading?: () => void;
+  /** Keys anywhere in the dialog, before its own (Ctrl/⌘+Enter); `preventDefault()` claims one. */
+  onKeyDown?: (e: ReactKeyboardEvent<HTMLDivElement>) => void;
+  /**
+   * Keys in the discard confirmation, which covers the dialog: a shortcut
+   * the dialog claims is claimed here too (`preventDefault()`) without acting.
+   */
+  onConfirmKeyDown?: (e: ReactKeyboardEvent<HTMLDivElement>) => void;
   submitLabel: ReactNode;
   canSubmit: boolean;
   onSubmit: () => void;
@@ -61,6 +83,19 @@ export interface FormDialogProps {
   extraActions?: ReactNode;
   submitTestId?: string;
   /**
+   * Opt in to asking before closing loses writing: the words not yet saved
+   * (`unsavedWords` in discard.ts), 0 when there is nothing worth asking
+   * about. Escape, ×, Cancel and a click outside then ask first.
+   */
+  unsavedWords?: number;
+  /** The confirmation's question: "Discard this task?". */
+  discardTitle?: string;
+  /**
+   * What would be lost. Default: the count of words written, which is only
+   * true when every word is new (creating); an edit says so without a count.
+   */
+  discardDescription?: string | undefined;
+  /**
    * The fields. Rendered only while the dialog is open, so a component
    * holding their state starts fresh each time it opens.
    */
@@ -68,45 +103,103 @@ export interface FormDialogProps {
 }
 
 /**
- * A dialog that is one form: Enter submits it, Cancel closes it, and the
- * server's reason for refusing shows under the fields.
+ * A dialog that is one form: Enter submits it (in a document, Ctrl/⌘+Enter
+ * does, and Enter in a one-line field moves to the next), Cancel closes it,
+ * and the server's reason for refusing shows under the fields (in a
+ * document, in the footer beside its buttons).
  */
 export function FormDialog(props: FormDialogProps) {
   const formId = useId();
+  const document = props.size === "document";
+  const [confirming, setConfirming] = useState(false);
+  const unsaved = props.unsavedWords ?? 0;
+  // Every way out of the dialog comes here; with writing at stake it asks.
+  const requestOpenChange = (open: boolean) => {
+    if (!open && unsaved > 0) setConfirming(true);
+    else props.onOpenChange(open);
+  };
+  // Radix can leave this dialog's Escape listener the highest layer when the
+  // confirmation opened from an Escape; an Escape then belongs to the confirmation.
+  const onEscapeKeyDown = (e: KeyboardEvent) => {
+    if (!confirming) return;
+    e.preventDefault();
+    setConfirming(false);
+  };
   return (
-    <Dialog
-      open={props.open}
-      onOpenChange={props.onOpenChange}
-      size={props.size ?? "sm"}
-      title={props.title}
-      description={props.description}
-      footer={
-        <>
-          <Button variant="quiet" onClick={() => props.onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button type="submit" form={formId} variant={props.extraActions ? "secondary" : "primary"}
-            disabled={!props.canSubmit} data-testid={props.submitTestId}>
-            {props.submitLabel}
-          </Button>
-          {props.extraActions}
-        </>
-      }
-    >
-      {props.open ? (
-        <form
-          id={formId}
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (props.canSubmit) props.onSubmit();
-          }}
-        >
-          <FormStack>
-            {props.children}
-            {props.problem ? <Callout tone="danger">{props.problem}</Callout> : null}
-          </FormStack>
-        </form>
-      ) : null}
-    </Dialog>
+    <>
+      <Dialog
+        open={props.open}
+        onOpenChange={requestOpenChange}
+        size={props.size ?? "sm"}
+        title={props.title}
+        description={props.description}
+        context={props.context}
+        aside={props.open ? props.aside : undefined}
+        asideLabel={props.asideLabel}
+        footerStart={props.footerStart}
+        headerActions={props.headerActions}
+        reading={props.open ? props.reading : undefined}
+        readingLabel={props.readingLabel}
+        onCloseReading={props.onCloseReading}
+        onEscapeKeyDown={onEscapeKeyDown}
+        // A document's column scrolls: under the fields the reason would be out of sight.
+        footerProblem={document ? props.problem : undefined}
+        onKeyDown={(e) => {
+          props.onKeyDown?.(e);
+          // A document's fields are multi-line: Enter is a new line there, so Ctrl/⌘+Enter submits.
+          if (!document || e.key !== "Enter" || !(e.ctrlKey || e.metaKey) || e.defaultPrevented) return;
+          e.preventDefault();
+          if (props.canSubmit) props.onSubmit();
+        }}
+        footer={
+          <>
+            <Button variant="quiet" onClick={() => requestOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" form={formId} variant={props.extraActions ? "secondary" : "primary"}
+              disabled={!props.canSubmit} data-testid={props.submitTestId}>
+              {props.submitLabel}
+            </Button>
+            {props.extraActions}
+          </>
+        }
+      >
+        {props.open ? (
+          <form
+            id={formId}
+            onKeyDown={(e) => {
+              // In a document, plain Enter in a one-line field moves on to the next field, never submits.
+              if (!document || e.key !== "Enter" || e.ctrlKey || e.metaKey || e.nativeEvent.isComposing) return;
+              if (!(e.target instanceof HTMLInputElement)) return;
+              e.preventDefault();
+              // A Markdown field in Preview is its focusable preview panel.
+              const fields = [...e.currentTarget.querySelectorAll<HTMLElement>('input, textarea, select, [role=tabpanel][tabindex="0"]')]
+                .filter((f) => !(f as HTMLInputElement).disabled && f.offsetParent !== null);
+              fields[fields.indexOf(e.target) + 1]?.focus();
+            }}
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (props.canSubmit) props.onSubmit();
+            }}
+          >
+            <FormStack fill={document}>
+              {props.children}
+              {props.problem && !document ? <Callout tone="danger">{props.problem}</Callout> : null}
+            </FormStack>
+          </form>
+        ) : null}
+      </Dialog>
+      <DiscardConfirm
+        open={props.open && confirming}
+        title={props.discardTitle ?? "Discard your changes?"}
+        description={props.discardDescription ?? `You have written ${unsaved.toLocaleString("en-US")} ${unsaved === 1 ? "word" : "words"} that haven't been saved.`}
+        onKeep={() => setConfirming(false)}
+        onKeyDown={props.onConfirmKeyDown}
+        onDiscard={() => {
+          setConfirming(false);
+          props.onOpenChange(false);
+        }}
+      />
+    </>
   );
 }

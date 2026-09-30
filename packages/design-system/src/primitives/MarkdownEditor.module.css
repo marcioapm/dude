@@ -1,0 +1,181 @@
+/*
+ * MarkdownEditor: Textarea's frame around a toolbar, the source and a
+ * footer. The field's edge is the one line; the toolbar is told from the
+ * text by the chrome shade, not a rule. Label / hint / error come from
+ * Input.module.css so the three fields cannot drift apart.
+ */
+
+.head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--ds-space-8);
+  row-gap: var(--ds-space-2);
+}
+
+.frame {
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: clip;
+  background: var(--ds-color-field-bg);
+  border: 1px solid var(--ds-color-border);
+  border-radius: var(--ds-radius-control);
+  color: var(--ds-color-text-primary);
+  transition:
+    border-color var(--ds-duration-fast) var(--ds-ease-standard),
+    box-shadow var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.frame:hover {
+  border-color: var(--ds-color-border-strong);
+}
+.frame:focus-within {
+  border-color: var(--ds-color-accent);
+  box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-color-selection);
+}
+.frame[data-invalid="true"] {
+  border-color: var(--ds-tone-danger-border);
+}
+.frame[data-invalid="true"]:focus-within {
+  border-color: var(--ds-tone-danger-fg);
+  box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-tone-danger-bg);
+}
+.frame[data-locked="true"],
+.frame[data-locked="true"]:hover {
+  border-color: var(--ds-color-border-subtle);
+}
+
+.bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-4) var(--ds-space-8);
+  padding: var(--ds-space-4);
+  background: var(--ds-color-chrome);
+}
+
+.tools {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+  margin-left: auto;
+}
+.frame[data-mode="preview"] .tools {
+  visibility: hidden;
+}
+.gap {
+  width: var(--ds-space-8);
+}
+/* Narrow: Quote goes first; the rest wrap under the switch if they must. */
+@container (max-width: 520px) {
+  .optional {
+    display: none;
+  }
+  /* The buttons wrap under the switch here; hidden, they would leave an empty band. */
+  .frame[data-mode="preview"] .tools {
+    display: none;
+  }
+}
+
+/* Lines on the code pitch and padding on the code block's, so both follow
+   the density; minRows sets the empty height. */
+.source {
+  display: block;
+  width: 100%;
+  min-height: calc(var(--mde-rows) * var(--ds-size-code-line) + 2 * var(--ds-space-code-y));
+  padding: var(--ds-space-code-y) var(--ds-space-code-x);
+  background: none;
+  border: 0;
+  outline: none;
+  resize: none;
+  overflow: hidden;
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-mono);
+  font-feature-settings: "tnum", "zero";
+  line-height: var(--ds-size-code-line);
+  tab-size: 2;
+  color: inherit;
+}
+/* Mono at the source's size: a placeholder here is source to be typed. */
+.source::placeholder {
+  color: var(--ds-color-text-muted);
+}
+.source:focus-visible {
+  outline: none;
+}
+.source:disabled {
+  cursor: not-allowed;
+}
+
+.preview {
+  min-height: calc(var(--mde-rows) * var(--ds-size-code-line) + 2 * var(--ds-space-code-y));
+  padding: var(--ds-space-code-y) var(--ds-space-code-x) var(--ds-space-16);
+  outline: none;
+}
+.preview:focus-visible {
+  box-shadow: inset 0 0 0 var(--ds-focus-ring-width) var(--ds-color-focus-ring);
+}
+.empty {
+  margin: 0;
+  font-size: var(--ds-text-md);
+  font-style: italic;
+  color: var(--ds-color-text-muted);
+}
+
+.foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-4) var(--ds-space-12);
+  min-height: var(--ds-size-row-compact);
+  padding: 0 var(--ds-space-8) var(--ds-space-2) var(--ds-space-code-x);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.md {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+}
+.summary {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-4) var(--ds-space-8);
+  min-width: 0;
+}
+.notice {
+  color: var(--ds-tone-attention-fg);
+}
+.grow {
+  flex: 1;
+}
+/* Stays at the right edge when the summary wraps it to a line of its own. */
+.count {
+  margin-left: auto;
+  white-space: nowrap;
+}
+.count[data-state="near"] {
+  color: var(--ds-tone-attention-fg);
+}
+.count[data-state="over"] {
+  color: var(--ds-tone-danger-fg);
+}
+
+/*
+ * fill: every box from the field down to the source flexes into the height
+ * the container leaves. None shrinks below its content, so a long source
+ * (its inline height is its content's) still grows the column, which scrolls.
+ */
+.fill,
+.fill .frame,
+.fill .write:not([hidden]),
+.fill .preview:not([hidden]),
+.fill .source {
+  flex: 1 0 auto;
+}
+.fill .write:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+}
