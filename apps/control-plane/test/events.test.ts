@@ -6,7 +6,9 @@
  * event in the gap between backfill and live subscription — only exist in
  * the presence of a real database and a real connection.
  *
- * Requires DATABASE_URL (owner role) and TEST_APP_DATABASE_URL (app role).
+ * Requires DATABASE_URL (owner role). The app role is the same database as
+ * dude_app, as the other database tests take it; TEST_APP_DATABASE_URL
+ * overrides it.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -19,7 +21,12 @@ import { startServer } from "../src/index.ts";
 import { listenForEvents } from "../src/events/listen.ts";
 
 const OWNER_URL = process.env.DATABASE_URL ?? "postgres://dude:dude@localhost:5433/dude";
-const APP_URL = process.env.TEST_APP_DATABASE_URL ?? "postgres://dude_app:dude_app@localhost:5433/dude";
+const APP_URL = process.env.TEST_APP_DATABASE_URL ?? (() => {
+  const url = new URL(OWNER_URL);
+  url.username = "dude_app";
+  url.password = "dude_app";
+  return url.toString();
+})();
 
 const ORG_A = `org_test_a_${Bun.randomUUIDv7("hex").slice(0, 8)}`;
 const ORG_B = `org_test_b_${Bun.randomUUIDv7("hex").slice(0, 8)}`;
