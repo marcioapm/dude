@@ -162,3 +162,20 @@
 .count[data-state="over"] {
   color: var(--ds-tone-danger-fg);
 }
+
+/*
+ * fill: every box from the field down to the source flexes into the height
+ * the container leaves. None shrinks below its content, so a long source
+ * (its inline height is its content's) still grows the column, which scrolls.
+ */
+.fill,
+.fill .frame,
+.fill .write:not([hidden]),
+.fill .preview:not([hidden]),
+.fill .source {
+  flex: 1 0 auto;
+}
+.fill .write:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+}

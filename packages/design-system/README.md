@@ -552,6 +552,13 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   and `notice`, and `n / max` (attention past 90%, danger over).
   - **Grows, never scrolls.** The source grows from `minRows` with its
     content; the dialog or page scrolls. No resize handle.
+  - **`fill` takes the room that is left.** In a flex column — a
+    `FormStack fill` in a `Dialog size="document"` — the frame flexes into
+    the height its siblings leave, with `minRows` as the floor below which
+    the column scrolls instead. Content taller than that still grows it, and
+    the column scrolls. One field per stack fills (a task's Goal); the
+    others keep a modest `minRows`, so the empty document opens with no
+    scroll.
   - **Preview is the safe path, and reads as the text will be read.** It is
     `Markdown unmeasured` in the caller's `variant` (default `message`: the
     long rhythm, 1.25em above headings) — the variant of the screen that
@@ -775,7 +782,10 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
   and anything browsed stay screens. The document's title field is
   `Input size="title"` — `labelNote="required"` says it after the label.
   The fields stack in `FormStack fill` (the column's width, `space-panel-gap`
-  apart), and the document's insets are `space-panel-gap` too, so compact
+  apart, and the column's height, so a `MarkdownEditor fill` in it takes
+  what the other fields leave; under 960px the writing takes at least the
+  whole view before the aside follows), and the document's insets are
+  `space-panel-gap` too, so compact
   tightens them. Key hints go in `footerStart`, and hide under 640px, where
   there is rarely a keyboard; a failed save shows there instead, at every
   width. In a document, Ctrl/⌘+Enter submits and plain Enter never does.
@@ -880,7 +890,7 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | `<RowMenu items={[…, { id: "delete", tone: "danger", disabled, disabledReason }]} />` | a row of icon buttons, or a greyed item that does not say why |
 | `<FindingRow severity="blocking" status="resolved" … />` | `f.severity.toUpperCase()` in red, struck through when done |
 | `<Breadcrumb items={[project, epic, key]} />` in the header | a ghost `Back` button under the content |
-| `<MarkdownEditor label="Goal" value={goal} onChange={setGoal} minRows={12} maxLength={10_000} />` | a `Textarea` for Markdown with a hand-rolled preview beside it |
+| `<MarkdownEditor label="Goal" value={goal} onChange={setGoal} fill minRows={4} maxLength={10_000} />` | a `Textarea` for Markdown with a hand-rolled preview beside it, or a `minRows={12}` that scrolls the empty dialog |
 | `<Dialog size="document" aside={…} context={…}>` with a `DiscardConfirm` for writing a task | a 400px dialog that loses three paragraphs to a stray Escape |
 | a settings page's sub-pages as `items` of its `SettingsNavItem` | `Tabs` inside a settings page |
 | `<SearchResultRow rank={1} lead={{ type: "memory" }} facts={["words and meaning"]} />` | a score chip and a progress bar on every result |
@@ -890,7 +900,7 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 ## Components
 
 `src/primitives/` — Button, IconButton, Input (`size="title"` for a
-document's heading), Textarea, MarkdownEditor, Select, Checkbox,
+document's heading), Textarea, MarkdownEditor (`fill`), Select, Checkbox,
 Badge, Card, Table (THead/TBody/Tr/Th/Td/TableEmpty), Tabs (underline for a
 page, segmented in a toolbar; a tab can carry a count), Dialog (`size=
 "document"` with `aside` and `context`), DiscardConfirm, Toast, Tooltip,

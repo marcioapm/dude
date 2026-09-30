@@ -24,6 +24,12 @@ export interface MarkdownEditorProps {
   readonly placeholder?: string | undefined;
   /** Source lines shown when empty; the field grows from here with its content. Default 6. */
   readonly minRows?: number | undefined;
+  /**
+   * Take the height its flex-column container has left (a `FormStack fill`
+   * in a `Dialog size="document"`), never less than `minRows`; past that it
+   * grows with its content as usual, and the container scrolls.
+   */
+  readonly fill?: boolean | undefined;
   /** Hard limit on the source, and the count's denominator. */
   readonly maxLength?: number | undefined;
   /** Nothing can be changed: opens in Preview with Write disabled. */
@@ -101,6 +107,7 @@ export function MarkdownEditor({
   error,
   placeholder,
   minRows = 6,
+  fill,
   maxLength,
   disabled,
   locked,
@@ -139,8 +146,13 @@ export function MarkdownEditor({
     const el = area.current;
     if (!el || el.offsetParent === null) return;
     const pinned = scrollPositions(el);
+    // Measured unflexed: the height set is the content's (or minRows'), and
+    // `fill` flexes up from it, so a shorter container later shrinks it back.
+    el.style.flexGrow = "0";
     el.style.height = "0px";
-    el.style.height = `${el.scrollHeight}px`;
+    const content = el.scrollHeight;
+    el.style.flexGrow = "";
+    el.style.height = `${content}px`;
     for (const [node, top] of pinned) if (node.scrollTop !== top) node.scrollTop = top;
   }, []);
   useLayoutEffect(fit, [fit, value, mode]);
@@ -232,7 +244,7 @@ export function MarkdownEditor({
   const frameStyle = { "--mde-rows": String(Math.max(1, minRows)) } as CSSProperties;
 
   return (
-    <div className={cx(inputStyles["field"], className)}>
+    <div className={cx(inputStyles["field"], fill && styles["fill"], className)}>
       {label || hint ? (
         <div className={styles["head"]}>
           {label ? (
@@ -307,7 +319,7 @@ export function MarkdownEditor({
             )}
           </div>
         </div>
-        <div role="tabpanel" id={`${tabs}-write-panel`} aria-labelledby={`${tabs}-write-tab`} hidden={mode !== "write"}>
+        <div role="tabpanel" id={`${tabs}-write-panel`} aria-labelledby={`${tabs}-write-tab`} className={styles["write"]} hidden={mode !== "write"}>
           <textarea
             ref={area}
             id={fieldId}

@@ -185,7 +185,8 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
         placeholder="Why does this matter? What exists today? What must an agent not break?"
         value={goal}
         onChange={setGoal}
-        minRows={12}
+        fill
+        minRows={4}
         maxLength={GOAL_MAX}
         locked={locked}
         data-testid="task-goal"
@@ -196,7 +197,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
         placeholder="- [ ] A thing that must be true when it's done"
         value={criteriaSource}
         onChange={setCriteriaSource}
-        minRows={7}
+        minRows={3}
         maxLength={CRITERIA_MAX}
         locked={locked}
         error={criteriaError ?? undefined}

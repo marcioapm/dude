@@ -149,11 +149,20 @@
   font-size: var(--ds-text-md);
   color: var(--ds-color-text-primary);
 }
-/* 16px at the top, so text scrolled under the header is cut in whitespace. */
+/* 16px at the top, so text scrolled under the header is cut in whitespace.
+   A flex column, so a `FormStack fill` (directly or in the form around it)
+   can take the column's height. */
 .main {
   min-width: 0;
   overflow: auto;
+  display: flex;
+  flex-direction: column;
   padding: var(--ds-space-16) var(--ds-space-panel-gap) var(--ds-space-panel-gap);
+}
+.main > form {
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
 }
 .aside {
   min-width: 0;
@@ -162,15 +171,21 @@
   background: var(--ds-color-chrome);
 }
 
-/* Too narrow for two columns: the aside follows the writing, one scroll. */
+/* Too narrow for two columns: the aside follows the writing, one scroll.
+   The writing takes at least the whole view, so a filling field still fills it. */
 @media (max-width: 960px) {
   .split {
-    grid-template-columns: minmax(0, 1fr);
+    display: flex;
+    flex-direction: column;
     overflow: auto;
   }
   .main,
   .aside {
+    flex: none;
     overflow: visible;
+  }
+  .main {
+    min-height: 100%;
   }
 }
 
