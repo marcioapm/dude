@@ -1,0 +1,143 @@
+import { describe, expect, test } from "bun:test";
+import {
+  GIB,
+  machineFit,
+  machineSizeInputSchema,
+  machineSpec,
+  MACHINE_STEP_MESSAGE,
+  MIB,
+  replaceMachineSize,
+  replacePreviewMachineSize,
+  resolveMachineSize,
+  type MachinePool,
+} from "../src/machines.ts";
+
+const size = (over: Record<string, unknown> = {}) => machineSizeInputSchema.safeParse({ name: "Large", cpus: 8, memoryMiB: 16384, diskGiB: 80, ...over });
+const errorOf = (r: ReturnType<typeof size>) => (r.success ? null : r.error.issues[0]!.message);
+
+describe("a size's steps and bounds", () => {
+  test("half steps are sizes", () => {
+    const r = size({ cpus: 6.5, memoryMiB: 22.5 * 1024, diskGiB: 120 });
+    expect(r.success).toBe(true);
+    expect(r.success && r.data.pool).toBeNull();
+    expect(r.success && r.data.isDefault).toBe(false);
+  });
+
+  test("an off-step value is refused, naming the step", () => {
+    expect(errorOf(size({ cpus: 2.3 }))).toBe(MACHINE_STEP_MESSAGE.cpus);
+    expect(errorOf(size({ memoryMiB: 1000 }))).toBe(MACHINE_STEP_MESSAGE.memoryMiB);
+    expect(errorOf(size({ diskGiB: 12 }))).toBe(MACHINE_STEP_MESSAGE.diskGiB);
+  });
+
+  test("the least of each is one step", () => {
+    expect(size({ cpus: 0.5, memoryMiB: 512, diskGiB: 5 }).success).toBe(true);
+    expect(errorOf(size({ cpus: 0 }))).toBe(MACHINE_STEP_MESSAGE.cpus);
+    expect(errorOf(size({ memoryMiB: 0 }))).toBe(MACHINE_STEP_MESSAGE.memoryMiB);
+    expect(errorOf(size({ diskGiB: 0 }))).toBe(MACHINE_STEP_MESSAGE.diskGiB);
+    expect(size({ cpus: 512 }).success).toBe(false);
+  });
+
+  test("a name is 1 to 40 characters, a pool a lux pool's name", () => {
+    expect(size({ name: " " }).success).toBe(false);
+    expect(size({ name: "x".repeat(41) }).success).toBe(false);
+    expect(size({ pool: "big" }).success).toBe(true);
+    expect(size({ pool: "Big Pool" }).success).toBe(false);
+  });
+
+  test("its spec reads as the pickers show it", () => {
+    expect(machineSpec({ cpus: 1.5, memoryMiB: 3584, diskGiB: 20 })).toBe("1.5 CPUs · 3.5 GiB · 20 GiB");
+    expect(machineSpec({ cpus: 1, memoryMiB: 512, diskGiB: 5 })).toBe("1 CPU · 0.5 GiB · 5 GiB");
+  });
+});
+
+const pool = (name: string, host: MachinePool["hostSize"], isDefault = false): MachinePool => ({
+  name, isDefault, platform: false, provider: "ec2", instanceType: null, hostSize: host, hostSizeFrom: host ? "running" : null, hostsRunning: null,
+});
+const POOLS = [
+  pool("default", { cpus: 16, memory: 32 * GIB, disk: 180 * GIB }, true),
+  pool("big", { cpus: 32, memory: 64 * GIB, disk: 380 * GIB }),
+  pool("shared", { cpus: 8, memory: 16 * GIB, disk: 0 }),
+  pool("new", null),
+];
+
+describe("the fit check", () => {
+  test("a size that fits one host says how much of it it takes", () => {
+    const fit = machineFit({ cpus: 8, memoryMiB: 16 * 1024, diskGiB: 80, pool: null }, POOLS);
+    expect(fit.kind).toBe("fits");
+    expect(fit.kind === "fits" && fit.pool.name).toBe("default");
+    expect(fit.kind === "fits" && fit.share).toBe(0.5);
+  });
+
+  test("too big for a known host is refused, naming what does not fit", () => {
+    const fit = machineFit({ cpus: 16, memoryMiB: 72 * 1024, diskGiB: 200, pool: "big" }, POOLS);
+    expect(fit.kind).toBe("too_big");
+    expect(fit.kind === "too_big" && fit.over).toEqual([{ what: "memory", asked: 72 * GIB, offers: 64 * GIB }]);
+  });
+
+  test("disk counts only where the host reserves it", () => {
+    const fit = machineFit({ cpus: 8, memoryMiB: 14 * 1024, diskGiB: 500, pool: "shared" }, POOLS);
+    expect(fit.kind === "fits" && fit.diskReserved).toBe(false);
+    expect(fit.kind === "fits" && fit.share).toBe(1);
+  });
+
+  test("a host size nobody knows is allowed, with the reason", () => {
+    expect(machineFit({ cpus: 64, memoryMiB: 512, diskGiB: 5, pool: "new" }, POOLS)).toMatchObject({ kind: "unknown", reason: "no_host_size" });
+    expect(machineFit({ cpus: 64, memoryMiB: 512, diskGiB: 5, pool: "gone" }, POOLS)).toMatchObject({ kind: "unknown", reason: "no_pool" });
+    // lux unreachable: no pools at all, the default pool unknown too.
+    expect(machineFit({ cpus: 2, memoryMiB: 8192, diskGiB: 20, pool: null }, [])).toMatchObject({ kind: "unknown", pool: null });
+  });
+
+  test("memory is compared in bytes", () => {
+    expect(machineFit({ cpus: 1, memoryMiB: 32 * 1024, diskGiB: 5, pool: null }, POOLS).kind).toBe("fits");
+    expect(machineFit({ cpus: 1, memoryMiB: 32 * 1024 + 512, diskGiB: 5, pool: null }, POOLS).kind).toBe("too_big");
+    expect(MIB * 1024).toBe(GIB);
+  });
+});
+
+describe("resolving a role's size", () => {
+  const sizes = [{ id: "std", isDefault: true }, { id: "lg", isDefault: false }, { id: "xl", isDefault: false }];
+
+  test("the project's, then the organization's, then the default", () => {
+    expect(resolveMachineSize("reviewer", { project: { reviewer: { machineSize: "xl" } }, organization: { reviewer: { machineSize: "lg" } } }, sizes))
+      .toEqual({ sizeId: "xl", from: "project" });
+    expect(resolveMachineSize("reviewer", { project: {}, organization: { reviewer: { machineSize: "lg" } } }, sizes))
+      .toEqual({ sizeId: "lg", from: "organization" });
+    expect(resolveMachineSize("reviewer", { project: {}, organization: {} }, sizes)).toEqual({ sizeId: "std", from: "default" });
+  });
+
+  test("the fixer follows the implementer where it has none of its own", () => {
+    expect(resolveMachineSize("fixer", { project: { implementer: { machineSize: "xl" } }, organization: {} }, sizes))
+      .toEqual({ sizeId: "xl", from: "implementer" });
+    expect(resolveMachineSize("fixer", { project: { implementer: { machineSize: "xl" } }, organization: { fixer: { machineSize: "lg" } } }, sizes))
+      .toEqual({ sizeId: "lg", from: "organization" });
+  });
+
+  test("an id that names no size is passed over", () => {
+    expect(resolveMachineSize("reviewer", { organization: { reviewer: { machineSize: "gone" } } }, sizes)).toEqual({ sizeId: "std", from: "default" });
+  });
+});
+
+describe("removing a size moves what named it", () => {
+  test("to another size", () => {
+    const models = { implementer: { model: "m", machineSize: "lg" }, reviewer: { machineSize: "xl" } };
+    expect(replaceMachineSize(models, "lg", "xl")).toEqual({ implementer: { model: "m", machineSize: "xl" }, reviewer: { machineSize: "xl" } });
+  });
+
+  test("to none: the key goes, and a role left with nothing goes", () => {
+    const models = { implementer: { model: "m", machineSize: "lg" }, fixer: { machineSize: "lg" }, reviewer: { machineSize: "xl" } };
+    expect(replaceMachineSize(models, "lg", null)).toEqual({ implementer: { model: "m" }, reviewer: { machineSize: "xl" } });
+  });
+
+  test("nothing named it: the same object", () => {
+    const models = { reviewer: { machineSize: "xl" } };
+    expect(replaceMachineSize(models, "lg", null)).toBe(models);
+  });
+
+  test("a project's previews", () => {
+    const previews: Record<string, unknown> = { egress: [], machineSize: "lg" };
+    expect(replacePreviewMachineSize(previews, "lg", "xl")).toEqual({ egress: [], machineSize: "xl" });
+    expect(replacePreviewMachineSize(previews, "lg", null)).toEqual({ egress: [] });
+    const other = { machineSize: "xl" };
+    expect(replacePreviewMachineSize(other, "lg", null)).toBe(other);
+  });
+});

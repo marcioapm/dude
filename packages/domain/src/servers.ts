@@ -101,6 +101,8 @@ export const previewSettingsSchema = z.object({
     .max(200)
     .default([]),
   idleTimeoutMinutes: z.number().int().min(1).max(7 * 24 * 60).default(30),
+  /** The machine size a preview runs on (an organization's size id); null: the organization's default size. */
+  machineSize: z.string().min(1).max(100).nullable().default(null),
 });
 export type PreviewSettings = z.infer<typeof previewSettingsSchema>;
 
