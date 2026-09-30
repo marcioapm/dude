@@ -311,6 +311,11 @@ def test_a_task_that_fails_to_save_says_why_beside_the_buttons(
     assert alert.get_attribute("title") == reason
     # The key hints give way to it.
     expect(page.get_by_role("dialog", name="New task")).not_to_contain_text("toggle preview")
+    # On a phone the hints are gone, but the reason and the button stay on screen.
+    page.set_viewport_size({"width": 375, "height": 812})
+    expect(alert).to_have_text(reason)
+    expect(alert).to_be_in_viewport()
+    expect(page.get_by_test_id("task-save")).to_be_in_viewport()
     assert all("400" in e for e in console_errors), console_errors
 
 
