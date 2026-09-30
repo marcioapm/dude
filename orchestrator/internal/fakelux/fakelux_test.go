@@ -4,7 +4,10 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -43,6 +46,49 @@ func TestASubmitWithARegistryLuxWouldRefuseIsRefused(t *testing.T) {
 			t.Errorf("%q: refused: %v", registry, err)
 		case !ok && (!refused || le.Status != http.StatusUnprocessableEntity || le.Code != "invalid_spec"):
 			t.Errorf("%q: err = %v, want 422 invalid_spec", registry, err)
+		}
+	}
+}
+
+// inputWorkers counts goroutines holding gated input (InputGate).
+func inputWorkers() int {
+	buf := make([]byte, 1<<22)
+	return strings.Count(string(buf[:runtime.Stack(buf, true)]), "fakelux.(*Server).input.func")
+}
+
+// Input held on a gate that is never opened is dropped when the fake
+// closes: no worker outlives it.
+func TestClosingTheFakeReleasesGatedInput(t *testing.T) {
+	fake := New("", "k", func(map[string]any) Behaviour { return Behaviour{Reply: "Done."} })
+	fake.InputGate = make(chan struct{})
+	srv := httptest.NewServer(fake.Handler())
+	t.Cleanup(srv.Close)
+	c := lux.New(srv.URL, "k")
+	run, err := c.Submit(context.Background(), lux.Spec{Workload: lux.Workload{Adapter: "opencode", Prompt: "go"}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		fake.mu.Lock()
+		ended := fake.runs[run.ID].turnsEnded
+		fake.mu.Unlock()
+		if ended == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the first turn never ended")
+		}
+	}
+	if err := c.Input(context.Background(), run.ID, "more", "req_1", false); err != nil {
+		t.Fatal(err)
+	}
+	if n := inputWorkers(); n != 1 {
+		t.Fatalf("%d gated workers, want 1", n)
+	}
+	fake.Close()
+	for deadline := time.Now().Add(2 * time.Second); inputWorkers() > 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d gated workers after Close", inputWorkers())
 		}
 	}
 }

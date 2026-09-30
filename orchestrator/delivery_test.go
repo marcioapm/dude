@@ -105,6 +105,7 @@ func newWorld(t *testing.T) *world {
 	}
 	luxSrv := httptest.NewServer(w.lux.Handler())
 	t.Cleanup(luxSrv.Close)
+	t.Cleanup(w.lux.Close)
 
 	w.project, w.repoID = "prj_"+w.org, "repo_"+w.org
 	models := `{"implementer":{"model":"fake/scripted"},"reviewer":{"model":"fake/scripted"},"simplifier":{"model":"fake/scripted"}}`
@@ -1926,6 +1927,18 @@ func TestASteerSentAsTheTurnEndsIsDeliveredBeforeTheRunFinishes(t *testing.T) {
 	}
 }
 
+// gateInput holds what input starts in an idle agent (fakelux InputGate)
+// until release, which the test's cleanup also calls, so a failed
+// assertion strands no fake worker.
+func (w *world) gateInput() (release func()) {
+	gate := make(chan struct{})
+	w.lux.InputGate = gate
+	var once sync.Once
+	release = func() { once.Do(func() { close(gate) }) }
+	w.t.Cleanup(release)
+	return release
+}
+
 // lux answers the input POST before the agent's records for it arrive. In
 // that window the steer is sent and unread: the Run is not collected. Once
 // the agent takes it, the turn it starts ends before the Run is.
@@ -1934,8 +1947,7 @@ func TestASteerSentButNotYetReadHoldsTheFinishedTurn(t *testing.T) {
 		t.Run(map[bool]string{false: "receipts", true: "legacy lux"}[legacy], func(t *testing.T) {
 			w := newWorld(t)
 			w.lux.LegacyInput = legacy
-			gate := make(chan struct{})
-			w.lux.InputGate = gate
+			release := w.gateInput()
 			wi := w.task()
 			runID := w.turnDoneWithSteer(wi)
 			w.until("the steer to be sent", func() bool {
@@ -1950,7 +1962,7 @@ func TestASteerSentButNotYetReadHoldsTheFinishedTurn(t *testing.T) {
 			if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.completed'`, runID); n != 0 {
 				t.Fatal("a Run with a sent, unread steer completed")
 			}
-			close(gate)
+			release()
 			w.until("the run to finish", func() bool {
 				return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status IN ('completed', 'failed')`, runID) == 1
 			})
@@ -1970,9 +1982,7 @@ func TestASteerSentButNotYetReadHoldsTheFinishedTurn(t *testing.T) {
 // only: then the Run is collected, and the steer is marked failed.
 func TestASteerNeverReadStopsHoldingTheRunAfterTheCap(t *testing.T) {
 	w := newWorld(t)
-	gate := make(chan struct{})
-	w.lux.InputGate = gate
-	t.Cleanup(func() { close(gate) })
+	w.gateInput()
 	wi := w.task()
 	runID := w.turnDoneWithSteer(wi)
 	w.until("the steer to be sent", func() bool {
