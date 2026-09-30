@@ -312,7 +312,7 @@ describe("the pieces around a document being written", () => {
       const h = renderToStaticMarkup(<MarkdownCheatsheet extra={[["**bold**", "strong text"]]} />);
       const rows = [...h.matchAll(/<dt>(.*?)<\/dt><dd>(.*?)<\/dd>/g)].map((m) => [m[1]!.replace(/<[^>]+>/g, ""), m[2]!]);
       expect(rows.map(([source]) => source)).toEqual(["**bold**", "_italic_", "[text](url)", "`code`", "- [ ] item", "## Heading"]);
-      const [, bold] = rows[0]!;
+      const bold = rows[0]![1]!;
       expect(bold.replace(/<[^>]+>/g, "")).toBe(`strong text ${modKey()}B`);
       expect([...bold.matchAll(/<kbd[^>]*>([^<]+)<\/kbd>/g)].map((m) => m[1])).toEqual([modKey(), "B"]);
     } finally {
