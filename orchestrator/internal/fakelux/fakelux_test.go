@@ -51,6 +51,36 @@ func TestASubmitWithARegistryLuxWouldRefuseIsRefused(t *testing.T) {
 	}
 }
 
+// submitRun serves fake and submits one opencode Run to it.
+func submitRun(t *testing.T, fake *Server) (*lux.HTTPClient, lux.Run) {
+	t.Helper()
+	srv := httptest.NewServer(fake.Handler())
+	t.Cleanup(srv.Close)
+	c := lux.New(srv.URL, "k")
+	run, err := c.Submit(context.Background(), lux.Spec{Workload: lux.Workload{Adapter: "opencode", Prompt: "go"}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c, run
+}
+
+// awaitRun polls the Run under the fake's lock for 5 s until cond holds,
+// and fails the test with failure if it never does.
+func awaitRun(t *testing.T, fake *Server, id, failure string, cond func(*Run) bool) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		fake.mu.Lock()
+		ok := cond(fake.runs[id])
+		fake.mu.Unlock()
+		if ok {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal(failure)
+		}
+	}
+}
+
 // inputWorkers counts goroutines holding gated input (InputGate).
 func inputWorkers() int {
 	buf := make([]byte, 1<<22)
@@ -62,24 +92,8 @@ func inputWorkers() int {
 func TestClosingTheFakeReleasesGatedInput(t *testing.T) {
 	fake := New("", "k", func(map[string]any) Behaviour { return Behaviour{Reply: "Done."} })
 	fake.InputGate = make(chan struct{})
-	srv := httptest.NewServer(fake.Handler())
-	t.Cleanup(srv.Close)
-	c := lux.New(srv.URL, "k")
-	run, err := c.Submit(context.Background(), lux.Spec{Workload: lux.Workload{Adapter: "opencode", Prompt: "go"}}, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		fake.mu.Lock()
-		ended := fake.runs[run.ID].turnsEnded
-		fake.mu.Unlock()
-		if ended == 1 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the first turn never ended")
-		}
-	}
+	c, run := submitRun(t, fake)
+	awaitRun(t, fake, run.ID, "the first turn never ended", func(r *Run) bool { return r.turnsEnded == 1 })
 	if err := c.Input(context.Background(), run.ID, "more", "req_1", false); err != nil {
 		t.Fatal(err)
 	}
@@ -154,24 +168,8 @@ func TestAnInterruptCarriesAnUnreadSteerIntoTheNextTurn(t *testing.T) {
 				})
 				fake.LegacyInput = legacy
 				fake.FailUnreadOnInterrupt = old
-				srv := httptest.NewServer(fake.Handler())
-				t.Cleanup(srv.Close)
-				c := lux.New(srv.URL, "k")
-				run, err := c.Submit(context.Background(), lux.Spec{Workload: lux.Workload{Adapter: "opencode", Prompt: "go"}}, "")
-				if err != nil {
-					t.Fatal(err)
-				}
-				for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-					fake.mu.Lock()
-					open := len(fake.runs[run.ID].openTools)
-					fake.mu.Unlock()
-					if open == 1 {
-						break
-					}
-					if time.Now().After(deadline) {
-						t.Fatal("the tool never started")
-					}
-				}
+				c, run := submitRun(t, fake)
+				awaitRun(t, fake, run.ID, "the tool never started", func(r *Run) bool { return len(r.openTools) == 1 })
 				if err := c.Input(context.Background(), run.ID, "check the migration", "dir_a", false); err != nil {
 					t.Fatal(err)
 				}
