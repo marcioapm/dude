@@ -2,12 +2,8 @@ package main
 
 import (
 	"maps"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/marciomartins/dude/orchestrator/internal/config"
 )
 
 func TestEmbeddingsComeFromTheLLMUnlessOverriddenOrOff(t *testing.T) {
@@ -111,17 +107,7 @@ func TestEmbeddingsComeFromTheConfigFile(t *testing.T) {
 			vars: map[string]string{"DUDE_EMBEDDINGS_URL": "https://llm.example/v2"}, url: "https://llm.example/v2", key: "sk-file"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "dude.toml")
-			if err := os.WriteFile(path, []byte(tc.text), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			vars := map[string]string{"DUDE_CONFIG": path}
-			maps.Copy(vars, tc.vars)
-			cfg, err := config.Load(config.Orchestrator, config.Options{Getenv: func(k string) string { return vars[k] },
-				DefaultPath: filepath.Join(t.TempDir(), "absent.toml")})
-			if err != nil {
-				t.Fatal(err)
-			}
+			cfg := loadConfig(t, tc.text, 0o600, tc.vars)
 			c, err := embeddingsFromEnv(cfg.Getenv)
 			if tc.fail != nil {
 				if err == nil {
