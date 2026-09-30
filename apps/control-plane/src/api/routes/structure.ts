@@ -9,7 +9,7 @@
  */
 
 import { z } from "zod";
-import { EventTypes, epicState, epicStateSchema, newId, type EpicState } from "@dude/domain";
+import { EventTypes, epicState, epicStateSchema, newId, taskCriteriaInput, taskGoalInput, type EpicState } from "@dude/domain";
 import { withOrg, type OrgScope } from "../../db/client.ts";
 import { badRequest, conflict, json, noContent, notFound, parseBody } from "../http.ts";
 import { registerRepositoryWebhook } from "./pullRequests.ts";
@@ -275,8 +275,8 @@ async function deleteEpic(ctx: RequestContext): Promise<Response> {
 
 const updateTaskInput = z.object({
   title: z.string().trim().min(1).max(500),
-  goal: z.string().max(10_000),
-  acceptanceCriteria: z.array(z.string().max(2000)),
+  goal: taskGoalInput,
+  acceptanceCriteria: taskCriteriaInput,
   /** Move it into an epic of its project, or out of any (null). */
   epicId: z.string().min(1).nullable(),
   /** The repositories it works on; fixed, like the task, once delivery starts. */

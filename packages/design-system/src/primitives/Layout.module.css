@@ -159,6 +159,12 @@
   max-width: var(--ds-measure-document);
   min-width: 0;
 }
+/* In a flex column (a document dialog's column) it takes the height, for a child that fills. */
+.formFill {
+  flex: 1 0 auto;
+  gap: var(--ds-space-panel-gap);
+  max-width: none;
+}
 .formRow {
   display: grid;
   grid-auto-flow: column;

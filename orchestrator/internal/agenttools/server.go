@@ -179,8 +179,8 @@ func (s *Server) callJSON(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// maxInput bounds a tool call's arguments.
-const maxInput = 256 << 10
+// maxInput bounds a tool call's arguments: 1 MiB, because json.Marshal escapes `<>&` as six bytes, so a 64K goal and 16K of criteria can take ~492 KB.
+const maxInput = 1 << 20
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
