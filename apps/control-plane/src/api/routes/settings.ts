@@ -44,6 +44,7 @@ import { badRequest, HttpError, json, notFound, parseBody } from "../http.ts";
 import { auditActor } from "../auth.ts";
 import type { RequestContext, Router } from "../router.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
+import { requireSize } from "./machines.ts";
 
 type Json = Record<string, unknown>;
 
@@ -263,6 +264,13 @@ function applyPatch(models: AgentModels, policy: Json, patch: SettingsPatch): { 
   return { models: nextModels as AgentModels, policy: applyKeys(policy, policyChanges) };
 }
 
+/** Every machine size a patch names must be the organization's. */
+async function checkSizes(scope: OrgScope, patch: SettingsPatch) {
+  for (const change of Object.values(patch.roles ?? {})) {
+    if (change?.machineSize) await requireSize(scope, change.machineSize);
+  }
+}
+
 async function recordSettings(scope: OrgScope, ctx: RequestContext, projectId: string | null, patch: SettingsPatch) {
   await appendInScope(scope, {
     eventType: EventTypes.SettingsUpdated,
@@ -284,6 +292,7 @@ async function patchOrganizationSettings(ctx: RequestContext): Promise<Response>
   await withOrg(ctx.principal.organizationId, async (scope) => {
     const layers = await loadLayers(scope, undefined, true);
     if (!layers) throw notFound("organization not found");
+    await checkSizes(scope, patch);
     const next = applyPatch(layers.org.agentModels, layers.org.deliveryPolicy, patch);
     await scope.sql`
       UPDATE organizations SET default_agent_models = ${next.models}::jsonb, delivery_policy = ${next.policy}::jsonb,
@@ -305,6 +314,7 @@ async function patchProjectSettings(ctx: RequestContext): Promise<Response> {
   await withOrg(ctx.principal.organizationId, async (scope) => {
     const layers = await loadLayers(scope, projectId, true);
     if (!layers?.project) throw notFound(`project ${projectId} not found`);
+    await checkSizes(scope, patch);
     const next = applyPatch(layers.project.agentModels, layers.project.deliveryPolicy, patch);
     await scope.sql`
       UPDATE projects SET agent_models = ${next.models}::jsonb, delivery_policy = ${next.policy}::jsonb, updated_at = now()
