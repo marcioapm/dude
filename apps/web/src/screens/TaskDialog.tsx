@@ -137,6 +137,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
       problem={problem ?? loadProblem}
       unsavedWords={unsaved}
       discardTitle={existing ? "Discard your changes to this task?" : "Discard this task?"}
+      discardDescription={existing ? "Your changes to this task haven't been saved." : undefined}
       footerStart={
         <>
           <KeyHint keys={["mod", "Enter"]}>{existing ? "save" : "create"}</KeyHint>
