@@ -118,7 +118,7 @@ type phaseRun struct {
 	// is the one waited on.
 	// Evaluated only where advance reads it (a finished turn of a running
 	// Run not yet pushed); false otherwise. Its lookups use the partial
-	// indexes of migration 060.
+	// indexes of migration 062.
 	Unread bool
 	// A person approved a repository the lux Run does not have yet.
 	RepoApproved bool

@@ -1,4 +1,4 @@
--- 060_directive_receipts.sql — a steer is taken, then read.
+-- 062_directive_receipts.sql — a steer is taken, then read.
 --
 -- lux reports a directive twice: accepted when the harness took it (with
 -- where it lands: at the agent's next step, or only when its turn ends),
