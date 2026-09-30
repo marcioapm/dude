@@ -146,10 +146,11 @@
   font-size: var(--ds-text-md);
   color: var(--ds-color-text-primary);
 }
+/* 16px at the top, so text scrolled under the header is cut in whitespace. */
 .main {
   min-width: 0;
   overflow: auto;
-  padding: var(--ds-space-8) var(--ds-space-panel-gap) var(--ds-space-panel-gap);
+  padding: var(--ds-space-16) var(--ds-space-panel-gap) var(--ds-space-panel-gap);
 }
 .aside {
   min-width: 0;
