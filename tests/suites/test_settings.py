@@ -207,16 +207,11 @@ def test_a_run_records_the_prompt_version_it_ran_with(client: ApiClient, owner_d
 import pytest  # noqa: E402
 from playwright.sync_api import Page, expect  # noqa: E402
 
-from helpers import toast  # noqa: E402
+from helpers import sign_in, toast  # noqa: E402
 
 
 def _sign_in(page: Page, web_url: str, api_key: str) -> None:
-    page.goto(web_url)
-    page.evaluate("localStorage.clear()")
-    page.goto(web_url)
-    page.fill('input[type="password"]', api_key)
-    page.click('button[type="submit"]')
-    expect(page.get_by_test_id("shell")).to_be_visible()
+    sign_in(page, web_url, api_key)
 
 
 @pytest.mark.ui
