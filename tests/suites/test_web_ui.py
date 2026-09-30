@@ -475,6 +475,23 @@ def test_a_task_saves_from_read_and_a_locked_task_reads_too(
     saved = client.get(f"/v1/tasks/{task_id}").json()
     assert saved["acceptanceCriteria"] == ["SEPA appears on the payment step", "Invoice only for annual plans,\nnever monthly ones"]
 
+    # Editing, the footer's Save saves from Read too: its form is under the reading, inert, and still submits.
+    page.get_by_test_id("edit-task").click()
+    page.get_by_test_id("task-title").fill("Read then saved again")
+    page.get_by_test_id("task-goal").fill("Saved with the mouse, from Read.")
+    page.get_by_test_id("task-read").click()
+    expect(page.get_by_test_id("task-reading")).to_be_visible()
+    page.get_by_test_id("task-save").click()
+    expect(page.get_by_role("dialog", name="Edit task")).to_have_count(0)
+    edited = client.get(f"/v1/tasks/{task_id}").json()
+    assert (edited["title"], edited["goal"]) == ("Read then saved again", "Saved with the mouse, from Read.")
+    assert edited["acceptanceCriteria"] == saved["acceptanceCriteria"]
+    page.get_by_test_id("edit-task").click()
+    page.get_by_test_id("task-title").fill("Read then saved")
+    page.get_by_test_id("task-goal").fill(GOAL_MARKDOWN)
+    page.get_by_test_id("task-save").click()
+    expect(page.get_by_role("dialog", name="Edit task")).to_have_count(0)
+
     # Once delivery has started it is fixed, and still reads.
     assert client.post(f"/v1/tasks/{task_id}/deliver").status_code == 201
     page.reload()
