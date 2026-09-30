@@ -43,11 +43,12 @@ async function listProjectServers(ctx: RequestContext): Promise<Response> {
 
 /** Who changed a project's servers, recorded like its other settings. */
 async function recordChange(scope: OrgScope, ctx: RequestContext, projectId: string, changed: Record<string, unknown>) {
+  const actor = auditActor(ctx.principal);
   await appendInScope(scope, {
     eventType: EventTypes.SettingsUpdated,
     organizationId: ctx.principal.organizationId,
     projectId,
-    actor: { type: ctx.principal.credentialKind === "api_key" ? "human" : "person", id: auditActor(ctx.principal).id },
+    actor: { type: actor.kind, id: actor.id },
     source: "control-plane",
     payload: { scope: "project", projectId, changed },
   });
