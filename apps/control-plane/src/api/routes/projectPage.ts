@@ -54,12 +54,17 @@ async function projectOverview(ctx: RequestContext): Promise<Response> {
       SELECT e.id, e.title, e.description, e.position, e.state AS "storedState",
              e.created_at AS "createdAt", e.updated_at AS "updatedAt",
              COALESCE((SELECT array_agg(t.status::text) FROM tasks t WHERE t.epic_id = e.id), '{}') AS statuses,
-             -- Who owns its tasks, as people, most tasks first.
+             -- Who owns its tasks, as people, most tasks first. A task's owner
+             -- is its first active person by (position, person_id), as in
+             -- ownerJson(): positions are not renumbered when someone leaves.
              COALESCE((SELECT json_agg(person_ref(p) ORDER BY o.n DESC, p.name)
-                       FROM (SELECT tp.person_id, count(*) AS n
-                             FROM tasks t JOIN task_people tp ON tp.task_id = t.id AND tp.position = 0
-                             WHERE t.epic_id = e.id GROUP BY tp.person_id) o
-                       JOIN people p ON p.id = o.person_id AND p.removed_at IS NULL), '[]') AS owners,
+                       FROM (SELECT f.person_id, count(*) AS n
+                             FROM tasks t CROSS JOIN LATERAL (
+                               SELECT tp.person_id FROM task_people tp JOIN people a ON a.id = tp.person_id
+                               WHERE tp.task_id = t.id AND a.removed_at IS NULL
+                               ORDER BY tp.position, tp.person_id LIMIT 1) f
+                             WHERE t.epic_id = e.id GROUP BY f.person_id) o
+                       JOIN people p ON p.id = o.person_id), '[]') AS owners,
              COALESCE((SELECT json_object_agg(s.state, s.n) FROM (
                          SELECT pr.state::text AS state, count(*) AS n FROM pull_requests pr JOIN tasks t ON t.id = pr.task_id
                          WHERE t.epic_id = e.id GROUP BY pr.state) s), '{}') AS prs,

@@ -8,8 +8,8 @@
  * the same error shape as this API's, so they pass straight through.
  */
 
+import { auditActor, type Principal } from "../api/auth.ts";
 import { HttpError } from "../api/http.ts";
-import type { Principal } from "../api/auth.ts";
 
 const TIMEOUT_MS = 15_000;
 
@@ -70,7 +70,12 @@ export async function orchestratorStream(organizationId: string, path: string): 
 function identity(actor: string | Principal | undefined): Record<string, string> {
   if (!actor) return {};
   if (typeof actor === "string") return { "x-dude-actor": actor };
-  return { "x-dude-actor": actor.apiKeyId, "x-dude-person": actor.personId, "x-dude-role": actor.role };
+  return {
+    "x-dude-credential-kind": actor.credentialKind,
+    "x-dude-actor": auditActor(actor).id,
+    "x-dude-person": actor.personId,
+    "x-dude-role": actor.role,
+  };
 }
 
 async function call(organizationId: string, method: string, path: string, init: RequestInit): Promise<Response> {

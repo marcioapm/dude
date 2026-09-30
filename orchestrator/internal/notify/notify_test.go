@@ -121,6 +121,9 @@ func TestAnAskReachesItsOwnersBrowsersOnce(t *testing.T) {
 	exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ($1, $2, 'P', $1, 'TEXT')`, "prj_"+org, org)
 	exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, owner_key_id) VALUES ($1, $2, $3, 19, 'Count sentences', $4)`,
 		"wi_"+org, org, "prj_"+org, "key_me_"+org)
+	exec(`INSERT INTO task_people (task_id, organization_id, person_id, position)
+		SELECT $1, $2, person_id, 0 FROM api_keys WHERE id = $3`, "wi_"+org, org, "key_me_"+org)
+	exec(`INSERT INTO people (id, organization_id, name) VALUES ($1, $2, 'Other organization')`, "per_theirs_"+other, other)
 	exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role)
 		VALUES ($1, $2, $3, $4, 1, 'running', 'implement', 'implementer')`, "run_"+org, org, "prj_"+org, "wi_"+org)
 	// And one from before there were owners.
@@ -144,10 +147,14 @@ func TestAnAskReachesItsOwnersBrowsersOnce(t *testing.T) {
 		{"/colleague", org, "key_colleague_" + org, colleague}, {"/theirs", other, "", theirs},
 	} {
 		p256dh, auth := s.b.keys()
-		exec(`INSERT INTO push_subscriptions (endpoint, organization_id, api_key_id, p256dh, auth) VALUES ($1, $2, NULLIF($3, ''), $4, $5)`,
-			push.URL+s.path, s.org, s.key, p256dh, auth)
+		exec(`INSERT INTO push_subscriptions (endpoint, organization_id, api_key_id, person_id, p256dh, auth)
+			VALUES ($1, $2, NULLIF($3, ''), COALESCE((SELECT person_id FROM api_keys WHERE id = $3), $6), $4, $5)`,
+			push.URL+s.path, s.org, s.key, p256dh, auth, "per_theirs_"+other)
 	}
 
+	// The owner can sign in without a key; revocation leaves browser ownership intact.
+	exec(`UPDATE api_keys SET revoked_at = now() WHERE id = $1`, "key_me_"+org)
+	exec(`UPDATE push_subscriptions SET api_key_id = NULL WHERE endpoint = $1`, push.URL+"/mine")
 	n := &notify.Notifier{DB: app, Log: slog.New(slog.DiscardHandler), Subject: "ops@example.com", HTTP: push.Client()}
 	if _, _, err := n.Keys(ctx); err != nil {
 		t.Fatal(err)
@@ -197,5 +204,89 @@ func TestAnAskReachesItsOwnersBrowsersOnce(t *testing.T) {
 	var gone bool
 	if err := owner.QueryRow(ctx, `SELECT NOT EXISTS (SELECT 1 FROM push_subscriptions WHERE endpoint = $1)`, push.URL+"/stale").Scan(&gone); err != nil || !gone {
 		t.Errorf("a subscription its push service says is gone was kept")
+	}
+}
+
+// An ask on a task nobody owns reaches every active person's browser, a
+// person whose only key is revoked included, and never the browser a
+// removed person left behind.
+func TestAnUnownedAskSkipsRemovedPeople(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	org := dbtest.Org(t, owner)
+	ctx := context.Background()
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := owner.Exec(ctx, sql, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	active, revoked, removed := "per_active_"+org, "per_revoked_"+org, "per_removed_"+org
+	exec(`INSERT INTO people (id, organization_id, name) VALUES ($1, $4, 'Active'), ($2, $4, 'Revoked'), ($3, $4, 'Removed')`,
+		active, revoked, removed, org)
+	exec(`INSERT INTO api_keys (id, organization_id, person_id, name, key_hash, key_prefix) VALUES ($1, $2, $3, $1, $1, 'dude_sk_')`,
+		"key_revoked_"+org, org, revoked)
+	exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ($1, $2, 'P', $1, 'UNOWN')`, "prj_"+org, org)
+	exec(`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES ($1, $2, $3, 7, 'Nobody owns this')`,
+		"wi_"+org, org, "prj_"+org)
+
+	// Every browser has valid keys, so a delivery to the removed one would
+	// be received and decrypted like any other.
+	browsers := map[string]*browser{active: newBrowser(t), revoked: newBrowser(t), removed: newBrowser(t)}
+	var mu sync.Mutex
+	recipients := map[string]int{}
+	mux := http.NewServeMux()
+	for person, b := range browsers {
+		mux.Handle("/"+person, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			recipients[person]++
+			mu.Unlock()
+			b.ServeHTTP(w, r)
+		}))
+	}
+	push := httptest.NewServer(mux)
+	t.Cleanup(push.Close)
+	for person, b := range browsers {
+		p256dh, auth := b.keys()
+		exec(`INSERT INTO push_subscriptions (endpoint, organization_id, person_id, api_key_id, p256dh, auth)
+			VALUES ($1, $2, $3, (SELECT id FROM api_keys WHERE person_id = $3), $4, $5)`,
+			push.URL+"/"+person, org, person, p256dh, auth)
+	}
+	// Revoking a key keeps its person and their browser; removal keeps the
+	// subscription row here, as a row a removal left behind would be.
+	exec(`UPDATE api_keys SET revoked_at = now() WHERE id = $1`, "key_revoked_"+org)
+	exec(`UPDATE people SET removed_at = now() WHERE id = $1`, removed)
+	var kept int
+	if err := owner.QueryRow(ctx, `SELECT count(*) FROM push_subscriptions WHERE organization_id = $1`, org).Scan(&kept); err != nil || kept != 3 {
+		t.Fatalf("subscriptions before the sweep = %d, %v; want all 3", kept, err)
+	}
+
+	n := &notify.Notifier{DB: app, Log: slog.New(slog.DiscardHandler), Subject: "ops@example.com", HTTP: push.Client()}
+	if _, _, err := n.Keys(ctx); err != nil {
+		t.Fatal(err)
+	}
+	exec(`UPDATE push_config SET after_cursor = (SELECT COALESCE(max(cursor), 0) FROM events)`)
+	exec(`INSERT INTO events (id, organization_id, event_type, project_id, task_id, actor_type, actor_id, source, payload)
+		VALUES ($1, $2, 'question.asked', $3, $4, 'system', 'orchestrator', 'orchestrator', '{"kind":"agent","prompt":"Which locale?"}')`,
+		"evt_q_"+org, org, "prj_"+org, "wi_"+org)
+	for range 5 {
+		if _, err := n.Sweep(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := map[string]int{active: 1, revoked: 1}
+	if len(recipients) != len(want) || recipients[active] != 1 || recipients[revoked] != 1 {
+		t.Fatalf("push deliveries by person = %v, want %v", recipients, want)
+	}
+	for _, person := range []string{active, revoked} {
+		b := browsers[person]
+		b.mu.Lock()
+		got := b.got
+		b.mu.Unlock()
+		if len(got) != 1 || got[0].Title != "UNOWN-7 asks" || got[0].Body != "Which locale?" {
+			t.Errorf("%s's browser got %+v", person, got)
+		}
 	}
 }

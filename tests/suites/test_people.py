@@ -12,7 +12,7 @@ import threading
 
 import requests
 
-from helpers import ApiClient, create_api_key, execute, query, wait_until
+from helpers import ApiClient, create_api_key, execute, query, sign_in, wait_until
 
 
 def _invite(admin: ApiClient, env, name: str, role: str = "member") -> tuple[dict, ApiClient]:
@@ -297,12 +297,7 @@ from playwright.sync_api import Page, expect  # noqa: E402
 
 
 def _sign_in(page: Page, web_url: str, api_key: str) -> None:
-    page.goto(web_url)
-    page.evaluate("localStorage.clear()")
-    page.goto(web_url)
-    page.fill('input[type="password"]', api_key)
-    page.click('button[type="submit"]')
-    expect(page.get_by_test_id("shell")).to_be_visible()
+    sign_in(page, web_url, api_key)
 
 
 @pytest.mark.ui

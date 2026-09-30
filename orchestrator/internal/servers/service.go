@@ -117,7 +117,8 @@ const runSelect = `SELECT r.id, r.project_id, r.task_id, r.kind, r.status::text,
 	COALESCE(r.lux_run_id, ''), COALESCE(r.lux_state, ''), COALESCE(r.branch, ''), r.base_shas, r.lux_repositories,
 	r.started_at,
 	(SELECT json_build_object('id', p.id, 'name', p.name) FROM people p WHERE p.id = CASE WHEN r.kind = 'preview'
-		THEN r.started_by ELSE (SELECT k.person_id FROM tasks t JOIN api_keys k ON k.id = t.owner_key_id WHERE t.id = r.task_id) END),
+		THEN r.started_by ELSE (SELECT p.id FROM task_people tp JOIN people p ON p.id = tp.person_id
+			WHERE tp.task_id = r.task_id AND p.removed_at IS NULL ORDER BY tp.position, tp.person_id LIMIT 1) END),
 	(SELECT preview_settings(pr) FROM projects pr WHERE pr.id = r.project_id),
 	ARRAY(SELECT s.name FROM project_servers s WHERE s.project_id = r.project_id AND COALESCE(s.setup, '') <> '')
 	FROM runs r`

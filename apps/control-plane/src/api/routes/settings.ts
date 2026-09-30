@@ -41,6 +41,7 @@ import { withOrg, type OrgScope } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { canEditProject, isOrgAdmin, requireOrgAdmin, requireProjectEditor } from "../access.ts";
 import { badRequest, HttpError, json, notFound, parseBody } from "../http.ts";
+import { auditActor } from "../auth.ts";
 import type { RequestContext, Router } from "../router.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
 
@@ -112,7 +113,7 @@ interface VersionRow {
 const VERSION_SELECT = `v.id, v.project_id AS "projectId", v.role, v.mode, v.body, v.note, v.created_at AS "createdAt",
   COALESCE(k.person_id, v.created_by) AS "createdById", COALESCE(p.name, k.name) AS "createdByName", v.restored_from AS "restoredFrom",
   (row_number() OVER w)::int AS number, (count(*) OVER (PARTITION BY v.role, v.project_id))::int AS total`;
-const VERSION_FROM = `prompt_versions v LEFT JOIN api_keys k ON k.id = v.created_by LEFT JOIN people p ON p.id = k.person_id`;
+const VERSION_FROM = `prompt_versions v LEFT JOIN api_keys k ON k.id = v.created_by LEFT JOIN people p ON p.id = COALESCE(k.person_id, v.created_by)`;
 const VERSION_WINDOW = `WINDOW w AS (PARTITION BY v.role, v.project_id ORDER BY v.created_at, v.id)`;
 
 /** Every version of the prompts at one layer (the organization's with no project), newest first. */
@@ -266,7 +267,7 @@ async function recordSettings(scope: OrgScope, ctx: RequestContext, projectId: s
     eventType: EventTypes.SettingsUpdated,
     organizationId: ctx.principal.organizationId,
     projectId,
-    actor: { type: "human", id: ctx.principal.apiKeyId },
+    actor: { type: auditActor(ctx.principal).kind, id: auditActor(ctx.principal).id },
     source: "control-plane",
     payload: { scope: projectId ? "project" : "organization", ...(projectId ? { projectId } : {}), changed: patch },
   });
@@ -410,12 +411,12 @@ async function insertVersion(
   const id = newId("promptVersion");
   await scope.sql`
     INSERT INTO prompt_versions (id, organization_id, project_id, role, mode, body, note, created_by, restored_from)
-    VALUES (${id}, ${scope.organizationId}, ${projectId}, ${role}, ${mode}, ${body}, ${note}, ${ctx.principal.apiKeyId}, ${restoredFrom})`;
+    VALUES (${id}, ${scope.organizationId}, ${projectId}, ${role}, ${mode}, ${body}, ${note}, ${auditActor(ctx.principal).id}, ${restoredFrom})`;
   await appendInScope(scope, {
     eventType: EventTypes.PromptSaved,
     organizationId: scope.organizationId,
     projectId,
-    actor: { type: "human", id: ctx.principal.apiKeyId },
+    actor: { type: auditActor(ctx.principal).kind, id: auditActor(ctx.principal).id },
     source: "control-plane",
     payload: { role, versionId: id, ...(projectId ? { projectId, mode } : {}), ...(restoredFrom ? { restoredFrom } : {}) },
   });

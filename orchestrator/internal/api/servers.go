@@ -75,11 +75,11 @@ func (s *Server) serverRoutes(mux *http.ServeMux) {
 		return answer(w, http.StatusOK, out, err)
 	}))
 	mux.Handle("POST /internal/tasks/{id}/preview", h(func(w http.ResponseWriter, r *http.Request, org string) error {
-		out, err := s.Servers.StartPreview(r.Context(), org, r.PathValue("id"), actor(r))
+		out, err := s.Servers.StartPreview(r.Context(), org, r.PathValue("id"), actor(r), principalOf(r).ActorType, principalOf(r).Person)
 		return answer(w, http.StatusCreated, out, err)
 	}))
 	mux.Handle("DELETE /internal/tasks/{id}/preview", h(func(w http.ResponseWriter, r *http.Request, org string) error {
-		out, err := s.Servers.StopPreview(r.Context(), org, r.PathValue("id"), actor(r))
+		out, err := s.Servers.StopPreview(r.Context(), org, r.PathValue("id"), actor(r), principalOf(r).ActorType, principalOf(r).Person)
 		return answer(w, http.StatusOK, out, err)
 	}))
 }

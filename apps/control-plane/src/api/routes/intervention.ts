@@ -28,7 +28,7 @@ const DIRECTIVE_SELECT = `
 function forward(action: "steer" | "pause" | "resume" | "abort") {
   return async (ctx: RequestContext): Promise<Response> =>
     orchestrator(ctx.principal.organizationId, "POST", `/internal/runs/${ctx.params.id}/${action}`,
-      await ctx.request.text(), ctx.principal.apiKeyId);
+      await ctx.request.text(), ctx.principal);
 }
 
 /** Directives issued for a Run, newest first. */
@@ -65,7 +65,7 @@ async function listQuestions(ctx: RequestContext): Promise<Response> {
 /** Answer a question: the orchestrator records it and gives it to the agent. */
 async function answerQuestion(ctx: RequestContext): Promise<Response> {
   return orchestrator(ctx.principal.organizationId, "POST", `/internal/questions/${ctx.params.id}/answer`,
-    await ctx.request.text(), ctx.principal.apiKeyId);
+    await ctx.request.text(), ctx.principal);
 }
 
 /**
@@ -92,7 +92,7 @@ async function listRepositoryRequests(ctx: RequestContext): Promise<Response> {
 /** Approve or decline: the orchestrator records it and carries it out. */
 async function decideRepositoryRequest(ctx: RequestContext): Promise<Response> {
   return orchestrator(ctx.principal.organizationId, "POST", `/internal/repository-requests/${ctx.params.id}/decide`,
-    await ctx.request.text(), ctx.principal.apiKeyId);
+    await ctx.request.text(), ctx.principal);
 }
 
 export function registerInterventionRoutes(router: Router): void {

@@ -27,8 +27,13 @@ func (m memoryAPI) do(t *testing.T, method, path, body string, headers ...string
 	req, _ := http.NewRequest(method, m.url+path, strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer svc")
 	req.Header.Set("X-Dude-Organization", m.org)
-	req.Header.Set("X-Dude-Actor", "key_1")
+	req.Header.Set("X-Dude-Credential-Kind", "person")
+	req.Header.Set("X-Dude-Person", "per_ana")
+	req.Header.Set("X-Dude-Actor", "per_ana")
 	for i := 0; i+1 < len(headers); i += 2 {
+		if headers[i] == "X-Dude-Person" {
+			req.Header.Set("X-Dude-Actor", headers[i+1])
+		}
 		req.Header.Set(headers[i], headers[i+1])
 	}
 	if body != "" {
@@ -87,6 +92,9 @@ func TestAPersonAddsAMemoryAndOnlyTheyOrAnAdminChangeIt(t *testing.T) {
 	}
 	if status, out := m.do(t, "PATCH", "/internal/memory/memories/"+id, `{"title": "Ana's edit"}`, "X-Dude-Person", "per_ana"); status != 200 || out["title"] != "Ana's edit" {
 		t.Errorf("Ana's own edit: %d %v", status, out)
+	}
+	if _, err := m.owner.Exec(context.Background(), `UPDATE people SET role = 'admin' WHERE id = 'per_bo'`); err != nil {
+		t.Fatal(err)
 	}
 	if status, out := m.do(t, "POST", "/internal/memory/memories/"+id+"/archive", "", "X-Dude-Person", "per_bo", "X-Dude-Role", "admin"); status != 200 || out["archivedAt"] == nil {
 		t.Errorf("an admin's archive: %d %v", status, out)

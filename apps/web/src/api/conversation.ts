@@ -732,7 +732,7 @@ function withoutQuestion(text: string): string {
  */
 export function humanActor(event: PersistedEvent): ActorRef | null {
   const actor = event.actor as PersistedEvent["actor"] & { name?: unknown };
-  if (actor?.type !== "human" || !actor.id || actor.id === "unknown") return null;
+  if ((actor?.type !== "human" && actor?.type !== "person") || !actor.id || actor.id === "unknown") return null;
   return { id: actor.id, name: typeof actor.name === "string" && actor.name ? actor.name : null };
 }
 
