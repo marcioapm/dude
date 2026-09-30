@@ -70,7 +70,12 @@ export async function orchestratorStream(organizationId: string, path: string): 
 function identity(actor: string | Principal | undefined): Record<string, string> {
   if (!actor) return {};
   if (typeof actor === "string") return { "x-dude-actor": actor };
-  return { "x-dude-actor": actor.apiKeyId, "x-dude-person": actor.personId, "x-dude-role": actor.role };
+  return {
+    "x-dude-credential-kind": actor.credentialKind,
+    "x-dude-actor": actor.credentialKind === "api_key" ? actor.apiKeyId : actor.personId,
+    "x-dude-person": actor.personId,
+    "x-dude-role": actor.role,
+  };
 }
 
 async function call(organizationId: string, method: string, path: string, init: RequestInit): Promise<Response> {

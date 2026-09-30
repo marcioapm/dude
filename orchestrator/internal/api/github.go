@@ -276,7 +276,7 @@ func (s *Server) pullRequestAction(w http.ResponseWriter, r *http.Request, org s
 	out["number"], out["repo"] = pr.Number, pr.Repo
 	if err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		return humanEvent(r.Context(), tx, org, "", runInfo{ProjectID: pr.ProjectID, TaskID: pr.TaskID},
-			delivery.EvPullRequestAction, actor(r), out)
+			delivery.EvPullRequestAction, principalOf(r), out)
 	}); err != nil {
 		return err
 	}

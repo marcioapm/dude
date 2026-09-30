@@ -123,27 +123,58 @@ func (s *Server) Handler() http.Handler {
 
 type handler func(w http.ResponseWriter, r *http.Request, org string) error
 
-// actor is who the backend says made the request.
+// Human identity is resolved against current organization membership; identity-free
+// service requests carry no person or admin authority.
 func actor(r *http.Request) string {
 	return principalOf(r).Actor
 }
 
-// principal is who the backend says is asking, as it sends it on every
-// call: the key acting, its person, and whether they are an admin. The
-// backend has authenticated them; this trusts it for that, as for the
-// organization.
 type principal struct {
-	Actor, Person string
-	Admin         bool
+	Actor, Person, ActorType string
+	Admin                    bool
 }
 
+type principalContextKey struct{}
+
 func principalOf(r *http.Request) principal {
-	p := principal{Actor: r.Header.Get("X-Dude-Actor"), Person: r.Header.Get("X-Dude-Person"),
-		Admin: r.Header.Get("X-Dude-Role") == "admin"}
-	if p.Actor == "" {
-		p.Actor = "unknown"
-	}
+	p, _ := r.Context().Value(principalContextKey{}).(principal)
 	return p
+}
+
+func (s *Server) resolvePrincipal(r *http.Request, org string) (principal, error) {
+	p := principal{Actor: r.Header.Get("X-Dude-Actor"), Person: r.Header.Get("X-Dude-Person"), ActorType: ledger.ActorHuman}
+	kind := r.Header.Get("X-Dude-Credential-Kind")
+	if p.Actor == "" && p.Person == "" && kind == "" {
+		return principal{Actor: "unknown", ActorType: ledger.ActorSystem}, nil
+	}
+	if kind != "" && kind != "api_key" && kind != "person" {
+		return p, fail(http.StatusForbidden, "invalid_principal", "invalid credential kind")
+	}
+	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+		var role, personID string
+		var err error
+		if kind == "person" {
+			if p.Person == "" || p.Actor != p.Person {
+				return fail(http.StatusForbidden, "invalid_principal", "invalid person actor")
+			}
+			p.ActorType = "person"
+			err = tx.QueryRow(r.Context(), `SELECT id, role FROM people
+				WHERE id = $1 AND organization_id = $2 AND removed_at IS NULL`, p.Person, org).Scan(&personID, &role)
+		} else {
+			err = tx.QueryRow(r.Context(), `SELECT p.id, p.role FROM api_keys k JOIN people p ON p.id = k.person_id
+				WHERE k.id = $1 AND k.organization_id = $2 AND p.organization_id = $2
+				AND k.kind = 'user' AND k.revoked_at IS NULL AND p.removed_at IS NULL`, p.Actor, org).Scan(&personID, &role)
+		}
+		if db.IsNotFound(err) || err == nil && p.Person != "" && p.Person != personID {
+			return fail(http.StatusForbidden, "invalid_principal", "principal is not an active organization member")
+		}
+		if err != nil {
+			return err
+		}
+		p.Person, p.Admin = personID, role == "admin"
+		return nil
+	})
+	return p, err
 }
 
 // split reads a comma-separated query value.
@@ -182,7 +213,12 @@ func (s *Server) auth(h handler) http.Handler {
 			write(w, http.StatusBadRequest, errBody("bad_request", "X-Dude-Organization is required"))
 			return
 		}
-		if err := h(w, r, org); err != nil {
+		p, err := s.resolvePrincipal(r, org)
+		if err == nil {
+			r = r.WithContext(context.WithValue(r.Context(), principalContextKey{}, p))
+			err = h(w, r, org)
+		}
+		if err != nil {
 			var he *httpError
 			if errors.As(err, &he) {
 				write(w, he.status, errBody(he.code, he.message))
@@ -315,36 +351,26 @@ func insertDirective(ctx context.Context, tx pgx.Tx, org, runID string, ri runIn
 		delivery.Directive{Text: text, Scope: scope, Supersedes: supersedes, Interrupt: interrupt})
 }
 
-// ownerOnly refuses anyone but a task's owner a decision that is theirs
-// to make — answering its agents, letting them at a repository — naming
-// who can. The owner is a person, with any number of keys: any of theirs
-// will do. A task with no owner (from before there were owners, or whose
-// owner's key is gone or revoked: they can no longer sign in) is anyone's.
-func ownerOnly(ctx context.Context, tx pgx.Tx, taskID, actor, verb string) error {
+// ownerOnly uses the first active ordered member, independent of credentials.
+func ownerOnly(ctx context.Context, tx pgx.Tx, taskID, personID, verb string) error {
 	var ownerID, ownerName *string
-	var mine bool
-	if err := tx.QueryRow(ctx, `SELECT k.id, COALESCE(p.name, k.name),
-			COALESCE(k.id = $2 OR k.person_id = (SELECT a.person_id FROM api_keys a WHERE a.id = $2), false)
-		FROM tasks t
-		LEFT JOIN api_keys k ON k.id = t.owner_key_id AND k.revoked_at IS NULL
-		LEFT JOIN people p ON p.id = k.person_id
-		WHERE t.id = $1`, taskID, actor).Scan(&ownerID, &ownerName, &mine); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT owner.id, owner.name FROM tasks t
+		LEFT JOIN LATERAL (SELECT p.id, p.name FROM task_people tp JOIN people p ON p.id = tp.person_id
+			WHERE tp.task_id = t.id AND p.removed_at IS NULL
+			ORDER BY tp.position, tp.person_id LIMIT 1) owner ON true
+		WHERE t.id = $1`, taskID).Scan(&ownerID, &ownerName); err != nil {
 		return err
 	}
-	if ownerID == nil || mine {
+	if ownerID == nil || *ownerID == personID {
 		return nil
 	}
-	name := *ownerID
-	if ownerName != nil {
-		name = *ownerName
-	}
-	return fail(http.StatusForbidden, "not_owner", "only %s can %s this — reassign the task to %s it", name, verb, verb)
+	return fail(http.StatusForbidden, "not_owner", "only %s can %s this — reassign the task to %s it", *ownerName, verb, verb)
 }
 
-func humanEvent(ctx context.Context, tx pgx.Tx, org, runID string, ri runInfo, typ, actor string, payload map[string]any) error {
+func humanEvent(ctx context.Context, tx pgx.Tx, org, runID string, ri runInfo, typ string, p principal, payload map[string]any) error {
 	_, err := ledger.Append(ctx, tx, ledger.Event{
 		Type: typ, OrganizationID: org, ProjectID: ri.ProjectID, TaskID: ri.TaskID, RunID: runID,
-		ActorType: ledger.ActorHuman, ActorID: actor, Source: ledger.SourceOrchestrator,
+		ActorType: p.ActorType, ActorID: p.Actor, Source: ledger.SourceOrchestrator,
 		CorrelationID: ri.TaskID, Payload: payload,
 	})
 	return err
@@ -388,7 +414,7 @@ func (s *Server) steer(w http.ResponseWriter, r *http.Request, org string) error
 		out = map[string]any{"id": id, "runId": runID, "taskId": ri.TaskID, "text": body.Text,
 			"scope": body.Scope, "supersedes": db.Nullable(body.Supersedes), "interrupt": body.Interrupt,
 			"deliveredAt": nil, "createdAt": createdAt}
-		return humanEvent(r.Context(), tx, org, runID, ri, "run.steered", actor(r), map[string]any{
+		return humanEvent(r.Context(), tx, org, runID, ri, "run.steered", principalOf(r), map[string]any{
 			"directiveId": id, "text": body.Text, "scope": body.Scope, "supersedes": db.Nullable(body.Supersedes),
 			"interrupt": body.Interrupt})
 	})
@@ -437,7 +463,7 @@ func (s *Server) pause(w http.ResponseWriter, r *http.Request, org string) error
 		if mode == "" {
 			mode = "graceful"
 		}
-		return humanEvent(r.Context(), tx, org, runID, ri, "run.paused", actor(r),
+		return humanEvent(r.Context(), tx, org, runID, ri, "run.paused", principalOf(r),
 			map[string]any{"mode": mode, "requested": true, "reason": db.Nullable(body.Reason)})
 	})
 	if err != nil {
@@ -470,7 +496,7 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request, org string) erro
 			control_reason = $2 WHERE id = $1`, runID, db.Nullable(body.Reason)); err != nil {
 			return err
 		}
-		return humanEvent(r.Context(), tx, org, runID, ri, "run.resumed", actor(r), map[string]any{"reason": db.Nullable(body.Reason)})
+		return humanEvent(r.Context(), tx, org, runID, ri, "run.resumed", principalOf(r), map[string]any{"reason": db.Nullable(body.Reason)})
 	})
 	if err != nil {
 		return err
@@ -517,7 +543,7 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 		if !isLive(ri.Status) {
 			return fail(http.StatusConflict, "conflict", "run %s is %s and can no longer be answered", runID, ri.Status)
 		}
-		if err := ownerOnly(r.Context(), tx, ri.TaskID, actor(r), "answer"); err != nil {
+		if err := ownerOnly(r.Context(), tx, ri.TaskID, principalOf(r).Person, "answer"); err != nil {
 			return err
 		}
 		var answeredAt any
@@ -538,7 +564,7 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 			return err
 		}
 		out = map[string]any{"id": questionID, "runId": runID, "status": "answered", "answer": body.Text, "answeredAt": answeredAt}
-		return humanEvent(r.Context(), tx, org, runID, ri, "question.answered", actor(r),
+		return humanEvent(r.Context(), tx, org, runID, ri, "question.answered", principalOf(r),
 			map[string]any{"questionId": questionID, "answer": body.Text, "directiveId": directiveID})
 	})
 	if err != nil {
@@ -577,7 +603,7 @@ func (s *Server) abort(w http.ResponseWriter, r *http.Request, org string) error
 			"a person aborted a run"); err != nil {
 			return err
 		}
-		return humanEvent(r.Context(), tx, org, runID, ri, "run.aborted", actor(r), map[string]any{"reason": db.Nullable(body.Reason)})
+		return humanEvent(r.Context(), tx, org, runID, ri, "run.aborted", principalOf(r), map[string]any{"reason": db.Nullable(body.Reason)})
 	})
 	if err != nil {
 		return err
@@ -741,7 +767,7 @@ func (s *Server) decideEscalation(w http.ResponseWriter, r *http.Request, org st
 			return fail(http.StatusBadRequest, "bad_request", "%q is not a way to go on after %s; one of %s",
 				body.Action, e.Reason, strings.Join(e.Actions(), ", "))
 		}
-		if err := ownerOnly(r.Context(), tx, taskID, actor(r), "decide"); err != nil {
+		if err := ownerOnly(r.Context(), tx, taskID, principalOf(r).Person, "decide"); err != nil {
 			return err
 		}
 		// Taken now, in the workflow's own state: a second decision is
@@ -761,7 +787,7 @@ func (s *Server) decideEscalation(w http.ResponseWriter, r *http.Request, org st
 				return err
 			}
 		}
-		return humanEvent(r.Context(), tx, org, "", runInfo{ProjectID: projectID, TaskID: taskID}, "task.decided", actor(r),
+		return humanEvent(r.Context(), tx, org, "", runInfo{ProjectID: projectID, TaskID: taskID}, "task.decided", principalOf(r),
 			map[string]any{"reason": e.Reason, "action": body.Action, "note": e.Decided.Note})
 	})
 	if err != nil {
@@ -813,7 +839,7 @@ func (s *Server) decideRepositoryRequest(w http.ResponseWriter, r *http.Request,
 		if err := stillOpen("repository request", id, status, "pending"); err != nil {
 			return err
 		}
-		if err := ownerOnly(r.Context(), tx, taskID, actor(r), "decide"); err != nil {
+		if err := ownerOnly(r.Context(), tx, taskID, principalOf(r).Person, "decide"); err != nil {
 			return err
 		}
 		decision := "denied"
@@ -858,7 +884,7 @@ func (s *Server) decideRepositoryRequest(w http.ResponseWriter, r *http.Request,
 			}
 		}
 		out = map[string]any{"id": id, "status": decision}
-		return humanEvent(r.Context(), tx, org, runID, ri, "repository."+decision, actor(r),
+		return humanEvent(r.Context(), tx, org, runID, ri, "repository."+decision, principalOf(r),
 			map[string]any{"requestId": id, "repository": repoName, "access": access, "note": body.Note})
 	})
 	if err != nil {
