@@ -327,3 +327,45 @@ def test_tooltips_draw_a_key_list_as_caps_and_a_string_as_it_is(gallery_page: Pa
     expect(string_tip).to_be_visible()
     expect(string_tip.locator("kbd")).to_have_text(["⏎"])
     assert console_errors == []
+
+
+# The space between the children of the nearest common ancestor of two elements that hold `a` and `b`.
+_GAP_BETWEEN = """([a, b]) => {
+  let child = a;
+  while (!child.parentElement.contains(b)) child = child.parentElement;
+  let next = b;
+  while (next.parentElement !== child.parentElement) next = next.parentElement;
+  return next.getBoundingClientRect().top - child.getBoundingClientRect().bottom;
+}"""
+
+
+def test_compact_tightens_a_filled_form_stack_and_leaves_a_plain_one(gallery_page: Page, console_errors: list):
+    """The task dialog's fields are a filled FormStack; compact draws them closer. The Form layout example is not filled."""
+    gaps = {}
+    for density in ("comfortable", "compact"):
+        gallery_page.locator("nav").get_by_role("combobox", name="Density").click()
+        gallery_page.get_by_role("option", name=density.capitalize(), exact=True).click()
+        expect(gallery_page.locator("#p-dialog [data-density]").first).to_have_attribute("data-density", density)
+
+        gallery_page.get_by_role("link", name="Dialog", exact=True).click()
+        gallery_page.locator("#p-dialog").get_by_role("button", name="Task dialog").first.click()
+        dialog = gallery_page.get_by_role("dialog", name="New task")
+        expect(dialog).to_be_visible()
+        # The dialog pops in with a scale; measure once it has settled.
+        gallery_page.wait_for_function(
+            "document.querySelector('[role=dialog]').getAnimations().every(a => a.playState === 'finished')")
+        title = dialog.get_by_role("textbox", name="Title")
+        goal = dialog.get_by_role("textbox", name="Goal")
+        filled = gallery_page.evaluate(_GAP_BETWEEN, [title.element_handle(), goal.element_handle()])
+        gallery_page.keyboard.press("Escape")
+        expect(dialog).to_have_count(0)
+
+        form = gallery_page.locator("#p-form")
+        callout = form.get_by_text("url must be an https, ssh or git:// URL").first
+        rounds = form.get_by_role("textbox", name="Review rounds").first
+        plain = gallery_page.evaluate(_GAP_BETWEEN, [callout.element_handle(), rounds.element_handle()])
+        gaps[density] = (filled, plain)
+
+    assert gaps["compact"][0] < gaps["comfortable"][0], gaps
+    assert gaps["compact"][1] == gaps["comfortable"][1], gaps
+    assert console_errors == []
