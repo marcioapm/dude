@@ -15,6 +15,31 @@ export interface CostProps extends Omit<HTMLAttributes<HTMLSpanElement>, "childr
   readonly machineMs?: number | undefined;
   readonly size?: "sm" | "md" | "lg" | undefined;
   readonly tone?: "default" | "secondary" | "muted" | undefined;
+  /**
+   * Who priced the tokens: `"lux"` (the runtime's metering) or `"agent"`
+   * (the harness's own figure, an estimate). Absent: the tooltip says nothing
+   * of where the numbers came from.
+   */
+  readonly tokensFrom?: CostOrigin | undefined;
+  /** Who priced the machine time: `"lux"` or dude's own `"estimate"`. */
+  readonly machineFrom?: "lux" | "estimate" | undefined;
+  /** lux has settled its figures (its cost is final). Only read for a part from lux. */
+  readonly settled?: boolean | undefined;
+}
+
+export type CostOrigin = "lux" | "agent";
+
+/** "· reported by lux" for a settled lux figure; every other origin is an estimate. */
+function tokensNote(from: CostOrigin | undefined, settled: boolean): string {
+  if (from === undefined) return "";
+  if (from === "lux") return settled ? " · reported by lux" : " · estimate, lux settling";
+  return " · estimate";
+}
+
+function machineNote(from: "lux" | "estimate" | undefined, settled: boolean): string {
+  if (from === undefined) return "";
+  if (from === "lux") return settled ? " · lux" : " · lux, settling";
+  return " · estimated";
 }
 
 /**
@@ -25,8 +50,13 @@ export interface CostProps extends Omit<HTMLAttributes<HTMLSpanElement>, "childr
  * Until machine time is measured the total is the tokens alone — the
  * hairline is one colour and the tooltip says machine time is not
  * counted yet. An unreported cost is "—" with a title, never $0.00.
+ *
+ * With `tokensFrom` / `machineFrom` each part also says where it came
+ * from and whether it is settled: only a lux figure lux has made final is
+ * "reported"; the rest are estimates and say so.
  */
-export function Cost({ tokensUsd, machineUsd, tokens, machineMs, size = "md", tone = "default", className, ...rest }: CostProps) {
+export function Cost({ tokensUsd, machineUsd, tokens, machineMs, size = "md", tone = "default",
+  tokensFrom, machineFrom, settled = false, className, ...rest }: CostProps) {
   if (tokensUsd === null && (machineUsd === null || machineUsd === undefined)) {
     return (
       <span className={cx(styles["unknown"], styles[size], className)} title="Cost not reported" aria-label="Cost not reported" {...rest}>
@@ -39,16 +69,19 @@ export function Cost({ tokensUsd, machineUsd, tokens, machineMs, size = "md", to
   const mach = machineKnown ? machineUsd : 0;
   const total = tok + mach;
   const share = total > 0 ? Math.round((tok / total) * 100) : 100;
+  const tokensSource = tokensUsd === null ? "" : tokensNote(tokensFrom, settled);
+  const machineSource = machineKnown ? machineNote(machineFrom, settled) : "";
   const tip = (
     <span className={styles["tip"]}>
       <span className={styles["tipTotal"]}>{formatUsd(total)} total</span>
-      <span>
+      <span data-part="tokens">
         Model tokens {tokensUsd === null ? "not reported" : formatUsd(tok)}
         {tokens !== undefined ? ` (${formatTokens(tokens)} tokens)` : ""}
+        {tokensSource}
       </span>
-      <span>
+      <span data-part="machine">
         {machineKnown
-          ? `Machine time ${formatUsd(mach)}${machineMs !== undefined ? ` (${formatDuration(machineMs)})` : ""}`
+          ? `Machine time ${formatUsd(mach)}${machineMs !== undefined ? ` (${formatDuration(machineMs)})` : ""}${machineSource}`
           : "Machine time not counted yet"}
       </span>
     </span>
@@ -58,7 +91,7 @@ export function Cost({ tokensUsd, machineUsd, tokens, machineMs, size = "md", to
       <span
         className={cx(styles["root"], styles[size], tone !== "default" && styles[tone], className)}
         tabIndex={0}
-        aria-label={`${formatUsd(total)}: model tokens ${formatUsd(tok)}${machineKnown ? `, machine time ${formatUsd(mach)}` : ""}`}
+        aria-label={`${formatUsd(total)}: model tokens ${formatUsd(tok)}${tokensSource}${machineKnown ? `, machine time ${formatUsd(mach)}${machineSource}` : ""}`}
         data-split={machineKnown ? "both" : "tokens"}
         {...rest}
       >

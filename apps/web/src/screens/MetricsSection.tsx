@@ -19,12 +19,18 @@ import { reportedCost } from "../api/client.ts";
  */
 
 /**
- * A cost as a total of model tokens and machine time. Tokens of zero are
- * "not reported", never $0.00 — as the run's header shows them.
+ * A cost as a total of model tokens and machine time. The harness's zero
+ * is "not reported", never $0.00 — as the run's header shows it; lux's
+ * zero is a price. The tooltip says who priced each half, when known.
  */
 function CostOf({ cost, tokens, activeMs, size }: { cost: CostSplit; tokens?: number; activeMs?: number; size?: "sm" | "md" | "lg" }) {
+  const origin = cost.origin;
+  const luxTokens = origin?.tokens === "lux";
+  const luxMachine = origin?.machine === "lux";
   return (
-    <Cost tokensUsd={reportedCost(cost.tokensUsd)} machineUsd={cost.machineUsd > 0 ? cost.machineUsd : null}
+    <Cost tokensUsd={luxTokens ? cost.tokensUsd : reportedCost(cost.tokensUsd)}
+      machineUsd={luxMachine || cost.machineUsd > 0 ? cost.machineUsd : null}
+      {...(origin ? { tokensFrom: origin.tokens, machineFrom: origin.machine, settled: origin.settled } : {})}
       {...(tokens !== undefined ? { tokens } : {})} {...(activeMs !== undefined ? { machineMs: activeMs } : {})} size={size} />
   );
 }

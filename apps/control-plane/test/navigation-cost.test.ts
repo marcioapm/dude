@@ -85,6 +85,18 @@ test("a task's spend on the board is its agents' effective model cost, the task 
   expect(board.costUsd).toBeCloseTo(1.810247 + 0.25, 9);
 
   const metrics = (await (await router.handle(new Request("http://dude.test/v1/tasks/wi_1/metrics",
-    { headers: { authorization: `Bearer ${key}` } }))).json()) as { costUsd: number };
+    { headers: { authorization: `Bearer ${key}` } }))).json()) as {
+    costUsd: number;
+    cost: { origin?: unknown };
+    runs: Array<{ id: string; cost: { tokensUsd: number; origin?: unknown } }>;
+  };
   expect(board.costUsd).toBeCloseTo(metrics.costUsd, 9);
+
+  // Who priced it: lux for the Run it priced, settled; the task's total is
+  // lux's only where every Run's is.
+  const impl = metrics.runs.find((r) => r.id === "run_impl")!;
+  expect(impl.cost.tokensUsd).toBeCloseTo(1.810247, 9);
+  expect(impl.cost.origin).toEqual({ tokens: "lux", machine: "estimate", settled: true });
+  expect(metrics.runs.find((r) => r.id === "run_rev")!.cost.origin).toEqual({ tokens: "agent", machine: "estimate", settled: false });
+  expect(metrics.cost.origin).toEqual({ tokens: "agent", machine: "estimate", settled: false });
 });

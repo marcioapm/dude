@@ -5,7 +5,7 @@
  * Runs already record; seconds in the database, milliseconds here.
  */
 
-import { costSplit } from "@dude/domain";
+import { costSplit, type CostOrigin } from "@dude/domain";
 import { withOrg } from "../../db/client.ts";
 import { json, notFound } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
@@ -16,20 +16,40 @@ const tokens = (row: Record<string, unknown>) => ({ input: Number(row.input_toke
 
 /**
  * What it cost, both ways: `costUsd` stays the model's tokens, as it always
- * was, and `cost` is the whole, split into tokens and machine time.
+ * was, and `cost` is the whole, split into tokens and machine time. With
+ * `lux_ai`, `lux_compute` and `lux_final` (booleans: every Run counted has
+ * one) the split says who priced it.
  */
 const costs = (row: Record<string, unknown>) => ({
   costUsd: Number(row.cost_usd),
-  cost: costSplit(Number(row.cost_usd), Number(row.machine_usd)),
+  cost: costSplit(Number(row.cost_usd), Number(row.machine_usd), origin(row)),
 });
+
+function origin(row: Record<string, unknown>): CostOrigin | undefined {
+  if (row.lux_ai === undefined) return undefined;
+  return {
+    tokens: row.lux_ai === true ? "lux" : "agent",
+    machine: row.lux_compute === true ? "lux" : "estimate",
+    settled: row.lux_final === true,
+  };
+}
+
+// Who priced a set of agents' Runs: lux, only where it priced every one.
+const ORIGIN_COLUMNS = `COALESCE(bool_and(r.lux_ai_usd IS NOT NULL), false) AS lux_ai,
+  COALESCE(bool_and(r.lux_compute_usd IS NOT NULL), false) AS lux_compute,
+  COALESCE(bool_and(r.lux_cost_status IS NOT DISTINCT FROM 'final'), false) AS lux_final`;
 
 async function taskMetrics(ctx: RequestContext): Promise<Response> {
   const id = ctx.params.id!;
   const out = await withOrg(ctx.principal.organizationId, async ({ sql }) => {
     const [task] = (await sql`SELECT * FROM task_metrics(${id})`) as Array<Record<string, unknown>>;
     if (!task) return null;
+    const [from] = (await sql`SELECT ${sql.unsafe(ORIGIN_COLUMNS)} FROM runs r
+      WHERE r.task_id = ${id} AND r.kind = 'agent'`) as Array<Record<string, unknown>>;
     const runs = (await sql`
-      SELECT r.id, r.phase, r.role, r.category, r.status, m.*
+      SELECT r.id, r.phase, r.role, r.category, r.status, m.*,
+             r.lux_ai_usd IS NOT NULL AS lux_ai, r.lux_compute_usd IS NOT NULL AS lux_compute,
+             COALESCE(r.lux_cost_status = 'final', false) AS lux_final
       FROM runs r CROSS JOIN LATERAL run_metrics(r.id) m
       WHERE r.task_id = ${id} AND r.kind = 'agent' ORDER BY r.created_at`) as Array<Record<string, unknown>>;
     return {
@@ -37,7 +57,7 @@ async function taskMetrics(ctx: RequestContext): Promise<Response> {
       activeMs: ms(task.active_seconds),
       humanWaitMs: ms(task.human_wait_seconds),
       reviewMs: ms(task.review_seconds),
-      ...costs(task),
+      ...costs({ ...task, ...from }),
       tokens: tokens(task),
       runs: runs.map((r) => ({
         id: r.id, phase: r.phase, role: r.role, category: r.category, status: r.status,

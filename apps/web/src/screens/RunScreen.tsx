@@ -309,7 +309,10 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     startedAt: run.startedAt ?? run.createdAt,
     endedAt: run.endedAt,
     ...(run.model ? { model: run.model } : {}),
-    costUsd: reportedCost(conversation.costUsd),
+    // A harness's zero is "not priced"; lux's is a price.
+    costUsd: conversation.costSource.from === "lux" ? conversation.costUsd : reportedCost(conversation.costUsd),
+    costFrom: conversation.costSource.from === "lux" ? "lux" as const : "agent" as const,
+    costSettled: conversation.costSource.settled,
     // The Run's own totals are exact; the projection's are what has streamed
     // in so far, for a Run still working.
     tokens: Math.max(run.tokens.input + run.tokens.output, conversation.tokens),

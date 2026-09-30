@@ -7,7 +7,7 @@ import { AgentAvatar, ROLE_LABEL } from "./AgentAvatar.tsx";
 import { PersonAvatar, type Person } from "./PersonAvatar.tsx";
 import { StatusBadge } from "./StatusBadge.tsx";
 import { CostDisplay, Duration, TokenCount } from "./Numbers.tsx";
-import { Cost } from "./Cost.tsx";
+import { Cost, type CostOrigin } from "./Cost.tsx";
 import styles from "./ChatTranscript.module.css";
 
 export interface ChatTranscriptSession {
@@ -36,6 +36,9 @@ export interface ChatTranscriptSession {
    * never shows `$0.00` for a run that simply was not priced.
    */
   readonly costUsd?: number | null | undefined;
+  /** Who priced `costUsd`, and whether it is settled: the cost's tooltip says so. */
+  readonly costFrom?: CostOrigin | undefined;
+  readonly costSettled?: boolean | undefined;
   readonly budgetUsd?: number | undefined;
   readonly tokens?: number | undefined;
   /** Whom the agent works for: their face carries its tile, in place of the bare tile. */
@@ -239,7 +242,7 @@ export function SessionHeader({ session, actions }: SessionHeaderProps) {
             {session.budgetUsd !== undefined ? (
               <CostDisplay usd={session.costUsd} budgetUsd={session.budgetUsd} live={spec.live && session.costUsd !== null} />
             ) : (
-              <Cost tokensUsd={session.costUsd} />
+              <Cost tokensUsd={session.costUsd} tokensFrom={session.costFrom} settled={session.costSettled} />
             )}
           </span>
         ) : null}

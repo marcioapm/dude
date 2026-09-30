@@ -210,6 +210,24 @@ describe("Cost", () => {
     const h = html(<Cost tokensUsd={null} />);
     expect(text(h)).toBe("—");
     expect(h).toContain('title="Cost not reported"');
+    // Even when told the parts would have come from lux.
+    expect(text(html(<Cost tokensUsd={null} tokensFrom="lux" machineFrom="lux" settled />))).toBe("—");
+  });
+  // The tooltip and the label say the same words; the label is what renders
+  // without a pointer, so it is what is read here.
+  const label = (h: string) => /aria-label="([^"]*)"/.exec(h)?.[1] ?? "";
+  test("without an origin it says nothing of one, as before", () => {
+    expect(label(html(<Cost tokensUsd={0.62} machineUsd={0.25} />))).toBe("$0.87: model tokens $0.62, machine time $0.25");
+  });
+  test("a figure lux has settled is reported by lux; one it has not is still an estimate", () => {
+    expect(label(html(<Cost tokensUsd={1.81} machineUsd={0.0077} tokensFrom="lux" machineFrom="lux" settled />)))
+      .toBe("$1.82: model tokens $1.81 · reported by lux, machine time $0.0077 · lux");
+    expect(label(html(<Cost tokensUsd={1.2} machineUsd={0.004} tokensFrom="lux" machineFrom="lux" />)))
+      .toBe("$1.20: model tokens $1.20 · estimate, lux settling, machine time $0.0040 · lux, settling");
+  });
+  test("the harness's figure and dude's machine rate are estimates, settled or not", () => {
+    expect(label(html(<Cost tokensUsd={0.3} machineUsd={0.2} tokensFrom="agent" machineFrom="estimate" settled />)))
+      .toBe("$0.50: model tokens $0.30 · estimate, machine time $0.20 · estimated");
   });
 });
 
