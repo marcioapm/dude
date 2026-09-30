@@ -773,7 +773,12 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
   it), each scrolling on its own; under 960px it follows the body in one
   scroll. `context` puts where the thing sits above the title. Settings
   and anything browsed stay screens. The document's title field is
-  `Input size="title"`.
+  `Input size="title"` — `labelNote="required"` says it after the label.
+  The fields stack in `FormStack fill` (the column's width, `space-panel-gap`
+  apart), and the document's insets are `space-panel-gap` too, so compact
+  tightens them. Key hints go in `footerStart`, and hide under 640px, where
+  there is rarely a keyboard; a failed save shows there instead, at every
+  width. In a document, Ctrl/⌘+Enter submits and plain Enter never does.
 - Cards do not nest. A card's header and footer are told from its body by
   shade (`chrome`), not a rule.
 - Empty states are one line of text and a hint, never an illustration.

@@ -17,7 +17,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { Badge, Breadcrumb, Button, Checkbox, Fieldset, HelpList, Input, KeyHint, MarkdownCheatsheet, MarkdownEditor, Select } from "@dude/design-system";
+import { Badge, Breadcrumb, Button, Checkbox, Fieldset, FormStack, HelpList, Input, KeyHint, MarkdownCheatsheet, MarkdownEditor, Select } from "@dude/design-system";
 import type { ApiClient, Epic, Repository, TaskDetail, TaskFields, TaskRepository } from "../api/client.ts";
 import { unsavedWords } from "../hooks/discard.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
@@ -153,7 +153,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
       }
       asideLabel="Where it sits"
       aside={
-        <div className="taskDialogAside">
+        <FormStack fill>
           <Select
             label="Epic"
             value={epic}
@@ -169,7 +169,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
             <li>Link issues, designs and logs; paste error output in a <code>```</code> block.</li>
           </HelpList>
           <MarkdownCheatsheet extra={[["- [ ] item", "a criterion"]]} />
-        </div>
+        </FormStack>
       }
     >
       <Input size="title" label="Title" labelNote={locked ? undefined : "required"} autoFocus required placeholder="What should change?"

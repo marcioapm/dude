@@ -160,7 +160,7 @@
   min-width: 0;
 }
 .formFill {
-  gap: var(--ds-space-24);
+  gap: var(--ds-space-panel-gap);
   max-width: none;
 }
 .formRow {
