@@ -116,3 +116,5 @@ export { RemovableList } from "./RemovableList.tsx";
 export type { RemovableItem, RemovableListProps } from "./RemovableList.tsx";
 export { SearchPicker } from "./SearchPicker.tsx";
 export type { SearchPickerProps } from "./SearchPicker.tsx";
+export { FitBar, MachineChip, MachineTip, ProportionBar, ReservedSwatch } from "./Machines.tsx";
+export type { FitBarProps, MachineChipProps, ProportionBarProps, ProportionSegment } from "./Machines.tsx";

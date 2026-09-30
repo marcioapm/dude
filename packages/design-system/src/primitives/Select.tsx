@@ -9,6 +9,14 @@ export interface SelectOption<T extends string = string> {
   readonly value: T;
   readonly label: ReactNode;
   readonly disabled?: boolean | undefined;
+  /**
+   * Muted words after the label, on its line: a machine size's spec
+   * ("8 CPUs · 16 GiB · 80 GiB"). Shown in the closed trigger too, after
+   * the label, and cut with an ellipsis before the label is.
+   */
+  readonly meta?: ReactNode;
+  /** A muted line under the label, in the list only: what the option means. */
+  readonly description?: ReactNode;
 }
 
 export interface SelectGroup<T extends string = string> {
@@ -28,6 +36,11 @@ export interface SelectProps<T extends string = string> {
   readonly name?: string | undefined;
   readonly className?: string | undefined;
   readonly "aria-label"?: string | undefined;
+  /** Under the list, on the chrome shade: a note, or a link to where the options are managed. */
+  readonly footer?: ReactNode;
+  /** The trigger's id, so an outside label names it. */
+  readonly id?: string | undefined;
+  readonly "data-testid"?: string | undefined;
 }
 
 function isGrouped<T extends string>(
@@ -53,19 +66,33 @@ export function Select<T extends string = string>({
   name,
   className,
   "aria-label": ariaLabel,
+  footer,
+  id: givenId,
+  "data-testid": testId,
 }: SelectProps<T>) {
-  const id = useId();
+  const autoId = useId();
+  const id = givenId ?? autoId;
   const renderItem = (o: SelectOption<T>) => (
     <RadixSelect.Item
       key={o.value}
       value={o.value}
       disabled={o.disabled ?? false}
-      className={styles["item"]}
+      className={cx(styles["item"], o.description ? styles["itemTall"] : undefined)}
+      data-value={o.value}
     >
       <RadixSelect.ItemIndicator className={styles["indicator"]}>
         <Icon name="check" size={12} />
       </RadixSelect.ItemIndicator>
-      <RadixSelect.ItemText>{o.label}</RadixSelect.ItemText>
+      <span className={styles["itemBody"]}>
+        <span className={styles["itemLine"]}>
+          {/* Label and meta are the item's text: the trigger shows both. */}
+          <RadixSelect.ItemText className={styles["itemText"]}>
+            <span className={styles["itemLabel"]}>{o.label}</span>
+            {o.meta ? <span className={styles["meta"]}>{o.meta}</span> : null}
+          </RadixSelect.ItemText>
+        </span>
+        {o.description ? <span className={styles["description"]}>{o.description}</span> : null}
+      </span>
     </RadixSelect.Item>
   );
 
@@ -85,8 +112,10 @@ export function Select<T extends string = string>({
           name,
         })}
       >
-        <SelectTrigger id={id} size={size} ariaLabel={ariaLabel ?? label}>
-          <RadixSelect.Value placeholder={placeholder} />
+        <SelectTrigger id={id} size={size} ariaLabel={ariaLabel ?? label} testId={testId}>
+          <span className={styles["value"]}>
+            <RadixSelect.Value placeholder={placeholder} />
+          </span>
         </SelectTrigger>
         <RadixSelect.Portal>
           <RadixSelect.Content className={styles["content"]} position="popper" sideOffset={4}>
@@ -107,6 +136,7 @@ export function Select<T extends string = string>({
             <RadixSelect.ScrollDownButton className={styles["scrollButton"]}>
               <Icon name="chevron-down" />
             </RadixSelect.ScrollDownButton>
+            {footer ? <div className={styles["footer"]}>{footer}</div> : null}
           </RadixSelect.Content>
         </RadixSelect.Portal>
       </RadixSelect.Root>
@@ -118,11 +148,12 @@ interface TriggerProps {
   readonly id: string;
   readonly size: "sm" | "md";
   readonly ariaLabel: string | undefined;
+  readonly testId?: string | undefined;
   readonly children: ReactNode;
 }
 
 const SelectTrigger = forwardRef<HTMLButtonElement, TriggerProps>(function SelectTrigger(
-  { id, size, ariaLabel, children },
+  { id, size, ariaLabel, testId, children },
   ref,
 ) {
   return (
@@ -131,6 +162,7 @@ const SelectTrigger = forwardRef<HTMLButtonElement, TriggerProps>(function Selec
       id={id}
       className={cx(styles["trigger"], size === "sm" && styles["sm"])}
       aria-label={ariaLabel}
+      data-testid={testId}
     >
       {children}
       <RadixSelect.Icon className={styles["chevron"]}>
