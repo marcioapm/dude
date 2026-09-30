@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -87,6 +90,105 @@ func TestPushPreflightTimeoutIsTransient(t *testing.T) {
 	err := g.CheckPushAccess(context.Background(), srv.URL+"/acme/repo.git")
 	if !Transient(err) || !strings.Contains(err.Error(), "unreachable") {
 		t.Fatalf("timeout: %v", err)
+	}
+}
+
+func TestPushPreflightSuccessBodyConnectionReuse(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		size        int
+		connections int32
+	}{
+		{"advertisement 120KiB", 120 << 10, 1},
+		{"exact 1MiB cap", 1 << 20, 1},
+		{"over cap 2MiB", 2 << 20, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var body strings.Builder
+			packet := func(line string) { fmt.Fprintf(&body, "%04x%s", len(line)+4, line) }
+			packet("# service=git-receive-pack\n")
+			body.WriteString("0000")
+			packet(strings.Repeat("a", 40) + " refs/heads/main\x00report-status delete-refs\n")
+			for i := 0; body.Len() < tc.size-4; i++ {
+				remaining := tc.size - 4 - body.Len()
+				n := min(1024, remaining)
+				if remaining > n && remaining-n < 128 {
+					n -= 128
+				}
+				prefix := strings.Repeat("a", 40) + fmt.Sprintf(" refs/heads/branch-%d-", i)
+				packet(prefix + strings.Repeat("x", n-4-len(prefix)-1) + "\n")
+			}
+			body.WriteString("0000")
+			if body.Len() != tc.size {
+				t.Fatalf("fixture length = %d, want %d", body.Len(), tc.size)
+			}
+
+			var connections atomic.Int32
+			srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.ProtoMajor != 1 {
+					t.Errorf("protocol = %s, want HTTP/1.1", r.Proto)
+				}
+				w.Header().Set("Content-Type", "application/x-git-receive-pack-advertisement")
+				w.Header().Set("Content-Length", fmt.Sprint(body.Len()))
+				_, _ = io.WriteString(w, body.String())
+			}))
+			srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+				if state == http.StateNew {
+					connections.Add(1)
+				}
+			}
+			srv.StartTLS()
+			defer srv.Close()
+			g := NewGitHub(Credential{Secret: "secret", APIBaseURL: srv.URL})
+			g.http = srv.Client()
+			g.http.Timeout = requestTimeout
+			defer g.http.CloseIdleConnections()
+			for i := 0; i < 3; i++ {
+				if err := g.CheckPushAccess(context.Background(), srv.URL+"/acme/repo.git"); err != nil {
+					t.Fatalf("probe %d: %v", i, err)
+				}
+			}
+			if got := connections.Load(); got != tc.connections {
+				t.Fatalf("connections = %d, want %d for 3 probes", got, tc.connections)
+			}
+		})
+	}
+}
+
+func TestPushPreflightSuccessBodyFailuresAreTransient(t *testing.T) {
+	for _, timeout := range []bool{false, true} {
+		t.Run(fmt.Sprintf("timeout=%v", timeout), func(t *testing.T) {
+			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/x-git-receive-pack-advertisement")
+				w.Header().Set("Content-Length", "1024")
+				_, _ = io.WriteString(w, "001e# service=git-receive-pack\n")
+				w.(http.Flusher).Flush()
+				if timeout {
+					<-r.Context().Done()
+				}
+			}))
+			defer srv.Close()
+			g := NewGitHub(Credential{Secret: "secret", APIBaseURL: srv.URL})
+			g.http = srv.Client()
+			g.http.Timeout = requestTimeout
+			if timeout {
+				g.http.Timeout = 100 * time.Millisecond
+			}
+			defer g.http.CloseIdleConnections()
+			err := g.CheckPushAccess(context.Background(), srv.URL+"/acme/repo.git")
+			var unreachable *Unreachable
+			if !errors.As(err, &unreachable) || !Transient(err) {
+				t.Fatalf("body failure = %v, want transient Unreachable", err)
+			}
+			if timeout {
+				var netErr net.Error
+				if !errors.As(err, &netErr) || !netErr.Timeout() {
+					t.Fatalf("body timeout = %v, want timeout error", err)
+				}
+			} else if !errors.Is(err, io.ErrUnexpectedEOF) {
+				t.Fatalf("truncated body = %v, want unexpected EOF", err)
+			}
+		})
 	}
 }
 

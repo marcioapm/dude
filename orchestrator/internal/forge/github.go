@@ -273,6 +273,10 @@ func (g *GitHub) CheckPushAccess(ctx context.Context, repository string) error {
 		if strings.TrimSpace(strings.Split(res.Header.Get("Content-Type"), ";")[0]) != "application/x-git-receive-pack-advertisement" {
 			return &Error{Status: http.StatusBadGateway, Message: "Git receive-pack discovery returned no Git advertisement (possibly an authentication gateway)"}
 		}
+		// Reach EOF for connection reuse, but leave oversized advertisements unread.
+		if _, err := io.Copy(io.Discard, io.LimitReader(res.Body, (1<<20)+1)); err != nil {
+			return &Unreachable{err}
+		}
 		return nil
 	}
 	// Error bodies are diagnostic, not an unbounded Git advertisement.
