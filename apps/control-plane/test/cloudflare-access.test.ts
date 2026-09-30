@@ -1,5 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { SQL } from "bun";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { SignJWT, exportJWK, generateKeyPair, type JWK } from "jose";
 import { createApiKey, requestAuthenticator, type Principal } from "../src/api/auth.ts";
 import {
@@ -8,7 +11,7 @@ import {
 import { Router } from "../src/api/router.ts";
 import { registerPeopleRoutes } from "../src/api/routes/people.ts";
 import { registerEventRoutes } from "../src/api/routes/events.ts";
-import { type AccessConfig, ConfigError, parseConfig, readConfig } from "../src/config.ts";
+import { type AccessConfig, Config, ConfigError } from "../src/config.ts";
 import { authFor } from "../src/index.ts";
 import { closePool, setPool } from "../src/db/client.ts";
 
@@ -139,36 +142,67 @@ default_organization = "absmartly"
 team = "absmartly"
 aud = "application-audience"
 `;
-  test("no file keeps API keys; a valid file enables Access with auto_create by default", async () => {
-    expect(await readConfig(undefined)).toEqual({ auth: { provider: "api_key" } });
-    expect(parseConfig("").auth).toEqual({ provider: "api_key" });
-    expect(parseConfig("[auth]\n").auth).toEqual({ provider: "api_key" });
-    expect(parseConfig(valid).auth).toEqual({
+  const dir = mkdtempSync(join(tmpdir(), "dude-auth-config-"));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  let files = 0;
+  // The [auth] the backend resolves from `text` as its file, with `env` over it.
+  const authOf = (text: string, env: Record<string, string> = {}) => {
+    const path = join(dir, `${++files}.toml`);
+    writeFileSync(path, text, { mode: 0o600 });
+    return Config.load({ env: { DUDE_CONFIG: path, ...env }, defaultPath: join(dir, "absent.toml") }).auth;
+  };
+
+  test("no file keeps API keys; a valid file enables Access with auto_create by default", () => {
+    expect(Config.load({ env: {}, defaultPath: join(dir, "absent.toml") }).auth).toEqual({ provider: "api_key" });
+    expect(authOf("")).toEqual({ provider: "api_key" });
+    expect(authOf("[auth]\n")).toEqual({ provider: "api_key" });
+    expect(authOf(valid)).toEqual({
       provider: "cloudflare_access", public_url: "https://dude.absmartly.dev", auto_create: true,
       default_organization: "absmartly", cloudflare_access: { team: "absmartly", aud: "application-audience" },
     });
-    expect(await readConfig(`${import.meta.dir}/../../../docs/dude.example.toml`)).toEqual(parseConfig(valid));
+  });
+
+  test("every [auth] setting has a variable that overrides the file", () => {
+    expect(authOf("", {
+      DUDE_AUTH_PROVIDER: "cloudflare_access", DUDE_AUTH_PUBLIC_URL: "https://env.example",
+      DUDE_AUTH_AUTO_CREATE: "false", DUDE_AUTH_DEFAULT_ORGANIZATION: "envorg",
+      DUDE_AUTH_CLOUDFLARE_ACCESS_TEAM: "envteam", DUDE_AUTH_CLOUDFLARE_ACCESS_AUD: "env-aud",
+    })).toEqual({
+      provider: "cloudflare_access", public_url: "https://env.example", auto_create: false,
+      default_organization: "envorg", cloudflare_access: { team: "envteam", aud: "env-aud" },
+    });
+    expect(authOf(valid, { DUDE_AUTH_CLOUDFLARE_ACCESS_AUD: "other-aud", DUDE_AUTH_AUTO_CREATE: "off" }))
+      .toMatchObject({ auto_create: false, cloudflare_access: { team: "absmartly", aud: "other-aud" } });
+    // Access configured in the file is switched off by the variable alone.
+    expect(authOf(valid, { DUDE_AUTH_PROVIDER: "api_key" })).toEqual({ provider: "api_key" });
   });
 
   test.each([
-    ["malformed TOML", `[auth]\nprovider = "api_key`],
-    ["duplicate key", `[auth]\nprovider = "api_key"\nprovider = "api_key"`],
-    ["unknown provider", `[auth]\nprovider = "google"`],
-    ["missing organization", valid.replace(/default_organization.*\n/, "")],
-    ["missing public_url", valid.replace(/public_url.*\n/, "")],
-    ["missing audience", valid.replace(/aud =.*\n/, "")],
-    ["team as a URL", valid.replace(`team = "absmartly"`, `team = "https://evil.example"`)],
-    ["plain http origin", valid.replace("https://dude", "http://dude")],
-    ["origin with a path", valid.replace(".dev\"", ".dev/app\"")],
-    ["wrong type", valid.replace(`default_organization = "absmartly"`, "default_organization = \"absmartly\"\nauto_create = \"yes\"")],
-    ["unknown key", valid + "extra = 1\n"],
-    ["unknown table", valid + "[other]\nx = 1\n"],
-  ])("%s fails", (_, text) => {
-    expect(() => parseConfig(text)).toThrow(ConfigError);
+    ["malformed TOML", `[auth]\nprovider = "api_key`, ""],
+    ["duplicate key", `[auth]\nprovider = "api_key"\nprovider = "api_key"`, ""],
+    ["unknown provider", `[auth]\nprovider = "google"`, "auth.provider (DUDE_AUTH_PROVIDER)"],
+    ["missing organization", valid.replace(/default_organization.*\n/, ""), "auth.default_organization"],
+    ["missing public_url", valid.replace(/public_url.*\n/, ""), "auth.public_url"],
+    ["missing audience", valid.replace(/aud =.*\n/, ""), "auth.cloudflare_access.aud"],
+    ["team as a URL", valid.replace(`team = "absmartly"`, `team = "https://evil.example"`), "auth.cloudflare_access.team"],
+    ["plain http origin", valid.replace("https://dude", "http://dude"), "auth.public_url"],
+    ["origin with a path", valid.replace(".dev\"", ".dev/app\""), "auth.public_url"],
+    ["wrong type", valid.replace(`default_organization = "absmartly"`, "default_organization = \"absmartly\"\nauto_create = \"yes\""), "auth.auto_create"],
+    ["unknown key", valid + "extra = 1\n", "auth.cloudflare_access.extra"],
+    ["unknown table", valid + "[other]\nx = 1\n", "other"],
+    ["Access settings without a provider", valid.replace(/provider.*\n/, ""), "auth.provider"],
+  ])("%s fails", (_, text, names) => {
+    expect(() => authOf(text)).toThrow(ConfigError);
+    if (names) expect(() => authOf(text)).toThrow(names);
+  });
+
+  test("an invalid variable fails naming it", () => {
+    expect(() => authOf(valid, { DUDE_AUTH_PUBLIC_URL: "http://plain.example" })).toThrow("DUDE_AUTH_PUBLIC_URL");
+    expect(() => authOf(valid, { DUDE_AUTH_AUTO_CREATE: "sometimes" })).toThrow("DUDE_AUTH_AUTO_CREATE");
   });
 
   test("an unreadable file and an organization that does not exist fail startup", async () => {
-    await expect(readConfig("/nonexistent/dude.toml")).rejects.toThrow(ConfigError);
+    expect(() => Config.load({ env: { DUDE_CONFIG: "/nonexistent/dude.toml" } })).toThrow(ConfigError);
     const before = await owner`SELECT count(*)::int AS n FROM organizations`;
     await expect(authFor(config({ default_organization: `missing_${suffix}` }))).rejects.toThrow(ConfigError);
     expect(await owner`SELECT count(*)::int AS n FROM organizations`).toEqual(before);

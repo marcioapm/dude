@@ -11,7 +11,7 @@
 import { Router } from "./api/router.ts";
 import { type RequestAuthenticator, authenticate, requestAuthenticator } from "./api/auth.ts";
 import { accessAuthenticator, accessProfiles, accessVerifier } from "./api/cloudflareAccess.ts";
-import { type AuthConfig, organizationBySlug, readConfig } from "./config.ts";
+import { type AuthConfig, Config, organizationBySlug } from "./config.ts";
 import { json } from "./api/http.ts";
 import { registerEventRoutes } from "./api/routes/events.ts";
 import { registerNavigationRoutes } from "./api/routes/navigation.ts";
@@ -111,7 +111,7 @@ if (import.meta.main) {
 
   let auth: RequestAuthenticator;
   try {
-    auth = await authFor((await readConfig(process.env.DUDE_CONFIG)).auth);
+    auth = await authFor(Config.load().auth);
   } catch (err) {
     console.error(`configuration: ${(err as Error).message}`);
     process.exit(1);
