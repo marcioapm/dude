@@ -173,6 +173,17 @@ aud = "application-audience"
     });
     expect(authOf(valid, { DUDE_AUTH_CLOUDFLARE_ACCESS_AUD: "other-aud", DUDE_AUTH_AUTO_CREATE: "off" }))
       .toMatchObject({ auto_create: false, cloudflare_access: { team: "absmartly", aud: "other-aud" } });
+    // Every one of the six [auth] keys in the file conflicts with its variable, and each variable wins.
+    const full = valid.replace(`provider = "cloudflare_access"`, `provider = "api_key"`)
+      .replace(`default_organization = "absmartly"`, `default_organization = "absmartly"\nauto_create = true`);
+    expect(authOf(full, {
+      DUDE_AUTH_PROVIDER: "cloudflare_access", DUDE_AUTH_PUBLIC_URL: "https://env.example",
+      DUDE_AUTH_AUTO_CREATE: "false", DUDE_AUTH_DEFAULT_ORGANIZATION: "envorg",
+      DUDE_AUTH_CLOUDFLARE_ACCESS_TEAM: "envteam", DUDE_AUTH_CLOUDFLARE_ACCESS_AUD: "env-aud",
+    })).toEqual({
+      provider: "cloudflare_access", public_url: "https://env.example", auto_create: false,
+      default_organization: "envorg", cloudflare_access: { team: "envteam", aud: "env-aud" },
+    });
     // Access configured in the file is switched off by the variable alone.
     expect(authOf(valid, { DUDE_AUTH_PROVIDER: "api_key" })).toEqual({ provider: "api_key" });
   });

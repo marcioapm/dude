@@ -304,10 +304,17 @@ url = "https://lux.example"
 }
 
 func TestAFileOthersCanReadWithASecretWarns(t *testing.T) {
-	secret := "[lux]\nurl = \"https://lux.example\"\napi_key = \"k\"\n"
+	const sentinel = "S3NT1NEL-lux-api-key-7d1e"
+	secret := "[lux]\nurl = \"https://lux.example\"\napi_key = \"" + sentinel + "\"\n"
 	c := mustLoad(t, Orchestrator, map[string]string{"DUDE_CONFIG": writeFile(t, secret, 0o644)})
-	if len(c.Warnings) != 1 || !strings.Contains(c.Warnings[0], "lux.api_key") || strings.Contains(c.Warnings[0], "\"k\"") {
-		t.Errorf("warnings = %q, want one naming lux.api_key", c.Warnings)
+	if len(c.Warnings) != 1 || !strings.Contains(c.Warnings[0], "lux.api_key") || strings.Contains(c.Warnings[0], sentinel) {
+		t.Errorf("warnings = %q, want one naming lux.api_key and not its value", c.Warnings)
+	}
+	// The file still holds the secret for anyone to read, whatever the
+	// environment overrides it with.
+	c = mustLoad(t, Orchestrator, map[string]string{"DUDE_CONFIG": writeFile(t, secret, 0o644), "LUX_API_KEY": "env-key"})
+	if c.String("LUX_API_KEY") != "env-key" || len(c.Warnings) != 1 || !strings.Contains(c.Warnings[0], "lux.api_key") {
+		t.Errorf("env override: key %q, warnings = %q; want the warning still", c.String("LUX_API_KEY"), c.Warnings)
 	}
 	for name, cfg := range map[string]*Config{
 		"private file":  mustLoad(t, Orchestrator, map[string]string{"DUDE_CONFIG": writeFile(t, secret, 0o600)}),
@@ -370,9 +377,15 @@ func TestTheSharedFixtureResolvesAsBothSuitesExpect(t *testing.T) {
 			}
 		}
 		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: resolved map differs from full.json", p)
 			for k := range want {
 				if !reflect.DeepEqual(got[k], want[k]) {
 					t.Errorf("%s: %s = %#v, want %#v", p, k, got[k], want[k])
+				}
+			}
+			for k := range got {
+				if _, ok := want[k]; !ok {
+					t.Errorf("%s: %s = %#v is not in full.json", p, k, got[k])
 				}
 			}
 		}
