@@ -84,20 +84,31 @@ export function safeUrl(raw: string): string | null {
 const FENCE_RE = /^(\s{0,3})(`{3,}|~{3,})\s*([^\s`]*)\s*(.*)$/;
 const HEADING_RE = /^(#{1,6})(?:[ \t]+(.*?))?[ \t]*#*[ \t]*$/;
 const HR_RE = /^[ \t]{0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
+// HR_RE backtracks for milliseconds on a long "- - - … x" line; a rule holds
+// nothing but markers and blanks, so reject anything else before running it.
+const isRule = (l: string): boolean => !/[^-*_ \t]/.test(l) && HR_RE.test(l);
 const UL_RE = /^(\s*)([-*+])(?:[ \t]+(.*)|$)/;
 const OL_RE = /^(\s*)(\d{1,9})[.)](?:[ \t]+(.*)|$)/;
 const QUOTE_RE = /^\s{0,3}>[ \t]?(.*)$/;
 const TABLE_SEP_RE = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
 const TASK_RE = /^\[( |x|X)\][ \t]+/;
 
+// Quotes and list items nest by recursion. Content nested deeper than this
+// renders as one literal paragraph, so hostile input cannot exhaust the stack.
+const MAX_BLOCK_DEPTH = 32;
+
 export function parseMarkdown(src: string, opts: ParseOptions = {}): Block[] {
   const streaming = opts.streaming === true;
   const lines = src.replace(/\r\n?/g, "\n").split("\n");
   const usedIds = new Map<string, number>();
-  return parseBlocks(lines, streaming, usedIds);
+  return parseBlocks(lines, streaming, usedIds, 0);
 }
 
-function parseBlocks(lines: readonly string[], streaming: boolean, usedIds: Map<string, number>): Block[] {
+function parseBlocks(lines: readonly string[], streaming: boolean, usedIds: Map<string, number>, depth: number): Block[] {
+  if (depth > MAX_BLOCK_DEPTH) {
+    const v = lines.filter((l) => l.trim() !== "").join("\n");
+    return v === "" ? [] : [{ t: "paragraph", c: [{ t: "text", v }] }];
+  }
   const out: Block[] = [];
   let i = 0;
   while (i < lines.length) {
@@ -140,7 +151,7 @@ function parseBlocks(lines: readonly string[], streaming: boolean, usedIds: Map<
     }
 
     // Thematic break (checked before lists: `---` and `* * *` overlap)
-    if (HR_RE.test(line)) {
+    if (isRule(line)) {
       out.push({ t: "hr" });
       i++;
       continue;
@@ -157,7 +168,7 @@ function parseBlocks(lines: readonly string[], streaming: boolean, usedIds: Map<
         else if (l.trim() !== "" && inner.length > 0 && !isBlockStart(l)) inner.push(l); // lazy continuation
         else break;
       }
-      out.push({ t: "quote", c: parseBlocks(inner, streaming, usedIds) });
+      out.push({ t: "quote", c: parseBlocks(inner, streaming, usedIds, depth + 1) });
       i = j;
       continue;
     }
@@ -215,7 +226,7 @@ function parseBlocks(lines: readonly string[], streaming: boolean, usedIds: Map<
           }
           break;
         }
-        items.push({ c: parseBlocks(buf, streaming, usedIds), task });
+        items.push({ c: parseBlocks(buf, streaming, usedIds, depth + 1), task });
         j = k;
       }
       out.push({ t: "list", ordered, start, items });
@@ -264,7 +275,7 @@ function parseBlocks(lines: readonly string[], streaming: boolean, usedIds: Map<
  * cannot lazily continue the paragraph above it.
  */
 export function isBlockStart(l: string): boolean {
-  return FENCE_RE.test(l) || HEADING_RE.test(l) || HR_RE.test(l) || QUOTE_RE.test(l) || matchListMarker(l) !== null;
+  return FENCE_RE.test(l) || HEADING_RE.test(l) || isRule(l) || QUOTE_RE.test(l) || matchListMarker(l) !== null;
 }
 
 function matchListMarker(l: string): { indent: number; markerWidth: number; ordered: boolean; start: number; content: string } | null {
