@@ -72,7 +72,8 @@ afterAll(async () => {
   }
   await admin.end();
   await rm(work, { recursive: true, force: true });
-});
+  // Dropping a database per test outlasts the default 5 s on a loaded host.
+}, 60_000);
 
 test("from source, the runner reads every .sql file in migrations/, in order", async () => {
   const files = await listMigrationFiles();
