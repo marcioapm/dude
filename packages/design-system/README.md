@@ -795,7 +795,9 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
   `footerStart`). `reading` shows the whole thing as one document in place
   of the writing and the aside: a centred column at `measure-document`,
   scrolling on its own, the footer kept (saving from Read is allowed).
-  Build it as one `Markdown variant="document"` with `title` (the name as
+  Build it as one `Markdown`, in the variant the text is read in (a task's:
+  `message`, as its screen and its Preview show it; the column sets the
+  width, not the variant), with `title` (the name as
   its `h1`, plain text; blank reads `untitled`, muted) and `source` as a
   list of sections, each parsed on its own so an open fence in one cannot
   swallow the next. The writing stays laid out, hidden and inert,
@@ -905,7 +907,7 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | `<Breadcrumb items={[project, epic, key]} />` in the header | a ghost `Back` button under the content |
 | `<MarkdownEditor label="Goal" value={goal} onChange={setGoal} fill minRows={4} maxLength={65_536} />` | a `Textarea` for Markdown with a hand-rolled preview beside it, or a `minRows={12}` that scrolls the empty dialog |
 | `<Dialog size="document" aside={…} context={…}>` with a `DiscardConfirm` for writing a task | a 400px dialog that loses three paragraphs to a stray Escape |
-| `<Dialog reading={<Markdown variant="document" title={title} source={[goal, "## Acceptance criteria", list]} />}>` | a second modal over the first to show the same text, or one string joined from the parts |
+| `<Dialog reading={<Markdown title={title} source={[goal, "## Acceptance criteria", list]} />}>`, in the variant the task screen reads it in | a second modal over the first to show the same text, one string joined from the parts, or `variant="document"` spacing on text that is read as a message |
 | a settings page's sub-pages as `items` of its `SettingsNavItem` | `Tabs` inside a settings page |
 | `<SearchResultRow rank={1} lead={{ type: "memory" }} facts={["words and meaning"]} />` | a score chip and a progress bar on every result |
 | `<EntityLine lead={face} name={…} detail={…} />`, `<AuthorLine author={…} />` | a face and two spans styled in the app's CSS |

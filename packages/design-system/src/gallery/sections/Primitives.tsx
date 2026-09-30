@@ -704,7 +704,7 @@ function TaskDialogExample() {
         </Button>
       }
       reading={reading ? (
-        <Markdown variant="document" title={title} untitled="Untitled task" source={[goal, "## Acceptance criteria", criteria]} />
+        <Markdown title={title} untitled="Untitled task" source={[goal, "## Acceptance criteria", criteria]} />
       ) : undefined}
       readingLabel="The task as it reads"
       onCloseReading={() => setReading(false)}

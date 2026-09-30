@@ -412,12 +412,16 @@ def test_read_shows_the_task_as_one_document_and_escape_goes_back_to_writing(
     column = "() => document.querySelector('[data-testid=task-title]').closest('form').parentElement.scrollTop"
     scrolled = page.evaluate(column)
     assert scrolled > 0
+    heading_style = "el => { const s = getComputedStyle(el); return [s.fontSize, s.marginTop, s.lineHeight]; }"
+    previewed = page.get_by_test_id("task-goal-preview").get_by_role("heading", name="What exists today").evaluate(heading_style)
 
     read = page.get_by_test_id("task-read")
     expect(read).to_have_text("Read")
     read.click()
     expect(read).to_have_text("Back to writing")
     _assert_reads_as_the_task(page, "Keep SEPA at checkout")
+    # Read is set as the Goal's Preview (and the task screen) are: the message rhythm.
+    assert page.get_by_test_id("task-reading").get_by_role("heading", name="What exists today").evaluate(heading_style) == previewed
     expect(dialog).to_contain_text("back to writing")
 
     # Escape leaves Read, not the dialog, and asks nothing.
