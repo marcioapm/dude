@@ -149,6 +149,18 @@ The backend runs no background work; the orchestrator runs all of it.
 Neither keeps anything on local disk. Run one orchestrator: its loops claim
 work through the database, but only one has ever been run at a time.
 
+### Bun
+
+The release's `dude-backend` and `dude-migrate` carry their own Bun (the
+version pinned in `.github/workflows/release.yml`); nothing else is
+installed. Run from source, the backend needs **Bun 1.4.0 or later**
+(`engines.bun` in `package.json`). Bun 1.3.x's S3 client fails every
+upload to a store that answers `Connection: close`, as versitygw does: the
+object is stored, but Bun reports `ConnectionClosed` and the upload answers
+500. With `s3.bucket` set, the backend refuses to start on an earlier Bun,
+naming the version it needs; without it, no S3 request is made and it
+starts.
+
 The orchestrator reaches out to `LUX_URL`, to GitHub's API
 (`https://api.github.com`, or the organization's stored `apiBaseUrl`), to
 ECR's API (`api.ecr.<region>.amazonaws.com`) and the instance metadata
@@ -275,7 +287,7 @@ does not refuse to start.
 | `orchestrator.machine_usd_per_hour` | `DUDE_MACHINE_USD_PER_HOUR` | `0.20` | orchestrator | What an hour of a lux host costs, recorded with each Run; not negative. |
 | `orchestrator.lux_cost_every` | `DUDE_LUX_COST_EVERY` | `2m` | orchestrator | How often an agent's Run's cost is read from lux (`GET /v1/runs/{id}/cost`), until lux reports it final or eight days after the Run ended; positive. |
 | `s3.bucket` | `DUDE_S3_BUCKET` | off | backend | The bucket people's photos and projects' images are kept in. Unset, uploads answer 503 and faces show initials. |
-| `s3.endpoint` | `DUDE_S3_ENDPOINT` | AWS | backend | For MinIO, versitygw and other S3-compatible stores (path-style). |
+| `s3.endpoint` | `DUDE_S3_ENDPOINT` | AWS | backend | For MinIO, versitygw and other S3-compatible stores (path-style). versitygw needs Bun ≥ 1.4.0 (see [Bun](#bun)); the release has it. |
 | `s3.region` | `DUDE_S3_REGION` | `us-east-1` | backend | |
 | `s3.access_key`, `s3.secret_key` | `DUDE_S3_ACCESS_KEY`, `DUDE_S3_SECRET_KEY` | off | backend | Explicit credentials for local S3-compatible stores such as MinIO; set both. The secret key is a **secret**. Unset, the backend obtains temporary EC2 instance-role credentials through IMDSv2; it does not use Bun's AWS environment credential fallback. |
 | `lux.url` | `LUX_URL` | required | orchestrator | The lux control plane. |

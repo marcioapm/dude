@@ -64,10 +64,12 @@ containers on Podman hosts and moves it between them. See
 
 ### Prerequisites
 
-Bun, Go 1.25, Docker, Python 3.14 with `uv`, git, and Google Chrome (the
+Bun 1.4 or later, Go 1.25, Docker, Python 3.14 with `uv`, git, and Google Chrome (the
 browser tests drive the system Chrome; Playwright's bundled Chromium has no
 build for Ubuntu 26.04). To run real agents, a lux (`~/git/lux`) and
-an LLM API's URL and key.
+an LLM API's URL and key. Bun 1.3 cannot upload photos to versitygw, the
+suite's S3, so the backend (with S3 set) and `run_tests.py` refuse to start
+on it; see [`docs/operations.md`](docs/operations.md#bun).
 
 ```bash
 bun install
@@ -242,7 +244,7 @@ real lux (the latest `run_tests.py --serve` in lux's repository, or
 
 ## Releases
 
-`VERSION=vX.Y.Z bun run dist` (`scripts/dist.sh`, needs Go, Bun and GNU
+`VERSION=vX.Y.Z bun run dist` (`scripts/dist.sh`, needs Go, Bun ≥ 1.4 and GNU
 tar) builds `dist/dude_<version>_linux_{arm64,amd64}.tar.gz` and
 `SHA256SUMS` over them. Each holds `bin/{dude-orchestrator,dude,dude-backend,dude-migrate}`
 and `share/dude/web`, with the licences of code bundled into the binaries under
