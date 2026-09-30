@@ -57,14 +57,10 @@ var promptVariable = regexp.MustCompile(`\{\{\s*([\w.]+)\s*\}\}`)
 // The task still follows in full, as every phase frames it: a prompt that
 // names one part of it must not cost the agent the rest.
 func (in PromptInput) fill(prompt string) string {
-	criteria := make([]string, len(in.AcceptanceCriteria))
-	for i, c := range in.AcceptanceCriteria {
-		criteria[i] = "- " + c
-	}
 	values := map[string]string{
 		"task.title":    in.Title,
 		"task.goal":     in.Goal,
-		"task.criteria": strings.Join(criteria, "\n"),
+		"task.criteria": criteriaList(in.AcceptanceCriteria),
 		"run.branch":    in.Branch,
 		"run.base_ref":  in.BaseRef,
 	}
@@ -113,6 +109,18 @@ func workspaceNote(repos []PromptRepo, review bool) string {
 	return b.String()
 }
 
+// criteriaList writes the criteria as a Markdown list, one item each. A
+// criterion is Markdown and may run over several lines; its later lines are
+// indented under its marker, or they would read as text after the list (or,
+// starting with "- ", as criteria of their own).
+func criteriaList(criteria []string) string {
+	items := make([]string, len(criteria))
+	for i, c := range criteria {
+		items[i] = "- " + strings.ReplaceAll(c, "\n", "\n  ")
+	}
+	return strings.Join(items, "\n")
+}
+
 func (in PromptInput) task() string {
 	parts := []string{in.Title}
 	if g := strings.TrimSpace(in.Goal); g != "" {
@@ -120,10 +128,8 @@ func (in PromptInput) task() string {
 	}
 	if len(in.AcceptanceCriteria) > 0 {
 		var b strings.Builder
-		b.WriteString("Acceptance criteria:")
-		for _, c := range in.AcceptanceCriteria {
-			b.WriteString("\n- " + c)
-		}
+		b.WriteString("Acceptance criteria:\n")
+		b.WriteString(criteriaList(in.AcceptanceCriteria))
 		parts = append(parts, b.String())
 	}
 	if len(in.Decisions) > 0 {
