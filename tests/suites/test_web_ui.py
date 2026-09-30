@@ -252,6 +252,7 @@ def test_enter_in_the_title_moves_to_the_goal_and_does_not_create(
     page.get_by_role("tablist", name="Goal view").get_by_role("tab", name="Preview").click()
     title.focus()
     title.press("Enter")
+    expect(page.get_by_test_id("task-goal-preview")).to_be_focused()
     assert console_errors == []
 
 
@@ -698,8 +699,20 @@ def test_criteria_that_open_over_the_editors_limit_block_saving_until_they_fit(
     expect(page.get_by_text("55 characters over the limit; shorten it to save.", exact=True)).to_be_visible()
     expect(page.get_by_role("dialog", name="Edit task").get_by_text("16,439 / 16,384")).to_be_visible()
     expect(page.get_by_test_id("task-save")).to_be_disabled()
+    task_url = f"/v1/tasks/{item['id']}"
+    attempts = []
+
+    def record_patch(request):
+        if request.method == "PATCH" and request.url.endswith(task_url):
+            attempts.append(request)
+
+    page.on("request", record_patch)
     criteria.press("ControlOrMeta+Enter")
+    # The save handler sends synchronously; two frames drain its request event, with no fixed wait.
+    page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+    assert attempts == []
     expect(criteria).to_be_visible()
+    page.remove_listener("request", record_patch)
 
     # Shortened to fit, it saves.
     criteria.evaluate("el => el.setSelectionRange(el.value.length - 55, el.value.length)")

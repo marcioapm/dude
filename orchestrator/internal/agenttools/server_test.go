@@ -319,6 +319,52 @@ func TestATaskTakesA64KGoalAnd16KOfCriteriaInAllAndNoMore(t *testing.T) {
 	}
 }
 
+func TestTheLimitsCountUTF16UnitsAsTheAPIDoes(t *testing.T) {
+	f := setup(t)
+	token := f.run(t, "run_u16", "implementer", "running")
+	body := func(goal string, criteria ...string) string {
+		b, _ := json.Marshal(map[string]any{"title": "Units", "goal": goal, "acceptanceCriteria": criteria})
+		return string(b)
+	}
+	count := func() int {
+		var n int
+		_ = f.owner.QueryRow(context.Background(), `SELECT count(*) FROM tasks WHERE project_id = $1 AND title = 'Units'`, f.project).Scan(&n)
+		return n
+	}
+	// 😀 is two UTF-16 units (four bytes, one rune); é is one unit (two bytes).
+	emojiGoal := strings.Repeat("😀", 32768)
+	emojiCriterion := strings.Repeat("😀", 8192)
+	accepted := []string{
+		body(emojiGoal),
+		body("g", emojiCriterion),
+		body(strings.Repeat("é", 65536), strings.Repeat("é", 16384)),
+	}
+	for i, ok := range accepted {
+		if status, out := f.post(t, token, "create_task", ok); status != 200 {
+			t.Errorf("accepted case %d at the limits: %d %v", i, status, out)
+		}
+	}
+	if n := count(); n != 3 {
+		t.Fatalf("%d tasks made, want the 3 at the limits", n)
+	}
+	refused := []string{
+		body(emojiGoal + "g"),
+		body(strings.Repeat("😀", 32767) + "gg" + "g"),
+		body("g", emojiCriterion, "c"),
+		body("g", strings.Repeat("😀", 8191)+"cc", "c"),
+		body(strings.Repeat("é", 65537)),
+		body("g", strings.Repeat("é", 16385)),
+	}
+	for i, over := range refused {
+		if status, out := f.post(t, token, "create_task", over); status != 422 {
+			t.Errorf("refused case %d over the limits: %d %v", i, status, out)
+		}
+	}
+	if n := count(); n != 3 {
+		t.Errorf("%d tasks after the refusals, want still 3", n)
+	}
+}
+
 func TestA64KGoalThatJSONEscapesSixfoldIsStillATask(t *testing.T) {
 	f := setup(t)
 	token := f.run(t, "run_esc", "implementer", "running")

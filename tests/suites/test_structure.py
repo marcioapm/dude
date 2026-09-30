@@ -134,6 +134,14 @@ def test_a_task_takes_a_64k_goal_and_16k_of_criteria_in_all(client: ApiClient, f
     assert client.patch(f"/v1/tasks/{item['id']}", {"goal": "g" * 65_537}).status_code == 400
     assert client.get(f"/v1/tasks/{item['id']}").json()["acceptanceCriteria"][1] == "y" * (16_384 - 3000)
 
+    # An update takes both limits too, with a criterion far past the old 2,000 each.
+    task_url = f"/v1/tasks/{item['id']}"
+    fields = {"goal": "h" * 65_536, "acceptanceCriteria": ["a" * 3000, "b" * (16_384 - 3000)]}
+    updated = client.patch(task_url, fields)
+    assert updated.status_code == 200, updated.text
+    persisted = client.get(task_url).json()
+    assert {key: persisted[key] for key in fields} == fields
+
 
 def test_a_task_names_its_repositories_each_changed_or_read(client: ApiClient, forge_project: dict):
     """A task names the repositories it touches — each one it changes or
