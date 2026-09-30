@@ -60,6 +60,7 @@ type tracked struct {
 	FeedbackCursor                                                                             *time.Time
 	UpdatedAt                                                                                  time.Time
 	ReviewsJSON                                                                                []byte
+	ChecksJSON                                                                                 []byte
 }
 
 // errRaced: another sync of the same pull request recorded first.
@@ -88,11 +89,11 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		return tx.QueryRow(ctx, `SELECT pr.id, pr.project_id, pr.task_id, COALESCE(pr.run_id, ''), pr.state::text,
 			pr.checks::text, pr.review::text, COALESCE(pr.head_sha, ''), r.url, r.name, pr.mergeable_state,
 			pr.number, pr.behind_by, pr.unresolved_threads, pr.had_ci, pr.head_seen_at, pr.feedback_cursor,
-			pr.reviews_json, pr.updated_at
+			pr.reviews_json, pr.checks_json, pr.updated_at
 			FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id WHERE pr.id = $1`, prID).
 			Scan(&pr.ID, &pr.ProjectID, &pr.TaskID, &pr.RunID, &pr.State, &pr.Checks, &pr.Review, &pr.HeadSHA,
 				&pr.RepoURL, &pr.RepoName, &pr.Mergeable, &pr.Number, &pr.BehindBy, &pr.UnresolvedThreads,
-				&pr.HadCI, &pr.HeadSeenAt, &pr.FeedbackCursor, &pr.ReviewsJSON, &pr.UpdatedAt)
+				&pr.HadCI, &pr.HeadSeenAt, &pr.FeedbackCursor, &pr.ReviewsJSON, &pr.ChecksJSON, &pr.UpdatedAt)
 	}); err != nil {
 		return err
 	}
@@ -229,10 +230,19 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 			payload map[string]any
 		}
 		var changes []change
-		if status.Checks != pr.Checks {
+		// Whether the checks could be read at all changes what a person is
+		// told even while the rollup stays pending; job details do not.
+		fromDiagnostic, diagnostic := storedDiagnostic(pr.ChecksJSON), forge.CheckDiagnostic(status.CheckList)
+		if status.Checks != pr.Checks || diagnostic != fromDiagnostic {
 			p := map[string]any{"from": pr.Checks, "to": status.Checks}
 			if failing := failingNames(status.CheckList); len(failing) > 0 {
 				p["failing"] = failing
+			}
+			if fromDiagnostic != "" {
+				p["fromDiagnostic"] = fromDiagnostic
+			}
+			if diagnostic != "" {
+				p["diagnostic"] = diagnostic
 			}
 			changes = append(changes, change{delivery.EvPullRequestChecks, p})
 		}
@@ -383,6 +393,14 @@ func failingNames(checks []forge.Check) []string {
 		}
 	}
 	return out
+}
+
+// storedDiagnostic is the diagnostic recorded in checks_json by the last
+// sync; an unreadable column is none, as rows from before diagnostics are.
+func storedDiagnostic(checksJSON []byte) string {
+	var checks []forge.Check
+	_ = json.Unmarshal(checksJSON, &checks)
+	return forge.CheckDiagnostic(checks)
 }
 
 // newReviews: the reviewers whose word changed since the last sync, for

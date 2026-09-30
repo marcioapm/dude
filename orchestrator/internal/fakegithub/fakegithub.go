@@ -75,13 +75,15 @@ type Server struct {
 	// scope).
 	PermissionRefused bool
 	// Update-branch requests fail as GitHub does when it is down.
-	UpdateDown        bool
-	ReceiveStatus     int
-	ReceiveBody       string
-	ReceiveHeaders    http.Header
-	ReceiveToken      string
-	ReceiveRequests   []string
-	ReceiveDisconnect bool
+	UpdateDown bool
+	// The check-runs listing refuses, as for a token without Checks: read.
+	CheckRunsForbidden bool
+	ReceiveStatus      int
+	ReceiveBody        string
+	ReceiveHeaders     http.Header
+	ReceiveToken       string
+	ReceiveRequests    []string
+	ReceiveDisconnect  bool
 }
 
 // Comment and review ids, unique across repositories as GitHub's are.
@@ -508,8 +510,12 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 // reports through check runs instead of statuses.
 func (s *Server) checkRuns(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
-	state := s.checks
+	state, forbidden := s.checks, s.CheckRunsForbidden
 	s.mu.Unlock()
+	if forbidden {
+		fail(w, 403, "Resource not accessible by personal access token")
+		return
+	}
 	runs := []any{}
 	if conclusion, ok := strings.CutPrefix(state, "run:"); ok {
 		status := "completed"
