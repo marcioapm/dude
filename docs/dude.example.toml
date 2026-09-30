@@ -93,6 +93,9 @@ image = "localhost/dude-runtime:dev"                     # DUDE_AGENT_IMAGE
 # timeout = "48h"                                        # DUDE_AGENT_TIMEOUT
 # Hosts agents may reach besides llm.url's host; "*" turns filtering off.
 # egress = ["pypi.org", "registry.npmjs.org"]            # DUDE_AGENT_EGRESS
+# Let agents run containers (docker/podman in the Run). Needs lux hosts
+# started with nested containers and an image with the engine.
+# nested_containers = true                               # DUDE_AGENT_NESTED_CONTAINERS
 
 [registry]
 # How lux logs in to pull agent and preview images: none, static or ecr.

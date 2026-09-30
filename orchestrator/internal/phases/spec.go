@@ -30,6 +30,11 @@ type AgentConfig struct {
 	// Hosts every agent may reach besides its model provider. "*" turns
 	// egress filtering off.
 	Egress []string
+	// Agents may run containers themselves (DUDE_AGENT_NESTED_CONTAINERS):
+	// docker or podman in the Run, for test suites that start their own
+	// services. lux then places agent Runs only on hosts offering nested
+	// containers, so it is off unless the operator's lux has them.
+	NestedContainers bool
 	// A limit on a Run's running time (DUDE_AGENT_TIMEOUT), for an operator
 	// who wants one; none by default. Agents work for days, and one waiting
 	// on a person is parked, not timed out: lux counts only time spent
@@ -60,6 +65,8 @@ func LoadAgentConfig(cfg *config.Config) (AgentConfig, error) {
 		ToolsService: cfg.Bool("DUDE_TOOLS_SERVICE"),
 		ToolsKey:     []byte(cfg.String("DUDE_TOOLS_KEY")),
 		Egress:       cfg.List("DUDE_AGENT_EGRESS"),
+
+		NestedContainers: cfg.Bool("DUDE_AGENT_NESTED_CONTAINERS"),
 	}
 	if len(c.ToolsKey) == 0 {
 		c.ToolsKey = []byte(cfg.String("DUDE_ORCHESTRATOR_TOKEN"))
@@ -255,6 +262,9 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		spec.Secrets = append(spec.Secrets, lux.Secret{Name: "DUDE_LLM_KEY", Value: c.LLMKey, As: "env"})
 	}
 	spec.Network = egress(c)
+	if c.NestedContainers {
+		spec.Sandbox = &lux.Sandbox{NestedContainers: true}
+	}
 	return spec
 }
 
