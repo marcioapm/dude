@@ -57,6 +57,10 @@ class BrowserAuth(unittest.TestCase):
         self.nav_calls = []
         # /v1/navigation requests answered "hold": fulfilled by the test itself.
         self.held = []
+        # Statuses for the next event-stream requests; otherwise a stream that ends and asks
+        # EventSource to reconnect after 50 ms.
+        self.stream_failures = []
+        self.quick_streams = False
         self.navigation = []
         self.context.route("**/*", self.route)
         self.page.on("request", lambda req: self.navigation.append(req.url)
@@ -83,7 +87,12 @@ class BrowserAuth(unittest.TestCase):
                                     **response})
         elif "/v1/events/stream" in req.url:
             self.streams.append(req.url)
-            route.fulfill(content_type="text/event-stream", body=": ready\n\n")
+            if self.stream_failures:
+                route.fulfill(status=self.stream_failures.pop(0), content_type="text/html", body="Refused")
+            elif self.quick_streams:
+                route.fulfill(content_type="text/event-stream", body=": ready\nretry: 50\n\n")
+            else:
+                route.fulfill(content_type="text/event-stream", body=": ready\n\n")
         elif "/v1/people" in req.url:
             route.fulfill(json={"people": [PERSON], "you": PERSON["id"]})
         elif "/v1/navigation" in req.url:
@@ -199,6 +208,56 @@ class BrowserAuth(unittest.TestCase):
         self.shell()
         expect(self.page.get_by_label("API key", exact=True)).to_have_count(0)
         self.assertEqual(self.probes, ["Bearer valid", None])
+
+    def refuse_next_stream(self, status, probes):
+        """Signs in by Access, then answers the next stream reconnect with `status`
+        and the probes that follow it with `probes`."""
+        self.responses = [{"authMethod": "cloudflare_access"}]
+        self.quick_streams = True
+        self.open()
+        self.shell()
+        self.responses = list(probes)
+        self.stream_failures = [status]
+        # The refused reconnect makes the app check its session.
+        self.wait_until(lambda: len(self.probes) >= 2)
+
+    def test_refused_stream_reconnect_recovers_access_session(self):
+        for status in (401, 403):
+            with self.subTest(status=status):
+                self.probes.clear()
+                self.streams.clear()
+                self.refuse_next_stream(status, [401, {"authMethod": "cloudflare_access"}])
+                # Reprobed by cookie; the session is kept and its stream reopens and goes live.
+                self.wait_until(lambda: len(self.probes) == 3)
+                self.shell()
+                # The harness ends every stream at once, so a live EventSource keeps coming back.
+                refused_at = len(self.streams)
+                self.wait_until(lambda: len(self.streams) > refused_at + 1)
+                expect(self.page.get_by_label("API key", exact=True)).to_have_count(0)
+                self.assertEqual(self.probes, [None, None, None])
+
+    def test_refused_stream_reconnect_with_refused_cookie_shows_prompt(self):
+        self.refuse_next_stream(401, [401, 401])
+        self.prompt()
+        self.assertEqual(self.probes, [None, None, None])
+        streams = len(self.streams)
+        self.page.wait_for_timeout(300)
+        self.assertEqual(len(self.streams), streams)
+
+    def test_failed_stream_reconnect_with_valid_session_reopens(self):
+        self.refuse_next_stream(503, [{"authMethod": "cloudflare_access"}])
+        refused_at = len(self.streams)
+        # Not an auth refusal: the stream is reopened after a delay, in the same session.
+        self.wait_until(lambda: len(self.streams) > refused_at + 1, timeout=5)
+        self.shell()
+        self.assertEqual(self.probes, [None, None])
+
+    def wait_until(self, condition, timeout=5):
+        for _ in range(int(timeout * 20)):
+            if condition():
+                return
+            self.page.wait_for_timeout(50)
+        self.fail("condition not reached")
 
     def test_keyless_refusal_shows_prompt(self):
         self.responses = [401]
