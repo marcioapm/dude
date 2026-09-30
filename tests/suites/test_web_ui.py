@@ -144,6 +144,96 @@ def test_a_task_is_edited_and_moved_from_its_screen(
     assert console_errors == []
 
 
+GOAL_MARKDOWN = """Checkout dropped **SEPA** from the payment step.
+
+## What exists today
+- The old flow lives behind `checkout_v2`.
+- Methods come from `GET /v1/billing/methods`."""
+
+
+def test_a_task_is_written_in_markdown_and_its_criteria_are_the_list_items(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    sign_in(page, web_url, org["api_key"])
+    page.get_by_test_id("new-task").click()
+    page.get_by_test_id("task-title").fill("Keep SEPA at checkout")
+    page.get_by_test_id("task-goal").fill(GOAL_MARKDOWN)
+    criteria = page.get_by_test_id("task-criteria")
+    criteria.fill("- [ ] SEPA appears on the payment step\n- Invoice only for annual plans")
+    expect(page.get_by_test_id("task-criteria-count")).to_have_text("2 criteria")
+
+    # Preview renders the goal through the safe Markdown path, heading and list.
+    goal_view = page.get_by_role("tablist", name="Goal view")
+    goal_view.get_by_role("tab", name="Preview").click()
+    preview = page.get_by_test_id("task-goal-preview")
+    expect(preview.get_by_role("heading", name="What exists today")).to_be_visible()
+    expect(preview.get_by_role("listitem")).to_have_count(2)
+    expect(preview.locator("strong")).to_have_text("SEPA")
+    # ← goes back to Write, and the source is as it was typed.
+    goal_view.get_by_role("tab", name="Preview").press("ArrowLeft")
+    expect(goal_view.get_by_role("tab", name="Write")).to_have_attribute("aria-selected", "true")
+    expect(page.get_by_test_id("task-goal")).to_have_value(GOAL_MARKDOWN)
+
+    # Typing a list continues it: Enter after a task item opens the next one.
+    criteria.focus()
+    criteria.evaluate("el => el.setSelectionRange(el.value.length, el.value.length)")
+    criteria.press("Enter")
+    expect(criteria).to_have_value("- [ ] SEPA appears on the payment step\n- Invoice only for annual plans\n- ")
+    criteria.press("Enter")
+    expect(criteria).to_have_value("- [ ] SEPA appears on the payment step\n- Invoice only for annual plans\n")
+
+    page.get_by_test_id("task-save").click()
+    expect(page.get_by_test_id("task-screen")).to_be_visible()
+
+    items = client.get("/v1/tasks", params={"projectId": forge_project["id"]}).json()["tasks"]
+    task_id = next(i["id"] for i in items if i["title"] == "Keep SEPA at checkout")
+    saved = client.get(f"/v1/tasks/{task_id}").json()
+    assert saved["acceptanceCriteria"] == ["SEPA appears on the payment step", "Invoice only for annual plans"]
+    assert saved["goal"] == GOAL_MARKDOWN
+
+    # The task shows what the preview showed: the goal's heading, each criterion.
+    screen = page.get_by_test_id("task-screen")
+    expect(screen.get_by_role("heading", name="What exists today")).to_be_visible()
+    expect(screen.get_by_role("list", name="Acceptance criteria").locator(":scope > li")).to_have_count(2)
+
+    # Editing opens the criteria as the list they were saved from.
+    page.get_by_test_id("edit-task").click()
+    expect(page.get_by_test_id("task-criteria")).to_have_value(
+        "- [ ] SEPA appears on the payment step\n- [ ] Invoice only for annual plans")
+    expect(page.get_by_test_id("task-goal")).to_have_value(GOAL_MARKDOWN)
+    assert console_errors == []
+
+
+def test_closing_a_task_with_writing_in_it_asks_first(
+    page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list
+):
+    sign_in(page, web_url, org["api_key"])
+    page.get_by_test_id("new-task").click()
+    # A few words close as before.
+    page.get_by_test_id("task-title").fill("Short")
+    page.keyboard.press("Escape")
+    expect(page.get_by_test_id("task-title")).to_have_count(0)
+
+    page.get_by_test_id("new-task").click()
+    page.get_by_test_id("task-title").fill("Keep SEPA at checkout")
+    goal = " ".join(f"word{i}" for i in range(25))
+    page.get_by_test_id("task-goal").fill(goal)
+    page.keyboard.press("Escape")
+    confirm = page.get_by_role("dialog", name="Discard this task?")
+    expect(confirm).to_be_visible()
+    expect(confirm).to_contain_text("You have written 29 words that haven't been saved.")
+    expect(page.get_by_test_id("discard-keep")).to_be_focused()
+    page.get_by_test_id("discard-keep").click()
+    expect(confirm).to_have_count(0)
+    expect(page.get_by_test_id("task-goal")).to_have_value(goal)
+
+    # Cancel asks too, and Discard closes without saving.
+    page.get_by_role("button", name="Cancel").click()
+    page.get_by_test_id("discard-confirm").click()
+    expect(page.get_by_test_id("task-title")).to_have_count(0)
+    assert console_errors == []
+
+
 def test_a_task_names_the_repositories_it_changes_and_reads(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
 ):
