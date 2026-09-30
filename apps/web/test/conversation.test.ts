@@ -10,6 +10,10 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { EventRow } from "@dude/design-system/components";
+import { summarize } from "../src/screens/RunScreen.tsx";
 import { EventTypes } from "@dude/domain";
 import type { PersistedEvent } from "@dude/domain";
 import { actorName, apply, emptyProjection, humanActor, project, snapshot } from "../src/api/conversation.ts";
@@ -37,6 +41,26 @@ function ev(eventType: string, payload: Record<string, unknown> = {}): Persisted
     occurredAt: new Date(Date.UTC(2026, 0, 1, 0, 0, cursor)).toISOString(),
   } as unknown as PersistedEvent;
 }
+
+describe("git event labels", () => {
+  test("clone and checkout render truthful outcomes and checkout coordinates", () => {
+    const labels = [
+      [EventTypes.GitClone, { repo: "target", ref: "main", status: "cloned" }, "Cloned · target · at main"],
+      [EventTypes.GitClone, { repo: "web", ref: "missing", status: "failed", error: "ref not found" }, "Clone · web · at missing · failed · ref not found"],
+      [EventTypes.GitCheckout, { repo: "target", ref: "main", branch: "dude/task", base: "abc123" }, "Checked out · target · at main · on dude/task · from abc123"],
+    ] as const;
+    for (const [type, payload, label] of labels) {
+      const event = ev(type, payload);
+      const summary = summarize(event);
+      expect(summary).toBe(label);
+      const html = renderToStaticMarkup(createElement(EventRow, {
+        occurredAt: event.occurredAt, actor: { type: "system" }, eventType: type, summary,
+      }));
+      expect(html).toContain(label);
+      expect(html).toContain(type);
+    }
+  });
+});
 
 describe("turns", () => {
   test("an agent message becomes a message turn", () => {

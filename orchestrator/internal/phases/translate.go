@@ -186,6 +186,9 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 			return t.ended(ctx, tx, s, state, str("reason"))
 		}
 	case "git.clone":
+		if err := s.event(ctx, tx, t.run, "git.clone", ledger.ActorSystem, d); err != nil {
+			return err
+		}
 		// A repository added at a resume (only those carry a request id):
 		// the approval for it, on this Run, is settled by name — cloned, or
 		// failed, when lux has dropped it and the agent goes on without it.
@@ -200,9 +203,11 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 	case "git.checkout":
 		// What each checkout started from, the first time it was made; a
 		// resume leaves the checkout as the agent left it.
-		_, err := tx.Exec(ctx, `UPDATE runs SET base_shas = jsonb_build_object($2::text, $3::text) || base_shas
-			WHERE id = $1`, t.run.ID, str("repo"), str("base"))
-		return err
+		if _, err := tx.Exec(ctx, `UPDATE runs SET base_shas = jsonb_build_object($2::text, $3::text) || base_shas
+			WHERE id = $1`, t.run.ID, str("repo"), str("base")); err != nil {
+			return err
+		}
+		return s.event(ctx, tx, t.run, "git.checkout", ledger.ActorSystem, d)
 	case "git.push":
 		if str("requestId") != t.run.PushRequestID && t.run.PushRequestID != "" {
 			return nil

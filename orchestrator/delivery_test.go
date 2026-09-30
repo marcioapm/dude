@@ -688,6 +688,10 @@ func TestAnAgentIsGivenARepositoryAPersonApproved(t *testing.T) {
 	w.until("lux to report web cloned", func() bool {
 		return w.count(`SELECT count(*) FROM repository_requests WHERE id = $1 AND status = 'cloned'`, req.RequestID) == 1
 	})
+	w.until("the resumed clone outcome in the ledger", func() bool {
+		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'git.clone'
+			AND payload->>'repo' = 'web' AND payload->>'status' = 'cloned' AND payload->>'requestId' IS NOT NULL`, wi) == 1
+	})
 	r := w.lux.Runs()[0]
 	if len(w.lux.Runs()) != 1 || r.Resumed != 1 {
 		t.Fatalf("lux runs %d, resumed %d", len(w.lux.Runs()), r.Resumed)
@@ -707,6 +711,47 @@ func TestAnAgentIsGivenARepositoryAPersonApproved(t *testing.T) {
 	// The task names it now, read only, for every later phase.
 	if n := w.count(`SELECT count(*) FROM task_repositories WHERE task_id = $1 AND access = 'read'`, wi); n != 1 {
 		t.Errorf("task's read repositories: %d", n)
+	}
+}
+
+func TestAResumedCloneFailureRetainsApprovalSemantics(t *testing.T) {
+	w := newWorld(t)
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
+	t.Cleanup(tools.Close)
+	w.syncer.Agent.ToolsURL = tools.URL
+	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+		VALUES ($1, $2, $3, 'web', 'https://github.com/acme/web.git', 'missing-ref')`, "repo_web_"+w.org, w.org, w.project)
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	wi := w.task()
+	w.names(wi, w.repoID)
+	w.deliver(wi)
+	w.until("agent running", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running'`, wi) == 1
+	})
+	status, body := w.callTool(tools.URL, string(w.lux.Runs()[0].Spec), "request_repository", `{"repository":"web","reason":"read client"}`)
+	if status != 200 {
+		t.Fatalf("request: %d %s", status, body)
+	}
+	var req struct{ RequestID string }
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatal(err)
+	}
+	if status, body := w.call("/internal/repository-requests/"+req.RequestID+"/decide", map[string]any{"approve": true}); status != 200 {
+		t.Fatalf("approve: %d %v", status, body)
+	}
+	w.until("approval failed with lux error", func() bool {
+		return w.count(`SELECT count(*) FROM repository_requests WHERE id = $1 AND status = 'failed' AND error = 'ref not found'`, req.RequestID) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM task_repositories WHERE task_id = $1 AND repository_id = $2`, wi, "repo_web_"+w.org); n != 0 {
+		t.Fatalf("failed repository still attached: %d", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'git.clone'
+		AND payload->>'repo' = 'web' AND payload->>'status' = 'failed' AND payload->>'error' = 'ref not found'
+		AND payload->>'requestId' IS NOT NULL`, wi); n != 1 {
+		t.Fatalf("resume clone failures: %d", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'repository.clone_failed'`, wi); n != 1 {
+		t.Fatalf("approval failure events: %d", n)
 	}
 }
 
@@ -1850,6 +1895,81 @@ func TestMain(m *testing.M) {
 // A Run whose turn ended while no one was following its stream (a restart,
 // a dropped connection) must still learn what its push did. Found in review:
 // finishing Runs were never followed again, and waited forever.
+func TestInitialGitEventsSurviveAStreamReconnectWithoutDuplicates(t *testing.T) {
+	w := newWorld(t)
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	wi := w.task()
+	w.names(wi, w.repoID)
+	w.deliver(wi)
+	w.until("initial clone and checkout in the ledger", func() bool {
+		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type IN ('git.clone', 'git.checkout')`, wi) == 2
+	})
+	var runID, base string
+	if err := w.owner.QueryRow(context.Background(), `SELECT id, base_shas->>'target' FROM runs WHERE task_id = $1`, wi).Scan(&runID, &base); err != nil {
+		t.Fatal(err)
+	}
+	for _, typ := range []string{"git.clone", "git.checkout"} {
+		var raw []byte
+		if err := w.owner.QueryRow(context.Background(), `SELECT payload FROM events WHERE run_id = $1 AND event_type = $2`, runID, typ).Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["repo"] != "target" || payload["ref"] != "main" || base == "" {
+			t.Fatalf("%s payload: %v, base %q", typ, payload, base)
+		}
+		if typ == "git.clone" && (payload["status"] != "cloned" || payload["commit"] != base) {
+			t.Fatalf("clone outcome: %v", payload)
+		}
+		if typ == "git.checkout" && payload["base"] != base {
+			t.Fatalf("checkout: %v", payload)
+		}
+	}
+	w.syncer.Stop()
+	w.syncer = &phases.Syncer{DB: w.syncer.DB, Lux: w.syncer.Lux, Forges: w.syncer.Forges, Log: quiet, Agent: w.syncer.Agent}
+	t.Cleanup(w.syncer.Stop)
+	status, body := w.call("/internal/runs/"+runID+"/steer", map[string]any{"text": "Keep working", "interrupt": true})
+	if status != 201 {
+		t.Fatalf("steer: %d %v", status, body)
+	}
+	w.until("reconnected stream to deliver steering", func() bool {
+		return w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.directive.delivered'`, runID) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type IN ('git.clone', 'git.checkout')`, runID); n != 2 {
+		t.Fatalf("replayed git events: %d, want 2", n)
+	}
+}
+
+func TestInitialCloneFailureIsRecordedWithoutACheckout(t *testing.T) {
+	w := newWorld(t)
+	mustExec(t, w.owner, `UPDATE repositories SET default_branch = 'missing-ref' WHERE id = $1`, w.repoID)
+	wi := w.task()
+	w.names(wi, w.repoID)
+	w.deliver(wi)
+	w.until("clone failure in the ledger", func() bool {
+		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'git.clone'`, wi) == 1
+	})
+	var raw []byte
+	if err := w.owner.QueryRow(context.Background(), `SELECT payload FROM events WHERE task_id = $1 AND event_type = 'git.clone'`, wi).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["repo"] != "target" || payload["ref"] != "missing-ref" || payload["status"] != "failed" || payload["error"] != "ref not found" {
+		t.Fatalf("clone failure: %v", payload)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'git.checkout'`, wi); n != 0 {
+		t.Fatalf("failed clone produced %d checkouts", n)
+	}
+	if n := w.count(`SELECT count(*) FROM repository_requests WHERE task_id = $1`, wi); n != 0 {
+		t.Fatalf("initial clone created %d approvals", n)
+	}
+}
+
 func TestAFinishingRunIsFollowedAfterARestart(t *testing.T) {
 	w := newWorld(t)
 	wi := w.task()
