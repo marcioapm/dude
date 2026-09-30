@@ -27,7 +27,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(__file__))
 
 from build import build, build_gallery, build_web  # noqa: E402
-from env import TestEnvironment, lux_env  # noqa: E402
+from env import TestEnvironment, lux_env, require_bun  # noqa: E402
 
 TESTS_DIR = Path(__file__).resolve().parent
 
@@ -41,6 +41,7 @@ def main() -> None:
                         help="run the contract suite against a real lux instead (see suites/test_lux_contract.py)")
     args, pytest_args = parser.parse_known_args()
 
+    require_bun()
     build()
     if not args.no_ui:
         build_gallery(force=args.build)

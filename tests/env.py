@@ -50,6 +50,36 @@ POSTGRES_APP_USER = os.environ.get("DUDE_TEST_PG_APP_USER", "dude_app")
 POSTGRES_APP_PASSWORD = os.environ.get("DUDE_TEST_PG_APP_PASSWORD", "dude_app")
 POSTGRES_ADMIN_DB = os.environ.get("DUDE_TEST_PG_ADMIN_DB", "postgres")
 
+# The backend stores photos in versitygw, which closes the connection after
+# each PUT; Bun before this reports that as ConnectionClosed and fails the
+# upload (apps/control-plane/src/storage.ts, MIN_BUN_FOR_S3).
+MIN_BUN = (1, 4, 0)
+
+
+def bun_problem(version: str) -> str | None:
+    """Why the `bun --version` output `version` cannot run the suite, or None."""
+    version = version.strip()
+    need = ".".join(map(str, MIN_BUN))
+    parts = version.split("-")[0].split("+")[0].split(".")
+    if len(parts) != 3 or not all(p.isdigit() for p in parts):
+        return f"could not read the Bun version from {version!r}; the suite needs Bun >= {need}"
+    have = tuple(int(p) for p in parts)
+    if have < MIN_BUN or (have == MIN_BUN and "-" in version.split("+")[0]):
+        return (f"Bun {version} is on PATH; the suite needs Bun >= {need}: earlier Bun fails every "
+                "photo upload to the test S3 (versitygw answers Connection: close)")
+    return None
+
+
+def require_bun() -> None:
+    """Stop before building anything when the `bun` on PATH is too old."""
+    try:
+        out = subprocess.run(["bun", "--version"], capture_output=True, text=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError) as err:
+        raise SystemExit(f"bun --version failed: {err}")
+    problem = bun_problem(out)
+    if problem:
+        raise SystemExit(problem)
+
 
 def lux_env() -> dict:
     """The lux environment to run the contract suite against.
@@ -155,6 +185,7 @@ class TestEnvironment:
     # -- lifecycle ----------------------------------------------------------
 
     def setup(self) -> None:
+        require_bun()
         self._s3_bucket()
         self._create_database()
         self._migrate()

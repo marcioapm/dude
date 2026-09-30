@@ -30,6 +30,16 @@ TAR="${TAR:-$(command -v gtar || command -v tar)}"
 "$TAR" --version 2>/dev/null | grep -q 'GNU tar' || { echo "dist.sh needs GNU tar (set TAR=)" >&2; exit 1; }
 TAR_REPRO_FLAGS=(--owner=0 --group=0 --numeric-owner --sort=name --mtime="$MTIME")
 if command -v sha256sum >/dev/null; then SHA256=(sha256sum); else SHA256=(shasum -a 256); fi
+# The binaries embed the Bun that builds them, and Bun < 1.4.0 cannot upload
+# photos to a store that answers Connection: close (versitygw). The floor is
+# package.json's engines.bun; Bun.semver orders a pre-release of it below it.
+(cd "$ROOT" && bun -e '
+  const floor = require("./package.json").engines.bun.replace(/^>=\s*/, "");
+  if (Bun.semver.order(Bun.version, floor) < 0) {
+    console.error(`dist.sh needs Bun >= ${floor}, found ${Bun.version}: earlier Bun fails S3 uploads to versitygw`);
+    process.exit(1);
+  }
+') || exit 1
 
 rm -rf "$DIST"
 mkdir -p "$DIST"
