@@ -99,14 +99,14 @@ func TestOwnerOnlyUsesFirstActivePersonAndIgnoresLegacyKey(t *testing.T) {
 		}
 	}
 	exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_owner', $1, 'P', 'p', 'P')`, org)
-	exec(`INSERT INTO people (id, organization_id, name) VALUES ('per_first', $1, 'First'), ('per_second', $1, 'Second')`, org)
-	exec(`INSERT INTO api_keys (id, organization_id, name, key_hash, key_prefix, person_id) VALUES ('key_old', $1, 'Old', 'old', 'dude_sk_', 'per_second')`, org)
+	exec(`INSERT INTO people (id, organization_id, name) VALUES ('per_z_owner', $1, 'First'), ('per_a_member', $1, 'Second')`, org)
+	exec(`INSERT INTO api_keys (id, organization_id, name, key_hash, key_prefix, person_id) VALUES ('key_old', $1, 'Old', 'old', 'dude_sk_', 'per_a_member')`, org)
 	exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, owner_key_id) VALUES ('task_owner', $1, 'prj_owner', 1, 'Task', 'key_old')`, org)
 	var count int
 	if err := owner.QueryRow(ctx, `SELECT count(*) FROM task_people WHERE task_id = 'task_owner'`).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("legacy key insertion assigned membership: %d %v", count, err)
 	}
-	exec(`INSERT INTO task_people (task_id, person_id, organization_id, position) VALUES ('task_owner', 'per_first', $1, 3), ('task_owner', 'per_second', $1, 8)`, org)
+	exec(`INSERT INTO task_people (task_id, person_id, organization_id, position) VALUES ('task_owner', 'per_z_owner', $1, 3), ('task_owner', 'per_a_member', $1, 8)`, org)
 	foreignOrg := dbtest.Org(t, owner)
 	exec(`INSERT INTO people (id, organization_id, name) VALUES ('per_foreign_owner', $1, 'Foreign')`, foreignOrg)
 	if _, err := owner.Exec(ctx, `INSERT INTO task_people (task_id, person_id, organization_id, position)
@@ -154,18 +154,18 @@ func TestOwnerOnlyUsesFirstActivePersonAndIgnoresLegacyKey(t *testing.T) {
 			}
 		}
 	}
-	check("per_first", true)
-	check("per_second", false)
+	check("per_z_owner", true)
+	check("per_a_member", false)
 	exec(`UPDATE api_keys SET revoked_at = now() WHERE id = 'key_old'`)
-	check("per_first", true)
-	check("per_second", false)
+	check("per_z_owner", true)
+	check("per_a_member", false)
 	exec(`UPDATE tasks SET owner_key_id = NULL WHERE id = 'task_owner'`)
-	check("per_second", false)
-	exec(`UPDATE people SET removed_at = now() WHERE id = 'per_first'`)
-	check("per_first", false)
-	check("per_second", true)
-	exec(`UPDATE people SET removed_at = now() WHERE id = 'per_second'`)
-	check("per_first", false)
+	check("per_a_member", false)
+	exec(`UPDATE people SET removed_at = now() WHERE id = 'per_z_owner'`)
+	check("per_z_owner", false)
+	check("per_a_member", true)
+	exec(`UPDATE people SET removed_at = now() WHERE id = 'per_a_member'`)
+	check("per_z_owner", false)
 	exec(`INSERT INTO people (id, organization_id, name) VALUES ('per_unowned', $1, 'Unowned')`, org)
 	check("per_unowned", true)
 }
