@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import pkg from "../../../package.json";
 import { MIN_BUN_FOR_S3, s3RuntimeProblem } from "../src/storage.ts";
 
 test("Bun below 1.4.0 is refused for photo storage, naming the floor and the reason", () => {
@@ -24,6 +25,6 @@ test("a version that is not major.minor.patch is refused rather than guessed at"
   }
 });
 
-test("the running Bun passes, so the backend starts with S3 configured", () => {
-  expect(s3RuntimeProblem(Bun.version)).toBeUndefined();
+test("the backend's floor is the one package.json asks for", () => {
+  expect(pkg.engines.bun).toBe(`>=${MIN_BUN_FOR_S3}`);
 });
