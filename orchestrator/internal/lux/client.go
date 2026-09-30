@@ -139,6 +139,13 @@ type Spec struct {
 	Volumes  []Volume          `json:"volumes,omitempty"`
 	Timeout  string            `json:"timeout,omitempty"`
 	Network  *Network          `json:"network,omitempty"`
+	Sandbox  *Sandbox          `json:"sandbox,omitempty"`
+}
+
+// Sandbox relaxes a Run's container for what its workload needs.
+type Sandbox struct {
+	// Requires a host offering nested containers and an image with the engine.
+	NestedContainers bool `json:"nestedContainers,omitempty"`
 }
 
 type Image struct {

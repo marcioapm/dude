@@ -93,7 +93,13 @@ export type IconName =
   | "bold"
   | "code"
   | "braces"
-  | "memory";
+  | "italic"
+  | "link"
+  | "quote"
+  | "list-bullet"
+  | "markdown"
+  | "memory"
+  | "book-open";
 
 /** Path data on a 16x16 grid. `fill` marks icons that are filled shapes. */
 const PATHS: Record<IconName, { d: string; fill?: true; dashed?: true }> = {
@@ -184,6 +190,13 @@ const PATHS: Record<IconName, { d: string; fill?: true; dashed?: true }> = {
   braces: { d: "M6 3H5a1.5 1.5 0 0 0-1.5 1.5v2L2.5 8l1 1.5v2A1.5 1.5 0 0 0 5 13h1M10 3h1a1.5 1.5 0 0 1 1.5 1.5v2l1 1.5-1 1.5v2A1.5 1.5 0 0 1 11 13h-1" },
   globe: { d: "M8 2.75a5.25 5.25 0 1 0 0 10.5a5.25 5.25 0 0 0 0-10.5ZM2.75 8h10.5M8 2.75c1.6 1.6 2.4 3.4 2.4 5.25S9.6 11.65 8 13.25M8 2.75C6.4 4.35 5.6 6.15 5.6 8s.8 3.65 2.4 5.25" },
   "list-check": { d: "M2.75 4.5l1 1 2-2M2.75 8.5l1 1 2-2M2.75 12.5l1 1 2-2M8 4.5h5.25M8 8.5h5.25M8 12.5h5.25" },
+  italic: { d: "M9.5 3h-3M9.5 13h-3M9 3L7 13" },
+  link: { d: "M6.5 9.5l3-3M7 4.5l1-1a2.8 2.8 0 0 1 4 4l-1 1M9 11.5l-1 1a2.8 2.8 0 0 1-4-4l1-1" },
+  /* A bar down the side of lines: a quotation. */
+  quote: { d: "M3 3.5v9M6.5 5h7M6.5 8h7M6.5 11h5" },
+  "list-bullet": { d: "M6 4h7.5M6 8h7.5M6 12h7.5M3 4h.01M3 8h.01M3 12h.01" },
+  /* The Markdown mark: M and a down arrow in a frame. */
+  markdown: { d: "M2.5 3.5h11a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1ZM4 10.5v-5l2 2.5 2-2.5v5M11.5 5.5v5M10 9l1.5 1.5L13 9" },
   message: { d: "M3 3.5h10a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-.5.5H7l-3 2.5V10.5H3a.5.5 0 0 1-.5-.5V4a.5.5 0 0 1 .5-.5Z" },
   /* Two lobes and a midline: the model's reasoning, as opposed to its output. */
   brain: {
@@ -211,6 +224,8 @@ const PATHS: Record<IconName, { d: string; fill?: true; dashed?: true }> = {
   building: { d: "M2.5 13.5h11M4 13.5V6l4-3.5L12 6v7.5M6.5 13.5v-4h3v4" },
   /* Something kept: a page with a bookmark. A memory, and the Memory settings. */
   memory: { d: "M4 2.5h8a.5.5 0 0 1 .5.5v10.5L8 11l-4.5 2.5V3a.5.5 0 0 1 .5-.5ZM6 5.5h4M6 7.5h2.5" },
+  /* Two open pages: reading the whole thing, as opposed to editing it. */
+  "book-open": { d: "M8 4.5C6.8 3.6 5 3.25 2.5 3.25v9c2.5 0 4.3.35 5.5 1.25M8 4.5c1.2-.9 3-1.25 5.5-1.25v9c-2.5 0-4.3.35-5.5 1.25M8 4.5v9" },
 };
 
 export interface IconProps extends Omit<SVGProps<SVGSVGElement>, "name"> {
