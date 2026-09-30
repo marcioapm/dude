@@ -11,7 +11,7 @@
 import { Router } from "./api/router.ts";
 import { type RequestAuthenticator, authenticate, requestAuthenticator } from "./api/auth.ts";
 import { type FetchLike, accessAuthenticator, accessProfiles, accessVerifier } from "./api/cloudflareAccess.ts";
-import { type AuthConfig, Config, config, organizationBySlug, useConfig } from "./config.ts";
+import { type AuthConfig, Config, type LoadOptions, config, organizationBySlug, useConfig } from "./config.ts";
 import { json } from "./api/http.ts";
 import { registerEventRoutes } from "./api/routes/events.ts";
 import { registerNavigationRoutes } from "./api/routes/navigation.ts";
@@ -102,32 +102,66 @@ export function startServer(port = config().port, router: Router = buildRouter()
   return server;
 }
 
+/**
+ * Every configuration check startup makes before it opens a connection:
+ * the loader's (types, values, [auth]), the required settings, and that
+ * this Bun can store photos when s3.bucket is set. `error`
+ * is the line startup prints for a refusal. Whether
+ * `auth.default_organization` exists needs the database, so it is not here.
+ * `settings` is null when the loader refused.
+ */
+export function resolveSettings(opts?: LoadOptions, bunVersion: string = Bun.version):
+  { settings: Config | null; error: string | null } {
+  let settings: Config;
+  try {
+    settings = Config.load(opts);
+  } catch (err) {
+    return { settings: null, error: `configuration: ${(err as Error).message}` };
+  }
+  if (!settings.databaseUrl) return { settings, error: "database.url (DATABASE_URL) is required" };
+  // Refused here, not at the first upload: that fails a person days later.
+  const runtimeProblem = settings.string("DUDE_S3_BUCKET") ? s3RuntimeProblem(bunVersion) : undefined;
+  return { settings, error: runtimeProblem ? `configuration: ${runtimeProblem}` : null };
+}
+
+/**
+ * `dude-backend validate`: resolveSettings and nothing else, so it refuses
+ * what startup refuses on configuration and connects, listens and writes
+ * nothing. Returns the exit code: 0 with "ok: <file>" on stdout, 1 with
+ * startup's error on stderr, 2 on extra arguments.
+ */
+export function validate(args: string[], opts?: LoadOptions,
+  out: (line: string) => void = console.log, err: (line: string) => void = console.error): number {
+  if (args.length) {
+    err("usage: dude-backend validate");
+    return 2;
+  }
+  const { settings, error } = resolveSettings(opts);
+  for (const warning of settings?.warnings ?? []) err(`warning: ${warning}`);
+  if (error || !settings) {
+    err(error!);
+    return 1;
+  }
+  if (settings.auth.provider === "cloudflare_access") err("not checked: default_organization exists");
+  out(`ok: ${settings.path ?? "no file"}`);
+  return 0;
+}
+
 if (import.meta.main) {
   if (process.argv.includes("--version")) {
     console.log(version);
     process.exit(0);
   }
-  let settings: Config;
-  try {
-    settings = Config.load();
-  } catch (err) {
-    console.error(`configuration: ${(err as Error).message}`);
+  if (process.argv[2] === "validate") process.exit(validate(process.argv.slice(3)));
+  const { settings, error } = resolveSettings();
+  if (settings?.path) console.log(`configuration file read: ${settings.path}`);
+  for (const warning of settings?.warnings ?? []) console.warn(`configuration: ${warning}`);
+  if (error || !settings) {
+    console.error(error);
     process.exit(1);
   }
-  if (settings.path) console.log(`configuration file read: ${settings.path}`);
-  for (const warning of settings.warnings) console.warn(`configuration: ${warning}`);
   useConfig(settings);
-  const databaseUrl = settings.databaseUrl;
-  if (!databaseUrl) {
-    console.error("database.url (DATABASE_URL) is required");
-    process.exit(1);
-  }
-  // Refused here, not at the first upload: that fails a person days later.
-  const runtimeProblem = settings.string("DUDE_S3_BUCKET") ? s3RuntimeProblem(Bun.version) : undefined;
-  if (runtimeProblem) {
-    console.error(`configuration: ${runtimeProblem}`);
-    process.exit(1);
-  }
+  const databaseUrl = settings.databaseUrl!;
 
   let router: Router;
   try {
