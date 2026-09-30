@@ -29,7 +29,13 @@ func cli(t *testing.T) string {
 // which the CLI never sees.
 func luxService(t *testing.T, upstream, token string) string {
 	t.Helper()
-	sock := filepath.Join(t.TempDir(), "dude.sock")
+	// Unix socket paths are bounded by sockaddr_un, including the temp root.
+	dir, err := os.MkdirTemp("", "lux-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "dude.sock")
 	l, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatal(err)

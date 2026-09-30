@@ -5,9 +5,8 @@
  * A person is a `people` row (migration 035) that any number of API keys
  * act for. Everywhere the API names one it is a `PersonRef`
  * (`person_ref()` in SQL): id, name, photo, and whether they were seen in
- * the last five minutes. A task's owner is the first of its people and is
- * mirrored, as one of their keys, in `tasks.owner_key_id` for the
- * orchestrator, which enforces that only the owner answers its agents.
+ * the last five minutes. A task's owner is its first active person;
+ * `tasks.owner_key_id` is only an optional legacy mirror.
  */
 
 import { z } from "zod";
@@ -15,7 +14,7 @@ import { EventTypes, personRoleSchema, type PersonRef } from "@dude/domain";
 import type { OrgScope } from "../../db/client.ts";
 import { withOrg, withoutTenant } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
-import { insertApiKey, insertPerson } from "../auth.ts";
+import { auditActor, insertApiKey, insertPerson } from "../auth.ts";
 import { HttpError, badRequest, conflict, json, noContent, notFound, parseBody } from "../http.ts";
 import { replaceImage, serveImage } from "../faces.ts";
 import { deleteObject } from "../../storage.ts";
@@ -23,10 +22,9 @@ import type { PublicContext, RequestContext, Router } from "../router.ts";
 
 /** The SELECT expression for a task's owner (a `PersonRef`) or null, for the `tasks` rows under `alias`. */
 export function ownerJson(alias = "tasks"): string {
-  // The key the task names, if it can still sign in: the orchestrator's
-  // test for who answers, so the two never disagree.
-  return `(SELECT person_ref(p) FROM api_keys k JOIN people p ON p.id = k.person_id
-  WHERE k.id = ${alias}.owner_key_id AND k.revoked_at IS NULL) AS owner`;
+  return `(SELECT person_ref(p) FROM task_people tp JOIN people p ON p.id = tp.person_id
+   WHERE tp.task_id = ${alias}.id AND p.removed_at IS NULL
+   ORDER BY tp.position, tp.person_id LIMIT 1) AS owner`;
 }
 
 /** The SELECT expression for everyone on a task, the owner first, for the `tasks` rows under `alias`. */
@@ -63,8 +61,8 @@ export async function personOf(scope: OrgScope, given: string): Promise<string |
 /**
  * Put `people` on a task in that order, the first its owner. With `keep`,
  * whoever else was on it stays, after them; otherwise the list replaces
- * theirs. The owner is mirrored as one of their keys in
- * `tasks.owner_key_id` for the orchestrator. Records what changed.
+ * theirs. A usable key is mirrored in `tasks.owner_key_id` only for legacy
+ * readers. Records what changed.
  */
 export async function setTaskPeople(scope: OrgScope, ctx: RequestContext, taskId: string, projectId: string,
   people: readonly string[], keep: boolean): Promise<void> {
@@ -80,10 +78,9 @@ export async function setTaskPeople(scope: OrgScope, ctx: RequestContext, taskId
     INSERT INTO task_people (task_id, person_id, organization_id, position)
     SELECT ${taskId}, id, ${scope.organizationId}, n - 1
     FROM jsonb_array_elements_text(${next}::jsonb) WITH ORDINALITY AS t(id, n)`;
-  const owner = next[0]!;
-  if (owner !== was[0]) {
-    // The trigger that follows this write finds the owner already first.
-    await scope.sql`UPDATE tasks SET owner_key_id = ${await keyOf(scope, owner)} WHERE id = ${taskId}`;
+  const owner = next[0] ?? null;
+  if (owner !== (was[0] ?? null)) {
+    await scope.sql`UPDATE tasks SET owner_key_id = ${owner ? await keyOf(scope, owner) : null} WHERE id = ${taskId}`;
     await recordAs(scope, ctx, EventTypes.TaskOwnerChanged, { from: was[0] ?? null, to: owner }, { projectId, taskId });
   }
   await recordAs(scope, ctx, EventTypes.TaskPeopleChanged, { people: next }, { projectId, taskId });
@@ -133,7 +130,7 @@ export function recordAs(scope: OrgScope, ctx: RequestContext, eventType: string
     projectId: where.projectId ?? null,
     taskId: where.taskId ?? null,
     correlationId: where.taskId ?? null,
-    actor: { type: "human", id: ctx.principal.apiKeyId },
+    actor: { type: auditActor(ctx.principal).kind, id: auditActor(ctx.principal).id },
     source: "control-plane",
     payload,
   });
@@ -225,7 +222,7 @@ async function listMyKeys(ctx: RequestContext): Promise<Response> {
       SELECT ${scope.sql.unsafe(KEY_SELECT)} FROM api_keys
       WHERE person_id = ${ctx.principal.personId} AND revoked_at IS NULL
       ORDER BY created_at`) as Array<{ id: string }>;
-    return rows.map((k) => ({ ...k, current: k.id === ctx.principal.apiKeyId }));
+    return rows.map((k) => ({ ...k, current: ctx.principal.credentialKind === "api_key" && k.id === ctx.principal.apiKeyId }));
   });
   return json({ keys });
 }
@@ -247,9 +244,8 @@ async function revokeMyKey(ctx: RequestContext): Promise<Response> {
       SELECT id FROM api_keys WHERE person_id = ${ctx.principal.personId} AND revoked_at IS NULL
       FOR UPDATE`) as Array<{ id: string }>;
     if (!rows.some((k) => k.id === id)) return "missing";
-    // Your last key is how you sign in: revoking it would lock you out
-    // with nobody but an admin to let you back.
-    if (rows.length === 1) return "last";
+    // A verified person credential remains usable without an API key.
+    if (rows.length === 1 && ctx.principal.credentialKind !== "person") return "last";
     await scope.sql`UPDATE api_keys SET revoked_at = now() WHERE id = ${id}`;
     return "revoked";
   });
@@ -336,16 +332,21 @@ async function updatePerson(ctx: RequestContext): Promise<Response> {
  */
 async function passOnTasks(scope: OrgScope, ctx: RequestContext, personId: string): Promise<void> {
   const owned = (await scope.sql`
-    DELETE FROM task_people tp USING tasks t
-    WHERE tp.person_id = ${personId} AND t.id = tp.task_id
-    RETURNING tp.task_id AS "taskId", tp.position, t.project_id AS "projectId"`) as Array<
-    { taskId: string; position: number; projectId: string }
-  >;
-  for (const { taskId, projectId } of owned.filter((t) => t.position === 0)) {
+    SELECT tp.task_id AS "taskId", t.project_id AS "projectId"
+    FROM task_people tp JOIN tasks t ON t.id = tp.task_id
+    WHERE tp.person_id = ${personId} AND NOT EXISTS (
+      SELECT 1 FROM task_people earlier JOIN people p ON p.id = earlier.person_id
+      WHERE earlier.task_id = tp.task_id AND p.removed_at IS NULL
+        AND (earlier.position, earlier.person_id) < (tp.position, tp.person_id))`) as Array<
+      { taskId: string; projectId: string }
+    >;
+  await scope.sql`DELETE FROM task_people WHERE person_id = ${personId}`;
+  for (const { taskId, projectId } of owned) {
     const next = (await scope.sql`
-      SELECT person_id AS id FROM task_people WHERE task_id = ${taskId} ORDER BY position LIMIT 1`) as Array<{ id: string }>;
+      SELECT tp.person_id AS id FROM task_people tp JOIN people p ON p.id = tp.person_id
+      WHERE tp.task_id = ${taskId} AND p.removed_at IS NULL
+      ORDER BY tp.position, tp.person_id LIMIT 1`) as Array<{ id: string }>;
     const to = next[0]?.id ?? null;
-    // The trigger that follows finds the next owner already first.
     await scope.sql`UPDATE tasks SET owner_key_id = ${to ? await keyOf(scope, to) : null} WHERE id = ${taskId}`;
     await recordAs(scope, ctx, EventTypes.TaskOwnerChanged, { from: personId, to }, { projectId, taskId });
   }
@@ -367,6 +368,7 @@ async function removePerson(ctx: RequestContext): Promise<Response> {
     if (rows[0].role === "admin" && (await otherAdmins(scope, id)) === 0) return "lastAdmin";
     await scope.sql`UPDATE people SET removed_at = now() WHERE id = ${id}`;
     await scope.sql`UPDATE api_keys SET revoked_at = now() WHERE person_id = ${id} AND revoked_at IS NULL`;
+    await scope.sql`DELETE FROM push_subscriptions WHERE person_id = ${id}`;
     await passOnTasks(scope, ctx, id);
     await recordAs(scope, ctx, EventTypes.PersonRemoved, { personId: id });
     return "removed";

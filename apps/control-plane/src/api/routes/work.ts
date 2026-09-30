@@ -6,6 +6,7 @@
  * duration and failure remain inspectable per attempt (plan §39).
  */
 
+import { auditActor } from "../auth.ts";
 import { z } from "zod";
 import { EventTypes, agentRoleSchema, newId, resolveAgentModel } from "@dude/domain";
 import type { AgentModels } from "@dude/domain";
@@ -94,10 +95,13 @@ async function createTask(ctx: RequestContext): Promise<Response> {
     // Whoever creates it drives it until they hand it to someone.
     await scope.sql`
       INSERT INTO tasks (id, organization_id, project_id, number, epic_id, title, goal,
-                              acceptance_criteria, status, owner_key_id)
-      VALUES (${taskId}, ${organizationId}, ${input.projectId}, ${project[0]!.number}, ${input.epicId},
-              ${input.title}, ${input.goal},
-              ${input.acceptanceCriteria ?? []}::jsonb, 'received', ${ctx.principal.apiKeyId})`;
+                               acceptance_criteria, status)
+       VALUES (${taskId}, ${organizationId}, ${input.projectId}, ${project[0]!.number}, ${input.epicId},
+               ${input.title}, ${input.goal},
+               ${input.acceptanceCriteria ?? []}::jsonb, 'received')`;
+     await scope.sql`
+       INSERT INTO task_people (task_id, person_id, organization_id, position)
+       VALUES (${taskId}, ${ctx.principal.personId}, ${organizationId}, 0)`;
     const missing = await setTaskRepositories(scope, organizationId, input.projectId, taskId, input.repositories ?? []);
     // Thrown, so the transaction and the task's number roll back.
     if (missing) throw notFound(`repository ${missing} is not in this project`);
@@ -109,7 +113,7 @@ async function createTask(ctx: RequestContext): Promise<Response> {
       organizationId,
       projectId: input.projectId,
       taskId,
-      actor: { type: "human", id: ctx.principal.apiKeyId },
+      actor: { type: ctx.principal.credentialKind === "api_key" ? "human" : "person", id: auditActor(ctx.principal).id },
       source: "control-plane",
       correlationId: taskId,
       payload: { title: input.title, goal: input.goal },
@@ -139,19 +143,19 @@ async function deliverTask(ctx: RequestContext): Promise<Response> {
   // The policy is what admins set: only they may loosen it for one task.
   if (input.policy) await requireOrgAdmin(ctx);
   return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${ctx.params.id}/deliver`,
-    JSON.stringify(input), ctx.principal.apiKeyId);
+    JSON.stringify(input), ctx.principal);
 }
 
 /** Mark finished work that has nothing to merge done: a person has read it. */
 async function markTaskDone(ctx: RequestContext): Promise<Response> {
   return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${ctx.params.id}/done`,
-    "{}", ctx.principal.apiKeyId);
+    "{}", ctx.principal);
 }
 
 /** Its owner decides how delivery goes on after it stopped for them. */
 async function decideTask(ctx: RequestContext): Promise<Response> {
   return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${ctx.params.id}/decide`,
-    await ctx.request.text(), ctx.principal.apiKeyId);
+    await ctx.request.text(), ctx.principal);
 }
 
 async function listTasks(ctx: RequestContext): Promise<Response> {
@@ -232,7 +236,7 @@ async function createRun(ctx: RequestContext): Promise<Response> {
       projectId: task.project_id,
       taskId,
       runId,
-      actor: { type: "human", id: ctx.principal.apiKeyId },
+      actor: { type: ctx.principal.credentialKind === "api_key" ? "human" : "person", id: auditActor(ctx.principal).id },
       source: "control-plane",
       correlationId: taskId,
       payload: { attempt },

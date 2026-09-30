@@ -139,22 +139,31 @@ func TestAnImplementerRecordsWorkItFoundAndSeesIt(t *testing.T) {
 
 // Work an agent finds is owned by whoever drives the task it found it in:
 // the person who hears of it and decides whether it is worth doing.
-func TestWorkAnAgentFindsIsOwnedByItsTasksOwner(t *testing.T) {
+func TestWorkAnAgentFindsInheritsItsKeylessPersonOwner(t *testing.T) {
 	f := setup(t)
-	mustExec(t, f.owner, `INSERT INTO api_keys (id, organization_id, name, key_hash, key_prefix) VALUES ($1, $2, 'Ana', $1, 'dude_sk_')`,
-		"key_ana_"+f.org, f.org)
-	mustExec(t, f.owner, `UPDATE tasks SET owner_key_id = $2 WHERE id = $1`, f.item, "key_ana_"+f.org)
+	mustExec(t, f.owner, `INSERT INTO people (id, organization_id, name) VALUES ($1, $2, 'Ana')`, "per_ana_"+f.org, f.org)
+	mustExec(t, f.owner, `INSERT INTO task_people (task_id, person_id, organization_id, position) VALUES ($1, $2, $3, 0)`, f.item, "per_ana_"+f.org, f.org)
 	token := f.run(t, "run_found", "implementer", "running")
 	if status, out := f.post(t, token, "create_task", `{"title":"Found on the way","goal":"why"}`); status != 200 {
 		t.Fatalf("create: %d %v", status, out)
 	}
 	var owner string
-	if err := f.owner.QueryRow(context.Background(), `SELECT COALESCE(owner_key_id, '') FROM tasks
-		WHERE project_id = $1 AND number = 2`, f.project).Scan(&owner); err != nil {
+	if err := f.owner.QueryRow(context.Background(), `SELECT tp.person_id FROM tasks t JOIN task_people tp ON tp.task_id = t.id
+		WHERE t.project_id = $1 AND t.number = 2`, f.project).Scan(&owner); err != nil {
 		t.Fatal(err)
 	}
-	if owner != "key_ana_"+f.org {
+	if owner != "per_ana_"+f.org {
 		t.Errorf("owned by %q, want the parent task's owner", owner)
+	}
+	var keys int
+	var legacyOwner *string
+	if err := f.owner.QueryRow(context.Background(), `SELECT
+		(SELECT count(*) FROM api_keys WHERE person_id = $2), owner_key_id
+		FROM tasks WHERE project_id = $1 AND number = 2`, f.project, owner).Scan(&keys, &legacyOwner); err != nil {
+		t.Fatal(err)
+	}
+	if keys != 0 || legacyOwner != nil {
+		t.Fatalf("keyless inheritance minted or required a key: keys=%d legacyOwner=%v", keys, legacyOwner)
 	}
 }
 
