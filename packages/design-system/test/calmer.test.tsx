@@ -139,10 +139,7 @@ describe("checks that cannot be read", () => {
     expect(h).toContain('data-pr-state="ci_running"');
     const icon = html(<PrChip pr={pr([codeRabbit, denied], "ci_running")} iconOnly />);
     expect(icon).toContain('aria-label="CI unavailable, pull request acme/dude#101 (opens on GitHub)"');
-    const facts = prFacts(pr([codeRabbit, denied], "ci_running"));
-    expect(facts).toContain("Checks: 1 readable passing");
-    expect(facts.some((f) => f.includes("Checks: Read"))).toBe(true);
-    expect(facts.some((f) => /all .* passing/i.test(f) || f.includes("running"))).toBe(false);
+    expect(prFacts(pr([codeRabbit, denied], "ci_running"))).toEqual(["Checks: 1 readable passing", prCheckDiagnosticReason(CHECK_RUNS_FORBIDDEN), "Approved"]);
   });
 
   test("a real failure, or the pull request being over, still wins the chip", () => {
@@ -159,8 +156,8 @@ describe("checks that cannot be read", () => {
     expect(h).toContain(prCheckDiagnosticReason(CHECK_RUNS_FORBIDDEN));
     expect(h).toContain("1 readable check passing");
     // One job row, CodeRabbit's: the diagnostic is no row of its own.
-    const rows = html(<PullRequestPanel pr={pr([codeRabbit, denied], "ci_running")} />).match(/<li><svg[^]*?<\/li>/g) ?? [];
-    expect(rows.map(text)).toEqual(["CodeRabbit"]);
+    const jobs = html(<PullRequestPanel pr={pr([codeRabbit, denied], "ci_running")} />).match(/data-fact="checks"[^]*?<ul[^>]*>([^]*?)<\/ul>/)?.[1] ?? "";
+    expect((jobs.match(/<li[^>]*>[^]*?<\/li>/g) ?? []).map(text)).toEqual(["CodeRabbit"]);
     // Its checks line is not drawn green.
     const checksLine = html(<PullRequestPanel pr={pr([codeRabbit, denied], "ci_running")} />).match(/data-fact="checks"[^]*?data-icon="([^"]+)"/)?.[1];
     expect(checksLine).toBe("circle-dotted");
