@@ -5,6 +5,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -61,5 +62,27 @@ func TestTheSpecIsTheGoldenOne(t *testing.T) {
 				t.Errorf("spec differs from %s:\n got: %s\nwant: %s", path, got, want)
 			}
 		})
+	}
+}
+
+// agent.nested_containers asks lux for a sandbox that runs containers, on
+// agent Runs only when set: lux places such a Run only on a host offering
+// them, so an unset operator must not get Runs that wait for one.
+func TestNestedContainersAreAskedForOnlyWhenSet(t *testing.T) {
+	for _, model := range []string{"llm/impl", "fake/scripted"} {
+		c, in := goldenInput(model)
+		if sp := buildSpec(c, in); sp.Sandbox != nil {
+			t.Errorf("%s: unset, sandbox = %+v", model, *sp.Sandbox)
+		}
+	}
+	c, in := goldenInput("llm/impl")
+	c.NestedContainers = true
+	sp := buildSpec(c, in)
+	if sp.Sandbox == nil || !sp.Sandbox.NestedContainers {
+		t.Fatalf("set: sandbox = %+v", sp.Sandbox)
+	}
+	b, _ := json.Marshal(sp)
+	if !strings.Contains(string(b), `"sandbox":{"nestedContainers":true}`) {
+		t.Errorf("wire form: %s", b)
 	}
 }
