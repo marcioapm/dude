@@ -1889,13 +1889,9 @@ func (w *world) turnDoneWithSteer(wi string) string {
 	if _, err := w.syncer.Sweep(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(10 * time.Second)
-	for w.count(`SELECT count(*) FROM runs WHERE id = $1 AND turn_done_at IS NOT NULL`, runID) == 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("the agent's turn never ended")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	w.await("the agent's turn never ended", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND turn_done_at IS NOT NULL`, runID) > 0
+	})
 	mustExec(t, w.owner, `INSERT INTO directives (id, organization_id, task_id, run_id, text) VALUES ('dir_late', $1, $2, $3, 'one more thing')`,
 		w.org, wi, runID)
 	return runID
@@ -2048,13 +2044,9 @@ func TestInterruptNowCarriesTheWordsWhenTheSteerFailedBeforeItWasSent(t *testing
 	wi := w.task()
 	runID, interruptID := w.interruptQueuedSteer(wi)
 	w.lux.FailInput(w.lux.Runs()[0].ID, "dir_s", "the agent exited")
-	deadline := time.Now().Add(10 * time.Second)
-	for w.count(`SELECT count(*) FROM directives WHERE id = 'dir_s' AND failed_at IS NOT NULL`) == 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("the steer's failure was never recorded")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	w.await("the steer's failure was never recorded", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE id = 'dir_s' AND failed_at IS NOT NULL`) > 0
+	})
 	w.until("the interrupt to be sent", func() bool {
 		return w.count(`SELECT count(*) FROM directives WHERE id = $1 AND sent_at IS NOT NULL`, interruptID) == 1
 	})
@@ -2171,12 +2163,19 @@ func (w *world) interruptQueuedSteer(wi string) (runID, interruptID string) {
 // original steer read.
 func (w *world) waitRead() {
 	w.t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for w.count(`SELECT count(*) FROM directives WHERE id = 'dir_s' AND delivered_at IS NOT NULL`) == 0 {
+	w.await("the steer was never read", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE id = 'dir_s' AND delivered_at IS NOT NULL`) > 0
+	})
+}
+
+// await polls cond for 10 s without sweeping, for what the follower alone
+// records, and fails the test with failure if it never holds.
+func (w *world) await(failure string, cond func() bool) {
+	w.t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); !cond(); time.Sleep(10 * time.Millisecond) {
 		if time.Now().After(deadline) {
-			w.t.Fatal("the steer was never read")
+			w.t.Fatal(failure)
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
 }
 
