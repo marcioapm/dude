@@ -5,7 +5,7 @@
  * route definitions testable in isolation and independent of the server.
  */
 
-import { type Principal, authenticate } from "./auth.ts";
+import { type Principal, authenticate, personPrincipal } from "./auth.ts";
 import { touch } from "./presence.ts";
 import { errorResponse, notFound, unauthorized } from "./http.ts";
 
@@ -52,6 +52,8 @@ export type Fallback = (request: Request, url: URL) => Promise<Response | null> 
 export class Router {
   readonly #routes: Route[] = [];
   #fallback: Fallback | null = null;
+
+  constructor(private readonly authenticateRequest: (credential: string | null) => Promise<Principal | null> = authenticate) {}
 
   #add(
     method: string,
@@ -120,10 +122,13 @@ export class Router {
          * enabled per route rather than globally, and only for the read-only
          * stream endpoint.
          */
-        const principal = await authenticate(
+        let principal = await this.authenticateRequest(
           request.headers.get("authorization") ??
             (route.allowKeyInQuery ? url.searchParams.get("key") : null),
         );
+        if (principal?.credentialKind === "person") {
+          principal = await personPrincipal(principal.organizationId, principal.personId);
+        }
         if (!principal) throw unauthorized();
         await touch(principal, request.headers.get("x-dude-where"));
 
