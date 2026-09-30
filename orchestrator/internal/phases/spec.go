@@ -30,7 +30,9 @@ type AgentConfig struct {
 	// Hosts every agent may reach besides its model provider. "*" turns
 	// egress filtering off.
 	Egress []string
-	// DUDE_AGENT_NESTED_CONTAINERS: opt in only when lux hosts support it.
+	// Agents may run docker or podman in their Run
+	// (DUDE_AGENT_NESTED_CONTAINERS). lux places such Runs only on hosts
+	// offering nested containers, so it is off unless its hosts do.
 	NestedContainers bool
 	// A limit on a Run's running time (DUDE_AGENT_TIMEOUT), for an operator
 	// who wants one; none by default. Agents work for days, and one waiting
@@ -232,7 +234,8 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		spec.Secrets = append(spec.Secrets, lux.Secret{Name: "DUDE_TOOLS_AUTH", Value: "Bearer " + in.ToolsToken})
 	}
 
-	// Scripted agents need the same sandbox on real lux in the contract suite.
+	// Before the scripted agent returns: the contract suite runs it on a
+	// real lux, which must place it like the agent it stands in for.
 	if c.NestedContainers {
 		spec.Sandbox = &lux.Sandbox{NestedContainers: true}
 	}
