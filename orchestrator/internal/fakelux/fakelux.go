@@ -100,6 +100,9 @@ type Run struct {
 	Stopped     int
 	Resumed     int
 	Interrupted int
+	// Each input request's body as received (refused ones too), by request
+	// id, in order: a retry of one request adds another.
+	InputBodies map[string][]string
 	// The secrets each accepted resume carried, in order, decoded and as
 	// sent (every field of each descriptor).
 	ResumeSecrets    [][]lux.Secret
@@ -278,6 +281,10 @@ type Server struct {
 	// only between turns: accepted at once with lands "next_turn", read
 	// when the turn ends.
 	LegacyInput, NextTurnInput bool
+	// BeforeInput, when set, runs as each input request arrives, before the
+	// fake acts on it; false refuses the request (503), as a lux that is
+	// briefly unavailable. Called without the fake's lock.
+	BeforeInput func(runID, requestID string) bool
 }
 
 // New serves a fake lux. With decide nil, every Run plays dude's scripted
@@ -841,7 +848,18 @@ func (s *Server) input(w http.ResponseWriter, r *http.Request) {
 		RequestID string `json:"requestId"`
 		Interrupt bool   `json:"interrupt"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&in)
+	body, _ := io.ReadAll(r.Body)
+	_ = json.Unmarshal(body, &in)
+	s.mu.Lock()
+	if run.InputBodies == nil {
+		run.InputBodies = map[string][]string{}
+	}
+	run.InputBodies[in.RequestID] = append(run.InputBodies[in.RequestID], string(body))
+	s.mu.Unlock()
+	if s.BeforeInput != nil && !s.BeforeInput(run.ID, in.RequestID) {
+		writeErr(w, 503, "unavailable", "try again")
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// lux takes input for a Run that is live or about to be, and delivers

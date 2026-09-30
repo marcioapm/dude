@@ -417,11 +417,18 @@ type Directive struct {
 
 // QueueDirective records a directive for the Run, and returns its id and
 // when it was queued.
+//
+// An interrupt superseding a directive of this Run with the same words, not
+// failed, is interrupt_only ("Interrupt now"): the words go, or went, with
+// the original, so lux is sent only the interrupt, whatever becomes of the
+// original before the syncer sends it.
 func QueueDirective(ctx context.Context, tx pgx.Tx, r RunRef, d Directive) (string, time.Time, error) {
 	id := ids.New(ids.Directive)
 	var createdAt time.Time
-	err := tx.QueryRow(ctx, `INSERT INTO directives (id, organization_id, task_id, run_id, text, scope, supersedes, interrupt)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING created_at`,
+	err := tx.QueryRow(ctx, `INSERT INTO directives (id, organization_id, task_id, run_id, text, scope, supersedes, interrupt, interrupt_only)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8 AND EXISTS (SELECT 1 FROM directives s
+			WHERE s.id = $7 AND s.run_id = $4 AND s.text = $5 AND s.failed_at IS NULL))
+		RETURNING created_at`,
 		id, r.Org, r.TaskID, r.RunID, d.Text, d.Scope, db.Nullable(d.Supersedes), d.Interrupt).Scan(&createdAt)
 	return id, createdAt, err
 }
