@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"log/slog"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/config"
+	"github.com/marciomartins/dude/orchestrator/internal/registry"
 )
 
 // loadConfig resolves the orchestrator's config from a file holding text
@@ -150,6 +152,40 @@ subject = "mailto:file@example.com"
 	// With no console URL of its own, lux's URL is the env's too.
 	if s.ConsoleURL != "https://lux.env" {
 		t.Errorf("console url = %q", s.ConsoleURL)
+	}
+}
+
+func TestStaticRegistrySettingsReachTheRegistryLogin(t *testing.T) {
+	file := required + `[registry]
+auth = "static"
+host = "registry.file.example:5000"
+credential = "file-user:file-pass"
+`
+	for name, tc := range map[string]struct {
+		vars                 map[string]string
+		wantHost, wantSecret string
+	}{
+		"file": {wantHost: "registry.file.example:5000", wantSecret: "file-user:file-pass"},
+		"env host": {vars: map[string]string{"DUDE_REGISTRY": "ghcr.io"},
+			wantHost: "ghcr.io", wantSecret: "file-user:file-pass"},
+		"env credential": {vars: map[string]string{"DUDE_REGISTRY_CREDENTIAL": "env-user:env-pass"},
+			wantHost: "registry.file.example:5000", wantSecret: "env-user:env-pass"},
+	} {
+		s := mustSettings(t, loadConfig(t, file, 0o600, tc.vars))
+		login, err := registry.FromEnv(context.Background(), s.Registry.getenv, s.Agent.DefaultImage)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if login == nil {
+			t.Fatalf("%s: no registry login", name)
+		}
+		secret, err := login.Credential(context.Background())
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if login.Registry() != tc.wantHost || secret != tc.wantSecret {
+			t.Errorf("%s: login = %q %q, want %q %q", name, login.Registry(), secret, tc.wantHost, tc.wantSecret)
+		}
 	}
 }
 
