@@ -64,16 +64,22 @@ export const EventTypes = {
    */
   DirectiveAccepted: "run.directive.accepted",
   /**
-   * A steer reached the agent. Payload: `{ directiveId, read? }`: `read`
-   * when lux reported the agent's step reading it, so the event's time and
-   * place in the ledger are where it was read; without it (an older lux, a
-   * harness with no read receipt) it was handed over then.
+   * A steer reached the agent. Payload: `{ directiveId, read?, interruptOnly? }`:
+   * `read` when lux reported the agent's step reading it, so the event's
+   * time and place in the ledger are where it was read; without it (an
+   * older lux, a harness with no read receipt) it was handed over then.
+   * `interruptOnly`: an "Interrupt now" sent as the interrupt alone, settled
+   * with the steer whose words it resends (in the same transaction, or when
+   * sent if they were already read); it is not a second read.
    */
   DirectiveDelivered: "run.directive.delivered",
   /**
    * A steer will not reach the agent. Payload: `{ directiveId, error }`.
    * Never after its delivery; a `DirectiveDelivered` after it (the agent
-   * read it after all) supersedes it, and the failure is cleared.
+   * read it after all) supersedes it, and the failure is cleared. An
+   * "Interrupt now" sent as the interrupt alone fails with the steer whose
+   * words it resends, with the same error (an older lux fails that steer
+   * when the interrupt cancels its turn).
    */
   DirectiveFailed: "run.directive.failed",
   RunPaused: "run.paused",

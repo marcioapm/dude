@@ -134,10 +134,26 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   is the agent's own report that it has the words: the failure and its
   error are cleared and `run.directive.delivered` is written.
   "Interrupt now" on a queued steer is a directive superseding it with the
-  same words and `interrupt: true`; the API marks it `interrupt_only` when
-  it is created, and lux is sent only the interrupt, with no text, however
-  far the original has got by then: the agent hears the words once. It is
-  delivered with the original.
+  same words and `interrupt: true`. Its `resends` names the root
+  instruction (an Interrupt now on an Interrupt now names the first), so
+  repeated clicks are one instruction. Whether it carries the words is
+  decided at its first send attempt and then fixed (`interrupt_only`), so
+  every retry sends the same request: if a directive carrying the words is
+  with lux and not failed, lux is sent the interrupt alone; if the root
+  failed or was never sent, the interrupt carries the words, and the agent
+  hears them once. lux sends no receipt for an interrupt alone: it is
+  delivered in the same transaction as the directive carrying its words
+  (consumed, or a legacy handoff), or when sent if that one was already
+  read, each time with `run.directive.delivered` `{interruptOnly: true}`
+  (never `read`). If the words fail and no directive left carries them, the
+  interrupt fails with the same error, one `run.directive.failed` each. lux
+  carries steers an interrupt left unread into the next turn, under the same
+  request ids, so the root is normally consumed in the turn after the
+  interrupt; they fail only when the Run stops or the harness errors. An
+  older lux fails them on the cancel: the root fails, the interrupt fails
+  with it, and the transcript shows one failed steer with Retry. The
+  transcript folds every attempt into the root's turn, at the position and
+  time it was read, even when the click came after the read.
 - **Pause** stops the lux Run, keeping its workspace and session; **resume**
   continues it, on any host, with the agent's conversation intact.
 - **Parking.** dude pauses a Run itself (`runs.dude_pause`) so that one
