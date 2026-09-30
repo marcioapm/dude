@@ -65,21 +65,28 @@ Fields/validation: repo `name` `^[a-z0-9][a-z0-9-]*$`, unique in project; `url` 
 `Dialog size="sm"`: title (required, ≤200), description (Textarea, Markdown). Reorder via **Move up / Move down** in the row menu and a `position` field on the epic; no drag, consistent with the board rule. Delete is `Dialog tone="danger"` with "Its N tasks move to *No epic*"; a non-empty epic is never deleted silently. Epic board header gets `Edit epic` (secondary) and shows the description under the title, clamped to two lines.
 
 ### Task create / edit / move / split
-Replace the inline two-input form with a `Dialog size="md"`:
+The task dialog is a document being written: `Dialog size="document"` (1120×900, full screen under 640px) with the project › epic above its title and a 300px aside on the chrome shade.
 ```
-New task                                               ✕
- Kind    (● Code change → pull request) (○ Document → artifact)
- Title   [                                              ]  required
- Epic    [OAuth migration            ▾]   (prefilled from scope; "No epic")
- Repo    [api                        ▾]   (change only; hidden if one repo; required if >1)
- Goal    [                                              ]
-         [ textarea, Markdown, "why, and any detail"     ]
- Acceptance criteria
-   • [Login works with PKCE                     ] ✕
-   • [+ add criterion]
-                                       [Cancel] [Create]  [Create and deliver]
+Customer portal › ⧉ Checkout v2                                            ✕
+New task
+ Title · required                                  │ Epic   [Checkout v2   ▾]
+ [ Payment step keeps SEPA and Invoice          ]  │ Repositories (only when >1)
+ Goal  Why it matters, what exists today, …        │   ☑ web  main  [Changes it ▾]
+ ┌ Write | Preview           H B I  <> 🔗 ❝  • ☑ ┐ │ WHAT MAKES A GOOD TASK
+ │ Markdown source, mono, grows with its content  │ │   • Goal … • Criteria … • Links …
+ └ Markdown                          836 / 10,000 ┘ │ MARKDOWN  **bold** Ctrl B …
+ Acceptance criteria  One list item per criterion. │
+ ┌ Write | Preview                    …           ┐ │
+ │ - [ ] Card, SEPA and Invoice all appear         │ │
+ │ - [ ] Invoice only for annual plans             │ │
+ └ Markdown  (2 criteria)                          ┘ │
+ Ctrl Enter create  Ctrl Shift P toggle preview      [Cancel] [Create] [Create and deliver]
 ```
-Validation: title 1–500; goal ≤10k; criteria each ≤2000, blanks dropped; repo required at *deliver* time for kind=change (today a two-repo project 400s on Deliver with no UI to fix it). Edit reuses the same dialog: title/goal/criteria editable until the item is `done`; epic movable always; kind and repo locked once a run exists (hint says why). **Move** is the epic `Select` alone (`RowMenu › Move to epic ›`). **Split** dialog: a list editor of new titles, "close the original as *superseded*" checkbox; children land in the same epic with `splitFromId`. Delete: only for never-delivered items; otherwise the menu offers *Abort* and explains. New DS piece: **ListEditor** (criteria / split rows).
+Goal and criteria are `MarkdownEditor`s; Preview is `Markdown variant="document"`, the safe AST renderer.
+
+**Criteria are one Markdown list, stored as the list of strings the API has always kept** (`acceptanceCriteria: string[]`, no schema change). `apps/web/src/screens/criteria.ts`: each top-level list item (`-`, `*`, `+`, `1.`, `1)`), less one `[ ]`/`[x]` marker, is one criterion; lines indented under it, blank lines between those, and a fence opened in it stay with it, dedented to the item's content column; trimmed, empties dropped. Text outside every item is *stray*: the footer warns "Text outside a list item isn't saved as a criterion" and it is not sent. Editing opens the saved criteria as `- [ ] first line` with further lines indented two spaces; reading that back gives exactly the saved strings (unit-tested, including 2000 seeded random criteria). The footer counts them ("2 criteria"). The task screen renders the goal and each criterion with `Markdown`, so what was previewed is what is shown.
+
+Validation: title 1–500; goal ≤10k; each criterion ≤2000 (the server's limit; the server does not cap the count) — one over is the field's error, naming it, and saving is disabled; repo required at *deliver* time for kind=change. Ctrl/⌘+Enter creates (not delivers). Closing with more than 20 new words (Escape, ×, Cancel, a click outside) asks "Discard this task?" — Keep writing (focused) / Discard (danger). Edit reuses the same dialog: once a delivery has started the title is disabled and both editors open locked in Preview; the epic stays movable. **Move** is the epic `Select` alone (`RowMenu › Move to epic ›`). **Split** dialog: a list editor of new titles, "close the original as *superseded*" checkbox; children land in the same epic with `splitFromId`. Delete: only for never-delivered items; otherwise the menu offers *Abort* and explains.
 
 ### Task kinds
 `kind: "change" | "document"`. A *change* ends in a PR (today's pipeline). A *document* runs investigate → write → review → publish; the task screen shows an **Artifacts** section instead of the PR step: a row per artifact (name, media type, size, producer role, age) opening a `Markdown variant="document"` view inline for text, download otherwise. Board cards for documents show a `file` glyph after the key so the kind reads without colour.
