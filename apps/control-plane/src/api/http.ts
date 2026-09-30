@@ -3,6 +3,7 @@
  */
 
 import type { ZodType } from "zod";
+import { MODEL_ACCEPTED_FORM } from "@dude/domain";
 
 export class HttpError extends Error {
   constructor(
@@ -70,7 +71,11 @@ export async function parseBody<T>(request: Request, schema: ZodType<T>): Promis
 
   const result = schema.safeParse(payload);
   if (!result.success) {
-    throw badRequest("request body failed validation", result.error.flatten());
+    const modelIssues = result.error.issues.filter((issue) => issue.message === MODEL_ACCEPTED_FORM);
+    const message = modelIssues.length
+      ? `request body failed validation: ${modelIssues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ")}`
+      : "request body failed validation";
+    throw badRequest(message, result.error.flatten());
   }
   return result.data;
 }

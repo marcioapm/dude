@@ -8,6 +8,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildRouter } from "../src/index.ts";
+import { Config, useConfig } from "../src/config.ts";
 import type { Router } from "../src/api/router.ts";
 
 const INDEX = "<!doctype html><title>dude</title>";
@@ -110,6 +111,20 @@ describe("DUDE_WEB_DIR", () => {
     for (const path of ["/%2e%2e/secret.txt", "/a/../../secret.txt"]) {
       const res = await get(path);
       expect(await res.text()).toBe(INDEX);
+    }
+  });
+});
+
+describe("backend.web_dir in the configuration file", () => {
+  test("is where the router serves the web app from when none is passed", async () => {
+    const file = join(parent, "dude.toml");
+    await writeFile(file, `[backend]\nweb_dir = ${JSON.stringify(join(parent, "web"))}\n`, { mode: 0o600 });
+    useConfig(Config.load({ env: { DUDE_CONFIG: file }, defaultPath: join(parent, "absent.toml") }));
+    try {
+      const res = await buildRouter().handle(new Request("http://dude.test/some/page"));
+      expect(await res.text()).toBe(INDEX);
+    } finally {
+      useConfig(null);
     }
   });
 });

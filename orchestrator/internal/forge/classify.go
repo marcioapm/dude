@@ -208,6 +208,10 @@ func Classify(prior, current Status, feedback []Feedback, factoryLogins []string
 // factory merges only when a person says so; this is what a person is told.
 func Ready(s Status) bool { return len(Blockers(s)) == 0 }
 
+// A 403 without rate-limit markers is also what SSO enforcement and pending
+// organization token approval answer, so this advises rather than diagnoses.
+const checkRunsForbiddenBlocker = "GitHub refused the check-runs read; check the token's Checks: Read permission and its repository/organization access (SSO, token approval)"
+
 // Blockers says, in a person's words, what keeps a pull request from
 // being merged: nothing, when it is ready.
 func Blockers(s Status) []string {
@@ -216,11 +220,17 @@ func Blockers(s Status) []string {
 		// GitHub merges no draft: it is marked ready for review first.
 		out = append(out, "it is a draft")
 	}
-	switch s.Checks {
-	case ChecksFailing:
+	unreadable := CheckDiagnostic(s.CheckList) == CheckRunsForbidden
+	switch {
+	case s.Checks == ChecksFailing:
 		out = append(out, "checks are failing")
-	case ChecksPending:
-		out = append(out, "checks are still running")
+		if unreadable {
+			out = append(out, checkRunsForbiddenBlocker)
+		}
+	case s.Checks == ChecksPending && unreadable:
+		out = append(out, checkRunsForbiddenBlocker)
+	case s.Checks == ChecksPending:
+		out = append(out, "checks are pending")
 	}
 	switch s.Review {
 	case ReviewChangesRequested:

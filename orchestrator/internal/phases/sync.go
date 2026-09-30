@@ -221,7 +221,7 @@ func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 			  AND (r.status IN ('pending', 'scheduled', 'starting', 'running')
 			       OR `+resumable+`
 			       -- Aborted in dude but not yet cancelled in lux.
-			       OR (r.status = 'aborted' AND r.lux_run_id IS NOT NULL AND r.lux_stop_reason IS DISTINCT FROM 'cancel'))
+			       OR (r.status IN ('aborted', 'failed') AND r.lux_run_id IS NOT NULL AND r.lux_stop_reason IS DISTINCT FROM 'cancel'))
 			  -- An abort does not wait out the back-off of the step it ends.
 			  AND (r.status = 'aborted' OR r.next_attempt_at IS NULL
 			       OR r.next_attempt_at <= now() + make_interval(secs => $3::float8))
@@ -264,7 +264,7 @@ func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 // it did anything, so the sweeper keeps going while there is work.
 func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 	switch {
-	case r.Status == statusAborted:
+	case r.Status == statusAborted || r.Status == "failed":
 		return true, s.cancel(ctx, r)
 	case r.Status == statusPending && r.LuxRunID == "":
 		return true, s.submit(ctx, r)
@@ -312,7 +312,7 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 // submit builds the Run's spec and hands it to lux.
 func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 	spec, err := s.spec(ctx, r, nil)
-	if passing(err) {
+	if passing(err) || forge.Transient(err) {
 		return s.retryLater(ctx, r, err)
 	}
 	if err != nil {
@@ -474,6 +474,16 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec) (
 	if gh != nil {
 		if in.ForgeToken, err = gh.Token(); err != nil {
 			return lux.Spec{}, errForge{err}
+		}
+		if delivery.Publishes[r.Phase] {
+			for _, repo := range repos {
+				if repo.Access == "read" {
+					continue
+				}
+				if err := gh.CheckPushAccess(ctx, repo.URL); err != nil {
+					return lux.Spec{}, fmt.Errorf("push preflight for %s: %w", repo.Name, err)
+				}
+			}
 		}
 	}
 	if s.Agent.ToolsURL != "" {
@@ -763,7 +773,12 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		case !known:
 			return nil, fmt.Errorf("lux pushed %s, which this task does not name", res.Repo)
 		case res.Status != "pushed" && res.Status != "up-to-date":
-			return nil, fmt.Errorf("push %s %s: %s", res.Repo, res.Status, res.Error)
+			guidance := ""
+			message := strings.ToLower(res.Error)
+			if strings.Contains(message, "refusing to allow a personal access token to create or update workflow") && strings.Contains(message, "scope") {
+				guidance = "; workflow-file pushes require Workflows: Read and write on a fine-grained PAT, or the workflow scope on a classic PAT; ordinary push preflight does not establish this permission"
+			}
+			return nil, fmt.Errorf("push %s %s: %s%s", res.Repo, res.Status, res.Error, guidance)
 		}
 		if res.Commit == "" {
 			continue // nothing committed there
@@ -861,11 +876,13 @@ func judged(shown []string, verdicts map[int]bool) map[string]bool {
 	return out
 }
 
-// cancel ends the lux Run of a Run a person aborted.
+// cancel ends the lux Run of a failed or aborted Run, including resumable stopped and lost Runs.
 func (s *Syncer) cancel(ctx context.Context, r phaseRun) error {
 	s.unfollow(r.ID)
-	if err := s.ask(ctx, r, s.Lux.Cancel); err != nil {
-		return err
+	if r.LuxRunID != "" && r.LuxState != "cancelled" && r.LuxState != "succeeded" && r.LuxState != "failed" {
+		if err := s.askControl(ctx, r, s.Lux.Cancel); err != nil {
+			return err
+		}
 	}
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE runs SET lux_stop_reason = 'cancel', control = 'none' WHERE id = $1`, r.ID)
@@ -947,8 +964,11 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		// The agent is starting a new turn; the old "done" no longer holds.
 		// lux_state is what lux says now ("resuming"), so directives wait for
-		// the stream to report it running.
+		// the stream to report it running. A resumed lux Run's cost is no
+		// longer final, so it goes back on the cost work list; the stored
+		// amounts stand until the next read replaces them.
 		_, err := tx.Exec(ctx, `UPDATE runs SET status = 'running', lux_state = $2, lux_stop_reason = NULL,
+			lux_cost_next_at = now(),
 			control = 'none', control_requested_at = NULL, control_reason = NULL, dude_pause = NULL,
 			tool_starts = tool_starts + 1, idle_nudged_at = NULL, agent_active_at = NULL,
 			-- Still waiting on a person (a person resumed it anyway): the
@@ -999,7 +1019,7 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (lux.Run,
 		return lux.Run{}, err
 	}
 	spec, err := s.spec(ctx, r, &lr.Spec)
-	if passing(err) || errors.As(err, new(errLoginUnavailable)) {
+	if passing(err) || forge.Transient(err) || errors.As(err, new(errLoginUnavailable)) {
 		return lux.Run{}, err
 	}
 	if err != nil {
@@ -1199,13 +1219,16 @@ func (s *Syncer) fail(ctx context.Context, r phaseRun, reason string) error {
 	})
 }
 
-// ask stops or cancels the Run's lux Run, if it is still going. An answer
-// that may change later backs the Run off and returns errRetry; lux refusing
-// outright (the Run is already over) counts as done.
+// ask stops the Run's lux Run if it is still going.
 func (s *Syncer) ask(ctx context.Context, r phaseRun, call func(context.Context, string) error) error {
 	if r.LuxRunID == "" || lux.Terminal(r.LuxState) {
 		return nil
 	}
+	return s.askControl(ctx, r, call)
+}
+
+// askControl retries transient failures; a definitive refusal counts as done.
+func (s *Syncer) askControl(ctx context.Context, r phaseRun, call func(context.Context, string) error) error {
 	err := call(ctx, r.LuxRunID)
 	if le, ok := lux.AsError(err); err == nil || ok && !le.Retryable() {
 		return nil
@@ -1311,8 +1334,14 @@ func (s *Syncer) retryLater(ctx context.Context, r phaseRun, cause error) error 
 		return s.fail(ctx, r, "lux no longer has this Run")
 	}
 	s.Log.Info("lux call failed; retrying later", "run", r.ID, "error", cause)
+	// GitHub penalises requests made during a limit it asked to be waited out.
+	delay := 5 * time.Second
+	if wait := forge.RetryAfter(cause); wait > delay {
+		delay = wait
+	}
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE runs SET next_attempt_at = now() + interval '5 seconds' WHERE id = $1`, r.ID)
+		_, err := tx.Exec(ctx, `UPDATE runs SET next_attempt_at = now() + make_interval(secs => $2) WHERE id = $1`,
+			r.ID, delay.Seconds())
 		return err
 	})
 }

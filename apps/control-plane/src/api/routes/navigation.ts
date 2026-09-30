@@ -152,14 +152,14 @@ async function getNavigation(ctx: RequestContext): Promise<Response> {
       WHERE rank <= ${ATTEMPTS_PER_TASK}
       ORDER BY "taskId", attempt, created_at`) as RunRow[];
 
-    // Spend per task. Cost events carry USD as reported by the harness.
+    // Spend per task: its agents' model cost by the one rule every screen
+    // uses (run_model_usd, migration 061): lux's AI cost once reported, else
+    // what the harness reported — never both.
     const costs = (await sql`
-      SELECT task_id AS "taskId",
-             COALESCE(sum((payload->>'costUsd')::numeric), 0)::float8 AS "costUsd"
-      FROM events
-      WHERE event_type = 'agent.model.request.completed' AND task_id IS NOT NULL
-        AND jsonb_typeof(payload->'costUsd') = 'number'
-      GROUP BY task_id`) as Array<{ taskId: string; costUsd: number }>;
+      SELECT r.task_id AS "taskId", COALESCE(sum(run_model_usd(r)), 0)::float8 AS "costUsd"
+      FROM runs r
+      WHERE r.kind = 'agent'
+      GROUP BY r.task_id`) as Array<{ taskId: string; costUsd: number }>;
 
     // -- assemble ----------------------------------------------------------
 

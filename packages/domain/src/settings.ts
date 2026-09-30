@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   deliveryPolicySchema,
   effortSchema,
+  modelSelectionSchema,
   TERMINAL_TASK_STATUSES,
   timeLimitMinutesSchema,
   type Effort,
@@ -126,7 +127,7 @@ export const settingsPatchSchema = z
         z.enum(SETTINGS_ROLES),
         z
           .object({
-            model: nullable(z.string().trim().min(1).max(200)),
+            model: nullable(modelSelectionSchema),
             effort: nullable(effortSchema),
             timeLimitMinutes: nullable(timeLimitMinutesSchema),
             enabled: nullable(z.boolean()),
