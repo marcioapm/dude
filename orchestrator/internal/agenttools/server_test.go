@@ -319,6 +319,28 @@ func TestATaskTakesA64KGoalAnd16KOfCriteriaInAllAndNoMore(t *testing.T) {
 	}
 }
 
+func TestA64KGoalThatJSONEscapesSixfoldIsStillATask(t *testing.T) {
+	f := setup(t)
+	token := f.run(t, "run_esc", "implementer", "running")
+	goal := strings.Repeat("<", 65536)
+	criteria := []string{strings.Repeat(">", 16384)}
+	b, _ := json.Marshal(map[string]any{"title": "Escaped", "goal": goal, "acceptanceCriteria": criteria})
+	if len(b) < 480_000 {
+		t.Fatalf("the body is %d bytes; json.Marshal was expected to escape it sixfold", len(b))
+	}
+	status, out := f.post(t, token, "create_task", string(b))
+	if status != 200 {
+		t.Fatalf("a %d-byte request within the limits: %d %v", len(b), status, out)
+	}
+	var gotGoal string
+	var gotCriteria []string
+	_ = f.owner.QueryRow(context.Background(), `SELECT goal, acceptance_criteria FROM tasks WHERE project_id = $1 AND title = 'Escaped'`,
+		f.project).Scan(&gotGoal, &gotCriteria)
+	if gotGoal != goal || len(gotCriteria) != 1 || gotCriteria[0] != criteria[0] {
+		t.Errorf("saved a goal of %d and criteria %d, want them as sent", len(gotGoal), len(gotCriteria))
+	}
+}
+
 func TestAnAgentAsksAPersonThroughATool(t *testing.T) {
 	f := setup(t)
 	token := f.run(t, "run_ask", "implementer", "running")
