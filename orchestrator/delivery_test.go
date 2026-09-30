@@ -1849,7 +1849,19 @@ func TestASteerToANextTurnHarnessWaitsForTheTurn(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM directives WHERE id = 'dir_s' AND delivered_at IS NOT NULL`); n != 0 {
 		t.Fatal("a next-turn steer was read mid-turn")
 	}
-	_ = runID
+	// The turn ends on its own: the agent reads it then, as its next turn.
+	w.lux.EndTurn(w.lux.Runs()[0].ID)
+	w.until("the agent to read it as the turn ends", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE id = 'dir_s' AND delivered_at IS NOT NULL`) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM events d JOIN events s ON s.run_id = d.run_id
+		WHERE d.run_id = $1 AND d.event_type = 'run.directive.delivered' AND (d.payload->>'read')::boolean
+		  AND d.payload->>'directiveId' = 'dir_s' AND s.event_type = 'agent.session.stopped' AND s.cursor < d.cursor`, runID); n != 1 {
+		t.Error("the read is not recorded after the turn's end")
+	}
+	if r := w.lux.Runs()[0]; r.Interrupted != 0 || len(r.Inputs) != 1 {
+		t.Errorf("interrupted=%d inputs=%v, want no interrupt and the words once", r.Interrupted, r.Inputs)
+	}
 }
 
 // turnDoneWithSteer plays an agent that finishes its first turn, seen done
