@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -74,11 +75,30 @@ func newCostFixture(t *testing.T) *costFixture {
 // one still going).
 func (f *costFixture) run(id, endedAgo string) {
 	f.t.Helper()
-	if _, err := f.owner.Exec(f.ctx, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, lux_run_id, started_at, ended_at)
-		VALUES ($1, $2, 'prj_'||$2, 'wi_'||$2, 1, 'lux_'||$1, now() - interval '9 days',
-		        CASE WHEN $3 = '' THEN NULL ELSE now() - $3::interval END)`, id, f.org, endedAgo); err != nil {
+	f.runOf("agent", id, endedAgo)
+}
+
+func (f *costFixture) runOf(kind, id, endedAgo string) {
+	f.t.Helper()
+	if _, err := f.owner.Exec(f.ctx, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, kind, lux_run_id, started_at, ended_at)
+		VALUES ($1, $2, 'prj_'||$2, 'wi_'||$2, 1, $4, 'lux_'||$1, now() - interval '9 days',
+		        CASE WHEN $3 = '' THEN NULL ELSE now() - $3::interval END)`, id, f.org, endedAgo, kind); err != nil {
 		f.t.Fatal(err)
 	}
+}
+
+// nextIn is how long until the Run's cost is read again; ok is false when
+// no read is due at all (the Run left the work list).
+func (f *costFixture) nextIn(id string) (d time.Duration, ok bool) {
+	f.t.Helper()
+	var s *float64
+	if err := f.owner.QueryRow(f.ctx, `SELECT EXTRACT(EPOCH FROM lux_cost_next_at - now())::float8 FROM runs WHERE id = $1`, id).Scan(&s); err != nil {
+		f.t.Fatal(err)
+	}
+	if s == nil {
+		return 0, false
+	}
+	return time.Duration(*s * float64(time.Second)), true
 }
 
 // sweep reads every Run due, then makes them all due again, as the next
@@ -145,6 +165,22 @@ func TestCostsAreStoredAsLuxReportsThemUntilFinal(t *testing.T) {
 		t.Errorf("%d cost events after an unchanged read, want 1", n)
 	}
 
+	// The amount rises at the same status: this is what moves the run header
+	// while lux is still settling.
+	f.lux.set("lux_run_a", lux.RunCost{Status: lux.CostIncomplete,
+		ByFamily: []lux.FamilyCost{usd(lux.FamilyAI, "0.9")}})
+	f.sweep()
+	if n := len(f.reported("run_a")); n != 2 {
+		t.Errorf("%d cost events after the AI amount rose at the same status, want 2", n)
+	}
+	// Only compute appears, AI and status unchanged.
+	f.lux.set("lux_run_a", lux.RunCost{Status: lux.CostIncomplete,
+		ByFamily: []lux.FamilyCost{usd(lux.FamilyAI, "0.9"), usd(lux.FamilyCompute, "0.004")}})
+	f.sweep()
+	if n := len(f.reported("run_a")); n != 3 {
+		t.Errorf("%d cost events after only compute changed, want 3", n)
+	}
+
 	f.lux.set("lux_run_a", lux.RunCost{Status: lux.CostFinal, Final: true,
 		ByFamily: []lux.FamilyCost{usd(lux.FamilyAI, "1.810247"), usd(lux.FamilyCompute, "0.007659225")}})
 	f.sweep()
@@ -153,10 +189,10 @@ func TestCostsAreStoredAsLuxReportsThemUntilFinal(t *testing.T) {
 		t.Fatalf("after final: ai %s compute %s status %s", str(s.AI), str(s.Compute), str(s.Status))
 	}
 	events := f.reported("run_a")
-	if len(events) != 2 {
-		t.Fatalf("%d cost events, want 2", len(events))
+	if len(events) != 4 {
+		t.Fatalf("%d cost events, want 4", len(events))
 	}
-	last := events[1]
+	last := events[3]
 	if last["aiUsd"] != 1.810247 || last["computeUsd"] != 0.007659225 || last["status"] != "final" {
 		t.Errorf("last event %v", last)
 	}
@@ -219,6 +255,61 @@ func TestOneFailingRunDoesNotStopTheOthersAndOldRunsAreLeftAlone(t *testing.T) {
 	f.sweep()
 	if s := f.stored("run_down"); str(s.AI) != "0.75" {
 		t.Errorf("the Run lux was down for was not read again: ai %s", str(s.AI))
+	}
+}
+
+// When lux is next asked, measured without making anything due again: a
+// read waits one cadence, a failed read too, a Run lux does not know waits
+// an hour, and a Run with nothing left to settle leaves the work list. A
+// preview's lux Run is never asked about.
+func TestAReadWaitsItsTurnAndALostRunWaitsAnHour(t *testing.T) {
+	f := newCostFixture(t)
+	f.costs.Every = time.Minute
+	f.run("run_ok", "")
+	f.run("run_down", "")
+	f.run("run_gone", "")
+	f.run("run_final", "")
+	f.run("run_aging", "7 days")
+	f.run("run_aging_down", "7 days")
+	f.runOf("preview", "run_prev", "")
+	// Both ended within costPatience when they got their lux Run, and have
+	// aged past it since.
+	if _, err := f.owner.Exec(f.ctx, `UPDATE runs SET ended_at = now() - interval '9 days' WHERE id IN ('run_aging', 'run_aging_down')`); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"lux_run_ok", "lux_run_aging", "lux_run_prev"} {
+		f.lux.set(id, lux.RunCost{Status: lux.CostIncomplete, ByFamily: []lux.FamilyCost{usd(lux.FamilyAI, "0.1")}})
+	}
+	f.lux.set("lux_run_final", lux.RunCost{Status: lux.CostFinal, Final: true})
+	f.lux.errs["lux_run_down"] = &lux.Error{Status: 503, Code: "unavailable"}
+	f.lux.errs["lux_run_aging_down"] = &lux.Error{Status: 503, Code: "unavailable"}
+	f.lux.errs["lux_run_gone"] = &lux.Error{Status: 404, Code: "not_found"}
+
+	if n, err := f.costs.Sweep(f.ctx); err != nil || n != 6 {
+		t.Fatalf("first sweep read %d (%v), want the 6 agent Runs", n, err)
+	}
+	if n, err := f.costs.Sweep(f.ctx); err != nil || n != 0 {
+		t.Fatalf("second sweep at once read %d (%v), want none due", n, err)
+	}
+	if f.lux.asked["lux_run_prev"] != 0 {
+		t.Error("a preview's lux Run was asked for its cost")
+	}
+	if _, ok := f.nextIn("run_prev"); ok {
+		t.Error("a preview is on the cost work list")
+	}
+
+	for _, id := range []string{"run_ok", "run_down"} {
+		if w, ok := f.nextIn(id); !ok || w < 50*time.Second || w > time.Minute {
+			t.Errorf("%s: next read in %v (due %v), want ~1m", id, w, ok)
+		}
+	}
+	if w, ok := f.nextIn("run_gone"); !ok || w < 59*time.Minute || w > time.Hour {
+		t.Errorf("after a 404: next read in %v (due %v), want ~1h", w, ok)
+	}
+	for _, id := range []string{"run_final", "run_aging", "run_aging_down"} {
+		if w, ok := f.nextIn(id); ok {
+			t.Errorf("%s: still due in %v after its last read, want off the work list", id, w)
+		}
 	}
 }
 
