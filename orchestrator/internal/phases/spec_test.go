@@ -64,9 +64,7 @@ func TestTheSpecIsTheGoldenOne(t *testing.T) {
 	}
 }
 
-// agent.nested_containers asks lux for a sandbox that runs containers, on
-// agent Runs only when set: lux places such a Run only on a host offering
-// them, so an unset operator must not get Runs that wait for one.
+// Unset Runs must not wait for a host offering nested containers.
 func TestNestedContainersAreAskedForOnlyWhenSet(t *testing.T) {
 	for _, model := range []string{"llm/impl", "fake/scripted"} {
 		for _, set := range []bool{false, true} {
@@ -76,7 +74,7 @@ func TestNestedContainersAreAskedForOnlyWhenSet(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			// At the top of the spec, where lux reads it.
+			// lux reads sandbox at the spec's top level.
 			var wire map[string]json.RawMessage
 			if err := json.Unmarshal(b, &wire); err != nil {
 				t.Fatal(err)

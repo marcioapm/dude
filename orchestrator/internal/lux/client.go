@@ -142,12 +142,8 @@ type Spec struct {
 	Sandbox  *Sandbox          `json:"sandbox,omitempty"`
 }
 
-// Sandbox relaxes a Run's container for what its workload needs.
 type Sandbox struct {
-	// NestedContainers lets the workload run containers itself (rootless
-	// Podman or Docker in the Run). lux places such a Run only on a host
-	// whose runner offers nested containers, and the image must carry the
-	// engine; see lux's docs/runspec.md "Nested containers".
+	// Requires a host offering nested containers and an image with the engine.
 	NestedContainers bool `json:"nestedContainers,omitempty"`
 }
 
