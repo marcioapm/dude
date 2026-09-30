@@ -49,12 +49,14 @@ export type CostWordsInput = Pick<CostProps, "tokensUsd" | "machineUsd" | "token
  * say different things.
  */
 export function costWords({ tokensUsd, machineUsd, tokens, machineMs, tokensFrom, machineFrom, settled = false }: CostWordsInput): {
-  total: number; lines: [string, string, string]; label: string;
+  total: number; machineKnown: boolean; share: number; lines: [string, string, string]; label: string;
 } {
   const tok = tokensUsd ?? 0;
   const machineKnown = machineUsd !== null && machineUsd !== undefined;
   const mach = machineKnown ? machineUsd : 0;
   const total = tok + mach;
+  // The tokens' percentage of the total, for the hairline; all tokens at $0.
+  const share = total > 0 ? Math.round((tok / total) * 100) : 100;
   const tokensPart = `model tokens ${tokensUsd === null ? "not reported" : formatUsd(tok)}`
     + (tokens !== undefined ? ` (${formatTokens(tokens)} tokens)` : "")
     + (tokensUsd === null ? "" : tokensNote(tokensFrom, settled));
@@ -64,6 +66,8 @@ export function costWords({ tokensUsd, machineUsd, tokens, machineMs, tokensFrom
   const line = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
   return {
     total,
+    machineKnown,
+    share,
     lines: [`${formatUsd(total)} total`, line(tokensPart), machinePart ? line(machinePart) : "Machine time not counted yet"],
     label: `${formatUsd(total)}: ${tokensPart}${machinePart ? `, ${machinePart}` : ""}`,
   };
@@ -84,17 +88,15 @@ export function costWords({ tokensUsd, machineUsd, tokens, machineMs, tokensFrom
  */
 export function Cost({ tokensUsd, machineUsd, tokens, machineMs, size = "md", tone = "default",
   tokensFrom, machineFrom, settled = false, className, ...rest }: CostProps) {
-  if (tokensUsd === null && (machineUsd === null || machineUsd === undefined)) {
+  const words = costWords({ tokensUsd, machineUsd, tokens, machineMs, tokensFrom, machineFrom, settled });
+  if (tokensUsd === null && !words.machineKnown) {
     return (
       <span className={cx(styles["unknown"], styles[size], className)} title="Cost not reported" aria-label="Cost not reported" {...rest}>
         —
       </span>
     );
   }
-  const words = costWords({ tokensUsd, machineUsd, tokens, machineMs, tokensFrom, machineFrom, settled });
-  const machineKnown = machineUsd !== null && machineUsd !== undefined;
-  const { total } = words;
-  const share = total > 0 ? Math.round(((tokensUsd ?? 0) / total) * 100) : 100;
+  const { total, machineKnown, share } = words;
   const [totalLine, tokensLine, machineLine] = words.lines;
   const tip = (
     <span className={styles["tip"]}>
