@@ -8,6 +8,7 @@ import { authenticate, createApiKey, personPrincipal, type Principal } from "../
 import { Router, type RequestContext } from "../src/api/router.ts";
 import { ownerJson, registerPeopleRoutes, setTaskPeople } from "../src/api/routes/people.ts";
 import { registerPushRoutes } from "../src/api/routes/push.ts";
+import { registerProjectPageRoutes } from "../src/api/routes/projectPage.ts";
 
 const ownerUrl = process.env.DATABASE_URL!;
 const name = `dude_people_push_${Bun.randomUUIDv7("hex").slice(-12)}`;
@@ -26,6 +27,7 @@ const router = new Router(credential => credential?.startsWith("Person ")
   ? personPrincipal(org, credential.slice(7)) : authenticate(credential));
 registerPeopleRoutes(router);
 registerPushRoutes(router);
+registerProjectPageRoutes(router);
 
 function ctx(principal: Principal, method = "GET", path = "/v1/me", body?: unknown, params = {}): RequestContext {
   const url = new URL(`http://dude.test${path}`);
@@ -149,6 +151,27 @@ test("removal hands ownership to a keyless person and deletes their browser subs
   expect((await call(departingPrincipal, "POST", "/v1/push/subscriptions", {
     endpoint: "https://push.example.test/departing", keys: { p256dh: "public", auth: "secret" },
   })).status).toBe(401);
+});
+
+test("project overview shows the survivor as owner after the position-0 owner is removed", async () => {
+  const leaving = "per_overview_leaving";
+  const survivor = "per_overview_survivor";
+  await owner`INSERT INTO people (id, organization_id, name) VALUES (${leaving}, ${org}, 'Leaving'), (${survivor}, ${org}, 'Survivor')`;
+  await owner`INSERT INTO epics (id, organization_id, project_id, title) VALUES ('epc_overview', ${org}, ${project}, 'Overview')`;
+  await owner`INSERT INTO tasks (id, organization_id, project_id, epic_id, number, title)
+    VALUES ('tsk_overview', ${org}, ${project}, 'epc_overview', 3, 'Overview task')`;
+  await withOrg(org, scope => setTaskPeople(scope, ctx(adminPerson), "tsk_overview", project, [leaving, survivor], false));
+  const owners = async () => {
+    const response = await call(adminPerson, "GET", "/v1/projects/:id/overview", undefined, { id: project });
+    expect(response.status).toBe(200);
+    const body = await response.json() as { epics: Array<{ id: string; owners: Array<{ id: string }> }> };
+    return body.epics.find(e => e.id === "epc_overview")!.owners.map(o => o.id);
+  };
+  expect(await owners()).toEqual([leaving]);
+  expect((await call(adminPerson, "DELETE", "/v1/people/:id", undefined, { id: leaving })).status).toBe(204);
+  expect(await owner`SELECT person_id, position FROM task_people WHERE task_id = 'tsk_overview'`)
+    .toEqual([{ person_id: survivor, position: 1 }]);
+  expect(await owners()).toEqual([survivor]);
 });
 
 test("member management rechecks the current person role", async () => {
