@@ -232,22 +232,18 @@ for (const baseline of ["055", "056"]) {
       expect(active.role).toBe("admin");
       const revoked = before.find(row => row.api_key_id === "key_upgrade_revoked")!;
       expect(await personPrincipal("org_upgrade", revoked.person_id)).not.toBeNull();
-      const eligible = async () => withOrg("org_upgrade", async ({ sql }) => sql`
-        SELECT s.api_key_id FROM push_subscriptions s JOIN people p ON p.id = s.person_id
-          AND p.organization_id = s.organization_id WHERE p.removed_at IS NULL ORDER BY s.api_key_id`);
-      expect(await eligible()).toEqual([{ api_key_id: "key_upgrade_active" }, { api_key_id: "key_upgrade_revoked" }]);
+      // Which of these a sweep delivers to is pinned against the notifier
+      // itself in orchestrator/internal/notify.
       const upgradeRouter = new Router(() => personPrincipal("org_upgrade", active.personId));
       registerPeopleRoutes(upgradeRouter);
       const revoke = await upgradeRouter.handle(new Request(`http://dude.test/v1/me/keys/key_upgrade_active`, { method: "DELETE" }));
       expect(revoke.status).toBe(204);
       const afterRevoke = await legacy`SELECT * FROM push_subscriptions ORDER BY endpoint` as typeof before;
       expect(afterRevoke).toEqual(before);
-      expect(await eligible()).toHaveLength(2);
       const remove = await upgradeRouter.handle(new Request(`http://dude.test/v1/people/${revoked.person_id}`, { method: "DELETE" }));
       expect(remove.status).toBe(204);
       expect(await personPrincipal("org_upgrade", revoked.person_id)).toBeNull();
       expect(await legacy`SELECT endpoint FROM push_subscriptions WHERE person_id = ${revoked.person_id}`).toHaveLength(0);
-      expect(await eligible()).toEqual([{ api_key_id: "key_upgrade_active" }]);
     } finally {
       setPool(app);
       await upgradeApp?.end();
