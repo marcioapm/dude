@@ -52,7 +52,15 @@ export interface FormDialogProps {
   onOpenChange: (open: boolean) => void;
   title: ReactNode;
   description?: ReactNode;
-  size?: "sm" | "md";
+  /** Above the title: where the thing sits (a `Breadcrumb size="sm"`). */
+  context?: ReactNode;
+  /** `document`: writing one document, with `aside` beside the fields. */
+  size?: "sm" | "md" | "document";
+  /** `document` only: the column beside the fields — where it sits, help for writing it. */
+  aside?: ReactNode;
+  asideLabel?: string;
+  /** At the footer's start, muted: key hints. */
+  footerStart?: ReactNode;
   submitLabel: ReactNode;
   canSubmit: boolean;
   onSubmit: () => void;
@@ -68,11 +76,13 @@ export interface FormDialogProps {
 }
 
 /**
- * A dialog that is one form: Enter submits it, Cancel closes it, and the
- * server's reason for refusing shows under the fields.
+ * A dialog that is one form: Enter submits it (Ctrl/⌘+Enter in a document,
+ * whose fields take Enter), Cancel closes it, and the server's reason for
+ * refusing shows under the fields.
  */
 export function FormDialog(props: FormDialogProps) {
   const formId = useId();
+  const document = props.size === "document";
   return (
     <Dialog
       open={props.open}
@@ -80,6 +90,16 @@ export function FormDialog(props: FormDialogProps) {
       size={props.size ?? "sm"}
       title={props.title}
       description={props.description}
+      context={props.context}
+      aside={props.open ? props.aside : undefined}
+      asideLabel={props.asideLabel}
+      footerStart={props.footerStart}
+      onKeyDown={(e) => {
+        // A document's fields are multi-line: Enter is a new line there, so Ctrl/⌘+Enter submits.
+        if (!document || e.key !== "Enter" || !(e.ctrlKey || e.metaKey) || e.defaultPrevented) return;
+        e.preventDefault();
+        if (props.canSubmit) props.onSubmit();
+      }}
       footer={
         <>
           <Button variant="quiet" onClick={() => props.onOpenChange(false)}>
@@ -101,7 +121,7 @@ export function FormDialog(props: FormDialogProps) {
             if (props.canSubmit) props.onSubmit();
           }}
         >
-          <FormStack>
+          <FormStack fill={document}>
             {props.children}
             {props.problem ? <Callout tone="danger">{props.problem}</Callout> : null}
           </FormStack>

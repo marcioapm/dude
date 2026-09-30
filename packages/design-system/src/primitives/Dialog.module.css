@@ -86,3 +86,103 @@
   gap: var(--ds-space-8);
   padding: var(--ds-space-12) var(--ds-space-16) var(--ds-space-16);
 }
+
+.context {
+  display: flex;
+  min-width: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+.footerStart {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-4) var(--ds-space-12);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.footer:has(.footerStart) {
+  align-items: center;
+}
+
+/*
+ * Writing one document. A fixed height, so the dialog does not grow as
+ * the text does: the columns scroll inside it. The body's text starts on
+ * the same 24px as the header's and the footer's.
+ */
+.document {
+  --dialog-w: 1120px;
+  width: min(var(--dialog-w), calc(100vw - 48px));
+  height: min(900px, calc(100vh - 48px));
+  max-height: none;
+}
+.document .header {
+  padding-left: var(--ds-space-24);
+}
+.document .body {
+  padding: var(--ds-space-8) var(--ds-space-24) var(--ds-space-24);
+}
+.document .footer {
+  padding-left: var(--ds-space-24);
+}
+
+.split {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  font-size: var(--ds-text-md);
+  color: var(--ds-color-text-primary);
+}
+.main {
+  min-width: 0;
+  overflow: auto;
+  padding: var(--ds-space-8) var(--ds-space-24) var(--ds-space-24);
+}
+.aside {
+  min-width: 0;
+  overflow: auto;
+  padding: var(--ds-space-16);
+  background: var(--ds-color-chrome);
+}
+
+/* Too narrow for two columns: the aside follows the writing, one scroll. */
+@media (max-width: 960px) {
+  .split {
+    grid-template-columns: minmax(0, 1fr);
+    overflow: auto;
+  }
+  .main,
+  .aside {
+    overflow: visible;
+  }
+}
+
+/* A phone: the whole screen, square. */
+@media (max-width: 640px) {
+  .document {
+    top: 0;
+    left: 0;
+    transform: none;
+    width: 100vw;
+    height: 100dvh;
+    border-radius: 0;
+  }
+  .document .header,
+  .document .footer {
+    padding-left: var(--ds-space-16);
+  }
+  .document .main,
+  .document .body {
+    padding-left: var(--ds-space-16);
+    padding-right: var(--ds-space-16);
+  }
+  .document .footer {
+    flex-wrap: wrap;
+  }
+  .document .footerStart {
+    flex-basis: 100%;
+  }
+}

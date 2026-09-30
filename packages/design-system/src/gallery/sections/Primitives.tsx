@@ -5,6 +5,7 @@ import { Button, IconButton } from "../../primitives/Button.tsx";
 import { Input } from "../../primitives/Input.tsx";
 import { Textarea } from "../../primitives/Textarea.tsx";
 import { MarkdownEditor, type MarkdownEditorProps } from "../../primitives/MarkdownEditor.tsx";
+import { HelpList, KeyHint, MarkdownCheatsheet } from "../../primitives/Kbd.tsx";
 import { RowMenu, RowMenuTrigger, rowMenuOpeners, type RowMenuItem } from "../../primitives/RowMenu.tsx";
 import { Select } from "../../primitives/Select.tsx";
 import { Checkbox } from "../../primitives/Checkbox.tsx";
@@ -19,6 +20,7 @@ import { EmptyState, Skeleton, SkeletonLines, Spinner } from "../../primitives/F
 import { ScrollArea } from "../../primitives/ScrollArea.tsx";
 import { Callout, Fieldset, FormActions, FormRow, FormStack, KeyValueList, Page, PageHeader, Section as PageSection } from "../../primitives/Layout.tsx";
 import { StepList, StepRow } from "../../components/StepList.tsx";
+import { Breadcrumb } from "../../components/Breadcrumb.tsx";
 import { AgentAvatar } from "../../components/AgentAvatar.tsx";
 import { Icon } from "../../icons/index.tsx";
 import { StatusBadge } from "../../components/StatusBadge.tsx";
@@ -135,6 +137,8 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
             <Input label="Repository URL" defaultValue="git@github" error="Must be an https:// or ssh:// URL" />
             <Input label="Disabled" defaultValue="Not editable" disabled />
             <Input size="sm" placeholder="Filter events…" leading={<Icon name="search" size={12} />} aria-label="Filter events" />
+            <Input size="title" label="Title" labelNote="required" placeholder="What should change?" />
+            <Input size="title" label="Title (locked)" defaultValue="Payment step keeps SEPA and Invoice" disabled />
           </div>
         </Panes>
       </Block>
@@ -366,9 +370,10 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
 
-      <Block id="p-dialog" title="Dialog" note="For decisions, not browsing. Destructive confirmations get the danger tone and a destructive primary action.">
+      <Block id="p-dialog" title="Dialog" note="For decisions and small forms — and for writing one document: size='document' is a fixed 1120×900 (full screen under 640px) with an optional aside on the chrome shade that scrolls on its own and stacks under the writing below 960px; context puts where the thing sits above the title. Destructive confirmations get the danger tone and a destructive primary action.">
         <Panes mode={mode}>
           <Row>
+            <TaskDialogExample />
             <Dialog
               trigger={<Button>Open dialog</Button>}
               title="Retry run"
@@ -677,4 +682,48 @@ export const SAMPLE_CRITERIA = `- [ ] Card, SEPA and Invoice all appear on the p
 function MarkdownEditorDemo({ initial, ...props }: { readonly initial: string } & Omit<MarkdownEditorProps, "value" | "onChange">) {
   const [value, setValue] = useState(initial);
   return <MarkdownEditor minRows={6} maxLength={10_000} {...props} value={value} onChange={setValue} />;
+}
+
+/** The task dialog as the web app draws it: a document with where it sits beside it. */
+function TaskDialogExample() {
+  const [title, setTitle] = useState("Payment step keeps SEPA and Invoice");
+  const [goal, setGoal] = useState(SAMPLE_GOAL);
+  const [criteria, setCriteria] = useState(SAMPLE_CRITERIA);
+  const [epic, setEpic] = useState("checkout");
+  return (
+    <Dialog
+      trigger={<Button>Task dialog</Button>}
+      size="document"
+      context={<Breadcrumb size="sm" items={[{ id: "p", label: "Customer portal" }, { id: "e", label: "Checkout v2", icon: "layers" }]} />}
+      title="New task"
+      asideLabel="Where it sits"
+      aside={
+        <FormStack fill>
+          <Select label="Epic" value={epic} onValueChange={setEpic} options={[{ value: "checkout", label: "Checkout v2" }, { value: "none", label: "No epic" }]} />
+          <HelpList title="What makes a good task">
+            <li><strong>Goal:</strong> why it matters, what exists today, and what an agent can't guess.</li>
+            <li><strong>Criteria:</strong> one checkable statement per list item.</li>
+          </HelpList>
+          <MarkdownCheatsheet />
+        </FormStack>
+      }
+      footerStart={<><KeyHint keys={["mod", "Enter"]}>create</KeyHint><KeyHint keys={["mod", "Shift", "P"]}>toggle preview</KeyHint></>}
+      footer={
+        <>
+          <DialogClose asChild>
+            <Button variant="quiet">Cancel</Button>
+          </DialogClose>
+          <Button variant="secondary">Create</Button>
+          <Button variant="primary">Create and deliver</Button>
+        </>
+      }
+    >
+      <FormStack fill>
+        <Input size="title" label="Title" labelNote="required" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="What should change?" />
+        <MarkdownEditor label="Goal" hint="Why it matters, what exists today, and anything an agent can't guess." value={goal} onChange={setGoal} minRows={12} maxLength={10_000} />
+        <MarkdownEditor label="Acceptance criteria" hint="One list item per criterion. Reviewers check each one." value={criteria} onChange={setCriteria} minRows={7}
+          placeholder="- [ ] A thing that must be true when it's done" summary={<Badge tone="neutral" size="sm">4 criteria</Badge>} />
+      </FormStack>
+    </Dialog>
+  );
 }
