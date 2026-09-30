@@ -98,7 +98,8 @@ export type IconName =
   | "quote"
   | "list-bullet"
   | "markdown"
-  | "memory";
+  | "memory"
+  | "book-open";
 
 /** Path data on a 16x16 grid. `fill` marks icons that are filled shapes. */
 const PATHS: Record<IconName, { d: string; fill?: true; dashed?: true }> = {
@@ -223,6 +224,8 @@ const PATHS: Record<IconName, { d: string; fill?: true; dashed?: true }> = {
   building: { d: "M2.5 13.5h11M4 13.5V6l4-3.5L12 6v7.5M6.5 13.5v-4h3v4" },
   /* Something kept: a page with a bookmark. A memory, and the Memory settings. */
   memory: { d: "M4 2.5h8a.5.5 0 0 1 .5.5v10.5L8 11l-4.5 2.5V3a.5.5 0 0 1 .5-.5ZM6 5.5h4M6 7.5h2.5" },
+  /* Two open pages: reading the whole thing, as opposed to editing it. */
+  "book-open": { d: "M8 4.5C6.8 3.6 5 3.25 2.5 3.25v9c2.5 0 4.3.35 5.5 1.25M8 4.5c1.2-.9 3-1.25 5.5-1.25v9c-2.5 0-4.3.35-5.5 1.25M8 4.5v9" },
 };
 
 export interface IconProps extends Omit<SVGProps<SVGSVGElement>, "name"> {

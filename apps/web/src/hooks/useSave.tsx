@@ -4,7 +4,7 @@
  * refuses, an optional toast when it lands.
  */
 
-import { useCallback, useId, useState, type ReactNode } from "react";
+import { useCallback, useId, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { Button, Callout, Dialog, DiscardConfirm, FormStack, useToast } from "@dude/design-system/primitives";
 import { ApiError } from "../api/client.ts";
 
@@ -61,6 +61,15 @@ export interface FormDialogProps {
   asideLabel?: string;
   /** At the footer's start, muted: key hints. */
   footerStart?: ReactNode;
+  /** In the header, before Close (a `Read` toggle). */
+  headerActions?: ReactNode;
+  /** `document` only: the whole thing as it reads, in place of the fields while set (`Dialog reading`). */
+  reading?: ReactNode;
+  readingLabel?: string;
+  /** Escape while `reading`: back to the fields, never closing or asking to discard. */
+  onCloseReading?: () => void;
+  /** Keys anywhere in the dialog, before its own (Ctrl/⌘+Enter); `preventDefault()` claims one. */
+  onKeyDown?: (e: ReactKeyboardEvent<HTMLDivElement>) => void;
   submitLabel: ReactNode;
   canSubmit: boolean;
   onSubmit: () => void;
@@ -123,10 +132,15 @@ export function FormDialog(props: FormDialogProps) {
         aside={props.open ? props.aside : undefined}
         asideLabel={props.asideLabel}
         footerStart={props.footerStart}
+        headerActions={props.headerActions}
+        reading={props.open ? props.reading : undefined}
+        readingLabel={props.readingLabel}
+        onCloseReading={props.onCloseReading}
         onEscapeKeyDown={onEscapeKeyDown}
         // A document's column scrolls: under the fields the reason would be out of sight.
         footerProblem={document ? props.problem : undefined}
         onKeyDown={(e) => {
+          props.onKeyDown?.(e);
           // A document's fields are multi-line: Enter is a new line there, so Ctrl/⌘+Enter submits.
           if (!document || e.key !== "Enter" || !(e.ctrlKey || e.metaKey) || e.defaultPrevented) return;
           e.preventDefault();

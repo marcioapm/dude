@@ -1,5 +1,5 @@
 import * as RadixDialog from "@radix-ui/react-dialog";
-import { useRef, type KeyboardEvent, type ReactNode } from "react";
+import { useLayoutEffect, useRef, type FocusEvent, type KeyboardEvent, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import { compact } from "../util/compact.ts";
 import { closeAutoFocus, focusedElement } from "../util/focusReturn.ts";
@@ -31,6 +31,20 @@ export interface DialogProps {
   readonly aside?: ReactNode;
   /** Accessible name of the aside. */
   readonly asideLabel?: string | undefined;
+  /** In the header, before Close: quiet actions on the whole thing (a `Read` toggle). */
+  readonly headerActions?: ReactNode;
+  /**
+   * `document` only: what it reads as, shown over the body and the aside
+   * while set — one centred column at the document measure, scrolling on
+   * its own. The writing stays laid out under it, hidden and inert, so its
+   * scroll positions and its fields' state are as they were on return, and
+   * focus goes back to the field that last had it.
+   */
+  readonly reading?: ReactNode;
+  /** Accessible name of the reading column. */
+  readonly readingLabel?: string | undefined;
+  /** Escape while `reading`: called instead of closing the dialog, after `onEscapeKeyDown` has had it. */
+  readonly onCloseReading?: (() => void) | undefined;
   /** Danger/attention prefix icon; use for destructive confirmations. */
   readonly tone?: "danger" | "attention" | undefined;
   readonly footer?: ReactNode;
@@ -74,6 +88,10 @@ export function Dialog({
   size = "md",
   aside,
   asideLabel,
+  headerActions,
+  reading,
+  readingLabel,
+  onCloseReading,
   tone,
   footer,
   footerStart,
@@ -89,6 +107,49 @@ export function Dialog({
   // menu item or a button elsewhere would leave it on <body>.
   const opener = useRef<Element | null>(null);
   const split = size === "document" && aside !== undefined && aside !== null;
+  const isReading = size === "document" && reading !== undefined && reading !== null && reading !== false;
+  const readingColumn = useRef<HTMLDivElement>(null);
+  const writing = useRef<HTMLDivElement>(null);
+  // The field last focused in the writing, to go back to after reading.
+  const lastFocused = useRef<HTMLElement | null>(null);
+  const wasReading = useRef(false);
+
+  useLayoutEffect(() => {
+    if (isReading === wasReading.current) return;
+    wasReading.current = isReading;
+    if (isReading) {
+      // Focus in what just went out of reach goes to the document, so keys scroll it.
+      const active = document.activeElement;
+      if (!active || active === document.body || writing.current?.contains(active)) readingColumn.current?.focus();
+    } else if (lastFocused.current?.isConnected) {
+      lastFocused.current.focus({ preventScroll: true });
+    }
+  }, [isReading]);
+
+  // While reading, the writing stays laid out under the document, hidden
+  // and inert: its scroll positions, its editors' modes and selections are
+  // as they were on return.
+  const writingProps = {
+    ref: writing,
+    "data-covered": isReading ? "true" : undefined,
+    ...(isReading ? { inert: true } : {}),
+    onFocusCapture: (e: FocusEvent<HTMLDivElement>) => {
+      if (e.target instanceof HTMLElement) lastFocused.current = e.target;
+    },
+  };
+  const body = split ? (
+    <div className={styles["split"]} {...writingProps}>
+      <div className={styles["main"]}>{children}</div>
+      <aside className={styles["aside"]} aria-label={asideLabel}>
+        {aside}
+      </aside>
+    </div>
+  ) : children ? (
+    <div className={styles["body"]} {...writingProps}>
+      {children}
+    </div>
+  ) : null;
+
   return (
     <RadixDialog.Root {...compact({ open, defaultOpen, onOpenChange })}>
       {trigger ? <RadixDialog.Trigger asChild>{trigger}</RadixDialog.Trigger> : null}
@@ -102,7 +163,13 @@ export function Dialog({
           }}
           onCloseAutoFocus={closeAutoFocus(() => opener.current, onCloseAutoFocus)}
           {...(onKeyDown ? { onKeyDown } : {})}
-          {...(onEscapeKeyDown ? { onEscapeKeyDown } : {})}
+          onEscapeKeyDown={(e) => {
+            onEscapeKeyDown?.(e);
+            if (e.defaultPrevented || !isReading || !onCloseReading) return;
+            // Reading is a view of the dialog, not a layer over it: Escape leaves it, and only it.
+            e.preventDefault();
+            onCloseReading();
+          }}
         >
           <div className={styles["header"]}>
             {tone ? (
@@ -120,20 +187,23 @@ export function Dialog({
                 <RadixDialog.Description className={styles["description"]}>{description}</RadixDialog.Description>
               ) : null}
             </div>
+            {headerActions ? <div className={styles["headerActions"]}>{headerActions}</div> : null}
             <RadixDialog.Close asChild>
               <IconButton icon="close" label="Close" size="sm" />
             </RadixDialog.Close>
           </div>
-          {split ? (
-            <div className={styles["split"]}>
-              <div className={styles["main"]}>{children}</div>
-              <aside className={styles["aside"]} aria-label={asideLabel}>
-                {aside}
-              </aside>
+          {size === "document" ? (
+            <div className={styles["stage"]}>
+              {body}
+              {isReading ? (
+                <div ref={readingColumn} className={styles["reading"]} role="region" aria-label={readingLabel} tabIndex={0}>
+                  <div className={styles["readingMeasure"]}>{reading}</div>
+                </div>
+              ) : null}
             </div>
-          ) : children ? (
-            <div className={styles["body"]}>{children}</div>
-          ) : null}
+          ) : (
+            body
+          )}
           {footer ? (
             <div className={styles["footer"]}>
               {footerProblem ? (
@@ -154,3 +224,4 @@ export function Dialog({
 
 /** Wrap a button with this to make it close the dialog. */
 export const DialogClose = RadixDialog.Close;
+
