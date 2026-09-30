@@ -6,7 +6,7 @@ import { Duration } from "../../components/Numbers.tsx";
 import { PersonAvatar } from "../../components/PersonAvatar.tsx";
 import { PreviewAlsoRunning, PreviewStages, ServersMoved } from "../../components/PreviewStages.tsx";
 import { EnvVarRows, ServerRecipeDialog, ServerRecipeTable, ServerUrlPreview } from "../../components/ServerRecipe.tsx";
-import { AutostartMark, ServerList, ServerRecipeRow, ServerRow, ServersDrawer, ServersPanel, ServersRecipesPreview, ServersRunLine, ShortId, TerminalLink } from "../../components/ServerRow.tsx";
+import { AutostartMark, ServerList, ServerRecipeRow, ServerRow, ServersPanel, ServersRecipesPreview, ServersRunLine, ServersTabTip, ShortId, TerminalLink } from "../../components/ServerRow.tsx";
 import { ServerStateDot, ServerStateMark } from "../../components/ServerStateMark.tsx";
 import { ServersSummary, ServersSummaryRow } from "../../components/ServersSummary.tsx";
 import { HostChips } from "../../components/HostChips.tsx";
@@ -18,7 +18,8 @@ import { FormActions } from "../../primitives/Layout.tsx";
 import { RowMenu } from "../../primitives/RowMenu.tsx";
 import { Select } from "../../primitives/Select.tsx";
 import { SERVER_DISPLAY_STATES } from "../../tokens/servers.ts";
-import { canStartAny, canStopAny, describeServer, isMoving, serverLogLines, summarizeServers } from "../../util/servers.ts";
+import { canStartAny, canStopAny, describeServer, isMoving, serverLogLines, summarizeTaskServers } from "../../util/servers.ts";
+import { Tab, TabList, Tabs } from "../../primitives/Tabs.tsx";
 import { toggled } from "../../util/sets.ts";
 import { formatTimestamp } from "../../util/format.ts";
 import { egressProblem, type PreviewStage, type RunServer, type TaskServers } from "@dude/domain";
@@ -35,7 +36,7 @@ const SCENARIO_WORDS: Record<ServerScenario, string> = {
 };
 
 /** The servers panel as the app composes it, for one scenario. */
-function Panel({ data, compact, logHeight, openLogs = [] }: { readonly data: TaskServers; readonly compact?: boolean | undefined; readonly logHeight?: number | undefined; readonly openLogs?: readonly string[] | undefined }) {
+function Panel({ data, openLogs = [] }: { readonly data: TaskServers; readonly openLogs?: readonly string[] | undefined }) {
   const [open, setOpen] = useState<Set<string>>(() => new Set(openLogs));
   const now = Date.now();
   const run = data.run;
@@ -74,14 +75,12 @@ function Panel({ data, compact, logHeight, openLogs = [] }: { readonly data: Tas
             : <><ShortId id={run.luxRunId} /> · {run.host} · started <Duration ms={Math.max(0, Date.now() - Date.parse(run.startedAt ?? ""))} tone="muted" format="age" /> ago · for Márcio</>}
           actions={
             <>
-              <TerminalLink href={run.terminalUrl ?? "#"} />
-              {isPreview ? <Button size="sm" variant="quiet" leadingIcon="stop">Stop preview</Button> : (
-                <>
-                  {compact ? null : <Button size="sm" variant="secondary" leadingIcon="play" disabled={!canStartAny(data.servers)}>Start all</Button>}
-                  {compact ? null : <Button size="sm" variant="quiet" leadingIcon="stop" disabled={!canStopAny(data.servers)}>Stop all</Button>}
-                  <Button size="sm" variant="quiet" leadingIcon="plus">Add server</Button>
-                </>
-              )}
+              {/* An agent's terminal is in its session's rail; a preview has no session. */}
+              {isPreview ? <TerminalLink href={run.terminalUrl ?? "#"} /> : null}
+              <Button size="sm" variant="secondary" leadingIcon="play" disabled={!canStartAny(data.servers)}>Start all</Button>
+              <Button size="sm" variant="quiet" leadingIcon="stop" disabled={!canStopAny(data.servers)}>Stop all</Button>
+              {isPreview ? <Button size="sm" variant="quiet" leadingIcon="stop">Stop preview</Button> : null}
+              <Button size="sm" variant="quiet" leadingIcon="plus">Add server</Button>
             </>
           }
         />
@@ -106,7 +105,7 @@ function Panel({ data, compact, logHeight, openLogs = [] }: { readonly data: Tas
                 onStop={() => undefined}
                 onRestart={() => undefined}
                 menu={<RowMenu size="sm" label={`Actions for ${s.name}`} items={[{ id: "remove", label: "Remove", tone: "danger" }]} />}
-                logs={{ open: open.has(s.name), onToggle: () => toggle(s.name), lines: serverLogLines(logs[s.name] ?? []), live: isMoving(s), maxHeight: logHeight, onFull: () => undefined }}
+                logs={{ open: open.has(s.name), onToggle: () => toggle(s.name), lines: serverLogLines(logs[s.name] ?? []), live: isMoving(s), onFull: () => undefined }}
               />
             );
           })}
@@ -239,15 +238,18 @@ export function ServersSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
 
-      <Block id="sv-drawer" title="ServersDrawer" note="The run screen's drawer: the same panel at 440px on the chrome shade, its rows stacked by the container query, beside the conversation.">
-        <Panes mode={mode} surface>
-          <div className={styles["serversSplit"]}>
-            <div className={styles["serversSplitMain"]}>the conversation</div>
-            <ServersDrawer count={`${summarizeServers(serverScenarios.a.servers).ready} of ${serverScenarios.a.servers.length} ready`} onClose={() => undefined}
-              actions={<Button size="sm" variant="quiet" leadingIcon="play">Start all</Button>}>
-              <Panel data={serverScenarios.a} compact logHeight={200} />
-            </ServersDrawer>
-          </div>
+      <Block id="sv-tab" title="The task's Servers tab" note={<>Its count is the servers that are on (starting, ready or unreachable), none at zero; after it the first bad server's dot, else the breathing dot while one starts or a preview comes up. Hover or focus a Servers tab for its tooltip, from the same <code>summarizeTaskServers</code>.</>}>
+        <Panes mode={mode}>
+          <Col>
+            <States items={TAB_STATES.map(([k, data]) => [k, <TabDemo key={k} data={data} />])} />
+            <Label>The tooltip, open</Label>
+            <Row style={{ alignItems: "flex-start", gap: 16 }}>
+              {TAB_STATES.map(([k, data]) => {
+                const summary = summarizeTaskServers(data);
+                return summary ? <span key={k} className={styles["serversTip"]}><ServersTabTip summary={summary} /></span> : null;
+              })}
+            </Row>
+          </Col>
         </Panes>
       </Block>
 
@@ -293,6 +295,33 @@ export function ServersSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
     </Section>
+  );
+}
+
+/** The tab's four states, each from a scenario's servers. */
+const TAB_STATES: ReadonlyArray<readonly [string, TaskServers]> = [
+  ["0 on", serverScenarios.b],
+  ["2 on", { ...serverScenarios.a, servers: serverScenarios.a.servers.map((x) => (x.name === "api" ? { ...x, state: "ready" as const, readySince: x.since } : x)) }],
+  ["1 on, 1 exited", serverScenarios.c],
+  ["starting", serverScenarios.a],
+];
+
+/** A task's tab row with the Servers tab as the app draws it: count, mark and tooltip from one reading. */
+function TabDemo({ data }: { readonly data: TaskServers }) {
+  const summary = summarizeTaskServers(data);
+  const mark = !summary ? null : summary.bad ? <ServerStateDot state={summary.bad.state} label={`${summary.bad.name} ${summary.bad.state}`} />
+    : summary.starting ? <ServerStateDot state="starting" label="Starting" />
+    : summary.moved ? <ServerStateDot state="unreachable" label="Stopped when the run moved" />
+    : null;
+  return (
+    <Tabs defaultValue="overview">
+      <TabList aria-label="Task">
+        <Tab value="overview">Overview</Tab>
+        <Tab value="sessions" count={1}>Sessions</Tab>
+        <Tab value="servers" count={summary && summary.on.length > 0 ? summary.on.length : undefined} trailing={mark}
+          tooltip={summary ? <ServersTabTip summary={summary} /> : undefined}>Servers</Tab>
+      </TabList>
+    </Tabs>
   );
 }
 

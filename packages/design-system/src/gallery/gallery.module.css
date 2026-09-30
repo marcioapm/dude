@@ -398,8 +398,7 @@
   overflow: hidden;
 }
 
-/* Servers section: the task's tab as apps/web lays it out, and the run
-   screen's split with the drawer or the docked preview beside it. */
+/* Servers section: the task's tab as apps/web lays it out. */
 .serversTab {
   padding: var(--ds-space-16) var(--ds-space-8);
 }
@@ -409,17 +408,12 @@
 .serversAccess {
   font-size: var(--ds-text-sm);
 }
-.serversSplit {
-  display: flex;
-  height: 640px;
-  min-width: 0;
-  background: var(--ds-color-surface);
-}
-.serversSplitMain {
-  flex: 1;
-  min-width: 0;
-  display: grid;
-  place-items: center;
-  color: var(--ds-color-text-disabled);
+/* A tooltip's body drawn open on the page, for the servers tab's states. */
+.serversTip {
+  padding: var(--ds-space-4) var(--ds-space-8);
+  background: var(--ds-color-text-primary);
+  color: var(--ds-color-text-inverse);
+  border-radius: var(--ds-radius-float);
   font-size: var(--ds-text-sm);
+  line-height: var(--ds-leading-snug);
 }

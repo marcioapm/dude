@@ -2,9 +2,8 @@
  * The servers a task or a run has, as one section: the run they live on
  * (the agent's, or a branch preview's), a notice when the run moved host,
  * a preview's stages, the list with each server's log folding open under
- * it, and Preview opening the page in a new tab. The task's Servers tab and
- * the run screen's drawer are the same section; the drawer carries the
- * run's actions in its own head, through `ServersRunActions`.
+ * it, and Preview opening the page in a new tab. It is the task's Servers
+ * tab: a session has no servers panel of its own.
  */
 
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
@@ -21,12 +20,13 @@ import {
   ServersPanel,
   ServersRecipesPreview,
   ServersRunLine,
+  ServersTabTip,
   ShortId,
   StatusMark,
   TerminalLink,
 } from "@dude/design-system/components";
-import { anyMoving, canStartAny, canStop, canStopAny, describeServer, firstName, formatTimestamp, isMoving, PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES, serverLogLines, summarizeServers, toggled, useNow, type ServersRun } from "@dude/design-system";
-import { Button, Callout, Dialog, EmptyState, FormActions, RowMenu, Spinner, TabCount } from "@dude/design-system/primitives";
+import { anyMoving, canStartAny, canStop, canStopAny, describeServer, firstName, formatTimestamp, isMoving, PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES, serverLogLines, summarizeTaskServers, toggled, useNow, type ServersRun } from "@dude/design-system";
+import { Button, Callout, Dialog, EmptyState, FormActions, RowMenu, Spinner } from "@dude/design-system/primitives";
 import { ALL_STATUSES } from "@dude/design-system/tokens";
 import type { RunStatus, TaskServers } from "@dude/domain";
 import type { LogLine } from "@dude/design-system/components";
@@ -40,8 +40,6 @@ export interface ServersSectionProps {
   servers: ServersState;
   /** The task, for Preview branch (its branch is what a preview checks out). */
   taskId?: string | undefined;
-  /** In a drawer: the run's actions sit in its head (`ServersRunActions`), the logs are shorter. */
-  inDrawer?: boolean | undefined;
 }
 
 /** The run status as StatusMark says it: a preview's own word until its servers are up; a word the vocabulary lacks, as it came. */
@@ -51,19 +49,7 @@ function runMark(run: ServersRun) {
   return <StatusMark status={known ? (run.state as RunStatus) : "running"} size="sm" label={known ? undefined : run.state} />;
 }
 
-/** Start all and Stop all, wherever the run's actions sit: the section's run line, or the drawer's head. */
-export function ServersRunActions({ servers, variant = "secondary" }: { servers: ServersState; variant?: "secondary" | "quiet" | undefined }) {
-  const { data, busy } = servers;
-  if (!data?.run || !runIsLive(data.run)) return null;
-  return (
-    <>
-      <Button size="sm" variant={variant} leadingIcon="play" disabled={busy !== null || !canStartAny(data.servers)} onClick={() => void servers.startAll()} data-testid="start-all">Start all</Button>
-      <Button size="sm" variant="quiet" leadingIcon="stop" disabled={busy !== null || !canStopAny(data.servers)} onClick={() => void servers.stopAll()} data-testid="stop-all">Stop all</Button>
-    </>
-  );
-}
-
-export const ServersSection = memo(function ServersSection({ client, servers, taskId, inDrawer }: ServersSectionProps) {
+export const ServersSection = memo(function ServersSection({ client, servers, taskId }: ServersSectionProps) {
   const { data, problem, busy } = servers;
   const people = usePeople();
   const now = useNow(Boolean(data && anyMoving(data.servers)), 30_000);
@@ -187,12 +173,18 @@ export const ServersSection = memo(function ServersSection({ client, servers, ta
           detail={detail}
           actions={
             <>
-              {live && run.terminalUrl ? <TerminalLink href={run.terminalUrl} /> : null}
+              {/* An agent's terminal is its session's (the rail); a preview has no session to hold it. */}
+              {isPreview && live && run.terminalUrl ? <TerminalLink href={run.terminalUrl} /> : null}
+              {live ? (
+                <>
+                  <Button size="sm" variant="secondary" leadingIcon="play" disabled={busy !== null || !canStartAny(data.servers)} onClick={() => void servers.startAll()} data-testid="start-all">Start all</Button>
+                  <Button size="sm" variant="quiet" leadingIcon="stop" disabled={busy !== null || !canStopAny(data.servers)} onClick={() => void servers.stopAll()} data-testid="stop-all">Stop all</Button>
+                </>
+              ) : null}
+              {/* Stopping a preview ends its run; Stop all leaves the run live. */}
               {isPreview && taskId ? (
                 <Button size="sm" variant="quiet" leadingIcon="stop" disabled={busy !== null} onClick={stopPreview} data-testid="stop-preview">Stop preview</Button>
-              ) : inDrawer ? null : (
-                <ServersRunActions servers={servers} />
-              )}
+              ) : null}
               <Button size="sm" variant="quiet" leadingIcon="plus" disabled={!live} onClick={() => setAdding(true)} data-testid="add-server">Add server</Button>
             </>
           }
@@ -240,7 +232,7 @@ export const ServersSection = memo(function ServersSection({ client, servers, ta
                   lines: log === "loading" ? [] : log ?? [],
                   loading: log === "loading",
                   live: isMoving(s),
-                  maxHeight: inDrawer ? 200 : 240,
+                  maxHeight: 240,
                 }}
               />
             );
@@ -290,13 +282,24 @@ export const ServersSection = memo(function ServersSection({ client, servers, ta
   );
 });
 
-/** What the Servers tab shows beside its name: the first bad server as a dot, else how many are ready. */
-export function serversTabTrailing(data: TaskServers | null): ReactNode {
-  if (!data?.run) return null;
-  const { bad, ready } = summarizeServers(data.servers);
-  if (bad) return <ServerStateDot state={bad.state} label={`${bad.name} ${bad.state}`} />;
-  if (ready > 0) return <TabCount>{ready} ready</TabCount>;
-  if (data.run.kind === "preview" && data.run.previewStage !== "ready" && runIsLive(data.run)) return <ServerStateDot state="starting" label="Preview starting" />;
-  if (data.moved) return <ServerStateDot state="unreachable" label="Stopped when the run moved" />;
-  return null;
+/**
+ * The Servers tab's count, mark and tooltip, from one reading of the
+ * task's servers: how many are on (no count at none), the first bad
+ * server's dot, else a breathing dot while something starts, else the
+ * dot for servers a move stopped; the tooltip names each. Nothing at all
+ * when no run serves the task and the project defines no servers.
+ */
+export function serversTab(data: TaskServers | null): { count?: number; trailing?: ReactNode; tooltip?: ReactNode } {
+  const summary = summarizeTaskServers(data);
+  if (!summary) return {};
+  const { on, bad, starting, booting, moved } = summary;
+  const trailing = bad ? <ServerStateDot state={bad.state} label={`${bad.name} ${bad.state}`} />
+    : starting ? <ServerStateDot state="starting" label={booting ? "Preview starting" : "Starting"} />
+    : moved ? <ServerStateDot state="unreachable" label="Stopped when the run moved" />
+    : undefined;
+  return {
+    ...(on.length > 0 ? { count: on.length } : {}),
+    ...(trailing ? { trailing } : {}),
+    tooltip: <ServersTabTip summary={summary} />,
+  };
 }

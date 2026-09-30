@@ -8,7 +8,7 @@
  * a state allows, so the row, the summary and Start all agree with lux.
  */
 
-import { serverNameSchema, serverPortSchema, type RunServer, type TaskServers } from "@dude/domain";
+import { serverNameSchema, serverPortSchema, TERMINAL_RUN_STATUSES, type RunServer, type RunStatus, type TaskServers } from "@dude/domain";
 import type { LogLine } from "../components/LogStream.tsx";
 import type { ServerDisplayState } from "../tokens/servers.ts";
 import { formatDuration, formatTimestamp } from "./format.ts";
@@ -101,10 +101,53 @@ export const canStopAny = (servers: ReadonlyArray<Stateful>): boolean => servers
 export const anyMoving = (servers: ReadonlyArray<Stateful>): boolean => servers.some(isMoving);
 
 /** The state a list of servers puts on its tab: the first bad one, else how many are ready. */
-export function summarizeServers(servers: ReadonlyArray<Pick<RunServer, "name" | "state">>): { bad: Pick<RunServer, "name" | "state"> | null; ready: number } {
+export function summarizeServers<S extends Pick<RunServer, "name" | "state">>(servers: ReadonlyArray<S>): { bad: S | null; ready: number } {
   return {
     bad: servers.find((s) => s.state === "exited" || s.state === "unreachable") ?? null,
     ready: servers.filter((s) => s.state === "ready").length,
+  };
+}
+
+/** A process is running: lux has it starting, answering, or gone quiet on its port. */
+export const isOn = (s: Stateful): boolean => s.state === "starting" || s.state === "ready" || s.state === "unreachable";
+
+export interface TaskServersSummary {
+  /** The servers with a process running, in the run's order. */
+  readonly on: ReadonlyArray<RunServer>;
+  /** The rest: stopped or exited on the run, or every recipe (stopped) when no run serves the task. */
+  readonly off: ReadonlyArray<Pick<RunServer, "name" | "state">>;
+  /** The first exited or unreachable server (`summarizeServers`'s rule). */
+  readonly bad: RunServer | null;
+  /** A server is starting, or a branch preview is still coming up. */
+  readonly starting: boolean;
+  /** A branch preview is still coming up (its stages before ready). */
+  readonly booting: boolean;
+  /** The run moved host and its servers stopped with the old placement. */
+  readonly moved: boolean;
+}
+
+/**
+ * What the task's Servers tab says, its label and its tooltip from one
+ * reading: which servers are on, which are off, the first bad one, and
+ * whether something is starting. Null when there is nothing to say: no
+ * run serves the task and the project defines no servers.
+ */
+export function summarizeTaskServers(data: Pick<TaskServers, "run" | "servers" | "recipes" | "moved"> | null): TaskServersSummary | null {
+  if (!data) return null;
+  if (!data.run) {
+    if (data.recipes.length === 0) return null;
+    return { on: [], off: data.recipes.map((r) => ({ name: r.name, state: "stopped" as const })), bad: null, starting: false, booting: false, moved: false };
+  }
+  const run = data.run;
+  const live = !TERMINAL_RUN_STATUSES.includes(run.state as RunStatus);
+  const booting = run.kind === "preview" && run.previewStage !== "ready" && live;
+  return {
+    on: data.servers.filter(isOn),
+    off: data.servers.filter((s) => !isOn(s)),
+    bad: summarizeServers(data.servers).bad,
+    starting: booting || data.servers.some((s) => s.state === "starting"),
+    booting,
+    moved: data.moved !== null,
   };
 }
 
