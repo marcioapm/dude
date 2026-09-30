@@ -451,10 +451,8 @@ body {
   max-width: 720px;
   color: var(--ds-color-text-secondary);
 }
-.taskGoal p {
-  margin: 0;
-}
-.taskGoal ul {
+/* Each criterion is Markdown of its own; the list is the criteria's. */
+.taskCriteria {
   margin: var(--ds-space-8) 0 0;
   padding-left: var(--ds-space-20);
 }
