@@ -30,9 +30,14 @@ CREATE TABLE machine_sizes (
 
 -- A name is unique in its organization, whatever its case.
 CREATE UNIQUE INDEX machine_sizes_name_idx ON machine_sizes (organization_id, lower(name));
--- At most one default per organization. The API flips it in one statement,
--- and refuses to remove the default, so there is always exactly one.
-CREATE UNIQUE INDEX machine_sizes_default_idx ON machine_sizes (organization_id) WHERE is_default;
+-- At most one default per organization: a partial uniqueness, as an
+-- exclusion constraint because only a constraint can be DEFERRABLE, and a
+-- unique index is checked row by row — the API's one statement that moves
+-- the default would fail or pass by the order it met the rows. Checked at
+-- the statement's end instead. The API refuses to remove the default, so
+-- there is always exactly one.
+ALTER TABLE machine_sizes ADD CONSTRAINT machine_sizes_one_default
+  EXCLUDE USING btree (organization_id WITH =) WHERE (is_default) DEFERRABLE INITIALLY IMMEDIATE;
 
 ALTER TABLE machine_sizes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE machine_sizes FORCE ROW LEVEL SECURITY;
