@@ -91,7 +91,7 @@ describe("the terminal", () => {
     expect(link.getAttribute("target")).toBe("_blank");
     // The header keeps its icon as the fallback for where the rail is not.
     // Which of the two shows is a container query on the session's width
-    // (app.css), which happy-dom does not lay out: the browser check covers it.
+    // (app.css), which happy-dom does not lay out: browser_terminal.py covers it.
     expect(page.querySelector("[data-testid=terminal-icon]")?.getAttribute("href")).toBe(link.getAttribute("href"));
   });
 
