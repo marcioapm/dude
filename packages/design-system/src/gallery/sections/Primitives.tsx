@@ -147,10 +147,10 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
       <Block id="p-textarea" title="Textarea" note="The Input anatomy, taller. Grows with its content from `rows` to `maxRows` (default 3 → 12) and then scrolls; no resize handle. Mono for commands and config. Try typing past the limit.">
         <Panes mode={mode}>
           <div className={styles["grid2"]}>
-            <Textarea label="Goal" placeholder="Why, and any detail the agent should know…" hint="Markdown. Up to 10k characters." />
+            <Textarea label="Goal" placeholder="Why, and any detail the agent should know…" hint="Markdown. Up to 64K characters." />
             <Textarea label="Description" defaultValue={"Migrate every login flow to PKCE.\n\n- Web\n- Mobile\n- CLI"} />
             <Textarea label="Runtime command" mono rows={2} maxRows={6} defaultValue={"bun install --frozen-lockfile\nbun test"} />
-            <Textarea label="Acceptance criterion" defaultValue="" error="Each criterion must be under 2000 characters" rows={2} />
+            <Textarea label="Reason" defaultValue="" error="Say why, in a sentence or two" rows={2} />
             <Textarea label="Locked" defaultValue="Kind and repository are fixed once a run exists." disabled rows={2} />
             <ControlledTextarea />
           </div>
@@ -683,7 +683,7 @@ export const SAMPLE_CRITERIA = `- [ ] Card, SEPA and Invoice all appear on the p
 
 function MarkdownEditorDemo({ initial, ...props }: { readonly initial: string } & Omit<MarkdownEditorProps, "value" | "onChange">) {
   const [value, setValue] = useState(initial);
-  return <MarkdownEditor minRows={6} maxLength={10_000} {...props} value={value} onChange={setValue} />;
+  return <MarkdownEditor minRows={6} maxLength={65_536} {...props} value={value} onChange={setValue} />;
 }
 
 /** The task dialog as the web app draws it: a document with where it sits beside it. */
@@ -723,7 +723,7 @@ function TaskDialogExample() {
     >
       <FormStack fill>
         <Input size="title" label="Title" labelNote="required" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="What should change?" />
-        <MarkdownEditor label="Goal" hint="Why it matters, what exists today, and anything an agent can't guess." value={goal} onChange={setGoal} fill minRows={4} maxLength={10_000} />
+        <MarkdownEditor label="Goal" hint="Why it matters, what exists today, and anything an agent can't guess." value={goal} onChange={setGoal} fill minRows={4} maxLength={65_536} />
         <MarkdownEditor label="Acceptance criteria" hint="One list item per criterion. Reviewers check each one." value={criteria} onChange={setCriteria} minRows={3}
           placeholder="- [ ] A thing that must be true when it's done" summary={<Badge tone="neutral" size="sm">4 criteria</Badge>} />
       </FormStack>

@@ -422,7 +422,7 @@ def test_a_task_that_fails_to_save_says_why_beside_the_buttons(
     assert all("400" in e for e in console_errors), console_errors
 
 
-def test_a_criterion_over_the_limit_blocks_saving_until_it_fits(
+def test_a_task_takes_a_64k_goal_and_16k_of_criteria_and_no_more(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
 ):
     def titled(title: str) -> list[dict]:
@@ -432,25 +432,57 @@ def test_a_criterion_over_the_limit_blocks_saving_until_it_fits(
     sign_in(page, web_url, org["api_key"])
     page.get_by_test_id("new-task").click()
     page.get_by_test_id("task-title").fill("Long criterion")
+    goal = page.get_by_test_id("task-goal")
     criteria = page.get_by_test_id("task-criteria")
-    criteria.fill("- " + "x" * 2001)
-    expect(page.get_by_text("Criterion 1 is 2,001 characters; each can be at most 2,000.", exact=True)).to_be_visible()
-    expect(page.get_by_test_id("task-save")).to_be_disabled()
-    expect(page.get_by_test_id("task-create-deliver")).to_be_disabled()
-    criteria.press("ControlOrMeta+Enter")
-    expect(page.get_by_test_id("task-title")).to_be_visible()
-    assert titled("Long criterion") == []
 
-    # At exactly the limit it saves, whole, with Ctrl/⌘+Enter: created once, not delivered.
-    criteria.fill("- " + "x" * 2000)
+    # The editors stop at their limits: a longer goal or criteria source is cut there, and typing adds nothing.
+    goal.fill("g" * 65_537)
+    assert goal.evaluate("el => el.value.length") == 65_536
+    goal.press("End")
+    page.keyboard.insert_text("more")
+    assert goal.evaluate("el => el.value.length") == 65_536
+    criteria.fill("- " + "c" * 16_400)
+    assert criteria.evaluate("el => el.value.length") == 16_384
+
+    # One criterion far past the old 2,000 each saves whole, with a goal at exactly the limit.
+    criteria.fill("- " + "x" * 3000)
     expect(page.get_by_test_id("task-save")).to_be_enabled()
     criteria.press("ControlOrMeta+Enter")
     expect(page.get_by_test_id("task-screen")).to_be_visible()
     saved = titled("Long criterion")
     assert len(saved) == 1
     detail = client.get(f"/v1/tasks/{saved[0]['id']}").json()
-    assert detail["acceptanceCriteria"] == ["x" * 2000]
+    assert detail["acceptanceCriteria"] == ["x" * 3000]
+    assert len(detail["goal"]) == 65_536
     assert detail["runs"] == []
+    assert console_errors == []
+
+
+def test_criteria_that_open_over_the_editors_limit_block_saving_until_they_fit(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    """Saved criteria within 16K open as a list whose markers take it past the editor's limit."""
+    item = client.create_task(forge_project["id"], "Near the limit", acceptanceCriteria=["y" * 2048] * 8)
+    sign_in(page, web_url, org["api_key"])
+    page.get_by_text("Near the limit").first.click()
+    page.get_by_test_id("edit-task").click()
+    criteria = page.get_by_test_id("task-criteria")
+    # Eight "- [ ] " and seven newlines: 16,384 + 55.
+    assert criteria.evaluate("el => el.value.length") == 16_439
+    expect(page.get_by_text("55 characters over the limit; shorten it to save.", exact=True)).to_be_visible()
+    expect(page.get_by_role("dialog", name="Edit task").get_by_text("16,439 / 16,384")).to_be_visible()
+    expect(page.get_by_test_id("task-save")).to_be_disabled()
+    criteria.press("ControlOrMeta+Enter")
+    expect(criteria).to_be_visible()
+
+    # Shortened to fit, it saves.
+    criteria.evaluate("el => el.setSelectionRange(el.value.length - 55, el.value.length)")
+    criteria.press("Delete")
+    expect(page.get_by_test_id("task-save")).to_be_enabled()
+    page.get_by_test_id("task-save").click()
+    expect(criteria).to_have_count(0)
+    saved = client.get(f"/v1/tasks/{item['id']}").json()["acceptanceCriteria"]
+    assert len(saved) == 8 and saved[-1] == "y" * (2048 - 55)
     assert console_errors == []
 
 

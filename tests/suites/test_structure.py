@@ -111,6 +111,30 @@ def test_a_task_can_be_edited_and_moved_until_delivery_starts(client: ApiClient,
     assert client.patch(f"/v1/tasks/{item['id']}", {"epicId": None}).status_code == 200
 
 
+def test_a_task_takes_a_64k_goal_and_16k_of_criteria_in_all(client: ApiClient, forge_project: dict):
+    """The goal is bounded, and so are the criteria together; one criterion has no limit of its own."""
+    project = forge_project["id"]
+    created = client.post("/v1/tasks", {"projectId": project, "title": "Limits", "goal": "g" * 65_536,
+                                        "acceptanceCriteria": ["x" * 3000, "y" * (16_384 - 3000)]})
+    assert created.status_code == 201, created.text
+    item = created.json()
+    assert len(item["goal"]) == 65_536 and item["acceptanceCriteria"][0] == "x" * 3000
+
+    over_goal = client.post("/v1/tasks", {"projectId": project, "title": "Over", "goal": "g" * 65_537})
+    assert over_goal.status_code == 400
+    assert "goal" in over_goal.json()["error"]["details"]["fieldErrors"]
+    too_many = ["x" * 3000, "y" * (16_384 - 2999)]
+    for resp in (client.post("/v1/tasks", {"projectId": project, "title": "Over", "acceptanceCriteria": too_many}),
+                 client.patch(f"/v1/tasks/{item['id']}", {"acceptanceCriteria": too_many})):
+        assert resp.status_code == 400
+        error = resp.json()["error"]
+        assert error["code"] == "bad_request"
+        assert error["details"]["fieldErrors"]["acceptanceCriteria"] == [
+            "acceptance criteria can be at most 16,384 characters in all"]
+    assert client.patch(f"/v1/tasks/{item['id']}", {"goal": "g" * 65_537}).status_code == 400
+    assert client.get(f"/v1/tasks/{item['id']}").json()["acceptanceCriteria"][1] == "y" * (16_384 - 3000)
+
+
 def test_a_task_names_its_repositories_each_changed_or_read(client: ApiClient, forge_project: dict):
     """A task names the repositories it touches — each one it changes or
     only reads — and they are fixed, like what it asks for, once it is delivered."""

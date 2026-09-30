@@ -6,7 +6,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { parseMarkdown } from "@dude/design-system";
-import { criteriaFromMarkdown, criteriaToMarkdown, criterionTooLong, type ParsedCriteria } from "../src/screens/criteria.ts";
+import { criteriaFromMarkdown, criteriaToMarkdown, type ParsedCriteria } from "../src/screens/criteria.ts";
 
 const from = (src: string) => criteriaFromMarkdown(src);
 const roundTrip = (items: string[]) => from(criteriaToMarkdown(items)).items;
@@ -181,9 +181,21 @@ describe("the round trip is stable", () => {
   });
 });
 
-describe("criterionTooLong", () => {
-  test("names the first criterion over the server's limit", () => {
-    expect(criterionTooLong(["ok", "x".repeat(2000)])).toBeNull();
-    expect(criterionTooLong(["ok", "x".repeat(2001), "y".repeat(3000)])).toBe("Criterion 2 is 2,001 characters; each can be at most 2,000.");
+describe("the saved criteria are never longer than their source", () => {
+  // The editor bounds the source; the server bounds the criteria's total. This holds the second under the first.
+  test("random sources built from Markdown's awkward pieces", () => {
+    let seed = 0x51ce5ad;
+    const rand = (n: number) => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return (((t ^ (t >>> 14)) >>> 0) / 4294967296) * n | 0;
+    };
+    const pieces = ["- ", "* ", "1. ", "10. ", "- [ ] ", "[x] ", "```", "~~~", "  ", "    ", "\t", "\t\t", "> ", "# ", "word", "é", "😀", "\n", "\n\n", "\n  ", "\n\t", "\n- ", "\r\n", " "];
+    for (let n = 0; n < 3000; n++) {
+      const source = Array.from({ length: 1 + rand(30) }, () => pieces[rand(pieces.length)]).join("");
+      const saved = from(source).items.reduce((sum, c) => sum + c.length, 0);
+      if (saved > source.length) throw new Error(`${JSON.stringify(source)} saves ${saved} characters from ${source.length}`);
+    }
   });
 });

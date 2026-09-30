@@ -6,9 +6,6 @@
 
 import { isMarkdownBlockStart } from "@dude/design-system";
 
-/** The server's limit on one criterion (`z.string().max(2000)` in the task routes). */
-export const CRITERION_MAX = 2000;
-
 export interface ParsedCriteria {
   /** One string per top-level list item, task marker removed, trimmed; empty items dropped. */
   readonly items: string[];
@@ -151,11 +148,4 @@ export function criteriaToMarkdown(items: ReadonlyArray<string>): string {
       return ["- [ ] " + first, ...rest.map((l) => (l === "" ? "" : "  " + l))].join("\n");
     })
     .join("\n");
-}
-
-/** The first criterion over the server's limit, as the field's error; null when all fit. */
-export function criterionTooLong(items: ReadonlyArray<string>, max = CRITERION_MAX): string | null {
-  const at = items.findIndex((c) => c.length > max);
-  if (at === -1) return null;
-  return `Criterion ${at + 1} is ${items[at]!.length.toLocaleString("en-US")} characters; each can be at most ${max.toLocaleString("en-US")}.`;
 }
