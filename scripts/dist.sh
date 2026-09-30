@@ -9,6 +9,7 @@
 #     bin/dude-migrate         the migration runner, bun --compile, with
 #                              migrations/*.sql embedded (build-migrate.sh)
 #     share/dude/web/          the built web app (DUDE_WEB_DIR)
+#     share/dude/third-party/  licences of code bundled into the binaries
 #
 # Unpacking a tarball into a prefix gives that layout under it.
 # The bun binaries link glibc dynamically; the Go ones link nothing.
@@ -58,6 +59,9 @@ for arch in arm64 amd64; do
 
   cp -R "$ROOT/apps/web/dist" "$work/share/dude/web"
   cp "$ROOT/LICENSE" "$work/share/dude/LICENSE"
+  # dude-backend bundles jose (MIT), whose licence asks for its notice in copies.
+  mkdir -p "$work/share/dude/third-party"
+  cp "$ROOT/apps/control-plane/node_modules/jose/LICENSE.md" "$work/share/dude/third-party/jose-LICENSE.md"
 
   chmod 0755 "$work/bin/"*
   chmod -R u+rwX,go+rX,go-w "$work/share"

@@ -317,7 +317,7 @@ func setRefs(ctx context.Context, tx pgx.Tx, org, id string, refs []Ref) error {
 // selectMemory reads a memory as people see it: who wrote it (an agent's
 // Run gives the person it worked for and its task), and its index state.
 const selectMemory = `SELECT m.id, coalesce(m.project_id, ''), m.title, m.content, m.kind, m.author_kind,
-		coalesce(m.author_person_id, owner.person_id, ''), coalesce(p.name, op.name, ''),
+		coalesce(m.author_person_id, op.id, ''), coalesce(p.name, op.name, ''),
 		coalesce(r.role::text, ''), coalesce(m.created_by_run_id, ''), coalesce(tp.key_prefix || '-' || t.number, ''),
 		coalesce(m.system_reason, ''), coalesce(m.source_type, ''), coalesce(m.source_id, ''),
 		m.archived_at, m.created_at, m.updated_at,
@@ -328,8 +328,9 @@ const selectMemory = `SELECT m.id, coalesce(m.project_id, ''), m.title, m.conten
 	LEFT JOIN runs r ON r.id = m.created_by_run_id
 	LEFT JOIN tasks t ON t.id = r.task_id
 	LEFT JOIN projects tp ON tp.id = t.project_id
-	LEFT JOIN api_keys owner ON owner.id = t.owner_key_id
-	LEFT JOIN people op ON op.id = owner.person_id
+	LEFT JOIN LATERAL (SELECT p.id, p.name FROM task_people membership JOIN people p ON p.id = membership.person_id
+		WHERE membership.task_id = t.id AND p.removed_at IS NULL
+		ORDER BY membership.position, membership.person_id LIMIT 1) op ON true
 	LEFT JOIN search_documents d ON d.source_type = 'memory' AND d.source_id = m.id`
 
 func scan(row pgx.Row) (Memory, error) {

@@ -81,17 +81,16 @@ try {
 
     for (const [i, t] of TASKS.entries()) {
       const taskId = newId("task");
-      const [ownerIndex, ...others] = t.people;
-      // The owner's key: a trigger (migration 035) makes them the task's first person.
+      // Ownership is task_people position 0; owner_key_id is only the legacy mirror.
       await sql`
         INSERT INTO tasks (id, organization_id, project_id, number, epic_id, title, status, owner_key_id)
         VALUES (${taskId}, ${organizationId}, ${projectId}, ${i + 1},
                 ${t.epic === null ? null : epicIds[t.epic]!}, ${t.title}, ${t.status}::task_status,
-                ${made[ownerIndex!]!.keyId})`;
-      for (const [n, other] of others.entries()) {
+                ${made[t.people[0]!]!.keyId})`;
+      for (const [position, person] of t.people.entries()) {
         await sql`
           INSERT INTO task_people (task_id, person_id, organization_id, position)
-          VALUES (${taskId}, ${made[other]!.personId}, ${organizationId}, ${n + 1})`;
+          VALUES (${taskId}, ${made[person]!.personId}, ${organizationId}, ${position})`;
       }
     }
     return made;

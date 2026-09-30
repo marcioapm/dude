@@ -36,11 +36,11 @@ const EVENT_COLUMNS = `
   correlation_id    AS "correlationId",
   causation_id      AS "causationId",
   payload,
-  -- A person acted: who, as the API names people, through the key the
-  -- ledger recorded. Keys from before people resolve through the person
-  -- migration 035 made for them.
+  -- Legacy human actors name keys; person actors name people directly.
   CASE WHEN actor_type = 'human' THEN
     (SELECT person_ref(p) FROM api_keys k JOIN people p ON p.id = k.person_id WHERE k.id = events.actor_id)
+  WHEN actor_type = 'person' THEN
+    (SELECT person_ref(p) FROM people p WHERE p.id = events.actor_id)
   END               AS "actorPerson"`;
 
 interface EventRow {
@@ -79,7 +79,7 @@ function toPersisted(row: EventRow): PersistedEvent {
     sessionId: row.sessionId,
     workflowRunId: row.workflowRunId,
     actor: row.actorPerson
-      ? { type: row.actorType, ...row.actorPerson, keyId: row.actorId }
+      ? { type: row.actorType, ...row.actorPerson, ...(row.actorType === "human" ? { keyId: row.actorId } : {}) }
       : { type: row.actorType, id: row.actorId },
     source: row.source,
     correlationId: row.correlationId,

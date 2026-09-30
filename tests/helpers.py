@@ -166,14 +166,29 @@ class ApiClient:
 
 
 def sign_in(page, web_url: str, api_key: str) -> None:
-    """Sign the web app in with a key, from a clean slate."""
+    """Sign the web app in with a key, from a clean slate.
+
+    The key is stored before the app's first script runs, once per tab: the
+    app first asks /v1/me with no key (for a Cloudflare Access session), and
+    that expected 401 would count as a console error in every test. The key
+    prompt's own path is covered by the sign-in tests.
+    """
+    import json
+    import uuid
+
     from playwright.sync_api import expect
 
+    # Init scripts accumulate on a page; each sign-in stores its key once,
+    # on the next document only, and later documents keep what the app did.
+    page.add_init_script(
+        """((key, token) => {
+          if (sessionStorage.getItem("dude.test.signedIn:" + token)) return;
+          sessionStorage.setItem("dude.test.signedIn:" + token, "1");
+          localStorage.clear();
+          localStorage.setItem("dude.apiKey", key);
+        })(%s, %s)""" % (json.dumps(api_key), json.dumps(uuid.uuid4().hex)),
+    )
     page.goto(web_url)
-    page.evaluate("localStorage.clear()")
-    page.goto(web_url)
-    page.fill('input[type="password"]', api_key)
-    page.click('button[type="submit"]')
     expect(page.get_by_test_id("shell")).to_be_visible()
 
 

@@ -30,7 +30,8 @@ async function subscribe(ctx: RequestContext): Promise<Response> {
   const sub = await parseBody(ctx.request, subscriptionSchema);
   await withOrg(ctx.principal.organizationId, async ({ sql }) => {
     await sql`SELECT claim_push_subscription(${sub.endpoint}, ${ctx.principal.organizationId},
-      ${ctx.principal.apiKeyId}, ${sub.keys.p256dh}, ${sub.keys.auth})`;
+      ${ctx.principal.personId}, ${ctx.principal.credentialKind === "api_key" ? ctx.principal.apiKeyId : null},
+      ${sub.keys.p256dh}, ${sub.keys.auth})`;
   });
   return json({ subscribed: true }, 201);
 }

@@ -12,18 +12,13 @@ import pytest
 from playwright.sync_api import Page, expect
 
 from fake_github import FakeGitHub
-from helpers import ApiClient, wait_until
+from helpers import ApiClient, sign_in, wait_until
 
 pytestmark = pytest.mark.ui
 
 
 def _sign_in(page: Page, web_url: str, api_key: str) -> None:
-    page.goto(web_url)
-    page.evaluate("localStorage.clear()")
-    page.goto(web_url)
-    page.fill('input[type="password"]', api_key)
-    page.click('button[type="submit"]')
-    expect(page.get_by_test_id("shell")).to_be_visible()
+    sign_in(page, web_url, api_key)
 
 
 def _open_pr(client: ApiClient, project: dict) -> tuple[dict, dict]:
