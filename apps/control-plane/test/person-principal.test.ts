@@ -63,15 +63,15 @@ test("a person with no key creates a task that is theirs alone, or nothing on ba
   expect(res.status).toBe(201);
   const task = await res.json() as { id: string; owner: { id: string } | null };
   expect(task.owner?.id).toBe(creator);
-  expect(await owner`SELECT person_id, position FROM task_people WHERE task_id = ${task.id}`)
+  expect(Array.from(await owner`SELECT person_id, position FROM task_people WHERE task_id = ${task.id}`))
     .toEqual([{ person_id: creator, position: 0 }]);
-  expect(await owner`SELECT actor_type, actor_id FROM events WHERE task_id = ${task.id} AND event_type = 'task.created'`)
+  expect(Array.from(await owner`SELECT actor_type, actor_id FROM events WHERE task_id = ${task.id} AND event_type = 'task.created'`))
     .toEqual([{ actor_type: "person", actor_id: creator }]);
   expect(await owner`SELECT id FROM api_keys WHERE person_id = ${creator}`).toHaveLength(0);
 
   const numberBefore = await owner`SELECT next_task_number FROM projects WHERE id = ${project}`;
   expect((await create({ title: "Bad repo", repositories: [{ id: `${org}_nowhere` }] })).status).toBe(404);
-  expect(await owner`SELECT id FROM tasks WHERE project_id = ${project}`).toEqual([{ id: task.id }]);
-  expect(await owner`SELECT next_task_number FROM projects WHERE id = ${project}`).toEqual(numberBefore);
-  expect(await owner`SELECT task_id FROM task_people WHERE organization_id = ${org}`).toEqual([{ task_id: task.id }]);
+  expect(Array.from(await owner`SELECT id FROM tasks WHERE project_id = ${project}`)).toEqual([{ id: task.id }]);
+  expect(Array.from(await owner`SELECT next_task_number FROM projects WHERE id = ${project}`)).toEqual(numberBefore);
+  expect(Array.from(await owner`SELECT task_id FROM task_people WHERE organization_id = ${org}`)).toEqual([{ task_id: task.id }]);
 });
