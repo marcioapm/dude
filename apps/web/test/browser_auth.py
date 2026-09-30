@@ -52,6 +52,9 @@ class BrowserAuth(unittest.TestCase):
         self.probes = []
         self.streams = []
         self.responses = []
+        # Answers to /v1/navigation in order, then the empty tree.
+        self.nav_responses = []
+        self.nav_calls = []
         self.navigation = []
         self.context.route("**/*", self.route)
         self.page.on("request", lambda req: self.navigation.append(req.url)
@@ -82,7 +85,13 @@ class BrowserAuth(unittest.TestCase):
         elif "/v1/people" in req.url:
             route.fulfill(json={"people": [PERSON], "you": PERSON["id"]})
         elif "/v1/navigation" in req.url:
-            route.fulfill(json={"projects": []})
+            self.nav_calls.append(req.headers.get("authorization"))
+            response = self.nav_responses.pop(0) if self.nav_responses else None
+            if response is None:
+                route.fulfill(json={"projects": []})
+            else:
+                route.fulfill(status=response, content_type="application/json",
+                              body=json.dumps({"error": {"code": "refused", "message": "Refused"}}))
         elif "/v1/pull-requests" in req.url:
             route.fulfill(json={"pullRequests": []})
         elif "/v1/" in req.url:
@@ -135,6 +144,35 @@ class BrowserAuth(unittest.TestCase):
                 self.shell()
                 self.assertEqual(self.probes, ["Bearer bad", None])
                 self.assertIsNone(self.page.evaluate("localStorage.getItem('dude.apiKey')"))
+
+    def test_app_refusal_of_verified_key_falls_back_to_access_once(self):
+        for status in (401, 403):
+            with self.subTest(status=status):
+                self.responses = [{"authMethod": "api_key"}, {"authMethod": "cloudflare_access"}]
+                self.nav_responses = [status]
+                self.probes.clear()
+                self.nav_calls.clear()
+                # The app's tree read by cookie happens only after the refusal and re-probe.
+                with self.page.expect_request(lambda r: "/v1/navigation" in r.url
+                                              and r.headers.get("authorization") is None):
+                    self.open("valid")
+                self.shell()
+                self.assertEqual(self.probes, ["Bearer valid", None])
+                self.assertEqual(self.nav_calls[0], "Bearer valid")
+                self.assertIsNone(self.page.evaluate("localStorage.getItem('dude.apiKey')"))
+
+    def test_app_refusal_then_refused_cookie_shows_stable_prompt(self):
+        self.responses = [{"authMethod": "api_key"}, 401]
+        # Dev StrictMode runs the app's first load twice; refuse both.
+        self.nav_responses = [401, 401]
+        self.open("valid")
+        self.prompt()
+        self.page.wait_for_timeout(500)
+        self.prompt()
+        self.assertEqual(self.probes, ["Bearer valid", None])
+        self.assertTrue(self.nav_calls)
+        self.assertEqual(set(self.nav_calls), {"Bearer valid"})
+        self.assertIsNone(self.page.evaluate("localStorage.getItem('dude.apiKey')"))
 
     def test_keyless_refusal_shows_prompt(self):
         self.responses = [401]
