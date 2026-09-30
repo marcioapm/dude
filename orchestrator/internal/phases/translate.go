@@ -288,6 +288,12 @@ func (t *translator) shimEvent(ctx context.Context, tx pgx.Tx, s *Syncer, typ st
 	return nil
 }
 
+// interruptAloneOf (SQL): d is an undelivered "Interrupt now" sent as the
+// interrupt alone, resending the instruction whose words f ($1, of Run $2)
+// carries: it settles with f.
+const interruptAloneOf = `f.id = $1 AND f.run_id = $2 AND f.interrupt_only IS FALSE
+	AND d.run_id = f.run_id AND d.resends = COALESCE(f.resends, f.id) AND d.interrupt_only AND d.delivered_at IS NULL`
+
 // directiveReceipt records what lux says became of a person's steer, typ
 // being the record (lux.RecordInput and those following it):
 //
@@ -345,9 +351,7 @@ func (t *translator) directiveReceipt(ctx context.Context, tx pgx.Tx, s *Syncer,
 		// An interrupt alone that relied on these words fails with them, once
 		// no other directive carrying them is left to deliver them.
 		return settleInterrupts(ctx, tx, s, t.run, evDirectiveFailed, &msg, `UPDATE directives d SET failed_at = now(), error = $3
-			FROM directives f WHERE f.id = $1 AND f.run_id = $2 AND f.interrupt_only IS FALSE
-			  AND d.run_id = f.run_id AND d.resends = COALESCE(f.resends, f.id) AND d.interrupt_only
-			  AND d.delivered_at IS NULL AND d.failed_at IS NULL
+			FROM directives f WHERE `+interruptAloneOf+` AND d.failed_at IS NULL
 			  AND NOT EXISTS (SELECT 1 FROM directives c WHERE c.run_id = d.run_id AND `+carrierOf+` AND c.failed_at IS NULL)
 			RETURNING d.id`, id, t.run.ID, msg)
 	}
@@ -377,9 +381,10 @@ func (t *translator) directiveReceipt(ctx context.Context, tx pgx.Tx, s *Syncer,
 	}
 	// Accepted with no receipt to follow is delivered now, unless it failed
 	// first; a consumed or handoff receipt delivers even a failed one.
+	overridesFailure := phase != lux.InputAccepted
 	tag, err := tx.Exec(ctx, `UPDATE directives SET delivered_at = now(), accepted_at = COALESCE(accepted_at, now()),
 			failed_at = NULL, error = NULL
-		WHERE id = $1 AND run_id = $2 AND delivered_at IS NULL AND (failed_at IS NULL OR $3)`, id, t.run.ID, phase != lux.InputAccepted)
+		WHERE id = $1 AND run_id = $2 AND delivered_at IS NULL AND (failed_at IS NULL OR $3)`, id, t.run.ID, overridesFailure)
 	if err != nil || tag.RowsAffected() == 0 {
 		return err
 	}
@@ -398,10 +403,8 @@ func (t *translator) directiveReceipt(ctx context.Context, tx pgx.Tx, s *Syncer,
 	// event flagged interruptOnly: the words were read once, here.
 	return settleInterrupts(ctx, tx, s, t.run, evDirectiveDelivered, nil, `UPDATE directives d
 			SET delivered_at = now(), accepted_at = COALESCE(d.accepted_at, now()), failed_at = NULL, error = NULL
-		FROM directives c WHERE c.id = $1 AND c.run_id = $2 AND c.interrupt_only IS FALSE
-		  AND d.run_id = c.run_id AND d.resends = COALESCE(c.resends, c.id) AND d.interrupt_only
-		  AND d.delivered_at IS NULL AND (d.failed_at IS NULL OR $3)
-		RETURNING d.id`, id, t.run.ID, phase != lux.InputAccepted)
+		FROM directives f WHERE `+interruptAloneOf+` AND (d.failed_at IS NULL OR $3)
+		RETURNING d.id`, id, t.run.ID, overridesFailure)
 }
 
 // session records the placement the agent's session is established in. The
