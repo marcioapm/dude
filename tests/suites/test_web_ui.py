@@ -204,6 +204,22 @@ def test_a_task_is_written_in_markdown_and_its_criteria_are_the_list_items(
     assert console_errors == []
 
 
+def test_enter_in_the_title_moves_to_the_goal_and_does_not_create(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    sign_in(page, web_url, org["api_key"])
+    page.get_by_test_id("new-task").click()
+    title = page.get_by_test_id("task-title")
+    title.fill("Not yet")
+    expect(page.get_by_test_id("task-save")).to_be_enabled()
+    title.press("Enter")
+    expect(page.get_by_test_id("task-goal")).to_be_focused()
+    expect(title).to_have_value("Not yet")
+    items = client.get("/v1/tasks", params={"projectId": forge_project["id"]}).json()["tasks"]
+    assert [i for i in items if i["title"] == "Not yet"] == []
+    assert console_errors == []
+
+
 def test_closing_a_task_with_writing_in_it_asks_first(
     page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list
 ):
