@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"os"
@@ -269,14 +270,25 @@ func TestAMissingRequiredSettingIsNamed(t *testing.T) {
 func TestTheLoadersWarningsAreLoggedWithoutTheirSecrets(t *testing.T) {
 	const sentinel = "S3NT1NEL-lux-key-9f2c"
 	text := "[lux]\nurl = \"https://lux.file\"\napi_key = \"" + sentinel + "\"\n"
-	logged := func(cfg *config.Config) string {
+	// logged is logConfig's records, decoded, and its raw output.
+	logged := func(cfg *config.Config) ([]map[string]any, string) {
 		var buf bytes.Buffer
-		logConfig(slog.New(slog.NewTextHandler(&buf, nil)), cfg)
-		return buf.String()
+		logConfig(slog.New(slog.NewJSONHandler(&buf, nil)), cfg)
+		var recs []map[string]any
+		for dec := json.NewDecoder(bytes.NewReader(buf.Bytes())); dec.More(); {
+			var rec map[string]any
+			if err := dec.Decode(&rec); err != nil {
+				t.Fatal(err)
+			}
+			recs = append(recs, rec)
+		}
+		return recs, buf.String()
 	}
-	out := logged(loadConfig(t, text, 0o644, nil))
-	if !strings.Contains(out, "level=WARN") || !strings.Contains(out, "lux.api_key") {
-		t.Errorf("log = %q, want a warning naming lux.api_key", out)
+	cfg := loadConfig(t, text, 0o644, nil)
+	recs, out := logged(cfg)
+	if len(recs) != 2 || recs[0]["msg"] != "configuration file read" || recs[0]["path"] != cfg.Path ||
+		recs[1]["level"] != "WARN" || !strings.Contains(recs[1]["msg"].(string), "lux.api_key") {
+		t.Errorf("log = %q, want the file read at %s and a warning naming lux.api_key", out, cfg.Path)
 	}
 	if strings.Contains(out, sentinel) {
 		t.Errorf("log carries the secret: %q", out)
@@ -285,7 +297,7 @@ func TestTheLoadersWarningsAreLoggedWithoutTheirSecrets(t *testing.T) {
 		"private file": loadConfig(t, text, 0o600, nil),
 		"no secret":    loadConfig(t, "[lux]\nurl = \"https://lux.file\"\n", 0o644, nil),
 	} {
-		if out := logged(cfg); strings.Contains(out, "level=WARN") || !strings.Contains(out, "configuration file read") {
+		if recs, out := logged(cfg); len(recs) != 1 || recs[0]["path"] != cfg.Path || recs[0]["level"] != "INFO" {
 			t.Errorf("%s: log = %q, want the file named and no warning", name, out)
 		}
 	}
