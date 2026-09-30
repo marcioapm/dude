@@ -122,11 +122,14 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
       onOpenChange={(open) => !open && onClose()}
       size="document"
       // The line is there from the start, so the fields do not move down when the choices arrive.
+      // A failed load leaves it empty (an empty fragment still reserves its height); the footer says why.
       context={choices ? (
         <Breadcrumb size="sm" current={false} items={[
           { id: "project", label: choices.projectName },
           ...(epicTitle ? [{ id: "epic", label: epicTitle, icon: "layers" as const }] : []),
         ]} />
+      ) : loadProblem ? (
+        <></>
       ) : (
         <Skeleton variant="text" width={160} />
       )}

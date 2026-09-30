@@ -286,6 +286,41 @@ def test_the_task_dialog_does_not_move_when_where_it_sits_arrives(
     assert console_errors == []
 
 
+def test_a_task_dialog_whose_project_fails_to_load_shows_no_loading_line(
+    page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list
+):
+    sign_in(page, web_url, org["api_key"])
+    held = []
+    page.route(f"**/v1/projects/{forge_project['id']}",
+               lambda route: held.append(route) if route.request.method == "GET" else route.continue_())
+    page.get_by_test_id("new-task").click()
+    dialog = page.get_by_role("dialog", name="New task")
+    title = page.get_by_test_id("task-title")
+    expect(title).to_be_visible()
+    for _ in range(100):
+        if held:
+            break
+        page.wait_for_timeout(50)
+    assert held, "the project was never asked for"
+    page.wait_for_function(
+        "document.querySelector('[role=dialog]').getAnimations().every(a => a.playState === 'finished')")
+    running = "d => d.getAnimations({ subtree: true }).filter(a => a.playState === 'running').length"
+    # While it loads, the context line pulses.
+    assert dialog.evaluate(running) > 0
+    before = title.bounding_box()["y"]
+    reason = "The project is not available right now."
+    for route in held:
+        route.fulfill(status=500, content_type="application/json",
+                      body='{"error":{"code":"internal","message":"%s"}}' % reason)
+    alert = dialog.get_by_role("alert")
+    expect(alert).to_have_text(reason)
+    # Once it has failed nothing says it is still loading, and the fields stay where they were.
+    assert dialog.evaluate(running) == 0
+    expect(dialog.locator("[aria-busy=true]")).to_have_count(0)
+    assert title.bounding_box()["y"] == before
+    assert all("500" in e for e in console_errors), console_errors
+
+
 def test_a_task_that_fails_to_save_says_why_beside_the_buttons(
     page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list
 ):
