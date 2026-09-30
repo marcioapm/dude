@@ -58,13 +58,14 @@ MIN_BUN = (1, 4, 0)
 
 def bun_problem(version: str) -> str | None:
     """Why the `bun --version` output `version` cannot run the suite, or None."""
+    version = version.strip()
     need = ".".join(map(str, MIN_BUN))
-    parts = version.strip().split("-")[0].split("+")[0].split(".")
+    parts = version.split("-")[0].split("+")[0].split(".")
     if len(parts) != 3 or not all(p.isdigit() for p in parts):
-        return f"could not read the Bun version from {version.strip()!r}; the suite needs Bun >= {need}"
+        return f"could not read the Bun version from {version!r}; the suite needs Bun >= {need}"
     have = tuple(int(p) for p in parts)
     if have < MIN_BUN or (have == MIN_BUN and "-" in version.split("+")[0]):
-        return (f"Bun {version.strip()} is on PATH; the suite needs Bun >= {need}: earlier Bun fails every "
+        return (f"Bun {version} is on PATH; the suite needs Bun >= {need}: earlier Bun fails every "
                 "photo upload to the test S3 (versitygw answers Connection: close)")
     return None
 
