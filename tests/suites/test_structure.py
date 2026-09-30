@@ -162,6 +162,33 @@ def test_the_github_connection_is_shown_masked_and_can_be_verified(client: ApiCl
     assert client.post("/v1/forge/credential/verify").json() == {"ok": False, "reason": "GitHub rejected the token"}
 
 
+def test_demo_seed_credential_authenticates_receive_pack(client: ApiClient, org: dict, owner_dsn: str, fake_github):
+    import requests
+
+    from demo import seed_forge_credential
+    from helpers import query
+
+    seed_forge_credential(client, fake_github)
+    credential = query(
+        owner_dsn,
+        "SELECT secret FROM forge_credentials WHERE organization_id = %s",
+        (org["id"],),
+    )[0]
+    discovery = f"{fake_github.api_url}/{fake_github.owner}/{fake_github.repo}.git/info/refs"
+    response = requests.get(
+        discovery, params={"service": "git-receive-pack"},
+        auth=("x-access-token", credential["secret"]), timeout=5,
+    )
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"] == "application/x-git-receive-pack-advertisement"
+    assert response.content == b"001f# service=git-receive-pack\n0000"
+    rejected = requests.get(
+        discovery, params={"service": "git-receive-pack"},
+        auth=("x-access-token", "wrong-token"), timeout=5,
+    )
+    assert rejected.status_code == 401
+
+
 def test_an_organization_without_github_says_so(client: ApiClient):
     assert client.get("/v1/forge/credential").json() == {"connected": False}
 
