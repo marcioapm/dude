@@ -740,21 +740,65 @@ export function PreviewRunNote({ openServers }: { openServers?: (() => void) | u
  * The Run's lux terminal URL, read from its servers when it is running and
  * kept: it names the lux Run, which a resume keeps. Until known, read again
  * whenever `askAgain` moves. Null until known.
+ *
+ * One read at a time per client and Run: an `askAgain` during a read is
+ * folded into one follow-up after it, and the read out still lands. Only a
+ * new client or Run, or unmounting, discards an answer.
  */
 function useTerminalUrl(client: ApiClient, runId: string, running: boolean, askAgain: number): string | null {
   const [url, setUrl] = useState<{ runId: string; url: string } | null>(null);
   const known = url?.runId === runId ? url.url : null;
+  const reader = useRef<TerminalReader | null>(null);
   useEffect(() => {
-    if (!running || known) return;
-    let cancelled = false;
-    client.runServers(runId).then((s) => {
-      if (!cancelled && s.run?.terminalUrl) setUrl({ runId, url: s.run.terminalUrl });
-    }, () => undefined);
+    const r = new TerminalReader(client, runId, (found) => setUrl({ runId, url: found }));
+    reader.current = r;
     return () => {
-      cancelled = true;
+      r.dead = true;
     };
+  }, [client, runId]);
+  useEffect(() => {
+    const r = reader.current;
+    if (!r) return;
+    r.wanted = running && !known;
+    if (r.wanted) r.ask();
   }, [client, runId, running, known, askAgain]);
   return known;
+}
+
+class TerminalReader {
+  dead = false;
+  /** Running and the URL still unknown: a follow-up is only read while this holds. */
+  wanted = false;
+  private inFlight = false;
+  private again = false;
+  constructor(
+    private readonly client: ApiClient,
+    private readonly runId: string,
+    private readonly found: (url: string) => void,
+  ) {}
+
+  ask(): void {
+    if (this.dead) return;
+    if (this.inFlight) {
+      this.again = true;
+      return;
+    }
+    this.inFlight = true;
+    this.again = false;
+    this.client
+      .runServers(this.runId)
+      .then((s) => {
+        const url = s.run?.terminalUrl;
+        if (!this.dead && url) {
+          this.wanted = false;
+          this.found(url);
+        }
+      }, () => undefined)
+      .finally(() => {
+        this.inFlight = false;
+        if (this.again && this.wanted) this.ask();
+      });
+  }
 }
 
 /** A message's token foot: the context then, against the window when known, and the turn's output. */

@@ -130,6 +130,62 @@ describe("the terminal", () => {
     await until(() => page.querySelector("[data-testid=terminal-link]"), "the terminal once lux has the run");
   });
 
+  /**
+   * `runServers` held open until the test lets each answer go, counting the
+   * reads started and the most ever in flight at once.
+   */
+  class Held extends RunClient {
+    started = 0;
+    active = 0;
+    peak = 0;
+    private readonly waiting: Array<(withUrl: boolean) => void> = [];
+    override async runServers() {
+      this.started++;
+      this.peak = Math.max(this.peak, ++this.active);
+      const withUrl = await new Promise<boolean>((r) => this.waiting.push(r));
+      this.active--;
+      const s = await super.runServers();
+      return withUrl ? s : { ...s, run: s.run ? { ...s.run, terminalUrl: null } : null };
+    }
+    answer(withUrl: boolean) {
+      this.waiting.shift()!(withUrl);
+    }
+  }
+  const burst = async (n: number) => {
+    const { emitForTest } = await import("./dom.ts");
+    for (let i = 0; i < n; i++) await emitForTest("servers.changed");
+  };
+
+  test("a burst of events while the read is out keeps the read's answer, and asks nothing more once it is known", async () => {
+    const client = new Held({});
+    const page = await session({ client });
+    await until(() => (client.started === 1 ? true : null), "the first read");
+    await burst(10);
+    expect(client.started).toBe(1);
+    expect(client.active).toBe(1);
+    client.answer(true);
+    const link = await until(() => page.querySelector("[data-testid=terminal-link]"), "the terminal from the read that was out");
+    expect(link.getAttribute("href")).toBe("https://lux.example.com/runs/run_k3jq7x2mfa9vbn4z/terminal");
+    await burst(5);
+    expect(client.started).toBe(1);
+    expect(client.peak).toBe(1);
+  });
+
+  test("a read that finds no terminal yet is followed by one more read for the whole burst", async () => {
+    const client = new Held({});
+    const page = await session({ client });
+    await until(() => (client.started === 1 ? true : null), "the first read");
+    await burst(10);
+    client.answer(false);
+    await until(() => (client.started === 2 ? true : null), "the one follow-up");
+    expect(client.active).toBe(1);
+    client.answer(true);
+    await until(() => page.querySelector("[data-testid=terminal-link]"), "the terminal from the follow-up");
+    await burst(3);
+    expect(client.started).toBe(2);
+    expect(client.peak).toBe(1);
+  });
+
   test("a run that pauses loses it", async () => {
     let status: RunDetail["status"] = "running";
     class Pausing extends FixtureClient {
