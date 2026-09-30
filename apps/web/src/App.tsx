@@ -156,9 +156,8 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
       setVersion((v) => v + 1);
       setProblem(null);
     } catch (err) {
-      // Nothing here works without a key the server takes: back to asking
-      // for one, rather than an error above a spinner that never ends.
-      if (err instanceof ApiError && err.status === 401) onKeyRefused();
+      // A refused credential needs a fresh session check; transport errors stay in the app.
+      if (err instanceof ApiError && (err.status === 401 || err.status === 403)) onKeyRefused();
       else setProblem(errorText(err));
     }
   }, [client, onKeyRefused]);

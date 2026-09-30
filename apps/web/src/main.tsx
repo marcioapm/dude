@@ -1,14 +1,7 @@
-/**
- * Application entry point.
- *
- * The API key is read from localStorage rather than baked in. Real auth is a
- * later concern (plan §53 has the organization model); what matters now is
- * that the frontend holds a credential it was given, and never a database
- * connection or a host-specific capability — the app must keep working
- * unchanged inside the desktop shell (plan §117).
- */
+/** Application entry point: verify the browser's credential before mounting product data. */
 
-import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { StrictMode, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { Button, Card, CardBody, CardHeader, FormStack, Input, ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { ThemeProvider } from "@dude/design-system";
@@ -24,7 +17,7 @@ import { turnPushOff } from "./push.ts";
 import { PeopleProvider } from "./people.tsx";
 import { DudeMark } from "./DudeMark.tsx";
 
-const KEY_STORAGE = "dude.apiKey";
+import { AuthSession, KEY_STORAGE } from "./auth.ts";
 
 /**
  * The mockups' world in place of the API, outside production: loaded only
@@ -37,34 +30,33 @@ async function fixtureClient(scenario: FixtureScenario): Promise<ApiClient> {
 }
 
 function Root() {
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem(KEY_STORAGE) ?? "");
-  // The server refused the key it was given: the prompt says so.
-  const [refused, setRefused] = useState(false);
   // Outside production, `?fixtures=a` … `e` answers the API from the mockups' world.
   const scenario = useMemo(() => (import.meta.env.DEV || import.meta.env.MODE === "fixtures" ? fixtureScenario() : null), []);
   const [fixtures, setFixtures] = useState<ApiClient | null>(null);
+  const [session] = useState(() => new AuthSession(localStorage));
+  const auth = useSyncExternalStore(session.subscribe, session.snapshot);
   useEffect(() => {
     if (scenario) void fixtureClient(scenario).then(setFixtures);
-  }, [scenario]);
-
-  // Same-origin in the browser (Vite proxies /v1), loopback in the desktop
-  // shell — so no base URL is needed in either.
-  //
-  // Memoized because the client is an effect dependency downstream: a new
-  // instance per render would tear down and re-establish the event stream.
-  // Declared before the early return: hooks must run in the same order on
-  // every render, and signing out changes which branch is taken.
-  const client = useMemo(() => fixtures ?? new ApiClient({ apiKey }), [apiKey, fixtures]);
-  const keyRefused = useCallback(() => {
-    localStorage.removeItem(KEY_STORAGE);
-    setRefused(true);
-    setApiKey("");
-  }, []);
+    else void session.check();
+  }, [scenario, session]);
 
   if (scenario && !fixtures) return null;
-  if (!apiKey && !scenario) {
-    return <KeyPrompt refused={refused} />;
+  if (!scenario && auth.kind === "key-prompt") return <KeyPrompt refused={auth.refused} />;
+  if (!scenario && auth.kind === "network-error") {
+    return (
+      <div className="keyPrompt" role="alert">
+        <Card variant="flat">
+          <CardHeader title={<h1>Could not check your session</h1>} />
+          <CardBody>
+            <p>The server could not be reached. Please try again.</p>
+            <Button variant="primary" onClick={() => void session.check()}>Retry</Button>
+          </CardBody>
+        </Card>
+      </div>
+    );
   }
+  const client = fixtures ?? (auth.kind === "authenticated" ? auth.client : null);
+  if (!client) return <div className="keyPrompt" role="status">Checking session…</div>;
 
   return (
     <TooltipProvider>
@@ -72,13 +64,9 @@ function Root() {
         <PeopleProvider client={client}>
           <App
             client={client}
-            onKeyRefused={keyRefused}
+            onKeyRefused={session.refused}
             onSignOut={() => {
-              // This browser stops hearing about the organization it leaves.
-              void turnPushOff(client).finally(() => {
-                localStorage.removeItem(KEY_STORAGE);
-                setApiKey("");
-              });
+              void session.signOut(turnPushOff, (url) => location.assign(url), flushSync);
             }}
           />
         </PeopleProvider>
