@@ -1908,6 +1908,88 @@ func TestPushPreflightRefusesBeforeLuxSubmission(t *testing.T) {
 	}
 }
 
+func TestResumePushDenialCancelsThePausedLuxRun(t *testing.T) {
+	for _, transient := range []bool{false, true} {
+		t.Run(fmt.Sprint(transient), func(t *testing.T) {
+			w := newWorld(t)
+			w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+			var mu sync.Mutex
+			cancelAttempts := 0
+			refuseCancel := transient
+			handler := w.lux.Handler()
+			proxy := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+				if strings.HasSuffix(req.URL.Path, "/cancel") {
+					mu.Lock()
+					cancelAttempts++
+					refuse := refuseCancel
+					mu.Unlock()
+					if refuse {
+						http.Error(rw, "temporarily unavailable", http.StatusServiceUnavailable)
+						return
+					}
+				}
+				handler.ServeHTTP(rw, req)
+			}))
+			t.Cleanup(proxy.Close)
+			w.syncer.Lux = lux.New(proxy.URL, "lux-key")
+			wi := w.task()
+			w.deliver(wi)
+			w.until("publishing run to be running", func() bool {
+				return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'running'`, wi) == 1
+			})
+			var runID string
+			if err := w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1`, wi).Scan(&runID); err != nil {
+				t.Fatal(err)
+			}
+			mustExec(t, w.owner, `UPDATE runs SET control = 'pause_graceful' WHERE id = $1`, runID)
+			w.until("paused run's stopped state to be recorded", func() bool {
+				return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, runID) == 1
+			})
+			w.gh.Set(func(s *fakegithub.Server) { s.ReceiveStatus = 403 })
+			if status, body := w.call("/internal/runs/"+runID+"/resume", map[string]any{}); status != 200 {
+				t.Fatalf("resume: %d %v", status, body)
+			}
+			w.until("resume preflight failure", func() bool {
+				return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed'`, runID) == 1
+			})
+			w.until("cancellation attempt", func() bool {
+				mu.Lock()
+				defer mu.Unlock()
+				return cancelAttempts > 0
+			})
+			if transient {
+				if w.lux.Runs()[0].Cancelled || w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_stop_reason = 'cancel'`, runID) != 0 {
+					t.Fatal("transient cancellation failure was marked as cancelled")
+				}
+				if w.count(`SELECT count(*) FROM runs WHERE id = $1 AND next_attempt_at > now()`, runID) != 1 {
+					t.Fatal("transient cancellation did not back off")
+				}
+				mu.Lock()
+				refuseCancel = false
+				mu.Unlock()
+				w.syncer.RetryAhead = time.Minute
+			}
+			w.until("lux run actually cancelled and cancellation recorded", func() bool {
+				return w.lux.Runs()[0].Cancelled && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_stop_reason = 'cancel' AND control = 'none'`, runID) == 1
+			})
+			if r := w.lux.Runs()[0]; r.Resumed != 0 || r.Stopped != 1 {
+				t.Fatalf("denied run resumed or stopped again: %+v", r)
+			}
+			mu.Lock()
+			attempts := cancelAttempts
+			mu.Unlock()
+			for range 3 {
+				w.pump()
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if cancelAttempts != attempts || transient && attempts < 2 {
+				t.Fatalf("cancel attempts: before %d, after %d", attempts, cancelAttempts)
+			}
+		})
+	}
+}
+
 func TestPushPreflightRetriesWithFreshCredential(t *testing.T) {
 	for _, network := range []bool{false, true} {
 		t.Run(fmt.Sprint(network), func(t *testing.T) {
