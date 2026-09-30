@@ -169,6 +169,8 @@ def test_a_task_is_written_in_markdown_and_its_criteria_are_the_list_items(
     expect(preview.get_by_role("heading", name="What exists today")).to_be_visible()
     expect(preview.get_by_role("listitem")).to_have_count(2)
     expect(preview.locator("strong")).to_have_text("SEPA")
+    heading_style = "el => { const s = getComputedStyle(el); return [s.fontSize, s.marginTop, s.lineHeight]; }"
+    previewed = preview.get_by_role("heading", name="What exists today").evaluate(heading_style)
     # ← goes back to Write, and the source is as it was typed.
     goal_view.get_by_role("tab", name="Preview").press("ArrowLeft")
     expect(goal_view.get_by_role("tab", name="Write")).to_have_attribute("aria-selected", "true")
@@ -194,6 +196,8 @@ def test_a_task_is_written_in_markdown_and_its_criteria_are_the_list_items(
     # The task shows what the preview showed: the goal's heading, each criterion.
     screen = page.get_by_test_id("task-screen")
     expect(screen.get_by_role("heading", name="What exists today")).to_be_visible()
+    # Set as it was previewed: the same size and the same space above it.
+    assert screen.get_by_role("heading", name="What exists today").evaluate(heading_style) == previewed
     expect(screen.get_by_role("list", name="Acceptance criteria").locator(":scope > li")).to_have_count(2)
 
     # Editing opens the criteria as the list they were saved from.

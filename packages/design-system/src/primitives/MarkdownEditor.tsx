@@ -36,6 +36,12 @@ export interface MarkdownEditorProps {
   /** In the footer, attention ink: something about the text worth knowing before saving. */
   readonly notice?: string | undefined;
   readonly defaultMode?: MarkdownEditorMode | undefined;
+  /**
+   * The `Markdown` variant Preview renders in: the one the text will be read
+   * in. `message` (default) for a field shown on a screen, `document` for
+   * text published as an artifact.
+   */
+  readonly variant?: "message" | "document" | undefined;
   readonly id?: string | undefined;
   readonly name?: string | undefined;
   readonly autoFocus?: boolean | undefined;
@@ -85,7 +91,7 @@ function applyEdit(el: HTMLTextAreaElement, edit: TextEdit) {
  * switch and quiet formatting on the chrome shade, the source in mono, and
  * a footer that counts. The source grows with its content — the page or
  * dialog scrolls, never the field — and Preview is the one safe renderer,
- * `Markdown variant="document"`, at least as tall as the source was.
+ * `Markdown` in the caller's `variant`, at least as tall as the source was.
  */
 export function MarkdownEditor({
   value,
@@ -102,6 +108,7 @@ export function MarkdownEditor({
   summary,
   notice,
   defaultMode = "write",
+  variant = "message",
   id,
   name,
   autoFocus,
@@ -333,7 +340,7 @@ export function MarkdownEditor({
           data-testid={testId ? `${testId}-preview` : undefined}
         >
           {mode !== "preview" ? null : value.trim() ? (
-            <Markdown source={value} variant="document" unmeasured />
+            <Markdown source={value} variant={variant} unmeasured />
           ) : (
             <p className={styles["empty"]}>Nothing to preview yet.</p>
           )}
