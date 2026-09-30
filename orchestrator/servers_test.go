@@ -327,6 +327,83 @@ func TestABranchPreviewServesTheTasksBranchAndIsParkedWhenUnused(t *testing.T) {
 	}
 }
 
+func TestKeylessPeopleOwnAgentServersAndStartPreviews(t *testing.T) {
+	w := newWorld(t)
+	ownerID, starterID := "per_owner_"+w.org, "per_starter_"+w.org
+	mustExec(t, w.owner, `INSERT INTO people (id, organization_id, name)
+		VALUES ($1, $3, 'Keyless owner'), ($2, $3, 'Keyless starter')`, ownerID, starterID, w.org)
+	wi := w.task()
+	mustExec(t, w.owner, `INSERT INTO task_people (task_id, person_id, organization_id, position)
+		VALUES ($1, $2, $3, 5)`, wi, ownerID, w.org)
+	call := func(person, method, path string) (int, map[string]any) {
+		t.Helper()
+		req, err := http.NewRequest(method, w.api+path, strings.NewReader("{}"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer svc")
+		req.Header.Set("X-Dude-Organization", w.org)
+		req.Header.Set("X-Dude-Credential-Kind", "person")
+		req.Header.Set("X-Dude-Actor", person)
+		req.Header.Set("X-Dude-Person", person)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		var out map[string]any
+		if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+			t.Fatal(err)
+		}
+		return res.StatusCode, out
+	}
+	code, out := call(starterID, "POST", "/internal/tasks/"+wi+"/preview")
+	if code != 201 {
+		t.Fatalf("start: %d %v", code, out)
+	}
+	run := out["run"].(map[string]any)
+	previewID := run["id"].(string)
+	by := run["startedBy"].(map[string]any)
+	if by["id"] != starterID || by["name"] != "Keyless starter" {
+		t.Fatalf("preview starter: %v", by)
+	}
+	var persisted string
+	if err := w.owner.QueryRow(context.Background(), `SELECT started_by FROM runs WHERE id = $1`, previewID).Scan(&persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted != starterID {
+		t.Fatalf("persisted starter: %s", persisted)
+	}
+	if w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.created'
+		AND actor_type = 'person' AND actor_id = $2`, previewID, starterID) != 1 {
+		t.Fatal("preview creation lacks person attribution")
+	}
+	if code, out = call(starterID, "DELETE", "/internal/tasks/"+wi+"/preview"); code != 200 {
+		t.Fatalf("stop: %d %v", code, out)
+	}
+	if w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.completed'
+		AND actor_type = 'person' AND actor_id = $2`, previewID, starterID) != 1 {
+		t.Fatal("preview stop lacks person attribution")
+	}
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	w.deliver(wi)
+	w.until("the keyless owner's agent to run", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND kind = 'agent' AND status = 'running'`, wi) == 1
+	})
+	code, out = call(starterID, "GET", "/internal/tasks/"+wi+"/servers")
+	if code != 200 {
+		t.Fatalf("servers: %d %v", code, out)
+	}
+	run = out["run"].(map[string]any)
+	by = run["startedBy"].(map[string]any)
+	if run["kind"] != "agent" || by["id"] != ownerID || by["name"] != "Keyless owner" {
+		t.Fatalf("agent owner: %v", run)
+	}
+	if n := w.count(`SELECT count(*) FROM api_keys WHERE person_id IN ($1, $2)`, ownerID, starterID); n != 0 {
+		t.Fatalf("keyless people have %d keys", n)
+	}
+}
+
 func TestAPreviewChecksOutTheBranchTheTaskPublished(t *testing.T) {
 	w := newWorld(t)
 	w.actor = w.person("Ana")

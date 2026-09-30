@@ -16,6 +16,7 @@ import { EventTypes } from "@dude/domain";
 import { withOrg } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { json, notFound, parseBody } from "../http.ts";
+import { auditActor } from "../auth.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 const FINDING_SELECT = `
@@ -84,7 +85,7 @@ async function resolveFinding(ctx: RequestContext): Promise<Response> {
       projectId: null,
       taskId: finding.taskId as string,
       runId: (finding.runId as string | null) ?? null,
-      actor: { type: "human", id: ctx.principal.apiKeyId },
+      actor: { type: auditActor(ctx.principal).kind, id: auditActor(ctx.principal).id },
       source: "control-plane",
       correlationId: finding.taskId as string,
       payload: { status: input.status, note: input.note, title: finding.title },

@@ -177,6 +177,40 @@ open pull requests every 15 minutes.
 
 `scripts/seed-github.ts` creates such a project in one step.
 
+### Signing in with Cloudflare Access
+
+By default people sign in with an API key. To let an existing organization's
+people sign in through a Cloudflare Access application instead, point the
+backend's `DUDE_CONFIG` at a TOML file like
+[`docs/dude.example.toml`](docs/dude.example.toml). The backend reads it once,
+before listening, and refuses to start if it is unreadable or invalid, or if
+`default_organization` names no organization (it never creates one). A
+deployment renders this file itself; the aiverse host configuration does not
+yet.
+
+With it:
+
+- The backend verifies each request's Access token itself — the
+  `Cf-Access-Jwt-Assertion` header, else the `CF_Authorization` cookie —
+  against `https://<team>.cloudflareaccess.com` (RS256, issuer, the
+  application's `aud`, expiry). Service tokens are refused.
+- The verified email is matched, case-insensitively, to one of the
+  organization's people, who keep their id and role. Someone unknown becomes
+  a member with no API key while `auto_create` is true (the default).
+  Someone removed stays removed; an admin re-invites them.
+- Name and picture from Access fill a profile's name only while it is still
+  the email, and its photo only while it has none.
+- A request that changes something must come from `public_url` (its
+  `Origin`); requests another site makes are refused.
+- An `Authorization` header is always an API key, and a refused one is never
+  retried as the cookie, so scripts behave as before.
+- Signing out goes to Access's own `/cdn-cgi/access/logout` on the same
+  origin. What that ends beyond the Access session (the identity provider's
+  sign-in, other applications) is Cloudflare's and the provider's behaviour,
+  not dude's.
+- The live event stream reconnects at least every ten minutes, and before the
+  token expires, so someone removed stops receiving events within that time.
+
 ## Tests
 
 Unit tests live beside the code in each language. The E2E suite is a
@@ -210,7 +244,8 @@ real lux (the latest `run_tests.py --serve` in lux's repository, or
 `VERSION=vX.Y.Z bun run dist` (`scripts/dist.sh`, needs Go, Bun and GNU
 tar) builds `dist/dude_<version>_linux_{arm64,amd64}.tar.gz` and
 `SHA256SUMS` over them. Each holds `bin/{dude-orchestrator,dude,dude-backend,dude-migrate}`
-and `share/dude/web`; unpack it into a prefix. `dude-migrate` carries every
+and `share/dude/web`, with the licences of code bundled into the binaries under
+`share/dude/third-party`; unpack it into a prefix. `dude-migrate` carries every
 `migrations/*.sql` inside itself (`scripts/build-migrate.sh`). The Go
 binaries are static; the Bun ones are `bun build --compile` and need glibc. Every
 binary answers `--version`. The tarballs are reproducible: the same commit

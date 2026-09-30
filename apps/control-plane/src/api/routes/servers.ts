@@ -10,6 +10,7 @@
  * lux's to allow, not dude's.
  */
 
+import { auditActor } from "../auth.ts";
 import {
   EventTypes,
   addServerSchema,
@@ -42,11 +43,12 @@ async function listProjectServers(ctx: RequestContext): Promise<Response> {
 
 /** Who changed a project's servers, recorded like its other settings. */
 async function recordChange(scope: OrgScope, ctx: RequestContext, projectId: string, changed: Record<string, unknown>) {
+  const actor = auditActor(ctx.principal);
   await appendInScope(scope, {
     eventType: EventTypes.SettingsUpdated,
     organizationId: ctx.principal.organizationId,
     projectId,
-    actor: { type: "human", id: ctx.principal.apiKeyId },
+    actor: { type: actor.kind, id: actor.id },
     source: "control-plane",
     payload: { scope: "project", projectId, changed },
   });
@@ -125,7 +127,7 @@ async function putPreviewSettings(ctx: RequestContext): Promise<Response> {
 
 /** Forward to the orchestrator as this person, passing its answer back. */
 function forward(ctx: RequestContext, method: string, path: string, body?: string): Promise<Response> {
-  return orchestrator(ctx.principal.organizationId, method, path, body, ctx.principal.apiKeyId);
+  return orchestrator(ctx.principal.organizationId, method, path, body, ctx.principal);
 }
 
 const runPath = (ctx: RequestContext) => `/internal/runs/${encodeURIComponent(ctx.params.runId!)}/servers`;

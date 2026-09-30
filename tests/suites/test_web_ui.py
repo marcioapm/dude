@@ -748,16 +748,48 @@ def test_a_refused_key_asks_for_another(page: Page, web_url: str, org: dict, con
     page.goto(web_url)
     page.evaluate("localStorage.clear()")
     page.goto(web_url)
+    page.evaluate("window.loginDocumentMarker = 'original'")
+    documents = []
+    page.on("request", lambda request: documents.append(request.url) if request.is_navigation_request() else None)
     page.fill('input[type="password"]', "dude_sk_not-a-key")
     page.click('button[type="submit"]')
     expect(page.get_by_text("That key was not accepted")).to_be_visible()
     assert page.evaluate("localStorage.getItem('dude.apiKey')") is None
+    assert page.evaluate("window.loginDocumentMarker") == "original"
+    assert documents == []
 
-    # The right one lets you in.
+    # The right one creates one new document, without a credential in its URL.
     page.fill('input[type="password"]', org["api_key"])
     page.click('button[type="submit"]')
     expect(page.get_by_test_id("shell")).to_be_visible()
+    assert page.evaluate("window.loginDocumentMarker") is None
+    assert page.evaluate("localStorage.getItem('dude.apiKey')") == org["api_key"]
+    assert documents == [web_url + "/"]
     assert all("401" in e for e in console_errors), console_errors
+
+
+@pytest.mark.parametrize("failure", ["html_401", "html_503", "network"])
+def test_manual_login_check_failure_can_retry(page: Page, web_url: str, org: dict, failure: str):
+    page.goto(web_url)
+    page.evaluate("localStorage.clear()")
+    page.goto(web_url)
+    page.evaluate("window.loginDocumentMarker = 'original'")
+    if failure == "network":
+        page.route("**/v1/me", lambda route: route.abort())
+    else:
+        page.route("**/v1/me", lambda route: route.fulfill(
+            status=401 if failure == "html_401" else 503,
+            content_type="text/html", body="<h1>Unavailable</h1>"))
+    page.fill('input[type="password"]', org["api_key"])
+    page.click('button[type="submit"]')
+    message = "That key was not accepted" if failure == "html_401" else "Could not check that key. Please try again."
+    expect(page.get_by_text(message)).to_be_visible()
+    assert page.evaluate("localStorage.getItem('dude.apiKey')") is None
+    assert page.evaluate("window.loginDocumentMarker") == "original"
+    expect(page.get_by_role("button", name="Continue")).to_be_enabled()
+    page.unroute("**/v1/me")
+    page.click('button[type="submit"]')
+    expect(page.get_by_test_id("shell")).to_be_visible()
 
 
 def test_a_link_to_something_gone_says_so(

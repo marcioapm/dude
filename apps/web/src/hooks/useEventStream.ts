@@ -8,9 +8,11 @@
  * needs a backoff timer, a retained cursor, or a dedupe of its own.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { EventTypes, type PersistedEvent } from "@dude/domain";
 import type { ApiClient } from "../api/client.ts";
+import { authRefused } from "../auth.ts";
+import { AuthRefusal } from "../authRefusal.ts";
 
 /**
  * A dropped connection is never an error state: EventSource reconnects and
@@ -43,6 +45,9 @@ export interface EventStreamState {
 }
 
 const DEFAULT_LIMIT = 2_000;
+// Reopening a stream EventSource gave up on: first delay, and the most it grows to.
+const RETRY_MIN_MS = 1_000;
+const RETRY_MAX_MS = 30_000;
 
 export function useEventStream(options: UseEventStreamOptions): EventStreamState {
   const { client, runId, sessionId, taskId, all, limit = DEFAULT_LIMIT, live = all } = options;
@@ -59,6 +64,10 @@ export function useEventStream(options: UseEventStreamOptions): EventStreamState
   const [generation, setGeneration] = useState(0);
   const lastCursor = useRef(0);
   const scope = useRef<{ client: ApiClient; key: string } | null>(null);
+  const onRefused = useContext(AuthRefusal);
+  const reportRefused = useRef(onRefused);
+  reportRefused.current = onRefused;
+  const retryDelay = useRef(RETRY_MIN_MS);
   const key = [runId, sessionId, taskId, all, live, limit].join("|");
 
   useEffect(() => {
@@ -84,7 +93,10 @@ export function useEventStream(options: UseEventStreamOptions): EventStreamState
     // from now rather than replaying the ledger.
     const source = new EventSource(client.streamUrl({ runId, sessionId, taskId, live, after }));
 
-    source.onopen = () => setStatus("live");
+    source.onopen = () => {
+      retryDelay.current = RETRY_MIN_MS;
+      setStatus("live");
+    };
 
     /*
      * The server sends unnamed frames precisely so this handler fires. A
@@ -108,7 +120,27 @@ export function useEventStream(options: UseEventStreamOptions): EventStreamState
 
     // EventSource retries on its own and resumes from Last-Event-ID, so a
     // control plane restart heals without leaving a dead panel.
-    source.onerror = () => setStatus("reconnecting");
+    let disposed = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    source.onerror = () => {
+      setStatus("reconnecting");
+      /*
+       * A (re)connect answered with anything but a 200 event stream is
+       * terminal: EventSource stops and never says why. A session stream
+       * refused at its token's expiry ends here, so ask the API whether the
+       * credential still holds. A refusal goes to the session's bounded
+       * recovery; otherwise the stream failed on its own and is reopened
+       * after a growing delay.
+       */
+      if (source.readyState !== EventSource.CLOSED) return;
+      void client.me().then(() => false, authRefused).then((refused) => {
+        if (disposed) return;
+        if (refused) return reportRefused.current(client);
+        const delay = retryDelay.current;
+        retryDelay.current = Math.min(delay * 2, RETRY_MAX_MS);
+        retry = setTimeout(() => setGeneration((g) => g + 1), delay);
+      });
+    };
 
     // The browser knows the network went before the socket does, which can
     // hang on a dead connection for minutes: say so at once, and reopen
@@ -122,6 +154,8 @@ export function useEventStream(options: UseEventStreamOptions): EventStreamState
     window.addEventListener("online", online);
 
     return () => {
+      disposed = true;
+      clearTimeout(retry);
       source.close();
       window.removeEventListener("offline", offline);
       window.removeEventListener("online", online);

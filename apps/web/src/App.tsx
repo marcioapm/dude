@@ -40,8 +40,8 @@ import { DudeMark } from "./DudeMark.tsx";
 export interface AppProps {
   client: ApiClient;
   onSignOut: () => void;
-  /** The key was refused: it is wrong, or was revoked. */
-  onKeyRefused: () => void;
+  /** `client`'s credential was refused: it is wrong, revoked or expired. */
+  onKeyRefused: (client: ApiClient) => void;
 }
 
 /** The one dialog the shell may have open. */
@@ -156,9 +156,8 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
       setVersion((v) => v + 1);
       setProblem(null);
     } catch (err) {
-      // Nothing here works without a key the server takes: back to asking
-      // for one, rather than an error above a spinner that never ends.
-      if (err instanceof ApiError && err.status === 401) onKeyRefused();
+      // A refused credential needs a fresh session check; transport errors stay in the app.
+      if (err instanceof ApiError && (err.status === 401 || err.status === 403)) onKeyRefused(client);
       else setProblem(errorText(err));
     }
   }, [client, onKeyRefused]);

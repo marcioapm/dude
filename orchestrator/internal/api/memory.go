@@ -13,7 +13,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/memory"
 )
 
@@ -30,7 +29,7 @@ func (s *Server) memoryRoutes(mux *http.ServeMux) {
 }
 
 func person(r *http.Request) memory.Actor {
-	return memory.Actor{Type: ledger.ActorHuman, ID: principalOf(r).Actor}
+	return memory.Actor{Type: principalOf(r).ActorType, ID: principalOf(r).Actor}
 }
 
 // memoryError turns the package's refusals into the caller's.

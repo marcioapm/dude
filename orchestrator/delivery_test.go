@@ -1144,6 +1144,13 @@ func (w *world) person(name string) string {
 	return id
 }
 
+func (w *world) assignOwner(task, key string) {
+	w.t.Helper()
+	mustExec(w.t, w.owner, `DELETE FROM task_people WHERE task_id = $1`, task)
+	mustExec(w.t, w.owner, `INSERT INTO task_people (task_id, person_id, organization_id, position)
+		SELECT $1, person_id, organization_id, 0 FROM api_keys WHERE id = $2`, task, key)
+}
+
 // Only a task's owner answers its agents and decides what they may
 // reach; anyone else is told who can. A task nobody owns is anyone's.
 func TestOnlyATasksOwnerAnswersAndDecides(t *testing.T) {
@@ -1152,7 +1159,7 @@ func TestOnlyATasksOwnerAnswersAndDecides(t *testing.T) {
 	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
 		VALUES ($1, $2, $3, 'web', 'git://127.0.0.1/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
 	wi, _ := w.asking()
-	mustExec(t, w.owner, `UPDATE tasks SET owner_key_id = $2 WHERE id = $1`, wi, ana)
+	w.assignOwner(wi, ana)
 	qid := w.questionID(wi)
 
 	status, body := w.callAs(bo, "/internal/questions/"+qid+"/answer", map[string]any{"text": "yes"})
@@ -1177,14 +1184,18 @@ func TestOnlyATasksOwnerAnswersAndDecides(t *testing.T) {
 	}
 
 	// Reassigned, the new owner decides.
-	mustExec(t, w.owner, `UPDATE tasks SET owner_key_id = $2 WHERE id = $1`, wi, bo)
+	w.assignOwner(wi, bo)
 	if status, body := w.callAs(bo, "/internal/repository-requests/"+req.RequestID+"/decide", map[string]any{"approve": false}); status != 200 {
 		t.Fatalf("the owner's decision: %d %v", status, body)
 	}
-	// An owner who can no longer sign in is no owner: anyone answers.
+	// Revoking a credential does not remove the person or their ownership.
 	mustExec(t, w.owner, `UPDATE api_keys SET revoked_at = now() WHERE id = $1`, bo)
+	if status, body := w.callAs(ana, "/internal/questions/"+qid+"/answer", map[string]any{"text": "yes"}); status != 403 {
+		t.Fatalf("key revocation lost person ownership: %d %v", status, body)
+	}
+	mustExec(t, w.owner, `UPDATE people SET removed_at = now() WHERE id = (SELECT person_id FROM api_keys WHERE id = $1)`, bo)
 	if status, body := w.callAs(ana, "/internal/questions/"+qid+"/answer", map[string]any{"text": "yes"}); status != 200 {
-		t.Fatalf("an answer on a task whose owner was revoked: %d %v", status, body)
+		t.Fatalf("an answer on a task with no active owner: %d %v", status, body)
 	}
 }
 
@@ -1197,7 +1208,7 @@ func TestAnOwnerAnswersWithAnyOfTheirKeys(t *testing.T) {
 	mustExec(t, w.owner, `INSERT INTO api_keys (id, organization_id, name, key_hash, key_prefix, person_id)
 		SELECT $1, $2, 'laptop', $1, 'dude_sk_', person_id FROM api_keys WHERE id = $3`, laptop, w.org, ana)
 	wi, _ := w.asking()
-	mustExec(t, w.owner, `UPDATE tasks SET owner_key_id = $2 WHERE id = $1`, wi, ana)
+	w.assignOwner(wi, ana)
 	if status, body := w.callAs(laptop, "/internal/questions/"+w.questionID(wi)+"/answer", map[string]any{"text": "yes"}); status != 200 {
 		t.Fatalf("the owner's other key: %d %v", status, body)
 	}
@@ -2691,7 +2702,7 @@ func TestOnlyATasksOwnerDecidesAStoppedDelivery(t *testing.T) {
 	w := newWorld(t)
 	ana, bo := w.person("Ana"), w.person("Bo")
 	wi := w.escalated()
-	mustExec(t, w.owner, `UPDATE tasks SET owner_key_id = $2 WHERE id = $1`, wi, ana)
+	w.assignOwner(wi, ana)
 	if status, body := w.callAs(bo, "/internal/tasks/"+wi+"/decide", map[string]any{"action": "stop"}); status != 403 {
 		t.Fatalf("a non-owner's decision: %d %v", status, body)
 	}

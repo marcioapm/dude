@@ -710,7 +710,11 @@ func (p *Previews) waitForLogin(ctx context.Context, r previewRun, cause error) 
 
 // StartPreview starts a branch preview of a task, on behalf of the key
 // actor: 409 if the task has one live already, or is over.
-func (s *Service) StartPreview(ctx context.Context, org, taskID, actor string) (TaskServers, error) {
+func (s *Service) StartPreview(ctx context.Context, org, taskID, actor string, identity ...string) (TaskServers, error) {
+	actorType, personID := ledger.ActorHuman, ""
+	if len(identity) == 2 {
+		actorType, personID = identity[0], identity[1]
+	}
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		var projectID string
 		var attempt int
@@ -737,12 +741,14 @@ func (s *Service) StartPreview(ctx context.Context, org, taskID, actor string) (
 		}
 		id := ids.New(ids.Run)
 		if _, err := tx.Exec(ctx, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, kind, started_by)
-			VALUES ($1, $2, $3, $4, $5, 'pending', 'preview', (SELECT person_id FROM api_keys WHERE id = $6))`,
-			id, org, projectID, taskID, attempt, actor); err != nil {
+			VALUES ($1, $2, $3, $4, $5, 'pending', 'preview', COALESCE(NULLIF($7, ''),
+				(SELECT k.person_id FROM api_keys k JOIN people p ON p.id = k.person_id
+				 WHERE k.id = $6 AND k.organization_id = $2 AND p.organization_id = $2 AND k.revoked_at IS NULL AND p.removed_at IS NULL)))`,
+			id, org, projectID, taskID, attempt, actor, personID); err != nil {
 			return err
 		}
 		_, err := ledger.Append(ctx, tx, ledger.Event{Type: "run.created", OrganizationID: org, ProjectID: projectID,
-			TaskID: taskID, RunID: id, ActorType: ledger.ActorHuman, ActorID: actor, Source: ledger.SourceOrchestrator,
+			TaskID: taskID, RunID: id, ActorType: actorType, ActorID: actor, Source: ledger.SourceOrchestrator,
 			CorrelationID: taskID, Payload: map[string]any{"kind": KindPreview}})
 		if err != nil {
 			return err
@@ -757,7 +763,11 @@ func (s *Service) StartPreview(ctx context.Context, org, taskID, actor string) (
 }
 
 // StopPreview stops a task's live preview for good.
-func (s *Service) StopPreview(ctx context.Context, org, taskID, actor string) (TaskServers, error) {
+func (s *Service) StopPreview(ctx context.Context, org, taskID, actor string, identity ...string) (TaskServers, error) {
+	actorType := ledger.ActorHuman
+	if len(identity) == 2 {
+		actorType = identity[0]
+	}
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		var id, projectID string
 		// The sweep cancels its lux Run, if it has one (or when a submit in
@@ -771,7 +781,7 @@ func (s *Service) StopPreview(ctx context.Context, org, taskID, actor string) (T
 			return err
 		}
 		if _, err := ledger.Append(ctx, tx, ledger.Event{Type: "run.completed", OrganizationID: org, ProjectID: projectID,
-			TaskID: taskID, RunID: id, ActorType: ledger.ActorHuman, ActorID: actor, Source: ledger.SourceOrchestrator,
+			TaskID: taskID, RunID: id, ActorType: actorType, ActorID: actor, Source: ledger.SourceOrchestrator,
 			CorrelationID: taskID, Payload: map[string]any{"status": "completed", "kind": KindPreview}}); err != nil {
 			return err
 		}

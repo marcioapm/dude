@@ -248,10 +248,17 @@ function qs(params: Record<string, unknown>): string {
 // Client
 // ---------------------------------------------------------------------------
 
+export interface MeResponse {
+  person: Member;
+  organization: { id: string; name: string };
+  authMethod?: "api_key" | "cloudflare_access";
+  logoutUrl?: "/cdn-cgi/access/logout";
+}
+
 export interface ApiClientOptions {
   /** Base URL; empty means same-origin, which is the browser and Tauri case. */
   baseUrl?: string;
-  apiKey: string;
+  apiKey?: string | undefined;
 }
 
 /** A file an agent published, as the task lists it. `GET /v1/artifacts`. */
@@ -275,7 +282,7 @@ export interface Artifact {
 
 export class ApiClient {
   readonly #baseUrl: string;
-  readonly #apiKey: string;
+  readonly #apiKey: string | undefined;
   /** What this browser has open, for presence ("TEXT-14"): see `setWhere`. */
   #where = "";
 
@@ -290,8 +297,9 @@ export class ApiClient {
     const raw = body instanceof Blob;
     const res = await fetch(`${this.#baseUrl}${path}`, {
       method,
+      credentials: "same-origin",
       headers: {
-        authorization: `Bearer ${this.#apiKey}`,
+        ...(this.#apiKey ? { authorization: `Bearer ${this.#apiKey}` } : {}),
         "content-type": raw ? body.type : "application/json",
         ...(this.#where ? { "x-dude-where": this.#where } : {}),
       },
@@ -299,7 +307,12 @@ export class ApiClient {
     });
     if (!res.ok) {
       const text = await res.text();
-      const error = (text ? JSON.parse(text) : null)?.error ?? {};
+      let error: { code?: string; message?: string; details?: unknown } = {};
+      try {
+        error = (text ? JSON.parse(text) : null)?.error ?? {};
+      } catch {
+        // Proxy and Access refusals may be HTML; the HTTP status still applies.
+      }
       throw new ApiError(
         res.status,
         error.code ?? "error",
@@ -461,7 +474,7 @@ export class ApiClient {
   }
 
   /** Who you are, and your organization. */
-  me(): Promise<{ person: Member; organization: { id: string; name: string } }> {
+  me(): Promise<MeResponse> {
     return this.#request("GET", "/v1/me");
   }
 
@@ -805,7 +818,7 @@ export class ApiClient {
     live?: boolean | undefined;
   }): string {
     const { live, ...rest } = params;
-    return `${this.#baseUrl}/v1/events/stream${qs({ ...rest, ...(live ? { live: 1 } : {}), key: this.#apiKey })}`;
+    return `${this.#baseUrl}/v1/events/stream${qs({ ...rest, ...(live ? { live: 1 } : {}), ...(this.#apiKey ? { key: this.#apiKey } : {}) })}`;
   }
 }
 

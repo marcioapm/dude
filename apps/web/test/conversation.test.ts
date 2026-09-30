@@ -392,6 +392,20 @@ describe("who said it", () => {
     ]);
   });
 
+  test("person actors retain attribution for steering, answers and aborts", () => {
+    const actor = { type: "person", id: "per_ana", name: "Ana Ribeiro" };
+    const { turns } = project([
+      human(EventTypes.RunSteered, { text: "Use the helper", directiveId: "d1" }, actor),
+      human(EventTypes.QuestionAnswered, { answer: "Yes" }, actor),
+      human(EventTypes.RunAborted, { reason: "wrong task" }, actor),
+    ]);
+    expect(turns.map((turn) => "by" in turn ? turn.by : null)).toEqual([
+      { id: "per_ana", name: "Ana Ribeiro" },
+      { id: "per_ana", name: "Ana Ribeiro" },
+      { id: "per_ana", name: "Ana Ribeiro" },
+    ]);
+  });
+
   test("nobody is named for an actor that is not a person, or unknown", () => {
     expect(humanActor(human(EventTypes.RunSteered, {}, { type: "system", id: "dude" }))).toBeNull();
     expect(humanActor(human(EventTypes.RunSteered, {}, { type: "human", id: "unknown" }))).toBeNull();

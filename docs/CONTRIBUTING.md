@@ -269,6 +269,29 @@ and simplifier commit. `fake/hang` never finishes its turn, for steering and
 pausing. The fake lux plays it directly; a real lux runs it as a lux-fake
 script.
 
+### Manual browser sign-in
+
+Manual key submission verifies the candidate through `/v1/me` before storing
+it. A successful submission uses `location.replace` to open a new document at
+the current same-origin path and hash, dropping query parameters. It does not
+mount the authenticated app in the password form's document. Invalid keys are
+not stored; failed checks leave the form available for retry. Key-mode sign-out
+clears this browser's credential without revoking the API key.
+
+The document boundary replaces extension-injected DOM as well as the form.
+Browser regressions prove one navigation after successful verification and no
+navigation or persistence on refusal. They do **not** prove the reported
+Bitwarden residue is fixed: its cause has not been reproduced, and real
+extension verification remains manual. No extension DOM manipulation, synthetic
+Escape, CSS suppression, or shared input changes are involved.
+
+Cloudflare Access is not implemented yet. Enabling keyless sign-in requires the
+coordinated person-principal, ownership, push and attribution migration in both
+processes first; a person ID must never be substituted for an API-key ID.
+Eventual aiverse rendering must supply `DUDE_CONFIG` with backend `[auth]`
+configuration, including the fixed trusted `public_url` and Access team/audience,
+without changing the default API-key mode. No aiverse wiring is included here.
+
 ## What's next
 
 In rough priority order.

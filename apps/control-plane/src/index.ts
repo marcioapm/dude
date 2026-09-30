@@ -9,6 +9,9 @@
  */
 
 import { Router } from "./api/router.ts";
+import { type RequestAuthenticator, authenticate, requestAuthenticator } from "./api/auth.ts";
+import { accessAuthenticator, accessProfiles, accessVerifier } from "./api/cloudflareAccess.ts";
+import { type AuthConfig, organizationBySlug, readConfig } from "./config.ts";
 import { json } from "./api/http.ts";
 import { registerEventRoutes } from "./api/routes/events.ts";
 import { registerNavigationRoutes } from "./api/routes/navigation.ts";
@@ -32,8 +35,8 @@ import { version } from "./build.ts";
 import { closePool, getPool } from "./db/client.ts";
 import { listenForEvents } from "./events/listen.ts";
 
-export function buildRouter(webDir = process.env.DUDE_WEB_DIR): Router {
-  const router = new Router();
+export function buildRouter(webDir = process.env.DUDE_WEB_DIR, auth: RequestAuthenticator = authenticate): Router {
+  const router = new Router(auth);
 
   router.publicRoute("GET", "/health", async () => {
     try {
@@ -67,8 +70,23 @@ export function buildRouter(webDir = process.env.DUDE_WEB_DIR): Router {
   return router;
 }
 
-export function startServer(port = Number(process.env.PORT ?? 3000)) {
-  const router = buildRouter();
+/**
+ * How requests authenticate under `auth`: API keys alone, or API keys and
+ * Cloudflare Access. Resolves the configured organization, so a name that
+ * matches none stops startup rather than every sign-in.
+ */
+export async function authFor(auth: AuthConfig, fetchImpl: typeof fetch = fetch): Promise<RequestAuthenticator> {
+  if (auth.provider === "api_key") return authenticate;
+  const organizationId = await organizationBySlug(auth.default_organization);
+  const { team, aud } = auth.cloudflare_access;
+  return requestAuthenticator(accessAuthenticator(auth, organizationId, {
+    verify: accessVerifier(team, aud, fetchImpl),
+    profile: accessProfiles(team, fetchImpl),
+  }));
+}
+
+export function startServer(port = Number(process.env.PORT ?? 3000), auth: RequestAuthenticator = authenticate) {
+  const router = buildRouter(undefined, auth);
 
   const server = Bun.serve({
     port,
@@ -91,7 +109,14 @@ if (import.meta.main) {
     process.exit(1);
   }
 
-  const server = startServer();
+  let auth: RequestAuthenticator;
+  try {
+    auth = await authFor((await readConfig(process.env.DUDE_CONFIG)).auth);
+  } catch (err) {
+    console.error(`configuration: ${(err as Error).message}`);
+    process.exit(1);
+  }
+  const server = startServer(undefined, auth);
   console.log(`backend listening on http://localhost:${server.port}`);
 
   // Events are written by the orchestrator as well as here; the live stream
