@@ -66,12 +66,15 @@
   min-width: 0;
   overflow: hidden;
 }
-/* Radix's value span holds the chosen item's text: label, then meta. */
+/* Radix's value span holds the chosen item's text: label, then meta, close together. */
 .value > span {
   display: flex;
-  align-items: baseline;
-  gap: var(--ds-space-8);
   min-width: 0;
+  overflow: hidden;
+}
+.value .itemText {
+  justify-content: flex-start;
+  gap: var(--ds-space-8);
   overflow: hidden;
 }
 .value .itemLabel {
@@ -152,6 +155,11 @@
 }
 .itemLine {
   display: flex;
+  min-width: 0;
+}
+.itemLine > span {
+  display: flex;
+  flex: 1;
   min-width: 0;
 }
 .itemText {

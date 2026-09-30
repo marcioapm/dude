@@ -5,6 +5,7 @@
   flex-direction: column;
   gap: var(--ds-space-4);
   min-width: 0;
+  container-type: inline-size;
 }
 
 .label {
@@ -98,6 +99,15 @@
   padding-right: var(--ds-space-4);
   font-size: var(--ds-text-sm);
   color: var(--ds-color-text-muted);
+}
+/* Narrow (three side by side on a phone): the number keeps the room, the unit is in the label's words. */
+@container (max-width: 140px) {
+  .unit {
+    display: none;
+  }
+  .input {
+    text-align: center;
+  }
 }
 
 .hint {

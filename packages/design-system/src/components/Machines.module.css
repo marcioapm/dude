@@ -125,21 +125,23 @@
 }
 
 .usedBy {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: var(--ds-space-8);
   min-width: 0;
-  white-space: nowrap;
 }
 .usedFaces {
   display: inline-flex;
   gap: var(--ds-space-2);
   flex-shrink: 0;
 }
+/* Words wrap rather than cut: "Tester · and any with none set" is read whole. */
 .usedWords {
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* A floor, so a table that shares out its width never leaves a character per line. */
+  min-width: 12ch;
+  white-space: normal;
   font-size: var(--ds-text-sm);
+  line-height: var(--ds-leading-snug);
   color: var(--ds-color-text-secondary);
 }
 
