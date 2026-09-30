@@ -115,7 +115,6 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
   }
 
   const epicTitle = choices?.epics.find((e) => e.id === epic)?.title;
-  const fixedHint = "Fixed once delivery has started.";
 
   return (
     <FormDialog
@@ -176,7 +175,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
         value={title} disabled={locked} maxLength={500} onChange={(e) => setTitle(e.target.value)} data-testid="task-title" />
       <MarkdownEditor
         label="Goal"
-        hint={locked ? fixedHint : "Why it matters, what exists today, and anything an agent can't guess."}
+        hint="Why it matters, what exists today, and anything an agent can't guess."
         placeholder="Why does this matter? What exists today? What must an agent not break?"
         value={goal}
         onChange={setGoal}
@@ -187,7 +186,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
       />
       <MarkdownEditor
         label="Acceptance criteria"
-        hint={locked ? fixedHint : "One list item per criterion. Reviewers check each one."}
+        hint="One list item per criterion. Reviewers check each one."
         placeholder="- [ ] A thing that must be true when it's done"
         value={criteriaSource}
         onChange={setCriteriaSource}
