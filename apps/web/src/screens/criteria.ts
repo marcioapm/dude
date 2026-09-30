@@ -47,12 +47,12 @@ function dedent(line: string, by: number): string {
 }
 
 /** Opening or closing a fence: the fence it opens, or null when this line closes `open` or is no fence. */
-function fenceStep(text: string, open: string | null): { open: string | null } {
+function fenceStep(text: string, open: string | null): string | null {
   const m = FENCE.exec(text);
-  if (!m) return { open };
+  if (!m) return open;
   const mark = m[1]!;
-  if (open === null) return { open: mark };
-  return mark[0] === open[0] && mark.length >= open.length && text.trim() === mark ? { open: null } : { open };
+  if (open === null) return mark;
+  return mark[0] === open[0] && mark.length >= open.length && text.trim() === mark ? null : open;
 }
 
 /**
@@ -83,7 +83,7 @@ export function criteriaFromMarkdown(source: string): ParsedCriteria {
 
   for (const line of source.split("\n")) {
     if (strayFence !== null) {
-      strayFence = fenceStep(line, strayFence).open;
+      strayFence = fenceStep(line, strayFence);
       continue;
     }
     // A fence inside an item runs to its closer or to the item's end: a
@@ -91,7 +91,7 @@ export function criteriaFromMarkdown(source: string): ParsedCriteria {
     if (current && fence !== null && (line.trim() === "" || indentOf(line) >= column)) {
       const text = dedent(line, column);
       current.push(text);
-      fence = fenceStep(text, fence).open;
+      fence = fenceStep(text, fence);
       continue;
     }
     if (line.trim() === "") {
@@ -106,7 +106,7 @@ export function criteriaFromMarkdown(source: string): ParsedCriteria {
       const text = dedent(line, column);
       current.push(...blanks, text);
       blanks = [];
-      fence = fenceStep(text, null).open;
+      fence = fenceStep(text, null);
       continue;
     }
     // Lazy continuation, as `parseMarkdown` reads it: a line that opens no
@@ -126,12 +126,12 @@ export function criteriaFromMarkdown(source: string): ParsedCriteria {
       // continuation: `- ` is 2, `10. ` is 4.
       column = indent + marker[2]!.length + 1;
       current = [first];
-      fence = fenceStep(first, null).open;
+      fence = fenceStep(first, null);
       continue;
     }
     finish();
     stray = true;
-    strayFence = fenceStep(line, null).open;
+    strayFence = fenceStep(line, null);
   }
   finish();
   return { items: items.map((s) => s.trim()).filter(Boolean), stray };
