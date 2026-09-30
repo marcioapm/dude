@@ -209,6 +209,12 @@ class TestEnvironment:
                 "DUDE_LLM_URL": "",
                 "DUDE_LLM_KEY": "",
                 "DUDE_EMBEDDINGS_URL": "off",
+                # Only the contract gateway (or an explicit local topology smoke)
+                # may use separate HTTP API and git-daemon ports.
+                "DUDE_TEST_GITHUB_GIT_HOST": (
+                    self.real_lux["gateway"] if self.real_lux
+                    else os.environ.get("DUDE_TEST_GITHUB_GIT_HOST", "")
+                ),
                 # An agent waiting on a person is parked after seconds, not
                 # the policy's minutes, so the suite sees it happen.
                 "DUDE_PARK_AFTER": "3s",

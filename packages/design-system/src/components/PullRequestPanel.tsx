@@ -1,5 +1,5 @@
 import type { HTMLAttributes, ReactNode } from "react";
-import { prCheckFailed, prChecksSummary, prReviewSummary } from "@dude/domain";
+import { prActualChecks, prCheckDiagnostic, prCheckDiagnosticReason, prCheckFailed, prChecksSummary, prReviewSummary } from "@dude/domain";
 import { cx } from "../util/cx.ts";
 import { formatDuration } from "../util/format.ts";
 import { Icon, type IconName } from "../icons/index.tsx";
@@ -51,27 +51,32 @@ export function PullRequestPanel({ pr, additions, deletions, actions, face, note
 
   // Checks: by name when the forge sent them, else the one word.
   if (typeof pr.checks !== "string") {
-    const failing = pr.checks.filter(prCheckFailed);
-    const done = pr.checks.filter((c) => c.status.toLowerCase() === "completed").length;
+    // A diagnostic entry is no check: it is the warning below, not a row.
+    const checks = prActualChecks(pr.checks);
+    const diagnostic = prCheckDiagnostic(pr.checks);
+    const failing = checks.filter(prCheckFailed);
+    const done = checks.filter((c) => c.status.toLowerCase() === "completed").length;
     // None yet on this head (a fix just pushed): CI has not reported, which
     // is not passing.
-    const none = pr.checks.length === 0;
+    const none = checks.length === 0;
     const summary = none
-      ? "No checks reported on this commit yet"
+      ? diagnostic ? "No checks could be read" : "No checks reported on this commit yet"
       : failing.length > 0
-        ? `${failing.length} of ${pr.checks.length} checks failing`
-        : done < pr.checks.length
-          ? `Checks running · ${done} of ${pr.checks.length} done`
-          : `All ${pr.checks.length} checks passing`;
+        ? `${failing.length} of ${checks.length} checks failing`
+        : done < checks.length
+          ? `Checks running · ${done} of ${checks.length} done`
+          : diagnostic ? `${checks.length} readable ${checks.length === 1 ? "check" : "checks"} passing` : `All ${checks.length} checks passing`;
+    // Green only when every check could be read.
+    const green = !none && failing.length === 0 && done === checks.length && !diagnostic;
     facts.push({
       kind: "checks",
-      tone: none ? "neutral" : failing.length > 0 ? "bad" : done < pr.checks.length ? "attention" : "ok",
-      glyph: none ? "circle" : failing.length > 0 ? "circle-x" : done < pr.checks.length ? "circle-dotted" : "circle-check",
+      tone: none && !diagnostic ? "neutral" : failing.length > 0 ? "bad" : green ? "ok" : "attention",
+      glyph: none ? "circle" : failing.length > 0 ? "circle-x" : done < checks.length || diagnostic ? "circle-dotted" : "circle-check",
       text: <b>{summary}</b>,
       children:
-        pr.checks.length > 0 ? (
+        checks.length > 0 ? (
           <ul className={styles["checks"]}>
-            {pr.checks.map((c) => {
+            {checks.map((c) => {
               const bad = prCheckFailed(c);
               const running = c.status.toLowerCase() !== "completed";
               return (
@@ -90,8 +95,9 @@ export function PullRequestPanel({ pr, additions, deletions, actions, face, note
           </ul>
         ) : undefined,
     });
+    if (diagnostic) facts.push({ tone: "attention", glyph: "warning", text: <span role="note">{prCheckDiagnosticReason(diagnostic)}</span> });
   } else {
-    const words = { failing: ["bad", "circle-x", "Checks failing"], pending: ["attention", "circle-dotted", "Checks running"], passing: ["ok", "circle-check", "Checks passing"], unknown: ["neutral", "circle", "No checks reported yet"] } as const;
+    const words = { failing: ["bad", "circle-x", "Checks failing"], pending: ["attention", "circle-dotted", "Checks pending"], passing: ["ok", "circle-check", "Checks passing"], unknown: ["neutral", "circle", "No checks reported yet"] } as const;
     const [tone, glyph, text] = words[prChecksSummary(pr.checks)];
     if (pr.state !== "merged" || tone !== "neutral") facts.push({ kind: "checks", tone, glyph, text });
   }

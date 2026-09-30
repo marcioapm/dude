@@ -410,6 +410,9 @@ type Client interface {
 	ServerAction(ctx context.Context, runID, name, action string) (Server, error)
 	RemoveServer(ctx context.Context, runID, name string) error
 	ServerLog(ctx context.Context, runID, name string, tail int) (json.RawMessage, error)
+
+	// Cost is what lux's cost plugins have priced for a Run so far.
+	Cost(ctx context.Context, runID string) (RunCost, error)
 }
 
 type HTTPClient struct {
@@ -615,6 +618,12 @@ func (c *HTTPClient) RemoveServer(ctx context.Context, runID, name string) error
 func (c *HTTPClient) ServerLog(ctx context.Context, runID, name string, tail int) (json.RawMessage, error) {
 	var out json.RawMessage
 	err := c.do(ctx, "GET", serverPath(runID, name)+"/log?tail="+fmt.Sprint(tail), nil, nil, &out)
+	return out, err
+}
+
+func (c *HTTPClient) Cost(ctx context.Context, runID string) (RunCost, error) {
+	var out RunCost
+	err := c.do(ctx, "GET", "/v1/runs/"+url.PathEscape(runID)+"/cost", nil, nil, &out)
 	return out, err
 }
 

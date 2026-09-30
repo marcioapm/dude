@@ -3,6 +3,7 @@ package phases
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -189,6 +190,9 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 			return t.ended(ctx, tx, s, state, str("reason"))
 		}
 	case "git.clone":
+		if err := s.event(ctx, tx, t.run, "git.clone", ledger.ActorSystem, d); err != nil {
+			return err
+		}
 		// A repository added at a resume (only those carry a request id):
 		// the approval for it, on this Run, is settled by name — cloned, or
 		// failed, when lux has dropped it and the agent goes on without it.
@@ -203,9 +207,11 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 	case "git.checkout":
 		// What each checkout started from, the first time it was made; a
 		// resume leaves the checkout as the agent left it.
-		_, err := tx.Exec(ctx, `UPDATE runs SET base_shas = jsonb_build_object($2::text, $3::text) || base_shas
-			WHERE id = $1`, t.run.ID, str("repo"), str("base"))
-		return err
+		if _, err := tx.Exec(ctx, `UPDATE runs SET base_shas = jsonb_build_object($2::text, $3::text) || base_shas
+			WHERE id = $1`, t.run.ID, str("repo"), str("base")); err != nil {
+			return err
+		}
+		return s.event(ctx, tx, t.run, "git.checkout", ledger.ActorSystem, d)
 	case "git.push":
 		if str("requestId") != t.run.PushRequestID && t.run.PushRequestID != "" {
 			return nil
@@ -472,7 +478,8 @@ func (t *translator) activity(ctx context.Context, tx pgx.Tx, s *Syncer, activit
 // records, so the resumed turn can end before it.
 func (t *translator) turnDone(ctx context.Context, tx pgx.Tx, s *Syncer, settling bool) error {
 	tag, err := tx.Exec(ctx, `UPDATE runs r SET turn_done_at = now(), waiting_since = NULL
-		WHERE r.id = $1 AND r.agent_busy_at IS NOT NULL AND r.turn_done_at IS NULL
+		WHERE r.id = $1 AND r.status IN ('scheduled', 'starting', 'running')
+		  AND r.agent_busy_at IS NOT NULL AND r.turn_done_at IS NULL
 		  AND (NOT $2 OR (r.waiting_since IS NOT NULL AND NOT `+delivery.HoldsTurn+`))`, t.run.ID, settling)
 	if err != nil || tag.RowsAffected() == 0 {
 		return err
@@ -613,9 +620,50 @@ func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux
 		if err := t.flush(ctx, tx, s); err != nil {
 			return err
 		}
-		return t.turnUsage(ctx, tx, s, u)
+		if err := t.turnUsage(ctx, tx, s, u); err != nil {
+			return err
+		}
+		// lux sets error when the agent answered the turn's session/prompt
+		// with an error rather than a stop reason: the turn never happened,
+		// or broke off. A turn dude cancelled (a nudge, an interrupt) ends
+		// with stopReason "cancelled" and no error, and is not a failure.
+		if e := str(u, "error"); e != "" {
+			return t.turnFailed(ctx, tx, s, e)
+		}
 	}
 	return nil
+}
+
+// The failure and stream cursor commit together, before a following idle or
+// queued input can turn a failed prompt into completed work.
+func (t *translator) turnFailed(ctx context.Context, tx pgx.Tx, s *Syncer, agentErr string) error {
+	var model string
+	var produced bool
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(model, ''), EXISTS (SELECT 1 FROM events
+		WHERE run_id = $1 AND event_type IN ($2, $3, $4, $5)) FROM runs WHERE id = $1`,
+		t.run.ID, evAgentMessage, evAgentThought, evToolCalled, evPlanUpdated).Scan(&model, &produced); err != nil {
+		return err
+	}
+	reason := turnFailure(agentErr, model, produced)
+	tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $2, ended_at = now(), turn_done_at = NULL
+		WHERE id = $1 AND status IN ('scheduled', 'starting', 'running') AND lux_stop_reason IS NULL`, t.run.ID, reason)
+	if err != nil || tag.RowsAffected() == 0 {
+		return err
+	}
+	return s.event(ctx, tx, t.run, "run.failed", ledger.ActorSystem, map[string]any{"status": "failed", "error": reason})
+}
+
+// turnFailure says why a turn failed, for a person. OpenCode answers a model
+// it has no provider or definition for with a generic API error (-32603,
+// "Cannot connect to API"), which reads as a network fault; when the agent
+// did nothing at all, the model is the likelier cause and is named.
+func turnFailure(agentErr, model string, produced bool) string {
+	if !produced && model != "" && (strings.Contains(agentErr, "-32603") || strings.Contains(agentErr, "APIError")) {
+		return fmt.Sprintf("the agent could not start its turn with model %q (a role's model must be <provider>/<model> "+
+			"for a provider and model the agent image's OpenCode config defines, e.g. llm-anthropic/claude-sonnet-5): %s",
+			model, agentErr)
+	}
+	return "the agent's turn failed: " + agentErr
 }
 
 // flush records whatever reply or thought was streaming: something else

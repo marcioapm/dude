@@ -40,7 +40,7 @@ import { summarizeServers } from "@dude/design-system";
 import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, runLabel } from "@dude/domain";
 import type { AgentRole, PersistedEvent } from "@dude/domain";
 import type { ApiClient, Person, RunDetail, RunDiffSummary } from "../api/client.ts";
-import { ApiError, reportedCost } from "../api/client.ts";
+import { ApiError, modelCostShown } from "../api/client.ts";
 import {
   PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, landsHint, snapshot, steerWait, toolLabel, type HumanTurn, type SteerWait, type Turn,
 } from "../api/conversation.ts";
@@ -322,7 +322,9 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     startedAt: run.startedAt ?? run.createdAt,
     endedAt: run.endedAt,
     ...(run.model ? { model: run.model } : {}),
-    costUsd: reportedCost(conversation.costUsd),
+    costUsd: modelCostShown(conversation.costUsd, conversation.costSource.from),
+    tokensFrom: conversation.costSource.from,
+    settled: conversation.costSource.settled,
     // The Run's own totals are exact; the projection's are what has streamed
     // in so far, for a Run still working.
     tokens: Math.max(run.tokens.input + run.tokens.output, conversation.tokens),
@@ -803,8 +805,19 @@ function tokenFoot(turn: { contextTokens: number | null; outputTokens: number | 
 }
 
 /** One line describing an event, for the debugging timeline. */
-function summarize(event: PersistedEvent): string {
+export function summarize(event: PersistedEvent): string {
   const payload = event.payload;
+  if (event.eventType === EventTypes.GitClone || event.eventType === EventTypes.GitCheckout) {
+    const repo = typeof payload.repo === "string" ? payload.repo : "repository";
+    const ref = typeof payload.ref === "string" ? payload.ref : "";
+    const branch = typeof payload.branch === "string" ? payload.branch : "";
+    const base = typeof payload.base === "string" ? payload.base : "";
+    const status = typeof payload.status === "string" ? payload.status : "";
+    const error = typeof payload.error === "string" ? payload.error.split("\n")[0] : "";
+    const action = event.eventType === EventTypes.GitCheckout ? "Checked out" : status === "cloned" ? "Cloned" : "Clone";
+    return [action, repo, ref && `at ${ref}`, branch && `on ${branch}`, base && `from ${base}`,
+      event.eventType === EventTypes.GitClone && status !== "cloned" && status, error].filter(Boolean).join(" · ");
+  }
   // Tool events carry the harness's arguments, which the design system
   // already knows how to condense (todo lists, paths, commands).
   if (typeof payload.tool === "string") {

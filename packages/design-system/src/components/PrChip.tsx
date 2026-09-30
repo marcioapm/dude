@@ -1,5 +1,5 @@
 import type { HTMLAttributes, ReactNode } from "react";
-import { prCheckFailed, prChecksSummary, prDisplayState, prReviewSummary, type PrDisplayInput, type PrDisplayState } from "@dude/domain";
+import { prActualChecks, prCheckDiagnostic, prCheckDiagnosticReason, prCheckFailed, prChecksSummary, prDisplayState, prReviewSummary, type PrDisplayInput, type PrDisplayState } from "@dude/domain";
 import { cx } from "../util/cx.ts";
 import { Icon, type IconName } from "../icons/index.tsx";
 import { Tooltip } from "../primitives/Tooltip.tsx";
@@ -33,7 +33,7 @@ export const PR_DISPLAY_SPECS: Record<PrDisplayState, PrDisplaySpec> = {
   merged: { label: "Merged", glyph: "merge", description: "The pull request was merged. The task is done." },
   closed: { label: "Closed", glyph: "stop", description: "Closed without merging." },
   ci_red: { label: "CI failing", glyph: "circle-x", description: "A check failed. dude wakes a fixer with the failing check's log." },
-  ci_running: { label: "CI running", glyph: "circle-dotted", description: "Checks are still running on the latest commit." },
+  ci_running: { label: "CI pending", glyph: "circle-dotted", description: "No CI verdict on the latest commit yet." },
   awaiting: { label: "Awaiting approval", glyph: "eye", description: "Checks pass; nobody has approved or asked for changes yet." },
   changes: { label: "Changes requested", glyph: "file-diff", description: "A reviewer asked for changes. dude wakes a fixer with their comments." },
   conflict: { label: "Conflicts", glyph: "git-conflict", description: "The branch conflicts with its base. Update the branch or resolve it by hand." },
@@ -47,6 +47,17 @@ export function prStateOf(pr: PrChipPullRequest): PrDisplayState {
 }
 
 /**
+ * How a state is shown for this pull request: pending because its checks
+ * cannot be read is said so, not left to read as CI at work. The state
+ * itself stays `ci_running`, which is what older clients know.
+ */
+export function prSpecOf(pr: PrChipPullRequest, state: PrDisplayState = prStateOf(pr)): PrDisplaySpec {
+  const diagnostic = prCheckDiagnostic(pr.checks);
+  if (state === "ci_running" && diagnostic) return { label: "CI unavailable", glyph: "warning", description: prCheckDiagnosticReason(diagnostic) };
+  return PR_DISPLAY_SPECS[state];
+}
+
+/**
  * Everything else true of a pull request, one line each, for the chip's
  * tooltip: checks, review, how it stands against its base, open threads.
  * Only what is known — a field the forge has not reported says nothing.
@@ -56,13 +67,16 @@ export function prFacts(pr: PrChipPullRequest): string[] {
   if (pr.state === "merged") out.push("Merged");
   if (pr.state === "closed") out.push("Closed without merging");
   if (typeof pr.checks !== "string") {
-    const failing = pr.checks.filter(prCheckFailed);
-    const done = pr.checks.filter((c) => c.status.toLowerCase() === "completed").length;
+    const checks = prActualChecks(pr.checks);
+    const diagnostic = prCheckDiagnostic(pr.checks);
+    const failing = checks.filter(prCheckFailed);
+    const done = checks.filter((c) => c.status.toLowerCase() === "completed").length;
     if (failing.length > 0) out.push(`Checks: ${failing.map((c) => c.name).join(", ")} failing`);
-    else if (done < pr.checks.length) out.push(`Checks: running (${done} of ${pr.checks.length} done)`);
-    else if (pr.checks.length > 0) out.push(`Checks: all ${pr.checks.length} passing`);
+    else if (done < checks.length) out.push(`Checks: running (${done} of ${checks.length} done)`);
+    else if (checks.length > 0) out.push(diagnostic ? `Checks: ${checks.length} readable passing` : `Checks: all ${checks.length} passing`);
+    if (diagnostic) out.push(prCheckDiagnosticReason(diagnostic));
   } else {
-    const words = { failing: "Checks: failing", pending: "Checks: running", passing: "Checks: passing", unknown: null }[prChecksSummary(pr.checks)];
+    const words = { failing: "Checks: failing", pending: "Checks: pending", passing: "Checks: passing", unknown: null }[prChecksSummary(pr.checks)];
     if (words) out.push(words);
   }
   const review = prReviewSummary(pr);
@@ -94,7 +108,7 @@ export interface PrChipProps extends Omit<HTMLAttributes<HTMLAnchorElement>, "ch
  */
 export function PrChip({ pr, showNumber = true, iconOnly, size = "md", className, ...rest }: PrChipProps) {
   const state = prStateOf(pr);
-  const spec = PR_DISPLAY_SPECS[state];
+  const spec = prSpecOf(pr, state);
   const where = pr.repositoryName ? `${pr.repositoryName}#${pr.number}` : `#${pr.number}`;
   const tip: ReactNode = (
     <span className={styles["tip"]}>

@@ -162,6 +162,68 @@ def test_the_github_connection_is_shown_masked_and_can_be_verified(client: ApiCl
     assert client.post("/v1/forge/credential/verify").json() == {"ok": False, "reason": "GitHub rejected the token"}
 
 
+@pytest.mark.skipif(not os.environ.get("DUDE_TEST_GITHUB_GIT_HOST"), reason="needs an explicit local test gateway")
+def test_publishing_preflight_contacts_test_gateway(client: ApiClient, env):
+    import ipaddress
+    from urllib.parse import urlsplit
+
+    from fake_github import FakeGitHub
+
+    host = os.environ["DUDE_TEST_GITHUB_GIT_HOST"]
+    assert not ipaddress.ip_address(host).is_loopback, "smoke must exercise the non-loopback opt-in"
+    gh = FakeGitHub(env.git_root, owner=f"o{os.urandom(4).hex()}", listen=host)
+    try:
+        gh.start()
+        assert urlsplit(gh.api_url).hostname == urlsplit(gh.clone_url).hostname == host
+        assert urlsplit(gh.api_url).port != urlsplit(gh.clone_url).port
+        client.post("/v1/forge/credential", {
+            "auth": "pat", "secret": "fake-token", "apiBaseUrl": gh.api_url,
+        }).raise_for_status()
+        project = client.create_project(
+            name="Gateway preflight", slug=f"gateway-{gh.api_port}", runtimeImage="dude-runtime:test",
+            agentModels={role: {"model": "fake/scripted"} for role in ("implementer", "reviewer", "fixer", "simplifier")},
+            repositories=[{"name": "target", "url": gh.clone_url, "defaultBranch": "main"}],
+        )
+        task = client.create_task(project["id"], "Publish through gateway")
+        assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+        wait_until(lambda: gh.receive_requests, timeout=20, message="publishing preflight never reached gateway API")
+        assert gh.receive_requests[0] == f"/{gh.owner}/{gh.repo}.git/info/refs?service=git-receive-pack"
+        wait_until(
+            lambda: client.get("/v1/pull-requests", params={"taskId": task["id"]}).json()["pullRequests"],
+            timeout=120, message="gateway delivery did not publish",
+        )
+        assert all(run["status"] == "completed" for run in client.task_runs(task["id"]))
+    finally:
+        gh.stop()
+
+
+def test_demo_seed_credential_authenticates_receive_pack(client: ApiClient, org: dict, owner_dsn: str, fake_github):
+    import requests
+
+    from demo import seed_forge_credential
+    from helpers import query
+
+    seed_forge_credential(client, fake_github)
+    credential = query(
+        owner_dsn,
+        "SELECT secret FROM forge_credentials WHERE organization_id = %s",
+        (org["id"],),
+    )[0]
+    discovery = f"{fake_github.api_url}/{fake_github.owner}/{fake_github.repo}.git/info/refs"
+    response = requests.get(
+        discovery, params={"service": "git-receive-pack"},
+        auth=("x-access-token", credential["secret"]), timeout=5,
+    )
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"] == "application/x-git-receive-pack-advertisement"
+    assert response.content == b"001f# service=git-receive-pack\n0000"
+    rejected = requests.get(
+        discovery, params={"service": "git-receive-pack"},
+        auth=("x-access-token", "wrong-token"), timeout=5,
+    )
+    assert rejected.status_code == 401
+
+
 def test_an_organization_without_github_says_so(client: ApiClient):
     assert client.get("/v1/forge/credential").json() == {"connected": False}
 

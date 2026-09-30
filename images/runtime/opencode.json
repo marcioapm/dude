@@ -14,6 +14,7 @@
         "claude-opus-5": {"name": "Claude Opus 5", "reasoning": true, "limit": {"context": 744000, "output": 128000}},
         "claude-sonnet-4.6": {"name": "Claude Sonnet 4.6", "limit": {"context": 744000, "output": 128000}},
         "claude-sonnet-5": {"name": "Claude Sonnet 5", "limit": {"context": 744000, "output": 128000}},
+        "claude-sonnet-5-5": {"name": "Claude Sonnet 5.5", "reasoning": true, "limit": {"context": 744000, "output": 128000}},
         "claude-haiku-4.5": {"name": "Claude Haiku 4.5", "limit": {"context": 200000, "output": 64000}},
         "claude-fable-5-1": {"name": "Claude Fable 5.1", "reasoning": true, "limit": {"context": 744000, "output": 128000}},
         "claude-opus-5-5": {"name": "Claude Opus 5.5", "reasoning": true, "limit": {"context": 744000, "output": 128000}}
