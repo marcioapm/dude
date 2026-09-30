@@ -95,8 +95,13 @@ export interface RoleSettings {
   model: Setting<string | null>;
   effort: Setting<Effort | null>;
   timeLimitMinutes: Setting<number | null>;
-  /** A machine size's id; null: none set at any layer, so the organization's default size. */
-  machineSize: Setting<string | null>;
+  /**
+   * A machine size's id; null: none set at any layer, so the organization's
+   * default size. On a project, `organization` is what the organization's
+   * layer says (what a Reset goes back to); `followsImplementer` marks a
+   * fixer's value that is the implementer's.
+   */
+  machineSize: Setting<string | null> & { organization?: string | null; followsImplementer?: boolean };
   /** Null for a role that is always on. */
   enabled: Setting<boolean> | null;
   prompt: {

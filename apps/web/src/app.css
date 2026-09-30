@@ -343,6 +343,14 @@ body {
   align-self: stretch;
 }
 
+/* A settings page held in one element (for its test id): the column the frame's own is. */
+.settingsPage {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-24);
+  min-width: 0;
+}
+
 /* -- The task page -------------------------------------------------- */
 
 .taskScreen {

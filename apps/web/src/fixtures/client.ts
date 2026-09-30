@@ -17,7 +17,7 @@ import type { AddServer, PersistedEvent, PreviewSettings, Recipe, RecipeInput, R
 import { egressProblem } from "@dude/domain";
 import type { ServerLogLine } from "@dude/design-system";
 import { ApiClient, ApiError, type Member, type ProjectDetail, type RunDetail, type TaskDetail, type TaskMetrics } from "../api/client.ts";
-import { EPIC, FINDINGS, METRICS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RUN_ID, SETTINGS, TASK_ID, YOU, eventsFor, logsFor, navigationFor, runDetailFor, serversFor, taskFor } from "./data.ts";
+import { EPIC, FINDINGS, MACHINE_SIZES, METRICS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RUN_ID, SETTINGS, TASK_ID, YOU, eventsFor, logsFor, navigationFor, runDetailFor, serversFor, taskFor } from "./data.ts";
 
 type LedgerQuery = { runId?: string | undefined; taskId?: string | undefined; after?: number | undefined };
 
@@ -191,6 +191,12 @@ export class FixtureClient extends ApiClient {
   }
   override subscribePush() {
     return Promise.resolve({ subscribed: false });
+  }
+  override machineSizes() {
+    return Promise.resolve({ sizes: MACHINE_SIZES, canEdit: true });
+  }
+  override machinePools() {
+    return Promise.resolve({ pools: [], readAt: new Date().toISOString(), problem: "no lux in the fixtures" });
   }
 
   // -- servers --------------------------------------------------------------
