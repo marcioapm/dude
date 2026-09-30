@@ -284,6 +284,14 @@ describe("the pieces around a document being written", () => {
     expect([...h.matchAll(/<kbd[^>]*>([^<]+)<\/kbd>/g)].map((m) => m[1])).toEqual([modKey(), "B", modKey(), "I", modKey(), "K", modKey(), "E"]);
   });
 
+  test("the cheatsheet is generic, and the caller says what a row means where it is used", () => {
+    const text = (h: string) => [...h.matchAll(/<dt>(.*?)<\/dt><dd>(.*?)<\/dd>/g)].map((m) => [m[1]!.replace(/<[^>]+>/g, ""), m[2]!.replace(/<[^>]+>/g, "")]);
+    const plain = text(renderToStaticMarkup(<MarkdownCheatsheet />));
+    expect(plain.slice(4)).toEqual([["- [ ] item", "a checklist item"], ["## Heading", "a section"]]);
+    const task = text(renderToStaticMarkup(<MarkdownCheatsheet extra={[["- [ ] item", "a criterion"], ["~~gone~~", "struck through"]]} />));
+    expect(task.slice(4)).toEqual([["- [ ] item", "a criterion"], ["## Heading", "a section"], ["~~gone~~", "struck through"]]);
+  });
+
   test("a key hint is its keys and what they do", () => {
     const h = renderToStaticMarkup(<KeyHint keys={["mod", "Enter"]}>create</KeyHint>);
     expect(h.replace(/<[^>]+>/g, "")).toBe(`${modKey()}Entercreate`);
