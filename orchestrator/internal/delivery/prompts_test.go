@@ -22,3 +22,26 @@ func TestEveryPhaseIsToldWhatPeopleDecided(t *testing.T) {
 		}
 	}
 }
+
+// A criterion written over several lines stays one item in the prompt: its
+// later lines sit under its marker, so a line that starts with "- " is not
+// read as a criterion of its own, and nothing drops out of the list.
+func TestAMultiLineCriterionStaysOneItem(t *testing.T) {
+	in := PromptInput{Title: "Checkout keeps SEPA", AcceptanceCriteria: []string{
+		"Each step fires its funnel event once:\n- `checkout.plan_selected`\n- `checkout.completed`",
+		"Invoice only for annual plans",
+	}}
+	want := "Acceptance criteria:\n" +
+		"- Each step fires its funnel event once:\n  - `checkout.plan_selected`\n  - `checkout.completed`\n" +
+		"- Invoice only for annual plans"
+	for _, phase := range []string{PhaseImplement, PhaseReview, PhaseFix, PhaseSimplify, PhaseTest} {
+		if got := Prompt(phase, in); !strings.Contains(got, want) {
+			t.Errorf("%s: criteria not one item each:\n%s", phase, got)
+		}
+	}
+	saved := "Criteria:\n{{task.criteria}}"
+	in.OrgPrompt = &saved
+	if got := Prompt(PhaseImplement, in); !strings.Contains(got, "Criteria:\n"+strings.TrimPrefix(want, "Acceptance criteria:\n")) {
+		t.Errorf("{{task.criteria}} not one item each:\n%s", got)
+	}
+}
