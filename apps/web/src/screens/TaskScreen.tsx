@@ -22,6 +22,7 @@ import {
   Duration,
   FindingGroup,
   FindingRow,
+  Markdown,
   PersonAvatar,
   PersonLine,
   PlanMeter,
@@ -335,11 +336,12 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, bread
                 <section className="taskBlock" aria-label="Goal">
                   <h2 className="ds-label">Goal</h2>
                   <div className="taskGoal">
-                    {item.goal ? <p>{item.goal}</p> : null}
+                    {/* Written in Markdown in the task dialog: shown as its preview showed it. */}
+                    {item.goal ? <Markdown source={item.goal} /> : null}
                     {item.acceptanceCriteria.length > 0 ? (
                       <ul aria-label="Acceptance criteria">
-                        {item.acceptanceCriteria.map((c) => (
-                          <li key={c}>{c}</li>
+                        {item.acceptanceCriteria.map((c, i) => (
+                          <li key={i}><Markdown source={c} /></li>
                         ))}
                       </ul>
                     ) : null}
