@@ -375,4 +375,13 @@ describe("Markdown as one document from its parts", () => {
     // Joined into one string, the fence would hold all of it.
     expect(headings(doc({ source: "```\nnever closed\n\n## Acceptance criteria\n\n- [ ] one" }))).toEqual([]);
   });
+
+  test("the same heading in two sections gets two ids, and the outline links each", () => {
+    const h = renderToStaticMarkup(
+      <Markdown variant="document" outline source={["## Acceptance criteria\n\nIn the goal", "## Acceptance criteria", "- [ ] one"]} />,
+    );
+    const ids = [...h.matchAll(/<h2 id="([^"]+)"/g)].map((m) => m[1]);
+    expect(ids).toEqual(["acceptance-criteria", "acceptance-criteria-1"]);
+    expect([...h.matchAll(/href="#([^"]+)"/g)].map((m) => m[1])).toEqual(ids);
+  });
 });
