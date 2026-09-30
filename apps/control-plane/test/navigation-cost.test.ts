@@ -124,3 +124,12 @@ test("an epic whose every agent Run lux priced says so, even at $0", async () =>
               VALUES ('run_unpriced', ${ORG}, ${PROJECT}, 'wi_2', 2, 0.10)`;
   expect((await get("/v1/epics/epc_free/metrics")).cost.origin).toEqual({ tokens: "agent", machine: "estimate", settled: false });
 });
+
+test("an epic with no agent Runs yet is not lux's", async () => {
+  await owner`INSERT INTO epics (id, organization_id, project_id, title) VALUES ('epc_new', ${ORG}, ${PROJECT}, 'New')`;
+  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, epic_id) VALUES ('wi_3', ${ORG}, ${PROJECT}, 3, 'New', 'epc_new')`;
+  const res = await router.handle(new Request("http://dude.test/v1/epics/epc_new/metrics", { headers: { authorization: `Bearer ${key}` } }));
+  expect(res.status).toBe(200);
+  const epic = (await res.json()) as { cost: { origin?: unknown } };
+  expect(epic.cost.origin).toEqual({ tokens: "agent", machine: "estimate", settled: false });
+});
