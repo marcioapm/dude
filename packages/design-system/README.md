@@ -536,6 +536,39 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - **Textarea** has the `Input` anatomy (label, hint, error,
   `aria-describedby`) and grows from `rows` to `maxRows` (3 → 12) then
   scrolls; never a resize handle. `mono` for commands and config.
+- **MarkdownEditor** is for writing one Markdown document that is read
+  rendered — a task's goal, its acceptance criteria. A note, a command or
+  a reason stays a `Textarea`. It has Textarea's anatomy (label, hint,
+  error, `aria-describedby`, `maxLength`, the caller's `data-testid` on the
+  textarea) around a frame whose edge is its one line: a Write / Preview
+  `Segmented tabs` (tablist and tabpanels, one Tab stop, ← →;
+  Ctrl/⌘+Shift+P), its track at the toolbar's `control-sm`, and quiet
+  formatting on the chrome shade — no rule under it — then the source in
+  mono on the code pitch, then a footer: "Markdown", the caller's `summary`
+  and `notice`, and `n / max` (attention past 90%, danger over).
+  - **Grows, never scrolls.** The source grows from `minRows` with its
+    content; the dialog or page scrolls. No resize handle.
+  - **Preview is the safe path.** It is `Markdown variant="document"
+    unmeasured` and nothing else — no HTML string, no second renderer — and
+    keeps at least the source's height, so toggling does not jump.
+  - **Edits stay undoable.** Ctrl/⌘+B I K E and the buttons wrap the
+    selection (a placeholder, selected, when there is none); Enter
+    continues a list (`- `, `2.` after `1.`, `- [ ] `) and ends it on an
+    empty item. All of it goes through `execCommand("insertText")`, with
+    `setRangeText` where that is gone, so Undo takes it back.
+  - **Locked opens in Preview.** `locked` / `disabled`: Write is disabled
+    and the caller's `hint` says why. Narrow, Quote is the first button to go.
+- **A dialog that holds writing asks before losing it.** `FormDialog
+  unsavedWords` (the app's `unsavedWords`: words in fields changed since
+  it opened, 0 at 20 or fewer) makes Escape, ×, Cancel and a click outside
+  open a small `Dialog tone="danger"`: the question ("Discard this
+  task?"), how many words, **Keep writing** (focused) and **Discard**
+  (`danger solid`, inside its own confirmation). Nothing worth asking
+  about closes at once.
+- **Key hints** are `KeyHint keys={["mod", "Enter"]}` (`Kbd` for one cap;
+  `mod` is ⌘ on Apple devices, Ctrl elsewhere), muted, at a dialog's
+  `footerStart`. Help beside a form is a `HelpList` and, for Markdown,
+  `MarkdownCheatsheet`.
 - **Breadcrumb** says where you are: Project › Epic › KEY, each crumb but
   the last a link or button, the last `aria-current`. Middle crumbs elide in
   the middle (`elideMiddle`) so head and tail survive; the last never does.
@@ -714,6 +747,15 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
   default control, so it follows the density; `row-compact` and `control-sm`
   hold in both and are for what one scans or for toolbars.
 - One `primary` button per view. Most actions are `secondary` or `quiet`.
+- Dialogs are for decisions and small forms — and for writing one
+  document: `Dialog size="document"` is a fixed min(1120, 100vw − 48) ×
+  min(900, 100vh − 48), so it never resizes while its fields grow, and the
+  whole screen, square, under 640px. `aside` puts a 300px column on the
+  chrome shade beside the body (where the thing sits, help for writing
+  it), each scrolling on its own; under 960px it follows the body in one
+  scroll. `context` puts where the thing sits above the title. Settings
+  and anything browsed stay screens. The document's title field is
+  `Input size="title"`.
 - Cards do not nest. A card's header and footer are told from its body by
   shade (`chrome`), not a rule.
 - Empty states are one line of text and a hint, never an illustration.
@@ -815,6 +857,8 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | `<RowMenu items={[…, { id: "delete", tone: "danger", disabled, disabledReason }]} />` | a row of icon buttons, or a greyed item that does not say why |
 | `<FindingRow severity="blocking" status="resolved" … />` | `f.severity.toUpperCase()` in red, struck through when done |
 | `<Breadcrumb items={[project, epic, key]} />` in the header | a ghost `Back` button under the content |
+| `<MarkdownEditor label="Goal" value={goal} onChange={setGoal} minRows={12} maxLength={10_000} />` | a `Textarea` for Markdown with a hand-rolled preview beside it |
+| `<FormDialog size="document" aside={…} unsavedWords={n} />` for writing a task | a 400px dialog that loses three paragraphs to a stray Escape |
 | a settings page's sub-pages as `items` of its `SettingsNavItem` | `Tabs` inside a settings page |
 | `<SearchResultRow rank={1} lead={{ type: "memory" }} facts={["words and meaning"]} />` | a score chip and a progress bar on every result |
 | `<EntityLine lead={face} name={…} detail={…} />`, `<AuthorLine author={…} />` | a face and two spans styled in the app's CSS |
@@ -822,11 +866,13 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 
 ## Components
 
-`src/primitives/` — Button, IconButton, Input, Textarea, Select, Checkbox,
+`src/primitives/` — Button, IconButton, Input (`size="title"` for a
+document's heading), Textarea, MarkdownEditor, Select, Checkbox,
 Badge, Card, Table (THead/TBody/Tr/Th/Td/TableEmpty), Tabs (underline for a
-page, segmented in a toolbar; a tab can carry a count), Dialog, Toast,
-Tooltip, RowMenu (+ `rowMenuOpeners`), Skeleton/SkeletonLines/Spinner,
-EmptyState, ScrollArea.
+page, segmented in a toolbar; a tab can carry a count), Dialog (`size=
+"document"` with `aside` and `context`), Toast, Tooltip, RowMenu (+
+`rowMenuOpeners`), Skeleton/SkeletonLines/Spinner, EmptyState, ScrollArea,
+Kbd/KeyHint/HelpList/MarkdownCheatsheet.
 
 `src/components/` — the factory vocabulary:
 
