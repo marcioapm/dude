@@ -77,6 +77,8 @@ type Server struct {
 	// Update-branch requests fail as GitHub does when it is down.
 	UpdateDown        bool
 	ReceiveStatus     int
+	ReceiveBody       string
+	ReceiveHeaders    http.Header
 	ReceiveToken      string
 	ReceiveRequests   []string
 	ReceiveDisconnect bool
@@ -218,6 +220,7 @@ func (s *Server) Handler() http.Handler {
 		s.mu.Lock()
 		s.ReceiveRequests = append(s.ReceiveRequests, token)
 		status, expected, disconnect := s.ReceiveStatus, s.ReceiveToken, s.ReceiveDisconnect
+		body, headers := s.ReceiveBody, s.ReceiveHeaders.Clone()
 		s.mu.Unlock()
 		if disconnect {
 			conn, _, _ := w.(http.Hijacker).Hijack()
@@ -231,8 +234,14 @@ func (s *Server) Handler() http.Handler {
 			status = 200
 		}
 		w.Header().Set("Content-Type", "application/x-git-receive-pack-advertisement")
+		for name, values := range headers {
+			w.Header()[name] = values
+		}
 		w.WriteHeader(status)
-		_, _ = w.Write([]byte("001f# service=git-receive-pack\n0000"))
+		if body == "" {
+			body = "001f# service=git-receive-pack\n0000"
+		}
+		_, _ = w.Write([]byte(body))
 	})
 	mux.HandleFunc("POST "+prefix+"/pulls", s.openPull)
 	mux.HandleFunc("GET "+prefix+"/pulls/{n}", s.getPull)

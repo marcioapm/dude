@@ -275,11 +275,30 @@ func (g *GitHub) CheckPushAccess(ctx context.Context, repository string) error {
 		}
 		return nil
 	}
-	message := "Git receive-pack discovery failed"
-	if res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden {
-		message = "Git push access denied: grant Contents: Read and write to the fine-grained PAT for this repository (classic PAT: repo or public_repo), and check repository selection, owner access and organization approval/SSO"
+	// Error bodies are diagnostic, not an unbounded Git advertisement.
+	data, err := io.ReadAll(io.LimitReader(res.Body, 64<<10))
+	if err != nil {
+		return &Unreachable{err}
 	}
-	return &Error{Status: res.StatusCode, Message: message}
+	var response struct {
+		Message string `json:"message"`
+	}
+	_ = json.Unmarshal(data, &response)
+	message := response.Message
+	if message == "" {
+		message = strings.TrimSpace(string(data))
+	}
+	if message == "" {
+		message = "Git receive-pack discovery failed"
+	}
+	refusal := &Error{Status: res.StatusCode, Message: message}
+	if res.StatusCode == http.StatusForbidden && (res.Header.Get("Retry-After") != "" || res.Header.Get("X-RateLimit-Remaining") == "0") {
+		refusal.Message = "Git receive-pack discovery rate limit: " + message
+	}
+	if !Transient(refusal) && (res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden) {
+		refusal.Message = "Git push access denied: grant Contents: Read and write to the fine-grained PAT for this repository (classic PAT: repo or public_repo), and check repository selection, owner access and organization approval/SSO"
+	}
+	return refusal
 }
 
 func (g *GitHub) do(ctx context.Context, method, path string, body, out any) error {

@@ -90,6 +90,82 @@ func TestPushPreflightTimeoutIsTransient(t *testing.T) {
 	}
 }
 
+func TestPushPreflightClassifiesHTTPFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		status    int
+		body      string
+		headers   http.Header
+		message   string
+		transient bool
+	}{
+		{name: "JSON primary limit", status: 403, body: `{"message":"API rate limit exceeded for user ID 1."}`, message: "API rate limit exceeded for user ID 1.", transient: true},
+		{name: "plaintext primary limit", status: 403, body: "API rate limit exceeded for user ID 1.", message: "API rate limit exceeded for user ID 1.", transient: true},
+		{name: "JSON secondary limit", status: 403, body: `{"message":"You have exceeded a secondary rate limit."}`, message: "You have exceeded a secondary rate limit.", transient: true},
+		{name: "plaintext secondary limit", status: 403, body: "You have exceeded a secondary rate limit.", message: "You have exceeded a secondary rate limit.", transient: true},
+		{name: "Retry-After only", status: 403, body: "Forbidden", headers: http.Header{"Retry-After": {"60"}}, message: "Forbidden", transient: true},
+		{name: "remaining zero only", status: 403, body: "Forbidden", headers: http.Header{"X-Ratelimit-Remaining": {"0"}}, message: "Forbidden", transient: true},
+		{name: "429 retained", status: 429, body: "Too many requests", message: "Too many requests", transient: true},
+		{name: "503 retained", status: 503, body: `{"message":"Service unavailable"}`, message: "Service unavailable", transient: true},
+		{name: "401 authentication denial", status: 401, body: `{"message":"Bad credentials"}`},
+		{name: "403 permission denial", status: 403, body: `{"message":"Resource not accessible by personal access token"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := fakegithub.New("", "acme/repo")
+			fake.ReceiveStatus, fake.ReceiveBody, fake.ReceiveHeaders = tc.status, tc.body, tc.headers
+			srv := httptest.NewServer(fake.Handler())
+			defer srv.Close()
+
+			err := NewGitHub(Credential{Secret: "secret", APIBaseURL: srv.URL}).CheckPushAccess(context.Background(), srv.URL+"/acme/repo.git")
+			var refusal *Error
+			if !errors.As(err, &refusal) {
+				t.Fatalf("error = %v, want a forge Error", err)
+			}
+			if refusal.Status != tc.status {
+				t.Errorf("status = %d, want %d", refusal.Status, tc.status)
+			}
+			if got := Transient(err); got != tc.transient {
+				t.Errorf("Transient(%v) = %v, want %v", err, got, tc.transient)
+			}
+			if tc.transient {
+				if !strings.Contains(refusal.Message, tc.message) {
+					t.Errorf("message = %q, want retained diagnostic %q", refusal.Message, tc.message)
+				}
+				if strings.Contains(refusal.Message, "Contents:") {
+					t.Errorf("transient failure received Contents guidance: %v", err)
+				}
+			} else if !strings.Contains(refusal.Message, "Contents: Read and write") {
+				t.Errorf("denial lacks Contents guidance: %v", err)
+			}
+		})
+	}
+}
+
+func TestPushPreflightBoundsHTTPErrorBody(t *testing.T) {
+	const limit = 64 << 10
+	prefix := strings.Repeat("x", limit)
+	fake := fakegithub.New("", "acme/repo")
+	fake.ReceiveStatus = http.StatusServiceUnavailable
+	fake.ReceiveBody = prefix + strings.Repeat("y", 1<<20) + "end-of-response"
+	srv := httptest.NewServer(fake.Handler())
+	defer srv.Close()
+
+	err := NewGitHub(Credential{Secret: "secret", APIBaseURL: srv.URL}).CheckPushAccess(context.Background(), srv.URL+"/acme/repo.git")
+	var refusal *Error
+	if !errors.As(err, &refusal) {
+		t.Fatalf("error = %v, want a forge Error", err)
+	}
+	if refusal.Status != http.StatusServiceUnavailable || !Transient(err) {
+		t.Errorf("status = %d, transient = %v, want 503 and transient", refusal.Status, Transient(err))
+	}
+	if len(refusal.Message) != limit {
+		t.Errorf("error body length = %d, want %d", len(refusal.Message), limit)
+	}
+	if refusal.Message != prefix {
+		t.Error("error body did not retain exactly the bounded response prefix")
+	}
+}
+
 // Every false positive here costs a fix Run; every false negative is a
 // person's request silently ignored. The tests pin both directions.
 
