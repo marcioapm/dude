@@ -78,8 +78,9 @@ export function Markdown({
   const blocks = useMemo(
     () => {
       const sections = typeof source === "string" ? [source] : source;
+      const usedIds = new Map<string, number>();
       // Only the last section can still be arriving.
-      return sections.flatMap((section, i) => parseMarkdown(section, { streaming: (streaming ?? false) && i === sections.length - 1 }));
+      return sections.flatMap((section, i) => parseMarkdown(section, { streaming: (streaming ?? false) && i === sections.length - 1, usedIds }));
     },
     [source, streaming],
   );

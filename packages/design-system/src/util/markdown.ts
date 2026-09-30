@@ -56,6 +56,8 @@ export type Block =
 export interface ParseOptions {
   /** Treat unterminated constructs at end of input as open (see above). */
   readonly streaming?: boolean | undefined;
+  /** Heading ids already taken, shared by the sections of one document so each id is unique in it. */
+  readonly usedIds?: Map<string, number> | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -100,7 +102,7 @@ const MAX_BLOCK_DEPTH = 32;
 export function parseMarkdown(src: string, opts: ParseOptions = {}): Block[] {
   const streaming = opts.streaming === true;
   const lines = src.replace(/\r\n?/g, "\n").split("\n");
-  const usedIds = new Map<string, number>();
+  const usedIds = opts.usedIds ?? new Map<string, number>();
   return parseBlocks(lines, streaming, usedIds, 0);
 }
 
