@@ -471,14 +471,7 @@ function whyItRan(run: Run, index: number, phases: readonly Run[], findings: rea
   const earlier = phases.slice(0, index);
   if (run.phase === "fix") {
     if (prEvents.some((e) => e.eventType === "pull_request.opened" && e.occurredAt < run.createdAt)) {
-      // A checks event whose verdict did not change (read access lost or
-      // regained) woke no fixer.
-      const feedback = prEvents.findLast((e) => e.occurredAt <= run.createdAt &&
-        (e.eventType === "pull_request.commented" || e.eventType === "pull_request.reviewed" ||
-          (e.eventType === "pull_request.checks_changed" && e.payload.to !== e.payload.from)));
-      if (feedback?.eventType === "pull_request.checks_changed") return "for failing CI";
-      const author = typeof feedback?.payload.author === "string" ? feedback.payload.author : null;
-      return author ? `for ${author}'s review` : "for the pull request's feedback";
+      return prFeedbackReason(prEvents, run.createdAt);
     }
     return "for the review";
   }
@@ -487,6 +480,18 @@ function whyItRan(run: Run, index: number, phases: readonly Run[], findings: rea
     return found === 0 ? "no findings" : undefined;
   }
   return undefined;
+}
+
+/** Which pull request feedback, at or before `at`, a fix answered. */
+export function prFeedbackReason(prEvents: readonly PersistedEvent[], at: string): string {
+  // A checks event whose verdict did not change (read access lost or
+  // regained) woke no fixer.
+  const feedback = prEvents.findLast((e) => e.occurredAt <= at &&
+    (e.eventType === "pull_request.commented" || e.eventType === "pull_request.reviewed" ||
+      (e.eventType === "pull_request.checks_changed" && e.payload.to !== e.payload.from)));
+  if (feedback?.eventType === "pull_request.checks_changed") return "for failing CI";
+  const author = typeof feedback?.payload.author === "string" ? feedback.payload.author : null;
+  return author ? `for ${author}'s review` : "for the pull request's feedback";
 }
 
 function PhaseStep({ run, findings, plan, why, onOpen }: {
