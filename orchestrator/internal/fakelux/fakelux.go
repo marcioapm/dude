@@ -874,8 +874,14 @@ func (s *Server) exited(run *Run) {
 	}()
 }
 
-// mimeFor guesses a type from a name, as lux does from the file.
+// mimeFor guesses a type from a name, as lux does from the file. Go reads
+// its extension table from the host (/etc/mime.types), and macOS has no
+// entry for Markdown, so the type an agent's notes need is fixed here, as
+// lux's Linux hosts give it.
 func mimeFor(name string) string {
+	if ext := path.Ext(name); ext == ".md" || ext == ".markdown" {
+		return "text/markdown; charset=utf-8"
+	}
 	if t := mime.TypeByExtension(path.Ext(name)); t != "" {
 		return t
 	}
