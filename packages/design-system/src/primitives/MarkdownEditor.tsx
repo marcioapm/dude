@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
-import { modKey } from "../util/keys.ts";
 import { continueList, countState, editorKey, FORMAT_KEYS, formatEdit, type MarkdownFormat, type TextEdit } from "../util/markdownEdit.ts";
 import { Icon, type IconName } from "../icons/index.tsx";
 import { Markdown } from "../components/Markdown.tsx";
@@ -230,7 +229,6 @@ export function MarkdownEditor({
 
   const count = countState(value.length, maxLength);
   const described = [hint ? hintId : null, error ? errorId : null, summary || notice ? footId : null].filter(Boolean).join(" ") || undefined;
-  const mod = modKey();
   const frameStyle = { "--mde-rows": String(Math.max(1, minRows)) } as CSSProperties;
 
   return (
@@ -283,7 +281,7 @@ export function MarkdownEditor({
               f === "gap" ? (
                 <span key={i} className={styles["gap"]} aria-hidden />
               ) : (
-                <Tooltip key={f.format} content={f.label} shortcut={FORMAT_KEYS[f.format] ? `${mod}+${FORMAT_KEYS[f.format]!.toUpperCase()}` : undefined}>
+                <Tooltip key={f.format} content={f.label} shortcut={FORMAT_KEYS[f.format] ? ["mod", FORMAT_KEYS[f.format]!.toUpperCase()] : undefined}>
                   <IconButton
                     size="sm"
                     icon={f.icon}
@@ -348,7 +346,7 @@ export function MarkdownEditor({
         </div>
         <div className={styles["foot"]}>
           <span className={styles["md"]}>
-            <Icon name="markdown" size={16} />
+            <Icon name="markdown" size={12} />
             Markdown
           </span>
           {summary || notice ? (

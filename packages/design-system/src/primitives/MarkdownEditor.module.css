@@ -97,10 +97,9 @@
   tab-size: 2;
   color: inherit;
 }
+/* Mono at the source's size: a placeholder here is source to be typed. */
 .source::placeholder {
   color: var(--ds-color-text-muted);
-  font-family: var(--ds-font-sans);
-  font-size: var(--ds-text-md);
 }
 .source:focus-visible {
   outline: none;
