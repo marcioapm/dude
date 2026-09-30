@@ -168,7 +168,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
             <li><strong>Criteria:</strong> one checkable statement per list item — reviewers check every one.</li>
             <li>Link issues, designs and logs; paste error output in a <code>```</code> block.</li>
           </HelpList>
-          <MarkdownCheatsheet />
+          <MarkdownCheatsheet extra={[["- [ ] item", "a criterion"]]} />
         </div>
       }
     >
