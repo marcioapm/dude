@@ -14,7 +14,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { listMigrationFiles, repoMigrationsDir } from "../src/db/migrate.ts";
+import { listMigrationFiles, migrate, repoMigrationsDir } from "../src/db/migrate.ts";
 
 const OWNER_URL = process.env.DATABASE_URL ?? "postgres://dude:dude@localhost:5433/dude";
 const ROOT = join(import.meta.dir, "../../..");
@@ -117,9 +117,13 @@ test("a database migrated from the repository is up to date for the binary, and 
   expect(repoOnBin.out).toContain("up to date\n");
 }, 120_000);
 
-test("an owner that is not a superuser applies every migration", async () => {
-  // As on the aiverse host or a managed Postgres: the owner bypasses row-level
-  // security and creates roles, and a superuser created vector beforehand.
+/**
+ * An empty database owned by a role that is not a superuser, as on the aiverse
+ * host or a managed Postgres: the owner bypasses row-level security and
+ * creates roles, and a superuser created vector beforehand. Its URL logs in
+ * as that owner.
+ */
+async function ownedByANonSuperuser(): Promise<string> {
   const owner = `dude_migrate_owner_${Bun.randomUUIDv7("hex").slice(-12)}`;
   const db = `dude_migrate_test_${Bun.randomUUIDv7("hex").slice(-12)}`;
   roles.push(owner);
@@ -141,10 +145,14 @@ test("an owner that is not a superuser applies every migration", async () => {
   const url = new URL(databaseUrl(db));
   url.username = owner;
   url.password = "owner";
+  return url.toString();
+}
 
-  const migrated = run([binary], { DATABASE_URL: url.toString() });
+test("an owner that is not a superuser applies every migration", async () => {
+  const url = await ownedByANonSuperuser();
+  const migrated = run([binary], { DATABASE_URL: url });
   expect(migrated.code, migrated.out).toBe(0);
-  expect((await recorded(url.toString())).map((r) => r.name)).toEqual(await repoSqlFiles());
+  expect((await recorded(url)).map((r) => r.name)).toEqual(await repoSqlFiles());
   const [app] = await admin`SELECT rolsuper, rolbypassrls, rolcreatedb, rolcreaterole FROM pg_roles WHERE rolname = 'dude_app'`;
   expect(app).toEqual({ rolsuper: false, rolbypassrls: false, rolcreatedb: false, rolcreaterole: false });
 }, 120_000);
@@ -182,5 +190,48 @@ test("002 strips every privilege from a dude_app that already holds them", async
     expect(app).toEqual({ rolsuper: false, rolbypassrls: false, rolcreatedb: false, rolcreaterole: false });
   } finally {
     await admin.unsafe("ALTER ROLE dude_app NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE");
+  }
+}, 120_000);
+
+test("063 makes waiting work due on any clock, and keeps a refusal's backoff", async () => {
+  // A database with work in it, upgraded by its owner: everything up to 062
+  // applied as the runner applies it, and the index stamped as 054 did.
+  const url = await ownedByANonSuperuser();
+  const sql = new SQL(url);
+  try {
+    await sql`CREATE TABLE schema_migrations (version text PRIMARY KEY, name text NOT NULL,
+      checksum text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())`;
+    for (const file of (await listMigrationFiles()).filter((f) => f.version < "063")) {
+      const contents = await file.contents();
+      await sql.begin(async (tx) => {
+        await tx.unsafe(contents);
+        await tx`INSERT INTO schema_migrations (version, name, checksum)
+          VALUES (${file.version}, ${file.name}, ${createHash("sha256").update(contents).digest("hex")})`;
+      });
+    }
+    await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_a', 'a', 'a'), ('org_b', 'b', 'b')`;
+    // Waiting in two organizations, stamped by a database clock an hour
+    // ahead; one refused until 2030; one embedded.
+    await sql`INSERT INTO search_documents (source_type, source_id, organization_id, title, body, content_hash, tsv,
+        embedding, attempts, next_attempt_at)
+      VALUES ('memory', 'waiting_a', 'org_a', 't', 'b', 'h1', ''::tsvector, NULL, 0, now() + interval '1 hour'),
+             ('memory', 'waiting_b', 'org_b', 't', 'b', 'h2', ''::tsvector, NULL, 0, now() + interval '1 hour'),
+             ('memory', 'refused', 'org_a', 't', 'b', 'h3', ''::tsvector, NULL, 3, '2030-01-01T00:00:00Z'),
+             ('memory', 'embedded', 'org_b', 't', 'b', 'h4', ''::tsvector,
+               array_fill(0::real, ARRAY[768])::halfvec, 0, '2020-01-01T00:00:00Z')`;
+
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["063_index_due_on_any_clock.sql"]);
+
+    // Due by the sweep's own test, on a clock behind the database's.
+    const due = async (at: string) =>
+      (await sql`SELECT source_id FROM search_documents WHERE embedding IS NULL AND next_attempt_at <= ${at}::timestamptz
+        ORDER BY source_id`).map((r: { source_id: string }) => r.source_id);
+    expect(await due("2026-01-01T00:00:00Z")).toEqual(["waiting_a", "waiting_b"]);
+    expect(await due("2029-12-31T23:59:59Z")).toEqual(["waiting_a", "waiting_b"]);
+    expect(await due("2030-01-01T00:00:00Z")).toEqual(["refused", "waiting_a", "waiting_b"]);
+    const [embedded] = await sql`SELECT attempts, next_attempt_at::text AS next FROM search_documents WHERE source_id = 'embedded'`;
+    expect(embedded).toEqual({ attempts: 0, next: "2020-01-01 00:00:00+00" });
+  } finally {
+    await sql.end();
   }
 }, 120_000);
