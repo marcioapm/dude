@@ -173,7 +173,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
         </Tooltip>
       }
       reading={reading ? (
-        <Markdown variant="document" title={title} untitled="Untitled task" source={readingSource} data-testid="task-reading" />
+        <Markdown title={title} untitled="Untitled task" source={readingSource} data-testid="task-reading" />
       ) : undefined}
       readingLabel="The task as it reads"
       onCloseReading={() => setReading(false)}
