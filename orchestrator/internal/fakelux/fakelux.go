@@ -198,6 +198,27 @@ func (s *Server) FinishTools(id string) {
 	}
 }
 
+// EndTurn ends a busy agent's turn as the agent would on its own (a Hang
+// agent finishing, not interrupted): what it was steered with and has not
+// read is read now, as the input of its next turn.
+func (s *Server) EndTurn(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	run := s.runs[id]
+	if run == nil || run.State != "running" || !run.busy {
+		return
+	}
+	for _, call := range run.openTools {
+		s.agent(run, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": call, "status": "completed"})
+	}
+	run.openTools = nil
+	s.recordEvent(run, "acp.turn_end", map[string]any{"stopReason": "end_turn"})
+	s.recordEvent(run, "lux.activity", map[string]any{"activity": "idle"})
+	run.busy = false
+	run.turnsEnded++
+	s.deliverQueued(run)
+}
+
 type placement struct {
 	Epoch int
 	// The host it ran on (host-<epoch>: each start is on another).
