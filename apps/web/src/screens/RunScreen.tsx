@@ -34,9 +34,11 @@ import {
   ToolUsage,
   ToolCallCard,
   summarizeToolArgs,
+  MachineChip,
+  MachineTip,
 } from "@dude/design-system/components";
 import { Button, Callout, Dialog, LinkButton, Spinner, Textarea } from "@dude/design-system/primitives";
-import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, runLabel } from "@dude/domain";
+import { DEFAULT_RUN_ROLE, EventTypes, MIB, SETTINGS_ROLE_LABEL, TERMINAL_RUN_STATUSES, gib, machineSpec, runLabel } from "@dude/domain";
 import type { AgentRole, PersistedEvent } from "@dude/domain";
 import type { ApiClient, Person, RunDetail, RunDiffSummary } from "../api/client.ts";
 import { ApiError, modelCostShown } from "../api/client.ts";
@@ -150,7 +152,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   // it is read from the Run's servers. Until it is known, a servers.changed
   // (lux took the Run) or a stream that came back asks again.
   const askAgain = useMemo(() => (events.findLast((e) => e.eventType === EventTypes.ServersChanged)?.cursor ?? 0) + reconnects * 1e9, [events, reconnects]);
-  const terminalUrl = useTerminalUrl(client, runId, run?.status === "running", askAgain);
+  const { url: terminalUrl, memoryLimit } = useTerminalUrl(client, runId, run?.status === "running", askAgain);
 
   useEffect(() => {
     if (!taskId) return;
@@ -292,6 +294,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
       <>
         {owner ? <span>for {firstName(owner.name)}</span> : <span>{runLabel(run)}</span>}
         {run.model ? <code>{run.model}</code> : null}
+        {run.machine ? <RunMachineChip machine={run.machine} memoryLimit={memoryLimit} role={role} phase={run.phase} /> : null}
         {taskKey ? <code title={`task ${run.taskId} · run ${run.id}`}>{taskKey}</code> : null}
       </>
     ),
@@ -793,12 +796,12 @@ export function PreviewRunNote({ openServers }: { openServers?: (() => void) | u
  * folded into one follow-up after it, and the read out still lands. Only a
  * new client or Run, or unmounting, discards an answer.
  */
-function useTerminalUrl(client: ApiClient, runId: string, running: boolean, askAgain: number): string | null {
-  const [url, setUrl] = useState<{ runId: string; url: string } | null>(null);
+function useTerminalUrl(client: ApiClient, runId: string, running: boolean, askAgain: number): { url: string | null; memoryLimit: number | null } {
+  const [url, setUrl] = useState<{ runId: string; url: string; memoryLimit: number | null } | null>(null);
   const known = url?.runId === runId ? url.url : null;
   const reader = useRef<TerminalReader | null>(null);
   useEffect(() => {
-    const r = new TerminalReader(client, runId, (found) => setUrl({ runId, url: found }));
+    const r = new TerminalReader(client, runId, (found, memoryLimit) => setUrl({ runId, url: found, memoryLimit }));
     reader.current = r;
     return () => {
       r.dead = true;
@@ -810,7 +813,7 @@ function useTerminalUrl(client: ApiClient, runId: string, running: boolean, askA
     r.wanted = running && !known;
     if (r.wanted) r.ask();
   }, [client, runId, running, known, askAgain]);
-  return known;
+  return { url: known, memoryLimit: url?.runId === runId ? url.memoryLimit : null };
 }
 
 class TerminalReader {
@@ -822,7 +825,8 @@ class TerminalReader {
   constructor(
     private readonly client: ApiClient,
     private readonly runId: string,
-    private readonly found: (url: string) => void,
+    /** The terminal's URL, and the memory limit lux gave the container when it says (read in the same answer). */
+    private readonly found: (url: string, memoryLimit: number | null) => void,
   ) {}
 
   ask(): void {
@@ -839,7 +843,7 @@ class TerminalReader {
         const url = s.run?.terminalUrl;
         if (!this.dead && url) {
           this.wanted = false;
-          this.found(url);
+          this.found(url, s.run?.memoryLimit ?? null);
         }
       }, () => undefined)
       .finally(() => {
@@ -847,6 +851,31 @@ class TerminalReader {
         if (this.again && this.wanted) this.ask();
       });
   }
+}
+
+/**
+ * The machine the Run ran on, as it was when it started: its size's name
+ * and spec, where the size came from, and — when lux reports it — the
+ * memory its container actually got.
+ */
+function RunMachineChip({ machine, memoryLimit, role, phase }: { machine: NonNullable<RunDetail["machine"]>; memoryLimit: number | null; role: AgentRole; phase: string | null }) {
+  const agent = phase === "fix" ? "Fixer" : (SETTINGS_ROLE_LABEL as Record<string, string>)[role] ?? "agent";
+  const from = machine.from === "project" ? `From its project’s settings for the ${agent}.`
+    : machine.from === "organization" ? `From the organisation’s settings for the ${agent}.`
+    : machine.from === "implementer" ? "The implementer’s size: the fixer has none of its own."
+    : "The organisation’s default size: nothing names another for it.";
+  const asked = gib(machine.memoryMiB * MIB);
+  const limit = memoryLimit ?? machine.memoryLimit ?? null;
+  return (
+    <MachineChip name={machine.name} spec={machineSpec(machine)} data-testid="run-machine"
+      tooltip={
+        <MachineTip name={machine.name}>
+          {from} Fixed when the session started — editing {machine.name} now changes the next session, not this one.
+          {limit ? ` It asked for ${asked} GiB and got ${gib(limit)}: every run on its host gives up the same share to Linux.` : null}
+          {machine.pool ? ` Pool ${machine.pool}.` : null}
+        </MachineTip>
+      } />
+  );
 }
 
 /** A message's token foot: the context then, against the window when known, and the turn's output. */
