@@ -8,7 +8,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Config, ConfigError, KEYS } from "../src/config.ts";
+import { Config, ConfigError, KEYS, RETIRED } from "../src/config.ts";
 
 const fixtures = `${import.meta.dir}/../../../tests/fixtures/config`;
 const dir = mkdtempSync(join(tmpdir(), "dude-config-"));
@@ -197,10 +197,42 @@ describe("secrets in the file", () => {
   });
 });
 
+describe("retired keys", () => {
+  // A synthetic list: no real key is retired today.
+  const retired = [{ name: "lux.old_token", env: "LUX_OLD_TOKEN" }, { name: "gone.table.key", env: "DUDE_GONE" }];
+  const value = "S3NT1NEL-retired-value";
+  const loadRetired = (env: Record<string, string>) => Config.load({ env, defaultPath: absent, retired });
+
+  test("are accepted from the file and the environment, ignored, and warned about by name", () => {
+    const path = file(`[lux]\nurl = "https://lux.file"\nold_token = "${value}"\n[gone.table]\nkey = 7\n[backend]\nport = 4100\n`);
+    const c = loadRetired({ DUDE_CONFIG: path, DUDE_GONE: value });
+    expect(c.warnings).toEqual([
+      "retired: gone.table.key; remove it", "retired: lux.old_token; remove it", "retired: DUDE_GONE; remove it",
+    ]);
+    expect(c.port).toBe(4100);
+    expect(Object.values(c.set())).not.toContain(value);
+    expect(c.warnings.join("\n")).not.toContain(value);
+    // Without the list the same file is refused: retiring is what accepts it.
+    expect(() => load({ DUDE_CONFIG: path })).toThrow("unknown key lux.old_token, gone");
+  });
+
+  test.each([
+    ["[lux]\nold_token = \"x\"\nold_tokn = \"y\"\n", "unknown key lux.old_tokn"],
+    ["[gone.table]\nkey = 1\nother = 2\n", "unknown key gone.table.other"],
+    ["[gone]\nkey = 1\n", "unknown key gone.key"],
+    ["[lux]\nold_token = \"x\"\n[backend]\nport = \"x\"\n", "backend.port (PORT): want an integer, not a string"],
+  ])("do not let their neighbours through: %j", (text, want) => {
+    expect(() => loadRetired({ DUDE_CONFIG: file(text) })).toThrow(want);
+  });
+});
+
 describe("the shared fixture", () => {
   test("the schema is tests/fixtures/config/keys.json, as the Go schema is", async () => {
     const want = await Bun.file(`${fixtures}/keys.json`).json();
-    expect(KEYS.map((k) => ({ ...k }))).toEqual(want);
+    expect(KEYS.map((k) => ({ ...k }))).toEqual(want.keys);
+    expect(RETIRED.map((r) => ({ ...r }))).toEqual(want.retired);
+    // A retired key that is still a setting would be both read and ignored.
+    for (const r of RETIRED) expect(KEYS.some((k) => k.name === r.name || k.env === r.env)).toBe(false);
   });
 
   test("full.toml resolves to full.json, as the Go suite requires", async () => {

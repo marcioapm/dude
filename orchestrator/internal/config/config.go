@@ -162,12 +162,29 @@ var keys, byEnv = func() ([]Key, map[string]Key) {
 	return out, m
 }()
 
+// RetiredKey is a setting a release removed. For one more release both
+// processes accept it, from the file or the environment, ignore it and warn,
+// so the previous release's configuration still starts the new one.
+type RetiredKey struct {
+	Name string // the file key, dotted
+	Env  string // its variable
+}
+
+// retired is every retired setting; tests/fixtures/config/keys.json's
+// "retired" must match it, as the backend's RETIRED must.
+var retired = []RetiredKey{}
+
+// Retired lists the retired settings.
+func Retired() []RetiredKey { return retired }
+
 // Options are where Load looks. The zero value is the production one.
 type Options struct {
 	// Getenv reads the environment; os.Getenv when nil.
 	Getenv func(string) string
 	// DefaultPath replaces DefaultPath, for tests.
 	DefaultPath string
+	// Retired replaces the retired settings when not nil, for tests.
+	Retired []RetiredKey
 }
 
 // Config is the resolved settings of one process.
@@ -189,6 +206,10 @@ func Load(p Process, opts Options) (*Config, error) {
 	if getenv == nil {
 		getenv = os.Getenv
 	}
+	gone := opts.Retired
+	if gone == nil {
+		gone = retired
+	}
 	c := &Config{process: p, values: map[string]any{}, from: map[string]string{}}
 	path, text, err := readFile(getenv, opts.DefaultPath)
 	if err != nil {
@@ -196,11 +217,20 @@ func Load(p Process, opts Options) (*Config, error) {
 	}
 	if path != "" {
 		c.Path = path
-		if err := c.loadFile(text); err != nil {
+		found, err := c.loadFile(text, gone)
+		if err != nil {
 			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+		for _, name := range found {
+			c.Warnings = append(c.Warnings, retiredWarning(name))
 		}
 		if w := secretWarning(path, c.from); w != "" {
 			c.Warnings = append(c.Warnings, w)
+		}
+	}
+	for _, r := range gone {
+		if r.Env != "" && getenv(r.Env) != "" {
+			c.Warnings = append(c.Warnings, retiredWarning(r.Env))
 		}
 	}
 	for _, k := range keys {
@@ -283,54 +313,74 @@ func quoteSegment(s string) string {
 // unknownKeys walks the parsed document segment by segment. go-toml's struct
 // decoder matches names case-insensitively, so [Orchestrator] or Listen
 // would otherwise be read as a known key, and listen and Listen as one.
-func unknownKeys(doc map[string]any) []string {
-	var unknown []string
+// Retired keys, and tables that only lead to them, are returned apart.
+func unknownKeys(doc map[string]any, gone []RetiredKey) (unknown, found []string) {
+	names, prefixes := map[string]bool{}, map[string]bool{}
+	for _, r := range gone {
+		names[r.Name] = true
+		parts := strings.Split(r.Name, ".")
+		for i := 1; i < len(parts); i++ {
+			prefixes[strings.Join(parts[:i], ".")] = true
+		}
+	}
 	var walk func(m map[string]any, table string)
 	walk = func(m map[string]any, table string) {
 		for name, v := range m {
 			full := table + dot(table) + quoteSegment(name)
 			leaf, known := tables[table][name]
+			sub, isTable := v.(map[string]any)
 			switch {
+			case !known && names[full]:
+				found = append(found, full)
+			case !known && isTable && prefixes[full]:
+				walk(sub, full) // tables[full] is nil: only retired keys pass
 			case !known:
 				unknown = append(unknown, full)
-			case !leaf:
-				if sub, ok := v.(map[string]any); ok {
-					walk(sub, full)
-				}
+			case !leaf && isTable:
+				walk(sub, full)
 			}
 		}
 	}
 	walk(doc, "")
 	slices.Sort(unknown)
-	return unknown
+	slices.Sort(found)
+	return unknown, found
 }
 
-func (c *Config) loadFile(text []byte) error {
+// loadFile reads the file's settings and returns the retired keys it holds.
+func (c *Config) loadFile(text []byte, gone []RetiredKey) ([]string, error) {
 	var raw map[string]any
+	vetted := false
+	var found []string
 	if err := toml.Unmarshal(text, &raw); err == nil {
-		if unknown := unknownKeys(raw); len(unknown) > 0 {
-			return fmt.Errorf("unknown key %s", strings.Join(unknown, ", "))
+		var unknown []string
+		if unknown, found = unknownKeys(raw, gone); len(unknown) > 0 {
+			return nil, fmt.Errorf("unknown key %s", strings.Join(unknown, ", "))
 		}
+		vetted = true
 	}
 	var doc schema
 	err := toml.NewDecoder(bytes.NewReader(text)).DisallowUnknownFields().Decode(&doc)
 	var strict *toml.StrictMissingError
 	var decode *toml.DecodeError
 	switch {
+	case errors.As(err, &strict) && vetted && len(found) > 0:
+		// unknownKeys passed every key but the retired ones, so they are all
+		// the decoder missed; it reports them after decoding the rest.
 	case errors.As(err, &strict):
 		var unknown []string
 		for _, e := range strict.Errors {
 			unknown = append(unknown, strings.Join(e.Key(), "."))
 		}
-		return fmt.Errorf("unknown key %s", strings.Join(unknown, ", "))
+		return nil, fmt.Errorf("unknown key %s", strings.Join(unknown, ", "))
 	case errors.As(err, &decode):
 		row, col := decode.Position()
 		if key := strings.Join(decode.Key(), "."); key != "" {
-			return fmt.Errorf("%s: %v (line %d column %d)", key, err, row, col)
+			return nil, fmt.Errorf("%s: %v (line %d column %d)", key, err, row, col)
 		}
-		return fmt.Errorf("%v (line %d column %d)", err, row, col)
+		return nil, fmt.Errorf("%v (line %d column %d)", err, row, col)
 	case err != nil:
-		return err
+		return nil, err
 	}
 	i := 0
 	var walk func(v reflect.Value) error
@@ -361,7 +411,10 @@ func (c *Config) loadFile(text []byte) error {
 		}
 		return nil
 	}
-	return walk(reflect.ValueOf(doc))
+	if err := walk(reflect.ValueOf(doc)); err != nil {
+		return nil, err
+	}
+	return found, nil
 }
 
 // fromFile checks a decoded TOML value against k's kind and returns it as
@@ -484,6 +537,9 @@ func tomlType(v any) string {
 	}
 	return fmt.Sprintf("%T", v)
 }
+
+// retiredWarning names a retired setting, never its value.
+func retiredWarning(name string) string { return "retired: " + name + "; remove it" }
 
 // secretWarning is set when the file others on the host can read holds a
 // secret: it belongs in the environment, or the file must be 0600/0640.

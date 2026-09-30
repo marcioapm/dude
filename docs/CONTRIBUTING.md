@@ -345,6 +345,20 @@ in `full.toml`, `full.json` and `docs/dude.example.toml`. Every file in
 error its first comment line names. Read sites take
 values from the resolved config, never `os.Getenv`/`process.env`.
 
+**Configuration stays compatible across one release**, because a
+deployment upgrades by running the new release on the old release's
+configuration (and refuses to switch when its `validate` fails):
+
+- **A new setting always has a default or is optional**, so a new release
+  starts on the previous release's configuration. A setting that must be
+  required waits a release: optional first, required once deployments have it.
+- **A removed setting is accepted for one more release with a warning.**
+  Move it from the key table to the `retired` list — `retired` in
+  `orchestrator/internal/config`, `RETIRED` in `apps/control-plane/src/config.ts`,
+  and `"retired"` in `keys.json` (file key and variable). Both loaders
+  accept it from the file or the environment, ignore its value and warn
+  `retired: <key>; remove it`. Delete the entry in the release after.
+
 ## What's next
 
 In rough priority order.
