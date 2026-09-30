@@ -55,12 +55,17 @@ class BrowserAuth(unittest.TestCase):
         # Answers to /v1/navigation in order, then the empty tree.
         self.nav_responses = []
         self.nav_calls = []
+        # What /v1/navigation answers with when nothing else is queued.
+        self.tree = []
         # /v1/navigation requests answered "hold": fulfilled by the test itself.
         self.held = []
         # Statuses for the next event-stream requests; otherwise a stream that ends and asks
         # EventSource to reconnect after 50 ms.
         self.stream_failures = []
         self.quick_streams = False
+        self.still_streams = False
+        # Only streams whose URL contains this are failed.
+        self.failing_scope = ""
         self.navigation = []
         self.context.route("**/*", self.route)
         self.page.on("request", lambda req: self.navigation.append(req.url)
@@ -87,10 +92,14 @@ class BrowserAuth(unittest.TestCase):
                                     **response})
         elif "/v1/events/stream" in req.url:
             self.streams.append(req.url)
-            if self.stream_failures:
+            if self.stream_failures and self.failing_scope in req.url:
                 route.fulfill(status=self.stream_failures.pop(0), content_type="text/html", body="Refused")
             elif self.quick_streams:
                 route.fulfill(content_type="text/event-stream", body=": ready\nretry: 50\n\n")
+            elif self.still_streams:
+                # EventSource's own reconnect runs on the browser's clock, not the page's
+                # fake one: a day keeps it out of a test's connection count.
+                route.fulfill(content_type="text/event-stream", body=": ready\nretry: 86400000\n\n")
             else:
                 route.fulfill(content_type="text/event-stream", body=": ready\n\n")
         elif "/v1/people" in req.url:
@@ -101,10 +110,13 @@ class BrowserAuth(unittest.TestCase):
             if response == "hold":
                 self.held.append(route)
             elif response is None:
-                route.fulfill(json={"projects": []})
+                route.fulfill(json={"projects": self.tree})
             else:
                 route.fulfill(status=response, content_type="application/json",
                               body=json.dumps({"error": {"code": "refused", "message": "Refused"}}))
+        elif "/v1/tasks/" in req.url:
+            route.fulfill(status=404, content_type="application/json",
+                          body=json.dumps({"error": {"code": "not_found", "message": "No such task."}}))
         elif "/v1/pull-requests" in req.url:
             route.fulfill(json={"pullRequests": []})
         elif "/v1/" in req.url:
@@ -258,6 +270,115 @@ class BrowserAuth(unittest.TestCase):
                 return
             self.page.wait_for_timeout(50)
         self.fail("condition not reached")
+
+    def clocked_shell(self, suffix="/"):
+        """Signs in by key on a paused page clock, with streams that open and then
+        leave reconnecting to the browser for a day."""
+        self.page.clock.install()
+        self.responses = [{"authMethod": "api_key"}]
+        self.still_streams = True
+        self.open("valid", suffix)
+        self.shell()
+        self.page.clock.pause_at(self.page.evaluate("Date.now()") + 1_000)
+        self.quiet()
+
+    def quiet(self):
+        # Real time, not the page's: the fake clock also holds requestAnimationFrame.
+        self.page.wait_for_timeout(150)
+
+    def scoped(self):
+        return [url for url in self.streams if self.failing_scope in url]
+
+    def fail_streams(self, statuses, me):
+        """Answers the next (re)connects in the failing scope with `statuses` and the
+        session checks they cause with `me`, then takes the network down and back so
+        the scope's stream reconnects into the first of them."""
+        self.stream_failures = list(statuses)
+        self.responses = list(me)
+        streams, probes = len(self.scoped()), len(self.probes)
+        self.page.evaluate("dispatchEvent(new Event('offline')); dispatchEvent(new Event('online'))")
+        self.wait_until(lambda: len(self.scoped()) == streams + 1 and len(self.probes) == probes + 1)
+        self.quiet()
+
+    def next_connection_after(self, delay_ms):
+        """No connection in the failing scope 1 ms before `delay_ms` on the page clock,
+        exactly one at it; if that one fails, waits for the session check it causes."""
+        streams, probes = len(self.scoped()), len(self.probes)
+        fails = bool(self.stream_failures)
+        self.page.clock.run_for(delay_ms - 1)
+        self.page.wait_for_timeout(150)
+        self.assertEqual(len(self.scoped()), streams, f"reconnected before {delay_ms} ms")
+        self.page.clock.run_for(1)
+        self.wait_until(lambda: len(self.scoped()) == streams + 1)
+        if fails:
+            self.wait_until(lambda: len(self.probes) == probes + 1)
+        self.quiet()
+        self.assertEqual(len(self.scoped()), streams + 1)
+
+    def test_failed_stream_retries_back_off_to_a_cap(self):
+        self.clocked_shell()
+        ok = {"authMethod": "api_key"}
+        # Seven terminal failures in a row with the session valid throughout; the
+        # eighth connection opens.
+        self.fail_streams([503] * 7, [ok] * 7)
+        for delay in (1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000):
+            self.next_connection_after(delay)
+        self.assertEqual(self.stream_failures, [])
+        self.shell()
+        self.assertEqual(self.probes, ["Bearer valid"] * 8)
+
+    def test_an_open_stream_resets_the_retry_delay(self):
+        self.clocked_shell()
+        ok = {"authMethod": "api_key"}
+        self.fail_streams([503, 503], [ok, ok])
+        self.next_connection_after(1_000)
+        self.next_connection_after(2_000)  # opens
+        self.fail_streams([503], [ok])
+        self.next_connection_after(1_000)
+
+    def test_session_check_failure_reopens_without_clearing_the_key(self):
+        for failure in (503, "network"):
+            with self.subTest(failure=failure):
+                self.clocked_shell()
+                self.fail_streams([503], [failure])
+                self.next_connection_after(1_000)
+                self.shell()
+                self.assertEqual(self.page.evaluate("localStorage.getItem('dude.apiKey')"), "valid")
+                self.assertEqual(self.probes, ["Bearer valid", "Bearer valid"])
+                self.tearDown()
+                self.setUp()
+
+    def test_a_pending_retry_dies_with_its_stream(self):
+        ok = {"authMethod": "api_key"}
+        # "reopen": the network comes back while the retry is pending, so the same
+        # mounted stream reopens at once and the pending retry must not add another.
+        for leave in ("unmount", "sign-out", "reopen"):
+            with self.subTest(leave=leave):
+                # A task's screen has a stream of its own; leaving the screen unmounts it.
+                self.failing_scope = "taskId=" if leave == "unmount" else ""
+                self.tree = [{"id": "prj_retry", "name": "Retry", "epics": [], "tasks": [
+                    {"id": "tsk_retry", "key": "R-1", "title": "Retry", "status": "running"}]}] \
+                    if leave == "unmount" else []
+                self.clocked_shell("/#/task/tsk_retry" if leave == "unmount" else "/")
+                self.wait_until(lambda: len(self.scoped()) >= 1)
+                self.fail_streams([503], [ok])
+                if leave == "unmount":
+                    self.page.evaluate("location.hash = '#/waiting'")
+                    expect(self.page.get_by_test_id("shell")).to_be_visible()
+                elif leave == "sign-out":
+                    self.page.get_by_test_id("sign-out").click()
+                    self.prompt()
+                else:
+                    streams = len(self.streams)
+                    self.page.evaluate("dispatchEvent(new Event('online'))")
+                    self.wait_until(lambda: len(self.streams) == streams + 1)
+                self.quiet()
+                streams = len(self.streams)
+                self.page.clock.run_for(30_000)
+                self.page.wait_for_timeout(300)
+                self.assertEqual(len(self.streams), streams)
+                self.tearDown()
+                self.setUp()
 
     def test_keyless_refusal_shows_prompt(self):
         self.responses = [401]
