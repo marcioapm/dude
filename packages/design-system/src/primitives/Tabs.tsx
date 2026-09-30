@@ -82,7 +82,13 @@ export function Tab({ value, icon, count, trailing, tooltip, disabled, children 
       {trailing}
     </TabTrigger>
   );
-  return tooltip ? <Tooltip content={tooltip} side="bottom">{trigger}</Tooltip> : trigger;
+  // Always the Tooltip wrapper: swapping it in and out would remount the
+  // button and drop keyboard focus when the tooltip arrives or leaves.
+  return (
+    <Tooltip content={tooltip} side="bottom" disabled={!tooltip}>
+      {trigger}
+    </Tooltip>
+  );
 }
 
 /** A tab's count, drawn apart: for a `trailing` that carries a count of its own. */

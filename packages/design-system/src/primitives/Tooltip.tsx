@@ -16,6 +16,11 @@ export interface TooltipProps {
    * person most needs the tooltip's words, so it must not close them.
    */
   readonly keepOnPress?: boolean | undefined;
+  /**
+   * Never open. For a trigger whose tooltip comes and goes with its data:
+   * the tree stays the same, so the trigger keeps focus across the change.
+   */
+  readonly disabled?: boolean | undefined;
   /** The trigger. Must accept a ref and forward props (asChild). */
   readonly children: ReactNode;
 }
@@ -24,7 +29,7 @@ export interface TooltipProps {
  * Tooltip. Wrap the app once in `TooltipProvider` (one shared delay). Content is supplementary
  * — never the only place a label lives. Icon buttons already carry a title.
  */
-export function Tooltip({ content, shortcut, side = "top", mono, delay, keepOnPress, children }: TooltipProps) {
+export function Tooltip({ content, shortcut, side = "top", mono, delay, keepOnPress, disabled, children }: TooltipProps) {
   // keepOnPress: the tooltip's state is ours, so a close asked for while the
   // trigger is pressed is simply not taken. No event is cancelled: the press
   // reaches every listener, and the trigger's own behaviour is untouched.
@@ -47,8 +52,9 @@ export function Tooltip({ content, shortcut, side = "top", mono, delay, keepOnPr
       document.addEventListener("pointercancel", release, { signal: ends.signal });
     },
   };
+  const control = disabled ? { open: false } : keepOnPress ? { open, onOpenChange } : {};
   const root = (
-    <RadixTooltip.Root {...(delay !== undefined ? { delayDuration: delay } : {})} {...(keepOnPress ? { open, onOpenChange } : {})}>
+    <RadixTooltip.Root {...(delay !== undefined ? { delayDuration: delay } : {})} {...control}>
       <RadixTooltip.Trigger asChild {...(keepOnPress ? pressKeeper : {})}>{children}</RadixTooltip.Trigger>
       <RadixTooltip.Portal>
         <RadixTooltip.Content className={cx(styles["content"], mono && styles["mono"])} side={side} sideOffset={4}>
