@@ -22,6 +22,8 @@ export interface MarkdownDocumentProps extends Omit<HTMLAttributes<HTMLDivElemen
   readonly onEditingChange?: ((editing: boolean) => void) | undefined;
   /** How it reads: `prompt` for an agent's instructions (default), `document` for an artifact. */
   readonly variant?: Exclude<MarkdownVariant, "message"> | undefined;
+  /** A single newline reads as a line break (`Markdown breaks`): on for text a person writes. */
+  readonly breaks?: boolean | undefined;
   /** What `{{ }}` offers to insert while editing, with what each is. None: no button. */
   readonly variables?: ReadonlyArray<{ readonly name: string; readonly description: string }> | undefined;
 }
@@ -132,6 +134,7 @@ export function MarkdownDocument({
   defaultEditing = false,
   onEditingChange,
   variant = "prompt",
+  breaks,
   variables,
   className,
   ...rest
@@ -288,7 +291,7 @@ export function MarkdownDocument({
           />
         </div>
       ) : (
-        <div className={styles["view"]} data-testid="markdown-view">{source.trim() ? <Markdown source={source} variant={variant} /> : <p className={styles["empty"]}>{emptyText}</p>}</div>
+        <div className={styles["view"]} data-testid="markdown-view">{source.trim() ? <Markdown source={source} variant={variant} breaks={breaks} /> : <p className={styles["empty"]}>{emptyText}</p>}</div>
       )}
     </div>
   );

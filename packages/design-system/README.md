@@ -565,6 +565,8 @@ size and shade, not weight: body 400, names and labels 500, headings at most
     shows it — and nothing else: no HTML string, no second renderer. It
     keeps at least the source's height, so toggling does not jump.
     `document` is for an editor whose output is published as an artifact.
+    `breaks` passes through to it: a person writes here, so it is on
+    wherever the rendered text is theirs (a task's goal and criteria).
   - **Edits stay undoable.** Ctrl/⌘+B I K E and the buttons wrap the
     selection (a placeholder, selected, when there is none); Enter
     continues a list (`- `, `2.` after `1.`, `- [ ] `) and ends it on an
@@ -694,6 +696,18 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   as open — an unclosed fence is still a code block, an open `**` is still
   bold — so nothing flickers when the closer lands. Finished messages parse
   strictly.
+- `breaks` (`parseMarkdown`'s `breaks` option) renders a single newline
+  inside a paragraph, list item, quote or table cell as a line break, as
+  the person who pressed Enter meant, rather than CommonMark's space. Code
+  blocks, code spans and headings are unaffected; the two-space and `\`
+  hard breaks work either way. **The rule: on where a person writes the
+  Markdown, off for agent output.** On: a task's goal and criteria (the
+  editor's Preview, Read, the task screen), a person's `ChatMessage` (it
+  keys on its own resolved `kind === "human"`: prompts, steers, answers),
+  prompts (`MarkdownDocument breaks`, `PromptHistory`). Off (the default):
+  agent turns, `ThinkingBlock`, `QuestionCard`, `ArtifactPreview`,
+  `FindingRow` and anything else a model wrote, which is written to the
+  standard.
 - `variant="message"` (default) is a chat turn. One block sits on the chat
   line (16/22). Two or more switch to long-form rhythm: 1.5 leading, 0.75em
   between blocks, headings 1.25em above and one step smaller than in a
@@ -905,9 +919,9 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | `<RowMenu items={[…, { id: "delete", tone: "danger", disabled, disabledReason }]} />` | a row of icon buttons, or a greyed item that does not say why |
 | `<FindingRow severity="blocking" status="resolved" … />` | `f.severity.toUpperCase()` in red, struck through when done |
 | `<Breadcrumb items={[project, epic, key]} />` in the header | a ghost `Back` button under the content |
-| `<MarkdownEditor label="Goal" value={goal} onChange={setGoal} fill minRows={4} maxLength={65_536} />` | a `Textarea` for Markdown with a hand-rolled preview beside it, or a `minRows={12}` that scrolls the empty dialog |
+| `<MarkdownEditor label="Goal" value={goal} onChange={setGoal} fill breaks minRows={4} maxLength={65_536} />` | a `Textarea` for Markdown with a hand-rolled preview beside it, or a `minRows={12}` that scrolls the empty dialog |
 | `<Dialog size="document" aside={…} context={…}>` with a `DiscardConfirm` for writing a task | a 400px dialog that loses three paragraphs to a stray Escape |
-| `<Dialog reading={<Markdown title={title} source={[goal, "## Acceptance criteria", list]} />}>`, in the variant the task screen reads it in | a second modal over the first to show the same text, one string joined from the parts, or `variant="document"` spacing on text that is read as a message |
+| `<Dialog reading={<Markdown title={title} breaks source={[goal, "## Acceptance criteria", list]} />}>`, in the variant the task screen reads it in | a second modal over the first to show the same text, one string joined from the parts, or `variant="document"` spacing on text that is read as a message |
 | a settings page's sub-pages as `items` of its `SettingsNavItem` | `Tabs` inside a settings page |
 | `<SearchResultRow rank={1} lead={{ type: "memory" }} facts={["words and meaning"]} />` | a score chip and a progress bar on every result |
 | `<EntityLine lead={face} name={…} detail={…} />`, `<AuthorLine author={…} />` | a face and two spans styled in the app's CSS |

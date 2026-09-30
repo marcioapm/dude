@@ -235,6 +235,49 @@ def test_a_task_is_written_in_markdown_and_its_criteria_are_the_list_items(
     assert console_errors == []
 
 
+BROKEN_GOAL = "Keep SEPA at checkout.\nKeep Invoice for annual plans.\n\nA second paragraph."
+BROKEN_CRITERIA = "- [ ] SEPA appears\n  on the payment step"
+
+
+def test_a_single_newline_a_person_types_is_a_line_break_in_preview_read_and_on_the_task(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    first_paragraph = "p:has-text('Keep SEPA at checkout.')"
+    lines = "el => el.innerText.split('\\n')"
+    sign_in(page, web_url, org["api_key"])
+    page.get_by_test_id("new-task").click()
+    page.get_by_test_id("task-title").fill("Line breaks")
+    page.get_by_test_id("task-goal").fill(BROKEN_GOAL)
+    page.get_by_test_id("task-criteria").fill(BROKEN_CRITERIA)
+
+    page.get_by_role("tablist", name="Goal view").get_by_role("tab", name="Preview").click()
+    para = page.get_by_test_id("task-goal-preview").locator(first_paragraph)
+    expect(para.locator("br")).to_have_count(1)
+    assert para.evaluate(lines) == ["Keep SEPA at checkout.", "Keep Invoice for annual plans."]
+    criteria_view = page.get_by_role("tablist", name="Acceptance criteria view")
+    criteria_view.get_by_role("tab", name="Preview").click()
+    expect(page.get_by_test_id("task-criteria-preview").locator("li br")).to_have_count(1)
+
+    page.get_by_test_id("task-read").click()
+    doc = page.get_by_test_id("task-reading")
+    expect(doc.locator(first_paragraph).locator("br")).to_have_count(1)
+    expect(doc.locator("li br")).to_have_count(1)
+    page.keyboard.press("Escape")
+
+    page.get_by_test_id("task-save").click()
+    screen = page.get_by_test_id("task-screen")
+    expect(screen).to_be_visible()
+    goal = screen.get_by_role("region", name="Goal").locator(first_paragraph)
+    expect(goal.locator("br")).to_have_count(1)
+    assert goal.evaluate(lines) == ["Keep SEPA at checkout.", "Keep Invoice for annual plans."]
+    expect(screen.get_by_role("list", name="Acceptance criteria").locator("li br")).to_have_count(1)
+    items = client.get("/v1/tasks", params={"projectId": forge_project["id"]}).json()["tasks"]
+    saved = client.get(f"/v1/tasks/{next(i['id'] for i in items if i['title'] == 'Line breaks')}").json()
+    assert saved["goal"] == BROKEN_GOAL
+    assert saved["acceptanceCriteria"] == ["SEPA appears\non the payment step"]
+    assert console_errors == []
+
+
 def test_enter_in_the_title_moves_to_the_goal_and_does_not_create(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
 ):
