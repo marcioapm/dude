@@ -339,7 +339,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, bread
                     {/* Written in Markdown in the task dialog: shown as its preview showed it. */}
                     {item.goal ? <Markdown source={item.goal} /> : null}
                     {item.acceptanceCriteria.length > 0 ? (
-                      <ul aria-label="Acceptance criteria">
+                      <ul aria-label="Acceptance criteria" className="taskCriteria">
                         {item.acceptanceCriteria.map((c, i) => (
                           <li key={i}><Markdown source={c} /></li>
                         ))}

@@ -252,7 +252,7 @@ export function MarkdownEditor({
           >
             {FORMATS.map((f, i) =>
               f === "gap" ? (
-                <span key={i} className={cx(styles["gap"], i === 6 && styles["optional"])} aria-hidden />
+                <span key={i} className={styles["gap"]} aria-hidden />
               ) : (
                 <Tooltip key={f.format} content={f.label} shortcut={FORMAT_KEYS[f.format] ? `${mod}+${FORMAT_KEYS[f.format]!.toUpperCase()}` : undefined}>
                   <IconButton

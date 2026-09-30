@@ -77,6 +77,10 @@
   .optional {
     display: none;
   }
+  /* The buttons wrap under the switch here; hidden, they would leave an empty band. */
+  .frame[data-mode="preview"] .tools {
+    display: none;
+  }
 }
 
 /* Lines on the code pitch and padding on the code block's, so both follow
