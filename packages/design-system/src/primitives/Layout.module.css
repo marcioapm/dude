@@ -159,6 +159,10 @@
   max-width: var(--ds-measure-document);
   min-width: 0;
 }
+.formFill {
+  gap: var(--ds-space-24);
+  max-width: none;
+}
 .formRow {
   display: grid;
   grid-auto-flow: column;

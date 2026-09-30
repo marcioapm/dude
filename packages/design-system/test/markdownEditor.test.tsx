@@ -9,6 +9,9 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MarkdownEditor, type MarkdownEditorProps } from "../src/primitives/MarkdownEditor.tsx";
+import { modKey } from "../src/util/keys.ts";
+import { Input } from "../src/primitives/Input.tsx";
+import { KeyHint, MarkdownCheatsheet } from "../src/primitives/Kbd.tsx";
 import { continueList, countState, editorKey, formatEdit, type TextEdit } from "../src/util/markdownEdit.ts";
 
 const noop = () => {};
@@ -242,5 +245,26 @@ describe("continueList", () => {
     expect(continueList("plain", 5)).toBeNull();
     expect(continueList("-not a list", 11)).toBeNull();
     expect(continueList("## Heading", 10)).toBeNull();
+  });
+});
+
+describe("the pieces around a document being written", () => {
+  test("a title-sized Input keeps the field's anatomy and says what the label needs", () => {
+    const h = renderToStaticMarkup(<Input size="title" label="Title" labelNote="required" defaultValue="x" data-testid="t" />);
+    const label = tag(h, "<label");
+    const id = /for="([^"]+)"/.exec(label)![1]!;
+    expect(tag(h, "<input")).toContain(`id="${id}"`);
+    expect(h).toMatch(/<label[^>]*>Title<span[^>]*> · required<\/span><\/label>/);
+  });
+
+  test("the cheatsheet lists the editor's shortcuts as key caps", () => {
+    const h = renderToStaticMarkup(<MarkdownCheatsheet />);
+    for (const source of ["**bold**", "_italic_", "[text](url)", "`code`", "- [ ] item", "## Heading"]) expect(h).toContain(source);
+    expect([...h.matchAll(/<kbd[^>]*>([^<]+)<\/kbd>/g)].map((m) => m[1])).toEqual([modKey(), "B", modKey(), "I", modKey(), "K", modKey(), "E"]);
+  });
+
+  test("a key hint is its keys and what they do", () => {
+    const h = renderToStaticMarkup(<KeyHint keys={["mod", "Enter"]}>create</KeyHint>);
+    expect(h.replace(/<[^>]+>/g, "")).toBe(`${modKey()}Entercreate`);
   });
 });

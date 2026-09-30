@@ -1,0 +1,75 @@
+/* Key caps, a shortcut hint, and the help that sits beside a form. */
+
+.kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 var(--ds-space-4);
+  border-radius: var(--ds-radius-mark);
+  background: var(--ds-color-sunken);
+  box-shadow: inset 0 0 0 1px var(--ds-color-border-subtle);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-2xs);
+  line-height: 1;
+  color: var(--ds-color-text-secondary);
+}
+.keys {
+  display: inline-flex;
+  gap: var(--ds-space-2);
+}
+.hint {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+}
+
+.help {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  min-width: 0;
+}
+.helpTitle {
+  margin: 0;
+}
+.helpList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+  margin: 0;
+  padding-left: 1.2em;
+  font-size: var(--ds-text-sm);
+  line-height: var(--ds-leading-prose);
+  color: var(--ds-color-text-secondary);
+}
+.helpList strong {
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-primary);
+}
+
+.cheats {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--ds-space-4) var(--ds-space-12);
+  align-items: center;
+  margin: 0;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+}
+.cheat {
+  display: contents;
+}
+.cheat dt,
+.cheat dd {
+  margin: 0;
+}
+.source {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-primary);
+  white-space: pre;
+}

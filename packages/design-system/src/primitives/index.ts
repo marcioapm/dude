@@ -35,3 +35,4 @@ export type { MarkdownEditorProps, MarkdownEditorMode } from "./MarkdownEditor.t
 export { formatEdit, continueList, editorKey, countState, FORMAT_KEYS } from "../util/markdownEdit.ts";
 export type { TextEdit, MarkdownFormat, EditorKey } from "../util/markdownEdit.ts";
 export { modKey } from "../util/keys.ts";
+export { Kbd, KeyHint, HelpList, MarkdownCheatsheet } from "./Kbd.tsx";
