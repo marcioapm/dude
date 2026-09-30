@@ -812,6 +812,10 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
   `data-state`, not the tooltip's) and its place in the ←→ walk; a focus
   that selects it also shows the tip. The tooltip is supplementary: the
   name and count are still the tab's label. Never a native `title`.
+- A tooltip may come and go with its data (the Servers tab has none until
+  its servers load). Every `Tab` sits in the same `Tooltip` wrapper, held
+  shut (`Tooltip disabled`) when it has no `tooltip`, so the button is
+  never remounted and a keyboard user on it keeps focus.
 
 ### Servers
 

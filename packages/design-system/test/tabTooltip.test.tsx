@@ -89,6 +89,44 @@ describe("a tab with a tooltip", () => {
     expect(tab("Overview").getAttribute("data-state")).toBe("inactive");
   });
 
+  // The Servers tab gets its tooltip when the servers load, and loses it with
+  // the last recipe: a keyboard user already on it must stay on it.
+  for (const [from, to] of [[undefined, "1 server on"], ["1 server on", undefined]] as const) {
+    test(`keeps focus when its tooltip goes from ${from ?? "none"} to ${to ?? "none"}`, async () => {
+      host = document.createElement("div");
+      document.body.appendChild(host);
+      root = createRoot(host);
+      const draw = (tip: string | undefined) =>
+        root!.render(
+          <TooltipProvider>
+            <Tabs defaultValue="overview">
+              <TabList aria-label="Task">
+                <Tab value="overview">Overview</Tab>
+                <Tab value="servers" tooltip={tip}>Servers</Tab>
+                <Tab value="activity">Activity</Tab>
+              </TabList>
+              <TabPanel value="overview">o</TabPanel>
+              <TabPanel value="servers">s</TabPanel>
+              <TabPanel value="activity">a</TabPanel>
+            </Tabs>
+          </TooltipProvider>,
+        );
+      await act(async () => draw(from));
+      const before = tab("Servers");
+      await act(async () => before.focus());
+      expect(document.activeElement === before).toBe(true);
+      await act(async () => draw(to));
+      expect(tab("Servers") === before).toBe(true);
+      expect(document.activeElement === before).toBe(true);
+      await key(before, "ArrowRight");
+      expect(focused()).toBe("Activity");
+      await key(tab("Activity"), "ArrowLeft");
+      expect(document.activeElement === before).toBe(true);
+      await key(before, "ArrowLeft");
+      expect(focused()).toBe("Overview");
+    });
+  }
+
   test("a tab without one is the tab it always was", async () => {
     await render();
     await act(async () => tab("Activity").focus());
