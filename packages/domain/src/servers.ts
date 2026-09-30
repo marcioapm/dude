@@ -148,6 +148,8 @@ export interface TaskServers {
     previewStage: PreviewStage | null;
     parksAfterMinutes: number | null;
     terminalUrl: string | null;
+    /** The memory limit lux gave its container, in bytes, when lux reports one. */
+    memoryLimit?: number | null;
   };
   servers: RunServer[];
   moved: null | { at: string; fromHost: string | null; toHost: string | null };
