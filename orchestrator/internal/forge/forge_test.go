@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -31,6 +32,50 @@ func TestPushPreflightUsesEnterpriseOriginAndGitAuthentication(t *testing.T) {
 	}
 	if len(fake.ReceiveRequests) != 4 {
 		t.Fatalf("requests: %v", fake.ReceiveRequests)
+	}
+}
+
+func TestPushPreflightTestGatewayRequiresExactOptIn(t *testing.T) {
+	fake := fakegithub.New("", "acme/repo")
+	fake.ReceiveToken = "secret"
+	srv := httptest.NewServer(fake.Handler())
+	defer srv.Close()
+	local, _ := url.Parse(srv.URL)
+	for _, tc := range []struct {
+		name, configured, apiScheme, apiHost, gitHost, token string
+		allowed                                              bool
+	}{
+		{"trusted", "gateway.test", "http", "gateway.test", "gateway.test", "secret", true},
+		{"unset", "", "http", "gateway.test", "gateway.test", "secret", false},
+		{"wrong opt-in", "other.test", "http", "gateway.test", "gateway.test", "secret", false},
+		{"wrong git host", "gateway.test", "http", "gateway.test", "other.test", "secret", false},
+		{"wrong API host", "gateway.test", "http", "other.test", "gateway.test", "secret", false},
+		{"HTTPS API", "gateway.test", "https", "gateway.test", "gateway.test", "secret", false},
+		{"wrong token", "gateway.test", "http", "gateway.test", "gateway.test", "wrong", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			g := NewGitHub(Credential{Secret: tc.token, APIBaseURL: tc.apiScheme + "://" + tc.apiHost + ":43210"}, WithTestGitHost(tc.configured))
+			g.http.Transport = &http.Transport{Proxy: nil, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+				calls++
+				return (&net.Dialer{}).DialContext(ctx, network, local.Host)
+			}}
+			defer g.http.CloseIdleConnections()
+			err := g.CheckPushAccess(context.Background(), "git://"+tc.gitHost+":43211/acme/repo.git")
+			if (err == nil) != tc.allowed {
+				t.Fatalf("allowed=%v, error=%v", tc.allowed, err)
+			}
+			wantCalls := 0
+			if tc.allowed || tc.name == "wrong token" {
+				wantCalls = 1
+			}
+			if calls != wantCalls {
+				t.Fatalf("HTTP connections=%d, want %d", calls, wantCalls)
+			}
+		})
+	}
+	if len(fake.ReceiveRequests) != 2 {
+		t.Fatalf("discovery requests: %v", fake.ReceiveRequests)
 	}
 }
 
