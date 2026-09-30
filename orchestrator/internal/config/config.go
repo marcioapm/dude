@@ -17,6 +17,7 @@ import (
 	"math"
 	"os"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -237,7 +238,63 @@ func readFile(getenv func(string) string, defaultPath string) (string, []byte, e
 	return defaultPath, text, nil
 }
 
+// tables is the schema's shape: each table's exact, case-sensitive child
+// names, by the table's dotted name ("" for the root); true marks a leaf.
+var tables = func() map[string]map[string]bool {
+	out := map[string]map[string]bool{"": {}}
+	for _, k := range keys {
+		parts := strings.Split(k.Name, ".")
+		for i, part := range parts {
+			parent := strings.Join(parts[:i], ".")
+			leaf := i == len(parts)-1
+			out[parent][part] = leaf
+			if !leaf && out[parent+dot(parent)+part] == nil {
+				out[parent+dot(parent)+part] = map[string]bool{}
+			}
+		}
+	}
+	return out
+}()
+
+func dot(prefix string) string {
+	if prefix == "" {
+		return ""
+	}
+	return "."
+}
+
+// unknownKeys walks the parsed document segment by segment. go-toml's struct
+// decoder matches names case-insensitively, so [Orchestrator] or Listen
+// would otherwise be read as a known key, and listen and Listen as one.
+func unknownKeys(doc map[string]any) []string {
+	var unknown []string
+	var walk func(m map[string]any, table string)
+	walk = func(m map[string]any, table string) {
+		for name, v := range m {
+			full := table + dot(table) + name
+			leaf, known := tables[table][name]
+			switch {
+			case !known:
+				unknown = append(unknown, full)
+			case !leaf:
+				if sub, ok := v.(map[string]any); ok {
+					walk(sub, full)
+				}
+			}
+		}
+	}
+	walk(doc, "")
+	slices.Sort(unknown)
+	return unknown
+}
+
 func (c *Config) loadFile(text []byte) error {
+	var raw map[string]any
+	if err := toml.Unmarshal(text, &raw); err == nil {
+		if unknown := unknownKeys(raw); len(unknown) > 0 {
+			return fmt.Errorf("unknown key %s", strings.Join(unknown, ", "))
+		}
+	}
 	var doc schema
 	err := toml.NewDecoder(bytes.NewReader(text)).DisallowUnknownFields().Decode(&doc)
 	var strict *toml.StrictMissingError

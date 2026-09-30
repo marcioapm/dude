@@ -185,6 +185,22 @@ func TestANonFiniteRateIsRefused(t *testing.T) {
 	}
 }
 
+func TestKeysAreMatchedExactlyAndCaseSensitively(t *testing.T) {
+	for text, want := range map[string]string{
+		"[Orchestrator]\nlisten = \"127.0.0.1:1\"\n":                         "Orchestrator",
+		"[orchestrator]\nListen = \"127.0.0.1:1\"\n":                         "orchestrator.Listen",
+		"[orchestrator]\nlisten = \"127.0.0.1:1\"\nListen = \"0.0.0.0:1\"\n": "orchestrator.Listen",
+		"[auth.Cloudflare_Access]\nteam = \"x\"\n":                           "auth.Cloudflare_Access",
+	} {
+		for _, p := range []Process{Orchestrator, Backend} {
+			_, err := load(t, p, map[string]string{"DUDE_CONFIG": writeFile(t, text, 0o600)})
+			if err == nil || !strings.Contains(err.Error(), "unknown key "+want) {
+				t.Errorf("%s %q: err = %v, want unknown key %s", p, text, err, want)
+			}
+		}
+	}
+}
+
 func TestAnUnknownKeyIsRefusedByName(t *testing.T) {
 	for text, want := range map[string]string{
 		"[lux]\nurl = \"x\"\ntoken = \"y\"\n":           "lux.token",
