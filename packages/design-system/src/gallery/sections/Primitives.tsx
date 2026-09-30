@@ -702,10 +702,11 @@ function TaskDialogExample() {
       aside={
         <FormStack fill>
           <Select label="Epic" value={epic} onValueChange={setEpic} options={[{ value: "checkout", label: "Checkout v2" }, { value: "none", label: "No epic" }]} />
-          <HelpList title="What makes a good task">
-            <li><strong>Goal:</strong> why it matters, what exists today, and what an agent can't guess.</li>
-            <li><strong>Criteria:</strong> one checkable statement per list item.</li>
-          </HelpList>
+          <HelpList title="What makes a good task" items={[
+            <><strong>Goal:</strong> why it matters, what exists today, and what an agent can't guess.</>,
+            <><strong>Criteria:</strong> one checkable statement per list item.</>,
+            <>Paste error output in a <code>```</code> block.</>,
+          ]} />
           <MarkdownCheatsheet />
         </FormStack>
       }

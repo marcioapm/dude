@@ -12,7 +12,7 @@ import { MarkdownEditor, type MarkdownEditorProps } from "../src/primitives/Mark
 import { modKey } from "../src/util/keys.ts";
 import { Input } from "../src/primitives/Input.tsx";
 import { Breadcrumb } from "../src/components/Breadcrumb.tsx";
-import { KeyHint, MarkdownCheatsheet } from "../src/primitives/Kbd.tsx";
+import { HelpList, KeyHint, MarkdownCheatsheet } from "../src/primitives/Kbd.tsx";
 import { continueList, countState, editorKey, formatEdit, type TextEdit } from "../src/util/markdownEdit.ts";
 
 const noop = () => {};
@@ -312,5 +312,13 @@ describe("a dialog's context line", () => {
     const words = (h: string) => h.replace(/<[^>]+>/g, "|").split("|").filter(Boolean);
     expect(words(path)).toEqual(words(nav));
     expect(words(path)).toEqual(["Customer portal", "Checkout v2"]);
+  });
+});
+
+describe("HelpList", () => {
+  test("each item the caller passes is one list item, under an h3", () => {
+    const h = renderToStaticMarkup(<HelpList title="What makes a good task" items={[<><strong>Goal:</strong> why</>, "Criteria"]} />);
+    expect(h).toMatch(/<h3[^>]*>What makes a good task<\/h3>/);
+    expect([...h.matchAll(/<li>(.*?)<\/li>/g)].map((m) => m[1])).toEqual(["<strong>Goal:</strong> why", "Criteria"]);
   });
 });

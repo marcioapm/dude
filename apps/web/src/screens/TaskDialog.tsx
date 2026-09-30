@@ -162,11 +162,11 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
           {choosing ? (
             <RepositoryChooser repositories={repositories} chosen={chosen} onChange={setChosen} disabled={locked} />
           ) : null}
-          <HelpList title="What makes a good task">
-            <li><strong>Goal:</strong> why it matters, what exists today, and the constraints an agent can't guess.</li>
-            <li><strong>Criteria:</strong> one checkable statement per list item — reviewers check every one.</li>
-            <li>Link issues, designs and logs; paste error output in a <code>```</code> block.</li>
-          </HelpList>
+          <HelpList title="What makes a good task" items={[
+            <><strong>Goal:</strong> why it matters, what exists today, and the constraints an agent can't guess.</>,
+            <><strong>Criteria:</strong> one checkable statement per list item — reviewers check every one.</>,
+            <>Link issues, designs and logs; paste error output in a <code>```</code> block.</>,
+          ]} />
           <MarkdownCheatsheet extra={[["- [ ] item", "a criterion"]]} />
         </FormStack>
       }

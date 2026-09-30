@@ -23,12 +23,19 @@ export function KeyHint({ keys, children }: { readonly keys: ReadonlyArray<strin
   );
 }
 
-/** Help beside a form: a small-caps title over a short list in secondary ink. */
-export function HelpList({ title, children }: { readonly title: string; readonly children: ReactNode }) {
+/**
+ * Help beside a form: a small-caps title over a short list in secondary
+ * ink. The title is an h3: it sits under a dialog's title, which is the h2.
+ */
+export function HelpList({ title, items }: { readonly title: string; readonly items: ReadonlyArray<ReactNode> }) {
   return (
     <section className={styles["help"]}>
       <h3 className={cx("ds-label", styles["helpTitle"])}>{title}</h3>
-      <ul className={styles["helpList"]}>{children}</ul>
+      <ul className={styles["helpList"]}>
+        {items.map((item, i) => (
+          <li key={i}>{item}</li>
+        ))}
+      </ul>
     </section>
   );
 }
