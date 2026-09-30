@@ -15,15 +15,34 @@ export const KEY_PREFIX = "dude_sk_";
 /** Only user keys remain: runner keys belonged to the retired Go runner. */
 export type PrincipalKind = "user";
 
-export interface Principal {
+interface PersonIdentity {
   organizationId: string;
-  apiKeyId: string;
-  /** The person the key acts for (migration 035 gives every user key one). */
   personId: string;
   kind: PrincipalKind;
   name: string;
-  /** Their role in the organization, as of this request. */
   role: "admin" | "member";
+}
+
+export type Principal = PersonIdentity & (
+  | { credentialKind: "api_key"; apiKeyId: string }
+  | { credentialKind: "person" }
+);
+
+export function auditActor(principal: Principal): { kind: "human" | "person"; id: string } {
+  return principal.credentialKind === "api_key"
+    ? { kind: "human", id: principal.apiKeyId }
+    : { kind: "person", id: principal.personId };
+}
+
+export async function personPrincipal(organizationId: string, personId: string): Promise<Principal | null> {
+  return withOrg(organizationId, async ({ sql }) => {
+    const rows = await sql`SELECT name, role FROM people
+      WHERE id = ${personId} AND organization_id = ${organizationId} AND removed_at IS NULL`;
+    const row = rows[0];
+    if (!row) return null;
+    return { credentialKind: "person", organizationId, personId, kind: "user",
+      name: row.name, role: row.role };
+  });
 }
 
 export function hashKey(key: string): string {
@@ -125,6 +144,7 @@ export async function authenticate(authorization: string | null): Promise<Princi
   }).catch(() => {});
 
   return {
+    credentialKind: "api_key",
     organizationId: row.organization_id,
     apiKeyId: row.id,
     personId: row.person_id,
