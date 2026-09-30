@@ -158,13 +158,20 @@ export function MarkdownDocument({
     el.style.height = `${el.scrollHeight}px`;
   }, [draft]);
 
+  // Edit puts the caret at the start of the field in the commit that opens
+  // it. A frame later would move a selection made in between back to 0.
+  const opening = useRef(false);
   const start = () => {
+    opening.current = true;
     setDraft(source);
-    requestAnimationFrame(() => {
-      area.current?.focus();
-      area.current?.setSelectionRange(0, 0);
-    });
   };
+  useLayoutEffect(() => {
+    const el = area.current;
+    if (!el || !opening.current) return;
+    opening.current = false;
+    el.focus();
+    el.setSelectionRange(0, 0);
+  }, [editing]);
   const save = async () => {
     if (draft === null || !onSave) return;
     setSaving(true);
