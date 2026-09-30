@@ -4,6 +4,7 @@ import styles from "../gallery.module.css";
 import { Button, IconButton } from "../../primitives/Button.tsx";
 import { Input } from "../../primitives/Input.tsx";
 import { Textarea } from "../../primitives/Textarea.tsx";
+import { MarkdownEditor, type MarkdownEditorProps } from "../../primitives/MarkdownEditor.tsx";
 import { RowMenu, RowMenuTrigger, rowMenuOpeners, type RowMenuItem } from "../../primitives/RowMenu.tsx";
 import { Select } from "../../primitives/Select.tsx";
 import { Checkbox } from "../../primitives/Checkbox.tsx";
@@ -148,6 +149,26 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
             <Textarea label="Locked" defaultValue="Kind and repository are fixed once a run exists." disabled rows={2} />
             <ControlledTextarea />
           </div>
+        </Panes>
+      </Block>
+
+      <Block
+        id="p-markdown-editor"
+        title="MarkdownEditor"
+        note="For writing one Markdown document — a task's goal, its criteria. Textarea's anatomy around a frame: Write / Preview on the chrome shade (Ctrl/⌘+Shift+P), quiet formatting (Ctrl/⌘+B I K E), the source in mono, growing with its content — the page scrolls, never the field. Enter continues a list; Enter on an empty item ends it. Preview is Markdown variant='document', the one safe renderer, at least as tall as the source was. Locked opens in Preview with Write disabled and says why in the hint. The count turns attention past 90% and danger over."
+      >
+        <Panes mode={mode}>
+          <Col>
+            <MarkdownEditorDemo label="Write" initial={SAMPLE_GOAL} hint="Why it matters, what exists today, and anything an agent can't guess." />
+            <MarkdownEditorDemo label="Preview" initial={SAMPLE_GOAL} defaultMode="preview" />
+            <MarkdownEditorDemo label="Empty" initial="" placeholder="Why does this matter? What exists today? What must an agent not break?" minRows={4} />
+            <MarkdownEditorDemo label="Locked" initial={SAMPLE_CRITERIA} locked hint="Delivery has started, so what it asks for is fixed." />
+            <MarkdownEditorDemo label="Near the limit" initial={"- [ ] " + "Each step fires its funnel event exactly once. ".repeat(4)} maxLength={200} minRows={2} />
+            <MarkdownEditorDemo label="Over the limit" initial={"- [ ] " + "Each step fires its funnel event exactly once. ".repeat(5)} maxLength={200} minRows={2}
+              error="Criterion 1 is over 200 characters." />
+            <MarkdownEditorDemo label="With a summary" initial={SAMPLE_CRITERIA + "\n\nAnd a note that is not a criterion."} minRows={4}
+              summary={<Badge tone="neutral" size="sm">4 criteria</Badge>} notice="Text outside a list item isn't saved as a criterion" />
+          </Col>
         </Panes>
       </Block>
 
@@ -637,4 +658,23 @@ function ToastDemo() {
       <Caption>toasts render bottom-right of the page, in the active app theme</Caption>
     </Row>
   );
+}
+
+const SAMPLE_GOAL = `Checkout v2 dropped **SEPA** and **Invoice** from the payment step. About 18% of annual plans paid that way last quarter, and sales has had [three escalations](https://example.com/issues/412) this month.
+
+## What exists today
+- The old flow lives behind \`checkout_v2\` in \`web/src/checkout/legacy/\`.
+- Payment methods come from \`GET /v1/billing/methods\`, which already returns \`sepa\` and \`invoice\`.
+
+> Keep the old flow available for one week after release, then remove it in a follow-up.`;
+
+export const SAMPLE_CRITERIA = `- [ ] Card, SEPA and Invoice all appear on the payment step
+- [ ] Invoice appears **only** for annual plans
+- [ ] The old flow still works behind \`checkout_v2=false\` for one week
+- [ ] Each step fires its funnel event exactly once:
+  \`checkout.plan_selected\`, \`checkout.payment_viewed\`, \`checkout.completed\``;
+
+function MarkdownEditorDemo({ initial, ...props }: { readonly initial: string } & Omit<MarkdownEditorProps, "value" | "onChange">) {
+  const [value, setValue] = useState(initial);
+  return <MarkdownEditor minRows={6} maxLength={10_000} {...props} value={value} onChange={setValue} />;
 }

@@ -1,4 +1,4 @@
-import type { HTMLAttributes, ReactNode } from "react";
+import type { HTMLAttributes, KeyboardEvent, ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import styles from "./ScreenHeader.module.css";
 
@@ -32,24 +32,49 @@ export function ScreenHeader({ lead, title, meta, actions, className, children, 
 }
 
 export interface SegmentedProps<T extends string> extends Omit<HTMLAttributes<HTMLSpanElement>, "onChange"> {
-  readonly options: ReadonlyArray<{ readonly value: T; readonly label: ReactNode }>;
+  readonly options: ReadonlyArray<{ readonly value: T; readonly label: ReactNode; readonly disabled?: boolean | undefined }>;
   readonly value: T;
   readonly onChange: (value: T) => void;
   /** Names the group for a screen reader: "Whose tasks". */
   readonly label: string;
   readonly size?: "sm" | "md" | undefined;
   readonly disabled?: boolean | undefined;
+  /**
+   * The options switch panels the caller renders: a `tablist` whose tabs
+   * are `${tabs}-${value}-tab` and control `${tabs}-${value}-panel`, with
+   * one Tab stop and ← → between them. Omitted: a group of pressed buttons.
+   */
+  readonly tabs?: string | undefined;
 }
 
 /** Two or three views of the same thing, one chosen: Everyone / Mine, All / Open / Fixed. */
-export function Segmented<T extends string>({ options, value, onChange, label, size = "md", disabled, className, ...rest }: SegmentedProps<T>) {
+export function Segmented<T extends string>({ options, value, onChange, label, size = "md", disabled, tabs, className, ...rest }: SegmentedProps<T>) {
+  const enabled = options.filter((o) => !(disabled || o.disabled));
+  const move = (e: KeyboardEvent<HTMLButtonElement>, from: T) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    const at = enabled.findIndex((o) => o.value === from);
+    const next = enabled[(at + (e.key === "ArrowRight" ? 1 : -1) + enabled.length) % enabled.length];
+    if (!next) return;
+    onChange(next.value);
+    e.currentTarget.parentElement?.querySelector<HTMLButtonElement>(`#${CSS.escape(`${tabs}-${next.value}-tab`)}`)?.focus();
+  };
   return (
-    <span className={cx(styles["seg"], size === "sm" && styles["segSm"], className)} role="group" aria-label={label} {...rest}>
-      {options.map((o) => (
-        <button key={o.value} type="button" aria-pressed={o.value === value} disabled={disabled} onClick={() => onChange(o.value)}>
-          {o.label}
-        </button>
-      ))}
+    <span className={cx(styles["seg"], size === "sm" && styles["segSm"], className)} role={tabs ? "tablist" : "group"} aria-label={label} {...rest}>
+      {options.map((o) => {
+        const off = disabled || o.disabled;
+        const on = o.value === value;
+        return tabs ? (
+          <button key={o.value} type="button" role="tab" id={`${tabs}-${o.value}-tab`} aria-controls={`${tabs}-${o.value}-panel`}
+            aria-selected={on} tabIndex={on ? 0 : -1} disabled={off} onClick={() => onChange(o.value)} onKeyDown={(e) => move(e, o.value)}>
+            {o.label}
+          </button>
+        ) : (
+          <button key={o.value} type="button" aria-pressed={on} disabled={off} onClick={() => onChange(o.value)}>
+            {o.label}
+          </button>
+        );
+      })}
     </span>
   );
 }
