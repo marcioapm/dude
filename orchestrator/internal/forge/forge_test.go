@@ -34,6 +34,31 @@ func TestPushPreflightUsesEnterpriseOriginAndGitAuthentication(t *testing.T) {
 	}
 }
 
+func TestPushPreflightNormalizesTrailingSlash(t *testing.T) {
+	for _, path := range []string{"/owner/repo/", "/owner/repo.git/"} {
+		t.Run(path, func(t *testing.T) {
+			calls := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if r.URL.Path != "/owner/repo.git/info/refs" || r.URL.RawQuery != "service=git-receive-pack" {
+					t.Errorf("request URL = %s, want /owner/repo.git/info/refs?service=git-receive-pack", r.URL)
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+				w.Header().Set("Content-Type", "application/x-git-receive-pack-advertisement")
+			}))
+			defer srv.Close()
+			g := NewGitHub(Credential{Secret: "secret", APIBaseURL: srv.URL})
+			if err := g.CheckPushAccess(context.Background(), srv.URL+path); err != nil {
+				t.Fatal(err)
+			}
+			if calls != 1 {
+				t.Fatalf("sent %d requests, want 1", calls)
+			}
+		})
+	}
+}
+
 func TestPushPreflightNeverContactsAnUntrustedOrigin(t *testing.T) {
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; w.WriteHeader(200) }))
@@ -44,7 +69,8 @@ func TestPushPreflightNeverContactsAnUntrustedOrigin(t *testing.T) {
 			t.Fatalf("accepted untrusted origin with base %q", base)
 		}
 	}
-	for _, path := range []string{"/acme/repo.git?x=1", "/acme/repo.git#fragment", "/acme/../repo.git", "/acme/%2fother.git"} {
+	for _, path := range []string{"/acme/repo.git?x=1", "/acme/repo.git#fragment", "/acme/../repo.git", "/acme/%2fother.git",
+		"/acme/repo//", "/acme/repo.git//", "/acme/repo/extra/", "//acme/repo/", "/acme/./", "/acme/../"} {
 		if err := NewGitHub(Credential{Secret: "secret", APIBaseURL: srv.URL}).CheckPushAccess(context.Background(), srv.URL+path); err == nil {
 			t.Fatalf("accepted %s", path)
 		}

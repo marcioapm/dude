@@ -247,7 +247,7 @@ func (g *GitHub) CheckPushAccess(ctx context.Context, repository string) error {
 	if !localGit && (clone.Scheme != base.Scheme || !strings.EqualFold(clone.Host, base.Host)) {
 		return fmt.Errorf("repository origin does not match the configured GitHub origin")
 	}
-	slug := strings.TrimSuffix(strings.TrimPrefix(clone.Path, "/"), ".git")
+	slug := strings.TrimSuffix(strings.TrimSuffix(strings.TrimPrefix(clone.Path, "/"), "/"), ".git")
 	if !regexp.MustCompile(`^[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+$`).MatchString(slug) || strings.HasSuffix(slug, "/.") || strings.HasSuffix(slug, "/..") {
 		return fmt.Errorf("invalid GitHub repository path")
 	}
