@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -141,19 +142,36 @@ func TestAnImplementerRecordsWorkItFoundAndSeesIt(t *testing.T) {
 // the person who hears of it and decides whether it is worth doing.
 func TestWorkAnAgentFindsInheritsItsKeylessPersonOwner(t *testing.T) {
 	f := setup(t)
-	mustExec(t, f.owner, `INSERT INTO people (id, organization_id, name) VALUES ($1, $2, 'Ana')`, "per_ana_"+f.org, f.org)
-	mustExec(t, f.owner, `INSERT INTO task_people (task_id, person_id, organization_id, position) VALUES ($1, $2, $3, 0)`, f.item, "per_ana_"+f.org, f.org)
+	// A removed member first, then an owner whose id sorts after the
+	// remaining member's: only the first active person by position passes on.
+	owner, member, removed := "per_z_owner_"+f.org, "per_a_member_"+f.org, "per_0_removed_"+f.org
+	mustExec(t, f.owner, `INSERT INTO people (id, organization_id, name, removed_at) VALUES ($1, $2, 'Gone', now())`, removed, f.org)
+	mustExec(t, f.owner, `INSERT INTO people (id, organization_id, name) VALUES ($1, $3, 'Zoe'), ($2, $3, 'Abe')`, owner, member, f.org)
+	mustExec(t, f.owner, `INSERT INTO task_people (task_id, person_id, organization_id, position)
+		VALUES ($1, $2, $5, 0), ($1, $3, $5, 3), ($1, $4, $5, 8)`, f.item, removed, owner, member, f.org)
 	token := f.run(t, "run_found", "implementer", "running")
 	if status, out := f.post(t, token, "create_task", `{"title":"Found on the way","goal":"why"}`); status != 200 {
 		t.Fatalf("create: %d %v", status, out)
 	}
-	var owner string
-	if err := f.owner.QueryRow(context.Background(), `SELECT tp.person_id FROM tasks t JOIN task_people tp ON tp.task_id = t.id
-		WHERE t.project_id = $1 AND t.number = 2`, f.project).Scan(&owner); err != nil {
+	rows, err := f.owner.Query(context.Background(), `SELECT tp.person_id, tp.position FROM tasks t JOIN task_people tp ON tp.task_id = t.id
+		WHERE t.project_id = $1 AND t.number = 2 ORDER BY tp.position, tp.person_id`, f.project)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if owner != "per_ana_"+f.org {
-		t.Errorf("owned by %q, want the parent task's owner", owner)
+	var got []string
+	for rows.Next() {
+		var person string
+		var position int
+		if err := rows.Scan(&person, &position); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, fmt.Sprintf("%s@%d", person, position))
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{owner + "@0"}; !slices.Equal(got, want) {
+		t.Errorf("child's people %v, want %v", got, want)
 	}
 	var keys int
 	var legacyOwner *string
