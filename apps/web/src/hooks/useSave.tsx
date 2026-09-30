@@ -153,7 +153,8 @@ export function FormDialog(props: FormDialogProps) {
               if (!document || e.key !== "Enter" || e.ctrlKey || e.metaKey || e.nativeEvent.isComposing) return;
               if (!(e.target instanceof HTMLInputElement)) return;
               e.preventDefault();
-              const fields = [...e.currentTarget.querySelectorAll<HTMLElement>("input, textarea, select")]
+              // A Markdown field in Preview is its focusable preview panel.
+              const fields = [...e.currentTarget.querySelectorAll<HTMLElement>('input, textarea, select, [role=tabpanel][tabindex="0"]')]
                 .filter((f) => !(f as HTMLInputElement).disabled && f.offsetParent !== null);
               fields[fields.indexOf(e.target) + 1]?.focus();
             }}

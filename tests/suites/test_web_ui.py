@@ -248,6 +248,11 @@ def test_enter_in_the_title_moves_to_the_goal_and_does_not_create(
     expect(title).to_have_value("Not yet")
     items = client.get("/v1/tasks", params={"projectId": forge_project["id"]}).json()["tasks"]
     assert [i for i in items if i["title"] == "Not yet"] == []
+    # With the goal in Preview, Enter moves to its preview, not past it.
+    page.get_by_role("tablist", name="Goal view").get_by_role("tab", name="Preview").click()
+    title.focus()
+    title.press("Enter")
+    expect(page.get_by_test_id("task-goal-preview")).to_be_focused()
     assert console_errors == []
 
 
