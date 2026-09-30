@@ -311,12 +311,23 @@ type Server struct {
 	// request is answered first, as lux answers the POST before the
 	// agent's records arrive.
 	InputGate chan struct{}
+
+	// closed ends everything the fake waits on in the background (Close).
+	closed    chan struct{}
+	closeOnce sync.Once
+}
+
+// Close is the fake lux shutting down: work held on InputGate is dropped,
+// so no goroutine outlives the test that served it.
+func (s *Server) Close() {
+	s.closeOnce.Do(func() { close(s.closed) })
 }
 
 // New serves a fake lux. With decide nil, every Run plays dude's scripted
 // agent (fakeagent), as a real lux running lux-fake would.
 func New(repo, key string, decide func(map[string]any) Behaviour) *Server {
-	s := &Server{runs: map[string]*Run{}, byKey: map[string]string{}, Decide: decide, Repo: repo, Key: key}
+	s := &Server{runs: map[string]*Run{}, byKey: map[string]string{}, Decide: decide, Repo: repo, Key: key,
+		closed: make(chan struct{})}
 	if decide == nil {
 		s.Decide = s.scripted
 	}
@@ -916,7 +927,11 @@ func (s *Server) input(w http.ResponseWriter, r *http.Request) {
 	if !run.busy {
 		if gate := s.InputGate; gate != nil {
 			go func() {
-				<-gate
+				select {
+				case <-gate:
+				case <-s.closed:
+					return
+				}
 				s.mu.Lock()
 				defer s.mu.Unlock()
 				if !run.busy {
