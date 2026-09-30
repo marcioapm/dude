@@ -304,6 +304,23 @@ describe("the pieces around a document being written", () => {
     expect(task.slice(4)).toEqual([["- [ ] item", "a criterion"], ["## Heading", "a section"], ["~~gone~~", "struck through"]]);
   });
 
+  test("an extra for a shortcut's source gives that row its meaning and keeps its keys, in one row", () => {
+    const warnings: unknown[] = [];
+    const error = console.error;
+    console.error = (...args: unknown[]) => void warnings.push(args);
+    try {
+      const h = renderToStaticMarkup(<MarkdownCheatsheet extra={[["**bold**", "strong text"]]} />);
+      const rows = [...h.matchAll(/<dt>(.*?)<\/dt><dd>(.*?)<\/dd>/g)].map((m) => [m[1]!.replace(/<[^>]+>/g, ""), m[2]!]);
+      expect(rows.map(([source]) => source)).toEqual(["**bold**", "_italic_", "[text](url)", "`code`", "- [ ] item", "## Heading"]);
+      const [, bold] = rows[0]!;
+      expect(bold.replace(/<[^>]+>/g, "")).toBe(`strong text ${modKey()}B`);
+      expect([...bold.matchAll(/<kbd[^>]*>([^<]+)<\/kbd>/g)].map((m) => m[1])).toEqual([modKey(), "B"]);
+    } finally {
+      console.error = error;
+    }
+    expect(warnings).toEqual([]);
+  });
+
   test("a key hint is its keys and what they do", () => {
     const h = renderToStaticMarkup(<KeyHint keys={["mod", "Enter"]}>create</KeyHint>);
     expect(h.replace(/<[^>]+>/g, "")).toBe(`${modKey()}Entercreate`);
