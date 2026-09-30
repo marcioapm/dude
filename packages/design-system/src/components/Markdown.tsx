@@ -9,7 +9,12 @@ import styles from "./Markdown.module.css";
 export type MarkdownVariant = "message" | "document" | "prompt";
 
 export interface MarkdownProps extends Omit<HTMLAttributes<HTMLDivElement>, "children"> {
-  readonly source: string;
+  /**
+   * The Markdown. A list is sections of one document, each parsed on its
+   * own — an unclosed fence in one cannot swallow the next — and rendered
+   * as one, in one rhythm.
+   */
+  readonly source: string | ReadonlyArray<string>;
   /**
    * `message` (default): a chat turn. One block reads at chat
    * leading; more than one switches to the long-form rhythm (prose leading,
@@ -35,6 +40,20 @@ export interface MarkdownProps extends Omit<HTMLAttributes<HTMLDivElement>, "chi
   readonly unmeasured?: boolean | undefined;
   /** Document variant only: show a heading outline beside the text. */
   readonly outline?: boolean | undefined;
+  /**
+   * The document's name, as its first heading (an `h1`), plain text: a
+   * title a person typed is not Markdown. Blank, `untitled` stands in,
+   * muted.
+   */
+  readonly title?: string | undefined;
+  /** In place of a blank `title`. Default "Untitled". */
+  readonly untitled?: string | undefined;
+  /**
+   * A single newline is a line break (`parseMarkdown`'s `breaks`). On where
+   * a person writes the Markdown (a task, a prompt, a steer); off, the
+   * default, for agent output.
+   */
+  readonly breaks?: boolean | undefined;
   /** Where links open. Defaults to a new tab with `rel="noopener noreferrer"`. */
   readonly linkTarget?: "_blank" | "_self" | undefined;
   /** Render fenced ```diff / ```patch blocks with DiffView (default true). */
@@ -53,19 +72,33 @@ export function Markdown({
   source,
   variant = "message",
   streaming,
+  breaks,
   unmeasured,
   outline,
+  title,
+  untitled = "Untitled",
   linkTarget = "_blank",
   diffs = true,
   className,
   ...rest
 }: MarkdownProps) {
-  const blocks = useMemo(() => parseMarkdown(source, { streaming: streaming ?? false }), [source, streaming]);
+  const blocks = useMemo(
+    () => {
+      const sections = typeof source === "string" ? [source] : source;
+      const usedIds = new Map<string, number>();
+      // Only the last section can still be arriving.
+      return sections.flatMap((section, i) => parseMarkdown(section, { streaming: (streaming ?? false) && i === sections.length - 1, breaks, usedIds }));
+    },
+    [source, streaming, breaks],
+  );
   const headings = useMemo(() => (outline && variant === "document" ? buildOutline(blocks) : []), [blocks, outline, variant]);
   const ctx: RenderCtx = { linkTarget, diffs, streaming: streaming === true, variables: variant === "prompt" };
 
   const body = (
     <div className={cx(styles["root"], variant === "message" ? styles["message"] : styles[variant], variant === "message" && !streaming && blocks.length > 1 && styles["long"], streaming && styles["streaming"], unmeasured && styles["unmeasured"], className)} {...rest}>
+      {title !== undefined ? (
+        <h1 className={cx(styles["h"], styles["h1"], !title.trim() && styles["untitled"])}>{title.trim() || untitled}</h1>
+      ) : null}
       {blocks.length === 0 && streaming ? (
         <p className={styles["p"]}>
           <Caret />

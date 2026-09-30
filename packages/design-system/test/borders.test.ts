@@ -15,6 +15,14 @@ import { declarations, ROOT, stylesheets } from "./stylesheets.ts";
 const ALLOWED: Record<string, Record<string, string>> = {
   "packages/design-system/src/primitives/Input.module.css": { "*": "a field's edge" },
   "packages/design-system/src/primitives/Textarea.module.css": { "*": "a field's edge" },
+  "packages/design-system/src/primitives/MarkdownEditor.module.css": {
+    ".frame": "a field's edge",
+    ".frame:hover": "a field's edge",
+    ".frame:focus-within": "focus",
+    '.frame[data-invalid="true"]': "a field's edge, invalid",
+    '.frame[data-invalid="true"]:focus-within': "focus, invalid",
+    '.frame[data-locked="true"], .frame[data-locked="true"]:hover': "a field's edge, fixed",
+  },
   "packages/design-system/src/primitives/Select.module.css": { "*": "a field's edge" },
   "packages/design-system/src/primitives/Checkbox.module.css": { "*": "a checkbox is its outline" },
   "packages/design-system/src/components/ChatComposer.module.css": { ".field": "a field's edge", ".field:hover": "a field's edge", ".field:focus-within": "focus" },

@@ -240,6 +240,26 @@ describe("ChatMessage gutter time and actions", () => {
   });
 });
 
+describe("ChatMessage line breaks", () => {
+  const text = "first line\nsecond line";
+
+  test("a person's turn, a steer or an answer, breaks where they pressed Enter", () => {
+    for (const h of [
+      html(<ChatMessage role="human" content={text} />),
+      html(<ChatMessage role="implementer" intent="steer" content={text} />),
+      html(<ChatMessage role="implementer" intent="answer" content={text} />),
+    ]) {
+      expect(h).toContain("<p>first line<br/>second line</p>");
+    }
+  });
+
+  test("an agent's turn keeps the standard soft break", () => {
+    const h = html(<ChatMessage role="implementer" content={text} />);
+    expect(h).toContain("<p>first line second line</p>");
+    expect(h).not.toContain("<br/>");
+  });
+});
+
 describe("Icon stroke width", () => {
   const stroke = (size?: number | string) => /stroke-width="([\d.]+)"/.exec(html(<Icon name="check" size={size} />))?.[1];
 

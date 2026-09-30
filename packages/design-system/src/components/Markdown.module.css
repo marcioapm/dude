@@ -76,6 +76,10 @@
 .document .h1 {
   font-size: 1.618em;
 }
+/* A blank title's stand-in: there is no name yet. */
+.h.untitled {
+  color: var(--ds-color-text-muted);
+}
 .document .h2 {
   font-size: 1.462em;
 }

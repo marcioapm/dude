@@ -6,7 +6,10 @@ export interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 
   readonly label?: string | undefined;
   readonly hint?: string | undefined;
   readonly error?: string | undefined;
-  readonly size?: "sm" | "md" | undefined;
+  /** `title`: a document's heading that is still a field — 44px, text-xl, semibold. */
+  readonly size?: "sm" | "md" | "title" | undefined;
+  /** After the label, muted: "required", "optional". */
+  readonly labelNote?: string | undefined;
   /** Monospace text — for IDs, SHAs, paths, commands. */
   readonly mono?: boolean | undefined;
   readonly leading?: ReactNode;
@@ -18,7 +21,7 @@ export interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 
  * has the same anatomy. Error text is tied to the input via aria-describedby.
  */
 export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
-  { label, hint, error, size = "md", mono, leading, trailing, className, id, disabled, ...rest },
+  { label, labelNote, hint, error, size = "md", mono, leading, trailing, className, id, disabled, ...rest },
   ref,
 ) {
   const autoId = useId();
@@ -30,10 +33,11 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
       {label ? (
         <label className={styles["label"]} htmlFor={inputId}>
           {label}
+          {labelNote ? <span className={styles["labelNote"]}> · {labelNote}</span> : null}
         </label>
       ) : null}
       <div
-        className={cx(styles["control"], size === "sm" && styles["sm"])}
+        className={cx(styles["control"], size !== "md" && styles[size])}
         data-invalid={error ? "true" : undefined}
         data-disabled={disabled ? "true" : undefined}
       >

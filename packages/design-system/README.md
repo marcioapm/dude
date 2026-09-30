@@ -173,7 +173,7 @@ gallery for every value.
 | Diff | `--ds-diff-{add,del}-{bg,bg-strong,fg}`, `--ds-diff-hunk-{bg,fg}` | Softer than the tones; read for minutes. |
 | Merged | `--ds-merged-{fg,bg}` | GitHub's violet, for a merged pull request and nothing else. Not a tone. |
 | Elevation | `--ds-shadow-1/2/3` | Includes the hairline ring. Theme-dependent. |
-| Type | `--ds-font-sans/mono`, `--ds-text-2xs…4xl`, `--ds-text-nav`, `--ds-text-prose`, `--ds-text-mono`, `--ds-weight-*`, `--ds-leading-*`, `--ds-tracking-*` | UI body `text-md` 15px (14 compact); `sm`/`xs` 13/12 and `nav` 14 in both densities; prose 16px (15 compact). Transcript text runs at `leading-chat` 1.375 (22px at 16px); documents and multi-block Markdown at `leading-prose` 1.5; headings at `leading-tight` 1.3. `2xs` 11px for small-caps labels only; `mono` 13px. Headings `lg…4xl` are 16/20/22/26/34. |
+| Type | `--ds-font-sans/mono`, `--ds-text-2xs…4xl`, `--ds-text-nav`, `--ds-text-prose`, `--ds-text-mono`, `--ds-weight-*`, `--ds-leading-*`, `--ds-tracking-*` | UI body `text-md` 15px (14 compact); `sm`/`xs` 13/12 and `nav` 14 in both densities; prose 16px (15 compact). Transcript text runs at `leading-chat` 1.375 (22px at 16px); documents and multi-block Markdown at `leading-prose` 1.5; headings at `leading-tight` 1.3. `2xs` 11px for small-caps labels, badges and key caps only; `mono` 13px. Headings `lg…4xl` are 16/20/22/26/34. |
 | Space | `--ds-space-0…64`, `--ds-space-{main-pad,card-pad,chat-pad-x,chat-gap,chat-avatar-gap,panel-gap,tree-indent,nav-row-gap}` | 4px grid plus 2 and 6. The named spaces are layout: main pane 24, board card 12, chat turn 16 across and 17 between speakers, avatar gap 16 (so transcript text starts at 16 + 40 + 16 = 72px), panel gap 24, tree indent 16, 2 between sidebar rows. |
 | Radius | `--ds-radius-{none,mark,control,float,full}`, `--ds-radius-face-{agent,project}` | Roles, not sizes: structure `none`, inline marks `mark` 3, controls `control` 6 (5 compact), floats `float` 10, people and dots `full`. Agent and project faces take a share of their size (28%, 22%). |
 | Size | `--ds-size-control-sm/md/lg`, `--ds-size-row-compact/default/comfortable`, `--ds-size-avatar-{xs,sm,md,lg,chat}`, `--ds-size-badge-{sm,md}`, `--ds-size-chip`, `--ds-size-icon-*` | Controls 28/32/36, rows 28/32/40. Avatars 16/20/24/32 and 40 for the transcript's own. Badges 16/18, chips 22, in both densities. |
@@ -555,10 +555,70 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - **Textarea** has the `Input` anatomy (label, hint, error,
   `aria-describedby`) and grows from `rows` to `maxRows` (3 → 12) then
   scrolls; never a resize handle. `mono` for commands and config.
+- **MarkdownEditor** is for writing one Markdown document that is read
+  rendered — a task's goal, its acceptance criteria. A note, a command or
+  a reason stays a `Textarea`. It has Textarea's anatomy (label, hint,
+  error, `aria-describedby`, `maxLength`, the caller's `data-testid` on the
+  textarea), except that the hint sits beside the label, not under the
+  field — the frame's footer is under it; the error stays under the frame.
+  Empty, Preview says "Nothing to preview yet." In Preview the formatting
+  buttons hide (and leave no band when they had wrapped). The field is a
+  frame whose edge is its one line: a Write / Preview `Segmented tabs
+  size="toolbar"` (tablist and tabpanels, one Tab stop, ← → Home End;
+  Ctrl/⌘+Shift+P), and quiet
+  formatting on the chrome shade — no rule under it — then the source in
+  mono on the code pitch, then a footer: "Markdown", the caller's `summary`
+  and `notice`, and `n / max` (attention past 90%, danger over).
+  - **Grows, never scrolls.** The source grows from `minRows` with its
+    content; the dialog or page scrolls. No resize handle.
+  - **`fill` takes the room that is left.** In a flex column — a
+    `FormStack fill` in a `Dialog size="document"` — the frame flexes into
+    the height its siblings leave, with `minRows` as the floor below which
+    the column scrolls instead. Content taller than that still grows it, and
+    the column scrolls. One field per stack fills (a task's Goal); the
+    others keep a modest `minRows`, so the empty document opens with no
+    scroll.
+  - **Preview is the safe path, and reads as the text will be read.** It is
+    `Markdown unmeasured` in the caller's `variant` (default `message`: the
+    long rhythm, 1.25em above headings) — the variant of the screen that
+    shows it — and nothing else: no HTML string, no second renderer. It
+    keeps at least the source's height, so toggling does not jump.
+    `document` is for an editor whose output is published as an artifact.
+    `breaks` passes through to it: a person writes here, so it is on
+    wherever the rendered text is theirs (a task's goal and criteria).
+  - **Edits stay undoable.** Ctrl/⌘+B I K E and the buttons wrap the
+    selection (a placeholder, selected, when there is none); Enter
+    continues a list (`- `, `2.` after `1.`, `- [ ] `) and ends it on an
+    empty item. All of it goes through `execCommand("insertText")`, with
+    `setRangeText` where that is gone, so Undo takes it back.
+  - **Locked opens in Preview.** `locked` / `disabled`: Write is disabled
+    and the caller's `hint` says why. Narrow, Quote is the first button to go.
+- **A dialog that holds writing asks before losing it.** When more than a
+  few words would be lost, every way out — Escape, ×, Cancel, a click
+  outside — opens a `DiscardConfirm` (a `Dialog size="sm" tone="danger"`):
+  the question ("Discard this task?"), what would be lost ("You have
+  written 195 words…" when creating; "Your changes haven't been saved."
+  when editing), **Keep writing** (`quiet`, focused on open) and
+  **Discard** (`danger solid`, inside its own confirmation). Saving never
+  asks. The app decides the threshold (dude's: more than 20 words in
+  fields that changed).
+- **Segmented or Tabs.** `Segmented` switches between two or three views
+  of one thing inside a bar with other controls (the session bar, the
+  editor's Write / Preview; `size="toolbar"` in a bar of `sm` buttons).
+  With `tabs="<id>"` it is a tablist whose tabs control
+  `<id>-<value>-panel`s the caller renders: one Tab stop, ← → Home End.
+  `Tabs` is for a page's sections (underline). Do not use `TabList
+  variant="segmented"` for new work.
+- **Key hints** are `KeyHint keys={["mod", "Enter"]}` (`Kbd` for one cap;
+  `mod` is ⌘ on Apple devices, Ctrl elsewhere), muted, at a dialog's
+  `footerStart`. Help beside a form is a `HelpList` and, for Markdown,
+  `MarkdownCheatsheet`.
 - **Breadcrumb** says where you are: Project › Epic › KEY, each crumb but
   the last a link or button, the last `aria-current`. Middle crumbs elide in
   the middle (`elideMiddle`) so head and tail survive; the last never does.
   It replaces a Back button in the task and transcript headers.
+  `size="sm"` with `current={false}` is a dialog's `context`: where the
+  thing sits, as a plain path — no links, no `aria-current`, no landmark.
 - **FindingRow** is the only way a review finding is drawn: severity as
   glyph + word in its tone (`FINDING_SEVERITY_SPECS`, keyed on the domain
   union), category, title, `file:line` in mono, and the status as a neutral
@@ -655,6 +715,18 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   as open — an unclosed fence is still a code block, an open `**` is still
   bold — so nothing flickers when the closer lands. Finished messages parse
   strictly.
+- `breaks` (`parseMarkdown`'s `breaks` option) renders a single newline
+  inside a paragraph, list item or quote as a line break, as
+  the person who pressed Enter meant, rather than CommonMark's space. Code
+  blocks, code spans and headings are unaffected; the two-space and `\`
+  hard breaks work either way. **The rule: on where a person writes the
+  Markdown, off for agent output.** On: a task's goal and criteria (the
+  editor's Preview, Read, the task screen), a person's `ChatMessage` (it
+  keys on its own resolved `kind === "human"`: prompts, steers, answers),
+  prompts (`MarkdownDocument breaks`, `PromptHistory`). Off (the default):
+  agent turns, `ThinkingBlock`, `QuestionCard`, `ArtifactPreview`,
+  `FindingRow` and anything else a model wrote, which is written to the
+  standard.
 - `variant="message"` (default) is a chat turn. One block sits on the chat
   line (16/22). Two or more switch to long-form rhythm: 1.5 leading, 0.75em
   between blocks, headings 1.25em above and one step smaller than in a
@@ -722,7 +794,7 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 17) than comfortable.
 
 - Body text 15px (14 compact); captions 12–13px; nothing smaller than 11px
-  and only in small-caps labels and badges.
+  and only in small-caps labels, badges and key caps.
 - Rows 32px by default. Use `row-compact` (28px) for logs, event streams and
   anything the operator scans rather than reads. Use `row-comfortable` (40px)
   only for rows with two lines of content — an `EntityLine` with a detail
@@ -733,6 +805,38 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
   default control, so it follows the density; `row-compact` and `control-sm`
   hold in both and are for what one scans or for toolbars.
 - One `primary` button per view. Most actions are `secondary` or `quiet`.
+- Dialogs are for decisions and small forms — and for writing one
+  document: `Dialog size="document"` is a fixed min(1120, 100vw − 48) ×
+  min(900, 100vh − 48), so it never resizes while its fields grow, and the
+  whole screen, square, under 640px. `aside` puts a 300px column on the
+  chrome shade beside the body (where the thing sits, help for writing
+  it), each scrolling on its own; under 960px it follows the body in one
+  scroll. `context` puts where the thing sits above the title. Settings
+  and anything browsed stay screens. The document's title field is
+  `Input size="title"` — `labelNote="required"` says it after the label.
+  The fields stack in `FormStack fill` (the column's width, `space-panel-gap`
+  apart, and the column's height, so a `MarkdownEditor fill` in it takes
+  what the other fields leave; under 960px the writing takes at least the
+  whole view before the aside follows), and the document's insets are
+  `space-panel-gap` too, so compact
+  tightens them. Key hints go in `footerStart`, and hide under 640px, where
+  there is rarely a keyboard; a failed save shows there instead, at every
+  width. In a document, Ctrl/⌘+Enter submits and plain Enter never does.
+  `headerActions` puts quiet actions before Close — a document's **Read**
+  (`book-open`, "Back to writing" with `edit` while reading), whose key is
+  Ctrl/⌘+Shift+R (browsers let a page take it; it is named in
+  `footerStart`). `reading` shows the whole thing as one document in place
+  of the writing and the aside: a centred column at `measure-document`,
+  scrolling on its own, the footer kept (saving from Read is allowed).
+  Build it as one `Markdown`, in the variant the text is read in (a task's:
+  `message`, as its screen and its Preview show it; the column sets the
+  width, not the variant), with `title` (the name as
+  its `h1`, plain text; blank reads `untitled`, muted) and `source` as a
+  list of sections, each parsed on its own so an open fence in one cannot
+  swallow the next. The writing stays laid out, hidden and inert,
+  underneath, so its scroll, its editors' modes and selections survive, and
+  focus returns to the field that had it. Escape while reading calls
+  `onCloseReading` — back to writing, never closing or asking to discard.
 - Cards do not nest. A card's header and footer are told from its body by
   shade (`chrome`), not a rule.
 - Empty states are one line of text and a hint, never an illustration.
@@ -868,6 +972,9 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | `<RowMenu items={[…, { id: "delete", tone: "danger", disabled, disabledReason }]} />` | a row of icon buttons, or a greyed item that does not say why |
 | `<FindingRow severity="blocking" status="resolved" … />` | `f.severity.toUpperCase()` in red, struck through when done |
 | `<Breadcrumb items={[project, epic, key]} />` in the header | a ghost `Back` button under the content |
+| `<MarkdownEditor label="Goal" value={goal} onChange={setGoal} fill breaks minRows={4} maxLength={65_536} />` | a `Textarea` for Markdown with a hand-rolled preview beside it, or a `minRows={12}` that scrolls the empty dialog |
+| `<Dialog size="document" aside={…} context={…}>` with a `DiscardConfirm` for writing a task | a 400px dialog that loses three paragraphs to a stray Escape |
+| `<Dialog reading={<Markdown title={title} breaks source={[goal, "## Acceptance criteria", list]} />}>`, in the variant the task screen reads it in | a second modal over the first to show the same text, one string joined from the parts, or `variant="document"` spacing on text that is read as a message |
 | a settings page's sub-pages as `items` of its `SettingsNavItem` | `Tabs` inside a settings page |
 | `<SearchResultRow rank={1} lead={{ type: "memory" }} facts={["words and meaning"]} />` | a score chip and a progress bar on every result |
 | `<EntityLine lead={face} name={…} detail={…} />`, `<AuthorLine author={…} />` | a face and two spans styled in the app's CSS |
@@ -877,12 +984,15 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 
 ## Components
 
-`src/primitives/` — Button, IconButton, Input, Textarea, Select, Checkbox,
+`src/primitives/` — Button, IconButton, Input (`size="title"` for a
+document's heading), Textarea, MarkdownEditor (`fill`), Select, Checkbox,
 Badge, Card, Table (THead/TBody/Tr/Th/Td/TableEmpty), Tabs (underline for a
 page, segmented in a toolbar; a tab can carry a count, a trailing mark and
-a `tooltip`), Dialog, Toast,
-Tooltip, RowMenu (+ `rowMenuOpeners`), Skeleton/SkeletonLines/Spinner,
-EmptyState, ScrollArea.
+a `tooltip`), Dialog (`size=
+"document"` with `aside`, `context`, `headerActions` and `reading`), DiscardConfirm, Toast, Tooltip,
+RowMenu (+ `rowMenuOpeners`), Skeleton/SkeletonLines/Spinner, EmptyState,
+ScrollArea, FormStack (`fill`), Kbd/KeyHint (+ `modKey`)/HelpList/
+MarkdownCheatsheet.
 
 `src/components/` — the factory vocabulary:
 
@@ -954,6 +1064,8 @@ EmptyState, ScrollArea.
   vs steer (interrupts a running turn) vs prompt, visibly different.
 - **Markdown** — untrusted Markdown to React from a typed AST; streaming-safe;
   `message` and `document` variants; ```` ```diff ```` hands off to `DiffView`.
+  `title` renders a plain-text name as the first `h1` (blank: `untitled`,
+  muted); `source` may be a list of sections, each parsed on its own.
   `parseMarkdown` / `safeUrl` are exported for consumers that need the AST.
 
 `src/components/` — navigation (the other half of the screen):
@@ -984,6 +1096,9 @@ EmptyState, ScrollArea.
 `src/components/` — management:
 
 - **Breadcrumb** — Project › Epic › KEY; links or buttons, middle-elided.
+- **Segmented** (with `ScreenHeader`) — two or three views of one thing;
+  `tabs="<id>"` makes it a tablist; `size="toolbar"` sits level with `sm`
+  buttons.
 - **FindingRow / FindingGroup** — a review finding, and the open-first list
   of them; `FINDING_SEVERITY_SPECS` / `FINDING_STATUS_SPECS` are the
   vocabulary.

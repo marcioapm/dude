@@ -1,12 +1,16 @@
 import * as RadixTooltip from "@radix-ui/react-tooltip";
 import { createContext, useContext, useRef, useState, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
+import { modKey } from "../util/keys.ts";
 import styles from "./Tooltip.module.css";
 
 export interface TooltipProps {
   readonly content: ReactNode;
-  /** Keyboard shortcut hint shown after the content. */
-  readonly shortcut?: string | undefined;
+  /**
+   * Keyboard shortcut hint shown after the content. Keys as a list are
+   * drawn as caps, as `KeyHint` draws them (`["mod", "B"]`: ⌘ or Ctrl, B).
+   */
+  readonly shortcut?: string | ReadonlyArray<string> | undefined;
   readonly side?: "top" | "right" | "bottom" | "left" | undefined;
   readonly mono?: boolean | undefined;
   readonly delay?: number | undefined;
@@ -62,7 +66,15 @@ export function Tooltip({ content, shortcut, side = "top", mono, delay, keepOnPr
       <RadixTooltip.Portal>
         <RadixTooltip.Content className={cx(styles["content"], mono && styles["mono"])} side={side} sideOffset={4}>
           {content}
-          {shortcut ? <kbd className={styles["kbd"]}>{shortcut}</kbd> : null}
+          {typeof shortcut === "string" ? (
+            <kbd className={styles["kbd"]}>{shortcut}</kbd>
+          ) : shortcut ? (
+            <span className={styles["keys"]}>
+              {shortcut.map((k, i) => (
+                <kbd key={i} className={styles["cap"]}>{k === "mod" ? modKey() : k}</kbd>
+              ))}
+            </span>
+          ) : null}
           <RadixTooltip.Arrow className={styles["arrow"]} width={8} height={4} />
         </RadixTooltip.Content>
       </RadixTooltip.Portal>

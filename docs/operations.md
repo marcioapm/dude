@@ -290,6 +290,7 @@ does not refuse to start.
 | `agent.image` | `DUDE_AGENT_IMAGE` | `localhost/dude-runtime:dev` | orchestrator | Image for agents when a project names none: the operator's own, pinned by digest. |
 | `agent.timeout` | `DUDE_AGENT_TIMEOUT` | none | orchestrator | A limit on a Run's running time, passed to lux. |
 | `agent.egress` | `DUDE_AGENT_EGRESS` | none | orchestrator | Hosts agents may reach besides `llm.url`'s host; `*` turns egress filtering off. With neither this nor `llm.url`, egress is unrestricted. |
+| `agent.nested_containers` | `DUDE_AGENT_NESTED_CONTAINERS` | `false` | orchestrator | Agents may run containers themselves (rootless Docker or Podman in the Run), for test suites that start their own services. Sets lux's `sandbox.nestedContainers` on every agent Run, so lux places them only on hosts whose runner offers nested containers: with none, Runs wait for one. The agent image must carry the engine. Preview servers are unaffected. |
 | `registry.auth` | `DUDE_REGISTRY_AUTH` | `none` | orchestrator | How lux logs in to pull agent images: `none`, `ecr` or `static`. See [Private agent images](#private-agent-images). |
 | `registry.host` | `DUDE_REGISTRY` | none | orchestrator | `static` only: the registry host, e.g. `ghcr.io`. |
 | `registry.credential` | `DUDE_REGISTRY_CREDENTIAL` | none | orchestrator | `static` only: `user:password` for `registry.host`. **Secret.** |
