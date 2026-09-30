@@ -3173,6 +3173,34 @@ func TestUnreadableCheckRunsAreRecordedAndClearedOnce(t *testing.T) {
 	}
 }
 
+// A headerless 403 saying "abuse detection" is GitHub's secondary limit:
+// the sync fails, to be tried again, and records no diagnostic.
+func TestAnAbuseDetectionLimitOnCheckRunsRecordsNoDiagnostic(t *testing.T) {
+	w := newWorld(t)
+	w.gh.SetChecks("pending")
+	wi := w.reviewing()
+	w.sync()
+	before := len(w.checksEvents(wi))
+	var prID string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM pull_requests WHERE task_id = $1`, wi).Scan(&prID)
+
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.CheckRunsForbiddenMessage = "You have triggered an abuse detection mechanism"
+	})
+	err := w.prs.Sync(context.Background(), w.org, prID)
+	if !forge.Transient(err) {
+		t.Fatalf("sync = %v, want a transient failure", err)
+	}
+	w.sync()
+	rollup, list := w.storedChecks(wi)
+	if rollup != forge.ChecksPending || forge.CheckDiagnostic(list) != "" {
+		t.Fatalf("stored %s %+v, want pending with no diagnostic", rollup, list)
+	}
+	if n := len(w.checksEvents(wi)); n != before {
+		t.Errorf("%d checks events for a rate limit, want none", n-before)
+	}
+}
+
 // A ready pull request whose check runs become unreadable is ready no
 // more, and merging it is refused with the reason; there is nothing to
 // re-run.
@@ -3187,8 +3215,9 @@ func TestUnreadableCheckRunsBlockAMergeAndSayWhy(t *testing.T) {
 	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM pull_requests WHERE task_id = $1`, wi).Scan(&prID)
 	me := w.person("owner")
 	code, body := w.callAs(me, "/internal/pull-requests/"+prID+"/merge", map[string]any{})
-	if msg := fmt.Sprint(body); code != 409 || !strings.Contains(msg, "Checks: Read") || strings.Contains(msg, "running") {
-		t.Fatalf("merging with check runs unreadable: %d %v", code, body)
+	msg, _ := body["error"].(map[string]any)["message"].(string)
+	if want := "not ready to merge: GitHub refused the check-runs read; check the token's Checks: Read permission and its repository/organization access (SSO, token approval)"; code != 409 || msg != want {
+		t.Fatalf("merging with check runs unreadable: %d %v, want 409 %q", code, body, want)
 	}
 	if code, _ := w.callAs(me, "/internal/pull-requests/"+prID+"/rerun-failed", map[string]any{}); code != 409 {
 		t.Errorf("re-running a diagnostic: %d", code)

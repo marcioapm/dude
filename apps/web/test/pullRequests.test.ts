@@ -15,6 +15,7 @@ const pr = (over: Partial<PullRequest> = {}): PullRequest => ({
   display: "ready", createdAt: "", updatedAt: "", ...over,
 });
 const check = (name: string, status: string, conclusion: string | null) => ({ name, status, conclusion });
+const refused = "GitHub refused the check-runs read; check the token's Checks: Read permission and its repository/organization access (SSO, token approval)";
 
 const event = (eventType: string, payload: Record<string, unknown>, actorId = "workflow"): PersistedEvent => ({
   eventId: "e", eventType, occurredAt: "2026-09-28T10:00:00Z", organizationId: "o", projectId: null, taskId: "t", runId: null,
@@ -35,13 +36,10 @@ describe("merging", () => {
     expect(mergeBlockedBy(pr({ display: "ci_running", checkState: "pending" }))).toBe("Blocked: checks pending");
     const denied = { ...check("GitHub check runs", "unavailable", ""), diagnostic: "check_runs_forbidden" };
     const unreadable = mergeBlockedBy(pr({ display: "ci_running", checkState: "pending", checks: [check("CodeRabbit", "completed", "success"), denied] }));
-    expect(unreadable).toContain("cannot read GitHub check runs");
-    expect(unreadable).toContain("Checks: Read");
-    expect(unreadable).not.toContain("running");
-    expect(unreadable).not.toContain("pending");
+    expect(unreadable).toBe(`Blocked: ${refused}`);
     // A real failure is said first, and the unreadable runs beside it.
     const both = mergeBlockedBy(pr({ display: "ci_red", checkState: "failing", checks: [check("lint", "completed", "failure"), denied] }));
-    expect(both).toStartWith("Blocked: lint failing, dude cannot read GitHub check runs");
+    expect(both).toBe(`Blocked: lint failing, ${refused}`);
   });
 });
 
@@ -70,7 +68,7 @@ describe("activity", () => {
   test("checks pending is not checks started; losing and regaining read access say so", () => {
     expect(pullRequestActivity(event("pull_request.checks_changed", { from: "passing", to: "pending" }), false)?.text).toBe("Checks pending on #41");
     expect(pullRequestActivity(event("pull_request.checks_changed", { from: "pending", to: "pending", diagnostic: "check_runs_forbidden" }), false)?.text)
-      .toBe("GitHub check runs on #41 cannot be read: access denied");
+      .toBe("GitHub refused the check-runs read on #41");
     expect(pullRequestActivity(event("pull_request.checks_changed", { from: "pending", to: "pending", fromDiagnostic: "check_runs_forbidden" }), false)?.text)
       .toBe("GitHub check runs on #41 can be read again");
     expect(pullRequestActivity(event("pull_request.checks_changed", { from: "pending", to: "passing", fromDiagnostic: "check_runs_forbidden" }), false)?.text)

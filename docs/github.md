@@ -61,9 +61,9 @@ A token verification check that can read `/user` does not establish code, workfl
 
 ### A pull request shows “CI pending” or “CI unavailable” while GitHub shows results
 
-**CI unavailable**, with the warning *Cannot read GitHub check runs (access denied)*, means GitHub answered 403 to the check-runs listing for the pull request's head. Check runs are how GitHub Actions and most CI apps report, so the checks dude shows are only what it could read, commonly commit statuses such as CodeRabbit's. dude keeps the pull request out of ready-to-merge and refuses to merge it, but wakes no fixer and re-runs nothing for this.
+**CI unavailable**, with the warning *GitHub refused the check-runs read; check the token's Checks: Read permission and its repository/organization access (SSO, token approval).*, means GitHub answered 403 to the check-runs listing for the pull request's head, without marking it as a rate limit. Check runs are how GitHub Actions and most CI apps report, so the checks dude shows are only what it could read, commonly commit statuses such as CodeRabbit's. dude keeps the pull request out of ready-to-merge and refuses to merge it, but wakes no fixer and re-runs nothing for this.
 
-Grant the token **Checks: Read** (classic PAT: `repo`), and check that the repository is selected, the owner still has access, and organization approval/SSO is complete. The next sync (a webhook, or the reconciler within 15 minutes) clears the warning and records it on the task. A rate limit is not reported this way: it fails the sync, which is retried.
+The 403 does not say why. A missing **Checks: Read** (classic PAT: `repo`) is the common cause, but SSO enforcement, organization token approval, a repository left out of the token's selection or the owner losing access answer the same way; check each. The next sync (a webhook, or the reconciler within 15 minutes) clears the warning and records it on the task. A rate limit is not reported this way, including GitHub's "abuse detection" secondary limit: it fails the sync, which is retried.
 
 **CI pending** with no warning means dude has no verdict on the head commit yet: checks queued or running, CI yet to register on a new push, or a run cancelled or waiting on approval. It does not claim that anything is running. Pending past the organization's patience asks a person.
 

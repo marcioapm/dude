@@ -208,7 +208,9 @@ func Classify(prior, current Status, feedback []Feedback, factoryLogins []string
 // factory merges only when a person says so; this is what a person is told.
 func Ready(s Status) bool { return len(Blockers(s)) == 0 }
 
-const checkRunsForbiddenBlocker = "GitHub check runs cannot be read: grant the token Checks: Read and check its repository and organization access"
+// A 403 without rate-limit markers is also what SSO enforcement and pending
+// organization token approval answer, so this advises rather than diagnoses.
+const checkRunsForbiddenBlocker = "GitHub refused the check-runs read; check the token's Checks: Read permission and its repository/organization access (SSO, token approval)"
 
 // Blockers says, in a person's words, what keeps a pull request from
 // being merged: nothing, when it is ready.

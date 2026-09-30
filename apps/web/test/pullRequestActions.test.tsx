@@ -28,7 +28,8 @@ describe("pull request actions", () => {
     const h = render(pr({ checks: [{ name: "CodeRabbit", status: "completed", conclusion: "success" }, denied] }));
     expect(h).not.toContain('data-testid="pr-rerun"');
     expect(h).toMatch(/data-testid="pr-merge"[^>]*disabled|disabled[^>]*data-testid="pr-merge"/);
-    expect(h).toContain("Checks: Read");
+    const note = h.match(/<span data-testid="pr-blocked">([^<]*)<\/span>/)?.[1]?.replaceAll("&#x27;", "'");
+    expect(note).toBe("Blocked: GitHub refused the check-runs read; check the token's Checks: Read permission and its repository/organization access (SSO, token approval)");
   });
 
   test("a real failure beside them can still be re-run", () => {

@@ -606,7 +606,7 @@ export function prActualChecks(checks: ReadonlyArray<PrCheck>): PrCheck[] {
 /** Why the checks could not all be read, in a person's words. */
 export function prCheckDiagnosticReason(code: string): string {
   return code === CHECK_RUNS_FORBIDDEN
-    ? "Cannot read GitHub check runs (access denied). Check the token's Checks: Read permission and repository/organization access."
+    ? "GitHub refused the check-runs read; check the token's Checks: Read permission and its repository/organization access (SSO, token approval)."
     : "Some GitHub checks cannot be read.";
 }
 

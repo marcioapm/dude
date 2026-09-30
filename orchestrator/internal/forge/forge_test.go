@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -472,13 +473,14 @@ func TestSlugFromURL(t *testing.T) {
 // A blip must be retried; a refusal must not be retried into the same wall.
 func TestTransientErrors(t *testing.T) {
 	for err, want := range map[error]bool{
-		&Error{Status: 502, Message: "Bad Gateway"}:                               true,
-		&Error{Status: 429, Message: "slow down"}:                                 true,
-		&Error{Status: 403, Message: "API rate limit exceeded"}:                   true,
-		fmt.Errorf("compare: %w", &Unreachable{errors.New("connection refused")}): true,
-		&Error{Status: 422, Message: "Update is not a fast forward"}:              false,
-		&Error{Status: 403, Message: "Resource not accessible by integration"}:    false,
-		errors.New("lux reported no push result"):                                 false,
+		&Error{Status: 502, Message: "Bad Gateway"}:                                     true,
+		&Error{Status: 429, Message: "slow down"}:                                       true,
+		&Error{Status: 403, Message: "API rate limit exceeded"}:                         true,
+		&Error{Status: 403, Message: "You have triggered an abuse detection mechanism"}: true,
+		fmt.Errorf("compare: %w", &Unreachable{errors.New("connection refused")}):       true,
+		&Error{Status: 422, Message: "Update is not a fast forward"}:                    false,
+		&Error{Status: 403, Message: "Resource not accessible by integration"}:          false,
+		errors.New("lux reported no push result"):                                       false,
 	} {
 		if got := Transient(err); got != want {
 			t.Errorf("Transient(%v) = %v, want %v", err, got, want)
@@ -601,12 +603,12 @@ func TestCheckRunsItCannotReadArePendingAndSayWhy(t *testing.T) {
 			if Ready(st) {
 				t.Error("ready with check runs unreadable")
 			}
-			blockers := strings.Join(Blockers(st), "; ")
-			if !strings.Contains(blockers, "Checks: Read") || strings.Contains(blockers, "running") {
-				t.Errorf("blockers = %q", blockers)
+			want := []string{"GitHub refused the check-runs read; check the token's Checks: Read permission and its repository/organization access (SSO, token approval)"}
+			if tc.checks == ChecksFailing {
+				want = append([]string{"checks are failing"}, want...)
 			}
-			if (tc.checks == ChecksFailing) != strings.Contains(blockers, "checks are failing") {
-				t.Errorf("blockers = %q", blockers)
+			if got := Blockers(st); !slices.Equal(got, want) {
+				t.Errorf("blockers = %q, want %q", got, want)
 			}
 		})
 	}
@@ -655,6 +657,19 @@ func TestAHeaderOnlyRateLimitOnCheckRunsFailsTheSync(t *testing.T) {
 				t.Fatalf("err = %v, want a transient error keeping GitHub's message", err)
 			}
 		})
+	}
+}
+
+// GitHub's older secondary limit is a headerless 403 saying "abuse
+// detection": a limit to wait out, not a refusal to diagnose.
+func TestAnAbuseDetectionLimitOnCheckRunsFailsTheSync(t *testing.T) {
+	_, err := checksServer(t, codeRabbitPassed, func(w http.ResponseWriter, _ string) {
+		w.WriteHeader(403)
+		fmt.Fprint(w, `{"message":"You have triggered an abuse detection mechanism"}`)
+	}).PullRequest(context.Background(), "acme/api", 1)
+	var e *Error
+	if !errors.As(err, &e) || e.Status != 403 || e.Message != "You have triggered an abuse detection mechanism" || !Transient(err) {
+		t.Fatalf("err = %v, want a transient 403 keeping GitHub's message", err)
 	}
 }
 
