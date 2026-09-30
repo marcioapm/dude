@@ -270,7 +270,7 @@ export function eventsFor(scenario: ServerScenario): PersistedEvent[] {
     event(2 * 24 * 60 * MIN, "task.created", { title: TASK_BASE.title }, me, null),
     event(40 * MIN, "run.created", { phase: "implement", role: "implementer" }, dude),
     event(38 * MIN, "run.started", {}, dude),
-    event(38 * MIN - 2000, "agent.prompt.delivered", { text: PROMPT }, dude),
+    event(38 * MIN - 2000, "agent.prompt.delivered", { text: PROMPT, lands: "next_step" }, dude),
     event(37.5 * MIN, "agent.plan.updated", PLAN(0)),
     event(37.4 * MIN, "agent.message", { text: "Reading the current step first. `apps/web/src/checkout/DetailsAndPayment.tsx` holds both forms in one `useForm`; the totals come from `useCart()` directly. I will split the form state, add a `PaymentStep` and put the route behind the flag.", contextTokens: 24_100 }),
     event(37.3 * MIN, "agent.thought", { text: "The flag should gate the route, not the component: a component-level gate would leave the old step mounted under the new URL and double the funnel events." }),

@@ -128,6 +128,8 @@ export interface HumanTurn {
   failed: string | null;
   /** A person asked for it to be heard now: re-sent with interrupt. */
   interrupting: boolean;
+  /** The directive it was sent as, to re-send it (Interrupt now, Retry); null for an answer given directly. */
+  directiveId: string | null;
 }
 
 export type SteerLands = "next_step" | "next_turn";
@@ -236,6 +238,37 @@ const NOTICES: Record<string, { notice: NoticeTurn["notice"]; text: (payload: Re
 
 /** Custom events live under this prefix in the ledger (agenttools.CustomPrefix). */
 export const CUSTOM_EVENT_PREFIX = "agent.custom.";
+
+/**
+ * Why a queued steer has not been read, as its one line says: the Run's
+ * state first (paused, starting), then what lux said the harness does,
+ * then what the agent is running now. `tool` is the open tool call's name;
+ * null when nothing is running. An older lux (lands unknown) holds a steer
+ * until the turn ends, and is described so.
+ */
+export type SteerWait =
+  | { kind: "paused" } | { kind: "starting" } | { kind: "next_turn" }
+  | { kind: "tool"; tool: string } | { kind: "next_step" };
+
+export function steerWait(turn: HumanTurn, runStatus: RunStatus, activeTool: string | null, lands: SteerLands | null): SteerWait {
+  if (runStatus === "paused") return { kind: "paused" };
+  if (runStatus === "pending" || runStatus === "scheduled" || runStatus === "starting") return { kind: "starting" };
+  const where = turn.lands ?? lands;
+  if (where !== "next_step") return { kind: "next_turn" };
+  return activeTool ? { kind: "tool", tool: activeTool } : { kind: "next_step" };
+}
+
+/** The composer's hint for a steer sent now, following the same capability. */
+export function landsHint(runStatus: RunStatus, activeTool: string | null, lands: SteerLands | null): string | null {
+  if (runStatus !== "running") return null;
+  if (lands !== "next_step") return "Lands when the turn ends";
+  return activeTool ? "Lands after the current tool" : "Lands at the agent's next step";
+}
+
+/** A tool's name as a person reads it: "bash" → "Bash". */
+export function toolLabel(name: string): string {
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
 
 export interface Conversation {
   turns: Turn[];
@@ -527,18 +560,22 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
 
       case EventTypes.RunSteered: {
         const directiveId = typeof payload.directiveId === "string" ? payload.directiveId : null;
-        // "Interrupt now" on a queued steer re-sends it to be heard at once,
-        // superseding it: one steer, not two turns saying the same thing.
+        // "Interrupt now" on a queued steer, or Retry on a failed one, sends
+        // it again superseding it: one steer, not two turns saying the same thing.
         const earlier = typeof payload.supersedes === "string" ? state.steersByDirective.get(payload.supersedes) : undefined;
-        if (earlier && payload.interrupt === true && earlier.deliveredAt === null && earlier.text === String(payload.text ?? "")) {
-          earlier.interrupting = true;
+        if (earlier && earlier.deliveredAt === null && earlier.text === String(payload.text ?? "")) {
+          earlier.interrupting = earlier.interrupting || payload.interrupt === true;
           earlier.failed = null;
-          if (directiveId) state.steersByDirective.set(directiveId, earlier);
+          if (directiveId) {
+            state.steersByDirective.set(directiveId, earlier);
+            earlier.directiveId = directiveId;
+          }
           break;
         }
         const turn: HumanTurn = {
           ...humanTurn(event, "steer", String(payload.text ?? ""), null),
           interrupting: payload.interrupt === true,
+          directiveId,
         };
         if (directiveId) state.steersByDirective.set(directiveId, turn);
         turns.push(turn);
@@ -570,8 +607,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         const question = state.questionsById.get(String(payload.questionId ?? ""));
         if (question) question.answeredAt = event.occurredAt;
         // Delivered the way a steer is: queued until the agent takes it.
-        const turn = humanTurn(event, "answer", String(payload.answer ?? ""),
-          typeof payload.directiveId === "string" ? null : event.occurredAt);
+        const directiveId = typeof payload.directiveId === "string" ? payload.directiveId : null;
+        const turn = { ...humanTurn(event, "answer", String(payload.answer ?? ""), directiveId ? null : event.occurredAt), directiveId };
         if (typeof payload.directiveId === "string") state.steersByDirective.set(payload.directiveId, turn);
         turns.push(turn);
         break;
@@ -816,7 +853,7 @@ function landsOf(value: unknown): SteerLands | null {
 function humanTurn(event: PersistedEvent, intent: HumanTurn["intent"], text: string, deliveredAt: string | null): HumanTurn {
   return {
     kind: "human", id: event.eventId, intent, by: humanActor(event), text, at: event.occurredAt, deliveredAt,
-    acceptedAt: null, lands: null, read: false, after: null, failed: null, interrupting: false,
+    acceptedAt: null, lands: null, read: false, after: null, failed: null, interrupting: false, directiveId: null,
   };
 }
 
