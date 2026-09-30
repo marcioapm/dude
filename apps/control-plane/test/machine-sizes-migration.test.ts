@@ -92,7 +92,15 @@ describe("the database refuses what the API would", () => {
   }
 
   test("a second default", async () => {
-    expect(await insert("second_default", { is_default: true })).toMatch(/machine_sizes_default_idx/);
+    expect(await insert("second_default", { is_default: true })).toMatch(/machine_sizes_one_default/);
+  });
+
+  test("the default moves in one statement, whichever row it meets first", async () => {
+    expect(await insert("next_default")).toBe("");
+    for (const to of ["next_default", "half", "next_default"]) {
+      await db`UPDATE machine_sizes SET is_default = (id = ${to}) WHERE organization_id = 'org_before' AND (is_default OR id = ${to})`;
+      expect((await db`SELECT id FROM machine_sizes WHERE organization_id = 'org_before' AND is_default`).map((r: { id: string }) => r.id)).toEqual([to]);
+    }
   });
 
   test("a name used twice, whatever its case", async () => {
