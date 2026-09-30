@@ -64,11 +64,10 @@ func (c *Costs) Sweep(ctx context.Context) (int, error) {
 	}
 	var due []costRun
 	if err := c.DB.InSystem(ctx, "lux-cost", func(tx pgx.Tx) error {
+		// Only Runs with a read still due have a next_at (060): an agent's Run
+		// on lux, not final, not past costPatience.
 		rows, err := tx.Query(ctx, `SELECT id, organization_id, project_id, task_id, lux_run_id FROM runs
-			WHERE kind = 'agent' AND lux_run_id IS NOT NULL AND lux_cost_status IS DISTINCT FROM 'final'
-			  AND (lux_cost_next_at IS NULL OR lux_cost_next_at <= now())
-			  AND (ended_at IS NULL OR ended_at > now() - make_interval(secs => $1))
-			ORDER BY lux_cost_next_at NULLS FIRST LIMIT $2`, costPatience.Seconds(), batch)
+			WHERE lux_cost_next_at <= now() ORDER BY lux_cost_next_at LIMIT $1`, batch)
 		if err != nil {
 			return err
 		}
@@ -112,7 +111,9 @@ func (c *Costs) log() *slog.Logger {
 
 // read asks lux for one Run's cost, stores it, and records it in the
 // ledger when it changed. lux's error and the database's are apart: only
-// the second leaves the Run due at once.
+// the second leaves the Run due at once. The Run leaves the work list
+// (next_at NULL) once lux says final or it ended more than costPatience
+// ago, whether lux answered or not.
 func (c *Costs) read(ctx context.Context, r costRun) (luxErr, dbErr error) {
 	cost, err := c.Lux.Cost(ctx, r.LuxRunID)
 	if err != nil {
@@ -121,8 +122,11 @@ func (c *Costs) read(ctx context.Context, r costRun) (luxErr, dbErr error) {
 			wait = costNotFoundBackoff
 		}
 		return err, c.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, `UPDATE runs SET lux_cost_next_at = now() + make_interval(secs => $2) WHERE id = $1`,
-				r.ID, wait.Seconds())
+			_, err := tx.Exec(ctx, `UPDATE runs SET lux_cost_next_at = CASE
+					WHEN ended_at < now() - make_interval(secs => $3) THEN NULL
+					ELSE now() + make_interval(secs => $2) END
+				WHERE id = $1`,
+				r.ID, wait.Seconds(), costPatience.Seconds())
 			return err
 		})
 	}
@@ -133,11 +137,14 @@ func (c *Costs) read(ctx context.Context, r costRun) (luxErr, dbErr error) {
 		err := tx.QueryRow(ctx, `WITH old AS (
 				SELECT lux_ai_usd, lux_compute_usd, lux_cost_status FROM runs WHERE id = $1 FOR UPDATE)
 			UPDATE runs SET lux_ai_usd = $2::numeric, lux_compute_usd = $3::numeric, lux_cost_status = $4,
-				lux_cost_read_at = now(), lux_cost_next_at = now() + make_interval(secs => $5)
+				lux_cost_read_at = now(), lux_cost_next_at = CASE
+					WHEN $4 = 'final' OR runs.ended_at < now() - make_interval(secs => $6) THEN NULL
+					ELSE now() + make_interval(secs => $5) END
 			FROM old WHERE runs.id = $1
 			RETURNING old.lux_ai_usd IS DISTINCT FROM $2::numeric OR old.lux_compute_usd IS DISTINCT FROM $3::numeric
 				OR old.lux_cost_status IS DISTINCT FROM $4`,
-			r.ID, decimalOrNil(ai, hasAI), decimalOrNil(compute, hasCompute), cost.Status, c.every().Seconds()).Scan(&changed)
+			r.ID, decimalOrNil(ai, hasAI), decimalOrNil(compute, hasCompute), cost.Status, c.every().Seconds(),
+			costPatience.Seconds()).Scan(&changed)
 		if err != nil || !changed {
 			return err
 		}
