@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { SQL } from "bun";
-import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { listMigrationFiles, migrate } from "../src/db/migrate.ts";
 import { closePool, setPool, withOrg } from "../src/db/client.ts";
@@ -52,10 +51,7 @@ function dbUrl(appRole = false) {
 beforeAll(async () => {
   admin = new SQL(ownerUrl);
   await admin.unsafe(`CREATE DATABASE "${name}"`);
-  const migrated = Bun.spawnSync(["bun", "run", "apps/control-plane/src/db/migrate.ts"], {
-    cwd: join(import.meta.dir, "../../.."), env: { ...process.env, DATABASE_URL: dbUrl() },
-  });
-  if (migrated.exitCode) throw new Error(migrated.stderr.toString());
+  await migrate(dbUrl(), { log() {} });
   owner = new SQL(dbUrl());
   for (const id of [org, other]) await owner`INSERT INTO organizations (id, name, slug) VALUES (${id}, ${id}, ${id})`;
   await owner`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES (${project}, ${org}, 'People', 'people', 'PP')`;
