@@ -61,6 +61,29 @@ function safeError(operation: Operation, error: unknown): Error {
   return new StorageError(operation);
 }
 
+// Bun's S3Client before 1.4.0 fails every PUT to a store that answers
+// `Connection: close` (versitygw does) with ConnectionClosed, though the 200
+// arrived and the object is stored.
+export const MIN_BUN_FOR_S3 = "1.4.0";
+
+// major.minor.patch, then a pre-release or build suffix (1.4.1-canary.3+abc).
+const BUN_VERSION = /^(\d+)\.(\d+)\.(\d+)(-[^+]*)?(\+.*)?$/;
+
+/** Why `version` of Bun cannot store photos, or undefined when it can. */
+export function s3RuntimeProblem(version: string): string | undefined {
+  const refuse = `photo storage (s3.bucket) needs Bun >= ${MIN_BUN_FOR_S3}, this is Bun ${version}: ` +
+    "earlier Bun fails every upload to a store that answers Connection: close, such as versitygw";
+  const have = BUN_VERSION.exec(version);
+  if (!have) return refuse;
+  const floor = BUN_VERSION.exec(MIN_BUN_FOR_S3)!;
+  for (let i = 1; i <= 3; i++) {
+    const diff = Number(have[i]) - Number(floor[i]);
+    if (diff !== 0) return diff > 0 ? undefined : refuse;
+  }
+  // A pre-release of the floor comes before it (semver §11).
+  return have[4] ? refuse : undefined;
+}
+
 // Visible ASCII only: no CR, LF or other characters invalid in a header value.
 const IMDS_TOKEN = /^[\x21-\x7e]{1,1024}$/;
 

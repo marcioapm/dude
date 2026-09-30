@@ -34,6 +34,7 @@ import { webApp } from "./api/web.ts";
 import { version } from "./build.ts";
 import { closePool, getPool } from "./db/client.ts";
 import { listenForEvents } from "./events/listen.ts";
+import { s3RuntimeProblem } from "./storage.ts";
 
 export function buildRouter(webDir = config().webDir, auth: RequestAuthenticator = authenticate): Router {
   const router = new Router(auth);
@@ -119,6 +120,12 @@ if (import.meta.main) {
   const databaseUrl = settings.databaseUrl;
   if (!databaseUrl) {
     console.error("database.url (DATABASE_URL) is required");
+    process.exit(1);
+  }
+  // Refused here, not at the first upload: that fails a person days later.
+  const runtimeProblem = settings.string("DUDE_S3_BUCKET") ? s3RuntimeProblem(Bun.version) : undefined;
+  if (runtimeProblem) {
+    console.error(`configuration: ${runtimeProblem}`);
     process.exit(1);
   }
 
