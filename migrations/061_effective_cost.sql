@@ -13,6 +13,14 @@ LANGUAGE sql IMMUTABLE AS $$
   SELECT COALESCE(r.lux_ai_usd, r.agent_cost_usd, 0)
 $$;
 
+-- Who priced the Run's cost under that rule: lux_ai / lux_compute, lux's
+-- figure stands for that half; lux_final, lux has made it final. A total
+-- over several Runs is lux's only where every Run's is (metrics.ts).
+CREATE FUNCTION run_cost_origin(r runs, OUT lux_ai boolean, OUT lux_compute boolean, OUT lux_final boolean)
+LANGUAGE sql IMMUTABLE AS $$
+  SELECT r.lux_ai_usd IS NOT NULL, r.lux_compute_usd IS NOT NULL, r.lux_cost_status IS NOT DISTINCT FROM 'final'
+$$;
+
 -- Same columns as 050's, so task_metrics and epic_metrics, which sum it,
 -- follow without change.
 CREATE OR REPLACE FUNCTION run_metrics(p_run text)

@@ -16,52 +16,46 @@ const tokens = (row: Record<string, unknown>) => ({ input: Number(row.input_toke
 
 /**
  * What it cost, both ways: `costUsd` stays the model's tokens, as it always
- * was, and `cost` is the whole, split into tokens and machine time. With
- * `lux_ai`, `lux_compute` and `lux_final` (booleans: every Run counted has
- * one) the split says who priced it.
+ * was, and `cost` is the whole, split into tokens and machine time, with
+ * who priced each half when known.
  */
-const costs = (row: Record<string, unknown>) => ({
+const costs = (row: Record<string, unknown>, from?: CostProvenance) => ({
   costUsd: Number(row.cost_usd),
-  cost: costSplit(Number(row.cost_usd), Number(row.machine_usd), origin(row)),
+  cost: costSplit(Number(row.cost_usd), Number(row.machine_usd), from),
 });
 
-function origin(row: Record<string, unknown>): CostProvenance | undefined {
-  if (row.lux_ai === undefined) return undefined;
+/**
+ * Who priced a set of agents' Runs, from run_cost_origin's columns (061):
+ * lux for a half only where lux priced it on every Run; none is not lux.
+ */
+function origin(rows: ReadonlyArray<Record<string, unknown>>): CostProvenance {
+  const all = (column: string) => rows.length > 0 && rows.every((r) => r[column] === true);
   return {
-    tokens: row.lux_ai === true ? "lux" : "agent",
-    machine: row.lux_compute === true ? "lux" : "estimate",
-    settled: row.lux_final === true,
+    tokens: all("lux_ai") ? "lux" : "agent",
+    machine: all("lux_compute") ? "lux" : "estimate",
+    settled: all("lux_final"),
   };
 }
-
-// Who priced a set of agents' Runs: lux, only where it priced every one.
-const ORIGIN_COLUMNS = `COALESCE(bool_and(r.lux_ai_usd IS NOT NULL), false) AS lux_ai,
-  COALESCE(bool_and(r.lux_compute_usd IS NOT NULL), false) AS lux_compute,
-  COALESCE(bool_and(r.lux_cost_status IS NOT DISTINCT FROM 'final'), false) AS lux_final`;
 
 async function taskMetrics(ctx: RequestContext): Promise<Response> {
   const id = ctx.params.id!;
   const out = await withOrg(ctx.principal.organizationId, async ({ sql }) => {
     const [task] = (await sql`SELECT * FROM task_metrics(${id})`) as Array<Record<string, unknown>>;
     if (!task) return null;
-    const [from] = (await sql`SELECT ${sql.unsafe(ORIGIN_COLUMNS)} FROM runs r
-      WHERE r.task_id = ${id} AND r.kind = 'agent'`) as Array<Record<string, unknown>>;
     const runs = (await sql`
-      SELECT r.id, r.phase, r.role, r.category, r.status, m.*,
-             r.lux_ai_usd IS NOT NULL AS lux_ai, r.lux_compute_usd IS NOT NULL AS lux_compute,
-             COALESCE(r.lux_cost_status = 'final', false) AS lux_final
-      FROM runs r CROSS JOIN LATERAL run_metrics(r.id) m
+      SELECT r.id, r.phase, r.role, r.category, r.status, m.*, o.*
+      FROM runs r CROSS JOIN LATERAL run_metrics(r.id) m CROSS JOIN LATERAL run_cost_origin(r) o
       WHERE r.task_id = ${id} AND r.kind = 'agent' ORDER BY r.created_at`) as Array<Record<string, unknown>>;
     return {
       leadMs: ms(task.lead_seconds),
       activeMs: ms(task.active_seconds),
       humanWaitMs: ms(task.human_wait_seconds),
       reviewMs: ms(task.review_seconds),
-      ...costs({ ...task, ...from }),
+      ...costs(task, origin(runs)),
       tokens: tokens(task),
       runs: runs.map((r) => ({
         id: r.id, phase: r.phase, role: r.role, category: r.category, status: r.status,
-        activeMs: ms(r.active_seconds), parkedMs: ms(r.parked_seconds), ...costs(r),
+        activeMs: ms(r.active_seconds), parkedMs: ms(r.parked_seconds), ...costs(r, origin([r])),
         tokens: tokens(r),
       })),
     };
@@ -76,6 +70,9 @@ async function epicMetrics(ctx: RequestContext): Promise<Response> {
     const found = (await sql`SELECT 1 FROM epics WHERE id = ${id}`) as unknown[];
     if (found.length === 0) return null;
     const [m] = (await sql`SELECT * FROM epic_metrics(${id})`) as Array<Record<string, unknown>>;
+    const runs = (await sql`
+      SELECT o.* FROM runs r JOIN tasks t ON t.id = r.task_id CROSS JOIN LATERAL run_cost_origin(r) o
+      WHERE t.epic_id = ${id} AND r.kind = 'agent'`) as Array<Record<string, unknown>>;
     return {
       tasks: Number(m!.tasks),
       done: Number(m!.done),
@@ -83,7 +80,7 @@ async function epicMetrics(ctx: RequestContext): Promise<Response> {
       activeMs: ms(m!.active_seconds),
       humanWaitMs: ms(m!.human_wait_seconds),
       reviewMs: ms(m!.review_seconds),
-      ...costs(m!),
+      ...costs(m!, origin(runs)),
       tokens: tokens(m!),
     };
   });

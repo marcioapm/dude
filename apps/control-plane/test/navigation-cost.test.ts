@@ -100,3 +100,27 @@ test("a task's spend on the board is its agents' effective model cost, the task 
   expect(metrics.runs.find((r) => r.id === "run_rev")!.cost.origin).toEqual({ tokens: "agent", machine: "estimate", settled: false });
   expect(metrics.cost.origin).toEqual({ tokens: "agent", machine: "estimate", settled: false });
 });
+
+test("an epic whose every agent Run lux priced says so, even at $0", async () => {
+  await owner`INSERT INTO epics (id, organization_id, project_id, title) VALUES ('epc_free', ${ORG}, ${PROJECT}, 'Free')`;
+  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, epic_id) VALUES ('wi_2', ${ORG}, ${PROJECT}, 2, 'Free', 'epc_free')`;
+  await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, agent_cost_usd, lux_ai_usd, lux_compute_usd, lux_cost_status)
+              VALUES ('run_free', ${ORG}, ${PROJECT}, 'wi_2', 1, 0.30, 0, 0, 'final')`;
+  // A preview lux has not priced is not one of the epic's agents.
+  await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, kind)
+              VALUES ('run_free_prev', ${ORG}, ${PROJECT}, 'wi_2', 1, 'preview')`;
+  const get = async (path: string) =>
+    (await (await router.handle(new Request(`http://dude.test${path}`, { headers: { authorization: `Bearer ${key}` } }))).json()) as {
+      cost: { tokensUsd: number; origin?: unknown };
+    };
+
+  const epic = await get("/v1/epics/epc_free/metrics");
+  expect(epic.cost.tokensUsd).toBe(0);
+  expect(epic.cost.origin).toEqual({ tokens: "lux", machine: "lux", settled: true });
+  expect((await get("/v1/tasks/wi_2/metrics")).cost.origin).toEqual(epic.cost.origin);
+
+  // One Run lux has not priced makes the total the harness's again.
+  await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, agent_cost_usd)
+              VALUES ('run_unpriced', ${ORG}, ${PROJECT}, 'wi_2', 2, 0.10)`;
+  expect((await get("/v1/epics/epc_free/metrics")).cost.origin).toEqual({ tokens: "agent", machine: "estimate", settled: false });
+});
