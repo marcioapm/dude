@@ -6,8 +6,14 @@
 -- delivered_at is the second; an older lux, or a harness with no read
 -- receipt, sets it on the first. A failure is kept with lux's reason, so a
 -- steer that never reached the agent says so rather than staying queued.
+--
+-- interrupt_only: "Interrupt now" on an instruction already submitted. It
+-- supersedes that directive with the same words, and lux is sent only the
+-- interrupt: the words went with the original, whatever became of it
+-- since. Decided once, when the directive is created.
 ALTER TABLE directives
-  ADD COLUMN accepted_at timestamptz,
-  ADD COLUMN lands       text CHECK (lands IN ('next_step', 'next_turn')),
-  ADD COLUMN failed_at   timestamptz,
-  ADD COLUMN error       text;
+  ADD COLUMN accepted_at    timestamptz,
+  ADD COLUMN lands          text CHECK (lands IN ('next_step', 'next_turn')),
+  ADD COLUMN failed_at      timestamptz,
+  ADD COLUMN error          text,
+  ADD COLUMN interrupt_only boolean NOT NULL DEFAULT false;

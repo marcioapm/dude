@@ -1931,6 +1931,86 @@ func TestInterruptNowOnAQueuedSteerIsHeardOnce(t *testing.T) {
 	}
 }
 
+// interruptQueuedSteer is a steer the harness took while a tool runs, and a
+// person's "Interrupt now" on it, recorded by the API and not yet sent:
+// returns the Run and the interrupt's directive.
+func (w *world) interruptQueuedSteer(wi string) (runID, interruptID string) {
+	w.t.Helper()
+	runID = w.steerDuringTool(wi)
+	w.until("the harness to take it", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE id = 'dir_s' AND accepted_at IS NOT NULL`) == 1
+	})
+	code, out := w.call("/internal/runs/"+runID+"/steer", map[string]any{
+		"text": "check the migration too", "supersedes": "dir_s", "interrupt": true})
+	if code != http.StatusCreated {
+		w.t.Fatalf("steer: %d %v", code, out)
+	}
+	return runID, out["id"].(string)
+}
+
+// waitRead waits, without sweeping, for the follower to record the
+// original steer read.
+func (w *world) waitRead() {
+	w.t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for w.count(`SELECT count(*) FROM directives WHERE id = 'dir_s' AND delivered_at IS NOT NULL`) == 0 {
+		if time.Now().After(deadline) {
+			w.t.Fatal("the steer was never read")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// The agent reads the original steer after the click and before the syncer
+// sends the interrupt: the interrupt still goes, the words do not go again.
+func TestInterruptNowOnASteerReadBeforeItIsSentSendsNoWords(t *testing.T) {
+	w := newWorld(t)
+	wi := w.task()
+	runID, interruptID := w.interruptQueuedSteer(wi)
+	w.lux.FinishTools(w.lux.Runs()[0].ID)
+	w.waitRead()
+	w.until("the interrupt to be sent and delivered", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE id = $1 AND sent_at IS NOT NULL AND delivered_at IS NOT NULL`, interruptID) == 1
+	})
+	r := w.lux.Runs()[0]
+	if r.Interrupted != 1 || len(r.Inputs) != 1 {
+		t.Errorf("interrupted=%d inputs=%v, want one interrupt and the words once", r.Interrupted, r.Inputs)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.directive.delivered'`, runID); n != 1 {
+		t.Errorf("%d delivered events, want the original's alone", n)
+	}
+}
+
+// The agent reads the original between the syncer's reading the interrupt
+// and lux answering it, and lux refuses that first request: the retry is
+// the same request, still with no words.
+func TestInterruptNowRetriedAfterTheSteerWasReadSendsTheSameRequest(t *testing.T) {
+	w := newWorld(t)
+	w.syncer.RetryAhead = time.Minute
+	wi := w.task()
+	_, interruptID := w.interruptQueuedSteer(wi)
+	var once sync.Once
+	w.lux.BeforeInput = func(luxRunID, requestID string) bool {
+		first := false
+		once.Do(func() {
+			first = true
+			w.lux.FinishTools(luxRunID)
+			w.waitRead()
+		})
+		return !first
+	}
+	w.until("the interrupt to be sent", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE id = $1 AND sent_at IS NOT NULL`, interruptID) == 1
+	})
+	r := w.lux.Runs()[0]
+	if bodies := r.InputBodies[interruptID]; len(bodies) != 2 || bodies[0] != bodies[1] {
+		t.Errorf("request bodies for one request id: %q, want two identical", bodies)
+	}
+	if r.Interrupted != 1 || len(r.Inputs) != 1 {
+		t.Errorf("interrupted=%d inputs=%v, want one interrupt and the words once", r.Interrupted, r.Inputs)
+	}
+}
+
 func TestPauseKeepsTheRunAndResumeContinuesIt(t *testing.T) {
 	w := newWorld(t)
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour {

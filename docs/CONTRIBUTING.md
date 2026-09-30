@@ -128,6 +128,11 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   step has it (`run.directive.delivered`). An older lux reports only the
   handoff, which counts as delivered. Each is recorded once per directive
   and Run.
+  "Interrupt now" on a queued steer is a directive superseding it with the
+  same words and `interrupt: true`; the API marks it `interrupt_only` when
+  it is created, and lux is sent only the interrupt, with no text, however
+  far the original has got by then: the agent hears the words once. It is
+  delivered with the original.
 - **Pause** stops the lux Run, keeping its workspace and session; **resume**
   continues it, on any host, with the agent's conversation intact.
 - **Parking.** dude pauses a Run itself (`runs.dude_pause`) so that one

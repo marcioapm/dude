@@ -333,12 +333,11 @@ func (t *translator) directiveReceipt(ctx context.Context, tx pgx.Tx, s *Syncer,
 	if err != nil || tag.RowsAffected() == 0 {
 		return err
 	}
-	// An "interrupt now" that re-sent it carried no text of its own (the
-	// syncer's deliverDirectives): it is delivered with it. No event: the
-	// transcript knows them as one steer.
-	if _, err := tx.Exec(ctx, `UPDATE directives d SET delivered_at = now(), accepted_at = COALESCE(d.accepted_at, now())
-		FROM directives s WHERE s.id = $1 AND d.supersedes = s.id AND d.run_id = $2 AND d.interrupt
-		  AND d.text = s.text AND d.delivered_at IS NULL`, id, t.run.ID); err != nil {
+	// An "interrupt now" on it carries no text of its own (interrupt_only,
+	// see QueueDirective): it is delivered with it, sent yet or not. No
+	// event: the transcript knows them as one steer.
+	if _, err := tx.Exec(ctx, `UPDATE directives SET delivered_at = now(), accepted_at = COALESCE(accepted_at, now())
+		WHERE supersedes = $1 AND run_id = $2 AND interrupt_only AND delivered_at IS NULL`, id, t.run.ID); err != nil {
 		return err
 	}
 	payload := map[string]any{"directiveId": id}

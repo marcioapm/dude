@@ -1191,20 +1191,17 @@ func (s *Syncer) deliverDirectives(ctx context.Context, r phaseRun) (bool, error
 	type directive struct {
 		ID, Text  string
 		Interrupt bool
-		// This re-sends, to be heard now, a directive lux already holds and
-		// the agent has not read (Interrupt now): lux is asked only to stop
-		// the turn, so the agent hears the text once. Echoes: the directive
-		// it would re-send, when that is still unsent (sent in this loop).
-		Resends bool
-		Echoes  string
+		// "Interrupt now" on an instruction already submitted (decided when
+		// it was created, QueueDirective): lux is asked only to stop the
+		// turn. The words are the original's, sent with it however far it
+		// has got since, so the agent hears them once, and the request body
+		// is the same on every retry.
+		InterruptOnly bool
 	}
 	var pending []directive
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT d.id, d.text, d.interrupt,
-				d.interrupt AND COALESCE(s.sent_at IS NOT NULL AND s.delivered_at IS NULL AND s.failed_at IS NULL AND s.text = d.text, false),
-				CASE WHEN d.interrupt AND s.sent_at IS NULL AND s.text = d.text THEN s.id ELSE '' END
-			FROM directives d LEFT JOIN directives s ON s.id = d.supersedes AND s.run_id = d.run_id
-			WHERE d.run_id = $1 AND d.sent_at IS NULL ORDER BY d.created_at`, r.ID)
+		rows, err := tx.Query(ctx, `SELECT id, text, interrupt, interrupt_only
+			FROM directives WHERE run_id = $1 AND sent_at IS NULL ORDER BY created_at`, r.ID)
 		if err != nil {
 			return err
 		}
@@ -1213,10 +1210,9 @@ func (s *Syncer) deliverDirectives(ctx context.Context, r phaseRun) (bool, error
 	}); err != nil || len(pending) == 0 {
 		return false, err
 	}
-	sent := map[string]bool{}
 	for _, d := range pending {
 		text := d.Text
-		if d.Resends || sent[d.Echoes] {
+		if d.InterruptOnly {
 			text = ""
 		}
 		// The directive id is the request id, so a retried send is delivered
@@ -1225,12 +1221,17 @@ func (s *Syncer) deliverDirectives(ctx context.Context, r phaseRun) (bool, error
 			return true, s.retryLater(ctx, r, err)
 		}
 		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, `UPDATE directives SET sent_at = now() WHERE id = $1`, d.ID)
+			// lux sends no receipt for an interrupt alone: one whose original
+			// the agent already has is delivered with it; otherwise the
+			// original's receipt delivers it (directiveReceipt).
+			_, err := tx.Exec(ctx, `UPDATE directives d SET sent_at = now(),
+				delivered_at = COALESCE(d.delivered_at, CASE WHEN d.interrupt_only THEN
+					(SELECT s.delivered_at FROM directives s WHERE s.id = d.supersedes AND s.run_id = d.run_id) END)
+				WHERE d.id = $1`, d.ID)
 			return err
 		}); err != nil {
 			return true, err
 		}
-		sent[d.ID] = true
 	}
 	return true, nil
 }
