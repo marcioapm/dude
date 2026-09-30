@@ -89,9 +89,9 @@ export interface FormDialogProps {
 }
 
 /**
- * A dialog that is one form: Enter submits it (Ctrl/⌘+Enter in a document,
- * whose fields take Enter), Cancel closes it, and the server's reason for
- * refusing shows under the fields.
+ * A dialog that is one form: Enter submits it (in a document, Ctrl/⌘+Enter
+ * does, and Enter in a one-line field moves to the next), Cancel closes it,
+ * and the server's reason for refusing shows under the fields.
  */
 export function FormDialog(props: FormDialogProps) {
   const formId = useId();
@@ -138,6 +138,15 @@ export function FormDialog(props: FormDialogProps) {
         {props.open ? (
           <form
             id={formId}
+            onKeyDown={(e) => {
+              // In a document, plain Enter in a one-line field moves on to the next field, never submits.
+              if (!document || e.key !== "Enter" || e.ctrlKey || e.metaKey || e.nativeEvent.isComposing) return;
+              if (!(e.target instanceof HTMLInputElement)) return;
+              e.preventDefault();
+              const fields = [...e.currentTarget.querySelectorAll<HTMLElement>("input, textarea, select")]
+                .filter((f) => !(f as HTMLInputElement).disabled && f.offsetParent !== null);
+              fields[fields.indexOf(e.target) + 1]?.focus();
+            }}
             onSubmit={(e) => {
               e.preventDefault();
               if (props.canSubmit) props.onSubmit();
