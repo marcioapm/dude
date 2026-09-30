@@ -4,6 +4,14 @@ What a deployment of dude needs: the release, the processes, their
 configuration, and the order of an upgrade. Building a release is in the
 [README](../README.md#releases).
 
+## GitHub credentials
+
+Before running tasks against GitHub, configure the organization’s token
+with the permissions for the operations it should perform. See
+[GitHub credentials and permissions](github.md) for fine-grained and classic
+PAT checklists, workflow-file access, CI reruns, webhooks and troubleshooting.
+A successful connection or clone does not prove push/workflow access.
+
 ## The release
 
 A GitHub Release per `v*` tag holds:
