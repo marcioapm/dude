@@ -61,7 +61,8 @@ class QuietEventSource extends EventTarget {
   }
 }
 
-function emit(event: Omit<PersistedEvent, "cursor" | "eventId">): void {
+/** Send an event down every open fixture stream, as the backend would. */
+export function emit(event: Omit<PersistedEvent, "cursor" | "eventId">): void {
   const cursor = ++streamCursor;
   const data = JSON.stringify({ ...event, cursor, eventId: `evt_fx_${cursor}` });
   for (const s of streams) if (s.readyState === 1) s.onmessage?.(new MessageEvent("message", { data }));

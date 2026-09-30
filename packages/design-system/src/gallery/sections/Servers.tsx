@@ -75,7 +75,8 @@ function Panel({ data, openLogs = [] }: { readonly data: TaskServers; readonly o
             : <><ShortId id={run.luxRunId} /> · {run.host} · started <Duration ms={Math.max(0, Date.now() - Date.parse(run.startedAt ?? ""))} tone="muted" format="age" /> ago · for Márcio</>}
           actions={
             <>
-              <TerminalLink href={run.terminalUrl ?? "#"} />
+              {/* An agent's terminal is in its session's rail; a preview has no session. */}
+              {isPreview ? <TerminalLink href={run.terminalUrl ?? "#"} /> : null}
               {isPreview ? <Button size="sm" variant="quiet" leadingIcon="stop">Stop preview</Button> : (
                 <>
                   <Button size="sm" variant="secondary" leadingIcon="play" disabled={!canStartAny(data.servers)}>Start all</Button>
