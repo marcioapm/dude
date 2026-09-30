@@ -70,6 +70,11 @@ export interface FormDialogProps {
   onCloseReading?: () => void;
   /** Keys anywhere in the dialog, before its own (Ctrl/⌘+Enter); `preventDefault()` claims one. */
   onKeyDown?: (e: ReactKeyboardEvent<HTMLDivElement>) => void;
+  /**
+   * Keys in the discard confirmation, which covers the dialog: a shortcut
+   * the dialog claims is claimed here too (`preventDefault()`) without acting.
+   */
+  onConfirmKeyDown?: (e: ReactKeyboardEvent<HTMLDivElement>) => void;
   submitLabel: ReactNode;
   canSubmit: boolean;
   onSubmit: () => void;
@@ -189,6 +194,7 @@ export function FormDialog(props: FormDialogProps) {
         title={props.discardTitle ?? "Discard your changes?"}
         description={props.discardDescription ?? `You have written ${unsaved.toLocaleString("en-US")} ${unsaved === 1 ? "word" : "words"} that haven't been saved.`}
         onKeep={() => setConfirming(false)}
+        onKeyDown={props.onConfirmKeyDown}
         onDiscard={() => {
           setConfirming(false);
           props.onOpenChange(false);

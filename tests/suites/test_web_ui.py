@@ -690,6 +690,23 @@ def test_closing_a_task_with_writing_in_it_asks_first(
     expect(page.get_by_role("dialog", name="New task")).to_be_visible()
     expect(page.get_by_test_id("task-goal")).to_have_value(goal)
 
+    # The Read shortcut inside the confirmation is taken from the browser (no hard reload), and does nothing else.
+    page.keyboard.press("Escape")
+    expect(confirm).to_be_visible()
+    page.evaluate("""() => { window.keys = [];
+      document.addEventListener('keydown', e => window.keys.push([e.key.toLowerCase(), e.defaultPrevented])); }""")
+    for keys in ("Control+Shift+r", "Meta+Shift+r"):
+        page.keyboard.press(keys)
+    assert [k for k in page.evaluate("window.keys") if k[0] == "r"] == [["r", True], ["r", True]]
+    expect(confirm).to_be_visible()
+    expect(page.get_by_test_id("discard-keep")).to_be_focused()
+    expect(page.get_by_test_id("task-reading")).to_have_count(0)
+    page.get_by_test_id("discard-keep").click()
+    expect(confirm).to_have_count(0)
+    expect(page.get_by_test_id("task-reading")).to_have_count(0)
+    expect(page.get_by_test_id("task-goal")).to_have_value(goal)
+    expect(page.get_by_test_id("task-title")).to_have_value("Keep SEPA at checkout")
+
     # Cancel asks too, and Discard closes without saving.
     page.get_by_role("button", name="Cancel").click()
     page.get_by_test_id("discard-confirm").click()

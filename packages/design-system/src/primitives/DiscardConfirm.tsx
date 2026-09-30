@@ -1,4 +1,4 @@
-import { useRef, type ReactNode } from "react";
+import { useRef, type KeyboardEvent, type ReactNode } from "react";
 import { Button } from "./Button.tsx";
 import { Dialog } from "./Dialog.tsx";
 
@@ -11,6 +11,8 @@ export interface DiscardConfirmProps {
   /** Close the confirmation and go back to the writing. Escape and × do the same. */
   readonly onKeep: () => void;
   readonly onDiscard: () => void;
+  /** Keys inside the confirmation: the dialog it covers keeps its shortcuts from reaching the browser. */
+  readonly onKeyDown?: ((event: KeyboardEvent<HTMLDivElement>) => void) | undefined;
 }
 
 /**
@@ -19,7 +21,7 @@ export interface DiscardConfirmProps {
  * out; Discard is `danger solid`, inside its own confirmation. Whether to
  * ask at all is the app's rule.
  */
-export function DiscardConfirm({ open, title, description, onKeep, onDiscard }: DiscardConfirmProps) {
+export function DiscardConfirm({ open, title, description, onKeep, onDiscard, onKeyDown }: DiscardConfirmProps) {
   const keep = useRef<HTMLButtonElement>(null);
   return (
     <Dialog
@@ -29,6 +31,7 @@ export function DiscardConfirm({ open, title, description, onKeep, onDiscard }: 
       tone="danger"
       title={title}
       description={description}
+      onKeyDown={onKeyDown}
       onOpenAutoFocus={(e) => {
         e.preventDefault();
         keep.current?.focus();
