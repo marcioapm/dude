@@ -395,6 +395,37 @@ describe("signing in", () => {
     expect(rows.map((r) => r.id)).toEqual([`${org}_tombstone`]);
   });
 
+  test("a first sign-in rechecks only after the removal holding the lock commits", async () => {
+    const email = "lockorder@example.com";
+    const tombstone = `${org}_lockorder`;
+    const locked = Promise.withResolvers<void>();
+    // Resolved true to commit; false (the test failed first) rolls the tombstone back.
+    const commit = Promise.withResolvers<boolean>();
+    // Takes the organization's people lock and writes the tombstone, committing only when told.
+    const removal = owner.begin(async (tx) => {
+      await tx`SELECT pg_advisory_xact_lock(hashtext('people:' || ${org}))`;
+      await tx`INSERT INTO people (id, organization_id, name, email, removed_at)
+        VALUES (${tombstone}, ${org}, 'Removed', ${email}, now())`;
+      locked.resolve();
+      if (!(await commit.promise)) throw new Error("rolled back");
+    });
+    try {
+      const got = signInAround(email, () => locked.promise);
+      // The sign-in's transaction must be queued on that advisory lock before the removal commits.
+      await waitFor(async () => (await owner`
+        SELECT count(*)::int AS n FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+        WHERE l.locktype = 'advisory' AND NOT l.granted AND a.usename = 'dude_app'
+          AND a.datname = current_database()`)[0].n > 0);
+      commit.resolve(true);
+      await removal;
+      expect((await got).status).toBe(401);
+      expect((await peopleByEmail(email)).map((r) => r.id)).toEqual([tombstone]);
+    } finally {
+      commit.resolve(false);
+      await removal.catch(() => {});
+    }
+  });
+
   test("a member added while the first sign-in fetched its profile is reused", async () => {
     const got = await signInAround("addedmeanwhile@example.com",
       () => insertLocked(`${org}_addedmeanwhile`, "addedmeanwhile@example.com", false));
