@@ -1997,6 +1997,7 @@ func TestPushPreflightRetriesWithFreshCredential(t *testing.T) {
 			w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
 			w.gh.Set(func(s *fakegithub.Server) { s.ReceiveStatus = 503; s.ReceiveDisconnect = network })
 			wi := w.task()
+			w.addWeb(wi, "write")
 			w.deliver(wi)
 			w.pump()
 			if len(w.lux.Runs()) != 0 || w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'pending' AND next_attempt_at > now()`, wi) != 1 {
@@ -2015,8 +2016,34 @@ func TestPushPreflightRetriesWithFreshCredential(t *testing.T) {
 					t.Errorf("requests: %v", s.ReceiveRequests)
 				}
 			})
-			if !bytes.Contains(w.lux.Runs()[0].Spec, []byte("replacement")) {
-				t.Fatal("lux did not get the checked credential")
+			var spec lux.Spec
+			if err := json.Unmarshal(w.lux.Runs()[0].Spec, &spec); err != nil {
+				t.Fatal(err)
+			}
+			tokens := 0
+			for _, secret := range spec.Secrets {
+				if secret.Name == "GIT_TOKEN" {
+					tokens++
+					if secret.Value != "replacement" {
+						t.Fatalf("GIT_TOKEN value = %q, want replacement", secret.Value)
+					}
+				}
+			}
+			if tokens != 1 {
+				t.Fatalf("GIT_TOKEN secrets = %d, want one", tokens)
+			}
+			if spec.Git == nil || len(spec.Git.Repositories) != 2 {
+				t.Fatalf("want two named repositories, got %+v", spec.Git)
+			}
+			names := map[string]bool{}
+			for _, repo := range spec.Git.Repositories {
+				names[repo.Name] = true
+				if repo.Credential != "GIT_TOKEN" {
+					t.Errorf("repository %s credential = %q, want GIT_TOKEN", repo.Name, repo.Credential)
+				}
+			}
+			if !names["target"] || !names["web"] {
+				t.Fatalf("named repositories = %v, want target and web", names)
 			}
 		})
 	}
