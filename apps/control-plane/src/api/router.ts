@@ -5,7 +5,7 @@
  * route definitions testable in isolation and independent of the server.
  */
 
-import { type Principal, authenticate, personPrincipal } from "./auth.ts";
+import { type Principal, type RequestAuthenticator, authenticate, personPrincipal } from "./auth.ts";
 import { touch } from "./presence.ts";
 import { errorResponse, notFound, unauthorized } from "./http.ts";
 
@@ -53,7 +53,7 @@ export class Router {
   readonly #routes: Route[] = [];
   #fallback: Fallback | null = null;
 
-  constructor(private readonly authenticateRequest: (credential: string | null) => Promise<Principal | null> = authenticate) {}
+  constructor(private readonly authenticateRequest: RequestAuthenticator = authenticate) {}
 
   #add(
     method: string,
@@ -120,14 +120,17 @@ export class Router {
          * to authenticate from a browser. That is a real trade-off — a key in
          * a URL can reach access logs, proxies and referrers — so it is
          * enabled per route rather than globally, and only for the read-only
-         * stream endpoint.
+         * stream endpoint. A header or parameter that is present, even
+         * empty, is an explicit credential; the authenticator decides
+         * whether a request naming none may still be someone (a session).
          */
-        let principal = await this.authenticateRequest(
-          request.headers.get("authorization") ??
-            (route.allowKeyInQuery ? url.searchParams.get("key") : null),
-        );
+        const explicit = request.headers.get("authorization") ??
+          (route.allowKeyInQuery ? url.searchParams.get("key") : null);
+        let principal = await this.authenticateRequest(explicit, request);
         if (principal?.credentialKind === "person") {
+          const { expiresAt } = principal;
           principal = await personPrincipal(principal.organizationId, principal.personId);
+          if (principal?.credentialKind === "person" && expiresAt !== undefined) principal.expiresAt = expiresAt;
         }
         if (!principal) throw unauthorized();
         await touch(principal, request.headers.get("x-dude-where"));

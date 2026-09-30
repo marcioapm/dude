@@ -25,8 +25,28 @@ interface PersonIdentity {
 
 export type Principal = PersonIdentity & (
   | { credentialKind: "api_key"; apiKeyId: string }
-  | { credentialKind: "person" }
+  // expiresAt: when the credential that proved it lapses, seconds since the epoch.
+  | { credentialKind: "person"; expiresAt?: number }
 );
+
+/**
+ * Who a request is. `credential` is what it named explicitly — its
+ * Authorization header, or a `key` parameter where a route allows one —
+ * and null only when it named none.
+ */
+export type RequestAuthenticator = (credential: string | null, request: Request) => Promise<Principal | null>;
+
+/**
+ * An explicit credential is an API key and nothing else: one that fails is
+ * a refusal, never a reason to try the request's cookies. Only a request
+ * that names none is asked of `session` (Cloudflare Access, when on).
+ */
+export function requestAuthenticator(session?: (request: Request) => Promise<Principal | null>): RequestAuthenticator {
+  return async (credential, request) => {
+    if (credential !== null) return authenticate(credential);
+    return session ? session(request) : null;
+  };
+}
 
 export function auditActor(principal: Principal): { kind: "human" | "person"; id: string } {
   return principal.credentialKind === "api_key"

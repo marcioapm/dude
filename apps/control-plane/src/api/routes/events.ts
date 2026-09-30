@@ -48,6 +48,8 @@ async function listEvents({ url, principal }: RequestContext): Promise<Response>
  */
 /** Events per backfill query. The whole history is still sent, in pages. */
 const BACKFILL_PAGE = 1000;
+/** The longest a session-authenticated stream stays open before it must authenticate again. */
+export const SESSION_STREAM_MS = 10 * 60_000;
 
 function streamEvents({ url, principal, request }: RequestContext): Response {
   const filter = { organizationId: principal.organizationId, ...filtersFrom(url) };
@@ -66,6 +68,7 @@ function streamEvents({ url, principal, request }: RequestContext): Response {
 
   let unsubscribe: (() => void) | undefined;
   let heartbeat: ReturnType<typeof setInterval> | undefined;
+  let lifetime: ReturnType<typeof setTimeout> | undefined;
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -148,20 +151,36 @@ function streamEvents({ url, principal, request }: RequestContext): Response {
         if (!closed) controller.enqueue(encoder.encode(": heartbeat\n\n"));
       }, 15_000);
 
-      request.signal.addEventListener("abort", () => {
+      /*
+       * A session-authenticated stream ends by the time its token does, and
+       * at the latest after SESSION_STREAM_MS, so EventSource's reconnect
+       * (resuming by Last-Event-ID) authenticates again: someone removed or
+       * signed out stops receiving within that bound. API keys are checked
+       * per connection as before.
+       */
+      if (principal.credentialKind === "person") {
+        const untilExpiry = principal.expiresAt !== undefined ? principal.expiresAt * 1000 - Date.now() : Infinity;
+        lifetime = setTimeout(end, Math.max(0, Math.min(untilExpiry, SESSION_STREAM_MS)));
+      }
+
+      request.signal.addEventListener("abort", end);
+      function end() {
+        if (closed) return;
         closed = true;
         unsubscribe?.();
         if (heartbeat) clearInterval(heartbeat);
+        if (lifetime) clearTimeout(lifetime);
         try {
           controller.close();
         } catch {
           // Already closed by the runtime.
         }
-      });
+      }
     },
     cancel() {
       unsubscribe?.();
       if (heartbeat) clearInterval(heartbeat);
+      if (lifetime) clearTimeout(lifetime);
     },
   });
 

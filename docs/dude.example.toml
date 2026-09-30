@@ -1,0 +1,24 @@
+# dude backend configuration, read once at startup from the file DUDE_CONFIG
+# names. Without DUDE_CONFIG, API keys are the only way to sign in. Database,
+# service and port settings stay in the environment.
+
+[auth]
+# "api_key" (the default when absent) or "cloudflare_access". API keys keep
+# working either way, for scripts and for anyone who signs in with one.
+provider = "cloudflare_access"
+# The origin people open dude at. Changes signed in by Access must come from
+# it (the Origin header); required with cloudflare_access.
+public_url = "https://dude.absmartly.dev"
+# Someone Access lets in who is not yet one of the organization's people
+# becomes a member (never an admin, never with a key). false refuses them.
+auto_create = true
+# The slug of an existing organization Access sign-ins belong to. It is never
+# created: startup fails if no organization has it.
+default_organization = "absmartly"
+
+[auth.cloudflare_access]
+# The Zero Trust team name: tokens are verified against
+# https://<team>.cloudflareaccess.com only.
+team = "absmartly"
+# The Access application's audience (AUD) tag.
+aud = "application-audience"
