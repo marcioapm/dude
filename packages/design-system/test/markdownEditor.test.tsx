@@ -11,6 +11,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MarkdownEditor, type MarkdownEditorProps } from "../src/primitives/MarkdownEditor.tsx";
 import { modKey } from "../src/util/keys.ts";
 import { Input } from "../src/primitives/Input.tsx";
+import { Breadcrumb } from "../src/components/Breadcrumb.tsx";
 import { KeyHint, MarkdownCheatsheet } from "../src/primitives/Kbd.tsx";
 import { continueList, countState, editorKey, formatEdit, type TextEdit } from "../src/util/markdownEdit.ts";
 
@@ -295,5 +296,21 @@ describe("the pieces around a document being written", () => {
   test("a key hint is its keys and what they do", () => {
     const h = renderToStaticMarkup(<KeyHint keys={["mod", "Enter"]}>create</KeyHint>);
     expect(h.replace(/<[^>]+>/g, "")).toBe(`${modKey()}Entercreate`);
+  });
+});
+
+describe("a dialog's context line", () => {
+  const items = [{ id: "p", label: "Customer portal" }, { id: "e", label: "Checkout v2", icon: "layers" as const }];
+  test("a plain path is no landmark and marks no crumb current, with the same crumbs", () => {
+    const path = renderToStaticMarkup(<Breadcrumb size="sm" current={false} items={items} />);
+    const nav = renderToStaticMarkup(<Breadcrumb size="sm" items={items} />);
+    expect(path).not.toContain("<nav");
+    expect(path).not.toContain("aria-current");
+    expect(path).not.toContain('aria-label="Breadcrumb"');
+    expect(nav).toContain('<nav aria-label="Breadcrumb"');
+    expect(nav).toContain('aria-current="page"');
+    const words = (h: string) => h.replace(/<[^>]+>/g, "|").split("|").filter(Boolean);
+    expect(words(path)).toEqual(words(nav));
+    expect(words(path)).toEqual(["Customer portal", "Checkout v2"]);
   });
 });

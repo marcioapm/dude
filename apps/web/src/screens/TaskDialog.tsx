@@ -123,7 +123,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
       onOpenChange={(open) => !open && onClose()}
       size="document"
       context={choices ? (
-        <Breadcrumb size="sm" items={[
+        <Breadcrumb size="sm" current={false} items={[
           { id: "project", label: choices.projectName },
           ...(epicTitle ? [{ id: "epic", label: epicTitle, icon: "layers" as const }] : []),
         ]} />
