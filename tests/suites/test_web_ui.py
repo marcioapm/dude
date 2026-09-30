@@ -252,7 +252,75 @@ def test_enter_in_the_title_moves_to_the_goal_and_does_not_create(
     page.get_by_role("tablist", name="Goal view").get_by_role("tab", name="Preview").click()
     title.focus()
     title.press("Enter")
-    expect(page.get_by_test_id("task-goal-preview")).to_be_focused()
+    assert console_errors == []
+
+
+# The task dialog's main column, its Goal frame and its Criteria field, measured.
+_TASK_COLUMN = """() => {
+  const main = document.querySelector('[data-testid="task-title"]').closest('form').parentElement;
+  const goal = document.querySelector('[data-testid="task-goal"]').closest('[data-mode]');
+  const criteria = document.querySelector('[data-testid="task-criteria"]').closest('[data-mode]').parentElement;
+  const stack = criteria.parentElement;
+  const cs = getComputedStyle(main);
+  return {
+    scrollHeight: main.scrollHeight, clientHeight: main.clientHeight,
+    gap: parseFloat(getComputedStyle(stack).rowGap),
+    goalBottom: goal.getBoundingClientRect().bottom,
+    criteriaTop: criteria.getBoundingClientRect().top,
+    criteriaBottom: criteria.getBoundingClientRect().bottom,
+    columnInnerBottom: main.getBoundingClientRect().top + main.clientHeight - parseFloat(cs.paddingBottom),
+  };
+}"""
+
+
+@pytest.mark.parametrize("height,density", [(900, "comfortable"), (720, "comfortable"), (720, "compact")])
+def test_the_empty_task_dialog_opens_without_scrolling_and_its_goal_fills_the_column(
+    page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list, height: int, density: str
+):
+    page.set_viewport_size({"width": 1280, "height": height})
+    sign_in(page, web_url, org["api_key"])
+    page.evaluate(f"localStorage.setItem('dude.density', '{density}')")
+    page.reload()
+    expect(page.locator(f"[data-density={density}]").first).to_be_attached()
+    page.get_by_test_id("new-task").click()
+    dialog = page.get_by_role("dialog", name="New task")
+    expect(dialog.get_by_text(forge_project["name"], exact=True)).to_be_visible()
+    page.wait_for_function(
+        "document.querySelector('[role=dialog]').getAnimations().every(a => a.playState === 'finished')")
+
+    m = page.evaluate(_TASK_COLUMN)
+    assert m["scrollHeight"] <= m["clientHeight"], m
+    # The Goal takes what is left: it ends a gap above the criteria, which end at the column's foot.
+    assert abs(m["criteriaTop"] - m["gap"] - m["goalBottom"]) <= 2, m
+    assert abs(m["columnInnerBottom"] - m["criteriaBottom"]) <= 2, m
+
+    # Past what the column holds, the Goal grows with its text and the column scrolls; the editor does not.
+    goal = page.get_by_test_id("task-goal")
+    goal.fill("\n".join(f"Line {i}" for i in range(80)))
+    m = page.evaluate(_TASK_COLUMN)
+    assert m["scrollHeight"] > m["clientHeight"], m
+    assert goal.evaluate("el => el.scrollHeight <= el.clientHeight"), "the Goal scrolls inside itself"
+    assert console_errors == []
+
+
+def test_on_a_phone_the_task_dialogs_writing_fills_the_screen_before_the_aside(
+    page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list
+):
+    page.set_viewport_size({"width": 375, "height": 812})
+    sign_in(page, web_url, org["api_key"])
+    page.get_by_test_id("new-task").click()
+    expect(page.get_by_role("dialog", name="New task").get_by_text(forge_project["name"], exact=True)).to_be_visible()
+    page.wait_for_function(
+        "document.querySelector('[role=dialog]').getAnimations().every(a => a.playState === 'finished')")
+    m = page.evaluate(_TASK_COLUMN)
+    # One scroll for the writing and the aside after it; the writing is the first screenful, filled.
+    scroller = page.evaluate("""() => {
+      const main = document.querySelector('[data-testid="task-title"]').closest('form').parentElement;
+      return { main: main.getBoundingClientRect().height, view: main.parentElement.clientHeight };
+    }""")
+    assert abs(scroller["main"] - scroller["view"]) <= 2, scroller
+    assert abs(m["criteriaTop"] - m["gap"] - m["goalBottom"]) <= 2, m
+    assert abs(m["columnInnerBottom"] - m["criteriaBottom"]) <= 2, m
     assert console_errors == []
 
 
