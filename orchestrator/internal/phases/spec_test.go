@@ -75,14 +75,16 @@ func TestNestedContainersAreAskedForOnlyWhenSet(t *testing.T) {
 			t.Errorf("%s: unset, sandbox = %+v", model, *sp.Sandbox)
 		}
 	}
-	c, in := goldenInput("llm/impl")
-	c.NestedContainers = true
-	sp := buildSpec(c, in)
-	if sp.Sandbox == nil || !sp.Sandbox.NestedContainers {
-		t.Fatalf("set: sandbox = %+v", sp.Sandbox)
-	}
-	b, _ := json.Marshal(sp)
-	if !strings.Contains(string(b), `"sandbox":{"nestedContainers":true}`) {
-		t.Errorf("wire form: %s", b)
+	for _, model := range []string{"llm/impl", "fake/scripted"} {
+		c, in := goldenInput(model)
+		c.NestedContainers = true
+		sp := buildSpec(c, in)
+		if sp.Sandbox == nil || !sp.Sandbox.NestedContainers {
+			t.Fatalf("%s: set, sandbox = %+v", model, sp.Sandbox)
+		}
+		b, _ := json.Marshal(sp)
+		if !strings.Contains(string(b), `"sandbox":{"nestedContainers":true}`) {
+			t.Errorf("%s: wire form: %s", model, b)
+		}
 	}
 }
