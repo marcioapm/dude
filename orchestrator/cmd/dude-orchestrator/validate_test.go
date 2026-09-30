@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -53,7 +54,7 @@ type validateRun struct {
 	stdout, stderr string
 }
 
-func runValidate(t *testing.T, text string, mode os.FileMode, args ...string) (validateRun, string) {
+func configFile(t *testing.T, text string, mode os.FileMode) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "dude.toml")
 	if err := os.WriteFile(path, []byte(text), mode); err != nil {
@@ -62,17 +63,23 @@ func runValidate(t *testing.T, text string, mode os.FileMode, args ...string) (v
 	if err := os.Chmod(path, mode); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	return path
+}
+
+// runMain runs the orchestrator's main with args, configured by the file at
+// path and env alone: none of this machine's own settings.
+func runMain(t *testing.T, path string, env []string, args ...string) validateRun {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestValidateHelper$", "-test.count=1")
-	// Only the file configures it: none of this machine's own settings.
-	cmd.Env = []string{"DUDE_TEST_VALIDATE_HELPER=1", "DUDE_TEST_VALIDATE_ARGS=" + strings.Join(append([]string{"validate"}, args...), " "),
-		"DUDE_CONFIG=" + path, "HOME=" + t.TempDir(), "PATH=" + os.Getenv("PATH")}
+	cmd.Env = append([]string{"DUDE_TEST_VALIDATE_HELPER=1", "DUDE_TEST_VALIDATE_ARGS=" + strings.Join(args, " "),
+		"DUDE_CONFIG=" + path, "HOME=" + t.TempDir(), "PATH=" + os.Getenv("PATH")}, env...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
 	if ctx.Err() != nil {
-		t.Fatalf("validate did not exit: %s", stderr.String())
+		t.Fatalf("%q did not exit: %s", args, stderr.String())
 	}
 	r := validateRun{stdout: stdout.String(), stderr: stderr.String()}
 	if exit, ok := err.(*exec.ExitError); ok {
@@ -80,7 +87,13 @@ func runValidate(t *testing.T, text string, mode os.FileMode, args ...string) (v
 	} else if err != nil {
 		t.Fatal(err)
 	}
-	return r, path
+	return r
+}
+
+func runValidate(t *testing.T, text string, mode os.FileMode, args ...string) (validateRun, string) {
+	t.Helper()
+	path := configFile(t, text, mode)
+	return runMain(t, path, nil, append([]string{"validate"}, args...)...), path
 }
 
 // startupError is the error startup's resolve gives for the file at path.
@@ -98,19 +111,17 @@ func startupError(t *testing.T, path string) string {
 	return err.Error()
 }
 
-func TestValidate(t *testing.T) {
-	const sentinel = "S3NT1NEL-validate-lux-key-7c1e"
-	addr, connections := listener(t)
-	// Every address in the file is the test's own listener: a connection to
-	// any of them is one validate must not make.
-	good := `[database]
+// validFile is a complete orchestrator file whose every address is addr: a
+// connection to any of them is one validate must not make.
+func validFile(addr, luxKey string) string {
+	return `[database]
 url = "postgres://dude:pw@` + addr + `/dude?connect_timeout=2"
 [orchestrator]
 token = "file-token"
 listen = "` + addr + `"
 [lux]
 url = "http://` + addr + `"
-api_key = "` + sentinel + `"
+api_key = "` + luxKey + `"
 [llm]
 url = "http://` + addr + `/v1"
 key = "llm-key"
@@ -118,6 +129,12 @@ key = "llm-key"
 listen = "` + addr + `"
 url = "http://` + addr + `"
 `
+}
+
+func TestValidate(t *testing.T) {
+	const sentinel = "S3NT1NEL-validate-lux-key-7c1e"
+	addr, connections := listener(t)
+	good := validFile(addr, sentinel)
 	check := func(name string, r validateRun, exit int, stdout string, stderrHas ...string) {
 		t.Helper()
 		if r.exit != exit || r.stdout != stdout {
@@ -168,6 +185,51 @@ url = "http://` + addr + `"
 
 	if n := connections(); n != 0 {
 		t.Errorf("validate made %d connections", n)
+	}
+}
+
+// Startup (no arguments) and validate, run on the same file, refuse it with
+// the same diagnostic, and neither reaches the addresses in it.
+func TestStartupRefusesWhatValidateRefuses(t *testing.T) {
+	addr, connections := listener(t)
+	good := validFile(addr, "lux-key")
+	cases := []struct {
+		name, text  string
+		startupExit int
+		diagnostic  string
+	}{
+		{"loader error", good + "[agent]\nimgae = \"x\"\n", 1, "unknown key agent.imgae"},
+		{"missing database.url", strings.Replace(good, `url = "postgres://dude:pw@`+addr+`/dude?connect_timeout=2"`+"\n", "", 1),
+			2, "database.url (DATABASE_URL) is required"},
+		{"missing lux.url", strings.Replace(good, "[lux]\nurl = \"http://"+addr+"\"\n", "[lux]\n", 1),
+			2, "lux.url (LUX_URL) is required"},
+		{"missing lux.api_key", strings.Replace(good, "api_key = \"lux-key\"\n", "", 1),
+			2, "lux.api_key (LUX_API_KEY) is required"},
+		{"missing orchestrator.token", strings.Replace(good, "token = \"file-token\"\n", "", 1),
+			2, "orchestrator.token (DUDE_ORCHESTRATOR_TOKEN) is required"},
+		{"invalid registry", good + "[registry]\nauth = \"ecr\"\n", 1, "needs DUDE_AGENT_IMAGE in an ECR registry"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if c.text == good {
+				t.Fatal("the case does not change the file")
+			}
+			path := configFile(t, c.text, 0o600)
+			v := runMain(t, path, nil, "validate")
+			if v.exit != 1 || v.stdout != "" || !strings.Contains(v.stderr, c.diagnostic) {
+				t.Fatalf("validate: exit %d stdout %q stderr %q, want 1 and %q", v.exit, v.stdout, v.stderr, c.diagnostic)
+			}
+			diagnostic := strings.TrimSuffix(v.stderr, "\n")
+			s := runMain(t, path, nil)
+			// slog quotes the error, escaping any quotes in it.
+			quoted := strconv.Quote(diagnostic)
+			if s.exit != c.startupExit || !(strings.Contains(s.stderr, diagnostic) || strings.Contains(s.stderr, quoted[1:len(quoted)-1])) {
+				t.Errorf("startup: exit %d stderr %q, want %d and validate's %q", s.exit, s.stderr, c.startupExit, diagnostic)
+			}
+		})
+	}
+	if n := connections(); n != 0 {
+		t.Errorf("startup or validate made %d connections", n)
 	}
 }
 

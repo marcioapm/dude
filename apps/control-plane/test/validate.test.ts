@@ -1,7 +1,8 @@
 /**
- * `dude-backend validate`, run as the binary is: a process of its own with
- * only the file for configuration. Needs no database: every address in the
- * file is a listener the test owns, and none may be connected to.
+ * `dude-backend validate`, and startup on the same files, run as the binary
+ * is: a process of its own with only the file for configuration. Needs no
+ * database: every address in the file is a listener the test owns, and none
+ * may be connected to.
  */
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -143,6 +144,23 @@ describe("dude-backend validate", () => {
     expect(await backend(["--version"], {})).toEqual({ exit: 0, stdout: "dev\n", stderr: "" });
   });
 
+  // Startup (no arguments) and validate on the same file: the same refusal.
+  test.each([
+    ["a loader error", good.replace('bucket = "b"', 'bucket = "b"\nbuckett = "x"'), "unknown key s3.buckett"],
+    ["missing database.url", good.replace(/url = "postgres[^\n]*\n/, ""), "database.url (DATABASE_URL) is required"],
+    ["invalid [auth]", good + access.replace('team = "acme"', 'team = "Not A Label"'),
+      "auth.cloudflare_access.team (DUDE_AUTH_CLOUDFLARE_ACCESS_TEAM)"],
+  ])("startup refuses what validate refuses: %s", async (_, text, diagnostic) => {
+    expect(text).not.toBe(good);
+    const path = file(text);
+    const checked = await run(path);
+    expect(checked.exit).toBe(1);
+    expect(checked.stderr).toContain(diagnostic);
+    const started = await backend([], { DUDE_CONFIG: path });
+    expect(started.exit).toBe(1);
+    expect(started.stderr).toContain(checked.stderr);
+  });
+
   test("no file: ok with no file", () => {
     const out: string[] = [];
     const err: string[] = [];
@@ -151,7 +169,8 @@ describe("dude-backend validate", () => {
     expect({ exit, out, err }).toEqual({ exit: 0, out: ["ok: no file"], err: [] });
   });
 
-  // Last, after every run above: none of them reached the listener.
+  // Last, after every run above, validate's and startup's: none of them
+  // reached the listener.
   test("connected to nothing", async () => {
     await Bun.sleep(50);
     expect(connections).toBe(0);
