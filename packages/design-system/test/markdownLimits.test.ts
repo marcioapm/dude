@@ -130,3 +130,27 @@ describe("nesting at the 64K goal limit", () => {
     expect(deepest(parseMarkdown("> > > x"))).toEqual({ t: "paragraph", c: [{ t: "text", v: "x" }] });
   });
 });
+
+describe("the nesting bound does not leak between paths that reach the same text", () => {
+  // A failed emphasis scan parses the links one level deeper and caches the
+  // result; the top-level pass that follows must not reuse the deeper,
+  // earlier-truncated parse.
+  const links = (n: number) => "[".repeat(n) + "x" + "](u)".repeat(n);
+  const inner = (blocks: readonly Block[]) => {
+    const p = blocks[0];
+    if (p?.t !== "paragraph") throw new Error("expected a paragraph");
+    return p.c;
+  };
+
+  test.each([1, 2, 16, 31, 32])("%i nested links read the same after an unmatched star", (n) => {
+    const alone = inner(parseMarkdown(links(n)));
+    const starred = inner(parseMarkdown("*" + links(n)));
+    expect(starred[0]).toEqual({ t: "text", v: "*" });
+    expect(starred.slice(1)).toEqual(alone);
+  });
+
+  test("so does emphasis inside them", () => {
+    const src = "[".repeat(30) + "**x**" + "](u)".repeat(30);
+    expect(inner(parseMarkdown("_" + src)).slice(1)).toEqual(inner(parseMarkdown(src)));
+  });
+});
