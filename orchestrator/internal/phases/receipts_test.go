@@ -261,10 +261,7 @@ func TestAFailureAfterAcceptedIsRecorded(t *testing.T) {
 // superseding row.
 func TestAReadOriginalClearsItsFailedInterrupt(t *testing.T) {
 	w := newReceiptWorld(t)
-	if _, err := w.owner.Exec(context.Background(), `INSERT INTO directives (id, organization_id, task_id, run_id, text, supersedes, resends, interrupt, interrupt_only, sent_at)
-		VALUES ('dir_2', $1, 'wi_'||$1, 'run_'||$1, 'also add a test', 'dir_1', 'dir_1', true, true, now())`, w.org); err != nil {
-		t.Fatal(err)
-	}
+	w.interruptOnly("dir_2")
 	w.receive(failedFirst("dir_2", "workload not reachable"))
 	w.receive(consumed("dir_1"))
 	var delivered, failed bool
