@@ -327,6 +327,12 @@ with `registry.auth = "ecr"`; the region is always the image's registry's),
 and the retired `DUDE_OPENCODE_AUTH`/`DUDE_OPENCODE_CONFIG`, ignored with a
 warning. The `dude` CLI inside Run containers is configured by lux per Run.
 
+**Retired settings.** A setting a release removes is still accepted by the
+next release, from the file or the environment: it is ignored, and each
+process logs `retired: <key>; remove it` (the key or variable, never its
+value). The release after refuses it as an unknown key. None is retired
+today.
+
 ### Moving a deployment to the file
 
 The file can be committed with the deployment (for example in the aiverse
