@@ -114,6 +114,9 @@ type phaseRun struct {
 	// A directive lux has, sent within unreadGraceSecs, that the agent has
 	// not read, or read after its last turn ended (by ledger order: in one
 	// transaction the two carry the same now()): a new turn is starting.
+	// Evaluated only where advance reads it (a finished turn of a running
+	// Run not yet pushed); false otherwise. Its lookups use the partial
+	// indexes of migration 060.
 	Unread bool
 	// A person approved a repository the lux Run does not have yet.
 	RepoApproved bool
@@ -144,11 +147,13 @@ const runColumns = `r.id, r.organization_id, r.project_id, r.task_id, r.phase::t
 	COALESCE(r.lux_run_id, ''), COALESCE(r.lux_state, ''), COALESCE(r.lux_stop_reason, ''),
 	COALESCE(r.push_request_id, ''), COALESCE(r.push_branch, ''), cardinality(r.lux_pushes) > 0, r.base_refs, r.base_shas, r.turn_done_at IS NOT NULL,
 	EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL),
-	EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NOT NULL AND d.failed_at IS NULL
+	CASE WHEN r.turn_done_at IS NOT NULL AND r.status = 'running' AND r.lux_state = 'running' AND r.push_request_id IS NULL
+	THEN EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NOT NULL AND d.failed_at IS NULL
 	        AND d.sent_at > now() - make_interval(secs => ` + unreadGraceSecs + `)
 	        AND (d.delivered_at IS NULL OR (SELECT max(e.cursor) FROM events e WHERE e.run_id = r.id
 	              AND e.event_type = 'run.directive.delivered' AND e.payload->>'directiveId' = d.id)
-	            > (SELECT max(e.cursor) FROM events e WHERE e.run_id = r.id AND e.event_type = 'agent.session.stopped'))),
+	            > (SELECT max(e.cursor) FROM events e WHERE e.run_id = r.id AND e.event_type = 'agent.session.stopped')))
+	ELSE false END,
 	EXISTS (SELECT 1 FROM repository_requests q JOIN repositories repo ON repo.id = q.repository_id
 	        WHERE q.run_id = r.id AND q.status = 'approved' AND NOT (repo.name = ANY (r.lux_repositories))),
 	COALESCE(r.dude_pause, ''), ask.open,

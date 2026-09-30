@@ -17,3 +17,12 @@ ALTER TABLE directives
   ADD COLUMN failed_at      timestamptz,
   ADD COLUMN error          text,
   ADD COLUMN interrupt_only boolean NOT NULL DEFAULT false;
+
+-- A finished turn is held open while a steer sent to it is unread: the
+-- sweep compares that steer's delivery with the Run's last turn end. Both
+-- are a few rows among the thousands a Run records; these find them
+-- without reading the rest.
+CREATE INDEX events_run_directive_delivered_idx ON events (run_id, (payload->>'directiveId'), cursor)
+  WHERE event_type = 'run.directive.delivered';
+CREATE INDEX events_run_turn_end_idx ON events (run_id, cursor)
+  WHERE event_type = 'agent.session.stopped';
