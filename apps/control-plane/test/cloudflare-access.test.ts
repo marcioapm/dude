@@ -367,13 +367,13 @@ describe("signing in", () => {
 
   // The profile step is the window between the first read and the locked
   // recheck: hold the sign-in there while someone else writes the email.
-  async function signInAround(email: string, meanwhile: () => Promise<void>) {
+  async function signInAround(email: string, meanwhile: () => Promise<void>, failProfile = false) {
     const inProfile = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     const r = routerFor(edge, {}, org, (profile) => async (token, e) => {
       inProfile.resolve();
       await release.promise;
-      return profile(token, e);
+      return failProfile ? null : profile(token, e);
     });
     const signing = me(r, cookie(await sign(signer, { email })));
     await inProfile.promise;
@@ -425,6 +425,25 @@ describe("signing in", () => {
       await removal.catch(() => {});
     }
   });
+
+  // An existing person whose name is still their email and who has no photo gets
+  // the profile's; removed meanwhile, both the fill (UPDATE) and the plain reread
+  // (SELECT, when the profile gave nothing) must refuse them and change nothing.
+  for (const [branch, failProfile] of [["a matching profile", false], ["a failed profile", true]] as const) {
+    test(`someone removed while ${branch} was fetched for them is refused and left unchanged`, async () => {
+      const email = `fill${failProfile ? "failed" : "matched"}@example.com`;
+      const id = `${org}_fill${failProfile ? "failed" : "matched"}`;
+      await owner`INSERT INTO people (id, organization_id, name, email) VALUES (${id}, ${org}, ${email}, ${email})`;
+      edge.profiles.set(email, { email, name: "Filled In", oidc_fields: { picture: "https://img.example/f.png" } });
+      const got = await signInAround(email,
+        async () => { await owner`UPDATE people SET removed_at = now() WHERE id = ${id}`; }, failProfile);
+      expect(got.status).toBe(401);
+      const rows = await peopleByEmail(email);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ id, name: email, photo_url: null });
+      expect(rows[0]!.removed_at).not.toBeNull();
+    });
+  }
 
   test("a member added while the first sign-in fetched its profile is reused", async () => {
     const got = await signInAround("addedmeanwhile@example.com",
