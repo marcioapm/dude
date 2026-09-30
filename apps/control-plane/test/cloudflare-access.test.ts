@@ -439,6 +439,17 @@ describe("signing in", () => {
     expect(await peopleByEmail("shared@example.com", other)).toHaveLength(1);
   });
 
+  test("the email lookup sees only the transaction's own organization", async () => {
+    await owner`INSERT INTO people (id, organization_id, name, email) VALUES (${`${other}_scoped`}, ${other}, 'Scoped', 'scoped@example.com')`;
+    const lookup = (organizationId: string | null) => app.begin(async (tx) => {
+      if (organizationId) await tx`SELECT set_config('app.organization_id', ${organizationId}, true)`;
+      return (await tx`SELECT id FROM people_by_email('SCOPED@example.com')`).map((r: { id: string }) => r.id);
+    });
+    expect(await lookup(other)).toEqual([`${other}_scoped`]);
+    expect(await lookup(org)).toEqual([]);
+    expect(await lookup(null)).toEqual([]);
+  });
+
   test("the header wins over the cookie, and nothing but a verified token identifies anyone", async () => {
     const a = await sign(signer, { email: "new@example.com" });
     const b = await sign(signer, { email: "marcio@example.com" });
