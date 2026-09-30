@@ -37,7 +37,7 @@ export interface SegmentedProps<T extends string> extends Omit<HTMLAttributes<HT
   readonly onChange: (value: T) => void;
   /** Names the group for a screen reader: "Whose tasks". */
   readonly label: string;
-  /** `toolbar`: level with `sm` buttons in a bar (its track is `control-sm`), words at the md size. */
+  /** `toolbar`: level with `sm` buttons in a bar (its track is `control-sm`), words at the `sm` text size. */
   readonly size?: "sm" | "md" | "toolbar" | undefined;
   readonly disabled?: boolean | undefined;
   /**
