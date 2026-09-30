@@ -169,8 +169,8 @@ test("project overview shows the survivor as owner after the position-0 owner is
   };
   expect(await owners()).toEqual([leaving]);
   expect((await call(adminPerson, "DELETE", "/v1/people/:id", undefined, { id: leaving })).status).toBe(204);
-  expect(await owner`SELECT person_id, position FROM task_people WHERE task_id = 'tsk_overview'`)
-    .toEqual([{ person_id: survivor, position: 1 }]);
+  const left = await owner`SELECT person_id, position FROM task_people WHERE task_id = 'tsk_overview'` as unknown[];
+  expect(left).toEqual([{ person_id: survivor, position: 1 }]);
   expect(await owners()).toEqual([survivor]);
 });
 
