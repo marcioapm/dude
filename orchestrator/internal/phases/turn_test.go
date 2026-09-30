@@ -20,4 +20,3 @@ func TestATurnFailureNamesTheModelOnlyWhenTheAgentNeverStarted(t *testing.T) {
 		t.Errorf("another error: %q", got)
 	}
 }
-
