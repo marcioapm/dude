@@ -54,7 +54,7 @@ def test_delivering_from_the_ui_reaches_a_pull_request_and_back(
     page.get_by_test_id("new-task").click()
     page.get_by_test_id("task-title").fill("Greet people by their full name")
     page.get_by_test_id("task-goal").fill("Use the full name, not just the first.")
-    page.get_by_label("Criterion 1").fill("Greets with the full name")
+    page.get_by_test_id("task-criteria").fill("- [ ] Greets with the full name")
     page.get_by_test_id("task-create-deliver").click()
     expect(page.get_by_test_id("task-screen")).to_be_visible()
 
@@ -131,7 +131,7 @@ def test_a_task_is_edited_and_moved_from_its_screen(
 
     page.get_by_test_id("edit-task").click()
     page.get_by_test_id("task-title").fill("Greet by full name")
-    page.get_by_label("Criterion 1").fill("Uses the full name")
+    page.get_by_test_id("task-criteria").fill("- Uses the full name")
     page.get_by_role("combobox", name="Epic").click()
     page.get_by_role("listbox").get_by_text("Greetings").click()
     page.get_by_test_id("task-save").click()
@@ -141,6 +141,722 @@ def test_a_task_is_edited_and_moved_from_its_screen(
     expect(screen.get_by_role("list", name="Acceptance criteria")).to_contain_text("Uses the full name")
     saved = client.get(f"/v1/tasks/{item['id']}").json()
     assert saved["epicId"] == epic["id"]
+    assert console_errors == []
+
+
+GOAL_MARKDOWN = """Checkout dropped **SEPA** from the payment step.
+
+## What exists today
+- The old flow lives behind `checkout_v2`.
+- Methods come from `GET /v1/billing/methods`."""
+
+
+def test_a_task_is_written_in_markdown_and_its_criteria_are_the_list_items(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    sign_in(page, web_url, org["api_key"])
+    page.get_by_test_id("new-task").click()
+    page.get_by_test_id("task-title").fill("Keep SEPA at checkout")
+    goal = page.get_by_test_id("task-goal")
+    selected = "el => el.value.slice(el.selectionStart, el.selectionEnd)"
+
+    # The toolbar's Bold wraps the selection, which stays selected.
+    goal.fill("make it red")
+    goal.evaluate("el => el.setSelectionRange(8, 11)")
+    page.get_by_role("toolbar", name="Formatting").first.get_by_role("button", name="Bold", exact=True).click()
+    expect(goal).to_have_value("make it **red**")
+    assert goal.evaluate(selected) == "red"
+    expect(goal).to_be_focused()
+    # Ctrl+B again takes it off.
+    goal.press("Control+b")
+    expect(goal).to_have_value("make it red")
+    assert goal.evaluate(selected) == "red"
+    # Ctrl+B on, then Undo: the text is as it was.
+    goal.press("Control+b")
+    expect(goal).to_have_value("make it **red**")
+    goal.press("ControlOrMeta+z")
+    expect(goal).to_have_value("make it red")
+
+    goal.fill(GOAL_MARKDOWN)
+    criteria = page.get_by_test_id("task-criteria")
+    criteria.fill("- [ ] SEPA appears on the payment step\n- Invoice only for **annual** plans")
+    expect(page.get_by_test_id("task-criteria-count")).to_have_text("2 criteria")
+
+    # Preview renders the goal through the safe Markdown path, heading and list.
+    goal_view = page.get_by_role("tablist", name="Goal view")
+    goal_view.get_by_role("tab", name="Preview").click()
+    preview = page.get_by_test_id("task-goal-preview")
+    expect(preview.get_by_role("heading", name="What exists today")).to_be_visible()
+    expect(preview.get_by_role("listitem")).to_have_count(2)
+    expect(preview.locator("strong")).to_have_text("SEPA")
+    heading_style = "el => { const s = getComputedStyle(el); return [s.fontSize, s.marginTop, s.lineHeight]; }"
+    previewed = preview.get_by_role("heading", name="What exists today").evaluate(heading_style)
+    # ← goes back to Write, and the source is as it was typed.
+    goal_view.get_by_role("tab", name="Preview").press("ArrowLeft")
+    expect(goal_view.get_by_role("tab", name="Write")).to_have_attribute("aria-selected", "true")
+    expect(page.get_by_test_id("task-goal")).to_have_value(GOAL_MARKDOWN)
+
+    # Typing a list continues it: Enter after a task item opens the next one.
+    criteria.focus()
+    criteria.evaluate("el => el.setSelectionRange(el.value.length, el.value.length)")
+    criteria.press("Enter")
+    expect(criteria).to_have_value("- [ ] SEPA appears on the payment step\n- Invoice only for **annual** plans\n- ")
+    criteria.press("Enter")
+    expect(criteria).to_have_value("- [ ] SEPA appears on the payment step\n- Invoice only for **annual** plans\n")
+
+    page.get_by_test_id("task-save").click()
+    expect(page.get_by_test_id("task-screen")).to_be_visible()
+
+    items = client.get("/v1/tasks", params={"projectId": forge_project["id"]}).json()["tasks"]
+    task_id = next(i["id"] for i in items if i["title"] == "Keep SEPA at checkout")
+    saved = client.get(f"/v1/tasks/{task_id}").json()
+    assert saved["acceptanceCriteria"] == ["SEPA appears on the payment step", "Invoice only for **annual** plans"]
+    assert saved["goal"] == GOAL_MARKDOWN
+
+    # The task shows what the preview showed: the goal's heading, each criterion.
+    screen = page.get_by_test_id("task-screen")
+    expect(screen.get_by_role("heading", name="What exists today")).to_be_visible()
+    # Set as it was previewed: the same size and the same space above it.
+    assert screen.get_by_role("heading", name="What exists today").evaluate(heading_style) == previewed
+    criteria_list = screen.get_by_role("list", name="Acceptance criteria")
+    expect(criteria_list.locator(":scope > li")).to_have_count(2)
+    expect(criteria_list.locator("strong")).to_have_text("annual")
+    # The criteria are a section of their own, their items where the goal's list items are.
+    expect(screen.get_by_role("region", name="Acceptance criteria").get_by_role("heading", name="Acceptance criteria")).to_be_visible()
+    goal_item = screen.get_by_role("region", name="Goal").get_by_role("listitem").first
+    left = "el => Math.round(el.getBoundingClientRect().left)"
+    assert criteria_list.locator(":scope > li").first.evaluate(left) == goal_item.evaluate(left)
+
+    # Editing opens the criteria as the list they were saved from.
+    page.get_by_test_id("edit-task").click()
+    expect(page.get_by_test_id("task-criteria")).to_have_value(
+        "- [ ] SEPA appears on the payment step\n- [ ] Invoice only for **annual** plans")
+    expect(page.get_by_test_id("task-goal")).to_have_value(GOAL_MARKDOWN)
+    assert console_errors == []
+
+
+BROKEN_GOAL = "Keep SEPA at checkout.\nKeep Invoice for annual plans.\n\nA second paragraph."
+BROKEN_CRITERIA = "- [ ] SEPA appears\n  on the payment step"
+
+
+def test_a_single_newline_a_person_types_is_a_line_break_in_preview_read_and_on_the_task(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    first_paragraph = "p:has-text('Keep SEPA at checkout.')"
+    lines = "el => el.innerText.split('\\n')"
+    sign_in(page, web_url, org["api_key"])
+    page.get_by_test_id("new-task").click()
+    page.get_by_test_id("task-title").fill("Line breaks")
+    page.get_by_test_id("task-goal").fill(BROKEN_GOAL)
+    page.get_by_test_id("task-criteria").fill(BROKEN_CRITERIA)
+
+    page.get_by_role("tablist", name="Goal view").get_by_role("tab", name="Preview").click()
+    para = page.get_by_test_id("task-goal-preview").locator(first_paragraph)
+    expect(para.locator("br")).to_have_count(1)
+    assert para.evaluate(lines) == ["Keep SEPA at checkout.", "Keep Invoice for annual plans."]
+    criteria_view = page.get_by_role("tablist", name="Acceptance criteria view")
+    criteria_view.get_by_role("tab", name="Preview").click()
+    expect(page.get_by_test_id("task-criteria-preview").locator("li br")).to_have_count(1)
+
+    page.get_by_test_id("task-read").click()
+    doc = page.get_by_test_id("task-reading")
+    expect(doc.locator(first_paragraph).locator("br")).to_have_count(1)
+    expect(doc.locator("li br")).to_have_count(1)
+    page.keyboard.press("Escape")
+
+    page.get_by_test_id("task-save").click()
+    screen = page.get_by_test_id("task-screen")
+    expect(screen).to_be_visible()
+    goal = screen.get_by_role("region", name="Goal").locator(first_paragraph)
+    expect(goal.locator("br")).to_have_count(1)
+    assert goal.evaluate(lines) == ["Keep SEPA at checkout.", "Keep Invoice for annual plans."]
+    expect(screen.get_by_role("list", name="Acceptance criteria").locator("li br")).to_have_count(1)
+    items = client.get("/v1/tasks", params={"projectId": forge_project["id"]}).json()["tasks"]
+    saved = client.get(f"/v1/tasks/{next(i['id'] for i in items if i['title'] == 'Line breaks')}").json()
+    assert saved["goal"] == BROKEN_GOAL
+    assert saved["acceptanceCriteria"] == ["SEPA appears\non the payment step"]
+    assert console_errors == []
+
+
+def test_enter_in_the_title_moves_to_the_goal_and_does_not_create(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    sign_in(page, web_url, org["api_key"])
+    page.get_by_test_id("new-task").click()
+    title = page.get_by_test_id("task-title")
+    title.fill("Not yet")
+    expect(page.get_by_test_id("task-save")).to_be_enabled()
+    title.press("Enter")
+    expect(page.get_by_test_id("task-goal")).to_be_focused()
+    expect(title).to_have_value("Not yet")
+    items = client.get("/v1/tasks", params={"projectId": forge_project["id"]}).json()["tasks"]
+    assert [i for i in items if i["title"] == "Not yet"] == []
+    # With the goal in Preview, Enter moves to its preview, not past it.
+    page.get_by_role("tablist", name="Goal view").get_by_role("tab", name="Preview").click()
+    title.focus()
+    title.press("Enter")
+    expect(page.get_by_test_id("task-goal-preview")).to_be_focused()
+    assert console_errors == []
+
+
+# The task dialog's main column, its Goal frame and its Criteria field, measured.
+_TASK_COLUMN = """() => {
+  const main = document.querySelector('[data-testid="task-title"]').closest('form').parentElement;
+  const goal = document.querySelector('[data-testid="task-goal"]').closest('[data-mode]');
+  const criteria = document.querySelector('[data-testid="task-criteria"]').closest('[data-mode]').parentElement;
+  const stack = criteria.parentElement;
+  const cs = getComputedStyle(main);
+  return {
+    scrollHeight: main.scrollHeight, clientHeight: main.clientHeight,
+    gap: parseFloat(getComputedStyle(stack).rowGap),
+    goalBottom: goal.getBoundingClientRect().bottom,
+    criteriaTop: criteria.getBoundingClientRect().top,
+    criteriaBottom: criteria.getBoundingClientRect().bottom,
+    columnInnerBottom: main.getBoundingClientRect().top + main.clientHeight - parseFloat(cs.paddingBottom),
+  };
+}"""
+
+
+@pytest.mark.parametrize("height,density", [(900, "comfortable"), (720, "comfortable"), (720, "compact")])
+def test_the_empty_task_dialog_opens_without_scrolling_and_its_goal_fills_the_column(
+    page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list, height: int, density: str
+):
+    page.set_viewport_size({"width": 1280, "height": height})
+    sign_in(page, web_url, org["api_key"])
+    page.evaluate(f"localStorage.setItem('dude.density', '{density}')")
+    page.reload()
+    expect(page.locator(f"[data-density={density}]").first).to_be_attached()
+    page.get_by_test_id("new-task").click()
+    dialog = page.get_by_role("dialog", name="New task")
+    expect(dialog.get_by_text(forge_project["name"], exact=True)).to_be_visible()
+    page.wait_for_function(
+        "document.querySelector('[role=dialog]').getAnimations().every(a => a.playState === 'finished')")
+
+    m = page.evaluate(_TASK_COLUMN)
+    assert m["scrollHeight"] <= m["clientHeight"], m
+    # The Goal takes what is left: it ends a gap above the criteria, which end at the column's foot.
+    assert abs(m["criteriaTop"] - m["gap"] - m["goalBottom"]) <= 2, m
+    assert abs(m["columnInnerBottom"] - m["criteriaBottom"]) <= 2, m
+
+    # Past what the column holds, the Goal grows with its text and the column scrolls; the editor does not.
+    goal = page.get_by_test_id("task-goal")
+    goal.fill("\n".join(f"Line {i}" for i in range(80)))
+    m = page.evaluate(_TASK_COLUMN)
+    assert m["scrollHeight"] > m["clientHeight"], m
+    assert goal.evaluate("el => el.scrollHeight <= el.clientHeight"), "the Goal scrolls inside itself"
+    assert console_errors == []
+
+
+def test_on_a_phone_the_task_dialogs_writing_fills_the_screen_before_the_aside(
+    page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list
+):
+    page.set_viewport_size({"width": 375, "height": 812})
+    sign_in(page, web_url, org["api_key"])
+    page.get_by_test_id("new-task").click()
+    expect(page.get_by_role("dialog", name="New task").get_by_text(forge_project["name"], exact=True)).to_be_visible()
+    page.wait_for_function(
+        "document.querySelector('[role=dialog]').getAnimations().every(a => a.playState === 'finished')")
+    m = page.evaluate(_TASK_COLUMN)
+    # One scroll for the writing and the aside after it; the writing is the first screenful, filled.
+    scroller = page.evaluate("""() => {
+      const main = document.querySelector('[data-testid="task-title"]').closest('form').parentElement;
+      return { main: main.getBoundingClientRect().height, view: main.parentElement.clientHeight };
+    }""")
+    assert abs(scroller["main"] - scroller["view"]) <= 2, scroller
+    assert abs(m["criteriaTop"] - m["gap"] - m["goalBottom"]) <= 2, m
+    assert abs(m["columnInnerBottom"] - m["criteriaBottom"]) <= 2, m
+    assert console_errors == []
+
+
+def test_the_task_dialog_refits_when_the_window_shrinks_in_write_and_in_preview(
+    page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list
+):
+    page.set_viewport_size({"width": 1280, "height": 900})
+    sign_in(page, web_url, org["api_key"])
+    page.get_by_test_id("new-task").click()
+    expect(page.get_by_role("dialog", name="New task").get_by_text(forge_project["name"], exact=True)).to_be_visible()
+    page.wait_for_function(
+        "document.querySelector('[role=dialog]').getAnimations().every(a => a.playState === 'finished')")
+
+    def fits() -> dict:
+        m = page.evaluate(_TASK_COLUMN)
+        assert m["scrollHeight"] <= m["clientHeight"], m
+        assert abs(m["criteriaTop"] - m["gap"] - m["goalBottom"]) <= 2, m
+        assert abs(m["columnInnerBottom"] - m["criteriaBottom"]) <= 2, m
+        return m
+
+    # Write, in the same open dialog: 900 → 720 → 900.
+    tall = fits()
+    page.set_viewport_size({"width": 1280, "height": 720})
+    short = fits()
+    assert short["goalBottom"] < tall["goalBottom"] - 100
+    page.set_viewport_size({"width": 1280, "height": 900})
+    fits()
+
+    # Preview entered at 900, then 720: it gives the surplus back, and fills again at 900.
+    goal_view = page.get_by_role("tablist", name="Goal view")
+    page.get_by_test_id("task-goal").fill("A short goal.")
+    goal_view.get_by_role("tab", name="Preview").click()
+    expect(page.get_by_test_id("task-goal-preview")).to_contain_text("A short goal.")
+    fits()
+    page.set_viewport_size({"width": 1280, "height": 720})
+    fits()
+    page.set_viewport_size({"width": 1280, "height": 900})
+    fits()
+
+    # A long source still keeps its height in Preview; the column scrolls.
+    goal_view.get_by_role("tab", name="Write").click()
+    page.get_by_test_id("task-goal").fill("\n\n".join(f"Line {i}" for i in range(40)))
+    source = page.get_by_test_id("task-goal").evaluate("el => el.offsetHeight")
+    goal_view.get_by_role("tab", name="Preview").click()
+    preview = page.get_by_test_id("task-goal-preview")
+    expect(preview).to_contain_text("Line 39")
+    assert preview.evaluate("el => el.offsetHeight") >= source
+    m = page.evaluate(_TASK_COLUMN)
+    assert m["scrollHeight"] > m["clientHeight"], m
+    assert console_errors == []
+
+
+READ_CRITERIA = "- [ ] SEPA appears on the payment step\n- Invoice only for annual plans,\nnever monthly ones"
+
+
+def _assert_reads_as_the_task(page: Page, title: str) -> None:
+    doc = page.get_by_test_id("task-reading")
+    expect(doc).to_be_visible()
+    expect(doc.get_by_role("heading", level=1)).to_have_text(title)
+    expect(doc.get_by_role("heading", name="What exists today")).to_be_visible()
+    expect(doc.get_by_role("heading", name="Acceptance criteria")).to_be_visible()
+    # The criteria as a checklist of what would be saved: the lazy line is part of the second, on a line of its own.
+    checklist = doc.locator("li:has(> [aria-hidden] svg)")
+    expect(checklist).to_have_count(2)
+    expect(checklist.nth(0)).to_have_text("SEPA appears on the payment step")
+    expect(checklist.nth(1).locator("br")).to_have_count(1)
+    assert checklist.nth(1).evaluate("el => el.innerText.trim().split('\\n')") == [
+        "Invoice only for annual plans,", "never monthly ones"]
+    # The fields and the aside are out of sight, and out of reach.
+    expect(page.get_by_test_id("task-goal")).not_to_be_visible()
+    expect(page.get_by_test_id("task-criteria")).not_to_be_visible()
+    expect(page.get_by_test_id("task-title")).not_to_be_visible()
+    expect(page.get_by_role("complementary", name="Where it sits")).to_have_count(0)
+
+
+def test_read_shows_the_task_as_one_document_and_escape_goes_back_to_writing(
+    page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list
+):
+    sign_in(page, web_url, org["api_key"])
+    page.get_by_test_id("new-task").click()
+    dialog = page.get_by_role("dialog", name="New task")
+    page.get_by_test_id("task-title").fill("Keep SEPA at checkout")
+    goal = page.get_by_test_id("task-goal")
+    goal.fill(GOAL_MARKDOWN + "\n" + "\n".join(f"Line {i}" for i in range(60)))
+    criteria = page.get_by_test_id("task-criteria")
+    criteria.fill(READ_CRITERIA)
+    # The goal in Preview, the column scrolled, the caret in the criteria: all of it comes back.
+    page.get_by_role("tablist", name="Goal view").get_by_role("tab", name="Preview").click()
+    criteria.focus()
+    criteria.evaluate("el => el.setSelectionRange(6, 10)")
+    column = "() => document.querySelector('[data-testid=task-title]').closest('form').parentElement.scrollTop"
+    scrolled = page.evaluate(column)
+    assert scrolled > 0
+    heading_style = "el => { const s = getComputedStyle(el); return [s.fontSize, s.marginTop, s.lineHeight]; }"
+    previewed = page.get_by_test_id("task-goal-preview").get_by_role("heading", name="What exists today").evaluate(heading_style)
+
+    read = page.get_by_test_id("task-read")
+    expect(read).to_have_text("Read")
+    read.click()
+    expect(read).to_have_text("Back to writing")
+    _assert_reads_as_the_task(page, "Keep SEPA at checkout")
+    # Read is set as the Goal's Preview (and the task screen) are: the message rhythm.
+    assert page.get_by_test_id("task-reading").get_by_role("heading", name="What exists today").evaluate(heading_style) == previewed
+    expect(dialog).to_contain_text("back to writing")
+
+    # Escape leaves Read, not the dialog, and asks nothing.
+    page.keyboard.press("Escape")
+    expect(page.get_by_test_id("task-reading")).to_have_count(0)
+    expect(dialog).to_be_visible()
+    expect(page.get_by_role("dialog", name="Discard this task?")).to_have_count(0)
+    expect(read).to_have_text("Read")
+    expect(criteria).to_have_value(READ_CRITERIA)
+    expect(page.get_by_role("tablist", name="Goal view").get_by_role("tab", name="Preview")).to_have_attribute("aria-selected", "true")
+    assert page.evaluate(column) == scrolled
+    expect(criteria).to_be_focused()
+    assert criteria.evaluate("el => [el.selectionStart, el.selectionEnd]") == [6, 10]
+
+    # The shortcut toggles both ways, from inside a field.
+    criteria.press("ControlOrMeta+Shift+r")
+    _assert_reads_as_the_task(page, "Keep SEPA at checkout")
+    page.keyboard.press("ControlOrMeta+Shift+r")
+    expect(page.get_by_test_id("task-reading")).to_have_count(0)
+    expect(criteria).to_be_focused()
+
+    # An empty title reads as untitled; an empty goal and no criteria leave their sections out.
+    page.get_by_test_id("task-title").fill("")
+    goal_view = page.get_by_role("tablist", name="Goal view")
+    goal_view.get_by_role("tab", name="Write").click()
+    goal.fill("")
+    criteria.fill("")
+    read.click()
+    doc = page.get_by_test_id("task-reading")
+    expect(doc.get_by_role("heading")).to_have_count(1)
+    expect(doc.get_by_role("heading", level=1)).to_have_text("Untitled task")
+    assert console_errors == []
+
+
+def test_a_task_saves_from_read_and_a_locked_task_reads_too(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    sign_in(page, web_url, org["api_key"])
+    page.get_by_test_id("new-task").click()
+    page.get_by_test_id("task-title").fill("Read then saved")
+    page.get_by_test_id("task-goal").fill(GOAL_MARKDOWN)
+    page.get_by_test_id("task-criteria").fill(READ_CRITERIA)
+    page.get_by_test_id("task-read").click()
+    expect(page.get_by_test_id("task-reading")).to_be_visible()
+    # Ctrl/⌘+Enter saves from Read, as it does from the fields.
+    page.keyboard.press("ControlOrMeta+Enter")
+    expect(page.get_by_test_id("task-screen")).to_be_visible()
+    items = client.get("/v1/tasks", params={"projectId": forge_project["id"]}).json()["tasks"]
+    task_id = next(i["id"] for i in items if i["title"] == "Read then saved")
+    saved = client.get(f"/v1/tasks/{task_id}").json()
+    assert saved["acceptanceCriteria"] == ["SEPA appears on the payment step", "Invoice only for annual plans,\nnever monthly ones"]
+
+    # Editing, the footer's Save saves from Read too: its form is under the reading, inert, and still submits.
+    page.get_by_test_id("edit-task").click()
+    page.get_by_test_id("task-title").fill("Read then saved again")
+    page.get_by_test_id("task-goal").fill("Saved with the mouse, from Read.")
+    page.get_by_test_id("task-read").click()
+    expect(page.get_by_test_id("task-reading")).to_be_visible()
+    page.get_by_test_id("task-save").click()
+    expect(page.get_by_role("dialog", name="Edit task")).to_have_count(0)
+    edited = client.get(f"/v1/tasks/{task_id}").json()
+    assert (edited["title"], edited["goal"]) == ("Read then saved again", "Saved with the mouse, from Read.")
+    assert edited["acceptanceCriteria"] == saved["acceptanceCriteria"]
+    page.get_by_test_id("edit-task").click()
+    page.get_by_test_id("task-title").fill("Read then saved")
+    page.get_by_test_id("task-goal").fill(GOAL_MARKDOWN)
+    page.get_by_test_id("task-save").click()
+    expect(page.get_by_role("dialog", name="Edit task")).to_have_count(0)
+
+    # Once delivery has started it is fixed, and still reads.
+    assert client.post(f"/v1/tasks/{task_id}/deliver").status_code == 201
+    page.reload()
+    expect(page.get_by_test_id("task-screen")).to_be_visible()
+    expect(page.get_by_test_id("phase").first).to_be_visible(timeout=30_000)
+    page.get_by_test_id("edit-task").click()
+    dialog = page.get_by_role("dialog", name="Edit task")
+    expect(dialog).to_contain_text("Delivery has started")
+    page.get_by_test_id("task-read").click()
+    _assert_reads_as_the_task(page, "Read then saved")
+    page.keyboard.press("Escape")
+    expect(page.get_by_test_id("task-reading")).to_have_count(0)
+    expect(dialog).to_be_visible()
+    expect(page.get_by_test_id("task-goal-preview")).to_be_visible()
+    assert console_errors == []
+
+
+def test_read_on_a_phone_is_the_same_document(
+    page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list
+):
+    page.set_viewport_size({"width": 375, "height": 812})
+    sign_in(page, web_url, org["api_key"])
+    page.get_by_test_id("new-task").click()
+    page.get_by_test_id("task-title").fill("Keep SEPA at checkout")
+    page.get_by_test_id("task-goal").fill(GOAL_MARKDOWN)
+    page.get_by_test_id("task-criteria").fill(READ_CRITERIA)
+    page.get_by_test_id("task-read").click()
+    _assert_reads_as_the_task(page, "Keep SEPA at checkout")
+    # The document fits the screen's width, and the buttons stay on screen.
+    doc = page.get_by_test_id("task-reading")
+    assert doc.evaluate("el => el.getBoundingClientRect().right") <= 375
+    expect(page.get_by_test_id("task-save")).to_be_in_viewport()
+    page.keyboard.press("Escape")
+    expect(page.get_by_test_id("task-title")).to_have_value("Keep SEPA at checkout")
+    expect(page.get_by_test_id("task-title")).to_be_visible()
+    assert console_errors == []
+
+
+def test_the_read_shortcut_waits_for_an_open_select_to_close(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    client.post(f"/v1/projects/{forge_project['id']}/epics", {"title": "Epic A"})
+    client.post(f"/v1/projects/{forge_project['id']}/epics", {"title": "Epic B"})
+    sign_in(page, web_url, org["api_key"])
+    page.get_by_test_id("new-task").click()
+    page.get_by_test_id("task-title").fill("Read over a popup")
+    epic = page.get_by_role("combobox", name="Epic")
+    epic.click()
+    listbox = page.get_by_role("listbox")
+    option = listbox.get_by_role("option", name="Epic A")
+    option.focus()
+    expect(option).to_be_focused()
+
+    # The listbox lives outside the dialog: the shortcut is taken (no reload) but Read waits.
+    page.evaluate("""() => { window.readKey = null;
+      document.addEventListener('keydown', e => { if (e.key.toLowerCase() === 'r') window.readKey = e.defaultPrevented; }); }""")
+    page.keyboard.press("ControlOrMeta+Shift+r")
+    assert page.evaluate("window.readKey") is True
+    expect(page.get_by_test_id("task-reading")).to_have_count(0)
+    expect(listbox).to_be_visible()
+    expect(page.get_by_test_id("task-read")).to_have_text("Read")
+
+    # Closed, the Select has focus back; Read and back to writing return to it, not to the option.
+    page.keyboard.press("Escape")
+    expect(listbox).to_have_count(0)
+    expect(page.get_by_role("dialog", name="New task")).to_be_visible()
+    expect(epic).to_be_focused()
+    page.keyboard.press("ControlOrMeta+Shift+r")
+    expect(page.get_by_test_id("task-reading")).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(page.get_by_test_id("task-reading")).to_have_count(0)
+    expect(epic).to_be_focused()
+    expect(epic).to_have_text("No epic")
+    assert console_errors == []
+
+
+def test_the_task_dialog_does_not_move_when_where_it_sits_arrives(
+    page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list
+):
+    sign_in(page, web_url, org["api_key"])
+    held = []
+    page.route(f"**/v1/projects/{forge_project['id']}",
+               lambda route: held.append(route) if route.request.method == "GET" else route.continue_())
+    page.get_by_test_id("new-task").click()
+    title = page.get_by_test_id("task-title")
+    expect(title).to_be_visible()
+    # Route handlers run while Playwright is called, so poll through it.
+    for _ in range(100):
+        if held:
+            break
+        page.wait_for_timeout(50)
+    assert held, "the project was never asked for"
+    # The dialog pops in with a scale; measure once it has settled.
+    page.wait_for_function(
+        "document.querySelector('[role=dialog]').getAnimations().every(a => a.playState === 'finished')")
+    before = title.bounding_box()["y"]
+    for route in held:
+        route.continue_()
+    dialog = page.get_by_role("dialog", name="New task")
+    expect(dialog.get_by_text(forge_project["name"], exact=True)).to_be_visible()
+    assert title.bounding_box()["y"] == before
+    # A plain path: nothing to navigate, so no landmark.
+    expect(dialog.get_by_role("navigation")).to_have_count(0)
+    assert console_errors == []
+
+
+def test_a_task_dialog_whose_project_fails_to_load_shows_no_loading_line(
+    page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list
+):
+    sign_in(page, web_url, org["api_key"])
+    held = []
+    page.route(f"**/v1/projects/{forge_project['id']}",
+               lambda route: held.append(route) if route.request.method == "GET" else route.continue_())
+    page.get_by_test_id("new-task").click()
+    dialog = page.get_by_role("dialog", name="New task")
+    title = page.get_by_test_id("task-title")
+    expect(title).to_be_visible()
+    for _ in range(100):
+        if held:
+            break
+        page.wait_for_timeout(50)
+    assert held, "the project was never asked for"
+    page.wait_for_function(
+        "document.querySelector('[role=dialog]').getAnimations().every(a => a.playState === 'finished')")
+    running = "d => d.getAnimations({ subtree: true }).filter(a => a.playState === 'running').length"
+    # While it loads, the context line pulses.
+    assert dialog.evaluate(running) > 0
+    before = title.bounding_box()["y"]
+    reason = "The project is not available right now."
+    for route in held:
+        route.fulfill(status=500, content_type="application/json",
+                      body='{"error":{"code":"internal","message":"%s"}}' % reason)
+    alert = dialog.get_by_role("alert")
+    expect(alert).to_have_text(reason)
+    # Once it has failed nothing says it is still loading, and the fields stay where they were.
+    assert dialog.evaluate(running) == 0
+    expect(dialog.locator("[aria-busy=true]")).to_have_count(0)
+    assert title.bounding_box()["y"] == before
+    assert all("500" in e for e in console_errors), console_errors
+
+
+def test_a_task_that_fails_to_save_says_why_beside_the_buttons(
+    page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list
+):
+    """The document's column scrolls, so the reason shows in the footer, where the button was pressed."""
+    sign_in(page, web_url, org["api_key"])
+    page.get_by_test_id("new-task").click()
+    page.get_by_test_id("task-title").fill("Refused")
+    page.get_by_test_id("task-goal").fill("\n".join(f"Line {i}" for i in range(60)))
+    reason = "Tasks cannot be created in this project right now."
+
+    def refuse(route):
+        if route.request.method == "POST":
+            route.fulfill(status=400, content_type="application/json",
+                          body='{"error":{"code":"invalid","message":"%s"}}' % reason)
+        else:
+            route.continue_()
+
+    page.route("**/v1/tasks", refuse)
+    page.get_by_test_id("task-save").click()
+    alert = page.get_by_role("dialog", name="New task").get_by_role("alert")
+    expect(alert).to_have_text(reason)
+    expect(alert).to_be_in_viewport()
+    assert alert.get_attribute("title") == reason
+    # The key hints give way to it.
+    expect(page.get_by_role("dialog", name="New task")).not_to_contain_text("toggle preview")
+    # On a phone the hints are gone, but the reason and the button stay on screen.
+    page.set_viewport_size({"width": 375, "height": 812})
+    expect(alert).to_have_text(reason)
+    expect(alert).to_be_in_viewport()
+    expect(page.get_by_test_id("task-save")).to_be_in_viewport()
+    assert all("400" in e for e in console_errors), console_errors
+
+
+def test_a_task_takes_a_64k_goal_and_16k_of_criteria_and_no_more(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    def titled(title: str) -> list[dict]:
+        items = client.get("/v1/tasks", params={"projectId": forge_project["id"]}).json()["tasks"]
+        return [i for i in items if i["title"] == title]
+
+    sign_in(page, web_url, org["api_key"])
+    page.get_by_test_id("new-task").click()
+    page.get_by_test_id("task-title").fill("Long criterion")
+    goal = page.get_by_test_id("task-goal")
+    criteria = page.get_by_test_id("task-criteria")
+
+    # The editors stop at their limits: a longer goal or criteria source is cut there, and typing adds nothing.
+    goal.fill("g" * 65_537)
+    assert goal.evaluate("el => el.value.length") == 65_536
+    goal.press("End")
+    page.keyboard.insert_text("more")
+    assert goal.evaluate("el => el.value.length") == 65_536
+    criteria.fill("- " + "c" * 16_400)
+    assert criteria.evaluate("el => el.value.length") == 16_384
+
+    # One criterion far past the old 2,000 each saves whole, with a goal at exactly the limit.
+    criteria.fill("- " + "x" * 3000)
+    expect(page.get_by_test_id("task-save")).to_be_enabled()
+    criteria.press("ControlOrMeta+Enter")
+    expect(page.get_by_test_id("task-screen")).to_be_visible()
+    saved = titled("Long criterion")
+    assert len(saved) == 1
+    detail = client.get(f"/v1/tasks/{saved[0]['id']}").json()
+    assert detail["acceptanceCriteria"] == ["x" * 3000]
+    assert len(detail["goal"]) == 65_536
+    assert detail["runs"] == []
+    assert console_errors == []
+
+
+def test_criteria_that_open_over_the_editors_limit_block_saving_until_they_fit(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    """Saved criteria within 16K open as a list whose markers take it past the editor's limit."""
+    item = client.create_task(forge_project["id"], "Near the limit", acceptanceCriteria=["y" * 2048] * 8)
+    sign_in(page, web_url, org["api_key"])
+    page.get_by_text("Near the limit").first.click()
+    page.get_by_test_id("edit-task").click()
+    criteria = page.get_by_test_id("task-criteria")
+    # Eight "- [ ] " and seven newlines: 16,384 + 55.
+    assert criteria.evaluate("el => el.value.length") == 16_439
+    expect(page.get_by_text("55 characters over the limit; shorten it to save.", exact=True)).to_be_visible()
+    expect(page.get_by_role("dialog", name="Edit task").get_by_text("16,439 / 16,384")).to_be_visible()
+    expect(page.get_by_test_id("task-save")).to_be_disabled()
+    task_url = f"/v1/tasks/{item['id']}"
+    attempts = []
+
+    def record_patch(request):
+        if request.method == "PATCH" and request.url.endswith(task_url):
+            attempts.append(request)
+
+    page.on("request", record_patch)
+    criteria.press("ControlOrMeta+Enter")
+    # The save handler sends synchronously; two frames drain its request event, with no fixed wait.
+    page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+    assert attempts == []
+    expect(criteria).to_be_visible()
+    page.remove_listener("request", record_patch)
+
+    # Shortened to fit, it saves.
+    criteria.evaluate("el => el.setSelectionRange(el.value.length - 55, el.value.length)")
+    criteria.press("Delete")
+    expect(page.get_by_test_id("task-save")).to_be_enabled()
+    page.get_by_test_id("task-save").click()
+    expect(criteria).to_have_count(0)
+    saved = client.get(f"/v1/tasks/{item['id']}").json()["acceptanceCriteria"]
+    assert len(saved) == 8 and saved[-1] == "y" * (2048 - 55)
+    assert console_errors == []
+
+
+def test_closing_a_task_with_writing_in_it_asks_first(
+    page: Page, web_url: str, org: dict, forge_project: dict, console_errors: list
+):
+    sign_in(page, web_url, org["api_key"])
+    page.get_by_test_id("new-task").click()
+    # A few words close as before.
+    page.get_by_test_id("task-title").fill("Short")
+    page.keyboard.press("Escape")
+    expect(page.get_by_test_id("task-title")).to_have_count(0)
+
+    page.get_by_test_id("new-task").click()
+    page.get_by_test_id("task-title").fill("Keep SEPA at checkout")
+    goal = " ".join(f"word{i}" for i in range(25))
+    page.get_by_test_id("task-goal").fill(goal)
+    page.keyboard.press("Escape")
+    confirm = page.get_by_role("dialog", name="Discard this task?")
+    expect(confirm).to_be_visible()
+    expect(confirm).to_contain_text("You have written 29 words that haven't been saved.")
+    expect(page.get_by_test_id("discard-keep")).to_be_focused()
+    page.get_by_test_id("discard-keep").click()
+    expect(confirm).to_have_count(0)
+    expect(page.get_by_test_id("task-goal")).to_have_value(goal)
+
+    # Escape inside the confirmation closes only it; the writing stays, and closing asks again.
+    page.keyboard.press("Escape")
+    expect(confirm).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(confirm).to_have_count(0)
+    expect(page.get_by_role("dialog", name="New task")).to_be_visible()
+    expect(page.get_by_test_id("task-goal")).to_have_value(goal)
+
+    # The Read shortcut inside the confirmation is taken from the browser (no hard reload), and does nothing else.
+    page.keyboard.press("Escape")
+    expect(confirm).to_be_visible()
+    page.evaluate("""() => { window.keys = [];
+      document.addEventListener('keydown', e => window.keys.push([e.key.toLowerCase(), e.defaultPrevented])); }""")
+    for keys in ("Control+Shift+r", "Meta+Shift+r"):
+        page.keyboard.press(keys)
+    assert [k for k in page.evaluate("window.keys") if k[0] == "r"] == [["r", True], ["r", True]]
+    expect(confirm).to_be_visible()
+    expect(page.get_by_test_id("discard-keep")).to_be_focused()
+    expect(page.get_by_test_id("task-reading")).to_have_count(0)
+    page.get_by_test_id("discard-keep").click()
+    expect(confirm).to_have_count(0)
+    expect(page.get_by_test_id("task-reading")).to_have_count(0)
+    expect(page.get_by_test_id("task-goal")).to_have_value(goal)
+    expect(page.get_by_test_id("task-title")).to_have_value("Keep SEPA at checkout")
+
+    # Cancel asks too, and Discard closes without saving.
+    page.get_by_role("button", name="Cancel").click()
+    page.get_by_test_id("discard-confirm").click()
+    expect(page.get_by_test_id("task-title")).to_have_count(0)
+    assert console_errors == []
+
+
+def test_closing_an_edited_task_says_its_changes_are_unsaved_without_a_count(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    # Most of the goal was there already: a count of every word in it would be false.
+    long_goal = " ".join(f"word{i}" for i in range(60))
+    client.create_task(forge_project["id"], "Edited goal", goal=long_goal)
+    sign_in(page, web_url, org["api_key"])
+    page.get_by_text("Edited goal").first.click()
+    page.get_by_test_id("edit-task").click()
+    page.get_by_test_id("task-goal").fill(long_goal + " more")
+    page.keyboard.press("Escape")
+    confirm = page.get_by_role("dialog", name="Discard your changes to this task?")
+    expect(confirm).to_be_visible()
+    expect(confirm.get_by_text("Your changes to this task haven't been saved.", exact=True)).to_be_visible()
+    expect(confirm).not_to_contain_text("words")
     assert console_errors == []
 
 

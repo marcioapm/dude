@@ -265,3 +265,136 @@ def test_board_keeps_needs_you_first_and_is_a_keyboard_grid(gallery_page: Page, 
     assert board.locator("[aria-current='true']").get_attribute("data-board-key") == start, "moving focus must not change selection"
 
     assert console_errors == [], f"console errors on the board: {console_errors}"
+
+
+def test_markdown_toolbar_keeps_its_tab_stop_when_quote_hides(gallery_page: Page, console_errors: list):
+    """Quote hides when the editor narrows. If it held the toolbar's one Tab
+    stop, the stop and focus move to a button still shown, so the toolbar
+    stays reachable by Tab."""
+    gallery_page.set_viewport_size({"width": 2400, "height": 900})
+    gallery_page.get_by_role("link", name="MarkdownEditor").click()
+    toolbar = gallery_page.locator("#p-markdown-editor").get_by_role("toolbar", name="Formatting").first
+    toolbar.scroll_into_view_if_needed()
+    expect(toolbar.locator('[data-format="quote"]')).to_be_visible()
+    toolbar.locator('[data-format="heading"]').focus()
+    for _ in range(5):
+        gallery_page.keyboard.press("ArrowRight")
+    assert gallery_page.evaluate("document.activeElement?.getAttribute('data-format')") == "quote"
+
+    gallery_page.set_viewport_size({"width": 480, "height": 900})
+    expect(toolbar.locator('[data-format="quote"]')).to_be_hidden()
+    expect(toolbar.locator('[data-format="link"]')).to_be_focused()
+    stops = toolbar.locator("button[tabindex='0']")
+    expect(stops).to_have_count(1)
+    assert stops.first.get_attribute("data-format") == "link"
+    assert console_errors == []
+
+
+def test_segmented_tabs_move_with_home_and_end(gallery_page: Page, console_errors: list):
+    """Write / Preview is a tablist: Home and End reach its ends, as ← → do its neighbours."""
+    gallery_page.get_by_role("link", name="MarkdownEditor").click()
+    view = gallery_page.locator("#p-markdown-editor").get_by_role("tablist", name="Write view").first
+    write = view.get_by_role("tab", name="Write")
+    preview = view.get_by_role("tab", name="Preview")
+    write.focus()
+    gallery_page.keyboard.press("End")
+    expect(preview).to_have_attribute("aria-selected", "true")
+    expect(preview).to_be_focused()
+    gallery_page.keyboard.press("Home")
+    expect(write).to_have_attribute("aria-selected", "true")
+    expect(write).to_be_focused()
+    # Level with the toolbar's sm buttons.
+    bold = gallery_page.locator("#p-markdown-editor").get_by_role("button", name="Bold").first
+    assert view.evaluate("el => el.getBoundingClientRect().height") == bold.evaluate("el => el.getBoundingClientRect().height")
+    assert console_errors == []
+
+
+def test_tooltips_draw_a_key_list_as_caps_and_a_string_as_it_is(gallery_page: Page, console_errors: list):
+    """The editor's Bold names its shortcut as caps, the platform's modifier first."""
+    gallery_page.get_by_role("link", name="MarkdownEditor").click()
+    bold = gallery_page.locator("#p-markdown-editor").get_by_role("button", name="Bold").first
+    bold.hover()
+    tip = gallery_page.get_by_role("tooltip", name="Bold")
+    caps = tip.locator("kbd")
+    expect(tip).to_be_visible()
+    modifier = gallery_page.evaluate(
+        "/mac|iphone|ipad|ipod/i.test(navigator.userAgentData?.platform || navigator.platform) ? '⌘' : 'Ctrl'")
+    expect(caps).to_have_text([modifier, "B"])
+
+    gallery_page.get_by_role("link", name="Tooltip").click()
+    gallery_page.locator("#p-tooltip").get_by_role("button", name="Hover me").first.hover()
+    string_tip = gallery_page.get_by_role("tooltip").filter(has_text="Open the session in a side panel")
+    expect(string_tip).to_be_visible()
+    expect(string_tip.locator("kbd")).to_have_text(["⏎"])
+    assert console_errors == []
+
+
+# The space between the children of the nearest common ancestor of two elements that hold `a` and `b`.
+_GAP_BETWEEN = """([a, b]) => {
+  let child = a;
+  while (!child.parentElement.contains(b)) child = child.parentElement;
+  let next = b;
+  while (next.parentElement !== child.parentElement) next = next.parentElement;
+  return next.getBoundingClientRect().top - child.getBoundingClientRect().bottom;
+}"""
+
+
+def test_compact_tightens_a_filled_form_stack_and_leaves_a_plain_one(gallery_page: Page, console_errors: list):
+    """The task dialog's fields are a filled FormStack; compact draws them closer. The Form layout example is not filled."""
+    gaps = {}
+    for density in ("comfortable", "compact"):
+        gallery_page.locator("nav").get_by_role("combobox", name="Density").click()
+        gallery_page.get_by_role("option", name=density.capitalize(), exact=True).click()
+        expect(gallery_page.locator("#p-dialog [data-density]").first).to_have_attribute("data-density", density)
+
+        gallery_page.get_by_role("link", name="Dialog", exact=True).click()
+        gallery_page.locator("#p-dialog").get_by_role("button", name="Task dialog").first.click()
+        dialog = gallery_page.get_by_role("dialog", name="New task")
+        expect(dialog).to_be_visible()
+        # The dialog pops in with a scale; measure once it has settled.
+        gallery_page.wait_for_function(
+            "document.querySelector('[role=dialog]').getAnimations().every(a => a.playState === 'finished')")
+        title = dialog.get_by_role("textbox", name="Title")
+        goal = dialog.get_by_role("textbox", name="Goal")
+        filled = gallery_page.evaluate(_GAP_BETWEEN, [title.element_handle(), goal.element_handle()])
+        gallery_page.keyboard.press("Escape")
+        expect(dialog).to_have_count(0)
+
+        form = gallery_page.locator("#p-form")
+        callout = form.get_by_text("url must be an https, ssh or git:// URL").first
+        rounds = form.get_by_role("textbox", name="Review rounds").first
+        plain = gallery_page.evaluate(_GAP_BETWEEN, [callout.element_handle(), rounds.element_handle()])
+        gaps[density] = (filled, plain)
+
+    assert gaps["compact"][0] < gaps["comfortable"][0], gaps
+    assert gaps["compact"][1] == gaps["comfortable"][1], gaps
+    assert console_errors == []
+
+
+def test_a_filling_field_fills_a_document_dialog_without_an_aside(gallery_page: Page, console_errors: list):
+    """The body is the one column: the Note fills it to the body's foot, and grows past it with its text."""
+    gallery_page.set_viewport_size({"width": 1280, "height": 900})
+    gallery_page.get_by_role("link", name="Dialog", exact=True).click()
+    gallery_page.locator("#p-dialog").get_by_role("button", name="Note dialog").first.click()
+    dialog = gallery_page.get_by_role("dialog", name="New note")
+    expect(dialog).to_be_visible()
+    gallery_page.wait_for_function(
+        "document.querySelector('[role=dialog]').getAnimations().every(a => a.playState === 'finished')")
+    measure = """() => {
+      const note = document.querySelector('[data-testid="note-body"]');
+      const frame = note.closest('[data-mode]');
+      let body = frame.parentElement;
+      while (getComputedStyle(body).overflowY !== 'auto') body = body.parentElement;
+      const b = body.getBoundingClientRect(), cs = getComputedStyle(body);
+      return { frameBottom: frame.getBoundingClientRect().bottom, bodyInnerBottom: b.top + body.clientHeight - parseFloat(cs.paddingBottom),
+               frameHeight: frame.getBoundingClientRect().height, scrollHeight: body.scrollHeight, clientHeight: body.clientHeight };
+    }"""
+    m = gallery_page.evaluate(measure)
+    assert m["scrollHeight"] <= m["clientHeight"], m
+    assert abs(m["bodyInnerBottom"] - m["frameBottom"]) <= 2, m
+    assert m["frameHeight"] > 500, m
+    dialog.get_by_role("textbox", name="Note").fill("\n".join(f"Line {i}" for i in range(80)))
+    m = gallery_page.evaluate(measure)
+    assert m["scrollHeight"] > m["clientHeight"], m
+    gallery_page.keyboard.press("Escape")
+    assert console_errors == []

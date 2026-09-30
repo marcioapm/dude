@@ -267,6 +267,19 @@ export interface PersonDetail extends PersonRef {
 export const personSchema = z.object({ id: z.string(), name: z.string() });
 export type Person = z.infer<typeof personSchema>;
 
+/** Longest goal a task takes, in characters (UTF-16 units, as `.length`). */
+export const TASK_GOAL_MAX = 65_536;
+/** Longest a task's acceptance criteria are all together; one criterion has no limit of its own. */
+export const TASK_CRITERIA_MAX = 16_384;
+
+/** A task's goal as the API takes it. */
+export const taskGoalInput = z.string().max(TASK_GOAL_MAX);
+/** A task's acceptance criteria as the API takes them: bounded in total, not each. */
+export const taskCriteriaInput = z.array(z.string()).refine(
+  (criteria) => criteria.reduce((n, c) => n + c.length, 0) <= TASK_CRITERIA_MAX,
+  `acceptance criteria can be at most ${TASK_CRITERIA_MAX.toLocaleString("en-US")} characters in all`,
+);
+
 export const taskSchema = z.object({
   id: z.string(),
   organizationId: z.string(),

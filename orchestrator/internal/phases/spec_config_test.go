@@ -29,19 +29,20 @@ func TestAgentConfigReadsTheEnvironment(t *testing.T) {
 	c, err := LoadAgentConfig(settings(t, map[string]string{
 		"DUDE_LLM_URL": "https://llm.example/v1", "DUDE_LLM_KEY": "sk-test",
 		"DUDE_TOOLS_URL": "http://10.0.0.5:3120/", "DUDE_TOOLS_SERVICE": "",
-		"DUDE_AGENT_IMAGE": "img:1", "DUDE_AGENT_EGRESS": "a.example, b.example",
+		"DUDE_AGENT_IMAGE": "img:1", "DUDE_AGENT_EGRESS": "a.example, b.example", "DUDE_AGENT_NESTED_CONTAINERS": "true",
 		"DUDE_ORCHESTRATOR_TOKEN": "service-token",
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.ToolsURL != "http://10.0.0.5:3120/" || !c.ToolsService || c.DefaultImage != "img:1" || len(c.Egress) != 2 ||
+	if c.ToolsURL != "http://10.0.0.5:3120/" || !c.ToolsService || c.DefaultImage != "img:1" || len(c.Egress) != 2 || !c.NestedContainers ||
 		c.LLMURL != "https://llm.example/v1" || c.LLMKey != "sk-test" || string(c.ToolsKey) != "service-token" {
 		t.Errorf("config = %+v", c)
 	}
 	c, err = LoadAgentConfig(settings(t, map[string]string{"DUDE_TOOLS_SERVICE": "off", "DUDE_TOOLS_KEY": "tools-key",
 		"DUDE_ORCHESTRATOR_TOKEN": "service-token"}))
-	if err != nil || c.ToolsService || string(c.ToolsKey) != "tools-key" || c.DefaultImage != "localhost/dude-runtime:dev" {
+	if err != nil || c.ToolsService || string(c.ToolsKey) != "tools-key" || c.DefaultImage != "localhost/dude-runtime:dev" ||
+		c.NestedContainers {
 		t.Errorf("config = %+v, %v", c, err)
 	}
 }
@@ -58,6 +59,7 @@ token = "file-service-token"
 image = "img:2"
 timeout = "48h"
 egress = ["a.example"]
+nested_containers = true
 [tools]
 service = false
 url = "http://10.0.0.7:3200/"
@@ -70,8 +72,12 @@ url = "http://10.0.0.7:3200/"
 	}
 	if c.LLMURL != "https://llm.example/v1" || c.LLMKey != "sk-file" || c.DefaultImage != "img:env" || c.Timeout != "48h" ||
 		len(c.Egress) != 1 || c.Egress[0] != "a.example" || c.ToolsService || c.ToolsURL != "http://10.0.0.7:3200/" ||
-		string(c.ToolsKey) != "file-service-token" {
+		string(c.ToolsKey) != "file-service-token" || !c.NestedContainers {
 		t.Errorf("config = %+v", c)
+	}
+	c, err = LoadAgentConfig(settings(t, map[string]string{"DUDE_CONFIG": path, "DUDE_AGENT_NESTED_CONTAINERS": "false"}))
+	if err != nil || c.NestedContainers {
+		t.Errorf("env false over file true: nested = %v, %v", c.NestedContainers, err)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode/utf16"
 
 	"github.com/jackc/pgx/v5"
 
@@ -123,13 +124,38 @@ type createTaskOut struct {
 	Key string `json:"key"`
 }
 
+// The control plane's task limits, in UTF-16 code units as its `.length`
+// counts them: a goal, and all the criteria together.
+const (
+	GoalMax     = 65_536
+	CriteriaMax = 16_384
+)
+
+func utf16Len(s string) int {
+	n := 0
+	for _, r := range s {
+		n += utf16.RuneLen(r)
+	}
+	return n
+}
+
+func criteriaLength(criteria []string) int {
+	n := 0
+	for _, c := range criteria {
+		n += utf16Len(c)
+	}
+	return n
+}
+
 func createTask(ctx context.Context, tx pgx.Tx, c Caller, in createTaskIn) (createTaskOut, error) {
 	title := strings.TrimSpace(in.Title)
 	switch {
 	case title == "":
 		return createTaskOut{}, refuse("a title is required")
-	case len(title) > 500 || len(in.Goal) > 10_000 || len(in.AcceptanceCriteria) > 50:
-		return createTaskOut{}, refuse("too long: a title of at most 500 characters, a goal of 10000, at most 50 criteria")
+	case len(title) > 500 || utf16Len(in.Goal) > GoalMax || len(in.AcceptanceCriteria) > 50:
+		return createTaskOut{}, refuse("too long: a title of at most 500 characters, a goal of %d, at most 50 criteria", GoalMax)
+	case criteriaLength(in.AcceptanceCriteria) > CriteriaMax:
+		return createTaskOut{}, refuse("acceptance criteria too long: at most %d characters in all", CriteriaMax)
 	}
 	var epicID *string
 	if e := strings.TrimSpace(in.Epic); e != "" {

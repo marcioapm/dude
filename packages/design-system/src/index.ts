@@ -25,7 +25,7 @@ export {
   shortId,
 } from "./util/format.ts";
 export type { DurationOptions, TimestampStyle, UsdOptions } from "./util/format.ts";
-export { parseMarkdown, safeUrl } from "./util/markdown.ts";
+export { isBlockStart as isMarkdownBlockStart, parseMarkdown, safeUrl } from "./util/markdown.ts";
 export { parseAnsi } from "./util/ansi.ts";
 export type { AnsiColor, AnsiStyle, AnsiSegment, ParseAnsiOptions } from "./util/ansi.ts";
 export type { Block as MarkdownBlock, Inline as MarkdownInline, ParseOptions as MarkdownParseOptions } from "./util/markdown.ts";

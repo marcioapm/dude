@@ -287,7 +287,7 @@ export function ChatMessage({
           {children !== undefined ? (
             <div className={styles["body"]}>{children}</div>
           ) : content !== undefined && (content.length > 0 || streaming) ? (
-            <Markdown source={content} streaming={streaming} unmeasured className={styles["body"]} />
+            <Markdown source={content} streaming={streaming} breaks={k === "human"} unmeasured className={styles["body"]} />
           ) : null}
         </ClampedBody>
         {queued ? (

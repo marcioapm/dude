@@ -8,7 +8,7 @@
 
 import { auditActor } from "../auth.ts";
 import { z } from "zod";
-import { EventTypes, agentRoleSchema, newId, resolveAgentModel } from "@dude/domain";
+import { EventTypes, agentRoleSchema, newId, resolveAgentModel, taskCriteriaInput, taskGoalInput } from "@dude/domain";
 import type { AgentModels } from "@dude/domain";
 import { withOrg, withoutTenant } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
@@ -72,8 +72,8 @@ const createTaskInput = z.object({
   /** The repositories it works on; the project's only one when none is named. */
   repositories: taskRepositoriesInput.default([]),
   title: z.string().min(1).max(500),
-  goal: z.string().max(10_000).default(""),
-  acceptanceCriteria: z.array(z.string().max(2000)).default([]),
+  goal: taskGoalInput.default(""),
+  acceptanceCriteria: taskCriteriaInput.default([]),
 });
 
 async function createTask(ctx: RequestContext): Promise<Response> {

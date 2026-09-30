@@ -294,6 +294,26 @@ describe("ChatComposer lands hint", () => {
   test("an answer, or a finished session, says nothing about landing", () => {
     expect(html(<ChatComposer question={{ id: "q", text: "?" }} landsHint="Lands after the current tool" onSubmit={noop} />)).not.toContain("lands-hint");
     expect(html(<ChatComposer mode="steer" disabled landsHint="Lands after the current tool" onSubmit={noop} />)).not.toContain("lands-hint");
+    });
+  });
+
+describe("ChatMessage line breaks", () => {
+  const text = "first line\nsecond line";
+
+  test("a person's turn, a steer or an answer, breaks where they pressed Enter", () => {
+    for (const h of [
+      html(<ChatMessage role="human" content={text} />),
+      html(<ChatMessage role="implementer" intent="steer" content={text} />),
+      html(<ChatMessage role="implementer" intent="answer" content={text} />),
+    ]) {
+      expect(h).toContain("<p>first line<br/>second line</p>");
+    }
+  });
+
+  test("an agent's turn keeps the standard soft break", () => {
+    const h = html(<ChatMessage role="implementer" content={text} />);
+    expect(h).toContain("<p>first line second line</p>");
+    expect(h).not.toContain("<br/>");
   });
 });
 
