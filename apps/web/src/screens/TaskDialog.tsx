@@ -49,10 +49,10 @@ export interface TaskDialogProps {
 }
 
 export function TaskDialog({ client, projectId, onClose, existing, epicId, onSaved }: TaskDialogProps) {
-  const [opened] = useState(() => [existing?.title ?? "", existing?.goal ?? "", criteriaToMarkdown(existing?.acceptanceCriteria ?? [])]);
-  const [title, setTitle] = useState(opened[0]!);
-  const [goal, setGoal] = useState(opened[1]!);
-  const [criteriaSource, setCriteriaSource] = useState(opened[2]!);
+  const [opened] = useState(() => [existing?.title ?? "", existing?.goal ?? "", criteriaToMarkdown(existing?.acceptanceCriteria ?? [])] as const);
+  const [title, setTitle] = useState(opened[0]);
+  const [goal, setGoal] = useState(opened[1]);
+  const [criteriaSource, setCriteriaSource] = useState(opened[2]);
   const [epic, setEpic] = useState<string>(existing?.epicId ?? epicId ?? NO_EPIC);
   const [chosen, setChosen] = useState<TaskRepository[]>(existing?.repositories ?? []);
   // The choices arrive after it opens; until they have, a save could miss
