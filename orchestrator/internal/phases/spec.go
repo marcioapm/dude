@@ -7,10 +7,9 @@ import (
 	"maps"
 	"net"
 	"net/url"
-	"os"
 	"slices"
-	"strings"
 
+	"github.com/marciomartins/dude/orchestrator/internal/config"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -50,25 +49,24 @@ type AgentConfig struct {
 	ToolsService bool
 }
 
-// LoadAgentConfig reads the agent configuration from the environment.
-func LoadAgentConfig() (AgentConfig, error) {
+// LoadAgentConfig reads the agent configuration from the resolved settings.
+func LoadAgentConfig(cfg *config.Config) (AgentConfig, error) {
 	c := AgentConfig{
-		LLMURL:       os.Getenv("DUDE_LLM_URL"),
-		LLMKey:       os.Getenv("DUDE_LLM_KEY"),
-		DefaultImage: envOr("DUDE_AGENT_IMAGE", "localhost/dude-runtime:dev"),
-		Timeout:      os.Getenv("DUDE_AGENT_TIMEOUT"),
-		ToolsURL:     os.Getenv("DUDE_TOOLS_URL"),
-		ToolsService: os.Getenv("DUDE_TOOLS_SERVICE") != "off",
-		ToolsKey:     []byte(envOr("DUDE_TOOLS_KEY", os.Getenv("DUDE_ORCHESTRATOR_TOKEN"))),
+		LLMURL:       cfg.String("DUDE_LLM_URL"),
+		LLMKey:       cfg.String("DUDE_LLM_KEY"),
+		DefaultImage: cfg.String("DUDE_AGENT_IMAGE"),
+		Timeout:      cfg.String("DUDE_AGENT_TIMEOUT"),
+		ToolsURL:     cfg.String("DUDE_TOOLS_URL"),
+		ToolsService: cfg.Bool("DUDE_TOOLS_SERVICE"),
+		ToolsKey:     []byte(cfg.String("DUDE_TOOLS_KEY")),
+		Egress:       cfg.List("DUDE_AGENT_EGRESS"),
+	}
+	if len(c.ToolsKey) == 0 {
+		c.ToolsKey = []byte(cfg.String("DUDE_ORCHESTRATOR_TOKEN"))
 	}
 	if c.LLMURL != "" {
 		if err := ValidateHTTPURL(c.LLMURL); err != nil {
-			return c, fmt.Errorf("DUDE_LLM_URL: %w", err)
-		}
-	}
-	for _, h := range strings.Split(os.Getenv("DUDE_AGENT_EGRESS"), ",") {
-		if h = strings.TrimSpace(h); h != "" {
-			c.Egress = append(c.Egress, h)
+			return c, fmt.Errorf("%s: %w", cfg.Label("DUDE_LLM_URL"), err)
 		}
 	}
 	return c, nil
@@ -88,13 +86,6 @@ func ValidateHTTPURL(raw string) error {
 		return fmt.Errorf("need an http or https URL with a host, not scheme %q host %q", u.Scheme, u.Host)
 	}
 	return nil
-}
-
-func envOr(name, fallback string) string {
-	if v := os.Getenv(name); v != "" {
-		return v
-	}
-	return fallback
 }
 
 // Where things live inside the container.

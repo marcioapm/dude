@@ -10,8 +10,8 @@
 
 import { Router } from "./api/router.ts";
 import { type RequestAuthenticator, authenticate, requestAuthenticator } from "./api/auth.ts";
-import { accessAuthenticator, accessProfiles, accessVerifier } from "./api/cloudflareAccess.ts";
-import { type AuthConfig, organizationBySlug, readConfig } from "./config.ts";
+import { type FetchLike, accessAuthenticator, accessProfiles, accessVerifier } from "./api/cloudflareAccess.ts";
+import { type AuthConfig, Config, config, organizationBySlug, useConfig } from "./config.ts";
 import { json } from "./api/http.ts";
 import { registerEventRoutes } from "./api/routes/events.ts";
 import { registerNavigationRoutes } from "./api/routes/navigation.ts";
@@ -35,7 +35,7 @@ import { version } from "./build.ts";
 import { closePool, getPool } from "./db/client.ts";
 import { listenForEvents } from "./events/listen.ts";
 
-export function buildRouter(webDir = process.env.DUDE_WEB_DIR, auth: RequestAuthenticator = authenticate): Router {
+export function buildRouter(webDir = config().webDir, auth: RequestAuthenticator = authenticate): Router {
   const router = new Router(auth);
 
   router.publicRoute("GET", "/health", async () => {
@@ -75,7 +75,7 @@ export function buildRouter(webDir = process.env.DUDE_WEB_DIR, auth: RequestAuth
  * Cloudflare Access. Resolves the configured organization, so a name that
  * matches none stops startup rather than every sign-in.
  */
-export async function authFor(auth: AuthConfig, fetchImpl: typeof fetch = fetch): Promise<RequestAuthenticator> {
+export async function authFor(auth: AuthConfig, fetchImpl: FetchLike = fetch): Promise<RequestAuthenticator> {
   if (auth.provider === "api_key") return authenticate;
   const organizationId = await organizationBySlug(auth.default_organization);
   const { team, aud } = auth.cloudflare_access;
@@ -85,9 +85,12 @@ export async function authFor(auth: AuthConfig, fetchImpl: typeof fetch = fetch)
   }));
 }
 
-export function startServer(port = Number(process.env.PORT ?? 3000), auth: RequestAuthenticator = authenticate) {
-  const router = buildRouter(undefined, auth);
+/** The router the backend serves under `settings`: its web app and its [auth]. */
+export async function routerFor(settings: Config, fetchImpl: FetchLike = fetch): Promise<Router> {
+  return buildRouter(settings.webDir, await authFor(settings.auth, fetchImpl));
+}
 
+export function startServer(port = config().port, router: Router = buildRouter()) {
   const server = Bun.serve({
     port,
     // SSE streams are long-lived; the default idle timeout would cut them off.
@@ -103,20 +106,30 @@ if (import.meta.main) {
     console.log(version);
     process.exit(0);
   }
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    console.error("DATABASE_URL is required");
-    process.exit(1);
-  }
-
-  let auth: RequestAuthenticator;
+  let settings: Config;
   try {
-    auth = await authFor((await readConfig(process.env.DUDE_CONFIG)).auth);
+    settings = Config.load();
   } catch (err) {
     console.error(`configuration: ${(err as Error).message}`);
     process.exit(1);
   }
-  const server = startServer(undefined, auth);
+  if (settings.path) console.log(`configuration file read: ${settings.path}`);
+  for (const warning of settings.warnings) console.warn(`configuration: ${warning}`);
+  useConfig(settings);
+  const databaseUrl = settings.databaseUrl;
+  if (!databaseUrl) {
+    console.error("database.url (DATABASE_URL) is required");
+    process.exit(1);
+  }
+
+  let router: Router;
+  try {
+    router = await routerFor(settings);
+  } catch (err) {
+    console.error(`configuration: ${(err as Error).message}`);
+    process.exit(1);
+  }
+  const server = startServer(settings.port, router);
   console.log(`backend listening on http://localhost:${server.port}`);
 
   // Events are written by the orchestrator as well as here; the live stream
