@@ -5,6 +5,7 @@ import { closePool, setPool } from "../src/db/client.ts";
 import { buildRouter } from "../src/index.ts";
 import type { Router } from "../src/api/router.ts";
 import { createApiKey } from "../src/api/auth.ts";
+import { promptRoleSchema } from "@dude/domain";
 
 const OWNER_URL = process.env.DATABASE_URL ?? "postgres://dude:dude@localhost:5433/dude";
 const NAME = `dude_models_test_${Bun.randomUUIDv7("hex").slice(-12)}`;
@@ -56,7 +57,10 @@ beforeAll(async () => {
   setPool(app);
   key = (await createApiKey({ organizationId: ORG, name: "Admin" })).key;
   server = Bun.serve({ port: 0, fetch(req) {
-    return Response.json(new URL(req.url).pathname.endsWith("builtin") ? {} : {
+    // Every prompt role gets a body: the control plane caches this answer
+    // for the process, and later suites in the same run save prompts on it.
+    return Response.json(new URL(req.url).pathname.endsWith("builtin")
+      ? Object.fromEntries(promptRoleSchema.options.map((role) => [role, "Built-in prompt"])) : {
       requiredReviewers: ["correctness"], blockingSeverities: ["blocking"], maxReviewIterations: 3,
       maxAttemptsPerFinding: 2, maxPrFixIterations: 3, simplify: true, test: false,
       parkAfterMinutes: 10, idleNudgeMinutes: 0,
