@@ -1852,44 +1852,51 @@ func TestASteerToANextTurnHarnessWaitsForTheTurn(t *testing.T) {
 	_ = runID
 }
 
+// turnDoneWithSteer plays an agent that finishes its first turn, seen done
+// by the follower alone (no sweep acting on it), and a steer that reaches
+// dude then: the Run, with the steer queued as 'dir_late'.
+func (w *world) turnDoneWithSteer(wi string) string {
+	t := w.t
+	t.Helper()
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Reply: "Done."} }
+	w.deliver(wi)
+	w.until("the run to reach lux", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND lux_run_id IS NOT NULL`, wi) == 1
+	})
+	var runID string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1`, wi).Scan(&runID)
+	// The fake agent finishes its first turn on its own; once it has, this
+	// sweep reads the Run before anything was followed, and starts the
+	// follower.
+	select {
+	case <-w.lux.TurnsEnded(w.lux.Runs()[0].ID, 1):
+	case <-time.After(10 * time.Second):
+		t.Fatal("the agent's first turn never ended")
+	}
+	if _, err := w.syncer.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for w.count(`SELECT count(*) FROM runs WHERE id = $1 AND turn_done_at IS NOT NULL`, runID) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the agent's turn never ended")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	mustExec(t, w.owner, `INSERT INTO directives (id, organization_id, task_id, run_id, text) VALUES ('dir_late', $1, $2, $3, 'one more thing')`,
+		w.org, wi, runID)
+	return runID
+}
+
 // A steer sent as the agent's turn ends is not dropped: the Run waits to
 // be collected until the agent has it, and it takes it as its next turn.
-// Played step by step, without the sweeps racing the follower: the turn
-// is seen done by the follower alone, the steer lands, and only then does
-// the syncer sweep.
 func TestASteerSentAsTheTurnEndsIsDeliveredBeforeTheRunFinishes(t *testing.T) {
 	for _, legacy := range []bool{false, true} {
 		t.Run(map[bool]string{false: "receipts", true: "legacy lux"}[legacy], func(t *testing.T) {
 			w := newWorld(t)
 			w.lux.LegacyInput = legacy
-			w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Reply: "Done."} }
 			wi := w.task()
-			w.deliver(wi)
-			w.until("the run to reach lux", func() bool {
-				return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND lux_run_id IS NOT NULL`, wi) == 1
-			})
-			var runID string
-			_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1`, wi).Scan(&runID)
-			// The fake agent finishes its first turn on its own; once it has,
-			// this sweep reads the Run before anything was followed, and
-			// starts the follower.
-			select {
-			case <-w.lux.TurnsEnded(w.lux.Runs()[0].ID, 1):
-			case <-time.After(10 * time.Second):
-				t.Fatal("the agent's first turn never ended")
-			}
-			if _, err := w.syncer.Sweep(context.Background()); err != nil {
-				t.Fatal(err)
-			}
-			deadline := time.Now().Add(10 * time.Second)
-			for w.count(`SELECT count(*) FROM runs WHERE id = $1 AND turn_done_at IS NOT NULL`, runID) == 0 {
-				if time.Now().After(deadline) {
-					t.Fatal("the agent's turn never ended")
-				}
-				time.Sleep(10 * time.Millisecond)
-			}
-			mustExec(t, w.owner, `INSERT INTO directives (id, organization_id, task_id, run_id, text) VALUES ('dir_late', $1, $2, $3, 'one more thing')`,
-				w.org, wi, runID)
+			runID := w.turnDoneWithSteer(wi)
 			w.until("the run to finish", func() bool {
 				return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status IN ('completed', 'failed')`, runID) == 1
 			})
@@ -1904,6 +1911,77 @@ func TestASteerSentAsTheTurnEndsIsDeliveredBeforeTheRunFinishes(t *testing.T) {
 				t.Errorf("%d turns ended, want 2", n)
 			}
 		})
+	}
+}
+
+// lux answers the input POST before the agent's records for it arrive. In
+// that window the steer is sent and unread: the Run is not collected. Once
+// the agent takes it, the turn it starts ends before the Run is.
+func TestASteerSentButNotYetReadHoldsTheFinishedTurn(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		t.Run(map[bool]string{false: "receipts", true: "legacy lux"}[legacy], func(t *testing.T) {
+			w := newWorld(t)
+			w.lux.LegacyInput = legacy
+			gate := make(chan struct{})
+			w.lux.InputGate = gate
+			wi := w.task()
+			runID := w.turnDoneWithSteer(wi)
+			w.until("the steer to be sent", func() bool {
+				return w.count(`SELECT count(*) FROM directives WHERE id = 'dir_late' AND sent_at IS NOT NULL`) == 1
+			})
+			for range 5 {
+				w.pump()
+			}
+			if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND push_request_id IS NULL AND status = 'running'`, runID); n != 1 {
+				t.Fatalf("a Run with a sent, unread steer was collected\nruns:\n%s", w.describeRuns())
+			}
+			if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.completed'`, runID); n != 0 {
+				t.Fatal("a Run with a sent, unread steer completed")
+			}
+			close(gate)
+			w.until("the run to finish", func() bool {
+				return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status IN ('completed', 'failed')`, runID) == 1
+			})
+			if n := w.count(`SELECT count(*) FROM directives WHERE id = 'dir_late' AND delivered_at IS NOT NULL AND failed_at IS NULL`); n != 1 {
+				t.Error("the steer was not delivered")
+			}
+			// Both turns ended before the Run completed.
+			if n := w.count(`SELECT count(*) FROM events s JOIN events c ON c.run_id = s.run_id AND c.event_type = 'run.completed'
+				WHERE s.run_id = $1 AND s.event_type = 'agent.session.stopped' AND s.cursor < c.cursor`, runID); n != 2 {
+				t.Errorf("%d turns ended before the run completed, want 2", n)
+			}
+		})
+	}
+}
+
+// A steer lux took and never reported is waited on for unreadGraceSecs
+// only: then the Run is collected, and the steer is marked failed.
+func TestASteerNeverReadStopsHoldingTheRunAfterTheCap(t *testing.T) {
+	w := newWorld(t)
+	gate := make(chan struct{})
+	w.lux.InputGate = gate
+	t.Cleanup(func() { close(gate) })
+	wi := w.task()
+	runID := w.turnDoneWithSteer(wi)
+	w.until("the steer to be sent", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE id = 'dir_late' AND sent_at IS NOT NULL`) == 1
+	})
+	w.pump()
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND push_request_id IS NULL`, runID); n != 1 {
+		t.Fatal("a Run with a steer sent a moment ago was collected")
+	}
+	// Sent longer ago than the cap: no receipt is coming.
+	mustExec(t, w.owner, `UPDATE directives SET sent_at = now() - interval '121 seconds' WHERE id = 'dir_late'`)
+	w.until("the run to finish", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM directives WHERE id = 'dir_late' AND delivered_at IS NULL
+		AND failed_at IS NOT NULL AND error = 'the run finished before the agent read it'`); n != 1 {
+		t.Error("the unread steer was not marked failed when the run completed")
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.directive.failed'
+		AND payload->>'directiveId' = 'dir_late'`, runID); n != 1 {
+		t.Errorf("%d failed events for the unread steer, want 1", n)
 	}
 }
 

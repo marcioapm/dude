@@ -285,6 +285,11 @@ type Server struct {
 	// fake acts on it; false refuses the request (503), as a lux that is
 	// briefly unavailable. Called without the fake's lock.
 	BeforeInput func(runID, requestID string) bool
+	// InputGate, when set, holds what input starts in an idle agent (its
+	// receipts, and the turn it takes) until the channel is closed. The
+	// request is answered first, as lux answers the POST before the
+	// agent's records arrive.
+	InputGate chan struct{}
 }
 
 // New serves a fake lux. With decide nil, every Run plays dude's scripted
@@ -888,7 +893,18 @@ func (s *Server) input(w http.ResponseWriter, r *http.Request) {
 		run.busy = false
 	}
 	if !run.busy {
-		s.deliverQueued(run)
+		if gate := s.InputGate; gate != nil {
+			go func() {
+				<-gate
+				s.mu.Lock()
+				defer s.mu.Unlock()
+				if !run.busy {
+					s.deliverQueued(run)
+				}
+			}()
+		} else {
+			s.deliverQueued(run)
+		}
 	}
 	writeJSON(w, 202, map[string]any{"requestId": in.RequestID})
 }
