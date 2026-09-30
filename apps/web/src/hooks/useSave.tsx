@@ -4,7 +4,7 @@
  * refuses, an optional toast when it lands.
  */
 
-import { useCallback, useId, useState, type ReactNode } from "react";
+import { useCallback, useId, useRef, useState, type ReactNode } from "react";
 import { Button, Callout, Dialog, FormStack, useToast } from "@dude/design-system/primitives";
 import { ApiError } from "../api/client.ts";
 
@@ -69,6 +69,14 @@ export interface FormDialogProps {
   extraActions?: ReactNode;
   submitTestId?: string;
   /**
+   * Opt in to asking before closing loses writing: the words not yet saved
+   * (`unsavedWords` in discard.ts), 0 when there is nothing worth asking
+   * about. Escape, ×, Cancel and a click outside then ask first.
+   */
+  unsavedWords?: number;
+  /** The confirmation's question: "Discard this task?". */
+  discardTitle?: string;
+  /**
    * The fields. Rendered only while the dialog is open, so a component
    * holding their state starts fresh each time it opens.
    */
@@ -83,50 +91,86 @@ export interface FormDialogProps {
 export function FormDialog(props: FormDialogProps) {
   const formId = useId();
   const document = props.size === "document";
+  const [confirming, setConfirming] = useState(false);
+  const keep = useRef<HTMLButtonElement>(null);
+  const unsaved = props.unsavedWords ?? 0;
+  // Every way out of the dialog comes here; with writing at stake it asks.
+  const requestOpenChange = (open: boolean) => {
+    if (!open && unsaved > 0) setConfirming(true);
+    else props.onOpenChange(open);
+  };
   return (
-    <Dialog
-      open={props.open}
-      onOpenChange={props.onOpenChange}
-      size={props.size ?? "sm"}
-      title={props.title}
-      description={props.description}
-      context={props.context}
-      aside={props.open ? props.aside : undefined}
-      asideLabel={props.asideLabel}
-      footerStart={props.footerStart}
-      onKeyDown={(e) => {
-        // A document's fields are multi-line: Enter is a new line there, so Ctrl/⌘+Enter submits.
-        if (!document || e.key !== "Enter" || !(e.ctrlKey || e.metaKey) || e.defaultPrevented) return;
-        e.preventDefault();
-        if (props.canSubmit) props.onSubmit();
-      }}
-      footer={
-        <>
-          <Button variant="quiet" onClick={() => props.onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button type="submit" form={formId} variant={props.extraActions ? "secondary" : "primary"}
-            disabled={!props.canSubmit} data-testid={props.submitTestId}>
-            {props.submitLabel}
-          </Button>
-          {props.extraActions}
-        </>
-      }
-    >
-      {props.open ? (
-        <form
-          id={formId}
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (props.canSubmit) props.onSubmit();
-          }}
-        >
-          <FormStack fill={document}>
-            {props.children}
-            {props.problem ? <Callout tone="danger">{props.problem}</Callout> : null}
-          </FormStack>
-        </form>
-      ) : null}
-    </Dialog>
+    <>
+      <Dialog
+        open={props.open}
+        onOpenChange={requestOpenChange}
+        size={props.size ?? "sm"}
+        title={props.title}
+        description={props.description}
+        context={props.context}
+        aside={props.open ? props.aside : undefined}
+        asideLabel={props.asideLabel}
+        footerStart={props.footerStart}
+        onKeyDown={(e) => {
+          // A document's fields are multi-line: Enter is a new line there, so Ctrl/⌘+Enter submits.
+          if (!document || e.key !== "Enter" || !(e.ctrlKey || e.metaKey) || e.defaultPrevented) return;
+          e.preventDefault();
+          if (props.canSubmit) props.onSubmit();
+        }}
+        footer={
+          <>
+            <Button variant="quiet" onClick={() => requestOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" form={formId} variant={props.extraActions ? "secondary" : "primary"}
+              disabled={!props.canSubmit} data-testid={props.submitTestId}>
+              {props.submitLabel}
+            </Button>
+            {props.extraActions}
+          </>
+        }
+      >
+        {props.open ? (
+          <form
+            id={formId}
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (props.canSubmit) props.onSubmit();
+            }}
+          >
+            <FormStack fill={document}>
+              {props.children}
+              {props.problem ? <Callout tone="danger">{props.problem}</Callout> : null}
+            </FormStack>
+          </form>
+        ) : null}
+      </Dialog>
+      <Dialog
+        open={props.open && confirming}
+        onOpenChange={setConfirming}
+        size="sm"
+        tone="danger"
+        title={props.discardTitle ?? "Discard your changes?"}
+        description={`You have written ${unsaved.toLocaleString("en-US")} ${unsaved === 1 ? "word" : "words"} that haven't been saved.`}
+        onOpenAutoFocus={(e) => {
+          e.preventDefault();
+          keep.current?.focus();
+        }}
+        footer={
+          <>
+            <Button ref={keep} variant="quiet" onClick={() => setConfirming(false)} data-testid="discard-keep">
+              Keep writing
+            </Button>
+            <Button variant="danger" solid data-testid="discard-confirm"
+              onClick={() => {
+                setConfirming(false);
+                props.onOpenChange(false);
+              }}>
+              Discard
+            </Button>
+          </>
+        }
+      />
+    </>
   );
 }
