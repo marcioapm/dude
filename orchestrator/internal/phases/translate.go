@@ -261,7 +261,9 @@ func (t *translator) shimEvent(ctx context.Context, tx pgx.Tx, s *Syncer, typ st
 		// The task itself: recorded when the agent has it, as lux delivered
 		// it — from its first answer.
 		if str("requestId") == promptRequestID {
-			if str("error") != "" || str("phase") == lux.InputFailed {
+			// Only a first answer that has the task: accepted, or an older
+			// lux's phase-less handoff. Failed and unknown phases are not.
+			if phase := str("phase"); str("error") != "" || (phase != "" && phase != lux.InputAccepted) {
 				return nil
 			}
 			// Once per Run: an agent resumed on another host is not given its
