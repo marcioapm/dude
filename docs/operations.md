@@ -224,45 +224,108 @@ Before the first `DUDE_REGISTRY_AUTH=ecr` (or `static`):
    has no `DUDE_REGISTRY_AUTH` in its environment or files.
 4. Only then point more projects at the private image.
 
-## Environment
+## Configuration
 
-**Secret** marks a value that must be kept out of logs and unit files that
-others can read.
+Both processes read **one TOML file**: `DUDE_CONFIG` if it is set, else
+`/etc/dude/dude.toml` if it exists, else none. [`dude.example.toml`](dude.example.toml)
+lists every key with its default and its variable.
+
+**Precedence.** Every setting has an environment variable, and a variable
+that is set and not empty overrides the file's key; a key in neither is its
+default. Lists (`agent.egress`, `factory.logins`) are TOML arrays in the file
+and comma-separated in the variable. Booleans in a variable are `true`,
+`false`, `on`, `off`, `1` or `0`. With no file, the environment alone
+configures dude, exactly as before the file existed.
+
+**Strict.** Each process stops at startup, naming the file key and variable,
+on: `DUDE_CONFIG` set to a file it cannot read; a key neither process knows;
+a value of the wrong type or an invalid value (from the file or the
+variable) for a key it uses. Each process checks only the keys it uses, so
+the backend accepts the orchestrator's sections and the reverse. A key only
+the other process uses is that process's to refuse.
+
+**Secret** marks a value that must be kept out of logs and out of files
+others can read. Either process logs a warning at startup when the file is
+readable by group or others (mode `0644`, `0640`) and holds a secret key; it
+does not refuse to start.
+
+| File key | Variable | Default | Used by | |
+| --- | --- | --- | --- | --- |
+| `database.url` | `DATABASE_URL` | required | both | Postgres, as `dude_app`. **Secret** (password). |
+| `backend.port` | `PORT` | `3000` | backend | Listening port, on all interfaces. |
+| `backend.web_dir` | `DUDE_WEB_DIR` | off | backend | Serve the web app from this directory: `<prefix>/share/dude/web`. Unset, the backend serves only the API. |
+| `orchestrator.url` | `DUDE_ORCHESTRATOR_URL` | none | backend | The orchestrator's internal API, e.g. `http://127.0.0.1:3100`. Unset, anything that changes what runs answers 503. |
+| `orchestrator.token` | `DUDE_ORCHESTRATOR_TOKEN` | required (orchestrator) | both | The token the backend authenticates with, the same in both; also signs agents' tool tokens unless `tools.key` is set. **Secret.** |
+| `orchestrator.listen` | `DUDE_ORCHESTRATOR_LISTEN` | `127.0.0.1:3100` | orchestrator | Internal API address. |
+| `orchestrator.pr_reconcile` | `DUDE_PR_RECONCILE` | `15m` | orchestrator | How often open pull requests are re-read as a backstop to webhooks (a Go duration). |
+| `orchestrator.park_after` | `DUDE_PARK_AFTER` | the delivery policy's | orchestrator | Grace before a Run waiting on a person is parked, for projects that set none (a Go duration). |
+| `orchestrator.idle_after` | `DUDE_IDLE_AFTER` | the delivery policy's | orchestrator | Quiet time before an idle Run is nudged and parked, for projects that set none. |
+| `orchestrator.diff_every` | `DUDE_DIFF_EVERY` | `15s` | orchestrator | How often a working agent's diff is read besides after its edits. |
+| `orchestrator.machine_usd_per_hour` | `DUDE_MACHINE_USD_PER_HOUR` | `0.20` | orchestrator | What an hour of a lux host costs, recorded with each Run; not negative. |
+| `s3.bucket` | `DUDE_S3_BUCKET` | off | backend | The bucket people's photos and projects' images are kept in. Unset, uploads answer 503 and faces show initials. |
+| `s3.endpoint` | `DUDE_S3_ENDPOINT` | AWS | backend | For MinIO, versitygw and other S3-compatible stores (path-style). |
+| `s3.region` | `DUDE_S3_REGION` | `us-east-1` | backend | |
+| `s3.access_key`, `s3.secret_key` | `DUDE_S3_ACCESS_KEY`, `DUDE_S3_SECRET_KEY` | off | backend | Explicit credentials for local S3-compatible stores such as MinIO; set both. The secret key is a **secret**. Unset, the backend obtains temporary EC2 instance-role credentials through IMDSv2; it does not use Bun's AWS environment credential fallback. |
+| `lux.url` | `LUX_URL` | required | orchestrator | The lux control plane. |
+| `lux.api_key` | `LUX_API_KEY` | required | orchestrator | A lux API key with the `run` scope. **Secret.** |
+| `lux.console_url` | `LUX_CONSOLE_URL` | `lux.url` | orchestrator | lux's console, for the "Open terminal in lux" links on a task's servers (`<url>/runs/<luxRunId>/terminal`). |
+| `llm.url` | `DUDE_LLM_URL` | none | orchestrator | The LLM API agents use, as a base URL before the API path, e.g. `https://llmproxy.example.com/v1`; must be http(s). Given to each Run as the plain env var `DUDE_LLM_URL`; its host is agents' model egress. See [Agent image contract](#agent-image-contract). |
+| `llm.key` | `DUDE_LLM_KEY` | none | orchestrator | That API's key. Given to each Run as a lux secret delivered as the env var `DUDE_LLM_KEY`: never in the spec's env or labels, never stored by lux. **Secret.** |
+| `embeddings.url` | `DUDE_EMBEDDINGS_URL` | `llm.url` | orchestrator | An OpenAI-compatible embeddings API, before `/embeddings` (llm-proxy: `https://…/v1`), for a provider other than the agents'. `off`, or neither this nor `llm.url` set, and memory is searched by words alone. |
+| `embeddings.key` | `DUDE_EMBEDDINGS_KEY` | `llm.key`, when the embeddings URL is `llm.url` or on its origin | orchestrator | Its key: the deployment's own virtual key, never a person's. `llm.key` is never sent to another origin (scheme, host, port): an explicit `embeddings.url` elsewhere without this key fails startup. With only `llm.url` and no key at all, embeddings are off. **Secret.** |
+| `embeddings.model` | `DUDE_EMBEDDINGS_MODEL` | `gemini-embedding-2` | orchestrator | Changing it re-embeds everything in the background; search keeps working by words meanwhile. |
+| `embeddings.dimensions` | `DUDE_EMBEDDINGS_DIMENSIONS` | `768` | orchestrator | The index's size: only 768 is accepted, another is a migration. |
+| `agent.image` | `DUDE_AGENT_IMAGE` | `localhost/dude-runtime:dev` | orchestrator | Image for agents when a project names none: the operator's own, pinned by digest. |
+| `agent.timeout` | `DUDE_AGENT_TIMEOUT` | none | orchestrator | A limit on a Run's running time, passed to lux. |
+| `agent.egress` | `DUDE_AGENT_EGRESS` | none | orchestrator | Hosts agents may reach besides `llm.url`'s host; `*` turns egress filtering off. With neither this nor `llm.url`, egress is unrestricted. |
+| `registry.auth` | `DUDE_REGISTRY_AUTH` | `none` | orchestrator | How lux logs in to pull agent images: `none`, `ecr` or `static`. See [Private agent images](#private-agent-images). |
+| `registry.host` | `DUDE_REGISTRY` | none | orchestrator | `static` only: the registry host, e.g. `ghcr.io`. |
+| `registry.credential` | `DUDE_REGISTRY_CREDENTIAL` | none | orchestrator | `static` only: `user:password` for `registry.host`. **Secret.** |
+| `registry.ecr_role_arn` | `DUDE_ECR_ROLE_ARN` | none (host credentials) | orchestrator | `ecr` only: a pull-only IAM role to assume and mint tokens as. See [A pull-only role for ECR](#a-pull-only-role-for-ecr). |
+| `tools.listen` | `DUDE_TOOLS_LISTEN` | off | orchestrator | Address the agent tools listen on, e.g. `0.0.0.0:3200`. Unset, agents get no dude tools. |
+| `tools.url` | `DUDE_TOOLS_URL` | none | orchestrator | The tools as agents' containers reach them, e.g. `http://10.0.1.5:3200`. Unset, agents get no dude tools. Must not be the lux host or lux's own address: lux never lets a Run reach either. |
+| `tools.service` | `DUDE_TOOLS_SERVICE` | `true` | orchestrator | `false` (`off`) for a lux without workload services: the agent is then handed the tool token directly. |
+| `tools.key` | `DUDE_TOOLS_KEY` | `orchestrator.token` | orchestrator | Key that derives each Run's tool token. Changing it invalidates live Runs' tokens. **Secret.** |
+| `vapid.public_key`, `vapid.private_key` | `DUDE_VAPID_PUBLIC_KEY`, `DUDE_VAPID_PRIVATE_KEY` | made once, kept in `push_config` | orchestrator | Web Push keys. The private key is a **secret**. Changing them invalidates existing browser subscriptions. |
+| `vapid.subject` | `DUDE_VAPID_SUBJECT` | `mailto:dude@localhost` | orchestrator | Who push services may contact (`mailto:` or `https:`). |
+| `factory.logins` | `DUDE_FACTORY_LOGINS` | none | orchestrator | GitHub logins whose PR comments are the factory's own, and wake no agent. |
+| `auth.provider` | `DUDE_AUTH_PROVIDER` | `api_key` | backend | `api_key` or `cloudflare_access` ([README](../README.md)). API keys keep working either way. Access settings below without a provider are refused. |
+| `auth.public_url` | `DUDE_AUTH_PUBLIC_URL` | required with Access | backend | The https origin people open dude at; changes signed in by Access must come from it. |
+| `auth.auto_create` | `DUDE_AUTH_AUTO_CREATE` | `true` | backend | Someone Access lets in who is not yet one of the organization's people becomes a member; `false` refuses them. |
+| `auth.default_organization` | `DUDE_AUTH_DEFAULT_ORGANIZATION` | required with Access | backend | The slug of an existing organization Access sign-ins belong to; startup fails if none has it. |
+| `auth.cloudflare_access.team` | `DUDE_AUTH_CLOUDFLARE_ACCESS_TEAM` | required with Access | backend | The Zero Trust team name (one DNS label). |
+| `auth.cloudflare_access.aud` | `DUDE_AUTH_CLOUDFLARE_ACCESS_AUD` | required with Access | backend | The Access application's audience (AUD) tag. |
+
+Also read from the environment only, and not settings: `AWS_PROFILE` and
+the other `AWS_*` variables (the orchestrator's AWS default credential chain
+with `registry.auth = "ecr"`; the region is always the image's registry's),
+and the retired `DUDE_OPENCODE_AUTH`/`DUDE_OPENCODE_CONFIG`, ignored with a
+warning. The `dude` CLI inside Run containers is configured by lux per Run.
+
+### Moving a deployment to the file
+
+The file can be committed with the deployment (for example in the aiverse
+repository) and installed as `/etc/dude/dude.toml`, readable by the service
+user only if it holds anything sensitive. Put in it everything that is not a
+secret, and keep in the environment files only the secrets and the values
+known only at deploy time. The secrets are:
+
+- `database.url` (`DATABASE_URL`: holds the password)
+- `orchestrator.token` (`DUDE_ORCHESTRATOR_TOKEN`)
+- `lux.api_key` (`LUX_API_KEY`)
+- `llm.key` (`DUDE_LLM_KEY`)
+- `embeddings.key` (`DUDE_EMBEDDINGS_KEY`)
+- `vapid.private_key` (`DUDE_VAPID_PRIVATE_KEY`)
+- `tools.key` (`DUDE_TOOLS_KEY`)
+- `s3.secret_key` (`DUDE_S3_SECRET_KEY`)
+- `registry.credential` (`DUDE_REGISTRY_CREDENTIAL`)
+
+Moving is safe one key at a time: a variable still set wins over the file,
+so an existing environment file keeps working unchanged. Remove a variable
+only once its key is in the file. Both processes log `configuration file
+read` with its path at startup; check it before removing variables.
 
 ### dude-orchestrator
-
-| Variable | Default | |
-| --- | --- | --- |
-| `DATABASE_URL` | required | Postgres, as `dude_app`. **Secret** (password). |
-| `DUDE_ORCHESTRATOR_TOKEN` | required | The token the backend authenticates with; also signs agents' tool tokens unless `DUDE_TOOLS_KEY` is set. **Secret.** |
-| `DUDE_ORCHESTRATOR_LISTEN` | `127.0.0.1:3100` | Internal API address. |
-| `LUX_URL` | required | The lux control plane. |
-| `LUX_API_KEY` | required | A lux API key with the `run` scope. **Secret.** |
-| `LUX_CONSOLE_URL` | `LUX_URL` | lux's console, for the "Open terminal in lux" links on a task's servers (`<url>/runs/<luxRunId>/terminal`). |
-| `DUDE_AGENT_IMAGE` | `localhost/dude-runtime:dev` | Image for agents when a project names none: the operator's own, pinned by digest. |
-| `DUDE_REGISTRY_AUTH` | `none` | How lux logs in to pull agent images: `none`, `ecr` or `static`. See [Private agent images](#private-agent-images). |
-| `DUDE_REGISTRY` | none | `static` only: the registry host, e.g. `ghcr.io`. |
-| `DUDE_REGISTRY_CREDENTIAL` | none | `static` only: `user:password` for `DUDE_REGISTRY`. **Secret.** |
-| `DUDE_ECR_ROLE_ARN` | none (host credentials) | `ecr` only: a pull-only IAM role to assume and mint tokens as. See [A pull-only role for ECR](#a-pull-only-role-for-ecr). |
-| `AWS_PROFILE`, other `AWS_*` | the instance role | `ecr` only: the AWS default credential chain. The region is always the image's registry's. |
-| `DUDE_LLM_URL` | none | The LLM API agents use, as a base URL before the API path, e.g. `https://llmproxy.example.com/v1`; must be http(s). Given to each Run as the plain env var `DUDE_LLM_URL`; its host is agents' model egress. See [Agent image contract](#agent-image-contract). |
-| `DUDE_LLM_KEY` | none | That API's key. Given to each Run as a lux secret delivered as the env var `DUDE_LLM_KEY`: never in the spec's env or labels, never stored by lux. **Secret.** |
-| `DUDE_AGENT_EGRESS` | none | Comma-separated hosts agents may reach besides `DUDE_LLM_URL`'s host; `*` turns egress filtering off. With neither this nor `DUDE_LLM_URL`, egress is unrestricted. |
-| `DUDE_AGENT_TIMEOUT` | none | A limit on a Run's running time, passed to lux. |
-| `DUDE_TOOLS_LISTEN` | off | Address the agent tools listen on, e.g. `0.0.0.0:3200`. Unset, agents get no dude tools. |
-| `DUDE_TOOLS_URL` | none | The tools as agents' containers reach them, e.g. `http://10.0.1.5:3200`. Unset, agents get no dude tools. Must not be the lux host or lux's own address: lux never lets a Run reach either. |
-| `DUDE_TOOLS_SERVICE` | on | `off` for a lux without workload services: the agent is then handed the tool token directly. |
-| `DUDE_TOOLS_KEY` | `DUDE_ORCHESTRATOR_TOKEN` | Key that derives each Run's tool token. Changing it invalidates live Runs' tokens. **Secret.** |
-| `DUDE_PR_RECONCILE` | `15m` | How often open pull requests are re-read as a backstop to webhooks. |
-| `DUDE_PARK_AFTER` | the delivery policy's | Grace before a Run waiting on a person is parked, for projects that set none (a Go duration). |
-| `DUDE_IDLE_AFTER` | the delivery policy's | Quiet time before an idle Run is nudged and parked, for projects that set none. |
-| `DUDE_VAPID_PUBLIC_KEY`, `DUDE_VAPID_PRIVATE_KEY` | made once, kept in `push_config` | Web Push keys. The private key is a **secret**. Changing them invalidates existing browser subscriptions. |
-| `DUDE_VAPID_SUBJECT` | `mailto:dude@localhost` | Who push services may contact (`mailto:` or `https:`). |
-| `DUDE_FACTORY_LOGINS` | none | Comma-separated GitHub logins whose PR comments are the factory's own, and wake no agent. |
-| `DUDE_EMBEDDINGS_URL` | `DUDE_LLM_URL` | An OpenAI-compatible embeddings API, before `/embeddings` (llm-proxy: `https://…/v1`), for a provider other than the agents'. `off`, or neither this nor `DUDE_LLM_URL` set, and memory is searched by words alone. |
-| `DUDE_EMBEDDINGS_KEY` | `DUDE_LLM_KEY`, when the embeddings URL is `DUDE_LLM_URL` or on its origin | Its key: the deployment's own virtual key, never a person's. `DUDE_LLM_KEY` is never sent to another origin (scheme, host, port): an explicit `DUDE_EMBEDDINGS_URL` elsewhere without this key fails startup. With only `DUDE_LLM_URL` and no key at all, embeddings are off. **Secret.** |
-| `DUDE_EMBEDDINGS_MODEL` | `gemini-embedding-2` | Changing it re-embeds everything in the background; search keeps working by words meanwhile. |
-| `DUDE_EMBEDDINGS_DIMENSIONS` | `768` | The index's size: only 768 is accepted, another is a migration. |
 
 At startup the orchestrator logs which variables the embeddings URL and key
 came from (`url_from`, `key_from`), never the key.
@@ -333,18 +396,6 @@ Run as the secrets `opencode_auth` and `opencode_config`
   supplied again on each resume.
 
 ### dude-backend
-
-| Variable | Default | |
-| --- | --- | --- |
-| `DATABASE_URL` | required | Postgres, as `dude_app`. **Secret** (password). |
-| `DUDE_ORCHESTRATOR_URL` | none | The orchestrator's internal API, e.g. `http://127.0.0.1:3100`. Unset, anything that changes what runs answers 503. |
-| `DUDE_ORCHESTRATOR_TOKEN` | none | The same token as the orchestrator's. **Secret.** |
-| `PORT` | `3000` | Listening port, on all interfaces. |
-| `DUDE_WEB_DIR` | off | Serve the web app from this directory: `<prefix>/share/dude/web`. Unset, the backend serves only the API. |
-| `DUDE_S3_BUCKET` | off | The bucket people's photos and projects' images are kept in. Unset, uploads answer 503 and faces show initials. |
-| `DUDE_S3_ENDPOINT` | AWS | For MinIO, versitygw and other S3-compatible stores (path-style). |
-| `DUDE_S3_REGION` | `us-east-1` | |
-| `DUDE_S3_ACCESS_KEY`, `DUDE_S3_SECRET_KEY` | off | Explicit credentials for local S3-compatible stores such as MinIO; set both. The secret key is a **secret**. Unset, the backend obtains temporary EC2 instance-role credentials through IMDSv2; it does not use Bun's AWS environment credential fallback. |
 
 On EC2, set `DUDE_S3_BUCKET` and `DUDE_S3_REGION`, grant the instance role
 `s3:PutObject`, `s3:GetObject` and `s3:DeleteObject` on the bucket's objects

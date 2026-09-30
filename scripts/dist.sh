@@ -59,9 +59,12 @@ for arch in arm64 amd64; do
 
   cp -R "$ROOT/apps/web/dist" "$work/share/dude/web"
   cp "$ROOT/LICENSE" "$work/share/dude/LICENSE"
-  # dude-backend bundles jose (MIT), whose licence asks for its notice in copies.
+  # dude-backend bundles jose (MIT), and dude-orchestrator links go-toml
+  # (MIT); both licences ask for their notice in copies.
   mkdir -p "$work/share/dude/third-party"
   cp "$ROOT/apps/control-plane/node_modules/jose/LICENSE.md" "$work/share/dude/third-party/jose-LICENSE.md"
+  cp "$(cd "$ROOT/orchestrator" && go list -m -f '{{.Dir}}' github.com/pelletier/go-toml/v2)/LICENSE" \
+    "$work/share/dude/third-party/go-toml-LICENSE"
 
   chmod 0755 "$work/bin/"*
   chmod -R u+rwX,go+rX,go-w "$work/share"
