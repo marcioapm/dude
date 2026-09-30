@@ -42,12 +42,34 @@ export interface ChatMessageProps extends Omit<HTMLAttributes<HTMLElement>, "chi
   /** For `answer`: the question that was answered, quoted above the reply. */
   readonly inReplyTo?: string | undefined;
   /**
-   * Framed turns only: when the agent actually received it. `null` means
-   * sent but not yet delivered — a steer arriving mid-turn is held until
-   * the turn ends, and until then the turn shows a "Queued" mark and a
-   * dashed frame. `undefined` means delivery is not tracked for this turn.
+   * Framed turns only: when the agent received it. `null` means sent but
+   * not yet delivered: the turn shows a "Queued" mark, a dashed bar and
+   * `pendingReason` under the body. `undefined` means delivery is not
+   * tracked for this turn.
    */
   readonly deliveredAt?: string | number | Date | null | undefined;
+  /**
+   * `deliveredAt` is when the agent's step read it (lux's read receipt),
+   * so the header says "sent 14:30 · read 14:30:41". Without it the header
+   * says only "delivered": an older lux reports the handoff, not the read.
+   */
+  readonly read?: boolean | undefined;
+  /** What the agent finished just before reading it: "read 14:30:41, after Bash". */
+  readonly readAfter?: string | undefined;
+  /**
+   * Queued only: where and when it lands, one line under the body ("Lands
+   * after **Bash** finishes."). The app knows the reason; the default is
+   * the agent's next step.
+   */
+  readonly pendingReason?: ReactNode;
+  /** Queued only: offer "Interrupt now", which stops the turn so it is heard at once. */
+  readonly onInterrupt?: (() => void) | undefined;
+  /**
+   * It will not reach the agent: a danger line "Not delivered: <reason>"
+   * in place of the queued treatment, with Retry when `onRetry` is given.
+   */
+  readonly failed?: ReactNode;
+  readonly onRetry?: (() => void) | undefined;
   readonly startedAt?: string | number | Date | undefined;
   readonly endedAt?: string | number | Date | null | undefined;
   /** `null` = not known (e.g. a subscription harness). Renders as "—", never as $0.00. */
@@ -128,6 +150,12 @@ export function ChatMessage({
   intent,
   inReplyTo,
   deliveredAt,
+  read,
+  readAfter,
+  pendingReason,
+  onInterrupt,
+  failed,
+  onRetry,
   startedAt,
   endedAt,
   costUsd,
@@ -170,8 +198,10 @@ export function ChatMessage({
   }
 
   const humanIntent: HumanIntent = intent ?? "prompt";
-  const queued = k === "human" && deliveredAt === null;
+  const isFailed = k === "human" && deliveredAt === null && failed !== undefined && failed !== null && failed !== false;
+  const queued = k === "human" && deliveredAt === null && !isFailed;
   const delivered = k === "human" ? toDate(deliveredAt) : null;
+  const wasRead = delivered !== null && read === true;
   const clampLines = maxLines === false ? null : maxLines ?? (k === "human" && humanIntent === "prompt" ? PROMPT_MAX_LINES : null);
   const hasStats = k === "agent" && (costUsd !== undefined || tokens !== undefined || contextTokens !== undefined || outputTokens !== undefined || timed);
 
@@ -191,6 +221,7 @@ export function ChatMessage({
       data-role={role}
       data-intent={k === "human" ? humanIntent : undefined}
       data-pending={queued ? "true" : undefined}
+      data-failed={isFailed ? "true" : undefined}
       aria-busy={live || undefined}
       {...rest}
     >
@@ -217,21 +248,32 @@ export function ChatMessage({
             {k === "agent" && name ? <span className={styles["roleName"]}>{ROLE_LABEL[role]}</span> : null}
             {k === "human" ? <span className={cx(styles["intent"], styles[`intentTag-${humanIntent}`])}><span className="ds-cap">{INTENT_LABEL[humanIntent]}</span></span> : null}
             {queued ? (
-              <span className={styles["queued-tag"]} title="Sent. The agent is mid-turn; it will read this when the turn ends.">
+              <span className={styles["queued-tag"]} title="Sent. The agent has not read it yet; the line under it says when it will.">
                 <Icon name="clock" size={10} strokeWidth={2} />
                 <span className="ds-cap">Queued</span>
               </span>
             ) : null}
             {model ? <code className={styles["model"]}>{model}</code> : null}
-            {ts ? (
+            {ts && wasRead ? (
+              <span className={styles["time"]}>
+                sent{" "}
+                <time dateTime={ts.toISOString()} title={ts.toISOString()}>{formatTimestamp(ts, "time-short")}</time>
+                {" · "}read{" "}
+                <time className={styles["delivered"]} dateTime={delivered.toISOString()} title={`Read by the agent at ${delivered.toISOString()}`}>
+                  {formatTimestamp(delivered, "time")}
+                </time>
+                {readAfter ? `, after ${readAfter}` : null}
+              </span>
+            ) : ts ? (
               <time className={styles["time"]} dateTime={ts.toISOString()} title={ts.toISOString()}>
                 {formatTimestamp(ts, "time")}
               </time>
             ) : null}
-            {delivered ? (
-              <time className={styles["delivered"]} dateTime={delivered.toISOString()} title={`Delivered to the agent at ${delivered.toISOString()}`}>
-                delivered {formatTimestamp(delivered, "time")}
-              </time>
+            {delivered && !wasRead ? (
+              // Handed over, with no word of when the agent read it.
+              <span className={styles["delivered"]} title={`Handed to the agent at ${delivered.toISOString()}`}>
+                delivered
+              </span>
             ) : null}
           </header>
         )}
@@ -248,7 +290,28 @@ export function ChatMessage({
             <Markdown source={content} streaming={streaming} breaks={k === "human"} unmeasured className={styles["body"]} />
           ) : null}
         </ClampedBody>
-        {queued ? <div className={styles["queuedNote"]}>Waiting for the current turn to end before the agent reads this.</div> : null}
+        {queued ? (
+          <div className={styles["queuedNote"]}>
+            <span>{pendingReason ?? "Lands at the agent's next step."}</span>
+            {onInterrupt ? (
+              <button type="button" className={styles["noteAction"]} onClick={onInterrupt}
+                title="Stop the agent's current turn so it hears this now">
+                Interrupt now
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+        {isFailed ? (
+          <div className={styles["failedNote"]} role="status">
+            <Icon name="alert" size={12} strokeWidth={2} />
+            <span><b>Not delivered:</b> {failed}</span>
+            {onRetry ? (
+              <button type="button" className={styles["noteAction"]} onClick={onRetry}>
+                Retry
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         {attachments !== undefined ? <div className={styles["attachments"]}>{attachments}</div> : null}
         {actions !== undefined ? <div className={styles["actions"]}>{actions}</div> : null}
         {activity !== undefined || hasStats ? (

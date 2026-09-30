@@ -30,6 +30,10 @@ const (
 	evRunStarted         = "run.started"
 	evRuntimeStopped     = "runtime.stopped"
 	evDirectiveDelivered = "run.directive.delivered"
+	evDirectiveAccepted  = "run.directive.accepted"
+	evDirectiveFailed    = "run.directive.failed"
+	// inputConsumed: directiveReceipt's name for a lux.input.consumed.
+	inputConsumed = "consumed"
 )
 
 // translator turns one lux Run's output into dude's ledger, and into the
@@ -254,12 +258,20 @@ func (t *translator) shimEvent(ctx context.Context, tx pgx.Tx, s *Syncer, typ st
 		return t.session(ctx, tx, s, str("sessionId"), epoch)
 	case "lux.activity":
 		return t.activity(ctx, tx, s, str("activity"))
-	case "lux.input":
-		if str("error") != "" {
+	case lux.RecordInputConsumed, lux.RecordInputFailed:
+		if str("requestId") == promptRequestID {
 			return nil
 		}
-		// The task itself: recorded when the agent has it, as lux delivered it.
+		return t.directiveReceipt(ctx, tx, s, typ, data)
+	case lux.RecordInput:
+		// The task itself: recorded when the agent has it, as lux delivered
+		// it — from its first answer.
 		if str("requestId") == promptRequestID {
+			// Only a first answer that has the task: accepted, or an older
+			// lux's phase-less handoff. Failed and unknown phases are not.
+			if phase := str("phase"); str("error") != "" || (phase != "" && phase != lux.InputAccepted) {
+				return nil
+			}
 			// Once per Run: an agent resumed on another host is not given its
 			// task again, but a lux that acknowledged it again would repeat it.
 			if t.promptSeen {
@@ -271,15 +283,140 @@ func (t *translator) shimEvent(ctx context.Context, tx pgx.Tx, s *Syncer, typ st
 			if truncated, _ := data["truncated"].(bool); truncated {
 				payload["truncated"] = true
 			}
+			// Where this harness lands input: what the composer promises a steer.
+			if lands := landsOf(data); lands != "" {
+				payload["lands"] = lands
+			}
 			return s.event(ctx, tx, t.run, evPromptDelivered, ledger.ActorSystem, payload)
 		}
-		tag, err := tx.Exec(ctx, `UPDATE directives SET delivered_at = COALESCE(delivered_at, now()) WHERE id = $1`, str("requestId"))
+		return t.directiveReceipt(ctx, tx, s, typ, data)
+	}
+	return nil
+}
+
+// interruptAloneOf (SQL): d is an undelivered "Interrupt now" sent as the
+// interrupt alone, resending the instruction whose words f ($1, of Run $2)
+// carries: it settles with f.
+const interruptAloneOf = `f.id = $1 AND f.run_id = $2 AND f.interrupt_only IS FALSE
+	AND d.run_id = f.run_id AND d.resends = COALESCE(f.resends, f.id) AND d.interrupt_only AND d.delivered_at IS NULL`
+
+// directiveReceipt records what lux says became of a person's steer, typ
+// being the record (lux.RecordInput and those following it):
+//
+//   - lux.input phase "accepted": the harness took it; lands says when the
+//     agent reads it (next_step, or next_turn for a harness that reads only
+//     between turns). With receipt false no lux.input.consumed follows, so
+//     it is delivered now.
+//   - lux.input.consumed: the agent's next model step has it in context.
+//   - lux.input with no phase and no error: a lux from before the phases,
+//     which acknowledges once, on handoff. Delivered then, as it always was.
+//   - lux.input phase "failed" (never accepted), lux.input.failed (after
+//     it was), or an older lux's lux.input with an error: it will not reach
+//     the agent.
+//
+// Each transition happens once per directive and Run however often lux
+// repeats a receipt (a reconnect, a resumed shim): the update is guarded on
+// the state it moves from, and the event is written only when a row moved.
+//
+// Delivered is final: a failure after it changes nothing. A failure is
+// final against "accepted" (with or without receipt), which only says the
+// harness took it. A delivery (consumed, or an older lux's handoff) after a
+// failure wins: it is the agent's own report that it has the words, so the
+// failure and its error are cleared with it and run.directive.delivered is
+// written.
+func (t *translator) directiveReceipt(ctx context.Context, tx pgx.Tx, s *Syncer, typ string, data map[string]any) error {
+	id, _ := data["requestId"].(string)
+	msg, _ := data["error"].(string)
+	var phase string
+	switch typ {
+	case lux.RecordInputConsumed:
+		phase = inputConsumed
+	case lux.RecordInputFailed:
+		phase = lux.InputFailed
+	default:
+		phase, _ = data["phase"].(string)
+		if phase != "" && phase != lux.InputAccepted && phase != lux.InputFailed {
+			return nil // lux.input carries no other phase
+		}
+		if phase == "" && msg != "" {
+			phase = lux.InputFailed
+		}
+	}
+	if phase == lux.InputFailed {
+		if msg == "" {
+			msg = "lux could not deliver it"
+		}
+		tag, err := tx.Exec(ctx, `UPDATE directives SET failed_at = now(), error = $3
+			WHERE id = $1 AND run_id = $2 AND delivered_at IS NULL AND failed_at IS NULL`, id, t.run.ID, msg)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
-		return s.event(ctx, tx, t.run, evDirectiveDelivered, ledger.ActorSystem, map[string]any{"directiveId": str("requestId")})
+		if err := s.event(ctx, tx, t.run, evDirectiveFailed, ledger.ActorSystem, map[string]any{"directiveId": id, "error": msg}); err != nil {
+			return err
+		}
+		// An interrupt alone that relied on these words fails with them, once
+		// no other directive carrying them is left to deliver them.
+		return settleInterrupts(ctx, tx, s, t.run, &msg, `UPDATE directives d SET failed_at = now(), error = $3
+			FROM directives f WHERE `+interruptAloneOf+` AND d.failed_at IS NULL
+			  AND NOT EXISTS (SELECT 1 FROM directives c WHERE c.run_id = d.run_id AND `+carrierOf+` AND c.failed_at IS NULL)
+			RETURNING d.id`, id, t.run.ID, msg)
 	}
-	return nil
+	receipt, _ := data["receipt"].(bool)
+	if phase == lux.InputAccepted {
+		lands := landsOf(data)
+		tag, err := tx.Exec(ctx, `UPDATE directives SET accepted_at = now(), lands = NULLIF($3, '')
+			WHERE id = $1 AND run_id = $2 AND accepted_at IS NULL AND delivered_at IS NULL AND failed_at IS NULL`, id, t.run.ID, lands)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() > 0 {
+			payload := map[string]any{"directiveId": id, "receipt": receipt}
+			if lands != "" {
+				payload["lands"] = lands
+			}
+			if err := s.event(ctx, tx, t.run, evDirectiveAccepted, ledger.ActorSystem, payload); err != nil {
+				return err
+			}
+		}
+		if receipt {
+			return nil
+		}
+	}
+	// Accepted with no receipt to follow is delivered now, unless it failed
+	// first; a consumed or handoff receipt delivers even a failed one.
+	overridesFailure := phase != lux.InputAccepted
+	tag, err := tx.Exec(ctx, `UPDATE directives SET delivered_at = now(), accepted_at = COALESCE(accepted_at, now()),
+			failed_at = NULL, error = NULL
+		WHERE id = $1 AND run_id = $2 AND delivered_at IS NULL AND (failed_at IS NULL OR $3)`, id, t.run.ID, overridesFailure)
+	if err != nil || tag.RowsAffected() == 0 {
+		return err
+	}
+	payload := map[string]any{"directiveId": id}
+	// Only a consumed receipt says when the agent read it; the other two
+	// say only that it was handed over.
+	if phase == inputConsumed {
+		payload["read"] = true
+	}
+	if err := s.event(ctx, tx, t.run, evDirectiveDelivered, ledger.ActorSystem, payload); err != nil {
+		return err
+	}
+	// An "Interrupt now" sent as the interrupt alone (interrupt_only, see
+	// deliverDirectives) has no receipt of its own: it is delivered with
+	// the directive carrying its words, on the same precedence, with an
+	// event flagged interruptOnly: the words were read once, here.
+	return settleInterrupts(ctx, tx, s, t.run, nil, `UPDATE directives d
+			SET delivered_at = now(), accepted_at = COALESCE(d.accepted_at, now()), failed_at = NULL, error = NULL
+		FROM directives f WHERE `+interruptAloneOf+` AND (d.failed_at IS NULL OR $3)
+		RETURNING d.id`, id, t.run.ID, overridesFailure)
+}
+
+// landsOf is where an accepted answer says the harness lands input,
+// next_step or next_turn; "" for anything else.
+func landsOf(data map[string]any) string {
+	if lands, _ := data["lands"].(string); lands == "next_step" || lands == "next_turn" {
+		return lands
+	}
+	return ""
 }
 
 // session records the placement the agent's session is established in. The

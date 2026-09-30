@@ -134,6 +134,31 @@
   color: var(--ds-color-text-muted);
   white-space: nowrap;
 }
+/* Where a steer lands, before the keys: the same muted ink, set off by space. */
+.lands {
+  margin-right: var(--ds-space-8);
+  color: var(--ds-color-text-secondary);
+}
+/* A narrow composer (a panel open beside it) keeps where the steer lands
+   and drops the key hints, which the placeholder and button already imply. */
+.root {
+  container-type: inline-size;
+}
+@container (max-width: 640px) {
+  .actions {
+    flex-wrap: wrap;
+    row-gap: var(--ds-space-4);
+  }
+  .keys {
+    display: none;
+  }
+  .submit {
+    margin-left: auto;
+  }
+  .lands {
+    margin-right: 0;
+  }
+}
 .kbd {
   font-family: var(--ds-font-mono);
   font-size: var(--ds-text-2xs);

@@ -777,12 +777,17 @@ export class ApiClient {
   }
 
   /**
-   * Redirect a running agent. Produces a durable, auditable directive. An
-   * agent mid-turn hears it when the turn ends, unless `interrupt` stops
-   * the turn so it hears it now.
+   * Redirect a running agent. Produces a durable, auditable directive. The
+   * agent reads it at its next step (or its next turn, for a harness that
+   * reads only between turns), unless `interrupt` stops the turn so it
+   * hears it now. `supersedes` sends a queued or failed directive again.
    */
-  steer(runId: string, text: string, options: { scope?: DirectiveScope; interrupt?: boolean } = {}): Promise<Directive> {
-    return this.#request("POST", `/v1/runs/${runId}/steer`, { text, scope: options.scope ?? "run", ...(options.interrupt ? { interrupt: true } : {}) });
+  steer(runId: string, text: string, options: { scope?: DirectiveScope; interrupt?: boolean; supersedes?: string } = {}): Promise<Directive> {
+    return this.#request("POST", `/v1/runs/${runId}/steer`, {
+      text, scope: options.scope ?? "run",
+      ...(options.interrupt ? { interrupt: true } : {}),
+      ...(options.supersedes ? { supersedes: options.supersedes } : {}),
+    });
   }
 
   /**
