@@ -196,10 +196,10 @@ interface PersonRow {
   photoKey: string | null;
 }
 
+// people_by_email (migration 059) reads the scope's tenant by index; row-level security would not.
 const findByEmail = async (scope: OrgScope, email: string) => (await scope.sql`
-  SELECT id, removed_at IS NOT NULL AS removed, name, role, email::text AS email, photo_url AS "photoUrl",
-         photo_key AS "photoKey"
-  FROM people WHERE email = ${email}`) as PersonRow[];
+  SELECT id, removed, name, role, email, photo_url AS "photoUrl", photo_key AS "photoKey"
+  FROM people_by_email(${email})`) as PersonRow[];
 
 const member = (row: { id: string; name: string; role: string }): Member =>
   ({ personId: row.id, name: row.name, role: row.role === "admin" ? "admin" : "member" });
