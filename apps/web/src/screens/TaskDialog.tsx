@@ -33,10 +33,6 @@ const NO_EPIC = "__none__";
 const READ_KEYS = ["mod", "Shift", "R"];
 const isReadKey = (e: { key: string; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean }) =>
   (e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === "r";
-// The server bounds the criteria's total; the editor bounds their source.
-// Reading a source only strips markers and indentation, never adds, so the
-// source is at least as long as what it saves and this is the binding limit.
-const CRITERIA_MAX = TASK_CRITERIA_MAX;
 
 /** Past the editor's limit (text that arrived longer than it, not typed): what to do about it. */
 function overBy(value: string, max: number): string | undefined {
@@ -98,7 +94,9 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
   const choosing = repositories.length > 1;
   const criteria = useMemo(() => criteriaFromMarkdown(criteriaSource), [criteriaSource]);
   const goalError = locked ? undefined : overBy(goal, TASK_GOAL_MAX);
-  const criteriaError = locked ? undefined : overBy(criteriaSource, CRITERIA_MAX);
+  // Reading criteria only strips markers and indentation, so bounding their
+  // Markdown source also bounds the total saved by the server.
+  const criteriaError = locked ? undefined : overBy(criteriaSource, TASK_CRITERIA_MAX);
   const canSave = choices !== null && Boolean(title.trim()) && !goalError && !criteriaError && !busy;
   const unsaved = locked ? 0 : unsavedWords(opened, [title, goal, criteriaSource]);
 
@@ -246,7 +244,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
         onChange={setCriteriaSource}
         breaks
         minRows={3}
-        maxLength={CRITERIA_MAX}
+        maxLength={TASK_CRITERIA_MAX}
         locked={locked}
         error={criteriaError}
         summary={criteriaSource.trim() ? (
