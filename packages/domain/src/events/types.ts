@@ -143,7 +143,8 @@ export const EventTypes = {
   AgentThought: "agent.thought",
   /**
    * The task, as the agent received it — recorded when the agent takes it,
-   * not when dude sends it. Payload: `{ text }`.
+   * not when dude sends it. Payload: `{ text, truncated?, lands? }`; `lands`
+   * is where this harness takes a steer (see `DirectiveAccepted`).
    */
   PromptDelivered: "agent.prompt.delivered",
   /**
