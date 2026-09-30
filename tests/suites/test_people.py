@@ -8,6 +8,7 @@ for them. The first key an organization is provisioned with is its admin.
 from __future__ import annotations
 
 import json
+import os
 import threading
 
 import requests
@@ -169,6 +170,23 @@ def test_a_profile_has_a_name_and_a_photo_kept_in_storage(client: ApiClient, env
     for bad in ("javascript:alert(1)", "http://example.com/a.jpg", "data:image/png;base64,iVBORw0KGgo="):
         assert client.patch("/v1/me", {"photoUrl": bad}).status_code == 400, bad
     assert client.patch("/v1/me", {"photoUrl": None}).json()["person"]["photoUrl"] is None
+
+
+def test_a_photo_round_trips_through_the_test_s3(client: ApiClient, env):
+    """A photo PUT through the API is stored in the suite's versitygw and read back byte for byte.
+
+    versitygw answers each PUT with `Connection: close`; Bun's S3Client before
+    1.4.0 reports that as ConnectionClosed and the upload as failed.
+    """
+    # Only the JPEG signature is checked; the rest can be anything, and 200 KB spans many packets.
+    photo = b"\xff\xd8\xff\xe0" + os.urandom(200_000)
+    up = _upload(client, "/v1/me/photo", photo, "image/jpeg")
+    assert up.status_code == 200, up.text
+    person = up.json()["person"]
+    got = requests.get(f"{env.control_plane_url}{person['photoUrl']}", timeout=10)
+    assert got.status_code == 200, got.text
+    assert got.headers["content-type"] == "image/jpeg"
+    assert got.content == photo
 
 
 def test_a_project_has_an_image_only_admins_set(client: ApiClient, env, project: dict):
