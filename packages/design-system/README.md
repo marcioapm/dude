@@ -544,9 +544,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   field — the frame's footer is under it; the error stays under the frame.
   Empty, Preview says "Nothing to preview yet." In Preview the formatting
   buttons hide (and leave no band when they had wrapped). The field is a
-  frame whose edge is its one line: a Write / Preview `Segmented tabs`
-  (tablist and tabpanels, one Tab stop, ← →; Ctrl/⌘+Shift+P), its track at
-  the toolbar's `control-sm`, and quiet
+  frame whose edge is its one line: a Write / Preview `Segmented tabs
+  size="toolbar"` (tablist and tabpanels, one Tab stop, ← → Home End;
+  Ctrl/⌘+Shift+P), and quiet
   formatting on the chrome shade — no rule under it — then the source in
   mono on the code pitch, then a footer: "Markdown", the caller's `summary`
   and `notice`, and `n / max` (attention past 90%, danger over).
@@ -574,6 +574,13 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   **Discard** (`danger solid`, inside its own confirmation). Saving never
   asks. The app decides the threshold (dude's: more than 20 words in
   fields that changed).
+- **Segmented or Tabs.** `Segmented` switches between two or three views
+  of one thing inside a bar with other controls (the session bar, the
+  editor's Write / Preview; `size="toolbar"` in a bar of `sm` buttons).
+  With `tabs="<id>"` it is a tablist whose tabs control
+  `<id>-<value>-panel`s the caller renders: one Tab stop, ← → Home End.
+  `Tabs` is for a page's sections (underline). Do not use `TabList
+  variant="segmented"` for new work.
 - **Key hints** are `KeyHint keys={["mod", "Enter"]}` (`Kbd` for one cap;
   `mod` is ⌘ on Apple devices, Ctrl elsewhere), muted, at a dialog's
   `footerStart`. Help beside a form is a `HelpList` and, for Markdown,
@@ -984,6 +991,9 @@ MarkdownCheatsheet.
 `src/components/` — management:
 
 - **Breadcrumb** — Project › Epic › KEY; links or buttons, middle-elided.
+- **Segmented** (with `ScreenHeader`) — two or three views of one thing;
+  `tabs="<id>"` makes it a tablist; `size="toolbar"` sits level with `sm`
+  buttons.
 - **FindingRow / FindingGroup** — a review finding, and the open-first list
   of them; `FINDING_SEVERITY_SPECS` / `FINDING_STATUS_SPECS` are the
   vocabulary.

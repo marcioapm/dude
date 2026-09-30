@@ -288,3 +288,22 @@ def test_markdown_toolbar_keeps_its_tab_stop_when_quote_hides(gallery_page: Page
     expect(stops).to_have_count(1)
     assert stops.first.get_attribute("data-format") == "link"
     assert console_errors == []
+
+
+def test_segmented_tabs_move_with_home_and_end(gallery_page: Page, console_errors: list):
+    """Write / Preview is a tablist: Home and End reach its ends, as ← → do its neighbours."""
+    gallery_page.get_by_role("link", name="MarkdownEditor").click()
+    view = gallery_page.locator("#p-markdown-editor").get_by_role("tablist", name="Write view").first
+    write = view.get_by_role("tab", name="Write")
+    preview = view.get_by_role("tab", name="Preview")
+    write.focus()
+    gallery_page.keyboard.press("End")
+    expect(preview).to_have_attribute("aria-selected", "true")
+    expect(preview).to_be_focused()
+    gallery_page.keyboard.press("Home")
+    expect(write).to_have_attribute("aria-selected", "true")
+    expect(write).to_be_focused()
+    # Level with the toolbar's sm buttons.
+    bold = gallery_page.locator("#p-markdown-editor").get_by_role("button", name="Bold").first
+    assert view.evaluate("el => el.getBoundingClientRect().height") == bold.evaluate("el => el.getBoundingClientRect().height")
+    assert console_errors == []
