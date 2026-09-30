@@ -395,7 +395,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                     key={event.eventId}
                     occurredAt={event.occurredAt}
                     eventType={event.eventType}
-                    actor={{ type: event.actor.type, id: event.actor.id, ...namedActor(event, people) }}
+                     actor={{ type: event.actor.type === "person" ? "human" : event.actor.type, id: event.actor.id, ...namedActor(event, people) }}
                     summary={summarize(event)}
                     // An element, not a string: EventRow only renders the detail
                     // when the row is open, so the JSON is built for the handful

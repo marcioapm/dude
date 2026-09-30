@@ -121,7 +121,7 @@ export function seenEvent(organizationId: string, person: PersonRef & { where: s
     runId: null,
     sessionId: null,
     workflowRunId: null,
-    actor: { type: "human", id: person.id, name: person.name, photoUrl: person.photoUrl, online: true },
+    actor: { type: "person", id: person.id, name: person.name, photoUrl: person.photoUrl, online: true },
     source: "control-plane",
     correlationId: null,
     causationId: null,

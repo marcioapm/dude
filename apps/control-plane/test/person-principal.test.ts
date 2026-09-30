@@ -31,7 +31,7 @@ test("person auth dependency rereads current role and removal without creating k
   router.get("/identity", ctx => Response.json(ctx.principal));
   await owner`UPDATE people SET role = 'member' WHERE id = ${person}`;
   const response = await router.handle(new Request("http://dude.test/identity"));
-  expect((await response.json()).role).toBe("member");
+  expect((await response.json() as { role: string }).role).toBe("member");
   expect(await owner`SELECT id FROM api_keys WHERE person_id = ${person}`).toHaveLength(0);
   const production = new Router().get("/identity", () => Response.json({}));
   expect((await production.handle(new Request("http://dude.test/identity", { headers: { "x-dude-person": person, "x-dude-organization": org } }))).status).toBe(401);
