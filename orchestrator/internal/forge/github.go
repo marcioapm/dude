@@ -173,11 +173,14 @@ func (e *Error) AlreadyExists() bool {
 }
 
 // Transient says whether trying again later could succeed: the forge was
-// unreachable, rate-limiting or failing, rather than refusing.
+// unreachable, rate-limiting or failing, rather than refusing. GitHub's
+// older secondary-limit 403 says "abuse detection" instead of "rate limit".
 func Transient(err error) bool {
 	var e *Error
 	if errors.As(err, &e) {
-		return e.Status == 429 || e.Status >= 500 || e.Status == 403 && strings.Contains(strings.ToLower(e.Message), "rate limit")
+		msg := strings.ToLower(e.Message)
+		return e.Status == 429 || e.Status >= 500 ||
+			e.Status == 403 && (strings.Contains(msg, "rate limit") || strings.Contains(msg, "abuse detection"))
 	}
 	// No answer from GitHub at all: the request never completed.
 	var u *Unreachable

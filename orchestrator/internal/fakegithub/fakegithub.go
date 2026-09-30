@@ -78,12 +78,15 @@ type Server struct {
 	UpdateDown bool
 	// The check-runs listing refuses, as for a token without Checks: read.
 	CheckRunsForbidden bool
-	ReceiveStatus      int
-	ReceiveBody        string
-	ReceiveHeaders     http.Header
-	ReceiveToken       string
-	ReceiveRequests    []string
-	ReceiveDisconnect  bool
+	// When set, the check-runs listing answers 403 with this message and
+	// no rate-limit headers, as GitHub's abuse-detection limit does.
+	CheckRunsForbiddenMessage string
+	ReceiveStatus             int
+	ReceiveBody               string
+	ReceiveHeaders            http.Header
+	ReceiveToken              string
+	ReceiveRequests           []string
+	ReceiveDisconnect         bool
 }
 
 // Comment and review ids, unique across repositories as GitHub's are.
@@ -510,8 +513,12 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 // reports through check runs instead of statuses.
 func (s *Server) checkRuns(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
-	state, forbidden := s.checks, s.CheckRunsForbidden
+	state, forbidden, message := s.checks, s.CheckRunsForbidden, s.CheckRunsForbiddenMessage
 	s.mu.Unlock()
+	if message != "" {
+		fail(w, 403, message)
+		return
+	}
 	if forbidden {
 		fail(w, 403, "Resource not accessible by personal access token")
 		return

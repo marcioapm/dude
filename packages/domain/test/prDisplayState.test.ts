@@ -108,7 +108,9 @@ describe("checks that cannot be read", () => {
     expect(prCheckDiagnostic([check("CodeRabbit", "completed", "success")])).toBeNull();
     expect(prCheckDiagnostic("pending")).toBeNull();
     expect(prActualChecks(checks).map((c) => c.name)).toEqual(["CodeRabbit"]);
-    expect(prCheckDiagnosticReason(CHECK_RUNS_FORBIDDEN)).toContain("Checks: Read");
+    expect(prCheckDiagnosticReason(CHECK_RUNS_FORBIDDEN)).toBe(
+      "GitHub refused the check-runs read; check the token's Checks: Read permission and its repository/organization access (SSO, token approval).");
+    expect(prCheckDiagnosticReason("other")).toBe("Some GitHub checks cannot be read.");
   });
 
   test("survive the API schema", () => {
