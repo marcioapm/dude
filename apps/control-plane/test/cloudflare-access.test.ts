@@ -355,6 +355,44 @@ describe("signing in", () => {
     expect(filled!.body!.person.name).toBe("Named Later");
   });
 
+  // The profile step is the window between the first read and the locked
+  // recheck: hold the sign-in there while someone else writes the email.
+  async function signInAround(email: string, meanwhile: () => Promise<void>) {
+    const inProfile = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const r = routerFor(edge, {}, org, (profile) => async (token, e) => {
+      inProfile.resolve();
+      await release.promise;
+      return profile(token, e);
+    });
+    const signing = me(r, cookie(await sign(signer, { email })));
+    await inProfile.promise;
+    await meanwhile();
+    release.resolve();
+    return signing;
+  }
+  const insertLocked = (id: string, email: string, removed: boolean) => owner.begin(async (tx) => {
+    await tx`SELECT pg_advisory_xact_lock(hashtext('people:' || ${org}))`;
+    await tx`INSERT INTO people (id, organization_id, name, email, removed_at)
+      VALUES (${id}, ${org}, 'Meanwhile', ${email}, ${removed ? new Date() : null})`;
+  });
+
+  test("someone removed while the first sign-in fetched its profile is refused, not recreated", async () => {
+    const got = await signInAround("tombstone@example.com",
+      () => insertLocked(`${org}_tombstone`, "tombstone@example.com", true));
+    expect(got.status).toBe(401);
+    const rows = await peopleByEmail("tombstone@example.com");
+    expect(rows.map((r) => r.id)).toEqual([`${org}_tombstone`]);
+  });
+
+  test("a member added while the first sign-in fetched its profile is reused", async () => {
+    const got = await signInAround("addedmeanwhile@example.com",
+      () => insertLocked(`${org}_addedmeanwhile`, "addedmeanwhile@example.com", false));
+    expect(got.status).toBe(200);
+    expect(got.body!.person).toMatchObject({ id: `${org}_addedmeanwhile`, name: "Meanwhile" });
+    expect(await peopleByEmail("addedmeanwhile@example.com")).toHaveLength(1);
+  });
+
   test("concurrent first requests for one email share one profile fetch", async () => {
     const slow = new Edge();
     slow.keys = [signer.jwk];
