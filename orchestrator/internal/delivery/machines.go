@@ -64,17 +64,23 @@ func (s Sizes) ForRole(role string, project, org json.RawMessage) (Machine, bool
 	if f, ok := modelFallback[role]; ok {
 		chain = append(chain, f)
 	}
-	layers := []struct {
-		name string
-		raw  json.RawMessage
-	}{{"project", project}, {"organization", org}}
+	type layer struct {
+		name  string
+		roles map[string]roleLayer
+	}
+	layers := []layer{{name: "project"}, {name: "organization"}}
+	for i, raw := range []json.RawMessage{project, org} {
+		if json.Unmarshal(raw, &layers[i].roles) != nil {
+			layers[i].roles = nil
+		}
+	}
 	for _, r := range chain {
 		for _, l := range layers {
-			var m map[string]roleLayer
-			if json.Unmarshal(l.raw, &m) != nil || m[r].MachineSize == nil {
+			id := l.roles[r].MachineSize
+			if id == nil {
 				continue
 			}
-			if size, ok := s.ByID[*m[r].MachineSize]; ok {
+			if size, ok := s.ByID[*id]; ok {
 				size.From = l.name
 				if r != role {
 					size.From = r

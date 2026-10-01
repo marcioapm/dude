@@ -347,7 +347,7 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 
 // submit builds the Run's spec and hands it to lux.
 func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
-	spec, err := s.spec(ctx, r, nil)
+	spec, machine, err := s.spec(ctx, r, nil)
 	if passing(err) || forge.Transient(err) {
 		return s.retryLater(ctx, r, err)
 	}
@@ -376,12 +376,15 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 				}
 			}
 		}
+		// machine: what it runs on, recorded with the lux Run it runs as, so a
+		// later edit or removal of the size leaves this Run's record alone.
 		tag, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, next_attempt_at = NULL,
 			harness = $4, model = $5, push_branch = NULLIF($6, ''), lux_repositories = $7, lux_pushes = $8,
 			machine_usd_per_hour = COALESCE(machine_usd_per_hour, NULLIF($9::float8, 0)),
+			machine = CASE WHEN lux_run_id IS NULL THEN $10::jsonb ELSE machine END,
 			status = CASE WHEN status = 'pending' THEN 'scheduled'::run_status ELSE status END
 			WHERE id = $1`, r.ID, lr.ID, lr.State, spec.Labels["dude.harness"], spec.Labels["dude.model"], pushBranch,
-			db.NonNil(repos), db.NonNil(pushes), s.MachineUSDPerHour)
+			db.NonNil(repos), db.NonNil(pushes), s.MachineUSDPerHour, machine)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
@@ -397,7 +400,10 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 // stored is lux's copy of the Run's spec, for a resume (resumeInput): the
 // registry login is the one it names, for the image lux has, whatever the
 // project names now. Nil for a submit.
-func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec) (lux.Spec, error) {
+//
+// Also returns the size the Run's role resolves to now (nil: the
+// organization has none); submit records it, a resume does not.
+func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec) (lux.Spec, *delivery.Machine, error) {
 	var in specInput
 	var title, goal, image string
 	var repos []delivery.Repository
@@ -454,12 +460,12 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec) (
 		return nil
 	})
 	if err != nil {
-		return lux.Spec{}, err
+		return lux.Spec{}, nil, err
 	}
 	role := delivery.RoleForPhase[r.Phase]
 	settings := delivery.ResolveRole(delivery.PromptRoleForPhase[r.Phase], projectModels, orgModels)
 	if settings.Model == "" {
-		return lux.Spec{}, fmt.Errorf("no model is configured for the %s role", role)
+		return lux.Spec{}, nil, fmt.Errorf("no model is configured for the %s role", role)
 	}
 
 	var ac []string
@@ -479,24 +485,13 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec) (
 	in.Model, in.Effort, in.TimeLimitMinutes = settings.Model, settings.Effort, settings.TimeLimitMinutes
 	if m, ok := sizes.ForRole(delivery.PromptRoleForPhase[r.Phase], projectModels, orgModels); ok {
 		in.Machine = &m
-		if stored == nil {
-			// What it runs on, kept as it is now: a later edit or removal of
-			// the size changes the next session, not this one's history.
-			// Fixed once lux has the Run; a retried submit writes it again.
-			if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-				_, err := tx.Exec(ctx, `UPDATE runs SET machine = $2 WHERE id = $1 AND lux_run_id IS NULL`, r.ID, m)
-				return err
-			}); err != nil {
-				return lux.Spec{}, err
-			}
-		}
 	}
 	in.Image = image
 	if in.Image == "" {
 		in.Image = s.Agent.DefaultImage
 	}
 	if in.Registry, err = LoginFor(ctx, s.Registry, in.Image, stored); err != nil {
-		return lux.Spec{}, err
+		return lux.Spec{}, nil, err
 	}
 	promptIn := delivery.PromptInput{
 		Title: title, Goal: goal, AcceptanceCriteria: ac, Category: r.Category,
@@ -523,11 +518,11 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec) (
 	// refused by lux for good.
 	gh, err := s.Forges.For(ctx, r.Org)
 	if err != nil {
-		return lux.Spec{}, errForge{err}
+		return lux.Spec{}, nil, errForge{err}
 	}
 	if gh != nil {
 		if in.ForgeToken, err = gh.Token(); err != nil {
-			return lux.Spec{}, errForge{err}
+			return lux.Spec{}, nil, errForge{err}
 		}
 		if delivery.Publishes[r.Phase] {
 			for _, repo := range repos {
@@ -535,7 +530,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec) (
 					continue
 				}
 				if err := gh.CheckPushAccess(ctx, repo.URL); err != nil {
-					return lux.Spec{}, fmt.Errorf("push preflight for %s: %w", repo.Name, err)
+					return lux.Spec{}, nil, fmt.Errorf("push preflight for %s: %w", repo.Name, err)
 				}
 			}
 		}
@@ -549,18 +544,18 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec) (
 		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 			return tx.QueryRow(ctx, `SELECT tool_starts FROM runs WHERE id = $1`, r.ID).Scan(&start)
 		}); err != nil {
-			return lux.Spec{}, err
+			return lux.Spec{}, nil, err
 		}
 		token, hash := agenttools.RunToken(s.Agent.ToolsKey, r.ID, start)
 		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 			_, err := tx.Exec(ctx, `UPDATE runs SET mcp_token_hash = $2 WHERE id = $1`, r.ID, hash)
 			return err
 		}); err != nil {
-			return lux.Spec{}, err
+			return lux.Spec{}, nil, err
 		}
 		in.ToolsToken = token
 	}
-	return buildSpec(s.Agent, in), nil
+	return buildSpec(s.Agent, in), in.Machine, nil
 }
 
 // runBranch is where one phase Run's commits are pushed. Every Run has its
@@ -1089,7 +1084,7 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (lux.Run,
 	if err != nil {
 		return lux.Run{}, err
 	}
-	spec, err := s.spec(ctx, r, &lr.Spec)
+	spec, _, err := s.spec(ctx, r, &lr.Spec)
 	if passing(err) || forge.Transient(err) || errors.As(err, new(errLoginUnavailable)) {
 		return lux.Run{}, err
 	}

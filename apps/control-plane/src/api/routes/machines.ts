@@ -22,6 +22,7 @@ import {
   removeMachineSizeSchema,
   replaceMachineSize,
   replacePreviewMachineSize,
+  resolveMachineSize,
   type AgentModels,
   type MachinePools,
   type MachineSize,
@@ -61,10 +62,11 @@ export async function requireSize(scope: OrgScope, id: string): Promise<void> {
 
 /**
  * Who names each size: the organization's roles, each project's overrides,
- * and each project's previews. A fixer that names none at a layer where
- * the implementer does runs on the implementer's, and is listed as such.
+ * and each project's previews. A fixer that names none of its own runs on
+ * the implementer's (resolveMachineSize), and is listed under the layer
+ * whose implementer it takes.
  */
-async function usage(scope: OrgScope): Promise<Map<string, MachineSizeUse[]>> {
+async function usage(scope: OrgScope, sizes: readonly MachineSize[]): Promise<Map<string, MachineSizeUse[]>> {
   const [org] = (await scope.sql`SELECT default_agent_models AS models FROM organizations WHERE id = ${scope.organizationId}`) as Array<{ models: AgentModels }>;
   const projects = (await scope.sql`
     SELECT id, name, ${scope.sql.unsafe(PROJECT_IMAGE_URL)} AS "imageUrl", agent_models AS models, preview_settings AS previews
@@ -72,18 +74,23 @@ async function usage(scope: OrgScope): Promise<Map<string, MachineSizeUse[]>> {
   const out = new Map<string, MachineSizeUse[]>();
   const add = (id: unknown, use: MachineSizeUse) => {
     if (typeof id !== "string") return;
-    out.set(id, [...(out.get(id) ?? []), use]);
+    const uses = out.get(id);
+    if (uses) uses.push(use);
+    else out.set(id, [use]);
   };
   const roles = (models: AgentModels | undefined) => (models ?? {}) as Record<string, { machineSize?: string } | undefined>;
   const orgModels = roles(org?.models);
   for (const [role, config] of Object.entries(orgModels)) add(config?.machineSize, { kind: "organization", role, project: null });
-  if (!orgModels["fixer"]?.machineSize) add(orgModels["implementer"]?.machineSize, { kind: "organization", role: "fixer", project: null, inherited: true });
+  const orgFixer = resolveMachineSize("fixer", { organization: org?.models }, sizes);
+  if (orgFixer.from === "implementer") add(orgFixer.sizeId, { kind: "organization", role: "fixer", project: null, inherited: true });
   for (const p of projects) {
     const project = { id: p.id, name: p.name, imageUrl: p.imageUrl };
     const own = roles(p.models);
     for (const [role, config] of Object.entries(own)) add(config?.machineSize, { kind: "project", role, project });
-    if (!own["fixer"]?.machineSize && !orgModels["fixer"]?.machineSize) {
-      add(own["implementer"]?.machineSize, { kind: "project", role: "fixer", project, inherited: true });
+    const layers = { project: p.models, organization: org?.models };
+    const fixer = resolveMachineSize("fixer", layers, sizes);
+    if (fixer.from === "implementer" && resolveMachineSize("implementer", layers, sizes).from === "project") {
+      add(fixer.sizeId, { kind: "project", role: "fixer", project, inherited: true });
     }
     add(p.previews?.["machineSize"], { kind: "preview", role: null, project });
   }
@@ -92,8 +99,9 @@ async function usage(scope: OrgScope): Promise<Map<string, MachineSizeUse[]>> {
 
 async function sizesResponse(ctx: RequestContext): Promise<{ sizes: MachineSizeWithUse[]; canEdit: boolean }> {
   const sizes = await withOrg(ctx.principal.organizationId, async (scope) => {
-    const uses = await usage(scope);
-    return (await listSizes(scope)).map((s) => ({ ...s, usedBy: uses.get(s.id) ?? [] }));
+    const sizes = await listSizes(scope);
+    const uses = await usage(scope, sizes);
+    return sizes.map((s) => ({ ...s, usedBy: uses.get(s.id) ?? [] }));
   });
   return { sizes, canEdit: await isOrgAdmin(ctx) };
 }

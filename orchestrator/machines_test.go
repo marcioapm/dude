@@ -13,8 +13,7 @@ import (
 // Each phase Run goes to lux on the size its role names — the project's,
 // the organization's, the fixer following the implementer, else the
 // default — with its pool when the size names one, and records what it
-// ran on. An edit to the size after the Run was submitted leaves its record
-// as it was.
+// ran on.
 func TestAPhaseRunsOnItsRolesMachineSizeAndRecordsIt(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
@@ -54,19 +53,43 @@ func TestAPhaseRunsOnItsRolesMachineSizeAndRecordsIt(t *testing.T) {
 			t.Errorf("runs.machine[%s] = %v, want %v (%s)", k, machine[k], v, raw)
 		}
 	}
+}
 
-	// Edited and then removed after the Run started: its record stands.
+// A Run keeps the record of the size it started on: its size edited and
+// then removed while it is parked, the resume (which builds its spec again
+// from the settings as they are now) neither fails nor rewrites runs.machine,
+// and lux keeps the resources it was submitted with.
+func TestAResumedRunKeepsTheSizeItStartedOn(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool)
+		VALUES ('msz_large', $1, 'Large', 6.5, 23040, 120, 'big')`, w.org)
+	mustExec(t, w.owner, `UPDATE projects SET agent_models = jsonb_set(agent_models, '{implementer,machineSize}', '"msz_large"') WHERE id = $1`, w.project)
+	w.lux.Decide = hang
+	wi := w.task()
+	w.deliver(wi)
+	runID := w.parked(wi)
+
 	mustExec(t, w.owner, `UPDATE machine_sizes SET name = 'Huge', cpus = 16 WHERE id = 'msz_large'`)
 	mustExec(t, w.owner, `DELETE FROM machine_sizes WHERE id = 'msz_large'`)
+	r := w.lux.Runs()[0]
+	if status, out := w.call("/internal/runs/"+runID+"/resume", map[string]any{}); status != 200 {
+		t.Fatalf("resume: %d %v", status, out)
+	}
+	w.until("the resume", func() bool { return r.Resumed == 1 })
 	w.pump()
-	var name string
+
+	var name, from string
 	var cpus float64
-	if err := w.owner.QueryRow(ctx, `SELECT machine->>'name', (machine->>'cpus')::float8 FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi).
-		Scan(&name, &cpus); err != nil {
+	if err := w.owner.QueryRow(ctx, `SELECT machine->>'name', machine->>'from', (machine->>'cpus')::float8 FROM runs WHERE id = $1`, runID).
+		Scan(&name, &from, &cpus); err != nil {
 		t.Fatal(err)
 	}
-	if name != "Large" || cpus != 6.5 {
-		t.Errorf("after the size changed the Run says %s, %g CPUs; want what it ran on", name, cpus)
+	if name != "Large" || from != "project" || cpus != 6.5 {
+		t.Errorf("after the size changed and the Run resumed it says %s from %s, %g CPUs; want Large from project, 6.5", name, from, cpus)
+	}
+	if spec := submitted(t, r); spec.Resources == nil || spec.Resources.CPUs != 6.5 || spec.Placement == nil || spec.Placement.Pool != "big" {
+		t.Errorf("lux's spec for the resumed Run: resources %+v placement %+v, want Large's", spec.Resources, spec.Placement)
 	}
 }
 

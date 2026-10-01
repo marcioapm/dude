@@ -112,8 +112,12 @@ describe("resolving a role's size", () => {
       .toEqual({ sizeId: "lg", from: "organization" });
   });
 
-  test("an id that names no size is passed over", () => {
+  test("an id that names no size is passed over, to the next layer or the implementer's", () => {
     expect(resolveMachineSize("reviewer", { organization: { reviewer: { machineSize: "gone" } } }, sizes)).toEqual({ sizeId: "std", from: "default" });
+    expect(resolveMachineSize("reviewer", { project: { reviewer: { machineSize: "gone" } }, organization: { reviewer: { machineSize: "lg" } } }, sizes))
+      .toEqual({ sizeId: "lg", from: "organization" });
+    expect(resolveMachineSize("fixer", { project: { fixer: { machineSize: "gone" } }, organization: { implementer: { machineSize: "xl" } } }, sizes))
+      .toEqual({ sizeId: "xl", from: "implementer" });
   });
 });
 

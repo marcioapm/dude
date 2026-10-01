@@ -163,7 +163,7 @@ func (p *Previews) advance(ctx context.Context, r previewRun) (bool, error) {
 
 // submit builds the preview's spec and hands it to lux.
 func (p *Previews) submit(ctx context.Context, r previewRun) error {
-	spec, branch, err := p.spec(ctx, r)
+	spec, branch, machine, err := p.spec(ctx, r)
 	if err != nil {
 		return err
 	}
@@ -185,10 +185,11 @@ func (p *Previews) submit(ctx context.Context, r previewRun) error {
 	return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		// Recorded whatever the preview's status: one stopped while this
 		// submit was in flight is then cancelled in lux by the next sweep.
+		// machine is what it runs on, recorded once, with the lux Run.
 		tag, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, next_attempt_at = NULL,
-			lux_repositories = $4, branch = NULLIF($5, ''),
+			lux_repositories = $4, branch = NULLIF($5, ''), machine = $6::jsonb,
 			status = CASE WHEN status = 'pending' THEN 'scheduled'::run_status ELSE status END
-			WHERE id = $1 AND lux_run_id IS NULL`, r.ID, lr.ID, lr.State, db.NonNil(repos), branch)
+			WHERE id = $1 AND lux_run_id IS NULL`, r.ID, lr.ID, lr.State, db.NonNil(repos), branch, machine)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
@@ -201,7 +202,7 @@ func (p *Previews) submit(ctx context.Context, r previewRun) error {
 // pushed; a workload that only waits; the project's servers marked to start
 // in previews; its preview settings' egress and image. Returns the branch
 // the first repository — the one servers run in — is at.
-func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, error) {
+func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, *delivery.Machine, error) {
 	type repo struct{ Name, URL, Ref string }
 	var repos []repo
 	var recipes []Recipe
@@ -227,10 +228,6 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, er
 		}
 		if m, ok := sizes.ForPreview(sizeID); ok {
 			machine = &m
-			// What it runs on, kept as it is now (as a phase Run's is).
-			if _, err := tx.Exec(ctx, `UPDATE runs SET machine = $2 WHERE id = $1 AND lux_run_id IS NULL`, r.ID, m); err != nil {
-				return err
-			}
 		}
 		taskRepos, err := delivery.TaskRepositories(ctx, tx, r.TaskID)
 		if err != nil {
@@ -265,7 +262,7 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, er
 		recipes, err = LoadRecipes(ctx, tx, r.ProjectID)
 		return err
 	}); err != nil {
-		return lux.Spec{}, "", err
+		return lux.Spec{}, "", nil, err
 	}
 
 	image := projectImage
@@ -298,7 +295,7 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, er
 		spec.Workload.Workdir = phases.RepoPath(primary)
 		token, err := p.forgeToken(ctx, r.Org)
 		if err != nil {
-			return lux.Spec{}, "", err
+			return lux.Spec{}, "", nil, err
 		}
 		spec.Git = &lux.Git{}
 		for _, rp := range repos {
@@ -327,11 +324,11 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, er
 	// A login that cannot be had now is an error the sweep retries.
 	login, err := phases.LoginFor(ctx, p.Registry, image, nil)
 	if err != nil {
-		return lux.Spec{}, "", err
+		return lux.Spec{}, "", nil, err
 	}
 	login.Apply(&spec)
 	phases.MachineSpec(machine, &spec)
-	return spec, branch, nil
+	return spec, branch, machine, nil
 }
 
 func (p *Previews) forgeToken(ctx context.Context, org string) (string, error) {
