@@ -521,9 +521,13 @@ func TestTheRowKeepsTheLastLogMaxOfALongLog(t *testing.T) {
 	}
 	p.printf("the end\n")
 	f.b.flush(context.Background(), j, p, true)
-	got := f.str(`SELECT log FROM image_builds WHERE id = $1`, build)
-	if len(got) != LogMax || !strings.HasSuffix(got, "the end\n") {
-		t.Errorf("log is %d bytes, ending %q", len(got), got[len(got)-10:])
+	got := f.row(`SELECT log, log_total FROM image_builds WHERE id = $1`, build)
+	log := got[0].(string)
+	if len(log) != LogMax || !strings.HasSuffix(log, "the end\n") {
+		t.Errorf("log is %d bytes, ending %q", len(log), log[len(log)-10:])
+	}
+	if got[1] != int64(1100*1024+len("the end\n")) {
+		t.Errorf("log_total = %v", got[1])
 	}
 }
 

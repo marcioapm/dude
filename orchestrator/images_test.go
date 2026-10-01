@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/marciomartins/dude/orchestrator/internal/images"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
 )
@@ -46,14 +48,39 @@ func (w *world) finishJobs() []string {
 	if err != nil {
 		w.t.Fatal(err)
 	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var s string
-		_ = rows.Scan(&s)
-		out = append(out, s)
+	out, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		w.t.Fatal(err)
 	}
 	return out
+}
+
+// runError is the error of the task's Run of phase.
+func (w *world) runError(wi, phase string) string {
+	w.t.Helper()
+	var reason string
+	if err := w.owner.QueryRow(context.Background(), `SELECT COALESCE(error, '') FROM runs WHERE task_id = $1 AND phase::text = $2`,
+		wi, phase).Scan(&reason); err != nil {
+		w.t.Fatal(err)
+	}
+	return reason
+}
+
+// firstVersionQueued adds an image with nothing published and v1 queued to
+// build; returns the build's id.
+func (w *world) firstVersionQueued(id, name string) string {
+	w.t.Helper()
+	mustExec(w.t, w.owner, `INSERT INTO images (id, organization_id, name) VALUES ($1, $2, $3)`, id, w.org, name)
+	mustExec(w.t, w.owner, `INSERT INTO image_versions (id, organization_id, image_id, number, containerfile, state)
+		VALUES ($1, $2, $3, 1, 'FROM debian', 'queued')`, "imv_"+id, w.org, id)
+	mustExec(w.t, w.owner, `INSERT INTO image_builds (id, organization_id, image_version_id, kind) VALUES ($1, $2, $3, 'build')`,
+		"imb_"+id, w.org, "imv_"+id)
+	return "imb_" + id
+}
+
+// look sends the task's waiting Runs back to the syncer at once.
+func (w *world) look(wi string) {
+	mustExec(w.t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE task_id = $1`, wi)
 }
 
 func (w *world) runImage(wi, phase string) images.RunImage {
@@ -74,7 +101,8 @@ func TestARunGetsItsLibraryImagesFinalAndRecordsIt(t *testing.T) {
 	w.useLayer(imageLayer)
 	version := w.libraryImage("img_base", "acme-base", true)
 	mustExec(t, w.owner, `UPDATE organizations SET default_image_id = 'img_base' WHERE id = $1`, w.org)
-	// The typed image from before the library loses to any library image.
+	// The project's typed image (the world's agent:test) loses to the
+	// default base: the implementer ran on the final, not on agent:test.
 	wi := w.task()
 	w.deliver(wi)
 	w.until("the implementer to reach lux", func() bool { return w.specOf("implement") != nil })
@@ -87,21 +115,168 @@ func TestARunGetsItsLibraryImagesFinalAndRecordsIt(t *testing.T) {
 	}
 }
 
-// A role's image wins over the project's; the fixer follows the implementer.
+// A role's image wins over the project's; the fixer follows the
+// implementer's; a role naming an image that is gone gets the project's.
 func TestARolesImageWinsOverTheProjects(t *testing.T) {
 	w := newWorld(t)
 	w.useLayer(imageLayer)
 	w.libraryImage("img_base", "acme-base", true)
 	w.libraryImage("img_qa", "playwright", true)
-	mustExec(t, w.owner, `UPDATE images SET published_version_id = NULL WHERE id = 'img_qa'`)
 	mustExec(t, w.owner, `UPDATE projects SET runtime_image_id = 'img_base',
-		agent_models = jsonb_set(agent_models, '{reviewer,image}', '"img_gone"') WHERE id = $1`, w.project)
+		agent_models = jsonb_set(jsonb_set(agent_models, '{reviewer,image}', '"img_gone"'), '{implementer,image}', '"img_qa"')
+		WHERE id = $1`, w.project)
 	wi := w.task()
 	w.deliver(wi)
-	w.until("a reviewer to reach lux", func() bool { return w.specOf("review") != nil })
-	// The reviewer names an image that is gone: skipped, the project's.
+	// The scripted reviewer raises a finding the fixer then takes.
+	w.until("the fixer to reach lux", func() bool { return w.specOf("fix") != nil })
+	if got := w.runImage(wi, "implement").ImageID; got != "img_qa" {
+		t.Errorf("implementer ran in %s, want its role's img_qa", got)
+	}
 	if got := w.runImage(wi, "review").ImageID; got != "img_base" {
-		t.Errorf("reviewer ran in %s", got)
+		t.Errorf("reviewer ran in %s, want the project's img_base (its own is gone)", got)
+	}
+	if got := w.runImage(wi, "fix").ImageID; got != "img_qa" {
+		t.Errorf("fixer ran in %s, want the implementer's img_qa", got)
+	}
+}
+
+// An image with nothing published yet and its first version queued: the
+// Run waits on that build (no finish of its own), and runs once it
+// published and was finished.
+func TestARunWaitsForItsImagesFirstVersion(t *testing.T) {
+	w := newWorld(t)
+	w.useLayer(imageLayer)
+	build := w.firstVersionQueued("img_new", "fresh")
+	mustExec(t, w.owner, `UPDATE projects SET runtime_image_id = 'img_new' WHERE id = $1`, w.project)
+	wi := w.task()
+	w.deliver(wi)
+	w.until("the implementer to wait on v1's build", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND image_build_id = $2 AND lux_run_id IS NULL`, wi, build) == 1
+	})
+	if got := w.finishJobs(); len(got) != 0 {
+		t.Errorf("finish jobs = %v, want none: the build finishes its own", got)
+	}
+	// The builder publishes v1, finished with the layer.
+	mustExec(t, w.owner, `UPDATE image_versions SET state = 'published', user_ref = $1 WHERE id = 'imv_img_new'`, userRef)
+	mustExec(t, w.owner, `UPDATE images SET published_version_id = 'imv_img_new' WHERE id = 'img_new'`)
+	mustExec(t, w.owner, `INSERT INTO image_finals (organization_id, image_version_id, layer_ref, final_ref) VALUES ($1, 'imv_img_new', $2, $3)`,
+		w.org, imageLayer, finalRef)
+	mustExec(t, w.owner, `UPDATE image_builds SET state = 'succeeded' WHERE id = $1`, build)
+	w.look(wi)
+	w.until("the implementer to reach lux", func() bool { return w.specOf("implement") != nil })
+	if got := w.specOf("implement").Image.Ref; got != finalRef {
+		t.Errorf("ran %s", got)
+	}
+}
+
+// Nothing published and nothing building: the Run fails before lux.
+func TestARunOnAnImageNeverBuiltFails(t *testing.T) {
+	w := newWorld(t)
+	w.useLayer(imageLayer)
+	mustExec(t, w.owner, `INSERT INTO images (id, organization_id, name) VALUES ('img_new', $1, 'fresh')`, w.org)
+	mustExec(t, w.owner, `UPDATE projects SET runtime_image_id = 'img_new' WHERE id = $1`, w.project)
+	wi := w.task()
+	w.deliver(wi)
+	w.until("the implementer to fail", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'failed'`, wi) == 1
+	})
+	if got := w.runError(wi, "implement"); got != "cannot start: its image fresh has no published version: build and publish one first" {
+		t.Errorf("error = %q", got)
+	}
+	if n := len(w.lux.Runs()); n != 0 {
+		t.Errorf("%d lux Runs", n)
+	}
+}
+
+// The first version a Run waits on fails to build: the Run fails before
+// lux with the build's sentence.
+func TestARunWhoseImagesFirstBuildFailsFails(t *testing.T) {
+	w := newWorld(t)
+	w.useLayer(imageLayer)
+	build := w.firstVersionQueued("img_new", "fresh")
+	mustExec(t, w.owner, `UPDATE projects SET runtime_image_id = 'img_new' WHERE id = $1`, w.project)
+	wi := w.task()
+	w.deliver(wi)
+	w.until("the implementer to wait", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND image_build_id = $2`, wi, build) == 1
+	})
+	mustExec(t, w.owner, `UPDATE image_builds SET state = 'failed', error = 'ran out of memory (1.5 GB) at step 2' WHERE id = $1`, build)
+	w.look(wi)
+	w.until("the implementer to fail", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'failed'`, wi) == 1
+	})
+	if got := w.runError(wi, "implement"); got != "cannot start: its image fresh has no published version: v1 failed to build: ran out of memory (1.5 GB) at step 2" {
+		t.Errorf("error = %q", got)
+	}
+}
+
+// An admin queues v2 while a Run waits on v1's build: v1's build is
+// cancelled, and the Run waits on v2's instead of failing.
+func TestARunWaitingOnACancelledBuildWaitsOnTheNewerOne(t *testing.T) {
+	w := newWorld(t)
+	w.useLayer(imageLayer)
+	first := w.firstVersionQueued("img_new", "fresh")
+	mustExec(t, w.owner, `UPDATE projects SET runtime_image_id = 'img_new' WHERE id = $1`, w.project)
+	wi := w.task()
+	w.deliver(wi)
+	w.until("the implementer to wait on v1", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND image_build_id = $2`, wi, first) == 1
+	})
+	// What Build & publish does to the version still waiting (images.ts buildImage).
+	mustExec(t, w.owner, `UPDATE image_versions SET state = 'cancelled' WHERE id = 'imv_img_new'`)
+	mustExec(t, w.owner, `UPDATE image_builds SET state = 'cancelled', error = 'a newer version was queued' WHERE id = $1`, first)
+	mustExec(t, w.owner, `INSERT INTO image_versions (id, organization_id, image_id, number, containerfile, state)
+		VALUES ('imv_new2', $1, 'img_new', 2, 'FROM debian', 'queued')`, w.org)
+	mustExec(t, w.owner, `INSERT INTO image_builds (id, organization_id, image_version_id, kind) VALUES ('imb_new2', $1, 'imv_new2', 'build')`, w.org)
+	w.look(wi)
+	w.until("the implementer to wait on v2", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND image_build_id = 'imb_new2' AND status = 'pending'`, wi) == 1
+	})
+	if got := w.runError(wi, "implement"); got != "" {
+		t.Errorf("error = %q", got)
+	}
+}
+
+// The builder has been offline the whole time a Run waited 30 minutes for
+// its image: the Run fails before lux saying so; a shorter wait, or a
+// builder heard from lately, keeps waiting.
+func TestARunWaitingOnAnOfflineBuilderGivesUp(t *testing.T) {
+	w := newWorld(t)
+	w.useLayer(nextLayer)
+	w.libraryImage("img_base", "acme-base", true)
+	mustExec(t, w.owner, `UPDATE projects SET runtime_image_id = 'img_base' WHERE id = $1`, w.project)
+	mustExec(t, w.owner, `INSERT INTO image_builder (seen_at) VALUES ('2026-10-01 08:00+00')`)
+	wi := w.task()
+	w.deliver(wi)
+	w.until("the implementer to wait", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND image_build_id IS NOT NULL AND image_waiting_since IS NOT NULL`, wi) == 1
+	})
+	// Waited 10 minutes: still waiting.
+	mustExec(t, w.owner, `UPDATE runs SET image_waiting_since = now() - interval '10 minutes' WHERE task_id = $1`, wi)
+	w.look(wi)
+	w.pump()
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'pending'`, wi); n != 1 {
+		t.Fatalf("gave up after 10 minutes")
+	}
+	// The builder was heard from 20 minutes ago, the Run has waited an hour:
+	// it has been offline for only 20 of them.
+	mustExec(t, w.owner, `UPDATE image_builder SET seen_at = now() - interval '20 minutes'`)
+	mustExec(t, w.owner, `UPDATE runs SET image_waiting_since = now() - interval '1 hour' WHERE task_id = $1`, wi)
+	w.look(wi)
+	w.pump()
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'pending'`, wi); n != 1 {
+		t.Fatalf("gave up after 20 offline minutes")
+	}
+	mustExec(t, w.owner, `UPDATE image_builder SET seen_at = '2026-10-01 08:00+00'`)
+	w.look(wi)
+	w.until("the implementer to fail", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'failed'`, wi) == 1
+	})
+	if got := w.runError(wi, "implement"); got != "cannot start: image builder offline since 2026-10-01 08:00 UTC" {
+		t.Errorf("error = %q", got)
+	}
+	if n := len(w.lux.Runs()); n != 0 {
+		t.Errorf("%d lux Runs", n)
 	}
 }
 
@@ -153,13 +328,11 @@ func TestAFailedFinishFailsTheRunBeforeLux(t *testing.T) {
 		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND image_build_id IS NOT NULL`, wi) == 1
 	})
 	mustExec(t, w.owner, `UPDATE image_builds SET state = 'failed', error = 'the image needs git: agents commit with it' WHERE organization_id = $1`, w.org)
-	mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE task_id = $1`, wi)
+	w.look(wi)
 	w.until("the implementer to fail", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'failed'`, wi) == 1
 	})
-	var reason string
-	_ = w.owner.QueryRow(context.Background(), `SELECT error FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi).Scan(&reason)
-	if reason != "cannot start: its image acme-base v1 could not get the dude layer: the image needs git: agents commit with it" {
+	if reason := w.runError(wi, "implement"); reason != "cannot start: its image acme-base v1 could not get the dude layer: the image needs git: agents commit with it" {
 		t.Errorf("error = %q", reason)
 	}
 	if n := len(w.lux.Runs()); n != 0 {
