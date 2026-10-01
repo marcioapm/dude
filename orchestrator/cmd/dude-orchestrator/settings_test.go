@@ -79,6 +79,9 @@ lux_cost_every = "5m"
 url = "https://lux.file"
 api_key = "lux-file-key"
 console_url = "https://console.file"
+[previews]
+domain = "Preview-Absmartly.dev."
+reap_after = "72h"
 [llm]
 url = "https://llm.file/v1"
 key = "llm-file-key"
@@ -102,6 +105,7 @@ logins = ["file-bot"]
 	want := settings{
 		DatabaseURL: "postgres://file/dude", Token: "file-token", Listen: "127.0.0.1:4100", ToolsListen: "0.0.0.0:3200",
 		LuxURL: "https://lux.file", LuxKey: "lux-file-key", ConsoleURL: "https://console.file",
+		PreviewDomain: "preview-absmartly.dev", PreviewReapAfter: 72 * time.Hour,
 		Registry:       registrySettings{Mode: "ecr", ECRRoleARN: "arn:aws:iam::123456789012:role/file"},
 		ReconcileEvery: 30 * time.Minute, ParkAfter: 20 * time.Minute, IdleAfter: time.Hour, DiffEvery: 30 * time.Second,
 		MachineUSDPerHour: 0.35, LuxCostEvery: 5 * time.Minute, FactoryLogins: []string{"file-bot"},
@@ -218,7 +222,8 @@ func TestSettingsDefaults(t *testing.T) {
 	if s.Listen != "127.0.0.1:3100" || s.ToolsListen != "" || s.ReconcileEvery != 15*time.Minute ||
 		s.DiffEvery != 15*time.Second || s.ParkAfter != 0 || s.IdleAfter != 0 || s.MachineUSDPerHour != 0.2 || s.LuxCostEvery != 2*time.Minute ||
 		s.VAPIDSubject != "mailto:dude@localhost" || s.Registry.Mode != "none" || s.FactoryLogins != nil ||
-		s.Embeddings.URL != "" || s.Embeddings.Off == "" || s.Agent.DefaultImage != "localhost/dude-runtime:dev" {
+		s.Embeddings.URL != "" || s.Embeddings.Off == "" || s.Agent.DefaultImage != "localhost/dude-runtime:dev" ||
+		s.PreviewDomain != "" || s.PreviewReapAfter != 7*24*time.Hour {
 		t.Errorf("settings = %+v", s)
 	}
 	// An empty listen in the file is unset: the default, never Go's ":http".
@@ -292,6 +297,11 @@ func TestAMissingRequiredSettingIsNamed(t *testing.T) {
 		if _, err := settingsFrom(loadConfig(t, required, 0o600, map[string]string{"DUDE_LUX_COST_EVERY": v})); err == nil ||
 			!strings.Contains(err.Error(), "orchestrator.lux_cost_every (DUDE_LUX_COST_EVERY)") {
 			t.Errorf("lux cost cadence %s: err = %v, want refused", v, err)
+		}
+	}
+	for env, v := range map[string]string{"DUDE_PREVIEW_REAP_AFTER": "0s", "DUDE_PREVIEW_DOMAIN": "web.*.example"} {
+		if _, err := settingsFrom(loadConfig(t, required, 0o600, map[string]string{env: v})); err == nil || !strings.Contains(err.Error(), env) {
+			t.Errorf("%s=%s: err = %v, want refused", env, v, err)
 		}
 	}
 }

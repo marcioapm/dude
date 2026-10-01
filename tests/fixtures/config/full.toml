@@ -33,6 +33,10 @@ url = "https://lux.example"
 console_url = "https://console.lux.example"
 api_key = "lux-key"
 
+[previews]
+domain = "preview-absmartly.dev"
+reap_after = "72h"
+
 [llm]
 url = "https://llm.example/v1"
 key = "llm-key"

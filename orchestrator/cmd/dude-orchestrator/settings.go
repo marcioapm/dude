@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"log/slog"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/config"
@@ -20,6 +22,10 @@ type settings struct {
 
 	LuxURL, LuxKey string
 	ConsoleURL     string // lux.console_url, else lux.url
+
+	// previews.domain ("": lux's own) and previews.reap_after.
+	PreviewDomain    string
+	PreviewReapAfter time.Duration
 
 	Agent    phases.AgentConfig
 	Registry registrySettings
@@ -67,6 +73,9 @@ func (e missingError) Error() string { return e.label + " is required" }
 // indexDimensions is the size of memory's vector index; another is a migration.
 const indexDimensions = 768
 
+// previewDomainRe is a domain of DNS labels, at least two.
+var previewDomainRe = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
 func settingsFrom(cfg *config.Config) (settings, error) {
 	var s settings
 	required := []struct {
@@ -85,6 +94,13 @@ func settingsFrom(cfg *config.Config) (settings, error) {
 	s.ToolsListen = cfg.String("DUDE_TOOLS_LISTEN")
 	if s.ConsoleURL = cfg.String("LUX_CONSOLE_URL"); s.ConsoleURL == "" {
 		s.ConsoleURL = s.LuxURL
+	}
+	s.PreviewDomain = strings.Trim(strings.ToLower(cfg.String("DUDE_PREVIEW_DOMAIN")), ".")
+	if s.PreviewDomain != "" && !previewDomainRe.MatchString(s.PreviewDomain) {
+		return settings{}, fmt.Errorf("%s: not a domain: %q", cfg.Label("DUDE_PREVIEW_DOMAIN"), s.PreviewDomain)
+	}
+	if s.PreviewReapAfter = cfg.Duration("DUDE_PREVIEW_REAP_AFTER"); s.PreviewReapAfter <= 0 {
+		return settings{}, fmt.Errorf("%s: not a positive duration: %v", cfg.Label("DUDE_PREVIEW_REAP_AFTER"), s.PreviewReapAfter)
 	}
 
 	agent, err := phases.LoadAgentConfig(cfg)
