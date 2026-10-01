@@ -51,6 +51,8 @@ type Previews struct {
 	// A wakeable preview nobody has woken for this long is ended
 	// (previews.reap_after); zero is 7 days.
 	ReapAfter time.Duration
+	// How many wakeable previews one sweep takes at most; zero is 1000.
+	SweepLimit int
 
 	mu        sync.Mutex
 	following map[string]context.CancelFunc

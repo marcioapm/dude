@@ -93,4 +93,12 @@ CREATE TRIGGER pull_requests_preview_sync_wanted
   FOR EACH ROW WHEN (NEW.head_sha IS DISTINCT FROM OLD.head_sha)
   EXECUTE FUNCTION preview_sync_wanted();
 
-CREATE INDEX runs_wake_wanted_idx ON runs (wake_wanted_at) WHERE wake_wanted_at IS NOT NULL;
+-- The wakeable sweep (servers.wakeableSelect) reads through these, a
+-- BitmapOr of the two runs indexes, so its cost follows the live previews
+-- and not every preview ever made. A preview leaves the second once
+-- nothing of it is left in lux (lux_stop_reason = 'cancel').
+CREATE INDEX runs_wakeable_live_idx ON runs (created_at)
+  WHERE kind = 'preview' AND wakeable AND status IN ('pending', 'scheduled', 'starting', 'running', 'paused');
+CREATE INDEX runs_wakeable_open_idx ON runs (created_at)
+  WHERE kind = 'preview' AND wakeable AND lux_stop_reason IS DISTINCT FROM 'cancel';
+CREATE INDEX preview_servers_live_idx ON preview_servers (run_id) WHERE deleted_at IS NULL;
