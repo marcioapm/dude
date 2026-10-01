@@ -26,7 +26,7 @@ export interface ServerLogLine {
 }
 
 /** What the preview settings say when nothing has been chosen. */
-export const PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES = 30;
+export const PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES = 15;
 
 /** Why a server name is not one, in words a form shows; null when it is. */
 export function serverNameProblem(name: string): string | null {
