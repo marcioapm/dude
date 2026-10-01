@@ -174,11 +174,11 @@ export function MachinesPage({ client, orgName, sizes, problem, setSizes }: {
                   <Td align="right" fit className="ds-tnum">{gib(s.memoryMiB * 1024 * 1024)} GiB</Td>
                   <Td align="right" fit className="ds-tnum">{s.diskGiB} GiB</Td>
                   {sized.kind === "gone" ? (
-                    <Td fit hideWhenNarrow data-pool-gone><Badge tone="danger" size="sm" icon="warning">Pool gone from lux</Badge></Td>
+                    <Td fit hideWhenNarrow data-pool-cell data-pool-gone><Badge tone="danger" size="sm" icon="warning">Pool gone from lux</Badge></Td>
                   ) : (
-                    <Td fit hideWhenNarrow mono={s.poolId !== null} muted={s.poolId === null}>{poolLabel(s, known)}</Td>
+                    <Td fit hideWhenNarrow data-pool-cell mono={s.poolId !== null} muted={s.poolId === null}>{poolLabel(s, known)}</Td>
                   )}
-                  <Td fit hideWhenNarrow><FitBar share={fit.share}>{fit.text}</FitBar></Td>
+                  <Td fit hideWhenNarrow data-fit-cell><FitBar share={fit.share}>{fit.text}</FitBar></Td>
                   <Td wrap hideWhenNarrow><UsedBy faces={faces(s.usedBy)}>{usedByWords(s, s.usedBy)}</UsedBy></Td>
                   {canEdit ? (
                     <Td align="right">
