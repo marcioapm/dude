@@ -330,35 +330,35 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
         <div style={{ height: 8 }} />
         <Panes mode={mode} surface>
           <div style={{ overflowX: "auto", minWidth: 0 }}>
-          <Col>
-            {/* Frames of 600 and 320px: every column, then only what identifies a row and its numbers. */}
-            {[600, 320].map((w) => (
-              <div key={w} style={{ width: w }} data-testid={`table-narrow-${w}`}>
-                <Table>
-                  <THead>
-                    <Tr>
-                      <Th>Name</Th>
-                      <Th align="right">CPUs</Th>
-                      <Th align="right">Memory</Th>
-                      <Th hideWhenNarrow>Pool</Th>
-                      <Th hideWhenNarrow>Used by</Th>
-                    </Tr>
-                  </THead>
-                  <TBody>
-                    {([["Standard", "2", "8 GiB", "Default pool", "Any with none set"], ["Large", "8", "16 GiB", "big", "2 agents"]] as const).map(([n, c, m, p, u]) => (
-                      <Tr key={n}>
-                        <Td fit>{n}</Td>
-                        <Td align="right" fit>{c}</Td>
-                        <Td align="right" fit>{m}</Td>
-                        <Td fit hideWhenNarrow>{p}</Td>
-                        <Td hideWhenNarrow>{u}</Td>
+            <Col>
+              {/* Frames of 600 and 320px: every column, then only what identifies a row and its numbers. */}
+              {[600, 320].map((w) => (
+                <div key={w} style={{ width: w }} data-testid={`table-narrow-${w}`}>
+                  <Table>
+                    <THead>
+                      <Tr>
+                        <Th>Name</Th>
+                        <Th align="right">CPUs</Th>
+                        <Th align="right">Memory</Th>
+                        <Th hideWhenNarrow>Pool</Th>
+                        <Th hideWhenNarrow>Used by</Th>
                       </Tr>
-                    ))}
-                  </TBody>
-                </Table>
-              </div>
-            ))}
-          </Col>
+                    </THead>
+                    <TBody>
+                      {([["Standard", "2", "8 GiB", "Default pool", "Any with none set"], ["Large", "8", "16 GiB", "big", "2 agents"]] as const).map(([n, c, m, p, u]) => (
+                        <Tr key={n}>
+                          <Td fit>{n}</Td>
+                          <Td align="right" fit>{c}</Td>
+                          <Td align="right" fit>{m}</Td>
+                          <Td fit hideWhenNarrow>{p}</Td>
+                          <Td hideWhenNarrow>{u}</Td>
+                        </Tr>
+                      ))}
+                    </TBody>
+                  </Table>
+                </div>
+              ))}
+            </Col>
           </div>
         </Panes>
       </Block>
