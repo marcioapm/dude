@@ -139,7 +139,8 @@ func (b *Builder) Recover(ctx context.Context) error {
 			if j.Restarts == 0 {
 				b.Log.Warn("re-queueing a job its builder died under", "build", j.ID)
 				if _, err := tx.Exec(ctx, `UPDATE image_builds SET state = 'queued', restarts = restarts + 1, started_at = NULL,
-					heartbeat_at = NULL, stage = NULL, log = log || E'\n— builder restarted; trying again —\n' WHERE id = $1`, j.ID); err != nil {
+					heartbeat_at = NULL, stage = NULL, log = right(log || $2, $3), log_total = log_total + octet_length($2)
+					WHERE id = $1`, j.ID, "\n— builder restarted; trying again —\n", LogMax); err != nil {
 					return err
 				}
 				if j.Kind == "build" {
@@ -278,11 +279,12 @@ func (p *progress) unwritten(text string) {
 	p.mu.Unlock()
 }
 
-// full is the whole kept log, as the job's row holds it at the end.
-func (p *progress) full() (log, stage string, cut bool) {
+// full is the kept log and the stage the job reached, for its failure's
+// sentence.
+func (p *progress) full() (log, stage string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return strings.ReplaceAll(strings.ToValidUTF8(p.tail.String(), "\uFFFD"), "\x00", ""), p.stage, p.tail.cut
+	return p.tail.String(), p.stage
 }
 
 func (b *Builder) flushEvery() time.Duration {
@@ -336,14 +338,7 @@ func (b *Builder) do(ctx context.Context, j job) {
 	// The job may have ended already (published): its last output is
 	// written whatever its state.
 	b.flush(record, j, p, false)
-	log, stage, cut := p.full()
-	// The row holds the deltas; the kept tail is written whole only when
-	// its start was cut, so it begins at a line and says so.
-	if cut {
-		if _, werr := b.DB.Pool.Exec(record, `UPDATE image_builds SET log = $2 WHERE id = $1`, j.ID, log); werr != nil {
-			b.Log.Error("recording an image job's log", "build", j.ID, "error", werr)
-		}
-	}
+	log, stage := p.full()
 	if _, werr := b.DB.Pool.Exec(record, `UPDATE image_builds SET build_seconds = $2, push_seconds = $3 WHERE id = $1`,
 		j.ID, nullable(timings["build"]), nullable(timings["push"])); werr != nil {
 		b.Log.Error("recording an image job's timings", "build", j.ID, "error", werr)
@@ -400,10 +395,11 @@ func (b *Builder) flush(ctx context.Context, j job, p *progress, running bool) {
 	var err error
 	switch {
 	case dirty && running:
-		_, err = b.DB.Pool.Exec(ctx, `UPDATE image_builds SET log = right(log || $2, $4), stage = $3, heartbeat_at = now()
-			WHERE id = $1 AND state = 'running'`, j.ID, text, stage, LogMax)
+		_, err = b.DB.Pool.Exec(ctx, `UPDATE image_builds SET log = right(log || $2, $4), log_total = log_total + octet_length($2),
+			stage = $3, heartbeat_at = now() WHERE id = $1 AND state = 'running'`, j.ID, text, stage, LogMax)
 	case dirty:
-		_, err = b.DB.Pool.Exec(ctx, `UPDATE image_builds SET log = right(log || $2, $3) WHERE id = $1`, j.ID, text, LogMax)
+		_, err = b.DB.Pool.Exec(ctx, `UPDATE image_builds SET log = right(log || $2, $3), log_total = log_total + octet_length($2)
+			WHERE id = $1`, j.ID, text, LogMax)
 	case running:
 		_, err = b.DB.Pool.Exec(ctx, `UPDATE image_builds SET heartbeat_at = now() WHERE id = $1 AND state = 'running'`, j.ID)
 	}

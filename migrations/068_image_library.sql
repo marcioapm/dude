@@ -118,8 +118,12 @@ CREATE TABLE image_builds (
   -- While running: resolving, building, pushing, finishing, publishing.
   stage            text,
   error            text,
-  -- The tail of podman's output, at most 1 MiB (the builder keeps the end).
+  -- The tail of podman's output, at most 1 MiB (the builder keeps the end),
+  -- and how many bytes were ever appended: the log holds bytes
+  -- [log_total - octet_length(log), log_total), so a reader asks for what
+  -- came after the end it has (GET /v1/images/builds/:id?after=).
   log              text NOT NULL DEFAULT '',
+  log_total        bigint NOT NULL DEFAULT 0,
   -- A job its builder died under is re-queued once; the second time it fails.
   restarts         integer NOT NULL DEFAULT 0,
   -- Seconds spent building and pushing, for the build page.
@@ -151,10 +155,12 @@ ALTER TABLE projects
 -- What image a Run got: {imageId, name, versionId, version, ref, layer} —
 -- ref the final digest lux pulls. Written when it is resolved, never again,
 -- so a resume and the Run's page keep what it started with. image_build_id:
--- the finish job a pending Run waits on ("Preparing image").
+-- the job a Run waits on before it goes to lux ("Preparing image"), and
+-- image_waiting_since since when it has waited for one.
 ALTER TABLE runs
   ADD COLUMN image jsonb,
-  ADD COLUMN image_build_id text REFERENCES image_builds(id) ON DELETE SET NULL;
+  ADD COLUMN image_build_id text REFERENCES image_builds(id) ON DELETE SET NULL,
+  ADD COLUMN image_waiting_since timestamptz;
 -- The foreign key's ON DELETE reads runs by it.
 CREATE INDEX runs_image_build_idx ON runs (image_build_id) WHERE image_build_id IS NOT NULL;
 

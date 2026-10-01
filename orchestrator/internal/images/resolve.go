@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -111,17 +112,16 @@ type Outcome struct {
 	Fail      string
 }
 
-// Ready is an outcome that starts the Run.
-func (o Outcome) Ready() bool { return o.Ref != "" }
-
 // ErrNotConfigured is a library image with no dude layer to finish it.
 const ErrNotConfigured = "image library not configured: DUDE_LAYER_IMAGE is unset, so the library's images cannot run"
 
 // Resolve is what imageID gives a Run now, under layer (DUDE_LAYER_IMAGE),
 // in the Run's organization's transaction. waitingOn is the job the Run
 // already waited on (runs.image_build_id), "" for none: its failure is the
-// Run's. A finish that is missing is queued, or joined if one is: two Runs
-// needing the same one share it, and the builder takes it before any build.
+// Run's. A build cancelled under it (a newer version queued instead) is
+// not: the image is looked at again. A finish that is missing is queued,
+// or joined if one is: two Runs needing the same one share it, and the
+// builder takes it before any build.
 func Resolve(ctx context.Context, tx pgx.Tx, imageID, layer, waitingOn string) (Outcome, error) {
 	if waitingOn != "" {
 		var state, kind string
@@ -130,7 +130,7 @@ func Resolve(ctx context.Context, tx pgx.Tx, imageID, layer, waitingOn string) (
 		if err != nil && !db.IsNotFound(err) {
 			return Outcome{}, err
 		}
-		if state == "failed" || state == "cancelled" {
+		if state == "failed" || (state == "cancelled" && kind == "finish") {
 			name, version := versionName(ctx, tx, waitingOn)
 			sentence := "it was cancelled"
 			if why != nil {
@@ -228,6 +228,15 @@ type Waiting struct {
 	New   bool
 }
 
+// OfflineSentence is what a Run waiting for its image says when the
+// builder has not been heard from for Offline: since its last heartbeat.
+func OfflineSentence(seen *time.Time) string {
+	if seen == nil {
+		return "image builder offline: it has never reported in"
+	}
+	return "image builder offline since " + seen.UTC().Format("2006-01-02 15:04 UTC")
+}
+
 func (w Waiting) Error() string { return "waiting for image build " + w.Build }
 
 // Refused is a Run that cannot have its image: it fails before lux, with
@@ -258,19 +267,42 @@ func Choose(ctx context.Context, tx pgx.Tx, site Site, layer, runID, waitingOn s
 		if err != nil {
 			return "", nil, err
 		}
+		if gone, why, err := givenUp(ctx, tx, runID); err != nil || gone {
+			if err != nil {
+				return "", nil, err
+			}
+			return "", nil, Refused{why}
+		}
 		return "", nil, Waiting{Build: out.WaitBuild, New: fresh}
 	}
 	return out.Ref, out.Image, nil
 }
 
-// Wait records on a Run the job it waits on, once: true when it is new,
-// for the caller's event.
+// Wait records on a Run the job it waits on, once, and since when it has
+// waited for an image: true when the job is new, for the caller's event.
 func Wait(ctx context.Context, tx pgx.Tx, runID, build string) (bool, error) {
-	tag, err := tx.Exec(ctx, `UPDATE runs SET image_build_id = $2 WHERE id = $1 AND image_build_id IS DISTINCT FROM $2`, runID, build)
+	tag, err := tx.Exec(ctx, `UPDATE runs SET image_build_id = $2, image_waiting_since = COALESCE(image_waiting_since, now())
+		WHERE id = $1 AND image_build_id IS DISTINCT FROM $2`, runID, build)
 	if err != nil {
 		return false, err
 	}
 	return tag.RowsAffected() > 0, nil
+}
+
+// givenUp: the Run has waited for its image GiveUp while the builder was
+// offline (the overlap of its wait and the builder's silence), and fails
+// with why.
+func givenUp(ctx context.Context, tx pgx.Tx, runID string) (bool, string, error) {
+	var seen *time.Time
+	var gone bool
+	err := tx.QueryRow(ctx, `SELECT b.seen_at,
+			(b.seen_at IS NULL OR b.seen_at < now() - make_interval(secs => $2))
+			AND now() - GREATEST(r.image_waiting_since, b.seen_at) > make_interval(secs => $3)
+		FROM runs r LEFT JOIN image_builder b ON true WHERE r.id = $1`, runID, Offline.Seconds(), GiveUp.Seconds()).Scan(&seen, &gone)
+	if err != nil || !gone {
+		return false, "", err
+	}
+	return true, OfflineSentence(seen), nil
 }
 
 // Settle splits Choose's error: one to return from the transaction (a

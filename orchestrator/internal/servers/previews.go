@@ -180,23 +180,14 @@ func (p *Previews) advance(ctx context.Context, r previewRun) (bool, error) {
 
 // submit builds the preview's spec and hands it to lux. A library image
 // not ready yet keeps it pending, as a phase Run waits; one that cannot be
-// had fails it before lux.
+// had fails it before lux (imageOutcome).
 func (p *Previews) submit(ctx context.Context, r previewRun) error {
 	spec, branch, machine, got, err := p.spec(ctx, r)
-	var waiting images.Waiting
-	var refused images.Refused
-	switch {
-	case errors.As(err, &waiting):
-		return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, `UPDATE runs SET next_attempt_at = now() + interval '5 seconds' WHERE id = $1`, r.ID)
-			if err != nil || !waiting.New {
-				return err
-			}
-			return phases.ServersChanged(ctx, tx, r.Org, r.ProjectID, r.TaskID, r.ID, map[string]any{"change": "preparing_image", "buildId": waiting.Build})
-		})
-	case errors.As(err, &refused):
-		return p.fail(ctx, r, "cannot start: "+refused.Reason)
-	case err != nil:
+	if done, err := p.imageOutcome(ctx, r, err, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE runs SET next_attempt_at = now() + make_interval(secs => $2) WHERE id = $1`,
+			r.ID, phases.ImagePoll.Seconds())
+		return err
+	}); done || err != nil {
 		return err
 	}
 	// The dude Run id is the idempotency key: a retried submit gets the lux
@@ -223,7 +214,7 @@ func (p *Previews) submit(ctx context.Context, r previewRun) error {
 		// submit was in flight is then cancelled in lux by the next sweep.
 		// machine is what it runs on, recorded once, with the lux Run.
 		tag, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, next_attempt_at = NULL,
-			lux_repositories = $4, branch = NULLIF($5, ''), machine = $6::jsonb, image = $7::jsonb,
+			lux_repositories = $4, branch = NULLIF($5, ''), machine = $6::jsonb, image = $7::jsonb, image_waiting_since = NULL,
 			status = CASE WHEN status = 'pending' THEN 'scheduled'::run_status ELSE status END
 			WHERE id = $1 AND lux_run_id IS NULL`, r.ID, lr.ID, lr.State, db.NonNil(repos), branch, machine, got)
 		if err != nil || tag.RowsAffected() == 0 {
@@ -231,6 +222,29 @@ func (p *Previews) submit(ctx context.Context, r previewRun) error {
 		}
 		return phases.ServersChanged(ctx, tx, r.Org, r.ProjectID, r.TaskID, r.ID, map[string]any{"change": "submitted"})
 	})
+}
+
+// imageOutcome acts on what spec said of a preview's library image, for
+// both ways a preview is submitted (submit, submitWoken): Waiting runs
+// wait (to look again in phases.ImagePoll), with a preparing_image change
+// the first time; Refused fails the preview before lux. done: it was one
+// of them, and the caller submits nothing. Any other error is returned.
+func (p *Previews) imageOutcome(ctx context.Context, r previewRun, err error, wait func(pgx.Tx) error) (done bool, _ error) {
+	var waiting images.Waiting
+	var refused images.Refused
+	switch {
+	case errors.As(err, &waiting):
+		return true, p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			if err := wait(tx); err != nil || !waiting.New {
+				return err
+			}
+			return phases.ServersChanged(ctx, tx, r.Org, r.ProjectID, r.TaskID, r.ID,
+				map[string]any{"change": "preparing_image", "buildId": waiting.Build})
+		})
+	case errors.As(err, &refused):
+		return true, p.fail(ctx, r, "cannot start: "+refused.Reason)
+	}
+	return false, err
 }
 
 // previewRef is one repository of a preview, at the ref it previews.

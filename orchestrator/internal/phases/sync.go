@@ -408,7 +408,7 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 		tag, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, next_attempt_at = NULL,
 			harness = $4, model = $5, push_branch = NULLIF($6, ''), lux_repositories = $7, lux_pushes = $8,
 			machine_usd_per_hour = COALESCE(machine_usd_per_hour, NULLIF($9::float8, 0)),
-			machine = $10::jsonb, image = $11::jsonb,
+			machine = $10::jsonb, image = $11::jsonb, image_waiting_since = NULL,
 			status = CASE WHEN status = 'pending' THEN 'scheduled'::run_status ELSE status END
 			WHERE id = $1`, r.ID, lr.ID, lr.State, spec.Labels["dude.harness"], spec.Labels["dude.model"], pushBranch,
 			db.NonNil(repos), db.NonNil(pushes), s.MachineUSDPerHour, machine, got)
@@ -453,16 +453,16 @@ func (s *Syncer) image(ctx context.Context, r phaseRun) (string, *images.RunImag
 	return ref, got, err
 }
 
-// imagePoll is how soon a Run waiting for its image looks again. The
-// builder takes a Run's finish first; one takes about a minute.
-const imagePoll = 5 * time.Second
+// ImagePoll is how soon a Run (or a preview) waiting for its image looks
+// again. The builder takes a Run's finish first; one takes about a minute.
+const ImagePoll = 5 * time.Second
 
 // waitForImage leaves a Run pending while the builder prepares its image,
 // saying so in its chat the first time.
 func (s *Syncer) waitForImage(ctx context.Context, r phaseRun, w images.Waiting) error {
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `UPDATE runs SET next_attempt_at = now() + make_interval(secs => $2) WHERE id = $1`,
-			r.ID, imagePoll.Seconds()); err != nil {
+			r.ID, ImagePoll.Seconds()); err != nil {
 			return err
 		}
 		if !w.New {
