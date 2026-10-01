@@ -16,14 +16,16 @@ dude's Servers tab go to DUDE_WAKE_SHOTS (default /var/tmp/dude-wake-shots).
 
 from __future__ import annotations
 
+import json
 import os
-import time
 import urllib.parse
+from datetime import datetime
 from pathlib import Path
 
 import psycopg
 import pytest
 import requests
+from playwright.sync_api import expect
 
 from fake_github import FakeGitHub
 from helpers import ApiClient, sign_in, wait_until
@@ -123,8 +125,8 @@ def test_a_preview_sleeps_and_wakes_on_real_lux(client: ApiClient, env, org: dic
     # A signed-in request: the waking page, and dude wakes it (a new Run, the server attached).
     page.goto(ticket_link(env, sv))
     page.wait_for_selector("ol.steps", timeout=30_000)
+    expect(page.get_by_text("Asked the orchestrator to start it")).to_be_visible()
     page.screenshot(path=str(SHOTS / "1-lux-waking-page.png"))
-    assert "Asked the orchestrator to start it" in page.content()
     shot_dude(page, web_url, org, task, "2-dude-waking.png")
     b = Browser(env, sv).sign_in()
     first = b.into_app()
@@ -146,12 +148,21 @@ def test_a_preview_sleeps_and_wakes_on_real_lux(client: ApiClient, env, org: dic
     wait_until(lambda: client.get(f"/v1/tasks/{task['id']}/servers").json()["run"].get("asleep"),
                timeout=60, interval=1, message="dude never showed it asleep")
     assert lux_api(env, "GET", f"/v1/servers/{sv['id']}").json()["state"] == "asleep"
+    # The feed's events dude reads fields of, as lux sends them.
+    by_type = {}
+    for e in server_feed(env, sv["id"]):
+        by_type.setdefault(e["type"], e)
+    idle, wake, state = by_type["server.idle"], by_type["server.wake_requested"], by_type["server.state"]
+    last = idle["data"]["lastRequestAt"]
+    assert last is None or datetime.fromisoformat(last.replace("Z", "+00:00")), idle
+    assert idle["serverId"] == sv["id"] and wake["serverId"] == sv["id"] and wake["data"]["name"] == "web", (idle, wake)
+    assert state["data"]["state"] in ("starting", "ready", "unreachable", "exited", "stopped"), state
 
     # A new commit on the branch while it sleeps; the next request wakes it on it.
     _write_message(gh, "hello from commit B")
     page.goto(ticket_link(env, sv))
     page.wait_for_selector("ol.steps", timeout=30_000)
-    time.sleep(2)
+    expect(page.get_by_text("Asked the orchestrator to start it")).to_be_visible()
     page.screenshot(path=str(SHOTS / "5-lux-waking-again.png"))
     b = Browser(env, sv).sign_in()
     again = b.into_app()
@@ -172,8 +183,8 @@ def test_a_preview_sleeps_and_wakes_on_real_lux(client: ApiClient, env, org: dic
     wait_until(lambda: lux_api(env, "GET", f"/v1/runs/{lux_run}").json()["state"] == "cancelled",
                timeout=60, interval=1, message="the Run was never cancelled")
     page.goto(sv["url"] + "/")
+    expect(page.get_by_text("This preview is gone")).to_be_visible()
     page.screenshot(path=str(SHOTS / "8-lux-gone.png"))
-    assert "This preview is gone" in page.content()
 
 
 def _write_message(gh: FakeGitHub, text: str) -> str:
@@ -197,6 +208,19 @@ def lux_events(env, run_id: str) -> list[dict]:
     return lux_api(env, "GET", f"/v1/runs/{run_id}/events").json()["events"]
 
 
+def server_feed(env, server_id: str) -> list[dict]:
+    """A server's events on the tenant feed (the last 500), oldest first."""
+    r = requests.get(env.lux_url + "/v1/events?follow=false&last=500", timeout=30, stream=True,
+                     headers={"Authorization": f"Bearer {env.lux_key}", "Accept": "text/event-stream"})
+    out = []
+    for line in r.iter_lines(decode_unicode=True):
+        if line.startswith("data: "):
+            e = json.loads(line[6:])
+            if e.get("serverId") == server_id:
+                out.append(e)
+    return out
+
+
 def shot_dude(page, url: str, org: dict, task: dict, name: str) -> None:
     """dude's Servers tab for the task, as a person sees it, in a tab of its
     own (the lux page stays where it is)."""
@@ -205,7 +229,7 @@ def shot_dude(page, url: str, org: dict, task: dict, name: str) -> None:
         sign_in(tab, url, org["api_key"])
         tab.goto(f"{url}/#/task/{task['id']}/servers")
         tab.wait_for_selector('[data-testid="servers-panel"]', timeout=30_000)
-        time.sleep(1)
+        tab.wait_for_load_state("networkidle")
         tab.screenshot(path=str(SHOTS / name), full_page=True)
     finally:
         tab.close()
