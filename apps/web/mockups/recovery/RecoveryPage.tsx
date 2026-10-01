@@ -40,7 +40,7 @@ import { LAST_TURNS, LEFT, P, STOPPED, TASK, afterResume, afterRetry, afterStart
 import styles from "./recovery.module.css";
 
 export type Way = "resume" | "retry" | "restart";
-export type Screen = "meaning" | "task" | "session" | "after";
+export type Screen = "meaning" | "task" | "session" | "after" | "history";
 
 const LABEL: Record<MockRun["phase"], string> = { implement: "Implement", review: "Review", fix: "Fix", simplify: "Simplify" };
 const money = (n: number) => `$${n.toFixed(2)}`;
@@ -248,7 +248,12 @@ export function PickUpDialog({ stop, expired, way, onWay, onClose, onDone }: {
 
 // --------------------------------------------------------------------------- pipeline and sessions
 
-function Pipeline({ runs }: { readonly runs: readonly MockRun[] }) {
+function Pipeline({ runs, stop = "aborted", earlierOpen = false, onEarlierOpen }: {
+  readonly runs: readonly MockRun[];
+  readonly stop?: Stop;
+  readonly earlierOpen?: boolean;
+  readonly onEarlierOpen?: (open: boolean) => void;
+}) {
   const attempt = Math.max(...runs.map((r) => r.attempt));
   const current = runs.filter((r) => r.attempt === attempt).sort((a, b) => a.startedAt - b.startedAt);
   const earlier = runs.filter((r) => r.attempt < attempt);
@@ -258,12 +263,66 @@ function Pipeline({ runs }: { readonly runs: readonly MockRun[] }) {
       <StepList>
         {current.map((r) => <Step key={r.id} run={r} />)}
       </StepList>
-      {earlier.length > 0 ? (
+      {earlier.length === 0 ? null : earlierOpen ? (
+        <EarlierAttempt runs={earlier} stop={stop} onFold={() => onEarlierOpen?.(false)} />
+      ) : (
         <p className={styles["earlier"]}>
-          <Icon name="layers" size={12} /> Attempt 1 stopped at Implement ({STOPPED.aborted.short.toLowerCase()}). <Button size="sm" variant="quiet">Show attempt 1</Button>
+          <Icon name="layers" size={12} /> Attempt 1 stopped at Implement ({STOPPED[stop].short.toLowerCase()}).{" "}
+          <Button size="sm" variant="quiet" trailingIcon="chevron-down" onClick={() => onEarlierOpen?.(true)}>Show attempt 1</Button>
         </p>
-      ) : null}
+      )}
     </section>
+  );
+}
+
+/**
+ * An earlier attempt, folded open under the current one: its steps as they
+ * ended, why it stopped, and what it left — read-only, every row still
+ * opening its session. Nothing here is offered to resume: the attempt was
+ * set aside on purpose.
+ */
+function EarlierAttempt({ runs, stop, onFold }: { readonly runs: readonly MockRun[]; readonly stop: Stop; readonly onFold: () => void }) {
+  const s = STOPPED[stop];
+  const spent = runs.reduce((n, r) => n + r.costUsd, 0);
+  return (
+    <div className={styles["attempt"]} aria-label="Attempt 1">
+      <div className={styles["attemptHead"]}>
+        <Icon name="layers" size={14} />
+        <span className={styles["attemptTitle"]}>Attempt 1</span>
+        <StatusMark status={stop} size="sm" />
+        <span className={styles["muted"]}>
+          <Duration ms={142 * 60_000} format="age" tone="muted" /> ago · ran <Duration since={runs.at(-1)!.startedAt} until={runs[0]!.endedAt} tone="muted" /> · {money(spent)}
+        </span>
+        <span className={styles["spacer"]} />
+        <Button size="sm" variant="quiet" trailingIcon="chevron-up" onClick={onFold}>Hide</Button>
+      </div>
+      <StepList>
+        {[...runs].sort((a, b) => a.startedAt - b.startedAt).map((r) => <Step key={r.id} run={r} />)}
+      </StepList>
+      <dl className={styles["attemptFacts"]}>
+        <dt>Stopped</dt>
+        <dd>
+          {s.by ? <><b>{s.by.name}</b> aborted the implementer: “{s.why}”</> : <>The implementer failed: {s.why}.</>}
+        </dd>
+        <dt>Set aside</dt>
+        <dd>
+          <b>Márcio Martins</b> started over <Duration ms={60_000} format="age" tone="muted" /> ago:
+          “Don't touch the runner protocol. Read tool boundaries from the ACP events the shim already gets.”
+        </dd>
+        <dt>Branch</dt>
+        <dd>
+          <span className="ds-mono">{TASK.branch}</span> at <span className="ds-mono">{LEFT.pushed.sha}</span> — kept on GitHub
+          ({LEFT.pushed.files} files, <span className={styles["add"]}>+{LEFT.pushed.additions}</span> <span className={styles["del"]}>−{LEFT.pushed.deletions}</span>).{" "}
+          <Button size="sm" variant="quiet" leadingIcon="file-diff">Compare with attempt 2</Button>
+        </dd>
+        <dt>Not pushed</dt>
+        <dd>{LEFT.unpushed.files} files in its workspace, kept by lux until {LEFT.keptUntil}, then gone.</dd>
+        <dt>Pull request</dt>
+        <dd className={styles["muted"]}>None — it stopped before one was opened. (One would show here, closed.)</dd>
+        <dt>Findings · files</dt>
+        <dd className={styles["muted"]}>None — on the Findings and Files tabs, marked attempt 1, when there are.</dd>
+      </dl>
+    </div>
   );
 }
 
@@ -281,28 +340,41 @@ function Step({ run }: { readonly run: MockRun }) {
 }
 
 function Sessions({ runs, open, onOpen }: { readonly runs: readonly MockRun[]; readonly open: string; readonly onOpen: (id: string) => void }) {
-  const multi = new Set(runs.map((r) => r.attempt)).size > 1;
+  // With more than one attempt, each is a group under its own heading, newest first.
+  const attempts = [...new Set(runs.map((r) => r.attempt))].sort((a, b) => b - a);
+  const item = (r: MockRun) => (
+    <SessionItem key={r.id} current={r.id === open} onOpen={() => onOpen(r.id)}
+      avatar={<AgentAvatar role={r.role} size="lg" live={r.status === "running"} />}
+      title={LABEL[r.phase] + (r.note?.startsWith("again") ? " · again" : "")}
+      detail={<>{r.model} · <Duration since={r.startedAt} until={r.endedAt} live={r.status === "running"} tone="muted" /></>}
+      trailing={<StatusMark status={r.status} size="sm" iconOnly={r.status === "completed"} />} />
+  );
+  if (attempts.length === 1) return <SessionList className="taskSessionList">{runs.map(item)}</SessionList>;
   return (
-    <SessionList className="taskSessionList">
-      {runs.map((r) => (
-        <SessionItem key={r.id} current={r.id === open} onOpen={() => onOpen(r.id)}
-          avatar={<AgentAvatar role={r.role} size="lg" live={r.status === "running"} />}
-          title={LABEL[r.phase] + (multi ? ` · attempt ${r.attempt}` : "") + (r.note?.startsWith("again") ? " · again" : "")}
-          detail={<>{r.model} · <Duration since={r.startedAt} until={r.endedAt} live={r.status === "running"} tone="muted" /></>}
-          trailing={<StatusMark status={r.status} size="sm" iconOnly={r.status === "completed"} />} />
+    <div className="taskSessionList">
+      {attempts.map((a, i) => (
+        <section key={a} aria-label={`Attempt ${a}`}>
+          <h3 className={styles["groupHead"]}>
+            Attempt {a}
+            <span className={styles["groupNote"]}>{i === 0 ? "current" : "set aside"}</span>
+          </h3>
+          <SessionList>{runs.filter((r) => r.attempt === a).map(item)}</SessionList>
+        </section>
       ))}
-    </SessionList>
+    </div>
   );
 }
 
 // --------------------------------------------------------------------------- a stopped session, and one resumed
 
-function Session({ run, stop, resumed, expired, onChoose }: {
+function Session({ run, stop, resumed, expired, onChoose, setAside }: {
   readonly run: MockRun;
   readonly stop: Stop;
   readonly resumed: boolean;
   readonly expired: boolean;
   readonly onChoose: (w: Way) => void;
+  /** An earlier attempt's session, read after Start over: nothing is offered on it. */
+  readonly setAside?: "retry" | "restart" | undefined;
 }) {
   const s = STOPPED[stop];
   const live = run.status === "running";
@@ -314,7 +386,17 @@ function Session({ run, stop, resumed, expired, onChoose }: {
           <ChatTranscript fill live={live}
             session={{ id: run.id, role: run.role, status: run.status, model: run.model, taskKey: TASK.key, title: LABEL[run.phase], owner: P["marcio"], startedAt: run.startedAt, endedAt: run.endedAt, costUsd: run.costUsd }}
             headerActions={live ? <><Button size="sm" variant="secondary">Pause</Button><Button size="sm" variant="danger">Abort…</Button></> : undefined}
-            footer={ended ? (
+            footer={setAside ? (
+              <Callout tone="neutral">
+                <span className="runEnded">
+                  <span>
+                    {setAside === "restart" ? "Attempt 1 · set aside when Márcio started over." : "Set aside when Márcio tried again with a new implementer."}{" "}
+                    <span className={styles["muted"]}>Kept to read; the work goes on in {setAside === "restart" ? "attempt 2's sessions" : "Implement · again"}.</span>
+                  </span>
+                  <Button size="sm" variant="quiet" trailingIcon="arrow-right">{setAside === "restart" ? "Go to attempt 2" : "Go to the new session"}</Button>
+                </span>
+              </Callout>
+            ) : ended ? (
               <Callout tone={stop === "failed" ? "danger" : "attention"}>
                 <span className="runEnded">
                   <span>{stop === "aborted" ? "This run was aborted." : "This run failed."} {expired ? <span className={styles["muted"]}>Its workspace is gone; try again from the task.</span> : <span className={styles["muted"]}>Kept until {LEFT.keptUntil}.</span>}</span>
@@ -346,7 +428,7 @@ function Session({ run, stop, resumed, expired, onChoose }: {
                 { label: "Model", value: run.model, mono: true },
                 { label: "Agent", value: "opencode" },
                 { label: "Attempt", value: run.attempt },
-                ...(ended ? [{ label: "Kept until", value: expired ? "gone" : LEFT.keptUntil }] : [{ label: "Resumed", value: "once" }]),
+                ...(setAside ? [{ label: "Set aside", value: setAside === "restart" ? "for attempt 2" : "for a new session" }] : ended ? [{ label: "Kept until", value: expired ? "gone" : LEFT.keptUntil }] : [{ label: "Resumed", value: "once" }]),
               ]} />
             </SessionRailBlock>
             <SessionRailBlock label="Left behind">
@@ -398,20 +480,33 @@ export function StoppedSession({ stop, expired, onChoose }: { readonly stop: Sto
   );
 }
 
-export function After({ stop, way, tab }: { readonly stop: Stop; readonly way: Way; readonly tab: "overview" | "sessions" | "activity" }) {
+export function After({ stop, way, tab, earlierOpen, onEarlierOpen, openOld, onOpenOld }: {
+  readonly stop: Stop;
+  readonly way: Way;
+  readonly tab: "overview" | "sessions" | "activity";
+  readonly earlierOpen: boolean;
+  readonly onEarlierOpen: (open: boolean) => void;
+  /** Sessions: the old attempt's session open, rather than the running one. */
+  readonly openOld: boolean;
+  readonly onOpenOld: (old: boolean) => void;
+}) {
   const runs = way === "resume" ? afterResume(stop) : way === "retry" ? afterRetry(stop) : afterStartOver(stop);
-  const open = runs[0]!;
+  const old = runs.length > 1 ? runs[runs.length - 1]! : null;
+  const showOld = openOld && old !== null;
+  const open = showOld ? old : runs[0]!;
   const what = way === "resume" ? "resumed the implementer" : way === "retry" ? "tried again with a new implementer" : "started over as attempt 2";
   return (
     <TaskFrame status="running" tab={tab}>
       {tab === "overview" ? (
         <div className="taskPane">
-          <div className="taskOverview"><div className="taskMain"><Pipeline runs={runs} /></div></div>
+          <div className="taskOverview"><div className="taskMain"><Pipeline runs={runs} stop={stop} earlierOpen={earlierOpen} onEarlierOpen={onEarlierOpen} /></div></div>
         </div>
       ) : tab === "sessions" ? (
         <div className="taskSessions">
-          <Sessions runs={runs} open={open.id} onOpen={() => undefined} />
-          {way === "resume" ? (
+          <Sessions runs={runs} open={open.id} onOpen={(id) => onOpenOld(id === old?.id)} />
+          {showOld ? (
+            <Session run={old} stop={stop} resumed={false} expired={false} onChoose={() => undefined} setAside={way === "resume" ? undefined : way} />
+          ) : way === "resume" ? (
             <Session run={open} stop={stop} resumed expired={false} onChoose={() => undefined} />
           ) : (
             <div className="runScreen">
@@ -433,6 +528,7 @@ export function After({ stop, way, tab }: { readonly stop: Stop; readonly way: W
             <TimelineItem who={<PersonAvatar person={P["marcio"]!} size={32} />} when={<Duration ms={60_000} format="age" tone="muted" />}
               quote="Don't touch the runner protocol. Read tool boundaries from the ACP events the shim already gets.">
               <b>Márcio Martins</b> picked the task back up: {what}
+              {way === "restart" ? <span className={styles["groupNote"]}> · attempt 2 begins; attempt 1 is kept</span> : null}
             </TimelineItem>
             {stop === "aborted" ? (
               <TimelineItem who={<PersonAvatar person={P["ana"]!} size={32} />} when={<Duration ms={95 * 60_000} format="age" tone="muted" />} quote={STOPPED.aborted.why}>

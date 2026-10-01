@@ -26,17 +26,27 @@ function Mock() {
   const [dialog, setDialog] = useState<Way | null>(null);
   const [way, setWay] = useState<Way>("resume");
   const [afterTab, setAfterTab] = useState<"overview" | "sessions" | "activity">("sessions");
+  const [earlierOpen, setEarlierOpen] = useState(false);
+  const [openOld, setOpenOld] = useState(false);
+  const history = screen === "history";
   const expired = kept === "gone";
   const choose = (w: Way) => setDialog(expired && w === "resume" ? "retry" : w);
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       <div className="mockbar">
         <b>dude · Picking a stopped task back up (mockup)</b>
-        <Segmented size="sm" label="Screen" value={screen} onChange={(s) => { setScreen(s); setDialog(null); }} options={[
+        <Segmented size="sm" label="Screen" value={screen} onChange={(s) => {
+          setScreen(s);
+          setDialog(null);
+          // The old attempt's history: after Start over, folded open, its session to hand.
+          if (s === "history") { setWay("restart"); setAfterTab("overview"); setEarlierOpen(true); setOpenOld(true); }
+          else { setEarlierOpen(false); setOpenOld(false); }
+        }} options={[
           { value: "meaning", label: "1 · What they mean" },
           { value: "task", label: "2 · Stopped task" },
           { value: "session", label: "3 · Its session" },
           { value: "after", label: "4 · After" },
+          { value: "history", label: "5 · Attempt 1" },
         ]} />
         <Segmented size="sm" label="Theme" value={theme.resolved} onChange={(t) => theme.setPreference(t as ThemePreference)} options={[{ value: "dark", label: "Dark" }, { value: "light", label: "Light" }]} />
       </div>
@@ -44,7 +54,7 @@ function Mock() {
         <div className="mockbar">
           <span style={{ marginRight: "auto" }}>Scenario</span>
           <Segmented size="sm" label="How it stopped" value={stop} onChange={setStop} options={[{ value: "aborted", label: "Aborted by Ana" }, { value: "failed", label: "Failed (host lost)" }]} />
-          {screen === "after" ? (
+          {screen === "after" || history ? (
             <>
               <Segmented size="sm" label="Picked up by" value={way} onChange={setWay} options={[{ value: "resume", label: "Resume" }, { value: "retry", label: "Try again" }, { value: "restart", label: "Start over" }]} />
               <Segmented size="sm" label="Tab" value={afterTab} onChange={setAfterTab} options={[{ value: "overview", label: "Overview" }, { value: "sessions", label: "Sessions" }, { value: "activity", label: "Activity" }]} />
@@ -74,7 +84,9 @@ function Mock() {
           {screen === "meaning" ? <Meaning /> : null}
           {screen === "task" ? <StoppedTask stop={stop} expired={expired} you={who === "owner"} onChoose={choose} /> : null}
           {screen === "session" ? <StoppedSession stop={stop} expired={expired} onChoose={choose} /> : null}
-          {screen === "after" ? <After stop={stop} way={way} tab={afterTab} /> : null}
+          {screen === "after" || history ? (
+            <After stop={stop} way={way} tab={afterTab} earlierOpen={earlierOpen} onEarlierOpen={setEarlierOpen} openOld={openOld} onOpenOld={setOpenOld} />
+          ) : null}
           {dialog ? (
             <PickUpDialog stop={stop} expired={expired} way={dialog} onWay={setDialog} onClose={() => setDialog(null)}
               onDone={(w) => { setDialog(null); setWay(w); setAfterTab(w === "restart" ? "overview" : "sessions"); setScreen("after"); }} />
