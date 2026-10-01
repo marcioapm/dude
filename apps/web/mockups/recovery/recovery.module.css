@@ -1,0 +1,196 @@
+/*
+ * Only what the design system does not already lay out: the choice list
+ * (a radio group whose options carry a sentence each — the one new piece),
+ * the kept / new / gone lines under it, and the explainer page, which is
+ * for the discussion and not an app page.
+ */
+
+.left {
+  color: var(--ds-color-text-secondary);
+}
+.add {
+  color: var(--ds-tone-success-fg);
+}
+.del {
+  color: var(--ds-tone-danger-fg);
+}
+.muted {
+  color: var(--ds-color-text-muted);
+}
+.endActions {
+  display: inline-flex;
+  gap: var(--ds-space-8);
+}
+.earlier {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  margin: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+.fakeComposer {
+  padding: var(--ds-space-12) var(--ds-space-chat-pad-x);
+  border-top: 1px solid var(--ds-color-border-subtle);
+  color: var(--ds-color-text-muted);
+}
+
+/* -- The dialog -- */
+.dialogBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-16);
+}
+.choices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+}
+.choice {
+  display: grid;
+  grid-template-columns: 16px 16px minmax(0, 1fr);
+  align-items: start;
+  gap: var(--ds-space-8) var(--ds-space-12);
+  padding: var(--ds-space-8) var(--ds-space-12);
+  border: 1px solid var(--ds-color-border-subtle);
+  border-radius: var(--ds-radius-control);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.choice:hover:not(:disabled) {
+  background: var(--ds-color-hover-wash);
+}
+.choice:focus-visible {
+  outline: var(--ds-focus-ring-width) solid var(--ds-color-focus-ring);
+  outline-offset: var(--ds-focus-ring-offset);
+}
+.choice:disabled {
+  cursor: default;
+  color: var(--ds-color-text-disabled);
+}
+.chosen {
+  border-color: var(--ds-color-accent);
+  background: var(--ds-color-accent-subtle);
+}
+.dot {
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  border: 1.5px solid var(--ds-color-border-strong);
+  border-radius: var(--ds-radius-full);
+}
+.chosen .dot {
+  border: 4px solid var(--ds-color-accent);
+}
+.choiceIcon {
+  margin-top: 1px;
+  color: var(--ds-color-text-secondary);
+}
+.choiceText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.choiceTitle {
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
+}
+.choice:disabled .choiceTitle {
+  color: var(--ds-color-text-disabled);
+}
+.choiceDetail {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+
+.effects {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: max-content max-content minmax(0, 1fr);
+  gap: var(--ds-space-6) var(--ds-space-12);
+  font-size: var(--ds-text-sm);
+}
+.effect {
+  display: contents;
+}
+.effectWhat {
+  color: var(--ds-color-text-secondary);
+}
+.effectHow {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  color: var(--ds-color-text-muted);
+}
+.effect[data-how="kept"] .effectHow {
+  color: var(--ds-tone-success-fg);
+}
+.effect[data-how="gone"] .effectHow {
+  color: var(--ds-tone-attention-fg);
+}
+.effectText {
+  color: var(--ds-color-text-primary);
+}
+
+/* -- The explainer -- */
+.meaning {
+  max-width: 1080px;
+}
+.h1 {
+  margin: 0 0 var(--ds-space-8);
+  font-size: var(--ds-text-2xl);
+  color: var(--ds-color-text-strong);
+}
+.h2 {
+  margin: var(--ds-space-32) 0 var(--ds-space-8);
+  font-size: var(--ds-text-lg);
+  color: var(--ds-color-text-strong);
+}
+.lede {
+  max-width: 760px;
+  color: var(--ds-color-text-secondary);
+}
+.table {
+  width: 100%;
+  margin-top: var(--ds-space-16);
+  border-collapse: collapse;
+  font-size: var(--ds-text-sm);
+}
+.table th,
+.table td {
+  padding: var(--ds-space-8) var(--ds-space-12);
+  border-bottom: 1px solid var(--ds-color-border-subtle);
+  text-align: left;
+  vertical-align: top;
+}
+.table tbody th {
+  color: var(--ds-color-text-muted);
+  font-weight: var(--ds-weight-medium);
+  white-space: nowrap;
+}
+.th {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  color: var(--ds-color-text-strong);
+  font-size: var(--ds-text-md);
+}
+.thSub {
+  display: block;
+  font-weight: normal;
+  color: var(--ds-color-text-muted);
+}
+.questions {
+  max-width: 760px;
+  padding-left: var(--ds-space-20);
+  color: var(--ds-color-text-secondary);
+}
+.questions li {
+  margin-bottom: var(--ds-space-6);
+}
