@@ -420,6 +420,9 @@ type Client interface {
 
 	// Cost is what lux's cost plugins have priced for a Run so far.
 	Cost(ctx context.Context, runID string) (RunCost, error)
+
+	// The tenant's servers and its event feed (servers.go).
+	Servers
 }
 
 type HTTPClient struct {
@@ -552,19 +555,24 @@ func (c *HTTPClient) Resume(ctx context.Context, runID string, in ResumeInput) (
 	if len(in.AddRepositories) > 0 {
 		body["git"] = map[string]any{"repositories": in.AddRepositories}
 	}
+	if len(in.Sync) > 0 {
+		body["sync"] = in.Sync
+	}
 	var r Run
 	err := c.do(ctx, "POST", "/v1/runs/"+runID+"/resume", body, nil, &r)
 	return r, err
 }
 
 // ResumeInput is what a resume carries: the secrets again (lux never keeps
-// them), input for the agent, and repositories to add to the Run — cloned
-// before it starts, each reported as a git.clone event with the request id.
+// them), input for the agent, repositories to add to the Run — cloned
+// before it starts, each reported as a git.clone event with the request id
+// — and checkouts to move to new commits before init (Sync).
 type ResumeInput struct {
 	Secrets         []Secret
 	Input           string
 	RequestID       string
 	AddRepositories []Repository
+	Sync            []SyncRef
 }
 
 func (c *HTTPClient) Get(ctx context.Context, runID string) (Run, error) {
