@@ -518,8 +518,9 @@ class FakeGitHub:
                     words = (v.get("q") or "").lower()
                     return self._send(200, {"data": {"repository": {
                         "pullRequest": {"author": {"login": "dude-bot"},
-                                        "suggestedReviewers": [{"isCommenter": i == 1, "reviewer": u}
-                                                               for i, u in enumerate(REVIEWERS[:2])]} if pr else None,
+                                        # Suggestions only without words, as GitHub's @include(if:$suggest).
+                                        "suggestedReviewers": [] if words else [{"isCommenter": i == 1, "reviewer": u}
+                                                                               for i, u in enumerate(REVIEWERS[:2])]} if pr else None,
                         "assignableUsers": {"nodes": [u for u in REVIEWERS if words in f"{u['login']} {u['name']}".lower()]}}}})
                 pr = gh.pulls.get(int(v.get("number") or 0)) if gh else None
                 if pr is None:

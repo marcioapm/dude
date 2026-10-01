@@ -647,10 +647,14 @@ func fail(w http.ResponseWriter, status int, message string) {
 	write(w, status, map[string]string{"message": message})
 }
 
+// reviewerCandidates answers as GitHub does: suggestions only without
+// words (the query's @include(if:$suggest)), people matching them with.
 func (s *Server) reviewerCandidates(number int, q string) map[string]any {
 	suggested := []any{}
-	for i, u := range reviewers[:2] {
-		suggested = append(suggested, map[string]any{"isCommenter": i == 1, "reviewer": u})
+	if q == "" {
+		for i, u := range reviewers[:2] {
+			suggested = append(suggested, map[string]any{"isCommenter": i == 1, "reviewer": u})
+		}
 	}
 	found := []any{}
 	for _, u := range reviewers {
