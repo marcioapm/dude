@@ -211,7 +211,10 @@ keeps lux's server id; it never reads a hostname back.
   servers. The page drops into the app once it serves.
 - **Unused**: lux reports a server idle after `idleAfter` without a
   request; once every server of the preview is, dude stops the Run (its
-  checkout and state volume kept for the next wake).
+  checkout and state volume kept for the next wake). lux reports idleness
+  only for a server that is ready, so one that never becomes ready
+  (starting or unreachable) counts as idle once it has had no request for
+  `idleAfter`, and an exited one at once.
 - **A new commit** on the task's branch (an agent's, or a push the forge
   reports on its pull request) is synced into a running preview at once; a
   sleeping one gets it on its next wake.
@@ -223,10 +226,15 @@ keeps lux's server id; it never reads a hostname back.
 
 Every orchestrator follows the feed; each event is applied once, keyed in
 the database, and a wake is acted on by one orchestrator. The feed's
-position is kept in `lux_feed`, so a restart misses no event.
+position is kept in `lux_feed`: the highest event id whose lux time is
+more than 15 seconds old (lux can commit a lower id after a higher one for
+up to its 10-second feed settle), written at most once a second. A restart
+replays at most that much, applied once, and misses no event.
 
 **Requirements.** dude needs a lux with `/v1/servers`: the orchestrator
-refuses to start against an older one, naming the release. `previews.domain`
+refuses to start against an older one (404 or 405 there), naming the
+release. A lux that does not answer at startup is asked again, backing off
+to once a minute, rather than stopping the orchestrator. `previews.domain`
 may be left unset (lux's own is used); set, it must equal lux's. Without a
 preview domain in lux, previews keep the old path below.
 
