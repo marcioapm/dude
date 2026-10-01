@@ -287,6 +287,14 @@ func (t *translator) shimEvent(ctx context.Context, tx pgx.Tx, s *Syncer, typ st
 			if lands := landsOf(data); lands != "" {
 				payload["lands"] = lands
 			}
+			// The images it was given with the task, for the prompt turn.
+			images, err := delivery.PromptAttachmentInfo(ctx, tx, t.run.ID)
+			if err != nil {
+				return err
+			}
+			if len(images) > 0 {
+				payload["attachments"] = images
+			}
 			return s.event(ctx, tx, t.run, evPromptDelivered, ledger.ActorSystem, payload)
 		}
 		return t.directiveReceipt(ctx, tx, s, typ, data)

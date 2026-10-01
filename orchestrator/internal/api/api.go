@@ -253,6 +253,8 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, org string) err
 	var body struct {
 		Policy  json.RawMessage `json:"policy"`
 		ActorID string          `json:"actorId"`
+		// Images given with the task's prompt: its first agent sees them.
+		AttachmentIDs []string `json:"attachmentIds"`
 	}
 	if err := read(r, &body); err != nil {
 		return err
@@ -267,6 +269,20 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, org string) err
 				return fail(http.StatusNotFound, "not_found", "task %s not found", taskID)
 			}
 			return err
+		}
+		if len(body.AttachmentIDs) > 0 {
+			// Only before any agent has been given the prompt.
+			var started bool
+			if err := tx.QueryRow(r.Context(), `SELECT EXISTS (SELECT 1 FROM runs WHERE task_id = $1 AND kind = 'agent')`,
+				taskID).Scan(&started); err != nil {
+				return err
+			}
+			if started {
+				return fail(http.StatusConflict, "conflict", "task %s has started: its prompt was given already", taskID)
+			}
+			if _, err := attach(r.Context(), tx, taskID, "", body.AttachmentIDs); err != nil {
+				return err
+			}
 		}
 		// Which repositories it works on is the task's to say: none is
 		// work that changes no code — unless its project has just one.
@@ -357,6 +373,18 @@ func insertDirective(ctx context.Context, tx pgx.Tx, org, runID string, ri runIn
 		delivery.Directive{Text: text, Scope: scope, Supersedes: supersedes, Interrupt: interrupt})
 }
 
+// attach sends the task's uploads ids with the directive (or, with
+// directiveID "", the task's prompt), refusing ids that are another
+// task's, already sent, or too many or too large together.
+func attach(ctx context.Context, tx pgx.Tx, taskID, directiveID string, ids []string) ([]json.RawMessage, error) {
+	attached, err := delivery.Attach(ctx, tx, taskID, directiveID, ids)
+	var refused delivery.AttachmentError
+	if errors.As(err, &refused) {
+		return nil, fail(http.StatusBadRequest, "invalid_attachment", "%s", refused.Message)
+	}
+	return attached, err
+}
+
 // ownerOnly uses the first active ordered member, independent of credentials.
 func ownerOnly(ctx context.Context, tx pgx.Tx, taskID, personID, verb string) error {
 	var ownerID, ownerName *string
@@ -394,11 +422,13 @@ func (s *Server) steer(w http.ResponseWriter, r *http.Request, org string) error
 		// agent that cannot take a message mid-turn hears it when the turn
 		// ends.
 		Interrupt bool `json:"interrupt"`
+		// Images uploaded to the task, sent with the words.
+		AttachmentIDs []string `json:"attachmentIds"`
 	}
 	if err := read(r, &body); err != nil {
 		return err
 	}
-	if strings.TrimSpace(body.Text) == "" {
+	if strings.TrimSpace(body.Text) == "" && len(body.AttachmentIDs) == 0 {
 		return fail(http.StatusBadRequest, "bad_request", "text is required")
 	}
 	if body.Scope == "" {
@@ -417,12 +447,20 @@ func (s *Server) steer(w http.ResponseWriter, r *http.Request, org string) error
 		if err != nil {
 			return err
 		}
+		attached, err := attach(r.Context(), tx, ri.TaskID, id, body.AttachmentIDs)
+		if err != nil {
+			return err
+		}
 		out = map[string]any{"id": id, "runId": runID, "taskId": ri.TaskID, "text": body.Text,
 			"scope": body.Scope, "supersedes": db.Nullable(body.Supersedes), "interrupt": body.Interrupt,
-			"deliveredAt": nil, "createdAt": createdAt}
-		return humanEvent(r.Context(), tx, org, runID, ri, "run.steered", principalOf(r), map[string]any{
+			"deliveredAt": nil, "createdAt": createdAt, "attachments": db.NonNil(attached)}
+		payload := map[string]any{
 			"directiveId": id, "text": body.Text, "scope": body.Scope, "supersedes": db.Nullable(body.Supersedes),
-			"interrupt": body.Interrupt})
+			"interrupt": body.Interrupt}
+		if len(attached) > 0 {
+			payload["attachments"] = attached
+		}
+		return humanEvent(r.Context(), tx, org, runID, ri, "run.steered", principalOf(r), payload)
 	})
 	if err != nil {
 		return err
@@ -521,12 +559,13 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request, org string) erro
 func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) error {
 	questionID := r.PathValue("id")
 	var body struct {
-		Text string `json:"text"`
+		Text          string   `json:"text"`
+		AttachmentIDs []string `json:"attachmentIds"`
 	}
 	if err := read(r, &body); err != nil {
 		return err
 	}
-	if strings.TrimSpace(body.Text) == "" {
+	if strings.TrimSpace(body.Text) == "" && len(body.AttachmentIDs) == 0 {
 		return fail(http.StatusBadRequest, "bad_request", "text is required")
 	}
 	var out map[string]any
@@ -565,13 +604,21 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 		if err != nil {
 			return err
 		}
+		attached, err := attach(r.Context(), tx, ri.TaskID, directiveID, body.AttachmentIDs)
+		if err != nil {
+			return err
+		}
 		if _, err := delivery.SetTaskStatusTx(r.Context(), tx, org, ri.ProjectID, ri.TaskID, "awaiting_input",
 			"running", "a person answered the agent"); err != nil {
 			return err
 		}
-		out = map[string]any{"id": questionID, "runId": runID, "status": "answered", "answer": body.Text, "answeredAt": answeredAt}
-		return humanEvent(r.Context(), tx, org, runID, ri, "question.answered", principalOf(r),
-			map[string]any{"questionId": questionID, "answer": body.Text, "directiveId": directiveID})
+		out = map[string]any{"id": questionID, "runId": runID, "status": "answered", "answer": body.Text, "answeredAt": answeredAt,
+			"attachments": db.NonNil(attached)}
+		payload := map[string]any{"questionId": questionID, "answer": body.Text, "directiveId": directiveID}
+		if len(attached) > 0 {
+			payload["attachments"] = attached
+		}
+		return humanEvent(r.Context(), tx, org, runID, ri, "question.answered", principalOf(r), payload)
 	})
 	if err != nil {
 		return err

@@ -130,6 +130,8 @@ async function createTask(ctx: RequestContext): Promise<Response> {
 const deliverInput = z.object({
   /** Overrides for this task only; unset fields keep the default. */
   policy: z.record(z.string(), z.unknown()).optional(),
+  /** Images uploaded to the task, given to its first agent with the prompt. */
+  attachmentIds: z.array(z.string().min(1)).max(6).optional(),
 });
 
 /**

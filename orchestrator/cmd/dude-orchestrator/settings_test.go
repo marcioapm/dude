@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/config"
+	"github.com/marciomartins/dude/orchestrator/internal/objects"
 	"github.com/marciomartins/dude/orchestrator/internal/registry"
 )
 
@@ -101,6 +102,11 @@ private_key = "vapid-file-private"
 subject = "mailto:file@example.com"
 [factory]
 logins = ["file-bot"]
+[s3]
+bucket = "file-bucket"
+endpoint = "http://127.0.0.1:9000"
+access_key = "file-key"
+secret_key = "file-secret"
 `, 0o600, nil))
 	want := settings{
 		DatabaseURL: "postgres://file/dude", Token: "file-token", Listen: "127.0.0.1:4100", ToolsListen: "0.0.0.0:3200",
@@ -110,6 +116,8 @@ logins = ["file-bot"]
 		ReconcileEvery: 30 * time.Minute, ParkAfter: 20 * time.Minute, IdleAfter: time.Hour, DiffEvery: 30 * time.Second,
 		MachineUSDPerHour: 0.35, LuxCostEvery: 5 * time.Minute, FactoryLogins: []string{"file-bot"},
 		VAPIDPublic: "BFile", VAPIDPrivate: "vapid-file-private", VAPIDSubject: "mailto:file@example.com",
+		Objects: objects.Config{Bucket: "file-bucket", Endpoint: "http://127.0.0.1:9000", Region: "us-east-1",
+			AccessKey: "file-key", SecretKey: "file-secret"},
 		Embeddings: embeddingsConfig{URL: "https://llm.file/v1", Key: "llm-file-key",
 			URLFrom: "DUDE_LLM_URL", KeyFrom: "DUDE_LLM_KEY"},
 		EmbeddingsModel: "file-model", EmbeddingsDimension: 768,

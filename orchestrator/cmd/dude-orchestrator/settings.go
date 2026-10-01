@@ -8,6 +8,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/config"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
+	"github.com/marciomartins/dude/orchestrator/internal/objects"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
 	"github.com/marciomartins/dude/orchestrator/internal/registry"
 )
@@ -39,6 +40,9 @@ type settings struct {
 	FactoryLogins []string
 
 	VAPIDPublic, VAPIDPrivate, VAPIDSubject string
+
+	// Where people's attached images are read from; Bucket "" for none.
+	Objects objects.Config
 
 	Embeddings          embeddingsConfig // URL "" for none
 	EmbeddingsModel     string
@@ -125,6 +129,12 @@ func settingsFrom(cfg *config.Config) (settings, error) {
 	}
 	if s.LuxCostEvery = cfg.Duration("DUDE_LUX_COST_EVERY"); s.LuxCostEvery <= 0 {
 		return settings{}, fmt.Errorf("%s: not a positive duration: %v", cfg.Label("DUDE_LUX_COST_EVERY"), s.LuxCostEvery)
+	}
+	s.Objects = objects.Config{Bucket: cfg.String("DUDE_S3_BUCKET"), Endpoint: cfg.String("DUDE_S3_ENDPOINT"),
+		Region: cfg.String("DUDE_S3_REGION"), AccessKey: cfg.String("DUDE_S3_ACCESS_KEY"), SecretKey: cfg.String("DUDE_S3_SECRET_KEY")}
+	if (s.Objects.AccessKey == "") != (s.Objects.SecretKey == "") {
+		return settings{}, fmt.Errorf("%s and %s are set together or not at all",
+			cfg.Label("DUDE_S3_ACCESS_KEY"), cfg.Label("DUDE_S3_SECRET_KEY"))
 	}
 	s.FactoryLogins = cfg.List("DUDE_FACTORY_LOGINS")
 	s.VAPIDPublic, s.VAPIDPrivate = cfg.String("DUDE_VAPID_PUBLIC_KEY"), cfg.String("DUDE_VAPID_PRIVATE_KEY")

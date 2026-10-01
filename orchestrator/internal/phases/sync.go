@@ -40,6 +40,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
+	"github.com/marciomartins/dude/orchestrator/internal/objects"
 	"github.com/marciomartins/dude/orchestrator/internal/registry"
 )
 
@@ -50,7 +51,10 @@ type Syncer struct {
 	Agent  AgentConfig
 	// The login for the registry agent images come from; nil for none.
 	Registry registry.Provider
-	Log      *slog.Logger
+	// Where the images people attach are read from; nil when no bucket is
+	// configured (and so none was ever uploaded).
+	Objects objects.Store
+	Log     *slog.Logger
 	// The factory's grace before a Run waiting on a person is parked, and
 	// its idle limit, for projects whose policy sets none (DUDE_PARK_AFTER,
 	// DUDE_IDLE_AFTER; finer than the policy's minutes, for tests). Zero
@@ -354,12 +358,32 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 	if err != nil {
 		return s.fail(ctx, r, "cannot build the run: "+err.Error())
 	}
+	// The images given with the task's prompt, for its first agent.
+	var sent []delivery.SentAttachment
+	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		var err error
+		sent, err = delivery.PromptAttachments(ctx, tx, r.ID)
+		return err
+	}); err != nil {
+		return err
+	}
+	images, reason, err := s.readAttachments(ctx, sent)
+	if err != nil {
+		return s.retryLater(ctx, r, err)
+	}
+	if reason != "" {
+		return s.fail(ctx, r, "the task's "+strings.TrimPrefix(reason, "its "))
+	}
+	spec.Workload.Attachments = images
 	// The dude Run id is the idempotency key: a submit that timed out and is
 	// retried returns the lux Run the first one created.
 	NamePool(ctx, s.Lux, machine)
 	lr, err := s.Lux.Submit(ctx, spec, r.ID)
 	if reason := PoolGone(err, machine); reason != "" {
 		return s.fail(ctx, r, reason)
+	}
+	if reason := attachmentsRefused(err); reason != "" {
+		return s.fail(ctx, r, "the task's prompt: "+reason)
 	}
 	if err != nil {
 		return s.retryOrFail(ctx, r, err, "lux refused the run")
@@ -1254,19 +1278,44 @@ func (s *Syncer) deliverDirectives(ctx context.Context, r phaseRun) (bool, error
 		return false, err
 	}
 	for _, d := range pending {
-		text := d.Text
+		text, alone := d.Text, false
 		if d.Resends != "" {
 			only, err := s.interruptOnly(ctx, r, d.ID)
 			if err != nil {
 				return true, err
 			}
 			if only {
-				text = ""
+				text, alone = "", true
+			}
+		}
+		// The words' images go with the words (an image may be all there
+		// is); an interrupt alone carries neither.
+		var images []lux.Attachment
+		if !alone {
+			var sent []delivery.SentAttachment
+			if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+				var err error
+				sent, err = delivery.DirectiveAttachments(ctx, tx, d.ID)
+				return err
+			}); err != nil {
+				return true, err
+			}
+			var reason string
+			var err error
+			if images, reason, err = s.readAttachments(ctx, sent); err != nil {
+				return true, s.retryLater(ctx, r, err)
+			}
+			if reason != "" {
+				return true, s.failDirective(ctx, r, d.ID, reason)
 			}
 		}
 		// The directive id is the request id, so a retried send is delivered
 		// once.
-		if err := s.Lux.Input(ctx, r.LuxRunID, text, d.ID, d.Interrupt); err != nil {
+		err := s.Lux.InputWith(ctx, r.LuxRunID, lux.InputRequest{Text: text, RequestID: d.ID, Interrupt: d.Interrupt, Attachments: images})
+		if reason := attachmentsRefused(err); reason != "" {
+			return true, s.failDirective(ctx, r, d.ID, reason)
+		}
+		if err != nil {
 			return true, s.retryLater(ctx, r, err)
 		}
 		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
@@ -1287,6 +1336,66 @@ func (s *Syncer) deliverDirectives(ctx context.Context, r phaseRun) (bool, error
 		}
 	}
 	return true, nil
+}
+
+// readAttachments reads what an input carries from storage. A reason, and
+// no error, when they cannot be sent at all: the bucket is gone from the
+// configuration, or an object is missing; an error is worth retrying.
+func (s *Syncer) readAttachments(ctx context.Context, sent []delivery.SentAttachment) ([]lux.Attachment, string, error) {
+	if len(sent) == 0 {
+		return nil, "", nil
+	}
+	if s.Objects == nil {
+		return nil, "its images could not be read: " + objects.ErrUnconfigured.Error(), nil
+	}
+	out := make([]lux.Attachment, 0, len(sent))
+	for _, a := range sent {
+		data, err := s.Objects.Get(ctx, a.ObjectKey, lux.MaxAttachmentBytes)
+		if errors.Is(err, objects.ErrNotFound) {
+			return nil, fmt.Sprintf("its image %s is gone from storage", a.Name), nil
+		}
+		if err != nil {
+			return nil, "", err
+		}
+		out = append(out, lux.Attachment{Name: a.Name, ContentType: a.ContentType, Data: data})
+	}
+	return out, "", nil
+}
+
+// attachmentsRefused is why lux will never take an input's images, as a
+// person reads it, or "" when err is anything else.
+func attachmentsRefused(err error) string {
+	le, ok := lux.AsError(err)
+	if !ok {
+		return ""
+	}
+	switch le.Code {
+	case lux.CodeAttachmentsUnsupported:
+		return "this agent cannot take images"
+	case lux.CodeInvalidAttachment:
+		return "lux refused its images: " + le.Message
+	}
+	return ""
+}
+
+// failDirective records that a directive will never reach the agent, with
+// why (run.directive.failed), as a failure lux reports is; an interrupt
+// alone relying on its words fails with it.
+func (s *Syncer) failDirective(ctx context.Context, r phaseRun, id, reason string) error {
+	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE directives SET failed_at = now(), error = $2
+			WHERE id = $1 AND delivered_at IS NULL AND failed_at IS NULL`, id, reason)
+		if err != nil || tag.RowsAffected() == 0 {
+			return err
+		}
+		if err := s.event(ctx, tx, r, evDirectiveFailed, ledger.ActorSystem, map[string]any{"directiveId": id, "error": reason}); err != nil {
+			return err
+		}
+		return settleInterrupts(ctx, tx, s, r, &reason, `UPDATE directives d SET failed_at = now(), error = $3
+			FROM directives f WHERE `+interruptAloneOf+` AND d.failed_at IS NULL
+			  AND NOT EXISTS (SELECT 1 FROM directives c WHERE c.run_id = d.run_id AND `+carrierOf+` AND c.failed_at IS NULL)
+			RETURNING d.id`, id, r.ID, reason)
+	})
 }
 
 // carrierOf (SQL): c is a directive carrying the words of d's instruction,
