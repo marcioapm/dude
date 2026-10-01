@@ -246,7 +246,9 @@ func TestARequestAfterAnIdleKeepsTheRun(t *testing.T) {
 	_, runID := w.declare()
 	web := w.serverID(runID, "web")
 	w.open(web)
-	w.until("running", func() bool { return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, runID) == 1 })
+	w.until("running", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, runID) == 1
+	})
 	r := w.luxRuns()[0]
 	w.lux.RequestServer(web, "/") // lastRequestAt now
 	stale := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339Nano)
