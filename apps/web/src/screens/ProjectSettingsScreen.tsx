@@ -6,7 +6,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ProjectAvatar, SettingsHeader, SettingsNote, TextButton } from "@dude/design-system/components";
+import { ProjectAvatar, SettingRow, SettingsHeader, SettingsNote, SettingsSection, TextButton } from "@dude/design-system/components";
 import {
   Button,
   Callout,
@@ -35,6 +35,7 @@ import { DeliveryPage, RolePage } from "./settingsPages.tsx";
 import { FacePicker } from "./FacePicker.tsx";
 import { ServersSettingsPage } from "./ServersSettings.tsx";
 import { useMachineSizes } from "./MachinesSettings.tsx";
+import { ImageField, imageWords, useImageChoices, type ImageChoices } from "../images.tsx";
 import { isMemoryPage, MEMORY_PAGES, MemoryPages, memoryNav, useIndexSummary, type ProjectChoice } from "./MemorySettings.tsx";
 
 // The first is where the screen opens: a new project needs its repositories first.
@@ -101,6 +102,8 @@ export function ProjectSettingsScreen({ client, projectId, projects, admin, page
   const orgName = settings?.organization.name ?? "the organisation";
   // The organisation's sizes, once for the screen: each Machine field's choices.
   const sizes = useMachineSizes(client).sizes?.sizes ?? null;
+  // The organisation's images, once for the screen: every image field's choices.
+  const images = useImageChoices(client);
 
   return (
     <SettingsFrame
@@ -148,7 +151,8 @@ export function ProjectSettingsScreen({ client, projectId, projects, admin, page
           {page === "general" ? (
             <>
               <SettingsHeader title="General" />
-              <GeneralTab client={client} project={project} canEdit={scope.settings.canEdit} onSaved={saved} />
+              <GeneralTab client={client} project={project} canEdit={scope.settings.canEdit} onSaved={saved} images={images} orgName={orgName}
+                onManageImages={admin ? () => onOrganization("images") : undefined} />
             </>
           ) : page === "repositories" ? (
             <>
@@ -156,11 +160,13 @@ export function ProjectSettingsScreen({ client, projectId, projects, admin, page
               <RepositoriesTab client={client} project={project} canEdit={scope.settings.canEdit} onSaved={saved} />
             </>
           ) : page === "servers" ? (
-            <ServersSettingsPage client={client} project={project} canEdit={scope.settings.canEdit} orgName={orgName} sizes={sizes} onCount={setServerCount} />
+            <ServersSettingsPage client={client} project={project} canEdit={scope.settings.canEdit} orgName={orgName} sizes={sizes} onCount={setServerCount}
+              images={images} onManageImages={admin ? () => onOrganization("images") : undefined} />
           ) : page === "delivery" ? (
             <DeliveryPage scope={scope} />
           ) : isRole(page) ? (
-            <RolePage key={page} scope={scope} role={page} onOpenRun={onOpenRun} sizes={sizes} />
+            <RolePage key={page} scope={scope} role={page} onOpenRun={onOpenRun} sizes={sizes} images={images}
+              onManageImages={admin ? () => onOrganization("images") : undefined} />
           ) : isMemoryPage(page) ? (
             <MemoryPages client={client} page={page} projects={projects} admin={admin} index={index} onPage={onPage}
               scope={{ kind: "project", id: project.id, name: project.name, organization: orgName }} />
@@ -179,20 +185,18 @@ interface TabProps {
   onSaved: () => void;
 }
 
-function GeneralTab({ client, project, canEdit, onSaved }: TabProps) {
+function GeneralTab({ client, project, canEdit, onSaved, images, orgName, onManageImages }: TabProps & { images: ImageChoices; orgName: string; onManageImages?: (() => void) | undefined }) {
   const [name, setName] = useState(project.name);
-  const [image, setImage] = useState(project.runtimeImage ?? "");
   const { busy, problem, save } = useSave();
   const face = useSave();
-  const dirty = name.trim() !== project.name || image.trim() !== (project.runtimeImage ?? "");
+  const imageSave = useSave();
+  const dirty = name.trim() !== project.name;
+  const base = imageWords(images.images, images.defaultImageId);
   return (
     <form
       onSubmit={(e) => {
         e.preventDefault();
-        void save(() => client.updateProject(project.id, {
-          name: name.trim(),
-          runtimeImage: image.trim() || null,
-        }), onSaved, "General settings saved");
+        void save(() => client.updateProject(project.id, { name: name.trim() }), onSaved, "General settings saved");
       }}
     >
       <fieldset disabled={!canEdit} className="plainFieldset">
@@ -209,14 +213,6 @@ function GeneralTab({ client, project, canEdit, onSaved }: TabProps) {
         {face.problem ? <Callout tone="danger">{face.problem}</Callout> : null}
         <Input label="Name" value={name} required maxLength={200} onChange={(e) => setName(e.target.value)} />
         <Input label="Slug" value={project.slug} mono disabled hint="Fixed: it names the project in paths and keys." />
-        <Input
-          label="Runtime image"
-          mono
-          value={image}
-          placeholder="The system default"
-          hint="The container image agents work in. Empty uses the system default."
-          onChange={(e) => setImage(e.target.value)}
-        />
         {problem ? <Callout tone="danger">{problem}</Callout> : null}
         {canEdit ? (
           <FormActions>
@@ -227,6 +223,26 @@ function GeneralTab({ client, project, canEdit, onSaved }: TabProps) {
         ) : null}
       </FormStack>
       </fieldset>
+      <SettingsSection title="Images">
+        <SettingRow label="Runtime image" help={`What this project’s agents work in. Without one, ${orgName}’s default base.`} data-testid="runtime-image-row">
+          <ImageField
+            testId="runtime-image"
+            label="Runtime image"
+            images={images.images}
+            value={project.runtimeImageId}
+            orgName={orgName}
+            allowNone={`Use ${orgName}’s default base`}
+            noneLabel={base ? `${orgName}’s default base · ${base}` : "dude’s own image"}
+            legacy={project.runtimeImage}
+            shadowedBy={base}
+            disabled={!canEdit || imageSave.busy}
+            onManage={onManageImages}
+            onChange={(runtimeImageId) => void imageSave.save(() => client.updateProject(project.id, { runtimeImageId }), onSaved, "Runtime image saved")}
+            onClearLegacy={() => void imageSave.save(() => client.updateProject(project.id, { runtimeImage: null }), onSaved, "Typed image cleared")}
+          />
+        </SettingRow>
+        {imageSave.problem ? <Callout tone="danger">{imageSave.problem}</Callout> : null}
+      </SettingsSection>
     </form>
   );
 }

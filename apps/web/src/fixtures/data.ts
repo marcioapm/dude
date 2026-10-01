@@ -201,6 +201,7 @@ export const SETTINGS: SettingsResponse = {
     effort: { value: null, source: "organization" },
     timeLimitMinutes: { value: null, source: "organization" },
     machineSize: { value: null, source: "organization", organization: null },
+    image: { value: null, source: "organization", organization: null },
     enabled: role === "simplifier" || role === "qa_browser" ? { value: role === "simplifier", source: "organization" } : null,
     prompt: { organization: { versionId: null, body: "", updatedAt: null, updatedBy: null, versions: 0 }, project: { versionId: null, body: "", updatedAt: null, updatedBy: null, versions: 0, mode: "inherit" } },
   }])) as SettingsResponse["roles"],

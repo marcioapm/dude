@@ -41,6 +41,10 @@ import type {
   MachineSizeInput,
   MachineSizeWithUse,
   MachinePools,
+  ImageBuildWithLog,
+  ImageChoice,
+  ImageDetail,
+  ImagesResponse,
   AddServer,
   PreviewSettings,
   Recipe,
@@ -575,7 +579,7 @@ export class ApiClient {
 
   updateProject(
     id: string,
-    changes: Partial<{ name: string; description: string; runtimeImage: string | null;
+    changes: Partial<{ name: string; description: string; runtimeImage: null; runtimeImageId: string | null;
       agentModels: Project["agentModels"]; deliveryPolicy: DeliveryPolicy }>,
   ): Promise<ProjectDetail> {
     return this.#request("PATCH", `/v1/projects/${id}`, changes);
@@ -702,6 +706,63 @@ export class ApiClient {
 
   machinePools(): Promise<MachinePools> {
     return this.#request("GET", "/v1/machines/pools");
+  }
+
+  // -- images: the organization's library ------------------------------------
+
+  images(): Promise<ImagesResponse> {
+    return this.#request("GET", "/v1/images");
+  }
+
+  /** Every image a picker offers, the default base first. */
+  imageChoices(): Promise<{ images: ImageChoice[]; defaultImageId: string | null }> {
+    return this.#request("GET", "/v1/images/picker");
+  }
+
+  image(id: string): Promise<ImageDetail> {
+    return this.#request("GET", `/v1/images/${encodeURIComponent(id)}`);
+  }
+
+  createImage(input: { name: string; description?: string; containerfile?: string; note?: string }): Promise<ImageDetail> {
+    return this.#request("POST", "/v1/images", input);
+  }
+
+  updateImage(id: string, patch: { description?: string; archived?: boolean }): Promise<ImageDetail> {
+    return this.#request("PATCH", `/v1/images/${encodeURIComponent(id)}`, patch);
+  }
+
+  /** Save the image's draft; 422 invalid_containerfile names each line that won't build. */
+  saveImageDraft(id: string, draft: { containerfile: string; buildArgs?: Record<string, string>; note?: string }): Promise<ImageDetail> {
+    return this.#request("PUT", `/v1/images/${encodeURIComponent(id)}/draft`, draft);
+  }
+
+  discardImageDraft(id: string): Promise<ImageDetail> {
+    return this.#request("DELETE", `/v1/images/${encodeURIComponent(id)}/draft`);
+  }
+
+  /** Build & publish: the draft (saved first, when given) numbered and queued. */
+  buildImage(
+    id: string,
+    draft?: { containerfile: string; buildArgs?: Record<string, string>; note?: string },
+  ): Promise<{ buildId: string; versionId: string; version: number; image: ImageDetail }> {
+    return this.#request("POST", `/v1/images/${encodeURIComponent(id)}/build`, draft);
+  }
+
+  /** Publish a built version again: at once, no build. */
+  republishImage(id: string, versionId: string): Promise<ImageDetail> {
+    return this.#request("POST", `/v1/images/${encodeURIComponent(id)}/versions/${encodeURIComponent(versionId)}/publish`);
+  }
+
+  setDefaultImage(id: string | null): Promise<ImagesResponse> {
+    return id ? this.#request("POST", `/v1/images/default/${encodeURIComponent(id)}`) : this.#request("DELETE", "/v1/images/default");
+  }
+
+  imageBuild(buildId: string): Promise<ImageBuildWithLog> {
+    return this.#request("GET", `/v1/images/builds/${encodeURIComponent(buildId)}`);
+  }
+
+  cancelImageBuild(buildId: string): Promise<{ cancelled: string }> {
+    return this.#request("POST", `/v1/images/builds/${encodeURIComponent(buildId)}/cancel`);
   }
 
   /** A project's page: its epics by state, with lanes, pull requests, people and cost. */
