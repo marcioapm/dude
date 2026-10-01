@@ -194,6 +194,59 @@ func isLux(err error, status int, code string) bool {
 	return ok && le.Status == status && le.Code == code
 }
 
+// Attach refusals carry lux's codes and messages: a Run it does not have
+// (not_found "not found", no ids), a server another Run holds (attached),
+// a name the Run has (name_taken), a Run that is over (finished). A resume
+// of a Run resuming already answers as the first did; one that cannot be
+// resumed is 409 not_resumable.
+func TestAttachAndResumeRefusalsAreLuxs(t *testing.T) {
+	ctx := context.Background()
+	fake, c, runA := started(t, servesOnly)
+	_, _, runB := startedWith(t, fake, servesOnly)
+	mk := func(host string) string {
+		sv, err := c.CreateServer(ctx, lux.CreateServer{Name: "web", Port: 3000, Hostname: host + ".lux.test", Wake: "request"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sv.ID
+	}
+	one, two := mk("one"), mk("two")
+	_, err := c.AttachServer(ctx, one, "lrun_nope")
+	if le, _ := lux.AsError(err); !isLux(err, 404, "not_found") || le.Message != "not found" {
+		t.Errorf("attach to an unknown Run: %v", err)
+	}
+	if _, err := c.AttachServer(ctx, one, runA); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.AttachServer(ctx, one, runB); !isLux(err, 409, "attached") {
+		t.Errorf("attach of a server another Run holds: %v", err)
+	}
+	if _, err := c.AttachServer(ctx, two, runA); !isLux(err, 409, "name_taken") {
+		t.Errorf("attach of a name the Run has: %v", err)
+	}
+	if err := c.Cancel(ctx, runB); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "cancelled", func() bool { r, _ := c.Get(ctx, runB); return r.State == "cancelled" })
+	if _, err := c.AttachServer(ctx, two, runB); !isLux(err, 409, "finished") {
+		t.Errorf("attach to a cancelled Run: %v", err)
+	}
+	if _, err := c.Resume(ctx, runB, lux.ResumeInput{}); !isLux(err, 409, "not_resumable") {
+		t.Errorf("resume of a cancelled Run: %v", err)
+	}
+	if err := c.Stop(ctx, runA); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "stopped", func() bool { r, _ := c.Get(ctx, runA); return r.State == "stopped" })
+	fake.StartAfter = time.Hour
+	if _, err := c.Resume(ctx, runA, lux.ResumeInput{}); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := c.Resume(ctx, runA, lux.ResumeInput{}); err != nil || r.State != "resuming" {
+		t.Errorf("a second resume of a resuming Run: %+v %v", r, err)
+	}
+}
+
 // gitInit makes a repository with one commit on main.
 func gitInit(t *testing.T, dir string) {
 	t.Helper()

@@ -340,9 +340,9 @@ func (s *Server) createTenantServer(w http.ResponseWriter, r *http.Request) {
 	s.tservers[t.ID] = t
 	s.serverEvent(t, "server.created", map[string]any{"by": "key", "wake": wake, "lifetime": lifetime})
 	if in.RunID != "" {
-		if msg, code := s.attach(t, in.RunID); msg != "" {
+		if status, code, msg := s.attach(t, in.RunID); status != 0 {
 			delete(s.tservers, t.ID)
-			writeErr(w, code, "attach_failed", msg)
+			writeErr(w, status, code, msg)
 			return
 		}
 	}
@@ -351,20 +351,21 @@ func (s *Server) createTenantServer(w http.ResponseWriter, r *http.Request) {
 }
 
 // attach puts a server on a Run: started now if the Run runs, else at its
-// next placement. Callers hold s.mu.
-func (s *Server) attach(t *tenantServer, runID string) (string, int) {
+// next placement. A refusal is lux's: its status, code and message.
+// Callers hold s.mu.
+func (s *Server) attach(t *tenantServer, runID string) (status int, code, msg string) {
 	run := s.runs[runID]
 	switch {
 	case run == nil:
-		return "no run " + runID, 404
-	case t.RunID == runID:
-		return "", 0
-	case t.RunID != "":
-		return fmt.Sprintf("server %s is attached to %s: detach it there first", t.ID, t.RunID), 409
+		return 404, "not_found", "not found"
 	case !runLive(run.State):
-		return "run is " + run.State, 409
+		return 409, "finished", "run is " + run.State
+	case t.RunID == runID:
+		return 0, "", ""
+	case t.RunID != "":
+		return 409, "attached", fmt.Sprintf("server %s is attached to %s: detach it there first", t.ID, t.RunID)
 	case run.server(t.Name) != nil:
-		return "the Run already has a server of that name", 409
+		return 409, "name_taken", "the Run already has a server of that name"
 	}
 	t.RunID = runID
 	t.proc = &server{Name: t.Name, Port: t.Port, Command: t.Command, Workdir: t.Workdir, Env: t.Env,
@@ -375,7 +376,7 @@ func (s *Server) attach(t *tenantServer, runID string) (string, int) {
 	if run.State == "running" && t.Command != nil {
 		s.startServer(run, t.proc)
 	}
-	return "", 0
+	return 0, "", ""
 }
 
 // detach takes a server off its Run (its process stops). Callers hold s.mu.
@@ -493,12 +494,8 @@ func (s *Server) attachTenantServer(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 422, "invalid_request", "runId is required")
 		return
 	}
-	if msg, code := s.attach(t, in.RunID); msg != "" {
-		c := "attached"
-		if code == 404 {
-			c = "not_found"
-		}
-		writeErr(w, code, c, msg)
+	if status, code, msg := s.attach(t, in.RunID); status != 0 {
+		writeErr(w, status, code, msg)
 		return
 	}
 	writeJSON(w, 200, s.tview(t))

@@ -345,6 +345,8 @@ type Server struct {
 	// How long a started server with a command takes to be ready; zero is
 	// 30ms.
 	ServerReadyAfter time.Duration
+	// How long a submitted or resumed Run takes to start; zero is 20ms.
+	StartAfter time.Duration
 	// The preview domain servers' URLs are under; "" gives them none, as a
 	// lux without previews configured.
 	PreviewDomain string
@@ -633,7 +635,11 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 
 // play is the agent's life: start, check out, take the task, work, go idle.
 func (s *Server) play(run *Run, spec map[string]any, resumed bool) {
-	time.Sleep(20 * time.Millisecond)
+	after := s.StartAfter
+	if after <= 0 {
+		after = 20 * time.Millisecond
+	}
+	time.Sleep(after)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if run.behavior.FailToStart {
@@ -1400,9 +1406,22 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.Unmarshal(body, &raw)
 	s.mu.Lock()
-	if run.State != "stopped" && run.State != "failed" && run.State != "lost" {
+	// As lux's resumeRun: a Run resuming already answers as the first
+	// resume did; every other 409 means it was not resumed.
+	switch run.State {
+	case "stopped", "failed", "lost":
+	case "resuming":
+		view := s.view(run)
+		s.mu.Unlock()
+		writeJSON(w, 202, view)
+		return
+	case "cancelled", "succeeded":
 		s.mu.Unlock()
 		writeErr(w, 409, "not_resumable", "run is "+run.State)
+		return
+	default:
+		s.mu.Unlock()
+		writeErr(w, 409, "not_resumable", "run is "+run.State+": stop it first")
 		return
 	}
 	// As lux does (resumeRun, requireSecrets): it kept no value, so every
