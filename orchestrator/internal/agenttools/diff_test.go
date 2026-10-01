@@ -326,6 +326,25 @@ func TestRunDiffCountsHunkHeadersAgainstTheLineCap(t *testing.T) {
 	if out.Files[1]["patch"] != "" || out.Files[1]["cut"] != true || out.Files[1]["truncated"] != nil {
 		t.Errorf("two.go: cut %v truncated %v patch %q", out.Files[1]["cut"], out.Files[1]["truncated"], out.Files[1]["patch"])
 	}
+
+	// A hunk storage kept no lines of (past the 5,000-line store cap) still
+	// costs its header: with the budget spent, it is left out and cut.
+	token = f.run(t, "run_h_empty", "implementer", "running")
+	text := one
+	for i := range 4 {
+		filler, _ := gitDiff(fmt.Sprintf("filler%d.go", i), 999, 0) // 1,000 stored lines each
+		text += filler
+	}
+	empty, _ := gitDiff("empty.go", 1, 0)
+	f.storeDiff(t, "run_h_empty", text+empty)
+	out = f.diff(t, token, `{"paths":["one.go","empty.go"]}`)
+	if len(out.Files) != 2 {
+		t.Fatalf("files: %v", paths(out.Files))
+	}
+	if out.Files[0]["patch"] != oneH || out.Files[1]["patch"] != "" || out.Files[1]["truncated"] != true ||
+		out.Files[1]["cut"] != true || !out.Cut || out.LineCap != 2000 {
+		t.Errorf("empty.go: patch %q truncated %v cut %v, top cut %v", out.Files[1]["patch"], out.Files[1]["truncated"], out.Files[1]["cut"], out.Cut)
+	}
 }
 
 func TestRunDiffSelectsManyPathsOnceEachInTheOrderAsked(t *testing.T) {
