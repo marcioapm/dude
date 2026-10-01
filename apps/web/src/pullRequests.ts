@@ -11,11 +11,6 @@ import type { PersistedEvent, PullRequest } from "@dude/domain";
 import { CHECK_RUNS_FORBIDDEN, prCheckDiagnostic, prCheckFailed } from "@dude/domain";
 import { plural } from "@dude/design-system";
 
-/** GitHub logins as a person types them: "@cy, bo". */
-export function parseLogins(text: string): string[] {
-  return text.split(/[\s,]+/).map((l) => l.replace(/^@/, "")).filter(Boolean);
-}
-
 /** A reviewer's latest word, in a person's words. */
 export function reviewWords(state: string): string {
   switch (state.toUpperCase()) {

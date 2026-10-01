@@ -12,18 +12,29 @@
 
 import { useState, type ReactNode } from "react";
 import type { FactKind } from "@dude/design-system/components";
-import { Button, Input, RowMenu, Tooltip } from "@dude/design-system/primitives";
+import { Button, RowMenu, Tooltip } from "@dude/design-system/primitives";
 import { prCheckFailed } from "@dude/domain";
-import type { ApiClient, MergeMethod, PullRequest } from "../api/client.ts";
+import type { ApiClient, MergeMethod, PullRequest, ReviewerCandidate } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
-import { mergeBlockedBy, parseLogins } from "../pullRequests.ts";
+import { mergeBlockedBy } from "../pullRequests.ts";
+import { ReviewerPicker } from "./ReviewerPicker.tsx";
 
 const METHOD_LABEL: Record<MergeMethod, string> = { squash: "Squash and merge", merge: "Create a merge commit", rebase: "Rebase and merge" };
 
 export interface PullRequestActionSlots {
   facts: Partial<Record<FactKind, ReactNode>>;
+  /** Under a fact's line: asking for a review opens under the reviewers. */
+  under: Partial<Record<FactKind, ReactNode>>;
   merge: ReactNode;
   note: ReactNode;
+}
+
+/** "Ask", "Ask Ana", "Ask 2 people". */
+function askLabel(picked: ReadonlyArray<ReviewerCandidate>): string {
+  if (picked.length === 0) return "Ask";
+  if (picked.length > 1) return `Ask ${picked.length} ${picked.some((p) => p.kind === "team") ? "reviewers" : "people"}`;
+  const [one] = picked;
+  return `Ask ${one!.kind === "team" ? one!.name || one!.login : (one!.name || one!.login).split(" ")[0]}`;
 }
 
 export function PullRequestActions({ client, pr, defaultMethod, onChanged, children }: {
@@ -38,7 +49,7 @@ export function PullRequestActions({ client, pr, defaultMethod, onChanged, child
   const [problem, setProblem] = useState<string | null>(null);
   const [method, setMethod] = useState<MergeMethod | null>(null);
   const [asking, setAsking] = useState(false);
-  const [logins, setLogins] = useState("");
+  const [picked, setPicked] = useState<ReviewerCandidate[]>([]);
 
   const act = async (what: string, action: () => Promise<unknown>): Promise<boolean> => {
     setBusy(what);
@@ -56,7 +67,7 @@ export function PullRequestActions({ client, pr, defaultMethod, onChanged, child
   };
 
   const open = pr.state === "open" || pr.state === "draft";
-  if (!open) return <>{children({ facts: {}, merge: null, note: null })}</>;
+  if (!open) return <>{children({ facts: {}, under: {}, merge: null, note: null })}</>;
 
   const blocked = mergeBlockedBy(pr);
   const how = method ?? defaultMethod;
@@ -81,26 +92,30 @@ export function PullRequestActions({ client, pr, defaultMethod, onChanged, child
   if (pr.unresolvedThreads > 0) {
     facts.threads = <a href={`${pr.url}/files`} target="_blank" rel="noreferrer">show</a>;
   }
-  facts.reviews = asking ? (
-    <form className="prAskForm" onSubmit={(e) => {
-      e.preventDefault();
-      const who = parseLogins(logins);
-      if (who.length) {
-        void act("review", () => client.requestReview(pr.id, who)).then((ok) => {
-          if (ok) {
-            setAsking(false);
-            setLogins("");
-          }
-        });
-      }
-    }}>
-      <Input size="sm" autoFocus aria-label="GitHub logins to ask" placeholder="logins, comma-separated" value={logins}
-        onChange={(e) => setLogins(e.target.value)} data-testid="pr-review-logins" />
-      <Button size="sm" type="submit" disabled={busy !== null || !logins.trim()} data-testid="pr-review-send">Ask</Button>
-    </form>
-  ) : (
+  const stopAsking = () => {
+    setAsking(false);
+    setPicked([]);
+  };
+  const ask = () => {
+    if (picked.length === 0 || busy !== null) return;
+    void act("review", () => client.requestReview(pr.id, picked.map((p) => p.login))).then((ok) => ok && stopAsking());
+  };
+  facts.reviews = asking ? null : (
     <Button size="sm" variant="quiet" onClick={() => setAsking(true)} data-testid="pr-request-review">Request review</Button>
   );
+
+  // Asking opens under the reviewers' lines: a picker, and Ask for those picked.
+  const asker = asking ? (
+    <div className="prAsk" data-testid="pr-review-ask">
+      <ReviewerPicker client={client} pullRequestId={pr.id} picked={picked} onChange={setPicked} onSubmit={ask} onCancel={stopAsking} autoFocus />
+      <span className="prAskFoot">
+        <Button size="sm" variant="primary" disabled={busy !== null || picked.length === 0} onClick={ask} data-testid="pr-review-send">
+          {busy === "review" ? "Asking…" : askLabel(picked)}
+        </Button>
+        <Button size="sm" variant="quiet" onClick={stopAsking}>Cancel</Button>
+      </span>
+    </div>
+  ) : null;
 
   const merge = (
     <span className="prMerge">
@@ -121,5 +136,5 @@ export function PullRequestActions({ client, pr, defaultMethod, onChanged, child
 
   const note = problem ? <span className="prProblem" role="alert" data-testid="pr-problem">{problem}</span>
     : blocked ? <span data-testid="pr-blocked">{blocked}</span> : null;
-  return <>{children({ facts, merge, note })}</>;
+  return <>{children({ facts, under: { reviews: asker }, merge, note })}</>;
 }
