@@ -33,7 +33,8 @@ export function ReviewerPicker({ client, pullRequestId, asked, picked, onChange,
   size?: "sm" | "md";
 }) {
   const find = useCallback((q: string) => client.reviewerCandidates(pullRequestId, q), [client, pullRequestId]);
-  const exclude = useMemo(() => new Set(picked.map((p) => p.login)), [picked]);
+  // GitHub logins are one person whatever their case: a saved "Ana" is GitHub's "ana".
+  const exclude = useMemo(() => new Set(picked.map((p) => p.login.toLowerCase())), [picked]);
   return (
     <>
       {picked.length > 0 ? (
@@ -49,7 +50,7 @@ export function ReviewerPicker({ client, pullRequestId, asked, picked, onChange,
         clearOnPick
         find={find}
         exclude={exclude}
-        optionKey={(c) => c.login}
+        optionKey={(c) => c.login.toLowerCase()}
         group={(c) => (c.reason ? SUGGESTED : c.kind === "team" ? "Teams" : "People")}
         renderGroup={(g) => <>{g === SUGGESTED ? <Icon name="github" size={12} /> : null}{g}</>}
         renderOption={(c) => (
