@@ -152,6 +152,11 @@ func TestRunDiffPagesTheList(t *testing.T) {
 	if !slices.Equal(paths(out.Files), []string{"logo.png"}) || out.HasMore || out.Offset != 4 {
 		t.Errorf("last page: %v more=%v", paths(out.Files), out.HasMore)
 	}
+	// A page that ends exactly at the last file leaves none for another.
+	out = f.diff(t, token, `{"limit":2,"offset":3}`)
+	if !slices.Equal(paths(out.Files), []string{"d.go", "logo.png"}) || out.HasMore {
+		t.Errorf("a page ending at the last file: %v more=%v", paths(out.Files), out.HasMore)
+	}
 	out = f.diff(t, token, `{"offset":9}`)
 	if len(out.Files) != 0 || out.HasMore || out.TotalFiles != 5 {
 		t.Errorf("past the end: %v more=%v", paths(out.Files), out.HasMore)
