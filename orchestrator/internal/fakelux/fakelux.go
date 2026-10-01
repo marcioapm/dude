@@ -370,6 +370,16 @@ type Server struct {
 	// agent's records arrive.
 	InputGate chan struct{}
 
+	// Pools is what GET /v1/pools lists; nil is DefaultPools. POST
+	// /v1/pools adds one, or updates the one of its name; DELETE
+	// /v1/pools/{name} removes one. A submit naming a placement.poolId not
+	// in it is refused (422 unknown_pool), as lux does.
+	Pools    []lux.Pool
+	nextPool int
+	// MemoryShare is the part of what a Run asks for that its container is
+	// given, reported as each placement's memoryLimit (a newer lux); zero
+	// reports none, as today's lux.
+	MemoryShare float64
 	// closed ends everything the fake waits on in the background (Close).
 	closed    chan struct{}
 	closeOnce sync.Once
@@ -552,6 +562,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/runs/{id}/servers/{name}", s.removeServer)
 	mux.HandleFunc("GET /v1/runs/{id}/servers/{name}/log", s.serverLog)
 	mux.HandleFunc("GET /v1/runs/{id}/cost", s.getCost)
+	mux.HandleFunc("GET /v1/pools", s.listPools)
+	mux.HandleFunc("POST /v1/pools", s.putPool)
+	mux.HandleFunc("DELETE /v1/pools/{name}", s.deletePool)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+s.Key {
 			writeErr(w, 401, "unauthorized", "invalid API key")
@@ -578,6 +591,11 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 		run := s.runs[id]
 		s.mu.Unlock()
 		writeJSON(w, 200, s.view(run))
+		return
+	}
+	if msg := s.placementProblem(raw); msg != "" {
+		s.mu.Unlock()
+		writeErr(w, 422, lux.CodeUnknownPool, msg)
 		return
 	}
 	s.next++
@@ -918,9 +936,14 @@ func head(repo, ref string) string {
 func (s *Server) view(run *Run) map[string]any {
 	placements := []any{}
 	host := ""
+	limit := s.memoryLimit(run)
 	for _, p := range run.placements {
-		placements = append(placements, map[string]any{"epoch": p.Epoch, "hostName": p.HostName, "state": p.State,
-			"workloadStartedAt": p.WorkloadStartedAt, "exitedAt": p.ExitedAt, "snapshotDoneAt": p.SnapshotDoneAt})
+		view := map[string]any{"epoch": p.Epoch, "hostName": p.HostName, "state": p.State,
+			"workloadStartedAt": p.WorkloadStartedAt, "exitedAt": p.ExitedAt, "snapshotDoneAt": p.SnapshotDoneAt}
+		if limit != nil {
+			view["memoryLimit"] = *limit
+		}
+		placements = append(placements, view)
 		if p.Epoch == run.Epoch && p.ExitedAt == nil {
 			host = p.HostName
 		}

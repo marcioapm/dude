@@ -21,13 +21,15 @@ import {
 /**
  * The agents a person configures, in the order they are shown. The fixer
  * is the implementer's model told something else: its own prompt, and
- * settings of its own only where it is given them.
+ * settings of its own only where it is given them. The investigator reads
+ * before anything is written; like the others it has a model, effort, time
+ * limit and machine, and it follows no other role.
  */
-export const SETTINGS_ROLES = ["implementer", "reviewer", "fixer", "simplifier", "qa_browser"] as const;
+export const SETTINGS_ROLES = ["investigator", "implementer", "reviewer", "fixer", "simplifier", "qa_browser"] as const;
 export type SettingsRole = (typeof SETTINGS_ROLES)[number];
 
-/** Roles with a prompt: the configured ones, and the investigator. */
-export const promptRoleSchema = z.enum([...SETTINGS_ROLES, "investigator"]);
+/** Roles with a prompt: every configured one. */
+export const promptRoleSchema = z.enum(SETTINGS_ROLES);
 export type PromptRole = z.infer<typeof promptRoleSchema>;
 
 export const SETTINGS_ROLE_LABEL: Record<PromptRole, string> = {
@@ -93,6 +95,13 @@ export interface RoleSettings {
   model: Setting<string | null>;
   effort: Setting<Effort | null>;
   timeLimitMinutes: Setting<number | null>;
+  /**
+   * A machine size's id; null: none set at any layer, so the organization's
+   * default size. On a project, `organization` is what the organization's
+   * layer says (what a Reset goes back to); `followsImplementer` marks a
+   * fixer's value that is the implementer's.
+   */
+  machineSize: Setting<string | null> & { organization?: string | null; followsImplementer?: boolean };
   /** Null for a role that is always on. */
   enabled: Setting<boolean> | null;
   prompt: {
@@ -130,6 +139,7 @@ export const settingsPatchSchema = z
             model: nullable(modelSelectionSchema),
             effort: nullable(effortSchema),
             timeLimitMinutes: nullable(timeLimitMinutesSchema),
+            machineSize: nullable(z.string().min(1).max(100)),
             enabled: nullable(z.boolean()),
           })
           .strict(),

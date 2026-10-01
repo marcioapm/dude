@@ -1,0 +1,159 @@
+/* ProportionBar: a whole split into parts by share. Square: it is structure. */
+.proportion {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-6);
+  margin: 0;
+  min-width: 0;
+}
+.bar {
+  display: flex;
+  gap: var(--ds-space-2);
+  height: var(--ds-size-chip);
+  min-width: 0;
+}
+.segment {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-basis: 0;
+  min-width: var(--ds-space-8);
+  overflow: hidden;
+  background: var(--ds-tone-info-bg);
+  color: var(--ds-tone-info-fg);
+}
+/* Kept back: hatched on the sunken shade, so it reads as nobody's in grayscale too. */
+.reserved,
+.swatch {
+  background:
+    repeating-linear-gradient(135deg, var(--ds-color-border-strong) 0 3px, transparent 3px 6px),
+    var(--ds-color-sunken);
+}
+.segmentLabel {
+  padding: 0 var(--ds-space-6);
+  font-size: var(--ds-text-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.legend {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--ds-space-12);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.legendKey {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  min-width: 0;
+}
+.legendTotal {
+  flex-shrink: 0;
+}
+.swatch {
+  display: inline-block;
+  width: var(--ds-space-12);
+  height: var(--ds-space-12);
+  flex-shrink: 0;
+}
+
+/* FitBar: a short track and the words. */
+.fit {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  white-space: nowrap;
+}
+.fitTrack {
+  display: inline-block;
+  width: 40px;
+  height: 3px;
+  background: var(--ds-color-border);
+  flex-shrink: 0;
+}
+.fitFill {
+  display: block;
+  height: 100%;
+  background: var(--ds-tone-success-solid);
+}
+.fitText {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.fitUnknown {
+  color: var(--ds-color-text-muted);
+}
+
+/* MachineChip: a chip in the session header's subtitle line. */
+.chip {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: var(--ds-space-6);
+  height: var(--ds-size-chip);
+  max-width: 100%;
+  padding: 0 var(--ds-space-8);
+  background: var(--ds-color-raised);
+  border: 0;
+  border-radius: var(--ds-radius-control);
+  color: var(--ds-color-text-secondary);
+  font: inherit;
+  font-size: var(--ds-text-xs);
+  white-space: nowrap;
+  min-width: 0;
+}
+.chip:hover,
+.chip[data-state$="open"] {
+  background: var(--ds-color-overlay);
+  color: var(--ds-color-text-primary);
+}
+.chipIcon {
+  color: var(--ds-color-text-muted);
+}
+.chipName {
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
+}
+.chipSpec {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--ds-color-text-muted);
+}
+
+.usedBy {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-width: 0;
+}
+.usedFaces {
+  display: inline-flex;
+  gap: var(--ds-space-2);
+  flex-shrink: 0;
+}
+/* Words wrap rather than cut: "Tester · and any with none set" is read whole. */
+.usedWords {
+  /* A floor, so a table that shares out its width never leaves a character per line. */
+  min-width: 12ch;
+  white-space: normal;
+  font-size: var(--ds-text-sm);
+  line-height: var(--ds-leading-snug);
+  color: var(--ds-color-text-secondary);
+}
+
+.tip {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+  padding: var(--ds-space-4) 0;
+}
+.tipTitle {
+  font-weight: var(--ds-weight-semibold);
+}
+.tipBody {
+  line-height: var(--ds-leading-snug);
+}

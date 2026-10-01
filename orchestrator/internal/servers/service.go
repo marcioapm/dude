@@ -84,6 +84,9 @@ type RunView struct {
 	PreviewStage      *string  `json:"previewStage"`
 	ParksAfterMinutes *float64 `json:"parksAfterMinutes"`
 	TerminalURL       *string  `json:"terminalUrl"`
+	// The memory limit lux gave its current container, in bytes, when lux
+	// reports one: what the Run's size asked for less the host's share.
+	MemoryLimit *int64 `json:"memoryLimit"`
 }
 
 type PersonRef struct {
@@ -245,6 +248,7 @@ func (s *Service) view(ctx context.Context, r *runRow, recipes json.RawMessage) 
 		if luxRun, err = s.Lux.Get(ctx, r.LuxRunID); err == nil {
 			v.LuxState = luxRun.State
 			v.Host = nonEmpty(luxRun.Host)
+			v.MemoryLimit = luxRun.MemoryLimit()
 		} else {
 			s.Log.Debug("reading the run from lux", "run", r.ID, "error", err)
 		}

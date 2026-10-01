@@ -34,6 +34,8 @@ type roleLayer struct {
 	Effort           *string `json:"effort"`
 	TimeLimitMinutes *int    `json:"timeLimitMinutes"`
 	Context          *string `json:"context"`
+	// Resolved by Sizes.ForRole, which passes over ids that are gone.
+	MachineSize *string `json:"machineSize"`
 }
 
 // modelFallback is where a role with no settings of its own takes them

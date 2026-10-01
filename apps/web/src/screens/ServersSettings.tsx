@@ -8,13 +8,22 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { HostChips, ServerRecipeDialog, ServerRecipeTable, SettingRow, SettingSource, SettingsHeader, SettingsMeta, SettingsNote, SettingsSection } from "@dude/design-system/components";
 import { formatTimestamp, Icon, PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES } from "@dude/design-system";
 import { Button, Callout, Dialog, EmptyState, FormActions, Input, RowMenu, Select, Spinner } from "@dude/design-system/primitives";
-import { egressProblem, type PreviewSettings, type Recipe, type RecipeInput } from "@dude/domain";
+import { egressProblem, type MachineSizeWithUse, type PreviewSettings, type Recipe, type RecipeInput } from "@dude/domain";
 import type { ApiClient, ProjectDetail } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
+import { MachineSelect } from "./MachinesSettings.tsx";
 
 const IDLE_TIMEOUTS = [5, 10, 15, 30, 60, 120, 240];
 
-export function ServersSettingsPage({ client, project, canEdit, orgName, onCount }: { client: ApiClient; project: ProjectDetail; canEdit: boolean; orgName: string; onCount?: ((n: number) => void) | undefined }) {
+export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, onCount }: {
+  client: ApiClient;
+  project: ProjectDetail;
+  canEdit: boolean;
+  orgName: string;
+  /** The organisation's sizes, as the settings screen loaded them; null while loading. */
+  sizes: readonly MachineSizeWithUse[] | null;
+  onCount?: ((n: number) => void) | undefined;
+}) {
   const [recipes, setRecipes] = useState<Recipe[] | null>(null);
   const [previews, setPreviews] = useState<PreviewSettings | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
@@ -25,6 +34,7 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, onCount
   const previewSave = useSave();
   const [previewRound, setPreviewRound] = useState(0);
   const addButton = useRef<HTMLButtonElement>(null);
+  const defaultSize = sizes?.find((s) => s.isDefault) ?? null;
 
   const latest = useRef(0);
   const load = useCallback(async () => {
@@ -99,6 +109,21 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, onCount
       <SettingsSection title="Branch previews" data-testid="preview-settings">
         {recipes.length === 0 ? <Callout tone="neutral">Previewing a branch needs at least one server. Add one above.</Callout> : null}
         {previewSave.problem ? <Callout tone="danger">{previewSave.problem}</Callout> : null}
+        <SettingRow label="Machine" help="The size a preview runs on: one run with every server that starts in previews." htmlFor="preview-machine" data-testid="preview-machine-row"
+          source={previews.machineSize && sizes?.some((s) => s.id === previews.machineSize)
+            ? <SettingSource source="project" from={orgName} inherited={defaultSize ? `default size, ${defaultSize.name}` : "default size"}
+                onReset={canEdit ? () => savePreviews({ machineSize: null }, "Machine reset") : undefined} />
+            : <SettingSource source="organization" from={`${orgName}’s default size`} />}>
+          {sizes ? (
+            <MachineSelect id="preview-machine" testId="preview-machine" sizes={sizes} value={previews.machineSize} inherited={defaultSize}
+              inheritLabel={`${orgName}’s default`} inheritDescription="Follows whichever size is the default"
+              footer={`Sizes are ${orgName}’s.`} disabled={!canEdit || previewSave.busy}
+              onChange={(machineSize) => savePreviews({ machineSize }, machineSize ? "Machine saved" : "Machine reset")} />
+          ) : null}
+        </SettingRow>
+        <SettingsNote icon="info">
+          A preview is one run with every server that starts in previews. Servers someone starts from a session run inside that agent’s machine instead, sharing its CPUs and memory.
+        </SettingsNote>
         <SettingRow label="Image" help="The container a preview run starts in. The project’s runner image unless changed here."
           source={previews.image === null ? <SettingSource source="organization" from="the project’s runner" /> : <SettingSource source="project" from="the project’s runner" onReset={canEdit ? () => savePreviews({ image: null }, "Image reset") : undefined} />}>
           <ImageField key={previewRound} value={previews.image} fallback={project.runtimeImage} disabled={!canEdit || previewSave.busy} onSave={(image) => savePreviews({ image }, "Image saved")} />

@@ -19,6 +19,7 @@ import {
   EventTypes,
   newId,
   promptRoleSchema,
+  resolveMachineSize,
   ROLE_ENABLED_BY,
   savePromptSchema,
   SETTINGS_ROLES,
@@ -44,6 +45,7 @@ import { badRequest, HttpError, json, notFound, parseBody } from "../http.ts";
 import { auditActor } from "../auth.ts";
 import type { RequestContext, Router } from "../router.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
+import { listSizes, requireSize } from "./machines.ts";
 
 type Json = Record<string, unknown>;
 
@@ -193,6 +195,22 @@ async function settingsResponse(ctx: RequestContext, projectId?: string): Promis
       }
       return { value: null as never, source: "organization" as SettingSource };
     };
+    /**
+     * The size, by the one rule (resolveMachineSize): null when it is the
+     * default's. With what the organization says under a project's, and
+     * whether the fixer's is the implementer's.
+     */
+    const sizes = await listSizes(scope);
+    const machine = (role: SettingsRole): RoleSettings["machineSize"] => {
+      const { sizeId, from } = resolveMachineSize(role, { project: layers.project?.agentModels, organization: layers.org.agentModels }, sizes);
+      const orgOnly = resolveMachineSize(role, { organization: layers.org.agentModels }, sizes);
+      return {
+        value: from === "default" ? null : sizeId,
+        source: from === "project" ? "project" : "organization",
+        ...(role === "fixer" ? { followsImplementer: from === "implementer" } : {}),
+        ...(layers.project ? { organization: orgOnly.from === "default" ? null : orgOnly.sizeId } : {}),
+      };
+    };
     const roles = Object.fromEntries(
       SETTINGS_ROLES.map((role): [SettingsRole, RoleSettings] => {
         const enabledBy = ROLE_ENABLED_BY[role as keyof typeof ROLE_ENABLED_BY];
@@ -204,6 +222,7 @@ async function settingsResponse(ctx: RequestContext, projectId?: string): Promis
             model: field(role, "model"),
             effort: field(role, "effort"),
             timeLimitMinutes: field(role, "timeLimitMinutes"),
+            machineSize: machine(role),
             enabled: enabledBy ? delivery[enabledBy] : null,
             prompt: {
               organization: promptState(orgCurrent, builtin[role]),
@@ -262,6 +281,13 @@ function applyPatch(models: AgentModels, policy: Json, patch: SettingsPatch): { 
   return { models: nextModels as AgentModels, policy: applyKeys(policy, policyChanges) };
 }
 
+/** Every machine size a patch names must be the organization's. */
+async function checkSizes(scope: OrgScope, patch: SettingsPatch) {
+  for (const change of Object.values(patch.roles ?? {})) {
+    if (change?.machineSize) await requireSize(scope, change.machineSize);
+  }
+}
+
 async function recordSettings(scope: OrgScope, ctx: RequestContext, projectId: string | null, patch: SettingsPatch) {
   await appendInScope(scope, {
     eventType: EventTypes.SettingsUpdated,
@@ -283,6 +309,7 @@ async function patchOrganizationSettings(ctx: RequestContext): Promise<Response>
   await withOrg(ctx.principal.organizationId, async (scope) => {
     const layers = await loadLayers(scope, undefined, true);
     if (!layers) throw notFound("organization not found");
+    await checkSizes(scope, patch);
     const next = applyPatch(layers.org.agentModels, layers.org.deliveryPolicy, patch);
     await scope.sql`
       UPDATE organizations SET default_agent_models = ${next.models}::jsonb, delivery_policy = ${next.policy}::jsonb,
@@ -304,6 +331,7 @@ async function patchProjectSettings(ctx: RequestContext): Promise<Response> {
   await withOrg(ctx.principal.organizationId, async (scope) => {
     const layers = await loadLayers(scope, projectId, true);
     if (!layers?.project) throw notFound(`project ${projectId} not found`);
+    await checkSizes(scope, patch);
     const next = applyPatch(layers.project.agentModels, layers.project.deliveryPolicy, patch);
     await scope.sql`
       UPDATE projects SET agent_models = ${next.models}::jsonb, delivery_policy = ${next.policy}::jsonb, updated_at = now()
