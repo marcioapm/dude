@@ -747,7 +747,7 @@ func (p *Previews) retireRun(ctx context.Context, r wakeRun) error {
 // submitWoken submits the preview's Run (a servers-only spec: its servers
 // are lux's own, attached) and attaches every server to it.
 func (p *Previews) submitWoken(ctx context.Context, r wakeRun) error {
-	spec, branch, machine, err := p.spec(ctx, r.previewRun)
+	spec, branch, machine, got, err := p.spec(ctx, r.previewRun)
 	if phases.IsLoginUnavailable(err) {
 		return p.releaseWake(ctx, r, phases.LoginRetry)
 	}
@@ -782,8 +782,8 @@ func (p *Previews) submitWoken(ctx context.Context, r wakeRun) error {
 		// is a failed start; StartBefore 0 makes every event of it newer
 		// than the submit's answer.
 		_, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, lux_repositories = $4, branch = NULLIF($5, ''),
-			machine = $7::jsonb, started_at = COALESCE(started_at, now()), lux_start_event = 1
-			WHERE id = $1 AND lux_run_id IS NULL AND lux_generation = $6`, r.ID, lr.ID, lr.State, db.NonNil(repos), branch, r.Generation, machine)
+			machine = $7::jsonb, image = $8::jsonb, started_at = COALESCE(started_at, now()), lux_start_event = 1
+			WHERE id = $1 AND lux_run_id IS NULL AND lux_generation = $6`, r.ID, lr.ID, lr.State, db.NonNil(repos), branch, r.Generation, machine, got)
 		return err
 	}); err != nil {
 		return err
