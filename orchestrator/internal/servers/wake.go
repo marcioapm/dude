@@ -73,9 +73,9 @@ type wakeRun struct {
 // age, $2 parkCheckEvery, $3 wakeClaimFor and $5 parkSweepEvery, in
 // seconds; $4 the page size. The inner query computes each row's flags once
 // (its servers' counts in one lateral aggregate); the outer one keeps the
-// rows with something to do and sorts those with work due first, so running
-// previews that are only re-followed do not push a due wake, park or end
-// past the page.
+// rows with something to do and sorts them: a wake, a sync or an end due
+// first (someone may be waiting on it), then a park check due, then the
+// running previews that are only re-followed.
 //
 // The status/lux_stop_reason conjunct is what runs_wakeable_live_idx and
 // runs_wakeable_open_idx (064) serve, so the scan follows the live previews
@@ -111,8 +111,8 @@ const wakeableSelect = `SELECT id, organization_id, project_id, task_id, status,
 	WHERE status IN ('pending', 'completed', 'failed', 'aborted') OR task_ended OR wake_due OR sync_wanted_at IS NOT NULL OR reap
 	   OR (status IN ('scheduled', 'starting', 'running') AND lux_run_id <> '')
 	   OR (status = 'paused' AND lux_run_id <> '' AND lux_state NOT IN ('stopped', 'failed', 'lost'))
-	ORDER BY (status NOT IN ('scheduled', 'starting', 'running') OR task_ended OR wake_due OR sync_wanted_at IS NOT NULL
-	          OR park_due) DESC, created_at
+	ORDER BY (status NOT IN ('scheduled', 'starting', 'running') OR task_ended OR wake_due OR sync_wanted_at IS NOT NULL) DESC,
+	         park_due DESC, created_at
 	LIMIT $4`
 
 // The page a wakeable sweep takes at most; Previews.SweepLimit overrides it.
