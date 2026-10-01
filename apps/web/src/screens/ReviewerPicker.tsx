@@ -17,6 +17,9 @@ const REASON: Record<NonNullable<ReviewerCandidate["reason"]>, string> = {
   commented: "Commented on this pull request",
 };
 
+// GitHub logins are one person whatever their case: a saved "Ana" is GitHub's "ana".
+const loginKey = (login: string) => login.toLowerCase();
+
 const user = (c: ReviewerCandidate) => ({ login: c.login, name: c.name, avatarUrl: c.avatarUrl, team: c.kind === "team" });
 
 export function ReviewerPicker({ client, pullRequestId, asked, picked, onChange, onSubmit, onCancel, autoFocus, size = "sm" }: {
@@ -33,8 +36,7 @@ export function ReviewerPicker({ client, pullRequestId, asked, picked, onChange,
   size?: "sm" | "md";
 }) {
   const find = useCallback((q: string) => client.reviewerCandidates(pullRequestId, q), [client, pullRequestId]);
-  // GitHub logins are one person whatever their case: a saved "Ana" is GitHub's "ana".
-  const exclude = useMemo(() => new Set(picked.map((p) => p.login.toLowerCase())), [picked]);
+  const exclude = useMemo(() => new Set(picked.map((p) => loginKey(p.login))), [picked]);
   return (
     <>
       {picked.length > 0 ? (
@@ -50,13 +52,13 @@ export function ReviewerPicker({ client, pullRequestId, asked, picked, onChange,
         clearOnPick
         find={find}
         exclude={exclude}
-        optionKey={(c) => c.login.toLowerCase()}
+        optionKey={(c) => loginKey(c.login)}
         group={(c) => (c.reason ? SUGGESTED : c.kind === "team" ? "Teams" : "People")}
         renderGroup={(g) => <>{g === SUGGESTED ? <Icon name="github" size={12} /> : null}{g}</>}
         renderOption={(c) => (
           <GitHubUserLine user={user(c)} detail={c.reason ? REASON[c.reason] : c.members ? plural(c.members, "member") : undefined} />
         )}
-        optionDisabled={(c) => (asked?.has(c.login.toLowerCase()) ? "Already asked" : null)}
+        optionDisabled={(c) => (asked?.has(loginKey(c.login)) ? "Already asked" : null)}
         empty={(q) => `Nobody who can review matches “${q}”.`}
         onPick={(c) => onChange([...picked, c])}
         onBackspaceEmpty={() => onChange(picked.slice(0, -1))}
