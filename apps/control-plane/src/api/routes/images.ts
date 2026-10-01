@@ -382,8 +382,9 @@ async function discardDraft(ctx: RequestContext): Promise<Response> {
 async function buildImage(ctx: RequestContext): Promise<Response> {
   await requireOrgAdmin(ctx);
   const id = ctx.params.id!;
+  // No body, or an empty object: build the draft as saved.
   const raw = (await ctx.request.clone().text()).trim();
-  const input = raw ? ((await parseBody(ctx.request, imageDraftSchema)) as ImageDraftInput) : null;
+  const input = raw && raw !== "{}" ? ((await parseBody(ctx.request, imageDraftSchema)) as ImageDraftInput) : null;
   if (!builderInfo().available) {
     throw new HttpError(503, "image builds are not configured on this dude: DUDE_LAYER_IMAGE is unset", "builder_unavailable");
   }
