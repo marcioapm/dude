@@ -40,7 +40,7 @@ describe("pull request actions", () => {
 
 describe("asking for a review", () => {
   test("picks from GitHub's suggestions and a search, and asks for them together", async () => {
-    const { act, click, mount, settle } = await import("./dom.ts");
+    const { act, click, mount, settle, type } = await import("./dom.ts");
     const { PullRequestPanel } = await import("@dude/design-system/components");
     const asked: string[][] = [];
     const found: string[] = [];
@@ -74,11 +74,7 @@ describe("asking for a review", () => {
     await settle();
     expect(q('[data-testid="reviewer-picks"]').textContent).toContain("Tom Okafor");
 
-    await act(async () => {
-      const field = q<HTMLInputElement>("[role=combobox]");
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, "an");
-      field.dispatchEvent(new Event("input", { bubbles: true }));
-    });
+    await type(q("[role=combobox]"), "an");
     await settle(250);
     expect(options().map((o) => o?.slice(0, 2))).toEqual(["HL", "PL"]);
     await key("ArrowDown");
@@ -95,7 +91,7 @@ describe("asking for a review", () => {
 
 describe("the reviewers a setting names", () => {
   test("one saved in another case is not offered again", async () => {
-    const { act, mount, settle } = await import("./dom.ts");
+    const { mount, settle, type } = await import("./dom.ts");
     const { ReviewerPicker } = await import("../src/screens/ReviewerPicker.tsx");
     const client = {
       reviewerCandidates: async () => [{ kind: "user", login: "ana", name: "Ana Ribeiro" }, { kind: "user", login: "hanna", name: "Hanna Lindqvist" }],
@@ -103,11 +99,7 @@ describe("the reviewers a setting names", () => {
     const { container, unmount } = await mount(
       <ReviewerPicker client={client} pullRequestId={null} picked={[{ kind: "user", login: "Ana" }]} onChange={() => {}} />,
     );
-    await act(async () => {
-      const field = container.querySelector<HTMLInputElement>("[role=combobox]")!;
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, "an");
-      field.dispatchEvent(new Event("input", { bubbles: true }));
-    });
+    await type(container.querySelector("[role=combobox]")!, "an");
     await settle(250);
     expect([...container.querySelectorAll("[role=option]")].map((o) => o.textContent?.slice(0, 2))).toEqual(["HL"]);
     await unmount();
