@@ -189,12 +189,42 @@ func TestAnECROutageDelaysAPreview(t *testing.T) {
 
 // countingLux is the world's lux client, counting Gets, Resumes and
 // Submits asked (whatever lux answers); a set refuseResume answers the
-// next Resume instead of lux.
+// next Resume instead of lux, a set failStop the next Stop, and a set
+// getAs rewrites the next Get's answer.
 type countingLux struct {
 	lux.Client
 	mu                     sync.Mutex
 	gets, resumes, submits int
-	refuseResume           error
+	// GET /v1/servers/{id} and GET /v1/servers asked.
+	serverGets, serverLists int
+	refuseResume            error
+	failStop                error
+	getAs                   func(*lux.Run)
+}
+
+func (c *countingLux) GetServer(ctx context.Context, id string) (lux.TenantServer, error) {
+	c.mu.Lock()
+	c.serverGets++
+	c.mu.Unlock()
+	return c.Client.GetServer(ctx, id)
+}
+
+func (c *countingLux) ListServers(ctx context.Context, hostname string, labels ...string) ([]lux.TenantServer, error) {
+	c.mu.Lock()
+	c.serverLists++
+	c.mu.Unlock()
+	return c.Client.ListServers(ctx, hostname, labels...)
+}
+
+func (c *countingLux) Stop(ctx context.Context, id string) error {
+	c.mu.Lock()
+	fail := c.failStop
+	c.failStop = nil
+	c.mu.Unlock()
+	if fail != nil {
+		return fail
+	}
+	return c.Client.Stop(ctx, id)
 }
 
 func (c *countingLux) Submit(ctx context.Context, spec lux.Spec, key string) (lux.Run, error) {
@@ -207,8 +237,14 @@ func (c *countingLux) Submit(ctx context.Context, spec lux.Spec, key string) (lu
 func (c *countingLux) Get(ctx context.Context, id string) (lux.Run, error) {
 	c.mu.Lock()
 	c.gets++
+	rewrite := c.getAs
+	c.getAs = nil
 	c.mu.Unlock()
-	return c.Client.Get(ctx, id)
+	r, err := c.Client.Get(ctx, id)
+	if err == nil && rewrite != nil {
+		rewrite(&r)
+	}
+	return r, err
 }
 
 func (c *countingLux) Resume(ctx context.Context, id string, in lux.ResumeInput) (lux.Run, error) {

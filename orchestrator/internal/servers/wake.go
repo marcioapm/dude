@@ -48,6 +48,9 @@ const (
 	// How soon a running preview with one server idle and another in use
 	// is checked again.
 	parkCheckEvery = 30 * time.Second
+	// How often a running preview with no idle mark is checked for servers
+	// lux never reports idle (never ready: starting, unreachable).
+	parkSweepEvery = 5 * time.Minute
 )
 
 // wakeRun is a wakeable preview as the sweep reads it.
@@ -63,56 +66,54 @@ type wakeRun struct {
 	Reap bool
 	// Something to clean up in lux: servers not deleted, a Run not cancelled.
 	LuxLeft bool
-	// Its idle servers are to be checked: every one is idle, or the last
-	// check is parkCheckEvery old.
+	// Its servers are to be checked for idleness (wakeableSelect's park_due).
 	ParkDue bool
 }
 
 // wakeableSelect: wakeable previews with something to do. $1 is the reap
-// age, $2 parkCheckEvery and $3 wakeClaimFor, in seconds; $4 the page size.
+// age, $2 parkCheckEvery, $3 wakeClaimFor and $5 parkSweepEvery, in
+// seconds; $4 the page size. The inner query computes each row's flags once
+// (its servers' counts in one lateral aggregate); the outer one keeps the
+// rows with something to do and sorts those with work due first, so running
+// previews that are only re-followed do not push a due wake, park or end
+// past the page.
 //
 // The status/lux_stop_reason conjunct is what runs_wakeable_live_idx and
 // runs_wakeable_open_idx (064) serve, so the scan follows the live previews
 // and not every preview ever made. An ended preview is taken until endInLux
 // marks it lux_stop_reason = 'cancel' (nothing of it left in lux).
-// Rows with work due sort first: running previews that are only re-followed
-// must not push a due wake, park or end past the page.
-const wakeableSelect = `SELECT r.id, r.organization_id, r.project_id, r.task_id, r.status::text,
-		COALESCE(r.lux_run_id, ''), COALESCE(r.lux_state, ''), t.status IN ('done', 'failed', 'aborted'),
-		r.wake_wanted_at, r.sync_wanted_at, r.lux_generation, r.lux_repositories,
-		(SELECT count(*) FROM preview_servers s WHERE s.run_id = r.id AND s.deleted_at IS NULL),
-		(SELECT count(*) FROM preview_servers s WHERE s.run_id = r.id AND s.deleted_at IS NULL AND s.idle_at IS NOT NULL),
-		r.status IN ('pending', 'paused') AND COALESCE(r.lux_state, '') NOT IN ('running', 'starting', 'resuming', 'scheduled', 'submitted', 'stopping')
-			AND COALESCE((SELECT max(s.last_woken_at) FROM preview_servers s WHERE s.run_id = r.id), r.created_at)
-				< now() - make_interval(secs => $1),
-		EXISTS (SELECT 1 FROM preview_servers s WHERE s.run_id = r.id AND s.deleted_at IS NULL)
-			OR (r.lux_run_id IS NOT NULL AND r.lux_stop_reason IS DISTINCT FROM 'cancel'),
-		r.park_checked_at IS NULL OR r.park_checked_at < now() - make_interval(secs => $2)
-			OR NOT EXISTS (SELECT 1 FROM preview_servers s WHERE s.run_id = r.id AND s.deleted_at IS NULL AND s.idle_at IS NULL)
-	FROM runs r JOIN tasks t ON t.id = r.task_id
-	WHERE r.kind = 'preview' AND r.wakeable
-	  AND (r.status IN ('pending', 'scheduled', 'starting', 'running', 'paused') OR r.lux_stop_reason IS DISTINCT FROM 'cancel')
-	  AND (r.next_attempt_at IS NULL OR r.next_attempt_at <= now())
-	  AND (r.status = 'pending'
-	       OR (r.status IN ('paused', 'scheduled', 'starting', 'running') AND (
-	             t.status IN ('done', 'failed', 'aborted')
-	             OR (r.wake_wanted_at IS NOT NULL AND (r.wake_claimed_at IS NULL OR r.wake_claimed_at < now() - make_interval(secs => $3)))
-	             OR r.sync_wanted_at IS NOT NULL
-	             OR (r.status = 'running' AND EXISTS (SELECT 1 FROM preview_servers s WHERE s.run_id = r.id AND s.deleted_at IS NULL AND s.idle_at IS NOT NULL)
-	                 AND (r.park_checked_at IS NULL OR r.park_checked_at < now() - make_interval(secs => $2)
-	                      OR NOT EXISTS (SELECT 1 FROM preview_servers s WHERE s.run_id = r.id AND s.deleted_at IS NULL AND s.idle_at IS NULL)))
-	             OR (r.status IN ('scheduled', 'starting', 'running') AND r.lux_run_id IS NOT NULL)
-	             OR (r.status = 'paused' AND r.lux_run_id IS NOT NULL AND r.lux_state IS DISTINCT FROM 'stopped'
-	                 AND r.lux_state IS DISTINCT FROM 'failed' AND r.lux_state IS DISTINCT FROM 'lost')
-	             OR (r.status = 'paused' AND COALESCE(r.lux_state, '') NOT IN ('running', 'starting', 'resuming', 'scheduled', 'submitted', 'stopping')
-	                 AND COALESCE((SELECT max(s.last_woken_at) FROM preview_servers s WHERE s.run_id = r.id), r.created_at)
-	                     < now() - make_interval(secs => $1))))
-	       OR r.status IN ('completed', 'failed', 'aborted'))
-	ORDER BY (r.status NOT IN ('scheduled', 'starting', 'running') OR r.wake_wanted_at IS NOT NULL
-	          OR r.sync_wanted_at IS NOT NULL OR t.status IN ('done', 'failed', 'aborted')
-	          OR (r.status = 'running' AND (r.park_checked_at IS NULL OR r.park_checked_at < now() - make_interval(secs => $2))
-	              AND EXISTS (SELECT 1 FROM preview_servers s WHERE s.run_id = r.id AND s.deleted_at IS NULL AND s.idle_at IS NOT NULL))) DESC,
-	         r.created_at
+const wakeableSelect = `SELECT id, organization_id, project_id, task_id, status, lux_run_id, lux_state, task_ended,
+		wake_wanted_at, sync_wanted_at, lux_generation, lux_repositories, live, idle, reap, lux_left, park_due
+	FROM (SELECT r.id, r.organization_id, r.project_id, r.task_id, r.status::text AS status, r.created_at,
+			COALESCE(r.lux_run_id, '') AS lux_run_id, COALESCE(r.lux_state, '') AS lux_state,
+			t.status IN ('done', 'failed', 'aborted') AS task_ended,
+			r.wake_wanted_at, r.sync_wanted_at, r.lux_generation, r.lux_repositories, ps.live, ps.idle,
+			r.wake_wanted_at IS NOT NULL
+				AND (r.wake_claimed_at IS NULL OR r.wake_claimed_at < now() - make_interval(secs => $3)) AS wake_due,
+			r.status IN ('pending', 'paused')
+				AND COALESCE(r.lux_state, '') NOT IN ('running', 'starting', 'resuming', 'scheduled', 'submitted', 'stopping')
+				AND COALESCE(ps.woken, r.created_at) < now() - make_interval(secs => $1) AS reap,
+			ps.live > 0 OR (r.lux_run_id IS NOT NULL AND r.lux_stop_reason IS DISTINCT FROM 'cancel') AS lux_left,
+			-- A new idle mark, or every server marked: checked at once; marks
+			-- already checked, every parkCheckEvery; none, every
+			-- parkSweepEvery, for servers lux never reports idle.
+			r.status = 'running' AND ps.live > 0 AND (r.park_checked_at IS NULL
+				OR r.park_checked_at < now() - make_interval(secs => $5)
+				OR (ps.idle > 0 AND (ps.idle = ps.live OR ps.idle_at > r.park_checked_at
+					OR r.park_checked_at < now() - make_interval(secs => $2)))) AS park_due
+		FROM runs r JOIN tasks t ON t.id = r.task_id
+		CROSS JOIN LATERAL (SELECT count(*) FILTER (WHERE s.deleted_at IS NULL) AS live,
+				count(*) FILTER (WHERE s.deleted_at IS NULL AND s.idle_at IS NOT NULL) AS idle,
+				max(s.last_woken_at) AS woken, max(s.idle_at) FILTER (WHERE s.deleted_at IS NULL) AS idle_at
+			FROM preview_servers s WHERE s.run_id = r.id) ps
+		WHERE r.kind = 'preview' AND r.wakeable
+		  AND (r.status IN ('pending', 'scheduled', 'starting', 'running', 'paused') OR r.lux_stop_reason IS DISTINCT FROM 'cancel')
+		  AND (r.next_attempt_at IS NULL OR r.next_attempt_at <= now())) w
+	WHERE status IN ('pending', 'completed', 'failed', 'aborted') OR task_ended OR wake_due OR sync_wanted_at IS NOT NULL OR reap
+	   OR (status IN ('scheduled', 'starting', 'running') AND lux_run_id <> '')
+	   OR (status = 'paused' AND lux_run_id <> '' AND lux_state NOT IN ('stopped', 'failed', 'lost'))
+	ORDER BY (status NOT IN ('scheduled', 'starting', 'running') OR task_ended OR wake_due OR sync_wanted_at IS NOT NULL
+	          OR park_due) DESC, created_at
 	LIMIT $4`
 
 // The page a wakeable sweep takes at most; Previews.SweepLimit overrides it.
@@ -139,7 +140,8 @@ func (p *Previews) sweepWakeable(ctx context.Context) (int, error) {
 		if _, err := tx.Exec(ctx, `SET LOCAL jit = off`); err != nil {
 			return err
 		}
-		rows, err := tx.Query(ctx, wakeableSelect, p.reapAfter().Seconds(), parkCheckEvery.Seconds(), wakeClaimFor.Seconds(), limit)
+		rows, err := tx.Query(ctx, wakeableSelect, p.reapAfter().Seconds(), parkCheckEvery.Seconds(), wakeClaimFor.Seconds(), limit,
+			parkSweepEvery.Seconds())
 		if err != nil {
 			return err
 		}
@@ -203,12 +205,19 @@ func (p *Previews) advanceWakeable(ctx context.Context, r wakeRun) (bool, error)
 		}
 		did = true
 	}
-	if r.Idle > 0 && r.ParkDue && r.Status == "running" && r.WakeWanted == nil {
+	if r.Status == "running" && r.ParkDue && r.Servers > 0 && r.WakeWanted == nil {
 		parked, err := p.parkIfIdle(ctx, r)
 		if err != nil {
 			return true, err
 		}
 		did = did || parked
+	}
+	if r.Status == "paused" && r.LuxRunID != "" && r.LuxState == "running" && r.WakeWanted == nil {
+		// Parked, and lux has not said it is stopping: a stop that failed
+		// is asked again (idempotent), without keeping the loop from resting.
+		if err := p.stop(ctx, r.previewRun); err != nil {
+			return did, err
+		}
 	}
 	if r.LuxRunID != "" && (r.Status != "paused" || !lux.Terminal(r.LuxState)) {
 		p.follow(r.previewRun)
@@ -625,31 +634,38 @@ func (p *Previews) woken(ctx context.Context, r wakeRun, luxRunID, state string,
 // parkIfIdle stops a running preview once every one of its servers is
 // idle: each has an unanswered server.idle and no request since (lux's
 // lastRequestAt is the one the event carried), or no longer serves (exited,
-// stopped). A request to any one keeps the Run: its mark is dropped.
+// stopped), or never became ready and has had no request for its idleAfter
+// (lux reports idle only for ready servers). A request to any one keeps the
+// Run: its mark is dropped. One label list of lux's answers for them all.
 func (p *Previews) parkIfIdle(ctx context.Context, r wakeRun) (bool, error) {
 	list, err := p.previewServers(ctx, r.Org, r.ID)
 	if err != nil {
 		return false, err
 	}
+	inLux, err := p.Lux.ListServers(ctx, "", "dude.preview="+r.ID)
+	if err != nil {
+		return false, err
+	}
+	byID := map[string]lux.TenantServer{}
+	for _, ts := range inLux {
+		byID[ts.ID] = ts
+	}
+	now := time.Now()
 	allIdle := len(list) > 0
 	var used []string
 	for _, sv := range list {
-		if sv.IdleAt == nil {
-			got, err := p.Lux.GetServer(ctx, sv.LuxID)
-			if err != nil {
-				return false, err
-			}
-			if got.State != lux.SrvExited && got.State != lux.SrvStopped {
+		got, ok := byID[sv.LuxID]
+		switch {
+		case !ok:
+			// Gone from lux: its server.deleted ends the preview.
+		case sv.IdleAt != nil:
+			if requestedSince(got.LastRequestAt, sv.IdleLastRequestAt) {
+				used = append(used, sv.LuxID)
 				allIdle = false
 			}
-			continue
-		}
-		got, err := p.Lux.GetServer(ctx, sv.LuxID)
-		if err != nil {
-			return false, err
-		}
-		if requestedSince(got.LastRequestAt, sv.IdleLastRequestAt) {
-			used = append(used, sv.LuxID)
+		case got.State == lux.SrvExited || got.State == lux.SrvStopped:
+		case got.State != lux.SrvReady && unusedFor(got, now):
+		default:
 			allIdle = false
 		}
 	}
@@ -685,6 +701,20 @@ func (p *Previews) parkIfIdle(ctx context.Context, r wakeRun) (bool, error) {
 		return false, err
 	}
 	return true, p.stop(ctx, r.previewRun)
+}
+
+// unusedFor: a server has had no request, and no change of state, for its
+// idleAfter (0: never idle).
+func unusedFor(s lux.TenantServer, now time.Time) bool {
+	limit := s.IdleAfterDuration()
+	if limit <= 0 {
+		return false
+	}
+	last := s.Since
+	if s.LastRequestAt != nil && s.LastRequestAt.After(last) {
+		last = *s.LastRequestAt
+	}
+	return now.Sub(last) >= limit
 }
 
 // requestedSince: lux's lastRequestAt moved past the one its idle event

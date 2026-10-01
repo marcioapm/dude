@@ -32,8 +32,27 @@ type TenantServer struct {
 	RunState      string     `json:"runState"`
 	LastRequestAt *time.Time `json:"lastRequestAt"`
 	Wakes         int        `json:"wakes"`
+	// When its state last changed.
+	Since time.Time `json:"since"`
+	// How long without a request before server.idle: a Go duration
+	// ("45m0s") or seconds; 0 is never.
+	IdleAfter json.RawMessage `json:"idleAfter"`
 
 	Raw json.RawMessage `json:"-"`
+}
+
+// IdleAfterDuration is IdleAfter read; 0 when absent or unreadable.
+func (s TenantServer) IdleAfterDuration() time.Duration {
+	var str string
+	if json.Unmarshal(s.IdleAfter, &str) == nil {
+		d, _ := time.ParseDuration(str)
+		return d
+	}
+	var secs float64
+	if json.Unmarshal(s.IdleAfter, &secs) == nil {
+		return time.Duration(secs * float64(time.Second))
+	}
+	return 0
 }
 
 func (s *TenantServer) UnmarshalJSON(b []byte) error {

@@ -17,7 +17,8 @@ import (
 // processes do not. The fake runs no process: a started server with a
 // command is "starting", then "ready" a moment later (ServerReadyAfter) —
 // unless its command says `fakelux-exit=<code>`, and then it exits with that
-// code. One with no command waits for its port to open (OpenPort), as the
+// code, or `fakelux-never-ready`, and then it stays starting. One with no
+// command waits for its port to open (OpenPort), as the
 // runner's health check would find someone else serving it.
 //
 // A placement's end stops every server — "run stopped", "migrated" or
@@ -203,6 +204,9 @@ func (s *Server) startServer(run *Run, sv *server) {
 			sv.Error = fmt.Sprintf("listen tcp :%d: bind: address already in use", sv.Port)
 			sv.logf("stderr", "%s", sv.Error)
 			s.setServer(run, sv, "exited")
+			return
+		}
+		if strings.Contains(strings.Join(sv.Command, " "), "fakelux-never-ready") {
 			return
 		}
 		sv.logf("stdout", "listening on :%d", sv.Port)
