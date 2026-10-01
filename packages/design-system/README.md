@@ -824,6 +824,14 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
   `RemovableList`, a picker's options) takes the default row and the
   default control, so it follows the density; `row-compact` and `control-sm`
   hold in both and are for what one scans or for toolbars.
+- A `Table` too wide for its frame scrolls sideways inside it, never the
+  page. On a phone, mark the columns that can go — `hideWhenNarrow` on the
+  `Th` and on each of its `Td`s — and they are hidden while the table's
+  own frame is under 560px (a container query, so a table in a narrow
+  column hides them at any window size). There a `fit` label cell may
+  take a second line (a name over its badge); right-aligned numbers stay
+  on one. Keep what identifies a row and its numbers; hide what explains
+  them (pool, fit, who uses it).
 - One `primary` button per view. Most actions are `secondary` or `quiet`.
 - Dialogs are for decisions and small forms — and for writing one
   document: `Dialog size="document"` is a fixed min(1120, 100vw − 48) ×
@@ -1004,7 +1012,10 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
   none), a `FitBar`, who uses it (faces and words), and a `RowMenu` (Edit,
   Make default, Remove…; Remove disabled with its reason on the default).
   lux's pools are a second `Table` with a "read … ago" meta line; then the
-  memory explainer, a `Callout`-shaped box around a `ProportionBar`. A
+  memory explainer, a `Callout`-shaped box around a `ProportionBar`. On a
+  phone both tables keep the name and the numbers: pool, fit and who uses
+  a size, and a pool's machines and where its size is known from, are
+  `hideWhenNarrow`. A
   member sees the same page with no Add and no row menu. A size is edited
   in a `Dialog` of `NumberInput`s and the pool `Select`, with the fit as a
   `Callout` under them (success, danger, or neutral when unknown), and

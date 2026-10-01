@@ -18,6 +18,7 @@ import json
 import os
 
 import pytest
+import requests
 
 from fake_github import FakeGitHub
 from helpers import ApiClient, wait_until
@@ -210,3 +211,86 @@ def test_an_agent_waiting_on_a_person_is_parked_on_real_lux_and_resumed_by_the_a
     messages = " ".join(e["payload"].get("text", "") for e in client.events(runId=implementer()["id"])
                         if e["eventType"] == "agent.message")
     assert "Answer to your question" in messages, messages
+
+
+# ---------------------------------------------------------------------------
+# Machine sizes: what dude sends lux as a Run's size and pool, and how it
+# reads lux's pools. Straight to lux's API with dude's key, encoded as the
+# orchestrator encodes them (lux.Resources: memory and disk as JSON numbers
+# of bytes; lux.PlacementSpec: placement.pool).
+# ---------------------------------------------------------------------------
+
+GIB = 1 << 30
+
+
+def _lux(env, method: str, path: str, body: dict | None = None, key: str | None = None) -> requests.Response:
+    headers = {"authorization": f"Bearer {env.real_lux['api_key']}"}
+    if key:
+        headers["idempotency-key"] = key
+    return requests.request(method, env.real_lux["luxd_url"] + path, json=body, headers=headers, timeout=30)
+
+
+def _sleeper(name: str, **extra) -> dict:
+    """A Run that only waits, as a branch preview's workload does."""
+    return {"name": name, "labels": {"dude.kind": "contract"}, "image": {"ref": FAKE_IMAGE},
+            "workload": {"adapter": "generic", "command": ["sleep", "infinity"], "workdir": "/tmp"}, **extra}
+
+
+def test_a_run_sized_as_dude_sizes_it_reaches_running_on_real_lux(env):
+    """lux's spec.Bytes takes a JSON number of bytes as well as "8Gi"
+    (docs/runspec.md: "Sizes accept 512Mi, 8Gi, 1G, or bytes"); this is
+    the number form dude sends. Its hosts must have 2 CPUs and 8 GiB free."""
+    resources = {"cpus": 2, "memory": 8 * GIB, "disk": 20 * GIB}
+    res = _lux(env, "POST", "/v1/runs", _sleeper("contract sized", resources=resources), key=f"contract-{os.urandom(6).hex()}")
+    assert res.status_code in (200, 201, 202), res.text
+    run_id = res.json()["id"]
+    try:
+        run = wait_until(lambda: (r := _lux(env, "GET", f"/v1/runs/{run_id}").json())["state"] == "running" and r,
+                         timeout=180, interval=1, message="a Run with dude's resources never ran on lux")
+        # lux kept the size it was given, in bytes.
+        assert run["spec"]["resources"]["memory"] == 8 * GIB and run["spec"]["resources"]["disk"] == 20 * GIB, run["spec"]
+    finally:
+        _lux(env, "POST", f"/v1/runs/{run_id}/cancel")
+
+
+def test_a_pool_lux_does_not_have_is_taken_and_never_placed(env):
+    """What lux does with a size whose pool is gone (removed from lux after
+    an admin chose it). lux's spec.Normalize does not check the pool, so the
+    submit is taken (201) and the scheduler leaves the Run submitted, saying
+    no host matches: there is no refusal code. dude records such a Run as
+    scheduled and it waits; if lux starts refusing it with a 4xx other than
+    429, dude fails the Run instead (lux.Error.Retryable), and this test
+    says the contract moved."""
+    pool = f"no-such-pool-{os.urandom(3).hex()}"
+    res = _lux(env, "POST", "/v1/runs", _sleeper("contract no pool", placement={"pool": pool}), key=f"contract-{os.urandom(6).hex()}")
+    assert res.status_code == 201, (res.status_code, res.text)
+    run_id = res.json()["id"]
+    try:
+        run = wait_until(lambda: (r := _lux(env, "GET", f"/v1/runs/{run_id}").json())["stateReason"] and r,
+                         timeout=60, interval=1, message="lux never said why the Run waits")
+        assert (run["state"], run["stateReason"]) == ("submitted", "no host matches"), run
+        assert run["spec"]["placement"]["pool"] == pool, run["spec"]
+    finally:
+        _lux(env, "POST", f"/v1/runs/{run_id}/cancel")
+
+
+def test_luxs_pools_decode_as_dude_reads_them(env, client: ApiClient):
+    res = _lux(env, "GET", "/v1/pools")
+    assert res.status_code == 200, res.text
+    pools = res.json()["pools"]
+    assert all(isinstance(p["name"], str) and p["name"] for p in pools), pools
+    for p in pools:
+        # Absent from an older lux; when there, one host's size: CPUs, and
+        # memory and disk in bytes (0: disk not reserved).
+        host = p.get("hostSize")
+        if host is not None:
+            assert isinstance(host["cpus"], (int, float)) and host["cpus"] > 0, p
+            assert isinstance(host["memory"], int) and host["memory"] > 0, p
+            assert isinstance(host["disk"], int) and host["disk"] >= 0, p
+        assert p.get("hostSizeFrom") in (None, "", "running", "history"), p
+        assert isinstance(p.get("isDefault", False), bool) and isinstance(p.get("hostsRunning", 0), (int, type(None))), p
+    # And through the orchestrator's lux.Client and the backend, as the
+    # Machines page reads them: a decoding failure would be a `problem`.
+    served = client.get("/v1/machines/pools")
+    assert served.status_code == 200 and served.json()["problem"] is None, served.text
+    assert sorted(p["name"] for p in served.json()["pools"]) == sorted(p["name"] for p in pools)
