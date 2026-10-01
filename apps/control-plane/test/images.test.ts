@@ -166,7 +166,7 @@ describe("images", () => {
       [1, "There is no image named nope in the library"],
       [2, "An image has no build files: COPY only --from a stage or another image"],
     ]);
-    expect((await image(ids.base)).versions[0].containerfile).toBe(BASE);
+    expect((await image(ids.base!)).versions[0].containerfile).toBe(BASE);
   });
 
   test("a warning (a tag with no digest) does not stop a save", async () => {

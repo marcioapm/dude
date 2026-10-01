@@ -200,6 +200,14 @@ export class FixtureClient extends ApiClient {
   override machineSizes() {
     return Promise.resolve({ sizes: MACHINE_SIZES, canEdit: true });
   }
+  // The image library is empty in the fixtures: the real backend's browser
+  // tests show it full. Builds are off (no dude layer), as on a dude without one.
+  override imageChoices() {
+    return Promise.resolve({ images: [], defaultImageId: null });
+  }
+  override images() {
+    return Promise.resolve({ images: [], queue: [], defaultImageId: null, builder: { available: false, layer: null, cpus: 1.5, memoryMiB: 1536 }, canEdit: true });
+  }
   override machinePools() {
     return Promise.resolve({ pools: [], readAt: new Date().toISOString(), problem: "no lux in the fixtures" });
   }

@@ -1,0 +1,633 @@
+/**
+ * Organisation settings → Images: the organisation's image library.
+ *
+ * The list (with the builder's queue over it), an image's page — its
+ * Containerfile in the editor with the dude layer under it, its history
+ * with diffs and Publish again, its builds — and a build's page with its
+ * stages and log. Everyone reads; admins add, edit, build and publish.
+ * Where an image is chosen (a project, a preview, a role) is the
+ * ImagePicker on those pages; this is where images are made.
+ *
+ * Its sub-page is in the URL after "images/": "<image id>", then
+ * "/history" or "/builds", or "builds/<build id>".
+ */
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Breadcrumb,
+  BuildQueueStrip,
+  BuildStages,
+  CodeEditor,
+  ImageHistory,
+  ImageMark,
+  ImageState,
+  LogStream,
+  SettingsHeader,
+  SettingsNote,
+  type ImageHistoryVersion,
+  type LogLine,
+} from "@dude/design-system/components";
+import { formatDuration, formatTimestamp } from "@dude/design-system";
+import {
+  Badge,
+  Button,
+  Callout,
+  Dialog,
+  Input,
+  RowMenu,
+  Spinner,
+  Tab,
+  TabList,
+  TabPanel,
+  Table,
+  Tabs,
+  TBody,
+  Td,
+  Th,
+  THead,
+  Tr,
+} from "@dude/design-system/primitives";
+import {
+  IMAGE_NAME,
+  IMAGE_NAME_MESSAGE,
+  imageReferences,
+  lintContainerfile,
+  shortDigest,
+  type ImageBuild,
+  type ImageBuildWithLog,
+  type ImageDetail,
+  type ImagesResponse,
+  type ImageSummary,
+  type ImageVersion,
+} from "@dude/domain";
+import type { ApiClient } from "../api/client.ts";
+import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
+import { useReloadOnEvents } from "../hooks/useEventStream.ts";
+import { buildStages, builderLimits, containerfileCompletions, draftCounts, imageState, queuePlace, usedByWords } from "../imageWords.ts";
+
+const ago = (iso: string) => formatTimestamp(iso, "relative");
+
+/** The organisation's images and queue, read again on any change and every few seconds while something builds. */
+export function useImages(client: ApiClient) {
+  const [data, setData] = useState<ImagesResponse | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  const load = useCallback(() => {
+    client.images().then((d) => {
+      setData(d);
+      setProblem(null);
+    }, (err: unknown) => setProblem(errorText(err)));
+  }, [client]);
+  useEffect(load, [load]);
+  useReloadOnEvents({ client, all: true }, load, 1000);
+  const busy = Boolean(data?.queue.length);
+  useEffect(() => {
+    if (!busy) return;
+    const t = setInterval(load, 4000);
+    return () => clearInterval(t);
+  }, [busy, load]);
+  return { data, problem, load, setData };
+}
+
+/** How many builds run or wait, for the menu. */
+export const queueCount = (d: ImagesResponse | null) => d?.queue.length ?? 0;
+
+export interface ImagesPageProps {
+  client: ApiClient;
+  orgName: string;
+  images: ReturnType<typeof useImages>;
+  sub?: string | undefined;
+  onSub: (sub: string | undefined) => void;
+}
+
+export function ImagesPage({ client, orgName, images, sub, onSub }: ImagesPageProps) {
+  const parts = (sub ?? "").split("/").filter(Boolean);
+  if (parts[0] === "builds" && parts[1]) return <BuildPage client={client} orgName={orgName} buildId={parts[1]} onSub={onSub} />;
+  if (parts[0]) {
+    return <ImagePage key={parts[0]} client={client} orgName={orgName} id={parts[0]} tab={parts[1] ?? "containerfile"} onSub={onSub}
+      library={images.data} onChanged={images.load} />;
+  }
+  return <ImagesList client={client} orgName={orgName} images={images} onSub={onSub} />;
+}
+
+// ---------------------------------------------------------------------------
+// The list
+// ---------------------------------------------------------------------------
+
+function ImagesList({ client, orgName, images, onSub }: { client: ApiClient; orgName: string; images: ReturnType<typeof useImages>; onSub: (sub: string | undefined) => void }) {
+  const [adding, setAdding] = useState<{ from?: string } | null>(null);
+  const { data, problem } = images;
+  if (!data) return <div className="centered">{problem ? <Callout tone="danger">{problem}</Callout> : <Spinner label="Loading…" />}</div>;
+  const running = data.queue.find((b) => b.state === "running");
+  const waiting = data.queue.filter((b) => b.state === "queued");
+  // Children under their parent, as the mockup's tree has them: an image
+  // built FROM another of the library's sits after it, indented.
+  const ordered = treeOrder(data.images);
+  return (
+    <>
+      <SettingsHeader
+        title="Images"
+        description="What agents, servers and previews run in. Edit one here and everything that uses it gets the new version once it builds."
+        actions={data.canEdit ? <Button variant="primary" leadingIcon="plus" onClick={() => setAdding({})} data-testid="new-image">New image</Button> : undefined}
+      />
+      {!data.canEdit ? <SettingsNote icon="info">Only {orgName}’s admins change images. Everyone can read them and their builds.</SettingsNote> : null}
+      <BuildQueueStrip
+        building={running ? { label: `${running.imageName} v${running.version ?? ""}${running.kind === "finish" ? " (dude layer)" : ""}`, elapsed: running.startedAt ? formatDuration(Date.now() - Date.parse(running.startedAt)) : undefined } : null}
+        waiting={waiting.map((b) => `${b.imageName} v${b.version ?? ""}`)}
+        onOpen={running ? () => onSub(`builds/${running.id}`) : undefined}
+        limits={builderLimits(data.builder)}
+        unavailable={data.builder.available ? undefined : "Builds are off: this dude has no dude layer configured (DUDE_LAYER_IMAGE), so images can be edited but not built or run."}
+      />
+      {data.images.length === 0 ? (
+        <Callout tone="neutral">No images yet. An image is a Containerfile dude builds and adds its own tools to; projects, previews and agent roles then pick it.</Callout>
+      ) : (
+        <Table density="default" data-testid="images-table">
+          <THead>
+            <Tr>
+              <Th width="40%">Image</Th>
+              <Th width="72px">Published</Th>
+              <Th hideWhenNarrow>Used by</Th>
+              <Th>Status</Th>
+              <Th hideWhenNarrow>Changed</Th>
+            </Tr>
+          </THead>
+          <TBody>
+            {ordered.map(({ image, depth }) => {
+              const state = imageState(image, data.queue, ago);
+              return (
+                <Tr key={image.id} interactive onClick={() => onSub(image.id)} data-testid="image-row" data-image={image.name}>
+                  <Td wrap>
+                    <span className="imageRow" style={{ paddingLeft: depth ? 20 : 0 }}>
+                      <ImageMark isDefault={image.isDefault} />
+                      <span className="imageRowText">
+                        <span className="imageRowName">
+                          <span className="ds-mono">{image.name}</span>
+                          {image.isDefault ? <Badge size="sm" tone="info" emphasis="subtle">Default base</Badge> : null}
+                          {image.archivedAt ? <Badge size="sm" icon="archive">Archived</Badge> : null}
+                        </span>
+                        {image.description ? <span className="imageRowDesc">{image.description}</span> : null}
+                        {image.from ? <span className="imageRowFrom">FROM {image.from}</span> : null}
+                      </span>
+                    </span>
+                  </Td>
+                  <Td mono>
+                    {image.published ? `v${image.published.number}` : "—"}
+                    {image.pending ? <div className="imageRowSub">v{image.pending.number} {image.pending.state === "queued" ? "waiting" : image.pending.state === "failed" ? "failed" : "building"}</div> : null}
+                  </Td>
+                  <Td hideWhenNarrow wrap muted>{usedByWords(image.usedBy, orgName)}</Td>
+                  <Td><ImageState kind={state.kind}>{state.words}</ImageState></Td>
+                  <Td hideWhenNarrow muted>{image.lastChange.source === "base_rebuild" ? "dude" : (image.lastChange.by?.name ?? "—")} · {ago(image.lastChange.at)}</Td>
+                </Tr>
+              );
+            })}
+          </TBody>
+        </Table>
+      )}
+      {adding ? <NewImageDialog client={client} from={adding.from} onClose={() => setAdding(null)} onMade={(id) => {
+        setAdding(null);
+        images.load();
+        onSub(id);
+      }} /> : null}
+    </>
+  );
+}
+
+/** Each image, then the images built FROM it, one level in. */
+function treeOrder(images: readonly ImageSummary[]): Array<{ image: ImageSummary; depth: number }> {
+  const ids = new Set(images.map((i) => i.id));
+  const childOf = new Map<string, ImageSummary[]>();
+  const roots: ImageSummary[] = [];
+  for (const i of images) {
+    const parent = i.parents.find((p) => ids.has(p.id) && p.id !== i.id);
+    if (parent) childOf.set(parent.id, [...(childOf.get(parent.id) ?? []), i]);
+    else roots.push(i);
+  }
+  const out: Array<{ image: ImageSummary; depth: number }> = [];
+  const seen = new Set<string>();
+  const walk = (i: ImageSummary, depth: number) => {
+    if (seen.has(i.id)) return;
+    seen.add(i.id);
+    out.push({ image: i, depth });
+    for (const c of childOf.get(i.id) ?? []) walk(c, Math.min(depth + 1, 1));
+  };
+  for (const r of roots.sort((a, b) => Number(b.isDefault) - Number(a.isDefault))) walk(r, 0);
+  for (const i of images) walk(i, 0);
+  return out;
+}
+
+/** A new image: its name (fixed once made), what it is, and the base it starts FROM. */
+export function NewImageDialog({ client, from, onClose, onMade }: { client: ApiClient; from?: string | undefined; onClose: () => void; onMade: (id: string) => void }) {
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [base, setBase] = useState(from ?? "");
+  const { busy, problem, save } = useSave();
+  const nameProblem = name && !IMAGE_NAME.test(name) ? IMAGE_NAME_MESSAGE : undefined;
+  return (
+    <FormDialog open onOpenChange={(o) => !o && onClose()} title="New image" size="md"
+      description="It starts as a draft: a one-line Containerfile you can edit, then build and publish."
+      submitLabel="Create" submitTestId="new-image-create" canSubmit={!busy && Boolean(name) && !nameProblem} problem={problem}
+      onSubmit={() => {
+        let made = "";
+        void save(async () => {
+          const out = await client.createImage({
+            name, description: description.trim(),
+            containerfile: `FROM ${base.trim() || "debian:bookworm-slim"}\n`, note: "First version",
+          });
+          made = out.image.id;
+        }, () => onMade(made), `${name} created`);
+      }}>
+      <Input label="Name" mono autoFocus value={name} onChange={(e) => setName(e.target.value.toLowerCase())} error={nameProblem}
+        hint="What FROM image:<name> calls it. Fixed once made." data-testid="new-image-name" />
+      <Input label="Description" value={description} onChange={(e) => setDescription(e.target.value)} maxLength={500} />
+      <Input label="FROM" mono value={base} placeholder="debian:bookworm-slim" onChange={(e) => setBase(e.target.value)}
+        hint="A registry image, or image:<name> for another of the library's." data-testid="new-image-from" />
+    </FormDialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// An image
+// ---------------------------------------------------------------------------
+
+function useImage(client: ApiClient, id: string) {
+  const [detail, setDetail] = useState<ImageDetail | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  const load = useCallback(() => {
+    client.image(id).then((d) => {
+      setDetail(d);
+      setProblem(null);
+    }, (err: unknown) => setProblem(errorText(err)));
+  }, [client, id]);
+  useEffect(load, [load]);
+  useReloadOnEvents({ client, all: true }, load, 1000);
+  const live = detail?.builds.some((b) => b.state === "queued" || b.state === "running");
+  useEffect(() => {
+    if (!live) return;
+    const t = setInterval(load, 4000);
+    return () => clearInterval(t);
+  }, [live, load]);
+  return { detail, problem, load, setDetail };
+}
+
+function ImagePage({ client, orgName, id, tab, onSub, library, onChanged }: {
+  client: ApiClient;
+  orgName: string;
+  id: string;
+  tab: string;
+  onSub: (sub: string | undefined) => void;
+  library: ImagesResponse | null;
+  onChanged: () => void;
+}) {
+  const { detail, problem, load, setDetail } = useImage(client, id);
+  const [describing, setDescribing] = useState(false);
+  const action = useSave();
+  if (!detail) return <div className="centered">{problem ? <Callout tone="danger">{problem}</Callout> : <Spinner label="Loading…" />}</div>;
+  const { image, versions, builds } = detail;
+  const state = imageState(image, library?.queue ?? builds.filter((b) => b.state === "queued" || b.state === "running"), ago);
+  const changed = (d: ImageDetail) => {
+    setDetail(d);
+    onChanged();
+  };
+  const crumbs = [
+    { id: "images", label: "Images", onSelect: () => onSub(undefined) },
+    { id: image.id, label: image.name, mono: true, onSelect: () => onSub(image.id) },
+    ...(tab === "history" ? [{ id: "history", label: "History" }] : tab === "builds" ? [{ id: "builds", label: "Builds" }] : []),
+  ];
+  return (
+    <>
+      <Breadcrumb items={crumbs} size="sm" />
+      <SettingsHeader
+        leading={<ImageMark isDefault={image.isDefault} size={44} />}
+        title={<span className="ds-mono" data-testid="image-name">{image.name}</span>}
+        description={image.description || "No description."}
+        actions={
+          <span className="imageHeadActions">
+            <ImageState kind={state.kind}>{image.published ? `v${image.published.number} published` : state.words}</ImageState>
+            {image.isDefault ? <Badge tone="info" emphasis="subtle">Default base</Badge> : null}
+            {detail.canEdit ? (
+              <RowMenu label={`Actions for ${image.name}`} items={[
+                { id: "describe", label: "Edit description", icon: "edit", onSelect: () => setDescribing(true) },
+                image.isDefault
+                  ? { id: "undefault", label: "Stop being the default base", onSelect: () => void action.save(() => client.setDefaultImage(null), () => { load(); onChanged(); }, "No default base") }
+                  : { id: "default", label: "Make it the default base", disabled: !image.published, disabledReason: "Publish a version first", onSelect: () => void action.save(() => client.setDefaultImage(image.id), () => { load(); onChanged(); }, `${image.name} is the default base`) },
+                { kind: "separator" },
+                image.archivedAt
+                  ? { id: "unarchive", label: "Unarchive", onSelect: () => void action.save(() => client.updateImage(image.id, { archived: false }).then(changed), undefined, "Unarchived") }
+                  : { id: "archive", label: "Archive", tone: "danger", onSelect: () => void action.save(() => client.updateImage(image.id, { archived: true }).then(changed), undefined, `${image.name} archived`) },
+              ]} />
+            ) : null}
+          </span>
+        }
+      />
+      {image.archivedAt ? <Callout tone="attention">Archived: pickers no longer offer it. {image.usedBy.length ? "What still names it keeps working." : ""}</Callout> : null}
+      {action.problem ? <Callout tone="danger">{action.problem}</Callout> : null}
+      <Tabs value={tab} onValueChange={(t) => onSub(t === "containerfile" ? image.id : `${image.id}/${t}`)}>
+        <TabList aria-label="Image">
+          <Tab value="containerfile">Containerfile</Tab>
+          <Tab value="history" count={versions.length}>History</Tab>
+          <Tab value="builds" count={builds.length}>Builds</Tab>
+        </TabList>
+        <TabPanel value="containerfile">
+          <ContainerfileTab key={versions[0]?.id ?? "none"} client={client} detail={detail} orgName={orgName} library={library}
+            onChanged={changed} onOpenBuild={(b) => onSub(`builds/${b}`)} />
+        </TabPanel>
+        <TabPanel value="history">
+          <HistoryTab client={client} detail={detail} onChanged={changed} onOpenBuild={(b) => onSub(`builds/${b}`)} />
+        </TabPanel>
+        <TabPanel value="builds">
+          <BuildsTable builds={builds} onOpen={(b) => onSub(`builds/${b}`)} />
+        </TabPanel>
+      </Tabs>
+      {describing ? (
+        <DescribeDialog image={image} onClose={() => setDescribing(false)}
+          onSave={(description) => action.save(() => client.updateImage(image.id, { description }).then(changed), () => setDescribing(false), "Description saved")} />
+      ) : null}
+    </>
+  );
+}
+
+function DescribeDialog({ image, onClose, onSave }: { image: ImageSummary; onClose: () => void; onSave: (d: string) => Promise<boolean> }) {
+  const [text, setText] = useState(image.description);
+  return (
+    <FormDialog open onOpenChange={(o) => !o && onClose()} title={`Describe ${image.name}`} submitLabel="Save" canSubmit problem={null}
+      onSubmit={() => void onSave(text.trim())}>
+      <Input label="Description" autoFocus value={text} maxLength={500} onChange={(e) => setText(e.target.value)} />
+    </FormDialog>
+  );
+}
+
+/** The latest version that is not the draft: what the draft is "from". */
+const latestNumbered = (versions: readonly ImageVersion[]) => versions.find((v) => v.number !== null && v.state !== "cancelled") ?? null;
+
+function ContainerfileTab({ client, detail, orgName, library, onChanged, onOpenBuild }: {
+  client: ApiClient;
+  detail: ImageDetail;
+  orgName: string;
+  library: ImagesResponse | null;
+  onChanged: (d: ImageDetail) => void;
+  onOpenBuild: (buildId: string) => void;
+}) {
+  const { image, versions, builds, builder, canEdit } = detail;
+  const draft = versions.find((v) => v.state === "draft") ?? null;
+  const base = latestNumbered(versions);
+  const published = versions.find((v) => v.id === image.published?.versionId) ?? null;
+  const [text, setText] = useState(draft?.containerfile ?? base?.containerfile ?? "FROM debian:bookworm-slim\n");
+  const [note, setNote] = useState(draft?.note ?? "");
+  const [refused, setRefused] = useState<string | null>(null);
+  const { busy, problem, save } = useSave();
+  const names = useMemo(() => (library?.images ?? []).map((i) => i.name), [library]);
+  // Until the list has loaded, an image: name is not called unknown.
+  const lintNames = useMemo(() => (library ? names : [...names, ...imageReferences(text)]), [library, names, text]);
+  const diagnostics = useMemo(() => lintContainerfile(text, { images: lintNames, self: image.name }), [text, lintNames, image.name]);
+  const errors = diagnostics.filter((d) => d.severity === "error").length;
+  const dirty = text !== (draft?.containerfile ?? base?.containerfile ?? "") || note !== (draft?.note ?? "");
+  const next = (versions.reduce((n, v) => Math.max(n, v.number ?? 0), 0) || 0) + 1;
+  const ahead = (library?.queue ?? []).length;
+  const counts = base ? draftCounts(base.containerfile, text) : null;
+  const choices = (library?.images ?? []).map((i) => ({ name: i.name, version: i.published?.number ?? null, isDefault: i.isDefault }));
+  const running = builds.find((b) => b.state === "running" || b.state === "queued");
+  const failed = (e: unknown) => {
+    setRefused(errorText(e));
+    throw e;
+  };
+  return (
+    <div className="imageEdit">
+      <div className="imageEditMain">
+        {running ? (
+          <Callout tone="info">
+            v{running.version} is {running.state === "running" ? "building" : `waiting (${queuePlace(running.ahead)})`}.{" "}
+            <Button size="sm" variant="quiet" onClick={() => onOpenBuild(running.id)}>Open its build</Button>
+          </Callout>
+        ) : null}
+        <CodeEditor
+          data-testid="containerfile-editor"
+          aria-label="Containerfile"
+          language="dockerfile"
+          value={text}
+          readOnly={!canEdit}
+          onChange={(v) => {
+            setText(v);
+            setRefused(null);
+          }}
+          diagnostics={diagnostics}
+          complete={(ctx) => containerfileCompletions(ctx, choices, orgName, image.name)}
+          minLines={12}
+          header={
+            <>
+              <span className="ds-mono">Containerfile</span>
+              {draft || dirty ? <Badge size="sm" tone="attention">draft v{next}</Badge> : base ? <Badge size="sm">v{base.number}</Badge> : null}
+              {base && (draft || dirty) ? <span>from v{base.number}</span> : null}
+              <span className="imageEditSpacer" />
+              <span className="hideNarrow">⌘F search · ⌘Z undo · Ctrl-Space complete</span>
+            </>
+          }
+          after={
+            <>
+              <span className="layerLabel">DUDE LAYER</span>
+              <span className="layerNote"> · added last, from the running release · read-only</span>
+              {`\nCOPY --from=${builder.layer ? `dude-layer@${shortDigest(builder.layer)}` : "dude-layer (not configured)"} /rootfs/ /   # dude CLI, OpenCode, its config\nRUN ["/bin/sh", "/usr/local/share/dude/setup.sh"]\nUSER agent`}
+            </>
+          }
+          footer={
+            <>
+              <span>{text.split("\n").length} lines</span>
+              {counts ? <span>+{counts.add} −{counts.del} against v{base!.number}</span> : null}
+              <span className="imageEditSpacer" />
+              {errors ? <span className="lintBad" data-testid="lint-errors">✕ {errors} won’t build</span> : <span className="lintOk">Builds</span>}
+            </>
+          }
+        />
+        {refused ?? problem ? <Callout tone="danger" data-testid="image-save-problem">{refused ?? problem}</Callout> : null}
+        {canEdit ? (
+          <>
+            <div className="imageSaveBar">
+              {draft || dirty ? <span className="draftMark">● Draft not built</span> : null}
+              <Input aria-label="What changed" placeholder="What changed, and why" value={note} onChange={(e) => setNote(e.target.value)} maxLength={500}
+                data-testid="image-note" className="imageNote" />
+              {draft ? (
+                <Button variant="quiet" disabled={busy} onClick={() => void save(() => client.discardImageDraft(image.id).then(onChanged), undefined, "Draft discarded")}>
+                  Discard draft
+                </Button>
+              ) : null}
+              <Button variant="secondary" disabled={busy || !dirty} data-testid="save-draft"
+                onClick={() => void save(() => client.saveImageDraft(image.id, { containerfile: text, note }).then(onChanged, failed), undefined, "Draft saved")}>
+                Save draft
+              </Button>
+              <Button variant="primary" disabled={busy || errors > 0 || !builder.available || (!draft && !dirty)} data-testid="build-publish"
+                onClick={() => void save(() => client.buildImage(image.id, { containerfile: text, note }).then((r) => {
+                  onChanged(r.image);
+                  onOpenBuild(r.buildId);
+                }, failed), undefined, `v${next} queued`)}>
+                Build & publish v{next}
+              </Button>
+            </div>
+            <p className="imageSaveHint">
+              {builder.available
+                ? `v${next} joins the queue${ahead ? ` (${ahead} ahead)` : ""}. If it fails, ${image.published ? `v${image.published.number} stays published` : "nothing changes"} and the draft keeps its build log.`
+                : "Builds are off on this dude (no DUDE_LAYER_IMAGE): drafts save, nothing builds."}
+              {" "}Build arguments and the Containerfile are not secret: the history shows them.
+            </p>
+          </>
+        ) : null}
+      </div>
+      <aside className="imageEditAside">
+        <h3 className="ds-label">Used by · all on the latest</h3>
+        <p className="imageAsideText" data-testid="image-used-by">{usedByWords(image.usedBy, orgName)}</p>
+        {published ? (
+          <>
+            <h3 className="ds-label">Published · v{published.number}</h3>
+            <dl className="imageFacts">
+              <dt>Built</dt><dd>{published.builtAt ? formatTimestamp(published.builtAt, "datetime") : "—"}</dd>
+              {published.parents.length ? <><dt>Base</dt><dd className="ds-mono">{published.parents.map((p) => `${p.name} v${p.version ?? "?"}`).join(", ")}</dd></> : null}
+              <dt>Image</dt><dd className="ds-mono">{shortDigest(published.userRef)}</dd>
+            </dl>
+          </>
+        ) : null}
+        <h3 className="ds-label">Builds run</h3>
+        <ul className="imageAsideList">
+          <li>on the dude host, rootless, {builder.cpus} CPU and {(builder.memoryMiB / 1024).toFixed(1).replace(/\.0$/, "")} GB, one at a time;</li>
+          <li>with no build files: COPY only from a stage or an image;</li>
+          <li>with the internet, but not the host’s AWS credentials or dude’s own services.</li>
+        </ul>
+      </aside>
+    </div>
+  );
+}
+
+const asHistory = (v: ImageVersion): ImageHistoryVersion => ({
+  id: v.id,
+  number: v.number,
+  state: v.state,
+  containerfile: v.containerfile,
+  note: v.note,
+  author: v.createdBy,
+  when: formatTimestamp(v.createdAt, "relative"),
+  builtOn: v.parents.filter((p) => p.version).map((p) => `${p.name} v${p.version}`).join(", ") || undefined,
+  error: v.error,
+});
+
+function HistoryTab({ client, detail, onChanged, onOpenBuild }: { client: ApiClient; detail: ImageDetail; onChanged: (d: ImageDetail) => void; onOpenBuild: (b: string) => void }) {
+  const { image, versions, builds, canEdit } = detail;
+  const [asking, setAsking] = useState<ImageHistoryVersion | null>(null);
+  const { busy, problem, save } = useSave();
+  const running = builds.find((b) => b.state === "running" && b.kind === "build");
+  const users = image.usedBy.filter((u) => u.kind !== "child");
+  const children = image.usedBy.filter((u) => u.kind === "child");
+  const original = versions.find((v) => v.id === asking?.id);
+  return (
+    <>
+      {problem ? <Callout tone="danger">{problem}</Callout> : null}
+      <div data-testid="image-history">
+        <ImageHistory versions={versions.map(asHistory)} publishedId={image.published?.versionId ?? null}
+          onRepublish={canEdit ? setAsking : undefined}
+          onOpenBuild={(v) => {
+            const b = builds.find((x) => x.versionId === v.id && x.kind === "build");
+            if (b) onOpenBuild(b.id);
+          }} />
+      </div>
+      <Dialog open={asking !== null} onOpenChange={(o) => !o && setAsking(null)} size="md" title={`Publish v${asking?.number} again?`}
+        description={`v${asking?.number}’s image is still in the registry, so there’s nothing to build. It becomes the published version straight away.`}
+        footer={
+          <>
+            <Button variant="quiet" onClick={() => setAsking(null)}>Cancel</Button>
+            <Button variant="primary" disabled={busy} data-testid="republish-confirm" onClick={() => {
+              const v = asking!;
+              void save(() => client.republishImage(image.id, v.id).then(onChanged), () => setAsking(null), `v${v.number} published again`);
+            }}>Publish v{asking?.number}</Button>
+          </>
+        }>
+        <ul className="republishList">
+          <li>{users.length ? "Everything that uses it" : "Whatever picks it later"} runs v{asking?.number} from its next Run; Runs already going keep theirs.</li>
+          {children.length ? <li>{children.map((c) => c.image!.name).join(", ")}, built FROM {image.name}, {children.length === 1 ? "is" : "are"} queued to rebuild on v{asking?.number}.</li> : null}
+          {original?.parents.length ? <li>v{asking?.number} was built on {original.parents.map((p) => `${p.name} v${p.version ?? "?"}`).join(", ")}. To move it onto today’s, build it again instead.</li> : null}
+          {running ? <li>The v{running.version} build that is running carries on. If it passes, it publishes over this.</li> : null}
+        </ul>
+      </Dialog>
+    </>
+  );
+}
+
+function BuildsTable({ builds, onOpen }: { builds: readonly ImageBuild[]; onOpen: (id: string) => void }) {
+  if (builds.length === 0) return <Callout tone="neutral">No builds yet. Build & publish queues the draft.</Callout>;
+  return (
+    <Table density="compact" data-testid="image-builds">
+      <THead>
+        <Tr>
+          <Th>Version</Th>
+          <Th>Kind</Th>
+          <Th>State</Th>
+          <Th hideWhenNarrow>Asked</Th>
+          <Th align="right" hideWhenNarrow>Took</Th>
+        </Tr>
+      </THead>
+      <TBody>
+        {builds.map((b) => (
+          <Tr key={b.id} interactive onClick={() => onOpen(b.id)} data-testid="image-build-row">
+            <Td mono>v{b.version ?? "?"}</Td>
+            <Td>{b.kind === "finish" ? `dude layer ${shortDigest(b.layerRef).replace("sha256:", "").slice(0, 12)}` : "build"}</Td>
+            <Td>
+              <ImageState kind={b.state === "succeeded" ? "published" : b.state === "running" ? "building" : b.state === "queued" ? "waiting" : b.state === "failed" ? "failed" : "none"}>
+                {b.state === "queued" ? `waiting · ${queuePlace(b.ahead)}` : b.state === "failed" ? `failed: ${b.error ?? ""}` : b.state}
+              </ImageState>
+            </Td>
+            <Td hideWhenNarrow muted>{b.requestedBy?.name ?? "dude"} · {ago(b.requestedAt)}</Td>
+            <Td align="right" hideWhenNarrow mono>{b.startedAt && b.finishedAt ? formatDuration(Date.parse(b.finishedAt) - Date.parse(b.startedAt)) : "—"}</Td>
+          </Tr>
+        ))}
+      </TBody>
+    </Table>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// A build
+// ---------------------------------------------------------------------------
+
+function BuildPage({ client, orgName, buildId, onSub }: { client: ApiClient; orgName: string; buildId: string; onSub: (sub: string | undefined) => void }) {
+  const [build, setBuild] = useState<ImageBuildWithLog | null>(null);
+  const [limits, setLimits] = useState<{ cpus: number; memoryMiB: number } | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  const load = useCallback(() => {
+    client.imageBuild(buildId).then((b) => {
+      setBuild(b);
+      setProblem(null);
+    }, (err: unknown) => setProblem(errorText(err)));
+  }, [client, buildId]);
+  useEffect(load, [load]);
+  useEffect(() => {
+    void client.images().then((d) => setLimits(d.builder), () => undefined);
+  }, [client]);
+  const live = build?.state === "queued" || build?.state === "running";
+  useEffect(() => {
+    if (!live) return;
+    const t = setInterval(load, 2000);
+    return () => clearInterval(t);
+  }, [live, load]);
+  const lines = useMemo<LogLine[]>(() => (build?.log ?? "").replace(/\n$/, "").split("\n").filter((l, i, a) => l || i < a.length - 1).map((text, seq) => ({ seq, text })), [build?.log]);
+  if (!build) return <div className="centered">{problem ? <Callout tone="danger">{problem}</Callout> : <Spinner label="Loading…" />}</div>;
+  const elapsed = build.startedAt ? (build.finishedAt ? Date.parse(build.finishedAt) : Date.now()) - Date.parse(build.startedAt) : null;
+  return (
+    <>
+      <Breadcrumb size="sm" items={[
+        { id: "images", label: "Images", onSelect: () => onSub(undefined) },
+        { id: build.imageId, label: build.imageName, mono: true, onSelect: () => onSub(build.imageId) },
+        { id: build.id, label: build.kind === "finish" ? `Dude layer for v${build.version}` : `Build of v${build.version}` },
+      ]} />
+      <SettingsHeader leading={<ImageMark size={44} />} title={<span className="ds-mono" data-testid="build-title">{build.imageName} v{build.version}</span>}
+        description={<>{build.note ? `“${build.note}” · ` : ""}{build.requestedBy?.name ?? "dude"}</>} />
+      <div data-testid="build-stages" data-state={build.state}>
+        <BuildStages stages={buildStages(build, limits ?? { cpus: 1.5, memoryMiB: 1536 }, build.published?.number ?? null)} />
+      </div>
+      <dl className="buildFacts">
+        <div><dt className="ds-tnum">{elapsed !== null ? formatDuration(elapsed) : build.state === "queued" ? queuePlace(build.ahead) : "—"}</dt><dd>{elapsed !== null ? (live ? "elapsed" : "took") : "in the line"}</dd></div>
+        {build.buildSeconds ? <div><dt className="ds-tnum">{formatDuration(build.buildSeconds * 1000)}</dt><dd>building</dd></div> : null}
+        {build.pushSeconds ? <div><dt className="ds-tnum">{formatDuration(build.pushSeconds * 1000)}</dt><dd>pushing</dd></div> : null}
+        <div><dt className="ds-tnum">{build.published ? `v${build.published.number}` : "none"}</dt><dd>{build.state === "succeeded" && build.kind === "build" ? "published now" : "published"}</dd></div>
+      </dl>
+      {build.state === "failed" ? <Callout tone="danger" data-testid="build-error">{build.error}</Callout> : null}
+      {build.state === "succeeded" && build.kind === "build" ? (
+        <Callout tone="success">Published. Everything that uses {build.imageName} gets v{build.version} on its next Run{orgName ? "" : ""}.</Callout>
+      ) : null}
+      <LogStream lines={lines} title="Build log" live={live} maxHeight={520} emptyMessage={build.state === "queued" ? "Waiting for the builder." : "No output."} data-testid="build-log" />
+    </>
+  );
+}
