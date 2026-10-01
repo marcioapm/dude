@@ -3,7 +3,6 @@ package servers
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -276,7 +275,7 @@ func (p *Previews) createServers(ctx context.Context, r wakeRun) error {
 		return err
 	}
 	for _, rc := range recipes {
-		if !rc.Autostart || hasServer(have, rc.Name) {
+		if !rc.Autostart || slices.ContainsFunc(have, func(s previewServer) bool { return s.Name == rc.Name }) {
 			continue
 		}
 		in, err := rc.Input(primary)
@@ -291,13 +290,22 @@ func (p *Previews) createServers(ctx context.Context, r wakeRun) error {
 		if err != nil {
 			return err
 		}
+		var kept string
 		if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, `INSERT INTO preview_servers (run_id, organization_id, name, lux_server_id, hostname, url)
-				VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (run_id, name) DO NOTHING`,
-				r.ID, r.Org, rc.Name, sv.ID, deref(sv.Hostname), sv.URL)
-			return err
+			return tx.QueryRow(ctx, `INSERT INTO preview_servers (run_id, organization_id, name, lux_server_id, hostname, url)
+				VALUES ($1, $2, $3, $4, $5, $6)
+				ON CONFLICT (run_id, name) DO UPDATE SET name = preview_servers.name
+				RETURNING lux_server_id`,
+				r.ID, r.Org, rc.Name, sv.ID, deref(sv.Hostname), sv.URL).Scan(&kept)
 		}); err != nil {
 			return err
+		}
+		if kept != sv.ID {
+			// Another orchestrator recorded its own server for this one
+			// first: the one made here is an orphan, deleted.
+			if err := p.Lux.DeleteServer(ctx, sv.ID); err != nil && !lux.IsNotFound(err) {
+				return err
+			}
 		}
 	}
 	return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
@@ -310,15 +318,6 @@ func (p *Previews) createServers(ctx context.Context, r wakeRun) error {
 	})
 }
 
-func hasServer(list []previewServer, name string) bool {
-	for _, s := range list {
-		if s.Name == name {
-			return true
-		}
-	}
-	return false
-}
-
 func deref(s *string) string {
 	if s == nil {
 		return ""
@@ -326,32 +325,51 @@ func deref(s *string) string {
 	return *s
 }
 
-// createServer creates (or finds) one preview server in lux.
+// createServer creates (or finds) one preview server in lux: at its
+// hostname, else, when another preview holds that (409 hostname_taken), at
+// the one salted with this preview's id. Each attempt first adopts a server
+// this preview already has there: a create whose answer was lost, or one
+// another orchestrator made for it meanwhile.
 func (p *Previews) createServer(ctx context.Context, r wakeRun, in lux.ServerInput, settings PreviewSettings) (lux.TenantServer, error) {
 	labels := map[string]string{"dude.org": r.Org, "dude.project": r.ProjectID, "dude.task": r.TaskID,
 		"dude.preview": r.ID, "dude.kind": KindPreview}
 	body := lux.CreateServer{Name: in.Name, Port: in.Port, Command: in.Command, Workdir: in.Workdir, Env: in.Env,
 		Labels: labels, Wake: "request", Lifetime: "owner", IdleAfter: idleAfter(settings.IdleTimeoutMinutes),
 		WakeTimeout: previewWakeTimeout, ExpireAfter: previewExpireAfter}
-	for _, salt := range []string{"", r.ID} {
-		body.Hostname = PreviewHostname(p.PreviewDomain, in.Name, r.TaskID, r.ProjectID, salt)
-		found, err := p.Lux.ListServers(ctx, body.Hostname)
-		if err != nil {
-			return lux.TenantServer{}, err
-		}
-		for _, sv := range found {
-			if sv.Labels["dude.preview"] == r.ID && sv.Name == in.Name {
-				return sv, nil
-			}
-		}
-		sv, err := p.Lux.CreateServer(ctx, body)
-		if le, ok := lux.AsError(err); ok && le.Code == "hostname_taken" && salt == "" {
-			p.Log.Warn("a preview hostname is taken; choosing another", "run", r.ID, "hostname", body.Hostname)
-			continue
-		}
+	plain := PreviewHostname(p.PreviewDomain, in.Name, r.TaskID, r.ProjectID, "")
+	sv, err := p.adoptOrCreate(ctx, r, body, plain)
+	if le, ok := lux.AsError(err); !ok || le.Code != "hostname_taken" {
 		return sv, err
 	}
-	return lux.TenantServer{}, errors.New("unreachable")
+	// Taken: by another orchestrator creating this very server (adopted
+	// now), or by another preview (salted).
+	if sv, found, err := p.adopt(ctx, r, in.Name, plain); err != nil || found {
+		return sv, err
+	}
+	p.Log.Warn("a preview hostname is taken; choosing another", "run", r.ID, "hostname", plain)
+	return p.adoptOrCreate(ctx, r, body, PreviewHostname(p.PreviewDomain, in.Name, r.TaskID, r.ProjectID, r.ID))
+}
+
+func (p *Previews) adoptOrCreate(ctx context.Context, r wakeRun, body lux.CreateServer, hostname string) (lux.TenantServer, error) {
+	if sv, found, err := p.adopt(ctx, r, body.Name, hostname); err != nil || found {
+		return sv, err
+	}
+	body.Hostname = hostname
+	return p.Lux.CreateServer(ctx, body)
+}
+
+// adopt finds this preview's server of a name at a hostname.
+func (p *Previews) adopt(ctx context.Context, r wakeRun, name, hostname string) (lux.TenantServer, bool, error) {
+	found, err := p.Lux.ListServers(ctx, hostname)
+	if err != nil {
+		return lux.TenantServer{}, false, err
+	}
+	for _, sv := range found {
+		if sv.Labels["dude.preview"] == r.ID && sv.Name == name {
+			return sv, true, nil
+		}
+	}
+	return lux.TenantServer{}, false, nil
 }
 
 // idleAfter is the project's idle limit as lux takes it.
@@ -530,20 +548,11 @@ func (p *Previews) syncRefs(ctx context.Context, r wakeRun) ([]lux.SyncRef, erro
 	}
 	var out []lux.SyncRef
 	for _, rf := range refs {
-		if len(r.Repos) == 0 || contains(r.Repos, rf.Name) {
+		if len(r.Repos) == 0 || slices.Contains(r.Repos, rf.Name) {
 			out = append(out, lux.SyncRef{Repo: rf.Name, Ref: rf.Ref})
 		}
 	}
 	return out, nil
-}
-
-func contains(list []string, s string) bool {
-	for _, x := range list {
-		if x == s {
-			return true
-		}
-	}
-	return false
 }
 
 // retireRun forgets a preview's lux Run that can never run again (or that
@@ -850,10 +859,10 @@ func (s *Service) wakeable(ctx context.Context, tx pgx.Tx, projectID string) (bo
 	if s.PreviewDomain == "" {
 		return false, nil
 	}
-	var any bool
+	var some bool
 	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM project_servers WHERE project_id = $1 AND autostart_in_previews)`,
-		projectID).Scan(&any)
-	return any, err
+		projectID).Scan(&some)
+	return some, err
 }
 
 // wakeableView fills in a wakeable preview's servers from lux's own
