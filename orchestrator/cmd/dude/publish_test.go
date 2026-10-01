@@ -51,18 +51,43 @@ func TestPublishingAFileAlreadyInTheArtifactsKeepsItsBytes(t *testing.T) {
 	if err := os.WriteFile(video, []byte(want), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// By its own path, and by a hard link under another name.
 	link := filepath.Join(t.TempDir(), "elsewhere.webm")
 	if err := os.Link(video, link); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{video, link} {
-		name, n := publishes(t, path, "walkthrough.webm")
+	// As agents run it (by its own path, no --name), and by a hard link
+	// under another name.
+	for _, c := range []struct{ path, name string }{{video, ""}, {link, "walkthrough.webm"}} {
+		name, n := publishes(t, c.path, c.name)
 		if name != "walkthrough.webm" || n != int64(len(want)) {
-			t.Fatalf("publishing %s: published %q, %d bytes; want walkthrough.webm, %d", path, name, n, len(want))
+			t.Fatalf("publishing %s: published %q, %d bytes; want walkthrough.webm, %d", c.path, name, n, len(want))
 		}
 		if b, _ := os.ReadFile(video); string(b) != want {
-			t.Fatalf("after publishing %s, the file holds %q", path, b)
+			t.Fatalf("after publishing %s, the file holds %q", c.path, b)
 		}
+	}
+}
+
+// Publishing under the name of a different file already published replaces
+// it with the new bytes, and leaves the source alone.
+func TestPublishingOverADifferentArtifactReplacesIt(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("LUX_ARTIFACTS", dir)
+	if err := os.WriteFile(filepath.Join(dir, "report.md"), []byte("an older, longer report"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(t.TempDir(), "draft.md")
+	if err := os.WriteFile(src, []byte("new report"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	name, n := publishes(t, src, "report.md")
+	if name != "report.md" || n != 10 {
+		t.Fatalf("published %q, %d bytes; want report.md, 10", name, n)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "report.md")); string(b) != "new report" {
+		t.Fatalf("the published file holds %q", b)
+	}
+	if b, _ := os.ReadFile(src); string(b) != "new report" {
+		t.Fatalf("the source now holds %q", b)
 	}
 }
