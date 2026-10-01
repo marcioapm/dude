@@ -580,6 +580,9 @@ func (p *Previews) resume(ctx context.Context, r previewRun) error {
 	if err != nil {
 		return err
 	}
+	if err := phases.RecordMemoryLimit(ctx, p.DB, r.Org, r.ID, lr); err != nil {
+		return err
+	}
 	login, err := phases.LoginFor(ctx, p.Registry, lr.Spec.Image.Ref, &lr.Spec)
 	if phases.IsLoginUnavailable(err) {
 		return p.waitForLogin(ctx, r, err)

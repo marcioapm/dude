@@ -93,6 +93,28 @@ func TestAResumedRunKeepsTheSizeItStartedOn(t *testing.T) {
 	}
 }
 
+// The memory limit lux reports for a Run's container is kept on its record
+// once the Run has stopped, so a finished Run still says what it got; one
+// recorded is not overwritten.
+func TestAFinishedRunKeepsTheMemoryLimitLuxGaveIt(t *testing.T) {
+	w := newWorld(t)
+	w.lux.MemoryShare = 0.95
+	wi := w.task()
+	w.deliver(wi)
+	// Standard, the default: 8 GiB, of which the container gets 95%, to a MiB.
+	want := int64(7782) << 20
+	w.until("the implementer to finish with its limit kept", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'completed'
+			AND (machine->>'memoryLimit')::bigint = $2`, wi, want) == 1
+	})
+	mustExec(t, w.owner, `UPDATE runs SET machine = jsonb_set(machine, '{memoryLimit}', '1') WHERE task_id = $1 AND phase = 'implement'`, wi)
+	mustExec(t, w.owner, `UPDATE runs SET artifacts_due_at = now(), artifacts_next_at = now() WHERE task_id = $1 AND phase = 'implement'`, wi)
+	w.pump()
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND machine->>'memoryLimit' = '1'`, wi); n != 1 {
+		t.Error("a limit already recorded was written again")
+	}
+}
+
 // The fixer names no size of its own: it runs on the implementer's.
 func TestTheFixerRunsOnTheImplementersSize(t *testing.T) {
 	w := newWorld(t)

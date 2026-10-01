@@ -62,6 +62,42 @@ describe("the session's machine", () => {
   });
 });
 
+/** The machine chip's tooltip, opened as a keyboard user does: focusing the chip. */
+async function machineTip(page: HTMLElement, name = "Machine: Large, 8 CPUs · 16 GiB · 80 GiB"): Promise<string> {
+  const chip = await until(() => page.querySelector<HTMLButtonElement>(`button[aria-label="${name}"]`), "the machine chip");
+  const { act } = await import("react");
+  await act(async () => chip.focus());
+  const tip = await until(() => document.querySelector("[role=tooltip]"), "the chip's tooltip");
+  return tip.textContent ?? "";
+}
+
+const LARGE: NonNullable<RunDetail["machine"]> = { sizeId: "msz_large", name: "Large", cpus: 8, memoryMiB: 16384, diskGiB: 80, pool: null, from: "organization" };
+
+describe("the memory the Run's container got", () => {
+  test("while it runs, from lux's answer", async () => {
+    class Limited extends RunClient {
+      override async runServers() {
+        const s = await super.runServers();
+        return { ...s, run: s.run ? { ...s.run, memoryLimit: 15.2 * 1024 ** 3 } : null };
+      }
+    }
+    const page = await session({ client: new Limited({ machine: LARGE }) });
+    // Read once the terminal is known: the limit comes in the same answer.
+    await until(() => page.querySelector("[data-testid=terminal-link]"), "lux's answer");
+    expect(await machineTip(page)).toContain("It asked for 16 GiB and got 15.2:");
+  });
+
+  test("on a finished Run, from what the Run recorded", async () => {
+    const page = await session({ client: new RunClient({ status: "completed", endedAt: new Date().toISOString(), machine: { ...LARGE, memoryLimit: 15.2 * 1024 ** 3 } }) });
+    expect(await machineTip(page)).toContain("It asked for 16 GiB and got 15.2:");
+  });
+
+  test("not reported: the tooltip does not say", async () => {
+    const page = await session({ client: new RunClient({ status: "completed", endedAt: new Date().toISOString(), machine: LARGE }) });
+    expect(await machineTip(page)).not.toContain("It asked for");
+  });
+});
+
 describe("a branch preview's session", () => {
   test("on its task's page, points at the task's Servers tab", async () => {
     let opened = 0;

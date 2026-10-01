@@ -186,6 +186,9 @@ func (a *Artifacts) settled(ctx context.Context, r dueRun) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	if err := RecordMemoryLimit(ctx, a.DB, r.Org, r.ID, run); err != nil {
+		return false, err
+	}
 	resumed := r.Status == statusRunning || r.Status == statusScheduled
 	if !lux.Terminal(run.State) && !resumed {
 		return false, nil

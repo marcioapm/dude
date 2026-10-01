@@ -248,9 +248,7 @@ func (s *Service) view(ctx context.Context, r *runRow, recipes json.RawMessage) 
 		if luxRun, err = s.Lux.Get(ctx, r.LuxRunID); err == nil {
 			v.LuxState = luxRun.State
 			v.Host = nonEmpty(luxRun.Host)
-			if n := len(luxRun.Placements); n > 0 {
-				v.MemoryLimit = luxRun.Placements[n-1].MemoryLimit
-			}
+			v.MemoryLimit = luxRun.MemoryLimit()
 		} else {
 			s.Log.Debug("reading the run from lux", "run", r.ID, "error", err)
 		}

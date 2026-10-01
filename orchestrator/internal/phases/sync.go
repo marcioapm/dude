@@ -1084,6 +1084,9 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (lux.Run,
 	if err != nil {
 		return lux.Run{}, err
 	}
+	if err := RecordMemoryLimit(ctx, s.DB, r.Org, r.ID, lr); err != nil {
+		return lux.Run{}, err
+	}
 	spec, _, err := s.spec(ctx, r, &lr.Spec)
 	if passing(err) || forge.Transient(err) || errors.As(err, new(errLoginUnavailable)) {
 		return lux.Run{}, err
