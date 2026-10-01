@@ -38,7 +38,8 @@ type Indexer struct {
 	DB       *db.DB
 	Embedder embeddings.Embedder
 	Log      *slog.Logger
-	// Now is for tests.
+	// Now overrides the indexer's clock for tests. Refusal backoff uses this
+	// clock; immediately due work uses -infinity to avoid database clock skew.
 	Now func() time.Time
 
 	mu       sync.Mutex
@@ -225,7 +226,7 @@ func (x *Indexer) broke(cause error, at time.Time) {
 func (x *Indexer) clearOtherModels(ctx context.Context, model string) error {
 	return x.DB.InSystem(ctx, "indexer", func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE search_documents
-			SET embedding = NULL, embedding_model = NULL, embedded_at = NULL, attempts = 0, last_error = NULL, next_attempt_at = now()
+			SET embedding = NULL, embedding_model = NULL, embedded_at = NULL, attempts = 0, last_error = NULL, next_attempt_at = '-infinity'
 			WHERE embedding IS NOT NULL AND embedding_model IS DISTINCT FROM $1`, model)
 		if err == nil && tag.RowsAffected() > 0 && x.Log != nil {
 			x.Log.Info("embeddings from another model cleared, to embed again", "model", model, "documents", tag.RowsAffected())
@@ -320,7 +321,7 @@ func Vector(v []float32) string {
 // Retry makes the failed documents of an organization due now: the Index
 // page's Retry and Retry all.
 func Retry(ctx context.Context, tx pgx.Tx, typ, id string) (int64, error) {
-	tag, err := tx.Exec(ctx, `UPDATE search_documents SET next_attempt_at = now()
+	tag, err := tx.Exec(ctx, `UPDATE search_documents SET next_attempt_at = '-infinity'
 		WHERE embedding IS NULL AND last_error IS NOT NULL
 		  AND ($1 = '' OR (source_type = $1 AND source_id = $2))`, typ, id)
 	if err != nil {
@@ -333,7 +334,7 @@ func Retry(ctx context.Context, tx pgx.Tx, typ, id string) (int64, error) {
 // again, by words meanwhile.
 func Reindex(ctx context.Context, tx pgx.Tx) (int64, error) {
 	tag, err := tx.Exec(ctx, `UPDATE search_documents
-		SET embedding = NULL, embedding_model = NULL, embedded_at = NULL, attempts = 0, last_error = NULL, next_attempt_at = now()`)
+		SET embedding = NULL, embedding_model = NULL, embedded_at = NULL, attempts = 0, last_error = NULL, next_attempt_at = '-infinity'`)
 	if err != nil {
 		return 0, fmt.Errorf("reindex: %w", err)
 	}
