@@ -25,6 +25,16 @@ const ALLOWED: Record<string, Record<string, string>> = {
   },
   "packages/design-system/src/primitives/Select.module.css": { "*": "a field's edge" },
   "packages/design-system/src/primitives/NumberInput.module.css": { "*": "a field's edge" },
+  "packages/design-system/src/components/CodeEditor.module.css": {
+    ".frame": "a field's edge",
+    ".frame:hover": "a field's edge",
+    ".frame:focus-within": "focus",
+  },
+  "packages/design-system/src/components/ImagePicker.module.css": {
+    ".field": "a field's edge",
+    ".field:hover": "a field's edge",
+    ".field:focus-within, .fieldOpen": "focus",
+  },
   "packages/design-system/src/primitives/Checkbox.module.css": { "*": "a checkbox is its outline" },
   "packages/design-system/src/components/ChatComposer.module.css": { ".field": "a field's edge", ".field:hover": "a field's edge", ".field:focus-within": "focus" },
   "packages/design-system/src/components/Sidebar.module.css": { ".search": "a field's edge", ".search:hover": "a field's edge", ".search:focus-within": "focus" },
