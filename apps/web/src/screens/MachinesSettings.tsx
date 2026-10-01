@@ -145,9 +145,9 @@ export function MachinesPage({ client, orgName, sizes, problem, setSizes }: {
               <Th align="right">CPUs</Th>
               <Th align="right">Memory</Th>
               <Th align="right">Disk</Th>
-              <Th>Pool</Th>
-              <Th>Fits</Th>
-              <Th>Used by</Th>
+              <Th hideWhenNarrow>Pool</Th>
+              <Th hideWhenNarrow>Fits</Th>
+              <Th hideWhenNarrow>Used by</Th>
               {canEdit ? <Th align="right" width="48px"><span className="ds-sr-only">Actions</span></Th> : null}
             </Tr>
           </THead>
@@ -163,9 +163,9 @@ export function MachinesPage({ client, orgName, sizes, problem, setSizes }: {
                   <Td align="right" fit className="ds-tnum">{s.cpus} CPUs</Td>
                   <Td align="right" fit className="ds-tnum">{gib(s.memoryMiB * 1024 * 1024)} GiB</Td>
                   <Td align="right" fit className="ds-tnum">{s.diskGiB} GiB</Td>
-                  <Td fit mono={s.pool !== null} muted={s.pool === null}>{s.pool ?? "Default pool"}</Td>
-                  <Td fit><FitBar share={fit.share}>{fit.text}</FitBar></Td>
-                  <Td wrap><UsedBy faces={faces(s.usedBy)}>{usedByWords(s, s.usedBy)}</UsedBy></Td>
+                  <Td fit hideWhenNarrow mono={s.pool !== null} muted={s.pool === null}>{s.pool ?? "Default pool"}</Td>
+                  <Td fit hideWhenNarrow><FitBar share={fit.share}>{fit.text}</FitBar></Td>
+                  <Td wrap hideWhenNarrow><UsedBy faces={faces(s.usedBy)}>{usedByWords(s, s.usedBy)}</UsedBy></Td>
                   {canEdit ? (
                     <Td align="right">
                       <RowMenu size="sm" label={`Actions for ${s.name}`} items={[
@@ -195,11 +195,11 @@ export function MachinesPage({ client, orgName, sizes, problem, setSizes }: {
             <THead>
               <Tr>
                 <Th>Pool</Th>
-                <Th>Machines</Th>
+                <Th hideWhenNarrow>Machines</Th>
                 <Th align="right">CPUs</Th>
                 <Th align="right">Memory</Th>
                 <Th align="right">Disk</Th>
-                <Th>Known from</Th>
+                <Th hideWhenNarrow>Known from</Th>
               </Tr>
             </THead>
             <TBody>
@@ -210,13 +210,13 @@ export function MachinesPage({ client, orgName, sizes, problem, setSizes }: {
                     {p.isDefault ? <Badge size="sm">{orgName}’s default</Badge> : null}{" "}
                     {p.platform ? <Badge size="sm">Platform</Badge> : null}
                   </Td>
-                  <Td fit>{poolMachines(p)}</Td>
+                  <Td fit hideWhenNarrow>{poolMachines(p)}</Td>
                   <Td align="right" fit className="ds-tnum">{p.hostSize ? p.hostSize.cpus : "—"}</Td>
                   <Td align="right" fit className="ds-tnum">{p.hostSize ? `${gib(p.hostSize.memory)} GiB` : "—"}</Td>
                   <Td align="right" fit muted={p.hostSize?.disk === 0} className="ds-tnum">
                     {p.hostSize ? (p.hostSize.disk > 0 ? `${gib(p.hostSize.disk)} GiB` : "not reserved") : "—"}
                   </Td>
-                  <Td fit muted>{poolKnownFrom(p)}</Td>
+                  <Td fit muted hideWhenNarrow>{poolKnownFrom(p)}</Td>
                 </Tr>
               ))}
             </TBody>
