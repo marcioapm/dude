@@ -91,3 +91,46 @@ def test_another_organization_sees_no_servers(client: ApiClient, second_org: dic
     assert other.get(f"/v1/projects/{forge_project['id']}/servers").status_code == 404
     task = client.create_task(forge_project["id"], "Mine")
     assert other.get(f"/v1/tasks/{task['id']}/servers").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# In the browser
+# ---------------------------------------------------------------------------
+
+import re  # noqa: E402
+
+import pytest  # noqa: E402
+from playwright.sync_api import Page, expect  # noqa: E402
+
+from helpers import sign_in, toast  # noqa: E402
+
+
+@pytest.mark.ui
+def test_branch_previews_run_on_the_size_a_project_picks_and_reset_follows_the_default(
+    page: Page, web_url: str, client: ApiClient, org: dict, project: dict, console_errors: list
+):
+    pid = project["id"]
+    created = client.post("/v1/machines/sizes", {"name": "Large", "cpus": 8, "memoryMiB": 16384, "diskGiB": 80})
+    assert created.status_code == 201, created.text
+    large = next(s for s in created.json()["sizes"] if s["name"] == "Large")
+    org_name = client.get("/v1/settings/organization").json()["organization"]["name"]
+    sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/project/{pid}/settings/servers")
+    previews = page.get_by_test_id("preview-settings")
+    machine = previews.get_by_test_id("preview-machine")
+    # Naming none: the organisation's default size, Standard.
+    expect(machine).to_have_text(re.compile(rf"^{re.escape(org_name)}’s default\s*Standard · 2 CPUs · 8 GiB · 20 GiB$"))
+
+    machine.click()
+    page.get_by_role("option").filter(has_text=re.compile(r"^Large\s*8 CPUs · 16 GiB · 80 GiB$")).click()
+    expect(toast(page, "Machine saved")).to_be_visible()
+    assert client.get(f"/v1/projects/{pid}/servers").json()["previews"]["machineSize"] == large["id"]
+    expect(machine).to_have_text(re.compile(r"^Large\s*8 CPUs · 16 GiB · 80 GiB$"))
+
+    overridden = previews.locator("[data-source='project']")
+    expect(overridden).to_contain_text("default size, Standard")
+    overridden.get_by_role("button", name="Reset", exact=True).click()
+    expect(toast(page, "Machine reset")).to_be_visible()
+    assert client.get(f"/v1/projects/{pid}/servers").json()["previews"]["machineSize"] is None
+    expect(previews.locator("[data-source='organization']").first).to_have_text(f"From {org_name}’s default size")
+    assert console_errors == []
