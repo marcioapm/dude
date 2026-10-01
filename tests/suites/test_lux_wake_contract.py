@@ -198,9 +198,14 @@ def lux_events(env, run_id: str) -> list[dict]:
 
 
 def shot_dude(page, url: str, org: dict, task: dict, name: str) -> None:
-    """dude's Servers tab for the task, as a person sees it."""
-    sign_in(page, url, org["api_key"])
-    page.goto(f"{url}/#/task/{task['id']}/servers")
-    page.wait_for_selector('[data-testid="servers-panel"]', timeout=30_000)
-    time.sleep(1)
-    page.screenshot(path=str(SHOTS / name), full_page=True)
+    """dude's Servers tab for the task, as a person sees it, in a tab of its
+    own (the lux page stays where it is)."""
+    tab = page.context.new_page()
+    try:
+        sign_in(tab, url, org["api_key"])
+        tab.goto(f"{url}/#/task/{task['id']}/servers")
+        tab.wait_for_selector('[data-testid="servers-panel"]', timeout=30_000)
+        time.sleep(1)
+        tab.screenshot(path=str(SHOTS / name), full_page=True)
+    finally:
+        tab.close()
