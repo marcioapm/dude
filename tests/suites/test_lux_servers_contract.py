@@ -148,9 +148,10 @@ def state_of(lux: Lux, run: str) -> str:
 
 
 def test_attach_and_sync_refusals_carry_the_codes_dude_branches_on(lux: Lux):
-    """dude detaches and attaches again only on 409 `attached`; leaves a push
-    to the next wake on 409 `not_running`; reads a 404 from attach as the Run
-    or the server only by asking for the server."""
+    """dude detaches and attaches again only on 409 `attached`; reads a 404
+    from attach as the Run or the server only by asking for the server; and
+    drops a sync lux refuses for good. (A sync of a stopped Run, 409
+    not_running, needs a Run with a repository: test_lux_wake_contract.)"""
     domain = lux.domain()
     runs = [submit(lux), submit(lux)]
     servers = []
@@ -180,13 +181,14 @@ def test_attach_and_sync_refusals_carry_the_codes_dude_branches_on(lux: Lux):
         assert gone.status_code == 404 and gone.json()["error"]["code"] == "not_found", gone.text
         assert lux.req("GET", f"/v1/servers/{b['id']}").status_code == 200
 
-        # A sync of a Run that is not running: 409 not_running.
-        assert lux.req("POST", f"/v1/runs/{runs[1]}/stop", {}).status_code in (200, 202)
-        wait_until(lambda: state_of(lux, runs[1]) == "stopped", timeout=120, interval=1, message="never stopped")
+        # A sync naming a repository the Run does not have: 422, whatever
+        # its state (dude syncs only the repositories its Run holds).
         r = lux.req("POST", f"/v1/runs/{runs[1]}/sync", {"requestId": "x", "sync": [{"repo": "app", "ref": "main"}]})
-        assert r.status_code == 409 and r.json()["error"]["code"] == "not_running", r.text
+        assert r.status_code == 422 and r.json()["error"]["code"] == "invalid_request", r.text
 
         # A Run over: attach is 409 finished, resume 409 not_resumable.
+        assert lux.req("POST", f"/v1/runs/{runs[1]}/stop", {}).status_code in (200, 202)
+        wait_until(lambda: state_of(lux, runs[1]) == "stopped", timeout=120, interval=1, message="never stopped")
         assert lux.req("POST", f"/v1/runs/{runs[1]}/cancel", {}).status_code in (200, 202)
         wait_until(lambda: state_of(lux, runs[1]) == "cancelled", timeout=120, interval=1, message="never cancelled")
         over = lux.req("POST", f"/v1/servers/{b['id']}/attach", {"runId": runs[1]})

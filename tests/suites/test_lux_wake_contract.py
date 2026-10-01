@@ -157,6 +157,10 @@ def test_a_preview_sleeps_and_wakes_on_real_lux(client: ApiClient, env, org: dic
     assert last is None or datetime.fromisoformat(last.replace("Z", "+00:00")), idle
     assert idle["serverId"] == sv["id"] and wake["serverId"] == sv["id"] and wake["data"]["name"] == "web", (idle, wake)
     assert state["data"]["state"] in ("starting", "ready", "unreachable", "exited", "stopped"), state
+    # A push while asleep: lux refuses a sync of the stopped Run (409
+    # not_running), and dude leaves it to the next wake.
+    r = lux_api(env, "POST", f"/v1/runs/{lux_run}/sync", {"requestId": "contract", "sync": [{"repo": "app", "ref": "main"}]})
+    assert r.status_code == 409 and r.json()["error"]["code"] == "not_running", r.text
 
     # A new commit on the branch while it sleeps; the next request wakes it on it.
     _write_message(gh, "hello from commit B")
