@@ -102,3 +102,12 @@ CREATE INDEX runs_wakeable_live_idx ON runs (created_at)
 CREATE INDEX runs_wakeable_open_idx ON runs (created_at)
   WHERE kind = 'preview' AND wakeable AND lux_stop_reason IS DISTINCT FROM 'cancel';
 CREATE INDEX preview_servers_live_idx ON preview_servers (run_id) WHERE deleted_at IS NULL;
+
+-- A preview sleeps after 15 minutes without a request unless its project says otherwise
+-- (was 30, from 055). Projects that chose a timeout keep theirs.
+CREATE OR REPLACE FUNCTION preview_settings(p projects) RETURNS json LANGUAGE sql STABLE AS $$
+  SELECT json_build_object('image', p.preview_settings->'image',
+    'egress', COALESCE(p.preview_settings->'egress', '[]'::jsonb),
+    'idleTimeoutMinutes', COALESCE((p.preview_settings->>'idleTimeoutMinutes')::float8, 15),
+    'machineSize', p.preview_settings->'machineSize')
+$$;

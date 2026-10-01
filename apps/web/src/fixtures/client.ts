@@ -93,7 +93,7 @@ export class FixtureClient extends ApiClient {
     this.#servers = serversFor(scenario);
     this.#logs = logsFor(scenario);
     this.#recipes = [...serverRecipes];
-    this.#previews = { image: null, egress: [...previewEgress], idleTimeoutMinutes: 30, machineSize: null };
+    this.#previews = { image: null, egress: [...previewEgress], idleTimeoutMinutes: 15, machineSize: null };
     this.#task = taskFor(scenario);
     this.#events = eventsFor(scenario);
     const as = localStorage.getItem("dude.fixtures.run");
