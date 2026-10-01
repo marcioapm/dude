@@ -63,6 +63,7 @@ type listed struct {
 	HasMore    bool             `json:"hasMore"`
 	Files      []map[string]any `json:"files"`
 	NotChanged []string         `json:"notChanged"`
+	LineCap    int              `json:"lineCap"`
 	Cut        bool             `json:"cut"`
 }
 
@@ -245,8 +246,8 @@ func TestRunDiffCapsTheLinesOfOneCallAndKeepsTruncated(t *testing.T) {
 	if lines(1) != 900 || mid1["cut"] != nil || mid1["truncated"] != nil {
 		t.Errorf("mid.go: %d lines, cut %v", lines(1), mid1["cut"])
 	}
-	if lines(2) != 100 || small2["cut"] != true {
-		t.Errorf("small.go: %d lines, cut %v; want the 100 left of 2,000", lines(2), small2["cut"])
+	if lines(2) != 97 || small2["cut"] != true {
+		t.Errorf("small.go: %d lines, cut %v; want the 97 left of 2,000 after three headers", lines(2), small2["cut"])
 	}
 	// Alone, it is whole.
 	out = f.diff(t, token, `{"paths":["small.go"]}`)
@@ -257,6 +258,42 @@ func TestRunDiffCapsTheLinesOfOneCallAndKeepsTruncated(t *testing.T) {
 	out = f.diff(t, token, `{}`)
 	if out.Files[0]["path"] != "big.go" || out.Files[0]["truncated"] != true || out.Files[1]["truncated"] != nil {
 		t.Errorf("list: %v", out.Files)
+	}
+}
+
+// fragmented is one file's `git diff` text of n one-line insertion hunks.
+func fragmented(path string, n int) (text, hunks string) {
+	var h strings.Builder
+	for i := range n {
+		fmt.Fprintf(&h, "@@ -%d,0 +%d @@\n+line %d\n", 2*i, 2*i+1, i)
+	}
+	return fmt.Sprintf("diff --git a/%[1]s b/%[1]s\nindex 1..2 100644\n--- a/%[1]s\n+++ b/%[1]s\n", path) + h.String(), h.String()
+}
+
+func TestRunDiffCountsHunkHeadersAgainstTheLineCap(t *testing.T) {
+	f := setup(t)
+	token := f.run(t, "run_h", "implementer", "running")
+	// 1,000 hunks of one line each: 2,000 lines of text per file.
+	one, oneH := fragmented("one.go", 1000)
+	two, _ := fragmented("two.go", 1000)
+	f.storeDiff(t, "run_h", one+two)
+
+	out := f.diff(t, token, `{"paths":["one.go","two.go"]}`)
+	if len(out.Files) != 2 || !out.Cut || out.LineCap != 2000 {
+		t.Fatalf("files %v cut %v lineCap %d", paths(out.Files), out.Cut, out.LineCap)
+	}
+	total := 0
+	for _, file := range out.Files {
+		total += strings.Count(file["patch"].(string), "\n")
+	}
+	if total > 2000 {
+		t.Errorf("%d lines of patch text, over the cap of 2,000", total)
+	}
+	if out.Files[0]["patch"] != oneH || out.Files[0]["cut"] != nil || out.Files[0]["truncated"] != nil {
+		t.Errorf("one.go: cut %v truncated %v, patch whole %v", out.Files[0]["cut"], out.Files[0]["truncated"], out.Files[0]["patch"] == oneH)
+	}
+	if out.Files[1]["patch"] != "" || out.Files[1]["cut"] != true || out.Files[1]["truncated"] != nil {
+		t.Errorf("two.go: cut %v truncated %v patch %q", out.Files[1]["cut"], out.Files[1]["truncated"], out.Files[1]["patch"])
 	}
 }
 

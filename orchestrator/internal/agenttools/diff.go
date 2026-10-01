@@ -18,7 +18,8 @@ import (
 const (
 	diffListDefault = 200
 	diffListMax     = 1000
-	// Hunk lines one call returns over all the paths it names.
+	// Lines of patch text, hunk headers included, one call returns over
+	// all the paths it names.
 	diffPatchLines = 2000
 )
 
@@ -180,7 +181,7 @@ func runDiff(ctx context.Context, tx pgx.Tx, c Caller, in runDiffIn) (any, error
 }
 
 // patches renders the files asked for as unified diff text, in the order
-// asked, until diffPatchLines lines in all.
+// asked, until diffPatchLines lines in all: hunk headers count as lines.
 func patches(head diffHeader, paths []string, stored []storedDiffFile) diffPatchesOut {
 	out := diffPatchesOut{diffHeader: head, Files: []diffPatchOut{}, LineCap: diffPatchLines}
 	byPath := map[string]storedDiffFile{}
@@ -198,12 +199,15 @@ func patches(head diffHeader, paths []string, stored []storedDiffFile) diffPatch
 		var b strings.Builder
 	hunks:
 		for _, h := range f.Hunks {
-			if left == 0 && len(h.Lines) > 0 {
+			// A header is written only with room for it and, if the hunk
+			// has any, its first line.
+			if left < 1+min(len(h.Lines), 1) {
 				file.Cut = true
 				break
 			}
 			b.WriteString(h.Header)
 			b.WriteByte('\n')
+			left--
 			for _, l := range h.Lines {
 				if left == 0 {
 					file.Cut = true
