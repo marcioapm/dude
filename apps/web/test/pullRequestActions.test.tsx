@@ -92,3 +92,24 @@ describe("asking for a review", () => {
     await unmount();
   });
 });
+
+describe("the reviewers a setting names", () => {
+  test("one saved in another case is not offered again", async () => {
+    const { act, mount, settle } = await import("./dom.ts");
+    const { ReviewerPicker } = await import("../src/screens/ReviewerPicker.tsx");
+    const client = {
+      reviewerCandidates: async () => [{ kind: "user", login: "ana", name: "Ana Ribeiro" }, { kind: "user", login: "hanna", name: "Hanna Lindqvist" }],
+    } as unknown as ApiClient;
+    const { container, unmount } = await mount(
+      <ReviewerPicker client={client} pullRequestId={null} picked={[{ kind: "user", login: "Ana" }]} onChange={() => {}} />,
+    );
+    await act(async () => {
+      const field = container.querySelector<HTMLInputElement>("[role=combobox]")!;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, "an");
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await settle(250);
+    expect([...container.querySelectorAll("[role=option]")].map((o) => o.textContent?.slice(0, 2))).toEqual(["HL"]);
+    await unmount();
+  });
+});
