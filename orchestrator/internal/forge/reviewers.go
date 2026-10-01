@@ -44,19 +44,19 @@ func (g *GitHub) ReviewerCandidates(ctx context.Context, slug string, number int
 	if !search && number == 0 {
 		return []Candidate{}, nil
 	}
-	const query = `query($owner:String!,$name:String!,$number:Int!,$pr:Boolean!,$search:Boolean!,$q:String!){` +
+	const query = `query($owner:String!,$name:String!,$number:Int!,$pr:Boolean!,$search:Boolean!,$teams:Boolean!,$q:String!){` +
 		`repository(owner:$owner,name:$name){` +
 		`pullRequest(number:$number)@include(if:$pr){author{login}` +
 		`suggestedReviewers{isAuthor isCommenter reviewer{login name avatarUrl}}` +
 		`reviewRequests(first:100){nodes{requestedReviewer{__typename ...on User{login} ...on Team{slug}}}}}` +
 		`assignableUsers(first:20,query:$q)@include(if:$search){nodes{login name avatarUrl}}}` +
-		`organization(login:$owner)@include(if:$search){teams(first:20,query:$q){nodes{slug name avatarUrl members{totalCount}}}}}`
+		`organization(login:$owner)@include(if:$teams){teams(first:20,query:$q){nodes{slug name avatarUrl members{totalCount}}}}}`
 	type user struct {
 		Login     string `json:"login"`
 		Name      string `json:"name"`
 		AvatarURL string `json:"avatarUrl"`
 	}
-	var out struct {
+	type answer struct {
 		Data *struct {
 			Repository *struct {
 				PullRequest *struct {
@@ -101,10 +101,28 @@ func (g *GitHub) ReviewerCandidates(ctx context.Context, slug string, number int
 			Path    []any  `json:"path"`
 		} `json:"errors"`
 	}
-	if err := g.doURL(ctx, "POST", g.graphqlURL(), map[string]any{"query": query, "variables": map[string]any{
-		"owner": owner, "name": name, "number": number, "pr": number > 0, "search": search, "q": words,
-	}}, &out); err != nil {
+	ask := func(teams bool) (answer, error) {
+		var out answer
+		err := g.doURL(ctx, "POST", g.graphqlURL(), map[string]any{"query": query, "variables": map[string]any{
+			"owner": owner, "name": name, "number": number, "pr": number > 0, "search": search, "teams": search && teams, "q": words,
+		}}, &out)
+		return out, err
+	}
+	out, err := ask(true)
+	if err != nil {
 		return nil, err
+	}
+	// A token without read:org has the whole query refused for its teams,
+	// with no path to say so: ask again without them — people, no teams.
+	if search && out.Data == nil {
+		for _, e := range out.Errors {
+			if e.Type == "INSUFFICIENT_SCOPES" {
+				if out, err = ask(false); err != nil {
+					return nil, err
+				}
+				break
+			}
+		}
 	}
 	// GraphQL answers 200 with "errors": a rate limit is GitHub's to say
 	// again later; an error about the organization only (a user owns the
