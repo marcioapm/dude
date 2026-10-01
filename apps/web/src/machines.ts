@@ -10,6 +10,7 @@ import {
   SETTINGS_ROLE_LABEL,
   gib,
   machineSizeInputSchema,
+  sizePool,
   type Fit,
   type MachinePool,
   type MachinePools,
@@ -66,7 +67,8 @@ export function knownPools(pools: MachinePools | null): MachinePool[] | null {
  */
 export function poolLabel(size: Pick<MachineSizeWithUse, "poolId" | "poolName">, known: readonly MachinePool[] | null): string {
   if (size.poolId === null) return "Default pool";
-  return known?.find((p) => p.id === size.poolId)?.name ?? size.poolName ?? size.poolId;
+  const pool = known === null ? null : sizePool(size.poolId, known);
+  return pool?.name ?? size.poolName ?? size.poolId;
 }
 
 export function roleLabel(role: string | null): string {

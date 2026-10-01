@@ -165,7 +165,7 @@ export function sizePool(poolId: string | null, pools: readonly MachinePool[]): 
  * does not have it. An unread list (null) says nothing is gone.
  */
 export function poolGone(poolId: string | null, pools: readonly MachinePool[] | null): boolean {
-  return poolId !== null && pools !== null && !pools.some((p) => p.id === poolId);
+  return poolId !== null && pools !== null && sizePool(poolId, pools) === null;
 }
 
 /**
