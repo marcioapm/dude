@@ -702,44 +702,32 @@ func (g *GitHub) unresolvedThreads(ctx context.Context, slug string, number int)
 		`pullRequest(number:$number){reviewThreads(first:100,after:$after){nodes{isResolved}pageInfo{hasNextPage endCursor}}}}}`
 	var after *string
 	for range 20 {
-		var out struct {
-			Data *struct {
-				Repository *struct {
-					PullRequest *struct {
-						ReviewThreads struct {
-							Nodes []struct {
-								IsResolved bool `json:"isResolved"`
-							} `json:"nodes"`
-							PageInfo struct {
-								HasNextPage bool   `json:"hasNextPage"`
-								EndCursor   string `json:"endCursor"`
-							} `json:"pageInfo"`
-						} `json:"reviewThreads"`
-					} `json:"pullRequest"`
-				} `json:"repository"`
-			} `json:"data"`
-			Errors []struct {
-				Type    string `json:"type"`
-				Message string `json:"message"`
-			} `json:"errors"`
+		var data struct {
+			Repository *struct {
+				PullRequest *struct {
+					ReviewThreads struct {
+						Nodes []struct {
+							IsResolved bool `json:"isResolved"`
+						} `json:"nodes"`
+						PageInfo struct {
+							HasNextPage bool   `json:"hasNextPage"`
+							EndCursor   string `json:"endCursor"`
+						} `json:"pageInfo"`
+					} `json:"reviewThreads"`
+				} `json:"pullRequest"`
+			} `json:"repository"`
 		}
-		err := g.doURL(ctx, "POST", g.graphqlURL(), map[string]any{"query": query,
-			"variables": map[string]any{"owner": owner, "name": name, "number": number, "after": after}}, &out)
+		errs, err := g.graphql(ctx, query, map[string]any{"owner": owner, "name": name, "number": number, "after": after}, &data)
 		if err != nil {
 			if Transient(err) {
 				return 0, false, err
 			}
 			return 0, true, nil
 		}
-		for _, e := range out.Errors {
-			if e.Type == "RATE_LIMITED" {
-				return 0, false, &Error{Status: 429, Message: "GraphQL: " + e.Message}
-			}
-		}
-		if len(out.Errors) > 0 || out.Data == nil || out.Data.Repository == nil || out.Data.Repository.PullRequest == nil {
+		if len(errs) > 0 || data.Repository == nil || data.Repository.PullRequest == nil {
 			return 0, true, nil
 		}
-		threads := out.Data.Repository.PullRequest.ReviewThreads
+		threads := data.Repository.PullRequest.ReviewThreads
 		for _, t := range threads.Nodes {
 			if !t.IsResolved {
 				n++
@@ -754,6 +742,37 @@ func (g *GitHub) unresolvedThreads(ctx context.Context, slug string, number int)
 	// More threads than it reads: at least n, which holds readiness back
 	// if any is open, as all of them would.
 	return n, false, nil
+}
+
+// gqlError is one of the errors GraphQL answers 200 with.
+type gqlError struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
+}
+
+// graphql sends a query and decodes its data into `data`. GraphQL answers
+// most failures with 200 and "errors": a rate limit among them is an
+// error, GitHub's to say again later; the rest are returned for the caller
+// to judge, beside whatever data came with them.
+func (g *GitHub) graphql(ctx context.Context, query string, vars map[string]any, data any) ([]gqlError, error) {
+	var out struct {
+		Data   json.RawMessage `json:"data"`
+		Errors []gqlError      `json:"errors"`
+	}
+	if err := g.doURL(ctx, "POST", g.graphqlURL(), map[string]any{"query": query, "variables": vars}, &out); err != nil {
+		return nil, err
+	}
+	for _, e := range out.Errors {
+		if e.Type == "RATE_LIMITED" {
+			return nil, &Error{Status: 429, Message: "GraphQL: " + e.Message}
+		}
+	}
+	if len(out.Data) > 0 && string(out.Data) != "null" {
+		if err := json.Unmarshal(out.Data, data); err != nil {
+			return nil, err
+		}
+	}
+	return out.Errors, nil
 }
 
 // graphqlURL: github.com's GraphQL is beside its REST root; Enterprise's

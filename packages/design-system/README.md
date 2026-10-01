@@ -699,7 +699,8 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   (`findOnEmpty`), heads its options in groups (`group`: "Suggested by
   GitHub", "People", "Teams"), shows one it will not pick with why
   (`optionDisabled` → a badge, "Already asked"), and empties after a pick
-  (`clearOnPick`). The picks are a `RemovableList` above the field;
+  (`clearOnPick`), hiding what is already picked (`exclude`) rather than
+  asking again. The picks are a `RemovableList` above the field;
   Backspace in the empty field drops the last (`onBackspaceEmpty`) and
   ⌘/Ctrl+Enter sends them (`onSubmit`).
 - **Ask for a GitHub login with a SearchPicker of who can review**, never

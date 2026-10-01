@@ -15,7 +15,7 @@ const pr = (over: Partial<PullRequest> = {}): PullRequest => ({
   display: "ready", createdAt: "", updatedAt: "", ...over,
 });
 const check = (name: string, status: string, conclusion: string | null) => ({ name, status, conclusion });
-const refused = "dude's GitHub token can't read this repository's checks (it needs Checks: Read)";
+const refused = "GitHub won't show dude this repository's checks";
 
 const event = (eventType: string, payload: Record<string, unknown>, actorId = "workflow"): PersistedEvent => ({
   eventId: "e", eventType, occurredAt: "2026-09-28T10:00:00Z", organizationId: "o", projectId: null, taskId: "t", runId: null,

@@ -11,6 +11,7 @@
  */
 
 import { useState, type ReactNode } from "react";
+import { firstName, plural } from "@dude/design-system";
 import type { FactKind } from "@dude/design-system/components";
 import { Button, RowMenu, Tooltip } from "@dude/design-system/primitives";
 import { prCheckFailed } from "@dude/domain";
@@ -32,9 +33,10 @@ export interface PullRequestActionSlots {
 /** "Ask", "Ask Ana", "Ask 2 people". */
 function askLabel(picked: ReadonlyArray<ReviewerCandidate>): string {
   if (picked.length === 0) return "Ask";
-  if (picked.length > 1) return `Ask ${picked.length} ${picked.some((p) => p.kind === "team") ? "reviewers" : "people"}`;
-  const [one] = picked;
-  return `Ask ${one!.kind === "team" ? one!.name || one!.login : (one!.name || one!.login).split(" ")[0]}`;
+  if (picked.length > 1) return `Ask ${plural(picked.length, picked.some((p) => p.kind === "team") ? "reviewer" : "person", picked.some((p) => p.kind === "team") ? "reviewers" : "people")}`;
+  const one = picked[0]!;
+  const name = one.name || one.login;
+  return `Ask ${one.kind === "team" ? name : firstName(name)}`;
 }
 
 export function PullRequestActions({ client, pr, defaultMethod, onChanged, children }: {
@@ -92,6 +94,8 @@ export function PullRequestActions({ client, pr, defaultMethod, onChanged, child
   if (pr.unresolvedThreads > 0) {
     facts.threads = <a href={`${pr.url}/files`} target="_blank" rel="noreferrer">show</a>;
   }
+  // Asked already and yet to answer: shown in the picker, not picked again.
+  const asked = new Set(pr.reviews.filter((r) => r.state.toUpperCase() === "REQUESTED" || r.rerequested).map((r) => r.login.toLowerCase()));
   const stopAsking = () => {
     setAsking(false);
     setPicked([]);
@@ -106,8 +110,8 @@ export function PullRequestActions({ client, pr, defaultMethod, onChanged, child
 
   // Asking opens under the reviewers' lines: a picker, and Ask for those picked.
   const asker = asking ? (
-    <div className="prAsk" data-testid="pr-review-ask">
-      <ReviewerPicker client={client} pullRequestId={pr.id} picked={picked} onChange={setPicked} onSubmit={ask} onCancel={stopAsking} autoFocus />
+    <div data-testid="pr-review-ask">
+      <ReviewerPicker client={client} pullRequestId={pr.id} asked={asked} picked={picked} onChange={setPicked} onSubmit={ask} onCancel={stopAsking} autoFocus />
       <span className="prAskFoot">
         <Button size="sm" variant="primary" disabled={busy !== null || picked.length === 0} onClick={ask} data-testid="pr-review-send">
           {busy === "review" ? "Asking…" : askLabel(picked)}

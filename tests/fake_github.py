@@ -509,16 +509,18 @@ class FakeGitHub:
                 and who could review it (REVIEWERS; the first two suggested)."""
                 v = body.get("variables") or {}
                 gh = root._for_repo(v.get("name", "")) if v.get("owner") == root.owner else None
+                if "teams(" in body.get("query", ""):
+                    # The owner's teams: none, as for a repository a user owns.
+                    return self._send(200, {"data": {"organization": None}, "errors": [
+                        {"type": "NOT_FOUND", "message": "Could not resolve to an Organization"}]})
                 if gh is not None and "suggestedReviewers" in body.get("query", ""):
                     pr = gh.pulls.get(int(v.get("number") or 0))
                     words = (v.get("q") or "").lower()
-                    asked = [{"requestedReviewer": {"__typename": "User", "login": l}} for l in (pr.requested_reviewers if pr else [])]
                     return self._send(200, {"data": {"repository": {
-                        "pullRequest": {"author": {"login": "dude-bot"}, "reviewRequests": {"nodes": asked},
-                                        "suggestedReviewers": [{"isAuthor": False, "isCommenter": i == 1, "reviewer": u}
+                        "pullRequest": {"author": {"login": "dude-bot"},
+                                        "suggestedReviewers": [{"isCommenter": i == 1, "reviewer": u}
                                                                for i, u in enumerate(REVIEWERS[:2])]} if pr else None,
-                        "assignableUsers": {"nodes": [u for u in REVIEWERS if words in f"{u['login']} {u['name']}".lower()]}},
-                        "organization": {"teams": {"nodes": []}}}})
+                        "assignableUsers": {"nodes": [u for u in REVIEWERS if words in f"{u['login']} {u['name']}".lower()]}}}})
                 pr = gh.pulls.get(int(v.get("number") or 0)) if gh else None
                 if pr is None:
                     return self._send(200, {"data": {"repository": None}, "errors": [

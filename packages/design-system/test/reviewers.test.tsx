@@ -29,6 +29,10 @@ afterEach(async () => {
 });
 
 const asked: string[][] = [];
+// Suggestions before any words, the rest by name after; what is picked the picker hides.
+const find = async (q: string) =>
+  PEOPLE.filter((p) => (q ? p.group !== "Suggested" && (p.login + p.name).toLowerCase().includes(q.toLowerCase()) : p.group === "Suggested"));
+
 function Picker() {
   const [picked, setPicked] = useState<Who[]>([]);
   return (
@@ -36,8 +40,8 @@ function Picker() {
       <output>{picked.map((p) => p.login).join(",")}</output>
       <SearchPicker<Who>
         label="Who to ask" findOnEmpty clearOnPick delay={0}
-        find={async (q) => PEOPLE.filter((p) => !picked.includes(p) && (q ? p.group !== "Suggested" && (p.login + p.name).toLowerCase().includes(q.toLowerCase()) : p.group === "Suggested"))}
-        version={picked.length}
+        find={find}
+        exclude={new Set(picked.map((p) => p.login))}
         optionKey={(p) => p.login}
         renderOption={(p) => <span>{p.name}</span>}
         group={(p) => p.group}
@@ -160,10 +164,10 @@ describe("PullRequestPanel reviewers", () => {
   const line = (reviews: object[]) =>
     [...renderToStaticMarkup(<PullRequestPanel pr={{ ...base, reviews } as never} />).matchAll(/data-fact="reviews"[^>]*>([^]*?)<\/li>/g)].map((m) => text(m[1]!));
 
+  // Each one's latest word, as the sync keeps them (forge.latestReviews).
   test("every reviewer keeps a line: a comment, a team asked, one asked again after a verdict", () => {
     expect(line([
       { login: "ana", state: "APPROVED", submittedAt: "1" },
-      { login: "ana", state: "COMMENTED", submittedAt: "2" },
       { login: "tom", state: "COMMENTED", submittedAt: "1" },
       { login: "dana", state: "APPROVED", submittedAt: "1", rerequested: true },
       { login: "acme/platform", state: "REQUESTED", team: true },

@@ -263,6 +263,12 @@ const REVIEWERS: ReadonlyArray<Reviewer> = [
   { login: "acme/platform", name: "Platform", team: true, reason: "7 members" },
 ];
 
+/** GitHub's suggestions before any words; people and teams by name after. */
+async function findReviewers(q: string): Promise<ReadonlyArray<Reviewer>> {
+  return REVIEWERS.filter((r) => (q ? `${r.login} ${r.name}`.toLowerCase().includes(q.toLowerCase()) : r.reason && !r.team))
+    .map((r) => (q && !r.team ? { login: r.login, name: r.name, asked: r.asked } : r));
+}
+
 function ReviewerDemo() {
   const [picked, setPicked] = useState<Reviewer[]>([]);
   return (
@@ -272,10 +278,7 @@ function ReviewerDemo() {
         items={picked.map((r) => ({ id: r.login, label: r.login, content: <GitHubUserLine user={r} size={20} inline /> }))} />
       <SearchPicker<Reviewer>
         label="Who to ask for a review" placeholder={picked.length ? "Anyone else?" : "Name or GitHub login"} size="sm"
-        findOnEmpty clearOnPick version={picked.length}
-        find={async (q) => REVIEWERS.filter((r) => !picked.includes(r) &&
-          (q ? `${r.login} ${r.name}`.toLowerCase().includes(q.toLowerCase()) : r.reason && !r.team))
-          .map((r): Reviewer => (q && !r.team ? { login: r.login, name: r.name, asked: r.asked } : r))}
+        findOnEmpty clearOnPick find={findReviewers} exclude={new Set(picked.map((r) => r.login))}
         group={(r) => (r.reason && !r.team ? "Suggested by GitHub" : r.team ? "Teams" : "People")}
         renderGroup={(g) => <>{g === "Suggested by GitHub" ? <Icon name="github" size={12} /> : null}{g}</>}
         optionKey={(r) => r.login}
@@ -289,9 +292,9 @@ function ReviewerDemo() {
         pr={{ number: 482, url: "#", title: "Retry webhook deliveries with exponential backoff", repositoryName: "control-plane",
           state: "open", review: "changes_requested", checks: "passing", baseBranch: "main", mergeable: "clean",
           reviews: [
+            { login: "danabrams", state: "APPROVED", submittedAt: "2026-10-01T09:00:00Z", rerequested: true },
             { login: "anaribeiro", state: "APPROVED", submittedAt: "2026-10-01T10:00:00Z" },
             { login: "kai-n", state: "CHANGES_REQUESTED", submittedAt: "2026-10-01T10:05:00Z" },
-            { login: "danabrams", state: "APPROVED", submittedAt: "2026-10-01T09:00:00Z", rerequested: true },
             { login: "tokafor", state: "COMMENTED", submittedAt: "2026-10-01T10:10:00Z" },
             { login: "acme/platform", state: "REQUESTED", team: true },
           ] }}

@@ -52,17 +52,17 @@ export interface SearchPickerProps<T> {
   readonly onBackspaceEmpty?: (() => void) | undefined;
   /** ⌘/Ctrl+Enter. */
   readonly onSubmit?: (() => void) | undefined;
-  /** Find again for the same words when this changes: the app's picks changed what it offers. */
-  readonly version?: string | number | undefined;
+  /** Keys (`optionKey`) never shown: what is already picked. Hidden as found, never found again. */
+  readonly exclude?: ReadonlySet<string> | undefined;
 }
 
 export function SearchPicker<T>({
   find, optionKey, renderOption, onPick, onCancel, placeholder, label, autoFocus, delay = 200, size,
-  findOnEmpty, group, renderGroup, optionDisabled, clearOnPick, empty, onBackspaceEmpty, onSubmit, version,
+  findOnEmpty, group, renderGroup, optionDisabled, clearOnPick, empty, onBackspaceEmpty, onSubmit, exclude,
 }: SearchPickerProps<T>) {
   const listId = useId();
   const [query, setQuery] = useState("");
-  const [options, setOptions] = useState<ReadonlyArray<T>>([]);
+  const [found, setFound] = useState<ReadonlyArray<T>>([]);
   // The words the options answer: an empty answer to words is "nothing found".
   const [answered, setAnswered] = useState<string | null>(null);
   const [active, setActive] = useState(0);
@@ -77,7 +77,7 @@ export function SearchPicker<T>({
     const words = query.trim();
     const mine = ++latest.current;
     if (!words && !findOnEmpty) {
-      setOptions([]);
+      setFound([]);
       setAnswered(null);
       return;
     }
@@ -85,19 +85,23 @@ export function SearchPicker<T>({
       find(words).then(
         (found) => {
           if (mine !== latest.current) return;
-          setOptions(found);
+          setFound(found);
           setAnswered(words);
-          setActive(Math.max(0, found.findIndex((o) => !why(o))));
+          setActive(0);
         },
         () => {
           if (mine !== latest.current) return;
-          setOptions([]);
+          setFound([]);
           setAnswered(null);
         },
       );
     }, words ? delay : 0);
     return () => clearTimeout(t);
-  }, [query, find, delay, findOnEmpty, version]);
+  }, [query, find, delay, findOnEmpty]);
+
+  const options = exclude?.size ? found.filter((o) => !exclude.has(optionKey(o))) : found;
+  // The active row is the first that can be picked, until the person moves.
+  const current = active < options.length && !why(options[active]!) ? active : Math.max(0, options.findIndex((o) => !why(o)));
 
   const open = !closed && options.length > 0;
   const nothing = !closed && !open && !!answered && empty !== undefined;
@@ -120,7 +124,7 @@ export function SearchPicker<T>({
     if ((e.key === "ArrowDown" || e.key === "ArrowUp") && (open || closed)) {
       e.preventDefault();
       if (closed) setClosed(false);
-      else setActive((i) => step(i, e.key === "ArrowDown" ? 1 : -1));
+      else setActive(step(current, e.key === "ArrowDown" ? 1 : -1));
     } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && onSubmit) {
       e.preventDefault();
       onSubmit();
@@ -128,7 +132,7 @@ export function SearchPicker<T>({
       // Enter picks, or does nothing: a field that finds is never a form's
       // submit (a settings page saving on half-typed words).
       e.preventDefault();
-      if (open) pick(options[active]!);
+      if (open) pick(options[current]!);
     } else if (e.key === "Backspace" && query === "" && onBackspaceEmpty) {
       onBackspaceEmpty();
     } else if (e.key === "Escape") {
@@ -144,20 +148,22 @@ export function SearchPicker<T>({
   };
 
   const rows: ReactNode[] = [];
+  let lastGroup: string | undefined;
   options.forEach((o, i) => {
     const g = group?.(o);
-    if (g !== undefined && (i === 0 || group!(options[i - 1]!) !== g)) {
+    if (g !== undefined && (i === 0 || g !== lastGroup)) {
       rows.push(<li key={`group:${g}`} role="presentation" className={styles["group"]}>{renderGroup ? renderGroup(g) : g}</li>);
     }
+    lastGroup = g;
     const off = why(o);
     rows.push(
       <li
         key={optionKey(o)}
         id={optionId(i)}
         role="option"
-        aria-selected={i === active}
+        aria-selected={i === current}
         aria-disabled={off ? true : undefined}
-        className={cx(styles["option"], i === active && !off && styles["active"], off && styles["disabled"])}
+        className={cx(styles["option"], i === current && !off && styles["active"], off && styles["disabled"])}
         // mousedown, not click: the field keeps its focus.
         onMouseDown={(e) => {
           e.preventDefault();
@@ -180,7 +186,7 @@ export function SearchPicker<T>({
         aria-expanded={open}
         aria-controls={listId}
         aria-autocomplete="list"
-        aria-activedescendant={open ? optionId(active) : undefined}
+        aria-activedescendant={open ? optionId(current) : undefined}
         autoFocus={autoFocus}
         leading={<Icon name="search" size={14} />}
         placeholder={placeholder}

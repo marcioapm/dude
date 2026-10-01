@@ -2,14 +2,14 @@ package api
 
 // Who can be asked for a review: GitHub's suggestions for a pull request,
 // or a search by name and login, for the Request review picker and the
-// setting that names reviewers for every pull request. Answers are kept a
-// minute, so a person typing and backspacing costs GitHub one query per
-// distinct word, not per key.
+// setting that names reviewers for every pull request. Who was already
+// asked is not part of the answer: the page has it, from the pull
+// request's reviews. Answers are kept a minute, so a person typing and
+// backspacing costs GitHub one query per distinct word, not per key.
 
 import (
 	"context"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,13 +22,15 @@ import (
 
 const candidatesTTL = time.Minute
 
+// candidateCache keeps GitHub's answers a minute, by what was asked.
 type candidateCache struct {
 	mu   sync.Mutex
-	seen map[string]cachedCandidates
-	// How many times each repository's answers were forgotten: an answer
-	// asked for before the latest is not kept, as it may not show who was
-	// just asked.
-	forgot map[string]uint64
+	kept map[candidateQuery]cachedCandidates
+}
+
+type candidateQuery struct {
+	org, slug, words string
+	number           int
 }
 
 type cachedCandidates struct {
@@ -36,14 +38,11 @@ type cachedCandidates struct {
 	list []forge.Candidate
 }
 
-var candidates = candidateCache{seen: map[string]cachedCandidates{}, forgot: map[string]uint64{}}
-
 // get answers from the cache, else asks GitHub and keeps the answer.
-func (c *candidateCache) get(ctx context.Context, repo, key string, ask func(context.Context) ([]forge.Candidate, error)) ([]forge.Candidate, error) {
+func (c *candidateCache) get(ctx context.Context, q candidateQuery, ask func(context.Context) ([]forge.Candidate, error)) ([]forge.Candidate, error) {
 	now := time.Now()
 	c.mu.Lock()
-	hit, ok := c.seen[key]
-	generation := c.forgot[repo]
+	hit, ok := c.kept[q]
 	c.mu.Unlock()
 	if ok && now.Sub(hit.at) < candidatesTTL {
 		return hit.list, nil
@@ -54,31 +53,17 @@ func (c *candidateCache) get(ctx context.Context, repo, key string, ask func(con
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.kept == nil {
+		c.kept = map[candidateQuery]cachedCandidates{}
+	}
 	// Old answers go as new ones come: the cache never outgrows a minute's typing.
-	for k, v := range c.seen {
+	for k, v := range c.kept {
 		if now.Sub(v.at) >= candidatesTTL {
-			delete(c.seen, k)
+			delete(c.kept, k)
 		}
 	}
-	if c.forgot[repo] == generation {
-		c.seen[key] = cachedCandidates{at: now, list: list}
-	}
+	c.kept[q] = cachedCandidates{at: now, list: list}
 	return list, nil
-}
-
-// forget drops what was kept for a repository: once someone is asked, the
-// next look must show them asked.
-func (c *candidateCache) forget(org, slug string) {
-	repo := org + "\x00" + slug
-	prefix := repo + "\x00"
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.forgot[repo]++
-	for k := range c.seen {
-		if strings.HasPrefix(k, prefix) {
-			delete(c.seen, k)
-		}
-	}
 }
 
 // pullRequestReviewerCandidates: for a pull request, GitHub's suggestions
@@ -105,24 +90,29 @@ func (s *Server) pullRequestReviewerCandidates(w http.ResponseWriter, r *http.Re
 // everyone across an organization's repositories; a team or a member of
 // the owner is assignable in each.
 func (s *Server) organizationReviewerCandidates(w http.ResponseWriter, r *http.Request, org string) error {
-	var urls []string
+	var slug string
 	if err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		rows, err := tx.Query(r.Context(), `SELECT url FROM repositories ORDER BY created_at, name`)
 		if err != nil {
 			return err
 		}
-		urls, err = pgx.CollectRows(rows, pgx.RowTo[string])
-		return err
+		defer rows.Close()
+		for rows.Next() && slug == "" {
+			var url string
+			if err := rows.Scan(&url); err != nil {
+				return err
+			}
+			slug = forge.SlugFromURL(url)
+		}
+		return rows.Err()
 	}); err != nil {
 		return err
 	}
-	for _, u := range urls {
-		if slug := forge.SlugFromURL(u); slug != "" {
-			return s.reviewerCandidates(w, r, org, slug, 0)
-		}
+	if slug == "" {
+		write(w, http.StatusOK, map[string]any{"candidates": []forge.Candidate{}})
+		return nil
 	}
-	write(w, http.StatusOK, map[string]any{"candidates": []forge.Candidate{}})
-	return nil
+	return s.reviewerCandidates(w, r, org, slug, 0)
 }
 
 func (s *Server) reviewerCandidates(w http.ResponseWriter, r *http.Request, org, slug string, number int) error {
@@ -133,17 +123,21 @@ func (s *Server) reviewerCandidates(w http.ResponseWriter, r *http.Request, org,
 	if len(words) > 100 {
 		return fail(http.StatusBadRequest, "bad_request", "q: at most 100 characters")
 	}
-	gh, err := s.forge(r.Context(), org)
-	if err != nil {
-		return err
-	}
-	repo := org + "\x00" + slug
-	key := strings.Join([]string{repo, strings.ToLower(words), strconv.Itoa(number)}, "\x00")
-	list, err := candidates.get(r.Context(), repo, key, func(ctx context.Context) ([]forge.Candidate, error) {
-		return gh.ReviewerCandidates(ctx, slug, number, words)
+	q := candidateQuery{org: org, slug: slug, words: strings.ToLower(words), number: number}
+	list, err := s.candidates.get(r.Context(), q, func(ctx context.Context) ([]forge.Candidate, error) {
+		// GitHub only on a miss: a cached word costs no credential read.
+		gh, err := s.forge(ctx, org)
+		if err != nil {
+			return nil, err
+		}
+		list, err := gh.ReviewerCandidates(ctx, slug, number, words)
+		if err != nil {
+			return nil, forgeRefusal(err, "GitHub would not list reviewers")
+		}
+		return list, nil
 	})
 	if err != nil {
-		return forgeRefusal(err, "GitHub would not list reviewers")
+		return err
 	}
 	write(w, http.StatusOK, map[string]any{"candidates": list})
 	return nil
