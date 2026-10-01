@@ -18,10 +18,15 @@ import (
 
 func started(t *testing.T, spec lux.Spec) (*fakelux.Server, *lux.HTTPClient, string) {
 	t.Helper()
-	fake := fakelux.New(t.TempDir(), "k", nil)
+	return startedWith(t, fakelux.New(t.TempDir(), "k", nil), spec)
+}
+
+func startedWith(t *testing.T, fake *fakelux.Server, spec lux.Spec) (*fakelux.Server, *lux.HTTPClient, string) {
+	t.Helper()
 	fake.PreviewDomain = "lux.test"
 	srv := httptest.NewServer(fake.Handler())
 	t.Cleanup(srv.Close)
+	t.Cleanup(fake.Close)
 	c := lux.New(srv.URL, "k")
 	run, err := c.Submit(context.Background(), spec, "")
 	if err != nil {

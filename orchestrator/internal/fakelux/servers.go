@@ -47,6 +47,8 @@ type server struct {
 	// Bumped on every start or stop, so a pending "ready" of an earlier
 	// start does nothing.
 	gen int
+	// The tenant server this is the process of, when attached (tenant.go).
+	tenant *tenantServer
 }
 
 type logLine struct {
@@ -154,6 +156,18 @@ func (s *Server) setServer(run *Run, sv *server, state string) {
 			data["error"] = sv.Error
 		}
 	}
+	if t := sv.tenant; t != nil {
+		// A tenant server's: on the feed with its id; ready resolves its
+		// open wake and starts a new idle period.
+		if state == lux.ServerReady {
+			t.WakeRequestedAt = nil
+		}
+		if state == lux.ServerStopped && sv.StopReason != "" {
+			data["stopReason"] = sv.StopReason
+		}
+		s.serverEvent(t, "server.state", data)
+		return
+	}
 	s.luxEvent(run, "server.state", data)
 }
 
@@ -221,11 +235,12 @@ func (s *Server) placementEnded(run *Run, state, reason string) {
 	}
 }
 
-// placementStarted starts the spec's servers, as lux does on every start
-// of the Run. Callers hold s.mu.
+// placementStarted starts the spec's servers and the attached tenant
+// servers with a command, as lux does on every start of the Run. Callers
+// hold s.mu.
 func (s *Server) placementStarted(run *Run) {
 	for _, sv := range run.servers {
-		if sv.FromSpec {
+		if sv.FromSpec || sv.tenant != nil && sv.Command != nil {
 			s.startServer(run, sv)
 		}
 	}

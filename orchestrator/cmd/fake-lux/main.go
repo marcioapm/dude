@@ -29,9 +29,12 @@ func main() {
 	legacyInput := flag.Bool("legacy-input", false, "acknowledge input as a lux before input phases: one lux.input with no phase, at the turn's end")
 	nextTurnInput := flag.Bool("next-turn-input", false, "a harness that reads input only between turns (lands next_turn)")
 	failUnreadOnInterrupt := flag.Bool("fail-unread-on-interrupt", false, "an interrupt fails input the agent took and had not read, as a lux before it carried it into the next turn")
+	previewDomain := flag.String("preview-domain", "", "the domain servers' preview URLs are under (none: previews off)")
+	idleCheck := flag.Duration("idle-check", 0, "how often idle servers are looked for (default 100ms)")
 	flag.Parse()
 
 	srv := fakelux.New("", *key, nil)
+	srv.PreviewDomain, srv.IdleCheck = *previewDomain, *idleCheck
 	srv.LegacyInput, srv.NextTurnInput = *legacyInput, *nextTurnInput
 	srv.FailUnreadOnInterrupt = *failUnreadOnInterrupt
 	srv.Workspaces = *workspaces
