@@ -74,12 +74,17 @@ export type Sizes = { sizes: MachineSizeWithUse[]; canEdit: boolean };
  * The organisation's sizes, loaded once per client by the settings screen
  * and passed to every page under it; `setSizes` takes what a change on the
  * Machines page answered, so the menu's count and the Machine fields follow.
+ * A failed load leaves no sizes, so Machine fields still offer the inherited
+ * one; `problem` is for the Machines page's banner.
  */
 export function useMachineSizes(client: ApiClient) {
   const [sizes, setSizes] = useState<Sizes | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   useEffect(() => {
-    client.machineSizes().then(setSizes, (err: unknown) => setProblem(errorText(err)));
+    client.machineSizes().then(setSizes, (err: unknown) => {
+      setProblem(errorText(err));
+      setSizes({ sizes: [], canEdit: false });
+    });
   }, [client]);
   return { sizes, setSizes, problem };
 }
@@ -122,7 +127,7 @@ export function MachinesPage({ client, orgName, sizes, problem, setSizes }: {
   const [removing, setRemoving] = useState<MachineSizeWithUse | null>(null);
   const { save, problem: saveProblem } = useSave();
 
-  if (!sizes) return <div className="centered">{problem ? <Callout tone="danger">{problem}</Callout> : <Spinner label="Loading…" />}</div>;
+  if (!sizes || problem) return <div className="centered">{problem ? <Callout tone="danger">{problem}</Callout> : <Spinner label="Loading…" />}</div>;
   const canEdit = sizes.canEdit;
   const poolList = pools?.pools ?? [];
   const defaultSize = sizes.sizes.find((s) => s.isDefault);
