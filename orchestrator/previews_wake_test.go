@@ -417,6 +417,14 @@ func TestAPushSyncsARunningPreviewOnly(t *testing.T) {
 		t.Errorf("synced %v, want %v", r.Syncs[0], want)
 	}
 
+	// A person pushes to the task's pull request's branch: the forge's new
+	// head (webhook or reconciler) syncs it too.
+	mustExec(t, w.owner, `INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url,
+		head_branch, base_branch, head_sha, title) VALUES ($1, $2, $3, $4, $5, 1, 'u', 'dude/x', 'main', 'a1', 't')`,
+		"pr_"+w.org, w.org, w.project, task, w.repoID)
+	mustExec(t, w.owner, `UPDATE pull_requests SET head_sha = 'b2' WHERE id = $1`, "pr_"+w.org)
+	w.until("the forge push to sync", func() bool { return len(r.Syncs) == 2 })
+
 	w.lux.Idle(web)
 	w.until("parked", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, runID) == 1
@@ -425,8 +433,14 @@ func TestAPushSyncsARunningPreviewOnly(t *testing.T) {
 	w.until("the sync to be dropped", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND sync_wanted_at IS NULL`, runID) == 1
 	})
-	if len(r.Syncs) != 1 || slices.Contains(w.lux.CallsOf(r.ID)[len(w.lux.CallsOf(r.ID))-1:], "sync") {
-		t.Errorf("a sleeping preview was synced: %v", w.lux.CallsOf(r.ID))
+	syncs := 0
+	for _, c := range w.lux.CallsOf(r.ID) {
+		if c == "sync" {
+			syncs++
+		}
+	}
+	if len(r.Syncs) != 2 || syncs != 2 {
+		t.Errorf("a sleeping preview was synced: %d accepted, %d asked", len(r.Syncs), syncs)
 	}
 }
 
@@ -463,6 +477,82 @@ func TestTheReaperEndsPreviewsUnusedPastItsAge(t *testing.T) {
 	if _, ok := w.lux.TenantServer(w.serverID(young, "web")); !ok {
 		t.Error("the young preview's server was deleted")
 	}
+}
+
+// A preview declared and never opened is reaped by its age.
+func TestANeverWokenPreviewIsReaped(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	w.previews.ReapAfter = 7 * 24 * time.Hour
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	_, runID := w.declare()
+	web := w.serverID(runID, "web")
+	mustExec(t, w.owner, `UPDATE runs SET created_at = now() - interval '7 days 1 hour' WHERE id = $1`, runID)
+	w.until("reaped", func() bool { return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1 })
+	w.until("its server deleted", func() bool { _, ok := w.lux.TenantServer(web); return !ok })
+}
+
+// The reaper's clock is the latest wake of any of the preview's servers,
+// and a running preview is not reaped however long ago it was woken.
+func TestTheReaperGoesByTheLatestWakeAndSparesARunningPreview(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	w.previews.ReapAfter = 7 * 24 * time.Hour
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	w.recipe("api", 4000, "go run .", "api", nil, true)
+	_, runID := w.declare()
+	web := w.serverID(runID, "web")
+	mustExec(t, w.owner, `UPDATE runs SET created_at = now() - interval '30 days' WHERE id = $1`, runID)
+	mustExec(t, w.owner, `UPDATE preview_servers SET last_woken_at = CASE name WHEN 'api' THEN now() - interval '8 days'
+		ELSE now() - interval '1 hour' END WHERE run_id = $1`, runID)
+	for range 3 {
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, runID); n != 1 || w.labelled(runID) != 2 {
+		t.Fatalf("a preview whose web was woken an hour ago was reaped:\n%s", w.describeRuns())
+	}
+
+	w.open(web)
+	w.running(runID, "web")
+	mustExec(t, w.owner, `UPDATE preview_servers SET last_woken_at = now() - interval '8 days' WHERE run_id = $1`, runID)
+	for range 3 {
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, runID); n != 1 {
+		t.Fatalf("a running preview was reaped:\n%s", w.describeRuns())
+	}
+}
+
+// deleteGone deletes a server in lux before dude does, as lux would have
+// had dude crashed after its DELETE: dude's own DELETE then answers 404.
+type deleteGone struct {
+	lux.Client
+}
+
+func (d deleteGone) DeleteServer(ctx context.Context, id string) error {
+	_ = d.Client.DeleteServer(ctx, id)
+	return d.Client.DeleteServer(ctx, id)
+}
+
+// A server lux has deleted already (404 on dude's DELETE), with no
+// server.deleted heard (dude crashed after its DELETE, before recording
+// it): the server is done, and the Run is cancelled after it.
+func TestAnEndWhoseServerIsGoneStillCancelsTheRun(t *testing.T) {
+	w := newWorld(t)
+	w.lux.PreviewDomain, w.previews.PreviewDomain = previewDomain, previewDomain
+	w.lux.IdleCheck = time.Hour
+	stopFeed := w.startFeed(w.newFeed())
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	task, runID := w.declare()
+	w.open(w.serverID(runID, "web"))
+	r := w.luxRuns()[0]
+	stopFeed()
+	w.previews.Lux = deleteGone{Client: w.previews.Lux}
+	mustExec(t, w.owner, `UPDATE tasks SET status = 'done' WHERE id = $1`, task)
+	w.until("its Run cancelled", func() bool {
+		mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE id = $1`, runID)
+		return r.Cancelled
+	})
 }
 
 // A task that ends takes its preview with it: its lux servers deleted
@@ -664,4 +754,20 @@ func TestStartingAServerOfAnAsleepPreviewWakesIt(t *testing.T) {
 		sv, _ := w.lux.TenantServer(w.serverID(runID, "web"))
 		return sv.State == lux.SrvReady
 	})
+}
+
+// Anything but a start on an asleep preview waits until it runs: 409
+// asleep, and no wake asked for.
+func TestStoppingAServerOfAnAsleepPreviewIsRefused(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	_, runID := w.declare()
+	code, out := w.do("POST", "/internal/runs/"+runID+"/servers/web/stop", nil)
+	if e, _ := out["error"].(map[string]any); code != 409 || e["code"] != "asleep" {
+		t.Fatalf("stop = %d %v", code, out)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND wake_wanted_at IS NULL`, runID); n != 1 {
+		t.Error("a stop asked for a wake")
+	}
 }
