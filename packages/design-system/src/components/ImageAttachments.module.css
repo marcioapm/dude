@@ -1,0 +1,395 @@
+/*
+ * Images a person sends an agent. A chip in the tray, the images under a
+ * sent turn, and the viewer are things you touch: control radius. The
+ * viewer and the drop overlay cover their region: square. Shapes are drawn
+ * with shadows, never borders; text over an image sits on the scrim.
+ */
+
+/* ---- tray ------------------------------------------------------------- */
+
+.tray {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-8);
+  padding: var(--ds-space-8) var(--ds-space-8) 0;
+}
+
+.chip {
+  position: relative;
+  flex: none;
+  width: 76px;
+  height: 76px;
+  overflow: hidden;
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-raised);
+  box-shadow: 0 0 0 1px var(--ds-color-border-subtle);
+}
+.chipImage {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.chipUploading .chipImage {
+  filter: saturate(0.3) brightness(0.85);
+}
+.chipError {
+  box-shadow: 0 0 0 1.5px var(--ds-tone-danger-mark);
+}
+.chipError .chipImage {
+  opacity: 0.35;
+}
+.chipFile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--ds-space-2);
+  padding: var(--ds-space-8) var(--ds-space-4) 0;
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-2xs);
+  text-align: center;
+}
+.chipFileName {
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.chipRing {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+.ring {
+  fill: none;
+  stroke-width: 4;
+}
+.ringTrack {
+  stroke: color-mix(in srgb, var(--ds-color-on-accent) 35%, transparent);
+}
+.ringFill {
+  stroke: var(--ds-color-on-accent);
+  stroke-linecap: round;
+  transition: stroke-dasharray var(--ds-duration-base) var(--ds-ease-standard);
+}
+.ringSweep {
+  animation: global(ds-spin) calc(var(--ds-cadence-spin) / max(var(--ds-motion-live), 0.0001)) linear infinite;
+}
+.chipBadge {
+  position: absolute;
+  left: var(--ds-space-4);
+  bottom: var(--ds-space-4);
+  padding: 1px var(--ds-space-4);
+  border-radius: var(--ds-radius-mark);
+  background: var(--ds-color-overlay);
+  color: var(--ds-color-text-primary);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-2xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3;
+}
+.chipErrorLabel {
+  position: absolute;
+  left: var(--ds-space-4);
+  right: var(--ds-space-4);
+  bottom: var(--ds-space-4);
+  padding: var(--ds-space-2) var(--ds-space-4);
+  border-radius: var(--ds-radius-mark);
+  background: var(--ds-color-surface);
+  color: var(--ds-tone-danger-fg);
+  font-size: var(--ds-text-2xs);
+  font-weight: var(--ds-weight-medium);
+  line-height: 1.2;
+}
+.chipRemove {
+  position: absolute;
+  top: var(--ds-space-4);
+  right: var(--ds-space-4);
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-color-overlay);
+  color: var(--ds-color-text-primary);
+  box-shadow: var(--ds-shadow-1);
+}
+.chipRemove:hover {
+  color: var(--ds-color-text-strong);
+}
+.chipRemove:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-color-focus-ring);
+}
+
+/* The line under the tray when something in it cannot go. */
+.warning {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ds-space-8);
+  padding: var(--ds-space-6) var(--ds-space-8);
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-tone-attention-bg);
+  color: var(--ds-tone-attention-fg);
+  font-size: var(--ds-text-xs);
+  line-height: var(--ds-leading-snug);
+}
+.warning b {
+  font-weight: var(--ds-weight-medium);
+}
+
+/* ---- drop target ----------------------------------------------------- */
+
+.dropZone {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.dropOverlay {
+  position: absolute;
+  inset: var(--ds-space-8);
+  z-index: var(--ds-z-raised);
+  display: grid;
+  place-items: center;
+  border-radius: var(--ds-radius-float);
+  background: color-mix(in srgb, var(--ds-color-surface) 82%, transparent);
+  box-shadow: inset 0 0 0 2px var(--ds-color-accent);
+  pointer-events: none;
+  animation: global(ds-fade-in) var(--ds-duration-fast) var(--ds-ease-enter);
+}
+.dropMessage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--ds-space-4);
+  max-width: 360px;
+  color: var(--ds-color-accent-text);
+  text-align: center;
+}
+.dropTitle {
+  margin-top: var(--ds-space-4);
+  font-size: var(--ds-text-lg);
+  color: var(--ds-color-text-strong);
+}
+.dropDetail {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.dropDetail b {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-strong);
+}
+
+/* ---- in the transcript ----------------------------------------------- */
+
+.images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-8);
+  margin-top: var(--ds-space-4);
+}
+.image {
+  position: relative;
+  display: block;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-raised);
+  box-shadow: 0 0 0 1px var(--ds-color-border-subtle);
+  cursor: zoom-in;
+}
+.image img,
+.imagePending {
+  display: block;
+  height: 150px;
+  width: auto;
+  max-width: 100%;
+  object-fit: cover;
+}
+.imagesOne .image img,
+.imagesOne .imagePending {
+  width: min(360px, 100%);
+  height: auto;
+}
+.imagePending {
+  display: grid;
+  place-items: center;
+  min-width: 120px;
+  color: var(--ds-color-text-muted);
+}
+.image:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-color-focus-ring);
+}
+.caption {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  gap: var(--ds-space-6);
+  justify-content: space-between;
+  padding: var(--ds-space-16) var(--ds-space-8) var(--ds-space-4);
+  background: linear-gradient(transparent, var(--ds-color-scrim));
+  color: var(--ds-color-on-accent);
+  font-size: var(--ds-text-2xs);
+  font-variant-numeric: tabular-nums;
+  opacity: 0;
+  transition: opacity var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.captionName {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.image:hover .caption,
+.image:focus-visible .caption {
+  opacity: 1;
+}
+
+/* ---- viewer ---------------------------------------------------------- */
+
+.viewer {
+  position: fixed;
+  inset: 0;
+  z-index: var(--ds-z-dialog);
+  display: flex;
+  flex-direction: column;
+  background: color-mix(in srgb, var(--ds-color-canvas) 96%, transparent);
+  color: var(--ds-color-text-secondary);
+  outline: none;
+  animation: global(ds-fade-in) var(--ds-duration-base) var(--ds-ease-enter);
+}
+.viewerTop {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+  padding: var(--ds-space-12) var(--ds-space-16);
+  font-size: var(--ds-text-sm);
+}
+.viewerTitle {
+  margin: 0;
+  font-size: var(--ds-text-sm);
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-strong);
+}
+.viewerContext {
+  color: var(--ds-color-text-muted);
+}
+.spacer {
+  flex: 1;
+}
+.viewerButton {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  height: var(--ds-size-control-sm);
+  padding: 0 var(--ds-space-12);
+  border: 0;
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-active-wash);
+  color: var(--ds-color-text-primary);
+  font-size: var(--ds-text-sm);
+  font-variant-numeric: tabular-nums;
+}
+.viewerButton:hover {
+  background: var(--ds-color-secondary-hover);
+}
+.viewerButton[aria-pressed="true"] {
+  background: var(--ds-color-accent-subtle);
+  color: var(--ds-color-accent-text);
+}
+.viewerButton:focus-visible,
+.viewerStep:focus-visible,
+.viewerThumb:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-color-focus-ring);
+}
+.viewerStage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--ds-space-8) var(--ds-space-64);
+}
+.viewerImage {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: var(--ds-radius-control);
+  box-shadow: var(--ds-shadow-3);
+  /* Transparent images keep their edges. */
+  background: var(--ds-color-surface);
+}
+.viewerLoading {
+  color: var(--ds-color-text-muted);
+}
+.viewerStep {
+  position: absolute;
+  top: 50%;
+  translate: 0 -50%;
+  display: grid;
+  place-items: center;
+  width: var(--ds-size-control-lg);
+  height: var(--ds-size-control-lg);
+  padding: 0;
+  border: 0;
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-color-active-wash);
+  color: var(--ds-color-text-primary);
+}
+.viewerStep:hover {
+  background: var(--ds-color-secondary-hover);
+}
+.viewerPrev {
+  left: var(--ds-space-16);
+}
+.viewerNext {
+  right: var(--ds-space-16);
+}
+.viewerMeta {
+  padding: 0 var(--ds-space-16) var(--ds-space-12);
+  font-size: var(--ds-text-xs);
+  text-align: center;
+  color: var(--ds-color-text-muted);
+}
+.viewerMeta code {
+  font-family: var(--ds-font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ds-color-text-primary);
+}
+.viewerStrip {
+  display: flex;
+  justify-content: center;
+  gap: var(--ds-space-8);
+  padding: 0 var(--ds-space-16) var(--ds-space-12);
+}
+.viewerThumb {
+  display: grid;
+  place-items: center;
+  height: 54px;
+  min-width: 54px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-raised);
+  color: var(--ds-color-text-muted);
+  opacity: 0.5;
+}
+.viewerThumb img {
+  height: 54px;
+  width: auto;
+  display: block;
+}
+.viewerThumbOn {
+  opacity: 1;
+  box-shadow: 0 0 0 2px var(--ds-color-text-strong);
+}
