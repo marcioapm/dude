@@ -8,6 +8,10 @@
  * for the orchestrator that answers lux's pools as the test sets them.
  *
  * Requires DATABASE_URL: a role that can create databases (the owner).
+ *
+ * The tests run in order on one database and share its state: Half and
+ * Large are made in "sizes" and used by the describes after it, so a test
+ * picked alone with -t fails. A database per test would cost a migration each.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -56,6 +60,8 @@ let luxPools: MachinePool[] | null = [
   pool("big", { cpus: 32, memory: 64 * GIB, disk: 380 * GIB }),
   pool("fresh", null),
 ];
+/** When set, how the orchestrator answers GET /internal/lux/pools instead. */
+let poolsReply: (() => Response) | null = null;
 
 type Json = any; // eslint-disable-line @typescript-eslint/no-explicit-any
 const body = async (res: Response): Promise<Json> => res.json();
@@ -88,6 +94,7 @@ beforeAll(async () => {
     fetch(req) {
       const path = new URL(req.url).pathname;
       if (path === "/internal/lux/pools") {
+        if (poolsReply) return poolsReply();
         return luxPools === null
           ? Response.json({ pools: [], readAt: new Date().toISOString(), problem: "lux is unreachable" })
           : Response.json({ pools: luxPools, readAt: new Date().toISOString(), problem: null });
@@ -188,6 +195,74 @@ describe("sizes", () => {
   });
 });
 
+/** A size as PUT takes it: what GET says, less what only the API writes. */
+const asInput = ({ id: _id, usedBy: _usedBy, updatedAt: _at, updatedBy: _by, ...input }: Json) => input;
+
+describe("changing a size", () => {
+  test("one that does not exist is 404", async () => {
+    expect((await call(adminKey, "PUT", "/v1/machines/sizes/msz_nope", LARGE)).status).toBe(404);
+    expect((await call(adminKey, "POST", "/v1/machines/sizes/msz_nope/default")).status).toBe(404);
+  });
+
+  test("renamed onto a name taken, whatever its case, is 409 and changes nothing", async () => {
+    const large = await byName("Large");
+    const res = await call(adminKey, "PUT", `/v1/machines/sizes/${large.id}`, { ...asInput(large), name: "HALF" });
+    expect(res.status).toBe(409);
+    expect((await body(res)).error.message).toBe("there is already a size named HALF");
+    expect(await byName("Large")).toMatchObject({ cpus: 8, memoryMiB: 16384 });
+  });
+
+  test("made too big for its pool's host is 422 and changes nothing", async () => {
+    const large = await byName("Large");
+    const res = await call(adminKey, "PUT", `/v1/machines/sizes/${large.id}`, { ...asInput(large), memoryMiB: 72 * 1024, pool: "big" });
+    expect(res.status).toBe(422);
+    expect((await body(res)).error.message).toBe("No host in ‘big’ can hold this: 72 GiB memory (it offers 64)");
+    expect(await byName("Large")).toMatchObject({ memoryMiB: 16384, pool: null });
+  });
+
+  test("unticking the default leaves it the default", async () => {
+    const standard = await byName("Standard");
+    expect((await call(adminKey, "PUT", `/v1/machines/sizes/${standard.id}`, { ...asInput(standard), isDefault: false })).status).toBe(200);
+    expect((await sizes()).filter((s) => s.isDefault).map((s) => s.name)).toEqual(["Standard"]);
+  });
+
+  test("another organization's admin cannot edit, remove or default one: 404, nothing changed", async () => {
+    const large = await byName("Large");
+    for (const [method, path, payload] of [
+      ["PUT", `/v1/machines/sizes/${large.id}`, { ...LARGE, name: "Taken over", cpus: 1 }],
+      ["DELETE", `/v1/machines/sizes/${large.id}`, { replacement: null }],
+      ["POST", `/v1/machines/sizes/${large.id}/default`, undefined],
+    ] as const) {
+      expect((await call(otherKey, method, path, payload)).status).toBe(404);
+    }
+    expect(await byName("Large")).toMatchObject({ name: "Large", cpus: 8, isDefault: false });
+    expect((await sizes()).filter((s) => s.isDefault).map((s) => s.name)).toEqual(["Standard"]);
+    expect((await sizes(otherKey)).map((s) => s.name)).toEqual(["Standard"]);
+  });
+});
+
+describe("lux's pools when the orchestrator cannot give them", () => {
+  test("an error with a message: no pools, its message; a size can still be added", async () => {
+    poolsReply = () => Response.json({ error: { code: "unavailable", message: "lux answered 503" } }, { status: 503 });
+    try {
+      expect(await body(await call(memberKey, "GET", "/v1/machines/pools"))).toMatchObject({ pools: [], problem: "lux answered 503" });
+      expect((await call(adminKey, "POST", "/v1/machines/sizes", { ...LARGE, name: "Unchecked", cpus: 40 })).status).toBe(201);
+    } finally {
+      poolsReply = null;
+    }
+    expect((await call(adminKey, "DELETE", `/v1/machines/sizes/${(await byName("Unchecked")).id}`, { replacement: null })).status).toBe(200);
+  });
+
+  test("a body that is not JSON: no pools, the status", async () => {
+    poolsReply = () => new Response("<html>bad gateway</html>", { status: 502, headers: { "content-type": "text/html" } });
+    try {
+      expect(await body(await call(memberKey, "GET", "/v1/machines/pools"))).toMatchObject({ pools: [], problem: "the orchestrator answered 502" });
+    } finally {
+      poolsReply = null;
+    }
+  });
+});
+
 describe("roles and previews name a size", () => {
   test("set at the organization, overridden in a project, Reset; the fixer follows the implementer", async () => {
     const large = await byName("Large");
@@ -208,6 +283,26 @@ describe("roles and previews name a size", () => {
     expect(after.agent_models).toEqual({});
 
     expect((await call(adminKey, "PATCH", `/v1/projects/${PROJECT}/settings`, { roles: { reviewer: { machineSize: "msz_nope" } } })).status).toBe(400);
+  });
+
+  test("a project's fixer follows the project's implementer, unless the organization gives the fixer one", async () => {
+    const large = await byName("Large");
+    const half = await byName("Half");
+    const standard = await byName("Standard");
+    try {
+      let project = await body(await call(adminKey, "PATCH", `/v1/projects/${PROJECT}/settings`, { roles: { implementer: { machineSize: half.id } } }));
+      // Under it, the organization's fixer is the organization's implementer's.
+      expect(project.roles.fixer.machineSize).toEqual({ value: half.id, source: "organization", followsImplementer: true, organization: large.id });
+      expect((await byName("Half")).usedBy).toContainEqual({ kind: "project", role: "fixer", project: { id: PROJECT, name: "Checkout", imageUrl: null }, inherited: true });
+
+      await call(adminKey, "PATCH", "/v1/settings/organization", { roles: { fixer: { machineSize: standard.id } } });
+      project = await body(await call(adminKey, "GET", `/v1/projects/${PROJECT}/settings`));
+      expect(project.roles.fixer.machineSize).toEqual({ value: standard.id, source: "organization", followsImplementer: false, organization: standard.id });
+      expect((await byName("Half")).usedBy.filter((u: Json) => u.role === "fixer")).toEqual([]);
+    } finally {
+      await call(adminKey, "PATCH", "/v1/settings/organization", { roles: { fixer: { machineSize: null } } });
+      await call(adminKey, "PATCH", `/v1/projects/${PROJECT}/settings`, { roles: { implementer: { machineSize: null } } });
+    }
   });
 
   test("a project's previews name one; one the organization lacks is refused", async () => {

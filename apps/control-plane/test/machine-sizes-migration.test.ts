@@ -74,6 +74,11 @@ describe("the database refuses what the API would", () => {
     expect(await insert("half", { cpus: 6.5, memory_mib: 23040, disk_gib: 125, pool: "big" })).toBe("");
   });
 
+  test("the most of each is a size", async () => {
+    expect(await insert("most", { cpus: 256, memory_mib: 2097152, disk_gib: 20000 })).toBe("");
+    await db`DELETE FROM machine_sizes WHERE id = 'most'`;
+  });
+
   for (const [what, over] of [
     ["CPUs off the half step", { cpus: 2.3 }],
     ["CPUs just off it", { cpus: 2.04 }],
@@ -82,6 +87,9 @@ describe("the database refuses what the API would", () => {
     ["no memory", { memory_mib: 0 }],
     ["disk off 5 GiB", { disk_gib: 12 }],
     ["no disk", { disk_gib: 0 }],
+    ["too many CPUs", { cpus: 256.5 }],
+    ["too much memory", { memory_mib: 2097152 + 512 }],
+    ["too much disk", { disk_gib: 20005 }],
     ["an empty name", { name: "" }],
     ["a name over 40", { name: "x".repeat(41) }],
     ["a pool lux would not name", { pool: "Big Pool" }],
