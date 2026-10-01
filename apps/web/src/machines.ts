@@ -27,8 +27,14 @@ export function hostSpec(pool: MachinePool): string | null {
 
 /** What a pool's machines are: "EC2 · c7a.4xlarge", or "Static · platform". */
 export function poolMachines(pool: MachinePool): string {
-  const provider = pool.provider === "ec2" ? "EC2" : pool.provider ? pool.provider[0]!.toUpperCase() + pool.provider.slice(1) : "Static";
-  return pool.instanceType ? `${provider} · ${pool.instanceType}` : `${provider} · ${pool.platform ? "platform" : "hosts"}`;
+  let provider = "Static";
+  if (pool.provider === "ec2") {
+    provider = "EC2";
+  } else if (pool.provider) {
+    provider = pool.provider[0]!.toUpperCase() + pool.provider.slice(1);
+  }
+  const machines = pool.instanceType || (pool.platform ? "platform" : "hosts");
+  return `${provider} · ${machines}`;
 }
 
 /** Where lux learned a pool's host size. */
@@ -47,7 +53,9 @@ export function poolOptionLabel(pool: MachinePool, orgName: string): string {
   return `${name} — ${poolMachines(pool)}${host ? ` · ${host}` : " · host size unknown"}`;
 }
 
-export const roleLabel = (role: string | null) => (role ? SETTINGS_ROLE_LABEL[role as SettingsRole] ?? role : "");
+export function roleLabel(role: string | null): string {
+  return role ? SETTINGS_ROLE_LABEL[role as SettingsRole] ?? role : "";
+}
 
 /** Who uses a size, in words: "3 agents", "2 agents · 1 project", "Tester · and any with none set". */
 export function usedByWords(size: Pick<MachineSize, "isDefault">, uses: readonly MachineSizeUse[]): string {
@@ -90,7 +98,17 @@ export function draftProblems(d: SizeDraft): Partial<Record<"name" | "cpus" | "m
   const parsed = machineSizeInputSchema.safeParse(asInput(d));
   if (parsed.success) return out;
   for (const issue of parsed.error.issues) {
-    const key = issue.path[0] === "memoryMiB" ? "memory" : issue.path[0] === "diskGiB" ? "disk" : (issue.path[0] as "name" | "cpus");
+    let key: "name" | "cpus" | "memory" | "disk";
+    switch (issue.path[0]) {
+      case "memoryMiB":
+        key = "memory";
+        break;
+      case "diskGiB":
+        key = "disk";
+        break;
+      default:
+        key = issue.path[0] as "name" | "cpus";
+    }
     out[key] ??= issue.message;
   }
   return out;
