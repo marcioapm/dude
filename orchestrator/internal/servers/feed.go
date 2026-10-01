@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
+	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
 )
@@ -18,24 +19,34 @@ import (
 // applied in a transaction keyed on durable columns, so two followers, or a
 // replay after a restart, apply it once.
 //
-// The cursor (lux_feed) is a settled watermark, not the last id seen: lux
-// takes an event's id when it is written, so for up to its feedSettle
-// (10s) a lower id can become visible after a higher one, and Last-Event-ID
-// resumes strictly after the id given. The cursor is kept at the lowest id
-// seen in the last Settle, less one, so a restart replays at most that much
-// (applied once) and misses nothing.
+// The cursor (lux_feed) is a settled watermark, not the last id received:
+// lux takes an event's id when it is written, not when its transaction
+// commits, so a lower id can become visible after a higher one, and
+// Last-Event-ID resumes strictly after the id given. lux's own feed moves
+// its watermark only past events whose time (when their transaction began)
+// is older than its feedSettle (10s); dude stores the highest id received
+// whose time is older than Settle (15s, a margin for the two clocks), so a
+// restart replays at most that much (applied once) and misses nothing an id
+// still to commit would carry.
 type Feed struct {
 	DB   *db.DB
 	Lux  lux.Servers
 	Log  *slog.Logger
 	Kick func()
-	// How long an event id may still be overtaken; zero is 15s.
+	// How old an event's time must be before nothing below its id can
+	// still appear; zero is 15s.
 	Settle time.Duration
 	// Waits before reconnecting; zero is 2s.
 	Retry time.Duration
+	// The cursor is written at most this often; zero is 1s.
+	CursorEvery time.Duration
 
-	mu     sync.Mutex
-	recent []seen
+	mu sync.Mutex
+	// Events received and not yet settled, by their lux time.
+	young []seen
+	// The highest settled id, and the one last written and when.
+	settled, written int64
+	writtenAt        time.Time
 }
 
 type seen struct {
@@ -50,6 +61,13 @@ func (f *Feed) settle() time.Duration {
 		return f.Settle
 	}
 	return 15 * time.Second
+}
+
+func (f *Feed) cursorEvery() time.Duration {
+	if f.CursorEvery > 0 {
+		return f.CursorEvery
+	}
+	return time.Second
 }
 
 // Run follows the feed until ctx ends, reconnecting after each failure.
@@ -72,20 +90,48 @@ func (f *Feed) Run(ctx context.Context) {
 }
 
 // Once follows the feed from the stored cursor until it ends. A first
-// follower (no cursor) starts from now: there is nothing of dude's before.
+// follower (no cursor) starts at lux's latest event, so the cursor is
+// stored from the first connection on. While it follows, the cursor is
+// also settled on a ticker, so a quiet feed's last events are stored.
 func (f *Feed) Once(ctx context.Context) error {
 	after, err := f.cursor(ctx)
 	if err != nil {
 		return err
 	}
 	f.mu.Lock()
-	f.recent = nil
+	f.young, f.settled, f.written, f.writtenAt = nil, after, after, time.Time{}
 	f.mu.Unlock()
+	tickCtx, stop := context.WithCancel(ctx)
+	var ticking sync.WaitGroup
+	ticking.Add(1)
+	defer func() { stop(); ticking.Wait() }()
+	go func() {
+		defer ticking.Done()
+		tick := time.NewTicker(f.cursorEvery())
+		defer tick.Stop()
+		for {
+			select {
+			case <-tickCtx.Done():
+				return
+			case <-tick.C:
+				if err := f.store(tickCtx); err != nil && tickCtx.Err() == nil {
+					f.Log.Warn("storing lux's feed cursor", "error", err)
+				}
+			}
+		}
+	}()
 	return f.Lux.Feed(ctx, after, func(e lux.FeedEvent) error {
 		if err := f.Apply(ctx, e); err != nil {
 			return err
 		}
-		return f.advance(ctx, e.ID)
+		at := e.Time
+		if at.IsZero() {
+			at = time.Now()
+		}
+		f.mu.Lock()
+		f.young = append(f.young, seen{e.ID, at})
+		f.mu.Unlock()
+		return f.store(ctx)
 	})
 }
 
@@ -101,33 +147,40 @@ func (f *Feed) cursor(ctx context.Context) (int64, error) {
 	return after, err
 }
 
-// advance moves the stored cursor to the settled watermark after id.
-func (f *Feed) advance(ctx context.Context, id int64) error {
+// store moves the stored cursor to the highest settled id: only forward,
+// and at most once per CursorEvery. Held under f.mu throughout, so the
+// ticker's and an event's writes do not race, and a write that failed is
+// tried again.
+func (f *Feed) store(ctx context.Context) error {
 	now := time.Now()
 	f.mu.Lock()
-	f.recent = append(f.recent, seen{id, now})
-	keep := f.recent[:0]
-	mark := int64(-1)
-	for _, s := range f.recent {
-		if now.Sub(s.at) < f.settle() {
+	defer f.mu.Unlock()
+	keep := f.young[:0]
+	for _, s := range f.young {
+		if now.Sub(s.at) >= f.settle() {
+			f.settled = max(f.settled, s.id)
+		} else {
 			keep = append(keep, s)
-			if mark < 0 || s.id-1 < mark {
-				mark = s.id - 1
-			}
 		}
 	}
-	f.recent = keep
-	f.mu.Unlock()
-	if mark < 0 {
+	f.young = keep
+	mark := f.settled
+	if mark <= f.written || now.Sub(f.writtenAt) < f.cursorEvery() {
 		return nil
 	}
-	return f.DB.InSystem(ctx, "lux-feed", func(tx pgx.Tx) error {
-		// Forward only: two followers each move it to what they have settled.
+	err := f.DB.InSystem(ctx, "lux-feed", func(tx pgx.Tx) error {
+		// Forward only: two followers each move it to what they have
+		// settled; one behind leaves the row, and its lock, alone.
 		_, err := tx.Exec(ctx, `INSERT INTO lux_feed (id, after_event_id) VALUES ($1, $2)
-			ON CONFLICT (id) DO UPDATE SET after_event_id = GREATEST(lux_feed.after_event_id, EXCLUDED.after_event_id), updated_at = now()`,
+			ON CONFLICT (id) DO UPDATE SET after_event_id = EXCLUDED.after_event_id, updated_at = now()
+			WHERE lux_feed.after_event_id < EXCLUDED.after_event_id`,
 			feedKey, mark)
 		return err
 	})
+	if err == nil {
+		f.written, f.writtenAt = mark, now
+	}
+	return err
 }
 
 // Apply applies one feed event to the wakeable preview whose server it is
@@ -191,10 +244,16 @@ func (f *Feed) Apply(ctx context.Context, e lux.FeedEvent) error {
 			if err != nil || tag.RowsAffected() == 0 {
 				return err
 			}
+			why := map[string]string{"server.deleted": "deleted", "server.expired": "expired"}[e.Type]
 			tag, err = tx.Exec(ctx, `UPDATE runs r SET status = 'completed', ended_at = now(), wake_wanted_at = NULL,
 				error = 'its preview server was ' || $2 || ' in lux'
-				WHERE r.id = $1 AND `+livePreview, runID, map[string]string{"server.deleted": "deleted", "server.expired": "expired"}[e.Type])
+				WHERE r.id = $1 AND `+livePreview, runID, why)
 			if err != nil || tag.RowsAffected() == 0 {
+				return err
+			}
+			if _, err := ledger.Append(ctx, tx, ledger.Event{Type: "run.completed", OrganizationID: org, ProjectID: projectID,
+				TaskID: taskID, RunID: runID, ActorType: ledger.ActorSystem, ActorID: runID, Source: ledger.SourceOrchestrator,
+				CorrelationID: taskID, Payload: map[string]any{"status": "completed", "kind": KindPreview, "reason": why}}); err != nil {
 				return err
 			}
 			kick = true
