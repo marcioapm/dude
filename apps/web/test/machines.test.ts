@@ -45,6 +45,16 @@ describe("pools as the page reads them", () => {
   test("a row's fit", () => {
     expect(fitWords(machineFit({ cpus: 8, memoryMiB: 16384, diskGiB: 80, pool: null }, [pool()]))).toEqual({ share: 0.5, text: "50% of a host" });
     expect(fitWords(machineFit({ cpus: 8, memoryMiB: 16384, diskGiB: 80, pool: null }, []))).toEqual({ share: null, text: "Unknown" });
+    expect(fitWords(machineFit({ cpus: 32, memoryMiB: 16384, diskGiB: 80, pool: null }, [pool()]))).toEqual({ share: 1, text: "Too big for a host" });
+  });
+
+  test("a pool lux knows less about", () => {
+    expect(poolKnownFrom(pool({ hostSize: null }))).toBe("no host yet");
+    expect(poolKnownFrom(pool({ hostsRunning: null }))).toBe("hosts running");
+    expect(poolKnownFrom(pool({ hostsRunning: 1 }))).toBe("1 host running");
+    expect(poolMachines(pool({ provider: "static", instanceType: null, platform: false }))).toBe("Static · hosts");
+    expect(poolMachines(pool({ provider: null, instanceType: null, platform: false }))).toBe("Static · hosts");
+    expect(poolOptionLabel(pool({ name: "new", isDefault: false, hostSize: null }), "Acme")).toBe("new — EC2 · c7a.4xlarge · host size unknown");
   });
 });
 
@@ -58,6 +68,7 @@ describe("who uses a size", () => {
 
   test("in words: agents, then projects; the default adds everyone with none", () => {
     expect(usedByWords({ isDefault: false }, uses)).toBe("2 agents · 1 project");
+    expect(usedByWords({ isDefault: true }, uses)).toBe("2 agents · 1 project · and any with none set");
     expect(usedByWords({ isDefault: true }, [])).toBe("Any with none set");
     expect(usedByWords({ isDefault: false }, [])).toBe("Nobody");
   });

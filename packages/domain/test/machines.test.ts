@@ -4,6 +4,7 @@ import {
   machineFit,
   machineSizeInputSchema,
   machineSpec,
+  MACHINE_MAX_MESSAGE,
   MACHINE_STEP_MESSAGE,
   MIB,
   replaceMachineSize,
@@ -35,6 +36,12 @@ describe("a size's steps and bounds", () => {
     expect(errorOf(size({ memoryMiB: 0 }))).toBe(MACHINE_STEP_MESSAGE.memoryMiB);
     expect(errorOf(size({ diskGiB: 0 }))).toBe(MACHINE_STEP_MESSAGE.diskGiB);
     expect(size({ cpus: 512 }).success).toBe(false);
+  });
+
+  test("past the most of each is refused, saying the most", () => {
+    expect(errorOf(size({ cpus: 256.5 }))).toBe(MACHINE_MAX_MESSAGE.cpus);
+    expect(errorOf(size({ memoryMiB: 2048 * 1024 + 512 }))).toBe("At most 2048 GiB");
+    expect(errorOf(size({ diskGiB: 20_005 }))).toBe("At most 20000 GiB");
   });
 
   test("a name is 1 to 40 characters, a pool a lux pool's name", () => {
@@ -76,8 +83,7 @@ describe("the fit check", () => {
 
   test("disk counts only where the host reserves it", () => {
     const fit = machineFit({ cpus: 8, memoryMiB: 14 * 1024, diskGiB: 500, pool: "shared" }, POOLS);
-    expect(fit.kind === "fits" && fit.diskReserved).toBe(false);
-    expect(fit.kind === "fits" && fit.share).toBe(1);
+    expect(fit).toMatchObject({ kind: "fits", diskReserved: false, share: 1 });
   });
 
   test("a host size nobody knows is allowed, with the reason", () => {
@@ -85,6 +91,9 @@ describe("the fit check", () => {
     expect(machineFit({ cpus: 64, memoryMiB: 512, diskGiB: 5, pool: "gone" }, POOLS)).toMatchObject({ kind: "unknown", reason: "no_pool" });
     // lux unreachable: no pools at all, the default pool unknown too.
     expect(machineFit({ cpus: 2, memoryMiB: 8192, diskGiB: 20, pool: null }, [])).toMatchObject({ kind: "unknown", pool: null });
+    // An older lux lists pools but marks none the default: the default pool is unknown.
+    expect(machineFit({ cpus: 64, memoryMiB: 512, diskGiB: 5, pool: null }, POOLS.map((p) => ({ ...p, isDefault: false }))))
+      .toEqual({ kind: "unknown", pool: null, reason: "no_pool" });
   });
 
   test("memory is compared in bytes", () => {

@@ -111,15 +111,13 @@ describe("NumberInput", () => {
 });
 
 describe("Select with meta", () => {
-  test("the closed trigger shows the chosen option's label and its muted meta", () => {
+  test("rendered statically, the trigger carries its aria-label", () => {
     const h = renderToStaticMarkup(
       <Select aria-label="Machine" value="lg" options={[
         { value: "std", label: "Standard", meta: "2 CPUs · 8 GiB · 20 GiB" },
         { value: "lg", label: "Large", meta: "8 CPUs · 16 GiB · 80 GiB", description: "For builds" },
       ]} />,
     );
-    // Radix renders the chosen item's text into the trigger once mounted; statically
-    // the trigger is there with its value slot.
     expect(h).toContain('aria-label="Machine"');
   });
 

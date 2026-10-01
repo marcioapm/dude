@@ -51,20 +51,38 @@ describe("the session's bar", () => {
 describe("the session's machine", () => {
   test("the header names the size the Run recorded, with its spec", async () => {
     const page = await session({ client: new RunClient({}) });
-    const chip = await until(() => page.querySelector("[data-testid=run-machine]"), "the machine chip");
-    expect(chip.textContent).toContain("Large");
-    expect(chip.textContent).toContain("8 CPUs · 16 GiB · 80 GiB");
+    const chip = await until(() => machineChip(page), "the machine chip");
+    expect(chip.textContent).toBe("Large8 CPUs · 16 GiB · 80 GiB");
   });
 
   test("a Run from before sizes has no chip", async () => {
     const page = await session({ client: new RunClient({ machine: null }) });
+    await until(() => page.querySelector("[data-testid=session-rail]"), "the rail");
     expect(page.querySelector("[data-testid=run-machine]")).toBeNull();
   });
+
+  const FIXED = "Fixed when the session started — editing Large now changes the next session, not this one.";
+  for (const [from, phase, role, says] of [
+    ["project", "implement", "implementer", "From its project’s settings for the Implementer."],
+    ["organization", "review", "reviewer", "From the organisation’s settings for the Reviewer."],
+    ["implementer", "fix", "implementer", "The implementer’s size: the fixer has none of its own."],
+    ["default", "simplify", "simplifier", "The organisation’s default size: nothing names another for it."],
+    ["organization", "fix", "implementer", "From the organisation’s settings for the Fixer."],
+  ] as const) {
+    test(`a ${phase} Run whose size is from ${from} says so`, async () => {
+      const page = await session({ client: new RunClient({ phase, role, status: "completed", endedAt: new Date().toISOString(), machine: { ...LARGE, from } }) });
+      expect(await machineTip(page)).toBe(`Machine: Large${says} ${FIXED}`);
+    });
+  }
 });
 
+/** The machine chip, by its role and its exact accessible name. */
+const machineChip = (page: HTMLElement, name = "Machine: Large, 8 CPUs · 16 GiB · 80 GiB") =>
+  [...page.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.getAttribute("aria-label") === name) ?? null;
+
 /** The machine chip's tooltip, opened as a keyboard user does: focusing the chip. */
-async function machineTip(page: HTMLElement, name = "Machine: Large, 8 CPUs · 16 GiB · 80 GiB"): Promise<string> {
-  const chip = await until(() => page.querySelector<HTMLButtonElement>(`button[aria-label="${name}"]`), "the machine chip");
+async function machineTip(page: HTMLElement): Promise<string> {
+  const chip = await until(() => machineChip(page), "the machine chip");
   const { act } = await import("react");
   await act(async () => chip.focus());
   const tip = await until(() => document.querySelector("[role=tooltip]"), "the chip's tooltip");
