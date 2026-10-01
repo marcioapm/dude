@@ -42,7 +42,7 @@ export function mergeBlockedBy(pr: PullRequest): string | null {
   const failing = pr.checks.filter(prCheckFailed).map((c) => c.name);
   const unreadable = prCheckDiagnostic(pr.checks);
   if (pr.checkState === "failing") why.push(failing.length ? `${failing.join(", ")} failing` : "checks failing");
-  if (unreadable === CHECK_RUNS_FORBIDDEN) why.push("GitHub refused the check-runs read; check the token's Checks: Read permission and its repository/organization access (SSO, token approval)");
+  if (unreadable === CHECK_RUNS_FORBIDDEN) why.push("dude's GitHub token can't read this repository's checks (it needs Checks: Read)");
   else if (unreadable) why.push("some checks cannot be read");
   else if (pr.checkState === "pending") why.push("checks pending");
   if (pr.review === "changes_requested") why.push("changes requested");
@@ -101,7 +101,7 @@ export function pullRequestActivity(e: PersistedEvent, named: boolean): PullRequ
       // Losing or regaining read access is its own line; a verdict that
       // changed with it is said after it.
       const access = p.diagnostic && p.diagnostic !== p.fromDiagnostic
-        ? `GitHub refused the check-runs read on ${pr}`
+        ? `GitHub won't show dude the checks on ${pr}`
         : p.fromDiagnostic && !p.diagnostic ? `GitHub check runs on ${pr} can be read again` : null;
       const verdict = p.to === p.from ? null
         : p.to === "failing" ? `CI ${failing.length ? `${failing.join(", ")} ` : ""}failed on ${pr}`

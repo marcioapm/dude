@@ -101,6 +101,13 @@
   flex: 1;
   min-width: 0;
 }
+/* What to do about checks dude cannot read: under its line, at the text's indent. */
+.diagnostic {
+  margin: 0 0 var(--ds-space-4) calc(14px + var(--ds-space-8));
+  font-size: var(--ds-text-xs);
+  line-height: var(--ds-leading-snug);
+  color: var(--ds-color-text-muted);
+}
 .muted {
   color: var(--ds-color-text-muted);
   font-variant-numeric: tabular-nums;

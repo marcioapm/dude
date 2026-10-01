@@ -695,6 +695,26 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   closes the list, then the picker. The app finds (`find`), the picker
   debounces and keeps only the latest answer. Build a lookup this way, not
   from a `Select` or a list of bare buttons.
+  To pick several (reviewers), it suggests before any words
+  (`findOnEmpty`), heads its options in groups (`group`: "Suggested by
+  GitHub", "People", "Teams"), shows one it will not pick with why
+  (`optionDisabled` → a badge, "Already asked"), and empties after a pick
+  (`clearOnPick`). The picks are a `RemovableList` above the field;
+  Backspace in the empty field drops the last (`onBackspaceEmpty`) and
+  ⌘/Ctrl+Enter sends them (`onSubmit`).
+- **Ask for a GitHub login with a SearchPicker of who can review**, never
+  a text field of comma-separated logins: a person does not know them by
+  heart. Each option is a **GitHubUserLine** — GitHub's avatar, the name in
+  strong ink, the login in mono and why GitHub suggests them beneath. A
+  team is the same line with a rounded-square face (ProjectAvatar's
+  shape): only people are circles.
+- **A pull request's reviewers each keep a line** in PullRequestPanel:
+  approved, requested changes, commented, review requested (a team too),
+  and "asked again · approved before" — attention, their earlier word
+  muted — for one asked again after a verdict. Faces are GitHub's.
+- **Checks dude cannot read are said plainly**: "GitHub won't show dude
+  this repository's checks", what the token lacks beneath, and a link to
+  where it is fixed (`diagnosticAction`). Never a bare "CI unavailable".
 - A page's own note: a settings page with its own audience (Memory: who
   may add, who may change) renders its own `SettingsNote`; the frame's
   default is for the rest. "From <organisation>" is `SettingSource`
@@ -1059,6 +1079,7 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | `<SearchResultRow rank={1} lead={{ type: "memory" }} facts={["words and meaning"]} />` | a score chip and a progress bar on every result |
 | `<EntityLine lead={face} name={…} detail={…} />`, `<AuthorLine author={…} />` | a face and two spans styled in the app's CSS |
 | `<SearchPicker find={…} onPick={…} />` | an `Input` over a list of bare buttons |
+| `<SearchPicker findOnEmpty group={…} optionDisabled={…} clearOnPick />` over a `RemovableList` of `GitHubUserLine`s | `<Input placeholder="logins, comma-separated">` |
 | a run's servers on its task's Servers tab; `<TerminalLink>` in the session's rail | a servers panel or drawer inside a session |
 | `<Tab count={on} tooltip={<ServersTabTip summary={s} />}>` | a native `title` on a tab, or "N ready" beside it |
 | `<NumberInput step={0.5} min={0.5} unit="CPUs" error="Whole or half CPUs: 0.5, 1, 1.5…" />` | `<input type="number" step="0.5">`, rounding what was typed without saying |
@@ -1198,7 +1219,10 @@ MarkdownCheatsheet.
 - **EntityLine / PersonLine / AuthorLine** — a named thing, a person, an
   author (person, agent for a person, or dude) in a row.
 - **RemovableList** — attached things, each removable.
-- **SearchPicker** — a combobox that finds one thing by name.
+- **SearchPicker** — a combobox that finds one thing by name, or several
+  (suggestions, groups, options it will not pick).
+- **GitHubUserLine / GitHubFace** — someone on GitHub, or a team, in a row:
+  avatar, name, mono login, why.
 
 `src/components/` — servers and previews (what a run serves):
 

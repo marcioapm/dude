@@ -1,8 +1,9 @@
 import type { HTMLAttributes, ReactNode } from "react";
-import { prActualChecks, prCheckDiagnostic, prCheckDiagnosticReason, prCheckFailed, prChecksSummary, prReviewSummary } from "@dude/domain";
+import { prActualChecks, prCheckDiagnostic, prCheckDiagnosticFix, prCheckDiagnosticReason, prCheckFailed, prChecksSummary, prReviewSummary, type PrReview } from "@dude/domain";
 import { cx } from "../util/cx.ts";
 import { formatDuration } from "../util/format.ts";
 import { Icon, type IconName } from "../icons/index.tsx";
+import { GitHubFace } from "./GitHubUserLine.tsx";
 import { PrChip, type PrChipPullRequest } from "./PrChip.tsx";
 import styles from "./PullRequestPanel.module.css";
 
@@ -13,7 +14,7 @@ export interface PullRequestPanelProps extends Omit<HTMLAttributes<HTMLElement>,
   readonly deletions?: number | undefined;
   /** At the foot: what can be done (Open on GitHub; merge, once dude can). */
   readonly actions?: ReactNode;
-  /** A face for a reviewer's login, when the app knows who that is. */
+  /** A face for a reviewer's login, when the app knows better than GitHub's avatar. */
   readonly face?: ((login: string) => ReactNode) | undefined;
   /** Under the actions, muted: why it waits, in words. */
   readonly note?: ReactNode;
@@ -23,7 +24,18 @@ export interface PullRequestPanelProps extends Omit<HTMLAttributes<HTMLElement>,
    * base, "show" by the threads, "Request review" after the reviewers.
    */
   readonly factActions?: Partial<Record<FactKind, ReactNode>> | undefined;
+  /** After what to do about checks dude cannot read: a link to where it is done. */
+  readonly diagnosticAction?: ReactNode;
 }
+
+/** A reviewer's latest word on their line: its tone, its glyph, and what it says. */
+const REVIEW_WORDS: Record<string, { tone: Tone; glyph: IconName; text: string; past: string }> = {
+  APPROVED: { tone: "ok", glyph: "check", text: "approved", past: "approved" },
+  CHANGES_REQUESTED: { tone: "bad", glyph: "file-diff", text: "requested changes", past: "requested changes" },
+  COMMENTED: { tone: "neutral", glyph: "comments", text: "commented", past: "commented" },
+  REQUESTED: { tone: "neutral", glyph: "eye", text: "· review requested", past: "was asked" },
+  DISMISSED: { tone: "neutral", glyph: "eye", text: "dismissed their review", past: "reviewed" },
+};
 
 /** The facts a panel lists, by what they are about. */
 export type FactKind = "checks" | "reviews" | "base" | "threads";
@@ -45,7 +57,7 @@ interface Fact {
  * the forge reports them), reviews (by person when it does), how it stands
  * against its base, open threads. What is not known is not said.
  */
-export function PullRequestPanel({ pr, additions, deletions, actions, face, note, factActions, className, ...rest }: PullRequestPanelProps) {
+export function PullRequestPanel({ pr, additions, deletions, actions, face, note, factActions, diagnosticAction, className, ...rest }: PullRequestPanelProps) {
   const facts: Fact[] = [];
   if (pr.state === "merged") facts.push({ tone: "ok", glyph: "merge", text: "Merged" });
 
@@ -95,30 +107,46 @@ export function PullRequestPanel({ pr, additions, deletions, actions, face, note
           </ul>
         ) : undefined,
     });
-    if (diagnostic) facts.push({ tone: "attention", glyph: "warning", text: <span role="note">{prCheckDiagnosticReason(diagnostic)}</span> });
+    if (diagnostic) {
+      const fix = prCheckDiagnosticFix(diagnostic);
+      facts.push({
+        tone: "attention",
+        glyph: "warning",
+        text: <span role="note">{prCheckDiagnosticReason(diagnostic)}</span>,
+        children: fix ? <p className={styles["diagnostic"]}>{fix}{diagnosticAction ? <> {diagnosticAction}</> : null}</p> : undefined,
+      });
+    }
   } else {
     const words = { failing: ["bad", "circle-x", "Checks failing"], pending: ["attention", "circle-dotted", "Checks pending"], passing: ["ok", "circle-check", "Checks passing"], unknown: ["neutral", "circle", "No checks reported yet"] } as const;
     const [tone, glyph, text] = words[prChecksSummary(pr.checks)];
     if (pr.state !== "merged" || tone !== "neutral") facts.push({ kind: "checks", tone, glyph, text });
   }
 
-  // Reviews: by person when the forge sent them, else the verdict.
-  const latest = new Map<string, string>();
-  for (const r of [...(pr.reviews ?? [])].sort((a, b) => (a.submittedAt ?? "").localeCompare(b.submittedAt ?? ""))) {
-    if (r.state.toUpperCase() !== "COMMENTED") latest.set(r.login, r.state.toUpperCase());
+  // Reviews: by person when the forge sent them, else the verdict. Each
+  // person's latest word stands (a comment never replaces a verdict); one
+  // asked again owes another look, their earlier word muted after it.
+  const latest = new Map<string, PrReview>();
+  // Oldest word first; those yet to answer (no time) after everyone who has.
+  const when = (r: PrReview) => r.submittedAt ?? "\uffff";
+  for (const r of [...(pr.reviews ?? [])].sort((a, b) => when(a).localeCompare(when(b)))) {
+    const prior = latest.get(r.login);
+    if (r.state.toUpperCase() === "COMMENTED" && prior && prior.state.toUpperCase() !== "COMMENTED") continue;
+    latest.set(r.login, r);
   }
   if (latest.size > 0) {
-    for (const [login, state] of latest) {
-      const changes = state === "CHANGES_REQUESTED";
-      const approved = state === "APPROVED";
+    for (const r of latest.values()) {
+      const state = r.state.toUpperCase();
+      const words = REVIEW_WORDS[state] ?? REVIEW_WORDS["DISMISSED"]!;
+      const again = r.rerequested === true;
+      const user = { login: r.login, avatarUrl: r.avatarUrl, team: r.team };
       facts.push({
         kind: "reviews",
-        tone: changes ? "bad" : approved ? "ok" : "neutral",
-        glyph: changes ? "file-diff" : approved ? "check" : "eye",
+        tone: again ? "attention" : words.tone,
+        glyph: again ? "circle-dotted" : words.glyph,
         text: (
           <span className={styles["who"]}>
-            {face?.(login)}
-            <b>{login}</b> {changes ? "requested changes" : approved ? "approved" : state === "REQUESTED" ? "· review requested" : "dismissed their review"}
+            {face ? face(r.login) : <GitHubFace user={user} size={20} />}
+            <b>{r.login}</b> {again ? <>· asked again <span className={styles["muted"]}>· {words.past} before</span></> : words.text}
           </span>
         ),
       });
