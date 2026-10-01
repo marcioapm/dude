@@ -135,3 +135,49 @@ func TestARequestAfterAnIdleWithNoRequestKeepsTheRun(t *testing.T) {
 		t.Fatal("stopped although a request came after an idle that carried none")
 	}
 }
+
+// A wake during a failed idle-stop sees a Run that is already running.
+// There will be no new state event: dude must record serving immediately.
+func TestAWakeDuringAFailedParkKeepsServingAndCanParkAgain(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	calls := &countingLux{Client: w.previews.Lux}
+	w.previews.Lux = calls
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	_, runID := w.declare()
+	web := w.serverID(runID, "web")
+	w.open(web)
+	w.running(runID, "web")
+	calls.mu.Lock()
+	calls.failStop = &lux.Error{Status: 503, Code: "unavailable", Message: "lux is restarting"}
+	calls.mu.Unlock()
+	if !w.lux.Idle(web) {
+		t.Fatal("web was not ready to go idle")
+	}
+	w.until("paused with the failed stop pending", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'running' AND next_attempt_at IS NOT NULL`, runID) == 1
+	})
+	if code, out := w.do("POST", "/internal/runs/"+runID+"/servers/web/start", nil); code != 200 {
+		t.Fatalf("start = %d %v", code, out)
+	}
+	mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE id = $1`, runID)
+	w.until("serving without waiting for another running event", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_state = 'running' AND wake_wanted_at IS NULL`, runID) == 1
+	})
+	calls.mu.Lock()
+	before := calls.resumes + calls.submits
+	calls.mu.Unlock()
+	if before != 1 {
+		t.Fatalf("already-running wake asked for %d starts; want only the original submit", before)
+	}
+	mustExec(t, w.owner, `UPDATE runs SET sync_wanted_at = now() WHERE id = $1`, runID)
+	w.until("a push to be synced while serving", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND sync_wanted_at IS NULL`, runID) == 1
+	})
+	if !w.lux.Idle(web) {
+		t.Fatal("web could not go idle again")
+	}
+	w.until("a later idle to stop the Run", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, runID) == 1
+	})
+}

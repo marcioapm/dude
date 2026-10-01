@@ -647,8 +647,11 @@ func (p *Previews) attachAll(ctx context.Context, r wakeRun, runID string) error
 func (p *Previews) woken(ctx context.Context, r wakeRun, luxRunID, state string, started bool) error {
 	return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE runs SET wake_wanted_at = NULL, wake_claimed_at = NULL, next_attempt_at = NULL,
-			status = CASE WHEN status = 'paused' THEN 'scheduled'::run_status ELSE status END,
-			lux_state = CASE WHEN $3 THEN $2 ELSE lux_state END, lux_stop_reason = NULL, dude_pause = NULL, error = NULL
+			status = CASE WHEN $2 = 'running' THEN 'running'::run_status
+				WHEN status = 'paused' THEN 'scheduled'::run_status ELSE status END,
+			active_since = CASE WHEN $2 = 'running' THEN COALESCE(active_since, now()) ELSE active_since END,
+			lux_state = CASE WHEN $3 OR $2 = 'running' THEN $2 ELSE lux_state END,
+			lux_stop_reason = NULL, dude_pause = NULL, error = NULL
 			WHERE id = $1 AND wake_wanted_at = $4`, r.ID, state, started, *r.WakeWanted)
 		if err != nil {
 			return err
