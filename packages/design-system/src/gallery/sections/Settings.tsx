@@ -18,6 +18,8 @@ import { RemovableList } from "../../components/RemovableList.tsx";
 import { SearchPicker } from "../../components/SearchPicker.tsx";
 import { Icon } from "../../icons/index.tsx";
 import { Select } from "../../primitives/Select.tsx";
+import { NumberInput } from "../../primitives/NumberInput.tsx";
+import { FitBar, MachineChip, MachineTip, ProportionBar, ReservedSwatch } from "../../components/Machines.tsx";
 
 const PROMPT = `# Implementer
 
@@ -93,6 +95,51 @@ function SettingsDemo() {
   );
 }
 
+const SIZES = [
+  { value: "default", label: "Default", meta: "Standard · 4 CPUs · 8 GiB · 40 GiB", description: "Follows whichever size is the default" },
+  { value: "small", label: "Small", meta: "1.5 CPUs · 3.5 GiB · 20 GiB" },
+  { value: "standard", label: "Standard", meta: "4 CPUs · 8 GiB · 40 GiB" },
+  { value: "large", label: "Large", meta: "8 CPUs · 16 GiB · 80 GiB" },
+  { value: "xl", label: "XL", meta: "16 CPUs · 48 GiB · 200 GiB · big" },
+];
+
+function MachinesDemo() {
+  const [cpus, setCpus] = useState<number | null>(6.5);
+  const [memory, setMemory] = useState<number | null>(22.5);
+  const [bad, setBad] = useState<number | null>(2.3);
+  const [size, setSize] = useState("large");
+  return (
+    <Col>
+      <Label>NumberInput: on step, and off it</Label>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "var(--ds-space-16)", maxWidth: 560 }}>
+        <NumberInput label="CPUs" unit="CPUs" value={cpus} onValueChange={setCpus} step={0.5} min={0.5} hint="In steps of 0.5" />
+        <NumberInput label="Memory" unit="GiB" value={memory} onValueChange={setMemory} step={0.5} min={0.5} hint="In steps of 0.5 GiB" />
+        <NumberInput label="CPUs" unit="CPUs" value={bad} onValueChange={setBad} step={0.5} min={0.5} error="Whole or half CPUs: 0.5, 1, 1.5…" />
+      </div>
+      <Label>Select, each option with its spec as meta, and a footer</Label>
+      <div style={{ maxWidth: 260 }}>
+        <Select aria-label="Machine" value={size} onValueChange={setSize} options={SIZES}
+          footer={<>CPUs · memory · disk. <a href="#s-machines">Manage sizes in Machines</a></>} />
+      </div>
+      <Label>FitBar</Label>
+      <FitBar share={0.11}>11% of a host</FitBar>
+      <FitBar share={0.75}>75% of a host</FitBar>
+      <FitBar share={null}>Unknown</FitBar>
+      <Label>ProportionBar: one host&apos;s memory</Label>
+      <ProportionBar aria-label="A 32 GiB host: 2 GiB kept by Linux and the host, two runs asking 16 each get 15"
+        segments={[
+          { id: "host", value: 2, kind: "reserved" },
+          { id: "a", value: 15, label: "Run A · asks 16 · gets 15" },
+          { id: "b", value: 15, label: "Run B · asks 16 · gets 15" },
+        ]}
+        legend={<><ReservedSwatch />Linux and the host · 2 GiB</>} total="c7a.4xlarge · 32 GiB" />
+      <Label>MachineChip, with its tooltip</Label>
+      <MachineChip name="XL" spec="16 CPUs · 48 GiB · 200 GiB"
+        tooltip={<MachineTip name="XL">From Checkout’s settings for the Implementer. Fixed when the session started. It asked for 48 GiB and got 45.6.</MachineTip>} />
+    </Col>
+  );
+}
+
 export function SettingsGallerySection({ mode }: { readonly mode: PaneMode }) {
   const [source, setSource] = useState(PROMPT);
   const [prompt, setPrompt] = useState<"add" | "replace" | "inherit">("add");
@@ -156,6 +203,11 @@ export function SettingsGallerySection({ mode }: { readonly mode: PaneMode }) {
               renderOption={(t) => <><RefLead type="task" taskKey={t.key} status="queued" /><span>{t.title}</span></>}
               onPick={() => {}} />
           </Col>
+        </Panes>
+      </Block>
+      <Block id="s-machines" title="NumberInput / Select meta / FitBar / ProportionBar / MachineChip" note="A machine size in the pieces that show it. NumberInput moves in steps (− value + and ↑ ↓), keeps what is typed, and names the step when it is off. A Select option's meta is muted on its line and follows the label into the trigger; description is a line under it; footer sits under the list. FitBar is how much of one host a size takes, words only when nobody knows the host. ProportionBar splits a host's memory, the part nobody gets hatched. MachineChip is the session header's machine, its origin in a tooltip.">
+        <Panes mode={mode}>
+          <MachinesDemo />
         </Panes>
       </Block>
       <Block id="s-markdown" title="MarkdownDocument" note="Reads rendered; Edit swaps in the Markdown source, lightly highlighted, in place; Save or Cancel returns to reading.">

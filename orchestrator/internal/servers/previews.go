@@ -169,13 +169,17 @@ func (p *Previews) advance(ctx context.Context, r previewRun) (bool, error) {
 
 // submit builds the preview's spec and hands it to lux.
 func (p *Previews) submit(ctx context.Context, r previewRun) error {
-	spec, branch, err := p.spec(ctx, r)
+	spec, branch, machine, err := p.spec(ctx, r)
 	if err != nil {
 		return err
 	}
 	// The dude Run id is the idempotency key: a retried submit gets the lux
 	// Run the first one made.
+	phases.NamePool(ctx, p.Lux, machine)
 	lr, err := p.Lux.Submit(ctx, spec, r.ID)
+	if reason := phases.PoolGone(err, machine); reason != "" {
+		return p.fail(ctx, r, reason)
+	}
 	if le, ok := lux.AsError(err); ok && !le.Retryable() {
 		return p.fail(ctx, r, "lux refused the preview: "+le.Message)
 	}
@@ -191,10 +195,11 @@ func (p *Previews) submit(ctx context.Context, r previewRun) error {
 	return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		// Recorded whatever the preview's status: one stopped while this
 		// submit was in flight is then cancelled in lux by the next sweep.
+		// machine is what it runs on, recorded once, with the lux Run.
 		tag, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, next_attempt_at = NULL,
-			lux_repositories = $4, branch = NULLIF($5, ''),
+			lux_repositories = $4, branch = NULLIF($5, ''), machine = $6::jsonb,
 			status = CASE WHEN status = 'pending' THEN 'scheduled'::run_status ELSE status END
-			WHERE id = $1 AND lux_run_id IS NULL`, r.ID, lr.ID, lr.State, db.NonNil(repos), branch)
+			WHERE id = $1 AND lux_run_id IS NULL`, r.ID, lr.ID, lr.State, db.NonNil(repos), branch, machine)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
@@ -257,11 +262,12 @@ func taskRefs(ctx context.Context, tx pgx.Tx, r previewRun) ([]previewRef, error
 // pushed; a workload that only waits; the project's servers marked to start
 // in previews; its preview settings' egress and image. Returns the branch
 // the first repository — the one servers run in — is at.
-func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, error) {
+func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, *delivery.Machine, error) {
 	var repos []previewRef
 	var recipes []Recipe
 	var settings PreviewSettings
 	var projectImage string
+	var machine *delivery.Machine
 	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		var raw []byte
 		if err := tx.QueryRow(ctx, `SELECT preview_settings(p), COALESCE(p.runtime_image, '') FROM projects p WHERE p.id = $1`,
@@ -271,14 +277,24 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, er
 		if err := json.Unmarshal(raw, &settings); err != nil {
 			return err
 		}
-		var err error
+		sizes, err := delivery.LoadSizes(ctx, tx)
+		if err != nil {
+			return err
+		}
+		sizeID := ""
+		if settings.MachineSize != nil {
+			sizeID = *settings.MachineSize
+		}
+		if m, ok := sizes.ForPreview(sizeID); ok {
+			machine = &m
+		}
 		if repos, err = taskRefs(ctx, tx, r); err != nil {
 			return err
 		}
 		recipes, err = LoadRecipes(ctx, tx, r.ProjectID)
 		return err
 	}); err != nil {
-		return lux.Spec{}, "", err
+		return lux.Spec{}, "", nil, err
 	}
 
 	image := projectImage
@@ -311,7 +327,7 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, er
 		spec.Workload.Workdir = phases.RepoPath(primary)
 		token, err := p.forgeToken(ctx, r.Org)
 		if err != nil {
-			return lux.Spec{}, "", err
+			return lux.Spec{}, "", nil, err
 		}
 		spec.Git = &lux.Git{}
 		for _, rp := range repos {
@@ -340,10 +356,11 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, er
 	// A login that cannot be had now is an error the sweep retries.
 	login, err := phases.LoginFor(ctx, p.Registry, image, nil)
 	if err != nil {
-		return lux.Spec{}, "", err
+		return lux.Spec{}, "", nil, err
 	}
 	login.Apply(&spec)
-	return spec, branch, nil
+	phases.MachineSpec(machine, &spec)
+	return spec, branch, machine, nil
 }
 
 func (p *Previews) forgeToken(ctx context.Context, org string) (string, error) {
@@ -600,6 +617,7 @@ func (p *Previews) resume(ctx context.Context, r previewRun) error {
 	if err != nil {
 		return err
 	}
+	phases.RecordMemoryLimit(ctx, p.DB, p.Log, r.Org, r.ID, lr)
 	login, err := phases.LoginFor(ctx, p.Registry, lr.Spec.Image.Ref, &lr.Spec)
 	if phases.IsLoginUnavailable(err) {
 		return p.waitForLogin(ctx, r, err)

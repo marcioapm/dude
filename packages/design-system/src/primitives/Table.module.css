@@ -3,6 +3,14 @@
   min-width: 0;
   overflow: auto;
 }
+/*
+ * Its own width, not the page's, decides which columns show. Only for a
+ * table that marks one: a size container no longer takes its width from
+ * its content, which would collapse a table in a shrink-to-fit parent.
+ */
+.wrap:has(.hideNarrow) {
+  container-type: inline-size;
+}
 
 .table {
   --row-h: var(--ds-size-row-default);
@@ -125,4 +133,19 @@
   padding: var(--ds-space-32) var(--ds-space-16);
   text-align: center;
   color: var(--ds-color-text-muted);
+}
+
+/*
+ * A lesser column (Th/Td hideWhenNarrow): gone while the table's frame is
+ * phone-narrow. A `fit` label cell there may take a second line (a name and
+ * its badge) rather than push the table past its frame; numbers, which are
+ * right-aligned, stay on one. Last, so it wins over .td's nowrap.
+ */
+@container (max-width: 559.98px) {
+  .hideNarrow {
+    display: none;
+  }
+  .tdFit:not(.alignRight) {
+    white-space: normal;
+  }
 }

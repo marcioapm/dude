@@ -15,6 +15,10 @@ import styles from "./Table.module.css";
  *
  * Cells truncate with an ellipsis. A cell that must be read whole takes
  * `wrap` (more lines) or `fit` (one line, as wide as it needs).
+ *
+ * Narrow: the table scrolls sideways in its own frame. A column that can
+ * go on a phone marks its Th and every Td `hideWhenNarrow`: it is hidden
+ * while the table's frame is under 560px, so the rest fit without scrolling.
  */
 
 export type TableDensity = "compact" | "default" | "comfortable";
@@ -87,10 +91,12 @@ export interface ThProps extends ThHTMLAttributes<HTMLTableCellElement> {
   /** Present => the column is sortable. */
   readonly onSort?: ((next: SortDirection) => void) | undefined;
   readonly width?: number | string | undefined;
+  /** A lesser column: hidden while the table's frame is under 560px. Mark its Td too. */
+  readonly hideWhenNarrow?: boolean | undefined;
   readonly children?: ReactNode;
 }
 
-export function Th({ align = "left", sort, onSort, width, className, style, children, ...rest }: ThProps) {
+export function Th({ align = "left", sort, onSort, width, hideWhenNarrow, className, style, children, ...rest }: ThProps) {
   const sortable = onSort !== undefined;
   const ariaSort = sort === "asc" ? "ascending" : sort === "desc" ? "descending" : sortable ? "none" : undefined;
   const next: SortDirection = sort === "asc" ? "desc" : "asc";
@@ -115,6 +121,7 @@ export function Th({ align = "left", sort, onSort, width, className, style, chil
         align === "center" && styles["alignCenter"],
         sortable && styles["thSortable"],
         sort && styles["thSorted"],
+        hideWhenNarrow && styles["hideNarrow"],
         className,
       )}
       aria-sort={ariaSort}
@@ -145,10 +152,12 @@ export interface TdProps extends TdHTMLAttributes<HTMLTableCellElement> {
    * which shares the width evenly whatever the content.
    */
   readonly fit?: boolean | undefined;
+  /** In a column whose Th is `hideWhenNarrow`. */
+  readonly hideWhenNarrow?: boolean | undefined;
   readonly children?: ReactNode;
 }
 
-export function Td({ align = "left", mono, muted, wrap, fit, className, children, ...rest }: TdProps) {
+export function Td({ align = "left", mono, muted, wrap, fit, hideWhenNarrow, className, children, ...rest }: TdProps) {
   return (
     <td
       className={cx(
@@ -159,6 +168,7 @@ export function Td({ align = "left", mono, muted, wrap, fit, className, children
         muted && styles["muted"],
         wrap && styles["tdWrap"],
         fit && styles["tdFit"],
+        hideWhenNarrow && styles["hideNarrow"],
         className,
       )}
       {...rest}

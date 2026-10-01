@@ -31,12 +31,18 @@ func main() {
 	failUnreadOnInterrupt := flag.Bool("fail-unread-on-interrupt", false, "an interrupt fails input the agent took and had not read, as a lux before it carried it into the next turn")
 	previewDomain := flag.String("preview-domain", "", "the domain servers' preview URLs are under (none: previews off)")
 	idleCheck := flag.Duration("idle-check", 0, "how often idle servers are looked for (default 100ms)")
+	oldPools := flag.Bool("old-pools", false, "list pools as a lux before host sizes: no hostSize, hostSizeFrom, instanceType or isDefault")
+	memoryShare := flag.Float64("memory-share", 0.95, "report each placement's memoryLimit as this share of the memory its spec asks for; 0 reports none, as an older lux")
 	flag.Parse()
 
 	srv := fakelux.New("", *key, nil)
 	srv.PreviewDomain, srv.IdleCheck = *previewDomain, *idleCheck
 	srv.LegacyInput, srv.NextTurnInput = *legacyInput, *nextTurnInput
 	srv.FailUnreadOnInterrupt = *failUnreadOnInterrupt
+	srv.MemoryShare = *memoryShare
+	if *oldPools {
+		srv.Pools = fakelux.OldPools()
+	}
 	srv.Workspaces = *workspaces
 	srv.RepoFor = func(u string) string { return repoPath(*root, u) }
 	ln, err := net.Listen("tcp", *listen)

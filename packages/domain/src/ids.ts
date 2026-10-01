@@ -30,6 +30,7 @@ export const ID_PREFIXES = {
   finding: "find",
   promptVersion: "pv",
   memory: "mem",
+  machineSize: "msz",
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIXES;

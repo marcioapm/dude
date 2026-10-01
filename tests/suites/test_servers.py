@@ -10,12 +10,15 @@ on request, through its test hooks for a signed-in request and idleness.
 from __future__ import annotations
 
 import json
+import re
 import threading
 
+import pytest
 import requests
+from playwright.sync_api import Page, expect
 
 from env import FAKE_PREVIEW_DOMAIN
-from helpers import ApiClient, wait_until
+from helpers import ApiClient, sign_in, toast, wait_until
 
 WEB = {
     "name": "web",
@@ -34,8 +37,14 @@ def test_a_project_defines_its_servers_and_a_preview_serves_them(client: ApiClie
     saved = client.put(f"/v1/projects/{pid}/servers/web", WEB)
     assert saved.status_code == 200, saved.text
     assert client.put(f"/v1/projects/{pid}/servers/Web", {**WEB, "name": "Web"}).status_code == 400
-    settings = client.put(f"/v1/projects/{pid}/preview-settings", {"egress": ["registry.npmjs.org"], "idleTimeoutMinutes": 30})
+    big = next(p["id"] for p in client.get("/v1/machines/pools").json()["pools"] if p["name"] == "big")
+    sized = client.post("/v1/machines/sizes", {"name": "Preview", "cpus": 3, "memoryMiB": 6144, "diskGiB": 25, "poolId": big})
+    assert sized.status_code == 201, sized.text
+    size = next(s for s in sized.json()["sizes"] if s["name"] == "Preview")
+    settings = client.put(f"/v1/projects/{pid}/preview-settings",
+                          {"egress": ["registry.npmjs.org"], "idleTimeoutMinutes": 30, "machineSize": size["id"]})
     assert settings.status_code == 200 and settings.json()["egress"] == ["registry.npmjs.org"]
+    assert settings.json()["machineSize"] == size["id"]
 
     task = client.create_task(pid, "Preview it")
     before = client.get(f"/v1/tasks/{task['id']}/servers").json()
@@ -89,6 +98,11 @@ def test_a_project_defines_its_servers_and_a_preview_serves_them(client: ApiClie
                message="no servers.changed for web ready")
     stop.set()
     first_lux_run = ready["run"]["luxRunId"]
+    # Woken on the project's preview size, in its pool by lux's id.
+    woken_spec = lux_get(env, f"/v1/runs/{first_lux_run}")["spec"]
+    assert woken_spec["resources"] == {"cpus": 3, "memory": 6144 * 1024 * 1024, "disk": 25 * 1024 ** 3}, woken_spec
+    assert woken_spec["placement"] == {"poolId": big}, woken_spec
+    assert not woken_spec["workload"].get("servers"), woken_spec
 
     # Unused: lux says so, dude stops the Run, the preview sleeps.
     assert lux_fake(env, f"/fake/servers/{web['id']}/idle")["idle"] is True
@@ -103,6 +117,8 @@ def test_a_project_defines_its_servers_and_a_preview_serves_them(client: ApiClie
     again = wait_until(lambda: (s := client.get(f"/v1/tasks/{task['id']}/servers").json())["run"]["previewStage"] == "ready" and s,
                        timeout=60, message="the preview never woke again")
     assert again["run"]["luxRunId"] == first_lux_run
+    resumed_spec = lux_get(env, f"/v1/runs/{first_lux_run}")["spec"]
+    assert (resumed_spec["resources"], resumed_spec["placement"]) == (woken_spec["resources"], woken_spec["placement"])
 
     run_id = again["run"]["id"]
     # Starting the server of a running preview is lux's, as for any Run.
@@ -139,3 +155,39 @@ def test_another_organization_sees_no_servers(client: ApiClient, second_org: dic
     assert other.get(f"/v1/projects/{forge_project['id']}/servers").status_code == 404
     task = client.create_task(forge_project["id"], "Mine")
     assert other.get(f"/v1/tasks/{task['id']}/servers").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# In the browser
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.ui
+def test_branch_previews_run_on_the_size_a_project_picks_and_reset_follows_the_default(
+    page: Page, web_url: str, client: ApiClient, org: dict, project: dict, console_errors: list
+):
+    pid = project["id"]
+    created = client.post("/v1/machines/sizes", {"name": "Large", "cpus": 8, "memoryMiB": 16384, "diskGiB": 80})
+    assert created.status_code == 201, created.text
+    large = next(s for s in created.json()["sizes"] if s["name"] == "Large")
+    org_name = client.get("/v1/settings/organization").json()["organization"]["name"]
+    sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/project/{pid}/settings/servers")
+    previews = page.get_by_test_id("preview-settings")
+    machine = previews.get_by_test_id("preview-machine")
+    # Naming none: the organisation's default size, Standard.
+    expect(machine).to_have_text(re.compile(rf"^{re.escape(org_name)}’s default\s*Standard · 2 CPUs · 8 GiB · 20 GiB$"))
+
+    machine.click()
+    page.get_by_role("option").filter(has_text=re.compile(r"^Large\s*8 CPUs · 16 GiB · 80 GiB$")).click()
+    expect(toast(page, "Machine saved")).to_be_visible()
+    assert client.get(f"/v1/projects/{pid}/servers").json()["previews"]["machineSize"] == large["id"]
+    expect(machine).to_have_text(re.compile(r"^Large\s*8 CPUs · 16 GiB · 80 GiB$"))
+
+    overridden = previews.locator("[data-source='project']")
+    expect(overridden).to_contain_text("default size, Standard")
+    overridden.get_by_role("button", name="Reset", exact=True).click()
+    expect(toast(page, "Machine reset")).to_be_visible()
+    assert client.get(f"/v1/projects/{pid}/servers").json()["previews"]["machineSize"] is None
+    expect(previews.get_by_test_id("preview-machine-row").locator("[data-source='organization']")).to_have_text(f"From {org_name}’s default size")
+    assert console_errors == []

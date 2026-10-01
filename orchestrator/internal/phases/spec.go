@@ -1,6 +1,7 @@
 package phases
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"slices"
 
 	"github.com/marciomartins/dude/orchestrator/internal/config"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -119,6 +121,56 @@ type specInput struct {
 	ToolsToken string
 	// The login for Image's registry; nil when it needs none.
 	Registry *RegistryLogin
+	// The machine it runs on; nil leaves lux's default size and pool.
+	Machine *delivery.Machine
+}
+
+// MachineSpec puts a machine size on a lux spec: its resources, memory and
+// disk in bytes, and its pool by lux's id when it names one (none is the
+// tenant's default pool in lux). A nil machine leaves lux's defaults.
+func MachineSpec(m *delivery.Machine, spec *lux.Spec) {
+	if m == nil {
+		return
+	}
+	spec.Resources = &lux.Resources{CPUs: m.CPUs, Memory: m.MemoryMiB << 20, Disk: m.DiskGiB << 30}
+	if m.PoolID != nil && *m.PoolID != "" {
+		spec.Placement = &lux.PlacementSpec{PoolID: *m.PoolID}
+	}
+}
+
+// NamePool records on m its pool's name in lux now, for runs.machine, so the
+// Run's history says where it ran after the pool is renamed. Best effort: a
+// pool lux does not list, or lux not answering, leaves it unnamed, and the
+// submit that follows is what decides.
+func NamePool(ctx context.Context, c lux.Client, m *delivery.Machine) {
+	if m == nil || m.PoolID == nil {
+		return
+	}
+	pools, err := c.Pools(ctx)
+	if err != nil {
+		return
+	}
+	for _, p := range pools {
+		if p.ID == *m.PoolID {
+			name := p.Name
+			m.Pool = &name
+			return
+		}
+	}
+}
+
+// PoolGone is the reason a Run fails when lux refuses its size's pool as
+// unknown (422 unknown_pool): the pool was deleted after the size named it.
+// "" for any other error, or with no machine (only a machine places a Run).
+func PoolGone(err error, m *delivery.Machine) string {
+	if m == nil {
+		return ""
+	}
+	le, ok := lux.AsError(err)
+	if !ok || le.Code != lux.CodeUnknownPool {
+		return ""
+	}
+	return fmt.Sprintf("Its machine size, %s, runs in a lux pool that no longer exists. Give %s another pool in Machines.", m.Name, m.Name)
 }
 
 type specRepo struct {
@@ -194,6 +246,7 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		spec.Labels["dude.effort"] = in.Effort
 	}
 	in.Registry.Apply(&spec)
+	MachineSpec(in.Machine, &spec)
 	if len(in.Repos) > 0 || in.PushBranch != "" {
 		spec.Git = &lux.Git{}
 		for _, r := range in.Repos {

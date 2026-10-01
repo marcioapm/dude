@@ -1,4 +1,4 @@
--- 064_wakeable_previews.sql — branch previews that wake on request.
+-- 065_wakeable_previews.sql — branch previews that wake on request.
 --
 -- A preview is lux servers of its own (lux's /v1/servers, lux#41), one per
 -- project server marked to start in previews, at a hostname dude chooses.
