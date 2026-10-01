@@ -577,6 +577,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/servers/{sid}/detach", s.detachTenantServer)
 	mux.HandleFunc("GET /v1/events", s.feedHandler)
 	mux.HandleFunc("GET /v1/whoami", s.whoami)
+	// Test hooks, not lux's: a signed-in browser request to a server's
+	// hostname, and lux finding it idle.
+	mux.HandleFunc("POST /fake/servers/{sid}/request", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]any{"served": s.RequestServer(r.PathValue("sid"), r.URL.Query().Get("path"))})
+	})
+	mux.HandleFunc("POST /fake/servers/{sid}/idle", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]any{"idle": s.Idle(r.PathValue("sid"))})
+	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+s.Key {
 			writeErr(w, 401, "unauthorized", "invalid API key")
