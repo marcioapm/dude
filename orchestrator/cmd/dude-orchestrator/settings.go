@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/config"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
 	"github.com/marciomartins/dude/orchestrator/internal/registry"
 )
@@ -95,7 +95,7 @@ func settingsFrom(cfg *config.Config) (settings, error) {
 	if s.ConsoleURL = cfg.String("LUX_CONSOLE_URL"); s.ConsoleURL == "" {
 		s.ConsoleURL = s.LuxURL
 	}
-	s.PreviewDomain = strings.Trim(strings.ToLower(cfg.String("DUDE_PREVIEW_DOMAIN")), ".")
+	s.PreviewDomain = lux.NormalDomain(cfg.String("DUDE_PREVIEW_DOMAIN"))
 	if s.PreviewDomain != "" && !previewDomainRe.MatchString(s.PreviewDomain) {
 		return settings{}, fmt.Errorf("%s: not a domain: %q", cfg.Label("DUDE_PREVIEW_DOMAIN"), s.PreviewDomain)
 	}

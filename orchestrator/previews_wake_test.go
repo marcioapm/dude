@@ -165,6 +165,28 @@ func TestDeclaringAPreviewCreatesItsServersAndNothingElse(t *testing.T) {
 	}
 }
 
+// A running wakeable preview's view shows lux's servers of it, read by
+// label: its Run's own server list is not asked for.
+func TestARunningWakeablePreviewsViewReadsServersByLabel(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	task, runID := w.declare()
+	w.open(w.serverID(runID, "web"))
+	w.running(runID, "web")
+	calls := &countingLux{Client: w.previews.Lux}
+	w.previews.Lux = calls
+	code, out := w.do("GET", "/internal/tasks/"+task+"/servers", nil)
+	if web := serverNamed(out, "web"); code != 200 || web == nil || web["serverState"] != "ready" {
+		t.Fatalf("view = %d %v", code, out)
+	}
+	calls.mu.Lock()
+	defer calls.mu.Unlock()
+	if calls.runServers != 0 || calls.serverLists != 1 {
+		t.Errorf("the view asked lux %d run server lists and %d label lists; want 0 and 1", calls.runServers, calls.serverLists)
+	}
+}
+
 // The first request wakes a preview that never ran: dude submits its Run
 // and attaches every server; later requests while it comes up ask nothing.
 // Idle on one of two servers keeps it; both park it. The next request
@@ -488,7 +510,9 @@ func TestANeverWokenPreviewIsReaped(t *testing.T) {
 	_, runID := w.declare()
 	web := w.serverID(runID, "web")
 	mustExec(t, w.owner, `UPDATE runs SET created_at = now() - interval '7 days 1 hour' WHERE id = $1`, runID)
-	w.until("reaped", func() bool { return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1 })
+	w.until("reaped", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
+	})
 	w.until("its server deleted", func() bool { _, ok := w.lux.TenantServer(web); return !ok })
 }
 
