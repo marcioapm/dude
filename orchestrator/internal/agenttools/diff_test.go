@@ -297,6 +297,34 @@ func TestRunDiffCountsHunkHeadersAgainstTheLineCap(t *testing.T) {
 	}
 }
 
+func TestRunDiffSelectsManyPathsOnceEachInTheOrderAsked(t *testing.T) {
+	f := setup(t)
+	token := f.run(t, "run_m", "implementer", "running")
+	const n = 3000
+	var text strings.Builder
+	for i := range n {
+		full, _ := gitDiff(fmt.Sprintf("f%04d.go", i), 1, 0)
+		text.WriteString(full)
+	}
+	f.storeDiff(t, "run_m", text.String())
+
+	// Every file, last first, each twice, with empty paths and missing ones.
+	var asked, want []string
+	for i := n - 1; i >= 0; i-- {
+		asked = append(asked, fmt.Sprintf("f%04d.go", i), "", fmt.Sprintf("f%04d.go", i))
+		want = append(want, fmt.Sprintf("f%04d.go", i))
+	}
+	asked = append(asked, "gone.go", "gone.go")
+	body, _ := json.Marshal(map[string]any{"paths": asked})
+	out := f.diff(t, token, string(body))
+	if !slices.Equal(paths(out.Files), want) || !slices.Equal(out.NotChanged, []string{"gone.go"}) {
+		t.Errorf("%d files (first %v), notChanged %v", len(out.Files), paths(out.Files[:3]), out.NotChanged)
+	}
+	if out.TotalFiles != n || !out.Cut {
+		t.Errorf("total %d cut %v", out.TotalFiles, out.Cut)
+	}
+}
+
 func TestRunDiffOfARunNotReadYetIsEmpty(t *testing.T) {
 	f := setup(t)
 	token := f.run(t, "run_e", "implementer", "running")

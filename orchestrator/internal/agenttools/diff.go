@@ -124,10 +124,12 @@ func runDiff(ctx context.Context, tx pgx.Tx, c Caller, in runDiffIn) (any, error
 	head := diffHeader{Run: runID}
 	listed, picked := []byte("[]"), []byte("[]")
 	var updated time.Time
-	// The list without its hunks, and the hunks only of the files asked for.
+	// The list without its hunks, and the hunks only of the files asked for:
+	// a join, so many paths are hashed rather than each searched for.
 	err = tx.QueryRow(ctx, `SELECT d.base, d.final, d.updated_at,
 			COALESCE((SELECT jsonb_agg(f - 'hunks') FROM jsonb_array_elements(d.files) f), '[]'),
-			COALESCE((SELECT jsonb_agg(f) FROM jsonb_array_elements(d.files) f WHERE f->>'path' = ANY($2)), '[]')
+			COALESCE((SELECT jsonb_agg(f) FROM jsonb_array_elements(d.files) f
+				JOIN (SELECT DISTINCT unnest($2::text[]) AS path) asked ON asked.path = f->>'path'), '[]')
 		FROM run_diffs d WHERE d.run_id = $1`, runID, paths).Scan(&head.Base, &head.Final, &updated, &listed, &picked)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
@@ -229,10 +231,13 @@ func patches(head diffHeader, paths []string, stored []storedDiffFile) diffPatch
 // uniquePaths keeps each path once, as given: a path matches exactly.
 func uniquePaths(in []string) []string {
 	out := []string{}
+	seen := make(map[string]struct{}, len(in))
 	for _, p := range in {
-		if p != "" && !slices.Contains(out, p) {
-			out = append(out, p)
+		if _, dup := seen[p]; p == "" || dup {
+			continue
 		}
+		seen[p] = struct{}{}
+		out = append(out, p)
 	}
 	return out
 }
