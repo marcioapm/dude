@@ -17,7 +17,8 @@ import (
 // processes do not. The fake runs no process: a started server with a
 // command is "starting", then "ready" a moment later (ServerReadyAfter) —
 // unless its command says `fakelux-exit=<code>`, and then it exits with that
-// code. One with no command waits for its port to open (OpenPort), as the
+// code, or `fakelux-never-ready`, and then it stays starting. One with no
+// command waits for its port to open (OpenPort), as the
 // runner's health check would find someone else serving it.
 //
 // A placement's end stops every server — "run stopped", "migrated" or
@@ -47,6 +48,8 @@ type server struct {
 	// Bumped on every start or stop, so a pending "ready" of an earlier
 	// start does nothing.
 	gen int
+	// The tenant server this is the process of, when attached (tenant.go).
+	tenant *tenantServer
 }
 
 type logLine struct {
@@ -154,6 +157,18 @@ func (s *Server) setServer(run *Run, sv *server, state string) {
 			data["error"] = sv.Error
 		}
 	}
+	if t := sv.tenant; t != nil {
+		// A tenant server's: on the feed with its id; ready resolves its
+		// open wake and starts a new idle period.
+		if state == lux.ServerReady {
+			t.WakeRequestedAt = nil
+		}
+		if state == lux.ServerStopped && sv.StopReason != "" {
+			data["stopReason"] = sv.StopReason
+		}
+		s.serverEvent(t, "server.state", data)
+		return
+	}
 	s.luxEvent(run, "server.state", data)
 }
 
@@ -191,6 +206,9 @@ func (s *Server) startServer(run *Run, sv *server) {
 			s.setServer(run, sv, "exited")
 			return
 		}
+		if strings.Contains(strings.Join(sv.Command, " "), "fakelux-never-ready") {
+			return
+		}
 		sv.logf("stdout", "listening on :%d", sv.Port)
 		s.setServer(run, sv, lux.ServerReady)
 	}()
@@ -221,11 +239,12 @@ func (s *Server) placementEnded(run *Run, state, reason string) {
 	}
 }
 
-// placementStarted starts the spec's servers, as lux does on every start
-// of the Run. Callers hold s.mu.
+// placementStarted starts the spec's servers and the attached tenant
+// servers with a command, as lux does on every start of the Run. Callers
+// hold s.mu.
 func (s *Server) placementStarted(run *Run) {
 	for _, sv := range run.servers {
-		if sv.FromSpec {
+		if sv.FromSpec || sv.tenant != nil && sv.Command != nil {
 			s.startServer(run, sv)
 		}
 	}

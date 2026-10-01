@@ -486,6 +486,9 @@ type Client interface {
 
 	// Pools are the pools dude's key can place Runs in.
 	Pools(ctx context.Context) ([]Pool, error)
+
+	// The tenant's servers and its event feed (servers.go).
+	Servers
 }
 
 type HTTPClient struct {
@@ -496,12 +499,20 @@ type HTTPClient struct {
 	stream *http.Client
 }
 
+// idleConnsPerHost bounds the connections to lux kept open between
+// requests. http.DefaultTransport keeps 2, below the preview and phase
+// sweeps' 8 at a time plus each preview's output stream, so most
+// connections were closed after one request and dialled again.
+const idleConnsPerHost = 32
+
 func New(baseURL, apiKey string) *HTTPClient {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.MaxIdleConns, t.MaxIdleConnsPerHost = 2*idleConnsPerHost, idleConnsPerHost
 	return &HTTPClient{
 		url:    strings.TrimRight(baseURL, "/"),
 		key:    apiKey,
-		http:   &http.Client{Timeout: 30 * time.Second},
-		stream: &http.Client{},
+		http:   &http.Client{Timeout: 30 * time.Second, Transport: t},
+		stream: &http.Client{Transport: t},
 	}
 }
 
@@ -618,19 +629,24 @@ func (c *HTTPClient) Resume(ctx context.Context, runID string, in ResumeInput) (
 	if len(in.AddRepositories) > 0 {
 		body["git"] = map[string]any{"repositories": in.AddRepositories}
 	}
+	if len(in.Sync) > 0 {
+		body["sync"] = in.Sync
+	}
 	var r Run
 	err := c.do(ctx, "POST", "/v1/runs/"+runID+"/resume", body, nil, &r)
 	return r, err
 }
 
 // ResumeInput is what a resume carries: the secrets again (lux never keeps
-// them), input for the agent, and repositories to add to the Run — cloned
-// before it starts, each reported as a git.clone event with the request id.
+// them), input for the agent, repositories to add to the Run — cloned
+// before it starts, each reported as a git.clone event with the request id
+// — and checkouts to move to new commits before init (Sync).
 type ResumeInput struct {
 	Secrets         []Secret
 	Input           string
 	RequestID       string
 	AddRepositories []Repository
+	Sync            []SyncRef
 }
 
 func (c *HTTPClient) Get(ctx context.Context, runID string) (Run, error) {

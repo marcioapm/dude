@@ -181,6 +181,70 @@ to the push services of browsers that asked for notifications. The backend
 reaches out to the orchestrator, and to GitHub's API when a person verifies
 a stored credential.
 
+## Branch previews
+
+A branch preview serves a task's branch with the project's servers marked
+to start in previews. With a lux that serves previews (its
+`preview.domain`), each of those servers is a **lux server of its own**
+(lux's `/v1/servers`, marcioapm/lux#41) at a hostname dude chooses, one DNS
+label under the preview domain:
+
+```
+<server>-<task id>-<project id>.<preview domain>     web-wi-0mg7…-prj-0mg7….preview-absmartly.dev
+```
+
+The domain's wildcard certificate need cover one level only. Each part is
+lowercased with anything outside `a-z0-9` made `-`; a label longer than 63
+characters is cut and ends in `-` and 8 hex characters of a hash of the
+three parts, so it is stable and distinct. lux refusing a hostname another
+server has (`hostname_taken`) makes dude choose a second, hashed one. dude
+keeps lux's server id; it never reads a hostname back.
+
+- **Declaring a preview** creates its servers (`wake: request`, `lifetime:
+  owner`, `idleAfter` the project's idle limit, `expireAfter` 30 days,
+  labels `dude.org`, `dude.project`, `dude.task`, `dude.preview`) and
+  nothing else: no Run, no host.
+- **Opening a URL** (signed in to lux's previews) shows lux's waking page,
+  and lux tells dude on its event feed (`GET /v1/events`). dude resumes the
+  preview's Run, every checkout synced to the task's branch, or, the first
+  time (or when lux can no longer resume it), submits one and attaches the
+  servers. The page drops into the app once it serves.
+- **Unused**: lux reports a server idle after `idleAfter` without a
+  request; once every server of the preview is, dude stops the Run (its
+  checkout and state volume kept for the next wake). lux reports idleness
+  only for a server that is ready, so one that never becomes ready
+  (starting or unreachable) counts as idle once it has had no request for
+  `idleAfter`, and an exited one at once.
+- **A new commit** on the task's branch (an agent's, or a push the forge
+  reports on its pull request) is synced into a running preview at once; a
+  sleeping one gets it on its next wake.
+- **Ending**: a preview nobody has opened for `previews.reap_after`
+  (default 7 days), a stopped one, or one whose task is done, failed or
+  aborted has its lux servers deleted — their URLs then say "This preview
+  is gone" — and then its Run cancelled. lux's own 30-day expiry is the
+  safety net; a server lux expires or someone deletes ends its preview.
+
+Every orchestrator follows the feed; each event is applied once, keyed in
+the database, and a wake is acted on by one orchestrator. The feed's
+position is kept in `lux_feed`: the highest event id whose lux time is
+more than 15 seconds old (lux can commit a lower id after a higher one for
+up to its 10-second feed settle), written at most once a second. A restart
+replays at most that much, applied once, and misses no event.
+
+**Requirements.** dude needs a lux with `/v1/servers`: the orchestrator
+refuses to start against an older one (404 or 405 there), naming the
+release. A lux that does not answer at startup is asked again, backing off
+to once a minute, rather than stopping the orchestrator. `previews.domain`
+may be left unset (lux's own is used); set, it must equal lux's. Without a
+preview domain in lux, previews keep the old path below.
+
+**Switching over.** Previews created before this release, and previews of
+a project with no server marked to start in previews, keep the old path
+until they end: a Run with its servers in its spec, at
+`<server>-<run>.<domain>`, parked by dude after the project's idle limit
+and woken by a person starting a server. Nothing is migrated: stop and
+start an old preview to move it to the new path.
+
 ## Postgres
 
 Postgres 17 with the pgvector extension is what the tests run against
@@ -338,6 +402,8 @@ does not refuse to start.
 | `lux.url` | `LUX_URL` | required | orchestrator | The lux control plane. |
 | `lux.api_key` | `LUX_API_KEY` | required | orchestrator | A lux API key with the `run` scope. **Secret.** |
 | `lux.console_url` | `LUX_CONSOLE_URL` | `lux.url` | orchestrator | lux's console, for the "Open terminal in lux" links on a task's servers (`<url>/runs/<luxRunId>/terminal`). |
+| `previews.domain` | `DUDE_PREVIEW_DOMAIN` | lux's (`GET /v1/whoami` `previewDomain`) | orchestrator | The domain lux serves branch previews under, e.g. `preview-absmartly.dev`. Each preview server is one DNS label under it, `<server>-<task>-<project>.<domain>` (see [Branch previews](#branch-previews)): the domain's wildcard certificate need cover one level only. Must be lux's `preview.domain`. |
+| `previews.reap_after` | `DUDE_PREVIEW_REAP_AFTER` | `168h` | orchestrator | A branch preview nobody has opened for this long is ended and its lux servers deleted; positive. lux's own `expireAfter` (30 days, set by dude) is the safety net. |
 | `llm.url` | `DUDE_LLM_URL` | none | orchestrator | The LLM API agents use, as a base URL before the API path, e.g. `https://llmproxy.example.com/v1`; must be http(s). Given to each Run as the plain env var `DUDE_LLM_URL`; its host is agents' model egress. See [Agent image contract](#agent-image-contract). |
 | `llm.key` | `DUDE_LLM_KEY` | none | orchestrator | That API's key. Given to each Run as a lux secret delivered as the env var `DUDE_LLM_KEY`: never in the spec's env or labels, never stored by lux. **Secret.** |
 | `embeddings.url` | `DUDE_EMBEDDINGS_URL` | `llm.url` | orchestrator | An OpenAI-compatible embeddings API, before `/embeddings` (llm-proxy: `https://…/v1`), for a provider other than the agents'. `off`, or neither this nor `llm.url` set, and memory is searched by words alone. |

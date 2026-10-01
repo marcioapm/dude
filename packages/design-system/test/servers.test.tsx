@@ -79,6 +79,15 @@ describe("describeServer", () => {
     expect(describeServer(server({ state: "stopped" }), NOW, run)).toEqual({ state: "stopped", detail: "manual" });
     expect(describeServer(server({ state: "stopped", fromSpec: true }), NOW, { ...run, previewStage: "starting" }).state).toBe("stopped");
   });
+
+  test("a wakeable preview's server says lux's word while no process serves it", () => {
+    expect(describeServer(server({ state: "stopped", serverState: "asleep" }), NOW)).toEqual({ state: "stopped", label: "Asleep", detail: "wakes when its URL is opened" });
+    expect(describeServer(server({ state: "stopped", serverState: "waking" }), NOW)).toEqual({ state: "starting", label: "Waking", detail: "waking up" });
+    expect(describeServer(server({ state: "starting", serverState: "waking", since: at(4_000) }), NOW).detail).toBe("starting · 4.0s");
+    expect(describeServer(server({ state: "stopped", serverState: "no answer" }), NOW).label).toBe("No answer");
+    // Once it serves, the process's own words.
+    expect(describeServer(server({ state: "ready", serverState: "ready", readySince: at(2 * MIN), since: at(2 * MIN) }), NOW)).toEqual({ state: "ready", detail: "ready for 2m" });
+  });
 });
 
 describe("summaries", () => {
@@ -129,6 +138,10 @@ describe("summaries", () => {
     // A preview that ended is not coming up, whatever stage it last reported.
     const ended = summarizeTaskServers(task([], { run: { ...preview, state: "aborted" } }))!;
     expect(ended.booting).toBe(false);
+    // An asleep wakeable preview is not coming up either.
+    const asleep = summarizeTaskServers(task([server({ state: "stopped", serverState: "asleep" })],
+      { run: { ...preview, state: "paused", previewStage: null, wakeable: true, asleep: true } }))!;
+    expect([asleep.starting, asleep.booting]).toEqual([false, false]);
   });
 
   test("with no run, the recipes are all off; with no run and no recipes there is nothing to say", () => {

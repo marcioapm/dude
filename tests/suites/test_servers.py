@@ -3,7 +3,8 @@ backend, orchestrator and fake lux.
 
 A project's recipes and preview settings are the backend's; a task's
 servers are lux's, reached through the orchestrator. The fake lux moves
-servers as lux does: starting, then ready a moment later.
+servers as lux does: starting, then ready a moment later; its previews wake
+on request, through its test hooks for a signed-in request and idleness.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import pytest
 import requests
 from playwright.sync_api import Page, expect
 
+from env import FAKE_PREVIEW_DOMAIN
 from helpers import ApiClient, sign_in, toast, wait_until
 
 WEB = {
@@ -29,14 +31,20 @@ WEB = {
 }
 
 
-def test_a_project_defines_its_servers_and_a_preview_serves_them(client: ApiClient, forge_project: dict):
+def test_a_project_defines_its_servers_and_a_preview_serves_them(client: ApiClient, forge_project: dict, env):
     pid = forge_project["id"]
     # The org's first key is its admin: a maintainer.
     saved = client.put(f"/v1/projects/{pid}/servers/web", WEB)
     assert saved.status_code == 200, saved.text
     assert client.put(f"/v1/projects/{pid}/servers/Web", {**WEB, "name": "Web"}).status_code == 400
-    settings = client.put(f"/v1/projects/{pid}/preview-settings", {"egress": ["registry.npmjs.org"], "idleTimeoutMinutes": 30})
+    big = next(p["id"] for p in client.get("/v1/machines/pools").json()["pools"] if p["name"] == "big")
+    sized = client.post("/v1/machines/sizes", {"name": "Preview", "cpus": 3, "memoryMiB": 6144, "diskGiB": 25, "poolId": big})
+    assert sized.status_code == 201, sized.text
+    size = next(s for s in sized.json()["sizes"] if s["name"] == "Preview")
+    settings = client.put(f"/v1/projects/{pid}/preview-settings",
+                          {"egress": ["registry.npmjs.org"], "idleTimeoutMinutes": 30, "machineSize": size["id"]})
     assert settings.status_code == 200 and settings.json()["egress"] == ["registry.npmjs.org"]
+    assert settings.json()["machineSize"] == size["id"]
 
     task = client.create_task(pid, "Preview it")
     before = client.get(f"/v1/tasks/{task['id']}/servers").json()
@@ -65,27 +73,80 @@ def test_a_project_defines_its_servers_and_a_preview_serves_them(client: ApiClie
     assert run["kind"] == "preview" and run["label"] == "Branch preview" and run["parksAfterMinutes"] == 30
     assert client.post(f"/v1/tasks/{task['id']}/preview").status_code == 409
 
+    # Declared: its server exists in lux, at one label under the preview
+    # domain, asleep; nothing runs.
+    asleep = wait_until(lambda: (s := client.get(f"/v1/tasks/{task['id']}/servers").json())["run"].get("asleep") and s,
+                        timeout=60, message="the preview never went to sleep")
+    assert asleep["run"]["wakeable"] is True and asleep["run"]["previewStage"] is None, asleep["run"]
+    [web] = asleep["servers"]
+    host = web["url"].removeprefix("https://")
+    label, _, domain = host.partition(".")
+    assert domain == FAKE_PREVIEW_DOMAIN and label.startswith("web-") and len(label) <= 63, host
+    assert web["serverState"] == "asleep" and web["state"] == "stopped", web
+    luxed = lux_get(env, f"/v1/servers?hostname={host}")["servers"]
+    assert [s["id"] for s in luxed] == [web["id"]] and luxed[0]["labels"]["dude.task"] == task["id"], luxed
+
+    # Someone opens it: lux asks dude, dude starts it, it serves.
+    assert lux_fake(env, f"/fake/servers/{web['id']}/request?path=/")["served"] is False
     ready = wait_until(lambda: (s := client.get(f"/v1/tasks/{task['id']}/servers").json())["run"]["previewStage"] == "ready" and s,
-                       timeout=30, message="the preview never served")
+                       timeout=60, message="the preview never woke")
     assert [s["name"] for s in ready["servers"]] == ["web"] and ready["servers"][0]["state"] == "ready"
+    assert ready["servers"][0]["url"] == web["url"], "the URL changed on waking"
     assert ready["run"]["terminalUrl"].endswith(f"/runs/{ready['run']['luxRunId']}/terminal")
-    wait_until(lambda: any(p.get("server") == "web" and p.get("state") == "ready" for p in heard), timeout=30,
+    assert lux_fake(env, f"/fake/servers/{web['id']}/request?path=/")["served"] is True
+    wait_until(lambda: any(p.get("server") == "web" and p.get("state") == "ready" for p in heard), timeout=60,
                message="no servers.changed for web ready")
     stop.set()
+    first_lux_run = ready["run"]["luxRunId"]
+    # Woken on the project's preview size, in its pool by lux's id.
+    woken_spec = lux_get(env, f"/v1/runs/{first_lux_run}")["spec"]
+    assert woken_spec["resources"] == {"cpus": 3, "memory": 6144 * 1024 * 1024, "disk": 25 * 1024 ** 3}, woken_spec
+    assert woken_spec["placement"] == {"poolId": big}, woken_spec
+    assert not woken_spec["workload"].get("servers"), woken_spec
 
-    run_id = ready["run"]["id"]
-    # A server of a person's own, stopped, its log, removed.
-    assert client.post(f"/v1/runs/{run_id}/servers", {"name": "vite", "port": 5173}).status_code == 201
-    stopped = client.post(f"/v1/runs/{run_id}/servers/web/stop")
-    assert stopped.status_code == 200 and stopped.json()["state"] == "stopped"
-    assert "lines" in client.get(f"/v1/runs/{run_id}/servers/web/log?tail=5").json()
-    assert client.delete(f"/v1/runs/{run_id}/servers/vite").status_code == 204
+    # Unused: lux says so, dude stops the Run, the preview sleeps.
+    assert lux_fake(env, f"/fake/servers/{web['id']}/idle")["idle"] is True
+    wait_until(lambda: client.get(f"/v1/tasks/{task['id']}/servers").json()["run"].get("asleep"), timeout=60,
+               message="the idle preview was never put to sleep")
+    # dude records the park before asking lux, so lux catches up after.
+    wait_until(lambda: lux_get(env, f"/v1/runs/{first_lux_run}")["state"] == "stopped", timeout=60,
+               message="dude never stopped the idle preview's Run")
+
+    # Opened again: the same Run resumed.
+    lux_fake(env, f"/fake/servers/{web['id']}/request?path=/")
+    again = wait_until(lambda: (s := client.get(f"/v1/tasks/{task['id']}/servers").json())["run"]["previewStage"] == "ready" and s,
+                       timeout=60, message="the preview never woke again")
+    assert again["run"]["luxRunId"] == first_lux_run
+    resumed_spec = lux_get(env, f"/v1/runs/{first_lux_run}")["spec"]
+    assert (resumed_spec["resources"], resumed_spec["placement"]) == (woken_spec["resources"], woken_spec["placement"])
+
+    run_id = again["run"]["id"]
+    # Starting the server of a running preview is lux's, as for any Run.
+    assert client.post(f"/v1/runs/{run_id}/servers/web/start").status_code == 200
 
     # A preview is not an agent: the sidebar leaves it out, and it is not aborted.
     assert client.post(f"/v1/runs/{run_id}/abort", {}).status_code == 409
 
+    # Stopped: its server deleted in lux (its URL gone), its Run cancelled.
     assert client.delete(f"/v1/tasks/{task['id']}/preview").status_code == 200
     assert client.get(f"/v1/tasks/{task['id']}/servers").json()["run"] is None
+    wait_until(lambda: lux_get(env, f"/v1/servers?hostname={host}")["servers"] == [], timeout=60,
+               message="the preview's server was never deleted in lux")
+    wait_until(lambda: lux_get(env, f"/v1/runs/{first_lux_run}")["state"] == "cancelled", timeout=60,
+               message="the preview's Run was never cancelled")
+
+
+def lux_get(env, path: str) -> dict:
+    res = requests.get(env.lux_url + path, headers={"Authorization": f"Bearer {env.lux_key}"}, timeout=10)
+    res.raise_for_status()
+    return res.json()
+
+
+def lux_fake(env, path: str) -> dict:
+    """The fake lux's test hooks: a signed-in request, lux finding a server idle."""
+    res = requests.post(env.lux_url + path, headers={"Authorization": f"Bearer {env.lux_key}"}, timeout=10)
+    res.raise_for_status()
+    return res.json()
 
 
 def test_another_organization_sees_no_servers(client: ApiClient, second_org: dict, forge_project: dict):

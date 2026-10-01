@@ -67,6 +67,7 @@ def main() -> None:
         os.environ["DUDE_TEST_RUN_ID"] = env.run_id
         os.environ["DUDE_TEST_CONTROL_PLANE_PORT"] = str(env.control_plane_port)
         os.environ["DUDE_TEST_ORCHESTRATOR_PORT"] = str(env.orchestrator_port)
+        os.environ["DUDE_TEST_LUX_URL"] = env.lux_url
         if args.lux:
             os.environ["DUDE_TEST_REAL_LUX"] = "1"
         os.environ["DUDE_TEST_GALLERY_PORT"] = str(env.gallery_port)
@@ -77,8 +78,9 @@ def main() -> None:
         os.environ["DUDE_TEST_LOG_DIR"] = str(env.log_dir)
 
         # One orchestrator drives one lux, so the contract suite gets an
-        # environment of its own rather than sharing the fake's.
-        skip_marks = ["lux"] if args.lux else ["not lux"]
+        # environment of its own rather than sharing the fake's. Tests marked
+        # both_luxes run in either: they pin the fake to the real one.
+        skip_marks = ["(lux or both_luxes)"] if args.lux else ["not lux"]
         if args.no_ui:
             skip_marks.append("not ui")
         if skip_marks:
