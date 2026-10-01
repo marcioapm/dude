@@ -71,6 +71,15 @@ type Placement struct {
 	MemoryLimit *int64 `json:"memoryLimit,omitempty"`
 }
 
+// MemoryLimit is the memory limit of the Run's latest placement, when lux
+// reports one.
+func (r Run) MemoryLimit() *int64 {
+	if n := len(r.Placements); n > 0 {
+		return r.Placements[n-1].MemoryLimit
+	}
+	return nil
+}
+
 // Artifact is a file a Run produced, kept by lux after the Run ends.
 type Artifact struct {
 	ID    string `json:"id"`
