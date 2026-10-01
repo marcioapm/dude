@@ -126,6 +126,14 @@ afterAll(async () => {
 const sizes = async (key = adminKey) => (await body(await call(key, "GET", "/v1/machines/sizes"))).sizes as Json[];
 const byName = async (name: string) => (await sizes()).find((s) => s.name === name);
 const LARGE = { name: "Large", cpus: 8, memoryMiB: 16384, diskGiB: 80, poolId: null };
+/** Deletes the sizes named, where they exist, so a failed test leaves none behind for the next. */
+async function removeSizes(...names: string[]) {
+  for (const s of await sizes()) {
+    if (!names.includes(s.name)) continue;
+    const res = await call(adminKey, "DELETE", `/v1/machines/sizes/${s.id}`, { replacement: null });
+    if (res.status !== 200) throw new Error(`removing ${s.name}: ${res.status} ${await res.text()}`);
+  }
+}
 
 describe("sizes", () => {
   test("an organization starts with Standard, its default; everyone reads, only admins change", async () => {
@@ -172,12 +180,16 @@ describe("sizes", () => {
 
   test("a pool lux does not list is refused, 422 unknown_pool, and nothing is saved", async () => {
     const before = await sizes();
-    // A pool's name is not its id: refused by the schema.
-    expect((await call(adminKey, "POST", "/v1/machines/sizes", { ...LARGE, name: "Named", poolId: "big" })).status).toBe(400);
-    const res = await call(adminKey, "POST", "/v1/machines/sizes", { ...LARGE, name: "Orphan", poolId: "pool_deleted0" });
-    expect(res.status).toBe(422);
-    expect((await body(res)).error).toMatchObject({ code: "unknown_pool", message: "lux has no pool with id pool_deleted0 for this organisation" });
-    expect(await sizes()).toEqual(before);
+    try {
+      // A pool's name is not its id: refused by the schema.
+      expect((await call(adminKey, "POST", "/v1/machines/sizes", { ...LARGE, name: "Named", poolId: "big" })).status).toBe(400);
+      const res = await call(adminKey, "POST", "/v1/machines/sizes", { ...LARGE, name: "Orphan", poolId: "pool_deleted0" });
+      expect(res.status).toBe(422);
+      expect((await body(res)).error).toMatchObject({ code: "unknown_pool", message: "lux has no pool with id pool_deleted0 for this organisation" });
+      expect(await sizes()).toEqual(before);
+    } finally {
+      await removeSizes("Named", "Orphan");
+    }
   });
 
   test("lux unreachable: a size naming a pool is 503 and not saved; one with none still saves", async () => {
@@ -192,19 +204,23 @@ describe("sizes", () => {
       expect(none.status).toBe(201);
     } finally {
       luxPools = POOLS();
+      await removeSizes("Pooled", "Unpooled");
     }
-    expect((await call(adminKey, "DELETE", `/v1/machines/sizes/${(await byName("Unpooled")).id}`, { replacement: null })).status).toBe(200);
+    expect((await sizes()).map((s) => s.name)).toEqual(before.map((s) => s.name));
   });
 
   test("a size names its pool by id; a rename in lux shows by itself", async () => {
-    const res = await call(adminKey, "POST", "/v1/machines/sizes", { ...LARGE, name: "Roomy", poolId: BIG });
-    expect(res.status).toBe(201);
-    expect((await body(res)).sizes.find((s: Json) => s.name === "Roomy")).toMatchObject({ poolId: BIG, poolName: "big" });
-    const [row] = await owner`SELECT pool_id FROM machine_sizes WHERE name = 'Roomy'`;
-    expect(row.pool_id).toBe(BIG);
-    luxPools = POOLS().map((p) => (p.id === BIG ? { ...p, name: "huge" } : p));
     try {
+      const res = await call(adminKey, "POST", "/v1/machines/sizes", { ...LARGE, name: "Roomy", poolId: BIG });
+      expect(res.status).toBe(201);
+      expect((await body(res)).sizes.find((s: Json) => s.name === "Roomy")).toMatchObject({ poolId: BIG, poolName: "big" });
+      const [row] = await owner`SELECT pool_id FROM machine_sizes WHERE name = 'Roomy'`;
+      expect(row.pool_id).toBe(BIG);
+      luxPools = POOLS().map((p) => (p.id === BIG ? { ...p, name: "huge" } : p));
       expect(await byName("Roomy")).toMatchObject({ poolId: BIG, poolName: "huge" });
+      // lux unreadable: the size is still listed, its pool's name unknown.
+      luxPools = null;
+      expect(await byName("Roomy")).toMatchObject({ poolId: BIG, poolName: null });
       // Gone from lux's list: still listed, its pool unnamed.
       luxPools = POOLS().filter((p) => p.id !== BIG);
       expect(await byName("Roomy")).toMatchObject({ poolId: BIG, poolName: null });
@@ -214,8 +230,9 @@ describe("sizes", () => {
       expect((await call(adminKey, "PUT", `/v1/machines/sizes/${roomy.id}`, { ...asInput(roomy), poolId: null })).status).toBe(200);
     } finally {
       luxPools = POOLS();
+      await removeSizes("Roomy");
     }
-    expect((await call(adminKey, "DELETE", `/v1/machines/sizes/${(await byName("Roomy")).id}`, { replacement: null })).status).toBe(200);
+    expect(await byName("Roomy")).toBeUndefined();
   });
 
   test("members read lux's pools", async () => {
@@ -250,6 +267,13 @@ describe("sizes", () => {
 
 /** A size as PUT takes it: what GET says, less what only the API writes. */
 const asInput = ({ id: _id, usedBy: _usedBy, updatedAt: _at, updatedBy: _by, poolName: _poolName, ...input }: Json) => input;
+/** Puts a shared size back as GET read it, when a refused change went through anyway. */
+async function restoreSize(was: Json) {
+  const now = await byName(was.name);
+  if (now && JSON.stringify(asInput(now)) === JSON.stringify(asInput(was))) return;
+  const res = await call(adminKey, "PUT", `/v1/machines/sizes/${was.id}`, asInput(was));
+  if (res.status !== 200) throw new Error(`restoring ${was.name}: ${res.status} ${await res.text()}`);
+}
 
 describe("changing a size", () => {
   test("one that does not exist is 404", async () => {
@@ -275,10 +299,14 @@ describe("changing a size", () => {
 
   test("moved to a pool lux does not list is 422 unknown_pool and changes nothing", async () => {
     const large = await byName("Large");
-    const res = await call(adminKey, "PUT", `/v1/machines/sizes/${large.id}`, { ...asInput(large), cpus: 4, poolId: "pool_deleted0" });
-    expect(res.status).toBe(422);
-    expect((await body(res)).error.code).toBe("unknown_pool");
-    expect(await byName("Large")).toMatchObject({ cpus: 8, poolId: null });
+    try {
+      const res = await call(adminKey, "PUT", `/v1/machines/sizes/${large.id}`, { ...asInput(large), cpus: 4, poolId: "pool_deleted0" });
+      expect(res.status).toBe(422);
+      expect((await body(res)).error.code).toBe("unknown_pool");
+      expect(await byName("Large")).toMatchObject({ cpus: 8, poolId: null });
+    } finally {
+      await restoreSize(large);
+    }
   });
 
   test("moved to a pool while lux cannot be read is 503 and changes nothing", async () => {
@@ -287,10 +315,12 @@ describe("changing a size", () => {
     try {
       const res = await call(adminKey, "PUT", `/v1/machines/sizes/${large.id}`, { ...asInput(large), cpus: 4, poolId: BIG });
       expect(res.status).toBe(503);
+      luxPools = POOLS();
+      expect(await byName("Large")).toMatchObject({ cpus: 8, poolId: null });
     } finally {
       luxPools = POOLS();
+      await restoreSize(large);
     }
-    expect(await byName("Large")).toMatchObject({ cpus: 8, poolId: null });
   });
 
   test("unticking the default leaves it the default", async () => {
