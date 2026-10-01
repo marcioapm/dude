@@ -233,6 +233,22 @@ export async function getObject(key: string): Promise<ArrayBuffer | null> {
   }
 }
 
+/** Whether a bucket is configured: without one, uploads answer 503. */
+export function storageConfigured(): boolean {
+  return Boolean(config().string("DUDE_S3_BUCKET"));
+}
+
+/** Remove an object, or throw StorageError: for a caller that retries what it could not delete. */
+export async function removeObject(key: string): Promise<void> {
+  try {
+    await (await required()).delete(key);
+  } catch (err) {
+    const error = safeError("delete", err);
+    if (error instanceof StorageError && error.code === "NoSuchKey") return;
+    throw error;
+  }
+}
+
 /** Remove an object, best effort: one left behind costs a few KB, never a wrong face. */
 export async function deleteObject(key: string): Promise<void> {
   if (!config().string("DUDE_S3_BUCKET")) return;

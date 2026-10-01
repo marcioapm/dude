@@ -31,6 +31,7 @@ export const ID_PREFIXES = {
   promptVersion: "pv",
   memory: "mem",
   machineSize: "msz",
+  attachment: "att",
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIXES;
