@@ -200,10 +200,11 @@ func (p *Previews) advanceWakeable(ctx context.Context, r wakeRun) (bool, error)
 		did = did || woke
 	}
 	if r.SyncWanted != nil {
-		if err := p.syncRunning(ctx, r); err != nil {
+		synced, err := p.syncRunning(ctx, r)
+		if err != nil {
 			return true, err
 		}
-		did = true
+		did = did || synced
 	}
 	if r.Status == "running" && r.ParkDue && r.Servers > 0 && r.WakeWanted == nil {
 		parked, err := p.parkIfIdle(ctx, r)
@@ -470,19 +471,35 @@ func (p *Previews) resumeWoken(ctx context.Context, r wakeRun, lr lux.Run) error
 		_ = p.releaseWake(ctx, r, 5*time.Second)
 		return err
 	}
-	// Attached before the resume, so lux starts them on its placement.
+	// Attached before the resume, so lux starts them on its placement. A
+	// failed Run takes none (409 finished) until it is resumed: then after.
+	attachAfter := false
 	if err := p.attachAll(ctx, r, r.LuxRunID); err != nil {
-		_ = p.releaseWake(ctx, r, 5*time.Second)
-		return err
+		if le, ok := lux.AsError(err); !ok || le.Code != "finished" {
+			_ = p.releaseWake(ctx, r, 5*time.Second)
+			return err
+		}
+		attachAfter = true
 	}
 	res, err := p.Lux.Resume(ctx, r.LuxRunID, lux.ResumeInput{Secrets: spec.Secrets, Sync: sync,
 		RequestID: fmt.Sprintf("wake-%s-%d", r.ID, r.WakeWanted.UnixMilli())})
 	if le, ok := lux.AsError(err); ok && le.Status == http.StatusConflict {
-		// Resumed already (another wake, or lux moving it): it comes up.
-		return p.woken(ctx, r, r.LuxRunID, "resuming", true)
+		// lux answers a resume of a Run resuming already with 2xx; a 409
+		// (no_snapshot, not_resumable) is a resume not done. What the Run
+		// is now decides.
+		lr, gerr := p.Lux.Get(ctx, r.LuxRunID)
+		switch {
+		case gerr != nil && !lux.IsNotFound(gerr):
+			_ = p.releaseWake(ctx, r, 5*time.Second)
+			return gerr
+		case gerr == nil && slices.Contains([]string{"scheduled", "starting", "resuming", "running"}, lr.State):
+			return p.woken(ctx, r, r.LuxRunID, lr.State, true)
+		case gerr == nil && lr.State == "stopping":
+			return p.releaseWake(ctx, r, time.Second)
+		}
 	}
 	if le, ok := lux.AsError(err); ok && !le.Retryable() {
-		// A Run lux will not resume: a new one at the next wake.
+		// A Run lux will not resume: a new one now.
 		p.Log.Warn("lux refused to resume a preview; submitting a new run", "run", r.ID, "error", le.Message)
 		if err := p.retireRun(ctx, r); err != nil {
 			return err
@@ -494,6 +511,12 @@ func (p *Previews) resumeWoken(ctx context.Context, r wakeRun, lr lux.Run) error
 	if err != nil {
 		_ = p.releaseWake(ctx, r, 5*time.Second)
 		return err
+	}
+	if attachAfter {
+		if err := p.attachAll(ctx, r, r.LuxRunID); err != nil {
+			_ = p.releaseWake(ctx, r, 5*time.Second)
+			return err
+		}
 	}
 	return p.woken(ctx, r, r.LuxRunID, res.State, true)
 }
@@ -592,11 +615,16 @@ func (p *Previews) attachAll(ctx context.Context, r wakeRun, runID string) error
 				_, err = p.Lux.AttachServer(ctx, sv.LuxID, runID)
 			}
 		}
-		if lux.IsNotFound(err) && !strings.Contains(err.Error(), runID) {
-			err = p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-				_, err := tx.Exec(ctx, `UPDATE preview_servers SET deleted_at = COALESCE(deleted_at, now()) WHERE lux_server_id = $1`, sv.LuxID)
-				return err
-			})
+		if lux.IsNotFound(err) {
+			// The server or the Run: only the server's own 404 says which.
+			if _, gerr := p.Lux.GetServer(ctx, sv.LuxID); lux.IsNotFound(gerr) {
+				err = p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+					_, err := tx.Exec(ctx, `UPDATE preview_servers SET deleted_at = COALESCE(deleted_at, now()) WHERE lux_server_id = $1`, sv.LuxID)
+					return err
+				})
+			} else if gerr != nil {
+				err = gerr
+			}
 		}
 		if err != nil {
 			return err
@@ -616,7 +644,9 @@ func (p *Previews) woken(ctx context.Context, r wakeRun, luxRunID, state string,
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE preview_servers SET idle_at = NULL, idle_last_request_at = NULL WHERE run_id = $1`, r.ID); err != nil {
+		// A wake from dude (Start) counts for the reaper as a URL's does.
+		if _, err := tx.Exec(ctx, `UPDATE preview_servers SET idle_at = NULL, idle_last_request_at = NULL,
+			last_woken_at = CASE WHEN $2 THEN now() ELSE last_woken_at END WHERE run_id = $1`, r.ID, started); err != nil {
 			return err
 		}
 		if tag.RowsAffected() == 0 || !started {
@@ -731,13 +761,17 @@ func requestedSince(now, atIdle *time.Time) bool {
 }
 
 // syncRunning moves a running preview's checkouts to the task's branch,
-// which moved. A preview that is not running has nothing to do: its next
-// wake syncs.
-func (p *Previews) syncRunning(ctx context.Context, r wakeRun) error {
-	if r.Status == "running" && r.LuxState == "running" && r.LuxRunID != "" {
+// which moved. An asleep one has nothing to do: its next wake syncs. One
+// on its way up keeps the want until it runs: its resume's sync may have
+// been of the older ref.
+func (p *Previews) syncRunning(ctx context.Context, r wakeRun) (bool, error) {
+	if r.Status != "paused" && (r.Status != "running" || r.LuxState != "running") {
+		return false, nil
+	}
+	if r.Status == "running" && r.LuxRunID != "" {
 		refs, err := p.syncRefs(ctx, r)
 		if err != nil {
-			return err
+			return true, err
 		}
 		err = p.Lux.SyncRun(ctx, r.LuxRunID, fmt.Sprintf("sync-%s-%d", r.ID, r.SyncWanted.UnixMilli()), refs)
 		if le, ok := lux.AsError(err); ok && (le.Code == "not_running" || !le.Retryable()) {
@@ -745,10 +779,10 @@ func (p *Previews) syncRunning(ctx context.Context, r wakeRun) error {
 			err = nil
 		}
 		if err != nil {
-			return err
+			return true, err
 		}
 	}
-	return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+	return true, p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE runs SET sync_wanted_at = NULL WHERE id = $1 AND sync_wanted_at = $2`, r.ID, *r.SyncWanted)
 		return err
 	})
