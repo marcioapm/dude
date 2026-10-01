@@ -208,4 +208,13 @@ func TestDudeDiffPassesItsArgumentsToTheTool(t *testing.T) {
 	if _, sent = dude("diff", "run_tests/x.go"); sent != `/tools/run_diff {"paths":["run_tests/x.go"]}` {
 		t.Errorf("dude diff run_tests/x.go sent %s", sent)
 	}
+	// A repository-qualified path goes as given.
+	repos := ids.New(ids.Run)
+	f.run(t, repos, "implementer", "completed")
+	repoHunks := f.storeTwoRepos(t, repos)
+	got, sent = dude("diff", repos, "api/a.go")
+	if sent != `/tools/run_diff {"paths":["api/a.go"],"run":"`+repos+`"}` ||
+		!slices.Equal(paths(got.Files), []string{"api/a.go"}) || got.Files[0]["patch"] != repoHunks["api/a.go"] {
+		t.Errorf("dude diff RUN api/a.go sent %s, showed %v", sent, got.Files)
+	}
 }
