@@ -91,7 +91,7 @@ func TestReviewerSearchErrors(t *testing.T) {
 		"user-owned": {`{"data":{"repository":{"pullRequest":null,"assignableUsers":{"nodes":[{"login":"cy"}]}},"organization":null},
 			"errors":[{"type":"NOT_FOUND","path":["organization"],"message":"Could not resolve to an Organization"}]}`, 1, false, false},
 		// A path through a list has numbers in it: still the organization's.
-		"a team hidden by SSO": {`{"data":{"repository":{"pullRequest":null,"assignableUsers":{"nodes":[{"login":"cy"}]}},"organization":{"teams":{"nodes":[]}}},
+		"a team hidden by SSO": {`{"data":{"repository":{"pullRequest":null,"assignableUsers":{"nodes":[{"login":"cy"}]}},"organization":{"teams":{"nodes":[null]}}},
 			"errors":[{"type":"FORBIDDEN","path":["organization","teams","nodes",0,"members"],"message":"SSO"}]}`, 1, false, false},
 		"rate limited": {`{"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded"}]}`, 0, true, false},
 		"no repository": {`{"data":{"repository":null},"errors":[{"type":"NOT_FOUND","path":["repository"],"message":"Could not resolve"}]}`,

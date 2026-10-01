@@ -25,6 +25,10 @@ const candidatesTTL = time.Minute
 type candidateCache struct {
 	mu   sync.Mutex
 	seen map[string]cachedCandidates
+	// How many times each repository's answers were forgotten: an answer
+	// asked for before the latest is not kept, as it may not show who was
+	// just asked.
+	forgot map[string]uint64
 }
 
 type cachedCandidates struct {
@@ -32,13 +36,14 @@ type cachedCandidates struct {
 	list []forge.Candidate
 }
 
-var candidates = candidateCache{seen: map[string]cachedCandidates{}}
+var candidates = candidateCache{seen: map[string]cachedCandidates{}, forgot: map[string]uint64{}}
 
 // get answers from the cache, else asks GitHub and keeps the answer.
-func (c *candidateCache) get(ctx context.Context, key string, ask func(context.Context) ([]forge.Candidate, error)) ([]forge.Candidate, error) {
+func (c *candidateCache) get(ctx context.Context, repo, key string, ask func(context.Context) ([]forge.Candidate, error)) ([]forge.Candidate, error) {
 	now := time.Now()
 	c.mu.Lock()
 	hit, ok := c.seen[key]
+	generation := c.forgot[repo]
 	c.mu.Unlock()
 	if ok && now.Sub(hit.at) < candidatesTTL {
 		return hit.list, nil
@@ -55,16 +60,20 @@ func (c *candidateCache) get(ctx context.Context, key string, ask func(context.C
 			delete(c.seen, k)
 		}
 	}
-	c.seen[key] = cachedCandidates{at: now, list: list}
+	if c.forgot[repo] == generation {
+		c.seen[key] = cachedCandidates{at: now, list: list}
+	}
 	return list, nil
 }
 
 // forget drops what was kept for a repository: once someone is asked, the
 // next look must show them asked.
 func (c *candidateCache) forget(org, slug string) {
-	prefix := org + "\x00" + slug + "\x00"
+	repo := org + "\x00" + slug
+	prefix := repo + "\x00"
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.forgot[repo]++
 	for k := range c.seen {
 		if strings.HasPrefix(k, prefix) {
 			delete(c.seen, k)
@@ -128,8 +137,9 @@ func (s *Server) reviewerCandidates(w http.ResponseWriter, r *http.Request, org,
 	if err != nil {
 		return err
 	}
-	key := strings.Join([]string{org, slug, strings.ToLower(words), strconv.Itoa(number)}, "\x00")
-	list, err := candidates.get(r.Context(), key, func(ctx context.Context) ([]forge.Candidate, error) {
+	repo := org + "\x00" + slug
+	key := strings.Join([]string{repo, strings.ToLower(words), strconv.Itoa(number)}, "\x00")
+	list, err := candidates.get(r.Context(), repo, key, func(ctx context.Context) ([]forge.Candidate, error) {
 		return gh.ReviewerCandidates(ctx, slug, number, words)
 	})
 	if err != nil {
