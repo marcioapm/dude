@@ -94,7 +94,9 @@ def test_a_project_defines_its_servers_and_a_preview_serves_them(client: ApiClie
     assert lux_fake(env, f"/fake/servers/{web['id']}/idle")["idle"] is True
     wait_until(lambda: client.get(f"/v1/tasks/{task['id']}/servers").json()["run"].get("asleep"), timeout=60,
                message="the idle preview was never put to sleep")
-    assert lux_get(env, f"/v1/runs/{first_lux_run}")["state"] == "stopped"
+    # dude records the park before asking lux, so lux catches up after.
+    wait_until(lambda: lux_get(env, f"/v1/runs/{first_lux_run}")["state"] == "stopped", timeout=60,
+               message="dude never stopped the idle preview's Run")
 
     # Opened again: the same Run resumed.
     lux_fake(env, f"/fake/servers/{web['id']}/request?path=/")

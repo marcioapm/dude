@@ -155,4 +155,22 @@ describe("a branch preview on the Servers tab", () => {
     await click(button(page, "start-all")!);
     await until(() => all(page, "starting", "ready"), "every server started again");
   });
+
+  test("a wakeable preview asleep: says so, how long until it sleeps, and offers no Add server", async () => {
+    class AsleepPreview extends FixtureClient {
+      override taskServers() {
+        return super.taskServers().then((d) => ({
+          ...d,
+          run: d.run ? { ...d.run, state: "paused" as const, wakeable: true, asleep: true, previewStage: null, parksAfterMinutes: 30 } : null,
+        }));
+      }
+    }
+    const page = await taskPage(new AsleepPreview("e"), { tab: "servers" });
+    const panel = await until(() => page.querySelector<HTMLElement>("[data-testid=servers-panel][data-run=preview]"), "the preview's panel");
+    await until(() => (panel.textContent?.includes("· asleep") ? true : null), "the asleep detail");
+    expect(panel.textContent).toContain("sleeps after 30m without a request");
+    expect(panel.textContent).not.toContain("parks after");
+    expect(panel.textContent).toContain("opening one wakes it on the branch’s latest commit");
+    expect(button(page, "add-server")?.disabled).toBe(true);
+  });
 });

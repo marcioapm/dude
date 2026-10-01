@@ -127,8 +127,74 @@ def test_a_wakeable_server_is_created_found_and_deleted_as_dude_expects(lux: Lux
     assert not [e for e in lux.feed(evs[-1]["id"]) if e.get("serverId") == sv["id"]]
 
 
-def test_a_sync_of_a_run_that_is_not_running_is_refused(lux: Lux):
-    """dude's push-while-asleep path relies on this: lux answers 409 and dude
-    leaves the sync to the next wake."""
+def test_a_sync_of_an_unknown_run_is_not_found(lux: Lux):
     r = lux.req("POST", "/v1/runs/run_doesnotexist/sync", {"requestId": "x", "sync": [{"repo": "app", "ref": "main"}]})
     assert r.status_code == 404, r.text
+
+
+# lux-fake, preloaded on every real lux host; the fake lux takes any image.
+SERVES_ONLY = {"image": {"ref": "localhost/lux-fake:test"},
+               "workload": {"adapter": "generic", "command": ["sleep", "infinity"]}}
+
+
+def submit(lux: Lux) -> str:
+    r = lux.req("POST", "/v1/runs", SERVES_ONLY, headers={"Idempotency-Key": f"contract-{os.urandom(6).hex()}"})
+    assert r.status_code in (200, 201), r.text
+    return r.json()["id"]
+
+
+def state_of(lux: Lux, run: str) -> str:
+    return lux.req("GET", f"/v1/runs/{run}").json()["state"]
+
+
+def test_attach_and_sync_refusals_carry_the_codes_dude_branches_on(lux: Lux):
+    """dude detaches and attaches again only on 409 `attached`; leaves a push
+    to the next wake on 409 `not_running`; reads a 404 from attach as the Run
+    or the server only by asking for the server."""
+    domain = lux.domain()
+    runs = [submit(lux), submit(lux)]
+    servers = []
+
+    def create(name: str) -> dict:
+        label = f"contract-{os.urandom(4).hex()}"
+        r = lux.req("POST", "/v1/servers", {"name": name, "port": 8080, "hostname": f"{label}.{domain}", "wake": "request",
+                                            "lifetime": "owner", "labels": {"dude.preview": label}})
+        assert r.status_code == 201, r.text
+        servers.append(r.json()["id"])
+        return r.json()
+
+    try:
+        for run in runs:
+            wait_until(lambda run=run: state_of(lux, run) == "running", timeout=120, interval=1,
+                       message=f"{run} never ran")
+        a, b = create("web"), create("web")
+        assert lux.req("POST", f"/v1/servers/{a['id']}/attach", {"runId": runs[0]}).status_code == 200
+        # Held by another Run: 409 attached.
+        other = lux.req("POST", f"/v1/servers/{a['id']}/attach", {"runId": runs[1]})
+        assert other.status_code == 409 and other.json()["error"]["code"] == "attached", other.text
+        # A name the Run has: 409 name_taken, not attached.
+        clash = lux.req("POST", f"/v1/servers/{b['id']}/attach", {"runId": runs[0]})
+        assert clash.status_code == 409 and clash.json()["error"]["code"] == "name_taken", clash.text
+        # A Run lux does not have: 404, the server still there.
+        gone = lux.req("POST", f"/v1/servers/{b['id']}/attach", {"runId": "run_doesnotexist"})
+        assert gone.status_code == 404 and gone.json()["error"]["code"] == "not_found", gone.text
+        assert lux.req("GET", f"/v1/servers/{b['id']}").status_code == 200
+
+        # A sync of a Run that is not running: 409 not_running.
+        assert lux.req("POST", f"/v1/runs/{runs[1]}/stop", {}).status_code in (200, 202)
+        wait_until(lambda: state_of(lux, runs[1]) == "stopped", timeout=120, interval=1, message="never stopped")
+        r = lux.req("POST", f"/v1/runs/{runs[1]}/sync", {"requestId": "x", "sync": [{"repo": "app", "ref": "main"}]})
+        assert r.status_code == 409 and r.json()["error"]["code"] == "not_running", r.text
+
+        # A Run over: attach is 409 finished, resume 409 not_resumable.
+        assert lux.req("POST", f"/v1/runs/{runs[1]}/cancel", {}).status_code in (200, 202)
+        wait_until(lambda: state_of(lux, runs[1]) == "cancelled", timeout=120, interval=1, message="never cancelled")
+        over = lux.req("POST", f"/v1/servers/{b['id']}/attach", {"runId": runs[1]})
+        assert over.status_code == 409 and over.json()["error"]["code"] == "finished", over.text
+        resume = lux.req("POST", f"/v1/runs/{runs[1]}/resume", {})
+        assert resume.status_code == 409 and resume.json()["error"]["code"] == "not_resumable", resume.text
+    finally:
+        for sid in servers:
+            lux.req("DELETE", f"/v1/servers/{sid}")
+        for run in runs:
+            lux.req("POST", f"/v1/runs/{run}/cancel", {})
