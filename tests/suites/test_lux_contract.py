@@ -273,7 +273,7 @@ def test_luxs_pools_decode_as_dude_reads_them(env, client: ApiClient):
     assert res.status_code == 200, res.text
     pools = res.json()["pools"]
     assert all(isinstance(p["name"], str) and p["name"] for p in pools), pools
-    # Each pool's id is what a size stores; the pattern is migration 063's.
+    # Each pool's id is what a size stores; the pattern is migration 064's.
     assert all(re.fullmatch(r"pool_[A-Za-z0-9_-]+", p.get("id", "")) for p in pools), pools
     for p in pools:
         # Absent from an older lux; when there, one host's size: CPUs, and

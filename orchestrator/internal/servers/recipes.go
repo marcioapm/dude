@@ -134,7 +134,7 @@ type PreviewSettings struct {
 	Image              *string  `json:"image"`
 	Egress             []string `json:"egress"`
 	IdleTimeoutMinutes float64  `json:"idleTimeoutMinutes"`
-	// A machine size's id; nil: the organization's default (migration 063).
+	// A machine size's id; nil: the organization's default (migration 064).
 	MachineSize *string `json:"machineSize"`
 }
 

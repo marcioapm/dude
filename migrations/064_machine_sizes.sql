@@ -1,4 +1,4 @@
--- 063_machine_sizes.sql — every agent and every branch preview runs on a
+-- 064_machine_sizes.sql — every agent and every branch preview runs on a
 -- named machine size.
 --
 -- A size is the organization's, changed by its admins: CPUs, memory and

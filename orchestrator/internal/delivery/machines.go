@@ -1,6 +1,6 @@
 package delivery
 
-// Machine sizes: the organization's (machine_sizes, migration 063), named
+// Machine sizes: the organization's (machine_sizes, migration 064), named
 // by each role's settings (machineSize, over the same layers as its model)
 // and by a project's branch previews. What names none, or names a size
 // that is gone, runs on the organization's default.

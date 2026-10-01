@@ -1,7 +1,7 @@
 /**
  * Machines: the organization's machine sizes, and the lux pools they run in.
  *
- * Sizes are the organization's (machine_sizes, migration 063); anyone in
+ * Sizes are the organization's (machine_sizes, migration 064); anyone in
  * it reads them, only its admins change them. Every agent role names one
  * in its settings (settings.ts) and a project's branch previews in their
  * preview settings (servers.ts); what names none runs on the default.
