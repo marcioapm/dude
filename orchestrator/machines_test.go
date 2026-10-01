@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/api"
+	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -309,4 +310,83 @@ type failingPools struct{ lux.Client }
 
 func (failingPools) Pools(context.Context) ([]lux.Pool, error) {
 	return nil, &lux.Error{Status: 0, Code: "unreachable", Message: "dial tcp: connection refused"}
+}
+
+// A wakeable preview's Run, submitted servers-only when a request wakes it,
+// goes to lux on the project's preview size in that size's pool and records
+// it; a size id of another organization is not one of this one's sizes, so
+// the next woken preview runs on the default, with no pool; and a size whose
+// pool lux no longer has fails the woken preview with the reason, once.
+func TestAWokenPreviewRunsOnItsProjectsPreviewSizeAndNoOtherOrganizations(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	other := dbtest.Org(t, w.owner)
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool_id)
+		VALUES ('msz_xl', $1, 'XL', 16, 49152, 200, $2), ('msz_theirs', $3, 'Theirs', 64, 262144, 1000, $2)`, w.org, bigPool, other)
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	mustExec(t, w.owner, `UPDATE projects SET preview_settings = '{"machineSize":"msz_xl"}' WHERE id = $1`, w.project)
+
+	_, sized := w.declare()
+	if n := len(w.luxRuns()); n != 0 {
+		t.Fatalf("declaring submitted %d lux runs", n)
+	}
+	w.open(w.serverID(sized, "web"))
+	runs := w.luxRuns()
+	if len(runs) != 1 {
+		t.Fatalf("%d lux runs after a wake", len(runs))
+	}
+	spec := submitted(t, runs[0])
+	if len(spec.Workload.Servers) != 0 || spec.Labels["dude.preview"] != sized {
+		t.Errorf("not a servers-only wake: servers %v labels %v", spec.Workload.Servers, spec.Labels)
+	}
+	if spec.Resources == nil || *spec.Resources != (lux.Resources{CPUs: 16, Memory: 48 << 30, Disk: 200 << 30}) {
+		t.Errorf("woken preview resources = %+v, want XL", spec.Resources)
+	}
+	if spec.Placement == nil || *spec.Placement != (lux.PlacementSpec{PoolID: bigPool}) {
+		t.Errorf("woken preview placement = %+v, want big's id", spec.Placement)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND machine->>'sizeId' = 'msz_xl' AND machine->>'pool' = 'big'
+		AND machine->>'poolId' = $2 AND machine->>'from' = 'project'`, sized, bigPool); n != 1 {
+		t.Errorf("the woken preview did not record its size:\n%s", w.describeRuns())
+	}
+
+	mustExec(t, w.owner, `UPDATE projects SET preview_settings = '{"machineSize":"msz_theirs"}' WHERE id = $1`, w.project)
+	_, fallback := w.declare()
+	w.open(w.serverID(fallback, "web"))
+	var theirs *fakelux.Run
+	for _, r := range w.luxRuns() {
+		if s := submitted(t, r); s.Labels["dude.preview"] == fallback {
+			theirs = r
+		}
+	}
+	if theirs == nil {
+		t.Fatal("the second preview never reached lux")
+	}
+	if s := submitted(t, theirs); s.Resources == nil || *s.Resources != (lux.Resources{CPUs: 2, Memory: 8 << 30, Disk: 20 << 30}) || s.Placement != nil {
+		t.Errorf("another organization's size: resources %+v placement %+v, want Standard and no pool", s.Resources, s.Placement)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND machine->>'name' = 'Standard' AND machine->>'from' = 'default'`, fallback); n != 1 {
+		t.Errorf("the fallback preview did not record the default:\n%s", w.describeRuns())
+	}
+
+	counted := &submits{Client: w.previews.Lux}
+	w.previews.Lux = counted
+	w.lux.Pools = slices.DeleteFunc(fakelux.DefaultPools(), func(p lux.Pool) bool { return p.ID == bigPool })
+	mustExec(t, w.owner, `UPDATE projects SET preview_settings = '{"machineSize":"msz_xl"}' WHERE id = $1`, w.project)
+	_, gone := w.declare()
+	w.lux.RequestServer(w.serverID(gone, "web"), "/")
+	w.until("the woken preview to fail", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed'`, gone) == 1
+	})
+	want := "Its machine size, XL, runs in a lux pool that no longer exists. Give XL another pool in Machines."
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND error = $2`, gone, want); n != 1 {
+		t.Errorf("the woken preview did not fail with the reason:\n%s", w.describeRuns())
+	}
+	tried := counted.n.Load()
+	for range 3 {
+		w.pump()
+	}
+	if got := counted.n.Load(); tried != 1 || got != tried {
+		t.Errorf("submitted %d times, then %d; want once, and never again", tried, got)
+	}
 }
