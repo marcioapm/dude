@@ -435,7 +435,7 @@ def test_an_admin_adds_a_size_in_half_steps_and_one_off_step_or_too_big_is_refus
     expect(row).to_contain_text("6.5 CPUs")
     expect(row).to_contain_text("22.5 GiB")
     # Its pool by lux's current name.
-    expect(row).to_contain_text("big")
+    expect(row.locator("[data-pool-cell]")).to_have_text("big")
     size = _sizes(client)["Large (Java)"]
     # Stored by lux's id, not its name.
     assert (size["cpus"], size["memoryMiB"], size["diskGiB"], size["poolId"], size["poolName"]) == (6.5, 23040, 120, big, "big")
@@ -585,7 +585,7 @@ def test_a_size_whose_pool_vanished_from_lux_says_so_and_asks_for_another(
     machines = page.get_by_test_id("machines-page")
     row = machines.locator("[data-size='Scratch']")
     expect(row.locator("[data-pool-gone]")).to_have_text("Pool gone from lux")
-    expect(row).to_contain_text("—")
+    expect(row.locator("[data-fit-cell]")).to_have_text("—")
 
     # Edit says so, and Save is refused until another pool is chosen.
     machines.get_by_role("button", name="Actions for Scratch").click()
@@ -599,6 +599,8 @@ def test_a_size_whose_pool_vanished_from_lux_says_so_and_asks_for_another(
     save.click()
     expect(toast(page, "Scratch saved")).to_be_visible()
     expect(row.locator("[data-pool-gone]")).to_have_count(0)
-    expect(row).to_contain_text("big")
+    expect(row.locator("[data-pool-cell]")).to_have_text("big")
+    # 2 of big's 32 CPUs and 4 of its 64 GiB: 6% of one host.
+    expect(row.locator("[data-fit-cell]")).to_have_text("6% of a host")
     assert _sizes(client)["Scratch"]["poolId"] == _pool_id(client, "big")
     assert console_errors == []
