@@ -1,0 +1,173 @@
+package orchestrator_test
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
+	"github.com/marciomartins/dude/orchestrator/internal/objects"
+)
+
+// bucket is a photo bucket in memory.
+type bucket map[string][]byte
+
+func (b bucket) Get(_ context.Context, key string, _ int64) ([]byte, error) {
+	if v, ok := b[key]; ok {
+		return v, nil
+	}
+	return nil, objects.ErrNotFound
+}
+
+var screenshot = append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte{7}, 64)...)
+
+// withImages gives the world a bucket and returns it.
+func (w *world) withImages() bucket {
+	b := bucket{}
+	w.syncer.Objects = b
+	return b
+}
+
+// upload records an image uploaded to a task, as the backend does.
+func (w *world) upload(b bucket, id, task, name string, data []byte) {
+	key := "attachments/" + id
+	b[key] = data
+	mustExec(w.t, w.owner, `INSERT INTO attachments (id, organization_id, task_id, name, content_type, width, height, bytes,
+		sha256, object_key, original_content_type, original_width, original_height, original_bytes, original_key)
+		VALUES ($1, $2, $3, $4, 'image/png', 10, 10, $5, 'x', $6, 'image/png', 20, 20, $5, $6||'.o')`,
+		id, w.org, task, name, len(data), key)
+}
+
+// The task's first prompt carries its images as workload.attachments, to
+// its first agent only.
+func TestATaskStartedWithAnImageGivesItToItsFirstAgent(t *testing.T) {
+	w := newWorld(t)
+	b := w.withImages()
+	wi := w.task()
+	w.upload(b, "att_design", wi, "design.png", screenshot)
+	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{"attachmentIds": []string{"att_design"}}); status != 201 {
+		t.Fatalf("deliver: %d %v", status, body)
+	}
+	w.until("the implementer to be submitted", func() bool { return len(w.lux.Runs()) >= 1 })
+	var spec struct {
+		Workload struct {
+			Attachments []struct {
+				Name, ContentType string
+				Data              []byte
+			} `json:"attachments"`
+		} `json:"workload"`
+	}
+	if err := json.Unmarshal(w.lux.Runs()[0].Spec, &spec); err != nil {
+		t.Fatal(err)
+	}
+	got := spec.Workload.Attachments
+	if len(got) != 1 || got[0].Name != "design.png" || got[0].ContentType != "image/png" || !bytes.Equal(got[0].Data, screenshot) {
+		t.Fatalf("the first agent's spec carried %+v", got)
+	}
+	// The transcript's prompt turn names it.
+	w.until("the prompt to reach the ledger", func() bool {
+		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'agent.prompt.delivered'
+			AND payload->'attachments'->0->>'id' = 'att_design'`, wi) == 1
+	})
+	// The reviewer after it is not shown it again.
+	w.until("a second phase", func() bool { return len(w.lux.Runs()) >= 2 })
+	if strings.Contains(string(w.lux.Runs()[1].Spec), `"attachments"`) {
+		t.Error("a later phase was given the prompt's images too")
+	}
+	// Once given, the prompt takes no more.
+	w.upload(b, "att_late", wi, "late.png", screenshot)
+	if status, _ := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{"attachmentIds": []string{"att_late"}}); status != 409 {
+		t.Errorf("images were added to a prompt already given: %d", status)
+	}
+}
+
+// A steer names only its own task's unsent images; anything else is
+// refused before anything is queued.
+func TestASteerRefusesImagesThatAreNotItsTasksToSend(t *testing.T) {
+	w := newWorld(t)
+	b := w.withImages()
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	wi, other := w.task(), w.task()
+	w.deliver(wi)
+	w.until("the implementer to run", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running'`, wi) == 1
+	})
+	var runID string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1`, wi).Scan(&runID)
+	w.upload(b, "att_mine", wi, "mine.png", screenshot)
+	w.upload(b, "att_theirs", other, "theirs.png", screenshot)
+
+	for _, c := range []struct {
+		ids  []string
+		want string
+	}{
+		{[]string{"att_theirs"}, "image att_theirs is not one of this task's"},
+		{[]string{"att_nowhere"}, "image att_nowhere is not one of this task's"},
+		{[]string{"att_mine", "att_mine"}, "image att_mine is named twice"},
+		{[]string{"a", "b", "c", "d", "e", "f", "g"}, "a message carries at most 6 images"},
+	} {
+		status, body := w.call("/internal/runs/"+runID+"/steer", map[string]any{"text": "see", "attachmentIds": c.ids})
+		msg, _ := body["error"].(map[string]any)["message"].(string)
+		if status != 400 || msg != c.want {
+			t.Errorf("%v: %d %q, want 400 %q", c.ids, status, msg, c.want)
+		}
+	}
+	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1`, runID); n != 0 {
+		t.Fatalf("a refused steer queued %d directives", n)
+	}
+
+	status, body := w.call("/internal/runs/"+runID+"/steer", map[string]any{"text": "", "attachmentIds": []string{"att_mine"}})
+	if status != 201 {
+		t.Fatalf("an image alone: %d %v", status, body)
+	}
+	if atts, _ := body["attachments"].([]any); len(atts) != 1 {
+		t.Errorf("the steer answered %v", body["attachments"])
+	}
+	// Sent once: a second message cannot take it.
+	if status, _ := w.call("/internal/runs/"+runID+"/steer", map[string]any{"text": "again", "attachmentIds": []string{"att_mine"}}); status != 400 {
+		t.Errorf("an image already sent was sent again: %d", status)
+	}
+	w.until("lux to have the image", func() bool { return len(w.lux.Attachments(w.lux.Runs()[0].ID)) == 1 })
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.steered'
+		AND payload->'attachments'->0->>'name' = 'mine.png'`, runID); n != 1 {
+		t.Errorf("run.steered does not carry the image: %d", n)
+	}
+}
+
+// An answer is a directive like a steer: its images reach the agent with it.
+func TestAnAnswerCarriesItsImagesToTheAgent(t *testing.T) {
+	w := newWorld(t)
+	w.withTools()
+	b := w.withImages()
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
+			return fakelux.Behaviour{Hang: true}
+		}
+		return fakelux.Behaviour{Ask: `{"question":"Does it overflow on a phone?"}`, Reply: "Fixed it.",
+			Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
+	}
+	wi := w.task()
+	w.deliver(wi)
+	w.until("the question", func() bool { return w.taskStatus(wi) == "awaiting_input" })
+	var qid string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM questions WHERE task_id = $1`, wi).Scan(&qid)
+	w.upload(b, "att_phone", wi, "phone.png", screenshot)
+	if status, body := w.call("/internal/questions/"+qid+"/answer", map[string]any{"text": "It overflows", "attachmentIds": []string{"att_phone"}}); status != 200 {
+		t.Fatalf("answer: %d %v", status, body)
+	}
+	w.until("the implementer to finish", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'completed'`, wi) == 1
+	})
+	var directive string
+	_ = w.owner.QueryRow(context.Background(), `SELECT directive_id FROM attachments WHERE id = 'att_phone'`).Scan(&directive)
+	got := w.lux.Attachments(w.lux.Runs()[0].ID)[directive]
+	if len(got) != 1 || got[0].Name != "phone.png" || !bytes.Equal(got[0].Data, screenshot) {
+		t.Fatalf("the agent got %+v with the answer", got)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'question.answered'
+		AND payload->'attachments'->0->>'id' = 'att_phone'`, wi); n != 1 {
+		t.Errorf("question.answered does not carry the image")
+	}
+}

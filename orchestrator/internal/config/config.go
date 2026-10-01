@@ -61,11 +61,11 @@ type schema struct {
 		LuxCostEvery      any `toml:"lux_cost_every" env:"DUDE_LUX_COST_EVERY" kind:"duration" use:"orchestrator" default:"2m"`
 	} `toml:"orchestrator"`
 	S3 struct {
-		Bucket    any `toml:"bucket" env:"DUDE_S3_BUCKET" kind:"string" use:"backend"`
-		Endpoint  any `toml:"endpoint" env:"DUDE_S3_ENDPOINT" kind:"string" use:"backend"`
-		Region    any `toml:"region" env:"DUDE_S3_REGION" kind:"string" use:"backend" default:"us-east-1"`
-		AccessKey any `toml:"access_key" env:"DUDE_S3_ACCESS_KEY" kind:"string" use:"backend"`
-		SecretKey any `toml:"secret_key" env:"DUDE_S3_SECRET_KEY" kind:"string" use:"backend" secret:"true"`
+		Bucket    any `toml:"bucket" env:"DUDE_S3_BUCKET" kind:"string" use:"both"`
+		Endpoint  any `toml:"endpoint" env:"DUDE_S3_ENDPOINT" kind:"string" use:"both"`
+		Region    any `toml:"region" env:"DUDE_S3_REGION" kind:"string" use:"both" default:"us-east-1"`
+		AccessKey any `toml:"access_key" env:"DUDE_S3_ACCESS_KEY" kind:"string" use:"both"`
+		SecretKey any `toml:"secret_key" env:"DUDE_S3_SECRET_KEY" kind:"string" use:"both" secret:"true"`
 	} `toml:"s3"`
 	Lux struct {
 		URL        any `toml:"url" env:"LUX_URL" kind:"string" use:"orchestrator"`

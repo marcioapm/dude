@@ -395,10 +395,10 @@ does not refuse to start.
 | `orchestrator.diff_every` | `DUDE_DIFF_EVERY` | `15s` | orchestrator | How often a working agent's diff is read besides after its edits. |
 | `orchestrator.machine_usd_per_hour` | `DUDE_MACHINE_USD_PER_HOUR` | `0.20` | orchestrator | What an hour of a lux host costs, recorded with each Run; not negative. |
 | `orchestrator.lux_cost_every` | `DUDE_LUX_COST_EVERY` | `2m` | orchestrator | How often an agent's Run's cost is read from lux (`GET /v1/runs/{id}/cost`), until lux reports it final or eight days after the Run ended; positive. |
-| `s3.bucket` | `DUDE_S3_BUCKET` | off | backend | The bucket people's photos and projects' images are kept in. Unset, uploads answer 503 and faces show initials. |
-| `s3.endpoint` | `DUDE_S3_ENDPOINT` | AWS | backend | For MinIO, versitygw and other S3-compatible stores (path-style). versitygw needs Bun ≥ 1.4.0 (see [Bun](#bun)); the release has it. |
-| `s3.region` | `DUDE_S3_REGION` | `us-east-1` | backend | |
-| `s3.access_key`, `s3.secret_key` | `DUDE_S3_ACCESS_KEY`, `DUDE_S3_SECRET_KEY` | off | backend | Explicit credentials for local S3-compatible stores such as MinIO; set both. The secret key is a **secret**. Unset, the backend obtains temporary EC2 instance-role credentials through IMDSv2; it does not use Bun's AWS environment credential fallback. |
+| `s3.bucket` | `DUDE_S3_BUCKET` | off | both | The bucket people's photos, projects' images and the images people send agents (steers, answers, a task's prompt) are kept in. The backend writes and serves them; the orchestrator reads the images it gives lux. Unset, uploads answer 503, faces show initials, and the composer's attach button is off ("Image storage isn't set up"). |
+| `s3.endpoint` | `DUDE_S3_ENDPOINT` | AWS | both | For MinIO, versitygw and other S3-compatible stores (path-style). versitygw needs Bun ≥ 1.4.0 (see [Bun](#bun)); the release has it. |
+| `s3.region` | `DUDE_S3_REGION` | `us-east-1` | both | |
+| `s3.access_key`, `s3.secret_key` | `DUDE_S3_ACCESS_KEY`, `DUDE_S3_SECRET_KEY` | off | both | Explicit credentials for local S3-compatible stores such as MinIO; set both. The secret key is a **secret**. Unset, each process obtains temporary EC2 instance-role credentials through IMDSv2; neither uses the AWS environment credential chain. The orchestrator needs `s3:GetObject` only; the backend `s3:PutObject`, `s3:GetObject` and `s3:DeleteObject`. |
 | `lux.url` | `LUX_URL` | required | orchestrator | The lux control plane. |
 | `lux.api_key` | `LUX_API_KEY` | required | orchestrator | A lux API key with the `run` scope. **Secret.** |
 | `lux.console_url` | `LUX_CONSOLE_URL` | `lux.url` | orchestrator | lux's console, for the "Open terminal in lux" links on a task's servers (`<url>/runs/<luxRunId>/terminal`). |
@@ -585,12 +585,21 @@ object key, which holds the random token that authorizes serving the image.
 `AWS_EC2_METADATA_SERVICE_ENDPOINT` overrides the metadata address for local
 tests only; do not point it at an untrusted server.
 
-Photos and project images are the only files the backend stores. They are
-small (the browser uploads a 160 px square, at most 512 KB is accepted),
-written once under a new key per upload, and served back through the
-backend under a token, so the bucket needs no public access and no CORS.
-The backend needs `s3:PutObject`, `s3:GetObject` and `s3:DeleteObject` on
-it; a replaced image's object is deleted.
+Photos and project images are small (the browser uploads a 160 px square, at
+most 512 KB is accepted), written once under a new key per upload, and served
+back through the backend under a token, so the bucket needs no public access
+and no CORS. The backend needs `s3:PutObject`, `s3:GetObject` and
+`s3:DeleteObject` on it; a replaced image's object is deleted.
+
+Images people send agents are the other files it stores, under
+`attachments/<org>/<task>/`: each is the original (at most 10 MB) and the
+variant the agent is sent (the browser scales it to at most 2000 px and
+4.5 MiB). Only the organisation's members can read them, through the
+backend. The backend's one background loop deletes uploads never sent after
+24 hours and the objects of every attachment row that is gone — removed, swept,
+or with its task (`ON DELETE CASCADE`); a delete storage refuses is retried on
+the next pass, every 10 minutes. The orchestrator reads the delivered
+variant to give it to lux, so it needs `s3:GetObject` on the bucket too.
 
 With `DUDE_WEB_DIR` set, GET and HEAD requests that match no API route and
 are outside `/v1` and `/health` are served from the directory, and unknown
