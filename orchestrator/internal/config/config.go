@@ -72,6 +72,10 @@ type schema struct {
 		ConsoleURL any `toml:"console_url" env:"LUX_CONSOLE_URL" kind:"string" use:"orchestrator"`
 		APIKey     any `toml:"api_key" env:"LUX_API_KEY" kind:"string" use:"orchestrator" secret:"true"`
 	} `toml:"lux"`
+	Previews struct {
+		Domain    any `toml:"domain" env:"DUDE_PREVIEW_DOMAIN" kind:"string" use:"orchestrator"`
+		ReapAfter any `toml:"reap_after" env:"DUDE_PREVIEW_REAP_AFTER" kind:"duration" use:"orchestrator" default:"168h"`
+	} `toml:"previews"`
 	LLM struct {
 		URL any `toml:"url" env:"DUDE_LLM_URL" kind:"string" use:"orchestrator"`
 		Key any `toml:"key" env:"DUDE_LLM_KEY" kind:"string" use:"orchestrator" secret:"true"`

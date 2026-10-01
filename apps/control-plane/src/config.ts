@@ -57,6 +57,8 @@ export const KEYS: readonly Key[] = [
   key("lux.url", "LUX_URL", "string", "orchestrator"),
   key("lux.console_url", "LUX_CONSOLE_URL", "string", "orchestrator"),
   key("lux.api_key", "LUX_API_KEY", "string", "orchestrator", "", true),
+  key("previews.domain", "DUDE_PREVIEW_DOMAIN", "string", "orchestrator"),
+  key("previews.reap_after", "DUDE_PREVIEW_REAP_AFTER", "duration", "orchestrator", "168h"),
   key("llm.url", "DUDE_LLM_URL", "string", "orchestrator"),
   key("llm.key", "DUDE_LLM_KEY", "string", "orchestrator", "", true),
   key("embeddings.url", "DUDE_EMBEDDINGS_URL", "string", "orchestrator"),
