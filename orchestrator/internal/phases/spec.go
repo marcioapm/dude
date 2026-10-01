@@ -161,14 +161,14 @@ func NamePool(ctx context.Context, c lux.Client, m *delivery.Machine) {
 
 // PoolGone is the reason a Run fails when lux refuses its size's pool as
 // unknown (422 unknown_pool): the pool was deleted after the size named it.
-// "" for any other error.
+// "" for any other error, or with no machine (only a machine places a Run).
 func PoolGone(err error, m *delivery.Machine) string {
+	if m == nil {
+		return ""
+	}
 	le, ok := lux.AsError(err)
 	if !ok || le.Code != lux.CodeUnknownPool {
 		return ""
-	}
-	if m == nil {
-		return "It runs in a lux pool that no longer exists."
 	}
 	return fmt.Sprintf("Its machine size, %s, runs in a lux pool that no longer exists. Give %s another pool in Machines.", m.Name, m.Name)
 }

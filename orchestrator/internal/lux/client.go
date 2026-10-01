@@ -169,11 +169,9 @@ type Resources struct {
 
 // PlacementSpec names the pool a Run is placed in. PoolID is lux's id for
 // it, which a rename leaves alone: lux refuses an id it does not have for
-// the tenant (422 unknown_pool) at submit. Pool is by name, which lux takes
-// without checking; machine sizes never send it.
+// the tenant (422 unknown_pool) at submit.
 type PlacementSpec struct {
 	PoolID string `json:"poolId,omitempty"`
-	Pool   string `json:"pool,omitempty"`
 }
 
 // CodeUnknownPool is lux refusing a placement.poolId it has no pool for.
