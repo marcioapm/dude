@@ -4,7 +4,6 @@ import {
   machineFit,
   machineSizeInputSchema,
   machineSpec,
-  MACHINE_MAX_MESSAGE,
   MACHINE_STEP_MESSAGE,
   MIB,
   replaceMachineSize,
@@ -39,7 +38,7 @@ describe("a size's steps and bounds", () => {
   });
 
   test("past the most of each is refused, saying the most", () => {
-    expect(errorOf(size({ cpus: 256.5 }))).toBe(MACHINE_MAX_MESSAGE.cpus);
+    expect(errorOf(size({ cpus: 256.5 }))).toBe("At most 256 CPUs");
     expect(errorOf(size({ memoryMiB: 2048 * 1024 + 512 }))).toBe("At most 2048 GiB");
     expect(errorOf(size({ diskGiB: 20_005 }))).toBe("At most 20000 GiB");
   });

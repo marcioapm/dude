@@ -109,7 +109,7 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, 
       <SettingsSection title="Branch previews" data-testid="preview-settings">
         {recipes.length === 0 ? <Callout tone="neutral">Previewing a branch needs at least one server. Add one above.</Callout> : null}
         {previewSave.problem ? <Callout tone="danger">{previewSave.problem}</Callout> : null}
-        <SettingRow label="Machine" help="The size a preview runs on: one run with every server that starts in previews." htmlFor="preview-machine"
+        <SettingRow label="Machine" help="The size a preview runs on: one run with every server that starts in previews." htmlFor="preview-machine" data-testid="preview-machine-row"
           source={previews.machineSize && sizes?.some((s) => s.id === previews.machineSize)
             ? <SettingSource source="project" from={orgName} inherited={defaultSize ? `default size, ${defaultSize.name}` : "default size"}
                 onReset={canEdit ? () => savePreviews({ machineSize: null }, "Machine reset") : undefined} />
