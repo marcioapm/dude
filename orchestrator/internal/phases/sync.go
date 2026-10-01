@@ -358,6 +358,9 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 	// retried returns the lux Run the first one created.
 	NamePool(ctx, s.Lux, machine)
 	lr, err := s.Lux.Submit(ctx, spec, r.ID)
+	if reason := PoolGone(err, machine); reason != "" {
+		return s.fail(ctx, r, reason)
+	}
 	if err != nil {
 		return s.retryOrFail(ctx, r, err, "lux refused the run")
 	}

@@ -171,6 +171,9 @@ func (p *Previews) submit(ctx context.Context, r previewRun) error {
 	// Run the first one made.
 	phases.NamePool(ctx, p.Lux, machine)
 	lr, err := p.Lux.Submit(ctx, spec, r.ID)
+	if reason := phases.PoolGone(err, machine); reason != "" {
+		return p.fail(ctx, r, reason)
+	}
 	if le, ok := lux.AsError(err); ok && !le.Retryable() {
 		return p.fail(ctx, r, "lux refused the preview: "+le.Message)
 	}
