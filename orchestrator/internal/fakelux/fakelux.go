@@ -118,6 +118,13 @@ type Run struct {
 	Forgotten bool
 	// What was asked of it, in order: "exec", "stop", "cancel".
 	Calls []string
+	// Each resume's sync and each POST /sync's, as received.
+	ResumeSyncs [][]lux.SyncRef
+	Syncs       [][]lux.SyncRef
+	// Where each checkout is, by repository: its clone, then its syncs.
+	at map[string]string
+	// A resume's sync, applied when its placement starts.
+	pendingSync []lux.SyncRef
 
 	// Its servers (servers.go).
 	servers []*server
@@ -338,9 +345,19 @@ type Server struct {
 	// How long a started server with a command takes to be ready; zero is
 	// 30ms.
 	ServerReadyAfter time.Duration
+	// How long a submitted or resumed Run takes to start; zero is 20ms.
+	StartAfter time.Duration
 	// The preview domain servers' URLs are under; "" gives them none, as a
 	// lux without previews configured.
 	PreviewDomain string
+	// The port in preview URLs, when not the scheme's (a local demo).
+	PreviewPort int
+	// How often idle servers are looked for; zero is 100ms.
+	IdleCheck time.Duration
+	// Tenant servers deleted or expired, in order.
+	DeletedServers []string
+	// The tenant's servers and its event feed (tenant.go).
+	feedState
 	// How lux acknowledges input. By default as lux does now: "accepted"
 	// when the harness takes it (at once, even mid-turn), "consumed" when
 	// the agent's next step reads it — after the tool it was running
@@ -396,6 +413,7 @@ func (s *Server) Close() {
 func New(repo, key string, decide func(map[string]any) Behaviour) *Server {
 	s := &Server{runs: map[string]*Run{}, byKey: map[string]string{}, Decide: decide, Repo: repo, Key: key,
 		closed: make(chan struct{})}
+	s.feedInit()
 	if decide == nil {
 		s.Decide = s.scripted
 	}
@@ -565,6 +583,23 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/pools", s.listPools)
 	mux.HandleFunc("POST /v1/pools", s.putPool)
 	mux.HandleFunc("DELETE /v1/pools/{name}", s.deletePool)
+	mux.HandleFunc("POST /v1/runs/{id}/sync", s.syncRun)
+	mux.HandleFunc("GET /v1/servers", s.listTenantServers)
+	mux.HandleFunc("POST /v1/servers", s.createTenantServer)
+	mux.HandleFunc("GET /v1/servers/{sid}", s.getTenantServer)
+	mux.HandleFunc("DELETE /v1/servers/{sid}", s.deleteTenantServer)
+	mux.HandleFunc("POST /v1/servers/{sid}/attach", s.attachTenantServer)
+	mux.HandleFunc("POST /v1/servers/{sid}/detach", s.detachTenantServer)
+	mux.HandleFunc("GET /v1/events", s.feedHandler)
+	mux.HandleFunc("GET /v1/whoami", s.whoami)
+	// Test hooks, not lux's: a signed-in browser request to a server's
+	// hostname, and lux finding it idle.
+	mux.HandleFunc("POST /fake/servers/{sid}/request", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]any{"served": s.RequestServer(r.PathValue("sid"), r.URL.Query().Get("path"))})
+	})
+	mux.HandleFunc("POST /fake/servers/{sid}/idle", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]any{"idle": s.Idle(r.PathValue("sid"))})
+	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+s.Key {
 			writeErr(w, 401, "unauthorized", "invalid API key")
@@ -618,7 +653,11 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 
 // play is the agent's life: start, check out, take the task, work, go idle.
 func (s *Server) play(run *Run, spec map[string]any, resumed bool) {
-	time.Sleep(20 * time.Millisecond)
+	after := s.StartAfter
+	if after <= 0 {
+		after = 20 * time.Millisecond
+	}
+	time.Sleep(after)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if run.behavior.FailToStart {
@@ -640,8 +679,17 @@ func (s *Server) play(run *Run, spec map[string]any, resumed bool) {
 			}
 			s.luxEvent(run, "git.clone", map[string]any{"repo": repo.Name, "ref": repo.Ref, "status": "cloned", "commit": base})
 			s.luxEvent(run, "git.checkout", map[string]any{"repo": repo.Name, "ref": repo.Ref, "base": base})
+			if run.at == nil {
+				run.at = map[string]string{}
+			}
+			run.at[repo.Name] = base
 		}
 		run.SessionID = fmt.Sprintf("ses_%s", run.ID)
+	}
+	if resumed && run.pendingSync != nil {
+		// Restored checkouts move before init, as a resume's sync does.
+		s.applySync(run, run.pendingSync, "")
+		run.pendingSync = nil
 	}
 	// Every start of the Run starts its spec's servers.
 	s.placementStarted(run)
@@ -851,6 +899,10 @@ func (s *Server) setStateWith(run *Run, state, reason string) {
 		s.exited(run)
 		s.placementEnded(run, state, reason)
 	}
+	if state == "succeeded" || state == "cancelled" {
+		// Never runs again: its owner servers are detached, as lux does.
+		defer s.ownerRunEnded(run)
+	}
 	data := map[string]any{"state": state}
 	if reason != "" {
 		data["reason"] = reason
@@ -906,10 +958,10 @@ func mimeFor(name string) string {
 	return "application/octet-stream"
 }
 
+// luxEvent is one of a Run's events: on its stream and on the tenant's
+// feed. Callers hold s.mu.
 func (s *Server) luxEvent(run *Run, typ string, data map[string]any) {
-	s.nextEv++
-	run.events = append(run.events, event{ID: s.nextEv, Epoch: run.Epoch, Type: typ, Data: data})
-	run.cond.Broadcast()
+	s.emit(run, "", typ, data)
 }
 
 func (s *Server) agent(run *Run, update map[string]any) {
@@ -1368,6 +1420,7 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		Git       *struct {
 			Repositories []map[string]any `json:"repositories"`
 		} `json:"git"`
+		Sync []lux.SyncRef `json:"sync"`
 	}
 	body, _ := io.ReadAll(r.Body)
 	_ = json.Unmarshal(body, &in)
@@ -1376,9 +1429,22 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.Unmarshal(body, &raw)
 	s.mu.Lock()
-	if run.State != "stopped" && run.State != "failed" && run.State != "lost" {
+	// As lux's resumeRun: a Run resuming already answers as the first
+	// resume did; every other 409 means it was not resumed.
+	switch run.State {
+	case "stopped", "failed", "lost":
+	case "resuming":
+		view := s.view(run)
+		s.mu.Unlock()
+		writeJSON(w, 202, view)
+		return
+	case "cancelled", "succeeded":
 		s.mu.Unlock()
 		writeErr(w, 409, "not_resumable", "run is "+run.State)
+		return
+	default:
+		s.mu.Unlock()
+		writeErr(w, 409, "not_resumable", "run is "+run.State+": stop it first")
 		return
 	}
 	// As lux does (resumeRun, requireSecrets): it kept no value, so every
@@ -1427,6 +1493,9 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	run.Resumed++
 	run.ResumeSecrets = append(run.ResumeSecrets, in.Secrets)
 	run.ResumeSecretsRaw = append(run.ResumeSecretsRaw, raw.Secrets)
+	run.ResumeSyncs = append(run.ResumeSyncs, in.Sync)
+	run.pendingSync = in.Sync
+	run.Calls = append(run.Calls, "resume")
 	run.Epoch++
 	if in.Input != nil {
 		// Delivered once the agent is back, as lux does: it is the input the

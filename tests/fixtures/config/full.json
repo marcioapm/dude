@@ -19,6 +19,8 @@
   "LUX_URL": "https://lux.example",
   "LUX_CONSOLE_URL": "https://console.lux.example",
   "LUX_API_KEY": "lux-key",
+  "DUDE_PREVIEW_DOMAIN": "preview-absmartly.dev",
+  "DUDE_PREVIEW_REAP_AFTER": "72h",
   "DUDE_LLM_URL": "https://llm.example/v1",
   "DUDE_LLM_KEY": "llm-key",
   "DUDE_EMBEDDINGS_URL": "https://embeddings.example/v1",

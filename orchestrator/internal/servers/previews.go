@@ -48,6 +48,11 @@ type Previews struct {
 	Registry registry.Provider
 	// The idle limit's unit, for tests; zero is a minute.
 	Minute time.Duration
+	// A wakeable preview nobody has woken for this long is ended
+	// (previews.reap_after); zero is 7 days.
+	ReapAfter time.Duration
+	// How many wakeable previews one sweep takes at most; zero is 1000.
+	SweepLimit int
 
 	mu        sync.Mutex
 	following map[string]context.CancelFunc
@@ -74,7 +79,7 @@ func (p *Previews) Sweep(ctx context.Context) (int, error) {
 				(preview_settings(pr)->>'idleTimeoutMinutes')::float8,
 				t.status IN ('done', 'failed', 'aborted')
 			FROM runs r JOIN projects pr ON pr.id = r.project_id JOIN tasks t ON t.id = r.task_id
-			WHERE r.kind = 'preview'
+			WHERE r.kind = 'preview' AND NOT r.wakeable
 			  AND (r.status IN ('pending', 'scheduled', 'starting', 'running')
 			       OR (r.status = 'paused' AND cardinality(r.pending_starts) > 0)
 			       OR (r.status = 'paused' AND r.lux_state IS DISTINCT FROM 'stopped')
@@ -124,7 +129,8 @@ func (p *Previews) Sweep(ctx context.Context) (int, error) {
 		}()
 	}
 	wg.Wait()
-	return int(acted.Load()), nil
+	n, err := p.sweepWakeable(ctx)
+	return int(acted.Load()) + n, err
 }
 
 func (p *Previews) advance(ctx context.Context, r previewRun) (bool, error) {
@@ -201,14 +207,63 @@ func (p *Previews) submit(ctx context.Context, r previewRun) error {
 	})
 }
 
+// previewRef is one repository of a preview, at the ref it previews.
+type previewRef struct{ Name, URL, Ref string }
+
+// refs are a preview's repositories: the task's, else its project's, each
+// at the task's branch where its work reached it, else its default branch.
+// Read afresh each time: a branch published since is what a wake syncs to.
+func (p *Previews) refs(ctx context.Context, r previewRun) ([]previewRef, error) {
+	var repos []previewRef
+	err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) (err error) {
+		repos, err = taskRefs(ctx, tx, r)
+		return err
+	})
+	return repos, err
+}
+
+func taskRefs(ctx context.Context, tx pgx.Tx, r previewRun) ([]previewRef, error) {
+	taskRepos, err := delivery.TaskRepositories(ctx, tx, r.TaskID)
+	if err != nil {
+		return nil, err
+	}
+	if len(taskRepos) == 0 {
+		// A task naming none previews its project's code.
+		rows, err := tx.Query(ctx, `SELECT id, name, url, default_branch, 'read' FROM repositories
+			WHERE project_id = $1 ORDER BY name`, r.ProjectID)
+		if err != nil {
+			return nil, err
+		}
+		if taskRepos, err = pgx.CollectRows(rows, pgx.RowToStructByPos[delivery.Repository]); err != nil {
+			return nil, err
+		}
+	}
+	var repos []previewRef
+	for _, tr := range taskRepos {
+		// The task's branch in a repository its work reached; its
+		// default branch where nothing was published yet.
+		ref := tr.DefaultBranch
+		var branch string
+		err := tx.QueryRow(ctx, `SELECT branch FROM runs WHERE task_id = $1 AND branch IS NOT NULL AND heads ? $2
+			ORDER BY created_at DESC LIMIT 1`, r.TaskID, tr.Name).Scan(&branch)
+		switch {
+		case err == nil:
+			ref = branch
+		case !db.IsNotFound(err):
+			return nil, err
+		}
+		repos = append(repos, previewRef{tr.Name, tr.URL, ref})
+	}
+	return repos, nil
+}
+
 // spec is a preview's lux spec: the task's repositories, each at the
 // task's branch where one was published (else its default branch), not
 // pushed; a workload that only waits; the project's servers marked to start
 // in previews; its preview settings' egress and image. Returns the branch
 // the first repository — the one servers run in — is at.
 func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, *delivery.Machine, error) {
-	type repo struct{ Name, URL, Ref string }
-	var repos []repo
+	var repos []previewRef
 	var recipes []Recipe
 	var settings PreviewSettings
 	var projectImage string
@@ -233,35 +288,8 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, *d
 		if m, ok := sizes.ForPreview(sizeID); ok {
 			machine = &m
 		}
-		taskRepos, err := delivery.TaskRepositories(ctx, tx, r.TaskID)
-		if err != nil {
+		if repos, err = taskRefs(ctx, tx, r); err != nil {
 			return err
-		}
-		if len(taskRepos) == 0 {
-			// A task naming none previews its project's code.
-			rows, err := tx.Query(ctx, `SELECT id, name, url, default_branch, 'read' FROM repositories
-				WHERE project_id = $1 ORDER BY name`, r.ProjectID)
-			if err != nil {
-				return err
-			}
-			if taskRepos, err = pgx.CollectRows(rows, pgx.RowToStructByPos[delivery.Repository]); err != nil {
-				return err
-			}
-		}
-		for _, tr := range taskRepos {
-			// The task's branch in a repository its work reached; its
-			// default branch where nothing was published yet.
-			ref := tr.DefaultBranch
-			var branch string
-			err := tx.QueryRow(ctx, `SELECT branch FROM runs WHERE task_id = $1 AND branch IS NOT NULL AND heads ? $2
-				ORDER BY created_at DESC LIMIT 1`, r.TaskID, tr.Name).Scan(&branch)
-			switch {
-			case err == nil:
-				ref = branch
-			case !db.IsNotFound(err):
-				return err
-			}
-			repos = append(repos, repo{tr.Name, tr.URL, ref})
 		}
 		recipes, err = LoadRecipes(ctx, tx, r.ProjectID)
 		return err
@@ -480,16 +508,21 @@ func (p *Previews) luxEvent(ctx context.Context, tx pgx.Tx, r previewRun, f lux.
 		state := lux.Recorded(str("state"), str("reason"))
 		// Running is a start: what its idle time counts from. A preview dude
 		// did not stop that ends has failed (a clone, its image); one it
-		// stopped is parked or finished, as dude already recorded.
+		// stopped is parked or finished, as dude already recorded. A
+		// wakeable one goes back to sleep instead, its error kept: lux can
+		// resume a failed Run, and the next request wakes it.
 		if _, err := tx.Exec(ctx, `UPDATE runs SET lux_state = $2,
 			started_at = CASE WHEN $2 = 'running' THEN COALESCE(started_at, now()) ELSE started_at END,
 			active_since = CASE WHEN $2 = 'running' THEN now() ELSE active_since END,
 			status = CASE WHEN $2 = 'running' AND status IN ('scheduled', 'starting') THEN 'running'::run_status
+			              WHEN $3 AND lux_stop_reason IS NULL AND status IN ('scheduled', 'starting', 'running') AND wakeable THEN 'paused'::run_status
 			              WHEN $3 AND lux_stop_reason IS NULL AND status IN ('scheduled', 'starting', 'running') THEN 'failed'::run_status
 			              ELSE status END,
+			dude_pause = CASE WHEN $3 AND lux_stop_reason IS NULL AND status IN ('scheduled', 'starting', 'running') AND wakeable
+			                  THEN 'unused' ELSE dude_pause END,
 			error = CASE WHEN $3 AND lux_stop_reason IS NULL AND status IN ('scheduled', 'starting', 'running')
 			             THEN 'the preview stopped: ' || COALESCE(NULLIF($4, ''), $2) ELSE error END,
-			ended_at = CASE WHEN $3 AND lux_stop_reason IS NULL AND status IN ('scheduled', 'starting', 'running')
+			ended_at = CASE WHEN $3 AND lux_stop_reason IS NULL AND status IN ('scheduled', 'starting', 'running') AND NOT wakeable
 			                THEN now() ELSE ended_at END
 			WHERE id = $1`, r.ID, state, lux.Terminal(state), str("reason")); err != nil {
 			return err
@@ -759,16 +792,20 @@ func (s *Service) StartPreview(ctx context.Context, org, taskID, actor string, i
 			return refuse(http.StatusConflict, "preview_running", "task %s already has a branch preview", taskID)
 		}
 		id := ids.New(ids.Run)
-		if _, err := tx.Exec(ctx, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, kind, started_by)
-			VALUES ($1, $2, $3, $4, $5, 'pending', 'preview', COALESCE(NULLIF($7, ''),
-				(SELECT k.person_id FROM api_keys k JOIN people p ON p.id = k.person_id
-				 WHERE k.id = $6 AND k.organization_id = $2 AND p.organization_id = $2 AND k.revoked_at IS NULL AND p.removed_at IS NULL)))`,
-			id, org, projectID, taskID, attempt, actor, personID); err != nil {
+		wakeable, err := s.wakeable(ctx, tx, projectID)
+		if err != nil {
 			return err
 		}
-		_, err := ledger.Append(ctx, tx, ledger.Event{Type: "run.created", OrganizationID: org, ProjectID: projectID,
+		if _, err := tx.Exec(ctx, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, kind, started_by, wakeable)
+			VALUES ($1, $2, $3, $4, $5, 'pending', 'preview', COALESCE(NULLIF($7, ''),
+				(SELECT k.person_id FROM api_keys k JOIN people p ON p.id = k.person_id
+				 WHERE k.id = $6 AND k.organization_id = $2 AND p.organization_id = $2 AND k.revoked_at IS NULL AND p.removed_at IS NULL)), $8)`,
+			id, org, projectID, taskID, attempt, actor, personID, wakeable); err != nil {
+			return err
+		}
+		_, err = ledger.Append(ctx, tx, ledger.Event{Type: "run.created", OrganizationID: org, ProjectID: projectID,
 			TaskID: taskID, RunID: id, ActorType: actorType, ActorID: actor, Source: ledger.SourceOrchestrator,
-			CorrelationID: taskID, Payload: map[string]any{"kind": KindPreview}})
+			CorrelationID: taskID, Payload: map[string]any{"kind": KindPreview, "wakeable": wakeable}})
 		if err != nil {
 			return err
 		}

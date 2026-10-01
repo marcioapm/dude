@@ -100,7 +100,7 @@ export const previewSettingsSchema = z.object({
     }))
     .max(200)
     .default([]),
-  idleTimeoutMinutes: z.number().int().min(1).max(7 * 24 * 60).default(30),
+  idleTimeoutMinutes: z.number().int().min(1).max(7 * 24 * 60).default(15),
   /** The machine size a preview runs on (an organization's size id); null: the organization's default size. */
   machineSize: z.string().min(1).max(100).nullable().default(null),
 });
@@ -126,7 +126,15 @@ export interface RunServer {
   epoch: number;
   url: string | null;
   lastRequestAt?: string | null;
+  /**
+   * A wakeable preview's server (lux's own resource): lux's server state,
+   * beside `state`, its process's. Absent on a Run's own servers.
+   */
+  serverState?: WakeableServerState;
 }
+
+/** lux's state of a server that wakes on request (`/v1/servers`' `state`). */
+export type WakeableServerState = "ready" | "waking" | "asleep" | "stopped" | "unreachable" | "exited" | "no answer";
 
 export type PreviewStage = "scheduling" | "cloning" | "setup" | "starting" | "ready";
 
@@ -148,6 +156,10 @@ export interface TaskServers {
     previewStage: PreviewStage | null;
     parksAfterMinutes: number | null;
     terminalUrl: string | null;
+    /** A preview whose servers wake on request: opening a URL starts it. */
+    wakeable?: boolean;
+    /** A wakeable preview nothing serves and no wake is due. */
+    asleep?: boolean;
     /** The memory limit lux gave its container, in bytes, when lux reports one. */
     memoryLimit?: number | null;
   };

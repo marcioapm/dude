@@ -51,7 +51,8 @@ loops (`cmd/dude-orchestrator/main.go`):
 | `phase-sync` | Drives each phase Run on lux: submit, follow its output into the ledger, deliver directives, pause, resume, cancel, and when the agent's turn ends, push, fast-forward the branch, record findings, stop. |
 | `phase-notifier` | Turns a finished phase Run into a `phase.finished` signal for its workflow. |
 | `webhooks` | Acts on stored GitHub deliveries: syncs the pull request each is about. |
-| `previews` | Drives branch previews on lux: submit, follow their state and servers, park one nobody has opened for its project's idle timeout, resume a parked one a person starts a server on, cancel a stopped one. |
+| `previews` | Drives branch previews on lux: creates a wakeable preview's lux servers, wakes it (resume with a sync, or submit and attach) when lux's feed says someone opened it, stops it when every server is idle, syncs a running one when its branch moves, reaps unused ones, deletes the servers and cancels the Run of an ended one. Previews from before lux#41 keep the old park-after-idle path. |
+| `lux-feed` (goroutine) | Follows lux's tenant event feed (`GET /v1/events`) from the cursor in `lux_feed`, recording wakes, idleness and gone servers of wakeable previews (`servers.Feed`). |
 | `pr-reconciler` | Re-reads open pull requests not seen for 15 minutes — the backstop for webhooks GitHub never sent. |
 
 **lux** is the runtime (`~/git/lux`, its own repository and docs). It runs
@@ -208,14 +209,23 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   person starts them again. A move is also not the agent dying: a Run lux
   stopped with a move's reason (`lux.Moved`) is left running.
 - **A branch preview is a Run with no agent** (`runs.kind = 'preview'`, no
-  phase), serving the task's branch with the recipes marked to start in
-  previews as the spec's `workload.servers`. It is parked (`dude_pause =
-  'unused'`) after the project's idle timeout without a request, by lux's
-  `lastRequestAt`; starting a server on it resumes it. One per task.
-  Steer, pause, resume and abort refuse it; it is stopped with `DELETE
-  /v1/tasks/:id/preview`, or ends when its task does (done, failed,
-  aborted). A stopped preview's lux Run is cancelled, a lost one too (lux
-  keeps a lost Run to resume).
+  phase). One per task. Steer, pause, resume and abort refuse it; it is
+  stopped with `DELETE /v1/tasks/:id/preview`, or ends when its task does
+  (done, failed, aborted). A stopped preview's lux Run is cancelled, a lost
+  one too (lux keeps a lost Run to resume).
+- **A wakeable preview** (`runs.wakeable`, lux#41) is lux servers of its
+  own (`preview_servers`), one per recipe marked to start in previews, at
+  `<server>-<task>-<project>.<preview domain>` — one DNS label
+  (`servers.PreviewLabel`). lux owns the URL and says on its feed when
+  someone opens one (`server.wake_requested`) or none is used
+  (`server.idle`); `servers.Feed` records it and the preview loop acts.
+  Its Run is servers-only (no `workload.servers`), resumed with `sync` on
+  every wake. See [operations](operations.md#branch-previews).
+- **An old-style preview** (`wakeable = false`: before lux#41, or a lux with
+  no preview domain) serves the recipes as the spec's `workload.servers`.
+  It is parked (`dude_pause = 'unused'`) after the project's idle timeout
+  without a request, by lux's `lastRequestAt`; starting a server on it
+  resumes it.
 - **Previews open in a new tab**, never in a frame: a preview's sign-in
   cookie is SameSite=Lax and does not reach a cross-site iframe. Only an
   `https://` server URL becomes a link.

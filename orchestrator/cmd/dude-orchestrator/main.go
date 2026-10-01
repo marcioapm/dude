@@ -134,6 +134,15 @@ func run(log *slog.Logger) error {
 		return runtime.Signal(ctx, org, wf, name, payload, key)
 	}
 	luxClient := lux.New(set.LuxURL, set.LuxKey)
+	previewDomain, err := previewDomainOf(ctx, luxClient, set.PreviewDomain, log, time.Second)
+	if err != nil {
+		return err
+	}
+	if previewDomain == "" {
+		log.Warn("branch previews do not wake on request: lux has no preview domain (preview.domain) and previews.domain is unset")
+	} else {
+		log.Info("branch previews wake on request", "domain", previewDomain)
+	}
 	syncer := &phases.Syncer{
 		DB: database, Lux: luxClient,
 		Forges: forges, Agent: agent, Registry: registryLogin, Log: log,
@@ -141,9 +150,9 @@ func run(log *slog.Logger) error {
 		DiffEvery: set.DiffEvery, MachineUSDPerHour: set.MachineUSDPerHour,
 	}
 	defer syncer.Stop()
-	serverService := &servers.Service{DB: database, Lux: luxClient, Log: log, ConsoleURL: set.ConsoleURL}
+	serverService := &servers.Service{DB: database, Lux: luxClient, Log: log, ConsoleURL: set.ConsoleURL, PreviewDomain: previewDomain}
 	previews := &servers.Previews{Service: serverService, Forges: forges, DefaultImage: agent.DefaultImage,
-		Registry: registryLogin}
+		Registry: registryLogin, ReapAfter: set.PreviewReapAfter}
 	defer previews.Stop()
 	pullRequests := &prs.Syncer{DB: database, Forges: forges, Signal: signalWorkflow, Log: log,
 		FactoryLogins: set.FactoryLogins}
@@ -196,6 +205,8 @@ func run(log *slog.Logger) error {
 		default:
 		}
 	}
+	// lux's feed: wakes, idleness and gone servers of wakeable previews.
+	go (&servers.Feed{DB: database, Lux: luxClient, Log: log, Kick: serverService.Kick}).Run(ctx)
 	go func() {
 		for range kick {
 			for _, w := range wakers {
@@ -244,6 +255,50 @@ func run(log *slog.Logger) error {
 	}
 	wg.Wait()
 	return nil
+}
+
+// previewDomainOf checks that lux has the server resource dude's previews
+// need (lux#41) and settles the preview domain: previews.domain must be
+// lux's own when both are set (lux refuses hostnames outside it); unset,
+// lux's is used. A lux without the resource, or a mismatch, stops startup;
+// a lux not answering is asked again, every retry up to a minute apart,
+// until ctx ends, rather than the process exiting and restarting.
+func previewDomainOf(ctx context.Context, c *lux.HTTPClient, configured string, log *slog.Logger, retry time.Duration) (string, error) {
+	for {
+		luxDomain, err := luxPreviewDomain(ctx, c)
+		if err == nil {
+			if configured != "" && luxDomain != "" && configured != luxDomain {
+				return "", fmt.Errorf("previews.domain (DUDE_PREVIEW_DOMAIN) is %s but lux serves previews under %s", configured, luxDomain)
+			}
+			if configured != "" {
+				return configured, nil
+			}
+			return luxDomain, nil
+		}
+		if errors.Is(err, lux.ErrNoServers) {
+			return "", fmt.Errorf("lux at startup: %w", err)
+		}
+		log.Warn("lux at startup: not answering; asking again", "in", retry, "error", err)
+		select {
+		case <-ctx.Done():
+			return "", fmt.Errorf("lux at startup: %w", err)
+		case <-time.After(retry):
+		}
+		retry = min(2*retry, time.Minute)
+	}
+}
+
+func luxPreviewDomain(ctx context.Context, c *lux.HTTPClient) (string, error) {
+	check, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if err := lux.RequireServers(check, c); err != nil {
+		return "", err
+	}
+	d, err := c.PreviewDomain(check)
+	if err != nil {
+		return "", fmt.Errorf("whoami: %w", err)
+	}
+	return d, nil
 }
 
 // memoryAndPush builds the embedder (nil when embeddings are off) and the

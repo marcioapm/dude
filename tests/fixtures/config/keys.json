@@ -20,6 +20,8 @@
     {"name": "lux.url", "env": "LUX_URL", "kind": "string", "use": "orchestrator", "default": "", "secret": false},
     {"name": "lux.console_url", "env": "LUX_CONSOLE_URL", "kind": "string", "use": "orchestrator", "default": "", "secret": false},
     {"name": "lux.api_key", "env": "LUX_API_KEY", "kind": "string", "use": "orchestrator", "default": "", "secret": true},
+    {"name": "previews.domain", "env": "DUDE_PREVIEW_DOMAIN", "kind": "string", "use": "orchestrator", "default": "", "secret": false},
+    {"name": "previews.reap_after", "env": "DUDE_PREVIEW_REAP_AFTER", "kind": "duration", "use": "orchestrator", "default": "168h", "secret": false},
     {"name": "llm.url", "env": "DUDE_LLM_URL", "kind": "string", "use": "orchestrator", "default": "", "secret": false},
     {"name": "llm.key", "env": "DUDE_LLM_KEY", "kind": "string", "use": "orchestrator", "default": "", "secret": true},
     {"name": "embeddings.url", "env": "DUDE_EMBEDDINGS_URL", "kind": "string", "use": "orchestrator", "default": "", "secret": false},
