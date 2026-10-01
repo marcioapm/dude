@@ -11,6 +11,11 @@
   color: var(--ds-color-text-secondary);
 }
 
+.hint {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+
 .trigger {
   --sel-h: var(--ds-size-control-md);
   display: inline-flex;
@@ -53,6 +58,35 @@
 .chevron {
   color: var(--ds-color-text-muted);
   flex-shrink: 0;
+}
+
+/* What the closed trigger shows: the label, then its meta, which is cut before the label is. */
+.value {
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+}
+/* Radix's value span holds the chosen item's text: label, then meta, close together. */
+.value > span {
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+}
+.value .itemText {
+  justify-content: flex-start;
+  gap: var(--ds-space-8);
+  overflow: hidden;
+}
+.value .itemLabel {
+  flex-shrink: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.value .meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .content {
@@ -100,6 +134,64 @@
   left: var(--ds-space-6);
   display: inline-flex;
   color: var(--ds-color-accent-text);
+}
+
+/* An option with a line under its label is as tall as it needs. */
+.itemTall {
+  height: auto;
+  min-height: var(--ds-size-row-default);
+  padding-top: var(--ds-space-6);
+  padding-bottom: var(--ds-space-6);
+}
+.itemTall .indicator {
+  top: var(--ds-space-8);
+}
+.itemBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+  flex: 1;
+  min-width: 0;
+}
+.itemLine {
+  display: flex;
+  min-width: 0;
+}
+.itemLine > span {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+.itemText {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--ds-space-16);
+  flex: 1;
+  min-width: 0;
+}
+.itemLabel {
+  white-space: nowrap;
+}
+.meta {
+  font-size: var(--ds-text-sm);
+  font-weight: var(--ds-weight-regular);
+  color: var(--ds-color-text-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.description {
+  font-size: var(--ds-text-xs);
+  font-weight: var(--ds-weight-regular);
+  color: var(--ds-color-text-muted);
+  white-space: normal;
+}
+
+.footer {
+  padding: var(--ds-space-8) var(--ds-space-12);
+  background: var(--ds-color-chrome);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
 }
 
 .group {

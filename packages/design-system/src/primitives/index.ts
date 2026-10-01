@@ -2,6 +2,8 @@ export { Button, IconButton, LinkButton } from "./Button.tsx";
 export type { ButtonProps, ButtonVariant, ButtonSize, IconButtonProps, LinkButtonProps } from "./Button.tsx";
 export { Input } from "./Input.tsx";
 export type { InputProps } from "./Input.tsx";
+export { NumberInput } from "./NumberInput.tsx";
+export type { NumberInputProps } from "./NumberInput.tsx";
 export { Select } from "./Select.tsx";
 export type { SelectProps, SelectOption, SelectGroup } from "./Select.tsx";
 export { Checkbox } from "./Checkbox.tsx";

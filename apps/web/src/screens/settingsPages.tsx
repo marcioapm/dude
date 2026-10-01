@@ -21,6 +21,7 @@ import {
   SettingsDisclosure,
   SettingsHeader,
   SettingsMeta,
+  SettingsNote,
   SettingsSection,
   Switch,
   TextButton,
@@ -37,6 +38,7 @@ import {
   SETTINGS_ROLE_DESCRIPTION,
   SETTINGS_ROLE_LABEL,
   type FullDeliveryPolicy,
+  type MachineSizeWithUse,
   type ProjectPromptMode,
   type PromptHistory as PromptHistoryData,
   type PromptState,
@@ -48,6 +50,7 @@ import {
 import type { ApiClient } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
 import { deliveryPatch, deliveryValues, effortLabel, TIME_LIMITS, timeLimitLabel } from "../settings.ts";
+import { MachineSelect } from "./MachinesSettings.tsx";
 
 /** Where these settings are: an organization's, or a project's over it. */
 export interface SettingsScope {
@@ -80,7 +83,15 @@ function Source<T>({ scope, setting, reset }: { scope: SettingsScope; setting: S
 
 const NONE = "__none__";
 
-export function RolePage({ scope, role, onOpenRun }: { scope: SettingsScope; role: SettingsRole; onOpenRun?: ((runId: string) => void) | undefined }) {
+export function RolePage({ scope, role, sizes, onOpenRun, onManageSizes }: {
+  scope: SettingsScope;
+  role: SettingsRole;
+  /** The organisation's sizes, as the settings screen loaded them; null while loading. */
+  sizes: readonly MachineSizeWithUse[] | null;
+  onOpenRun?: ((runId: string) => void) | undefined;
+  /** Open the organisation's Machines page (its admins). */
+  onManageSizes?: (() => void) | undefined;
+}) {
   const { settings } = scope;
   const r = settings.roles[role];
   const project = isProject(settings);
@@ -162,12 +173,59 @@ export function RolePage({ scope, role, onOpenRun }: { scope: SettingsScope; rol
             options={TIME_LIMITS.map((m) => ({ value: m === null ? NONE : String(m), label: timeLimitLabel(m) }))}
           />
         </SettingField>
+        <MachineField scope={scope} role={role} sizes={sizes} onManageSizes={onManageSizes} />
       </SettingFields>
+      {role === "fixer" ? (
+        <SettingsNote icon="info">The fixer runs on the implementer’s model, effort, time limit and machine unless you give it its own.</SettingsNote>
+      ) : null}
       <PromptSection scope={scope} role={role} onHistory={() => setHistory(true)} />
       {history ? (
         <HistoryDialog scope={scope} role={role} onClose={() => setHistory(false)} onOpenRun={onOpenRun} />
       ) : null}
     </>
+  );
+}
+
+/**
+ * The machine size a role's sessions run on. A project stores only its
+ * override; naming none follows the organisation's (or, for the fixer, the
+ * implementer's), and on the organisation, the default size.
+ */
+function MachineField({ scope, role, sizes, onManageSizes }: { scope: SettingsScope; role: SettingsRole; sizes: readonly MachineSizeWithUse[] | null; onManageSizes?: (() => void) | undefined }) {
+  const { settings } = scope;
+  const ms = settings.roles[role].machineSize;
+  const project = isProject(settings);
+  const orgName = settings.organization.name;
+  const fixer = role === "fixer";
+  const byId = (id: string | null | undefined) => sizes?.find((s) => s.id === id) ?? null;
+  const fallback = sizes?.find((s) => s.isDefault) ?? null;
+  // What this layer sets, and what naming none here resolves to.
+  const own = project ? (ms.source === "project" ? ms.value : null) : ms.followsImplementer ? null : ms.value;
+  const inherited = (ms.followsImplementer ? byId(ms.value) : project ? byId(ms.organization) : null) ?? fallback;
+  const inheritLabel = fixer ? "The implementer’s" : project ? `From ${orgName}` : "Default";
+  const set = (machineSize: string | null, done: string) => void scope.patch({ roles: { [role]: { machineSize } } }, done);
+  return (
+    <SettingField
+      label="Machine"
+      htmlFor={`machine-${role}`}
+      source={project ? (
+        <SettingSource source={ms.source} from={orgName} inherited={ms.source === "project" ? (byId(ms.organization) ?? fallback)?.name : undefined}
+          onReset={settings.canEdit ? () => set(null, "Machine reset") : undefined} />
+      ) : null}
+    >
+      {sizes ? (
+        <MachineSelect id={`machine-${role}`} testId="role-machine" sizes={sizes} value={own} inherited={inherited}
+          inheritLabel={inheritLabel}
+          inheritDescription={fixer ? "Runs on the implementer’s size" : project ? `Follows ${orgName}’s setting` : "Follows whichever size is the default"}
+          disabled={!settings.canEdit}
+          footer={project ? `Sizes are ${orgName}’s.` : onManageSizes
+            ? <>CPUs · memory · disk. <TextButton onClick={onManageSizes} data-testid="manage-sizes">Manage sizes in Machines</TextButton></>
+            : "CPUs · memory · disk. Only admins change sizes."}
+          onChange={(id) => set(id, id ? "Machine saved" : "Machine reset")} />
+      ) : (
+        <Select aria-label="Machine" disabled options={[{ value: "loading", label: "Loading…" }]} value="loading" />
+      )}
+    </SettingField>
   );
 }
 

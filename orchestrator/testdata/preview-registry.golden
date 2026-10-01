@@ -73,5 +73,10 @@
         "host": "registry.npmjs.org"
       }
     ]
+  },
+  "resources": {
+    "cpus": 2,
+    "memory": 8589934592,
+    "disk": 21474836480
   }
 }

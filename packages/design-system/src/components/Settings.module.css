@@ -11,6 +11,16 @@
   min-width: 0;
   gap: var(--ds-space-40);
 }
+/* A phone: the menu above the page, not beside it; wide tables scroll in their own frame. */
+@media (max-width: 719.98px) {
+  .layout {
+    flex-direction: column;
+    gap: var(--ds-space-24);
+  }
+  .nav {
+    width: auto;
+  }
+}
 
 .nav {
   flex: none;
@@ -146,6 +156,39 @@
 .noteIcon {
   flex: none;
   color: var(--ds-color-text-muted);
+}
+
+.explainer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-6);
+  max-width: calc(var(--ds-measure-message) + var(--ds-space-64) * 2);
+  padding: var(--ds-space-12) var(--ds-space-16);
+  background: var(--ds-color-chrome);
+  font-size: var(--ds-text-sm);
+  line-height: var(--ds-leading-prose);
+  color: var(--ds-color-text-secondary);
+}
+.explainerHead {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  color: var(--ds-color-text-strong);
+}
+.explainerHead b {
+  font-weight: var(--ds-weight-semibold);
+}
+.explainerIcon {
+  flex: none;
+  color: var(--ds-tone-info-fg);
+}
+.explainerBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-12);
+}
+.explainerBody p {
+  margin: 0;
 }
 
 .section {
@@ -290,7 +333,8 @@
 
 .fields {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  /* A role's four (model, effort, time limit, machine) fit one row of the settings column. */
+  grid-template-columns: repeat(auto-fit, minmax(176px, 1fr));
   gap: var(--ds-space-16);
 }
 .field {

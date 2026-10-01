@@ -100,6 +100,12 @@ func (s *Server) Handler() http.Handler {
 		write(w, http.StatusOK, delivery.DefaultPolicy())
 		return nil
 	}))
+	// lux's pools, for the machine sizes page and its fit check. Never an
+	// error: lux out of reach is no pools and why, and sizes still work.
+	mux.Handle("GET /internal/lux/pools", s.auth(func(w http.ResponseWriter, r *http.Request, _ string) error {
+		write(w, http.StatusOK, s.pools(r.Context()))
+		return nil
+	}))
 	s.githubRoutes(mux)
 	s.serverRoutes(mux)
 	s.memoryRoutes(mux)

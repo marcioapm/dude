@@ -103,6 +103,24 @@ export function SettingsNote({ icon = "info", children }: { readonly icon?: Icon
   );
 }
 
+/**
+ * How something works that a page's values depend on, explained once:
+ * a titled box on the chrome shade, at the prose measure, with a figure
+ * after the words (Machines: why a run gets a little less memory than it
+ * asks for).
+ */
+export function SettingsExplainer({ title, children, ...rest }: { readonly title: ReactNode; readonly children: ReactNode } & Omit<HTMLAttributes<HTMLElement>, "title">) {
+  return (
+    <aside className={styles["explainer"]} {...rest}>
+      <div className={styles["explainerHead"]}>
+        <Icon name="info" size={14} className={styles["explainerIcon"]} />
+        <b>{title}</b>
+      </div>
+      <div className={styles["explainerBody"]}>{children}</div>
+    </aside>
+  );
+}
+
 export function SettingsSection({ title, actions, children, ...rest }: {
   readonly title?: ReactNode;
   /** On the title's line, at the right. */
