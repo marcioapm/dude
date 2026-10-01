@@ -29,7 +29,7 @@ describe("pull request actions", () => {
     expect(h).not.toContain('data-testid="pr-rerun"');
     expect(h).toMatch(/data-testid="pr-merge"[^>]*disabled|disabled[^>]*data-testid="pr-merge"/);
     const note = h.match(/<span data-testid="pr-blocked">([^<]*)<\/span>/)?.[1]?.replaceAll("&#x27;", "'");
-    expect(note).toBe("Blocked: GitHub refused the check-runs read; check the token's Checks: Read permission and its repository/organization access (SSO, token approval)");
+    expect(note).toBe("Blocked: dude's GitHub token can't read this repository's checks (it needs Checks: Read)");
   });
 
   test("a real failure beside them can still be re-run", () => {

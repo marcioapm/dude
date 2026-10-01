@@ -16,6 +16,8 @@ import { AuthorLine } from "../../components/PersonAvatar.tsx";
 import { RefLead } from "../../components/RefLead.tsx";
 import { RemovableList } from "../../components/RemovableList.tsx";
 import { SearchPicker } from "../../components/SearchPicker.tsx";
+import { GitHubUserLine, type GitHubUser } from "../../components/GitHubUserLine.tsx";
+import { PullRequestPanel } from "../../components/PullRequestPanel.tsx";
 import { Icon } from "../../icons/index.tsx";
 import { Select } from "../../primitives/Select.tsx";
 import { NumberInput } from "../../primitives/NumberInput.tsx";
@@ -205,6 +207,11 @@ export function SettingsGallerySection({ mode }: { readonly mode: PaneMode }) {
           </Col>
         </Panes>
       </Block>
+      <Block id="s-reviewers" title="Asking for a review: SearchPicker of GitHubUserLines / PullRequestPanel reviewers" note="Who to ask, as GitHub offers them: its suggestions before any words, people and teams by name after. One already asked is shown, not picked. Picks gather above the field; Backspace drops the last, ⌘Enter asks. In the panel every reviewer keeps a line — a comment, a team, one asked again after a verdict.">
+        <Panes mode={mode}>
+          <ReviewerDemo />
+        </Panes>
+      </Block>
       <Block id="s-machines" title="NumberInput / Select meta / FitBar / ProportionBar / MachineChip" note="A machine size in the pieces that show it. NumberInput moves in steps (− value + and ↑ ↓), keeps what is typed, and names the step when it is off. A Select option's meta is muted on its line and follows the label into the trigger; description is a line under it; footer sits under the list. FitBar is how much of one host a size takes, words only when nobody knows the host. ProportionBar splits a host's memory, the part nobody gets hatched. MachineChip is the session header's machine, its origin in a tooltip.">
         <Panes mode={mode}>
           <MachinesDemo />
@@ -239,5 +246,56 @@ export function SettingsGallerySection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
     </Section>
+  );
+}
+
+interface Reviewer extends GitHubUser {
+  readonly reason?: string | undefined;
+  readonly asked?: boolean | undefined;
+}
+
+const REVIEWERS: ReadonlyArray<Reviewer> = [
+  { login: "anaribeiro", name: "Ana Ribeiro", reason: "Changed these files recently" },
+  { login: "tokafor", name: "Tom Okafor", reason: "Commented on this pull request" },
+  { login: "danabrams", name: "Dana Abrams", reason: "Changed these files recently", asked: true },
+  { login: "hanna", name: "Hanna Lindqvist" },
+  { login: "ananya-k", name: "Ananya Krishnan" },
+  { login: "acme/platform", name: "Platform", team: true, reason: "7 members" },
+];
+
+function ReviewerDemo() {
+  const [picked, setPicked] = useState<Reviewer[]>([]);
+  return (
+    <Col>
+      <Label>Request review</Label>
+      <RemovableList onRemove={(login) => setPicked((l) => l.filter((r) => r.login !== login))}
+        items={picked.map((r) => ({ id: r.login, label: r.login, content: <GitHubUserLine user={r} size={20} inline /> }))} />
+      <SearchPicker<Reviewer>
+        label="Who to ask for a review" placeholder={picked.length ? "Anyone else?" : "Name or GitHub login"} size="sm"
+        findOnEmpty clearOnPick version={picked.length}
+        find={async (q) => REVIEWERS.filter((r) => !picked.includes(r) &&
+          (q ? `${r.login} ${r.name}`.toLowerCase().includes(q.toLowerCase()) : r.reason && !r.team))
+          .map((r): Reviewer => (q && !r.team ? { login: r.login, name: r.name, asked: r.asked } : r))}
+        group={(r) => (r.reason && !r.team ? "Suggested by GitHub" : r.team ? "Teams" : "People")}
+        renderGroup={(g) => <>{g === "Suggested by GitHub" ? <Icon name="github" size={12} /> : null}{g}</>}
+        optionKey={(r) => r.login}
+        renderOption={(r) => <GitHubUserLine user={r} detail={r.reason} />}
+        optionDisabled={(r) => (r.asked ? "Already asked" : null)}
+        empty={(q) => `Nobody who can review this repository matches “${q}”.`}
+        onPick={(r) => setPicked((l) => [...l, r])}
+        onBackspaceEmpty={() => setPicked((l) => l.slice(0, -1))} />
+      <Label>PullRequestPanel, once they review</Label>
+      <PullRequestPanel
+        pr={{ number: 482, url: "#", title: "Retry webhook deliveries with exponential backoff", repositoryName: "control-plane",
+          state: "open", review: "changes_requested", checks: "passing", baseBranch: "main", mergeable: "clean",
+          reviews: [
+            { login: "anaribeiro", state: "APPROVED", submittedAt: "2026-10-01T10:00:00Z" },
+            { login: "kai-n", state: "CHANGES_REQUESTED", submittedAt: "2026-10-01T10:05:00Z" },
+            { login: "danabrams", state: "APPROVED", submittedAt: "2026-10-01T09:00:00Z", rerequested: true },
+            { login: "tokafor", state: "COMMENTED", submittedAt: "2026-10-01T10:10:00Z" },
+            { login: "acme/platform", state: "REQUESTED", team: true },
+          ] }}
+        factActions={{ reviews: <Button size="sm" variant="quiet">Request review</Button> }} />
+    </Col>
   );
 }

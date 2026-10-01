@@ -17,6 +17,9 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
+  /* Eight rows, then it scrolls: a picker never pushes its page away. */
+  max-height: calc(var(--ds-size-row-default) * 8);
+  overflow-y: auto;
 }
 .list[hidden] {
   display: none;
@@ -26,7 +29,8 @@
   align-items: center;
   gap: var(--ds-space-8);
   min-height: var(--ds-size-row-default);
-  padding: 0 var(--ds-space-8);
+  /* Two-line rows (a name over a login) keep a breath above and below. */
+  padding: var(--ds-space-2) var(--ds-space-8);
   border-radius: var(--ds-radius-control);
   font-size: var(--ds-text-sm);
   color: var(--ds-color-text-primary);
@@ -35,4 +39,31 @@
 }
 .active {
   background: var(--ds-color-hover-wash);
+}
+/* A group's heading: muted, small, not an option. */
+.group {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  padding: var(--ds-space-8) var(--ds-space-8) var(--ds-space-2);
+  font-size: var(--ds-text-xs);
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-muted);
+}
+.group:first-child {
+  padding-top: var(--ds-space-4);
+}
+/* Shown, not picked: no wash, why at the end. */
+.disabled {
+  cursor: not-allowed;
+  color: var(--ds-color-text-secondary);
+}
+.why {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.empty {
+  padding: var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
 }
