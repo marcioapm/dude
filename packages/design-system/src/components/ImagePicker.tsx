@@ -160,6 +160,8 @@ export function ImagePicker({
           aria-expanded={open}
           aria-controls={listId}
           aria-autocomplete="list"
+          spellCheck={false}
+          autoComplete="off"
           aria-activedescendant={open && rows[active] ? optionId(active) : undefined}
           className={cx(styles["input"], chosen && !open && styles["inputChosen"])}
           value={shown}

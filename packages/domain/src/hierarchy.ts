@@ -473,9 +473,20 @@ export const runSchema = z.object({
     })
     .nullable()
     .default(null),
-  /** While it waits for its image's dude layer: the finish job, and where it is. */
+  /**
+   * While it waits for its image (its dude layer, or its first version): the
+   * job, and where it is; builderOfflineSince when the builder has not been
+   * heard from for 2 minutes, from its last heartbeat (or, never seen, from
+   * when the Run began to wait).
+   */
   preparingImage: z
-    .object({ buildId: z.string(), state: z.string(), imageName: z.string(), version: z.number().nullable() })
+    .object({
+      buildId: z.string(),
+      state: z.string(),
+      imageName: z.string(),
+      version: z.number().nullable(),
+      builderOfflineSince: z.string().datetime({ offset: true }).nullable().default(null),
+    })
     .nullable()
     .default(null),
   createdAt: z.string().datetime({ offset: true }),

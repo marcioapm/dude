@@ -116,10 +116,19 @@ export interface ImageBuild {
 }
 
 export interface ImageBuildWithLog extends ImageBuild {
+  /**
+   * The log from byte logStart of everything the build ever wrote to
+   * logTotal: the whole kept tail (its last 1 MiB), or with `?after=<n>`
+   * only what came after byte n when the tail still holds it.
+   */
   log: string;
+  logStart: number;
+  logTotal: number;
   /** The image's version that is live while this one builds. */
   published: { versionId: string; number: number } | null;
   note: string;
+  /** The limits every build runs under. */
+  builder: ImageBuilderInfo;
 }
 
 /** Who names an image. */
@@ -161,6 +170,10 @@ export interface ImageBuilderInfo {
   layer: string | null;
   cpus: number;
   memoryMiB: number;
+  /** dude-image-builder's last heartbeat (every 30 s), null if it never ran. */
+  lastSeenAt: string | null;
+  /** Builds are on, and the builder has not been heard from for 2 minutes. */
+  offline: boolean;
 }
 
 export interface ImagesResponse {
@@ -437,6 +450,15 @@ export const COMMON_BASES: ReadonlyArray<string> = [
   "mcr.microsoft.com/playwright:v1.55.0-noble",
 ];
 
+/**
+ * What a waiting Run, a preview or the Images page says of a builder not
+ * heard from: since its last heartbeat (the same words the orchestrator
+ * fails a Run with after 30 minutes of it).
+ */
+export function builderOffline(lastSeenAt: string | null, format: (iso: string) => string): string {
+  return lastSeenAt ? `image builder offline since ${format(lastSeenAt)}` : "image builder offline: it has never reported in";
+}
+
 /** A digest ref shortened for people: `sha256:3f9a07…`. */
 export function shortDigest(ref: string | null | undefined): string {
   if (!ref) return "";
@@ -449,7 +471,8 @@ export function shortDigest(ref: string | null | undefined): string {
  * The image a role names: the project's, then the organization's — for the
  * fixer, then the implementer's over the same layers — or none, and the
  * Run falls through to its project's image. An id the library lacks is
- * skipped. The orchestrator's images.ForRole is the same rule.
+ * skipped. The orchestrator's images.RoleImage is the same rule, pinned
+ * by the same table of cases in both test suites.
  */
 export function resolveRoleImage(
   role: string,

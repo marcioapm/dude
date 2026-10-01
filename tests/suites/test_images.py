@@ -27,6 +27,10 @@ from playwright.sync_api import Page, expect
 from env import TEST_LAYER
 from helpers import ApiClient, execute, query, sign_in, wait_until
 
+# dude-image-builder's heartbeat, as it writes it every 30 s; the suite
+# says it is alive unless a test is about it being offline.
+BUILDER_ALIVE = "INSERT INTO image_builder (seen_at) VALUES (now()) ON CONFLICT (id) DO UPDATE SET seen_at = now()"
+
 BASE = "FROM debian:bookworm-slim\nRUN apt-get update && apt-get install -y git\n"
 SCRIPTED = {r: {"model": "fake/scripted"} for r in ("implementer", "reviewer", "simplifier")}
 
@@ -152,11 +156,22 @@ def test_another_organization_cannot_see_or_use_an_image(client: ApiClient, seco
 SHOTS = Path(os.environ["DUDE_SHOTS"]) if os.environ.get("DUDE_SHOTS") else None
 
 
+def _dismiss_toasts(page: Page) -> None:
+    """Closes every toast showing, so none covers what a screenshot is of."""
+    toasts = page.locator("[data-toast]")
+    for _ in range(toasts.count()):
+        dismiss = toasts.first.get_by_role("button", name="Dismiss")
+        if dismiss.count():
+            dismiss.click()
+    expect(toasts).to_have_count(0)
+
+
 def _shoot(page: Page, name: str, *, narrow: bool = True, compact: bool = False) -> None:
     """The page at 1440 and 390 wide, light and dark, when DUDE_SHOTS is set."""
     if not SHOTS:
         return
     SHOTS.mkdir(parents=True, exist_ok=True)
+    _dismiss_toasts(page)
     size = page.viewport_size or {"width": 1440, "height": 1000}
     for width in ([1440, 390] if narrow else [1440]):
         page.set_viewport_size({"width": width, "height": 1000 if width > 500 else 844})
@@ -214,23 +229,26 @@ def _library(client: ApiClient, dsn: str) -> dict:
 @pytest.mark.ui
 def test_the_library_its_image_page_history_and_builds(page: Page, web_url: str, client: ApiClient, org: dict, owner_dsn: str, console_errors: list):
     lib = _library(client, owner_dsn)
+    execute(owner_dsn, BUILDER_ALIVE)
     sign_in(page, web_url, org["api_key"])
 
     # The list: the queue, the tree, each image's state.
     page.goto(f"{web_url}#/org/settings/images")
+    expect(page.get_by_test_id("builder-offline")).to_have_count(0)
     expect(page.get_by_test_id("build-queue")).to_contain_text("Building node-pnpm v3")
     expect(page.get_by_test_id("build-queue")).to_contain_text("1 waiting: python-uv v2")
     expect(page.get_by_test_id("images-queue-count")).to_have_text("2")
-    rows = page.get_by_test_id("image-row")
+    table = page.get_by_role("table")
+    rows = table.get_by_role("row").filter(has_not=page.get_by_role("columnheader"))
     expect(rows).to_have_count(4)
     expect(rows.nth(0)).to_contain_text("acme-base")
     expect(rows.nth(0)).to_contain_text("Default base")
-    expect(page.locator("[data-image=rails-legacy]")).to_contain_text("v2 failed · v1 still live")
-    expect(page.locator("[data-image=python-uv]")).to_contain_text("Waiting · 2nd")
+    expect(table.get_by_role("row", name=re.compile(r"^rails-legacy"))).to_contain_text("v2 failed · v1 still live")
+    expect(table.get_by_role("row", name=re.compile(r"^python-uv"))).to_contain_text("Waiting · 2nd")
     _shoot(page, "images-list", compact=True)
 
     # The image page: the editor, lint and autocomplete.
-    page.locator("[data-image=node-pnpm]").click()
+    table.get_by_role("row", name=re.compile(r"^node-pnpm")).click()
     expect(page.get_by_test_id("image-name")).to_have_text("node-pnpm")
     editor = page.get_by_test_id("containerfile-editor").locator(".cm-content")
     expect(editor).to_be_visible(timeout=15000)
@@ -246,6 +264,18 @@ def test_the_library_its_image_page_history_and_builds(page: Page, web_url: str,
     # The server refuses what the editor marks, with the same words.
     page.get_by_test_id("save-draft").click()
     expect(page.get_by_test_id("image-save-problem")).to_contain_text("An image has no build files")
+    # Taken out again, the draft builds: Build & publish is the page's one filled button.
+    editor.click()
+    page.keyboard.press("ControlOrMeta+End")
+    for _ in range(len("\nCOPY package.json /workspace/\nFROM image:")):
+        page.keyboard.press("Backspace")
+    page.keyboard.type("\nRUN pnpm --version")
+    expect(page.get_by_test_id("lint-errors")).to_have_count(0)
+    publish = page.get_by_test_id("build-publish")
+    expect(publish).to_be_enabled()
+    assert publish.evaluate("b => getComputedStyle(b).backgroundColor") != page.get_by_test_id("save-draft").evaluate(
+        "b => getComputedStyle(b).backgroundColor")
+    _shoot(page, "image-containerfile-ready")
 
     # History: a diff, and Publish again.
     page.goto(f"{web_url}#/org/settings/images/{lib['pnpm']}/history")
@@ -279,14 +309,40 @@ def test_the_library_its_image_page_history_and_builds(page: Page, web_url: str,
 
 
 @pytest.mark.ui
+def test_an_offline_builder_is_said_on_the_list_and_on_a_waiting_run(page: Page, web_url: str, client: ApiClient, org: dict, owner_dsn: str,
+                                                                      console_errors: list):
+    base = _publish_first(client, owner_dsn, "acme-base", final=False)
+    client.post(f"/v1/images/default/{base['image']['id']}")
+    execute(owner_dsn, "INSERT INTO image_builder (seen_at) VALUES ('2026-10-01T08:00:00Z') ON CONFLICT (id) DO UPDATE SET seen_at = EXCLUDED.seen_at")
+    listed = client.get("/v1/images").json()["builder"]
+    assert listed["offline"] is True
+    project = client.create_project(name="Greeter", slug=f"greeter-{os.urandom(3).hex()}", agentModels=SCRIPTED)
+    task = client.create_task(project["id"], "Say hello")
+    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+    run = wait_until(lambda: (r := query(owner_dsn, "SELECT id FROM runs WHERE task_id = %s AND image_build_id IS NOT NULL", (task["id"],))) and r[0],
+                     timeout=60, message="the implementer never waited on its image")
+    assert client.get_run(run["id"])["preparingImage"]["builderOfflineSince"] is not None
+    sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/org/settings/images")
+    expect(page.get_by_test_id("builder-offline")).to_contain_text("Image builder offline since")
+    _shoot(page, "images-builder-offline")
+    page.goto(f"{web_url}#/session/{run['id']}")
+    expect(page.get_by_test_id("preparing-image")).to_contain_text("image builder offline since")
+    _shoot(page, "run-preparing-image-offline")
+    execute(owner_dsn, BUILDER_ALIVE)
+    assert all("409" in e for e in console_errors), console_errors
+
+
+@pytest.mark.ui
 def test_a_member_reads_the_library_and_changes_nothing(page: Page, web_url: str, client: ApiClient, org: dict, owner_dsn: str, env, console_errors: list):
     _publish_first(client, owner_dsn, "acme-base")
     member = client.post("/v1/people", {"name": "Bo", "email": f"bo-{os.urandom(2).hex()}@acme.dev", "role": "member"}).json()["key"]
     sign_in(page, web_url, member)
     page.goto(f"{web_url}#/org/settings/images")
-    expect(page.get_by_test_id("image-row")).to_have_count(1)
+    rows = page.get_by_role("table").get_by_role("row", name=re.compile(r"^acme-base"))
+    expect(rows).to_have_count(1)
     expect(page.get_by_test_id("new-image")).to_have_count(0)
-    page.get_by_test_id("image-row").click()
+    rows.click()
     expect(page.get_by_test_id("containerfile-editor").locator(".cm-content")).to_have_attribute("contenteditable", "false", timeout=15000)
     expect(page.get_by_test_id("build-publish")).to_have_count(0)
     assert console_errors == []
@@ -297,6 +353,7 @@ def test_the_picker_on_a_project_and_a_role_stores_the_image_and_a_typed_one_is_
     page: Page, web_url: str, client: ApiClient, org: dict, owner_dsn: str, console_errors: list
 ):
     lib = _library(client, owner_dsn)
+    execute(owner_dsn, BUILDER_ALIVE)
     project = client.create_project(name="Dashboard", slug=f"dash-{os.urandom(3).hex()}", agentModels=SCRIPTED)
     # A typed image from before the library.
     execute(owner_dsn, "UPDATE projects SET runtime_image = 'ghcr.io/acme/runner:node22' WHERE id = %s", (project["id"],))
@@ -343,6 +400,7 @@ def test_the_picker_on_a_project_and_a_role_stores_the_image_and_a_typed_one_is_
 def test_a_run_preparing_its_image_says_so(page: Page, web_url: str, client: ApiClient, org: dict, owner_dsn: str, console_errors: list):
     base = _publish_first(client, owner_dsn, "acme-base", final=False)
     client.post(f"/v1/images/default/{base['image']['id']}")
+    execute(owner_dsn, BUILDER_ALIVE)
     project = client.create_project(name="Greeter", slug=f"greeter-{os.urandom(3).hex()}", agentModels=SCRIPTED)
     task = client.create_task(project["id"], "Say hello")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201

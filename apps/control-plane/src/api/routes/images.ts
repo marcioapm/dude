@@ -49,30 +49,41 @@ import type { RequestContext, Router } from "../router.ts";
 
 type Json = Record<string, unknown>;
 
-/** The builder as configured: builds run only with a dude layer to finish them with. */
-export function builderInfo(): ImageBuilderInfo {
+/** The builder as configured, and whether it is alive: builds run only with a dude layer to finish them with. */
+export async function builderInfo(scope: OrgScope): Promise<ImageBuilderInfo> {
   const c = config();
   const layer = c.string("DUDE_LAYER_IMAGE") ?? null;
   const memory = c.string("DUDE_BUILDER_MEMORY") ?? "1536m";
-  return { available: layer !== null, layer, cpus: c.float("DUDE_BUILDER_CPUS"), memoryMiB: mebibytes(memory) };
+  const [beat] = (await scope.sql`
+    SELECT seen_at AS "seenAt", seen_at < now() - interval '2 minutes' AS stale FROM image_builder`) as Array<{ seenAt: string; stale: boolean }>;
+  return {
+    available: layer !== null, layer, cpus: c.float("DUDE_BUILDER_CPUS"), memoryMiB: mebibytes(memory),
+    lastSeenAt: beat?.seenAt ?? null, offline: layer !== null && (beat?.stale ?? true),
+  };
 }
 
-/** podman's memory notation (1536m, 2g, 1610612736) in MiB. */
+/** Whether builds can run at all, without a database read. */
+const buildsConfigured = () => Boolean(config().string("DUDE_LAYER_IMAGE"));
+
+/**
+ * The builder's memory setting in MiB: whole bytes or a whole number of
+ * k, m or g, the notation dude-image-builder validates (images.MemoryBytes).
+ */
 function mebibytes(s: string): number {
-  const m = /^(\d+(?:\.\d+)?)([bkmg]?)$/i.exec(s.trim());
+  const m = /^(\d+)([bkmg]?)$/i.exec(s.trim());
   if (!m) return 0;
-  const n = Number(m[1]);
-  const unit = (m[2] ?? "").toLowerCase();
-  return Math.round(unit === "g" ? n * 1024 : unit === "m" ? n : unit === "k" ? n / 1024 : n / 1024 / 1024);
+  const shift = { "": 0, b: 0, k: 10, m: 20, g: 30 }[(m[2] ?? "").toLowerCase() as "" | "b" | "k" | "m" | "g"];
+  return Math.round((Number(m[1]) * 2 ** shift) / 2 ** 20);
 }
 
-const person = (alias: string) =>
-  `(SELECT json_build_object('id', ${alias}.id, 'name', ${alias}.name) FROM people ${alias} WHERE ${alias}.id = `;
+/** The person `column` names, as `{id, name}`, read through `alias`. */
+const person = (alias: string, column: string) =>
+  `(SELECT json_build_object('id', ${alias}.id, 'name', ${alias}.name) FROM people ${alias} WHERE ${alias}.id = ${column})`;
 
 // An image's summary, over `images i` in scope and `organizations o`.
 const SUMMARY_COLUMNS = `
   i.id, i.name, i.description, i.archived_at AS "archivedAt", i.created_at AS "createdAt",
-  ${person("cp")} i.created_by) AS "createdBy",
+  ${person("cp", "i.created_by")} AS "createdBy",
   (i.id IS NOT DISTINCT FROM o.default_image_id) AS "isDefault",
   (SELECT json_build_object('versionId', v.id, 'number', v.number, 'builtAt', v.built_at, 'userRef', v.user_ref)
    FROM image_versions v WHERE v.id = i.published_version_id) AS published,
@@ -81,13 +92,13 @@ const SUMMARY_COLUMNS = `
      AND v.number > COALESCE((SELECT p.number FROM image_versions p WHERE p.id = i.published_version_id), 0)
      AND v.state IN ('queued', 'building', 'pushing', 'failed')
    ORDER BY v.number DESC LIMIT 1) AS pending,
-  (SELECT json_build_object('versionId', v.id, 'updatedAt', v.updated_at, 'updatedBy', ${person("dp")} v.created_by))
+  (SELECT json_build_object('versionId', v.id, 'updatedAt', v.updated_at, 'updatedBy', ${person("dp", "v.created_by")})
    FROM image_versions v WHERE v.image_id = i.id AND v.state = 'draft') AS draft,
   (SELECT COALESCE(json_agg(json_build_object('id', pi.id, 'name', pi.name) ORDER BY pi.name), '[]')
    FROM image_version_parents vp JOIN images pi ON pi.id = vp.parent_image_id
    WHERE vp.version_id = latest.id) AS parents,
   latest.containerfile AS "latestContainerfile",
-  json_build_object('at', latest.updated_at, 'by', ${person("lp")} latest.created_by), 'source', latest.source) AS "lastChange"`;
+  json_build_object('at', latest.updated_at, 'by', ${person("lp", "latest.created_by")}, 'source', latest.source) AS "lastChange"`;
 
 // The version whose Containerfile an image is now: its draft, else its newest.
 const SUMMARY_FROM = `
@@ -152,7 +163,7 @@ async function usage(scope: OrgScope): Promise<Map<string, ImageUse[]>> {
 
 const BUILD_COLUMNS = `
   b.id, i.id AS "imageId", i.name AS "imageName", v.id AS "versionId", v.number AS version, b.kind, b.state, b.stage,
-  b.layer_ref AS "layerRef", ${person("rp")} b.requested_by) AS "requestedBy", b.requested_at AS "requestedAt",
+  b.layer_ref AS "layerRef", ${person("rp", "b.requested_by")} AS "requestedBy", b.requested_at AS "requestedAt",
   b.started_at AS "startedAt", b.finished_at AS "finishedAt", b.error, b.build_seconds AS "buildSeconds",
   b.push_seconds AS "pushSeconds", CASE WHEN b.state = 'queued' THEN image_queue_ahead(b.id) END AS ahead`;
 const BUILD_FROM = `image_builds b JOIN image_versions v ON v.id = b.image_version_id JOIN images i ON i.id = v.image_id`;
@@ -172,7 +183,7 @@ async function imagesResponse(ctx: RequestContext): Promise<ImagesResponse> {
       images: await summaries(scope),
       queue: await queue(scope),
       defaultImageId: org?.id ?? null,
-      builder: builderInfo(),
+      builder: await builderInfo(scope),
       canEdit: await isOrgAdmin(ctx),
     };
   });
@@ -180,7 +191,7 @@ async function imagesResponse(ctx: RequestContext): Promise<ImagesResponse> {
 
 const VERSION_COLUMNS = `
   v.id, v.image_id AS "imageId", v.number, v.state, v.containerfile, v.build_args AS "buildArgs", v.note, v.source,
-  v.created_at AS "createdAt", v.updated_at AS "updatedAt", ${person("vp_")} v.created_by) AS "createdBy",
+  v.created_at AS "createdAt", v.updated_at AS "updatedAt", ${person("vp_", "v.created_by")} AS "createdBy",
   v.user_ref AS "userRef", v.built_at AS "builtAt", v.error,
   (SELECT COALESCE(json_agg(json_build_object('imageId', p.parent_image_id, 'name', pi.name, 'versionId', p.parent_version_id,
      'version', pv.number) ORDER BY pi.name), '[]')
@@ -197,18 +208,39 @@ async function detail(ctx: RequestContext, id: string): Promise<ImageDetail> {
     const builds = (await scope.sql`
       SELECT ${scope.sql.unsafe(BUILD_COLUMNS)} FROM ${scope.sql.unsafe(BUILD_FROM)}
       WHERE i.id = ${id} ORDER BY b.requested_at DESC, b.id DESC LIMIT 100`) as ImageBuild[];
-    return { image, versions, builds, builder: builderInfo(), canEdit: await isOrgAdmin(ctx) };
+    return { image, versions, builds, builder: await builderInfo(scope), canEdit: await isOrgAdmin(ctx) };
   });
 }
 
+/**
+ * A build with its log. `?after=<n>`, n the logTotal a reader already has:
+ * only the bytes after it, when the kept tail still starts at or before n;
+ * else the whole tail. logStart says which.
+ */
 async function buildDetail(ctx: RequestContext): Promise<Response> {
   const id = ctx.params.buildId!;
+  const raw = new URL(ctx.request.url).searchParams.get("after");
+  const after = raw !== null && /^\d{1,15}$/.test(raw) ? Number(raw) : null;
+  if (raw !== null && after === null) throw badRequest("after must be a byte count");
   const build = await withOrg(ctx.principal.organizationId, async (scope) => {
+    // The kept tail is bytes [log_total - octet_length(log), log_total).
     const [row] = (await scope.sql`
-      SELECT ${scope.sql.unsafe(BUILD_COLUMNS)}, b.log, v.note,
+      SELECT ${scope.sql.unsafe(BUILD_COLUMNS)}, v.note, b.log_total::float8 AS "logTotal",
+        (b.log_total - octet_length(b.log))::float8 AS "tailStart",
+        CASE WHEN ${after}::bigint = b.log_total THEN ''
+          WHEN ${after}::bigint >= b.log_total - octet_length(b.log) AND ${after}::bigint < b.log_total
+            -- At a rune's first byte: a log_total a reader was given always is.
+            AND get_byte(convert_to(b.log, 'UTF8'), (${after}::bigint - (b.log_total - octet_length(b.log)))::int) & 192 <> 128
+          THEN convert_from(substring(convert_to(b.log, 'UTF8') FROM (${after}::bigint - (b.log_total - octet_length(b.log)) + 1)::int), 'UTF8')
+          ELSE b.log END AS log,
+        ${after}::bigint >= b.log_total - octet_length(b.log) AND ${after}::bigint <= b.log_total
+          AND (${after}::bigint = b.log_total
+            OR get_byte(convert_to(b.log, 'UTF8'), (${after}::bigint - (b.log_total - octet_length(b.log)))::int) & 192 <> 128) AS partial,
         (SELECT json_build_object('versionId', pv.id, 'number', pv.number) FROM image_versions pv WHERE pv.id = i.published_version_id) AS published
-      FROM ${scope.sql.unsafe(BUILD_FROM)} WHERE b.id = ${id}`) as ImageBuildWithLog[];
-    return row;
+      FROM ${scope.sql.unsafe(BUILD_FROM)} WHERE b.id = ${id}`) as Array<Omit<ImageBuildWithLog, "logStart" | "builder"> & { tailStart: number; partial: boolean | null }>;
+    if (!row) return null;
+    const { tailStart, partial, ...rest } = row;
+    return { ...rest, logStart: partial && after !== null ? after : tailStart, builder: await builderInfo(scope) } satisfies ImageBuildWithLog;
   });
   if (!build) throw notFound(`no image build ${id}`);
   return json(build);
@@ -385,7 +417,7 @@ async function buildImage(ctx: RequestContext): Promise<Response> {
   // No body, or an empty object: build the draft as saved.
   const raw = (await ctx.request.clone().text()).trim();
   const input = raw && raw !== "{}" ? ((await parseBody(ctx.request, imageDraftSchema)) as ImageDraftInput) : null;
-  if (!builderInfo().available) {
+  if (!buildsConfigured()) {
     throw new HttpError(503, "image builds are not configured on this dude: DUDE_LAYER_IMAGE is unset", "builder_unavailable");
   }
   const queued = await withOrg(ctx.principal.organizationId, async (scope) => {
