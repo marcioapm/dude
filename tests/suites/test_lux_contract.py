@@ -22,7 +22,7 @@ import pytest
 import requests
 
 from fake_github import FakeGitHub
-from helpers import ApiClient, wait_until
+from helpers import ApiClient, query, wait_until
 
 pytestmark = pytest.mark.lux
 
@@ -290,3 +290,59 @@ def test_luxs_pools_decode_as_dude_reads_them(env, client: ApiClient):
     served = client.get("/v1/machines/pools")
     assert served.status_code == 200 and served.json()["problem"] is None, served.text
     assert sorted(p["name"] for p in served.json()["pools"]) == sorted(p["name"] for p in pools)
+
+
+def test_a_role_on_a_size_reaches_real_lux_with_its_resources_and_pool(client: ApiClient, env, owner_dsn: str, lux_project):
+    """End to end: an admin's machine size, named by a role, is what lux runs.
+
+    The size names one of lux's pools by id; the implementer's Run goes to
+    lux with the size as resources and that pool as placement.poolId. lux
+    resolves the pool, places the Run there, starts its container with a
+    memory limit scaled from the size, and dude records the size and the
+    limit on its Run. Needs a lux with placement.poolId (feat/memory-factor)."""
+    project, _gh = lux_project
+    pools = client.get("/v1/machines/pools").json()
+    assert pools["problem"] is None, pools
+    pool = next(p for p in pools["pools"] if p.get("isDefault")) if any(p.get("isDefault") for p in pools["pools"]) else pools["pools"][0]
+    made = client.post("/v1/machines/sizes", {"name": f"Contract {os.urandom(2).hex()}", "cpus": 1.5, "memoryMiB": 1536, "diskGiB": 5, "poolId": pool["id"]})
+    assert made.status_code == 201, made.text
+    size = next(s for s in made.json()["sizes"] if s["name"].startswith("Contract"))
+    client.patch(f"/v1/projects/{project['id']}/settings", {"roles": {"implementer": {"machineSize": size["id"]}}})
+
+    task = client.create_task(project["id"], "Sized on lux")
+    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+
+    def submitted():
+        rows = query(owner_dsn, "SELECT id, lux_run_id, machine FROM runs WHERE task_id = %s AND phase = 'implement' AND lux_run_id IS NOT NULL", (task["id"],))
+        return rows[0] if rows else None
+
+    run = wait_until(submitted, timeout=120, interval=1, message="the implementer never reached lux")
+
+    # What lux stored: the size as resources, the pool by id, resolved to its name.
+    lux_run = _lux(env, "GET", f"/v1/runs/{run['lux_run_id']}").json()
+    assert lux_run["spec"]["resources"]["cpus"] == 1.5, lux_run["spec"]
+    assert lux_run["spec"]["resources"]["memory"] == 1536 * 1024 * 1024, lux_run["spec"]
+    assert lux_run["spec"]["resources"]["disk"] == 5 * GIB, lux_run["spec"]
+    assert lux_run["spec"]["placement"]["poolId"] == pool["id"], lux_run["spec"]
+    assert lux_run["spec"]["placement"]["pool"] == pool["name"], lux_run["spec"]
+
+    # lux placed it and started its container with a memory limit from the size.
+    def placed():
+        r = _lux(env, "GET", f"/v1/runs/{run['lux_run_id']}").json()
+        ps = r.get("placements") or []
+        return ps[-1] if ps and ps[-1].get("memoryLimit") else None
+
+    placement = wait_until(placed, timeout=180, interval=1, message="lux never started the sized Run's container")
+    limit = placement["memoryLimit"]
+    assert 0 < limit <= 1536 * 1024 * 1024, placement
+    print("placement:", {k: placement.get(k) for k in ("hostId", "memoryLimit")})
+
+    # dude recorded the size it sent, the pool's name then, and lux's limit.
+    def recorded():
+        m = query(owner_dsn, "SELECT machine FROM runs WHERE id = %s", (run["id"],))[0]["machine"]
+        return m if m and m.get("memoryLimit") else None
+
+    machine = wait_until(recorded, timeout=120, interval=1, message="dude never recorded lux's memory limit")
+    assert (machine["name"], machine["from"], machine["poolId"], machine["pool"]) == (size["name"], "project", pool["id"], pool["name"]), machine
+    assert (machine["cpus"], machine["memoryMiB"], machine["diskGiB"]) == (1.5, 1536, 5), machine
+    assert machine["memoryLimit"] == limit, (machine, placement)
