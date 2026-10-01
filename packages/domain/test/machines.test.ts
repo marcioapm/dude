@@ -6,6 +6,7 @@ import {
   machineSpec,
   MACHINE_STEP_MESSAGE,
   MIB,
+  poolGone,
   replaceMachineSize,
   replacePreviewMachineSize,
   resolveMachineSize,
@@ -99,6 +100,11 @@ describe("the fit check", () => {
     // An empty list is lux saying it has none: gone too.
     expect(machineFit({ cpus: 2, memoryMiB: 8192, diskGiB: 20, poolId: "pool_big_id" }, [])).toEqual({ kind: "gone", poolId: "pool_big_id" });
     expect(machineFit({ cpus: 2, memoryMiB: 8192, diskGiB: 20, poolId: "pool_big_id" }, null)).toEqual({ kind: "unknown", pool: null, reason: "no_pool" });
+    expect(poolGone("pool_deleted", POOLS)).toBe(true);
+    expect(poolGone("pool_big_id", [])).toBe(true);
+    expect(poolGone("pool_big_id", POOLS)).toBe(false);
+    expect(poolGone("pool_big_id", null)).toBe(false);
+    expect(poolGone(null, [])).toBe(false);
   });
 
   test("disk counts only where the host reserves it", () => {
