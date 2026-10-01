@@ -357,6 +357,16 @@ def _sizes(client: ApiClient) -> dict:
     return {s["name"]: s for s in client.get("/v1/machines/sizes").json()["sizes"]}
 
 
+def _pool_id(client: ApiClient, name: str) -> str:
+    """A lux pool's id, as the fake lux lists it now."""
+    return next(p["id"] for p in client.get("/v1/machines/pools").json()["pools"] if p["name"] == name)
+
+
+def _fake_lux(env, method: str, path: str, body: dict | None = None) -> requests.Response:
+    """Change the fake lux's pools as lux's own API would (POST /v1/pools, DELETE /v1/pools/{name})."""
+    return requests.request(method, env.fake_lux_url + path, json=body, headers={"authorization": f"Bearer {env.lux_key}"}, timeout=10)
+
+
 def _invite_member(admin: ApiClient, env, name: str) -> tuple[ApiClient, str]:
     resp = admin.post("/v1/people", {"name": name, "email": f"{name.lower()}-{os.urandom(2).hex()}@acme.dev", "role": "member"})
     assert resp.status_code == 201, resp.text
@@ -414,7 +424,8 @@ def test_an_admin_adds_a_size_in_half_steps_and_one_off_step_or_too_big_is_refus
     expect(page.get_by_role("dialog")).to_contain_text("Most a big host has: 64 GiB")
     expect(dialog.get_by_role("button", name="Add size", exact=True)).to_be_disabled()
     # The API refuses it too, whatever a browser sends.
-    too_big = client.post("/v1/machines/sizes", {"name": "Huge", "cpus": 16, "memoryMiB": 72 * 1024, "diskGiB": 200, "pool": "big"})
+    big = _pool_id(client, "big")
+    too_big = client.post("/v1/machines/sizes", {"name": "Huge", "cpus": 16, "memoryMiB": 72 * 1024, "diskGiB": 200, "poolId": big})
     assert too_big.status_code == 422 and "72 GiB memory (it offers 64)" in too_big.json()["error"]["message"]
 
     page.get_by_test_id("machine-size-memory").fill("22.5")
@@ -423,8 +434,12 @@ def test_an_admin_adds_a_size_in_half_steps_and_one_off_step_or_too_big_is_refus
     row = machines.locator("[data-size='Large (Java)']")
     expect(row).to_contain_text("6.5 CPUs")
     expect(row).to_contain_text("22.5 GiB")
+    # Its pool by lux's current name.
+    expect(row).to_contain_text("big")
     size = _sizes(client)["Large (Java)"]
-    assert (size["cpus"], size["memoryMiB"], size["diskGiB"], size["pool"]) == (6.5, 23040, 120, "big")
+    # Stored by lux's id, not its name.
+    assert (size["cpus"], size["memoryMiB"], size["diskGiB"], size["poolId"], size["poolName"]) == (6.5, 23040, 120, big, "big")
+    assert big.startswith("pool_") and big != "big"
     # The menu counts it at once: Standard and Large (Java).
     expect(page.locator("[data-settings-nav='machines']")).to_have_text(re.compile(r"^Machines\s*2$"))
     assert console_errors == []
@@ -434,7 +449,8 @@ def test_an_admin_adds_a_size_in_half_steps_and_one_off_step_or_too_big_is_refus
 def test_a_size_is_set_on_the_implementer_overridden_in_a_project_and_reset(
     page: Page, web_url: str, client: ApiClient, org: dict, project: dict, console_errors: list
 ):
-    for body in ({"name": "Large", "cpus": 8, "memoryMiB": 16384, "diskGiB": 80}, {"name": "XL", "cpus": 16, "memoryMiB": 49152, "diskGiB": 200, "pool": "big"}):
+    for body in ({"name": "Large", "cpus": 8, "memoryMiB": 16384, "diskGiB": 80},
+                 {"name": "XL", "cpus": 16, "memoryMiB": 49152, "diskGiB": 200, "poolId": _pool_id(client, "big")}):
         assert client.post("/v1/machines/sizes", body).status_code == 201
     sizes = _sizes(client)
     org_name = client.get("/v1/settings/organization").json()["organization"]["name"]
@@ -523,12 +539,14 @@ def test_a_member_sees_machines_read_only(page: Page, web_url: str, client: ApiC
 
 def test_a_phase_run_goes_to_lux_on_its_roles_size_and_pool(client: ApiClient, env, owner_dsn: str):
     """The scripted agent runs the implementer; the spec the fake lux was
-    sent carries the size as resources and its pool, and the Run records it."""
+    sent carries the size as resources and its pool by lux's id, and the
+    Run records it with the pool's name then."""
     project = client.create_project(
         name="Sized", slug=f"sized-{os.urandom(3).hex()}", runtimeImage="dude-runtime:test",
         agentModels={r: {"model": "fake/scripted"} for r in ("implementer", "reviewer", "simplifier")},
     )
-    size = client.post("/v1/machines/sizes", {"name": "Half", "cpus": 6.5, "memoryMiB": 23040, "diskGiB": 120, "pool": "big"}).json()
+    big = _pool_id(client, "big")
+    size = client.post("/v1/machines/sizes", {"name": "Half", "cpus": 6.5, "memoryMiB": 23040, "diskGiB": 120, "poolId": big}).json()
     half = next(s for s in size["sizes"] if s["name"] == "Half")
     client.patch(f"/v1/projects/{project['id']}/settings", {"roles": {"implementer": {"machineSize": half["id"]}}})
 
@@ -542,6 +560,45 @@ def test_a_phase_run_goes_to_lux_on_its_roles_size_and_pool(client: ApiClient, e
     run = wait_until(submitted, timeout=60, message="the implementer never reached lux")
     spec = requests.get(f"{env.fake_lux_url}/v1/runs/{run['lux_run_id']}", headers={"authorization": f"Bearer {env.lux_key}"}, timeout=10).json()["spec"]
     assert spec["resources"] == {"cpus": 6.5, "memory": 23040 * 1024 * 1024, "disk": 120 * 1024 ** 3}
-    assert spec["placement"] == {"pool": "big"}
+    assert spec["placement"] == {"poolId": big}
     assert run["machine"]["name"] == "Half" and run["machine"]["from"] == "project"
+    assert (run["machine"]["poolId"], run["machine"]["pool"]) == (big, "big")
     assert client.get(f"/v1/runs/{run['id']}").json()["machine"]["cpus"] == 6.5
+
+
+@pytest.mark.ui
+def test_a_size_whose_pool_vanished_from_lux_says_so_and_asks_for_another(
+    page: Page, web_url: str, client: ApiClient, org: dict, env, console_errors: list
+):
+    # A pool of its own, so removing it from the fake lux leaves every other test's pools alone.
+    scratch = f"scratch-{os.urandom(3).hex()}"
+    made = _fake_lux(env, "POST", "/v1/pools", {"name": scratch, "provider": "static"})
+    assert made.status_code == 200, made.text
+    pool_id = made.json()["id"]
+    added = client.post("/v1/machines/sizes", {"name": "Scratch", "cpus": 2, "memoryMiB": 4096, "diskGiB": 20, "poolId": pool_id})
+    assert added.status_code == 201, added.text
+    assert _fake_lux(env, "DELETE", f"/v1/pools/{scratch}").status_code == 204
+    assert _sizes(client)["Scratch"]["poolName"] is None
+
+    _sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/org/settings/machines")
+    machines = page.get_by_test_id("machines-page")
+    row = machines.locator("[data-size='Scratch']")
+    expect(row.locator("[data-pool-gone]")).to_have_text("Pool gone from lux")
+    expect(row).to_contain_text("—")
+
+    # Edit says so, and Save is refused until another pool is chosen.
+    machines.get_by_role("button", name="Actions for Scratch").click()
+    page.get_by_role("menuitem", name="Edit").click()
+    expect(page.get_by_test_id("machine-pool-gone")).to_contain_text("Its pool is gone from lux.")
+    save = page.get_by_test_id("machine-size-save")
+    expect(save).to_be_disabled()
+    _pick(page, page.get_by_test_id("machine-size-pool"), "big — EC2 · c7a.8xlarge · 32 CPUs · 64 GiB · 380 GiB")
+    expect(page.get_by_test_id("machine-pool-gone")).to_have_count(0)
+    expect(save).to_be_enabled()
+    save.click()
+    expect(toast(page, "Scratch saved")).to_be_visible()
+    expect(row.locator("[data-pool-gone]")).to_have_count(0)
+    expect(row).to_contain_text("big")
+    assert _sizes(client)["Scratch"]["poolId"] == _pool_id(client, "big")
+    assert console_errors == []

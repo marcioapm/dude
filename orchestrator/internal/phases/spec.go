@@ -1,6 +1,7 @@
 package phases
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -125,15 +126,36 @@ type specInput struct {
 }
 
 // MachineSpec puts a machine size on a lux spec: its resources, memory and
-// disk in bytes, and its pool when it names one (none is the tenant's
-// default pool in lux). A nil machine leaves lux's defaults.
+// disk in bytes, and its pool by lux's id when it names one (none is the
+// tenant's default pool in lux). A nil machine leaves lux's defaults.
 func MachineSpec(m *delivery.Machine, spec *lux.Spec) {
 	if m == nil {
 		return
 	}
 	spec.Resources = &lux.Resources{CPUs: m.CPUs, Memory: m.MemoryMiB << 20, Disk: m.DiskGiB << 30}
-	if m.Pool != nil && *m.Pool != "" {
-		spec.Placement = &lux.PlacementSpec{Pool: *m.Pool}
+	if m.PoolID != nil && *m.PoolID != "" {
+		spec.Placement = &lux.PlacementSpec{PoolID: *m.PoolID}
+	}
+}
+
+// NamePool records on m its pool's name in lux now, for runs.machine, so the
+// Run's history says where it ran after the pool is renamed. Best effort: a
+// pool lux does not list, or lux not answering, leaves it unnamed, and the
+// submit that follows is what decides.
+func NamePool(ctx context.Context, c lux.Client, m *delivery.Machine) {
+	if m == nil || m.PoolID == nil {
+		return
+	}
+	pools, err := c.Pools(ctx)
+	if err != nil {
+		return
+	}
+	for _, p := range pools {
+		if p.ID == *m.PoolID {
+			name := p.Name
+			m.Pool = &name
+			return
+		}
 	}
 }
 

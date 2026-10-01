@@ -1009,7 +1009,8 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
   admins change sizes and that a change reaches sessions that start after
   it. Sizes are a `Table` — the name with a Default badge, CPUs, memory
   and disk right-aligned and tabular, the pool in mono ("Default pool" for
-  none), a `FitBar`, who uses it (faces and words), and a `RowMenu` (Edit,
+  none; a pool the runtime no longer has is a danger `Badge` with the
+  warning glyph, its fit "—"), a `FitBar`, who uses it (faces and words), and a `RowMenu` (Edit,
   Make default, Remove…; Remove disabled with its reason on the default).
   lux's pools are a second `Table` with a "read … ago" meta line; then the
   memory explainer, a `Callout`-shaped box around a `ProportionBar`. On a

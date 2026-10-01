@@ -6,10 +6,10 @@ import (
 )
 
 func TestASizeIsTheOneNamedElseTheDefault(t *testing.T) {
-	big := "big"
+	big := "pool_b8r2n5w1c7z3"
 	sizes := Sizes{Default: "std", ByID: map[string]Machine{
 		"std":   {SizeID: "std", Name: "Standard", CPUs: 2, MemoryMiB: 8192, DiskGiB: 20},
-		"large": {SizeID: "large", Name: "Large", CPUs: 8, MemoryMiB: 16384, DiskGiB: 80, Pool: &big},
+		"large": {SizeID: "large", Name: "Large", CPUs: 8, MemoryMiB: 16384, DiskGiB: 80, PoolID: &big},
 	}}
 	org := json.RawMessage(`{"implementer":{"machineSize":"large"},"reviewer":{"machineSize":"gone"}}`)
 	for _, tc := range []struct {

@@ -11,15 +11,18 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
+// The fake lux's pool "big" (fakelux.DefaultPools), by lux's id.
+const bigPool = "pool_b8r2n5w1c7z3"
+
 // Each phase Run goes to lux on the size its role names — the project's,
 // the organization's, the fixer following the implementer, else the
-// default — with its pool when the size names one, and records what it
-// ran on.
+// default — with its pool's id when the size names one, and records what
+// it ran on, with the pool's name in lux then.
 func TestAPhaseRunsOnItsRolesMachineSizeAndRecordsIt(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
-	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool)
-		VALUES ('msz_large', $1, 'Large', 6.5, 23040, 120, 'big'), ('msz_small', $1, 'Small', 1.5, 3584, 20, NULL)`, w.org)
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool_id)
+		VALUES ('msz_large', $1, 'Large', 6.5, 23040, 120, $2), ('msz_small', $1, 'Small', 1.5, 3584, 20, NULL)`, w.org, bigPool)
 	mustExec(t, w.owner, `UPDATE organizations SET default_agent_models = default_agent_models || '{"implementer":{"machineSize":"msz_small"}}'::jsonb
 		WHERE id = $1`, w.org)
 	mustExec(t, w.owner, `UPDATE projects SET agent_models = jsonb_set(agent_models, '{implementer,machineSize}', '"msz_large"') WHERE id = $1`, w.project)
@@ -34,8 +37,8 @@ func TestAPhaseRunsOnItsRolesMachineSizeAndRecordsIt(t *testing.T) {
 	if impl.Resources == nil || *impl.Resources != (lux.Resources{CPUs: 6.5, Memory: 23040 << 20, Disk: 120 << 30}) {
 		t.Errorf("implementer resources = %+v, want the project's Large", impl.Resources)
 	}
-	if impl.Placement == nil || impl.Placement.Pool != "big" {
-		t.Errorf("implementer placement = %+v, want pool big", impl.Placement)
+	if impl.Placement == nil || *impl.Placement != (lux.PlacementSpec{PoolID: bigPool}) {
+		t.Errorf("implementer placement = %+v, want big's id and no name", impl.Placement)
 	}
 	// The reviewer names none: the default size, Standard, in the default pool.
 	if review.Resources == nil || *review.Resources != (lux.Resources{CPUs: 2, Memory: 8 << 30, Disk: 20 << 30}) || review.Placement != nil {
@@ -48,7 +51,8 @@ func TestAPhaseRunsOnItsRolesMachineSizeAndRecordsIt(t *testing.T) {
 	}
 	var machine map[string]any
 	_ = json.Unmarshal(raw, &machine)
-	want := map[string]any{"sizeId": "msz_large", "name": "Large", "cpus": 6.5, "memoryMiB": 23040.0, "diskGiB": 120.0, "pool": "big", "from": "project"}
+	want := map[string]any{"sizeId": "msz_large", "name": "Large", "cpus": 6.5, "memoryMiB": 23040.0, "diskGiB": 120.0,
+		"poolId": bigPool, "pool": "big", "from": "project"}
 	for k, v := range want {
 		if machine[k] != v {
 			t.Errorf("runs.machine[%s] = %v, want %v (%s)", k, machine[k], v, raw)
@@ -63,8 +67,8 @@ func TestAPhaseRunsOnItsRolesMachineSizeAndRecordsIt(t *testing.T) {
 func TestAResumedRunKeepsTheSizeItStartedOn(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
-	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool)
-		VALUES ('msz_large', $1, 'Large', 6.5, 23040, 120, 'big')`, w.org)
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool_id)
+		VALUES ('msz_large', $1, 'Large', 6.5, 23040, 120, $2)`, w.org, bigPool)
 	mustExec(t, w.owner, `UPDATE projects SET agent_models = jsonb_set(agent_models, '{implementer,machineSize}', '"msz_large"') WHERE id = $1`, w.project)
 	w.lux.Decide = hang
 	wi := w.task()
@@ -104,7 +108,7 @@ func TestAResumedRunKeepsTheSizeItStartedOn(t *testing.T) {
 	if name != "Large" || from != "project" || cpus != 6.5 {
 		t.Errorf("after the size changed and the Run resumed it says %s from %s, %g CPUs; want Large from project, 6.5", name, from, cpus)
 	}
-	if spec := submitted(t, r); spec.Resources == nil || spec.Resources.CPUs != 6.5 || spec.Placement == nil || spec.Placement.Pool != "big" {
+	if spec := submitted(t, r); spec.Resources == nil || spec.Resources.CPUs != 6.5 || spec.Placement == nil || spec.Placement.PoolID != bigPool {
 		t.Errorf("lux's spec for the resumed Run: resources %+v placement %+v, want Large's", spec.Resources, spec.Placement)
 	}
 }
@@ -150,11 +154,11 @@ func TestTheFixerRunsOnTheImplementersSize(t *testing.T) {
 }
 
 // A branch preview runs on the size its project's preview settings name,
-// with its pool, and records it.
+// in its pool by id, and records it.
 func TestABranchPreviewRunsOnItsProjectsPreviewSize(t *testing.T) {
 	w := newWorld(t)
-	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool)
-		VALUES ('msz_xl', $1, 'XL', 16, 49152, 200, 'big')`, w.org)
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool_id)
+		VALUES ('msz_xl', $1, 'XL', 16, 49152, 200, $2)`, w.org, bigPool)
 	w.recipe("web", 3000, "npm run dev", "", nil, true)
 	mustExec(t, w.owner, `UPDATE projects SET preview_settings = '{"machineSize":"msz_xl"}' WHERE id = $1`, w.project)
 	wi := w.task()
@@ -168,10 +172,10 @@ func TestABranchPreviewRunsOnItsProjectsPreviewSize(t *testing.T) {
 	if spec.Resources == nil || *spec.Resources != (lux.Resources{CPUs: 16, Memory: 48 << 30, Disk: 200 << 30}) {
 		t.Errorf("preview resources = %+v", spec.Resources)
 	}
-	if spec.Placement == nil || spec.Placement.Pool != "big" {
+	if spec.Placement == nil || *spec.Placement != (lux.PlacementSpec{PoolID: bigPool}) {
 		t.Errorf("preview placement = %+v", spec.Placement)
 	}
-	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND machine->>'name' = 'XL'`, runID); n != 1 {
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND machine->>'name' = 'XL' AND machine->>'pool' = 'big'`, runID); n != 1 {
 		t.Errorf("the preview did not record its size:\n%s", w.describeRuns())
 	}
 }
@@ -186,6 +190,7 @@ func TestLuxsPoolsAreServedToTheBackend(t *testing.T) {
 	}
 	var got struct {
 		Pools []struct {
+			ID        string        `json:"id"`
 			Name      string        `json:"name"`
 			IsDefault bool          `json:"isDefault"`
 			HostSize  *lux.HostSize `json:"hostSize"`
@@ -195,7 +200,8 @@ func TestLuxsPoolsAreServedToTheBackend(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Problem != nil || len(got.Pools) != 3 || !got.Pools[0].IsDefault || got.Pools[0].HostSize == nil || got.Pools[0].HostSize.CPUs != 16 {
+	if got.Problem != nil || len(got.Pools) != 3 || !got.Pools[0].IsDefault || got.Pools[0].HostSize == nil || got.Pools[0].HostSize.CPUs != 16 ||
+		got.Pools[1].ID != bigPool || got.Pools[1].Name != "big" {
 		t.Errorf("pools = %s", body)
 	}
 

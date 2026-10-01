@@ -59,7 +59,9 @@ import {
   draftProblems,
   fitWords,
   hostSpec,
+  knownPools,
   poolKnownFrom,
+  poolLabel,
   poolMachines,
   poolOptionLabel,
   STEP_HINT,
@@ -130,6 +132,7 @@ export function MachinesPage({ client, orgName, sizes, problem, setSizes }: {
   if (!sizes || problem) return <div className="centered">{problem ? <Callout tone="danger">{problem}</Callout> : <Spinner label="Loading…" />}</div>;
   const canEdit = sizes.canEdit;
   const poolList = pools?.pools ?? [];
+  const known = knownPools(pools);
   const defaultSize = sizes.sizes.find((s) => s.isDefault);
 
   return (
@@ -158,7 +161,8 @@ export function MachinesPage({ client, orgName, sizes, problem, setSizes }: {
           </THead>
           <TBody>
             {sizes.sizes.map((s) => {
-              const fit = fitWords(machineFit(s, poolList));
+              const sized = machineFit(s, known);
+              const fit = fitWords(sized);
               return (
                 <Tr key={s.id} data-size={s.name}>
                   <Td fit>
@@ -168,7 +172,11 @@ export function MachinesPage({ client, orgName, sizes, problem, setSizes }: {
                   <Td align="right" fit className="ds-tnum">{s.cpus} CPUs</Td>
                   <Td align="right" fit className="ds-tnum">{gib(s.memoryMiB * 1024 * 1024)} GiB</Td>
                   <Td align="right" fit className="ds-tnum">{s.diskGiB} GiB</Td>
-                  <Td fit hideWhenNarrow mono={s.pool !== null} muted={s.pool === null}>{s.pool ?? "Default pool"}</Td>
+                  {sized.kind === "gone" ? (
+                    <Td fit hideWhenNarrow data-pool-gone><Badge tone="danger" size="sm" icon="warning">Pool gone from lux</Badge></Td>
+                  ) : (
+                    <Td fit hideWhenNarrow mono={s.poolId !== null} muted={s.poolId === null}>{poolLabel(s, known)}</Td>
+                  )}
                   <Td fit hideWhenNarrow><FitBar share={fit.share}>{fit.text}</FitBar></Td>
                   <Td wrap hideWhenNarrow><UsedBy faces={faces(s.usedBy)}>{usedByWords(s, s.usedBy)}</UsedBy></Td>
                   {canEdit ? (
@@ -209,7 +217,7 @@ export function MachinesPage({ client, orgName, sizes, problem, setSizes }: {
             </THead>
             <TBody>
               {poolList.map((p) => (
-                <Tr key={p.name} data-pool={p.name}>
+                <Tr key={p.id} data-pool={p.name}>
                   <Td fit>
                     <span className="ds-mono">{p.name}</span>{" "}
                     {p.isDefault ? <Badge size="sm">{orgName}’s default</Badge> : null}{" "}
@@ -275,10 +283,12 @@ function SizeDialog({ client, orgName, existing, pools, defaultName, onClose, on
   const { busy, problem, save } = useSave();
   const set = <K extends keyof SizeDraft>(k: K, v: SizeDraft[K]) => setDraft((d) => ({ ...d, [k]: v }));
   const problems = draftProblems(draft);
-  const poolList = pools?.pools ?? [];
+  const known = knownPools(pools);
   const input = asInput(draft);
-  const fit = Object.keys(problems).some((k) => k !== "name") ? null : machineFit(input, poolList);
+  const fit = Object.keys(problems).some((k) => k !== "name") ? null : machineFit(input, known);
   const tooBig = fit?.kind === "too_big";
+  // The draft names a pool lux no longer lists: saving would be refused.
+  const poolGone = draft.poolId !== null && known !== null && !known.some((p) => p.id === draft.poolId);
   // Beside the field that does not fit, what one host has of it.
   const over = (what: "cpus" | "memory" | "disk") => {
     if (fit?.kind !== "too_big") return undefined;
@@ -287,7 +297,7 @@ function SizeDialog({ client, orgName, existing, pools, defaultName, onClose, on
     return what === "cpus" ? `Most a ${fit.pool.name} host has: ${o.offers}` : `Most a ${fit.pool.name} host has: ${gib(o.offers)} GiB`;
   };
   const users = existing?.usedBy ?? [];
-  const valid = Object.keys(problems).length === 0 && !tooBig;
+  const valid = Object.keys(problems).length === 0 && !tooBig && !poolGone;
 
   return (
     <FormDialog open onOpenChange={(open) => !open && onClose()} size="md"
@@ -315,8 +325,14 @@ function SizeDialog({ client, orgName, existing, pools, defaultName, onClose, on
         <NumberInput label="Disk" unit="GiB" value={draft.diskGiB} step={5} min={5} onValueChange={(v) => set("diskGiB", v)}
           hint={STEP_HINT.disk} error={problems.disk ?? over("disk")} data-testid="machine-size-disk" />
       </FormRow>
-      <PoolField orgName={orgName} pools={pools} value={draft.pool} onChange={(v) => set("pool", v)} />
-      {fit ? <FitCallout fit={fit} memoryGiB={draft.memoryGiB ?? 0} /> : null}
+      <PoolField orgName={orgName} pools={pools} value={draft.poolId} currentName={existing?.poolName ?? null} gone={poolGone}
+        onChange={(v) => set("poolId", v)} />
+      {poolGone ? (
+        <Callout tone="danger" data-testid="machine-pool-gone">
+          <b>Its pool is gone from lux.</b> Sessions on {existing?.name ?? "this size"} fail until it runs in another: choose one, or {orgName}’s default pool.
+        </Callout>
+      ) : null}
+      {fit && fit.kind !== "gone" ? <FitCallout fit={fit} memoryGiB={draft.memoryGiB ?? 0} /> : null}
       {existing?.isDefault ? (
         <Checkbox checked disabled label="The default" description="Make another size the default to change this." />
       ) : (
@@ -327,24 +343,40 @@ function SizeDialog({ client, orgName, existing, pools, defaultName, onClose, on
   );
 }
 
-function PoolField({ orgName, pools, value, onChange }: { orgName: string; pools: MachinePools | null; value: string | null; onChange: (v: string | null) => void }) {
+/**
+ * The pool picker: its value is lux's id for the pool, its label lux's
+ * current name. A pool the size names that lux no longer lists stays the
+ * value, labelled as gone, until another is chosen.
+ */
+function PoolField({ orgName, pools, value, currentName, gone, onChange }: {
+  orgName: string;
+  pools: MachinePools | null;
+  value: string | null;
+  /** The name the API last read for `value`, for when lux's list is not to hand. */
+  currentName: string | null;
+  gone: boolean;
+  onChange: (poolId: string | null) => void;
+}) {
   const list = pools?.pools ?? [];
-  const known = value === null || list.some((p) => p.name === value);
+  const listed = value === null || list.some((p) => p.id === value);
   const options = [
-    // None named is the pool lux calls the default; when lux says which, it is that pool's row.
+    // None named is the pool lux calls the default; when lux says which, it is that pool's row
+    // (unless the size names that pool by its id).
     ...(list.some((p) => p.isDefault) ? [] : [{ value: DEFAULT_POOL, label: `${orgName}’s default pool` }]),
-    ...list.map((p) => ({ value: p.isDefault ? DEFAULT_POOL : p.name, label: poolOptionLabel(p, orgName) })),
-    ...(known ? [] : [{ value: value!, label: `${value} — not among lux’s pools now` }]),
+    ...list.map((p) => ({ value: p.isDefault && p.id !== value ? DEFAULT_POOL : p.id, label: poolOptionLabel(p, orgName) })),
+    ...(listed ? [] : [{ value: value!, label: gone ? "Pool gone from lux" : (currentName ?? value!), disabled: gone }]),
   ];
+  let hint = `Where lux runs sessions of this size. The list is lux’s: the pools ${orgName}’s key can use.`;
+  if (pools?.problem) hint = `lux could not be read (${pools.problem}): a size in a named pool can’t be saved until it can.`;
+  else if (gone) hint = "lux no longer has this pool. Choose another.";
   return (
     <Select label="Pool" aria-label="Pool" value={value ?? DEFAULT_POOL} options={options}
-      onValueChange={(v) => onChange(v === DEFAULT_POOL ? null : v)} data-testid="machine-size-pool"
-      hint={pools?.problem ? `lux could not be read (${pools.problem}): the pool is sent as it is.` : `Where lux runs sessions of this size. The list is lux’s: the pools ${orgName}’s key can use.`} />
+      onValueChange={(v) => onChange(v === DEFAULT_POOL ? null : v)} data-testid="machine-size-pool" hint={hint} />
   );
 }
 
 /** Whether the size fits one host of its pool, and what a session gets. */
-function FitCallout({ fit, memoryGiB }: { fit: ReturnType<typeof machineFit>; memoryGiB: number }) {
+function FitCallout({ fit, memoryGiB }: { fit: Exclude<ReturnType<typeof machineFit>, { kind: "gone" }>; memoryGiB: number }) {
   const hint = (
     <SettingsMeta>
       A session gets a little less than {memoryGiB} GiB: Linux keeps some of every machine, and each run on it gives up the same share.
@@ -456,7 +488,8 @@ export const INHERIT = "__inherit__";
  * its spec as muted meta. The footer says where sizes are managed.
  */
 export function MachineSelect({ sizes, value, inherited, inheritLabel, inheritDescription, footer, disabled, onChange, id, testId }: {
-  sizes: readonly MachineSize[];
+  /** The organisation's sizes, each with lux's current name for its pool when it names one. */
+  sizes: readonly MachineSizeWithUse[];
   /** The size set at this layer; null: none, so `inherited`. */
   value: string | null;
   /** What naming none resolves to here. */
@@ -471,7 +504,7 @@ export function MachineSelect({ sizes, value, inherited, inheritLabel, inheritDe
 }) {
   const options = [
     { value: INHERIT, label: inheritLabel, meta: inherited ? `${inherited.name} · ${machineSpec(inherited)}` : undefined, description: inheritDescription },
-    ...sizes.map((s) => ({ value: s.id, label: s.name, meta: `${machineSpec(s)}${s.pool ? ` · ${s.pool}` : ""}` })),
+    ...sizes.map((s) => ({ value: s.id, label: s.name, meta: `${machineSpec(s)}${s.poolName ? ` · ${s.poolName}` : ""}` })),
   ];
   return (
     <Select id={id} aria-label="Machine" value={value !== null && sizes.some((s) => s.id === value) ? value : INHERIT} disabled={disabled}

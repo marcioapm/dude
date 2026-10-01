@@ -42,9 +42,9 @@ afterAll(async () => {
 });
 
 const sizes = (org: string) =>
-  db`SELECT name, cpus::float8 AS cpus, memory_mib AS "memoryMiB", disk_gib AS "diskGiB", pool, is_default AS "isDefault"
+  db`SELECT name, cpus::float8 AS cpus, memory_mib AS "memoryMiB", disk_gib AS "diskGiB", pool_id AS "poolId", is_default AS "isDefault"
      FROM machine_sizes WHERE organization_id = ${org}`;
-const STANDARD = { name: "Standard", cpus: 2, memoryMiB: 8192, diskGiB: 20, pool: null, isDefault: true };
+const STANDARD = { name: "Standard", cpus: 2, memoryMiB: 8192, diskGiB: 20, poolId: null, isDefault: true };
 
 describe("seeding", () => {
   test("an organization from before the migration has Standard, as its default", async () => {
@@ -60,18 +60,18 @@ describe("seeding", () => {
 describe("the database refuses what the API would", () => {
   /** The error inserting a size raises, or "" when it is taken. */
   const insert = async (id: string, over: Record<string, unknown> = {}): Promise<string> => {
-    const s = { name: id, cpus: 4, memory_mib: 8192, disk_gib: 40, pool: null, is_default: false, ...over };
+    const s = { name: id, cpus: 4, memory_mib: 8192, disk_gib: 40, pool_id: null, is_default: false, ...over };
     try {
-      await db`INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool, is_default)
-               VALUES (${id}, 'org_before', ${s.name}, ${s.cpus}, ${s.memory_mib}, ${s.disk_gib}, ${s.pool}, ${s.is_default})`;
+      await db`INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool_id, is_default)
+               VALUES (${id}, 'org_before', ${s.name}, ${s.cpus}, ${s.memory_mib}, ${s.disk_gib}, ${s.pool_id}, ${s.is_default})`;
       return "";
     } catch (err) {
       return String(err);
     }
   };
 
-  test("half steps are sizes", async () => {
-    expect(await insert("half", { cpus: 6.5, memory_mib: 23040, disk_gib: 125, pool: "big" })).toBe("");
+  test("half steps are sizes, in a pool by lux's id", async () => {
+    expect(await insert("half", { cpus: 6.5, memory_mib: 23040, disk_gib: 125, pool_id: "pool_b8r2n5w1c7z3" })).toBe("");
   });
 
   test("the most of each is a size", async () => {
@@ -92,7 +92,9 @@ describe("the database refuses what the API would", () => {
     ["too much disk", { disk_gib: 20005 }],
     ["an empty name", { name: "" }],
     ["a name over 40", { name: "x".repeat(41) }],
-    ["a pool lux would not name", { pool: "Big Pool" }],
+    ["a pool's name for its id", { pool_id: "big" }],
+    ["an id with no body", { pool_id: "pool_" }],
+    ["an id with a space", { pool_id: "pool_a b" }],
   ] as const) {
     test(`${what}`, async () => {
       expect(await insert(`bad_${what.replaceAll(" ", "_")}`, over)).toMatch(/check constraint/);

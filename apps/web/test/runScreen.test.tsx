@@ -89,7 +89,7 @@ async function machineTip(page: HTMLElement): Promise<string> {
   return tip.textContent ?? "";
 }
 
-const LARGE: NonNullable<RunDetail["machine"]> = { sizeId: "msz_large", name: "Large", cpus: 8, memoryMiB: 16384, diskGiB: 80, pool: null, from: "organization" };
+const LARGE: NonNullable<RunDetail["machine"]> = { sizeId: "msz_large", name: "Large", cpus: 8, memoryMiB: 16384, diskGiB: 80, poolId: null, pool: null, from: "organization" };
 
 describe("the memory the Run's container got", () => {
   test("while it runs, from lux's answer", async () => {

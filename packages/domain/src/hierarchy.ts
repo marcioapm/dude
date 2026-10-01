@@ -425,6 +425,9 @@ export const runSchema = z.object({
       cpus: z.number(),
       memoryMiB: z.number(),
       diskGiB: z.number(),
+      /** The lux pool's id; null: the organisation's default pool. */
+      poolId: z.string().nullable(),
+      /** The pool's name in lux when the Run was submitted. */
       pool: z.string().nullable(),
       from: z.string().optional(),
       /** The memory limit lux gave its container, in bytes, when lux reports one. */
