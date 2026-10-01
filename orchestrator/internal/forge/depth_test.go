@@ -68,16 +68,11 @@ func TestMergeableReadsGitHubsTwoFieldsAndTheDistance(t *testing.T) {
 	}
 }
 
-// A question after an approval is still an approval; asked again, a
-// reviewer is listed as requested.
+// A question after an approval is still an approval; one asked who has not
+// answered is listed as requested, and one asked again keeps their word,
+// marked as owing another look.
 func TestEachReviewersLatestVerdict(t *testing.T) {
-	user := func(l string) *struct {
-		Login string `json:"login"`
-	} {
-		return &struct {
-			Login string `json:"login"`
-		}{l}
-	}
+	user := func(l string) *ghUser { return &ghUser{Login: l, AvatarURL: "https://avatars/" + l} }
 	at := "2026-09-28T10:00:00Z"
 	got := latestReviews([]ghReview{
 		{User: user("cy"), State: "CHANGES_REQUESTED", SubmittedAt: &at},
@@ -85,15 +80,20 @@ func TestEachReviewersLatestVerdict(t *testing.T) {
 		{User: user("ana"), State: "COMMENTED", SubmittedAt: &at},
 		{User: user("cy"), State: "APPROVED", SubmittedAt: &at},
 		{User: user("gus"), State: "COMMENTED", SubmittedAt: &at},
-	}, []struct {
-		Login string `json:"login"`
-	}{{"bo"}})
+	}, []ghUser{{Login: "bo"}, {Login: "cy"}})
 	var words []string
 	for _, r := range got {
-		words = append(words, r.Login+":"+r.State)
+		w := r.Login + ":" + r.State
+		if r.Rerequested {
+			w += "+again"
+		}
+		words = append(words, w)
 	}
-	if strings.Join(words, " ") != "cy:APPROVED ana:APPROVED gus:COMMENTED bo:REQUESTED" {
+	if strings.Join(words, " ") != "cy:APPROVED+again ana:APPROVED gus:COMMENTED bo:REQUESTED" {
 		t.Errorf("reviews = %v", words)
+	}
+	if got[0].AvatarURL != "https://avatars/cy" {
+		t.Errorf("avatar = %q", got[0].AvatarURL)
 	}
 }
 

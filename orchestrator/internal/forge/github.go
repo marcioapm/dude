@@ -137,6 +137,12 @@ type Review struct {
 	Login       string  `json:"login"`
 	State       string  `json:"state"`
 	SubmittedAt *string `json:"submittedAt"`
+	AvatarURL   string  `json:"avatarUrl,omitempty"`
+	// A team asked for a review ("org/slug"), not a person.
+	Team bool `json:"team,omitempty"`
+	// Asked again since this verdict: it stands on GitHub, but they owe
+	// another look.
+	Rerequested bool `json:"rerequested,omitempty"`
 }
 
 // Mergeable states.
@@ -450,9 +456,15 @@ type ghPull struct {
 	Base struct {
 		Ref string `json:"ref"`
 	} `json:"base"`
-	RequestedReviewers []struct {
-		Login string `json:"login"`
-	} `json:"requested_reviewers"`
+	RequestedReviewers []ghUser `json:"requested_reviewers"`
+	RequestedTeams     []struct {
+		Slug string `json:"slug"`
+	} `json:"requested_teams"`
+}
+
+type ghUser struct {
+	Login     string `json:"login"`
+	AvatarURL string `json:"avatar_url"`
 }
 
 func (p ghPull) ref() PullRequestRef {
@@ -515,6 +527,10 @@ func (g *GitHub) PullRequest(ctx context.Context, slug string, number int) (Stat
 		return Status{}, err
 	}
 	st.Review, st.Reviews, st.reviews = reviewState(reviews), latestReviews(reviews, p.RequestedReviewers), reviews
+	owner, _, _ := strings.Cut(slug, "/")
+	for _, t := range p.RequestedTeams {
+		st.Reviews = append(st.Reviews, Review{Login: owner + "/" + t.Slug, State: "REQUESTED", Team: true})
+	}
 	if st.State != StateOpen && st.State != StateDraft {
 		return st, nil
 	}
@@ -778,13 +794,11 @@ func worseChecks(a, b string) string {
 }
 
 type ghComment struct {
-	ID        int64  `json:"id"`
-	Body      string `json:"body"`
-	Path      string `json:"path"`
-	CreatedAt string `json:"created_at"`
-	User      *struct {
-		Login string `json:"login"`
-	} `json:"user"`
+	ID        int64   `json:"id"`
+	Body      string  `json:"body"`
+	Path      string  `json:"path"`
+	CreatedAt string  `json:"created_at"`
+	User      *ghUser `json:"user"`
 }
 
 type ghReview struct {
@@ -792,14 +806,10 @@ type ghReview struct {
 	Body        string  `json:"body"`
 	State       string  `json:"state"`
 	SubmittedAt *string `json:"submitted_at"`
-	User        *struct {
-		Login string `json:"login"`
-	} `json:"user"`
+	User        *ghUser `json:"user"`
 }
 
-func login(u *struct {
-	Login string `json:"login"`
-}) string {
+func login(u *ghUser) string {
 	if u == nil {
 		return "unknown"
 	}
@@ -991,10 +1001,12 @@ func (g *GitHub) RerunFailed(ctx context.Context, slug string, checks []Check) (
 	return n, nil
 }
 
-// RequestReviewers asks people for a review on a pull request.
+// RequestReviewers asks people, and teams named "org/slug", for a review
+// on a pull request.
 func (g *GitHub) RequestReviewers(ctx context.Context, slug string, number int, logins []string) error {
+	users, teams := reviewerSlugs(logins)
 	return g.do(ctx, "POST", fmt.Sprintf("/repos/%s/pulls/%d/requested_reviewers", slug, number),
-		map[string]any{"reviewers": logins}, nil)
+		map[string]any{"reviewers": users, "team_reviewers": teams}, nil)
 }
 
 // CheckOutput is what a failed check run says about why: its summary and
@@ -1172,9 +1184,8 @@ func reviewState(reviews []ghReview) string {
 // latestReviews is each reviewer's latest word, oldest first, and those
 // asked for a review who have not given one yet. A COMMENTED review does
 // not replace a verdict: a question after an approval is still an approval.
-func latestReviews(reviews []ghReview, requested []struct {
-	Login string `json:"login"`
-}) []Review {
+// One asked again after reviewing keeps their word, marked Rerequested.
+func latestReviews(reviews []ghReview, requested []ghUser) []Review {
 	var order []string
 	latest := map[string]Review{}
 	for _, r := range reviews {
@@ -1188,16 +1199,22 @@ func latestReviews(reviews []ghReview, requested []struct {
 		if r.State == "COMMENTED" && seen && prior.State != "COMMENTED" {
 			continue
 		}
-		latest[r.User.Login] = Review{Login: r.User.Login, State: r.State, SubmittedAt: r.SubmittedAt}
+		latest[r.User.Login] = Review{Login: r.User.Login, State: r.State, SubmittedAt: r.SubmittedAt, AvatarURL: r.User.AvatarURL}
+	}
+	// Asked again after reviewing: GitHub lists them as requested once more.
+	asked := map[string]bool{}
+	for _, r := range requested {
+		asked[r.Login] = true
 	}
 	out := make([]Review, 0, len(order)+len(requested))
 	for _, l := range order {
-		out = append(out, latest[l])
+		r := latest[l]
+		r.Rerequested = asked[l]
+		out = append(out, r)
 	}
-	// Asked again after reviewing: GitHub lists them as requested once more.
 	for _, r := range requested {
 		if _, seen := latest[r.Login]; !seen {
-			out = append(out, Review{Login: r.Login, State: "REQUESTED"})
+			out = append(out, Review{Login: r.Login, State: "REQUESTED", AvatarURL: r.AvatarURL})
 		}
 	}
 	return out
