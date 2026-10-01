@@ -552,7 +552,16 @@ export const prCheckSchema = z.object({
   diagnostic: z.string().nullable().optional(),
 });
 /** A reviewer's latest word (`PrReview`); `REQUESTED` for one asked who has not answered. */
-export const prReviewSchema = z.object({ login: z.string(), state: z.string(), submittedAt: z.string().nullable().optional() });
+export const prReviewSchema = z.object({
+  login: z.string(),
+  state: z.string(),
+  submittedAt: z.string().nullable().optional(),
+  avatarUrl: z.string().optional(),
+  /** A team asked ("org/slug"), not a person. */
+  team: z.boolean().optional(),
+  /** Asked again since this verdict: it stands, but they owe another look. */
+  rerequested: z.boolean().optional(),
+});
 
 export const pullRequestSchema = z.object({
   id: z.string(),
@@ -650,9 +659,14 @@ export function prCheckDiagnosticReason(code: string): string {
 /** A review as GitHub reports it (`reviews_json`); each person's latest verdict counts. */
 export interface PrReview {
   login: string;
-  /** `APPROVED`, `CHANGES_REQUESTED`, `COMMENTED`, `DISMISSED`. */
+  /** `APPROVED`, `CHANGES_REQUESTED`, `COMMENTED`, `DISMISSED`, or `REQUESTED` for one asked who has not answered. */
   state: string;
   submittedAt?: string | null | undefined;
+  avatarUrl?: string | undefined;
+  /** A team asked ("org/slug"), not a person. */
+  team?: boolean | undefined;
+  /** Asked again since this verdict: it stands on GitHub, but they owe another look. */
+  rerequested?: boolean | undefined;
 }
 
 export type PrMergeable = "clean" | "behind" | "conflicting" | "unknown";

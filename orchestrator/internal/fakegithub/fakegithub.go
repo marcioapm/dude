@@ -432,21 +432,35 @@ func (s *Server) pullJSON(p *Pull) map[string]any {
 	}
 }
 
-// Graphql answers the one query dude sends — a pull request's review
-// threads, Unresolved of them unresolved — for whichever of servers holds
-// the repository the query names.
+// Reviewers is who the fake says can review: the people and teams dude's
+// reviewer picker finds. The first two are GitHub's suggestions.
+var Reviewers = []map[string]any{
+	{"login": "ana", "name": "Ana Ribeiro", "avatarUrl": ""},
+	{"login": "tom", "name": "Tom Okafor", "avatarUrl": ""},
+	{"login": "hanna", "name": "Hanna Lindqvist", "avatarUrl": ""},
+}
+
+// Graphql answers the queries dude sends — a pull request's review
+// threads, Unresolved of them unresolved, and who can review it — for
+// whichever of servers holds the repository the query names.
 func Graphql(servers ...*Server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
+			Query     string `json:"query"`
 			Variables struct {
 				Owner, Name string
 				Number      int
+				Q           string
 			} `json:"variables"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&in)
 		for _, s := range servers {
 			if s.Slug != in.Variables.Owner+"/"+in.Variables.Name {
 				continue
+			}
+			if strings.Contains(in.Query, "suggestedReviewers") {
+				write(w, 200, s.reviewerCandidates(in.Variables.Number, in.Variables.Q))
+				return
 			}
 			s.mu.Lock()
 			n := s.Unresolved[in.Variables.Number]
@@ -625,4 +639,33 @@ func write(w http.ResponseWriter, status int, v any) {
 
 func fail(w http.ResponseWriter, status int, message string) {
 	write(w, status, map[string]string{"message": message})
+}
+
+func (s *Server) reviewerCandidates(number int, q string) map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	requests := []any{}
+	if p := s.pulls[number]; p != nil {
+		for _, l := range p.Requested {
+			requests = append(requests, map[string]any{"requestedReviewer": map[string]any{"__typename": "User", "login": l}})
+		}
+	}
+	suggested := []any{}
+	for i, u := range Reviewers[:2] {
+		suggested = append(suggested, map[string]any{"isAuthor": false, "isCommenter": i == 1, "reviewer": u})
+	}
+	found := []any{}
+	for _, u := range Reviewers {
+		if strings.Contains(strings.ToLower(u["login"].(string)+" "+u["name"].(string)), strings.ToLower(q)) {
+			found = append(found, u)
+		}
+	}
+	return map[string]any{"data": map[string]any{
+		"repository": map[string]any{
+			"pullRequest": map[string]any{"author": map[string]any{"login": "dude-bot"}, "suggestedReviewers": suggested,
+				"reviewRequests": map[string]any{"nodes": requests}},
+			"assignableUsers": map[string]any{"nodes": found},
+		},
+		"organization": map[string]any{"teams": map[string]any{"nodes": []any{}}},
+	}}
 }

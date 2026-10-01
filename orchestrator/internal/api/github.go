@@ -24,6 +24,8 @@ import (
 func (s *Server) githubRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /internal/webhooks/register", s.auth(s.registerWebhooks))
 	mux.Handle("POST /internal/pull-requests/{id}/{action}", s.auth(s.pullRequestAction))
+	mux.Handle("GET /internal/pull-requests/{id}/reviewer-candidates", s.auth(s.pullRequestReviewerCandidates))
+	mux.Handle("GET /internal/reviewer-candidates", s.auth(s.organizationReviewerCandidates))
 	mux.Handle("GET /internal/github-settings", s.auth(s.githubSettings))
 	mux.Handle("PATCH /internal/github-settings", s.auth(s.updateGithubSettings))
 }
@@ -269,6 +271,7 @@ func (s *Server) pullRequestAction(w http.ResponseWriter, r *http.Request, org s
 		if err := gh.RequestReviewers(r.Context(), slug, pr.Number, body.Logins); err != nil {
 			return forgeRefusal(err, "GitHub would not request the review")
 		}
+		candidates.forget(org, slug)
 		out["logins"] = body.Logins
 	}
 	// Who did it, for the task's activity: GitHub will say only that it
