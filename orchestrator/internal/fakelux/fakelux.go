@@ -925,10 +925,11 @@ func head(repo, ref string) string {
 func (s *Server) view(run *Run) map[string]any {
 	placements := []any{}
 	host := ""
+	limit := s.memoryLimit(run)
 	for _, p := range run.placements {
 		view := map[string]any{"epoch": p.Epoch, "hostName": p.HostName, "state": p.State,
 			"workloadStartedAt": p.WorkloadStartedAt, "exitedAt": p.ExitedAt, "snapshotDoneAt": p.SnapshotDoneAt}
-		if limit := s.memoryLimit(run); limit != nil {
+		if limit != nil {
 			view["memoryLimit"] = *limit
 		}
 		placements = append(placements, view)
