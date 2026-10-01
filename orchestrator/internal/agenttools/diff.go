@@ -199,10 +199,8 @@ func patches(head diffHeader, paths []string, stored []storedDiffFile) diffPatch
 		}
 		file := diffPatchOut{diffFileOut: f.diffFileOut}
 		var b strings.Builder
-	hunks:
 		for _, h := range f.Hunks {
-			// A header is written only with room for it and, if the hunk
-			// has any, its first line.
+			// A nonempty hunk needs room for its header and first line.
 			if left < 1+min(len(h.Lines), 1) {
 				file.Cut = true
 				break
@@ -210,15 +208,16 @@ func patches(head diffHeader, paths []string, stored []storedDiffFile) diffPatch
 			b.WriteString(h.Header)
 			b.WriteByte('\n')
 			left--
-			for _, l := range h.Lines {
-				if left == 0 {
-					file.Cut = true
-					break hunks
-				}
+			lines := h.Lines[:min(left, len(h.Lines))]
+			for _, l := range lines {
 				b.WriteString(l.Kind)
 				b.WriteString(l.Text)
 				b.WriteByte('\n')
-				left--
+			}
+			left -= len(lines)
+			if len(lines) < len(h.Lines) {
+				file.Cut = true
+				break
 			}
 		}
 		file.Patch = b.String()
