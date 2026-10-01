@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { GIB, type MachinePool, type MachineSizeUse } from "@dude/domain";
-import { asInput, draftOf, draftProblems, fitWords, hostSpec, machineFit, poolKnownFrom, poolMachines, poolOptionLabel, useLine, usedByWords } from "../src/machines.ts";
+import { GIB, machineFit, type MachinePool, type MachineSizeUse } from "@dude/domain";
+import { asInput, draftOf, draftProblems, fitWords, hostSpec, poolKnownFrom, poolMachines, poolOptionLabel, useLine, usedByWords } from "../src/machines.ts";
 
 const pool = (over: Partial<MachinePool> = {}): MachinePool => ({
   name: "default", isDefault: true, platform: false, provider: "ec2", instanceType: "c7a.4xlarge",

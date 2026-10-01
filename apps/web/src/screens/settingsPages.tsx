@@ -38,6 +38,7 @@ import {
   SETTINGS_ROLE_DESCRIPTION,
   SETTINGS_ROLE_LABEL,
   type FullDeliveryPolicy,
+  type MachineSize,
   type ProjectPromptMode,
   type PromptHistory as PromptHistoryData,
   type PromptState,
@@ -49,7 +50,7 @@ import {
 import type { ApiClient } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
 import { deliveryPatch, deliveryValues, effortLabel, TIME_LIMITS, timeLimitLabel } from "../settings.ts";
-import { MachineSelect, useSizes } from "./MachinesSettings.tsx";
+import { MachineSelect } from "./MachinesSettings.tsx";
 
 /** Where these settings are: an organization's, or a project's over it. */
 export interface SettingsScope {
@@ -82,9 +83,11 @@ function Source<T>({ scope, setting, reset }: { scope: SettingsScope; setting: S
 
 const NONE = "__none__";
 
-export function RolePage({ scope, role, onOpenRun, onManageSizes }: {
+export function RolePage({ scope, role, sizes, onOpenRun, onManageSizes }: {
   scope: SettingsScope;
   role: SettingsRole;
+  /** The organisation's sizes, as the settings screen loaded them; null while loading. */
+  sizes: readonly MachineSize[] | null;
   onOpenRun?: ((runId: string) => void) | undefined;
   /** Open the organisation's Machines page (its admins). */
   onManageSizes?: (() => void) | undefined;
@@ -170,7 +173,7 @@ export function RolePage({ scope, role, onOpenRun, onManageSizes }: {
             options={TIME_LIMITS.map((m) => ({ value: m === null ? NONE : String(m), label: timeLimitLabel(m) }))}
           />
         </SettingField>
-        <MachineField scope={scope} role={role} onManageSizes={onManageSizes} />
+        <MachineField scope={scope} role={role} sizes={sizes} onManageSizes={onManageSizes} />
       </SettingFields>
       {role === "fixer" ? (
         <SettingsNote icon="info">The fixer runs on the implementer’s model, effort, time limit and machine unless you give it its own.</SettingsNote>
@@ -188,9 +191,8 @@ export function RolePage({ scope, role, onOpenRun, onManageSizes }: {
  * override; naming none follows the organisation's (or, for the fixer, the
  * implementer's), and on the organisation, the default size.
  */
-function MachineField({ scope, role, onManageSizes }: { scope: SettingsScope; role: SettingsRole; onManageSizes?: (() => void) | undefined }) {
+function MachineField({ scope, role, sizes, onManageSizes }: { scope: SettingsScope; role: SettingsRole; sizes: readonly MachineSize[] | null; onManageSizes?: (() => void) | undefined }) {
   const { settings } = scope;
-  const sizes = useSizes(scope.client);
   const ms = settings.roles[role].machineSize;
   const project = isProject(settings);
   const orgName = settings.organization.name;

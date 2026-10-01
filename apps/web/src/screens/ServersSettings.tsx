@@ -8,14 +8,22 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { HostChips, ServerRecipeDialog, ServerRecipeTable, SettingRow, SettingSource, SettingsHeader, SettingsMeta, SettingsNote, SettingsSection } from "@dude/design-system/components";
 import { formatTimestamp, Icon, PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES } from "@dude/design-system";
 import { Button, Callout, Dialog, EmptyState, FormActions, Input, RowMenu, Select, Spinner } from "@dude/design-system/primitives";
-import { egressProblem, type PreviewSettings, type Recipe, type RecipeInput } from "@dude/domain";
+import { egressProblem, type MachineSize, type PreviewSettings, type Recipe, type RecipeInput } from "@dude/domain";
 import type { ApiClient, ProjectDetail } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
-import { MachineSelect, useSizes } from "./MachinesSettings.tsx";
+import { MachineSelect } from "./MachinesSettings.tsx";
 
 const IDLE_TIMEOUTS = [5, 10, 15, 30, 60, 120, 240];
 
-export function ServersSettingsPage({ client, project, canEdit, orgName, onCount }: { client: ApiClient; project: ProjectDetail; canEdit: boolean; orgName: string; onCount?: ((n: number) => void) | undefined }) {
+export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, onCount }: {
+  client: ApiClient;
+  project: ProjectDetail;
+  canEdit: boolean;
+  orgName: string;
+  /** The organisation's sizes, as the settings screen loaded them; null while loading. */
+  sizes: readonly MachineSize[] | null;
+  onCount?: ((n: number) => void) | undefined;
+}) {
   const [recipes, setRecipes] = useState<Recipe[] | null>(null);
   const [previews, setPreviews] = useState<PreviewSettings | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
@@ -26,7 +34,6 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, onCount
   const previewSave = useSave();
   const [previewRound, setPreviewRound] = useState(0);
   const addButton = useRef<HTMLButtonElement>(null);
-  const sizes = useSizes(client);
   const defaultSize = sizes?.find((s) => s.isDefault) ?? null;
 
   const latest = useRef(0);

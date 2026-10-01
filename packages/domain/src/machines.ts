@@ -33,6 +33,13 @@ export const MACHINE_STEP_MESSAGE = {
   diskGiB: "In steps of 5 GiB: 5, 10, 15…",
 } as const;
 
+/** What a value above a dimension's most is told. */
+export const MACHINE_MAX_MESSAGE = {
+  cpus: `At most ${MACHINE_LIMITS.cpus.max} CPUs`,
+  memoryMiB: `At most ${MACHINE_LIMITS.memoryMiB.max / 1024} GiB`,
+  diskGiB: `At most ${MACHINE_LIMITS.diskGiB.max} GiB`,
+} as const;
+
 const onStep = (value: number, step: number) => Number.isFinite(value) && Math.abs(value / step - Math.round(value / step)) < 1e-9;
 
 function dimension(key: keyof typeof MACHINE_LIMITS) {
@@ -40,7 +47,7 @@ function dimension(key: keyof typeof MACHINE_LIMITS) {
   return z
     .number({ invalid_type_error: MACHINE_STEP_MESSAGE[key] })
     .min(min, MACHINE_STEP_MESSAGE[key])
-    .max(max, `At most ${key === "memoryMiB" ? `${max / 1024} GiB` : key === "diskGiB" ? `${max} GiB` : `${max} CPUs`}`)
+    .max(max, MACHINE_MAX_MESSAGE[key])
     .refine((v) => onStep(v, step), MACHINE_STEP_MESSAGE[key]);
 }
 
@@ -84,18 +91,6 @@ export interface MachineSizeWithUse extends MachineSize {
 
 /** `DELETE /v1/machines/sizes/:id`: where what named it goes. null follows the default. */
 export const removeMachineSizeSchema = z.object({ replacement: z.string().min(1).nullable().default(null) }).strict();
-
-/** The Run's machine, as it was when its spec was built (`runs.machine`). */
-export interface RunMachine {
-  sizeId: string | null;
-  name: string;
-  cpus: number;
-  memoryMiB: number;
-  diskGiB: number;
-  pool: string | null;
-  /** Where it came from: "project", "organization", "implementer" (the fixer's), "default". */
-  from?: string;
-}
 
 // ---------------------------------------------------------------------------
 // Pools, as lux reports them
