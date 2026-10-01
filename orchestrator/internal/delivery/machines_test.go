@@ -5,28 +5,6 @@ import (
 	"testing"
 )
 
-func TestARolesMachineSizeResolvesLikeItsOtherFields(t *testing.T) {
-	org := json.RawMessage(`{"implementer":{"model":"org/impl","machineSize":"msz_large"},"reviewer":{"machineSize":"msz_small"}}`)
-	project := json.RawMessage(`{"reviewer":{"machineSize":"msz_xl","effort":"low"}}`)
-	if got := ResolveRole("reviewer", project, org); got.MachineSize != "msz_xl" || got.Effort != "low" {
-		t.Errorf("reviewer = %+v, want the project's size", got)
-	}
-	if got := ResolveRole("implementer", project, org); got.MachineSize != "msz_large" || got.Model != "org/impl" {
-		t.Errorf("implementer = %+v, want the organization's size", got)
-	}
-	// The fixer follows the implementer, a field at a time.
-	if got := ResolveRole("fixer", project, org); got.MachineSize != "msz_large" {
-		t.Errorf("fixer = %+v, want the implementer's size", got)
-	}
-	if got := ResolveRole("fixer", json.RawMessage(`{"fixer":{"machineSize":"msz_small"}}`), org); got.MachineSize != "msz_small" {
-		t.Errorf("fixer with its own = %+v", got)
-	}
-	// Unset at every layer: none named, so the default size.
-	if got := ResolveRole("simplifier", project, org); got.MachineSize != "" {
-		t.Errorf("simplifier = %+v", got)
-	}
-}
-
 func TestASizeIsTheOneNamedElseTheDefault(t *testing.T) {
 	big := "big"
 	sizes := Sizes{Default: "std", ByID: map[string]Machine{

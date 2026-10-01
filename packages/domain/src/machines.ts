@@ -231,8 +231,8 @@ export function replacePreviewMachineSize<T extends Record<string, unknown>>(pre
 /**
  * The size a role runs on: the project's, then the organization's — for
  * the fixer, then the implementer's over the same layers — else the
- * organization's default. A stored id that names no size is skipped (the
- * orchestrator's delivery.ResolveRole and machines.go do the same).
+ * organization's default. A stored id that names no size is skipped. The
+ * orchestrator's delivery.Sizes.ForRole is the same rule, for the Run.
  */
 export function resolveMachineSize(
   role: string,

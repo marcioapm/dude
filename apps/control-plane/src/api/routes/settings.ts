@@ -19,6 +19,7 @@ import {
   EventTypes,
   newId,
   promptRoleSchema,
+  resolveMachineSize,
   ROLE_ENABLED_BY,
   savePromptSchema,
   SETTINGS_ROLES,
@@ -44,7 +45,7 @@ import { badRequest, HttpError, json, notFound, parseBody } from "../http.ts";
 import { auditActor } from "../auth.ts";
 import type { RequestContext, Router } from "../router.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
-import { requireSize } from "./machines.ts";
+import { listSizes, requireSize } from "./machines.ts";
 
 type Json = Record<string, unknown>;
 
@@ -182,31 +183,33 @@ async function settingsResponse(ctx: RequestContext, projectId?: string): Promis
      * What the fixer takes from the implementer is not the fixer's own
      * setting, so it is never the project's to reset there.
      */
-    const field = (role: SettingsRole, key: string, only?: "organization") => {
+    const field = (role: SettingsRole, key: string) => {
       const chain = role === "fixer" ? ["fixer", "implementer"] : [role];
       for (const r of chain) {
         for (const [models, source] of [[layers.project?.agentModels, "project"], [layers.org.agentModels, "organization"]] as const) {
-          if (only && source !== only) continue;
           const v = roleLayer(models, r)[key];
           if (v !== undefined) {
-            return { value: v, source: r === role ? source : "organization", via: r } as { value: never; source: SettingSource; via: string };
+            return { value: v, source: r === role ? source : "organization" } as { value: never; source: SettingSource };
           }
         }
       }
-      return { value: null as never, source: "organization" as SettingSource, via: role as string };
+      return { value: null as never, source: "organization" as SettingSource };
     };
-    /** The size, with what the organization says under a project's, and whether the fixer's is the implementer's. */
+    /**
+     * The size, by the one rule (resolveMachineSize): null when it is the
+     * default's. With what the organization says under a project's, and
+     * whether the fixer's is the implementer's.
+     */
+    const sizes = await listSizes(scope);
     const machine = (role: SettingsRole): RoleSettings["machineSize"] => {
-      const { via, ...setting } = field(role, "machineSize");
+      const { sizeId, from } = resolveMachineSize(role, { project: layers.project?.agentModels, organization: layers.org.agentModels }, sizes);
+      const orgOnly = resolveMachineSize(role, { organization: layers.org.agentModels }, sizes);
       return {
-        ...setting,
-        ...(role === "fixer" ? { followsImplementer: via === "implementer" } : {}),
-        ...(layers.project ? { organization: field(role, "machineSize", "organization").value } : {}),
+        value: from === "default" ? null : sizeId,
+        source: from === "project" ? "project" : "organization",
+        ...(role === "fixer" ? { followsImplementer: from === "implementer" } : {}),
+        ...(layers.project ? { organization: orgOnly.from === "default" ? null : orgOnly.sizeId } : {}),
       };
-    };
-    const plain = (role: SettingsRole, key: string) => {
-      const { via: _via, ...setting } = field(role, key);
-      return setting;
     };
     const roles = Object.fromEntries(
       SETTINGS_ROLES.map((role): [SettingsRole, RoleSettings] => {
@@ -216,9 +219,9 @@ async function settingsResponse(ctx: RequestContext, projectId?: string): Promis
         return [
           role,
           {
-            model: plain(role, "model"),
-            effort: plain(role, "effort"),
-            timeLimitMinutes: plain(role, "timeLimitMinutes"),
+            model: field(role, "model"),
+            effort: field(role, "effort"),
+            timeLimitMinutes: field(role, "timeLimitMinutes"),
             machineSize: machine(role),
             enabled: enabledBy ? delivery[enabledBy] : null,
             prompt: {

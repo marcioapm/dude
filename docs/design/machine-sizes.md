@@ -58,10 +58,12 @@ size. This is how sizes are kept, chosen, sent to lux and shown.
   its size strings — and `placement: {pool}` when the size names one, for
   phase Runs (`phases.buildSpec`) and previews (`servers.Previews.spec`)
   alike.
-- **Each Run snapshots what it ran on** when its spec is built:
+- **Each Run snapshots what it ran on** in the statement that records its
+  lux Run id at submit:
   `runs.machine = {sizeId, name, cpus, memoryMiB, diskGiB, pool, from}`,
-  never rewritten once lux has the Run. History stays true after the size
-  is edited or removed. The session header shows it as a chip (the size's
+  never rewritten once lux has the Run (a resume keeps it). History stays
+  true after the size is edited or removed. The session header shows it
+  as a chip (the size's
   name and spec) with a tooltip saying where it came from and that it is
   fixed for the session.
 

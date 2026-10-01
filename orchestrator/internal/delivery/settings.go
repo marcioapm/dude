@@ -25,9 +25,6 @@ type RoleSettings struct {
 	TimeLimitMinutes int
 	// Per-role notes, appended to the role's prompt.
 	Context string
-	// The machine size's id the first layer names; "" names none (the
-	// organization's default). ResolveMachine turns it into a size.
-	MachineSize string
 }
 
 // roleLayer is one layer's config for a role, as stored: agent_models on a
@@ -37,7 +34,8 @@ type roleLayer struct {
 	Effort           *string `json:"effort"`
 	TimeLimitMinutes *int    `json:"timeLimitMinutes"`
 	Context          *string `json:"context"`
-	MachineSize      *string `json:"machineSize"`
+	// Resolved by Sizes.ForRole, which passes over ids that are gone.
+	MachineSize *string `json:"machineSize"`
 }
 
 // modelFallback is where a role with no settings of its own takes them
@@ -75,9 +73,6 @@ func ResolveRole(role string, layers ...json.RawMessage) RoleSettings {
 			}
 			if rs.Context == "" && l.Context != nil {
 				rs.Context = *l.Context
-			}
-			if rs.MachineSize == "" && l.MachineSize != nil {
-				rs.MachineSize = *l.MachineSize
 			}
 		}
 	}
