@@ -5,12 +5,23 @@ import (
 	"testing"
 )
 
+// Repository is a ref without its tag or digest: where its tags live.
+func Repository(ref string) string {
+	if i := strings.Index(ref, "@"); i >= 0 {
+		ref = ref[:i]
+	}
+	if i := strings.LastIndex(ref, ":"); i > strings.LastIndex(ref, "/") {
+		ref = ref[:i]
+	}
+	return ref
+}
+
 func TestFinishContainerfileAddsTheLayerAndItsSetupLast(t *testing.T) {
 	got := FinishContainerfile("r.example/dude/custom@sha256:aa", "r.example/dude/layer@sha256:bb")
 	want := `FROM r.example/dude/custom@sha256:aa
 COPY --from=r.example/dude/layer@sha256:bb /rootfs/ /
 RUN ["/bin/sh", "/usr/local/share/dude/setup.sh"]
-ENV OPENCODE_CONFIG=/usr/local/share/dude/opencode.json DISABLE_AUTOUPDATER=1 OPENCODE_DISABLE_AUTOUPDATE=1
+ENV OPENCODE_CONFIG=/usr/local/share/dude/opencode.json DISABLE_AUTOUPDATER=1 OPENCODE_DISABLE_AUTOUPDATE=1 HOME=/home/agent
 USER agent
 WORKDIR /home/agent
 `
@@ -50,6 +61,19 @@ func TestSubstituteReplacesLibraryImagesOnlyWhereAnImageIsNamed(t *testing.T) {
 		"COPY --from=r/c@sha256:1 /x /y\n" +
 		"RUN echo image:acme-base\n" +
 		"FROM image:acme-base-two\n"
+	if got := Substitute(in, refs); got != want {
+		t.Fatalf("got\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestSubstituteFollowsContinuedInstructions(t *testing.T) {
+	refs := map[string]string{"acme-base": "r/c@sha256:1"}
+	in := "FROM \\\n    image:acme-base AS a\n" +
+		"COPY \\\n  --from=image:acme-base /x /y\n" +
+		"RUN echo \\\n  image:acme-base\n"
+	want := "FROM \\\n    r/c@sha256:1 AS a\n" +
+		"COPY \\\n  --from=r/c@sha256:1 /x /y\n" +
+		"RUN echo \\\n  image:acme-base\n"
 	if got := Substitute(in, refs); got != want {
 		t.Fatalf("got\n%s\nwant\n%s", got, want)
 	}
@@ -121,8 +145,24 @@ func TestBuildArgsCarryTheLimits(t *testing.T) {
 	}
 }
 
+func TestTailHoldsNoMoreThanTwiceItsMax(t *testing.T) {
+	tail := Tail{Max: 1000}
+	line := []byte(strings.Repeat("x", 99) + "\n")
+	for range 1000 {
+		_, _ = tail.Write(line)
+		if len(tail.buf) > 2*tail.Max {
+			t.Fatalf("held %d bytes", len(tail.buf))
+		}
+	}
+	// The last Max bytes, from the first whole line in them.
+	if kept := strings.SplitN(tail.String(), "\n", 2)[1]; len(kept) != 900 {
+		t.Fatalf("kept %d bytes", len(kept))
+	}
+}
+
 func TestHumanMemory(t *testing.T) {
-	for in, want := range map[string]string{"1536m": "1.5 GB", "2g": "2 GB", "512m": "512 MB", "weird": "weird"} {
+	for in, want := range map[string]string{"1536m": "1.5 GB", "2g": "2 GB", "512m": "512 MB", "1536": "1.5 KB",
+		"2048k": "2 MB", "1.5g": "1.5g", "weird": "weird"} {
 		if got := HumanMemory(in); got != want {
 			t.Errorf("%s: %s, want %s", in, got, want)
 		}

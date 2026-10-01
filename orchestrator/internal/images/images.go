@@ -15,8 +15,10 @@
 package images
 
 import (
+	"bytes"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -30,12 +32,14 @@ const (
 
 // FinishContainerfile adds the dude layer to a built user image: its
 // files, its setup (the agent user, the git identity), the environment
-// OpenCode reads, and the agent user as the image's user.
+// OpenCode reads, and the agent user as the image's user. HOME is set
+// because agent may be a second name for uid 1000 (node on node images),
+// and podman takes HOME from the first passwd entry for that uid.
 func FinishContainerfile(userRef, layer string) string {
 	return fmt.Sprintf(`FROM %s
 COPY --from=%s /rootfs/ /
 RUN ["/bin/sh", "%s"]
-ENV OPENCODE_CONFIG=%s DISABLE_AUTOUPDATER=1 OPENCODE_DISABLE_AUTOUPDATE=1
+ENV OPENCODE_CONFIG=%s DISABLE_AUTOUPDATER=1 OPENCODE_DISABLE_AUTOUPDATE=1 HOME=/home/agent
 USER agent
 WORKDIR /home/agent
 `, userRef, layer, LayerSetup, LayerConfig)
@@ -65,16 +69,11 @@ func LayerShort(layer string) string {
 	return d
 }
 
-// Repository is a ref without its tag or digest: where its tags live.
-func Repository(ref string) string {
-	if i := strings.Index(ref, "@"); i >= 0 {
-		ref = ref[:i]
-	}
-	if i := strings.LastIndex(ref, ":"); i > strings.LastIndex(ref, "/") {
-		ref = ref[:i]
-	}
-	return ref
-}
+var digestRef = regexp.MustCompile(`^[^\s@]+@sha256:[0-9a-f]{64}$`)
+
+// IsDigestRef is a ref naming its image by digest (…@sha256:<64 hex>), as
+// DUDE_LAYER_IMAGE must.
+func IsDigestRef(ref string) bool { return digestRef.MatchString(ref) }
 
 // imageWord is `image:<name>` where a FROM or --from names it: after
 // whitespace or `=`, and ending the word.
@@ -82,37 +81,52 @@ var imageWord = regexp.MustCompile(`(^|[\s=])image:([a-z0-9][a-z0-9-]{0,62})(\s|
 
 // Substitute replaces each `image:<name>` with the ref its parent's
 // published user image has. A name it lacks is left as written (the
-// caller resolved every parent first).
+// caller resolved every parent first). Instructions are read as the lint
+// reads them, `\`-continued lines joined: only one that takes an image
+// (FROM, or COPY/ADD with --from=image:) is rewritten, on every one of its
+// lines, so a RUN that echoes "image:x" is left alone.
 func Substitute(containerfile string, refs map[string]string) string {
 	var out strings.Builder
-	for _, line := range strings.SplitAfter(containerfile, "\n") {
-		trimmed := strings.TrimSpace(line)
-		upper := strings.ToUpper(trimmed)
-		// Only instructions that take an image: FROM, and COPY/ADD --from=.
-		// A RUN that echoes "image:x" is left alone. A continuation line of
-		// a FROM is not a thing in practice.
-		if !strings.HasPrefix(upper, "FROM ") && !strings.Contains(line, "--from=image:") {
+	lines := strings.SplitAfter(containerfile, "\n")
+	for i := 0; i < len(lines); {
+		end := i + 1
+		for end < len(lines) && strings.HasSuffix(strings.TrimRight(lines[end-1], " \t\r\n"), "\\") {
+			end++
+		}
+		group := lines[i:end]
+		joined := strings.Join(group, "")
+		takesImage := strings.HasPrefix(strings.ToUpper(strings.TrimSpace(joined)), "FROM ") ||
+			strings.Contains(joined, "--from=image:")
+		for _, line := range group {
+			if takesImage {
+				line = substituteLine(line, refs)
+			}
 			out.WriteString(line)
-			continue
 		}
-		// Twice: adjacent matches share the separator between them.
-		for range 2 {
-			line = imageWord.ReplaceAllStringFunc(line, func(m string) string {
-				sub := imageWord.FindStringSubmatch(m)
-				ref, ok := refs[sub[2]]
-				if !ok {
-					return m
-				}
-				return sub[1] + ref + sub[3]
-			})
-		}
-		out.WriteString(line)
+		i = end
 	}
 	return out.String()
 }
 
+func substituteLine(line string, refs map[string]string) string {
+	// Twice: adjacent matches share the separator between them.
+	for range 2 {
+		line = imageWord.ReplaceAllStringFunc(line, func(m string) string {
+			sub := imageWord.FindStringSubmatch(m)
+			ref, ok := refs[sub[2]]
+			if !ok {
+				return m
+			}
+			return sub[1] + ref + sub[3]
+		})
+	}
+	return line
+}
+
 // Tail keeps the last Max bytes written to it, cut at a line start where
-// it can be: a build's log, which can be far longer than anyone reads.
+// it can be: a build's log, which can be far longer than anyone reads. The
+// buffer is trimmed only once it holds twice Max, so the copy is amortised
+// over at least Max bytes of writes.
 type Tail struct {
 	Max int
 	buf []byte
@@ -121,23 +135,33 @@ type Tail struct {
 
 func (t *Tail) Write(p []byte) (int, error) {
 	t.buf = append(t.buf, p...)
-	if over := len(t.buf) - t.Max; t.Max > 0 && over > 0 {
-		start := over
-		if nl := strings.IndexByte(string(t.buf[start:]), '\n'); nl >= 0 && nl < 4096 {
-			start += nl + 1
-		}
-		// Never mid-rune: step past UTF-8 continuation bytes.
-		for start < len(t.buf) && t.buf[start]&0xC0 == 0x80 {
-			start++
-		}
-		t.buf = append([]byte(nil), t.buf[start:]...)
-		t.cut = true
+	if t.Max > 0 && len(t.buf) > 2*t.Max {
+		t.trim()
 	}
 	return len(p), nil
 }
 
+// trim drops all but the last Max bytes, from the next line start within
+// 4 KiB, never mid-rune.
+func (t *Tail) trim() {
+	over := len(t.buf) - t.Max
+	if over <= 0 {
+		return
+	}
+	start := over
+	if nl := bytes.IndexByte(t.buf[start:min(len(t.buf), start+4096)], '\n'); nl >= 0 {
+		start += nl + 1
+	}
+	for start < len(t.buf) && t.buf[start]&0xC0 == 0x80 {
+		start++
+	}
+	t.buf = append(t.buf[:0], t.buf[start:]...)
+	t.cut = true
+}
+
 // String is what is kept, with a first line saying the start is gone.
 func (t *Tail) String() string {
+	t.trim()
 	if t.cut {
 		return "… (the start of the log is gone: dude keeps the last 1 MiB)\n" + string(t.buf)
 	}
@@ -215,26 +239,39 @@ func lastLine(log string, err error) string {
 	return "it failed"
 }
 
-// HumanMemory is podman's memory notation as people say it: 1536m → 1.5 GB.
+// memoryNotation is the podman memory notation dude accepts for
+// DUDE_BUILDER_MEMORY: whole bytes, or whole k/m/g (KiB, MiB, GiB).
+var memoryNotation = regexp.MustCompile(`^([0-9]+)([bkmg]?)$`)
+
+// MemoryBytes is a memory setting in bytes; false when it is not in
+// memoryNotation.
+func MemoryBytes(m string) (int64, bool) {
+	sub := memoryNotation.FindStringSubmatch(strings.ToLower(strings.TrimSpace(m)))
+	if sub == nil {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(sub[1], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return n << map[string]int{"": 0, "b": 0, "k": 10, "m": 20, "g": 30}[sub[2]], true
+}
+
+// HumanMemory is a memory setting as people say it: 1536m → 1.5 GB. One
+// outside memoryNotation is returned as written.
 func HumanMemory(m string) string {
-	m = strings.ToLower(strings.TrimSpace(m))
-	var n float64
-	var unit string
-	if _, err := fmt.Sscanf(m, "%f%s", &n, &unit); err != nil {
-		if _, err := fmt.Sscanf(m, "%f", &n); err != nil {
-			return m
-		}
+	n, ok := MemoryBytes(m)
+	switch {
+	case !ok:
+		return m
+	case n >= 1<<30:
+		return trimFloat(float64(n)/(1<<30)) + " GB"
+	case n >= 1<<20:
+		return trimFloat(float64(n)/(1<<20)) + " MB"
+	case n >= 1<<10:
+		return trimFloat(float64(n)/(1<<10)) + " KB"
 	}
-	switch unit {
-	case "g":
-		return trimFloat(n) + " GB"
-	case "m":
-		if n >= 1024 {
-			return trimFloat(n/1024) + " GB"
-		}
-		return trimFloat(n) + " MB"
-	}
-	return m
+	return fmt.Sprintf("%d B", n)
 }
 
 func trimFloat(f float64) string {

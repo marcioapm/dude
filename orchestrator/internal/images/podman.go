@@ -3,6 +3,7 @@ package images
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -25,8 +26,14 @@ type Podman interface {
 	Push(ctx context.Context, tag string, log io.Writer) (string, error)
 	// FreeBytes is the free space where podman keeps images.
 	FreeBytes(ctx context.Context) (int64, error)
-	// Prune removes images nothing has used for a day.
+	// Prune removes every image no container uses: base images and the
+	// dude layer come back with a pull, and everything built is in the
+	// registry.
 	Prune(ctx context.Context, log io.Writer) error
+	// Remove untags tag, removing its image when nothing else names it.
+	Remove(ctx context.Context, tag string, log io.Writer) error
+	// Controllers are the cgroup controllers podman can apply limits with.
+	Controllers(ctx context.Context) ([]string, error)
 }
 
 // Limits are each build's: what a build may use of the dude host.
@@ -134,7 +141,46 @@ func (c CLI) FreeBytes(ctx context.Context) (int64, error) {
 }
 
 func (c CLI) Prune(ctx context.Context, log io.Writer) error {
-	return c.run(ctx, log, "image", "prune", "-a", "-f", "--filter", "until=24h")
+	return c.run(ctx, log, "image", "prune", "-a", "-f")
+}
+
+func (c CLI) Remove(ctx context.Context, tag string, log io.Writer) error {
+	return c.run(ctx, log, "rmi", "--ignore", tag)
+}
+
+func (c CLI) Controllers(ctx context.Context) ([]string, error) {
+	var out, errb bytes.Buffer
+	cmd := exec.CommandContext(ctx, c.bin(), "info", "--format", "{{json .Host.CgroupControllers}}")
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("podman info: %w: %s", err, strings.TrimSpace(errb.String()))
+	}
+	var list []string
+	if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), &list); err != nil {
+		return nil, fmt.Errorf("podman info: reading its cgroup controllers %q: %w", strings.TrimSpace(out.String()), err)
+	}
+	return list, nil
+}
+
+// CheckLimits refuses a podman that cannot apply a build's CPU and memory
+// limits: without the cpu and memory cgroup controllers delegated to the
+// builder's user, podman only warns and builds unlimited.
+func CheckLimits(ctx context.Context, p Podman) error {
+	have, err := p.Controllers(ctx)
+	if err != nil {
+		return err
+	}
+	var missing []string
+	for _, c := range []string{"cpu", "memory"} {
+		if !slices.Contains(have, c) {
+			missing = append(missing, c)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("podman cannot limit builds: the %s cgroup controller%s not delegated to this user (podman has %v); "+
+			"delegate cpu and memory to its user@.service", strings.Join(missing, " and "), map[bool]string{true: "s are", false: " is"}[len(missing) > 1], have)
+	}
+	return nil
 }
 
 func (c CLI) run(ctx context.Context, log io.Writer, args ...string) error {

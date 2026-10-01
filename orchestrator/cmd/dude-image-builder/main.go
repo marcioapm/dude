@@ -52,7 +52,7 @@ func main() {
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	if err := run(log); err != nil {
-		log.Error("image builder stopped", "error", err)
+		fmt.Fprintln(os.Stderr, "dude-image-builder: "+err.Error())
 		os.Exit(1)
 	}
 }
@@ -63,11 +63,7 @@ type settings struct {
 	MinFree                                  int64
 }
 
-var (
-	digestRef = regexp.MustCompile(`^[^\s@]+@sha256:[0-9a-f]{64}$`)
-	memory    = regexp.MustCompile(`^[0-9]+[bkmg]?$`)
-	repoRef   = regexp.MustCompile(`^[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._-]+)+$`)
-)
+var repoRef = regexp.MustCompile(`^[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._-]+)+$`)
 
 // resolve is every configuration check startup makes before it connects.
 func resolve(opts config.Options) (*config.Config, settings, error) {
@@ -93,7 +89,7 @@ func resolve(opts config.Options) (*config.Config, settings, error) {
 	need("DUDE_BUILDER_DATABASE_URL", s.DatabaseURL)
 	need("DUDE_BUILDER_REPOSITORY", s.Repository)
 	need("DUDE_LAYER_IMAGE", s.Layer)
-	if s.Layer != "" && !digestRef.MatchString(s.Layer) {
+	if s.Layer != "" && !images.IsDigestRef(s.Layer) {
 		problems = append(problems, fmt.Errorf("%s must name the layer by digest (…@sha256:<64 hex>), not %q", cfg.Label("DUDE_LAYER_IMAGE"), s.Layer))
 	}
 	if s.Repository != "" && !repoRef.MatchString(s.Repository) {
@@ -102,8 +98,8 @@ func resolve(opts config.Options) (*config.Config, settings, error) {
 	if s.Limits.CPUs <= 0 {
 		problems = append(problems, fmt.Errorf("%s must be more than 0", cfg.Label("DUDE_BUILDER_CPUS")))
 	}
-	if !memory.MatchString(s.Limits.Memory) {
-		problems = append(problems, fmt.Errorf("%s must be podman's memory notation (1536m, 2g), not %q", cfg.Label("DUDE_BUILDER_MEMORY"), s.Limits.Memory))
+	if _, ok := images.MemoryBytes(s.Limits.Memory); !ok {
+		problems = append(problems, fmt.Errorf("%s must be whole bytes or a whole number of k, m or g (1536m, 2g), not %q", cfg.Label("DUDE_BUILDER_MEMORY"), s.Limits.Memory))
 	}
 	if s.Limits.Timeout <= 0 {
 		problems = append(problems, fmt.Errorf("%s must be more than 0", cfg.Label("DUDE_BUILDER_TIMEOUT")))
@@ -146,6 +142,12 @@ func run(log *slog.Logger) error {
 	for _, w := range cfg.Warnings {
 		log.Warn(w)
 	}
+	podman := images.CLI{Limits: s.Limits, Authfile: s.Authfile, TLSVerify: true}
+	// podman only warns when it cannot apply --memory or the CPU quota, and
+	// builds unlimited: the builder does not start on such a host.
+	if err := images.CheckLimits(ctx, podman); err != nil {
+		return err
+	}
 	database, err := db.Open(ctx, s.DatabaseURL)
 	if err != nil {
 		return err
@@ -155,12 +157,13 @@ func run(log *slog.Logger) error {
 		"cpus", s.Limits.CPUs, "memory", s.Limits.Memory, "platform", s.Limits.Platform)
 	b := &images.Builder{
 		DB:         database,
-		Podman:     images.CLI{Limits: s.Limits, Authfile: s.Authfile, TLSVerify: true},
+		Podman:     podman,
 		Repository: s.Repository,
 		Layer:      s.Layer,
 		Limits:     s.Limits,
 		MinFree:    s.MinFree,
 		Log:        log,
+		Version:    version.Version,
 	}
 	return b.Run(ctx)
 }

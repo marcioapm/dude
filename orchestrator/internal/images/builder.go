@@ -8,8 +8,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 
@@ -35,7 +37,21 @@ type Builder struct {
 	Flush time.Duration
 	// How long an idle builder waits before looking again; 3s when 0.
 	Poll time.Duration
+	// How often the builder says it is alive (image_builder), idle or not;
+	// BeatEvery when 0.
+	Beat time.Duration
+	// Written with each heartbeat: the release the builder runs.
+	Version string
 }
+
+// BeatEvery is how often a running builder writes its heartbeat. One not
+// heard from for Offline is offline: the Images page and waiting Runs say
+// so, and a Run that has waited GiveUp of that time fails.
+const (
+	BeatEvery = 30 * time.Second
+	Offline   = 2 * time.Minute
+	GiveUp    = 30 * time.Minute
+)
 
 // ActorID is who the builder's events are by.
 const ActorID = "dude-image-builder"
@@ -51,11 +67,32 @@ type job struct {
 	UserRef                            string
 }
 
-// Run takes jobs until ctx ends.
+// Run takes jobs until ctx ends, writing its heartbeat throughout.
 func (b *Builder) Run(ctx context.Context) error {
 	if err := b.Recover(ctx); err != nil {
 		return err
 	}
+	if err := b.Heartbeat(ctx); err != nil {
+		return err
+	}
+	beat := b.Beat
+	if beat == 0 {
+		beat = BeatEvery
+	}
+	go func() {
+		t := time.NewTicker(beat)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if err := b.Heartbeat(ctx); err != nil && ctx.Err() == nil {
+					b.Log.Warn("writing the builder's heartbeat", "error", err)
+				}
+			}
+		}
+	}()
 	poll := b.Poll
 	if poll == 0 {
 		poll = 3 * time.Second
@@ -121,6 +158,13 @@ func (b *Builder) Recover(ctx context.Context) error {
 	})
 }
 
+// Heartbeat records that the builder is alive now.
+func (b *Builder) Heartbeat(ctx context.Context) error {
+	_, err := b.DB.Pool.Exec(ctx, `INSERT INTO image_builder (id, seen_at, version) VALUES (true, now(), $1)
+		ON CONFLICT (id) DO UPDATE SET seen_at = now(), version = EXCLUDED.version`, b.Version)
+	return err
+}
+
 // Once claims and does one job; false when there was none.
 func (b *Builder) Once(ctx context.Context) (bool, error) {
 	j, ok, err := b.claim(ctx)
@@ -168,19 +212,25 @@ func (b *Builder) claim(ctx context.Context) (job, bool, error) {
 	return j, true, nil
 }
 
-// progress is a running job's log and stage, written to its row every
-// Flush with the heartbeat, so the build page follows it.
+// progress is a running job's log and stage. Every Flush the output
+// written since the last one is appended to the job's row, with the stage
+// and the heartbeat, so the build page follows it.
 type progress struct {
 	mu    sync.Mutex
 	tail  Tail
 	stage string
-	dirty bool
+	// Output not yet in the row, and whether stage changed since.
+	pending    []byte
+	stageDirty bool
 }
 
 func (p *progress) Write(b []byte) (int, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.dirty = true
+	p.pending = append(p.pending, b...)
+	if over := len(p.pending) - LogMax; over > 0 {
+		p.pending = p.pending[over:]
+	}
 	return p.tail.Write(b)
 }
 
@@ -190,15 +240,49 @@ func (p *progress) printf(format string, args ...any) {
 
 func (p *progress) setStage(s string) {
 	p.mu.Lock()
-	p.stage, p.dirty = s, true
+	p.stage, p.stageDirty = s, true
 	p.mu.Unlock()
 }
 
-func (p *progress) snapshot() (string, string) {
+// delta takes the output not yet written, up to its last whole rune, as
+// text Postgres takes (valid UTF-8, no NUL); dirty when there is any, or
+// the stage changed.
+func (p *progress) delta() (text, stage string, dirty bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.dirty = false
-	return p.tail.String(), p.stage
+	cut := len(p.pending)
+	for i := 1; i <= 3 && i <= len(p.pending); i++ {
+		c := p.pending[len(p.pending)-i]
+		if c&0xC0 == 0xC0 {
+			// A rune's first byte: kept back if its rune is incomplete.
+			if !utf8.FullRune(p.pending[len(p.pending)-i:]) {
+				cut = len(p.pending) - i
+			}
+			break
+		}
+		if c < 0x80 {
+			break
+		}
+	}
+	text = strings.ReplaceAll(strings.ToValidUTF8(string(p.pending[:cut]), "\uFFFD"), "\x00", "")
+	p.pending = append(p.pending[:0], p.pending[cut:]...)
+	dirty, p.stageDirty = text != "" || p.stageDirty, false
+	return text, p.stage, dirty
+}
+
+// unwritten puts back a delta a flush could not write.
+func (p *progress) unwritten(text string) {
+	p.mu.Lock()
+	p.pending = append([]byte(text), p.pending...)
+	p.stageDirty = true
+	p.mu.Unlock()
+}
+
+// full is the whole kept log, as the job's row holds it at the end.
+func (p *progress) full() (log, stage string, cut bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return strings.ReplaceAll(strings.ToValidUTF8(p.tail.String(), "\uFFFD"), "\x00", ""), p.stage, p.tail.cut
 }
 
 func (b *Builder) flushEvery() time.Duration {
@@ -210,6 +294,8 @@ func (b *Builder) flushEvery() time.Duration {
 
 // do runs a claimed job to its end, recording how it ended. Its own
 // failures are the job's; a database that cannot record them is logged.
+// A job the builder is stopped under (SIGTERM on a deploy) is queued again
+// as it was, never failed: the next builder does it.
 func (b *Builder) do(ctx context.Context, j job) {
 	p := &progress{tail: Tail{Max: LogMax}, stage: "resolving"}
 	stop := make(chan struct{})
@@ -223,7 +309,7 @@ func (b *Builder) do(ctx context.Context, j job) {
 			case <-stop:
 				return
 			case <-t.C:
-				b.flush(context.WithoutCancel(ctx), j, p)
+				b.flush(context.WithoutCancel(ctx), j, p, true)
 			}
 		}
 	}()
@@ -236,33 +322,66 @@ func (b *Builder) do(ctx context.Context, j job) {
 	}
 	close(stop)
 	<-done
-	log, stage := p.snapshot()
 	record := context.WithoutCancel(ctx)
-	if err != nil {
-		timedOut := errors.Is(err, context.DeadlineExceeded) || errors.Is(err, errTimeout)
-		var sentence string
-		if r, ok := err.(reason); ok {
-			sentence = string(r)
-		} else {
-			sentence = Failure(stage, log, err, b.Limits.Memory, timedOut)
-		}
-		b.Log.Warn("image job failed", "build", j.ID, "error", sentence, "cause", err)
-		if ferr := pgx.BeginFunc(record, b.DB.Pool, func(tx pgx.Tx) error {
-			if _, err := tx.Exec(record, `UPDATE image_builds SET log = $2, build_seconds = $3, push_seconds = $4 WHERE id = $1`,
-				j.ID, log, nullable(timings["build"]), nullable(timings["push"])); err != nil {
-				return err
-			}
-			return b.failIn(record, tx, j, sentence)
-		}); ferr != nil {
-			b.Log.Error("recording a failed image job", "build", j.ID, "error", ferr)
+	if err != nil && ctx.Err() != nil {
+		b.Log.Info("image job stopped with the builder; queued again", "build", j.ID)
+		p.printf("— the builder stopped; queued again —\n")
+		b.flush(record, j, p, true)
+		if rerr := b.requeue(record, j); rerr != nil {
+			// Left running: Recover re-queues it when the builder starts.
+			b.Log.Error("re-queueing a stopped image job", "build", j.ID, "error", rerr)
 		}
 		return
 	}
-	b.Log.Info("image job succeeded", "build", j.ID)
-	if _, err := b.DB.Pool.Exec(record, `UPDATE image_builds SET log = $2, build_seconds = $3, push_seconds = $4 WHERE id = $1`,
-		j.ID, log, nullable(timings["build"]), nullable(timings["push"])); err != nil {
-		b.Log.Error("recording an image job's log", "build", j.ID, "error", err)
+	// The job may have ended already (published): its last output is
+	// written whatever its state.
+	b.flush(record, j, p, false)
+	log, stage, cut := p.full()
+	// The row holds the deltas; the kept tail is written whole only when
+	// its start was cut, so it begins at a line and says so.
+	if cut {
+		if _, werr := b.DB.Pool.Exec(record, `UPDATE image_builds SET log = $2 WHERE id = $1`, j.ID, log); werr != nil {
+			b.Log.Error("recording an image job's log", "build", j.ID, "error", werr)
+		}
 	}
+	if _, werr := b.DB.Pool.Exec(record, `UPDATE image_builds SET build_seconds = $2, push_seconds = $3 WHERE id = $1`,
+		j.ID, nullable(timings["build"]), nullable(timings["push"])); werr != nil {
+		b.Log.Error("recording an image job's timings", "build", j.ID, "error", werr)
+	}
+	if err == nil {
+		b.Log.Info("image job succeeded", "build", j.ID)
+		return
+	}
+	timedOut := errors.Is(err, context.DeadlineExceeded) || errors.Is(err, errTimeout)
+	var sentence string
+	if r, ok := err.(reason); ok {
+		sentence = string(r)
+	} else {
+		sentence = Failure(stage, log, err, b.Limits.Memory, timedOut)
+	}
+	b.Log.Warn("image job failed", "build", j.ID, "error", sentence, "cause", err)
+	if ferr := pgx.BeginFunc(record, b.DB.Pool, func(tx pgx.Tx) error {
+		return b.failIn(record, tx, j, sentence)
+	}); ferr != nil {
+		b.Log.Error("recording a failed image job", "build", j.ID, "error", ferr)
+	}
+}
+
+// requeue puts a job the builder stopped under back in the queue, as it
+// was when claimed; its version waits again.
+func (b *Builder) requeue(ctx context.Context, j job) error {
+	return pgx.BeginFunc(ctx, b.DB.Pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `UPDATE image_builds SET state = 'queued', started_at = NULL, heartbeat_at = NULL, stage = NULL
+			WHERE id = $1 AND state = 'running'`, j.ID); err != nil {
+			return err
+		}
+		if j.Kind != "build" {
+			return nil
+		}
+		_, err := tx.Exec(ctx, `UPDATE image_versions SET state = 'queued', updated_at = now()
+			WHERE id = $1 AND state IN ('building', 'pushing')`, j.VersionID)
+		return err
+	})
 }
 
 func nullable(f float64) any {
@@ -272,10 +391,24 @@ func nullable(f float64) any {
 	return f
 }
 
-func (b *Builder) flush(ctx context.Context, j job, p *progress) {
-	log, stage := p.snapshot()
-	if _, err := b.DB.Pool.Exec(ctx, `UPDATE image_builds SET log = $2, stage = $3, heartbeat_at = now() WHERE id = $1 AND state = 'running'`,
-		j.ID, log, stage); err != nil {
+// flush appends the output written since the last flush to the job's log,
+// keeping its last LogMax characters, with the stage and the heartbeat;
+// with nothing new, only the heartbeat. running: only while the job runs
+// (a live flush); false for the last one, after the job has ended.
+func (b *Builder) flush(ctx context.Context, j job, p *progress, running bool) {
+	text, stage, dirty := p.delta()
+	var err error
+	switch {
+	case dirty && running:
+		_, err = b.DB.Pool.Exec(ctx, `UPDATE image_builds SET log = right(log || $2, $4), stage = $3, heartbeat_at = now()
+			WHERE id = $1 AND state = 'running'`, j.ID, text, stage, LogMax)
+	case dirty:
+		_, err = b.DB.Pool.Exec(ctx, `UPDATE image_builds SET log = right(log || $2, $3) WHERE id = $1`, j.ID, text, LogMax)
+	case running:
+		_, err = b.DB.Pool.Exec(ctx, `UPDATE image_builds SET heartbeat_at = now() WHERE id = $1 AND state = 'running'`, j.ID)
+	}
+	if err != nil {
+		p.unwritten(text)
 		b.Log.Warn("writing an image job's log", "build", j.ID, "error", err)
 	}
 }
@@ -332,6 +465,9 @@ func (b *Builder) buildJob(ctx context.Context, j job, p *progress, timings map[
 	start := time.Now()
 	err = b.Podman.Build(limit, dir, tag, j.BuildArgs, p)
 	timings["build"] = time.Since(start).Seconds()
+	// Nothing local needs it once its finish is built: children and
+	// finishes name the pushed digest.
+	defer b.remove(ctx, tag, p)
 	if err != nil {
 		if limit.Err() != nil && ctx.Err() == nil {
 			return fmt.Errorf("%w: %w", errTimeout, err)
@@ -435,7 +571,10 @@ func (b *Builder) finish(ctx context.Context, j job, layer string, p *progress, 
 	defer os.RemoveAll(dir)
 	tag := FinalTag(b.Repository, j.VersionID, layer)
 	start := time.Now()
-	if err := b.Podman.Build(ctx, dir, tag, nil, p); err != nil {
+	err = b.Podman.Build(ctx, dir, tag, nil, p)
+	// Runs pull it from the registry; the builder never uses it again.
+	defer b.remove(ctx, tag, p)
+	if err != nil {
 		return "", wrapTimeout(ctx, err)
 	}
 	timings["build"] += time.Since(start).Seconds()
@@ -448,6 +587,17 @@ func (b *Builder) finish(ctx context.Context, j job, layer string, p *progress, 
 	final := b.Repository + "@" + digest
 	p.printf("pushed %s\n", final)
 	return final, nil
+}
+
+// remove untags an image the job built, whether or not it was pushed, so
+// the builder's storage holds only base images and the dude layer between
+// jobs. A failure costs disk, not the job: the next prune takes it.
+func (b *Builder) remove(ctx context.Context, tag string, p *progress) {
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+	defer cancel()
+	if err := b.Podman.Remove(rctx, tag, p); err != nil {
+		b.Log.Warn("removing a built image", "tag", tag, "error", err)
+	}
 }
 
 func wrapTimeout(ctx context.Context, err error) error {
@@ -520,7 +670,7 @@ func (b *Builder) space(ctx context.Context, p *progress) error {
 	if free >= b.MinFree {
 		return nil
 	}
-	p.printf("%s free, below %s: pruning images unused for a day\n", gib(free), gib(b.MinFree))
+	p.printf("%s free, below %s: pruning every image no container uses\n", gib(free), gib(b.MinFree))
 	if err := b.Podman.Prune(ctx, p); err != nil {
 		return err
 	}

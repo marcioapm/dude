@@ -88,12 +88,26 @@ alone, and it may insert `image.*` events. Nothing else is granted.
 It loops as follows:
 
 1. Claim the next job with `FOR UPDATE SKIP LOCKED`. While it runs,
-   heartbeat it.
-2. When the builder starts, a job left `running` by a dead builder is
-   re-queued once. The second time, the job fails with "the builder
-   restarted while building it, twice".
-3. Check free space. Below `min_free_bytes`, prune images unused for 24h
-   and check again. If space is still short, fail.
+   heartbeat it, and every 2 s append the output written since to its log
+   (only the heartbeat when there is none).
+2. A job the builder is stopped under (SIGTERM, as on a deploy) goes back to
+   the queue as it was, never failed. When the builder starts, a job left
+   `running` by a builder that died (SIGKILL, a crash) is re-queued once.
+   The second time, the job fails with "the builder restarted while
+   building it, twice".
+3. Check free space. Below `min_free_bytes`, prune every image no container
+   uses (`podman image prune -a`, no age filter) and check again. If space
+   is still short, fail.
+
+Every image a job builds is removed (`podman rmi`) as soon as nothing local
+needs it: the final once pushed, the user image once its final is built.
+Children and finishes name the pushed digest, so between jobs the
+builder's storage holds only base images and the dude layer, which a pull
+brings back.
+
+**Starting.** The builder refuses to start unless `podman info` reports the
+`cpu` and `memory` cgroup controllers: without them podman only warns and
+ignores the limits below.
 
 A **build** job:
 
@@ -110,7 +124,7 @@ A **finish** job builds this Containerfile:
 FROM <user_ref>
 COPY --from=<layer> /rootfs/ /
 RUN ["/bin/sh", "/usr/local/share/dude/setup.sh"]
-ENV OPENCODE_CONFIG=… DISABLE_AUTOUPDATER=1 OPENCODE_DISABLE_AUTOUPDATE=1
+ENV OPENCODE_CONFIG=… DISABLE_AUTOUPDATER=1 OPENCODE_DISABLE_AUTOUPDATE=1 HOME=/home/agent
 USER agent
 WORKDIR /home/agent
 ```
@@ -122,6 +136,10 @@ scratch` image whose `/rootfs/` holds:
 - the dude CLI, OpenCode and ripgrep;
 - OpenCode's config;
 - `setup.sh`, which adds the `agent` user and the git identity.
+
+`HOME` is set because `agent` may be a second name for uid 1000 (`node` on
+the node images), and podman takes `HOME` from the first passwd entry with
+that uid.
 
 aiverse builds it.
 
