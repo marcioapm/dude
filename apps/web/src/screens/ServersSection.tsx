@@ -133,18 +133,22 @@ export const ServersSection = memo(function ServersSection({ client, servers, ta
   }
 
   const isPreview = run.kind === "preview";
+  const wakeable = isPreview && run.wakeable === true;
   const owner = run.startedBy ? (people.byId.get(run.startedBy.id) ?? run.startedBy) : null;
   const live = runIsLive(run);
   const setup = data.recipes.filter((r) => r.autostartInPreviews && r.setup).map((r) => r.setup).join(", ");
 
   const host = run.host ? <> · {run.host}</> : null;
   const started = run.startedAt ? <> · started <Duration ms={Math.max(0, now - Date.parse(run.startedAt))} format="age" tone="muted" /> ago</> : null;
+  const idle = run.parksAfterMinutes
+    ? wakeable ? <> · sleeps after {run.parksAfterMinutes}m without a request</> : <> · parks after {run.parksAfterMinutes}m idle</>
+    : null;
   const detail = isPreview ? (
     <>
       <code>{run.branch}{run.commit ? ` @ ${run.commit.slice(0, 7)}` : ""}</code>
-      {host}
-      {started}
-      {run.parksAfterMinutes ? <> · parks after {run.parksAfterMinutes}m idle</> : null}
+      {run.asleep ? <> · asleep</> : host}
+      {run.asleep ? null : started}
+      {idle}
     </>
   ) : (
     <>
@@ -160,7 +164,9 @@ export const ServersSection = memo(function ServersSection({ client, servers, ta
       <ServersPanel
         data-testid="servers-panel"
         data-run={run.kind}
-        note={isPreview
+        note={wakeable
+          ? <>A preview run has no agent. Its URLs stay the same: opening one wakes it on the branch’s latest commit, and it goes back to sleep after {run.parksAfterMinutes ?? PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES} minutes without a request.</>
+          : isPreview
           ? <>A preview run has no agent. It is parked after {run.parksAfterMinutes ?? PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES} minutes without a request; starting a server wakes it.</>
           : <>Servers stop when the run pauses, ends or moves host; they do not restart on their own. Output streams into the run log as <span className="ds-mono">server:&lt;name&gt;</span>.</>}
       >
@@ -185,7 +191,7 @@ export const ServersSection = memo(function ServersSection({ client, servers, ta
               {isPreview && taskId ? (
                 <Button size="sm" variant="quiet" leadingIcon="stop" disabled={busy !== null} onClick={stopPreview} data-testid="stop-preview">Stop preview</Button>
               ) : null}
-              <Button size="sm" variant="quiet" leadingIcon="plus" disabled={!live} onClick={() => setAdding(true)} data-testid="add-server">Add server</Button>
+              <Button size="sm" variant="quiet" leadingIcon="plus" disabled={!live || wakeable} onClick={() => setAdding(true)} data-testid="add-server">Add server</Button>
             </>
           }
         />
