@@ -143,8 +143,8 @@ function ImagesList({ client, orgName, images, onSub }: { client: ApiClient; org
         <Table density="default" data-testid="images-table">
           <THead>
             <Tr>
-              <Th width="40%">Image</Th>
-              <Th width="72px">Published</Th>
+              <Th>Image</Th>
+              <Th hideWhenNarrow>Published</Th>
               <Th hideWhenNarrow>Used by</Th>
               <Th>Status</Th>
               <Th hideWhenNarrow>Changed</Th>
@@ -169,13 +169,13 @@ function ImagesList({ client, orgName, images, onSub }: { client: ApiClient; org
                       </span>
                     </span>
                   </Td>
-                  <Td mono>
+                  <Td mono fit hideWhenNarrow>
                     {image.published ? `v${image.published.number}` : "—"}
                     {image.pending ? <div className="imageRowSub">v{image.pending.number} {image.pending.state === "queued" ? "waiting" : image.pending.state === "failed" ? "failed" : "building"}</div> : null}
                   </Td>
                   <Td hideWhenNarrow wrap muted>{usedByWords(image.usedBy, orgName)}</Td>
-                  <Td><ImageState kind={state.kind}>{state.words}</ImageState></Td>
-                  <Td hideWhenNarrow muted>{image.lastChange.source === "base_rebuild" ? "dude" : (image.lastChange.by?.name ?? "—")} · {ago(image.lastChange.at)}</Td>
+                  <Td wrap><ImageState kind={state.kind}>{state.words}</ImageState></Td>
+                  <Td hideWhenNarrow wrap muted>{image.lastChange.source === "base_rebuild" ? "dude" : (image.lastChange.by?.name ?? "—")} · {ago(image.lastChange.at)}</Td>
                 </Tr>
               );
             })}

@@ -130,13 +130,13 @@ def run(env: TestEnvironment, args) -> None:
     gh.webhook_url = env.control_plane_url + r.json()["webhookPath"]
     gh.webhook_secret = webhook_secret(env.owner_dsn, org)
 
-    dash = ana.create_project(name="Dashboard", slug="dashboard", runtimeImage="dude-runtime:test", agentModels=SCRIPTED,
+    dash = ana.create_project(name="Dashboard", slug="dashboard", agentModels=SCRIPTED,
                               repositories=[{"name": "dashboard", "url": gh.clone_url, "defaultBranch": "main"}])
     billing = ana.create_project(name="Billing API", slug="billing", agentModels=SCRIPTED)
     # Agents that stay put, each in a project whose implementer is set for it
     # from the start (a phase takes its project's models as it begins).
     gh_live = gh.add_repository("insights")
-    insights = ana.create_project(name="Insights", slug="insights", runtimeImage="dude-runtime:test",
+    insights = ana.create_project(name="Insights", slug="insights",
                                   agentModels={**SCRIPTED, "implementer": {"model": "fake/live"}},
                                   repositories=[{"name": "insights", "url": gh_live.clone_url, "defaultBranch": "main"}])
     pid = dash["id"]
