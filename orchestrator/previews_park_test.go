@@ -40,7 +40,8 @@ func TestAFailedStopOnParkIsAskedAgain(t *testing.T) {
 	w.lux.Idle(web)
 	w.until("the Run stopped in lux", func() bool {
 		mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE id = $1`, runID)
-		return r.State == "stopped"
+		lr, err := w.previews.Lux.Get(context.Background(), r.ID)
+		return err == nil && lr.State == "stopped"
 	})
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, runID); n != 1 {
 		t.Errorf("dude's row:\n%s", w.describeRuns())
@@ -70,7 +71,10 @@ func TestAServerThatNeverBecomesReadyIsParked(t *testing.T) {
 		mustExec(t, w.owner, `UPDATE runs SET park_checked_at = now() - interval '1 hour' WHERE id = $1 AND park_checked_at IS NOT NULL`, runID)
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, runID) == 1
 	})
-	w.until("its Run stopped", func() bool { return r.State == "stopped" })
+	w.until("its Run stopped", func() bool {
+		lr, err := w.previews.Lux.Get(context.Background(), r.ID)
+		return err == nil && lr.State == "stopped"
+	})
 }
 
 // A server whose process exited counts as idle: with the other idle, the
