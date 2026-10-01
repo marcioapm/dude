@@ -612,25 +612,39 @@ func TestAFinishedTasksPreviewDeletesItsServersThenCancelsItsRun(t *testing.T) {
 	})
 }
 
-// More busy previews than one sweep takes (running, re-followed only) do
-// not push a due wake off the page: work that is due is taken first.
+// More busy previews than one sweep takes do not push a due wake off the
+// page: a wake is taken first, ahead of previews only re-followed and of
+// park checks due; one sweep acts on it.
 func TestADueWakeIsTakenPastAFullPageOfBusyPreviews(t *testing.T) {
-	w := newWorld(t)
-	w.wakeable()
-	w.previews.SweepLimit = 3
-	w.recipe("web", 3000, "npm run dev", "", nil, true)
-	_, runID := w.declare()
-	web := w.serverID(runID, "web")
-	// Older than the asleep one, so a page in created_at order is all theirs.
-	for i := range 5 {
-		task := w.task()
-		mustExec(t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, kind, wakeable,
-			lux_run_id, lux_state, created_at) VALUES ($1, $2, $3, $4, 1, 'running', 'preview', true, $5, 'running', now() - interval '1 day')`,
-			fmt.Sprintf("run_busy_%d_%s", i, w.org), w.org, w.project, task, fmt.Sprintf("lux_busy_%d_%s", i, w.org))
-	}
-	w.open(web)
-	if n := len(w.luxRuns()); n != 1 {
-		t.Fatalf("%d lux runs for one wake", n)
+	for _, busy := range []string{"re-followed", "park check due"} {
+		t.Run(busy, func(t *testing.T) {
+			w := newWorld(t)
+			w.wakeable()
+			w.previews.SweepLimit = 3
+			w.recipe("web", 3000, "npm run dev", "", nil, true)
+			_, runID := w.declare()
+			web := w.serverID(runID, "web")
+			// Older than the asleep one, so a page in created_at order is all theirs.
+			for i := range 5 {
+				id := fmt.Sprintf("run_busy_%d_%s", i, w.org)
+				mustExec(t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, kind, wakeable,
+					lux_run_id, lux_state, created_at) VALUES ($1, $2, $3, $4, 1, 'running', 'preview', true, $5, 'running', now() - interval '1 day')`,
+					id, w.org, w.project, w.task(), fmt.Sprintf("lux_busy_%d_%s", i, w.org))
+				if busy == "park check due" {
+					mustExec(t, w.owner, `INSERT INTO preview_servers (run_id, organization_id, name, lux_server_id, hostname, idle_at)
+						VALUES ($1, $2, 'web', $3, $3, now())`, id, w.org, "srv_busy_"+id)
+				}
+			}
+			w.lux.RequestServer(web, "/")
+			w.heard(runID)
+			if _, err := w.previews.Sweep(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if n := len(w.luxRuns()); n != 1 {
+				t.Fatalf("%d lux runs after one sweep with a wake due; want the wake's", n)
+			}
+			w.open(web)
+		})
 	}
 }
 
