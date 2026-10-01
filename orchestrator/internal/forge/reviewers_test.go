@@ -105,6 +105,23 @@ func TestReviewerSearchErrors(t *testing.T) {
 	}
 }
 
+// A token without read:org: GitHub refuses the query whole, no path; the
+// search asks again without teams and still finds the people.
+func TestReviewerSearchWithoutReadOrg(t *testing.T) {
+	var asked []any
+	gh, _ := graphQLServer(t, func(v map[string]any) string {
+		asked = append(asked, v["teams"])
+		if v["teams"] == true {
+			return `{"errors":[{"type":"INSUFFICIENT_SCOPES","message":"Your token has not been granted the required scopes to execute this query. The 'teams' field requires one of the following scopes: ['read:org']"}]}`
+		}
+		return `{"data":{"repository":{"pullRequest":null,"assignableUsers":{"nodes":[{"login":"cy","name":"Cy"}]}}}}`
+	})
+	got, err := gh.ReviewerCandidates(context.Background(), "acme/api", 0, "c")
+	if err != nil || len(got) != 1 || got[0].Login != "cy" || len(asked) != 2 || asked[1] != false {
+		t.Errorf("%+v, %v, asked %v", got, err, asked)
+	}
+}
+
 // No pull request and no words: nothing to suggest, and GitHub is not asked.
 func TestNoSuggestionsWithoutAPullRequest(t *testing.T) {
 	gh, _ := graphQLServer(t, func(map[string]any) string {
