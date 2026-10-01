@@ -3,15 +3,21 @@ package agenttools_test
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/marciomartins/dude/orchestrator/internal/ids"
 )
 
 // cli builds the dude CLI once per test binary.
@@ -127,5 +133,79 @@ func TestTheCLIWorksThroughLuxsSocketWithoutTheToken(t *testing.T) {
 	if out, err = dude("ask", "Keep hyphenated words whole?", "--choice", "yes", "--choice", "no"); err != nil ||
 		!strings.Contains(out, "End your turn") {
 		t.Errorf("ask: %v\n%s", err, out)
+	}
+}
+
+// dude diff's arguments reach run_diff: the Run (else the caller's own),
+// the paths, and the list's flags.
+func TestDudeDiffPassesItsArgumentsToTheTool(t *testing.T) {
+	f := setup(t)
+	token := f.run(t, "run_clidiff", "reviewer", "running")
+	sibling := ids.New(ids.Run)
+	f.run(t, sibling, "implementer", "completed")
+	hunks := f.fiveFiles(t, sibling)
+	f.fiveFiles(t, "run_clidiff")
+
+	// What the CLI sent, as lux's socket forwards it.
+	var mu sync.Mutex
+	var bodies []string
+	recorder := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, r.URL.Path+" "+string(b))
+		mu.Unlock()
+		r.Body = io.NopCloser(bytes.NewReader(b))
+		r.URL.Scheme, r.URL.Host, r.RequestURI = "http", strings.TrimPrefix(f.url, "http://"), ""
+		res, err := http.DefaultTransport.RoundTrip(r)
+		if err != nil {
+			http.Error(w, err.Error(), 502)
+			return
+		}
+		defer res.Body.Close()
+		w.WriteHeader(res.StatusCode)
+		_, _ = io.Copy(w, res.Body)
+	}))
+	t.Cleanup(recorder.Close)
+	bin := cli(t)
+	env := append(os.Environ(), "LUX_SERVICE_DUDE="+luxService(t, recorder.URL, token), "DUDE_TOOLS_TOKEN=", "DUDE_TOOLS_URL=")
+	dude := func(args ...string) (listed, string) {
+		t.Helper()
+		mu.Lock()
+		bodies = nil
+		mu.Unlock()
+		cmd := exec.Command(bin, args...)
+		cmd.Env = env
+		var out bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &out, &out
+		err := cmd.Run()
+		var got listed
+		if err != nil || json.Unmarshal(out.Bytes(), &got) != nil {
+			t.Fatalf("dude %v: %v\n%s", args, err, out.String())
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if len(bodies) != 1 {
+			t.Fatalf("dude %v sent %v", args, bodies)
+		}
+		return got, bodies[0]
+	}
+
+	got, sent := dude("diff")
+	if sent != "/tools/run_diff {}" || got.Run != "run_clidiff" || got.TotalFiles != 5 {
+		t.Errorf("dude diff sent %s, showed run %s", sent, got.Run)
+	}
+	got, sent = dude("diff", "--name-status", "--limit", "2", "--offset", "1")
+	if sent != `/tools/run_diff {"limit":2,"nameStatus":true,"offset":1}` ||
+		!slices.Equal(paths(got.Files), []string{"b.go", "c.go"}) || len(got.Files[0]) != 2 || !got.HasMore {
+		t.Errorf("dude diff --name-status --limit 2 --offset 1 sent %s, showed %v", sent, got.Files)
+	}
+	got, sent = dude("diff", sibling, "a.go", "c.go")
+	if sent != `/tools/run_diff {"paths":["a.go","c.go"],"run":"`+sibling+`"}` || got.Run != sibling ||
+		len(got.Files) != 2 || got.Files[0]["patch"] != hunks["a.go"] {
+		t.Errorf("dude diff RUN a.go c.go sent %s, showed %v", sent, got.Files)
+	}
+	// A path that only looks like a Run's id is a path.
+	if _, sent = dude("diff", "run_tests/x.go"); sent != `/tools/run_diff {"paths":["run_tests/x.go"]}` {
+		t.Errorf("dude diff run_tests/x.go sent %s", sent)
 	}
 }
