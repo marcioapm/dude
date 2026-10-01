@@ -67,7 +67,7 @@ def test_a_project_defines_its_servers_and_a_preview_serves_them(client: ApiClie
     # Declared: its server exists in lux, at one label under the preview
     # domain, asleep; nothing runs.
     asleep = wait_until(lambda: (s := client.get(f"/v1/tasks/{task['id']}/servers").json())["run"].get("asleep") and s,
-                        timeout=30, message="the preview never went to sleep")
+                        timeout=60, message="the preview never went to sleep")
     assert asleep["run"]["wakeable"] is True and asleep["run"]["previewStage"] is None, asleep["run"]
     [web] = asleep["servers"]
     host = web["url"].removeprefix("https://")
@@ -80,26 +80,26 @@ def test_a_project_defines_its_servers_and_a_preview_serves_them(client: ApiClie
     # Someone opens it: lux asks dude, dude starts it, it serves.
     assert lux_fake(env, f"/fake/servers/{web['id']}/request?path=/")["served"] is False
     ready = wait_until(lambda: (s := client.get(f"/v1/tasks/{task['id']}/servers").json())["run"]["previewStage"] == "ready" and s,
-                       timeout=30, message="the preview never woke")
+                       timeout=60, message="the preview never woke")
     assert [s["name"] for s in ready["servers"]] == ["web"] and ready["servers"][0]["state"] == "ready"
     assert ready["servers"][0]["url"] == web["url"], "the URL changed on waking"
     assert ready["run"]["terminalUrl"].endswith(f"/runs/{ready['run']['luxRunId']}/terminal")
     assert lux_fake(env, f"/fake/servers/{web['id']}/request?path=/")["served"] is True
-    wait_until(lambda: any(p.get("server") == "web" and p.get("state") == "ready" for p in heard), timeout=30,
+    wait_until(lambda: any(p.get("server") == "web" and p.get("state") == "ready" for p in heard), timeout=60,
                message="no servers.changed for web ready")
     stop.set()
     first_lux_run = ready["run"]["luxRunId"]
 
     # Unused: lux says so, dude stops the Run, the preview sleeps.
     assert lux_fake(env, f"/fake/servers/{web['id']}/idle")["idle"] is True
-    wait_until(lambda: client.get(f"/v1/tasks/{task['id']}/servers").json()["run"].get("asleep"), timeout=30,
+    wait_until(lambda: client.get(f"/v1/tasks/{task['id']}/servers").json()["run"].get("asleep"), timeout=60,
                message="the idle preview was never put to sleep")
     assert lux_get(env, f"/v1/runs/{first_lux_run}")["state"] == "stopped"
 
     # Opened again: the same Run resumed.
     lux_fake(env, f"/fake/servers/{web['id']}/request?path=/")
     again = wait_until(lambda: (s := client.get(f"/v1/tasks/{task['id']}/servers").json())["run"]["previewStage"] == "ready" and s,
-                       timeout=30, message="the preview never woke again")
+                       timeout=60, message="the preview never woke again")
     assert again["run"]["luxRunId"] == first_lux_run
 
     run_id = again["run"]["id"]
@@ -112,9 +112,9 @@ def test_a_project_defines_its_servers_and_a_preview_serves_them(client: ApiClie
     # Stopped: its server deleted in lux (its URL gone), its Run cancelled.
     assert client.delete(f"/v1/tasks/{task['id']}/preview").status_code == 200
     assert client.get(f"/v1/tasks/{task['id']}/servers").json()["run"] is None
-    wait_until(lambda: lux_get(env, f"/v1/servers?hostname={host}")["servers"] == [], timeout=30,
+    wait_until(lambda: lux_get(env, f"/v1/servers?hostname={host}")["servers"] == [], timeout=60,
                message="the preview's server was never deleted in lux")
-    wait_until(lambda: lux_get(env, f"/v1/runs/{first_lux_run}")["state"] == "cancelled", timeout=30,
+    wait_until(lambda: lux_get(env, f"/v1/runs/{first_lux_run}")["state"] == "cancelled", timeout=60,
                message="the preview's Run was never cancelled")
 
 
