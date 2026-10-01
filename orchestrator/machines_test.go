@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/api"
+	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
@@ -177,6 +180,93 @@ func TestABranchPreviewRunsOnItsProjectsPreviewSize(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND machine->>'name' = 'XL' AND machine->>'pool' = 'big'`, runID); n != 1 {
 		t.Errorf("the preview did not record its size:\n%s", w.describeRuns())
+	}
+}
+
+// submits counts what is submitted to lux, refused or not.
+type submits struct {
+	lux.Client
+	n atomic.Int32
+}
+
+func (s *submits) Submit(ctx context.Context, spec lux.Spec, key string) (lux.Run, error) {
+	s.n.Add(1)
+	return s.Client.Submit(ctx, spec, key)
+}
+
+// The reason a Run on a size whose pool is gone from lux fails with, as the
+// task's page shows it.
+const poolGone = "Its machine size, Large, runs in a lux pool that no longer exists. Give Large another pool in Machines."
+
+// A phase Run on a size whose pool was deleted in lux after the size named
+// it: lux refuses the submit (422 unknown_pool), and the Run fails at once
+// with a reason in words, and is never submitted again.
+func TestAPhaseRunWhosePoolWasDeletedFailsWithTheReason(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	counted := &submits{Client: w.syncer.Lux}
+	w.syncer.Lux = counted
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool_id)
+		VALUES ('msz_large', $1, 'Large', 8, 16384, 80, $2)`, w.org, bigPool)
+	mustExec(t, w.owner, `UPDATE projects SET agent_models = jsonb_set(agent_models, '{implementer,machineSize}', '"msz_large"') WHERE id = $1`, w.project)
+	w.lux.Pools = slices.DeleteFunc(fakelux.DefaultPools(), func(p lux.Pool) bool { return p.ID == bigPool })
+
+	wi := w.task()
+	w.deliver(wi)
+	w.until("the implementer to fail", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'failed'`, wi) == 1
+	})
+	var errText string
+	if err := w.owner.QueryRow(ctx, `SELECT error FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi).Scan(&errText); err != nil {
+		t.Fatal(err)
+	}
+	if errText != poolGone {
+		t.Errorf("error = %q, want %q", errText, poolGone)
+	}
+	tried := counted.n.Load()
+	// Sweeps after the failure do not submit it again; nothing reached lux.
+	mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE task_id = $1`, wi)
+	for range 3 {
+		w.pump()
+	}
+	if got := counted.n.Load(); tried != 1 || got != tried {
+		t.Errorf("submitted %d times, then %d; want once, and never again", tried, got)
+	}
+	if n := len(w.lux.Runs()); n != 0 {
+		t.Errorf("lux made %d Runs", n)
+	}
+}
+
+// The same for a branch preview on such a size.
+func TestAPreviewWhosePoolWasDeletedFailsWithTheReason(t *testing.T) {
+	w := newWorld(t)
+	counted := &submits{Client: w.previews.Lux}
+	w.previews.Lux = counted
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool_id)
+		VALUES ('msz_large', $1, 'Large', 8, 16384, 80, $2)`, w.org, bigPool)
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	mustExec(t, w.owner, `UPDATE projects SET preview_settings = '{"machineSize":"msz_large"}' WHERE id = $1`, w.project)
+	w.lux.Pools = slices.DeleteFunc(fakelux.DefaultPools(), func(p lux.Pool) bool { return p.ID == bigPool })
+
+	wi := w.task()
+	code, out := w.do("POST", "/internal/tasks/"+wi+"/preview", nil)
+	if code != 201 {
+		t.Fatalf("start = %d %v", code, out)
+	}
+	runID := out["run"].(map[string]any)["id"].(string)
+	w.until("the preview to fail", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed'`, runID) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND error = $2`, runID, poolGone); n != 1 {
+		t.Errorf("the preview did not fail with the reason:\n%s", w.describeRuns())
+	}
+	tried := counted.n.Load()
+	mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE id = $1`, runID)
+	for range 3 {
+		w.pump()
+	}
+	if got := counted.n.Load(); tried != 1 || got != tried {
+		t.Errorf("submitted %d times, then %d; want once, and never again", tried, got)
 	}
 }
 
