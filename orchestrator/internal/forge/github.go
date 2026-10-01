@@ -1004,7 +1004,7 @@ func (g *GitHub) RerunFailed(ctx context.Context, slug string, checks []Check) (
 // RequestReviewers asks people, and teams named "org/slug", for a review
 // on a pull request.
 func (g *GitHub) RequestReviewers(ctx context.Context, slug string, number int, logins []string) error {
-	users, teams := reviewerSlugs(logins)
+	users, teams := reviewerSlugs(slug, logins)
 	return g.do(ctx, "POST", fmt.Sprintf("/repos/%s/pulls/%d/requested_reviewers", slug, number),
 		map[string]any{"reviewers": users, "team_reviewers": teams}, nil)
 }

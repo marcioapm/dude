@@ -96,9 +96,9 @@ func (g *GitHub) ReviewerCandidates(ctx context.Context, slug string, number int
 			} `json:"organization"`
 		} `json:"data"`
 		Errors []struct {
-			Type    string   `json:"type"`
-			Message string   `json:"message"`
-			Path    []string `json:"path"`
+			Type    string `json:"type"`
+			Message string `json:"message"`
+			Path    []any  `json:"path"`
 		} `json:"errors"`
 	}
 	if err := g.doURL(ctx, "POST", g.graphqlURL(), map[string]any{"query": query, "variables": map[string]any{
@@ -113,7 +113,7 @@ func (g *GitHub) ReviewerCandidates(ctx context.Context, slug string, number int
 		if e.Type == "RATE_LIMITED" {
 			return nil, &Error{Status: 429, Message: "GraphQL: " + e.Message}
 		}
-		if len(e.Path) == 0 || e.Path[0] != "organization" {
+		if len(e.Path) == 0 || e.Path[0] != any("organization") {
 			return nil, &Error{Status: 422, Message: "GitHub would not list reviewers: " + e.Message}
 		}
 	}
@@ -178,12 +178,18 @@ func (g *GitHub) ReviewerCandidates(ctx context.Context, slug string, number int
 }
 
 // reviewerSlugs splits what RequestReviewers was given into users and the
-// slugs of teams ("org/slug", as Candidate names a team).
-func reviewerSlugs(logins []string) (users, teams []string) {
+// slugs of teams ("org/slug", as Candidate names a team). Only the
+// repository owner's teams can review its pull requests: another owner's
+// team (one saved in the settings, from another repository) is left out,
+// rather than asking a same-named team here or failing the whole request.
+func reviewerSlugs(slug string, logins []string) (users, teams []string) {
+	owner, _, _ := strings.Cut(slug, "/")
 	users, teams = []string{}, []string{}
 	for _, l := range logins {
-		if _, slug, ok := strings.Cut(l, "/"); ok {
-			teams = append(teams, slug)
+		if org, team, ok := strings.Cut(l, "/"); ok {
+			if strings.EqualFold(org, owner) {
+				teams = append(teams, team)
+			}
 		} else {
 			users = append(users, l)
 		}
