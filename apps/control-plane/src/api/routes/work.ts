@@ -30,7 +30,7 @@ const RUN_SELECT = `
   task_id AS "taskId", attempt, status, error, kind,
   phase, role, category, parent_run_id AS "parentRunId", base_refs AS "baseRefs",
   (SELECT COALESCE(json_object_agg(k, v->>'sha'), '{}'::json) FROM jsonb_each(heads) AS h(k, v)) AS heads,
-  branch, harness, model, dude_pause AS "dudePause",
+  branch, harness, model, dude_pause AS "dudePause", machine,
   json_build_object('input', input_tokens, 'output', output_tokens, 'cacheRead', cache_read_tokens,
     'cacheWrite', cache_write_tokens, 'context', context_tokens) AS tokens,
   created_at AS "createdAt", started_at AS "startedAt", ended_at AS "endedAt"`;

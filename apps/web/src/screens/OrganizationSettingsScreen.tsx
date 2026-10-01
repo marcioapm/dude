@@ -29,10 +29,11 @@ import { agentsNav, deliveryNav, isRole, SettingsFrame, useSettings } from "./Se
 import { DeliveryPage, RolePage } from "./settingsPages.tsx";
 import { GithubBehaviour, WebhookCard } from "./GithubSettings.tsx";
 import { isMemoryPage, MEMORY_PAGES, MemoryPages, memoryNav, useIndexSummary, type ProjectChoice } from "./MemorySettings.tsx";
+import { MachinesPage, useMachineSizes } from "./MachinesSettings.tsx";
 
 // The first is where the screen opens: who is in the organization, then
 // GitHub, what a new organization sets up first.
-const PAGES = ["members", "github", "general", ...SETTINGS_ROLES, "delivery", ...MEMORY_PAGES] as const;
+const PAGES = ["members", "github", "general", ...SETTINGS_ROLES, "machines", "delivery", ...MEMORY_PAGES] as const;
 
 export interface OrganizationSettingsScreenProps {
   client: ApiClient;
@@ -52,6 +53,9 @@ export function OrganizationSettingsScreen({ client, me, people, onPeopleChanged
   const index = useIndexSummary(client);
   const { scope, problem } = useSettings(client, () => client.organizationSettings(), (p) => client.updateOrganizationSettings(p));
   const settings = scope?.settings;
+  // The sizes, once for the screen: the menu's count, the Machines page and
+  // each role's Machine field. A change on the Machines page lands here.
+  const machines = useMachineSizes(client);
   // Members and GitHub are the backend's own: they show at once, and still
   // work while the orchestrator (defaults, built-in prompts) is away. Only
   // the pages that need its settings wait for them.
@@ -69,6 +73,7 @@ export function OrganizationSettingsScreen({ client, me, people, onPeopleChanged
         { id: "general", label: "General", icon: "settings" },
         { id: "github", label: "GitHub", icon: "git-branch" },
         agentsNav(settings),
+        { id: "machines", label: "Machines", icon: "chip", note: machines.sizes?.sizes.length ?? undefined },
         deliveryNav(settings),
         memoryNav(index.status?.failed),
       ]}
@@ -77,6 +82,10 @@ export function OrganizationSettingsScreen({ client, me, people, onPeopleChanged
         // A page with another audience says so itself: Memory says who may do what there.
         <MemoryPages client={client} page={page} projects={projects} admin={me?.role === "admin"} index={index} onPage={onPage}
           scope={{ kind: "organization", name: settings?.organization.name ?? "the organisation" }} />
+      ) : page === "machines" ? (
+        // Machines says who may change sizes itself.
+        <MachinesPage client={client} orgName={settings?.organization.name ?? "the organisation"}
+          sizes={machines.sizes} problem={machines.problem} setSizes={machines.setSizes} />
       ) : (
         <>
           <SettingsNote icon="info">
@@ -100,7 +109,8 @@ export function OrganizationSettingsScreen({ client, me, people, onPeopleChanged
           ) : scope && page === "delivery" ? (
             <DeliveryPage scope={scope} />
           ) : scope && isRole(page) ? (
-            <RolePage key={page} scope={scope} role={page} onOpenRun={onOpenRun} />
+            <RolePage key={page} scope={scope} role={page} onOpenRun={onOpenRun} sizes={machines.sizes?.sizes ?? null}
+              onManageSizes={me?.role === "admin" ? () => onPage("machines") : undefined} />
           ) : null}
         </>
       )}

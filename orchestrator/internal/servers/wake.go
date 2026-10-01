@@ -78,7 +78,7 @@ type wakeRun struct {
 // running previews that are only re-followed.
 //
 // The status/lux_stop_reason conjunct is what runs_wakeable_live_idx and
-// runs_wakeable_open_idx (064) serve, so the scan follows the live previews
+// runs_wakeable_open_idx (065) serve, so the scan follows the live previews
 // and not every preview ever made. An ended preview is taken until endInLux
 // marks it lux_stop_reason = 'cancel' (nothing of it left in lux).
 const wakeableSelect = `SELECT id, organization_id, project_id, task_id, status, lux_run_id, lux_state, task_ended,
@@ -465,6 +465,7 @@ func (p *Previews) wake(ctx context.Context, r wakeRun) (bool, error) {
 
 // resumeWoken resumes a stopped preview Run, syncing its checkouts.
 func (p *Previews) resumeWoken(ctx context.Context, r wakeRun, lr lux.Run) error {
+	phases.RecordMemoryLimit(ctx, p.DB, p.Log, r.Org, r.ID, lr)
 	login, err := phases.LoginFor(ctx, p.Registry, lr.Spec.Image.Ref, &lr.Spec)
 	if phases.IsLoginUnavailable(err) {
 		p.Log.Warn("preview not woken: "+err.Error(), "run", r.ID)
@@ -570,7 +571,7 @@ func (p *Previews) retireRun(ctx context.Context, r wakeRun) error {
 // submitWoken submits the preview's Run (a servers-only spec: its servers
 // are lux's own, attached) and attaches every server to it.
 func (p *Previews) submitWoken(ctx context.Context, r wakeRun) error {
-	spec, branch, err := p.spec(ctx, r.previewRun)
+	spec, branch, machine, err := p.spec(ctx, r.previewRun)
 	if phases.IsLoginUnavailable(err) {
 		return p.releaseWake(ctx, r, phases.LoginRetry)
 	}
@@ -580,7 +581,11 @@ func (p *Previews) submitWoken(ctx context.Context, r wakeRun) error {
 	}
 	spec.Workload.Servers = nil
 	spec.Labels["dude.preview"] = r.ID
+	phases.NamePool(ctx, p.Lux, machine)
 	lr, err := p.Lux.Submit(ctx, spec, fmt.Sprintf("%s/%d", r.ID, r.Generation))
+	if reason := phases.PoolGone(err, machine); reason != "" {
+		return p.fail(ctx, r.previewRun, reason)
+	}
 	if le, ok := lux.AsError(err); ok && !le.Retryable() {
 		return p.fail(ctx, r.previewRun, "lux refused the preview: "+le.Message)
 	}
@@ -595,9 +600,11 @@ func (p *Previews) submitWoken(ctx context.Context, r wakeRun) error {
 		}
 	}
 	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		// machine: the size this lux Run was submitted on; a later generation
+		// records its own.
 		_, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, lux_repositories = $4, branch = NULLIF($5, ''),
-			started_at = COALESCE(started_at, now())
-			WHERE id = $1 AND lux_run_id IS NULL AND lux_generation = $6`, r.ID, lr.ID, lr.State, db.NonNil(repos), branch, r.Generation)
+			machine = $7::jsonb, started_at = COALESCE(started_at, now())
+			WHERE id = $1 AND lux_run_id IS NULL AND lux_generation = $6`, r.ID, lr.ID, lr.State, db.NonNil(repos), branch, r.Generation, machine)
 		return err
 	}); err != nil {
 		return err

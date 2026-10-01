@@ -34,6 +34,7 @@ import { agentsNav, deliveryNav, isRole, SettingsFrame, useSettings } from "./Se
 import { DeliveryPage, RolePage } from "./settingsPages.tsx";
 import { FacePicker } from "./FacePicker.tsx";
 import { ServersSettingsPage } from "./ServersSettings.tsx";
+import { useMachineSizes } from "./MachinesSettings.tsx";
 import { isMemoryPage, MEMORY_PAGES, MemoryPages, memoryNav, useIndexSummary, type ProjectChoice } from "./MemorySettings.tsx";
 
 // The first is where the screen opens: a new project needs its repositories first.
@@ -98,6 +99,8 @@ export function ProjectSettingsScreen({ client, projectId, projects, admin, page
   };
   const settings = scope?.settings;
   const orgName = settings?.organization.name ?? "the organisation";
+  // The organisation's sizes, once for the screen: each Machine field's choices.
+  const sizes = useMachineSizes(client).sizes?.sizes ?? null;
 
   return (
     <SettingsFrame
@@ -153,11 +156,11 @@ export function ProjectSettingsScreen({ client, projectId, projects, admin, page
               <RepositoriesTab client={client} project={project} canEdit={scope.settings.canEdit} onSaved={saved} />
             </>
           ) : page === "servers" ? (
-            <ServersSettingsPage client={client} project={project} canEdit={scope.settings.canEdit} orgName={orgName} onCount={setServerCount} />
+            <ServersSettingsPage client={client} project={project} canEdit={scope.settings.canEdit} orgName={orgName} sizes={sizes} onCount={setServerCount} />
           ) : page === "delivery" ? (
             <DeliveryPage scope={scope} />
           ) : isRole(page) ? (
-            <RolePage key={page} scope={scope} role={page} onOpenRun={onOpenRun} />
+            <RolePage key={page} scope={scope} role={page} onOpenRun={onOpenRun} sizes={sizes} />
           ) : isMemoryPage(page) ? (
             <MemoryPages client={client} page={page} projects={projects} admin={admin} index={index} onPage={onPage}
               scope={{ kind: "project", id: project.id, name: project.name, organization: orgName }} />

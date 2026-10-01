@@ -16,11 +16,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 import pytest
+import requests
 
 from fake_github import FakeGitHub
-from helpers import ApiClient, wait_until
+from helpers import ApiClient, query, wait_until
 
 pytestmark = pytest.mark.lux
 
@@ -210,3 +212,137 @@ def test_an_agent_waiting_on_a_person_is_parked_on_real_lux_and_resumed_by_the_a
     messages = " ".join(e["payload"].get("text", "") for e in client.events(runId=implementer()["id"])
                         if e["eventType"] == "agent.message")
     assert "Answer to your question" in messages, messages
+
+
+# ---------------------------------------------------------------------------
+# Machine sizes: what dude sends lux as a Run's size and pool, and how it
+# reads lux's pools. Straight to lux's API with dude's key, encoded as the
+# orchestrator encodes them (lux.Resources: memory and disk as JSON numbers
+# of bytes; lux.PlacementSpec: placement.poolId).
+# ---------------------------------------------------------------------------
+
+GIB = 1 << 30
+
+
+def _lux(env, method: str, path: str, body: dict | None = None, key: str | None = None) -> requests.Response:
+    headers = {"authorization": f"Bearer {env.real_lux['api_key']}"}
+    if key:
+        headers["idempotency-key"] = key
+    return requests.request(method, env.real_lux["luxd_url"] + path, json=body, headers=headers, timeout=30)
+
+
+def _sleeper(name: str, **extra) -> dict:
+    """A Run that only waits, as a branch preview's workload does."""
+    return {"name": name, "labels": {"dude.kind": "contract"}, "image": {"ref": FAKE_IMAGE},
+            "workload": {"adapter": "generic", "command": ["sleep", "infinity"], "workdir": "/tmp"}, **extra}
+
+
+def test_a_run_sized_as_dude_sizes_it_reaches_running_on_real_lux(env):
+    """lux's spec.Bytes takes a JSON number of bytes as well as "8Gi"
+    (docs/runspec.md: "Sizes accept 512Mi, 8Gi, 1G, or bytes"); this is
+    the number form dude sends. Its hosts must have 2 CPUs and 8 GiB free."""
+    resources = {"cpus": 2, "memory": 8 * GIB, "disk": 20 * GIB}
+    res = _lux(env, "POST", "/v1/runs", _sleeper("contract sized", resources=resources), key=f"contract-{os.urandom(6).hex()}")
+    assert res.status_code in (200, 201, 202), res.text
+    run_id = res.json()["id"]
+    try:
+        run = wait_until(lambda: (r := _lux(env, "GET", f"/v1/runs/{run_id}").json())["state"] == "running" and r,
+                         timeout=180, interval=1, message="a Run with dude's resources never ran on lux")
+        # lux kept the size it was given, in bytes.
+        assert run["spec"]["resources"]["memory"] == 8 * GIB and run["spec"]["resources"]["disk"] == 20 * GIB, run["spec"]
+    finally:
+        _lux(env, "POST", f"/v1/runs/{run_id}/cancel")
+
+
+def test_a_pool_id_lux_does_not_have_is_refused(env):
+    """What lux does with a size whose pool is gone (deleted in lux after an
+    admin chose it). dude sends the pool as placement.poolId; lux resolves
+    it at submit and refuses an id it has no pool for with 422
+    unknown_pool, which dude turns into a failed Run with a reason in words
+    (phases.PoolGone). Needs a lux with placement.poolId (feat/memory-factor)."""
+    pool_id = f"pool_nosuch{os.urandom(4).hex()}"
+    res = _lux(env, "POST", "/v1/runs", _sleeper("contract no pool", placement={"poolId": pool_id}), key=f"contract-{os.urandom(6).hex()}")
+    if res.status_code in (200, 201, 202):
+        _lux(env, "POST", f"/v1/runs/{res.json()['id']}/cancel")
+    assert res.status_code == 422, (res.status_code, res.text)
+    assert res.json()["error"]["code"] == "unknown_pool", res.text
+
+
+def test_luxs_pools_decode_as_dude_reads_them(env, client: ApiClient):
+    res = _lux(env, "GET", "/v1/pools")
+    assert res.status_code == 200, res.text
+    pools = res.json()["pools"]
+    assert all(isinstance(p["name"], str) and p["name"] for p in pools), pools
+    # Each pool's id is what a size stores; the pattern is migration 064's.
+    assert all(re.fullmatch(r"pool_[A-Za-z0-9_-]+", p.get("id", "")) for p in pools), pools
+    for p in pools:
+        # Absent from an older lux; when there, one host's size: CPUs, and
+        # memory and disk in bytes (0: disk not reserved).
+        host = p.get("hostSize")
+        if host is not None:
+            assert isinstance(host["cpus"], (int, float)) and host["cpus"] > 0, p
+            assert isinstance(host["memory"], int) and host["memory"] > 0, p
+            assert isinstance(host["disk"], int) and host["disk"] >= 0, p
+        assert p.get("hostSizeFrom") in (None, "", "running", "history"), p
+        assert isinstance(p.get("isDefault", False), bool) and isinstance(p.get("hostsRunning", 0), (int, type(None))), p
+    # And through the orchestrator's lux.Client and the backend, as the
+    # Machines page reads them: a decoding failure would be a `problem`.
+    served = client.get("/v1/machines/pools")
+    assert served.status_code == 200 and served.json()["problem"] is None, served.text
+    assert sorted(p["name"] for p in served.json()["pools"]) == sorted(p["name"] for p in pools)
+
+
+def test_a_role_on_a_size_reaches_real_lux_with_its_resources_and_pool(client: ApiClient, env, owner_dsn: str, lux_project):
+    """End to end: an admin's machine size, named by a role, is what lux runs.
+
+    The size names one of lux's pools by id; the implementer's Run goes to
+    lux with the size as resources and that pool as placement.poolId. lux
+    resolves the pool, places the Run there, starts its container with a
+    memory limit scaled from the size, and dude records the size and the
+    limit on its Run. Needs a lux with placement.poolId (feat/memory-factor)."""
+    project, _gh = lux_project
+    pools = client.get("/v1/machines/pools").json()
+    assert pools["problem"] is None, pools
+    pool = next(p for p in pools["pools"] if p.get("isDefault")) if any(p.get("isDefault") for p in pools["pools"]) else pools["pools"][0]
+    made = client.post("/v1/machines/sizes", {"name": f"Contract {os.urandom(2).hex()}", "cpus": 1.5, "memoryMiB": 1536, "diskGiB": 5, "poolId": pool["id"]})
+    assert made.status_code == 201, made.text
+    size = next(s for s in made.json()["sizes"] if s["name"].startswith("Contract"))
+    client.patch(f"/v1/projects/{project['id']}/settings", {"roles": {"implementer": {"machineSize": size["id"]}}})
+
+    task = client.create_task(project["id"], "Sized on lux")
+    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+
+    def submitted():
+        rows = query(owner_dsn, "SELECT id, lux_run_id, machine FROM runs WHERE task_id = %s AND phase = 'implement' AND lux_run_id IS NOT NULL", (task["id"],))
+        return rows[0] if rows else None
+
+    run = wait_until(submitted, timeout=120, interval=1, message="the implementer never reached lux")
+
+    # What lux stored: the size as resources, the pool by id, resolved to its name.
+    lux_run = _lux(env, "GET", f"/v1/runs/{run['lux_run_id']}").json()
+    assert lux_run["spec"]["resources"]["cpus"] == 1.5, lux_run["spec"]
+    assert lux_run["spec"]["resources"]["memory"] == 1536 * 1024 * 1024, lux_run["spec"]
+    assert lux_run["spec"]["resources"]["disk"] == 5 * GIB, lux_run["spec"]
+    assert lux_run["spec"]["placement"]["poolId"] == pool["id"], lux_run["spec"]
+    assert lux_run["spec"]["placement"]["pool"] == pool["name"], lux_run["spec"]
+
+    # lux placed it and started its container with a memory limit from the size.
+    def placed():
+        r = _lux(env, "GET", f"/v1/runs/{run['lux_run_id']}").json()
+        ps = r.get("placements") or []
+        return ps[-1] if ps and ps[-1].get("memoryLimit") else None
+
+    placement = wait_until(placed, timeout=180, interval=1, message="lux never started the sized Run's container")
+    limit = placement["memoryLimit"]
+    assert 0 < limit <= 1536 * 1024 * 1024, placement
+    print("placement:", {k: placement.get(k) for k in ("hostId", "memoryLimit")})
+
+    # dude recorded the size it sent, the pool's name then, and lux's limit.
+    def recorded():
+        m = query(owner_dsn, "SELECT machine FROM runs WHERE id = %s", (run["id"],))[0]["machine"]
+        return m if m and m.get("memoryLimit") else None
+
+    machine = wait_until(recorded, timeout=120, interval=1, message="dude never recorded lux's memory limit")
+    assert (machine["name"], machine["from"], machine["poolId"], machine["pool"]) == (size["name"], "project", pool["id"], pool["name"]), machine
+    assert (machine["cpus"], machine["memoryMiB"], machine["diskGiB"]) == (1.5, 1536, 5), machine
+    assert machine["memoryLimit"] == limit, (machine, placement)

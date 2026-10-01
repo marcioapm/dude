@@ -97,6 +97,11 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   a branch that does not exist — and the orchestrator fast-forwards the work
   item's branch to it through GitHub, never forcing. The next phase checks
   out that commit.
+- **Every Run is on a machine size.** The organisation's sizes
+  (`machine_sizes`) are named by each role's settings and a project's
+  previews; the spec carries the size as `resources` and its pool, by
+  lux's id, as `placement.poolId`, and `runs.machine` keeps what it ran on. Design:
+  [`design/machine-sizes.md`](design/machine-sizes.md).
 - **Publishing is a property of the phase** (`Publishes`): a reviewer's
   container is never pushed.
 - **A turn is done when the agent goes busy then idle**, as lux's shim

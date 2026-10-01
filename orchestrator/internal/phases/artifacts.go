@@ -3,6 +3,7 @@ package phases
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +35,32 @@ import (
 type Artifacts struct {
 	DB  *db.DB
 	Lux lux.Client
+	// nil logs to slog.Default.
+	Log *slog.Logger
+}
+
+// RecordMemoryLimit adds to a Run's runs.machine the memory limit lux
+// reports for its latest placement, once: so a finished Run still says what
+// its container got. Nothing when lux reports none, the Run recorded no
+// machine, or the limit is already there. A failed write is logged, not
+// returned: the limit only informs the run chip, and the next read of the
+// lux Run writes it again.
+func RecordMemoryLimit(ctx context.Context, d *db.DB, log *slog.Logger, org, runID string, lr lux.Run) {
+	limit := lr.MemoryLimit()
+	if limit == nil {
+		return
+	}
+	err := d.InOrg(ctx, org, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE runs SET machine = jsonb_set(machine, '{memoryLimit}', to_jsonb($2::bigint))
+			WHERE id = $1 AND machine IS NOT NULL AND machine->>'memoryLimit' IS NULL`, runID, *limit)
+		return err
+	})
+	if err != nil && ctx.Err() == nil {
+		if log == nil {
+			log = slog.Default()
+		}
+		log.Warn("recording a Run's memory limit failed", "run", runID, "error", err)
+	}
 }
 
 // How long to keep asking lux about an exit it has not reported, or about
@@ -186,6 +213,7 @@ func (a *Artifacts) settled(ctx context.Context, r dueRun) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	RecordMemoryLimit(ctx, a.DB, a.Log, r.Org, r.ID, run)
 	resumed := r.Status == statusRunning || r.Status == statusScheduled
 	if !lux.Terminal(run.State) && !resumed {
 		return false, nil
