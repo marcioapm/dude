@@ -12,7 +12,7 @@
  * "/history" or "/builds", or "builds/<build id>".
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Breadcrumb,
   BuildQueueStrip,
@@ -48,17 +48,20 @@ import {
   Tr,
 } from "@dude/design-system/primitives";
 import {
+  builderOffline,
   IMAGE_NAME,
   IMAGE_NAME_MESSAGE,
   imageReferences,
   lintContainerfile,
   shortDigest,
   type ImageBuild,
+  type ImageBuilderInfo,
   type ImageBuildWithLog,
   type ImageDetail,
   type ImagesResponse,
   type ImageSummary,
   type ImageVersion,
+  type PersistedEvent,
 } from "@dude/domain";
 import type { ApiClient } from "../api/client.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
@@ -67,7 +70,16 @@ import { buildStages, builderLimits, containerfileCompletions, draftCounts, imag
 
 const ago = (iso: string) => formatTimestamp(iso, "relative");
 
-/** The organisation's images and queue, read again on any change and every few seconds while something builds. */
+/** Only the library's own events change what these pages show; the rest of the organisation's are skipped. */
+const notAnImageEvent = (e: PersistedEvent) => !e.eventType.startsWith("image.");
+
+/** How often an idle page re-reads, to notice the builder going offline (its heartbeat is every 30 s). */
+const LIVENESS_EVERY = 60_000;
+
+/**
+ * The organisation's images and queue, read again on an image.* event,
+ * every few seconds while something builds, and every minute otherwise.
+ */
 export function useImages(client: ApiClient) {
   const [data, setData] = useState<ImagesResponse | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
@@ -78,15 +90,27 @@ export function useImages(client: ApiClient) {
     }, (err: unknown) => setProblem(errorText(err)));
   }, [client]);
   useEffect(load, [load]);
-  useReloadOnEvents({ client, all: true }, load, 1000);
+  useReloadOnEvents({ client, all: true }, load, 1000, notAnImageEvent);
   const busy = Boolean(data?.queue.length);
   useEffect(() => {
-    if (!busy) return;
-    const t = setInterval(load, 4000);
+    const t = setInterval(load, busy ? 4000 : LIVENESS_EVERY);
     return () => clearInterval(t);
   }, [busy, load]);
   return { data, problem, load, setData };
 }
+
+/** The builder not heard from: since when, and that builds wait for it. */
+function BuilderOffline({ builder }: { builder: ImageBuilderInfo }) {
+  if (!builder.offline) return null;
+  return (
+    <Callout tone="attention" data-testid="builder-offline">
+      <b>{capitalise(builderOffline(builder.lastSeenAt, (iso) => formatTimestamp(iso, "datetime")))}.</b>{" "}
+      Builds wait until it is back; a Run waiting for its image fails after 30 minutes of this.
+    </Callout>
+  );
+}
+
+const capitalise = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /** How many builds run or wait, for the menu. */
 export const queueCount = (d: ImagesResponse | null) => d?.queue.length ?? 0;
@@ -101,7 +125,7 @@ export interface ImagesPageProps {
 
 export function ImagesPage({ client, orgName, images, sub, onSub }: ImagesPageProps) {
   const parts = (sub ?? "").split("/").filter(Boolean);
-  if (parts[0] === "builds" && parts[1]) return <BuildPage client={client} orgName={orgName} buildId={parts[1]} onSub={onSub} />;
+  if (parts[0] === "builds" && parts[1]) return <BuildPage client={client} buildId={parts[1]} onSub={onSub} />;
   if (parts[0]) {
     return <ImagePage key={parts[0]} client={client} orgName={orgName} id={parts[0]} tab={parts[1] ?? "containerfile"} onSub={onSub}
       library={images.data} onChanged={images.load} />;
@@ -130,6 +154,7 @@ function ImagesList({ client, orgName, images, onSub }: { client: ApiClient; org
         actions={data.canEdit ? <Button variant="primary" leadingIcon="plus" onClick={() => setAdding({})} data-testid="new-image">New image</Button> : undefined}
       />
       {!data.canEdit ? <SettingsNote icon="info">Only {orgName}’s admins change images. Everyone can read them and their builds.</SettingsNote> : null}
+      <BuilderOffline builder={data.builder} />
       <BuildQueueStrip
         building={running ? { label: `${running.imageName} v${running.version ?? ""}${running.kind === "finish" ? " (dude layer)" : ""}`, elapsed: running.startedAt ? formatDuration(Date.now() - Date.parse(running.startedAt)) : undefined } : null}
         waiting={waiting.map((b) => `${b.imageName} v${b.version ?? ""}`)}
@@ -258,7 +283,7 @@ function useImage(client: ApiClient, id: string) {
     }, (err: unknown) => setProblem(errorText(err)));
   }, [client, id]);
   useEffect(load, [load]);
-  useReloadOnEvents({ client, all: true }, load, 1000);
+  useReloadOnEvents({ client, all: true }, load, 1000, notAnImageEvent);
   const live = detail?.builds.some((b) => b.state === "queued" || b.state === "running");
   useEffect(() => {
     if (!live) return;
@@ -320,6 +345,7 @@ function ImagePage({ client, orgName, id, tab, onSub, library, onChanged }: {
       />
       {image.archivedAt ? <Callout tone="attention">Archived: pickers no longer offer it. {image.usedBy.length ? "What still names it keeps working." : ""}</Callout> : null}
       {action.problem ? <Callout tone="danger">{action.problem}</Callout> : null}
+      <BuilderOffline builder={detail.builder} />
       <Tabs value={tab} onValueChange={(t) => onSub(t === "containerfile" ? image.id : `${image.id}/${t}`)}>
         <TabList aria-label="Image">
           <Tab value="containerfile">Containerfile</Tab>
@@ -582,20 +608,20 @@ function BuildsTable({ builds, onOpen }: { builds: readonly ImageBuild[]; onOpen
 // A build
 // ---------------------------------------------------------------------------
 
-function BuildPage({ client, orgName, buildId, onSub }: { client: ApiClient; orgName: string; buildId: string; onSub: (sub: string | undefined) => void }) {
+function BuildPage({ client, buildId, onSub }: { client: ApiClient; buildId: string; onSub: (sub: string | undefined) => void }) {
   const [build, setBuild] = useState<ImageBuildWithLog | null>(null);
-  const [limits, setLimits] = useState<{ cpus: number; memoryMiB: number } | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+  // While it runs, each read asks only for the log after the bytes it has.
+  const have = useRef<{ id: string; total: number } | null>(null);
   const load = useCallback(() => {
-    client.imageBuild(buildId).then((b) => {
-      setBuild(b);
+    const after = have.current?.id === buildId ? have.current.total : undefined;
+    client.imageBuild(buildId, after).then((b) => {
+      have.current = { id: buildId, total: b.logTotal };
+      setBuild((prev) => (after !== undefined && b.logStart === after && prev?.id === b.id ? { ...b, log: prev.log + b.log } : b));
       setProblem(null);
     }, (err: unknown) => setProblem(errorText(err)));
   }, [client, buildId]);
   useEffect(load, [load]);
-  useEffect(() => {
-    void client.images().then((d) => setLimits(d.builder), () => undefined);
-  }, [client]);
   const live = build?.state === "queued" || build?.state === "running";
   useEffect(() => {
     if (!live) return;
@@ -615,7 +641,7 @@ function BuildPage({ client, orgName, buildId, onSub }: { client: ApiClient; org
       <SettingsHeader leading={<ImageMark size={44} />} title={<span className="ds-mono" data-testid="build-title">{build.imageName} v{build.version}</span>}
         description={<>{build.note ? `“${build.note}” · ` : ""}{build.requestedBy?.name ?? "dude"}</>} />
       <div data-testid="build-stages" data-state={build.state}>
-        <BuildStages stages={buildStages(build, limits ?? { cpus: 1.5, memoryMiB: 1536 }, build.published?.number ?? null)} />
+        <BuildStages stages={buildStages(build, build.builder, build.published?.number ?? null)} />
       </div>
       <dl className="buildFacts">
         <div><dt className="ds-tnum">{elapsed !== null ? formatDuration(elapsed) : build.state === "queued" ? queuePlace(build.ahead) : "—"}</dt><dd>{elapsed !== null ? (live ? "elapsed" : "took") : "in the line"}</dd></div>
@@ -623,9 +649,10 @@ function BuildPage({ client, orgName, buildId, onSub }: { client: ApiClient; org
         {build.pushSeconds ? <div><dt className="ds-tnum">{formatDuration(build.pushSeconds * 1000)}</dt><dd>pushing</dd></div> : null}
         <div><dt className="ds-tnum">{build.published ? `v${build.published.number}` : "none"}</dt><dd>{build.state === "succeeded" && build.kind === "build" ? "published now" : "published"}</dd></div>
       </dl>
+      {live ? <BuilderOffline builder={build.builder} /> : null}
       {build.state === "failed" ? <Callout tone="danger" data-testid="build-error">{build.error}</Callout> : null}
       {build.state === "succeeded" && build.kind === "build" ? (
-        <Callout tone="success">Published. Everything that uses {build.imageName} gets v{build.version} on its next Run{orgName ? "" : ""}.</Callout>
+        <Callout tone="success">Published. Everything that uses {build.imageName} gets v{build.version} on its next Run.</Callout>
       ) : null}
       <LogStream lines={lines} title="Build log" live={live} maxHeight={520} emptyMessage={build.state === "queued" ? "Waiting for the builder." : "No output."} data-testid="build-log" />
     </>

@@ -176,7 +176,10 @@ For a library image:
 
 - **Library off.** `DUDE_LAYER_IMAGE` is unset, so the library is off. The
   Run fails before lux with "image library not configured".
-- **No published version.** The Run fails before lux.
+- **No published version.** If its first version is queued or building,
+  the Run waits on that build; if an admin queues a newer version (which
+  cancels the waiting one), it waits on the newer one. With none, or when
+  the build fails, the Run fails before lux.
 - **Final exists.** If `image_finals` has (published version, current
   layer), the Run uses that digest.
 - **No final yet.** Otherwise dude enqueues the finish job, or joins one
@@ -187,6 +190,22 @@ For a library image:
     model cost.
 
 Drafts never hold up a Run.
+
+A branch preview resolves and waits the same way, whether it is submitted
+eagerly or woken by a request to its URL (`Previews.imageOutcome`). A
+woken preview that waits releases its wake claim and keeps the wake
+wanted; once its image is ready the next sweep submits it.
+
+**Builder liveness.** The builder writes a heartbeat (`image_builder`, one
+row) every 30 s, idle or busy. When it is older than 2 minutes, the Images
+page and a waiting Run say "image builder offline since <time>". A Run or
+a preview that has waited (`runs.image_waiting_since`) for 30 minutes while
+the builder was offline fails before lux with that sentence.
+
+**The build log.** The builder appends each flush's new output to
+`image_builds.log`, keeping the last 1 MiB, and counts every byte in
+`log_total`. The build page polls `GET /v1/images/builds/:id?after=<n>`
+and gets only what came after byte n while the kept tail still holds it.
 
 `runs.image` records `{imageId, name, versionId, version, ref, layer}` once
 the image is resolved, and nothing rewrites it. Resumes therefore use the

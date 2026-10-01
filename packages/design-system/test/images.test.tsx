@@ -78,6 +78,11 @@ describe("ImagePicker", () => {
     expect(host!.textContent).toContain("Acme's images");
   });
 
+  test("an image's name is not spell-checked or filled in by the browser", async () => {
+    await mount(<Picker initial="uv" />);
+    expect([input().getAttribute("spellcheck"), input().getAttribute("autocomplete")]).toEqual(["false", "off"]);
+  });
+
   test("the words filter by name and description, ↓ moves, Enter picks the id and closes", async () => {
     picks.length = 0;
     await mount(<Picker />);

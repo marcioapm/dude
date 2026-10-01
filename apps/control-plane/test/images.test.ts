@@ -196,7 +196,8 @@ describe("build and publish", () => {
     expect(out.version).toBe(1);
     expect(out.image.image).toMatchObject({ published: null, pending: { number: 1, state: "queued" }, draft: null });
     const list = await body(await call(adminKey, "GET", "/v1/images"));
-    expect(list.builder).toEqual({ available: true, layer: LAYER, cpus: 1.5, memoryMiB: 1536 });
+    // No heartbeat yet: builds are on, and the builder is offline.
+    expect(list.builder).toEqual({ available: true, layer: LAYER, cpus: 1.5, memoryMiB: 1536, lastSeenAt: null, offline: true });
     expect(list.queue.map((b: Json) => [b.imageName, b.version, b.kind, b.state, b.ahead])).toEqual([["acme-base", 1, "build", "queued", 0]]);
     const [event] = await owner`SELECT payload FROM events WHERE event_type = 'image.build_queued' ORDER BY cursor DESC LIMIT 1`;
     expect(event.payload).toMatchObject({ name: "acme-base", version: 1, source: "person" });
@@ -301,11 +302,59 @@ describe("build and publish", () => {
     expect(v.state).toBe("cancelled");
   });
 
-  test("a build's page has its log", async () => {
-    await owner`UPDATE image_builds SET log = 'STEP 1/2: FROM debian\n' WHERE id = ${ids.baseBuild1}`;
+  test("a running build, and a Run's finish, cannot be cancelled", async () => {
+    await owner`INSERT INTO image_builds (id, organization_id, image_version_id, kind, layer_ref)
+      VALUES ('imb_fin_test', ${ORG}, ${ids.baseV1}, 'finish', ${LAYER})`;
+    const finish = await call(adminKey, "POST", "/v1/images/builds/imb_fin_test/cancel");
+    expect(finish.status).toBe(409);
+    expect((await body(finish)).error.message).toBe("a Run is waiting on this: it cannot be cancelled");
+    await owner`UPDATE image_builds SET state = 'running' WHERE id = 'imb_fin_test'`;
+    const running = await call(adminKey, "POST", "/v1/images/builds/imb_fin_test/cancel");
+    expect(running.status).toBe(409);
+    expect((await body(running)).error.message).toBe("only a build still waiting can be cancelled");
+    const [b] = await owner`SELECT state FROM image_builds WHERE id = 'imb_fin_test'`;
+    expect(b.state).toBe("running");
+    await owner`UPDATE image_builds SET state = 'succeeded' WHERE id = 'imb_fin_test'`;
+  });
+
+  test("a build's page has its log, its limits, and with ?after only what came since", async () => {
+    // As the builder's flushes write it: appended, log_total counting every byte.
+    await owner`UPDATE image_builds SET log = ${"STEP 1/2: FROM debian\n"}, log_total = 22 WHERE id = ${ids.baseBuild1}`;
     const out = await body(await call(memberKey, "GET", `/v1/images/builds/${ids.baseBuild1}`));
-    expect(out).toMatchObject({ imageName: "acme-base", version: 1, log: "STEP 1/2: FROM debian\n", note: "First" });
+    expect(out).toMatchObject({ imageName: "acme-base", version: 1, log: "STEP 1/2: FROM debian\n", logStart: 0, logTotal: 22, note: "First" });
+    expect(out.builder).toMatchObject({ cpus: 1.5, memoryMiB: 1536 });
+    await owner`UPDATE image_builds SET log = log || ${"STEP 2/2: RUN é\n"}, log_total = log_total + octet_length(${"STEP 2/2: RUN é\n"}) WHERE id = ${ids.baseBuild1}`;
+    const since = await body(await call(memberKey, "GET", `/v1/images/builds/${ids.baseBuild1}?after=22`));
+    expect([since.log, since.logStart, since.logTotal]).toEqual(["STEP 2/2: RUN é\n", 22, 39]);
+    expect((await body(await call(memberKey, "GET", `/v1/images/builds/${ids.baseBuild1}?after=39`))).log).toBe("");
+    // The tail no longer holds byte 5 (the start was cut), or 37 is inside é's two bytes: the whole tail.
+    await owner`UPDATE image_builds SET log_total = log_total + 100 WHERE id = ${ids.baseBuild1}`;
+    const cut = await body(await call(memberKey, "GET", `/v1/images/builds/${ids.baseBuild1}?after=5`));
+    expect([cut.log, cut.logStart, cut.logTotal]).toEqual(["STEP 1/2: FROM debian\nSTEP 2/2: RUN é\n", 100, 139]);
+    const mid = await body(await call(memberKey, "GET", `/v1/images/builds/${ids.baseBuild1}?after=${100 + 37}`));
+    expect(mid.logStart).toBe(100);
+    expect((await call(memberKey, "GET", `/v1/images/builds/${ids.baseBuild1}?after=x`)).status).toBe(400);
     expect((await call(otherKey, "GET", `/v1/images/builds/${ids.baseBuild1}`)).status).toBe(404);
+  });
+
+  test("the builder is offline when its heartbeat is 2 minutes old", async () => {
+    await owner`INSERT INTO image_builder (seen_at) VALUES (now())`;
+    expect((await body(await call(memberKey, "GET", "/v1/images"))).builder).toMatchObject({ offline: false });
+    await owner`UPDATE image_builder SET seen_at = '2026-10-01T08:00:00Z'`;
+    const list = await body(await call(memberKey, "GET", "/v1/images"));
+    expect(list.builder.offline).toBe(true);
+    expect(Date.parse(list.builder.lastSeenAt)).toBe(Date.parse("2026-10-01T08:00:00Z"));
+  });
+
+  test("a draft can be discarded; the published version stays", async () => {
+    await call(adminKey, "PUT", `/v1/images/${ids.base}/draft`, { containerfile: BASE + "RUN echo draft\n" });
+    expect((await image(ids.base!)).versions[0].state).toBe("draft");
+    expect((await call(memberKey, "DELETE", `/v1/images/${ids.base}/draft`)).status).toBe(403);
+    const res = await call(adminKey, "DELETE", `/v1/images/${ids.base}/draft`);
+    expect(res.status).toBe(200);
+    const out = await body(res);
+    expect(out.versions.some((v: Json) => v.state === "draft")).toBe(false);
+    expect(out.image).toMatchObject({ draft: null, published: { versionId: ids.baseV1 } });
   });
 });
 
@@ -316,6 +365,13 @@ describe("where images are named", () => {
     expect(res.images.find((i: Json) => i.id === ids.base).isDefault).toBe(true);
     expect((await call(memberKey, "POST", `/v1/images/default/${ids.child}`)).status).toBe(403);
     expect((await call(adminKey, "POST", `/v1/images/default/img_nope`)).status).toBe(400);
+    expect((await call(memberKey, "DELETE", "/v1/images/default")).status).toBe(403);
+    const none = await body(await call(adminKey, "DELETE", "/v1/images/default"));
+    expect(none.defaultImageId).toBeNull();
+    expect(none.images.some((i: Json) => i.isDefault)).toBe(false);
+    const [org] = await owner`SELECT default_image_id FROM organizations WHERE id = ${ORG}`;
+    expect(org.default_image_id).toBeNull();
+    await call(adminKey, "POST", `/v1/images/default/${ids.base}`);
   });
 
   test("a project's runtime image by id; a typed one only cleared", async () => {
@@ -369,5 +425,35 @@ describe("where images are named", () => {
     expect(res.status).toBe(400);
     expect((await body(res)).error.message).toBe("node-pnpm is archived: pick another image");
     await call(adminKey, "PATCH", `/v1/images/${ids.child}`, { archived: false });
+  });
+});
+
+describe("a Run waiting for its image", () => {
+  const runOf = async (id: string) => body(await call(memberKey, "GET", `/v1/runs/${id}`));
+
+  test("says what it waits on while it waits, and that the builder is offline since its last heartbeat", async () => {
+    await owner`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES ('tsk_img', ${ORG}, ${PROJECT}, 1, 't')`;
+    await owner`INSERT INTO image_builds (id, organization_id, image_version_id, kind, layer_ref)
+      VALUES ('imb_wait', ${ORG}, ${ids.baseV1}, 'finish', ${"registry.example/dude/layer@sha256:" + "2".repeat(64)})`;
+    // A phase Run pending, and a woken preview, asleep (paused) with no lux Run.
+    await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, kind, image_build_id, image_waiting_since)
+      VALUES ('run_img_phase', ${ORG}, ${PROJECT}, 'tsk_img', 1, 'pending', 'agent', 'imb_wait', now()),
+             ('run_img_prev', ${ORG}, ${PROJECT}, 'tsk_img', 1, 'paused', 'preview', 'imb_wait', now())`;
+    await owner`UPDATE image_builder SET seen_at = now()`;
+    for (const id of ["run_img_phase", "run_img_prev"]) {
+      expect((await runOf(id)).preparingImage).toEqual({ buildId: "imb_wait", state: "queued", imageName: "acme-base", version: 1, builderOfflineSince: null });
+    }
+    await owner`UPDATE image_builder SET seen_at = '2026-10-01T08:00:00Z'`;
+    expect(Date.parse((await runOf("run_img_prev")).preparingImage.builderOfflineSince)).toBe(Date.parse("2026-10-01T08:00:00Z"));
+  });
+
+  test("not once the job is over, or the Run has a lux Run or ended", async () => {
+    await owner`UPDATE runs SET lux_run_id = 'lux_1' WHERE id = 'run_img_phase'`;
+    expect((await runOf("run_img_phase")).preparingImage).toBeNull();
+    await owner`UPDATE runs SET status = 'failed' WHERE id = 'run_img_prev'`;
+    expect((await runOf("run_img_prev")).preparingImage).toBeNull();
+    await owner`UPDATE runs SET status = 'paused' WHERE id = 'run_img_prev'`;
+    await owner`UPDATE image_builds SET state = 'succeeded' WHERE id = 'imb_wait'`;
+    expect((await runOf("run_img_prev")).preparingImage).toBeNull();
   });
 });

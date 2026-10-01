@@ -757,8 +757,9 @@ export class ApiClient {
     return id ? this.#request("POST", `/v1/images/default/${encodeURIComponent(id)}`) : this.#request("DELETE", "/v1/images/default");
   }
 
-  imageBuild(buildId: string): Promise<ImageBuildWithLog> {
-    return this.#request("GET", `/v1/images/builds/${encodeURIComponent(buildId)}`);
+  /** A build with its log; `after`, the logTotal already read: only the log since, when the build still holds it. */
+  imageBuild(buildId: string, after?: number): Promise<ImageBuildWithLog> {
+    return this.#request("GET", `/v1/images/builds/${encodeURIComponent(buildId)}${after === undefined ? "" : `?after=${after}`}`);
   }
 
   cancelImageBuild(buildId: string): Promise<{ cancelled: string }> {

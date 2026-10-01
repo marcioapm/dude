@@ -34,9 +34,15 @@ const RUN_SELECT = `
   phase, role, category, parent_run_id AS "parentRunId", base_refs AS "baseRefs",
   (SELECT COALESCE(json_object_agg(k, v->>'sha'), '{}'::json) FROM jsonb_each(heads) AS h(k, v)) AS heads,
   branch, harness, model, dude_pause AS "dudePause", machine, image,
-  (SELECT json_build_object('buildId', b.id, 'state', b.state, 'imageName', i.name, 'version', v.number)
+  -- Waiting for its image: the job it waits on is still queued or running,
+  -- and it has no lux Run yet (a phase Run pending, a woken preview paused).
+  (SELECT json_build_object('buildId', b.id, 'state', b.state, 'imageName', i.name, 'version', v.number,
+      'builderOfflineSince', CASE WHEN ib.seen_at IS NULL OR ib.seen_at < now() - interval '2 minutes'
+        THEN COALESCE(ib.seen_at, runs.image_waiting_since) END)
    FROM image_builds b JOIN image_versions v ON v.id = b.image_version_id JOIN images i ON i.id = v.image_id
-   WHERE b.id = runs.image_build_id AND runs.lux_run_id IS NULL AND runs.status = 'pending') AS "preparingImage",
+   LEFT JOIN image_builder ib ON true
+   WHERE b.id = runs.image_build_id AND b.state IN ('queued', 'running') AND runs.lux_run_id IS NULL
+     AND runs.status NOT IN ('completed', 'failed', 'aborted')) AS "preparingImage",
   json_build_object('input', input_tokens, 'output', output_tokens, 'cacheRead', cache_read_tokens,
     'cacheWrite', cache_write_tokens, 'context', context_tokens) AS tokens,
   created_at AS "createdAt", started_at AS "startedAt", ended_at AS "endedAt"`;

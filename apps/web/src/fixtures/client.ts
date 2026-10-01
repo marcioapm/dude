@@ -206,7 +206,7 @@ export class FixtureClient extends ApiClient {
     return Promise.resolve({ images: [], defaultImageId: null });
   }
   override images() {
-    return Promise.resolve({ images: [], queue: [], defaultImageId: null, builder: { available: false, layer: null, cpus: 1.5, memoryMiB: 1536 }, canEdit: true });
+    return Promise.resolve({ images: [], queue: [], defaultImageId: null, builder: { available: false, layer: null, cpus: 1.5, memoryMiB: 1536, lastSeenAt: null, offline: false }, canEdit: true });
   }
   override machinePools() {
     return Promise.resolve({ pools: [], readAt: new Date().toISOString(), problem: "no lux in the fixtures" });

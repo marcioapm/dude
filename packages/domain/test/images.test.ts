@@ -7,6 +7,7 @@ import {
   imageNameSchema,
   imageReferences,
   lintContainerfile,
+  resolveRoleImage,
   shortDigest,
   type LintContext,
 } from "../src/images.ts";
@@ -144,4 +145,27 @@ describe("inputs", () => {
     expect(shortDigest(`r.example/dude/custom@${DIGEST}`)).toBe("sha256:aaaaaaaaaaaa…");
     expect(shortDigest(null)).toBe("");
   });
+});
+
+// The same cases as orchestrator/internal/images resolve_test.go's
+// RoleImage table: the backend shows what the orchestrator runs.
+describe("resolveRoleImage", () => {
+  const known = ["img_p", "img_o", "img_f", "img_i", "img_of", "img_oi"].map((id) => ({ id }));
+  const cases: Array<[string, string, unknown, unknown, string | null, ReturnType<typeof resolveRoleImage>["from"]]> = [
+    ["the project's beats the organization's", "reviewer", { reviewer: { image: "img_p" } }, { reviewer: { image: "img_o" } }, "img_p", "project"],
+    ["the organization's when the project names none", "reviewer", { reviewer: { model: "m" } }, { reviewer: { image: "img_o" } }, "img_o", "organization"],
+    ["the fixer's own beats the implementer's", "fixer", { fixer: { image: "img_f" }, implementer: { image: "img_i" } }, {}, "img_f", "project"],
+    ["the fixer's own on the organization beats the project's implementer", "fixer", { implementer: { image: "img_i" } }, { fixer: { image: "img_of" } }, "img_of", "organization"],
+    ["the fixer follows the project's implementer", "fixer", { implementer: { image: "img_i" } }, { implementer: { image: "img_oi" } }, "img_i", "implementer"],
+    ["the fixer follows the organization's implementer", "fixer", {}, { implementer: { image: "img_oi" } }, "img_oi", "implementer"],
+    ["only the fixer follows the implementer", "reviewer", { implementer: { image: "img_i" } }, {}, null, "none"],
+    ["an image that is gone is skipped", "reviewer", { reviewer: { image: "img_gone" } }, { reviewer: { image: "img_o" } }, "img_o", "organization"],
+    ["no project layer falls through to the organization", "reviewer", null, { reviewer: { image: "img_o" } }, "img_o", "organization"],
+    ["none anywhere", "implementer", {}, null, null, "none"],
+  ];
+  for (const [name, role, project, organization, imageId, from] of cases) {
+    test(name, () => {
+      expect(resolveRoleImage(role, { project: project as never, organization: organization as never }, known)).toEqual({ imageId, from });
+    });
+  }
 });

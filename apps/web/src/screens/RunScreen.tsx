@@ -38,7 +38,7 @@ import {
   MachineTip,
 } from "@dude/design-system/components";
 import { Button, Callout, Dialog, LinkButton, Spinner, Textarea } from "@dude/design-system/primitives";
-import { DEFAULT_RUN_ROLE, EventTypes, MIB, SETTINGS_ROLE_LABEL, TERMINAL_RUN_STATUSES, gib, machineSpec, runLabel, shortDigest } from "@dude/domain";
+import { builderOffline, DEFAULT_RUN_ROLE, EventTypes, MIB, SETTINGS_ROLE_LABEL, TERMINAL_RUN_STATUSES, gib, machineSpec, runLabel, shortDigest } from "@dude/domain";
 import type { AgentRole, PersistedEvent } from "@dude/domain";
 import type { ApiClient, Person, RunDetail, RunDiffSummary } from "../api/client.ts";
 import { ApiError, modelCostShown } from "../api/client.ts";
@@ -48,7 +48,7 @@ import {
 import type { ComposerSubmission } from "@dude/design-system/components";
 import { useEventStream } from "../hooks/useEventStream.ts";
 import { conflictNotice, type Notice } from "../conflict.ts";
-import { firstName, Icon } from "@dude/design-system";
+import { firstName, formatTimestamp, Icon } from "@dude/design-system";
 import { usePeople, type People } from "../people.tsx";
 import { NotFound } from "./NotFound.tsx";
 import { DudeMark, dudeName } from "../DudeMark.tsx";
@@ -918,6 +918,15 @@ function RunImageChip({ image }: { image: NonNullable<RunDetail["image"]> }) {
  */
 export function PreparingImage({ preparing }: { preparing: NonNullable<RunDetail["preparingImage"]> }) {
   const label = `${preparing.imageName}${preparing.version ? ` v${preparing.version}` : ""}`;
+  if (preparing.builderOfflineSince) {
+    const offline = builderOffline(preparing.builderOfflineSince, (iso) => formatTimestamp(iso, "datetime"));
+    return (
+      <Callout tone="attention" data-testid="preparing-image">
+        <b>Preparing image: waiting for {label}</b>, but the {offline}. The session starts once the builder is back and done;
+        if it stays offline for 30 minutes of the wait, this Run fails before it starts. Nothing is spent meanwhile.
+      </Callout>
+    );
+  }
   return (
     <Callout tone="info" data-testid="preparing-image">
       <b>Preparing image: adding the dude layer</b> to {label}. {preparing.state === "running" ? "The builder is on it now" : "It is next in the builder’s line"};
