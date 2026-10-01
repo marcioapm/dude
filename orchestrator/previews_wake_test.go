@@ -486,6 +486,32 @@ func TestAFinishedTasksPreviewDeletesItsServersThenCancelsItsRun(t *testing.T) {
 		t.Fatal(code)
 	}
 	w.until("its server deleted", func() bool { return slices.Contains(w.lux.DeletedServers, web2) })
+	// Nothing of it is left in lux: marked so, it leaves the sweep.
+	w.until("the never-run preview marked done in lux", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_stop_reason = 'cancel' AND lux_run_id IS NULL`, run2) == 1
+	})
+}
+
+// More busy previews than one sweep takes (running, re-followed only) do
+// not push a due wake off the page: work that is due is taken first.
+func TestADueWakeIsTakenPastAFullPageOfBusyPreviews(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	w.previews.SweepLimit = 3
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	_, runID := w.declare()
+	web := w.serverID(runID, "web")
+	// Older than the asleep one, so a page in created_at order is all theirs.
+	for i := range 5 {
+		task := w.task()
+		mustExec(t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, kind, wakeable,
+			lux_run_id, lux_state, created_at) VALUES ($1, $2, $3, $4, 1, 'running', 'preview', true, $5, 'running', now() - interval '1 day')`,
+			fmt.Sprintf("run_busy_%d_%s", i, w.org), w.org, w.project, task, fmt.Sprintf("lux_busy_%d_%s", i, w.org))
+	}
+	w.open(web)
+	if n := len(w.luxRuns()); n != 1 {
+		t.Fatalf("%d lux runs for one wake", n)
+	}
 }
 
 // lux expiring (or someone deleting) a preview's server ends the preview.

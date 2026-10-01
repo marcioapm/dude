@@ -69,7 +69,14 @@ type wakeRun struct {
 }
 
 // wakeableSelect: wakeable previews with something to do. $1 is the reap
-// age, $2 parkCheckEvery and $3 wakeClaimFor, in seconds.
+// age, $2 parkCheckEvery and $3 wakeClaimFor, in seconds; $4 the page size.
+//
+// The status/lux_stop_reason conjunct is what runs_wakeable_live_idx and
+// runs_wakeable_open_idx (064) serve, so the scan follows the live previews
+// and not every preview ever made. An ended preview is taken until endInLux
+// marks it lux_stop_reason = 'cancel' (nothing of it left in lux).
+// Rows with work due sort first: running previews that are only re-followed
+// must not push a due wake, park or end past the page.
 const wakeableSelect = `SELECT r.id, r.organization_id, r.project_id, r.task_id, r.status::text,
 		COALESCE(r.lux_run_id, ''), COALESCE(r.lux_state, ''), t.status IN ('done', 'failed', 'aborted'),
 		r.wake_wanted_at, r.sync_wanted_at, r.lux_generation, r.lux_repositories,
@@ -84,6 +91,7 @@ const wakeableSelect = `SELECT r.id, r.organization_id, r.project_id, r.task_id,
 			OR NOT EXISTS (SELECT 1 FROM preview_servers s WHERE s.run_id = r.id AND s.deleted_at IS NULL AND s.idle_at IS NULL)
 	FROM runs r JOIN tasks t ON t.id = r.task_id
 	WHERE r.kind = 'preview' AND r.wakeable
+	  AND (r.status IN ('pending', 'scheduled', 'starting', 'running', 'paused') OR r.lux_stop_reason IS DISTINCT FROM 'cancel')
 	  AND (r.next_attempt_at IS NULL OR r.next_attempt_at <= now())
 	  AND (r.status = 'pending'
 	       OR (r.status IN ('paused', 'scheduled', 'starting', 'running') AND (
@@ -99,11 +107,16 @@ const wakeableSelect = `SELECT r.id, r.organization_id, r.project_id, r.task_id,
 	             OR (r.status = 'paused' AND COALESCE(r.lux_state, '') NOT IN ('running', 'starting', 'resuming', 'scheduled', 'submitted', 'stopping')
 	                 AND COALESCE((SELECT max(s.last_woken_at) FROM preview_servers s WHERE s.run_id = r.id), r.created_at)
 	                     < now() - make_interval(secs => $1))))
-	       OR (r.status IN ('completed', 'failed', 'aborted') AND (
-	             EXISTS (SELECT 1 FROM preview_servers s WHERE s.run_id = r.id AND s.deleted_at IS NULL)
-	             OR (r.lux_run_id IS NOT NULL AND r.lux_stop_reason IS DISTINCT FROM 'cancel'))))
-	ORDER BY r.created_at
-	LIMIT 1000`
+	       OR r.status IN ('completed', 'failed', 'aborted'))
+	ORDER BY (r.status NOT IN ('scheduled', 'starting', 'running') OR r.wake_wanted_at IS NOT NULL
+	          OR r.sync_wanted_at IS NOT NULL OR t.status IN ('done', 'failed', 'aborted')
+	          OR (r.status = 'running' AND (r.park_checked_at IS NULL OR r.park_checked_at < now() - make_interval(secs => $2))
+	              AND EXISTS (SELECT 1 FROM preview_servers s WHERE s.run_id = r.id AND s.deleted_at IS NULL AND s.idle_at IS NOT NULL))) DESC,
+	         r.created_at
+	LIMIT $4`
+
+// The page a wakeable sweep takes at most; Previews.SweepLimit overrides it.
+const wakeableLimit = 1000
 
 func (p *Previews) reapAfter() time.Duration {
 	if p.ReapAfter > 0 {
@@ -114,9 +127,19 @@ func (p *Previews) reapAfter() time.Duration {
 
 // sweepWakeable takes one pass over the wakeable previews with something to do.
 func (p *Previews) sweepWakeable(ctx context.Context) (int, error) {
+	limit := p.SweepLimit
+	if limit <= 0 {
+		limit = wakeableLimit
+	}
 	var runs []wakeRun
 	if err := p.DB.InSystem(ctx, "previews", func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, wakeableSelect, p.reapAfter().Seconds(), parkCheckEvery.Seconds(), wakeClaimFor.Seconds())
+		// The planner multiplies the correlated subplans' estimates by the
+		// page; past jit_above_cost every 1s sweep would be JIT-compiled
+		// (~40ms each) for a query that runs in ~20ms.
+		if _, err := tx.Exec(ctx, `SET LOCAL jit = off`); err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, wakeableSelect, p.reapAfter().Seconds(), parkCheckEvery.Seconds(), wakeClaimFor.Seconds(), limit)
 		if err != nil {
 			return err
 		}
@@ -744,7 +767,13 @@ func (p *Previews) endInLux(ctx context.Context, r wakeRun) error {
 	}
 	if r.LuxRunID == "" {
 		p.unfollow(r.ID)
-		return nil
+		// Nothing left in lux: 'cancel' takes the row out of
+		// runs_wakeable_open_idx and the sweep.
+		return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `UPDATE runs SET lux_stop_reason = 'cancel' WHERE id = $1 AND lux_run_id IS NULL
+				AND status IN ('completed', 'failed', 'aborted')`, r.ID)
+			return err
+		})
 	}
 	return p.cancel(ctx, r.previewRun)
 }
