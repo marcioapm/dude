@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/api"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
@@ -72,11 +73,26 @@ func TestAResumedRunKeepsTheSizeItStartedOn(t *testing.T) {
 
 	mustExec(t, w.owner, `UPDATE machine_sizes SET name = 'Huge', cpus = 16 WHERE id = 'msz_large'`)
 	mustExec(t, w.owner, `DELETE FROM machine_sizes WHERE id = 'msz_large'`)
+	// lux reports a limit from now on; only the resume reads it below.
+	w.lux.MemoryShare = 0.95
 	r := w.lux.Runs()[0]
 	if status, out := w.call("/internal/runs/"+runID+"/resume", map[string]any{}); status != 200 {
 		t.Fatalf("resume: %d %v", status, out)
 	}
-	w.until("the resume", func() bool { return r.Resumed == 1 })
+	// The syncer alone, so no artifacts sweep can be what writes the limit.
+	for i := 0; r.Resumed == 0 && i < 200; i++ {
+		if _, err := w.syncer.Sweep(ctx); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if r.Resumed != 1 {
+		t.Fatalf("the Run was not resumed\n%s", w.describeRuns())
+	}
+	// Large's 23040 MiB, of which the container gets 95%, to a MiB.
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND (machine->>'memoryLimit')::bigint = $2`, runID, int64(21888)<<20); n != 1 {
+		t.Errorf("the resume did not record the memory limit lux reported")
+	}
 	w.pump()
 
 	var name, from string

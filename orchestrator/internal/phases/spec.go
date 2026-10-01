@@ -1,7 +1,6 @@
 package phases
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,10 +9,7 @@ import (
 	"net/url"
 	"slices"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/marciomartins/dude/orchestrator/internal/config"
-	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
@@ -139,22 +135,6 @@ func MachineSpec(m *delivery.Machine, spec *lux.Spec) {
 	if m.Pool != nil && *m.Pool != "" {
 		spec.Placement = &lux.PlacementSpec{Pool: *m.Pool}
 	}
-}
-
-// RecordMemoryLimit adds to a Run's runs.machine the memory limit lux
-// reports for its latest placement, once: so a finished Run still says what
-// its container got. Nothing when lux reports none, the Run recorded no
-// machine, or the limit is already there.
-func RecordMemoryLimit(ctx context.Context, d *db.DB, org, runID string, lr lux.Run) error {
-	limit := lr.MemoryLimit()
-	if limit == nil {
-		return nil
-	}
-	return d.InOrg(ctx, org, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE runs SET machine = jsonb_set(machine, '{memoryLimit}', to_jsonb($2::bigint))
-			WHERE id = $1 AND machine IS NOT NULL AND machine->>'memoryLimit' IS NULL`, runID, *limit)
-		return err
-	})
 }
 
 type specRepo struct {
