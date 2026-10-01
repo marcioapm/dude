@@ -124,9 +124,11 @@ export function SearchPicker<T>({
     } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && onSubmit) {
       e.preventDefault();
       onSubmit();
-    } else if (e.key === "Enter" && open) {
+    } else if (e.key === "Enter") {
+      // Enter picks, or does nothing: a field that finds is never a form's
+      // submit (a settings page saving on half-typed words).
       e.preventDefault();
-      pick(options[active]!);
+      if (open) pick(options[active]!);
     } else if (e.key === "Backspace" && query === "" && onBackspaceEmpty) {
       onBackspaceEmpty();
     } else if (e.key === "Escape") {

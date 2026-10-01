@@ -119,6 +119,23 @@ describe("SearchPicker, picking reviewers", () => {
     await key("ArrowDown");
     expect(field().getAttribute("aria-expanded")).toBe("true");
   });
+
+  test("Enter with nothing open never submits the form around it", async () => {
+    let submitted = 0;
+    host = document.body.appendChild(document.createElement("div"));
+    root = createRoot(host);
+    await act(async () => root!.render(
+      <form onSubmit={(e) => { e.preventDefault(); submitted++; }}>
+        <SearchPicker<Who> label="Who" delay={1000} find={async () => PEOPLE} optionKey={(p) => p.login}
+          renderOption={(p) => p.name} onPick={() => {}} />
+      </form>,
+    ));
+    await type("ok");
+    const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    await act(async () => void field().dispatchEvent(enter));
+    expect(enter.defaultPrevented).toBe(true);
+    expect(submitted).toBe(0);
+  });
 });
 
 const text = (h: string) => h.replace(/<[^>]+>/g, "").replaceAll("&#x27;", "'").replaceAll("&quot;", '"');
