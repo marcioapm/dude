@@ -55,6 +55,9 @@ POSTGRES_ADMIN_DB = os.environ.get("DUDE_TEST_PG_ADMIN_DB", "postgres")
 # upload (apps/control-plane/src/storage.ts, MIN_BUN_FOR_S3).
 MIN_BUN = (1, 4, 0)
 
+# The fake lux's preview domain: its servers' URLs are under it.
+FAKE_PREVIEW_DOMAIN = "preview.dude.test"
+
 
 def bun_problem(version: str) -> str | None:
     """Why the `bun --version` output `version` cannot run the suite, or None."""
@@ -211,6 +214,8 @@ class TestEnvironment:
         self.lux_proc = subprocess.Popen(
             [str(REPO_ROOT / "orchestrator" / "bin" / "fake-lux"), "-root", str(self.git_root),
              "-key", self.lux_key, "-addr-file", str(addr_file),
+             # Previews wake on request, as on a lux with previews.
+             "-preview-domain", FAKE_PREVIEW_DOMAIN,
              # Each Run's checkout, removed with the rest of the run's files.
              "-workspaces", str(self.git_root.parent)],
             stdout=self._log("fake-lux"), stderr=subprocess.STDOUT,
@@ -505,4 +510,8 @@ class TestEnvironment:
         env.orchestrator_port = int(os.environ.get("DUDE_TEST_ORCHESTRATOR_PORT", "0"))
         env.real_lux = lux_env() if os.environ.get("DUDE_TEST_REAL_LUX") else None
         env._init_services()
+        # The lux the orchestrator drives: the fake's address, or the real one's.
+        env.lux_url = os.environ.get("DUDE_TEST_LUX_URL", "")
+        if env.real_lux:
+            env.lux_url, env.lux_key = env.real_lux["luxd_url"], env.real_lux["api_key"]
         return env
