@@ -196,7 +196,7 @@ func TestAPreviewWakesSleepsAndWakesOnTheLatestCommit(t *testing.T) {
 		t.Fatalf("web not idle-able: %s", sv.Raw)
 	}
 	w.until("dude to hear the idle", func() bool {
-		return w.count(`SELECT count(*) FROM preview_servers WHERE lux_server_id = $1 AND idle_at IS NOT NULL`, web) == 1
+		return w.count(`SELECT count(*) FROM preview_servers WHERE lux_server_id = $1 AND idle_event_id > 0`, web) == 1
 	})
 	for range 3 {
 		w.pump()
@@ -227,6 +227,7 @@ func TestAPreviewWakesSleepsAndWakesOnTheLatestCommit(t *testing.T) {
 	}
 }
 
+// tokenIn finds the forge token among a resume's secrets.
 func tokenIn(secrets []lux.Secret) (string, bool) {
 	for _, s := range secrets {
 		if s.Name == "GIT_TOKEN" && s.Value != "" {
@@ -234,6 +235,34 @@ func tokenIn(secrets []lux.Secret) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// A server.idle that a request has overtaken (lux's lastRequestAt is later
+// than the one the event carried) does not count: the Run is kept.
+func TestARequestAfterAnIdleKeepsTheRun(t *testing.T) {
+	w := newWorld(t)
+	feed := w.wakeable()
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	_, runID := w.declare()
+	web := w.serverID(runID, "web")
+	w.open(web)
+	w.until("running", func() bool { return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, runID) == 1 })
+	r := w.luxRuns()[0]
+	w.lux.RequestServer(web, "/") // lastRequestAt now
+	stale := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339Nano)
+	if err := feed.Apply(context.Background(), lux.FeedEvent{ID: 1 << 40, Type: "server.idle", ServerID: web,
+		Data: map[string]any{"lastRequestAt": stale}}); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		w.pump()
+	}
+	if slices.Contains(w.lux.CallsOf(r.ID), "stop") {
+		t.Fatal("stopped although a request came after its idle")
+	}
+	if n := w.count(`SELECT count(*) FROM preview_servers WHERE lux_server_id = $1 AND idle_at IS NULL`, web); n != 1 {
+		t.Error("the overtaken idle mark was kept")
+	}
 }
 
 // One wake, however many times its event is seen (a replay, a second
@@ -275,11 +304,31 @@ func TestOneWakeIsOneResume(t *testing.T) {
 	if err := feed.Apply(context.Background(), ev); err != nil {
 		t.Fatal(err)
 	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND wake_wanted_at IS NOT NULL`, runID); n != 0 {
+		t.Fatal("a wake event seen again asked for a wake again")
+	}
 	for range 3 {
 		w.pump()
 	}
 	if r.Resumed != 1 || len(w.luxRuns()) != 1 {
 		t.Fatalf("one wake: %d resumes, %d runs", r.Resumed, len(w.luxRuns()))
+	}
+	// Asleep again, the latest wake event replayed (a follower restarting
+	// behind it): still nothing.
+	w.lux.Idle(web)
+	w.lux.Idle(api)
+	w.until("parked again", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, runID) == 1
+	})
+	ev.ID = int64(w.count(`SELECT wake_event_id FROM runs WHERE id = $1`, runID))
+	if err := feed.Apply(context.Background(), ev); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		w.pump()
+	}
+	if r.Resumed != 1 {
+		t.Fatalf("a replayed wake resumed the preview: %d resumes", r.Resumed)
 	}
 }
 
@@ -290,7 +339,11 @@ func TestTwoOrchestratorsActOnAWakeOnce(t *testing.T) {
 	w.recipe("web", 3000, "npm run dev", "", nil, true)
 	_, runID := w.declare()
 	web := w.serverID(runID, "web")
-	other := &servers.Previews{Service: &servers.Service{DB: w.app, Lux: w.previews.Lux, Log: quiet, PreviewDomain: previewDomain},
+	// Both orchestrators' lux requests, counted as sent: lux would answer
+	// a second submit or resume harmlessly, but a wake is one orchestrator's.
+	calls := &countingLux{Client: w.previews.Lux}
+	w.previews.Lux = calls
+	other := &servers.Previews{Service: &servers.Service{DB: w.app, Lux: calls, Log: quiet, PreviewDomain: previewDomain},
 		Forges: w.previews.Forges, DefaultImage: "default:img"}
 	t.Cleanup(other.Stop)
 	sweepBoth := func() {
@@ -310,6 +363,9 @@ func TestTwoOrchestratorsActOnAWakeOnce(t *testing.T) {
 	if n := len(w.luxRuns()); n != 1 {
 		t.Fatalf("%d lux runs submitted for one wake", n)
 	}
+	if calls.submits != 1 {
+		t.Fatalf("%d submits asked of lux for one wake", calls.submits)
+	}
 	r := w.luxRuns()[0]
 	w.lux.Idle(web)
 	w.until("parked", func() bool {
@@ -321,8 +377,8 @@ func TestTwoOrchestratorsActOnAWakeOnce(t *testing.T) {
 		sweepBoth()
 	}
 	w.open(web)
-	if r.Resumed != 1 {
-		t.Fatalf("%d resumes for one wake on two orchestrators", r.Resumed)
+	if _, resumes := calls.counts(); r.Resumed != 1 || resumes != 1 {
+		t.Fatalf("%d resumes accepted, %d asked, for one wake on two orchestrators", r.Resumed, resumes)
 	}
 }
 

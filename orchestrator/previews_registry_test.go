@@ -187,13 +187,21 @@ func TestAnECROutageDelaysAPreview(t *testing.T) {
 	}
 }
 
-// countingLux is the world's lux client, counting Gets and Resumes; a
-// set refuseResume answers the next Resume instead of lux.
+// countingLux is the world's lux client, counting Gets, Resumes and
+// Submits asked (whatever lux answers); a set refuseResume answers the
+// next Resume instead of lux.
 type countingLux struct {
 	lux.Client
-	mu            sync.Mutex
-	gets, resumes int
-	refuseResume  error
+	mu                     sync.Mutex
+	gets, resumes, submits int
+	refuseResume           error
+}
+
+func (c *countingLux) Submit(ctx context.Context, spec lux.Spec, key string) (lux.Run, error) {
+	c.mu.Lock()
+	c.submits++
+	c.mu.Unlock()
+	return c.Client.Submit(ctx, spec, key)
 }
 
 func (c *countingLux) Get(ctx context.Context, id string) (lux.Run, error) {
