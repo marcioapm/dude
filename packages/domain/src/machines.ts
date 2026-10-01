@@ -13,7 +13,7 @@ import type { AgentModels } from "./hierarchy.ts";
  * the pool's name is always lux's current one, from its list.
  *
  * Sizes move in steps (half a CPU, half a GiB of memory, 5 GiB of disk),
- * checked here and by the database (migration 063), so an illegal size
+ * checked here and by the database (migration 064), so an illegal size
  * cannot exist.
  */
 
@@ -54,7 +54,7 @@ function dimension(key: keyof typeof MACHINE_LIMITS) {
     .refine((v) => onStep(v, step), MACHINE_STEP_MESSAGE[key]);
 }
 
-/** A lux pool's id, as lux makes them (`pool_…`); migration 063 holds the same pattern. */
+/** A lux pool's id, as lux makes them (`pool_…`); migration 064 holds the same pattern. */
 export const poolIdSchema = z.string().regex(/^pool_[A-Za-z0-9_-]+$/, "a lux pool’s id");
 
 /** A size as an admin writes it (`POST /v1/machines/sizes`, `PUT /v1/machines/sizes/:id`). */

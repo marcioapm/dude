@@ -1,11 +1,11 @@
 /**
- * Migration 063, machine sizes: every organization has exactly one size
+ * Migration 064, machine sizes: every organization has exactly one size
  * from the start — those that existed before it, and those made after —
  * and the database itself refuses a size off its steps, a second default,
  * and a name used twice.
  *
- * Applies the migrations before 063 to a database of its own, adds an
- * organization, then applies 063, as a deploy would meet one.
+ * Applies the migrations before 064 to a database of its own, adds an
+ * organization, then applies 064, as a deploy would meet one.
  *
  * Requires DATABASE_URL: a role that can create databases (the owner).
  */
@@ -30,9 +30,9 @@ beforeAll(async () => {
   // As the runner has it before the first file (migrate.ts, ensureMigrationsTable).
   await db`CREATE TABLE schema_migrations (version text PRIMARY KEY, name text NOT NULL, checksum text NOT NULL,
            applied_at timestamptz NOT NULL DEFAULT now())`;
-  for (const f of files.filter((f) => f.version < "063")) await db.unsafe(await f.contents());
+  for (const f of files.filter((f) => f.version < "064")) await db.unsafe(await f.contents());
   await db`INSERT INTO organizations (id, name, slug) VALUES ('org_before', 'Before', 'before')`;
-  for (const f of files.filter((f) => f.version >= "063")) await db.unsafe(await f.contents());
+  for (const f of files.filter((f) => f.version >= "064")) await db.unsafe(await f.contents());
 }, 120_000);
 
 afterAll(async () => {

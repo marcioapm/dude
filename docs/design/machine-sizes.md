@@ -6,7 +6,7 @@ size. This is how sizes are kept, chosen, sent to lux and shown.
 ## The model
 
 - **Sizes are the organisation's.** Each is `{id, name, cpus, memoryMiB,
-  diskGiB, poolId, isDefault}` (`machine_sizes`, migration 063). Everyone
+  diskGiB, poolId, isDefault}` (`machine_sizes`, migration 064). Everyone
   in the organisation reads them; only its admins change them.
 - **Steps.** CPUs in 0.5 steps, memory in 0.5 GiB steps (stored in MiB,
   a multiple of 512), disk in 5 GiB steps; the least of each is one step.
