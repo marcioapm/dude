@@ -102,8 +102,9 @@ type Servers interface {
 	DetachServer(ctx context.Context, id string) error
 	// SyncRun moves a running Run's checkouts.
 	SyncRun(ctx context.Context, runID, requestID string, sync []SyncRef) error
-	// Feed follows GET /v1/events after an event id (-1: from now), calling
-	// fn for each, until ctx ends, the stream does, or fn fails.
+	// Feed follows GET /v1/events after an event id (-1: from the latest
+	// event lux has), calling fn for each, until ctx ends, the stream does,
+	// or fn fails.
 	Feed(ctx context.Context, after int64, fn func(FeedEvent) error) error
 	// PreviewDomain is lux's preview domain (whoami), "" when off.
 	PreviewDomain(ctx context.Context) (string, error)
@@ -166,13 +167,17 @@ func (c *HTTPClient) PreviewDomain(ctx context.Context) (string, error) {
 }
 
 // Feed reads the SSE stream: `id:`, `event: lux`, `data: <FeedEvent>`;
-// Last-Event-ID resumes strictly after the id given.
+// Last-Event-ID resumes strictly after the id given. With no id (after < 0)
+// it starts at the latest event (?last=1), so the caller has an id to keep.
 func (c *HTTPClient) Feed(ctx context.Context, after int64, fn func(FeedEvent) error) error {
 	headers := map[string]string{"Accept": "text/event-stream"}
+	path := "/v1/events"
 	if after >= 0 {
 		headers["Last-Event-ID"] = strconv.FormatInt(after, 10)
+	} else {
+		path += "?last=1"
 	}
-	res, err := c.send(ctx, c.stream, "GET", "/v1/events", nil, headers)
+	res, err := c.send(ctx, c.stream, "GET", path, nil, headers)
 	if err != nil {
 		return err
 	}

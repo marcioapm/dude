@@ -27,9 +27,15 @@ func (w *world) wakeable() *servers.Feed {
 	w.lux.PreviewDomain = previewDomain
 	w.lux.IdleCheck = time.Hour // idleness only when a test says so
 	w.previews.PreviewDomain = previewDomain
-	feed := &servers.Feed{DB: w.app, Lux: w.previews.Lux, Log: quiet, Settle: time.Millisecond, Retry: 10 * time.Millisecond}
+	feed := w.newFeed()
 	w.startFeed(feed)
 	return feed
+}
+
+// newFeed is a follower that settles and writes its cursor at once.
+func (w *world) newFeed() *servers.Feed {
+	return &servers.Feed{DB: w.app, Lux: w.previews.Lux, Log: quiet, Settle: time.Millisecond,
+		CursorEvery: time.Millisecond, Retry: 10 * time.Millisecond}
 }
 
 func (w *world) startFeed(feed *servers.Feed) context.CancelFunc {
@@ -286,7 +292,7 @@ func TestOneWakeIsOneResume(t *testing.T) {
 
 	// A second follower, as on another orchestrator, and the same event
 	// applied again by hand.
-	w.startFeed(&servers.Feed{DB: w.app, Lux: w.previews.Lux, Log: quiet, Settle: time.Millisecond, Retry: 10 * time.Millisecond})
+	w.startFeed(w.newFeed())
 	w.lux.RequestServer(web, "/")
 	w.lux.RequestServer(api, "/")
 	var wakeID int64
@@ -514,16 +520,30 @@ func TestADueWakeIsTakenPastAFullPageOfBusyPreviews(t *testing.T) {
 	}
 }
 
-// lux expiring (or someone deleting) a preview's server ends the preview.
+// lux expiring a preview's server, or someone deleting it in lux, ends the
+// preview, in the ledger too.
 func TestAServerGoneInLuxEndsItsPreview(t *testing.T) {
-	w := newWorld(t)
-	w.wakeable()
-	w.recipe("web", 3000, "npm run dev", "", nil, true)
-	_, runID := w.declare()
-	w.lux.Expire(w.serverID(runID, "web"))
-	w.until("the preview to end", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed' AND error LIKE '%expired%'`, runID) == 1
-	})
+	for _, why := range []string{"expired", "deleted"} {
+		t.Run(why, func(t *testing.T) {
+			w := newWorld(t)
+			w.wakeable()
+			w.recipe("web", 3000, "npm run dev", "", nil, true)
+			_, runID := w.declare()
+			web := w.serverID(runID, "web")
+			if why == "expired" {
+				w.lux.Expire(web)
+			} else if err := w.previews.Lux.DeleteServer(context.Background(), web); err != nil {
+				t.Fatal(err)
+			}
+			w.until("the preview to end", func() bool {
+				return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed' AND error LIKE '%'||$2||'%'`, runID, why) == 1
+			})
+			if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.completed'
+				AND payload->>'reason' = $2`, runID, why); n != 1 {
+				t.Errorf("%d run.completed events with reason %s", n, why)
+			}
+		})
+	}
 }
 
 // A hostname another server of lux holds is chosen again, salted.
@@ -550,13 +570,30 @@ func TestATakenHostnameIsChosenAgain(t *testing.T) {
 	}
 }
 
+// A first follower (no cursor) stores one from its first connection, with
+// no new event needed: a restart before lux says anything misses nothing.
+func TestAFirstFeedFollowerStoresACursorAtOnce(t *testing.T) {
+	w := newWorld(t)
+	w.lux.PreviewDomain, w.previews.PreviewDomain = previewDomain, previewDomain
+	w.lux.IdleCheck = time.Hour
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	w.declare() // lux has events; nobody follows yet
+	w.startFeed(w.newFeed())
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if w.count(`SELECT count(*) FROM lux_feed`) == 1 {
+			return
+		}
+	}
+	t.Fatal("no cursor stored by a first follower with nothing new on the feed")
+}
+
 // The follower resumes after the cursor it stored: what lux said while it
 // was down is applied when it comes back.
 func TestTheFeedResumesFromItsStoredCursor(t *testing.T) {
 	w := newWorld(t)
 	w.lux.PreviewDomain, w.previews.PreviewDomain = previewDomain, previewDomain
 	w.lux.IdleCheck = time.Hour
-	feed := &servers.Feed{DB: w.app, Lux: w.previews.Lux, Log: quiet, Settle: time.Millisecond, Retry: 10 * time.Millisecond}
+	feed := w.newFeed()
 	stop := w.startFeed(feed)
 	w.recipe("web", 3000, "npm run dev", "", nil, true)
 	_, runID := w.declare()
@@ -572,7 +609,7 @@ func TestTheFeedResumesFromItsStoredCursor(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND wake_wanted_at IS NOT NULL`, runID); n != 0 {
 		t.Fatal("a wake was heard with no follower")
 	}
-	w.startFeed(&servers.Feed{DB: w.app, Lux: w.previews.Lux, Log: quiet, Settle: time.Millisecond, Retry: 10 * time.Millisecond})
+	w.startFeed(w.newFeed())
 	w.open(web)
 	if after := w.count(`SELECT after_event_id FROM lux_feed`); after <= before {
 		t.Errorf("cursor %d, was %d", after, before)
