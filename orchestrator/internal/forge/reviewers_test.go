@@ -90,6 +90,9 @@ func TestReviewerSearchErrors(t *testing.T) {
 	}{
 		"user-owned": {`{"data":{"repository":{"pullRequest":null,"assignableUsers":{"nodes":[{"login":"cy"}]}},"organization":null},
 			"errors":[{"type":"NOT_FOUND","path":["organization"],"message":"Could not resolve to an Organization"}]}`, 1, false, false},
+		// A path through a list has numbers in it: still the organization's.
+		"a team hidden by SSO": {`{"data":{"repository":{"pullRequest":null,"assignableUsers":{"nodes":[{"login":"cy"}]}},"organization":{"teams":{"nodes":[]}}},
+			"errors":[{"type":"FORBIDDEN","path":["organization","teams","nodes",0,"members"],"message":"SSO"}]}`, 1, false, false},
 		"rate limited": {`{"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded"}]}`, 0, true, false},
 		"no repository": {`{"data":{"repository":null},"errors":[{"type":"NOT_FOUND","path":["repository"],"message":"Could not resolve"}]}`,
 			0, false, true},
@@ -113,10 +116,11 @@ func TestNoSuggestionsWithoutAPullRequest(t *testing.T) {
 	}
 }
 
-// A team is asked as a team: "org/slug" goes to team_reviewers.
+// A team is asked as a team: "org/slug" goes to team_reviewers, and only
+// the repository owner's — another owner's team cannot review here.
 func TestRequestReviewersSplitsTeams(t *testing.T) {
 	gh, posted := graphQLServer(t, func(map[string]any) string { return "{}" })
-	if err := gh.RequestReviewers(context.Background(), "acme/api", 7, []string{"ana", "acme/platform"}); err != nil {
+	if err := gh.RequestReviewers(context.Background(), "acme/api", 7, []string{"ana", "acme/platform", "other/platform"}); err != nil {
 		t.Fatal(err)
 	}
 	b, _ := json.Marshal((*posted)[0])
