@@ -134,6 +134,8 @@ CREATE UNIQUE INDEX image_builds_one_finish ON image_builds (image_version_id, l
 CREATE UNIQUE INDEX image_builds_one_build ON image_builds (image_version_id)
   WHERE kind = 'build' AND state IN ('queued', 'running');
 CREATE INDEX image_builds_queue_idx ON image_builds ((kind = 'build'), requested_at) WHERE state = 'queued';
+-- image_queue_ahead's scan of what is queued or running, whatever its kind.
+CREATE INDEX image_builds_live_idx ON image_builds (state) WHERE state IN ('queued', 'running');
 CREATE INDEX image_builds_version_idx ON image_builds (image_version_id, requested_at DESC);
 
 -- Where an image is named, by id, same organization enforced. The free-text
@@ -153,6 +155,18 @@ ALTER TABLE projects
 ALTER TABLE runs
   ADD COLUMN image jsonb,
   ADD COLUMN image_build_id text REFERENCES image_builds(id) ON DELETE SET NULL;
+-- The foreign key's ON DELETE reads runs by it.
+CREATE INDEX runs_image_build_idx ON runs (image_build_id) WHERE image_build_id IS NOT NULL;
+
+-- The builder's heartbeat, one row: written every 30 s, idle or not. One
+-- not seen for 2 minutes is offline; the Images page and waiting Runs say
+-- since when. Nobody's data, so no row-level security.
+CREATE TABLE image_builder (
+  id      boolean PRIMARY KEY DEFAULT true CHECK (id),
+  seen_at timestamptz NOT NULL,
+  version text NOT NULL DEFAULT ''
+);
+GRANT SELECT ON image_builder TO dude_app;
 
 DO $$
 DECLARE t text;
@@ -185,6 +199,7 @@ GRANT SELECT, INSERT, UPDATE ON image_version_parents TO dude_builder;
 GRANT SELECT, INSERT ON image_finals TO dude_builder;
 GRANT SELECT, INSERT, UPDATE ON image_builds TO dude_builder;
 GRANT INSERT ON events TO dude_builder;
+GRANT SELECT, INSERT, UPDATE ON image_builder TO dude_builder;
 DO $$
 DECLARE t text;
 BEGIN

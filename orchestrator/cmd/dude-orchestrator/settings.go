@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/config"
+	"github.com/marciomartins/dude/orchestrator/internal/images"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
 	"github.com/marciomartins/dude/orchestrator/internal/registry"
@@ -76,8 +77,6 @@ const indexDimensions = 768
 // previewDomainRe is a domain of DNS labels, at least two.
 var previewDomainRe = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
-var layerRef = regexp.MustCompile(`^[^\s@]+@sha256:[0-9a-f]{64}$`)
-
 func settingsFrom(cfg *config.Config) (settings, error) {
 	var s settings
 	required := []struct {
@@ -118,7 +117,7 @@ func settingsFrom(cfg *config.Config) (settings, error) {
 		return settings{}, fmt.Errorf("registry login: %w", err)
 	}
 	// A layer by tag would change under the Runs finished with it.
-	if agent.Layer != "" && !layerRef.MatchString(agent.Layer) {
+	if agent.Layer != "" && !images.IsDigestRef(agent.Layer) {
 		return settings{}, fmt.Errorf("%s must name the dude layer by digest (…@sha256:<64 hex>), not %q", cfg.Label("DUDE_LAYER_IMAGE"), agent.Layer)
 	}
 

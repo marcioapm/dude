@@ -73,10 +73,27 @@ func TestPodmanBuildsWithinItsMemoryAndPushesByDigest(t *testing.T) {
 	if !strings.HasPrefix(digest, "sha256:") || len(digest) != 71 {
 		t.Fatalf("digest = %q", digest)
 	}
+	// Removed from the builder's storage once pushed, as the builder does.
+	if err := c.Remove(context.Background(), tag, &push); err != nil {
+		t.Fatalf("rmi: %v\n%s", err, push.String())
+	}
+	if exec.Command("podman", "image", "exists", tag).Run() == nil {
+		t.Errorf("%s is still in podman's storage", tag)
+	}
 	// What was pushed can be pulled back by that digest.
 	ref := Repository(tag) + "@" + digest
 	if out, err := exec.Command("podman", "pull", "--tls-verify=false", ref).CombinedOutput(); err != nil {
 		t.Fatalf("pull %s: %v\n%s", ref, err, out)
+	}
+}
+
+func TestPodmanOnThisHostCanLimitABuild(t *testing.T) {
+	c, _ := realPodman(t)
+	if err := CheckLimits(context.Background(), c); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := c.Controllers(context.Background()); err != nil || !strings.Contains(fmt.Sprint(got), "memory") {
+		t.Fatalf("controllers = %v, %v", got, err)
 	}
 }
 
@@ -149,12 +166,23 @@ if ! grep -q "^agent:" /etc/passwd; then
   fi
 fi
 mkdir -p /home/agent && chown 1000:1000 /home/agent
+[ -n "$(git config --system user.name 2>/dev/null)" ] || printf '[user]\n\tname = dude\n\temail = dude@localhost\n[init]\n\tdefaultBranch = main\n' >> /etc/gitconfig
 git --version >/dev/null 2>&1 || { echo "dude: the image needs git: agents commit with it"; exit 1; }
 `
 
 func runIn(t *testing.T, image string, cmd ...string) string {
 	t.Helper()
-	out, err := exec.Command("podman", append([]string{"run", "--rm", image}, cmd...)...).CombinedOutput()
+	return runAs(t, "", image, cmd...)
+}
+
+// runAs runs cmd in image as user ("" for the image's own).
+func runAs(t *testing.T, user, image string, cmd ...string) string {
+	t.Helper()
+	args := []string{"run", "--rm"}
+	if user != "" {
+		args = append(args, "--user", user)
+	}
+	out, err := exec.Command("podman", append(append(args, image), cmd...)...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("run %v: %v\n%s", cmd, err, out)
 	}
@@ -178,6 +206,14 @@ func TestPodmanFinishesNodeWhoseUid1000IsNode(t *testing.T) {
 	}
 	if got := runIn(t, final, "sh", "-c", "getent passwd agent | cut -d: -f3,6"); got != "1000:/home/agent" {
 		t.Errorf("agent = %s", got)
+	}
+	// node's passwd entry comes first for uid 1000 (home /home/node): run
+	// by name or by uid, as a runtime may, HOME and the git identity are
+	// still the agent's.
+	for _, user := range []string{"", "1000", "1000:1000"} {
+		if got := runAs(t, user, final, "sh", "-c", "echo $HOME; git config user.name; cd && pwd"); got != "/home/agent\ndude\n/home/agent" {
+			t.Errorf("as %q: HOME and git identity = %q", user, got)
+		}
 	}
 }
 

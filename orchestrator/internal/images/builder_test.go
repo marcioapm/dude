@@ -28,8 +28,13 @@ type fakePodman struct {
 	builds []string // tag + "\n" + Containerfile
 	free   []int64
 	pruned int
-	fail   func(op, tag, containerfile string) (string, error)
-	block  chan struct{}
+	// Tags removed, in order; what Controllers answers (cpu, memory when nil).
+	removed     []string
+	controllers []string
+	fail        func(op, tag, containerfile string) (string, error)
+	block       chan struct{}
+	// Closed, when set, once a build is blocked on block.
+	blocked chan struct{}
 }
 
 func (f *fakePodman) Build(ctx context.Context, dir, tag string, _ map[string]string, log io.Writer) error {
@@ -45,6 +50,10 @@ func (f *fakePodman) Build(ctx context.Context, dir, tag string, _ map[string]st
 		fmt.Fprintf(log, "STEP %d/%d: %s\n", i+1, len(lines), l)
 	}
 	if f.block != nil {
+		if f.blocked != nil {
+			close(f.blocked)
+			f.blocked = nil
+		}
 		select {
 		case <-f.block:
 		case <-ctx.Done():
@@ -87,6 +96,20 @@ func (f *fakePodman) FreeBytes(context.Context) (int64, error) {
 func (f *fakePodman) Prune(context.Context, io.Writer) error {
 	f.pruned++
 	return nil
+}
+
+func (f *fakePodman) Remove(_ context.Context, tag string, _ io.Writer) error {
+	f.mu.Lock()
+	f.removed = append(f.removed, tag)
+	f.mu.Unlock()
+	return nil
+}
+
+func (f *fakePodman) Controllers(context.Context) ([]string, error) {
+	if f.controllers == nil {
+		return []string{"cpuset", "cpu", "io", "memory", "pids"}, nil
+	}
+	return f.controllers, nil
 }
 
 func digestOf(tag string) string {
@@ -206,6 +229,11 @@ func TestABuildPassingPublishesTheVersionWithItsUserImageAndItsFinal(t *testing.
 	}
 	if got := f.str(`SELECT string_agg(event_type, ',' ORDER BY cursor) FROM events WHERE organization_id = $1`, f.org); got != "image.build_started,image.published" {
 		t.Errorf("events = %s", got)
+	}
+	// Both pushed tags leave the builder's storage: the final once pushed,
+	// the user image once the final was built from it.
+	if want := []string{FinalTag(repo, "imv_b1", layer), UserTag(repo, "imv_b1")}; strings.Join(f.podman.removed, " ") != strings.Join(want, " ") {
+		t.Errorf("removed %v, want %v", f.podman.removed, want)
 	}
 }
 
@@ -391,4 +419,141 @@ func TestTheLogIsWrittenWhileItBuilds(t *testing.T) {
 	}
 	close(f.podman.block)
 	<-done
+}
+
+func TestAFailedBuildsImageIsRemovedToo(t *testing.T) {
+	f := setup(t)
+	f.image("img_base", "acme-base")
+	f.podman.fail = func(op, _, _ string) (string, error) {
+		if op == "push" {
+			return "Error: writing blob: unauthorized\n", errors.New("exit status 125")
+		}
+		return "", nil
+	}
+	f.queue("img_base", "imv_b1", 1, "FROM debian\n")
+	f.once()
+	if got := strings.Join(f.podman.removed, " "); got != UserTag(repo, "imv_b1") {
+		t.Errorf("removed %q", got)
+	}
+}
+
+func TestABuilderStoppedMidJobQueuesItAgainUnfailed(t *testing.T) {
+	f := setup(t)
+	f.image("img_base", "acme-base")
+	f.podman.block = make(chan struct{})
+	f.podman.blocked = make(chan struct{})
+	blocked := f.podman.blocked
+	build := f.queue("img_base", "imv_b1", 1, "FROM debian\nRUN make\n")
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if _, err := f.b.Once(ctx); err != nil {
+			t.Errorf("Once: %v", err)
+		}
+	}()
+	<-blocked
+	// What SIGTERM does to the builder's context.
+	stop()
+	<-done
+	got := f.row(`SELECT state, error, restarts, started_at, log FROM image_builds WHERE id = $1`, build)
+	if got[0] != "queued" || got[1] != nil || got[2] != int32(0) || got[3] != nil {
+		t.Fatalf("job = %v", got[:4])
+	}
+	if !strings.Contains(fmt.Sprint(got[4]), "— the builder stopped; queued again —") {
+		t.Errorf("log = %s", got[4])
+	}
+	if got := f.row(`SELECT state, error FROM image_versions WHERE id = 'imv_b1'`); got[0] != "queued" || got[1] != nil {
+		t.Errorf("version = %v", got)
+	}
+	if got := f.str(`SELECT count(*) FROM events WHERE event_type = 'image.build_failed'`); got != "0" {
+		t.Errorf("%s failure events", got)
+	}
+	// The next builder takes it and publishes it.
+	f.podman.block = nil
+	f.once()
+	if got := f.str(`SELECT state FROM image_versions WHERE id = 'imv_b1'`); got != "published" {
+		t.Errorf("then %s", got)
+	}
+}
+
+func TestAFlushWithNothingNewWritesOnlyTheHeartbeat(t *testing.T) {
+	f := setup(t)
+	f.image("img_base", "acme-base")
+	build := f.queue("img_base", "imv_b1", 1, "FROM debian\n")
+	f.exec(`UPDATE image_builds SET state = 'running', log = E'kept\n' WHERE id = $1`, build)
+	j := job{ID: build}
+	p := &progress{tail: Tail{Max: LogMax}, stage: "building"}
+	p.setStage("building")
+	p.printf("STEP 1/2: FROM debian\n")
+	f.b.flush(context.Background(), j, p, true)
+	p.printf("STEP 2/2: RUN é")
+	// Half a rune is held back until the rest of it comes.
+	_, _ = p.Write([]byte{0xC3})
+	f.b.flush(context.Background(), j, p, true)
+	if got := f.str(`SELECT log FROM image_builds WHERE id = $1`, build); got != "kept\nSTEP 1/2: FROM debian\nSTEP 2/2: RUN é" {
+		t.Fatalf("log = %q", got)
+	}
+	_, _ = p.Write([]byte{0xA9, '\n'})
+	f.b.flush(context.Background(), j, p, true)
+	f.exec(`UPDATE image_builds SET log = 'replaced', heartbeat_at = now() - interval '1 hour' WHERE id = $1`, build)
+	// Nothing written since: the log is left alone, the heartbeat moves.
+	f.b.flush(context.Background(), j, p, true)
+	got := f.row(`SELECT log, heartbeat_at > now() - interval '1 minute' FROM image_builds WHERE id = $1`, build)
+	if got[0] != "replaced" || got[1] != true {
+		t.Errorf("after an empty flush: %v", got)
+	}
+}
+
+func TestTheRowKeepsTheLastLogMaxOfALongLog(t *testing.T) {
+	f := setup(t)
+	f.image("img_base", "acme-base")
+	build := f.queue("img_base", "imv_b1", 1, "FROM debian\n")
+	f.exec(`UPDATE image_builds SET state = 'running' WHERE id = $1`, build)
+	j := job{ID: build}
+	p := &progress{tail: Tail{Max: LogMax}, stage: "building"}
+	line := strings.Repeat("x", 1023) + "\n"
+	for i := range 1100 {
+		p.printf("%s", line)
+		if i%100 == 0 {
+			f.b.flush(context.Background(), j, p, true)
+		}
+	}
+	p.printf("the end\n")
+	f.b.flush(context.Background(), j, p, true)
+	got := f.str(`SELECT log FROM image_builds WHERE id = $1`, build)
+	if len(got) != LogMax || !strings.HasSuffix(got, "the end\n") {
+		t.Errorf("log is %d bytes, ending %q", len(got), got[len(got)-10:])
+	}
+}
+
+func TestTheHeartbeatSaysWhenTheBuilderWasLastSeen(t *testing.T) {
+	f := setup(t)
+	f.b.Version = "1.2.3"
+	if err := f.b.Heartbeat(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.exec(`UPDATE image_builder SET seen_at = now() - interval '1 hour'`)
+	if err := f.b.Heartbeat(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.row(`SELECT count(*), bool_and(seen_at > now() - interval '1 minute'), max(version) FROM image_builder`); got[0] != int64(1) || got[1] != true || got[2] != "1.2.3" {
+		t.Errorf("image_builder = %v", got)
+	}
+}
+
+func TestCheckLimitsRefusesAPodmanWithoutCPUAndMemoryControllers(t *testing.T) {
+	for _, c := range []struct {
+		have []string
+		want string
+	}{
+		{[]string{"cpu", "memory", "pids"}, ""},
+		{[]string{"pids"}, "podman cannot limit builds: the cpu and memory cgroup controllers are not delegated to this user (podman has [pids]); delegate cpu and memory to its user@.service"},
+		{[]string{"cpu", "pids"}, "podman cannot limit builds: the memory cgroup controller is not delegated to this user (podman has [cpu pids]); delegate cpu and memory to its user@.service"},
+	} {
+		err := CheckLimits(context.Background(), &fakePodman{controllers: c.have})
+		if got := fmt.Sprint(err); (c.want == "" && err != nil) || (c.want != "" && got != c.want) {
+			t.Errorf("%v: %v", c.have, err)
+		}
+	}
 }
