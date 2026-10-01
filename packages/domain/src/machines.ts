@@ -161,6 +161,14 @@ export function sizePool(poolId: string | null, pools: readonly MachinePool[]): 
 }
 
 /**
+ * Whether a size's pool is gone: it names one by id and lux's list, read,
+ * does not have it. An unread list (null) says nothing is gone.
+ */
+export function poolGone(poolId: string | null, pools: readonly MachinePool[] | null): boolean {
+  return poolId !== null && pools !== null && !pools.some((p) => p.id === poolId);
+}
+
+/**
  * Whether a size fits one host of its pool. Too big for a known host size
  * is refused; a host size nobody knows (an older lux, a pool that never
  * had a host) is allowed, with a note. `pools` null is lux's list unread
@@ -170,11 +178,9 @@ export function machineFit(
   size: Pick<MachineSizeInput, "cpus" | "memoryMiB" | "diskGiB" | "poolId">,
   pools: readonly MachinePool[] | null,
 ): Fit {
+  if (poolGone(size.poolId, pools)) return { kind: "gone", poolId: size.poolId! };
   const pool = pools ? sizePool(size.poolId, pools) : null;
-  if (!pool) {
-    if (pools && size.poolId !== null) return { kind: "gone", poolId: size.poolId };
-    return { kind: "unknown", pool: null, reason: "no_pool" };
-  }
+  if (!pool) return { kind: "unknown", pool: null, reason: "no_pool" };
   const host = pool.hostSize;
   if (!host) return { kind: "unknown", pool, reason: "no_host_size" };
   const memory = size.memoryMiB * MIB;

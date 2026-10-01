@@ -46,6 +46,7 @@ import {
   gib,
   machineFit,
   machineSpec,
+  poolGone,
   type MachinePools,
   type MachineSize,
   type MachineSizeUse,
@@ -287,8 +288,7 @@ function SizeDialog({ client, orgName, existing, pools, defaultName, onClose, on
   const input = asInput(draft);
   const fit = Object.keys(problems).some((k) => k !== "name") ? null : machineFit(input, known);
   const tooBig = fit?.kind === "too_big";
-  // The draft names a pool lux no longer lists: saving would be refused.
-  const poolGone = draft.poolId !== null && known !== null && !known.some((p) => p.id === draft.poolId);
+  const poolIsGone = poolGone(draft.poolId, known);
   // Beside the field that does not fit, what one host has of it.
   const over = (what: "cpus" | "memory" | "disk") => {
     if (fit?.kind !== "too_big") return undefined;
@@ -297,7 +297,7 @@ function SizeDialog({ client, orgName, existing, pools, defaultName, onClose, on
     return what === "cpus" ? `Most a ${fit.pool.name} host has: ${o.offers}` : `Most a ${fit.pool.name} host has: ${gib(o.offers)} GiB`;
   };
   const users = existing?.usedBy ?? [];
-  const valid = Object.keys(problems).length === 0 && !tooBig && !poolGone;
+  const valid = Object.keys(problems).length === 0 && !tooBig && !poolIsGone;
 
   return (
     <FormDialog open onOpenChange={(open) => !open && onClose()} size="md"
@@ -325,9 +325,9 @@ function SizeDialog({ client, orgName, existing, pools, defaultName, onClose, on
         <NumberInput label="Disk" unit="GiB" value={draft.diskGiB} step={5} min={5} onValueChange={(v) => set("diskGiB", v)}
           hint={STEP_HINT.disk} error={problems.disk ?? over("disk")} data-testid="machine-size-disk" />
       </FormRow>
-      <PoolField orgName={orgName} pools={pools} value={draft.poolId} currentName={existing?.poolName ?? null} gone={poolGone}
+      <PoolField orgName={orgName} pools={pools} value={draft.poolId} currentName={existing?.poolName ?? null} gone={poolIsGone}
         onChange={(v) => set("poolId", v)} />
-      {poolGone ? (
+      {poolIsGone ? (
         <Callout tone="danger" data-testid="machine-pool-gone">
           <b>Its pool is gone from lux.</b> Sessions on {existing?.name ?? "this size"} fail until it runs in another: choose one, or {orgName}’s default pool.
         </Callout>
