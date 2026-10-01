@@ -202,7 +202,7 @@ func TestAReviewerCannotCreateWork(t *testing.T) {
 	}
 	// Seeing work, recording events and what it learned, not making work or
 	// stopping for a person.
-	if strings.Join(names, ",") != "emit_event,get_memory,list_epics,list_repositories,list_tasks,remember,request_repository,search_memory" {
+	if strings.Join(names, ",") != "emit_event,get_memory,list_epics,list_repositories,list_tasks,remember,request_repository,run_diff,search_memory" {
 		t.Errorf("a reviewer sees %v", names)
 	}
 }
