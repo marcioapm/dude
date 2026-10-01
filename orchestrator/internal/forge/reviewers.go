@@ -171,6 +171,10 @@ func (g *GitHub) ReviewerCandidates(ctx context.Context, slug string, number int
 	}
 	if org := out.Data.Organization; org != nil {
 		for _, t := range org.Teams.Nodes {
+			// A team GitHub would not show the token comes back null: no team.
+			if t.Slug == "" {
+				continue
+			}
 			add(Candidate{Kind: "team", Login: owner + "/" + t.Slug, Name: t.Name, AvatarURL: t.AvatarURL, Members: t.Members.TotalCount})
 		}
 	}
