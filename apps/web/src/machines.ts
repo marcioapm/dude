@@ -12,9 +12,11 @@ import {
   machineSizeInputSchema,
   type Fit,
   type MachinePool,
+  type MachinePools,
   type MachineSize,
   type MachineSizeInput,
   type MachineSizeUse,
+  type MachineSizeWithUse,
   type SettingsRole,
 } from "@dude/domain";
 
@@ -53,6 +55,20 @@ export function poolOptionLabel(pool: MachinePool, orgName: string): string {
   return `${name} — ${poolMachines(pool)}${host ? ` · ${host}` : " · host size unknown"}`;
 }
 
+/** lux's pools as the fit check takes them: null while unread, or when lux could not be read. */
+export function knownPools(pools: MachinePools | null): MachinePool[] | null {
+  return pools && pools.problem === null ? pools.pools : null;
+}
+
+/**
+ * A size's pool by lux's current name: "Default pool" for none, else the
+ * name in lux's list, else the one the API read, else its id.
+ */
+export function poolLabel(size: Pick<MachineSizeWithUse, "poolId" | "poolName">, known: readonly MachinePool[] | null): string {
+  if (size.poolId === null) return "Default pool";
+  return known?.find((p) => p.id === size.poolId)?.name ?? size.poolName ?? size.poolId;
+}
+
 export function roleLabel(role: string | null): string {
   return role ? SETTINGS_ROLE_LABEL[role as SettingsRole] ?? role : "";
 }
@@ -82,14 +98,15 @@ export interface SizeDraft {
   cpus: number | null;
   memoryGiB: number | null;
   diskGiB: number | null;
-  pool: string | null;
+  /** lux's id for the pool; null: the organisation's default pool. */
+  poolId: string | null;
   isDefault: boolean;
 }
 
 export function draftOf(size: MachineSize | null): SizeDraft {
   return size
-    ? { name: size.name, cpus: size.cpus, memoryGiB: size.memoryMiB / 1024, diskGiB: size.diskGiB, pool: size.pool, isDefault: size.isDefault }
-    : { name: "", cpus: 2, memoryGiB: 8, diskGiB: 20, pool: null, isDefault: false };
+    ? { name: size.name, cpus: size.cpus, memoryGiB: size.memoryMiB / 1024, diskGiB: size.diskGiB, poolId: size.poolId, isDefault: size.isDefault }
+    : { name: "", cpus: 2, memoryGiB: 8, diskGiB: 20, poolId: null, isDefault: false };
 }
 
 /** Each field's problem, in the step's words; none when the draft is a size. */
@@ -121,7 +138,7 @@ export function asInput(d: SizeDraft): MachineSizeInput {
     cpus: d.cpus ?? NaN,
     memoryMiB: d.memoryGiB === null ? NaN : Math.round(d.memoryGiB * 1024 * 1e6) / 1e6,
     diskGiB: d.diskGiB ?? NaN,
-    pool: d.pool,
+    poolId: d.poolId,
     isDefault: d.isDefault,
   };
 }
@@ -132,9 +149,10 @@ export const STEP_HINT = {
   disk: `In steps of ${MACHINE_LIMITS.diskGiB.step} GiB`,
 } as const;
 
-/** How much of one host a size takes, as its row says it. */
+/** How much of one host a size takes, as its row says it; "—" for a pool gone from lux. */
 export function fitWords(fit: Fit): { share: number | null; text: string } {
   if (fit.kind === "fits") return { share: fit.share, text: `${Math.round(fit.share * 100)}% of a host` };
   if (fit.kind === "too_big") return { share: 1, text: "Too big for a host" };
+  if (fit.kind === "gone") return { share: null, text: "—" };
   return { share: null, text: "Unknown" };
 }

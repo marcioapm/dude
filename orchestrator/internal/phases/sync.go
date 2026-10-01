@@ -356,6 +356,7 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 	}
 	// The dude Run id is the idempotency key: a submit that timed out and is
 	// retried returns the lux Run the first one created.
+	NamePool(ctx, s.Lux, machine)
 	lr, err := s.Lux.Submit(ctx, spec, r.ID)
 	if err != nil {
 		return s.retryOrFail(ctx, r, err, "lux refused the run")

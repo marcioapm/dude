@@ -20,7 +20,10 @@ type Machine struct {
 	CPUs      float64 `json:"cpus"`
 	MemoryMiB int64   `json:"memoryMiB"`
 	DiskGiB   int64   `json:"diskGiB"`
-	// nil: the organization's default pool in lux.
+	// lux's id for its pool; nil: the organization's default pool in lux.
+	PoolID *string `json:"poolId"`
+	// The pool's name in lux when the Run was submitted; filled in by the
+	// submit from lux's list, nil when it names none or lux did not say.
 	Pool *string `json:"pool"`
 	// Where the size came from: "project", "organization", "implementer"
 	// (a fixer with none of its own), or "default".
@@ -36,7 +39,7 @@ type Sizes struct {
 // LoadSizes reads the organization's sizes, in its transaction.
 func LoadSizes(ctx context.Context, tx pgx.Tx) (Sizes, error) {
 	out := Sizes{ByID: map[string]Machine{}}
-	rows, err := tx.Query(ctx, `SELECT id, name, cpus::float8, memory_mib, disk_gib, pool, is_default FROM machine_sizes`)
+	rows, err := tx.Query(ctx, `SELECT id, name, cpus::float8, memory_mib, disk_gib, pool_id, is_default FROM machine_sizes`)
 	if err != nil {
 		return out, fmt.Errorf("load machine sizes: %w", err)
 	}
@@ -44,7 +47,7 @@ func LoadSizes(ctx context.Context, tx pgx.Tx) (Sizes, error) {
 	for rows.Next() {
 		var m Machine
 		var isDefault bool
-		if err := rows.Scan(&m.SizeID, &m.Name, &m.CPUs, &m.MemoryMiB, &m.DiskGiB, &m.Pool, &isDefault); err != nil {
+		if err := rows.Scan(&m.SizeID, &m.Name, &m.CPUs, &m.MemoryMiB, &m.DiskGiB, &m.PoolID, &isDefault); err != nil {
 			return out, err
 		}
 		out.ByID[m.SizeID] = m

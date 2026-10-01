@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 import pytest
 import requests
@@ -217,7 +218,7 @@ def test_an_agent_waiting_on_a_person_is_parked_on_real_lux_and_resumed_by_the_a
 # Machine sizes: what dude sends lux as a Run's size and pool, and how it
 # reads lux's pools. Straight to lux's API with dude's key, encoded as the
 # orchestrator encodes them (lux.Resources: memory and disk as JSON numbers
-# of bytes; lux.PlacementSpec: placement.pool).
+# of bytes; lux.PlacementSpec: placement.poolId).
 # ---------------------------------------------------------------------------
 
 GIB = 1 << 30
@@ -253,25 +254,18 @@ def test_a_run_sized_as_dude_sizes_it_reaches_running_on_real_lux(env):
         _lux(env, "POST", f"/v1/runs/{run_id}/cancel")
 
 
-def test_a_pool_lux_does_not_have_is_taken_and_never_placed(env):
-    """What lux does with a size whose pool is gone (removed from lux after
-    an admin chose it). lux's spec.Normalize does not check the pool, so the
-    submit is taken (201) and the scheduler leaves the Run submitted, saying
-    no host matches: there is no refusal code. dude records such a Run as
-    scheduled and it waits; if lux starts refusing it with a 4xx other than
-    429, dude fails the Run instead (lux.Error.Retryable), and this test
-    says the contract moved."""
-    pool = f"no-such-pool-{os.urandom(3).hex()}"
-    res = _lux(env, "POST", "/v1/runs", _sleeper("contract no pool", placement={"pool": pool}), key=f"contract-{os.urandom(6).hex()}")
-    assert res.status_code == 201, (res.status_code, res.text)
-    run_id = res.json()["id"]
-    try:
-        run = wait_until(lambda: (r := _lux(env, "GET", f"/v1/runs/{run_id}").json())["stateReason"] and r,
-                         timeout=60, interval=1, message="lux never said why the Run waits")
-        assert (run["state"], run["stateReason"]) == ("submitted", "no host matches"), run
-        assert run["spec"]["placement"]["pool"] == pool, run["spec"]
-    finally:
-        _lux(env, "POST", f"/v1/runs/{run_id}/cancel")
+def test_a_pool_id_lux_does_not_have_is_refused(env):
+    """What lux does with a size whose pool is gone (deleted in lux after an
+    admin chose it). dude sends the pool as placement.poolId; lux resolves
+    it at submit and refuses an id it has no pool for with 422
+    unknown_pool, which dude turns into a failed Run with a reason in words
+    (phases.PoolGone). Needs a lux with placement.poolId (feat/memory-factor)."""
+    pool_id = f"pool_nosuch{os.urandom(4).hex()}"
+    res = _lux(env, "POST", "/v1/runs", _sleeper("contract no pool", placement={"poolId": pool_id}), key=f"contract-{os.urandom(6).hex()}")
+    if res.status_code in (200, 201, 202):
+        _lux(env, "POST", f"/v1/runs/{res.json()['id']}/cancel")
+    assert res.status_code == 422, (res.status_code, res.text)
+    assert res.json()["error"]["code"] == "unknown_pool", res.text
 
 
 def test_luxs_pools_decode_as_dude_reads_them(env, client: ApiClient):
@@ -279,6 +273,8 @@ def test_luxs_pools_decode_as_dude_reads_them(env, client: ApiClient):
     assert res.status_code == 200, res.text
     pools = res.json()["pools"]
     assert all(isinstance(p["name"], str) and p["name"] for p in pools), pools
+    # Each pool's id is what a size stores; the pattern is migration 063's.
+    assert all(re.fullmatch(r"pool_[A-Za-z0-9_-]+", p.get("id", "")) for p in pools), pools
     for p in pools:
         # Absent from an older lux; when there, one host's size: CPUs, and
         # memory and disk in bytes (0: disk not reserved).

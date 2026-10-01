@@ -7,7 +7,10 @@ import type { AgentModels } from "./hierarchy.ts";
  * names one in its settings (org default, project override, field by
  * field like its model), and one that names none runs on the
  * organization's default size. lux runs the machine: dude sends the size
- * as the RunSpec's `resources`, and its pool as `placement.pool`.
+ * as the RunSpec's `resources`, and its pool as `placement.poolId`.
+ *
+ * A size keeps its pool by lux's id, which a rename in lux leaves alone;
+ * the pool's name is always lux's current one, from its list.
  *
  * Sizes move in steps (half a CPU, half a GiB of memory, 5 GiB of disk),
  * checked here and by the database (migration 063), so an illegal size
@@ -51,8 +54,8 @@ function dimension(key: keyof typeof MACHINE_LIMITS) {
     .refine((v) => onStep(v, step), MACHINE_STEP_MESSAGE[key]);
 }
 
-/** A lux pool's name, as lux takes one: lowercase letters, digits and '-'. */
-export const poolNameSchema = z.string().trim().min(1).max(63).regex(/^[a-z0-9][a-z0-9-]*$/, "a lux pool’s name");
+/** A lux pool's id, as lux makes them (`pool_…`); migration 063 holds the same pattern. */
+export const poolIdSchema = z.string().regex(/^pool_[A-Za-z0-9_-]+$/, "a lux pool’s id");
 
 /** A size as an admin writes it (`POST /v1/machines/sizes`, `PUT /v1/machines/sizes/:id`). */
 export const machineSizeInputSchema = z
@@ -62,7 +65,7 @@ export const machineSizeInputSchema = z
     memoryMiB: dimension("memoryMiB"),
     diskGiB: dimension("diskGiB"),
     /** null: the organization's default pool in lux. */
-    pool: poolNameSchema.nullable().default(null),
+    poolId: poolIdSchema.nullable().default(null),
     isDefault: z.boolean().default(false),
   })
   .strict();
@@ -86,6 +89,8 @@ export interface MachineSizeUse {
 }
 
 export interface MachineSizeWithUse extends MachineSize {
+  /** lux's current name for its pool; null for the default pool, or when lux's list lacks it or could not be read. */
+  poolName: string | null;
   usedBy: MachineSizeUse[];
 }
 
@@ -105,6 +110,8 @@ export interface HostSize {
 
 /** A pool dude's lux key can use (`GET /v1/machines/pools`). */
 export interface MachinePool {
+  /** lux's id for it, unchanged by a rename: what a size stores. */
+  id: string;
   name: string;
   /** Where lux puts a Run that names no pool. */
   isDefault: boolean;
@@ -140,22 +147,34 @@ export type Fit =
   /** share: the largest part of one host it takes, 0..1. */
   | { kind: "fits"; pool: MachinePool; share: number; diskReserved: boolean }
   | { kind: "too_big"; pool: MachinePool; over: Array<{ what: FitDimension; asked: number; offers: number }> }
+  /** The size names a pool lux's list does not have: deleted in lux, or never the organisation's. */
+  | { kind: "gone"; poolId: string }
   /** Allowed: lux will place it or say why. */
   | { kind: "unknown"; pool: MachinePool | null; reason: "no_pool" | "no_host_size" };
 
-/** The pool a size runs in: its own, or the one lux marks as the default. */
-export function sizePool(pool: string | null, pools: readonly MachinePool[]): MachinePool | null {
-  return pool === null ? (pools.find((p) => p.isDefault) ?? null) : (pools.find((p) => p.name === pool) ?? null);
+/**
+ * The pool a size runs in: its own by id, or the one lux marks as the
+ * default. null when lux's list does not have it.
+ */
+export function sizePool(poolId: string | null, pools: readonly MachinePool[]): MachinePool | null {
+  return poolId === null ? (pools.find((p) => p.isDefault) ?? null) : (pools.find((p) => p.id === poolId) ?? null);
 }
 
 /**
  * Whether a size fits one host of its pool. Too big for a known host size
  * is refused; a host size nobody knows (an older lux, a pool that never
- * had a host, lux unreachable) is allowed, with a note.
+ * had a host) is allowed, with a note. `pools` null is lux's list unread
+ * (lux unreachable): nothing is known, not even whether the pool exists.
  */
-export function machineFit(size: Pick<MachineSizeInput, "cpus" | "memoryMiB" | "diskGiB" | "pool">, pools: readonly MachinePool[]): Fit {
-  const pool = sizePool(size.pool, pools);
-  if (!pool) return { kind: "unknown", pool: null, reason: "no_pool" };
+export function machineFit(
+  size: Pick<MachineSizeInput, "cpus" | "memoryMiB" | "diskGiB" | "poolId">,
+  pools: readonly MachinePool[] | null,
+): Fit {
+  const pool = pools ? sizePool(size.poolId, pools) : null;
+  if (!pool) {
+    if (pools && size.poolId !== null) return { kind: "gone", poolId: size.poolId };
+    return { kind: "unknown", pool: null, reason: "no_pool" };
+  }
   const host = pool.hostSize;
   if (!host) return { kind: "unknown", pool, reason: "no_host_size" };
   const memory = size.memoryMiB * MIB;

@@ -7,10 +7,12 @@
  * preview settings (servers.ts); what names none runs on the default.
  *
  * Pools are lux's: the orchestrator reads them with dude's lux key
- * (GET /internal/lux/pools) and this passes them on. A size is checked
- * against one host of its pool on save: too big for a host lux knows is
- * refused; a host nobody knows (an older lux, a pool that never had one,
- * lux unreachable) is allowed.
+ * (GET /internal/lux/pools) and this passes them on. A size names its pool
+ * by lux's id; the name shown is lux's current one. On save a named pool
+ * must be in lux's list (422 unknown_pool, or 503 when lux cannot be read
+ * to check), and a size must fit one host of its pool: too big for a host
+ * lux knows is refused; a host nobody knows (an older lux, a pool that
+ * never had one, lux unreachable for the default pool) is allowed.
  */
 
 import {
@@ -23,6 +25,7 @@ import {
   replaceMachineSize,
   replacePreviewMachineSize,
   resolveMachineSize,
+  sizePool,
   type AgentModels,
   type MachinePools,
   type MachineSize,
@@ -98,11 +101,16 @@ async function usage(scope: OrgScope, sizes: readonly MachineSize[]): Promise<Ma
   return out;
 }
 
-async function sizesResponse(ctx: RequestContext): Promise<{ sizes: MachineSizeWithUse[]; canEdit: boolean }> {
+async function sizesResponse(ctx: RequestContext, read?: MachinePools): Promise<{ sizes: MachineSizeWithUse[]; canEdit: boolean }> {
+  const luxPools = (read ?? (await pools(ctx))).pools;
   const sizes = await withOrg(ctx.principal.organizationId, async (scope) => {
     const sizes = await listSizes(scope);
     const uses = await usage(scope, sizes);
-    return sizes.map((s) => ({ ...s, usedBy: uses.get(s.id) ?? [] }));
+    return sizes.map((s) => ({
+      ...s,
+      poolName: s.poolId === null ? null : (sizePool(s.poolId, luxPools)?.name ?? null),
+      usedBy: uses.get(s.id) ?? [],
+    }));
   });
   return { sizes, canEdit: await isOrgAdmin(ctx) };
 }
@@ -128,12 +136,26 @@ export async function pools(ctx: RequestContext): Promise<MachinePools> {
   }
 }
 
-/** A size that cannot fit one host of its pool is refused, naming what does not fit. */
-async function checkFit(ctx: RequestContext, size: MachineSizeInput): Promise<void> {
-  const fit = machineFit(size, (await pools(ctx)).pools);
+/**
+ * A size is checked against lux's pools as they are now: a pool lux does
+ * not list for the organisation is refused, as is one lux cannot be read to
+ * check; a size too big for one host of its pool is refused, naming what
+ * does not fit. Returns the pools read, for the answer.
+ */
+async function checkPool(ctx: RequestContext, size: MachineSizeInput): Promise<MachinePools> {
+  const read = await pools(ctx);
+  const unread = read.problem !== null;
+  if (size.poolId !== null && unread) {
+    throw new HttpError(503, `can't check the pool with lux: ${read.problem}`, "unavailable");
+  }
+  const fit = machineFit(size, unread ? null : read.pools);
+  if (fit.kind === "gone") {
+    throw new HttpError(422, `lux has no pool with id ${fit.poolId} for this organisation`, "unknown_pool", { poolId: fit.poolId });
+  }
   if (fit.kind === "too_big") {
     throw new HttpError(422, `No host in ‘${fit.pool.name}’ can hold this: ${fitProblem(fit.over)}`, "too_big", { over: fit.over, pool: fit.pool.name });
   }
+  return read;
 }
 
 // ---------------------------------------------------------------------------
@@ -176,35 +198,35 @@ const sizeInput = async (ctx: RequestContext): Promise<MachineSizeInput> =>
 async function createSize(ctx: RequestContext): Promise<Response> {
   await requireOrgAdmin(ctx);
   const input = await sizeInput(ctx);
-  await checkFit(ctx, input);
+  const read = await checkPool(ctx, input);
   const id = newId("machineSize");
   await withOrg(ctx.principal.organizationId, async (scope) => {
     await scope.sql`
-      INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool, is_default, updated_by)
-      VALUES (${id}, ${scope.organizationId}, ${input.name}, ${input.cpus}, ${input.memoryMiB}, ${input.diskGiB}, ${input.pool},
+      INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool_id, is_default, updated_by)
+      VALUES (${id}, ${scope.organizationId}, ${input.name}, ${input.cpus}, ${input.memoryMiB}, ${input.diskGiB}, ${input.poolId},
               false, ${ctx.principal.personId})`.catch((err: unknown) => nameTaken(err, input.name));
     if (input.isDefault) await makeDefault(scope, id);
     await record(scope, ctx, { [id]: { added: input } });
   });
-  return json(await sizesResponse(ctx), 201);
+  return json(await sizesResponse(ctx, read), 201);
 }
 
 async function updateSize(ctx: RequestContext): Promise<Response> {
   await requireOrgAdmin(ctx);
   const id = ctx.params.id!;
   const input = await sizeInput(ctx);
-  await checkFit(ctx, input);
+  const read = await checkPool(ctx, input);
   await withOrg(ctx.principal.organizationId, async (scope) => {
     const rows = await scope.sql`
       UPDATE machine_sizes SET name = ${input.name}, cpus = ${input.cpus}, memory_mib = ${input.memoryMiB},
-        disk_gib = ${input.diskGiB}, pool = ${input.pool}, updated_at = now(), updated_by = ${ctx.principal.personId}
+        disk_gib = ${input.diskGiB}, pool_id = ${input.poolId}, updated_at = now(), updated_by = ${ctx.principal.personId}
       WHERE id = ${id} RETURNING is_default AS "isDefault"`.catch((err: unknown) => nameTaken(err, input.name));
     if (rows.length === 0) throw notFound(`no machine size ${id}`);
     // The default is moved by making another the default, never by unticking it.
     if (input.isDefault && !rows[0].isDefault) await makeDefault(scope, id);
     await record(scope, ctx, { [id]: { edited: input } });
   });
-  return json(await sizesResponse(ctx));
+  return json(await sizesResponse(ctx, read));
 }
 
 async function setDefault(ctx: RequestContext): Promise<Response> {

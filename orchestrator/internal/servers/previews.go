@@ -169,6 +169,7 @@ func (p *Previews) submit(ctx context.Context, r previewRun) error {
 	}
 	// The dude Run id is the idempotency key: a retried submit gets the lux
 	// Run the first one made.
+	phases.NamePool(ctx, p.Lux, machine)
 	lr, err := p.Lux.Submit(ctx, spec, r.ID)
 	if le, ok := lux.AsError(err); ok && !le.Retryable() {
 		return p.fail(ctx, r, "lux refused the preview: "+le.Message)

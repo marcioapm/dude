@@ -10,6 +10,7 @@ import (
 // Pool is a lux pool as the machine sizes page shows it (the domain's
 // MachinePool): lux's fields, with what an older lux does not send as null.
 type Pool struct {
+	ID           string        `json:"id"`
 	Name         string        `json:"name"`
 	IsDefault    bool          `json:"isDefault"`
 	Platform     bool          `json:"platform"`
@@ -40,7 +41,7 @@ func (s *Server) pools(ctx context.Context) poolList {
 		return out
 	}
 	for _, p := range list {
-		out.Pools = append(out.Pools, Pool{Name: p.Name, IsDefault: p.IsDefault, Platform: p.Platform,
+		out.Pools = append(out.Pools, Pool{ID: p.ID, Name: p.Name, IsDefault: p.IsDefault, Platform: p.Platform,
 			Provider: nonEmpty(p.Provider), InstanceType: nonEmpty(p.InstanceType), HostSize: p.HostSize,
 			HostSizeFrom: nonEmpty(p.HostSizeFrom), HostsRunning: p.HostsRunning})
 	}

@@ -38,7 +38,7 @@ import {
   SETTINGS_ROLE_DESCRIPTION,
   SETTINGS_ROLE_LABEL,
   type FullDeliveryPolicy,
-  type MachineSize,
+  type MachineSizeWithUse,
   type ProjectPromptMode,
   type PromptHistory as PromptHistoryData,
   type PromptState,
@@ -87,7 +87,7 @@ export function RolePage({ scope, role, sizes, onOpenRun, onManageSizes }: {
   scope: SettingsScope;
   role: SettingsRole;
   /** The organisation's sizes, as the settings screen loaded them; null while loading. */
-  sizes: readonly MachineSize[] | null;
+  sizes: readonly MachineSizeWithUse[] | null;
   onOpenRun?: ((runId: string) => void) | undefined;
   /** Open the organisation's Machines page (its admins). */
   onManageSizes?: (() => void) | undefined;
@@ -191,7 +191,7 @@ export function RolePage({ scope, role, sizes, onOpenRun, onManageSizes }: {
  * override; naming none follows the organisation's (or, for the fixer, the
  * implementer's), and on the organisation, the default size.
  */
-function MachineField({ scope, role, sizes, onManageSizes }: { scope: SettingsScope; role: SettingsRole; sizes: readonly MachineSize[] | null; onManageSizes?: (() => void) | undefined }) {
+function MachineField({ scope, role, sizes, onManageSizes }: { scope: SettingsScope; role: SettingsRole; sizes: readonly MachineSizeWithUse[] | null; onManageSizes?: (() => void) | undefined }) {
   const { settings } = scope;
   const ms = settings.roles[role].machineSize;
   const project = isProject(settings);

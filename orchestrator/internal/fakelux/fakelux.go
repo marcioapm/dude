@@ -370,8 +370,12 @@ type Server struct {
 	// agent's records arrive.
 	InputGate chan struct{}
 
-	// Pools is what GET /v1/pools lists; nil is DefaultPools.
-	Pools []lux.Pool
+	// Pools is what GET /v1/pools lists; nil is DefaultPools. POST
+	// /v1/pools adds one, or updates the one of its name; DELETE
+	// /v1/pools/{name} removes one. A submit naming a placement.poolId not
+	// in it is refused (422 unknown_pool), as lux does.
+	Pools    []lux.Pool
+	nextPool int
 	// MemoryShare is the part of what a Run asks for that its container is
 	// given, reported as each placement's memoryLimit (a newer lux); zero
 	// reports none, as today's lux.
@@ -559,6 +563,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/runs/{id}/servers/{name}/log", s.serverLog)
 	mux.HandleFunc("GET /v1/runs/{id}/cost", s.getCost)
 	mux.HandleFunc("GET /v1/pools", s.listPools)
+	mux.HandleFunc("POST /v1/pools", s.putPool)
+	mux.HandleFunc("DELETE /v1/pools/{name}", s.deletePool)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+s.Key {
 			writeErr(w, 401, "unauthorized", "invalid API key")
@@ -585,6 +591,11 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 		run := s.runs[id]
 		s.mu.Unlock()
 		writeJSON(w, 200, s.view(run))
+		return
+	}
+	if msg := s.placementProblem(raw); msg != "" {
+		s.mu.Unlock()
+		writeErr(w, 422, lux.CodeUnknownPool, msg)
 		return
 	}
 	s.next++

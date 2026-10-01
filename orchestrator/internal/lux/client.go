@@ -167,15 +167,24 @@ type Resources struct {
 	Disk   int64   `json:"disk,omitempty"`
 }
 
-// PlacementSpec names the pool a Run is placed in.
+// PlacementSpec names the pool a Run is placed in. PoolID is lux's id for
+// it, which a rename leaves alone: lux refuses an id it does not have for
+// the tenant (422 unknown_pool) at submit. Pool is by name, which lux takes
+// without checking; machine sizes never send it.
 type PlacementSpec struct {
-	Pool string `json:"pool,omitempty"`
+	PoolID string `json:"poolId,omitempty"`
+	Pool   string `json:"pool,omitempty"`
 }
+
+// CodeUnknownPool is lux refusing a placement.poolId it has no pool for.
+const CodeUnknownPool = "unknown_pool"
 
 // Pool is one of lux's pools dude's key can use (GET /v1/pools). HostSize,
 // HostSizeFrom and InstanceType are from a newer lux: nil or "" from one
 // that does not say.
 type Pool struct {
+	// lux's id (pool_…), unchanged by a rename.
+	ID       string `json:"id"`
 	Name     string `json:"name"`
 	Provider string `json:"provider,omitempty"`
 	Platform bool   `json:"platform,omitempty"`

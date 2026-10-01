@@ -1,9 +1,22 @@
 import { describe, expect, test } from "bun:test";
 import { GIB, machineFit, type MachinePool, type MachineSizeUse } from "@dude/domain";
-import { asInput, draftOf, draftProblems, fitWords, hostSpec, poolKnownFrom, poolMachines, poolOptionLabel, useLine, usedByWords } from "../src/machines.ts";
+import {
+  asInput,
+  draftOf,
+  draftProblems,
+  fitWords,
+  hostSpec,
+  knownPools,
+  poolKnownFrom,
+  poolLabel,
+  poolMachines,
+  poolOptionLabel,
+  useLine,
+  usedByWords,
+} from "../src/machines.ts";
 
 const pool = (over: Partial<MachinePool> = {}): MachinePool => ({
-  name: "default", isDefault: true, platform: false, provider: "ec2", instanceType: "c7a.4xlarge",
+  id: "pool_default1", name: "default", isDefault: true, platform: false, provider: "ec2", instanceType: "c7a.4xlarge",
   hostSize: { cpus: 16, memory: 32 * GIB, disk: 180 * GIB }, hostSizeFrom: "running", hostsRunning: 3, ...over,
 });
 const project = { id: "p", name: "Checkout", imageUrl: null };
@@ -11,7 +24,7 @@ const project = { id: "p", name: "Checkout", imageUrl: null };
 describe("a size dialog's draft", () => {
   test("memory is typed in GiB and sent in MiB", () => {
     const draft = { ...draftOf(null), name: " Large ", cpus: 6.5, memoryGiB: 22.5, diskGiB: 120 };
-    expect(asInput(draft)).toEqual({ name: "Large", cpus: 6.5, memoryMiB: 23040, diskGiB: 120, pool: null, isDefault: false });
+    expect(asInput(draft)).toEqual({ name: "Large", cpus: 6.5, memoryMiB: 23040, diskGiB: 120, poolId: null, isDefault: false });
     expect(draftProblems(draft)).toEqual({});
   });
 
@@ -24,9 +37,9 @@ describe("a size dialog's draft", () => {
     });
   });
 
-  test("editing starts from the size, in the dialog's units", () => {
-    expect(draftOf({ id: "s", name: "Small", cpus: 1.5, memoryMiB: 3584, diskGiB: 20, pool: "big", isDefault: false, updatedAt: "", updatedBy: null }))
-      .toEqual({ name: "Small", cpus: 1.5, memoryGiB: 3.5, diskGiB: 20, pool: "big", isDefault: false });
+  test("editing starts from the size, in the dialog's units, its pool by id", () => {
+    expect(draftOf({ id: "s", name: "Small", cpus: 1.5, memoryMiB: 3584, diskGiB: 20, poolId: "pool_big1", isDefault: false, updatedAt: "", updatedBy: null }))
+      .toEqual({ name: "Small", cpus: 1.5, memoryGiB: 3.5, diskGiB: 20, poolId: "pool_big1", isDefault: false });
   });
 });
 
@@ -42,10 +55,24 @@ describe("pools as the page reads them", () => {
     expect(poolOptionLabel(pool(), "Acme")).toBe("default (Acme’s default) — EC2 · c7a.4xlarge · 16 CPUs · 32 GiB · 180 GiB");
   });
 
-  test("a row's fit", () => {
-    expect(fitWords(machineFit({ cpus: 8, memoryMiB: 16384, diskGiB: 80, pool: null }, [pool()]))).toEqual({ share: 0.5, text: "50% of a host" });
-    expect(fitWords(machineFit({ cpus: 8, memoryMiB: 16384, diskGiB: 80, pool: null }, []))).toEqual({ share: null, text: "Unknown" });
-    expect(fitWords(machineFit({ cpus: 32, memoryMiB: 16384, diskGiB: 80, pool: null }, [pool()]))).toEqual({ share: 1, text: "Too big for a host" });
+  test("a row's fit; a pool gone from lux has none", () => {
+    expect(fitWords(machineFit({ cpus: 8, memoryMiB: 16384, diskGiB: 80, poolId: null }, [pool()]))).toEqual({ share: 0.5, text: "50% of a host" });
+    expect(fitWords(machineFit({ cpus: 8, memoryMiB: 16384, diskGiB: 80, poolId: null }, []))).toEqual({ share: null, text: "Unknown" });
+    expect(fitWords(machineFit({ cpus: 32, memoryMiB: 16384, diskGiB: 80, poolId: null }, [pool()]))).toEqual({ share: 1, text: "Too big for a host" });
+    expect(fitWords(machineFit({ cpus: 8, memoryMiB: 16384, diskGiB: 80, poolId: "pool_deleted" }, [pool()]))).toEqual({ share: null, text: "—" });
+  });
+
+  test("a size's pool is named as lux names it now", () => {
+    const pools = { pools: [pool(), pool({ id: "pool_big1", name: "huge", isDefault: false })], readAt: "", problem: null };
+    const known = knownPools(pools);
+    expect(poolLabel({ poolId: null, poolName: null }, known)).toBe("Default pool");
+    // Renamed since the API read it: lux's list wins.
+    expect(poolLabel({ poolId: "pool_big1", poolName: "big" }, known)).toBe("huge");
+    // lux unread: the name the API read, else the id.
+    expect(knownPools({ pools: [], readAt: "", problem: "lux is unreachable" })).toBeNull();
+    expect(knownPools(null)).toBeNull();
+    expect(poolLabel({ poolId: "pool_big1", poolName: "big" }, null)).toBe("big");
+    expect(poolLabel({ poolId: "pool_big1", poolName: null }, null)).toBe("pool_big1");
   });
 
   test("a pool lux knows less about", () => {

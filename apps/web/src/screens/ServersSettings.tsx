@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { HostChips, ServerRecipeDialog, ServerRecipeTable, SettingRow, SettingSource, SettingsHeader, SettingsMeta, SettingsNote, SettingsSection } from "@dude/design-system/components";
 import { formatTimestamp, Icon, PREVIEW_IDLE_TIMEOUT_DEFAULT_MINUTES } from "@dude/design-system";
 import { Button, Callout, Dialog, EmptyState, FormActions, Input, RowMenu, Select, Spinner } from "@dude/design-system/primitives";
-import { egressProblem, type MachineSize, type PreviewSettings, type Recipe, type RecipeInput } from "@dude/domain";
+import { egressProblem, type MachineSizeWithUse, type PreviewSettings, type Recipe, type RecipeInput } from "@dude/domain";
 import type { ApiClient, ProjectDetail } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
 import { MachineSelect } from "./MachinesSettings.tsx";
@@ -21,7 +21,7 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, 
   canEdit: boolean;
   orgName: string;
   /** The organisation's sizes, as the settings screen loaded them; null while loading. */
-  sizes: readonly MachineSize[] | null;
+  sizes: readonly MachineSizeWithUse[] | null;
   onCount?: ((n: number) => void) | undefined;
 }) {
   const [recipes, setRecipes] = useState<Recipe[] | null>(null);

@@ -13,13 +13,13 @@ const oldPools = `{"pools":[
  {"name":"default","provider":"ec2","minHosts":0,"maxHosts":4,"scaleDownAfter":"10m","template":{},"tenant":"acme"},
  {"name":"shared","provider":"static","platform":true,"shared":true}]}`
 
-// The same after lux reports each pool's host size and where it has it from.
+// The same after lux reports each pool's id, host size and where it has it from.
 const newPools = `{"pools":[
- {"name":"default","provider":"ec2","isDefault":true,"instanceType":"c7a.4xlarge","hostsRunning":3,
+ {"id":"pool_7hq2k9v4m1","name":"default","provider":"ec2","isDefault":true,"instanceType":"c7a.4xlarge","hostsRunning":3,
   "hostSize":{"cpus":16,"memory":34359738368,"disk":193273528320},"hostSizeFrom":"running","tenant":"acme"},
- {"name":"big","provider":"ec2","instanceType":"c7a.8xlarge","hostsRunning":0,
+ {"id":"pool_3bx8r5n0c2","name":"big","provider":"ec2","instanceType":"c7a.8xlarge","hostsRunning":0,
   "hostSize":{"cpus":32,"memory":68719476736,"disk":408021893120},"hostSizeFrom":"history"},
- {"name":"new","provider":"ec2","hostSize":null}]}`
+ {"id":"pool_9zt1w6p4d8","name":"new","provider":"ec2","hostSize":null}]}`
 
 func TestPoolsReadsLuxWithOrWithoutHostSizes(t *testing.T) {
 	url, path := costServer(t, 200, oldPools)
@@ -47,7 +47,7 @@ func TestPoolsReadsLuxWithOrWithoutHostSizes(t *testing.T) {
 		d.HostSize == nil || *d.HostSize != (lux.HostSize{CPUs: 16, Memory: 32 << 30, Disk: 180 << 30}) {
 		t.Errorf("default = %+v", d)
 	}
-	if pools[1].HostSizeFrom != "history" || pools[1].HostSize.Memory != 64<<30 {
+	if pools[1].ID != "pool_3bx8r5n0c2" || pools[1].HostSizeFrom != "history" || pools[1].HostSize.Memory != 64<<30 {
 		t.Errorf("big = %+v", pools[1])
 	}
 	if pools[2].HostSize != nil {

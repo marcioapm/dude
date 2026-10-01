@@ -9,6 +9,7 @@ import {
   replaceMachineSize,
   replacePreviewMachineSize,
   resolveMachineSize,
+  sizePool,
   type MachinePool,
 } from "../src/machines.ts";
 
@@ -19,7 +20,7 @@ describe("a size's steps and bounds", () => {
   test("half steps are sizes", () => {
     const r = size({ cpus: 6.5, memoryMiB: 22.5 * 1024, diskGiB: 120 });
     expect(r.success).toBe(true);
-    expect(r.success && r.data.pool).toBeNull();
+    expect(r.success && r.data.poolId).toBeNull();
     expect(r.success && r.data.isDefault).toBe(false);
   });
 
@@ -43,11 +44,14 @@ describe("a size's steps and bounds", () => {
     expect(errorOf(size({ diskGiB: 20_005 }))).toBe("At most 20000 GiB");
   });
 
-  test("a name is 1 to 40 characters, a pool a lux pool's name", () => {
+  test("a name is 1 to 40 characters, a pool a lux pool's id", () => {
     expect(size({ name: " " }).success).toBe(false);
     expect(size({ name: "x".repeat(41) }).success).toBe(false);
-    expect(size({ pool: "big" }).success).toBe(true);
-    expect(size({ pool: "Big Pool" }).success).toBe(false);
+    expect(size({ poolId: "pool_b8r2n5w1c7z3" }).success).toBe(true);
+    // A pool's name is not its id.
+    expect(size({ poolId: "big" }).success).toBe(false);
+    expect(size({ poolId: "pool_" }).success).toBe(false);
+    expect(size({ pool: "big" }).success).toBe(false);
   });
 
   test("its spec reads as the pickers show it", () => {
@@ -57,7 +61,8 @@ describe("a size's steps and bounds", () => {
 });
 
 const pool = (name: string, host: MachinePool["hostSize"], isDefault = false): MachinePool => ({
-  name, isDefault, platform: false, provider: "ec2", instanceType: null, hostSize: host, hostSizeFrom: host ? "running" : null, hostsRunning: null,
+  id: `pool_${name}_id`, name, isDefault, platform: false, provider: "ec2", instanceType: null, hostSize: host,
+  hostSizeFrom: host ? "running" : null, hostsRunning: null,
 });
 const POOLS = [
   pool("default", { cpus: 16, memory: 32 * GIB, disk: 180 * GIB }, true),
@@ -68,36 +73,52 @@ const POOLS = [
 
 describe("the fit check", () => {
   test("a size that fits one host says how much of it it takes", () => {
-    const fit = machineFit({ cpus: 8, memoryMiB: 16 * 1024, diskGiB: 80, pool: null }, POOLS);
+    const fit = machineFit({ cpus: 8, memoryMiB: 16 * 1024, diskGiB: 80, poolId: null }, POOLS);
     expect(fit.kind).toBe("fits");
     expect(fit.kind === "fits" && fit.pool.name).toBe("default");
     expect(fit.kind === "fits" && fit.share).toBe(0.5);
   });
 
   test("too big for a known host is refused, naming what does not fit", () => {
-    const fit = machineFit({ cpus: 16, memoryMiB: 72 * 1024, diskGiB: 200, pool: "big" }, POOLS);
+    const fit = machineFit({ cpus: 16, memoryMiB: 72 * 1024, diskGiB: 200, poolId: "pool_big_id" }, POOLS);
     expect(fit.kind).toBe("too_big");
     expect(fit.kind === "too_big" && fit.over).toEqual([{ what: "memory", asked: 72 * GIB, offers: 64 * GIB }]);
   });
 
+  test("the pool is found by its id, whatever lux calls it now", () => {
+    const renamed = POOLS.map((p) => (p.id === "pool_big_id" ? { ...p, name: "huge" } : p));
+    const fit = machineFit({ cpus: 16, memoryMiB: 32 * 1024, diskGiB: 190, poolId: "pool_big_id" }, renamed);
+    expect(fit).toMatchObject({ kind: "fits", pool: { id: "pool_big_id", name: "huge" }, share: 0.5 });
+    expect(sizePool("pool_big_id", renamed)?.name).toBe("huge");
+    // A pool's name is never taken for its id.
+    expect(sizePool("big", POOLS)).toBeNull();
+  });
+
+  test("a pool lux's list does not have is gone; lux unread knows nothing", () => {
+    expect(machineFit({ cpus: 2, memoryMiB: 8192, diskGiB: 20, poolId: "pool_deleted" }, POOLS)).toEqual({ kind: "gone", poolId: "pool_deleted" });
+    // An empty list is lux saying it has none: gone too.
+    expect(machineFit({ cpus: 2, memoryMiB: 8192, diskGiB: 20, poolId: "pool_big_id" }, [])).toEqual({ kind: "gone", poolId: "pool_big_id" });
+    expect(machineFit({ cpus: 2, memoryMiB: 8192, diskGiB: 20, poolId: "pool_big_id" }, null)).toEqual({ kind: "unknown", pool: null, reason: "no_pool" });
+  });
+
   test("disk counts only where the host reserves it", () => {
-    const fit = machineFit({ cpus: 8, memoryMiB: 14 * 1024, diskGiB: 500, pool: "shared" }, POOLS);
+    const fit = machineFit({ cpus: 8, memoryMiB: 14 * 1024, diskGiB: 500, poolId: "pool_shared_id" }, POOLS);
     expect(fit).toMatchObject({ kind: "fits", diskReserved: false, share: 1 });
   });
 
   test("a host size nobody knows is allowed, with the reason", () => {
-    expect(machineFit({ cpus: 64, memoryMiB: 512, diskGiB: 5, pool: "new" }, POOLS)).toMatchObject({ kind: "unknown", reason: "no_host_size" });
-    expect(machineFit({ cpus: 64, memoryMiB: 512, diskGiB: 5, pool: "gone" }, POOLS)).toMatchObject({ kind: "unknown", reason: "no_pool" });
-    // lux unreachable: no pools at all, the default pool unknown too.
-    expect(machineFit({ cpus: 2, memoryMiB: 8192, diskGiB: 20, pool: null }, [])).toMatchObject({ kind: "unknown", pool: null });
+    expect(machineFit({ cpus: 64, memoryMiB: 512, diskGiB: 5, poolId: "pool_new_id" }, POOLS)).toMatchObject({ kind: "unknown", reason: "no_host_size" });
+    // lux unreachable, or no pools at all: the default pool unknown too.
+    expect(machineFit({ cpus: 2, memoryMiB: 8192, diskGiB: 20, poolId: null }, [])).toMatchObject({ kind: "unknown", pool: null });
+    expect(machineFit({ cpus: 2, memoryMiB: 8192, diskGiB: 20, poolId: null }, null)).toMatchObject({ kind: "unknown", pool: null });
     // An older lux lists pools but marks none the default: the default pool is unknown.
-    expect(machineFit({ cpus: 64, memoryMiB: 512, diskGiB: 5, pool: null }, POOLS.map((p) => ({ ...p, isDefault: false }))))
+    expect(machineFit({ cpus: 64, memoryMiB: 512, diskGiB: 5, poolId: null }, POOLS.map((p) => ({ ...p, isDefault: false }))))
       .toEqual({ kind: "unknown", pool: null, reason: "no_pool" });
   });
 
   test("memory is compared in bytes", () => {
-    expect(machineFit({ cpus: 1, memoryMiB: 32 * 1024, diskGiB: 5, pool: null }, POOLS).kind).toBe("fits");
-    expect(machineFit({ cpus: 1, memoryMiB: 32 * 1024 + 512, diskGiB: 5, pool: null }, POOLS).kind).toBe("too_big");
+    expect(machineFit({ cpus: 1, memoryMiB: 32 * 1024, diskGiB: 5, poolId: null }, POOLS).kind).toBe("fits");
+    expect(machineFit({ cpus: 1, memoryMiB: 32 * 1024 + 512, diskGiB: 5, poolId: null }, POOLS).kind).toBe("too_big");
     expect(MIB * 1024).toBe(GIB);
   });
 });
