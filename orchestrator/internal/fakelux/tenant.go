@@ -756,8 +756,17 @@ func (s *Server) syncRun(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	run.Calls = append(run.Calls, "sync")
+	// As lux's checkSync, before the Run's state: every repo the spec's.
+	var spec map[string]any
+	_ = json.Unmarshal(run.Spec, &spec)
+	for _, sr := range in.Sync {
+		if !slices.ContainsFunc(specRepos(spec), func(x specRepo) bool { return x.Name == sr.Repo }) {
+			writeErr(w, 422, "invalid_request", fmt.Sprintf("sync: the run has no repository %q", sr.Repo))
+			return
+		}
+	}
 	if run.State != "running" {
-		writeErr(w, 409, "not_running", "run is "+run.State)
+		writeErr(w, 409, "not_running", "run is "+run.State+": sync a running Run, or resume it with sync")
 		return
 	}
 	run.Syncs = append(run.Syncs, in.Sync)
