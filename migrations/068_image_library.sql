@@ -209,6 +209,73 @@ $$;
 REVOKE ALL ON FUNCTION image_queue_ahead(text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION image_queue_ahead(text) TO dude_app;
 
+-- An id as packages/domain/src/ids.ts and orchestrator/internal/ids make
+-- them (<prefix>_<base36 ms, 9 wide><16 hex>), for rows made in SQL.
+CREATE FUNCTION new_id(prefix text) RETURNS text LANGUAGE plpgsql VOLATILE AS $$
+DECLARE
+  ms bigint := floor(extract(epoch FROM clock_timestamp()) * 1000);
+  s text := '';
+BEGIN
+  WHILE ms > 0 LOOP
+    s := substr('0123456789abcdefghijklmnopqrstuvwxyz', (ms % 36)::int + 1, 1) || s;
+    ms := ms / 36;
+  END LOOP;
+  RETURN prefix || '_' || lpad(s, 9, '0') || substr(replace(gen_random_uuid()::text, '-', ''), 1, 16);
+END $$;
+
+-- Publish a built version: it becomes what every user of its image runs,
+-- the one published before is superseded, and every image whose published
+-- version is built FROM this image is queued to rebuild on it (a new
+-- version with the same Containerfile, by dude) — unless one is already
+-- waiting, which resolves its parents when it starts and so gets this one.
+-- One definition for both writers: the backend (publishing an older
+-- version again) and dude-image-builder (a build that passed). Returns the
+-- rebuilds queued, for the caller's events.
+CREATE FUNCTION image_publish(p_version text)
+RETURNS TABLE (image_id text, image_name text, version_id text, version integer, build_id text)
+LANGUAGE plpgsql AS $$
+DECLARE
+  v image_versions;
+  parent images;
+  child record;
+  nv text;
+  nb text;
+  n integer;
+BEGIN
+  SELECT * INTO v FROM image_versions WHERE id = p_version FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'no image version %', p_version USING ERRCODE = 'P0002'; END IF;
+  IF v.user_ref IS NULL THEN RAISE EXCEPTION 'version % has not been built', p_version USING ERRCODE = '22023'; END IF;
+  SELECT * INTO parent FROM images WHERE id = v.image_id FOR UPDATE;
+  UPDATE image_versions SET state = 'superseded', updated_at = now()
+    WHERE image_versions.image_id = v.image_id AND state = 'published' AND id <> v.id;
+  UPDATE image_versions SET state = 'published', updated_at = now(), error = NULL WHERE id = v.id;
+  UPDATE images SET published_version_id = v.id WHERE id = v.image_id;
+  FOR child IN
+    SELECT c.id, c.name, c.organization_id, cv.containerfile, cv.build_args
+    FROM images c
+    JOIN image_versions cv ON cv.id = c.published_version_id
+    WHERE c.organization_id = v.organization_id
+      AND EXISTS (SELECT 1 FROM image_version_parents p WHERE p.version_id = cv.id AND p.parent_image_id = v.image_id)
+      AND NOT EXISTS (SELECT 1 FROM image_versions w WHERE w.image_id = c.id AND w.state = 'queued')
+    ORDER BY c.name
+    FOR UPDATE OF c
+  LOOP
+    SELECT COALESCE(max(number), 0) + 1 INTO n FROM image_versions WHERE image_versions.image_id = child.id;
+    nv := new_id('imv');
+    nb := new_id('imb');
+    INSERT INTO image_versions (id, organization_id, image_id, number, containerfile, build_args, note, source, state)
+    VALUES (nv, child.organization_id, child.id, n, child.containerfile, child.build_args,
+            'Rebuild on ' || parent.name || ' v' || v.number, 'base_rebuild', 'queued');
+    INSERT INTO image_version_parents (organization_id, version_id, parent_image_id)
+    SELECT child.organization_id, nv, p.parent_image_id FROM image_version_parents p
+    JOIN images ci ON ci.published_version_id = p.version_id AND ci.id = child.id;
+    INSERT INTO image_builds (id, organization_id, image_version_id, kind) VALUES (nb, child.organization_id, nv, 'build');
+    image_id := child.id; image_name := child.name; version_id := nv; version := n; build_id := nb;
+    RETURN NEXT;
+  END LOOP;
+END $$;
+GRANT EXECUTE ON FUNCTION new_id(text), image_publish(text) TO dude_app, dude_builder;
+
 -- A project's preview settings gain imageId (the column above).
 CREATE OR REPLACE FUNCTION preview_settings(p projects) RETURNS json LANGUAGE sql STABLE AS $$
   SELECT json_build_object('image', p.preview_settings->'image',

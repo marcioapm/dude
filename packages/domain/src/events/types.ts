@@ -21,6 +21,20 @@ export const EventTypes = {
   /** A role's prompt was saved or restored. Payload: `{ role, versionId, projectId?, restoredFrom? }`. */
   PromptSaved: "prompt.saved",
 
+  // The image library (the backend writes the person's acts, dude-image-builder the builds')
+  /** An image was added, described, archived or made the default base. Payload: `{ imageId, name, changed }`. */
+  ImageUpdated: "image.updated",
+  /** A version was queued to build. Payload: `{ imageId, name, versionId, version, buildId, source }`. */
+  ImageBuildQueued: "image.build_queued",
+  /** A build or finish started. Payload: `{ imageId, buildId, kind }`. */
+  ImageBuildStarted: "image.build_started",
+  /** A build or finish failed. Payload: `{ imageId, name, versionId, version, buildId, kind, error }`. */
+  ImageBuildFailed: "image.build_failed",
+  /** A finish succeeded. Payload: `{ imageId, versionId, buildId, layer, ref }`. */
+  ImageFinished: "image.finished",
+  /** A version became the one every user runs: built, or published again. Payload: `{ imageId, name, versionId, version, republished }`. */
+  ImagePublished: "image.published",
+
   // Task lifecycle
   TaskCreated: "task.created",
   TaskUpdated: "task.updated",

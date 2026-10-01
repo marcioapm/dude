@@ -77,6 +77,8 @@ export const agentModelConfigSchema = z.object({
   timeLimitMinutes: timeLimitMinutesSchema.optional(),
   /** The machine size its sessions run on (an organization's size id); unset is the default size. */
   machineSize: z.string().min(1).optional(),
+  /** The image its sessions run in (an image library id); unset falls through to the project's image. */
+  image: z.string().min(1).optional(),
 });
 export type AgentModelConfig = z.infer<typeof agentModelConfigSchema>;
 
@@ -179,8 +181,13 @@ export const projectSchema = z.object({
   repositories: z.array(repositorySchema).default([]),
   /** Per-role model selection for this project. */
   agentModels: agentModelsSchema,
-  /** Container image for Run runtimes; null uses the system default. */
+  /**
+   * A container image typed by hand, from before the image library: used
+   * only when runtimeImageId is null. The API takes it only as null (clear).
+   */
   runtimeImage: z.string().nullable().default(null),
+  /** The library image its agents run in; null: the organization's default base. */
+  runtimeImageId: z.string().nullable().default(null),
   /** How its work is delivered, over the factory's defaults. */
   deliveryPolicy: deliveryPolicySchema.default({}),
   createdAt: z.string().datetime({ offset: true }),
@@ -448,6 +455,27 @@ export const runSchema = z.object({
       /** The memory limit lux gave its container, in bytes, when lux reports one. */
       memoryLimit: z.number().nullable().optional(),
     })
+    .nullable()
+    .default(null),
+  /**
+   * The library image it got ({imageId, name, versionId, version, ref,
+   * layer}), fixed when it was resolved; null for a Run on a typed image or
+   * dude's fallback.
+   */
+  image: z
+    .object({
+      imageId: z.string(),
+      name: z.string(),
+      versionId: z.string(),
+      version: z.number(),
+      ref: z.string(),
+      layer: z.string(),
+    })
+    .nullable()
+    .default(null),
+  /** While it waits for its image's dude layer: the finish job, and where it is. */
+  preparingImage: z
+    .object({ buildId: z.string(), state: z.string(), imageName: z.string(), version: z.number().nullable() })
     .nullable()
     .default(null),
   createdAt: z.string().datetime({ offset: true }),

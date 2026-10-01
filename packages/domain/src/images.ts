@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { AgentModels } from "./hierarchy.ts";
 
 /**
  * The image library: the organization's images, each a history of
@@ -442,4 +443,26 @@ export function shortDigest(ref: string | null | undefined): string {
   const at = ref.lastIndexOf("@");
   const digest = at >= 0 ? ref.slice(at + 1) : ref;
   return digest.length > 19 ? `${digest.slice(0, 19)}…` : digest;
+}
+
+/**
+ * The image a role names: the project's, then the organization's — for the
+ * fixer, then the implementer's over the same layers — or none, and the
+ * Run falls through to its project's image. An id the library lacks is
+ * skipped. The orchestrator's images.ForRole is the same rule.
+ */
+export function resolveRoleImage(
+  role: string,
+  layers: { project?: AgentModels | null | undefined; organization: AgentModels | null | undefined },
+  images: ReadonlyArray<{ id: string }>,
+): { imageId: string | null; from: "project" | "organization" | "implementer" | "none" } {
+  const chain = role === "fixer" ? ["fixer", "implementer"] : [role];
+  const ordered = [["project", layers.project], ["organization", layers.organization]] as const;
+  for (const r of chain) {
+    for (const [name, layer] of ordered) {
+      const id = (layer as Record<string, { image?: string }> | null | undefined)?.[r]?.image;
+      if (id && images.some((i) => i.id === id)) return { imageId: id, from: r === role ? name : "implementer" };
+    }
+  }
+  return { imageId: null, from: "none" };
 }
