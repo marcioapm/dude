@@ -11,6 +11,7 @@ Driven through the public API, as the settings screens use it.
 from __future__ import annotations
 
 import os
+import re
 
 import requests
 
@@ -363,10 +364,14 @@ def _invite_member(admin: ApiClient, env, name: str) -> tuple[ApiClient, str]:
     return ApiClient(env.control_plane_url, key), key
 
 
-def _pick(page: Page, trigger, option: str) -> None:
-    """Open a Select and choose the option showing `option` (a label, or a size's spec)."""
+def _pick(page: Page, trigger, label: str, meta: str = "") -> None:
+    """Open a Select and choose the one option whose text is exactly `label`
+    then `meta` (a size's spec): anchored and case-sensitive, so neither
+    another size whose spec ends the same nor an option that quotes the spec
+    in its own meta is taken."""
     trigger.click()
-    page.get_by_role("option").filter(has_text=option).first.click()
+    text = re.compile(rf"^{re.escape(label)}\s*{re.escape(meta)}$")
+    page.get_by_role("option").filter(has_text=text).click()
 
 
 @pytest.mark.ui
@@ -382,8 +387,9 @@ def test_an_admin_adds_a_size_in_half_steps_and_one_off_step_or_too_big_is_refus
     expect(machines.get_by_test_id("machine-pools").locator("[data-pool='big']")).to_contain_text("c7a.8xlarge")
     expect(machines.get_by_test_id("memory-share")).to_contain_text("Run A · asks 16 · gets 15")
 
-    machines.get_by_test_id("add-machine-size").click()
-    page.get_by_test_id("machine-size-name").fill("Large (Java)")
+    machines.get_by_role("button", name="Add size", exact=True).click()
+    dialog = page.get_by_role("dialog")
+    dialog.get_by_label("Name", exact=True).fill("Large (Java)")
     cpus = page.get_by_test_id("machine-size-cpus")
     # ↑ is a step.
     cpus.fill("6")
@@ -397,7 +403,7 @@ def test_an_admin_adds_a_size_in_half_steps_and_one_off_step_or_too_big_is_refus
     # Off the step: refused in place, naming it.
     cpus.fill("2.3")
     expect(page.get_by_role("dialog")).to_contain_text("Whole or half CPUs: 0.5, 1, 1.5…")
-    expect(page.get_by_test_id("machine-size-save")).to_be_disabled()
+    expect(dialog.get_by_role("button", name="Add size", exact=True)).to_be_disabled()
     cpus.fill("6.5")
 
     # Too big for the pool's hosts: refused, saying what does not fit.
@@ -406,19 +412,21 @@ def test_an_admin_adds_a_size_in_half_steps_and_one_off_step_or_too_big_is_refus
     expect(page.get_by_test_id("machine-fit")).to_have_attribute("data-fit", "too_big")
     expect(page.get_by_test_id("machine-fit")).to_contain_text("72 GiB memory (it offers 64)")
     expect(page.get_by_role("dialog")).to_contain_text("Most a big host has: 64 GiB")
-    expect(page.get_by_test_id("machine-size-save")).to_be_disabled()
+    expect(dialog.get_by_role("button", name="Add size", exact=True)).to_be_disabled()
     # The API refuses it too, whatever a browser sends.
     too_big = client.post("/v1/machines/sizes", {"name": "Huge", "cpus": 16, "memoryMiB": 72 * 1024, "diskGiB": 200, "pool": "big"})
     assert too_big.status_code == 422 and "72 GiB memory (it offers 64)" in too_big.json()["error"]["message"]
 
     page.get_by_test_id("machine-size-memory").fill("22.5")
-    page.get_by_test_id("machine-size-save").click()
+    dialog.get_by_role("button", name="Add size", exact=True).click()
     expect(toast(page, "Large (Java) added")).to_be_visible()
     row = machines.locator("[data-size='Large (Java)']")
     expect(row).to_contain_text("6.5 CPUs")
     expect(row).to_contain_text("22.5 GiB")
     size = _sizes(client)["Large (Java)"]
     assert (size["cpus"], size["memoryMiB"], size["diskGiB"], size["pool"]) == (6.5, 23040, 120, "big")
+    # The menu counts it at once: Standard and Large (Java).
+    expect(page.locator("[data-settings-nav='machines']")).to_contain_text("2")
     assert console_errors == []
 
 
@@ -429,29 +437,33 @@ def test_a_size_is_set_on_the_implementer_overridden_in_a_project_and_reset(
     for body in ({"name": "Large", "cpus": 8, "memoryMiB": 16384, "diskGiB": 80}, {"name": "XL", "cpus": 16, "memoryMiB": 49152, "diskGiB": 200, "pool": "big"}):
         assert client.post("/v1/machines/sizes", body).status_code == 201
     sizes = _sizes(client)
+    org_name = client.get("/v1/settings/organization").json()["organization"]["name"]
     _sign_in(page, web_url, org["api_key"])
 
     # The organisation's implementer: Large. The fixer follows it.
     page.goto(f"{web_url}#/org/settings/implementer")
     settings = page.get_by_test_id("org-settings")
-    _pick(page, settings.get_by_test_id("role-machine"), "8 CPUs · 16 GiB · 80 GiB")
+    _pick(page, settings.get_by_test_id("role-machine"), "Large", "8 CPUs · 16 GiB · 80 GiB")
     expect(toast(page, "Machine saved")).to_be_visible()
     assert client.get("/v1/settings/organization").json()["roles"]["implementer"]["machineSize"]["value"] == sizes["Large"]["id"]
     page.locator("[data-settings-nav='fixer']").click()
     expect(settings.get_by_test_id("role-machine")).to_contain_text("The implementer’s")
     expect(settings.get_by_test_id("role-machine")).to_contain_text("Large")
 
-    # The project overrides it with XL, says so, and Reset puts Acme's back.
+    # The project overrides it with XL, says so, and Reset puts the organisation's back.
     page.goto(f"{web_url}#/project/{project['id']}/settings/implementer")
     ps = page.get_by_test_id("project-settings")
-    expect(ps.get_by_test_id("role-machine")).to_contain_text("From ")
-    _pick(page, ps.get_by_test_id("role-machine"), "16 CPUs · 48 GiB · 200 GiB · big")
+    # Inherited: the organisation's Large, named as such.
+    expect(ps.get_by_test_id("role-machine")).to_have_text(re.compile(rf"^From {re.escape(org_name)}\s*Large · 8 CPUs · 16 GiB · 80 GiB$"))
+    _pick(page, ps.get_by_test_id("role-machine"), "XL", "16 CPUs · 48 GiB · 200 GiB · big")
     expect(toast(page, "Machine saved")).to_be_visible()
-    overridden = ps.locator("[data-source='project']").filter(has_text="Large")
+    # "Overridden", then what the organisation says, then Reset.
+    was_large = re.compile(rf"^Overridden\s*{re.escape(org_name)}: Large\s*Reset$")
+    overridden = ps.locator("[data-source='project']").filter(has_text=was_large)
     expect(overridden).to_contain_text("Overridden")
     assert client.get(f"/v1/projects/{project['id']}").json()["agentModels"]["implementer"]["machineSize"] == sizes["XL"]["id"]
-    overridden.get_by_role("button", name="Reset").click()
-    expect(ps.locator("[data-source='project']").filter(has_text="Large")).to_have_count(0)
+    overridden.get_by_role("button", name="Reset", exact=True).click()
+    expect(ps.locator("[data-source='project']").filter(has_text=was_large)).to_have_count(0)
     assert "machineSize" not in client.get(f"/v1/projects/{project['id']}").json()["agentModels"].get("implementer", {})
 
     # The investigator is configurable like the others.
@@ -486,8 +498,8 @@ def test_removing_a_size_in_use_moves_what_named_it(
     expect(uses).to_contain_text("Implementer")
     expect(uses).to_contain_text("follows the implementer")
     expect(uses).to_contain_text("E2E Project · Reviewer")
-    _pick(page, page.get_by_test_id("machine-size-move"), "16 CPUs · 32 GiB · 100 GiB")
-    page.get_by_test_id("remove-machine-size").click()
+    _pick(page, page.get_by_test_id("machine-size-move"), "XL", "16 CPUs · 32 GiB · 100 GiB")
+    page.get_by_role("button", name="Remove and move them", exact=True).click()
     expect(toast(page, "Large removed")).to_be_visible()
     expect(machines.locator("[data-size='Large']")).to_have_count(0)
     assert client.get("/v1/settings/organization").json()["roles"]["implementer"]["machineSize"]["value"] == sizes["XL"]["id"]
@@ -502,7 +514,7 @@ def test_a_member_sees_machines_read_only(page: Page, web_url: str, client: ApiC
     page.goto(f"{web_url}#/org/settings/machines")
     machines = page.get_by_test_id("machines-page")
     expect(machines.locator("[data-size='Standard']")).to_be_visible()
-    expect(machines.get_by_test_id("add-machine-size")).to_have_count(0)
+    expect(machines.get_by_role("button", name="Add size", exact=True)).to_have_count(0)
     expect(machines.get_by_role("button", name="Actions for Standard")).to_have_count(0)
     assert console_errors == []
 
