@@ -24,6 +24,8 @@ export interface PullRequestPanelProps extends Omit<HTMLAttributes<HTMLElement>,
    * base, "show" by the threads, "Request review" after the reviewers.
    */
   readonly factActions?: Partial<Record<FactKind, ReactNode>> | undefined;
+  /** Under a kind's last line, at its text's indent: asking for a review opens under the reviewers. */
+  readonly factUnder?: Partial<Record<FactKind, ReactNode>> | undefined;
   /** After what to do about checks dude cannot read: a link to where it is done. */
   readonly diagnosticAction?: ReactNode;
 }
@@ -57,7 +59,7 @@ interface Fact {
  * the forge reports them), reviews (by person when it does), how it stands
  * against its base, open threads. What is not known is not said.
  */
-export function PullRequestPanel({ pr, additions, deletions, actions, face, note, factActions, diagnosticAction, className, ...rest }: PullRequestPanelProps) {
+export function PullRequestPanel({ pr, additions, deletions, actions, face, note, factActions, factUnder, diagnosticAction, className, ...rest }: PullRequestPanelProps) {
   const facts: Fact[] = [];
   if (pr.state === "merged") facts.push({ tone: "ok", glyph: "merge", text: "Merged" });
 
@@ -199,6 +201,9 @@ export function PullRequestPanel({ pr, additions, deletions, actions, face, note
               {f.kind && facts.findLastIndex((g) => g.kind === f.kind) === i ? factActions?.[f.kind] : null}
             </span>
             {f.children}
+            {f.kind && factUnder?.[f.kind] && facts.findLastIndex((g) => g.kind === f.kind) === i ? (
+              <div className={styles["under"]}>{factUnder[f.kind]}</div>
+            ) : null}
           </li>
         ))}
       </ul>
