@@ -1,9 +1,7 @@
 """The page holds still while a session's list and rail scroll, laid out by a real browser.
 
-A screen-reader-only word (`ds-sr-only`) is absolutely positioned. Deep in a
-scrolling list with no positioned box around it, it was placed against the
-page instead, as far down as that list's content ran: the page itself grew a
-scrollbar onto empty canvas. happy-dom does not lay out, so this needs Chrome.
+A screen-reader-only word (`ds-sr-only`) in them must not lengthen the page;
+happy-dom does not lay out, so this needs Chrome.
 Against the fixture client; no backend or external network required.
 
 Run with: python3 apps/web/test/browser_layout.py
@@ -42,27 +40,23 @@ class PageHoldsStill(unittest.TestCase):
         cls.browser = cls.playwright.chromium.launch(channel="chrome", headless=True)
         cls.addClassCleanup(cls.browser.close)
 
-    def sessions(self, scenario):
-        """The fixture task's Sessions tab in `scenario`, at a desktop window."""
+    def page_overflow(self, scenario, box):
+        """How far the page scrolls once `box`, on the fixture task's Sessions tab in `scenario`, is overfilled."""
         context = self.browser.new_context(viewport={"width": 1440, "height": 900}, service_workers="block")
         self.addCleanup(context.close)
         page = context.new_page()
         page.goto(f"{URL}/?fixtures={scenario}#/task/{TASK}")
         page.get_by_role("tab", name="Sessions").click()
-        page.get_by_test_id("session-rail").wait_for(timeout=15000)
-        return page
+        page.locator(f"{box} .ds-sr-only").first.wait_for(state="attached", timeout=15000)
+        return page.evaluate(OVERFILL, box)
 
     def test_a_long_session_list_scrolls_in_itself(self):
         # Scenario d has a completed session, whose mark is an sr-only word.
-        page = self.sessions("d")
-        page.locator(".taskSessionList .ds-sr-only").first.wait_for(state="attached")
-        self.assertEqual(page.evaluate(OVERFILL, ".taskSessionList"), 0)
+        self.assertEqual(self.page_overflow("d", ".taskSessionList"), 0)
 
     def test_a_long_rail_scrolls_in_itself(self):
         # The rail's terminal link says, in an sr-only word, that it opens a new tab.
-        page = self.sessions("a")
-        page.locator(".runRail .ds-sr-only").first.wait_for(state="attached")
-        self.assertEqual(page.evaluate(OVERFILL, ".runRail"), 0)
+        self.assertEqual(self.page_overflow("a", ".runRail"), 0)
 
 
 if __name__ == "__main__":
