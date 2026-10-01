@@ -35,6 +35,7 @@ without the file, or without the word, does not support the feature.
 | Feature | What it promises |
 | --- | --- |
 | `validate` | `dude-orchestrator validate` and `dude-backend validate` exist ([Validating a configuration](#validating-a-configuration)). Check it first: an older `dude-orchestrator` ignores the argument and **starts the service**. |
+| `image-builder` | `bin/dude-image-builder` exists, migration 068 creates the `dude_builder` role it connects as, and the `[images]` and `[builder]` settings are known ([design](design/images.md)). Run the builder only for a release that declares it. |
 
 A release holds no agent image. `DUDE_AGENT_IMAGE` is the operator's own:
 any registry lux's runners can pull from, pinned by digest
