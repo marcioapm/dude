@@ -161,6 +161,11 @@ func TestRunDiffPagesTheList(t *testing.T) {
 	if len(out.Files) != 0 || out.HasMore || out.TotalFiles != 5 {
 		t.Errorf("past the end: %v more=%v", paths(out.Files), out.HasMore)
 	}
+	// The largest offset accepted: an empty page, not an overflow.
+	out = f.diff(t, token, `{"offset":9223372036854775807,"limit":1}`)
+	if out.Files == nil || len(out.Files) != 0 || out.HasMore || out.Offset != 9223372036854775807 || out.TotalFiles != 5 {
+		t.Errorf("the largest offset: %+v", out)
+	}
 	if out = f.diff(t, token, `{"limit":5000}`); out.Limit != 1000 {
 		t.Errorf("limit 5000 became %d, want the cap of 1000", out.Limit)
 	}
