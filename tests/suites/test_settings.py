@@ -465,6 +465,9 @@ def test_a_size_is_set_on_the_implementer_overridden_in_a_project_and_reset(
     page.locator("[data-settings-nav='fixer']").click()
     expect(settings.get_by_test_id("role-machine")).to_contain_text("The implementer’s")
     expect(settings.get_by_test_id("role-machine")).to_contain_text("Large")
+    # The organisation's toast closes (after 5 s) before the project's opens,
+    # so the next "Machine saved" can only be the project's.
+    expect(toast(page, "Machine saved")).to_have_count(0, timeout=10_000)
 
     # The project overrides it with XL, says so, and Reset puts the organisation's back.
     page.goto(f"{web_url}#/project/{project['id']}/settings/implementer")
