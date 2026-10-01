@@ -29,7 +29,11 @@ type Service struct {
 	// Where lux's console is, for the terminal link (LUX_CONSOLE_URL; lux's
 	// API base URL by default).
 	ConsoleURL string
-	Log        *slog.Logger
+	// The domain lux serves previews under: new previews wake on request
+	// at <server>-<task>-<project>.<PreviewDomain>. "" keeps the old path
+	// (a Run with its servers in its spec, parked by dude).
+	PreviewDomain string
+	Log           *slog.Logger
 	// Wakes the loops after a change, so a preview starts or stops now.
 	Kick func()
 }
@@ -84,6 +88,10 @@ type RunView struct {
 	PreviewStage      *string  `json:"previewStage"`
 	ParksAfterMinutes *float64 `json:"parksAfterMinutes"`
 	TerminalURL       *string  `json:"terminalUrl"`
+	// A wakeable preview: its servers wake on request (opening a URL).
+	Wakeable bool `json:"wakeable"`
+	// A wakeable preview nothing serves now and no wake is due.
+	Asleep bool `json:"asleep"`
 }
 
 type PersonRef struct {
@@ -111,6 +119,9 @@ type runRow struct {
 	// The project's recipes with a setup step: a preview's server of that
 	// name starting is its setup running, as far as dude can tell.
 	WithSetup []string
+	// A preview of lux servers of its own that wake on request, and whether
+	// a wake is due.
+	Wakeable, WakeWanted bool
 }
 
 const runSelect = `SELECT r.id, r.project_id, r.task_id, r.kind, r.status::text, COALESCE(r.phase::text, ''),
@@ -120,14 +131,15 @@ const runSelect = `SELECT r.id, r.project_id, r.task_id, r.kind, r.status::text,
 		THEN r.started_by ELSE (SELECT p.id FROM task_people tp JOIN people p ON p.id = tp.person_id
 			WHERE tp.task_id = r.task_id AND p.removed_at IS NULL ORDER BY tp.position, tp.person_id LIMIT 1) END),
 	(SELECT preview_settings(pr) FROM projects pr WHERE pr.id = r.project_id),
-	ARRAY(SELECT s.name FROM project_servers s WHERE s.project_id = r.project_id AND COALESCE(s.setup, '') <> '')
+	ARRAY(SELECT s.name FROM project_servers s WHERE s.project_id = r.project_id AND COALESCE(s.setup, '') <> ''),
+	r.wakeable, r.wake_wanted_at IS NOT NULL
 	FROM runs r`
 
 func scanRun(row pgx.Row) (runRow, error) {
 	var r runRow
 	var settings []byte
 	err := row.Scan(&r.ID, &r.ProjectID, &r.TaskID, &r.Kind, &r.Status, &r.Phase, &r.LuxRunID, &r.LuxState, &r.Branch,
-		&r.BaseSHAs, &r.Repos, &r.StartedAt, &r.StartedBy, &settings, &r.WithSetup)
+		&r.BaseSHAs, &r.Repos, &r.StartedAt, &r.StartedBy, &settings, &r.WithSetup, &r.Wakeable, &r.WakeWanted)
 	if err == nil {
 		err = json.Unmarshal(settings, &r.Settings)
 	}
@@ -226,7 +238,7 @@ func (s *Service) view(ctx context.Context, r *runRow, recipes json.RawMessage) 
 	if r == nil {
 		return out
 	}
-	v := &RunView{ID: r.ID, LuxRunID: r.LuxRunID, Kind: r.Kind, State: r.Status, LuxState: r.LuxState,
+	v := &RunView{ID: r.ID, LuxRunID: r.LuxRunID, Kind: r.Kind, State: r.Status, LuxState: r.LuxState, Wakeable: r.Wakeable,
 		StartedAt: r.StartedAt, StartedBy: r.StartedBy, Branch: nonEmpty(r.Branch)}
 	out.Run = v
 	if len(r.Repos) > 0 {
@@ -253,6 +265,11 @@ func (s *Service) view(ctx context.Context, r *runRow, recipes json.RawMessage) 
 		} else if err != nil {
 			s.Log.Debug("reading the run's servers from lux", "run", r.ID, "error", err)
 		}
+	}
+	if r.Kind == KindPreview && r.Wakeable {
+		s.wakeableView(ctx, r, v, &out)
+		out.Moved = nil
+		return out
 	}
 	if r.Kind == KindPreview {
 		v.PreviewStage = Stage(r.Status, v.LuxState, out.Servers, func(name string) bool { return slices.Contains(r.WithSetup, name) })
@@ -383,6 +400,8 @@ func (s *Service) writable(ctx context.Context, org, runID string) (runRow, erro
 		return r, err
 	}
 	switch {
+	case r.Wakeable && r.Status == "paused":
+		return r, errAsleep
 	case r.LuxRunID == "" && r.Kind == KindPreview && r.Status == "pending":
 		return r, refuse(http.StatusConflict, "not_running", "the preview is still being submitted")
 	case r.LuxRunID == "":
@@ -391,6 +410,26 @@ func (s *Service) writable(ctx context.Context, org, runID string) (runRow, erro
 		return r, refuse(http.StatusConflict, "run_ended", "run %s is %s", runID, r.Status)
 	}
 	return r, nil
+}
+
+// errAsleep: a wakeable preview nothing serves; starting one of its
+// servers wakes it (Action, All), anything else waits until it runs.
+var errAsleep = refuse(http.StatusConflict, "asleep", "the preview is asleep: open one of its URLs, or start a server, to wake it")
+
+// wakeOnStart wakes an asleep wakeable preview when a person starts its
+// servers, as a request to one of its URLs would. ok: it was one.
+func (s *Service) wakeOnStart(ctx context.Context, org, runID, action string, err error) (bool, error) {
+	if err != errAsleep {
+		return false, err
+	}
+	if action != "start" && action != "restart" {
+		return true, err
+	}
+	var r runRow
+	if lerr := s.DB.InOrg(ctx, org, func(tx pgx.Tx) (e error) { r, e = loadRun(ctx, tx, runID); return e }); lerr != nil {
+		return true, lerr
+	}
+	return true, s.wantWake(ctx, org, r)
 }
 
 // parked: a preview dude parked for want of use, which a person starting
@@ -468,8 +507,8 @@ func (s *Service) Add(ctx context.Context, org, runID string, in AddInput) (lux.
 // a parked preview wakes it: the server starts once it runs.
 func (s *Service) Action(ctx context.Context, org, runID, name, action string) (lux.Server, error) {
 	r, err := s.writable(ctx, org, runID)
-	if err != nil {
-		return lux.Server{}, err
+	if woke, err := s.wakeOnStart(ctx, org, runID, action, err); woke || err != nil {
+		return lux.Server{Name: name}, err
 	}
 	if r.parked() {
 		if action == "stop" {
@@ -523,8 +562,10 @@ func (s *Service) Remove(ctx context.Context, org, runID, name string) error {
 // first refusal ends it, saying which.
 func (s *Service) All(ctx context.Context, org, runID, action string) (TaskServers, error) {
 	r, err := s.writable(ctx, org, runID)
-	if err != nil {
+	if woke, err := s.wakeOnStart(ctx, org, runID, action, err); err != nil {
 		return TaskServers{}, err
+	} else if woke {
+		return s.ForRun(ctx, org, runID)
 	}
 	list, err := s.Lux.Servers(ctx, r.LuxRunID)
 	if err != nil {
