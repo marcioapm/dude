@@ -260,16 +260,19 @@ func (s *Service) view(ctx context.Context, r *runRow, recipes json.RawMessage) 
 		} else {
 			s.Log.Debug("reading the run from lux", "run", r.ID, "error", err)
 		}
+	}
+	if r.Kind == KindPreview && r.Wakeable {
+		// Its servers are lux's own, read by label, not its Run's.
+		s.wakeableView(ctx, r, v, &out)
+		out.Moved = nil
+		return out
+	}
+	if r.LuxRunID != "" {
 		if list, err := s.Lux.Servers(ctx, r.LuxRunID); err == nil && list != nil {
 			out.Servers = list
 		} else if err != nil {
 			s.Log.Debug("reading the run's servers from lux", "run", r.ID, "error", err)
 		}
-	}
-	if r.Kind == KindPreview && r.Wakeable {
-		s.wakeableView(ctx, r, v, &out)
-		out.Moved = nil
-		return out
 	}
 	if r.Kind == KindPreview {
 		v.PreviewStage = Stage(r.Status, v.LuxState, out.Servers, func(name string) bool { return slices.Contains(r.WithSetup, name) })

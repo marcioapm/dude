@@ -195,11 +195,18 @@ type countingLux struct {
 	lux.Client
 	mu                     sync.Mutex
 	gets, resumes, submits int
-	// GET /v1/servers/{id} and GET /v1/servers asked.
-	serverGets, serverLists int
-	refuseResume            error
-	failStop                error
-	getAs                   func(*lux.Run)
+	// GET /v1/servers/{id}, GET /v1/servers and GET /v1/runs/{id}/servers asked.
+	serverGets, serverLists, runServers int
+	refuseResume                        error
+	failStop                            error
+	getAs                               func(*lux.Run)
+}
+
+func (c *countingLux) Servers(ctx context.Context, runID string) ([]lux.Server, error) {
+	c.mu.Lock()
+	c.runServers++
+	c.mu.Unlock()
+	return c.Client.Servers(ctx, runID)
 }
 
 func (c *countingLux) GetServer(ctx context.Context, id string) (lux.TenantServer, error) {

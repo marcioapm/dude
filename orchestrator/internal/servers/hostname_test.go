@@ -21,7 +21,7 @@ func TestPreviewLabelIsOneDNSLabel(t *testing.T) {
 			t.Errorf("PreviewLabel(%q, %q, %q) = %q, want %q", c.server, c.task, c.project, got, c.want)
 		}
 	}
-	if h := PreviewHostname("Preview-ABsmartly.dev.", "web", "t123", "p9", ""); h != "web-t123-p9.preview-absmartly.dev" {
+	if h := PreviewHostname("preview-absmartly.dev", "web", "t123", "p9", ""); h != "web-t123-p9.preview-absmartly.dev" {
 		t.Errorf("hostname = %q", h)
 	}
 }

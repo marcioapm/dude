@@ -433,12 +433,20 @@ type HTTPClient struct {
 	stream *http.Client
 }
 
+// idleConnsPerHost bounds the connections to lux kept open between
+// requests. http.DefaultTransport keeps 2, below the preview and phase
+// sweeps' 8 at a time plus each preview's output stream, so most
+// connections were closed after one request and dialled again.
+const idleConnsPerHost = 32
+
 func New(baseURL, apiKey string) *HTTPClient {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.MaxIdleConns, t.MaxIdleConnsPerHost = 2*idleConnsPerHost, idleConnsPerHost
 	return &HTTPClient{
 		url:    strings.TrimRight(baseURL, "/"),
 		key:    apiKey,
-		http:   &http.Client{Timeout: 30 * time.Second},
-		stream: &http.Client{},
+		http:   &http.Client{Timeout: 30 * time.Second, Transport: t},
+		stream: &http.Client{Transport: t},
 	}
 }
 

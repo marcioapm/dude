@@ -74,7 +74,7 @@ GRANT SELECT, INSERT, UPDATE ON lux_feed TO dude_app, dude_sweeper;
 -- The task's branch moved — an agent published (runs.heads), or the forge
 -- reported a new head on its pull request — while it has a live wakeable
 -- preview: the preview syncs, if it runs.
-CREATE FUNCTION preview_sync_wanted() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+CREATE FUNCTION preview_sync_wanted() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 BEGIN
   UPDATE runs SET sync_wanted_at = now()
   WHERE task_id = NEW.task_id AND kind = 'preview' AND wakeable

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -175,6 +176,8 @@ func (c *HTTPClient) SyncRun(ctx context.Context, runID, requestID string, sync 
 		map[string]any{"requestId": requestID, "sync": sync}, nil, nil)
 }
 
+// PreviewDomain is lux's, normalised as previews.domain is: lowercase, no
+// leading or trailing dot.
 func (c *HTTPClient) PreviewDomain(ctx context.Context) (string, error) {
 	var w struct {
 		PreviewDomain *string `json:"previewDomain"`
@@ -182,8 +185,12 @@ func (c *HTTPClient) PreviewDomain(ctx context.Context) (string, error) {
 	if err := c.do(ctx, "GET", "/v1/whoami", nil, nil, &w); err != nil || w.PreviewDomain == nil {
 		return "", err
 	}
-	return *w.PreviewDomain, nil
+	return NormalDomain(*w.PreviewDomain), nil
 }
+
+// NormalDomain is a domain as dude compares and joins it: lowercase, no
+// leading or trailing dot.
+func NormalDomain(d string) string { return strings.Trim(strings.ToLower(d), ".") }
 
 // Feed reads the SSE stream: `id:`, `event: lux`, `data: <FeedEvent>`;
 // Last-Event-ID resumes strictly after the id given. With no id (after < 0)
@@ -220,12 +227,16 @@ func (c *HTTPClient) Feed(ctx context.Context, after int64, fn func(FeedEvent) e
 	return err
 }
 
-// RequireServers fails unless lux has the server resource (/v1/servers,
+// ErrNoServers: lux answered, and has no server resource (/v1/servers,
 // lux#41): a lux from before it answers 404 or 405.
+var ErrNoServers = errors.New("dude needs a lux with wakeable servers (marcioapm/lux#41 or later)")
+
+// RequireServers fails with ErrNoServers unless lux has the server
+// resource; any other failure (lux unreachable, 5xx) is returned as it is.
 func RequireServers(ctx context.Context, c Servers) error {
 	_, err := c.ListServers(ctx, "", "dude.kind=probe")
 	if le, ok := AsError(err); ok && (le.Status == http.StatusNotFound || le.Status == http.StatusMethodNotAllowed) {
-		return fmt.Errorf("lux has no /v1/servers (%s): dude needs a lux with wakeable servers (marcioapm/lux#41 or later)", le.Message)
+		return fmt.Errorf("lux has no /v1/servers (%s): %w", le.Message, ErrNoServers)
 	}
 	return err
 }
