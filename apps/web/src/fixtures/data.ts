@@ -334,7 +334,7 @@ export function logsFor(scenario: ServerScenario): Record<string, ServerLogLine[
 
 /** Who GitHub offers to review: two suggestions, the rest found by name. */
 export const REVIEWERS: ReviewerCandidate[] = [
-  { kind: "user", login: "ana-ribeiro", name: "Ana Ribeiro", reason: "changed", requested: true },
+  { kind: "user", login: "ana-ribeiro", name: "Ana Ribeiro", reason: "changed" },
   { kind: "user", login: "tokafor", name: "Tom Okafor", reason: "commented" },
   { kind: "user", login: "kai-n", name: "Kai Nakamura", reason: "changed" },
   { kind: "user", login: "hanna", name: "Hanna Lindqvist" },

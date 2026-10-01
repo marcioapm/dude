@@ -42,22 +42,8 @@ export function GitHubFace({ user, size = 24 }: { readonly user: GitHubUser; rea
  */
 export function GitHubUserLine({ user, detail, trailing, size = 24, inline, ...rest }: GitHubUserLineProps) {
   const login = <span className={styles["login"]}>{user.login}</span>;
-  const named = Boolean(user.name) && user.name !== user.login;
-  return (
-    <EntityLine
-      size="sm"
-      lead={<GitHubFace user={user} size={size} />}
-      name={
-        inline ? (
-          <>
-            {named ? user.name : user.login}
-            {named ? <span className={styles["inlineLogin"]}> {login}</span> : null}
-          </>
-        ) : named ? user.name : login
-      }
-      detail={inline ? undefined : named ? <>{login}{detail ? <> · {detail}</> : null}</> : detail}
-      trailing={trailing}
-      {...rest}
-    />
-  );
+  const line = { size: "sm" as const, lead: <GitHubFace user={user} size={size} />, trailing, ...rest };
+  if (!user.name || user.name === user.login) return <EntityLine {...line} name={login} detail={inline ? undefined : detail} />;
+  if (inline) return <EntityLine {...line} name={<>{user.name}<span className={styles["inlineLogin"]}> {login}</span></>} />;
+  return <EntityLine {...line} name={user.name} detail={<>{login}{detail ? <> · {detail}</> : null}</>} />;
 }

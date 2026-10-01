@@ -664,6 +664,24 @@ export function prCheckDiagnosticFix(code: string): string | null {
     : null;
 }
 
+/** A reviewer's latest word, in a person's words: "approved", "requested changes". */
+export function reviewWords(state: string): string {
+  switch (state.toUpperCase()) {
+    case "APPROVED":
+      return "approved";
+    case "COMMENTED":
+      return "commented";
+    case "CHANGES_REQUESTED":
+      return "requested changes";
+    case "REQUESTED":
+      return "review requested";
+    case "DISMISSED":
+      return "review dismissed";
+    default:
+      return state.toLowerCase().replaceAll("_", " ");
+  }
+}
+
 /** A review as GitHub reports it (`reviews_json`); each person's latest verdict counts. */
 export interface PrReview {
   login: string;

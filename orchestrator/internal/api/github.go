@@ -271,7 +271,6 @@ func (s *Server) pullRequestAction(w http.ResponseWriter, r *http.Request, org s
 		if err := gh.RequestReviewers(r.Context(), slug, pr.Number, body.Logins); err != nil {
 			return forgeRefusal(err, "GitHub would not request the review")
 		}
-		candidates.forget(org, slug)
 		out["logins"] = body.Logins
 	}
 	// Who did it, for the task's activity: GitHub will say only that it

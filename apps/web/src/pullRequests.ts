@@ -8,26 +8,8 @@
  */
 
 import type { PersistedEvent, PullRequest } from "@dude/domain";
-import { CHECK_RUNS_FORBIDDEN, prCheckDiagnostic, prCheckFailed } from "@dude/domain";
+import { prCheckDiagnostic, prCheckDiagnosticReason, prCheckFailed, reviewWords } from "@dude/domain";
 import { plural } from "@dude/design-system";
-
-/** A reviewer's latest word, in a person's words. */
-export function reviewWords(state: string): string {
-  switch (state.toUpperCase()) {
-    case "APPROVED":
-      return "approved";
-    case "COMMENTED":
-      return "commented";
-    case "CHANGES_REQUESTED":
-      return "requested changes";
-    case "REQUESTED":
-      return "review requested";
-    case "DISMISSED":
-      return "review dismissed";
-    default:
-      return state.toLowerCase().replaceAll("_", " ");
-  }
-}
 
 /** Why the Merge button is off, in a person's words; null when it is on. */
 export function mergeBlockedBy(pr: PullRequest): string | null {
@@ -37,8 +19,7 @@ export function mergeBlockedBy(pr: PullRequest): string | null {
   const failing = pr.checks.filter(prCheckFailed).map((c) => c.name);
   const unreadable = prCheckDiagnostic(pr.checks);
   if (pr.checkState === "failing") why.push(failing.length ? `${failing.join(", ")} failing` : "checks failing");
-  if (unreadable === CHECK_RUNS_FORBIDDEN) why.push("dude's GitHub token can't read this repository's checks (it needs Checks: Read)");
-  else if (unreadable) why.push("some checks cannot be read");
+  if (unreadable) why.push(prCheckDiagnosticReason(unreadable));
   else if (pr.checkState === "pending") why.push("checks pending");
   if (pr.review === "changes_requested") why.push("changes requested");
   if (pr.review === "pending") why.push("nobody has approved it");

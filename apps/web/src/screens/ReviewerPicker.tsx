@@ -6,9 +6,9 @@
  * search of the organization's repository).
  */
 
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { GitHubUserLine, RemovableList, SearchPicker } from "@dude/design-system/components";
-import { Icon } from "@dude/design-system";
+import { Icon, plural } from "@dude/design-system";
 import type { ApiClient, ReviewerCandidate } from "../api/client.ts";
 
 const SUGGESTED = "Suggested by GitHub";
@@ -17,10 +17,14 @@ const REASON: Record<NonNullable<ReviewerCandidate["reason"]>, string> = {
   commented: "Commented on this pull request",
 };
 
-export function ReviewerPicker({ client, pullRequestId, picked, onChange, onSubmit, onCancel, autoFocus, size = "sm" }: {
+const user = (c: ReviewerCandidate) => ({ login: c.login, name: c.name, avatarUrl: c.avatarUrl, team: c.kind === "team" });
+
+export function ReviewerPicker({ client, pullRequestId, asked, picked, onChange, onSubmit, onCancel, autoFocus, size = "sm" }: {
   client: ApiClient;
   /** The pull request to suggest for; null for a search alone. */
   pullRequestId: string | null;
+  /** Logins asked already and yet to answer: shown, not picked. */
+  asked?: ReadonlySet<string>;
   picked: ReadonlyArray<ReviewerCandidate>;
   onChange: (picked: ReviewerCandidate[]) => void;
   onSubmit?: () => void;
@@ -28,13 +32,8 @@ export function ReviewerPicker({ client, pullRequestId, picked, onChange, onSubm
   autoFocus?: boolean;
   size?: "sm" | "md";
 }) {
-  // Who is picked is not offered again.
-  const key = picked.map((p) => p.login.toLowerCase()).join(" ");
-  const find = useCallback(async (q: string) => {
-    const logins = new Set(key.split(" "));
-    return (await client.reviewerCandidates(pullRequestId, q)).filter((c) => !logins.has(c.login.toLowerCase()));
-  }, [client, pullRequestId, key]);
-  const user = (c: ReviewerCandidate) => ({ login: c.login, name: c.name, avatarUrl: c.avatarUrl, team: c.kind === "team" });
+  const find = useCallback((q: string) => client.reviewerCandidates(pullRequestId, q), [client, pullRequestId]);
+  const exclude = useMemo(() => new Set(picked.map((p) => p.login)), [picked]);
   return (
     <>
       {picked.length > 0 ? (
@@ -49,14 +48,14 @@ export function ReviewerPicker({ client, pullRequestId, picked, onChange, onSubm
         findOnEmpty={pullRequestId !== null}
         clearOnPick
         find={find}
+        exclude={exclude}
         optionKey={(c) => c.login}
         group={(c) => (c.reason ? SUGGESTED : c.kind === "team" ? "Teams" : "People")}
         renderGroup={(g) => <>{g === SUGGESTED ? <Icon name="github" size={12} /> : null}{g}</>}
         renderOption={(c) => (
-          <GitHubUserLine user={user(c)}
-            detail={c.reason ? REASON[c.reason] : c.members ? `${c.members} ${c.members === 1 ? "member" : "members"}` : undefined} />
+          <GitHubUserLine user={user(c)} detail={c.reason ? REASON[c.reason] : c.members ? plural(c.members, "member") : undefined} />
         )}
-        optionDisabled={(c) => (c.requested ? "Already asked" : null)}
+        optionDisabled={(c) => (asked?.has(c.login.toLowerCase()) ? "Already asked" : null)}
         empty={(q) => `Nobody who can review matches “${q}”.`}
         onPick={(c) => onChange([...picked, c])}
         onBackspaceEmpty={() => onChange(picked.slice(0, -1))}

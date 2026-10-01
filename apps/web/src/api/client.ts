@@ -138,8 +138,6 @@ export interface ReviewerCandidate {
   /** Why GitHub suggests them; absent for one found by words. */
   reason?: "changed" | "commented";
   members?: number;
-  /** Asked already on this pull request, and yet to answer. */
-  requested?: boolean;
 }
 
 /** How dude behaves on GitHub for the organization. */

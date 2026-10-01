@@ -432,9 +432,9 @@ func (s *Server) pullJSON(p *Pull) map[string]any {
 	}
 }
 
-// Reviewers is who the fake says can review: the people and teams dude's
-// reviewer picker finds. The first two are GitHub's suggestions.
-var Reviewers = []map[string]any{
+// reviewers is who the fake says can review: the people dude's reviewer
+// picker finds. The first two are GitHub's suggestions. It has no teams.
+var reviewers = []map[string]any{
 	{"login": "ana", "name": "Ana Ribeiro", "avatarUrl": ""},
 	{"login": "tom", "name": "Tom Okafor", "avatarUrl": ""},
 	{"login": "hanna", "name": "Hanna Lindqvist", "avatarUrl": ""},
@@ -454,6 +454,12 @@ func Graphql(servers ...*Server) http.HandlerFunc {
 			} `json:"variables"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&in)
+		// The owner's teams: none, as for a repository a user owns.
+		if strings.Contains(in.Query, "teams(") {
+			write(w, 200, map[string]any{"data": map[string]any{"organization": nil},
+				"errors": []any{map[string]string{"type": "NOT_FOUND", "message": "Could not resolve to an Organization"}}})
+			return
+		}
 		for _, s := range servers {
 			if s.Slug != in.Variables.Owner+"/"+in.Variables.Name {
 				continue
@@ -642,30 +648,20 @@ func fail(w http.ResponseWriter, status int, message string) {
 }
 
 func (s *Server) reviewerCandidates(number int, q string) map[string]any {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	requests := []any{}
-	if p := s.pulls[number]; p != nil {
-		for _, l := range p.Requested {
-			requests = append(requests, map[string]any{"requestedReviewer": map[string]any{"__typename": "User", "login": l}})
-		}
-	}
 	suggested := []any{}
-	for i, u := range Reviewers[:2] {
-		suggested = append(suggested, map[string]any{"isAuthor": false, "isCommenter": i == 1, "reviewer": u})
+	for i, u := range reviewers[:2] {
+		suggested = append(suggested, map[string]any{"isCommenter": i == 1, "reviewer": u})
 	}
 	found := []any{}
-	for _, u := range Reviewers {
+	for _, u := range reviewers {
 		if strings.Contains(strings.ToLower(u["login"].(string)+" "+u["name"].(string)), strings.ToLower(q)) {
 			found = append(found, u)
 		}
 	}
 	return map[string]any{"data": map[string]any{
 		"repository": map[string]any{
-			"pullRequest": map[string]any{"author": map[string]any{"login": "dude-bot"}, "suggestedReviewers": suggested,
-				"reviewRequests": map[string]any{"nodes": requests}},
+			"pullRequest":     map[string]any{"author": map[string]any{"login": "dude-bot"}, "suggestedReviewers": suggested},
 			"assignableUsers": map[string]any{"nodes": found},
 		},
-		"organization": map[string]any{"teams": map[string]any{"nodes": []any{}}},
 	}}
 }
