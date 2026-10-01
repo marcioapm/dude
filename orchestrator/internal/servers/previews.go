@@ -19,6 +19,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
+	"github.com/marciomartins/dude/orchestrator/internal/images"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
@@ -42,9 +43,12 @@ import (
 type Previews struct {
 	*Service
 	Forges delivery.Forges
-	// The image when neither the project's preview settings nor the
-	// project name one (DUDE_AGENT_IMAGE).
+	// The image when neither the project's preview settings, the project
+	// nor its organization name one (DUDE_AGENT_IMAGE).
 	DefaultImage string
+	// The dude layer library images are finished with (DUDE_LAYER_IMAGE);
+	// "" turns the library off.
+	Layer string
 	// The login for the registry agent images come from (DUDE_REGISTRY_AUTH);
 	// nil for none. A preview of the agent image pulls it the same way.
 	Registry registry.Provider
@@ -72,6 +76,8 @@ type previewRun struct {
 	// Its last sign of use, and the project's idle limit in minutes.
 	ActiveSince *time.Time
 	IdleMinutes float64
+	// The image job a pending preview waits on, "" for none.
+	ImageBuildID string
 }
 
 // Sweep takes one pass over every preview with something to do.
@@ -82,7 +88,7 @@ func (p *Previews) Sweep(ctx context.Context) (int, error) {
 				COALESCE(r.lux_run_id, ''), COALESCE(r.lux_state, ''),
 				r.pending_starts, r.active_since,
 				(preview_settings(pr)->>'idleTimeoutMinutes')::float8,
-				t.status IN ('done', 'failed', 'aborted')
+				t.status IN ('done', 'failed', 'aborted'), COALESCE(r.image_build_id, '')
 			FROM runs r JOIN projects pr ON pr.id = r.project_id JOIN tasks t ON t.id = r.task_id
 			WHERE r.kind = 'preview' AND NOT r.wakeable
 			  AND (r.status IN ('pending', 'scheduled', 'starting', 'running')
@@ -104,7 +110,7 @@ func (p *Previews) Sweep(ctx context.Context) (int, error) {
 		runs, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (previewRun, error) {
 			var r previewRun
 			return r, row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.TaskID, &r.Status, &r.LuxRunID, &r.LuxState,
-				&r.PendingStarts, &r.ActiveSince, &r.IdleMinutes, &r.TaskEnded)
+				&r.PendingStarts, &r.ActiveSince, &r.IdleMinutes, &r.TaskEnded, &r.ImageBuildID)
 		})
 		return err
 	}); err != nil {
@@ -172,10 +178,25 @@ func (p *Previews) advance(ctx context.Context, r previewRun) (bool, error) {
 	return p.parkIfUnused(ctx, r)
 }
 
-// submit builds the preview's spec and hands it to lux.
+// submit builds the preview's spec and hands it to lux. A library image
+// not ready yet keeps it pending, as a phase Run waits; one that cannot be
+// had fails it before lux.
 func (p *Previews) submit(ctx context.Context, r previewRun) error {
-	spec, branch, machine, err := p.spec(ctx, r)
-	if err != nil {
+	spec, branch, machine, got, err := p.spec(ctx, r)
+	var waiting images.Waiting
+	var refused images.Refused
+	switch {
+	case errors.As(err, &waiting):
+		return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `UPDATE runs SET next_attempt_at = now() + interval '5 seconds' WHERE id = $1`, r.ID)
+			if err != nil || !waiting.New {
+				return err
+			}
+			return phases.ServersChanged(ctx, tx, r.Org, r.ProjectID, r.TaskID, r.ID, map[string]any{"change": "preparing_image", "buildId": waiting.Build})
+		})
+	case errors.As(err, &refused):
+		return p.fail(ctx, r, "cannot start: "+refused.Reason)
+	case err != nil:
 		return err
 	}
 	// The dude Run id is the idempotency key: a retried submit gets the lux
@@ -202,9 +223,9 @@ func (p *Previews) submit(ctx context.Context, r previewRun) error {
 		// submit was in flight is then cancelled in lux by the next sweep.
 		// machine is what it runs on, recorded once, with the lux Run.
 		tag, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, next_attempt_at = NULL,
-			lux_repositories = $4, branch = NULLIF($5, ''), machine = $6::jsonb,
+			lux_repositories = $4, branch = NULLIF($5, ''), machine = $6::jsonb, image = $7::jsonb,
 			status = CASE WHEN status = 'pending' THEN 'scheduled'::run_status ELSE status END
-			WHERE id = $1 AND lux_run_id IS NULL`, r.ID, lr.ID, lr.State, db.NonNil(repos), branch, machine)
+			WHERE id = $1 AND lux_run_id IS NULL`, r.ID, lr.ID, lr.State, db.NonNil(repos), branch, machine, got)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
@@ -267,19 +288,36 @@ func taskRefs(ctx context.Context, tx pgx.Tx, r previewRun) ([]previewRef, error
 // pushed; a workload that only waits; the project's servers marked to start
 // in previews; its preview settings' egress and image. Returns the branch
 // the first repository — the one servers run in — is at.
-func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, *delivery.Machine, error) {
+func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, *delivery.Machine, *images.RunImage, error) {
 	var repos []previewRef
 	var recipes []Recipe
 	var settings PreviewSettings
-	var projectImage string
 	var machine *delivery.Machine
+	var image string
+	var got *images.RunImage
+	var outcome error
 	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		var raw []byte
-		if err := tx.QueryRow(ctx, `SELECT preview_settings(p), COALESCE(p.runtime_image, '') FROM projects p WHERE p.id = $1`,
-			r.ProjectID).Scan(&raw, &projectImage); err != nil {
+		var site images.Site
+		if err := tx.QueryRow(ctx, `SELECT preview_settings(p), COALESCE(p.runtime_image_id, ''), COALESCE(p.runtime_image, ''),
+				COALESCE(o.default_image_id, '')
+			FROM projects p JOIN organizations o ON o.id = p.organization_id WHERE p.id = $1`,
+			r.ProjectID).Scan(&raw, &site.RuntimeID, &site.RuntimeTyped, &site.DefaultID); err != nil {
 			return err
 		}
 		if err := json.Unmarshal(raw, &settings); err != nil {
+			return err
+		}
+		if settings.ImageID != nil {
+			site.PreviewID = *settings.ImageID
+		}
+		if settings.Image != nil {
+			site.PreviewTyped = *settings.Image
+		}
+		site.Fallback = p.DefaultImage
+		var err error
+		image, got, err = images.Choose(ctx, tx, site, p.Layer, r.ID, r.ImageBuildID)
+		if err, outcome = images.Settle(err); err != nil || outcome != nil {
 			return err
 		}
 		sizes, err := delivery.LoadSizes(ctx, tx)
@@ -299,16 +337,12 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, *d
 		recipes, err = LoadRecipes(ctx, tx, r.ProjectID)
 		return err
 	}); err != nil {
-		return lux.Spec{}, "", nil, err
+		return lux.Spec{}, "", nil, nil, err
+	}
+	if outcome != nil {
+		return lux.Spec{}, "", nil, nil, outcome
 	}
 
-	image := projectImage
-	if settings.Image != nil && *settings.Image != "" {
-		image = *settings.Image
-	}
-	if image == "" {
-		image = p.DefaultImage
-	}
 	spec := lux.Spec{
 		Name:   "preview " + r.TaskID,
 		Labels: map[string]string{"dude.org": r.Org, "dude.task": r.TaskID, "dude.run": r.ID, "dude.kind": KindPreview},
@@ -332,7 +366,7 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, *d
 		spec.Workload.Workdir = phases.RepoPath(primary)
 		token, err := p.forgeToken(ctx, r.Org)
 		if err != nil {
-			return lux.Spec{}, "", nil, err
+			return lux.Spec{}, "", nil, nil, err
 		}
 		spec.Git = &lux.Git{}
 		for _, rp := range repos {
@@ -361,11 +395,11 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, *d
 	// A login that cannot be had now is an error the sweep retries.
 	login, err := phases.LoginFor(ctx, p.Registry, image, nil)
 	if err != nil {
-		return lux.Spec{}, "", nil, err
+		return lux.Spec{}, "", nil, nil, err
 	}
 	login.Apply(&spec)
 	phases.MachineSpec(machine, &spec)
-	return spec, branch, machine, nil
+	return spec, branch, machine, got, nil
 }
 
 func (p *Previews) forgeToken(ctx context.Context, org string) (string, error) {

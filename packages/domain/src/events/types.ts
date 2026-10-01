@@ -34,6 +34,8 @@ export const EventTypes = {
   ImageFinished: "image.finished",
   /** A version became the one every user runs: built, or published again. Payload: `{ imageId, name, versionId, version, republished }`. */
   ImagePublished: "image.published",
+  /** A Run waits, before lux, for its library image's dude layer (or first version). Payload: `{ buildId }`. */
+  RunImagePreparing: "run.image_preparing",
 
   // Task lifecycle
   TaskCreated: "task.created",
