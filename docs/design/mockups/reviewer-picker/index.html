@@ -1123,6 +1123,7 @@ body.clean .new::after { display: none; }
     <button data-v="typing">Typing “an”</button>
     <button data-v="picked">Two picked</button>
     <button data-v="asked">Asked</button>
+    <button data-v="reviewed">Reviewed</button>
   </span>
   <span class="seg" id="seg-theme"><button data-v="dark">Dark</button><button data-v="light">Light</button></span>
   <span class="seg" id="seg-density"><button data-v="comfortable">Comfortable</button><button data-v="compact">Compact</button></span>
@@ -1142,6 +1143,14 @@ body.clean .new::after { display: none; }
         <li>Typing searches <b>everyone who can review in the repository</b> (GitHub’s assignable users) by login or name, plus teams when the repo is in an organisation.</li>
         <li>Pick several. They go into a list above the field, each with a remove button. Then <b>Ask 2 people</b>. People already requested are shown but can’t be picked. The PR author never appears.</li>
         <li>Keyboard: <kbd>↑</kbd><kbd>↓</kbd> move · <kbd>Enter</kbd> picks · <kbd>⌫</kbd> on an empty field drops the last one · <kbd>⌘/Ctrl</kbd>+<kbd>Enter</kbd> asks · <kbd>Esc</kbd> closes the list, then the picker.</li>
+      </ul>
+      <h2>Once they review (state “Reviewed”)</h2>
+      <ul>
+        <li>Already works today: each person’s latest verdict (<b>approved</b>, <b>requested changes</b>, dismissed) replaces “review requested”, live, from GitHub’s <code>pull_request_review</code> webhook.</li>
+        <li>New: a person who only <b>commented</b> keeps a row. Today they vanish from the panel.</li>
+        <li>New: <b>asked again</b> after reviewing shows as waiting, with their earlier verdict muted. Today the old verdict stays as if current.</li>
+        <li>New: a requested <b>team</b> has a row. Today dude doesn’t read <code>requested_teams</code>.</li>
+        <li>New: rows show the person’s GitHub name and avatar, as the picker does, instead of initials of the login.</li>
       </ul>
       <h2>CI unavailable, said plainly</h2>
       <ul>
@@ -1200,6 +1209,10 @@ const PEOPLE = [
   { team: true, login: "acme/backend", name: "Backend", why: "12 members" },
 ];
 const ICON = {
+  ok: '<svg class="icon ok" viewBox="0 0 16 16"><path d="M3.25 8.5l3 3 6.5-7"/></svg>',
+  changes: '<svg class="icon bad" viewBox="0 0 16 16"><path d="M4 2.5h5l3 3v8a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-10a1 1 0 0 1 1-1ZM6 9.5h4M8 7.5v4"/></svg>',
+  comment: '<svg class="icon neutral" viewBox="0 0 16 16"><path d="M3 3.5h10v7H7l-3 2.5v-2.5H3z"/></svg>',
+  rerequest: '<svg class="icon attention" viewBox="0 0 16 16"><path d="M8 2.75a5.25 5.25 0 1 0 0 10.5a5.25 5.25 0 0 0 0-10.5Z" stroke-dasharray="2 2"/></svg>',
   eye: '<svg class="icon neutral" viewBox="0 0 16 16"><path d="M1.75 8s2.25-4.25 6.25-4.25S14.25 8 14.25 8s-2.25 4.25-6.25 4.25S1.75 8 1.75 8ZM8 9.75a1.75 1.75 0 1 0 0-3.5a1.75 1.75 0 0 0 0 3.5Z"/></svg>',
   search: '<svg class="icon" viewBox="0 0 16 16"><path d="M7 11.5A4.5 4.5 0 1 0 7 2.5a4.5 4.5 0 0 0 0 9ZM10.3 10.3l3.2 3.2"/></svg>',
   close: '<svg class="icon" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
@@ -1225,6 +1238,7 @@ const pickable = (p) => !p.requested;
 
 function render() {
   const li = document.getElementById("reviews");
+  if (st.reviewed) { li.innerHTML = reviewedRows(); return; }
   const asked = [...PEOPLE.filter((p) => p.requested), ...st.asked];
   let html = asked.map((p, i) => `<span class="fact">${ICON.eye}<span class="factText"><span class="who">${face(p, 20)}<b>${esc(p.team ? p.login : p.login)}</b> · review requested</span></span>${i === asked.length - 1 && !st.open ? reqBtn() : ""}</span>`).join("");
   if (!asked.length) html = `<span class="fact">${ICON.eye}<span class="factText">No review yet</span>${st.open ? "" : reqBtn()}</span>`;
@@ -1247,6 +1261,15 @@ function render() {
   li.querySelector("[data-send]")?.addEventListener("click", send);
 }
 let wantFocus = false;
+function reviewedRows() {
+  const row = (icon, p, words, extra = "") => `<span class="fact">${icon}<span class="factText"><span class="who">${face(p, 20)}<b>${esc(p.name)}</b> ${words}</span></span>${extra}</span>`;
+  const n = (l) => PEOPLE.find((p) => p.login === l);
+  return row(ICON.ok, n("anaribeiro"), "approved")
+    + row(ICON.changes, n("kai-n"), "requested changes")
+    + `<span class="new" style="display:block">` + row(ICON.rerequest, n("danabrams"), "· asked again <span style=\"color:var(--ds-color-text-muted)\">· approved an earlier commit</span>") + `</span>`
+    + `<span class="new" style="display:block">` + row(ICON.comment, n("tokafor"), "commented") + `</span>`
+    + `<span class="new" style="display:block">` + row(ICON.eye, n("acme/platform"), "· review requested", reqBtn()) + `</span>`;
+}
 const reqBtn = () => `<button class="btn sm quiet" data-req>Request review</button>`;
 function askForm() {
   const groups = options();
@@ -1299,7 +1322,7 @@ const by = (l) => PEOPLE.find((p) => p.login === l);
 const H = new URLSearchParams(location.hash.slice(1));
 seg("seg-state", H.get("state") || "suggested", (v) => {
   wantFocus = false;
-  Object.assign(st, { open: v !== "closed" && v !== "asked", query: v === "typing" ? "an" : "", picked: v === "picked" ? [by("anaribeiro"), by("kai-n")] : [], asked: v === "asked" ? [by("anaribeiro"), by("kai-n")] : [], active: 0 });
+  Object.assign(st, { reviewed: v === "reviewed", open: !["closed", "asked", "reviewed"].includes(v), query: v === "typing" ? "an" : "", picked: v === "picked" ? [by("anaribeiro"), by("kai-n")] : [], asked: v === "asked" ? [by("anaribeiro"), by("kai-n")] : [], active: 0 });
   render();
 });
 seg("seg-theme", H.get("theme") || "dark", (v) => (document.documentElement.dataset.theme = v));
