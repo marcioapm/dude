@@ -5,7 +5,7 @@
  * it asks for.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AgentAvatar,
   EntityLine,
@@ -41,7 +41,16 @@ import {
   THead,
   Tr,
 } from "@dude/design-system/primitives";
-import { fitProblem, gib, GIB, type MachinePools, type MachineSize, type MachineSizeUse, type MachineSizeWithUse } from "@dude/domain";
+import {
+  fitProblem,
+  gib,
+  machineFit,
+  machineSpec,
+  type MachinePools,
+  type MachineSize,
+  type MachineSizeUse,
+  type MachineSizeWithUse,
+} from "@dude/domain";
 import type { ApiClient } from "../api/client.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
 import {
@@ -50,8 +59,6 @@ import {
   draftProblems,
   fitWords,
   hostSpec,
-  machineFit,
-  machineSpec,
   poolKnownFrom,
   poolMachines,
   poolOptionLabel,
@@ -61,19 +68,29 @@ import {
   type SizeDraft,
 } from "../machines.ts";
 
-type Sizes = { sizes: MachineSizeWithUse[]; canEdit: boolean };
+export type Sizes = { sizes: MachineSizeWithUse[]; canEdit: boolean };
 
-/** The organisation's sizes and lux's pools, loaded and kept current. */
-export function useMachines(client: ApiClient) {
+/**
+ * The organisation's sizes, loaded once per client by the settings screen
+ * and passed to every page under it; `setSizes` takes what a change on the
+ * Machines page answered, so the menu's count and the Machine fields follow.
+ */
+export function useMachineSizes(client: ApiClient) {
   const [sizes, setSizes] = useState<Sizes | null>(null);
-  const [pools, setPools] = useState<MachinePools | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
-  const reload = useCallback(() => {
+  useEffect(() => {
     client.machineSizes().then(setSizes, (err: unknown) => setProblem(errorText(err)));
+  }, [client]);
+  return { sizes, setSizes, problem };
+}
+
+/** lux's pools, read when the Machines page opens. */
+function usePools(client: ApiClient) {
+  const [pools, setPools] = useState<MachinePools | null>(null);
+  useEffect(() => {
     client.machinePools().then(setPools, () => setPools({ pools: [], readAt: new Date().toISOString(), problem: "the pools could not be read" }));
   }, [client]);
-  useEffect(reload, [reload]);
-  return { sizes, setSizes, pools, problem, reload };
+  return pools;
 }
 
 const faceOf = (use: MachineSizeUse) =>
@@ -92,8 +109,15 @@ function faces(uses: readonly MachineSizeUse[]) {
   }).slice(0, 4).map(faceOf);
 }
 
-export function MachinesPage({ client, orgName }: { client: ApiClient; orgName: string }) {
-  const { sizes, setSizes, pools, problem } = useMachines(client);
+export function MachinesPage({ client, orgName, sizes, problem, setSizes }: {
+  client: ApiClient;
+  orgName: string;
+  /** The screen's sizes (useMachineSizes); null while loading. */
+  sizes: Sizes | null;
+  problem: string | null;
+  setSizes: (s: Sizes) => void;
+}) {
+  const pools = usePools(client);
   const [editing, setEditing] = useState<MachineSizeWithUse | "new" | null>(null);
   const [removing, setRemoving] = useState<MachineSizeWithUse | null>(null);
   const { save, problem: saveProblem } = useSave();
@@ -413,8 +437,6 @@ function RemoveDialog({ client, orgName, size, others, onClose, onRemoved }: {
   );
 }
 
-export { GIB };
-
 // ---------------------------------------------------------------------------
 // The Machine field: an agent role's, or a project's previews'
 // ---------------------------------------------------------------------------
@@ -450,13 +472,4 @@ export function MachineSelect({ sizes, value, inherited, inheritLabel, inheritDe
     <Select id={id} aria-label="Machine" value={value !== null && sizes.some((s) => s.id === value) ? value : INHERIT} disabled={disabled}
       options={options} footer={footer} data-testid={testId} onValueChange={(v) => onChange(v === INHERIT ? null : v)} />
   );
-}
-
-/** The organisation's sizes, for a Machine field: loaded once per client. */
-export function useSizes(client: ApiClient): MachineSize[] | null {
-  const [sizes, setSizes] = useState<MachineSize[] | null>(null);
-  useEffect(() => {
-    client.machineSizes().then((s) => setSizes(s.sizes), () => setSizes([]));
-  }, [client]);
-  return sizes;
 }

@@ -30,6 +30,7 @@ import {
   type MachineSizeUse,
   type MachineSizeWithUse,
 } from "@dude/domain";
+import { SQL } from "bun";
 import { withOrg, type OrgScope } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
@@ -151,9 +152,15 @@ async function record(scope: OrgScope, ctx: RequestContext, changed: Json) {
   });
 }
 
-/** A name taken, as the unique index says it: a 409 a person can read. */
+/**
+ * A name taken, as the unique index refuses it: a 409 a person can read.
+ * Bun's driver puts Postgres's SQLSTATE (23505, unique_violation) in
+ * `errno`; its `code` is Bun's own.
+ */
 function nameTaken(err: unknown, name: string): never {
-  if (String(err).includes("machine_sizes_name_idx")) throw conflict(`there is already a size named ${name}`);
+  if (err instanceof SQL.PostgresError && err.errno === "23505" && err.constraint === "machine_sizes_name_idx") {
+    throw conflict(`there is already a size named ${name}`);
+  }
   throw err;
 }
 

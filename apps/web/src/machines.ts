@@ -6,14 +6,10 @@
  */
 
 import {
-  GIB,
-  MACHINE_STEP_MESSAGE,
   MACHINE_LIMITS,
   SETTINGS_ROLE_LABEL,
   gib,
-  machineFit,
   machineSizeInputSchema,
-  machineSpec,
   type Fit,
   type MachinePool,
   type MachineSize,
@@ -21,8 +17,6 @@ import {
   type MachineSizeUse,
   type SettingsRole,
 } from "@dude/domain";
-
-export { machineSpec };
 
 /** A pool's host, as a person reads it: "16 CPUs · 32 GiB · 180 GiB", disk "not reserved" when 0. */
 export function hostSpec(pool: MachinePool): string | null {
@@ -119,7 +113,6 @@ export const STEP_HINT = {
   memory: `In steps of ${MACHINE_LIMITS.memoryMiB.step / 1024} GiB`,
   disk: `In steps of ${MACHINE_LIMITS.diskGiB.step} GiB`,
 } as const;
-export { MACHINE_STEP_MESSAGE };
 
 /** How much of one host a size takes, as its row says it. */
 export function fitWords(fit: Fit): { share: number | null; text: string } {
@@ -127,5 +120,3 @@ export function fitWords(fit: Fit): { share: number | null; text: string } {
   if (fit.kind === "too_big") return { share: 1, text: "Too big for a host" };
   return { share: null, text: "Unknown" };
 }
-
-export { machineFit, GIB };
