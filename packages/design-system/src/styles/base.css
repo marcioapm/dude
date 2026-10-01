@@ -167,8 +167,13 @@ a:hover {
   white-space: nowrap;
 }
 
+/* Pinned to its containing block's corner: left where it falls, deep in a
+   scrolling list with no positioned box around it, it would lengthen the
+   page itself by as far as that list's content runs. */
 .ds-sr-only {
   position: absolute;
+  top: 0;
+  left: 0;
   width: 1px;
   height: 1px;
   padding: 0;
