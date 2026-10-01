@@ -25,7 +25,12 @@ func gitDiff(path string, adds, dels int) (text, hunks string) {
 	for i := range adds {
 		fmt.Fprintf(&h, "+new %d\n", i)
 	}
-	return fmt.Sprintf("diff --git a/%[1]s b/%[1]s\nindex 1..2 100644\n--- a/%[1]s\n+++ b/%[1]s\n", path) + h.String(), h.String()
+	return gitDiffText(path, h.String())
+}
+
+func gitDiffText(path, hunks string) (string, string) {
+	header := fmt.Sprintf("diff --git a/%[1]s b/%[1]s\nindex 1..2 100644\n--- a/%[1]s\n+++ b/%[1]s\n", path)
+	return header + hunks, hunks
 }
 
 // storeDiff records a Run's diff as the orchestrator does: git's text,
@@ -298,7 +303,7 @@ func fragmented(path string, n int) (text, hunks string) {
 	for i := range n {
 		fmt.Fprintf(&h, "@@ -%d,0 +%d @@\n+line %d\n", 2*i, 2*i+1, i)
 	}
-	return fmt.Sprintf("diff --git a/%[1]s b/%[1]s\nindex 1..2 100644\n--- a/%[1]s\n+++ b/%[1]s\n", path) + h.String(), h.String()
+	return gitDiffText(path, h.String())
 }
 
 func TestRunDiffCountsHunkHeadersAgainstTheLineCap(t *testing.T) {
