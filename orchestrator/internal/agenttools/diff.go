@@ -162,8 +162,11 @@ func runDiff(ctx context.Context, tx pgx.Tx, c Caller, in runDiffIn) (any, error
 		limit = diffListDefault
 	}
 	limit = min(limit, diffListMax)
-	page := files[min(in.Offset, len(files)):min(in.Offset+limit, len(files))]
-	out := diffListOut{diffHeader: head, Offset: in.Offset, Limit: limit, HasMore: in.Offset+limit < len(files)}
+	// Clamped before adding: offset+limit overflows for offsets near MaxInt.
+	start := min(in.Offset, len(files))
+	end := start + min(limit, len(files)-start)
+	page := files[start:end]
+	out := diffListOut{diffHeader: head, Offset: in.Offset, Limit: limit, HasMore: end < len(files)}
 	if in.NameStatus {
 		names := make([]diffNameOut, len(page))
 		for i, f := range page {
