@@ -9,11 +9,14 @@ servers as lux does: starting, then ready a moment later.
 from __future__ import annotations
 
 import json
+import re
 import threading
 
+import pytest
 import requests
+from playwright.sync_api import Page, expect
 
-from helpers import ApiClient, wait_until
+from helpers import ApiClient, sign_in, toast, wait_until
 
 WEB = {
     "name": "web",
@@ -97,13 +100,6 @@ def test_another_organization_sees_no_servers(client: ApiClient, second_org: dic
 # In the browser
 # ---------------------------------------------------------------------------
 
-import re  # noqa: E402
-
-import pytest  # noqa: E402
-from playwright.sync_api import Page, expect  # noqa: E402
-
-from helpers import sign_in, toast  # noqa: E402
-
 
 @pytest.mark.ui
 def test_branch_previews_run_on_the_size_a_project_picks_and_reset_follows_the_default(
@@ -132,5 +128,5 @@ def test_branch_previews_run_on_the_size_a_project_picks_and_reset_follows_the_d
     overridden.get_by_role("button", name="Reset", exact=True).click()
     expect(toast(page, "Machine reset")).to_be_visible()
     assert client.get(f"/v1/projects/{pid}/servers").json()["previews"]["machineSize"] is None
-    expect(previews.locator("[data-source='organization']").first).to_have_text(f"From {org_name}’s default size")
+    expect(previews.get_by_test_id("preview-machine-row").locator("[data-source='organization']")).to_have_text(f"From {org_name}’s default size")
     assert console_errors == []

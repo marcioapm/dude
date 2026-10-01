@@ -426,7 +426,7 @@ def test_an_admin_adds_a_size_in_half_steps_and_one_off_step_or_too_big_is_refus
     size = _sizes(client)["Large (Java)"]
     assert (size["cpus"], size["memoryMiB"], size["diskGiB"], size["pool"]) == (6.5, 23040, 120, "big")
     # The menu counts it at once: Standard and Large (Java).
-    expect(page.locator("[data-settings-nav='machines']")).to_contain_text("2")
+    expect(page.locator("[data-settings-nav='machines']")).to_have_text(re.compile(r"^Machines\s*2$"))
     assert console_errors == []
 
 
@@ -502,6 +502,8 @@ def test_removing_a_size_in_use_moves_what_named_it(
     page.get_by_role("button", name="Remove and move them", exact=True).click()
     expect(toast(page, "Large removed")).to_be_visible()
     expect(machines.locator("[data-size='Large']")).to_have_count(0)
+    # The menu counts what is left: Standard and XL.
+    expect(page.locator("[data-settings-nav='machines']")).to_have_text(re.compile(r"^Machines\s*2$"))
     assert client.get("/v1/settings/organization").json()["roles"]["implementer"]["machineSize"]["value"] == sizes["XL"]["id"]
     assert client.get(f"/v1/projects/{project['id']}").json()["agentModels"]["reviewer"]["machineSize"] == sizes["XL"]["id"]
     assert console_errors == []
