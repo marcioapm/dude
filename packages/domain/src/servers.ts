@@ -124,7 +124,15 @@ export interface RunServer {
   epoch: number;
   url: string | null;
   lastRequestAt?: string | null;
+  /**
+   * A wakeable preview's server (lux's own resource): lux's server state,
+   * beside `state`, its process's. Absent on a Run's own servers.
+   */
+  serverState?: WakeableServerState;
 }
+
+/** lux's state of a server that wakes on request (`/v1/servers`' `state`). */
+export type WakeableServerState = "ready" | "waking" | "asleep" | "stopped" | "unreachable" | "exited" | "no answer";
 
 export type PreviewStage = "scheduling" | "cloning" | "setup" | "starting" | "ready";
 
@@ -146,6 +154,10 @@ export interface TaskServers {
     previewStage: PreviewStage | null;
     parksAfterMinutes: number | null;
     terminalUrl: string | null;
+    /** A preview whose servers wake on request: opening a URL starts it. */
+    wakeable?: boolean;
+    /** A wakeable preview nothing serves and no wake is due. */
+    asleep?: boolean;
   };
   servers: RunServer[];
   moved: null | { at: string; fromHost: string | null; toHost: string | null };

@@ -55,6 +55,17 @@ export function describeServer(server: RunServer, now: number, run?: ServerRunCo
   const ready = toMs(server.readySince);
   const at = formatTimestamp(since, "time-short");
   const wasReady = ready !== null && ready <= since ? ` · was ready for ${formatDuration(Math.max(0, since - ready), { style: "age" })}` : "";
+  // A wakeable preview's server, while no process serves it: lux's word.
+  if (server.state === "stopped" || server.state === "starting") {
+    switch (server.serverState) {
+      case "asleep":
+        return { state: "stopped", label: "Asleep", detail: "wakes when its URL is opened" };
+      case "waking":
+        return { state: "starting", label: "Waking", detail: server.state === "starting" ? `starting · ${formatDuration(Math.max(0, now - since))}` : "waking up" };
+      case "no answer":
+        return { state: "unreachable", label: "No answer", detail: "asked to wake; nothing came up — opening its URL asks again" };
+    }
+  }
   switch (server.state) {
     case "ready":
       return { state: "ready", detail: `ready for ${formatDuration(Math.max(0, now - (ready ?? since)), { style: "age" })}` };
@@ -140,7 +151,7 @@ export function summarizeTaskServers(data: Pick<TaskServers, "run" | "servers" |
   }
   const run = data.run;
   const live = !TERMINAL_RUN_STATUSES.includes(run.state as RunStatus);
-  const booting = run.kind === "preview" && run.previewStage !== "ready" && live;
+  const booting = run.kind === "preview" && run.previewStage !== "ready" && live && !run.asleep;
   return {
     on: data.servers.filter(isOn),
     off: data.servers.filter((s) => !isOn(s)),
