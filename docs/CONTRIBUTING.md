@@ -98,8 +98,8 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   out that commit.
 - **Every Run is on a machine size.** The organisation's sizes
   (`machine_sizes`) are named by each role's settings and a project's
-  previews; the spec carries the size as `resources` and its pool as
-  `placement.pool`, and `runs.machine` keeps what it ran on. Design:
+  previews; the spec carries the size as `resources` and its pool, by
+  lux's id, as `placement.poolId`, and `runs.machine` keeps what it ran on. Design:
   [`design/machine-sizes.md`](design/machine-sizes.md).
 - **Publishing is a property of the phase** (`Publishes`): a reviewer's
   container is never pushed.
