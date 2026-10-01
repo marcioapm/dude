@@ -62,6 +62,10 @@ var tools = []tool{
 		"a fact that holds (\"the billing API paginates by cursor\"), a procedure that works, a trap and its way "+
 		"around. It is live at once, and marked as yours. Search first so you do not save it twice; do not save "+
 		"what the code or the task already says.", nil, remember).limit(remembersPerRun),
+	define("run_diff", "What a Run of your task changed: this Run's checkout, uncommitted work included, against "+
+		"the commit it started from — one snapshot, no history. Without paths, the changed files, most changed "+
+		"first, with line counts and no lines (paged by limit and offset; hasMore says there is another page). "+
+		"With paths, those files' changes as unified diff text, at most 2,000 lines in all.", nil, runDiff),
 }
 
 // ---- list_tasks --------------------------------------------------------------

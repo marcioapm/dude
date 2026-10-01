@@ -22,6 +22,7 @@ ACP `mcpServers` for OpenCode, `--mcp-config` for Claude Code).
 | `ask_person` | a question for a person; the turn ends and the answer is the next input. The only way an agent asks: the question block is gone | implementer, fixer |
 | `publish_artifact` | write a file for people (name, content) — same as `$LUX_ARTIFACTS`, for agents that prefer a tool | all |
 | `request_repository` | ask for another repository of the organization, read or write, with a reason; a person approves or denies (#45) | all |
+| `run_diff` | what a Run of the caller's task changed (`dude diff`): its checkout, uncommitted work included, against the commit it started from, as stored in `run_diffs` — one snapshot, no history. Without paths, the files by churn with counts and no lines (paged, 200 by default, at most 1,000); `nameStatus`, path and status only; with paths, those files as unified diff text, at most 2,000 lines a call. Another task's Run is refused | all |
 
 Everything an agent creates is marked as created by that Run (`created_by_run_id`)
 and shown so in the UI; nothing an agent creates starts work on its own.
