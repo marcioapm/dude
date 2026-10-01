@@ -253,7 +253,17 @@ func publish(path, name string) (json.RawMessage, error) {
 		return nil, err
 	}
 	defer src.Close()
+	info, err := src.Stat()
+	if err != nil {
+		return nil, err
+	}
 	dst := filepath.Join(dir, clean)
+	// Already there (written straight into $LUX_ARTIFACTS, as a browser's
+	// video often is): nothing to copy. Copying would truncate the file
+	// before reading it, and publish it empty.
+	if have, err := os.Stat(dst); err == nil && os.SameFile(info, have) {
+		return published(clean, info.Size())
+	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return nil, err
 	}
@@ -268,7 +278,11 @@ func publish(path, name string) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(map[string]any{"published": clean, "bytes": n,
+	return published(clean, n)
+}
+
+func published(name string, bytes int64) (json.RawMessage, error) {
+	return json.Marshal(map[string]any{"published": name, "bytes": bytes,
 		"note": "kept when your run stops, and shown with the task"})
 }
 
