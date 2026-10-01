@@ -216,7 +216,8 @@ test("063 makes waiting work due on any clock, and keeps a refusal's backoff", a
              ('memory', 'embedded', 'org_b', 't', 'b', 'h4', ''::tsvector,
                array_fill(0::real, ARRAY[768])::halfvec, 0, '2020-01-01T00:00:00Z')`;
 
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["063_index_due_on_any_clock.sql"]);
+    // 063 is the first migration applied (later ones come after it).
+    expect((await migrate(url, { log: () => {} })).applied[0]).toEqual("063_index_due_on_any_clock.sql");
 
     // Due by the sweep's own test, on a clock behind the database's.
     const due = async (at: string) =>
