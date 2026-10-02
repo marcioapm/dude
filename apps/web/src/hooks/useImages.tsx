@@ -91,7 +91,11 @@ export function useImageTray(client: ApiClient, taskId: string | undefined, limi
         const chip = fresh[i]!;
         const why = await refuse(file, limits);
         if (why) {
-          update(chip.id, { state: "error", error: why.short, errorDetail: why.detail });
+          // Not an image, or one too big to draw: no thumbnail, the file glyph.
+          const url = previews.current.get(chip.id);
+          if (url) URL.revokeObjectURL(url);
+          previews.current.delete(chip.id);
+          update(chip.id, { state: "error", error: why.short, errorDetail: why.detail, previewUrl: undefined });
           continue;
         }
         const used = chipsRef.current.filter((c) => c.id !== chip.id && c.state !== "error")

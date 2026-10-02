@@ -614,6 +614,22 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /fake/servers/{sid}/idle", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"idle": s.Idle(r.PathValue("sid"))})
 	})
+	// What each input of a Run carried as images, by request id: lux's
+	// record of them (name, type, size, sha256), never the bytes.
+	mux.HandleFunc("GET /fake/runs/{id}/attachments", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		run := s.runs[r.PathValue("id")]
+		if run == nil {
+			writeErr(w, 404, "not_found", "no such run")
+			return
+		}
+		out := map[string]any{}
+		for id, ms := range run.attachments {
+			out[id] = records(ms)
+		}
+		writeJSON(w, 200, out)
+	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+s.Key {
 			writeErr(w, 401, "unauthorized", "invalid API key")
