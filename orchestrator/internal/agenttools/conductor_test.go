@@ -231,3 +231,106 @@ func TestPullRequestsGivesStateChecksReviewsAndFeedback(t *testing.T) {
 		t.Errorf("the others: %+v", p.Feedback[1:])
 	}
 }
+
+// findings lists at most 200 of a task's findings, and says how many it has.
+func TestFindingsListsAtMost200(t *testing.T) {
+	f := setup(t)
+	token := f.conductor(t)
+	mustExec(t, f.owner, `INSERT INTO review_findings (id, organization_id, task_id, category, severity, title, description, created_at)
+		SELECT 'fnd_'||lpad(n::text, 3, '0'), $1, $2, 'correctness', 'low', 'T', 'D', now() + n * interval '1 millisecond'
+		FROM generate_series(1, 201) n`, f.org, f.item)
+	var list findingsAnswer
+	if status := f.postAs(t, token, "findings", `{}`, &list); status != 200 {
+		t.Fatalf("findings: %d", status)
+	}
+	if list.Total != 201 || len(list.Findings) != 200 {
+		t.Fatalf("findings: total %d, returned %d; want 201 and 200", list.Total, len(list.Findings))
+	}
+	// All equally severe and open: oldest first, the newest left out.
+	if list.Findings[0].ID != "fnd_001" || list.Findings[199].ID != "fnd_200" {
+		t.Errorf("returned %s … %s, want fnd_001 … fnd_200", list.Findings[0].ID, list.Findings[199].ID)
+	}
+}
+
+// pullRequestFixture is a conductor's task with one open pull request,
+// sdk#88, and the conductor's token.
+func pullRequestFixture(t *testing.T) (*fixture, string) {
+	f := setup(t)
+	token := f.conductor(t)
+	mustExec(t, f.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url) VALUES
+		('repo_s', $1, $2, 'sdk', 'git://x/sdk.git'), ('repo_w', $1, $2, 'web', 'git://x/web.git')`, f.org, f.project)
+	mustExec(t, f.owner, `INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url, head_branch,
+			base_branch, head_sha, title, state, checks, review)
+		VALUES ('pr_s', $1, $2, $3, 'repo_s', 88, 'https://x/pull/88', 'dude/x/attempt-1', 'main', '5d1e0aa', 'Retry', 'open',
+			'passing', 'pending'),
+		       ('pr_w', $1, $2, $3, 'repo_w', 12, 'https://x/pull/12', 'dude/x/attempt-1', 'main', '9ab0c11', 'Retry', 'open',
+			'passing', 'pending')`, f.org, f.project, f.item)
+	return f, token
+}
+
+// comment records a comment on a pull request of the fixture's task.
+func (f *fixture) comment(t *testing.T, id, repo string, number int, author, body, path string) {
+	t.Helper()
+	payload, _ := json.Marshal(map[string]any{"feedbackId": id, "author": author, "kind": "line_comment", "body": body,
+		"path": path, "number": number, "repo": repo})
+	mustExec(t, f.owner, `INSERT INTO events (id, organization_id, event_type, task_id, actor_type, actor_id, source, payload)
+		VALUES ('ev_'||$1, $2, 'pull_request.commented', $3, 'integration', 'github', 'test', $4)`, id, f.org, f.item, payload)
+}
+
+type feedbackAnswer struct {
+	PullRequests []struct {
+		Repo          string
+		FeedbackTotal int
+		Feedback      []struct{ Author, Path, Excerpt, ActedOnBy string }
+	} `json:"pullRequests"`
+}
+
+// pull_requests gives a pull request's latest 50 feedback items, oldest
+// first, and says how many it has.
+func TestPullRequestsGivesTheLatest50FeedbackItems(t *testing.T) {
+	f, token := pullRequestFixture(t)
+	for i := range 51 {
+		f.comment(t, fmt.Sprintf("c%02d", i), "sdk", 88, "tiago", fmt.Sprintf("comment %02d", i), "a.go")
+	}
+	var out feedbackAnswer
+	if status := f.postAs(t, token, "pull_requests", `{}`, &out); status != 200 || len(out.PullRequests) != 2 {
+		t.Fatalf("pull_requests: %d %+v", status, out)
+	}
+	p := out.PullRequests[0]
+	if p.Repo != "sdk" || p.FeedbackTotal != 51 || len(p.Feedback) != 50 {
+		t.Fatalf("sdk#88: total %d, returned %d; want 51 and 50", p.FeedbackTotal, len(p.Feedback))
+	}
+	for i, fb := range p.Feedback {
+		if want := fmt.Sprintf("comment %02d", i+1); fb.Excerpt != want {
+			t.Fatalf("feedback %d is %q, want %q: the latest 50, oldest first", i, fb.Excerpt, want)
+		}
+	}
+}
+
+// The same reviewer's same words on two paths, and on another pull
+// request: only the one a fixer was sent — its repository and path — reads
+// as acted on.
+func TestFeedbackIsActedOnOnlyWhereTheFixerWasSentIt(t *testing.T) {
+	f, token := pullRequestFixture(t)
+	f.comment(t, "c1", "sdk", 88, "tiago", "Handle the nil case", "a.go")
+	f.comment(t, "c2", "sdk", 88, "tiago", "Handle the nil case", "b.go")
+	f.comment(t, "c3", "web", 12, "tiago", "Handle the nil case", "a.go")
+	sent, _ := json.Marshal([]map[string]any{{"source": "review", "author": "tiago", "body": "Handle the nil case",
+		"repo": "sdk", "path": "a.go", "kind": "line_comment"}})
+	mustExec(t, f.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, pr_feedback)
+		VALUES ('run_prfix', $1, $2, $3, 1, 'completed', 'fix', 'implementer', $4)`, f.org, f.project, f.item, sent)
+
+	var out feedbackAnswer
+	if status := f.postAs(t, token, "pull_requests", `{}`, &out); status != 200 || len(out.PullRequests) != 2 {
+		t.Fatalf("pull_requests: %d %+v", status, out)
+	}
+	acted := map[string]string{}
+	for _, p := range out.PullRequests {
+		for _, fb := range p.Feedback {
+			acted[p.Repo+":"+fb.Path] = fb.ActedOnBy
+		}
+	}
+	if acted["sdk:a.go"] != "run_prfix" || acted["sdk:b.go"] != "" || acted["web:a.go"] != "" {
+		t.Errorf("acted on: %v; want only sdk:a.go, by run_prfix", acted)
+	}
+}
