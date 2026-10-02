@@ -385,9 +385,9 @@ func (p *Previews) adoptOrCreate(ctx context.Context, r wakeRun, body lux.Create
 	return p.Lux.CreateServer(ctx, body)
 }
 
-// adopt finds this preview's server of a name by its dude.preview label,
-// not by hostname: one made under an earlier naming (ids, or a key prefix
-// since renamed) is at a hostname dude would no longer choose.
+// adopt finds a server by its dude.preview label and name, regardless of
+// hostname, so id-based names and names made before key-prefix renames
+// remain adoptable.
 func (p *Previews) adopt(ctx context.Context, r wakeRun, name string) (lux.TenantServer, bool, error) {
 	found, err := p.Lux.ListServers(ctx, "", "dude.preview="+r.ID)
 	if err != nil {

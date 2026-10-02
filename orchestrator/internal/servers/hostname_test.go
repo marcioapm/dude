@@ -91,8 +91,8 @@ func TestTheHashIsOfTheIds(t *testing.T) {
 	}
 }
 
-// Previews whose labels share their first 54 characters, as long slugs of
-// one project do, never shorten to the same label.
+// With a long project slug, labels remain valid and distinct even when
+// shortened.
 func TestShortenedLabelsStayDistinct(t *testing.T) {
 	seen := map[string]string{}
 	slug := "a-project-slug-long-enough-to-fill-most-of-a-label"
