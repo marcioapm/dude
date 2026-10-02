@@ -38,7 +38,6 @@ import {
   MachineTip,
   AttachDropZone,
   ImageViewer,
-  MessageImages,
 } from "@dude/design-system/components";
 import { Button, Callout, Dialog, LinkButton, Spinner, Textarea } from "@dude/design-system/primitives";
 import { DEFAULT_RUN_ROLE, EventTypes, MIB, SETTINGS_ROLE_LABEL, TERMINAL_RUN_STATUSES, gib, machineSpec, runLabel } from "@dude/domain";
@@ -56,7 +55,7 @@ import { usePeople, type People } from "../people.tsx";
 import { NotFound } from "./NotFound.tsx";
 import { DudeMark, dudeName } from "../DudeMark.tsx";
 import { ChangesPanel } from "./ChangesPanel.tsx";
-import { limitsHint, useAttachmentLimits, useImageTray, useSentImages } from "../hooks/useImages.tsx";
+import { TurnImages, limitsHint, useAttachmentLimits, useImageTray, useSentImages, type SentImages } from "../hooks/useImages.tsx";
 import type { AttachmentInfo } from "@dude/domain";
 
 export interface RunScreenProps {
@@ -344,7 +343,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     wait: (turn) => steerWait(turn, run.status, activeTool, conversation.lands),
     resend: resteer,
   } : undefined;
-  const shown = { sent: images.sent, open: (turn: ViewedTurn, index: number) => setViewing({ turn, index }) };
+  const shown = { images, open: (turn: ViewedTurn, index: number) => setViewing({ turn, index }) };
   const render = (turn: Turn) => renderTurn(turn, role, conversation.contextWindow, !isLive, people, dude, decide, waitingOn, steer, shown);
   // A checkout to show: a Run with one, or any Run that has reported a diff
   // (the rail's files open Changes, so Changes must be there to open).
@@ -649,7 +648,7 @@ type ViewedTurn = HumanTurn | { kind: "prompt"; attachments: AttachmentInfo[]; a
 
 /** How a turn's images are shown, and opened. */
 interface ShownImages {
-  sent: ReturnType<typeof useSentImages>["sent"];
+  images: Pick<SentImages, "sent" | "mounted" | "visible">;
   open: (turn: ViewedTurn, index: number) => void;
 }
 
@@ -736,7 +735,7 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
       return (
         <ChatMessage key={turn.id} role="system" name={dude} avatar={<DudeMark size="fill" />} intent="prompt" content={turn.text} startedAt={turn.at}
           {...(turn.attachments.length > 0 && shown
-            ? { attachments: <MessageImages images={turn.attachments.map(shown.sent)} onOpen={(i) => shown.open(turn, i)} /> }
+            ? { attachments: <TurnImages attachments={turn.attachments} images={shown.images} onOpen={(i) => shown.open(turn, i)} /> }
             : {})} />
       );
     case "message":
@@ -789,7 +788,7 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
           person={person}
           name={name ?? "Someone"}
           {...(turn.attachments.length > 0 && shown
-            ? { attachments: <MessageImages images={turn.attachments.map(shown.sent)} onOpen={(i) => shown.open(turn, i)} /> }
+            ? { attachments: <TurnImages attachments={turn.attachments} images={shown.images} onOpen={(i) => shown.open(turn, i)} /> }
             : {})}
         />
       );
