@@ -26,7 +26,7 @@ func TestAPhaseRunsOnItsRolesMachineSizeAndRecordsIt(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
 	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool_id)
-		VALUES ('msz_large', $1, 'Large', 6.5, 23040, 120, $2), ('msz_small', $1, 'Small', 1.5, 3584, 20, NULL)`, w.org, bigPool)
+		VALUES ('msz_large', $1, 'Large', 6.5, 23040, 120, $2), ('msz_small', $1, 'Medium', 1.5, 3584, 20, NULL)`, w.org, bigPool)
 	mustExec(t, w.owner, `UPDATE organizations SET default_agent_models = default_agent_models || '{"implementer":{"machineSize":"msz_small"}}'::jsonb
 		WHERE id = $1`, w.org)
 	mustExec(t, w.owner, `UPDATE projects SET agent_models = jsonb_set(agent_models, '{implementer,machineSize}', '"msz_large"') WHERE id = $1`, w.project)

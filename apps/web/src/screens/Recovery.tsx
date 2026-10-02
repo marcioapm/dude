@@ -47,13 +47,15 @@ export function howRunStopped(run: Run, events: readonly PersistedEvent[], peopl
  * since the work last went on past one (a pick-up, or a decision other
  * than Stop), and who stopped it and why. None, when it stopped on no Run
  * (a pull request closed, a person stopping a review that got stuck): the
- * notice then says only that it stopped.
+ * notice then says only that it stopped. Delivery's Runs only: a task's
+ * conductor is no part of it, and recovery never takes one up.
  */
 export function stopOf(task: TaskDetail, events: readonly PersistedEvent[], people: People): Stop {
-  const attempt = Math.max(1, ...task.runs.map((r) => r.attempt));
+  const delivery = task.runs.filter((r) => r.role !== "conductor");
+  const attempt = Math.max(1, ...delivery.map((r) => r.attempt));
   const since = events.findLast((e) => e.eventType === "task.recovered" ||
     (e.eventType === "task.decided" && e.payload.action !== "stop"))?.occurredAt ?? "";
-  const ended = task.runs.filter((r) => r.attempt === attempt && (r.status === "aborted" || r.status === "failed") && (r.endedAt ?? "") > since)
+  const ended = delivery.filter((r) => r.attempt === attempt && (r.status === "aborted" || r.status === "failed") && (r.endedAt ?? "") > since)
     .sort((a, b) => (b.endedAt ?? b.createdAt).localeCompare(a.endedAt ?? a.createdAt));
   const run = ended[0] ?? null;
   return run ? { run, ...howRunStopped(run, events, people) } : { run: null, by: null, why: null };

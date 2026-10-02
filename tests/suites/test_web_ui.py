@@ -1750,3 +1750,45 @@ def test_a_dropped_stream_says_so_and_catches_up(
     expect(page.get_by_test_id("reconnecting")).to_have_count(0, timeout=30_000)
     expect(page.get_by_text("While away").first).to_be_visible(timeout=15_000)
     assert all("ERR_INTERNET_DISCONNECTED" in e for e in console_errors), console_errors
+
+
+def test_a_delivered_tasks_chat_asks_its_conductor_and_shows_the_answer(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    """Chat is the task's first tab: before anyone wrote, the task's history
+    in a line over an empty composer; a message starts the conductor, whose
+    briefing El Duderino signs and whose answer carries its own face."""
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
+        **forge_project["agentModels"], **client.on_models({"conductor": "fake/scripted"})}})
+    task = client.create_task(forge_project["id"], "Chat about me")
+    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+    wait_until(lambda: client.get("/v1/pull-requests", params={"taskId": task["id"]}).json()["pullRequests"],
+               timeout=90, message="the delivery never opened a pull request")
+
+    sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/task/{task['id']}")
+    tabs = page.get_by_role("tablist", name="Task").get_by_role("tab")
+    expect(tabs.first).to_have_text("Chat")
+    tabs.first.click()
+    history = page.get_by_test_id("chat-history")
+    expect(history).to_contain_text("Delivered automatically")
+    expect(history).to_contain_text("implementer → reviewer → fixer → reviewer → simplifier → PR #")
+    composer = page.get_by_test_id("task-chat").get_by_placeholder("Ask about this task…")
+    expect(composer).to_be_empty()
+
+    composer.fill("why does it greet like that?")
+    composer.press("Enter")
+
+    briefing = page.get_by_test_id("chat-briefing")
+    expect(briefing).to_contain_text("Briefing", timeout=30_000)
+    dude = briefing.locator("header").inner_text().split("\n")[0]
+    assert dude in ("The Dude", "El Duderino", "His Dudeness", "Duder"), dude
+    answer = page.get_by_test_id("conductor-turn").first
+    expect(answer).to_contain_text("why does it greet like that?", timeout=30_000)
+    expect(answer).to_contain_text(task["id"])
+    expect(answer).to_have_attribute("data-role", "conductor")
+    expect(answer.get_by_role("img", name="Conductor")).to_be_visible()
+    # It lives on: the page opens on Chat from now on.
+    page.goto(f"{web_url}#/task/{task['id']}")
+    expect(page.get_by_role("tablist", name="Task").get_by_role("tab", selected=True)).to_have_text("Chat")
+    assert console_errors == []

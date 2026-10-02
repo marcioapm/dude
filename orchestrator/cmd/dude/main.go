@@ -13,6 +13,8 @@
 //	dude event TYPE [--data JSON]         record an event on this run
 //	dude diff [RUN] [PATH...] [--name-status] [--limit N] [--offset N]
 //	                                      what a Run of this task changed
+//	dude findings [ID...]                 a conductor's: the task's findings
+//	dude prs                              a conductor's: the task's pull requests
 //	dude publish FILE [--name NAME]       keep a file for people (local)
 //	dude tools                            what this run may use
 //
@@ -235,6 +237,24 @@ func run(args []string, out io.Writer) error {
 			body["offset"] = *offset
 		}
 		return show(out, *asJSON, call("run_diff", body))
+	case "findings":
+		args, err := parse(fs, rest)
+		if err != nil {
+			return err
+		}
+		body := map[string]any{}
+		if len(args) > 0 {
+			body["ids"] = args
+		}
+		return show(out, *asJSON, call("findings", body))
+	case "prs":
+		if err := fs.Parse(rest); err != nil {
+			return err
+		}
+		if fs.NArg() > 0 {
+			return errors.New("usage: dude prs")
+		}
+		return show(out, *asJSON, call("pull_requests", map[string]any{}))
 	case "publish":
 		name := fs.String("name", "", "the name people see (default: the file's)")
 		args, err := parse(fs, rest)
@@ -431,6 +451,10 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
                                              another page); --name-status, path and status only.
                                              With PATHs (exact, as listed) their changes as
                                              unified diff text, at most 2,000 lines a call
+  dude findings [ID...]                      a conductor's: the task's review findings and how each
+                                             was settled; with IDs (fnd_…), those in full
+  dude prs                                   a conductor's: the task's pull requests, their checks,
+                                             reviews and feedback
   dude publish FILE [--name NAME]            keep a file for people, shown with the task
   dude tools                                 the tools this run may use
   dude --version                             this CLI's version

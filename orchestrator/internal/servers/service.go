@@ -157,9 +157,10 @@ func scanRun(row pgx.Row) (runRow, error) {
 }
 
 // liveAgent and livePreview (SQL, over runs r): a task's Run whose
-// servers a person can use now, or soon.
+// servers a person can use now, or soon. A task's conductor is not one: it
+// reads, and its checkout serves nothing a preview does not.
 const (
-	liveAgent   = `r.kind = 'agent' AND r.status IN ('scheduled', 'starting', 'running') AND r.lux_run_id IS NOT NULL`
+	liveAgent   = `r.kind = 'agent' AND r.role IS DISTINCT FROM 'conductor' AND r.status IN ('scheduled', 'starting', 'running') AND r.lux_run_id IS NOT NULL`
 	livePreview = `r.kind = 'preview' AND r.status IN ('pending', 'scheduled', 'starting', 'running', 'paused')`
 )
 

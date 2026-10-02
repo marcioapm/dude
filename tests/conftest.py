@@ -80,7 +80,7 @@ def project(client: ApiClient) -> dict:
         name="E2E Project",
         slug=f"e2e-{os.urandom(3).hex()}",
         agentModels=client.on_models({
-            "orchestrator": "project-orchestrator",
+            "conductor": "project-conductor",
             "implementer": {"model": "project-implementer", "harness": "opencode"},
         }),
     )

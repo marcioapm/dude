@@ -119,21 +119,36 @@ type SentAttachment struct {
 // the directive itself, or — for a Retry or an Interrupt now, which repeat
 // an earlier directive's words — of the directive they repeat.
 func DirectiveAttachments(ctx context.Context, tx pgx.Tx, directiveID string) ([]SentAttachment, error) {
-	rows, err := tx.Query(ctx, `WITH RECURSIVE chain (id, supersedes, resends, depth) AS (
-			SELECT id, supersedes, resends, 0 FROM directives WHERE id = $1
-			UNION ALL
-			SELECT d.id, d.supersedes, d.resends, c.depth + 1 FROM chain c
-			JOIN directives d ON d.id IN (c.supersedes, c.resends)
-			  AND d.text = (SELECT text FROM directives WHERE id = $1)
-			WHERE c.depth < 32)
-		SELECT a.name, a.content_type, a.object_key, a.bytes FROM attachments a
-		JOIN (SELECT id, min(depth) AS depth FROM chain GROUP BY id) c ON c.id = a.directive_id
-		WHERE c.depth = (SELECT min(c2.depth) FROM chain c2 JOIN attachments a2 ON a2.directive_id = c2.id)
-		ORDER BY a.position`, directiveID)
+	rows, err := tx.Query(ctx, `SELECT a.name, a.content_type, a.object_key, a.bytes FROM attachments a
+		WHERE a.id IN (`+directiveImages+`) ORDER BY a.position`, directiveID)
 	if err != nil {
 		return nil, err
 	}
 	return pgx.CollectRows(rows, pgx.RowToStructByPos[SentAttachment])
+}
+
+// directiveImages selects (SQL, $1 a directive id) the ids of the images
+// its words carry (DirectiveAttachments).
+const directiveImages = `WITH RECURSIVE chain (id, supersedes, resends, depth) AS (
+		SELECT id, supersedes, resends, 0 FROM directives WHERE id = $1
+		UNION ALL
+		SELECT d.id, d.supersedes, d.resends, c.depth + 1 FROM chain c
+		JOIN directives d ON d.id IN (c.supersedes, c.resends)
+		  AND d.text = (SELECT text FROM directives WHERE id = $1)
+		WHERE c.depth < 32)
+	SELECT a.id FROM attachments a
+	JOIN (SELECT id, min(depth) AS depth FROM chain GROUP BY id) c ON c.id = a.directive_id
+	WHERE c.depth = (SELECT min(c2.depth) FROM chain c2 JOIN attachments a2 ON a2.directive_id = c2.id)`
+
+// directiveAttachmentInfo is the metadata of the images directive id's
+// words carry (DirectiveAttachments), in order, for its event.
+func directiveAttachmentInfo(ctx context.Context, tx pgx.Tx, id string) ([]json.RawMessage, error) {
+	rows, err := tx.Query(ctx, `SELECT `+attachmentJSON+` FROM attachments a
+		WHERE a.id IN (`+directiveImages+`) ORDER BY a.position`, id)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[json.RawMessage])
 }
 
 // promptAttachments selects (SQL, $1 a Run id, then columns) the images
