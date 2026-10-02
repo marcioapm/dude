@@ -127,6 +127,38 @@ export type ForgeConnection =
       webhook: WebhookHealth;
     };
 
+/** One permission on one repository, as Verify found it. */
+export interface ForgePermission {
+  permission: string;
+  level: "required" | "optional";
+  outcome: "ok" | "missing" | "untested";
+  reason: string;
+}
+
+export interface ForgeRepositoryPermissions {
+  id: string;
+  name: string;
+  projectName: string;
+  slug: string | null;
+  error?: string;
+  permissions: ForgePermission[];
+}
+
+/**
+ * `POST /v1/forge/credential/verify`: who the token is and what it may do on
+ * each repository; `ok` is false when a required permission is missing. A
+ * token GitHub would not even identify has a `reason` instead.
+ */
+export type ForgeVerification =
+  | {
+      ok: boolean;
+      login: string | null;
+      scopes: string | null;
+      tokenKind: "classic" | "fine_grained" | "unknown";
+      repositories: ForgeRepositoryPermissions[];
+    }
+  | { ok: false; reason: string };
+
 /** Whether GitHub's webhooks reach dude, and each repository's hook. */
 export interface WebhookHealth {
   lastDeliveryAt: string | null;
@@ -460,8 +492,8 @@ export class ApiClient {
     return this.#request("GET", "/v1/forge/credential");
   }
 
-  /** Ask GitHub who the stored token is. */
-  verifyForge(): Promise<{ ok: true; login: string | null; scopes: string | null } | { ok: false; reason: string }> {
+  /** Ask GitHub who the stored token is, and what it may do on each repository. */
+  verifyForge(): Promise<ForgeVerification> {
     return this.#request("POST", "/v1/forge/credential/verify", {});
   }
 

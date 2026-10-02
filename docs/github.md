@@ -2,7 +2,9 @@
 
 Dude uses an organization's GitHub credential both for Git clone/push (passed to lux) and for the forge API: pull requests, checks, reviewer requests, branch updates, merges and webhooks. Configure it in the organization's GitHub settings.
 
-Use a **fine-grained personal access token (PAT)** limited to the repositories dude should work on. Select their resource owner, then **Only select repositories**. The token owner must also have the necessary repository access. Token permissions do not grant rights the owner lacks; organization approval, SSO policies and branch rules still apply.
+Use a **fine-grained personal access token (PAT)** limited to the repositories dude should work on, **unless dude must read CI check runs** (GitHub Actions and most CI apps report that way): GitHub offers fine-grained tokens no permission that reads check runs, so only a classic token with `repo` (or, once dude supports one, a GitHub App) can. With a fine-grained token, dude sees only commit statuses and every pull request shows "CI unavailable". For a fine-grained token, select its resource owner, then **Only select repositories**. The token owner must also have the necessary repository access. Token permissions do not grant rights the owner lacks; organization approval, SSO policies and branch rules still apply.
+
+**Verify** (Organization settings → GitHub) tests each of these on every repository of the organization's projects without changing anything on GitHub, and says which is missing, or why one could not be tested.
 
 ## Fine-grained PAT
 
@@ -13,8 +15,9 @@ Repository permissions:
 - **Contents: Read and write** — clone, push commits, create/update/delete task branches, update a PR branch and merge when delivery policy permits it.
 - **Pull requests: Read and write** — open/read PRs, read feedback and review threads, and request reviewers.
 - **Metadata: Read** — repository information and collaborator permission checks; GitHub includes this automatically.
-- **Checks: Read** — read check runs, their conclusions and annotations.
 - **Commit statuses: Read** — read combined commit status, including CI that reports statuses rather than check runs.
+
+Check runs cannot be granted: there is no Checks permission for fine-grained tokens. GitHub answers 403 ("Resource not accessible by personal access token", `X-Accepted-GitHub-Permissions: checks=read`) to the listing on any commit that has check runs, whatever else the token is granted. Use a classic PAT (below) when dude must see CI that reports check runs.
 
 ### Enable only for the operations you want
 
@@ -27,9 +30,9 @@ For full delivery including CI workflow edits, CI reruns and automatic webhook s
 
 ## Classic PAT
 
-Prefer a fine-grained PAT because classic scopes are broader and not restricted to selected repositories. If a classic token is necessary:
+Classic scopes are broader and not restricted to selected repositories, but a classic token is the only token kind that reads check runs today. If a classic token is used:
 
-- **`repo`** — code and PR operations on private repositories, including repository hooks. For a strictly public-only setup, **`public_repo`** is the narrower alternative.
+- **`repo`** — code and PR operations on private repositories, including repository hooks and reading check runs. For a strictly public-only setup, **`public_repo`** is the narrower alternative.
 - **`workflow`** — additionally required to create/update workflow files under `.github/workflows/`.
 - **`read:org`** — additionally required for private organization membership checks when that feedback policy is enabled.
 
@@ -57,13 +60,13 @@ This is not a model or connectivity failure. Do not change the workflow or broad
 
 Check the failed operation against the corresponding permission above. GitHub REST responses expose `X-Accepted-GitHub-Permissions`; multiple acceptable permission combinations may be listed. Classic tokens instead expose scope headers such as `X-OAuth-Scopes`.
 
-A token verification check that can read `/user` does not establish code, workflow, PR, webhook or CI-rerun access. Permissions are per operation, not a single “GitHub connected” boolean.
+A token verification check that can read `/user` does not establish code, workflow, PR, webhook or CI-rerun access. Permissions are per operation, not a single “GitHub connected” boolean; dude's Verify probes each one per repository for that reason.
 
 ### A pull request shows “CI pending” or “CI unavailable” while GitHub shows results
 
-**CI unavailable**, with the warning *GitHub refused the check-runs read; check the token's Checks: Read permission and its repository/organization access (SSO, token approval).*, means GitHub answered 403 to the check-runs listing for the pull request's head, without marking it as a rate limit. Check runs are how GitHub Actions and most CI apps report, so the checks dude shows are only what it could read, commonly commit statuses such as CodeRabbit's. dude keeps the pull request out of ready-to-merge and refuses to merge it, but wakes no fixer and re-runs nothing for this.
+**CI unavailable**, with the warning *GitHub refused the check-runs read; a fine-grained token cannot read check runs, so use a classic token with the repo scope (or a GitHub App once supported), and check SSO authorization, organization token approval and the token's repository access*, means GitHub answered 403 to the check-runs listing for the pull request's head, without marking it as a rate limit. Check runs are how GitHub Actions and most CI apps report, so the checks dude shows are only what it could read, commonly commit statuses such as CodeRabbit's. dude keeps the pull request out of ready-to-merge and refuses to merge it, but wakes no fixer and re-runs nothing for this.
 
-The 403 does not say why. A missing **Checks: Read** (classic PAT: `repo`) is the common cause, but SSO enforcement, organization token approval, a repository left out of the token's selection or the owner losing access answer the same way; check each. The next sync (a webhook, or the reconciler within 15 minutes) clears the warning and records it on the task. A rate limit is not reported this way, including GitHub's "abuse detection" secondary limit: it fails the sync, which is retried.
+The 403 does not say why. With a **fine-grained token** it is expected and cannot be fixed by granting anything: GitHub has no Checks permission for fine-grained tokens. Replace it with a classic token with `repo` (or a GitHub App once dude supports one). With a classic token, a missing `repo` scope, SSO authorization not given to the token, organization token approval, or the owner losing access to the repository answer the same way; check each. Verify in Organization settings → GitHub says which applies per repository. The next sync (a webhook, or the reconciler within 15 minutes) clears the warning and records it on the task. A rate limit is not reported this way, including GitHub's "abuse detection" secondary limit: it fails the sync, which is retried.
 
 **CI pending** with no warning means dude has no verdict on the head commit yet: checks queued or running, CI yet to register on a new push, or a run cancelled or waiting on approval. It does not claim that anything is running. Pending past the organization's patience asks a person.
 

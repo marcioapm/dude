@@ -577,7 +577,8 @@ func mergeable(ok *bool, state string, behindBy int) string {
 //
 // Every page of check runs: a matrix build has more than one holds, and the
 // failing one may be on the last. GitHub Enterprise without Actions has no
-// such endpoint (404): no check runs. A token without Checks: read is
+// such endpoint (404): no check runs. A token that may not read check runs
+// (any fine-grained token, a classic one without repo) is
 // refused (403): there may be CI it cannot see, so the checks are never
 // read as passing — pending, which holds readiness back without waking a
 // fixer — and the list says why with a CheckRunsForbidden entry beside the
