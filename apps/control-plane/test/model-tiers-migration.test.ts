@@ -23,6 +23,16 @@ const NAME = `dude_tiers_test_${Bun.randomUUIDv7("hex").slice(-12)}`;
 let admin: SQL;
 let db: SQL;
 
+function databaseUrl(appRole = false): string {
+  const url = new URL(OWNER_URL);
+  if (appRole) {
+    url.username = "dude_app";
+    url.password = "dude_app";
+  }
+  url.pathname = `/${NAME}`;
+  return url.toString();
+}
+
 const ACME = {
   investigator: { model: "llm-anthropic/claude-fable-5-1" },
   reviewer: { model: "llm-anthropic/claude-fable-5-1", effort: "high" },
@@ -35,25 +45,24 @@ const ACME = {
 beforeAll(async () => {
   admin = new SQL(OWNER_URL);
   await admin.unsafe(`CREATE DATABASE "${NAME}"`);
-  const url = new URL(OWNER_URL);
-  url.pathname = `/${NAME}`;
-  db = new SQL(url.toString());
+  db = new SQL(databaseUrl());
   const files = await listMigrationFiles();
   await db`CREATE TABLE schema_migrations (version text PRIMARY KEY, name text NOT NULL, checksum text NOT NULL,
            applied_at timestamptz NOT NULL DEFAULT now())`;
   for (const f of files.filter((f) => f.version < "066")) await db.unsafe(await f.contents());
 
-  await db`INSERT INTO organizations (id, name, slug, default_agent_models) VALUES ('org_acme', 'Acme', 'acme', ${ACME}::jsonb)`;
+  const organization = (id: string, name: string, models: unknown = {}) =>
+    db`INSERT INTO organizations (id, name, slug, default_agent_models) VALUES (${id}, ${name}, ${name.toLowerCase()}, ${models}::jsonb)`;
+  await organization("org_acme", "Acme", ACME);
   // A tie between two models: the first role in Thinker's order wins.
-  await db`INSERT INTO organizations (id, name, slug, default_agent_models) VALUES ('org_tie', 'Tie', 'tie',
-    ${{ reviewer: { model: "llm-openai/gpt-5.6-sol" }, investigator: { model: "llm-anthropic/claude-fable-5-1" } }}::jsonb)`;
-  await db`INSERT INTO organizations (id, name, slug) VALUES ('org_none', 'None', 'none')`;
+  await organization("org_tie", "Tie",
+    { reviewer: { model: "llm-openai/gpt-5.6-sol" }, investigator: { model: "llm-anthropic/claude-fable-5-1" } });
+  await organization("org_none", "None");
   // Most of Thinker's roles name one model; its first role names another.
-  await db`INSERT INTO organizations (id, name, slug, default_agent_models) VALUES ('org_most', 'Most', 'most',
-    ${{ investigator: { model: "llm-anthropic/claude-sonnet-5-5" }, reviewer: { model: "llm-anthropic/claude-fable-5-1" },
-        simplifier: { model: "llm-anthropic/claude-fable-5-1" } }}::jsonb)`;
-  await db`INSERT INTO organizations (id, name, slug, default_agent_models) VALUES ('org_fake', 'Fake', 'fake',
-    ${{ implementer: { model: "fake/scripted" }, reviewer: { model: "fake/scripted" } }}::jsonb)`;
+  await organization("org_most", "Most",
+    { investigator: { model: "llm-anthropic/claude-sonnet-5-5" }, reviewer: { model: "llm-anthropic/claude-fable-5-1" },
+      simplifier: { model: "llm-anthropic/claude-fable-5-1" } });
+  await organization("org_fake", "Fake", { implementer: { model: "fake/scripted" }, reviewer: { model: "fake/scripted" } });
   const project = (id: string, org: string, models: unknown) =>
     db`INSERT INTO projects (id, organization_id, name, slug, key_prefix, agent_models) VALUES (${id}, ${org}, ${id}, ${id}, 'P', ${models}::jsonb)`;
   // Matches Thinker's model; another's model no tier asks for, twice; an effort alone.
@@ -63,14 +72,13 @@ beforeAll(async () => {
   // A name too long for a tier's, and a model no tier can hold.
   await project("prj_long", "org_none", { implementer: { model: `llm-openai/${"m".repeat(30)}` }, reviewer: { model: "llm-openai/a b" } });
   // Bedrock-style ids alike in their first 24 characters, and a model named as a seeded tier is, in another case.
-  await db`INSERT INTO organizations (id, name, slug, default_agent_models) VALUES ('org_bed', 'Bed', 'bed',
-    ${{ implementer: { model: "llm-anthropic/claude-opus-5-5" } }}::jsonb)`;
+  await organization("org_bed", "Bed", { implementer: { model: "llm-anthropic/claude-opus-5-5" } });
   await project("prj_bed1", "org_bed", { reviewer: { model: "llm-openai/anthropic.claude-3-5-sonnet-20240620-v1:0" } });
   await project("prj_bed2", "org_bed", { reviewer: { model: "llm-openai/anthropic.claude-3-5-sonnet-20241022-v2:0" } });
   await project("prj_bed3", "org_bed", { simplifier: { model: "llm-openai/FAST" } });
   // The orchestrator's role naming a model; a project's fixer naming Coder's model.
-  await db`INSERT INTO organizations (id, name, slug, default_agent_models) VALUES ('org_shapes', 'Shapes', 'shapes',
-    ${{ orchestrator: { model: "llm-anthropic/claude-fable-5-1", effort: "low" }, implementer: { model: "llm-anthropic/claude-opus-5-5" } }}::jsonb)`;
+  await organization("org_shapes", "Shapes",
+    { orchestrator: { model: "llm-anthropic/claude-fable-5-1", effort: "low" }, implementer: { model: "llm-anthropic/claude-opus-5-5" } });
   await project("prj_coder", "org_shapes", { fixer: { model: "llm-anthropic/claude-opus-5-5" } });
   // A project on the scripted agent, in an organization whose tiers ask for it.
   await project("prj_fake", "org_fake", { implementer: { model: "fake/scripted" } });
@@ -234,11 +242,7 @@ describe("an organization made after", () => {
 
 describe("the database refuses what the API would", () => {
   const asApp = async <T>(org: string, fn: (sql: SQL) => Promise<T>): Promise<string> => {
-    const url = new URL(OWNER_URL);
-    url.username = "dude_app";
-    url.password = "dude_app";
-    url.pathname = `/${NAME}`;
-    const app = new SQL(url.toString());
+    const app = new SQL(databaseUrl(true));
     try {
       return await app.begin(async (tx) => {
         await tx`SELECT set_config('app.organization_id', ${org}, true)`;
