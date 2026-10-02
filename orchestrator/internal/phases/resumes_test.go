@@ -114,7 +114,13 @@ func (w *resumeWorld) resume(before lux.Run) {
 
 func (w *resumeWorld) resumeAnswered(before, resumed lux.Run) {
 	w.t.Helper()
-	foreseen := w.s.resumeAsked(w.ctx, w.run, before)
+	w.accepted(w.s.resumeAsked(w.ctx, w.run, before), resumed)
+}
+
+// accepted is the transaction that moves the Run back to running once lux
+// accepted the resume dude foresaw as epoch foreseen, without asking again.
+func (w *resumeWorld) accepted(foreseen int, resumed lux.Run) {
+	w.t.Helper()
 	if err := w.s.DB.InOrg(w.ctx, w.run.Org, func(tx pgx.Tx) error {
 		w.s.resumeAccepted(w.ctx, tx, w.run, foreseen, resumed)
 		_, err := tx.Exec(w.ctx, `UPDATE runs SET status = 'running', lux_state = 'resuming', dude_pause = NULL,

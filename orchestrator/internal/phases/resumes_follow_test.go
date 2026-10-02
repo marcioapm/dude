@@ -353,6 +353,37 @@ func TestAnOlderEpochsRunningStateBeforeTheMoveMarksNothingMissed(t *testing.T) 
 	}
 }
 
+// A trailing busy of the stopped epoch, committed after the resume was
+// asked and before the row moves to the epoch lux names, is no frame of
+// that epoch: the agent's activity it records carries no epoch. The moved
+// row is not marked frames_missed, and its own frames stamp it.
+func TestAnOlderEpochsActivityAfterTheAskMarksNothingMissed(t *testing.T) {
+	w := newResumeWorld(t)
+	base := time.Now().Add(-time.Minute).UTC()
+	w.exec(`UPDATE runs SET agent_session_epoch = 1 WHERE id = $1`, w.run.ID)
+	foreseen := w.s.resumeAsked(w.ctx, w.run, stoppedOnHost1(base))
+	if foreseen != 2 {
+		t.Fatalf("foreseen epoch %d, want 2", foreseen)
+	}
+	w.follow(busy(1))
+	if n := w.count(`SELECT count(*) FROM runs r JOIN run_resumes rr ON rr.run_id = r.id
+		WHERE r.id = $1 AND rr.epoch = 2 AND r.agent_active_at >= rr.requested_at`); n != 1 {
+		t.Fatalf("epoch 1's busy is not committed at or after the resume was asked")
+	}
+	w.accepted(foreseen, lux.Run{Epoch: 3, State: "resuming"})
+	if row := w.row(3); row["frames_missed"] != false {
+		t.Errorf("frames_missed = %v on epoch 3's row after only epoch 1's activity, want false", row["frames_missed"])
+	}
+	w.follow(record(3, "lux.session", map[string]any{"sessionId": "s1"}), busy(3), spoke(3))
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND agent_session_epoch = 3`); n != 1 {
+		t.Errorf("epoch 3's session was not recorded")
+	}
+	if row := w.row(3); row["busy_at"] == nil || row["first_output_at"] == nil {
+		t.Errorf("epoch 3's frames after the move were not stamped: busy %v, first output %v",
+			row["busy_at"], row["first_output_at"])
+	}
+}
+
 // otherEpochLux resumes the Run into epoch 3 (dude foresees 2), streaming
 // and having committed its session, busy and one chunk before it answers.
 type otherEpochLux struct {
