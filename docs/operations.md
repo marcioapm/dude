@@ -225,7 +225,11 @@ keeps lux's server id; it never reads a hostname back.
   or a URL opened after "no answer", tries one more new Run. The count
   resets once a start runs. A Run that ran and then crashed or lost its
   host is resumed from its snapshot as before: only a start that never ran
-  counts.
+  counts. "Never ran" is read from lux's own order of the Run's events
+  (`runs.lux_start_event`, `runs.lux_ran_event`): no `running` since the
+  `resuming` (or the new Run's first event) that began the start. It does
+  not depend on dude's status, or on whether the feed or the wake's own
+  answer from lux is recorded first; each event is applied once.
 - **Unused**: lux reports a server idle after `idleAfter` without a
   request; once every server of the preview is, dude stops the Run (its
   checkout and state volume kept for the next wake). lux reports idleness
