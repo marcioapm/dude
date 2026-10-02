@@ -53,24 +53,21 @@ export function TaskMetricsSection({ client, taskId, attempt, setAside, live, do
   done: boolean;
   version: number;
 }) {
-  const [m, setM] = useState<{ attempt: number | undefined; metrics: TaskMetrics } | null>(null);
+  const [read, setRead] = useState<{ attempt: number | undefined; metrics: TaskMetrics } | null>(null);
   useEffect(() => {
     let current = true;
-    void client.taskMetrics(taskId, attempt).then((metrics) => current && setM({ attempt, metrics }), () => {});
+    void client.taskMetrics(taskId, attempt).then((metrics) => current && setRead({ attempt, metrics }), () => {});
     return () => {
       current = false;
     };
   }, [client, taskId, attempt, version]);
   // Another attempt's figures are never shown for this one, even for the moment before its own arrive.
-  if (!m || m.attempt !== attempt || m.metrics.runs.length === 0) return null;
-  return <TaskMetricsFigures m={m.metrics} live={live} sub={setAside ? "start to set aside" : done ? "asked to done" : "so far"} />;
-}
-
-function TaskMetricsFigures({ m, live, sub }: { m: TaskMetrics; live: boolean; sub: string }) {
+  if (!read || read.attempt !== attempt || read.metrics.runs.length === 0) return null;
+  const m = read.metrics;
   return (
     <Section title="Time & cost" data-testid="task-metrics">
       <MetricGroup joined>
-        <MetricTile size="sm" label="Lead time" value={m.leadMs} unit="ms" live={live} sub={sub} />
+        <MetricTile size="sm" label="Lead time" value={m.leadMs} unit="ms" live={live} sub={setAside ? "start to set aside" : done ? "asked to done" : "so far"} />
         <MetricTile size="sm" label="Agents working" value={m.activeMs} unit="ms" live={live} />
         <MetricTile size="sm" label="Waiting on people" value={m.humanWaitMs} unit="ms" />
         <MetricTile size="sm" label="In review" value={m.reviewMs} unit="ms" />
