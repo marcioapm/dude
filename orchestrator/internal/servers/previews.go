@@ -1,8 +1,10 @@
 package servers
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -53,6 +55,9 @@ type Previews struct {
 	ReapAfter time.Duration
 	// How many wakeable previews one sweep takes at most; zero is 1000.
 	SweepLimit int
+	// How long a wake's drain may page lux's events in all; zero is 30
+	// seconds.
+	DrainFor time.Duration
 
 	mu        sync.Mutex
 	following map[string]context.CancelFunc
@@ -476,27 +481,67 @@ func (p *Previews) Stop() {
 // followEvents applies lux's lifecycle events for a preview: its state,
 // where its checkout started, and its servers'. A preview has no agent,
 // and lux leaves its servers' output out of the stream, so its records are
-// skipped: only the event position is kept.
+// skipped: only the event position is kept. lux ends every stream it
+// finishes with an end frame: one that stops without it was cut short
+// (errNoEnd).
 func (p *Previews) followEvents(ctx context.Context, r previewRun) error {
-	var after int64
-	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT lux_after_event FROM runs WHERE id = $1`, r.ID).Scan(&after)
-	}); err != nil {
+	after, err := p.afterEvent(ctx, r)
+	if err != nil {
 		return err
 	}
-	return p.Lux.Output(ctx, r.LuxRunID, "", after, func(f lux.Frame) error {
+	ended := false
+	err = p.Lux.Output(ctx, r.LuxRunID, "", after, func(f lux.Frame) error {
+		if f.Kind == "end" {
+			ended = true
+		}
 		if f.Kind != "lux" {
 			return nil
 		}
-		return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-			if err := p.luxEvent(ctx, tx, r, f); err != nil {
-				return err
-			}
-			_, err := tx.Exec(ctx, `UPDATE runs SET lux_after_event = GREATEST(lux_after_event, $2) WHERE id = $1`, r.ID, f.EventID)
+		return p.applyEvent(ctx, r, f)
+	})
+	if err == nil && !ended {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return errNoEnd
+	}
+	return err
+}
+
+// afterEvent is the id of the last lux event applied to the preview.
+func (p *Previews) afterEvent(ctx context.Context, r previewRun) (int64, error) {
+	var after int64
+	err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT lux_after_event FROM runs WHERE id = $1`, r.ID).Scan(&after)
+	})
+	return after, err
+}
+
+// applyEvent applies one lux lifecycle event (a "lux" frame, from the
+// output stream or a page of GET events) to the preview and moves its
+// cursor past it, in one transaction holding the row.
+func (p *Previews) applyEvent(ctx context.Context, r previewRun, f lux.Frame) error {
+	return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		var current bool
+		var applied int64
+		if err := tx.QueryRow(ctx, `SELECT lux_run_id IS NOT DISTINCT FROM $2, lux_after_event FROM runs WHERE id = $1 FOR UPDATE`,
+			r.ID, r.LuxRunID).Scan(&current, &applied); err != nil {
 			return err
-		})
+		}
+		// A retired Run's stream may still drain; a follower or wake drain
+		// may also have applied this event already.
+		if !current || f.EventID <= applied {
+			return nil
+		}
+		if err := p.luxEvent(ctx, tx, r, f); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `UPDATE runs SET lux_after_event = GREATEST(lux_after_event, $2) WHERE id = $1`, r.ID, f.EventID)
+		return err
 	})
 }
+
+var errNoEnd = errors.New("lux's event stream stopped without its end")
 
 func (p *Previews) luxEvent(ctx context.Context, tx pgx.Tx, r previewRun, f lux.Frame) error {
 	var d map[string]any
@@ -506,12 +551,18 @@ func (p *Previews) luxEvent(ctx context.Context, tx pgx.Tx, r previewRun, f lux.
 	case f.EventType == "state":
 		// A move is not an end: lux resumes it (lux.Recorded).
 		state := lux.Recorded(str("state"), str("reason"))
+		var wakeable, ran bool
+		var failures int
 		// Running is a start: what its idle time counts from. A preview dude
 		// did not stop that ends has failed (a clone, its image); one it
 		// stopped is parked or finished, as dude already recorded. A
 		// wakeable one goes back to sleep instead, its error kept: lux can
-		// resume a failed Run, and the next request wakes it.
-		if _, err := tx.Exec(ctx, `UPDATE runs SET lux_state = $2,
+		// resume a Run that crashed, and the next request wakes it. One
+		// whose current start never ran (no running since it began: at a
+		// resuming, or at dude's submit of a new Run) is a failed start
+		// (startFailed), whatever dude's status says meanwhile. Only a
+		// resuming begins a start here: an end or a running never does.
+		if err := tx.QueryRow(ctx, `UPDATE runs SET lux_state = $2,
 			started_at = CASE WHEN $2 = 'running' THEN COALESCE(started_at, now()) ELSE started_at END,
 			active_since = CASE WHEN $2 = 'running' THEN now() ELSE active_since END,
 			status = CASE WHEN $2 = 'running' AND status IN ('scheduled', 'starting') THEN 'running'::run_status
@@ -521,13 +572,27 @@ func (p *Previews) luxEvent(ctx context.Context, tx pgx.Tx, r previewRun, f lux.
 			dude_pause = CASE WHEN $3 AND lux_stop_reason IS NULL AND status IN ('scheduled', 'starting', 'running') AND wakeable
 			                  THEN 'unused' ELSE dude_pause END,
 			error = CASE WHEN $3 AND lux_stop_reason IS NULL AND status IN ('scheduled', 'starting', 'running')
-			             THEN 'the preview stopped: ' || COALESCE(NULLIF($4, ''), $2) ELSE error END,
+			             THEN 'the preview stopped: ' || COALESCE(NULLIF($4, ''), $2)
+			             WHEN $2 = 'running' AND start_failures > 0 THEN NULL ELSE error END,
+			start_failures = CASE WHEN $2 = 'running' THEN 0 ELSE start_failures END,
+			lux_start_event = CASE WHEN $2 = 'resuming' THEN GREATEST(lux_start_event, $5) ELSE lux_start_event END,
+			lux_ran_event = CASE WHEN $2 = 'running' THEN GREATEST(lux_ran_event, $5) ELSE lux_ran_event END,
 			ended_at = CASE WHEN $3 AND lux_stop_reason IS NULL AND status IN ('scheduled', 'starting', 'running') AND NOT wakeable
 			                THEN now() ELSE ended_at END
-			WHERE id = $1`, r.ID, state, lux.Terminal(state), str("reason")); err != nil {
+			WHERE id = $1
+			RETURNING wakeable, lux_ran_event >= lux_start_event, start_failures`, r.ID, state, lux.Terminal(state), str("reason"), f.EventID).
+			Scan(&wakeable, &ran, &failures); err != nil {
 			return err
 		}
-		return phases.ServersChanged(ctx, tx, r.Org, r.ProjectID, r.TaskID, r.ID, map[string]any{"change": "state", "luxState": state})
+		change := map[string]any{"change": "state", "luxState": state}
+		if wakeable && !ran && (state == "failed" || state == "lost") {
+			why, err := p.startFailed(ctx, tx, r, failures+1, cmp.Or(str("reason"), state))
+			if err != nil {
+				return err
+			}
+			change["error"] = why
+		}
+		return phases.ServersChanged(ctx, tx, r.Org, r.ProjectID, r.TaskID, r.ID, change)
 	case f.EventType == "git.checkout":
 		_, err := tx.Exec(ctx, `UPDATE runs SET base_shas = jsonb_build_object($2::text, $3::text) || base_shas WHERE id = $1`,
 			r.ID, str("repo"), str("base"))
