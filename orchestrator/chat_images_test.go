@@ -164,13 +164,16 @@ func TestAReferenceToAnImageNotTheTasksReadsAsUnavailable(t *testing.T) {
 	wi, other := w.task(), w.task()
 	w.upload(b, "att_theirs", other, "theirs.png", screenshot)
 	w.describe(other, "Theirs: ![theirs.png](attachment:att_theirs)")
-	w.describe(wi, "See ![theirs.png](attachment:att_theirs) and ![gone.png](attachment:att_gone).")
+	w.describe(wi, "See ![theirs.png](attachment:att_theirs) and ![gone.png](attachment:att_gone) and ![unsent.png](attachment:att_unsent).")
+	// This task's own upload, referenced but not attached: liable to be swept, so not the agent's.
+	w.upload(b, "att_unsent", wi, "unsent.png", screenshot)
 	w.deliver(wi)
 	w.until("the implementer to be submitted", func() bool { return len(w.lux.Runs()) >= 1 })
 	if got := promptImages(t, w.lux.Runs()[0].Spec); len(got) != 0 {
 		t.Errorf("the agent was given %v", got)
 	}
-	if p := w.lux.Runs()[0].Prompt(); !strings.Contains(p, "See [Image unavailable: theirs.png] and [Image unavailable: gone.png].") {
+	if p := w.lux.Runs()[0].Prompt(); !strings.Contains(p,
+		"See [Image unavailable: theirs.png] and [Image unavailable: gone.png] and [Image unavailable: unsent.png].") {
 		t.Errorf("the prompt:\n%s", p)
 	}
 }
