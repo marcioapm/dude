@@ -424,6 +424,8 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec) (
 	var sizes delivery.Sizes
 	var tier delivery.Tier
 	var noTier string
+	settingsRole := delivery.PromptRoleForPhase[r.Phase]
+	var settings delivery.RoleSettings
 	_ = json.Unmarshal(r.PRFeedback, &feedback)
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
@@ -434,7 +436,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec) (
 			return fmt.Errorf("load task: %w", err)
 		}
 		var err error
-		settingsRole := delivery.PromptRoleForPhase[r.Phase]
+		settings = delivery.ResolveRole(settingsRole, projectModels, orgModels)
 		if stored != nil {
 			// A resume goes on with what the Run was submitted with, whatever
 			// its tier says now: lux keeps the spec's env, model and all.
@@ -442,7 +444,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec) (
 				Scan(&tier.Model, &tier.Name); err != nil {
 				return fmt.Errorf("load run model: %w", err)
 			}
-		} else if tier, noTier, err = delivery.TierFor(ctx, tx, settingsRole, delivery.ResolveRole(settingsRole, projectModels, orgModels)); err != nil || noTier != "" {
+		} else if tier, noTier, err = delivery.TierFor(ctx, tx, settingsRole, settings); err != nil || noTier != "" {
 			return err
 		}
 		if sizes, err = delivery.LoadSizes(ctx, tx); err != nil {
@@ -488,7 +490,6 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec) (
 		return lux.Spec{}, nil, errNoModel(noTier)
 	}
 	role := delivery.RoleForPhase[r.Phase]
-	settings := delivery.ResolveRole(delivery.PromptRoleForPhase[r.Phase], projectModels, orgModels)
 
 	var ac []string
 	_ = json.Unmarshal(criteria, &ac)
