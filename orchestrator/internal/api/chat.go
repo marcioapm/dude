@@ -98,6 +98,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, org string) error 
 			return qerr
 		}
 		if qerr == nil {
+			ri := runInfo{ProjectID: projectID, TaskID: taskID, Role: delivery.RoleConductor}
 			if err := ownerOnly(r.Context(), tx, taskID, p.Person, "answer"); err != nil {
 				return err
 			}
