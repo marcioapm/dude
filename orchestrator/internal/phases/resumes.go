@@ -157,6 +157,10 @@ func (s *Syncer) resumeRefused(ctx context.Context, r phaseRun, epoch int) {
 // assigns the new placement, after the answer; an epoch above the
 // foreseen one means lux had already assigned it and moved on (a
 // placement failed and was rescheduled). No epoch (a 409) is 0.
+// Known limit: a fresh resume from a newer epoch lux placed and stopped on
+// its own after dude's Get looks already assigned, so it goes untimed (the
+// Run is unaffected): telling them apart needs placement data the answer
+// lacks, or a Get per resume, which dude does not make.
 func resumedEpoch(foreseen int, resumed lux.Run) int {
 	return max(foreseen, resumed.Epoch)
 }
