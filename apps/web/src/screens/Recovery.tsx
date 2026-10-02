@@ -238,8 +238,8 @@ export function PickUpDialog({ client, task, stop, options, initial, onEdit, onC
             the place is as tall as the longest, so choosing never moves the
             dialog's edges or the note under it. */}
         <div className="pickUpWhatItDoes">
-          {(["resume", "retry", "restart"] as const).map((a) => (
-            <div key={a} className="pickUpWay" hidden={a !== action} aria-hidden={a !== action}>
+          {choices.map(({ value: a }) => (
+            <div key={a} className="pickUpWay" data-shown={a === action}>
               <ul className="pickUpEffects" aria-label="What it does">
                 {effects(a, role, branch, head, options.attempt).map((e) => (
                   <li key={e.what} data-how={e.how}>
@@ -252,7 +252,7 @@ export function PickUpDialog({ client, task, stop, options, initial, onEdit, onC
               {a === "restart" ? (
                 <Callout tone="info">
                   What the task asks for can change before attempt {options.attempt + 1} starts.{" "}
-                  <Button size="sm" variant="quiet" leadingIcon="edit" onClick={onEdit} tabIndex={a === action ? undefined : -1}>Edit the task first</Button>
+                  <Button size="sm" variant="quiet" leadingIcon="edit" onClick={onEdit}>Edit the task first</Button>
                 </Callout>
               ) : null}
             </div>

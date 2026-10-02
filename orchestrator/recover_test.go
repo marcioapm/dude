@@ -6,12 +6,16 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // aborted delivers a task whose implementer hangs until it is aborted; the
@@ -520,5 +524,46 @@ func TestAnEarlierAttemptsRunsAreNotSignalledToTheNext(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM workflow_signals WHERE payload->>'runId' = $1`, runID); n != 0 {
 		t.Errorf("attempt 1's run was signalled %d times", n)
+	}
+}
+
+// A resume whose first answer was lost is asked again, and lux answers
+// 409 because the Run is already up: that is not a refusal, and the Run
+// goes on.
+func TestAResumeLuxAlreadyTookIsNotFailed(t *testing.T) {
+	w := newWorld(t)
+	wi, runID := w.aborted()
+	// The first resume reaches lux, but its answer is lost; every one after
+	// is answered as lux answers a Run that is already resuming or running.
+	var resumes atomic.Int32
+	handler := w.lux.Handler()
+	proxy := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		if strings.HasSuffix(req.URL.Path, "/resume") && req.Method == http.MethodPost {
+			if resumes.Add(1) == 1 {
+				handler.ServeHTTP(httptest.NewRecorder(), req)
+				http.Error(rw, "gateway timeout", http.StatusGatewayTimeout)
+				return
+			}
+			rw.Header().Set("Content-Type", "application/json")
+			rw.WriteHeader(http.StatusConflict)
+			_, _ = rw.Write([]byte(`{"error":{"code":"not_resumable","message":"run is running: stop it first"}}`))
+			return
+		}
+		handler.ServeHTTP(rw, req)
+	}))
+	t.Cleanup(proxy.Close)
+	w.syncer.Lux = lux.New(proxy.URL, "lux-key")
+	w.syncer.RetryAhead = time.Minute
+	if status, body := w.call("/internal/tasks/"+wi+"/recover", map[string]any{"action": "resume"}); status != 200 {
+		t.Fatalf("resume: %d %v", status, body)
+	}
+	w.until("the resumed run to finish its turn", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
+	})
+	if resumes.Load() < 2 {
+		t.Fatalf("the resume was asked %d times: the lost answer was never retried", resumes.Load())
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND error LIKE 'cannot resume%'`, runID); n != 0 {
+		t.Errorf("a resume lux had already taken failed the run")
 	}
 }

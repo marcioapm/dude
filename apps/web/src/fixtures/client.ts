@@ -16,6 +16,7 @@ import type { NavProject } from "@dude/design-system";
 import { canStart, canStop } from "@dude/design-system";
 import type { AddServer, PersistedEvent, PreviewSettings, Recipe, RecipeInput, RunServer, SettingsResponse, TaskServers } from "@dude/domain";
 import { egressProblem } from "@dude/domain";
+import { RUN_KEY } from "./scenario.ts";
 import type { ServerLogLine } from "@dude/design-system";
 import { ApiClient, ApiError, type Member, type ProjectDetail, type RecoverAction, type RecoveryOptions, type ReviewerCandidate, type Run, type RunDetail, type TaskDetail, type TaskMetrics } from "../api/client.ts";
 import { EPIC, FINDINGS, MACHINE_SIZES, METRICS, ORG, PEOPLE, PROJECT, PULL_REQUEST, REVIEWERS, RUN_ID, RUN_IMPLEMENT, SETTINGS, TASK_ID, YOU, eventsFor, logsFor, navigationFor, runDetailFor, serversFor, taskFor } from "./data.ts";
@@ -95,9 +96,10 @@ export class FixtureClient extends ApiClient {
     this.#logs = logsFor(scenario);
     this.#recipes = [...serverRecipes];
     this.#previews = { image: null, egress: [...previewEgress], idleTimeoutMinutes: 15, machineSize: null };
-    this.#task = taskFor(scenario);
+    const base = taskFor(scenario);
+    this.#task = base;
     this.#events = eventsFor(scenario);
-    const as = localStorage.getItem("dude.fixtures.run");
+    const as = localStorage.getItem(RUN_KEY);
     if (as === "paused" || as === "preview") {
       const patch: Partial<RunDetail> = as === "paused" ? { status: "paused" } : { kind: "preview", phase: null, role: null };
       this.#runPatch = patch;
@@ -108,7 +110,7 @@ export class FixtureClient extends ApiClient {
     if (as === "aborted" || as === "failed" || as === "restarted") this.#stop(as);
     this.#nav = navigationFor(scenario);
     // The tree and the board say what the task's page does.
-    if (this.#task.status !== taskFor(scenario).status) this.#nav = this.#nav.map((p) => ({ ...p,
+    if (this.#task.status !== base.status) this.#nav = this.#nav.map((p) => ({ ...p,
       epics: p.epics?.map((e) => ({ ...e, tasks: e.tasks.map((t) => (t.id === TASK_ID ? { ...t, status: this.#task.status, runs: undefined } : t)) })) }));
     ledger = (params) => this.#ledger(params);
   }

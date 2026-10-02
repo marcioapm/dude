@@ -995,51 +995,48 @@ func pushRequest(r phaseRun) string {
 // agent's conversation with it; then, or straight away for any other, it is
 // cancelled.
 func (s *Syncer) end(ctx context.Context, r phaseRun) error {
+	s.unfollow(r.ID)
+	var err error
 	if r.Keep && !r.KeepExpired && r.LuxRunID != "" && r.LuxState != "cancelled" && r.LuxState != "succeeded" {
-		return s.keep(ctx, r)
+		err = s.keep(ctx, r)
+	} else {
+		// Not worth keeping, its time is up, or lux has nothing left to resume.
+		err = s.cancel(ctx, r)
 	}
-	// Not worth keeping, its time is up, or lux has nothing left to resume.
-	return s.cancel(ctx, r)
-}
-
-// keep stops a failed or aborted Run's lux Run and keeps it.
-func (s *Syncer) keep(ctx context.Context, r phaseRun) error {
-	s.unfollow(r.ID)
-	if err := s.ask(ctx, r, s.Lux.Stop); err != nil {
-		return err
-	}
-	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		// Only one still stopped: a person may have taken it back up meanwhile.
-		_, err := tx.Exec(ctx, `UPDATE runs SET lux_stop_reason = 'kept', control = 'none',
-			kept_until = COALESCE(kept_until, now() + make_interval(secs => $2))
-			WHERE id = $1 AND status IN ('aborted', 'failed') AND keep`, r.ID, s.KeepFor.Seconds())
-		return err
-	}); err != nil {
-		return err
-	}
-	// Ended, as for cancel: no follower will time a resume whose first output is in.
-	s.timeResumesLater(r)
-	return nil
-}
-
-// cancel ends the lux Run of a failed or aborted Run, including resumable stopped and lost Runs.
-func (s *Syncer) cancel(ctx context.Context, r phaseRun) error {
-	s.unfollow(r.ID)
-	if r.LuxRunID != "" && r.LuxState != "cancelled" && r.LuxState != "succeeded" && r.LuxState != "failed" {
-		if err := s.askControl(ctx, r, s.Lux.Cancel); err != nil {
-			return err
-		}
-	}
-	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE runs SET lux_stop_reason = 'cancel', control = 'none', kept_until = NULL
-			WHERE id = $1 AND status IN ('aborted', 'failed')`, r.ID)
-		return err
-	}); err != nil {
+	if err != nil {
 		return err
 	}
 	// Ended: no follower will time a resume whose first output is in.
 	s.timeResumesLater(r)
 	return nil
+}
+
+// keep stops a failed or aborted Run's lux Run and keeps it.
+func (s *Syncer) keep(ctx context.Context, r phaseRun) error {
+	if err := s.ask(ctx, r, s.Lux.Stop); err != nil {
+		return err
+	}
+	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		// Only one still stopped: a person may have taken it back up meanwhile.
+		_, err := tx.Exec(ctx, `UPDATE runs SET lux_stop_reason = 'kept', control = 'none',
+			kept_until = COALESCE(kept_until, now() + make_interval(secs => $2))
+			WHERE id = $1 AND status IN ('aborted', 'failed') AND keep`, r.ID, s.KeepFor.Seconds())
+		return err
+	})
+}
+
+// cancel ends the lux Run of a failed or aborted Run, including resumable stopped and lost Runs.
+func (s *Syncer) cancel(ctx context.Context, r phaseRun) error {
+	if r.LuxRunID != "" && r.LuxState != "cancelled" && r.LuxState != "succeeded" && r.LuxState != "failed" {
+		if err := s.askControl(ctx, r, s.Lux.Cancel); err != nil {
+			return err
+		}
+	}
+	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE runs SET lux_stop_reason = 'cancel', control = 'none', kept_until = NULL
+			WHERE id = $1 AND status IN ('aborted', 'failed')`, r.ID)
+		return err
+	})
 }
 
 // pause stops the lux Run, keeping its state. Graceful and hard are the same
@@ -1093,6 +1090,12 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 		nudge = resumeNudge
 	}
 	lr, foreseen, err := s.resume(ctx, r, nudge)
+	// Refused for good: there is no such resume to time.
+	refused := func() {
+		if foreseen != 0 {
+			s.resumeRefused(ctx, r, foreseen)
+		}
+	}
 	var cannot errCannotResume
 	var noLogin errLoginUnavailable
 	if errors.As(err, &noLogin) {
@@ -1108,20 +1111,16 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 		// Already resuming (an earlier attempt got through and its answer
 		// was lost: lux's stream reports how it went) — or not resumable at
 		// all, cancelled or finished in lux, which fails it.
-		if cur, gerr := s.Lux.Get(ctx, r.LuxRunID); gerr == nil && cur.State != "resuming" {
-			if foreseen != 0 {
-				// Refused for good: there is no such resume to time.
-				s.resumeRefused(ctx, r, foreseen)
-			}
+		if cur, gerr := s.Lux.Get(ctx, r.LuxRunID); gerr == nil && (cur.State == "cancelled" || cur.State == "succeeded") {
+			refused()
 			return true, s.fail(ctx, r, "cannot resume: lux says the run is "+cur.State)
 		}
 		err = nil
 		lr.State = "resuming"
 	}
 	if err != nil {
-		if le, ok := lux.AsError(err); ok && !le.Retryable() && foreseen != 0 {
-			// Refused for good: there is no such resume to time.
-			s.resumeRefused(ctx, r, foreseen)
+		if le, ok := lux.AsError(err); ok && !le.Retryable() {
+			refused()
 		}
 		return true, s.retryOrFail(ctx, r, err, "lux refused to resume the run")
 	}

@@ -8,6 +8,8 @@ export const SCENARIOS = ["a", "b", "c", "d", "e"] as const;
 export type FixtureScenario = (typeof SCENARIOS)[number];
 
 const KEY = "dude.fixtures";
+/** The fixture task's run's state (`?run=`): paused, preview, aborted, failed, restarted. */
+export const RUN_KEY = `${KEY}.run`;
 
 /**
  * The scenario asked for: `?fixtures=b` (remembered), or what was remembered; `?fixtures=off` forgets. Null for the real API.
@@ -24,7 +26,7 @@ export function fixtureScenario(): FixtureScenario | null {
   };
   // Both read before either is taken off the address.
   const fixtures = remember("fixtures", KEY);
-  const run = remember("run", `${KEY}.run`);
+  const run = remember("run", RUN_KEY);
   // The parameters have done their work; the hash is the app's own.
   if (fixtures || run) window.history.replaceState(null, "", `${window.location.pathname}${window.location.hash}`);
   const stored = localStorage.getItem(KEY);

@@ -637,8 +637,9 @@ body {
   flex-direction: column;
   gap: var(--ds-space-16);
 }
-/* The ways' accounts stacked in one cell: as tall as the tallest, the
-   chosen one seen. `hidden` keeps its box (visibility), not display: none. */
+/* The ways' accounts stacked in one cell: as tall as the tallest, only the
+   chosen one seen. Hidden by visibility, which keeps its box and takes it
+   out of the tab order and the accessibility tree alike. */
 .pickUpWhatItDoes {
   display: grid;
 }
@@ -648,8 +649,7 @@ body {
   flex-direction: column;
   gap: var(--ds-space-12);
 }
-.pickUpWay[hidden] {
-  display: flex;
+.pickUpWay[data-shown="false"] {
   visibility: hidden;
 }
 .pickUpEffects {
