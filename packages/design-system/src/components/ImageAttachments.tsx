@@ -1,5 +1,5 @@
 import * as RadixDialog from "@radix-ui/react-dialog";
-import { useCallback, useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type DragEvent, type ReactNode, type RefObject } from "react";
 import { cx } from "../util/cx.ts";
 import { formatBytes } from "../util/format.ts";
 import { Icon } from "../icons/index.tsx";
@@ -197,19 +197,48 @@ export interface MessageImagesProps {
   readonly images: ReadonlyArray<SentImage>;
   /** Open the viewer on one. */
   readonly onOpen?: ((index: number) => void) | undefined;
+  /**
+   * Called once, when the images first scroll into view: the app reads
+   * their bytes then, not for every turn of a long conversation at once.
+   */
+  readonly onVisible?: (() => void) | undefined;
+}
+
+/** Calls `onVisible` once, when `ref`'s element first comes into view (at once without an IntersectionObserver). */
+function useFirstVisible(ref: RefObject<HTMLElement | null>, onVisible: (() => void) | undefined) {
+  const latest = useRef(onVisible);
+  latest.current = onVisible;
+  const wanted = onVisible !== undefined;
+  useEffect(() => {
+    const el = ref.current;
+    if (!wanted || !el) return;
+    if (typeof IntersectionObserver === "undefined") {
+      latest.current?.();
+      return;
+    }
+    const seen = new IntersectionObserver((entries) => {
+      if (!entries.some((e) => e.isIntersecting)) return;
+      seen.disconnect();
+      latest.current?.();
+    }, { rootMargin: "200px" });
+    seen.observe(el);
+    return () => seen.disconnect();
+  }, [ref, wanted]);
 }
 
 /** A turn's images, under its words: one shows large, several as a row. Hover gives name · size. */
-export function MessageImages({ images, onOpen }: MessageImagesProps) {
+export function MessageImages({ images, onOpen, onVisible }: MessageImagesProps) {
+  const ref = useRef<HTMLDivElement>(null);
+  useFirstVisible(ref, onVisible);
   if (images.length === 0) return null;
   const one = images.length === 1;
   return (
-    <div className={cx(styles["images"], one && styles["imagesOne"])} data-testid="message-images">
+    <div ref={ref} className={cx(styles["images"], one && styles["imagesOne"])} data-testid="message-images">
       {images.map((image, i) => (
         <button key={image.id} type="button" className={styles["image"]} onClick={() => onOpen?.(i)}
           aria-label={`Open ${image.name}`} data-testid="message-image">
           {image.src ? (
-            <img src={image.src} alt={image.name} draggable={false}
+            <img src={image.src} alt={image.name} draggable={false} decoding="async"
               style={{ aspectRatio: `${image.delivered.width} / ${image.delivered.height}` }} />
           ) : (
             <span className={styles["imagePending"]} style={{ aspectRatio: `${image.delivered.width} / ${image.delivered.height}` }}>

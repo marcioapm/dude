@@ -6,11 +6,11 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ComposerAttachment, SentImage } from "@dude/design-system/components";
+import { MessageImages, type ComposerAttachment, type SentImage } from "@dude/design-system/components";
 import { formatBytes } from "@dude/design-system";
 import { ATTACHMENT_LIMITS, type AttachmentInfo } from "@dude/domain";
 import { ApiError, type ApiClient, type AttachmentLimits } from "../api/client.ts";
-import { BUDGET_SPENT, ShrinkError, budgetFor, prepare, refuse, sentChips, type Limits, type Prepared } from "../images.ts";
+import { BUDGET_SPENT, ShrinkError, budgetFor, deliveredName, prepare, refuse, sentChips, type Limits, type Prepared } from "../images.ts";
 
 interface Chip extends ComposerAttachment {
   /** What the delivered variant weighs, once made: the message's budget counts it. */
@@ -178,7 +178,7 @@ export function useImageTray(client: ApiClient, taskId: string | undefined, limi
 /** The paperclip's tooltip: what may be attached, and how large. */
 export function limitsHint(limits: Limits) {
   return (
-    <span style={{ display: "flex", flexDirection: "column", gap: 2, maxWidth: 260 }}>
+    <span className="attachLimitsHint">
       <b>Attach images</b>
       <span>Or paste a screenshot, or drop files on the conversation.</span>
       <span>PNG, JPEG, WebP, GIF · up to {limits.perMessage} · up to {limits.originalBytes / 1e6} MB each</span>
@@ -188,12 +188,15 @@ export function limitsHint(limits: Limits) {
 }
 
 /**
- * Sent images, with blob URLs to show them: read once each through the
- * API (it needs the key, which an <img> cannot send) and kept for the page.
+ * Sent images, with blob URLs to show them: read through the API (it needs
+ * the key, which an <img> cannot send) once a turn showing them scrolls
+ * into view, and let go when every turn showing them has unmounted.
  */
 export function useSentImages(client: ApiClient) {
   const urls = useRef(new Map<string, string>());
   const asked = useRef(new Set<string>());
+  // How many mounted turns show each image id.
+  const shownBy = useRef(new Map<string, number>());
   const [, bump] = useState(0);
   useEffect(() => () => {
     for (const url of urls.current.values()) URL.revokeObjectURL(url);
@@ -203,13 +206,42 @@ export function useSentImages(client: ApiClient) {
     if (asked.current.has(key)) return;
     asked.current.add(key);
     client.attachment(id, variant).then((blob) => {
+      // Its turn unmounted while the bytes were on their way.
+      if (!asked.current.has(key)) return;
       urls.current.set(key, URL.createObjectURL(blob));
       bump((n) => n + 1);
     }, () => asked.current.delete(key));
   }, [client]);
-  /** A sent image for display, asking for its bytes the first time it is shown. */
+  const forget = useCallback((id: string) => {
+    for (const variant of ["delivered", "original"]) {
+      const key = `${id}:${variant}`;
+      const url = urls.current.get(key);
+      if (url) URL.revokeObjectURL(url);
+      urls.current.delete(key);
+      asked.current.delete(key);
+    }
+  }, []);
+  /** A turn showing `ids` mounted; returns its unmount. */
+  const mounted = useCallback((ids: ReadonlyArray<string>) => {
+    for (const id of ids) shownBy.current.set(id, (shownBy.current.get(id) ?? 0) + 1);
+    return () => {
+      for (const id of ids) {
+        const n = (shownBy.current.get(id) ?? 1) - 1;
+        if (n > 0) {
+          shownBy.current.set(id, n);
+          continue;
+        }
+        shownBy.current.delete(id);
+        forget(id);
+      }
+    };
+  }, [forget]);
+  /** A turn's images came into view: read the bytes of those not read yet. */
+  const visible = useCallback((ids: ReadonlyArray<string>) => {
+    for (const id of ids) load(id, "delivered");
+  }, [load]);
+  /** A sent image for display: its URL once read. */
   const sent = useCallback((a: AttachmentInfo): SentImage & { originalSrc?: string } => {
-    load(a.id, "delivered");
     const src = urls.current.get(`${a.id}:delivered`);
     const originalSrc = urls.current.get(`${a.id}:original`);
     return {
@@ -219,15 +251,33 @@ export function useSentImages(client: ApiClient) {
       ...(src ? { src } : {}),
       ...(originalSrc ? { originalSrc } : {}),
     };
-  }, [load]);
+  }, []);
   const download = useCallback(async (a: AttachmentInfo, variant: "delivered" | "original") => {
     const blob = await client.attachment(a.id, variant);
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = variant === "original" ? a.name.replace(/\.[a-z]+$/i, "") + "." + (a.original.contentType.split("/")[1] === "jpeg" ? "jpg" : a.original.contentType.split("/")[1]) : a.name;
+    link.download = variant === "original" ? deliveredName(a.name, a.original.contentType) : a.name;
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }, [client]);
-  return { sent, wantOriginal: (id: string) => load(id, "original"), download };
+  return { sent, mounted, visible, wantOriginal: (id: string) => load(id, "original"), download };
+}
+
+export type SentImages = ReturnType<typeof useSentImages>;
+
+/** A sent turn's images: their bytes read when they scroll into view, let go when the turn unmounts. */
+export function TurnImages({ attachments, images, onOpen }: {
+  attachments: ReadonlyArray<AttachmentInfo>;
+  images: Pick<SentImages, "sent" | "mounted" | "visible">;
+  onOpen: (index: number) => void;
+}) {
+  const ids = attachments.map((a) => a.id);
+  const key = ids.join(",");
+  const { mounted, visible } = images;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => mounted(ids), [mounted, key]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const onVisible = useCallback(() => visible(ids), [visible, key]);
+  return <MessageImages images={attachments.map(images.sent)} onOpen={onOpen} onVisible={onVisible} />;
 }
