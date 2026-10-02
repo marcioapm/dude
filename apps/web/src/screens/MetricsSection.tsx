@@ -42,19 +42,35 @@ function CostTile({ cost, tokens, activeMs, sub }: { cost: CostSplit; tokens: nu
   );
 }
 
-export function TaskMetricsSection({ client, taskId, live, done, version }: {
-  client: ApiClient; taskId: string; live: boolean;
+export function TaskMetricsSection({ client, taskId, attempt, setAside, live, done, version }: {
+  client: ApiClient; taskId: string;
+  /** One attempt's figures alone; none, the whole task's. */
+  attempt?: number | undefined;
+  /** An attempt set aside: its lead time ran until the next one began. */
+  setAside?: boolean | undefined;
+  live: boolean;
   /** Finished (done, failed or aborted): its lead time is whole, not so far. */
   done: boolean;
   version: number;
 }) {
-  const [m, setM] = useState<TaskMetrics | null>(null);
-  useEffect(() => void client.taskMetrics(taskId).then(setM, () => {}), [client, taskId, version]);
-  if (!m || m.runs.length === 0) return null;
+  const [m, setM] = useState<{ attempt: number | undefined; metrics: TaskMetrics } | null>(null);
+  useEffect(() => {
+    let current = true;
+    void client.taskMetrics(taskId, attempt).then((metrics) => current && setM({ attempt, metrics }), () => {});
+    return () => {
+      current = false;
+    };
+  }, [client, taskId, attempt, version]);
+  // Another attempt's figures are never shown for this one, even for the moment before its own arrive.
+  if (!m || m.attempt !== attempt || m.metrics.runs.length === 0) return null;
+  return <TaskMetricsFigures m={m.metrics} live={live} sub={setAside ? "start to set aside" : done ? "asked to done" : "so far"} />;
+}
+
+function TaskMetricsFigures({ m, live, sub }: { m: TaskMetrics; live: boolean; sub: string }) {
   return (
     <Section title="Time & cost" data-testid="task-metrics">
       <MetricGroup joined>
-        <MetricTile size="sm" label="Lead time" value={m.leadMs} unit="ms" live={live} sub={done ? "asked to done" : "so far"} />
+        <MetricTile size="sm" label="Lead time" value={m.leadMs} unit="ms" live={live} sub={sub} />
         <MetricTile size="sm" label="Agents working" value={m.activeMs} unit="ms" live={live} />
         <MetricTile size="sm" label="Waiting on people" value={m.humanWaitMs} unit="ms" />
         <MetricTile size="sm" label="In review" value={m.reviewMs} unit="ms" />

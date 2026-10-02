@@ -384,8 +384,9 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         taskId={taskId}
         runId={selected?.kind === "task" ? undefined : sessionId ?? undefined}
         tab={place?.view === "tree" && selected?.kind === "task" ? place.tab : undefined}
+        attempt={place?.view === "tree" && selected?.kind === "task" ? place.attempt : undefined}
         onOpenRun={(runId) => go(inTree({ kind: "session", id: runId }))}
-        onCloseRun={() => go(inTree({ kind: "task", id: taskId }))}
+        onNavigate={(tab, attempt, replace) => go(inTree({ kind: "task", id: taskId }, tab, attempt), replace)}
         onBack={toBoard}
         breadcrumb={trail(taskId)}
       />

@@ -840,9 +840,9 @@ export class ApiClient {
     return this.#request("POST", `/v1/repository-requests/${encodeURIComponent(id)}/decide`, { approve, note });
   }
 
-  /** How long a task's agents worked and waited, how long it sat in review, what it cost. */
-  taskMetrics(taskId: string): Promise<TaskMetrics> {
-    return this.#request("GET", `/v1/tasks/${encodeURIComponent(taskId)}/metrics`);
+  /** How long a task's agents worked and waited, how long it sat in review, what it cost; with `attempt`, that attempt's Runs' alone. */
+  taskMetrics(taskId: string, attempt?: number): Promise<TaskMetrics> {
+    return this.#request("GET", `/v1/tasks/${encodeURIComponent(taskId)}/metrics${attempt ? `?attempt=${attempt}` : ""}`);
   }
 
   /** An epic's tasks, totalled. */

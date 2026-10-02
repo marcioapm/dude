@@ -11,6 +11,13 @@
  * and its changes), Files (what they left), and Activity (who did what, by
  * name).
  *
+ * A task started over has several attempts, and the page shows one: the
+ * current one unless another is picked in the header, beside its branch.
+ * The header's status, branch and pull requests, the pipeline, time and
+ * cost, the findings, sessions and files are that attempt's; an earlier
+ * one is only to read. Goal, owner, Activity (every attempt) and Servers
+ * are the task's whatever attempt is shown.
+ *
  * Driven by the task's event stream, so a phase starting, a finding
  * landing or the PR opening appears without a reload; a dropped stream
  * is said by the shell, and the page re-reads when it is back.
@@ -37,8 +44,8 @@ import {
   TimelineItem,
   planProgress,
 } from "@dude/design-system/components";
-import { Button, Callout, EmptyState, KeyValueList, LinkButton, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
-import { Icon, shortId, toggled } from "@dude/design-system";
+import { Button, Callout, EmptyState, LinkButton, Select, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
+import { formatUsd, plural, type IconName } from "@dude/design-system";
 import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, runLabel, type PersistedEvent } from "@dude/domain";
 import type { ApiClient, Artifact, Finding, MergeMethod, PullRequest, Run, TaskDetail } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
@@ -59,21 +66,28 @@ import { ServersAside } from "./ServersAside.tsx";
 import { ServersSection, serversTab } from "./ServersSection.tsx";
 import { existingTask, TaskDialog } from "./TaskDialog.tsx";
 import { PullRequestActions } from "./PullRequestActions.tsx";
-import { PickUpDialog, StoppedNotice, howRunStopped, stopOf, stoppedSentence, useRecoveryOptions } from "./Recovery.tsx";
+import { PickUpDialog, StoppedNotice, stopOf, useRecoveryOptions } from "./Recovery.tsx";
 import type { RecoverAction } from "../api/client.ts";
 import { pullRequestActivity } from "../pullRequests.ts";
-import { formatPlace, type TaskTab } from "../place.ts";
+import { attemptScoped, formatPlace, type TaskTab } from "../place.ts";
+import { attemptEnd, attemptOfPr, attemptOfRun, attemptOfWork, attemptsOf, setAsideOf, type SetAside } from "../attempts.ts";
 
 export interface TaskScreenProps {
   client: ApiClient;
   taskId: string;
-  /** A session to show open on the Sessions tab: the page opens there. */
+  /** A session to show open on the Sessions tab: the page opens there, on its attempt. */
   runId?: string | undefined;
   onOpenRun: (runId: string) => void;
-  /** Left the Sessions tab with a session open, or the tab the URL named: the URL should say the task again. */
-  onCloseRun?: (() => void) | undefined;
+  /**
+   * The page moved to another tab or attempt: the URL should say the tab,
+   * and the attempt when it is not the current one. `replace` when only the
+   * tab changed, so Back goes to where the page was before, not each tab.
+   */
+  onNavigate?: ((tab: TaskTab | undefined, attempt: number | undefined, replace: boolean) => void) | undefined;
   /** The tab the URL names, to open on. */
   tab?: TaskTab | undefined;
+  /** The attempt the URL names; none is the current one. */
+  attempt?: number | undefined;
   /** Where it sits, shown at the top: Project › Epic › KEY. */
   breadcrumb?: ReactNode;
   /** Leave for somewhere that exists, when this task does not. */
@@ -95,35 +109,36 @@ function changesRun(payload: unknown): boolean {
   return RUN_CHANGES.has(String(p.change)) || typeof p.luxState === "string";
 }
 
-export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: openTab, breadcrumb, onBack }: TaskScreenProps) {
-  // A session's URL is the Sessions tab with it open; the task's URL is
-  // whichever tab was picked here, Overview first. Coming back to the
-  // task's URL from a session's (the tree, Back) is the overview again.
-  // A URL that names a tab (`#/task/<id>/servers`) opens the page there.
+const urlTab = (tab: string): TaskTab | undefined => (tab === "overview" ? undefined : (tab as TaskTab));
+const ago = (at: string) => <Duration ms={Math.max(0, Date.now() - Date.parse(at))} format="age" tone="muted" />;
+
+export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: openTab, attempt: urlAttempt, breadcrumb, onBack }: TaskScreenProps) {
+  // A session's URL is the Sessions tab with it open, on its attempt; the
+  // task's URL names the tab (none: Overview) and the attempt when it is
+  // not the current one. A tab or attempt picked here is written back.
   const [chosenTab, setTab] = useState<string>(openTab ?? "overview");
-  const tab = runId ? "sessions" : chosenTab;
-  const [lastRunId, setLastRunId] = useState(runId);
-  if (runId !== lastRunId) {
-    setLastRunId(runId);
-    if (!runId) setTab(openTab ?? "overview");
-  }
-  const [lastOpenTab, setLastOpenTab] = useState(openTab);
-  if (openTab !== lastOpenTab) {
-    setLastOpenTab(openTab);
-    if (openTab) setTab(openTab);
-  }
-  const pickTab = (next: string) => {
-    setTab(next);
-    // Leaving a session's tab, or the tab the URL named: the URL says the task again.
-    if ((runId && next !== "sessions") || (openTab && next !== openTab)) {
-      setLastRunId(undefined);
-      onCloseRun?.();
+  // The attempt picked, null for the current one. Kept on Activity and
+  // Servers, whose URLs never name one: back on a tab that shows one
+  // attempt, it is still the one shown.
+  const [chosenAttempt, setChosenAttempt] = useState<number | null>(attemptScoped(openTab) ? (urlAttempt ?? null) : null);
+  // A session left here before the URL says so (or with no URL to say it).
+  const [leftRun, setLeftRun] = useState<string | undefined>(undefined);
+  const [lastPlace, setLastPlace] = useState({ runId, openTab, urlAttempt });
+  if (lastPlace.runId !== runId || lastPlace.openTab !== openTab || lastPlace.urlAttempt !== urlAttempt) {
+    setLastPlace({ runId, openTab, urlAttempt });
+    setLeftRun(undefined);
+    if (!runId) {
+      setTab(openTab ?? "overview");
+      if (attemptScoped(openTab)) setChosenAttempt(urlAttempt ?? null);
     }
-  };
+  }
+  const openedRun = runId && runId !== leftRun ? runId : undefined;
+  const tab = openedRun ? "sessions" : chosenTab;
   // For the open session, which is memoised: one function for the page's life.
-  const pickLatest = useRef(pickTab);
-  pickLatest.current = pickTab;
+  const pickLatest = useRef<(tab: string) => void>(() => {});
   const openServers = useCallback(() => pickLatest.current("servers"), []);
+  const toCurrentLatest = useRef<() => void>(() => {});
+  const toCurrent = useCallback(() => toCurrentLatest.current(), []);
   // The session shown when none is asked for: the last one open, else one
   // picked the first time Sessions shows (what is running, else the newest)
   // and kept — a phase ending must not swap it under someone reading.
@@ -217,8 +232,6 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
   // A stopped task's ways back, read again whenever the page is.
   const recovery = useRecoveryOptions(client, item);
   const [pickingUp, setPickingUp] = useState<RecoverAction | null>(null);
-  // Earlier attempts, folded under the current one's pipeline: those opened.
-  const [shownAttempts, setShownAttempts] = useState<ReadonlySet<number>>(new Set());
 
   const deliver = async () => {
     setDelivering(true);
@@ -233,29 +246,48 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
     }
   };
 
-  // Phases of the current attempt, in the order they ran.
-  const phases = useMemo(() => {
-    const runs = [...(item?.runs ?? [])].filter((r) => r.phase);
-    const attempt = Math.max(0, ...runs.map((r) => r.attempt));
-    return runs.filter((r) => r.attempt === attempt).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-  }, [item]);
+  // Every attempt, newest first; the current is the highest. The one shown:
+  // the open session's, else the one picked, else the current.
+  const attempts = useMemo(() => attemptsOf(item?.runs ?? []), [item]);
+  const current = attempts[0] ?? 1;
+  const many = attempts.length > 1;
+  const openedRow = openedRun ? item?.runs.find((r) => r.id === openedRun) : undefined;
+  const shown = openedRow ? attemptOfRun(openedRow, current)
+    : chosenAttempt !== null && attempts.includes(chosenAttempt) ? chosenAttempt : current;
+  const earlier = shown !== current;
+
+  // A URL naming the current attempt, or one the task never had, says the task alone.
+  useEffect(() => {
+    if (item && urlAttempt !== undefined && !runId && (urlAttempt === current || !attempts.includes(urlAttempt))) {
+      onNavigate?.(openTab, undefined, true);
+    }
+  }, [item, urlAttempt, runId, current, attempts, openTab, onNavigate]);
+
+  // Phases of the attempt shown, and of the current one, in the order they ran.
+  const byCreated = (runs: readonly Run[]) => [...runs].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const phases = useMemo(() => byCreated((item?.runs ?? []).filter((r) => r.phase && r.attempt === shown)), [item, shown]);
+  const currentPhases = useMemo(() => byCreated((item?.runs ?? []).filter((r) => r.phase && r.attempt === current)), [item, current]);
 
   // What a pull request heard, for why a fix ran: a few of the ledger's many.
   const prEvents = useMemo(() => events.filter((e) => e.eventType.startsWith("pull_request.")), [events]);
 
   // How it stopped, read from the runs and the ledger once per change of them.
   const stopOfTask = useMemo(() => (item ? stopOf(item, events, people) : null), [item, events, people]);
+  // Why the attempt shown was set aside, when it was.
+  const aside = useMemo<SetAside | null>(() => (item && earlier ? setAsideOf(shown, item.runs, events, people) : null), [item, earlier, shown, events, people]);
   // What the open session's end strip says, if it stopped: the same object
   // while it says the same, so the session (memoised) is not redrawn.
   const keptUntil = recovery?.keptUntil ?? null;
   const canPickUp = Boolean(recovery?.actions.length) && (!item?.owner || item.owner.id === people.you);
   const stoppedOn = stopOfTask?.run?.id ?? null;
-  const shownRun = runId ?? picked;
-  const aside = item && shownRun ? setAsideOf(item.runs.find((r) => r.id === shownRun), Math.max(1, ...item.runs.map((r) => r.attempt)), item.runs) : undefined;
-  const pickUpHere = canPickUp && shownRun !== null && shownRun === stoppedOn;
+  const shownRun = openedRun ?? picked;
+  const retried = item && shownRun ? retriedRun(item.runs.find((r) => r.id === shownRun), item.runs) : false;
+  const pickUpHere = canPickUp && !earlier && shownRun !== null && shownRun === stoppedOn;
   const openStopped = useMemo<StoppedRun | undefined>(
-    () => (aside ? { setAside: aside } : pickUpHere ? { onPickUp: setPickingUp, keptUntil } : undefined),
-    [aside, pickUpHere, keptUntil]);
+    () => (earlier ? { setAside: "restart", toCurrent: { attempt: current, go: toCurrent } }
+      : retried ? { setAside: "retry" }
+      : pickUpHere ? { onPickUp: setPickingUp, keptUntil } : undefined),
+    [earlier, current, toCurrent, retried, pickUpHere, keptUntil]);
 
   // Each running phase's plan: the last it wrote, as the transcript has it.
   const plans = useMemo<Plans>(() => {
@@ -279,32 +311,61 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
     return <div className="centered">{problem ?? <Spinner label="Loading…" />}</div>;
   }
 
-  const started = phases.length > 0;
+  /** Show attempt `n`: picked in the header, from an empty tab, or the way back to the current one. */
+  const pickAttempt = (n: number, onTab: string = tab) => {
+    const next = n === current ? null : n;
+    setChosenAttempt(next);
+    setTab(onTab);
+    if (openedRun) setLeftRun(openedRun);
+    onNavigate?.(urlTab(onTab), next !== null && attemptScoped(urlTab(onTab)) ? next : undefined, false);
+  };
+  const pickTab = (next: string) => {
+    if (next === tab) return;
+    setTab(next);
+    setChosenAttempt(earlier ? shown : null);
+    const leaving = openedRun !== undefined;
+    if (leaving) setLeftRun(openedRun);
+    onNavigate?.(urlTab(next), earlier && attemptScoped(urlTab(next)) ? shown : undefined, !leaving);
+  };
+  pickLatest.current = pickTab;
+  toCurrentLatest.current = () => pickAttempt(current);
+
+  const started = currentPhases.length > 0;
   const stopped = item.status === "aborted" || item.status === "failed";
-  const stop = stopped ? stopOfTask : null;
+  // The pick-up is the current attempt's: an earlier one is only to read.
+  const stop = stopped && !earlier ? stopOfTask : null;
   // The reader picks it up when it is theirs, or nobody's.
   const yours = !item.owner || (people.you !== null && item.owner.id === people.you);
-  // Every attempt the task has had, newest first; the current is the highest.
-  const attempts = [...new Set(item.runs.filter((r) => r.kind !== "preview").map((r) => r.attempt))].sort((a, b) => b - a);
-  const current = attempts[0] ?? 1;
-  // One per repository the work changed, in the order they were opened.
-  const prs = [...pullRequests].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  // One per repository the work changed, in the order they were opened; the attempt shown's.
+  const allPrs = [...pullRequests].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const prs = allPrs.filter((pr) => attemptOfPr(pr, item.runs) === shown);
   const owner = item.owner ? (people.byId.get(item.owner.id) ?? item.owner) : null;
-  const working = phases.find((r) => r.status === "running");
+  const working = currentPhases.find((r) => r.status === "running");
   // The aside says what serves the task when something does, or could: a
-  // project with no servers defined has nothing to say there.
-  const showServers = Boolean(servers.data && (servers.data.run || servers.data.recipes.length > 0));
+  // project with no servers defined has nothing to say there. Servers are
+  // the current attempt's: an earlier one has none to show.
+  const showServers = !earlier && Boolean(servers.data && (servers.data.run || servers.data.recipes.length > 0));
+  // What each attempt made: its findings, files and sessions.
+  const ofAttempt = (n: number) => ({
+    findings: findings.filter((f) => attemptOfWork(f.runId, item.runs, current) === n),
+    artifacts: artifacts.filter((a) => attemptOfWork(a.runId, item.runs, current) === n),
+  });
+  const mine = ofAttempt(shown);
+  const fileCount = (list: readonly Artifact[]) => new Set(list.map((a) => a.name)).size;
+  const others = attempts.filter((n) => n !== shown).map((n) => ({ n, ...ofAttempt(n) }));
   // Newest first; the one open is the one asked for, else the one picked
   // on first sight (what was running, else the newest).
-  const sessions = [...item.runs].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  const openRun = (runId && sessions.some((r) => r.id === runId) ? runId : undefined)
+  const sessions = [...item.runs].filter((r) => attemptOfRun(r, current) === shown).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const openRun = (openedRun && sessions.some((r) => r.id === openedRun) ? openedRun : undefined)
     ?? (picked && sessions.some((r) => r.id === picked) ? picked : undefined)
     ?? sessions.find((r) => r.status === "running")?.id ?? sessions[0]?.id;
   if (tab === "sessions" && openRun && openRun !== picked) setPicked(openRun);
+  const reviewing = phases.some((r) => r.phase === "review" && r.status === "running");
+  const othersSaid = (what: "findings" | "files") => others.map((o) => `attempt ${o.n} had ${what === "findings" ? o.findings.length : fileCount(o.artifacts)}`).join(", ");
 
   return (
     // On Sessions the page holds still and the session scrolls inside it.
-    <div className={tab === "sessions" ? "screen taskScreen fixed" : "screen taskScreen"} data-testid="task-screen">
+    <div className={tab === "sessions" ? "screen taskScreen fixed" : "screen taskScreen"} data-testid="task-screen" data-attempt={shown}>
       <header className="taskTop">
         <div className="taskCrumbs">{breadcrumb}</div>
         <span className="taskTopActions">
@@ -314,7 +375,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
             </Button>
           ) : null}
           {/* Work that changed no code ends waiting to be read, with no PR to merge. */}
-          {item.status === "review" && prs.length === 0 && phases.length > 0 && phases.every((r) => TERMINAL_RUN_STATUSES.includes(r.status)) ? (
+          {!earlier && item.status === "review" && prs.length === 0 && currentPhases.length > 0 && currentPhases.every((r) => TERMINAL_RUN_STATUSES.includes(r.status)) ? (
             <Button variant="primary" leadingIcon="check" data-testid="mark-done"
               onClick={() => void client.markDone(taskId).then(() => load(), (err: unknown) => setProblem(err instanceof ApiError ? err.message : "Could not mark it done."))}>
               Mark done
@@ -330,13 +391,18 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
         <div className="taskHeadMain">
           <h1 className="taskTitle">{item.title}</h1>
           <div className="taskMeta">
-            <StatusMark status={item.status} size="sm" />
+            {/* The task's status, or on an earlier attempt how that attempt ended. */}
+            <StatusMark status={earlier ? attemptEnd(item.runs, shown) : item.status} size="sm" data-testid="header-status" />
             {prs.map((pr) => (
               <PrChip key={pr.id} pr={pr} data-testid="pr-link" />
             ))}
             {item.key ? <span className="ds-mono" title={item.id}>{item.key}</span> : null}
-            {phases[0]?.branch ? <span className="ds-mono">{phases[0].branch}</span> : null}
-            <span>created <Duration ms={Math.max(0, Date.now() - Date.parse(item.createdAt))} format="age" tone="muted" /> ago</span>
+            {many ? (
+              <AttemptPicker client={client} taskId={taskId} item={item} attempts={attempts} prs={allPrs} events={events} people={people}
+                value={shown} version={version} onChange={(n) => pickAttempt(n)} />
+            ) : null}
+            {phases[0]?.branch ? <span className="ds-mono" data-testid="branch">{phases[0].branch}</span> : null}
+            <span>created {ago(item.createdAt)} ago</span>
           </div>
         </div>
         <div className="taskPeople">
@@ -348,9 +414,10 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
         </div>
       </div>
 
-      {item.escalation || stop || problem ? (
+      {(item.escalation && !earlier) || stop || aside || problem ? (
         <div className="taskNotices">
-          {item.escalation ? (
+          {aside ? <EarlierBar attempt={shown} current={current} aside={aside} onCurrent={() => pickAttempt(current)} /> : null}
+          {item.escalation && !earlier ? (
             <EscalationPanel client={client} task={{ ...item, escalation: item.escalation }} you={people.you}
               onOpenRun={onOpenRun} onDecided={() => void load()} />
           ) : null}
@@ -383,11 +450,14 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
       <Tabs value={tab} onValueChange={pickTab} fill>
         <TabList aria-label="Task" className="tabsInset">
           <Tab value="overview">Overview</Tab>
-          <Tab value="findings" count={findings.length > 0 ? findings.length : undefined}>Findings</Tab>
-          <Tab value="sessions" count={item.runs.length > 0 ? item.runs.length : undefined}>Sessions</Tab>
-          <Tab value="files" count={artifacts.length > 0 ? new Set(artifacts.map((a) => a.name)).size : undefined}>Files</Tab>
+          <Tab value="findings" count={mine.findings.length > 0 ? mine.findings.length : undefined}
+            tooltip={many ? <>Attempt {shown}'s findings; {othersSaid("findings")}</> : undefined}>Findings</Tab>
+          <Tab value="sessions" count={sessions.length > 0 ? sessions.length : undefined}
+            tooltip={many ? <>Attempt {shown}'s sessions</> : undefined}>Sessions</Tab>
+          <Tab value="files" count={mine.artifacts.length > 0 ? fileCount(mine.artifacts) : undefined}
+            tooltip={many ? <>Attempt {shown}'s files; {othersSaid("files")}</> : undefined}>Files</Tab>
           <Tab value="servers" {...serversTab(servers.data)}>Servers</Tab>
-          <Tab value="activity">Activity</Tab>
+          <Tab value="activity" tooltip={many ? "Every attempt" : undefined}>Activity</Tab>
         </TabList>
 
         <TabPanel value="overview" className="taskPane">
@@ -414,35 +484,37 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
               ) : null}
 
               <section className="taskBlock" aria-label="Pipeline">
-                <h2 className="ds-label">Pipeline{attempts.length > 1 ? ` · attempt ${current}` : ""}</h2>
-                {started ? (
+                <h2 className="ds-label">Pipeline{many ? ` · attempt ${shown}` : ""}</h2>
+                {phases.length > 0 ? (
                   <StepList data-testid="pipeline">
                     {phases.map((run, index) => (
                       <PhaseStep key={run.id} run={run} plan={plans.get(run.id)} why={whyItRan(run, index, phases, findings, prEvents)}
                         findings={findings.filter((f) => f.runId === run.id)} onOpen={() => onOpenRun(run.id)} />
                     ))}
-                    {prs.filter((pr) => attemptOfPr(pr, item.runs) === current).map((pr, _, mine) => (
-                      <PullRequestStep key={pr.id} pr={pr} named={mine.length > 1} />
+                    {prs.map((pr) => (
+                      <PullRequestStep key={pr.id} pr={pr} named={prs.length > 1} />
                     ))}
                   </StepList>
                 ) : (
                   <EmptyState compact icon="git-pr" title="Not started"
                     description="Deliver runs an implementer, reviewers, a fixer if they find problems, a simplifier, and opens a pull request." />
                 )}
-                {attempts.slice(1).map((n) => (
-                  <EarlierAttempt key={n} attempt={n} runs={item.runs.filter((r) => r.attempt === n && r.phase)}
-                    prs={prs.filter((pr) => attemptOfPr(pr, item.runs) === n)} events={events} people={people}
-                    open={shownAttempts.has(n)} onOpenRun={onOpenRun}
-                    onToggle={(open) => setShownAttempts((s) => toggled(s, n, open))} />
-                ))}
               </section>
 
-              <TaskMetricsSection client={client} taskId={taskId} live={item.status === "running"}
-                done={["done", "failed", "aborted"].includes(item.status)} version={version} />
+              <TaskMetricsSection client={client} taskId={taskId} attempt={many ? shown : undefined} setAside={earlier}
+                live={!earlier && item.status === "running"}
+                done={earlier || ["done", "failed", "aborted"].includes(item.status)} version={version} />
             </div>
             {prs.length > 0 || showServers ? (
               <aside className="taskAside" aria-label="Pull requests and servers">
-                {prs.map((pr) => (
+                {prs.map((pr) => earlier ? (
+                  // An earlier attempt's pull request is only to read: no Merge, no requests.
+                  <PullRequestPanel key={pr.id} pr={pr} data-testid="pr-panel" data-pr={pr.id}
+                    note={pr.state === "closed" && aside?.at
+                      ? <>Closed by {dudeName(taskId)} {ago(aside.at)} ago, when {aside.by ? firstName(aside.by) : "someone"} started over.</>
+                      : undefined}
+                    actions={<LinkButton href={pr.url}>Open on GitHub</LinkButton>} />
+                ) : (
                   <PullRequestActions key={pr.id} client={client} pr={pr} defaultMethod={mergeMethod} onChanged={() => void load()}>
                     {(actions) => (
                       <PullRequestPanel pr={pr} data-testid="pr-panel" data-pr={pr.id}
@@ -458,7 +530,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
                   </PullRequestActions>
                 ))}
                 {showServers ? (
-                  <ServersAside client={client} taskId={taskId} servers={servers} onAll={() => setTab("servers")} />
+                  <ServersAside client={client} taskId={taskId} servers={servers} onAll={() => pickTab("servers")} />
                 ) : null}
               </aside>
             ) : null}
@@ -466,14 +538,18 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
         </TabPanel>
 
         <TabPanel value="findings" className="taskPane">
-          {findings.length > 0 ? (
-            <FindingGroup data-testid="findings" findings={findings}
+          {mine.findings.length > 0 ? (
+            <FindingGroup data-testid="findings" findings={mine.findings}
               renderRow={(f) => (
                 <FindingRow key={f.id} data-testid="finding" data-status={f.status} severity={f.severity} status={f.status}
                   category={f.category} title={f.title} file={f.file} line={f.line} description={f.description}
                   suggestedFix={f.suggestedFix} resolutionNote={f.resolutionNote} fixAttempts={f.fixAttempts}
                   fixedIn={f.resolvedByRunId ? resolvedIn(item, f.resolvedByRunId, onOpenRun) : undefined} />
               )} />
+          ) : many ? (
+            <Elsewhere icon="check" title={`No findings in attempt ${shown}${reviewing ? " yet" : ""}`}
+              description={reviewing ? "Its reviewers are still at work." : phases.some((r) => r.phase === "review") ? "Its reviewers raised nothing." : "Reviewers report here once its review starts."}
+              others={others.map((o) => ({ n: o.n, count: o.findings.length }))} what="finding" onAttempt={(n) => pickAttempt(n)} />
           ) : (
             <EmptyState compact icon="check" title="No findings" description={started ? "The reviewers raised nothing, yet." : "Reviewers report here once delivery starts."} />
           )}
@@ -483,27 +559,15 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
           {sessions.length > 0 ? (
             <div className="taskSessions">
               <div className="taskSessionList" data-testid="sessions">
-                {(attempts.length > 1 ? attempts : [null]).map((n) => {
-                  const mine = n === null ? sessions : sessions.filter((r) => r.attempt === n);
-                  const list = (
-                    <SessionList key={n ?? "all"}>
-                      {mine.map((run) => (
-                        <SessionItem key={run.id} onOpen={() => onOpenRun(run.id)} current={run.id === openRun} data-testid="session"
-                          avatar={<AgentAvatar role={run.role ?? DEFAULT_RUN_ROLE} size="lg" live={run.status === "running"} />}
-                          title={runLabel(run) + (againOf(run, mine) ? " · again" : "")}
-                          detail={<>{run.model ?? run.harness ?? "agent"} · {run.startedAt ? <Duration since={run.startedAt} until={run.endedAt} live={run.status === "running"} tone="muted" /> : "not started"}</>}
-                          trailing={<StatusMark status={run.status} size="sm" iconOnly={run.status === "completed"} />} />
-                      ))}
-                    </SessionList>
-                  );
-                  // One attempt: the list alone. Several: each under its head.
-                  return n === null ? list : (
-                    <section key={n} aria-label={`Attempt ${n}`} data-testid="attempt-sessions">
-                      <h3 className="ds-label sessionGroupHead">Attempt {n}<span>{n === current ? "current" : "set aside"}</span></h3>
-                      {list}
-                    </section>
-                  );
-                })}
+                <SessionList>
+                  {sessions.map((run) => (
+                    <SessionItem key={run.id} onOpen={() => onOpenRun(run.id)} current={run.id === openRun} data-testid="session"
+                      avatar={<AgentAvatar role={run.role ?? DEFAULT_RUN_ROLE} size="lg" live={run.status === "running"} />}
+                      title={runLabel(run) + (againOf(run, sessions) ? " · again" : "")}
+                      detail={<>{run.model ?? run.harness ?? "agent"} · {run.startedAt ? <Duration since={run.startedAt} until={run.endedAt} live={run.status === "running"} tone="muted" /> : "not started"}</>}
+                      trailing={<StatusMark status={run.status} size="sm" iconOnly={run.status === "completed"} />} />
+                  ))}
+                </SessionList>
               </div>
               {openRun ? (
                 <RunScreen key={openRun} client={client} runId={openRun} onBack={onBack} task={sessionTask} onOpenServers={openServers}
@@ -518,8 +582,12 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
         </TabPanel>
 
         <TabPanel value="files" className="taskPane">
-          {artifacts.length > 0 ? (
-            <FilesSection client={client} taskId={taskId} taskKey={item.key} artifacts={artifacts} onOpenRun={onOpenRun} />
+          {mine.artifacts.length > 0 ? (
+            <FilesSection client={client} taskId={taskId} taskKey={item.key} artifacts={mine.artifacts} onOpenRun={onOpenRun} />
+          ) : many ? (
+            <Elsewhere icon="file" title={`No files in attempt ${shown}${earlier ? "" : " yet"}`}
+              description="What its agents save — notes, screenshots, reports, recordings — shows here."
+              others={others.map((o) => ({ n: o.n, count: fileCount(o.artifacts) }))} what="file" onAttempt={(n) => pickAttempt(n)} />
           ) : (
             <EmptyState compact icon="file" title="No files yet" description="What the agents save — notes, screenshots, reports, recordings — shows here." />
           )}
@@ -530,16 +598,104 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
         </TabPanel>
 
         <TabPanel value="activity" className="taskPane">
-          <Activity events={events} people={people} runs={item.runs} />
+          <Activity events={events} people={people} runs={item.runs} prs={allPrs} current={current} many={many} shown={shown}
+            onOpenRun={onOpenRun} onShow={(n, t) => pickAttempt(n, t)} />
         </TabPanel>
       </Tabs>
     </div>
   );
 }
 
-/** The attempt a pull request belongs to: that of the Run that opened it, else the first. */
-function attemptOfPr(pr: PullRequest, runs: readonly Run[]): number {
-  return runs.find((r) => r.id === pr.runId)?.attempt ?? 1;
+/**
+ * The page's attempt, in the header before its branch: a `Select` whose
+ * options say, besides the number, how each ended (its mark), "current" or
+ * "set aside", and under it in the list when it started or was set aside
+ * and how, its branch, its pull requests and what it cost.
+ */
+function AttemptPicker({ client, taskId, item, attempts, prs, events, people, value, version, onChange }: {
+  client: ApiClient; taskId: string; item: TaskDetail; attempts: readonly number[]; prs: readonly PullRequest[];
+  events: readonly PersistedEvent[]; people: People; value: number; version: number; onChange: (n: number) => void;
+}) {
+  // What each attempt cost: its Runs' costs, from one read of the task's.
+  const [costs, setCosts] = useState<ReadonlyMap<string, number>>(new Map());
+  useEffect(() => void client.taskMetrics(taskId).then((m) => setCosts(new Map(m.runs.map((r) => [r.id, r.cost.totalUsd]))), () => {}),
+    [client, taskId, version]);
+  const current = attempts[0]!;
+  const options = attempts.map((n) => {
+    const runs = item.runs.filter((r) => r.kind !== "preview" && r.attempt === n);
+    const first = [...runs].sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
+    const aside = n === current ? null : setAsideOf(n, item.runs, events, people);
+    const branch = runs.find((r) => r.branch)?.branch;
+    const mine = prs.filter((pr) => attemptOfPr(pr, item.runs) === n);
+    const cost = runs.reduce((sum, r) => sum + (costs.get(r.id) ?? 0), 0);
+    const status = n === current ? item.status : attemptEnd(item.runs, n);
+    return {
+      value: String(n),
+      label: <span className="attemptPickLabel"><StatusMark status={status} size="sm" iconOnly />Attempt {n}</span>,
+      meta: n === current ? "current" : "set aside",
+      description: (
+        <>
+          {aside ? <>{aside.at ? <>Set aside {ago(aside.at)} ago</> : "Set aside"}{aside.how ? ` · ${aside.how}` : ""}</>
+            : first ? <>Started {ago(first.createdAt)} ago</> : "Not started"}
+          {branch ? <> · <span className="ds-mono">{branch}</span></> : null}
+          {mine.length > 0 ? <> · {mine.map((pr) => `PR #${pr.number} ${pr.state}`).join(", ")}</> : null}
+          {costs.size > 0 ? <> · {formatUsd(cost)}</> : null}
+        </>
+      ),
+    };
+  });
+  return (
+    <Select<string> size="sm" aria-label="Attempt" value={String(value)} onValueChange={(v) => onChange(Number(v))} options={options}
+      className="attemptPicker" data-testid="attempt-picker"
+      footer="The whole page shows the attempt chosen. Activity always shows every attempt." />
+  );
+}
+
+/**
+ * On an earlier attempt, in the escalation's place: who set it aside,
+ * when, their note, how it had ended, and the way to the current one.
+ * Neutral: nothing is wrong and nobody is needed.
+ */
+function EarlierBar({ attempt, current, aside, onCurrent }: { attempt: number; current: number; aside: SetAside; onCurrent: () => void }) {
+  return (
+    <Callout tone="neutral" data-testid="earlier-bar">
+      <div className="escalation">
+        <p>
+          <strong>Attempt {attempt} was set aside</strong>
+          {aside.at ? <> {ago(aside.at)} ago</> : null}
+          {aside.by ? <>, when <b>{aside.by}</b> started over</> : null}
+          {aside.note ? <>: “{aside.note}”</> : "."}
+        </p>
+        <p className="earlierSecond">
+          {aside.how ? `It had ${aside.how}. ` : null}What it left is here to read; nothing in it can be merged, resumed or steered.{" "}
+          <Button size="sm" variant="secondary" trailingIcon="arrow-right" onClick={onCurrent} data-testid="go-current">
+            Go to attempt {current} (current)
+          </Button>
+        </p>
+      </div>
+    </Callout>
+  );
+}
+
+/** An empty tab of one attempt, and every other attempt that had some, each a way there. */
+function Elsewhere({ icon, title, description, others, what, onAttempt }: {
+  icon: IconName; title: string; description: string; others: ReadonlyArray<{ n: number; count: number }>;
+  what: string; onAttempt: (n: number) => void;
+}) {
+  return (
+    <EmptyState compact icon={icon} title={title}
+      description={
+        <>
+          {description}
+          {others.filter((o) => o.count > 0).map((o) => (
+            <span key={o.n} className="elsewhere" data-testid="elsewhere" data-attempt={o.n}>
+              Attempt {o.n} had {plural(o.count, what)}.{" "}
+              <Button size="sm" variant="quiet" trailingIcon="arrow-right" onClick={() => onAttempt(o.n)}>Show attempt {o.n}'s</Button>
+            </span>
+          ))}
+        </>
+      } />
+  );
 }
 
 /** A phase run again in its attempt after one before it stopped: "Implement · again". */
@@ -548,73 +704,10 @@ function againOf(run: Run, runs: readonly Run[]): boolean {
     r.createdAt < run.createdAt && (r.status === "aborted" || r.status === "failed"));
 }
 
-/**
- * Why a session that stopped is no longer where the work goes on: its
- * attempt was set aside by a start over, or a new session took its step up
- * again. Undefined for one still current.
- */
-function setAsideOf(run: Run | undefined, current: number, runs: readonly Run[]): "restart" | "retry" | undefined {
-  if (!run || (run.status !== "aborted" && run.status !== "failed")) return undefined;
-  if (run.attempt < current) return "restart";
-  return runs.some((r) => r.attempt === run.attempt && r.phase === run.phase && r.createdAt > run.createdAt) ? "retry" : undefined;
-}
-
-/**
- * An earlier attempt under the current one's pipeline: one muted line —
- * how it stopped, and Show — that folds open to its steps as they ended,
- * who stopped it and why, who set it aside, and its branch and pull
- * requests. Nothing of it is offered to pick up: it was set aside.
- */
-function EarlierAttempt({ attempt, runs, prs, events, people, open, onToggle, onOpenRun }: {
-  attempt: number; runs: readonly Run[]; prs: readonly PullRequest[]; events: readonly PersistedEvent[]; people: People;
-  open: boolean; onToggle: (open: boolean) => void; onOpenRun: (runId: string) => void;
-}) {
-  const ordered = [...runs].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-  const stopped = ordered.findLast((r) => r.status === "aborted" || r.status === "failed");
-  const { by, why } = stopped ? howRunStopped(stopped, events, people, 120) : { by: null, why: null };
-  const restart = events.find((e) => e.eventType === "task.recovered" && e.payload.action === "restart" && e.payload.attempt === attempt + 1);
-  const restartBy = restart ? actorName(humanActor(restart), people.names) : null;
-  const note = typeof restart?.payload.note === "string" && restart.payload.note ? restart.payload.note : null;
-  const head = Object.entries(ordered.findLast((r) => Object.keys(r.heads).length > 0)?.heads ?? {})[0];
-  const how = stopped ? `stopped at ${runLabel(stopped)}${stopped.status === "failed" ? ", failed" : by ? `, aborted by ${firstName(by)}` : ", aborted"}` : "set aside";
-  if (!open) {
-    return (
-      <p className="earlierAttempt" data-testid="earlier-attempt" data-attempt={attempt}>
-        <Icon name="layers" size={12} /> Attempt {attempt} {how}.
-        <Button size="sm" variant="quiet" trailingIcon="chevron-down" onClick={() => onToggle(true)} data-testid="show-attempt">
-          Show attempt {attempt}
-        </Button>
-      </p>
-    );
-  }
-  return (
-    <div className="attemptOpen" data-testid="earlier-attempt" data-attempt={attempt} aria-label={`Attempt ${attempt}`}>
-      <div className="attemptHead">
-        <Icon name="layers" size={14} />
-        <span className="attemptTitle">Attempt {attempt}</span>
-        {stopped ? <StatusMark status={stopped.status} size="sm" /> : null}
-        <span className="attemptSpacer" />
-        <Button size="sm" variant="quiet" trailingIcon="chevron-up" onClick={() => onToggle(false)}>Hide</Button>
-      </div>
-      <StepList>
-        {ordered.map((run) => (
-          <StepRow key={run.id} onOpen={() => onOpenRun(run.id)} data-testid="phase"
-            avatar={<AgentAvatar role={run.role ?? DEFAULT_RUN_ROLE} size="lg" />}
-            label={runLabel(run)}
-            note={run.status === "aborted" ? (by ? `aborted by ${firstName(by)}` : "aborted") : run.status === "failed" && run.error ? shortError(run.error, 80) : undefined}
-            status={<StatusMark status={run.status} size="sm" iconOnly={run.status === "completed"} />}
-            meta={Object.values(run.heads).map((sha) => shortId(sha, 7))[0]}
-            duration={run.startedAt ? <Duration since={run.startedAt} until={run.endedAt} tone="muted" /> : "—"} />
-        ))}
-      </StepList>
-      <KeyValueList items={[
-        ...(stopped ? [{ label: "Stopped", value: stoppedSentence(stopped, by, why) }] : []),
-        ...(restart ? [{ label: "Set aside", value: <><b>{restartBy ?? "Someone"}</b> started over{note ? <>: “{note}”</> : "."}</> }] : []),
-        ...(head ? [{ label: "Branch", value: <><span className="ds-mono">{ordered.find((r) => r.branch)?.branch ?? "its branch"}</span> at <span className="ds-mono">{shortId(head[1], 7)}</span>, kept on GitHub.</> }] : []),
-        ...(prs.length > 0 ? [{ label: prs.length > 1 ? "Pull requests" : "Pull request", value: <span className="attemptPrs">{prs.map((pr) => <PrChip key={pr.id} pr={pr} />)}</span> }] : []),
-      ]} />
-    </div>
-  );
+/** A stopped session whose step a new session took up again in the same attempt (Try again). */
+function retriedRun(run: Run | undefined, runs: readonly Run[]): boolean {
+  if (!run || (run.status !== "aborted" && run.status !== "failed")) return false;
+  return runs.some((r) => r.attempt === run.attempt && r.phase === run.phase && r.createdAt > run.createdAt);
 }
 
 /** A task's events after a cursor, oldest first, in pages. */
@@ -734,17 +827,38 @@ function resolvedIn(item: TaskDetail, reviewId: string, onOpenRun: (id: string) 
   );
 }
 
-/** What a person or dude did to the task, newest first, by name. */
-function Activity({ events, people, runs }: { events: readonly PersistedEvent[]; people: People; runs: readonly Run[] }) {
-  const lines = useMemo(() => activityLines(events, people, runs), [events, people, runs]);
+/**
+ * What a person or dude did to the task, newest first, by name: every
+ * attempt's, each line marked with its attempt once there are several.
+ * A line's way to what it names opens it on that line's attempt.
+ */
+function Activity({ events, people, runs, prs, current, many, shown, onOpenRun, onShow }: {
+  events: readonly PersistedEvent[]; people: People; runs: readonly Run[]; prs: readonly PullRequest[]; current: number;
+  many: boolean; shown: number; onOpenRun: (runId: string) => void; onShow: (attempt: number, tab: string) => void;
+}) {
+  // A task never started over keeps the Activity it had: no attempt marks, ways there, or the lines that carry them.
+  const lines = useMemo(() => {
+    const all = activityLines(events, people, runs, prs, current);
+    return many ? all : all.filter((l) => !l.attemptOnly).map((l): ActivityLine => ({ ...l, open: undefined }));
+  }, [events, people, runs, prs, current, many]);
   if (lines.length === 0) return <EmptyState compact icon="list" title="Nothing yet" description="Who did what to the task shows here: deliveries, steers, answers, pull requests." />;
   const now = Date.now();
   return (
     <Timeline data-testid="activity">
       {lines.map((l) => (
         <TimelineItem key={l.id} who={l.who} quote={l.quote} when={<Duration ms={Math.max(0, now - Date.parse(l.at))} format="age" tone="muted" />}
-          data-testid="activity-item">
+          data-testid="activity-item" data-attempt={l.attempt}>
           {l.text}
+          {many ? <span className="lineAttempt" data-shown={l.attempt === shown || undefined}> · attempt {l.attempt}</span> : null}
+          {l.open ? (
+            <>
+              {" "}
+              <Button size="sm" variant="quiet" trailingIcon="arrow-right" data-testid="activity-open"
+                onClick={() => (l.open!.runId ? onOpenRun(l.open!.runId) : onShow(l.attempt, l.open!.tab))}>
+                {l.open.label}
+              </Button>
+            </>
+          ) : null}
         </TimelineItem>
       ))}
     </Timeline>
@@ -754,13 +868,35 @@ function Activity({ events, people, runs }: { events: readonly PersistedEvent[];
 interface ActivityLine {
   id: string;
   at: string;
+  /** The attempt it happened in. */
+  attempt: number;
   who: ReactNode;
   text: ReactNode;
   quote?: ReactNode;
+  /** A way to what it names: a session, or a tab of its attempt. */
+  open?: { label: string; runId?: string; tab: string } | undefined;
+  /** Only worth a line once there are attempts to tell apart: findings raised, a file saved. */
+  attemptOnly?: boolean;
 }
 
-/** The ledger as sentences: the acts worth a line, each with who did it. */
-export function activityLines(events: readonly PersistedEvent[], people: People, runs: readonly Run[]): ActivityLine[] {
+/**
+ * The attempt an event happened in: the one a start over began, its Run's,
+ * its pull request's, else the attempt under way when it happened.
+ */
+function attemptOfEvent(e: PersistedEvent, runs: readonly Run[], prs: readonly PullRequest[], current: number): number {
+  if (e.eventType === "task.recovered" && e.payload.action === "restart" && typeof e.payload.attempt === "number") return e.payload.attempt;
+  const run = e.runId ? runs.find((r) => r.id === e.runId) : undefined;
+  if (run) return attemptOfRun(run, current);
+  if (e.eventType.startsWith("pull_request.")) {
+    const same = prs.filter((p) => p.number === e.payload.number);
+    const pr = same.find((p) => p.repositoryName === e.payload.repo) ?? same[0];
+    if (pr) return attemptOfPr(pr, runs);
+  }
+  return Math.max(1, ...runs.filter((r) => r.kind !== "preview" && r.createdAt <= e.occurredAt).map((r) => r.attempt));
+}
+
+/** The ledger as sentences: the acts worth a line, each with who did it and its attempt. */
+export function activityLines(events: readonly PersistedEvent[], people: People, runs: readonly Run[], prs: readonly PullRequest[] = [], current = 1): ActivityLine[] {
   const out: ActivityLine[] = [];
   // A task with pull requests in several repositories names each by its repository.
   const named = new Set(events.filter((e) => e.eventType === "pull_request.opened").map((e) => e.payload.repo)).size > 1;
@@ -769,13 +905,14 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
   const taskId = events.find((e) => e.taskId)?.taskId;
   const dude = dudeName(taskId ?? "");
   const phase = (runId: string | null) => (runId && labels.get(runId)) || "agent";
+  const session = (runId: string | null) => (runId && labels.has(runId) ? { label: "Open session", runId, tab: "sessions" } : undefined);
   for (const e of events) {
     const by = humanActor(e);
     const name = actorName(by, people.names);
     const face = by ? <PersonAvatar person={{ ...(people.byId.get(by.id) ?? {}), id: by.id, name: name ?? "Someone" }} size={32} /> : null;
     const person = <b>{name ?? "Someone"}</b>;
     const p = e.payload;
-    const base = { id: e.eventId, at: e.occurredAt };
+    const base = { id: e.eventId, at: e.occurredAt, attempt: attemptOfEvent(e, runs, prs, current) };
     switch (e.eventType) {
       case "task.created":
         out.push({ ...base, who: face, text: <>{person} created the task</> });
@@ -795,7 +932,8 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
         if (by) out.push({ ...base, who: face, text: <>{person} resumed the {phase(e.runId)}</> });
         break;
       case "run.aborted":
-        out.push({ ...base, who: face ?? <DudeMark size={32} />, text: <>{by ? person : <b>{dude}</b>} aborted the {phase(e.runId)}</>, quote: p.reason ? String(p.reason) : undefined });
+        out.push({ ...base, who: face ?? <DudeMark size={32} />, text: <>{by ? person : <b>{dude}</b>} aborted the {phase(e.runId)}</>,
+          quote: p.reason ? String(p.reason) : undefined, open: session(e.runId) });
         break;
       case "task.recovered":
         out.push({ ...base, who: face, quote: p.note ? String(p.note) : undefined,
@@ -811,10 +949,19 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
         out.push({ ...base, who: face, text: <>{person} decided how delivery goes on: {String(p.action ?? "")}</>, quote: p.note ? String(p.note) : undefined });
         break;
       case "question.asked":
-        if (p.kind === "agent") out.push({ ...base, who: <AgentAvatar role="implementer" size="lg" />, text: <>The <b>{phase(e.runId)}</b> asked a question</>, quote: String(p.prompt ?? "") });
+        if (p.kind === "agent") out.push({ ...base, who: <AgentAvatar role="implementer" size="lg" />, text: <>The <b>{phase(e.runId)}</b> asked a question</>, quote: String(p.prompt ?? ""), open: session(e.runId) });
         break;
       case "run.created":
-        if (typeof p.phase === "string") out.push({ ...base, who: <AgentAvatar role={(typeof p.role === "string" ? p.role : DEFAULT_RUN_ROLE) as Run["role"] & string} size="lg" />, text: <>The <b>{phase(e.runId)}</b> started</> });
+        if (typeof p.phase === "string") out.push({ ...base, who: <AgentAvatar role={(typeof p.role === "string" ? p.role : DEFAULT_RUN_ROLE) as Run["role"] & string} size="lg" />, text: <>The <b>{phase(e.runId)}</b> started</>, open: session(e.runId) });
+        break;
+      case "review.completed": {
+        const count = Number(p.count ?? 0);
+        if (count > 0) out.push({ ...base, who: <AgentAvatar role="reviewer" size="lg" />, text: <>The <b>{phase(e.runId)}</b> raised {plural(count, "finding")}</>, open: { label: "Show findings", tab: "findings" }, attemptOnly: true });
+        break;
+      }
+      case "artifact.created":
+        out.push({ ...base, who: <AgentAvatar role={(runs.find((r) => r.id === e.runId)?.role ?? DEFAULT_RUN_ROLE)} size="lg" />,
+          text: <>The <b>{phase(e.runId)}</b> saved <span className="ds-mono">{String(p.name ?? "a file")}</span></>, open: { label: "Show file", tab: "files" }, attemptOnly: true });
         break;
       default: {
         // What happened to a pull request: by the GitHub login that did it,
@@ -825,7 +972,7 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
           ? <PersonAvatar person={{ id: `gh:${line.who}`, name: line.who }} size={32} />
           : line.byDude ? <DudeMark size={32} /> : <AgentAvatar role="integration" size="lg" />;
         const text = line.actorId ? <>{person} {line.text}</> : line.byDude ? <><b>{dude}</b> {line.text}</> : line.text;
-        out.push({ ...base, who, text, quote: line.quote });
+        out.push({ ...base, who, text, quote: line.quote, ...(e.eventType === "pull_request.opened" ? { open: { label: "Show", tab: "overview" } } : {}) });
         break;
       }
     }
