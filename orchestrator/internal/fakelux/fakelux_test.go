@@ -301,6 +301,51 @@ func TestARunEndedWhileStartingIsPlacedNoFurther(t *testing.T) {
 	}
 }
 
+// As lux's resumeRun answers with the Run's current epoch, and its
+// scheduler moves that epoch only when it assigns the new placement: the
+// resume's answer, and a Get before the assign, carry the stopped epoch;
+// once assigned, Get carries the new one and its placement.
+func TestAResumesAnswerCarriesTheStoppedEpochUntilThePlacementIsAssigned(t *testing.T) {
+	fake := New("", "k", func(map[string]any) Behaviour { return Behaviour{Hang: true} })
+	fake.StartAfter = 500 * time.Millisecond
+	srv := httptest.NewServer(fake.Handler())
+	t.Cleanup(srv.Close)
+	client := lux.New(srv.URL, "k")
+	run, err := client.Submit(context.Background(), lux.Spec{Image: lux.Image{Ref: "agent:1"},
+		Workload: lux.Workload{Adapter: "generic", Command: []string{"true"}}}, "k-epoch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, client, run.ID, "running")
+	if err := client.Stop(context.Background(), run.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, client, run.ID, "stopped")
+	resumed, err := client.Resume(context.Background(), run.ID, lux.ResumeInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.State != "resuming" || resumed.Epoch != 1 {
+		t.Errorf("resume answered %s at epoch %d, want resuming at the stopped epoch 1", resumed.State, resumed.Epoch)
+	}
+	// A fifth of the start passes before the host is assigned.
+	if got, _ := client.Get(context.Background(), run.ID); got.Epoch != 1 || len(got.Placements) != 1 {
+		t.Errorf("before the assign: epoch %d, %d placements, want 1 and 1", got.Epoch, len(got.Placements))
+	}
+	// Answered again while resuming, as lux answers a repeated resume.
+	if again, err := client.Resume(context.Background(), run.ID, lux.ResumeInput{}); err != nil || again.Epoch != 1 {
+		t.Errorf("a repeated resume answered epoch %d (%v), want 1", again.Epoch, err)
+	}
+	waitState(t, client, run.ID, "running")
+	got, err := client.Get(context.Background(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Epoch != 2 || len(got.Placements) != 2 || got.Placements[1].Epoch != 2 || got.Placements[1].AssignedAt == nil {
+		t.Errorf("once assigned: epoch %d, placements %+v, want epoch 2 with its placement", got.Epoch, got.Placements)
+	}
+}
+
 func waitState(t *testing.T, c *lux.HTTPClient, id, state string) {
 	t.Helper()
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
