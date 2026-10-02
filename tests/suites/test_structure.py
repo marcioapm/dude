@@ -204,16 +204,151 @@ def test_the_factorys_delivery_defaults_are_readable(client: ApiClient):
     assert defaults["maxReviewIterations"] >= 1
 
 
-def test_the_github_connection_is_shown_masked_and_can_be_verified(client: ApiClient, forge_project: dict):
+def _verify(client: ApiClient) -> dict:
+    resp = client.post("/v1/forge/credential/verify")
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+def _permissions(verdict: dict) -> dict[str, dict]:
+    """The one repository's results, by permission name, without its id."""
+    [repo] = verdict["repositories"]
+    return {p["permission"]: {k: v for k, v in p.items() if k != "permission"} for p in repo["permissions"]}
+
+
+def _use_token(client: ApiClient, gh, secret: str, **profile) -> None:
+    from fake_github import TokenProfile
+
+    gh.tokens[secret] = TokenProfile(**profile)
+    resp = client.post("/v1/forge/credential", {"auth": "pat", "secret": secret, "apiBaseUrl": gh.api_url})
+    assert resp.status_code == 200, resp.text
+
+
+FINE_GRAINED_CHECKS = (
+    "GitHub refused to list check runs, and fine-grained tokens cannot be granted Checks: Read (GitHub offers no "
+    "such permission for them): use a classic token with the repo scope, or a GitHub App once dude supports one.")
+
+
+def test_the_github_connection_is_shown_masked_and_can_be_verified(client: ApiClient, forge_project: dict, fake_github):
     conn = client.get("/v1/forge/credential").json()
     assert conn["connected"] is True and conn["auth"] == "pat"
     assert conn["secretHint"] == "oken"  # the fixture's token ends in "token"
     assert "secret" not in conn
     assert conn["webhookPath"].startswith("/v1/webhooks/github/")
-    assert client.post("/v1/forge/credential/verify").json() == {"ok": True, "login": "dude-bot", "scopes": None}
+    verdict = _verify(client)
+    repo = forge_project["repositories"][0]
+    assert {k: v for k, v in verdict.items() if k != "repositories"} == {
+        "ok": True, "login": "dude-bot", "scopes": None, "tokenKind": "unknown"}
+    assert [(r["id"], r["name"], r["projectName"], r["slug"]) for r in verdict["repositories"]] == [
+        (repo["id"], "greeter", "Greeter", f"{fake_github.owner}/{fake_github.repo}")]
+    outcomes = {name: (p["level"], p["outcome"]) for name, p in _permissions(verdict).items()}
+    assert outcomes == {
+        "Metadata: Read": ("required", "ok"),
+        "Contents: Read and write": ("required", "ok"),
+        "Pull requests: Read and write": ("required", "ok"),
+        "Commit statuses: Read": ("required", "ok"),
+        # No commit has check runs yet: nothing tells granted from missing.
+        "Checks: Read": ("required", "untested"),
+        "Webhooks: Read and write": ("optional", "ok"),
+        "Workflows: Read and write": ("optional", "untested"),
+        "Actions: Read and write": ("optional", "untested"),
+        "Members: Read (organization)": ("optional", "untested"),
+    }
+    # Push access was decided by discovery alone: nothing was pushed or opened.
+    assert f"/{fake_github.owner}/{fake_github.repo}.git/info/refs?service=git-receive-pack" in fake_github.receive_requests
+    assert fake_github.pulls == {} and fake_github.hooks == [] and fake_github.branches() == ["main"]
 
     client.post("/v1/forge/credential", {"auth": "pat", "secret": "wrong", "apiBaseUrl": conn["apiBaseUrl"]})
-    assert client.post("/v1/forge/credential/verify").json() == {"ok": False, "reason": "GitHub rejected the token"}
+    assert _verify(client) == {"ok": False, "reason": "GitHub rejected the token"}
+
+
+def test_a_fine_grained_token_missing_checks_is_told_it_needs_a_classic_token(client: ApiClient, forge_project: dict, fake_github):
+    _use_token(client, fake_github, "github_pat_nochecks", checks=False)
+    fake_github.add_check_run(fake_github.open_pull("feature"))
+    verdict = _verify(client)
+    assert verdict["ok"] is False and verdict["tokenKind"] == "fine_grained"
+    assert _permissions(verdict)["Checks: Read"] == {"level": "required", "outcome": "missing", "reason": FINE_GRAINED_CHECKS}
+    # The other required permissions it has are still reported as such.
+    assert _permissions(verdict)["Pull requests: Read and write"]["outcome"] == "ok"
+    assert [number for number in fake_github.pulls] == [1]
+
+
+def test_a_commit_without_check_runs_never_counts_as_checks_granted(client: ApiClient, forge_project: dict, fake_github):
+    # GitHub answers 200 with no runs even to a token that may not read them.
+    _use_token(client, fake_github, "github_pat_nochecks", checks=False)
+    fake_github.open_pull("feature")
+    verdict = _verify(client)
+    assert _permissions(verdict)["Checks: Read"] == {
+        "level": "required", "outcome": "untested",
+        "reason": "Could not test: no recent commit has check runs, and GitHub lists none to any token."}
+    assert verdict["ok"] is True
+
+    # A later commit with runs (an Actions run's head) decides it, past the empty head.
+    fake_github.add_check_run(fake_github.branch_sha("main"))
+    assert _permissions(_verify(client))["Checks: Read"]["outcome"] == "missing"
+
+
+def test_a_classic_token_is_judged_by_its_scopes_and_its_reads(client: ApiClient, forge_project: dict, fake_github):
+    fake_github.owner_type = "Organization"
+    _use_token(client, fake_github, "ghp_classicrepo", scopes="repo")
+    fake_github.add_check_run(fake_github.open_pull("feature"))
+    verdict = _verify(client)
+    assert (verdict["ok"], verdict["scopes"], verdict["tokenKind"]) == (True, "repo", "classic")
+    perms = _permissions(verdict)
+    assert {name: p["outcome"] for name, p in perms.items()} == {
+        "Metadata: Read": "ok", "Contents: Read and write": "ok", "Pull requests: Read and write": "ok",
+        "Commit statuses: Read": "ok", "Checks: Read": "ok", "Webhooks: Read and write": "ok",
+        # Optional and missing: reported, and ok stays true.
+        "Workflows: Read and write": "missing", "Actions: Read and write": "ok",
+        "Members: Read (organization)": "missing",
+    }
+    assert "workflow scope" in perms["Workflows: Read and write"]["reason"]
+    assert "read:org" in perms["Members: Read (organization)"]["reason"]
+
+    # public_repo does not reach a private repository: no push, no pull requests.
+    _use_token(client, fake_github, "ghp_classicpublic", scopes="public_repo, workflow, read:org")
+    verdict = _verify(client)
+    perms = _permissions(verdict)
+    assert verdict["ok"] is False
+    assert perms["Contents: Read and write"]["outcome"] == perms["Pull requests: Read and write"]["outcome"] == "missing"
+    assert "public_repo covers public repositories only" in perms["Contents: Read and write"]["reason"]
+    assert perms["Workflows: Read and write"]["outcome"] == perms["Members: Read (organization)"]["outcome"] == "ok"
+
+
+def test_a_missing_required_permission_fails_verify(client: ApiClient, forge_project: dict, fake_github):
+    _use_token(client, fake_github, "github_pat_nopulls", pulls_write=False)
+    verdict = _verify(client)
+    pulls = _permissions(verdict)["Pull requests: Read and write"]
+    assert verdict["ok"] is False and (pulls["level"], pulls["outcome"]) == ("required", "missing")
+    assert "pull_requests=write" in pulls["reason"]
+    assert fake_github.pulls == {}
+
+    _use_token(client, fake_github, "github_pat_nopush", push=False)
+    verdict = _verify(client)
+    assert verdict["ok"] is False
+    assert _permissions(verdict)["Contents: Read and write"] == {
+        "level": "required", "outcome": "missing",
+        "reason": "Git refused push discovery: the token cannot push to this repository."}
+    assert fake_github.branches() == ["main"]
+
+
+def test_a_missing_optional_permission_is_reported_without_failing_verify(client: ApiClient, forge_project: dict, fake_github):
+    _use_token(client, fake_github, "github_pat_nohooks", hooks_write=False)
+    verdict = _verify(client)
+    hooks = _permissions(verdict)["Webhooks: Read and write"]
+    assert verdict["ok"] is True and (hooks["level"], hooks["outcome"]) == ("optional", "missing")
+    assert "repository_hooks=write" in hooks["reason"]
+    assert fake_github.hooks == []
+
+
+def test_a_rate_limited_probe_is_untested_not_missing(client: ApiClient, forge_project: dict, fake_github):
+    _use_token(client, fake_github, "github_pat_limited", checks=False, rate_limited={"check-runs"})
+    fake_github.add_check_run(fake_github.open_pull("feature"))
+    verdict = _verify(client)
+    assert _permissions(verdict)["Checks: Read"] == {
+        "level": "required", "outcome": "untested",
+        "reason": "Rate limited: GitHub refused a listing of check runs until its limit resets."}
+    assert verdict["ok"] is True
 
 
 @pytest.mark.skipif(not os.environ.get("DUDE_TEST_GITHUB_GIT_HOST"), reason="needs an explicit local test gateway")

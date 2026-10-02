@@ -745,12 +745,13 @@ export function prCheckDiagnosticReason(code: string): string {
 }
 
 /**
- * What to do about it, under that line: what the token lacks, and that CI
- * may well be running — dude cannot see it, so Merge waits.
+ * What to do about it, under that line: GitHub gives fine-grained tokens no
+ * way to read check runs, so the fix is another kind of token — and that CI
+ * may well be running; dude cannot see it, so Merge waits.
  */
 export function prCheckDiagnosticFix(code: string): string | null {
   return code === CHECK_RUNS_FORBIDDEN
-    ? "dude's GitHub token needs Checks: Read on this repository, and the organization's approval if it uses SSO. CI may be running; dude can't see it, so Merge waits."
+    ? "A fine-grained token cannot read check runs: connect a classic token with the repo scope (or a GitHub App once dude supports one), authorized for the organization's SSO and with access to this repository. CI may be running; dude can't see it, so Merge waits."
     : null;
 }
 

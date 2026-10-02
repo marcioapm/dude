@@ -109,7 +109,8 @@ describe("checks that cannot be read", () => {
     expect(prCheckDiagnostic("pending")).toBeNull();
     expect(prActualChecks(checks).map((c) => c.name)).toEqual(["CodeRabbit"]);
     expect(prCheckDiagnosticReason(CHECK_RUNS_FORBIDDEN)).toBe("GitHub won't show dude this repository's checks");
-    expect(prCheckDiagnosticFix(CHECK_RUNS_FORBIDDEN)).toContain("needs Checks: Read");
+    expect(prCheckDiagnosticFix(CHECK_RUNS_FORBIDDEN)).toBe(
+      "A fine-grained token cannot read check runs: connect a classic token with the repo scope (or a GitHub App once dude supports one), authorized for the organization's SSO and with access to this repository. CI may be running; dude can't see it, so Merge waits.");
     expect(prCheckDiagnosticFix("other")).toBeNull();
     expect(prCheckDiagnosticReason("other")).toBe("Some GitHub checks cannot be read");
   });
