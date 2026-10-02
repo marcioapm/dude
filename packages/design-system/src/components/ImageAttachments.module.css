@@ -212,10 +212,16 @@
   max-width: 100%;
   object-fit: cover;
 }
+/* One shows large: 360px on its long side, so a phone screenshot is not a wall. */
 .imagesOne .image img,
 .imagesOne .imagePending {
-  width: min(360px, 100%);
+  width: auto;
   height: auto;
+  max-width: min(360px, 100%);
+  max-height: 360px;
+}
+.imagesOne .imagePending {
+  width: 360px;
 }
 .imagePending {
   display: grid;

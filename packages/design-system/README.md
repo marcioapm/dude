@@ -402,7 +402,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   ring, not a border — says how many and, in the steer's own words, who
   gets them and when (`detail`).
 - A sent turn's images are `MessageImages` in `ChatMessage`'s `attachments`
-  slot, under its words: one shows large (360px wide), several as a row of
+  slot, under its words: one shows large (up to 360px on its long side), several as a row of
   150px tiles, name · size on hover. The turn's receipt covers them; a
   failed one keeps them, with Retry.
 - `ImageViewer` opens over everything: ← → between the message's images,

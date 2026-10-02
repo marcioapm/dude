@@ -112,10 +112,11 @@ export function ImagesBlock({ mode }: { readonly mode: PaneMode }) {
             attachments={<MessageImages images={[{ id: "att_3", name: "console.png", src: CONSOLE,
               delivered: { width: 1000, height: 560, contentType: "image/png", bytes: 74 * 1024 },
               original: { width: 1000, height: 560, contentType: "image/png", bytes: 74 * 1024 } }]} />} />
-          <ImageViewer images={SENT.map((s) => ({ ...s, originalSrc: s.src }))} index={viewer} onIndexChange={setViewer} onClose={() => setViewer(null)}
-            context="Márcio · steer to Implement · 15:52" readAt="15:52:40" onDownload={() => undefined} />
         </Col>
       </Panes>
+      {/* Once, outside the panes: it covers the page, whichever pane opened it. */}
+      <ImageViewer images={SENT.map((s) => ({ ...s, originalSrc: s.src }))} index={viewer} onIndexChange={setViewer} onClose={() => setViewer(null)}
+        context="Márcio · steer to Implement · 15:52" readAt="15:52:40" onDownload={() => undefined} />
     </Block>
   );
 }

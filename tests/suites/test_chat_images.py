@@ -344,6 +344,7 @@ def test_a_task_created_with_an_image_gives_it_to_its_first_agent(
     page.get_by_test_id("task-attach-input").set_input_files([{"name": "Summary v3.png", "mimeType": "image/png", "buffer": png(900, 900, (160, 90, 250))}])
     expect(page.get_by_test_id("attachment-chip")).to_have_attribute("data-state", "ready", timeout=20_000)
     expect(page.get_by_test_id("task-save")).to_be_disabled()
+    expect(page.get_by_test_id("task-create-deliver")).to_be_enabled()
     _shoot(page, "5-task-prompt")
     page.get_by_test_id("task-create-deliver").click()
     expect(page.get_by_test_id("task-screen")).to_be_visible(timeout=30_000)
