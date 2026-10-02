@@ -13,6 +13,7 @@ import { FixtureClient, emit } from "../src/fixtures/client.ts";
 import { ORG, ORPHAN_FINDING, PROJECT, RUN_ID, TASK_ID, YOU, taskFor } from "../src/fixtures/data.ts";
 import { stopOf } from "../src/screens/Recovery.tsx";
 import type { RecoverAction } from "../src/api/client.ts";
+import type { PersistedEvent } from "@dude/domain";
 import { App } from "../src/App.tsx";
 import { PeopleProvider } from "../src/people.tsx";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
@@ -157,6 +158,53 @@ describe("a task started over", () => {
     expect(page.textContent).not.toContain("Attempt");
   });
 
+  test("a task with one attempt keeps the Activity it had: no findings raised, no files saved, no ways there", async () => {
+    const client = new FixtureClient("d");
+    const events = client.events.bind(client);
+    client.events = async (params) => {
+      const r = await events(params);
+      if (r.events.length === 0) return r;
+      const like = r.events.find((e) => e.runId === "run_d2")!;
+      const extra = [
+        { ...like, eventId: "evt_d_review", cursor: 30_000, eventType: "review.completed", payload: { phase: "review", count: 4 } },
+        { ...like, eventId: "evt_d_file", cursor: 30_001, eventType: "artifact.created", payload: { artifactId: "art_d", name: "notes/vat.md" } },
+      ];
+      return { events: [...r.events, ...extra], nextCursor: 30_001 };
+    };
+    const page = await taskPage(client, { tab: "activity" });
+    await until(() => (count(page, "[data-testid=activity-item]") > 0 ? true : null), "Activity's lines");
+    // The ledger's acts are there; the lines and ways only a started-over task has are not.
+    expect(texts(page, "[data-testid=activity-item]").join()).toContain("created the task");
+    expect(texts(page, "[data-testid=activity-item]").filter((t) => t.includes("raised") || t.includes("saved"))).toHaveLength(0);
+    expect(count(page, "[data-testid=activity-open]")).toBe(0);
+  });
+
+  test("Activity is not worked out again for what an agent says as it works", async () => {
+    const client = restarted();
+    // Counts each pass over the ledger: the pass reads the last event's type.
+    let passes = 0;
+    const events = client.events.bind(client);
+    client.events = async (params) => {
+      const r = await events(params);
+      const last = r.events.at(-1);
+      if (!last) return r;
+      const counted = { ...last };
+      Object.defineProperty(counted, "eventType", { enumerable: true, get: () => (passes++, last.eventType) });
+      return { ...r, events: [...r.events.slice(0, -1), counted] };
+    };
+    const page = await taskPage(client, { tab: "activity" });
+    await until(() => (count(page, "[data-testid=activity-item]") > 0 ? true : null), "Activity's lines");
+    await settle(300);
+    const before = passes;
+    for (let i = 0; i < 10; i++) {
+      await act(async () => emit({ eventType: "agent.message", occurredAt: new Date().toISOString(), organizationId: ORG.id, projectId: PROJECT.id,
+        taskId: TASK_ID, runId: "run_a2_fix", sessionId: null, workflowRunId: null, actor: { type: "agent", id: "run_a2_fix" }, source: "runner",
+        correlationId: null, causationId: null, payload: { text: "Still on it." } } as never));
+    }
+    await settle(300);
+    expect(passes - before).toBe(0);
+  });
+
   test("the picker opens on the current attempt, and its options say how each went", async () => {
     const page = await taskPage(restarted());
     const trigger = await until(() => picker(page), "the attempt picker");
@@ -188,10 +236,10 @@ describe("a task started over", () => {
   test("attempt 1 shows its branch, pull request, pipeline, findings, sessions and files, and its counts", async () => {
     const page = await taskPage(restarted());
     await until(() => picker(page), "the attempt picker");
-    // Attempt 2's counts first: no findings, no files, four sessions.
+    // Attempt 2's counts first: no findings, its one file, four sessions.
     expect(tabCount(page, "Findings")).toBe("");
     expect(tabCount(page, "Sessions")).toBe("4");
-    expect(tabCount(page, "Files")).toBe("");
+    expect(tabCount(page, "Files")).toBe("1");
     await pick(page, 1);
     expect(page.querySelector("[data-testid=branch]")?.textContent).toBe("dude/task_wc214/attempt-1");
     expect(texts(page, "[data-testid=pr-link]")).toHaveLength(1);
@@ -228,6 +276,18 @@ describe("a task started over", () => {
     await openTab(page, "Files");
     await until(() => page.querySelector("[data-testid=files]"), "attempt 1's files");
     expect(page.querySelector("[data-testid=files]")?.textContent).toContain("routing.md");
+    expect(page.querySelector("[data-testid=files]")?.textContent).not.toContain("form-split.md");
+  });
+
+  test("each attempt's Files lists its own files alone", async () => {
+    const page = await taskPage(restarted(), { tab: "files" });
+    await until(() => picker(page), "the attempt picker");
+    const files = () => page.querySelector("[data-testid=files]")?.textContent ?? "";
+    await until(() => (files().includes("form-split.md") ? true : null), "attempt 2's file");
+    expect(files()).not.toContain("routing.md");
+    await pick(page, 1);
+    await until(() => (files().includes("routing.md") ? true : null), "attempt 1's file");
+    expect(files()).not.toContain("form-split.md");
   });
 
   test("the header says how attempt 1 ended, and the bar who set it aside, when and why, with the way back", async () => {
@@ -281,6 +341,180 @@ describe("a task started over", () => {
     expect(panel.getAttribute("data-pr")).toBe("pr_483");
     expect(count(panel, "[data-testid=pr-merge]")).toBe(1);
     await until(() => page.querySelector("[data-testid=servers-summary]"), "the servers beside it");
+  });
+
+  type Task = Awaited<ReturnType<FixtureClient["getTask"]>>;
+  /** The restarted task as `change` makes it, wherever the page reads it. */
+  function restartedAs(change: (t: Task) => Task) {
+    const client = restarted();
+    const getTask = client.getTask.bind(client);
+    client.getTask = async (id) => change(await getTask(id));
+    const getRun = client.getRun.bind(client);
+    client.getRun = async (id) => {
+      const r = await getRun(id);
+      return { ...r, ...change({ ...(await getTask(TASK_ID)) }).runs.find((x) => x.id === id) } as typeof r;
+    };
+    return client;
+  }
+  const at = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
+  /** Attempt 2's fixer aborted, and the task with it, to be picked back up. */
+  function attempt2Aborted() {
+    const client = restartedAs((t) => ({ ...t, status: "aborted",
+      runs: t.runs.map((r) => (r.id === "run_a2_fix" ? { ...r, status: "aborted" as const, endedAt: at(5) } : r)) }));
+    client.recoveryOptions = async () => ({ taskId: TASK_ID, actions: ["resume", "retry", "restart"], attempt: 2, keptUntil: at(-6 * 24 * 60) });
+    return client;
+  }
+
+  test("attempt 2 stopped offers the ways back; attempt 1 offers none of them", async () => {
+    const page = await taskPage(attempt2Aborted());
+    const notice = await until(() => page.querySelector<HTMLElement>("[data-testid=stopped]"), "attempt 2's stopped notice");
+    await until(() => notice.querySelector("[data-testid=recover-resume]"), "the ways back on attempt 2");
+    expect(count(page, "[data-testid^=recover-]")).toBe(3);
+    await pick(page, 1);
+    await until(() => page.querySelector("[data-testid=earlier-bar]"), "attempt 1's bar");
+    expect(count(page, "[data-testid=stopped]")).toBe(0);
+    expect(count(page, "[data-testid^=recover-]")).toBe(0);
+  });
+
+  test("attempt 2's stopped session offers Resume on its strip; attempt 1's sessions only the way to attempt 2", async () => {
+    const page = await taskPage(attempt2Aborted(), { runId: "run_a2_fix" });
+    const strip = await until(() => page.querySelector<HTMLElement>("[data-testid=run-ended]"), "attempt 2's end strip");
+    await until(() => strip.querySelector("[data-testid=run-ended-resume]"), "Resume… on attempt 2's strip");
+    const one = await taskPage(attempt2Aborted(), { runId: "run_a1_fix" });
+    const old = await until(() => one.querySelector<HTMLElement>("[data-testid=run-ended]"), "attempt 1's end strip");
+    await until(() => old.querySelector("[data-testid=run-ended-current]"), "the way to attempt 2");
+    expect(count(old, "[data-testid=run-ended-resume]")).toBe(0);
+    expect(count(old, "[data-testid=run-ended-other]")).toBe(0);
+  });
+
+  test("attempt 2 escalated shows its decision; attempt 1 does not", async () => {
+    const page = await taskPage(restartedAs((t) => ({ ...t, status: "awaiting_input",
+      escalation: { reason: "implement_failed", detail: { runId: "run_a2_fix", error: "host lost" }, actions: ["retry", "stop"], at: at(3) } })));
+    await until(() => page.querySelector("[data-testid=escalation]"), "attempt 2's escalation");
+    expect(count(page, "[data-testid=escalation]")).toBe(1);
+    await pick(page, 1);
+    await until(() => page.querySelector("[data-testid=earlier-bar]"), "attempt 1's bar");
+    expect(count(page, "[data-testid=escalation]")).toBe(0);
+  });
+
+  test("attempt 2 finished with no pull request offers Mark done; attempt 1 does not", async () => {
+    const client = restartedAs((t) => ({ ...t, status: "review",
+      runs: t.runs.map((r) => (r.id === "run_a2_fix" ? { ...r, status: "completed" as const, endedAt: at(2) } : r)) }));
+    client.listPullRequests = async () => ({ pullRequests: [] });
+    const page = await taskPage(client);
+    await until(() => page.querySelector("[data-testid=mark-done]"), "Mark done on attempt 2");
+    await pick(page, 1);
+    await until(() => page.querySelector("[data-testid=earlier-bar]"), "attempt 1's bar");
+    expect(count(page, "[data-testid=mark-done]")).toBe(0);
+  });
+
+  /** The restarted task's ledger as `change` makes it. */
+  function restartedWithEvents(change: (events: PersistedEvent[]) => PersistedEvent[]) {
+    const client = restarted();
+    const events = client.events.bind(client);
+    client.events = async (params) => {
+      const r = await events(params);
+      return { ...r, events: change(r.events) };
+    };
+    return client;
+  }
+  const movedClose = (min: number, actor?: PersistedEvent["actor"]) => (events: PersistedEvent[]) =>
+    events.map((e) => (e.eventType === "pull_request.closed" ? { ...e, occurredAt: at(min), ...(actor ? { actor } : {}) } : e));
+
+  test("attempt 1's pull request closed before the start over is not said to be dude's close", async () => {
+    // Closed on GitHub 100 minutes ago; started over 95 minutes ago.
+    const page = await taskPage(restartedWithEvents(movedClose(100, { type: "system", id: "forge" })));
+    await until(() => picker(page), "the attempt picker");
+    await pick(page, 1);
+    const panel = await until(() => page.querySelector<HTMLElement>("[data-testid=pr-panel][data-pr=pr_478]"), "attempt 1's pull request");
+    expect(panel.textContent).toContain("Closed. Attempt 1 was set aside");
+    expect(panel.textContent).not.toContain("Closed by");
+    expect(panel.textContent).not.toContain("started over");
+  });
+
+  test("attempt 1's pull request closed after the start over is dude's close, dated when it closed", async () => {
+    const page = await taskPage(restartedWithEvents(movedClose(20)));
+    await until(() => picker(page), "the attempt picker");
+    await pick(page, 1);
+    const panel = await until(() => page.querySelector<HTMLElement>("[data-testid=pr-panel][data-pr=pr_478]"), "attempt 1's pull request");
+    expect(panel.textContent).toMatch(/Closed by .+ 20m ago, when Márcio started over\./);
+  });
+
+  test("attempt 1's pull request closed on GitHub after attempt 2 began is still attempt 1's in Activity", async () => {
+    const page = await taskPage(restartedWithEvents(movedClose(20)), { tab: "activity" });
+    const line = await until(() => [...page.querySelectorAll<HTMLElement>("[data-testid=activity-item]")]
+      .find((l) => l.textContent?.includes("#478 was closed")), "the close's line");
+    expect(line.getAttribute("data-attempt")).toBe("1");
+  });
+
+  test("a fix's reason is read from its own attempt's pull request, not an earlier one's", async () => {
+    // Attempt 1's #478 failed CI 115 minutes ago, before its fixer (110) and long before attempt 2's (10).
+    const failing = (events: PersistedEvent[]) => [...events, { ...events.find((e) => e.eventType === "pull_request.closed")!,
+      eventId: "evt_ci_478", cursor: 20_000, eventType: "pull_request.checks_changed", occurredAt: at(115),
+      payload: { number: 478, repo: "example/web-console", from: "pending", to: "failing" } }];
+    const page = await taskPage(restartedWithEvents(failing));
+    await until(() => picker(page), "the attempt picker");
+    const fix = () => [...page.querySelectorAll<HTMLElement>("[data-testid=pipeline] [data-testid=phase][data-phase=fix]")].at(-1)?.textContent ?? "";
+    await until(() => (fix() ? true : null), "attempt 2's fixer");
+    expect(fix()).not.toContain("failing CI");
+    expect(fix()).toContain("for the pull request's feedback");
+    await pick(page, 1);
+    await until(() => (fix().includes("for failing CI") ? true : null), "attempt 1's fixer, for its CI");
+  });
+
+  test("a non-existent attempt in the URL is written as the task's, and the current attempt is shown", async () => {
+    const said: Array<[string | undefined, number | undefined, boolean]> = [];
+    const page = await taskPage(restarted(), { attempt: 9, onNavigate: (t, a, r) => said.push([t, a, r]) });
+    await until(() => (said.length > 0 ? true : null), "the URL rewritten");
+    expect(said).toEqual([[undefined, undefined, true]]);
+    await until(() => picker(page), "the attempt picker");
+    expect(count(page, "[data-testid=task-screen][data-attempt='2']")).toBe(1);
+    expect(count(page, "[data-testid=earlier-bar]")).toBe(0);
+  });
+
+  test("while attempt 1's figures are on their way, attempt 2's are not shown in their place", async () => {
+    const client = restarted();
+    const metrics = client.taskMetrics.bind(client);
+    let release: () => void = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    client.taskMetrics = async (id, attempt) => {
+      if (attempt === 1) await held;
+      return metrics(id, attempt);
+    };
+    const page = await taskPage(client);
+    await until(() => page.querySelector("[data-testid=task-metrics]"), "attempt 2's figures");
+    await pick(page, 1);
+    await settle(100);
+    expect(count(page, "[data-testid=task-metrics]")).toBe(0);
+    release();
+    const section = await until(() => page.querySelector<HTMLElement>("[data-testid=task-metrics]"), "attempt 1's figures");
+    expect(section.textContent).toContain("start to set aside");
+    expect(section.querySelectorAll("[data-testid=run-metrics] tbody tr").length).toBe(4);
+  });
+
+  test("the page reads attempt 2's figures alone; the picker reads each attempt's cost when it opens", async () => {
+    const client = restarted();
+    const reads: Array<number | undefined> = [];
+    const metrics = client.taskMetrics.bind(client);
+    client.taskMetrics = (id, attempt) => {
+      reads.push(attempt);
+      return metrics(id, attempt);
+    };
+    const page = await taskPage(client);
+    await until(() => page.querySelector("[data-testid=task-metrics]"), "attempt 2's figures");
+    await settle(100);
+    expect(reads).toEqual([2]);
+    // A reload the stream causes reads attempt 2's again, and not the whole task's.
+    await act(async () => emit({ eventType: "task.status_changed", occurredAt: new Date().toISOString(), organizationId: ORG.id, projectId: PROJECT.id,
+      taskId: TASK_ID, runId: null, sessionId: null, workflowRunId: null, actor: { type: "system", id: "dude" }, source: "control-plane",
+      correlationId: null, causationId: null, payload: { status: "running" } } as never));
+    await until(() => (reads.length === 2 ? true : null), "the reload's read");
+    await settle(400);
+    expect(reads).toEqual([2, 2]);
+    await press(picker(page)!);
+    const option = await until(() => document.querySelector<HTMLElement>('[role=option][data-value="1"]'), "attempt 1 in the picker");
+    await until(() => (option.textContent?.includes("$13.40") ? true : null), "attempt 1's cost");
+    expect(reads).toEqual([2, 2, undefined]);
   });
 
   test("a session of attempt 1 is read-only: no Pause, Abort or composer, and its strip leads to attempt 2", async () => {
@@ -354,7 +588,11 @@ describe("a task started over", () => {
   });
 
   test("an empty tab says what the other attempts had, and goes there", async () => {
-    const page = await taskPage(restarted(), { tab: "files" });
+    // Attempt 2 saved nothing yet.
+    const client = restarted();
+    const listArtifacts = client.listArtifacts.bind(client);
+    client.listArtifacts = async () => ({ artifacts: (await listArtifacts()).artifacts.filter((a) => a.runId !== "run_attempt2") });
+    const page = await taskPage(client, { tab: "files" });
     await until(() => picker(page), "the attempt picker");
     const line = await until(() => page.querySelector<HTMLElement>("[data-testid=elsewhere]"), "what attempt 1 had");
     expect(page.textContent).toContain("No files in attempt 2 yet");
@@ -362,6 +600,18 @@ describe("a task started over", () => {
     await click(line.querySelector("button")!);
     await until(() => (shown(page) === "1" ? true : null), "attempt 1 shown");
     await until(() => page.querySelector("[data-testid=files]"), "attempt 1's files");
+  });
+
+  test("an empty Findings tab says attempt 1 had three, and shows them", async () => {
+    const page = await taskPage(restarted(), { tab: "findings" });
+    await until(() => picker(page), "the attempt picker");
+    const line = await until(() => page.querySelector<HTMLElement>("[data-testid=elsewhere][data-attempt='1']"), "what attempt 1 had");
+    expect(page.textContent).toContain("No findings in attempt 2");
+    expect(line.textContent).toContain("Attempt 1 had 3 findings.");
+    expect(count(page, "[data-testid=finding]")).toBe(0);
+    await click(line.querySelector("button")!);
+    await until(() => (shown(page) === "1" ? true : null), "attempt 1 shown");
+    await until(() => (count(page, "[data-testid=finding]") === 3 ? true : null), "attempt 1's three findings");
   });
 
   test("a tab's tooltip says what the other attempts had", async () => {

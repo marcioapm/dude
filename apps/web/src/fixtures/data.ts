@@ -145,7 +145,7 @@ export const FINDINGS: Finding[] = [
  * ran the pipeline, opened #478, and was stopped at the fix for its CI by
  * Ana; Márcio started over. Attempt 2's reviewer raised nothing, #483 is
  * open, and its fixer is at work on a review comment. Attempt 1 left three
- * findings and a file; attempt 2 none yet.
+ * findings and a file; attempt 2 no findings yet, and a file of its own.
  */
 export const RESTART = {
   setAsideMin: 95,
@@ -191,7 +191,10 @@ const artifact = (id: string, runId: string | null, name: string, phase: string,
   id, taskId: TASK_ID, runId, name, contentType: "text/markdown", sizeBytes: 2_400, sha256: id, epoch: 1, createdAt: iso(min * MIN),
   phase, role: "implementer" as const, version: 1, versions: 1,
 });
-export const RESTARTED_ARTIFACTS = [artifact("art_a1_notes", RUN_ID, "notes/routing.md", "implement", 170)];
+export const RESTARTED_ARTIFACTS = [
+  artifact("art_a1_notes", RUN_ID, "notes/routing.md", "implement", 170),
+  artifact("art_a2_notes", "run_attempt2", "notes/form-split.md", "implement", 60),
+];
 
 /** The task metrics' per-Run rows for the restarted task, each Run costing what its attempt makes it. */
 export function restartedMetrics(attempt?: number): TaskMetrics {

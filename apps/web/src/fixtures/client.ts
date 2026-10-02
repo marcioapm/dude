@@ -160,6 +160,7 @@ export class FixtureClient extends ApiClient {
       if (r.id === "run_a1_review") push(141.5, "review.completed", { phase: "review", count: 3 }, { type: "agent", id: r.id }, r.id);
       if (r.id === "run_a2_review") push(41.5, "review.completed", { phase: "review", count: 0 }, { type: "agent", id: r.id }, r.id);
       if (r.id === RUN_ID) push(170, "artifact.created", { artifactId: "art_a1_notes", name: "notes/routing.md" }, { type: "agent", id: r.id }, r.id);
+      if (r.id === "run_attempt2") push(60, "artifact.created", { artifactId: "art_a2_notes", name: "notes/form-split.md" }, { type: "agent", id: r.id }, r.id);
       if (r.id === "run_a1_simplify") push(129, "pull_request.opened", { number: 478, repo: "example/web-console", url: RESTARTED_PULL_REQUESTS[0]!.url }, dude, null);
       if (r.id === "run_a1_fix") {
         push(97, "run.aborted", { reason: RESTART.abortReason }, ana, r.id);
