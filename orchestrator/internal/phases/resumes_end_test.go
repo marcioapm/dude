@@ -1,0 +1,57 @@
+package phases
+
+import (
+	"testing"
+	"time"
+)
+
+// A resume whose first output is in and that was never timed — its
+// follow-up lost to a restart — is timed when its Run ends, however it
+// ends.
+func TestAnEndingRunTimesTheResumeItsFollowerNeverDid(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		end  func(w *resumeWorld) error
+	}{
+		{"completed", func(w *resumeWorld) error {
+			w.exec(`UPDATE runs SET status = 'running', lux_state = 'stopped' WHERE id = $1`, w.run.ID)
+			r := w.run
+			r.Status, r.LuxState = statusRunning, "stopped"
+			_, err := w.s.finish(w.ctx, r)
+			return err
+		}},
+		{"failed", func(w *resumeWorld) error {
+			w.exec(`UPDATE runs SET status = 'failed', lux_state = 'stopped' WHERE id = $1`, w.run.ID)
+			r := w.run
+			r.Status, r.LuxState = "failed", "stopped"
+			_, err := w.s.advance(w.ctx, r)
+			return err
+		}},
+		{"aborted", func(w *resumeWorld) error {
+			w.exec(`UPDATE runs SET status = 'aborted', control = 'abort' WHERE id = $1`, w.run.ID)
+			r := w.run
+			r.Status, r.Control = statusAborted, "abort"
+			_, err := w.s.advance(w.ctx, r)
+			return err
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := newResumeWorld(t)
+			w.s.Lux = &refusingLux{placementLux: w.lux}
+			base := time.Now().Add(-time.Minute)
+			w.exec(`INSERT INTO run_resumes (run_id, organization_id, epoch, cause, woken_at, requested_at, first_output_at)
+				VALUES ($1, $2, 2, 'person', $3, $4, $5)`, w.run.ID, w.run.Org, base, base.Add(time.Second), base.Add(3*time.Second))
+			if err := c.end(w); err != nil {
+				t.Fatal(err)
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for len(w.timed()) == 0 && time.Now().Before(deadline) {
+				time.Sleep(10 * time.Millisecond)
+			}
+			got := w.timed()
+			if len(got) != 1 || got[0]["epoch"] != 2.0 || got[0]["totalMs"] != 3000.0 {
+				t.Errorf("run.resume.timed after the Run %s: %v, want one for epoch 2 of 3000ms", c.name, got)
+			}
+		})
+	}
+}

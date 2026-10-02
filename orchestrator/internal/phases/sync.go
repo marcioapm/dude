@@ -780,7 +780,8 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 	if len(heads) > 0 {
 		branch = delivery.BranchFor(r.TaskID, r.Attempt)
 	}
-	return true, s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+	completed := false
+	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'completed', ended_at = now(), lux_stop_reason = $2,
 			heads = $3::jsonb, branch = COALESCE(NULLIF($4, ''), branch)
 			WHERE id = $1 AND status IN ('scheduled', 'starting', 'running')`,
@@ -788,6 +789,7 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
+		completed = true
 		// What the agent never read, it never will: said so, not left queued.
 		rows, err := tx.Query(ctx, `UPDATE directives SET failed_at = now(), error = $2
 			WHERE run_id = $1 AND delivered_at IS NULL AND failed_at IS NULL RETURNING id`,
@@ -806,7 +808,14 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 			}
 		}
 		return s.event(ctx, tx, r, "run.completed", ledger.ActorSystem, map[string]any{"status": "completed"})
-	})
+	}); err != nil {
+		return true, err
+	}
+	if completed {
+		// Ended: no follower will time a resume whose first output is in.
+		s.timeResumesLater(r)
+	}
+	return true, nil
 }
 
 // publish moves the task's branch in each repository this Run changed
@@ -960,10 +969,15 @@ func (s *Syncer) cancel(ctx context.Context, r phaseRun) error {
 			return err
 		}
 	}
-	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE runs SET lux_stop_reason = 'cancel', control = 'none' WHERE id = $1`, r.ID)
 		return err
-	})
+	}); err != nil {
+		return err
+	}
+	// Ended: no follower will time a resume whose first output is in.
+	s.timeResumesLater(r)
+	return nil
 }
 
 // pause stops the lux Run, keeping its state. Graceful and hard are the same
