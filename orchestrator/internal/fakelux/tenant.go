@@ -115,7 +115,7 @@ func (s *Server) emit(run *Run, serverID, typ string, data map[string]any) {
 	if run != nil {
 		id, ep := run.ID, run.Epoch
 		e.RunID, e.Epoch = &id, &ep
-		run.events = append(run.events, event{ID: e.ID, Epoch: run.Epoch, Type: typ, Data: data})
+		run.events = append(run.events, event{ID: e.ID, Epoch: run.Epoch, Type: typ, Data: data, Time: e.Time})
 		run.cond.Broadcast()
 	}
 	s.feed = append(s.feed, e)
