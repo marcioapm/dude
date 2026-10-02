@@ -32,6 +32,10 @@ const verification: ForgeVerification = {
     },
     { id: "repo_b", name: "web", projectName: "Payments", slug: "acme/web", permissions: [p("Checks: Read", "required", "ok", "listed")] },
     { id: "repo_c", name: "local", projectName: "Payments", slug: null, error: "Its URL names no GitHub repository, so it was not tested.", permissions: [] },
+    {
+      id: "repo_d", name: "jobs", projectName: "Payments", slug: "acme/jobs",
+      permissions: [p("Metadata: Read", "required", "untested", "Rate limited."), p("Checks: Read", "required", "untested", "Not tested: the repository could not be read.")],
+    },
   ],
 };
 
@@ -47,6 +51,7 @@ test("each repository lists what is missing, required first, then what is untest
   const repos = [...m.container.querySelectorAll('[data-testid="forge-permission-repo"]')];
   expect(repos.map((r) => r.querySelector(".forgePermissionRepo")!.textContent)).toEqual([
     "MissingPayments / api", "ReadyPayments / web", "Not testedPayments / localIts URL names no GitHub repository, so it was not tested.",
+    "Not fully testedPayments / jobs",
   ]);
   const rows = [...repos[0]!.querySelectorAll('[data-testid="forge-permission"]')];
   expect(rows.map((r) => [r.getAttribute("data-outcome"), r.textContent])).toEqual([
