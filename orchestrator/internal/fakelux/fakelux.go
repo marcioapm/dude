@@ -398,8 +398,13 @@ type Server struct {
 	// given, reported as each placement's memoryLimit (a newer lux); zero
 	// reports none, as today's lux.
 	MemoryShare float64
-	// Starts still to fail, by spec label "key=value" (FailStarts).
+	// Starts still to fail, by spec label "key=value" (FailStarts), and
+	// the state each ends in.
 	failStarts map[string]int
+	failAs     map[string]string
+	// Hooks a test holds the fake at (BeforeEvent, BeforeStart).
+	beforeEvent func(runID string, eventID int64, typ string)
+	beforeStart func(runID string)
 	// closed ends everything the fake waits on in the background (Close).
 	closed    chan struct{}
 	closeOnce sync.Once
@@ -498,31 +503,73 @@ func (s *Server) TurnsEnded(id string, n int) <-chan struct{} {
 // FailStarts makes the next n starts (a submit's or a resume's placement)
 // of Runs whose spec has the label "key=value" fail before the workload
 // runs, as lux reports a container that would not start; n <= 0 clears it.
-func (s *Server) FailStarts(label string, n int) {
+func (s *Server) FailStarts(label string, n int) { s.failStartsAs(label, n, "failed") }
+
+// LoseStarts is FailStarts with the host lost mid-start: the Run is lost.
+func (s *Server) LoseStarts(label string, n int) { s.failStartsAs(label, n, "lost") }
+
+func (s *Server) failStartsAs(label string, n int, state string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.failStarts == nil {
-		s.failStarts = map[string]int{}
+		s.failStarts, s.failAs = map[string]int{}, map[string]string{}
 	}
 	if n <= 0 {
 		delete(s.failStarts, label)
 		return
 	}
-	s.failStarts[label] = n
+	s.failStarts[label], s.failAs[label] = n, state
 }
 
-// takeFailStart uses up one of FailStarts' for a Run of this spec.
-// Callers hold s.mu.
-func (s *Server) takeFailStart(spec map[string]any) bool {
+// takeFailStart uses up one of FailStarts' for a Run of this spec: the
+// state the start ends in, "" for none. Callers hold s.mu.
+func (s *Server) takeFailStart(spec map[string]any) string {
 	labels, _ := spec["labels"].(map[string]any)
 	for k, v := range labels {
 		key := fmt.Sprintf("%s=%v", k, v)
 		if s.failStarts[key] > 0 {
 			s.failStarts[key]--
-			return true
+			return s.failAs[key]
 		}
 	}
-	return false
+	return ""
+}
+
+// BeforeEvent has every Run's output stream call fn before it sends each
+// lifecycle event, without the fake's lock: a test holds a follower there
+// while the Run moves on. nil clears it.
+func (s *Server) BeforeEvent(fn func(runID string, eventID int64, typ string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.beforeEvent = fn
+}
+
+// BeforeStart has every placement (a submit's, a resume's) call fn as it
+// starts, before it runs or fails, without the fake's lock. nil clears it.
+func (s *Server) BeforeStart(fn func(runID string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.beforeStart = fn
+}
+
+// State is the Run's state now.
+func (s *Server) State(id string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		return run.State
+	}
+	return ""
+}
+
+// Lose ends a Run as lux does when its host stops answering: lost,
+// resumable from its last snapshot.
+func (s *Server) Lose(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		s.setStateWith(run, "lost", "host lost")
+	}
 }
 
 // Crash ends a Run's agent as a dead container would.
@@ -697,18 +744,31 @@ func (s *Server) play(run *Run, spec map[string]any, resumed bool) {
 	}
 	time.Sleep(after)
 	s.mu.Lock()
+	hook := s.beforeStart
+	s.mu.Unlock()
+	if hook != nil {
+		hook(run.ID)
+	}
+	s.mu.Lock()
 	defer s.mu.Unlock()
 	if run.behavior.FailToStart {
 		run.placements = append(run.placements, &placement{Epoch: run.Epoch, State: "starting"})
 		s.setState(run, "failed")
 		return
 	}
-	if run.State != "cancelled" && s.takeFailStart(spec) {
-		// As lux's runner reports a container that would not start (exit
-		// 125): the placement never ran, and the Run is failed.
-		run.placements = append(run.placements, &placement{Epoch: run.Epoch, State: "starting"})
-		s.setStateWith(run, "failed", "start-failed")
-		return
+	if run.State != "cancelled" {
+		switch s.takeFailStart(spec) {
+		case "failed":
+			// As lux's runner reports a container that would not start (exit
+			// 125): the placement never ran, and the Run is failed.
+			run.placements = append(run.placements, &placement{Epoch: run.Epoch, State: "starting"})
+			s.setStateWith(run, "failed", "start-failed")
+			return
+		case "lost":
+			run.placements = append(run.placements, &placement{Epoch: run.Epoch, State: "starting"})
+			s.setStateWith(run, "lost", "host lost")
+			return
+		}
 	}
 	if run.State == "cancelled" {
 		return // cancelled before it started
@@ -1615,11 +1675,17 @@ func (s *Server) output(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		for _, e := range run.events {
+		for i := 0; i < len(run.events); i++ {
+			e := run.events[i]
 			if e.ID <= afterEvent {
 				continue
 			}
 			afterEvent = e.ID
+			if hook := s.beforeEvent; hook != nil {
+				s.mu.Unlock()
+				hook(run.ID, e.ID, e.Type)
+				s.mu.Lock()
+			}
 			if !send("lux", map[string]any{"id": e.ID, "epoch": e.Epoch, "type": e.Type, "data": e.Data}) {
 				return
 			}
