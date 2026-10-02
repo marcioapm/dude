@@ -396,3 +396,26 @@ func TestAnotherOrganizationCannotSeeOrWriteAResume(t *testing.T) {
 		t.Errorf("its own organization sees %d resumes (%v)", seen, err)
 	}
 }
+
+// A resume belongs to its Run's organization: another organization cannot
+// write one about this one's Run under its own name, and so cannot take
+// the Run's (run_id, epoch) from it.
+func TestAResumeCannotNameAnotherOrganizationsRun(t *testing.T) {
+	w := newResumeWorld(t)
+	other := dbtest.Org(t, w.owner)
+	err := w.s.DB.InOrg(w.ctx, other, func(tx pgx.Tx) error {
+		_, err := tx.Exec(w.ctx, `INSERT INTO run_resumes (run_id, organization_id, epoch, cause) VALUES ($1, $2, 2, 'person')`,
+			w.run.ID, other)
+		return err
+	})
+	if err == nil {
+		t.Fatalf("another organization wrote a resume of this one's Run")
+	}
+	w.resume(stoppedOnHost1(time.Now()))
+	if n := len(w.timed()); n != 0 {
+		t.Fatalf("%d events", n)
+	}
+	if row := w.row(2); row["organization_id"] != w.run.Org {
+		t.Errorf("the Run's resume is under %v", row["organization_id"])
+	}
+}
