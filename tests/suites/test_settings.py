@@ -19,26 +19,27 @@ from helpers import ApiClient, execute, query, wait_until
 
 
 def test_an_organizations_default_is_overridden_by_a_project_and_reset(client: ApiClient, project: dict):
-    org = client.patch("/v1/settings/organization", {"roles": {"reviewer": {"model": "llm-anthropic/org-review", "effort": "high"}}})
+    review, review2 = client.tier_for("org-review"), client.tier_for("org-review-2")
+    org = client.patch("/v1/settings/organization", {"roles": {"reviewer": {"tier": review, "effort": "high"}}})
     assert org.status_code == 200, org.text
-    assert org.json()["roles"]["reviewer"]["model"] == {"value": "llm-anthropic/org-review", "source": "organization"}
+    assert org.json()["roles"]["reviewer"]["tier"] == {"value": review, "source": "organization"}
 
     # The project follows it until it says otherwise.
     settings = client.get(f"/v1/projects/{project['id']}/settings").json()
-    assert settings["roles"]["reviewer"]["model"] == {"value": "llm-anthropic/org-review", "source": "organization"}
+    assert settings["roles"]["reviewer"]["tier"] == {"value": review, "source": "organization", "organization": review}
     assert settings["roles"]["reviewer"]["effort"] == {"value": "high", "source": "organization"}
 
     # An override of one field leaves the others inherited.
     changed = client.patch(f"/v1/projects/{project['id']}/settings", {"roles": {"reviewer": {"effort": "low"}}}).json()
     assert changed["roles"]["reviewer"]["effort"] == {"value": "low", "source": "project"}
-    assert changed["roles"]["reviewer"]["model"] == {"value": "llm-anthropic/org-review", "source": "organization"}
+    assert changed["roles"]["reviewer"]["tier"] == {"value": review, "source": "organization", "organization": review}
     # Stored as an override only.
     assert client.get(f"/v1/projects/{project['id']}").json()["agentModels"]["reviewer"] == {"effort": "low"}
 
     # The organization's later change still reaches what the project did not override.
-    client.patch("/v1/settings/organization", {"roles": {"reviewer": {"model": "llm-anthropic/org-review-2"}}})
+    client.patch("/v1/settings/organization", {"roles": {"reviewer": {"tier": review2}}})
     settings = client.get(f"/v1/projects/{project['id']}/settings").json()
-    assert settings["roles"]["reviewer"]["model"]["value"] == "llm-anthropic/org-review-2"
+    assert settings["roles"]["reviewer"]["tier"]["value"] == review2
 
     # Reset is a delete: the value is the organization's again, and the
     # project stores nothing for the role.
@@ -48,14 +49,19 @@ def test_an_organizations_default_is_overridden_by_a_project_and_reset(client: A
 
 
 def test_the_fixer_follows_the_implementer_without_calling_it_its_own(client: ApiClient, project: dict):
-    # The project overrides the implementer's model; the fixer runs it too,
+    # The project overrides the implementer's tier; the fixer runs on it too,
     # but has nothing of its own to reset.
-    settings = client.patch(f"/v1/projects/{project['id']}/settings", {"roles": {"implementer": {"model": "llm-openai/proj-impl"}}}).json()
-    assert settings["roles"]["implementer"]["model"] == {"value": "llm-openai/proj-impl", "source": "project"}
-    assert settings["roles"]["fixer"]["model"] == {"value": "llm-openai/proj-impl", "source": "organization"}
+    impl, fix = client.tier_for("proj-impl"), client.tier_for("proj-fix")
+    settings = client.patch(f"/v1/projects/{project['id']}/settings", {"roles": {"implementer": {"tier": impl}}}).json()
+    assert settings["roles"]["implementer"]["tier"]["value"] == impl
+    assert settings["roles"]["implementer"]["tier"]["source"] == "project"
+    assert settings["roles"]["fixer"]["tier"]["value"] == impl
+    assert settings["roles"]["fixer"]["tier"]["source"] == "organization"
+    assert settings["roles"]["fixer"]["tier"]["followsImplementer"] is True
 
-    settings = client.patch(f"/v1/projects/{project['id']}/settings", {"roles": {"fixer": {"model": "llm-openai/proj-fix"}}}).json()
-    assert settings["roles"]["fixer"]["model"] == {"value": "llm-openai/proj-fix", "source": "project"}
+    settings = client.patch(f"/v1/projects/{project['id']}/settings", {"roles": {"fixer": {"tier": fix}}}).json()
+    assert settings["roles"]["fixer"]["tier"]["value"] == fix
+    assert settings["roles"]["fixer"]["tier"]["source"] == "project"
 
 
 def test_delivery_is_the_factorys_then_the_organizations_then_the_projects(client: ApiClient, project: dict):
@@ -181,7 +187,7 @@ def test_a_run_records_the_prompt_version_it_ran_with(client: ApiClient, owner_d
     versions current when it started, and the history counts them."""
     project = client.create_project(
         name="Notes", slug=f"notes-{os.urandom(3).hex()}", runtimeImage="dude-runtime:test",
-        agentModels={r: {"model": "fake/scripted"} for r in ("implementer", "reviewer", "simplifier")},
+        agentModels=client.on_models({r: "fake/scripted" for r in ("implementer", "reviewer", "simplifier")}),
     )
     client.post("/v1/prompts/implementer", {"body": "Implement it, carefully."})
     client.post("/v1/prompts/implementer", {"projectId": project["id"], "mode": "add", "body": "Notes go in NOTES.md."})
@@ -546,7 +552,7 @@ def test_a_phase_run_goes_to_lux_on_its_roles_size_and_pool(client: ApiClient, e
     Run records it with the pool's name then."""
     project = client.create_project(
         name="Sized", slug=f"sized-{os.urandom(3).hex()}", runtimeImage="dude-runtime:test",
-        agentModels={r: {"model": "fake/scripted"} for r in ("implementer", "reviewer", "simplifier")},
+        agentModels=client.on_models({r: "fake/scripted" for r in ("implementer", "reviewer", "simplifier")}),
     )
     big = _pool_id(client, "big")
     size = client.post("/v1/machines/sizes", {"name": "Half", "cpus": 6.5, "memoryMiB": 23040, "diskGiB": 120, "poolId": big}).json()
@@ -606,4 +612,190 @@ def test_a_size_whose_pool_vanished_from_lux_says_so_and_asks_for_another(
     # 2 of big's 32 CPUs and 4 of its 64 GiB: 6% of one host.
     expect(row.locator("[data-fit-cell]")).to_have_text("6% of a host")
     assert _sizes(client)["Scratch"]["poolId"] == _pool_id(client, "big")
+    assert console_errors == []
+
+
+# ---------------------------------------------------------------------------
+# Model tiers
+# ---------------------------------------------------------------------------
+
+
+def _tiers(client: ApiClient) -> dict:
+    return {t["name"]: t for t in client.get("/v1/models/tiers").json()["tiers"]}
+
+
+@pytest.mark.ui
+def test_an_admin_adds_a_tier_and_changes_one_and_the_role_page_follows(
+    page: Page, web_url: str, client: ApiClient, org: dict, console_errors: list
+):
+    _sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/org/settings/models")
+    models = page.get_by_test_id("models-page")
+    # Every organisation starts with three tiers; Fast names no model yet.
+    expect(models.locator("[data-tier='Thinker']")).to_contain_text("Reads, plans, judges and tidies.")
+    expect(models.locator("[data-tier='Fast'] [data-model-cell]")).to_have_text("Not set")
+    expect(page.locator("[data-settings-nav='models']")).to_have_text(re.compile(r"^Models\s*3$"))
+    expect(models.get_by_test_id("models-explainer")).to_contain_text("dude doesn’t see which.")
+
+    # Add a tier. The suite's orchestrator has no proxy, so there is no list
+    # to suggest from, and it says so; any name is taken.
+    models.get_by_role("button", name="Add tier", exact=True).click()
+    dialog = page.get_by_role("dialog")
+    expect(dialog).to_contain_text("The proxy’s list of models could not be read")
+    dialog.get_by_label("Name", exact=True).fill("Cheap")
+    dialog.get_by_label("What it’s for", exact=True).fill("Bulk, low-stakes work at the lowest price.")
+    model = dialog.get_by_label("Model to request", exact=True)
+    model.fill("llm-openai/gpt-5.6-luna")
+    expect(dialog).to_contain_text("The model as the proxy names it: no spaces or slashes")
+    expect(dialog.get_by_test_id("model-tier-save")).to_be_disabled()
+    model.fill("gpt-5.6-luna")
+    dialog.get_by_test_id("model-tier-save").click()
+    expect(toast(page, "Cheap added")).to_be_visible()
+    expect(models.locator("[data-tier='Cheap'] [data-model-cell]")).to_have_text("gpt-5.6-luna")
+    expect(page.locator("[data-settings-nav='models']")).to_have_text(re.compile(r"^Models\s*4$"))
+    assert _tiers(client)["Cheap"]["description"] == "Bulk, low-stakes work at the lowest price."
+
+    # Change what Coder requests, and the implementer's page says so.
+    models.get_by_role("button", name="Actions for Coder").click()
+    page.get_by_role("menuitem", name="Change model…").click()
+    dialog = page.get_by_role("dialog")
+    expect(dialog.get_by_test_id("model-tier-users")).to_contain_text("On Coder now: Implementer, Fixer.")
+    dialog.get_by_label("Model to request", exact=True).fill("claude-opus-5-5")
+    dialog.get_by_test_id("model-tier-save").click()
+    expect(toast(page, "Coder saved")).to_be_visible()
+    expect(models.locator("[data-tier='Coder'] [data-model-cell]")).to_have_text("claude-opus-5-5")
+
+    page.goto(f"{web_url}#/org/settings/implementer")
+    settings = page.get_by_test_id("org-settings")
+    tier = settings.get_by_test_id("role-tier")
+    expect(tier).to_contain_text("Coder")
+    expect(settings).to_contain_text("Requests claude-opus-5-5")
+    expect(settings).to_contain_text("The proxy drops it for models that don’t reason")
+    # Picking another tier: the implementer now requests Cheap's model.
+    tier.click()
+    page.get_by_role("option").filter(has_text=re.compile(r"^Cheap")).click()
+    expect(toast(page, "Model saved")).to_be_visible()
+    expect(settings).to_contain_text("Requests gpt-5.6-luna")
+    assert client.get("/v1/settings/organization").json()["roles"]["implementer"]["tier"]["value"] == _tiers(client)["Cheap"]["id"]
+    assert console_errors == []
+
+
+@pytest.mark.ui
+def test_a_project_overrides_a_roles_tier_and_resets_it(
+    page: Page, web_url: str, client: ApiClient, org: dict, project: dict, console_errors: list
+):
+    tiers = _tiers(client)
+    org_name = client.get("/v1/settings/organization").json()["organization"]["name"]
+    _sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/project/{project['id']}/settings/reviewer")
+    ps = page.get_by_test_id("project-settings")
+    tier = ps.get_by_test_id("role-tier")
+    # Inherited: the organisation's Thinker, named as such.
+    expect(tier).to_have_text(re.compile(rf"^From {re.escape(org_name)} · Thinker"))
+    tier.click()
+    expect(page.get_by_role("listbox")).to_contain_text(f"Tiers are {org_name}’s — ask an admin to change one")
+    page.get_by_role("option").filter(has_text=re.compile(r"^Fast")).click()
+    expect(toast(page, "Model saved")).to_be_visible()
+    was_thinker = re.compile(rf"^Overridden\s*{re.escape(org_name)}: Thinker\s*Reset$")
+    overridden = ps.locator("[data-source='project']").filter(has_text=was_thinker)
+    expect(overridden).to_be_visible()
+    expect(page.locator("[data-settings-nav='reviewer']")).to_contain_text("changed")
+    assert client.get(f"/v1/projects/{project['id']}").json()["agentModels"]["reviewer"] == {"tier": tiers["Fast"]["id"]}
+
+    overridden.get_by_role("button", name="Reset", exact=True).click()
+    expect(ps.locator("[data-source='project']").filter(has_text=was_thinker)).to_have_count(0)
+    expect(tier).to_have_text(re.compile(rf"^From {re.escape(org_name)} · Thinker"))
+    assert "reviewer" not in client.get(f"/v1/projects/{project['id']}").json()["agentModels"]
+    assert console_errors == []
+
+
+@pytest.mark.ui
+def test_removing_a_tier_in_use_moves_what_named_it(
+    page: Page, web_url: str, client: ApiClient, org: dict, project: dict, console_errors: list
+):
+    tiers = _tiers(client)
+    client.patch(f"/v1/projects/{project['id']}/settings", {"roles": {"reviewer": {"tier": tiers["Fast"]["id"], "effort": "low"}}})
+    client.patch("/v1/settings/organization", {"roles": {"simplifier": {"tier": tiers["Fast"]["id"]}}})
+    _sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/org/settings/models")
+    models = page.get_by_test_id("models-page")
+    expect(models.locator("[data-tier='Fast']")).to_contain_text("1 agent · 1 project")
+    count = len(tiers)
+    expect(page.locator("[data-settings-nav='models']")).to_have_text(re.compile(rf"^Models\s*{count}$"))
+
+    models.get_by_role("button", name="Actions for Fast").click()
+    page.get_by_role("menuitem", name="Remove…").click()
+    uses = page.get_by_test_id("model-tier-uses")
+    expect(uses).to_contain_text("Simplifier")
+    expect(uses).to_contain_text("E2E Project · Reviewer")
+    expect(uses).to_contain_text("project override")
+    page.get_by_test_id("model-tier-move").click()
+    page.get_by_role("option").filter(has_text=re.compile(r"^Coder")).click()
+    page.get_by_role("button", name="Remove and move them", exact=True).click()
+    expect(toast(page, "Fast removed")).to_be_visible()
+    expect(models.locator("[data-tier='Fast']")).to_have_count(0)
+    # The menu counts what is left at once.
+    expect(page.locator("[data-settings-nav='models']")).to_have_text(re.compile(rf"^Models\s*{count - 1}$"))
+    coder = tiers["Coder"]["id"]
+    assert client.get("/v1/settings/organization").json()["roles"]["simplifier"]["tier"]["value"] == coder
+    assert client.get(f"/v1/projects/{project['id']}").json()["agentModels"]["reviewer"] == {"tier": coder, "effort": "low"}
+
+    # One nothing uses goes on a plain confirm.
+    assert client.post("/v1/models/tiers", {"name": "Spare"}).status_code == 201
+    page.reload()
+    models.get_by_role("button", name="Actions for Spare").click()
+    page.get_by_role("menuitem", name="Remove…").click()
+    expect(page.get_by_role("dialog")).to_contain_text("Nothing uses it.")
+    page.get_by_role("button", name="Remove", exact=True).click()
+    expect(toast(page, "Spare removed")).to_be_visible()
+    assert "Spare" not in _tiers(client)
+    assert console_errors == []
+
+
+@pytest.mark.ui
+def test_a_member_sees_models_read_only(page: Page, web_url: str, client: ApiClient, env, console_errors: list):
+    _, key = _invite_member(client, env, "Bo")
+    _sign_in(page, web_url, key)
+    page.goto(f"{web_url}#/org/settings/models")
+    models = page.get_by_test_id("models-page")
+    expect(models.locator("[data-tier='Coder']")).to_be_visible()
+    expect(models.get_by_role("button", name="Add tier", exact=True)).to_have_count(0)
+    expect(models.get_by_role("button", name="Actions for Coder")).to_have_count(0)
+    assert console_errors == []
+
+
+@pytest.mark.ui
+def test_the_session_header_says_the_tier_and_the_model_it_requested(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, owner_dsn: str, console_errors: list
+):
+    """The scripted agent runs the implementer on a tier, and stays at work
+    (fake/hang); the Run records the tier's name and the model it requested
+    at the submit, and the header says both. A later edit of the tier changes
+    neither."""
+    project = forge_project
+    client.patch(f"/v1/projects/{project['id']}", {"agentModels": client.on_models({"implementer": "fake/hang"})})
+    tier_id = client.get(f"/v1/projects/{project['id']}").json()["agentModels"]["implementer"]["tier"]
+    assert client.put(f"/v1/models/tiers/{tier_id}", {"name": "Scripted", "model": "fake/hang"}).status_code == 200
+    task = client.create_task(project["id"], "Write it up")
+    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+
+    def submitted():
+        rows = query(owner_dsn, "SELECT id, model, model_tier FROM runs WHERE task_id = %s AND phase = 'implement' AND lux_run_id IS NOT NULL",
+                     (task["id"],))
+        return rows[0] if rows else None
+
+    run = wait_until(submitted, timeout=60, message="the implementer never reached lux")
+    assert (run["model"], run["model_tier"]) == ("fake/hang", "Scripted")
+    assert client.put(f"/v1/models/tiers/{tier_id}", {"name": "Renamed", "model": "fake/hang"}).status_code == 200
+    assert client.get(f"/v1/runs/{run['id']}").json()["modelTier"] == "Scripted"
+
+    _sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/run/{run['id']}")
+    chip = page.get_by_test_id("run-model")
+    expect(chip).to_have_attribute("aria-label", "Model: Scripted, requests fake/hang")
+    chip.focus()
+    tip = page.get_by_role("tooltip")
+    expect(tip).to_contain_text("When this session started, Scripted asked the proxy for fake/hang")
+    expect(tip).to_contain_text("changing Scripted now changes the next session, not this one.")
+    expect(tip).to_contain_text("how the proxy served it is the proxy’s to say")
     assert console_errors == []

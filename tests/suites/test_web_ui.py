@@ -1076,8 +1076,8 @@ def test_an_agents_progress_shows_in_its_chat(
 ):
     """The implementer reports progress with `dude event progress`; its
     chat shows one progress row that moved, not a line per update."""
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
-        "implementer": {"model": "fake/tools"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
+        "implementer": {"model": "fake/tools"}, "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
     item = client.create_task(forge_project["id"], "Report progress")
     assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
     implement = wait_until(lambda: next((r for r in client.task_runs(item["id"]) if r["phase"] == "implement"), None),
@@ -1102,8 +1102,8 @@ def test_a_person_approves_a_repository_an_agent_asked_for(
     web = fake_github.add_repository("web")
     client.post(f"/v1/projects/{forge_project['id']}/repositories", {"name": "web", "url": web.clone_url})
     target = next(r for r in client.get(f"/v1/projects/{forge_project['id']}").json()["repositories"] if r["name"] != "web")
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
-        "implementer": {"model": "fake/request"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
+        "implementer": {"model": "fake/request"}, "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
     item = client.create_task(forge_project["id"], "Needs the client", repositories=[{"id": target["id"]}])
     assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
     implement = wait_until(lambda: next((r for r in client.task_runs(item["id"]) if r["phase"] == "implement"), None),
@@ -1130,8 +1130,8 @@ def test_a_parked_agent_is_answered_from_its_chat(
 ):
     """An agent that asked and was not answered in time is parked: its chat
     says so, and answering there resumes it."""
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
-        "implementer": {"model": "fake/ask"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
+        "implementer": {"model": "fake/ask"}, "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
     item = client.create_task(forge_project["id"], "Ask, then wait")
     assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
     implement = wait_until(
@@ -1157,8 +1157,8 @@ def test_an_agent_parked_on_a_repository_request_says_what_resumes_it(
     web = fake_github.add_repository("web")
     client.post(f"/v1/projects/{forge_project['id']}/repositories", {"name": "web", "url": web.clone_url})
     target = next(r for r in client.get(f"/v1/projects/{forge_project['id']}").json()["repositories"] if r["name"] != "web")
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
-        "implementer": {"model": "fake/wait"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
+        "implementer": {"model": "fake/wait"}, "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
     item = client.create_task(forge_project["id"], "Needs the client first", repositories=[{"id": target["id"]}])
     assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
     implement = wait_until(
@@ -1250,12 +1250,12 @@ def test_everything_waiting_on_you_is_in_one_place(
     web = fake_github.add_repository("web")
     client.post(f"/v1/projects/{forge_project['id']}/repositories", {"name": "web", "url": web.clone_url})
     target = next(r for r in client.get(f"/v1/projects/{forge_project['id']}").json()["repositories"] if r["name"] != "web")
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
-        "implementer": {"model": "fake/ask"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
+        "implementer": {"model": "fake/ask"}, "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
     asking = client.create_task(forge_project["id"], "Ask first", repositories=[{"id": target["id"]}])
     client.post(f"/v1/tasks/{asking['id']}/deliver")
     wait_until(lambda: client.get("/v1/questions").json()["questions"], timeout=30, message="no question")
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {"implementer": {"model": "fake/wait"}}})
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({"implementer": "fake/wait"})})
     requesting = client.create_task(forge_project["id"], "Needs the client", repositories=[{"id": target["id"]}])
     client.post(f"/v1/tasks/{requesting['id']}/deliver")
     wait_until(lambda: client.get("/v1/repository-requests").json()["repositoryRequests"], timeout=30, message="no request")
@@ -1282,8 +1282,8 @@ def test_only_a_tasks_owner_answers_and_anyone_can_take_it_over(
     """Whoever creates a task drives it: a colleague sees its agent's
     question, but not the choices — they wait on the owner. Taking the task
     over from its page makes the question theirs to answer."""
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
-        "implementer": {"model": "fake/ask"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
+        "implementer": {"model": "fake/ask"}, "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
     item = client.create_task(forge_project["id"], "Ask the owner")
     assert item["owner"]["name"] == "e2e user"
     assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
@@ -1389,7 +1389,7 @@ def test_a_failed_implementer_says_why_on_its_task_and_its_chat(
     a person. The task says why at the top and on the failed step, "Waiting on
     you" gives the reason, and the Run's chat ends on the error rather than a
     composer nobody would hear."""
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {"reviewer": {"model": "fake/scripted"}}})
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({"reviewer": "fake/scripted"})})
     item = client.create_task(forge_project["id"], "Nobody to implement it")
     assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
     wait_until(lambda: client.get(f"/v1/tasks/{item['id']}").json()["status"] == "awaiting_input",
@@ -1402,8 +1402,8 @@ def test_a_failed_implementer_says_why_on_its_task_and_its_chat(
     page.goto(f"{web_url}#/task/{item['id']}")
     escalation = page.get_by_test_id("escalation")
     expect(escalation).to_contain_text("Implementer failed")
-    expect(escalation).to_contain_text("no model is configured for the implementer role")
-    expect(page.get_by_test_id("phase").first).to_contain_text("no model is configured")
+    expect(escalation).to_contain_text("The Implementer runs on Coder, which names no model yet. An admin sets it in Models.")
+    expect(page.get_by_test_id("phase").first).to_contain_text("which names no model yet")
     expect(page).to_have_title("GREE-1 · Nobody to implement it — dude")
 
     page.goto(f"{web_url}#/waiting")
@@ -1414,7 +1414,7 @@ def test_a_failed_implementer_says_why_on_its_task_and_its_chat(
     ended = page.get_by_test_id("run-ended")
     expect(ended).to_have_attribute("data-outcome", "failed")
     # Why is the transcript's last line, just above; the strip says only how it ended.
-    expect(page.get_by_test_id("chat-ended")).to_contain_text("no model is configured")
+    expect(page.get_by_test_id("chat-ended")).to_contain_text("which names no model yet")
     # No composer: a finished run hears nothing. It is on its task's page,
     # so there is no way back to offer: the task is right there.
     expect(page.get_by_test_id("run-screen").locator("textarea")).to_have_count(0)
@@ -1430,7 +1430,7 @@ def test_a_person_decides_how_a_stopped_delivery_goes_on(
     """Delivery stopped for a person offers what fits: here, a failed
     implementer — try again, or stop. A note goes with the decision; trying
     again runs the step afresh, and with its model back it goes on."""
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {"reviewer": {"model": "fake/scripted"}}})
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({"reviewer": "fake/scripted"})})
     item = client.create_task(forge_project["id"], "Implement it once it can")
     assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
     wait_until(lambda: client.get(f"/v1/tasks/{item['id']}").json()["status"] == "awaiting_input",
@@ -1446,7 +1446,7 @@ def test_a_person_decides_how_a_stopped_delivery_goes_on(
 
     # Its model back, and a word for the agent.
     client.patch(f"/v1/projects/{forge_project['id']}",
-                 {"agentModels": {"implementer": {"model": "fake/scripted"}, "reviewer": {"model": "fake/scripted"}}})
+                 {"agentModels": client.on_models({"implementer": "fake/scripted", "reviewer": "fake/scripted"})})
     escalation.get_by_test_id("escalation-note").fill("The model is configured now.")
     escalation.get_by_test_id("escalation-retry").click()
     expect(page.get_by_test_id("escalation")).to_have_count(0)
@@ -1524,8 +1524,8 @@ def test_a_link_to_something_gone_says_so(
 
 def _hanging_run(client: ApiClient, forge_project: dict, title: str) -> dict:
     """A task whose implementer is working and never finishes its turn."""
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
-        "implementer": {"model": "fake/hang"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
+        "implementer": {"model": "fake/hang"}, "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
     item = client.create_task(forge_project["id"], title)
     assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
     return wait_until(lambda: next((r for r in client.task_runs(item["id"]) if r["phase"] == "implement" and r["status"] == "running"), None),

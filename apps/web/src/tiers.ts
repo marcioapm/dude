@@ -53,10 +53,10 @@ export function tierUseWhere(use: ModelTierUse, orgName: string): string {
   return use.kind === "project" ? "project override" : `${orgName}’s setting`;
 }
 
-/** The efforts a tier's agents use, distinct, in words: "high", "high and low", or null for none set. */
+/** The efforts a tier's agents use, distinct, in words: "high", "high and low"; null when none sets one. */
 export function effortsWords(uses: readonly ModelTierUse[]): string | null {
   const efforts = [...new Set(uses.map((u) => u.effort ?? "the model’s default"))];
-  if (!uses.length) return null;
+  if (!uses.some((u) => u.effort)) return null;
   return efforts.map((e) => (e === "the model’s default" ? e : effortLabel(e).toLowerCase())).join(" and ");
 }
 
