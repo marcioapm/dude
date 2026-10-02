@@ -104,12 +104,19 @@ func runningAgain(base time.Time, host string) lux.Run {
 	return r
 }
 
-// resume records the resume as whilePaused does, in the transaction that
-// moves the Run back to running.
+// resume records the resume as whilePaused does: its row before lux is
+// asked, then the transaction that moves the Run back to running, with
+// lux's answer resumed (its epoch 0: as foreseen).
 func (w *resumeWorld) resume(before lux.Run) {
 	w.t.Helper()
+	w.resumeAnswered(before, lux.Run{})
+}
+
+func (w *resumeWorld) resumeAnswered(before, resumed lux.Run) {
+	w.t.Helper()
+	foreseen := w.s.resumeAsked(w.ctx, w.run, before)
 	if err := w.s.DB.InOrg(w.ctx, w.run.Org, func(tx pgx.Tx) error {
-		w.s.recordResume(w.ctx, tx, w.run, before)
+		w.s.resumeAccepted(w.ctx, tx, w.run, foreseen, resumed)
 		_, err := tx.Exec(w.ctx, `UPDATE runs SET status = 'running', lux_state = 'resuming', dude_pause = NULL,
 			lux_stop_reason = NULL, control = 'none', control_requested_at = NULL WHERE id = $1`, w.run.ID)
 		return err

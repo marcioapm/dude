@@ -71,9 +71,12 @@ type translator struct {
 	// Tool calls started and not yet finished, by id, written with the
 	// cursor: an agent in a long command is working, however quiet.
 	openCalls map[string]bool
-	// The epochs whose first busy and first output were looked for, so
-	// each is looked for once per placement and not on every chunk.
+	// The epochs whose first busy and first output were looked for and
+	// settled, so each is looked for once per placement and not on every
+	// chunk; and those looked for in this batch and not settled yet, looked
+	// for again in the next (resumes.go).
 	busyEpoch, outputEpoch int
+	unsettled              map[unsettledKey]bool
 	// Resumes to follow up once the batch commits, by epoch: true to read
 	// lux's placements first (resumes.go).
 	resumes map[int]bool
@@ -150,6 +153,7 @@ func (t *translator) save(ctx context.Context, tx pgx.Tx, cursor string, afterEv
 		t.run.ID, t.message.String(), t.thought.String(), u.cost, u.context, u.input, u.output, u.cacheRead, u.cacheWrite,
 		db.NonNil(open), t.active, cursor, afterEvent)
 	t.active = false
+	t.unsettled = nil
 	return err
 }
 
