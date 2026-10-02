@@ -23,6 +23,7 @@ import (
 	"os/exec"
 	"path"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -397,6 +398,8 @@ type Server struct {
 	// given, reported as each placement's memoryLimit (a newer lux); zero
 	// reports none, as today's lux.
 	MemoryShare float64
+	// Starts still to fail, by spec label "key=value" (FailStarts).
+	failStarts map[string]int
 	// closed ends everything the fake waits on in the background (Close).
 	closed    chan struct{}
 	closeOnce sync.Once
@@ -490,6 +493,36 @@ func (s *Server) TurnsEnded(id string, n int) <-chan struct{} {
 		}
 	}()
 	return done
+}
+
+// FailStarts makes the next n starts (a submit's or a resume's placement)
+// of Runs whose spec has the label "key=value" fail before the workload
+// runs, as lux reports a container that would not start; n <= 0 clears it.
+func (s *Server) FailStarts(label string, n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.failStarts == nil {
+		s.failStarts = map[string]int{}
+	}
+	if n <= 0 {
+		delete(s.failStarts, label)
+		return
+	}
+	s.failStarts[label] = n
+}
+
+// takeFailStart uses up one of FailStarts' for a Run of this spec.
+// Callers hold s.mu.
+func (s *Server) takeFailStart(spec map[string]any) bool {
+	labels, _ := spec["labels"].(map[string]any)
+	for k, v := range labels {
+		key := fmt.Sprintf("%s=%v", k, v)
+		if s.failStarts[key] > 0 {
+			s.failStarts[key]--
+			return true
+		}
+	}
+	return false
 }
 
 // Crash ends a Run's agent as a dead container would.
@@ -600,6 +633,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /fake/servers/{sid}/idle", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"idle": s.Idle(r.PathValue("sid"))})
 	})
+	mux.HandleFunc("POST /fake/fail-starts", func(w http.ResponseWriter, r *http.Request) {
+		n, _ := strconv.Atoi(r.URL.Query().Get("n"))
+		s.FailStarts(r.URL.Query().Get("label"), n)
+		writeJSON(w, 200, map[string]any{"label": r.URL.Query().Get("label"), "n": n})
+	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+s.Key {
 			writeErr(w, 401, "unauthorized", "invalid API key")
@@ -663,6 +701,13 @@ func (s *Server) play(run *Run, spec map[string]any, resumed bool) {
 	if run.behavior.FailToStart {
 		run.placements = append(run.placements, &placement{Epoch: run.Epoch, State: "starting"})
 		s.setState(run, "failed")
+		return
+	}
+	if run.State != "cancelled" && s.takeFailStart(spec) {
+		// As lux's runner reports a container that would not start (exit
+		// 125): the placement never ran, and the Run is failed.
+		run.placements = append(run.placements, &placement{Epoch: run.Epoch, State: "starting"})
+		s.setStateWith(run, "failed", "start-failed")
 		return
 	}
 	if run.State == "cancelled" {
