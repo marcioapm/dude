@@ -12,9 +12,8 @@
  */
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
-import { attachmentReferences } from "@dude/domain";
 import { cx } from "../util/cx.ts";
-import { IMAGE_SIZES, cutReference, insertReference, moveReference, moveReferenceTo, removeReference, snapWidth, withLayout, type FieldKind, type ImageLayout, type ImageSize } from "../util/imageLayout.ts";
+import { IMAGE_MIN_WIDTH, IMAGE_SIZES, cutReference, indexAt, insertReference, moveReference, moveReferenceTo, removeReference, snapWidth, withLayout, type FieldKind, type ImageLayout, type ImageSize } from "../util/imageLayout.ts";
 import { ImageFigure, type AttachmentFrameProps } from "../components/Markdown.tsx";
 import { IconButton } from "./Button.tsx";
 import { Tooltip } from "./Tooltip.tsx";
@@ -260,8 +259,6 @@ export function useImageEditing({ kind, enabled, value, text, setText, preview }
   return { frame, panel, slotLine };
 }
 
-const indexAt = (text: string, at: number) => attachmentReferences(text).findIndex((r) => r.from === at);
-
 const SIZES: ReadonlyArray<{ size: "small" | "medium" | "full"; icon: IconName; label: string }> = [
   { size: "small", icon: "image-small", label: "Small" },
   { size: "medium", icon: "image-medium", label: "Medium" },
@@ -350,7 +347,7 @@ function EditableImage({ n, alt, layout, children, fieldKey, selected, onSelect,
     resizing.current = true;
     let size: ImageSize = layout.size;
     const moveTo = (x: number) => {
-      const raw = Math.min(max, Math.max(120, startW + side * k * (x - startX)));
+      const raw = Math.min(max, Math.max(IMAGE_MIN_WIDTH, startW + side * k * (x - startX)));
       size = snapWidth(raw, max);
       const width = size === "full" ? max : typeof size === "number" ? size : IMAGE_SIZES[size];
       setDrag({ width, label: sizeName(size) });

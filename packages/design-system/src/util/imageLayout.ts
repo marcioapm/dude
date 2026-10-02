@@ -89,12 +89,12 @@ export function cutReference(text: string, n: number): { text: string; ref: stri
   const lineEnd = nl < 0 ? text.length : nl;
   const head = text.slice(lineStart, r.from);
   const tail = text.slice(r.to, lineEnd);
+  const at = lineOf(text, r.from);
   // The image was a list item's whole text: the item goes too, unless lines
   // under it follow, which then become its text.
-  const bareItem = blank(tail) && BARE_ITEM.test(head) && !criteriaLines(text).items.some((i) => i.first === lineOf(text, r.from) && i.last > i.first);
+  const bareItem = blank(tail) && BARE_ITEM.test(head) && !criteriaItems(text).some((i) => i.first === at && i.last > i.first);
   if (blank(head + tail) || bareItem) {
     const lines = text.split("\n");
-    const at = lineOf(text, r.from);
     lines.splice(at, 1);
     while (at < lines.length && blank(lines[at]) && (at === 0 || blank(lines[at - 1]))) lines.splice(at, 1);
     if (at >= lines.length) while (lines.length && blank(lines[lines.length - 1])) lines.pop();
@@ -110,7 +110,7 @@ export function removeReference(text: string, n: number): string {
 
 // --- Where an image can go ---------------------------------------------------
 
-/** The line each top-level block of the goal starts on. One trial move parses the same text several times: the last answer is kept. */
+// The line each top-level block of the goal starts on. A trial move parses one text several times, so the last answer is kept.
 let lastBlocks: { text: string; lines: readonly number[] } | null = null;
 function blockStarts(text: string): readonly number[] {
   if (lastBlocks?.text === text) return lastBlocks.lines;
@@ -120,15 +120,8 @@ function blockStarts(text: string): readonly number[] {
   return lines;
 }
 
-
-/**
- * The criteria's items as `criteriaLines` reads them (the rule the saved
- * criteria follow), one per drawn `li`: `last` is the item's last non-blank
- * line, `column` where a continuation line is indented to.
- */
-export function criteriaItems(text: string): CriteriaItem[] {
-  return [...criteriaLines(text).items];
-}
+// The criteria's items, one per drawn `li`, by the rule the saved criteria follow.
+const criteriaItems = (text: string) => criteriaLines(text).items;
 
 /**
  * The item's last line an image can follow: its last non-blank line, or,
@@ -217,7 +210,7 @@ function placeOf(text: string, n: number, kind: FieldKind): { slot: number; own:
 }
 
 /** The reference's index in `text` at offset `at`. */
-const indexAt = (text: string, at: number) => attachmentReferences(text).findIndex((r) => r.from === at);
+export const indexAt = (text: string, at: number) => attachmentReferences(text).findIndex((r) => r.from === at);
 
 /**
  * `n`'s image moved within its field to `slot` (in the field as it is now).
@@ -230,8 +223,7 @@ export function moveReferenceTo(text: string, n: number, slot: number, kind: Fie
   let target = slot;
   // A goal paragraph of its own is gone after the cut: the slots after it move down one.
   if (kind === "goal" && place.own && slot > place.slot) target--;
-  if (kind === "goal" && place.own && target === place.slot) return null;
-  if (kind === "criteria" && place.own && target === place.slot) return null;
+  if (place.own && target === place.slot) return null;
   // A criterion that was only the image is gone after the cut: the same.
   if (kind === "criteria" && target > place.slot && criteriaItems(cut.text).length < criteriaItems(text).length) target--;
   const put = insertReference(cut.text, cut.ref, target, kind);
@@ -242,20 +234,12 @@ export function moveReferenceTo(text: string, n: number, slot: number, kind: Fie
 export function moveReference(text: string, n: number, dir: -1 | 1, kind: FieldKind): { text: string; index: number } | null {
   const place = placeOf(text, n, kind);
   if (!place) return null;
-  if (kind === "goal") {
-    const blocks = blockStarts(text).length;
-    // Own paragraph: before the one above, or after the one below. In a paragraph: before it, or after it.
-    const slot = place.own ? (dir < 0 ? place.slot - 1 : place.slot + 2) : dir < 0 ? place.slot : place.slot + 1;
-    if (slot < 0 || slot > blocks) return null;
-    return moveReferenceTo(text, n, slot, kind);
-  }
-  const items = criteriaItems(text).length;
-  const slot = place.own ? place.slot + dir : dir < 0 ? place.slot - 1 : place.slot;
-  if (slot < 0 || slot >= items) return null;
+  // Goal, own paragraph: before the one above, or after the one below; in a paragraph: before it, or after it.
+  // Criteria, its whole end: the next item; inline: its own item's end (down) or the item above (up).
+  const slot = kind === "goal"
+    ? (place.own ? (dir < 0 ? place.slot - 1 : place.slot + 2) : dir < 0 ? place.slot : place.slot + 1)
+    : (place.own ? place.slot + dir : dir < 0 ? place.slot - 1 : place.slot);
+  const last = kind === "goal" ? blockStarts(text).length : criteriaItems(text).length - 1;
+  if (slot < 0 || slot > last) return null;
   return moveReferenceTo(text, n, slot, kind);
-}
-
-/** Whether `n`'s image can move one block in `dir`. */
-export function canMove(text: string, n: number, dir: -1 | 1, kind: FieldKind): boolean {
-  return moveReference(text, n, dir, kind) !== null;
 }
