@@ -1,7 +1,8 @@
 /**
  * The task dialog saves only with a goal of at least TASK_GOAL_MIN
  * characters, trimmed, and says how many more once the person types in it.
- * Mounted in happy-dom against the fixture client.
+ * A new task's images hold Create and deliver until they are made; an edit
+ * takes no images. Mounted in happy-dom against the fixture client.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -109,5 +110,55 @@ describe("editing a task saved before the rule", () => {
     const d = await open(old(true));
     expect(d.goalLabel()).toBe("Goal");
     expect(d.save().disabled).toBe(false);
+  });
+
+  test("a file dragged over it shows no drop overlay: an edit takes no images", async () => {
+    await open(old(false));
+    await act(async () => void fileEvent("dragenter", PNG));
+    expect(document.querySelectorAll('[data-testid="drop-overlay"]').length).toBe(0);
+  });
+});
+
+const PNG = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0, 0, 0, 0])], "design.png", { type: "image/png" });
+
+/** A file drag event on the goal, carrying `file`. */
+function fileEvent(type: string, file: File) {
+  const e = new Event(type, { bubbles: true, cancelable: true }) as Event & { dataTransfer: unknown };
+  e.dataTransfer = { types: ["Files"], items: [file], files: [file], dropEffect: "" };
+  document.querySelector("[data-testid=task-goal]")!.dispatchEvent(e);
+  return e;
+}
+
+describe("a new task's images", () => {
+  test("Create and deliver waits for a dropped image to be made, and is enabled once it is", async () => {
+    // Decoding is held until released, so the chip stays "uploading"; the canvas encodes a small PNG.
+    let decoded!: () => void;
+    const held = new Promise<void>((r) => (decoded = r));
+    const g = globalThis as { createImageBitmap?: unknown };
+    const canvas = Object.getPrototypeOf(document.createElement("canvas")) as Record<string, unknown>;
+    const saved = { bitmap: g.createImageBitmap, getContext: canvas["getContext"], toBlob: canvas["toBlob"] };
+    g.createImageBitmap = async () => {
+      await held;
+      return { width: 40, height: 30, close() {} };
+    };
+    canvas["getContext"] = () => ({ fillRect() {}, drawImage() {} });
+    canvas["toBlob"] = (done: (b: Blob) => void, type: string) => done(new Blob([new Uint8Array(1024)], { type }));
+    try {
+      const d = await open();
+      await d.title("Show invoices in euros");
+      await d.goal("Keep invoices in euros for EU customers.");
+      expect(d.deliver()!.disabled).toBe(false);
+      await act(async () => void fileEvent("drop", PNG));
+      const chip = () => document.querySelector("[data-testid=attachment-chip]");
+      expect(chip()?.getAttribute("data-state")).toBe("uploading");
+      expect(d.deliver()!.disabled).toBe(true);
+      await act(async () => decoded());
+      await until(() => chip()?.getAttribute("data-state") === "ready", "the chip, ready");
+      expect(d.deliver()!.disabled).toBe(false);
+    } finally {
+      g.createImageBitmap = saved.bitmap;
+      canvas["getContext"] = saved.getContext;
+      canvas["toBlob"] = saved.toBlob;
+    }
   });
 });

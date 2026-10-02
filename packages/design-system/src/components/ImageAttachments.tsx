@@ -101,7 +101,7 @@ export interface AttachDropZoneProps {
   readonly disabledReason?: ReactNode;
   /** Who gets them and when: "They go with your next steer to Implement. It reads them after the current tool." */
   readonly detail?: ReactNode;
-  /** Also take images pasted anywhere inside it, unless a field already took them. */
+  /** Also take images pasted anywhere inside it. */
   readonly takePaste?: boolean | undefined;
   readonly className?: string | undefined;
   readonly children: ReactNode;
@@ -111,20 +111,24 @@ const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).inclu
 
 /**
  * Takes a paste's files for `onFiles`. The paste's text, when it has some
- * (an app copying an image puts its name or URL there too), is left to go
- * into the field; a paste of files alone is claimed. True when it took any.
+ * (a caption, a URL), is left to go into the field; a paste of files alone
+ * is claimed. True when it took any.
  */
 export function takePastedFiles(e: ReactClipboardEvent, onFiles: (files: File[]) => void): boolean {
-  // A paste with text is not default-prevented, so an enclosing zone knows a field took it from here.
-  if (taken.has(e.nativeEvent)) return false;
   const files = Array.from(e.clipboardData?.files ?? []);
   if (files.length === 0) return false;
-  taken.add(e.nativeEvent);
-  if (!Array.from(e.clipboardData?.types ?? []).includes("text/plain")) e.preventDefault();
+  if (!pasteHasText(e.clipboardData, files)) e.preventDefault();
   onFiles(files);
   return true;
 }
-const taken = new WeakSet<Event>();
+
+// A file copied in a file manager also puts its name in text/plain, one line per file; that is not text.
+function pasteHasText(data: DataTransfer, files: File[]): boolean {
+  if (!Array.from(data.types ?? []).includes("text/plain")) return false;
+  const names = new Set(files.map((f) => f.name));
+  const lines = data.getData("text/plain").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  return lines.some((line) => !names.has(line));
+}
 
 /**
  * The drop target for images, put around everything a person may drop on

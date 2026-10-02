@@ -1,14 +1,15 @@
 /**
  * The composer's image tray, mounted: Send waits for uploads and refuses an
  * image that cannot go, a message may be images alone, Enter during an
- * upload sends once it is done, and pasting an image attaches it.
+ * upload sends once it is done, and pasting an image attaches it. The drop
+ * zone claims pastes of files and refused drops.
  */
 
 import { afterEach, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { ChatComposer, type ComposerSubmission } from "../src/components/ChatComposer.tsx";
-import { ImageViewer, MessageImages, type ComposerAttachment, type SentImage } from "../src/components/ImageAttachments.tsx";
+import { AttachDropZone, ImageViewer, MessageImages, type ComposerAttachment, type SentImage } from "../src/components/ImageAttachments.tsx";
 import { TooltipProvider } from "../src/primitives/Tooltip.tsx";
 
 let root: Root | null = null;
@@ -88,6 +89,38 @@ test("pasting an image attaches it; pasting text does not", async () => {
   const text = await act(async () => paste([]));
   expect(text.defaultPrevented).toBe(false);
   expect(got.length).toBe(1);
+});
+
+test("a zone that takes pastes claims files alone or with their own names, and leaves real text to the field", async () => {
+  const got: File[][] = [];
+  const zone = (reason?: string) => (
+    <AttachDropZone takePaste onFiles={(f) => void got.push(f)} disabledReason={reason}><input data-testid="field" /></AttachDropZone>
+  );
+  await render(zone());
+  const field = q<HTMLInputElement>('[data-testid="field"]')!;
+  const image = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], "design.png", { type: "image/png" });
+  const fire = (type: string, prop: "clipboardData" | "dataTransfer", data: object) => {
+    const e = new Event(type, { bubbles: true, cancelable: true }) as Event & Record<string, unknown>;
+    e[prop] = data;
+    field.dispatchEvent(e);
+    return e;
+  };
+  const paste = (types: string[], files: File[], text = "") =>
+    act(async () => fire("paste", "clipboardData", { types, files, getData: () => text }));
+
+  expect((await paste(["Files"], [image])).defaultPrevented).toBe(true);
+  expect((await paste(["Files", "text/plain"], [image], "see the header")).defaultPrevented).toBe(false);
+  expect((await paste(["Files", "text/plain"], [image], " design.png \n")).defaultPrevented).toBe(true);
+  expect((await paste(["text/plain"], [], "just words")).defaultPrevented).toBe(false);
+  expect(got.length).toBe(3);
+
+  await render(zone("Image storage isn't set up"));
+  const drag = { types: ["Files"], items: [image], files: [image], dropEffect: "" };
+  await act(async () => void fire("dragenter", "dataTransfer", drag));
+  expect(q('[data-testid="drop-overlay"]')?.textContent).toContain("Image storage isn't set up");
+  const drop = await act(async () => fire("drop", "dataTransfer", drag));
+  expect(drop.defaultPrevented).toBe(true);
+  expect(got.length).toBe(3);
 });
 
 test("a message the app could not send keeps its words, and the refusal goes no further", async () => {
