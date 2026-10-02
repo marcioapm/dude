@@ -398,3 +398,30 @@ def test_a_filling_field_fills_a_document_dialog_without_an_aside(gallery_page: 
     assert m["scrollHeight"] > m["clientHeight"], m
     gallery_page.keyboard.press("Escape")
     assert console_errors == []
+
+
+def test_the_image_states_render_and_the_viewer_opens_from_a_turn(gallery_page: Page, console_errors: list):
+    """Every tray state, the drop target and a turn's images; a click opens
+    the viewer on that image, Esc closes it."""
+    import os
+    from pathlib import Path
+
+    gallery_page.set_viewport_size({"width": 1440, "height": 1000})
+    gallery_page.get_by_role("link", name="Images", exact=True).click()
+    block = gallery_page.locator("#ch-images")
+    expect(block.get_by_test_id("attachment-chip").first).to_be_visible()
+    for state in ("uploading", "ready", "error"):
+        expect(block.locator(f'[data-testid="attachment-chip"][data-state="{state}"]').first).to_be_visible()
+    expect(block.get_by_test_id("attachment-warning").first).to_contain_text("2 can't be sent")
+    expect(block.get_by_test_id("attach-button").filter(has=gallery_page.locator("[disabled]")).or_(
+        block.locator('[data-testid="attach-button"][disabled]')).first).to_be_visible()
+    shots = Path(os.environ.get("DUDE_TEST_SHOTS", "/var/tmp/cimg-dude-shots"))
+    shots.mkdir(parents=True, exist_ok=True)
+    block.screenshot(path=str(shots / "gallery-images.png"))
+    block.get_by_test_id("message-image").first.click()
+    viewer = gallery_page.get_by_test_id("image-viewer")
+    expect(viewer).to_be_visible()
+    expect(gallery_page.get_by_test_id("viewer-meta")).to_contain_text("scaled from 2400×1520")
+    gallery_page.keyboard.press("Escape")
+    expect(viewer).to_have_count(0)
+    assert console_errors == []
