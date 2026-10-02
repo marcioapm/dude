@@ -316,6 +316,33 @@ func TestFirstFramesOfAnotherEpochBeforeTheRowMovesAreNotTakenFromALaterOne(t *t
 	}
 }
 
+// A trailing running state of the stopped epoch, committed before the row
+// moves to the epoch lux names, is no frame of that epoch: the moved row
+// is not marked frames_missed, and its own session, busy and output,
+// after the move, stamp it.
+func TestAnOlderEpochsRunningStateBeforeTheMoveMarksNothingMissed(t *testing.T) {
+	w := newResumeWorld(t)
+	base := time.Now().Add(-time.Minute).UTC()
+	w.exec(`UPDATE runs SET agent_session_epoch = 1 WHERE id = $1`, w.run.ID)
+	if foreseen := w.s.resumeAsked(w.ctx, w.run, stoppedOnHost1(base)); foreseen != 2 {
+		t.Fatalf("foreseen epoch %d, want 2", foreseen)
+	}
+	w.follow(running(1))
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_state = 'running'`); n != 1 {
+		t.Fatalf("epoch 1's running state was not committed")
+	}
+	w.resumeAnswered(stoppedOnHost1(base), lux.Run{Epoch: 3, State: "resuming"})
+	if row := w.row(3); row["frames_missed"] != false {
+		t.Errorf("frames_missed = %v on epoch 3's row after only an epoch-1 frame, want false", row["frames_missed"])
+	}
+	w.follow(record(3, "lux.session", map[string]any{"sessionId": "s1"}), busy(3), spoke(3))
+	row := w.row(3)
+	if row["busy_at"] == nil || row["first_output_at"] == nil {
+		t.Errorf("epoch 3's frames after the move were not stamped: busy %v, first output %v",
+			row["busy_at"], row["first_output_at"])
+	}
+}
+
 // otherEpochLux resumes the Run into epoch 3 (dude foresees 2), streaming
 // and having committed its session, busy and one chunk before it answers.
 type otherEpochLux struct {
