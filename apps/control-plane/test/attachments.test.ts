@@ -499,6 +499,51 @@ describe("a task's images are the ones its text shows", () => {
     expect((await owner`SELECT count(*)::int AS n FROM attachments WHERE id = ${id}`)[0].n).toBe(0);
     expect(objects.has(row.object_key)).toBe(false);
   });
+
+  const goalOf = async (id: string) => (await owner`SELECT goal FROM tasks WHERE id = ${id}`)[0].goal as string;
+  const refused = async (id: string, goal: string) => {
+    const before = await goalOf(id);
+    const res = await patch(id, { goal });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as Json).error.code).toBe("invalid_attachment_reference");
+    expect(await goalOf(id)).toBe(before);
+  };
+
+  test("a reference to an image a message already carried is refused, and nothing is saved", async () => {
+    const sent = await img(taskId, "steer.png");
+    await owner`INSERT INTO directives (id, organization_id, task_id, text) VALUES ('dir_att_sent', ${ORG}, ${taskId}, 'look')`;
+    await owner`UPDATE attachments SET directive_id = 'dir_att_sent', attached_at = now() WHERE id = ${sent}`;
+    await refused(taskId, `${GOAL} ![s](attachment:${sent})`);
+    expect((await owner`SELECT directive_id FROM attachments WHERE id = ${sent}`)[0].directive_id).toBe("dir_att_sent");
+  });
+
+  test("more images than one message takes, or more bytes together, are refused, and nothing is saved", async () => {
+    const seven: string[] = [];
+    for (let i = 0; i < 7; i++) seven.push(await img(taskId, `n${i}.png`));
+    await refused(taskId, `${GOAL}\n\n${seven.map((id, i) => `![n${i}](attachment:${id})`).join("\n\n")}`);
+    for (const id of seven) expect((await state(id)).attached).toBe(false);
+
+    const big = [await img(taskId, "big1.png"), await img(taskId, "big2.png")];
+    // 6 MiB together: over the 5 MiB a message's images may be.
+    await owner`UPDATE attachments SET bytes = ${3 << 20} WHERE id IN ${owner(big)}`;
+    await refused(taskId, `${GOAL}\n\n![b1](attachment:${big[0]}) ![b2](attachment:${big[1]})`);
+    for (const id of big) expect((await state(id)).attached).toBe(false);
+  });
+
+  test("saving one task's text leaves another task's images attached", async () => {
+    await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_att_scope', ${ORG}, 'prj_att', 5, 'S', ${GOAL})`;
+    const theirs = await img("wi_att_scope", "theirs.png");
+    expect((await patch("wi_att_scope", { goal: `${GOAL} ![t](attachment:${theirs})` })).status).toBe(200);
+    expect((await patch(taskId, { goal: `${GOAL} and nothing else` })).status).toBe(200);
+    expect(await state(theirs)).toEqual({ for_prompt: true, attached: true, position: 0, detached: false });
+  });
+
+  test("an update of the criteria alone keeps the goal's images attached", async () => {
+    const shown = await img(taskId, "goal.png");
+    expect((await patch(taskId, { goal: `${GOAL} ![g](attachment:${shown})` })).status).toBe(200);
+    expect((await patch(taskId, { acceptanceCriteria: ["The header sits under the menu"] })).status).toBe(200);
+    expect(await state(shown)).toEqual({ for_prompt: true, attached: true, position: 0, detached: false });
+  });
 });
 
 describe("deleting a task", () => {
