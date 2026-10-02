@@ -140,6 +140,18 @@ beforeAll(async () => {
   await taskWith("wi_6", 6, "Aborted", "aborted", 300,
     [["run_f1", 1, 240, 180, "aborted"], ["run_f2", 2, 180, 60, "aborted"]],
     [["aborted", 240], ["running", 180], ["review", 120], ["aborted", 60]]);
+
+  // Its conductor was written to before anything was delivered (attempt 1,
+  // 5 h ago), and a second conductor is recorded on attempt 2 at 200
+  // minutes, before attempt 2's first agent 2 h ago. Attempt 1's
+  // implementer ran 4 h to 3 h ago.
+  await taskWith("wi_7", 7, "Asked first", "running", 360,
+    [["run_g1", 1, 240, 180, "aborted"], ["run_g2", 2, 120, null, "running"]], []);
+  await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, role, created_at, started_at, ended_at, status)
+              VALUES ('run_g_cond1', ${ORG}, ${PROJECT}, 'wi_7', 1, 'conductor',
+                      now() - interval '300 minutes', now() - interval '300 minutes', now() - interval '290 minutes', 'completed'),
+                     ('run_g_cond2', ${ORG}, ${PROJECT}, 'wi_7', 2, 'conductor',
+                      now() - interval '200 minutes', now() - interval '200 minutes', now() - interval '190 minutes', 'completed')`;
   app = new SQL(databaseUrl("app", NAME));
   setPool(app);
   key = (await createApiKey({ organizationId: ORG, name: "Ana" })).key;
@@ -239,6 +251,15 @@ test("the latest attempt of an aborted task ends at the abort, with its review b
 
 test("an attempt aborted and resumed, running now, runs until now", async () => {
   near((await get("/v1/tasks/wi_4/metrics?attempt=2")).leadMs, 3 * HOUR);
+});
+
+test("a conductor's Run is counted in its attempt but neither begins it nor ends the one before", async () => {
+  const one = await get("/v1/tasks/wi_7/metrics?attempt=1");
+  expect(one.runs.map((r) => r.id)).toEqual(["run_g_cond1", "run_g1"]);
+  // From the implementer 4 h ago until attempt 2's first agent 2 h ago.
+  near(one.leadMs, 2 * HOUR);
+  // From attempt 2's first agent, 2 h ago, until now.
+  near((await get("/v1/tasks/wi_7/metrics?attempt=2")).leadMs, 2 * HOUR);
 });
 
 test("a question or a repository request still waiting on a person counts until now", async () => {
