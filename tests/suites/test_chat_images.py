@@ -650,6 +650,11 @@ def test_an_image_laid_out_in_preview_keeps_its_place_and_size_and_the_agent_rea
     expect(shown.locator("img")).to_have_attribute("src", re.compile(r"^blob:"), timeout=20_000)
     style = shown.evaluate("el => { const s = getComputedStyle(el); return [s.float, el.getBoundingClientRect().width]; }")
     assert style[0] == "right" and abs(style[1] - 200) < 1, style
+    # A phone-wide column (under 480 px) wraps nothing: the same image stands on its own line.
+    page.set_viewport_size({"width": 390, "height": 1000})
+    expect(shown).to_have_css("float", "none")
+    page.set_viewport_size({"width": 1440, "height": 1000})
+    expect(shown).to_have_css("float", "right")
 
     # Dragged under criterion 2: a continuation line there; the list keeps its length.
     page.get_by_test_id("edit-task").click()
