@@ -34,9 +34,11 @@ export async function orchestrator(
   body: string = "{}",
   /** Who is asking: a principal (its key, person and role all travel), or a key's id alone. */
   actor?: string | Principal,
+  /** For a call bounded longer on the orchestrator's side than this default. */
+  timeoutMs: number = TIMEOUT_MS,
 ): Promise<Response> {
   const res = await call(organizationId, method, path, {
-    signal: AbortSignal.timeout(TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
     headers: { ...identity(actor), "content-type": "application/json" },
     ...(method === "GET" ? {} : { body: body || "{}" }),
   });

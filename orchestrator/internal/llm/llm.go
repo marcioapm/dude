@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -112,10 +113,13 @@ func (c Client) Models(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
-// Result is one test message: at one effort ("" none), how long the proxy
-// took, and what it answered.
+// Result is one test message: the efforts it stands for (none: sent
+// without one), how long the proxy took, and what it answered.
 type Result struct {
-	Effort    *string `json:"effort"`
+	// Every effort asked for whose request this was; nil is no effort.
+	Efforts []*string `json:"efforts"`
+	// What went on the wire: nil when the request carried no effort.
+	Sent      *string `json:"sent"`
 	OK        bool    `json:"ok"`
 	LatencyMs int64   `json:"latencyMs"`
 	// The proxy's HTTP status; nil when it did not answer.
@@ -124,30 +128,62 @@ type Result struct {
 	Error *string `json:"error"`
 }
 
-// Test sends one tiny request for model at each effort, together, in the
-// wire format the agent uses for it: Anthropic Messages for Claude models,
-// Chat Completions with reasoning_effort otherwise. OpenCode's Anthropic
-// provider drops reasoningEffort (its option is named effort), so a Claude
-// model is sent no effort here either: what is checked is what the agent
-// will send.
+// WireEffort is the effort a request for model carries for a dude effort,
+// "" for none: OpenAI's reasoning_effort for OpenAI-compatible models;
+// nothing for Claude, as OpenCode's Anthropic provider drops reasoningEffort
+// (its option is named effort).
+func WireEffort(model, effort string) string {
+	if Provider(model) == ProviderAnthropic {
+		return ""
+	}
+	return OpenAIEffort(effort)
+}
+
+// Test sends one tiny request for model per distinct request the agent
+// would send at the given efforts, together, in the wire format the agent
+// uses for it: Anthropic Messages for Claude models, Chat Completions with
+// reasoning_effort otherwise. Each result lists the efforts it covers, in
+// the order first asked.
 func (c Client) Test(ctx context.Context, model string, efforts []string) []Result {
-	out := make([]Result, len(efforts))
+	var groups [][]string
+	index := map[string]int{}
+	for _, e := range efforts {
+		sent := WireEffort(model, e)
+		i, seen := index[sent]
+		if !seen {
+			i = len(groups)
+			index[sent] = i
+			groups = append(groups, nil)
+		}
+		if !slices.Contains(groups[i], e) {
+			groups[i] = append(groups[i], e)
+		}
+	}
+	out := make([]Result, len(groups))
 	var wg sync.WaitGroup
-	for i, effort := range efforts {
+	for i, group := range groups {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			out[i] = c.test(ctx, model, effort)
+			out[i] = c.test(ctx, model, WireEffort(model, group[0]))
+			for _, e := range group {
+				if e == "" {
+					out[i].Efforts = append(out[i].Efforts, nil)
+				} else {
+					out[i].Efforts = append(out[i].Efforts, &e)
+				}
+			}
 		}()
 	}
 	wg.Wait()
 	return out
 }
 
-func (c Client) test(ctx context.Context, model, effort string) Result {
+// test sends one request carrying the wire effort sent ("" none).
+func (c Client) test(ctx context.Context, model, sent string) Result {
 	r := Result{}
-	if effort != "" {
-		r.Effort = &effort
+	if sent != "" {
+		r.Sent = &sent
 	}
 	timeout := c.Timeout
 	if timeout == 0 {
@@ -165,8 +201,8 @@ func (c Client) test(ctx context.Context, model, effort string) Result {
 		headers["anthropic-version"] = "2023-06-01"
 	} else {
 		headers["Authorization"] = "Bearer " + c.Key
-		if effort != "" {
-			body["reasoning_effort"] = OpenAIEffort(effort)
+		if sent != "" {
+			body["reasoning_effort"] = sent
 		}
 	}
 	payload, _ := json.Marshal(body)

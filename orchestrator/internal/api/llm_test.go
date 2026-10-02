@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
@@ -24,6 +25,7 @@ func TestATestMessageIsAnAdminsAndReachesTheProxy(t *testing.T) {
 	if _, err := owner.Exec(ctx, `INSERT INTO people (id, organization_id, name, role) VALUES ('per_admin', $1, 'A', 'admin'), ('per_member', $1, 'M', 'member')`, org); err != nil {
 		t.Fatal(err)
 	}
+	var mu sync.Mutex
 	var efforts []string
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/models" {
@@ -33,7 +35,9 @@ func TestATestMessageIsAnAdminsAndReachesTheProxy(t *testing.T) {
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		e, _ := body["reasoning_effort"].(string)
+		mu.Lock()
 		efforts = append(efforts, e)
+		mu.Unlock()
 		_, _ = w.Write([]byte(`{}`))
 	}))
 	t.Cleanup(proxy.Close)
@@ -65,6 +69,16 @@ func TestATestMessageIsAnAdminsAndReachesTheProxy(t *testing.T) {
 	results, _ := out["results"].([]any)
 	if code != 200 || len(results) != 2 || len(efforts) != 2 {
 		t.Fatalf("admin's test: %d %v (proxy saw %v)", code, out, efforts)
+	}
+	// Every effort a tier's agents can run at: high and max are one request.
+	efforts = nil
+	code, out = call("POST", "/internal/llm/test", "per_admin", `{"model":"gpt-5.6-sol","efforts":[null,"low","medium","high","max"]}`)
+	results, _ = out["results"].([]any)
+	if code != 200 || len(results) != 4 || len(efforts) != 4 {
+		t.Fatalf("five efforts: %d %v (proxy saw %v)", code, out, efforts)
+	}
+	if code, _ := call("POST", "/internal/llm/test", "per_admin", `{"model":"gpt-5.6-sol","efforts":[null,"low","medium","high","max","max"]}`); code != 400 {
+		t.Errorf("six efforts: %d, want 400", code)
 	}
 	if code, _ := call("POST", "/internal/llm/test", "per_admin", `{"model":"gpt-5.6-sol","efforts":["extreme"]}`); code != 400 {
 		t.Errorf("an unknown effort: %d, want 400", code)

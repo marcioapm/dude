@@ -103,10 +103,15 @@ export const testModelSchema = z
   })
   .strict();
 
-/** One try of a model at one effort, as the orchestrator reports it. */
+/**
+ * One request to the proxy, as the orchestrator reports it: the efforts it
+ * stands for (the agent sends the same request for each), and what it sent.
+ */
 export interface ModelTestResult {
-  /** null: sent without an effort. */
-  effort: string | null;
+  /** The efforts asked for that this request covers; null: no effort. */
+  efforts: Array<string | null>;
+  /** The effort on the wire; null: sent without one (always, for a Claude model). */
+  sent: string | null;
   ok: boolean;
   latencyMs: number;
   /** The proxy's HTTP status; null when no answer came (timeout, unreachable). */

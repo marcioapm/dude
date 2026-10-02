@@ -345,7 +345,7 @@ function TestOutcome({ test, users }: { test: { model: string; results: ModelTes
   return (
     <FormStack>
       {test.results.map((r, i) => {
-        const who = users.filter((u) => (u.effort ?? null) === r.effort).map(tierUseName);
+        const who = users.filter((u) => r.efforts.includes(u.effort ?? null)).map(tierUseName);
         return (
           <Callout key={i} tone={r.ok ? "success" : "danger"} data-testid="model-tier-test-result" data-ok={r.ok}>
             <code>{test.model}</code> {testResultWords(r)}{r.ok && who.length ? ` (${who.join(", ")})` : ""}.

@@ -30,8 +30,8 @@ class TestingClient extends FixtureClient {
   override testModel(model: string, tierId: string | null) {
     this.tested.push([model, tierId]);
     return Promise.resolve({ model, results: [
-      { effort: "high", ok: true, latencyMs: 1200, status: 200, error: null },
-      { effort: "low", ok: false, latencyMs: 30, status: 404, error: "no such model" },
+      { efforts: ["high", "max"], sent: "high", ok: true, latencyMs: 1200, status: 200, error: null },
+      { efforts: ["low"], sent: "low", ok: false, latencyMs: 30, status: 404, error: "no such model" },
     ] });
   }
 }
@@ -107,8 +107,8 @@ describe("the Models page", () => {
     }, "the test's answers");
     expect(client.tested).toEqual([["claude-opus-5-5", "mtr_coder"]]);
     expect(results.map((r) => [r.getAttribute("data-ok"), r.textContent])).toEqual([
-      ["true", "claude-opus-5-5 answered at effort high in 1.2 s (Implementer, Fixer)."],
-      ["false", "claude-opus-5-5 at effort low: the proxy answered 404 — no such model."],
+      ["true", "claude-opus-5-5 answered (efforts high, max) in 1.2 s (Implementer, Fixer)."],
+      ["false", "claude-opus-5-5 (effort low): the proxy answered 404 — no such model."],
     ]);
   });
 
