@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ImageBuild, ImageSummary } from "@dude/domain";
-import { buildStages, containerfileCompletions, draftCounts, imageState, queuePlace, usedByWords } from "../src/imageWords.ts";
+import { buildStages, containerfileCompletions, draftCounts, imageState, mergeBuildLog, queuePlace, usedByWords } from "../src/imageWords.ts";
 
 const summary = (over: Partial<ImageSummary> = {}): ImageSummary => ({
   id: "img_a", name: "node-pnpm", description: "", archivedAt: null, createdAt: "2026-09-01T00:00:00Z", createdBy: null, isDefault: false,
@@ -90,4 +90,29 @@ describe("Containerfile completion", () => {
 
 test("a draft's lines added and removed against what it was made from", () => {
   expect(draftCounts("FROM a\nRUN x\n", "FROM a\nRUN y\nENV Z=1\n")).toEqual({ add: 2, del: 1 });
+});
+
+describe("the build page's log after a read", () => {
+  type Log = { id: string; log: string; logStart: number; logTotal: number };
+  const log = (logStart: number, text: string, id = "imb_1"): Log => ({ id, log: text, logStart, logTotal: logStart + new TextEncoder().encode(text).length });
+  const held = log(0, "STEP 1\nSTEP 2\n");
+  test.each<[string, Log | null, Log, Log]>([
+    ["the first read is taken as it is", null, held, held],
+    ["a delta from where it ends is appended", held, log(14, "STEP 3 é\n"), { id: "imb_1", log: "STEP 1\nSTEP 2\nSTEP 3 é\n", logStart: 0, logTotal: 24 }],
+    ["an empty delta changes nothing in the log", held, log(14, ""), { ...held }],
+    ["a delta for bytes it has (two reads overlapping) is dropped", log(0, "STEP 1\nSTEP 2\nSTEP 3\n"), log(14, "STEP 3\n"), log(0, "STEP 1\nSTEP 2\nSTEP 3\n")],
+    ["an answer older than what it has is dropped", log(0, "STEP 1\nSTEP 2\nSTEP 3\n"), log(0, "STEP 1\n"), log(0, "STEP 1\nSTEP 2\nSTEP 3\n")],
+    ["a cut tail, starting past its end, replaces it", held, log(100, "STEP 9\n"), log(100, "STEP 9\n")],
+    ["the whole kept log, holding all it has, replaces it", held, log(0, "STEP 1\nSTEP 2\nSTEP 3\n"), log(0, "STEP 1\nSTEP 2\nSTEP 3\n")],
+    ["another build's log replaces it", held, log(0, "other\n", "imb_2"), log(0, "other\n", "imb_2")],
+  ])("%s", (_name, prev, next, want) => {
+    expect(mergeBuildLog(prev, next)).toEqual(want);
+  });
+
+  test("keeps only the last max bytes, never half a rune", () => {
+    const got = mergeBuildLog(log(0, "aaaa"), log(4, "ébb"), 3);
+    // "aaaaébb" is 8 bytes; the last 3 would start inside é, so 2 are kept.
+    expect(got).toEqual({ id: "imb_1", log: "bb", logStart: 6, logTotal: 8 });
+    expect(mergeBuildLog(null, log(0, "x".repeat(10)), 4)).toEqual({ id: "imb_1", log: "xxxx", logStart: 6, logTotal: 10 });
+  });
 });

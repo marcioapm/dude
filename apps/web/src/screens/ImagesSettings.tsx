@@ -66,7 +66,7 @@ import {
 import type { ApiClient } from "../api/client.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
 import { useReloadOnEvents } from "../hooks/useEventStream.ts";
-import { buildStages, builderLimits, containerfileCompletions, draftCounts, imageState, queuePlace, usedByWords } from "../imageWords.ts";
+import { buildStages, builderLimits, containerfileCompletions, draftCounts, imageState, mergeBuildLog, queuePlace, usedByWords } from "../imageWords.ts";
 
 const ago = (iso: string) => formatTimestamp(iso, "relative");
 
@@ -611,13 +611,15 @@ function BuildsTable({ builds, onOpen }: { builds: readonly ImageBuild[]; onOpen
 function BuildPage({ client, buildId, onSub }: { client: ApiClient; buildId: string; onSub: (sub: string | undefined) => void }) {
   const [build, setBuild] = useState<ImageBuildWithLog | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
-  // While it runs, each read asks only for the log after the bytes it has.
+  // While it runs, each read asks only for the log after the bytes the page has.
   const have = useRef<{ id: string; total: number } | null>(null);
+  useEffect(() => {
+    have.current = build ? { id: build.id, total: build.logTotal } : null;
+  }, [build]);
   const load = useCallback(() => {
     const after = have.current?.id === buildId ? have.current.total : undefined;
     client.imageBuild(buildId, after).then((b) => {
-      have.current = { id: buildId, total: b.logTotal };
-      setBuild((prev) => (after !== undefined && b.logStart === after && prev?.id === b.id ? { ...b, log: prev.log + b.log } : b));
+      setBuild((prev) => mergeBuildLog(prev, b));
       setProblem(null);
     }, (err: unknown) => setProblem(errorText(err)));
   }, [client, buildId]);
