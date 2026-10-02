@@ -148,7 +148,8 @@ def run(env: TestEnvironment, args) -> None:
     ana.patch(f"/v1/epics/{exports['id']}", {"state": "planned"})
 
     def task(client: ApiClient, title: str, epic: dict | None, people: list[str], goal: str = "", project: str = "") -> dict:
-        t = client.create_task(project or pid, title, epicId=epic["id"] if epic else None, goal=goal or title,
+        goal = goal or f"{title}, so the dashboard reads right for every customer who opens it."
+        t = client.create_task(project or pid, title, epicId=epic["id"] if epic else None, goal=goal,
                                acceptanceCriteria=["It works", "It has a test"])
         client.put(f"/v1/tasks/{t['id']}/people", {"people": [ids[p] for p in people]})
         return t
@@ -184,7 +185,7 @@ def run(env: TestEnvironment, args) -> None:
     deliver(ben, live)
     task(chloe, "Revenue chart zoom", charts, ["Chloé Martin"])
     task(ana, "PNG export", exports, ["Ana Costa"])
-    ben.create_task(billing["id"], "Invoices in euros", goal="Invoices in euros")
+    ben.create_task(billing["id"], "Invoices in euros", goal="Customers billed in the EU see their invoices in euros.")
 
     for (t, client, state), pr in zip(delivered, prs):
         n = pr["number"]
