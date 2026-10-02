@@ -50,7 +50,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import requests  # noqa: E402
 
 from build import build  # noqa: E402
-from env import TestEnvironment, lux_env, require_bun  # noqa: E402
+from env import TestEnvironment, llm_env, lux_env, require_bun  # noqa: E402
 from fake_github import FakeGitHub  # noqa: E402
 from helpers import ApiClient, create_api_key, create_organization, query  # noqa: E402
 
@@ -102,11 +102,6 @@ def wait(what: str, check, timeout: float, interval: float = 0.5):
 
 
 # -- the environment ----------------------------------------------------------
-
-
-def llm_env() -> dict:
-    """DUDE_LLM_URL / DUDE_LLM_KEY from this process, for the orchestrator."""
-    return {k: os.environ[k] for k in ("DUDE_LLM_URL", "DUDE_LLM_KEY") if os.environ.get(k)}
 
 
 def bring_up(keep: bool) -> TestEnvironment:
