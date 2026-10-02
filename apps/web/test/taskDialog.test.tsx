@@ -14,6 +14,7 @@ import { FixtureClient } from "../src/fixtures/client.ts";
 import { PROJECT } from "../src/fixtures/data.ts";
 import { TaskDialog, type ExistingTask } from "../src/screens/TaskDialog.tsx";
 import { criteriaFromMarkdown } from "../src/screens/criteria.ts";
+import { imageDrag, stackRects } from "../../../packages/design-system/test/imageDrag.ts";
 
 let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -239,16 +240,8 @@ describe("laying out a task's images in Preview", () => {
     await preview("task-goal");
     const crit = await preview("task-criteria");
     await until(() => figure("task-goal") && crit.querySelector("li"), "both previews");
-    const items = [...crit.querySelectorAll<HTMLElement>("li")];
-    items.forEach((li, i) => (li.getBoundingClientRect = () => ({ top: i * 20, bottom: i * 20 + 20, left: 0, right: 100, width: 100, height: 20, x: 0, y: i * 20, toJSON() {} })));
-    const store = new Map<string, string>();
-    const dataTransfer = { get types() { return [...store.keys()]; }, setData: (t: string, v: string) => void store.set(t, v), getData: (t: string) => store.get(t) ?? "", effectAllowed: "", dropEffect: "" };
-    const dnd = (type: string, el: Element, clientY = 0) => {
-      const e = new Event(type, { bubbles: true, cancelable: true }) as Event & { dataTransfer: unknown; clientY: number };
-      e.dataTransfer = dataTransfer;
-      e.clientY = clientY;
-      el.dispatchEvent(e);
-    };
+    stackRects(crit.querySelectorAll("li"), 20, 20);
+    const dnd = imageDrag();
     await act(async () => dnd("dragstart", figure("task-goal")!));
     await act(async () => dnd("dragover", crit, 40));
     await act(async () => dnd("drop", crit, 40));

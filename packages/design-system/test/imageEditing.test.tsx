@@ -13,6 +13,7 @@ import { MarkdownImage } from "../src/components/Markdown.tsx";
 import { MarkdownEditor } from "../src/primitives/MarkdownEditor.tsx";
 import { TooltipProvider } from "../src/primitives/Tooltip.tsx";
 import type { FieldKind } from "../src/util/imageLayout.ts";
+import { imageDrag, rect, stackRects } from "./imageDrag.ts";
 
 const cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -20,6 +21,8 @@ afterEach(() => {
 });
 
 const A = "![a.png](attachment:att_a)";
+
+const pointer = (type: string, clientX: number, pointerType = "mouse") => new PointerEvent(type, { bubbles: true, cancelable: true, clientX, button: 0, pointerId: 1, pointerType });
 
 type Field = { kind: FieldKind; value: string; locked?: boolean; id: string };
 
@@ -45,17 +48,20 @@ async function mountFields(fields: Field[]) {
     container.remove();
   });
   const figure = (id: string, n = 0) => container.querySelector<HTMLElement>(`[data-testid="${id}-preview"] [data-image-n="${n}"]`);
+  const button = (label: string) => container.querySelector<HTMLButtonElement>(`[data-image-toolbar] button[aria-label="${label}"]`);
+  const panel = (id: string) => container.querySelector<HTMLElement>(`[data-testid="${id}-preview"]`)!;
+  const key = async (el: Element, key: string, init: KeyboardEventInit = {}) => act(async () => void el.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init })));
   return {
     container,
     opened,
     value: (id: string) => values.get(id)!,
     figure,
     select: async (id: string, n = 0) => act(async () => figure(id, n)!.click()),
-    button: (label: string) => container.querySelector<HTMLButtonElement>(`[data-image-toolbar] button[aria-label="${label}"]`),
-    press: async (label: string) => act(async () => container.querySelector<HTMLButtonElement>(`[data-image-toolbar] button[aria-label="${label}"]`)!.click()),
-    key: async (el: Element, key: string, init: KeyboardEventInit = {}) => act(async () => void el.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init }))),
-    panel: (id: string) => container.querySelector<HTMLElement>(`[data-testid="${id}-preview"]`)!,
-    undo: async (id: string) => act(async () => void container.querySelector(`[data-testid="${id}-preview"]`)!.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true, cancelable: true }))),
+    button,
+    press: async (label: string) => act(async () => button(label)!.click()),
+    key,
+    panel,
+    undo: async (id: string) => key(panel(id), "z", { ctrlKey: true }),
     // A change from outside the image editing: typing, or an upload replacing its placeholder.
     type: async (id: string, next: string) => act(async () => {
       const area = container.querySelector<HTMLTextAreaElement>(`textarea[data-testid="${id}"]`)!;
@@ -163,10 +169,10 @@ test("a resize handle snaps to Small within 10 px and writes it", async () => {
   const f = await mountFields([{ id: "goal", kind: "goal", value: `One.\n\n![a.png](attachment:att_a "300 left")` }]);
   await f.select("goal");
   const fig = f.figure("goal")!;
-  fig.getBoundingClientRect = () => ({ width: 300, height: 100, top: 0, left: 0, right: 300, bottom: 100, x: 0, y: 0, toJSON() {} });
+  fig.getBoundingClientRect = () => rect(0, 100, 300);
   Object.defineProperty(fig.parentElement!, "clientWidth", { value: 700, configurable: true });
   const handle = f.container.querySelector<HTMLElement>('[data-testid="image-resize-right"]')!;
-  const pe = (type: string, clientX: number) => new PointerEvent(type, { bubbles: true, cancelable: true, clientX, button: 0, pointerId: 1, pointerType: "pen" });
+  const pe = (type: string, clientX: number) => pointer(type, clientX, "pen");
   await act(async () => void handle.dispatchEvent(pe("pointerdown", 300)));
   await act(async () => void handle.dispatchEvent(pe("pointermove", 205)));
   expect(f.container.querySelector('[data-testid="image-size-tip"]')?.textContent).toBe("Small");
@@ -214,17 +220,10 @@ test("twenty dragovers at one height render the preview at most once", async () 
   cleanups.push(() => renders.mockRestore());
   const f = await mountFields([{ id: "goal", kind: "goal", value: `Intro.\n\n${A}\n\nOutro.` }]);
   const panel = f.panel("goal");
-  const blocks = [...panel.querySelector(":scope > div")!.children] as HTMLElement[];
-  blocks.forEach((b, i) => (b.getBoundingClientRect = () => ({ top: i * 40, bottom: i * 40 + 30, left: 0, right: 100, width: 100, height: 30, x: 0, y: i * 40, toJSON() {} })));
-  const store = new Map<string, string>([["application/x-dude-image", "{}"]]);
-  const over = () => {
-    const e = new Event("dragover", { bubbles: true, cancelable: true }) as Event & { dataTransfer: unknown; clientY: number };
-    e.dataTransfer = { get types() { return [...store.keys()]; }, getData: () => "", dropEffect: "" };
-    e.clientY = 41;
-    panel.dispatchEvent(e);
-  };
+  stackRects(panel.querySelector(":scope > div")!.children, 40, 30);
+  const dnd = imageDrag({ "application/x-dude-image": "{}" });
   const before = renders.mock.calls.length;
-  for (let i = 0; i < 20; i++) await act(async () => over());
+  for (let i = 0; i < 20; i++) await act(async () => dnd("dragover", panel, 41));
   expect(f.container.querySelector('[data-testid="image-slot"]')?.getAttribute("data-slot")).toBe("1");
   // The first sets the slot line; the other nineteen find it unchanged.
   expect(renders.mock.calls.length - before).toBeLessThanOrEqual(1);
@@ -234,10 +233,10 @@ test("twenty resize moves on a selected image try no move", async () => {
   const f = await mountFields([{ id: "goal", kind: "goal", value: `Intro.\n\n${A}\n\nOutro.` }]);
   await f.select("goal");
   const fig = f.figure("goal")!;
-  fig.getBoundingClientRect = () => ({ width: 420, height: 100, top: 0, left: 0, right: 420, bottom: 100, x: 0, y: 0, toJSON() {} });
+  fig.getBoundingClientRect = () => rect(0, 100, 420);
   Object.defineProperty(fig.parentElement!, "clientWidth", { value: 700, configurable: true });
   const handle = f.container.querySelector<HTMLElement>('[data-testid="image-resize-right"]')!;
-  const pe = (type: string, clientX: number) => new PointerEvent(type, { bubbles: true, cancelable: true, clientX, button: 0, pointerId: 1, pointerType: "mouse" });
+  const pe = (type: string, clientX: number) => pointer(type, clientX);
   await act(async () => void handle.dispatchEvent(pe("pointerdown", 420)));
   const moves = spyOn(layoutModule, "moveReference");
   for (let i = 1; i <= 20; i++) await act(async () => void handle.dispatchEvent(pe("pointermove", 420 + i * 5)));
@@ -249,18 +248,10 @@ test("twenty resize moves on a selected image try no move", async () => {
 
 test("a drag within the goal drops the image between two of its paragraphs", async () => {
   const f = await mountFields([{ id: "goal", kind: "goal", value: `One.\n\nTwo.\n\n${A}` }]);
-  const store = new Map<string, string>();
-  const dataTransfer = { get types() { return [...store.keys()]; }, setData: (t: string, v: string) => void store.set(t, v), getData: (t: string) => store.get(t) ?? "", effectAllowed: "", dropEffect: "" };
-  const dnd = (type: string, el: Element, clientY = 0) => {
-    const e = new Event(type, { bubbles: true, cancelable: true }) as Event & { dataTransfer: unknown; clientY: number };
-    e.dataTransfer = dataTransfer;
-    e.clientY = clientY;
-    el.dispatchEvent(e);
-  };
+  const dnd = imageDrag();
   const panel = f.panel("goal");
   // Three blocks, 40 px apart: slot 1 is the top of "Two.", at 40.
-  const blocks = [...panel.querySelector(":scope > div")!.children] as HTMLElement[];
-  blocks.forEach((b, i) => (b.getBoundingClientRect = () => ({ top: i * 40, bottom: i * 40 + 30, left: 0, right: 100, width: 100, height: 30, x: 0, y: i * 40, toJSON() {} })));
+  stackRects(panel.querySelector(":scope > div")!.children, 40, 30);
   await act(async () => dnd("dragstart", f.figure("goal")!));
   await act(async () => dnd("dragover", panel, 38));
   expect(f.container.querySelector('[data-testid="image-slot"]')?.getAttribute("data-slot")).toBe("1");
@@ -273,25 +264,10 @@ test("a drag from the goal drops under a criterion as its continuation line", as
     { id: "goal", kind: "goal", value: `Intro.\n\n${A}\n\nOutro.` },
     { id: "crit", kind: "criteria", value: "- [ ] One\n- [ ] Two\n- [ ] Three" },
   ]);
-  const store = new Map<string, string>();
-  const dataTransfer = {
-    get types() {
-      return [...store.keys()];
-    },
-    setData: (t: string, v: string) => void store.set(t, v),
-    getData: (t: string) => store.get(t) ?? "",
-    effectAllowed: "", dropEffect: "",
-  };
-  const dnd = (type: string, el: Element, clientY = 0) => {
-    const e = new Event(type, { bubbles: true, cancelable: true }) as Event & { dataTransfer: unknown; clientY: number };
-    e.dataTransfer = dataTransfer;
-    e.clientY = clientY;
-    el.dispatchEvent(e);
-  };
+  const dnd = imageDrag();
   // happy-dom lays nothing out: give each criterion a place, 20 px tall.
-  const items = [...f.container.querySelectorAll<HTMLElement>('[data-testid="crit-preview"] li')];
-  items.forEach((li, i) => (li.getBoundingClientRect = () => ({ top: i * 20, bottom: i * 20 + 20, left: 0, right: 100, width: 100, height: 20, x: 0, y: i * 20, toJSON() {} })));
-  const panel = f.container.querySelector('[data-testid="crit-preview"]')!;
+  stackRects(f.container.querySelectorAll('[data-testid="crit-preview"] li'), 20, 20);
+  const panel = f.panel("crit");
   await act(async () => dnd("dragstart", f.figure("goal")!));
   await act(async () => dnd("dragover", panel, 41));
   expect(f.container.querySelector('[data-testid="image-slot"]')?.getAttribute("data-slot")).toBe("1");
