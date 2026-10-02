@@ -1,4 +1,4 @@
--- 067_model_tiers.sql — agents pick a model tier, never a model.
+-- 068_model_tiers.sql — agents pick a model tier, never a model.
 --
 -- A tier is the organization's, changed by its admins: a name, what it is
 -- for, and the one model name dude requests from the LLM proxy for it,

@@ -51,7 +51,7 @@ const organizationId = newId("organization");
 const slug = `demo-${Date.now().toString(36)}`;
 
 try {
-  // The trigger seeds Thinker, Coder and Fast with no model (migration 067):
+  // The trigger seeds Thinker, Coder and Fast with no model (migration 068):
   // the reviewer's Thinker asks for a real one, the implementer's Coder plays
   // the scripted agent.
   await owner`INSERT INTO organizations (id, name, slug) VALUES (${organizationId}, 'Demo', ${slug})`;
