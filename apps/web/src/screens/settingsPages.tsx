@@ -200,18 +200,19 @@ function TierField({ scope, role, tiers, tiersProblem, onManageTiers }: {
   const inheritLabel = fixer ? "The implementer’s" : `From ${orgName}`;
   const set = (tier: string | null, done: string) => void scope.patch({ roles: { [role]: { tier } } }, done);
   const current = byId(t.value);
-  const options = [
-    ...(offersInherit
-      ? [{ value: INHERIT_TIER, label: `${inheritLabel}${inherited ? ` · ${inherited.name}` : ""}`,
-          description: inherited ? <span className="ds-mono">{inherited.model ?? "Not set"}</span> : undefined }]
-      : own === null ? [{ value: INHERIT_TIER, label: "No tier", disabled: true }] : []),
-    ...(tiers ?? []).map(tierOption),
-  ];
-  const footer = onManageTiers
-    ? <TextButton onClick={onManageTiers} data-testid="manage-tiers">Manage tiers in Models</TextButton>
-    : project
-      ? `Tiers are ${orgName}’s — ask an admin to change one`
-      : "Only admins change tiers.";
+  // The first option: what naming none here follows; on the organisation, a placeholder while no tier is set.
+  let first: Array<{ value: string; label: string; description?: ReactNode; disabled?: boolean }> = [];
+  if (offersInherit) {
+    first = [{ value: INHERIT_TIER, label: `${inheritLabel}${inherited ? ` · ${inherited.name}` : ""}`,
+      description: inherited ? <span className="ds-mono">{inherited.model ?? "Not set"}</span> : undefined }];
+  } else if (own === null) {
+    first = [{ value: INHERIT_TIER, label: "No tier", disabled: true }];
+  }
+  const options = [...first, ...(tiers ?? []).map(tierOption)];
+  let footer: ReactNode = project ? `Tiers are ${orgName}’s — ask an admin to change one` : "Only admins change tiers.";
+  if (onManageTiers) footer = <TextButton onClick={onManageTiers} data-testid="manage-tiers">Manage tiers in Models</TextButton>;
+  let hint: ReactNode;
+  if (!project && current) hint = current.model ? <>Requests <code>{current.model}</code></> : `${current.name} names no model yet`;
   return (
     <SettingField
       label="Model"
@@ -224,7 +225,7 @@ function TierField({ scope, role, tiers, tiersProblem, onManageTiers }: {
       {tiers ? (
         <Select id={`tier-${role}`} aria-label="Model" data-testid="role-tier" disabled={!settings.canEdit}
           value={own !== null && tiers.some((x) => x.id === own) ? own : INHERIT_TIER} options={options} footer={footer}
-          hint={project ? undefined : current ? (current.model ? <>Requests <code>{current.model}</code></> : `${current.name} names no model yet`) : undefined}
+          hint={hint}
           onValueChange={(v) => set(v === INHERIT_TIER ? null : v, v === INHERIT_TIER ? "Model reset" : "Model saved")} />
       ) : (
         <Select aria-label="Model" disabled options={[{ value: "loading", label: "Loading…" }]} value="loading" />
