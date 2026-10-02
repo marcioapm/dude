@@ -38,7 +38,7 @@ import {
   MachineTip,
 } from "@dude/design-system/components";
 import { Button, Callout, Dialog, LinkButton, Spinner, Textarea } from "@dude/design-system/primitives";
-import { builderOffline, DEFAULT_RUN_ROLE, EventTypes, MIB, SETTINGS_ROLE_LABEL, TERMINAL_RUN_STATUSES, gib, machineSpec, runLabel, shortDigest } from "@dude/domain";
+import { BUILDER_GIVE_UP_MINUTES, builderOffline, DEFAULT_RUN_ROLE, EventTypes, MIB, SETTINGS_ROLE_LABEL, TERMINAL_RUN_STATUSES, gib, machineSpec, runLabel, shortDigest } from "@dude/domain";
 import type { AgentRole, PersistedEvent } from "@dude/domain";
 import type { ApiClient, Person, RunDetail, RunDiffSummary } from "../api/client.ts";
 import { ApiError, modelCostShown } from "../api/client.ts";
@@ -923,13 +923,22 @@ export function PreparingImage({ preparing }: { preparing: NonNullable<RunDetail
     return (
       <Callout tone="attention" data-testid="preparing-image">
         <b>Preparing image: waiting for {label}</b>, but the {offline}. The session starts once the builder is back and done;
-        if it stays offline for 30 minutes of the wait, this Run fails before it starts. Nothing is spent meanwhile.
+        if it stays offline for {BUILDER_GIVE_UP_MINUTES} minutes of the wait, this Run fails before it starts. Nothing is spent meanwhile.
+      </Callout>
+    );
+  }
+  const now = preparing.state === "running" ? "The builder is on it now" : "It is next in the builder’s line";
+  if (preparing.kind === "build") {
+    return (
+      <Callout tone="info" data-testid="preparing-image">
+        <b>Preparing image: building {label}</b> (its first version). {now}; the session starts once it is built and published.
+        Nothing is spent until then.
       </Callout>
     );
   }
   return (
     <Callout tone="info" data-testid="preparing-image">
-      <b>Preparing image: adding the dude layer</b> to {label}. {preparing.state === "running" ? "The builder is on it now" : "It is next in the builder’s line"};
+      <b>Preparing image: adding the dude layer</b> to {label}. {now};
       the session starts once it is done, usually within a minute or two. Nothing is spent until then.
     </Callout>
   );

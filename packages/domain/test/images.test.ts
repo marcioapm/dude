@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
+  BUILDER_GIVE_UP_MINUTES,
+  BUILDER_OFFLINE_SECONDS,
   buildArgsSchema,
   firstFrom,
   imageCycle,
@@ -168,4 +170,9 @@ describe("resolveRoleImage", () => {
       expect(resolveRoleImage(role, { project: project as never, organization: organization as never }, known)).toEqual({ imageId, from });
     });
   }
+});
+
+test("the builder's liveness limits are the ones the orchestrator uses (tests/fixtures/images/builder.json)", async () => {
+  const shared = await Bun.file(`${import.meta.dir}/../../../tests/fixtures/images/builder.json`).json();
+  expect({ offlineSeconds: BUILDER_OFFLINE_SECONDS, giveUpMinutes: BUILDER_GIVE_UP_MINUTES }).toEqual(shared);
 });

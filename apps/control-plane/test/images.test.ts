@@ -18,7 +18,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { SQL } from "bun";
 import { join } from "node:path";
-import { promptRoleSchema } from "@dude/domain";
+import { BUILDER_OFFLINE_SECONDS, promptRoleSchema } from "@dude/domain";
 import { closePool, setPool } from "../src/db/client.ts";
 import { buildRouter } from "../src/index.ts";
 import { Config, useConfig } from "../src/config.ts";
@@ -351,9 +351,11 @@ describe("build and publish", () => {
   });
 
 
-  test("the builder is offline when its heartbeat is 2 minutes old", async () => {
-    await owner`INSERT INTO image_builder (seen_at) VALUES (now())`;
+  test("the builder is offline when its heartbeat is BUILDER_OFFLINE_SECONDS old", async () => {
+    await owner`INSERT INTO image_builder (seen_at) VALUES (now() - make_interval(secs => ${BUILDER_OFFLINE_SECONDS - 5}))`;
     expect((await body(await call(memberKey, "GET", "/v1/images"))).builder).toMatchObject({ offline: false });
+    await owner`UPDATE image_builder SET seen_at = now() - make_interval(secs => ${BUILDER_OFFLINE_SECONDS + 5})`;
+    expect((await body(await call(memberKey, "GET", "/v1/images"))).builder).toMatchObject({ offline: true });
     await owner`UPDATE image_builder SET seen_at = '2026-10-01T08:00:00Z'`;
     const list = await body(await call(memberKey, "GET", "/v1/images"));
     expect(list.builder.offline).toBe(true);
@@ -455,10 +457,38 @@ describe("a Run waiting for its image", () => {
              ('run_img_prev', ${ORG}, ${PROJECT}, 'tsk_img', 1, 'paused', 'preview', 'imb_wait', now())`;
     await owner`UPDATE image_builder SET seen_at = now()`;
     for (const id of ["run_img_phase", "run_img_prev"]) {
-      expect((await runOf(id)).preparingImage).toEqual({ buildId: "imb_wait", state: "queued", imageName: "acme-base", version: 1, builderOfflineSince: null });
+      expect((await runOf(id)).preparingImage).toEqual({ buildId: "imb_wait", state: "queued", kind: "finish", imageName: "acme-base", version: 1, builderOfflineSince: null });
     }
     await owner`UPDATE image_builder SET seen_at = '2026-10-01T08:00:00Z'`;
     expect(Date.parse((await runOf("run_img_prev")).preparingImage.builderOfflineSince)).toBe(Date.parse("2026-10-01T08:00:00Z"));
+    // Seen BUILDER_OFFLINE_SECONDS ago less a little: not yet offline; a little more: offline.
+    await owner`UPDATE image_builder SET seen_at = now() - make_interval(secs => ${BUILDER_OFFLINE_SECONDS - 5})`;
+    expect((await runOf("run_img_prev")).preparingImage.builderOfflineSince).toBeNull();
+    await owner`UPDATE image_builder SET seen_at = now() - make_interval(secs => ${BUILDER_OFFLINE_SECONDS + 5})`;
+    expect((await runOf("run_img_prev")).preparingImage.builderOfflineSince).not.toBeNull();
+  });
+
+  test("a builder that never reported in is offline since the Run began to wait", async () => {
+    const saved = await owner`SELECT seen_at, version FROM image_builder`;
+    await owner`DELETE FROM image_builder`;
+    try {
+      await owner`UPDATE runs SET image_waiting_since = '2026-10-01T09:30:00Z' WHERE id = 'run_img_prev'`;
+      expect(Date.parse((await runOf("run_img_prev")).preparingImage.builderOfflineSince)).toBe(Date.parse("2026-10-01T09:30:00Z"));
+    } finally {
+      for (const r of saved) await owner`INSERT INTO image_builder (seen_at, version) VALUES (${r.seen_at}, ${r.version})`;
+    }
+  });
+
+  test("a Run waiting on its image's first version says it is building, not adding the layer", async () => {
+    await owner`INSERT INTO image_versions (id, organization_id, image_id, number, containerfile, state)
+      VALUES ('imv_first', ${ORG}, ${ids.child}, 99, 'FROM debian', 'queued')`;
+    await owner`INSERT INTO image_builds (id, organization_id, image_version_id, kind) VALUES ('imb_first', ${ORG}, 'imv_first', 'build')`;
+    await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, kind, image_build_id, image_waiting_since)
+      VALUES ('run_img_first', ${ORG}, ${PROJECT}, 'tsk_img', 2, 'pending', 'agent', 'imb_first', now())`;
+    expect((await runOf("run_img_first")).preparingImage).toMatchObject({ buildId: "imb_first", kind: "build", imageName: "node-pnpm", version: 99 });
+    await owner`UPDATE image_builds SET state = 'cancelled' WHERE id = 'imb_first'`;
+    await owner`UPDATE image_versions SET state = 'cancelled' WHERE id = 'imv_first'`;
+    await owner`UPDATE runs SET status = 'failed' WHERE id = 'run_img_first'`;
   });
 
   test("not once the job is over, or the Run has a lux Run or ended", async () => {

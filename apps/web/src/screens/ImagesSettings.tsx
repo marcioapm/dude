@@ -48,6 +48,7 @@ import {
   Tr,
 } from "@dude/design-system/primitives";
 import {
+  BUILDER_GIVE_UP_MINUTES,
   builderOffline,
   IMAGE_NAME,
   IMAGE_NAME_MESSAGE,
@@ -105,7 +106,7 @@ function BuilderOffline({ builder }: { builder: ImageBuilderInfo }) {
   return (
     <Callout tone="attention" data-testid="builder-offline">
       <b>{capitalise(builderOffline(builder.lastSeenAt, (iso) => formatTimestamp(iso, "datetime")))}.</b>{" "}
-      Builds wait until it is back; a Run waiting for its image fails after 30 minutes of this.
+      Builds wait until it is back; a Run waiting for its image fails after {BUILDER_GIVE_UP_MINUTES} minutes of this.
     </Callout>
   );
 }

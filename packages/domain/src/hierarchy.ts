@@ -483,6 +483,8 @@ export const runSchema = z.object({
     .object({
       buildId: z.string(),
       state: z.string(),
+      // build: its image's first version; finish: the dude layer added to it.
+      kind: z.enum(["build", "finish"]).default("finish"),
       imageName: z.string(),
       version: z.number().nullable(),
       builderOfflineSince: z.string().datetime({ offset: true }).nullable().default(null),

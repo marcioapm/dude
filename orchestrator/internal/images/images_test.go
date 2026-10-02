@@ -1,8 +1,11 @@
 package images
 
 import (
+	"encoding/json"
+	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Repository is a ref without its tag or digest: where its tags live.
@@ -166,5 +169,21 @@ func TestHumanMemory(t *testing.T) {
 		if got := HumanMemory(in); got != want {
 			t.Errorf("%s: %s, want %s", in, got, want)
 		}
+	}
+}
+
+// The backend and the web app use @dude/domain's BUILDER_OFFLINE_SECONDS
+// and BUILDER_GIVE_UP_MINUTES; their test checks the same file.
+func TestTheBuilderLivenessLimitsAreTheSharedOnes(t *testing.T) {
+	raw, err := os.ReadFile("../../../tests/fixtures/images/builder.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shared struct{ OfflineSeconds, GiveUpMinutes int }
+	if err := json.Unmarshal(raw, &shared); err != nil {
+		t.Fatal(err)
+	}
+	if Offline != time.Duration(shared.OfflineSeconds)*time.Second || GiveUp != time.Duration(shared.GiveUpMinutes)*time.Minute {
+		t.Errorf("Offline %v, GiveUp %v; the fixture says %+v", Offline, GiveUp, shared)
 	}
 }
