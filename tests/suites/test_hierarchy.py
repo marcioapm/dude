@@ -101,7 +101,7 @@ def test_retrying_creates_a_new_attempt_without_erasing_the_first(client: ApiCli
 
 
 def test_task_for_unknown_project_is_rejected(client: ApiClient):
-    resp = client.post("/v1/tasks", {"projectId": "prj_nonexistent", "title": "orphan"})
+    resp = client.post("/v1/tasks", {"projectId": "prj_nonexistent", "title": "orphan", "goal": client.DEFAULT_GOAL})
     assert resp.status_code == 404
 
 

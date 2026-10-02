@@ -13,6 +13,8 @@ import pytest
 
 from helpers import ApiClient, wait_until
 
+GOAL = ApiClient.DEFAULT_GOAL
+
 
 def _project(client: ApiClient) -> dict:
     return client.create_project(name="Structure", slug=f"structure-{os.urandom(3).hex()}")
@@ -83,7 +85,7 @@ def test_epics_are_ordered_and_deleting_one_keeps_its_work(client: ApiClient):
     assert client.patch(f"/v1/epics/{one['id']}", {"position": 99}).status_code == 200
     assert order() == ["2", "4", "3", "1"]
 
-    item = client.post("/v1/tasks", {"projectId": project["id"], "epicId": two["id"], "title": "Keep me"}).json()
+    item = client.post("/v1/tasks", {"projectId": project["id"], "epicId": two["id"], "title": "Keep me", "goal": GOAL}).json()
     assert client.request("DELETE", f"/v1/epics/{two['id']}").status_code == 204
     kept = client.get(f"/v1/tasks/{item['id']}").json()
     assert kept["title"] == "Keep me" and kept["epicId"] is None
@@ -93,7 +95,7 @@ def test_epics_are_ordered_and_deleting_one_keeps_its_work(client: ApiClient):
 
 def test_a_task_can_be_edited_and_moved_until_delivery_starts(client: ApiClient, forge_project: dict):
     epic = client.post(f"/v1/projects/{forge_project['id']}/epics", {"title": "Later"}).json()
-    item = client.post("/v1/tasks", {"projectId": forge_project["id"], "title": "Draft"}).json()
+    item = client.post("/v1/tasks", {"projectId": forge_project["id"], "title": "Draft", "goal": GOAL}).json()
 
     resp = client.patch(f"/v1/tasks/{item['id']}", {"title": "Final", "acceptanceCriteria": ["it works"],
                                                            "epicId": epic["id"]})
@@ -111,6 +113,23 @@ def test_a_task_can_be_edited_and_moved_until_delivery_starts(client: ApiClient,
     assert client.patch(f"/v1/tasks/{item['id']}", {"epicId": None}).status_code == 200
 
 
+def test_a_task_is_saved_with_a_goal_of_at_least_16_characters(client: ApiClient, forge_project: dict):
+    """Creating needs the goal, trimmed, at 16 characters; an edit that sets it does too."""
+    project = forge_project["id"]
+    message = "a task needs a goal of at least 16 characters: why it matters and what should change"
+    for goal in (None, "", "g" * 15, "  \n" + "g" * 15 + "\t "):
+        body = {"projectId": project, "title": "Too short"} | ({} if goal is None else {"goal": goal})
+        resp = client.post("/v1/tasks", body)
+        assert resp.status_code == 400, (goal, resp.text)
+        assert resp.json()["error"]["message"] == message
+    created = client.post("/v1/tasks", {"projectId": project, "title": "Enough", "goal": "g" * 16})
+    assert created.status_code == 201, created.text
+    resp = client.patch(f"/v1/tasks/{created.json()['id']}", {"goal": "g" * 15})
+    assert resp.status_code == 400 and resp.json()["error"]["message"] == message
+    titles = {t["title"] for t in client.get("/v1/tasks", params={"projectId": project}).json()["tasks"]}
+    assert "Too short" not in titles and "Enough" in titles
+
+
 def test_a_task_takes_a_64k_goal_and_16k_of_criteria_in_all(client: ApiClient, forge_project: dict):
     """The goal is bounded, and so are the criteria together; one criterion has no limit of its own."""
     project = forge_project["id"]
@@ -124,7 +143,7 @@ def test_a_task_takes_a_64k_goal_and_16k_of_criteria_in_all(client: ApiClient, f
     assert over_goal.status_code == 400
     assert "goal" in over_goal.json()["error"]["details"]["fieldErrors"]
     too_many = ["x" * 3000, "y" * (16_384 - 2999)]
-    for resp in (client.post("/v1/tasks", {"projectId": project, "title": "Over", "acceptanceCriteria": too_many}),
+    for resp in (client.post("/v1/tasks", {"projectId": project, "title": "Over", "goal": GOAL, "acceptanceCriteria": too_many}),
                  client.patch(f"/v1/tasks/{item['id']}", {"acceptanceCriteria": too_many})):
         assert resp.status_code == 400
         error = resp.json()["error"]
@@ -149,7 +168,7 @@ def test_a_task_names_its_repositories_each_changed_or_read(client: ApiClient, f
     first = client.get(f"/v1/projects/{forge_project['id']}").json()["repositories"][0]
     second = _repo(client, forge_project, "second")
     wanted = [{"id": first["id"], "access": "write"}, {"id": second["id"], "access": "read"}]
-    item = client.post("/v1/tasks", {"projectId": forge_project["id"], "title": "Where", "repositories": wanted}).json()
+    item = client.post("/v1/tasks", {"projectId": forge_project["id"], "title": "Where", "goal": GOAL, "repositories": wanted}).json()
     assert sorted(item["repositories"], key=lambda r: r["id"]) == sorted(wanted, key=lambda r: r["id"])
 
     # One not in the project, or named twice, is refused.
@@ -262,8 +281,8 @@ def test_an_organization_without_github_says_so(client: ApiClient):
 
 def test_tasks_are_numbered_within_their_project(client: ApiClient):
     project = client.create_project(name="Text Kit", slug=f"textkit-{os.urandom(3).hex()}")
-    first = client.post("/v1/tasks", {"projectId": project["id"], "title": "One"}).json()
-    second = client.post("/v1/tasks", {"projectId": project["id"], "title": "Two"}).json()
+    first = client.post("/v1/tasks", {"projectId": project["id"], "title": "One", "goal": GOAL}).json()
+    second = client.post("/v1/tasks", {"projectId": project["id"], "title": "Two", "goal": GOAL}).json()
     assert (first["key"], second["key"]) == ("TEXT-1", "TEXT-2")
     assert client.get(f"/v1/tasks/{second['id']}").json()["key"] == "TEXT-2"
     nav = client.get("/v1/navigation").json()
