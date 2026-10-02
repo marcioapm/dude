@@ -108,15 +108,17 @@ class Cleanup:
     last staying), and task_runs answering each call from `listings` in
     turn. Records what was asked, in order."""
 
-    def __init__(self, monkeypatch, rows, states, listings, failing=()):
+    def __init__(self, monkeypatch, rows, states, listings, failing=(), claims=((),), after_clear=()):
         self.asked, self.logged = [], []
         cycler = m.Cycler.__new__(m.Cycler)
-        asked, listings = self.asked, list(listings)
+        asked, listings, claims = self.asked, list(listings), list(claims)
+        cleared = []
 
         class Client:
             def task_runs(self, task_id):
                 asked.append("list")
-                return [{"id": r} for r in (listings.pop(0) if len(listings) > 1 else listings[0])]
+                listed = listings.pop(0) if len(listings) > 1 else listings[0]
+                return [{"id": r} for r in [*listed, *(after_clear if cleared else ())]]
 
             def post(self, path, body):
                 run = path.split("/")[3]
@@ -124,8 +126,16 @@ class Cleanup:
                 if run in failing:
                     raise ConnectionError("dude went away")
 
+        def claimed_steps():
+            asked.append("claimed?")
+            claimed = list(claims.pop(0) if len(claims) > 1 else claims[0])
+            if not claimed:
+                cleared.append(True)
+            return claimed
+
         cycler.client, cycler.tasks = Client(), ["task_1"]
         cycler.stop_workflows = lambda: asked.append("stop workflows")
+        cycler.claimed_steps = claimed_steps
         cycler.row = lambda run_id: {"status": rows[run_id][0], "lux_run_id": rows[run_id][1]}
         cycler.lux_run = lambda lux_id: {"state": states[lux_id].pop(0) if len(states[lux_id]) > 1 else states[lux_id][0]}
         monkeypatch.setattr(m.time, "sleep", lambda s: None)
@@ -176,6 +186,27 @@ def test_a_run_a_workflow_step_created_after_the_first_listing_is_aborted_too(mo
     assert [a for a in c.asked if a.startswith("abort")] == ["abort run_r"]
     assert c.asked.count("list") == 2
     assert c.states["lrun_r"] == ["cancelled"]
+
+
+def test_a_run_a_claimed_step_creates_once_it_finishes_is_aborted_too(monkeypatch):
+    # The step is still claimed at the first poll and clears at the second;
+    # its Run is listed only once it has.
+    c = Cleanup(monkeypatch, rows={"run_i": ("completed", "lrun_i"), "run_r": ("running", "lrun_r")},
+                states={"lrun_i": ["stopped"], "lrun_r": ["running", "cancelled"]},
+                listings=[["run_i"]], claims=[["wf_1"], []], after_clear=["run_r"])
+    c.cycler.abort_all(timeout=5, claim_wait=60)
+    assert [a for a in c.asked if a.startswith("abort")] == ["abort run_r"]
+    assert c.states["lrun_r"] == ["cancelled"]
+    assert c.asked.count("claimed?") == 2
+    assert not [line for line in c.logged if "still claimed" in line], c.logged
+
+
+def test_a_step_claimed_past_the_bound_is_said_and_cleanup_goes_on(monkeypatch):
+    c = Cleanup(monkeypatch, rows={"run_r": ("running", "lrun_r")}, states={"lrun_r": ["running", "cancelled"]},
+                listings=[["run_r"]], claims=[["wf_1"]])
+    c.cycler.abort_all(timeout=5, claim_wait=0)
+    assert [line for line in c.logged if "still claimed after 0s: wf_1" in line], c.logged
+    assert c.asked.count("list") == 2
 
 
 def test_down_needs_no_lux(tmp_path, monkeypatch):
