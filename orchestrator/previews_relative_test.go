@@ -37,10 +37,12 @@ func TestFakeLuxRelativePreviewHostname(t *testing.T) {
 			t.Fatalf("lookup %q = %+v, %v", hostname, found, err)
 		}
 	}
-	if _, err := client.CreateServer(ctx, lux.CreateServer{Name: "web", Port: 3000, Hostname: full, Wake: "request"}); err == nil {
-		t.Fatal("relative and full names did not conflict")
-	} else if le, ok := lux.AsError(err); !ok || le.Status != 409 || le.Code != "hostname_taken" {
-		t.Fatalf("conflict = %v", err)
+	// Either form of a taken name conflicts, the bare label as much as the full name.
+	for _, hostname := range []string{full, "web-task-project"} {
+		_, err := client.CreateServer(ctx, lux.CreateServer{Name: "web", Port: 3000, Hostname: hostname, Wake: "request"})
+		if le, ok := lux.AsError(err); !ok || le.Status != 409 || le.Code != "hostname_taken" {
+			t.Fatalf("conflict %q = %v", hostname, err)
+		}
 	}
 	// lux takes one relative label only: a dotted name must already be under the domain.
 	for _, dotted := range []string{"api.task", "api."} {
@@ -166,5 +168,43 @@ func TestRelativePreviewCreationAdoptionAndSaltedRetry(t *testing.T) {
 				t.Fatalf("woken view = %d %v", code, out)
 			}
 		})
+	}
+}
+
+// A preview made before the upgrade, in full-name mode, keeps working once
+// dude names previews by label: it is woken and ended by its server id, and
+// keeps the full hostname lux gave it.
+func TestAFullNamePreviewSurvivesTheSwitchToRelativeNames(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	task, runID := w.startPreview()
+	w.until("full-name preview asleep", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND wakeable`, runID) == 1
+	})
+	full := servers.PreviewLabel("web", task, w.project, "") + "." + previewDomain
+	id := w.serverID(runID, "web")
+	if got := w.str(`SELECT hostname FROM preview_servers WHERE run_id = $1`, runID); got != full {
+		t.Fatalf("stored hostname = %q, want %q", got, full)
+	}
+
+	// The upgrade: lux now takes labels, and dude sends them.
+	enabled := true
+	w.lux.Previews = &enabled
+	w.previews.PreviewDomain = ""
+	w.previews.PreviewRelative = true
+	calls := &relativePreviewLux{Client: w.previews.Lux}
+	w.previews.Lux = calls
+
+	w.lux.RequestServer(id, "/")
+	w.heard(runID)
+	w.open(id)
+	w.running(runID, "web")
+	code, out := w.do("GET", "/internal/tasks/"+task+"/servers", nil)
+	if web := serverNamed(out, "web"); code != 200 || web == nil || web["url"] != "https://"+full || web["hostname"] != full {
+		t.Fatalf("woken view = %d %v", code, out)
+	}
+	if w.serverID(runID, "web") != id || w.labelled(runID) != 1 || len(calls.creates) != 0 {
+		t.Fatalf("after the switch: server %s (was %s), %d labelled, creates %v", w.serverID(runID, "web"), id, w.labelled(runID), calls.creates)
 	}
 }

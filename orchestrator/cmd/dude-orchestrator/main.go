@@ -143,6 +143,8 @@ func run(log *slog.Logger) error {
 		log.Info("branch previews wake on request", "mode", "relative")
 	case preview.Domain != "":
 		log.Info("branch previews wake on request", "mode", "full-name", "domain", preview.Domain)
+	case preview.LuxOff:
+		log.Warn("branch previews do not wake on request: lux has previews off (preview.domain)", "mode", "off")
 	default:
 		log.Warn("branch previews do not wake on request: lux has no preview domain (preview.domain) and previews.domain is unset", "mode", "off")
 	}
@@ -153,7 +155,7 @@ func run(log *slog.Logger) error {
 		DiffEvery: set.DiffEvery, MachineUSDPerHour: set.MachineUSDPerHour,
 	}
 	defer syncer.Stop()
-	serverService := &servers.Service{DB: database, Lux: luxClient, Log: log, ConsoleURL: set.ConsoleURL, PreviewDomain: preview.Domain, PreviewRelative: preview.Relative}
+	serverService := preview.service(database, luxClient, log, set.ConsoleURL)
 	previews := &servers.Previews{Service: serverService, Forges: forges, DefaultImage: agent.DefaultImage,
 		Registry: registryLogin, ReapAfter: set.PreviewReapAfter}
 	defer previews.Stop()
@@ -263,6 +265,12 @@ func run(log *slog.Logger) error {
 type previewMode struct {
 	Domain   string
 	Relative bool
+	LuxOff   bool // lux reports previews: false
+}
+
+// service is the servers.Service startup runs, in this preview mode.
+func (m previewMode) service(database *db.DB, luxClient *lux.HTTPClient, log *slog.Logger, consoleURL string) *servers.Service {
+	return &servers.Service{DB: database, Lux: luxClient, Log: log, ConsoleURL: consoleURL, PreviewDomain: m.Domain, PreviewRelative: m.Relative}
 }
 
 func previewModeOf(ctx context.Context, c *lux.HTTPClient, configured string, log *slog.Logger, retry time.Duration) (previewMode, error) {
@@ -270,11 +278,11 @@ func previewModeOf(ctx context.Context, c *lux.HTTPClient, configured string, lo
 		capability, err := luxPreviewDomain(ctx, c)
 		if err == nil {
 			luxDomain := capability.Domain
-			if capability.Previews != nil && !*capability.Previews {
-				return previewMode{}, nil
-			}
 			if configured != "" && luxDomain != "" && configured != luxDomain {
 				return previewMode{}, fmt.Errorf("previews.domain (DUDE_PREVIEW_DOMAIN) is %s but lux serves previews under %s", configured, luxDomain)
+			}
+			if capability.Previews != nil && !*capability.Previews {
+				return previewMode{LuxOff: true}, nil
 			}
 			if capability.Previews != nil {
 				if configured != "" && luxDomain == "" {
