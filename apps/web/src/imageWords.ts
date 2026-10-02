@@ -104,6 +104,37 @@ function trimGb(mib: number): string {
   return `${Number.isInteger(gb) ? gb : gb.toFixed(1)} GB`;
 }
 
+/** The most of a build's log the page keeps, in bytes: what the builder keeps (images.LogMax). */
+export const BUILD_LOG_MAX = 1 << 20;
+
+type BuildLog = { id: string; log: string; logStart: number; logTotal: number };
+
+/**
+ * The build page's log after a read: `prev` holds bytes [logStart,
+ * logTotal) of build `prev.id`. A read starting where prev ends is
+ * appended; one from another build, one starting past prev's end (the
+ * tail it asked from was trimmed) or one holding all prev holds replaces
+ * it; any other (an older or overlapping read answered late) is dropped,
+ * and prev is returned as it was. The result keeps the last max bytes.
+ */
+export function mergeBuildLog<B extends BuildLog>(prev: B | null, next: B, max = BUILD_LOG_MAX): B {
+  if (!prev || prev.id !== next.id) return capLog(next, max);
+  if (next.logTotal < prev.logTotal) return prev;
+  if (next.logStart === prev.logTotal) return capLog({ ...next, log: prev.log + next.log, logStart: prev.logStart }, max);
+  if (next.logStart > prev.logTotal || next.logStart <= prev.logStart) return capLog(next, max);
+  return prev;
+}
+
+function capLog<B extends BuildLog>(b: B, max: number): B {
+  // A UTF-16 unit is at most 3 UTF-8 bytes: a log this short needs no encoding.
+  if (b.log.length * 3 <= max) return b;
+  const bytes = new TextEncoder().encode(b.log);
+  if (bytes.length <= max) return b;
+  let cut = bytes.length - max;
+  while (cut < bytes.length && ((bytes[cut] ?? 0) & 0xc0) === 0x80) cut++;
+  return { ...b, log: new TextDecoder().decode(bytes.subarray(cut)), logStart: b.logTotal - (bytes.length - cut) };
+}
+
 /** The builder's limits, as the queue strip shows them. */
 export const builderLimits = (b: { cpus: number; memoryMiB: number }) => ["Rootless", `${b.cpus} CPU`, trimGb(b.memoryMiB), "One at a time"];
 
