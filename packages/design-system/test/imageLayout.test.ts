@@ -5,6 +5,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { cutReference, insertReference, layoutTitle, moveReference, moveReferenceTo, parseLayout, removeReference, slotCount, snapWidth, withLayout } from "../src/util/imageLayout.ts";
+import { criteriaLines } from "../src/util/criteria.ts";
 
 // What criteria.ts reads (kept here so the design system needs no app import): items by top-level marker.
 const itemsOf = (src: string) => src.split("\n").filter((l) => /^[-*+] /.test(l)).length;
@@ -53,6 +54,18 @@ describe("remove", () => {
   });
   test("a criterion's continuation line goes, the list intact", () => {
     expect(removeReference(`- [ ] One\n  ${A}\n- [ ] Two`, 0)).toBe("- [ ] One\n- [ ] Two");
+  });
+  test("an image that is a criterion's whole text takes the empty item with it", () => {
+    expect(removeReference(`- [ ] a\n- [ ] ${A}\n- [ ] b`, 0)).toBe("- [ ] a\n- [ ] b");
+    expect(removeReference(`- a\n- ${A}\n- b`, 0)).toBe("- a\n- b");
+    expect(removeReference(`9. a\n10. ${A}\n11. b`, 0)).toBe("9. a\n11. b");
+    expect(moveReference(`- [ ] a\n- [ ] ${A}\n- [ ] b`, 0, 1, "criteria")).toEqual({ text: `- [ ] a\n- [ ] b\n  ${A}`, index: 0 });
+    expect(moveReference(`- a\n- ${A}\n- b`, 0, -1, "criteria")).toEqual({ text: `- a\n  ${A}\n- b`, index: 0 });
+    expect(moveReference(`9. a\n10. ${A}\n11. b`, 0, 1, "criteria")).toEqual({ text: `9. a\n11. b\n    ${A}`, index: 0 });
+  });
+  test("with lines under it, the item stays and they become its text", () => {
+    expect(removeReference(`- [ ] ${A}\n  more`, 0)).toBe("- [ ]\n  more");
+    expect(criteriaLines(removeReference(`- [ ] ${A}\n  more`, 0)).items.map((i) => i.lines.join("\n").trim())).toEqual(["more"]);
   });
 });
 
