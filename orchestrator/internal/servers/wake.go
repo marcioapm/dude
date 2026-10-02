@@ -74,9 +74,10 @@ type wakeRun struct {
 	ParkDue bool
 	// Starts of its lux Run in a row that failed before running.
 	StartFailures int
-	// lux_after_event when this orchestrator claimed the wake: an event
-	// applied since is newer than the wake's own answer from lux (woken).
-	AppliedAtClaim int64
+	// lux_start_event before the request this wake's acknowledgement
+	// (woken) answers: once it has moved, an event of that start or a later
+	// one was applied, and is newer than the answer.
+	StartBefore int64
 }
 
 // wakeableSelect: wakeable previews with something to do. $1 is the reap
@@ -416,7 +417,7 @@ func (p *Previews) claimWake(ctx context.Context, r *wakeRun) (bool, error) {
 	err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		err := tx.QueryRow(ctx, `UPDATE runs SET wake_claimed_at = now() WHERE id = $1 AND wake_wanted_at IS NOT NULL
 			AND (wake_claimed_at IS NULL OR wake_claimed_at < now() - make_interval(secs => $2))
-			RETURNING lux_after_event`, r.ID, wakeClaimFor.Seconds()).Scan(&r.AppliedAtClaim)
+			RETURNING lux_start_event`, r.ID, wakeClaimFor.Seconds()).Scan(&r.StartBefore)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}
@@ -548,6 +549,14 @@ func (p *Previews) resumeWoken(ctx context.Context, r wakeRun, lr lux.Run) error
 			return err
 		}
 		attachAfter = true
+	}
+	// After what drain applied of the Run's earlier starts: their ends are
+	// older than this resume's answer, whenever they reached dude.
+	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT lux_start_event FROM runs WHERE id = $1`, r.ID).Scan(&r.StartBefore)
+	}); err != nil {
+		_ = p.releaseWake(ctx, r, 5*time.Second)
+		return err
 	}
 	res, err := p.Lux.Resume(ctx, r.LuxRunID, lux.ResumeInput{Secrets: spec.Secrets, Sync: sync,
 		RequestID: fmt.Sprintf("wake-%s-%d", r.ID, r.WakeWanted.UnixMilli())})
@@ -709,6 +718,7 @@ func (p *Previews) submitWoken(ctx context.Context, r wakeRun) error {
 	}); err != nil {
 		return err
 	}
+	r.StartBefore = 0
 	if err := p.attachAll(ctx, r, lr.ID); err != nil {
 		return p.attachFailed(ctx, r, lr.ID, err)
 	}
@@ -772,22 +782,24 @@ func (p *Previews) attachAll(ctx context.Context, r wakeRun, runID string) error
 
 // woken records a wake done: lux has the Run coming up. Its idle marks are
 // of the last period. Only for the wake this start was for: a failed start
-// recorded meanwhile (startFailed) has moved the wake on, and wins. What
-// lux answered is older than any event of the Run applied since the claim:
-// then the applied lux_state stands, and the status follows it.
+// recorded meanwhile (startFailed) has moved the wake on, and wins. Once an
+// event of this start was applied (lux_start_event moved past StartBefore,
+// read before the request), what lux answered is older: the applied
+// lux_state stands, and the status follows it. Before that, an applied end
+// or running is of an earlier start, and the answer's state is written.
 func (p *Previews) woken(ctx context.Context, r wakeRun, luxRunID, state string, started bool) error {
 	return p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE runs SET wake_wanted_at = NULL, wake_claimed_at = NULL, next_attempt_at = NULL,
-			lux_state = CASE WHEN lux_after_event > $5 THEN lux_state WHEN $3 OR $2 = 'running' THEN $2 ELSE lux_state END,
-			status = CASE WHEN (CASE WHEN lux_after_event > $5 THEN lux_state ELSE $2 END) = 'running' THEN 'running'::run_status
-				WHEN lux_after_event > $5 AND lux_state IN ('stopped', 'failed', 'lost', 'succeeded', 'cancelled') THEN status
+			lux_state = CASE WHEN lux_start_event > $5 THEN lux_state WHEN $3 OR $2 = 'running' THEN $2 ELSE lux_state END,
+			status = CASE WHEN (CASE WHEN lux_start_event > $5 THEN lux_state ELSE $2 END) = 'running' THEN 'running'::run_status
+				WHEN lux_start_event > $5 AND lux_state IN ('stopped', 'failed', 'lost', 'succeeded', 'cancelled') THEN status
 				WHEN status = 'paused' THEN 'scheduled'::run_status ELSE status END,
-			active_since = CASE WHEN (CASE WHEN lux_after_event > $5 THEN lux_state ELSE $2 END) = 'running'
+			active_since = CASE WHEN (CASE WHEN lux_start_event > $5 THEN lux_state ELSE $2 END) = 'running'
 				THEN COALESCE(active_since, now()) ELSE active_since END,
 			lux_stop_reason = NULL, dude_pause = NULL,
 			-- A start that failed stays said until one runs (luxEvent).
 			error = CASE WHEN start_failures > 0 THEN error END
-			WHERE id = $1 AND wake_wanted_at = $4 AND lux_run_id = $6`, r.ID, state, started, *r.WakeWanted, r.AppliedAtClaim, luxRunID)
+			WHERE id = $1 AND wake_wanted_at = $4 AND lux_run_id = $6`, r.ID, state, started, *r.WakeWanted, r.StartBefore, luxRunID)
 		if err != nil {
 			return err
 		}
