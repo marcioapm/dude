@@ -136,6 +136,10 @@ type Run struct {
 	placements []*placement
 	// When lux accepted the submit or resume its next placement is for.
 	acceptedAt *time.Time
+	// The epoch a resume's placement is for, until lux assigns it a host:
+	// Epoch stays the stopped one till then, as lux's runs.current_epoch
+	// does. 0 when none is pending.
+	assigning int
 	// Its next placement goes to another host (a migrate).
 	moveNext bool
 	artifacts  []*artifact
@@ -338,6 +342,10 @@ func (s *Server) placing(run *Run, epoch int, after time.Duration) bool {
 		s.mu.Unlock()
 		return false
 	}
+	if run.assigning == epoch {
+		// The scheduler's assign: the Run's epoch moves to the placement's.
+		run.Epoch, run.assigning = epoch, 0
+	}
 	p := run.currentPlacement()
 	if p == nil {
 		p = s.newPlacement(run)
@@ -358,10 +366,10 @@ func (s *Server) placing(run *Run, epoch int, after time.Duration) bool {
 	return true
 }
 
-// starting says the Run's start into epoch is still under way. Callers
-// hold s.mu.
+// starting says the Run's start into epoch is still under way, assigned
+// or not. Callers hold s.mu.
 func (run *Run) starting(epoch int) bool {
-	return run.Epoch == epoch && !lux.Terminal(run.State)
+	return (run.Epoch == epoch || run.assigning == epoch) && !lux.Terminal(run.State)
 }
 
 // stopRequested stamps the current placement asked to stop. Callers hold
@@ -1619,7 +1627,10 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	run.ResumeSyncs = append(run.ResumeSyncs, in.Sync)
 	run.pendingSync = in.Sync
 	run.Calls = append(run.Calls, "resume")
-	run.Epoch++
+	// As lux's resumeRun: the answer carries the Run's current epoch, the
+	// stopped one; the new one is set when the placement is assigned
+	// (placing).
+	run.assigning = run.Epoch + 1
 	accepted := time.Now()
 	run.acceptedAt = &accepted
 	if in.Input != nil {
@@ -1630,10 +1641,11 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	s.setState(run, "resuming")
 	var spec map[string]any
 	_ = json.Unmarshal(run.Spec, &spec)
-	epoch := run.Epoch
+	epoch := run.assigning
+	view := s.view(run)
 	s.mu.Unlock()
 	go s.play(run, epoch, spec, true)
-	writeJSON(w, 202, s.view(run))
+	writeJSON(w, 202, view)
 }
 
 // output streams a Run's records and events as lux does: from a cursor,

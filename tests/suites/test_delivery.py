@@ -14,6 +14,7 @@ from __future__ import annotations
 from datetime import datetime
 
 import pytest
+import requests
 
 from fake_github import FakeGitHub
 from helpers import ApiClient, assert_timed_is_its_row, query, wait_until
@@ -201,7 +202,7 @@ def test_a_project_policy_names_only_reviewers_the_factory_has(client: ApiClient
     assert resp.status_code == 400, resp.text
 
 
-def test_an_agent_asks_a_person_waits_and_carries_on_with_the_answer(client: ApiClient, forge_project: dict, owner_dsn: str):
+def test_an_agent_asks_a_person_waits_and_carries_on_with_the_answer(client: ApiClient, forge_project: dict, owner_dsn: str, env):
     """The question reaches the API and the sidebar; parked while it waits,
     the answer resumes it, and the resume is timed from the answer."""
     # The suite parks a waiting agent after seconds (DUDE_PARK_AFTER).
@@ -235,6 +236,7 @@ def test_an_agent_asks_a_person_waits_and_carries_on_with_the_answer(client: Api
     run = next(r for r in client.task_runs(task["id"]) if r["phase"] == "implement")
     types = [e.get("eventType", e.get("type")) for e in client.events(runId=run["id"])]
     assert "run.parked" in types, types
+    stopped_epoch = _stopped_epoch(env, owner_dsn, run["id"])
 
     resp = client.post(f"/v1/questions/{question['id']}/answer", {"text": "yes"})
     assert resp.status_code == 200, resp.text
@@ -244,6 +246,7 @@ def test_an_agent_asks_a_person_waits_and_carries_on_with_the_answer(client: Api
         timeout=30, message="the implementer never carried on after the answer",
     )
     timed = _timed_resume(client, run["id"], "answer")
+    _unparked_and_timed_name_the_placement_after(client, env, owner_dsn, run["id"], timed, stopped_epoch)
     answered_at = next(e["occurredAt"] for e in client.events(runId=run["id"]) if e["eventType"] == "question.answered")
     assert _at(timed["occurredAt"]) >= _at(answered_at), (timed, answered_at)
     # Due from the answer itself, not from when the orchestrator noticed it.
@@ -291,6 +294,34 @@ def _timed_resume(client: ApiClient, run_id: str, cause: str) -> dict:
     unparked = [e["payload"] for e in events if e["eventType"] == "run.unparked"]
     assert all(p["epoch"] == payload["epoch"] for p in unparked), (unparked, payload)
     return event
+
+
+def _fake_lux_run(env, owner_dsn: str, run_id: str) -> dict:
+    """The fake lux's view of the Run, as GET /v1/runs/{id} answers it."""
+    lux_run_id = query(owner_dsn, "SELECT lux_run_id FROM runs WHERE id = %s", (run_id,))[0]["lux_run_id"]
+    return requests.get(f"{env.fake_lux_url}/v1/runs/{lux_run_id}",
+                        headers={"authorization": f"Bearer {env.lux_key}"}, timeout=10).json()
+
+
+def _stopped_epoch(env, owner_dsn: str, run_id: str) -> int:
+    """The epoch the fake lux stopped the parked or paused Run in, once it
+    reports it stopped."""
+    stopped = wait_until(lambda: (r := _fake_lux_run(env, owner_dsn, run_id))["state"] == "stopped" and r,
+                         timeout=20, message="lux never reported the Run stopped")
+    return stopped["epoch"]
+
+
+def _unparked_and_timed_name_the_placement_after(client: ApiClient, env, owner_dsn: str, run_id: str,
+                                                 timed: dict, stopped_epoch: int) -> None:
+    """run.unparked and run.resume.timed both carry the epoch of the fake
+    lux's placement that started after the one the Run was stopped in: lux
+    answers the resume with the stopped epoch, which dude must not take for
+    the resume's."""
+    placements = _fake_lux_run(env, owner_dsn, run_id)["placements"]
+    resumed = min(p["epoch"] for p in placements if p["epoch"] > stopped_epoch)
+    unparked = [e["payload"]["epoch"] for e in client.events(runId=run_id) if e["eventType"] == "run.unparked"]
+    assert unparked == [resumed], (unparked, stopped_epoch, placements)
+    assert timed["payload"]["epoch"] == resumed, (timed["payload"], stopped_epoch, placements)
 
 
 def _resume_row_in_order(owner_dsn: str, run_id: str, timed: dict) -> dict:
