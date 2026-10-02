@@ -80,6 +80,8 @@ function urlStart(span: string): number {
 
 const lineOf = (text: string, at: number) => text.slice(0, at).split("\n").length - 1;
 const blank = (l: string | undefined) => l === undefined || l.trim() === "";
+// A list marker, and a task box, with nothing after them.
+const BARE_ITEM = /^[ \t]{0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?$/;
 
 /**
  * The text without `n`'s reference, and the reference as written. A line
@@ -95,7 +97,10 @@ export function cutReference(text: string, n: number): { text: string; ref: stri
   const lineEnd = nl < 0 ? text.length : nl;
   const head = text.slice(lineStart, r.from);
   const tail = text.slice(r.to, lineEnd);
-  if (blank(head + tail)) {
+  // The image was a list item's whole text: the item goes too, unless lines
+  // under it follow, which then become its text.
+  const bareItem = blank(tail) && BARE_ITEM.test(head) && !criteriaLines(text).items.some((i) => i.first === lineOf(text, r.from) && i.last > i.first);
+  if (blank(head + tail) || bareItem) {
     const lines = text.split("\n");
     const at = lineOf(text, r.from);
     lines.splice(at, 1);
@@ -232,6 +237,8 @@ export function moveReferenceTo(text: string, n: number, slot: number, kind: Fie
   if (kind === "goal" && place.own && slot > place.slot) target--;
   if (kind === "goal" && place.own && target === place.slot) return null;
   if (kind === "criteria" && place.own && target === place.slot) return null;
+  // A criterion that was only the image is gone after the cut: the same.
+  if (kind === "criteria" && target > place.slot && criteriaItems(cut.text).length < criteriaItems(text).length) target--;
   const put = insertReference(cut.text, cut.ref, target, kind);
   return { text: put.text, index: indexAt(put.text, put.at) };
 }
