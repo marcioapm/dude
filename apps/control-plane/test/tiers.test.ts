@@ -572,4 +572,54 @@ describe("removing a tier while a project's role is set to it", () => {
       expect((await tiers()).map((t) => t.id)).toEqual(order);
     }, 15_000);
   }
+
+  // Archiving an image locks its row FOR UPDATE, then its event's insert
+  // needs the organization's row FOR KEY SHARE. A patch naming the image
+  // must lock the image before the organization's row, or each waits on
+  // the other.
+  describe("archiving an image while a project's role is set to it", () => {
+    const freshImage = async (name: string) => {
+      const id = `img_racing_${name}`;
+      await owner`INSERT INTO images (id, organization_id, name) VALUES (${id}, ${ORG}, ${name})`;
+      return id;
+    };
+    const archived = async (id: string) => (await owner`SELECT archived_at IS NOT NULL AS a FROM images WHERE id = ${id}`)[0].a as boolean;
+
+    test("the archive queued first: it completes and the patch naming the image is refused", async () => {
+      const image = await freshImage("racing-a");
+      await owner`UPDATE projects SET agent_models = '{}' WHERE id = ${PROJECT}`;
+      const [archive, patch] = await interleaved(
+        () => call(adminKey, "PATCH", `/v1/images/${image}`, { archived: true }),
+        () => call(adminKey, "PATCH", `/v1/projects/${PROJECT}/settings`, { roles: { reviewer: { image } } }),
+      );
+      expect(archive.status).toBe(200);
+      expect(patch.status).toBe(400);
+      expect((await body(patch)).error.message).toBe("racing-a is archived: pick another image");
+      expect(await projectModels()).toEqual({});
+      expect(await archived(image)).toBe(true);
+    }, 15_000);
+
+    test("the patch queued first: both complete, and the role keeps naming the archived image", async () => {
+      const image = await freshImage("racing-b");
+      await owner`UPDATE projects SET agent_models = '{}' WHERE id = ${PROJECT}`;
+      const [patch, archive] = await interleaved(
+        () => call(adminKey, "PATCH", `/v1/projects/${PROJECT}/settings`, { roles: { reviewer: { image } } }),
+        () => call(adminKey, "PATCH", `/v1/images/${image}`, { archived: true }),
+      );
+      expect([patch.status, archive.status]).toEqual([200, 200]);
+      expect(await projectModels()).toEqual({ reviewer: { image } });
+      expect(await archived(image)).toBe(true);
+    }, 15_000);
+
+    test("the organization's patch queued first: both complete", async () => {
+      const image = await freshImage("racing-c");
+      const [patch, archive] = await interleaved(
+        () => call(adminKey, "PATCH", "/v1/settings/organization", { roles: { reviewer: { image } } }),
+        () => call(adminKey, "PATCH", `/v1/images/${image}`, { archived: true }),
+      );
+      expect([patch.status, archive.status]).toEqual([200, 200]);
+      expect((await orgModels()).reviewer.image).toBe(image);
+      expect(await archived(image)).toBe(true);
+    }, 15_000);
+  });
 });
