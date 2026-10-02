@@ -220,9 +220,10 @@ async function removeTier(ctx: RequestContext): Promise<Response> {
   const id = ctx.params.id!;
   const replacement = (await parseBody(ctx.request, removeModelTierSchema)).replacement ?? null;
   await withOrg(ctx.principal.organizationId, async (scope) => {
-    // Locked FOR UPDATE: a settings change naming it (requireTier, FOR
-    // SHARE) either finished first, and is moved below, or waits and is
-    // then refused.
+    // Locked FOR UPDATE before the organization and project rows, the
+    // order a settings patch takes them in (requireTier's FOR SHARE, then
+    // loadLayers): a patch naming it either committed first, and is moved
+    // below, or waits here and is then refused.
     const found = await scope.sql`SELECT id FROM model_tiers WHERE id = ${id} FOR UPDATE`;
     if (found.length === 0) throw notFound(`no model tier ${id}`);
     const [count] = (await scope.sql`SELECT count(*)::int AS n FROM model_tiers`) as Array<{ n: number }>;

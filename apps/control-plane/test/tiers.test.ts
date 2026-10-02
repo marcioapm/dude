@@ -335,3 +335,80 @@ describe("the upgrade's notes", () => {
     expect((await owner`SELECT count(*)::int AS n FROM model_tier_upgrade_notes WHERE organization_id = ${OTHER} AND dismissed_at IS NULL`)[0].n).toBe(1);
   });
 });
+
+/**
+ * A removal and a settings patch naming the same tier, interleaved. A third
+ * transaction holds the organization's row, so each request stops at the
+ * first lock it cannot take; which one queued on the row first decides the
+ * order. Whatever the order: no deadlock, and nothing left naming a tier
+ * that is gone.
+ */
+describe("removing a tier while a project's role is set to it", () => {
+  // Backends of the app role waiting on a lock they have not been granted.
+  const waiting = async () => (await owner`
+    SELECT count(DISTINCT l.pid)::int AS n FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+    WHERE NOT l.granted AND a.usename = 'dude_app' AND a.datname = current_database()`)[0].n as number;
+  async function waitFor(ready: () => Promise<boolean>, ms = 5_000) {
+    const until = Date.now() + ms;
+    while (!(await ready())) {
+      if (Date.now() > until) throw new Error("condition not reached");
+      await Bun.sleep(20);
+    }
+  }
+
+  /** Runs `first`, then `second`, each once the one before is queued on a lock, with the organization's row held. */
+  async function interleaved(first: () => Promise<Response>, second: () => Promise<Response>) {
+    const held = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const holder = owner.begin(async (tx) => {
+      await tx`SELECT 1 FROM organizations WHERE id = ${ORG} FOR UPDATE`;
+      held.resolve();
+      await release.promise;
+    });
+    try {
+      await held.promise;
+      const a = first();
+      await waitFor(async () => (await waiting()) === 1);
+      const b = second();
+      await waitFor(async () => (await waiting()) === 2);
+      release.resolve();
+      await holder;
+      return [await a, await b] as const;
+    } finally {
+      release.resolve();
+      await holder.catch(() => {});
+    }
+  }
+
+  const freshTier = async (name: string) =>
+    (await body(await call(adminKey, "POST", "/v1/models/tiers", { name }))).tiers.find((t: Json) => t.name === name).id as string;
+
+  test("the removal queued first: it completes and the patch naming the tier is refused", async () => {
+    const [thinker] = await tiers();
+    const gone = await freshTier("Racing A");
+    await owner`UPDATE projects SET agent_models = '{}' WHERE id = ${PROJECT}`;
+    const [removal, patch] = await interleaved(
+      () => call(adminKey, "DELETE", `/v1/models/tiers/${gone}`, { replacement: thinker.id }),
+      () => call(adminKey, "PATCH", `/v1/projects/${PROJECT}/settings`, { roles: { reviewer: { tier: gone } } }),
+    );
+    expect(removal.status).toBe(200);
+    expect(patch.status).toBe(400);
+    expect((await body(patch)).error.message).toBe(`there is no model tier ${gone}`);
+    expect(await projectModels()).toEqual({});
+    expect((await tiers()).map((t) => t.id)).not.toContain(gone);
+  });
+
+  test("the patch queued first: it completes and the removal moves what it set", async () => {
+    const [thinker] = await tiers();
+    const gone = await freshTier("Racing B");
+    await owner`UPDATE projects SET agent_models = '{}' WHERE id = ${PROJECT}`;
+    const [patch, removal] = await interleaved(
+      () => call(adminKey, "PATCH", `/v1/projects/${PROJECT}/settings`, { roles: { reviewer: { tier: gone } } }),
+      () => call(adminKey, "DELETE", `/v1/models/tiers/${gone}`, { replacement: thinker.id }),
+    );
+    expect(patch.status).toBe(200);
+    expect(removal.status).toBe(200);
+    expect(await projectModels()).toEqual({ reviewer: { tier: thinker.id } });
+    expect((await tiers()).map((t) => t.id)).not.toContain(gone);
+  });
+});

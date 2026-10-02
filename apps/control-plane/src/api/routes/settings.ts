@@ -321,9 +321,10 @@ async function patchOrganizationSettings(ctx: RequestContext): Promise<Response>
   await requireOrgAdmin(ctx);
   const patch = await parseBody(ctx.request, settingsPatchSchema);
   await withOrg(ctx.principal.organizationId, async (scope) => {
+    // Sizes and tiers before the organization row: the order their removal locks them in.
+    await checkSizes(scope, patch);
     const layers = await loadLayers(scope, undefined, true);
     if (!layers) throw notFound("organization not found");
-    await checkSizes(scope, patch);
     const next = applyPatch(layers.org.agentModels, layers.org.deliveryPolicy, patch);
     await scope.sql`
       UPDATE organizations SET default_agent_models = ${next.models}::jsonb, delivery_policy = ${next.policy}::jsonb,
@@ -343,9 +344,10 @@ async function patchProjectSettings(ctx: RequestContext): Promise<Response> {
   await requireProjectEditor(ctx, projectId);
   const patch = await parseBody(ctx.request, settingsPatchSchema);
   await withOrg(ctx.principal.organizationId, async (scope) => {
+    // Sizes and tiers before the organization and project rows: the order their removal locks them in.
+    await checkSizes(scope, patch);
     const layers = await loadLayers(scope, projectId, true);
     if (!layers?.project) throw notFound(`project ${projectId} not found`);
-    await checkSizes(scope, patch);
     const next = applyPatch(layers.project.agentModels, layers.project.deliveryPolicy, patch);
     await scope.sql`
       UPDATE projects SET agent_models = ${next.models}::jsonb, delivery_policy = ${next.policy}::jsonb, updated_at = now()
