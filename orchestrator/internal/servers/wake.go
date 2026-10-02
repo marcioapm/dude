@@ -1,6 +1,7 @@
 package servers
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -623,7 +624,7 @@ func (p *Previews) syncRefs(ctx context.Context, r wakeRun) ([]lux.SyncRef, erro
 // tried again later).
 func (p *Previews) drain(ctx context.Context, r wakeRun) error {
 	for range drainPasses {
-		dctx, cancel := context.WithTimeout(ctx, drainFor)
+		dctx, cancel := context.WithTimeout(ctx, cmp.Or(p.DrainFor, drainFor))
 		err := p.followEvents(dctx, r.previewRun)
 		cancel()
 		if err != nil {

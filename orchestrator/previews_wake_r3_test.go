@@ -10,9 +10,12 @@ import (
 	"os"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // migrate066 applies migration 066 to the world's database as an upgrade
@@ -395,4 +398,91 @@ func TestADrainCutWithoutItsEndIsTriedAgain(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND start_failures = 1`, runID); n != 1 {
 		t.Fatalf("the next try did not count the failed start:\n%s", w.preview(runID))
 	}
+}
+
+// outputDown is lux with its output endpoint unavailable while down is set.
+type outputDown struct {
+	lux.Client
+	down atomic.Bool
+}
+
+func (o *outputDown) Output(ctx context.Context, runID, cursor string, afterEvent int64, fn func(lux.Frame) error) error {
+	if o.down.Load() {
+		return &lux.Error{Status: 503, Code: "unavailable", Message: "output unavailable"}
+	}
+	return o.Client.Output(ctx, runID, cursor, afterEvent, fn)
+}
+
+// sweepAgain makes the preview's backed-off wake due and sweeps once.
+func (w *world) sweepAgain(runID string) {
+	w.t.Helper()
+	if _, err := w.owner.Exec(context.Background(), `UPDATE runs SET next_attempt_at = NULL WHERE id = $1`, runID); err != nil {
+		w.t.Fatal(err)
+	}
+	if _, err := w.previews.Sweep(context.Background()); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+// The wake waits on a drain that cannot finish: the stream of the ended
+// Run stays open (held before its failure) past the drain's bound, or lux's
+// output endpoint is unavailable. The wake stays wanted and unclaimed, with
+// nothing replaced or resumed and nothing counted; once lux answers, the
+// next try counts the failed start and replaces the Run.
+func TestADrainThatCannotFinishLeavesTheWakeForLater(t *testing.T) {
+	recovers := func(t *testing.T, w *world, runID string, r *fakelux.Run) {
+		t.Helper()
+		if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND start_failures = 0 AND wake_wanted_at IS NOT NULL
+			AND wake_claimed_at IS NULL AND next_attempt_at > now() AND lux_run_id = $2`, runID, r.ID); n != 1 ||
+			len(w.luxRuns()) != 1 || r.Resumed != 1 {
+			t.Fatalf("a wake whose drain did not finish was decided on: %d lux runs, resumed %d\n%s",
+				len(w.luxRuns()), r.Resumed, w.preview(runID))
+		}
+		w.sweepAgain(runID)
+		if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND start_failures = 1`, runID); n != 1 {
+			t.Fatalf("the next try did not count the failed start:\n%s", w.preview(runID))
+		}
+		w.untilPreview(runID, "a new Run running", func() bool {
+			return len(w.luxRuns()) == 2 &&
+				w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_state = 'running'`, runID) == 1
+		})
+		if !slices.Contains(w.lux.CallsOf(r.ID), "cancel") || r.Resumed != 1 {
+			t.Fatalf("the failed Run: resumed %d, calls %v; want replaced", r.Resumed, w.lux.CallsOf(r.ID))
+		}
+	}
+	t.Run("stream stays open", func(t *testing.T) {
+		w := newWorld(t)
+		w.wakeable()
+		runID, r := w.failedStartUnapplied()
+		w.previews.DrainFor = 200 * time.Millisecond
+		open := make(chan struct{})
+		var once sync.Once
+		release := func() { once.Do(func() { close(open) }) }
+		t.Cleanup(release)
+		w.lux.CutStreams(func(id string, eventID int64, typ string) fakelux.StreamCut {
+			if typ == "state" && w.lux.EventState(id, eventID) == "failed" {
+				<-open
+			}
+			return fakelux.StreamGoesOn
+		})
+		if _, err := w.previews.Sweep(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		w.lux.CutStreams(nil)
+		release()
+		recovers(t, w, runID, r)
+	})
+	t.Run("output unavailable", func(t *testing.T) {
+		w := newWorld(t)
+		w.wakeable()
+		runID, r := w.failedStartUnapplied()
+		down := &outputDown{Client: w.previews.Lux}
+		down.down.Store(true)
+		w.previews.Lux = down
+		if _, err := w.previews.Sweep(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		down.down.Store(false)
+		recovers(t, w, runID, r)
+	})
 }

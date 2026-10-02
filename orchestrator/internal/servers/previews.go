@@ -55,6 +55,9 @@ type Previews struct {
 	ReapAfter time.Duration
 	// How many wakeable previews one sweep takes at most; zero is 1000.
 	SweepLimit int
+	// How long one pass of a wake's drain waits on lux's stream; zero is
+	// 30 seconds.
+	DrainFor time.Duration
 
 	mu        sync.Mutex
 	following map[string]context.CancelFunc
