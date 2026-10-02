@@ -151,11 +151,20 @@ func (s *Syncer) resumeRefused(ctx context.Context, r phaseRun, epoch int) {
 	}
 }
 
+// resumedEpoch is the epoch a resume lux accepted is for: the one
+// foreseen, unless lux's answer names a later one. lux answers with the
+// Run's current epoch, which stays the stopped one until its scheduler
+// assigns the new placement, after the answer; an epoch above the
+// foreseen one means lux had already assigned it and moved on (a
+// placement failed and was rescheduled). No epoch (a 409) is 0.
+func resumedEpoch(foreseen int, resumed lux.Run) int {
+	return max(foreseen, resumed.Epoch)
+}
+
 // resumeAccepted moves the row of a resume lux accepted to the epoch lux
-// says it is for, when that is not the one foreseen; in the transaction
-// that takes the Run out of paused, with the Run's row locked, before it
-// is updated. lux's answer with no epoch (a resume already under way, a
-// 409) leaves it.
+// says it is for, when that is above the one foreseen (resumedEpoch); in
+// the transaction that takes the Run out of paused, with the Run's row
+// locked, before it is updated.
 //
 // Frames of that epoch the stream committed before the move found no row
 // to stamp, and nothing durable records when they came: the agent's
@@ -166,7 +175,8 @@ func (s *Syncer) resumeRefused(ctx context.Context, r phaseRun, epoch int) {
 // returned, for its timing to be written as it stands once the
 // transaction commits: no later frame stamps it.
 func (s *Syncer) resumeAccepted(ctx context.Context, tx pgx.Tx, r phaseRun, foreseen int, resumed lux.Run) (missed bool) {
-	if resumed.Epoch == 0 || resumed.Epoch == foreseen {
+	epoch := resumedEpoch(foreseen, resumed)
+	if epoch == foreseen {
 		return false
 	}
 	s.bestEffort(ctx, tx, r, "accepted", func(ctx context.Context, tx pgx.Tx) error {
@@ -175,7 +185,7 @@ func (s *Syncer) resumeAccepted(ctx context.Context, tx pgx.Tx, r phaseRun, fore
 					OR COALESCE(r.agent_active_at >= rr.requested_at, false)
 			FROM runs r WHERE r.id = rr.run_id AND rr.run_id = $1 AND rr.epoch = $2
 			AND NOT EXISTS (SELECT 1 FROM run_resumes WHERE run_id = $1 AND epoch = $3)
-			RETURNING rr.frames_missed`, r.ID, foreseen, resumed.Epoch).Scan(&missed)
+			RETURNING rr.frames_missed`, r.ID, foreseen, epoch).Scan(&missed)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}

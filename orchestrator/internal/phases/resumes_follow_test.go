@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
+	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
@@ -329,6 +330,86 @@ func (f *otherEpochLux) Resume(context.Context, string, lux.ResumeInput) (lux.Ru
 	f.frames <- cursorFrame(spoke(3), "e2")
 	f.w.committed("e2", 5*time.Second)
 	return lux.Run{ID: "lrun_1", State: "resuming", Epoch: 3}, nil
+}
+
+// lux answers a resume with the Run's current epoch, still the one it was
+// stopped in: the new placement's epoch is set when lux's scheduler
+// assigns it, after the answer. The row stays under the foreseen epoch,
+// is not marked frames_missed, and is timed from that epoch's frames,
+// once, with every phase; run.unparked carries the foreseen epoch.
+func TestALuxAnswerCarryingTheStoppedEpochLeavesTheRowAtTheForeseenOne(t *testing.T) {
+	w := newResumeWorld(t)
+	base := time.Now().Add(-time.Minute).UTC().Truncate(time.Millisecond)
+	// The session was established on epoch 1, the one it was stopped in.
+	if _, err := w.owner.Exec(w.ctx, `UPDATE runs SET agent_session_epoch = 1 WHERE id = $1`, w.run.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Parked before the question was answered (2s ago), so the answer woke it.
+	if err := w.s.DB.InOrg(w.ctx, w.run.Org, func(tx pgx.Tx) error {
+		return w.s.event(w.ctx, tx, w.run, evParked, ledger.ActorSystem,
+			map[string]any{"reason": "question", "parkedAt": time.Now().Add(-10 * time.Second).UTC()})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w.resumable()
+	w.lux.set(stoppedOnHost1(base), nil)
+	st := w.following()
+	w.s.Lux = &stoppedEpochLux{streamLux: st, base: base}
+	r := w.run
+	r.Resumable = true
+	if _, err := w.s.whilePaused(w.ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.count(`SELECT count(*) FROM run_resumes WHERE run_id = $1 AND epoch = 1`); n != 0 {
+		t.Errorf("the row moved to the stopped epoch 1")
+	}
+	if row := w.row(2); row["frames_missed"] != false {
+		t.Errorf("frames_missed = %v on the foreseen epoch's row, want false", row["frames_missed"])
+	}
+	var unparked int
+	if err := w.owner.QueryRow(w.ctx, `SELECT (payload->>'epoch')::int FROM events
+		WHERE run_id = $1 AND event_type = 'run.unparked'`, w.run.ID).Scan(&unparked); err != nil || unparked != 2 {
+		t.Errorf("run.unparked epoch %d (%v), want the foreseen 2", unparked, err)
+	}
+
+	// lux assigns epoch 2, and its placement's frames come.
+	st.frames <- record(2, "lux.session", map[string]any{"sessionId": "s1"})
+	st.frames <- running(2)
+	st.frames <- busy(2)
+	st.frames <- cursorFrame(spoke(2), "c1")
+	w.committed("c1", 5*time.Second)
+	deadline := time.Now().Add(5 * time.Second)
+	for len(w.timed()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond)
+	got := w.timed()
+	if len(got) != 1 {
+		t.Fatalf("%d run.resume.timed, want 1: %v", len(got), got)
+	}
+	phases, _ := got[0]["phases"].(map[string]any)
+	if got[0]["epoch"] != 2.0 || len(phases) != 8 || got[0]["totalMs"] == nil || got[0]["untilBusyMs"] == nil {
+		t.Errorf("run.resume.timed %v, want epoch 2 with all 8 phases, totalMs and untilBusyMs", got[0])
+	}
+	row := w.row(2)
+	for _, col := range []string{"running_at", "busy_at", "first_output_at"} {
+		if row[col] == nil {
+			t.Errorf("%s not stamped from epoch 2's frames", col)
+		}
+	}
+}
+
+// stoppedEpochLux answers a resume as lux does: "resuming", with the Run's
+// current epoch, the stopped 1. Its Gets report epoch 2 assigned and
+// running from then on.
+type stoppedEpochLux struct {
+	*streamLux
+	base time.Time
+}
+
+func (f *stoppedEpochLux) Resume(context.Context, string, lux.ResumeInput) (lux.Run, error) {
+	f.placementLux.set(runningAgain(f.base, "host-a"), nil)
+	return lux.Run{ID: "lrun_1", State: "resuming", Epoch: 1}, nil
 }
 
 // A resume lux refuses for good leaves no row, and the Run fails; one it
