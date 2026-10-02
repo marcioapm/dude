@@ -73,6 +73,13 @@ export function attachmentReferences(text: string): AttachmentReference[] {
   return out;
 }
 
+/** The offset in `text` of `ref`'s id: the first `attachment:` past the alt's `]`, which an escape never is. */
+export function attachmentIdAt(text: string, ref: AttachmentReference): number {
+  let i = ref.from + 2;
+  while (i < ref.to && text[i] !== "]") i += text[i] === "\\" ? 2 : 1;
+  return text.indexOf(ATTACHMENT_SCHEME, i) + ATTACHMENT_SCHEME.length;
+}
+
 /** The line with each closed code span's content blanked, so nothing in it matches. */
 function maskCodeSpans(line: string): string {
   let out = "";

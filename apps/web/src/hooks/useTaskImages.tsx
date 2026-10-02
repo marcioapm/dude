@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ImageViewer, MarkdownImage } from "@dude/design-system";
-import { attachmentReferences } from "@dude/domain";
+import { attachmentIdAt, attachmentReferences } from "@dude/domain";
 import type { ApiClient } from "../api/client.ts";
 
 /** A local stand-in id for an image held in the browser until its task exists. */
@@ -115,16 +115,9 @@ export function withUploadedIds(text: string, ids: ReadonlyMap<string, string>):
   for (const r of attachmentReferences(text)) {
     const real = ids.get(r.id);
     if (!real) continue;
-    const idAt = r.from + urlStart(text.slice(r.from, r.to)) + "attachment:".length;
+    const idAt = attachmentIdAt(text, r);
     out += text.slice(at, idAt) + real;
     at = idAt + r.id.length;
   }
   return out + text.slice(at);
-}
-
-/** Where `attachment:` starts in one reference: past the alt's closing `]`, which an escape never is. */
-function urlStart(span: string): number {
-  let i = 2;
-  while (span[i] !== "]") i += span[i] === "\\" ? 2 : 1;
-  return span.indexOf("attachment:", i);
 }
