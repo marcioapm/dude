@@ -266,19 +266,20 @@ test("072 gives each task's tray images a place at the end of its goal, so they 
         original_key, for_prompt, position, attached_at)
       VALUES (${id}, 'org_a', 'wi_tray', ${name}, 'image/png', 1, 1, 1, 'x', ${id}, 'image/png', 1, 1, 1, ${id + ".o"}, ${prompt}, ${position},
         ${prompt ? new Date() : null})`;
-    await image("att_second", "b [v2].png", true, 1);
-    await image("att_first", "a.png", true, 0);
+    // Ids sort against the tray's order, so only `position` gives it.
+    await image("att_a_second", "b [v2].png", true, 1);
+    await image("att_z_first", "a.png", true, 0);
     await image("att_unsent", "c.png", false, 0);
 
     expect((await migrate(url, { log: () => {} })).applied).toEqual(["072_task_inline_images.sql"]);
     const goals = await sql`SELECT id, goal FROM tasks ORDER BY id`;
     expect(goals).toEqual([
       { id: "wi_none", goal: "No images." },
-      { id: "wi_tray", goal: "Build it.\n\n![a.png](attachment:att_first)\n\n![b (v2).png](attachment:att_second)" },
+      { id: "wi_tray", goal: "Build it.\n\n![a.png](attachment:att_z_first)\n\n![b (v2).png](attachment:att_a_second)" },
     ]);
     // Still the prompt's, as the text now says.
     const attached = await sql`SELECT id FROM attachments WHERE for_prompt AND attached_at IS NOT NULL ORDER BY position`;
-    expect(attached.map((r: { id: string }) => r.id)).toEqual(["att_first", "att_second"]);
+    expect(attached.map((r: { id: string }) => r.id)).toEqual(["att_z_first", "att_a_second"]);
   } finally {
     await sql.end();
   }
