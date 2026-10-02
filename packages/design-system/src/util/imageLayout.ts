@@ -118,10 +118,13 @@ export function removeReference(text: string, n: number): string {
 
 // --- Where an image can go ---------------------------------------------------
 
-/** The line each top-level block of the goal starts on. */
-function blockStarts(text: string): number[] {
+/** The line each top-level block of the goal starts on. One trial move parses the same text several times: the last answer is kept. */
+let lastBlocks: { text: string; lines: readonly number[] } | null = null;
+function blockStarts(text: string): readonly number[] {
+  if (lastBlocks?.text === text) return lastBlocks.lines;
   const lines: number[] = [];
   parseMarkdown(text, { blockLines: lines });
+  lastBlocks = { text, lines };
   return lines;
 }
 
