@@ -67,6 +67,9 @@ type Syncer struct {
 	// much earlier, so a retry a minute out is exercised without the wait.
 	// Zero outside tests.
 	RetryAhead time.Duration
+	// For tests: the orchestrator's clock, as its events' occurred_at
+	// (ledger.Event.OccurredAt); nil is the ledger's time.Now.
+	Now func() time.Time
 
 	// One follower per live lux Run. The follower is the only writer of a
 	// Run's cursor, so two must never run for the same Run.
@@ -1158,13 +1161,20 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 // since — so an answer or a word from the agent in between wins.
 func (s *Syncer) requestPause(ctx context.Context, r phaseRun, kind, why string) error {
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE runs r SET control = 'pause_graceful', control_requested_at = now(), control_reason = $2,
+		// parkedAt: when the park began, on the database's clock, as the
+		// answers and decisions that end it are stamped.
+		var parkedAt time.Time
+		err := tx.QueryRow(ctx, `UPDATE runs r SET control = 'pause_graceful', control_requested_at = now(), control_reason = $2,
 			dude_pause = $3
 			WHERE r.id = $1 AND r.control = 'none' AND r.status = 'running'
 			  AND ($3 <> 'person' OR (r.waiting_since IS NOT NULL AND `+delivery.OpenAsk+`))
 			  AND ($3 <> 'idle' OR (r.turn_done_at IS NULL AND r.waiting_since IS NULL
-			       AND cardinality(r.open_tool_calls) = 0 AND `+quietSince+` = $4))`, r.ID, why, kind, r.QuietSince)
-		if err != nil || tag.RowsAffected() == 0 || kind == "repository" {
+			       AND cardinality(r.open_tool_calls) = 0 AND `+quietSince+` = $4))
+			RETURNING r.control_requested_at`, r.ID, why, kind, r.QuietSince).Scan(&parkedAt)
+		if db.IsNotFound(err) {
+			return nil
+		}
+		if err != nil || kind == "repository" {
 			return err
 		}
 		var taskStatus string
@@ -1180,7 +1190,7 @@ func (s *Syncer) requestPause(ctx context.Context, r phaseRun, kind, why string)
 			}
 		}
 		return s.event(ctx, tx, r, evParked, ledger.ActorSystem,
-			map[string]any{"reason": kind, "message": why, "taskStatus": db.Nullable(taskStatus)})
+			map[string]any{"reason": kind, "message": why, "taskStatus": db.Nullable(taskStatus), "parkedAt": parkedAt})
 	})
 }
 
@@ -1538,8 +1548,12 @@ func (s *Syncer) retryLater(ctx context.Context, r phaseRun, cause error) error 
 }
 
 func (s *Syncer) event(ctx context.Context, tx pgx.Tx, r phaseRun, typ, actor string, payload map[string]any) error {
+	var at time.Time
+	if s.Now != nil {
+		at = s.Now()
+	}
 	_, err := ledger.Append(ctx, tx, ledger.Event{
-		Type: typ, OrganizationID: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, RunID: r.ID,
+		Type: typ, OrganizationID: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, RunID: r.ID, OccurredAt: at,
 		ActorType: actor, ActorID: r.ID, Source: ledger.SourceRunner, CorrelationID: r.TaskID, Payload: payload,
 	})
 	return err
