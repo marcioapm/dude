@@ -474,6 +474,21 @@ func (s *Server) Runs() []*Run {
 	return out
 }
 
+// Records is what lux recorded of a Run, in order: each {type, data}.
+func (s *Server) Records(id string) []map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	run := s.runs[id]
+	if run == nil {
+		return nil
+	}
+	out := make([]map[string]any, len(run.records))
+	for i, rec := range run.records {
+		out[i] = rec.Event
+	}
+	return out
+}
+
 // CallsOf is what was asked of a Run, in order: "exec", "stop", "cancel".
 func (s *Server) CallsOf(id string) []string {
 	s.mu.Lock()
@@ -639,9 +654,27 @@ func (s *Server) Handler() http.Handler {
 	})
 }
 
+// MaxBody is luxd's limit on a request body: an input or a submit larger
+// is refused before it is read as JSON.
+const MaxBody = 8 << 20
+
+// readBody reads a request body as luxd does, answering 400 for one over
+// MaxBody. On an error the answer is written.
+func readBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxBody))
+	if err != nil {
+		writeErr(w, 400, "bad_request", "request body too large or unreadable: "+err.Error())
+	}
+	return body, err
+}
+
 func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
+	body, err := readBody(w, r)
+	if err != nil {
+		return
+	}
 	var raw json.RawMessage
-	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+	if err := json.Unmarshal(body, &raw); err != nil {
 		writeErr(w, 400, "bad_request", err.Error())
 		return
 	}
@@ -1130,7 +1163,10 @@ func (s *Server) input(w http.ResponseWriter, r *http.Request) {
 		Interrupt   bool            `json:"interrupt"`
 		Attachments json.RawMessage `json:"attachments"`
 	}
-	body, _ := io.ReadAll(r.Body)
+	body, err := readBody(w, r)
+	if err != nil {
+		return
+	}
 	_ = json.Unmarshal(body, &in)
 	s.mu.Lock()
 	if run.InputBodies == nil {

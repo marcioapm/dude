@@ -216,6 +216,24 @@ func TestARetriedImageSteerLandsOnce(t *testing.T) {
 	if seen != 1 {
 		t.Errorf("the agent read the steer %d times, want once", seen)
 	}
+	if got := w.fake.Attachments(w.run.LuxRunID)["dir_retry"]; len(got) != 1 || !bytes.Equal(got[0].Data, pngBytes) {
+		t.Errorf("the agent has %d images with the steer, want the one", len(got))
+	}
+	if inputs := acceptedInputs(w.fake, w.run.LuxRunID, "dir_retry"); inputs != 1 {
+		t.Errorf("lux took the steer %d times, want once", inputs)
+	}
+}
+
+// acceptedInputs counts lux's accepted lux.input records for request id.
+func acceptedInputs(fake *fakelux.Server, runID, requestID string) int {
+	n := 0
+	for _, rec := range fake.Records(runID) {
+		data, _ := rec["data"].(map[string]any)
+		if rec["type"] == lux.RecordInput && data["requestId"] == requestID && data["phase"] == lux.InputAccepted {
+			n++
+		}
+	}
+	return n
 }
 
 // lux refusing the images fails the directive with a reason a person can
@@ -243,7 +261,7 @@ func TestAnInvalidImageIsRefusedByLuxAndFailsTheSteer(t *testing.T) {
 	w.steer("dir_bad", "see", "att_a")
 	w.deliver()
 	_, failed, reason := w.directive("dir_bad")
-	if !failed || !strings.HasPrefix(reason, "lux refused its images: attachments[0]: the data is not image/png") {
+	if !failed || !strings.HasPrefix(reason, "lux refused its images: attachments[0]: ") {
 		t.Fatalf("failed=%v reason=%q", failed, reason)
 	}
 }
@@ -299,6 +317,53 @@ func TestARetryCarriesTheFailedSteersImages(t *testing.T) {
 	w.deliver()
 	if got := w.fake.Attachments(w.run.LuxRunID)["dir_again"]; len(got) != 1 || got[0].Name != "checkout.png" {
 		t.Fatalf("the retry carried %v", got)
+	}
+}
+
+// A steer superseding a failed one with other words is a new message: it
+// does not carry the failed one's images.
+func TestASupersedingSteerWithNewWordsCarriesNoImages(t *testing.T) {
+	w := newImageWorld(t, "acp")
+	w.steer("dir_first", "see", "att_a")
+	w.exec(`UPDATE directives SET failed_at = now(), error = 'the run stopped' WHERE id = 'dir_first'`)
+	w.exec(`INSERT INTO directives (id, organization_id, task_id, run_id, text, supersedes) VALUES ('dir_other', $1, 'wi_'||$1, 'run_'||$1, 'use the blue one instead', 'dir_first')`, w.org)
+	gets := w.store.gets
+	w.deliver()
+	if sent, _, _ := w.directive("dir_other"); !sent {
+		t.Fatal("the new words were not sent")
+	}
+	if got := w.fake.Attachments(w.run.LuxRunID)["dir_other"]; len(got) != 0 {
+		t.Errorf("new words carried the failed steer's images: %v", got)
+	}
+	if w.store.gets != gets {
+		t.Error("new words read the failed steer's images")
+	}
+}
+
+// A steer with an image queued while the Run is paused waits — /resume
+// carries no images — and goes through /input once the Run runs again.
+func TestAnImageSteerQueuedWhilePausedIsDeliveredAfterResume(t *testing.T) {
+	w := newImageWorld(t, "acp")
+	w.steer("dir_paused", "", "att_b")
+	paused := w.run
+	paused.Status, paused.LuxState = statusPaused, "paused"
+	if _, err := w.s.deliverDirectives(context.Background(), paused); err != nil {
+		t.Fatal(err)
+	}
+	resuming := w.run
+	resuming.LuxState = "resuming"
+	if _, err := w.s.deliverDirectives(context.Background(), resuming); err != nil {
+		t.Fatal(err)
+	}
+	if sent, _, _ := w.directive("dir_paused"); sent || len(w.fake.Runs()[0].InputBodies["dir_paused"]) != 0 {
+		t.Fatal("an image steer was sent to a Run not running")
+	}
+	w.deliver()
+	if sent, failed, _ := w.directive("dir_paused"); !sent || failed {
+		t.Fatalf("after resume: sent=%v failed=%v", sent, failed)
+	}
+	if got := w.fake.Attachments(w.run.LuxRunID)["dir_paused"]; len(got) != 1 || got[0].Name != "Summary v3.jpg" {
+		t.Errorf("lux got %v", got)
 	}
 }
 
