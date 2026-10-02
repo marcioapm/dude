@@ -299,3 +299,67 @@ func TestStartingOverClosesTheLastAttemptsOpenPullRequest(t *testing.T) {
 	}
 	w.until("attempt 2's pull request", func() bool { return len(w.gh.Pulls()) == 2 })
 }
+
+// A kept Run taken back up and failing again tells its workflow again: the
+// delivery stops for a person, not waiting on it for ever.
+func TestAResumeThatFailsStopsTheDeliveryAgain(t *testing.T) {
+	w := newWorld(t)
+	wi, runID := w.aborted()
+	// lux lost it meanwhile: the resume is refused.
+	w.lux.Forget()
+	if status, body := w.call("/internal/tasks/"+wi+"/recover", map[string]any{"action": "resume"}); status != 200 {
+		t.Fatalf("resume: %d %v", status, body)
+	}
+	w.until("the delivery to stop for a person", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed'`, runID) == 1 && w.taskStatus(wi) == "awaiting_input"
+	})
+}
+
+// A Run that died with a push asked for is asked for its push again when
+// its resumed turn ends, not left waiting on the first.
+func TestAResumedRunPushesAgain(t *testing.T) {
+	w := newWorld(t)
+	wi, runID := w.aborted()
+	mustExec(t, w.owner, `UPDATE runs SET push_request_id = 'push-stale', push_result = '{"results":[]}'::jsonb WHERE id = $1`, runID)
+	if status, body := w.call("/internal/tasks/"+wi+"/recover", map[string]any{"action": "resume"}); status != 200 {
+		t.Fatalf("resume: %d %v", status, body)
+	}
+	w.until("the resumed run to push and finish", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed' AND heads <> '{}'::jsonb`, runID) == 1
+	})
+}
+
+// After a start over, a comment on attempt 1's pull request does not wake
+// attempt 2's delivery.
+func TestAnEarlierAttemptsPullRequestDoesNotWakeTheNext(t *testing.T) {
+	w := newWorld(t)
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		if labels["dude.phase"] == "implement" {
+			return fakelux.Behaviour{Commit: map[string]string{"A.md": "a\n"}, Message: "work"}
+		}
+		return fakelux.Behaviour{Reply: "Looks good."}
+	}
+	wi := w.task()
+	w.deliver(wi)
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	var impl string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi).Scan(&impl)
+	// Stopped by a person, as an abort would leave it, then started over.
+	mustExec(t, w.owner, `UPDATE tasks SET status = 'aborted' WHERE id = $1`, wi)
+	mustExec(t, w.owner, `UPDATE workflow_runs SET status = 'completed' WHERE task_id = $1`, wi)
+	if status, body := w.call("/internal/tasks/"+wi+"/recover", map[string]any{"action": "restart"}); status != 200 {
+		t.Fatalf("restart: %d %v", status, body)
+	}
+	w.until("attempt 2's pull request", func() bool { return len(w.gh.Pulls()) == 2 })
+	// Reopened on GitHub and commented on.
+	w.gh.Reopen(1)
+	w.gh.Comment(1, "octo", "@dude please rename it")
+	for range 5 {
+		_, _ = w.prs.Reconcile(context.Background(), 0)
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix'`, wi); n != 0 {
+		t.Errorf("attempt 1's pull request woke %d fixers", n)
+	}
+}

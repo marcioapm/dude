@@ -33,9 +33,16 @@ export interface Stop {
   failed: boolean;
 }
 
-/** How the task stopped: its last aborted or failed Run, and who stopped it and why. */
+/**
+ * How the task stopped: the current attempt's last aborted or failed Run
+ * since it was last picked up, and who stopped it and why. None, when it
+ * stopped on no Run (a pull request closed, a person stopping a review
+ * that got stuck): the notice then says only that it stopped.
+ */
 export function stopOf(task: TaskDetail, events: readonly PersistedEvent[], people: People): Stop {
-  const ended = task.runs.filter((r) => r.status === "aborted" || r.status === "failed")
+  const attempt = Math.max(1, ...task.runs.map((r) => r.attempt));
+  const since = events.findLast((e) => e.eventType === "task.recovered")?.occurredAt ?? "";
+  const ended = task.runs.filter((r) => r.attempt === attempt && (r.status === "aborted" || r.status === "failed") && (r.endedAt ?? "") > since)
     .sort((a, b) => (b.endedAt ?? b.createdAt).localeCompare(a.endedAt ?? a.createdAt));
   const run = ended[0] ?? null;
   const aborted = run ? events.findLast((e) => e.eventType === "run.aborted" && e.runId === run.id) : undefined;
@@ -49,7 +56,8 @@ export function stopOf(task: TaskDetail, events: readonly PersistedEvent[], peop
 
 /** The first line: who stopped what, and why. */
 function stopSentence(stop: Stop): ReactNode {
-  const what = stop.run ? runLabel(stop.run).toLowerCase() : "work";
+  if (!stop.run) return <><strong>Delivery stopped</strong>{stop.at ? null : "."}</>;
+  const what = runLabel(stop.run).toLowerCase();
   const ago = stop.at ? <> <Duration ms={Math.max(0, Date.now() - Date.parse(stop.at))} format="age" tone="muted" /> ago</> : null;
   if (stop.failed) return <><strong>The {what} failed</strong>{ago}{stop.why ? `: ${stop.why}` : "."}</>;
   return <><strong>{stop.by ?? "Someone"} aborted the {what}</strong>{ago}{stop.why ? <>: “{stop.why}”</> : "."}</>;

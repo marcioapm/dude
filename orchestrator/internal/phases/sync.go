@@ -20,6 +20,7 @@
 package phases
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -69,7 +70,7 @@ type Syncer struct {
 	// Zero outside tests.
 	RetryAhead time.Duration
 	// How long an aborted or failed Run's lux Run is kept for a resume
-	// (DUDE_KEEP_STOPPED); zero takes KeepFor.
+	// (DUDE_KEEP_STOPPED, never zero there); zero takes KeepFor, for tests.
 	KeepFor time.Duration
 
 	// One follower per live lux Run. The follower is the only writer of a
@@ -765,7 +766,7 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 			if forge.Transient(err) {
 				return true, s.retryLater(ctx, r, err)
 			}
-			return true, s.failKept(ctx, r, err.Error())
+			return true, s.fail(ctx, r, err.Error())
 		}
 	}
 	if r.Phase == delivery.PhaseReview || r.Phase == delivery.PhaseTest {
@@ -978,13 +979,12 @@ func (s *Syncer) keep(ctx context.Context, r phaseRun) error {
 	if err := s.ask(ctx, r, s.Lux.Stop); err != nil {
 		return err
 	}
-	keepFor := s.KeepFor
-	if keepFor <= 0 {
-		keepFor = KeepFor
-	}
+	keepFor := cmp.Or(s.KeepFor, KeepFor)
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		// Only one still stopped: a person may have taken it back up meanwhile.
 		_, err := tx.Exec(ctx, `UPDATE runs SET lux_stop_reason = 'kept', control = 'none',
-			kept_until = COALESCE(kept_until, now() + make_interval(secs => $2)) WHERE id = $1`, r.ID, keepFor.Seconds())
+			kept_until = COALESCE(kept_until, now() + make_interval(secs => $2))
+			WHERE id = $1 AND status IN ('aborted', 'failed') AND keep`, r.ID, keepFor.Seconds())
 		return err
 	})
 }
@@ -998,7 +998,8 @@ func (s *Syncer) cancel(ctx context.Context, r phaseRun) error {
 		}
 	}
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE runs SET lux_stop_reason = 'cancel', control = 'none', kept_until = NULL WHERE id = $1`, r.ID)
+		_, err := tx.Exec(ctx, `UPDATE runs SET lux_stop_reason = 'cancel', control = 'none', kept_until = NULL
+			WHERE id = $1 AND status IN ('aborted', 'failed')`, r.ID)
 		return err
 	})
 }
@@ -1625,7 +1626,7 @@ func NotifyFinished(ctx context.Context, database *db.DB, signal func(ctx contex
 	var runs []finished
 	if err := database.InSystem(ctx, "phase-notifier", func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.status::text, w.id,
-				'phase-finished:' || r.id || CASE WHEN r.tool_starts > 0 THEN ':' || r.tool_starts ELSE '' END
+				'phase-finished:' || r.id || CASE WHEN r.finishes > 0 THEN ':' || r.finishes ELSE '' END
 			FROM runs r
 			JOIN workflow_runs w ON w.task_id = r.task_id AND w.organization_id = r.organization_id
 			WHERE r.phase IS NOT NULL AND r.status IN ('completed', 'failed', 'aborted')

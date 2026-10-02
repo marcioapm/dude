@@ -223,6 +223,11 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 				return err
 			}
 		}
+		if body.Action != "resume" {
+			if err := release(r.Context(), tx, taskID); err != nil {
+				return err
+			}
+		}
 		switch body.Action {
 		case "restart":
 			attempt = t.Attempt + 1
@@ -293,10 +298,14 @@ func pickUp(ctx context.Context, tx pgx.Tx, org string, t stoppedTask, action, n
 // it resumes any (phases.Syncer.whilePaused), the agent's conversation and
 // workspace as they stopped; the note, if any, is their next message.
 func resumeKept(ctx context.Context, tx pgx.Tx, org, projectID, taskID string, runIDs []string, note string) error {
+	// Its push, if it had asked for one, is asked for again when its turn
+	// ends: what it pushed then is not what it will have done by then.
 	tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'paused', control = 'resume', control_requested_at = now(),
 			control_reason = 'picked back up', lux_stop_reason = 'pause', keep = false, kept_until = NULL,
-			ended_at = NULL, error = NULL, phase_notified_at = NULL, dude_pause = NULL
-		WHERE id = ANY($1) AND status IN ('aborted', 'failed') AND keep AND lux_stop_reason IS DISTINCT FROM 'cancel'`, runIDs)
+			ended_at = NULL, error = NULL, phase_notified_at = NULL, dude_pause = NULL, finishes = finishes + 1,
+			push_request_id = NULL, push_result = NULL, turn_done_at = NULL
+		WHERE id = ANY($1) AND status IN ('aborted', 'failed') AND keep AND lux_run_id IS NOT NULL
+		  AND lux_stop_reason IS DISTINCT FROM 'cancel' AND (kept_until IS NULL OR kept_until > now())`, runIDs)
 	if err != nil {
 		return err
 	}
@@ -312,6 +321,15 @@ func resumeKept(ctx context.Context, tx pgx.Tx, org, projectID, taskID string, r
 		}
 	}
 	return nil
+}
+
+// release lets kept Runs go — a retry or a start over took their work up
+// afresh, and nothing will resume them — so the syncer cancels them now
+// rather than when their time is up.
+func release(ctx context.Context, tx pgx.Tx, taskID string) error {
+	_, err := tx.Exec(ctx, `UPDATE runs SET kept_until = now()
+		WHERE task_id = $1 AND status IN ('aborted', 'failed') AND keep AND lux_stop_reason IS DISTINCT FROM 'cancel'`, taskID)
+	return err
 }
 
 // startOver starts the task's next attempt: a delivery of its own, on a

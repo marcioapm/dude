@@ -11,7 +11,10 @@
 -- any paused Run does.
 ALTER TABLE runs
   ADD COLUMN keep boolean NOT NULL DEFAULT false,
-  ADD COLUMN kept_until timestamptz;
+  ADD COLUMN kept_until timestamptz,
+  -- Times it was taken back up after it ended: each new end is a new
+  -- phase.finished signal for its workflow, not a repeat of the last.
+  ADD COLUMN finishes integer NOT NULL DEFAULT 0;
 
 COMMENT ON COLUMN runs.keep IS
   'Aborted or failed, and worth resuming: its lux Run is stopped and kept rather than cancelled.';

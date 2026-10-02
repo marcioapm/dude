@@ -306,9 +306,11 @@ async function updateTask(ctx: RequestContext): Promise<Response> {
       input.acceptanceCriteria !== undefined || input.repositories !== undefined;
     // Started means a delivery exists, whatever the status says yet: the
     // orchestrator moves the status on its own schedule. A stopped one may
-    // change, before it is started over.
+    // say something else before it is picked back up — what it asks for,
+    // not where: a delivery picked up again works where it was.
     const delivering = await scope.sql`SELECT 1 FROM workflow_runs WHERE task_id = ${id} LIMIT 1`;
-    if (changesTheTask && delivering.length > 0 && status !== "aborted" && status !== "failed") return { started: status };
+    const stopped = status === "aborted" || status === "failed";
+    if (changesTheTask && delivering.length > 0 && (!stopped || input.repositories !== undefined)) return { started: status };
     if (input.epicId) {
       const epic = await scope.sql`SELECT 1 FROM epics WHERE id = ${input.epicId} AND project_id = ${projectId}`;
       if (epic.length === 0) return { noEpic: input.epicId };

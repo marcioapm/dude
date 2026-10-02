@@ -789,6 +789,12 @@ func (s *Server) decideEscalation(w http.ResponseWriter, r *http.Request, org st
 			if err := resumeKept(r.Context(), tx, org, projectID, taskID, []string{e.RunID()}, strings.TrimSpace(body.Note)); err != nil {
 				return err
 			}
+		} else if body.Action != "stop" {
+			// Gone on past it: nothing will resume the Run that failed. (Stop
+			// keeps it: the task can still be picked back up.)
+			if err := release(r.Context(), tx, taskID); err != nil {
+				return err
+			}
 		}
 		// Taken now, in the workflow's own state: a second decision is
 		// refused from here on, before the workflow has acted on this one.

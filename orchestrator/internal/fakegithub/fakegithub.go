@@ -104,6 +104,13 @@ func (s *Server) Set(f func(s *Server)) {
 	f(s)
 }
 
+// Reopen reopens a pull request closed without merging, as a person would.
+func (s *Server) Reopen(number int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pulls[number].State = "open"
+}
+
 // AdvanceBase commits to a pull request's base, as someone merging other
 // work does: the pull request falls behind.
 func (s *Server) AdvanceBase(base, message string) string {

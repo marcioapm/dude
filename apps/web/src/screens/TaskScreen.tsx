@@ -349,7 +349,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
       ) : null}
 
       {editing ? (
-        <TaskDialog client={client} projectId={item.projectId} onClose={() => setEditing(false)} existing={existingTask(item, started && !stopped)} onSaved={() => void load()} />
+        <TaskDialog client={client} projectId={item.projectId} onClose={() => setEditing(false)} existing={existingTask(item, started && !stopped, started && stopped)} onSaved={() => void load()} />
       ) : null}
       {pickingUp && stop && recovery ? (
         <PickUpDialog client={client} task={item} stop={stop} options={recovery} initial={pickingUp}
@@ -362,7 +362,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
             setPickingUp(null);
             void load();
             // A resume goes on in the session that stopped; the rest start new ones.
-            if (action !== "restart" && stop.run) onOpenRun(stop.run.id);
+            if (action === "resume" && stop.run) onOpenRun(stop.run.id);
           }} />
       ) : null}
 
