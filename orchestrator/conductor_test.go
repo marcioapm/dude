@@ -889,29 +889,34 @@ func (w *world) luxSpecOf(phase string) string {
 // the conductor leaves the task waiting; settling that blocker, the last,
 // puts it back to the status before the conductor's wait.
 func TestAConductorsWaitEndsWhenItsLastBlockerSettles(t *testing.T) {
+	anotherAgentsQuestion := func(w *world, task, implementer string) func() {
+		var qid string
+		if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
+			var err error
+			qid, err = delivery.AskTx(context.Background(), tx,
+				delivery.RunRef{Org: w.org, ProjectID: w.project, TaskID: task, RunID: implementer}, "Which file?", nil)
+			return err
+		}); err != nil {
+			w.t.Fatal(err)
+		}
+		return func() {
+			if status, body := w.call("/internal/questions/"+qid+"/answer", map[string]any{"text": "a.md"}); status != 200 {
+				w.t.Fatalf("answer the implementer: %d %v", status, body)
+			}
+		}
+	}
 	for _, c := range []struct {
 		name string
+		// from is the status the task is moved to before the conductor's
+		// question; "" leaves it running.
+		from string
 		// block makes the task wait on a person for something else, and
 		// returns how a person settles it.
 		block func(w *world, task, implementer string) (settle func())
 	}{
-		{"another agent's question", func(w *world, task, implementer string) func() {
-			var qid string
-			if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
-				var err error
-				qid, err = delivery.AskTx(context.Background(), tx,
-					delivery.RunRef{Org: w.org, ProjectID: w.project, TaskID: task, RunID: implementer}, "Which file?", nil)
-				return err
-			}); err != nil {
-				w.t.Fatal(err)
-			}
-			return func() {
-				if status, body := w.call("/internal/questions/"+qid+"/answer", map[string]any{"text": "a.md"}); status != 200 {
-					w.t.Fatalf("answer the implementer: %d %v", status, body)
-				}
-			}
-		}},
-		{"a blocking repository request", func(w *world, task, implementer string) func() {
+		{"another agent's question", "", anotherAgentsQuestion},
+		{"another agent's question, from review", "review", anotherAgentsQuestion},
+		{"a blocking repository request", "", func(w *world, task, implementer string) func() {
 			mustExec(w.t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
 				VALUES ($1, $2, $3, 'web', 'git://127.0.0.1/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
 			status, body := w.callTool(w.syncer.Agent.ToolsURL, w.luxSpecOf("implement"), "request_repository",
@@ -927,7 +932,7 @@ func TestAConductorsWaitEndsWhenItsLastBlockerSettles(t *testing.T) {
 				}
 			}
 		}},
-		{"an escalation", func(w *world, task, implementer string) func() {
+		{"an escalation", "", func(w *world, task, implementer string) func() {
 			mustExec(w.t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{escalation}',
 				'{"reason":"stuck","step":"fix"}') WHERE task_id = $1`, task)
 			return func() {
@@ -936,7 +941,7 @@ func TestAConductorsWaitEndsWhenItsLastBlockerSettles(t *testing.T) {
 				}
 			}
 		}},
-		{"an idle-parked phase agent", func(w *world, task, implementer string) func() {
+		{"an idle-parked phase agent", "", func(w *world, task, implementer string) func() {
 			w.syncer.IdleAfter = 300 * time.Millisecond
 			w.until("the implementer to be parked as idle", func() bool {
 				return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause = 'idle'`, implementer) == 1
@@ -971,7 +976,18 @@ func TestAConductorsWaitEndsWhenItsLastBlockerSettles(t *testing.T) {
 					AND status = 'running' AND lux_state = 'running'`, task).Scan(&implementer)
 				return implementer != ""
 			})
+			if c.from != "" {
+				if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
+					_, err := delivery.SetTaskStatusTx(context.Background(), tx, w.org, w.project, task, "running", c.from, "the work is in "+c.from)
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
 			was := w.taskStatus(task)
+			if c.from != "" && was != c.from {
+				t.Fatalf("the task is %s, want %s", was, c.from)
+			}
 			w.chat(task, "can you change it?")
 			w.until("the conductor's question", func() bool {
 				return w.conductorQuestion(task) != "" && w.taskStatus(task) == "awaiting_input"

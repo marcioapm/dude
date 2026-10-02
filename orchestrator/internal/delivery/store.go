@@ -526,15 +526,8 @@ func EndConductorWait(ctx context.Context, tx pgx.Tx, org, projectID, taskID str
 		return err
 	}
 	var before string
-	// The question's event follows its status change in the same
-	// transaction, so only the task's events after that change are read.
-	err := tx.QueryRow(ctx, `SELECT e.payload->>'taskStatus' FROM tasks t
-		CROSS JOIN LATERAL (SELECT max(s.cursor) AS c FROM events s WHERE s.task_id = t.id AND s.event_type = $2) m
-		JOIN events e ON e.task_id = t.id AND e.cursor > m.c AND e.event_type = $3
-			AND (e.payload->>'waitCursor')::bigint = m.c AND e.payload->>'taskStatus' IS NOT NULL
-		JOIN runs r ON r.id = e.run_id AND r.role = 'conductor'
-		WHERE t.id = $1 AND t.status = 'awaiting_input' AND NOT `+waitBlocked+`
-		ORDER BY e.cursor LIMIT 1`, taskID, EvTaskStatusChanged, EvQuestionAsked).Scan(&before)
+	err := tx.QueryRow(ctx, conductorWait+` AND NOT `+waitBlocked+` ORDER BY e.cursor LIMIT 1`,
+		taskID, EvTaskStatusChanged, EvQuestionAsked).Scan(&before)
 	if db.IsNotFound(err) {
 		return nil
 	}
@@ -544,6 +537,31 @@ func EndConductorWait(ctx context.Context, tx pgx.Tx, org, projectID, taskID str
 	_, err = SetTaskStatusTx(ctx, tx, org, projectID, taskID, "awaiting_input", before, "nothing waits on a person any more")
 	return err
 }
+
+// ConductorOwnsWait says whether the task's current wait was raised by a
+// conductor's question (EndConductorWait's candidate), blocked or not: such
+// a wait is ended only by EndConductorWait, which restores its saved status.
+func ConductorOwnsWait(ctx context.Context, tx pgx.Tx, taskID string) (bool, error) {
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM tasks WHERE id = $1 FOR UPDATE`, taskID); err != nil {
+		return false, err
+	}
+	var owned bool
+	err := tx.QueryRow(ctx, `SELECT EXISTS (`+conductorWait+`)`,
+		taskID, EvTaskStatusChanged, EvQuestionAsked).Scan(&owned)
+	return owned, err
+}
+
+// conductorWait (SQL; $1 task, $2 status-change and $3 question-asked event
+// types) selects the saved status of each conductor question.asked whose
+// waitCursor is still the task's latest status change. The question's event
+// follows its status change in the same transaction, so only the task's
+// events after that change are read.
+const conductorWait = `SELECT e.payload->>'taskStatus' FROM tasks t
+	CROSS JOIN LATERAL (SELECT max(s.cursor) AS c FROM events s WHERE s.task_id = t.id AND s.event_type = $2) m
+	JOIN events e ON e.task_id = t.id AND e.cursor > m.c AND e.event_type = $3
+		AND (e.payload->>'waitCursor')::bigint = m.c AND e.payload->>'taskStatus' IS NOT NULL
+	JOIN runs r ON r.id = e.run_id AND r.role = 'conductor'
+	WHERE t.id = $1 AND t.status = 'awaiting_input'`
 
 // waitBlocked (SQL, over tasks t): something on the task still waits on a
 // person — an open question, a pending blocking repository request, an
