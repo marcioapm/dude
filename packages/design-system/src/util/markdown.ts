@@ -495,7 +495,8 @@ function parseInlineRange(ctx: InlineCtx, from: number, to: number, closer: stri
       const link = parseLink(ctx, i + 1, to, depth, links);
       if (link) {
         flush();
-        const s = safeUrl(link.href);
+        // attachment: names one of the caller's own images; Markdown draws it only through a resolver.
+        const s = /^attachment:[\w-]+$/.test(link.href.trim()) ? link.href.trim() : safeUrl(link.href);
         const alt = plain(link.nodes);
         if (s) nodes.push({ t: "image", src: s, alt });
         else nodes.push({ t: "text", v: alt });

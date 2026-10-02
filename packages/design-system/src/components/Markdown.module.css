@@ -169,6 +169,45 @@
   text-decoration: none;
 }
 
+/* A person's own image, in place: natural size, never wider than the column. */
+.imageButton {
+  display: inline-block;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  vertical-align: top;
+  border-radius: var(--ds-radius-mark);
+}
+button.imageButton {
+  cursor: zoom-in;
+}
+.imageButton:focus-visible {
+  outline: 2px solid var(--ds-color-accent);
+  outline-offset: 2px;
+}
+.image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--ds-radius-mark);
+  box-shadow: inset 0 0 0 1px var(--ds-color-border-subtle);
+}
+.imageLoading {
+  display: block;
+  width: 160px;
+  height: 96px;
+  border-radius: var(--ds-radius-mark);
+  background: var(--ds-color-border-subtle);
+}
+.imageMissing {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+
 /* Lists */
 /* Hanging indent: markers sit in the 1.5em gutter, wrapped lines align with the text. */
 .list {

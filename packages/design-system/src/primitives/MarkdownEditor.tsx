@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { cx } from "../util/cx.ts";
 import { continueList, countState, editorKey, FORMAT_KEYS, formatEdit, type MarkdownFormat, type TextEdit } from "../util/markdownEdit.ts";
 import { Icon, type IconName } from "../icons/index.tsx";
@@ -57,6 +57,30 @@ export interface MarkdownEditorProps {
   readonly className?: string | undefined;
   /** On the textarea, as `Textarea` passes it. */
   readonly "data-testid"?: string | undefined;
+  /** Preview draws `![alt](attachment:id)` with this (`Markdown`'s `attachmentImage`). */
+  readonly attachmentImage?: ((id: string, alt: string) => ReactNode) | undefined;
+  /** The field took focus (a dialog remembers which field an Attach button inserts into). */
+  readonly onFocus?: (() => void) | undefined;
+  /** Edits in place, undoable, for text the caller inserts (`MarkdownEditorHandle`). */
+  readonly editorRef?: Ref<MarkdownEditorHandle> | undefined;
+}
+
+/** What the caller may do to the field's text, as a person typing would. */
+export interface MarkdownEditorHandle {
+  /** The whole field, label to footer: to tell whether a drop landed on it. */
+  root(): HTMLElement | null;
+  /** The source as it is now, edits not yet rendered included. */
+  text(): string;
+  /** Where the caret is, or was when the field last had focus. */
+  caret(): number;
+  /** Puts `text` in place of `at`..`upTo` (the selection when `at` is omitted), the caret after it; undoable. */
+  insert(text: string, at?: number, upTo?: number): void;
+  /**
+   * Replaces the first `find` with `replace`, leaving focus and the caret
+   * where they are (an upload finishing while the person types). False
+   * when `find` is not there any more.
+   */
+  replace(find: string, replace: string): boolean;
 }
 
 const FORMATS: ReadonlyArray<{ format: MarkdownFormat; icon: IconName; label: string; optional?: true } | "gap"> = [
@@ -95,6 +119,17 @@ function applyEdit(el: HTMLTextAreaElement, edit: TextEdit) {
 }
 
 /**
+ * Sets the whole source as an input would, outside the undo stack: through
+ * the prototype's setter, which React's change tracking does not watch, so
+ * the `input` event reaches `onChange`.
+ */
+function setSource(el: HTMLTextAreaElement, next: string, selectionStart: number, selectionEnd: number) {
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(el, next);
+  el.dispatchEvent(new Event("input", { bubbles: true }));
+  el.setSelectionRange(selectionStart, selectionEnd);
+}
+
+/**
  * A field for writing one Markdown document: `Textarea`'s anatomy (label,
  * hint, error, `aria-describedby`) around a frame with a Write / Preview
  * switch and quiet formatting on the chrome shade, the source in mono, and
@@ -126,6 +161,9 @@ export function MarkdownEditor({
   autoFocus,
   className,
   "data-testid": testId,
+  attachmentImage,
+  onFocus,
+  editorRef,
 }: MarkdownEditorProps) {
   const autoId = useId();
   const fieldId = id ?? autoId;
@@ -138,8 +176,41 @@ export function MarkdownEditor({
   const mode: MarkdownEditorMode = fixed ? "preview" : chosen;
   const [previewMin, setPreviewMin] = useState<number | undefined>(undefined);
   const area = useRef<HTMLTextAreaElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
   const previewTab = useRef<HTMLDivElement>(null);
   const focusAfter = useRef<MarkdownEditorMode | null>(null);
+
+  useImperativeHandle(editorRef, () => ({
+    root: () => rootRef.current,
+    text: () => area.current?.value ?? value,
+    caret: () => area.current?.selectionStart ?? value.length,
+    insert: (text, at, upTo) => {
+      const el = area.current;
+      if (!el) return;
+      const from = Math.min(at ?? el.selectionStart, el.value.length);
+      const to = at === undefined ? el.selectionEnd : Math.max(from, Math.min(upTo ?? from, el.value.length));
+      el.focus();
+      el.setSelectionRange(from, to);
+      let done = false;
+      try {
+        // Focused and shown: through the browser, so Undo takes it back.
+        done = document.activeElement === el && document.execCommand("insertText", false, text) && el.value.slice(from, from + text.length) === text;
+      } catch {
+        done = false;
+      }
+      if (!done) setSource(el, el.value.slice(0, from) + text + el.value.slice(to), from + text.length, from + text.length);
+    },
+    replace: (find, replace) => {
+      const el = area.current;
+      if (!el) return false;
+      const at = el.value.indexOf(find);
+      if (at < 0) return false;
+      // The person's selection stays where it was, moved with the text before it.
+      const shift = (p: number) => (p <= at ? p : p >= at + find.length ? p + replace.length - find.length : at + replace.length);
+      setSource(el, el.value.slice(0, at) + replace + el.value.slice(at + find.length), shift(el.selectionStart), shift(el.selectionEnd));
+      return true;
+    },
+  }), [value]);
 
   const switchTo = (next: MarkdownEditorMode) => {
     if (next === mode) return;
@@ -258,7 +329,7 @@ export function MarkdownEditor({
   const frameStyle = { "--mde-rows": String(Math.max(1, minRows)) } as CSSProperties;
 
   return (
-    <div className={cx(inputStyles["field"], fill && styles["fill"], className)}>
+    <div ref={rootRef} className={cx(inputStyles["field"], fill && styles["fill"], className)}>
       {label || hint ? (
         <div className={styles["head"]}>
           {label ? (
@@ -351,6 +422,7 @@ export function MarkdownEditor({
             aria-describedby={described}
             onChange={(e) => onChange(e.target.value)}
             onKeyDown={onAreaKey}
+            onFocus={onFocus}
             data-testid={testId}
           />
         </div>
@@ -366,7 +438,7 @@ export function MarkdownEditor({
           data-testid={testId ? `${testId}-preview` : undefined}
         >
           {mode !== "preview" ? null : value.trim() ? (
-            <Markdown source={value} variant={variant} breaks={breaks} unmeasured />
+            <Markdown source={value} variant={variant} breaks={breaks} unmeasured attachmentImage={attachmentImage} />
           ) : (
             <p className={styles["empty"]}>Nothing to preview yet.</p>
           )}
