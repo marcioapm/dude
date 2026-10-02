@@ -82,6 +82,16 @@ describe("tenancy", () => {
     expect(seen).toEqual({ images: ["img_org_a"], versions: ["imv_org_a"], builds: ["imb_org_a"] });
   });
 
+  test("an organization reads only its own build logs", async () => {
+    await owner`INSERT INTO image_build_log (organization_id, build_id, start_offset, chunk)
+      VALUES ('org_a', 'imb_org_a', 0, 'a'), ('org_b', 'imb_org_b', 0, 'b')`;
+    expect(await inOrg("org_a", async (tx) => (await tx`SELECT chunk FROM image_build_log`).map((r: { chunk: string }) => r.chunk))).toEqual(["a"]);
+    // A chunk cannot claim another organization's build.
+    expect(await failure(owner`INSERT INTO image_build_log (organization_id, build_id, start_offset, chunk) VALUES ('org_b', 'imb_org_a', 1, 'x')`))
+      .toMatch(/foreign key/);
+    await owner`DELETE FROM image_build_log`;
+  });
+
   test("a project cannot name another organization's image, nor an organization its default", async () => {
     expect(await failure(owner`UPDATE projects SET runtime_image_id = 'img_org_b' WHERE id = 'prj_a'`)).toMatch(/foreign key/);
     expect(await failure(owner`UPDATE projects SET preview_image_id = 'img_org_b' WHERE id = 'prj_a'`)).toMatch(/foreign key/);
@@ -155,5 +165,14 @@ describe("the builder's role", () => {
   test("cannot delete what it builds", async () => {
     expect(await failure(builder`DELETE FROM image_versions WHERE id = 'imv_org_a'`)).toMatch(/permission denied/);
     expect(await failure(builder`DELETE FROM image_builds WHERE id = 'imb_org_a'`)).toMatch(/permission denied/);
+  });
+
+  test("appends, reads and trims any organization's build log, and cannot rewrite a chunk", async () => {
+    await builder`INSERT INTO image_build_log (organization_id, build_id, start_offset, chunk)
+      VALUES ('org_a', 'imb_org_a', 0, 'one'), ('org_b', 'imb_org_b', 0, 'two')`;
+    expect((await builder`SELECT chunk FROM image_build_log ORDER BY chunk`).map((r: { chunk: string }) => r.chunk)).toEqual(["one", "two"]);
+    expect(await failure(builder`UPDATE image_build_log SET chunk = 'x'`)).toMatch(/permission denied/);
+    await builder`DELETE FROM image_build_log`;
+    expect((await owner`SELECT count(*)::int AS n FROM image_build_log`)[0].n).toBe(0);
   });
 });

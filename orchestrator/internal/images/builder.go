@@ -138,9 +138,11 @@ func (b *Builder) Recover(ctx context.Context) error {
 		for _, j := range dead {
 			if j.Restarts == 0 {
 				b.Log.Warn("re-queueing a job its builder died under", "build", j.ID)
+				if _, err := tx.Exec(ctx, appendLog, j.ID, "\n— builder restarted; trying again —\n", nil, LogMax); err != nil {
+					return err
+				}
 				if _, err := tx.Exec(ctx, `UPDATE image_builds SET state = 'queued', restarts = restarts + 1, started_at = NULL,
-					heartbeat_at = NULL, stage = NULL, log = right(log || $2, $3), log_total = log_total + octet_length($2)
-					WHERE id = $1`, j.ID, "\n— builder restarted; trying again —\n", LogMax); err != nil {
+					heartbeat_at = NULL, stage = NULL WHERE id = $1`, j.ID); err != nil {
 					return err
 				}
 				if j.Kind == "build" {
@@ -335,8 +337,9 @@ func (b *Builder) do(ctx context.Context, j job) {
 		}
 		return
 	}
-	// The job may have ended already (published): its last output is
-	// written whatever its state.
+	// The job may have ended already (published): appendLog writes output
+	// whatever the job's state, so neither a live flush that ran after the
+	// publish nor this last one drops any.
 	b.flush(record, j, p, false)
 	log, stage := p.full()
 	if _, werr := b.DB.Pool.Exec(record, `UPDATE image_builds SET build_seconds = $2, push_seconds = $3 WHERE id = $1`,
@@ -386,21 +389,35 @@ func nullable(f float64) any {
 	return f
 }
 
+// appendLog adds $2 to job $1's log as one image_build_log chunk at
+// log_total, and deletes the chunks that end before the last $4 bytes
+// (start_offset < bound keeps that delete on the primary key). While the
+// job runs it also sets its heartbeat and, unless $3 is NULL, its stage; a
+// job that has ended (published while the output was in flight) still gets
+// the output, never a stage again.
+const appendLog = `
+	WITH b AS (
+		UPDATE image_builds SET log_total = log_total + octet_length($2),
+			stage = CASE WHEN state = 'running' AND $3::text IS NOT NULL THEN $3 ELSE stage END,
+			heartbeat_at = CASE WHEN state = 'running' THEN now() ELSE heartbeat_at END
+		WHERE id = $1 RETURNING organization_id, log_total),
+	chunk AS (
+		INSERT INTO image_build_log (organization_id, build_id, start_offset, chunk)
+		SELECT organization_id, $1, log_total - octet_length($2), $2 FROM b WHERE $2 <> '')
+	DELETE FROM image_build_log l USING b
+	WHERE l.build_id = $1 AND l.start_offset < b.log_total - $4 AND l.start_offset + octet_length(l.chunk) <= b.log_total - $4`
+
 // flush appends the output written since the last flush to the job's log,
-// keeping its last LogMax characters, with the stage and the heartbeat;
-// with nothing new, only the heartbeat. running: only while the job runs
-// (a live flush); false for the last one, after the job has ended.
-func (b *Builder) flush(ctx context.Context, j job, p *progress, running bool) {
+// with the stage and the heartbeat; with nothing new, only the heartbeat.
+// live: a flush while the job runs; the last one (false) writes only when
+// there is output or a stage left.
+func (b *Builder) flush(ctx context.Context, j job, p *progress, live bool) {
 	text, stage, dirty := p.delta()
 	var err error
 	switch {
-	case dirty && running:
-		_, err = b.DB.Pool.Exec(ctx, `UPDATE image_builds SET log = right(log || $2, $4), log_total = log_total + octet_length($2),
-			stage = $3, heartbeat_at = now() WHERE id = $1 AND state = 'running'`, j.ID, text, stage, LogMax)
 	case dirty:
-		_, err = b.DB.Pool.Exec(ctx, `UPDATE image_builds SET log = right(log || $2, $3), log_total = log_total + octet_length($2)
-			WHERE id = $1`, j.ID, text, LogMax)
-	case running:
+		_, err = b.DB.Pool.Exec(ctx, appendLog, j.ID, text, stage, LogMax)
+	case live:
 		_, err = b.DB.Pool.Exec(ctx, `UPDATE image_builds SET heartbeat_at = now() WHERE id = $1 AND state = 'running'`, j.ID)
 	}
 	if err != nil {

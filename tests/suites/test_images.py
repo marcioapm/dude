@@ -39,16 +39,23 @@ def _digest(seed: str) -> str:
     return "sha256:" + (seed.encode().hex() * 64)[:64]
 
 
+def _log(dsn: str, build_id: str, text: str) -> None:
+    """A job's log as dude-image-builder flushes it: one chunk at log_total."""
+    execute(dsn, """WITH b AS (UPDATE image_builds SET log_total = log_total + octet_length(%s) WHERE id = %s RETURNING organization_id, log_total)
+        INSERT INTO image_build_log (organization_id, build_id, start_offset, chunk)
+        SELECT organization_id, %s, log_total - octet_length(%s), %s FROM b""", (text, build_id, build_id, text, text))
+
+
 def _built(dsn: str, version_id: str, final: bool = True) -> list[dict]:
     """What dude-image-builder does when a version's build passes."""
     user = f"registry.test/dude/custom@{_digest('u' + version_id)}"
     execute(dsn, """UPDATE image_version_parents vp SET parent_version_id = i.published_version_id
         FROM images i WHERE i.id = vp.parent_image_id AND vp.version_id = %s""", (version_id,))
     execute(dsn, "UPDATE image_versions SET user_ref = %s, built_at = now() WHERE id = %s", (user, version_id))
-    execute(dsn, """UPDATE image_builds SET state = 'succeeded', finished_at = now(), started_at = now() - interval '2 minutes',
-        build_seconds = 104, push_seconds = 12, layer_ref = %s,
-        log = 'build · podman, rootless · 1.5 CPUs · 1.5 GB memory · linux/arm64' || chr(10) || 'STEP 1/2: FROM debian:bookworm-slim' || chr(10) || 'STEP 2/2: RUN apt-get install -y git' || chr(10) || 'pushed ' || %s
-        WHERE image_version_id = %s AND kind = 'build' AND state IN ('queued', 'running')""", (TEST_LAYER, user, version_id))
+    for build in query(dsn, """UPDATE image_builds SET state = 'succeeded', finished_at = now(), started_at = now() - interval '2 minutes',
+        build_seconds = 104, push_seconds = 12, layer_ref = %s
+        WHERE image_version_id = %s AND kind = 'build' AND state IN ('queued', 'running') RETURNING id""", (TEST_LAYER, version_id)):
+        _log(dsn, build["id"], "build · podman, rootless · 1.5 CPUs · 1.5 GB memory · linux/arm64\nSTEP 1/2: FROM debian:bookworm-slim\nSTEP 2/2: RUN apt-get install -y git\npushed " + user)
     if final:
         execute(dsn, """INSERT INTO image_finals (organization_id, image_version_id, layer_ref, final_ref)
             SELECT organization_id, id, %s, %s FROM image_versions WHERE id = %s""",
@@ -208,9 +215,9 @@ def _library(client: ApiClient, dsn: str) -> dict:
     failed = client.post(f"/v1/images/{rid}/build").json()
     execute(dsn, "UPDATE image_versions SET state = 'failed', error = 'ran out of memory (1.5 GB) at step 3' WHERE id = %s", (failed["versionId"],))
     execute(dsn, """UPDATE image_builds SET state = 'failed', error = 'ran out of memory (1.5 GB) at step 3', started_at = now() - interval '3 minutes',
-        finished_at = now(), build_seconds = 170,
-        log = 'build of rails-legacy v2 · podman, rootless · 1.5 CPUs · 1.5 GB memory · linux/arm64' || chr(10) || 'STEP 1/3: FROM ruby:3.1-bookworm' || chr(10) || 'STEP 2/3: RUN apt-get update && apt-get install -y nodejs' || chr(10) || 'STEP 3/3: RUN bundle install --jobs 8' || chr(10) || 'Installing nokogiri 1.16.0 with native extensions' || chr(10) || 'error running container: exit status 137' || chr(10) || 'Error: building at STEP \"RUN bundle install --jobs 8\": exit status 137'
+        finished_at = now(), build_seconds = 170
         WHERE id = %s""", (failed["buildId"],))
+    _log(dsn, failed["buildId"], "build of rails-legacy v2 · podman, rootless · 1.5 CPUs · 1.5 GB memory · linux/arm64\nSTEP 1/3: FROM ruby:3.1-bookworm\nSTEP 2/3: RUN apt-get update && apt-get install -y nodejs\nSTEP 3/3: RUN bundle install --jobs 8\nInstalling nokogiri 1.16.0 with native extensions\nerror running container: exit status 137\nError: building at STEP \"RUN bundle install --jobs 8\": exit status 137")
     uv = _publish_first(client, dsn, "python-uv", "FROM image:acme-base\nRUN pip install uv\n", description="uv and the Postgres client")
     client.put(f"/v1/images/{uv['image']['id']}/draft", {"containerfile": "FROM image:acme-base\nRUN pip install uv psycopg\n", "note": "psycopg"})
     queued_uv = client.post(f"/v1/images/{uv['image']['id']}/build").json()
@@ -218,9 +225,9 @@ def _library(client: ApiClient, dsn: str) -> dict:
     client.put(f"/v1/images/{pid}/draft", {"containerfile": "# pnpm and turbo for the dashboard's agents and previews.\nFROM image:acme-base\nARG PNPM_VERSION=9.15.0\nRUN npm install -g pnpm@${PNPM_VERSION} turbo@2\nWORKDIR /workspace\n", "note": "Node 26 from the base"})
     running = client.post(f"/v1/images/{pid}/build").json()
     execute(dsn, """UPDATE image_builds SET state = 'running', stage = 'building', started_at = now() - interval '130 seconds', heartbeat_at = now(),
-        requested_at = now() - interval '10 minutes',
-        log = 'build of node-pnpm v3 · podman, rootless · 1.5 CPUs · 1.5 GB memory · linux/arm64' || chr(10) || 'resolve image:acme-base → v1 = registry.test/dude/custom@sha256:75…' || chr(10) || 'STEP 1/5: FROM registry.test/dude/custom@sha256:75…' || chr(10) || 'STEP 2/5: ARG PNPM_VERSION=9.15.0' || chr(10) || 'STEP 3/5: RUN npm install -g pnpm@9.15.0 turbo@2' || chr(10) || 'added 2 packages in 4s'
+        requested_at = now() - interval '10 minutes'
         WHERE id = %s""", (running["buildId"],))
+    _log(dsn, running["buildId"], "build of node-pnpm v3 · podman, rootless · 1.5 CPUs · 1.5 GB memory · linux/arm64\nresolve image:acme-base → v1 = registry.test/dude/custom@sha256:75…\nSTEP 1/5: FROM registry.test/dude/custom@sha256:75…\nSTEP 2/5: ARG PNPM_VERSION=9.15.0\nSTEP 3/5: RUN npm install -g pnpm@9.15.0 turbo@2\nadded 2 packages in 4s")
     execute(dsn, "UPDATE image_versions SET state = 'building' WHERE id = %s", (running["versionId"],))
     return {"base": base, "pnpm": pid, "rails": rid, "uv": uv["image"]["id"], "running": running["buildId"], "failed": failed["buildId"],
             "published_build": v2["buildId"], "queued": queued_uv["buildId"]}
