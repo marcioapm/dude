@@ -226,7 +226,7 @@ func TestAReplacementThatFailsBeforeItsAttachIsCounted(t *testing.T) {
 	g.attachAfterEnd = true
 	w.previews.Lux = g
 	w.recipe("web", 3000, "npm run dev", "", nil, true)
-	task, runID := w.declare()
+	_, runID := w.declare()
 	web := w.serverID(runID, "web")
 	w.lux.FailStarts("dude.preview="+runID, 100)
 
@@ -253,7 +253,6 @@ func TestAReplacementThatFailsBeforeItsAttachIsCounted(t *testing.T) {
 	if n := len(w.luxRuns()); n != 4 {
 		t.Fatalf("%d lux runs after one more request; want 4", n)
 	}
-	_ = task
 }
 
 // A second orchestrator replays the Run's first running event after the

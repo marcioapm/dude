@@ -403,7 +403,7 @@ type Server struct {
 	// the state each ends in.
 	failStarts map[string]int
 	failAs     map[string]string
-	// Hooks a test holds the fake at (BeforeEvent, BeforeStart).
+	// Test hooks for stream delivery, placement starts, and event pages.
 	beforeEvent func(runID string, eventID int64, typ string)
 	beforeStart func(runID string)
 	eventPages  func(runID string, after int64, ids []int64) int
@@ -1741,17 +1741,14 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	}
 	var after int64
 	fmt.Sscan(r.URL.Query().Get("after"), &after)
-	page := func() []event {
-		var out []event
-		for _, e := range run.events {
-			if e.ID > after && len(out) < eventsPage {
-				out = append(out, e)
-			}
-		}
-		return out
-	}
 	s.mu.Lock()
-	out, pages := page(), s.eventPages
+	var out []event
+	for _, e := range run.events {
+		if e.ID > after && len(out) < eventsPage {
+			out = append(out, e)
+		}
+	}
+	pages := s.eventPages
 	s.mu.Unlock()
 	if pages != nil {
 		ids := make([]int64, len(out))

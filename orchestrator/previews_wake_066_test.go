@@ -1,9 +1,9 @@
 package orchestrator_test
 
-// Migration 066 applied to preview rows in the states an upgrade can find
-// them in beyond running, stopped and mid-start: a failed or lost Run whose
-// end was already applied, the same with its snapshot gone, a wake claimed
-// by an orchestrator stopped for the upgrade, and a Run cancelled in lux.
+// Migration 066 applied to preview rows an upgrade can find: a failed or
+// lost Run whose end was already applied, the same with its snapshot gone,
+// a wake claimed by an orchestrator stopped for the upgrade, and a Run
+// cancelled in lux.
 
 import (
 	"context"
@@ -75,9 +75,9 @@ func TestAnEndAppliedBeforeTheMigrationIsResumedOnceThenCounted(t *testing.T) {
 	}
 }
 
-// The same, its snapshot gone: lux refuses the resume (409 no_snapshot),
-// which is not a start; the replacement's own failed start is counted, and
-// the next replacement serves.
+// A migrated failed Run with its snapshot gone: lux refuses the resume
+// (409 no_snapshot), which is not a start; the replacement's own failed
+// start is counted, and the next replacement serves.
 func TestAnEndAppliedBeforeTheMigrationWithoutASnapshotIsReplaced(t *testing.T) {
 	w := newWorld(t)
 	w.wakeable()
