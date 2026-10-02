@@ -502,16 +502,27 @@ two providers, `llm-anthropic` (`@ai-sdk/anthropic`) and `llm-openai`
     "llm-anthropic": {
       "npm": "@ai-sdk/anthropic",
       "options": { "baseURL": "{env:DUDE_LLM_URL}", "apiKey": "{env:DUDE_LLM_KEY}" },
-      "models": { "claude-sonnet-5": { "name": "Claude Sonnet 5" } }
+      "models": { "claude-sonnet-5": { "name": "Claude Sonnet 5", "attachment": true,
+        "modalities": { "input": ["text", "image"], "output": ["text"] } } }
     },
     "llm-openai": {
       "npm": "@ai-sdk/openai-compatible",
       "options": { "baseURL": "{env:DUDE_LLM_URL}", "apiKey": "{env:DUDE_LLM_KEY}" },
-      "models": { "gpt-5.6-sol": { "name": "GPT 5.6 Sol" } }
+      "models": { "gpt-5.6-sol": { "name": "GPT 5.6 Sol", "attachment": true,
+        "modalities": { "input": ["text", "image"], "output": ["text"] } } }
     }
   }
 }
 ```
+
+Every model must declare `"attachment": true` and
+`"modalities": {"input": ["text", "image"], "output": ["text"]}`. OpenCode
+does not know a custom provider's models, and without both keys it treats
+one as text only: the images people send with a steer, an answer or a
+task's prompt reach the agent, and the model answers "This model does not
+support image input". A custom or production image must declare them for
+each model it defines; the dev catalog's are checked by
+`apps/control-plane/test/runtime-image.test.ts`.
 
 The file must not live in `/etc/opencode/`: on Linux that is OpenCode's
 managed config directory, merged above `OPENCODE_CONFIG_CONTENT`, so anything
