@@ -415,6 +415,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
           lastField.current = "goal";
         }}
         editorRef={goalEditor}
+        imageField="goal"
         data-testid="task-goal"
       />
       <MarkdownEditor
@@ -439,6 +440,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
           lastField.current = "criteria";
         }}
         editorRef={criteriaEditor}
+        imageField="criteria"
         data-testid="task-criteria"
       />
     </FormDialog>

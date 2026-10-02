@@ -13,6 +13,7 @@ import type { Epic } from "../src/api/client.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { PROJECT } from "../src/fixtures/data.ts";
 import { TaskDialog, type ExistingTask } from "../src/screens/TaskDialog.tsx";
+import { criteriaFromMarkdown } from "../src/screens/criteria.ts";
 
 let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -194,6 +195,78 @@ describe("a new task's images", () => {
     await until(() => document.querySelector("[data-testid=task-image-refused]"), "the warning");
     expect(goalValue()).toBe("Keep invoices in euros for EU customers.");
     expect(document.querySelector("[data-testid=task-image-refused]")!.textContent).toContain("spec.pdf: only PNG, JPEG, WebP and GIF can be sent");
+  });
+});
+
+describe("laying out a task's images in Preview", () => {
+  const IMG = "![design.png](attachment:att_d1)";
+  const task = (fixed: ExistingTask["fixed"], goal: string, criteria: string[] = []): ExistingTask => ({
+    id: "task_lay", fixed, title: "Lay out", goal, acceptanceCriteria: criteria, epicId: null, repositories: [],
+  });
+  const preview = async (field: "task-goal" | "task-criteria") => {
+    const panel = document.querySelector<HTMLElement>(`[data-testid=${field}-preview]`)!;
+    const tab = document.getElementById(panel.getAttribute("aria-labelledby")!) as HTMLButtonElement;
+    if (tab.getAttribute("aria-selected") !== "true") await act(async () => tab.click());
+    return panel;
+  };
+  const figure = (field: string) => document.querySelector<HTMLElement>(`[data-testid=${field}-preview] [data-image-n="0"]`);
+  const press = (label: string) => act(async () => document.querySelector<HTMLButtonElement>(`[data-image-toolbar] button[aria-label="${label}"]`)!.click());
+  const criteriaValue = () => document.querySelector<HTMLTextAreaElement>("[data-testid=task-criteria]")!.value;
+
+  test("Wrap right and Small write \"small right\" into the goal's source, and Save is enabled", async () => {
+    const d = await open(task(null, `Keep invoices in euros for EU customers.\n\n${IMG}`));
+    await preview("task-goal");
+    await until(() => figure("task-goal"), "the image");
+    await act(async () => figure("task-goal")!.click());
+    await press("Wrap right");
+    await press("Small");
+    expect(goalValue()).toBe('Keep invoices in euros for EU customers.\n\n![design.png](attachment:att_d1 "small right")');
+    expect(d.save().disabled).toBe(false);
+  });
+
+  test("Move up swaps it with the paragraph above", async () => {
+    await open(task(null, `First paragraph here.\n\nSecond paragraph here.\n\n${IMG}`));
+    await preview("task-goal");
+    await until(() => figure("task-goal"), "the image");
+    await act(async () => figure("task-goal")!.click());
+    await press("Move up");
+    expect(goalValue()).toBe(`First paragraph here.\n\n${IMG}\n\nSecond paragraph here.`);
+  });
+
+  test("a drag from the goal lands in a criterion as its continuation, and the criteria keep their number", async () => {
+    await open(task(null, `Keep invoices in euros for EU customers.\n\n${IMG}`, ["One", "Two", "Three"]));
+    await preview("task-goal");
+    const crit = await preview("task-criteria");
+    await until(() => figure("task-goal") && crit.querySelector("li"), "both previews");
+    const items = [...crit.querySelectorAll<HTMLElement>("li")];
+    items.forEach((li, i) => (li.getBoundingClientRect = () => ({ top: i * 20, bottom: i * 20 + 20, left: 0, right: 100, width: 100, height: 20, x: 0, y: i * 20, toJSON() {} })));
+    const store = new Map<string, string>();
+    const dataTransfer = { get types() { return [...store.keys()]; }, setData: (t: string, v: string) => void store.set(t, v), getData: (t: string) => store.get(t) ?? "", effectAllowed: "", dropEffect: "" };
+    const dnd = (type: string, el: Element, clientY = 0) => {
+      const e = new Event(type, { bubbles: true, cancelable: true }) as Event & { dataTransfer: unknown; clientY: number };
+      e.dataTransfer = dataTransfer;
+      e.clientY = clientY;
+      el.dispatchEvent(e);
+    };
+    await act(async () => dnd("dragstart", figure("task-goal")!));
+    await act(async () => dnd("dragover", crit, 40));
+    await act(async () => dnd("drop", crit, 40));
+    expect(goalValue()).toBe("Keep invoices in euros for EU customers.");
+    expect(criteriaValue()).toBe(`- [ ] One\n- [ ] Two\n  ${IMG}\n- [ ] Three`);
+    const parsed = criteriaFromMarkdown(criteriaValue());
+    expect(parsed.items).toEqual(["One", `Two\n${IMG}`, "Three"]);
+    expect(parsed.stray).toBe(false);
+    expect(document.querySelector("[data-testid=task-criteria-count]")!.textContent).toBe("3 criteria");
+  });
+
+  test("while delivery runs: no toolbar, no handles, and a click does not select", async () => {
+    await open(task("all", `Keep invoices in euros for EU customers.\n\n${IMG}`));
+    const goal = document.querySelector<HTMLElement>("[data-testid=task-goal-preview]")!;
+    await until(() => goal.querySelector('[data-testid="markdown-figure"]'), "the image");
+    expect(figure("task-goal")).toBeNull();
+    await act(async () => goal.querySelector<HTMLElement>('[data-testid="markdown-figure"]')!.click());
+    expect(document.querySelector("[data-image-toolbar]")).toBeNull();
+    expect(goal.querySelector("[draggable=true]")).toBeNull();
   });
 });
 
