@@ -41,7 +41,7 @@ func TestTheFakeValidatesAttachmentsAsLuxDoes(t *testing.T) {
 		{[]lux.Attachment{img("big.png", "image/png", append(png, make([]byte, lux.MaxAttachmentBytes)...))}, "attachments[0]: "},
 		{many, "attachments: at most 10 per input, got 11"},
 	} {
-		err := c.InputWith(context.Background(), run.ID, lux.InputRequest{Text: "x", RequestID: "r", Attachments: c2.in})
+		err := c.Input(context.Background(), run.ID, lux.InputRequest{Text: "x", RequestID: "r", Attachments: c2.in})
 		le, ok := lux.AsError(err)
 		if !ok || le.Status != 400 || le.Code != lux.CodeInvalidAttachment || !strings.HasPrefix(le.Message, c2.want) {
 			t.Errorf("want 400 invalid_attachment %q, got %v", c2.want, err)
@@ -78,7 +78,7 @@ func TestLuxRecordsTheMetadataOfImagesNeverTheBytes(t *testing.T) {
 	}
 	awaitRun(t, fake, run.ID, "never ran", func(r *Run) bool { return r.busy })
 	for _, id := range []string{"dir_1", "dir_2"} {
-		if err := c.InputWith(context.Background(), run.ID, lux.InputRequest{Text: "see", RequestID: id,
+		if err := c.Input(context.Background(), run.ID, lux.InputRequest{Text: "see", RequestID: id,
 			Attachments: []lux.Attachment{{Name: id + ".png", ContentType: "image/png", Data: png}}}); err != nil {
 			t.Fatal(err)
 		}
@@ -113,11 +113,11 @@ func TestTheFakeRefusesABodyOverLuxsLimit(t *testing.T) {
 		sixAtTheLimit[i] = lux.Attachment{Name: fmt.Sprintf("%d.png", i), ContentType: "image/png",
 			Data: append(append([]byte{}, png...), make([]byte, (5<<20)/6-len(png))...)}
 	}
-	if err := c.InputWith(context.Background(), run.ID, lux.InputRequest{Text: "six", RequestID: "six", Attachments: sixAtTheLimit}); err != nil {
+	if err := c.Input(context.Background(), run.ID, lux.InputRequest{Text: "six", RequestID: "six", Attachments: sixAtTheLimit}); err != nil {
 		t.Fatalf("six images at 5 MiB together: %v", err)
 	}
 	big := lux.Attachment{Name: "big.png", ContentType: "image/png", Data: append(append([]byte{}, png...), make([]byte, 4<<20)...)}
-	err := c.InputWith(context.Background(), run.ID, lux.InputRequest{Text: "two", RequestID: "two", Attachments: []lux.Attachment{big, big}})
+	err := c.Input(context.Background(), run.ID, lux.InputRequest{Text: "two", RequestID: "two", Attachments: []lux.Attachment{big, big}})
 	if le, ok := lux.AsError(err); !ok || le.Status != 400 || le.Code != "bad_request" {
 		t.Errorf("an input of 8 MiB of images: %v, want 400", err)
 	}
@@ -144,7 +144,7 @@ func TestAGenericRunRefusesImages(t *testing.T) {
 		t.Fatal(err)
 	}
 	awaitRun(t, fake, run.ID, "never ran", func(r *Run) bool { return r.State == "running" })
-	err = srv.InputWith(context.Background(), run.ID, lux.InputRequest{RequestID: "x",
+	err = srv.Input(context.Background(), run.ID, lux.InputRequest{RequestID: "x",
 		Attachments: []lux.Attachment{{Name: "a.png", ContentType: "image/png", Data: png}}})
 	if le, ok := lux.AsError(err); !ok || le.Status != 400 || le.Code != lux.CodeAttachmentsUnsupported {
 		t.Fatalf("input: %v", err)

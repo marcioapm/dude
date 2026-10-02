@@ -1312,7 +1312,7 @@ func (s *Syncer) deliverDirectives(ctx context.Context, r phaseRun) (bool, error
 		}
 		// The directive id is the request id, so a retried send is delivered
 		// once.
-		err := s.Lux.InputWith(ctx, r.LuxRunID, lux.InputRequest{Text: text, RequestID: d.ID, Interrupt: d.Interrupt, Attachments: images})
+		err := s.Lux.Input(ctx, r.LuxRunID, lux.InputRequest{Text: text, RequestID: d.ID, Interrupt: d.Interrupt, Attachments: images})
 		if reason := attachmentsRefused(err); reason != "" {
 			return true, s.failDirective(ctx, r, d.ID, reason)
 		}
@@ -1386,23 +1386,28 @@ func attachmentsRefused(err error) string {
 }
 
 // failDirective records that a directive will never reach the agent, with
-// why (run.directive.failed), as a failure lux reports is; an interrupt
-// alone relying on its words fails with it.
+// why (failDirectiveTx).
 func (s *Syncer) failDirective(ctx context.Context, r phaseRun, id, reason string) error {
-	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE directives SET failed_at = now(), error = $2
-			WHERE id = $1 AND delivered_at IS NULL AND failed_at IS NULL`, id, reason)
-		if err != nil || tag.RowsAffected() == 0 {
-			return err
-		}
-		if err := s.event(ctx, tx, r, evDirectiveFailed, ledger.ActorSystem, map[string]any{"directiveId": id, "error": reason}); err != nil {
-			return err
-		}
-		return settleInterrupts(ctx, tx, s, r, &reason, `UPDATE directives d SET failed_at = now(), error = $3
-			FROM directives f WHERE `+interruptAloneOf+` AND d.failed_at IS NULL
-			  AND NOT EXISTS (SELECT 1 FROM directives c WHERE c.run_id = d.run_id AND `+carrierOf+` AND c.failed_at IS NULL)
-			RETURNING d.id`, id, r.ID, reason)
-	})
+	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error { return failDirectiveTx(ctx, tx, s, r, id, reason) })
+}
+
+// failDirectiveTx fails directive id of Run r with reason, once: a
+// delivered or already failed directive is left as it is. It writes
+// run.directive.failed, and an interrupt alone relying on its words fails
+// with it once no other directive carrying them is left to deliver them.
+func failDirectiveTx(ctx context.Context, tx pgx.Tx, s *Syncer, r phaseRun, id, reason string) error {
+	tag, err := tx.Exec(ctx, `UPDATE directives SET failed_at = now(), error = $3
+		WHERE id = $1 AND run_id = $2 AND delivered_at IS NULL AND failed_at IS NULL`, id, r.ID, reason)
+	if err != nil || tag.RowsAffected() == 0 {
+		return err
+	}
+	if err := s.event(ctx, tx, r, evDirectiveFailed, ledger.ActorSystem, map[string]any{"directiveId": id, "error": reason}); err != nil {
+		return err
+	}
+	return settleInterrupts(ctx, tx, s, r, &reason, `UPDATE directives d SET failed_at = now(), error = $3
+		FROM directives f WHERE `+interruptAloneOf+` AND d.failed_at IS NULL
+		  AND NOT EXISTS (SELECT 1 FROM directives c WHERE c.run_id = d.run_id AND `+carrierOf+` AND c.failed_at IS NULL)
+		RETURNING d.id`, id, r.ID, reason)
 }
 
 // carrierOf (SQL): c is a directive carrying the words of d's instruction,

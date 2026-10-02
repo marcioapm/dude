@@ -489,9 +489,8 @@ const (
 // Client is what dude calls on lux. An interface so tests can stand in.
 type Client interface {
 	Submit(ctx context.Context, spec Spec, idempotencyKey string) (Run, error)
-	Input(ctx context.Context, runID, text, requestID string, interrupt bool) error
-	// InputWith is Input carrying images.
-	InputWith(ctx context.Context, runID string, in InputRequest) error
+	// Input sends a Run's agent words, images or an interrupt.
+	Input(ctx context.Context, runID string, in InputRequest) error
 	Push(ctx context.Context, runID, requestID string) error
 	Stop(ctx context.Context, runID string) error
 	Cancel(ctx context.Context, runID string) error
@@ -630,11 +629,7 @@ func (c *HTTPClient) Submit(ctx context.Context, spec Spec, key string) (Run, er
 	return r, err
 }
 
-func (c *HTTPClient) Input(ctx context.Context, runID, text, requestID string, interrupt bool) error {
-	return c.InputWith(ctx, runID, InputRequest{Text: text, RequestID: requestID, Interrupt: interrupt})
-}
-
-func (c *HTTPClient) InputWith(ctx context.Context, runID string, in InputRequest) error {
+func (c *HTTPClient) Input(ctx context.Context, runID string, in InputRequest) error {
 	body := map[string]any{"requestId": in.RequestID}
 	if in.Text != "" {
 		body["text"] = in.Text
