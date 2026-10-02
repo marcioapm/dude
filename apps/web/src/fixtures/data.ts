@@ -155,15 +155,19 @@ export const RESTART = {
 const A1 = "dude/task_wc214/attempt-1";
 const A2 = "dude/task_wc214/attempt-2";
 const head = (sha: string) => ({ "web-console": sha });
+/** One of the restarted task's Runs, on its attempt's branch, started when created unless `more` says otherwise. */
+const step = (id: string, attempt: 1 | 2, phase: Run["phase"], role: Run["role"], status: Run["status"], createdMin: number, endedMin: number | null, sha: string, more: Partial<Run> = {}) =>
+  run({ id, attempt, phase, role, status, branch: attempt === 1 ? A1 : A2, createdAt: iso(createdMin * MIN), startedAt: iso(createdMin * MIN),
+    endedAt: endedMin === null ? null : iso(endedMin * MIN), heads: head(sha), ...more });
 export const RESTARTED_RUNS: Run[] = [
-  run({ id: "run_a2_fix", attempt: 2, phase: "fix", role: "implementer", status: "running", branch: A2, createdAt: iso(10 * MIN), startedAt: iso(10 * MIN), heads: head("e4d1a0b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8") }),
-  run({ id: "run_a2_simplify", attempt: 2, phase: "simplify", role: "simplifier", status: "completed", branch: A2, createdAt: iso(40 * MIN), startedAt: iso(40 * MIN), endedAt: iso(32 * MIN), heads: head("d3c0f9e8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2") }),
-  run({ id: "run_a2_review", attempt: 2, phase: "review", role: "reviewer", category: "correctness", status: "completed", branch: A2, createdAt: iso(55 * MIN), startedAt: iso(55 * MIN), endedAt: iso(41 * MIN), heads: head("b2a1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3") }),
-  run({ id: "run_attempt2", attempt: 2, phase: "implement", role: "implementer", status: "completed", branch: A2, createdAt: iso(90 * MIN), startedAt: iso(89 * MIN), endedAt: iso(56 * MIN), heads: head("b2a1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3") }),
-  run({ id: "run_a1_fix", attempt: 1, phase: "fix", role: "implementer", status: "aborted", branch: A1, createdAt: iso(110 * MIN), startedAt: iso(110 * MIN), endedAt: iso(97 * MIN), heads: head("9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b") }),
-  run({ id: "run_a1_simplify", attempt: 1, phase: "simplify", role: "simplifier", status: "completed", branch: A1, createdAt: iso(140 * MIN), startedAt: iso(140 * MIN), endedAt: iso(130 * MIN), heads: head("7f6e5d4c3b2a1f0e9d8c7b6a5f4e3d2c1b0a9f8e") }),
-  run({ id: "run_a1_review", attempt: 1, phase: "review", role: "reviewer", category: "correctness", status: "completed", branch: A1, createdAt: iso(160 * MIN), startedAt: iso(160 * MIN), endedAt: iso(141 * MIN), heads: head("3f2a9c1d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b") }),
-  run({ id: RUN_ID, attempt: 1, phase: "implement", role: "implementer", status: "completed", branch: A1, createdAt: iso(220 * MIN), startedAt: iso(219 * MIN), endedAt: iso(161 * MIN), heads: head("3f2a9c1d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b") }),
+  step("run_a2_fix", 2, "fix", "implementer", "running", 10, null, "e4d1a0b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8"),
+  step("run_a2_simplify", 2, "simplify", "simplifier", "completed", 40, 32, "d3c0f9e8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2"),
+  step("run_a2_review", 2, "review", "reviewer", "completed", 55, 41, "b2a1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3", { category: "correctness" }),
+  step("run_attempt2", 2, "implement", "implementer", "completed", 90, 56, "b2a1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3", { startedAt: iso(89 * MIN) }),
+  step("run_a1_fix", 1, "fix", "implementer", "aborted", 110, 97, "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b"),
+  step("run_a1_simplify", 1, "simplify", "simplifier", "completed", 140, 130, "7f6e5d4c3b2a1f0e9d8c7b6a5f4e3d2c1b0a9f8e"),
+  step("run_a1_review", 1, "review", "reviewer", "completed", 160, 141, "3f2a9c1d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b", { category: "correctness" }),
+  step(RUN_ID, 1, "implement", "implementer", "completed", 220, 161, "3f2a9c1d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b", { startedAt: iso(219 * MIN) }),
 ];
 
 export const RESTARTED_PULL_REQUESTS: PullRequest[] = [
