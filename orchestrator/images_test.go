@@ -470,3 +470,48 @@ func TestASteerSentAgainCannotBringNewImages(t *testing.T) {
 		t.Fatalf("new words: %d %v", status, body)
 	}
 }
+
+// An image steer sent to a paused Run waits for it: the resume carries
+// neither its words nor a nudge (a resume has no images), and once the
+// Run runs again the steer goes through /input with its image.
+func TestAnImageSteerToAPausedRunGoesAfterTheResume(t *testing.T) {
+	w := newWorld(t)
+	b := w.withImages()
+	wi, runID := w.hangingRun()
+	if status, body := w.call("/internal/runs/"+runID+"/pause", map[string]any{}); status != 200 {
+		t.Fatalf("pause: %d %v", status, body)
+	}
+	w.until("the pause", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, runID) == 1
+	})
+	w.upload(b, "att_paused", wi, "paused.png", screenshot)
+	status, body := w.call("/internal/runs/"+runID+"/steer", map[string]any{"text": "look at this", "attachmentIds": []string{"att_paused"}})
+	if status != 201 {
+		t.Fatalf("steer: %d %v", status, body)
+	}
+	dir, _ := body["id"].(string)
+	for range 5 {
+		w.pump()
+	}
+	lr := w.lux.Runs()[0]
+	if n := w.count(`SELECT count(*) FROM directives WHERE id = $1 AND sent_at IS NULL`, dir); n != 1 || len(w.lux.Attachments(lr.ID)[dir]) != 0 {
+		t.Fatal("a steer was sent to a paused Run")
+	}
+
+	if status, body := w.call("/internal/runs/"+runID+"/resume", map[string]any{}); status != 200 {
+		t.Fatalf("resume: %d %v", status, body)
+	}
+	w.until("the image to reach lux", func() bool { return len(w.lux.Attachments(lr.ID)[dir]) == 1 })
+	if !slices.Contains(w.lux.CallsOf(lr.ID), "resume") {
+		t.Errorf("lux was asked %v, no resume", w.lux.CallsOf(lr.ID))
+	}
+	if got := w.lux.ResumeInputs(lr.ID); !slices.Equal(got, []string{""}) {
+		t.Errorf("the resume carried input %q", got)
+	}
+	if got := w.lux.Attachments(lr.ID)[dir]; got[0].Name != "paused.png" || !bytes.Equal(got[0].Data, screenshot) {
+		t.Errorf("the steer carried %+v", got)
+	}
+	if bodies := w.lux.InputBodies(lr.ID, dir); len(bodies) != 1 || !strings.Contains(bodies[0], "look at this") {
+		t.Errorf("/input for the steer got %q", bodies)
+	}
+}
