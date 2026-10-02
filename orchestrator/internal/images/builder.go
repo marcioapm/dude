@@ -218,13 +218,14 @@ func (b *Builder) claim(ctx context.Context) (job, bool, error) {
 }
 
 // progress is a running job's log and stage. Every Flush the output
-// written since the last one is appended to the job's row, with the stage
-// and the heartbeat, so the build page follows it.
+// written since the last one is appended to the job's log (a chunk in
+// image_build_log), with the stage and the heartbeat on its row, so the
+// build page follows it.
 type progress struct {
 	mu    sync.Mutex
 	tail  Tail
 	stage string
-	// Output not yet in the row, and whether stage changed since.
+	// Output not yet in the log, and whether stage changed since.
 	pending    []byte
 	stageDirty bool
 }

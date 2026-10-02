@@ -362,6 +362,13 @@ func TestAJobItsBuilderDiedUnderIsTriedOnceMore(t *testing.T) {
 	if got := f.row(`SELECT state, restarts FROM image_builds WHERE id = $1`, build); got[0] != "queued" || got[1] != int32(1) {
 		t.Fatalf("after one death: %v", got)
 	}
+	const restarted = "\n— builder restarted; trying again —\n"
+	if got := f.log(build); got != restarted {
+		t.Errorf("log = %q", got)
+	}
+	if got := f.row(`SELECT log_total, stage, heartbeat_at FROM image_builds WHERE id = $1`, build); got[0] != int64(len(restarted)) || got[1] != nil || got[2] != nil {
+		t.Errorf("after recover: %v", got)
+	}
 	if got := f.str(`SELECT state FROM image_versions WHERE id = 'imv_b1'`); got != "queued" {
 		t.Errorf("version = %s", got)
 	}
@@ -540,7 +547,7 @@ func TestOutputFlushedAfterTheJobEndedIsStillWritten(t *testing.T) {
 	}
 }
 
-func TestTheRowKeepsTheLastLogMaxOfALongLog(t *testing.T) {
+func TestTheLogKeepsTheLastLogMaxOfALongLog(t *testing.T) {
 	f := setup(t)
 	f.image("img_base", "acme-base")
 	build := f.queue("img_base", "imv_b1", 1, "FROM debian\n")

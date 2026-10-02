@@ -115,9 +115,12 @@ type BuildLog = { id: string; log: string; logStart: number; logTotal: number };
  * appended; one from another build, one starting past prev's end (the
  * tail it asked from was trimmed) or one holding all prev holds replaces
  * it; any other (an older or overlapping read answered late) is dropped,
- * and prev is returned as it was. The result keeps the last max bytes.
+ * and prev is returned as it was. A read for a build other than `shown`
+ * (the page moved on before it was answered) is dropped too. The result
+ * keeps the last max bytes.
  */
-export function mergeBuildLog<B extends BuildLog>(prev: B | null, next: B, max = BUILD_LOG_MAX): B {
+export function mergeBuildLog<B extends BuildLog>(prev: B | null, next: B, shown: string, max = BUILD_LOG_MAX): B | null {
+  if (next.id !== shown) return prev;
   if (!prev || prev.id !== next.id) return capLog(next, max);
   if (next.logTotal < prev.logTotal) return prev;
   if (next.logStart === prev.logTotal) return capLog({ ...next, log: prev.log + next.log, logStart: prev.logStart }, max);

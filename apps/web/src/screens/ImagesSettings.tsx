@@ -614,13 +614,15 @@ function BuildPage({ client, buildId, onSub }: { client: ApiClient; buildId: str
   const [problem, setProblem] = useState<string | null>(null);
   // While it runs, each read asks only for the log after the bytes the page has.
   const have = useRef<{ id: string; total: number } | null>(null);
+  const shown = useRef(buildId);
+  shown.current = buildId;
   useEffect(() => {
     have.current = build ? { id: build.id, total: build.logTotal } : null;
   }, [build]);
   const load = useCallback(() => {
     const after = have.current?.id === buildId ? have.current.total : undefined;
     client.imageBuild(buildId, after).then((b) => {
-      setBuild((prev) => mergeBuildLog(prev, b));
+      setBuild((prev) => mergeBuildLog(prev, b, shown.current));
       setProblem(null);
     }, (err: unknown) => setProblem(errorText(err)));
   }, [client, buildId]);
