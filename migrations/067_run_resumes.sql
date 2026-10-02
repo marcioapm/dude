@@ -1,4 +1,4 @@
--- 066_run_resumes.sql — how long each resume of a Run took, end to end.
+-- 067_run_resumes.sql — how long each resume of a Run took, end to end.
 --
 -- One row per lux resume dude makes of a Run, keyed by the epoch of the
 -- placement it resumed into, inserted just before dude asks lux for it
