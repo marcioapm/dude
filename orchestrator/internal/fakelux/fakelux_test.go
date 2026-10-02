@@ -306,10 +306,11 @@ func TestARunEndedWhileStartingIsPlacedNoFurther(t *testing.T) {
 // As lux's resumeRun answers with the Run's current epoch, and its
 // scheduler moves that epoch only when it assigns the new placement: the
 // resume's answer, and a Get before the assign, carry the stopped epoch;
-// once assigned, Get carries the new one and its placement.
+// once assigned, Get carries the new one and its placement. The resume's
+// start is held before its assign, so the checks before it are not raced.
 func TestAResumesAnswerCarriesTheStoppedEpochUntilThePlacementIsAssigned(t *testing.T) {
 	fake := New("", "k", func(map[string]any) Behaviour { return Behaviour{Hang: true} })
-	fake.StartAfter = 500 * time.Millisecond
+	holds := holdStarts(t, fake, "2/"+holdAssign)
 	srv := httptest.NewServer(fake.Handler())
 	t.Cleanup(srv.Close)
 	client := lux.New(srv.URL, "k")
@@ -330,7 +331,7 @@ func TestAResumesAnswerCarriesTheStoppedEpochUntilThePlacementIsAssigned(t *test
 	if resumed.State != "resuming" || resumed.Epoch != 1 {
 		t.Errorf("resume answered %s at epoch %d, want resuming at the stopped epoch 1", resumed.State, resumed.Epoch)
 	}
-	// A fifth of the start passes before the host is assigned.
+	holds.reached(2, holdAssign)
 	if got, _ := client.Get(context.Background(), run.ID); got.Epoch != 1 || len(got.Placements) != 1 {
 		t.Errorf("before the assign: epoch %d, %d placements, want 1 and 1", got.Epoch, len(got.Placements))
 	}
@@ -338,6 +339,7 @@ func TestAResumesAnswerCarriesTheStoppedEpochUntilThePlacementIsAssigned(t *test
 	if again, err := client.Resume(context.Background(), run.ID, lux.ResumeInput{}); err != nil || again.Epoch != 1 {
 		t.Errorf("a repeated resume answered epoch %d (%v), want 1", again.Epoch, err)
 	}
+	holds.let(2, holdAssign)
 	waitState(t, client, run.ID, "running")
 	got, err := client.Get(context.Background(), run.ID)
 	if err != nil {
