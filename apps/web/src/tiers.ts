@@ -18,8 +18,8 @@ import type { TierTone } from "@dude/design-system/components";
 import { roleLabel } from "./machines.ts";
 import { effortLabel } from "./settings.ts";
 
-/** A tier's mark: the seeded tiers have their own; any other the sparkle, by its place. */
-export function tierMark(tier: Pick<ModelTier, "name" | "position">): { icon: IconName; tone: TierTone } {
+/** A tier's mark: the seeded tiers have their own; any other the sparkle. */
+export function tierMark(tier: Pick<ModelTier, "name">): { icon: IconName; tone: TierTone } {
   switch (tier.name.toLowerCase()) {
     case "thinker":
       return { icon: "brain", tone: "info" };
@@ -42,9 +42,14 @@ export function tierUsedByWords(uses: readonly ModelTierUse[]): string {
   return parts.length ? parts.join(" · ") : "Nobody";
 }
 
+/** A role, on a project when it is a project's: "Implementer", "abs · Reviewer". */
+function roleOn(role: string, project: { name: string } | null): string {
+  return project ? `${project.name} · ${roleLabel(role)}` : roleLabel(role);
+}
+
 /** One use, as the remove dialog and the edit callout name it: "Implementer", "abs · Reviewer". */
 export function tierUseName(use: ModelTierUse): string {
-  return use.kind === "project" ? `${use.project!.name} · ${roleLabel(use.role)}` : roleLabel(use.role);
+  return roleOn(use.role, use.kind === "project" ? use.project! : null);
 }
 
 /** Where a use is set, as the remove dialog says it. */
@@ -55,9 +60,9 @@ export function tierUseWhere(use: ModelTierUse, orgName: string): string {
 
 /** The efforts a tier's agents use, distinct, in words: "high", "high and low"; null when none sets one. */
 export function effortsWords(uses: readonly ModelTierUse[]): string | null {
-  const efforts = [...new Set(uses.map((u) => u.effort ?? "the model’s default"))];
   if (!uses.some((u) => u.effort)) return null;
-  return efforts.map((e) => (e === "the model’s default" ? e : effortLabel(e).toLowerCase())).join(" and ");
+  const efforts = [...new Set(uses.map((u) => u.effort))];
+  return efforts.map((e) => (e === null ? "the model’s default" : effortLabel(e).toLowerCase())).join(" and ");
 }
 
 /** Whether the proxy lists a name; unknown (null) while its list could not be read. */
@@ -111,17 +116,8 @@ export function testResultWords(r: ModelTestResult): string {
   return `${at}: the proxy answered ${r.status}${r.error ? ` — ${r.error}` : ""}`;
 }
 
-/** An upgrade note's role, as its line names it: "Implementer", or "abs · Reviewer" for a project's. */
-export function noteWho(note: ModelTierUpgradeNote): string {
-  return note.project ? `${note.project.name} · ${roleLabel(note.role)}` : roleLabel(note.role);
-}
-
-/**
- * The upgrade's notes as the banner lists them: the organisation's roles
- * grouped by the model they named and the tier they ask for, then each
- * project's override on its own line.
- */
-export function upgradeLines(notes: readonly ModelTierUpgradeNote[]): Array<{
+/** One line of the upgrade banner: the roles it covers, and a project's override named as `who`. */
+export interface UpgradeLine {
   key: string;
   roles: string[];
   oldModel: string;
@@ -130,8 +126,15 @@ export function upgradeLines(notes: readonly ModelTierUpgradeNote[]): Array<{
   tierName: string;
   newTier: boolean;
   modelChanged: boolean;
-}> {
-  const out: ReturnType<typeof upgradeLines> = [];
+}
+
+/**
+ * The upgrade's notes as the banner lists them: the organisation's roles
+ * grouped by the model they named and the tier they ask for, then each
+ * project's override on its own line.
+ */
+export function upgradeLines(notes: readonly ModelTierUpgradeNote[]): UpgradeLine[] {
+  const out: UpgradeLine[] = [];
   for (const n of notes) {
     if (!n.project) {
       const same = out.find((l) => !l.project && l.oldModel === n.oldModel && l.tierName === n.tierName);
@@ -140,7 +143,7 @@ export function upgradeLines(notes: readonly ModelTierUpgradeNote[]): Array<{
         continue;
       }
     }
-    out.push({ key: `${n.id}`, roles: [n.role], oldModel: n.oldModel, project: n.project, who: n.project ? noteWho(n) : null,
+    out.push({ key: `${n.id}`, roles: [n.role], oldModel: n.oldModel, project: n.project, who: n.project ? roleOn(n.role, n.project) : null,
       tierName: n.tierName, newTier: n.newTier, modelChanged: n.modelChanged });
   }
   return out;
