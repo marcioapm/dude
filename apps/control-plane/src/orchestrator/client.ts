@@ -12,8 +12,6 @@ import { auditActor, type Principal } from "../api/auth.ts";
 import { HttpError } from "../api/http.ts";
 import { config as settings } from "../config.ts";
 
-const TIMEOUT_MS = 15_000;
-
 function config(): { url: string; token: string } {
   const url = settings().string("DUDE_ORCHESTRATOR_URL");
   const token = settings().string("DUDE_ORCHESTRATOR_TOKEN");
@@ -34,8 +32,8 @@ export async function orchestrator(
   body: string = "{}",
   /** Who is asking: a principal (its key, person and role all travel), or a key's id alone. */
   actor?: string | Principal,
-  /** For a call bounded longer on the orchestrator's side than this default. */
-  timeoutMs: number = TIMEOUT_MS,
+  /** For a call bounded longer on the orchestrator's side than the default (orchestratorTimeouts.callMs). */
+  timeoutMs: number = settings().orchestratorTimeouts.callMs,
 ): Promise<Response> {
   const res = await call(organizationId, method, path, {
     signal: AbortSignal.timeout(timeoutMs),
@@ -57,7 +55,7 @@ export async function orchestrator(
  */
 export async function orchestratorStream(organizationId: string, path: string): Promise<Response> {
   const abort = new AbortController();
-  const timer = setTimeout(() => abort.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => abort.abort(), settings().orchestratorTimeouts.callMs);
   try {
     return await call(organizationId, "GET", path, { signal: abort.signal });
   } finally {

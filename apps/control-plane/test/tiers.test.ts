@@ -53,8 +53,10 @@ let otherKey: string;
 let orchestratorServer: ReturnType<typeof Bun.serve>;
 /** What the stand-in orchestrator was asked to test, in order. */
 const tested: unknown[] = [];
-/** How long it takes to answer a test of the model "slow". */
-const slowMs = 16_000;
+/** How long the backend waits on the orchestrator: shortened, so a slow answer costs the tests little. */
+const timeouts = { callMs: 200, testMessageMs: 1_000 };
+/** How long the stand-in takes to answer a test of the model "slow", or GET /internal/push/key: between the two. */
+const slowMs = 500;
 /** How it answers GET /internal/llm/models. */
 let modelsReply = () => Response.json({ models: ["claude-opus-5-5", "gpt-5.6-sol"], source: "https://llm.example/v1", problem: null });
 
@@ -89,6 +91,10 @@ beforeAll(async () => {
     async fetch(req) {
       const path = new URL(req.url).pathname;
       if (path === "/internal/llm/models") return modelsReply();
+      if (path === "/internal/push/key") {
+        await Bun.sleep(slowMs);
+        return Response.json({ publicKey: "k" });
+      }
       if (path === "/internal/llm/test") {
         const asked = await req.json() as { model: string; efforts: Array<string | null> };
         tested.push(asked);
@@ -105,7 +111,7 @@ beforeAll(async () => {
     },
   });
   useConfig(Config.load({ env: { ...process.env,
-    DUDE_ORCHESTRATOR_URL: `http://localhost:${orchestratorServer.port}`, DUDE_ORCHESTRATOR_TOKEN: "svc" } }));
+    DUDE_ORCHESTRATOR_URL: `http://localhost:${orchestratorServer.port}`, DUDE_ORCHESTRATOR_TOKEN: "svc" }, orchestratorTimeouts: timeouts }));
   router = buildRouter("");
 });
 
@@ -302,7 +308,13 @@ describe("a test message", () => {
     const res = await call(adminKey, "POST", "/v1/models/test", { model: "slow" });
     expect(res.status).toBe(200);
     expect((await body(res)).results.map((r: Json) => r.ok)).toEqual([true]);
-  }, slowMs + 10_000);
+  });
+
+  test("another orchestrator call as slow is given up on", async () => {
+    const res = await call(adminKey, "GET", "/v1/push/key");
+    expect(res.status).toBe(503);
+    expect((await body(res)).error.message).toStartWith("the orchestrator is unreachable: ");
+  });
 
   test("the proxy's refusal is passed on as it came", async () => {
     const res = await body(await call(adminKey, "POST", "/v1/models/test", { model: "nope" }));
