@@ -204,9 +204,13 @@ test("an attempt with no Runs has nothing to count", async () => {
 });
 
 test("an attempt that is not a positive whole number is refused", async () => {
-  for (const bad of ["0", "-1", "1.5", "two", "", "1e3"]) {
+  for (const bad of ["0", "-1", "1.5", "two", "9999999999"]) {
     const res = await call(`/v1/tasks/wi_1/metrics?attempt=${bad}`);
-    expect(res.status).toBe(422);
-    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("invalid_attempt");
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("bad_request");
   }
+});
+
+test("an empty attempt is the whole task, as for any number parameter", async () => {
+  expect((await get("/v1/tasks/wi_1/metrics?attempt=")).runs).toHaveLength(3);
 });
