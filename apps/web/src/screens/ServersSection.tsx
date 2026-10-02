@@ -196,6 +196,7 @@ export const ServersSection = memo(function ServersSection({ client, servers, ta
           }
         />
         {problem ? <Callout tone="danger">{problem}</Callout> : null}
+        {wakeable && run.error ? <Callout tone="attention" data-testid="preview-error">{run.error}</Callout> : null}
         {data.preview && taskId ? (
           <PreviewAlsoRunning parked={data.preview.state === "paused"} busy={busy !== null} onStop={stopPreview} />
         ) : null}
