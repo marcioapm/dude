@@ -5,10 +5,12 @@
  *
  * The delivered variant is drawn into a canvas — so EXIF and any other
  * metadata are gone, and a GIF is its first frame — at most `maxSide` on its
- * long side. A PNG stays a PNG when it fits; otherwise WebP, then JPEG, at
- * decreasing quality, then a smaller scale estimated from how far over it
- * came, until it is at most `deliveredBytes` and its share of what the
- * message's `messageBytes` has left (budgetFor).
+ * long side, within its budget: what the message's `messageBytes` has left
+ * (budgetFor), and never over `deliveredBytes`. A PNG stays a PNG when it
+ * fits an even share of the message (`messageBytes / perMessage`); anything
+ * else is one lossy draw at BEST_QUALITY, at most one more at a lower
+ * quality when it came barely over, and otherwise a smaller scale estimated
+ * from how far over it came (shrink): about three draws an image.
  */
 
 import type { AttachmentType } from "@dude/domain";
@@ -66,16 +68,8 @@ export function fit(from: Size, maxSide: number, scale = 1): Size {
   return { width: Math.max(1, Math.round(from.width * ratio)), height: Math.max(1, Math.round(from.height * ratio)) };
 }
 
-/**
- * The encodings tried, in order, for a source of `type`: the same type
- * first for a PNG (lossless stays lossless when it fits), then WebP and
- * JPEG at falling quality.
- */
-export function encodings(type: string): Array<{ type: "image/png" | "image/webp" | "image/jpeg"; quality?: number }> {
-  const lossy: Array<{ type: "image/webp" | "image/jpeg"; quality: number }> = [];
-  for (const quality of [0.92, 0.85, 0.75, 0.6]) lossy.push({ type: "image/webp", quality }, { type: "image/jpeg", quality });
-  return type === "image/png" ? [{ type: "image/png" }, ...lossy] : lossy;
-}
+/** The quality of an image's first lossy draw. */
+export const BEST_QUALITY = 0.92;
 
 /** How a canvas encodes, so tests can stand in for one. */
 export interface Encoder {
@@ -104,36 +98,36 @@ export function nextScale(scale: number, size: number, budget: number): number {
 
 /**
  * The delivered variant within `budget`. A PNG source tries PNG once, at
- * full size (lossless when it fits). Then, at each scale, one lossy
- * encoding at its best quality — WebP, or JPEG where the browser cannot
- * make WebP; when that comes out at most LADDER over the budget, once more
- * at LADDER_QUALITY; otherwise the next scale is estimated from how far
- * over it came (nextScale). About three draws an image. Throws a
- * ShrinkError when the budget is below MIN_IMAGE_BUDGET, or nothing fits
- * after MAX_SCALES steps.
+ * full size, kept only within `losslessBudget` too: a lossless image would
+ * otherwise take what the message's later images need. Then, at each
+ * scale, one lossy encoding at BEST_QUALITY — WebP, or JPEG where the
+ * browser cannot make WebP; when that comes out at most LADDER over the
+ * budget, once more at LADDER_QUALITY; otherwise the next scale is
+ * estimated from how far over it came (nextScale). Throws a ShrinkError
+ * when the budget is below MIN_IMAGE_BUDGET, or nothing fits after
+ * MAX_SCALES steps.
  */
-export async function shrink(source: Size, sourceType: string, encoder: Encoder, maxSide: number, budget: number): Promise<{ blob: Blob; size: Size }> {
+export async function shrink(source: Size, sourceType: string, encoder: Encoder, maxSide: number, budget: number,
+  losslessBudget = budget): Promise<{ blob: Blob; size: Size }> {
   if (budget < MIN_IMAGE_BUDGET) throw new ShrinkError(BUDGET_SPENT);
-  const order = encodings(sourceType);
   let size = fit(source, maxSide);
-  if (order[0]?.type === "image/png") {
+  if (sourceType === "image/png") {
     const blob = await encoder.encode(size, "image/png");
-    if (blob?.type === "image/png" && blob.size <= budget) return { blob, size };
+    if (blob?.type === "image/png" && blob.size <= Math.min(budget, losslessBudget)) return { blob, size };
   }
-  // The first lossy encoding the browser can make: WebP, else JPEG.
-  let lossy = order.find((e) => e.type === "image/webp")!;
+  let lossy: "image/webp" | "image/jpeg" = "image/webp";
   const encode = async (quality: number) => {
-    let blob = await encoder.encode(size, lossy.type, quality);
+    let blob = await encoder.encode(size, lossy, quality);
     // A browser that cannot encode WebP gives a PNG instead: not what was asked.
-    if (blob?.type !== lossy.type && lossy.type === "image/webp") {
-      lossy = order.find((e) => e.type === "image/jpeg")!;
-      blob = await encoder.encode(size, lossy.type, quality);
+    if (blob?.type !== lossy && lossy === "image/webp") {
+      lossy = "image/jpeg";
+      blob = await encoder.encode(size, lossy, quality);
     }
-    return blob?.type === lossy.type ? blob : null;
+    return blob?.type === lossy ? blob : null;
   };
   let scale = 1;
   for (let step = 0; step < MAX_SCALES; step++) {
-    const best = await encode(lossy.quality!);
+    const best = await encode(BEST_QUALITY);
     if (!best) break;
     if (best.size <= budget) return { blob: best, size };
     if (best.size <= budget * LADDER) {
@@ -218,7 +212,9 @@ async function decodeInCanvas(file: File): Promise<Decoded> {
 
 /**
  * Make the delivered variant of `file` within `budget` bytes, and never
- * over `limits.deliveredBytes` whatever the budget.
+ * over `limits.deliveredBytes` whatever the budget. A PNG stays lossless
+ * only within an even share of the message, so images pasted one at a time
+ * leave room for the ones after.
  */
 export async function prepare(file: File, limits: Limits, budget: number, decode: (file: File) => Promise<Decoded> = decodeInCanvas): Promise<Prepared> {
   const type = sniffImage(new Uint8Array(await file.slice(0, 16).arrayBuffer()));
@@ -226,10 +222,23 @@ export async function prepare(file: File, limits: Limits, budget: number, decode
   if (room < MIN_IMAGE_BUDGET) throw new ShrinkError(BUDGET_SPENT);
   const image = await decode(file);
   try {
-    const made = await shrink(image.size, type ?? file.type, image.encoder, limits.maxSide, room);
+    const made = await shrink(image.size, type ?? file.type, image.encoder, limits.maxSide, room,
+      Math.floor(limits.messageBytes / limits.perMessage));
     const name = file.name && file.name !== "image.png" ? file.name : `pasted-${new Date().toISOString().slice(11, 19).replaceAll(":", "")}.png`;
     return { name: deliveredName(name, made.blob.type), original: file, delivered: made.blob, ...made.size };
   } finally {
     image.close();
   }
+}
+
+/**
+ * One tray chip's image, made as the tray makes it: refused with why
+ * (refuse), or its delivered variant within what the tray's other `chips`
+ * leave it (budgetFor). Throws as prepare does.
+ */
+export async function makeChip(chips: ReadonlyArray<BudgetChip>, self: string, file: File, limits: Limits,
+  decode: (file: File) => Promise<Decoded> = decodeInCanvas): Promise<{ refused: { short: string; detail: string } } | { made: Prepared }> {
+  const refused = await refuse(file, limits);
+  if (refused) return { refused };
+  return { made: await prepare(file, limits, budgetFor(chips, self, limits.messageBytes), decode) };
 }
