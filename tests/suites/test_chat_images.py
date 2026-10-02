@@ -60,8 +60,8 @@ def fake_lux_images(env, lux_run_id: str) -> dict:
 
 
 def _hanging_run(client: ApiClient, project: dict, title: str, model: str = "fake/hang") -> tuple[dict, dict]:
-    client.patch(f"/v1/projects/{project['id']}", {"agentModels": {
-        "implementer": {"model": model}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
+    client.patch(f"/v1/projects/{project['id']}", {"agentModels": client.on_models({
+        "implementer": model, "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
     task = client.create_task(project["id"], title)
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
     run = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["phase"] == "implement" and r["status"] == "running"), None),
@@ -339,8 +339,8 @@ def test_a_failed_image_steer_keeps_its_image_with_retry(
 def test_an_answer_carries_a_screenshot(
     page: Page, web_url: str, env, client: ApiClient, org: dict, forge_project: dict, owner_dsn: str, console_errors: list
 ):
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
-        "implementer": {"model": "fake/ask"}, "reviewer": {"model": "fake/hang"}, "simplifier": {"model": "fake/scripted"}}})
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
+        "implementer": "fake/ask", "reviewer": "fake/hang", "simplifier": "fake/scripted"})})
     task = client.create_task(forge_project["id"], "Phone layout")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
     run = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["phase"] == "implement"), None), timeout=60, message="no run")
@@ -368,8 +368,8 @@ def test_an_answer_carries_a_screenshot(
 def test_a_task_created_with_an_image_gives_it_to_its_first_agent(
     page: Page, web_url: str, env, client: ApiClient, org: dict, forge_project: dict, owner_dsn: str, console_errors: list
 ):
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
-        "implementer": {"model": "fake/hang"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
+        "implementer": "fake/hang", "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
     page.set_viewport_size({"width": 1440, "height": 900})
     sign_in(page, web_url, org["api_key"])
     page.get_by_test_id("new-task").click()
@@ -470,7 +470,9 @@ def test_attach_images_is_a_labelled_button(page: Page, web_url: str, org: dict,
     attach.hover()
     expect(page.get_by_role("tooltip")).to_contain_text("up to 10 MB each")
     # Pressed from the keyboard, it opens the file picker.
+    # The title is autofocused when the dialog opens; the button must hold focus before Enter.
     attach.focus()
+    expect(attach).to_be_focused()
     with page.expect_file_chooser() as chooser:
         page.keyboard.press("Enter")
     chooser.value.set_files([{"name": "picked.png", "mimeType": "image/png", "buffer": png(200, 120)}])
