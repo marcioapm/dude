@@ -14,6 +14,7 @@ import { ToolCallCard } from "../../components/ToolCallCard.tsx";
 import { ChatEvent } from "../../components/ChatEvent.tsx";
 import { ChatProgress } from "../../components/ChatProgress.tsx";
 import { ChatNotice } from "../../components/ChatNotice.tsx";
+import { TaskHistory } from "../../components/TaskHistory.tsx";
 import { Button, IconButton } from "../../primitives/Button.tsx";
 import { ACTIVITY_KINDS, ACTIVITY_SPECS } from "../../tokens/activity.ts";
 import { at } from "../fixtures.tsx";
@@ -381,6 +382,29 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
             <ChatMessage role="human" name="marcio" intent="steer" content="Do not change the public API of GithubClient. Add the retry inside `post` only." startedAt={at(1_530_000)} deliveredAt={null} />
             <ChatMessage role="human" name="marcio" intent="steer" content="Do not change the public API of GithubClient. Add the retry inside `post` only." startedAt={at(1_530_000)} deliveredAt={at(1_571_000)} read />
             <ChatMessage role="reviewer" model="claude-opus-4" content="Backoff jitter uses `Math.random`; consider seeding for tests (minor)." startedAt={at(1_640_000)} endedAt={at(1_650_000)} costUsd={0.03} activity="failed" activityProps={{ detail: "upstream 500 after 5 attempts" }} />
+          </Col>
+        </Panes>
+      </Block>
+
+      <Block
+        id="ch-conductor"
+        title="A task's Chat"
+        note="Talking with a task's conductor. TaskHistory heads it: how the task went, what ran (a fan-out folded, ×3), what it came to — the whole line before anyone has written. The first message is the person's own turn (intent message: signed, no tint — talking, not intervening); dude's briefing follows, a framed prompt tagged Briefing and signed with the task's dude name. The conductor answers with its own face (round, violet). dude's notices in Chat say who says them. The composer is chat: Send, accent focus, no interrupt, and 'To Conductor · read-only' where 'Sent as' would be."
+      >
+        <Panes mode={mode} surface>
+          <Col>
+            <TaskHistory lead="Delivered automatically, merged" steps={["implementer", "reviewers ×3", "fixer", "reviewers ×3", "simplifier", "PR #88"]}
+              facts={["5 findings, all settled", "$9.80"]} />
+            <ChatMessage role="human" name="Márcio" intent="message" content="why is the max backoff 8s and not something like 30? and does this retry POSTs?" startedAt={at(0)} />
+            <ChatMessage role="system" name="El Duderino" intent="briefing" startedAt={at(1_000)}
+              content={"Conductor, Márcio wrote in the Chat of SDK-31, \"Retry on 429 with backoff\". You are this task's conductor: answer them.\n\n## The task\n\nSDK-31 · status done\n\n## Runs (8)\n\n- run_… · implement · implementer · completed · Implemented it.\n- run_… · review · correctness · reviewer · completed · One problem."} />
+            <ChatAside><ToolCallCard name="bash" status="completed" args={{ command: "rg -n \"maxBackoff|idempot\" src/" }} durationMs={200} /></ChatAside>
+            <ChatMessage role="conductor" model="claude-sonnet-4.5" startedAt={at(9_000)} endedAt={at(16_000)} costUsd={0.02}
+              content={"**8s**: Tiago asked for it on the PR — *\"browser tab will look hung past ~10s, cap it\"*. The first implementer had 30s; the PR-fix Run changed it to 8s.\n\n**POSTs**: only when the request carries an `Idempotency-Key` (`src/http/retry.ts:41`)."} />
+            <ChatNotice kind="parked" by="El Duderino" text="Parked while nobody is writing — nothing is held; your next message resumes it." at={at(320_000)} />
+            <div style={{ border: "1px solid var(--ds-color-border-subtle)", borderRadius: "var(--ds-radius-control)", overflow: "hidden" }}>
+              <ChatComposer mode="chat" sentAs="Márcio" to={<>To <b>Conductor</b> · read-only</>} onSubmit={() => undefined} />
+            </div>
           </Col>
         </Panes>
       </Block>

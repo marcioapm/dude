@@ -18,7 +18,8 @@ export type Place =
   | { view: "inbox" };
 
 /** The task tabs a URL can name. */
-export type TaskTab = "servers";
+export type TaskTab = "servers" | "chat";
+const TASK_TABS: readonly string[] = ["servers", "chat"];
 
 const TREE_KINDS: ReadonlyArray<NavRef["kind"]> = ["project", "epic", "task", "run", "session"];
 
@@ -37,7 +38,7 @@ export function parsePlace(hash: string): Place | null {
     return page ? { view: "projectSettings", projectId: decoded, page } : { view: "projectSettings", projectId: decoded };
   }
   const ref = { kind: kind as NavRef["kind"], id: decoded };
-  return kind === "task" && view === "servers" ? { view: "tree", ref, tab: "servers" } : { view: "tree", ref };
+  return kind === "task" && view && TASK_TABS.includes(view) ? { view: "tree", ref, tab: view as TaskTab } : { view: "tree", ref };
 }
 
 export function formatPlace(place: Place | null): string {

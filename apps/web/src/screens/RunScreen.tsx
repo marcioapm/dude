@@ -10,7 +10,7 @@
  * wrong, not watched continuously.
  */
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AgentPlan,
   ChatComposer,
@@ -19,6 +19,7 @@ import {
   ChatNotice,
   ChatProgress,
   ChatTranscript,
+  CostDisplay,
   EventRow,
   EventStream,
   ChangedFiles,
@@ -69,6 +70,20 @@ export interface RunScreenProps {
    * the owner alone, its key being on the page already.
    */
   task?: { owner: Person | null; key?: string | undefined } | undefined;
+  /**
+   * Shown as a task's Chat, its conductor's conversation: no session
+   * header or view switch, `head` above the turns (the task's history), and
+   * a composer that talks to the conductor through `send` — always open: a
+   * parked conductor wakes for a message, and one that ended is replaced.
+   */
+  chat?: ChatVariant | undefined;
+}
+
+export interface ChatVariant {
+  head: ReactNode;
+  send: (text: string) => Promise<unknown>;
+  /** What the rail says of the task, beside the conductor's own facts. */
+  briefedWith: ReadonlyArray<{ label: string; value: ReactNode; mono?: boolean }>;
 }
 
 /** What a session shows: its conversation, its checkout's changes, or its event ledger. */
@@ -90,7 +105,7 @@ const STATUS_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.RunResumed,
 ]);
 
-export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, onOpenServers, onBack, task: given }: RunScreenProps) {
+export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, onOpenServers, onBack, task: given, chat }: RunScreenProps) {
   const [view, setView] = useState<SessionView>("chat");
   // The bar's slot where Changes draws the diff's own controls.
   const [toolbar, setToolbar] = useState<HTMLDivElement | null>(null);
@@ -244,13 +259,16 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
   }, [notice, run?.status]);
 
   // Awaited, so the composer stays busy until the API has answered: no
-  // second submit of the same words while the first is on its way.
+  // second submit of the same words while the first is on its way. In a
+  // task's Chat every message — an answer to its question too — goes to
+  // the task's Chat, which knows what the conductor waits on.
   const send = useCallback(
     (submission: ComposerSubmission) =>
-      submission.mode === "answer"
+      chat ? intervene(() => chat.send(submission.text), "send the message")
+      : submission.mode === "answer"
         ? intervene(() => client.answer(submission.questionId, submission.text), "answer the agent")
         : intervene(() => client.steer(runId, submission.text, { interrupt: submission.mode === "steer" && submission.interrupt }), "steer this run"),
-    [client, runId, intervene],
+    [client, runId, intervene, chat],
   );
 
   // Interrupt now (a queued steer) and Retry (a failed one) send the same
@@ -325,6 +343,71 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     resend: resteer,
   } : undefined;
   const render = (turn: Turn) => renderTurn(turn, role, conversation.contextWindow, !isLive, people, dude, decide, waitingOn, steer);
+
+  if (chat) {
+    // A task's Chat: the conductor's conversation under the task's history,
+    // a composer that always talks to the task's conductor, and the rail
+    // with what it was briefed with — no session header or views: the task
+    // page around it is the context.
+    const asking = conversation.openQuestion;
+    return (
+      <div className="runScreen" data-view="chat" data-testid="chat-screen">
+        <div className="runView">
+          <div className="runChat">
+            <ChatTranscript
+              fill
+              live={isLive}
+              revision={events.length}
+              turns={conversation.turns.length}
+              pinned={chat.head}
+              footer={
+                <ChatComposer
+                  mode={asking ? "answer" : "chat"}
+                  question={asking ? {
+                    id: asking.questionId, text: asking.text, askedBy: "the conductor", askedAt: asking.at,
+                    options: waitingOn ? [] : asking.options,
+                  } : undefined}
+                  disabled={asking !== null && waitingOn !== undefined}
+                  disabledReason={waitingOn ? `Waiting for ${waitingOn} to answer.` : undefined}
+                  onSubmit={send}
+                  sentAs={youName ? firstName(youName) : undefined}
+                  to={<>To <b>Conductor</b> · read-only</>}
+                />
+              }
+              emptyMessage="Waiting for the conductor to start."
+            >
+              {grouped.map((group) => Array.isArray(group)
+                ? <ChatAside key={group[0]!.id}>{group.map(render)}</ChatAside>
+                : render(group))}
+              {conversation.activity ? (
+                <ChatMessage role={role} activity={conversation.activity}
+                  activityProps={conversation.activeTool ? { label: conversation.activeTool.name, since: conversation.activeTool.since } : undefined} />
+              ) : null}
+            </ChatTranscript>
+            <SessionRail className="runRail" aria-label="The conductor" data-testid="chat-rail">
+              <SessionRailBlock label="Briefed with">
+                <SessionFacts facts={[...chat.briefedWith]} />
+              </SessionRailBlock>
+              <SessionRailBlock label="Conductor">
+                <SessionFacts facts={[
+                  ...(run.model ? [{ label: "Model", value: run.model, mono: true }] : []),
+                  ...(run.machine ? [{ label: "Machine", value: run.machine.name }] : []),
+                  { label: "Cost", value: <CostDisplay usd={modelCostShown(conversation.costUsd, conversation.costSource.from)} /> },
+                ]} />
+              </SessionRailBlock>
+              {tools.length > 0 ? (
+                <SessionRailBlock label="Tools used">
+                  <ToolUsage tools={tools} />
+                </SessionRailBlock>
+              ) : null}
+            </SessionRail>
+          </div>
+        </div>
+        {notice ? <Callout tone="neutral" data-testid="conflict-notice">{notice.text}</Callout> : null}
+        {problem ? <Callout tone="danger">{problem}</Callout> : null}
+      </div>
+    );
+  }
   // A checkout to show: a Run with one, or any Run that has reported a diff
   // (the rail's files open Changes, so Changes must be there to open).
   const hasChanges = Object.keys(run.baseRefs).length > 0 || run.phase !== null || changed.length > 0;
@@ -626,7 +709,7 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
       );
     }
     case "notice":
-      return <ChatNotice key={turn.id} data-testid="chat-notice" kind={turn.notice} text={turn.text} at={turn.at}
+      return <ChatNotice key={turn.id} data-testid="chat-notice" kind={turn.notice} text={turn.text} at={turn.at} by={dude}
         {...(turn.title ? { title: turn.title } : {})} />;
     case "ended":
       // Where the transcript stops, and why: a failure in its tone, not a
@@ -661,13 +744,16 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
       );
     case "prompt":
       // Written by the factory, not a person: the avatar and name say so.
+      // A conductor's is dude's briefing of it, tagged so.
       return (
-        <ChatMessage key={turn.id} role="system" name={dude} avatar={<DudeMark size="fill" />} intent="prompt" content={turn.text} startedAt={turn.at} />
+        <ChatMessage key={turn.id} role="system" name={dude} avatar={<DudeMark size="fill" />} intent={turn.briefing ? "briefing" : "prompt"}
+          content={turn.text} startedAt={turn.at} data-testid={turn.briefing ? "chat-briefing" : undefined} />
       );
     case "message":
       return (
         <ChatMessage
           key={turn.id}
+          data-testid={role === "conductor" ? "conductor-turn" : undefined}
           role={role}
           content={turn.text}
           startedAt={turn.at}
@@ -693,9 +779,9 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
       // Signed: the person's face and name when known; "Someone" only when the ledger kept no one.
       const name = actorName(turn.by, people.names);
       const person = name && turn.by ? { ...(people.byId.get(turn.by.id) ?? {}), id: turn.by.id, name } : undefined;
-      const wait = steer && turn.intent === "steer" && turn.deliveredAt === null && !turn.failed ? steer.wait(turn) : null;
-      // Only where there is a turn to stop, and not twice.
-      const interruptible = (wait?.kind === "tool" || wait?.kind === "next_step" || wait?.kind === "next_turn") && !turn.interrupting;
+      const wait = steer && (turn.intent === "steer" || turn.intent === "message") && turn.deliveredAt === null && !turn.failed ? steer.wait(turn) : null;
+      // Only where there is a turn to stop, and not twice; never a message in Chat, which starts a turn.
+      const interruptible = turn.intent === "steer" && (wait?.kind === "tool" || wait?.kind === "next_step" || wait?.kind === "next_turn") && !turn.interrupting;
       return (
         <ChatMessage
           key={turn.id}

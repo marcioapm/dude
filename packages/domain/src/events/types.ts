@@ -209,6 +209,12 @@ export const EventTypes = {
    * delivered as the directive named.
    */
   ChatMessage: "chat.message",
+  /**
+   * dude briefed a task's new conductor: `{ text }` is its first prompt —
+   * dude's note on the task, then the first message. Written with the
+   * Run, after that message's `chat.message`.
+   */
+  ConductorBriefed: "conductor.briefed",
 
   // Artifacts
   ArtifactCreated: "artifact.created",

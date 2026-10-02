@@ -32,6 +32,10 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
+.by {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-secondary);
+}
 .time {
   font-family: var(--ds-font-mono);
   font-variant-numeric: tabular-nums;

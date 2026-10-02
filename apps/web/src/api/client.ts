@@ -173,6 +173,15 @@ export interface TaskDetail extends Task {
   escalation: Escalation | null;
 }
 
+/** What a message in a task's Chat reached: its conductor, made by it or not. */
+export interface ChatSent {
+  runId: string;
+  taskId: string;
+  created: boolean;
+  directiveId?: string;
+  questionId?: string;
+}
+
 /**
  * The navigation tree gives each task's escalation, when delivery stopped
  * for a person; the design system's NavTask shows it as what the task waits
@@ -765,6 +774,14 @@ export class ApiClient {
   /** Answer the question an agent stopped on; the answer starts its next turn. */
   answer(questionId: string, text: string): Promise<{ id: string; status: "answered" }> {
     return this.#request("POST", `/v1/questions/${questionId}/answer`, { text });
+  }
+
+  /**
+   * A message in a task's Chat: it starts the task's conductor, or is its
+   * next input (or the answer to its question). Says which Run heard it.
+   */
+  chat(taskId: string, text: string): Promise<ChatSent> {
+    return this.#request("POST", `/v1/tasks/${taskId}/chat`, { text });
   }
 
   // -- servers: a project's recipes, and what a run serves ---------------

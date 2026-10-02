@@ -4,8 +4,12 @@ import { Icon } from "../icons/index.tsx";
 import { Button } from "../primitives/Button.tsx";
 import styles from "./ChatComposer.module.css";
 
-/** The two ways a human intervenes, plus the initial prompt. */
-export type ComposerMode = "answer" | "steer" | "prompt";
+/**
+ * The two ways a human intervenes, plus the initial prompt, plus `chat`:
+ * talking with a task's conductor, which is a conversation, not an
+ * intervention in someone's turn.
+ */
+export type ComposerMode = "answer" | "steer" | "prompt" | "chat";
 
 export interface PendingQuestion {
   readonly id: string;
@@ -52,22 +56,30 @@ export interface ChatComposerProps extends Omit<HTMLAttributes<HTMLFormElement>,
    * the turn ends". The app knows; the composer only says it.
    */
   readonly landsHint?: ReactNode;
+  /**
+   * Chat only: who it goes to and on what terms, where `sentAs` would be —
+   * "To **Conductor** · read-only".
+   */
+  readonly to?: ReactNode;
 }
 
 export type ComposerSubmission =
   | { readonly mode: "answer"; readonly questionId: string; readonly text: string }
   | { readonly mode: "steer"; readonly text: string; readonly interrupt: boolean }
-  | { readonly mode: "prompt"; readonly text: string };
+  | { readonly mode: "prompt"; readonly text: string }
+  | { readonly mode: "chat"; readonly text: string };
 
 const MODE_LABEL: Record<ComposerMode, string> = {
   answer: "Answer",
   steer: "Steer",
   prompt: "Send",
+  chat: "Send",
 };
 const MODE_PLACEHOLDER: Record<ComposerMode, string> = {
   answer: "Type your answer…",
   steer: "Steer the agent…",
   prompt: "Describe the task…",
+  chat: "Ask about this task…",
 };
 
 /**
@@ -88,7 +100,12 @@ const MODE_PLACEHOLDER: Record<ComposerMode, string> = {
  *           heard at once — that is the costly one, and it is a
  *           deliberate tick, not a key.
  *
- * Enter sends in both modes; Shift+Enter always inserts a newline. The
+ *   chat    a task's Chat: a message to its conductor, which answers it.
+ *           Accent-toned like a steer — it is talking to an agent — but
+ *           with Send and no interrupt: it starts the conductor's next
+ *           turn, never cuts one short. `to` names who it goes to.
+ *
+ * Enter sends in every mode; Shift+Enter always inserts a newline. The
  * action row says who it is sent as.
  */
 export function ChatComposer({
@@ -107,6 +124,7 @@ export function ChatComposer({
   sentAs,
   canInterrupt,
   landsHint,
+  to,
   className,
   ...rest
 }: ChatComposerProps) {
@@ -141,7 +159,10 @@ export function ChatComposer({
     const t = (override ?? text).trim();
     if (disabled || busy || t.length === 0) return;
     const submission: ComposerSubmission =
-      mode === "answer" && question ? { mode: "answer", questionId: question.id, text: t } : mode === "steer" ? { mode: "steer", text: t, interrupt } : { mode: "prompt", text: t };
+      mode === "answer" && question ? { mode: "answer", questionId: question.id, text: t }
+        : mode === "steer" ? { mode: "steer", text: t, interrupt }
+        : mode === "chat" ? { mode: "chat", text: t }
+        : { mode: "prompt", text: t };
     setBusy(true);
     try {
       await onSubmit(submission);
@@ -209,7 +230,9 @@ export function ChatComposer({
             ))}
           </div>
         ) : null}
-        {sentAs && !isDisabled ? (
+        {mode === "chat" && to && !isDisabled ? (
+          <span className={styles["sentAs"]} data-testid="composer-to">{to}</span>
+        ) : sentAs && !isDisabled ? (
           <span className={styles["sentAs"]}>
             Sent as <b>{sentAs}</b>
           </span>
