@@ -134,18 +134,26 @@ def bring_up(keep: bool) -> TestEnvironment:
 
 
 def reuse(state: dict) -> TestEnvironment | None:
-    os.environ.update({
-        "DUDE_TEST_RUN_ID": state["run_id"], "DUDE_TEST_CONTROL_PLANE_PORT": str(state["control_plane_port"]),
-        "DUDE_TEST_ORCHESTRATOR_PORT": str(state["orchestrator_port"]), "DUDE_TEST_LOG_DIR": state["log_dir"],
-        "DUDE_TEST_REAL_LUX": "1",
-    })
+    _state_env(state)
+    os.environ["DUDE_TEST_REAL_LUX"] = "1"
     if state.get("lux_env"):
         os.environ["DUDE_TEST_LUX_ENV"] = state["lux_env"]
     env = TestEnvironment.from_env()
     return env if env.wait_healthy(timeout=3) else None
 
 
+def _state_env(state: dict) -> None:
+    """The variables TestEnvironment.from_env rebuilds a kept environment from."""
+    os.environ.update({
+        "DUDE_TEST_RUN_ID": state["run_id"], "DUDE_TEST_CONTROL_PLANE_PORT": str(state["control_plane_port"]),
+        "DUDE_TEST_ORCHESTRATOR_PORT": str(state["orchestrator_port"]), "DUDE_TEST_LOG_DIR": state["log_dir"],
+    })
+
+
 def take_down() -> None:
+    """A kept environment's processes stopped and its database, bucket and
+    files dropped, as a run of the suite drops them. Local only: lux is not
+    asked anything, so this works with lux down too."""
     if not STATE.exists():
         raise SystemExit(f"no kept environment ({STATE})")
     state = json.loads(STATE.read_text())
@@ -154,20 +162,18 @@ def take_down() -> None:
             os.kill(pid, signal.SIGTERM)
         except ProcessLookupError:
             pass
-    # Its database, bucket and files: dropped as a run of the suite drops them.
-    reuse(state)
+    _state_env(state)
+    os.environ.pop("DUDE_TEST_REAL_LUX", None)
     TestEnvironment.from_env().teardown()
     STATE.unlink()
     log(f"taken down; logs kept in {state['log_dir']}")
 
 
-def project(env: TestEnvironment, image: str, model: str) -> tuple[ApiClient, dict, FakeGitHub, str]:
-    """An organization of its own, and a project on a stand-in GitHub that
-    lux's hosts reach at their network's gateway."""
+def project(env: TestEnvironment, gh: FakeGitHub, image: str, model: str) -> tuple[ApiClient, dict, str]:
+    """An organization of its own, and a project on the stand-in GitHub
+    (which lux's hosts reach at their network's gateway)."""
     org = create_organization(env.owner_dsn, f"measure{os.urandom(3).hex()}")
     client = ApiClient(env.control_plane_url, create_api_key(env.owner_dsn, org))
-    gh = FakeGitHub(env.git_root, owner=f"m{os.urandom(4).hex()}", listen=env.real_lux["gateway"])
-    gh.start()
     resp = client.post("/v1/forge/credential", {"auth": "pat", "secret": "fake-token", "apiBaseUrl": gh.api_url})
     assert resp.status_code == 200, resp.text
     implementer = "fake/live" if model.startswith("fake/") else model
@@ -175,27 +181,53 @@ def project(env: TestEnvironment, image: str, model: str) -> tuple[ApiClient, di
     proj = client.create_project(name="Resume timing", slug=f"resume-{os.urandom(3).hex()}", runtimeImage=image,
                                  agentModels=models,
                                  repositories=[{"name": "target", "url": gh.clone_url, "defaultBranch": "main"}])
-    return client, proj, gh, implementer
+    return client, proj, implementer
 
 
 # -- one cycle -----------------------------------------------------------------
+
+
+def timed_for(events: list[dict], stopped_epoch: int) -> dict | None:
+    """The run.resume.timed of the resume out of stopped_epoch: the first
+    timing of a later epoch."""
+    return next((e for e in events if e["eventType"] == "run.resume.timed"
+                 and e["payload"].get("epoch", 0) > stopped_epoch), None)
 
 
 class Cycler:
     def __init__(self, env: TestEnvironment, client: ApiClient, proj: dict, timeout: float) -> None:
         self.env, self.client, self.project, self.timeout = env, client, proj, timeout
         self.run: dict | None = None
+        # Every task delivered, so cleanup finds each of their Runs.
+        self.tasks: list[str] = []
+        # Each Run's events read so far, from the API's cursor on.
+        self.seen: dict[str, list[dict]] = {}
+        self.cursor: dict[str, int] = {}
 
-    def lux_state(self, lux_run_id: str) -> str:
+    def lux_run(self, lux_run_id: str) -> dict:
         r = requests.get(f"{self.env.lux_url}/v1/runs/{lux_run_id}",
                          headers={"authorization": f"Bearer {self.env.lux_key}"}, timeout=10)
         r.raise_for_status()
-        return r.json()["state"]
+        return r.json()
 
     def row(self, run_id: str) -> dict:
         return query(self.env.owner_dsn, """SELECT status::text, COALESCE(lux_run_id, '') AS lux_run_id,
             COALESCE(lux_state, '') AS lux_state, agent_busy_at IS NOT NULL AND turn_done_at IS NULL AS working
             FROM runs WHERE id = %s""", (run_id,))[0]
+
+    def events(self, run_id: str) -> list[dict]:
+        """The Run's events, every page, read on from where the last call
+        left off."""
+        seen = self.seen.setdefault(run_id, [])
+        while True:
+            resp = self.client.get("/v1/events", params={"runId": run_id, "after": self.cursor.get(run_id, 0),
+                                                          "limit": 1000})
+            assert resp.status_code == 200, resp.text
+            page = resp.json()
+            seen.extend(page["events"])
+            self.cursor[run_id] = page["nextCursor"]
+            if not page["events"]:
+                return seen
 
     def working_run(self) -> dict:
         """The Run of the last cycle while its agent still works, else a new task's implementer."""
@@ -205,6 +237,7 @@ class Cycler:
                 return self.run
             self.client.post(f"/v1/runs/{self.run['id']}/abort", {"reason": "measured"})
         task = self.client.create_task(self.project["id"], f"Resume timing {os.urandom(2).hex()}")
+        self.tasks.append(task["id"])
         assert self.client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
         self.run = wait("the implementer to start", lambda: next(
             (r for r in self.client.task_runs(task["id"]) if r["phase"] == "implement"), None), self.timeout)
@@ -214,20 +247,41 @@ class Cycler:
         run = self.working_run()
         wait("the agent to be working", lambda: (lambda r: r["status"] == "running" and r["lux_state"] == "running"
                                                  and r["working"])(self.row(run["id"])), self.timeout)
-        before = {e["eventId"] for e in self.timed(run["id"])}
         resp = self.client.post(f"/v1/runs/{run['id']}/pause", {})
         assert resp.status_code == 200, resp.text
         lux_run_id = self.row(run["id"])["lux_run_id"]
-        wait("lux to report it stopped", lambda: self.lux_state(lux_run_id) == "stopped", self.timeout)
+        stopped = wait("lux to report it stopped", lambda: (lambda r: r["state"] == "stopped" and r)(
+            self.lux_run(lux_run_id)), self.timeout)
         wait("dude to see it paused", lambda: self.row(run["id"])["status"] == "paused", self.timeout)
         resp = self.client.post(f"/v1/runs/{run['id']}/resume", {})
         assert resp.status_code == 200, resp.text
-        event = wait("the resume's run.resume.timed", lambda: next(
-            (e for e in self.timed(run["id"]) if e["eventId"] not in before), None), self.timeout)
+        event = wait("the resume's run.resume.timed", lambda: timed_for(self.events(run["id"]), stopped["epoch"]),
+                     self.timeout)
         return {"runId": run["id"], **event["payload"]}
 
-    def timed(self, run_id: str) -> list[dict]:
-        return [e for e in self.client.events(runId=run_id) if e["eventType"] == "run.resume.timed"]
+    def abort_all(self, timeout: float = 120) -> None:
+        """Every Run this measured aborted, and lux seen to have cancelled
+        each (or finished it), while dude is still up to tell lux. Best
+        effort: a failure is said, and the rest still cleaned up."""
+        runs = []
+        for task_id in self.tasks:
+            try:
+                runs += [r for r in self.client.task_runs(task_id)]
+            except Exception as err:  # noqa: BLE001 - cleanup goes on
+                log(f"could not list task {task_id}'s Runs: {err}")
+        for run in runs:
+            try:
+                row = self.row(run["id"])
+                # A completed Run's lux Run is stopped, holding no host; any
+                # other is aborted here, and dude cancels it in lux.
+                ended = ("stopped", "cancelled", "succeeded", "failed") if row["status"] == "completed" else ("cancelled",)
+                if row["status"] not in ("completed", "failed", "aborted"):
+                    self.client.post(f"/v1/runs/{run['id']}/abort", {"reason": "measured"})
+                if row["lux_run_id"]:
+                    wait(f"lux to end {row['lux_run_id']}",
+                         lambda: self.lux_run(row["lux_run_id"])["state"] in ended, timeout)
+            except (Exception, SystemExit) as err:  # noqa: BLE001 - cleanup goes on
+                log(f"could not end Run {run['id']} on lux: {err}")
 
 
 # -- the numbers ------------------------------------------------------------------
@@ -307,9 +361,12 @@ def main() -> None:
         log(NO_TENANT_MOVE)
     env = bring_up(args.keep)
     gh = None
+    cycler = None
     cycles: list[dict] = []
     try:
-        client, proj, gh, implementer = project(env, args.image, args.model)
+        gh = FakeGitHub(env.git_root, owner=f"m{os.urandom(4).hex()}", listen=env.real_lux["gateway"])
+        gh.start()
+        client, proj, implementer = project(env, gh, args.image, args.model)
         if implementer != args.model:
             notes.append(f"the implementer runs {implementer}: {args.model}'s finishes its turn at once, "
                          "leaving nothing working to pause")
@@ -318,9 +375,11 @@ def main() -> None:
             c = cycler.cycle()
             cycles.append(c)
             log(f"cycle {i + 1}/{args.cycles}: {ms(c.get('totalMs'))}")
-        if cycler.run:
-            client.post(f"/v1/runs/{cycler.run['id']}/abort", {"reason": "measured"})
     finally:
+        # Whatever happened, no Run is left working on lux: aborted while
+        # dude and the stand-in GitHub are still up, and seen cancelled.
+        if cycler:
+            cycler.abort_all()
         if gh:
             gh.stop()
         if not args.keep:
