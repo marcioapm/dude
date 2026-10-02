@@ -552,6 +552,21 @@ func (s *Server) BeforeStart(fn func(runID string)) {
 	s.beforeStart = fn
 }
 
+// EventState is the state a Run's state event reported; "" for another.
+func (s *Server) EventState(runID string, eventID int64) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[runID]; run != nil {
+		for _, e := range run.events {
+			if e.ID == eventID {
+				st, _ := e.Data["state"].(string)
+				return st
+			}
+		}
+	}
+	return ""
+}
+
 // State is the Run's state now.
 func (s *Server) State(id string) string {
 	s.mu.Lock()
