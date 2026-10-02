@@ -9,8 +9,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { act, click, mount, settle, until } from "./dom.ts";
-import { FixtureClient } from "../src/fixtures/client.ts";
-import { ORPHAN_FINDING, RUN_ID, TASK_ID, taskFor } from "../src/fixtures/data.ts";
+import { FixtureClient, emit } from "../src/fixtures/client.ts";
+import { ORG, ORPHAN_FINDING, PROJECT, RUN_ID, TASK_ID, YOU, taskFor } from "../src/fixtures/data.ts";
 import { stopOf } from "../src/screens/Recovery.tsx";
 import type { RecoverAction } from "../src/api/client.ts";
 import { App } from "../src/App.tsx";
@@ -296,7 +296,34 @@ describe("a task started over", () => {
     await until(() => (shown(page) === "2" ? true : null), "attempt 2 again");
   });
 
-  test("an attempt 1 session still recorded as running is read-only too", async () => {
+  /** A repository request, a queued steer and a failed one, on `runId`'s transcript. */
+  async function askAndSteer(runId: string) {
+    const at = new Date().toISOString();
+    const send = (eventType: string, payload: Record<string, unknown>, actor = { type: "agent", id: runId }) => act(async () => {
+      emit({ eventType, occurredAt: at, organizationId: ORG.id, projectId: PROJECT.id, taskId: TASK_ID, runId, sessionId: `${runId}-s`,
+        workflowRunId: null, actor, source: "control-plane", correlationId: null, causationId: null, payload } as never);
+    });
+    const me = { type: "human", id: YOU };
+    await send("repository.requested", { requestId: "rr_1", repository: "example/billing", access: "read", reason: "The invoice types live there." });
+    await send("run.steered", { text: "Keep the old route too.", directiveId: "dir_q" }, me);
+    await send("run.steered", { text: "And the tests.", directiveId: "dir_f" }, me);
+    await send("run.directive.failed", { directiveId: "dir_f", error: "the agent exited" });
+    await settle(50);
+  }
+  // A question card's options read "1Approve": their index, then the word.
+  const buttons = (root: ParentNode, text: string) => [...root.querySelectorAll("button")].filter((b) => b.textContent?.endsWith(text)).length;
+
+  test("on a running session of attempt 2, a repository request can be decided and steers interrupted or retried", async () => {
+    const page = await taskPage(restarted(), { runId: "run_a2_fix" });
+    await until(() => page.querySelector("[data-testid=abort]"), "Abort on attempt 2's fixer");
+    await askAndSteer("run_a2_fix");
+    const request = await until(() => page.querySelector<HTMLElement>("[data-testid=repository-request]"), "the repository request");
+    expect(buttons(request, "Approve")).toBe(1);
+    expect(buttons(page, "Interrupt now")).toBe(1);
+    expect(buttons(page, "Retry")).toBe(1);
+  });
+
+  test("an attempt 1 session still recorded as running is read-only too, its transcript included", async () => {
     const client = restarted();
     const getTask = client.getTask.bind(client);
     const live = (r: Awaited<ReturnType<typeof getTask>>["runs"][number]) => (r.id === "run_a1_fix" ? { ...r, status: "running" as const, endedAt: null } : r);
@@ -310,6 +337,13 @@ describe("a task started over", () => {
     await until(() => page.querySelector("[data-testid=run-ended]"), "the set-aside strip");
     expect(count(page, "[data-testid=abort]")).toBe(0);
     expect(count(page, "textarea")).toBe(0);
+    await askAndSteer("run_a1_fix");
+    const request = await until(() => page.querySelector<HTMLElement>("[data-testid=repository-request]"), "the repository request");
+    await until(() => (count(page, "[data-testid=human-turn]") === 2 ? true : null), "both steers");
+    expect(buttons(request, "Approve")).toBe(0);
+    expect(buttons(request, "Decline")).toBe(0);
+    expect(buttons(page, "Interrupt now")).toBe(0);
+    expect(buttons(page, "Retry")).toBe(0);
   });
 
   test("a running session of attempt 2 can be steered and stopped", async () => {
