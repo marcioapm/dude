@@ -9,7 +9,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { act, mount, until } from "./dom.ts";
-import type { Epic } from "../src/api/client.ts";
+import { ApiError, type Epic } from "../src/api/client.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { PROJECT } from "../src/fixtures/data.ts";
 import { TaskDialog, type ExistingTask } from "../src/screens/TaskDialog.tsx";
@@ -27,11 +27,11 @@ class EpicsClient extends FixtureClient {
   }
 }
 
-async function open(existing?: ExistingTask) {
+async function open(existing?: ExistingTask, client: FixtureClient = new EpicsClient("a")) {
   const { unmount } = await mount(
     <TooltipProvider>
       <ToastProvider>
-        <TaskDialog client={new EpicsClient("a")} projectId={PROJECT.id} existing={existing} onClose={() => {}} onSaved={() => {}} />
+        <TaskDialog client={client} projectId={PROJECT.id} existing={existing} onClose={() => {}} onSaved={() => {}} />
       </ToastProvider>
     </TooltipProvider>,
   );
@@ -126,10 +126,11 @@ describe("editing a task saved before the rule", () => {
 
 const PNG = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0, 0, 0, 0])], "design.png", { type: "image/png" });
 
-/** A file drag event on `target` (the goal), carrying `file`. */
-function fileEvent(type: string, file: File, target = "task-goal") {
+/** A file drag event on `target` (the goal), carrying `file` (or several). */
+function fileEvent(type: string, file: File | File[], target = "task-goal") {
+  const files = Array.isArray(file) ? file : [file];
   const e = new Event(type, { bubbles: true, cancelable: true }) as Event & { dataTransfer: unknown };
-  e.dataTransfer = { types: ["Files"], items: [file], files: [file], dropEffect: "" };
+  e.dataTransfer = { types: ["Files"], items: files, files, dropEffect: "" };
   document.querySelector(`[data-testid=${target}]`)!.dispatchEvent(e);
   return e;
 }
@@ -267,6 +268,114 @@ describe("laying out a task's images in Preview", () => {
     await act(async () => goal.querySelector<HTMLElement>('[data-testid="markdown-figure"]')!.click());
     expect(document.querySelector("[data-image-toolbar]")).toBeNull();
     expect(goal.querySelector("[draggable=true]")).toBeNull();
+  });
+});
+
+/** Records each save call in order; a call named in `failing` rejects that many times first. */
+class SaveRecorder extends EpicsClient {
+  calls: Array<{ call: string; detail?: unknown }> = [];
+  failing: Record<string, number> = {};
+  #uploads = 0;
+  #fail(call: string) {
+    if ((this.failing[call] ?? 0) === 0) return;
+    this.failing[call]!--;
+    throw new ApiError(500, "internal", `${call} failed`);
+  }
+  override async createTask(input: Parameters<FixtureClient["createTask"]>[0]) {
+    this.calls.push({ call: "createTask", detail: input });
+    this.#fail("createTask");
+    return { id: "task_new" } as Awaited<ReturnType<FixtureClient["createTask"]>>;
+  }
+  override async uploadAttachment(taskId: string, image: Parameters<FixtureClient["uploadAttachment"]>[1]) {
+    this.calls.push({ call: "uploadAttachment", detail: taskId });
+    this.#fail("uploadAttachment");
+    return { id: `att_real${++this.#uploads}`, name: image.name } as Awaited<ReturnType<FixtureClient["uploadAttachment"]>>;
+  }
+  override async updateTask(id: string, fields: Parameters<FixtureClient["updateTask"]>[1]) {
+    this.calls.push({ call: "updateTask", detail: { id, ...fields } });
+    this.#fail("updateTask");
+    return { id } as Awaited<ReturnType<FixtureClient["updateTask"]>>;
+  }
+  override async deliver(taskId: string) {
+    this.calls.push({ call: "deliver", detail: taskId });
+    this.#fail("deliver");
+    return { workflowRunId: "wf_new", alreadyRunning: false };
+  }
+  names() {
+    return this.calls.map((c) => c.call);
+  }
+}
+
+describe("creating a task with images", () => {
+  const GOAL = "Keep invoices in euros. Like this:";
+
+  /** New task with `count` images dropped at the end of the goal, each made. */
+  async function withImages(client: SaveRecorder, count = 1) {
+    const canvas = heldCanvas();
+    try {
+      const d = await open(undefined, client);
+      await d.title("Show invoices in euros");
+      await d.goal(GOAL);
+      const area = document.querySelector<HTMLTextAreaElement>("[data-testid=task-goal]")!;
+      area.setSelectionRange(GOAL.length, GOAL.length);
+      const files = Array.from({ length: count }, (_, i) => new File([PNG], `design${i}.png`, { type: "image/png" }));
+      await act(async () => void fileEvent("drop", files));
+      await act(async () => canvas.decoded());
+      await until(() => (goalValue().match(/attachment:att_local/g) ?? []).length === count && !goalValue().includes("Uploading"), "the references");
+      return d;
+    } finally {
+      canvas.restore();
+    }
+  }
+  const press = async (button: HTMLButtonElement) => act(async () => button.click());
+  const sentGoal = (c: SaveRecorder) => (c.calls.findLast((x) => x.call === "updateTask")!.detail as { goal: string }).goal;
+
+  test("Create and deliver: the task, its image uploaded to it, one PATCH with the real id and every field, then the delivery", async () => {
+    const client = new SaveRecorder("a");
+    const d = await withImages(client);
+    await press(d.deliver()!);
+    await until(() => client.names().includes("deliver"), "the delivery");
+    expect(client.names()).toEqual(["createTask", "uploadAttachment", "updateTask", "deliver"]);
+    const patch = client.calls[2]!.detail as Record<string, unknown>;
+    expect(patch).toMatchObject({ id: "task_new", title: "Show invoices in euros", acceptanceCriteria: [], epicId: null });
+    expect(patch).toHaveProperty("repositories");
+    expect(patch["goal"]).toBe(`${GOAL}\n\n![design0.png](attachment:att_real1)`);
+  });
+
+  test("a PATCH that fails is sent again on the retry, with no second task and no second upload", async () => {
+    const client = new SaveRecorder("a");
+    client.failing = { updateTask: 1 };
+    const d = await withImages(client);
+    await press(d.deliver()!);
+    await until(() => document.body.textContent?.includes("updateTask failed"), "the problem");
+    expect(client.names()).toEqual(["createTask", "uploadAttachment", "updateTask"]);
+    await press(d.deliver()!);
+    await until(() => client.names().includes("deliver"), "the delivery");
+    expect(client.names()).toEqual(["createTask", "uploadAttachment", "updateTask", "updateTask", "deliver"]);
+    expect(sentGoal(client)).toBe(`${GOAL}\n\n![design0.png](attachment:att_real1)`);
+  });
+
+  test("after a failed upload, a Create without the image saves the text as it now is", async () => {
+    const client = new SaveRecorder("a");
+    client.failing = { uploadAttachment: 1 };
+    const d = await withImages(client);
+    await press(d.save());
+    await until(() => document.body.textContent?.includes("uploadAttachment failed"), "the problem");
+    expect(client.names()).toEqual(["createTask", "uploadAttachment"]);
+    await d.goal("Keep invoices in euros for every EU customer.");
+    await press(d.save());
+    await until(() => client.names().includes("updateTask"), "the PATCH");
+    expect(client.names()).toEqual(["createTask", "uploadAttachment", "updateTask"]);
+    expect(sentGoal(client)).toBe("Keep invoices in euros for every EU customer.");
+    expect(sentGoal(client)).not.toContain("att_local");
+  });
+
+  test("more images than a task shows are refused before anything is created", async () => {
+    const client = new SaveRecorder("a");
+    const d = await withImages(client, 7);
+    await press(d.deliver()!);
+    await until(() => document.body.textContent?.includes("A task shows at most 6 images; this one shows 7."), "the refusal");
+    expect(client.calls).toEqual([]);
   });
 });
 
