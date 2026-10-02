@@ -1145,7 +1145,40 @@ def test_a_parked_agent_is_answered_from_its_chat(
     page.get_by_role("group", name="Answer with one of").get_by_role("button", name="yes").click()
     wait_until(lambda: client.get_run(implement["id"])["status"] == "completed",
                timeout=30, message="the answer did not resume the parked agent")
-    expect(page.get_by_test_id("chat-notice").last).to_contain_text("Taken back up")
+    # Once timed, its return says how long it took, its phases on hover.
+    back = page.get_by_test_id("chat-notice").filter(has_text="Taken back up")
+    expect(back).to_have_count(1)
+    expect(back).to_contain_text(re.compile(r"Taken back up in [\d.]+(ms|s)\."))
+    title = back.get_attribute("title") or ""
+    assert [line.rsplit(" ", 1)[0] for line in title.split("\n")] == [
+        "dude asked lux", "lux placed it", "image ready", "restored", "started", "agent reloaded",
+        "took its input", "first words"], title
+    assert console_errors == []
+
+
+def test_a_persons_resume_says_how_long_it_took(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    """A person pauses a working agent and resumes it: its chat says how long
+    the resume took once the agent speaks, with the phases on hover."""
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
+        "implementer": {"model": "fake/live"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
+    item = client.create_task(forge_project["id"], "Pause, then carry on")
+    assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
+    run = wait_until(lambda: next((r for r in client.task_runs(item["id"]) if r["status"] == "running"), None),
+                     timeout=30, message="the implementer never started")
+    sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/session/{run['id']}")
+    wait_until(lambda: any(e["eventType"] == "agent.tool.called" for e in client.events(runId=run["id"])),
+               timeout=30, message="the agent never started working")
+    assert client.post(f"/v1/runs/{run['id']}/pause", {}).status_code == 200
+    wait_until(lambda: any(e["eventType"] == "run.paused" and e["payload"].get("confirmed")
+                           for e in client.events(runId=run["id"])), timeout=30, message="the run never paused")
+    assert client.post(f"/v1/runs/{run['id']}/resume", {}).status_code == 200
+    resumed = page.get_by_test_id("chat-notice").filter(has_text="Resumed in")
+    expect(resumed).to_have_count(1, timeout=30_000)
+    expect(resumed).to_contain_text(re.compile(r"^.*Resumed in [\d.]+(ms|s)\."))
+    assert "agent reloaded" in (resumed.get_attribute("title") or "")
     assert console_errors == []
 
 
