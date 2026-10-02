@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -477,7 +478,9 @@ func (p *Previews) Stop() {
 // followEvents applies lux's lifecycle events for a preview: its state,
 // where its checkout started, and its servers'. A preview has no agent,
 // and lux leaves its servers' output out of the stream, so its records are
-// skipped: only the event position is kept.
+// skipped: only the event position is kept. lux ends every stream it
+// finishes with an end frame: one that stops without it was cut short
+// (errNoEnd).
 func (p *Previews) followEvents(ctx context.Context, r previewRun) error {
 	var after int64
 	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
@@ -485,7 +488,11 @@ func (p *Previews) followEvents(ctx context.Context, r previewRun) error {
 	}); err != nil {
 		return err
 	}
-	return p.Lux.Output(ctx, r.LuxRunID, "", after, func(f lux.Frame) error {
+	ended := false
+	err := p.Lux.Output(ctx, r.LuxRunID, "", after, func(f lux.Frame) error {
+		if f.Kind == "end" {
+			ended = true
+		}
 		if f.Kind != "lux" {
 			return nil
 		}
@@ -506,7 +513,16 @@ func (p *Previews) followEvents(ctx context.Context, r previewRun) error {
 			return err
 		})
 	})
+	if err == nil && !ended {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return errNoEnd
+	}
+	return err
 }
+
+var errNoEnd = errors.New("lux's event stream stopped without its end")
 
 func (p *Previews) luxEvent(ctx context.Context, tx pgx.Tx, r previewRun, f lux.Frame) error {
 	var d map[string]any
