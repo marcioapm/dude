@@ -526,14 +526,20 @@ func (w *world) handedTo(directive string) (next, why string) {
 	return next, why
 }
 
+func (w *world) nextConductor(task string) string {
+	w.t.Helper()
+	_, out := w.chat(task, "hello again")
+	next, _ := out["runId"].(string)
+	w.until("the next conductor's answer", func() bool { return len(w.said(next)) == 1 })
+	return next
+}
+
 // A message handed on to a conductor a person paused asks for it back, as
 // a message in Chat does: it is resumed, and answers the message.
 func TestAMessageHandedToAPausedConductorResumesIt(t *testing.T) {
 	w := conductorWorld(t)
 	task, ended := w.endedConductor()
-	_, out := w.chat(task, "hello again")
-	next, _ := out["runId"].(string)
-	w.until("the next conductor's answer", func() bool { return len(w.said(next)) == 1 })
+	next := w.nextConductor(task)
 	if status, body := w.call("/internal/runs/"+next+"/pause", map[string]any{}); status != 200 {
 		t.Fatalf("pause: %d %v", status, body)
 	}
@@ -557,9 +563,7 @@ func TestAMessageWithImagesHandedToTheLiveConductorKeepsThem(t *testing.T) {
 	w := conductorWorld(t)
 	b := w.withImages()
 	task, ended := w.endedConductor()
-	_, out := w.chat(task, "hello again")
-	next, _ := out["runId"].(string)
-	w.until("the next conductor's answer", func() bool { return len(w.said(next)) == 1 })
+	next := w.nextConductor(task)
 
 	w.upload(b, "att_layout_"+w.org, task, "layout.png", screenshot)
 	image := w.unread(ended, "", "Explain this screenshot", "att_layout_"+w.org)
@@ -598,9 +602,7 @@ func TestRetriesSharingImagesHandedOnBothKeepThem(t *testing.T) {
 	w := conductorWorld(t)
 	b := w.withImages()
 	task, ended := w.endedConductor()
-	_, out := w.chat(task, "hello again")
-	next, _ := out["runId"].(string)
-	w.until("the next conductor's answer", func() bool { return len(w.said(next)) == 1 })
+	next := w.nextConductor(task)
 	w.upload(b, "att_layout_"+w.org, task, "layout.png", screenshot)
 
 	// The failed original and its two retries, recorded together so the

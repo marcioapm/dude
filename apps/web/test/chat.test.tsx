@@ -194,6 +194,15 @@ async function chatPage(client: ChatClient, props: Partial<Parameters<typeof Tas
 const tabs = (page: HTMLElement) => [...page.querySelectorAll("[role=tab]")].map((t) => t.textContent?.replace(/\d+$/, ""));
 const selected = (page: HTMLElement) => page.querySelector("[role=tab][aria-selected=true]")?.textContent ?? "";
 
+const pickTab = async (page: HTMLElement, name: string) => {
+  const tab = [...page.querySelectorAll<HTMLElement>("[role=tab]")].find((t) => t.textContent?.replace(/\d+$/, "") === name)!;
+  await act(async () => {
+    tab.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+    tab.click();
+  });
+  await settle();
+};
+
 describe("the Chat tab", () => {
   test("is first; with no conductor the task opens on its Overview, and Chat shows the history and an empty composer", async () => {
     const client = new ChatClient(null);
@@ -201,11 +210,7 @@ describe("the Chat tab", () => {
     expect(tabs(page)[0]).toBe("Chat");
     expect(selected(page)).toBe("Overview");
 
-    const chat = [...page.querySelectorAll<HTMLElement>("[role=tab]")].find((t) => t.textContent === "Chat")!;
-    await act(async () => {
-      chat.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
-      chat.click();
-    });
+    await pickTab(page, "Chat");
     const history = await until(() => page.querySelector("[data-testid=chat-history]"), "the history line");
     expect(history.textContent).toContain("Delivered automatically");
     expect(history.textContent).toContain("implementer → reviewer → fixer → reviewer → simplifier → PR #");
@@ -214,14 +219,7 @@ describe("the Chat tab", () => {
     expect(page.querySelector("[data-testid=composer-to]")?.textContent).toBe("To Conductor · read-only");
 
     // Sending goes to the task's Chat.
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(composer, "why 8s?");
-      composer.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-    await act(async () => {
-      composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    });
-    await settle();
+    await write(page, "why 8s?");
     expect(client.sent).toEqual([`${TASK_ID}:why 8s?`]);
   });
 
@@ -399,15 +397,6 @@ describe("an earlier conductor's conversation", () => {
       return new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], { type: "image/png" });
     }
   }
-  const pickTab = async (page: HTMLElement, name: string) => {
-    const tab = [...page.querySelectorAll<HTMLElement>("[role=tab]")].find((t) => t.textContent?.replace(/\d+$/, "") === name)!;
-    await act(async () => {
-      tab.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
-      tab.click();
-    });
-    await settle();
-  };
-
   test("shows its images, and opens them in the viewer, as the live one's", async () => {
     const page = await chatPage(new TwoConductors());
     const earlier = await until(() => page.querySelector<HTMLElement>("[data-testid=earlier-conductor]"), "the earlier conversation");
