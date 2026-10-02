@@ -88,14 +88,12 @@ func placementsAround(ps []lux.Placement, epoch int) (cur, prev lux.Placement) {
 }
 
 // woken (SQL, over runs r and the cause $3): when the resume became due.
-// A person's Resume is control_requested_at. An approved repository is
-// the latest approval not yet brought (status still approved): a denial
-// brings nothing. An answer is the last of the asks that held the park
-// (delivery.OpenAsk: a question, or a blocking repository request) to be
-// answered or decided since the park began; an ask that held nothing, or
-// closed before this park, made nothing due. The park began at its
-// run.parked's parkedAt, on the database's clock as answers and decisions
-// are; a park recorded before parkedAt existed falls back to the event's
+// A person's Resume: control_requested_at. A repository: its latest
+// approval not yet brought (status still approved; a denial brings
+// nothing). An answer: the last ask that held the park (delivery.OpenAsk:
+// a question, or a blocking repository request) answered or decided since
+// the park began. The park began at its run.parked's parkedAt, on the
+// database's clock like the answers; older parks without it fall back to
 // occurred_at, the orchestrator's clock.
 const woken = `CASE $3
 	WHEN 'person' THEN r.control_requested_at
@@ -108,15 +106,12 @@ const woken = `CASE $3
 		FROM (SELECT COALESCE(max(COALESCE((e.payload->>'parkedAt')::timestamptz, e.occurred_at)), '-infinity') AS at FROM events e
 			WHERE e.run_id = r.id AND e.event_type = 'run.parked') park) END`
 
-// resumeAsked inserts the row for a resume dude is about to ask lux for,
-// in a transaction of its own, before lux is asked: lux may stream the
-// new placement's first frames before its answer is back, and those
-// frames have the row to stamp. requested_at is now, as dude asks. A
-// second attempt, after a refusal that may pass, moves it to that
-// attempt if lux still reports the Run stopped (the first did not take);
-// if lux is already resuming it, the first attempt's answer was lost and
-// its requested_at stands. before is the Run as lux reported it just
-// before. Returns the epoch foreseen.
+// resumeAsked inserts the row of a resume dude is about to ask lux for, in
+// a transaction of its own, so frames lux streams before its answer have a
+// row to stamp; requested_at is now. A retry moves requested_at only while
+// lux still reports the Run stopped (the earlier attempt did not take).
+// before is the Run as lux reported it just before. Returns the epoch
+// foreseen.
 func (s *Syncer) resumeAsked(ctx context.Context, r phaseRun, before lux.Run) int {
 	epoch := nextEpoch(before)
 	_, prev := placementsAround(before.Placements, epoch)
@@ -152,34 +147,29 @@ func (s *Syncer) resumeRefused(ctx context.Context, r phaseRun, epoch int) {
 }
 
 // resumedEpoch is the epoch a resume lux accepted is for: the one
-// foreseen, unless lux's answer names a later one. lux answers with the
-// Run's current epoch, which stays the stopped one until its scheduler
-// assigns the new placement, after the answer; an epoch above the
-// foreseen one means lux had already assigned it and moved on (a
-// placement failed and was rescheduled). No epoch (a 409) is 0.
+// foreseen, unless lux names a later one. lux answers with the Run's
+// current epoch, still the stopped one until its scheduler assigns the new
+// placement; a later epoch means lux had already assigned it and moved on.
+// A 409 carries no epoch (0).
 // Known limit: a fresh resume from a newer epoch lux placed and stopped on
-// its own after dude's Get looks already assigned, so it goes untimed (the
-// Run is unaffected): telling them apart needs placement data the answer
-// lacks, or a Get per resume, which dude does not make.
+// its own after dude's Get looks already assigned, and goes untimed (the
+// Run is unaffected); telling them apart needs placement data the answer
+// lacks, or a Get per resume.
 func resumedEpoch(foreseen int, resumed lux.Run) int {
 	return max(foreseen, resumed.Epoch)
 }
 
-// resumeAccepted moves the row of a resume lux accepted to the epoch lux
-// says it is for, when that is above the one foreseen (resumedEpoch); in
-// the transaction that takes the Run out of paused, with the Run's row
-// locked, before it is updated.
+// resumeAccepted moves the row of a resume lux accepted to the epoch
+// resumedEpoch names, when that is above the one foreseen; in the
+// transaction that takes the Run out of paused, its row locked.
 //
-// Frames of that epoch the stream committed before the move found no row
-// to stamp, and nothing durable records when they came: the agent's
-// events carry no epoch, and a chunk may not be an event yet. The only
-// epoch-qualified trace on the Run's row is agent_session_epoch: the
-// shim's session record for the epoch, the first record of a resumed
-// placement. Once it has reached the epoch, the row is marked
-// frames_missed, and true is returned, for its timing to be written as it
-// stands once the transaction commits: no later frame stamps it.
-// lux_state and agent_active_at record no epoch, so a trailing frame of an
-// older placement could have set them; they mark nothing.
+// Frames of that epoch committed before the move found no row, and when
+// they came is recorded nowhere. If the Run's agent_session_epoch already
+// reached the epoch (the only epoch-qualified trace: the shim's session
+// record), the row is marked frames_missed and true is returned, for it to
+// be timed as it stands: no later frame stamps it. lux_state and
+// agent_active_at carry no epoch, so an older placement's trailing frame
+// may have set them; they mark nothing.
 func (s *Syncer) resumeAccepted(ctx context.Context, tx pgx.Tx, r phaseRun, foreseen int, resumed lux.Run) (missed bool) {
 	epoch := resumedEpoch(foreseen, resumed)
 	if epoch == foreseen {
@@ -223,14 +213,12 @@ func writePlacements(ctx context.Context, tx pgx.Tx, runID string, epoch int, cu
 const latestResume = `epoch = CASE WHEN $2 = 0 THEN (SELECT max(epoch) FROM run_resumes WHERE run_id = $1) ELSE $2 END`
 
 // stamp writes col (a stamp of dude's own) once on the resume a frame of
-// epoch is about. It says which resume it stamped, if any, whether lux
-// had yet to report some of that resume's new placement, and whether the
-// epoch is settled: its row is there, or none will ever be. The row of a
-// resume is in before lux is asked for it (resumeAsked), so a frame of an
-// epoch with no row is settled unless the row is still to come or to move
-// to it: while the Run is paused (lux's answer not in yet) and the epoch
-// is newer than every row. The first placement (epoch 1) is no resume. A
-// row whose first frames were missed (frames_missed) takes no stamp.
+// epoch is about, unless that row is frames_missed. It returns the epoch
+// it stamped, if any; whether lux had yet to report some of its new
+// placement; and whether the epoch is settled: its row is there, or none
+// will ever be. An epoch with no row is unsettled only while the Run is
+// paused (lux's answer, which may move a row to it, is not in) and the
+// epoch is newer than every row; epoch 1 is no resume.
 func (t *translator) stamp(ctx context.Context, tx pgx.Tx, s *Syncer, col string, epoch int) (stamped *int, missing, settled bool) {
 	s.bestEffort(ctx, tx, t.run, col, func(ctx context.Context, tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `WITH target AS (SELECT epoch FROM run_resumes WHERE run_id = $1 AND `+latestResume+`),
