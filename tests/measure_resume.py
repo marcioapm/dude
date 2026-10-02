@@ -69,6 +69,11 @@ PHASES = (
 TOTALS = (("totalMs", "until it said something"), ("untilBusyMs", "until it took its input"))
 ROLES = ("implementer", "reviewer", "simplifier")
 STATE = Path(os.environ.get("DUDE_MEASURE_STATE", "/tmp/dude-measure-resume.json"))
+# workflow.Runtime's lease (leaseDuration): a step's claim lapses at most
+# this long after the step returns. Cleanup waits that, and a margin, for
+# claimed steps to finish.
+LEASE = 60
+CLAIM_WAIT = LEASE + 15
 
 # Why --move cannot be done with a tenant's key, from lux's docs/openapi.yaml
 # and docs/cli.md.
@@ -262,14 +267,37 @@ class Cycler:
     def stop_workflows(self) -> None:
         """Every delivered task's workflow stopped, so it starts no further
         phase. No API stops a task's delivery (a Run's abort stops its
-        workflow only while that Run is live), so it is stopped as the
-        orchestrator's own Abort does, through the owner's connection."""
+        workflow only while that Run is live), so it is stopped through the
+        owner's connection, with the status, reason and wake the
+        orchestrator's own Abort sets. Unlike Abort, the lease
+        (locked_by, locked_until) is left as it is: it is how
+        wait_for_claimed_steps sees a step still running."""
         if not self.tasks:
             return
         stopped = query(self.env.owner_dsn, """UPDATE workflow_runs SET status = 'aborted', last_error = 'measured',
-            wake_at = NULL, locked_by = NULL, locked_until = NULL
+            wake_at = NULL
             WHERE task_id = ANY(%s) AND status IN ('running', 'waiting') RETURNING id""", (self.tasks,))
         log(f"stopped {len(stopped)} delivery workflow(s)")
+
+    def claimed_steps(self) -> list[str]:
+        """The tasks' workflows whose step a poller still holds: its lease
+        runs on while the step does (workflow.Runtime renews it), and lapses
+        within one lease once the step returns."""
+        if not self.tasks:
+            return []
+        return [r["id"] for r in query(self.env.owner_dsn, """SELECT id FROM workflow_runs
+            WHERE task_id = ANY(%s) AND locked_until > now()""", (self.tasks,))]
+
+    def wait_for_claimed_steps(self, bound: float) -> None:
+        """Until no step of the tasks' workflows is claimed: a step already
+        running when its workflow was stopped can still create a phase.
+        At most bound seconds; then said, and cleanup goes on."""
+        deadline = time.time() + bound
+        while claimed := self.claimed_steps():
+            if time.time() >= deadline:
+                log(f"workflow step(s) still claimed after {bound:.0f}s: {', '.join(claimed)}")
+                return
+            time.sleep(1)
 
     def task_run_ids(self) -> list[str]:
         ids = []
@@ -290,26 +318,35 @@ class Cycler:
             ended = lux_ended(row["status"])
             wait(f"lux to end {row['lux_run_id']}", lambda: self.lux_run(row["lux_run_id"])["state"] in ended, timeout)
 
-    def abort_all(self, timeout: float = 120) -> None:
+    def abort_all(self, timeout: float = 120, claim_wait: float = CLAIM_WAIT) -> None:
         """Every Run this measured ended on lux, while dude is still up to
         tell lux: the tasks' workflows stopped first, so they start no new
-        phase, then each Run aborted and waited on. Once more after the
-        waits, for a phase a workflow step already in flight created. Best
-        effort: a failure is said, and the rest still cleaned up."""
+        phase, then each Run aborted and waited on. Then, once no workflow
+        step that was already running is left, the Runs listed once more,
+        for a phase such a step created. Best effort: a failure is said,
+        and the rest still cleaned up."""
         try:
             self.stop_workflows()
         except Exception as err:  # noqa: BLE001 - cleanup goes on
             log(f"could not stop the delivery workflows: {err}")
         done: set[str] = set()
-        for _ in range(2):
-            for run_id in self.task_run_ids():
-                if run_id in done:
-                    continue
-                done.add(run_id)
-                try:
-                    self.end(run_id, timeout)
-                except (Exception, SystemExit) as err:  # noqa: BLE001 - cleanup goes on
-                    log(f"could not end Run {run_id} on lux: {err}")
+        self.end_listed(done, timeout)
+        try:
+            self.wait_for_claimed_steps(claim_wait)
+        except Exception as err:  # noqa: BLE001 - cleanup goes on
+            log(f"could not see the workflows' claimed steps: {err}")
+        self.end_listed(done, timeout)
+
+    def end_listed(self, done: set[str], timeout: float) -> None:
+        """Each of the tasks' Runs not in done ended, and added to it."""
+        for run_id in self.task_run_ids():
+            if run_id in done:
+                continue
+            done.add(run_id)
+            try:
+                self.end(run_id, timeout)
+            except (Exception, SystemExit) as err:  # noqa: BLE001 - cleanup goes on
+                log(f"could not end Run {run_id} on lux: {err}")
 
 
 def lux_ended(status: str) -> tuple[str, ...]:
