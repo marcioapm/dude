@@ -186,16 +186,21 @@ RESUME_STOPPED = (("stop_requested_at", "stopRequestedAt"), ("exited_at", "exite
                   ("snapshot_bytes", "snapshotBytes"), ("stopped_host_name", "hostName"))
 
 
-def _ms(start, end) -> float:
-    return (end - start).total_seconds() * 1000
+def whole_ms(start, end) -> int:
+    """end − start in whole milliseconds as the orchestrator rounds it
+    (Go's math.Round: half away from zero), from integer microseconds."""
+    delta = end - start
+    us = (delta.days * 86_400 + delta.seconds) * 1_000_000 + delta.microseconds
+    ms = (abs(us) + 500) // 1000
+    return -ms if us < 0 else ms
 
 
 def assert_timed_is_its_row(payload: dict, row: dict) -> None:
     """A run.resume.timed says what its run_resumes row says: its epoch,
-    cause, move and host, and every phase and total the difference of the
-    two stamps it spans, to the millisecond it is rounded to. A phase
-    across two clocks (schedule, reload) may be negative; one whose stamps
-    are not both known is absent."""
+    cause, move and host, and every phase and total exactly the difference
+    of the two stamps it spans, rounded as the orchestrator rounds it. A
+    phase across two clocks (schedule, reload) may be negative; one whose
+    stamps are not both known is absent."""
     assert (payload["epoch"], payload["cause"], payload["moved"], payload["hostName"]) == (
         row["epoch"], row["cause"], row["moved"], row["host_name"]), (payload, row)
     phases = payload["phases"]
@@ -203,9 +208,9 @@ def assert_timed_is_its_row(payload: dict, row: dict) -> None:
         if row[start] is None or row[end] is None:
             assert name not in phases, (name, phases, row)
             continue
-        assert abs(phases[name] - _ms(row[start], row[end])) <= 0.5, (name, phases[name], row[start], row[end])
+        assert phases[name] == whole_ms(row[start], row[end]), (name, phases[name], row[start], row[end])
     for key, end in (("totalMs", "first_output_at"), ("untilBusyMs", "busy_at")):
-        assert abs(payload[key] - _ms(row["woken_at"], row[end])) <= 0.5, (key, payload[key], row)
+        assert payload[key] == whole_ms(row["woken_at"], row[end]), (key, payload[key], row)
 
 
 def lux_stamp(value: str | None):
