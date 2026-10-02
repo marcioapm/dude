@@ -3,16 +3,18 @@
  * fixture client: the table as the tiers read, the edit dialog's
  * suggestions and its warning for a name the proxy does not list, a test
  * message's answer, the remove dialog for a tier in use, and the role's
- * picker on the organisation and on a project.
+ * picker on the organisation and on a project, for an admin and a member.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
-import type { ModelTiersResponse } from "@dude/domain";
+import type { ModelTiersResponse, SettingsResponse } from "@dude/domain";
 import { act, click, mount, until } from "./dom.ts";
+import type { Member } from "../src/api/client.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
-import { MODEL_TIERS, PROJECT } from "../src/fixtures/data.ts";
+import { MODEL_TIERS, PEOPLE, PROJECT, SETTINGS } from "../src/fixtures/data.ts";
 import { ModelsPage } from "../src/screens/ModelsSettings.tsx";
+import { OrganizationSettingsScreen } from "../src/screens/OrganizationSettingsScreen.tsx";
 import { ProjectSettingsScreen } from "../src/screens/ProjectSettingsScreen.tsx";
 
 let mounted: Array<() => Promise<void>> = [];
@@ -111,9 +113,12 @@ describe("the Models page", () => {
     expect(button(dialog, "Save")).toBeDefined();
   });
 
-  test("Send a test message tries the tier's model and shows each effort's answer", async () => {
+  test("Send a test message tries the tier's model and shows each effort's answer, with who sends it", async () => {
     const client = new TestingClient("a");
-    const container = await page(client);
+    // The fixer at max: an effort the answer covers, but not the first it names.
+    const tiers = { ...TIERS, tiers: MODEL_TIERS.map((t) => t.id !== "mtr_coder" ? t
+      : { ...t, usedBy: t.usedBy.map((u) => (u.role === "fixer" ? { ...u, effort: "max" as const } : u)) }) };
+    const container = await page(client, tiers);
     const dialog = await menuItem(container, "Coder", "Send a test message");
     const results = await until(() => {
       const r = dialog.querySelectorAll("[data-testid=model-tier-test-result]");
@@ -158,6 +163,19 @@ describe("the Models page", () => {
 });
 
 describe("a role's tier", () => {
+  /** The fixtures answer only a project's settings; the organisation's are the same, without the project. */
+  class OrganizationClient extends FixtureClient {
+    override organizationSettings(): Promise<SettingsResponse> {
+      const { project: _, ...org } = SETTINGS;
+      const roles = Object.fromEntries(Object.entries(org.roles).map(([role, s]) => [role, { ...s, tier: { ...s.tier, organization: undefined } }]));
+      return Promise.resolve({ ...org, roles } as SettingsResponse);
+    }
+  }
+  class FailingTiers extends OrganizationClient {
+    override modelTiers(): Promise<ModelTiersResponse> {
+      return Promise.reject(new Error("the backend answered 503"));
+    }
+  }
   async function projectRole(admin: boolean, client = new FixtureClient("a"), onOrganization: (page: string) => void = () => {}) {
     const { container, unmount } = await mount(
       <TooltipProvider>
@@ -201,12 +219,44 @@ describe("a role's tier", () => {
   });
 
   test("tiers that could not be loaded say so, not just No tier", async () => {
-    class Failing extends FixtureClient {
-      override modelTiers(): Promise<ModelTiersResponse> {
-        return Promise.reject(new Error("the backend answered 503"));
-      }
-    }
-    const container = await projectRole(true, new Failing("a"));
+    const container = await projectRole(true, new FailingTiers("a"));
+    const problem = await until(() => container.querySelector("[data-testid=role-tier-problem]"), "the tiers' problem");
+    expect(problem.textContent).toBe("Example’s tiers could not be loaded: the backend answered 503");
+  });
+
+  async function organizationRole(me: Member, client: FixtureClient = new OrganizationClient("a")) {
+    const pages: string[] = [];
+    const { container, unmount } = await mount(
+      <TooltipProvider>
+        <ToastProvider>
+          <OrganizationSettingsScreen client={client} me={me} people={PEOPLE} onPeopleChanged={() => {}} projects={[]}
+            page="reviewer" onPage={(p) => pages.push(p)} />
+        </ToastProvider>
+      </TooltipProvider>,
+    );
+    mounted.push(unmount);
+    return { container, pages };
+  }
+  const ADMIN = PEOPLE.find((p) => p.role === "admin")!;
+  const MEMBER = PEOPLE.find((p) => p.role === "member")!;
+
+  test("on the organisation, an admin is offered Models", async () => {
+    const { container, pages } = await organizationRole(ADMIN);
+    await openOptions(container);
+    expect(document.body.textContent).not.toContain("Only admins change tiers.");
+    await click(button(document, "Manage tiers in Models")!);
+    expect(pages).toEqual(["models"]);
+  });
+
+  test("on the organisation, a member is told only admins change tiers", async () => {
+    const { container } = await organizationRole(MEMBER);
+    await openOptions(container);
+    expect(document.body.textContent).toContain("Only admins change tiers.");
+    expect(button(document, "Manage tiers in Models")).toBeUndefined();
+  });
+
+  test("on the organisation, tiers that could not be loaded say so", async () => {
+    const { container } = await organizationRole(ADMIN, new FailingTiers("a"));
     const problem = await until(() => container.querySelector("[data-testid=role-tier-problem]"), "the tiers' problem");
     expect(problem.textContent).toBe("Example’s tiers could not be loaded: the backend answered 503");
   });

@@ -89,13 +89,17 @@ describe("the first load with no place", () => {
   class SlowTree extends FixtureClient {
     private gate = Promise.withResolvers<void>();
     asked = Promise.withResolvers<void>();
+    /** Called as the tree is handed to the app. */
+    onArrival = () => {};
     arrive() {
       this.gate.resolve();
     }
     override async navigation() {
       this.asked.resolve();
       await this.gate.promise;
-      return super.navigation();
+      const tree = await super.navigation();
+      this.onArrival();
+      return tree;
     }
   }
 
@@ -115,11 +119,19 @@ describe("the first load with no place", () => {
     // and the tree arrives in the same task, so the first-load effect runs
     // before the hashchange (a timer) reaches the app's place.
     const named = `#/project/${PROJECT.id}/settings/reviewer`;
+    let fired = false;
+    let firedOnArrival = null as boolean | null;
+    window.addEventListener("hashchange", () => (fired = true), { once: true });
+    client.onArrival = () => (firedOnArrival = fired);
     await act(async () => {
       window.history.replaceState(null, "", named);
       client.arrive();
       for (let i = 0; i < 10; i++) await Promise.resolve();
     });
+    // The race was reproduced, so the test is not vacuous: when the tree was
+    // handed to the app, whose first-load effect runs on it before any timer,
+    // the hashchange (a timer, in happy-dom) had not reached the app yet.
+    expect(firedOnArrival).toBe(false);
     expect(window.location.hash).toBe(named);
     await settle(100);
     expect(window.location.hash).toBe(named);

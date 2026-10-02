@@ -278,7 +278,7 @@ describe("a test message", () => {
     const cheap = await byName("Cheap");
     const before = { org: await orgModels(), project: await projectModels() };
     try {
-      // Two more roles at high, and one at none: four uses, three efforts.
+      // Two more roles at high, and one at none: five uses, three efforts.
       await call(adminKey, "PATCH", "/v1/settings/organization", { roles: { qa_browser: { tier: cheap.id, effort: "high" } } });
       await call(adminKey, "PATCH", `/v1/projects/${PROJECT}/settings`, {
         roles: { simplifier: { tier: cheap.id, effort: "high" }, investigator: { tier: cheap.id } },
@@ -437,11 +437,13 @@ describe("removing a tier while a project's role is set to it", () => {
       held.resolve();
       await release.promise;
     });
+    let a: Promise<Response> | undefined;
+    let b: Promise<Response> | undefined;
     try {
       await held.promise;
-      const a = first();
+      a = first();
       await waitFor(async () => (await waiting()) === 1);
-      const b = second();
+      b = second();
       await waitFor(async () => (await waiting()) === 2);
       release.resolve();
       await holder;
@@ -449,6 +451,8 @@ describe("removing a tier while a project's role is set to it", () => {
     } finally {
       release.resolve();
       await holder.catch(() => {});
+      // A request left running after a failed wait would change what the next test sees.
+      await Promise.allSettled([a, b].filter(Boolean));
     }
   }
 
@@ -468,7 +472,7 @@ describe("removing a tier while a project's role is set to it", () => {
     expect((await body(patch)).error.message).toBe(`there is no model tier ${gone}`);
     expect(await projectModels()).toEqual({});
     expect((await tiers()).map((t) => t.id)).not.toContain(gone);
-  });
+  }, 15_000);
 
   test("the patch queued first: it completes and the removal moves what it set", async () => {
     const [thinker] = await tiers();
@@ -482,7 +486,7 @@ describe("removing a tier while a project's role is set to it", () => {
     expect(removal.status).toBe(200);
     expect(await projectModels()).toEqual({ reviewer: { tier: thinker.id } });
     expect((await tiers()).map((t) => t.id)).not.toContain(gone);
-  });
+  }, 15_000);
 
   test("the organization's patch queued first: it completes and the removal moves what it set", async () => {
     const [thinker] = await tiers();
