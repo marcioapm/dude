@@ -17,6 +17,8 @@ import { removeObject, storageConfigured } from "./storage.ts";
 /** How long an upload may wait to be sent. */
 export const UNATTACHED_TTL_HOURS = 24;
 const BATCH = 200;
+/** How long one pass drains the queue before leaving the rest to the next. */
+export const DRAIN_BUDGET_MS = 60_000;
 
 export interface SweepResult {
   /** Unsent uploads removed. */
@@ -27,7 +29,7 @@ export interface SweepResult {
   failed: number;
 }
 
-export async function sweepAttachments(now: Date = new Date()): Promise<SweepResult> {
+export async function sweepAttachments(now: Date = new Date(), budgetMs = DRAIN_BUDGET_MS): Promise<SweepResult> {
   const cutoff = new Date(now.getTime() - UNATTACHED_TTL_HOURS * 3600_000);
   const expired = await withoutTenant(async ({ sql }) => {
     await sql`SET LOCAL ROLE dude_sweeper`;
@@ -38,23 +40,36 @@ export async function sweepAttachments(now: Date = new Date()): Promise<SweepRes
   let failed = 0;
   // Without a bucket nothing was ever stored; the queue waits for one.
   if (!storageConfigured()) return { expired, deleted, failed };
-  const keys = await withoutTenant(async ({ sql }) => {
-    await sql`SET LOCAL ROLE dude_sweeper`;
-    return (await sql`SELECT object_key FROM attachment_object_deletions ORDER BY queued_at LIMIT ${BATCH}`) as Array<{ object_key: string }>;
-  });
-  for (const { object_key: key } of keys) {
-    try {
-      await removeObject(key);
-    } catch (err) {
-      failed++;
-      console.error(`attachments: could not delete an object: ${(err as Error).message}`);
-      continue;
-    }
-    await withoutTenant(async ({ sql }) => {
+  // Batch after batch until the queue is empty or the pass's time is spent.
+  // A key that failed is skipped for the rest of the pass, so it cannot be
+  // taken again and again ahead of the others.
+  const deadline = Date.now() + budgetMs;
+  const skip: string[] = [];
+  while (Date.now() < deadline) {
+    const keys = await withoutTenant(async ({ sql }) => {
       await sql`SET LOCAL ROLE dude_sweeper`;
-      await sql`DELETE FROM attachment_object_deletions WHERE object_key = ${key}`;
+      return (await sql`SELECT object_key FROM attachment_object_deletions WHERE NOT (object_key = ANY(${sql.array(skip, "TEXT")}))
+        ORDER BY queued_at LIMIT ${BATCH}`) as Array<{ object_key: string }>;
     });
-    deleted++;
+    if (keys.length === 0) break;
+    const done: string[] = [];
+    for (const { object_key: key } of keys) {
+      try {
+        await removeObject(key);
+        done.push(key);
+      } catch (err) {
+        failed++;
+        skip.push(key);
+        console.error(`attachments: could not delete an object: ${(err as Error).message}`);
+      }
+    }
+    if (done.length > 0) {
+      await withoutTenant(async ({ sql }) => {
+        await sql`SET LOCAL ROLE dude_sweeper`;
+        await sql`DELETE FROM attachment_object_deletions WHERE object_key = ANY(${sql.array(done, "TEXT")})`;
+      });
+    }
+    deleted += done.length;
   }
   return { expired, deleted, failed };
 }
