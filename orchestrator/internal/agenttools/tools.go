@@ -67,6 +67,13 @@ var tools = []tool{
 		"the commit it started from — one snapshot, no history. Without paths, the changed files, most changed "+
 		"first, with line counts and no lines (paged by limit and offset; hasMore says there is another page). "+
 		"With paths, those files' changes as unified diff text, at most 2,000 lines in all.", nil, runDiff),
+	define("findings", "Your task's review findings, open and most severe first: each one's id, severity, "+
+		"category, file:line, status and how it was settled (fixed by which Run, accepted by a person, or open after "+
+		"so many fix attempts). Name ids (at most 20) to read those in full: title, description, suggested fix and "+
+		"the resolution note.", conductors, findings),
+	define("pull_requests", "Your task's pull requests: state, head commit, checks (each one's status), review "+
+		"(each reviewer's word), unresolved threads, and the feedback people left — author, kind, path, a short "+
+		"excerpt, and whether a fixer was sent it.", conductors, pullRequests),
 }
 
 // ---- list_tasks --------------------------------------------------------------
