@@ -1091,7 +1091,12 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 				return err
 			}
 		}
-		return s.event(ctx, tx, r, evUnparked, ledger.ActorSystem, map[string]any{"reason": reason})
+		// The epoch it resumed into, its timing's (resumeAccepted).
+		epoch := foreseen
+		if lr.Epoch != 0 {
+			epoch = lr.Epoch
+		}
+		return s.event(ctx, tx, r, evUnparked, ledger.ActorSystem, map[string]any{"reason": reason, "epoch": epoch})
 	}); err != nil {
 		return true, err
 	}

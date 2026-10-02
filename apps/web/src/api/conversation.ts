@@ -388,10 +388,16 @@ export interface Projection {
   toolCounts: Map<string, number>;
   lands: SteerLands | null;
   /**
-   * The last "taken back up" notice, until its resume is timed: the
-   * `run.resume.timed` that follows says how long it took there. A later
-   * park or pause ends the wait, so a resume never timed is not given the
-   * next one's numbers.
+   * "Taken back up" notices whose resume is not timed yet, by the epoch
+   * their `run.unparked` names: the `run.resume.timed` of that epoch says
+   * how long it took there, whenever it arrives.
+   */
+  untimedUnparks: Map<number, NoticeTurn>;
+  /**
+   * The same for a `run.unparked` that names no epoch (written before
+   * they did): the last one, until the next timing. A later park or pause
+   * ends the wait, so a resume never timed is not given the next one's
+   * numbers.
    */
   untimedUnpark: NoticeTurn | null;
   /** Highest cursor folded in; lets a caller skip what it already applied. */
@@ -416,6 +422,7 @@ export function emptyProjection(): Projection {
     activeTool: null,
     toolCounts: new Map(),
     lands: null,
+    untimedUnparks: new Map(),
     untimedUnpark: null,
     cursor: 0,
   };
@@ -709,7 +716,10 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           state.activeTool = null;
           state.untimedUnpark = null;
         }
-        if (notice === "unparked") state.untimedUnpark = turn;
+        if (notice === "unparked") {
+          if (typeof payload.epoch === "number") state.untimedUnparks.set(payload.epoch, turn);
+          else state.untimedUnpark = turn;
+        }
         break;
       }
 
@@ -718,13 +728,20 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         break;
 
       case EventTypes.RunResumeTimed: {
-        // How long the resume took: said on its "taken back up" notice, or,
-        // for a person's resume of their own pause (which has none), on a
-        // notice of its own.
+        // How long the resume took: said on its own "taken back up" notice,
+        // by epoch — a timing can arrive after the next park — or, for a
+        // person's resume of their own pause (which has none), on a notice
+        // of its own.
         const timing = resumeTiming(payload);
         if (!timing) break;
-        const unparked = state.untimedUnpark;
-        state.untimedUnpark = null;
+        let unparked: NoticeTurn | null | undefined;
+        if (typeof payload.epoch === "number" && state.untimedUnparks.has(payload.epoch)) {
+          unparked = state.untimedUnparks.get(payload.epoch);
+          state.untimedUnparks.delete(payload.epoch);
+        } else {
+          unparked = state.untimedUnpark;
+          state.untimedUnpark = null;
+        }
         if (unparked) {
           unparked.text = `Taken back up ${timing.took}.`;
           unparked.title = timing.title;

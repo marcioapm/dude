@@ -192,7 +192,12 @@ func TestAResumeAnAnswerWokeIsTimedFromTheAnswer(t *testing.T) {
 		t.Fatalf("answer: %d %v", status, body)
 	}
 	answered := w.stamp(`SELECT answered_at FROM questions WHERE id = $1`, qid)
-	w.oneTimedResume(runID, "answer", answered, false)
+	r := w.oneTimedResume(runID, "answer", answered, false)
+	var unparkedEpoch int
+	if err := w.owner.QueryRow(context.Background(), `SELECT (payload->>'epoch')::int FROM events
+		WHERE run_id = $1 AND event_type = 'run.unparked'`, runID).Scan(&unparkedEpoch); err != nil || unparkedEpoch != r.Epoch {
+		t.Errorf("run.unparked epoch %d (%v), want its resume's %d", unparkedEpoch, err, r.Epoch)
+	}
 	w.until("the implementer to finish", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID) == 1
 	})
