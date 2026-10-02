@@ -316,6 +316,154 @@ func TestAConductorNeverPublishesOrFastForwards(t *testing.T) {
 	}
 }
 
+// luxRunOf is the lux Run a dude Run runs as.
+func (w *world) luxRunOf(runID string) string {
+	w.t.Helper()
+	var id string
+	if err := w.owner.QueryRow(context.Background(), `SELECT COALESCE(lux_run_id, '') FROM runs WHERE id = $1`, runID).Scan(&id); err != nil {
+		w.t.Fatal(err)
+	}
+	return id
+}
+
+// stopped stops a conductor's container on its own, as a dead host would,
+// and waits, without sweeping, for its follower to record what lux said.
+func (w *world) stopped(runID string) {
+	w.t.Helper()
+	w.lux.Crash(w.luxRunOf(runID))
+	deadline := time.Now().Add(10 * time.Second)
+	for w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_state = 'failed'`, runID) == 0 {
+		if time.Now().After(deadline) {
+			w.t.Fatalf("lux's stop of %s was never recorded:\n%s", runID, w.describeRuns())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// A message Chat took for a conductor whose container then stopped, before
+// the conductor read it, is not lost when the sweep ends that conductor:
+// it goes to the next one, which answers it, and the first says where it went.
+func TestAMessageForAConductorThatStoppedReachesTheNext(t *testing.T) {
+	w := conductorWorld(t)
+	w.syncer.ConductorWarm = time.Hour
+	task, _ := w.delivered()
+	_, out := w.chat(task, "what changed?")
+	first, _ := out["runId"].(string)
+	w.until("the answer", func() bool { return len(w.said(first)) == 1 })
+
+	status, out := w.chat(task, "and the tests?")
+	if status != 200 || out["runId"] != first {
+		t.Fatalf("the message: %d %v, want it queued for %s", status, out, first)
+	}
+	queued, _ := out["directiveId"].(string)
+	w.stopped(first)
+
+	w.until("a conductor to answer the message", func() bool {
+		next, _, _ := w.conductor(task)
+		if next == first {
+			return false
+		}
+		said := w.said(next)
+		return len(said) == 1 && strings.Contains(said[0], "and the tests?")
+	})
+	next, _, _ := w.conductor(task)
+	var prompt string
+	if err := w.owner.QueryRow(context.Background(), `SELECT prompt FROM runs WHERE id = $1`, next).Scan(&prompt); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(prompt, "and the tests?") {
+		t.Errorf("the next conductor's briefing does not end with the message:\n%s", prompt)
+	}
+	if _, st, _ := w.conductor(task); st == "completed" || st == "failed" {
+		t.Errorf("the next conductor is %s", st)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, first); n != 1 {
+		t.Errorf("the stopped conductor is not completed:\n%s", w.describeRuns())
+	}
+	// The first conductor's copy is settled, saying where it went.
+	var failed string
+	if err := w.owner.QueryRow(context.Background(), `SELECT COALESCE(payload->>'error', '') FROM events
+		WHERE run_id = $1 AND event_type = 'run.directive.failed' AND payload->>'directiveId' = $2`, first, queued).Scan(&failed); err != nil {
+		t.Fatalf("no failed delivery recorded for the stopped conductor's copy: %v", err)
+	}
+	if !strings.Contains(failed, next) {
+		t.Errorf("the failed delivery says %q, not that %s has it", failed, next)
+	}
+	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND delivered_at IS NULL AND failed_at IS NULL`, first); n != 0 {
+		t.Errorf("%d messages left queued for the stopped conductor", n)
+	}
+}
+
+// Chat never queues for a conductor whose container has stopped: the
+// message starts the next conductor at once, which answers it.
+func TestChatStartsTheNextConductorWhenTheLastHasStopped(t *testing.T) {
+	w := conductorWorld(t)
+	w.syncer.ConductorWarm = time.Hour
+	task, _ := w.delivered()
+	_, out := w.chat(task, "what changed?")
+	first, _ := out["runId"].(string)
+	w.until("the answer", func() bool { return len(w.said(first)) == 1 })
+	w.stopped(first)
+
+	status, out := w.chat(task, "and the tests?")
+	next, _ := out["runId"].(string)
+	if status != 201 || out["created"] != true || next == first {
+		t.Fatalf("a message after the stop: %d %v, want a new conductor", status, out)
+	}
+	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1`, first); n != 0 {
+		t.Errorf("%d messages queued for the stopped conductor", n)
+	}
+	w.until("the next conductor's answer", func() bool {
+		said := w.said(next)
+		return len(said) == 1 && strings.Contains(said[0], "and the tests?")
+	})
+}
+
+// A conductor that fails mid-turn with a message queued for it hands the
+// message to the next conductor; one a person aborted fails it, saying so.
+func TestAMessageForAConductorThatFailedOrWasAbortedIsSettled(t *testing.T) {
+	w := conductorWorld(t, fakeagent.HangModel)
+	task := w.task()
+	_, out := w.chat(task, "what changed?")
+	first, _ := out["runId"].(string)
+	w.until("the conductor to work", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, first) == 1
+	})
+	_, out = w.chat(task, "and the tests?")
+	queued, _ := out["directiveId"].(string)
+	w.lux.Crash(w.luxRunOf(first))
+	w.until("the message to reach the next conductor", func() bool {
+		next, _, _ := w.conductor(task)
+		return next != first && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND prompt LIKE '%and the tests?'`, next) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed'`, first); n != 1 {
+		t.Errorf("the crashed conductor:\n%s", w.describeRuns())
+	}
+	if n := w.count(`SELECT count(*) FROM directives WHERE id = $1 AND failed_at IS NOT NULL`, queued); n != 1 {
+		t.Errorf("the crashed conductor's copy is not settled")
+	}
+
+	second, _, _ := w.conductor(task)
+	w.until("the second conductor to work", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, second) == 1
+	})
+	_, out = w.chat(task, "one more")
+	queued, _ = out["directiveId"].(string)
+	if status, _ := w.call("/internal/runs/"+second+"/abort", map[string]any{}); status != 200 {
+		t.Fatalf("abort: %d", status)
+	}
+	w.until("the aborted conductor's message to be settled", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE id = $1 AND failed_at IS NOT NULL`, queued) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.directive.failed'
+		AND payload->>'directiveId' = $2 AND payload->>'error' LIKE '%was stopped%'`, second, queued); n != 1 {
+		t.Errorf("no failed delivery saying the conductor was stopped")
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND role = 'conductor'`, task); n != 2 {
+		t.Errorf("%d conductors after the abort, want 2: an abort starts none", n)
+	}
+}
+
 // A conductor's question is the usual question: the task waits on the
 // person, and the answer in Chat puts it back where it was — a conductor
 // changes nothing about the task.

@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -11,21 +10,8 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
-	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
-
-// A person's message in a task's Chat (EvChatMessage, on the conductor's
-// Run), and dude's briefing of a new conductor (the text of its first
-// prompt).
-const (
-	evChatMessage      = "chat.message"
-	evConductorBriefed = "conductor.briefed"
-)
-
-// liveConductor (SQL, over runs r): the task's conductor that can still
-// hear a message — at most one (runs_live_conductor_idx).
-const liveConductor = `r.role = 'conductor' AND r.kind = 'agent' AND r.status IN ('pending', 'scheduled', 'starting', 'running', 'paused')`
 
 // chatMessageMax bounds one message, as a steer's text is bounded by the
 // directive it becomes.
@@ -52,15 +38,14 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, org string) error 
 		return fail(http.StatusBadRequest, "bad_request", "a message is at most %d bytes", chatMessageMax)
 	}
 	p := principalOf(r)
+	writer := delivery.Writer{ActorType: actorTypeOf(p), ActorID: p.Actor, Person: p.Person}
 	var out map[string]any
 	created := false
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		// One message per task at a time: two people writing at once are
 		// taken one after the other, and the second finds the first's
-		// conductor. A lock of its own, not the task's row: the conductor's
-		// own transactions (a question it asks) hold its Run and then
-		// update the task, and this one takes its Run before the task too.
-		if _, err := tx.Exec(r.Context(), `SELECT pg_advisory_xact_lock(hashtext('chat:' || $1))`, taskID); err != nil {
+		// conductor. The syncer ends a conductor under the same lock.
+		if err := delivery.LockChat(r.Context(), tx, taskID); err != nil {
 			return err
 		}
 		var projectID string
@@ -72,11 +57,25 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, org string) error 
 		}
 		var runID, status string
 		var dudePause *string
-		err := tx.QueryRow(r.Context(), `SELECT r.id, r.status::text, r.dude_pause FROM runs r
-			WHERE r.task_id = $1 AND `+liveConductor+` FOR NO KEY UPDATE`, taskID).Scan(&runID, &status, &dudePause)
+		var ending bool
+		find := func() error {
+			return tx.QueryRow(r.Context(), `SELECT r.id, r.status::text, r.dude_pause, `+delivery.Ending+` FROM runs r
+				WHERE r.task_id = $1 AND `+delivery.LiveConductor+` FOR NO KEY UPDATE`, taskID).Scan(&runID, &status, &dudePause, &ending)
+		}
+		err := find()
+		if err == nil && ending {
+			// Its container stopped and nothing will resume it: it is ended
+			// here, as the syncer would, and what it never read goes to the
+			// next conductor — which this message then reaches too.
+			ref := delivery.RunRef{Org: org, ProjectID: projectID, TaskID: taskID, RunID: runID}
+			if err := delivery.EndConductor(r.Context(), tx, ref, "its container stopped"); err != nil {
+				return err
+			}
+			err = find()
+		}
 		if db.IsNotFound(err) {
 			created = true
-			runID, err = s.startConductor(r.Context(), tx, org, projectID, taskID, p, body.Text)
+			runID, err = delivery.StartConductor(r.Context(), tx, org, projectID, taskID, writer, body.Text)
 			if err != nil {
 				return err
 			}
@@ -126,7 +125,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, org string) error 
 			}
 		}
 		out = map[string]any{"runId": runID, "taskId": taskID, "created": false, "directiveId": directiveID}
-		return chatEvent(r.Context(), tx, org, projectID, taskID, runID, p, map[string]any{"text": body.Text, "directiveId": directiveID})
+		return delivery.ChatEvent(r.Context(), tx, ref, writer, map[string]any{"text": body.Text, "directiveId": directiveID})
 	})
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.ConstraintName == "runs_live_conductor_idx" {
@@ -143,61 +142,6 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, org string) error 
 	}
 	write(w, status, out)
 	return nil
-}
-
-// startConductor creates the task's conductor: a Run with no phase, role
-// conductor, from the task's head in each repository (the default branch
-// where nothing was published), briefed by dude with the person's message.
-func (s *Server) startConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID string, p principal, message string) (string, error) {
-	id := ids.New(ids.Run)
-	var person string
-	if p.Person != "" {
-		_ = tx.QueryRow(ctx, `SELECT name FROM people WHERE id = $1`, p.Person).Scan(&person)
-	}
-	briefing, err := delivery.Briefing(ctx, tx, taskID, id, person, message)
-	if err != nil {
-		return "", err
-	}
-	heads, err := delivery.TaskHeads(ctx, tx, taskID)
-	if err != nil {
-		return "", err
-	}
-	baseRefs := map[string]string{}
-	for _, h := range heads {
-		if h.SHA != "" {
-			baseRefs[h.Repo] = h.SHA
-		}
-	}
-	if _, err := tx.Exec(ctx, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, kind, role,
-			base_refs, prompt, started_by)
-		VALUES ($1, $2, $3, $4, COALESCE((SELECT max(attempt) FROM runs WHERE task_id = $4), 1), 'pending', 'agent',
-			'conductor', $5, $6, NULLIF($7, ''))`,
-		id, org, projectID, taskID, baseRefs, briefing, p.Person); err != nil {
-		return "", err
-	}
-	_, err = ledger.Append(ctx, tx, ledger.Event{Type: "run.created", OrganizationID: org, ProjectID: projectID,
-		TaskID: taskID, RunID: id, ActorType: actorTypeOf(p), ActorID: p.Actor, Source: ledger.SourceOrchestrator,
-		CorrelationID: taskID, Payload: map[string]any{"role": delivery.RoleConductor, "publishes": false, "baseRefs": baseRefs}})
-	if err != nil {
-		return "", err
-	}
-	// The message, then dude's briefing of the conductor about it: what the
-	// Chat shows, whatever the agent's harness echoes back of its prompt.
-	if err := chatEvent(ctx, tx, org, projectID, taskID, id, p, map[string]any{"text": message}); err != nil {
-		return "", err
-	}
-	_, err = ledger.Append(ctx, tx, ledger.Event{Type: evConductorBriefed, OrganizationID: org, ProjectID: projectID,
-		TaskID: taskID, RunID: id, ActorType: ledger.ActorSystem, ActorID: "dude", Source: ledger.SourceOrchestrator,
-		CorrelationID: taskID, Payload: map[string]any{"text": briefing}})
-	return id, err
-}
-
-func chatEvent(ctx context.Context, tx pgx.Tx, org, projectID, taskID, runID string, p principal, payload map[string]any) error {
-	_, err := ledger.Append(ctx, tx, ledger.Event{
-		Type: evChatMessage, OrganizationID: org, ProjectID: projectID, TaskID: taskID, RunID: runID,
-		ActorType: actorTypeOf(p), ActorID: p.Actor, Source: ledger.SourceOrchestrator, CorrelationID: taskID, Payload: payload,
-	})
-	return err
 }
 
 func actorTypeOf(p principal) string {
