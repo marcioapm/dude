@@ -51,10 +51,12 @@ const organizationId = newId("organization");
 const slug = `demo-${Date.now().toString(36)}`;
 
 try {
-  await owner`
-    INSERT INTO organizations (id, name, slug, default_agent_models)
-    VALUES (${organizationId}, 'Demo', ${slug},
-            ${{ reviewer: { model: "llm-anthropic/claude-sonnet-5" } }}::jsonb)`;
+  // The trigger seeds Thinker, Coder and Fast with no model (migration 066):
+  // the reviewer's Thinker asks for a real one, the implementer's Coder plays
+  // the scripted agent.
+  await owner`INSERT INTO organizations (id, name, slug) VALUES (${organizationId}, 'Demo', ${slug})`;
+  await owner`UPDATE model_tiers SET model = CASE name WHEN 'Thinker' THEN 'claude-sonnet-5' WHEN 'Coder' THEN 'fake/scripted' END
+              WHERE organization_id = ${organizationId} AND name IN ('Thinker', 'Coder')`;
 
   // Written through the app role, so the same row-level security that
   // protects production applies to the demo's data too.
@@ -69,7 +71,7 @@ try {
     await sql`
       INSERT INTO projects (id, organization_id, name, slug, key_prefix, description, agent_models, next_task_number)
       VALUES (${projectId}, ${organizationId}, 'Website', 'web', 'WEB', 'The public website and its API',
-              ${{ implementer: { model: "fake/scripted" } }}::jsonb, ${TASKS.length + 1})`;
+              '{}'::jsonb, ${TASKS.length + 1})`;
     const epicIds: string[] = [];
     for (const [position, title] of EPICS.entries()) {
       const id = newId("epic");
