@@ -721,6 +721,37 @@ describe("how long a resume took", () => {
     ]);
     expect(turns.map((t) => t.kind === "notice" && t.text)).toEqual(["Taken back up in 6.4s.", "Resumed in 1.5s."]);
   });
+
+  // lux streams the resumed agent's first words before its answer to the
+  // resume is back, so the timing is written before the park's return.
+  test("a park's timing that arrives before its return is said on that return, once", () => {
+    const events = [
+      ev("run.parked", { reason: "person" }),
+      timed({ epoch: 2, cause: "answer", moved: false, totalMs: 6400, phases: { react: 120, take: 400 } }),
+      ev("run.unparked", { reason: "person", epoch: 2 }),
+    ];
+    const { turns } = project(events);
+    expect(turns.filter((t) => t.kind === "notice" && t.notice === "unparked")).toEqual([
+      expect.objectContaining({ text: "Taken back up in 6.4s.", title: "dude asked lux 120ms\ntook its input 400ms" }),
+    ]);
+    const state = emptyProjection();
+    for (const e of events) apply(state, [e]);
+    expect(snapshot(state).turns).toEqual(turns);
+  });
+
+  test("a person's resume of a Run no park holds is said at once", () => {
+    const { turns } = project([
+      ev("run.parked", { reason: "person" }),
+      timed({ epoch: 2, cause: "answer", moved: false, totalMs: 6400, phases: {} }),
+      ev("run.unparked", { reason: "person", epoch: 2 }),
+      ev(EventTypes.RunPaused, { requested: true }),
+      ev(EventTypes.RunResumed, {}),
+      timed({ epoch: 3, cause: "person", moved: false, totalMs: 1500, phases: {} }),
+    ]);
+    expect(turns.map((t) => t.kind === "notice" && t.text)).toEqual([
+      expect.stringContaining("Parked"), "Taken back up in 6.4s.", "Resumed in 1.5s.",
+    ]);
+  });
 });
 
 describe("how a run ended", () => {

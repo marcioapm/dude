@@ -400,6 +400,15 @@ export interface Projection {
    * numbers.
    */
   untimedUnpark: NoticeTurn | null;
+  /**
+   * Whether dude's last word on a park was `run.parked`, not its
+   * `run.unparked`: the orchestrator writes `run.unparked` on a resume
+   * exactly then, whoever resumed it. A timing that arrives meanwhile is
+   * a park's return still to be written, kept here by epoch until it is;
+   * otherwise it is a person's resume of their own pause.
+   */
+  parked: boolean;
+  earlyTimings: Map<number, { took: string; title: string }>;
   /** Highest cursor folded in; lets a caller skip what it already applied. */
   cursor: number;
 }
@@ -424,6 +433,8 @@ export function emptyProjection(): Projection {
     lands: null,
     untimedUnparks: new Map(),
     untimedUnpark: null,
+    parked: false,
+    earlyTimings: new Map(),
     cursor: 0,
   };
 }
@@ -715,9 +726,16 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           state.activity = null;
           state.activeTool = null;
           state.untimedUnpark = null;
+          state.parked = true;
         }
         if (notice === "unparked") {
-          if (typeof payload.epoch === "number") state.untimedUnparks.set(payload.epoch, turn);
+          state.parked = false;
+          const early = typeof payload.epoch === "number" ? state.earlyTimings.get(payload.epoch) : undefined;
+          if (early) {
+            state.earlyTimings.delete(payload.epoch as number);
+            turn.text = `Taken back up ${early.took}.`;
+            turn.title = early.title;
+          } else if (typeof payload.epoch === "number") state.untimedUnparks.set(payload.epoch, turn);
           else state.untimedUnpark = turn;
         }
         break;
@@ -729,15 +747,18 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
 
       case EventTypes.RunResumeTimed: {
         // How long the resume took: said on its own "taken back up" notice,
-        // by epoch — a timing can arrive after the next park — or, for a
-        // person's resume of their own pause (which has none), on a notice
-        // of its own.
+        // by epoch — a timing can arrive after the next park, or before its
+        // own notice while the Run is still parked — or, for a person's
+        // resume of their own pause (which has none), on a notice of its own.
         const timing = resumeTiming(payload);
         if (!timing) break;
         let unparked: NoticeTurn | null | undefined;
         if (typeof payload.epoch === "number" && state.untimedUnparks.has(payload.epoch)) {
           unparked = state.untimedUnparks.get(payload.epoch);
           state.untimedUnparks.delete(payload.epoch);
+        } else if (typeof payload.epoch === "number" && state.parked) {
+          state.earlyTimings.set(payload.epoch, timing);
+          break;
         } else {
           unparked = state.untimedUnpark;
           state.untimedUnpark = null;
