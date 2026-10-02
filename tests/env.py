@@ -137,6 +137,9 @@ class TestEnvironment:
     web_proc: subprocess.Popen | None = field(default=None, repr=False)
     # A real lux to drive instead of the fake: its env.json (see lux_env).
     real_lux: dict | None = field(default=None, repr=False)
+    # Set on the orchestrator over the suite's own settings: a harness
+    # measuring a real model passes its LLM's URL and key this way.
+    orchestrator_env: dict = field(default_factory=dict, repr=False)
     control_plane_proc: subprocess.Popen | None = field(default=None, repr=False)
     orchestrator_proc: subprocess.Popen | None = field(default=None, repr=False)
     lux_proc: subprocess.Popen | None = field(default=None, repr=False)
@@ -258,6 +261,7 @@ class TestEnvironment:
                 # after each edit, so a test sees the slow path too.
                 "DUDE_DIFF_EVERY": "3s",
                 **self._tools_env(),
+                **self.orchestrator_env,
             },
             stdout=self._log("orchestrator"), stderr=subprocess.STDOUT,
         )
@@ -516,6 +520,7 @@ class TestEnvironment:
         env.gallery_proc = None
         env.orchestrator_port = int(os.environ.get("DUDE_TEST_ORCHESTRATOR_PORT", "0"))
         env.real_lux = lux_env() if os.environ.get("DUDE_TEST_REAL_LUX") else None
+        env.orchestrator_env = {}
         env._init_services()
         # The lux the orchestrator drives: the fake's address, or the real one's.
         env.lux_url = os.environ.get("DUDE_TEST_LUX_URL", "")
