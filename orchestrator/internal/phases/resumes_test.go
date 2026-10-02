@@ -212,14 +212,33 @@ func TestAReplayOrARepeatedStepMovesNoRecordedTimestamp(t *testing.T) {
 	w := newResumeWorld(t)
 	base := time.Now().Add(-time.Minute).UTC().Truncate(time.Millisecond)
 	w.resume(stoppedOnHost1(base))
-	w.lux.set(runningAgain(base, "host-a"), nil)
+	w.lux.set(runningAgain(base, "host-b"), nil)
 	w.follow(busy(2), spoke(2), running(2))
 	first := w.row(2)
-	for _, col := range []string{"woken_at", "requested_at", "assigned_at", "image_ready_at", "volumes_restored_at",
-		"container_started_at", "workload_started_at", "host_name", "stopped_host_name", "stop_requested_at",
-		"exited_at", "snapshot_done_at", "uploaded_at", "snapshot_bytes", "moved", "running_at", "busy_at", "first_output_at"} {
+	for _, col := range []string{"woken_at", "requested_at", "running_at", "busy_at", "first_output_at"} {
 		if first[col] == nil {
 			t.Errorf("%s was not recorded", col)
+		}
+	}
+	// Every field lux reported, as lux reported it: each is distinct in the
+	// fixture, so one stored in another's column shows.
+	reported := runningAgain(base, "host-b")
+	stopped, resumed := reported.Placements[0], reported.Placements[1]
+	for col, want := range map[string]any{
+		"assigned_at": *resumed.AssignedAt, "image_ready_at": *resumed.ImageReadyAt,
+		"volumes_restored_at": *resumed.VolumesRestoredAt, "container_started_at": *resumed.ContainerStartedAt,
+		"workload_started_at": *resumed.WorkloadStartedAt, "host_name": "host-b",
+		"stopped_host_name": "host-a", "stop_requested_at": *stopped.StopRequestedAt,
+		"exited_at": *stopped.ExitedAt, "snapshot_done_at": *stopped.SnapshotDoneAt,
+		"uploaded_at": *stopped.UploadedAt, "snapshot_bytes": *stopped.SnapshotBytes, "moved": true,
+	} {
+		got := first[col]
+		if wt, ok := want.(time.Time); ok {
+			if gt, ok := got.(time.Time); !ok || !gt.Equal(wt) {
+				t.Errorf("%s = %v, lux reported %v", col, got, wt)
+			}
+		} else if got != want {
+			t.Errorf("%s = %v, lux reported %v", col, got, want)
 		}
 	}
 	if n := len(w.timed()); n != 1 {
@@ -228,7 +247,7 @@ func TestAReplayOrARepeatedStepMovesNoRecordedTimestamp(t *testing.T) {
 
 	// lux reports every placement time differently now, on another host.
 	later := base.Add(time.Hour)
-	w.lux.set(runningAgain(later, "host-b"), nil)
+	w.lux.set(runningAgain(later, "host-c"), nil)
 	time.Sleep(20 * time.Millisecond)
 	// The sync step that resumed it, run again on a Run still paused (its
 	// transaction's answer lost), records the same resume.
