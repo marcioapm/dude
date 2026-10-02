@@ -124,6 +124,12 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 // The preview is woken with both sweeping, so both follow its Run, and it
 // returns once the second is held there and the first has seen it running.
 func (w *world) secondFollower(runID, web, holdAt string) *gateLux {
+	g, _ := w.secondOrchestrator(runID, web, holdAt)
+	return g
+}
+
+// secondOrchestrator is secondFollower, with that orchestrator's loop.
+func (w *world) secondOrchestrator(runID, web, holdAt string) (*gateLux, *servers.Previews) {
 	w.t.Helper()
 	g := newGateLux(w.previews.Lux, w.lux)
 	g.holdAt = holdAt
@@ -139,7 +145,7 @@ func (w *world) secondFollower(runID, web, holdAt string) *gateLux {
 		running := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_state = 'running'`, runID) == 1
 		if running && (holdAt != "running" || isClosed(g.reached)) {
 			w.open(web)
-			return g
+			return g, other
 		}
 		if time.Now().After(deadline) {
 			w.t.Fatalf("the preview never ran with two followers:\n%s", w.describeRuns())
@@ -165,7 +171,12 @@ func (w *world) holdOneStream(state string) (reached, release chan struct{}) {
 			<-release
 		}
 	})
-	w.t.Cleanup(func() { w.lux.BeforeEvent(nil) })
+	w.t.Cleanup(func() {
+		w.lux.BeforeEvent(nil)
+		if !isClosed(release) {
+			close(release)
+		}
+	})
 	return reached, release
 }
 
@@ -356,5 +367,125 @@ func TestARunningSeenBeforeTheWakeCommitsIsNotAFailedStart(t *testing.T) {
 	w.untilPreview(runID, "the crashed Run serving again", func() bool { return w.lux.RequestServer(web, "/") })
 	if n := len(w.luxRuns()); n != 1 || r.Resumed != 2 || slices.Contains(w.lux.CallsOf(r.ID), "cancel") {
 		t.Fatalf("%d lux runs, resumed %d, calls %v; want the crashed Run resumed, not replaced", n, r.Resumed, w.lux.CallsOf(r.ID))
+	}
+}
+
+// The replaced Run's own trailing events (its failed, then its cancelled),
+// delivered by a follower held on its stream until the preview holds its
+// replacement, are not the preview's: it stays on the new Run, serving,
+// with no error.
+func TestAReplacedRunsTrailingEventIsNotThePreviews(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	_, runID := w.declare()
+	web := w.serverID(runID, "web")
+	_, other := w.secondOrchestrator(runID, web, "")
+	old := w.luxRuns()[0]
+	w.lux.Idle(web)
+	w.until("parked", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, runID) == 1
+	})
+	reached, release := w.holdOneStream("failed")
+	w.lux.FailStarts("dude.preview="+runID, 1)
+	w.lux.RequestServer(web, "/")
+	w.untilPreview(runID, "a new Run running", func() bool {
+		_, _ = other.Sweep(context.Background())
+		return len(w.luxRuns()) == 2 &&
+			w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_state = 'running'`, runID) == 1
+	})
+	wait(t, reached, "a follower held at the old Run's failed")
+	fresh := w.luxRuns()[1]
+	close(release)
+	waitFor(t, "the old Run cancelled", func() bool { return w.lux.State(old.ID) == "cancelled" })
+	for range 5 {
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_run_id = $2 AND status = 'running' AND lux_state = 'running'
+		AND error IS NULL AND start_failures = 0`, runID, fresh.ID); n != 1 {
+		t.Fatalf("the old Run's trailing events were applied to the preview:\n%s", w.preview(runID))
+	}
+	w.open(web)
+}
+
+// A host lost while a start is under way is a failed start (a new Run); a
+// host lost after the Run ran is not (the same Run, resumed from its
+// snapshot).
+func TestALostStartIsReplacedAndALostRunIsResumed(t *testing.T) {
+	t.Run("lost before running", func(t *testing.T) {
+		w := newWorld(t)
+		w.wakeable()
+		runID, web := w.asleepPreview()
+		old := w.luxRuns()[0]
+		w.lux.LoseStarts("dude.preview="+runID, 1)
+		w.lux.RequestServer(web, "/")
+		w.untilPreview(runID, "a new Run running", func() bool {
+			return len(w.luxRuns()) == 2 &&
+				w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_state = 'running'`, runID) == 1
+		})
+		if old.Resumed != 1 || !slices.Contains(w.lux.CallsOf(old.ID), "cancel") {
+			t.Fatalf("old Run resumed %d, calls %v; want resumed once, then replaced", old.Resumed, w.lux.CallsOf(old.ID))
+		}
+	})
+	t.Run("lost after running", func(t *testing.T) {
+		w := newWorld(t)
+		w.wakeable()
+		w.recipe("web", 3000, "npm run dev", "", nil, true)
+		_, runID := w.declare()
+		web := w.serverID(runID, "web")
+		w.open(web)
+		r := w.luxRuns()[0]
+		w.lux.Lose(r.ID)
+		w.untilPreview(runID, "asleep", func() bool {
+			return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND start_failures = 0`, runID) == 1
+		})
+		w.open(web)
+		if n := len(w.luxRuns()); n != 1 || r.Resumed != 1 || slices.Contains(w.lux.CallsOf(r.ID), "cancel") {
+			t.Fatalf("%d lux runs, resumed %d, calls %v; want the lost Run resumed", n, r.Resumed, w.lux.CallsOf(r.ID))
+		}
+	})
+}
+
+// A start that runs gives the preview a fresh budget: after giving up, a
+// Run that starts clears the count and the error, and a later failing
+// resume is tried previewStartAttempts times again, not once.
+func TestAStartThatRunsResetsTheBudget(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	_, runID := w.declare()
+	web := w.serverID(runID, "web")
+	label := "dude.preview=" + runID
+	w.lux.FailStarts(label, 100)
+	w.lux.RequestServer(web, "/")
+	w.untilPreview(runID, "dude to give up", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND start_failures = 3 AND wake_wanted_at IS NULL`, runID) == 1
+	})
+
+	w.lux.FailStarts(label, 0)
+	if code, out := w.do("POST", "/internal/runs/"+runID+"/servers/web/start", nil); code != 200 {
+		t.Fatalf("start = %d %v", code, out)
+	}
+	w.open(web)
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND start_failures = 0 AND error IS NULL`, runID); n != 1 {
+		t.Fatalf("a start that ran kept the failures:\n%s", w.preview(runID))
+	}
+	ran := w.luxRuns()[3]
+	w.lux.Idle(web)
+	w.until("parked", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, runID) == 1
+	})
+
+	w.lux.FailStarts(label, 100)
+	w.lux.RequestServer(web, "/")
+	w.untilPreview(runID, "dude to give up again", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND start_failures = 3 AND wake_wanted_at IS NULL`, runID) == 1
+	})
+	for range 10 {
+		w.pump()
+	}
+	// The Run that ran is resumed once (start 1), then two new ones.
+	if n := len(w.luxRuns()); n != 6 || ran.Resumed != 1 {
+		t.Fatalf("%d lux runs, the one that ran resumed %d times; want 6 and 1\n%s", n, ran.Resumed, w.preview(runID))
 	}
 }
