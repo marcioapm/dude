@@ -207,8 +207,29 @@ keeps lux's server id and stores the full hostname and URL lux returns.
 - **Opening a URL** (signed in to lux's previews) shows lux's waking page,
   and lux tells dude on its event feed (`GET /v1/events`). dude resumes the
   preview's Run, every checkout synced to the task's branch, or, the first
-  time (or when lux can no longer resume it), submits one and attaches the
-  servers. The page drops into the app once it serves.
+  time, submits one and attaches the servers. A Run lux refuses to resume
+  (a 4xx: `no_snapshot`, `not_resumable`, `secrets_required`), or no longer
+  has, or that can never run again (`succeeded`, `cancelled`), is replaced:
+  a new Run is submitted and the servers attached to it. The page drops into
+  the app once it serves.
+- **A Run that fails to start**: lux took the resume or the submit, and the
+  Run then ended `failed` or `lost` before it ran (a container that would
+  not start, an image that would not pull, a host lost mid-start). Resuming
+  it would repeat what failed, so the next wake cancels it and submits a new
+  Run instead. dude asks for that wake itself, after 1 s, then 2 s, so
+  whoever is on the waking page gets the new Run: up to 3 starts in a row
+  for one request. After the third, dude stops. The preview shows asleep,
+  with the error (`the preview's Run failed to start (<lux's reason>) 3
+  times in a row`), and lux's page says "no answer" once its 5-minute wake
+  timeout passes. From then on each new request, a person starting a server
+  or a URL opened after "no answer", tries one more new Run. The count
+  resets once a start runs. A Run that ran and then crashed or lost its
+  host is resumed from its snapshot as before: only a start that never ran
+  counts. "Never ran" is read from lux's own order of the Run's events
+  (`runs.lux_start_event`, `runs.lux_ran_event`): no `running` since the
+  `resuming` (or the new Run's first event) that began the start. It does
+  not depend on dude's status, or on whether the feed or the wake's own
+  answer from lux is recorded first; each event is applied once.
 - **Unused**: lux reports a server idle after `idleAfter` without a
   request; once every server of the preview is, dude stops the Run (its
   checkout and state volume kept for the next wake). lux reports idleness

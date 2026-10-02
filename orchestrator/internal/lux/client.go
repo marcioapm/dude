@@ -464,6 +464,9 @@ type Client interface {
 	// Output follows a Run's output from a position until lux says there is
 	// no more, calling fn for each frame. Returning an error from fn stops.
 	Output(ctx context.Context, runID, cursor string, afterEvent int64, fn func(Frame) error) error
+	// Events is one page of a Run's lifecycle events after an event id,
+	// without its output.
+	Events(ctx context.Context, runID string, after int64) ([]Frame, error)
 	Get(ctx context.Context, runID string) (Run, error)
 	Artifacts(ctx context.Context, runID string) ([]Artifact, error)
 	// Download streams an artifact as the Run wrote it. The caller closes it.
@@ -747,6 +750,27 @@ func (c *HTTPClient) Output(ctx context.Context, runID, cursor string, afterEven
 		}
 		return fn(f)
 	})
+}
+
+// Events reads one page of a Run's lifecycle events after an event id, in id
+// order: up to 1000 of them (lux's page), none when lux had nothing past after at
+// its query. Each is the Frame the output stream sends for it (Kind "lux").
+func (c *HTTPClient) Events(ctx context.Context, runID string, after int64) ([]Frame, error) {
+	var out struct {
+		Events []json.RawMessage `json:"events"`
+	}
+	if err := c.do(ctx, "GET", "/v1/runs/"+url.PathEscape(runID)+"/events?after="+fmt.Sprint(after), nil, nil, &out); err != nil {
+		return nil, err
+	}
+	frames := make([]Frame, 0, len(out.Events))
+	for _, e := range out.Events {
+		f, ok := ParseFrame("lux", e)
+		if !ok {
+			return nil, fmt.Errorf("lux run %s: an event dude cannot read: %s", runID, e)
+		}
+		frames = append(frames, f)
+	}
+	return frames, nil
 }
 
 // ReadSSE calls fn for each server-sent event: `event:` and `data:` lines,
