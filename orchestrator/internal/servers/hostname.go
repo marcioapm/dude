@@ -29,8 +29,8 @@ func labelPart(s string) string {
 	return strings.Trim(b.String(), "-")
 }
 
-// PreviewOf is the task and project a preview serves: their key and slug
-// are what its label reads, their ids what its hash is of.
+// PreviewOf identifies a preview's task and project: key and slug name the
+// label; ids distinguish hashed labels.
 type PreviewOf struct {
 	TaskID, TaskKey, ProjectID, ProjectSlug string
 }
@@ -38,11 +38,10 @@ type PreviewOf struct {
 // PreviewLabel is the one DNS label a preview server is served at:
 // <server>-<task key>-<project slug>, each part normalised. Past 63
 // characters it is cut to 54 and ends in '-' and 8 hex characters of a hash
-// of the server's name and the task's and project's ids: ids, not the key,
-// so the suffix is one for the preview whatever its project's key prefix,
-// and two previews of different orgs with one key and slug differ. salt,
-// when not empty, joins the hash and forces the hashed form: a second
-// choice after lux answers hostname_taken.
+// of the server name, task id and project id. The ids keep the suffix stable
+// across key-prefix renames and distinguish previews with the same key and
+// slug in different orgs. A nonempty salt joins the hash and forces the
+// hashed form for a retry after lux answers hostname_taken.
 func PreviewLabel(server string, of PreviewOf, salt string) string {
 	var parts []string
 	for _, p := range []string{server, of.TaskKey, of.ProjectSlug} {
