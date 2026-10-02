@@ -154,22 +154,25 @@ func (s *Syncer) resumeRefused(ctx context.Context, r phaseRun, epoch int) {
 // Known limit: a fresh resume from a newer epoch lux placed and stopped on
 // its own after dude's Get looks already assigned, and goes untimed (the
 // Run is unaffected); telling them apart needs placement data the answer
-// lacks, or a Get per resume.
+// lacks, or a Get per resume, which dude does not make.
 func resumedEpoch(foreseen int, resumed lux.Run) int {
 	return max(foreseen, resumed.Epoch)
 }
 
 // resumeAccepted moves the row of a resume lux accepted to the epoch
 // resumedEpoch names, when that is above the one foreseen; in the
-// transaction that takes the Run out of paused, its row locked.
+// transaction that takes the Run out of paused, its row locked, before
+// the Run row is updated.
 //
 // Frames of that epoch committed before the move found no row, and when
-// they came is recorded nowhere. If the Run's agent_session_epoch already
-// reached the epoch (the only epoch-qualified trace: the shim's session
-// record), the row is marked frames_missed and true is returned, for it to
-// be timed as it stands: no later frame stamps it. lux_state and
-// agent_active_at carry no epoch, so an older placement's trailing frame
-// may have set them; they mark nothing.
+// they came cannot be recovered: the agent's events carry no epoch, and a
+// chunk may not be an event yet. The only epoch-qualified trace is the
+// Run's agent_session_epoch, from the shim's session record, the resumed
+// placement's first record. If it already reached the epoch, the row is
+// marked frames_missed and true is returned, for it to be timed as it
+// stands once the transaction commits: no later frame stamps it.
+// lux_state and agent_active_at carry no epoch, so an older placement's
+// trailing frame may have set them; they mark nothing.
 func (s *Syncer) resumeAccepted(ctx context.Context, tx pgx.Tx, r phaseRun, foreseen int, resumed lux.Run) (missed bool) {
 	epoch := resumedEpoch(foreseen, resumed)
 	if epoch == foreseen {
