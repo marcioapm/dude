@@ -22,9 +22,7 @@ export interface CriteriaItem {
   readonly column: number;
   /** The item's lines as content: marker and `[ ]` off the first, the rest dedented by `column`. */
   readonly lines: readonly string[];
-  /** A fence opened in the item and still open at its end, which the item's end closes. */
-  readonly openFence: string | null;
-  /** The line that open fence starts on. */
+  /** The line a fence opened in the item and still open at its end starts on; the item's end closes it. */
   readonly fenceLine: number | null;
 }
 
@@ -86,7 +84,7 @@ export function criteriaLines(source: string): CriteriaLines {
   let blanks: string[] = [];
 
   const finish = () => {
-    if (cur) items.push({ ...cur, openFence: fence, fenceLine: fence === null ? null : fenceLine });
+    if (cur) items.push({ ...cur, fenceLine: fence === null ? null : fenceLine });
     cur = null;
     blanks = [];
     fence = null;
