@@ -1218,7 +1218,7 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 `src/primitives/` — Button, IconButton, Input (`size="title"` for a
 document's heading), NumberInput (`step`, `min`, `max`, `unit`), Textarea,
 MarkdownEditor (`fill`), Select (options with `meta` and `description`, a
-`footer`), Checkbox, ChoiceList (a radio group of a few ways to act, each
+`footer`, `onOpenChange`), Checkbox, ChoiceList (a radio group of a few ways to act, each
 with a sentence; `disabledReason` says why one cannot be chosen),
 Badge, Card, Table (THead/TBody/Tr/Th/Td/TableEmpty), Tabs (underline for a
 page, segmented in a toolbar; a tab can carry a count, a trailing mark and
