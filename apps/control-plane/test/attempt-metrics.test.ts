@@ -157,6 +157,21 @@ beforeAll(async () => {
               FROM (VALUES (1, 'review', interval '50 minutes'), (2, 'ready_to_merge', interval '40 minutes'),
                            (3, 'running', interval '20 minutes')) AS v(n, s, at)
               ORDER BY n`;
+
+  // Aborted for good an hour ago, during its second attempt, after an hour in review.
+  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, status, created_at)
+              VALUES ('wi_6', ${ORG}, ${PROJECT}, 6, 'Aborted', 'aborted', now() - interval '5 hours')`;
+  await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, created_at, started_at, ended_at, status)
+              VALUES ('run_f1', ${ORG}, ${PROJECT}, 'wi_6', 1,
+                      now() - interval '4 hours', now() - interval '4 hours', now() - interval '3 hours', 'aborted'),
+                     ('run_f2', ${ORG}, ${PROJECT}, 'wi_6', 2,
+                      now() - interval '3 hours', now() - interval '3 hours', now() - interval '1 hour', 'aborted')`;
+  await owner`INSERT INTO events (id, organization_id, event_type, task_id, actor_type, actor_id, source, payload, occurred_at)
+              SELECT 'evt_f' || n, ${ORG}, 'task.status_changed', 'wi_6', 'system', 'orchestrator', 'orchestrator',
+                     jsonb_build_object('status', s), now() - at
+              FROM (VALUES (1, 'aborted', interval '4 hours'), (2, 'running', interval '3 hours'),
+                           (3, 'review', interval '2 hours'), (4, 'aborted', interval '1 hour')) AS v(n, s, at)
+              ORDER BY n`;
   app = new SQL(databaseUrl("app", NAME));
   setPool(app);
   key = (await createApiKey({ organizationId: ORG, name: "Ana" })).key;
@@ -247,6 +262,12 @@ test("an attempt aborted, tried again and then done ends when it was done", asyn
   // Attempt 2 began 3 h ago and was done 30 minutes ago, in review for the last hour of it.
   const two = await get("/v1/tasks/wi_3/metrics?attempt=2");
   near(two.leadMs, 150 * MINUTE);
+  near(two.reviewMs, HOUR);
+});
+
+test("the latest attempt of an aborted task ends at the abort, with its review before it", async () => {
+  const two = await get("/v1/tasks/wi_6/metrics?attempt=2");
+  near(two.leadMs, 2 * HOUR);
   near(two.reviewMs, HOUR);
 });
 
