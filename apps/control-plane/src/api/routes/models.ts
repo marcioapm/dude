@@ -55,22 +55,20 @@ export async function listTiers(scope: OrgScope): Promise<ModelTier[]> {
 }
 
 /**
- * Refuse a tier id the organization does not have (a settings patch naming
- * one). The row is held FOR SHARE to the end of the caller's transaction:
- * a removal, which locks it FOR UPDATE, then either waits for the patch and
- * moves what it set, or has gone and the patch is refused.
+ * Every tier a layer's agent models name must be the organization's. The
+ * rows are held FOR SHARE to the end of the caller's transaction: a
+ * removal, which locks them FOR UPDATE, then either waits for the patch and
+ * moves what it set, or has gone and the patch is refused. Every statement
+ * that locks several tiers takes them in id order, so none can deadlock.
  */
-export async function requireTier(scope: OrgScope, id: string): Promise<void> {
-  if ((await scope.sql`SELECT 1 FROM model_tiers WHERE id = ${id} FOR SHARE`).length === 0) {
-    throw badRequest(`there is no model tier ${id}`);
-  }
-}
-
-/** Every tier a layer's agent models name must be the organization's. */
 export async function checkTiers(scope: OrgScope, models: Record<string, { tier?: string | null | undefined } | undefined>): Promise<void> {
-  for (const change of Object.values(models)) {
-    if (change?.tier) await requireTier(scope, change.tier);
-  }
+  const ids = [...new Set(Object.values(models).flatMap((change) => (change?.tier ? [change.tier] : [])))];
+  if (ids.length === 0) return;
+  const found = (await scope.sql`
+    SELECT id FROM model_tiers WHERE id = ANY(${scope.sql.array(ids, "text")}::text[]) ORDER BY id FOR SHARE`)
+    .map((r: { id: string }) => r.id) as string[];
+  const missing = ids.find((id) => !found.includes(id));
+  if (missing) throw badRequest(`there is no model tier ${missing}`);
 }
 
 /**
@@ -201,7 +199,7 @@ async function reorderTiers(ctx: RequestContext): Promise<Response> {
   await requireOrgAdmin(ctx);
   const { ids } = await parseBody(ctx.request, reorderModelTiersSchema);
   await withOrg(ctx.principal.organizationId, async (scope) => {
-    const have = (await scope.sql`SELECT id FROM model_tiers FOR UPDATE`).map((r: { id: string }) => r.id) as string[];
+    const have = (await scope.sql`SELECT id FROM model_tiers ORDER BY id FOR UPDATE`).map((r: { id: string }) => r.id) as string[];
     if (ids.length !== have.length || new Set(ids).size !== ids.length || !ids.every((id) => have.includes(id))) {
       throw badRequest("the order names every tier of the organization, once each");
     }
@@ -224,18 +222,24 @@ async function removeTier(ctx: RequestContext): Promise<Response> {
   const id = ctx.params.id!;
   const replacement = (await parseBody(ctx.request, removeModelTierSchema)).replacement ?? null;
   await withOrg(ctx.principal.organizationId, async (scope) => {
-    // Locked FOR UPDATE before the organization and project rows, the
-    // order a settings patch takes them in (requireTier's FOR SHARE, then
-    // loadLayers): a patch naming it either committed first, and is moved
-    // below, or waits here and is then refused.
-    const found = await scope.sql`SELECT id FROM model_tiers WHERE id = ${id} FOR UPDATE`;
-    if (found.length === 0) throw notFound(`no model tier ${id}`);
+    // The tier and its replacement, in id order, before the organization and
+    // project rows: the order a settings patch takes them in (checkTiers,
+    // then loadLayers). A patch naming it either committed first, and is
+    // moved below, or waits here and is then refused.
+    const locked = (await scope.sql`
+      SELECT id FROM model_tiers WHERE id IN (${id}, ${replacement ?? id}) ORDER BY id FOR UPDATE`)
+      .map((r: { id: string }) => r.id) as string[];
+    if (!locked.includes(id)) throw notFound(`no model tier ${id}`);
     const [count] = (await scope.sql`SELECT count(*)::int AS n FROM model_tiers`) as Array<{ n: number }>;
     if (count!.n <= 1) throw conflict("the last tier cannot be removed: every agent needs one");
     if (replacement === id) throw badRequest("a tier cannot replace itself");
-    if (replacement !== null) await requireTier(scope, replacement);
+    if (replacement !== null && !locked.includes(replacement)) throw badRequest(`there is no model tier ${replacement}`);
 
-    const [org] = (await scope.sql`SELECT default_agent_models AS models FROM organizations WHERE id = ${scope.organizationId} FOR UPDATE`) as Array<{ models: AgentModels }>;
+    // NO KEY UPDATE: still serialises with a settings patch's FOR UPDATE, but
+    // lets a child insert's FK check (FOR KEY SHARE) through, so a
+    // transaction that holds a project row and then adds an epic or a
+    // prompt does not deadlock with this one.
+    const [org] = (await scope.sql`SELECT default_agent_models AS models FROM organizations WHERE id = ${scope.organizationId} FOR NO KEY UPDATE`) as Array<{ models: AgentModels }>;
     const projects = (await scope.sql`
       SELECT id, agent_models AS models FROM projects
       WHERE EXISTS (SELECT 1 FROM jsonb_each(agent_models) r WHERE r.value->>'tier' = ${id})
