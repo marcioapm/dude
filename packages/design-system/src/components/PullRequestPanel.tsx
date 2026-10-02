@@ -1,8 +1,9 @@
 import type { HTMLAttributes, ReactNode } from "react";
-import { prActualChecks, prCheckDiagnostic, prCheckDiagnosticReason, prCheckFailed, prChecksSummary, prReviewSummary } from "@dude/domain";
+import { prActualChecks, prCheckDiagnostic, prCheckDiagnosticFix, prCheckDiagnosticReason, prCheckFailed, prChecksSummary, prReviewSummary, reviewWords } from "@dude/domain";
 import { cx } from "../util/cx.ts";
 import { formatDuration } from "../util/format.ts";
 import { Icon, type IconName } from "../icons/index.tsx";
+import { GitHubFace } from "./GitHubUserLine.tsx";
 import { PrChip, type PrChipPullRequest } from "./PrChip.tsx";
 import styles from "./PullRequestPanel.module.css";
 
@@ -13,8 +14,6 @@ export interface PullRequestPanelProps extends Omit<HTMLAttributes<HTMLElement>,
   readonly deletions?: number | undefined;
   /** At the foot: what can be done (Open on GitHub; merge, once dude can). */
   readonly actions?: ReactNode;
-  /** A face for a reviewer's login, when the app knows who that is. */
-  readonly face?: ((login: string) => ReactNode) | undefined;
   /** Under the actions, muted: why it waits, in words. */
   readonly note?: ReactNode;
   /**
@@ -23,7 +22,18 @@ export interface PullRequestPanelProps extends Omit<HTMLAttributes<HTMLElement>,
    * base, "show" by the threads, "Request review" after the reviewers.
    */
   readonly factActions?: Partial<Record<FactKind, ReactNode>> | undefined;
+  /** Under a kind's last line, at its text's indent: asking for a review opens under the reviewers. */
+  readonly factUnder?: Partial<Record<FactKind, ReactNode>> | undefined;
+  /** After what to do about checks dude cannot read: a link to where it is done. */
+  readonly diagnosticAction?: ReactNode;
 }
+
+/** A reviewer's line, by their latest word: its tone and glyph (the words are `reviewWords`). */
+const REVIEW_MARK: Record<string, { tone: Tone; glyph: IconName }> = {
+  APPROVED: { tone: "ok", glyph: "check" },
+  CHANGES_REQUESTED: { tone: "bad", glyph: "file-diff" },
+  COMMENTED: { tone: "neutral", glyph: "comments" },
+};
 
 /** The facts a panel lists, by what they are about. */
 export type FactKind = "checks" | "reviews" | "base" | "threads";
@@ -45,7 +55,7 @@ interface Fact {
  * the forge reports them), reviews (by person when it does), how it stands
  * against its base, open threads. What is not known is not said.
  */
-export function PullRequestPanel({ pr, additions, deletions, actions, face, note, factActions, className, ...rest }: PullRequestPanelProps) {
+export function PullRequestPanel({ pr, additions, deletions, actions, note, factActions, factUnder, diagnosticAction, className, ...rest }: PullRequestPanelProps) {
   const facts: Fact[] = [];
   if (pr.state === "merged") facts.push({ tone: "ok", glyph: "merge", text: "Merged" });
 
@@ -95,30 +105,38 @@ export function PullRequestPanel({ pr, additions, deletions, actions, face, note
           </ul>
         ) : undefined,
     });
-    if (diagnostic) facts.push({ tone: "attention", glyph: "warning", text: <span role="note">{prCheckDiagnosticReason(diagnostic)}</span> });
+    if (diagnostic) {
+      const fix = prCheckDiagnosticFix(diagnostic);
+      facts.push({
+        tone: "attention",
+        glyph: "warning",
+        text: <span role="note">{prCheckDiagnosticReason(diagnostic)}</span>,
+        children: fix ? <p className={styles["diagnostic"]}>{fix}{diagnosticAction ? <> {diagnosticAction}</> : null}</p> : undefined,
+      });
+    }
   } else {
     const words = { failing: ["bad", "circle-x", "Checks failing"], pending: ["attention", "circle-dotted", "Checks pending"], passing: ["ok", "circle-check", "Checks passing"], unknown: ["neutral", "circle", "No checks reported yet"] } as const;
     const [tone, glyph, text] = words[prChecksSummary(pr.checks)];
     if (pr.state !== "merged" || tone !== "neutral") facts.push({ kind: "checks", tone, glyph, text });
   }
 
-  // Reviews: by person when the forge sent them, else the verdict.
-  const latest = new Map<string, string>();
-  for (const r of [...(pr.reviews ?? [])].sort((a, b) => (a.submittedAt ?? "").localeCompare(b.submittedAt ?? ""))) {
-    if (r.state.toUpperCase() !== "COMMENTED") latest.set(r.login, r.state.toUpperCase());
-  }
-  if (latest.size > 0) {
-    for (const [login, state] of latest) {
-      const changes = state === "CHANGES_REQUESTED";
-      const approved = state === "APPROVED";
+  // Reviews: by person when the forge sent them — each one's latest word,
+  // as the sync keeps them (forge.latestReviews) — else the verdict. One
+  // asked again owes another look, their earlier word muted after it.
+  if (pr.reviews?.length) {
+    for (const r of pr.reviews) {
+      const mark = REVIEW_MARK[r.state.toUpperCase()] ?? { tone: "neutral", glyph: "eye" };
+      const words = reviewWords(r.state);
+      const again = r.rerequested === true;
+      const user = { login: r.login, avatarUrl: r.avatarUrl, team: r.team };
       facts.push({
         kind: "reviews",
-        tone: changes ? "bad" : approved ? "ok" : "neutral",
-        glyph: changes ? "file-diff" : approved ? "check" : "eye",
+        tone: again ? "attention" : mark.tone,
+        glyph: again ? "circle-dotted" : mark.glyph,
         text: (
           <span className={styles["who"]}>
-            {face?.(login)}
-            <b>{login}</b> {changes ? "requested changes" : approved ? "approved" : state === "REQUESTED" ? "· review requested" : "dismissed their review"}
+            <GitHubFace user={user} size={20} />
+            <b>{r.login}</b> {again ? <>· asked again <span className={styles["muted"]}>· {words} before</span></> : r.state.toUpperCase() === "REQUESTED" ? `· ${words}` : words}
           </span>
         ),
       });
@@ -161,18 +179,22 @@ export function PullRequestPanel({ pr, additions, deletions, actions, face, note
         ) : null}
       </div>
       <ul className={styles["facts"]}>
-        {facts.map((f, i) => (
-          <li key={i} data-fact={f.kind}>
-            <span className={styles["fact"]}>
-              <Icon name={f.glyph} size={14} className={cx(styles["glyph"], styles[f.tone])} />
-              <span className={styles["factText"]}>{f.text}</span>
-              {f.trailing}
-              {/* A kind's action sits on its last line: after every reviewer, not each. */}
-              {f.kind && facts.findLastIndex((g) => g.kind === f.kind) === i ? factActions?.[f.kind] : null}
-            </span>
-            {f.children}
-          </li>
-        ))}
+        {facts.map((f, i) => {
+          // A kind's action sits on its last line, and what opens under it after: after every reviewer, not each.
+          const last = f.kind !== undefined && facts.findLastIndex((g) => g.kind === f.kind) === i ? f.kind : undefined;
+          return (
+            <li key={i} data-fact={f.kind}>
+              <span className={styles["fact"]}>
+                <Icon name={f.glyph} size={14} className={cx(styles["glyph"], styles[f.tone])} />
+                <span className={styles["factText"]}>{f.text}</span>
+                {f.trailing}
+                {last ? factActions?.[last] : null}
+              </span>
+              {f.children}
+              {last && factUnder?.[last] ? <div className={styles["under"]}>{factUnder[last]}</div> : null}
+            </li>
+          );
+        })}
       </ul>
       {actions ? <div className={styles["actions"]}>{actions}</div> : null}
       {note ? <p className={styles["note"]}>{note}</p> : null}

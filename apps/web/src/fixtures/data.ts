@@ -9,7 +9,7 @@ import type { NavProject } from "@dude/design-system";
 import { MIN, iso, serverLogs, serverLogsExited, serverScenarios, serverRecipes, type ServerScenario } from "@dude/design-system/fixtures/servers";
 import type { ServerLogLine } from "@dude/design-system";
 import type { Finding, MachineSizeWithUse, PersistedEvent, PullRequest, Run, SettingsResponse, Task, TaskServers } from "@dude/domain";
-import type { Member, ProjectDetail, RunDetail, TaskDetail, TaskMetrics } from "../api/client.ts";
+import type { Member, ProjectDetail, ReviewerCandidate, RunDetail, TaskDetail, TaskMetrics } from "../api/client.ts";
 
 export const ORG = { id: "org_example", name: "Example" };
 
@@ -331,3 +331,13 @@ export function serversFor(scenario: ServerScenario): TaskServers {
 export function logsFor(scenario: ServerScenario): Record<string, ServerLogLine[]> {
   return scenario === "c" ? serverLogsExited : serverLogs;
 }
+
+/** Who GitHub offers to review: two suggestions, the rest found by name. */
+export const REVIEWERS: ReviewerCandidate[] = [
+  { kind: "user", login: "ana-ribeiro", name: "Ana Ribeiro", reason: "changed" },
+  { kind: "user", login: "tokafor", name: "Tom Okafor", reason: "commented" },
+  { kind: "user", login: "kai-n", name: "Kai Nakamura", reason: "changed" },
+  { kind: "user", login: "hanna", name: "Hanna Lindqvist" },
+  { kind: "user", login: "ananya-k", name: "Ananya Krishnan" },
+  { kind: "team", login: "acme/platform", name: "Platform", members: 7 },
+];

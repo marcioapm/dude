@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CHECK_RUNS_FORBIDDEN, PR_DISPLAY_STATES, prActualChecks, prCheckDiagnostic, prCheckDiagnosticReason, prCheckFailed, prCheckSchema, prChecksSummary, prDisplayState, prReviewSummary, type PrCheck, type PrDisplayInput } from "../src/hierarchy.ts";
+import { CHECK_RUNS_FORBIDDEN, PR_DISPLAY_STATES, prActualChecks, prCheckDiagnostic, prCheckDiagnosticFix, prCheckDiagnosticReason, prCheckFailed, prCheckSchema, prChecksSummary, prDisplayState, prReviewSummary, type PrCheck, type PrDisplayInput } from "../src/hierarchy.ts";
 
 const open = (over: Partial<PrDisplayInput> = {}): PrDisplayInput => ({ state: "open", checks: "passing", review: "approved", ...over });
 const check = (name: string, status: string, conclusion: string | null): PrCheck => ({ name, status, conclusion });
@@ -108,9 +108,10 @@ describe("checks that cannot be read", () => {
     expect(prCheckDiagnostic([check("CodeRabbit", "completed", "success")])).toBeNull();
     expect(prCheckDiagnostic("pending")).toBeNull();
     expect(prActualChecks(checks).map((c) => c.name)).toEqual(["CodeRabbit"]);
-    expect(prCheckDiagnosticReason(CHECK_RUNS_FORBIDDEN)).toBe(
-      "GitHub refused the check-runs read; check the token's Checks: Read permission and its repository/organization access (SSO, token approval).");
-    expect(prCheckDiagnosticReason("other")).toBe("Some GitHub checks cannot be read.");
+    expect(prCheckDiagnosticReason(CHECK_RUNS_FORBIDDEN)).toBe("GitHub won't show dude this repository's checks");
+    expect(prCheckDiagnosticFix(CHECK_RUNS_FORBIDDEN)).toContain("needs Checks: Read");
+    expect(prCheckDiagnosticFix("other")).toBeNull();
+    expect(prCheckDiagnosticReason("other")).toBe("Some GitHub checks cannot be read");
   });
 
   test("survive the API schema", () => {
