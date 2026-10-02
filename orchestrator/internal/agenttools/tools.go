@@ -19,7 +19,7 @@ import (
 )
 
 // Who may create work: the roles whose job can turn up more of it.
-var creators = []string{"implementer", "investigator", "orchestrator"}
+var creators = []string{"implementer", "investigator", "conductor"}
 
 // Who may ask to change another repository: the roles that change code.
 var writers = []string{"implementer"}

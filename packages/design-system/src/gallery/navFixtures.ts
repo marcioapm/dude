@@ -27,7 +27,7 @@ function ses(id: string, role: AgentRole, status: SessionStatus, activity?: stri
 /** A running orchestrator with a typical crew. */
 function crew(id: string, extra?: NavSession[]): NavSession[] {
   return [
-    ses(`${id}-orc`, "orchestrator", "running", "Waiting for implementer", [
+    ses(`${id}-orc`, "conductor", "running", "Waiting for implementer", [
       ses(`${id}-inv`, "investigator", "completed"),
       ses(`${id}-imp`, "implementer", "running", "Running bun test", extra),
     ]),
@@ -67,7 +67,7 @@ function wi(title: string, status: TaskStatus, opts: { people?: Person[]; sessio
             id: `${id}-r${i + 1}`,
             attempt: i + 1,
             status: "failed" as const,
-            sessions: [ses(`${id}-r${i + 1}-orc`, "orchestrator" as const, "failed" as const, undefined, [ses(`${id}-r${i + 1}-imp`, "implementer", "failed")])],
+            sessions: [ses(`${id}-r${i + 1}-orc`, "conductor" as const, "failed" as const, undefined, [ses(`${id}-r${i + 1}-imp`, "implementer", "failed")])],
           })),
           { id: `${id}-r${opts.runs ?? 1}`, attempt: opts.runs ?? 1, status: status === "failed" ? ("failed" as const) : ("running" as const), sessions: opts.sessions },
         ]
@@ -87,7 +87,7 @@ export const navProjects: NavProject[] = [
           wi("Add retry with backoff to the GitHub webhook handler", "awaiting_input", {
             people: [P["marcio"]!, P["ana"]!],
             sessions: [
-              ses("s_2401-orc", "orchestrator", "awaiting_input", "Should 4xx responses be retried?", [
+              ses("s_2401-orc", "conductor", "awaiting_input", "Should 4xx responses be retried?", [
                 ses("s_2401-inv", "investigator", "completed"),
                 ses("s_2401-imp", "implementer", "completed", undefined, [ses("s_2401-qa", "qa_browser", "failed")]),
                 ses("s_2401-rev", "reviewer", "pending"),
@@ -108,13 +108,13 @@ export const navProjects: NavProject[] = [
           wi("Steer: deliver directives to the running harness", "running", {
             people: [P["marcio"]!],
             sessions: [
-              ses("s_2407-orc", "orchestrator", "running", "Delegating", [
+              ses("s_2407-orc", "conductor", "running", "Delegating", [
                 ses("s_2407-imp", "implementer", "running", "Editing control.go", [ses("s_2407-inv", "investigator", "running", "Reading runner/cmd")]),
                 ses("s_2407-rev", "reviewer", "running", "Reviewing intervention.ts"),
               ]),
             ],
           }),
-          wi("Pause graceful vs hard: finish the current tool call first", "failed", { people: [P["tom"]!], sessions: [ses("s_2408-orc", "orchestrator", "failed")], runs: 2 }),
+          wi("Pause graceful vs hard: finish the current tool call first", "failed", { people: [P["tom"]!], sessions: [ses("s_2408-orc", "conductor", "failed")], runs: 2 }),
           wi("Abort must preserve the workspace for inspection", "done", { people: [P["marcio"]!] }),
           wi("Resume after pause re-attaches to the same harness session", "queued", { people: [P["lin"]!] }),
           wi("Directive supersession: keep the earlier row", "done", { people: [P["ana"]!] }),
@@ -132,7 +132,7 @@ export const navProjects: NavProject[] = [
       },
     ],
     tasks: [
-      wi("Fix flaky test: reconcile: 3 runs checked", "running", { people: [P["jules"]!], sessions: [ses("s_2416-orc", "orchestrator", "running", "Thinking", [ses("s_2416-inv", "investigator", "running", "grep reconcile")])] }),
+      wi("Fix flaky test: reconcile: 3 runs checked", "running", { people: [P["jules"]!], sessions: [ses("s_2416-orc", "conductor", "running", "Thinking", [ses("s_2416-inv", "investigator", "running", "grep reconcile")])] }),
       wi("Bump zod to 3.25", "ready_to_merge", { people: [P["kai"]!] }),
       wi("Type the event payloads end to end", "intake", { people: [P["marcio"]!] }),
     ],
@@ -160,7 +160,7 @@ export const navProjects: NavProject[] = [
           wi("Sidebar: projects, epics, tasks, sessions", "running", {
             people: [P["marcio"]!],
             sessions: [
-              ses("s_2425-orc", "orchestrator", "running", "Waiting for reviewer", [
+              ses("s_2425-orc", "conductor", "running", "Waiting for reviewer", [
                 ses("s_2425-imp", "implementer", "completed"),
                 ses("s_2425-rev", "reviewer", "awaiting_input", "Is 12px indent enough at depth 4?"),
               ]),
@@ -199,7 +199,7 @@ export const navProjects: NavProject[] = [
           wi("Claude Code adapter: map tool events to the ledger", "done", { people: [P["marcio"]!] }),
           wi("OpenCode adapter: session resume", "failed", {
             people: [P["sam"]!, P["marcio"]!],
-            sessions: [ses("s_2437-orc", "orchestrator", "failed", undefined, [ses("s_2437-imp", "implementer", "failed")])],
+            sessions: [ses("s_2437-orc", "conductor", "failed", undefined, [ses("s_2437-imp", "implementer", "failed")])],
             runs: 3,
           }),
           wi("Capability negotiation: refuse a role the harness cannot fill", "review", { people: [P["lin"]!] }),

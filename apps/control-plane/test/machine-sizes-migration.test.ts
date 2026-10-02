@@ -43,17 +43,19 @@ afterAll(async () => {
 
 const sizes = (org: string) =>
   db`SELECT name, cpus::float8 AS cpus, memory_mib AS "memoryMiB", disk_gib AS "diskGiB", pool_id AS "poolId", is_default AS "isDefault"
-     FROM machine_sizes WHERE organization_id = ${org}`;
+     FROM machine_sizes WHERE organization_id = ${org} ORDER BY name DESC`;
 const STANDARD = { name: "Standard", cpus: 2, memoryMiB: 8192, diskGiB: 20, poolId: null, isDefault: true };
+// The conductor's, from migration 068 on: never the default.
+const SMALL = { name: "Small", cpus: 0.5, memoryMiB: 1024, diskGiB: 10, poolId: null, isDefault: false };
 
 describe("seeding", () => {
   test("an organization from before the migration has Standard, as its default", async () => {
-    expect(await sizes("org_before")).toEqual([STANDARD]);
+    expect(await sizes("org_before")).toEqual([STANDARD, SMALL]);
   });
 
   test("an organization made after it gets Standard too", async () => {
     await db`INSERT INTO organizations (id, name, slug) VALUES ('org_after', 'After', 'after')`;
-    expect(await sizes("org_after")).toEqual([STANDARD]);
+    expect(await sizes("org_after")).toEqual([STANDARD, SMALL]);
   });
 });
 

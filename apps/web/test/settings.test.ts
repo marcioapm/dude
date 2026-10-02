@@ -15,6 +15,7 @@ const delivery: DeliverySettings = {
   test: org(false),
   parkAfterMinutes: org(10),
   idleNudgeMinutes: org(0),
+  conductorWarmMinutes: org(5),
 } as DeliverySettings;
 
 const role = (over: Partial<RoleSettings> = {}): RoleSettings => ({

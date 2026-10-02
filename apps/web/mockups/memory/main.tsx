@@ -74,7 +74,7 @@ function Mock() {
             key={scope}
             scope={
               scope === "org"
-                ? { title: ORG, subtitle: "Organisation settings", leading: <AgentAvatar role="orchestrator" size="lg" /> }
+                ? { title: ORG, subtitle: "Organisation settings", leading: <AgentAvatar role="conductor" size="lg" /> }
                 : { title: "control-plane", subtitle: "Project settings", leading: <ProjectAvatar project={{ id: "p_control-plane", name: "control-plane" }} size={32} /> }
             }
             items={items}

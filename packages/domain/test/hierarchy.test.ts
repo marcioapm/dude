@@ -16,9 +16,9 @@ const project = (models: AgentModels) => ({ agentModels: models }) as Pick<Proje
 describe("resolveAgentModel", () => {
   test("prefers the project binding over the organization default", () => {
     const resolved = resolveAgentModel(
-      "orchestrator",
-      project({ orchestrator: { model: "project-model" } }),
-      org({ orchestrator: { model: "org-model" } }),
+      "conductor",
+      project({ conductor: { model: "project-model" } }),
+      org({ conductor: { model: "org-model" } }),
     );
     expect(resolved?.model).toBe("project-model");
   });
@@ -51,7 +51,7 @@ describe("resolveAgentModel", () => {
   test("resolves each role independently", () => {
     const resolved = resolveAgentModel(
       "implementer",
-      project({ orchestrator: { model: "project-orchestrator" } }),
+      project({ conductor: { model: "project-conductor" } }),
       org({ implementer: { model: "org-implementer" } }),
     );
     // The project configures a *different* role, so it must not shadow this one.

@@ -55,7 +55,7 @@ const project = await call<{ id: string; repositories: Array<{ id: string; name:
   {
     name: `GitHub (${slug})`,
     slug: `gh-${slug.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}-${Date.now().toString(36)}`,
-    agentModels: { orchestrator: { model } },
+    agentModels: { conductor: { model } },
     repositories: [
       {
         name: "target",

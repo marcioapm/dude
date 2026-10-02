@@ -45,7 +45,7 @@
   width: 100%;
   min-width: 24px;
   height: 2px;
-  background: var(--ds-role-orchestrator-solid);
+  background: var(--ds-role-conductor-solid);
   opacity: 0.55;
   font-style: normal;
 }
