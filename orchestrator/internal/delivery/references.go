@@ -155,12 +155,25 @@ func imageText(images []PromptImage) func(ImageRef) string {
 				return "[Image " + strconv.Itoa(i+1) + ": " + img.Name + "]"
 			}
 		}
-		name := r.Alt
-		if name == "" {
-			name = r.ID
-		}
-		return "[Image unavailable: " + name + "]"
+		return "[Image unavailable: " + r.name() + "]"
 	}
+}
+
+// name is what a reader is told the image is: its alt, else its id.
+func (r ImageRef) name() string {
+	if r.Alt == "" {
+		return r.ID
+	}
+	return r.Alt
+}
+
+// replaceEach is ReplaceImageRefs over each text, into a new slice.
+func replaceEach(texts []string, with func(ImageRef) string) []string {
+	out := make([]string, len(texts))
+	for i, t := range texts {
+		out[i] = ReplaceImageRefs(t, with)
+	}
+	return out
 }
 
 // withImages is the input with each reference in the goal and criteria
@@ -168,22 +181,19 @@ func imageText(images []PromptImage) func(ImageRef) string {
 func (in PromptInput) withImages() PromptInput {
 	text := imageText(in.Images)
 	in.Goal = ReplaceImageRefs(in.Goal, text)
-	criteria := make([]string, len(in.AcceptanceCriteria))
-	for i, c := range in.AcceptanceCriteria {
-		criteria[i] = ReplaceImageRefs(c, text)
-	}
-	in.AcceptanceCriteria = criteria
+	in.AcceptanceCriteria = replaceEach(in.AcceptanceCriteria, text)
 	return in
 }
+
+func nameText(r ImageRef) string { return "[Image: " + r.name() + "]" }
 
 // ImagesAsText writes a task text's references for a reader given no
 // images with it (a pull request, a note to a resumed agent): by name.
 func ImagesAsText(text string) string {
-	return ReplaceImageRefs(text, func(r ImageRef) string {
-		name := r.Alt
-		if name == "" {
-			name = r.ID
-		}
-		return "[Image: " + name + "]"
-	})
+	return ReplaceImageRefs(text, nameText)
+}
+
+// CriteriaImagesAsText is ImagesAsText for each criterion.
+func CriteriaImagesAsText(criteria []string) []string {
+	return replaceEach(criteria, nameText)
 }

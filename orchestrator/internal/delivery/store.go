@@ -716,11 +716,7 @@ func prBody(goal string, criteria []string, findings []struct{ Category, Severit
 	// An attachment: URL means nothing on the forge; the image is named instead.
 	sections := []string{strings.TrimSpace(ImagesAsText(goal))}
 	if len(criteria) > 0 {
-		shown := make([]string, len(criteria))
-		for i, c := range criteria {
-			shown[i] = ImagesAsText(c)
-		}
-		sections = append(sections, "## Acceptance criteria\n"+bullets(shown))
+		sections = append(sections, "## Acceptance criteria\n"+bullets(CriteriaImagesAsText(criteria)))
 	}
 	if len(findings) > 0 {
 		addressed := 0
