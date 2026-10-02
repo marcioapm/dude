@@ -118,6 +118,7 @@
   display: inline-flex;
   align-self: flex-start;
   align-items: center;
+  flex-shrink: 0;
   gap: var(--ds-space-6);
   height: var(--ds-size-chip);
   max-width: 100%;

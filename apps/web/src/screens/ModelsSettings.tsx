@@ -323,7 +323,7 @@ function TierDialog({ client, existing, testNow, proxy, onClose, onSaved }: {
         <FormStack>
           <SettingsMeta>Names the proxy knows</SettingsMeta>
           <NameChips label="Names the proxy knows" names={listed} value={model} onPick={(n) => set("model", n)} />
-          <SettingsMeta>From <code>{proxy?.source ? `${proxy.source}/models` : "the proxy’s /v1/models"}</code>, as suggestions; typing any other name is fine.</SettingsMeta>
+          <SettingsMeta><span>From <code>{proxy?.source ? `${proxy.source}/models` : "the proxy’s /v1/models"}</code>, as suggestions; typing any other name is fine.</span></SettingsMeta>
         </FormStack>
       ) : (
         <SettingsMeta>The proxy’s list of models could not be read{proxy?.problem ? ` (${proxy.problem})` : ""}; type the name as the proxy knows it.</SettingsMeta>
