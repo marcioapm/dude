@@ -273,23 +273,34 @@ func TestAStaleSweepDoesNotHoldTheNextWake(t *testing.T) {
 	}
 
 	gate := &claimGate{reached: make(chan struct{}), release: make(chan struct{})}
-	t.Cleanup(func() {
-		if !isClosed(gate.release) {
-			close(gate.release)
-		}
-	})
 	cfg := w.app.Pool.Config()
 	cfg.ConnConfig.Tracer = gate
 	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(pool.Close)
 	other := &servers.Previews{Service: &servers.Service{DB: &db.DB{Pool: pool}, Lux: w.previews.Lux, Log: quiet,
 		PreviewDomain: previewDomain}, Forges: w.previews.Forges, DefaultImage: "default:img"}
-	t.Cleanup(other.Stop)
-	swept := make(chan error, 1)
-	go func() { _, err := other.Sweep(context.Background()); swept <- err }()
+	swept, returned := make(chan error, 1), make(chan struct{})
+	// In this order on any exit: pool.Close waits on the connection the
+	// gate holds, so the gate is released and the sweep has returned first.
+	t.Cleanup(func() {
+		if !isClosed(gate.release) {
+			close(gate.release)
+		}
+		select {
+		case <-returned:
+		case <-time.After(30 * time.Second):
+			t.Error("the stale sweep did not return")
+		}
+		other.Stop()
+		pool.Close()
+	})
+	go func() {
+		defer close(returned)
+		_, err := other.Sweep(context.Background())
+		swept <- err
+	}()
 	wait(t, gate.reached, "the stale sweep at its claim")
 
 	close(release)
