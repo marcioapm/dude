@@ -161,51 +161,51 @@ export function Dialog({
 
   const content = (
     <>
-          <div className={styles["header"]}>
-            {tone ? (
-              <span
-                className={cx(styles["toneIcon"], tone === "danger" ? styles["toneDanger"] : styles["toneAttention"])}
-                aria-hidden
-              >
-                <Icon name={tone === "danger" ? "alert" : "warning"} size={16} />
-              </span>
-            ) : null}
-            <div className={styles["headerText"]}>
-              {context ? <div className={styles["context"]}>{context}</div> : null}
-              <RadixDialog.Title className={styles["title"]}>{title}</RadixDialog.Title>
-              {description ? (
-                <RadixDialog.Description className={styles["description"]}>{description}</RadixDialog.Description>
-              ) : null}
-            </div>
-            {headerActions ? <div className={styles["headerActions"]}>{headerActions}</div> : null}
-            <RadixDialog.Close asChild>
-              <IconButton icon="close" label="Close" size="sm" />
-            </RadixDialog.Close>
-          </div>
-          {size === "document" ? (
-            <div className={styles["stage"]}>
-              {body}
-              {isReading ? (
-                <div ref={readingColumn} className={styles["reading"]} role="region" aria-label={readingLabel} tabIndex={0}>
-                  <div className={styles["readingMeasure"]}>{reading}</div>
-                </div>
-              ) : null}
-            </div>
-          ) : (
-            body
-          )}
-          {footer ? (
-            <div className={styles["footer"]}>
-              {footerProblem ? (
-                <div className={styles["footerProblem"]} role="alert" title={footerProblem}>
-                  {footerProblem}
-                </div>
-              ) : footerStart ? (
-                <div className={styles["footerStart"]}>{footerStart}</div>
-              ) : null}
-              {footer}
+      <div className={styles["header"]}>
+        {tone ? (
+          <span
+            className={cx(styles["toneIcon"], tone === "danger" ? styles["toneDanger"] : styles["toneAttention"])}
+            aria-hidden
+          >
+            <Icon name={tone === "danger" ? "alert" : "warning"} size={16} />
+          </span>
+        ) : null}
+        <div className={styles["headerText"]}>
+          {context ? <div className={styles["context"]}>{context}</div> : null}
+          <RadixDialog.Title className={styles["title"]}>{title}</RadixDialog.Title>
+          {description ? (
+            <RadixDialog.Description className={styles["description"]}>{description}</RadixDialog.Description>
+          ) : null}
+        </div>
+        {headerActions ? <div className={styles["headerActions"]}>{headerActions}</div> : null}
+        <RadixDialog.Close asChild>
+          <IconButton icon="close" label="Close" size="sm" />
+        </RadixDialog.Close>
+      </div>
+      {size === "document" ? (
+        <div className={styles["stage"]}>
+          {body}
+          {isReading ? (
+            <div ref={readingColumn} className={styles["reading"]} role="region" aria-label={readingLabel} tabIndex={0}>
+              <div className={styles["readingMeasure"]}>{reading}</div>
             </div>
           ) : null}
+        </div>
+      ) : (
+        body
+      )}
+      {footer ? (
+        <div className={styles["footer"]}>
+          {footerProblem ? (
+            <div className={styles["footerProblem"]} role="alert" title={footerProblem}>
+              {footerProblem}
+            </div>
+          ) : footerStart ? (
+            <div className={styles["footerStart"]}>{footerStart}</div>
+          ) : null}
+          {footer}
+        </div>
+      ) : null}
     </>
   );
 
