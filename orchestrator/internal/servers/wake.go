@@ -269,15 +269,20 @@ func (p *Previews) previewServers(ctx context.Context, org, runID string) ([]pre
 
 // createServers makes the preview's lux servers, one per project server
 // marked to start in previews, then leaves it asleep. Each is looked for
-// by its hostname first, so a create whose answer was lost is not made
-// twice; a hostname another preview holds (409 hostname_taken) is chosen
-// again once, salted with this preview's id.
+// among the preview's servers in lux first, so a create whose answer was
+// lost is not made twice; a hostname another preview holds (409
+// hostname_taken) is chosen again once, salted with this preview's id.
 func (p *Previews) createServers(ctx context.Context, r wakeRun) error {
 	var recipes []Recipe
 	var settings PreviewSettings
+	of := PreviewOf{TaskID: r.TaskID, ProjectID: r.ProjectID}
 	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		var err error
 		if recipes, err = LoadRecipes(ctx, tx, r.ProjectID); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(ctx, `SELECT p.key_prefix || '-' || t.number, p.slug FROM tasks t JOIN projects p ON p.id = t.project_id
+			WHERE t.id = $1`, r.TaskID).Scan(&of.TaskKey, &of.ProjectSlug); err != nil {
 			return err
 		}
 		return loadSettings(ctx, tx, r.ProjectID, &settings)
@@ -301,7 +306,7 @@ func (p *Previews) createServers(ctx context.Context, r wakeRun) error {
 			p.Log.Warn("a preview server lux would refuse was left out", "run", r.ID, "server", rc.Name, "error", err)
 			continue
 		}
-		sv, err := p.createServer(ctx, r, in, settings)
+		sv, err := p.createServer(ctx, r, of, in, settings)
 		if le, ok := lux.AsError(err); ok && !le.Retryable() {
 			return p.fail(ctx, r.previewRun, fmt.Sprintf("lux refused preview server %s: %s", rc.Name, le.Message))
 		}
@@ -346,9 +351,9 @@ func deref(s *string) string {
 // createServer creates (or finds) one preview server in lux: at its
 // hostname, else, when another preview holds that (409 hostname_taken), at
 // the one salted with this preview's id. Each attempt first adopts a server
-// this preview already has there: a create whose answer was lost, or one
-// another orchestrator made for it meanwhile.
-func (p *Previews) createServer(ctx context.Context, r wakeRun, in lux.ServerInput, settings PreviewSettings) (lux.TenantServer, error) {
+// this preview already has, at whatever hostname: a create whose answer was
+// lost, or one another orchestrator made for it meanwhile.
+func (p *Previews) createServer(ctx context.Context, r wakeRun, of PreviewOf, in lux.ServerInput, settings PreviewSettings) (lux.TenantServer, error) {
 	labels := map[string]string{"dude.org": r.Org, "dude.project": r.ProjectID, "dude.task": r.TaskID,
 		"dude.preview": r.ID, "dude.kind": KindPreview}
 	body := lux.CreateServer{Name: in.Name, Port: in.Port, Command: in.Command, Workdir: in.Workdir, Env: in.Env,
@@ -358,36 +363,38 @@ func (p *Previews) createServer(ctx context.Context, r wakeRun, in lux.ServerInp
 	if p.PreviewRelative {
 		domain = ""
 	}
-	plain := PreviewHostname(domain, in.Name, r.TaskID, r.ProjectID, "")
+	plain := PreviewHostname(domain, in.Name, of, "")
 	sv, err := p.adoptOrCreate(ctx, r, body, plain)
 	if le, ok := lux.AsError(err); !ok || le.Code != "hostname_taken" {
 		return sv, err
 	}
 	// Taken: by another orchestrator creating this very server (adopted
 	// now), or by another preview (salted).
-	if sv, found, err := p.adopt(ctx, r, in.Name, plain); err != nil || found {
+	if sv, found, err := p.adopt(ctx, r, in.Name); err != nil || found {
 		return sv, err
 	}
 	p.Log.Warn("a preview hostname is taken; choosing another", "run", r.ID, "hostname", plain)
-	return p.adoptOrCreate(ctx, r, body, PreviewHostname(domain, in.Name, r.TaskID, r.ProjectID, r.ID))
+	return p.adoptOrCreate(ctx, r, body, PreviewHostname(domain, in.Name, of, r.ID))
 }
 
 func (p *Previews) adoptOrCreate(ctx context.Context, r wakeRun, body lux.CreateServer, hostname string) (lux.TenantServer, error) {
-	if sv, found, err := p.adopt(ctx, r, body.Name, hostname); err != nil || found {
+	if sv, found, err := p.adopt(ctx, r, body.Name); err != nil || found {
 		return sv, err
 	}
 	body.Hostname = hostname
 	return p.Lux.CreateServer(ctx, body)
 }
 
-// adopt finds this preview's server of a name at a hostname.
-func (p *Previews) adopt(ctx context.Context, r wakeRun, name, hostname string) (lux.TenantServer, bool, error) {
-	found, err := p.Lux.ListServers(ctx, hostname)
+// adopt finds a server by its dude.preview label and name, regardless of
+// hostname, so id-based names and names made before key-prefix renames
+// remain adoptable.
+func (p *Previews) adopt(ctx context.Context, r wakeRun, name string) (lux.TenantServer, bool, error) {
+	found, err := p.Lux.ListServers(ctx, "", "dude.preview="+r.ID)
 	if err != nil {
 		return lux.TenantServer{}, false, err
 	}
 	for _, sv := range found {
-		if sv.Labels["dude.preview"] == r.ID && sv.Name == name {
+		if sv.Name == name {
 			return sv, true, nil
 		}
 	}

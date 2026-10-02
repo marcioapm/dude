@@ -32,6 +32,7 @@ export const ID_PREFIXES = {
   memory: "mem",
   machineSize: "msz",
   attachment: "att",
+  modelTier: "mtr",
   image: "img",
   imageVersion: "imv",
   imageBuild: "imb",

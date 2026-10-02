@@ -32,7 +32,7 @@ from helpers import ApiClient, execute, query, sign_in, wait_until
 BUILDER_ALIVE = "INSERT INTO image_builder (seen_at) VALUES (now()) ON CONFLICT (id) DO UPDATE SET seen_at = now()"
 
 BASE = "FROM debian:bookworm-slim\nRUN apt-get update && apt-get install -y git\n"
-SCRIPTED = {r: {"model": "fake/scripted"} for r in ("implementer", "reviewer", "simplifier")}
+SCRIPTED = {r: "fake/scripted" for r in ("implementer", "reviewer", "simplifier")}
 
 
 def _digest(seed: str) -> str:
@@ -93,7 +93,7 @@ def _submitted_spec(env, dsn: str, task_id: str) -> dict | None:
 def test_a_run_on_the_default_base_waits_for_its_dude_layer_then_runs_its_final(client: ApiClient, env, owner_dsn: str):
     base = _publish_first(client, owner_dsn, "acme-base", final=False)
     assert client.post(f"/v1/images/default/{base['image']['id']}").status_code == 200
-    project = client.create_project(name="Greeter", slug=f"greeter-{os.urandom(3).hex()}", agentModels=SCRIPTED)
+    project = client.create_project(name="Greeter", slug=f"greeter-{os.urandom(3).hex()}", agentModels=client.on_models(SCRIPTED))
     task = client.create_task(project["id"], "Say hello")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
 
@@ -125,7 +125,7 @@ def test_a_run_on_the_default_base_waits_for_its_dude_layer_then_runs_its_final(
 
 def test_a_failed_finish_fails_the_run_before_lux(client: ApiClient, env, owner_dsn: str):
     base = _publish_first(client, owner_dsn, "slim", final=False)
-    project = client.create_project(name="Slim", slug=f"slim-{os.urandom(3).hex()}", agentModels=SCRIPTED,
+    project = client.create_project(name="Slim", slug=f"slim-{os.urandom(3).hex()}", agentModels=client.on_models(SCRIPTED),
                                     runtimeImageId=base["image"]["id"])
     task = client.create_task(project["id"], "Try it")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
@@ -138,7 +138,7 @@ def test_a_failed_finish_fails_the_run_before_lux(client: ApiClient, env, owner_
 
 
 def test_a_project_with_no_library_image_runs_dudes_own_as_before(client: ApiClient, env, owner_dsn: str):
-    project = client.create_project(name="Plain", slug=f"plain-{os.urandom(3).hex()}", agentModels=SCRIPTED)
+    project = client.create_project(name="Plain", slug=f"plain-{os.urandom(3).hex()}", agentModels=client.on_models(SCRIPTED))
     task = client.create_task(project["id"], "Nothing new")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
     spec = wait_until(lambda: _submitted_spec(env, owner_dsn, task["id"]), timeout=60, message="the implementer never reached lux")
@@ -323,7 +323,7 @@ def test_an_offline_builder_is_said_on_the_list_and_on_a_waiting_run(page: Page,
     try:
         listed = client.get("/v1/images").json()["builder"]
         assert listed["offline"] is True
-        project = client.create_project(name="Greeter", slug=f"greeter-{os.urandom(3).hex()}", agentModels=SCRIPTED)
+        project = client.create_project(name="Greeter", slug=f"greeter-{os.urandom(3).hex()}", agentModels=client.on_models(SCRIPTED))
         task = client.create_task(project["id"], "Say hello")
         assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
         run = wait_until(lambda: (r := query(owner_dsn, "SELECT id FROM runs WHERE task_id = %s AND image_build_id IS NOT NULL", (task["id"],))) and r[0],
@@ -360,7 +360,7 @@ def test_the_picker_on_a_project_and_a_role_stores_the_image_and_a_typed_one_is_
 ):
     lib = _library(client, owner_dsn)
     execute(owner_dsn, BUILDER_ALIVE)
-    project = client.create_project(name="Dashboard", slug=f"dash-{os.urandom(3).hex()}", agentModels=SCRIPTED)
+    project = client.create_project(name="Dashboard", slug=f"dash-{os.urandom(3).hex()}", agentModels=client.on_models(SCRIPTED))
     # A typed image from before the library.
     execute(owner_dsn, "UPDATE projects SET runtime_image = 'ghcr.io/acme/runner:node22' WHERE id = %s", (project["id"],))
     sign_in(page, web_url, org["api_key"], at=f"#/project/{project['id']}/settings/general")
@@ -406,7 +406,7 @@ def test_a_run_preparing_its_image_says_so(page: Page, web_url: str, client: Api
     base = _publish_first(client, owner_dsn, "acme-base", final=False)
     client.post(f"/v1/images/default/{base['image']['id']}")
     execute(owner_dsn, BUILDER_ALIVE)
-    project = client.create_project(name="Greeter", slug=f"greeter-{os.urandom(3).hex()}", agentModels=SCRIPTED)
+    project = client.create_project(name="Greeter", slug=f"greeter-{os.urandom(3).hex()}", agentModels=client.on_models(SCRIPTED))
     task = client.create_task(project["id"], "Say hello")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
     run = wait_until(lambda: (r := query(owner_dsn, "SELECT id FROM runs WHERE task_id = %s AND image_build_id IS NOT NULL", (task["id"],))) and r[0],
@@ -420,7 +420,7 @@ def test_a_run_preparing_its_image_says_so(page: Page, web_url: str, client: Api
     # A Run on an image whose first version is still building waits on that build, and says so.
     first = _image(client, "node-first")
     assert client.post(f"/v1/images/{first['image']['id']}/build").status_code == 201
-    other = client.create_project(name="Fresh", slug=f"fresh-{os.urandom(3).hex()}", agentModels=SCRIPTED, runtimeImageId=first["image"]["id"])
+    other = client.create_project(name="Fresh", slug=f"fresh-{os.urandom(3).hex()}", agentModels=client.on_models(SCRIPTED), runtimeImageId=first["image"]["id"])
     task2 = client.create_task(other["id"], "Say hello")
     assert client.post(f"/v1/tasks/{task2['id']}/deliver").status_code == 201
     run2 = wait_until(lambda: (r := query(owner_dsn, "SELECT id FROM runs WHERE task_id = %s AND image_build_id IS NOT NULL", (task2["id"],))) and r[0],

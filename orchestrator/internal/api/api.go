@@ -28,6 +28,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/embeddings"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
+	"github.com/marciomartins/dude/orchestrator/internal/llm"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/memory"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
@@ -64,6 +65,8 @@ type Server struct {
 	}
 	// GitHub's answers to who could review, kept a minute.
 	candidates candidateCache
+	// The LLM proxy, for the Models page's suggestions and test messages.
+	LLM llm.Client
 }
 
 func (s *Server) Handler() http.Handler {
@@ -111,6 +114,7 @@ func (s *Server) Handler() http.Handler {
 	s.githubRoutes(mux)
 	s.serverRoutes(mux)
 	s.memoryRoutes(mux)
+	s.llmRoutes(mux)
 	// dude's own prompt for each role: what an organization that never
 	// edits runs, and where its first edit starts from.
 	mux.Handle("GET /internal/prompts/builtin", s.auth(func(w http.ResponseWriter, r *http.Request, _ string) error {

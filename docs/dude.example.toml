@@ -80,8 +80,10 @@ region = "us-east-1"                                     # DUDE_S3_REGION
 reap_after = "168h"                                      # DUDE_PREVIEW_REAP_AFTER
 
 [llm]
-# The LLM API agents use, before the API path; http(s). Unset, only fake/
-# models run.
+# The LLM proxy agents use, before the API path; http(s). Unset, only fake/
+# models run. Each tier (Organisation › Models) names the model requested
+# here, as the proxy names it; the orchestrator alone holds the key, and
+# reads the proxy's GET /models for the Models page's suggestions.
 # url = "https://llm.example/v1"                         # DUDE_LLM_URL
 # key = "…"                                              # DUDE_LLM_KEY (secret)
 

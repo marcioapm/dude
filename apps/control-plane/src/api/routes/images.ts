@@ -563,6 +563,24 @@ export async function requireImage(scope: OrgScope, id: string, keep?: string | 
   if (row.archived && keep !== id) throw badRequest(`${row.name} is archived: pick another image`);
 }
 
+/**
+ * requireImage for several images at once, with no keep: locked in id order,
+ * as every multi-row lock is. Refusals name the first id in the caller's order.
+ */
+export async function checkImages(scope: OrgScope, ids: readonly string[]): Promise<void> {
+  const distinct = [...new Set(ids)];
+  if (distinct.length === 0) return;
+  const rows = (await scope.sql`
+    SELECT id, name, archived_at IS NOT NULL AS archived FROM images
+    WHERE id = ANY(${scope.sql.array(distinct, "text")}::text[]) ORDER BY id FOR SHARE`) as Array<{ id: string; name: string; archived: boolean }>;
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  for (const id of distinct) {
+    const row = byId.get(id);
+    if (!row) throw badRequest(`there is no image ${id}`);
+    if (row.archived) throw badRequest(`${row.name} is archived: pick another image`);
+  }
+}
+
 /** The image ids the organization has, for resolving a role's layers. */
 export async function imageIds(scope: OrgScope): Promise<Array<{ id: string }>> {
   return (await scope.sql`SELECT id FROM images`) as Array<{ id: string }>;

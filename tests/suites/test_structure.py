@@ -235,7 +235,7 @@ def test_publishing_preflight_contacts_test_gateway(client: ApiClient, env):
         }).raise_for_status()
         project = client.create_project(
             name="Gateway preflight", slug=f"gateway-{gh.api_port}",
-            agentModels={role: {"model": "fake/scripted"} for role in ("implementer", "reviewer", "fixer", "simplifier")},
+            agentModels=client.on_models({role: "fake/scripted" for role in ("implementer", "reviewer", "fixer", "simplifier")}),
             repositories=[{"name": "target", "url": gh.clone_url, "defaultBranch": "main"}],
         )
         task = client.create_task(project["id"], "Publish through gateway")

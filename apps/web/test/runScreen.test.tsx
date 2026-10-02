@@ -81,6 +81,48 @@ describe("the session's machine", () => {
 const machineChip = (page: HTMLElement, name = "Machine: Large, 8 CPUs · 16 GiB · 80 GiB") =>
   [...page.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.getAttribute("aria-label") === name) ?? null;
 
+/** A chip's tooltip, opened as a keyboard user does: focusing the chip. */
+async function tipOf(chip: HTMLButtonElement): Promise<string> {
+  const { act } = await import("react");
+  await act(async () => chip.focus());
+  const tip = await until(() => document.querySelector("[role=tooltip]"), "the chip's tooltip");
+  return tip.textContent ?? "";
+}
+
+describe("the session's model", () => {
+  const modelChip = (page: HTMLElement) => page.querySelector<HTMLButtonElement>("[data-testid=run-model]");
+
+  test("the header says the tier and the model it requested, as the Run recorded them", async () => {
+    const page = await session({ client: new RunClient({ model: "claude-opus-5-5", modelTier: "Coder" }) });
+    const chip = await until(() => modelChip(page), "the model chip");
+    expect(chip.getAttribute("aria-label")).toBe("Model: Coder, requests claude-opus-5-5");
+    expect(chip.textContent).toBe("Coder ·claude-opus-5-5");
+    expect(await tipOf(chip)).toBe("Coder" +
+      "The Implementer’s tier. When this session started, Coder asked the proxy for claude-opus-5-5; changing Coder now changes the next session, not this one." +
+      "That is what dude asked for; how the proxy served it is the proxy’s to say.");
+  });
+
+  test("a fix Run names the Fixer", async () => {
+    const page = await session({ client: new RunClient({ phase: "fix", role: "implementer", modelTier: "Coder" }) });
+    expect(await tipOf(await until(() => modelChip(page), "the model chip"))).toContain("The Fixer’s tier.");
+  });
+
+  test("a Run from before tiers shows its model alone", async () => {
+    const page = await session({ client: new RunClient({ model: "llm-anthropic/claude-sonnet-5", modelTier: null }) });
+    const chip = await until(() => modelChip(page), "the model chip");
+    expect(chip.getAttribute("aria-label")).toBe("Model: llm-anthropic/claude-sonnet-5");
+    expect(chip.textContent).toBe("llm-anthropic/claude-sonnet-5");
+    expect(await tipOf(chip)).toBe("llm-anthropic/claude-sonnet-5When this session started, dude asked the proxy for llm-anthropic/claude-sonnet-5." +
+      "That is what dude asked for; how the proxy served it is the proxy’s to say.");
+  });
+
+  test("a Run that has asked for nothing yet has no chip", async () => {
+    const page = await session({ client: new RunClient({ model: null, modelTier: null }) });
+    await until(() => page.querySelector("[data-testid=session-rail]"), "the rail");
+    expect(modelChip(page)).toBeNull();
+  });
+});
+
 /** The machine chip's tooltip, opened as a keyboard user does: focusing the chip. */
 async function machineTip(page: HTMLElement): Promise<string> {
   const chip = await until(() => machineChip(page), "the machine chip");

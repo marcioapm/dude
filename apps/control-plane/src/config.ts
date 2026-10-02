@@ -322,7 +322,23 @@ export interface LoadOptions {
   defaultPath?: string;
   /** Replaces RETIRED, for tests. */
   retired?: readonly RetiredKey[];
+  /** Replaces ORCHESTRATOR_TIMEOUTS, for tests. */
+  orchestratorTimeouts?: OrchestratorTimeouts;
 }
+
+/** How long the backend waits on the orchestrator, in milliseconds. */
+export interface OrchestratorTimeouts {
+  /** Any call, unless it says otherwise. */
+  readonly callMs: number;
+  /**
+   * A test message to the LLM proxy: the orchestrator bounds one at 30 s
+   * (llm.TestTimeout) and reports a slow proxy itself, so the call waits
+   * that long and a little more.
+   */
+  readonly testMessageMs: number;
+}
+
+export const ORCHESTRATOR_TIMEOUTS: OrchestratorTimeouts = { callMs: 15_000, testMessageMs: 35_000 };
 
 /** The backend's resolved settings. */
 export class Config {
@@ -333,6 +349,7 @@ export class Config {
     private readonly sources: Map<string, "file" | "env">,
     /** Problems that do not stop startup, for the caller to log. */
     readonly warnings: string[],
+    readonly orchestratorTimeouts: OrchestratorTimeouts,
   ) {
     const port = this.port;
     if (port < 0 || port > 65535) throw new ConfigError(`${label(byEnv.get("PORT")!)}: not a port: ${port}`);
@@ -395,7 +412,7 @@ export class Config {
       }
       sources.set(k.env, "env");
     }
-    return new Config(file?.path ?? null, values, sources, warnings);
+    return new Config(file?.path ?? null, values, sources, warnings, opts.orchestratorTimeouts ?? ORCHESTRATOR_TIMEOUTS);
   }
 
   private key(env: string, kind: Kind): Key {

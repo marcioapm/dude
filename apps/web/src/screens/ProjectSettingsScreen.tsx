@@ -35,6 +35,7 @@ import { DeliveryPage, RolePage } from "./settingsPages.tsx";
 import { FacePicker } from "./FacePicker.tsx";
 import { ServersSettingsPage } from "./ServersSettings.tsx";
 import { useMachineSizes } from "./MachinesSettings.tsx";
+import { useModelTiers } from "./ModelsSettings.tsx";
 import { ImageField, imageWords, useImageChoices, type ImageChoices } from "../images.tsx";
 import { isMemoryPage, MEMORY_PAGES, MemoryPages, memoryNav, useIndexSummary, type ProjectChoice } from "./MemorySettings.tsx";
 
@@ -102,6 +103,9 @@ export function ProjectSettingsScreen({ client, projectId, projects, admin, page
   const orgName = settings?.organization.name ?? "the organisation";
   // The organisation's sizes, once for the screen: each Machine field's choices.
   const sizes = useMachineSizes(client).sizes?.sizes ?? null;
+  // And its tiers: each role's Model field's choices.
+  const models = useModelTiers(client);
+  const tiers = models.tiers?.tiers ?? null;
   // The organisation's images, once for the screen: every image field's choices.
   const images = useImageChoices(client);
 
@@ -165,7 +169,8 @@ export function ProjectSettingsScreen({ client, projectId, projects, admin, page
           ) : page === "delivery" ? (
             <DeliveryPage scope={scope} />
           ) : isRole(page) ? (
-            <RolePage key={page} scope={scope} role={page} onOpenRun={onOpenRun} sizes={sizes} images={images}
+            <RolePage key={page} scope={scope} role={page} onOpenRun={onOpenRun} sizes={sizes} tiers={tiers}
+              tiersProblem={models.problem} onManageTiers={admin ? () => onOrganization("models") : undefined} images={images}
               onManageImages={admin ? () => onOrganization("images") : undefined} />
           ) : isMemoryPage(page) ? (
             <MemoryPages client={client} page={page} projects={projects} admin={admin} index={index} onPage={onPage}

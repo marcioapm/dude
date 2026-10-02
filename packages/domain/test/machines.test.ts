@@ -158,13 +158,13 @@ describe("resolving a role's size", () => {
 
 describe("removing a size moves what named it", () => {
   test("to another size", () => {
-    const models = { implementer: { model: "m", machineSize: "lg" }, reviewer: { machineSize: "xl" } };
-    expect(replaceMachineSize(models, "lg", "xl")).toEqual({ implementer: { model: "m", machineSize: "xl" }, reviewer: { machineSize: "xl" } });
+    const models = { implementer: { tier: "m", machineSize: "lg" }, reviewer: { machineSize: "xl" } };
+    expect(replaceMachineSize(models, "lg", "xl")).toEqual({ implementer: { tier: "m", machineSize: "xl" }, reviewer: { machineSize: "xl" } });
   });
 
   test("to none: the key goes, and a role left with nothing goes", () => {
-    const models = { implementer: { model: "m", machineSize: "lg" }, fixer: { machineSize: "lg" }, reviewer: { machineSize: "xl" } };
-    expect(replaceMachineSize(models, "lg", null)).toEqual({ implementer: { model: "m" }, reviewer: { machineSize: "xl" } });
+    const models = { implementer: { tier: "m", machineSize: "lg" }, fixer: { machineSize: "lg" }, reviewer: { machineSize: "xl" } };
+    expect(replaceMachineSize(models, "lg", null)).toEqual({ implementer: { tier: "m" }, reviewer: { machineSize: "xl" } });
   });
 
   test("nothing named it: the same object", () => {
