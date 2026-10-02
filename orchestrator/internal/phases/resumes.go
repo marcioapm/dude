@@ -168,12 +168,14 @@ func resumedEpoch(foreseen int, resumed lux.Run) int {
 //
 // Frames of that epoch the stream committed before the move found no row
 // to stamp, and nothing durable records when they came: the agent's
-// events carry no epoch, and a chunk may not be an event yet. What the
-// Run's row does say is whether any came since dude asked: the session
-// epoch reached it, lux reported it running, or the agent was active
-// after requested_at. Then the row is marked frames_missed, and true is
-// returned, for its timing to be written as it stands once the
-// transaction commits: no later frame stamps it.
+// events carry no epoch, and a chunk may not be an event yet. The only
+// epoch-qualified trace on the Run's row is agent_session_epoch: the
+// shim's session record for the epoch, the first record of a resumed
+// placement. Once it has reached the epoch, the row is marked
+// frames_missed, and true is returned, for its timing to be written as it
+// stands once the transaction commits: no later frame stamps it.
+// lux_state and agent_active_at record no epoch, so a trailing frame of an
+// older placement could have set them; they mark nothing.
 func (s *Syncer) resumeAccepted(ctx context.Context, tx pgx.Tx, r phaseRun, foreseen int, resumed lux.Run) (missed bool) {
 	epoch := resumedEpoch(foreseen, resumed)
 	if epoch == foreseen {
@@ -181,8 +183,7 @@ func (s *Syncer) resumeAccepted(ctx context.Context, tx pgx.Tx, r phaseRun, fore
 	}
 	s.bestEffort(ctx, tx, r, "accepted", func(ctx context.Context, tx pgx.Tx) error {
 		err := tx.QueryRow(ctx, `UPDATE run_resumes rr SET epoch = $3,
-				frames_missed = r.agent_session_epoch >= $3 OR r.lux_state = 'running'
-					OR COALESCE(r.agent_active_at >= rr.requested_at, false)
+				frames_missed = COALESCE(r.agent_session_epoch >= $3, false)
 			FROM runs r WHERE r.id = rr.run_id AND rr.run_id = $1 AND rr.epoch = $2
 			AND NOT EXISTS (SELECT 1 FROM run_resumes WHERE run_id = $1 AND epoch = $3)
 			RETURNING rr.frames_missed`, r.ID, foreseen, epoch).Scan(&missed)
