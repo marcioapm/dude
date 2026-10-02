@@ -1,9 +1,10 @@
 package orchestrator_test
 
-// A wake's boundaries with what lux reports meanwhile: a crash applied
+// A wake's boundaries with what lux reports meanwhile: an end applied
 // after an attach to a running Run and before its acknowledgement, a drain
-// whose pages end at a state the Run is in again later, and a sweep whose
-// selected wake is replaced before it claims it.
+// whose pages end at a state the Run is in again later or whose Run's output
+// is slow to replay, a sweep whose selected wake is replaced before it
+// claims it, and a database that refuses a claimed wake's write.
 
 import (
 	"context"
@@ -39,44 +40,76 @@ func (a *afterAttach) AttachServer(ctx context.Context, serverID, runID string) 
 	return sv, err
 }
 
-// A wake for a Run already running attaches its servers; the Run crashes
-// and the follower applies the crash before the attach's answer reaches
-// the acknowledgement. The crash stands: the preview is not shown serving,
-// the wake stays wanted, and the next sweep resumes the Run (it ran), which
-// then serves.
+// A wake for a Run already running attaches its servers; the Run ends
+// (crashed, lost its host, stopped or cancelled outside dude) and the
+// follower applies the end before the attach's answer reaches the
+// acknowledgement. The end stands: the preview is not shown serving and the
+// wake stays wanted. The next sweep resumes a Run that ran and can run again
+// (failed, lost, stopped), counting no failed start, and replaces one that
+// never runs again (cancelled); either then serves. lux's succeeded is not
+// covered: the fake never ends a preview's Run that way.
 func TestACrashAppliedAfterAnAttachIsKept(t *testing.T) {
-	w := newWorld(t)
-	w.wakeable()
-	w.recipe("web", 3000, "npm run dev", "", nil, true)
-	_, runID := w.declare()
-	web := w.serverID(runID, "web")
-	w.open(web)
-	w.running(runID, "web")
-	r := w.luxRuns()[0]
-	w.previews.Lux = &afterAttach{Client: w.previews.Lux, then: func() {
-		w.lux.Crash(r.ID)
-		waitFor(t, "the follower to apply the crash", func() bool {
-			return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'failed'`, runID) == 1
+	for _, end := range []string{"failed", "lost", "stopped", "cancelled"} {
+		t.Run(end, func(t *testing.T) {
+			w := newWorld(t)
+			w.wakeable()
+			w.recipe("web", 3000, "npm run dev", "", nil, true)
+			_, runID := w.declare()
+			web := w.serverID(runID, "web")
+			w.open(web)
+			w.running(runID, "web")
+			r := w.luxRuns()[0]
+			luxc := w.previews.Lux
+			w.previews.Lux = &afterAttach{Client: luxc, then: func() {
+				switch end {
+				case "failed":
+					w.lux.Crash(r.ID)
+				case "lost":
+					w.lux.Lose(r.ID)
+				case "stopped":
+					if err := luxc.Stop(context.Background(), r.ID); err != nil {
+						t.Error(err)
+					}
+				case "cancelled":
+					if err := luxc.Cancel(context.Background(), r.ID); err != nil {
+						t.Error(err)
+					}
+				}
+				waitFor(t, "the follower to apply the end", func() bool {
+					return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = $2`, runID, end) == 1
+				})
+			}}
+			// A wake outstanding for a Run that is up: its acknowledgement was
+			// lost (a restart), or lux asked while the Run was coming up.
+			mustExec(t, w.owner, `UPDATE runs SET wake_wanted_at = now() WHERE id = $1`, runID)
+			if _, err := w.previews.Sweep(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = $2
+				AND wake_wanted_at IS NOT NULL AND wake_claimed_at IS NULL`, runID, end); n != 1 {
+				t.Fatalf("the attach's answer was written over the end applied after it:\n%s", w.preview(runID))
+			}
+			w.sweepAgain(runID)
+			if end == "cancelled" {
+				w.untilPreview(runID, "a new Run running", func() bool {
+					return len(w.luxRuns()) == 2 &&
+						w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_state = 'running'`, runID) == 1
+				})
+				w.open(web)
+				if r.Resumed != 0 || w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND start_failures = 0`, runID) != 1 {
+					t.Fatalf("the cancelled Run: resumed %d, calls %v; want replaced\n%s", r.Resumed, w.lux.CallsOf(r.ID), w.preview(runID))
+				}
+				return
+			}
+			if r.Resumed != 1 {
+				t.Fatalf("the ended Run was not resumed: resumed %d, calls %v\n%s", r.Resumed, w.lux.CallsOf(r.ID), w.preview(runID))
+			}
+			w.open(web)
+			if n := len(w.luxRuns()); n != 1 || slices.Contains(w.lux.CallsOf(r.ID), "cancel") ||
+				w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND start_failures = 0`, runID) != 1 {
+				t.Fatalf("%d lux runs, calls %v; want the Run that ran resumed\n%s", n, w.lux.CallsOf(r.ID), w.preview(runID))
+			}
 		})
-	}}
-	// A wake outstanding for a Run that is up: its acknowledgement was lost
-	// (a restart), or lux asked while the Run was coming up.
-	mustExec(t, w.owner, `UPDATE runs SET wake_wanted_at = now() WHERE id = $1`, runID)
-	if _, err := w.previews.Sweep(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'failed'
-		AND wake_wanted_at IS NOT NULL AND wake_claimed_at IS NULL`, runID); n != 1 {
-		t.Fatalf("the attach's answer was written over the crash applied after it:\n%s", w.preview(runID))
-	}
-	w.sweepAgain(runID)
-	if r.Resumed != 1 {
-		t.Fatalf("the crashed Run was not resumed: resumed %d, calls %v\n%s", r.Resumed, w.lux.CallsOf(r.ID), w.preview(runID))
-	}
-	w.open(web)
-	if n := len(w.luxRuns()); n != 1 || slices.Contains(w.lux.CallsOf(r.ID), "cancel") ||
-		w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND start_failures = 0`, runID) != 1 {
-		t.Fatalf("%d lux runs, calls %v; want the Run that ran resumed\n%s", n, w.lux.CallsOf(r.ID), w.preview(runID))
 	}
 }
 
@@ -327,4 +360,49 @@ func TestAStaleSweepDoesNotHoldTheNextWake(t *testing.T) {
 		t.Fatalf("the failed Run: resumed %d, calls %v; want replaced", r.Resumed, w.lux.CallsOf(r.ID))
 	}
 	w.open(web)
+}
+
+// The database refuses a wake's write after it claimed the wake: the
+// acknowledgement of a resumed Run, or the retirement of a cancelled one
+// (a Postgres trigger raising on that UPDATE). The wake is released,
+// still wanted and backed off, not left claimed; once the database takes
+// the write, the next sweep wakes the preview, which serves on the
+// resumed Run, or on one new Run.
+func TestAWakeIsReleasedAfterADatabaseError(t *testing.T) {
+	for _, stage := range []string{"acknowledgement", "retirement"} {
+		t.Run(stage, func(t *testing.T) {
+			w := newWorld(t)
+			w.wakeable()
+			runID, web := w.asleepPreview()
+			r := w.luxRuns()[0]
+			refused := "OLD.wake_wanted_at IS NOT NULL AND NEW.wake_wanted_at IS NULL"
+			if stage == "retirement" {
+				if err := w.previews.Lux.Cancel(context.Background(), r.ID); err != nil {
+					t.Fatal(err)
+				}
+				refused = "OLD.lux_run_id IS NOT NULL AND NEW.lux_run_id IS NULL"
+			}
+			mustExec(t, w.owner, `CREATE FUNCTION refuse_wake_write() RETURNS trigger LANGUAGE plpgsql AS $$
+				BEGIN IF `+refused+` THEN RAISE EXCEPTION 'database unavailable'; END IF; RETURN NEW; END $$`)
+			mustExec(t, w.owner, `CREATE TRIGGER refuse_wake_write BEFORE UPDATE ON runs FOR EACH ROW EXECUTE FUNCTION refuse_wake_write()`)
+			mustExec(t, w.owner, `UPDATE runs SET wake_wanted_at = now(), next_attempt_at = NULL WHERE id = $1`, runID)
+			if _, err := w.previews.Sweep(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND wake_wanted_at IS NOT NULL AND wake_claimed_at IS NULL
+				AND next_attempt_at > now()`, runID); n != 1 {
+				t.Fatalf("the wake was left claimed or dropped after the database refused its write:\n%s", w.preview(runID))
+			}
+			mustExec(t, w.owner, `DROP TRIGGER refuse_wake_write ON runs`)
+			w.sweepAgain(runID)
+			w.open(web)
+			want := 1
+			if stage == "retirement" {
+				want = 2
+			}
+			if n := len(w.luxRuns()); n != want {
+				t.Fatalf("%d lux runs, want %d\n%s", n, want, w.preview(runID))
+			}
+		})
+	}
 }
