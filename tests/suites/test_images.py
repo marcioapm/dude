@@ -423,6 +423,18 @@ def test_a_run_preparing_its_image_says_so(page: Page, web_url: str, client: Api
     expect(page.get_by_test_id("preparing-image")).to_contain_text("Preparing image: adding the dude layer")
     expect(page.get_by_test_id("preparing-image")).to_contain_text("acme-base v1")
     _shoot(page, "run-preparing-image")
+    # A Run on an image whose first version is still building waits on that build, and says so.
+    first = _image(client, "node-first")
+    assert client.post(f"/v1/images/{first['image']['id']}/build").status_code == 201
+    other = client.create_project(name="Fresh", slug=f"fresh-{os.urandom(3).hex()}", agentModels=SCRIPTED, runtimeImageId=first["image"]["id"])
+    task2 = client.create_task(other["id"], "Say hello")
+    assert client.post(f"/v1/tasks/{task2['id']}/deliver").status_code == 201
+    run2 = wait_until(lambda: (r := query(owner_dsn, "SELECT id FROM runs WHERE task_id = %s AND image_build_id IS NOT NULL", (task2["id"],))) and r[0],
+                      timeout=60, message="the implementer never waited on the first build")
+    page.goto(f"{web_url}#/session/{run2['id']}")
+    expect(page.get_by_test_id("preparing-image")).to_contain_text("Preparing image: building node-first v1 (its first version)")
+    expect(page.get_by_test_id("preparing-image")).not_to_contain_text("a minute or two")
+    _shoot(page, "run-preparing-image-build")
     # An organization with no GitHub answers 409 for its forge settings, which
     # the session page reads: not this page's doing.
     assert [r for r in refused if "/v1/forge/settings" not in r] == []
