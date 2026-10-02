@@ -83,6 +83,11 @@ export const EventTypes = {
    */
   DirectiveFailed: "run.directive.failed",
   RunPaused: "run.paused",
+  /**
+   * A person asked for a paused Run to be resumed. Payload: `{ reason,
+   * requestedAt }`: `requestedAt` is when they asked, as the database
+   * stored it — what the resume's `run.resume.timed` counts from.
+   */
   RunResumed: "run.resumed",
   /**
    * How long a resume of the Run took, end to end, written once its agent
