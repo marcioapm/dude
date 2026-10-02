@@ -57,6 +57,12 @@ func TaskHeads(ctx context.Context, tx pgx.Tx, taskID string) ([]RepoHead, error
 // Briefing writes the conductor's first prompt: dude's note on the task,
 // then the person's message.
 func Briefing(ctx context.Context, tx pgx.Tx, taskID, conductorRunID, person, message string) (string, error) {
+	return briefing(ctx, tx, taskID, conductorRunID, person, message, false)
+}
+
+// briefing is Briefing, or with woken, a conductor dude starts to hear a
+// wake note (message) rather than a person.
+func briefing(ctx context.Context, tx pgx.Tx, taskID, conductorRunID, person, message string, woken bool) (string, error) {
 	var key, title, goal, status string
 	var criteria json.RawMessage
 	if err := tx.QueryRow(ctx, `SELECT p.key_prefix || '-' || t.number, t.title, t.goal, t.status::text, t.acceptance_criteria
@@ -69,8 +75,14 @@ func Briefing(ctx context.Context, tx pgx.Tx, taskID, conductorRunID, person, me
 	if who == "" {
 		who = "Someone"
 	}
-	fmt.Fprintf(&b, "Conductor, %s wrote in the Chat of %s, %q. You are this task's conductor: answer them. "+
-		"Below is what dude knows about the task, in short; read more with your tools.", who, key, oneLine(title))
+	if woken {
+		who = "dude"
+		fmt.Fprintf(&b, "Conductor, dude woke you about %s, %q: a decision is yours. You are this task's conductor. "+
+			"Below is what dude knows about the task, in short; read more with your tools.", key, oneLine(title))
+	} else {
+		fmt.Fprintf(&b, "Conductor, %s wrote in the Chat of %s, %q. You are this task's conductor: answer them. "+
+			"Below is what dude knows about the task, in short; read more with your tools.", who, key, oneLine(title))
+	}
 	fmt.Fprintf(&b, "\n\n## The task\n\n%s · %s · status %s", key, taskID, status)
 	fmt.Fprintf(&b, "\n\nGoal:\n\n%s", clip(strings.TrimSpace(goal), briefGoalChars))
 	var ac []string
@@ -114,8 +126,32 @@ func Briefing(ctx context.Context, tx pgx.Tx, taskID, conductorRunID, person, me
 		}
 	}
 	b.WriteString("\n\nYour checkout is at that head.")
+	if err := briefDeciderSection(ctx, tx, &b, taskID); err != nil {
+		return "", err
+	}
 	fmt.Fprintf(&b, "\n\n## %s's message\n\n%s", who, message)
 	return b.String(), nil
+}
+
+// briefDeciderSection says who takes the task's decisions, and the one
+// its delivery waits on.
+func briefDeciderSection(ctx context.Context, tx pgx.Tx, b *strings.Builder, taskID string) error {
+	d, err := ReadDelivery(ctx, tx, taskID)
+	if err != nil {
+		return err
+	}
+	b.WriteString("\n\n## Decisions\n\n")
+	switch {
+	case d == nil || !d.Live() || Ended(d.TaskStatus):
+		b.WriteString("No delivery is in progress: you are read-only.")
+	case !d.State.conducted():
+		b.WriteString("Deliver takes this task's decisions: you are read-only.")
+	case d.State.Decision != nil && d.State.Decision.Taken == nil:
+		fmt.Fprintf(b, "You take this task's decisions. The delivery waits on one now: %s.", pointLabel[d.State.Decision.Point])
+	default:
+		fmt.Fprintf(b, "You take this task's decisions. The delivery is at %s; you are woken at its next decision.", d.Step)
+	}
+	return nil
 }
 
 func briefRunsSection(ctx context.Context, tx pgx.Tx, b *strings.Builder, taskID, self string) error {

@@ -80,6 +80,8 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.Handle("POST /internal/tasks/{id}/deliver", s.auth(s.deliver))
 	mux.Handle("POST /internal/tasks/{id}/chat", s.auth(s.chat))
+	mux.Handle("POST /internal/tasks/{id}/talk", s.auth(s.talk))
+	mux.Handle("POST /internal/tasks/{id}/decider", s.auth(s.handBack))
 	mux.Handle("POST /internal/runs/{id}/steer", s.auth(s.steer))
 	mux.Handle("POST /internal/runs/{id}/pause", s.auth(s.pause))
 	mux.Handle("POST /internal/runs/{id}/resume", s.auth(s.resume))
@@ -269,14 +271,10 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, org string) err
 		return err
 	}
 	var projectID string
-	var orgPolicy, projectPolicy []byte
+	var policy delivery.Policy
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(r.Context(), `SELECT w.project_id, o.delivery_policy, p.delivery_policy FROM tasks w
-			JOIN projects p ON p.id = w.project_id JOIN organizations o ON o.id = p.organization_id
-			WHERE w.id = $1`, taskID).Scan(&projectID, &orgPolicy, &projectPolicy); err != nil {
-			if db.IsNotFound(err) {
-				return fail(http.StatusNotFound, "not_found", "task %s not found", taskID)
-			}
+		var err error
+		if projectID, policy, err = policyFor(r.Context(), tx, taskID); err != nil {
 			return err
 		}
 		// The prompt's images are set only before any agent has been given
@@ -306,12 +304,7 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, org string) err
 		return err
 	}
 
-	// The factory's defaults, then the organization's, then the project's,
-	// then this task's own: each layer sets only what it names.
-	policy, err := delivery.ResolvePolicy(orgPolicy, projectPolicy)
-	if err != nil {
-		return fmt.Errorf("project %s: %w", projectID, err)
-	}
+	// The task's own policy, over the layers policyFor resolved.
 	if len(body.Policy) > 0 {
 		if err := json.Unmarshal(body.Policy, &policy); err != nil {
 			return fail(http.StatusBadRequest, "bad_request", "policy: %v", err)
@@ -341,6 +334,27 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, org string) err
 
 // deliveryKey is the idempotency key of a task's delivery workflow.
 func deliveryKey(taskID string) string { return "delivery:" + taskID }
+
+// policyFor is the task's project and the delivery policy it gets: the
+// factory's defaults, then the organization's, then the project's, each
+// layer setting only what it names.
+func policyFor(ctx context.Context, tx pgx.Tx, taskID string) (string, delivery.Policy, error) {
+	var projectID string
+	var orgPolicy, projectPolicy []byte
+	if err := tx.QueryRow(ctx, `SELECT w.project_id, o.delivery_policy, p.delivery_policy FROM tasks w
+		JOIN projects p ON p.id = w.project_id JOIN organizations o ON o.id = p.organization_id
+		WHERE w.id = $1`, taskID).Scan(&projectID, &orgPolicy, &projectPolicy); err != nil {
+		if db.IsNotFound(err) {
+			return "", delivery.Policy{}, fail(http.StatusNotFound, "not_found", "task %s not found", taskID)
+		}
+		return "", delivery.Policy{}, err
+	}
+	policy, err := delivery.ResolvePolicy(orgPolicy, projectPolicy)
+	if err != nil {
+		return "", policy, fmt.Errorf("project %s: %w", projectID, err)
+	}
+	return projectID, policy, nil
+}
 
 // runInfo loads what every run-control action needs, confined to org.
 type runInfo struct {
