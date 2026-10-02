@@ -183,17 +183,13 @@ type PreviewConfig struct {
 
 func (c *HTTPClient) PreviewDomain(ctx context.Context) (PreviewConfig, error) {
 	var w struct {
-		PreviewDomain *string `json:"previewDomain"`
-		Previews      *bool   `json:"previews"`
+		PreviewDomain string `json:"previewDomain"`
+		Previews      *bool  `json:"previews"`
 	}
 	if err := c.do(ctx, "GET", "/v1/whoami", nil, nil, &w); err != nil {
 		return PreviewConfig{}, err
 	}
-	out := PreviewConfig{Previews: w.Previews}
-	if w.PreviewDomain != nil {
-		out.Domain = NormalDomain(*w.PreviewDomain)
-	}
-	return out, nil
+	return PreviewConfig{Domain: NormalDomain(w.PreviewDomain), Previews: w.Previews}, nil
 }
 
 // NormalDomain is a domain as dude compares and joins it: lowercase, no

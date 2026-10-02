@@ -138,12 +138,13 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	if !preview.Relative && preview.Domain == "" {
-		log.Warn("branch previews do not wake on request: lux has no preview domain (preview.domain) and previews.domain is unset", "mode", "off")
-	} else if preview.Relative {
+	switch {
+	case preview.Relative:
 		log.Info("branch previews wake on request", "mode", "relative")
-	} else {
+	case preview.Domain != "":
 		log.Info("branch previews wake on request", "mode", "full-name", "domain", preview.Domain)
+	default:
+		log.Warn("branch previews do not wake on request: lux has no preview domain (preview.domain) and previews.domain is unset", "mode", "off")
 	}
 	syncer := &phases.Syncer{
 		DB: database, Lux: luxClient,
@@ -282,7 +283,7 @@ func previewModeOf(ctx context.Context, c *lux.HTTPClient, configured string, lo
 				return previewMode{Relative: true}, nil
 			}
 			if configured != "" {
-				return previewMode{Domain: configured}, nil
+				luxDomain = configured
 			}
 			return previewMode{Domain: luxDomain}, nil
 		}
