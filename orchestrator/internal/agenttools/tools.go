@@ -51,7 +51,8 @@ var tools = []tool{
 		nil, requestRepository).limit(requestsPerRun),
 	define("create_task", "Record a piece of work you found that is outside your task — a bug, a "+
 		"follow-up, a part to split out — as a new task in this project. It is not started: a person reads it "+
-		"and decides. Say what and why in the goal.", creators, createTask).limit(createsPerRun),
+		"and decides. The goal is required (at least 16 characters): say why it matters and what should change.",
+		creators, createTask).limit(createsPerRun),
 	define("search_memory", "Search what is known here: memories people and agents saved (facts, procedures, "+
 		"notes), and this project's tasks, epics and the project itself — by words and by meaning, best first. "+
 		"Search before you investigate something that may already be known, and before you remember something.",
@@ -119,7 +120,7 @@ func listTasks(ctx context.Context, tx pgx.Tx, c Caller, in listTasksIn) (listTa
 
 type createTaskIn struct {
 	Title              string   `json:"title" jsonschema:"what should change, in one line"`
-	Goal               string   `json:"goal" jsonschema:"why, and any detail another agent or a person needs"`
+	Goal               string   `json:"goal" jsonschema:"required, at least 16 characters: why it matters, what should change, and any detail another agent or a person needs"`
 	AcceptanceCriteria []string `json:"acceptanceCriteria,omitempty" jsonschema:"things that must be true when it is done"`
 	Epic               string   `json:"epic,omitempty" jsonschema:"an existing epic's title to put it in (see list_tasks); none leaves it outside any"`
 }
@@ -129,8 +130,12 @@ type createTaskOut struct {
 }
 
 // The control plane's task limits, in UTF-16 code units as its `.length`
-// counts them: a goal, and all the criteria together.
+// counts them: a goal, and all the criteria together. GoalMin is counted on
+// the goal trimmed, and must agree with TASK_GOAL_MIN in
+// packages/domain/src/hierarchy.ts: a task an agent makes is one a person
+// could save.
 const (
+	GoalMin     = 16
 	GoalMax     = 65_536
 	CriteriaMax = 16_384
 )
@@ -156,6 +161,9 @@ func createTask(ctx context.Context, tx pgx.Tx, c Caller, in createTaskIn) (crea
 	switch {
 	case title == "":
 		return createTaskOut{}, refuse("a title is required")
+	case utf16Len(strings.TrimSpace(in.Goal)) < GoalMin:
+		return createTaskOut{}, refuse("a task needs a goal of at least %d characters: say why it matters and what should "+
+			"change, so a person can decide on it without asking you", GoalMin)
 	case len(title) > 500 || utf16Len(in.Goal) > GoalMax || len(in.AcceptanceCriteria) > 50:
 		return createTaskOut{}, refuse("too long: a title of at most 500 characters, a goal of %d, at most 50 criteria", GoalMax)
 	case criteriaLength(in.AcceptanceCriteria) > CriteriaMax:

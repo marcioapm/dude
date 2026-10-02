@@ -113,7 +113,7 @@ func run(args []string, out io.Writer) error {
 		return show(out, *asJSON, call("request_repository", map[string]any{"repository": args[0], "write": *write, "reason": *reason, "wait": *wait}))
 	case "task create":
 		title := fs.String("title", "", "what should change, in one line")
-		goal := fs.String("goal", "", "why, and what someone needs to know")
+		goal := fs.String("goal", "", "why it matters and what should change; required, at least 16 characters")
 		epic := fs.String("epic", "", "an existing epic's title")
 		var criteria many
 		fs.Var(&criteria, "criterion", "a thing that must be true when it is done (repeatable)")

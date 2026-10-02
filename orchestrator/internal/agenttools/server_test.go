@@ -132,7 +132,7 @@ func TestAnImplementerRecordsWorkItFoundAndSeesIt(t *testing.T) {
 
 	// A bad request is the agent's to fix, said plainly.
 	res, err = cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "create_task",
-		Arguments: map[string]any{"title": "x", "goal": "y", "epic": "no such epic"}})
+		Arguments: map[string]any{"title": "x", "goal": "Split hyphenated words on the hyphen.", "epic": "no such epic"}})
 	if err != nil || !res.IsError {
 		t.Fatalf("an unknown epic was accepted: %v %+v", err, res)
 	}
@@ -150,7 +150,7 @@ func TestWorkAnAgentFindsInheritsItsKeylessPersonOwner(t *testing.T) {
 	mustExec(t, f.owner, `INSERT INTO task_people (task_id, person_id, organization_id, position)
 		VALUES ($1, $2, $5, 0), ($1, $3, $5, 3), ($1, $4, $5, 8)`, f.item, removed, owner, member, f.org)
 	token := f.run(t, "run_found", "implementer", "running")
-	if status, out := f.post(t, token, "create_task", `{"title":"Found on the way","goal":"why"}`); status != 200 {
+	if status, out := f.post(t, token, "create_task", `{"title":"Found on the way","goal":"The parser drops a trailing hyphen."}`); status != 200 {
 		t.Fatalf("create: %d %v", status, out)
 	}
 	rows, err := f.owner.Query(context.Background(), `SELECT tp.person_id, tp.position FROM tasks t JOIN task_people tp ON tp.task_id = t.id
@@ -270,7 +270,7 @@ func (f *fixture) post(t *testing.T, token, tool, body string) (int, map[string]
 func TestTheCLIsJSONAPICallsTheSameTools(t *testing.T) {
 	f := setup(t)
 	token := f.run(t, "run_cli", "implementer", "running")
-	if status, out := f.post(t, token, "create_task", `{"title":"From the CLI","goal":"why"}`); status != 200 || out["key"] != "TEXT-2" {
+	if status, out := f.post(t, token, "create_task", `{"title":"From the CLI","goal":"Truncation splits words mid-hyphen."}`); status != 200 || out["key"] != "TEXT-2" {
 		t.Errorf("create: %d %v", status, out)
 	}
 	if status, out := f.post(t, token, "create_task", `{"title":"x","colour":"red"}`); status != 422 {
@@ -299,7 +299,7 @@ func TestATaskTakesA64KGoalAnd16KOfCriteriaInAllAndNoMore(t *testing.T) {
 		return string(b)
 	}
 	// One criterion far past the old 2,000 each, and the whole allowance split unevenly.
-	for _, ok := range []string{body(agenttools.GoalMax, 3000), body(10, agenttools.CriteriaMax-5000, 5000)} {
+	for _, ok := range []string{body(agenttools.GoalMax, 3000), body(agenttools.GoalMin, agenttools.CriteriaMax-5000, 5000)} {
 		if status, out := f.post(t, token, "create_task", ok); status != 200 {
 			t.Errorf("within the limits: %d %v", status, out)
 		}
@@ -308,7 +308,7 @@ func TestATaskTakesA64KGoalAnd16KOfCriteriaInAllAndNoMore(t *testing.T) {
 	if status != 422 || !strings.Contains(fmt.Sprint(out["error"]), "a goal of 65536") {
 		t.Errorf("a goal over 64K: %d %v", status, out)
 	}
-	status, out = f.post(t, token, "create_task", body(10, agenttools.CriteriaMax-5000, 5001))
+	status, out = f.post(t, token, "create_task", body(agenttools.GoalMin, agenttools.CriteriaMax-5000, 5001))
 	if status != 422 || out["error"] != "acceptance criteria too long: at most 16384 characters in all" {
 		t.Errorf("criteria over 16K in all: %d %v", status, out)
 	}
@@ -332,11 +332,12 @@ func TestTheLimitsCountUTF16UnitsAsTheAPIDoes(t *testing.T) {
 		return n
 	}
 	// 😀 is two UTF-16 units (four bytes, one rune); é is one unit (two bytes).
+	goal := "A goal long enough for the criteria cases."
 	emojiGoal := strings.Repeat("😀", 32768)
 	emojiCriterion := strings.Repeat("😀", 8192)
 	accepted := []string{
 		body(emojiGoal),
-		body("g", emojiCriterion),
+		body(goal, emojiCriterion),
 		body(strings.Repeat("é", 65536), strings.Repeat("é", 16384)),
 	}
 	for i, ok := range accepted {
@@ -350,10 +351,10 @@ func TestTheLimitsCountUTF16UnitsAsTheAPIDoes(t *testing.T) {
 	refused := []string{
 		body(emojiGoal + "g"),
 		body(strings.Repeat("😀", 32767) + "gg" + "g"),
-		body("g", emojiCriterion, "c"),
-		body("g", strings.Repeat("😀", 8191)+"cc", "c"),
+		body(goal, emojiCriterion, "c"),
+		body(goal, strings.Repeat("😀", 8191)+"cc", "c"),
 		body(strings.Repeat("é", 65537)),
-		body("g", strings.Repeat("é", 16385)),
+		body(goal, strings.Repeat("é", 16385)),
 	}
 	for i, over := range refused {
 		if status, out := f.post(t, token, "create_task", over); status != 422 {
@@ -468,7 +469,7 @@ func TestARunawayAgentIsSlowedDown(t *testing.T) {
 	token := f.run(t, "run_loop", "implementer", "running")
 	var last int
 	for i := 0; i < 25; i++ {
-		last, _ = f.post(t, token, "create_task", fmt.Sprintf(`{"title":"spam %d"}`, i))
+		last, _ = f.post(t, token, "create_task", fmt.Sprintf(`{"title":"spam %d","goal":"Another thing found on the way."}`, i))
 	}
 	if last != 422 {
 		t.Errorf("the 25th task was accepted: %d", last)
@@ -528,13 +529,59 @@ func TestAnOldCLIsToolNamesStillWork(t *testing.T) {
 	old := f.run(t, "run_old", "implementer", "running")
 	// The CLI in an image from before the rename, by the old name; its
 	// calls under that name count against the same budget.
-	if status, out := f.post(t, old, "create_work_item", `{"title":"From an old CLI","goal":"why"}`); status != 200 {
+	if status, out := f.post(t, old, "create_work_item", `{"title":"From an old CLI","goal":"Truncation splits words mid-hyphen."}`); status != 200 {
 		t.Errorf("create_work_item, the old name: %d %v", status, out)
 	}
 	mustExec(t, f.owner, `INSERT INTO events (id, organization_id, event_type, run_id, actor_type, actor_id, source, payload)
 		SELECT 'evt_old_' || g, $1, $2, 'run_old', 'agent', 'run_old', 'runner', '{"tool":"create_work_item"}'
 		FROM generate_series(1, 30) g`, f.org, agenttools.EventType)
-	if status, _ := f.post(t, old, "create_task", `{"title":"over budget","goal":"why"}`); status != 422 {
+	if status, _ := f.post(t, old, "create_task", `{"title":"over budget","goal":"Truncation splits words mid-hyphen."}`); status != 422 {
 		t.Errorf("calls under the old name did not count: %d", status)
+	}
+}
+
+// A task an agent makes needs the goal a person's would: at least GoalMin
+// UTF-16 units once trimmed, counted as the control plane counts them.
+func TestATaskNeedsAGoalOfAtLeast16Characters(t *testing.T) {
+	f := setup(t)
+	token := f.run(t, "run_goal", "implementer", "running")
+	body := func(title, goal string, withGoal bool) string {
+		in := map[string]any{"title": title}
+		if withGoal {
+			in["goal"] = goal
+		}
+		b, _ := json.Marshal(in)
+		return string(b)
+	}
+	const message = "a task needs a goal of at least 16 characters: say why it matters and what should change, " +
+		"so a person can decide on it without asking you"
+	refused := map[string]string{
+		"no goal":                body("Short", "", false),
+		"an empty goal":          body("Short", "", true),
+		"15 characters":          body("Short", strings.Repeat("g", 15), true),
+		"15 inside whitespace":   body("Short", "  \n\t"+strings.Repeat("g", 15)+" \n  ", true),
+		"7 emoji and one letter": body("Short", strings.Repeat("😀", 7)+"g", true),
+	}
+	for name, b := range refused {
+		if status, out := f.post(t, token, "create_task", b); status != 422 || out["error"] != message {
+			t.Errorf("%s: %d %v", name, status, out)
+		}
+	}
+	accepted := map[string]string{
+		"16 characters":        body("Enough", strings.Repeat("g", 16), true),
+		"16 inside whitespace": body("Enough", "  "+strings.Repeat("g", 16)+"\n", true),
+		// Eight runes, but 16 UTF-16 units, as `.length` counts them.
+		"8 emoji": body("Enough", strings.Repeat("😀", 8), true),
+	}
+	for name, b := range accepted {
+		if status, out := f.post(t, token, "create_task", b); status != 200 {
+			t.Errorf("%s: %d %v", name, status, out)
+		}
+	}
+	var short, enough int
+	_ = f.owner.QueryRow(context.Background(), `SELECT count(*) FILTER (WHERE title = 'Short'), count(*) FILTER (WHERE title = 'Enough')
+		FROM tasks WHERE project_id = $1`, f.project).Scan(&short, &enough)
+	if short != 0 || enough != 3 {
+		t.Errorf("%d short-goal tasks and %d with enough, want 0 and 3", short, enough)
 	}
 }
