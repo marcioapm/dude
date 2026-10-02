@@ -140,13 +140,11 @@ const directiveImages = `WITH RECURSIVE chain (id, supersedes, resends, depth) A
 	JOIN (SELECT id, min(depth) AS depth FROM chain GROUP BY id) c ON c.id = a.directive_id
 	WHERE c.depth = (SELECT min(c2.depth) FROM chain c2 JOIN attachments a2 ON a2.directive_id = c2.id)`
 
-// carryAttachments moves the images directive from's words carry to
-// directive to, which says the same words to another Run, and returns
-// their metadata in order, for its event. from is never sent after.
-func carryAttachments(ctx context.Context, tx pgx.Tx, from, to string) ([]json.RawMessage, error) {
-	rows, err := tx.Query(ctx, `WITH moved AS (UPDATE attachments SET directive_id = $2
-			WHERE id IN (`+directiveImages+`) RETURNING *)
-		SELECT `+attachmentJSON+` FROM moved a ORDER BY a.position`, from, to)
+// directiveAttachmentInfo is the metadata of the images directive id's
+// words carry (DirectiveAttachments), in order, for its event.
+func directiveAttachmentInfo(ctx context.Context, tx pgx.Tx, id string) ([]json.RawMessage, error) {
+	rows, err := tx.Query(ctx, `SELECT `+attachmentJSON+` FROM attachments a
+		WHERE a.id IN (`+directiveImages+`) ORDER BY a.position`, id)
 	if err != nil {
 		return nil, err
 	}

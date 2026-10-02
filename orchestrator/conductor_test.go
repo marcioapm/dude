@@ -570,7 +570,8 @@ func TestAMessageWithImagesHandedToTheLiveConductorKeepsThem(t *testing.T) {
 		t.Errorf("answered out of order: %q", said[1:])
 	}
 	var carried string
-	_ = w.owner.QueryRow(context.Background(), `SELECT directive_id FROM attachments WHERE id = $1`, "att_layout_"+w.org).Scan(&carried)
+	_ = w.owner.QueryRow(context.Background(), `SELECT payload->>'directiveId' FROM events WHERE run_id = $1
+		AND event_type = 'chat.message' AND payload->>'text' = 'Explain this screenshot'`, next).Scan(&carried)
 	luxNext := w.luxRunOf(next)
 	got := w.lux.Attachments(luxNext)[carried]
 	if len(got) != 1 || got[0].Name != "layout.png" || got[0].ContentType != "image/png" || !bytes.Equal(got[0].Data, screenshot) {
@@ -587,6 +588,82 @@ func TestAMessageWithImagesHandedToTheLiveConductorKeepsThem(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'chat.message'
 		AND payload->'attachments'->0->>'id' = $2`, next, "att_layout_"+w.org); n != 1 {
 		t.Errorf("the next conductor's Chat does not show the image")
+	}
+}
+
+// Two retries of a message with images that failed, both unread by a
+// conductor that stopped, share its images: handed on to the live
+// conductor, each copy carries them, in its delivery and in its Chat.
+func TestRetriesSharingImagesHandedOnBothKeepThem(t *testing.T) {
+	w := conductorWorld(t)
+	b := w.withImages()
+	task, ended := w.endedConductor()
+	_, out := w.chat(task, "hello again")
+	next, _ := out["runId"].(string)
+	w.until("the next conductor's answer", func() bool { return len(w.said(next)) == 1 })
+	w.upload(b, "att_layout_"+w.org, task, "layout.png", screenshot)
+
+	// The failed original and its two retries, recorded together so the
+	// hand-over sees both retries at once.
+	const text = "Explain this screenshot"
+	ctx := context.Background()
+	var retries []string
+	if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+		ref := delivery.RunRef{Org: w.org, ProjectID: w.project, TaskID: task, RunID: ended}
+		original, _, err := delivery.QueueDirective(ctx, tx, ref, delivery.Directive{Text: text, Scope: "run"})
+		if err != nil {
+			return err
+		}
+		if _, err := delivery.Attach(ctx, tx, task, original, []string{"att_layout_" + w.org}); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE directives SET failed_at = now(), error = 'lux refused it' WHERE id = $1`, original); err != nil {
+			return err
+		}
+		for range 2 {
+			id, _, err := delivery.QueueDirective(ctx, tx, ref, delivery.Directive{Text: text, Scope: "run", Supersedes: original})
+			if err != nil {
+				return err
+			}
+			if err := delivery.ChatEvent(ctx, tx, ref, delivery.Writer{ActorType: "human"},
+				map[string]any{"text": text, "directiveId": id}); err != nil {
+				return err
+			}
+			retries = append(retries, id)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	w.until("both retries answered by the live conductor", func() bool { return len(w.said(next)) == 3 })
+	for _, d := range retries {
+		if to, why := w.handedTo(d); to != next {
+			t.Errorf("%s failed with %q, next %q, want %s", d, why, to, next)
+		}
+	}
+	rows, err := w.owner.Query(ctx, `SELECT payload->>'directiveId', COALESCE(payload->'attachments'->0->>'id', '') FROM events
+		WHERE run_id = $1 AND event_type = 'chat.message' AND payload->>'text' = $2 ORDER BY cursor`, next, text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type copied struct{ Directive, Image string }
+	copies, err := pgx.CollectRows(rows, pgx.RowToStructByPos[copied])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(copies) != 2 {
+		t.Fatalf("the live conductor's Chat has %d copies, want 2", len(copies))
+	}
+	luxNext := w.luxRunOf(next)
+	for i, c := range copies {
+		if c.Image != "att_layout_"+w.org {
+			t.Errorf("copy %d's Chat message shows image %q", i+1, c.Image)
+		}
+		got := w.lux.Attachments(luxNext)[c.Directive]
+		if len(got) != 1 || got[0].Name != "layout.png" || got[0].ContentType != "image/png" || !bytes.Equal(got[0].Data, screenshot) {
+			t.Errorf("copy %d (directive %s) reached the live conductor with %+v", i+1, c.Directive, got)
+		}
 	}
 }
 

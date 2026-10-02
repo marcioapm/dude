@@ -229,11 +229,13 @@ func handTo(ctx context.Context, tx pgx.Tx, ended RunRef, to, from string, w Wri
 		return StartConductor(ctx, tx, ended.Org, ended.ProjectID, ended.TaskID, w, text)
 	}
 	ref := RunRef{Org: ended.Org, ProjectID: ended.ProjectID, TaskID: ended.TaskID, RunID: to}
-	id, _, err := QueueDirective(ctx, tx, ref, Directive{Text: text, Scope: "run"})
+	// Superseding from with the same words, the copy resolves from's images
+	// through it (DirectiveAttachments): retries sharing them all keep them.
+	id, _, err := QueueDirective(ctx, tx, ref, Directive{Text: text, Scope: "run", Supersedes: from})
 	if err != nil {
 		return "", err
 	}
-	images, err := carryAttachments(ctx, tx, from, id)
+	images, err := directiveAttachmentInfo(ctx, tx, id)
 	if err != nil {
 		return "", err
 	}
