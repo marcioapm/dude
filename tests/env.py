@@ -340,10 +340,12 @@ class TestEnvironment:
         """Serve the built web app, proxying the API to this run's control plane.
 
         `vite preview` rather than the dev server, for the same reason as the
-        gallery: the tests should exercise what ships.
+        gallery: the tests should exercise what ships. On 127.0.0.1, where
+        `web_url` looks for it: vite's own default host is localhost, which
+        on macOS resolves to ::1 first.
         """
         self.web_proc = subprocess.Popen(
-            ["bunx", "vite", "preview"],
+            ["bunx", "vite", "preview", "--host", "127.0.0.1"],
             cwd=REPO_ROOT / "apps" / "web",
             env={
                 **os.environ,
