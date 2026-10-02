@@ -62,6 +62,10 @@ type Syncer struct {
 	// DUDE_IDLE_AFTER; finer than the policy's minutes, for tests). Zero
 	// takes delivery.DefaultPolicy's.
 	ParkAfter, IdleAfter time.Duration
+	// How long a task's conductor stays running after its turn ends, for
+	// projects whose policy sets none (DUDE_CONDUCTOR_WARM; finer than the
+	// policy's minutes, for tests). Zero takes delivery.DefaultPolicy's.
+	ConductorWarm time.Duration
 	// How soon after an edit a Run's live diff is read, how often while its
 	// agent works (DUDE_DIFF_EVERY), and how often once several reads found
 	// nothing new; zero takes the defaults.
@@ -112,9 +116,12 @@ const (
 // a stop dude asked for is not mistaken for the agent dying.
 const stopPause = "pause"
 
-// phaseRun is a phase Run's row, as the syncer reads it.
+// phaseRun is a phase Run's row, as the syncer reads it — or a task's
+// conductor's (Phase "", Role conductor), which the syncer drives the same
+// way except where conductor() says otherwise.
 type phaseRun struct {
 	ID, Org, ProjectID, TaskID, Phase, Status, Control string
+	Role                                               string
 	Category                                           string
 	LuxRunID, LuxState, LuxStopReason                  string
 	PushRequestID                                      string
@@ -157,6 +164,8 @@ type phaseRun struct {
 	PRFeedback                     json.RawMessage
 	FindingIDs, BlockingSeverities []string
 	Attempt                        int
+	// A conductor whose turn ended longer ago than its warm period.
+	WarmOver bool
 	// Aborted or failed and worth resuming (runs.keep), and whether the
 	// time it is kept for has passed.
 	Keep, KeepExpired bool
@@ -166,7 +175,17 @@ type phaseRun struct {
 	ImageBuildID string
 }
 
-const runColumns = `r.id, r.organization_id, r.project_id, r.task_id, r.phase::text, r.status::text, r.control::text,
+// conductor says whether r is its task's conductor: no phase, never
+// finished at a turn's end, never published.
+func (r phaseRun) conductor() bool { return r.Phase == "" && r.Role == delivery.RoleConductor }
+
+// sweptRuns (SQL, over runs r): the Runs the syncer drives — every phase
+// Run, and each task's conductor. Not a branch preview, nor a Run made by
+// hand through the API.
+const sweptRuns = `(r.phase IS NOT NULL OR (r.role = 'conductor' AND r.kind = 'agent'))`
+
+const runColumns = `r.id, r.organization_id, r.project_id, r.task_id, COALESCE(r.phase::text, ''), r.status::text, r.control::text,
+	COALESCE(r.role::text, ''),
 	COALESCE(r.category, ''),
 	COALESCE(r.lux_run_id, ''), COALESCE(r.lux_state, ''), COALESCE(r.lux_stop_reason, ''),
 	COALESCE(r.push_request_id, ''), COALESCE(r.push_branch, ''), cardinality(r.lux_pushes) > 0, r.base_refs, r.base_shas, r.turn_done_at IS NOT NULL,
@@ -186,13 +205,15 @@ const runColumns = `r.id, r.organization_id, r.project_id, r.task_id, r.phase::t
 	` + resumable + `,
 	COALESCE(lim.idle_secs > 0 AND ` + quiet + `, false), r.idle_nudged_at IS NOT NULL, ` + quietSince + `,
 	r.push_result, r.pr_feedback, r.finding_ids, r.blocking_severities, r.attempt,
+	COALESCE(r.turn_done_at < now() - make_interval(secs => lim.warm_secs), false),
 	r.keep, COALESCE(r.kept_until <= now(), false), r.finishes, COALESCE(r.image_build_id, '')`
 
 // runFrom is what runColumns reads from: the Run, whether it has anything
 // open for a person (ask.open, delivery.OpenAsk: asked once per row, read
 // in several places), and how long its project
 // lets an agent wait on a person (park_secs) or stay quiet (idle_secs, 0 for
-// never) — the project's delivery policy, over its organization's, over the
+// never), and a conductor stay warm after its turn (warm_secs) — the
+// project's delivery policy, over its organization's, over the
 // factory's defaults.
 // Its parameters are Syncer.limits.
 const runFrom = `runs r JOIN projects p ON p.id = r.project_id JOIN organizations o ON o.id = r.organization_id
@@ -200,7 +221,9 @@ const runFrom = `runs r JOIN projects p ON p.id = r.project_id JOIN organization
 		COALESCE((p.delivery_policy->>'parkAfterMinutes')::float8 * 60, (o.delivery_policy->>'parkAfterMinutes')::float8 * 60,
 			$1::float8) AS park_secs,
 		COALESCE((p.delivery_policy->>'idleNudgeMinutes')::float8 * 60, (o.delivery_policy->>'idleNudgeMinutes')::float8 * 60,
-			$2::float8) AS idle_secs) lim
+			$2::float8) AS idle_secs,
+		COALESCE((p.delivery_policy->>'conductorWarmMinutes')::float8 * 60, (o.delivery_policy->>'conductorWarmMinutes')::float8 * 60,
+			$3::float8) AS warm_secs) lim
 	CROSS JOIN LATERAL (SELECT ` + delivery.OpenAsk + ` AS open) ask`
 
 // quiet (SQL, over runFrom): the agent is mid-turn, running no tool, waiting
@@ -220,49 +243,69 @@ const unreadGraceSecs = `120`
 
 // resumable (SQL): a paused Run that is due to be resumed. A person asked;
 // or dude paused it itself and its reason is over — a repository to bring
-// (at once), a person it waited on (once nothing is open for them). An idle
+// (at once), a person it waited on (once nothing is open for them), a
+// conductor parked after its warm period (once someone wrote to it). An idle
 // park, like a person's own pause, waits for a person's Resume.
 const resumable = `(r.status = 'paused' AND (r.control = 'resume' OR r.dude_pause = 'repository'
-	OR (r.dude_pause = 'person' AND NOT ask.open)))`
+	OR (r.dude_pause = 'person' AND NOT ask.open)
+	OR (r.dude_pause = 'conductor' AND ` + unsentDirective + `)))`
 
-// limits are runFrom's parameters: the factory's grace before parking and
-// idle limit, in seconds, for projects that set none — the syncer's own if
-// it has them, else delivery.DefaultPolicy's.
+// unsentDirective (SQL, over runs r): something is queued for the agent
+// that lux does not have yet.
+const unsentDirective = `EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL AND d.failed_at IS NULL)`
+
+// limits are runFrom's parameters: the factory's grace before parking, idle
+// limit and conductor's warm period, in seconds, for projects that set none
+// — the syncer's own if it has them, else delivery.DefaultPolicy's.
 func (s *Syncer) limits() []any {
 	d := delivery.DefaultPolicy()
-	park, idle := s.ParkAfter, s.IdleAfter
+	park, idle, warm := s.ParkAfter, s.IdleAfter, s.ConductorWarm
 	if park == 0 {
 		park = time.Duration(d.ParkAfterMinutes) * time.Minute
 	}
 	if idle == 0 {
 		idle = time.Duration(d.IdleNudgeMinutes) * time.Minute
 	}
-	return []any{park.Seconds(), idle.Seconds()}
+	if warm == 0 {
+		warm = time.Duration(d.ConductorWarmMinutes) * time.Minute
+	}
+	return []any{park.Seconds(), idle.Seconds(), warm.Seconds()}
 }
 
 func scan(row pgx.Row) (phaseRun, error) {
 	var r phaseRun
-	err := row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.TaskID, &r.Phase, &r.Status, &r.Control,
+	err := row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.TaskID, &r.Phase, &r.Status, &r.Control, &r.Role,
 		&r.Category, &r.LuxRunID, &r.LuxState, &r.LuxStopReason,
 		&r.PushRequestID, &r.PushBranch, &r.HoldsPushable, &r.BaseRefs, &r.BaseSHAs, &r.TurnDone, &r.HasDirectives, &r.Unread, &r.RepoApproved,
 		&r.DudePause, &r.Waiting, &r.ParkNow, &r.Resumable, &r.Quiet, &r.Nudged, &r.QuietSince,
-		&r.PushResult, &r.PRFeedback, &r.FindingIDs, &r.BlockingSeverities, &r.Attempt, &r.Keep, &r.KeepExpired, &r.Finishes, &r.ImageBuildID)
+		&r.PushResult, &r.PRFeedback, &r.FindingIDs, &r.BlockingSeverities, &r.Attempt, &r.WarmOver,
+		&r.Keep, &r.KeepExpired, &r.Finishes, &r.ImageBuildID)
 	return r, err
 }
 
-// Sweep takes one pass over every phase Run dude still has something to do
-// for, advancing each as far as it can. Cross-tenant, because finding the
-// Runs that need attention is the job; each is then handled in its own
-// organization's scope.
-func (s *Syncer) Sweep(ctx context.Context) (int, error) {
+// sweepBatch is how many Runs one sweep takes up.
+const sweepBatch = 1000
+
+// actionable (SQL, over runFrom): a Run the sweep has something to do for
+// now, sorted ahead of those it only follows. A finished phase is
+// collected. A conductor's finished turn is work only when something is
+// queued for it, its warm period is over, or its container stopped: a
+// warm, quiet conductor waits for a person, and a thousand of them must
+// not keep a newer pending Run out of the batch.
+const actionable = `(r.status = 'pending' OR r.control <> 'none' OR ` + resumable + `
+	OR (r.turn_done_at IS NOT NULL AND (r.phase IS NOT NULL OR ` + unsentDirective + `
+		OR r.turn_done_at < now() - make_interval(secs => lim.warm_secs)
+		OR r.lux_state IN ('stopped', 'succeeded', 'failed', 'cancelled', 'lost'))))`
+
+// due is what one sweep takes up: every live Run, not the oldest N — a Run
+// with nothing to do still needs its stream followed, and a paused, idle
+// or quiet Run must not crowd out a newer one that is waiting to be
+// submitted. Runs with something to do sort first (actionable).
+func (s *Syncer) due(ctx context.Context) ([]phaseRun, error) {
 	var runs []phaseRun
 	err := s.DB.InSystem(ctx, "phase-sync", func(tx pgx.Tx) error {
-		// Every live Run, not the oldest N: a Run with nothing to do still
-		// needs its stream followed, and a paused or idle Run must not
-		// crowd out a newer one that is waiting to be submitted. Runs with
-		// something to do sort first.
 		rows, err := tx.Query(ctx, `SELECT `+runColumns+` FROM `+runFrom+`
-			WHERE r.phase IS NOT NULL
+			WHERE `+sweptRuns+`
 			  AND (r.status IN ('pending', 'scheduled', 'starting', 'running')
 			       OR `+resumable+`
 			       -- Aborted or failed in dude, and not yet kept or cancelled in
@@ -272,15 +315,27 @@ func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 			           AND (r.lux_stop_reason IS DISTINCT FROM 'kept' OR r.kept_until <= now())))
 			  -- An abort does not wait out the back-off of the step it ends.
 			  AND (r.status = 'aborted' OR r.next_attempt_at IS NULL
-			       OR r.next_attempt_at <= now() + make_interval(secs => $3::float8))
-			ORDER BY (r.status = 'pending' OR r.control <> 'none' OR r.turn_done_at IS NOT NULL) DESC, r.created_at
-			LIMIT 1000`, append(s.limits(), s.RetryAhead.Seconds())...)
+			       OR r.next_attempt_at <= now() + make_interval(secs => $4::float8))
+			ORDER BY `+actionable+` DESC, r.created_at
+			LIMIT $5`, append(s.limits(), s.RetryAhead.Seconds(), sweepBatch)...)
 		if err != nil {
 			return err
 		}
 		runs, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (phaseRun, error) { return scan(row) })
 		return err
 	})
+	return runs, err
+}
+
+// Sweep takes one pass over every phase Run dude still has something to do
+// for, advancing each as far as it can. Cross-tenant, because finding the
+// Runs that need attention is the job; each is then handled in its own
+// organization's scope.
+func (s *Syncer) Sweep(ctx context.Context) (int, error) {
+	if err := s.handOverUnheard(ctx); err != nil {
+		s.Log.Warn("finding stopped conductors' messages failed", "error", err)
+	}
+	runs, err := s.due(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -348,6 +403,9 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 			return true, s.nudge(ctx, r)
 		}
 	}
+	if r.TurnDone && r.conductor() {
+		return s.betweenTurns(ctx, r)
+	}
 	if r.TurnDone {
 		// A steer that reached dude as the turn ended holds the Run open:
 		// sent, the agent takes it as its next turn, whose end is the one
@@ -369,6 +427,75 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 		return false, nil
 	}
 	return s.deliverDirectives(ctx, r)
+}
+
+// betweenTurns is a conductor whose turn has ended. It is never finished:
+// a person's next message is its next turn. It stays running for its warm
+// period, then is parked (dude_pause 'conductor') until someone writes.
+// One whose container stopped on its own ended there, and a new message
+// gets a new conductor.
+func (s *Syncer) betweenTurns(ctx context.Context, r phaseRun) (bool, error) {
+	if lux.Terminal(r.LuxState) && r.LuxStopReason == "" && r.Control == "none" {
+		return true, s.endConductor(ctx, r, "its container stopped")
+	}
+	if r.Status != statusRunning || r.LuxState != "running" {
+		return false, nil
+	}
+	switch {
+	case r.HasDirectives:
+		return s.deliverDirectives(ctx, r)
+	case r.Unread:
+		return false, nil
+	case r.WarmOver && r.Control == "none":
+		return true, s.requestPause(ctx, r, "conductor", "parked after its warm period")
+	}
+	return false, nil
+}
+
+// endConductor completes a conductor that can no longer be resumed, under
+// its task's Chat lock, handing what it never read to the next conductor
+// (delivery.EndConductor).
+func (s *Syncer) endConductor(ctx context.Context, r phaseRun, why string) error {
+	s.unfollow(r.ID)
+	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		if err := delivery.LockChat(ctx, tx, r.TaskID); err != nil {
+			return err
+		}
+		return delivery.EndConductor(ctx, tx, delivery.RunRef{Org: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, RunID: r.ID}, why)
+	})
+}
+
+// handOverUnheard settles input left on conductors that ended some other
+// way — failed mid-turn, or aborted — while a message was on its way to
+// them: handed to the task's next conductor, or, for one a person
+// aborted, failed saying so (delivery.HandOver).
+func (s *Syncer) handOverUnheard(ctx context.Context) error {
+	type ended struct{ ID, Org, ProjectID, TaskID, Status string }
+	var todo []ended
+	if err := s.DB.InSystem(ctx, "phase-sync", func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.project_id, r.task_id, r.status::text
+			FROM runs r WHERE `+delivery.Unheard+` ORDER BY r.ended_at LIMIT 100`)
+		if err != nil {
+			return err
+		}
+		todo, err = pgx.CollectRows(rows, pgx.RowToStructByPos[ended])
+		return err
+	}); err != nil {
+		return err
+	}
+	for _, e := range todo {
+		if err := s.DB.InOrg(ctx, e.Org, func(tx pgx.Tx) error {
+			if err := delivery.LockChat(ctx, tx, e.TaskID); err != nil {
+				return err
+			}
+			_, err := delivery.HandOver(ctx, tx, delivery.RunRef{Org: e.Org, ProjectID: e.ProjectID, TaskID: e.TaskID, RunID: e.ID},
+				e.Status != statusAborted)
+			return err
+		}); err != nil {
+			s.Log.Warn("handing a stopped conductor's messages on failed", "run", e.ID, "error", err)
+		}
+	}
+	return nil
 }
 
 // submit builds the Run's spec and hands it to lux. A Run whose image is
@@ -485,7 +612,7 @@ func (s *Syncer) image(ctx context.Context, r phaseRun) (string, *images.RunImag
 		if err != nil {
 			return err
 		}
-		site.Role = images.RoleImage(delivery.PromptRoleForPhase[r.Phase], projectModels, orgModels, known)
+		site.Role = images.RoleImage(delivery.PromptRoleFor(r.Phase, r.Role), projectModels, orgModels, known)
 		site.Fallback = s.Agent.DefaultImage
 		ref, got, err = images.Choose(ctx, tx, site, s.Agent.Layer, r.ID, r.ImageBuildID)
 		err, outcome = images.Settle(err)
@@ -542,17 +669,19 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var feedback []forge.ActionableFeedback
 	var prompts delivery.Prompts
 	var sizes delivery.Sizes
+	var briefing string
 	var tier delivery.Tier
 	var noTier string
-	settingsRole := delivery.PromptRoleForPhase[r.Phase]
+	settingsRole := delivery.PromptRoleFor(r.Phase, r.Role)
 	var settings delivery.RoleSettings
 	_ = json.Unmarshal(r.PRFeedback, &feedback)
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
-			SELECT w.title, w.goal, w.acceptance_criteria, p.agent_models, o.default_agent_models
+			SELECT w.title, w.goal, w.acceptance_criteria, p.agent_models, o.default_agent_models,
+				COALESCE((SELECT prompt FROM runs WHERE id = $2), '')
 			FROM tasks w JOIN projects p ON p.id = w.project_id JOIN organizations o ON o.id = p.organization_id
-			WHERE w.id = $1`, r.TaskID).
-			Scan(&title, &goal, &criteria, &projectModels, &orgModels); err != nil {
+			WHERE w.id = $1`, r.TaskID, r.ID).
+			Scan(&title, &goal, &criteria, &projectModels, &orgModels, &briefing); err != nil {
 			return fmt.Errorf("load task: %w", err)
 		}
 		var err error
@@ -570,7 +699,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		if sizes, err = delivery.LoadSizes(ctx, tx); err != nil {
 			return err
 		}
-		if prompts, err = delivery.LoadPrompts(ctx, tx, r.ID, r.ProjectID, r.Phase); err != nil {
+		if prompts, err = delivery.LoadPrompts(ctx, tx, r.ID, r.ProjectID, settingsRole); err != nil {
 			return err
 		}
 		if repos, err = delivery.TaskRepositories(ctx, tx, r.TaskID); err != nil {
@@ -610,6 +739,9 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		return lux.Spec{}, nil, errNoModel(noTier)
 	}
 	role := delivery.RoleForPhase[r.Phase]
+	if r.conductor() {
+		role = delivery.RoleConductor
+	}
 
 	var ac []string
 	_ = json.Unmarshal(criteria, &ac)
@@ -620,13 +752,13 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		if base := r.BaseRefs[repo.Name]; base != "" {
 			ref = base
 		}
-		readOnly := repo.Access == "read"
+		readOnly := repo.Access == "read" || r.conductor()
 		in.Repos = append(in.Repos, specRepo{Name: repo.Name, URL: repo.URL, Ref: ref, ReadOnly: readOnly})
 		promptRepos = append(promptRepos, delivery.PromptRepo{Name: repo.Name, Path: RepoPath(repo.Name), ReadOnly: readOnly})
 	}
 	in.RunID, in.OrganizationID, in.TaskID, in.Phase, in.Role = r.ID, r.Org, r.TaskID, r.Phase, role
 	in.Model, in.ModelTier, in.Effort, in.TimeLimitMinutes = tier.Model, tier.Name, settings.Effort, settings.TimeLimitMinutes
-	if m, ok := sizes.ForRole(delivery.PromptRoleForPhase[r.Phase], projectModels, orgModels); ok {
+	if m, ok := sizes.ForRole(settingsRole, projectModels, orgModels); ok {
 		in.Machine = &m
 	}
 	in.Image = image
@@ -650,7 +782,11 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		promptIn.BaseRef = in.Repos[0].Ref
 	}
 	in.Prompt = delivery.Prompt(r.Phase, promptIn)
-	// Pushed only by a phase that publishes. Even with nowhere to change
+	if r.conductor() {
+		in.Prompt = delivery.ConductorPrompt(briefing, promptIn)
+	}
+	// Pushed only by a phase that publishes — never a conductor, which has
+	// no phase. Even with nowhere to change
 	// yet: a repository a person lets it change mid-Run arrives at a
 	// resume, and lux pushes only to the branch the spec named at submit.
 	if delivery.Publishes[r.Phase] {
@@ -966,6 +1102,11 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 // Repositories that did not move are left alone — no branch, no PR — and a
 // read-only one is never pushed at all (lux reports it "skipped").
 func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.RunHead, error) {
+	if r.conductor() {
+		// Read-only: its spec names no push branch, and nothing it holds
+		// may move the task's branch.
+		return nil, fmt.Errorf("a conductor does not publish")
+	}
 	var push struct {
 		Results []struct {
 			Repo, Branch, Commit, Status, Error string
@@ -1113,11 +1254,12 @@ func pushRequest(r phaseRun) string {
 // end settles the lux Run of a failed or aborted Run. One worth resuming
 // (runs.keep) is stopped and kept until kept_until, its workspace and the
 // agent's conversation with it; then, or straight away for any other, it is
-// cancelled.
+// cancelled. A conductor is never kept: nothing resumes an ended one, and
+// the next message starts another.
 func (s *Syncer) end(ctx context.Context, r phaseRun) error {
 	s.unfollow(r.ID)
 	var err error
-	if r.Keep && !r.KeepExpired && r.LuxRunID != "" && r.LuxState != "cancelled" && r.LuxState != "succeeded" {
+	if r.Keep && !r.KeepExpired && !r.conductor() && r.LuxRunID != "" && r.LuxState != "cancelled" && r.LuxState != "succeeded" {
 		err = s.keep(ctx, r)
 	} else {
 		// Not worth keeping, its time is up, or lux has nothing left to resume.
@@ -1271,20 +1413,29 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 		// Taken back up from a park — whoever resumes it: a person may have
 		// made dude's park their own pause meanwhile.
 		var last, reason, taskStatus string
-		if err := tx.QueryRow(ctx, `SELECT event_type, COALESCE(payload->>'reason', ''), COALESCE(payload->>'taskStatus', '')
+		err = tx.QueryRow(ctx, `SELECT event_type, COALESCE(payload->>'reason', ''), COALESCE(payload->>'taskStatus', '')
 			FROM events WHERE run_id = $1 AND event_type IN ($2, $3) ORDER BY cursor DESC LIMIT 1`,
-			r.ID, evParked, evUnparked).Scan(&last, &reason, &taskStatus); err != nil || last != evParked {
-			if db.IsNotFound(err) {
-				return nil
-			}
+			r.ID, evParked, evUnparked).Scan(&last, &reason, &taskStatus)
+		if err != nil && !db.IsNotFound(err) {
 			return err
 		}
-		if taskStatus != "" {
+		parked := err == nil && last == evParked
+		if parked && taskStatus != "" {
 			// The flag its idle park raised, lowered.
 			if _, err := delivery.SetTaskStatusTx(ctx, tx, r.Org, r.ProjectID, r.TaskID, "awaiting_input", taskStatus,
 				"a person resumed the agent"); err != nil {
 				return err
 			}
+		}
+		// A phase agent taken back up, from a park or a person's pause, may
+		// have been the last thing the task waited on a person for.
+		if !r.conductor() {
+			if err := delivery.EndConductorWait(ctx, tx, r.Org, r.ProjectID, r.TaskID); err != nil {
+				return err
+			}
+		}
+		if !parked {
+			return nil
 		}
 		// The epoch it resumed into, its timing's (resumeAccepted).
 		return s.event(ctx, tx, r, evUnparked, ledger.ActorSystem,
@@ -1336,8 +1487,8 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 // requestPause asks for a graceful pause, saying why, marked as dude's own
 // (kind is a dude_pause) so the syncer knows when to resume it; a person's
 // later pause or resume wins. A pause other than for a repository is a
-// park, and says so in the Run's chat; an idle one also raises the work
-// item for a person to look at (lowered when they resume it).
+// park, and says so in the Run's chat; an idle one of a phase Run also
+// raises the work item for a person to look at (lowered when they resume it).
 //
 // The sweep decided from what it read; the pause checks it still holds — a
 // Run parked for a person still waits on one, an idle one has done nothing
@@ -1353,6 +1504,7 @@ func (s *Syncer) requestPause(ctx context.Context, r phaseRun, kind, why string)
 			  AND ($3 <> 'person' OR (r.waiting_since IS NOT NULL AND `+delivery.OpenAsk+`))
 			  AND ($3 <> 'idle' OR (r.turn_done_at IS NULL AND r.waiting_since IS NULL
 			       AND cardinality(r.open_tool_calls) = 0 AND `+quietSince+` = $4))
+			  AND ($3 <> 'conductor' OR (r.turn_done_at IS NOT NULL AND NOT `+unsentDirective+`))
 			RETURNING r.control_requested_at`, r.ID, why, kind, r.QuietSince).Scan(&parkedAt)
 		if db.IsNotFound(err) {
 			return nil
@@ -1361,9 +1513,11 @@ func (s *Syncer) requestPause(ctx context.Context, r phaseRun, kind, why string)
 			return err
 		}
 		var taskStatus string
-		if kind == "idle" {
+		if kind == "idle" && !r.conductor() {
 			// Raised for a person to look at, from whatever it was (running,
-			// in review); put back when the Run is taken up again.
+			// in review); put back when the Run is taken up again. Not for a
+			// conductor's: it changes nothing about the task, and its park
+			// shows in Chat.
 			if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1`, r.TaskID).Scan(&taskStatus); err != nil {
 				return err
 			}

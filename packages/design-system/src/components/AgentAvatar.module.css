@@ -46,13 +46,13 @@
   border-radius: var(--ds-radius-face-agent);
 }
 
-/* Roles. Shape channel: each role has its own glyph; the orchestrator is
+/* Roles. Shape channel: each role has its own glyph; the conductor is
    additionally round, so it reads as "the parent" even in monochrome. */
-.orchestrator {
-  --role-fg: var(--ds-role-orchestrator-fg);
-  --role-bg: var(--ds-role-orchestrator-bg);
-  --role-solid: var(--ds-role-orchestrator-solid);
-  --role-on-solid: var(--ds-role-orchestrator-on-solid);
+.conductor {
+  --role-fg: var(--ds-role-conductor-fg);
+  --role-bg: var(--ds-role-conductor-bg);
+  --role-solid: var(--ds-role-conductor-solid);
+  --role-on-solid: var(--ds-role-conductor-on-solid);
   border-radius: var(--ds-radius-full);
 }
 .investigator {

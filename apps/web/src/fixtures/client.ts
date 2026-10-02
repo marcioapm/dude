@@ -22,6 +22,7 @@ import { ApiClient, ApiError, type Member, type ProjectDetail, type RecoverActio
 import { EPIC, FINDINGS, MACHINE_SIZES, METRICS, MODEL_TIERS, ORG, PEOPLE, PROJECT, PULL_REQUEST, REVIEWERS, RUN_ID, RUN_IMPLEMENT, SETTINGS, TASK_ID, YOU, eventsFor, logsFor, navigationFor, runDetailFor, serversFor, taskFor } from "./data.ts";
 
 type LedgerQuery = { runId?: string | undefined; taskId?: string | undefined; after?: number | undefined };
+export type { LedgerQuery };
 
 /**
  * An EventSource over the fixtures: on open it replays the scope's ledger
@@ -112,7 +113,7 @@ export class FixtureClient extends ApiClient {
     // The tree and the board say what the task's page does.
     if (this.#task.status !== base.status) this.#nav = this.#nav.map((p) => ({ ...p,
       epics: p.epics?.map((e) => ({ ...e, tasks: e.tasks.map((t) => (t.id === TASK_ID ? { ...t, status: this.#task.status, runs: undefined } : t)) })) }));
-    ledger = (params) => this.#ledger(params);
+    ledger = (params) => this.ledgerFor(params);
   }
 
   /**
@@ -161,8 +162,8 @@ export class FixtureClient extends ApiClient {
     return { action };
   }
 
-  /** The scope's events after a cursor, as the API and the stream's backfill both answer. */
-  #ledger({ runId, taskId, after = 0 }: LedgerQuery): PersistedEvent[] {
+  /** The scope's events after a cursor, as the API and the stream's backfill both answer. A test's client adds its own. */
+  protected ledgerFor({ runId, taskId, after = 0 }: LedgerQuery): PersistedEvent[] {
     return this.#events.filter((e) => e.cursor > after && (!runId || e.runId === runId) && (!taskId || e.taskId === taskId));
   }
 
@@ -212,7 +213,7 @@ export class FixtureClient extends ApiClient {
     return id === PROJECT.id ? Promise.resolve(PROJECT) : Promise.reject(new ApiError(404, "not_found", "No such project."));
   }
   override events(params: LedgerQuery & { limit?: number }) {
-    const events = this.#ledger(params);
+    const events = this.ledgerFor(params);
     return Promise.resolve({ events, nextCursor: events.at(-1)?.cursor ?? params.after ?? 0 });
   }
   override listFindings(taskId: string) {

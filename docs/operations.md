@@ -431,6 +431,7 @@ does not refuse to start.
 | `orchestrator.pr_reconcile` | `DUDE_PR_RECONCILE` | `15m` | orchestrator | How often open pull requests are re-read as a backstop to webhooks (a Go duration). |
 | `orchestrator.park_after` | `DUDE_PARK_AFTER` | the delivery policy's | orchestrator | Grace before a Run waiting on a person is parked, for projects that set none (a Go duration). |
 | `orchestrator.idle_after` | `DUDE_IDLE_AFTER` | the delivery policy's | orchestrator | Quiet time before an idle Run is nudged and parked, for projects that set none. |
+| `orchestrator.conductor_warm` | `DUDE_CONDUCTOR_WARM` | the delivery policy's | orchestrator | How long a task's conductor stays running after its turn before it is parked, for projects that set none. |
 | `orchestrator.diff_every` | `DUDE_DIFF_EVERY` | `15s` | orchestrator | How often a working agent's diff is read besides after its edits. |
 | `orchestrator.machine_usd_per_hour` | `DUDE_MACHINE_USD_PER_HOUR` | `0.20` | orchestrator | What an hour of a lux host costs, recorded with each Run; not negative. |
 | `orchestrator.lux_cost_every` | `DUDE_LUX_COST_EVERY` | `2m` | orchestrator | How often an agent's Run's cost is read from lux (`GET /v1/runs/{id}/cost`), until lux reports it final or eight days after the Run ended; positive. |

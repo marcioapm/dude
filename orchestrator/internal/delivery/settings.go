@@ -105,13 +105,13 @@ type Prompts struct {
 	Project, ProjectMode string
 }
 
-// LoadPrompts reads the prompts a phase Run is told with. A Run already
+// LoadPrompts reads the prompts a Run is told with, by its prompt role
+// (PromptRoleFor). A Run already
 // given to lux is told what it was first told — the versions recorded on
 // it — so a resume does not change its instructions mid-conversation. A new
 // one takes the current versions, and records them.
-func LoadPrompts(ctx context.Context, tx pgx.Tx, runID, projectID, phase string) (Prompts, error) {
+func LoadPrompts(ctx context.Context, tx pgx.Tx, runID, projectID, role string) (Prompts, error) {
 	var ps Prompts
-	role := PromptRoleForPhase[phase]
 	if role == "" {
 		return ps, nil
 	}

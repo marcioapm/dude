@@ -161,4 +161,18 @@ describe("what stopped the task", () => {
     // Without that decision, the failure is what stopped it.
     expect(stopOf(task, [ev("task.decided", 5, { action: "stop" })], people).run?.id).toBe("run_old");
   });
+
+  test("a conductor that ended later is not the delivery agent that stopped", () => {
+    const base = taskFor("a");
+    const day = (h: number) => `2026-10-02T${String(h).padStart(2, "0")}:00:00.000Z`;
+    const implementer = { ...base.runs[0]!, id: "run_impl", role: "implementer" as const, attempt: 1,
+      status: "aborted" as const, endedAt: day(10) };
+    const conductor = { ...base.runs[0]!, id: "run_cond", role: "conductor" as const, phase: null, attempt: 1,
+      status: "failed" as const, endedAt: day(11), error: "host lost" };
+    const task = { ...base, status: "aborted" as const, runs: [implementer, conductor] };
+    expect(stopOf(task, [], people).run?.id).toBe("run_impl");
+    // Nor does it count as the delivery's attempt.
+    const later = { ...task, runs: [implementer, { ...conductor, attempt: 2 }] };
+    expect(stopOf(later, [], people).run?.id).toBe("run_impl");
+  });
 });

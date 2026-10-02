@@ -76,6 +76,8 @@ export { ChatEvent, summarizeEventData, eventDetail, eventHasDetail, EVENT_SUMMA
 export type { ChatEventProps } from "./ChatEvent.tsx";
 export { ChatNotice } from "./ChatNotice.tsx";
 export type { ChatNoticeProps, ChatNoticeKind } from "./ChatNotice.tsx";
+export { TaskHistory } from "./TaskHistory.tsx";
+export type { TaskHistoryProps } from "./TaskHistory.tsx";
 export { ChatProgress, progressFraction } from "./ChatProgress.tsx";
 export type { ChatProgressProps } from "./ChatProgress.tsx";
 export { StepList, StepRow } from "./StepList.tsx";
