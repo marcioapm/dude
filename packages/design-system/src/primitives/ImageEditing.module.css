@@ -35,6 +35,10 @@
   left: auto;
   right: 0;
 }
+.toolbarBelow {
+  bottom: auto;
+  top: calc(100% + var(--ds-space-6));
+}
 .sep {
   width: 1px;
   align-self: stretch;

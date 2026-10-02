@@ -11,7 +11,7 @@
  * criterion, in this field or another editor's on the page.
  */
 
-import { useCallback, useEffect, useId, useRef, useState, type DragEvent, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type DragEvent, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
 import { attachmentReferences } from "@dude/domain";
 import { cx } from "../util/cx.ts";
 import { IMAGE_SIZES, cutReference, insertReference, moveReference, moveReferenceTo, removeReference, snapWidth, withLayout, type FieldKind, type ImageLayout, type ImageSize } from "../util/imageLayout.ts";
@@ -230,6 +230,14 @@ function EditableImage({ n, alt, layout, children, fieldKey, selected, onSelect,
   const passClick = useRef(false);
   const resizing = useRef(false);
   const [drag, setDrag] = useState<{ width: number; label: string } | null>(null);
+  // The frame clips what overflows it: with no room above the image in the panel, the toolbar goes below.
+  const [below, setBelow] = useState(false);
+  useLayoutEffect(() => {
+    const fig = ref.current;
+    const panel = fig?.closest<HTMLElement>('[role="tabpanel"]');
+    if (!selected || !fig || !panel) return;
+    setBelow(fig.getBoundingClientRect().top - panel.getBoundingClientRect().top < 44);
+  }, [selected]);
 
   useEffect(() => {
     if (selected && !ref.current?.contains(document.activeElement)) ref.current?.focus({ preventScroll: true });
@@ -323,7 +331,7 @@ function EditableImage({ n, alt, layout, children, fieldKey, selected, onSelect,
       {children}
       {selected ? (
         <>
-          <span className={cx(styles["toolbar"], layout.align === "right" && styles["toolbarRight"])} role="toolbar" aria-label="Image layout" data-image-toolbar
+          <span className={cx(styles["toolbar"], layout.align === "right" && styles["toolbarRight"], below && styles["toolbarBelow"])} role="toolbar" aria-label="Image layout" data-image-toolbar
             onKeyDown={(e) => e.stopPropagation()}>
             {SIZES.map((s) => (
               <Tool key={s.size} icon={s.icon} label={s.label} pressed={layout.size === s.size}
