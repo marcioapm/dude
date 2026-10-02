@@ -165,7 +165,7 @@ func run(log *slog.Logger) error {
 	syncer := &phases.Syncer{
 		DB: database, Lux: luxClient, Objects: objectStore,
 		Forges: forges, Agent: agent, Registry: registryLogin, Log: log,
-		ParkAfter: set.ParkAfter, IdleAfter: set.IdleAfter,
+		ParkAfter: set.ParkAfter, IdleAfter: set.IdleAfter, KeepFor: set.KeepStopped,
 		DiffEvery: set.DiffEvery, MachineUSDPerHour: set.MachineUSDPerHour,
 	}
 	defer syncer.Stop()
@@ -199,9 +199,9 @@ func run(log *slog.Logger) error {
 		{"workflow", 250 * time.Millisecond, func(ctx context.Context) (int, error) { return runtime.Dispatch(ctx, stepSlots) }},
 		{"phase-sync", time.Second, syncer.Sweep},
 		{"phase-notifier", time.Second, func(ctx context.Context) (int, error) {
-			return phases.NotifyFinished(ctx, database, func(ctx context.Context, org, wf, runID, status string) error {
+			return phases.NotifyFinished(ctx, database, func(ctx context.Context, org, wf, runID, status, key string) error {
 				return runtime.Signal(ctx, org, wf, delivery.SignalPhaseFinished,
-					map[string]string{"runId": runID, "status": status}, "phase-finished:"+runID)
+					map[string]string{"runId": runID, "status": status}, key)
 			})
 		}},
 		{"previews", time.Second, previews.Sweep},

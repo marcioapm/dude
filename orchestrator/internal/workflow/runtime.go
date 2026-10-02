@@ -145,31 +145,47 @@ func (r *Runtime) Start(ctx context.Context, o StartOptions) (id string, dedupli
 		return "", false, err
 	}
 	err = r.db.InOrg(ctx, o.OrganizationID, func(tx pgx.Tx) error {
-		err := tx.QueryRow(ctx, `
-			INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, status, step, state, task_id)
-			VALUES ($1, $2, $3, $4, 'running', $5, $6::jsonb, $7)
-			ON CONFLICT (organization_id, workflow_type, idempotency_key) DO NOTHING
-			RETURNING id`,
-			ids.New(ids.WorkflowRun), o.OrganizationID, o.Type, o.IdempotencyKey, def.InitialStep, input,
-			db.Nullable(o.TaskID)).Scan(&id)
-		if err == nil {
-			return nil
-		}
-		if !db.IsNotFound(err) {
-			return err
-		}
-		deduplicated = true
-		err = tx.QueryRow(ctx, `SELECT id FROM workflow_runs WHERE workflow_type = $1 AND idempotency_key = $2`,
-			o.Type, o.IdempotencyKey).Scan(&id)
-		if db.IsNotFound(err) {
-			// Conflicted, yet the existing run is invisible: the tenant is
-			// wrong, or it was deleted in between. Say so plainly.
-			return fmt.Errorf("workflow start %s/%s conflicted, but the existing run is not visible to %s",
-				o.Type, o.IdempotencyKey, o.OrganizationID)
-		}
+		id, deduplicated, err = r.start(ctx, tx, def, o, input)
 		return err
 	})
 	return id, deduplicated, err
+}
+
+// StartTx is Start in the caller's transaction, for a start that must
+// commit with something else: a task taken up again and its new delivery.
+func (r *Runtime) StartTx(ctx context.Context, tx pgx.Tx, o StartOptions) (string, error) {
+	def := r.definition(o.Type)
+	if def == nil {
+		return "", fmt.Errorf("unknown workflow type: %s", o.Type)
+	}
+	input, err := json.Marshal(o.Input)
+	if err != nil {
+		return "", err
+	}
+	id, _, err := r.start(ctx, tx, def, o, input)
+	return id, err
+}
+
+func (r *Runtime) start(ctx context.Context, tx pgx.Tx, def *Definition, o StartOptions, input []byte) (id string, deduplicated bool, err error) {
+	err = tx.QueryRow(ctx, `
+		INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, status, step, state, task_id)
+		VALUES ($1, $2, $3, $4, 'running', $5, $6::jsonb, $7)
+		ON CONFLICT (organization_id, workflow_type, idempotency_key) DO NOTHING
+		RETURNING id`,
+		ids.New(ids.WorkflowRun), o.OrganizationID, o.Type, o.IdempotencyKey, def.InitialStep, input,
+		db.Nullable(o.TaskID)).Scan(&id)
+	if !db.IsNotFound(err) {
+		return id, false, err
+	}
+	err = tx.QueryRow(ctx, `SELECT id FROM workflow_runs WHERE workflow_type = $1 AND idempotency_key = $2`,
+		o.Type, o.IdempotencyKey).Scan(&id)
+	if db.IsNotFound(err) {
+		// Conflicted, yet the existing run is invisible: the tenant is
+		// wrong, or it was deleted in between. Say so plainly.
+		return "", true, fmt.Errorf("workflow start %s/%s conflicted, but the existing run is not visible to %s",
+			o.Type, o.IdempotencyKey, o.OrganizationID)
+	}
+	return id, true, err
 }
 
 // ErrNotFound is returned for a workflow run the organization cannot see.

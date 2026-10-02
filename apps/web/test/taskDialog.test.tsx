@@ -94,7 +94,7 @@ describe("a new task's goal", () => {
 
 describe("editing a task saved before the rule", () => {
   const old = (delivering: boolean): ExistingTask => ({
-    id: "task_old", delivering, title: "Old task", goal: "", acceptanceCriteria: [], epicId: null, repositories: [],
+    id: "task_old", fixed: delivering ? "all" : null, title: "Old task", goal: "", acceptanceCriteria: [], epicId: null, repositories: [],
   });
 
   test("opens without complaint, and saves once its goal is long enough", async () => {
@@ -160,5 +160,36 @@ describe("a new task's images", () => {
       canvas["getContext"] = saved.getContext;
       canvas["toBlob"] = saved.toBlob;
     }
+  });
+});
+
+describe("editing a task whose delivery stopped", () => {
+  test("what it asks for can change, its repositories cannot, and they are not sent", async () => {
+    const sent: unknown[] = [];
+    class Recording extends EpicsClient {
+      override updateTask(id: string, fields: Parameters<FixtureClient["updateTask"]>[1]) {
+        sent.push(fields);
+        return super.updateTask(id, fields);
+      }
+    }
+    const { unmount } = await mount(
+      <TooltipProvider>
+        <ToastProvider>
+          <TaskDialog client={new Recording("a")} projectId={PROJECT.id} onClose={() => {}} onSaved={() => {}}
+            existing={{ id: "task_stopped", fixed: "repositories", title: "Stopped task", goal: "Keep invoices in euros for EU customers.",
+              acceptanceCriteria: [], epicId: null, repositories: [] }} />
+        </ToastProvider>
+      </TooltipProvider>,
+    );
+    mounted.push(unmount);
+    await until(() => document.querySelector("[data-testid=task-goal]") && document.body.textContent?.includes(PROJECT.name), "the dialog, loaded");
+    expect(document.body.textContent).toContain("Its repositories are fixed.");
+    const title = document.querySelector<HTMLInputElement>("[data-testid=task-title]")!;
+    expect(title.disabled).toBe(false);
+    await set(title, HTMLInputElement.prototype, "Stopped task, reworded");
+    await act(async () => document.querySelector<HTMLButtonElement>("[data-testid=task-save]")!.click());
+    await until(() => sent.length > 0, "the save");
+    expect(sent[0]).toMatchObject({ title: "Stopped task, reworded" });
+    expect(sent[0]).not.toHaveProperty("repositories");
   });
 });

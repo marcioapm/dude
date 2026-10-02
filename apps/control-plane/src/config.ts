@@ -49,6 +49,7 @@ export const KEYS: readonly Key[] = [
   key("orchestrator.diff_every", "DUDE_DIFF_EVERY", "duration", "orchestrator", "15s"),
   key("orchestrator.machine_usd_per_hour", "DUDE_MACHINE_USD_PER_HOUR", "float", "orchestrator", "0.20"),
   key("orchestrator.lux_cost_every", "DUDE_LUX_COST_EVERY", "duration", "orchestrator", "2m"),
+  key("orchestrator.keep_stopped", "DUDE_KEEP_STOPPED", "duration", "orchestrator", "168h"),
   key("s3.bucket", "DUDE_S3_BUCKET", "string", "both"),
   key("s3.endpoint", "DUDE_S3_ENDPOINT", "string", "both"),
   key("s3.region", "DUDE_S3_REGION", "string", "both", "us-east-1"),

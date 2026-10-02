@@ -1,4 +1,4 @@
--- 070_attachments.sql — images a person sends an agent.
+-- 071_attachments.sql — images a person sends an agent.
 --
 -- A steer, an answer or a task's first prompt may carry images. Each is two
 -- objects in the photo bucket (DUDE_S3_BUCKET): the original as picked, and

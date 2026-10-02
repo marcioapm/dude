@@ -50,6 +50,7 @@ machine_usd_per_hour = 0.20                              # DUDE_MACHINE_USD_PER_
 # How often an agent's Run's cost is read from lux, until lux reports it
 # final or eight days after the Run ended. Positive.
 lux_cost_every = "2m"                                    # DUDE_LUX_COST_EVERY
+keep_stopped = "168h"                                    # DUDE_KEEP_STOPPED
 
 [s3]
 # The bucket people's photos and projects' images are kept in (backend).

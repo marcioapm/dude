@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
@@ -70,6 +71,29 @@ type State struct {
 	// Fix attempts per finding a person granted beyond the policy's, by
 	// sending a stuck review back to try again.
 	ExtraFixAttempts int `json:"extraFixAttempts,omitempty"`
+
+	// Which attempt at the task this delivery is: each start over is a new
+	// one, on a branch of its own. Zero from before attempts were kept here
+	// (the attempt is then the task's highest).
+	Attempt int `json:"attempt,omitempty"`
+	// The escalation a person stopped the delivery at, kept so the task can
+	// be picked back up from where it stopped.
+	Stopped *Escalation `json:"stopped,omitempty"`
+	// A person picking a stopped task back up (Recover), while the workflow
+	// carries it out.
+	Recover *Recover `json:"recover,omitempty"`
+}
+
+// Recover is a person picking a stopped task back up: resume the Runs that
+// stopped, at the step that waited on them, or try that step again.
+type Recover struct {
+	// "resume" or "retry". (Starting over is a new delivery, not this one.)
+	Action string `json:"action"`
+	// Resume: the step that waits on the Runs taken back up.
+	At string `json:"at,omitempty"`
+	// Retry: the step to run again. Why it stopped (State.Stopped, nil for
+	// an abort) says what budget it gets back.
+	Step string `json:"step,omitempty"`
 }
 
 type Escalation struct {
@@ -77,6 +101,9 @@ type Escalation struct {
 	Detail any    `json:"detail,omitempty"`
 	// The step to go back to on "retry": the one that stopped.
 	Step string `json:"step,omitempty"`
+	// The step that was waiting on the Run that failed, for "resume": it
+	// waits on it again once it is taken back up. "" when no Run failed.
+	At string `json:"at,omitempty"`
 	// A person's decision, once made: set as it is taken, so a second is
 	// refused before the workflow has acted on the first.
 	Decided *HumanDecision `json:"decided,omitempty"`
@@ -101,11 +128,25 @@ func (e *Escalation) Actions() []string {
 		// waits on the pull request again.
 		out = append(out, "wait")
 	default:
+		// A Run that failed is kept a while (phases.keep): the same agent
+		// can carry on where it stopped. Whether it still is, the API checks.
+		if e.At != "" && e.RunID() != "" {
+			out = append(out, "resume")
+		}
 		if e.Step != "" {
 			out = append(out, "retry")
 		}
 	}
 	return append(out, "stop")
+}
+
+// RunID is the Run the escalation is about, "" when it names none.
+func (e *Escalation) RunID() string {
+	var d struct {
+		RunID string `json:"runId"`
+	}
+	e.decode(&d)
+	return d.RunID
 }
 
 // detail reads a number the escalation's detail carries, as JSON left it.
@@ -137,9 +178,9 @@ func (e *Escalation) spent() []string {
 // HumanDecision is a person's answer to an escalation (SignalHumanDecision),
 // kept on it once taken (Escalation.Decided).
 type HumanDecision struct {
-	// "retry" the step that stopped; "accept" the findings a review got
-	// stuck on and go on; "done" — what is merged is the task; "wait" on
-	// the pull requests still open; "stop".
+	// "resume" the Run that failed; "retry" the step that stopped; "accept"
+	// the findings a review got stuck on and go on; "done" — what is merged
+	// is the task; "wait" on the pull requests still open; "stop".
 	Action string `json:"action"`
 	// What they said, for the agents from here on.
 	Note string `json:"note,omitempty"`
@@ -180,6 +221,7 @@ func Workflow(s *Store, forges Forges) *workflow.Definition {
 			"prFix":            w.prFix,
 			"awaitPRFix":       w.awaitPRFix,
 			"decide":           w.decide,
+			"recover":          w.recover,
 		},
 	}
 }
@@ -240,7 +282,7 @@ func key(sc workflow.StepContext, st *State, parts ...any) string {
 // phase creates a phase Run starting from where the work stands: each
 // repository at its head, or its default branch if nothing changed it yet.
 func (w *steps) phase(ctx context.Context, sc workflow.StepContext, st *State, phase, k string, extra func(*PhaseRun)) (string, error) {
-	in := PhaseRun{TaskID: st.TaskID, Phase: phase, BaseRefs: st.Heads, ParentRunID: st.HeadRunID, Key: k}
+	in := PhaseRun{TaskID: st.TaskID, Phase: phase, BaseRefs: st.Heads, ParentRunID: st.HeadRunID, Key: k, Attempt: st.Attempt}
 	if extra != nil {
 		extra(&in)
 	}
@@ -307,7 +349,7 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 	categories := ReviewersFor(st.Policy, st.ChangedPaths)
 	// A re-review judges what the fixer was sent: the open findings of its
 	// category that a fix has attempted.
-	toJudge, err := w.s.AttemptedFindings(ctx, sc.OrganizationID, st.TaskID)
+	toJudge, err := w.s.AttemptedFindings(ctx, sc.OrganizationID, st)
 	if err != nil {
 		return workflow.Result{}, err
 	}
@@ -339,7 +381,7 @@ func (w *steps) awaitReview(ctx context.Context, sc workflow.StepContext) (workf
 	if pending := settle(st, sc); len(pending) > 0 {
 		return park("awaitReview", st, pending), nil
 	}
-	findings, err := w.s.Findings(ctx, sc.OrganizationID, st.TaskID)
+	findings, err := w.s.Findings(ctx, sc.OrganizationID, st)
 	if err != nil {
 		return workflow.Result{}, err
 	}
@@ -371,7 +413,7 @@ func (w *steps) fix(ctx context.Context, sc workflow.StepContext) (workflow.Resu
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "fixing review findings"); err != nil {
 		return workflow.Result{}, err
 	}
-	findings, err := w.s.Findings(ctx, sc.OrganizationID, st.TaskID)
+	findings, err := w.s.Findings(ctx, sc.OrganizationID, st)
 	if err != nil {
 		return workflow.Result{}, err
 	}
@@ -843,6 +885,17 @@ func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State
 		return workflow.Result{}, err
 	}
 	st.Escalation = &Escalation{Reason: reason, Detail: detail, Step: RetryStep[sc.Step]}
+	if id := st.Escalation.RunID(); id != "" && strings.HasSuffix(reason, "_failed") {
+		// A Run failed, and lux keeps it: the step waiting on it can wait on
+		// it again, resumed.
+		kept, err := w.s.Kept(ctx, sc.OrganizationID, id)
+		if err != nil {
+			return workflow.Result{}, err
+		}
+		if kept {
+			st.Escalation.At = sc.Step
+		}
+	}
 	st.PendingRunIDs = nil
 	if err := w.s.Emit(ctx, sc.OrganizationID, st, EvQuestionAsked,
 		map[string]any{"kind": "escalation", "reason": reason, "detail": detail, "actions": st.Escalation.Actions()}); err != nil {
@@ -882,6 +935,9 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 	st.Escalation = nil
 	switch d.Action {
 	case "stop":
+		// Kept, so the task can be picked back up where it stopped.
+		e.Decided = nil
+		st.Stopped = e
 		return workflow.Result{State: st}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "aborted", "a person stopped it")
 	case "done":
 		return workflow.Result{State: st}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "done", "a person took what was merged")
@@ -899,7 +955,7 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 	switch d.Action {
 	case "accept":
 		// The findings it was stuck on ship as they are: a person's call.
-		if err := w.s.AcceptFindings(ctx, sc.OrganizationID, st.TaskID); err != nil {
+		if err := w.s.AcceptFindings(ctx, sc.OrganizationID, st); err != nil {
 			return workflow.Result{}, err
 		}
 		if st.Policy.Simplify {
@@ -907,14 +963,25 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		}
 		return workflow.Result{Next: "test", State: st}, nil
 	}
-	// retry: the step that stopped, afresh — new Runs, a new budget for
-	// the loop it gave up on.
+	if d.Action == "resume" {
+		// The Run that failed was taken back up with the decision (the API
+		// does it, where it can say if it no longer can): the step that
+		// waited on it waits on it again.
+		return park(e.At, st, []string{e.RunID()}), nil
+	}
+	return retry(st, e.Step, e), nil
+}
+
+// retry runs a step that stopped again, afresh — new Runs, a new budget
+// for the loop it gave up on. e is the escalation it stopped at; nil for
+// a step a person aborted.
+func retry(st *State, step string, e *Escalation) workflow.Result {
 	st.Retries++
-	switch e.Step {
+	switch step {
 	case "fix":
 		// A new budget for the loop: its rounds, and each finding's fixes.
 		st.Iteration = 0
-		if e.Reason == "stuck" {
+		if e != nil && e.Reason == "stuck" {
 			st.ExtraFixAttempts += st.Policy.MaxAttemptsPerFinding
 		}
 	case "prFix":
@@ -926,14 +993,47 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 				st.PRFixes[repo]--
 			}
 		}
-		if e.Reason == "pr_loop_exhausted" {
+		if e != nil && e.Reason == "pr_loop_exhausted" {
 			st.PRIteration = 0
 			for _, repo := range e.spent() {
 				st.PRFixes[repo] = 0
 			}
 		}
 	}
-	return workflow.Result{Next: e.Step, State: st}, nil
+	st.PendingRunIDs = nil
+	return workflow.Result{Next: step, State: st}
+}
+
+// AbortedRetryStep is where trying again goes back to when a person
+// aborted the work at a step: the step that made the Runs it was waiting on.
+var AbortedRetryStep = map[string]string{
+	"awaitImplement": "implement",
+	"awaitReview":    "review",
+	"awaitFix":       "fix",
+	"awaitSimplify":  "simplify",
+	"awaitTest":      "test",
+	"awaitPRFix":     "prFix",
+}
+
+// recover carries out a person picking a stopped task back up (State.
+// Recover, set with the request, which also took the Runs back up for a
+// resume): the step that waited on the Runs waits on them again, or the
+// step that made them runs again.
+func (w *steps) recover(ctx context.Context, sc workflow.StepContext) (workflow.Result, error) {
+	st, err := load(sc)
+	if err != nil {
+		return workflow.Result{}, err
+	}
+	rc := st.Recover
+	if rc == nil {
+		return workflow.Result{}, fmt.Errorf("nothing to recover")
+	}
+	e := st.Stopped
+	st.Recover, st.Stopped = nil, nil
+	if rc.Action == "resume" {
+		return park(rc.At, st, st.PendingRunIDs), nil
+	}
+	return retry(st, rc.Step, e), nil
 }
 
 // waitForPR waits on the task's pull requests: what the forge says of

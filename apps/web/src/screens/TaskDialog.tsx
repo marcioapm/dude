@@ -51,12 +51,18 @@ function shortGoalText(goal: string): string | undefined {
   return short > 0 ? `${short} more ${short === 1 ? "character" : "characters"} to save: why it matters and what should change.` : undefined;
 }
 
-export type ExistingTask = { id: string; delivering: boolean } & TaskFields;
+/**
+ * What delivery fixes about it: "all" while it is delivered (what it asks
+ * for and where); "repositories" once that stopped, to be picked back up
+ * where it was; nothing before it starts.
+ */
+export type ExistingTask = { id: string; fixed: "all" | "repositories" | null } & TaskFields;
 
-/** A task as the dialog edits it; `delivering` fixes what it asks for. */
-export function existingTask(item: TaskDetail, delivering: boolean): ExistingTask {
+/** A task as the dialog edits it; `started` says delivery has begun. */
+export function existingTask(item: TaskDetail, started: boolean): ExistingTask {
   const { id, title, goal, acceptanceCriteria, epicId, repositories } = item;
-  return { id, delivering, title, goal, acceptanceCriteria, epicId, repositories };
+  const stopped = item.status === "aborted" || item.status === "failed";
+  return { id, fixed: !started ? null : stopped ? "repositories" : "all", title, goal, acceptanceCriteria, epicId, repositories };
 }
 
 export interface TaskDialogProps {
@@ -119,7 +125,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
     };
   }, []);
 
-  const locked = existing?.delivering ?? false;
+  const locked = existing?.fixed === "all";
   const repositories = choices?.repositories ?? [];
   // One repository needs no choosing: it is where the work goes unless the
   // task says otherwise.
@@ -142,10 +148,11 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
         title: title.trim(),
         goal: goal.trim(),
         acceptanceCriteria: criteria.items,
-        // One repository needs no choosing, but is named: adding a second
-        // later must not leave this work with no checkout.
-        repositories: choosing ? chosen : repositories.map((r) => ({ id: r.id, access: "write" as const })),
       });
+      // One repository needs no choosing, but is named: adding a second
+      // later must not leave this work with no checkout. A stopped
+      // delivery's are fixed.
+      if (existing?.fixed !== "repositories") fields.repositories = choosing ? chosen : repositories.map((r) => ({ id: r.id, access: "write" as const }));
     }
     let id = existing?.id ?? created ?? "";
     void save(
@@ -189,7 +196,8 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
         <Skeleton variant="text" width={160} />
       )}
       title={existing ? "Edit task" : "New task"}
-      description={locked ? "Delivery has started, so what it asks for is fixed. You can still move it to another epic." : undefined}
+      description={locked ? "Delivery has started, so what it asks for is fixed. You can still move it to another epic."
+        : existing?.fixed === "repositories" ? "Its delivery stopped: what it asks for can change before it is picked back up. Its repositories are fixed." : undefined}
       submitLabel={existing ? "Save" : "Create"}
       submitTestId="task-save"
       // Images go with the prompt, which only a delivery gives.
@@ -252,7 +260,7 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
             options={[{ value: NO_EPIC, label: "No epic" }, ...(choices?.epics ?? []).map((e) => ({ value: e.id, label: e.title }))]}
           />
           {choosing ? (
-            <RepositoryChooser repositories={repositories} chosen={chosen} onChange={setChosen} disabled={locked} />
+            <RepositoryChooser repositories={repositories} chosen={chosen} onChange={setChosen} disabled={existing?.fixed != null} />
           ) : null}
           {existing ? null : <PromptImages tray={tray} />}
           <HelpList title="What makes a good task" items={[
