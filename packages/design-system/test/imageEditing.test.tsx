@@ -247,6 +247,27 @@ test("twenty resize moves on a selected image try no move", async () => {
   await act(async () => void handle.dispatchEvent(pe("pointerup", 520)));
 });
 
+test("a drag within the goal drops the image between two of its paragraphs", async () => {
+  const f = await mountFields([{ id: "goal", kind: "goal", value: `One.\n\nTwo.\n\n${A}` }]);
+  const store = new Map<string, string>();
+  const dataTransfer = { get types() { return [...store.keys()]; }, setData: (t: string, v: string) => void store.set(t, v), getData: (t: string) => store.get(t) ?? "", effectAllowed: "", dropEffect: "" };
+  const dnd = (type: string, el: Element, clientY = 0) => {
+    const e = new Event(type, { bubbles: true, cancelable: true }) as Event & { dataTransfer: unknown; clientY: number };
+    e.dataTransfer = dataTransfer;
+    e.clientY = clientY;
+    el.dispatchEvent(e);
+  };
+  const panel = f.panel("goal");
+  // Three blocks, 40 px apart: slot 1 is the top of "Two.", at 40.
+  const blocks = [...panel.querySelector(":scope > div")!.children] as HTMLElement[];
+  blocks.forEach((b, i) => (b.getBoundingClientRect = () => ({ top: i * 40, bottom: i * 40 + 30, left: 0, right: 100, width: 100, height: 30, x: 0, y: i * 40, toJSON() {} })));
+  await act(async () => dnd("dragstart", f.figure("goal")!));
+  await act(async () => dnd("dragover", panel, 38));
+  expect(f.container.querySelector('[data-testid="image-slot"]')?.getAttribute("data-slot")).toBe("1");
+  await act(async () => dnd("drop", panel, 38));
+  expect(f.value("goal")).toBe(`One.\n\n${A}\n\nTwo.`);
+});
+
 test("a drag from the goal drops under a criterion as its continuation line", async () => {
   const f = await mountFields([
     { id: "goal", kind: "goal", value: `Intro.\n\n${A}\n\nOutro.` },
