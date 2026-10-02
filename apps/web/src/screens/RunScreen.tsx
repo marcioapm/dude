@@ -626,7 +626,8 @@ function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: b
       );
     }
     case "notice":
-      return <ChatNotice key={turn.id} data-testid="chat-notice" kind={turn.notice} text={turn.text} at={turn.at} />;
+      return <ChatNotice key={turn.id} data-testid="chat-notice" kind={turn.notice} text={turn.text} at={turn.at}
+        {...(turn.title ? { title: turn.title } : {})} />;
     case "ended":
       // Where the transcript stops, and why: a failure in its tone, not a
       // margin note (ChatNotice has no tones).
