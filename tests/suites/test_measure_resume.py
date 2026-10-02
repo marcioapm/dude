@@ -102,32 +102,80 @@ def test_a_runs_events_are_read_page_by_page_from_the_cursor_on():
     assert api.asked[4:] == [5, 6]
 
 
-def test_cleanup_aborts_every_run_still_going_and_waits_for_lux_to_cancel_it(monkeypatch):
-    """A working Run is aborted and waited on until lux cancels it; a
-    completed one (stopped on lux) is only waited on; one whose abort fails
-    does not stop the others' cleanup."""
-    states = {"lrun_a": ["running", "running", "cancelled"], "lrun_b": ["stopped"], "lrun_c": ["running"]}
-    rows = {"run_a": ("running", "lrun_a"), "run_b": ("completed", "lrun_b"), "run_c": ("running", "lrun_c")}
-    aborted = []
+class Cleanup:
+    """A Cycler whose dude and lux are stubs: rows by Run id as (status,
+    lux Run id), lux states by lux Run id (each read takes the next, the
+    last staying), and task_runs answering each call from `listings` in
+    turn. Records what was asked, in order."""
 
-    class Client:
-        def task_runs(self, task_id):
-            return [{"id": r} for r in rows]
+    def __init__(self, monkeypatch, rows, states, listings, failing=()):
+        self.asked, self.logged = [], []
+        cycler = m.Cycler.__new__(m.Cycler)
+        asked, listings = self.asked, list(listings)
 
-        def post(self, path, body):
-            run = path.split("/")[3]
-            if run == "run_c":
-                raise ConnectionError("dude went away")
-            aborted.append(run)
+        class Client:
+            def task_runs(self, task_id):
+                asked.append("list")
+                return [{"id": r} for r in (listings.pop(0) if len(listings) > 1 else listings[0])]
 
-    cycler = m.Cycler.__new__(m.Cycler)
-    cycler.client, cycler.tasks = Client(), ["task_1"]
-    cycler.row = lambda run_id: {"status": rows[run_id][0], "lux_run_id": rows[run_id][1]}
-    cycler.lux_run = lambda lux_id: {"state": states[lux_id].pop(0) if len(states[lux_id]) > 1 else states[lux_id][0]}
-    monkeypatch.setattr(m.time, "sleep", lambda s: None)
-    cycler.abort_all(timeout=5)
-    assert aborted == ["run_a"]
-    assert states["lrun_a"] == ["cancelled"]
+            def post(self, path, body):
+                run = path.split("/")[3]
+                asked.append(f"abort {run}")
+                if run in failing:
+                    raise ConnectionError("dude went away")
+
+        cycler.client, cycler.tasks = Client(), ["task_1"]
+        cycler.stop_workflows = lambda: asked.append("stop workflows")
+        cycler.row = lambda run_id: {"status": rows[run_id][0], "lux_run_id": rows[run_id][1]}
+        cycler.lux_run = lambda lux_id: {"state": states[lux_id].pop(0) if len(states[lux_id]) > 1 else states[lux_id][0]}
+        monkeypatch.setattr(m.time, "sleep", lambda s: None)
+        monkeypatch.setattr(m, "log", self.logged.append)
+        self.cycler, self.states = cycler, states
+
+
+def test_cleanup_stops_the_workflows_then_aborts_every_run_still_going_and_waits_for_lux_to_cancel_it(monkeypatch):
+    c = Cleanup(monkeypatch, rows={"run_a": ("running", "lrun_a"), "run_b": ("completed", "lrun_b")},
+                states={"lrun_a": ["running", "running", "cancelled"], "lrun_b": ["stopped"]},
+                listings=[["run_a", "run_b"]])
+    c.cycler.abort_all(timeout=5)
+    assert c.asked[:2] == ["stop workflows", "list"]
+    assert [a for a in c.asked if a.startswith("abort")] == ["abort run_a"]
+    assert c.states["lrun_a"] == ["cancelled"]
+    assert not [line for line in c.logged if "could not" in line], c.logged
+
+
+def test_a_failed_run_lux_failed_has_ended_at_once(monkeypatch):
+    c = Cleanup(monkeypatch, rows={"run_f": ("failed", "lrun_f"), "run_x": ("aborted", "lrun_x")},
+                states={"lrun_f": ["failed"], "lrun_x": ["succeeded"]}, listings=[["run_f", "run_x"]])
+    c.cycler.abort_all(timeout=0)
+    assert not [a for a in c.asked if a.startswith("abort")]
+    assert not [line for line in c.logged if "could not" in line], c.logged
+
+
+def test_an_aborted_run_lux_stopped_has_not_ended(monkeypatch):
+    c = Cleanup(monkeypatch, rows={"run_x": ("aborted", "lrun_x")}, states={"lrun_x": ["stopped"]}, listings=[["run_x"]])
+    c.cycler.abort_all(timeout=0)
+    assert [line for line in c.logged if "could not end Run run_x" in line], c.logged
+
+
+def test_a_run_whose_abort_fails_does_not_keep_the_next_from_being_aborted(monkeypatch):
+    c = Cleanup(monkeypatch, rows={"run_c": ("running", "lrun_c"), "run_a": ("running", "lrun_a")},
+                states={"lrun_c": ["running"], "lrun_a": ["running", "cancelled"]},
+                listings=[["run_c", "run_a"]], failing=("run_c",))
+    c.cycler.abort_all(timeout=5)
+    assert [a for a in c.asked if a.startswith("abort")] == ["abort run_c", "abort run_a"]
+    assert c.states["lrun_a"] == ["cancelled"]
+    assert [line for line in c.logged if "could not end Run run_c" in line], c.logged
+
+
+def test_a_run_a_workflow_step_created_after_the_first_listing_is_aborted_too(monkeypatch):
+    c = Cleanup(monkeypatch, rows={"run_i": ("completed", "lrun_i"), "run_r": ("running", "lrun_r")},
+                states={"lrun_i": ["stopped"], "lrun_r": ["running", "cancelled"]},
+                listings=[["run_i"], ["run_i", "run_r"]])
+    c.cycler.abort_all(timeout=5)
+    assert [a for a in c.asked if a.startswith("abort")] == ["abort run_r"]
+    assert c.asked.count("list") == 2
+    assert c.states["lrun_r"] == ["cancelled"]
 
 
 def test_down_needs_no_lux(tmp_path, monkeypatch):

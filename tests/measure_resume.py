@@ -259,29 +259,65 @@ class Cycler:
                      self.timeout)
         return {"runId": run["id"], **event["payload"]}
 
-    def abort_all(self, timeout: float = 120) -> None:
-        """Every Run this measured aborted, and lux seen to have cancelled
-        each (or finished it), while dude is still up to tell lux. Best
-        effort: a failure is said, and the rest still cleaned up."""
-        runs = []
+    def stop_workflows(self) -> None:
+        """Every delivered task's workflow stopped, so it starts no further
+        phase. No API stops a task's delivery (a Run's abort stops its
+        workflow only while that Run is live), so it is stopped as the
+        orchestrator's own Abort does, through the owner's connection."""
+        if not self.tasks:
+            return
+        stopped = query(self.env.owner_dsn, """UPDATE workflow_runs SET status = 'aborted', last_error = 'measured',
+            wake_at = NULL, locked_by = NULL, locked_until = NULL
+            WHERE task_id = ANY(%s) AND status IN ('running', 'waiting') RETURNING id""", (self.tasks,))
+        log(f"stopped {len(stopped)} delivery workflow(s)")
+
+    def task_run_ids(self) -> list[str]:
+        ids = []
         for task_id in self.tasks:
             try:
-                runs += [r for r in self.client.task_runs(task_id)]
+                ids += [r["id"] for r in self.client.task_runs(task_id)]
             except Exception as err:  # noqa: BLE001 - cleanup goes on
                 log(f"could not list task {task_id}'s Runs: {err}")
-        for run in runs:
-            try:
-                row = self.row(run["id"])
-                # A completed Run's lux Run is stopped, holding no host; any
-                # other is aborted here, and dude cancels it in lux.
-                ended = ("stopped", "cancelled", "succeeded", "failed") if row["status"] == "completed" else ("cancelled",)
-                if row["status"] not in ("completed", "failed", "aborted"):
-                    self.client.post(f"/v1/runs/{run['id']}/abort", {"reason": "measured"})
-                if row["lux_run_id"]:
-                    wait(f"lux to end {row['lux_run_id']}",
-                         lambda: self.lux_run(row["lux_run_id"])["state"] in ended, timeout)
-            except (Exception, SystemExit) as err:  # noqa: BLE001 - cleanup goes on
-                log(f"could not end Run {run['id']} on lux: {err}")
+        return ids
+
+    def end(self, run_id: str, timeout: float) -> None:
+        """A Run aborted unless it has ended, and waited on until lux has
+        ended it too."""
+        row = self.row(run_id)
+        if row["status"] not in ("completed", "failed", "aborted"):
+            self.client.post(f"/v1/runs/{run_id}/abort", {"reason": "measured"})
+        if row["lux_run_id"]:
+            ended = lux_ended(row["status"])
+            wait(f"lux to end {row['lux_run_id']}", lambda: self.lux_run(row["lux_run_id"])["state"] in ended, timeout)
+
+    def abort_all(self, timeout: float = 120) -> None:
+        """Every Run this measured ended on lux, while dude is still up to
+        tell lux: the tasks' workflows stopped first, so they start no new
+        phase, then each Run aborted and waited on. Once more after the
+        waits, for a phase a workflow step already in flight created. Best
+        effort: a failure is said, and the rest still cleaned up."""
+        try:
+            self.stop_workflows()
+        except Exception as err:  # noqa: BLE001 - cleanup goes on
+            log(f"could not stop the delivery workflows: {err}")
+        done: set[str] = set()
+        for _ in range(2):
+            for run_id in self.task_run_ids():
+                if run_id in done:
+                    continue
+                done.add(run_id)
+                try:
+                    self.end(run_id, timeout)
+                except (Exception, SystemExit) as err:  # noqa: BLE001 - cleanup goes on
+                    log(f"could not end Run {run_id} on lux: {err}")
+
+
+def lux_ended(status: str) -> tuple[str, ...]:
+    """The lux states that end a dude Run of this status. lux's failed and
+    succeeded are final; dude cancels nothing in them. Stopped is resumable,
+    so it ends only a completed Run, which dude stops on purpose."""
+    ended = ("cancelled", "succeeded", "failed")
+    return ended + ("stopped",) if status == "completed" else ended
 
 
 # -- the numbers ------------------------------------------------------------------
