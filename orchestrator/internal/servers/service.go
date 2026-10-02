@@ -29,11 +29,11 @@ type Service struct {
 	// Where lux's console is, for the terminal link (LUX_CONSOLE_URL; lux's
 	// API base URL by default).
 	ConsoleURL string
-	// The domain lux serves previews under: new previews wake on request
-	// at <server>-<task>-<project>.<PreviewDomain>. "" keeps the old path
-	// (a Run with its servers in its spec, parked by dude).
+	// PreviewDomain keeps full-name requests for lux versions that require them.
 	PreviewDomain string
-	Log           *slog.Logger
+	// PreviewRelative sends bare labels for lux to resolve under its domain.
+	PreviewRelative bool
+	Log             *slog.Logger
 	// Wakes the loops after a change, so a preview starts or stops now.
 	Kick func()
 }
@@ -92,6 +92,9 @@ type RunView struct {
 	Wakeable bool `json:"wakeable"`
 	// A wakeable preview nothing serves now and no wake is due.
 	Asleep bool `json:"asleep"`
+	// A wakeable preview's last failure: its Run failed to start (and
+	// whether a new one is on its way), or stopped on its own.
+	Error *string `json:"error"`
 	// The memory limit lux gave its current container, in bytes, when lux
 	// reports one: what the Run's size asked for less the host's share.
 	MemoryLimit *int64 `json:"memoryLimit"`
@@ -125,6 +128,9 @@ type runRow struct {
 	// A preview of lux servers of its own that wake on request, and whether
 	// a wake is due.
 	Wakeable, WakeWanted bool
+	// Starts of its lux Run in a row that failed before running, and its error.
+	StartFailures int
+	Error         string
 }
 
 const runSelect = `SELECT r.id, r.project_id, r.task_id, r.kind, r.status::text, COALESCE(r.phase::text, ''),
@@ -135,14 +141,15 @@ const runSelect = `SELECT r.id, r.project_id, r.task_id, r.kind, r.status::text,
 			WHERE tp.task_id = r.task_id AND p.removed_at IS NULL ORDER BY tp.position, tp.person_id LIMIT 1) END),
 	(SELECT preview_settings(pr) FROM projects pr WHERE pr.id = r.project_id),
 	ARRAY(SELECT s.name FROM project_servers s WHERE s.project_id = r.project_id AND COALESCE(s.setup, '') <> ''),
-	r.wakeable, r.wake_wanted_at IS NOT NULL
+	r.wakeable, r.wake_wanted_at IS NOT NULL, r.start_failures, COALESCE(r.error, '')
 	FROM runs r`
 
 func scanRun(row pgx.Row) (runRow, error) {
 	var r runRow
 	var settings []byte
 	err := row.Scan(&r.ID, &r.ProjectID, &r.TaskID, &r.Kind, &r.Status, &r.Phase, &r.LuxRunID, &r.LuxState, &r.Branch,
-		&r.BaseSHAs, &r.Repos, &r.StartedAt, &r.StartedBy, &settings, &r.WithSetup, &r.Wakeable, &r.WakeWanted)
+		&r.BaseSHAs, &r.Repos, &r.StartedAt, &r.StartedBy, &settings, &r.WithSetup, &r.Wakeable, &r.WakeWanted,
+		&r.StartFailures, &r.Error)
 	if err == nil {
 		err = json.Unmarshal(settings, &r.Settings)
 	}

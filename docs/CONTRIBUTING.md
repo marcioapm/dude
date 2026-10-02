@@ -227,7 +227,8 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   someone opens one (`server.wake_requested`) or none is used
   (`server.idle`); `servers.Feed` records it and the preview loop acts.
   Its Run is servers-only (no `workload.servers`), resumed with `sync` on
-  every wake. See [operations](operations.md#branch-previews).
+  every wake, or replaced by a new one when its last start failed before it
+  ran (`runs.start_failures`, bounded). See [operations](operations.md#branch-previews).
 - **An old-style preview** (`wakeable = false`: before lux#41, or a lux with
   no preview domain) serves the recipes as the spec's `workload.servers`.
   It is parked (`dude_pause = 'unused'`) after the project's idle timeout
