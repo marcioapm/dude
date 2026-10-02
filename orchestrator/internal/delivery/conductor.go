@@ -3,7 +3,6 @@ package delivery
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -123,13 +122,17 @@ const Unheard = `(r.role = 'conductor' AND r.status IN ('completed', 'failed', '
 	AND r.id IN (SELECT d.run_id FROM directives d WHERE d.delivered_at IS NULL AND d.failed_at IS NULL))`
 
 // HandOver settles what a person sent an ended conductor and it never
-// read. With replace, the words go to the task's live conductor, or to a
-// new one briefed with them as the message it answers, as a first message
-// is; the ended one's copies fail saying which conductor has them, so its
-// Chat shows where they went. Without (a person aborted it) they fail,
-// saying it was stopped. An interrupt (an idle nudge, an Interrupt now) is
-// no one's words and only fails. Returns the conductor that has them, ""
-// for none. The caller holds the task's Chat lock, and the Run has ended.
+// read. With replace, each message goes to the task's live conductor, or
+// to a new one: the first becomes its briefing's message, as a first
+// message is, and the rest are queued for it. Each keeps its writer and
+// its images (carryAttachments). A briefing carries no images, so a first
+// message with images for a new conductor is failed, saying to send it
+// again. The ended one's copies fail saying which conductor has them, so
+// its Chat shows where they went. Without replace (a person aborted it)
+// they fail, saying it was stopped. An interrupt (an idle nudge, an
+// Interrupt now) is no one's words and only fails. Returns the conductor
+// that has them, "" for none. The caller holds the task's Chat lock, and
+// the Run has ended.
 func HandOver(ctx context.Context, tx pgx.Tx, ref RunRef, replace bool) (string, error) {
 	rows, err := tx.Query(ctx, `SELECT d.id, d.text, d.interrupt,
 			COALESCE(e.actor_type, ''), COALESCE(e.actor_id, '')
@@ -151,36 +154,42 @@ func HandOver(ctx context.Context, tx pgx.Tx, ref RunRef, replace bool) (string,
 	if err != nil || len(left) == 0 {
 		return "", err
 	}
-	var words []string
-	var w Writer
-	for _, d := range left {
-		if d.Interrupt {
-			continue
-		}
-		words = append(words, d.Text)
-		if w.ActorID == "" && d.ActorID != "" {
-			w = Writer{ActorType: d.ActorType, ActorID: d.ActorID}
-		}
-	}
+	stopped := "the conductor stopped before reading it"
+	why := map[string]string{}
 	next := ""
-	if replace && len(words) > 0 {
-		if next, err = handTo(ctx, tx, ref, w, strings.Join(words, "\n\n")); err != nil {
-			return "", err
+	if replace {
+		for _, d := range left {
+			if d.Interrupt {
+				continue
+			}
+			to, err := handTo(ctx, tx, ref, next, d.ID, Writer{ActorType: d.ActorType, ActorID: d.ActorID}, d.Text)
+			if err != nil {
+				return "", err
+			}
+			if to == "" {
+				why[d.ID] = stopped + "; its images were not passed on; send it again"
+				continue
+			}
+			next = to
 		}
 	}
-	why := "the conductor stopped before reading it"
-	switch {
-	case !replace:
-		why = "the conductor was stopped before reading it"
-	case next != "":
-		why = fmt.Sprintf("the conductor stopped before reading it; the next conductor, %s, has it", next)
-	}
 	for _, d := range left {
-		if _, err := tx.Exec(ctx, `UPDATE directives SET failed_at = now(), error = $2 WHERE id = $1`, d.ID, why); err != nil {
+		reason, to := why[d.ID], next
+		switch {
+		case reason != "":
+			to = ""
+		case !replace:
+			reason = "the conductor was stopped before reading it"
+		case next != "":
+			reason = fmt.Sprintf("%s; the next conductor, %s, has it", stopped, next)
+		default:
+			reason = stopped
+		}
+		if _, err := tx.Exec(ctx, `UPDATE directives SET failed_at = now(), error = $2 WHERE id = $1`, d.ID, reason); err != nil {
 			return "", err
 		}
 		if _, err := ledger.Append(ctx, tx, ref.Event(evDirectiveFailed, ledger.ActorSystem,
-			map[string]any{"directiveId": d.ID, "error": why, "nextRunId": db.Nullable(next)})); err != nil {
+			map[string]any{"directiveId": d.ID, "error": reason, "nextRunId": db.Nullable(to)})); err != nil {
 			return "", err
 		}
 	}
@@ -190,32 +199,61 @@ func HandOver(ctx context.Context, tx pgx.Tx, ref RunRef, replace bool) (string,
 // evDirectiveFailed is the phase syncer's run.directive.failed.
 const evDirectiveFailed = "run.directive.failed"
 
-// handTo gives text, written by w to an ended conductor, to the task's live
-// conductor as its next message, or to a new one it starts.
-func handTo(ctx context.Context, tx pgx.Tx, ended RunRef, w Writer, text string) (string, error) {
+// handTo gives one message an ended conductor never read — directive
+// from, written by w — to the conductor that now hears the task's Chat:
+// to, once an earlier message reached it; else the task's live conductor;
+// else a new one it starts, briefed with the message. Queued, the message
+// takes its images with it. Returns the conductor, or "" when the message
+// has images and would have to be a new conductor's briefing.
+func handTo(ctx context.Context, tx pgx.Tx, ended RunRef, to, from string, w Writer, text string) (string, error) {
 	if w.ActorType == "" {
 		w.ActorType = ledger.ActorSystem
 	}
-	// The person behind an API key, or the person themself.
-	if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT id FROM people WHERE id = $1),
-		(SELECT person_id FROM api_keys WHERE id = $1), '')`, w.ActorID).Scan(&w.Person); err != nil {
-		return "", err
+	if to == "" {
+		err := tx.QueryRow(ctx, `SELECT r.id FROM runs r WHERE r.task_id = $1 AND `+LiveConductor+` FOR NO KEY UPDATE`,
+			ended.TaskID).Scan(&to)
+		if err != nil && !db.IsNotFound(err) {
+			return "", err
+		}
 	}
-	var live string
-	err := tx.QueryRow(ctx, `SELECT r.id FROM runs r WHERE r.task_id = $1 AND `+LiveConductor+` FOR NO KEY UPDATE`,
-		ended.TaskID).Scan(&live)
-	if db.IsNotFound(err) {
+	if to == "" {
+		images, err := DirectiveAttachments(ctx, tx, from)
+		if err != nil || len(images) > 0 {
+			return "", err
+		}
+		// The person behind an API key, or the person themself.
+		if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT id FROM people WHERE id = $1),
+			(SELECT person_id FROM api_keys WHERE id = $1), '')`, w.ActorID).Scan(&w.Person); err != nil {
+			return "", err
+		}
 		return StartConductor(ctx, tx, ended.Org, ended.ProjectID, ended.TaskID, w, text)
 	}
-	if err != nil {
-		return "", err
-	}
-	ref := RunRef{Org: ended.Org, ProjectID: ended.ProjectID, TaskID: ended.TaskID, RunID: live}
+	ref := RunRef{Org: ended.Org, ProjectID: ended.ProjectID, TaskID: ended.TaskID, RunID: to}
 	id, _, err := QueueDirective(ctx, tx, ref, Directive{Text: text, Scope: "run"})
 	if err != nil {
 		return "", err
 	}
-	return live, ChatEvent(ctx, tx, ref, w, map[string]any{"text": text, "directiveId": id})
+	images, err := carryAttachments(ctx, tx, from, id)
+	if err != nil {
+		return "", err
+	}
+	if err := RequestResumeForMessage(ctx, tx, to, "a message handed on from the conductor before"); err != nil {
+		return "", err
+	}
+	payload := map[string]any{"text": text, "directiveId": id}
+	if len(images) > 0 {
+		payload["attachments"] = images
+	}
+	return to, ChatEvent(ctx, tx, ref, w, payload)
+}
+
+// RequestResumeForMessage asks for a paused conductor back for a message
+// queued for it, when a person paused it or it was parked as idle. Parked
+// by dude otherwise, it resumes for the message on its own (resumable).
+func RequestResumeForMessage(ctx context.Context, tx pgx.Tx, runID, reason string) error {
+	_, err := tx.Exec(ctx, `UPDATE runs SET control = 'resume', control_requested_at = now(), control_reason = $2
+		WHERE id = $1 AND status = 'paused' AND (dude_pause IS NULL OR dude_pause = 'idle')`, runID, reason)
+	return err
 }
 
 // LiveConductor (SQL, over runs r): the task's conductor that can still

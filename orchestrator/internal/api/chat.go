@@ -116,11 +116,8 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, org string) error 
 		// Parked by dude, it resumes for the directive on its own
 		// (resumable); paused by a person, or idle, a message is asking for
 		// it back.
-		if status == "paused" && (dudePause == nil || *dudePause == "idle") {
-			if _, err := tx.Exec(r.Context(), `UPDATE runs SET control = 'resume', control_requested_at = now(),
-				control_reason = 'a message in Chat' WHERE id = $1`, runID); err != nil {
-				return err
-			}
+		if err := delivery.RequestResumeForMessage(r.Context(), tx, runID, "a message in Chat"); err != nil {
+			return err
 		}
 		out = map[string]any{"runId": runID, "taskId": taskID, "created": false, "directiveId": directiveID}
 		return delivery.ChatEvent(r.Context(), tx, ref, writer, map[string]any{"text": body.Text, "directiveId": directiveID})
