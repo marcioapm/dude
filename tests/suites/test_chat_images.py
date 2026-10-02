@@ -663,6 +663,23 @@ def test_an_image_laid_out_in_preview_keeps_its_place_and_size_and_the_agent_rea
         f"- [ ] Totals are right-aligned\n- [ ] The logo sits top left\n  {ref}\n- [ ] Prints on one page")
     expect(page.get_by_test_id("task-goal")).to_have_value("The receipt should look like the mock below.\n\nKeep the paper size A4.")
     expect(page.get_by_test_id("task-criteria-count")).to_have_text("3 criteria")
+    # Floated right in criterion 2, it ends inside that criterion: the next one starts below it.
+    # Plain `- ` items, whose bodies are ordinary blocks (a `- [ ]` item is a flex row, which holds it anyway).
+    page.get_by_test_id("task-criteria").evaluate("""el => {
+      const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+      set.call(el, el.value.replaceAll('- [ ] ', '- '));
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    }""")
+    expect(page.get_by_test_id("task-criteria-preview").locator("li").nth(2)).to_be_visible()
+    fit = page.get_by_test_id("task-criteria-preview").evaluate("""el => {
+      const fig = el.querySelector('[data-testid=markdown-figure]');
+      const items = [...el.querySelectorAll('li')];
+      const f = fig.getBoundingClientRect();
+      return { float: getComputedStyle(fig).float, inItem: items.indexOf(fig.closest('li')),
+               figBottom: f.bottom, itemBottom: items[1].getBoundingClientRect().bottom, nextTop: items[2].getBoundingClientRect().top };
+    }""")
+    assert fit["float"] == "right" and fit["inItem"] == 1, fit
+    assert fit["figBottom"] <= fit["itemBottom"] + 0.5 and fit["figBottom"] <= fit["nextTop"] + 0.5, fit
     page.get_by_test_id("task-save").click()
     expect(page.get_by_test_id("task-goal")).to_have_count(0, timeout=20_000)
     saved = client.get(f"/v1/tasks/{task['id']}").json()
