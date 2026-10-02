@@ -38,6 +38,7 @@ describe("who uses a tier", () => {
     expect(effortsWords([org("implementer", "high"), org("fixer", "high", true)])).toBe("high");
     expect(effortsWords([org("implementer", "high"), proj("reviewer", "low"), org("simplifier")])).toBe("high and low and the model’s default");
     expect(effortsWords([])).toBeNull();
+    expect(effortsWords([org("implementer"), org("fixer", null, true)])).toBeNull();
   });
 });
 

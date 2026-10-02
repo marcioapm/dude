@@ -25,7 +25,7 @@ def test_work_on_no_repository_is_delivered_as_what_the_agents_publish(client: A
 
     project = client.create_project(
         name="Notes", slug=f"notes-{os.urandom(3).hex()}", runtimeImage="dude-runtime:test",
-        agentModels={r: {"model": "fake/scripted"} for r in ("implementer", "reviewer", "simplifier")},
+        agentModels=client.on_models({r: "fake/scripted" for r in ("implementer", "reviewer", "simplifier")}),
     )
     task = client.create_task(project["id"], "Write up the options")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
@@ -202,9 +202,9 @@ def test_a_project_policy_names_only_reviewers_the_factory_has(client: ApiClient
 def test_an_agent_asks_a_person_waits_and_carries_on_with_the_answer(client: ApiClient, forge_project: dict):
     """The question reaches the API and the sidebar; parked while it waits, the answer resumes it."""
     # The suite parks a waiting agent after seconds (DUDE_PARK_AFTER).
-    resp = client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
-        "implementer": {"model": "fake/ask"}, "reviewer": {"model": "fake/scripted"},
-        "simplifier": {"model": "fake/scripted"}}})
+    resp = client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
+        "implementer": "fake/ask", "reviewer": "fake/scripted",
+        "simplifier": "fake/scripted"})})
     assert resp.status_code == 200, resp.text
     task = client.create_task(forge_project["id"], "Ask first")
     client.post(f"/v1/tasks/{task['id']}/deliver")
@@ -245,7 +245,7 @@ def test_an_agent_asks_a_person_waits_and_carries_on_with_the_answer(client: Api
 def test_steer_pause_resume_and_abort_reach_the_agent(client: ApiClient, forge_project: dict):
     """Run control goes user → backend → orchestrator → lux, and back as events."""
     # An agent that never finishes its turn, to have something live to control.
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {"implementer": {"model": "fake/hang"}}})
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({"implementer": "fake/hang"})})
     task = client.create_task(forge_project["id"], "Hold on")
     client.post(f"/v1/tasks/{task['id']}/deliver")
 

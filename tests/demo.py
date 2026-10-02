@@ -33,7 +33,7 @@ from env import TestEnvironment
 from fake_github import FakeGitHub
 from helpers import ApiClient, create_api_key, create_organization, execute, wait_until, webhook_secret
 
-SCRIPTED = {role: {"model": "fake/scripted"} for role in ("implementer", "reviewer", "fixer", "simplifier")}
+SCRIPTED = {role: "fake/scripted" for role in ("implementer", "reviewer", "fixer", "simplifier")}
 
 PEOPLE = [
     ("Ana Costa", "ana@demo.test", "admin"),
@@ -100,7 +100,9 @@ def run(env: TestEnvironment, args) -> None:
         sys.exit(1)
     env.start_web()
 
-    org = create_organization(env.owner_dsn, "Acme", default_agent_models=SCRIPTED)
+    org = create_organization(env.owner_dsn, "Acme")
+    # Its seeded tiers play the scripted agent: every role is on one of them.
+    execute(env.owner_dsn, "UPDATE model_tiers SET model = 'fake/scripted' WHERE organization_id = %s", (org,))
     # The first admin is provisioned, as a deployment would; the rest are invited through the API.
     admin_key = create_api_key(env.owner_dsn, org, name=PEOPLE[0][0])
     ana = ApiClient(env.control_plane_url, admin_key)
@@ -130,14 +132,14 @@ def run(env: TestEnvironment, args) -> None:
     gh.webhook_url = env.control_plane_url + r.json()["webhookPath"]
     gh.webhook_secret = webhook_secret(env.owner_dsn, org)
 
-    dash = ana.create_project(name="Dashboard", slug="dashboard", runtimeImage="dude-runtime:test", agentModels=SCRIPTED,
+    dash = ana.create_project(name="Dashboard", slug="dashboard", runtimeImage="dude-runtime:test", agentModels=ana.on_models(SCRIPTED),
                               repositories=[{"name": "dashboard", "url": gh.clone_url, "defaultBranch": "main"}])
-    billing = ana.create_project(name="Billing API", slug="billing", agentModels=SCRIPTED)
+    billing = ana.create_project(name="Billing API", slug="billing", agentModels=ana.on_models(SCRIPTED))
     # Agents that stay put, each in a project whose implementer is set for it
     # from the start (a phase takes its project's models as it begins).
     gh_live = gh.add_repository("insights")
     insights = ana.create_project(name="Insights", slug="insights", runtimeImage="dude-runtime:test",
-                                  agentModels={**SCRIPTED, "implementer": {"model": "fake/live"}},
+                                  agentModels=ana.on_models({**SCRIPTED, "implementer": "fake/live"}),
                                   repositories=[{"name": "insights", "url": gh_live.clone_url, "defaultBranch": "main"}])
     pid = dash["id"]
     charts = ana.post(f"/v1/projects/{pid}/epics", {"title": "Charts v2", "description": "Replace the hand-rolled SVG charts with one library."}).json()
@@ -172,12 +174,12 @@ def run(env: TestEnvironment, args) -> None:
     # starts, so the one-off models below wait until these are past it.
     prs = [pr_of(client, t) for t, client, _ in delivered]
     # Asking its owner: the project's implementer asks, just for this one.
-    ana.patch(f"/v1/projects/{pid}", {"agentModels": {**SCRIPTED, "implementer": {"model": "fake/ask"}}})
+    ana.patch(f"/v1/projects/{pid}", {"agentModels": ana.on_models({**SCRIPTED, "implementer": "fake/ask"})})
     asking = task(ana, "Localise the settings screens", l10n, ["Ana Costa"])
     deliver(ana, asking)
     wait_until(lambda: ana.get("/v1/questions", params={"taskId": asking["id"]}).json().get("questions"),
                timeout=120, message="the question never came")
-    ana.patch(f"/v1/projects/{pid}", {"agentModels": SCRIPTED})
+    ana.patch(f"/v1/projects/{pid}", {"agentModels": ana.on_models(SCRIPTED)})
     live = task(ben, "Move data loading into useDashboardData", None, ["Ben Okafor", "Dev Patel"], project=insights["id"])
     deliver(ben, live)
     task(chloe, "Revenue chart zoom", charts, ["Chloé Martin"])
