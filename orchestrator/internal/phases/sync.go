@@ -70,6 +70,9 @@ type Syncer struct {
 	// For tests: the orchestrator's clock, as its events' occurred_at
 	// (ledger.Event.OccurredAt); nil is the ledger's time.Now.
 	Now func() time.Time
+	// For tests: called as each resume follow-up finishes, its placements
+	// recorded and its timing published.
+	followedUp func()
 
 	// One follower per live lux Run. The follower is the only writer of a
 	// Run's cursor, so two must never run for the same Run.

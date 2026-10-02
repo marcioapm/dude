@@ -42,8 +42,9 @@ func (f *gatedLux) release(n int) {
 
 // While lux is slow to answer the Gets that read a resume's placements,
 // the Run's stream goes on: its running state and the agent's first words
-// are committed before either Get answers. Whichever answers first, the
-// resume is timed once, for its epoch, with the placements lux reported.
+// are committed before either Get answers. One Get is let through and its
+// follow-up seen to finish, then the other: in either order, the resume
+// is timed once, for its epoch, with the placements lux reported.
 func TestASlowLuxHoldsUpNoFramesAndTheResumeIsTimedOnce(t *testing.T) {
 	for _, order := range [][2]int{{0, 1}, {1, 0}} {
 		t.Run(map[int]string{0: "the first Get answers first", 1: "the second Get answers first"}[order[0]], func(t *testing.T) {
@@ -53,10 +54,13 @@ func TestASlowLuxHoldsUpNoFramesAndTheResumeIsTimedOnce(t *testing.T) {
 				t.Fatal(err)
 			}
 			w.resume(stoppedOnHost1(base))
-			// lux has yet to report the image: the first output reads again.
+			// lux has yet to report the image when the stream reaches the
+			// first output, so the first output reads again.
 			partial := runningAgain(base, "host-a")
 			partial.Placements[1].ImageReadyAt = nil
 			w.lux.set(partial, nil)
+			finished := make(chan struct{}, 4)
+			w.s.followedUp = func() { finished <- struct{}{} }
 			st := w.following()
 			gated := &gatedLux{streamLux: st, entered: make(chan int, 4)}
 			w.s.Lux = gated
@@ -77,15 +81,12 @@ func TestASlowLuxHoldsUpNoFramesAndTheResumeIsTimedOnce(t *testing.T) {
 				t.Fatalf("timed before lux answered: %d", n)
 			}
 
-			// Lux reports the image by the time the Gets answer.
+			// Both Gets answer with the placement complete.
 			w.lux.set(runningAgain(base, "host-a"), nil)
-			gated.release([]int{first, second}[order[0]])
-			gated.release([]int{first, second}[order[1]])
-			deadline := time.Now().Add(5 * time.Second)
-			for len(w.timed()) == 0 && time.Now().Before(deadline) {
-				time.Sleep(10 * time.Millisecond)
+			for _, n := range order {
+				gated.release([]int{first, second}[n])
+				waitFinished(t, finished)
 			}
-			time.Sleep(100 * time.Millisecond)
 			got := w.timed()
 			if len(got) != 1 {
 				t.Fatalf("%d run.resume.timed, want 1", len(got))
@@ -102,6 +103,15 @@ func TestASlowLuxHoldsUpNoFramesAndTheResumeIsTimedOnce(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func waitFinished(t *testing.T, finished chan struct{}) {
+	t.Helper()
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the follow-up whose Get answered did not finish")
 	}
 }
 

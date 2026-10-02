@@ -312,6 +312,9 @@ func (s *Syncer) resumeFollowUp(r phaseRun, resumes map[int]bool) {
 			s.logger().Warn("recording a resume's timing failed", "run", r.ID, "epoch", epoch, "error", err)
 		}
 	}
+	if s.followedUp != nil {
+		s.followedUp()
+	}
 }
 
 // timeResumesLater writes, in the background, run.resume.timed for every
