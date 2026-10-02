@@ -342,8 +342,10 @@ class TestEnvironment:
         `vite preview` rather than the dev server, for the same reason as the
         gallery: the tests should exercise what ships.
         """
+        # On 127.0.0.1, where web_url looks: vite's default, localhost, is
+        # only ::1 on macOS, so the app came up where nothing looked.
         self.web_proc = subprocess.Popen(
-            ["bunx", "vite", "preview"],
+            ["bunx", "vite", "preview", "--host", "127.0.0.1"],
             cwd=REPO_ROOT / "apps" / "web",
             env={
                 **os.environ,
