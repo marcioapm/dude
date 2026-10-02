@@ -452,7 +452,7 @@ describe("removing a size in use", () => {
     expect(res.status).toBe(200);
     const [org] = await owner`SELECT default_agent_models FROM organizations WHERE id = ${ORG}`;
     // Every role keeps the tier the organization was seeded with (migration
-    // 069); the only size still named is the conductor's Small (070).
+    // 069); the only size still named is the conductor's Small (071).
     const sizesNamed = Object.entries(org.default_agent_models as Record<string, Json>).filter(([, r]) => "machineSize" in r);
     expect(sizesNamed).toEqual([["conductor", { tier: expect.any(String), machineSize: (await byName("Small")).id }]]);
     expect(org.default_agent_models.simplifier).toEqual({ effort: "low", tier: expect.any(String) });

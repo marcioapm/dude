@@ -123,7 +123,7 @@ func setup() {
 }
 
 // Upgrade gives a migration test a database of its own, migrated by the
-// files before version (e.g. "070") and nothing else, as a deploy meets
+// files before version (e.g. "071") and nothing else, as a deploy meets
 // one; apply runs the rest. owner is its owner-role connection.
 func Upgrade(t *testing.T, version string) (owner *pgx.Conn, apply func()) {
 	t.Helper()

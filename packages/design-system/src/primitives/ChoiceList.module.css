@@ -1,0 +1,82 @@
+/* Options told apart by shade, the chosen one by the accent wash; the dot
+   is the one line, as a checkbox is its outline. */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+}
+
+.option {
+  display: grid;
+  grid-template-columns: 14px auto minmax(0, 1fr);
+  align-items: start;
+  gap: var(--ds-space-8) var(--ds-space-12);
+  width: 100%;
+  padding: var(--ds-space-8) var(--ds-space-12);
+  border: 0;
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-raised);
+  color: var(--ds-color-text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.option:not(:has(.icon)) {
+  grid-template-columns: 14px minmax(0, 1fr);
+}
+.option:hover:not([aria-disabled="true"]):not(.chosen) {
+  background: var(--ds-color-hover-wash);
+}
+.option:focus-visible {
+  outline: var(--ds-focus-ring-width) solid var(--ds-color-focus-ring);
+  outline-offset: var(--ds-focus-ring-offset);
+}
+.option[aria-disabled="true"] {
+  cursor: not-allowed;
+  color: var(--ds-color-text-disabled);
+}
+.chosen {
+  background: var(--ds-color-accent-subtle);
+}
+
+.dot {
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  border: 1px solid var(--ds-color-border-strong);
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-color-field-bg);
+}
+.chosen .dot {
+  border: 4px solid var(--ds-color-accent);
+}
+.option[aria-disabled="true"] .dot {
+  opacity: 0.5;
+}
+
+.icon {
+  margin-top: 1px;
+  color: var(--ds-color-text-secondary);
+}
+.option[aria-disabled="true"] .icon {
+  color: var(--ds-color-text-disabled);
+}
+
+.text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.label {
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
+}
+.option[aria-disabled="true"] .label {
+  color: var(--ds-color-text-disabled);
+}
+.description {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}

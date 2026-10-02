@@ -43,7 +43,8 @@ import {
 import { Button, Callout, Dialog, LinkButton, Spinner, Textarea } from "@dude/design-system/primitives";
 import { BUILDER_GIVE_UP_MINUTES, builderOffline, DEFAULT_RUN_ROLE, EventTypes, MIB, SETTINGS_ROLE_LABEL, TERMINAL_RUN_STATUSES, gib, machineSpec, runLabel, shortDigest } from "@dude/domain";
 import type { AgentRole, PersistedEvent } from "@dude/domain";
-import type { ApiClient, CostSplit, Person, RunDetail, RunDiffSummary } from "../api/client.ts";
+import type { ApiClient, CostSplit, Person, RecoverAction, RunDetail, RunDiffSummary } from "../api/client.ts";
+import { keptUntil as keptUntilDay } from "./Recovery.tsx";
 import { ApiError, modelCostShown } from "../api/client.ts";
 import { CostOf } from "./MetricsSection.tsx";
 import {
@@ -80,6 +81,8 @@ export interface RunScreenProps {
    * parked conductor wakes for a message, and one that ended is replaced.
    */
   chat?: ChatVariant | undefined;
+  /** What its end strip says of a session that stopped, beyond how it ended. */
+  stopped?: StoppedRun | undefined;
 }
 
 export interface ChatVariant {
@@ -99,6 +102,15 @@ export interface RunCost {
   tokens: number;
   activeMs: number;
 }
+
+/**
+ * A stopped session: the work went on elsewhere (a start over set its
+ * attempt aside, or a new session took its step up again), or its task can
+ * be picked back up from here — resumed while it is kept, until when.
+ */
+export type StoppedRun =
+  | { readonly setAside: "restart" | "retry" }
+  | { readonly onPickUp: (action: RecoverAction) => void; readonly keptUntil: string | null };
 
 /** What a session shows: its conversation, its checkout's changes, or its event ledger. */
 type SessionView = "chat" | "changes" | "events";
@@ -122,7 +134,7 @@ const STATUS_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.RunLeaseAcquired,
 ]);
 
-export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, onOpenServers, onBack, task: given, chat }: RunScreenProps) {
+export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, onOpenServers, onBack, task: given, chat, stopped }: RunScreenProps) {
   const [view, setView] = useState<SessionView>("chat");
   // The bar's slot where Changes draws the diff's own controls.
   const [toolbar, setToolbar] = useState<HTMLDivElement | null>(null);
@@ -540,7 +552,8 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                   <AgentPlan items={conversation.plan} defaultCollapsed data-testid="plan" />
                 ) : null
               }
-              footer={!isLive ? <RunEnded run={run} onOpenTask={onOpenTask ? () => onOpenTask(run.taskId) : undefined} /> : isPreviewRun ? (
+              footer={!isLive ? <RunEnded run={run} onOpenTask={onOpenTask ? () => onOpenTask(run.taskId) : undefined}
+                stopped={stopped} /> : isPreviewRun ? (
                 // A preview run has no agent to steer: its servers are the whole of it,
                 // and they are on the task's Servers tab. A task this page could not
                 // read is no place to send anyone: the way there is said in words.
@@ -917,20 +930,40 @@ const ENDED_WORDS: Record<"completed" | "failed" | "aborted", string> = {
  * In place of the composer once a Run has ended — nobody would hear a
  * steer: how it ended, and the way back to its task, where what happens
  * next is decided. Why it failed is the transcript's last line, just above.
+ * One that stopped (aborted, failed) offers its task's ways back — Resume…
+ * while it is kept, and Other ways… — or, set aside, says where the work
+ * went on.
  */
-function RunEnded({ run, onOpenTask }: { run: RunDetail; onOpenTask?: (() => void) | undefined }) {
+function RunEnded({ run, onOpenTask, stopped }: { run: RunDetail; onOpenTask?: (() => void) | undefined; stopped?: StoppedRun | undefined }) {
   const outcome = run.status === "failed" || run.status === "aborted" ? run.status : "completed";
+  const setAside = stopped && "setAside" in stopped ? stopped.setAside : null;
+  const pickUp = stopped && "onPickUp" in stopped ? stopped : null;
   return (
     <Callout data-testid="run-ended" data-outcome={outcome}
-      tone={outcome === "failed" ? "danger" : outcome === "aborted" ? "attention" : "neutral"}>
+      tone={setAside ? "neutral" : outcome === "failed" ? "danger" : outcome === "aborted" ? "attention" : "neutral"}>
       <span className="runEnded">
-        <span>{ENDED_WORDS[outcome]}</span>
-        {/* On its task's page, the task is already here. */}
-        {!onOpenTask ? null : (
-          <Button size="sm" variant="quiet" trailingIcon="arrow-right" onClick={onOpenTask} data-testid="run-ended-task">
-            Back to the task
-          </Button>
-        )}
+        <span>
+          {setAside === "restart" ? "Set aside when its task was started over." : setAside === "retry" ? "Set aside: a new session took its step up again." : ENDED_WORDS[outcome]}
+          {pickUp ? <span className="runEndedKept"> {pickUp.keptUntil ? `Kept until ${keptUntilDay(pickUp.keptUntil)}.` : "Its workspace is no longer kept."}</span> : null}
+        </span>
+        <span className="runEndedActions">
+          {pickUp ? (
+            <>
+              {pickUp.keptUntil ? (
+                <Button size="sm" variant="primary" leadingIcon="play" onClick={() => pickUp.onPickUp("resume")} data-testid="run-ended-resume">Resume…</Button>
+              ) : null}
+              <Button size="sm" variant="quiet" onClick={() => pickUp.onPickUp("retry")} data-testid="run-ended-other">
+                {pickUp.keptUntil ? "Other ways…" : "Pick it back up…"}
+              </Button>
+            </>
+          ) : null}
+          {/* On its task's page, the task is already here. */}
+          {!onOpenTask ? null : (
+            <Button size="sm" variant="quiet" trailingIcon="arrow-right" onClick={onOpenTask} data-testid="run-ended-task">
+              Back to the task
+            </Button>
+          )}
+        </span>
       </span>
     </Callout>
   );

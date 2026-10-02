@@ -191,15 +191,23 @@ to start in previews. With a lux that serves previews (its
 label under the preview domain:
 
 ```
-<server>-<task id>-<project id>.<preview domain>     web-wi-0mg7…-prj-0mg7….preview-absmartly.dev
+<server>-<task key>-<project slug>.<preview domain>     web-jerv-2-jervasion.preview-absmartly.dev
 ```
 
 The domain's wildcard certificate need cover one level only. Each part is
 lowercased with anything outside `a-z0-9` made `-`; a label longer than 63
 characters is cut and ends in `-` and 8 hex characters of a hash of the
-three parts, so it is stable and distinct. lux refusing a hostname another
-server has (`hostname_taken`) makes dude choose a second, hashed one. dude
-keeps lux's server id and stores the full hostname and URL lux returns.
+server's name and the task's and project's ids, so it is stable and
+distinct. A project's slug is unique in its organization and never changes,
+so two projects sharing a key prefix get different names; another
+organization's project of the same slug may hold the name, and lux refusing
+a hostname another server has (`hostname_taken`) makes dude choose a
+second, hashed one. A server keeps the hostname it was created at: renaming
+a project's key prefix leaves existing previews' URLs as they are, and
+previews made before names used key and slug keep their id-based ones. dude
+keeps lux's server id, stores the full hostname and URL lux returns, and
+finds a preview's servers by their `dude.preview` label; it never reads a
+hostname back.
 
 - **Declaring a preview** creates its servers (`wake: request`, `lifetime:
   owner`, `idleAfter` the project's idle limit, `expireAfter` 30 days,
@@ -427,6 +435,7 @@ does not refuse to start.
 | `orchestrator.diff_every` | `DUDE_DIFF_EVERY` | `15s` | orchestrator | How often a working agent's diff is read besides after its edits. |
 | `orchestrator.machine_usd_per_hour` | `DUDE_MACHINE_USD_PER_HOUR` | `0.20` | orchestrator | What an hour of a lux host costs, recorded with each Run; not negative. |
 | `orchestrator.lux_cost_every` | `DUDE_LUX_COST_EVERY` | `2m` | orchestrator | How often an agent's Run's cost is read from lux (`GET /v1/runs/{id}/cost`), until lux reports it final or eight days after the Run ended; positive. |
+| `orchestrator.keep_stopped` | `DUDE_KEEP_STOPPED` | `168h` | orchestrator | How long an aborted or failed agent Run is kept in lux (stopped, its workspace and conversation with it) so a person can resume it; then it is cancelled. Kept Runs count against lux's storage quota (a Go duration). |
 | `s3.bucket` | `DUDE_S3_BUCKET` | off | backend | The bucket people's photos and projects' images are kept in. Unset, uploads answer 503 and faces show initials. |
 | `s3.endpoint` | `DUDE_S3_ENDPOINT` | AWS | backend | For MinIO, versitygw and other S3-compatible stores (path-style). versitygw needs Bun ≥ 1.4.0 (see [Bun](#bun)); the release has it. |
 | `s3.region` | `DUDE_S3_REGION` | `us-east-1` | backend | |
@@ -434,7 +443,7 @@ does not refuse to start.
 | `lux.url` | `LUX_URL` | required | orchestrator | The lux control plane. |
 | `lux.api_key` | `LUX_API_KEY` | required | orchestrator | A lux API key with the `run` scope. **Secret.** |
 | `lux.console_url` | `LUX_CONSOLE_URL` | `lux.url` | orchestrator | lux's console, for the "Open terminal in lux" links on a task's servers (`<url>/runs/<luxRunId>/terminal`). |
-| `previews.domain` | `DUDE_PREVIEW_DOMAIN` | optional; older lux's `previewDomain` | orchestrator | Needed only for lux predating relative hostnames when it does not report its domain. New lux receives only `<server>-<task>-<project>` and returns the full hostname and URL (see [Branch previews](#branch-previews)). If set, must match a domain lux reports; ignored for naming when new lux reports null. |
+| `previews.domain` | `DUDE_PREVIEW_DOMAIN` | optional; older lux's `previewDomain` | orchestrator | Needed only for lux predating relative hostnames when it does not report its domain. New lux receives only `<server>-<task key>-<project slug>` and returns the full hostname and URL (see [Branch previews](#branch-previews)). If set, must match a domain lux reports; ignored for naming when new lux reports null. |
 | `previews.reap_after` | `DUDE_PREVIEW_REAP_AFTER` | `168h` | orchestrator | A branch preview nobody has opened for this long is ended and its lux servers deleted; positive. lux's own `expireAfter` (30 days, set by dude) is the safety net. |
 | `llm.url` | `DUDE_LLM_URL` | none | orchestrator | The LLM API agents use, as a base URL before the API path, e.g. `https://llmproxy.example.com/v1`; must be http(s). Given to each Run as the plain env var `DUDE_LLM_URL`; its host is agents' model egress. See [Agent image contract](#agent-image-contract). |
 | `llm.key` | `DUDE_LLM_KEY` | none | orchestrator | That API's key. Given to each Run as a lux secret delivered as the env var `DUDE_LLM_KEY`: never in the spec's env or labels, never stored by lux. **Secret.** |

@@ -34,9 +34,11 @@ type settings struct {
 	ReconcileEvery       time.Duration
 	ParkAfter, IdleAfter time.Duration
 	ConductorWarm        time.Duration
-	DiffEvery            time.Duration
-	MachineUSDPerHour    float64
-	LuxCostEvery         time.Duration
+	// How long an aborted or failed Run's lux Run is kept for a resume.
+	KeepStopped       time.Duration
+	DiffEvery         time.Duration
+	MachineUSDPerHour float64
+	LuxCostEvery      time.Duration
 
 	FactoryLogins []string
 
@@ -126,6 +128,9 @@ func settingsFrom(cfg *config.Config) (settings, error) {
 	s.ParkAfter, s.IdleAfter = cfg.Duration("DUDE_PARK_AFTER"), cfg.Duration("DUDE_IDLE_AFTER")
 	s.ConductorWarm = cfg.Duration("DUDE_CONDUCTOR_WARM")
 	s.DiffEvery = cfg.Duration("DUDE_DIFF_EVERY")
+	if s.KeepStopped = cfg.Duration("DUDE_KEEP_STOPPED"); s.KeepStopped <= 0 {
+		return settings{}, fmt.Errorf("%s: not a positive duration: %v", cfg.Label("DUDE_KEEP_STOPPED"), s.KeepStopped)
+	}
 	// One rate for every lux host until lux reports each host's own.
 	if s.MachineUSDPerHour = cfg.Float("DUDE_MACHINE_USD_PER_HOUR"); s.MachineUSDPerHour < 0 {
 		return settings{}, fmt.Errorf("%s: not a rate: %v", cfg.Label("DUDE_MACHINE_USD_PER_HOUR"), s.MachineUSDPerHour)
