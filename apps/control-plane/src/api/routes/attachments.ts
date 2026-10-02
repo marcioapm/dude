@@ -7,14 +7,15 @@
  * `deliveredType`) and an optional `name`. Both are checked here by their
  * bytes — type by magic number, size from the header — against what they
  * claim, and stored in the photo
- * bucket. The row is the task's, and unattached until a steer, an answer or
- * the task's prompt carries its id (the orchestrator attaches it). An
+ * bucket. The row is the task's, and unattached until a steer or an answer
+ * carries its id (the orchestrator attaches it), or the task's goal or
+ * criteria reference it (syncTaskAttachments). An
  * upload never sent is swept after a day (sweeper.ts).
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import { ATTACHMENT_LIMITS, ATTACHMENT_TYPES, newId } from "@dude/domain";
-import { withOrg } from "../../db/client.ts";
+import { ATTACHMENT_LIMITS, ATTACHMENT_TYPES, newId, taskAttachmentIds } from "@dude/domain";
+import { withOrg, type OrgScope } from "../../db/client.ts";
 import { EXTENSION, imageInfo, type ImageType } from "../../images.ts";
 import { deleteObject, getObject, putObject, storageConfigured } from "../../storage.ts";
 import { HttpError, badRequest, conflict, forbidden, json, noContent, notFound, readCapped } from "../http.ts";
@@ -179,6 +180,45 @@ async function remove(ctx: RequestContext): Promise<Response> {
 /** What the composer needs to know before anything is picked. */
 async function limits(): Promise<Response> {
   return json({ enabled: storageConfigured(), types: ATTACHMENT_TYPES, ...ATTACHMENT_LIMITS });
+}
+
+const invalidReference = (message: string) => new HttpError(400, message, "invalid_attachment_reference");
+
+/**
+ * Make the task's images the ones its goal and criteria reference
+ * (`![name](attachment:att_…)`), in the caller's transaction, after the text
+ * is written: each referenced one is the task's prompt's (`for_prompt`,
+ * attached, `position` its order of first appearance), and each no longer
+ * referenced is let go — unsent again from now, so the sweeper takes it a
+ * day later (`detached_at`). A reference to another task's image, or to one
+ * sent with a message, is refused; one to an image that does not exist (or
+ * is another organization's: the same to RLS) is left in the text, and the
+ * agent is told it is unavailable.
+ */
+export async function syncTaskAttachments(scope: OrgScope, taskId: string, goal: string, criteria: ReadonlyArray<string>): Promise<void> {
+  const { sql } = scope;
+  const ids = taskAttachmentIds(goal, criteria);
+  const rows = ids.length === 0 ? [] : (await sql`
+    SELECT id, task_id, directive_id, bytes FROM attachments WHERE id IN ${sql(ids)} ORDER BY id FOR UPDATE`) as
+    Array<{ id: string; task_id: string; directive_id: string | null; bytes: number }>;
+  for (const r of rows) {
+    if (r.task_id !== taskId) throw invalidReference(`image ${r.id} is another task's; upload it to this one`);
+    if (r.directive_id !== null) throw invalidReference(`image ${r.id} was sent with a message; upload it again to use it here`);
+  }
+  // Every agent given the task gets these with its prompt, as one lux input.
+  if (rows.length > ATTACHMENT_LIMITS.perMessage) {
+    throw invalidReference(`a task's text shows at most ${ATTACHMENT_LIMITS.perMessage} images`);
+  }
+  if (rows.reduce((n, r) => n + r.bytes, 0) > ATTACHMENT_LIMITS.messageBytes) {
+    throw invalidReference(`a task's images are at most ${ATTACHMENT_LIMITS.messageBytes >> 20} MiB together`);
+  }
+  const found = ids.filter((id) => rows.some((r) => r.id === id));
+  for (const [position, id] of found.entries()) {
+    await sql`UPDATE attachments SET for_prompt = true, attached_at = COALESCE(attached_at, now()), detached_at = NULL,
+      position = ${position} WHERE id = ${id}`;
+  }
+  await sql`UPDATE attachments SET for_prompt = false, attached_at = NULL, position = 0, detached_at = now()
+    WHERE task_id = ${taskId} AND for_prompt AND NOT (id = ANY(${sql.array(found, "TEXT")}))`;
 }
 
 export function registerAttachmentRoutes(router: Router): void {
