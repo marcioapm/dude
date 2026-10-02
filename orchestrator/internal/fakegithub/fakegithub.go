@@ -104,6 +104,13 @@ func (s *Server) Set(f func(s *Server)) {
 	f(s)
 }
 
+// Reopen reopens a pull request closed without merging, as a person would.
+func (s *Server) Reopen(number int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pulls[number].State = "open"
+}
+
 // AdvanceBase commits to a pull request's base, as someone merging other
 // work does: the pull request falls behind.
 func (s *Server) AdvanceBase(base, message string) string {
@@ -206,6 +213,13 @@ func (s *Server) SetChecks(state string) {
 	s.checks = state
 }
 
+// Close closes a pull request without merging it, as a person would.
+func (s *Server) Close(number int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pulls[number].State = "closed"
+}
+
 func (s *Server) Merge(number int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -250,6 +264,20 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("POST "+prefix+"/pulls", s.openPull)
 	mux.HandleFunc("GET "+prefix+"/pulls/{n}", s.getPull)
+	mux.HandleFunc("PATCH "+prefix+"/pulls/{n}", func(w http.ResponseWriter, r *http.Request) {
+		p := s.number(w, r)
+		if p == nil {
+			return
+		}
+		var in struct{ State string }
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if in.State == "closed" && p.MergedAt == nil {
+			p.State = "closed"
+		}
+		write(w, 200, s.pullJSON(p))
+	})
 	mux.HandleFunc("GET "+prefix+"/pulls/{n}/reviews", s.reviews)
 	mux.HandleFunc("GET "+prefix+"/pulls/{n}/comments", func(w http.ResponseWriter, r *http.Request) { write(w, 200, []any{}) })
 	mux.HandleFunc("GET "+prefix+"/issues/{n}/comments", s.comments)

@@ -223,8 +223,10 @@ implement → review (fan-out) ⟲ fix → simplify → [test] → open PR → w
   one too (lux keeps a lost Run to resume).
 - **A wakeable preview** (`runs.wakeable`, lux#41) is lux servers of its
   own (`preview_servers`), one per recipe marked to start in previews, at
-  `<server>-<task>-<project>.<preview domain>` — one DNS label
-  (`servers.PreviewLabel`). lux owns the URL and says on its feed when
+  `<server>-<task key>-<project slug>.<preview domain>` — one DNS label
+  (`servers.PreviewLabel`), chosen once when the server is created and
+  kept: a server is found again by its `dude.preview` label, never by
+  hostname. lux owns the URL and says on its feed when
   someone opens one (`server.wake_requested`) or none is used
   (`server.idle`); `servers.Feed` records it and the preview loop acts.
   Its Run is servers-only (no `workload.servers`), resumed with `sync` on

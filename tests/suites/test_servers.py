@@ -74,14 +74,14 @@ def test_a_project_defines_its_servers_and_a_preview_serves_them(client: ApiClie
     assert client.post(f"/v1/tasks/{task['id']}/preview").status_code == 409
 
     # Declared: its server exists in lux, at one label under the preview
-    # domain, asleep; nothing runs.
+    # domain, <server>-<task key>-<project slug>, asleep; nothing runs.
     asleep = wait_until(lambda: (s := client.get(f"/v1/tasks/{task['id']}/servers").json())["run"].get("asleep") and s,
                         timeout=60, message="the preview never went to sleep")
     assert asleep["run"]["wakeable"] is True and asleep["run"]["previewStage"] is None, asleep["run"]
     [web] = asleep["servers"]
     host = web["url"].removeprefix("https://")
     label, _, domain = host.partition(".")
-    assert domain == FAKE_PREVIEW_DOMAIN and label.startswith("web-") and len(label) <= 63, host
+    assert domain == FAKE_PREVIEW_DOMAIN and label == f"web-{task['key']}-{forge_project['slug']}".lower(), (host, task["key"])
     assert web["serverState"] == "asleep" and web["state"] == "stopped", web
     luxed = lux_get(env, f"/v1/servers?hostname={host}")["servers"]
     assert [s["id"] for s in luxed] == [web["id"]] and luxed[0]["labels"]["dude.task"] == task["id"], luxed

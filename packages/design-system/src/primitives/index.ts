@@ -7,6 +7,8 @@ export type { NumberInputProps } from "./NumberInput.tsx";
 export { Select } from "./Select.tsx";
 export type { SelectProps, SelectOption, SelectGroup } from "./Select.tsx";
 export { Checkbox } from "./Checkbox.tsx";
+export { ChoiceList } from "./ChoiceList.tsx";
+export type { ChoiceListProps, ChoiceOption } from "./ChoiceList.tsx";
 export type { CheckboxProps, CheckedState } from "./Checkbox.tsx";
 export { Badge } from "./Badge.tsx";
 export type { BadgeProps, BadgeEmphasis } from "./Badge.tsx";

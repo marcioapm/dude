@@ -81,6 +81,18 @@ func (w *world) str(sql string, args ...any) string {
 	return s
 }
 
+// previewOf is a task's preview as its hostname reads it: its key and its
+// project's slug, as they are now.
+func (w *world) previewOf(task string) servers.PreviewOf {
+	w.t.Helper()
+	of := servers.PreviewOf{TaskID: task, ProjectID: w.project}
+	if err := w.owner.QueryRow(context.Background(), `SELECT p.key_prefix || '-' || t.number, p.slug
+		FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = $1`, task).Scan(&of.TaskKey, &of.ProjectSlug); err != nil {
+		w.t.Fatal(err)
+	}
+	return of
+}
+
 // open is a signed-in browser opening a server's URL until it is served.
 func (w *world) open(serverID string) {
 	w.t.Helper()
@@ -114,8 +126,8 @@ func TestDeclaringAPreviewCreatesItsServersAndNothingElse(t *testing.T) {
 	}
 	hosts := w.lux.TenantServers()
 	want := []string{
-		servers.PreviewHostname(previewDomain, "api", task, w.project, ""),
-		servers.PreviewHostname(previewDomain, "web", task, w.project, ""),
+		servers.PreviewHostname(previewDomain, "api", w.previewOf(task), ""),
+		servers.PreviewHostname(previewDomain, "web", w.previewOf(task), ""),
 	}
 	var got []string
 	for h := range hosts {
@@ -130,7 +142,7 @@ func TestDeclaringAPreviewCreatesItsServersAndNothingElse(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s not in lux", name)
 		}
-		host := servers.PreviewHostname(previewDomain, name, task, w.project, "")
+		host := servers.PreviewHostname(previewDomain, name, w.previewOf(task), "")
 		if strings.Count(strings.TrimSuffix(host, "."+previewDomain), ".") != 0 {
 			t.Errorf("%s is more than one label under the domain", host)
 		}
@@ -159,7 +171,7 @@ func TestDeclaringAPreviewCreatesItsServersAndNothingElse(t *testing.T) {
 		t.Errorf("run view %v", run)
 	}
 	web := serverNamed(out, "web")
-	if web == nil || web["url"] != "https://"+servers.PreviewHostname(previewDomain, "web", task, w.project, "") ||
+	if web == nil || web["url"] != "https://"+servers.PreviewHostname(previewDomain, "web", w.previewOf(task), "") ||
 		web["serverState"] != "asleep" || web["state"] != "stopped" {
 		t.Errorf("web = %v", web)
 	}
@@ -680,7 +692,7 @@ func TestATakenHostnameIsChosenAgain(t *testing.T) {
 	w.wakeable()
 	w.recipe("web", 3000, "npm run dev", "", nil, true)
 	task := w.task()
-	taken := servers.PreviewHostname(previewDomain, "web", task, w.project, "")
+	taken := servers.PreviewHostname(previewDomain, "web", w.previewOf(task), "")
 	if _, err := w.previews.Lux.CreateServer(context.Background(), lux.CreateServer{Name: "web", Port: 1, Hostname: taken}); err != nil {
 		t.Fatal(err)
 	}
@@ -693,7 +705,7 @@ func TestATakenHostnameIsChosenAgain(t *testing.T) {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, runID) == 1
 	})
 	got := w.str(`SELECT hostname FROM preview_servers WHERE run_id = $1`, runID)
-	if want := servers.PreviewHostname(previewDomain, "web", task, w.project, runID); got != want || got == taken {
+	if want := servers.PreviewHostname(previewDomain, "web", w.previewOf(task), runID); got != want || got == taken {
 		t.Errorf("hostname %s, want %s", got, want)
 	}
 }

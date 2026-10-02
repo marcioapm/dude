@@ -123,7 +123,7 @@ func newWorld(t *testing.T) *world {
 	forges := forge.Resolver{DB: app}
 	w.runtime = workflow.New(app, "test", quiet)
 	w.runtime.Register(delivery.Workflow(&delivery.Store{DB: app}, forges))
-	w.syncer = &phases.Syncer{DB: app, Lux: lux.New(luxSrv.URL, "lux-key"), Forges: forges, Log: quiet,
+	w.syncer = &phases.Syncer{DB: app, Lux: lux.New(luxSrv.URL, "lux-key"), Forges: forges, Log: quiet, KeepFor: 7 * 24 * time.Hour,
 		Agent: phases.AgentConfig{DefaultImage: "default:img", LLMURL: "https://llm.example/v1", LLMKey: "secret-key"}}
 	t.Cleanup(w.syncer.Stop)
 	w.artifacts = &phases.Artifacts{DB: app, Lux: w.syncer.Lux}
@@ -271,8 +271,8 @@ func (w *world) pump() {
 	if _, err := w.previews.Sweep(ctx); err != nil {
 		w.t.Fatal(err)
 	}
-	if _, err := phases.NotifyFinished(ctx, w.app, func(ctx context.Context, org, wf, runID, status string) error {
-		return w.runtime.Signal(ctx, org, wf, delivery.SignalPhaseFinished, map[string]string{"runId": runID, "status": status}, "phase-finished:"+runID)
+	if _, err := phases.NotifyFinished(ctx, w.app, func(ctx context.Context, org, wf, runID, status, key string) error {
+		return w.runtime.Signal(ctx, org, wf, delivery.SignalPhaseFinished, map[string]string{"runId": runID, "status": status}, key)
 	}); err != nil {
 		w.t.Fatal(err)
 	}
@@ -2362,7 +2362,34 @@ func TestPauseKeepsTheRunAndResumeContinuesIt(t *testing.T) {
 	}
 }
 
-func TestAbortCancelsTheLuxRun(t *testing.T) {
+// An aborted Run's lux Run is stopped and kept, not cancelled: its
+// workspace and the agent's conversation are there to resume.
+func TestAbortKeepsTheLuxRun(t *testing.T) {
+	w := newWorld(t)
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	wi := w.task()
+	w.deliver(wi)
+	w.until("the agent to be working", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running'`, wi) == 1
+	})
+	mustExec(t, w.owner, `UPDATE runs SET status = 'aborted', control = 'abort', keep = true WHERE task_id = $1`, wi)
+	w.until("the lux run to be kept", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND lux_stop_reason = 'kept' AND kept_until > now() + interval '6 days'`, wi) == 1
+	})
+	if r := w.lux.Runs()[0]; r.Cancelled || r.Stopped != 1 {
+		t.Fatalf("lux run stopped=%d cancelled=%v", r.Stopped, r.Cancelled)
+	}
+	// Its time up, it is cancelled.
+	mustExec(t, w.owner, `UPDATE runs SET kept_until = now() - interval '1 second' WHERE task_id = $1`, wi)
+	w.until("the lux run to be cancelled", func() bool { return w.lux.Runs()[0].Cancelled })
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND lux_stop_reason = 'cancel' AND kept_until IS NULL`, wi); n != 1 {
+		t.Errorf("a kept run past its time is not recorded cancelled")
+	}
+}
+
+// A Run aborted without being worth keeping (from before runs were kept)
+// is cancelled, as it always was.
+func TestAbortCancelsALuxRunNotKept(t *testing.T) {
 	w := newWorld(t)
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
 	wi := w.task()
@@ -2837,7 +2864,7 @@ func TestInitialGitEventsSurviveAStreamReconnectWithoutDuplicates(t *testing.T) 
 		}
 	}
 	w.syncer.Stop()
-	w.syncer = &phases.Syncer{DB: w.syncer.DB, Lux: w.syncer.Lux, Forges: w.syncer.Forges, Log: quiet, Agent: w.syncer.Agent}
+	w.syncer = &phases.Syncer{DB: w.syncer.DB, Lux: w.syncer.Lux, Forges: w.syncer.Forges, Log: quiet, Agent: w.syncer.Agent, KeepFor: w.syncer.KeepFor}
 	t.Cleanup(w.syncer.Stop)
 	status, body := w.call("/internal/runs/"+runID+"/steer", map[string]any{"text": "Keep working", "interrupt": true})
 	if status != 201 {
@@ -2888,7 +2915,7 @@ func TestAFinishingRunIsFollowedAfterARestart(t *testing.T) {
 	})
 	// A new orchestrator: nothing is following anything.
 	w.syncer.Stop()
-	w.syncer = &phases.Syncer{DB: w.syncer.DB, Lux: w.syncer.Lux, Forges: w.syncer.Forges, Log: quiet, Agent: w.syncer.Agent}
+	w.syncer = &phases.Syncer{DB: w.syncer.DB, Lux: w.syncer.Lux, Forges: w.syncer.Forges, Log: quiet, Agent: w.syncer.Agent, KeepFor: w.syncer.KeepFor}
 	t.Cleanup(w.syncer.Stop)
 	w.until("the implementer to complete", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'completed'`, wi) == 1
@@ -3137,7 +3164,7 @@ func TestAPersonSendsAStoppedDeliveryBackToTryAgain(t *testing.T) {
 	var actions string
 	_ = w.owner.QueryRow(context.Background(), `SELECT payload->>'actions' FROM events WHERE task_id = $1
 		AND event_type = 'question.asked' AND payload->>'kind' = 'escalation'`, wi).Scan(&actions)
-	if actions != `["retry", "stop"]` {
+	if actions != `["resume", "retry", "stop"]` {
 		t.Errorf("a failed implementer offers %s", actions)
 	}
 	if status, body := w.call("/internal/tasks/"+wi+"/decide", map[string]any{"action": "accept"}); status != 400 {

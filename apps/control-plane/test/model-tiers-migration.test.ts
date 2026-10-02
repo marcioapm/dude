@@ -83,7 +83,7 @@ beforeAll(async () => {
   // A project on the scripted agent, in an organization whose tiers ask for it.
   await project("prj_fake", "org_fake", { implementer: { model: "fake/scripted" } });
 
-  // 069 alone: what it leaves, before 070 renames the orchestrator.
+  // 069 alone: what it leaves, before 071 renames the orchestrator.
   for (const f of files.filter((f) => f.version === "069")) await db.unsafe(await f.contents());
 }, 120_000);
 
