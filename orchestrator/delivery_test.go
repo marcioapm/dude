@@ -205,13 +205,13 @@ func mustExec(t *testing.T, c *pgx.Conn, sql string, args ...any) {
 // the model itself, so a test can tell the two apart.
 func (w *world) onModel(role, model string) string {
 	w.t.Helper()
-	id := "mtr_" + strings.NewReplacer("/", "_", ".", "_", "-", "_").Replace(model)
+	id := "mtr_" + strings.NewReplacer("/", "_", ".", "_", "-", "_").Replace(model) + "_" + w.org
 	mustExec(w.t, w.owner, `INSERT INTO model_tiers (id, organization_id, name, model, position)
-		VALUES ($1 || '_' || $2, $2, $4, $3, 10) ON CONFLICT DO NOTHING`, id, w.org, model, onModelTier(model))
+		VALUES ($1, $2, $4, $3, 10) ON CONFLICT DO NOTHING`, id, w.org, model, onModelTier(model))
 	mustExec(w.t, w.owner, `UPDATE projects SET agent_models = jsonb_set(agent_models, ARRAY[$2::text],
-		COALESCE(agent_models->$2, '{}'::jsonb) || jsonb_build_object('tier', $3 || '_' || $4)) WHERE id = $1`,
-		w.project, role, id, w.org)
-	return id + "_" + w.org
+		COALESCE(agent_models->$2, '{}'::jsonb) || jsonb_build_object('tier', $3::text)) WHERE id = $1`,
+		w.project, role, id)
+	return id
 }
 
 // onModelTier is the name onModel gives the tier it makes for model.
