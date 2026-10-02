@@ -4,10 +4,11 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
+import { act } from "react";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
-import { click, mount, until } from "./dom.ts";
+import { click, mount, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
-import { RUN_ID, TASK_ID } from "../src/fixtures/data.ts";
+import { PROJECT, RUN_ID, TASK_ID } from "../src/fixtures/data.ts";
 import { ApiError, type RunDetail } from "../src/api/client.ts";
 import { App } from "../src/App.tsx";
 import { PeopleProvider } from "../src/people.tsx";
@@ -80,5 +81,47 @@ describe("the shell's routes to a task's servers", () => {
     await click(button);
     expect(window.location.hash).toBe(`#/task/${TASK_ID}/servers`);
     await onServers(page);
+  });
+});
+
+describe("the first load with no place", () => {
+  /** A client whose tree arrives only when `arrive` is called. */
+  class SlowTree extends FixtureClient {
+    private gate = Promise.withResolvers<void>();
+    asked = Promise.withResolvers<void>();
+    arrive() {
+      this.gate.resolve();
+    }
+    override async navigation() {
+      this.asked.resolve();
+      await this.gate.promise;
+      return super.navigation();
+    }
+  }
+
+  test("opens the first project's board", async () => {
+    const client = new SlowTree("a");
+    await app("", client);
+    client.arrive();
+    await until(() => (window.location.hash.startsWith("#/project/") ? true : null), "the board's hash");
+    expect(window.location.hash).toBe(`#/project/${PROJECT.id}`);
+  });
+
+  test("keeps a place the URL named after the app read it, before the tree arrived", async () => {
+    const client = new SlowTree("a");
+    await app("", client);
+    await client.asked.promise;
+    // As a link followed straight after the shell showed: the hash is set
+    // and the tree arrives in the same task, so the first-load effect runs
+    // before the hashchange (a timer) reaches the app's place.
+    const named = `#/project/${PROJECT.id}/settings/reviewer`;
+    await act(async () => {
+      window.history.replaceState(null, "", named);
+      client.arrive();
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+    });
+    expect(window.location.hash).toBe(named);
+    await settle(100);
+    expect(window.location.hash).toBe(named);
   });
 });

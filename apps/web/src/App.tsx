@@ -172,9 +172,13 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
     (e) => people.seen(e) || QUIET_EVENTS.has(e.eventType));
 
   // First load with nothing selected: open the first project's board rather
-  // than an empty pane.
+  // than an empty pane. Unless the URL has named a place since `place` was
+  // read: its hashchange may not have reached `place` yet, and replacing
+  // the hash here would lose it.
   useEffect(() => {
-    if (!place && projects && projects[0]) go(inTree({ kind: "project", id: projects[0].id }), true);
+    if (!place && projects && projects[0] && !parsePlace(window.location.hash)) {
+      go(inTree({ kind: "project", id: projects[0].id }), true);
+    }
   }, [projects, place, go]);
 
   const selected = treeSelection(place);
