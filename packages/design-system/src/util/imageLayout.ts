@@ -11,7 +11,7 @@
  * draws them in.
  */
 
-import { attachmentReferences } from "@dude/domain";
+import { attachmentIdAt, attachmentReferences } from "@dude/domain";
 import { criteriaLines, type CriteriaItem } from "./criteria.ts";
 import { parseMarkdown } from "./markdown.ts";
 
@@ -64,18 +64,10 @@ export function snapWidth(px: number, max: number): ImageSize {
 export function withLayout(text: string, n: number, layout: ImageLayout): string {
   const r = attachmentReferences(text)[n];
   if (!r) return text;
-  const span = text.slice(r.from, r.to);
-  let end = urlStart(span) + "attachment:".length + r.id.length;
-  if (span[end] === ">") end++;
+  let end = attachmentIdAt(text, r) + r.id.length;
+  if (text[end] === ">") end++;
   const title = layoutTitle(layout);
-  return text.slice(0, r.from) + span.slice(0, end) + (title ? ` "${title}"` : "") + ")" + text.slice(r.to);
-}
-
-/** Where `attachment:` starts in one reference: past the alt's `]`, which an escape never is. */
-function urlStart(span: string): number {
-  let i = 2;
-  while (i < span.length && span[i] !== "]") i += span[i] === "\\" ? 2 : 1;
-  return span.indexOf("attachment:", i);
+  return text.slice(0, end) + (title ? ` "${title}"` : "") + ")" + text.slice(r.to);
 }
 
 const lineOf = (text: string, at: number) => text.slice(0, at).split("\n").length - 1;
