@@ -60,7 +60,7 @@ func (in PromptInput) fill(prompt string) string {
 	values := map[string]string{
 		"task.title":    in.Title,
 		"task.goal":     in.Goal,
-		"task.criteria": criteriaList(in.AcceptanceCriteria),
+		"task.criteria": CriteriaList(in.AcceptanceCriteria),
 		"run.branch":    in.Branch,
 		"run.base_ref":  in.BaseRef,
 	}
@@ -109,11 +109,11 @@ func workspaceNote(repos []PromptRepo, review bool) string {
 	return b.String()
 }
 
-// criteriaList writes the criteria as a Markdown list, one item each. A
+// CriteriaList writes the criteria as a Markdown list, one item each. A
 // criterion is Markdown and may run over several lines; its later lines are
 // indented under its marker, or they would read as text after the list (or,
 // starting with "- ", as criteria of their own).
-func criteriaList(criteria []string) string {
+func CriteriaList(criteria []string) string {
 	items := make([]string, len(criteria))
 	for i, c := range criteria {
 		items[i] = "- " + strings.ReplaceAll(c, "\n", "\n  ")
@@ -129,7 +129,7 @@ func (in PromptInput) task() string {
 	if len(in.AcceptanceCriteria) > 0 {
 		var b strings.Builder
 		b.WriteString("Acceptance criteria:\n")
-		b.WriteString(criteriaList(in.AcceptanceCriteria))
+		b.WriteString(CriteriaList(in.AcceptanceCriteria))
 		parts = append(parts, b.String())
 	}
 	if len(in.Decisions) > 0 {

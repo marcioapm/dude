@@ -91,12 +91,9 @@ type Recover struct {
 	Action string `json:"action"`
 	// Resume: the step that waits on the Runs taken back up.
 	At string `json:"at,omitempty"`
-	// Retry: the step to run again, and why it stopped (an escalation's
-	// reason and detail, "" for an abort), which says what budget it gets
-	// back.
-	Step   string `json:"step,omitempty"`
-	Reason string `json:"reason,omitempty"`
-	Detail any    `json:"detail,omitempty"`
+	// Retry: the step to run again. Why it stopped (State.Stopped, nil for
+	// an abort) says what budget it gets back.
+	Step string `json:"step,omitempty"`
 }
 
 type Escalation struct {
@@ -1031,13 +1028,10 @@ func (w *steps) recover(ctx context.Context, sc workflow.StepContext) (workflow.
 	if rc == nil {
 		return workflow.Result{}, fmt.Errorf("nothing to recover")
 	}
+	e := st.Stopped
 	st.Recover, st.Stopped = nil, nil
 	if rc.Action == "resume" {
 		return park(rc.At, st, st.PendingRunIDs), nil
-	}
-	var e *Escalation
-	if rc.Reason != "" {
-		e = &Escalation{Reason: rc.Reason, Detail: rc.Detail}
 	}
 	return retry(st, rc.Step, e), nil
 }

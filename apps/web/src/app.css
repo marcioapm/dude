@@ -687,19 +687,6 @@ body {
 .attemptSpacer {
   flex: 1;
 }
-.attemptFacts {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: var(--ds-space-6) var(--ds-space-16);
-  margin: 0;
-  font-size: var(--ds-text-sm);
-}
-.attemptFacts dt {
-  color: var(--ds-color-text-muted);
-}
-.attemptFacts dd {
-  margin: 0;
-}
 .attemptPrs {
   display: flex;
   flex-wrap: wrap;
@@ -712,14 +699,9 @@ body {
   align-items: baseline;
   gap: var(--ds-space-8);
   margin: var(--ds-space-12) var(--ds-space-12) var(--ds-space-4);
-  font-size: var(--ds-text-xs);
-  font-weight: var(--ds-weight-semibold);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--ds-color-text-muted);
 }
+/* The attempt's state after its number, in words, not capitals. */
 .sessionGroupHead span {
-  font-weight: var(--ds-weight-regular);
   text-transform: none;
-  letter-spacing: 0;
+  letter-spacing: normal;
 }

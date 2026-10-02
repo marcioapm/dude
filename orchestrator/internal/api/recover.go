@@ -44,8 +44,8 @@ func (s *Server) recoverRoutes(mux *http.ServeMux) {
 type stoppedTask struct {
 	ProjectID, Status string
 	// Its delivery, the latest: nil for a task never delivered.
-	WorkflowID, WorkflowStatus, Step *string
-	State                            delivery.State
+	WorkflowID, Step *string
+	State            delivery.State
 	// Its attempt: the highest of its Runs'.
 	Attempt int
 	// The Runs a resume takes up again: the last attempt's agent Runs that
@@ -74,12 +74,12 @@ func loadStopped(ctx context.Context, tx pgx.Tx, taskID string, lock bool) (stop
 		forUpdate = "FOR UPDATE OF t"
 	}
 	var state []byte
-	err := tx.QueryRow(ctx, `SELECT t.project_id, t.status::text, d.id, d.status::text, d.step, d.state,
+	err := tx.QueryRow(ctx, `SELECT t.project_id, t.status::text, d.id, d.step, d.state,
 			COALESCE((SELECT max(attempt) FROM runs WHERE task_id = t.id AND kind = 'agent'), 1)
 		FROM tasks t LEFT JOIN LATERAL (SELECT * FROM workflow_runs d WHERE d.task_id = t.id
 		  ORDER BY d.created_at DESC LIMIT 1) d ON true
 		WHERE t.id = $1 `+forUpdate, taskID).
-		Scan(&t.ProjectID, &t.Status, &t.WorkflowID, &t.WorkflowStatus, &t.Step, &state, &t.Attempt)
+		Scan(&t.ProjectID, &t.Status, &t.WorkflowID, &t.Step, &state, &t.Attempt)
 	if db.IsNotFound(err) {
 		return t, fail(http.StatusNotFound, "not_found", "task %s not found", taskID)
 	}
@@ -193,7 +193,7 @@ func (s *Server) recoveryOptions(w http.ResponseWriter, r *http.Request, org str
 		return err
 	}
 	write(w, http.StatusOK, map[string]any{"taskId": taskID, "actions": db.NonNil(t.actions()),
-		"attempt": t.Attempt, "keptUntil": t.KeptUntil, "runIds": db.NonNil(t.Kept)})
+		"attempt": t.Attempt, "keptUntil": t.KeptUntil})
 	return nil
 }
 
@@ -304,9 +304,6 @@ func pickUp(ctx context.Context, tx pgx.Tx, org string, t stoppedTask, action, n
 		}
 	} else {
 		rc.Step = t.retryStep()
-		if e := st.Stopped; e != nil {
-			rc.Reason, rc.Detail = e.Reason, e.Detail
-		}
 	}
 	st.Recover = rc
 	next, _ := json.Marshal(st)
@@ -364,15 +361,11 @@ func resumeKept(ctx context.Context, tx pgx.Tx, org, projectID, taskID string, r
 func changedTask(title, goal string, rawCriteria []byte) string {
 	var criteria []string
 	_ = json.Unmarshal(rawCriteria, &criteria)
-	var b strings.Builder
-	fmt.Fprintf(&b, "While you were stopped, the task was changed. Work to it as it is now.\n\n**%s**\n\n%s", title, strings.TrimSpace(goal))
+	text := fmt.Sprintf("While you were stopped, the task was changed. Work to it as it is now.\n\n**%s**\n\n%s", title, strings.TrimSpace(goal))
 	if len(criteria) > 0 {
-		b.WriteString("\n\nAcceptance criteria:")
-		for _, c := range criteria {
-			b.WriteString("\n- " + c)
-		}
+		text += "\n\nAcceptance criteria:\n" + delivery.CriteriaList(criteria)
 	}
-	return b.String()
+	return text
 }
 
 // release lets a task's stopped Runs go — a retry or a start over took
@@ -408,20 +401,18 @@ func (s *Server) closePullRequests(ctx context.Context, org string, ids []string
 	if len(ids) == 0 || s.Forges == nil {
 		return
 	}
-	var prs []struct {
+	type openPR struct {
 		Number int
 		URL    string
 	}
+	var prs []openPR
 	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT p.number, r.url FROM pull_requests p JOIN repositories r ON r.id = p.repository_id
 			WHERE p.id = ANY($1) AND p.state IN ('open', 'draft')`, ids)
 		if err != nil {
 			return err
 		}
-		prs, err = pgx.CollectRows(rows, pgx.RowToStructByPos[struct {
-			Number int
-			URL    string
-		}])
+		prs, err = pgx.CollectRows(rows, pgx.RowToStructByPos[openPR])
 		return err
 	}); err != nil || len(prs) == 0 {
 		return

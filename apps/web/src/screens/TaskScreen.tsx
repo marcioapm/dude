@@ -37,8 +37,8 @@ import {
   TimelineItem,
   planProgress,
 } from "@dude/design-system/components";
-import { Button, Callout, EmptyState, LinkButton, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
-import { Icon } from "@dude/design-system";
+import { Button, Callout, EmptyState, KeyValueList, LinkButton, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
+import { Icon, shortId, toggled } from "@dude/design-system";
 import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, runLabel, type PersistedEvent } from "@dude/domain";
 import type { ApiClient, Artifact, Finding, MergeMethod, PullRequest, Run, TaskDetail } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
@@ -53,13 +53,13 @@ import { EscalationPanel } from "./EscalationPanel.tsx";
 import { TaskMetricsSection } from "./MetricsSection.tsx";
 import { NotFound } from "./NotFound.tsx";
 import { DudeMark, dudeName } from "../DudeMark.tsx";
-import { RunScreen } from "./RunScreen.tsx";
+import { RunScreen, type StoppedRun } from "./RunScreen.tsx";
 import { OwnerSelect } from "./OwnerSelect.tsx";
 import { ServersAside } from "./ServersAside.tsx";
 import { ServersSection, serversTab } from "./ServersSection.tsx";
 import { existingTask, TaskDialog } from "./TaskDialog.tsx";
 import { PullRequestActions } from "./PullRequestActions.tsx";
-import { PickUpDialog, StoppedNotice, stopOf, useRecoveryOptions } from "./Recovery.tsx";
+import { PickUpDialog, StoppedNotice, howRunStopped, stopOf, stoppedSentence, useRecoveryOptions } from "./Recovery.tsx";
 import type { RecoverAction } from "../api/client.ts";
 import { pullRequestActivity } from "../pullRequests.ts";
 import type { TaskTab } from "../place.ts";
@@ -215,7 +215,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
   }, [stream]);
   const servers = useServers(client, { taskId }, serversVersion);
   // A stopped task's ways back, read again whenever the page is.
-  const recovery = useRecoveryOptions(client, item, version);
+  const recovery = useRecoveryOptions(client, item);
   const [pickingUp, setPickingUp] = useState<RecoverAction | null>(null);
   // Earlier attempts, folded under the current one's pipeline: those opened.
   const [shownAttempts, setShownAttempts] = useState<ReadonlySet<number>>(new Set());
@@ -243,6 +243,20 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
   // What a pull request heard, for why a fix ran: a few of the ledger's many.
   const prEvents = useMemo(() => events.filter((e) => e.eventType.startsWith("pull_request.")), [events]);
 
+  // How it stopped, read from the runs and the ledger once per change of them.
+  const stopOfTask = useMemo(() => (item ? stopOf(item, events, people) : null), [item, events, people]);
+  // What the open session's end strip says, if it stopped: the same object
+  // while it says the same, so the session (memoised) is not redrawn.
+  const keptUntil = recovery?.keptUntil ?? null;
+  const canPickUp = Boolean(recovery?.actions.length) && (!item?.owner || item.owner.id === people.you);
+  const stoppedOn = stopOfTask?.run?.id ?? null;
+  const shownRun = runId ?? picked;
+  const aside = item && shownRun ? setAsideOf(item.runs.find((r) => r.id === shownRun), Math.max(1, ...item.runs.map((r) => r.attempt)), item.runs) : undefined;
+  const pickUpHere = canPickUp && shownRun !== null && shownRun === stoppedOn;
+  const openStopped = useMemo<StoppedRun | undefined>(
+    () => (aside ? { setAside: aside } : pickUpHere ? { onPickUp: setPickingUp, keptUntil } : undefined),
+    [aside, pickUpHere, keptUntil]);
+
   // Each running phase's plan: the last it wrote, as the transcript has it.
   const plans = useMemo<Plans>(() => {
     const out = new Map<string, { done: number; total: number; current: string | null }>();
@@ -267,7 +281,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
 
   const started = phases.length > 0;
   const stopped = item.status === "aborted" || item.status === "failed";
-  const stop = stopped ? stopOf(item, events, people) : null;
+  const stop = stopped ? stopOfTask : null;
   // The reader picks it up when it is theirs, or nobody's.
   const yours = !item.owner || (people.you !== null && item.owner.id === people.you);
   // Every attempt the task has had, newest first; the current is the highest.
@@ -349,7 +363,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
       ) : null}
 
       {editing ? (
-        <TaskDialog client={client} projectId={item.projectId} onClose={() => setEditing(false)} existing={existingTask(item, started && !stopped, started && stopped)} onSaved={() => void load()} />
+        <TaskDialog client={client} projectId={item.projectId} onClose={() => setEditing(false)} existing={existingTask(item, started)} onSaved={() => void load()} />
       ) : null}
       {pickingUp && stop && recovery ? (
         <PickUpDialog client={client} task={item} stop={stop} options={recovery} initial={pickingUp}
@@ -419,12 +433,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
                   <EarlierAttempt key={n} attempt={n} runs={item.runs.filter((r) => r.attempt === n && r.phase)}
                     prs={prs.filter((pr) => attemptOfPr(pr, item.runs) === n)} events={events} people={people}
                     open={shownAttempts.has(n)} onOpenRun={onOpenRun}
-                    onToggle={(open) => setShownAttempts((s) => {
-                      const next = new Set(s);
-                      if (open) next.add(n);
-                      else next.delete(n);
-                      return next;
-                    })} />
+                    onToggle={(open) => setShownAttempts((s) => toggled(s, n, open))} />
                 ))}
               </section>
 
@@ -490,7 +499,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
                   // One attempt: the list alone. Several: each under its head.
                   return n === null ? list : (
                     <section key={n} aria-label={`Attempt ${n}`} data-testid="attempt-sessions">
-                      <h3 className="sessionGroupHead">Attempt {n}<span>{n === current ? "current" : "set aside"}</span></h3>
+                      <h3 className="ds-label sessionGroupHead">Attempt {n}<span>{n === current ? "current" : "set aside"}</span></h3>
                       {list}
                     </section>
                   );
@@ -498,10 +507,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onCloseRun, tab: 
               </div>
               {openRun ? (
                 <RunScreen key={openRun} client={client} runId={openRun} onBack={onBack} task={sessionTask} onOpenServers={openServers}
-                  setAside={setAsideOf(item.runs.find((r) => r.id === openRun), current, item.runs)}
-                  onPickUp={stopped && yours && recovery && recovery.actions.length > 0 && stop?.run?.id === openRun
-                    ? (action) => setPickingUp(action) : undefined}
-                  resumable={Boolean(recovery?.actions.includes("resume"))} keptUntil={recovery?.keptUntil ?? null} />
+                  stopped={openStopped} />
               ) : null}
             </div>
           ) : (
@@ -565,9 +571,7 @@ function EarlierAttempt({ attempt, runs, prs, events, people, open, onToggle, on
 }) {
   const ordered = [...runs].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const stopped = ordered.findLast((r) => r.status === "aborted" || r.status === "failed");
-  const aborted = stopped ? events.findLast((e) => e.eventType === "run.aborted" && e.runId === stopped.id) : undefined;
-  const by = aborted ? actorName(humanActor(aborted), people.names) : null;
-  const why = typeof aborted?.payload.reason === "string" ? aborted.payload.reason : stopped?.error ? shortError(stopped.error, 120) : null;
+  const { by, why } = stopped ? howRunStopped(stopped, events, people, 120) : { by: null, why: null };
   const restart = events.find((e) => e.eventType === "task.recovered" && e.payload.action === "restart" && e.payload.attempt === attempt + 1);
   const restartBy = restart ? actorName(humanActor(restart), people.names) : null;
   const note = typeof restart?.payload.note === "string" && restart.payload.note ? restart.payload.note : null;
@@ -599,37 +603,16 @@ function EarlierAttempt({ attempt, runs, prs, events, people, open, onToggle, on
             label={runLabel(run)}
             note={run.status === "aborted" ? (by ? `aborted by ${firstName(by)}` : "aborted") : run.status === "failed" && run.error ? shortError(run.error, 80) : undefined}
             status={<StatusMark status={run.status} size="sm" iconOnly={run.status === "completed"} />}
-            meta={Object.values(run.heads)[0]?.slice(0, 7)}
+            meta={Object.values(run.heads).map((sha) => shortId(sha, 7))[0]}
             duration={run.startedAt ? <Duration since={run.startedAt} until={run.endedAt} tone="muted" /> : "—"} />
         ))}
       </StepList>
-      <dl className="attemptFacts">
-        {stopped ? (
-          <>
-            <dt>Stopped</dt>
-            <dd>{stopped.status === "failed" ? <>The {runLabel(stopped).toLowerCase()} failed{why ? `: ${why}` : "."}</>
-              : <><b>{by ?? "Someone"}</b> aborted the {runLabel(stopped).toLowerCase()}{why ? <>: “{why}”</> : "."}</>}</dd>
-          </>
-        ) : null}
-        {restart ? (
-          <>
-            <dt>Set aside</dt>
-            <dd><b>{restartBy ?? "Someone"}</b> started over{note ? <>: “{note}”</> : "."}</dd>
-          </>
-        ) : null}
-        {head ? (
-          <>
-            <dt>Branch</dt>
-            <dd><span className="ds-mono">{ordered.find((r) => r.branch)?.branch ?? "its branch"}</span> at <span className="ds-mono">{head[1].slice(0, 7)}</span>, kept on GitHub.</dd>
-          </>
-        ) : null}
-        {prs.length > 0 ? (
-          <>
-            <dt>{prs.length > 1 ? "Pull requests" : "Pull request"}</dt>
-            <dd className="attemptPrs">{prs.map((pr) => <PrChip key={pr.id} pr={pr} />)}</dd>
-          </>
-        ) : null}
-      </dl>
+      <KeyValueList items={[
+        ...(stopped ? [{ label: "Stopped", value: stoppedSentence(stopped, by, why) }] : []),
+        ...(restart ? [{ label: "Set aside", value: <><b>{restartBy ?? "Someone"}</b> started over{note ? <>: “{note}”</> : "."}</> }] : []),
+        ...(head ? [{ label: "Branch", value: <><span className="ds-mono">{ordered.find((r) => r.branch)?.branch ?? "its branch"}</span> at <span className="ds-mono">{shortId(head[1], 7)}</span>, kept on GitHub.</> }] : []),
+        ...(prs.length > 0 ? [{ label: prs.length > 1 ? "Pull requests" : "Pull request", value: <span className="attemptPrs">{prs.map((pr) => <PrChip key={pr.id} pr={pr} />)}</span> }] : []),
+      ]} />
     </div>
   );
 }

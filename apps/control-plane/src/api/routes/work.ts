@@ -52,9 +52,9 @@ export function escalationJson(alias = "tasks"): string {
   // Resume only while the Run that failed is still kept to resume
   // (run_kept, migration 066): after that, the other ways are left.
   return `(SELECT json_build_object('reason', e.payload->>'reason', 'detail', e.payload->'detail',
-    'actions', CASE WHEN EXISTS (SELECT 1 FROM runs WHERE runs.id = e.payload->'detail'->>'runId' AND run_kept(runs))
-      THEN COALESCE(e.payload->'actions', '["stop"]'::jsonb)
-      ELSE COALESCE(e.payload->'actions', '["stop"]'::jsonb) - 'resume' END, 'at', e.occurred_at)
+    'actions', COALESCE(e.payload->'actions', '["stop"]'::jsonb) - CASE WHEN EXISTS (SELECT 1 FROM runs
+        WHERE runs.id = e.payload->'detail'->>'runId' AND run_kept(runs)) THEN '' ELSE 'resume' END,
+    'at', e.occurred_at)
   FROM events e
   WHERE ${alias}.status = 'awaiting_input'
     AND e.task_id = ${alias}.id AND e.event_type = 'question.asked' AND e.payload->>'kind' = 'escalation'

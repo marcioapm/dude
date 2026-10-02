@@ -343,8 +343,6 @@ export const recoveryOptionsSchema = z.object({
   attempt: z.number().int(),
   /** Until when a resume can: when the first of the kept Runs stops being kept. */
   keptUntil: z.string().nullable(),
-  /** The Runs a resume takes back up. */
-  runIds: z.array(z.string()),
 });
 export type RecoveryOptions = z.infer<typeof recoveryOptionsSchema>;
 

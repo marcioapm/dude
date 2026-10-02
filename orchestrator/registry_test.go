@@ -400,7 +400,7 @@ func (w *world) restart(p registry.Provider) *bytes.Buffer {
 	var logs bytes.Buffer
 	w.syncer = &phases.Syncer{DB: old.DB, Lux: old.Lux, Forges: old.Forges, Agent: old.Agent, Registry: p,
 		Log: slog.New(slog.NewTextHandler(&logs, nil)), ParkAfter: old.ParkAfter, IdleAfter: old.IdleAfter,
-		RetryAhead: old.RetryAhead}
+		RetryAhead: old.RetryAhead, KeepFor: old.KeepFor}
 	w.t.Cleanup(w.syncer.Stop)
 	return &logs
 }

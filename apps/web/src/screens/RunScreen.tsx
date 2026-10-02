@@ -70,17 +70,18 @@ export interface RunScreenProps {
    * the owner alone, its key being on the page already.
    */
   task?: { owner: Person | null; key?: string | undefined } | undefined;
-  /**
-   * The work went on elsewhere: a start over set this session's attempt
-   * aside, or a new session took its step up again. Its end strip says so.
-   */
-  setAside?: "restart" | "retry" | undefined;
-  /** This session stopped and its task can be picked back up here: opens the dialog on a way. */
-  onPickUp?: ((action: RecoverAction) => void) | undefined;
-  /** It can still be resumed, and until when it is kept. */
-  resumable?: boolean | undefined;
-  keptUntil?: string | null | undefined;
+  /** What its end strip says of a session that stopped, beyond how it ended. */
+  stopped?: StoppedRun | undefined;
 }
+
+/**
+ * A stopped session: the work went on elsewhere (a start over set its
+ * attempt aside, or a new session took its step up again), or its task can
+ * be picked back up from here — resumed while it is kept, until when.
+ */
+export type StoppedRun =
+  | { readonly setAside: "restart" | "retry" }
+  | { readonly onPickUp: (action: RecoverAction) => void; readonly keptUntil: string | null };
 
 /** What a session shows: its conversation, its checkout's changes, or its event ledger. */
 type SessionView = "chat" | "changes" | "events";
@@ -101,7 +102,7 @@ const STATUS_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.RunResumed,
 ]);
 
-export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, onOpenServers, onBack, task: given, setAside, onPickUp, resumable, keptUntil }: RunScreenProps) {
+export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, onOpenServers, onBack, task: given, stopped }: RunScreenProps) {
   const [view, setView] = useState<SessionView>("chat");
   // The bar's slot where Changes draws the diff's own controls.
   const [toolbar, setToolbar] = useState<HTMLDivElement | null>(null);
@@ -433,7 +434,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                 ) : null
               }
               footer={!isLive ? <RunEnded run={run} onOpenTask={onOpenTask ? () => onOpenTask(run.taskId) : undefined}
-                setAside={setAside} onPickUp={onPickUp} resumable={resumable} keptUntil={keptUntil} /> : isPreviewRun ? (
+                stopped={stopped} /> : isPreviewRun ? (
                 // A preview run has no agent to steer: its servers are the whole of it,
                 // and they are on the task's Servers tab. A task this page could not
                 // read is no place to send anyone: the way there is said in words.
@@ -765,32 +766,26 @@ const ENDED_WORDS: Record<"completed" | "failed" | "aborted", string> = {
  * while it is kept, and Other ways… — or, set aside, says where the work
  * went on.
  */
-function RunEnded({ run, onOpenTask, setAside, onPickUp, resumable, keptUntil }: {
-  run: RunDetail;
-  onOpenTask?: (() => void) | undefined;
-  setAside?: "restart" | "retry" | undefined;
-  onPickUp?: ((action: RecoverAction) => void) | undefined;
-  resumable?: boolean | undefined;
-  keptUntil?: string | null | undefined;
-}) {
+function RunEnded({ run, onOpenTask, stopped }: { run: RunDetail; onOpenTask?: (() => void) | undefined; stopped?: StoppedRun | undefined }) {
   const outcome = run.status === "failed" || run.status === "aborted" ? run.status : "completed";
-  const kept = keptUntil ? keptUntilDay(keptUntil) : null;
+  const setAside = stopped && "setAside" in stopped ? stopped.setAside : null;
+  const pickUp = stopped && "onPickUp" in stopped ? stopped : null;
   return (
     <Callout data-testid="run-ended" data-outcome={outcome}
       tone={setAside ? "neutral" : outcome === "failed" ? "danger" : outcome === "aborted" ? "attention" : "neutral"}>
       <span className="runEnded">
         <span>
           {setAside === "restart" ? "Set aside when its task was started over." : setAside === "retry" ? "Set aside: a new session took its step up again." : ENDED_WORDS[outcome]}
-          {!setAside && onPickUp ? <span className="runEndedKept"> {resumable && kept ? `Kept until ${kept}.` : "Its workspace is no longer kept."}</span> : null}
+          {pickUp ? <span className="runEndedKept"> {pickUp.keptUntil ? `Kept until ${keptUntilDay(pickUp.keptUntil)}.` : "Its workspace is no longer kept."}</span> : null}
         </span>
         <span className="runEndedActions">
-          {!setAside && onPickUp ? (
+          {pickUp ? (
             <>
-              {resumable ? (
-                <Button size="sm" variant="primary" leadingIcon="play" onClick={() => onPickUp("resume")} data-testid="run-ended-resume">Resume…</Button>
+              {pickUp.keptUntil ? (
+                <Button size="sm" variant="primary" leadingIcon="play" onClick={() => pickUp.onPickUp("resume")} data-testid="run-ended-resume">Resume…</Button>
               ) : null}
-              <Button size="sm" variant="quiet" onClick={() => onPickUp("retry")} data-testid="run-ended-other">
-                {resumable ? "Other ways…" : "Pick it back up…"}
+              <Button size="sm" variant="quiet" onClick={() => pickUp.onPickUp("retry")} data-testid="run-ended-other">
+                {pickUp.keptUntil ? "Other ways…" : "Pick it back up…"}
               </Button>
             </>
           ) : null}

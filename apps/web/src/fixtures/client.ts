@@ -126,7 +126,7 @@ export class FixtureClient extends ApiClient {
       this.#task = { ...this.#task, status: "running", runs: [next, stopped] };
     } else {
       this.#task = { ...this.#task, status: as === "failed" ? "failed" : "aborted", runs: [stopped] };
-      this.#recovery = { taskId: TASK_ID, actions: ["resume", "retry", "restart"], attempt: 1, runIds: [RUN_ID],
+      this.#recovery = { taskId: TASK_ID, actions: ["resume", "retry", "restart"], attempt: 1,
         keptUntil: new Date(Date.now() + 6 * 24 * 3600_000).toISOString() };
     }
     const ana = { type: "human" as const, id: "u_ana", name: "Ana Ribeiro" };
@@ -146,7 +146,7 @@ export class FixtureClient extends ApiClient {
   #recovery: RecoveryOptions | null = null;
 
   override recoveryOptions(): Promise<RecoveryOptions> {
-    return Promise.resolve(this.#recovery ?? { taskId: TASK_ID, actions: [], attempt: 1, runIds: [], keptUntil: null });
+    return Promise.resolve(this.#recovery ?? { taskId: TASK_ID, actions: [], attempt: 1, keptUntil: null });
   }
 
   override async recover(_taskId: string, action: RecoverAction): Promise<{ action: RecoverAction }> {

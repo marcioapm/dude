@@ -12,6 +12,7 @@
  */
 
 import { useEffect, useState, type ReactNode } from "react";
+import { shortId } from "@dude/design-system";
 import { Duration } from "@dude/design-system/components";
 import { Button, Callout, ChoiceList, Dialog, Textarea, type ChoiceOption } from "@dude/design-system/primitives";
 import { DEFAULT_RUN_ROLE, runLabel, type PersistedEvent } from "@dude/domain";
@@ -23,14 +24,22 @@ import type { People } from "../people.tsx";
 
 /** How the task stopped, as the record has it. */
 export interface Stop {
-  /** The Run it stopped on (an aborted one, or the one that failed). */
+  /** The Run it stopped on (an aborted one, or the one that failed): when and how is its own. */
   run: Run | null;
   /** Who aborted it, or null for a failure or a stop no person made. */
   by: string | null;
   /** In their words, or the failure's. */
   why: string | null;
-  at: string | null;
-  failed: boolean;
+}
+
+/** Who stopped a Run and why: who aborted it and their reason, or the failure's words. */
+export function howRunStopped(run: Run, events: readonly PersistedEvent[], people: People, max?: number): Pick<Stop, "by" | "why"> {
+  if (run.status !== "aborted") return { by: null, why: run.error ? shortError(run.error, max) : null };
+  const aborted = events.findLast((e) => e.eventType === "run.aborted" && e.runId === run.id);
+  return {
+    by: aborted ? actorName(humanActor(aborted), people.names) : null,
+    why: typeof aborted?.payload.reason === "string" ? aborted.payload.reason : null,
+  };
 }
 
 /**
@@ -47,22 +56,22 @@ export function stopOf(task: TaskDetail, events: readonly PersistedEvent[], peop
   const ended = task.runs.filter((r) => r.attempt === attempt && (r.status === "aborted" || r.status === "failed") && (r.endedAt ?? "") > since)
     .sort((a, b) => (b.endedAt ?? b.createdAt).localeCompare(a.endedAt ?? a.createdAt));
   const run = ended[0] ?? null;
-  const aborted = run ? events.findLast((e) => e.eventType === "run.aborted" && e.runId === run.id) : undefined;
-  if (run && run.status === "aborted") {
-    const by = aborted ? actorName(humanActor(aborted), people.names) : null;
-    const reason = typeof aborted?.payload.reason === "string" ? aborted.payload.reason : null;
-    return { run, by, why: reason, at: run.endedAt, failed: false };
-  }
-  return { run, by: null, why: run?.error ? shortError(run.error) : null, at: run?.endedAt ?? null, failed: run?.status === "failed" };
+  return run ? { run, ...howRunStopped(run, events, people) } : { run: null, by: null, why: null };
 }
 
-/** The first line: who stopped what, and why. */
+/** The sentence for how a Run stopped, without when: "Ana aborted the implement: “…”", "The fix failed: …". */
+export function stoppedSentence(run: Run, by: string | null, why: string | null, ago: ReactNode = null): ReactNode {
+  const what = runLabel(run).toLowerCase();
+  if (run.status === "failed") return <><strong>The {what} failed</strong>{ago}{why ? `: ${why}` : "."}</>;
+  return <><strong>{by ?? "Someone"} aborted the {what}</strong>{ago}{why ? <>: “{why}”</> : "."}</>;
+}
+
+/** The first line: who stopped what, when, and why. */
 function stopSentence(stop: Stop): ReactNode {
   if (!stop.run) return <><strong>Delivery stopped</strong>.</>;
-  const what = runLabel(stop.run).toLowerCase();
-  const ago = stop.at ? <> <Duration ms={Math.max(0, Date.now() - Date.parse(stop.at))} format="age" tone="muted" /> ago</> : null;
-  if (stop.failed) return <><strong>The {what} failed</strong>{ago}{stop.why ? `: ${stop.why}` : "."}</>;
-  return <><strong>{stop.by ?? "Someone"} aborted the {what}</strong>{ago}{stop.why ? <>: “{stop.why}”</> : "."}</>;
+  const at = stop.run.endedAt;
+  return stoppedSentence(stop.run, stop.by, stop.why,
+    at ? <> <Duration ms={Math.max(0, Date.now() - Date.parse(at))} format="age" tone="muted" /> ago</> : null);
 }
 
 /** When a kept session stops being kept, as a day: "Thu 8 Oct". */
@@ -72,7 +81,7 @@ export const keptUntil = (iso: string) =>
 /** What stopped, for a sentence about it: "Ana aborted its implement.", "Its implement failed.", "Its delivery stopped." */
 function stoppedWords(stop: Stop, role: string): string {
   if (!stop.run) return "Its delivery stopped.";
-  return stop.failed ? `Its ${role} failed.` : `${stop.by ?? "Someone"} aborted its ${role}.`;
+  return stop.run.status === "failed" ? `Its ${role} failed.` : `${stop.by ?? "Someone"} aborted its ${role}.`;
 }
 
 const ACTION_LABEL: Record<RecoverAction, string> = { resume: "Resume…", retry: "Try again…", restart: "Start over…" };
@@ -96,7 +105,7 @@ export function StoppedNotice({ task, stop, options, owner, you, onOpenRun, onCh
   const actions = options?.actions ?? [];
   const head = Object.entries(stop.run?.heads ?? {})[0];
   return (
-    <Callout tone={stop.failed ? "danger" : "attention"} data-testid="stopped" data-status={task.status}>
+    <Callout tone={stop.run?.status === "failed" ? "danger" : "attention"} data-testid="stopped" data-status={task.status}>
       <div className="escalation">
         <p>
           {stopSentence(stop)}{" "}
@@ -107,7 +116,7 @@ export function StoppedNotice({ task, stop, options, owner, you, onOpenRun, onCh
           ) : null}
         </p>
         <p className="escalationWaiting">
-          {head ? <>It left <span className="ds-mono">{head[1].slice(0, 7)}</span> on <span className="ds-mono">{stop.run?.branch ?? "its branch"}</span>. </> : null}
+          {head ? <>It left <span className="ds-mono">{shortId(head[1], 7)}</span> on <span className="ds-mono">{stop.run?.branch ?? "its branch"}</span>. </> : null}
           {options === null ? null : options.keptUntil
             ? <>Its workspace and conversation are kept until {keptUntil(options.keptUntil)}.</>
             : actions.length > 0 ? <>Its workspace and conversation are no longer kept.</> : null}
@@ -186,7 +195,7 @@ export function PickUpDialog({ client, task, stop, options, initial, onEdit, onC
   useEffect(() => setAction(initial), [initial]);
   const role = (stop.run ? runLabel(stop.run) : "agent").toLowerCase();
   const roleName = stop.run?.role ?? DEFAULT_RUN_ROLE;
-  const head = Object.values(stop.run?.heads ?? {})[0]?.slice(0, 7) ?? null;
+  const head = Object.values(stop.run?.heads ?? {}).map((sha) => shortId(sha, 7))[0] ?? null;
   const branch = stop.run?.branch ?? task.runs.find((r) => r.branch)?.branch ?? "its branch";
   const open = new Set(options.actions);
   const reason = (a: RecoverAction): string | undefined => {
@@ -248,11 +257,24 @@ export function PickUpDialog({ client, task, stop, options, initial, onEdit, onC
   );
 }
 
-/** Reads how the task can be picked back up, again whenever `version` moves. */
-export function useRecoveryOptions(client: ApiClient, task: TaskDetail | null, version: number): RecoveryOptions | null {
+/**
+ * Reads how the task can be picked back up: again when one of its Runs ends
+ * or is taken back up, and — just after it stops, until a resume is open —
+ * a few seconds later, as the orchestrator keeps the stopped Runs a moment
+ * after they stop, and nothing on the page says when.
+ */
+export function useRecoveryOptions(client: ApiClient, task: TaskDetail | null): RecoveryOptions | null {
   const [options, setOptions] = useState<RecoveryOptions | null>(null);
+  const [tick, setTick] = useState(0);
   const stopped = task?.status === "aborted" || task?.status === "failed";
   const taskId = task?.id;
+  const runs = task?.runs.map((r) => `${r.id}:${r.status}:${r.endedAt ?? ""}`).join(",") ?? "";
+  const waiting = stopped && options !== null && !options.keptUntil && tick < 5;
+  useEffect(() => {
+    if (!waiting) return;
+    const timer = setTimeout(() => setTick((t) => t + 1), 2000);
+    return () => clearTimeout(timer);
+  }, [waiting, options]);
   useEffect(() => {
     if (!stopped || !taskId) {
       setOptions(null);
@@ -263,6 +285,6 @@ export function useRecoveryOptions(client: ApiClient, task: TaskDetail | null, v
     return () => {
       live = false;
     };
-  }, [client, taskId, stopped, version]);
+  }, [client, taskId, stopped, runs, tick]);
   return options;
 }

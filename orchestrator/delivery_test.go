@@ -121,7 +121,7 @@ func newWorld(t *testing.T) *world {
 	forges := forge.Resolver{DB: app}
 	w.runtime = workflow.New(app, "test", quiet)
 	w.runtime.Register(delivery.Workflow(&delivery.Store{DB: app}, forges))
-	w.syncer = &phases.Syncer{DB: app, Lux: lux.New(luxSrv.URL, "lux-key"), Forges: forges, Log: quiet,
+	w.syncer = &phases.Syncer{DB: app, Lux: lux.New(luxSrv.URL, "lux-key"), Forges: forges, Log: quiet, KeepFor: 7 * 24 * time.Hour,
 		Agent: phases.AgentConfig{DefaultImage: "default:img", LLMURL: "https://llm.example/v1", LLMKey: "secret-key"}}
 	t.Cleanup(w.syncer.Stop)
 	w.artifacts = &phases.Artifacts{DB: app, Lux: w.syncer.Lux}
@@ -2836,7 +2836,7 @@ func TestInitialGitEventsSurviveAStreamReconnectWithoutDuplicates(t *testing.T) 
 		}
 	}
 	w.syncer.Stop()
-	w.syncer = &phases.Syncer{DB: w.syncer.DB, Lux: w.syncer.Lux, Forges: w.syncer.Forges, Log: quiet, Agent: w.syncer.Agent}
+	w.syncer = &phases.Syncer{DB: w.syncer.DB, Lux: w.syncer.Lux, Forges: w.syncer.Forges, Log: quiet, Agent: w.syncer.Agent, KeepFor: w.syncer.KeepFor}
 	t.Cleanup(w.syncer.Stop)
 	status, body := w.call("/internal/runs/"+runID+"/steer", map[string]any{"text": "Keep working", "interrupt": true})
 	if status != 201 {
@@ -2887,7 +2887,7 @@ func TestAFinishingRunIsFollowedAfterARestart(t *testing.T) {
 	})
 	// A new orchestrator: nothing is following anything.
 	w.syncer.Stop()
-	w.syncer = &phases.Syncer{DB: w.syncer.DB, Lux: w.syncer.Lux, Forges: w.syncer.Forges, Log: quiet, Agent: w.syncer.Agent}
+	w.syncer = &phases.Syncer{DB: w.syncer.DB, Lux: w.syncer.Lux, Forges: w.syncer.Forges, Log: quiet, Agent: w.syncer.Agent, KeepFor: w.syncer.KeepFor}
 	t.Cleanup(w.syncer.Stop)
 	w.until("the implementer to complete", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'completed'`, wi) == 1

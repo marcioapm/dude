@@ -59,8 +59,8 @@ const edits = async () =>
 test("a stopped task's goal can change", async () => {
   const res = await call("PATCH", `/v1/tasks/${task}`, { title: "Greet", goal: "Say goodbye", acceptanceCriteria: ["it greets"] });
   expect(res.status).toBe(200);
-  const [{ goal }] = (await owner`SELECT goal FROM tasks WHERE id = ${task}`) as Array<{ goal: string }>;
-  expect(goal).toBe("Say goodbye");
+  const [row] = (await owner`SELECT goal FROM tasks WHERE id = ${task}`) as Array<{ goal: string }>;
+  expect(row?.goal).toBe("Say goodbye");
   // Only what changed is recorded.
   expect((await edits()).at(-1)?.payload).toEqual({ goal: "Say goodbye" });
 });

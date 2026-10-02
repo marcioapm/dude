@@ -20,7 +20,6 @@
 package phases
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -70,7 +69,7 @@ type Syncer struct {
 	// Zero outside tests.
 	RetryAhead time.Duration
 	// How long an aborted or failed Run's lux Run is kept for a resume
-	// (DUDE_KEEP_STOPPED, never zero there); zero takes KeepFor, for tests.
+	// (DUDE_KEEP_STOPPED).
 	KeepFor time.Duration
 
 	// One follower per live lux Run. The follower is the only writer of a
@@ -256,8 +255,8 @@ func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 			       -- Aborted or failed in dude, and not yet kept or cancelled in
 			       -- lux; or kept, and its time is up.
 			       OR (r.status IN ('aborted', 'failed') AND r.lux_run_id IS NOT NULL
-			           AND (r.lux_stop_reason IS NULL OR r.lux_stop_reason NOT IN ('cancel', 'kept')
-			                OR r.lux_stop_reason = 'kept' AND r.kept_until <= now())))
+			           AND r.lux_stop_reason IS DISTINCT FROM 'cancel'
+			           AND (r.lux_stop_reason IS DISTINCT FROM 'kept' OR r.kept_until <= now())))
 			  -- An abort does not wait out the back-off of the step it ends.
 			  AND (r.status = 'aborted' OR r.next_attempt_at IS NULL
 			       OR r.next_attempt_at <= now() + make_interval(secs => $3::float8))
@@ -970,10 +969,6 @@ func pushRequest(r phaseRun) string {
 	return fmt.Sprintf("push-%s-%d", r.ID, r.Finishes)
 }
 
-// KeepFor is how long an aborted or failed Run's lux Run is kept, by
-// default, for a person to resume it where it stopped.
-const KeepFor = 7 * 24 * time.Hour
-
 // end settles the lux Run of a failed or aborted Run. One worth resuming
 // (runs.keep) is stopped and kept until kept_until, its workspace and the
 // agent's conversation with it; then, or straight away for any other, it is
@@ -992,12 +987,11 @@ func (s *Syncer) keep(ctx context.Context, r phaseRun) error {
 	if err := s.ask(ctx, r, s.Lux.Stop); err != nil {
 		return err
 	}
-	keepFor := cmp.Or(s.KeepFor, KeepFor)
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		// Only one still stopped: a person may have taken it back up meanwhile.
 		_, err := tx.Exec(ctx, `UPDATE runs SET lux_stop_reason = 'kept', control = 'none',
 			kept_until = COALESCE(kept_until, now() + make_interval(secs => $2))
-			WHERE id = $1 AND status IN ('aborted', 'failed') AND keep`, r.ID, keepFor.Seconds())
+			WHERE id = $1 AND status IN ('aborted', 'failed') AND keep`, r.ID, s.KeepFor.Seconds())
 		return err
 	})
 }
