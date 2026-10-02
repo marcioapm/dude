@@ -70,7 +70,7 @@ import { PickUpDialog, StoppedNotice, stopOf, useRecoveryOptions } from "./Recov
 import type { RecoverAction } from "../api/client.ts";
 import { pullRequestActivity } from "../pullRequests.ts";
 import { attemptScoped, formatPlace, type TaskTab } from "../place.ts";
-import { attemptEnd, attemptOfPr, attemptOfRun, attemptOfWork, attemptsOf, setAsideOf, type SetAside } from "../attempts.ts";
+import { attemptEnd, attemptOfPr, attemptOfRun, attemptOfWork, attemptsOf, closedAtStartOver, prOfEvent, runsById, setAsideOf, type RunsById, type SetAside } from "../attempts.ts";
 
 export interface TaskScreenProps {
   client: ApiClient;
@@ -268,8 +268,36 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const phases = useMemo(() => byCreated((item?.runs ?? []).filter((r) => r.phase && r.attempt === shown)), [item, shown]);
   const currentPhases = useMemo(() => byCreated((item?.runs ?? []).filter((r) => r.phase && r.attempt === current)), [item, current]);
 
-  // What a pull request heard, for why a fix ran: a few of the ledger's many.
-  const prEvents = useMemo(() => events.filter((e) => e.eventType.startsWith("pull_request.")), [events]);
+  // The page re-renders on every frame of its stream, agent chatter
+  // included: what is worked out from the reads is kept until they change,
+  // so the sections memoised on it (Activity, Files) are not redone per frame.
+  const byId = useMemo(() => runsById(item?.runs ?? []), [item]);
+  // One per repository the work changed, in the order they were opened.
+  const allPrs = useMemo(() => [...pullRequests].sort((a, b) => a.createdAt.localeCompare(b.createdAt)), [pullRequests]);
+  // What each attempt made: its pull requests, findings, files and sessions; the one shown's, and the others'.
+  const parts = useMemo(() => {
+    const ofAttempt = (n: number) => ({
+      findings: findings.filter((f) => attemptOfWork(f.runId, byId, current) === n),
+      artifacts: artifacts.filter((a) => attemptOfWork(a.runId, byId, current) === n),
+    });
+    return {
+      prs: allPrs.filter((pr) => attemptOfPr(pr, byId, current) === shown),
+      mine: ofAttempt(shown),
+      others: attempts.filter((n) => n !== shown).map((n) => ({ n, ...ofAttempt(n) })),
+      // Newest first.
+      sessions: (item?.runs ?? []).filter((r) => attemptOfRun(r, current) === shown).sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    };
+  }, [findings, artifacts, allPrs, item, byId, attempts, current, shown]);
+
+  // What the attempt's pull requests heard, for why a fix ran: a few of the ledger's many.
+  const prEvents = useMemo(() => {
+    const mine = new Set(parts.prs);
+    return events.filter((e) => {
+      if (!e.eventType.startsWith("pull_request.")) return false;
+      const pr = prOfEvent(e, allPrs);
+      return pr !== undefined && mine.has(pr);
+    });
+  }, [events, parts.prs, allPrs]);
 
   // How it stopped, read from the runs and the ledger once per change of them.
   const stopOfTask = useMemo(() => (item ? stopOf(item, events, people) : null), [item, events, people]);
@@ -336,26 +364,16 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const stop = stopped && !earlier ? stopOfTask : null;
   // The reader picks it up when it is theirs, or nobody's.
   const yours = !item.owner || (people.you !== null && item.owner.id === people.you);
-  // One per repository the work changed, in the order they were opened; the attempt shown's.
-  const allPrs = [...pullRequests].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-  const prs = allPrs.filter((pr) => attemptOfPr(pr, item.runs) === shown);
+  const { prs, mine, others, sessions } = parts;
   const owner = item.owner ? (people.byId.get(item.owner.id) ?? item.owner) : null;
   const working = currentPhases.find((r) => r.status === "running");
   // The aside says what serves the task when something does, or could: a
   // project with no servers defined has nothing to say there. Servers are
   // the current attempt's: an earlier one has none to show.
   const showServers = !earlier && Boolean(servers.data && (servers.data.run || servers.data.recipes.length > 0));
-  // What each attempt made: its findings, files and sessions.
-  const ofAttempt = (n: number) => ({
-    findings: findings.filter((f) => attemptOfWork(f.runId, item.runs, current) === n),
-    artifacts: artifacts.filter((a) => attemptOfWork(a.runId, item.runs, current) === n),
-  });
-  const mine = ofAttempt(shown);
   const fileCount = (list: readonly Artifact[]) => new Set(list.map((a) => a.name)).size;
-  const others = attempts.filter((n) => n !== shown).map((n) => ({ n, ...ofAttempt(n) }));
-  // Newest first; the one open is the one asked for, else the one picked
-  // on first sight (what was running, else the newest).
-  const sessions = [...item.runs].filter((r) => attemptOfRun(r, current) === shown).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  // The one open is the one asked for, else the one picked on first sight
+  // (what was running, else the newest).
   const openRun = (openedRun && sessions.some((r) => r.id === openedRun) ? openedRun : undefined)
     ?? (picked && sessions.some((r) => r.id === picked) ? picked : undefined)
     ?? sessions.find((r) => r.status === "running")?.id ?? sessions[0]?.id;
@@ -398,8 +416,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
             ))}
             {item.key ? <span className="ds-mono" title={item.id}>{item.key}</span> : null}
             {many ? (
-              <AttemptPicker client={client} taskId={taskId} item={item} attempts={attempts} prs={allPrs} events={events} people={people}
-                value={shown} version={version} onChange={(n) => pickAttempt(n)} />
+              <AttemptPicker client={client} taskId={taskId} item={item} byId={byId} attempts={attempts} prs={allPrs} events={events} people={people}
+                value={shown} onChange={(n) => pickAttempt(n)} />
             ) : null}
             {phases[0]?.branch ? <span className="ds-mono" data-testid="branch">{phases[0].branch}</span> : null}
             <span>created {ago(item.createdAt)} ago</span>
@@ -510,9 +528,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                 {prs.map((pr) => earlier ? (
                   // An earlier attempt's pull request is only to read: no Merge, no requests.
                   <PullRequestPanel key={pr.id} pr={pr} data-testid="pr-panel" data-pr={pr.id}
-                    note={pr.state === "closed" && aside?.at
-                      ? <>Closed by {dudeName(taskId)} {ago(aside.at)} ago, when {aside.by ? firstName(aside.by) : "someone"} started over.</>
-                      : undefined}
+                    note={pr.state === "closed" && aside?.at ? <ClosedNote pr={pr} events={events} aside={{ ...aside, at: aside.at }} attempt={shown} taskId={taskId} /> : undefined}
                     actions={<LinkButton href={pr.url}>Open on GitHub</LinkButton>} />
                 ) : (
                   <PullRequestActions key={pr.id} client={client} pr={pr} defaultMethod={mergeMethod} onChanged={() => void load()}>
@@ -612,21 +628,26 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
  * "set aside", and under it in the list when it started or was set aside
  * and how, its branch, its pull requests and what it cost.
  */
-function AttemptPicker({ client, taskId, item, attempts, prs, events, people, value, version, onChange }: {
-  client: ApiClient; taskId: string; item: TaskDetail; attempts: readonly number[]; prs: readonly PullRequest[];
-  events: readonly PersistedEvent[]; people: People; value: number; version: number; onChange: (n: number) => void;
+function AttemptPicker({ client, taskId, item, byId, attempts, prs, events, people, value, onChange }: {
+  client: ApiClient; taskId: string; item: TaskDetail; byId: RunsById; attempts: readonly number[]; prs: readonly PullRequest[];
+  events: readonly PersistedEvent[]; people: People; value: number; onChange: (n: number) => void;
 }) {
-  // What each attempt cost: its Runs' costs, from one read of the task's.
+  // What each attempt cost: its Runs' costs, from one read of the task's
+  // each time the list opens; nothing else on the page needs them.
   const [costs, setCosts] = useState<ReadonlyMap<string, number>>(new Map());
-  useEffect(() => void client.taskMetrics(taskId).then((m) => setCosts(new Map(m.runs.map((r) => [r.id, r.cost.totalUsd]))), () => {}),
-    [client, taskId, version]);
+  const reads = useRef(0);
+  const readCosts = (open: boolean) => {
+    if (!open) return;
+    const seq = ++reads.current;
+    void client.taskMetrics(taskId).then((m) => seq === reads.current && setCosts(new Map(m.runs.map((r) => [r.id, r.cost.totalUsd]))), () => {});
+  };
   const current = attempts[0]!;
-  const options = attempts.map((n) => {
+  const options = useMemo(() => attempts.map((n) => {
     const runs = item.runs.filter((r) => r.kind !== "preview" && r.attempt === n);
     const first = [...runs].sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
     const aside = n === current ? null : setAsideOf(n, item.runs, events, people);
     const branch = runs.find((r) => r.branch)?.branch;
-    const mine = prs.filter((pr) => attemptOfPr(pr, item.runs) === n);
+    const mine = prs.filter((pr) => attemptOfPr(pr, byId, current) === n);
     const cost = runs.reduce((sum, r) => sum + (costs.get(r.id) ?? 0), 0);
     const status = n === current ? item.status : attemptEnd(item.runs, n);
     return {
@@ -643,10 +664,10 @@ function AttemptPicker({ client, taskId, item, attempts, prs, events, people, va
         </>
       ),
     };
-  });
+  }), [attempts, item, byId, prs, events, people, costs, current]);
   return (
-    <Select<string> size="sm" aria-label="Attempt" value={String(value)} onValueChange={(v) => onChange(Number(v))} options={options}
-      className="attemptPicker" data-testid="attempt-picker"
+    <Select<string> size="sm" aria-label="Attempt" value={String(value)} onValueChange={(v) => onChange(Number(v))} onOpenChange={readCosts}
+      options={options} className="attemptPicker" data-testid="attempt-picker"
       footer="The whole page shows the attempt chosen. Activity always shows every attempt." />
   );
 }
@@ -675,6 +696,17 @@ function EarlierBar({ attempt, current, aside, onCurrent }: { attempt: number; c
       </div>
     </Callout>
   );
+}
+
+/**
+ * Under an earlier attempt's closed pull request: dude closed it when the
+ * task was started over, or, closed before that (by someone on GitHub),
+ * only that it is closed and when the attempt was set aside.
+ */
+function ClosedNote({ pr, events, aside, attempt, taskId }: { pr: PullRequest; events: readonly PersistedEvent[]; aside: SetAside & { at: string }; attempt: number; taskId: string }) {
+  const at = closedAtStartOver(pr, events, aside.at);
+  if (at) return <>Closed by {dudeName(taskId)} {ago(at)} ago, when {aside.by ? firstName(aside.by) : "someone"} started over.</>;
+  return <>Closed. Attempt {attempt} was set aside {ago(aside.at)} ago.</>;
 }
 
 /** An empty tab of one attempt, and every other attempt that had some, each a way there. */
@@ -881,23 +913,35 @@ interface ActivityLine {
 
 /**
  * The attempt an event happened in: the one a start over began, its Run's,
- * its pull request's, else the attempt under way when it happened.
+ * its pull request's, else the attempt under way when it happened. Built
+ * once per pass over the ledger; asked only of the events that make a line.
  */
-function attemptOfEvent(e: PersistedEvent, runs: readonly Run[], prs: readonly PullRequest[], current: number): number {
-  if (e.eventType === "task.recovered" && e.payload.action === "restart" && typeof e.payload.attempt === "number") return e.payload.attempt;
-  const run = e.runId ? runs.find((r) => r.id === e.runId) : undefined;
-  if (run) return attemptOfRun(run, current);
-  if (e.eventType.startsWith("pull_request.")) {
-    const same = prs.filter((p) => p.number === e.payload.number);
-    const pr = same.find((p) => p.repositoryName === e.payload.repo) ?? same[0];
-    if (pr) return attemptOfPr(pr, runs);
+function eventAttempts(runs: readonly Run[], prs: readonly PullRequest[], current: number): (e: PersistedEvent) => number {
+  const byId = runsById(runs);
+  // Each attempt's first agent Run's creation, latest first, for an event on no known Run.
+  const starts = new Map<number, string>();
+  for (const r of runs) {
+    if (r.kind === "preview") continue;
+    const at = starts.get(r.attempt);
+    if (at === undefined || r.createdAt < at) starts.set(r.attempt, r.createdAt);
   }
-  return Math.max(1, ...runs.filter((r) => r.kind !== "preview" && r.createdAt <= e.occurredAt).map((r) => r.attempt));
+  const begun = [...starts].sort((a, b) => b[0] - a[0]);
+  return (e) => {
+    if (e.eventType === "task.recovered" && e.payload.action === "restart" && typeof e.payload.attempt === "number") return e.payload.attempt;
+    const run = e.runId ? byId.get(e.runId) : undefined;
+    if (run) return attemptOfRun(run, current);
+    if (e.eventType.startsWith("pull_request.")) {
+      const pr = prOfEvent(e, prs);
+      if (pr) return attemptOfPr(pr, byId, current);
+    }
+    return begun.find(([, at]) => at <= e.occurredAt)?.[0] ?? 1;
+  };
 }
 
 /** The ledger as sentences: the acts worth a line, each with who did it and its attempt. */
 export function activityLines(events: readonly PersistedEvent[], people: People, runs: readonly Run[], prs: readonly PullRequest[] = [], current = 1): ActivityLine[] {
   const out: ActivityLine[] = [];
+  const attemptOf = eventAttempts(runs, prs, current);
   // A task with pull requests in several repositories names each by its repository.
   const named = new Set(events.filter((e) => e.eventType === "pull_request.opened").map((e) => e.payload.repo)).size > 1;
   const labels = new Map(runs.map((r) => [r.id, runLabel(r).toLowerCase()]));
@@ -912,7 +956,9 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
     const face = by ? <PersonAvatar person={{ ...(people.byId.get(by.id) ?? {}), id: by.id, name: name ?? "Someone" }} size={32} /> : null;
     const person = <b>{name ?? "Someone"}</b>;
     const p = e.payload;
-    const base = { id: e.eventId, at: e.occurredAt, attempt: attemptOfEvent(e, runs, prs, current) };
+    // Its attempt is set below, once the event has made a line.
+    const base = { id: e.eventId, at: e.occurredAt, attempt: 0 };
+    const lines = out.length;
     switch (e.eventType) {
       case "task.created":
         out.push({ ...base, who: face, text: <>{person} created the task</> });
@@ -976,6 +1022,7 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
         break;
       }
     }
+    if (out.length > lines) out[lines]!.attempt = attemptOf(e);
   }
   return out.reverse();
 }
