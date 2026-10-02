@@ -169,6 +169,9 @@ export class FixtureClient extends ApiClient {
       }
       if (r.id === "run_a2_simplify") push(31, "pull_request.opened", { number: 483, repo: "example/web-console", url: RESTARTED_PULL_REQUESTS[1]!.url }, dude, null);
     }
+    // A person's acts on no Run: a decision that sent attempt 1's fixer, and a hand-over during attempt 2.
+    push(112, "task.decided", { action: "retry", note: "Fix the CI first." }, me, null);
+    push(50, "task.owner_changed", { to: YOU }, ana, null);
     extra.sort((a, b) => a.occurredAt.localeCompare(b.occurredAt));
     extra.forEach((e, i) => Object.assign(e, { cursor: 10_000 + i }));
     // The task's creation, then both attempts: none of scenario a's single implementer.
