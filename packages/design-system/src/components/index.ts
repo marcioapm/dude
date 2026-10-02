@@ -120,3 +120,5 @@ export { SearchPicker } from "./SearchPicker.tsx";
 export type { SearchPickerProps } from "./SearchPicker.tsx";
 export { FitBar, MachineChip, MachineTip, ProportionBar, ReservedSwatch, UsedBy } from "./Machines.tsx";
 export type { FitBarProps, MachineChipProps, ProportionBarProps, ProportionSegment } from "./Machines.tsx";
+export { FlowSteps, NameChips, TierChip, TierLine, TierMark, TierTip } from "./Tiers.tsx";
+export type { FlowStep, TierChipProps, TierTone } from "./Tiers.tsx";
