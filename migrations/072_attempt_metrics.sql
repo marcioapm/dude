@@ -18,14 +18,15 @@ RETURNS TABLE (lead_seconds double precision, active_seconds double precision,
 LANGUAGE sql STABLE AS $$
   WITH t AS (SELECT * FROM tasks WHERE id = p_task),
   mine AS (SELECT * FROM runs WHERE task_id = p_task AND kind = 'agent' AND attempt = p_attempt),
+  began AS (SELECT min(created_at) AS at FROM mine),
   done_at AS (
     SELECT max(e.occurred_at) AS at FROM events e
     WHERE e.task_id = p_task AND e.event_type = 'task.status_changed'
       AND e.payload->>'status' IN ('done', 'aborted', 'failed')
-      AND e.occurred_at >= (SELECT min(created_at) FROM mine)
+      AND e.occurred_at >= (SELECT at FROM began)
       AND (SELECT status FROM t) IN ('done', 'aborted', 'failed')),
   win AS (
-    SELECT (SELECT min(created_at) FROM mine) AS from_at,
+    SELECT (SELECT at FROM began) AS from_at,
            COALESCE((SELECT min(created_at) FROM runs WHERE task_id = p_task AND kind = 'agent' AND attempt > p_attempt),
                     (SELECT at FROM done_at), now()) AS to_at),
   rm AS (SELECT m.* FROM mine r CROSS JOIN LATERAL run_metrics(r.id) m),
