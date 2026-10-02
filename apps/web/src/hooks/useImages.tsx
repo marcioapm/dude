@@ -173,12 +173,12 @@ export function useImageTray(client: ApiClient, taskId: string | undefined, limi
   return { attachments: chips, add, remove, clear, disabledReason, limits, uploadTo };
 }
 
-/** The paperclip's tooltip: what may be attached, and how large. */
-export function limitsHint(limits: Limits) {
+/** The paperclip's tooltip: what may be attached, and how large. `dropOn` names where a drop lands. */
+export function limitsHint(limits: Limits, dropOn = "the conversation") {
   return (
     <span className="attachLimitsHint">
       <b>Attach images</b>
-      <span>Or paste a screenshot, or drop files on the conversation.</span>
+      <span>Or paste a screenshot, or drop files on {dropOn}.</span>
       <span>PNG, JPEG, WebP, GIF · up to {limits.perMessage} · up to {limits.originalBytes / 1e6} MB each</span>
       <span>Large images are scaled down to {limits.maxSide} px before the agent gets them. The original is kept.</span>
     </span>
