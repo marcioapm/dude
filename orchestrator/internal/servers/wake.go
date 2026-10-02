@@ -698,9 +698,12 @@ func (p *Previews) submitWoken(ctx context.Context, r wakeRun) error {
 	}
 	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		// machine: the size this lux Run was submitted on; a later generation
-		// records its own.
+		// records its own. Its first start begins here, before any of its
+		// events (lux_start_event 1), so a failure before its first running
+		// is a failed start; StartBefore 0 makes every event of it newer
+		// than the submit's answer.
 		_, err := tx.Exec(ctx, `UPDATE runs SET lux_run_id = $2, lux_state = $3, lux_repositories = $4, branch = NULLIF($5, ''),
-			machine = $7::jsonb, started_at = COALESCE(started_at, now())
+			machine = $7::jsonb, started_at = COALESCE(started_at, now()), lux_start_event = 1
 			WHERE id = $1 AND lux_run_id IS NULL AND lux_generation = $6`, r.ID, lr.ID, lr.State, db.NonNil(repos), branch, r.Generation, machine)
 		return err
 	}); err != nil {

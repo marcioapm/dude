@@ -523,9 +523,10 @@ func (p *Previews) luxEvent(ctx context.Context, tx pgx.Tx, r previewRun, f lux.
 		// stopped is parked or finished, as dude already recorded. A
 		// wakeable one goes back to sleep instead, its error kept: lux can
 		// resume a Run that crashed, and the next request wakes it. One
-		// whose current start never ran (no running since the event that
-		// began it: a resuming, or a new Run's first) is a failed start
-		// (startFailed), whatever dude's status says meanwhile.
+		// whose current start never ran (no running since it began: at a
+		// resuming, or at dude's submit of a new Run) is a failed start
+		// (startFailed), whatever dude's status says meanwhile. Only a
+		// resuming begins a start here: an end or a running never does.
 		if err := tx.QueryRow(ctx, `UPDATE runs SET lux_state = $2,
 			started_at = CASE WHEN $2 = 'running' THEN COALESCE(started_at, now()) ELSE started_at END,
 			active_since = CASE WHEN $2 = 'running' THEN now() ELSE active_since END,
@@ -539,7 +540,7 @@ func (p *Previews) luxEvent(ctx context.Context, tx pgx.Tx, r previewRun, f lux.
 			             THEN 'the preview stopped: ' || COALESCE(NULLIF($4, ''), $2)
 			             WHEN $2 = 'running' AND start_failures > 0 THEN NULL ELSE error END,
 			start_failures = CASE WHEN $2 = 'running' THEN 0 ELSE start_failures END,
-			lux_start_event = CASE WHEN $2 = 'resuming' OR lux_start_event = 0 THEN GREATEST(lux_start_event, $5) ELSE lux_start_event END,
+			lux_start_event = CASE WHEN $2 = 'resuming' THEN GREATEST(lux_start_event, $5) ELSE lux_start_event END,
 			lux_ran_event = CASE WHEN $2 = 'running' THEN GREATEST(lux_ran_event, $5) ELSE lux_ran_event END,
 			ended_at = CASE WHEN $3 AND lux_stop_reason IS NULL AND status IN ('scheduled', 'starting', 'running') AND NOT wakeable
 			                THEN now() ELSE ended_at END
