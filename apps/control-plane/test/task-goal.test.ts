@@ -63,15 +63,18 @@ async function refusedForTheGoal(res: Response) {
 }
 
 test("creating a task with no goal, or one under 16 characters trimmed, is refused and saves nothing", async () => {
-  await refusedForTheGoal(await create({ title: "No goal" }));
-  await refusedForTheGoal(await create({ title: "Empty goal", goal: "" }));
-  await refusedForTheGoal(await create({ title: "Fifteen", goal: "a".repeat(15) }));
-  // 23 characters as sent, 15 inside the whitespace.
-  await refusedForTheGoal(await create({ title: "Padded", goal: `  \n ${"a".repeat(15)}\t  ` }));
-  // 7 emoji are 14 UTF-16 units, and one more character makes 15.
-  await refusedForTheGoal(await create({ title: "Emoji", goal: `${"😀".repeat(7)}a` }));
-  await refusedForTheGoal(await create({ title: "Blank", goal: " ".repeat(20) }));
-  for (const title of ["No goal", "Empty goal", "Fifteen", "Padded", "Emoji", "Blank"]) expect(await tasksNamed(title)).toBe(0);
+  const refused = [
+    { title: "No goal" },
+    { title: "Empty goal", goal: "" },
+    { title: "Fifteen", goal: "a".repeat(15) },
+    // 23 characters as sent, 15 inside the whitespace.
+    { title: "Padded", goal: `  \n ${"a".repeat(15)}\t  ` },
+    // 7 emoji are 14 UTF-16 units, and one more character makes 15.
+    { title: "Emoji", goal: `${"😀".repeat(7)}a` },
+    { title: "Blank", goal: " ".repeat(20) },
+  ];
+  for (const body of refused) await refusedForTheGoal(await create(body));
+  for (const { title } of refused) expect(await tasksNamed(title)).toBe(0);
   expect(Array.from(await owner`SELECT next_task_number FROM projects WHERE id = ${project}`)).toEqual([{ next_task_number: 1 }]);
 });
 
