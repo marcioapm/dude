@@ -8,7 +8,7 @@
 
 import { costSplit, type CostProvenance } from "@dude/domain";
 import { withOrg } from "../../db/client.ts";
-import { HttpError, json, notFound } from "../http.ts";
+import { intParam, json, notFound } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 const ms = (s: unknown) => (s === null || s === undefined ? null : Math.round(Number(s) * 1000));
@@ -38,13 +38,9 @@ function origin(rows: ReadonlyArray<Record<string, unknown>>): CostProvenance {
   };
 }
 
-/** `?attempt=N`: a positive whole number, or absent for the whole task. */
-function attemptParam(ctx: RequestContext): number | null {
-  const raw = ctx.url.searchParams.get("attempt");
-  if (raw === null) return null;
-  if (!/^[1-9]\d{0,8}$/.test(raw)) throw new HttpError(422, "attempt must be a positive whole number", "invalid_attempt");
-  return Number(raw);
-}
+/** `?attempt=N`, or absent for the whole task; bounded by runs.attempt's int4. */
+const attemptParam = (ctx: RequestContext): number | null =>
+  intParam(ctx.url, "attempt", { min: 1, max: 2_147_483_647 }) ?? null;
 
 async function taskMetrics(ctx: RequestContext): Promise<Response> {
   const id = ctx.params.id!;
