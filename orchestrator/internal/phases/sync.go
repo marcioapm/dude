@@ -66,6 +66,11 @@ type Syncer struct {
 	// projects whose policy sets none (DUDE_CONDUCTOR_WARM; finer than the
 	// policy's minutes, for tests). Zero takes delivery.DefaultPolicy's.
 	ConductorWarm time.Duration
+	// How long reasons to wake a conductor are gathered after the last
+	// arrived before one note delivers them (0: WakeWindow), and how long
+	// a conductor may sleep with a Run of its own in flight before it is
+	// woken once to say what it waits for (0: SafetyAfter).
+	WakeWindow, SafetyAfter time.Duration
 	// How soon after an edit a Run's live diff is read, how often while its
 	// agent works (DUDE_DIFF_EVERY), and how often once several reads found
 	// nothing new; zero takes the defaults.
@@ -335,6 +340,9 @@ func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 	if err := s.handOverUnheard(ctx); err != nil {
 		s.Log.Warn("finding stopped conductors' messages failed", "error", err)
 	}
+	if err := s.wakeConductors(ctx); err != nil {
+		s.Log.Warn("waking conductors failed", "error", err)
+	}
 	runs, err := s.due(ctx)
 	if err != nil {
 		return 0, err
@@ -463,6 +471,69 @@ func (s *Syncer) endConductor(ctx context.Context, r phaseRun, why string) error
 		}
 		return delivery.EndConductor(ctx, tx, delivery.RunRef{Org: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, RunID: r.ID}, why)
 	})
+}
+
+// Waking conductors (delivery.WakeConductorTx): reasons are gathered for
+// WakeWindow after the last, and a conductor asleep for SafetyAfter with a
+// Run of its own in flight is woken once.
+const (
+	WakeWindow  = 15 * time.Second
+	SafetyAfter = 30 * time.Minute
+)
+
+// wakeConductors records the reasons the syncer sees — a Run a conductor
+// started failed; a conductor long asleep with a Run of its own in flight —
+// and delivers each task's pending reasons to its conductor as one note.
+func (s *Syncer) wakeConductors(ctx context.Context) error {
+	window, safety := s.WakeWindow, s.SafetyAfter
+	if window == 0 {
+		window = WakeWindow
+	}
+	if safety == 0 {
+		safety = SafetyAfter
+	}
+	type found struct{ Kind, Org, TaskID, RunID string }
+	var todo []found
+	if err := s.DB.InSystem(ctx, "phase-sync", func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT 'failed', r.organization_id, r.task_id, r.id FROM runs r WHERE `+delivery.FailedForConductor+`
+			UNION ALL
+			SELECT 'safety', r.organization_id, r.task_id, r.id FROM runs r WHERE `+delivery.SafetyNet+`
+			UNION ALL
+			SELECT DISTINCT 'wake', c.organization_id, c.task_id, '' FROM conductor_wakes c WHERE c.delivered_at IS NULL
+			LIMIT 200`, safety.Seconds())
+		if err != nil {
+			return err
+		}
+		todo, err = pgx.CollectRows(rows, pgx.RowToStructByPos[found])
+		return err
+	}); err != nil {
+		return err
+	}
+	woken := map[string]bool{}
+	for _, f := range todo {
+		err := s.DB.InOrg(ctx, f.Org, func(tx pgx.Tx) error {
+			switch f.Kind {
+			case "failed":
+				return delivery.RecordFailedTx(ctx, tx, f.Org, f.TaskID, f.RunID)
+			case "safety":
+				return delivery.RecordSafetyTx(ctx, tx, f.Org, f.TaskID, f.RunID)
+			}
+			if woken[f.TaskID] {
+				return nil
+			}
+			woken[f.TaskID] = true
+			if err := delivery.LockChat(ctx, tx, f.TaskID); err != nil {
+				return err
+			}
+			_, err := delivery.WakeConductorTx(ctx, tx, f.Org, f.TaskID, window.Seconds())
+			return err
+		})
+		if err != nil {
+			s.Log.Warn("waking a conductor failed", "task", f.TaskID, "error", err)
+		}
+	}
+	return nil
 }
 
 // handOverUnheard settles input left on conductors that ended some other
