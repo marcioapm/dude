@@ -197,6 +197,12 @@ func (f *fixture) str(sql string, args ...any) string {
 	return fmt.Sprint(v)
 }
 
+// log is a job's kept log, its chunks in order.
+func (f *fixture) log(build string) string {
+	f.t.Helper()
+	return f.str(`SELECT COALESCE(string_agg(chunk, '' ORDER BY start_offset), '') FROM image_build_log WHERE build_id = $1`, build)
+}
+
 func TestABuildPassingPublishesTheVersionWithItsUserImageAndItsFinal(t *testing.T) {
 	f := setup(t)
 	f.image("img_base", "acme-base")
@@ -214,13 +220,14 @@ func TestABuildPassingPublishesTheVersionWithItsUserImageAndItsFinal(t *testing.
 	if got := f.str(`SELECT final_ref FROM image_finals WHERE image_version_id = 'imv_b1' AND layer_ref = $1`, layer); got != finalRef {
 		t.Errorf("final = %s, want %s", got, finalRef)
 	}
-	got := f.row(`SELECT state, layer_ref, log, build_seconds IS NOT NULL FROM image_builds WHERE id = $1`, build)
-	if got[0] != "succeeded" || got[1] != layer || got[3] != true {
-		t.Errorf("build = %v", got[:2])
+	got := f.row(`SELECT state, layer_ref, build_seconds IS NOT NULL FROM image_builds WHERE id = $1`, build)
+	if got[0] != "succeeded" || got[1] != layer || got[2] != true {
+		t.Errorf("build = %v", got)
 	}
+	log := f.log(build)
 	for _, want := range []string{"STEP 2/2: RUN apt-get install -y git", "pushed " + userRef, "— dude layer abcdef012345 —", "pushed " + finalRef} {
-		if !strings.Contains(got[2].(string), want) {
-			t.Errorf("log lacks %q:\n%s", want, got[2])
+		if !strings.Contains(log, want) {
+			t.Errorf("log lacks %q:\n%s", want, log)
 		}
 	}
 	// The finish is built FROM the user image just pushed, by digest.
@@ -408,12 +415,12 @@ func TestTheLogIsWrittenWhileItBuilds(t *testing.T) {
 	go func() { f.once(); close(done) }()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		got := f.row(`SELECT stage, log FROM image_builds WHERE id = $1`, build)
-		if got[0] == "building" && strings.Contains(fmt.Sprint(got[1]), "STEP 2/2: RUN make") {
+		stage, log := f.str(`SELECT stage FROM image_builds WHERE id = $1`, build), f.log(build)
+		if stage == "building" && strings.Contains(log, "STEP 2/2: RUN make") {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("never saw the running log: %v", got)
+			t.Fatalf("never saw the running log: %s %q", stage, log)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -456,12 +463,12 @@ func TestABuilderStoppedMidJobQueuesItAgainUnfailed(t *testing.T) {
 	// What SIGTERM does to the builder's context.
 	stop()
 	<-done
-	got := f.row(`SELECT state, error, restarts, started_at, log FROM image_builds WHERE id = $1`, build)
+	got := f.row(`SELECT state, error, restarts, started_at FROM image_builds WHERE id = $1`, build)
 	if got[0] != "queued" || got[1] != nil || got[2] != int32(0) || got[3] != nil {
-		t.Fatalf("job = %v", got[:4])
+		t.Fatalf("job = %v", got)
 	}
-	if !strings.Contains(fmt.Sprint(got[4]), "— the builder stopped; queued again —") {
-		t.Errorf("log = %s", got[4])
+	if log := f.log(build); !strings.Contains(log, "— the builder stopped; queued again —") {
+		t.Errorf("log = %s", log)
 	}
 	if got := f.row(`SELECT state, error FROM image_versions WHERE id = 'imv_b1'`); got[0] != "queued" || got[1] != nil {
 		t.Errorf("version = %v", got)
@@ -481,7 +488,8 @@ func TestAFlushWithNothingNewWritesOnlyTheHeartbeat(t *testing.T) {
 	f := setup(t)
 	f.image("img_base", "acme-base")
 	build := f.queue("img_base", "imv_b1", 1, "FROM debian\n")
-	f.exec(`UPDATE image_builds SET state = 'running', log = E'kept\n' WHERE id = $1`, build)
+	f.exec(`UPDATE image_builds SET state = 'running', log_total = 5 WHERE id = $1`, build)
+	f.exec(`INSERT INTO image_build_log (organization_id, build_id, start_offset, chunk) VALUES ($1, $2, 0, E'kept\n')`, f.org, build)
 	j := job{ID: build}
 	p := &progress{tail: Tail{Max: LogMax}, stage: "building"}
 	p.setStage("building")
@@ -491,17 +499,44 @@ func TestAFlushWithNothingNewWritesOnlyTheHeartbeat(t *testing.T) {
 	// Half a rune is held back until the rest of it comes.
 	_, _ = p.Write([]byte{0xC3})
 	f.b.flush(context.Background(), j, p, true)
-	if got := f.str(`SELECT log FROM image_builds WHERE id = $1`, build); got != "kept\nSTEP 1/2: FROM debian\nSTEP 2/2: RUN é" {
+	if got := f.log(build); got != "kept\nSTEP 1/2: FROM debian\nSTEP 2/2: RUN é" {
 		t.Fatalf("log = %q", got)
 	}
 	_, _ = p.Write([]byte{0xA9, '\n'})
 	f.b.flush(context.Background(), j, p, true)
-	f.exec(`UPDATE image_builds SET log = 'replaced', heartbeat_at = now() - interval '1 hour' WHERE id = $1`, build)
-	// Nothing written since: the log is left alone, the heartbeat moves.
+	want := "kept\nSTEP 1/2: FROM debian\nSTEP 2/2: RUN éé\n"
+	got := f.row(`SELECT log_total, (SELECT string_agg(start_offset::text, ',' ORDER BY start_offset) FROM image_build_log WHERE build_id = $1)
+		FROM image_builds WHERE id = $1`, build)
+	if got[0] != int64(len(want)) || got[1] != "0,5,27,43" || f.log(build) != want {
+		t.Fatalf("log_total, chunk offsets = %v, log = %q", got, f.log(build))
+	}
+	f.exec(`UPDATE image_builds SET heartbeat_at = now() - interval '1 hour' WHERE id = $1`, build)
+	// Nothing written since: no chunk, the heartbeat moves.
 	f.b.flush(context.Background(), j, p, true)
-	got := f.row(`SELECT log, heartbeat_at > now() - interval '1 minute' FROM image_builds WHERE id = $1`, build)
-	if got[0] != "replaced" || got[1] != true {
+	got = f.row(`SELECT (SELECT count(*) FROM image_build_log WHERE build_id = $1), log_total, heartbeat_at > now() - interval '1 minute'
+		FROM image_builds WHERE id = $1`, build)
+	if got[0] != int64(4) || got[1] != int64(len(want)) || got[2] != true {
 		t.Errorf("after an empty flush: %v", got)
+	}
+}
+
+func TestOutputFlushedAfterTheJobEndedIsStillWritten(t *testing.T) {
+	f := setup(t)
+	f.image("img_base", "acme-base")
+	build := f.queue("img_base", "imv_b1", 1, "FROM debian\n")
+	f.exec(`UPDATE image_builds SET state = 'succeeded', stage = NULL, heartbeat_at = NULL WHERE id = $1`, build)
+	p := &progress{tail: Tail{Max: LogMax}}
+	p.setStage("publishing")
+	p.printf("pushed it\n")
+	// A live flush racing the publish, then the last one: both write output.
+	f.b.flush(context.Background(), job{ID: build}, p, true)
+	p.printf("done\n")
+	f.b.flush(context.Background(), job{ID: build}, p, false)
+	if got := f.log(build); got != "pushed it\ndone\n" {
+		t.Errorf("log = %q", got)
+	}
+	if got := f.row(`SELECT stage, heartbeat_at FROM image_builds WHERE id = $1`, build); got[0] != nil || got[1] != nil {
+		t.Errorf("an ended job got stage, heartbeat %v", got)
 	}
 }
 
@@ -513,21 +548,26 @@ func TestTheRowKeepsTheLastLogMaxOfALongLog(t *testing.T) {
 	j := job{ID: build}
 	p := &progress{tail: Tail{Max: LogMax}, stage: "building"}
 	line := strings.Repeat("x", 1023) + "\n"
-	for i := range 1100 {
+	for i := range 1200 {
 		p.printf("%s", line)
-		if i%100 == 0 {
+		if i%100 == 99 {
 			f.b.flush(context.Background(), j, p, true)
 		}
 	}
 	p.printf("the end\n")
 	f.b.flush(context.Background(), j, p, true)
-	got := f.row(`SELECT log, log_total FROM image_builds WHERE id = $1`, build)
-	log := got[0].(string)
-	if len(log) != LogMax || !strings.HasSuffix(log, "the end\n") {
-		t.Errorf("log is %d bytes, ending %q", len(log), log[len(log)-10:])
+	total := int64(1200*1024 + len("the end\n"))
+	if got := f.str(`SELECT log_total FROM image_builds WHERE id = $1`, build); got != fmt.Sprint(total) {
+		t.Errorf("log_total = %s", got)
 	}
-	if got[1] != int64(1100*1024+len("the end\n")) {
-		t.Errorf("log_total = %v", got[1])
+	// Flushes of 100 KiB: what is kept starts at the chunk holding byte
+	// total - LogMax, the 2nd (offset 102400), and runs to the end.
+	got := f.row(`SELECT min(start_offset), count(*) FROM image_build_log WHERE build_id = $1`, build)
+	if got[0] != int64(100*1024) || got[1] != int64(12) {
+		t.Errorf("first kept offset, chunks = %v", got)
+	}
+	if log := f.log(build); int64(len(log)) != total-100*1024 || !strings.HasSuffix(log, "x\nthe end\n") {
+		t.Errorf("log is %d bytes", len(log))
 	}
 }
 

@@ -118,11 +118,8 @@ CREATE TABLE image_builds (
   -- While running: resolving, building, pushing, finishing, publishing.
   stage            text,
   error            text,
-  -- The tail of podman's output, at most 1 MiB (the builder keeps the end),
-  -- and how many bytes were ever appended: the log holds bytes
-  -- [log_total - octet_length(log), log_total), so a reader asks for what
-  -- came after the end it has (GET /v1/images/builds/:id?after=).
-  log              text NOT NULL DEFAULT '',
+  -- How many bytes of output were ever appended to its log
+  -- (image_build_log): the end offset of its last chunk.
   log_total        bigint NOT NULL DEFAULT 0,
   -- A job its builder died under is re-queued once; the second time it fails.
   restarts         integer NOT NULL DEFAULT 0,
@@ -130,6 +127,7 @@ CREATE TABLE image_builds (
   build_seconds    double precision,
   push_seconds     double precision,
   FOREIGN KEY (organization_id, image_version_id) REFERENCES image_versions (organization_id, id) ON DELETE CASCADE,
+  UNIQUE (organization_id, id),
   CHECK (kind = 'build' OR layer_ref IS NOT NULL)
 );
 -- Two Runs needing the same finish share one job.
@@ -141,6 +139,22 @@ CREATE INDEX image_builds_queue_idx ON image_builds ((kind = 'build'), requested
 -- image_queue_ahead's scan of what is queued or running, whatever its kind.
 CREATE INDEX image_builds_live_idx ON image_builds (state) WHERE state IN ('queued', 'running');
 CREATE INDEX image_builds_version_idx ON image_builds (image_version_id, requested_at DESC);
+
+-- A job's log, as the builder flushed it: one row per flush that had
+-- output, holding bytes [start_offset, start_offset + octet_length(chunk))
+-- of everything the job printed. Appending a row costs its own size in
+-- WAL; rewriting one growing text value would cost the whole log each time.
+-- The builder deletes the chunks that end before log_total - 1 MiB, so the
+-- kept log is the last 1 MiB plus at most part of one chunk.
+CREATE TABLE image_build_log (
+  organization_id text NOT NULL,
+  build_id        text NOT NULL,
+  start_offset    bigint NOT NULL CHECK (start_offset >= 0),
+  -- Whole UTF-8 runes: the builder holds back a partial one.
+  chunk           text NOT NULL CHECK (chunk <> ''),
+  PRIMARY KEY (build_id, start_offset),
+  FOREIGN KEY (organization_id, build_id) REFERENCES image_builds (organization_id, id) ON DELETE CASCADE
+);
 
 -- Where an image is named, by id, same organization enforced. The free-text
 -- columns stay: with no id set, the text is used as before.
@@ -177,7 +191,7 @@ GRANT SELECT ON image_builder TO dude_app;
 DO $$
 DECLARE t text;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['images', 'image_versions', 'image_version_parents', 'image_finals', 'image_builds']
+  FOREACH t IN ARRAY ARRAY['images', 'image_versions', 'image_version_parents', 'image_finals', 'image_builds', 'image_build_log']
   LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
     EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
@@ -204,12 +218,13 @@ GRANT SELECT, INSERT, UPDATE ON image_versions TO dude_builder;
 GRANT SELECT, INSERT, UPDATE ON image_version_parents TO dude_builder;
 GRANT SELECT, INSERT ON image_finals TO dude_builder;
 GRANT SELECT, INSERT, UPDATE ON image_builds TO dude_builder;
+GRANT SELECT, INSERT, DELETE ON image_build_log TO dude_builder;
 GRANT INSERT ON events TO dude_builder;
 GRANT SELECT, INSERT, UPDATE ON image_builder TO dude_builder;
 DO $$
 DECLARE t text;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['images', 'image_versions', 'image_version_parents', 'image_finals', 'image_builds']
+  FOREACH t IN ARRAY ARRAY['images', 'image_versions', 'image_version_parents', 'image_finals', 'image_builds', 'image_build_log']
   LOOP
     EXECUTE format('CREATE POLICY builder ON %I TO dude_builder USING (true) WITH CHECK (true)', t);
   END LOOP;

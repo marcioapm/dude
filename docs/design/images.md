@@ -37,7 +37,7 @@ are in `packages/domain/src/images.ts`.
   - The builder runs one job at a time.
   - Partial unique indexes let two Runs that need the same finish share one
     job.
-  - The log keeps the last 1 MiB.
+  - The log (`image_build_log`, one chunk per flush) keeps the last 1 MiB.
   - `image_queue_ahead()` tells an organisation how many jobs are ahead of
     its own, and nothing about whose they are.
 - **Where an image is named**, always by id, with the same organisation
@@ -202,10 +202,13 @@ page and a waiting Run say "image builder offline since <time>". A Run or
 a preview that has waited (`runs.image_waiting_since`) for 30 minutes while
 the builder was offline fails before lux with that sentence.
 
-**The build log.** The builder appends each flush's new output to
-`image_builds.log`, keeping the last 1 MiB, and counts every byte in
-`log_total`. The build page polls `GET /v1/images/builds/:id?after=<n>`
-and gets only what came after byte n while the kept tail still holds it.
+**The build log.** Each builder flush that has output inserts one row into
+`image_build_log` (`start_offset`, `chunk`) and adds its bytes to
+`image_builds.log_total`; in the same statement it deletes the chunks that
+end before the last 1 MiB. A flush therefore costs its own size in WAL,
+not the log's. The build page polls `GET /v1/images/builds/:id?after=<n>`
+and gets only the chunks ending after byte n, the first cut at n, while
+the kept log still reaches back to n; otherwise the whole kept log.
 
 `runs.image` records `{imageId, name, versionId, version, ref, layer}` once
 the image is resolved, and nothing rewrites it. Resumes therefore use the

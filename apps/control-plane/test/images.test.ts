@@ -318,24 +318,38 @@ describe("build and publish", () => {
   });
 
   test("a build's page has its log, its limits, and with ?after only what came since", async () => {
-    // As the builder's flushes write it: appended, log_total counting every byte.
-    await owner`UPDATE image_builds SET log = ${"STEP 1/2: FROM debian\n"}, log_total = 22 WHERE id = ${ids.baseBuild1}`;
-    const out = await body(await call(memberKey, "GET", `/v1/images/builds/${ids.baseBuild1}`));
+    // As the builder's flushes write it: one chunk per flush at log_total.
+    const chunk = async (start: number, text: string) => {
+      await owner`INSERT INTO image_build_log (organization_id, build_id, start_offset, chunk) VALUES (${ORG}, ${ids.baseBuild1}, ${start}, ${text})`;
+      await owner`UPDATE image_builds SET log_total = ${start} + octet_length(${text}) WHERE id = ${ids.baseBuild1}`;
+    };
+    const read = async (after?: number | string) =>
+      body(await call(memberKey, "GET", `/v1/images/builds/${ids.baseBuild1}${after === undefined ? "" : `?after=${after}`}`));
+    await chunk(0, "STEP 1/2: FROM debian\n");
+    const out = await read();
     expect(out).toMatchObject({ imageName: "acme-base", version: 1, log: "STEP 1/2: FROM debian\n", logStart: 0, logTotal: 22, note: "First" });
     expect(out.builder).toMatchObject({ cpus: 1.5, memoryMiB: 1536 });
-    await owner`UPDATE image_builds SET log = log || ${"STEP 2/2: RUN é\n"}, log_total = log_total + octet_length(${"STEP 2/2: RUN é\n"}) WHERE id = ${ids.baseBuild1}`;
-    const since = await body(await call(memberKey, "GET", `/v1/images/builds/${ids.baseBuild1}?after=22`));
+    await chunk(22, "STEP 2/2: RUN é\n");
+    expect((await read()).log).toBe("STEP 1/2: FROM debian\nSTEP 2/2: RUN é\n");
+    const since = await read(22);
     expect([since.log, since.logStart, since.logTotal]).toEqual(["STEP 2/2: RUN é\n", 22, 39]);
-    expect((await body(await call(memberKey, "GET", `/v1/images/builds/${ids.baseBuild1}?after=39`))).log).toBe("");
-    // The tail no longer holds byte 5 (the start was cut), or 37 is inside é's two bytes: the whole tail.
-    await owner`UPDATE image_builds SET log_total = log_total + 100 WHERE id = ${ids.baseBuild1}`;
-    const cut = await body(await call(memberKey, "GET", `/v1/images/builds/${ids.baseBuild1}?after=5`));
-    expect([cut.log, cut.logStart, cut.logTotal]).toEqual(["STEP 1/2: FROM debian\nSTEP 2/2: RUN é\n", 100, 139]);
-    const mid = await body(await call(memberKey, "GET", `/v1/images/builds/${ids.baseBuild1}?after=${100 + 37}`));
-    expect(mid.logStart).toBe(100);
+    // Inside a chunk, at a rune's first byte: the chunk is cut there.
+    const inside = await read(32);
+    expect([inside.log, inside.logStart]).toEqual(["RUN é\n", 32]);
+    expect((await read(39)).log).toBe("");
+    // 37 is inside é's two bytes: the whole log.
+    const mid = await read(37);
+    expect([mid.log, mid.logStart]).toEqual(["STEP 1/2: FROM debian\nSTEP 2/2: RUN é\n", 0]);
+    // The first chunk trimmed: the kept log starts at 22, so 5 is gone and the whole kept log comes.
+    await owner`DELETE FROM image_build_log WHERE build_id = ${ids.baseBuild1} AND start_offset = 0`;
+    const cut = await read(5);
+    expect([cut.log, cut.logStart, cut.logTotal]).toEqual(["STEP 2/2: RUN é\n", 22, 39]);
+    // Past the end: the whole kept log.
+    expect((await read(500)).logStart).toBe(22);
     expect((await call(memberKey, "GET", `/v1/images/builds/${ids.baseBuild1}?after=x`)).status).toBe(400);
     expect((await call(otherKey, "GET", `/v1/images/builds/${ids.baseBuild1}`)).status).toBe(404);
   });
+
 
   test("the builder is offline when its heartbeat is 2 minutes old", async () => {
     await owner`INSERT INTO image_builder (seen_at) VALUES (now())`;

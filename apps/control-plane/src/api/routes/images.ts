@@ -214,8 +214,8 @@ async function detail(ctx: RequestContext, id: string): Promise<ImageDetail> {
 
 /**
  * A build with its log. `?after=<n>`, n the logTotal a reader already has:
- * only the bytes after it, when the kept tail still starts at or before n;
- * else the whole tail. logStart says which.
+ * only the bytes after it, when the kept log still starts at or before n;
+ * else the whole kept log. logStart says which.
  */
 async function buildDetail(ctx: RequestContext): Promise<Response> {
   const id = ctx.params.buildId!;
@@ -223,27 +223,52 @@ async function buildDetail(ctx: RequestContext): Promise<Response> {
   const after = raw !== null && /^\d{1,15}$/.test(raw) ? Number(raw) : null;
   if (raw !== null && after === null) throw badRequest("after must be a byte count");
   const build = await withOrg(ctx.principal.organizationId, async (scope) => {
-    // The kept tail is bytes [log_total - octet_length(log), log_total).
-    const [row] = (await scope.sql`
-      SELECT ${scope.sql.unsafe(BUILD_COLUMNS)}, v.note, b.log_total::float8 AS "logTotal",
-        (b.log_total - octet_length(b.log))::float8 AS "tailStart",
-        CASE WHEN ${after}::bigint = b.log_total THEN ''
-          WHEN ${after}::bigint >= b.log_total - octet_length(b.log) AND ${after}::bigint < b.log_total
-            -- At a rune's first byte: a log_total a reader was given always is.
-            AND get_byte(convert_to(b.log, 'UTF8'), (${after}::bigint - (b.log_total - octet_length(b.log)))::int) & 192 <> 128
-          THEN convert_from(substring(convert_to(b.log, 'UTF8') FROM (${after}::bigint - (b.log_total - octet_length(b.log)) + 1)::int), 'UTF8')
-          ELSE b.log END AS log,
-        ${after}::bigint >= b.log_total - octet_length(b.log) AND ${after}::bigint <= b.log_total
-          AND (${after}::bigint = b.log_total
-            OR get_byte(convert_to(b.log, 'UTF8'), (${after}::bigint - (b.log_total - octet_length(b.log)))::int) & 192 <> 128) AS partial,
-        (SELECT json_build_object('versionId', pv.id, 'number', pv.number) FROM image_versions pv WHERE pv.id = i.published_version_id) AS published
-      FROM ${scope.sql.unsafe(BUILD_FROM)} WHERE b.id = ${id}`) as Array<Omit<ImageBuildWithLog, "logStart" | "builder"> & { tailStart: number; partial: boolean | null }>;
+    const row = await readBuild(scope, id, after);
     if (!row) return null;
-    const { tailStart, partial, ...rest } = row;
-    return { ...rest, logStart: partial && after !== null ? after : tailStart, builder: await builderInfo(scope) } satisfies ImageBuildWithLog;
+    const whole = (r: BuildRow) => ({ log: r.chunks.map((c) => c.chunk).join(""), logStart: r.keptStart ?? r.logTotal });
+    let out = { row, ...whole(row) };
+    if (after !== null && after >= out.logStart && after <= row.logTotal) {
+      // The chunks that end after n: the first cut at n, which must be a
+      // rune's first byte (a logTotal a reader was given always is).
+      const [first, ...rest] = row.chunks;
+      const bytes = first ? new TextEncoder().encode(first.chunk) : new Uint8Array();
+      const cut = first ? after - first.start : 0;
+      if (cut < bytes.length && ((bytes[cut] ?? 0) & 0xc0) === 0x80) {
+        const all = (await readBuild(scope, id, null))!;
+        out = { row: all, ...whole(all) };
+      } else {
+        out = { row, log: new TextDecoder().decode(bytes.subarray(cut)) + rest.map((c) => c.chunk).join(""), logStart: after };
+      }
+    }
+    const { keptStart: _k, chunks: _c, ...fields } = out.row;
+    return { ...fields, log: out.log, logStart: out.logStart, builder: await builderInfo(scope) } satisfies ImageBuildWithLog;
   });
   if (!build) throw notFound(`no image build ${id}`);
   return json(build);
+}
+
+type BuildRow = Omit<ImageBuildWithLog, "log" | "logStart" | "builder"> & {
+  keptStart: number | null;
+  chunks: Array<{ start: number; chunk: string }>;
+};
+
+/**
+ * The build and, in one statement (one snapshot, so they agree with its
+ * logTotal), its kept log's first offset and its chunks in order: those
+ * ending after `after` when the kept log reaches back to it, else all.
+ */
+async function readBuild(scope: OrgScope, id: string, after: number | null): Promise<BuildRow | undefined> {
+  const [row] = (await scope.sql`
+    WITH kept AS (SELECT min(start_offset) AS start FROM image_build_log WHERE build_id = ${id})
+    SELECT ${scope.sql.unsafe(BUILD_COLUMNS)}, v.note, b.log_total::float8 AS "logTotal",
+      (SELECT start::float8 FROM kept) AS "keptStart",
+      (SELECT COALESCE(json_agg(json_build_object('start', l.start_offset::float8, 'chunk', l.chunk) ORDER BY l.start_offset), '[]')
+       FROM image_build_log l
+       WHERE l.build_id = b.id AND l.start_offset + octet_length(l.chunk) >
+         CASE WHEN ${after}::bigint BETWEEN (SELECT start FROM kept) AND b.log_total THEN ${after}::bigint ELSE 0 END) AS chunks,
+      (SELECT json_build_object('versionId', pv.id, 'number', pv.number) FROM image_versions pv WHERE pv.id = i.published_version_id) AS published
+    FROM ${scope.sql.unsafe(BUILD_FROM)} WHERE b.id = ${id}`) as BuildRow[];
+  return row;
 }
 
 /** What a picker lists: every image, archived ones marked (a picker shows one only while it is chosen). */
