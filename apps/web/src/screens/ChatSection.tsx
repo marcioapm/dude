@@ -17,7 +17,7 @@ import type { Finding, PersistedEvent, PullRequest, RunStatus } from "@dude/doma
 import { ApiError, type ApiClient, type Person, type TaskDetail } from "../api/client.ts";
 import { usePeople } from "../people.tsx";
 import { taskHistory } from "../taskHistory.ts";
-import { EndedConductor, RunScreen, type ChatVariant } from "./RunScreen.tsx";
+import { EndedConductor, RunScreen, type ChatVariant, type RunCost } from "./RunScreen.tsx";
 
 export interface ChatSectionProps {
   client: ApiClient;
@@ -42,16 +42,21 @@ export interface ChatSectionProps {
 export function ChatSection({ client, task, conductorId, earlier = [], findings, pullRequests, events, owner, version, onSent, onBack }: ChatSectionProps) {
   const people = usePeople();
   const [costUsd, setCostUsd] = useState<number | null>(null);
+  // Each Run's cost, split as the task's metrics split it: the rail's conductor cost.
+  const [runCosts, setRunCosts] = useState<ReadonlyMap<string, RunCost>>(new Map());
   const [problem, setProblem] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     void client.taskMetrics(task.id).then((m) => {
-      if (!cancelled) setCostUsd(m.cost.totalUsd);
+      if (cancelled) return;
+      setCostUsd(m.cost.totalUsd);
+      setRunCosts(new Map(m.runs.map((r) => [r.id, { cost: r.cost, tokens: r.tokens.input + r.tokens.output, activeMs: r.activeMs }])));
     }, () => undefined);
     return () => {
       cancelled = true;
     };
   }, [client, task.id, version]);
+  const conductorCost = conductorId ? runCosts.get(conductorId) ?? null : null;
 
   const line = taskHistory(task, findings, pullRequests, costUsd, (usd) => formatUsd(usd));
   const lineKey = [line.lead, ...line.steps, "|", ...line.facts].join("\u0000");
@@ -79,7 +84,7 @@ export function ChatSection({ client, task, conductorId, earlier = [], findings,
   const before = useMemo(() => earlier.length === 0 ? null
     : earlier.map((r) => <EndedConductor key={r.id} client={client} runId={r.id} status={r.status} />),
   [client, earlierKey]); // eslint-disable-line react-hooks/exhaustive-deps -- the conductors, by their ids
-  const chat = useMemo<ChatVariant>(() => ({ head, send, briefedWith, before }), [head, send, briefedWith, before]);
+  const chat = useMemo<ChatVariant>(() => ({ head, send, briefedWith, before, cost: conductorCost }), [head, send, briefedWith, before, conductorCost]);
 
   if (conductorId) {
     return (
