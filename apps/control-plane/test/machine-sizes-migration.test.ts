@@ -45,7 +45,7 @@ const sizes = (org: string) =>
   db`SELECT name, cpus::float8 AS cpus, memory_mib AS "memoryMiB", disk_gib AS "diskGiB", pool_id AS "poolId", is_default AS "isDefault"
      FROM machine_sizes WHERE organization_id = ${org} ORDER BY name DESC`;
 const STANDARD = { name: "Standard", cpus: 2, memoryMiB: 8192, diskGiB: 20, poolId: null, isDefault: true };
-// The conductor's, from migration 068 on: never the default.
+// The conductor's, from migration 069 on: never the default.
 const SMALL = { name: "Small", cpus: 0.5, memoryMiB: 1024, diskGiB: 10, poolId: null, isDefault: false };
 
 describe("seeding", () => {
