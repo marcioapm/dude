@@ -40,9 +40,11 @@ export interface ImageEditing {
   readonly slotLine: ReactNode;
 }
 
-export function useImageEditing({ kind, enabled, text, setText, preview }: {
+export function useImageEditing({ kind, enabled, value, text, setText, preview }: {
   kind: FieldKind | undefined;
   enabled: boolean;
+  /** The field's text as rendered. */
+  value: string;
   text: () => string;
   setText: (next: string) => void;
   preview: RefObject<HTMLDivElement | null>;
@@ -53,6 +55,21 @@ export function useImageEditing({ kind, enabled, text, setText, preview }: {
   const history = useRef<Array<{ before: string; after: string }>>([]);
   const on = Boolean(kind) && enabled;
 
+  // The selection is an index among the references: when the text changes by
+  // any path but this hook's own (typing, an upload, Attach, the other field's
+  // drop), it may name another image, so it goes. Cleared during render, so
+  // no frame draws, or focuses, the wrong image.
+  const own = useRef<string | null>(null);
+  const [seen, setSeen] = useState(value);
+  if (value !== seen) {
+    setSeen(value);
+    if (value !== own.current && selected !== null) setSelected(null);
+  }
+  const write = useCallback((next: string) => {
+    own.current = next;
+    setText(next);
+  }, [setText]);
+
   // Each edit is one step Ctrl/⌘+Z in Preview takes back, while the field
   // still holds the text that edit produced.
   const edit = useCallback((next: string | null | undefined) => {
@@ -60,8 +77,8 @@ export function useImageEditing({ kind, enabled, text, setText, preview }: {
     if (next == null || next === now) return;
     history.current.push({ before: now, after: next });
     if (history.current.length > 100) history.current.shift();
-    setText(next);
-  }, [text, setText]);
+    write(next);
+  }, [text, write]);
 
   // A drag between fields changes two texts: it is not an undo step in either.
   useEffect(() => {
@@ -103,13 +120,23 @@ export function useImageEditing({ kind, enabled, text, setText, preview }: {
     };
   }, [selected, key]);
 
+  // A move remounts the figure, which drops focus to the body: the moved
+  // figure takes it back when focus was in this panel, or the move was a drop.
+  const claim = useRef(false);
+  const takeFocus = useCallback(() => {
+    const c = claim.current;
+    claim.current = false;
+    return c;
+  }, []);
+
   const move = useCallback((n: number, dir: -1 | 1) => {
     if (!kind) return;
     const r = moveReference(text(), n, dir, kind);
     if (!r) return;
+    claim.current = Boolean(preview.current?.contains(document.activeElement));
     edit(r.text);
     setSelected(r.index);
-  }, [kind, text, edit]);
+  }, [kind, text, edit, preview]);
 
   const remove = useCallback((n: number) => {
     edit(removeReference(text(), n));
@@ -170,6 +197,7 @@ export function useImageEditing({ kind, enabled, text, setText, preview }: {
       if (from.key === key) {
         const r = moveReferenceTo(text(), from.n, target.n, kind);
         if (r) {
+          claim.current = true;
           edit(r.text);
           setSelected(r.index);
         }
@@ -180,7 +208,8 @@ export function useImageEditing({ kind, enabled, text, setText, preview }: {
       const put = insertReference(text(), cut.ref, target.n, kind);
       source.setText(cut.text);
       source.select(null);
-      setText(put.text);
+      claim.current = true;
+      write(put.text);
       setSelected(indexAt(put.text, put.at));
     },
     onKeyDown: (e) => {
@@ -194,7 +223,7 @@ export function useImageEditing({ kind, enabled, text, setText, preview }: {
         return;
       }
       history.current.pop();
-      setText(top.before);
+      write(top.before);
       setSelected(null);
     },
   } : {};
@@ -202,7 +231,7 @@ export function useImageEditing({ kind, enabled, text, setText, preview }: {
   const frame = on && kind ? (f: AttachmentFrameProps) => (
     <EditableImage key={`${f.n}:${f.id}`} {...f} fieldKey={key} selected={selected === f.n}
       onSelect={() => setSelected(f.n)} onLayout={(l) => relayout(f.n, l)} onMove={(d) => move(f.n, d)} onRemove={() => remove(f.n)}
-      canMove={(d) => moveReference(text(), f.n, d, kind) !== null} />
+      canMove={(d) => moveReference(text(), f.n, d, kind) !== null} takeFocus={takeFocus} />
   ) : undefined;
 
   const slotLine = slot ? <span className={styles["slot"]} style={{ top: slot.y }} data-testid="image-slot" data-slot={slot.n} aria-hidden /> : null;
@@ -226,7 +255,7 @@ function sizeName(size: ImageSize): string {
   return size === "full" ? "Full" : size === "small" ? "Small" : size === "medium" ? "Medium" : `${size} px`;
 }
 
-function EditableImage({ n, alt, layout, children, fieldKey, selected, onSelect, onLayout, onMove, onRemove, canMove }: AttachmentFrameProps & {
+function EditableImage({ n, alt, layout, children, fieldKey, selected, onSelect, onLayout, onMove, onRemove, canMove, takeFocus }: AttachmentFrameProps & {
   fieldKey: string;
   selected: boolean;
   onSelect: () => void;
@@ -234,6 +263,7 @@ function EditableImage({ n, alt, layout, children, fieldKey, selected, onSelect,
   onMove: (dir: -1 | 1) => void;
   onRemove: () => void;
   canMove: (dir: -1 | 1) => boolean;
+  takeFocus: () => boolean;
 }) {
   const ref = useRef<HTMLSpanElement>(null);
   const passClick = useRef(false);
@@ -248,8 +278,12 @@ function EditableImage({ n, alt, layout, children, fieldKey, selected, onSelect,
     setBelow(fig.getBoundingClientRect().top - panel.getBoundingClientRect().top < 44);
   }, [selected]);
 
+  // Focus follows a selection made in this panel only, never pulled from elsewhere.
   useEffect(() => {
-    if (selected && !ref.current?.contains(document.activeElement)) ref.current?.focus({ preventScroll: true });
+    const fig = ref.current;
+    if (!selected || !fig || fig.contains(document.activeElement)) return;
+    const inPanel = Boolean(fig.closest('[role="tabpanel"]')?.contains(document.activeElement));
+    if (takeFocus() || inPanel) fig.focus({ preventScroll: true });
   }, [selected]);
 
   const open = () => {

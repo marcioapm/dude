@@ -231,7 +231,7 @@ export function MarkdownEditor({
     if (!el) return onChange(next);
     setSource(el, next, Math.min(el.selectionStart, next.length), Math.min(el.selectionEnd, next.length));
   }, [onChange]);
-  const editing = useImageEditing({ kind: imageField, enabled: !fixed && mode === "preview", text: currentText, setText, preview: previewTab });
+  const editing = useImageEditing({ kind: imageField, enabled: !fixed && mode === "preview", value, text: currentText, setText, preview: previewTab });
 
   const switchTo = (next: MarkdownEditorMode) => {
     if (next === mode) return;
