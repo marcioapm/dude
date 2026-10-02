@@ -70,7 +70,7 @@ def test_agent_models_can_be_replaced(client: ApiClient):
 
 def test_task_starts_in_received(client: ApiClient, project: dict):
     task = client.create_task(
-        project["id"], "Add a health endpoint", goal="expose /health",
+        project["id"], "Add a health endpoint", goal="Expose /health so the load balancer can check the service.",
         acceptanceCriteria=["returns 200", "has a test"],
     )
     assert task["status"] == "received"

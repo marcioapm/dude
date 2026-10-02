@@ -429,9 +429,9 @@ def test_the_task_dialog_refits_when_the_window_shrinks_in_write_and_in_preview(
 
     # Preview entered at 900, then 720: it gives the surplus back, and fills again at 900.
     goal_view = page.get_by_role("tablist", name="Goal view")
-    page.get_by_test_id("task-goal").fill("A short goal.")
+    page.get_by_test_id("task-goal").fill("A goal of one short line.")
     goal_view.get_by_role("tab", name="Preview").click()
-    expect(page.get_by_test_id("task-goal-preview")).to_contain_text("A short goal.")
+    expect(page.get_by_test_id("task-goal-preview")).to_contain_text("A goal of one short line.")
     fits()
     page.set_viewport_size({"width": 1280, "height": 720})
     fits()
