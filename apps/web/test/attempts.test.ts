@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { attemptOfPr, attemptOfWork, attemptsOf, closedAtStartOver, runsById } from "../src/attempts.ts";
+import { attemptOfPr, attemptOfWork, attemptsOf, closedAtStartOver, prOfEvent, runsById } from "../src/attempts.ts";
 import { PULL_REQUEST, RESTARTED_RUNS, run } from "../src/fixtures/data.ts";
 import type { PersistedEvent } from "@dude/domain";
 
@@ -62,5 +62,28 @@ describe("who closed an earlier attempt's pull request", () => {
     expect(closedAtStartOver(pr, [], restartAt)).toBeNull();
     expect(closedAtStartOver(pr, [closed("2026-10-01T10:00:05.000Z", forge, 479)], restartAt)).toBeNull();
     expect(closedAtStartOver(pr, [closed("2026-10-01T10:00:05.000Z", forge)], null)).toBeNull();
+  });
+
+  test("closed by someone before the start over, reopened, then closed by it: dude's close", () => {
+    const events = [closed("2026-10-01T09:30:00.000Z", forge), closed("2026-10-01T10:00:05.000Z", forge)];
+    expect(closedAtStartOver(pr, events, restartAt)).toBe("2026-10-01T10:00:05.000Z");
+  });
+
+  test("a close of the same number in another repository is not this one's", () => {
+    const other = { ...closed("2026-10-01T10:00:05.000Z", forge), payload: { number: 478, repo: "example/api" } } as PersistedEvent;
+    expect(closedAtStartOver(pr, [other], restartAt)).toBeNull();
+    // This one's own close, before the start over, then the other's after it.
+    expect(closedAtStartOver(pr, [closed("2026-10-01T09:30:00.000Z", forge), other], restartAt)).toBeNull();
+  });
+});
+
+describe("which pull request an event is about", () => {
+  const web = { ...PULL_REQUEST, id: "pr_web", number: 12, repositoryName: "example/web-console" };
+  const api = { ...PULL_REQUEST, id: "pr_api", number: 12, repositoryName: "example/api" };
+  const about = (repo: string) => ({ eventType: "pull_request.checks_changed", payload: { number: 12, repo } }) as unknown as PersistedEvent;
+
+  test("two with the same number in different repositories: the event's repository's", () => {
+    expect(prOfEvent(about("example/api"), [web, api])?.id).toBe("pr_api");
+    expect(prOfEvent(about("example/web-console"), [api, web])?.id).toBe("pr_web");
   });
 });
