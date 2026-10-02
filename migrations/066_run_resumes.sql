@@ -41,7 +41,9 @@ CREATE TABLE run_resumes (
   snapshot_bytes       bigint,
   -- The host changed; NULL until both hosts are known.
   moved                boolean,
-  -- dude's stream got lux's running state for the new epoch.
+  -- dude's stream got lux's report of the new epoch running: its running
+  -- state, or the shim's session record for the epoch if that came first
+  -- (lux's state events trail the agent's records).
   running_at           timestamptz,
   -- The agent's first busy after the resume: it took its input.
   busy_at              timestamptz,

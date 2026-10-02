@@ -84,6 +84,20 @@ export const EventTypes = {
   DirectiveFailed: "run.directive.failed",
   RunPaused: "run.paused",
   RunResumed: "run.resumed",
+  /**
+   * How long a resume of the Run took, end to end, written once its agent
+   * said something. Payload: `{ epoch, cause, moved, hostName, totalMs,
+   * untilBusyMs, phases }`: `cause` is `answer`, `repository`, `person` or
+   * `idle`; `moved` whether lux placed it on another host (null when
+   * unknown); `totalMs` from when it became due to the agent's first
+   * message, thought or tool call, `untilBusyMs` to it taking its input.
+   * `phases`, in milliseconds, in order: `react` (dude asking lux),
+   * `schedule` (lux placing it), `image`, `restore` (its volumes),
+   * `start` (container and workload), `reload` (the agent loading its
+   * session until lux reports it running), `take` (it taking its input),
+   * `firstOutput`. A phase whose end is unknown is absent, never zero.
+   */
+  RunResumeTimed: "run.resume.timed",
 
   // Run lifecycle
   RunCreated: "run.created",

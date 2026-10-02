@@ -440,6 +440,10 @@ func (t *translator) session(ctx context.Context, tx pgx.Tx, s *Syncer, id strin
 		return err
 	}
 	if !first {
+		// The resumed agent has its session back: lux reports it running.
+		// Its state event says so too, but trails the agent's records on
+		// the stream, the first busy included.
+		t.resumeRunning(ctx, tx, s, epoch)
 		return nil
 	}
 	return s.event(ctx, tx, t.run, evSessionStarted, ledger.ActorAgent,

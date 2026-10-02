@@ -17,9 +17,12 @@ import (
 //
 //   - whilePaused: the row, its cause and woken_at, requested_at, and the
 //     placement it was stopped from, from the Get the resume makes anyway;
-//   - the stream: lux's running state (running_at), the agent's first busy
-//     (busy_at) and its first message, thought or tool call
-//     (first_output_at);
+//   - the stream: lux reporting the new placement running (running_at:
+//     its running state, or the shim's lux.session record for the epoch,
+//     whichever dude gets first — lux's state events trail the agent's
+//     records, so the state alone can come after the agent's first busy),
+//     the agent's first busy (busy_at) and its first message, thought or
+//     tool call (first_output_at);
 //   - lux's placements, read with Get once the Run runs again, and once
 //     more at the first output if lux had not reported everything yet.
 //
@@ -211,6 +214,9 @@ func (s *Syncer) resumeFollowUp(r phaseRun, resumes map[int]bool) {
 			if err := s.readPlacements(ctx, r, epoch); err != nil {
 				s.logger().Warn("reading a resume's placements failed", "run", r.ID, "epoch", epoch, "error", err)
 			}
+		}
+		if err := s.timeResumes(ctx, r, epoch); err != nil {
+			s.logger().Warn("recording a resume's timing failed", "run", r.ID, "epoch", epoch, "error", err)
 		}
 	}
 }
