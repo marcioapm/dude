@@ -11,7 +11,7 @@
  * criterion, in this field or another editor's on the page.
  */
 
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type DragEvent, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
 import { attachmentReferences } from "@dude/domain";
 import { cx } from "../util/cx.ts";
 import { IMAGE_SIZES, cutReference, insertReference, moveReference, moveReferenceTo, removeReference, snapWidth, withLayout, type FieldKind, type ImageLayout, type ImageSize } from "../util/imageLayout.ts";
@@ -52,6 +52,11 @@ export function useImageEditing({ kind, enabled, value, text, setText, preview }
   const key = useId();
   const [selected, setSelected] = useState<number | null>(null);
   const [slot, setSlot] = useState<{ n: number; y: number } | null>(null);
+  const slotNow = useRef<{ n: number; y: number } | null>(null);
+  const showSlot = useCallback((next: { n: number; y: number } | null) => {
+    slotNow.current = next;
+    setSlot(next);
+  }, []);
   const history = useRef<Array<{ before: string; after: string }>>([]);
   const on = Boolean(kind) && enabled;
 
@@ -176,17 +181,21 @@ export function useImageEditing({ kind, enabled, value, text, setText, preview }
       e.preventDefault();
       e.stopPropagation();
       e.dataTransfer.dropEffect = "move";
-      setSlot(slotAt(e.clientY));
+      // dragover repeats while the pointer rests: an unchanged slot sets no state, so nothing renders.
+      const next = slotAt(e.clientY);
+      const s = slotNow.current;
+      if (s === next || (s && next && s.n === next.n && s.y === next.y)) return;
+      showSlot(next);
     },
     onDragLeave: (e) => {
-      if (!(e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget))) setSlot(null);
+      if (!(e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget))) showSlot(null);
     },
     onDrop: (e) => {
       if (!e.dataTransfer.types.includes(DRAG_TYPE) || !kind) return;
       e.preventDefault();
       e.stopPropagation();
       const target = slotAt(e.clientY);
-      setSlot(null);
+      showSlot(null);
       let from: { key: string; n: number };
       try {
         from = JSON.parse(e.dataTransfer.getData(DRAG_TYPE)) as { key: string; n: number };
@@ -229,10 +238,16 @@ export function useImageEditing({ kind, enabled, value, text, setText, preview }
     },
   } : {};
 
+  // Whether the selected image can move up and down: one pair of trial moves
+  // per text and selection, not one per render (a resize renders per pointermove).
+  const movable = useMemo(() => (on && kind && selected !== null
+    ? { up: moveReference(value, selected, -1, kind) !== null, down: moveReference(value, selected, 1, kind) !== null }
+    : { up: false, down: false }), [on, kind, value, selected]);
+
   const frame = on && kind ? (f: AttachmentFrameProps) => (
     <EditableImage key={`${f.n}:${f.id}`} {...f} fieldKey={key} selected={selected === f.n}
       onSelect={() => setSelected(f.n)} onDeselect={() => setSelected(null)} onLayout={(l) => relayout(f.n, l)} onMove={(d) => move(f.n, d)} onRemove={() => remove(f.n)}
-      canMove={(d) => moveReference(text(), f.n, d, kind) !== null} takeFocus={takeFocus} />
+      canUp={movable.up} canDown={movable.down} takeFocus={takeFocus} />
   ) : undefined;
 
   const slotLine = slot ? <span className={styles["slot"]} style={{ top: slot.y }} data-testid="image-slot" data-slot={slot.n} aria-hidden /> : null;
@@ -256,7 +271,7 @@ function sizeName(size: ImageSize): string {
   return size === "full" ? "Full" : size === "small" ? "Small" : size === "medium" ? "Medium" : `${size} px`;
 }
 
-function EditableImage({ n, alt, layout, children, fieldKey, selected, onSelect, onDeselect, onLayout, onMove, onRemove, canMove, takeFocus }: AttachmentFrameProps & {
+function EditableImage({ n, alt, layout, children, fieldKey, selected, onSelect, onDeselect, onLayout, onMove, onRemove, canUp, canDown, takeFocus }: AttachmentFrameProps & {
   fieldKey: string;
   selected: boolean;
   onSelect: () => void;
@@ -264,7 +279,8 @@ function EditableImage({ n, alt, layout, children, fieldKey, selected, onSelect,
   onLayout: (l: ImageLayout) => void;
   onMove: (dir: -1 | 1) => void;
   onRemove: () => void;
-  canMove: (dir: -1 | 1) => boolean;
+  canUp: boolean;
+  canDown: boolean;
   takeFocus: () => boolean;
 }) {
   const ref = useRef<HTMLSpanElement>(null);
@@ -388,8 +404,8 @@ function EditableImage({ n, alt, layout, children, fieldKey, selected, onSelect,
                 onClick={() => onLayout({ size: layout.size, align: a.align })} />
             ))}
             <span className={styles["sep"]} aria-hidden />
-            <Tool icon="arrow-up" label="Move up" shortcut={["Alt", "↑"]} disabled={!canMove(-1)} onClick={() => onMove(-1)} />
-            <Tool icon="arrow-down" label="Move down" shortcut={["Alt", "↓"]} disabled={!canMove(1)} onClick={() => onMove(1)} />
+            <Tool icon="arrow-up" label="Move up" shortcut={["Alt", "↑"]} disabled={!canUp} onClick={() => onMove(-1)} />
+            <Tool icon="arrow-down" label="Move down" shortcut={["Alt", "↓"]} disabled={!canDown} onClick={() => onMove(1)} />
             <span className={styles["sep"]} aria-hidden />
             <Tool icon="external" label="Open" onClick={() => {
               open();

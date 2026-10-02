@@ -4,9 +4,11 @@
  * locked field draws no toolbar. Mounted in happy-dom.
  */
 
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
+import * as markdownModule from "../src/components/Markdown.tsx";
+import * as layoutModule from "../src/util/imageLayout.ts";
 import { MarkdownImage } from "../src/components/Markdown.tsx";
 import { MarkdownEditor } from "../src/primitives/MarkdownEditor.tsx";
 import { TooltipProvider } from "../src/primitives/Tooltip.tsx";
@@ -188,6 +190,45 @@ test("a change from outside clears the selection, steals no focus, and Backspace
   expect(document.activeElement).toBe(input);
   await f.key(document.activeElement!, "Backspace");
   expect(f.value("crit")).toBe(`- [ ] One ${B}\n- [ ] Two ${A}`);
+});
+
+test("twenty dragovers at one height render the preview at most once", async () => {
+  // Spied before mounting, so the preview's component is the spy throughout and is never remounted.
+  const renders = spyOn(markdownModule, "Markdown");
+  cleanups.push(() => renders.mockRestore());
+  const f = await mountFields([{ id: "goal", kind: "goal", value: `Intro.\n\n${A}\n\nOutro.` }]);
+  const panel = f.panel("goal");
+  const blocks = [...panel.querySelector(":scope > div")!.children] as HTMLElement[];
+  blocks.forEach((b, i) => (b.getBoundingClientRect = () => ({ top: i * 40, bottom: i * 40 + 30, left: 0, right: 100, width: 100, height: 30, x: 0, y: i * 40, toJSON() {} })));
+  const store = new Map<string, string>([["application/x-dude-image", "{}"]]);
+  const over = () => {
+    const e = new Event("dragover", { bubbles: true, cancelable: true }) as Event & { dataTransfer: unknown; clientY: number };
+    e.dataTransfer = { get types() { return [...store.keys()]; }, getData: () => "", dropEffect: "" };
+    e.clientY = 41;
+    panel.dispatchEvent(e);
+  };
+  const before = renders.mock.calls.length;
+  for (let i = 0; i < 20; i++) await act(async () => over());
+  expect(f.container.querySelector('[data-testid="image-slot"]')?.getAttribute("data-slot")).toBe("1");
+  // The first sets the slot line; the other nineteen find it unchanged.
+  expect(renders.mock.calls.length - before).toBeLessThanOrEqual(1);
+});
+
+test("twenty resize moves on a selected image try no move", async () => {
+  const f = await mountFields([{ id: "goal", kind: "goal", value: `Intro.\n\n${A}\n\nOutro.` }]);
+  await f.select("goal");
+  const fig = f.figure("goal")!;
+  fig.getBoundingClientRect = () => ({ width: 420, height: 100, top: 0, left: 0, right: 420, bottom: 100, x: 0, y: 0, toJSON() {} });
+  Object.defineProperty(fig.parentElement!, "clientWidth", { value: 700, configurable: true });
+  const handle = f.container.querySelector<HTMLElement>('[data-testid="image-resize-right"]')!;
+  const pe = (type: string, clientX: number) => new PointerEvent(type, { bubbles: true, cancelable: true, clientX, button: 0, pointerId: 1, pointerType: "mouse" });
+  await act(async () => void handle.dispatchEvent(pe("pointerdown", 420)));
+  const moves = spyOn(layoutModule, "moveReference");
+  for (let i = 1; i <= 20; i++) await act(async () => void handle.dispatchEvent(pe("pointermove", 420 + i * 5)));
+  expect(f.container.querySelector('[data-testid="image-size-tip"]')?.textContent).toBe("620 px");
+  expect(moves).toHaveBeenCalledTimes(0);
+  moves.mockRestore();
+  await act(async () => void handle.dispatchEvent(pe("pointerup", 520)));
 });
 
 test("a drag from the goal drops under a criterion as its continuation line", async () => {
