@@ -2,11 +2,13 @@ package fakelux
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -343,6 +345,136 @@ func TestAResumesAnswerCarriesTheStoppedEpochUntilThePlacementIsAssigned(t *test
 	}
 	if got.Epoch != 2 || len(got.Placements) != 2 || got.Placements[1].Epoch != 2 || got.Placements[1].AssignedAt == nil {
 		t.Errorf("once assigned: epoch %d, placements %+v, want epoch 2 with its placement", got.Epoch, got.Placements)
+	}
+}
+
+// startHolds stops a fake's starts at chosen hold points (Server.onStart):
+// reached(epoch, point) closes when a start gets there, and one held there
+// waits for release(epoch, point). Everything held is let go at cleanup.
+type startHolds struct {
+	t       *testing.T
+	mu      sync.Mutex
+	held    map[string]bool
+	reach   map[string]chan struct{}
+	release map[string]chan struct{}
+}
+
+func holdStarts(t *testing.T, fake *Server, held ...string) *startHolds {
+	h := &startHolds{t: t, held: map[string]bool{}, reach: map[string]chan struct{}{}, release: map[string]chan struct{}{}}
+	for _, k := range held {
+		h.held[k] = true
+	}
+	fake.onStart = func(epoch int, point string) {
+		k := fmt.Sprintf("%d/%s", epoch, point)
+		reach, release := h.chans(k)
+		h.mu.Lock()
+		select {
+		case <-reach:
+		default:
+			close(reach)
+		}
+		h.mu.Unlock()
+		if h.held[k] {
+			<-release
+		}
+	}
+	t.Cleanup(func() {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		for k := range h.held {
+			if _, release := h.chansLocked(k); !closed(release) {
+				close(release)
+			}
+		}
+	})
+	return h
+}
+
+func closed(c chan struct{}) bool {
+	select {
+	case <-c:
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *startHolds) chans(k string) (chan struct{}, chan struct{}) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.chansLocked(k)
+}
+
+func (h *startHolds) chansLocked(k string) (chan struct{}, chan struct{}) {
+	if h.reach[k] == nil {
+		h.reach[k], h.release[k] = make(chan struct{}), make(chan struct{})
+	}
+	return h.reach[k], h.release[k]
+}
+
+// reached waits, up to 5 s, for a start to get to point.
+func (h *startHolds) reached(epoch int, point string) {
+	h.t.Helper()
+	reach, _ := h.chans(fmt.Sprintf("%d/%s", epoch, point))
+	select {
+	case <-reach:
+	case <-time.After(5 * time.Second):
+		h.t.Fatalf("the start of epoch %d never got to %s", epoch, point)
+	}
+}
+
+func (h *startHolds) let(epoch int, point string) {
+	_, release := h.chans(fmt.Sprintf("%d/%s", epoch, point))
+	close(release)
+}
+
+// A start lux has given up on goes no further: the Run's epoch-1 start
+// is placed, the Run fails (Crash) before its workload starts, and lux
+// accepts a resume while that start is still going. The resume's start
+// is held before it is assigned, so the Run's epoch is still 1 when the
+// old start carries on. Only epoch 2 runs, on the one placement it added.
+func TestAStartTheRunHasGivenUpOnGoesNoFurther(t *testing.T) {
+	fake := New("", "k", func(map[string]any) Behaviour { return Behaviour{Hang: true} })
+	holds := holdStarts(t, fake, "1/"+holdWorkload, "2/"+holdAssign)
+	client, run := submitRun(t, fake)
+	ctx := context.Background()
+
+	holds.reached(1, holdWorkload)
+	fake.Crash(run.ID)
+	resumed, err := client.Resume(ctx, run.ID, lux.ResumeInput{})
+	if err != nil || resumed.State != "resuming" || resumed.Epoch != 1 {
+		t.Fatalf("resume answered %s at epoch %d (%v), want resuming at 1", resumed.State, resumed.Epoch, err)
+	}
+	holds.reached(2, holdAssign)
+	// The old start goes on, and is over, before the new one is assigned.
+	holds.let(1, holdWorkload)
+	holds.reached(1, holdOver)
+	holds.let(2, holdAssign)
+	holds.reached(2, holdOver)
+
+	fake.mu.Lock()
+	var running []int
+	for _, e := range fake.runs[run.ID].events {
+		if e.Type == "state" && e.Data["state"] == "running" {
+			running = append(running, e.Epoch)
+		}
+	}
+	fake.mu.Unlock()
+	if !slices.Equal(running, []int{2}) {
+		t.Errorf("running in epochs %v, want only 2", running)
+	}
+	got, err := client.Get(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != "running" || got.Epoch != 2 || len(got.Placements) != 2 {
+		t.Fatalf("got %s at epoch %d with %d placements, want running at 2 with 2", got.State, got.Epoch, len(got.Placements))
+	}
+	if old := got.Placements[0]; old.Epoch != 1 || old.WorkloadStartedAt != nil {
+		t.Errorf("the crashed placement %d started its workload at %v", old.Epoch, old.WorkloadStartedAt)
+	}
+	if p := got.Placements[1]; p.Epoch != 2 || p.WorkloadStartedAt == nil {
+		t.Errorf("the resume's placement is epoch %d, workload started %v; want epoch 2, started", p.Epoch, p.WorkloadStartedAt)
 	}
 }
 
