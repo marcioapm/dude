@@ -292,13 +292,6 @@ func (p *progress) full() (log, stage string) {
 	return p.tail.String(), p.stage
 }
 
-func (b *Builder) flushEvery() time.Duration {
-	if b.Flush == 0 {
-		return 2 * time.Second
-	}
-	return b.Flush
-}
-
 // do runs a claimed job to its end, recording how it ended. Its own
 // failures are the job's; a database that cannot record them is logged.
 // A job the builder is stopped under (SIGTERM on a deploy) is queued again
@@ -309,7 +302,11 @@ func (b *Builder) do(ctx context.Context, j job) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		t := time.NewTicker(b.flushEvery())
+		flushEvery := b.Flush
+		if flushEvery == 0 {
+			flushEvery = 2 * time.Second
+		}
+		t := time.NewTicker(flushEvery)
 		defer t.Stop()
 		for {
 			select {
